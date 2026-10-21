@@ -54,6 +54,7 @@ listen = "127.0.0.1:7091"   # loopback or a Tailscale address (100.64.0.0/10); o
 approval_wait = "10m"       # how long a held Claude permission prompt waits for your phone
 push = true                 # Web Push for blocked / errored / done / idle (notifications.on)
 # push_hosts = ["ntfy.example.com"]   # a self-hosted push service, besides the browsers' own
+# trusted_proxy = true     # a reverse proxy on this machine fronts serve (automatic for tailscale serve)
 ```
 
 **Without Tailscale.** Put a TLS reverse proxy in front of `127.0.0.1:7091`. Caddy:
@@ -64,12 +65,23 @@ ptyro.example.com {
 }
 ```
 
-Set `public_url = "https://ptyro.example.com"`. The proxy must pass WebSocket upgrades on `/ws`
-(Caddy and nginx with `proxy_http_version 1.1` + `Upgrade` headers do). Behind a proxy on
-loopback, `ptyro serve` takes the client's address from the *last* `X-Forwarded-For` entry (the
-one your proxy added; earlier ones are whatever the client sent). It refuses to listen on a non-loopback,
-non-Tailscale address unless you pass `--insecure`: on plain HTTP, tokens would cross the
-network in clear.
+Set `public_url = "https://ptyro.example.com"` and `trusted_proxy = true`. The proxy must pass
+WebSocket upgrades on `/ws` (Caddy and nginx with `proxy_http_version 1.1` + `Upgrade` headers
+do). It refuses to listen on a non-loopback, non-Tailscale address unless you pass `--insecure`:
+on plain HTTP, tokens would cross the network in clear.
+
+**Client addresses behind a proxy.** The login lockout and the audit trail go by the client's
+address. With `trusted_proxy = true`, a request from loopback takes it from the *last*
+`X-Forwarded-For` entry (the one your proxy added; earlier ones are whatever the client sent),
+and `Tailscale-User-Login` names the person. Without it those headers are ignored, because any
+local process could send them. `tailscale serve` fronting the port (`--tailscale`, or set up by
+hand before `ptyro serve` starts) turns this on by itself.
+
+**Host names.** `ptyro serve` answers only requests addressed to an IP address, `localhost`, the
+`public_url` host, or this machine's Tailscale name (`box.tailnet.ts.net`, `box`); anything else
+gets `421`. That stops DNS rebinding: a web page whose own name is made to resolve to
+127.0.0.1 can't talk to ptyro under that name. A proxy that rewrites `Host` to its upstream
+(nginx's default, `127.0.0.1:7091`) works too.
 
 ### 2. Pair the phone
 
@@ -134,6 +146,8 @@ through their protocol for structured sessions.
 | A browser posing as a local client | `ptyro serve` rewrites every Hello to `kind: web` with its real origin; the daemon holds web clients to their device's scope. |
 | A device doing more than intended | Scopes, enforced in the daemon for every request and keystroke. Unknown requests need `full`. Remote actions on a session go to its event log (`ptyro events -s S`) with the device's name. |
 | Cross-site WebSocket hijacking | No cookies: authentication is in-band, so a hostile page has nothing to ride on. |
+| DNS rebinding (a page whose name resolves to your machine) | Requests must be addressed to an IP, `localhost`, `public_url`'s host or the tailnet name; others get 421. |
+| Forged `X-Forwarded-For` to dodge the lockout | Only believed from loopback with `trusted_proxy` (or under `tailscale serve`), and only its last entry. |
 | Clickjacking, injected scripts | A strict CSP (`default-src 'none'`, scripts only from the app itself), `X-Frame-Options: DENY`, no third-party requests. |
 | Push payload snooping | Web Push is end-to-end encrypted (RFC 8291) for the device; push services see ciphertext. VAPID (RFC 8292) identifies your daemon. Subscriptions are accepted only for the browsers' push services, so a device can't make the daemon post elsewhere. |
 | An agent approving its own prompts | Agents can't answer permission prompts or gates, from any client (M7 policy). Devices can't pair devices. |

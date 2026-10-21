@@ -12,6 +12,11 @@
 //! Listens on loopback or Tailscale addresses unless `--insecure`: elsewhere plain HTTP would
 //! carry tokens in clear. For HTTPS (needed by phones for notifications and installing the app),
 //! `--tailscale` puts `tailscale serve` in front.
+//!
+//! Every request must name a host it expects (an IP address, localhost, `[remote] public_url`'s
+//! host, this machine's tailnet name), so a DNS-rebinding page can't reach it under a name of its
+//! own. `X-Forwarded-For` counts only behind a proxy we trust (`[remote] trusted_proxy`, or
+//! `tailscale serve` fronting our port).
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -81,6 +86,10 @@ struct State {
     ctx_paths: ptyro_core::paths::Paths,
     failures: Mutex<HashMap<IpAddr, (u32, Instant)>>,
     pending: Mutex<HashMap<IpAddr, u32>>,
+    /// A local proxy fronts us, so its `X-Forwarded-For` names the real client.
+    trust_proxy: bool,
+    /// Host names (lowercase, no port) requests may carry besides IP addresses and localhost.
+    hosts: Vec<String>,
 }
 
 /// One login in progress (see [`State::begin`]); dropping it ends it.
@@ -172,6 +181,10 @@ pub async fn run(
     let mut shown = config.clone();
     shown.remote.listen = addr.to_string();
     let base = crate::remote::base_url(&shown, None);
+    let fronted = crate::remote::tailscale_url(&shown.remote.listen).is_some();
+    let mut hosts: Vec<String> =
+        config.remote.public_url.iter().chain([&base]).filter_map(|u| url_host(u)).collect();
+    hosts.extend(tailnet_names());
     eprintln!(
         "ptyro serve: listening on http://{addr}; phones open {base} (pair one with `ptyro pair`)"
     );
@@ -179,6 +192,8 @@ pub async fn run(
         ctx_paths: ctx.paths.clone(),
         failures: Mutex::new(HashMap::new()),
         pending: Mutex::new(HashMap::new()),
+        trust_proxy: config.remote.trusted_proxy || tailscale || fronted,
+        hosts,
     });
     let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
     if managed {
@@ -267,12 +282,59 @@ fn secure(h: &mut hyper::HeaderMap) {
     );
 }
 
-/// Who connected, for the audit trail: the peer, or what a local proxy in front (Tailscale
-/// serve, a TLS reverse proxy) says about the real client. That's the last X-Forwarded-For
-/// entry, the one the proxy added: earlier ones come from the client and prove nothing.
-fn via(req: &Request<Incoming>, peer: SocketAddr) -> (String, IpAddr) {
+/// This machine's MagicDNS names (`box.tailnet.ts.net` and `box`), if Tailscale is up.
+fn tailnet_names() -> Vec<String> {
+    let Ok(out) = std::process::Command::new("tailscale").args(["status", "--json"]).output()
+    else {
+        return Vec::new();
+    };
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
+    let name = v["Self"]["DNSName"].as_str().unwrap_or("").trim_end_matches('.').to_lowercase();
+    match name.split_once('.') {
+        Some((short, _)) => vec![short.to_owned(), name],
+        None => Vec::new(),
+    }
+}
+
+/// The host of `scheme://host[:port]/…`, lowercase.
+fn url_host(url: &str) -> Option<String> {
+    let rest = url.split_once("://")?.1;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let authority = authority.rsplit('@').next()?;
+    Some(strip_port(authority).to_ascii_lowercase()).filter(|h| !h.is_empty())
+}
+
+/// `host:port` → `host`; `[v6]:port` → `v6`.
+fn strip_port(h: &str) -> &str {
+    if let Some(v6) = h.strip_prefix('[') {
+        return v6.split(']').next().unwrap_or("");
+    }
+    match h.rsplit_once(':') {
+        Some((host, port)) if port.bytes().all(|b| b.is_ascii_digit()) => host,
+        _ => h,
+    }
+}
+
+/// The DNS-rebinding defence: a `Host` header must be an IP address, `localhost`, or a name
+/// this server answers to. A rebinding page's requests carry the attacker's own name. (No
+/// `Host` at all isn't a browser.)
+fn host_ok(host: Option<&str>, names: &[String]) -> bool {
+    let Some(host) = host else { return true };
+    let h = strip_port(host).trim_end_matches('.').to_ascii_lowercase();
+    h.parse::<IpAddr>().is_ok()
+        || h == "localhost"
+        || h.ends_with(".localhost")
+        || names.iter().any(|n| *n == h)
+}
+
+/// Who connected, for the audit trail: the peer, or what a trusted local proxy in front
+/// (Tailscale serve, a TLS reverse proxy) says about the real client. That's the last
+/// X-Forwarded-For entry, the one the proxy added: earlier ones come from the client and prove
+/// nothing. Without a trusted proxy the header is ignored: any local process could send it.
+fn via(req: &Request<Incoming>, peer: SocketAddr, trust_proxy: bool) -> (String, IpAddr) {
     let hdr = |n: &str| req.headers().get(n).and_then(|v| v.to_str().ok()).map(str::to_owned);
-    if peer.ip().is_loopback()
+    if trust_proxy
+        && peer.ip().is_loopback()
         && let Some(xff) = hdr("x-forwarded-for")
     {
         let real = last_hop(&xff).to_owned();
@@ -293,7 +355,12 @@ async fn handle(
     peer: SocketAddr,
     slot: Arc<tokio::sync::OwnedSemaphorePermit>,
 ) -> Result<Response<Body>, Infallible> {
-    let (via, ip) = via(&req, peer);
+    let host = req.headers().get(header::HOST).map(|v| v.to_str().unwrap_or("\0"));
+    if !host_ok(host, &st.hosts) {
+        tracing::debug!(%peer, ?host, "unexpected Host");
+        return Ok(respond(StatusCode::MISDIRECTED_REQUEST, "text/plain", "unexpected Host"));
+    }
+    let (via, ip) = via(&req, peer, st.trust_proxy);
     let path = req.uri().path().to_owned();
     let busy =
         || respond(StatusCode::TOO_MANY_REQUESTS, "text/plain", "too many logins; try later");
@@ -532,6 +599,47 @@ mod tests {
     }
 
     #[test]
+    fn only_expected_hosts_are_served() {
+        let names = vec![
+            "box.tail1234.ts.net".to_owned(),
+            "box".to_owned(),
+            "ptyro.example.com".to_owned(),
+        ];
+        for ok in [
+            None,
+            Some("127.0.0.1:7091"),
+            Some("[::1]:7091"),
+            Some("100.101.102.103:7091"),
+            Some("localhost:7091"),
+            Some("LOCALHOST"),
+            Some("box.tail1234.ts.net"),
+            Some("box.tail1234.ts.net."),
+            Some("box:7091"),
+            Some("ptyro.example.com:443"),
+        ] {
+            assert!(host_ok(ok, &names), "{ok:?}");
+        }
+        for bad in [
+            Some("evil.example"),
+            Some("evil.example:7091"),
+            Some("box.tail1234.ts.net.evil.example"),
+            Some("127.0.0.1.nip.io"),
+            Some("x"),
+            Some(""),
+            Some("\0"),
+        ] {
+            assert!(!host_ok(bad, &names), "{bad:?}");
+        }
+        assert_eq!(url_host("https://Box.ts.net/").as_deref(), Some("box.ts.net"));
+        assert_eq!(url_host("http://127.0.0.1:7091").as_deref(), Some("127.0.0.1"));
+        assert_eq!(
+            url_host("https://u@ptyro.example.com:8443/x").as_deref(),
+            Some("ptyro.example.com")
+        );
+        assert_eq!(url_host("nope"), None);
+    }
+
+    #[test]
     fn logins_in_flight_are_capped_and_failures_pruned() {
         let st = Arc::new(State {
             ctx_paths: ptyro_core::paths::Paths::resolve(|k| {
@@ -540,6 +648,8 @@ mod tests {
             .unwrap(),
             failures: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
+            trust_proxy: false,
+            hosts: Vec::new(),
         });
         let ip: IpAddr = "1.2.3.4".parse().unwrap();
         let held: Vec<Pending> = (0..MAX_PENDING).map(|_| st.begin(ip).unwrap()).collect();

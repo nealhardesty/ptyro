@@ -2745,7 +2745,8 @@ change (debounced) and emits `ConfigReloaded`.
   `[daemon] scrollback_lines` is 5000 (§7.6).
   **[built M9]** `[remote]` is typed: `listen = "127.0.0.1:7091"`, `public_url`, `serve = false`,
   `insecure = false`, `approval_wait = "10m"`, `push = true`, `push_hosts = []` (push services a
-  device may subscribe with besides the browsers': FCM, Mozilla, Apple, Windows). No section is
+  device may subscribe with besides the browsers': FCM, Mozilla, Apple, Windows). `trusted_proxy
+  = false` (believe a loopback peer's `X-Forwarded-For`; on by itself under `tailscale serve`). No section is
   reserved any more.
   **[built M10]** `[agents.x] protocol` (`stream-json`, `app-server`, `acp`, `opencode`) makes
   `--structured` speak that protocol to the agent.
@@ -3869,9 +3870,13 @@ killed before a live upgrade, restarted by the next image).
   DENY`, `nosniff`, `no-referrer`.
 - **The WebSocket:** one WebSocket message per protocol frame (JSON text or MessagePack binary).
   The first message must be a Hello. `serve` rewrites it to `kind: web`, `via: ws:<peer>` (or
-  `X-Forwarded-For` and `Tailscale-User-Login` from a loopback proxy), `pid: 0`, and drops a
-  requested zstd. A `Reject` counts as a failed login: 10 from one address in 10 min answer 429.
+  `X-Forwarded-For` and `Tailscale-User-Login` from a loopback peer when a proxy is trusted:
+  `[remote] trusted_proxy`, `--tailscale`, or `tailscale serve` already fronting the port),
+  `pid: 0`, and drops a requested zstd. A `Reject` counts as a failed login: 10 from one address in 10 min answer 429.
   Pings every 25 s; messages up to `MAX_FRAME`.
+- **Host check (DNS rebinding):** a request whose `Host` isn't an IP address, `localhost`
+  (`*.localhost`), `public_url`'s host or this machine's MagicDNS name (full and short, from
+  `tailscale status --json`) gets 421. No `Host` passes (not a browser).
 - **Addresses:** loopback and Tailscale (100.64.0.0/10, fd7a:115c:a1e0::/48) only, unless
   `--insecure` or `[remote] insecure`. `--tailscale` runs `tailscale serve --bg --https=443
   http://127.0.0.1:<port>`.

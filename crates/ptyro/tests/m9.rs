@@ -317,11 +317,16 @@ async fn done_when_a_phone_approves_a_blocked_agent() {
     }
     let (code, _) = http(
         serve.port,
-        "POST /api/request HTTP/1.1\r\nHost: x\r\nContent-Length: 12\r\nConnection: close\r\n\r\n{\"t\":\"list\"}",
+        "POST /api/request HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 12\r\nConnection: close\r\n\r\n{\"t\":\"list\"}",
     );
     assert_eq!(code, 401);
-    let (code, text) = http(serve.port, "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    let (code, text) =
+        http(serve.port, "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
     assert_eq!(code, 200);
+    // A DNS-rebinding page's requests carry its own name.
+    let (code, _) =
+        http(serve.port, "GET / HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n\r\n");
+    assert_eq!(code, 421);
     let lower = text.to_ascii_lowercase();
     assert!(
         lower.contains("content-security-policy: default-src 'none'")
@@ -333,7 +338,7 @@ async fn done_when_a_phone_approves_a_blocked_agent() {
     let (code, text) = http(
         serve.port,
         &format!(
-            "POST /api/request HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            "POST /api/request HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         ),
     );
@@ -404,7 +409,7 @@ async fn scopes_revocation_and_lockout() {
     }
     let (code, _) = http(
         serve.port,
-        "GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nConnection: close\r\n\r\n",
+        "GET /ws HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nConnection: close\r\n\r\n",
     );
     assert_eq!(code, 429);
 }
@@ -671,12 +676,16 @@ fn the_daemon_runs_serve_and_keeps_it_through_upgrades() {
     let port = free_port();
     let w = World::new(&format!("[remote]\nserve = true\nlisten = \"127.0.0.1:{port}\"\n"), &[]);
     wait_http(port);
-    assert_eq!(http(port, "GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").0, 200);
+    assert_eq!(
+        http(port, "GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").0,
+        200
+    );
     w.ok(&["daemon", "upgrade"]);
     let deadline = Instant::now() + WAIT;
     loop {
         if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
-            && http(port, "GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").0 == 200
+            && http(port, "GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").0
+                == 200
         {
             break;
         }

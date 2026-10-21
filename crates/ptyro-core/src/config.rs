@@ -461,6 +461,9 @@ pub struct Remote {
     /// More push services a device may subscribe with, besides the browsers' own (a
     /// self-hosted UnifiedPush or ntfy server: `push_hosts = ["ntfy.example.com"]`).
     pub push_hosts: Vec<String>,
+    /// Believe `X-Forwarded-For` (and `Tailscale-User-Login`) from a loopback peer: set it when a
+    /// reverse proxy on this machine fronts `ptyro serve`. Automatic when `tailscale serve` does.
+    pub trusted_proxy: bool,
 }
 
 impl Default for Remote {
@@ -473,6 +476,7 @@ impl Default for Remote {
             approval_wait: "10m".into(),
             push: true,
             push_hosts: Vec::new(),
+            trusted_proxy: false,
         }
     }
 }

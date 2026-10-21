@@ -82,6 +82,7 @@ serve = true                              # the daemon runs `ptyro serve` (docs/
 listen = "127.0.0.1:7091"
 approval_wait = "10m"                     # held Claude permission prompts wait this long for a phone
 # push_hosts = ["ntfy.example.com"]       # self-hosted push services (UnifiedPush, ntfy)
+# trusted_proxy = true                   # a reverse proxy on this machine fronts serve
 
 [keys]
 "y" = "pane.zoom"         # after the prefix; "global:M-1" = "session.focus 1" needs no prefix
