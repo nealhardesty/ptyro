@@ -84,6 +84,9 @@ approval_wait = "10m"                     # held Claude permission prompts wait 
 # push_hosts = ["ntfy.example.com"]       # self-hosted push services (UnifiedPush, ntfy)
 # trusted_proxy = true                   # a reverse proxy on this machine fronts serve
 
+[clipboard]
+# allow_write = false                     # programs' OSC 52 copies don't reach your clipboard
+
 [keys]
 "y" = "pane.zoom"         # after the prefix; "global:M-1" = "session.focus 1" needs no prefix
 ```

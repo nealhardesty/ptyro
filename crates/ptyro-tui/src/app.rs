@@ -912,10 +912,11 @@ impl App {
                     crate::bell();
                 }
             }
+            // A program's copy goes to your terminal's clipboard, not ptyro's paste buffer (that
+            // holds only what you yanked, so a session can't plant text for another).
             DomainEvent::Clipboard { session, text } => {
-                if self.subscribed.contains(&session) {
+                if self.subscribed.contains(&session) && self.config.clipboard.allow_write {
                     crate::osc52(&text);
-                    self.buffer = Some(text);
                 }
             }
             DomainEvent::Notification { .. } => {}

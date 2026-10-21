@@ -599,7 +599,7 @@ XTVERSION (`DCS > | ptyro <ver> ST`), `CSI 16 t`, XTGETTCAP.
 | OSC 0/2 title | pane title; Gemini's dynamic title encodes Ready/Action Required/Working (§8.6) |
 | OSC 7 cwd | session cwd without polling |
 | OSC 133 A/B/C/D (shell integration) | prompt marks → jump-to-prompt in scrollback, command exit status for shell sessions. **[built M2]** Marks are stored *inside the grid*: at 133;A the daemon splits the batch and injects an invisible OSC 8 hyperlink (`ptyro:prompt`) that it closes at B/C/D or at the next newline. alacritty keeps hyperlinks per cell through scrolling and reflow, so the mark travels with its line into history, where line numbers can't follow. Rows carry `prompt: true` in frames and scrollback documents. Caveat: a program's own hyperlink that is open at that moment ends there. `ptyro shell-init bash\|zsh\|fish` prints the snippets; they do nothing outside ptyro. |
-| OSC 52 clipboard | forwarded to the controlling client if `clipboard.allow_write` (default on); reads denied by default |
+| OSC 52 clipboard | forwarded to the controlling client if `clipboard.allow_write` (default on); writes over 1 MiB dropped by the emulator; reads always denied. The TUI writes it to its own terminal's clipboard only, never to its paste buffer (`]` pastes only your own yanks) |
 | OSC 8 hyperlinks | preserved per cell; clients render as links |
 | OSC 9;4 progress (ConEmu) | progress bar in pane border (Claude `terminalProgressBarEnabled`) |
 
@@ -2750,6 +2750,8 @@ change (debounced) and emits `ConfigReloaded`.
   device may subscribe with besides the browsers': FCM, Mozilla, Apple, Windows). `trusted_proxy
   = false` (believe a loopback peer's `X-Forwarded-For`; on by itself under `tailscale serve`). No section is
   reserved any more.
+  `[clipboard] allow_write = true` (OSC 52 writes from programs reach the TUI's terminal;
+  read by the TUI, so it follows that machine's config).
   **[built M10]** `[agents.x] protocol` (`stream-json`, `app-server`, `acp`, `opencode`) makes
   `--structured` speak that protocol to the agent.
 
@@ -3963,7 +3965,7 @@ relay's budget.
 | Recipe values in commands | `run`, `done_when.run`, `loop.until` and verify `tests`/`repro` render every substituted value as one quoted shell word (`render_shell`): an agent-written output can't become shell syntax |
 | Parallel permission requests (structured sessions) | every driver keeps each open request: answered newest first (what the status shows), then the next becomes the blocked prompt; cancels and answers from the agent's own UI remove exactly theirs |
 | Stale answers | an answer names its prompt (`Answer.expect` = the blocked status's `since_ms`, which changes with every new prompt); approve/deny links and push notifications carry it; a held hook has a generation. A changed prompt refuses the answer |
-| Clipboard exfiltration | OSC 52 write only to the controlling client, configurable; read never |
+| Clipboard exfiltration | OSC 52 write only to the controlling client, off with `[clipboard] allow_write = false`, capped at 1 MiB, never into ptyro's paste buffer; read never |
 | Secrets in recordings/logs | files `0600`; recorder opt-out; logs never include PTY content above `trace` |
 | Data loss in worktrees | §10.8 rules; locks while running; marker files |
 | Remote access | **[built M9]** off by default; the daemon's clients use a local socket only (its one TCP port is the opt-in approve/deny link listener, loopback/Tailscale unless `insecure`). `ptyro serve` listens on loopback/Tailscale unless `--insecure`. Devices: 256-bit tokens stored hashed, compared in constant time, scopes enforced per request and keystroke, a browser's Hello rewritten to `web`, a lockout after 10 failures, revocation closes live connections, pairing only locally, remote actions in the event log. The app ships a strict CSP and no third-party code. Web Push is end-to-end encrypted. Over ssh: the ssh login. E2E relay later (docs/remote.md has the threat model). |

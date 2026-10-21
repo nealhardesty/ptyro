@@ -371,6 +371,22 @@ pub struct Config {
     pub orchestration: Orchestration,
     pub recorder: Recorder,
     pub remote: Remote,
+    pub clipboard: Clipboard,
+}
+
+/// OSC 52 from programs in sessions (SPEC §5.7, §17).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Clipboard {
+    /// A program's clipboard writes reach your terminal's clipboard (at most 1 MiB; reads are
+    /// always denied).
+    pub allow_write: bool,
+}
+
+impl Default for Clipboard {
+    fn default() -> Self {
+        Self { allow_write: true }
+    }
 }
 
 /// Pull requests through `gh` (M6.5, M6.10).

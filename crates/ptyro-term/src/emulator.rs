@@ -22,6 +22,9 @@ use crate::sniff::{PSP_REPLY, Psp, PspReport, Seq, Sniffer, State, parse_psp};
 /// Combining characters reported per cell at most (alacritty itself keeps any number).
 pub const MAX_COMBINING: usize = 16;
 
+/// The largest OSC 52 clipboard write passed on (decoded bytes); bigger ones are dropped.
+pub const MAX_CLIPBOARD: usize = 1 << 20;
+
 /// One cell of the visible screen, as the frame builder and text renderers need it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CellData {
@@ -366,7 +369,9 @@ impl AlacrittyEmulator {
                     out.events.push(TermEvent::Title(None));
                 }
                 Event::Bell => out.events.push(TermEvent::Bell),
-                Event::ClipboardStore(_, text) => out.events.push(TermEvent::Clipboard(text)),
+                Event::ClipboardStore(_, text) if text.len() <= MAX_CLIPBOARD => {
+                    out.events.push(TermEvent::Clipboard(text));
+                }
                 // Clipboard *reads* are denied (SPEC §17); the rest is renderer plumbing.
                 _ => {}
             }
@@ -764,6 +769,17 @@ mod tests {
         let mut out = FeedOutput::default();
         emu.feed(bytes, &mut out);
         out
+    }
+
+    #[test]
+    fn clipboard_writes_are_capped() {
+        let mut emu = AlacrittyEmulator::new(TermSize::new(20, 4), 100);
+        let out = feed(&mut emu, b"\x1b]52;c;aGk=\x07");
+        assert!(out.events.contains(&TermEvent::Clipboard("hi".into())), "{:?}", out.events);
+        // 1 MiB + 3 bytes of 'A's, base64: dropped.
+        let big = "QUFB".repeat(MAX_CLIPBOARD / 3 + 1);
+        let out = feed(&mut emu, format!("\x1b]52;c;{big}\x07").as_bytes());
+        assert!(!out.events.iter().any(|e| matches!(e, TermEvent::Clipboard(_))));
     }
 
     #[test]
