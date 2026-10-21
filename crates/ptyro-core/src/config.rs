@@ -276,7 +276,8 @@ pub struct Notifications {
     pub quiet_hours: Option<String>,
     /// At most one notification per session this often.
     pub coalesce: String,
-    /// Desktop notifier override; `{title}` and `{body}` are replaced.
+    /// Desktop notifier override (an argv, run without a shell); `{title}` and `{body}` are
+    /// replaced with agent-controlled text, so never pass them through `sh -c`.
     pub desktop_command: Option<Vec<String>>,
     pub sinks: Vec<SinkDef>,
     pub callback: Callback,

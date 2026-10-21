@@ -673,6 +673,8 @@ fn desktop(note: &Note, custom: Option<&[String]>) -> String {
         None => vec![
             "notify-send".into(),
             "--app-name=ptyro".into(),
+            // Title and body are agent text: never options.
+            "--".into(),
             note.title.clone(),
             note.body.clone(),
         ],

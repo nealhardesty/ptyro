@@ -1576,7 +1576,9 @@ conformance`):
 - **Channels:**
   - `osc`/`bell`: a `Notify` event; each TUI writes OSC 777 (and OSC 9) to its own terminal, in
     tmux DCS passthrough when inside tmux;
-  - `desktop`: `notify-send` / `osascript`, or `desktop_command` with `{title}`/`{body}`;
+  - `desktop`: `notify-send` (with `--` before the agent-controlled title and body) /
+    `osascript`, or `desktop_command` with `{title}`/`{body}` (an argv run without a shell; the
+    values are agent-controlled, so a `sh -c` wrapper around them is unsafe);
   - `sinks`: ntfy, Pushover, Slack, Discord, Telegram (through `curl --config -`, so tokens and
     webhook URLs never appear in a process listing), or `command` (JSON on stdin). Secrets are
     `Secret`s (`{command = [...]}` preferred).

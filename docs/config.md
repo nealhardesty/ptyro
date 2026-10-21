@@ -145,6 +145,7 @@ Other rules:
 channels = ["inbox", "osc", "bell", "desktop", "sinks"]
 on = ["blocked", "errored", "done", "idle"]
 quiet_hours = "22:00-07:00"          # inbox only (blocked still breaks through)
+# desktop_command = ["my-notifier", "--title", "{title}", "{body}"]   # instead of notify-send
 
 [[notifications.sinks]]
 type = "ntfy"                        # also pushover, slack, discord, telegram, command
@@ -158,6 +159,10 @@ listen = "127.0.0.1:7591"            # or your tailnet address
 
 - Approve/deny links are signed, single-use, and expire after 15 minutes. Opening one only shows
   a page; the button on it acts, so link previews can't approve anything.
+- `{title}` and `{body}` in `desktop_command` are text from the agent (a prompt, a tool's
+  description), so treat them as untrusted. The command runs without a shell, each `{…}` inside
+  one argument; never wrap it in `sh -c "… {body} …"`, where that text would become shell
+  syntax.
 - Tokens and webhooks can be `{ command = ["pass", "ntfy"] }` instead of literals. If you do keep
   literals, the file stays private: ptyro writes it `0600`, and `ptyro doctor` warns when it isn't.
 - `ptyro ws set personal --notify badge` keeps a workspace to inbox and badges; `mute` silences it.
