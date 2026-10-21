@@ -6,7 +6,10 @@
 set -eu
 cd "$(dirname "$0")/.."
 # `make` already puts ~/.cargo/bin on PATH; the caller's own shell may not have it.
-on_path=$(case :${PTYRO_CALLER_PATH:-$PATH}: in *":$HOME/.cargo/bin:"*) echo yes;; esac)
+on_path=
+case :${PTYRO_CALLER_PATH:-$PATH}: in
+  *":$HOME/.cargo/bin:"*) on_path=yes ;;
+esac
 export PATH="$HOME/.cargo/bin:$PATH"
 
 say() { printf 'rust-install: %s\n' "$*"; }
@@ -25,8 +28,10 @@ case $(uname -s) in
   *) die "unsupported OS $(uname -s): only Linux and macOS for now" ;;
 esac
 
-if command -v rustup >/dev/null 2>&1; then
-  say "rustup is already installed ($(rustup --version 2>/dev/null | head -1))"
+# Only the official install in ~/.cargo/bin counts: a package-manager rustup (Homebrew, apt) does
+# not put cargo and rustc on PATH, and Makefile expects them in ~/.cargo/bin.
+if [ -x "$HOME/.cargo/bin/rustup" ]; then
+  say "rustup is already installed ($("$HOME/.cargo/bin/rustup" --version 2>/dev/null | head -1))"
 else
   case $(uname -m) in
     x86_64 | amd64) arch=x86_64 ;;

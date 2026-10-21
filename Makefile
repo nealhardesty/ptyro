@@ -3,7 +3,8 @@
 # rustup installs to ~/.cargo/bin; make it work even when that isn't on the caller's PATH yet.
 CALLER_PATH := $(PATH)
 export PATH := $(HOME)/.cargo/bin:$(PATH)
-CARGO ?= cargo
+# Resolved with the PATH above: make execs simple recipes with its startup PATH, not the exported one.
+CARGO ?= $(or $(shell PATH="$(PATH)" command -v cargo),cargo)
 PTYRO := target/debug/ptyro
 HEADLESS := target/debug/ptyro-headless
 # Program for `make try` / `make headless` / `make fixture`.
