@@ -550,10 +550,11 @@ impl Daemon {
                     crate::structured::Start { driver },
                     self.hub(),
                 )
+                .map(|(s, r)| (s, Some(r)))
             }
-            None => Session::spawn(l.id, spawned, self.hub()),
+            None => Session::spawn(l.id, spawned, self.hub()).map(|s| (s, None)),
         };
-        let session = spawned_session.map_err(|e| {
+        let (session, driver) = spawned_session.map_err(|e| {
             let code = if e.kind() == std::io::ErrorKind::NotFound {
                 ErrorCode::NotFound
             } else {
@@ -577,6 +578,10 @@ impl Daemon {
             self.push_session(Arc::clone(&session));
             tracing::info!(session = %l.id, "spawned");
             let _ = self.events.send(DomainEvent::SessionCreated { info: self.info(&session) });
+        }
+        // Only now: the driver's first status must find the session registered.
+        if let Some(r) = driver {
+            crate::structured::run(Arc::clone(&session), r);
         }
         if let Some(w) = wt {
             self.touch_worktree(&w.id);

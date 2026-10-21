@@ -1184,14 +1184,16 @@ impl Session {
 
     /// A structured session (M10): the agent runs with pipes, not a PTY; its driver speaks the
     /// protocol and renders the transcript into this session's emulator, so every terminal view
-    /// (`read`, the recorder, the web app's canvas) shows it too.
+    /// (`read`, the recorder, the web app's canvas) shows it too. The caller starts the driver
+    /// (`structured::run`) once the session is registered: the driver's first status goes
+    /// through the signal feed, which drops signals for sessions it doesn't know yet.
     pub fn spawn_structured(
         id: SessionId,
         s: Spawned,
         st: Arc<crate::structured::Structured>,
         start: crate::structured::Start,
         hub: Hub,
-    ) -> std::io::Result<Arc<Self>> {
+    ) -> std::io::Result<(Arc<Self>, crate::structured::Resume)> {
         let (child, resume) = crate::structured::spawn_child(&s, &st, start)?;
         let mut emu = AlacrittyEmulator::new(s.size, s.scrollback);
         let tracker = FrameTracker::new(&mut emu);
@@ -1242,9 +1244,8 @@ impl Session {
             structured: Some(st),
         });
         session.save(Some(s.launch));
-        crate::structured::run(Arc::clone(&session), resume);
         tokio::spawn(Arc::clone(&session).waiter_task(child));
-        Ok(session)
+        Ok((session, resume))
     }
 
     pub(crate) fn io_control(&self) -> IoControl {
