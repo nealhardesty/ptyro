@@ -3,7 +3,7 @@
 
 use std::ffi::{OsStr, OsString};
 use std::io;
-use std::os::fd::{AsFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -206,8 +206,14 @@ async fn group_gone_within(pid: u32, wait: Duration) -> bool {
 }
 
 /// The foreground process group of the PTY (e.g. `vim` started from a shell).
+#[allow(unsafe_code)] // tcgetpgrp only reads the borrowed fd
 pub fn foreground_pid(master: &OwnedFd) -> Option<u32> {
-    rustix::termios::tcgetpgrp(master).ok().map(|p| p.as_raw_nonzero().get() as u32)
+    // Not rustix's tcgetpgrp: on macOS it answers 0 once the PTY has no foreground group (its
+    // program just exited), and rustix makes a `Pid` of that (a panic in debug builds, UB in
+    // release; rustix maps 0 to an error on Linux only).
+    // SAFETY: `master` is an open fd for the duration of the call.
+    let pgrp = unsafe { libc::tcgetpgrp(master.as_raw_fd()) };
+    u32::try_from(pgrp).ok().filter(|p| *p > 0)
 }
 
 /// Name and cwd of the PTY's foreground process.
