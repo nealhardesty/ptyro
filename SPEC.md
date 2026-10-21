@@ -850,6 +850,13 @@ Push messages have no id.
 - `SpawnSpec` gains `mcp` (give the agent `ptyro mcp`); `WorktreeSpec` gains `path` (put the
   worktree there instead of `worktrees.location`).
 
+**[built] Protocol 1.10** (security review, M2; *not* additive for pairing):
+- **Pairing:** `DevicePair{name, scope}` now answers `Pairing{device, code, expires_ms}`, a
+  single-use code (`ptp_…`) that works for 10 minutes, instead of the token.
+  `DeviceClaim{code, via}` trades it for `Paired{device, token}`, once; `ptyro serve` sends it
+  for `POST /api/pair`. Devices can't send either. `DeviceInfo` gains `pending` (not claimed
+  yet).
+
 ### 6.5 Screen frames
 
 ```rust
@@ -1602,6 +1609,8 @@ conformance`):
 
 **`after_turn`:** a trusted project's `[scripts] after_turn` runs after each completed turn
 (Working → Idle), with the worktree env (§10.6), unless `[agents.<name>] after_turn = false`.
+It runs as the user outside the agent's sandbox, and runs the files the agent just edited
+(§10.5, "What trust covers").
 
 **Workspace scope** (§9.6) is implemented: `notify`, `breakthrough`, the `attention.scope`
 modes, other-workspace badges and the per-workspace inbox tabs.
@@ -1726,6 +1735,12 @@ Scripts are defined in the project config (§13.3): `setup`, `run.<name>` (named
   after any change — ptyro shows the exact script text and asks to trust it. Trust is recorded as a
   SHA-256 fingerprint of the canonicalized `[scripts]` table per project. `ptyro project trust`.
   Untrusted scripts never run; worktree creation still works without them.
+- **What trust covers [security review M3]:** the fingerprint pins the *text* of the commands,
+  not the files they call. `cargo test`, `make check` or `./scripts/lint.sh` run whatever the
+  checkout holds at that moment, and agents edit the checkout. Trusted scripts, `after_turn` and
+  verify checks (§15.6.5) run as the user, with the daemon's full environment and network,
+  outside any sandbox an agent runs in. So trusting a command trusts every file it reads, now
+  and after any agent's edit. Sandboxing them is not attempted.
 - `run_mode = "concurrent" | "exclusive"`: `exclusive` stops the run script in other worktrees of the
   same project before starting (avoids port/DB collisions).
 - Stop: SIGTERM to the process group, SIGKILL after 5 s.
@@ -1862,6 +1877,16 @@ profile (§10.10).
 - **Locks:** every git call runs with `GIT_OPTIONAL_LOCKS=0`. Without it, the background
   `git status` takes `index.lock`, and a user's or agent's concurrent `git add` fails (seen in
   the tests).
+- **No repository code [security review M3]:** every git call runs with `-c
+  core.fsmonitor=false`, and every one but those the user asked for also with `-c
+  core.hooksPath=/dev/null`. A repository's config (`.git/config`, which agents in its
+  worktrees can write) can name code in both, and these calls run as the user, unasked,
+  outside any sandbox. Status, diffs (also `--no-ext-diff --no-textconv`), logs, checkpoints,
+  conflict checks, scratch worktrees and ref updates run no hooks. Hooks do run for what the user
+  asks ptyro to do and would expect them on: `commit`, `push`, `merge`, `rebase`,
+  `cherry-pick` and the `worktree add` of a new worktree (`Git::run_hooked`). Agents can edit
+  those hooks too; that is the same trust as running git there yourself. Clean/smudge filters
+  are left alone (LFS needs them).
 - **A vanished directory** turns the worktree `missing`; it goes back to `ready` when the
   directory returns.
 
@@ -2791,7 +2816,7 @@ change (debounced) and emits `ConfigReloaded`.
   sha).
 - **`.ptyro.toml [verify]`:** `check = "<run script name>"`, `max_bounces = 3`, `auto = false`
   (verify every agent in the project's worktrees). `check` names a run script, so it's covered by
-  the scripts' trust.
+  the scripts' trust, which pins the command text only (§10.5).
 
 ### 13.2 User config (example, all keys optional)
 
@@ -3517,6 +3542,10 @@ A session can have a check: `ptyro new --verify CHECK`, `ptyro verify S CHECK`, 
 `done_when`, `fanout --verify`, or `[verify] auto` in `.ptyro.toml`. CHECK is
 `scripts.run.<name>`, a run script's name, or a command; scripts need trust.
 
+The check runs `$SHELL -c` in the worktree as the user, with the daemon's environment and full
+network, outside the agent's sandbox. It is how agent-written code (tests, build scripts) gets
+run by something other than the agent; trust pins only the command's text (§10.5).
+
 - **Claude:** the Stop hook runs the check before the turn may end. If it fails and bounces are
   left, the hook answers `{"decision":"block","reason": "[via ptyro: verify] Not done yet: … exits
   N … output tail …"}`. The status stays working, so nothing downstream sees a false "done".
@@ -3875,13 +3904,15 @@ machine's (docs/remote.md).
 
 `ptyro serve --listen 127.0.0.1:7091` (or a Tailscale address) exposes the protocol over WebSocket
 (TLS optional, recommended via Tailscale/`tailscale serve` or a reverse proxy). Auth: long random
-device tokens (`ptyro pair` issues one), stored hashed; revocable (`ptyro devices ls|revoke`).
+device tokens (`ptyro pair` prints a one-time code the device trades for one), stored hashed;
+revocable (`ptyro devices ls|revoke`).
 
 **[built M9]** `ptyro serve` is its own process (hyper + tokio-tungstenite), so the daemon stays a
 local socket. With `[remote] serve = true` the daemon supervises it (backoff, `state/serve.log`,
 killed before a live upgrade, restarted by the next image).
 - **Routes:** `/` and the embedded app; `/ws`; `POST /api/request` (`Authorization: Bearer`,
-  one request, JSON outcome); `/healthz`.
+  one request, JSON outcome); `POST /api/pair` (`{code}` → `{token, device}`: a `DeviceClaim`
+  over a local connection; a refused code counts as a failed login); `/healthz`.
 - **Headers:** a strict CSP (`default-src 'none'`, `script-src 'self'`…), `X-Frame-Options:
   DENY`, `nosniff`, `no-referrer`.
 - **The WebSocket:** one WebSocket message per protocol frame (JSON text or MessagePack binary).
@@ -3897,8 +3928,9 @@ killed before a live upgrade, restarted by the next image).
   `--insecure` or `[remote] insecure`. `--tailscale` runs `tailscale serve --bg --https=443
   http://127.0.0.1:<port>`.
 - **Devices:** kept in the store's `kv` (`devices`): id, name, scope, SHA-256 of the token,
-  created/last seen/via, push subscriptions. Tokens are `ptd_` + 32 bytes from `/dev/urandom`
-  (no fallback), checked in constant time against every record.
+  created/last seen/via, push subscriptions, and, until claimed, the pairing code's SHA-256 and
+  expiry. Tokens are `ptd_` + 32 bytes from `/dev/urandom` (no fallback), checked in constant
+  time against every record; an unclaimed record has no token and never authenticates.
 - **Scopes:** `read` < `approve` < `control` < `full`, enforced in `handle_as`
   (`devices::needed`; unknown requests need `full`) and on `Input` (control). A device never
   takes control or resizes a session. Revocation bumps an epoch, and the device's live
@@ -3924,9 +3956,18 @@ embedded with `include_bytes!`, with no dependencies or third-party requests.
 - **PWA:** a manifest, icons (rendered by `scripts/icons.py`), and a service worker with an
   offline shell, push display, and Allow/Deny notification actions answered through
   `/api/request` with the token from IndexedDB.
-- **Pairing:** `ptyro pair` prints a QR code (`qrcode`, Dense1x2) for `<base>/#pair=<token>`.
-  The base is `--url`, `[remote] public_url`, the Tailscale HTTPS name when `tailscale serve`
-  proxies to our port, or `http://<listen>`.
+- **Pairing:** `ptyro pair` (scope `approve` unless `--scope`) prints a QR code (`qrcode`,
+  Dense1x2) for `<base>/#pair=<code>`. The base is `--url`, `[remote] public_url`, the Tailscale
+  HTTPS name when `tailscale serve` proxies to our port, or `http://<listen>`.
+  - **Why a code [security review M2]:** what is printed stays in scrollback and in the session
+    recording (on by default, kept 30 days), which `read` devices and agents can read. So it is
+    a pairing code (`ptp_` + 32 random bytes, stored as SHA-256), not the token. The app
+    `POST`s it to `/api/pair` and gets the token once. The code is then cleared; unclaimed, it
+    is pruned after 10 minutes (`PTYRO_TEST_PAIRING_TTL_MS` shortens that for tests, never
+    lengthens it). Either way the printed text is worthless afterwards.
+  - **Residual risk:** inside those 10 minutes the code is a credential; whoever claims it first
+    gets the device. `ptyro pair` waits and prints who claimed it and from where (`devices`
+    shows `unclaimed` until then), and in a ptyro pane it says the pane is recorded.
 
 **[built M9] Web Push.** The daemon is the application server.
 - **Keys:** a VAPID P-256 key in `state/push-vapid.key` (0600); an ES256 JWT with `aud` = the
@@ -3967,10 +4008,20 @@ relay's budget.
 
 ## 17. Security model
 
+**The boundary is the OS user.** Agents run as you. ptyro's rules for them (they never answer
+for a person, never pair devices or grant trust, stay within a lead's policy) defend against an
+agent's *mistake*, or a prompt injection talking it into casual misuse of ptyro's own commands.
+They are not a boundary against code running as your user, which can read ptyro's files, edit
+a trusted script, or reach the socket from a process ptyro can't place. Run an agent you don't
+trust under another user, or in a sandbox without the ptyro socket. Also, an agent that can
+reach the socket can start commands outside its own sandbox (a shell session, a verify
+command): ptyro doesn't confine that.
+
 | Asset / threat | Mitigation |
 |---|---|
 | Socket hijack by other local users | dir `0700`, socket `0600`, peer-uid check on accept |
 | Cloned repo runs arbitrary code | scripts/recipes require fingerprinted trust; agent executables only from user config |
+| Code ptyro runs for a repository: scripts, `after_turn`, verify checks, git (security review M3) | trust pins a script's *text*, not the files it calls, and agents edit those files: trusting `cargo test` trusts the tests. Scripts, `after_turn` and checks run as the user, with the daemon's environment and network, outside any agent sandbox; this is documented, not sandboxed (§10.5, §15.6.5, docs/config.md). Background git runs no repository code: `core.fsmonitor=false` always, `core.hooksPath=/dev/null` except for the operations the user asked for (commit, push, merge, rebase, cherry-pick, a new worktree), diffs with `--no-ext-diff --no-textconv` (§10.9) |
 | Agents' own permission prompts bypassed | ptyro never auto-answers permission prompts unless the user configured an explicit policy; "dangerous" agent args require `dangerous = true` and show a ⚠ badge |
 | Paste injection (`ESC[201~` in pasted text) | every ESC and C1 CSI is removed from bracketed-paste payloads, so nothing can close the bracket (a one-pass removal of `ESC[201~` was beatable by nesting) |
 | Malicious escape sequences from child output | emulator is the only consumer; clients render cells, not raw bytes; OSC 52 read denied; title length capped; OSC 7501 messages length-capped (4096); OSC 9/777/99 notifications stripped of controls and capped (1024); query replies never echo what the program sent (XTGETTCAP answers only hex names: echoing a non-hex request typed child output into the shell); sizes from the wire clamped (2×1 … 1000×500); combining marks capped per cell (16) both in what alacritty stores (a filter before its parser, escape-aware, split-UTF-8-safe) and in what frames report, frames budgeted (8 MiB), style tables bounded |
@@ -3981,9 +4032,11 @@ relay's budget.
 | Secrets in recordings/logs | files `0600`; recorder opt-out; logs never include PTY content above `trace` |
 | Secrets in the config file (literal tokens, webhooks) | everything ptyro writes there (`config edit`, `init`, profile and pin commands) is 0600 in directories it creates 0700, replaced atomically; `ptyro doctor` warns when group or others can read or write it |
 | Data loss in worktrees | §10.8 rules; locks while running; marker files |
-| Remote access | **[built M9]** off by default; the daemon's clients use a local socket only (its one TCP port is the opt-in approve/deny link listener, loopback/Tailscale unless `insecure`). `ptyro serve` listens on loopback/Tailscale unless `--insecure`. Devices: 256-bit tokens stored hashed, compared in constant time, scopes enforced per request and keystroke, a browser's Hello rewritten to `web`, a lockout after 10 failures, revocation closes live connections, pairing only locally, remote actions in the event log. The app ships a strict CSP and no third-party code. Web Push is end-to-end encrypted. Over ssh: the ssh login. E2E relay later (docs/remote.md has the threat model). |
+| Remote access | **[built M9]** off by default; the daemon's clients use a local socket only (its one TCP port is the opt-in approve/deny link listener, loopback/Tailscale unless `insecure`). `ptyro serve` listens on loopback/Tailscale unless `--insecure`. Devices: 256-bit tokens stored hashed, compared in constant time, scopes enforced per request and keystroke, a browser's Hello rewritten to `web`, a lockout after 10 failures, revocation closes live connections, pairing only locally and through a one-time code (single use, 10 minutes, so the printed link is worthless afterwards; the token itself is never printed), `approve` by default, remote actions in the event log. The app ships a strict CSP and no third-party code. Web Push is end-to-end encrypted. Over ssh: the ssh login. E2E relay later (docs/remote.md has the threat model). |
 | Credentials | ptyro stores none for agents; uses the agents' own auth; remote tokens hashed; profile `secrets` resolved per spawn, memory-only, redacted everywhere |
-| An agent escaping its orchestration limits | the daemon enforces a lead's policy on every request, identifying the caller by its process ancestry (peer pid), so shelling out to `ptyro` gets the same limits as MCP. Under a policy an agent gets an *allow-list* (reading, mail, leases, its own run's sessions; shipping only with `destructive`; everything else refused, including forks, retries and cancels of other runs). The hook exemption is by request (`Hook`, `StatusLine`, `Report`), never by the `kind` a client claims. A session in two runs gets the stricter policy. Sessions read only their own mail. Lead spawns are serialized and every spawn counts. Fences and guards match real paths (`..` folded, symlinks resolved); agents never answer gates or permission prompts; agent mail is framed as not-from-the-user and can't grant consent; only ptyro pushes/PRs/merges in recipes (`apply`), and guards deny `git push` and paths through PreToolUse |
+| An agent answering for a person, or widening what it may do (security review M1) | refused to any agent, with or without a policy, whichever client it uses: `answer` and `gate resolve`; typing (`send`, `send --raw`, a client's keystrokes) into a session that is blocked on a person (Claude's dialog preselects "Yes", so one Enter approves); pairing or revoking devices and push subscriptions; trusting scripts, recipes or templates (`project trust`, the `trust` fingerprint on new worktrees, `recipe run`, `cs new`); upgrading the daemon to another binary. Typing into an *idle* agent, mail, reading and spawning configured agents stay allowed: a lead or a script orchestrating other agents needs them (§15) |
+| Telling an agent's request from yours | the connecting process (its pid from the kernel, never from the Hello) is placed in a session by: (1) its ancestry, the nearest ancestor that is a session's process; (2) its POSIX session (`getsid`): every session's child leads its own, so a double-forked, `nohup`ed or `disown`ed process is still placed; (3) on Linux, the `PTYRO_SESSION_ID` it was exec'd with (`/proc/<pid>/environ`), which `setsid` keeps. A client's keystrokes are placed once per connection. The daemon carries no session id (the client that starts it strips it), so neither do the checks it runs. Paired devices are people and held to their scope instead. **It fails open:** a process that leaves all three (`setsid env -u PTYRO_SESSION_ID`, `systemd-run`, `ssh localhost`; on macOS, any `setsid`) looks exactly like you at a plain shell, and is treated like you. Failing closed would refuse the CLI from every terminal that isn't a ptyro session; given the boundary above, ptyro accepts the gap |
+| An agent escaping its orchestration limits | the daemon enforces a lead's policy on every request, identifying the caller as above, so shelling out to `ptyro` gets the same limits as MCP. Under a policy an agent gets an *allow-list* (reading, mail, leases, its own run's sessions; shipping only with `destructive`; everything else refused, including forks, retries and cancels of other runs). The hook exemption is by request (`Hook`, `StatusLine`, `Report`), never by the `kind` a client claims. A session in two runs gets the stricter policy. Sessions read only their own mail. Lead spawns are serialized and every spawn counts. Fences and guards match real paths (`..` folded, symlinks resolved); agents never answer gates or permission prompts; agent mail is framed as not-from-the-user and can't grant consent; only ptyro pushes/PRs/merges in recipes (`apply`), and guards deny `git push` and paths through PreToolUse |
 | Wrong account / identity (work ↔ personal) | profiles (§10.10): managed vars always scrubbed, credentials scrubbed for isolated profiles, resolution order shown, `match` guard, pins, resume bound to profile, labels everywhere; *not* an OS-level boundary |
 
 ---
@@ -4391,6 +4444,10 @@ learn something the hard way.
 - **[verified M3]** Background `git status` takes `index.lock` for its opportunistic index
   refresh and breaks concurrent `git add`/`commit`; `GIT_OPTIONAL_LOCKS=0` (or
   `--no-optional-locks`) prevents it.
+- **[verified 2026-10-21, git 2.53]** `git status` runs the program in `core.fsmonitor`, and
+  `update-ref` (so every checkpoint) runs the `reference-transaction` hook. `-c
+  core.fsmonitor=false -c core.hooksPath=/dev/null` stops both (`ptyro-git`'s
+  `background_calls_run_no_repository_code`).
 - **[verified M3]** A gitignore pattern with a trailing slash (`node_modules/`) matches
   directories only. A *symlink* to a directory is a file to git and shows as untracked.
 - **[verified M3, git 2.53]** `git worktree add -b B path origin/main` sets `origin/main` as B's

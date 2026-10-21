@@ -1170,6 +1170,25 @@ Each fix has a focused test where one could be written.
         an answer given in the agent's own UI removes exactly that request; none is dropped,
         so the agent never hangs on one nobody can answer.
       - [x] Push to self-hosted services: `[remote] push_hosts` (done in H1).
+- [x] **H1.6 Pre-release security review: agents, pairing, repository code** (2026-10-21).
+      - [x] **M1, agents answering for a person.** Policy or not, an agent can't type into a
+        session blocked on a person (`send`, `send --raw` or a client's keystrokes, which now
+        pass the same guard), pair or revoke devices, subscribe pushes, trust scripts, recipes
+        or templates, or upgrade the daemon to another binary. Callers are placed by ancestry,
+        then POSIX session (`getsid`), then (Linux) the exec-time `PTYRO_SESSION_ID`; what
+        leaves all three is treated as a plain shell, by choice (SPEC §17). SPEC §17 and
+        docs/remote.md now say plainly that this stops mistakes and casual prompt injection,
+        not code running as the user.
+      - [x] **M2, the pairing link.** `ptyro pair` prints a single-use code that works for 10
+        minutes; the web app trades it for the token through `POST /api/pair` (protocol 1.10:
+        `Pairing`, `DeviceClaim`). The printed text is worthless once claimed or expired.
+        `pair` waits and reports who claimed it; the default scope is `approve`.
+      - [x] **M3, repository code outside the sandbox.** Background git runs with
+        `core.fsmonitor=false` and no hooks (hooks only for the commit, push, merge, rebase,
+        cherry-pick and new worktree the user asks for); diffs skip external diff and
+        textconv. SPEC §10.5/§15.6.5 and docs/config.md say that trust pins a command's text,
+        not the files it runs, and that scripts, `after_turn` and checks run as the user
+        outside any sandbox. Not sandboxed.
 
 ---
 
