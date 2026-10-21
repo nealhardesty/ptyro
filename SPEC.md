@@ -3554,7 +3554,9 @@ run by something other than the agent; trust pins only the command's text (§10.
 - **Evidence** `{command, exit_code, tail, tree, at_ms, duration_ms}` sits in
   `SessionInfo.verify.last` and a `verify` session event.
 - **States:** `pending`, `checking`, `passed` (done, verified), `bounced`, `failed` (bounces ran
-  out: done, claimed). Bounces reset on a prompt that isn't a bounce.
+  out: done, claimed). Bounces reset on a prompt that isn't a bounce, except while one is
+  outstanding (`bounced`): hooks arrive on separate connections, so the turn's own prompt can
+  be reported after the turn was checked.
 - A step waits for `passed` (or fails on `failed`); the review queue and the compare view use it.
 
 #### 15.6.6 Checkpoints (M7.11)

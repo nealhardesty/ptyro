@@ -291,9 +291,18 @@ impl Daemon {
         });
     }
 
-    /// A prompt arrived (UserPromptSubmit): one that isn't a bounce is new work.
+    /// A prompt arrived (UserPromptSubmit): one that isn't a bounce is new work. Not while a
+    /// bounce is outstanding: hooks arrive on their own connections, so a busy machine can deliver
+    /// the turn's own prompt after that turn was already checked and bounced.
     pub(crate) fn verify_on_prompt(&self, s: &Arc<Session>, text: &str) {
-        if !text.contains(BOUNCE_MARK) {
+        let bounced = s
+            .meta
+            .lock()
+            .expect("meta")
+            .verify
+            .as_ref()
+            .is_some_and(|v| v.state == VerifyState::Bounced);
+        if !text.contains(BOUNCE_MARK) && !bounced {
             self.reset_verify(s);
         }
     }
