@@ -395,8 +395,20 @@ impl Driver for Acp {
 
     fn answer(&mut self, d: Decision) -> Vec<Effect> {
         let Some(p) = self.pending.take() else { return Vec::new() };
+        // "Allow" never becomes a standing rule: without a one-time option the request stays
+        // open for an explicit "always" (or a deny).
+        if d == Decision::Allow && !p.options.iter().any(|o| o.kind == PermKind::AllowOnce) {
+            self.pending = Some(p);
+            let id = self.fresh("note-");
+            return vec![notice(
+                id,
+                NoticeLevel::Warn,
+                "this agent offers no one-time allow: answer \"always\" to allow it from now on, \
+                 or deny",
+            )];
+        }
         let want: &[PermKind] = match d {
-            Decision::Allow => &[PermKind::AllowOnce, PermKind::AllowAlways],
+            Decision::Allow => &[PermKind::AllowOnce],
             Decision::Always => &[PermKind::AllowAlways, PermKind::AllowOnce],
             Decision::Deny => &[PermKind::RejectOnce, PermKind::RejectAlways],
         };
@@ -514,6 +526,25 @@ mod tests {
             -32601
         );
         assert!(Acp::restore(a.save()).unwrap().session.is_some());
+    }
+
+    #[test]
+    fn allow_never_becomes_always() {
+        let mut a = Acp::new(Opts { cwd: "/w".into(), ..Opts::default() });
+        a.start();
+        a.on_line(r#"{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1}}"#);
+        a.on_line(r#"{"jsonrpc":"2.0","id":1,"result":{"sessionId":"s"}}"#);
+        a.on_line(r#"{"jsonrpc":"2.0","id":7,"method":"session/request_permission","params":{"sessionId":"s","toolCall":{"toolCallId":"t1","title":"Run rm"},"options":[{"optionId":"always","name":"Always","kind":"allow_always"},{"optionId":"no","name":"No","kind":"reject_once"}]}}"#);
+        let fx = a.answer(Decision::Allow);
+        assert!(sent(&fx).is_empty(), "{fx:?}");
+        assert!(
+            fx.iter()
+                .any(|e| matches!(e, Effect::Item(i) if matches!(i.body, ChatBody::Notice { .. })))
+        );
+        assert!(a.pending());
+        let ans = sent(&a.answer(Decision::Always));
+        assert_eq!(ans[0]["result"]["outcome"]["optionId"], "always");
+        assert!(!a.pending());
     }
 
     #[test]

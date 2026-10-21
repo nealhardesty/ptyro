@@ -934,7 +934,10 @@ struct StyleDef { id: u32, fg: Color, bg: Color, ul: Option<Color>,
 - **Input.** Keys typed into the pane go through a line editor in the daemon: Enter sends,
   Shift/Alt+Enter is a newline, `a`/`A`/`d` (and `1`/`2`/`3`, Enter, Esc) answer an open
   permission request while the draft is empty, and Ctrl-C clears the draft or interrupts the
-  turn. `SendText` prompts directly; `answer` answers through the protocol.
+  turn. `SendText` prompts directly; `answer` answers through the protocol. An answer never
+  widens itself: "allow" is one-time only (ACP: an `allow_once` option; if the agent offers
+  none, the request stays open with a notice asking for an explicit "always" or a deny), while
+  "always" may fall back to one-time and "deny" to a standing reject.
 - **Readiness** comes only from the protocol's status.
 - **Stopping** interrupts a running turn, waits 3 s, then stops the process group.
 - **Clients.** A subscription to a structured session also streams `ServerMsg::Chat` (all items
