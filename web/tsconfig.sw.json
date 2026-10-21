@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["es2022", "webworker"],
+    "strict": true,
+    "noImplicitReturns": true,
+    "noUnusedLocals": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "newLine": "lf"
+  },
+  "files": ["src/sw.ts"]
+}

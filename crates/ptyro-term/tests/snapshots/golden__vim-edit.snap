@@ -1,0 +1,32 @@
+---
+source: crates/ptyro-term/tests/golden.rs
+expression: "snapshot_text(&whole, &modes)"
+---
+  1 alpha
+  2 beta
+  3 inserted line
+  4 gamma
+~
+~
+~
+~
+~
+~
+~
+:set number                               3,13          All
+──── cursor CursorState { x: 16, y: 2, visible: true, shape: Block, blinking: false }
+──── modes TermModes { app_cursor: true, app_keypad: true, bracketed_paste: true, focus_events: true, alt_screen: true, show_cursor: true, mouse: Off, sgr_mouse: false, kitty: 0 }
+──── title None
+──── ansi
+␛[0;93m  1 ␛[0malpha␛[0m
+␛[0;93m  2 ␛[0mbeta␛[0m
+␛[0;93m  3 ␛[0minserted line␛[0m
+␛[0;93m  4 ␛[0mgamma␛[0m
+␛[0;94m~␛[0m
+␛[0;94m~␛[0m
+␛[0;94m~␛[0m
+␛[0;94m~␛[0m
+␛[0;94m~␛[0m
+␛[0;94m~␛[0m
+␛[0;94m~␛[0m
+␛[0m:set number                               3,13          All␛[0m

@@ -1,0 +1,32 @@
+{
+  "codex_version": "0.143.0",
+  "note": "trusted_hash values written by Codex itself after 'trust all' in /hooks. key = '/<session-flags>/config.toml:<event>:<group>:<handler>'. hash = sha256(json(sorted keys, compact) of {event_name, hooks:[{type,command,timeout,async}]}), see SPEC \u00a78.4.",
+  "command": "/tmp/claude-1026/-home-neal-dev-ptyra/43048862-0e2e-4839-a0fd-7a83ccf57d63/scratchpad/codex-hooks/log.sh codex-c",
+  "timeout": 600,
+  "vectors": [
+    {
+      "event_name": "pre_tool_use",
+      "trusted_hash": "sha256:82dc4ce4728980476900820a632c01fe968ea991bcb3b424940abcc5e0f713d2"
+    },
+    {
+      "event_name": "permission_request",
+      "trusted_hash": "sha256:9439d8615f7285ff4a71013af83655e649cc19819bf374dfa156d654f491d9ff"
+    },
+    {
+      "event_name": "post_tool_use",
+      "trusted_hash": "sha256:f2ce53ec54f59d09157fd0be54afea246af7451634dbe9ceddb790bf5bfc94e7"
+    },
+    {
+      "event_name": "session_start",
+      "trusted_hash": "sha256:95b1be9809db45a132048bc6d168b68cb2a074381996ee64354b85c496ba0342"
+    },
+    {
+      "event_name": "user_prompt_submit",
+      "trusted_hash": "sha256:dd167fdd9dfc6ab7038e855ab75c8905a79e1aa4e33caff795b918de3fb0fc0b"
+    },
+    {
+      "event_name": "stop",
+      "trusted_hash": "sha256:9c87e52cd4ce8b9d9b6a929a313717f965c36cfa2230d99d75db5800a42bbdcc"
+    }
+  ]
+}

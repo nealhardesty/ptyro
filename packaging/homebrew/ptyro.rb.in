@@ -1,0 +1,48 @@
+# Homebrew formula for ptyro, rendered by `make homebrew-formula` (scripts/homebrew.sh) from the
+# release checksums. The release workflow pushes it to the tap: brew install nealhardesty/ptyro/ptyro
+class Ptyro < Formula
+  desc "Terminal-native home for your coding agents"
+  homepage "https://github.com/nealhardesty/ptyro"
+  version "@VERSION@"
+  license "MIT"
+
+  on_macos do
+    on_arm do
+      url "https://github.com/nealhardesty/ptyro/releases/download/v@VERSION@/ptyro-@VERSION@-aarch64-apple-darwin.tar.gz"
+      sha256 "@SHA_aarch64-apple-darwin@"
+    end
+    on_intel do
+      url "https://github.com/nealhardesty/ptyro/releases/download/v@VERSION@/ptyro-@VERSION@-x86_64-apple-darwin.tar.gz"
+      sha256 "@SHA_x86_64-apple-darwin@"
+    end
+  end
+
+  on_linux do
+    on_arm do
+      url "https://github.com/nealhardesty/ptyro/releases/download/v@VERSION@/ptyro-@VERSION@-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "@SHA_aarch64-unknown-linux-gnu@"
+    end
+    on_intel do
+      url "https://github.com/nealhardesty/ptyro/releases/download/v@VERSION@/ptyro-@VERSION@-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "@SHA_x86_64-unknown-linux-gnu@"
+    end
+  end
+
+  def install
+    bin.install "ptyro"
+    bash_completion.install "completions/ptyro.bash" => "ptyro" if File.exist?("completions/ptyro.bash")
+    zsh_completion.install "completions/_ptyro" if File.exist?("completions/_ptyro")
+    fish_completion.install "completions/ptyro.fish" if File.exist?("completions/ptyro.fish")
+  end
+
+  def caveats
+    <<~EOS
+      Upgrading? Sessions keep running across the new binary with:
+        ptyro daemon upgrade
+    EOS
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/ptyro --version")
+  end
+end

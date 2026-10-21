@@ -1,0 +1,18 @@
+{
+  "cwd": "/tmp/ptyro-spike/proj",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "permission_mode": "default",
+  "prompt_id": "ae5593ae-bce5-4dab-b6b8-1e41b2994dec",
+  "scratchpad_dir": "/tmp/ptyro-spike/scratchpad",
+  "session_id": "5a3f1e86-5393-4dd9-93ce-49d50dd228f9",
+  "tool_input": {
+    "command": "touch hook-marker.txt",
+    "description": "Create empty hook marker file"
+  },
+  "tool_name": "Bash",
+  "tool_use_id": "toolu_011USELwqu37DhxB1SZy8abK",
+  "transcript_path": "/home/user/.claude/projects/-tmp-ptyro-spike-hooks-proj/5a3f1e86-5393-4dd9-93ce-49d50dd228f9.jsonl"
+}

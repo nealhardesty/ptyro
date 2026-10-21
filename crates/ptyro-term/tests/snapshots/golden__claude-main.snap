@@ -1,0 +1,68 @@
+---
+source: crates/ptyro-term/tests/golden.rs
+expression: "snapshot_text(&whole, &modes)"
+---
+
+ ▐▛███▛█   Claude Code v2.1.304
+▝▜██████▀  Opus 5.5 · Claude Max
+ ▝▝   ▝▝   /…/-home-user-dev-ptyro/00000000-0000-0000-0000-000000000000/scratchpad/claude-run
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                ◐ medium · /effort
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Try "write a test for <filepath>"
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+──── cursor CursorState { x: 2, y: 27, visible: true, shape: Block, blinking: false }
+──── modes TermModes { app_cursor: false, app_keypad: false, bracketed_paste: true, focus_events: true, alt_screen: true, show_cursor: true, mouse: Motion, sgr_mouse: true, kitty: 5 }
+──── title Some("Claude Code")
+──── ansi
+␛[0m
+␛[0;38;2;215;119;87m ▐␛[0;38;2;215;119;87;48;2;0;0;0m▛███▛█␛[0m   ␛[0;1mClaude Code␛[0m ␛[0;38;2;153;153;153mv2.1.304␛[0m
+␛[0;38;2;215;119;87m▝▜␛[0;38;2;215;119;87;48;2;0;0;0m█████␛[0;38;2;215;119;87m█▀␛[0m  ␛[0;38;2;153;153;153mOpus 5.5 · Claude Max␛[0m
+␛[0;38;2;215;119;87m ▝▝   ▝▝ ␛[0m  ␛[0;38;2;153;153;153m/…/-home-user-dev-ptyro/00000000-0000-0000-0000-000000000000/scratchpad/claude-run␛[0m
+␛[0m
+␛[0m
+␛[0m
+␛[0m
+␛[0m
+␛[0m
+␛[0m
+␛[0m
+␛[0m
+␛[0m
+␛[0m
+␛[0m
+␛[0m
+␛[0m
+␛[0m
+␛[0m
+␛[0m
+␛[0m
+␛[0m
+␛[0m
+␛[0m
+␛[0m                                                                                ␛[0;38;2;153;153;153m◐ medium · /effort␛[0m
+␛[0;38;2;136;136;136m────────────────────────────────────────────────────────────────────────────────────────────────────␛[0m
+␛[0m❯ ␛[0;2mTry "write a test for <filepath>"␛[0m
+␛[0;38;2;136;136;136m────────────────────────────────────────────────────────────────────────────────────────────────────␛[0m
+␛[0m  ␛[0;38;2;255;193;7m⏵⏵ auto mode on␛[0;38;2;153;153;153m (shift+tab to cycle) · ← for agents␛[0m

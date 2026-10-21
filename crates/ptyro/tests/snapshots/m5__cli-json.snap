@@ -1,0 +1,291 @@
+---
+source: crates/ptyro/tests/m5.rs
+expression: "Value::Object(all)"
+---
+{
+  "config_check": {
+    "error": null,
+    "exists": "bool",
+    "notes": [],
+    "ok": "bool",
+    "path": "string"
+  },
+  "daemon_status": {
+    "clients": "number",
+    "generation": "number",
+    "live_sessions": "number",
+    "log_dir": "string",
+    "metrics": {
+      "bytes_read": "number",
+      "crashes": "number",
+      "frames_sent": "number",
+      "loop_lag_ms_max": "number",
+      "loop_lag_ms_p99": "number",
+      "open_fds": "number",
+      "pty_readers": "number",
+      "rss_kib": "number",
+      "scrollback_bytes": "number",
+      "sessions": [
+        [
+          "string"
+        ]
+      ],
+      "tasks_alive": "number"
+    },
+    "pid": "number",
+    "proto": {
+      "major": "number",
+      "minor": "number"
+    },
+    "rolled_back": "bool",
+    "sessions": "number",
+    "socket": "string",
+    "started_ms": "number",
+    "upgraded_ms": null,
+    "version": "string"
+  },
+  "events": {
+    "at_ms": "number",
+    "detail": {
+      "confidence": "string",
+      "detail": null,
+      "from": "string",
+      "kind": null,
+      "source": "string",
+      "to": "string"
+    },
+    "kind": "string",
+    "session": "string"
+  },
+  "inbox": [],
+  "integrations": [
+    {
+      "active": "bool",
+      "agent": "string",
+      "detail": "string",
+      "needs_install": "bool"
+    }
+  ],
+  "ls": [
+    {
+      "activity": null,
+      "agent": "string",
+      "argv": [
+        "string"
+      ],
+      "attention": null,
+      "children": [],
+      "controller": null,
+      "conversation": "string",
+      "created_ms": "number",
+      "cwd": "string",
+      "dangerous": "bool",
+      "ended_ms": null,
+      "foreground": "string",
+      "handle": "string",
+      "id": "string",
+      "kind": "string",
+      "last_command_exit": null,
+      "last_output_ms": "number",
+      "last_prompt_ms": "number",
+      "live_cwd": "string",
+      "name": "string",
+      "pid": "number",
+      "ports": [],
+      "profile": "string",
+      "program_status": {
+        "app": "string",
+        "at_ms": "number",
+        "state": "string"
+      },
+      "progress": null,
+      "project": null,
+      "prompt_pending": "bool",
+      "script": null,
+      "size": {
+        "cols": "number",
+        "rows": "number"
+      },
+      "state": {
+        "t": "string"
+      },
+      "status": {
+        "confidence": "string",
+        "since_ms": "number",
+        "source": "string",
+        "status": "string"
+      },
+      "title": null,
+      "turns": "number",
+      "viewers": "number",
+      "workspace": "string",
+      "worktree": null
+    }
+  ],
+  "profile_ls": [
+    {
+      "color": null,
+      "defined": "bool",
+      "dirs": {
+        "claude": "string",
+        "codex": "string",
+        "gemini": "string",
+        "gh": "string",
+        "opencode": "string"
+      },
+      "git_email": null,
+      "isolate": "bool",
+      "label": "string",
+      "matches": {
+        "paths": [],
+        "remotes": []
+      },
+      "name": "string",
+      "vars": [
+        "string"
+      ]
+    }
+  ],
+  "project_ls": [
+    {
+      "created_ms": "number",
+      "default_branch": "string",
+      "id": "string",
+      "last_used_ms": null,
+      "pin": null,
+      "remote_url": "string",
+      "root": "string",
+      "slug": "string"
+    }
+  ],
+  "read": {
+    "name": "string",
+    "session": "string",
+    "state": "string",
+    "status": {
+      "confidence": "string",
+      "since_ms": "number",
+      "source": "string",
+      "status": "string"
+    },
+    "text": "string",
+    "turns": "number",
+    "view": "string"
+  },
+  "status": {
+    "explain": [],
+    "session": {
+      "activity": null,
+      "agent": "string",
+      "argv": [
+        "string"
+      ],
+      "attention": null,
+      "children": [],
+      "controller": null,
+      "conversation": "string",
+      "created_ms": "number",
+      "cwd": "string",
+      "dangerous": "bool",
+      "ended_ms": null,
+      "foreground": "string",
+      "handle": "string",
+      "id": "string",
+      "kind": "string",
+      "last_command_exit": null,
+      "last_output_ms": "number",
+      "last_prompt_ms": "number",
+      "live_cwd": "string",
+      "name": "string",
+      "pid": "number",
+      "ports": [],
+      "profile": "string",
+      "program_status": {
+        "app": "string",
+        "at_ms": "number",
+        "state": "string"
+      },
+      "progress": null,
+      "project": null,
+      "prompt_pending": "bool",
+      "script": null,
+      "size": {
+        "cols": "number",
+        "rows": "number"
+      },
+      "state": {
+        "t": "string"
+      },
+      "status": {
+        "confidence": "string",
+        "since_ms": "number",
+        "source": "string",
+        "status": "string"
+      },
+      "title": null,
+      "turns": "number",
+      "viewers": "number",
+      "workspace": "string",
+      "worktree": null
+    }
+  },
+  "wait": [
+    {
+      "name": "string",
+      "reached": "bool",
+      "session": "string",
+      "state": "string",
+      "turns": "number",
+      "waited_ms": "number"
+    }
+  ],
+  "ws_ls": [
+    {
+      "created_ms": "number",
+      "id": "string",
+      "name": "string",
+      "notify": "string",
+      "profile": "string",
+      "projects": [
+        "string"
+      ]
+    }
+  ],
+  "wt_ls": [
+    {
+      "base": "string",
+      "branch": "string",
+      "created_ms": "number",
+      "id": "string",
+      "is_root": "bool",
+      "last_used_ms": null,
+      "locked": "bool",
+      "name": "string",
+      "path": "string",
+      "ports": null,
+      "pr": null,
+      "profile": null,
+      "project": "string",
+      "project_slug": "string",
+      "removed_ms": null,
+      "state": "string",
+      "status": {
+        "ahead": "number",
+        "at_ms": "number",
+        "base_ahead": "number",
+        "base_behind": "number",
+        "behind": "number",
+        "branch": "string",
+        "conflicts": "number",
+        "deletions": "number",
+        "head": "string",
+        "insertions": "number",
+        "modified": "number",
+        "staged": "number",
+        "subject": "string",
+        "untracked": "number",
+        "upstream": "string"
+      }
+    }
+  ]
+}

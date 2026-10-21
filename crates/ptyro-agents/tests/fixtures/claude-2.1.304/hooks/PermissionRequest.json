@@ -1,0 +1,31 @@
+{
+  "cwd": "/tmp/ptyro-spike/proj",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PermissionRequest",
+  "permission_mode": "default",
+  "permission_suggestions": [
+    {
+      "destination": "session",
+      "directories": [
+        "/tmp/ptyro-spike/proj"
+      ],
+      "type": "addDirectories"
+    },
+    {
+      "destination": "session",
+      "mode": "acceptEdits",
+      "type": "setMode"
+    }
+  ],
+  "prompt_id": "ae5593ae-bce5-4dab-b6b8-1e41b2994dec",
+  "scratchpad_dir": "/tmp/ptyro-spike/scratchpad",
+  "session_id": "5a3f1e86-5393-4dd9-93ce-49d50dd228f9",
+  "tool_input": {
+    "command": "touch hook-marker.txt",
+    "description": "Create empty hook marker file"
+  },
+  "tool_name": "Bash",
+  "transcript_path": "/home/user/.claude/projects/-tmp-ptyro-spike-hooks-proj/5a3f1e86-5393-4dd9-93ce-49d50dd228f9.jsonl"
+}

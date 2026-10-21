@@ -1,0 +1,12 @@
+[profiles.main]
+gh = "~/.config/gh-main"
+# ~/.config/fish/config.fish:2 export
+
+[profiles.me]
+claude = "~/.claude-me"
+# ~/.config/fish/config.fish:3 claude-me
+
+[profiles.work]
+claude = "~/.claude-work"
+# ~/.config/fish/config.fish:4 claude-work
+

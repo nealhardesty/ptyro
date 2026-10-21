@@ -1,0 +1,19 @@
+[package]
+name = "ptyro-pty"
+description = "PTY spawn/resize/signal, process groups, cwd and foreground-process probes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ptyro-core.workspace = true
+pty-process.workspace = true
+rustix.workspace = true
+tokio.workspace = true
+libc.workspace = true

@@ -1,0 +1,57 @@
+[package]
+name = "ptyro"
+description = "A terminal-native home for your coding agents"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+bytes.workspace = true
+clap.workspace = true
+clap_complete.workspace = true
+crossterm.workspace = true
+futures.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+ptyro-agents.workspace = true
+ptyro-client.workspace = true
+ptyro-core.workspace = true
+ptyro-daemon.workspace = true
+ptyro-protocol.workspace = true
+ptyro-run.workspace = true
+ptyro-term.workspace = true
+ptyro-pty.workspace = true
+ptyro-testkit.workspace = true
+ptyro-tui.workspace = true
+qrcode.workspace = true
+regex.workspace = true
+rustix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+tokio-util.workspace = true
+toml.workspace = true
+toml_edit.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+aes-gcm.workspace = true
+hkdf.workspace = true
+p256.workspace = true
+sha2.workspace = true
+insta = { workspace = true, features = ["json"] }
+ptyro-client.workspace = true
+futures.workspace = true
+tempfile.workspace = true
+tokio-tungstenite.workspace = true
+tokio-util.workspace = true

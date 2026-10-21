@@ -1,0 +1,9 @@
+{
+  "cwd": "/tmp/ptyro-spike/proj",
+  "hook_event_name": "SessionStart",
+  "model": "gpt-5.5",
+  "permission_mode": "default",
+  "session_id": "01a15792-d764-7782-832b-0fa3ff006082",
+  "source": "startup",
+  "transcript_path": "/home/user/.codex/sessions/2026/10/20/rollout-2026-10-20T04-30-03-01a15792-d764-7782-832b-0fa3ff006082.jsonl"
+}

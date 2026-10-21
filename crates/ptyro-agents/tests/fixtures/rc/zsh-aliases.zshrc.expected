@@ -1,0 +1,10 @@
+[profiles.personal]
+claude = "~/.claude-personal"
+# ~/.zshrc:7 claude-personal
+
+[profiles.work]
+claude = "~/.claude-work"
+codex = "~/.codex-work"
+# ~/.zshrc:6 claude-work
+# ~/.zshrc:8 codex-work
+

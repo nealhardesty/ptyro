@@ -1,0 +1,8 @@
+{
+  "cwd": "/tmp/ptyro-spike/proj",
+  "hook_event_name": "SessionStart",
+  "session_id": "b0583f04-e3e3-4cac-a366-568e31891152",
+  "source": "startup",
+  "timestamp": "2026-10-20T04:34:01.277Z",
+  "transcript_path": "/tmp/ptyro-spike/home/user/tmp/proj/chats/session-2026-10-20T04-34-b0583f04.jsonl"
+}

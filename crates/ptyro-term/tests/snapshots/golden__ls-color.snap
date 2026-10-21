@@ -1,0 +1,20 @@
+---
+source: crates/ptyro-term/tests/golden.rs
+expression: "snapshot_text(&whole, &modes)"
+---
+README.md
+docs/
+link.txt@
+notes.txt
+run.sh*
+src/
+──── cursor CursorState { x: 0, y: 6, visible: true, shape: Block, blinking: false }
+──── modes TermModes { app_cursor: false, app_keypad: false, bracketed_paste: false, focus_events: false, alt_screen: false, show_cursor: true, mouse: Off, sgr_mouse: false, kitty: 0 }
+──── title None
+──── ansi
+␛[0mREADME.md␛[0m
+␛[0;1;34mdocs␛[0m/␛[0m
+␛[0;1;36mlink.txt␛[0m@␛[0m
+␛[0mnotes.txt␛[0m
+␛[0;1;32mrun.sh␛[0m*␛[0m
+␛[0;1;34msrc␛[0m/␛[0m

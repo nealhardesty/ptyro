@@ -1,0 +1,9 @@
+{
+  "cwd": "/tmp/ptyro-spike/proj",
+  "hook_event_name": "SessionEnd",
+  "prompt_id": "332b10e3-6d0d-4b34-b550-f4f1eca9459a",
+  "reason": "prompt_input_exit",
+  "scratchpad_dir": "/tmp/ptyro-spike/scratchpad",
+  "session_id": "5a3f1e86-5393-4dd9-93ce-49d50dd228f9",
+  "transcript_path": "/home/user/.claude/projects/-tmp-ptyro-spike-hooks-proj/5a3f1e86-5393-4dd9-93ce-49d50dd228f9.jsonl"
+}

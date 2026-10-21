@@ -1,0 +1,363 @@
+---
+source: crates/ptyro/tests/m7.rs
+expression: "Value::Object(all)"
+---
+{
+  "checkpoint_ls": [
+    {
+      "at_ms": "number",
+      "files": "number",
+      "head": "string",
+      "n": "number",
+      "ref": "string",
+      "session": "string",
+      "sha": "string",
+      "turn": "number"
+    }
+  ],
+  "compare": {
+    "base": "string",
+    "base_tests": "number",
+    "candidates": [
+      {
+        "added": "number",
+        "agent": "string",
+        "broke_tests": "bool",
+        "cluster": "number",
+        "cross": null,
+        "discarded": "bool",
+        "duration_ms": "number",
+        "files": "number",
+        "hunks": "number",
+        "judge": null,
+        "judge_note": null,
+        "last_message": "string",
+        "picked": "bool",
+        "rank": "number",
+        "reasons": [
+          "string"
+        ],
+        "removed": "number",
+        "repro": null,
+        "session": "string",
+        "status": "string",
+        "step": "string",
+        "tests": "number",
+        "verified": null,
+        "worktree": "string",
+        "worktree_name": "string"
+      }
+    ],
+    "run": "string",
+    "top_difference": "string",
+    "warnings": []
+  },
+  "gate_ls": [
+    {
+      "gate": {
+        "ask": "string",
+        "by": null,
+        "choice": null,
+        "deadline_ms": null,
+        "id": "string",
+        "key": null,
+        "note": null,
+        "opened_ms": "number",
+        "options": [
+          "string"
+        ],
+        "resolved_ms": null
+      },
+      "run": "string",
+      "step": "string"
+    }
+  ],
+  "lease_ls": [
+    {
+      "exclusive": "bool",
+      "expires_ms": "number",
+      "holder": "string",
+      "holder_name": "string",
+      "id": "string",
+      "pattern": "string",
+      "reason": null
+    }
+  ],
+  "msg_ls": [
+    {
+      "at_ms": "number",
+      "body": "string",
+      "from": "string",
+      "id": "string",
+      "in_reply_to": null,
+      "kind": "string",
+      "priority": "string",
+      "run": null,
+      "state": "string",
+      "to": "string"
+    }
+  ],
+  "radar": {
+    "overlaps": [
+      {
+        "a": "string",
+        "b": "string",
+        "conflicts": [
+          "string"
+        ],
+        "files": [
+          "string"
+        ]
+      }
+    ],
+    "project": "string",
+    "worktrees": [
+      [
+        "string"
+      ]
+    ]
+  },
+  "recipe_ls": [
+    {
+      "description": "string",
+      "error": null,
+      "name": "string",
+      "path": null,
+      "source": "string",
+      "steps": "number",
+      "untrusted": null,
+      "vars": [
+        "string"
+      ]
+    }
+  ],
+  "run_ls": [
+    {
+      "children": [],
+      "dir": "string",
+      "order": [
+        "string"
+      ],
+      "state": {
+        "base": null,
+        "created_ms": "number",
+        "discarded": [],
+        "ended_ms": null,
+        "error": null,
+        "forked_from": null,
+        "id": "string",
+        "kind": "string",
+        "lead": null,
+        "name": "string",
+        "picked": [],
+        "project": "string",
+        "recipe_sha": "string",
+        "seq": "number",
+        "sessions": [],
+        "status": "string",
+        "steps": {
+          "g": {
+            "attempts": [
+              {
+                "bounces": "number",
+                "conversation": "string|null",
+                "end_ref": null,
+                "ended_ms": null,
+                "error": null,
+                "n": "number",
+                "outcome": null,
+                "session": null,
+                "start_ref": null,
+                "started_ms": "number",
+                "worktree": null
+              }
+            ],
+            "decided_by": null,
+            "ended_ms": null,
+            "gate": {
+              "ask": "string",
+              "by": null,
+              "choice": null,
+              "deadline_ms": null,
+              "id": "string",
+              "key": null,
+              "note": null,
+              "opened_ms": "number",
+              "options": [
+                "string"
+              ],
+              "resolved_ms": null
+            },
+            "outputs": {},
+            "reason": null,
+            "started_ms": "number",
+            "status": "string"
+          }
+        },
+        "vars": {}
+      }
+    }
+  ],
+  "run_show": {
+    "children": [],
+    "dir": "string",
+    "order": [
+      "string"
+    ],
+    "state": {
+      "base": null,
+      "created_ms": "number",
+      "discarded": [],
+      "ended_ms": "number",
+      "error": null,
+      "forked_from": null,
+      "id": "string",
+      "kind": "string",
+      "lead": null,
+      "name": "string",
+      "picked": [],
+      "project": "string",
+      "recipe_sha": "string",
+      "seq": "number",
+      "sessions": [
+        "string"
+      ],
+      "status": "string",
+      "steps": {
+        "claude": {
+          "attempts": [
+            {
+              "bounces": "number",
+              "conversation": "string|null",
+              "end_ref": "string",
+              "ended_ms": "number",
+              "error": null,
+              "n": "number",
+              "outcome": "string",
+              "session": "string",
+              "start_ref": "string",
+              "started_ms": "number",
+              "worktree": "string"
+            }
+          ],
+          "decided_by": "string",
+          "ended_ms": "number",
+          "gate": null,
+          "outputs": {
+            "base": "string",
+            "branch": "string",
+            "diffstat": "string",
+            "duration_ms": "number",
+            "files": [
+              "string"
+            ],
+            "head": "string",
+            "last_message": "string",
+            "session": "string",
+            "session_name": "string",
+            "turns": "number",
+            "worktree": "string",
+            "worktree_name": "string"
+          },
+          "reason": null,
+          "started_ms": "number",
+          "status": "string"
+        },
+        "codex": {
+          "attempts": [
+            {
+              "bounces": "number",
+              "conversation": "string|null",
+              "end_ref": "string",
+              "ended_ms": "number",
+              "error": null,
+              "n": "number",
+              "outcome": "string",
+              "session": "string",
+              "start_ref": "string",
+              "started_ms": "number",
+              "worktree": "string"
+            }
+          ],
+          "decided_by": "string",
+          "ended_ms": "number",
+          "gate": null,
+          "outputs": {
+            "base": "string",
+            "branch": "string",
+            "diffstat": "string",
+            "duration_ms": "number",
+            "files": [
+              "string"
+            ],
+            "head": "string",
+            "last_message": "string",
+            "session": "string",
+            "session_name": "string",
+            "turns": "number",
+            "worktree": "string",
+            "worktree_name": "string"
+          },
+          "reason": null,
+          "started_ms": "number",
+          "status": "string"
+        },
+        "rank": {
+          "attempts": [
+            {
+              "bounces": "number",
+              "conversation": "string|null",
+              "end_ref": null,
+              "ended_ms": "number",
+              "error": null,
+              "n": "number",
+              "outcome": "string",
+              "session": null,
+              "start_ref": null,
+              "started_ms": "number",
+              "worktree": null
+            }
+          ],
+          "decided_by": "string",
+          "ended_ms": "number",
+          "gate": null,
+          "outputs": {
+            "base_tests": "number",
+            "best": "string",
+            "evidence": {
+              "claude": {
+                "cross": null,
+                "judge": null,
+                "judge_note": null,
+                "repro": null,
+                "tests": "number"
+              },
+              "codex": {
+                "cross": null,
+                "judge": null,
+                "judge_note": null,
+                "repro": null,
+                "tests": "number"
+              }
+            },
+            "ranking": [
+              {
+                "rank": "number",
+                "reasons": [
+                  "string"
+                ],
+                "step": "string"
+              }
+            ]
+          },
+          "reason": null,
+          "started_ms": "number",
+          "status": "string"
+        }
+      },
+      "vars": {
+        "prompt": "string"
+      }
+    }
+  }
+}

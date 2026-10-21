@@ -1,0 +1,9 @@
+{
+  "cwd": "/tmp/ptyro-spike/proj",
+  "hook_event_name": "SessionStart",
+  "model": "claude-opus-5-5",
+  "scratchpad_dir": "/tmp/ptyro-spike/scratchpad",
+  "session_id": "5a3f1e86-5393-4dd9-93ce-49d50dd228f9",
+  "source": "startup",
+  "transcript_path": "/home/user/.claude/projects/-tmp-ptyro-spike-hooks-proj/5a3f1e86-5393-4dd9-93ce-49d50dd228f9.jsonl"
+}

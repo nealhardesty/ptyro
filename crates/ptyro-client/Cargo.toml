@@ -1,0 +1,21 @@
+[package]
+name = "ptyro-client"
+description = "Async client library for the ptyro daemon socket"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+futures.workspace = true
+ptyro-core.workspace = true
+ptyro-protocol.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true

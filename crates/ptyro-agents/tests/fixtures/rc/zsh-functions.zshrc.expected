@@ -1,0 +1,12 @@
+[profiles.acme]
+gh = "~/.config/gh-acme"
+# ~/.zshrc:11 gh-acme
+
+[profiles.personal]
+codex = "~/.codex-me"
+# ~/.zshrc:6 codex_personal
+
+[profiles.work]
+claude = "~/.claude-work"
+# ~/.zshrc:2 claude-work
+

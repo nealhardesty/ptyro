@@ -1,0 +1,8 @@
+[profiles.main]
+claude = "~/.claude-main"
+# ~/.bashrc:2 export
+
+[profiles.work]
+claude = "~/.claude-work"
+# ~/.bashrc:4 cw
+

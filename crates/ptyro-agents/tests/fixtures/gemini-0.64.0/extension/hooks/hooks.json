@@ -1,0 +1,74 @@
+{
+ "hooks": {
+  "SessionStart": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "ptyro hook gemini SessionStart"
+     }
+    ]
+   }
+  ],
+  "SessionEnd": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "ptyro hook gemini SessionEnd"
+     }
+    ]
+   }
+  ],
+  "BeforeAgent": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "ptyro hook gemini BeforeAgent"
+     }
+    ]
+   }
+  ],
+  "AfterAgent": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "ptyro hook gemini AfterAgent"
+     }
+    ]
+   }
+  ],
+  "BeforeTool": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "ptyro hook gemini BeforeTool"
+     }
+    ]
+   }
+  ],
+  "AfterTool": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "ptyro hook gemini AfterTool"
+     }
+    ]
+   }
+  ],
+  "Notification": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "ptyro hook gemini Notification"
+     }
+    ]
+   }
+  ]
+ }
+}

@@ -1,0 +1,10 @@
+{
+  "cwd": "/tmp/ptyro-spike/proj",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-5.5",
+  "permission_mode": "default",
+  "prompt": "Reply with only the word: pong",
+  "session_id": "01a15792-d764-7782-832b-0fa3ff006082",
+  "transcript_path": "/home/user/.codex/sessions/2026/10/20/rollout-2026-10-20T04-30-03-01a15792-d764-7782-832b-0fa3ff006082.jsonl",
+  "turn_id": "01a15792-e072-7172-86c6-b2d5bc104a8c"
+}

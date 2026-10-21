@@ -1,0 +1,1211 @@
+# ptyro — Roadmap
+
+This file is the source of truth for **what does not exist yet**. The design behind every item is in
+`SPEC.md` (section references like §5.6 point there). When a task ships, tick it here, make sure
+`SPEC.md` reflects reality, and make sure `README.md` tells users how to use it.
+
+Conventions:
+
+- Task IDs (`M1.4`) are stable; reference them in commits and PRs (`M1.4: query responder`).
+- Every milestone has a **Done when** — a demo-able acceptance test. A milestone is not done until
+  that demo works on Linux *and* macOS.
+- `[ ]` todo · `[~]` in progress · `[x]` done · `(spike)` = experiment whose result is written back
+  into SPEC §20 / §21 before dependent work starts.
+- Estimates are rough focused-effort sizes: **S** ≤ 1 day, **M** 2–4 days, **L** 1–2 weeks.
+
+## Overview
+
+| Milestone | Theme | Outcome |
+|---|---|---|
+| **M0** | Foundations & spikes | Repo skeleton, CI, and the risky assumptions proven |
+| **M1** | One session, rock solid | Daemon + PTY + emulator + attach/detach for a single Claude session |
+| **M2** | Multiplexer core | Many sessions, TUI shell, scrollback/copy, splits, config |
+| **M3** | Projects & worktrees | The workspace model: projects, safe worktrees, scripts, ports, per-workspace profiles (accounts) |
+| **M4** | Agent intelligence | Adapters for Claude/Codex/Gemini/OpenCode, status engine, attention, notifications, resume |
+| **M5** | Scriptable control plane | CLI/API parity, `--json`, `wait`/`send`/`events`, onboarding, doctor |
+| **M6** | Review & ship | Diff inspector, comments → agent, commit/PR/checks via `gh`, integrate |
+| **M7** | Orchestration | Fan-out & compare, recipes, gates, `ptyro mcp` for lead agents |
+| **M8** | Hardening | Live upgrade, recorder/replay, perf, fuzzing, crash safety |
+| **M9** | Remote | SSH remote TUI, WebSocket server, PWA/phone client, remote approvals |
+| **M10** | Structured sessions | ACP / stream-json / app-server sessions with a native chat view (done) |
+| **M11** | Change sets | One coordinated change across several repos: lead + member agents, contract, integration overlay, set checkpoints, merge train (done) |
+| **H1** | Hardening review | ~120 findings of a full code review fixed (security, crashes, correctness, build) (done) |
+| **Backlog** | Later / maybe | Editor, tasks, jj, libghostty, relay, … |
+
+Critical path: **M0 → M1 → M2 → M3 → M4** gives a daily-driver. M5 can interleave with M3/M4.
+M6–M10 are largely independent of each other after M5. M11 builds on M6 (PRs) and M7 (runs,
+mailbox, `ptyro mcp`); its experiment M11.0 can run as soon as M5 exists.
+
+---
+
+## M0 — Foundations & spikes
+
+Goal: de-risk the hard parts before writing the real thing. The spikes lived in `spikes/` and were
+promoted into the M1 crates (the `pty-pane` spike became `ptyro-term`, `ptyro-pty` and `ptyro-headless`).
+
+- [x] **M0.1** Cargo workspace skeleton per SPEC §3.3; `rust-toolchain.toml`; shared lints
+      (`clippy::pedantic` selectively, `unsafe_code = "deny"` except `ptyro-pty`); `cargo deny`
+      config; `LICENSE` (MIT, §21.1) exists, add `license = "MIT"` to each crate. **S**
+      *Done 2026-10-20:* 12 crates (stubs except `ptyro --version`), toolchain 1.99.1, `clippy::all`
+      (pedantic deferred until there is real code to tune it on), `deny.toml` green, root `Makefile`.
+- [~] **M0.2 (spike)** *PTY → alacritty_terminal → ratatui* pipeline: spawn `claude` in a
+      `pty-process` PTY, feed `alacritty_terminal`, paint a ratatui pane, forward keys via
+      `terminput`. Evaluate: rendering fidelity (Claude, nvim, htop), resize/reflow, kitty keyboard
+      (Shift+Enter in Claude), synchronized output, latency feel. Record findings in SPEC §20. **M**
+      *[~] 2026-10-20:* the spike worked headless on Linux with Claude, Codex, Gemini, vim
+      and htop (docs/compat.md), and with its own TUI dogfooded inside the emulator; findings are in
+      SPEC §5.6 and §20.5. **Left:** a human checks how it feels in real terminals
+      (now with the real product: `make try CMD=claude`), plus macOS.
+- [x] **M0.3 (spike)** Claude hook injection: verify `--plugin-dir` with a generated plugin
+      `hooks/hooks.json` is additive to user hooks; compare `--settings` inline hooks merge
+      behaviour. Capture real payloads of `SessionStart`, `UserPromptSubmit`, `PermissionRequest`,
+      `Notification`, `Stop`, `StopFailure`, `SessionEnd` as fixtures. **S**
+      *Done 2026-10-20:* both mechanisms are additive, `--plugin-dir` chosen (SPEC §8.2).
+      `--session-id` and resume verified. Fixtures are in `crates/ptyro-agents/tests/fixtures/claude-2.1.304/hooks/`;
+      `StopFailure` is not captured yet (it needs a real API failure).
+- [x] **M0.4 (spike)** Codex hook/notify injection without touching `~/.codex`: try `-c` inline
+      hooks, `--profile` layer, `CODEX_HOME` overlay (+ `auth.json` symlink); confirm hook trust
+      behaviour; capture payload fixtures; determine graceful-quit sequence. **S**
+      *Done 2026-10-20:* inline `-c` hooks plus inline `hooks.state` trust hashes, which ptyro
+      computes (verified bit-for-bit), and `-c projects={…}` to skip the worktree trust dialog
+      (SPEC §8.4). `SessionStart`/`UserPromptSubmit` captured. **Follow-up M0.4b:** capture
+      `Stop`/`PermissionRequest`/`notify` after `codex login`.
+- [x] **M0.5 (spike)** Gemini hook injection via `GEMINI_CLI_SYSTEM_SETTINGS_PATH` merge file;
+      confirm `--session-id` + `--resume <uuid>`; capture title strings for Ready/Action
+      Required/Working. **S** *Done 2026-10-20:* the system-settings route is impossible (needs
+      root-owned dirs); an opt-in linked **extension** works instead (SPEC §8.5). `--session-id`
+      verified via hooks; `GEMINI_CLI_HOME` verified. **Follow-up M0.5b:** turn hooks and the
+      Action Required/Working titles, once a working API key or Google login is available.
+- [x] **M0.6 (spike)** OSC 7501: implement probe reply in the M0.2 spike; confirm Claude reports
+      `working/blocked/idle` with `kind`; measure latency vs hooks; confirm ordering rule (7501
+      reply before DA1). **S** *Done 2026-10-20:* every state seen; 7501 runs 50–80 ms ahead of
+      hooks. This led to a status-fusion fix: most recent wins among high-confidence sources
+      (SPEC §9.2).
+- [~] **M0.7** CI: GitHub Actions matrix (ubuntu-latest, macos-latest): fmt, clippy, test, deny;
+      cache; nightly-free. **S** *Written* (`.github/workflows/ci.yml` → `make check` + cargo-deny);
+      unproven until the branch is pushed.
+- [x] **M0.8** `docs/compat.md` skeleton (the manual compatibility matrix from SPEC §18.2) and
+      `docs/fixtures.md` (how to record `.ptylog` fixtures). **S**
+- [x] **M0.9** Decide §21.1 (license: MIT) and §21.2 (prefix: `Ctrl-Space`, configurable) with the owner. **S**
+- [ ] **M0.10 (spike, deferred to M3 by the owner)** Multi-account isolation (SPEC §10.10), for each installed agent with two
+      real logins side by side on Linux *and* macOS:
+      - does the isolation variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GEMINI_CLI_HOME`) fully
+        separate auth, settings and conversation storage?
+      - macOS Keychain entry naming for Claude, and Codex keyring storage: are they per-dir?
+      - does Claude's `.claude.json` move into the dir?
+      - does ptyro's hook injection (M0.3/M0.4) still work in a non-default dir?
+      - which command reports the logged-in account?
+      Record the results in SPEC §20. **S**
+
+**Done when:** the M0.2 spike runs Claude Code interactively inside a ratatui pane well enough to
+complete a real task, and spike results for M0.3–M0.6 and M0.10 are written into SPEC §20 with "verified" tags.
+
+---
+
+## M1 — One session, rock solid
+
+Goal: the core loop of a tmux replacement, for exactly one session, with no shortcuts that would
+have to be undone later.
+
+**ptyro-pty**
+- [x] **M1.1** Spawn with env policy (SPEC §5.1 table, strip `TMUX` & friends), own process group,
+      resize, signal-group, wait for exit with status. Unit tests with `/bin/sh -c`. **M**
+      *Done:* `ptyro-pty`; env policy also strips parent-Claude markers, `COLUMNS`/`LINES`; tests cover size, env, group kill.
+- [x] **M1.2** Foreground-process + cwd probes (Linux `/proc`, macOS `libproc`). **S**
+      *Done:* Linux `/proc`, macOS `libproc` (type-checked for aarch64-apple-darwin; runtime-tested on Linux only).
+
+**ptyro-term**
+- [x] **M1.3** `Emulator` trait + `AlacrittyEmulator` (feed, resize with reflow, damage, rows,
+      cursor, modes, title, drain replies/events). **M**
+      *Done:* `snapshot()` for live upgrade is deferred to M8.1.
+- [x] **M1.4** Query responder (SPEC §5.6 table) incl. OSC 7501 probe reply and ordering rule. **M**
+      *Done:* VT220 DA1, XTVERSION, `CSI 16 t`, XTGETTCAP (TN/Co/RGB), OSC 10/11 with the viewer's real colours.
+      Port the spike's sniffer-before-emulator ordering. Add what alacritty lacks (XTVERSION,
+      `CSI 16 t`, XTGETTCAP) and override its VT102 DA1 reply.
+- [x] **M1.5** Side-channel sniffer: OSC 7501 reports, OSC 9/777/99, OSC 0/2, OSC 7, OSC 133,
+      OSC 52, OSC 9;4, BEL — with length caps. Fuzz target. **M**
+      *Done:* plus OSC 7 cwd, OSC 133 marks, OSC 9;4 progress (distinguished from OSC 9 notifications). "Fuzz target" is a proptest never-panic test; a `cargo fuzz` target can follow.
+- [x] **M1.6** Row-version table + `ScreenFrame` builder (keyframe & delta, style table, wide runs). **M**
+      *Done:* content-hashed row versions; property test (20k cases) proves deltas == keyframes.
+- [x] **M1.7** Input encoding: keys (xterm + kitty flags + DECCKM/DECKPAM), mouse (SGR/UTF-8/X10
+      per mode), bracketed paste with `ESC[201~` stripping, focus events. Table tests. **M**
+      *Done:* kitty flags by name, DECCKM, SGR + X10 mouse, paste defence, focus. Not yet: DECKPAM keypad, UTF-8 (1005) mouse.
+- [x] **M1.8** Golden-test harness: `.ptylog` fixtures → screen snapshots (`insta`). First fixtures:
+      Claude startup, Claude permission prompt, nvim open file, htop, `ls --color`. **M**
+      *Done:* fixtures for Claude (fullscreen main screen, permission dialog), Codex, vim, `ls --color`; chunking-independence check. htop skipped (its screen lists your processes).
+
+**ptyro-protocol / ptyro-client**
+- [x] **M1.9** Framing + msgpack/json codec, `Hello/Welcome/Reject` handshake, request/response
+      correlation, push messages; round-trip tests. **M**
+      *Done:* frames self-identify msgpack vs JSON; forward-compatible decoding tested.
+- [x] **M1.10** Async client library: connect (with auto-spawn of the daemon and ready-pipe),
+      request helpers, frame stream, reconnect with backoff. **M**
+      *Done:* readiness by polling the socket instead of a ready pipe (SPEC §4.1); reconnect with backoff lives in the TUI.
+
+**ptyro-daemon**
+- [x] **M1.11** Daemon bootstrap: paths (§14.1, `PTYRO_HOME`), lock file, stale-socket probe,
+      `0700`/`0600` perms, peer-uid check, `sun_path` length check, logging to file. **M**
+      *Done:* also refuses a socket dir owned by another uid; `/tmp` fallback for long paths.
+- [x] **M1.12** Session actor: PTY read loop always draining into the emulator, replies written
+      back, frame-ready notifications via `watch`. **M**
+      *Done.*
+- [x] **M1.13** Client hub: subscriptions, per-client pacing (tick + one-unacked-frame), controller
+      tracking, sizing policy (§5.8), sync-output holding. **M**
+      *Done:* sync-output holding comes free from alacritty's processor (frames never show half a 2026 batch).
+- [x] **M1.14** `daemon start|stop|status`, SIGTERM handling, graceful child shutdown (§4.4). **S**
+      *Done:* SIGTERM stops sessions gracefully until hibernation exists (M4.12).
+
+**ptyro (binary) / ptyro-tui (minimal)**
+- [x] **M1.15** `ptyro new -- <cmd>` (single session), `ptyro attach`, `ptyro attach --raw`,
+      `ptyro ls`, `ptyro kill`. **M**
+      *Done:* plus `rm`, `rename`, `read`, `send`.
+- [x] **M1.16** Minimal TUI: one full-screen pane + status line, prefix key, `prefix d` detach,
+      outer-terminal setup/teardown (alt screen, raw mode, kitty enhancement push/pop, mouse,
+      bracketed paste, focus reporting) with panic-safe restore. Query the outer terminal's real
+      OSC 10/11 colours at start and pass them to the daemon; Codex and Gemini theme from them. **M**
+      *Done:* prefix fixed at Ctrl-Space until the key-map engine (M2.5) reads config; OSC 52 forwarding, bell, cursor shape, reconnect.
+- [x] **M1.17** Testkit v0: temp daemon harness + `ptyro-fake-agent` (prints colours, alt screen,
+      asks a fake y/n prompt, emits OSC 7501). Integration test: spawn → attach → type → detach →
+      reattach → screen identical. **M**
+      *Done:* `crates/ptyro/tests/e2e.rs`, 12 tests (screen restore, responder, status, env, SIGPIPE, slow client, sizing, addressing, protocol reject, single instance + stale socket, CLI exit codes, SIGTERM, side channels).
+
+*Status 2026-10-20:* every task is done. The demo is automated: attach, type, detach, then reattach
+from another terminal at another size with the screen restored, run via `ptyro-headless` and
+`e2e.rs`. **Left for the owner:** the same by hand in real terminals, plus macOS CI.
+
+**Done when:** `ptyro new -- claude` starts Claude; you use it normally (incl. Shift+Enter, paste,
+resize); `prefix d` detaches; close the terminal; from a *different* terminal emulator,
+`ptyro attach` restores the exact screen instantly and Claude never noticed. Same for `nvim` and
+`htop`. The fake-agent integration test passes in CI on both OSes.
+
+---
+
+## M2 — Multiplexer core
+
+Goal: a multi-session terminal workspace you could already use instead of tmux for agent work.
+
+- [x] **M2.1** Session registry & addressing (§2.3): ULIDs, short handles, friendly corvid names,
+      `@last`, `@focused`, multi-target selectors. **M**
+      *Done:* `@focused`, `@all/@live/@exited`, `@working/@blocked/…`, globs, `,` unions; CLI multi-target via `Resolve`. Project-qualified names, `@attention` and `@run:` come with M3, M4 and M7.
+- [x] **M2.2** Store v1 (rusqlite + migrations, store actor): sessions, session events, kv. **M**
+      *Done:* `ptyro-store` (session, session_event, kv), orphan sessions from earlier runs closed, retention pruning, `ls --all`. The daemon degrades gracefully without the database.
+- [x] **M2.3** Config loader: user `config.toml`, validation with precise errors, hot reload,
+      `ptyro config path|edit|check|show`. **M**
+      *Done:* `[ui] [daemon] [keys] [themes.*]`, precise errors, reserved future sections accepted, directory watch with live reload in daemon and TUI, `config path|check|show|edit`.
+- [x] **M2.4** TUI shell: sidebar (sessions list for now), pane header, status bar, focus model
+      (terminal vs navigation mode), help overlay generated from the key map. **L**
+      *Done:* sidebar, pane headers, status bar with mode badges and clock, sidebar/pane focus, help generated from the live key map (filterable).
+- [x] **M2.5** Key map engine: prefix, after-prefix bindings, `global:` bindings, config
+      overrides, `prefix prefix` literal. **M**
+      *Done:* prefix/global/nav tables, overrides and unbinding, a configurable prefix, prefix-prefix literal; the prefix also escapes any overlay.
+- [x] **M2.6** Command palette (`:` / `Ctrl-p`) with fuzzy search (`nucleo`) over all commands. **M**
+      *Done:* nucleo-matcher palette: actions (with their keys), sessions and themes.
+- [x] **M2.7** Session switching: `j/k`, `1-9`, `/` fuzzy finder, `Tab`. **S**
+      *Done*, plus `` ` `` for the previous session in the pane.
+- [x] **M2.8** Scrollback: `ReadScrollback` ranges, client cache, mouse wheel, `scrollback_epoch`. **M**
+      *Done, design changed:* frozen `ScrollbackDoc` snapshots instead of ranges + epoch (SPEC §5.4); mouse wheel enters copy mode; `read --scrollback`.
+- [x] **M2.9** Copy mode: vi motions, search, selection, yank via OSC 52 to the outer terminal
+      (tmux-passthrough aware), prompt jumps via OSC 133. **L**
+      *Done:* vi motions with counts, words, `/ ? n N` smartcase search, char/line/block selection, `y`/`Y`, OSC 52 (tmux-wrapped), paste buffer (`prefix ]`), prompt jumps `[ ]` via in-grid hyperlink marks (SPEC §5.7), mouse-drag selection.
+- [x] **M2.10** Splits: two-to-four panes in the main area (h/v), focus movement, zoom,
+      drag-resize; layout saved per workspace view. **L**
+      *Done:* up to four panes, `v`/`s` with a picker, `h/l` and Shift-arrows, `z`, `c`, keyboard and drag resize, view persisted in the store.
+- [x] **M2.11** Shell sessions (`kind = shell`), command sessions, `ptyro shell-init` snippets for
+      OSC 7/133. **M**
+      *Done:* shell (`$SHELL -l`) and command sessions; `shell-init bash|zsh|fish` (OSC 7 + 133, inert outside ptyro).
+- [x] **M2.12** Exited/dormant session presentation: final screen greyed, exit code, `restart`. **S**
+      *Done:* greyed final screen, exit banner, ⏎ or `prefix C-r` restarts in place (same id), `x` removes. Dormant arrives with M4.
+- [x] **M2.13** Multiple simultaneous clients: view-only, controller handover, letterbox/crop with
+      size badge (§5.8). **M**
+      *Done:* `attach --view-only`, take-control (`=`), crop with badge and auto-pan to the cursor.
+- [x] **M2.14** Themes: `ptyro-dark`, `ptyro-light`, `high-contrast`; `NO_COLOR`; colour
+      downsampling for 256/16-colour outer terminals. **S**
+      *Done:* three built-in themes plus user themes, `NO_COLOR`, truecolor/256/16 downsampling of chrome and content, `theme.next` and palette switching.
+- [x] **M2.15** Mouse: click-to-focus, wheel scroll, split-border drag, passthrough when the child
+      grabbed the mouse. **M**
+      *Done:* click-to-focus (sidebar and panes), wheel, divider drag, drag-select, passthrough to mouse-reporting programs.
+
+*Status 2026-10-20:* every task is done. `crates/ptyro/tests/m2.rs` drives the real TUI inside the
+headless emulator: splits restored on reattach, copy-mode search and yank and paste, palette,
+finder, sidebar, restart, view-only, custom prefix. The daemon side is tested too: selectors,
+restart, scrollback documents with prompt marks, views and history across a daemon restart, and
+config reload with errors. **Left for the owner:** the demo by hand with real agents (Codex needs
+`codex login`), and macOS CI.
+
+**Done when:** you can run 5+ sessions (2 Claude, 1 Codex, nvim, a shell) in one TUI, switch with
+keys and the palette, split two side by side, scroll and copy from scrollback, attach a second
+terminal as a viewer, detach, and reattach later with layout intact.
+
+---
+
+## M3 — Projects, workspaces & worktrees
+
+Goal: the core workflow — "new idea → new isolated worktree with an agent in it" in two keystrokes,
+with zero risk of losing work.
+
+- [x] **M3.1** Store v2: workspace, project, workspace_project, worktree, trust tables, incl.
+      profile/notify columns (§14.2). **S**
+      *Done:* migration 2 (workspace, project, workspace_project, worktree with a partial unique name index, trust; session gains profile/worktree/project/workspace/agent/script/launch). An in-memory `Registry` writes through, so the store stays optional.
+- [x] **M3.2** Projects: `project add|ls|rm|show`, default branch & remote detection, discovery
+      scan of `discover.roots` with cache. **M**
+      *Done:* `project add|ls|rm|show|config|discover`. The main checkout is found from inside linked worktrees; default branch from `origin/HEAD`; scan of `discover.roots`, cached for an hour; TUI `project.add` picker.
+- [x] **M3.3** Workspaces: default `main`, `ws new|ls|rm|rename|add|remove`, saved views,
+      workspace switcher in TUI. **M**
+      *Done:* `main` always exists; `ws ls|new|set|rm|rename|add|remove`; views saved per workspace with the last one remembered; `C-Space w` switcher.
+- [x] **M3.4** `ptyro-git`: worktree add (fetch base, new/existing branch, `pull/<n>/head`), lock
+      while running, ptyro marker file, `worktree list --porcelain` reconciliation, symlink refusal. **L**
+      *Done:* `ptyro-git` (the git CLI, `GIT_OPTIONAL_LOCKS=0`): fetch the base (non-fatal offline), new/existing/remote branch, `pull/N/head`, `--no-track`; lock while sessions run; `ptyro.json` marker; reconciliation (missing, re-adopted); symlink refusal on ptyro-owned path parts.
+- [x] **M3.5** Worktree removal safety matrix (§10.8): running sessions, uncommitted, untracked,
+      unpushed, stashes; branch keep/delete rules; precise refusal reports. Exhaustive tests. **M**
+      *Done:* refuses on running sessions, uncommitted, untracked, unpushed-and-unmerged commits and stashes, with a precise report. `--force` asks; the branch is deleted only if merged or identical to its upstream. Covered by unit tests against real repos plus e2e and TUI tests.
+- [x] **M3.6** `.worktreeinclude` (gitignore semantics, matched-and-ignored), `worktree.copy`,
+      `worktree.share` with CoW clone / symlink / copy fallbacks. **M**
+      *Done:* matching is done by git itself (`ls-files --others --ignored --exclude`, `check-ignore`); `share` clones with CoW, falling back to symlink or copy, and excludes the shared entry so a symlink never counts as untracked work.
+- [x] **M3.7** Project config `.ptyro.toml` + `.ptyro.local.toml` layering; agent-executable
+      restriction (§13.1). **M**
+      *Done:* `.ptyro.toml` deep-merged with `.ptyro.local.toml` (main checkout and worktree); `[agents]`, `[profiles]`, `[ui]`, `[daemon]` and `[keys]` in a repository are errors that name the rule.
+- [x] **M3.8** Script runner: setup/run/archive in `script` sessions, process-group stop,
+      `run_mode = exclusive`, `after_turn` hook point (wired in M4). **M**
+      *Done:* setup/run/archive/after_turn in read-only `script` sessions (`<wt>.<script>`), stopped with TERM then KILL after 5 s; `run_mode = exclusive`; `start_agents = after_setup`; `after_turn` runs via `wt run W after_turn` (automatic in M4).
+- [x] **M3.9** Trust flow: fingerprint of `[scripts]`, TUI dialog showing exact script text, CLI
+      `project trust`, re-prompt on change. **M**
+      *Done:* SHA-256 of the merged `[scripts]`; the TUI dialog shows the full text *before* creating the worktree; `project trust [--yes]`; any change asks again.
+- [x] **M3.10** Port blocks (§10.7) + listening-port detection per session shown in sidebar. **M**
+      *Done:* first-fit blocks, bind-tested; a listening-port scan every 3 s over each session's process tree (`/proc` on Linux, `lsof` on macOS), shown in the sidebar, header and `ls`.
+- [x] **M3.11** Env injection for worktree sessions/scripts (§10.6) incl. optional Conductor
+      aliases. **S**
+      *Done:* `PTYRO_PROJECT/ROOT_PATH/WORKTREE_PATH/WORKTREE_NAME/BRANCH/PORT/PORT_COUNT`, `[compat] conductor_env`; inherited copies are stripped.
+- [x] **M3.12** Sidebar becomes the full tree: workspace → project → worktree → sessions, with
+      branch, diffstat, dirty marker, ports. Live repo status via `notify` (debounced). **L**
+      *Done:* the tree with folding, branch, `+/−`, dirty marker, state and ports; `notify` per worktree (500 ms) plus 10 s/60 s refresh; pinned profile badges.
+- [x] **M3.13** New-session / new-worktree wizard (`n`, `N`), fast path `n ⏎ ⏎`. **M**
+      *Done:* `n` (agent, then target; `n ⏎ ⏎` = default agent in a new worktree), `N` (name, then agent). The profile is shown with its reason; the pane follows the agent once setup ends.
+- [x] **M3.14** `wt open` editors (§13.2), `nvim` "inside" mode opens as a ptyro session. **S**
+      *Done:* `[editors]` plus built-ins (nvim/vim/hx inside, code/zed/cursor outside); `wt open`, `C-Space o`.
+- [x] **M3.15** `ptyro gc` (stale worktrees report, interactive cleanup). **S**
+      *Done:* `gc [--dry-run]`: gone, merged, unused for `stale_days`; asks for each, never forces.
+- [x] **M3.16** Branch name templates + optional auto-rename-from-first-prompt (`wt rename-branch`). **S**
+      *Done:* `{name} {user} {date} {slug}` (`{issue}` empty until issues exist); `wt rename-branch` refuses once pushed and can name the branch after the first commit. Naming from the first *prompt* waits for prompt delivery (M4).
+- [x] **M3.17** Profiles core (§10.10): `[profiles.*]` schema (user config only), resolution order,
+      env construction (managed-var scrub always, credential scrub when isolated; `default` isolated
+      once any profile exists), `PTYRO_PROFILE`,
+      `agent@profile` syntax, managed dirs under `data/profiles/`. Resume bound to the profile.
+      Table-driven tests for every spawn path (TUI, CLI, resume, scripts, MCP). **M**
+      *Done:* the schema, resolution order, env construction (`ptyro-agents::profile`), `PTYRO_PROFILE`, `agent@profile`, managed dirs. Restart is bound to its profile. Table-driven tests plus e2e for the CLI, TUI, restart and script paths; MCP arrives in M7.
+- [x] **M3.18** Profile secrets: `{ command = [...] }` resolution per spawn, memory-only TTL cache,
+      `<secret:NAME>` in the DB, redaction in logs, `profile env` and protocol replies. **S**
+      *Done:* `{ command = [...] }` per spawn with a TTL cache, `<secret:NAME>` in the launch record (the test greps the DB and WAL), never logged; `profile env` never resolves secrets.
+- [x] **M3.19** Profile CLI: `profile ls|show|new [--adopt]|rm|rename|env|login|sync`,
+      `ws new|set --profile`, `project pin|unpin`, `new --profile/--override-pin`. **M**
+      *Done:* everything listed, plus `profile detect [--apply]` (the owner's aliases) and `profile doctor`. Config edits use `toml_edit` (comments kept), validate, then `ReloadConfig`.
+- [x] **M3.20** Guardrails: `match` rules → pin suggestion on `project add`; spawn-time guard
+      (`confirm|refuse|warn`); pin-override confirmation; `share` symlinks that refuse credential
+      files. **M**
+      *Done:* auto-pin on add when exactly one profile matches (the TUI asks to keep it); guards (`confirm` asks, `refuse`, `warn`); pin-override confirmation (`needs_confirmation`, CLI `--yes`/`--override-pin`); `share` never links credential files.
+- [x] **M3.21** Identity in the TUI: profile label and colour in the workspace header, sidebar,
+      session header and status bar; optional border tint; the wizard shows the resolved profile and
+      why. **S**
+      *Done:* `[label]` badges in their colour on the workspace title, project rows, pane headers and status bar; `tint_borders`; the wizard title shows the resolved profile and why.
+
+*Status 2026-10-20:* every task is done. `crates/ptyro/tests/m3.rs` (10 tests) checks against a
+real daemon, real git (a bare "remote") and a fake `$HOME`:
+- the worktree lifecycle: includes, share, ports, untrusted-then-trusted setup, the §10.6 env,
+  locks, re-asking after a script change, every refusal, force with the kept branch, archive,
+  and merged removal with branch deletion;
+- scripts, exclusive run mode, live status and branch renames;
+- listening ports;
+- profiles: auto-pin, environment, secrets, guards, pin override, restart, the commit author, the
+  SSH key, and secrets kept out of the DB;
+- the profile CLI's config edits;
+- workspaces, reconciliation and gc;
+- editors;
+- the TUI: the `n ⏎ ⏎` fast path through trust and setup to the followed agent, the `N` wizard,
+  folding, refused removal and the workspace switcher.
+
+**Left for the owner:**
+- the Done-when with real Claude accounts: log in with `ptyro profile login work claude`, then
+  check `/status` inside;
+- a real `git push` with each profile's SSH key;
+- macOS (FSEvents watching, the `lsof` port scan, APFS clones).
+
+`make sandbox` gives a throwaway ptyro with a demo repository to try it in.
+
+
+**Done when:** from a fresh repo you register it, press `N`, and get a new worktree on
+`ptyro/<name>` with `.env` copied, setup script run (after trusting it), a port block assigned, and
+Claude running in it; you can try to remove a worktree with uncommitted work and ptyro refuses with a
+clear explanation; removing a clean merged one deletes it and its branch. With `work` and
+`personal` profiles defined, a repo matching `github.com:acme/*` is pinned to `work` on add; a
+Claude session there runs under the work account and commits with the work author; a shell in
+`personal` pushes with the personal key; spawning `claude@personal` in the work repo asks for
+confirmation first.
+
+---
+
+## M4 — Agent intelligence
+
+Goal: ptyro *knows* what every agent is doing and tells you exactly when you're needed.
+
+- [x] **M4.1** `Adapter` trait, capabilities, `LaunchPlan`, integration-file materialization under
+      `data/integrations/` (never in user config or worktree). **M**
+      *Done:* the synchronous `Adapter` trait (SPEC §8.1) with `Caps`, `LaunchPlan {argv, env, files, conversation, sidecar}`, `on_hook/on_title/on_screen/ready/answer/stop`; files land in `data/integrations/<agent>/<content hash>/`; `adapter = "…"` lets any agent name use any adapter; dangerous args need `dangerous = true` (⚠ badge).
+- [x] **M4.2** `ptyro hook` relay: blocking socket client, 500 ms budget, silent-success failure
+      mode, no-op without `PTYRO_SESSION_ID`. **S**
+      *Done:* `ptyro hook <adapter> <event>` runs before any runtime: blocking `UnixStream`, 500 ms budget, always exit 0 and no stdout, no-op without `PTYRO_SESSION_ID`; Codex `notify` JSON as the last argument with `--chain` to the user's own notify.
+- [x] **M4.3** Claude adapter: `--session-id` pre-assign, `-n`, hooks injection (per M0.3 result),
+      OSC 7501 mapping, prompt delivery, graceful stop, resume with re-passed flags, multi-account
+      via the session's profile (`CLAUDE_CONFIG_DIR`, M3.17). **L**
+      *Done:* plugin-dir hooks, `--session-id`, `-n`, the statusline relay, OSC 7501, folder-trust and login recognisers, prompt delivery only into the real input box (Enter as an encoded key event: Claude ignores a bare `\r`), answers `1`/`2`/Esc, stop via Esc → `/exit` → HUP, resume with re-passed flags, per-profile `CLAUDE_CONFIG_DIR`. Checked against real Claude 2.1.304 with `make verify-claude` (trust dialog, delivery, working/blocked/idle from hooks, `ptyro answer`, hibernate, dormant across a daemon restart, resume into the same conversation).
+- [x] **M4.4** Status engine (§9): reducer, precedence & staleness rules, persisted transitions,
+      `status --explain`. Fixture-driven tests from M0.3–M0.5 payloads. **M**
+      *Done:* `engine.rs`: high sources are peers (newest wins; a weaker one within 250 ms is deferred, not dropped), medium after `stale_after`, low last; strong details survive weak refreshes; a 64-entry explain ring (`ptyro status S --explain`, TUI `e`); every transition persisted with its previous confidence and work time. Tests replay the M0 fixtures.
+- [x] **M4.5** Attention model + "next attention" (`a`) + inbox (`i`) + peek (`p`) with inline
+      reply. **L**
+      *Done:* attention raised unless the session is watched (focused pane *and* focused terminal, mode 1004); `a` with `attention.scope`; `i` inbox with per-workspace tabs; `p` peek with `y`/`a`/`n` answers and a typed reply; `ptyro answer`.
+- [x] **M4.6** Notifier: channels (inbox, bell, OSC 9/777 via controller with tmux passthrough,
+      desktop via `notify-rust` feature), per-category/project/session mute, quiet hours,
+      coalescing, contextful messages. **M**
+      *Done:* inbox always; then gated by `on` kinds, mutes (`ptyro mute` session/project/workspace, `--for`), workspace mode + breakthrough, quiet hours and coalescing (blocked always passes). Channels: OSC 777/9 and bell through each TUI (tmux passthrough), desktop via `notify-send`/`osascript` or `desktop_command` (not `notify-rust`: no new dependency), titles carry the profile label and say what is needed; `ptyro notify test`.
+- [x] **M4.7** Codex adapter (per M0.4): notify chaining, hooks, id learning, title fallback,
+      resume. **M**
+      *Done:* `-c` hooks + `hooks.state` trust (hash golden-tested vs 0.143.0), chained `notify`, worktree trust when the project is trusted, id from `SessionStart`, braille-spinner title, update/trust/"hooks need review" recognisers, answers `y`/`a`/Esc, `/quit`, `codex resume`. Real turns are unverified (the Codex login returns 401), so it stays on hooks rather than M4.19's app-server.
+- [x] **M4.8** Gemini adapter (per M0.5): `--session-id`, system-settings hook merge, title
+      fallback, resume. **M**
+      *Done:* the system-settings route was rejected in M0.5; instead an opt-in linked extension (`ptyro integrations install gemini`), `--session-id`/`--resume`, title fallback; `profile doctor` warns about retired consumer Gemini. Turn hooks unverified (API key 403).
+- [x] **M4.9** OpenCode adapter: allocated `--port`, per-session password, SSE subscription,
+      `session.status`/`permission.asked` mapping, resume. **M**
+      *Done:* `--port`/`--hostname`, random `OPENCODE_SERVER_PASSWORD`, SSE `/event` follower (reconnecting), `session.status`/`permission.*`/`session.error` mapping, answers through `/session/:id/permissions/:id`, `--session` resume. Tested against the fake agent's OpenCode server only (not installed here).
+- [x] **M4.10** Generic adapter + activity heuristic with low-confidence display (`◌`). **S**
+      *Done:* `generic` trusts OSC 7501 from any program and otherwise uses titles, notifications and the heuristic (only screen-changing output counts), drawn `◌`; `shell` gets working/idle from OSC 133.
+- [x] **M4.11** Dormant sessions & resume: reconciliation on daemon start (§7.5),
+      `restore_on_start`, focus-to-resume, `ptyro resume`. **M**
+      *Done:* `close_orphans` → dormant, `restore_on_start = dormant|resume|none` (resume staggers 3 at a time), `⏎`/focus resumes (`resume_on_focus`), `ptyro resume`; `daemon stop` hibernates resumable agents first.
+- [x] **M4.12** Hibernation (`hibernate_after`), guarded by idle + not visible + no child
+      processes. **M**
+      *Done:* `hibernate_after` tick every 2 s: idle that long, no viewers, conversation known, and the PTY's foreground process is the agent itself; `ptyro hibernate` on demand.
+- [x] **M4.13** Pane header "current activity" (`Bash: cargo test`, `Editing src/x.rs`) from
+      `PreToolUse`/equivalents; progress bar from OSC 9;4 / OSC 7501 `progress`. **S**
+      *Done:* header activity from hooks/7501 `msg`/`PreToolUse` tool summaries and a progress bar from 7501 `progress` / OSC 9;4.
+- [x] **M4.14** `after_turn` script execution on turn end (opt-in). **S**
+      *Done:* a trusted project's `[scripts] after_turn` runs on Working → Idle with the worktree env; `[agents.<name>] after_turn = false` opts out (trusting the script is the opt-in). Also `worktrees.auto_rename_branch`: an unnamed worktree's branch is renamed from the first prompt.
+- [x] **M4.15** `ptyro-fake-agent` gains hook-calling modes for every adapter's payload shape, so
+      CI covers all four adapters without real agents. **M**
+      *Done:* `fake-agent --as claude|codex|gemini|opencode|antigravity` reads the integration ptyro actually generated (plugin hooks.json, `-c` hooks and notify) and calls it with each adapter's payload shapes; `--as opencode` serves the SSE/permissions API; plus `conformance` for 7501.
+- [x] **M4.16** Workspace-scoped attention (§9.6): home workspace per session, `notify =
+      all|badge|mute` with `breakthrough`, `attention.scope`, per-workspace inbox tabs, other
+      workspaces as status-bar badges, profile label in notification titles. **M**
+      *Done:* home workspace per session, `notify = all|badge|mute` with `breakthrough`, `attention.scope`, inbox tabs, `⚑N` badges for other workspaces, profile label in titles.
+
+*Added 2026-10-20 from `RESEARCH.md` (R-ids point to its idea funnel):*
+
+- [x] **M4.17** Usage and quota meters per profile (R-USE-01, promoted from Backlog):
+      - Claude: a `ptyro statusline-relay` set as `statusLine.command`. It chains to the user's own
+        statusline and forwards `rate_limits.five_hour` / `.seven_day` (`used_percentage`,
+        `resets_at`), cost and context % over the hook socket.
+      - Codex: a side app-server connection per `CODEX_HOME` on `account/rateLimits/updated`.
+      - History via `ccusage --json` when installed.
+      - Shown per profile in the status bar and sidebar, with a "rate-limited until T" state. **M**
+      *Done:* the statusline relay (chains to the user's `statusLine`), opt-in Codex side app-server (`[agents.codex] usage = true`), `StopFailure(rate_limit)` → "limited until T", `ptyro usage` (+ `ccusage` when installed), sidebar and status-bar meters. Codex meters unverified (401).
+- [x] **M4.18** Claude native bridges (R-ORC-01). **Spike first.**
+      - Learn `CLAUDE_CODE_MESSAGING_SOCKET`/`_TOKEN` from the hook env and deliver NDJSON over the
+        socket. Verify the token / own-child rule and `crossSessionInbound`.
+      - Ingest the Notification types `agent_needs_input` / `agent_completed`, plus `TeammateIdle`
+        and `TaskCompleted`.
+      - Read `claude agents --json`.
+      - Show Claude agent teams as child rows, and warn when a team shares one worktree.
+      - The spike result goes to SPEC §20.1. **M**
+      *Done:* Notification types `agent_needs_input`/`agent_completed`/`elicitation_dialog`, `TeammateIdle`, `TaskCompleted` and subagents as `+N` child rows; `claude agents --json` as a medium-confidence cross-check every 15 s when hooks are quiet (fields recorded in SPEC §20.1). **Not done:** socket delivery. The messaging protocol is undocumented and ptyro won't reverse-engineer its token handling, so prompts stay on the PTY until there's a documented interface or your decision. Two or more teammates in one worktree raise a "their edits can collide" notification (corrected 2026-10-20 in M5: this note first said the warning was missing).
+- [x] **M4.19** Codex hybrid session (R-ORC-35). **Spike first.**
+      - A daemon-owned `codex app-server --listen unix://…`, with `codex --remote unix://…` in the PTY.
+      - `thread/status/changed` feeds the status engine; prompts go via `turn/start`/`turn/steer`;
+        approvals are answered from the inbox.
+      - The spike answers two questions: do approvals reach every client, and do injected turns render
+        in the TUI?
+      - If it holds, M4.7 uses it and M10.4 shrinks. **M**
+      *Done:* spike recorded in SPEC §20.2: the app-server schema and rate-limit/approval methods are verified, but turns and approval routing couldn't be tested (401 despite "Logged in"). Not adopted; M4.7 stays on hooks. Re-run after `codex login`.
+- [x] **M4.20** OSC 7501 conformance and interop (R-STA-01).
+      - Audit against the current Program Status Protocol revision: ids and subtrees, the 256-record
+        LRU, rejecting control characters in base64 fields, record lifetimes across OSC 133 `A` and
+        process exit, RIS, suppressing OSC 9;4 on the root record, and notification rate limits.
+      - Accept iTerm2 OSC 21337 (low confidence) and herdr `report-agent`.
+      - Document precedence (including `applied:false`) and the tuios state-name mapping in SPEC §9.
+      - Any 7501 emitter gets confident status in the generic adapter.
+      - Conformance fixtures in `ptyro-fake-agent`.
+      - An inbound `done` means "finished, results unseen" (idle plus attention), not orchestration
+        `Done`. Add `Blocked{Unspecified}` (R-DD-02). **S**
+      *Done:* `parse_psp` follows rev 0.4 (whole-report discard, ids/subtrees, `app` inheritance, 256-record LRU, `clear`, record lifetimes across OSC 133 A, exit and RIS, OSC 9;4 suppressed once 7501 is seen, most-urgent effective record); OSC 21337 (low) and `ptyro report` (alias `report-agent`, herdr/tuios state names); precedence and `applied:false` documented in SPEC §9.7; `fake-agent conformance`. Agents' `done` is idle + attention; generic tools' `done` is `Done`, which raises attention too. Blocked without a kind is "has a question".
+- [x] **M4.21** Antigravity CLI adapter (R-AGT-01).
+      - Gemini CLI was replaced by `agy` for consumer accounts on 2026-06-18, so M4.8 stays thin and
+        the effort moves here.
+      - Map hooks: `SessionStart`, `PreInvocation` → working, `Stop` with `fullyIdle` → idle. Resume on
+        `conversationId`.
+      - Spike a blocked signal (no permission hook exists; check OSC 7501).
+      - `doctor` warns consumer Gemini users. **M**
+      *Done:* `agy` adapter written from its docs (SessionStart, PreInvocation, PreToolUse, Stop with `fullyIdle`), opt-in `ptyro integrations install antigravity`, blocked only via OSC 7501; `doctor` warns consumer Gemini users. Unverified: agy isn't installed here.
+- [x] **M4.22** External notification sinks for M4.6 (R-NOT-01): ntfy, Pushover, Slack/Discord
+      webhooks, Telegram.
+      - Approve/deny action links use signed, single-use, expiring tokens.
+      - They are answered by a minimal callback listener (off by default; loopback or tailnet bind),
+        which M9.2 later reuses. **M**
+      *Done:* ntfy, Pushover, Slack, Discord, Telegram and `command` sinks (secrets via `curl --config -`, never argv), approve/deny links signed with HMAC-SHA256, single-use and expiring, served by the opt-in callback listener (GET shows a page, only POST acts).
+
+*Status 2026-10-20:* every task is done except M4.18's socket delivery (needs your decision) and
+M4.19 (spiked, waiting on a Codex login). `crates/ptyro/tests/m4.rs` (8 tests) runs a real daemon
+with fake agents speaking each adapter's real integration:
+- Claude: plugin hooks, prompt delivery, attention, answers, usage and the explain log (the
+  real trust dialog is covered by `make verify-claude`);
+- Codex, Gemini, Antigravity and OpenCode, including the OpenCode SSE and permissions API;
+- generic, shell and `ptyro report`;
+- dormant, resume and restart;
+- notifications, sinks and signed links;
+- `after_turn` with the branch auto-rename;
+- the TUI's `a`, `p` and `i`;
+- 7501 conformance and auto-hibernation.
+
+`make verify-claude` checks the Claude adapter against the real Claude Code installed here, with
+one tiny turn.
+
+**Left for the owner:**
+- `codex login` (the stored token returns 401), then re-check Codex turns, M4.19 and the missing
+  fixtures;
+- a working Gemini API key;
+- installing OpenCode and agy to verify their adapters;
+- the M4.18 messaging-socket decision;
+- macOS desktop notifications;
+- the Done-when with real agents.
+
+**Done when:** with 2 Claude, 1 Codex, 1 Gemini session working in parallel, ptyro shows accurate
+working/blocked/idle states within ~1 s of reality, `a` always jumps to the session that needs you,
+notifications say *what* is needed, and after a reboot every agent session reappears as dormant and
+resumes its conversation on focus.
+
+---
+
+## M5 — Scriptable control plane
+
+Goal: everything the TUI can do, scripts and other agents can do too.
+
+- [x] **M5.1** CLI parity pass against SPEC §12.2; every list/query command has `--json` with
+      documented schemas (`docs/cli-json.md`) and snapshot tests. **L**
+      *Done:* the §12.2 tree is reconciled both ways (SPEC §12.2 [built M5] lists what was added and what waits for M7–M9). `--json` is on every listing and query, the shapes are documented in `docs/cli-json.md`, and a snapshot of every shape lives in `crates/ptyro/tests/snapshots/m5__cli-json.snap` (`make snapshots`). Protocol 1.4 adds `events_lost`.
+- [x] **M5.2** `send` (`--wait-ready`, `--raw`, multi-target), `read --screen|--scrollback`
+      (`--plain|--ansi`), `wait --for … --timeout` (`--any|--all`), `events --follow` (NDJSON). **M**
+      *Done:* `send S… TEXT` takes several sessions and `--wait-ready`; `--wait` reports how the turn ended (idle, blocked, stalled, exited) and covers R-STA-03, along with the new `turns` counter. `read --screen|--scrollback --plain|--ansi --json`. `wait --for … --timeout --any|--all`, plus `--match REGEX` (R-ORC-22) and `--stall`. `idle` means "after the prompt ptyro last typed", so `new --prompt` + `wait` is safe. `events` shows the persisted history, and `--follow` streams NDJSON. Also `broadcast`, `stop`, and `ls --status/--project/--workspace`.
+- [x] **M5.3** Stable exit codes (§12.4). **S**
+      *Done:* the codes of SPEC §12.4, plus `wait` → 5 when a session exits first and 7 on timeout or stall, and `doctor` → 1 on a problem. Tested in `m5.rs`, documented in `docs/cli-json.md`.
+- [x] **M5.4** Dynamic shell completions (live session/worktree/project names). **S**
+      *Done:* `ptyro completions bash|zsh|fish|elvish|powershell` uses clap_complete's dynamic engine (pinned `=4.6.11`). Session, worktree, project and workspace names come live from the daemon (400 ms budget, never starts one); agents, `agent@profile` and profiles come from the config.
+- [x] **M5.5** `ptyro init` onboarding wizard (§12.3), including detection and adoption of
+      existing multi-account setups per §10.10: alias/function parsing for config-dir variables
+      (the owner's setup; golden tests over real-world rc snippets), suffix → profile naming,
+      `includeIf` identities, orphan `~/.claude-*` dirs. **M**
+      *Done:* `ptyro init [--yes] [--dry-run]`: terminal and agent checks, account detection, preferences, a config written by adding only missing keys, repositories to register, then completions, the service and the tour (offered; `--yes` never edits rc files or installs anything). Detection now handles multi-line functions, fish `set -x`, `${HOME}`, and suffix-less aliases (named after the account dir), with golden tests over real-world rc snippets (`crates/ptyro-agents/tests/fixtures/rc/`).
+- [x] **M5.6** `ptyro doctor` + `profile doctor`: agents/versions/auth per profile (logged in as
+      whom), leaked managed vars in the daemon env, pins contradicting `match`, terminal caps,
+      tmux settings advice, socket perms, git version, hook-integration self-test (spawns fake agent). **M**
+      *Done:* `ptyro doctor [--quick] [--json]` and `profile doctor`:
+        - logins via each tool's own status command (`claude auth status --json`, `codex login status`, `gh auth status`), never by reading credentials;
+        - versions against those verified;
+        - account variables leaked into the daemon, and agents missing from the daemon's PATH;
+        - pins that contradict `match`; the terminal and kitty keys; tmux advice;
+        - socket permissions and git version;
+        - the hook self-test, which runs the fake agent through the real Claude, Codex and OpenCode integrations.
+
+        The Codex "hooks need review" screen is now recognised and reported here (part of R-AGT-06; `--repair` is open).
+- [x] **M5.7** `daemon install-service` / `uninstall-service` (systemd user unit, launchd agent). **S**
+      *Done:* `daemon install-service` / `uninstall-service [--dry-run]`:
+        - systemd: the user unit carries this shell's PATH and XDG/PTYRO_HOME, with `KillMode=mixed` (agents hibernate on stop) and `RestartPreventExitStatus=5`;
+        - launchd: a plist with `KeepAlive{SuccessfulExit=false}`;
+        - nothing is started or stopped behind your back.
+
+        Tested with a fake `systemctl`; the launchd path is unverified (no macOS here).
+- [x] **M5.8** `broadcast` to multiple sessions (TUI multi-select with `space` + `b`). **S**
+      *Done:* `ptyro broadcast S… TEXT` sends to each session once it's ready, in parallel. In the TUI, Space marks sessions in the sidebar (`◆`) and `b` sends one prompt to all of them.
+- [x] **M5.9** `docs/scripting.md` cookbook (shell recipes: overnight batch, "wait for all then
+      test", tmux status-line integration via `ptyro ls --json`). **S**
+      *Done:* `docs/scripting.md` covers one task start to finish, an overnight batch, wait-for-all-then-test, turn-by-turn `send --wait`, reacting to `events --follow`, a tmux status line and waiting for a dev server. It also has the AGENTS.md/skill snippet that teaches agents the commands (R-ORC-18).
+- [x] **M5.10** Read other tools' committed config (R-WT-03, from `RESEARCH.md`).
+      - Import as setup/run sources: `.claude/launch.json` (dev servers, `autoPort`),
+        `.conductor/settings.toml`, `.superset/config.json`, `.codex/` environments,
+        `copilot-setup-steps.yml`, `.cursor/environment.json`.
+      - All of it shows in, and is fingerprinted by, the M3.9 trust dialog.
+      - `project config --explain` shows where each value came from. **M**
+      *Done:* Six readers in `ptyro_core::imports`, one each for Conductor (`.conductor/settings.toml`, `conductor.json`), Superset, Codex environments, Claude's `launch.json` (ports from the worktree's block, `--port` rewritten), Cursor's `environment.json` and Copilot's setup steps (via yaml-rust2).
+        - They fill only what `.ptyro.toml` leaves unset.
+        - The trust dialog names each script's source file, and the scripts are fingerprinted like ptyro's own.
+        - Scripts get the tool's variables (`CONDUCTOR_*`, `SUPERSET_*`, `CODEX_*`).
+        - `project config --explain|--json` shows where every value came from; `[project] import = false` turns it off.
+
+        Formats are in SPEC §20.7.
+
+*Status 2026-10-20:* every task is done. `crates/ptyro/tests/m5.rs` (9 tests):
+- the Done-when as a real `sh` script, with `events --follow` watching;
+- `send`, `wait` (including `--match`, `--any` and `--stall`), `read`, `events`, `broadcast` and `stop`;
+- exit codes;
+- the `--json` shape snapshot;
+- live completions;
+- `doctor` with its self-test, and `install-service`;
+- `init` against a fake home;
+- other tools' config, from trust to the imported setup running with `CONDUCTOR_*`;
+- the TUI's broadcast and tour.
+
+Golden rc-file tests and importer unit tests live in their crates.
+
+**Left for the owner:**
+- the launchd service on macOS;
+- `init` on your real machine (it found no multi-account setup here);
+- the imported formats against real projects that use those tools.
+
+**Done when:** a shell script can create a worktree, start Claude with a prompt, wait for it to go
+idle, read its final screen, run tests and remove the worktree — using only `ptyro` commands — and
+the TUI shows all of it live.
+
+---
+
+## M6 — Review & ship
+
+Goal: close the loop from "agent finished" to "merged", without leaving ptyro.
+
+- [x] **M6.1** Inspector pane framework (`D`), tabs: Diff, Commits, Checks, Ports, Events. **M**
+      *Done:* `D` (after the prefix, or in the sidebar) opens the inspector over the panes for the selected or focused worktree, with five tabs (`1`–`5`/`Tab`) and the PR's check summary in its title. `Q` opens the review queue. Sidebar worktree rows show `#7 ✓` / `✗2` / `◌` / `merged`.
+- [x] **M6.2** Diff view: file list, unified/side-by-side hunks, syntax highlighting (optional
+      `syntect`), against base / upstream / last turn. **L**
+      *Done:* the daemon diffs the working tree with `-M` against the base (merge base), the upstream, the last turn (a `git stash create` snapshot at turn start, which touches nothing) or HEAD; untracked files are included and the diff is capped at 20k lines. The view has a file list, unified hunks with old/new numbers, and side by side (`s`). `wt diff --against/--stat/--json` gives the same. **Not done:** syntax highlighting, which was optional; syntect was left out for binary size.
+- [x] **M6.3** Line comments on the diff → batched into a prompt sent to the session's agent
+      (annotate-the-diff review). **M**
+      *Done:* `c` comments on the cursor line (the line's text is kept) and `S` sends all comments to the agent as one numbered `file:line` prompt, delivered once its turn is over. The comments live in the daemon (`review add/ls/rm/send`), so a TUI restart keeps them.
+- [x] **M6.4** Commit helper (stage all / pick files, message editor, or "ask the agent to commit"). **M**
+      *Done:* `Space` marks files and `C` commits them (or everything) with a message, as the worktree's profile identity. `E` commits in your `$EDITOR` inside ptyro (`git commit --verbose` in a session), and `A` asks the agent to commit. From the CLI: `wt commit -m/--all/-- FILES/--ask-agent` and `wt log`.
+- [x] **M6.5** `gh` integration: create (draft) PR, show PR number + check status per worktree in
+      sidebar, "fix failing checks" sends failing logs to the agent. **L**
+      *Done:* `pr create` pushes under the profile and opens a draft PR (`--ready`); the body is the commit list plus a worktree/session marker (R-GIT-03). The poller (`github.poll`, under the profile's gh account) gives the sidebar its PR number and checks. `pr status/checks` are there too, and `pr fix` (inspector `f`) sends the failing checks' log tails to the agent. Tested against `fake-gh`; gh isn't installed here.
+- [x] **M6.6** Create worktree from PR (`--pr 123`) or issue URL (branch name derived). **M**
+      *Done:* `wt new --pr N|URL`, `new --pr N|URL` (R-WT-02) and `--issue N|URL`. An issue gives the worktree `issue-N`, the branch `issue-N-<slug>`, and the agent a first prompt from the issue. Also `pr open N|URL`, which finds the worktree from a PR and attaches to its agent.
+- [x] **M6.7** Integrate / checkpoint: rebase onto base and fast-forward into a target branch, or
+      cherry-pick; "pair mode" checks out the agent branch in the main checkout for IDE/dev-server
+      use and restores afterwards (with stash safety). **L**
+      *Done:* `wt integrate W [--into B] [--cherry-pick] [--push]`: it refuses while dirty or while an agent is working, rebases onto the target (aborts on conflict), then fast-forwards the target, with `merge --ff-only` where it's checked out or by moving the branch forward. `wt pair W` / `wt unpair W`:
+        - **pair:** stash the main checkout's own work, check out the worktree's commit detached, then apply its uncommitted changes and copy its new files;
+        - **while paired:** edits made in the main checkout are carried back to the worktree on `--refresh`/`unpair`;
+        - **unpair:** restore the original branch and apply and drop exactly that stash.
+
+        Nothing changes if a patch doesn't apply. ("Checkpoint" is read as integrating progress into the target.)
+- [x] **M6.8** Events tab: per-session status timeline from `session_event`. **S**
+      *Done:* the inspector's Events tab: the worktree's sessions' persisted events as one timeline, with status transitions coloured.
+- [x] **M6.9** Review queue (R-ORC-24, from `RESEARCH.md`).
+      - One ranked "ready for review" lane across sessions, using verified-done (M7.9), check results,
+        diff size, touched files, time/cost and the last message.
+      - The evidence bundle opens in the inspector.
+      - A `max_unreviewed` policy queues new spawns and fan-outs past the limit.
+      - Digest notifications. **M**
+      *Done:* `review queue` (TUI `Q`) ranks worktrees whose agent finished a turn you haven't reviewed. The score weighs checks, diff size, files, errors and time waiting; each item has reasons and the agent's last line. The evidence bundle is the inspector. `review done` (or sending comments) counts as reviewed. `review.max_unreviewed` holds new agent spawns in a queue (`Queued` reply; `--unqueued` skips it) and starts them as room appears. A digest notification goes out at most every `review.digest`. Since M7, verified-done counts too: +25 "verified", −25 "claims done; its check fails".
+- [x] **M6.10** PR-event loop (R-GIT-01). Builds on M6.5.
+      - `ptyro watch-pr`, automatic for PRs ptyro opened, polls `gh pr checks` and review threads.
+      - New CI failures (with a log tail) and review comments go to the owning session. Delivery is
+        only when the agent is idle, and tagged with where it came from.
+      - Replies on review threads are marked "via ptyro". Ambiguous comments raise attention instead.
+      - `ptyro pr automerge` wraps `gh pr merge --auto`.
+      - Escalate to the human after a configurable time. **L**
+      *Done:* the poller runs the PR-event loop for watched PRs (ptyro's own, or `pr watch`/`watch-pr`):
+        - **baseline:** the first poll is a baseline, so only news is sent;
+        - **news:** newly failing checks (with a log tail) and new line comments go to the agent once its turn is over, tagged `[via ptyro: …]`;
+        - **questions** raise attention instead;
+        - **replies:** `pr reply` ends with "— via ptyro";
+        - **merging:** `pr automerge` wraps `gh pr merge --auto`;
+        - **escalation** after `github.escalate_after`.
+
+        State persists in the store.
+
+*Status 2026-10-20:* every task is done. Syntax highlighting (optional in M6.2) is left out.
+`crates/ptyro/tests/m6.rs` (7 tests):
+- the Done-when in the TUI: review in the inspector, two line comments become one prompt, the
+  "fix" is committed, a draft PR opens, and its checks go pending → passing in the sidebar;
+- diffs (base, head, last turn), commits as the profile identity, integrate and cherry-pick;
+- pair mode round-tripping the user's stash and edits;
+- PRs and the PR-event loop through `fake-gh`: baseline, failing CI with a log, a line comment
+  delivered, a question that raises attention, reply, auto-merge, `pr open`;
+- worktrees from issues;
+- the review queue: ranking, the `max_unreviewed` hold, the digest;
+- the inspector's tabs.
+
+**Left for the owner:**
+- install `gh` and check the PR features against a real repository (they follow gh's docs and
+  ran only against `fake-gh`);
+- pair mode in your IDE with a dev server running.
+
+**Done when:** you review an agent's changes in the inspector, leave two line comments that become
+a follow-up prompt, the agent fixes them, you open a draft PR and watch its checks in the sidebar.
+
+---
+
+## M7 — Orchestration
+
+Goal: run many agents on one problem deliberately, and let a lead agent coordinate workers safely.
+
+- [x] **M7.1** Run model + persistence (`run`, `run_message`), `ptyro run ls|show|cancel`.
+      Event-sourced (R-ORC-33):
+      - An append-only `run_event` table, with projections updated in the same transaction.
+      - The recipe source and sha are pinned per run.
+      - Attempts record `start_ref`/`end_ref` snapshot refs and the agent's native session id.
+      - `on_restart = native_resume|fresh|hold`; `failed` is kept distinct from `crashed`.
+      - `ptyro run fork --from <step>` with lineage (`run ls --tree`).
+      - Design notes: `RESEARCH.md` §II.3. **L**
+      *Done:* runs (`r-7f3a2c`) are event-sourced: an append-only `run_event` log plus the `run` projection, written in one transaction; `RunState::replay` rebuilds the projection from the log. The recipe source and sha are pinned per run. Attempts record the session, the agent's conversation id, the worktree and `start_ref`/`end_ref` (`refs/ptyro/runs/…`, checkpoint commits). `on_restart = native_resume|fresh|hold`; `failed` and `crashed` are distinct. CLI: `run ls [--active] [--tree]`, `show`, `events`, `wait [--gate]`, `cancel`, `retry`, `fork --from STEP [--set]`; forks record lineage. The mail ledger is `run_message` (M7.7). SPEC §15.6.1.
+- [x] **M7.2** `ptyro fanout` (§15.2): N worktrees from one base, prompt delivery on ready, wait,
+      optional test script per worktree. **M**
+      *Done:* `ptyro fanout --agents a,b,c | -n N` builds a recipe with one candidate per agent in `<prefix>-<agent>` worktrees from one base. The prompt goes in once each agent is ready, `--test` ranks them, and `--verify`, `--judge`, `--timeout` and `--wait` are there too. The TUI starts one with `F` in the runs view. SPEC §15.6.4.
+- [x] **M7.3** Compare view: side-by-side diffstat/tests/time/last message; pick (merge/cherry-pick/
+      PR), discard (safe removal), iterate (follow-up to one/all). **L**
+      *Done:* `ptyro compare` and the TUI's compare view (`O` → `c`) show, per candidate: diffstat, tests, time, last message and reasons. **Pick** merges (rebase + fast-forward), cherry-picks, opens a PR, or applies chosen files or hunks; uncommitted work is committed as the profile first. **Discard** goes through the safe removal (`--force` for work that would be lost). **Iterate** sends a follow-up to one or all.
+- [x] **M7.4** Recipes (§15.3): TOML schema, validation, DAG executor with `needs`, `wait`, `run`,
+      `gate`, timeouts, per-step retry, survival across daemon restart; repo recipes require trust. **L**
+      *Done:* the recipe schema v1 (SPEC §15.6.2):
+        - step kinds `spawn`, `send`, `run`, `gate`, `apply`, `sleep`, `verify`, plus `loop`;
+        - `needs` with `all|any|first_success|all_settled` joins and `cancel_siblings`;
+        - `if` conditions (a small non-Turing-complete language) and `{{templates}}`;
+        - typed outputs; `timeout {total,start,stall}`; `retry {max,on,not_on,mode,feedback}`; `budget {wall,sessions,attempts}`; `guard {deny_paths,deny_cmds}`.
+
+        `recipe validate` reports every mistake with where. The pure engine (`plan`) is unit-tested. Runs survive a daemon restart, and repo recipes (`.ptyro/recipes/`) need trust. Also `recipe graph` (Mermaid or dot). **Not done:** `guard.max_diff_lines`/`on_trip` are parsed but not enforced; `spawn.mode = "headless"`; the v2 primitives (`foreach`, `expand`, `wait_event`, triggers…).
+- [x] **M7.5** Gates: resolve from TUI (inbox entry), CLI, later phone. **S**
+      *Done:* gates have stable short ids (`g-7f3a`) and absolute deadlines that survive restarts. They are answered from the CLI (`gate ls/resolve`, idempotent per key), the TUI runs view (`1`–`9`, a note with `n`) and the inbox (opens the run), with notifications and toasts. `on_timeout` is reject, approve, escalate or an option. Agents can never answer one. **Not done:** phone links.
+- [x] **M7.6** `ptyro mcp` server (§15.4) with policy limits enforced by the daemon; injection into
+      a "lead" session via `--mcp-config`. **L**
+      *Done:* `ptyro mcp`, a stdio JSON-RPC MCP server with 16 tools, progress notifications and idempotency keys, injected into `--lead` sessions with `--mcp-config` (Codex: `-c mcp_servers.*`). The daemon enforces the policy (`max_sessions`, `max_spawns`, `agents`, `worktrees`, `destructive`) on every op, and identifies the caller by its process ancestry. Agents shelling out to `ptyro` therefore get the same limits, and no agent answers gates or permission prompts. SPEC §15.6.8.
+- [x] **M7.7** Mailbox messaging (typed messages, acks, group addresses `@idle` `@codex` `@all`). **M**
+      *Done:* typed messages and group addresses (`@lead @user @all @idle @<agent> @run:<id>`), which expand when sent. The daemon observes the acks itself: queued, delivered (typed into an idle agent, coalesced) and seen (the prompt hook carried the id). Messages are framed as not-from-the-user. Loop safety: ≤50 queued, repeats dropped, ≤4 hops, TTLs. Interrupt mail to a working Claude uses its messaging socket (unverified). Workers' turn ends reach their lead as `worker_done` messages. CLI: `msg send/check/ls/ack`.
+- [x] **M7.8** Built-in recipes: `implement-and-review`, `best-of-n`, `test-fixer`, `doc-writer`. **S**
+      *Done:* `implement-and-review`, `best-of-n`, `test-fixer`, `doc-writer`, plus `overnight` (M7.12). Each is valid by test, and `implement-and-review` runs end to end with fake agents (the writer, a reviewer from another vendor asking for changes, the follow-up, the gate, integrate).
+
+*Added 2026-10-20 from `RESEARCH.md` Part II (the orchestration deep dive):*
+
+- [x] **M7.9** Verified-done (R-ORC-23).
+      - Status splits into `done(claimed)` and `done(verified)`.
+      - A `check` is defined per project or per run. The evidence is stored: command, exit code,
+        output tail, tree hash.
+      - Recipe `done_when = { run, max_bounces }`. For Claude, the Stop hook returns `decision:block`
+        with the failures as the reason. For other agents, ptyro sends a follow-up prompt.
+      - Needs M4.4. **M**
+      *Done:* `new --verify`, `verify S CHECK`, `done_when`, `fanout --verify` and `.ptyro.toml [verify] auto` set a check on a session. Claude is bounced from its Stop hook (`decision:block`), so the turn never ends with failing tests; other agents get a follow-up prompt. Evidence (`command, exit_code, tail, tree`) is kept. The states are pending, checking, passed (done, verified), bounced and failed (done, claimed), shown as sidebar badges `✔ ◌ ↩N ✘`.
+- [x] **M7.10** Evidence-ranked compare and a `verify` step (R-ORC-04), extending M7.3.
+      - Signals: newly broken tests; a repro test that fails on base and passes after; a cross-test
+        matrix; Tree-sitter equivalence clusters; a divergence probe; diff spread; cost and time.
+      - An advisory judge: a different agent with a clean context, returning rubric JSON.
+      - Lexicographic ranking that shows its reasons, and a "differences between top candidates" view.
+      - Pick by hunk.
+      - Defaults: N=3, warn above 6, mixed agents. **L**
+      *Done:* evidence is gathered per candidate and cached on the run:
+        - tests, against the base in a throwaway worktree (so "broke tests" means something);
+        - a repro that must fail on the base;
+        - a cross-test matrix (one candidate's test files on another's tree);
+        - clusters of identical changes, comments and whitespace aside;
+        - diff spread, time and verified-done;
+        - an advisory judge (`--judge`; a clean directory of diffs, scores 0–10).
+
+        The ranking is lexicographic and shows its reasons. The view warns above 6 candidates and when every candidate is the same agent, and shows the diff between the top two. Pick by hunk with `pick --hunk F:N` and `--path`. **Not done:** Tree-sitter equivalence (the normalized-diff clusters stand in), the divergence probe, and cost as a signal (no trustworthy per-agent cost yet).
+- [x] **M7.11** Checkpoints for every session (R-ORC-03).
+      - At each turn end and loop iteration, write `refs/ptyro/ckpt/<session>/<n>`: HEAD plus a
+        snapshot of uncommitted work, with no user-visible commits.
+      - `ptyro checkpoint ls|diff|restore` and `restore --turn N`.
+      - Shares code with M11.8. **M**
+      *Done:* every agent turn that changed its worktree leaves `refs/ptyro/ckpt/<session>/<n>`: HEAD plus all uncommitted work, written through a private index, so no visible commit and the user's index untouched. 200 are kept per session. `checkpoint ls/diff/restore [--turn N]`; a restore checkpoints the present first and refuses while an agent works. `[orchestration] checkpoints` turns them off.
+- [x] **M7.12** `loop` recipe step (R-ORC-25).
+      - A fresh session per iteration, with a checkpoint per iteration (M7.11).
+      - Stops when the check passes, after N iterations without progress, or when the budget runs out.
+      - A built-in `overnight` recipe shows a morning digest on attach. **M**
+      *Done:* `loop = { until, max, no_progress }`: a fresh session per iteration in one worktree, with a checkpoint each time. It stops when the check passes, after `no_progress` unchanged iterations, at `max`, or when the budget runs out. The built-in `overnight` recipe ends in a morning gate, and the TUI shows a digest on attach (run updates and waiting gates).
+- [x] **M7.13** Collision radar and file leases (R-ORC-11).
+      - A live file-overlap matrix across worktrees, plus `git merge-tree --write-tree` predicted
+        conflicts. Both agents get a message with the overlapping hunks.
+      - Daemon-held leases (`path|glob`, exclusive or shared, ttl, holder), enforced through
+        PreToolUse/BeforeTool denials.
+      - Generalises the M11.4 fences. **M**
+      *Done:* `ptyro radar` lists each live worktree's changes (uncommitted included), the overlapping pairs and the files `git merge-tree --write-tree` predicts would conflict. After each turn, new overlaps message both agents once, with the other side's hunks; fan-out siblings are skipped. Daemon-held leases (`lease claim/release/ls`; path or glob, exclusive or shared, ttl, holder, reason) are enforced through PreToolUse/BeforeTool denials that name the holder and how to ask them. Guards' `deny_paths`/`deny_cmds` use the same path.
+
+**Done when:** `ptyro fanout --agents claude,codex,gemini --prompt-file task.md` produces three
+worktrees, you compare them in one view and merge the best; and a lead Claude session using
+`ptyro mcp` can spawn two worker sessions, wait for them, and report back — without being able to
+exceed its policy limits.
+
+
+*Status 2026-10-20:* every task is done, with the gaps named above: guard diff limits, headless
+spawns and the v2 primitives (M7.4); phone links for gates (M7.5); Tree-sitter equivalence, the
+divergence probe and cost (M7.10). `crates/ptyro/tests/m7.rs` (8 tests, every agent a fake):
+- the Done-when, part one: a claude/codex/gemini fan-out ranked by evidence (only one passes the
+  tests; the base doesn't); the best is merged, the rest discarded only with `--force`, then a
+  fork re-ranks;
+- the Done-when, part two: a lead Claude using `ptyro mcp` through `--mcp-config` starts two
+  workers, waits for them and reports back. A third worker, touching a non-worker, shelling out
+  to `ptyro new` and a worker answering a gate are all refused;
+- a recipe with a Stop-hook bounce, a check, a skipped step, a gate and `apply`
+  (commit + integrate); a guard denies `git push`; checkpoints exist;
+- a run surviving a daemon restart mid-gate, and a rejected gate retried;
+- leases denying an edit, the radar predicting a conflict and telling both agents, mail
+  delivered and seen, a checkpoint restore, and a follow-up bounce for Codex;
+- the built-in `implement-and-review` with a Codex reviewer asking for changes;
+- a judged fan-out;
+- the M7 `--json` shapes (`snapshots/m7__m7-cli-json.snap`).
+
+`make orchestrate-demo` runs a fan-out, a gated recipe and a lead with fake agents. **Needs you:**
+real agents. Watch Claude's Stop-hook bounce and the PreToolUse denial on 2.1.x, run Codex with
+`-c mcp_servers` as a lead, and try the messaging socket.
+
+---
+
+## M8 — Hardening
+
+Goal: trust it with a week of uninterrupted work.
+
+- [x] **M8.1** Live upgrade via re-exec handoff (§4.5): handoff image format (versioned),
+      fd-inheritance, emulator state serialization, client auto-reconnect, rollback path. **L**
+      *Done:* `ptyro daemon upgrade [--binary P]`. The daemon parks every PTY reader, flushes,
+      writes a versioned image (sessions, masters, status with engine clocks, run identity,
+      sidecars, counters) to a memfd, and re-executes itself in place. Each emulator is saved
+      whole: both grids, scrollback, cursors, modes, the kitty stack and the title, as compact
+      msgpack + zstd, encoded in parallel (10 × 12k lines: 0.25 s + 0.25 s). After the exec, a
+      `waitpid` reaper collects children tokio didn't spawn, and a SIGWINCH nudge makes programs
+      repaint. A refusing binary rolls back to `state/daemon.prev`. The TUI, `wait`,
+      `send --wait` (never typing twice), `run wait` and `events --follow` reconnect; runs carry
+      on. Two bugs the soak found are fixed: a request on a dead connection hung forever, and a
+      hook's `blocked` was lost to heuristics after the upgrade.
+- [x] **M8.2** Recorder (§7.6): ring-buffered `pty.log`, scrollback for exited/dormant sessions
+      after restart, `ptyro replay`, `ptyro export --asciicast|--text`. **M**
+      *Done:* a framed format with output, resize, keyframe and start records, in a two-file
+      ring (`[recorder] max_bytes`, 16 MiB; `0600`). Dormant agents show their last screen after
+      a restart. `read --scrollback N` and copy mode's `gg` reach past memory. `replay
+      [--speed --max-idle --from]` and `export --format asciicast|text|ptylog`. Recording can be
+      turned off globally or per agent (`record = false`). The in-memory default dropped to 5000
+      lines.
+- [x] **M8.3** Performance pass against SPEC §18.3 budgets; criterion benches (parse throughput,
+      frame build, paint); memory profiling of scrollback. **L** Baseline from M1 is in §18.3
+      (`make bench`). Open items: parse is at 140–200 MB/s, below the 200 MB/s target, and the
+      limit is alacritty itself; a full 200-column 10k-line scrollback costs ≈ 48 MB, so
+      consider a compact or compressed history, or a lower default.
+      *Done:* `make criterion` (parse, frames, scrollback, handoff image, TUI paint) and `make
+      latency` (`ptyro-latency`: key → echo → frame through a real daemon: p50 0.69 ms, p99
+      1.0 ms). Paint takes 0.23 ms, and a 200×60 keyframe is 58 KB built in 0.4 ms. Memory: a
+      full 10k-line 80-column session is ≈ 19.5 MB, over budget, so the default is now 5000
+      lines with the recorder behind it (§7.6). **Still open:** parse throughput is alacritty's
+      (no change).
+- [x] **M8.4** Fuzzing: side-channel sniffer, protocol decoder, input encoder (`cargo fuzz`, CI
+      smoke run). **M**
+      *Done:* six targets (sniff, emulator with resizes and image round trips, protocol with
+      zstd, input's paste safety, recipes, recordings), shared by `ptyro-fuzz` (stable, CI 20 s
+      each, `make fuzz-smoke`) and a cargo-fuzz crate (`make fuzz`, nightly). First long run:
+      ≈ 1.05 billion runs, no crash.
+- [x] **M8.5** Session actor panic isolation + crash reports (`state/crashes/`), daemon watchdog
+      metrics in `daemon status`. **M**
+      *Done:* a panic hook writes a report for every panic (newest 50 kept). An emulator that
+      panics on some output is replaced by a fresh one; the child keeps running, and you're
+      notified, with the bytes in the report. `daemon status` shows RSS, fds, tasks, PTY
+      readers, event-loop lag (max and p99 over a minute), bytes, frames, crashes, per-session
+      memory and upgrades; the counters carry across upgrades.
+- [x] **M8.6** Compatibility sweep: `vttest` sections, full `docs/compat.md` matrix across 6 outer
+      terminals + inside tmux. Fix or document every gap. **L**
+      *Done (headless half):* `make compat` checks vim, less, htop, top, tmux, zsh, bash, the
+      python REPL, man, git's pager and ten vttest screens (cursor, autowrap, VT102 insert and
+      delete, DSR, DA1/DA2). All pass. It found and fixed tab cells painting a raw tab into the
+      outer terminal. Gaps are documented: DECCOLM, DSR 6 under DECOM, DA3 and DECREQTPARM, all
+      alacritty's. **Needs a human:** the outer-terminal grid (Ghostty, kitty, WezTerm,
+      Alacritty, iTerm2, Terminal.app, inside tmux).
+- [x] **M8.7** Optional `zstd` frame compression (feature-negotiated). **S**
+      *Done:* the `"zstd"` feature in Hello/Welcome (`PTYRO_COMPRESS=1`). Frames of 512 bytes or
+      more go as zstd frames, which the decoder tells apart by magic, capped at the frame limit.
+      Off by default locally; it's for M9.
+- [x] **M8.8** Release engineering: tagged builds for linux-x86_64/aarch64, macos-aarch64/x86_64;
+      `cargo install`; Homebrew tap; checksums; changelog automation. **M**
+      *Done:* `make dist` (a tarball with completions, README, LICENSE and CHANGELOG, plus
+      `.sha256`; refuses a tag that doesn't match the version), `make changelog`
+      (`CHANGELOG.md` from tags and commit prefixes, milestone bullets kept), `make
+      homebrew-formula`, and `release.yml` on `v*` tags (four platforms, `SHA256SUMS`, notes,
+      `gh release`, a tap push with `HOMEBREW_TAP_TOKEN`). `cargo install --git` is in the
+      README. **Needs you:** create `nealhardesty/homebrew-ptyro` and the token, then push the
+      first tag.
+
+**Done when:** a daemon upgrade during active agent work is invisible to the agents, and a 7-day
+soak test (fake agents generating output + real daily use) shows no leaks, no stuck sessions, and
+budgets met.
+
+*Status 2026-10-21:* every task is done, except the outer-terminal half of M8.6, which needs a
+person at each terminal. `crates/ptyro/tests/m8.rs` (7 tests):
+- **The Done-when, part one.** An upgrade in the middle of a fake Claude's turn keeps the pid,
+  every session id and screen, and the daemon's identity. The turn's Stop hook lands on the new
+  daemon. A `ptyro wait` blocked across it returns `idle`. A ticker never stops. A child exiting
+  afterwards is reaped with its code. A second upgrade works too.
+- **Rollback.** A refused handoff rolls back, with sessions intact and exit 1.
+- **send across an upgrade.** A `send --wait-ready --wait` waiting inside the daemon (the agent
+  blocked on a question) is typed exactly once afterwards, and the hook's `blocked` survives.
+- **The recorder.** Deep scrollback, text and asciicast export, replay, `0600`/`0700`, and a
+  dormant agent's screen after a restart. Recording can be turned off.
+- **zstd and health.** A zstd client, and the health metrics.
+- **Dead connections.** A request on a dead connection fails at once.
+
+`make soak` passed a 4-minute run: 5 upgrades, 424 turns, flat RSS, fds and tasks, lag p99 4 ms.
+Stress-running the suites in parallel found and fixed three older races:
+- a fast agent's first hook arriving before its session was registered (signal lost);
+- a run's end re-marking a just-succeeded step as cancelled;
+- recorder segments starting within the same millisecond going back in time.
+**Needs you:**
+- the 7-day soak (`make soak DURATION=7d`) and real daily use, which is the second half of the
+  Done-when;
+- the outer-terminal grid;
+- the first tagged release;
+- a macOS run of `make check` and an upgrade (CI covers the build and tests).
+
+---
+
+## M9 — Remote
+
+Goal: check on and steer your agents from another machine or your phone, safely.
+
+- [x] **M9.1** `ptyro proxy` + `ptyro --remote ssh://host` / `attach --remote` (local TUI, remote
+      daemon over SSH stdio). **M**
+      *Done:* `--remote [ssh://][user@]host[:port]` (or `PTYRO_REMOTE`) for every command and
+      the TUI. ssh runs with BatchMode, finds ptyro in the usual install dirs, and is
+      replaceable (`PTYRO_SSH`). Frames are zstd-compressed, the Hello says `via ssh://host`,
+      and failures quote ssh's stderr. `ptyro proxy` bridges stdio to the daemon socket. A
+      failed remote `ls` is an error, not "no sessions".
+- [x] **M9.2** WebSocket transport (`ptyro serve`), device tokens (`ptyro pair` with terminal QR
+      code, `ptyro devices ls|revoke`), hashed storage, audit events for remote input. **L**
+      *Done:*
+      - `ptyro serve` is a separate process (hyper + tungstenite) with a strict CSP;
+        `--tailscale` puts Tailscale HTTPS in front; loopback/Tailscale only unless
+        `--insecure`; the daemon can supervise it (`[remote] serve = true`), through upgrades.
+      - The browser's Hello is rewritten (kind `web`, `via`); 10 failed logins lock an address
+        out.
+      - Tokens: 256 bits, SHA-256 stored, constant-time checks. Scopes read < approve <
+        control < full are enforced on every request and keystroke; devices never
+        resize/control.
+      - Revocation closes live connections. Pairing is local only, by QR code (`#pair=`
+        fragment). `remote` events record each action on a session.
+      - `POST /api/request` serves notification actions.
+- [x] **M9.3** Web client/PWA (TypeScript): session list + status, inbox, canvas terminal view from
+      `ScreenFrame`s, quick reply, mobile layout, install as PWA. **L**
+      *Done:* `web/src` (TS, no dependencies) → `web/dist` (committed, embedded;
+      `make web`/`web-check`).
+      - Session list (blocked first, Allow/Deny on the card), inbox, live canvas at the
+        session's size (fit/1:1), reply box, key bar, permission card.
+      - A chat view for structured sessions (M10).
+      - Manifest, icons, a service worker (offline shell, push, notification actions).
+      - Its screen model is checked against `ptyro read` on live frames.
+- [x] **M9.4** Web Push notifications for attention events. **M**
+      *Done:* VAPID (ES256) plus RFC 8291 encryption, matching the RFC's example byte for
+      byte. Delivery goes through curl and follows the notifier's filters; 404/410 drop the
+      subscription. `ptyro devices push-test`. An e2e test decrypts delivered pushes like a
+      browser.
+- [x] **M9.5** Remote approvals (§16.6) for Claude `PermissionRequest` (bounded wait; local key
+      always wins). **M**
+      *Done:* first verified on Claude 2.1.305 that the dialog shows while the hook runs, that
+      a hook decision closes it, and that a local answer wins. With a device paired, the hook is
+      held up to `[remote] approval_wait`. Any client's allow/deny lands as an exact decision;
+      answering in the dialog releases it. `SessionInfo.held` shows "exact".
+- [x] **M9.6** `docs/remote.md`: Tailscale recipe, reverse-proxy TLS recipe, threat model. **S**
+
+**Done when:** from a phone on Tailscale you see that an agent is blocked on a permission prompt,
+read the context, approve it, and watch it continue — and no unauthenticated request can reach the
+daemon.
+
+*Status 2026-10-21:* every task is done. `crates/ptyro/tests/m9.rs` (6 tests), with the "phone" a
+WebSocket client speaking the web app's JSON:
+- **The Done-when.** A blocked fake Claude, held for an exact answer, its context and dialog
+  read through `serve`, approved, and continuing. Hellos with no token, a wrong token, or
+  posing as a TUI are rejected; `/api/request` without a token is 401.
+- **Scopes:** read can't type; control can't spawn commands; nobody remote pairs.
+- **Revocation:** a goodbye, then rejection. **Lockout:** 429 after 10 failures.
+- **`--remote`** through a stand-in ssh, and ssh's error relayed.
+- **Web Push:** received, VAPID-signed, decrypted; 410 drops the subscription.
+- **The managed `serve`** coming back after an upgrade.
+- **The web app's TypeScript screen model** matching `ptyro read` (with Node).
+
+**Needs you:** a real phone over Tailscale (install the app, notifications on iOS/Android), a
+reverse-proxy setup, and a real Claude prompt answered from the phone.
+
+---
+
+## M10 — Structured sessions
+
+Goal: agents driven over structured protocols, for orchestration-heavy and mobile-first use.
+
+- [x] **M10.1** `structured` session kind and chat-view widget (messages, tool calls, diffs,
+      permission requests as interactive cards). **L**
+      *Done:* `new|fanout --structured`, recipe `spawn.structured`.
+      - The transcript model is `ptyro_core::chat`; drivers are in `ptyro-drive`; the daemon
+        glue is `structured.rs`, with status from the protocol, the transcript also rendered
+        into the emulator, and a line editor for keys.
+      - `ServerMsg::Chat` streams, and `read --chat` dumps the transcript.
+      - TUI chat view: cards, diffs, permission card with a/A/d, composer, PageUp/Down, `C-Space
+        t` for the terminal view. The web app has one too.
+      - Live upgrades carry it mid-turn.
+- [x] **M10.2** ACP client (stdio JSON-RPC) — Gemini `--acp`, OpenCode, and other ACP agents. **L**
+      *Done:* initialize/session/new/load, prompt, updates (messages, thoughts, tool calls with
+      content and diffs, plans), request_permission by option kind, cancel. Any agent with
+      `protocol = "acp"`. Gemini 0.64 handshake verified live.
+- [x] **M10.3** Claude `-p --input-format stream-json --output-format stream-json` driver. **M**
+      *Done:* verified on 2.1.305 with a real turn (fixture): partial text, tool_use/result
+      with Edit diffs, `can_use_tool` over stdio (`--permission-prompt-tool stdio`), interrupt,
+      exact cost per turn.
+- [x] **M10.4** Codex `app-server` driver (JSON-RPC, approval requests). **M**
+      *Done:* written against the generated 0.143 schema; handshake/thread/start verified live;
+      commands, file changes with diffs, plans, approvals (accept/acceptForSession/decline),
+      interrupt; a logged-out error shown once, as `auth`.
+- [x] **M10.5** OpenCode `serve` HTTP driver. **M**
+      *Done:* from the docs (not installed here): sessions, prompt_async, SSE parts, permissions,
+      abort, cost. Tested against the fake's server.
+- [x] **M10.6** Convert a structured session to interactive (resume the same conversation in the
+      agent's TUI) and back where supported. **M**
+      *Done:* `ptyro convert S [--to tui|structured] [--force]`: needs the conversation id,
+      refuses mid-turn without `--force`, hibernates and resumes in the other mode. The mode
+      persists through resume, restart and dormant restore.
+
+**Done when:** fan-out workers can run as structured sessions with full tool-call visibility in the
+compare view, and any of them can be "opened" into the native TUI to take over by hand.
+
+*Status 2026-10-21:* every task is done. `crates/ptyro/tests/m10.rs` (5 tests, fakes for all four
+protocols):
+- **The Done-when.** A structured claude/codex/gemini fan-out; compare shows each candidate's
+  tool calls and commands, and Claude's cost; the best is ranked by its test. A candidate is
+  converted to its TUI (same conversation), worked by hand, and converted back.
+- **Every protocol:** a turn plus an allowed and a denied permission.
+- **The chat stream:** streaming text, the draft, keys answering a card, a late subscriber's
+  reset.
+- **A live upgrade mid-turn** (same pid, transcript whole).
+- **Hibernate/resume** staying structured, an agent failing at start with its stderr shown, and
+  a read-scope device reading the transcript.
+
+`make verify-structured` passes against the real Claude (a turn, cost, takeover), Codex
+(thread) and Gemini (ACP session). **Not yet:** leases and guards for structured sessions (they
+ride on hooks); a structured transcript surviving a full daemon restart (not an upgrade).
+**Needs you:** OpenCode against a real install, and a real Gemini/Codex turn when logged in.
+
+---
+
+## M11 — Change sets (multi-repo)
+
+Goal: one coordinated change across several repositories, with a lead agent, one agent per repo,
+a contract at the seams, the ability to build against each other's in-progress code, multi-repo
+undo, and a ship train that's honest about partial states (SPEC §15.5).
+
+- [x] **M11.0 (experiment)** Run the workflow by hand on two or three real repos of the owner's:
+      linked worktrees on one branch, a lead Claude with `--add-dir` per member, member agents
+      prompted by the lead through `ptyro send`/`wait`/`read`, a shared `CONTRACT.md`. Record what
+      the lead needed, where it went wrong, which messages mattered and how long it took, in SPEC
+      §15.5 and §20. Decides the default layout and the message types. **M**
+      *Done 2026-10-21:* three toy repos (Go api + Go sdk with `replace ../api` + Node web),
+      Sonnet lead, Haiku members, 7 min 47 s, all green, nothing pushed (SPEC §15.7.1). It
+      decided: members live side by side in the root (relative-path deps then build against
+      siblings); `affects` falls back to section titles; the lead must not commit for members;
+      clean member exits aren't failures. It found a bug, fixed: `ptyro answer` couldn't pass
+      Claude's folder-trust dialog (§20.1).
+- [x] **M11.1** Model: Run kind `changeset`, `changeset_member` table, `CHANGESET.md` generation,
+      creation from projects or a template, same-profile check, `depends_on` cycle check, manifest-based
+      dependency suggestions. **M**
+      *Done:* `ptyro-run/src/changeset.rs` (pure) + `ptyro-daemon/src/changesets.rs`. Members
+      live in the run's event-sourced projection instead of a table (one source of truth).
+      Manifests read: go.mod, package.json, Cargo.toml, pyproject.toml.
+- [x] **M11.2** Linked worktrees: create/remove all members atomically from the user's view
+      (rollback on partial failure), per-member base branches, all-or-nothing removal safety. **M**
+      *Done:* `<root>/<member>` (`WorktreeSpec.path`), `--base m=ref`; `cs rm` checks every
+      member first (`--keep`, `--force`).
+- [x] **M11.3** Layouts `lead` / `solo` / `manual`; spawning a lead (cwd = root, read access to
+      members) and per-member agents (each project's `default_agent`) with their briefs. **M**
+      *Done:* the lead gets `--add-dir` per member and `ptyro mcp` with the set's tools; members
+      start when r1 is approved, with the contract in their brief and `$PTYRO_CS`.
+- [x] **M11.4** Write fences: `PreToolUse` denials for edits outside a role's allowed paths
+      (Claude, Codex), advisory flagging elsewhere, denial reasons fed back to the agent. **M**
+      *Done:* verified on the fake Claude and Codex; advisory: member changes made during the
+      lead's turn are flagged `out_of_fence`.
+- [x] **M11.5** Contract: versioned `CONTRACT.md` revisions in the ledger, the contract gate,
+      `contract_revised` propagation by `affects:`, and `cs contract show|edit|diff|history`. **M**
+      *Done:* plus `submit`, `revise` (text or unified diff), `approve`/`reject`; affected
+      members get an interrupt, the rest a normal message; `diff FILE` exits 1 on drift.
+- [x] **M11.6** Status-aware ledger: typed messages, delivery at idle, interrupts, `blocked_on`
+      wake-ups, `cs msg` and `cs log --follow`. **L**
+      *Done:* plus `cs ready`/`cs blocked`/`cs assign`/`cs ask`; interrupts stop a working
+      agent's turn (Esc) and deliver at idle; mail for an exited member resumes it.
+- [x] **M11.7** Integration overlay generators (Go, Rust, Node/pnpm, Python, compose), each opt-in
+      per member and never committed, plus integration checks and contract checks. **L**
+      *Done:* go.work and cargo `[patch]` in the root, node_modules symlinks (installed copy set
+      aside), venv `.pth`, git-excluded compose override; `cs overlay … off` restores.
+- [x] **M11.8** Set checkpoints: `refs/ptyro/cs/<set>/<n>` per member (HEAD plus snapshot of
+      uncommitted work), automatic checkpoints before revisions and land, and `cs restore` with
+      loss checks. **M**
+- [x] **M11.9** Lockstep git: `cs commit` with `Change-Set` trailers, dependency-ordered resumable
+      `cs push`, linked PRs with a live sibling table, and the gated `cs land` merge train. **L**
+      *Done:* PR mode waits for CI and merges with `gh`; repos without PRs rebase, fast-forward
+      and push; `Change-Set-Members` names the members committed before each one.
+- [x] **M11.10** Lead MCP tools (`cs_*`, SPEC §15.5.9), with no push/merge tools by design. **M**
+      *Done:* plus `cs_contract_submit` and `cs_log`; the daemon refuses shipping ops from any
+      agent.
+- [x] **M11.11** TUI: set node in the sidebar, set view with swimlanes (`prefix S`), attention
+      roll-up, ledger timeline. **L**
+- [x] **M11.12** Templates (`~/.config/ptyro/changesets/*.toml`, trusted hub repos) and
+      `cs new --template`. **S**
+      *Done:* hub templates are trusted per template (`--trust FP`, or asked on a terminal).
+- [x] **M11.13** Failure-mode states and suggested actions (SPEC §15.5.11), with a scripted test
+      for each using fake agents and temp repos with bare remotes. **M**
+      *Done:* `land_stopped`, `member_conflict`, `member_failed`, `out_of_order`,
+      `missing_worktree`, `integration_failed`, `check_failed`, `stale_contract`,
+      `out_of_fence`, `no_remote`, `blocked_on`, each with an action.
+
+**Done when:** `ptyro cs new add-user-tier --projects api,sdk,web` starts a lead that drafts a
+contract you approve. Three member agents (one of them Codex) implement it, and `sdk` and `web`
+build against the unpushed `api` through the overlay. A contract revision reaches exactly the
+affected members. You restore a checkpoint after a bad turn, then `cs land` merges the three PRs
+in dependency order. Injecting a CI failure in `sdk` stops the train with a precise partial-state
+report.
+
+*Status 2026-10-21:* every task is done. `crates/ptyro/tests/m11.rs` (6 tests, fake Claude and
+Codex agents, a fake `gh`, temp repos with bare remotes):
+- **The Done-when, local.** A three-member set (one member on Codex) with manifest-derived
+  order and the node overlay; the lead's contract approved; fences for both agents; `blocked`
+  and `ready` waking a member; a revision reaching only the member it affects (as an
+  interrupt); a set checkpoint restored across two repos; `cs commit` trailers; `cs land`
+  merging all three in order.
+- **The Done-when, PRs.** One PR per member with the live sibling table; gates answered from
+  the CLI; a CI failure injected in `sdk` stops the train ("Landed: api; not landed: sdk,
+  web"); fixed CI resumes it.
+- **Failure modes:** a failing check, no remote (resumable push), a failed member agent and its
+  recovery, a stale contract, an out-of-order merge, a rebase conflict, creation failing
+  halfway (nothing left behind), cycles, hub-template trust.
+- **The lead's tools** through `ptyro mcp`, and the set surviving a daemon restart.
+- **The TUI:** the sidebar node and the set view's swimlanes, gate and ledger.
+
+**Not yet:** `--from-issue` reads GitHub only; integration checks don't block a `ready` report;
+PR tables refresh on `cs pr` and landings, not from the PR poller. **Needs you:** a real
+multi-repo set of yours end to end (the experiment used toy repos), and a real `gh` merge train.
+
+---
+
+## H1 — Hardening from the full code review (2026-10-21)
+
+Goal: everything a full, eight-way code review of the whole tree found (about 120 findings: the
+daemon core, orchestration, agents/remote/git, the CLI and `ptyro serve`, the TUI, the emulator
+and protocol, the core libraries, the web app and the build) is fixed, or here with a reason.
+Each fix has a focused test where one could be written.
+
+- [x] **H1.1 Security.** *Done:*
+      - child output can no longer type into its own shell through an XTGETTCAP reply (non-hex
+        requests aren't echoed);
+      - bracketed paste drops every ESC/CSI (nesting beat the old removal);
+      - recipe values in command fields are shell-quoted (`render_shell`);
+      - a policy-bound agent gets an allow-list, the hook exemption is by request (a client
+        claiming `kind: hook` got none of the policy before), and a session in two runs gets the
+        stricter policy;
+      - sessions read only their own mail;
+      - fences, guards and leases match real paths (`..`, symlinks; the node overlay's links
+        reached siblings);
+      - answers name their prompt (`Answer.expect`, links, push payloads, held hooks with
+        generations), so a stale Allow never approves a newer request;
+      - PR comments instruct agents only from owners, members and collaborators;
+      - `ptyro serve` keys its lockout on the proxy-added address, caps logins in flight and
+        connections, and prunes its failure map;
+      - push subscriptions only for the browsers' push services; devices unsubscribe only their
+        own; revoke-by-name refuses ambiguity; verify/lead spawns need `full`; `Focus` is ignored
+        from devices;
+      - ssh targets can't be options, and the remote binary can't escape its quoting;
+      - the untracked-file preview doesn't follow symlinks; worktree file copies never write
+        through links;
+      - the callback key is created 0600 and never from a weak random fallback;
+      - git revisions from config are passed after `--end-of-options`.
+- [x] **H1.2 Crashes and hangs.** *Done:*
+      - a resize to 0 columns or 65535×65535 no longer panics or OOMs the daemon;
+      - frames stay under the frame limit (combining marks capped, a byte budget, bounded
+        scrollback documents), and style tables are bounded;
+      - the meta/term lock-order deadlock on the emulator-panic path is fixed;
+      - a failed live upgrade restores everything (fds private, accept loop back, goodbye
+        cleared);
+      - the exponential glob is now linear;
+      - pipe deadlocks fixed (secret commands, `git check-ignore`), and sinks and the roster no
+        longer run inline with status;
+      - a request or response that can't be decoded is answered instead of hanging;
+      - the TUI no longer panics on hint truncation, and its panic hook restores the terminal
+        fully;
+      - the key-encoding overflow found by the new overflow-checked fuzz profile is fixed;
+      - `ptyro mcp` stops with its client;
+      - replay speed and recording arithmetic are bounded.
+- [x] **H1.3 Correctness.** *Done:*
+      - **Daemon and orchestration:**
+        - restarts can't orphan a process; names are unique under concurrency; nothing is
+          spawned during an upgrade;
+        - run and step endings are final (no double "ended"), recovered retries run, and
+          gates are never re-asked, time out to a real option, and stop with their run;
+        - `cs rm` waits for a train;
+        - every signal (hooks, reports and ticks too) goes through the one feed queue, in
+          order; hooks wait for theirs;
+        - snapshots are written newest-only;
+        - review comments stay until delivered;
+        - workspace moves are saved and announced; project adds are serialized;
+        - checks kill their whole process group, and scratch worktrees are always removed.
+      - **Git:**
+        - checkpoint restore removes files deleted at the checkpoint and keeps the old HEAD
+          reachable;
+        - a paused rebase or cherry-pick is never aborted;
+        - quoted diff paths, scp remotes with digits and `**/` profile rules are handled;
+        - a fresh checkpoint copies the index (no full re-hash).
+      - **CLI:**
+        - `new --new-wt/--pr/--issue` honours every flag and starts a shell without `--agent`;
+        - `send --raw` sends bytes (`SendBytes`);
+        - `send S --raw TEXT` parses;
+        - `pr checks --json` exit codes, `daemon stop` timeouts, the launchd restart loop and
+          `events --session` selectors are fixed.
+      - **Web app:** it resubscribes after reconnects and keeps the draft, caret and scroll
+        across updates.
+      - **TUI:** the selection follows its row, stale replies are dropped, and scrolling, ages
+        and the copy-mode anchor are right.
+- [x] **H1.4 Build and tests.** *Done:*
+      - `make fuzz-smoke` builds with overflow checks and debug assertions (`[profile.fuzz]`);
+      - the release workflow uses a supported macOS runner, checks the web build, and re-runs
+        cleanly;
+      - icon checks compare pixels;
+      - the verify scripts can't pass vacuously;
+      - test CLIs never autospawn a daemon (`PTYRO_NO_AUTOSPAWN`).
+- [x] **H1.5 The rest** (2026-10-21).
+      - [x] The grid itself is bounded: a filter in front of alacritty's parser lets at most 16
+        zero-width characters through per printed base character. It follows escape state, so an
+        escape sequence's bytes neither count nor reset the allowance, and it carries split
+        UTF-8 across reads. ASCII and Latin-1 skip the work. Parse throughput stays in the SPEC
+        §18 range (141–183 MB/s plain, 83 MB/s SGR-heavy); fuzzed with overflow checks.
+      - [x] Parallel permission requests in structured sessions: every driver (Claude, Codex,
+        ACP, OpenCode) keeps each open request and answers them in turn, newest first (the one
+        the status shows, which becomes blocked again on the next). A cancel, an interrupt or
+        an answer given in the agent's own UI removes exactly that request; none is dropped,
+        so the agent never hangs on one nobody can answer.
+      - [x] Push to self-hosted services: `[remote] push_hosts` (done in H1).
+
+---
+
+## Backlog (unscheduled; ideas welcome)
+
+Back-burnered by the owner:
+
+- **Built-in editor** — a minimal modal editor pane for quick edits (or tight `nvim --embed`
+  integration instead of writing an editor).
+- **Tasks** — local task list per project; import from GitHub/Linear/Jira issues; "start task" =
+  new worktree + agent + prompt from the issue.
+
+Other ideas:
+
+- **Pre-trusted Claude worktrees** (M11.0): every new worktree shows Claude's folder-trust dialog
+  (ptyro can answer it now). Codex worktrees inherit their project's trust (§20.2); Claude has no
+  flag, so this would mean writing `hasTrustDialogAccepted` into the profile's `.claude.json`,
+  only for projects the user trusted already.
+- **Editor integrations**: VS Code/Cursor/Zed "open in", plus a VS Code extension that
+  shows ptyro sessions for the current folder.
+- **Jujutsu (jj) workspaces** via a pluggable VCS backend (Claude's `WorktreeCreate` hook pattern).
+- **libghostty-vt emulator backend** (§5.2) for grapheme/image fidelity once its API is stable.
+- **Kitty graphics / sixel** passthrough for single-client sessions.
+- **E2E relay** (§16.5) with self-hostable server.
+- **Droid** (Claude-compatible hooks), **Copilot CLI** (`COPILOT_HOME` hooks), **Cursor CLI**,
+  **Goose** adapters, in that order (R-AGT-01). Antigravity was promoted to M4.21. **Aider** stays on the generic
+  adapter (maintenance mode). The generic adapter covers all of these meanwhile.
+- **Usage & budget meters** (meters promoted to M4.17; budgets remain here): per-session tokens/cost where agents expose it (Claude `result`
+  `total_cost_usd`, Codex usage), daily totals, rate-limit countdowns.
+- **Per-profile usage meters**: usage and limits per account (builds on the usage meters above).
+- **Sandbox per profile**: separate OS user or container per profile for real isolation (§10.10).
+- **Container/sandbox sessions** (Docker/Podman) per worktree for untrusted repos.
+- **Cloud/SSH hosts as worktree targets**: run agents on a remote box, UI local (overlaps M9.1).
+- **Session templates**: "Claude + shell + dev server" trio spawned together per worktree.
+- **Timeline scrubber**: replay a session's recording synced with its status events and git commits.
+- **Prompt library** with per-project snippets and variables (seeded by `[prompts]`).
+- **`ptyro status-line`** output for tmux/starship/zellij bars.
+- **Plugin system** (WASM) for custom panes/adapters — only if real demand appears.
+- **Windows (ConPTY)** support.

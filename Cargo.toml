@@ -1,0 +1,109 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+repository = "https://github.com/nealhardesty/ptyro"
+publish = false
+
+# Versions per SPEC §3.5. alacritty_terminal is pinned exactly: its API breaks across minors.
+[workspace.dependencies]
+# internal
+ptyro-core = { path = "crates/ptyro-core" }
+ptyro-protocol = { path = "crates/ptyro-protocol" }
+ptyro-client = { path = "crates/ptyro-client" }
+ptyro-pty = { path = "crates/ptyro-pty" }
+ptyro-term = { path = "crates/ptyro-term" }
+ptyro-daemon = { path = "crates/ptyro-daemon" }
+ptyro-tui = { path = "crates/ptyro-tui" }
+ptyro-testkit = { path = "crates/ptyro-testkit" }
+ptyro-store = { path = "crates/ptyro-store" }
+ptyro-git = { path = "crates/ptyro-git" }
+ptyro-agents = { path = "crates/ptyro-agents" }
+ptyro-run = { path = "crates/ptyro-run" }
+ptyro-drive = { path = "crates/ptyro-drive" }
+# external
+alacritty_terminal = "=0.26.0"
+anyhow = "1.0.104"
+bytes = "1.12"
+clap = { version = "4.6.7", features = ["derive"] }
+# Dynamic completions (live session names) live behind clap_complete's `unstable-dynamic`
+# feature: pinned exactly so its API can't move under us.
+clap_complete = { version = "=4.6.11", features = ["unstable-dynamic"] }
+crossterm = { version = "0.29.0", features = ["event-stream"] }
+etcetera = "0.11"
+futures = "0.3"
+libc = "0.2.191"
+notify = { version = "8.2.0", default-features = false, features = ["macos_fsevent"] }
+notify-debouncer-mini = { version = "0.7.0", default-features = false }
+nucleo-matcher = "0.3.1"
+regex = "1.13.1"
+pty-process = { version = "0.5.4", features = ["async"] }
+ratatui = "0.30.2"
+rmp-serde = "1.3.1"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+rusqlite_migration = "2.6.0"
+rustix = { version = "1.1.5", features = ["event", "fs", "process", "termios", "pty", "stdio"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.10.9"
+terminput = "0.5.15"
+terminput-crossterm = "0.4.11"
+thiserror = "2.0.21"
+tokio = { version = "1.54", features = ["full"] }
+tokio-util = { version = "0.7.20", features = ["codec"] }
+toml = "1.1.8"
+toml_edit = "0.25.17"
+tracing = "0.1.44"
+tracing-appender = "0.2.5"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+ulid = "3.0.0"
+unicode-width = "0.2.2"
+zstd = { version = "0.13.3", default-features = false }
+# Web Push (M9.4): VAPID signatures and RFC 8291 payload encryption.
+p256 = { version = "0.13.2", default-features = false, features = ["ecdh", "ecdsa", "std"] }
+hkdf = "0.12.4"
+aes-gcm = { version = "0.10.3", default-features = false, features = ["aes", "alloc"] }
+# ptyro serve (M9.2): HTTP and WebSocket.
+hyper = { version = "1.12.0", features = ["server", "http1"] }
+hyper-util = { version = "0.1.21", features = ["tokio"] }
+http-body-util = "0.1.5"
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
+# Pairing QR codes in the terminal (M9.2).
+qrcode = { version = "0.14.1", default-features = false }
+yaml-rust2 = "0.13.0"
+# dev
+assert_cmd = "2.2.2"
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+insta = "1.49.0"
+proptest = "1.12.0"
+tempfile = "3.27.0"
+
+[workspace.lints.rust]
+unsafe_code = "deny"            # ptyro-pty may `#![allow(unsafe_code)]` with a justification
+unused_must_use = "deny"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "warn"
+todo = "warn"
+print_stderr = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+# `make fuzz-smoke`: release speed, but overflow and debug assertions stay on so they're found.
+[profile.fuzz]
+inherits = "release"
+overflow-checks = true
+debug-assertions = true
+lto = false
+codegen-units = 16
+strip = "none"

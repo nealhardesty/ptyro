@@ -1,0 +1,42 @@
+# cargo-deny (`make deny`): licenses, advisories, bans, sources. Run in CI.
+
+[graph]
+all-features = false
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+# Permissive licenses compatible with shipping ptyro under MIT (SPEC §21.1).
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    # notify (file watching): public-domain dedication.
+    "CC0-1.0",
+    # nucleo-matcher (fuzzy pickers, SPEC §3.5): file-level copyleft. Fine as an unmodified
+    # dependency of an MIT project; changes to *its* files would have to stay MPL.
+    "MPL-2.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = [
+    # SPEC §3.5: unmaintained (RUSTSEC-2025-0141); fork-after-tokio is unsound.
+    { crate = "bincode", reason = "unmaintained, RUSTSEC-2025-0141" },
+    { crate = "daemonize", reason = "forking after the tokio runtime starts is unsound" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

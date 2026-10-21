@@ -1,0 +1,13 @@
+# Keeps the SHA-pinned actions and the Cargo dependencies current (one PR per week per ecosystem).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      actions: { patterns: ["*"] }
+  - package-ecosystem: cargo
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      cargo: { patterns: ["*"], update-types: [minor, patch] }

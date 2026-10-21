@@ -1,0 +1,29 @@
+[package]
+name = "ptyro-term"
+description = "Terminal emulation for ptyro: Emulator trait, alacritty backend, query responder, row versions, input encoding"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+alacritty_terminal.workspace = true
+ptyro-core.workspace = true
+serde.workspace = true
+terminput.workspace = true
+unicode-width.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+insta.workspace = true
+rmp-serde.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "term"
+harness = false

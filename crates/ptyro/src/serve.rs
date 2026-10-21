@@ -1,0 +1,574 @@
+//! `ptyro serve` (SPEC §16.3–16.4, M9.2–M9.3): the web app and the protocol over WebSocket, for
+//! paired devices. It is its own process, so the daemon stays a local socket and a crash here
+//! takes nothing else down.
+//!
+//! - `GET /`: the web app (embedded; no third-party scripts, a strict CSP).
+//! - `GET /ws`: one WebSocket message per protocol frame. The first must be a `Hello` with a
+//!   device token; this process rewrites its kind (`web`) and origin (`via`), so a browser can't
+//!   pass for a local client, and the daemon checks the token before anything else reaches it.
+//! - `POST /api/request`: one request with `Authorization: Bearer <token>` (notification
+//!   actions, scripts).
+//!
+//! Listens on loopback or Tailscale addresses unless `--insecure`: elsewhere plain HTTP would
+//! carry tokens in clear. For HTTPS (needed by phones for notifications and installing the app),
+//! `--tailscale` puts `tailscale serve` in front.
+
+use std::collections::HashMap;
+use std::convert::Infallible;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use bytes::Bytes;
+use futures::{SinkExt, StreamExt};
+use http_body_util::{BodyExt, Full, Limited};
+use hyper::body::Incoming;
+use hyper::header::{self, HeaderValue};
+use hyper::service::service_fn;
+use hyper::{Method, Request, Response, StatusCode};
+use hyper_util::rt::TokioIo;
+use ptyro_core::Error;
+use ptyro_core::config::Config;
+use ptyro_protocol::{ClientKind, ClientMsg, Encoding, ServerMsg, decode, encode, framing};
+use tokio::net::TcpListener;
+use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
+use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
+use tokio_util::codec::Framed;
+
+use crate::cli::Ctx;
+
+type Body = Full<Bytes>;
+
+/// The web app, built from `web/src` by `make web` (committed, so a plain `cargo build` has it).
+const ASSETS: &[(&str, &str, &[u8])] = &[
+    ("/", "text/html; charset=utf-8", include_bytes!("../../../web/dist/index.html")),
+    ("/index.html", "text/html; charset=utf-8", include_bytes!("../../../web/dist/index.html")),
+    ("/app.js", "text/javascript; charset=utf-8", include_bytes!("../../../web/dist/app.js")),
+    ("/screen.js", "text/javascript; charset=utf-8", include_bytes!("../../../web/dist/screen.js")),
+    ("/sw.js", "text/javascript; charset=utf-8", include_bytes!("../../../web/dist/sw.js")),
+    ("/style.css", "text/css; charset=utf-8", include_bytes!("../../../web/dist/style.css")),
+    (
+        "/manifest.webmanifest",
+        "application/manifest+json",
+        include_bytes!("../../../web/dist/manifest.webmanifest"),
+    ),
+    ("/icon.svg", "image/svg+xml", include_bytes!("../../../web/dist/icon.svg")),
+    ("/icon-192.png", "image/png", include_bytes!("../../../web/dist/icon-192.png")),
+    ("/icon-512.png", "image/png", include_bytes!("../../../web/dist/icon-512.png")),
+    (
+        "/apple-touch-icon.png",
+        "image/png",
+        include_bytes!("../../../web/dist/apple-touch-icon.png"),
+    ),
+];
+
+const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
+    connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; \
+    frame-ancestors 'none'";
+
+/// Failed device logins per address: this many in the window locks the address out for it.
+const MAX_FAILURES: u32 = 10;
+const FAILURE_WINDOW: Duration = Duration::from_secs(600);
+/// Logins from one address still waiting for the daemon's answer: more are refused, so
+/// parallel guesses can't outrun the lockout.
+const MAX_PENDING: u32 = 4;
+/// Open connections in all.
+const MAX_CONNECTIONS: usize = 256;
+
+struct State {
+    ctx_paths: ptyro_core::paths::Paths,
+    failures: Mutex<HashMap<IpAddr, (u32, Instant)>>,
+    pending: Mutex<HashMap<IpAddr, u32>>,
+}
+
+/// One login in progress (see [`State::begin`]); dropping it ends it.
+struct Pending {
+    st: Arc<State>,
+    ip: IpAddr,
+}
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        let mut p = self.st.pending.lock().expect("pending");
+        if let Some(n) = p.get_mut(&self.ip) {
+            *n -= 1;
+            if *n == 0 {
+                p.remove(&self.ip);
+            }
+        }
+    }
+}
+
+impl State {
+    /// Start a login from `ip`, unless it has [`MAX_PENDING`] going already.
+    fn begin(self: &Arc<Self>, ip: IpAddr) -> Option<Pending> {
+        let mut p = self.pending.lock().expect("pending");
+        let n = p.entry(ip).or_insert(0);
+        if *n >= MAX_PENDING {
+            return None;
+        }
+        *n += 1;
+        Some(Pending { st: Arc::clone(self), ip })
+    }
+
+    fn locked_out(&self, ip: IpAddr) -> bool {
+        let f = self.failures.lock().expect("failures");
+        f.get(&ip).is_some_and(|(n, t)| *n >= MAX_FAILURES && t.elapsed() < FAILURE_WINDOW)
+    }
+
+    fn failed(&self, ip: IpAddr) {
+        let mut f = self.failures.lock().expect("failures");
+        f.retain(|_, (_, t)| t.elapsed() < FAILURE_WINDOW);
+        let e = f.entry(ip).or_insert((0, Instant::now()));
+        e.0 += 1;
+        if e.0 == MAX_FAILURES {
+            tracing::warn!(%ip, "locked out for {}m after {MAX_FAILURES} failed device logins", FAILURE_WINDOW.as_secs() / 60);
+        }
+    }
+}
+
+/// Loopback, or Tailscale (100.64.0.0/10, fd7a:115c:a1e0::/48): WireGuard encrypts those.
+pub fn safe_address(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v) => v.is_loopback() || (v.octets()[0] == 100 && (v.octets()[1] & 0xc0) == 64),
+        IpAddr::V6(v) => v.is_loopback() || v.segments()[..3] == [0xfd7a, 0x115c, 0xa1e0],
+    }
+}
+
+pub async fn run(
+    ctx: &Ctx,
+    listen: Option<String>,
+    insecure: bool,
+    tailscale: bool,
+    managed: bool,
+) -> Result<i32, Error> {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_env("PTYRO_LOG")
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_writer(std::io::stderr)
+        .try_init();
+    let config = Config::load(&Config::path(&ctx.paths)).unwrap_or_default();
+    let listen = listen.unwrap_or_else(|| config.remote.listen.clone());
+    let addr: SocketAddr = listen
+        .parse()
+        .map_err(|e| Error::invalid(format!("--listen {listen}: {e} (like 127.0.0.1:7091)")))?;
+    if !safe_address(addr.ip()) && !insecure && !config.remote.insecure {
+        return Err(Error::invalid(format!(
+            "{addr} isn't loopback or a Tailscale address: device tokens would cross the network \
+             in clear. Use Tailscale (`--tailscale`), a TLS reverse proxy to 127.0.0.1, or pass \
+             --insecure if you know the network"
+        )));
+    }
+    let listener = TcpListener::bind(addr)
+        .await
+        .map_err(|e| Error::internal(format!("listen on {addr}: {e}")))?;
+    if tailscale {
+        tailscale_front(addr)?;
+    }
+    let mut shown = config.clone();
+    shown.remote.listen = addr.to_string();
+    let base = crate::remote::base_url(&shown, None);
+    eprintln!(
+        "ptyro serve: listening on http://{addr}; phones open {base} (pair one with `ptyro pair`)"
+    );
+    let state = Arc::new(State {
+        ctx_paths: ctx.paths.clone(),
+        failures: Mutex::new(HashMap::new()),
+        pending: Mutex::new(HashMap::new()),
+    });
+    let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
+    if managed {
+        tokio::spawn(exit_with_daemon(ctx.paths.socket.clone()));
+    }
+    loop {
+        let (stream, peer) = match listener.accept().await {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::debug!("accept: {e}");
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                continue;
+            }
+        };
+        // Over the limit: drop it (a WebSocket keeps its slot until it closes).
+        let Ok(slot) = Arc::clone(&slots).try_acquire_owned() else {
+            tracing::debug!(%peer, "too many connections");
+            continue;
+        };
+        let slot = Arc::new(slot);
+        let st = Arc::clone(&state);
+        tokio::spawn(async move {
+            let svc = service_fn(move |req| handle(req, Arc::clone(&st), peer, Arc::clone(&slot)));
+            let _ = hyper::server::conn::http1::Builder::new()
+                .timer(hyper_util::rt::TokioTimer::new())
+                .header_read_timeout(Duration::from_secs(10))
+                .serve_connection(TokioIo::new(stream), svc)
+                .with_upgrades()
+                .await;
+        });
+    }
+}
+
+/// Started by the daemon: leave when it's gone for good (its socket missing for 30 s).
+async fn exit_with_daemon(socket: std::path::PathBuf) {
+    let mut missing = 0;
+    loop {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        missing = if socket.exists() { 0 } else { missing + 1 };
+        if missing >= 6 {
+            std::process::exit(0);
+        }
+    }
+}
+
+/// `tailscale serve --bg` HTTPS → our port. It changes Tailscale's config, which `--tailscale`
+/// asks for; `tailscale serve reset` undoes it.
+fn tailscale_front(addr: SocketAddr) -> Result<(), Error> {
+    let target = format!("http://127.0.0.1:{}", addr.port());
+    let out = std::process::Command::new("tailscale")
+        .args(["serve", "--bg", "--https=443", &target])
+        .output()
+        .map_err(|e| Error::invalid(format!("tailscale: {e} (is Tailscale installed?)")))?;
+    if !out.status.success() {
+        return Err(Error::invalid(format!(
+            "tailscale serve: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    if !addr.ip().is_loopback() {
+        eprintln!("note: tailscale serve proxies to 127.0.0.1:{}; listen there too", addr.port());
+    }
+    Ok(())
+}
+
+fn respond(status: StatusCode, ctype: &str, body: impl Into<Bytes>) -> Response<Body> {
+    let mut r = Response::new(Full::new(body.into()));
+    *r.status_mut() = status;
+    let h = r.headers_mut();
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(ctype).unwrap_or(HeaderValue::from_static("text/plain")),
+    );
+    secure(h);
+    r
+}
+
+fn secure(h: &mut hyper::HeaderMap) {
+    h.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(CSP));
+    h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    h.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    h.insert(
+        "permissions-policy",
+        HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
+    );
+}
+
+/// Who connected, for the audit trail: the peer, or what a local proxy in front (Tailscale
+/// serve, a TLS reverse proxy) says about the real client. That's the last X-Forwarded-For
+/// entry, the one the proxy added: earlier ones come from the client and prove nothing.
+fn via(req: &Request<Incoming>, peer: SocketAddr) -> (String, IpAddr) {
+    let hdr = |n: &str| req.headers().get(n).and_then(|v| v.to_str().ok()).map(str::to_owned);
+    if peer.ip().is_loopback()
+        && let Some(xff) = hdr("x-forwarded-for")
+    {
+        let real = last_hop(&xff).to_owned();
+        let ip = real.parse().unwrap_or(peer.ip());
+        let who = hdr("tailscale-user-login").map(|u| format!(" {u}")).unwrap_or_default();
+        return (format!("ws:{real}{who}"), ip);
+    }
+    (format!("ws:{peer}"), peer.ip())
+}
+
+fn last_hop(xff: &str) -> &str {
+    xff.rsplit(',').next().unwrap_or("").trim()
+}
+
+async fn handle(
+    req: Request<Incoming>,
+    st: Arc<State>,
+    peer: SocketAddr,
+    slot: Arc<tokio::sync::OwnedSemaphorePermit>,
+) -> Result<Response<Body>, Infallible> {
+    let (via, ip) = via(&req, peer);
+    let path = req.uri().path().to_owned();
+    let busy =
+        || respond(StatusCode::TOO_MANY_REQUESTS, "text/plain", "too many logins; try later");
+    Ok(match (req.method(), path.as_str()) {
+        (&Method::GET, "/ws") => match st.begin(ip) {
+            Some(login) if !st.locked_out(ip) => upgrade(req, st, via, ip, login, slot),
+            _ => busy(),
+        },
+        (&Method::POST, "/api/request") => match st.begin(ip) {
+            Some(login) if !st.locked_out(ip) => api_request(req, &st, via, ip, login).await,
+            _ => busy(),
+        },
+        (&Method::GET, "/healthz") => respond(StatusCode::OK, "text/plain", "ok"),
+        (&Method::GET | &Method::HEAD, p) => match ASSETS.iter().find(|(a, _, _)| *a == p) {
+            Some((_, ctype, data)) => {
+                let mut r = respond(StatusCode::OK, ctype, Bytes::from_static(data));
+                // The shell and the service worker must update; icons may be cached.
+                let cache = if p.ends_with(".png") || p.ends_with(".svg") {
+                    "public, max-age=86400"
+                } else {
+                    "no-cache"
+                };
+                r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+                r
+            }
+            None => respond(StatusCode::NOT_FOUND, "text/plain", "not found"),
+        },
+        _ => respond(StatusCode::METHOD_NOT_ALLOWED, "text/plain", "method not allowed"),
+    })
+}
+
+fn upgrade(
+    req: Request<Incoming>,
+    st: Arc<State>,
+    via: String,
+    ip: IpAddr,
+    login: Pending,
+    slot: Arc<tokio::sync::OwnedSemaphorePermit>,
+) -> Response<Body> {
+    let headers = req.headers();
+    let is_ws = headers
+        .get(header::UPGRADE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
+    let Some(key) = headers.get(header::SEC_WEBSOCKET_KEY).map(|k| derive_accept_key(k.as_bytes()))
+    else {
+        return respond(StatusCode::BAD_REQUEST, "text/plain", "expected a WebSocket upgrade");
+    };
+    if !is_ws {
+        return respond(StatusCode::BAD_REQUEST, "text/plain", "expected a WebSocket upgrade");
+    }
+    tokio::spawn(async move {
+        let _slot = slot;
+        match hyper::upgrade::on(req).await {
+            Ok(up) => {
+                let cfg = WebSocketConfig::default()
+                    .max_message_size(Some(ptyro_protocol::MAX_FRAME))
+                    .max_frame_size(Some(ptyro_protocol::MAX_FRAME));
+                let ws =
+                    WebSocketStream::from_raw_socket(TokioIo::new(up), Role::Server, Some(cfg))
+                        .await;
+                bridge(ws, st, via, ip, login).await;
+            }
+            Err(e) => tracing::debug!("upgrade: {e}"),
+        }
+    });
+    let mut r = respond(StatusCode::SWITCHING_PROTOCOLS, "text/plain", Bytes::new());
+    let h = r.headers_mut();
+    h.remove(header::CONTENT_TYPE);
+    h.insert(header::UPGRADE, HeaderValue::from_static("websocket"));
+    h.insert(header::CONNECTION, HeaderValue::from_static("Upgrade"));
+    if let Ok(v) = HeaderValue::from_str(&key) {
+        h.insert(header::SEC_WEBSOCKET_ACCEPT, v);
+    }
+    r
+}
+
+/// The browser's Hello, made safe: always a web client, with where it came from.
+fn rewrite_hello(payload: &[u8], via: &str) -> Option<(Bytes, Encoding)> {
+    let (msg, enc) = decode::<ClientMsg>(payload).ok()?;
+    let ClientMsg::Hello { proto, mut client, features } = msg else { return None };
+    client.kind = ClientKind::Web;
+    client.via = Some(via.to_owned());
+    client.pid = 0;
+    client.outer = None;
+    let features = features.into_iter().filter(|f| f != ptyro_protocol::FEATURE_ZSTD).collect();
+    encode(&ClientMsg::Hello { proto, client, features }, enc).ok().map(|b| (b, enc))
+}
+
+async fn bridge<S>(ws: WebSocketStream<S>, st: Arc<State>, via: String, ip: IpAddr, login: Pending)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let (mut wtx, mut wrx) = ws.split();
+    // First message: the Hello (10 s).
+    let first = match tokio::time::timeout(Duration::from_secs(10), wrx.next()).await {
+        Ok(Some(Ok(Message::Text(t)))) => Bytes::copy_from_slice(t.as_bytes()),
+        Ok(Some(Ok(Message::Binary(b)))) => b,
+        _ => return,
+    };
+    let Some((hello, enc)) = rewrite_hello(&first, &via) else {
+        let _ = wtx.send(Message::Close(None)).await;
+        return;
+    };
+    let opts = ptyro_client::ConnectOptions::new(st.ctx_paths.clone(), ClientKind::Web);
+    let sock = match ptyro_client::connect_raw(&opts).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("daemon: {e}");
+            let _ = wtx.send(Message::Close(None)).await;
+            return;
+        }
+    };
+    let (mut dtx, mut drx) = Framed::new(sock, framing()).split();
+    if dtx.send(hello).await.is_err() {
+        return;
+    }
+    let mut ping = tokio::time::interval(Duration::from_secs(25));
+    let mut welcomed = false;
+    // Counts against MAX_PENDING until the daemon answers the Hello.
+    let mut login = Some(login);
+    loop {
+        tokio::select! {
+            m = wrx.next() => match m {
+                Some(Ok(Message::Text(t))) => {
+                    if dtx.send(Bytes::copy_from_slice(t.as_bytes())).await.is_err() { break; }
+                }
+                Some(Ok(Message::Binary(b))) => {
+                    if dtx.send(b).await.is_err() { break; }
+                }
+                Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_))) => {}
+                _ => break,
+            },
+            f = drx.next() => match f {
+                Some(Ok(bytes)) => {
+                    if !welcomed {
+                        match decode::<ServerMsg>(&bytes) {
+                            Ok((ServerMsg::Welcome { .. }, _)) => welcomed = true,
+                            Ok((ServerMsg::Reject { .. }, _)) => st.failed(ip),
+                            _ => {}
+                        }
+                        if welcomed {
+                            drop(login.take());
+                        }
+                    }
+                    let msg = if enc == Encoding::Json && bytes.first() == Some(&b'{') {
+                        match String::from_utf8(bytes.to_vec()) {
+                            Ok(s) => Message::text(s),
+                            Err(_) => break,
+                        }
+                    } else {
+                        Message::binary(bytes.freeze())
+                    };
+                    if wtx.send(msg).await.is_err() { break; }
+                }
+                _ => break,
+            },
+            _ = ping.tick() => {
+                if wtx.send(Message::Ping(Bytes::new())).await.is_err() { break; }
+            }
+        }
+    }
+    let _ = wtx.send(Message::Close(None)).await;
+}
+
+/// One request for one token, answered as JSON: `{"t":"ok","reply":…}` or
+/// `{"t":"err","error":{"code":…,"message":…}}` (the protocol's own outcome shape).
+async fn api_request(
+    req: Request<Incoming>,
+    st: &State,
+    via: String,
+    ip: IpAddr,
+    login: Pending,
+) -> Response<Body> {
+    let token = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::to_owned);
+    let Some(token) = token else {
+        return respond(StatusCode::UNAUTHORIZED, "text/plain", "a device token is required");
+    };
+    let body = match Limited::new(req.into_body(), 1 << 20).collect().await {
+        Ok(b) => b.to_bytes(),
+        Err(_) => return respond(StatusCode::PAYLOAD_TOO_LARGE, "text/plain", "too large"),
+    };
+    let Ok(request) = serde_json::from_slice::<ptyro_protocol::Request>(&body) else {
+        return respond(StatusCode::BAD_REQUEST, "text/plain", "expected a JSON request");
+    };
+    let mut opts = ptyro_client::ConnectOptions::new(st.ctx_paths.clone(), ClientKind::Web);
+    opts.token = Some(token);
+    opts.encoding = Encoding::Json;
+    let client = ptyro_client::Client::connect_via(&opts, &via).await;
+    drop(login);
+    let client = match client {
+        Ok(c) => c,
+        Err(e) => {
+            if matches!(e, ptyro_client::ClientError::Rejected(_)) {
+                st.failed(ip);
+                return respond(StatusCode::UNAUTHORIZED, "text/plain", "unauthorized");
+            }
+            return respond(StatusCode::BAD_GATEWAY, "text/plain", e.to_string());
+        }
+    };
+    let out = match tokio::time::timeout(Duration::from_secs(30), client.request(request)).await {
+        Ok(Ok(reply)) => serde_json::json!({ "t": "ok", "reply": reply }),
+        Ok(Err(e)) => {
+            serde_json::json!({ "t": "err", "error": { "code": e.code, "message": e.message } })
+        }
+        Err(_) => {
+            serde_json::json!({ "t": "err", "error": { "code": "timeout", "message": "timed out" } })
+        }
+    };
+    respond(StatusCode::OK, "application/json", out.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn safe_addresses() {
+        for ok in ["127.0.0.1", "::1", "100.64.0.1", "100.127.255.254", "fd7a:115c:a1e0::1"] {
+            assert!(safe_address(ok.parse().unwrap()), "{ok}");
+        }
+        for bad in ["0.0.0.0", "192.168.1.5", "100.128.0.1", "10.0.0.1", "::"] {
+            assert!(!safe_address(bad.parse().unwrap()), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_proxy_added_address_counts() {
+        assert_eq!(last_hop("6.6.6.6, 1.2.3.4"), "1.2.3.4");
+        assert_eq!(last_hop("1.2.3.4"), "1.2.3.4");
+    }
+
+    #[test]
+    fn logins_in_flight_are_capped_and_failures_pruned() {
+        let st = Arc::new(State {
+            ctx_paths: ptyro_core::paths::Paths::resolve(|k| {
+                (k == "PTYRO_HOME").then(|| "/nonexistent".into())
+            })
+            .unwrap(),
+            failures: Mutex::new(HashMap::new()),
+            pending: Mutex::new(HashMap::new()),
+        });
+        let ip: IpAddr = "1.2.3.4".parse().unwrap();
+        let held: Vec<Pending> = (0..MAX_PENDING).map(|_| st.begin(ip).unwrap()).collect();
+        assert!(st.begin(ip).is_none());
+        assert!(st.begin("5.6.7.8".parse().unwrap()).is_some());
+        drop(held);
+        assert!(st.pending.lock().unwrap().is_empty());
+        let old: IpAddr = "9.9.9.9".parse().unwrap();
+        // (Instant can't go back further than boot.)
+        if let Some(then) = Instant::now().checked_sub(FAILURE_WINDOW) {
+            st.failures.lock().unwrap().insert(old, (3, then));
+            st.failed(ip);
+            assert!(!st.failures.lock().unwrap().contains_key(&old));
+        }
+    }
+
+    #[test]
+    fn hellos_are_rewritten() {
+        let hello = r#"{"t":"hello","proto":{"major":1,"minor":8},"client":{"kind":"tui","version":"x","pid":5,"token":"ptd_a"},"features":["zstd"]}"#;
+        let (b, enc) = rewrite_hello(hello.as_bytes(), "ws:1.2.3.4:5").unwrap();
+        assert_eq!(enc, Encoding::Json);
+        let (ClientMsg::Hello { client, features, .. }, _) = decode::<ClientMsg>(&b).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(client.kind, ClientKind::Web);
+        assert_eq!(client.via.as_deref(), Some("ws:1.2.3.4:5"));
+        assert_eq!(client.token.as_deref(), Some("ptd_a"));
+        assert!(features.is_empty());
+        assert!(rewrite_hello(br#"{"t":"ping"}"#, "x").is_none());
+    }
+}

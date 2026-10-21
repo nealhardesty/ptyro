@@ -1,0 +1,457 @@
+//! Paired devices (SPEC §16.3, M9.2): long random tokens, stored only as SHA-256 hashes, each
+//! with a scope the daemon enforces on every request and keystroke the device sends. Pairing
+//! and revoking happen only from this machine. Every remote action that touches a session is
+//! written to that session's event log.
+
+use ptyro_core::secret::{ct_eq, token};
+use ptyro_core::{Error, ErrorCode, now_ms};
+use ptyro_protocol::{DeviceInfo, PushSub, Reply, Request, Scope};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+use crate::daemon::Daemon;
+use crate::mail::Caller;
+
+const KV_KEY: &str = "devices";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceRecord {
+    pub id: String,
+    pub name: String,
+    pub scope: Scope,
+    /// SHA-256 of the token, hex.
+    pub token_sha256: String,
+    pub created_ms: u64,
+    #[serde(default)]
+    pub last_seen_ms: Option<u64>,
+    #[serde(default)]
+    pub last_via: Option<String>,
+    #[serde(default)]
+    pub push: Vec<PushSub>,
+}
+
+impl DeviceRecord {
+    pub fn info(&self) -> DeviceInfo {
+        DeviceInfo {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            scope: self.scope,
+            created_ms: self.created_ms,
+            last_seen_ms: self.last_seen_ms,
+            last_via: self.last_via.clone(),
+            push: self.push.len() as u32,
+        }
+    }
+}
+
+/// What an authenticated device may do, carried with each of its requests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Grant {
+    pub device: u64,
+    pub scope: Scope,
+}
+
+fn hash(token: &str) -> String {
+    Sha256::digest(token.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn id_num(id: &str) -> u64 {
+    u64::from_str_radix(id, 16).unwrap_or(0)
+}
+
+/// The scope a request needs from a device. Anything not listed needs `full`, so a new request
+/// is safe by default.
+pub fn needed(req: &Request) -> Scope {
+    use Request::*;
+    match req {
+        List
+        | Get { .. }
+        | ReadScreen { .. }
+        | ReadScrollback { .. }
+        | Status
+        | Resolve { .. }
+        | StatusExplain { .. }
+        | Inbox { .. }
+        | Events { .. }
+        | Usage
+        | History { .. }
+        | ProjectList
+        | ProjectGet { .. }
+        | WorkspaceList
+        | WorktreeList { .. }
+        | WorktreeGet { .. }
+        | WorktreeDiff { .. }
+        | WorktreeLog { .. }
+        | RunList { .. }
+        | RunGet { .. }
+        | RunEvents { .. }
+        | GateList { .. }
+        | Compare { .. }
+        | MsgList { .. }
+        | LeaseList
+        | Radar { .. }
+        | CheckpointList { .. }
+        | CheckpointDiff { .. }
+        | ProfileList
+        | ReviewList { .. }
+        | ReviewQueue
+        | PrGet { .. }
+        | RecipeList { .. }
+        | RecipeShow { .. }
+        | LoadView { .. }
+        | PushKey
+        | PushSubscribe { .. }
+        | PushUnsubscribe { .. }
+        | PushTest
+        | ChatGet { .. } => Scope::Read,
+        Answer { .. }
+        | GateResolve { .. }
+        | ClearAttention { .. }
+        | InboxMark { .. }
+        | Mute { .. } => Scope::Approve,
+        SendText { .. }
+        | SendBytes { .. }
+        | Resume { .. }
+        | Hibernate { .. }
+        | Restart { .. }
+        | Rename { .. }
+        | MsgPost { .. }
+        | ReviewAdd { .. }
+        | ReviewSend { .. }
+        | Iterate { .. }
+        | RunCancel { .. }
+        | RunRetry { .. }
+        | Convert { .. } => Scope::Control,
+        // A configured agent (its command comes from the user's config) is control; any other
+        // command line is full.
+        // A verify check, a lead or `ptyro mcp` is a command line of its own: full.
+        Spawn { spec }
+            if spec.agent.is_some()
+                && spec.argv.is_empty()
+                && spec.verify.is_none()
+                && spec.lead.is_none()
+                && !spec.mcp =>
+        {
+            Scope::Control
+        }
+        _ => Scope::Full,
+    }
+}
+
+/// The session a request acts on, for the audit trail.
+fn target(req: &Request) -> Option<&str> {
+    use Request::*;
+    match req {
+        SendText { addr, .. }
+        | SendBytes { addr, .. }
+        | Answer { addr, .. }
+        | ClearAttention { addr, .. }
+        | Resume { addr }
+        | Hibernate { addr }
+        | Kill { addr, .. }
+        | Restart { addr, .. }
+        | Rename { addr, .. } => Some(addr),
+        _ => None,
+    }
+}
+
+impl Daemon {
+    /// Devices from the store (or nothing, without one).
+    pub(crate) async fn load_devices(&self) {
+        let Some(store) = &self.store else { return };
+        if let Ok(Some(v)) = store.kv_get(KV_KEY.into()).await
+            && let Ok(list) = serde_json::from_value::<Vec<DeviceRecord>>(v)
+        {
+            *self.devices.lock().expect("devices") = list;
+        }
+    }
+
+    pub(crate) fn save_devices(&self) {
+        let v = serde_json::to_value(&*self.devices.lock().expect("devices")).unwrap_or_default();
+        self.save_kv(KV_KEY, v);
+    }
+
+    /// The device a token belongs to. Every record is compared, in constant time, whatever
+    /// matches first.
+    pub(crate) fn authenticate(&self, token: Option<&str>, via: Option<&str>) -> Option<Grant> {
+        let h = hash(token?);
+        let mut devices = self.devices.lock().expect("devices");
+        let mut found = None;
+        for (i, d) in devices.iter().enumerate() {
+            if ct_eq(d.token_sha256.as_bytes(), h.as_bytes()) {
+                found = Some(i);
+            }
+        }
+        let d = &mut devices[found?];
+        d.last_seen_ms = Some(now_ms());
+        d.last_via = via.map(str::to_owned);
+        Some(Grant { device: id_num(&d.id), scope: d.scope })
+    }
+
+    /// Still paired (revocation closes live connections).
+    pub(crate) fn device_valid(&self, device: u64) -> bool {
+        self.devices.lock().expect("devices").iter().any(|d| id_num(&d.id) == device)
+    }
+
+    pub(crate) fn device_name(&self, device: u64) -> String {
+        self.devices
+            .lock()
+            .expect("devices")
+            .iter()
+            .find(|d| id_num(&d.id) == device)
+            .map_or_else(|| format!("device {device:012x}"), |d| d.name.clone())
+    }
+
+    /// Hold a device to its scope; record what it did to sessions.
+    pub(crate) fn guard_device(&self, req: &Request, caller: Caller) -> Result<(), Error> {
+        let Some(g) = caller.grant else { return Ok(()) };
+        if matches!(req, Request::DevicePair { .. } | Request::DeviceRevoke { .. }) {
+            return Err(Error::new(
+                ErrorCode::PermissionDenied,
+                "devices are paired and revoked only on the machine that runs ptyro",
+            ));
+        }
+        let need = needed(req);
+        if g.scope < need {
+            tracing::warn!(device = %format!("{:012x}", g.device), "refused: needs {}", need.label());
+            return Err(Error::new(
+                ErrorCode::PermissionDenied,
+                format!(
+                    "this device is paired with scope {}; that needs {} (`ptyro pair --scope {}`)",
+                    g.scope.label(),
+                    need.label(),
+                    need.label()
+                ),
+            ));
+        }
+        if need >= Scope::Approve
+            && let Some(s) = target(req).and_then(|a| self.resolve(a).ok())
+        {
+            self.audit(&s, g, req_label(req));
+        }
+        Ok(())
+    }
+
+    /// A remote action on a session, in its event log (and the daemon log).
+    pub(crate) fn audit(&self, s: &crate::session::Session, g: Grant, what: &str) {
+        let device = self.device_name(g.device);
+        tracing::info!(session = %s.id, %device, "remote {what}");
+        s.record_event("remote", serde_json::json!({ "device": device, "action": what }));
+    }
+
+    pub(crate) async fn handle_devices(
+        &self,
+        req: Request,
+        caller: Caller,
+    ) -> Result<Reply, Error> {
+        match req {
+            Request::DevicePair { name, scope } => {
+                let name = name.trim();
+                if name.is_empty() || name.len() > 64 {
+                    return Err(Error::invalid("a device name is 1–64 characters"));
+                }
+                let token = token("ptd_").map_err(|e| Error::internal(format!("random: {e}")))?;
+                let id = ptyro_core::secret::random_bytes(6)
+                    .map_err(|e| Error::internal(format!("random: {e}")))?
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>();
+                let rec = DeviceRecord {
+                    id,
+                    name: name.to_owned(),
+                    scope,
+                    token_sha256: hash(&token),
+                    created_ms: now_ms(),
+                    last_seen_ms: None,
+                    last_via: None,
+                    push: Vec::new(),
+                };
+                let device = rec.info();
+                self.devices.lock().expect("devices").push(rec);
+                self.save_devices();
+                tracing::info!(device = %device.id, name = %device.name, scope = device.scope.label(), "paired");
+                Ok(Reply::Paired { device, token })
+            }
+            Request::DeviceList => Ok(Reply::Devices {
+                devices: self
+                    .devices
+                    .lock()
+                    .expect("devices")
+                    .iter()
+                    .map(DeviceRecord::info)
+                    .collect(),
+            }),
+            Request::DeviceRevoke { id } => {
+                let removed = {
+                    let mut d = self.devices.lock().expect("devices");
+                    // Names needn't be unique: by name, only when it names one device.
+                    let named = d.iter().filter(|x| x.name == id).count();
+                    if named > 1 && !d.iter().any(|x| x.id == id) {
+                        return Err(Error::new(
+                            ErrorCode::Ambiguous,
+                            format!(
+                                "{named} devices are called {id:?}: revoke by id (ptyro devices)"
+                            ),
+                        ));
+                    }
+                    let before = d.len();
+                    d.retain(|x| x.id != id && x.name != id);
+                    before != d.len()
+                };
+                if !removed {
+                    return Err(Error::not_found(&id));
+                }
+                self.save_devices();
+                self.devices_epoch.send_modify(|e| *e += 1);
+                tracing::info!(device = %id, "revoked");
+                Ok(Reply::Done)
+            }
+            Request::PushKey => Ok(Reply::PushKey { key: self.vapid()?.public_b64() }),
+            Request::PushSubscribe { sub } => {
+                let g = caller.grant.ok_or_else(|| {
+                    Error::invalid("push subscriptions belong to a paired device")
+                })?;
+                url_ok(&sub.endpoint, &self.config().remote.push_hosts)?;
+                {
+                    let mut devices = self.devices.lock().expect("devices");
+                    // One endpoint belongs to one device.
+                    for d in devices.iter_mut() {
+                        d.push.retain(|p| p.endpoint != sub.endpoint);
+                    }
+                    if let Some(d) = devices.iter_mut().find(|d| id_num(&d.id) == g.device) {
+                        d.push.push(sub);
+                    }
+                }
+                self.save_devices();
+                Ok(Reply::Done)
+            }
+            Request::PushUnsubscribe { endpoint } => {
+                // A device removes its own subscriptions only; a local client, any.
+                for d in self.devices.lock().expect("devices").iter_mut() {
+                    if caller.grant.is_some_and(|g| id_num(&d.id) != g.device) {
+                        continue;
+                    }
+                    d.push.retain(|p| p.endpoint != endpoint);
+                }
+                self.save_devices();
+                Ok(Reply::Done)
+            }
+            Request::PushTest => {
+                let results = self
+                    .push_all(
+                        caller.grant.map(|g| g.device),
+                        crate::push::Payload {
+                            title: "ptyro".into(),
+                            body: "Push notifications work.".into(),
+                            session: None,
+                            kind: "test".into(),
+                            tag: "ptyro-test".into(),
+                            since: None,
+                        },
+                    )
+                    .await;
+                if results.is_empty() {
+                    return Err(Error::new(
+                        ErrorCode::NotFound,
+                        "no device has push notifications turned on (open the web app → Notifications)",
+                    ));
+                }
+                Ok(Reply::Notes { notes: results })
+            }
+            _ => Err(Error::invalid("not a device request")),
+        }
+    }
+}
+
+/// Push services are HTTPS; anything else is refused before it reaches curl.
+fn url_ok(endpoint: &str, extra: &[String]) -> Result<(), Error> {
+    // Tests deliver to a plain-HTTP listener on loopback.
+    let test = std::env::var_os("PTYRO_TEST_PUSH_HTTP").is_some()
+        && endpoint.starts_with("http://127.0.0.1:");
+    // Only the browsers' push services: a device can't make the daemon post to any host.
+    let host = endpoint
+        .strip_prefix("https://")
+        .and_then(|r| r.split(['/', '?', ':']).next())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let known = [
+        "fcm.googleapis.com",
+        "android.googleapis.com",
+        "updates.push.services.mozilla.com",
+        "push.apple.com",
+        "notify.windows.com",
+    ]
+    .iter()
+    .copied()
+    .chain(extra.iter().map(String::as_str))
+    .any(|k| {
+        let k = k.to_ascii_lowercase();
+        host == k || host.ends_with(&format!(".{k}"))
+    });
+    if ((endpoint.starts_with("https://") && known) || test)
+        && endpoint.len() < 2048
+        && !endpoint.contains(['\n', '"', ' '])
+    {
+        Ok(())
+    } else {
+        Err(Error::invalid("a push endpoint is a browser push service's https URL"))
+    }
+}
+
+fn req_label(req: &Request) -> &'static str {
+    match req {
+        Request::SendText { .. } | Request::SendBytes { .. } => "typed",
+        Request::Answer { .. } => "answered",
+        Request::ClearAttention { .. } => "cleared attention",
+        Request::Resume { .. } => "resumed",
+        Request::Hibernate { .. } => "hibernated",
+        Request::Kill { .. } => "stopped",
+        Request::Restart { .. } => "restarted",
+        Request::Rename { .. } => "renamed",
+        _ => "acted",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ptyro_core::session::SpawnSpec;
+
+    #[test]
+    fn scopes_are_ordered_and_requests_classified() {
+        assert!(
+            Scope::Read < Scope::Approve
+                && Scope::Approve < Scope::Control
+                && Scope::Control < Scope::Full
+        );
+        assert_eq!(needed(&Request::List), Scope::Read);
+        assert_eq!(
+            needed(&Request::Answer { addr: "a".into(), decision: "allow".into(), expect: None }),
+            Scope::Approve
+        );
+        assert_eq!(
+            needed(&Request::SendText {
+                addr: "a".into(),
+                text: "x".into(),
+                enter: true,
+                wait_ready_ms: None
+            }),
+            Scope::Control
+        );
+        let any = SpawnSpec { argv: vec!["sh".into()], ..SpawnSpec::default() };
+        assert_eq!(needed(&Request::Spawn { spec: any }), Scope::Full);
+        let verify = SpawnSpec {
+            agent: Some("claude".into()),
+            verify: Some("curl x | sh".into()),
+            ..SpawnSpec::default()
+        };
+        assert_eq!(needed(&Request::Spawn { spec: verify }), Scope::Full);
+        assert!(url_ok("https://fcm.googleapis.com/fcm/send/abc", &[]).is_ok());
+        assert!(url_ok("https://web.push.apple.com/QGx", &[]).is_ok());
+        assert!(url_ok("https://internal.corp/admin", &[]).is_err());
+        assert!(url_ok("https://evilpush.apple.com.example/x", &[]).is_err());
+        assert!(url_ok("https://ntfy.example.com/up/x", &["ntfy.example.com".into()]).is_ok());
+        assert_eq!(needed(&Request::Upgrade { binary: None }), Scope::Full);
+        assert_eq!(needed(&Request::DeviceList), Scope::Full);
+    }
+}

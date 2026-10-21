@@ -1,0 +1,64 @@
+---
+source: crates/ptyro-term/tests/golden.rs
+expression: "snapshot_text(&whole, &modes)"
+---
+Claude Code's fullscreen renderer didn't finish starting last time on this machine, so this launch i
+s using the classic renderer. It will try fullscreen again next launch; /tui default keeps the class
+ic renderer.
+ ▐▛███▛█   Claude Code v2.1.304
+▝▜██████▀  Opus 5.5 · Claude Max
+ ▝▝   ▝▝   /…/-home-user-dev-ptyro/00000000-0000-0000-0000-000000000000/scratchpad/claude-run
+
+
+❯ Use the Bash tool to run exactly: touch golden.txt
+
+● Bash(touch golden.txt)
+  ⎿  Waiting…
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+ Tip: auto mode handles these prompts for you — choose "switch to auto mode" below
+ Create empty golden.txt file
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ touch golden.txt
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and always allow access to /tmp/claude-0000/-home-user-dev-ptyro/00000000-0000-0000-0000-
+      000000000000/scratchpad/claude-run from this project
+   3. Yes, and switch to auto mode · auto mode handles these prompts for you
+   4. No
+
+ Esc to cancel · Tab to amend
+──── cursor CursorState { x: 1, y: 21, visible: false, shape: Block, blinking: false }
+──── modes TermModes { app_cursor: false, app_keypad: false, bracketed_paste: true, focus_events: true, alt_screen: false, show_cursor: false, mouse: Off, sgr_mouse: false, kitty: 5 }
+──── title Some("Golden.txt file creation")
+──── ansi
+␛[0mClaude Code's fullscreen renderer didn't finish starting last time on this machine, so this launch i␛[0m
+␛[0ms using the classic renderer. It will try fullscreen again next launch; /tui default keeps the class␛[0m
+␛[0mic renderer.␛[0m
+␛[0;38;2;215;119;87m ▐␛[0;38;2;215;119;87;48;2;0;0;0m▛███▛█␛[0m   ␛[0;1mClaude␛[0m ␛[0;1mCode␛[0m ␛[0;38;2;153;153;153mv2.1.304␛[0m
+␛[0;38;2;215;119;87m▝▜␛[0;38;2;215;119;87;48;2;0;0;0m█████␛[0;38;2;215;119;87m█▀␛[0m  ␛[0;38;2;153;153;153mOpus␛[0m ␛[0;38;2;153;153;153m5.5␛[0m ␛[0;38;2;153;153;153m·␛[0m ␛[0;38;2;153;153;153mClaude␛[0m ␛[0;38;2;153;153;153mMax␛[0m
+␛[0;38;2;215;119;87m ▝▝␛[0m   ␛[0;38;2;215;119;87m▝▝␛[0m   ␛[0;38;2;153;153;153m/…/-home-user-dev-ptyro/00000000-0000-0000-0000-000000000000/scratchpad/claude-run␛[0m
+␛[0m
+␛[0m
+␛[0;38;2;153;153;153;48;2;55;55;55m❯ ␛[0;38;2;255;255;255;48;2;55;55;55mUse the Bash tool to run exactly: touch golden.txt␛[0;48;2;55;55;55m                                                ␛[0m
+␛[0m
+␛[0;38;2;153;153;153m●␛[0m ␛[0;1mBash␛[0m(touch golden.txt)␛[0m
+␛[0;38;2;153;153;153m  ⎿  Waiting…␛[0m
+␛[0m
+␛[0;38;2;177;185;249m────────────────────────────────────────────────────────────────────────────────────────────────────␛[0m
+␛[0m ␛[0;1;38;2;177;185;249mBash command␛[0m
+␛[0m ␛[0;1mTip: auto mode handles these prompts for you — choose "switch to auto mode" below␛[0m
+␛[0m ␛[0;38;2;153;153;153mCreate␛[0m ␛[0;38;2;153;153;153mempty␛[0m ␛[0;38;2;153;153;153mgolden.txt␛[0m ␛[0;38;2;153;153;153mfile␛[0m
+␛[0;38;2;80;80;80m╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌␛[0m
+␛[0m touch golden.txt␛[0m
+␛[0;38;2;80;80;80m╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌␛[0m
+␛[0m Do you want to proceed?␛[0m
+␛[0m ␛[0;38;2;177;185;249m❯␛[0m ␛[0;38;2;153;153;153m1.␛[0m ␛[0;38;2;177;185;249mYes␛[0m
+␛[0m   ␛[0;38;2;153;153;153m2.␛[0m Yes, and always allow access to ␛[0;1m/tmp/claude-0000/-home-user-dev-ptyro/00000000-0000-0000-0000-␛[0m
+␛[0m      ␛[0;1m000000000000/scratchpad/claude-run␛[0m from this project␛[0m
+␛[0m   ␛[0;38;2;153;153;153m3.␛[0m Yes, and switch to auto mode␛[0;38;2;153;153;153m ·␛[0m ␛[0;38;2;153;153;153mauto␛[0m ␛[0;38;2;153;153;153mmode␛[0m ␛[0;38;2;153;153;153mhandles␛[0m ␛[0;38;2;153;153;153mthese␛[0m ␛[0;38;2;153;153;153mprompts␛[0m ␛[0;38;2;153;153;153mfor␛[0m ␛[0;38;2;153;153;153myou␛[0m
+␛[0m   ␛[0;38;2;153;153;153m4.␛[0m No␛[0m
+␛[0m
+␛[0m ␛[0;38;2;153;153;153mEsc␛[0m ␛[0;38;2;153;153;153mto␛[0m ␛[0;38;2;153;153;153mcancel␛[0m ␛[0;38;2;153;153;153m·␛[0m ␛[0;38;2;153;153;153mTab␛[0m ␛[0;38;2;153;153;153mto␛[0m ␛[0;38;2;153;153;153mamend␛[0m
