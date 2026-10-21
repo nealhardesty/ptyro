@@ -149,7 +149,10 @@ fn watch_config(
 ) -> Option<notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>> {
     let dir = path.parent()?.to_path_buf();
     let _ = std::fs::create_dir_all(&dir);
-    let target = path.to_path_buf();
+    // Events name the real path: macOS's FSEvents reports `/private/var/…` for `/var/…`, so a
+    // config dir reached through a symlink would never match.
+    let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
+    let target = dir.join(path.file_name()?);
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
     let mut debouncer = notify_debouncer_mini::new_debouncer(
         Duration::from_millis(200),
