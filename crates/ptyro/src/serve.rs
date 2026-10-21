@@ -316,7 +316,7 @@ fn host_ok(host: Option<&str>, names: &[String]) -> bool {
     h.parse::<IpAddr>().is_ok()
         || h == "localhost"
         || h.ends_with(".localhost")
-        || names.iter().any(|n| *n == h)
+        || names.contains(&h)
 }
 
 /// Who connected, for the audit trail: the peer, or what a trusted local proxy in front
