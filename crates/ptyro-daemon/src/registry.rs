@@ -59,11 +59,7 @@ impl Daemon {
         if addr.starts_with(['/', '.', '~']) {
             let path = ptyro_core::config::expand_home(addr);
             let path = path.canonicalize().unwrap_or(path);
-            let wt = reg
-                .worktrees
-                .iter()
-                .filter(|w| path.starts_with(&w.path))
-                .max_by_key(|w| w.path.as_os_str().len());
+            let wt = innermost(reg.worktrees.iter(), &path);
             if let Some(p) = wt.and_then(|w| reg.projects.iter().find(|p| p.id == w.project)) {
                 return Ok(p.clone());
             }
@@ -88,11 +84,7 @@ impl Daemon {
             let path = ptyro_core::config::expand_home(addr);
             let path = path.canonicalize().unwrap_or(path);
             let reg = self.registry.lock().expect("registry");
-            return reg
-                .worktrees
-                .iter()
-                .filter(|w| path.starts_with(&w.path))
-                .max_by_key(|w| w.path.as_os_str().len())
+            return innermost(reg.worktrees.iter(), &path)
                 .cloned()
                 .ok_or_else(|| Error::missing("worktree", addr));
         }
@@ -818,4 +810,17 @@ pub fn scan_repos(roots: &[PathBuf], depth: u8) -> Vec<PathBuf> {
     }
     out.dedup();
     out
+}
+
+/// The worktree whose checkout holds `path` (already resolved), innermost first. Both sides are
+/// compared resolved: on macOS a checkout under /var or /tmp really lives in /private.
+pub(crate) fn innermost<'a>(
+    worktrees: impl Iterator<Item = &'a WorktreeInfo>,
+    path: &Path,
+) -> Option<&'a WorktreeInfo> {
+    worktrees
+        .map(|w| (w, w.path.canonicalize().unwrap_or_else(|_| w.path.clone())))
+        .filter(|(_, root)| path.starts_with(root))
+        .max_by_key(|(_, root)| root.as_os_str().len())
+        .map(|(w, _)| w)
 }
