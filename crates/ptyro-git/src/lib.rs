@@ -1,8 +1,9 @@
 //! Worktree operations via the git CLI (SPEC §10): registration facts, `worktree add/lock/remove`,
 //! `worktree list --porcelain`, repository status, and the removal safety checks of §10.8.
 //!
-//! Everything shells out to `git` (blocking): it is what users have, it honours their config and
-//! hooks, and every porcelain used here is stable. Callers in async code use `spawn_blocking`.
+//! Everything shells out to `git` (blocking): it is what users have, it honours their config,
+//! and every porcelain used here is stable. Hooks run only for what the user asked for (see
+//! `command_as`). Callers in async code use `spawn_blocking`.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -130,8 +131,21 @@ impl Git {
     }
 
     fn command(&self, dir: &Path, args: &[&str]) -> Command {
+        self.command_as(dir, args, false)
+    }
+
+    /// `hooks`: an operation the user asked ptyro for (commit, push, merge, rebase,
+    /// cherry-pick, a new worktree), which runs their hooks as git itself would. Every other
+    /// call (status, diffs, checkpoints, conflict checks: what ptyro runs by itself, in the
+    /// background) runs none. Hooks and `core.fsmonitor` are code a repository's config names,
+    /// and agents can write that config; these calls run as the user, outside any sandbox.
+    fn command_as(&self, dir: &Path, args: &[&str], hooks: bool) -> Command {
         let mut c = Command::new("git");
-        c.arg("-C").arg(dir).args(args);
+        c.arg("-C").arg(dir).args(["-c", "core.fsmonitor=false"]);
+        if !hooks {
+            c.args(["-c", "core.hooksPath=/dev/null"]);
+        }
+        c.args(args);
         if let Some(env) = &self.env {
             c.env_clear().envs(env.iter().map(|(k, v)| (k, v)));
         }
@@ -149,9 +163,20 @@ impl Git {
         })
     }
 
-    /// Run git in `dir`; stdout on success, a `Failed` with stderr otherwise.
+    /// Run git in `dir`; stdout on success, a `Failed` with stderr otherwise. No hooks run.
     pub fn run(&self, dir: &Path, args: &[&str]) -> Result<String> {
-        let out = self.output(dir, args)?;
+        self.run_as(dir, args, false)
+    }
+
+    /// [`Git::run`] for an operation the user asked for: their hooks run.
+    pub fn run_hooked(&self, dir: &Path, args: &[&str]) -> Result<String> {
+        self.run_as(dir, args, true)
+    }
+
+    fn run_as(&self, dir: &Path, args: &[&str], hooks: bool) -> Result<String> {
+        let out = self.command_as(dir, args, hooks).output().map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound { GitError::Missing } else { e.into() }
+        })?;
         if out.status.success() {
             Ok(String::from_utf8_lossy(&out.stdout).into_owned())
         } else {
@@ -325,16 +350,19 @@ impl Git {
                     )));
                 }
                 // --no-track: the new branch must not pretend `origin/main` is its upstream.
-                self.run(root, &["worktree", "add", "--no-track", "-b", branch, &p, base])?;
+                self.run_hooked(root, &["worktree", "add", "--no-track", "-b", branch, &p, base])?;
             }
             Source::Existing { branch } => {
                 if self.branch_exists(root, branch) {
-                    self.run(root, &["worktree", "add", &p, branch])?;
+                    self.run_hooked(root, &["worktree", "add", &p, branch])?;
                 } else if let Some(r) = self.main_remote(root)
                     && self.ref_exists(root, &format!("{}/{branch}", r.name))
                 {
                     let upstream = format!("{}/{branch}", r.name);
-                    self.run(root, &["worktree", "add", "--track", "-b", branch, &p, &upstream])?;
+                    self.run_hooked(
+                        root,
+                        &["worktree", "add", "--track", "-b", branch, &p, &upstream],
+                    )?;
                 } else {
                     return Err(GitError::Invalid(format!(
                         "no branch {branch} here or on the remote"
@@ -344,7 +372,7 @@ impl Git {
             Source::PullRequest { number, branch, remote } => {
                 self.check_branch_name(branch)?;
                 self.fetch(root, remote, &format!("pull/{number}/head:{branch}"))?;
-                self.run(root, &["worktree", "add", &p, branch])?;
+                self.run_hooked(root, &["worktree", "add", &p, branch])?;
             }
         }
         Ok(())

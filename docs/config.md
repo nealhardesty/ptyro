@@ -202,6 +202,13 @@ auto = true                          # ...for every agent session in this projec
   ignores, such as `.env`, is copied into each new worktree, plus `[worktree] copy`.
 - **Scripts run only once you trust them.** ptyro shows the exact script text first, and asks
   again whenever it changes (`ptyro project trust`).
+- **Trusting a command trusts the files it runs.** Trust pins the text (`cargo test`,
+  `./scripts/lint.sh`), not what those commands read, and agents edit the checkout. Scripts,
+  `after_turn` and `[verify]` checks run as you, with your full environment and network,
+  outside any sandbox an agent runs in, right after an agent's turn. Trust a project only if
+  you'd run its build and tests yourself after any agent's edit. (ptyro's own background `git`
+  calls run no hooks and no `core.fsmonitor`; a commit, push, merge or new worktree you ask for
+  runs your hooks as git would.)
 - **Other tools' config is read too.** Conductor (`.conductor/settings.toml`), Superset
   (`.superset/config.json`), the Codex app (`.codex/environments/`), Claude Desktop
   (`.claude/launch.json`), Cursor (`.cursor/environment.json`) and Copilot

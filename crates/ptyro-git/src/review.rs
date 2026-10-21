@@ -45,6 +45,7 @@ impl Git {
                 "diff",
                 "--no-color",
                 "--no-ext-diff",
+                "--no-textconv",
                 "-M",
                 "--unified=3",
                 "--end-of-options",
@@ -103,13 +104,13 @@ impl Git {
         if self.ok(path, &["diff", "--cached", "--quiet"]) {
             return Err(GitError::Invalid("nothing to commit (stage files, or use --all)".into()));
         }
-        self.run(path, &["commit", "--quiet", "-m", message])?;
+        self.run_hooked(path, &["commit", "--quiet", "-m", message])?;
         self.rev(path, "HEAD").ok_or_else(|| GitError::Invalid("no HEAD after committing".into()))
     }
 
     /// Push `branch` to `remote`, setting the upstream.
     pub fn push(&self, path: &Path, remote: &str, branch: &str) -> Result<()> {
-        self.run(path, &["push", "--quiet", "--set-upstream", remote, branch]).map(drop)
+        self.run_hooked(path, &["push", "--quiet", "--set-upstream", remote, branch]).map(drop)
     }
 
     pub fn is_ancestor(&self, path: &Path, a: &str, b: &str) -> bool {
@@ -146,7 +147,7 @@ impl Git {
     /// Rebase the checkout at `path` onto `onto`; aborts and reports on a conflict.
     pub fn rebase(&self, path: &Path, onto: &str) -> Result<()> {
         self.refuse_if_in_progress(path)?;
-        match self.run(path, &["rebase", "--quiet", "--end-of-options", onto]) {
+        match self.run_hooked(path, &["rebase", "--quiet", "--end-of-options", onto]) {
             Ok(_) => Ok(()),
             Err(e) => {
                 if self.in_progress(path)?.is_some() {
@@ -161,7 +162,7 @@ impl Git {
 
     /// Fast-forward the branch checked out at `path` to `to`.
     pub fn merge_ff(&self, path: &Path, to: &str) -> Result<()> {
-        self.run(path, &["merge", "--ff-only", "--quiet", "--end-of-options", to]).map(drop)
+        self.run_hooked(path, &["merge", "--ff-only", "--quiet", "--end-of-options", to]).map(drop)
     }
 
     /// Move a branch that isn't checked out anywhere to `to` (only ever forward).
@@ -177,7 +178,7 @@ impl Git {
     /// Cherry-pick `range` onto the branch checked out at `path`; aborts on a conflict.
     pub fn cherry_pick(&self, path: &Path, range: &str) -> Result<()> {
         self.refuse_if_in_progress(path)?;
-        match self.run(path, &["cherry-pick", "--end-of-options", range]) {
+        match self.run_hooked(path, &["cherry-pick", "--end-of-options", range]) {
             Ok(_) => Ok(()),
             Err(e) => {
                 if self.in_progress(path)?.is_some() {

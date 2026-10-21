@@ -175,7 +175,7 @@ impl Git {
         stat: bool,
         paths: &[String],
     ) -> Result<String> {
-        let mut args = vec!["diff", "--no-color", "--no-ext-diff"];
+        let mut args = vec!["diff", "--no-color", "--no-ext-diff", "--no-textconv"];
         // `--binary` makes a patch even with `--stat`: only for patches (they may be applied).
         args.push(if stat { "--stat" } else { "--binary" });
         args.extend(["--end-of-options", a, b, "--"]);

@@ -303,3 +303,44 @@ fn clone_tree_copies() {
     clone_tree(&src, &dst, true).unwrap();
     assert_eq!(std::fs::read_to_string(dst.join("deep/f")).unwrap(), "data");
 }
+
+/// Config an agent could write (`.git/config` is in its worktree's reach) names code: hooks and
+/// `core.fsmonitor`. What ptyro runs by itself (status, diffs, checkpoints) runs neither; what
+/// the user asked for (a commit here) runs their hooks.
+#[test]
+fn background_calls_run_no_repository_code() {
+    let f = fixture();
+    let hooks = f.base.join("hooks");
+    std::fs::create_dir(&hooks).unwrap();
+    let ran = f.base.join("ran");
+    std::fs::create_dir(&ran).unwrap();
+    let script = |name: &str, path: &Path| {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(path, format!("#!/bin/sh\ntouch '{}/{name}'\n", ran.display())).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    for h in ["reference-transaction", "pre-commit", "post-checkout"] {
+        script(h, &hooks.join(h));
+    }
+    let monitor = f.base.join("fsmonitor");
+    script("fsmonitor", &monitor);
+    f.git.run(&f.root, &["config", "core.hooksPath", &hooks.to_string_lossy()]).unwrap();
+    f.git.run(&f.root, &["config", "core.fsmonitor", &monitor.to_string_lossy()]).unwrap();
+    std::fs::write(f.root.join("README"), "changed\n").unwrap();
+    f.git.status(&f.root, Some("origin/main")).unwrap();
+    f.git.diff(&f.root, "HEAD", true).unwrap();
+    let snap = f.git.checkpoint(&f.root, "ckpt").unwrap();
+    f.git.update_ref(&f.root, "refs/ptyro/test", &snap.commit).unwrap();
+    let seen = || {
+        let mut v: Vec<String> = std::fs::read_dir(&ran)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
+    };
+    assert!(seen().is_empty(), "background git ran {:?}", seen());
+    f.git.commit(&f.root, "asked for", &[], true).unwrap();
+    assert!(seen().contains(&"pre-commit".to_owned()), "{:?}", seen());
+    assert!(!seen().contains(&"fsmonitor".to_owned()), "{:?}", seen());
+}
