@@ -99,11 +99,15 @@ impl Daemon {
         }
         let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
         let reg = self.registry.lock().expect("registry");
+        // Both sides resolved: on macOS a worktree under /var or /tmp really lives in /private.
         let best = reg
             .worktrees
             .iter()
-            .filter(|w| w.state == WorktreeState::Ready && cwd.starts_with(&w.path))
-            .max_by_key(|w| w.path.as_os_str().len());
+            .filter(|w| w.state == WorktreeState::Ready)
+            .map(|w| (w, w.path.canonicalize().unwrap_or_else(|_| w.path.clone())))
+            .filter(|(_, path)| cwd.starts_with(path))
+            .max_by_key(|(_, path)| path.as_os_str().len())
+            .map(|(w, _)| w);
         Ok(best.and_then(|w| {
             reg.projects.iter().find(|p| p.id == w.project).map(|p| (w.clone(), p.clone()))
         }))

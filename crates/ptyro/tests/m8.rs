@@ -281,7 +281,7 @@ async fn compressed_frames_and_health_metrics() {
         "--",
         "sh",
         "-c",
-        "seq 1 100000 | paste -sd ' ' | fold -w 199; sleep 600",
+        "seq 1 100000 | paste -sd ' ' - | fold -w 199; sleep 600",
     ]);
     let mut opts = ConnectOptions::new(w.d.paths.clone(), ClientKind::Test);
     opts.autospawn = false;
