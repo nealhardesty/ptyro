@@ -1137,7 +1137,14 @@ never rewritten. `sidecar` is a side channel the daemon runs (OpenCode's server)
   the `shell` session kind.
 - Args that skip permission prompts (`--dangerously-skip-permissions`, `--yolo`,
   `--dangerously-bypass-approvals-and-sandbox`, …) are refused unless the agent sets
-  `dangerous = true`. Those sessions carry a ⚠ badge everywhere.
+  `dangerous = true`. Those sessions carry a ⚠ badge everywhere. The check
+  (`config::dangerous_arg`) covers the flags `--dangerously-skip-permissions`,
+  `--allow-dangerously-skip-permissions`, `--dangerously-bypass-approvals-and-sandbox`,
+  `--full-auto`, `--yolo`, `-y`, and the values `--permission-mode bypassPermissions`,
+  `--approval-mode yolo`, `--sandbox`/`-s danger-full-access`, `--ask-for-approval`/`-a never`,
+  `--config`/`-c approval_policy=never|sandbox_mode=danger-full-access`. Values are matched as
+  the next argument, `--flag=value` or `-svalue`, ignoring case and quotes. A one-string
+  `command` is checked word by word. It runs on the config and on every launch's full argv.
 
 ### 8.2 Claude Code (primary) **[spike-validated items marked]**
 

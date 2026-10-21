@@ -389,9 +389,7 @@ impl Daemon {
                     },
                 )?;
             base.extend(l.argv.iter().cloned());
-            dangerous = base
-                .iter()
-                .any(|x| ptyro_core::config::DANGEROUS_ARGS.iter().any(|d| x.starts_with(d)));
+            dangerous = ptyro_core::config::dangerous_arg(&base).is_some();
             if dangerous && !def.dangerous {
                 return Err(Error::new(
                     ErrorCode::PermissionDenied,

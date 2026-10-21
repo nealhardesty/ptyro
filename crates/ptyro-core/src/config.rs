@@ -846,13 +846,16 @@ impl Config {
             if matches!(&a.command, Some(CommandSpec::Argv(v)) if v.is_empty()) {
                 return Err(format!("agents.{name}.command: must not be empty"));
             }
-            let skip = a.args.iter().chain(a.command.iter().flat_map(|c| match c {
-                CommandSpec::Argv(v) => v.iter(),
-                CommandSpec::Line(_) => [].iter(),
-            }));
+            // A one-string command is a program name, but check its words too: better a false
+            // alarm than a missed `--yolo`.
+            let mut argv: Vec<String> = match &a.command {
+                Some(CommandSpec::Argv(v)) => v.clone(),
+                Some(CommandSpec::Line(l)) => l.split_whitespace().map(str::to_owned).collect(),
+                None => Vec::new(),
+            };
+            argv.extend(a.args.iter().cloned());
             if !a.dangerous
-                && let Some(bad) =
-                    skip.into_iter().find(|x| DANGEROUS_ARGS.iter().any(|d| x.starts_with(d)))
+                && let Some(bad) = dangerous_arg(&argv)
             {
                 return Err(format!(
                     "agents.{name}: {bad} skips permission prompts; set `dangerous = true` to allow it (such sessions show ⚠)"
@@ -977,14 +980,66 @@ impl Config {
     }
 }
 
-/// Arguments that turn off an agent's permission prompts (need `dangerous = true`).
-pub const DANGEROUS_ARGS: &[&str] = &[
+/// Flags that turn off an agent's permission prompts or sandbox on their own (Claude, Codex,
+/// Gemini), alone or as `--flag=value`.
+const DANGEROUS_FLAGS: &[&str] = &[
     "--dangerously-skip-permissions",
+    "--allow-dangerously-skip-permissions",
     "--dangerously-bypass-approvals-and-sandbox",
+    "--full-auto",
     "--yolo",
-    "--permission-mode=bypassPermissions",
-    "--approval-mode=yolo",
+    "-y",
 ];
+
+/// Options whose value does it: the option's names, and the values (compared without case,
+/// quotes or spaces).
+const DANGEROUS_VALUES: &[(&[&str], &[&str])] = &[
+    (&["--permission-mode"], &["bypasspermissions"]),
+    (&["--approval-mode"], &["yolo"]),
+    (&["--sandbox", "-s"], &["danger-full-access"]),
+    (&["--ask-for-approval", "-a"], &["never"]),
+    (&["--config", "-c"], &["approval_policy=never", "sandbox_mode=danger-full-access"]),
+];
+
+/// The first argument that turns off an agent's permission prompts or sandbox (it needs
+/// `dangerous = true`), as written: `--yolo`, `--permission-mode bypassPermissions`,
+/// `--sandbox=danger-full-access`, `-sdanger-full-access`, `-c approval_policy="never"`…
+pub fn dangerous_arg(argv: &[String]) -> Option<String> {
+    let norm = |v: &str| v.chars().filter(|c| !matches!(c, '"' | '\'' | ' ')).collect::<String>();
+    for (i, arg) in argv.iter().enumerate() {
+        let (flag, inline) = match arg.split_once('=') {
+            Some((f, v)) if f.starts_with('-') => (f, Some(v)),
+            _ => (arg.as_str(), None),
+        };
+        if DANGEROUS_FLAGS.contains(&flag) {
+            return Some(arg.clone());
+        }
+        for (names, bad) in DANGEROUS_VALUES {
+            let (value, shown) = if names.contains(&flag) {
+                match inline {
+                    Some(v) => (v, arg.clone()),
+                    None => match argv.get(i + 1) {
+                        Some(v) => (v.as_str(), format!("{arg} {v}")),
+                        None => continue,
+                    },
+                }
+            } else if let Some(v) = names
+                .iter()
+                .filter(|n| n.len() == 2)
+                .find_map(|n| arg.strip_prefix(n).filter(|v| !v.is_empty()))
+            {
+                // `-sdanger-full-access`, `-anever`
+                (v, arg.clone())
+            } else {
+                continue;
+            };
+            if bad.contains(&norm(value).to_ascii_lowercase().as_str()) {
+                return Some(shown);
+            }
+        }
+    }
+    None
+}
 
 /// Editors available without configuration: terminal ones open inside ptyro.
 pub const BUILTIN_EDITORS: &[&str] = &["nvim", "vim", "hx", "code", "zed", "cursor"];
@@ -1233,6 +1288,50 @@ mod tests {
     use super::*;
 
     #[test]
+    fn dangerous_args_are_caught_in_every_spelling() {
+        let argv = |s: &str| s.split(' ').map(str::to_owned).collect::<Vec<_>>();
+        for (bad, shown) in [
+            ("claude --dangerously-skip-permissions", "--dangerously-skip-permissions"),
+            ("claude --allow-dangerously-skip-permissions", "--allow-dangerously-skip-permissions"),
+            ("claude --permission-mode bypassPermissions", "--permission-mode bypassPermissions"),
+            ("claude --permission-mode=bypassPermissions", "--permission-mode=bypassPermissions"),
+            (
+                "codex --dangerously-bypass-approvals-and-sandbox",
+                "--dangerously-bypass-approvals-and-sandbox",
+            ),
+            ("codex --sandbox danger-full-access", "--sandbox danger-full-access"),
+            ("codex --sandbox=danger-full-access", "--sandbox=danger-full-access"),
+            ("codex -s danger-full-access", "-s danger-full-access"),
+            ("codex -sdanger-full-access", "-sdanger-full-access"),
+            ("codex -a never", "-a never"),
+            ("codex --ask-for-approval=never", "--ask-for-approval=never"),
+            ("codex -c approval_policy=\"never\"", "-c approval_policy=\"never\""),
+            (
+                "codex --config=sandbox_mode=danger-full-access",
+                "--config=sandbox_mode=danger-full-access",
+            ),
+            ("codex --full-auto", "--full-auto"),
+            ("gemini -y", "-y"),
+            ("gemini --yolo", "--yolo"),
+            ("gemini --approval-mode yolo", "--approval-mode yolo"),
+            ("gemini --approval-mode=YOLO", "--approval-mode=YOLO"),
+        ] {
+            assert_eq!(dangerous_arg(&argv(bad)).as_deref(), Some(shown), "{bad}");
+        }
+        for ok in [
+            "claude --permission-mode plan",
+            "claude --permission-mode",
+            "codex -s workspace-write -a on-request",
+            "codex -c model=o3",
+            "gemini --approval-mode default",
+            "aider --yes-always-not",
+            "my-agent --sandbox",
+        ] {
+            assert_eq!(dangerous_arg(&argv(ok)), None, "{ok}");
+        }
+    }
+
+    #[test]
     fn safe_addresses() {
         for ok in ["127.0.0.1", "::1", "100.64.0.1", "100.127.255.254", "fd7a:115c:a1e0::1"] {
             assert!(safe_address(ok.parse().unwrap()), "{ok}");
@@ -1297,6 +1396,14 @@ scope = "global"
         );
         assert_eq!(c.notifications.sinks.len(), 2);
         assert_eq!(c.attention.scope, AttentionScope::Global);
+        for cmd in [
+            r#"command = "claude --dangerously-skip-permissions""#,
+            r#"args = ["--permission-mode", "bypassPermissions"]"#,
+            r#"command = ["codex", "-s", "danger-full-access"]"#,
+        ] {
+            let e = Config::parse(&format!("[agents.c]\n{cmd}\n")).unwrap_err();
+            assert!(e.contains("dangerous = true"), "{cmd}: {e}");
+        }
         let e =
             Config::parse("[agents.c]\nargs = [\"--dangerously-skip-permissions\"]\n").unwrap_err();
         assert!(e.contains("dangerous = true"), "{e}");
