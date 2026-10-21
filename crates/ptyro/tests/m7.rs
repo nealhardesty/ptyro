@@ -319,6 +319,67 @@ fn done_when_a_lead_coordinates_workers_within_its_policy() {
     assert!(!w.cli(&["gate", "resolve", &gid, "no"]).status.success());
 }
 
+/// Without any policy, an agent still can't answer for a person by another route: keys typed
+/// into a blocked session (through `send` or a client's keystrokes) are refused, and so are
+/// pairing a device and trusting a repository's scripts; a reparented or `setsid` caller is
+/// still placed in its session. Typing into an idle agent stays allowed (orchestration).
+#[test]
+fn agents_cannot_answer_prompts_pair_devices_or_grant_trust() {
+    let w = World::new(&format!(
+        "[agents.peek]\ncommand = [\"{BIN}\", \"attach\", \"victim\"]\nenv = {{ PTYRO_ALLOW_NESTED = \"1\" }}\n"
+    ));
+    let root = w.project("app");
+    std::fs::write(root.join(".ptyro.toml"), "[scripts]\nsetup = \"echo hi\"\n").unwrap();
+    w.ok(&["new", "-d", "--agent", "claude", "-n", "victim"]);
+    w.ok(&["new", "-d", "--agent", "claude", "-n", "intruder", "-C", root.to_str().unwrap()]);
+    w.wait_screen("victim", "fake claude");
+    w.wait_screen("intruder", "fake claude");
+    let status = |name: &str| {
+        let ls = w.json(&["ls", "--json"]);
+        let s = ls.as_array().unwrap().iter().find(|s| s["name"] == name).unwrap();
+        s["status"]["status"].as_str().unwrap_or_default().to_owned()
+    };
+    w.ok(&["send", "victim", "ask rm -rf /"]);
+    w.until("victim blocked", || status("victim") == "blocked");
+    let mut tries = vec![
+        // `send --raw 1` would pick "Yes" in the dialog.
+        r#"sh "$PTYRO_BIN" send victim --raw 1 2>&1; echo rc=$?"#,
+        // Orphaned (double-forked): the ancestry walk can't place it, its POSIX session can.
+        r#"sh sh -c '("$PTYRO_BIN" send victim --raw 1 >o 2>&1; echo rc=$? >>o) &'; sleep 2; cat o"#,
+        r#"sh "$PTYRO_BIN" pair stolen 2>&1; echo rc=$?"#,
+        r#"sh "$PTYRO_BIN" project trust app --yes 2>&1; echo rc=$?"#,
+    ];
+    // Its own POSIX session: the environment it was started with still names the session.
+    if cfg!(target_os = "linux") {
+        tries.push(r#"sh setsid -w "$PTYRO_BIN" send victim --raw 1 2>&1; echo rc=$?"#);
+    }
+    for (i, t) in tries.iter().enumerate() {
+        w.ok(&["send", "intruder", t]);
+        w.until(&format!("try {i} refused"), || w.screen("intruder").matches("rc=1").count() > i);
+    }
+    let screen = w.screen("intruder");
+    assert_eq!(screen.matches("is an agent").count(), tries.len(), "{screen}");
+    assert!(w.json(&["devices", "ls", "--json"]).as_array().unwrap().is_empty());
+    // Keystrokes from a client running in an agent's pane get the same answer.
+    w.ok(&["new", "-d", "--agent", "peek", "-n", "peek"]);
+    w.wait_screen("peek", "victim");
+    w.ok(&["send", "peek", "--raw", "1"]);
+    std::thread::sleep(Duration::from_secs(1));
+    assert_eq!(status("victim"), "blocked");
+    assert!(!w.screen("victim").contains("answer: yes"));
+    // A person answers, from a plain shell.
+    w.ok(&["send", "victim", "--raw", "1"]);
+    w.wait_screen("victim", "answer: yes");
+    w.until("victim idle", || status("victim") == "idle");
+    // An idle agent may be typed into by another (a lead's `send`).
+    w.ok(&[
+        "send",
+        "intruder",
+        r#"sh "$PTYRO_BIN" send victim "work 0.1 from-intruder"; echo rc=$?"#,
+    ]);
+    w.wait_screen("victim", "from-intruder");
+}
+
 const RECIPE: &str = r#"
 name = "ship-it"
 vars = { task = { required = true } }

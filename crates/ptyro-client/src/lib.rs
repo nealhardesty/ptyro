@@ -321,6 +321,9 @@ async fn spawn_daemon(opts: &ConnectOptions) -> Result<UnixStream, ClientError> 
     };
     let mut child = std::process::Command::new(&exe)
         .args(["daemon", "start", "--spawned"])
+        // The daemon belongs to no session, even when an agent's CLI call started it: what it
+        // runs must not be taken for that agent (who's calling, SPEC §17).
+        .env_remove("PTYRO_SESSION_ID")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

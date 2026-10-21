@@ -15,7 +15,7 @@ pub mod handoff;
 mod ports;
 mod probe;
 pub use ports::listening_ports;
-pub use probe::{cwd_of, local_time_hm, parent_pid, process_name};
+pub use probe::{cwd_of, exec_env_var, local_time_hm, parent_pid, process_name, session_leader};
 
 /// Variables that would make the child talk to the *outer* terminal or multiplexer, or that mark
 /// a *parent* Claude Code session (SPEC §5.1, §20.1).
@@ -315,6 +315,38 @@ mod tests {
         let alive = rustix::process::test_kill_process_group(raw).is_ok();
         let _ = signal_group(pid, Signal::KILL);
         assert!(!alive, "terminate returned with the group still alive");
+    }
+
+    #[tokio::test]
+    async fn probes_place_a_reparented_descendant() {
+        // A grandchild started in the background and orphaned (its shell exits) still names the
+        // session leader and carries the session's variables (who's calling, M7.6).
+        let argv: Vec<String> =
+            ["sh", "-c", "sh -c 'sleep 5 & echo $!'; sleep 5"].map(String::from).into();
+        let env = child_env(std::env::vars_os(), [("PTYRO_SESSION_ID", OsStr::new("probe"))]);
+        let mut c = spawn(SpawnRequest {
+            argv: &argv,
+            cwd: Path::new("/"),
+            env,
+            size: TermSize::new(20, 5),
+        })
+        .unwrap();
+        let mut out = Vec::new();
+        let mut buf = [0u8; 64];
+        while !out.contains(&b'\n') {
+            let n = c.reader.read(&mut buf).await.unwrap();
+            assert!(n > 0);
+            out.extend_from_slice(&buf[..n]);
+        }
+        let grandchild: u32 = String::from_utf8_lossy(&out).trim().parse().unwrap();
+        // Past its exec (mid-exec, the kernel shows an empty environment).
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(session_leader(c.pid), Some(c.pid));
+        assert_eq!(session_leader(grandchild), Some(c.pid));
+        assert_ne!(session_leader(std::process::id()), Some(c.pid));
+        #[cfg(target_os = "linux")]
+        assert_eq!(exec_env_var(grandchild, "PTYRO_SESSION_ID").as_deref(), Some("probe"));
+        let _ = signal_group(c.pid, Signal::KILL);
     }
 
     #[tokio::test]

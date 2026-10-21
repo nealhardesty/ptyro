@@ -76,6 +76,30 @@ pub fn cwd_of(_pid: u32) -> Option<PathBuf> {
     None
 }
 
+/// The POSIX session `pid` belongs to (its session leader's pid). Every ptyro session's child
+/// leads its own, so a descendant that was reparented (double-fork, `nohup … &`, `disown`)
+/// still names it; only `setsid` leaves.
+pub fn session_leader(pid: u32) -> Option<u32> {
+    let pid = rustix::process::Pid::from_raw(pid as i32)?;
+    rustix::process::getsid(Some(pid)).ok().map(|p| p.as_raw_nonzero().get() as u32)
+}
+
+/// One variable from the environment `pid` was started with, as the kernel recorded it at exec
+/// (not what the process claims now). Linux only; `None` elsewhere or when unreadable.
+#[cfg(target_os = "linux")]
+pub fn exec_env_var(pid: u32, name: &str) -> Option<String> {
+    let env = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
+    let prefix = format!("{name}=");
+    env.split(|b| *b == 0)
+        .find_map(|kv| kv.strip_prefix(prefix.as_bytes()))
+        .map(|v| String::from_utf8_lossy(v).into_owned())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn exec_env_var(_pid: u32, _name: &str) -> Option<String> {
+    None
+}
+
 /// Local wall-clock hour and minute (for the TUI's clock), honouring `TZ`.
 #[allow(unsafe_code)] // localtime_r has no std equivalent; it writes only into `tm`.
 pub fn local_time_hm() -> Option<(u8, u8)> {

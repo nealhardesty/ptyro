@@ -82,20 +82,34 @@ impl Daemon {
         }
     }
 
-    /// The session a process runs in: the nearest ancestor that is a session's process.
+    /// The session a process runs in, by what the kernel says about it: the nearest ancestor
+    /// that is a session's process; else the POSIX session it belongs to (every session's
+    /// child leads its own, so a double-forked or `nohup`ed descendant is still placed); else,
+    /// on Linux, the `PTYRO_SESSION_ID` it was exec'd with (`setsid` keeps that). A process
+    /// that leaves all three (`setsid env -u …`, `systemd-run`, `ssh localhost`) isn't placed:
+    /// it looks like a plain shell's CLI, which must keep working (SPEC §17).
     pub(crate) fn session_of_pid(&self, pid: u32) -> Option<Arc<Session>> {
         let sessions = self.sessions();
+        let live = |f: &dyn Fn(&Session) -> bool| {
+            sessions.iter().find(|s| s.is_live() && f(s)).map(Arc::clone)
+        };
         let mut p = pid;
         for _ in 0..64 {
-            if let Some(s) = sessions.iter().find(|s| s.is_live() && s.pid() == Some(p)) {
-                return Some(Arc::clone(s));
+            if let Some(s) = live(&|s| s.pid() == Some(p)) {
+                return Some(s);
             }
-            p = ptyro_pty::parent_pid(p)?;
-            if p <= 1 {
-                return None;
+            match ptyro_pty::parent_pid(p) {
+                Some(q) if q > 1 => p = q,
+                _ => break,
             }
         }
-        None
+        if let Some(leader) = ptyro_pty::session_leader(pid)
+            && let Some(s) = live(&|s| s.pid() == Some(leader))
+        {
+            return Some(s);
+        }
+        let id = ptyro_pty::exec_env_var(pid, "PTYRO_SESSION_ID")?;
+        live(&|s| s.id.full() == id)
     }
 
     /// Refuse what agents may not do, whichever way they ask (MCP or the CLI).
@@ -106,20 +120,67 @@ impl Daemon {
         {
             return Ok(());
         }
+        // A paired device is a person, held to its scope instead (`guard_device`), even when
+        // `ptyro serve` itself was started inside an agent's pane.
+        if caller.grant.is_some() {
+            return Ok(());
+        }
         let Some(pid) = caller.pid else { return Ok(()) };
         let Some(s) = self.session_of_pid(pid) else { return Ok(()) };
+        self.guard_agent(req, &s)
+    }
+
+    /// What the agent in `s` may ask for (nothing is refused to other kinds of session).
+    pub(crate) fn guard_agent(&self, req: &Request, s: &Arc<Session>) -> Result<(), Error> {
         if s.kind() != SessionKind::Agent {
             return Ok(());
         }
         let name = s.meta.lock().expect("meta").name.clone();
-        // No agent answers for a person, policy or not.
-        if matches!(req, Request::GateResolve { .. } | Request::Answer { .. }) {
-            return Err(Error::new(
+        let refuse = |what: &str| {
+            Err(Error::new(
                 ErrorCode::PermissionDenied,
                 format!(
-                    "{name} is an agent: gates and permission prompts are answered by a person (the TUI, the CLI outside agents, or your phone)"
+                    "{name} is an agent: {what} (the TUI, the CLI outside agents, or your phone)"
                 ),
-            ));
+            ))
+        };
+        // Policy or not, no agent answers for a person or extends what is trusted. These
+        // defaults stop an agent's mistake or a casual prompt injection, not code set on
+        // getting around them (SPEC §17).
+        match req {
+            Request::GateResolve { .. } | Request::Answer { .. } => {
+                return refuse("gates and permission prompts are answered by a person");
+            }
+            // A token minted here would leave through the agent's output.
+            Request::DevicePair { .. }
+            | Request::DeviceRevoke { .. }
+            | Request::PushSubscribe { .. }
+            | Request::PushUnsubscribe { .. } => {
+                return refuse("devices are paired and managed by a person");
+            }
+            Request::ProjectTrust { .. }
+            | Request::WorktreeNew { spec: WorktreeSpec { trust: Some(_), .. } }
+            | Request::RecipeRun { trust: Some(_), .. } => {
+                return refuse("repository scripts and recipes are trusted by a person");
+            }
+            Request::Cs { op: ptyro_run::wire::CsOp::New { spec } } if spec.trust.is_some() => {
+                return refuse("repository templates are trusted by a person");
+            }
+            Request::Upgrade { binary: Some(_) } => {
+                return refuse("the daemon is upgraded to another binary by a person");
+            }
+            // Keys typed into a dialog answer it (Claude's preselects "Yes"): a blocked
+            // session's prompt is answered with `answer`, by a person.
+            Request::SendText { addr, .. } | Request::SendBytes { addr, .. }
+                if self
+                    .resolve_many(addr)
+                    .is_ok_and(|v| v.iter().any(|t| t.status() == Some(AgentStatus::Blocked))) =>
+            {
+                return refuse(
+                    "it can't type into a session that waits on a person's answer; send mail instead (it is delivered once that session is idle)",
+                );
+            }
+            _ => {}
         }
         let Some((run, Some(policy), _)) = self.run_of_session(&s.id.full()) else { return Ok(()) };
         let own = |addr: &str| {

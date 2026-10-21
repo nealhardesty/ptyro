@@ -47,6 +47,9 @@ struct Conn {
     outer: Option<OuterTerm>,
     /// Who connected (the kernel says), for policy (M7.6).
     caller: crate::mail::Caller,
+    /// The session the caller runs in, worked out at its first keystroke (a process can't
+    /// gain an ancestor later).
+    placed: Option<Option<SessionId>>,
 }
 
 pub async fn serve(daemon: Arc<Daemon>, stream: UnixStream, pid: Option<u32>) {
@@ -145,6 +148,7 @@ pub async fn serve(daemon: Arc<Daemon>, stream: UnixStream, pid: Option<u32>) {
         interest,
         outer: client.outer,
         caller: crate::mail::Caller { pid, kind: Some(client.kind), grant },
+        placed: None,
     };
     let mut shutdown = daemon.shutdown.subscribe();
     let mut goodbye = daemon.goodbye.subscribe();
@@ -243,6 +247,18 @@ impl Conn {
                         }
                         self.daemon.audit(&s, g, "typed");
                     } else {
+                        // An agent's keys pass the same guard as its `send` (M7.6): typing
+                        // into a blocked session, or outside its run, is refused.
+                        if let Some(me) = self.placed_session() {
+                            let req = ptyro_protocol::Request::SendBytes {
+                                addr: s.id.full(),
+                                bytes: Vec::new(),
+                            };
+                            if let Err(e) = self.daemon.guard_agent(&req, &me) {
+                                tracing::debug!(client = %self.id, "input refused: {}", e.message);
+                                return;
+                            }
+                        }
                         self.take_control(&s).await;
                     }
                     s.input(&event).await;
@@ -309,6 +325,15 @@ impl Conn {
             }
             self.interest.lock().expect("interest").subscribed.remove(&id);
         }
+    }
+
+    fn placed_session(&mut self) -> Option<Arc<Session>> {
+        let daemon = &self.daemon;
+        let pid = self.caller.pid;
+        let id = *self
+            .placed
+            .get_or_insert_with(|| pid.and_then(|p| daemon.session_of_pid(p)).map(|s| s.id));
+        id.and_then(|id| self.daemon.session(id))
     }
 
     /// The most recently active client controls the session and its size (SPEC §5.8).
