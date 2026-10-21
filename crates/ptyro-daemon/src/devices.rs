@@ -369,33 +369,47 @@ fn url_ok(endpoint: &str, extra: &[String]) -> Result<(), Error> {
     let test = std::env::var_os("PTYRO_TEST_PUSH_HTTP").is_some()
         && endpoint.starts_with("http://127.0.0.1:");
     // Only the browsers' push services: a device can't make the daemon post to any host.
-    let host = endpoint
-        .strip_prefix("https://")
-        .and_then(|r| r.split(['/', '?', ':']).next())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let known = [
-        "fcm.googleapis.com",
-        "android.googleapis.com",
-        "updates.push.services.mozilla.com",
-        "push.apple.com",
-        "notify.windows.com",
-    ]
-    .iter()
-    .copied()
-    .chain(extra.iter().map(String::as_str))
-    .any(|k| {
-        let k = k.to_ascii_lowercase();
-        host == k || host.ends_with(&format!(".{k}"))
-    });
-    if ((endpoint.starts_with("https://") && known) || test)
-        && endpoint.len() < 2048
-        && !endpoint.contains(['\n', '"', ' '])
-    {
+    let host = push_host(endpoint).unwrap_or_default();
+    let known = !host.is_empty()
+        && [
+            "fcm.googleapis.com",
+            "android.googleapis.com",
+            "updates.push.services.mozilla.com",
+            "push.apple.com",
+            "notify.windows.com",
+        ]
+        .iter()
+        .copied()
+        .chain(extra.iter().map(String::as_str))
+        .any(|k| {
+            let k = k.to_ascii_lowercase();
+            host == k || host.ends_with(&format!(".{k}"))
+        });
+    if (known || test) && endpoint.len() < 2048 && !endpoint.contains(['\n', '"', ' ']) {
         Ok(())
     } else {
         Err(Error::invalid("a push endpoint is a browser push service's https URL"))
     }
+}
+
+/// The lowercased host of `https://host[:port][/path][?query]`, or `None` for anything a URL
+/// parser (curl's) might read as another host: userinfo (`@`), a fragment (`#`), backslashes,
+/// controls, a host that isn't plain dot-separated DNS labels (no `%`, brackets, empty labels),
+/// a port that isn't digits. Strict on purpose: push services hand out plain URLs.
+fn push_host(endpoint: &str) -> Option<String> {
+    let rest = endpoint.strip_prefix("https://")?;
+    if endpoint.contains(['#', '\\', '@']) || endpoint.chars().any(char::is_control) {
+        return None;
+    }
+    let authority = rest.split(['/', '?']).next()?;
+    let (host, port) = match authority.split_once(':') {
+        Some((h, p)) => (h, Some(p)),
+        None => (authority, None),
+    };
+    let label =
+        |l: &str| !l.is_empty() && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    let port_ok = port.is_none_or(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    (host.split('.').all(label) && port_ok).then(|| host.to_ascii_lowercase())
 }
 
 fn req_label(req: &Request) -> &'static str {
@@ -451,6 +465,27 @@ mod tests {
         assert!(url_ok("https://internal.corp/admin", &[]).is_err());
         assert!(url_ok("https://evilpush.apple.com.example/x", &[]).is_err());
         assert!(url_ok("https://ntfy.example.com/up/x", &["ntfy.example.com".into()]).is_ok());
+        assert!(url_ok("https://web.push.apple.com:443/QGx?a=b", &[]).is_ok());
+        // Anything curl could send to a host other than the one the allow-list saw.
+        for bad in [
+            "https://evil.example#.push.apple.com/x",
+            "https://evil.example#@web.push.apple.com/x",
+            "https://web.push.apple.com@evil.example/x",
+            "https://user:pw@web.push.apple.com/x",
+            "https://evil.example\\.push.apple.com/x",
+            "https://evil.example\\@web.push.apple.com/x",
+            "https://web.push.apple.com:evil.example/x",
+            "https://web.push.apple.com:/x",
+            "https://%65vil.push.apple.com/x",
+            "https://[::1].push.apple.com/x",
+            "https://web..push.apple.com/x",
+            "https://web.push.apple.com./x",
+            "http://web.push.apple.com/x",
+            "https://web.push.apple.com/x\t",
+            "https://push.apple.com.evil.example/x",
+        ] {
+            assert!(url_ok(bad, &[]).is_err(), "{bad}");
+        }
         assert_eq!(needed(&Request::Upgrade { binary: None }), Scope::Full);
         assert_eq!(needed(&Request::DeviceList), Scope::Full);
     }
