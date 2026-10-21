@@ -44,7 +44,7 @@ echo "copied: $(cat .env)"
 archive = "echo archived $PTYRO_WORKTREE_NAME"
 
 [scripts.run.serve]
-command = "python3 -m http.server $PTYRO_PORT"
+command = "python3 -m http.server --bind 127.0.0.1 $PTYRO_PORT"
 default = true
 TOML
   git add -A

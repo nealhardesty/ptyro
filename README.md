@@ -378,7 +378,7 @@ behave the same. (License and advisory checks run there through the cargo-deny a
 | `make check` / `make ci` | what CI runs except `deny` (fmt-check, lint, test, smoke) / everything, `deny` included |
 | `make tools` / `make deny` | install cargo-deny / license, advisory and source checks |
 | `make doc` / `make clean` | API docs / remove build output |
-| `make sandbox` / `make sandbox-clean` | a throwaway ptyro (own daemon, store, worktrees) with a demo repo / delete it |
+| `make sandbox` / `make sandbox-clean` | a throwaway ptyro (own daemon, store, worktrees) with a demo repo / delete it. It isolates ptyro's state, not a security sandbox: agents still run as you |
 | `make orchestrate-demo` (`ARGS=tui\|clean`) | fan-out, a gated recipe and a lead over MCP, with fake agents |
 | `make changeset-demo` (`ARGS=tui\|clean`) | a change set across three repos, contract to merge train, with fake agents |
 | `make verify-claude` | check the Claude adapter against the real Claude Code on your machine (one tiny turn) |

@@ -68,7 +68,7 @@ run: build ## Run ptyro with ARGS, e.g. make run ARGS="ls"
 try: build ## Start CMD in a new session and attach (the M1 demo), e.g. make try CMD=claude
 	$(PTYRO) new -- $(CMD)
 
-sandbox: build ## A throwaway ptyro (own daemon, store, worktrees) with a demo repo; ARGS go to ptyro
+sandbox: build ## A throwaway ptyro (own daemon, store, worktrees: isolates its state, not a security sandbox) with a demo repo; ARGS go to ptyro
 	scripts/sandbox.sh $(ARGS)
 
 sandbox-clean: build ## Stop the sandbox's daemon and delete it
