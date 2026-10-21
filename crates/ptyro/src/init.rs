@@ -238,14 +238,7 @@ pub async fn run(ctx: &Ctx, yes: bool, dry_run: bool) -> Result<i32, Error> {
         return Ok(0);
     }
     if !changes.is_empty() && ask.yes_no("  write it?", true) {
-        if let Some(d) = path.parent() {
-            std::fs::create_dir_all(d).map_err(|e| Error::internal(e.to_string()))?;
-        }
-        let tmp = path.with_extension("toml.tmp");
-        std::fs::write(&tmp, &new_text)
-            .map_err(|e| Error::internal(format!("{}: {e}", tmp.display())))?;
-        std::fs::rename(&tmp, &path)
-            .map_err(|e| Error::internal(format!("{}: {e}", path.display())))?;
+        crate::config::write_private(&path, &new_text)?;
         eprintln!("  wrote {}", path.display());
     }
 

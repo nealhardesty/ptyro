@@ -125,14 +125,7 @@ fn edit(
     let new = doc.to_string();
     Config::parse(&new)
         .map_err(|e| Error::invalid(format!("the edited config would be invalid: {e}")))?;
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| Error::internal(e.to_string()))?;
-    }
-    let tmp = path.with_extension("toml.tmp");
-    std::fs::write(&tmp, new).map_err(|e| Error::internal(format!("{}: {e}", tmp.display())))?;
-    std::fs::rename(&tmp, &path)
-        .map_err(|e| Error::internal(format!("{}: {e}", path.display())))?;
-    Ok(())
+    crate::config::write_private(&path, &new)
 }
 
 /// Have a running daemon pick up the edit now rather than on its file watch.

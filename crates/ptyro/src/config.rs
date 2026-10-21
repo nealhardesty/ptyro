@@ -102,12 +102,44 @@ const STARTER: &str = r#"# ptyro configuration. Every key is optional; see SPEC 
 # "global:M-1" = "session.focus 1"   # global: works without the prefix
 "#;
 
+/// Write the config (or any file that may hold secrets) atomically: the file 0600, directories
+/// created for it 0700. Replacing a file also tightens an older, looser one.
+pub(crate) fn write_private(path: &std::path::Path, text: &str) -> Result<(), Error> {
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+    let err =
+        |p: &std::path::Path, e: std::io::Error| Error::internal(format!("{}: {e}", p.display()));
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
+            .map_err(|e| err(dir, e))?;
+    }
+    let tmp = path.with_extension("toml.tmp");
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)
+        .map_err(|e| err(&tmp, e))?;
+    // (A leftover temp file keeps its old mode through `open`.)
+    f.set_permissions(std::fs::Permissions::from_mode(0o600)).map_err(|e| err(&tmp, e))?;
+    f.write_all(text.as_bytes()).map_err(|e| err(&tmp, e))?;
+    drop(f);
+    std::fs::rename(&tmp, path).map_err(|e| err(path, e))
+}
+
+/// The file's mode when group or others can read or write it.
+pub(crate) fn too_open(path: &std::path::Path) -> Option<u32> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(path).ok()?.permissions().mode() & 0o777;
+    (mode & 0o066 != 0).then_some(mode)
+}
+
 fn edit(path: &std::path::Path) -> Result<i32, Error> {
     if !path.exists() {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| Error::internal(e.to_string()))?;
-        }
-        std::fs::write(path, STARTER).map_err(|e| Error::internal(e.to_string()))?;
+        write_private(path, STARTER)?;
     }
     let editor = std::env::var("VISUAL")
         .or_else(|_| std::env::var("EDITOR"))
@@ -145,5 +177,33 @@ fn edit(path: &std::path::Path) -> Result<i32, Error> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    #[test]
+    fn configs_are_written_private() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("new/ptyro/config.toml");
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        write_private(&path, "[ui]\n").unwrap();
+        assert_eq!(mode(&path), 0o600);
+        assert_eq!(mode(path.parent().unwrap()), 0o700);
+        assert_eq!(mode(&d.path().join("new")), 0o700);
+        assert_eq!(too_open(&path), None);
+        // An older, world-readable file (and a stale temp file) get tightened.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(too_open(&path), Some(0o644));
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, "").unwrap();
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o666)).unwrap();
+        write_private(&path, "[ui]\nmouse = false\n").unwrap();
+        assert_eq!(mode(&path), 0o600);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[ui]\nmouse = false\n");
     }
 }

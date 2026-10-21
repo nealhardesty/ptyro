@@ -158,7 +158,8 @@ listen = "127.0.0.1:7591"            # or your tailnet address
 
 - Approve/deny links are signed, single-use, and expire after 15 minutes. Opening one only shows
   a page; the button on it acts, so link previews can't approve anything.
-- Tokens and webhooks can be `{ command = ["pass", "ntfy"] }` instead of literals.
+- Tokens and webhooks can be `{ command = ["pass", "ntfy"] }` instead of literals. If you do keep
+  literals, the file stays private: ptyro writes it `0600`, and `ptyro doctor` warns when it isn't.
 - `ptyro ws set personal --notify badge` keeps a workspace to inbox and badges; `mute` silences it.
 - `ptyro notify test` sends a test through everything you configured.
 - Codex usage meters are opt-in: `[agents.codex] usage = true`.

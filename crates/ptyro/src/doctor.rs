@@ -88,6 +88,19 @@ pub async fn run_cmd(ctx: &Ctx, quick: bool, json: bool) -> Result<i32, Error> {
     let config = match Config::load(&config_path) {
         Ok(c) => {
             r.add("ptyro", "config", Level::Ok, format!("{} is valid", config_path.display()));
+            if let Some(mode) = crate::config::too_open(&config_path) {
+                r.add(
+                    "ptyro",
+                    "config mode",
+                    Level::Warn,
+                    format!(
+                        "{} is {mode:03o}: other users can read it, and it can hold secrets \
+                         (`chmod 600 {}`)",
+                        config_path.display(),
+                        config_path.display()
+                    ),
+                );
+            }
             c
         }
         Err(e) => {
