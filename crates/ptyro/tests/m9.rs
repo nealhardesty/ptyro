@@ -62,12 +62,23 @@ impl World {
         serde_json::from_str(&out).unwrap_or_else(|e| panic!("ptyro {args:?}: {e}\n{out}"))
     }
 
-    /// `ptyro pair` → (device id, token).
-    fn pair(&self, name: &str, scope: &str) -> (String, String) {
+    /// `ptyro pair` → (device id, the link's one-time code).
+    fn pair_code(&self, name: &str, scope: &str) -> (String, String) {
         let v = self.json(&["pair", name, "--scope", scope, "--json"]);
         let url = v["url"].as_str().unwrap();
-        let token = url.split("#pair=").nth(1).unwrap().to_owned();
-        (v["device"]["id"].as_str().unwrap().to_owned(), token)
+        let code = url.split("#pair=").nth(1).unwrap().to_owned();
+        assert!(code.starts_with("ptp_"), "{url}");
+        (v["device"]["id"].as_str().unwrap().to_owned(), code)
+    }
+
+    /// `ptyro pair`, then the code traded for the token as the web app does → (id, token).
+    fn pair(&self, serve: &Serve, name: &str, scope: &str) -> (String, String) {
+        let (id, code) = self.pair_code(name, scope);
+        let (status, body) = claim(serve.port, &code);
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(body.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(v["device"]["id"], id.as_str());
+        (id, v["token"].as_str().unwrap().to_owned())
     }
 
     fn serve(&self) -> Serve {
@@ -125,6 +136,18 @@ fn http(port: u16, req: &str) -> (u16, String) {
     let text = String::from_utf8_lossy(&out).into_owned();
     let code = text.split_whitespace().nth(1).and_then(|c| c.parse().ok()).unwrap_or(0);
     (code, text)
+}
+
+/// `POST /api/pair {"code"}` → (status, response).
+fn claim(port: u16, code: &str) -> (u16, String) {
+    let body = json!({ "code": code }).to_string();
+    http(
+        port,
+        &format!(
+            "POST /api/pair HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        ),
+    )
 }
 
 fn wait_http(port: u16) {
@@ -268,8 +291,8 @@ fn session<'a>(list: &'a Value, name: &str) -> &'a Value {
 #[tokio::test]
 async fn done_when_a_phone_approves_a_blocked_agent() {
     let w = World::new("", &[]);
-    let (_, token) = w.pair("phone", "control");
     let serve = w.serve();
+    let (_, token) = w.pair(&serve, "phone", "control");
     w.ok(&["new", "-d", "-n", "a1", "--agent", "claude"]);
     w.ok(&["send", "a1", "ask rm -rf build", "--wait-ready"]);
 
@@ -350,10 +373,10 @@ async fn done_when_a_phone_approves_a_blocked_agent() {
 #[tokio::test]
 async fn scopes_revocation_and_lockout() {
     let w = World::new("", &[]);
-    let (_, watch) = w.pair("watcher", "read");
-    let (ctl_id, ctl) = w.pair("tablet", "control");
-    let (_, full) = w.pair("laptop", "full");
     let serve = w.serve();
+    let (_, watch) = w.pair(&serve, "watcher", "read");
+    let (ctl_id, ctl) = w.pair(&serve, "tablet", "control");
+    let (_, full) = w.pair(&serve, "laptop", "full");
     w.ok(&["new", "-d", "-n", "sh1", "--", "sh", "-c", "echo hello; cat"]);
     w.wait_screen("sh1", "hello");
 
@@ -412,6 +435,55 @@ async fn scopes_revocation_and_lockout() {
         "GET /ws HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nConnection: close\r\n\r\n",
     );
     assert_eq!(code, 429);
+}
+
+/// What `ptyro pair` prints lands in scrollback and recordings, so it is a code, not the
+/// token: claimed once, within minutes (here shortened), then worthless. Unclaimed, the device
+/// can't sign in; the default scope is `approve`.
+#[tokio::test]
+async fn pairing_codes_are_single_use_and_expire() {
+    let w = World::new("", &[("PTYRO_TEST_PAIRING_TTL_MS", "3000")]);
+    let serve = w.serve();
+    let v = w.json(&["pair", "phone", "--json"]);
+    assert_eq!(v["device"]["scope"], "approve");
+    assert_eq!(v["device"]["pending"], true);
+    let code = v["url"].as_str().unwrap().split("#pair=").nth(1).unwrap().to_owned();
+    // The code is no token.
+    let (p, first) =
+        Phone::hello(serve.port, json!({ "kind": "web", "version": "x", "pid": 0, "token": code }))
+            .await;
+    assert!(p.is_none() && first["t"] == "reject", "{first}");
+    let devices = w.json(&["devices", "ls", "--json"]);
+    assert_eq!(devices[0]["pending"], true, "{devices}");
+    // Claimed once: the token works, the code doesn't any more.
+    let (status, body) = claim(serve.port, &code);
+    assert_eq!(status, 200, "{body}");
+    let reply: Value = serde_json::from_str(body.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    let token = reply["token"].as_str().unwrap();
+    assert!(token.starts_with("ptd_") && reply["device"]["pending"] == false, "{reply}");
+    let mut phone = Phone::signed_in(serve.port, token).await;
+    phone.ok(json!({ "t": "list" })).await;
+    let (status, _) = claim(serve.port, &code);
+    assert_eq!(status, 401, "a used code");
+    let via = w.json(&["devices", "ls", "--json"])[0]["last_via"].clone();
+    assert!(via.as_str().is_some_and(|v| v.starts_with("ws:127.0.0.1")), "{via}");
+    // Unclaimed until it expires: then it is gone, and so is the device it named.
+    let (_, late) = w.pair_code("late", "read");
+    std::thread::sleep(Duration::from_millis(3500));
+    let (status, _) = claim(serve.port, &late);
+    assert_eq!(status, 401, "an expired code");
+    let devices = w.json(&["devices", "ls", "--json"]);
+    assert_eq!(devices.as_array().unwrap().len(), 1, "{devices}");
+    // The human-readable form prints the link and waits for the claim; nothing it prints is a
+    // token.
+    let out = w.cli(&["pair", "printed"]);
+    let text =
+        format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(
+        !out.status.success() && text.contains("#pair=ptp_") && text.contains("expired"),
+        "{text}"
+    );
+    assert!(!text.contains("ptd_"), "{text}");
 }
 
 /// A stand-in for ssh: checks its arguments, then runs the remote command against the "remote"
@@ -600,8 +672,8 @@ fn receive_push(l: &TcpListener, status: u16) -> (String, Vec<u8>) {
 #[tokio::test]
 async fn web_push_end_to_end() {
     let w = World::new("", &[("PTYRO_TEST_PUSH_HTTP", "1")]);
-    let (_, token) = w.pair("phone", "control");
     let serve = w.serve();
+    let (_, token) = w.pair(&serve, "phone", "control");
     let mut phone = Phone::signed_in(serve.port, &token).await;
     let key = phone.ok(json!({ "t": "push_key" })).await["key"].as_str().unwrap().to_owned();
     assert_eq!(key.len(), 87, "uncompressed P-256 point, base64url");
@@ -708,8 +780,8 @@ fn the_web_screen_model_matches_the_daemon() {
         return;
     }
     let w = World::new("", &[]);
-    let (_, token) = w.pair("browser", "read");
     let serve = w.serve();
+    let (_, token) = w.pair(&serve, "browser", "read");
     let script = "printf '\\033[1;31mred\\033[0m \\033[38;5;214morange\\033[0m 漢字 e\\314\\201 tab\\there\\n'; \
                   seq 1 30 | tr '\\n' ' '; printf '%0150d\\n' 7; echo END-MARK; sleep 60";
     w.ok(&["new", "-d", "-n", "web1", "--size", "60x20", "--", "sh", "-c", script]);

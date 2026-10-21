@@ -71,36 +71,68 @@ pub async fn pair(
 ) -> Result<i32, Error> {
     let scope: Scope = scope.parse().map_err(Error::invalid)?;
     let c = ctx.connect(true).await.map_err(no_daemon)?;
-    let (device, token) = match c.request(Request::DevicePair { name, scope }).await? {
-        Reply::Paired { device, token } => (device, token),
+    let (device, code, expires_ms) = match c.request(Request::DevicePair { name, scope }).await? {
+        Reply::Pairing { device, code, expires_ms } => (device, code, expires_ms),
         r => return Err(unexpected(r)),
     };
     let config = Config::load(&Config::path(&ctx.paths)).unwrap_or_default();
     let base = base_url(&config, url);
-    // The token travels in the fragment: browsers never send it to a server or put it in logs.
-    let link = format!("{base}/#pair={token}");
+    // What we print stays in scrollback and recordings, so it is a code the web app trades
+    // (once, within minutes) for the token, never the token. It travels in the fragment:
+    // browsers never send that to a server or put it in logs.
+    let link = format!("{base}/#pair={code}");
     if json {
-        println!("{}", serde_json::json!({ "device": device, "url": link }));
+        println!(
+            "{}",
+            serde_json::json!({ "device": device, "url": link, "expires_ms": expires_ms })
+        );
         return Ok(0);
     }
     if let Some(q) = qr(&link) {
         println!("{q}");
     }
+    let minutes = expires_ms.saturating_sub(ptyro_core::now_ms()).div_ceil(60_000);
     println!("Scan with the phone's camera, or open:\n  {link}\n");
     println!(
-        "Paired {} ({}, scope {}). It stays paired until `ptyro devices revoke {}`.",
-        device.name,
-        device.id,
-        device.scope.label(),
-        device.id
+        "The link works once, for {minutes} minutes, and needs `ptyro serve` running. Waiting \
+         for {} to open it (Ctrl-C stops waiting; the link keeps working)…",
+        device.name
     );
+    if std::env::var_os("PTYRO_SESSION_ID").is_some() {
+        eprintln!(
+            "note: this pane is recorded and readable by paired devices and agents; until the \
+             link is used or expires, so is the link. A plain terminal keeps it to you."
+        );
+    }
     if !base.starts_with("https://") && !base.contains("127.0.0.1") && !base.contains("localhost") {
         eprintln!(
             "note: {base} isn't HTTPS, so phones won't install the app or show notifications. \
              `ptyro serve --tailscale` puts Tailscale HTTPS in front (docs/remote.md)."
         );
     }
-    Ok(0)
+    // Who claimed it tells the user it was their phone (a code read off a recording would
+    // show up here too, and `ptyro devices revoke` undoes it).
+    while ptyro_core::now_ms() < expires_ms {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let Reply::Devices { devices } = c.request(Request::DeviceList).await? else { continue };
+        match devices.iter().find(|d| d.id == device.id) {
+            Some(d) if d.pending => {}
+            Some(d) => {
+                println!(
+                    "Paired {} ({}, scope {}) from {}. It stays paired until `ptyro devices revoke {}`.",
+                    d.name,
+                    d.id,
+                    d.scope.label(),
+                    d.last_via.as_deref().unwrap_or("?"),
+                    d.id
+                );
+                return Ok(0);
+            }
+            None => break,
+        }
+    }
+    eprintln!("The link expired unused (or was revoked); run `ptyro pair` again.");
+    Ok(1)
 }
 
 pub async fn devices(ctx: &Ctx, cmd: Option<DevicesCmd>) -> Result<i32, Error> {
@@ -124,7 +156,11 @@ pub async fn devices(ctx: &Ctx, cmd: Option<DevicesCmd>) -> Result<i32, Error> {
                 "ID", "NAME", "SCOPE", "LAST SEEN", "PUSH"
             );
             for d in devices {
-                let seen = d.last_seen_ms.map_or_else(|| "never".into(), crate::cli::age);
+                let seen = if d.pending {
+                    "unclaimed".into()
+                } else {
+                    d.last_seen_ms.map_or_else(|| "never".into(), crate::cli::age)
+                };
                 println!(
                     "{:<13} {:<16} {:<8} {:<12} {:<5} {}",
                     d.id,

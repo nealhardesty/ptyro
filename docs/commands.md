@@ -141,7 +141,7 @@ See [`remote.md`](remote.md).
 | Command | Does |
 |---|---|
 | `ptyro serve [--listen ADDR] [--tailscale] [--insecure]` | the web app and the protocol over WebSocket for paired devices |
-| `ptyro pair [NAME] [--scope read\|approve\|control\|full] [--url URL] [--json]` | pair a phone or browser (a QR code) |
+| `ptyro pair [NAME] [--scope read\|approve\|control\|full] [--url URL] [--json]` | pair a phone or browser: a QR code with a one-time code (10 minutes; scope `approve` by default), then waits for the device |
 | `ptyro devices [ls \| revoke ID \| push-test]` | paired devices |
 | `ptyro --remote HOST …` / `ptyro proxy` | any command against another machine's daemon / the bridge it runs there |
 

@@ -30,12 +30,33 @@ async function idbSet(key: string, value: string | null): Promise<void> {
   });
 }
 
-function takePairToken(): void {
+function takePairCode(): void {
   const m = location.hash.match(/^#pair=([A-Za-z0-9_\-]+)$/);
   if (m) {
     history.replaceState(null, "", location.pathname + "#/");
-    useToken(m[1]);
+    void claim(m[1]);
   }
+}
+/// Why the last pairing attempt failed (shown on the pairing screen).
+let pairNote = "";
+/// Trade the one-time code from `ptyro pair` for this device's token (`POST /api/pair`).
+async function claim(code: string): Promise<void> {
+  pairNote = "Pairing…";
+  render();
+  try {
+    const r = await fetch("/api/pair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const { token } = await r.json();
+    pairNote = "";
+    useToken(token);
+  } catch (e) {
+    pairNote = `Pairing failed: ${(e as Error).message || e}`;
+  }
+  render();
 }
 /// Store a device token and sign in with it (also from a tab that was open, unpaired).
 function useToken(t: string): void {
@@ -544,9 +565,10 @@ function pairView(): HTMLElement {
     h("p", {}, "Run ", h("code", {}, "ptyro pair"), " on your computer and scan the QR code with this device."),
     input,
     h("button", { onclick: () => {
-      const m = input.value.match(/pair=([A-Za-z0-9_\-]+)/) ?? input.value.match(/^(ptd_[A-Za-z0-9_\-]+)$/);
-      if (m) { useToken(m[1]); render(); }
+      const m = input.value.match(/pair=([A-Za-z0-9_\-]+)/) ?? input.value.match(/^(ptp_[A-Za-z0-9_\-]+)$/);
+      if (m) void claim(m[1]);
     } }, "Sign in"),
+    pairNote ? h("p", {}, pairNote) : null,
   );
 }
 
@@ -635,9 +657,9 @@ conn.listeners.add((msg) => {
 });
 conn.onState = render;
 
-window.addEventListener("hashchange", () => { takePairToken(); render(); });
+window.addEventListener("hashchange", () => { takePairCode(); render(); });
 window.addEventListener("resize", paint);
-takePairToken();
+takePairCode();
 if ("serviceWorker" in navigator) void navigator.serviceWorker.register("/sw.js");
 render();
 conn.connect();

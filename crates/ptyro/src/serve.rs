@@ -8,6 +8,7 @@
 //!   pass for a local client, and the daemon checks the token before anything else reaches it.
 //! - `POST /api/request`: one request with `Authorization: Bearer <token>` (notification
 //!   actions, scripts).
+//! - `POST /api/pair`: `{"code"}` from `ptyro pair`'s link, traded once for the device's token.
 //!
 //! Listens on loopback or Tailscale addresses unless `--insecure`: elsewhere plain HTTP would
 //! carry tokens in clear. For HTTPS (needed by phones for notifications and installing the app),
@@ -365,6 +366,10 @@ async fn handle(
             Some(login) if !st.locked_out(ip) => api_request(req, &st, via, ip, login).await,
             _ => busy(),
         },
+        (&Method::POST, "/api/pair") => match st.begin(ip) {
+            Some(login) if !st.locked_out(ip) => api_pair(req, &st, via, ip, login).await,
+            _ => busy(),
+        },
         (&Method::GET, "/healthz") => respond(StatusCode::OK, "text/plain", "ok"),
         (&Method::GET | &Method::HEAD, p) => match ASSETS.iter().find(|(a, _, _)| *a == p) {
             Some((_, ctype, data)) => {
@@ -568,6 +573,50 @@ async fn api_request(
         }
     };
     respond(StatusCode::OK, "application/json", out.to_string())
+}
+
+/// `{"code": "ptp_…"}` → `{"token": "ptd_…", "device": DeviceInfo}`: the web app trades the
+/// pairing code from `ptyro pair` for its token, once. A wrong code counts as a failed login.
+async fn api_pair(
+    req: Request<Incoming>,
+    st: &State,
+    via: String,
+    ip: IpAddr,
+    login: Pending,
+) -> Response<Body> {
+    #[derive(serde::Deserialize)]
+    struct Claim {
+        code: String,
+    }
+    let body = match Limited::new(req.into_body(), 4096).collect().await {
+        Ok(b) => b.to_bytes(),
+        Err(_) => return respond(StatusCode::PAYLOAD_TOO_LARGE, "text/plain", "too large"),
+    };
+    let Ok(Claim { code }) = serde_json::from_slice(&body) else {
+        return respond(StatusCode::BAD_REQUEST, "text/plain", "expected {\"code\": …}");
+    };
+    // A local client of the daemon: the claim is the one thing it asks for here.
+    let opts = ptyro_client::ConnectOptions::new(st.ctx_paths.clone(), ClientKind::Proxy);
+    let client = match ptyro_client::Client::connect(&opts).await {
+        Ok(c) => c,
+        Err(e) => return respond(StatusCode::BAD_GATEWAY, "text/plain", e.to_string()),
+    };
+    let claim = ptyro_protocol::Request::DeviceClaim { code, via: Some(via) };
+    let out = tokio::time::timeout(Duration::from_secs(10), client.request(claim)).await;
+    drop(login);
+    match out {
+        Ok(Ok(ptyro_protocol::Reply::Paired { device, token })) => respond(
+            StatusCode::OK,
+            "application/json",
+            serde_json::json!({ "token": token, "device": device }).to_string(),
+        ),
+        Ok(Err(e)) if e.code == ptyro_core::ErrorCode::PermissionDenied => {
+            st.failed(ip);
+            respond(StatusCode::UNAUTHORIZED, "text/plain", e.message)
+        }
+        Ok(Err(e)) => respond(StatusCode::BAD_GATEWAY, "text/plain", e.message),
+        Ok(Ok(_)) | Err(_) => respond(StatusCode::BAD_GATEWAY, "text/plain", "no answer"),
+    }
 }
 
 #[cfg(test)]

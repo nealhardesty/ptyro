@@ -247,14 +247,14 @@ guide: [`docs/changesets.md`](docs/changesets.md).
 
 ```bash
 ptyro serve --tailscale        # the web app over Tailscale HTTPS
-ptyro pair phone               # a QR code: scan it and the phone is signed in
+ptyro pair phone               # a one-time QR code (10 min): scan it and the phone is signed in
 ptyro devices revoke ID        # cut a device off at once
 ptyro --remote me@workbox      # the TUI (or any command) on another machine, over ssh
 ```
 
 The web app lists your agents (blocked ones on top, with Allow / Deny), the inbox, and a live
 view of any session with a reply box. Push notifications carry Allow / Deny where the platform
-shows actions. Each device gets a scope (`read`, `approve`, `control` or `full`). Setup and the threat model:
+shows actions. Each device gets a scope (`read`, `approve` by default, `control` or `full`). Setup and the threat model:
 [`docs/remote.md`](docs/remote.md).
 
 ### Structured sessions

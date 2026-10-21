@@ -49,7 +49,10 @@ impl Daemon {
     /// Start holding a Claude permission prompt for a remote answer (`None`: not held).
     pub(crate) fn begin_hold(&self, s: &Arc<Session>) -> Option<Hold> {
         let wait = parse_duration(&self.config().remote.approval_wait).ok()?;
-        if wait.is_zero() || self.devices.lock().expect("devices").is_empty() {
+        // A device whose pairing code is still unclaimed can't answer yet.
+        if wait.is_zero()
+            || !self.devices.lock().expect("devices").iter().any(|d| d.pairing.is_none())
+        {
             return None;
         }
         let (tx, rx) = oneshot::channel();

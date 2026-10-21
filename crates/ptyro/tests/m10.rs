@@ -414,13 +414,20 @@ fn resume_failures_and_remote_reading() {
 
     // A paired phone (read scope) reads the transcript.
     let v = w.json(&["pair", "phone", "--scope", "read", "--json"]);
-    let token = v["url"].as_str().unwrap().split("#pair=").nth(1).unwrap().to_owned();
-    let mut opts =
-        ptyro_client::ConnectOptions::new(w.d.paths.clone(), ptyro_protocol::ClientKind::Web);
-    opts.autospawn = false;
-    opts.token = Some(token);
+    let code = v["url"].as_str().unwrap().split("#pair=").nth(1).unwrap().to_owned();
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     rt.block_on(async {
+        // The code is traded for the token (what `ptyro serve` does for the web app).
+        let local = w.d.client().await.unwrap();
+        let claim = ptyro_protocol::Request::DeviceClaim { code, via: None };
+        let ptyro_protocol::Reply::Paired { token, .. } = local.request(claim).await.unwrap()
+        else {
+            panic!("not paired")
+        };
+        let mut opts =
+            ptyro_client::ConnectOptions::new(w.d.paths.clone(), ptyro_protocol::ClientKind::Web);
+        opts.autospawn = false;
+        opts.token = Some(token);
         let c = ptyro_client::Client::connect(&opts).await.unwrap();
         let r = c.request(ptyro_protocol::Request::ChatGet { addr: "h1".into() }).await.unwrap();
         let ptyro_protocol::Reply::Transcript { items } = r else { panic!("{r:?}") };

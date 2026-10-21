@@ -487,13 +487,13 @@ enum Cmd {
         #[arg(long, hide = true)]
         managed: bool,
     },
-    /// Pair a phone or browser: prints a QR code that opens the web app signed in
+    /// Pair a phone or browser: prints a one-time QR code that opens the web app signed in
     Pair {
         /// What to call it in `ptyro devices`
         #[arg(default_value = "phone")]
         name: String,
-        /// read, approve, control (default) or full
-        #[arg(long, default_value = "control")]
+        /// read, approve (default), control or full
+        #[arg(long, default_value = "approve")]
         scope: String,
         /// The address the QR code points at (default: `[remote] public_url`, your Tailscale
         /// HTTPS name, or the listen address)

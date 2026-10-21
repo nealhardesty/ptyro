@@ -32,7 +32,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 9 };
+pub const PROTO: Version = Version { major: 1, minor: 10 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -130,6 +130,9 @@ pub struct DeviceInfo {
     /// Web Push subscriptions it registered.
     #[serde(default)]
     pub push: u32,
+    /// Its pairing code hasn't been claimed yet (it has no token).
+    #[serde(default)]
+    pub pending: bool,
 }
 
 /// A browser's Web Push subscription (`PushSubscription.toJSON()`, flattened).
@@ -206,12 +209,20 @@ pub enum Request {
         #[serde(default)]
         binary: Option<PathBuf>,
     },
-    /// Pair a device (M9.2): only from this machine, never from a device. The token is
-    /// returned once and stored hashed.
+    /// Pair a device (M9.2): only from this machine, never from a device. Answers a pairing
+    /// code (`Pairing`): single-use, short-lived, what `ptyro pair` prints. The device's token
+    /// comes from claiming it.
     DevicePair {
         name: String,
         #[serde(default)]
         scope: Scope,
+    },
+    /// Exchange a pairing code for the device's token (`Paired`), once. `ptyro serve` sends it
+    /// for the web app's `POST /api/pair`; `via` is where the device came from.
+    DeviceClaim {
+        code: String,
+        #[serde(default)]
+        via: Option<String>,
     },
     DeviceList,
     DeviceRevoke {
@@ -1110,6 +1121,13 @@ pub enum Reply {
     HookOutput {
         stdout: String,
     },
+    /// A device waiting for its pairing code to be claimed (until `expires_ms`).
+    Pairing {
+        device: DeviceInfo,
+        code: String,
+        expires_ms: u64,
+    },
+    /// A claimed pairing: the device's token, returned only this once.
     Paired {
         device: DeviceInfo,
         token: String,
@@ -1494,6 +1512,10 @@ mod tests {
         round_trip(ClientMsg::Request {
             id: 9,
             req: Request::DevicePair { name: "phone".into(), scope: Scope::Approve },
+        });
+        round_trip(ClientMsg::Request {
+            id: 10,
+            req: Request::DeviceClaim { code: "ptp_x".into(), via: Some("ws:127.0.0.1".into()) },
         });
         round_trip(ClientMsg::Request {
             id: 7,

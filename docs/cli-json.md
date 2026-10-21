@@ -252,11 +252,14 @@ Pinned by `crates/ptyro/tests/m11.rs`.
 
 ## Remote (M9)
 
-- `ptyro pair NAME --json` → `{device: DeviceInfo, url}`. `url` carries the token in its
-  fragment (`#pair=ptd_…`); it is shown once.
+- `ptyro pair NAME --json` → `{device: DeviceInfo, url, expires_ms}`. `url` carries a
+  one-time pairing code in its fragment (`#pair=ptp_…`), not the token: the web app trades it
+  for the token (`POST /api/pair` on `ptyro serve`) once, before `expires_ms` (10 minutes).
+  `device.pending` is true until then.
 - `ptyro devices ls --json` → `[DeviceInfo]`: `{id, name, scope, created_ms, last_seen_ms?,
-  last_via?, push}`. `scope` is `read`, `approve`, `control` or `full`; `last_via` is the
-  address it last connected from; `push` counts its Web Push subscriptions.
+  last_via?, push, pending}`. `scope` is `read`, `approve`, `control` or `full`; `last_via` is
+  the address it last connected from; `push` counts its Web Push subscriptions; `pending`: its
+  pairing code hasn't been claimed yet.
 
 
 - `ptyro doctor --json`, `ptyro profile doctor --json` → `[{section, name, level, text}]`.

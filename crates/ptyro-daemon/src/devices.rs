@@ -28,7 +28,21 @@ pub struct DeviceRecord {
     pub last_via: Option<String>,
     #[serde(default)]
     pub push: Vec<PushSub>,
+    /// Not claimed yet: the code's hash and when it stops working. Such a record has no token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pairing: Option<PairingCode>,
 }
+
+/// What `ptyro pair` prints instead of the token (security review M2): the printed text lands
+/// in scrollback and recordings, so it must be worthless once used or after [`PAIRING_TTL_MS`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PairingCode {
+    pub code_sha256: String,
+    pub expires_ms: u64,
+}
+
+/// How long a pairing code can be claimed.
+pub const PAIRING_TTL_MS: u64 = 10 * 60 * 1000;
 
 impl DeviceRecord {
     pub fn info(&self) -> DeviceInfo {
@@ -40,6 +54,7 @@ impl DeviceRecord {
             last_seen_ms: self.last_seen_ms,
             last_via: self.last_via.clone(),
             push: self.push.len() as u32,
+            pending: self.pairing.is_some(),
         }
     }
 }
@@ -178,7 +193,7 @@ impl Daemon {
         let mut devices = self.devices.lock().expect("devices");
         let mut found = None;
         for (i, d) in devices.iter().enumerate() {
-            if ct_eq(d.token_sha256.as_bytes(), h.as_bytes()) {
+            if d.pairing.is_none() && ct_eq(d.token_sha256.as_bytes(), h.as_bytes()) {
                 found = Some(i);
             }
         }
@@ -186,6 +201,20 @@ impl Daemon {
         d.last_seen_ms = Some(now_ms());
         d.last_via = via.map(str::to_owned);
         Some(Grant { device: id_num(&d.id), scope: d.scope })
+    }
+
+    /// Forget pairings whose code expired unclaimed.
+    fn prune_pairings(&self) {
+        let now = now_ms();
+        let pruned = {
+            let mut d = self.devices.lock().expect("devices");
+            let before = d.len();
+            d.retain(|x| x.pairing.as_ref().is_none_or(|p| p.expires_ms > now));
+            before != d.len()
+        };
+        if pruned {
+            self.save_devices();
+        }
     }
 
     /// Still paired (revocation closes live connections).
@@ -205,7 +234,10 @@ impl Daemon {
     /// Hold a device to its scope; record what it did to sessions.
     pub(crate) fn guard_device(&self, req: &Request, caller: Caller) -> Result<(), Error> {
         let Some(g) = caller.grant else { return Ok(()) };
-        if matches!(req, Request::DevicePair { .. } | Request::DeviceRevoke { .. }) {
+        if matches!(
+            req,
+            Request::DevicePair { .. } | Request::DeviceClaim { .. } | Request::DeviceRevoke { .. }
+        ) {
             return Err(Error::new(
                 ErrorCode::PermissionDenied,
                 "devices are paired and revoked only on the machine that runs ptyro",
@@ -250,37 +282,80 @@ impl Daemon {
                 if name.is_empty() || name.len() > 64 {
                     return Err(Error::invalid("a device name is 1–64 characters"));
                 }
-                let token = token("ptd_").map_err(|e| Error::internal(format!("random: {e}")))?;
+                let code = token("ptp_").map_err(|e| Error::internal(format!("random: {e}")))?;
                 let id = ptyro_core::secret::random_bytes(6)
                     .map_err(|e| Error::internal(format!("random: {e}")))?
                     .iter()
                     .map(|b| format!("{b:02x}"))
                     .collect::<String>();
+                // Tests shorten it (never lengthen it) with PTYRO_TEST_PAIRING_TTL_MS.
+                let ttl = std::env::var("PTYRO_TEST_PAIRING_TTL_MS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .map_or(PAIRING_TTL_MS, |t: u64| t.min(PAIRING_TTL_MS));
+                let expires_ms = now_ms() + ttl;
                 let rec = DeviceRecord {
                     id,
                     name: name.to_owned(),
                     scope,
-                    token_sha256: hash(&token),
+                    token_sha256: String::new(),
                     created_ms: now_ms(),
                     last_seen_ms: None,
                     last_via: None,
                     push: Vec::new(),
+                    pairing: Some(PairingCode { code_sha256: hash(&code), expires_ms }),
                 };
                 let device = rec.info();
+                self.prune_pairings();
                 self.devices.lock().expect("devices").push(rec);
                 self.save_devices();
-                tracing::info!(device = %device.id, name = %device.name, scope = device.scope.label(), "paired");
+                tracing::info!(device = %device.id, name = %device.name, scope = device.scope.label(), "pairing code issued");
+                Ok(Reply::Pairing { device, code, expires_ms })
+            }
+            Request::DeviceClaim { code, via } => {
+                self.prune_pairings();
+                let h = hash(&code);
+                let token = token("ptd_").map_err(|e| Error::internal(format!("random: {e}")))?;
+                let device = {
+                    let mut devices = self.devices.lock().expect("devices");
+                    let mut found = None;
+                    for (i, d) in devices.iter().enumerate() {
+                        if d.pairing
+                            .as_ref()
+                            .is_some_and(|p| ct_eq(p.code_sha256.as_bytes(), h.as_bytes()))
+                        {
+                            found = Some(i);
+                        }
+                    }
+                    let Some(i) = found else {
+                        return Err(Error::new(
+                            ErrorCode::PermissionDenied,
+                            "this pairing code is unknown, already used or expired: run `ptyro pair` again",
+                        ));
+                    };
+                    let d = &mut devices[i];
+                    // Used up: the printed code is worth nothing from here on.
+                    d.pairing = None;
+                    d.token_sha256 = hash(&token);
+                    d.last_via = via;
+                    d.info()
+                };
+                self.save_devices();
+                tracing::info!(device = %device.id, name = %device.name, via = ?device.last_via, "paired");
                 Ok(Reply::Paired { device, token })
             }
-            Request::DeviceList => Ok(Reply::Devices {
-                devices: self
-                    .devices
-                    .lock()
-                    .expect("devices")
-                    .iter()
-                    .map(DeviceRecord::info)
-                    .collect(),
-            }),
+            Request::DeviceList => {
+                self.prune_pairings();
+                Ok(Reply::Devices {
+                    devices: self
+                        .devices
+                        .lock()
+                        .expect("devices")
+                        .iter()
+                        .map(DeviceRecord::info)
+                        .collect(),
+                })
+            }
             Request::DeviceRevoke { id } => {
                 let removed = {
                     let mut d = self.devices.lock().expect("devices");

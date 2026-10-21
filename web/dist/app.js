@@ -23,12 +23,35 @@ async function idbSet(key, value) {
         tx.onerror = () => err(tx.error);
     });
 }
-function takePairToken() {
+function takePairCode() {
     const m = location.hash.match(/^#pair=([A-Za-z0-9_\-]+)$/);
     if (m) {
         history.replaceState(null, "", location.pathname + "#/");
-        useToken(m[1]);
+        void claim(m[1]);
     }
+}
+/// Why the last pairing attempt failed (shown on the pairing screen).
+let pairNote = "";
+/// Trade the one-time code from `ptyro pair` for this device's token (`POST /api/pair`).
+async function claim(code) {
+    pairNote = "Pairing…";
+    render();
+    try {
+        const r = await fetch("/api/pair", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code }),
+        });
+        if (!r.ok)
+            throw new Error(await r.text());
+        const { token } = await r.json();
+        pairNote = "";
+        useToken(token);
+    }
+    catch (e) {
+        pairNote = `Pairing failed: ${e.message || e}`;
+    }
+    render();
 }
 /// Store a device token and sign in with it (also from a tab that was open, unpaired).
 function useToken(t) {
@@ -529,12 +552,10 @@ function subscribe(id) {
 function pairView() {
     const input = h("input", { placeholder: "Paste the link from `ptyro pair`", autocomplete: "off" });
     return h("main", { class: "center pair" }, h("img", { src: "/icon.svg", width: 72, height: 72, alt: "" }), h("h1", {}, "ptyro"), h("p", {}, "Run ", h("code", {}, "ptyro pair"), " on your computer and scan the QR code with this device."), input, h("button", { onclick: () => {
-            const m = input.value.match(/pair=([A-Za-z0-9_\-]+)/) ?? input.value.match(/^(ptd_[A-Za-z0-9_\-]+)$/);
-            if (m) {
-                useToken(m[1]);
-                render();
-            }
-        } }, "Sign in"));
+            const m = input.value.match(/pair=([A-Za-z0-9_\-]+)/) ?? input.value.match(/^(ptp_[A-Za-z0-9_\-]+)$/);
+            if (m)
+                void claim(m[1]);
+        } }, "Sign in"), pairNote ? h("p", {}, pairNote) : null);
 }
 // ── push notifications ──────────────────────────────────────────────────────────────────────
 function keyBytes(b64) {
@@ -639,9 +660,9 @@ conn.listeners.add((msg) => {
     }
 });
 conn.onState = render;
-window.addEventListener("hashchange", () => { takePairToken(); render(); });
+window.addEventListener("hashchange", () => { takePairCode(); render(); });
 window.addEventListener("resize", paint);
-takePairToken();
+takePairCode();
 if ("serviceWorker" in navigator)
     void navigator.serviceWorker.register("/sw.js");
 render();

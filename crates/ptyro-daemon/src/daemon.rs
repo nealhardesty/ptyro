@@ -162,9 +162,12 @@ impl Daemon {
             next_client: AtomicU64::new(1),
             clients: AtomicU32::new(0),
             shutdown: watch::Sender::new(false),
-            // The handoff's own variables are for this process, never its children.
+            // The handoff's own variables are for this process, never its children; nor the
+            // session of whichever client started us (it would place checks in it, M7.6).
             base_env: std::env::vars_os()
-                .filter(|(k, _)| !k.to_string_lossy().starts_with("PTYRO_HANDOFF_"))
+                .filter(|(k, _)| {
+                    !k.to_string_lossy().starts_with("PTYRO_HANDOFF_") && k != "PTYRO_SESSION_ID"
+                })
                 .collect(),
             store,
             config: RwLock::new(config),
@@ -834,6 +837,7 @@ impl Daemon {
         self.guard_device(&req, caller)?;
         match req {
             req @ (Request::DevicePair { .. }
+            | Request::DeviceClaim { .. }
             | Request::DeviceList
             | Request::DeviceRevoke { .. }
             | Request::PushKey

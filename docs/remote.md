@@ -88,24 +88,35 @@ gets `421`. That stops DNS rebinding: a web page whose own name is made to resol
 ### 2. Pair the phone
 
 ```bash
-ptyro pair phone                 # a QR code; scan it with the phone's camera
-ptyro pair tablet --scope approve
+ptyro pair phone                 # a one-time QR code; scan it with the phone's camera
+ptyro pair tablet --scope control
 ptyro devices                    # what's paired, last seen, from where, push on/off
 ptyro devices revoke 3f9a1c2b7e04  # the token stops working at once; open connections close
 ```
 
-The QR code opens the web app with the token in the URL's fragment (`#pair=…`). Browsers never
-send fragments to a server, so the token doesn't reach logs or proxies. The app stores it and
-removes it from the address bar. Tokens are 256 random bits; the daemon keeps only their
-SHA-256.
+`ptyro serve` must be running when the phone opens the link. The QR code carries a **pairing
+code**, not the device's token, in the URL's fragment (`#pair=ptp_…`). Browsers never send
+fragments to a server, so it doesn't reach logs or proxies. The app trades the code for the
+device's token once (`POST /api/pair`), stores the token, and removes the code from the address
+bar.
+
+A pairing code works **once, and for 10 minutes**. That matters because what `ptyro pair`
+prints stays wherever it was printed: in a ptyro pane, that is the scrollback and the session
+recording, which agents and `read` devices can see. Once claimed or expired, the printed code is
+worthless. `ptyro pair` waits and tells you when the device signed in, and from where; if that
+wasn't your phone, revoke it. Until then, `ptyro devices` lists the device as `unclaimed`. Run
+`ptyro pair` in a plain terminal when you can.
+
+Tokens are 256 random bits; the daemon keeps only their SHA-256 (and the code's, until it is
+used).
 
 **Scopes.** Each includes the ones before it:
 
 | Scope | Can |
 |---|---|
 | `read` | see sessions, screens, transcripts, status, the inbox, runs |
-| `approve` | also answer permission prompts and gates, clear attention, mute |
-| `control` (default) | also type into sessions, stop/resume/convert them, start *configured* agents |
+| `approve` (default) | also answer permission prompts and gates, clear attention, mute |
+| `control` | also type into sessions, stop/resume/convert them, start *configured* agents |
 | `full` | everything a local client can (any command line, config, upgrades) |
 
 Pairing and revoking only work from the machine itself, never from a device.
@@ -140,8 +151,9 @@ through their protocol for structured sessions.
 | Threat | Mitigation |
 |---|---|
 | Someone on the network reaches `ptyro serve` | Nothing gets past the first message without a valid device token; static files only otherwise. Listening is loopback/Tailscale-only unless `--insecure`. |
-| Token theft from logs or proxies | Tokens travel in the URL fragment (never sent) and the WebSocket's first message, not the URL. Stored hashed. |
-| Token guessing | 256-bit tokens; 10 failed logins from one address lock it out for 10 minutes, at most 4 logins from one address are in flight at once, and `ptyro serve` takes at most 256 connections. |
+| Token theft from logs or proxies | Tokens travel only in the WebSocket's first message or a request header, never a URL. The link `ptyro pair` prints holds a pairing code instead, in the fragment (never sent). Stored hashed. |
+| The pairing link read off a screen, scrollback or recording | It is a code, not the token: claimed once, within 10 minutes, then worthless. `ptyro pair` reports who claimed it and from where; failed claims count toward the lockout. During those minutes it *is* a credential, so prefer a plain terminal. |
+| Token guessing | 256-bit tokens and codes; 10 failed logins or pairing claims from one address lock it out for 10 minutes, at most 4 logins from one address are in flight at once, and `ptyro serve` takes at most 256 connections. |
 | A stale notification or link approving a newer prompt | Every answer names the prompt it was shown (its `since`); if the agent asks something else by then, the answer is refused ("that prompt changed") instead of approving it. Approve/deny links carry it too. |
 | Strangers steering an agent through a PR | PR review comments reach the agent only from the repository's owner, members and collaborators; anyone else's come to you. |
 | A lost phone | `ptyro devices revoke ID`: immediate, and live connections close. |
@@ -152,7 +164,16 @@ through their protocol for structured sessions.
 | Forged `X-Forwarded-For` to dodge the lockout | Only believed from loopback with `trusted_proxy` (or under `tailscale serve`), and only its last entry. |
 | Clickjacking, injected scripts | A strict CSP (`default-src 'none'`, scripts only from the app itself), `X-Frame-Options: DENY`, no third-party requests. |
 | Push payload snooping | Web Push is end-to-end encrypted (RFC 8291) for the device; push services see ciphertext. VAPID (RFC 8292) identifies your daemon. Subscriptions are accepted only for the browsers' push services, so a device can't make the daemon post elsewhere. |
-| An agent approving its own prompts | Agents can't answer permission prompts or gates, from any client (M7 policy). Devices can't pair devices. |
+| An agent approving prompts, or pairing a device for itself | An agent can't answer permission prompts or gates, type into a session that is blocked on one, pair or revoke devices, or trust a repository's scripts, from any client. See below for what this does and doesn't stop. Devices can't pair devices. |
 
-Remote input is equivalent to running commands as you. Pair only devices you control, and
-prefer `approve` for a phone you just want notifications and approvals on.
+Remote input is equivalent to running commands as you. Pair only devices you control. `approve`
+is the default: enough for notifications and approvals; pair with `--scope control` to type
+from the phone.
+
+**What the agent rules are for.** They stop an agent's mistake, or a prompt injection talking
+it into casual misuse ("run `ptyro send other --raw 1`", "pair a device and print the link").
+They are not a boundary against code determined to get around them: an agent runs as you, so
+it can do anything you can, by means ptyro never sees. ptyro tells an agent's request apart by
+the requesting process (its ancestry, its POSIX session, the environment it was started with);
+a process that leaves all three looks like you at a plain shell, and is treated like you
+(SPEC §17).
