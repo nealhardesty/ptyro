@@ -150,6 +150,7 @@ on = ["blocked"]
 
 [notifications.callback]             # optional: approve/deny buttons in your notifications
 listen = "127.0.0.1:7591"            # or your tailnet address
+# insecure = true                    # needed for any other address: the links are plain HTTP
 ```
 
 - Approve/deny links are signed, single-use, and expire after 15 minutes. Opening one only shows

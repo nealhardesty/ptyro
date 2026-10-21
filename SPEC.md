@@ -1573,7 +1573,9 @@ conformance`):
 - **Approve links:** with `[notifications.callback] listen` set, a blocked notification carries
   approve/deny URLs. Links are HMAC-SHA256-signed with `data/callback.key` (0600), single-use and
   expiring after `link_ttl` (15 m). A GET renders a confirmation page; only its POST answers, so
-  link unfurlers can't approve anything.
+  link unfurlers can't approve anything. Plain HTTP, so `listen` must be loopback or Tailscale
+  (`config::safe_address`, the rule `ptyro serve` uses) unless `insecure = true`; otherwise the
+  listener is not started and the daemon log says why.
 - `ptyro notify test` sends one notification through every channel and sink and reports which
   delivered.
 
@@ -2736,7 +2738,7 @@ change (debounced) and emits `ConfigReloaded`.
   - `quiet_hours = "22:00-07:00"`, `coalesce`, `desktop_command`;
   - `[[notifications.sinks]]` with `type = ntfy|pushover|slack|discord|telegram|command` and a
     per-sink `on`;
-  - `[notifications.callback] listen/public_url/link_ttl`.
+  - `[notifications.callback] listen/public_url/link_ttl/insecure`.
 - `[daemon] restore_on_start`, `[worktrees] auto_rename_branch` (a branch without a name is
   renamed from the first prompt), and `[prompts]` snippets.
 - Only `[recorder]` (M8) and `[remote]` (M9) remain reserved.
@@ -3964,7 +3966,7 @@ relay's budget.
 | Clipboard exfiltration | OSC 52 write only to the controlling client, configurable; read never |
 | Secrets in recordings/logs | files `0600`; recorder opt-out; logs never include PTY content above `trace` |
 | Data loss in worktrees | §10.8 rules; locks while running; marker files |
-| Remote access | **[built M9]** off by default; the daemon is a local socket only. `ptyro serve` listens on loopback/Tailscale unless `--insecure`. Devices: 256-bit tokens stored hashed, compared in constant time, scopes enforced per request and keystroke, a browser's Hello rewritten to `web`, a lockout after 10 failures, revocation closes live connections, pairing only locally, remote actions in the event log. The app ships a strict CSP and no third-party code. Web Push is end-to-end encrypted. Over ssh: the ssh login. E2E relay later (docs/remote.md has the threat model). |
+| Remote access | **[built M9]** off by default; the daemon's clients use a local socket only (its one TCP port is the opt-in approve/deny link listener, loopback/Tailscale unless `insecure`). `ptyro serve` listens on loopback/Tailscale unless `--insecure`. Devices: 256-bit tokens stored hashed, compared in constant time, scopes enforced per request and keystroke, a browser's Hello rewritten to `web`, a lockout after 10 failures, revocation closes live connections, pairing only locally, remote actions in the event log. The app ships a strict CSP and no third-party code. Web Push is end-to-end encrypted. Over ssh: the ssh login. E2E relay later (docs/remote.md has the threat model). |
 | Credentials | ptyro stores none for agents; uses the agents' own auth; remote tokens hashed; profile `secrets` resolved per spawn, memory-only, redacted everywhere |
 | An agent escaping its orchestration limits | the daemon enforces a lead's policy on every request, identifying the caller by its process ancestry (peer pid), so shelling out to `ptyro` gets the same limits as MCP. Under a policy an agent gets an *allow-list* (reading, mail, leases, its own run's sessions; shipping only with `destructive`; everything else refused, including forks, retries and cancels of other runs). The hook exemption is by request (`Hook`, `StatusLine`, `Report`), never by the `kind` a client claims. A session in two runs gets the stricter policy. Sessions read only their own mail. Lead spawns are serialized and every spawn counts. Fences and guards match real paths (`..` folded, symlinks resolved); agents never answer gates or permission prompts; agent mail is framed as not-from-the-user and can't grant consent; only ptyro pushes/PRs/merges in recipes (`apply`), and guards deny `git push` and paths through PreToolUse |
 | Wrong account / identity (work ↔ personal) | profiles (§10.10): managed vars always scrubbed, credentials scrubbed for isolated profiles, resolution order shown, `match` guard, pins, resume bound to profile, labels everywhere; *not* an OS-level boundary |

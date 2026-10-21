@@ -496,9 +496,11 @@ impl Daemon {
         Ok((v["s"].as_str().unwrap_or_default().to_owned(), d, v["p"].as_u64()))
     }
 
-    /// The approve/deny listener (M4.22), if `[notifications.callback] listen` is set.
+    /// The approve/deny listener (M4.22), if `[notifications.callback] listen` is set. Plain
+    /// HTTP, so only on loopback or Tailscale unless `insecure` (as `ptyro serve`).
     pub fn start_callback(self: &Arc<Self>) {
-        let Some(listen) = self.config().notifications.callback.listen.clone() else { return };
+        let cb = self.config().notifications.callback.clone();
+        let Some(listen) = cb.listen else { return };
         let me = Arc::clone(self);
         tokio::spawn(async move {
             let l = match tokio::net::TcpListener::bind(&listen).await {
@@ -508,6 +510,15 @@ impl Daemon {
                     return;
                 }
             };
+            let ip = l.local_addr().map(|a| a.ip());
+            if !cb.insecure && !ip.is_ok_and(ptyro_core::config::safe_address) {
+                tracing::warn!(
+                    "callback listener {listen}: not loopback or a Tailscale address, so links \
+                     would cross the network in clear; set [notifications.callback] \
+                     insecure = true if you mean it"
+                );
+                return;
+            }
             tracing::info!("approve/deny links answered on {listen}");
             loop {
                 let Ok((mut sock, _)) = l.accept().await else { continue };

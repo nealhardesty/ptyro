@@ -33,7 +33,7 @@ use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use ptyro_core::Error;
-use ptyro_core::config::Config;
+use ptyro_core::config::{Config, safe_address};
 use ptyro_protocol::{ClientKind, ClientMsg, Encoding, ServerMsg, decode, encode, framing};
 use tokio::net::TcpListener;
 use tokio_tungstenite::WebSocketStream;
@@ -135,14 +135,6 @@ impl State {
         if e.0 == MAX_FAILURES {
             tracing::warn!(%ip, "locked out for {}m after {MAX_FAILURES} failed device logins", FAILURE_WINDOW.as_secs() / 60);
         }
-    }
-}
-
-/// Loopback, or Tailscale (100.64.0.0/10, fd7a:115c:a1e0::/48): WireGuard encrypts those.
-pub fn safe_address(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v) => v.is_loopback() || (v.octets()[0] == 100 && (v.octets()[1] & 0xc0) == 64),
-        IpAddr::V6(v) => v.is_loopback() || v.segments()[..3] == [0xfd7a, 0x115c, 0xa1e0],
     }
 }
 
@@ -581,16 +573,6 @@ async fn api_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn safe_addresses() {
-        for ok in ["127.0.0.1", "::1", "100.64.0.1", "100.127.255.254", "fd7a:115c:a1e0::1"] {
-            assert!(safe_address(ok.parse().unwrap()), "{ok}");
-        }
-        for bad in ["0.0.0.0", "192.168.1.5", "100.128.0.1", "10.0.0.1", "::"] {
-            assert!(!safe_address(bad.parse().unwrap()), "{bad}");
-        }
-    }
 
     #[test]
     fn the_proxy_added_address_counts() {

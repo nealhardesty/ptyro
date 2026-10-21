@@ -8,7 +8,9 @@ There are two ways in:
 | Another computer | `ptyro --remote host …` (the CLI and the TUI) | your ssh login | ssh |
 | A phone or any browser | `ptyro serve` + the web app | a paired device token | Tailscale or TLS in front |
 
-Everything is off until you turn it on. The daemon itself only ever listens on a local socket.
+Everything is off until you turn it on. The daemon's clients reach it through a local socket;
+it opens a TCP port of its own only for approve/deny links in notifications, when you set
+`[notifications.callback] listen` (loopback or Tailscale unless `insecure = true`).
 
 ## From another computer: `--remote`
 

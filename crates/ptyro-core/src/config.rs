@@ -248,8 +248,11 @@ impl SinkDef {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Callback {
-    /// `127.0.0.1:7591`, or a tailnet address. Never `0.0.0.0` unless you mean it.
+    /// `127.0.0.1:7591`, or a tailnet address. Others (`0.0.0.0`, a LAN address) need
+    /// `insecure`: the links are plain HTTP.
     pub listen: Option<String>,
+    /// Allow `listen` on an address that isn't loopback or Tailscale.
+    pub insecure: bool,
     /// The URL links point at (default `http://<listen>`).
     pub public_url: Option<String>,
     /// How long an approve/deny link stays valid.
@@ -258,7 +261,7 @@ pub struct Callback {
 
 impl Default for Callback {
     fn default() -> Self {
-        Self { listen: None, public_url: None, link_ttl: "15m".into() }
+        Self { listen: None, insecure: false, public_url: None, link_ttl: "15m".into() }
     }
 }
 
@@ -478,6 +481,18 @@ impl Default for Remote {
             push_hosts: Vec::new(),
             trusted_proxy: false,
         }
+    }
+}
+
+/// Where a plain-HTTP listener (`ptyro serve`, the approve/deny links) may listen without an
+/// explicit `insecure`: loopback, or Tailscale (100.64.0.0/10, fd7a:115c:a1e0::/48), which
+/// WireGuard encrypts. Anywhere else, what it carries would cross the network in clear.
+pub fn safe_address(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v) => {
+            v.is_loopback() || (v.octets()[0] == 100 && (v.octets()[1] & 0xc0) == 64)
+        }
+        std::net::IpAddr::V6(v) => v.is_loopback() || v.segments()[..3] == [0xfd7a, 0x115c, 0xa1e0],
     }
 }
 
@@ -1200,6 +1215,16 @@ pub fn key_label(k: &KeyEvent) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn safe_addresses() {
+        for ok in ["127.0.0.1", "::1", "100.64.0.1", "100.127.255.254", "fd7a:115c:a1e0::1"] {
+            assert!(safe_address(ok.parse().unwrap()), "{ok}");
+        }
+        for bad in ["0.0.0.0", "192.168.1.5", "100.128.0.1", "10.0.0.1", "::"] {
+            assert!(!safe_address(bad.parse().unwrap()), "{bad}");
+        }
+    }
 
     #[test]
     fn empty_config_is_all_defaults() {

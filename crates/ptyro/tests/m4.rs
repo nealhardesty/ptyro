@@ -508,6 +508,17 @@ async fn notifications_sinks_mutes_and_signed_links() {
     assert!(out.contains("inbox: added") && out.contains("command: ran"), "{out}");
 }
 
+/// The approve/deny links are plain HTTP: like `ptyro serve`, they listen only on loopback or
+/// Tailscale unless `insecure = true`.
+#[tokio::test]
+async fn approve_links_refuse_a_public_address() {
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let w = World::new(&format!("[notifications]\ncallback = {{ listen = \"0.0.0.0:{port}\" }}\n"));
+    let _c = w.d.client().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err(), "it listened on 0.0.0.0");
+}
+
 #[tokio::test]
 async fn after_turn_runs_trusted_scripts_and_branches_follow_prompts() {
     let w = World::new("[worktrees]\nfetch = false\nauto_rename_branch = true\n");
