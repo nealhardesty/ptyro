@@ -57,11 +57,15 @@ fn apply(git: &Git, dir: &Path, patch_text: &str) -> Result<(), Error> {
     if patch_text.trim().is_empty() {
         return Ok(());
     }
-    let tmp = std::env::temp_dir()
-        .join(format!("ptyro-pair-{}.patch", ptyro_core::SessionId::new().full()));
-    std::fs::write(&tmp, patch_text).map_err(|e| Error::internal(e.to_string()))?;
-    let r = git.run(dir, &["apply", "--binary", "--whitespace=nowarn", &tmp.to_string_lossy()]);
-    let _ = std::fs::remove_file(&tmp);
+    // A worktree's changes can hold secrets: a 0600 file with a random name, removed on drop.
+    let write = || -> std::io::Result<tempfile::NamedTempFile> {
+        let mut f = tempfile::Builder::new().prefix("ptyro-pair-").suffix(".patch").tempfile()?;
+        std::io::Write::write_all(&mut f, patch_text.as_bytes())?;
+        Ok(f)
+    };
+    let tmp = write().map_err(|e| Error::internal(e.to_string()))?;
+    let r =
+        git.run(dir, &["apply", "--binary", "--whitespace=nowarn", &tmp.path().to_string_lossy()]);
     r.map(drop).map_err(|e| Error::conflict(format!("the changes don't apply cleanly ({e})")))
 }
 

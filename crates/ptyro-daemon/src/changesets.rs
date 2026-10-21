@@ -3368,17 +3368,15 @@ async fn fingerprints(set: &ChangeSet) -> BTreeMap<String, String> {
     .unwrap_or_default()
 }
 
-/// Apply a unified diff to `text` (`git apply` in a scratch directory).
+/// Apply a unified diff to `text` (`git apply` in a private scratch directory: random name,
+/// 0700, so no other user can plant a symlink in it).
 async fn apply_patch(text: &str, diff: &str) -> Result<String, Error> {
     let (text, diff) = (text.to_owned(), diff.to_owned());
     blocking(move || -> Result<String, Error> {
-        let dir = std::env::temp_dir().join(format!(
-            "ptyro-contract-{}-{}",
-            std::process::id(),
-            now_ms()
-        ));
-        std::fs::create_dir_all(&dir).map_err(cs_err)?;
-        let result = (|| {
+        let scratch =
+            tempfile::Builder::new().prefix("ptyro-contract-").tempdir().map_err(cs_err)?;
+        let dir = scratch.path();
+        (|| {
             let f = dir.join("CONTRACT.md");
             std::fs::write(&f, &text).map_err(cs_err)?;
             // Accept diffs against CONTRACT.md, a/CONTRACT.md, or with no names at all.
@@ -3394,7 +3392,7 @@ async fn apply_patch(text: &str, diff: &str) -> Result<String, Error> {
             let out = std::process::Command::new("git")
                 .args(["apply", "--recount", "--unidiff-zero", "-p1"])
                 .arg(&pf)
-                .current_dir(&dir)
+                .current_dir(dir)
                 .output()
                 .map_err(cs_err)?;
             if !out.status.success() {
@@ -3404,9 +3402,7 @@ async fn apply_patch(text: &str, diff: &str) -> Result<String, Error> {
                 )));
             }
             std::fs::read_to_string(&f).map_err(cs_err)
-        })();
-        let _ = std::fs::remove_dir_all(&dir);
-        result
+        })()
     })
     .await?
 }
@@ -3615,6 +3611,13 @@ mod tests {
         assert_eq!(normalize(Path::new("/r/./a")), PathBuf::from("/r/a"));
         assert_eq!(base_branch(Some("origin/develop"), None), "develop");
         assert_eq!(base_branch(None, Some("trunk")), "trunk");
+    }
+
+    #[tokio::test]
+    async fn contract_patches_apply_in_a_private_scratch_dir() {
+        let out = apply_patch("one\ntwo\n", "@@ -2 +2 @@\n-two\n+2\n").await.unwrap();
+        assert_eq!(out, "one\n2\n");
+        assert!(apply_patch("one\n", "@@ -1 +1 @@\n-zzz\n+y\n").await.is_err());
     }
 
     #[test]
