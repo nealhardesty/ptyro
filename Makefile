@@ -1,6 +1,7 @@
 # ptyro — every workflow has a make target (see AGENTS.md). `make` alone lists them.
 
 # rustup installs to ~/.cargo/bin; make it work even when that isn't on the caller's PATH yet.
+CALLER_PATH := $(PATH)
 export PATH := $(HOME)/.cargo/bin:$(PATH)
 CARGO ?= cargo
 PTYRO := target/debug/ptyro
@@ -16,13 +17,16 @@ SIZE ?= 100x30
 FIXTURES := crates/ptyro-term/tests/fixtures
 
 .DEFAULT_GOAL := help
-.PHONY: help build release install test fmt fmt-check lint deny doc check ci clean tools \
+.PHONY: help rust-install build release install test fmt fmt-check lint deny doc check ci clean tools \
         run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-check bench criterion latency soak compat dist changelog homebrew-formula sandbox sandbox-clean orchestrate-demo changeset-demo verify-claude verify-structured
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 ## ── build ──────────────────────────────────────────────────────────────────
+rust-install: ## Install rustup and the pinned Rust toolchain (Linux, macOS)
+	PTYRO_CALLER_PATH='$(CALLER_PATH)' scripts/rust-install.sh
+
 build: ## Debug build of the whole workspace
 	$(CARGO) build --workspace
 
