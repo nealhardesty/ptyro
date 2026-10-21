@@ -85,7 +85,8 @@ async fn restart_runs_the_command_again_in_place() {
     let mut c = d.client().await.unwrap();
     let mut pushes = c.pushes();
     c.send(ClientMsg::WatchEvents).unwrap();
-    let first = spawn(&c, "job", &["sh", "-c", "echo run-$$; exit 3"]).await;
+    // Alive a moment, so each reply still carries its process's pid.
+    let first = spawn(&c, "job", &["sh", "-c", "echo run-$$; sleep 0.5; exit 3"]).await;
     let exited = wait_state(&c, "job", |s| !s.is_live()).await;
     assert_eq!(exited.state, ProcessState::Exited { code: Some(3), signal: None });
     let err = c.request(Request::Restart { addr: "nope".into() }).await.unwrap_err();
@@ -95,6 +96,7 @@ async fn restart_runs_the_command_again_in_place() {
         other => panic!("{other:?}"),
     };
     assert_eq!(again.id, first.id, "same session");
+    assert!(first.pid.is_some() && again.pid.is_some(), "{first:?} {again:?}");
     assert_ne!(again.pid, first.pid, "new process");
     let deadline = Instant::now() + WAIT;
     let mut saw_restarted = false;
