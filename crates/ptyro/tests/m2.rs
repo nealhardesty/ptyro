@@ -315,6 +315,34 @@ async fn tui_splits_and_restores_the_layout_on_reattach() {
 }
 
 #[tokio::test]
+async fn tui_closes_the_pane_of_a_removed_session() {
+    let d = TempDaemon::start(BIN).unwrap();
+    let c = d.client().await.unwrap();
+    spawn(&c, "alpha", &["sh", "-c", "echo I-am-alpha; exec cat"]).await;
+    spawn(&c, "brief", &["sh", "-c", "echo I-am-brief; exec sleep 3"]).await;
+    let ui = tokio::spawn(run(tui(&d, &["attach", "alpha"])
+        .send(1.4, "\\x11v")
+        .send(1.8, "brief")
+        .send(2.2, "\\r")
+        .snapshot(2.8)
+        .snapshot(5.5)
+        .send(6.0, "\\x11d")
+        .timeout(7.0)));
+    wait_state(&c, "brief", |s| !s.is_live()).await;
+    c.request(Request::Remove { addr: "brief".into() }).await.expect("remove");
+    let r = ui.await.unwrap();
+    let split = r.at(2.8);
+    assert!(split.contains("I-am-alpha") && split.contains("I-am-brief"), "split:\n{split}");
+    let after = r.at(5.5);
+    assert!(
+        after.contains("I-am-alpha")
+            && !after.contains("I-am-brief")
+            && !after.contains("(empty pane)"),
+        "the removed session's pane closed:\n{after}"
+    );
+}
+
+#[tokio::test]
 async fn tui_copy_mode_searches_scrollback_and_yanks() {
     let d = TempDaemon::start(BIN).unwrap();
     let c = d.client().await.unwrap();

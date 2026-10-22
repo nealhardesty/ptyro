@@ -759,6 +759,19 @@ impl App {
         self.dirty = true;
     }
 
+    /// Remove `pane` from the layout; focus (and zoom) leave it if it had them. False for the last pane.
+    fn close_pane(&mut self, pane: PaneId) -> bool {
+        if !self.layout.close(pane) {
+            return false;
+        }
+        self.panes.remove(&pane);
+        if self.focused == pane {
+            self.focused = self.layout.first();
+            self.zoom = false;
+        }
+        true
+    }
+
     fn view_changed(&mut self) {
         if !self.opts.raw && !self.opts.view_only {
             self.view_dirty_since = Some(Instant::now());
@@ -890,10 +903,12 @@ impl App {
             }
             DomainEvent::SessionRemoved { id } => {
                 self.sessions.retain(|s| s.id != id);
-                for p in self.panes.values_mut() {
+                let mut emptied = Vec::new();
+                for (pane, p) in &mut self.panes {
                     if p.session == Some(id) {
                         p.session = None;
                         p.copy = None;
+                        emptied.push(*pane);
                     }
                     if p.last == Some(id) {
                         p.last = None;
@@ -901,8 +916,21 @@ impl App {
                 }
                 if self.opts.raw {
                     self.quit = Some(AttachEnd::Gone);
+                    self.sync();
+                    return;
                 }
-                self.sync();
+                // Its panes close; the last pane can't, so it shows a session not shown yet.
+                for pane in emptied {
+                    if !self.close_pane(pane) {
+                        let shown: Vec<SessionId> =
+                            self.panes.values().filter_map(|p| p.session).collect();
+                        let next = self.ordered().into_iter().find(|id| !shown.contains(id));
+                        if let Some(p) = self.panes.get_mut(&pane) {
+                            p.session = next;
+                        }
+                    }
+                }
+                self.view_changed();
             }
             DomainEvent::ControllerChanged { session, controller } => {
                 let me = self.client().map(|c| c.id);
@@ -1742,10 +1770,7 @@ impl App {
                 self.open_finder("Split down: show which session?", Purpose::Split(Dir::Down), true)
             }
             "pane.close" => {
-                if self.layout.close(self.focused) {
-                    self.panes.remove(&self.focused);
-                    self.focused = self.layout.first();
-                    self.zoom = false;
+                if self.close_pane(self.focused) {
                     self.view_changed();
                 } else {
                     self.toast("this is the only pane");

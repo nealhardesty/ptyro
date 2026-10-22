@@ -2167,7 +2167,9 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
 - **The view persists in the daemon** (`SaveView`/`LoadView "main"`, stored in `kv`, debounced
   500 ms and on detach): the layout, what each pane shows, focus, zoom and the sidebar. A plain
   `ptyro` brings it back, even after a daemon restart. Panes whose session is gone come back
-  empty; empty panes are filled from unshown sessions.
+  empty; empty panes are filled from unshown sessions. While attached, removing a session closes
+  the panes showing it (its sibling takes the space); the last pane is refilled from an unshown
+  session instead. An exited session keeps its pane.
 - **Overlays:** help (generated from the live key map, filterable, also showing the terminal's
   kitty-keyboard and colour support), the command palette (actions with their keys, sessions,
   themes), the session finder, a text prompt (new session: run through `$SHELL -c` so pipes and
