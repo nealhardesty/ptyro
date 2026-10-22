@@ -396,9 +396,10 @@ behave the same. (License and advisory checks run there through the cargo-deny a
 | `make soak` (`DURATION=10m`) | fake agents and shells with live upgrades; fails on leaks, stuck turns or lag |
 | `make web` / `make web-check` | build the web app (needs Node) / check the committed `web/dist` matches (CI) |
 | `make dist` (`TRIPLE=…`) / `changelog` / `homebrew-formula` | release tarball + `.sha256` in `dist/` / regenerate `CHANGELOG.md` / render `dist/ptyro.rb` from the checksums |
+| `make bump` (`V=patch\|minor\|major\|X.Y.Z`) | set the version in `Cargo.toml` and `Cargo.lock` (default: next patch); it prints the commit and tag to run |
 | `make check-macos` | type-check the workspace for macOS from Linux |
 
-Pushing a `vX.Y.Z` tag runs `dist`, `changelog` and `homebrew-formula` in CI and publishes the
+To release, run `make bump V=…`, commit, then push the `vX.Y.Z` tag. Pushing a `vX.Y.Z` tag runs `dist`, `changelog` and `homebrew-formula` in CI and publishes the
 release. Only the final `publish` job gets a write token. It runs in the `release` environment,
 which holds the `HOMEBREW_TAP_TOKEN` secret (a fine-grained token that can write only to
 `nealhardesty/homebrew-ptyro`); restrict that environment to `v*` tags. Actions are pinned by

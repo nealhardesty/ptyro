@@ -4111,7 +4111,9 @@ are built on tags later. CI only ever calls make targets.
   `make changelog dist` on four platforms (x86_64/aarch64 Linux, aarch64/x86_64 macOS), then
   `SHA256SUMS`, release notes from `scripts/changelog.sh --notes`, the formula from `make
   homebrew-formula`, `gh release`, and a push to the tap when `HOMEBREW_TAP_TOKEN` is set.
-  `make dist` refuses a tag that doesn't match the crate version.
+  `make dist` refuses a tag that doesn't match the crate version. `make bump V=patch|minor|major|X.Y.Z`
+  (`scripts/bump.sh`) sets that version, the first `version =` in the root `Cargo.toml`, and the
+  workspace entries in `Cargo.lock`; it refuses a version whose tag exists and never commits or tags.
 
 ### 18.3 Performance budgets (targets, measured in CI benches where feasible) **[proposed]**
 

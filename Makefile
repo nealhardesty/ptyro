@@ -19,7 +19,7 @@ FIXTURES := crates/ptyro-term/tests/fixtures
 
 .DEFAULT_GOAL := help
 .PHONY: help rust-install build release install test fmt fmt-check lint deny doc check ci clean tools \
-        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-check bench criterion latency soak compat dist changelog homebrew-formula sandbox sandbox-clean orchestrate-demo changeset-demo verify-claude verify-structured
+        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean orchestrate-demo changeset-demo verify-claude verify-structured
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -154,6 +154,9 @@ latency: release ## Key → echo → frame round trip through a real daemon, p50
 	target/release/ptyro-latency $(ARGS)
 
 ## ── release ────────────────────────────────────────────────────────────────
+bump: ## Bump the version in Cargo.toml and Cargo.lock (V=patch|minor|major|X.Y.Z; default patch); then commit and tag
+	CARGO=$(CARGO) scripts/bump.sh $(V)
+
 dist: ## Release tarball + .sha256 for this platform in dist/ (TRIPLE=<rust target> to cross-build)
 	TARGET=$(TRIPLE) CARGO=$(CARGO) scripts/dist.sh
 
