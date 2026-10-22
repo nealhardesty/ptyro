@@ -9,6 +9,8 @@ mod doctor;
 mod init;
 mod mcp;
 mod orch;
+#[cfg(test)]
+mod parity;
 mod profiles;
 mod projects;
 mod record;

@@ -27,8 +27,8 @@ they suggest. It feeds candidate work into `ROADMAP.md`.
 TUI, and be discoverable there, before it counts as done. The CLI must be complete
 too, but it follows the TUI.
 - A new CLI command needs its TUI path (a key, the palette, the row menu) or a
-  waiver with a reason in `docs/tui-parity.md`. Once ROADMAP UX1.0 lands,
-  `make tui-parity` checks this in CI.
+  waiver with a reason, as a row in `docs/tui-parity.md`. `make tui-parity`
+  checks this, and CI runs the same check through `make test`.
 - Out of the box comes first: sensible defaults, no setup the user must know
   about, and errors that offer the fix instead of naming a command to type.
 

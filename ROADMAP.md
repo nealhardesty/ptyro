@@ -1215,13 +1215,17 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
 
 ### First class, and seeing what's going on
 
-- [ ] **UX1.0 TUI first, enforced** (R-UX-21) — S
+- [x] **UX1.0 TUI first, enforced** (R-UX-21) — S
   - SPEC §1.3, `AGENTS.md`, README and these conventions say the TUI is first class (done
     2026-10-22 with this milestone).
   - `make tui-parity`, run in CI: it lists the CLI command tree (from clap) and the palette's
     actions and fails on a command with no TUI path unless `docs/tui-parity.md` waives it with a
     reason (e.g. `ptyro hook`, `ptyro proxy`).
   - *Done when:* CI fails on a new CLI command without a TUI action or a waiver.
+  - *Done (2026-10-22):* `crates/ptyro/src/parity.rs` walks the clap tree and checks it against
+    the table in `docs/tui-parity.md` (an action, `shown:`, `waived:` or `gap: UX1.x`). It runs
+    in `make test`; `make tui-parity` lists the 76 gaps left and `STRICT=1` fails on them. UX1
+    is finished when `STRICT=1` passes.
 - [x] **UX1.23 A removed session's pane shows the next one** (owner, 2026-10-22; high priority)
   — S.
   - **Today:** when the shown session is removed (`x` on an exited session, `X`, `ptyro kill` /

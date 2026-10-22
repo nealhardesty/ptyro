@@ -356,6 +356,7 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
 |---|---|
 | [`docs/commands.md`](docs/commands.md) | Every command, how to name sessions, and the exit codes |
 | [`docs/keys.md`](docs/keys.md) | Every key: prefix, sidebar, inspector, copy mode, mouse, rebinding |
+| [`docs/tui-parity.md`](docs/tui-parity.md) | Every command, and how to do it in the TUI |
 | [`docs/config.md`](docs/config.md) | Configuration: your config, profiles, notifications, `.ptyro.toml`, file locations |
 | [`docs/scripting.md`](docs/scripting.md) | Scripting recipes, and a snippet that teaches agents to use ptyro |
 | [`docs/cli-json.md`](docs/cli-json.md) | Every `--json` output and the exit codes |
@@ -385,6 +386,7 @@ behave the same. (License and advisory checks run there through the cargo-deny a
 | `make fmt` / `fmt-check` / `lint` | format / fail if unformatted / clippy with warnings as errors |
 | `make check` / `make ci` | what CI runs except `deny` (fmt-check, lint, test, smoke) / everything, `deny` included |
 | `make tools` / `make deny` | install cargo-deny / license, advisory and source checks |
+| `make tui-parity` (`STRICT=1`) | check that every CLI command has a TUI path or a waiver in [`docs/tui-parity.md`](docs/tui-parity.md), and list the gaps left (`STRICT=1` fails on them) |
 | `make doc` / `make clean` | API docs / remove build output |
 | `make sandbox` / `make sandbox-clean` | a throwaway ptyro (own daemon, store, worktrees) with a demo repo / delete it. It isolates ptyro's state, not a security sandbox: agents still run as you |
 | `make orchestrate-demo` (`ARGS=tui\|clean`) | fan-out, a gated recipe and a lead over MCP, with fake agents |

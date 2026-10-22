@@ -89,7 +89,8 @@ Status markers used below:
   workflow must be complete, discoverable and polished in the TUI, and must work there without
   the user learning anything up front: defaults set up, errors that offer the fix, keys shown
   where they apply. The CLI must be complete too (goal 5), for scripts and agents, but it
-  follows the TUI. `make tui-parity` (planned, ROADMAP UX1.0) will keep them level.
+  follows the TUI. `docs/tui-parity.md` maps every command to its TUI path, and `make tui-parity`
+  (also part of `make test`) fails when one has neither a path nor a waiver.
 - **Boring persistence, sharp terminal.** SQLite + plain files for state; all the cleverness goes
   into terminal fidelity and the attach experience.
 - **Small surface, deep quality.** Fewer features, each one polished, before breadth.
