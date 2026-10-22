@@ -27,7 +27,7 @@ recipes, or coordinate one change across several repositories.
 
 ## Status
 
-Pre-1.0 (version 0.0.1), public for early testing; there is no tagged release yet. Every
+Pre-1.0 (version 0.0.2, the first tagged release), public for early testing. Every
 feature milestone (M1–M11) is built and covered by tests, most of them against scripted fake
 agents. Day-to-day use so far is mainly Claude Code on Linux. Some features have not been run
 against the real thing yet: the phone app on a real phone, OpenCode, Gemini and Codex structured
