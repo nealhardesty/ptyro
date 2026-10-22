@@ -72,7 +72,9 @@ Status markers used below:
   sessions, splits, scrollback, copy, navigation. Not tmux's full command language.
 - Being a terminal emulator *application*. ptyro runs inside your terminal (Ghostty, kitty, WezTerm,
   Alacritty, iTerm2, foot, …), possibly inside tmux.
-- Being an agent. ptyro hosts agents; it never calls an LLM API itself (this may change in the future).
+- Being an agent. ptyro hosts agents; it never calls an LLM API itself. The one planned exception
+  is opt-in session summaries (ROADMAP UX1.3, approved 2026-10-22). They use the cheapest model of
+  the session's own agent and profile account, and they are off by default.
 - Built-in editor, task tracker (**back-burnered**; see ROADMAP Backlog).
 - Windows native. WSL2 is expected to work like Linux. **[decided]**
 
@@ -83,7 +85,11 @@ Status markers used below:
   (OSC 7501); heuristics are a labelled fallback with explicit low confidence.
 - **Never lose work.** No automatic deletion of a worktree with uncommitted or unpushed changes, ever.
 - **Agent-native, not agent-specific.** Adapters declare capabilities; the core never hard-codes Claude.
-- **The TUI is optional.** CLI/API parity is a requirement, not a nice-to-have.
+- **The TUI is first class.** *(owner, 2026-10-22; this replaces "the TUI is optional")* Every
+  workflow must be complete, discoverable and polished in the TUI, and must work there without
+  the user learning anything up front: defaults set up, errors that offer the fix, keys shown
+  where they apply. The CLI must be complete too (goal 5), for scripts and agents, but it
+  follows the TUI. `make tui-parity` (planned, ROADMAP UX1.0) will keep them level.
 - **Boring persistence, sharp terminal.** SQLite + plain files for state; all the cleverness goes
   into terminal fidelity and the attach experience.
 - **Small surface, deep quality.** Fewer features, each one polished, before breadth.
@@ -443,12 +449,6 @@ image is used to re-exec the *old* binary (kept at `state/daemon.prev`).
   (dev servers, test runners) die with the session. Stop sequence: `SIGHUP` → 3 s → `SIGTERM` → 2 s →
   `SIGKILL` (configurable per agent; Claude prefers `SIGINT` to end a turn cleanly).
 - **Resize** via `TIOCSWINSZ` on the master; the kernel delivers SIGWINCH to the foreground group.
-- **Inspection** (polled ≤ 1 Hz, only for visible or recently-active sessions):
-  - foreground process group: `tcgetpgrp(master)`; name via `/proc/<pid>/comm` (Linux) or
-    `proc_name` (macOS);
-  - cwd: `/proc/<pid>/cwd` (Linux) / `proc_pidinfo(PROC_PIDVNODEPATHINFO)` (macOS), preferring
-    OSC 7 reports from the shell when present;
-  - listening TCP ports of the process tree (Linux `/proc/net/tcp*` + fd inodes; macOS `libproc`) —
 - **Ctrl-Z** **[built]**: the child leads its own session, so its process group is orphaned and the
   kernel drops the SIGTSTP it gets (§20.5). A program that suspends itself (Claude) then waits for
   a SIGCONT no shell will send. So when Ctrl-Z (a key, or `send --raw '\x1a'`) goes to the
@@ -456,6 +456,12 @@ image is used to re-exec the *old* binary (kept at `state/daemon.prev`).
   If the terminal drops to cooked mode, the daemon sends SIGCONT to the group and announces
   `SessionResumed`, and the TUI shows a toast. A program that stays raw (Ctrl-Z as undo) is left
   alone, and so is a job inside a shell session: it has its own group, and its shell can `fg` it.
+- **Inspection** (polled ≤ 1 Hz, only for visible or recently-active sessions):
+  - foreground process group: `tcgetpgrp(master)`; name via `/proc/<pid>/comm` (Linux) or
+    `proc_name` (macOS);
+  - cwd: `/proc/<pid>/cwd` (Linux) / `proc_pidinfo(PROC_PIDVNODEPATHINFO)` (macOS), preferring
+    OSC 7 reports from the shell when present;
+  - listening TCP ports of the process tree (Linux `/proc/net/tcp*` + fd inodes; macOS `libproc`) —
     shown in the sidebar (§11) and used for port-conflict warnings.
 - **Child environment** (§8.2 adds adapter-specific variables):
 
@@ -864,16 +870,16 @@ Push messages have no id.
   for `POST /api/pair`. Devices can't send either. `DeviceInfo` gains `pending` (not claimed
   yet).
 
+**[built] Protocol 1.11** (additive):
+- A new event, `SessionResumed{session}`: the session's own process suspended itself on Ctrl-Z,
+  and the daemon resumed it (§5.1). Older clients skip events they can't read.
+
 ### 6.5 Screen frames
 
 ```rust
 struct ScreenFrame {
     session: SessionId,
     seq: u64,                    // this frame brings the client up to `seq`
-**[built] Protocol 1.11** (additive):
-- A new event, `SessionResumed{session}`: the session's own process suspended itself on Ctrl-Z,
-  and the daemon resumed it (§5.1). Older clients skip events they can't read.
-
     keyframe: bool,              // true: client must discard its cache first
     size: Option<TermSize>,      // cols, rows (present on keyframe or change)
     styles: Vec<StyleDef>,       // new style-table entries for this connection
@@ -4430,17 +4436,17 @@ learn something the hard way.
     by bits.
   - Its xterm encoder ignores DECCKM. In application-cursor mode, unmodified arrows/Home/End must
     become `ESC O x`. `ptyro-term` patches this, unit-tested in `crates/ptyro-term/src/input.rs`.
+- **[verified 2026-10-22, macOS 25.6]** SIGTSTP sent to a PTY's session leader is discarded,
+  because its process group is orphaned (POSIX; Linux does the same). After `killpg(TSTP)` the
+  process is still `Ss+`, while SIGSTOP stops it (`Ts+`). Claude Code 2.1.309 on Ctrl-Z resets
+  its terminal modes, leaves raw mode and signals itself. As a ptyro child it keeps running, and
+  after SIGCONT it goes raw again and redraws (`crates/ptyro/tests/m2.rs`, ctrl_z tests).
 - **[verified M0 spike]** Startup queries by program:
   - Claude Code 2.1.304: XTVERSION, OSC 7501 probe, kitty `?u`, DA1, DECRQM 2026, `CSI 16 t`,
     DECRQM 1016. It sets 2004, 1004, 2031 (palette-change notifications) and kitty flags 5, and
     uses 2026 sync for every frame (~50 pairs in a short session).
   - Codex 0.143.0: CPR, OSC 10/11, kitty `?u`, DA1, kitty push **7**, which includes
     REPORT_EVENT_TYPES, so key *releases* must be forwarded.
-- **[verified 2026-10-22, macOS 25.6]** SIGTSTP sent to a PTY's session leader is discarded,
-  because its process group is orphaned (POSIX; Linux does the same). After `killpg(TSTP)` the
-  process is still `Ss+`, while SIGSTOP stops it (`Ts+`). Claude Code 2.1.309 on Ctrl-Z resets
-  its terminal modes, leaves raw mode and signals itself. As a ptyro child it keeps running, and
-  after SIGCONT it goes raw again and redraws (`crates/ptyro/tests/m2.rs`, ctrl_z tests).
   - Gemini 0.64.0: XTVERSION, OSC 11, kitty `?u`, DA1, kitty push 1.
   - vim 9: CPR, DA2, OSC 10/11, DECRQM 12, XTWINOPS 22/23 (title stack).
   - Codex and Gemini pick their theme from OSC 10/11, so answering with the outer terminal's

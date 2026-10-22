@@ -23,6 +23,15 @@ they suggest. It feeds candidate work into `ROADMAP.md`.
   `R-` id in the ROADMAP task.
 - Take ideas, never code. Verified technical facts move to SPEC §20.
 
+**The TUI is first class** (SPEC §1.3). Every feature must work completely in the
+TUI, and be discoverable there, before it counts as done. The CLI must be complete
+too, but it follows the TUI.
+- A new CLI command needs its TUI path (a key, the palette, the row menu) or a
+  waiver with a reason in `docs/tui-parity.md`. Once ROADMAP UX1.0 lands,
+  `make tui-parity` checks this in CI.
+- Out of the box comes first: sensible defaults, no setup the user must know
+  about, and errors that offer the fix instead of naming a command to type.
+
 **Automation: everything has a `make` target.** The owner drives the project
 through the root `Makefile`.
 - Anything we implement that someone would run gets a target: build, test, lint,

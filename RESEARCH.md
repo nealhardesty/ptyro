@@ -2567,7 +2567,7 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 | R-AGT-06 | `ptyro hooks setup` + `doctor --repair`: detect agents on PATH, install idempotently, detect dropped or untrusted hooks (Codex hash-pinned trust), TUI banner | cmux, iTerm2, Codex | M5 | S | ★★ | partly built M5.6 (2026-10-20): `doctor` self-tests hooks and reports Codex hooks held for review; `--repair` and a TUI banner open |
 | R-AGT-07 | Claude `type:"http"` hooks to a daemon localhost endpoint, removing process spawns on hot events (spike vs §8.3 relay) | Claude Code | M8 (spike) | S | ★ | new |
 | R-AGT-08 | Cross-agent conversation handoff: export transcript, seed another agent | Kilo `/resume-claude` | Backlog | M | ★ | new |
-| R-AGT-09 | **Agent detected inside a shell session**: when a known agent is the PTY's foreground process, label the row `shell › agent` and use that adapter's hook-free status (titles, screen, OSC 7501) instead of OSC 133, which reports the whole run as working [V 2026-10-22, ptyro code]; offer to adopt it as a managed session (R-AGT-03) | herdr (foreground-process detection) | Backlog | M | ★★ | in ROADMAP Backlog (2026-10-22) |
+| R-AGT-09 | **Agent detected inside a shell session**: when a known agent is the PTY's foreground process, label the row `shell › agent` and use that adapter's hook-free status (titles, screen, OSC 7501) instead of OSC 133, which reports the whole run as working [V 2026-10-22, ptyro code]; offer to adopt it as a managed session (R-AGT-03) | herdr (foreground-process detection) | Backlog | M | ★★ | → UX1.4 (2026-10-22) |
 
 #### Worktrees and projects (R-WT)
 
@@ -2577,25 +2577,25 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 | R-WT-02 | `ptyro new --pr 1234`: worktree from a PR head | Claude `--worktree "#1234"`, git-gtr, Jean, workmux | M6 | S | ★★ | **built M6.6** (2026-10-20): `new --pr N|URL` |
 | R-WT-03 | **Import competitors' committed config** as setup/run sources, shown in the trust dialog: `.claude/launch.json` (`autoPort`), `.conductor/settings.toml`, `.superset/config.json`, `.codex/` environments, `copilot-setup-steps.yml`, `.cursor/environment.json` | Claude desktop, Conductor, Superset, Codex, Copilot, Cursor | M3 | M | ★★★ | **built M5.10** (2026-10-20) |
 | R-WT-04 | `symlink = [...]` next to copy rules (`node_modules`, caches) | workmux | M3 | S | ★★ | new |
-| R-WT-05 | Move work between checkout and worktree: `ptyro new --take-changes`; `ptyro wt adopt <session>` promotes a main-checkout session into a worktree; `ptyro pause`/`resume` frees the branch | workmux, Codex app, claude-squad | M3 / M6 | M | ★★ | new |
-| R-WT-06 | **Safe archive / shelve**: snapshot to `refs/ptyro/archive/<wt>`, remove the worktree, keep the branch; `ptyro wt restore`. A third option beside "refuse removal" | VS Code, andyrewlee/amux | M3 | S | ★★ | new |
+| R-WT-05 | Move work between checkout and worktree: `ptyro new --take-changes`; `ptyro wt adopt <session>` promotes a main-checkout session into a worktree; `ptyro pause`/`resume` frees the branch | workmux, Codex app, claude-squad | M3 / M6 | M | ★★ | `--take-changes` → UX1.10 (2026-10-22); `wt adopt`, pause/resume still new |
+| R-WT-06 | **Safe archive / shelve**: snapshot to `refs/ptyro/archive/<wt>`, remove the worktree, keep the branch; `ptyro wt restore`. A third option beside "refuse removal" | VS Code, andyrewlee/amux | M3 | S | ★★ | → UX1.12 (2026-10-22) |
 | R-WT-07 | `ptyro adopt <path>` for worktrees created outside ptyro | andyrewlee/amux | M3 | S | ★ | new |
 | R-WT-08 | Run and surface the dev server per worktree (URL in sidebar) on the allocated port | uzi, Superset, cmux | M3 / M4 | S | ★★ | new |
-| R-WT-09 | `ptyro gc --merged/--closed` and `gc.archive_on_merge = true`, running the safe-removal matrix | git-gtr, Jean, Claude, VS Code | M6 | S | ★★ | new |
+| R-WT-09 | `ptyro gc --merged/--closed` and `gc.archive_on_merge = true`, running the safe-removal matrix | git-gtr, Jean, Claude, VS Code | M6 | S | ★★ | → UX1.12 (2026-10-22) |
 
 #### TUI and UX (R-UX)
 
 | ID | Idea | Seen in | Fit | Size | Pri | Status |
 |---|---|---|---|---|---|---|
-| R-UX-01 | Derived names and summaries: deterministic slug from the prompt by default; optional cheap-model branch names, row summaries and commit messages using the session's own profile account | dmux, Claude agent view | M4+ | M | ★ | new |
+| R-UX-01 | Derived names and summaries: deterministic slug from the prompt by default; optional cheap-model branch names, row summaries and commit messages using the session's own profile account | dmux, Claude agent view | M4+ | M | ★ | slugs → UX1.9, LLM summaries → UX1.3 (opt-in, owner 2026-10-22); branch names and commit messages still new |
 | R-UX-02 | **Actionable inbox**: peek the pending question, reply inline, numbered choice by digit, **snooze** until next transition, jump to newest unread, cycle unread without marking read | Claude agent view, tuios, iTerm2, cmux | M4 | M | ★★★ | partly built M4.5: peek, inline reply, y/a/n answers, newest-first inbox per workspace; snooze open (2026-10-20) |
-| R-UX-03 | Companion-shell key per task (same worktree and profile env); **scratch sessions** (no project, temp dir) | AoE | M3 | S | ★★ | new |
+| R-UX-03 | Companion-shell key per task (same worktree and profile env); **scratch sessions** (no project, temp dir) | AoE | M3 | S | ★★ | companion shell → UX1.13 (2026-10-22); scratch sessions still new |
 | R-UX-04 | `ptyro project scan ~/dev` bulk registration | ccmanager | M3 | S | ★ | new |
 | R-UX-05 | Publish a **JSON Schema** for `config.toml` and `.ptyro.toml`; document config as agent-editable | Conductor, Warp | M5 | S | ★★ | new |
 | R-UX-06 | One-line agent-written note per session (`ptyro note`, or OSC 7501 `msg`) shown in the sidebar | Orca worktree comments | M4 | S | ★ | new |
 | R-UX-07 | Promote **session templates / layouts** (`[layouts.dev]` = agent + shell + dev server) | Superset presets, Warp Tab Configs | M3 / M4 | M | ★★ | merged → Backlog "Session templates" (promote) |
 | R-UX-08 | **Board view**: Backlog / Working / Blocked / Review / Done columns from status + PR state | Vibe Kanban, Nimbalyst | M6 | M | ★★ | new |
-| R-UX-09 | `:` actions palette listing `[scripts.*]` and recipes per project | Codex app actions | M5 | S | ★ | new |
+| R-UX-09 | `:` actions palette listing `[scripts.*]` and recipes per project | Codex app actions | M5 | S | ★ | → UX1.18 (2026-10-22) |
 | R-UX-10 | Tile view: auto-grid every session in a status | Cursor 3 grid | M2 polish | S | ★ | new |
 | R-UX-11 | Prompt library as `@snippet` expansion in `send` and the TUI | Warp, Superset | M5 | S | ★ | merged → Backlog "Prompt library" (promote) |
 | R-UX-12 | `ptyro screenshot <session>` → PNG/SVG of the current frame | cmux, kitty 0.49 | M5 | S | ★ | new |
@@ -2604,6 +2604,18 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 | R-UX-15 | `ptyro import tmux` migration and a "coming from tmux / Vibe Kanban / claude-squad" guide | tmux ecosystem, Vibe Kanban shutdown | M5 | S | ★★ | new |
 | R-UX-16 | Accessibility pass: screen-reader status announcements, linear "plain" mode | Contour | M8 | M | ★ | new |
 | R-UX-17 | **Recursive-attach guard** when `PTYRO_SESSION` is set (check SPEC coverage) | zmx | M2 fix | S | ★★ | new |
+| R-UX-18 | **Which-key**: pause after the prefix and a compact menu of the next keys appears | which-key.nvim, Helix, Zellij's key hints | UX1 | S | ★★★ | → UX1.14 (2026-10-22) |
+| R-UX-19 | **Row menu**: one key (or right-click) on a sidebar row lists every action that applies to that row | owner (2026-10-22) | UX1 | S | ★★★ | → UX1.15 (2026-10-22) |
+| R-UX-20 | **Multi-line sidebar rows**: the real program name (Claude's process is named after its version, `2.1.309` [V 2026-10-22, `ps` on macOS]), then state-dependent lines (what a blocked agent wants, the current step, the task and last reply, a shell's last command and exit) | owner (2026-10-22) | UX1 | M | ★★★ | → UX1.1, UX1.2 (2026-10-22) |
+| R-UX-21 | **TUI-first parity check**: `make tui-parity` fails CI when a CLI command has no TUI path and no recorded waiver | owner (2026-10-22) | UX1 | S | ★★★ | → UX1.0 (2026-10-22) |
+| R-UX-22 | **Auto-register the repo you're in**, in the current workspace, with an undo toast instead of a question | owner (2026-10-22) | UX1 | S | ★★★ | → UX1.5 (2026-10-22) |
+| R-UX-23 | **Prompt-first new task**: `n` is one box ("what should it do?"); ⏎ = worktree + branch named from the prompt + default agent + the prompt delivered; `ptyro "task"` from the shell | owner (2026-10-22); Claude agent view, dmux (prompt-named tasks) | UX1 | M | ★★★ | → UX1.9 (2026-10-22) |
+| R-UX-24 | **Health badge**: the doctor's findings in the status bar, each with a key that fixes it (shell-init line, tmux options, daemon upgrade) | owner (2026-10-22) | UX1 | M | ★★ | → UX1.20 (2026-10-22) |
+| R-UX-25 | **First run and home screen in the TUI**: `init` as a checklist screen; outside a repo, recent and discovered repos instead of a bare shell | owner (2026-10-22) | UX1 | M | ★★ | → UX1.19 (2026-10-22) |
+| R-UX-26 | **Interactive tour**: do the steps with a fake agent instead of reading pages | owner (2026-10-22) | UX1 | S | ★ | → UX1.22 (2026-10-22) |
+| R-UX-27 | **Errors offer the fix**: no toast names a command to type; it carries a key that does it | owner (2026-10-22) | UX1 | S | ★★★ | → UX1.17 (2026-10-22) |
+| R-UX-28 | **Context hints**: the status bar's hints follow the selection (blocked → answer, diff → review, merged → clean up) | owner (2026-10-22) | UX1 | S | ★★ | → UX1.16 (2026-10-22) |
+| R-WT-10 | **Setup suggestions on first use**: lockfiles suggest a setup script, ignored `.env*` files suggest a `.worktreeinclude`, written to local config after a yes | owner (2026-10-22); Conductor, Superset (setup scripts) | UX1 | S | ★★ | → UX1.11 (2026-10-22) |
 
 #### Orchestration (R-ORC)
 
@@ -2896,3 +2908,7 @@ follow you over SSH, and tmux plugins can't enforce policy. ptyro does all three
     multi-repo merge train; thurbox remains the closest (shared-branch multi-repo sessions).
   - A verified fact moved to SPEC §20.1: Claude 2.1.306's folder-trust dialog has no number
     keys (Down, Enter).
+- **2026-10-22 (UX1):** The owner made the out-of-the-box experience the top priority and the
+  TUI the first-class interface. R-UX-18…28 and R-WT-10 are new and promoted straight into the
+  new ROADMAP milestone UX1, with R-AGT-09, R-UX-01 (summaries, opt-in LLM approved), R-UX-03,
+  R-UX-09, R-WT-05 (`--take-changes`), R-WT-06 and R-WT-09.

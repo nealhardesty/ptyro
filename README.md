@@ -415,6 +415,7 @@ Found a security problem? See [`SECURITY.md`](SECURITY.md).
 The code is a Cargo workspace in `crates/` (SPEC §3.3). End-to-end tests in `crates/ptyro/tests`
 run a real daemon against real git repos, with built-in fake agents and a fake `gh`. Ground rules:
 
+- **The TUI is first class:** every feature must work completely in it, not only the CLI (SPEC §1.3).
 - Read `SPEC.md` before changing anything; record new hard-won facts in SPEC §20.
 - Reference roadmap task IDs in commits (e.g. `M1.4: query responder`).
 - Tick roadmap items when they ship, and keep this README current.
