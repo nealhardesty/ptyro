@@ -65,9 +65,10 @@ Or, without a checkout:
 cargo install --locked --git https://github.com/nealhardesty/ptyro ptyro
 ```
 
-Make sure `~/.cargo/bin` is on your `PATH`. Once a version is tagged, each GitHub release will
-also have prebuilt tarballs (Linux and macOS, x86_64 and aarch64) and a Homebrew tap
-(`brew install nealhardesty/ptyro/ptyro`). Then let ptyro look around:
+Make sure `~/.cargo/bin` is on your `PATH`. Or take a prebuilt tarball (Linux and macOS, x86_64
+and aarch64, with `SHA256SUMS`) from the [latest release](https://github.com/nealhardesty/ptyro/releases/latest).
+A Homebrew tap (`brew install nealhardesty/ptyro/ptyro`) is planned but not published yet. Then
+let ptyro look around:
 
 ```bash
 ptyro init       # finds your agents, accounts and repositories; asks a few questions
