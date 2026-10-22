@@ -2567,6 +2567,7 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 | R-AGT-06 | `ptyro hooks setup` + `doctor --repair`: detect agents on PATH, install idempotently, detect dropped or untrusted hooks (Codex hash-pinned trust), TUI banner | cmux, iTerm2, Codex | M5 | S | ★★ | partly built M5.6 (2026-10-20): `doctor` self-tests hooks and reports Codex hooks held for review; `--repair` and a TUI banner open |
 | R-AGT-07 | Claude `type:"http"` hooks to a daemon localhost endpoint, removing process spawns on hot events (spike vs §8.3 relay) | Claude Code | M8 (spike) | S | ★ | new |
 | R-AGT-08 | Cross-agent conversation handoff: export transcript, seed another agent | Kilo `/resume-claude` | Backlog | M | ★ | new |
+| R-AGT-09 | **Agent detected inside a shell session**: when a known agent is the PTY's foreground process, label the row `shell › agent` and use that adapter's hook-free status (titles, screen, OSC 7501) instead of OSC 133, which reports the whole run as working [V 2026-10-22, ptyro code]; offer to adopt it as a managed session (R-AGT-03) | herdr (foreground-process detection) | Backlog | M | ★★ | in ROADMAP Backlog (2026-10-22) |
 
 #### Worktrees and projects (R-WT)
 

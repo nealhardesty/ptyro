@@ -1218,6 +1218,20 @@ Other ideas:
 - **"No project" opens the picker**: when `worktree.new` (or anything else that needs a project)
   finds none, open the `project.add` discovery picker directly instead of showing a toast that
   names the palette command. Once you pick a project, carry on with the action that asked for it.
+- **Agents started inside a shell session** (R-AGT-09): typing `claude` in a `shell` session
+  leaves it a shell. The sidebar shows the foreground process. Status still comes from OSC 133,
+  which reports the whole Claude run as one long **working** command, even while Claude waits for
+  you. Proposed fix:
+  - When the foreground process (≤ 1 Hz probe, §5) is a known agent, show `zsh › claude ◌` in
+    the sidebar. Don't rename the session.
+  - While the agent is in the foreground, take status from that adapter's hook-free sources
+    instead of OSC 133: titles, screen recognisers and OSC 7501. Mark it low confidence.
+  - Go back to OSC 133 when the agent exits.
+  - Optionally offer "adopt": restart the session as a managed agent session with `--resume <id>`
+    (R-AGT-03), which brings back hooks, hibernation and mail.
+  - Looking through `node`/`npx` launchers belongs with detection manifests (R-DD-05).
+  - *Done when:* a shell session running a fake Claude shows idle and blocked, not a solid
+    working.
 - **Pre-trusted Claude worktrees** (M11.0): every new worktree shows Claude's folder-trust dialog
   (ptyro can answer it now). Codex worktrees inherit their project's trust (§20.2); Claude has no
   flag, so this would mean writing `hasTrustDialogAccepted` into the profile's `.claude.json`,
