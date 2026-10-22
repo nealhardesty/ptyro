@@ -114,7 +114,9 @@ printf 'IsPro\n' > "$set_root/sdk/sdk.txt"
 printf 'PRO badge\n' > "$set_root/web/web.txt"
 n=$(p cs checkpoint tier good 2>&1 | sed -n 's/.*#\([0-9]*\).*/\1/p')
 rm "$set_root/api/tier.txt"; printf 'broken\n' > "$set_root/web/web.txt"
-p cs restore tier "$n" --force
+# Restore refuses while a member is mid-turn (api's `cs ready` turn, or r2 arriving at an idle).
+until_ 20 "! '$bin' ls --status working | grep -qE 'tier-(api|sdk|web)' && '$bin' cs restore tier $n --force > '$dir/restore.out' 2>&1"
+cat "$dir/restore.out"
 echo "api/tier.txt: $(cat "$set_root/api/tier.txt"), web/web.txt: $(cat "$set_root/web/web.txt")"
 
 say "ptyro cs commit tier -m …   (linked by Change-Set trailers)"
