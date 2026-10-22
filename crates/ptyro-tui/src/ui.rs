@@ -399,9 +399,13 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
         lines.push(line);
     }
     if rows.is_empty() {
-        lines.push(Line::styled("  none yet: C-Space n", fg(app, t.dim)));
+        let prefix = key_label(&app.keymap.prefix);
+        lines.push(Line::styled(format!("  none yet: {prefix} n"), fg(app, t.dim)));
         if app.projects.is_empty() {
-            lines.push(Line::styled("  add a repo: C-Space : project.add", fg(app, t.dim)));
+            lines.push(Line::styled(
+                format!("  add a repo: {prefix} : project.add"),
+                fg(app, t.dim),
+            ));
         }
     }
     let mut hint = if app.focus == Focus::Sidebar {

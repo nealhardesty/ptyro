@@ -475,7 +475,7 @@ async fn tui_broadcast_and_tour() {
         w.tui(&["attach", "b1"])
             .snapshot(1.2)
             // Sidebar, mark both, b, type, enter.
-            .send(1.4, "\\x00\\t")
+            .send(1.4, "\\x11\\t")
             .send(1.7, " ")
             .send(1.9, "j")
             .send(2.1, " ")
@@ -485,7 +485,7 @@ async fn tui_broadcast_and_tour() {
             .send(3.2, "work 0.1 broadcasted")
             .send(3.5, "\\r")
             .snapshot(4.6)
-            .send(4.8, "\\x00d"),
+            .send(4.8, "\\x11d"),
     )
     .await
     .unwrap();
@@ -502,7 +502,7 @@ async fn tui_broadcast_and_tour() {
             .snapshot(1.8)
             .send(2.0, "q")
             .snapshot(2.3)
-            .send(2.5, "\\x00d"),
+            .send(2.5, "\\x11d"),
     )
     .await
     .unwrap();

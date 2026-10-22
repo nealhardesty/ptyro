@@ -555,6 +555,7 @@ Parallel Code (MIT, Electron/SolidJS), FleetCode, ChatML — confirm commoditisa
 - **Special [V]:** **web client** (opt-in; `zellij-no-web` build), hashed login tokens, **read-only tokens**, TLS, **bookmarkable URLs that start/attach/resurrect a session**, **mobile UI** (touch scroll, pane/tab pickers, on-screen keyboard, single-pane fullscreen), **PWA install**, `base_url` for proxies; **remote `zellij attach https://…`** with `--token`/`--remember`; resurrection with `post_command_discovery_hook`; 0.44 native Windows, CLI `list-panes`, `send-keys`, **`subscribe`**, `detach`, blocking `run`, plugin APIs (read scrollback, highlight, recolor), protobuf client/server contract; 0.44.1 OSC 99 forwarding; 0.44.2 CSI 2031. Community agent plugins: zjbar, cc-zjstatus, cc-zellij-tab-status.
 - **Gaps:** M9.2/9.3 already shipped; read-only tokens; plugins; Windows; `subscribe`.
 - **Weaknesses:** no native agent status (community plugins); no worktrees/orchestration; resurrection re-runs commands.
+- **Keys [S, 2026-10-22]:** the default preset quits Zellij on `Ctrl+q`, which is ptyro's default prefix since 2026-10-22. Inside Zellij, use its unlock-first preset or change `[ui] prefix` (SPEC §21.2).
 - **Ideas:** **read-only device tokens**; bookmarkable `/<session>` attach-or-resume URLs; mobile key row (Esc, Ctrl, arrows, **y/n for approvals**) (R-REM-03); `ptyro subscribe`; zjbar-compatible status feed = backlog `ptyro status-line` (R-EXT-04).
 
 #### C9. tmux 3.6–3.8 and its agent plugin ecosystem

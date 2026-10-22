@@ -30,7 +30,7 @@ use clap_complete::ArgValueCandidates;
     version,
     about = "A terminal-native home for your coding agents",
     long_about = "A terminal-native home for your coding agents.\n\nRun with no arguments to attach to the most recent session (or start a shell session).",
-    after_help = "Sessions keep running in the background daemon when you detach (Ctrl-Space d)."
+    after_help = "Sessions keep running in the background daemon when you detach (Ctrl-Q d)."
 )]
 struct Cli {
     /// Talk to the daemon in JSON instead of MessagePack (debugging).

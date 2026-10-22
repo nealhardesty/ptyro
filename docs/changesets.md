@@ -204,7 +204,7 @@ or merge tool: shipping is your train.
 ## In the TUI
 
 A set is a node at the top of the sidebar (`◆ add-user-tier working 2/3 ready · r2`, amber when
-it wants you), with its lead under it. `Ctrl-Space S` (or `⏎` on the node) opens the set view:
+it wants you), with its lead under it. `Ctrl-Q S` (or `⏎` on the node) opens the set view:
 one swimlane per member and the lead, the open gate (`1`–`9` answer it), the issues with their
 actions, and the ledger as a timeline where messages are arrows between lanes. `m` messages the
 selected lane, `⏎` shows its agent, `c` runs the checks, `p` takes a checkpoint.

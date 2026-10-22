@@ -598,17 +598,17 @@ async fn tui_attention_peek_answer_and_inbox() {
         .tui(&["attach", "busy"])
         .snapshot(1.4)
         // a: jump to the one that needs us.
-        .send(1.6, "\\x00a")
+        .send(1.6, "\\x11a")
         .snapshot(2.1)
         // p: peek, then y answers.
-        .send(2.3, "\\x00p")
+        .send(2.3, "\\x11p")
         .snapshot(2.9)
         .send(3.1, "y")
         .snapshot(4.0)
-        .send(4.2, "\\x00i")
+        .send(4.2, "\\x11i")
         .snapshot(4.7)
         .send(5.0, "\\e")
-        .send(5.3, "\\x00d"))
+        .send(5.3, "\\x11d"))
     .await;
     let start = r.at(1.4);
     assert!(

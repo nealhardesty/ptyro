@@ -58,7 +58,7 @@ range = "28000-28999"
 TOML
   "$bin" project add "$dir/demo" >/dev/null
   echo "sandbox ready: $dir (project 'demo')"
-  echo "try: C-Space n ⏎ ⏎ (an agent in a new worktree), C-Space N, C-Space r (serve), C-Space w"
+  echo "try: C-q n ⏎ ⏎ (an agent in a new worktree), C-q N, C-q r (serve), C-q w"
 fi
 cd "$dir/demo"
 exec "$bin" "$@"

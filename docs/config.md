@@ -18,7 +18,7 @@ The full schema is in [`SPEC.md`](../SPEC.md). This page covers the settings peo
 
 ```toml
 [ui]
-prefix = "C-a"            # default C-Space
+prefix = "C-]"            # default C-q
 theme = "ptyro-light"     # ptyro-dark (default), ptyro-light, high-contrast, or your own
 tint_borders = true       # colour pane dividers with the session's profile
 # mouse = false           # let the terminal own the mouse (native selection)

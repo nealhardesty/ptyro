@@ -292,11 +292,11 @@ async fn tui_splits_and_restores_the_layout_on_reattach() {
     spawn(&c, "agent", &[BIN, "fake-agent"]).await;
     spawn(&c, "logs", &["sh", "-c", "for i in $(seq 1 40); do echo log-$i; done; exec cat"]).await;
     let r = run(tui(&d, &["attach", "agent"])
-        .send(1.5, "\\x00v")
+        .send(1.5, "\\x11v")
         .send(1.9, "logs")
         .send(2.3, "\\r")
         .snapshot(3.2)
-        .send(3.6, "\\x00d")
+        .send(3.6, "\\x11d")
         .timeout(5.0))
     .await;
     let split = r.at(3.2);
@@ -304,7 +304,7 @@ async fn tui_splits_and_restores_the_layout_on_reattach() {
         split.contains("osc7501=yes") && split.contains("log-40"),
         "both panes visible:\n{split}"
     );
-    let r2 = run(tui(&d, &[]).snapshot(1.8).send(2.2, "\\x00d").timeout(4.0)).await;
+    let r2 = run(tui(&d, &[]).snapshot(1.8).send(2.2, "\\x11d").timeout(4.0)).await;
     let restored = r2.at(1.8);
     assert!(
         restored.contains("osc7501=yes") && restored.contains("log-40"),
@@ -318,21 +318,21 @@ async fn tui_copy_mode_searches_scrollback_and_yanks() {
     let c = d.client().await.unwrap();
     spawn(&c, "build", &["sh", "-c", "for i in $(seq 1 200); do echo row $i; done; echo 'ERROR: disk full'; seq 1 30; exec cat"]).await;
     let r = run(tui(&d, &["attach", "build"])
-        .send(1.4, "\\x00[")
+        .send(1.4, "\\x11[")
         .send(1.9, "/error\\r")
         .snapshot(2.4)
         .send(2.6, "V")
         .send(2.8, "y")
         .snapshot(3.2)
-        .send(3.4, "\\x00]")
+        .send(3.4, "\\x11]")
         .snapshot(3.9)
-        .send(4.2, "\\x00d"))
+        .send(4.2, "\\x11d"))
     .await;
     let found = r.at(2.4);
     assert!(found.contains("COPY") && found.contains("1/1"), "search found the match:\n{found}");
     assert!(found.contains("ERROR: disk full"));
     assert!(r.at(3.2).contains("copied 16 characters"), "{}", r.at(3.2));
-    // The original line has scrolled off; C-Space ] pasted the yank at `cat`'s cursor.
+    // The original line has scrolled off; C-q ] pasted the yank at `cat`'s cursor.
     assert!(!r.at(3.2).lines().take(18).any(|l| l.contains("ERROR")) || r.at(3.2).contains("30"));
     let last = r.at(3.9).lines().rev().find(|l| l.contains('│')).unwrap_or_default().to_owned();
     assert!(last.contains("ERROR: disk full"), "pasted:\n{}", r.at(3.9));
@@ -347,23 +347,23 @@ async fn tui_palette_finder_sidebar_and_restart() {
     let beta = r#"m=/tmp/ptyro-test-$PTYRO_SESSION_ID; echo I-am-beta; if [ -e $m ]; then rm $m; exec cat; fi; touch $m; exit 5"#;
     spawn(&c, "beta", &["sh", "-c", beta]).await;
     let r = run(tui(&d, &["attach", "alpha"])
-        .send(1.4, "\\x00/")
+        .send(1.4, "\\x11/")
         .send(1.8, "bet")
         .send(2.1, "\\r")
         .snapshot(2.6)
         .send(2.9, "\\r")
         .snapshot(3.6)
-        .send(3.9, "\\x00\\t")
+        .send(3.9, "\\x11\\t")
         .send(4.2, "k")
         .send(4.4, "\\r")
         .snapshot(4.9)
-        .send(5.2, "\\x00:")
+        .send(5.2, "\\x11:")
         .send(5.5, "pane.split_down")
         .send(5.8, "\\r")
         .send(6.1, "beta")
         .send(6.3, "\\r")
         .snapshot(6.9)
-        .send(7.1, "\\x00d")
+        .send(7.1, "\\x11d")
         .timeout(8.5))
     .await;
     let exited = r.at(2.6);

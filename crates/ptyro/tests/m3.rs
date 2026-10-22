@@ -801,7 +801,7 @@ async fn tui_wizard_fast_path_trusts_sets_up_and_follows_the_agent() {
     let r = run(w
         .tui(&["attach", "home-shell"])
         .snapshot(1.4)
-        .send(1.5, "\\x00n")
+        .send(1.5, "\\x11n")
         .snapshot(2.0)
         .send(2.2, "\\r")
         .snapshot(2.6)
@@ -809,7 +809,7 @@ async fn tui_wizard_fast_path_trusts_sets_up_and_follows_the_agent() {
         .snapshot(3.4)
         .send(3.6, "y")
         .snapshot(6.5)
-        .send(7.0, "\\x00d"))
+        .send(7.0, "\\x11d"))
     .await;
     let start = r.at(1.4);
     assert!(start.contains("▾ proj [wrk]"), "the tree, with the pin's label: {start}");
@@ -875,7 +875,7 @@ async fn tui_workspaces_tree_folding_and_worktree_removal() {
         .tui(&["attach", "worker"])
         .snapshot(1.4)
         // Sidebar: up to the worktree row, fold it, unfold it.
-        .send(1.5, "\\x00\\t")
+        .send(1.5, "\\x11\\t")
         .send(1.7, "k")
         .send(1.9, "h")
         .snapshot(2.2)
@@ -887,12 +887,12 @@ async fn tui_workspaces_tree_folding_and_worktree_removal() {
         .snapshot(3.8)
         .send(4.0, "n")
         // Workspace switcher.
-        .send(4.3, "\\x00w")
+        .send(4.3, "\\x11w")
         .snapshot(4.7)
         .send(4.9, "other")
         .send(5.1, "\\r")
         .snapshot(5.8)
-        .send(6.2, "\\x00d"))
+        .send(6.2, "\\x11d"))
     .await;
     assert!(r.at(1.4).contains("▾ dirty") && r.at(1.4).contains("worker"), "{}", r.at(1.4));
     let folded = r.at(2.2);
@@ -910,7 +910,7 @@ async fn tui_workspaces_tree_folding_and_worktree_removal() {
     let other = r.at(5.8);
     assert!(other.contains("WORKSPACE other") && !other.contains("lib"), "{other}");
     // The choice is remembered: a plain attach opens in `other`.
-    let r = run(w.tui(&[]).snapshot(1.5).send(1.8, "\\x00d").timeout(3.0)).await;
+    let r = run(w.tui(&[]).snapshot(1.5).send(1.8, "\\x11d").timeout(3.0)).await;
     assert!(r.at(1.5).contains("WORKSPACE other"), "{}", r.at(1.5));
 }
 
@@ -948,14 +948,14 @@ async fn tui_new_worktree_wizard() {
     // N, a name, ⏎, then the agent picker: ⏎ takes the default (claude).
     let r = run(w
         .tui(&["attach", "sh0"])
-        .send(1.5, "\\x00N")
+        .send(1.5, "\\x11N")
         .snapshot(1.9)
         .send(2.1, "spike")
         .send(2.3, "\\r")
         .snapshot(2.7)
         .send(2.9, "\\r")
         .snapshot(4.5)
-        .send(5.0, "\\x00d"))
+        .send(5.0, "\\x11d"))
     .await;
     assert!(r.at(1.9).contains("New worktree in tool (new worktree)"), "{}", r.at(1.9));
     assert!(r.at(2.7).contains("claude") && r.at(2.7).contains("no agent"), "{}", r.at(2.7));

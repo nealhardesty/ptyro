@@ -1,11 +1,18 @@
 # Keys
 
-Everything in the TUI starts with the **prefix**, `Ctrl-Space` by default (`[ui] prefix`). Press
-the prefix, release it, then the key. Press the prefix twice to send a real `Ctrl-Space` to the
+Everything in the TUI starts with the **prefix**, `Ctrl-Q` by default (`[ui] prefix`). Press
+the prefix, release it, then the key. Press the prefix twice to send a real `Ctrl-Q` to the
 program.
 
-`Ctrl-Space ?` lists every binding as it is configured right now, and `ptyro tour` is a
-60-second walkthrough. `Ctrl-Space :` (or `Ctrl-Space C-p`) opens the palette, which runs any
+`Ctrl-Q` is the default because none of Claude Code, Codex, Gemini CLI or OpenCode binds it, and
+it sits in the same place on every keyboard layout (SPEC §21.2). If a program around ptyro takes
+it first, choose another: `C-]` (not on layouts that need AltGr for `]`), or `C-Space` (free it
+from the macOS input-source shortcut first). In VS Code's terminal on Linux and Windows,
+`Ctrl-Q` opens Quick Open unless you add `-workbench.action.quickOpenView` to
+`terminal.integrated.commandsToSkipShell`. Zellij's default keys quit Zellij on `Ctrl-Q`.
+
+`Ctrl-Q ?` lists every binding as it is configured right now, and `ptyro tour` is a
+60-second walkthrough. `Ctrl-Q :` (or `Ctrl-Q C-p`) opens the palette, which runs any
 action by name.
 
 ## After the prefix
@@ -51,7 +58,7 @@ action by name.
 
 ## In the sidebar
 
-Focus the sidebar with `Ctrl-Space Tab`. These keys need no prefix there.
+Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.
 
 | Key | Does |
 |---|---|
@@ -72,13 +79,13 @@ Focus the sidebar with `Ctrl-Space Tab`. These keys need no prefix there.
 
 ## Peek and permission prompts
 
-In peek (`Ctrl-Space p`), `y` allows a permission prompt, `a` always allows, `n` denies. Or type
+In peek (`Ctrl-Q p`), `y` allows a permission prompt, `a` always allows, `n` denies. Or type
 a reply and press `⏎`.
 
 In a structured session's chat view, type into the pane and press `⏎` to send. On a permission
 card, `a` allows, `A` always allows, `d` denies. `Ctrl-C` interrupts the turn.
 
-## The inspector (`Ctrl-Space D`)
+## The inspector (`Ctrl-Q D`)
 
 Tabs `1`–`5` (or `Tab`): Diff, Commits, Checks, Ports, Events.
 
@@ -96,7 +103,7 @@ Tabs `1`–`5` (or `Tab`): Diff, Commits, Checks, Ports, Events.
 | `f` / `m` / `w` | Checks tab: send failing logs to the agent / auto-merge / watch |
 | `r` / `q` | refresh / close |
 
-## Runs (`Ctrl-Space O`) and change sets (`Ctrl-Space S`)
+## Runs (`Ctrl-Q O`) and change sets (`Ctrl-Q S`)
 
 - **Runs:** `⏎` opens a run, `c` opens the comparison (`m` merge, `p` PR, `d` discard,
   `i` iterate), `1`–`9` answer a gate (`n` with a note), `r` retries a step, `x` cancels,
@@ -106,7 +113,7 @@ Tabs `1`–`5` (or `Tab`): Diff, Commits, Checks, Ports, Events.
 
 ## Copy mode
 
-`Ctrl-Space [` freezes the scrollback so you can read it while output continues.
+`Ctrl-Q [` freezes the scrollback so you can read it while output continues.
 
 | Key | Does |
 |---|---|
@@ -129,7 +136,7 @@ Tabs `1`–`5` (or `Tab`): Diff, Commits, Checks, Ports, Events.
 
 ## The palette
 
-`Ctrl-Space :` runs any action by name, including ones with no default key: `project.add`
+`Ctrl-Q :` runs any action by name, including ones with no default key: `project.add`
 (pick from repos under `[discover] roots`), `project.trust`, `worktree.remove`,
 `session.command` (a session running a command line), `session.resume`, `session.hibernate`,
 `session.mute`, `notify.test`, `theme.next`, `config.edit`.
@@ -143,4 +150,4 @@ Tabs `1`–`5` (or `Tab`): Diff, Commits, Checks, Ports, Events.
 "nav:J" = "nav.down"                 # in the sidebar
 ```
 
-The action names are the ones the palette and `Ctrl-Space ?` show.
+The action names are the ones the palette and `Ctrl-Q ?` show.

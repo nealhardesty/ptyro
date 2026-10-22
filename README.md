@@ -87,13 +87,13 @@ ptyro project add       # once per repository
 ptyro                   # open the TUI (a shell session to start with)
 ```
 
-Every key starts with the **prefix**, `Ctrl-Space`. `Ctrl-Space ?` lists the keys; `ptyro tour`
+Every key starts with the **prefix**, `Ctrl-Q`. `Ctrl-Q ?` lists the keys; `ptyro tour`
 walks you through them.
 
-**2. Detach and come back.** Press `Ctrl-Space d`. Everything keeps running in the daemon. Run
+**2. Detach and come back.** Press `Ctrl-Q d`. Everything keeps running in the daemon. Run
 `ptyro` again and you're back on the same screen.
 
-**3. An agent in its own worktree.** Press `Ctrl-Space n`, then `⏎` `⏎`: Claude in a fresh
+**3. An agent in its own worktree.** Press `Ctrl-Q n`, then `⏎` `⏎`: Claude in a fresh
 worktree on its own branch. Or from the shell, with a first prompt:
 
 ```bash
@@ -110,13 +110,13 @@ ptyro new -d --agent claude --new-wt --prompt "fix the flaky test in tests/api.r
    ▾ brisk-rook +42 −7 ●      │
      2 ⚠ claude permission ⚑ │
      3 ● codex  Bash: cargo t │
- ptyro                main [work] 3 live · 1 working · 1 blocked  ✉2  C-Space ? help 14:02
+ ptyro                main [work] 3 live · 1 working · 1 blocked  ✉2  C-q ? help 14:02
 ```
 
-- `Ctrl-Space a` jumps to the next session that needs you (blocked first).
-- `Ctrl-Space p` peeks without switching: `y` allows a permission prompt, `n` denies, or type a
+- `Ctrl-Q a` jumps to the next session that needs you (blocked first).
+- `Ctrl-Q p` peeks without switching: `y` allows a permission prompt, `n` denies, or type a
   reply.
-- `Ctrl-Space i` opens the inbox. From the shell: `ptyro status`.
+- `Ctrl-Q i` opens the inbox. From the shell: `ptyro status`.
 
 ## Features
 
@@ -137,7 +137,7 @@ share = ["node_modules"]                  # shared, not copied
 setup = "pnpm install --frozen-lockfile"
 
 [scripts.run.dev]
-command = "pnpm dev --port $PTYRO_PORT"   # Ctrl-Space r runs it
+command = "pnpm dev --port $PTYRO_PORT"   # Ctrl-Q r runs it
 default = true
 ```
 
@@ -193,9 +193,9 @@ on = ["blocked"]
 
 ### Review and ship
 
-`Ctrl-Space D` opens the **inspector** on a worktree: the diff (against the base, unpushed, or
+`Ctrl-Q D` opens the **inspector** on a worktree: the diff (against the base, unpushed, or
 just the agent's last turn), line comments sent to the agent as one prompt, commit, PR and
-checks. `Ctrl-Space Q` lists worktrees waiting for your review.
+checks. `Ctrl-Q Q` lists worktrees waiting for your review.
 
 ```bash
 ptyro wt diff myrepo/brisk-rook --against last-turn   # what the agent's last turn changed
@@ -225,7 +225,7 @@ ptyro new --agent claude --lead --max-workers 3   # an agent that manages worker
 `implement-and-review` (a writer and a reviewer from another vendor), `best-of-n`, `test-fixer`
 and `overnight`. **Verified-done** (`--verify "cargo test"`) means an agent's turn only counts as
 done when the check passes. Agents can message each other, claim files, and every turn leaves a
-checkpoint you can restore. `Ctrl-Space O` shows every run. Try it with fake agents:
+checkpoint you can restore. `Ctrl-Q O` shows every run. Try it with fake agents:
 `make orchestrate-demo`.
 
 ### Change sets: one change across several repos
@@ -242,7 +242,7 @@ ptyro cs status add-user-tier              # members, gates, and what needs doin
 ptyro cs pr add-user-tier && ptyro cs land add-user-tier
 ```
 
-`Ctrl-Space S` shows the set as swimlanes. `make changeset-demo` runs one with fake agents. The
+`Ctrl-Q S` shows the set as swimlanes. `make changeset-demo` runs one with fake agents. The
 guide: [`docs/changesets.md`](docs/changesets.md).
 
 ### Your phone and other machines
@@ -273,7 +273,7 @@ ptyro convert fixer                        # take over in Claude's own TUI, same
 ptyro convert fixer --to structured        # and back
 ```
 
-`Ctrl-Space t` switches between the chat and terminal views.
+`Ctrl-Q t` switches between the chat and terminal views.
 
 ### Scripting
 
@@ -293,7 +293,7 @@ More recipes, including one that teaches *your agents* to drive ptyro, are in
 
 ## Essential keys
 
-All after the prefix, `Ctrl-Space`. The full list is in [`docs/keys.md`](docs/keys.md).
+All after the prefix, `Ctrl-Q`. The full list is in [`docs/keys.md`](docs/keys.md).
 
 | Key | Does |
 |---|---|
@@ -317,7 +317,7 @@ commented one and validates it when you save. Changes apply live.
 
 ```toml
 [ui]
-prefix = "C-a"                  # default C-Space
+prefix = "C-]"                  # default C-q
 theme = "ptyro-light"           # ptyro-dark (default), ptyro-light, high-contrast
 
 [agents.claude]
@@ -332,16 +332,19 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
 
 - **Inside tmux:** add `set -g allow-passthrough on` and `set -g extended-keys on` to
   `~/.tmux.conf` so Shift+Enter and clipboard copies reach ptyro.
-- **macOS:** free `Ctrl-Space` from the input-source shortcut, or pick another prefix.
+- **The prefix, `Ctrl-Q`,** is the one Ctrl+letter that none of Claude Code, Codex, Gemini CLI
+  and OpenCode uses. Press it twice to send a real `Ctrl-Q`. If something above ptyro takes it
+  (VS Code's terminal on Linux and Windows; Zellij), pick another with `[ui] prefix`, such as
+  `"C-]"`. `"C-Space"` works too, once you free it from macOS's input-source shortcut.
 - **Shift+Enter** reaches Claude when your terminal speaks the kitty keyboard protocol (Ghostty,
-  kitty, WezTerm, foot, recent iTerm2 and Alacritty). `Ctrl-Space ?` shows whether it's on.
+  kitty, WezTerm, foot, recent iTerm2 and Alacritty). `Ctrl-Q ?` shows whether it's on.
 - **Native mouse selection:** hold Shift while dragging, or set `[ui] mouse = false`.
 - **Prompt jumps and live cwd** need one line in your shell's rc file:
   `eval "$(ptyro shell-init zsh)"` (or `bash`; fish: `ptyro shell-init fish | source`).
 - **Completions:** `source <(ptyro completions zsh)` (or bash, fish…). **Start at login:**
   `ptyro daemon install-service` (systemd or launchd).
 - **Something odd?** Run `ptyro doctor`. `ptyro daemon logs` shows the daemon's log, and
-  `PTYRO_LOG=debug` makes it chatty. `Ctrl-Space C-l` redraws the screen.
+  `PTYRO_LOG=debug` makes it chatty. `Ctrl-Q C-l` redraws the screen.
 - **Recordings** of each session (for `ptyro replay` and `ptyro export`) can hold secrets that
   scrolled past. Turn them off with `[recorder] enabled = false`.
 

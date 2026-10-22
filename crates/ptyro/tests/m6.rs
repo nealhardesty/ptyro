@@ -182,7 +182,7 @@ async fn done_when_review_in_the_inspector_then_ship() {
     let r = ptyro_testkit::headless::run(
         w.tui(&["attach", "coder"])
             .snapshot(1.2)
-            .send(1.4, "\\x00D")
+            .send(1.4, "\\x11D")
             .snapshot(2.2)
             // Down to `+TWO` (header, one, -two, +TWO), comment.
             .send(2.4, "jjj")
@@ -197,7 +197,7 @@ async fn done_when_review_in_the_inspector_then_ship() {
             .send(5.0, "S")
             .snapshot(5.8)
             .send(6.0, "q")
-            .send(6.3, "\\x00d"),
+            .send(6.3, "\\x11d"),
     )
     .await
     .unwrap();
@@ -244,7 +244,7 @@ async fn done_when_review_in_the_inspector_then_ship() {
         w.json(&["wt", "status", "app/feat", "--json"])["pr"]["checks"][0]["bucket"] == "pass"
     });
     let r =
-        ptyro_testkit::headless::run(w.tui(&["attach", "coder"]).snapshot(1.5).send(1.7, "\\x00d"))
+        ptyro_testkit::headless::run(w.tui(&["attach", "coder"]).snapshot(1.5).send(1.7, "\\x11d"))
             .await
             .unwrap();
     assert!(r.at(1.5).contains("#7 ✓"), "the sidebar shows the PR and its checks: {}", r.at(1.5));
@@ -532,7 +532,7 @@ async fn inspector_tabs_and_last_turn() {
     assert_eq!(files, ["during.txt"], "{last}");
     let r = ptyro_testkit::headless::run(
         w.tui(&["attach", "tx"])
-            .send(1.0, "\\x00D")
+            .send(1.0, "\\x11D")
             .send(1.6, "2")
             .snapshot(2.2)
             .send(2.4, "5")
@@ -540,10 +540,10 @@ async fn inspector_tabs_and_last_turn() {
             .send(3.2, "3")
             .snapshot(3.6)
             .send(3.8, "q")
-            .send(4.0, "\\x00Q")
+            .send(4.0, "\\x11Q")
             .snapshot(4.6)
             .send(4.8, "\\e")
-            .send(5.0, "\\x00d"),
+            .send(5.0, "\\x11d"),
     )
     .await
     .unwrap();

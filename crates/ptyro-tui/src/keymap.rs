@@ -278,7 +278,7 @@ impl Keymap {
         let mut errors = Vec::new();
         let prefix = parse_key(&config.ui.prefix).map(normalize).unwrap_or_else(|e| {
             errors.push(format!("ui.prefix: {e}"));
-            key("C-Space")
+            key("C-q")
         });
         let mut map = Self { prefix, bindings: BTreeMap::new() };
         for (table, k, action) in DEFAULTS {
@@ -329,7 +329,8 @@ impl Keymap {
                     map.bindings.insert(slot(table, &k), (k, Command { action: s.id, arg }));
                 }
                 None => errors.push(format!(
-                    "keys.{spec_key:?}: unknown action {name:?} (see `C-Space ?` or the palette for the list)"
+                    "keys.{spec_key:?}: unknown action {name:?} (see `{} ?` or the palette for the list)",
+                    key_label(&map.prefix)
                 )),
             }
         }
@@ -400,14 +401,14 @@ mod tests {
     fn defaults_and_shifted_characters() {
         let (m, errors) = Keymap::new(&Config::default());
         assert!(errors.is_empty(), "{errors:?}");
-        assert!(m.is_prefix(ev(' ', Mods::CTRL)));
+        assert!(m.is_prefix(ev('q', Mods::CTRL)));
         assert_eq!(m.lookup(Table::Prefix, ev('d', 0)).unwrap().action, "app.detach");
         // Shift reported separately (kitty) or folded into the character (legacy) both match `X`.
         assert_eq!(m.lookup(Table::Prefix, ev('x', Mods::SHIFT)).unwrap().action, "session.kill");
         assert_eq!(m.lookup(Table::Prefix, ev('X', 0)).unwrap().action, "session.kill");
         assert_eq!(m.lookup(Table::Prefix, ev('?', Mods::SHIFT)).unwrap().action, "help");
         assert_eq!(m.lookup(Table::Prefix, ev('3', 0)).unwrap().number(), Some(3));
-        assert_eq!(m.key_for("app.detach").as_deref(), Some("C-Space d"));
+        assert_eq!(m.key_for("app.detach").as_deref(), Some("C-q d"));
     }
 
     #[test]

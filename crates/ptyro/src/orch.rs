@@ -773,7 +773,7 @@ pub async fn recipe(ctx: &Ctx, cmd: RecipeCmd) -> Result<i32, Error> {
                 } else {
                     println!("{}", r.state.id);
                     eprintln!(
-                        "started {} ({}): ptyro run show {} · Ctrl-Space O in the TUI",
+                        "started {} ({}): ptyro run show {} · Ctrl-Q O in the TUI",
                         r.state.name, r.state.id, r.state.id
                     );
                 }
@@ -830,7 +830,7 @@ pub async fn fanout(
         } else {
             println!("{}", r.state.id);
             eprintln!(
-                "fan-out {} with {} candidates: ptyro compare {} (when they're done) · Ctrl-Space O",
+                "fan-out {} with {} candidates: ptyro compare {} (when they're done) · Ctrl-Q O",
                 r.state.id,
                 r.order.len().saturating_sub(1),
                 r.state.id

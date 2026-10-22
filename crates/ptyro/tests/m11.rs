@@ -824,12 +824,12 @@ async fn the_tui_shows_a_set_as_swimlanes_with_its_ledger() {
     let r = ptyro_testkit::headless::run(
         w.tui(&["attach", "tv-lead"])
             .snapshot(1.5)
-            .send(1.7, "\\x00S")
+            .send(1.7, "\\x11S")
             .snapshot(2.5)
             .send(2.7, "\\r")
             .snapshot(3.6)
             .send(3.8, "q")
-            .send(4.1, "\\x00d"),
+            .send(4.1, "\\x11d"),
     )
     .await
     .unwrap();

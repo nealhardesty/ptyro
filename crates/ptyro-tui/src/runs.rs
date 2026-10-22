@@ -75,7 +75,12 @@ impl App {
         if opened > before
             && let Some((_, g)) = run.state.open_gates().last()
         {
-            self.toast(format!("gate {}: {} (Ctrl-Space O to answer)", g.id, g.ask));
+            self.toast(format!(
+                "gate {}: {} ({} O to answer)",
+                g.id,
+                g.ask,
+                ptyro_core::config::key_label(&self.keymap.prefix)
+            ));
         }
         let id = run.state.id.clone();
         let set = run.state.changeset.is_some();
@@ -210,7 +215,10 @@ impl App {
                     ..Default::default()
                 };
                 self.request(
-                    Pending::Done("fan-out started (Ctrl-Space O)".into()),
+                    Pending::Done(format!(
+                        "fan-out started ({} O)",
+                        ptyro_core::config::key_label(&self.keymap.prefix)
+                    )),
                     Request::Fanout { spec },
                 );
             }

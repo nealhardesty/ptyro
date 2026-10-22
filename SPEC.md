@@ -2131,7 +2131,7 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
 │ INBOX (2)                 │                                                             │
 │ ◉ quiet-jackdaw: Bash(...)│                                                             │
 ├───────────────────────────┴─────────────────────────────────────────────────────────────┤
-│ C-Space ? help · n new · a next attention · p peek · d detach        TERMINAL   12:41  │
+│ C-q ? help · n new · a next attention · p peek · d detach        TERMINAL   12:41      │
 └──────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -2147,8 +2147,9 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
 ### 11.2 Modes and focus
 
 - **Terminal mode** (default when a pane is focused): every key goes to the session, except the
-  **prefix** key (default `Ctrl-Space`, configurable; chosen because Claude Code, readline, Vim and
-  tmux's `C-b` don't use it). Prefix twice sends a literal prefix.
+  **prefix** key (default `Ctrl-Q`, configurable; chosen because it is the one Ctrl+letter that
+  Claude Code, Codex, Gemini CLI and OpenCode all leave free, §20.5). Prefix twice sends a
+  literal prefix.
 - **Navigation mode** (focus in sidebar or after prefix): single-key commands.
 - **Zoom**: pane fills the screen (sidebar hidden). **Raw attach** (`ptyro attach --raw`): no chrome
   at all; ideal over flaky SSH or on a phone terminal app; detach with `prefix d`.
@@ -2318,7 +2319,7 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
 
 ### 11.3 Default key map (after prefix) **[built M2; differs from the proposal where noted]**
 
-**[built M2]** The real table is generated: `C-Space ?` lists it and the palette shows each
+**[built M2]** The real table is generated: `C-q ?` lists it and the palette shows each
 action's key. Differences from the proposal below:
 - `c` closes a pane (`x` stops a session).
 - `C-r` restarts a session (`r`/`R` stay free for run scripts in M3).
@@ -2822,7 +2823,7 @@ change (debounced) and emits `ConfigReloaded`.
 
 ```toml
 [ui]
-prefix = "C-Space"
+prefix = "C-q"
 theme = "ptyro-dark"
 sidebar_width = 30
 show_ports = true
@@ -4496,6 +4497,21 @@ learn something the hard way.
 - **[verified M10]** `std::sync::Mutex` guards created inside a struct literal live until the end
   of the statement, so a later field that locks the same mutex deadlocks (`Session::image`'s
   `meta` field, then `is_live()`). This is the M7 double-lock again. Compute such fields first.
+- **Prefix-key survey (2026-10-22), the agents' default Ctrl+letter bindings** (for §21.2):
+  - **[verified docs]** Claude Code (code.claude.com, interactive mode) binds A B C D E G J K L N O
+    P R S T U V W Y Z, plus `C-x C-k`, `C-x C-e`, `C-x C-s`, `C-_` and `C-[`.
+  - **[verified docs]** Gemini CLI (geminicli.com, keyboard shortcuts) binds every letter but I, M
+    and Q. I and M are Tab and Enter anyway.
+  - **[verified docs]** OpenCode (opencode.ai/docs/keybinds) uses `ctrl+x` as its leader key and
+    binds A B C D E F G J K N P R T U V W Z directly.
+  - **[secondary]** Codex CLI: C, D, G (editor), L, O (copy), R, T (transcript); its keymap is
+    configurable (`/keymap`).
+  - So Q is the only Ctrl+letter free in all four. `C-]` and `C-\` are free too, but need AltGr on
+    many non-US layouts.
+  - **[secondary]** Outside the agents: VS Code on Linux and Windows binds Ctrl+Q to
+    `workbench.action.quickOpenView`. Its terminal swallows the key unless
+    `-workbench.action.quickOpenView` is added to `terminal.integrated.commandsToSkipShell`. Zellij's
+    default preset quits Zellij on Ctrl+q. Ctrl-Q is XON, but raw mode clears `IXON`, so it arrives.
 
 ### 20.6b GitHub CLI (`gh`), as ptyro uses it **[docs; tested against `fake-gh`, not the real `gh`]**
 
@@ -4592,10 +4608,16 @@ Checked against each tool's documentation on 2026-10-20. Marks: [V] official doc
 1. ~~**License**~~ — **decided 2026-10-20: MIT** ("for now"; `LICENSE` at repo root, `license =
    "MIT"` in every crate). MIT is compatible with alacritty_terminal's Apache-2.0. Relicensing to
    dual MIT OR Apache-2.0 later stays easy while the owner is the only contributor.
-2. ~~**Default prefix key**~~ — **decided 2026-10-20: `Ctrl-Space`, configurable** via
-   `[ui] prefix` (§13.2). Known caveat: macOS binds Ctrl-Space to "select previous input source"
-   when more than one input source is enabled; `ptyro doctor` and `ptyro init` should detect a
-   prefix that never arrives and suggest `C-a`/`C-]` or disabling the macOS shortcut.
+2. ~~**Default prefix key**~~ — **decided 2026-10-20: `Ctrl-Space`; changed 2026-10-22 to
+   `Ctrl-Q`**, configurable via `[ui] prefix` (§13.2). Why the change: on most Macs Ctrl-Space is
+   "select previous input source", so the default never arrived. Why `Ctrl-Q`: it is the only
+   Ctrl+letter that none of the four agents binds (survey in §20.5). It is also a letter, so it
+   works on layouts where `]` and `\` need AltGr. Its usual meaning (XON) is moot, because raw mode
+   turns flow control off. Readline and Vim only use it as a second key for `C-v`. Rejected:
+   `C-b` (Claude and Gemini use it to background tasks), `C-a` (line start; OpenCode's model list),
+   `C-x` (OpenCode's leader key), `C-]` / `C-\` (AltGr layouts; Vim tag jumps; SIGQUIT).
+   Caveats: VS Code's terminal on Linux and Windows and Zellij's default keys take `Ctrl-Q`. The
+   wording is in `docs/keys.md`. `ptyro init` still warns about `C-Space` on macOS.
 3. **Codex & Gemini hook injection** — which mechanism works without touching user config (M0.4/M0.5).
 4. ~~**Claude hooks injection**~~ — **decided 2026-10-20:** `--plugin-dir`; both mechanisms are additive (§8.2, M0.3).
 5. **Should the TUI offer a raw-passthrough fast path** when it is the only client and sizes match

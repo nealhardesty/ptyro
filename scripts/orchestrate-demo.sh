@@ -5,7 +5,7 @@
 # gate, and lets a lead agent start workers through `ptyro mcp` within its policy.
 #
 #   make orchestrate-demo           run it (about 20 s), then leave the daemon up to explore
-#   make orchestrate-demo ARGS=tui  …and open the TUI on it (Ctrl-Space O: runs)
+#   make orchestrate-demo ARGS=tui  …and open the TUI on it (Ctrl-Q O: runs)
 #   make orchestrate-demo ARGS=clean
 set -eu
 

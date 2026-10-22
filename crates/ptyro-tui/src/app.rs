@@ -516,7 +516,8 @@ impl App {
         let (ended, gates) = (unread(ptyro_core::status::AttentionKind::Run), self.open_gates());
         if ended + gates > 0 {
             self.toast(format!(
-                "while you were away: {ended} run update(s), {gates} gate(s) waiting — Ctrl-Space O"
+                "while you were away: {ended} run update(s), {gates} gate(s) waiting — {} O",
+                ptyro_core::config::key_label(&self.keymap.prefix)
             ));
         }
     }
@@ -1234,7 +1235,11 @@ impl App {
             (Pending::Spawned { .. } | Pending::Done(_), Err(e))
                 if e.code == ErrorCode::UntrustedProject =>
             {
-                self.toast_err(format!("{} (C-Space : → project.trust)", e.message));
+                self.toast_err(format!(
+                    "{} ({} : → project.trust)",
+                    e.message,
+                    ptyro_core::config::key_label(&self.keymap.prefix)
+                ));
             }
             (Pending::Scrollback { pane, session, then }, Ok(Reply::Scrollback { doc })) => {
                 if self.panes.get(&pane).is_some_and(|p| p.session == Some(session)) {
@@ -1428,7 +1433,7 @@ impl App {
                 Some(cmd) => self.run(&cmd),
                 None if key.code == KeyCode::Esc => {}
                 None => self.toast(format!(
-                    "{} {}: not bound (C-Space ? lists keys)",
+                    "{} {}: not bound ({0} ? lists keys)",
                     ptyro_core::config::key_label(&self.keymap.prefix),
                     ptyro_core::config::key_label(&keymap::normalize(key))
                 )),
@@ -1612,7 +1617,10 @@ impl App {
                             kind: PromptKind::WorktreeName(w),
                         });
                     }
-                    None => self.toast("no project here yet: C-Space : project.add"),
+                    None => self.toast(format!(
+                        "no project here yet: {} : project.add",
+                        ptyro_core::config::key_label(&self.keymap.prefix)
+                    )),
                 }
             }
             "workspace.switch" => self.open_workspaces(),
@@ -1709,7 +1717,10 @@ impl App {
                         Focus::Sidebar
                     }
                     Focus::Pane => {
-                        self.toast("the sidebar is hidden (C-Space \\ shows it)");
+                        self.toast(format!(
+                            "the sidebar is hidden ({} \\ shows it)",
+                            ptyro_core::config::key_label(&self.keymap.prefix)
+                        ));
                         Focus::Pane
                     }
                     Focus::Sidebar => Focus::Pane,
@@ -1784,7 +1795,10 @@ impl App {
             "copy.page_up" => self.enter_copy(CopyStart::Keys { page_up: true }),
             "paste.buffer" => match self.buffer.clone() {
                 Some(text) => self.forward(InputEvent::Paste { text }),
-                None => self.toast("nothing yanked yet (copy mode: C-Space [ … y)"),
+                None => self.toast(format!(
+                    "nothing yanked yet (copy mode: {} [ … y)",
+                    ptyro_core::config::key_label(&self.keymap.prefix)
+                )),
             },
             "view.chat" => {
                 match self
@@ -2899,7 +2913,10 @@ impl App {
         crate::osc52(&text);
         let n = text.chars().count();
         self.buffer = Some(text);
-        self.toast(format!("copied {n} characters (C-Space ] pastes)"));
+        self.toast(format!(
+            "copied {n} characters ({} ] pastes)",
+            ptyro_core::config::key_label(&self.keymap.prefix)
+        ));
     }
 
     // ── mouse ───────────────────────────────────────────────────────────────

@@ -156,7 +156,7 @@ pub async fn run(ctx: &Ctx, yes: bool, dry_run: bool) -> Result<i32, Error> {
     }
 
     section("preferences");
-    let prefix = ask.line("  prefix key (C-Space, C-a, C-])", &current.ui.prefix);
+    let prefix = ask.line("  prefix key (C-q, C-], C-Space)", &current.ui.prefix);
     if cfg!(target_os = "macos") && prefix == "C-Space" {
         eprintln!(
             "  note: macOS uses Ctrl-Space for input sources; free it in Keyboard settings, or pick another"

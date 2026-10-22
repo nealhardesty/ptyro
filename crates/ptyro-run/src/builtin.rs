@@ -88,7 +88,7 @@ verify = { candidates = ["a", "b", "c"], tests = "{{vars.test}}" }
 [[step]]
 id = "pick"
 needs = ["rank"]
-gate = { ask = "Best: {{steps.rank.outputs.best}}. Pick with `ptyro compare {{run.id}}` (or Ctrl-Space R), then say done.", options = ["done", "discard-all"] }
+gate = { ask = "Best: {{steps.rank.outputs.best}}. Pick with `ptyro compare {{run.id}}` (or Ctrl-Q R), then say done.", options = ["done", "discard-all"] }
 "#;
 
 pub const TEST_FIXER: &str = r#"name = "test-fixer"

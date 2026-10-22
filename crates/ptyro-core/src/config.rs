@@ -18,7 +18,7 @@ use crate::paths::Paths;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Ui {
-    /// The prefix key (SPEC §11.2), e.g. `C-Space`, `C-a`, `C-]`.
+    /// The prefix key (SPEC §11.2), e.g. `C-q`, `C-]`, `C-Space`.
     pub prefix: String,
     pub theme: String,
     pub sidebar: bool,
@@ -38,7 +38,7 @@ pub struct Ui {
 impl Default for Ui {
     fn default() -> Self {
         Self {
-            prefix: "C-Space".into(),
+            prefix: "C-q".into(),
             theme: "ptyro-dark".into(),
             sidebar: true,
             sidebar_width: 30,

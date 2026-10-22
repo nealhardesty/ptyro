@@ -7,7 +7,7 @@
 # set checkpoint restored across repositories, linked commits, and the merge train.
 #
 #   make changeset-demo           run it (about 30 s), then leave the daemon up to explore
-#   make changeset-demo ARGS=tui  …and open the TUI on it (Ctrl-Space S: the set view)
+#   make changeset-demo ARGS=tui  …and open the TUI on it (Ctrl-Q S: the set view)
 #   make changeset-demo ARGS=clean
 set -eu
 
@@ -128,4 +128,4 @@ for r in api sdk web; do echo "$r main: $(git -C "$dir/$r.git" log -1 --format=%
 say "ptyro cs log tier   (the ledger)"
 p cs log tier | tail -n 20
 printf '\nThe daemon is still up: PTYRO_HOME=%s %s cs show tier\n' "$PTYRO_HOME" "$bin"
-echo "make changeset-demo ARGS=tui opens the TUI (Ctrl-Space S); ARGS=clean removes it all"
+echo "make changeset-demo ARGS=tui opens the TUI (Ctrl-Q S); ARGS=clean removes it all"

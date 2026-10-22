@@ -87,7 +87,7 @@ const STARTER: &str = r#"# ptyro configuration. Every key is optional; see SPEC 
 # Changes apply live (the daemon reloads this file when it changes).
 
 [ui]
-# prefix = "C-Space"        # the key that starts ptyro commands, e.g. "C-a", "C-]"
+# prefix = "C-q"            # the key that starts ptyro commands, e.g. "C-]", "C-Space"
 # theme = "ptyro-dark"      # ptyro-dark, ptyro-light, high-contrast, or one of [themes.*]
 # sidebar = true
 # sidebar_width = 30
@@ -97,7 +97,7 @@ const STARTER: &str = r#"# ptyro configuration. Every key is optional; see SPEC 
 # scrollback_lines = 10000
 
 [keys]
-# Rebind after-prefix keys: "key" = "action [args]"; "none" unbinds. `C-Space ?` lists actions.
+# Rebind after-prefix keys: "key" = "action [args]"; "none" unbinds. `C-q ?` lists actions.
 # "a" = "session.next"
 # "global:M-1" = "session.focus 1"   # global: works without the prefix
 "#;

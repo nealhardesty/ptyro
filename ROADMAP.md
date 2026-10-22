@@ -86,7 +86,7 @@ promoted into the M1 crates (the `pty-pane` spike became `ptyro-term`, `ptyro-pt
       unproven until the branch is pushed.
 - [x] **M0.8** `docs/compat.md` skeleton (the manual compatibility matrix from SPEC §18.2) and
       `docs/fixtures.md` (how to record `.ptylog` fixtures). **S**
-- [x] **M0.9** Decide §21.1 (license: MIT) and §21.2 (prefix: `Ctrl-Space`, configurable) with the owner. **S**
+- [x] **M0.9** Decide §21.1 (license: MIT) and §21.2 (prefix: `Ctrl-Space`, configurable; changed to `Ctrl-Q` on 2026-10-22) with the owner. **S**
 - [ ] **M0.10 (spike, deferred to M3 by the owner)** Multi-account isolation (SPEC §10.10), for each installed agent with two
       real logins side by side on Linux *and* macOS:
       - does the isolation variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GEMINI_CLI_HOME`) fully
@@ -251,7 +251,7 @@ with zero risk of losing work.
       *Done:* `project add|ls|rm|show|config|discover`. The main checkout is found from inside linked worktrees; default branch from `origin/HEAD`; scan of `discover.roots`, cached for an hour; TUI `project.add` picker.
 - [x] **M3.3** Workspaces: default `main`, `ws new|ls|rm|rename|add|remove`, saved views,
       workspace switcher in TUI. **M**
-      *Done:* `main` always exists; `ws ls|new|set|rm|rename|add|remove`; views saved per workspace with the last one remembered; `C-Space w` switcher.
+      *Done:* `main` always exists; `ws ls|new|set|rm|rename|add|remove`; views saved per workspace with the last one remembered; `C-q w` switcher.
 - [x] **M3.4** `ptyro-git`: worktree add (fetch base, new/existing branch, `pull/<n>/head`), lock
       while running, ptyro marker file, `worktree list --porcelain` reconciliation, symlink refusal. **L**
       *Done:* `ptyro-git` (the git CLI, `GIT_OPTIONAL_LOCKS=0`): fetch the base (non-fatal offline), new/existing/remote branch, `pull/N/head`, `--no-track`; lock while sessions run; `ptyro.json` marker; reconciliation (missing, re-adopted); symlink refusal on ptyro-owned path parts.
@@ -281,7 +281,7 @@ with zero risk of losing work.
 - [x] **M3.13** New-session / new-worktree wizard (`n`, `N`), fast path `n ⏎ ⏎`. **M**
       *Done:* `n` (agent, then target; `n ⏎ ⏎` = default agent in a new worktree), `N` (name, then agent). The profile is shown with its reason; the pane follows the agent once setup ends.
 - [x] **M3.14** `wt open` editors (§13.2), `nvim` "inside" mode opens as a ptyro session. **S**
-      *Done:* `[editors]` plus built-ins (nvim/vim/hx inside, code/zed/cursor outside); `wt open`, `C-Space o`.
+      *Done:* `[editors]` plus built-ins (nvim/vim/hx inside, code/zed/cursor outside); `wt open`, `C-q o`.
 - [x] **M3.15** `ptyro gc` (stale worktrees report, interactive cleanup). **S**
       *Done:* `gc [--dry-run]`: gone, merged, unused for `stale_days`; asks for each, never forces.
 - [x] **M3.16** Branch name templates + optional auto-rename-from-first-prompt (`wt rename-branch`). **S**
@@ -932,7 +932,7 @@ Goal: agents driven over structured protocols, for orchestration-heavy and mobil
         glue is `structured.rs`, with status from the protocol, the transcript also rendered
         into the emulator, and a line editor for keys.
       - `ServerMsg::Chat` streams, and `read --chat` dumps the transcript.
-      - TUI chat view: cards, diffs, permission card with a/A/d, composer, PageUp/Down, `C-Space
+      - TUI chat view: cards, diffs, permission card with a/A/d, composer, PageUp/Down, `C-q
         t` for the terminal view. The web app has one too.
       - Live upgrades carry it mid-turn.
 - [x] **M10.2** ACP client (stdio JSON-RPC) — Gemini `--acp`, OpenCode, and other ACP agents. **L**
