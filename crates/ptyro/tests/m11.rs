@@ -184,6 +184,32 @@ impl World {
         self.json(&["cs", "show", set, "--json"])
     }
 
+    /// Wait until the set's agents are idle with no mail still to read. A revision reaches the
+    /// members it doesn't affect at their next idle, so its turn can start under the next step.
+    fn settle(&self, set: &str) {
+        let info = self.show(set);
+        let run = s(&info["run"]).to_owned();
+        let mut agents: Vec<String> = info["sessions"]
+            .as_object()
+            .into_iter()
+            .flat_map(|m| m.values().map(|v| s(v).to_owned()))
+            .collect();
+        agents.extend(info["lead"].as_str().map(str::to_owned));
+        self.until("the set's agents settle", || {
+            // Seen means the prompt hook ran, which also marked that turn working.
+            let unread =
+                self.json(&["msg", "ls", "--run", &run, "--json"]).as_array().is_some_and(|a| {
+                    a.iter().any(|m| {
+                        !s(&m["to"]).starts_with('@') && !matches!(s(&m["state"]), "seen" | "acked")
+                    })
+                });
+            !unread
+                && agents.iter().all(|a| {
+                    self.json(&["status", a, "--json"])["session"]["status"]["status"] != "working"
+                })
+        });
+    }
+
     fn member<'a>(&self, info: &'a Value, name: &str) -> &'a Value {
         info["set"]["members"].as_array().unwrap().iter().find(|m| m["name"] == name).unwrap()
     }
@@ -347,7 +373,9 @@ fn done_when_a_set_drafts_approves_builds_restores_and_lands() {
     w.wait_screen("tier-sdk", "IsFree");
     // api said ready against r1, but r2 doesn't affect it: not stale.
     assert_ne!(w.show("tier")["report"]["state"], "stale_contract");
-    // A set checkpoint, a bad turn across two repositories, and a restore.
+    // A set checkpoint, a bad turn across two repositories, and a restore (which needs every
+    // member idle: api and web read r2 at their own pace).
+    w.settle("tier");
     std::fs::write(root.join("sdk/sdk.txt"), "IsPro\n").unwrap();
     std::fs::write(root.join("web/web.txt"), "PRO badge\n").unwrap();
     let ck = w.ok(&["cs", "checkpoint", "tier", "good"]);
@@ -544,6 +572,8 @@ fn every_failure_mode_has_a_state_and_an_action() {
     assert_eq!(info["report"]["members"]["api"], "stale");
     assert_eq!(info["report"]["members"]["sdk"], "ready", "r2 doesn't concern sdk");
     w.wait_screen("fm-sdk", "fake claude");
+    // sdk reads r2 at its next idle: a good turn that would clear the failure below.
+    w.settle("fm");
     w.ok(&["send", "fm-sdk", "fail"]);
     w.until("sdk failed", || w.show("fm")["report"]["state"] == "member_failed");
     let info = w.show("fm");
@@ -652,11 +682,13 @@ fn a_set_lead_uses_its_tools_and_the_set_survives_a_restart() {
     let i = w.json(&["cs", "new", "mc", "--projects", "api,web", "--gates", "contract", "--json"]);
     let root = PathBuf::from(s(&i["set"]["root"]));
     w.wait_screen("mc-lead", "fake claude");
-    w.ok(&["send", "mc-lead", "mcp cs_status {}"]);
-    w.wait_screen("mc-lead", "\"state\": \"drafting\"");
+    // The contract is written before the lead's first turn ends: once the lead has spoken, the
+    // actor records a CONTRACT.md saved while it's idle as r1 itself, racing the submit.
     std::fs::write(root.join("CONTRACT.md"), "# C\n\n## web\naffects: web\n\nbadge\n").unwrap();
     w.ok(&["send", "mc-lead", r#"mcp cs_contract_submit {"summary":"first"}"#]);
     w.wait_screen("mc-lead", "\"rev\": 1");
+    w.ok(&["send", "mc-lead", "mcp cs_status {}"]);
+    w.wait_screen("mc-lead", "\"state\": \"contract_review\"");
     w.ok(&["cs", "contract", "mc", "approve"]);
     w.until("members", || w.show("mc")["sessions"].as_object().is_some_and(|m| m.len() == 2));
     w.ok(&["send", "mc-lead", r#"mcp cs_assign {"member":"web","task":"render the badge"}"#]);

@@ -3622,7 +3622,9 @@ After every agent turn that changed its worktree, the turn is checkpointed:
 
 After every agent turn it runs for that project (`[orchestration] radar`). Each new overlap
 messages both agents once (kind `collision`), with the other side's hunks of the shared files.
-Candidates of the same fan-out or verify step are alternatives and aren't messaged.
+Candidates of the same fan-out or verify step are alternatives and aren't messaged, also after
+the run has ended (a human taking one over). Mail typed into a structured session queues as a
+turn of its own ahead of the next prompt, so a stray message also ends `send --wait` early.
 
 #### 15.6.8 Leads and `ptyro mcp` (M7.6)
 

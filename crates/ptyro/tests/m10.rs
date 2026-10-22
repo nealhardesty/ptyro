@@ -139,16 +139,16 @@ fn done_when_structured_fanout_with_tool_visibility_and_takeover() {
     ]);
     let run = out.lines().next().unwrap().trim().to_owned();
     w.until("the fan-out", || {
-        w.json(&["run", "show", &run, "--json"])["state"]["status"] == "succeeded"
+        let r = w.json(&["run", "show", &run, "--json"]);
+        assert_ne!(r["state"]["status"], "failed", "{r:#}");
+        r["state"]["status"] == "succeeded"
     });
     let sessions = w.json(&["ls", "--json"]);
     for name in ["ans-claude", "ans-codex", "ans-gemini"] {
-        let s = sessions
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|s| s["name"] == name)
-            .unwrap_or_else(|| panic!("{name}: {sessions:#}"));
+        let s =
+            sessions.as_array().unwrap().iter().find(|s| s["name"] == name).unwrap_or_else(|| {
+                panic!("{name}: {sessions:#}\n{:#}", w.json(&["run", "show", &run, "--json"]))
+            });
         assert!(s["structured"].is_string(), "{name} runs structured: {s:#}");
     }
     let doc = w.json(&["compare", &run, "--json"]);
@@ -196,6 +196,10 @@ fn done_when_structured_fanout_with_tool_visibility_and_takeover() {
             .iter()
             .any(|i| i["t"] == "assistant" && i["text"] == "you said: hello again")
     );
+    // Candidates are alternatives, also once the run is over: the radar doesn't warn them about
+    // each other (that mail would run as a turn ahead of the prompt above).
+    let mail = w.json(&["msg", "ls", "--json"]);
+    assert!(!mail.as_array().unwrap().iter().any(|m| m["kind"] == "collision"), "{mail:#}");
     // Converting needs the mode to differ.
     let again = w.cli(&["convert", "ans-claude", "--to", "structured"]);
     assert_eq!(again.status.code(), Some(5), "{}", String::from_utf8_lossy(&again.stderr));

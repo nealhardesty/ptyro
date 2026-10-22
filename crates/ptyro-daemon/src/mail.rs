@@ -937,13 +937,14 @@ impl Daemon {
         tokio::spawn(async move {
             let Ok(r) = me.radar(&project).await else { return };
             for o in r.overlaps {
-                // A fan-out's candidates overlap by design: they're alternatives, not collisions.
+                // A fan-out's candidates overlap by design: they're alternatives, not collisions,
+                // also after the run ended (a human taking one over) and while one is dormant.
                 let run_of_wt = |wt: &str| {
-                    me.find_worktree(wt)
-                        .ok()
-                        .and_then(|w| me.owner(&w))
-                        .and_then(|s| me.run_of_session(&s.id.full()))
-                        .map(|(r, _, _)| r)
+                    me.find_worktree(wt).ok().and_then(|w| {
+                        me.sessions_in(&w.id).into_iter().find_map(|s| {
+                            s.meta.lock().expect("meta").run.as_ref().map(|(r, _)| r.clone())
+                        })
+                    })
                 };
                 if let (Some(ra), Some(rb)) = (run_of_wt(&o.a), run_of_wt(&o.b))
                     && ra == rb
