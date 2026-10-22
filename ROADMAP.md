@@ -1210,6 +1210,14 @@ Other ideas:
 - **Sidebar width keys**: with the sidebar focused, `<` / `>` narrow and widen it a column at a
   time. These match the pane-resize keys after the prefix, and both are free in the sidebar. They
   share the 12–80 clamp and the saved view with the drag above.
+- **Offer to register the repo you're in**: running `ptyro` inside a git repository that isn't a
+  project yet just opens a shell session. Then `Ctrl-Q N` says "no project here yet". Instead,
+  when the current workspace has no project for the cwd's repo, ask "register `myrepo` as a
+  project? [Y/n]" and add it to *that* workspace. `ptyro project add` without `--workspace`
+  always uses `main`, which is easy to miss.
+- **"No project" opens the picker**: when `worktree.new` (or anything else that needs a project)
+  finds none, open the `project.add` discovery picker directly instead of showing a toast that
+  names the palette command. Once you pick a project, carry on with the action that asked for it.
 - **Pre-trusted Claude worktrees** (M11.0): every new worktree shows Claude's folder-trust dialog
   (ptyro can answer it now). Codex worktrees inherit their project's trust (§20.2); Claude has no
   flag, so this would mean writing `hasTrustDialogAccepted` into the profile's `.claude.json`,
