@@ -207,6 +207,9 @@ impl Adapter for Claude {
                 }
             }
             "Stop" => {
+                if let Some(m) = str_of(p, "last_assistant_message") {
+                    out.push(Signal::Reply { text: m.to_owned() });
+                }
                 out.push(Signal::status(AgentStatus::Idle));
                 out.push(Signal::TurnEnd);
             }
@@ -373,6 +376,9 @@ mod tests {
         );
         assert!(n.contains(&Signal::blocked("question", Some("Which file?".into()))));
         assert!(c.on_hook("Stop", &json!({})).contains(&Signal::TurnEnd));
+        // 2.1.308's Stop carries the turn's last message.
+        let stop = c.on_hook("Stop", &json!({"last_assistant_message": "All tests pass."}));
+        assert!(stop.contains(&Signal::Reply { text: "All tests pass.".into() }));
     }
 
     #[test]

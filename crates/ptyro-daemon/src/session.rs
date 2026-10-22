@@ -105,6 +105,8 @@ pub struct Meta {
     /// The worktree's state when the current (or last) turn started (`git stash create`).
     pub turn_base: Option<String>,
     pub turn_started_ms: u64,
+    /// The agent's last message of the current turn, once it ended (`Signal::Reply`).
+    pub last_reply: Option<String>,
     /// Verified-done (M7.9).
     pub verify: Option<ptyro_core::session::Verify>,
     /// `(run, step)` it works for (M7.1).
@@ -281,6 +283,7 @@ fn new_meta(
         turns: 0,
         turn_base: None,
         turn_started_ms: 0,
+        last_reply: None,
         verify: None,
         run: None,
         guard: None,

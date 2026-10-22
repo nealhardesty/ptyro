@@ -3601,7 +3601,8 @@ After every agent turn that changed its worktree, the turn is checkpointed:
 - **Loop safety:** ≤50 queued per recipient, an identical body from the same sender within 60 s
   is dropped, ≤4 hops, a TTL on everything (`message_ttl`), idempotency keys.
 - **Heartbeats** come from the status engine: a lead's workers report `worker_done` (turn
-  over, with the last message), blocked and exited on their own.
+  over, with the last message: the agent's own reply when its adapter reports one, else the
+  screen's last line), blocked and exited on their own.
 - **Typing** into a session is serialized: a prompt (text, pause, Enter) never interleaves with
   another typist.
 
@@ -4204,6 +4205,10 @@ learn something the hard way.
   `SessionStart` (`source`: startup|resume|clear|compact|fork), `SessionEnd`. Common fields:
   `session_id`, `transcript_path`, `cwd`, `permission_mode`, `hook_event_name`.
   https://code.claude.com/docs/en/hooks
+- **[verified 2026-10-22, 2.1.308 binary schema]** `Stop` (and `StopFailure`, `SubagentStop`)
+  carry an optional `last_assistant_message`: the text of the turn's last reply. ptyro maps it to
+  `Signal::Reply`, the summary of a `worker_done`, a run's `last_message` and the review queue.
+  OSC 7501 `done` can arrive before the `Stop` hook, so the lead's notice waits up to 1 s for it.
 - **[verified in binary]** `idle_prompt` notifications are delayed by `messageIdleNotifThresholdMs`
   (default 60 000 ms) ⇒ use `Stop` for "turn ended", not `idle_prompt`.
 - **[docs]** `--resume` does not restore `--settings`, `--mcp-config`, `--plugin-dir`, `--add-dir`.

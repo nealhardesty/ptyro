@@ -675,19 +675,9 @@ impl Daemon {
         }
         let Some(lead) = self.run_info(&run).and_then(|i| i.state.lead) else { return };
         let info = self.info(s);
-        let last = info.status.as_ref().and_then(|r| r.detail.clone()).or_else(|| {
-            crate::review::last_line(&s.read_screen(ptyro_protocol::ScreenFormat::Plain))
-        });
         let (kind, body) = match what {
-            "done" => (
-                "worker_done",
-                format!(
-                    "{} finished turn {}{}",
-                    info.name,
-                    info.turns,
-                    last.map(|l| format!(": {l}")).unwrap_or_default()
-                ),
-            ),
+            // The summary is filled in below, once the turn's reply had a chance to arrive.
+            "done" => ("worker_done", format!("{} finished turn {}", info.name, info.turns)),
             "blocked" => (
                 "status",
                 format!(
@@ -703,7 +693,26 @@ impl Daemon {
             _ => ("status", format!("{} exited ({})", info.name, info.state.label())),
         };
         let me2 = Arc::clone(self);
+        let s = Arc::clone(s);
+        // Claude's 7501 `done` can beat the `Stop` hook that carries the reply: give it 1 s.
+        let tries = if s.adapter().is_some_and(|a| ptyro_agents::adapter(&a).caps().hooks) {
+            10
+        } else {
+            0
+        };
         tokio::spawn(async move {
+            let mut body = body;
+            if kind == "worker_done" {
+                for _ in 0..tries {
+                    if s.meta.lock().expect("meta").last_reply.is_some() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                if let Some(l) = crate::review::last_message(&s) {
+                    body.push_str(&format!(": {l}"));
+                }
+            }
             let _ = me2
                 .post(Some("@ptyro"), &lead, kind, &body, Some(run), None, None, None, None)
                 .await;

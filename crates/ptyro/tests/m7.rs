@@ -279,6 +279,8 @@ fn done_when_a_lead_coordinates_workers_within_its_policy() {
     // Workers report themselves too: their turn ends reach the lead's mailbox.
     w.ok(&["send", "lead", r#"mcp check_messages {"wait_s":10}"#]);
     w.wait_screen("lead", "worker_done");
+    // Summed up by the worker's reply ("one"), not its screen's last line ("worked: one").
+    w.wait_screen("lead", "w1 finished turn 1: one");
     w.ok(&["send", "lead", r#"mcp post_message {"to":"@user","body":"both workers are done"}"#]);
     w.until("the report reached the inbox", || {
         w.json(&["inbox", "--json"])

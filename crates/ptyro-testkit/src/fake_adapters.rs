@@ -356,8 +356,8 @@ impl Fake {
                 // Claude: a Stop hook that blocks keeps the turn going.
                 let mut active = false;
                 for _ in 0..10 {
-                    let Some(a) = self.hook_out("Stop", json!({ "stop_hook_active": active }))
-                    else {
+                    let stop = json!({ "stop_hook_active": active, "last_assistant_message": msg });
+                    let Some(a) = self.hook_out("Stop", stop) else {
                         return;
                     };
                     if a["decision"] != "block" {

@@ -458,14 +458,7 @@ impl Daemon {
             }
             let waiting_ms = now.saturating_sub(finished_at);
             score += (waiting_ms / 600_000).min(20) as i32;
-            let last_message = s
-                .engine
-                .lock()
-                .expect("engine")
-                .record
-                .as_ref()
-                .and_then(|r| r.detail.clone())
-                .or_else(|| last_line(&s.read_screen(ptyro_protocol::ScreenFormat::Plain)));
+            let last_message = last_message(s);
             items.push(ReviewItem {
                 worktree: wt.clone(),
                 session: Some(s.id.full()),
@@ -730,6 +723,18 @@ impl Daemon {
         }
         Ok(Reply::Notes { notes: result.1 })
     }
+}
+
+/// What the agent last said: its turn's reply when the adapter reports one, else the status
+/// detail, else the screen's last meaningful line.
+pub(crate) fn last_message(s: &crate::session::Session) -> Option<String> {
+    let reply = s.meta.lock().expect("meta").last_reply.clone();
+    reply
+        .as_deref()
+        .and_then(|r| r.lines().map(str::trim).find(|l| !l.is_empty()))
+        .map(|l| l.chars().take(140).collect())
+        .or_else(|| s.engine.lock().expect("engine").record.as_ref().and_then(|r| r.detail.clone()))
+        .or_else(|| last_line(&s.read_screen(ptyro_protocol::ScreenFormat::Plain)))
 }
 
 pub(crate) fn last_line(screen: &str) -> Option<String> {

@@ -1307,10 +1307,7 @@ impl Daemon {
         if let Some(v) = &info.verify {
             o.insert("verified".into(), json!(v.state == ptyro_core::session::VerifyState::Passed));
         }
-        let last = info.status.as_ref().and_then(|r| r.detail.clone()).or_else(|| {
-            crate::review::last_line(&s.read_screen(ptyro_protocol::ScreenFormat::Plain))
-        });
-        o.insert("last_message".into(), json!(last));
+        o.insert("last_message".into(), json!(crate::review::last_message(s)));
         // A structured session knows exactly what it said and did (M10).
         if let Some(st) = &s.structured {
             let chat = st.chat.lock().expect("chat");

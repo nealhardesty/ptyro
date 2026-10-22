@@ -289,6 +289,7 @@ impl Daemon {
                     changed = true;
                 }
                 Signal::Notify { text } => notes.push(text),
+                Signal::Reply { text } => s.meta.lock().expect("meta").last_reply = Some(text),
                 Signal::Messaging { socket } => {
                     s.meta.lock().expect("meta").messaging = Some(socket)
                 }
@@ -306,6 +307,9 @@ impl Daemon {
     }
 
     async fn on_transition(self: &Arc<Self>, s: &Arc<Session>, t: &Transition) {
+        if t.to.status == AgentStatus::Working {
+            s.meta.lock().expect("meta").last_reply = None;
+        }
         if t.from == Some(AgentStatus::Working)
             && matches!(t.to.status, AgentStatus::Idle | AgentStatus::Done)
         {

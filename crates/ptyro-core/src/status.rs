@@ -172,6 +172,8 @@ pub enum Signal {
     },
     /// The agent asked for the user's attention in words.
     Notify { text: String },
+    /// The agent's last message of a turn (Claude `Stop`, Codex `agent-turn-complete`).
+    Reply { text: String },
     /// Claude's messaging socket (learned from the hook environment; SPEC §20.1).
     Messaging { socket: String },
 }

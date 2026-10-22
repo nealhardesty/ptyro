@@ -229,6 +229,9 @@ impl Adapter for Codex {
             }
             // `notify` gets `{type: "agent-turn-complete", thread-id, last-assistant-message, …}`.
             "notify" if str_of(p, "type") == Some("agent-turn-complete") => {
+                if let Some(m) = str_of(p, "last-assistant-message") {
+                    out.push(Signal::Reply { text: m.to_owned() });
+                }
                 out.push(Signal::status(AgentStatus::Idle));
                 out.push(Signal::TurnEnd);
                 if let Some(m) = str_of(p, "last-assistant-message") {
@@ -368,6 +371,7 @@ mod tests {
         assert!(
             n.contains(&Signal::TurnEnd)
                 && n.contains(&Signal::Notify { text: "All tests pass.".into() })
+                && n.contains(&Signal::Reply { text: "All tests pass.\nDetails".into() })
         );
         assert_eq!(Codex.on_title("⠋ codex"), Some(Signal::status(AgentStatus::Working)));
         assert_eq!(Codex.on_title("codex"), None);
