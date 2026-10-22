@@ -911,13 +911,40 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                 r.y + 1,
             ));
         }
-        Overlay::Prompt { title, text, .. } => {
+        Overlay::Prompt { title, text, kind } => {
             let r = boxed(area, 70, 4);
             f.render_widget(Clear, r);
-            let lines = vec![
-                Line::from(vec![Span::styled("› ", fg(app, t.accent)), Span::raw(text.clone())]),
-                Line::styled("⏎ ok · Esc cancel · C-u clear", fg(app, t.dim)),
-            ];
+            // Checked as it's typed: characters a name can't hold are marked where they are.
+            let check = app.prompt_check(kind, text);
+            let bad = fg(app, t.error).add_modifier(Modifier::UNDERLINED);
+            let mut field = vec![Span::styled("› ", fg(app, t.accent))];
+            if kind.is_name() && check.is_err() {
+                field.extend(text.chars().map(|c| {
+                    let style = if ptyro_core::names::allowed(c) { Style::new() } else { bad };
+                    Span::styled(c.to_string(), style)
+                }));
+            } else {
+                field.push(Span::raw(text.clone()));
+            }
+            let help = match check {
+                Err(e) => {
+                    let fix = kind
+                        .is_name()
+                        .then(|| ptyro_core::names::tidy(text))
+                        .flatten()
+                        .map(|n| format!(" · Tab → {n}"))
+                        .unwrap_or_default();
+                    Line::styled(format!("✗ {e}{fix}"), fg(app, t.error))
+                }
+                Ok(note) => Line::styled(
+                    match note {
+                        Some(n) => format!("⏎ ok ({n}) · Esc cancel · C-u clear"),
+                        None => "⏎ ok · Esc cancel · C-u clear".into(),
+                    },
+                    fg(app, t.dim),
+                ),
+            };
+            let lines = vec![Line::from(field), help];
             f.render_widget(Paragraph::new(lines).block(block(title.clone())), r);
             f.set_cursor_position(Position::new(r.x + 3 + text.chars().count() as u16, r.y + 1));
         }

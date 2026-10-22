@@ -160,6 +160,13 @@ pub enum PromptKind {
     Sets(crate::sets::SetsInput),
 }
 
+impl PromptKind {
+    /// The text is a name (`[a-z0-9._-]`): bad characters are marked and Tab tidies it.
+    pub fn is_name(&self) -> bool {
+        matches!(self, Self::Rename(_) | Self::WorktreeName(_) | Self::NewWorkspace)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Confirmed {
     Stop(SessionId),
@@ -2591,7 +2598,15 @@ impl App {
             },
             Overlay::Prompt { title, mut text, kind } => match key.code {
                 KeyCode::Esc => {}
+                // The problem is already on screen; keep what was typed so it can be fixed.
+                KeyCode::Enter if self.prompt_check(&kind, &text).is_err() => {
+                    self.overlay = Some(Overlay::Prompt { title, text, kind });
+                }
                 KeyCode::Enter => self.prompt_done(text, kind),
+                KeyCode::Tab if kind.is_name() => {
+                    let text = ptyro_core::names::tidy(&text).unwrap_or(text);
+                    self.overlay = Some(Overlay::Prompt { title, text, kind });
+                }
                 KeyCode::Backspace => {
                     text.pop();
                     self.overlay = Some(Overlay::Prompt { title, text, kind });
@@ -2743,6 +2758,59 @@ impl App {
         }
     }
 
+    /// What the prompt's text would do, checked on every keystroke and shown under it: `Err`
+    /// is a problem (⏎ is refused until it's fixed), `Ok(Some)` a note. The daemon checks
+    /// again; this only says it sooner, mirroring its rules from what the TUI already knows.
+    pub(crate) fn prompt_check(
+        &self,
+        kind: &PromptKind,
+        text: &str,
+    ) -> Result<Option<String>, String> {
+        let t = text.trim();
+        let name = |t: &str| ptyro_core::names::problem(t).map_or(Ok(()), Err);
+        match kind {
+            PromptKind::Rename(id) => {
+                let current = self.session(*id).map(|s| s.name.as_str());
+                if t.is_empty() || current == Some(t) {
+                    return Ok(Some("unchanged".into()));
+                }
+                name(t)?;
+                if self.sessions.iter().any(|s| s.id != *id && s.name == t) {
+                    return Err(format!("a session named {t} exists"));
+                }
+            }
+            PromptKind::WorktreeName(w) if !t.is_empty() => {
+                name(t)?;
+                if let Some(x) = self
+                    .worktrees
+                    .iter()
+                    .find(|x| Some(&x.project) == w.project.as_ref() && x.name == t)
+                {
+                    return Err(format!("{}/{t} exists", x.project_slug));
+                }
+            }
+            PromptKind::NewWorkspace if !t.is_empty() => {
+                name(t)?;
+                if self.workspaces.iter().any(|w| w.name == t) {
+                    return Err(format!("workspace {t} exists"));
+                }
+            }
+            PromptKind::Orch(crate::runs::OrchInput::FanoutAgents { .. }) => {
+                for a in t.split([',', ' ']).map(str::trim).filter(|a| !a.is_empty()) {
+                    let (agent, _) = ptyro_agents::split_agent(a);
+                    if ptyro_agents::command(&self.config, agent).is_none() {
+                        return Err(format!(
+                            "unknown agent {agent} (known: {})",
+                            ptyro_agents::names(&self.config).join(", ")
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(None)
+    }
+
     fn prompt_done(&mut self, text: String, kind: PromptKind) {
         match kind {
             PromptKind::Command(w) => {
@@ -2763,14 +2831,7 @@ impl App {
                 }
             }
             PromptKind::WorktreeName(mut w) => {
-                let name = text.trim().to_owned();
-                if !name.is_empty()
-                    && let Err(e) = ptyro_core::names::validate(&name)
-                {
-                    self.toast_err(e);
-                    return;
-                }
-                w.name = Some(name);
+                w.name = Some(text.trim().to_owned());
                 // Then: which agent (shell for none).
                 let mut items: Vec<Item> = ptyro_agents::names(&self.config)
                     .into_iter()
@@ -2850,7 +2911,8 @@ impl App {
             }
             PromptKind::Rename(id) => {
                 let name = text.trim().to_owned();
-                if !name.is_empty() {
+                let same = self.session(id).is_some_and(|s| s.name == name);
+                if !name.is_empty() && !same {
                     self.request(
                         Pending::Done(format!("renamed to {name}")),
                         Request::Rename { addr: id.full(), name },
@@ -3614,5 +3676,105 @@ mod tests {
         assert_eq!(anchor_index(&gone, Some(&sel), 2), 1);
         assert_eq!(anchor_index(&gone, None, 0), 1);
         assert_eq!(anchor_index(&[], Some(&sel), 3), 0);
+    }
+
+    fn app() -> App {
+        let home = std::env::temp_dir().join("ptyro-tui-prompt-test");
+        let paths = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| home.clone())).unwrap();
+        let connect = ConnectOptions::new(paths.clone(), ptyro_protocol::ClientKind::Tui);
+        let area = Rect::new(0, 0, 100, 30);
+        App::new(Options::default(), connect, paths, Config::default(), false, area)
+    }
+
+    fn session(name: &str) -> SessionInfo {
+        serde_json::from_value(serde_json::json!({
+            "id": SessionId::new(), "handle": name, "name": name, "kind": SessionKind::Shell,
+            "argv": [], "cwd": "/", "state": ProcessState::Running,
+            "size": {"cols": 80, "rows": 24}, "created_ms": 0,
+        }))
+        .unwrap()
+    }
+
+    fn rename(app: &mut App, s: &SessionInfo) {
+        app.overlay = Some(Overlay::Prompt {
+            title: "Rename".into(),
+            text: s.name.clone(),
+            kind: PromptKind::Rename(s.id),
+        });
+    }
+
+    fn typed(app: &mut App, keys: &str) {
+        for c in keys.chars() {
+            let code = match c {
+                '\n' => KeyCode::Enter,
+                '\t' => KeyCode::Tab,
+                '\x08' => KeyCode::Backspace,
+                c => KeyCode::Char { c },
+            };
+            app.overlay_key(KeyEvent::new(code, Mods::NONE));
+        }
+    }
+
+    fn prompt_text(app: &App) -> Option<&str> {
+        match &app.overlay {
+            Some(Overlay::Prompt { text, .. }) => Some(text),
+            _ => None,
+        }
+    }
+
+    fn screen(app: &App) -> String {
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        t.draw(|f| crate::ui::draw(app, f)).unwrap();
+        let buf = t.backend().buffer();
+        buf.content.chunks(buf.area.width as usize).fold(String::new(), |mut s, row| {
+            s.extend(row.iter().map(|c| c.symbol()));
+            s.push('\n');
+            s
+        })
+    }
+
+    #[test]
+    fn a_bad_name_is_flagged_as_it_is_typed_and_enter_keeps_it() {
+        let mut app = app();
+        let s = session("brisk-rook");
+        app.sessions = vec![s.clone(), session("quiet-jay")];
+        rename(&mut app, &s);
+        assert!(screen(&app).contains("⏎ ok (unchanged)"));
+
+        typed(&mut app, "/X");
+        let shown = screen(&app);
+        assert!(shown.contains("✗ '/' isn't allowed: use a-z 0-9 . _ -"), "{shown}");
+        assert!(shown.contains("Tab → brisk-rook-x"), "{shown}");
+        // ⏎ doesn't throw the typing away: the prompt stays, text and all.
+        typed(&mut app, "\n");
+        assert_eq!(prompt_text(&app), Some("brisk-rook/X"));
+        // Tab takes the suggestion, and then ⏎ goes through.
+        typed(&mut app, "\t");
+        assert_eq!(prompt_text(&app), Some("brisk-rook-x"));
+        assert!(app.prompt_check(&PromptKind::Rename(s.id), "brisk-rook-x").is_ok());
+
+        // Another session's name is taken; its own isn't.
+        assert_eq!(
+            app.prompt_check(&PromptKind::Rename(s.id), "quiet-jay"),
+            Err("a session named quiet-jay exists".into())
+        );
+        assert!(app.prompt_check(&PromptKind::Rename(s.id), "brisk-rook").is_ok());
+    }
+
+    #[test]
+    fn workspace_and_fanout_prompts_are_checked_too() {
+        let app = app();
+        let ws = PromptKind::NewWorkspace;
+        assert!(app.prompt_check(&ws, "").is_ok(), "empty cancels");
+        assert!(app.prompt_check(&ws, "Side Job").unwrap_err().contains("'S' (uppercase)"));
+        assert!(app.prompt_check(&ws, "side-job").is_ok());
+
+        let fan = PromptKind::Orch(crate::runs::OrchInput::FanoutAgents { project: "p".into() });
+        assert!(app.prompt_check(&fan, "claude, codex@work").is_ok());
+        assert!(
+            app.prompt_check(&fan, "claude,cladue").unwrap_err().contains("unknown agent cladue")
+        );
+        // Free text isn't a name: anything goes.
+        assert!(app.prompt_check(&PromptKind::Broadcast(Vec::new()), "Fix /it/ now!").is_ok());
     }
 }

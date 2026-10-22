@@ -2173,7 +2173,12 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
 - **Overlays:** help (generated from the live key map, filterable, also showing the terminal's
   kitty-keyboard and colour support), the command palette (actions with their keys, sessions,
   themes), the session finder, a text prompt (new session: run through `$SHELL -c` so pipes and
-  quotes work; rename), and a confirmation for stop.
+  quotes work; rename), and a confirmation for stop. A prompt is **checked as it's typed**,
+  mirroring the daemon's rules from what the TUI knows: name prompts (rename, new worktree, new
+  workspace) mark characters outside `[a-z0-9._-]` and say which one is wrong, and say when the
+  name is taken; the fan-out agent list flags unknown agents. While there's a problem ⏎ is
+  refused and the text stays; in name prompts Tab applies the suggested fix (`My Feat/2` →
+  `my-feat-2`). Renaming a session to its own name does nothing.
 - **Copy mode** (`prefix [` or `PageUp`, the mouse wheel, or a drag): §11.3 below.
 - **Exited sessions** stay on screen, greyed, with a banner "exited N — ⏎ restart · x remove".
 - **Multiple clients:** `--view-only` never sends input, resize or focus; `=` takes control.
