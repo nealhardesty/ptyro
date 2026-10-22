@@ -289,7 +289,10 @@ impl Daemon {
                     changed = true;
                 }
                 Signal::Notify { text } => notes.push(text),
-                Signal::Reply { text } => s.meta.lock().expect("meta").last_reply = Some(text),
+                Signal::Reply { text } => {
+                    s.record_event("reply", serde_json::json!({ "chars": text.chars().count() }));
+                    s.meta.lock().expect("meta").last_reply = Some(text);
+                }
                 Signal::Messaging { socket } => {
                     s.meta.lock().expect("meta").messaging = Some(socket)
                 }

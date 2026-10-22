@@ -47,6 +47,9 @@ else
   fail "never blocked on the permission: $(status)"
 fi
 wait_for "idle" 60 && pass "back to idle after the turn" || fail "not idle: $(status)"
+"$bin" events -s v --json | grep '"reply"' | grep -qv '"chars":0' \
+  && pass "Stop carried the turn's reply (last_assistant_message)" \
+  || fail "no reply from Stop: summaries fall back to the screen (SPEC §20.1)"
 [ -f "$dir/proj/verified.txt" ] && pass "the approved command ran" || fail "verified.txt missing"
 "$bin" inbox | grep -q "wants permission" && pass "the inbox has the permission entry" || fail "inbox"
 conv=$("$bin" status v | sed -n 's/.*conversation //p')

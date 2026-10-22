@@ -4212,8 +4212,9 @@ learn something the hard way.
   `SessionStart` (`source`: startup|resume|clear|compact|fork), `SessionEnd`. Common fields:
   `session_id`, `transcript_path`, `cwd`, `permission_mode`, `hook_event_name`.
   https://code.claude.com/docs/en/hooks
-- **[verified 2026-10-22, 2.1.308 binary schema]** `Stop` (and `StopFailure`, `SubagentStop`)
-  carry an optional `last_assistant_message`: the text of the turn's last reply. ptyro maps it to
+- **[verified 2026-10-22: 2.1.308 binary schema; live in 2.1.309 by `make verify-claude`]** `Stop`
+  (and `StopFailure`, `SubagentStop`) carry an optional `last_assistant_message`: the text of the
+  turn's last reply (session event `reply`). In the live run `Stop` came ~10 ms *before* 7501 `done`. ptyro maps it to
   `Signal::Reply`, the summary of a `worker_done`, a run's `last_message` and the review queue.
   OSC 7501 `done` can arrive before the `Stop` hook, so the lead's notice waits up to 1 s for it.
 - **[verified in binary]** `idle_prompt` notifications are delayed by `messageIdleNotifThresholdMs`

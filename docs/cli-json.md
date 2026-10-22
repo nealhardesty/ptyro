@@ -113,6 +113,7 @@ A structured session's transcript, oldest first. `ChatItem` is `{id, at_ms, rev,
 | `hook` | `{adapter, event, tool}` |
 | `osc7501` | the report |
 | `prompt` | `{chars}` |
+| `reply` | `{chars}`: the agent's last message of a turn arrived (Claude `Stop`, Codex `notify`) |
 | `answer` | `{decision}` |
 | `process`, `rename`, `restart`, `resume` | |
 
