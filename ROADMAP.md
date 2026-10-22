@@ -1203,6 +1203,13 @@ Back-burnered by the owner:
 
 Other ideas:
 
+- **Drag to resize the sidebar**: SPEC §11 says the sidebar is resizable, but today only
+  `[ui] sidebar_width` sets it. Divider drag (M2.15) covers splits between panes only. Dragging the
+  sidebar's right edge sets the width, kept within 12–80 and saved with the workspace's view like
+  the rest of the layout.
+- **Sidebar width keys**: with the sidebar focused, `<` / `>` narrow and widen it a column at a
+  time. These match the pane-resize keys after the prefix, and both are free in the sidebar. They
+  share the 12–80 clamp and the saved view with the drag above.
 - **Pre-trusted Claude worktrees** (M11.0): every new worktree shows Claude's folder-trust dialog
   (ptyro can answer it now). Codex worktrees inherit their project's trust (§20.2); Claude has no
   flag, so this would mean writing `hasTrustDialogAccepted` into the profile's `.claude.json`,
