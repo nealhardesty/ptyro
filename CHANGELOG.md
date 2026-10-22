@@ -6,6 +6,7 @@ Generated from git history by `make changelog` (scripts/changelog.sh); edit comm
 
 ### Features
 
+- feat: Ctrl-Q and Ctrl-Space are both prefixes by default (6e35691)
 - feat: the default prefix is Ctrl-Q (7fab60a)
 
 ### Fixes
@@ -37,6 +38,7 @@ Generated from git history by `make changelog` (scripts/changelog.sh); edit comm
 
 ### Documentation
 
+- docs: regenerate CHANGELOG.md (90b7fa8)
 - docs: regenerate CHANGELOG.md (d735931)
 - docs: regenerate CHANGELOG.md (30eb521)
 
