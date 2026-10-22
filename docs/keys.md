@@ -1,15 +1,19 @@
 # Keys
 
-Everything in the TUI starts with the **prefix**, `Ctrl-Q` by default (`[ui] prefix`). Press
-the prefix, release it, then the key. Press the prefix twice to send a real `Ctrl-Q` to the
-program.
+Everything in the TUI starts with the **prefix**: `Ctrl-Q` or `Ctrl-Space`, whichever you like
+(`[ui] prefix`). Press the prefix, release it, then the key. Press a prefix twice to send it to
+the program. Hints on screen show the first one, `Ctrl-Q`.
 
-`Ctrl-Q` is the default because none of Claude Code, Codex, Gemini CLI or OpenCode binds it, and
-it sits in the same place on every keyboard layout (SPEC §21.2). If a program around ptyro takes
-it first, choose another: `C-]` (not on layouts that need AltGr for `]`), or `C-Space` (free it
-from the macOS input-source shortcut first). In VS Code's terminal on Linux and Windows,
-`Ctrl-Q` opens Quick Open unless you add `-workbench.action.quickOpenView` to
-`terminal.integrated.commandsToSkipShell`. Zellij's default keys quit Zellij on `Ctrl-Q`.
+There are two so that one always gets through (SPEC §21.2):
+- **`Ctrl-Q`**: none of Claude Code, Codex, Gemini CLI or OpenCode binds it, and it sits in the
+  same place on every keyboard layout. VS Code's terminal on Linux and Windows takes it for Quick
+  Open, unless you add `-workbench.action.quickOpenView` to
+  `terminal.integrated.commandsToSkipShell`. Zellij's default keys quit Zellij on it.
+- **`Ctrl-Space`**: on macOS it switches input sources when you have more than one, unless you
+  turn that shortcut off in Keyboard settings.
+
+To use other keys, set one or a list: `prefix = "C-]"` or `prefix = ["C-]", "C-q"]`. A list you set
+replaces both defaults. `C-]` needs AltGr on some non-US layouts.
 
 `Ctrl-Q ?` lists every binding as it is configured right now, and `ptyro tour` is a
 60-second walkthrough. `Ctrl-Q :` (or `Ctrl-Q C-p`) opens the palette, which runs any

@@ -87,7 +87,7 @@ const STARTER: &str = r#"# ptyro configuration. Every key is optional; see SPEC 
 # Changes apply live (the daemon reloads this file when it changes).
 
 [ui]
-# prefix = "C-q"            # the key that starts ptyro commands, e.g. "C-]", "C-Space"
+# prefix = ["C-q", "C-Space"] # the keys that start ptyro commands; one ("C-]") or several
 # theme = "ptyro-dark"      # ptyro-dark, ptyro-light, high-contrast, or one of [themes.*]
 # sidebar = true
 # sidebar_width = 30

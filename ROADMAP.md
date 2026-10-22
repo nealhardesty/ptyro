@@ -86,7 +86,7 @@ promoted into the M1 crates (the `pty-pane` spike became `ptyro-term`, `ptyro-pt
       unproven until the branch is pushed.
 - [x] **M0.8** `docs/compat.md` skeleton (the manual compatibility matrix from SPEC §18.2) and
       `docs/fixtures.md` (how to record `.ptylog` fixtures). **S**
-- [x] **M0.9** Decide §21.1 (license: MIT) and §21.2 (prefix: `Ctrl-Space`, configurable; changed to `Ctrl-Q` on 2026-10-22) with the owner. **S**
+- [x] **M0.9** Decide §21.1 (license: MIT) and §21.2 (prefix: `Ctrl-Space`, configurable; changed to `Ctrl-Q` plus `Ctrl-Space` on 2026-10-22) with the owner. **S**
 - [ ] **M0.10 (spike, deferred to M3 by the owner)** Multi-account isolation (SPEC §10.10), for each installed agent with two
       real logins side by side on Linux *and* macOS:
       - does the isolation variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GEMINI_CLI_HOME`) fully

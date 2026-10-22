@@ -18,8 +18,8 @@ use crate::paths::Paths;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Ui {
-    /// The prefix key (SPEC §11.2), e.g. `C-q`, `C-]`, `C-Space`.
-    pub prefix: String,
+    /// The prefix key or keys (SPEC §11.2), e.g. `C-q`, or `["C-q", "C-Space"]`.
+    pub prefix: Prefix,
     pub theme: String,
     pub sidebar: bool,
     pub sidebar_width: u16,
@@ -38,7 +38,7 @@ pub struct Ui {
 impl Default for Ui {
     fn default() -> Self {
         Self {
-            prefix: "C-q".into(),
+            prefix: Prefix::Keys(vec!["C-q".into(), "C-Space".into()]),
             theme: "ptyro-dark".into(),
             sidebar: true,
             sidebar_width: 30,
@@ -83,6 +83,24 @@ pub enum RestoreOnStart {
     Resume,
     /// Not restored.
     None,
+}
+
+/// The prefix (SPEC §11.2): one key (`"C-q"`) or several (`["C-q", "C-Space"]`), any of which
+/// starts a command. The first is the one hints show.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Prefix {
+    Key(String),
+    Keys(Vec<String>),
+}
+
+impl Prefix {
+    pub fn keys(&self) -> &[String] {
+        match self {
+            Self::Key(k) => std::slice::from_ref(k),
+            Self::Keys(v) => v,
+        }
+    }
 }
 
 /// A command: a string (`"claude"`) or an argv (`["claude", "--model", "opus"]`).
@@ -838,7 +856,12 @@ impl Config {
     }
 
     fn validate(&self) -> Result<(), String> {
-        parse_key(&self.ui.prefix).map_err(|e| format!("ui.prefix: {e}"))?;
+        if self.ui.prefix.keys().is_empty() {
+            return Err("ui.prefix: needs at least one key".into());
+        }
+        for k in self.ui.prefix.keys() {
+            parse_key(k).map_err(|e| format!("ui.prefix: {e}"))?;
+        }
         for (name, a) in &self.agents {
             crate::names::validate(name).map_err(|e| format!("agents.{name}: {e}"))?;
             if let Some(h) = &a.hibernate_after {
@@ -1352,6 +1375,10 @@ mod tests {
         let e = Config::parse("[ui]\nsidebar_widht = 3\n").unwrap_err();
         assert!(e.contains("sidebar_widht") && e.contains("line 2"), "{e}");
         let e = Config::parse("[ui]\nprefix = \"C-Spaec\"\n").unwrap_err();
+        assert!(e.contains("ui.prefix"), "{e}");
+        let e = Config::parse("[ui]\nprefix = [\"C-q\", \"C-Spaec\"]\n").unwrap_err();
+        assert!(e.contains("ui.prefix"), "{e}");
+        let e = Config::parse("[ui]\nprefix = []\n").unwrap_err();
         assert!(e.contains("ui.prefix"), "{e}");
         let e = Config::parse("[themes.mine]\naccent = \"#12345\"\n").unwrap_err();
         assert!(e.contains("themes.mine.accent"), "{e}");

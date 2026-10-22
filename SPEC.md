@@ -2147,9 +2147,9 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
 ### 11.2 Modes and focus
 
 - **Terminal mode** (default when a pane is focused): every key goes to the session, except the
-  **prefix** key (default `Ctrl-Q`, configurable; chosen because it is the one Ctrl+letter that
-  Claude Code, Codex, Gemini CLI and OpenCode all leave free, §20.5). Prefix twice sends a
-  literal prefix.
+  **prefix** keys (default `Ctrl-Q` and `Ctrl-Space`, configurable as one key or a list; §21.2).
+  Any of them starts a command, and hints show the first. A prefix pressed twice sends that key
+  to the program.
 - **Navigation mode** (focus in sidebar or after prefix): single-key commands.
 - **Zoom**: pane fills the screen (sidebar hidden). **Raw attach** (`ptyro attach --raw`): no chrome
   at all; ideal over flaky SSH or on a phone terminal app; detach with `prefix d`.
@@ -2683,7 +2683,7 @@ and then removes the session unless `--keep`. Still to come from this tree: `--v
    turn each into a profile and workspace (§10.10).
 4. Discover git repos under common roots; multi-select to register as projects; suggest a pin for
    each from the profiles' `match` rules.
-5. Choose prefix key, worktree location, notifications.
+5. Choose prefix keys, worktree location, notifications.
 6. Write `~/.config/ptyro/config.toml` with comments; offer to install shell completions and the
    systemd/launchd service.
 7. Offer a 60-second guided tour in the TUI.
@@ -2823,7 +2823,7 @@ change (debounced) and emits `ConfigReloaded`.
 
 ```toml
 [ui]
-prefix = "C-q"
+prefix = ["C-q", "C-Space"]  # or one key: "C-]"
 theme = "ptyro-dark"
 sidebar_width = 30
 show_ports = true
@@ -4616,8 +4616,12 @@ Checked against each tool's documentation on 2026-10-20. Marks: [V] official doc
    turns flow control off. Readline and Vim only use it as a second key for `C-v`. Rejected:
    `C-b` (Claude and Gemini use it to background tasks), `C-a` (line start; OpenCode's model list),
    `C-x` (OpenCode's leader key), `C-]` / `C-\` (AltGr layouts; Vim tag jumps; SIGQUIT).
-   Caveats: VS Code's terminal on Linux and Windows and Zellij's default keys take `Ctrl-Q`. The
-   wording is in `docs/keys.md`. `ptyro init` still warns about `C-Space` on macOS.
+   Caveats: VS Code's terminal on Linux and Windows and Zellij's default keys take `Ctrl-Q`.
+   **Same day, the owner asked for both:** `[ui] prefix` takes a list, and the default is
+   `["C-q", "C-Space"]`. Each key covers the other's gaps: macOS takes Ctrl-Space, while VS Code
+   and Zellij take Ctrl-Q. A list the user sets replaces the default. The user-facing wording is in
+   `docs/keys.md`. `ptyro init` asks for comma-separated keys and warns only when `C-Space` is the
+   sole prefix on macOS.
 3. **Codex & Gemini hook injection** — which mechanism works without touching user config (M0.4/M0.5).
 4. ~~**Claude hooks injection**~~ — **decided 2026-10-20:** `--plugin-dir`; both mechanisms are additive (§8.2, M0.3).
 5. **Should the TUI offer a raw-passthrough fast path** when it is the only client and sizes match

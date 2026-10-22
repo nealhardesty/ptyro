@@ -156,8 +156,13 @@ pub async fn run(ctx: &Ctx, yes: bool, dry_run: bool) -> Result<i32, Error> {
     }
 
     section("preferences");
-    let prefix = ask.line("  prefix key (C-q, C-], C-Space)", &current.ui.prefix);
-    if cfg!(target_os = "macos") && prefix == "C-Space" {
+    let prefix = ask.line(
+        "  prefix keys, comma-separated (C-q, C-], C-Space)",
+        &current.ui.prefix.keys().join(", "),
+    );
+    let prefix: Vec<String> =
+        prefix.split(',').map(|k| k.trim().to_owned()).filter(|k| !k.is_empty()).collect();
+    if cfg!(target_os = "macos") && prefix == ["C-Space"] {
         eprintln!(
             "  note: macOS uses Ctrl-Space for input sources; free it in Keyboard settings, or pick another"
         );
@@ -167,10 +172,14 @@ pub async fn run(ctx: &Ctx, yes: bool, dry_run: bool) -> Result<i32, Error> {
 
     // ── the config ──
     let mut changes: Vec<String> = Vec::new();
-    if prefix != Config::default().ui.prefix
-        && set_default(&mut doc, "ui", "prefix", toml_edit::value(prefix.clone()))
-    {
-        changes.push(format!("ui.prefix = {prefix:?}"));
+    if prefix != Config::default().ui.prefix.keys() {
+        let value = match prefix.as_slice() {
+            [one] => toml_edit::value(one.as_str()),
+            many => toml_edit::value(many.iter().map(String::as_str).collect::<toml_edit::Array>()),
+        };
+        if set_default(&mut doc, "ui", "prefix", value) {
+            changes.push(format!("ui.prefix = {prefix:?}"));
+        }
     }
     if !matches!(location.as_str(), "data" | "sibling" | "in-repo") {
         return Err(Error::invalid(format!("unknown worktree location {location:?}")));

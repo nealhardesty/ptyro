@@ -87,8 +87,8 @@ ptyro project add       # once per repository
 ptyro                   # open the TUI (a shell session to start with)
 ```
 
-Every key starts with the **prefix**, `Ctrl-Q`. `Ctrl-Q ?` lists the keys; `ptyro tour`
-walks you through them.
+Every key starts with the **prefix**, `Ctrl-Q` (or `Ctrl-Space`). `Ctrl-Q ?` lists the keys;
+`ptyro tour` walks you through them.
 
 **2. Detach and come back.** Press `Ctrl-Q d`. Everything keeps running in the daemon. Run
 `ptyro` again and you're back on the same screen.
@@ -293,7 +293,7 @@ More recipes, including one that teaches *your agents* to drive ptyro, are in
 
 ## Essential keys
 
-All after the prefix, `Ctrl-Q`. The full list is in [`docs/keys.md`](docs/keys.md).
+All after the prefix, `Ctrl-Q` or `Ctrl-Space`. The full list is in [`docs/keys.md`](docs/keys.md).
 
 | Key | Does |
 |---|---|
@@ -317,7 +317,7 @@ commented one and validates it when you save. Changes apply live.
 
 ```toml
 [ui]
-prefix = "C-]"                  # default C-q
+prefix = "C-]"                  # default ["C-q", "C-Space"]
 theme = "ptyro-light"           # ptyro-dark (default), ptyro-light, high-contrast
 
 [agents.claude]
@@ -332,10 +332,11 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
 
 - **Inside tmux:** add `set -g allow-passthrough on` and `set -g extended-keys on` to
   `~/.tmux.conf` so Shift+Enter and clipboard copies reach ptyro.
-- **The prefix, `Ctrl-Q`,** is the one Ctrl+letter that none of Claude Code, Codex, Gemini CLI
-  and OpenCode uses. Press it twice to send a real `Ctrl-Q`. If something above ptyro takes it
-  (VS Code's terminal on Linux and Windows; Zellij), pick another with `[ui] prefix`, such as
-  `"C-]"`. `"C-Space"` works too, once you free it from macOS's input-source shortcut.
+- **Two prefixes, `Ctrl-Q` and `Ctrl-Space`,** work out of the box, so if one is taken the other
+  still gets through. `Ctrl-Q` is the one Ctrl+letter that none of Claude Code, Codex, Gemini CLI
+  and OpenCode uses; macOS takes `Ctrl-Space` for switching input sources, and VS Code's terminal
+  on Linux and Windows and Zellij take `Ctrl-Q`. Press a prefix twice to send it to the program.
+  Set your own with `[ui] prefix`, one key (`"C-]"`) or a list.
 - **Shift+Enter** reaches Claude when your terminal speaks the kitty keyboard protocol (Ghostty,
   kitty, WezTerm, foot, recent iTerm2 and Alacritty). `Ctrl-Q ?` shows whether it's on.
 - **Native mouse selection:** hold Shift while dragging, or set `[ui] mouse = false`.

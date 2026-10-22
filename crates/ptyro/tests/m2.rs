@@ -304,12 +304,14 @@ async fn tui_splits_and_restores_the_layout_on_reattach() {
         split.contains("osc7501=yes") && split.contains("log-40"),
         "both panes visible:\n{split}"
     );
-    let r2 = run(tui(&d, &[]).snapshot(1.8).send(2.2, "\\x11d").timeout(4.0)).await;
+    // Ctrl-Space (NUL), the second default prefix, works like Ctrl-Q.
+    let r2 = run(tui(&d, &[]).snapshot(1.8).send(2.2, "\\x00d").timeout(4.0)).await;
     let restored = r2.at(1.8);
     assert!(
         restored.contains("osc7501=yes") && restored.contains("log-40"),
         "layout restored:\n{restored}"
     );
+    assert_eq!(r2.exit, Some(0), "Ctrl-Space d detaches:\n{}", r2.screen);
 }
 
 #[tokio::test]

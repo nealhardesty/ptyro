@@ -264,7 +264,10 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
 
 #[derive(Debug, Clone)]
 pub struct Keymap {
+    /// The first prefix key: the one hints show.
     pub prefix: KeyEvent,
+    /// Every prefix key, `prefix` first.
+    pub prefixes: Vec<KeyEvent>,
     bindings: BTreeMap<(Table, String), (KeyEvent, Command)>,
 }
 
@@ -276,11 +279,17 @@ impl Keymap {
     /// Defaults plus `[keys]` overrides; problems are returned, never fatal.
     pub fn new(config: &Config) -> (Self, Vec<String>) {
         let mut errors = Vec::new();
-        let prefix = parse_key(&config.ui.prefix).map(normalize).unwrap_or_else(|e| {
-            errors.push(format!("ui.prefix: {e}"));
-            key("C-q")
-        });
-        let mut map = Self { prefix, bindings: BTreeMap::new() };
+        let mut prefixes = Vec::new();
+        for k in config.ui.prefix.keys() {
+            match parse_key(k) {
+                Ok(k) => prefixes.push(normalize(k)),
+                Err(e) => errors.push(format!("ui.prefix: {e}")),
+            }
+        }
+        if prefixes.is_empty() {
+            prefixes.push(key("C-q"));
+        }
+        let mut map = Self { prefix: prefixes[0], prefixes, bindings: BTreeMap::new() };
         for (table, k, action) in DEFAULTS {
             let k = key(k);
             map.bindings.insert(slot(*table, &k), (k, Command { action, arg: None }));
@@ -338,7 +347,7 @@ impl Keymap {
     }
 
     pub fn is_prefix(&self, k: KeyEvent) -> bool {
-        normalize(k) == self.prefix
+        self.prefixes.contains(&normalize(k))
     }
 
     pub fn lookup(&self, table: Table, k: KeyEvent) -> Option<&Command> {
@@ -402,6 +411,7 @@ mod tests {
         let (m, errors) = Keymap::new(&Config::default());
         assert!(errors.is_empty(), "{errors:?}");
         assert!(m.is_prefix(ev('q', Mods::CTRL)));
+        assert!(m.is_prefix(ev(' ', Mods::CTRL)));
         assert_eq!(m.lookup(Table::Prefix, ev('d', 0)).unwrap().action, "app.detach");
         // Shift reported separately (kitty) or folded into the character (legacy) both match `X`.
         assert_eq!(m.lookup(Table::Prefix, ev('x', Mods::SHIFT)).unwrap().action, "session.kill");
@@ -419,6 +429,7 @@ mod tests {
         .unwrap();
         let (m, errors) = Keymap::new(&c);
         assert!(m.is_prefix(ev('a', Mods::CTRL)));
+        assert!(!m.is_prefix(ev('q', Mods::CTRL)), "a configured prefix replaces both defaults");
         assert!(m.lookup(Table::Prefix, ev('d', 0)).is_none());
         assert_eq!(m.lookup(Table::Global, ev('1', Mods::ALT)).unwrap().number(), Some(1));
         assert_eq!(errors.len(), 2, "{errors:?}");
