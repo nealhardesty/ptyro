@@ -79,6 +79,61 @@ async fn selectors_expand_to_the_right_sessions() {
     assert_eq!(err.code, ErrorCode::Ambiguous, "single-target requests refuse ambiguous selectors");
 }
 
+fn ctrl_z(session: &SessionInfo) -> ClientMsg {
+    use ptyro_core::input::{InputEvent, KeyCode, KeyEvent, Mods};
+    let key = KeyEvent::new(KeyCode::Char { c: 'z' }, Mods(Mods::CTRL));
+    ClientMsg::Input { session: session.id, event: InputEvent::Key { key } }
+}
+
+#[tokio::test]
+async fn ctrl_z_suspending_the_session_itself_is_resumed() {
+    let d = TempDaemon::start(BIN).unwrap();
+    let mut c = d.client().await.unwrap();
+    let mut pushes = c.pushes();
+    c.send(ClientMsg::WatchEvents).unwrap();
+    // Claude's Ctrl-Z: leave raw mode, SIGTSTP itself (dropped: the session's process group is
+    // orphaned), wait for SIGCONT. `sh` leads the session just like Claude would.
+    let agent = spawn(
+        &c,
+        "agent",
+        &[
+            "sh",
+            "-c",
+            "stty raw -echo; echo ready; dd bs=1 count=1 >/dev/null 2>&1; stty sane; \
+             trap 'echo resumed; sleep 30' CONT; kill -TSTP $$; while :; do sleep 0.1; done",
+        ],
+    )
+    .await;
+    // Ctrl-Z as undo: the program stays in raw mode, so it isn't suspending.
+    let editor = spawn(
+        &c,
+        "editor",
+        &[
+            "sh",
+            "-c",
+            "stty raw -echo; trap 'echo continued' CONT; echo ready; while :; do sleep 0.1; done",
+        ],
+    )
+    .await;
+    d.wait_for_text(&c, "agent", "ready", WAIT).await.unwrap();
+    d.wait_for_text(&c, "editor", "ready", WAIT).await.unwrap();
+    c.send(ctrl_z(&agent)).unwrap();
+    c.send(ctrl_z(&editor)).unwrap();
+    d.wait_for_text(&c, "agent", "resumed", WAIT).await.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut resumed = Vec::new();
+    while Instant::now() < deadline {
+        if let Ok(Some(ServerMsg::Event { event: DomainEvent::SessionResumed { session } })) =
+            tokio::time::timeout(Duration::from_millis(100), pushes.recv()).await
+        {
+            resumed.push(session);
+        }
+    }
+    assert_eq!(resumed, [agent.id], "only the suspended session, once");
+    let screen = d.wait_for_text(&c, "editor", "ready", WAIT).await.unwrap();
+    assert!(!screen.contains("continued"), "{screen}");
+}
+
 #[tokio::test]
 async fn restart_runs_the_command_again_in_place() {
     let d = TempDaemon::start(BIN).unwrap();
@@ -312,6 +367,32 @@ async fn tui_splits_and_restores_the_layout_on_reattach() {
         "layout restored:\n{restored}"
     );
     assert_eq!(r2.exit, Some(0), "Ctrl-Space d detaches:\n{}", r2.screen);
+}
+
+#[tokio::test]
+async fn tui_says_when_it_resumed_a_suspended_session() {
+    let d = TempDaemon::start(BIN).unwrap();
+    let c = d.client().await.unwrap();
+    spawn(
+        &c,
+        "agent",
+        &[
+            "sh",
+            "-c",
+            "stty raw -echo; echo ready; dd bs=1 count=1 >/dev/null 2>&1; stty sane; \
+             trap 'echo back; sleep 30' CONT; kill -TSTP $$; while :; do sleep 0.1; done",
+        ],
+    )
+    .await;
+    d.wait_for_text(&c, "agent", "ready", WAIT).await.unwrap();
+    let r = run(tui(&d, &["attach", "agent"])
+        .send(1.5, "\\x1a")
+        .snapshot(2.5)
+        .send(3.0, "\\x11d")
+        .timeout(4.5))
+    .await;
+    let s = r.at(2.5);
+    assert!(s.contains("resumed agent") && s.contains("back"), "{s}");
 }
 
 #[tokio::test]

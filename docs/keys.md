@@ -60,6 +60,10 @@ action by name.
 | `=` | take control: size the session to your pane (when another client resized it) |
 | `C-l` | redraw everything |
 
+`Ctrl-Z` (no prefix) goes to the program. An agent run directly in a session has no shell to
+`fg` it back, so when it suspends itself (Claude does), ptyro resumes it straight away and
+says so.
+
 ## In the sidebar
 
 Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.

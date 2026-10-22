@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ptyro_core::cache::ScreenCache;
-use ptyro_core::input::InputEvent;
+use ptyro_core::input::{InputEvent, KeyCode, KeyKind, Mods};
 use ptyro_core::session::{ProcessState, ProgramStatus, Progress, SessionInfo, SessionKind};
 use ptyro_core::status::{
     AgentStatus, Attention, Child, Confidence, Signal, SignalSource, Sourced,
@@ -414,7 +414,18 @@ impl Session {
 
     /// Raw bytes to the program (answers, stop keys).
     pub fn write_raw(&self, bytes: &[u8]) {
-        let _ = self.writer.send(WriterMsg::Bytes(bytes.to_vec()));
+        self.write_input(bytes.to_vec(), bytes == b"\x1a");
+    }
+
+    /// Write input to the program; for Ctrl-Z, watch whether it suspends itself.
+    fn write_input(&self, bytes: Vec<u8>, ctrl_z: bool) {
+        let suspending = ctrl_z.then(|| self.watch_suspend()).flatten();
+        if !bytes.is_empty() {
+            let _ = self.writer.send(WriterMsg::Bytes(bytes));
+        }
+        if let Some(watch) = suspending {
+            tokio::spawn(watch);
+        }
     }
 
     pub(crate) fn signal(&self, list: Vec<Sourced>) {
@@ -920,9 +931,37 @@ impl Session {
             let term = self.term.lock().expect("term");
             ptyro_term::input::encode(event, &term.emu.modes())
         };
-        if !bytes.is_empty() {
-            let _ = self.writer.send(WriterMsg::Bytes(bytes));
+        self.write_input(bytes, is_ctrl_z(event));
+    }
+
+    /// Ctrl-Z is about to reach the session's own process, in raw mode. It leads the PTY's session,
+    /// so its process group is orphaned and the kernel drops the SIGTSTP it sends itself. A
+    /// program that suspends itself (Claude) then waits, with the terminal back in cooked mode,
+    /// for a SIGCONT that no shell will ever send: send it, and say so. A job in a shell session
+    /// isn't the session's own process; its shell can `fg` it.
+    fn watch_suspend(&self) -> Option<impl std::future::Future<Output = ()> + use<>> {
+        let pid = self.pid()?;
+        let master = self.master.as_ref()?;
+        if self.foreground_pid() != Some(pid) || ptyro_pty::is_raw(master) != Some(true) {
+            return None;
         }
+        let (master, events, session) = (master.try_clone().ok()?, self.events.clone(), self.id);
+        Some(async move {
+            let deadline = tokio::time::Instant::now() + SUSPEND_WAIT;
+            while tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+                if ptyro_pty::foreground_pid(&master) != Some(pid) {
+                    return;
+                }
+                if ptyro_pty::is_raw(&master) == Some(false) {
+                    if ptyro_pty::signal_group(pid, ptyro_pty::Signal::CONT).is_ok() {
+                        tracing::info!(%session, "resumed a suspended session");
+                        let _ = events.send(DomainEvent::SessionResumed { session });
+                    }
+                    return;
+                }
+            }
+        })
     }
 
     /// Type text. Multi-line text is pasted (bracketed when the program asked for it) so a shell
@@ -1282,6 +1321,21 @@ impl Session {
         if let Some(fg) = self.foreground_pid() {
             let _ = ptyro_pty::signal_group(fg, ptyro_pty::Signal::WINCH);
         }
+    }
+}
+
+/// How long after Ctrl-Z a program gets to leave raw mode before it counts as not suspending.
+const SUSPEND_WAIT: Duration = Duration::from_secs(1);
+
+fn is_ctrl_z(event: &InputEvent) -> bool {
+    match event {
+        InputEvent::Key { key } => {
+            key.kind == KeyKind::Press
+                && key.mods == Mods(Mods::CTRL)
+                && matches!(key.code, KeyCode::Char { c: 'z' | 'Z' })
+        }
+        InputEvent::Raw { bytes } => bytes == b"\x1a",
+        _ => false,
     }
 }
 

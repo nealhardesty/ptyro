@@ -144,6 +144,13 @@ pub fn signal_group(pid: u32, sig: Signal) -> io::Result<()> {
     Ok(rustix::process::kill_process_group(pid, sig)?)
 }
 
+/// Whether the program in the PTY has the terminal in raw mode (no line editing): full-screen
+/// programs and agents do, a shell waiting at its prompt line or `cat` don't.
+pub fn is_raw(master: &OwnedFd) -> Option<bool> {
+    let t = rustix::termios::tcgetattr(master).ok()?;
+    Some(!t.local_modes.contains(rustix::termios::LocalModes::ICANON))
+}
+
 /// The stop sequence (SPEC §5.1): SIGHUP, then SIGTERM after `grace.0`, then SIGKILL after
 /// `grace.1`. Returns once the child has exited.
 pub async fn terminate(
@@ -352,6 +359,27 @@ mod tests {
         assert_ne!(session_leader(std::process::id()), Some(c.pid));
         #[cfg(target_os = "linux")]
         assert_eq!(exec_env_var(grandchild, "PTYRO_SESSION_ID").as_deref(), Some("probe"));
+        let _ = signal_group(c.pid, Signal::KILL);
+    }
+
+    #[tokio::test]
+    async fn is_raw_follows_the_program() {
+        let argv: Vec<String> =
+            ["sh", "-c", "sleep 0.5; stty raw -echo; sleep 5"].map(String::from).into();
+        let env = child_env(std::env::vars_os(), []);
+        let c = spawn(SpawnRequest {
+            argv: &argv,
+            cwd: Path::new("/"),
+            env,
+            size: TermSize::new(20, 5),
+        })
+        .unwrap();
+        assert_eq!(is_raw(&c.master), Some(false));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while is_raw(&c.master) != Some(true) {
+            assert!(tokio::time::Instant::now() < deadline, "never went raw");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
         let _ = signal_group(c.pid, Signal::KILL);
     }
 

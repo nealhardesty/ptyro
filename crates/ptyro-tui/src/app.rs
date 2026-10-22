@@ -955,6 +955,14 @@ impl App {
                     crate::osc52(&text);
                 }
             }
+            DomainEvent::SessionResumed { session } => {
+                if self.subscribed.contains(&session) {
+                    let name = self.session(session).map_or("the session", |s| s.name.as_str());
+                    self.toast(format!(
+                        "resumed {name}: Ctrl-Z suspended it, and there's no shell here to fg it"
+                    ));
+                }
+            }
             DomainEvent::Notification { .. } => {}
             DomainEvent::InboxAdded { entry } => {
                 // An open inbox keeps the same entry selected (it's above it, in its tab).

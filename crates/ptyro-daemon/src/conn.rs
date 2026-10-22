@@ -514,6 +514,7 @@ async fn forward_events(
             DomainEvent::SessionRemoved { id } => *id,
             DomainEvent::ControllerChanged { session, .. }
             | DomainEvent::Bell { session }
+            | DomainEvent::SessionResumed { session }
             | DomainEvent::Clipboard { session, .. }
             | DomainEvent::Notification { session, .. }
             | DomainEvent::Notify { session, .. } => *session,

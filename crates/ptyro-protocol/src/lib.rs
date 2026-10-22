@@ -32,7 +32,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 10 };
+pub const PROTO: Version = Version { major: 1, minor: 11 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1274,6 +1274,11 @@ pub enum DomainEvent {
     Clipboard {
         session: SessionId,
         text: String,
+    },
+    /// The session's own process was suspended (Ctrl-Z) with no shell to `fg` it, so the daemon
+    /// resumed it.
+    SessionResumed {
+        session: SessionId,
     },
     /// OSC 9/777/99 notification from the program.
     Notification {
