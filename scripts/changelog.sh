@@ -18,9 +18,10 @@ section() { # TITLE RANGE
   for kind in milestone feat fix perf research docs other; do
     out=$(for h in $log; do
       s=$(git log -1 --format=%s "$h")
+      # `(pattern)`: bash 3.2 (macOS /bin/sh) can't parse a bare `pattern)` inside `$(…)`.
       case $s in
-        M[0-9]*:*) k=milestone;; feat*) k=feat;; fix*) k=fix;; perf*) k=perf;; research*) k=research;;
-        docs*|style*) k=docs;; *) k=other;;
+        (M[0-9]*:*) k=milestone;; (feat*) k=feat;; (fix*) k=fix;; (perf*) k=perf;; (research*) k=research;;
+        (docs*|style*) k=docs;; (*) k=other;;
       esac
       [ "$k" = "$kind" ] || continue
       printf -- '- %s (%s)\n' "$s" "$(git log -1 --format=%h "$h")"
