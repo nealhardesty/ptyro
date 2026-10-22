@@ -2587,7 +2587,7 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 
 | ID | Idea | Seen in | Fit | Size | Pri | Status |
 |---|---|---|---|---|---|---|
-| R-UX-01 | Derived names and summaries: deterministic slug from the prompt by default; optional cheap-model branch names, row summaries and commit messages using the session's own profile account | dmux, Claude agent view | M4+ | M | ★ | slugs → UX1.9, LLM summaries → UX1.3 (opt-in, owner 2026-10-22); branch names and commit messages still new |
+| R-UX-01 | Derived names and summaries: deterministic slug from the prompt by default; optional cheap-model branch names, row summaries and commit messages using the session's own profile account | dmux, Claude agent view | M4+ | M | ★ | slugs → UX1.9 and UX1.24, LLM summaries → UX1.3 (opt-in, owner 2026-10-22); branch names and commit messages still new |
 | R-UX-02 | **Actionable inbox**: peek the pending question, reply inline, numbered choice by digit, **snooze** until next transition, jump to newest unread, cycle unread without marking read | Claude agent view, tuios, iTerm2, cmux | M4 | M | ★★★ | partly built M4.5: peek, inline reply, y/a/n answers, newest-first inbox per workspace; snooze open (2026-10-20) |
 | R-UX-03 | Companion-shell key per task (same worktree and profile env); **scratch sessions** (no project, temp dir) | AoE | M3 | S | ★★ | companion shell → UX1.13 (2026-10-22); scratch sessions still new |
 | R-UX-04 | `ptyro project scan ~/dev` bulk registration | ccmanager | M3 | S | ★ | new |
@@ -2615,6 +2615,7 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 | R-UX-26 | **Interactive tour**: do the steps with a fake agent instead of reading pages | owner (2026-10-22) | UX1 | S | ★ | → UX1.22 (2026-10-22) |
 | R-UX-27 | **Errors offer the fix**: no toast names a command to type; it carries a key that does it | owner (2026-10-22) | UX1 | S | ★★★ | → UX1.17 (2026-10-22) |
 | R-UX-28 | **Context hints**: the status bar's hints follow the selection (blocked → answer, diff → review, merged → clean up) | owner (2026-10-22) | UX1 | S | ★★ | → UX1.16 (2026-10-22) |
+| R-UX-29 | **Name and title**: every create dialog shows a suggested name (from the prompt, PR or branch) that ⏎ accepts; a fixed, slugged name for addresses and a separate free-text title for people | owner (2026-10-22); dmux, Claude agent view (prompt-named tasks) | UX1 | M | ★★★ | → UX1.24 (2026-10-22) |
 | R-WT-10 | **Setup suggestions on first use**: lockfiles suggest a setup script, ignored `.env*` files suggest a `.worktreeinclude`, written to local config after a yes | owner (2026-10-22); Conductor, Superset (setup scripts) | UX1 | S | ★★ | → UX1.11 (2026-10-22) |
 
 #### Orchestration (R-ORC)
@@ -2912,3 +2913,6 @@ follow you over SSH, and tmux plugins can't enforce policy. ptyro does all three
   TUI the first-class interface. R-UX-18…28 and R-WT-10 are new and promoted straight into the
   new ROADMAP milestone UX1, with R-AGT-09, R-UX-01 (summaries, opt-in LLM approved), R-UX-03,
   R-UX-09, R-WT-05 (`--take-changes`), R-WT-06 and R-WT-09.
+- **2026-10-22 (naming):** The owner split a session's label in two: a fixed name to type and a
+  changeable title to read, with a suggested name in every create dialog. R-UX-29, promoted to
+  UX1.24. R-UX-01's prompt slugs feed the suggestion.

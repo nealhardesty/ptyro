@@ -33,6 +33,19 @@ pub struct Ui {
     pub show_ports: bool,
     /// Tint pane borders with the session's profile colour (SPEC §10.10).
     pub tint_borders: bool,
+    /// What a pane shows after you stop its session from the TUI (UX1.23).
+    pub on_stop: OnStop,
+}
+
+/// What a pane does once you stop the session it shows (`[ui] on_stop`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OnStop {
+    /// Show the nearest other session (the stopped one stays in the sidebar).
+    #[default]
+    Next,
+    /// Keep showing the stopped session's last screen.
+    Stay,
 }
 
 impl Default for Ui {
@@ -48,6 +61,7 @@ impl Default for Ui {
             confirm_kill: true,
             show_ports: true,
             tint_borders: false,
+            on_stop: OnStop::Next,
         }
     }
 }

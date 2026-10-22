@@ -474,14 +474,10 @@ fn draw_panes(app: &App, f: &mut Frame<'_>) {
         let inner = app.inner(rect);
         draw_header(app, f, Rect { height: 1, ..rect }, inner, info, pane, focused);
         let Some(id) = session else {
-            let msg = format!(
-                "No session here.  {k} n  new · {k} /  find · {k} c  close pane",
-                k = key_label(&app.keymap.prefix)
-            );
-            f.render_widget(
-                Paragraph::new(Line::styled(msg, fg(app, t.dim)).centered()),
-                centered_line(inner),
-            );
+            let lines = empty_pane(app);
+            let h = (lines.len() as u16).min(inner.height);
+            let r = Rect { y: inner.y + inner.height.saturating_sub(h) / 2, height: h, ..inner };
+            f.render_widget(Paragraph::new(lines).centered(), r);
             continue;
         };
         if let Some(c) = state.and_then(|p| p.copy.as_ref()) {
@@ -541,8 +537,37 @@ fn draw_panes(app: &App, f: &mut Frame<'_>) {
     }
 }
 
-fn centered_line(r: Rect) -> Rect {
-    Rect { y: r.y + r.height / 2, height: 1.min(r.height), ..r }
+/// What an empty pane offers (UX1.23): the next thing to do, with the keys that do it.
+fn empty_pane(app: &App) -> Vec<Line<'static>> {
+    let t = &app.theme;
+    let key = |action: &str| app.keymap.key_for(action);
+    let mut lines = vec![
+        Line::styled(
+            format!("Nothing running in {} yet", app.workspace),
+            fg(app, t.text).add_modifier(Modifier::BOLD),
+        ),
+        Line::raw(""),
+    ];
+    let mut offer = |k: Option<String>, what: &str| {
+        if let Some(k) = k {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{k:>9}  "), fg(app, t.accent).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{what:<34}"), fg(app, t.dim)),
+            ]));
+        }
+    };
+    offer(key("session.new"), "start an agent or a shell");
+    if !app.tree().project_ids().is_empty() {
+        offer(key("worktree.new"), "a new worktree with an agent");
+    }
+    if app.sessions.iter().any(|s| app.home_of(s) != app.workspace) {
+        offer(key("session.find"), "a session from another workspace");
+    }
+    if app.layout.panes().len() > 1 {
+        offer(key("pane.close"), "close this pane");
+    }
+    offer(key("help"), "every key");
+    lines
 }
 
 fn draw_header(

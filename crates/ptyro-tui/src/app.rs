@@ -373,6 +373,8 @@ pub struct App {
     last_list: Instant,
     drag: Option<Drag>,
     reported_focus: Option<(SessionId, bool)>,
+    /// Sessions this TUI stopped: their panes move on when they exit (`[ui] on_stop`, UX1.23).
+    stopping: HashSet<SessionId>,
 }
 
 fn no_color() -> bool {
@@ -457,6 +459,7 @@ impl App {
             last_list: Instant::now(),
             drag: None,
             reported_focus: None,
+            stopping: HashSet::new(),
         }
     }
 
@@ -779,6 +782,52 @@ impl App {
         true
     }
 
+    /// Panes showing `gone` show its neighbour instead (UX1.23). `removed`: it's leaving the
+    /// list, so a pane with no neighbour to show closes (a split) or shows the empty state
+    /// (the last pane); a stopped one stays put when there's nothing else to show.
+    fn move_on(&mut self, gone: SessionId, order: &[SessionId], removed: bool) {
+        let Some(info) = self.session(gone).cloned() else { return };
+        let mut panes: Vec<PaneId> =
+            self.panes.iter().filter(|(_, p)| p.session == Some(gone)).map(|(k, _)| *k).collect();
+        // The focused pane picks first: it gets the nearest neighbour.
+        panes.sort_by_key(|p| (*p != self.focused, *p));
+        for pane in panes {
+            let shown: Vec<SessionId> = self
+                .panes
+                .iter()
+                .filter(|(k, _)| **k != pane)
+                .filter_map(|(_, p)| p.session)
+                .collect();
+            match neighbour(order, &info, &self.sessions, &shown) {
+                Some(next) => {
+                    if let Some(p) = self.panes.get_mut(&pane) {
+                        p.session = Some(next);
+                        p.copy = None;
+                        p.loading = false;
+                        // `` ` `` brings a stopped session back; a removed one is gone.
+                        p.last = (!removed).then_some(gone);
+                    }
+                    if pane == self.focused {
+                        let rows = self.rows();
+                        if let Some(i) = rows.iter().position(|r| *r == Row::Session(next)) {
+                            self.set_sel(&rows, i);
+                        }
+                    }
+                }
+                None if removed => {
+                    if !self.close_pane(pane)
+                        && let Some(p) = self.panes.get_mut(&pane)
+                    {
+                        p.session = None;
+                        p.copy = None;
+                    }
+                }
+                None => {}
+            }
+        }
+        self.view_changed();
+    }
+
     fn view_changed(&mut self) {
         if !self.opts.raw && !self.opts.view_only {
             self.view_dirty_since = Some(Instant::now());
@@ -896,7 +945,16 @@ impl App {
                 if self.opts.raw && self.focused_session() == Some(info.id) {
                     self.quit = Some(AttachEnd::Exited(info.state.clone()));
                 }
+                let id = info.id;
                 self.upsert(info);
+                // You stopped it here: its panes move on, and it stays in the sidebar.
+                if self.stopping.remove(&id)
+                    && !self.opts.raw
+                    && self.config.ui.on_stop == ptyro_core::config::OnStop::Next
+                {
+                    let order = self.ordered();
+                    self.move_on(id, &order, false);
+                }
             }
             DomainEvent::SessionRestarted { info } => {
                 let id = info.id;
@@ -909,32 +967,22 @@ impl App {
                 self.sync();
             }
             DomainEvent::SessionRemoved { id } => {
-                self.sessions.retain(|s| s.id != id);
-                let mut emptied = Vec::new();
-                for (pane, p) in &mut self.panes {
-                    if p.session == Some(id) {
-                        p.session = None;
-                        p.copy = None;
-                        emptied.push(*pane);
-                    }
-                    if p.last == Some(id) {
-                        p.last = None;
-                    }
-                }
+                self.stopping.remove(&id);
                 if self.opts.raw {
-                    self.quit = Some(AttachEnd::Gone);
+                    self.sessions.retain(|s| s.id != id);
+                    if self.focused_session() == Some(id) {
+                        self.quit = Some(AttachEnd::Gone);
+                    }
                     self.sync();
                     return;
                 }
-                // Its panes close; the last pane can't, so it shows a session not shown yet.
-                for pane in emptied {
-                    if !self.close_pane(pane) {
-                        let shown: Vec<SessionId> =
-                            self.panes.values().filter_map(|p| p.session).collect();
-                        let next = self.ordered().into_iter().find(|id| !shown.contains(id));
-                        if let Some(p) = self.panes.get_mut(&pane) {
-                            p.session = next;
-                        }
+                // The order as it was, so "the next one" means the one after it in the sidebar.
+                let order = self.ordered();
+                self.move_on(id, &order, true);
+                self.sessions.retain(|s| s.id != id);
+                for p in self.panes.values_mut() {
+                    if p.last == Some(id) {
+                        p.last = None;
                     }
                 }
                 self.view_changed();
@@ -1998,11 +2046,15 @@ impl App {
                     action: Confirmed::Stop(id),
                 });
             }
-            "session.stop" => self.request(
-                Pending::Done(format!("stopped {}", info.name)),
-                Request::Kill { addr, signal: None },
-            ),
+            "session.stop" => {
+                self.stopping.insert(id);
+                self.request(
+                    Pending::Done(format!("stopped {}", info.name)),
+                    Request::Kill { addr, signal: None },
+                );
+            }
             "session.kill" => {
+                self.stopping.insert(id);
                 self.request(
                     Pending::Done(format!("killed {}", info.name)),
                     Request::Kill { addr, signal: Some(9) },
@@ -2696,6 +2748,7 @@ impl App {
                 },
             ),
             Confirmed::Stop(id) => {
+                self.stopping.insert(id);
                 let name = self.session(id).map(|s| s.name.clone()).unwrap_or_default();
                 self.request(
                     Pending::Done(format!("stopped {name}")),
@@ -3621,6 +3674,37 @@ impl App {
     }
 }
 
+/// What a pane shows once `gone` leaves it (UX1.23): live sessions first (a dormant one never:
+/// showing it would wake it), then the nearest place (same worktree, then project, then
+/// anywhere), then the nearest in the sidebar's `order`, the one after before the one before.
+/// `shown` (in other panes) are skipped.
+fn neighbour(
+    order: &[SessionId],
+    gone: &SessionInfo,
+    sessions: &[SessionInfo],
+    shown: &[SessionId],
+) -> Option<SessionId> {
+    let at = order.iter().position(|id| *id == gone.id).unwrap_or(0);
+    let same = |a: &Option<String>, b: &Option<String>| a.is_some() && a == b;
+    order
+        .iter()
+        .enumerate()
+        .filter(|(_, id)| **id != gone.id && !shown.contains(id))
+        .filter_map(|(i, id)| sessions.iter().find(|s| s.id == *id).map(|s| (i, s)))
+        .filter(|(_, s)| s.state != ProcessState::Dormant)
+        .min_by_key(|(i, s)| {
+            let place = if same(&s.worktree, &gone.worktree) {
+                0
+            } else if same(&s.project, &gone.project) {
+                1
+            } else {
+                2
+            };
+            (!s.state.is_live(), place, i.abs_diff(at), *i < at)
+        })
+        .map(|(_, s)| s.id)
+}
+
 /// Where `anchor` is in `rows`; once it's gone, the selectable row nearest `fallback` (its
 /// index when it was selected).
 fn anchor_index(rows: &[Row], anchor: Option<&Row>, fallback: usize) -> usize {
@@ -3739,6 +3823,118 @@ mod tests {
             s.push('\n');
             s
         })
+    }
+
+    fn placed(name: &str, project: Option<&str>, worktree: Option<&str>) -> SessionInfo {
+        let mut s = session(name);
+        s.project = project.map(Into::into);
+        s.worktree = worktree.map(Into::into);
+        s
+    }
+
+    fn shows(app: &App, pane: PaneId) -> Option<String> {
+        let id = app.panes.get(&pane)?.session?;
+        app.session(id).map(|s| s.name.clone())
+    }
+
+    #[test]
+    fn the_neighbour_is_live_nearby_and_after_first() {
+        let (a, b, c) = (session("a"), session("b"), session("c"));
+        let all = vec![a.clone(), b.clone(), c.clone()];
+        let order: Vec<SessionId> = all.iter().map(|s| s.id).collect();
+        // The one after, else the one before.
+        assert_eq!(neighbour(&order, &b, &all, &[]), Some(c.id));
+        assert_eq!(neighbour(&order, &c, &all, &[]), Some(b.id));
+        // Shown in another pane: skipped.
+        assert_eq!(neighbour(&order, &b, &all, &[c.id]), Some(a.id));
+        assert_eq!(neighbour(&order, &b, &all, &[a.id, c.id]), None);
+
+        // Live beats exited, and a dormant agent is never picked (showing it would wake it).
+        let mut exited = session("exited");
+        exited.state = ProcessState::Exited { code: Some(0), signal: None };
+        let mut dormant = session("dormant");
+        dormant.state = ProcessState::Dormant;
+        let gone = session("gone");
+        let all = vec![gone.clone(), dormant.clone(), exited.clone(), a.clone()];
+        let order: Vec<SessionId> = all.iter().map(|s| s.id).collect();
+        assert_eq!(neighbour(&order, &gone, &all, &[]), Some(a.id));
+        assert_eq!(neighbour(&order, &gone, &all, &[a.id]), Some(exited.id));
+        assert_eq!(neighbour(&order, &gone, &all, &[a.id, exited.id]), None);
+
+        // Same worktree beats same project beats elsewhere, however far down.
+        let gone = placed("gone", Some("p"), Some("w1"));
+        let near = placed("near", None, None);
+        let project = placed("project", Some("p"), Some("w2"));
+        let worktree = placed("worktree", Some("p"), Some("w1"));
+        let all = vec![gone.clone(), near.clone(), project.clone(), worktree.clone()];
+        let order: Vec<SessionId> = all.iter().map(|s| s.id).collect();
+        assert_eq!(neighbour(&order, &gone, &all, &[]), Some(worktree.id));
+        assert_eq!(neighbour(&order, &gone, &all, &[worktree.id]), Some(project.id));
+    }
+
+    #[test]
+    fn a_removed_session_s_pane_shows_the_next_one() {
+        let mut app = app();
+        let (a, b, c) = (session("a"), session("b"), session("c"));
+        app.sessions = vec![a.clone(), b.clone(), c.clone()];
+        app.panes.get_mut(&1).unwrap().session = Some(b.id);
+        app.on_event(DomainEvent::SessionRemoved { id: b.id });
+        assert_eq!(shows(&app, 1).as_deref(), Some("c"), "the one after it");
+        app.on_event(DomainEvent::SessionRemoved { id: c.id });
+        assert_eq!(shows(&app, 1).as_deref(), Some("a"), "the last one: the one before");
+        app.on_event(DomainEvent::SessionRemoved { id: a.id });
+        assert_eq!(shows(&app, 1), None);
+        let shown = screen(&app);
+        assert!(shown.contains("Nothing running in main yet"), "{shown}");
+        assert!(shown.contains("start an agent or a shell"), "{shown}");
+    }
+
+    #[test]
+    fn in_splits_a_pane_takes_a_session_not_shown_else_closes() {
+        let mut app = app();
+        let (a, b, c) = (session("a"), session("b"), session("c"));
+        app.sessions = vec![a.clone(), b.clone(), c.clone()];
+        let right = app.layout.split(1, Dir::Right).unwrap();
+        app.panes.insert(right, PaneState::default());
+        app.panes.get_mut(&1).unwrap().session = Some(a.id);
+        app.panes.get_mut(&right).unwrap().session = Some(b.id);
+        app.focused = right;
+        app.on_event(DomainEvent::SessionRemoved { id: b.id });
+        assert_eq!(shows(&app, right).as_deref(), Some("c"));
+        // Only `a` is left, and the other pane shows it: this split closes.
+        app.on_event(DomainEvent::SessionRemoved { id: c.id });
+        assert!(!app.layout.contains(right));
+        assert_eq!(app.focused, 1);
+        assert_eq!(shows(&app, 1).as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn a_session_stopped_here_moves_its_pane_on_unless_on_stop_is_stay() {
+        let mut app = app();
+        let (a, b) = (session("a"), session("b"));
+        app.sessions = vec![a.clone(), b.clone()];
+        app.panes.get_mut(&1).unwrap().session = Some(a.id);
+        let exited = |s: &SessionInfo| {
+            let mut s = s.clone();
+            s.state = ProcessState::Exited { code: Some(0), signal: None };
+            DomainEvent::SessionExited { info: s }
+        };
+        // Exiting on its own (not stopped here): the pane keeps showing it, with ⏎ restart.
+        app.on_event(exited(&b));
+        assert_eq!(shows(&app, 1).as_deref(), Some("a"));
+        app.confirmed(Confirmed::Stop(a.id));
+        app.on_event(exited(&a));
+        assert_eq!(shows(&app, 1).as_deref(), Some("b"), "an exited one beats nothing");
+        assert_eq!(app.panes[&1].last, Some(a.id), "` brings the stopped one back");
+        assert!(app.session(a.id).is_some(), "it stays in the sidebar");
+
+        let mut app = self::app();
+        app.config.ui.on_stop = ptyro_core::config::OnStop::Stay;
+        app.sessions = vec![a.clone(), b.clone()];
+        app.panes.get_mut(&1).unwrap().session = Some(a.id);
+        app.confirmed(Confirmed::Stop(a.id));
+        app.on_event(exited(&a));
+        assert_eq!(shows(&app, 1).as_deref(), Some("a"));
     }
 
     #[test]

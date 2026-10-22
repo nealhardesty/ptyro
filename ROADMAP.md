@@ -1222,7 +1222,7 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
     actions and fails on a command with no TUI path unless `docs/tui-parity.md` waives it with a
     reason (e.g. `ptyro hook`, `ptyro proxy`).
   - *Done when:* CI fails on a new CLI command without a TUI action or a waiver.
-- [ ] **UX1.23 A removed session's pane shows the next one** (owner, 2026-10-22; high priority)
+- [x] **UX1.23 A removed session's pane shows the next one** (owner, 2026-10-22; high priority)
   — S.
   - **Today:** when the shown session is removed (`x` on an exited session, `X`, `ptyro kill` /
     `rm`), a split closes, but the last pane takes the first not-shown session in tree order,
@@ -1236,6 +1236,9 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
     (the default) the pane moves on too, and `C-r` / the sidebar bring the exited one back.
   - *Done when:* TUI tests remove the middle, the last and the only session, in one pane and
     in splits, and the pane shows the expected neighbour each time.
+  - *Done (2026-10-22):* `neighbour()` and `App::move_on` in `crates/ptyro-tui/src/app.rs`, with
+    tests for the ranking, removal, splits and `on_stop`; the empty pane says what to do next
+    (SPEC §11.2h).
 - [ ] **UX1.1 Real program names** (R-UX-20) — S. Claude Code's process is named after its
   version, so the foreground probe shows `2.1.309` (SPEC §20 when verified on Linux). When the
   name looks like a version, or is a known launcher, use argv[0] and the known-agent table, so
@@ -1318,6 +1321,29 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
     used in this project.
   - From the shell: `ptyro "fix the flaky test"` does the same and attaches.
   - *Done when:* end-to-end test from keys to a fake agent receiving the prompt.
+- [ ] **UX1.24 Every new thing has a name and a title** (R-UX-29; owner, 2026-10-22) — M.
+  Today agent sessions are named `claude`, `claude-2`…, which says nothing in the sidebar, and
+  the name is the only label a session has.
+  - **Two fields** (SPEC §2): the **name** is the address (slugged, fixed at creation, changed
+    only by rename); the **title** is free text people read (the task, a PR title, later a
+    UX1.3 summary) and may change freely. Sessions and worktrees get both; `SessionInfo.title`
+    already exists and is unused, and the protocol and store gain the worktree's.
+  - **Every create dialog shows the name**: new session, new worktree, workspace and project.
+    It is never blank and never required. It is filled with a dimmed suggestion that ⏎ accepts;
+    typing replaces it, and the as-typed checks and Tab fix apply as today. In UX1.9's one box
+    it is a preview line under the prompt (`→ fix-flaky-test · claude · new worktree`), and Tab
+    edits it, so the fast path gains no step.
+  - **The suggestion** comes from the best thing known: a slug of the prompt › the PR or issue
+    title › the branch › the worktree's name › `<agent>-<corvid>` (`claude-rook`, not
+    `claude-2`). It follows the prompt as you type until you edit the name, then stops. The
+    title defaults to the prompt (trimmed), else the PR or issue title, else nothing.
+  - The sidebar and header show the title when there is one and the name otherwise, with the
+    name still visible for typing. UX1.2's detail lines use the title. `ptyro rename` changes
+    the name; `ptyro retitle` (and `,` offering both) changes the title. `ptyro new`, `run` and
+    `wt new` take `--title`.
+  - *Done when:* TUI tests create a session and a worktree from a prompt, from a PR and from
+    nothing, and check the suggested name, that ⏎ accepts it, that an edited name stops
+    following the prompt, and that the title is shown. `make tui-parity` covers `retitle`.
 - [ ] **UX1.10 Where work comes from** (R-WT-05) — M. The wizard's target step offers:
   - a pasted GitHub PR or issue URL (→ `--pr` / `--issue`);
   - an existing branch (`--existing`);
@@ -1395,7 +1421,7 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
   it a column at a time. These match the pane-resize keys after the prefix, and both are free
   in the sidebar. They share the 12–80 clamp and the saved view with the drag above.
 
-Suggested order: UX1.23 → UX1.0 → UX1.1–1.2 → UX1.4–1.8 → UX1.9, UX1.17 → UX1.14–1.15 → UX1.12 →
+Suggested order: UX1.23 → UX1.0 → UX1.1–1.2 → UX1.4–1.8 → UX1.9, UX1.24, UX1.17 → UX1.14–1.15 → UX1.12 →
 UX1.19 → UX1.3 (after its spike) → the rest.
 
 ---

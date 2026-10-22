@@ -92,6 +92,7 @@ const STARTER: &str = r#"# ptyro configuration. Every key is optional; see SPEC 
 # sidebar = true
 # sidebar_width = 30
 # mouse = true
+# on_stop = "next"         # after you stop a pane's session: next (its neighbour) | stay
 
 [daemon]
 # scrollback_lines = 10000

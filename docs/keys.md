@@ -54,7 +54,7 @@ action by name.
 | `\` | show or hide the sidebar |
 | `[` or `PageUp` | copy mode |
 | `]` | paste what you last copied |
-| `x` / `X` | stop the session (with confirmation) / kill it now |
+| `x` / `X` | stop the session (with confirmation) / kill it now. The pane moves on to the nearest other session (`[ui] on_stop`); `` ` `` brings the stopped one back |
 | `C-r` | run an exited session's command again |
 | `,` | rename the session |
 | `=` | take control: size the session to your pane (when another client resized it) |
@@ -76,7 +76,7 @@ Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.
 | `Space` | mark a session for broadcast (`b`) |
 | `n` / `N` | new session here / new worktree |
 | `a` `p` `i` `e` | next attention / peek / inbox / why this status |
-| `x` / `X` | stop a session or remove a worktree (refuses to lose work) / kill |
+| `x` / `X` | stop a session (`x` again removes it) or remove a worktree (refuses to lose work) / kill. Its pane shows the next session |
 | `R` | restart an exited session |
 | `,` | rename |
 | `D` `O` `S` | inspector / runs / change sets |

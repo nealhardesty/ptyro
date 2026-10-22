@@ -21,6 +21,7 @@ The full schema is in [`SPEC.md`](../SPEC.md). This page covers the settings peo
 prefix = "C-]"            # one key or a list; default ["C-q", "C-Space"]
 theme = "ptyro-light"     # ptyro-dark (default), ptyro-light, high-contrast, or your own
 tint_borders = true       # colour pane dividers with the session's profile
+# on_stop = "stay"        # after you stop a pane's session, keep showing it (default: the next one)
 # mouse = false           # let the terminal own the mouse (native selection)
 
 [worktrees]
