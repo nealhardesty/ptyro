@@ -4,8 +4,18 @@ Generated from git history by `make changelog` (scripts/changelog.sh); edit comm
 
 ## Unreleased
 
+### Features
+
+- feat: the default prefix is Ctrl-Q (7fab60a)
+
 ### Fixes
 
+- fix: make changelog works on macOS (a51029a)
+- fix: a late prompt hook no longer resets a pending verify bounce; tokio 1.54.0 (yanked) -> 1.54.1 (78ffdd0)
+- fix: path addresses find their project or worktree on macOS too (f6dd8a3)
+- fix: a session started inside a worktree finds it on macOS (/var is /private/var) (40a5909)
+- fix: config hot reload works when the config dir is reached through a symlink (macOS /var) (86eb579)
+- fix: a PTY with no foreground group on macOS no longer panics the daemon (f2789ba)
 - fix(test): the pairing claim helper sends a Host the serve check accepts (92d98eb)
 - fix(test): keep the restart test's job alive long enough to compare pids (d91deb8)
 - fix: SPEC and ROADMAP for the security review (M1-M3) (92b2902)
@@ -27,9 +37,15 @@ Generated from git history by `make changelog` (scripts/changelog.sh); edit comm
 
 ### Documentation
 
+- docs: regenerate CHANGELOG.md (d735931)
 - docs: regenerate CHANGELOG.md (30eb521)
 
 ### Other
 
+- build: make bump sets the release version (6f2a902)
+- Ignore local git config file in .gitignore- Add /.gitconfig entry to .gitignore so a repo-local git identity file is not accidentally committedCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com> (f0d84af)
+- Fix rust install (no homebrew, real install) (8c85e6c)
+- build: make rust-install installs rustup and the pinned toolchain (Linux, macOS) (6a21d6d)
+- ci: time out hung jobs (e17e8e0)
 - ptyro: initial public commit (f1a18fb)
 
