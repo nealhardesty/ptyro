@@ -1,6 +1,6 @@
 # ptyro logo riffs
 
-Ten riffs on each of seven favourites (05, 22, 23, 25, 28, 48, 45), numbered 51–120. They favour few shapes, thick strokes and strong contrast so that they read from a distance. Rebuild with `make logos`.
+Ten riffs on each of seven favourites (05, 22, 23, 25, 28, 48, 45), numbered 51–120. They favour few shapes, thick strokes and strong contrast so that they read from a distance. Rebuild with `make logos`. Concepts 01–50 are listed in the [parent README](../README.md).
 
 # Riffs on 05 Fireworks
 
