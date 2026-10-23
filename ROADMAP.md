@@ -1471,6 +1471,13 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
 
 ### Learn nothing up front
 
+- [ ] **UX1.26 Several lines in ptyro's own boxes** (owner, 2026-10-23) — S. In the task box
+  (UX1.9), peek's reply and the other text prompts, Enter sends and nothing makes a new line,
+  while the agents' panes, `ptyro send` and the web all take several lines (docs/keys.md).
+  `Shift+Enter`, `Alt+Enter` and `Ctrl+J` insert a new line. The box grows up to a third of the
+  screen and wraps, and the hint line says which key makes a new line. Pasting keeps its new
+  lines. Name prompts (rename, a new worktree's name) stay single-line. *Done when:* TUI tests
+  type a two-line task with each key, and the agent receives one prompt with both lines.
 - [x] **UX1.14 Which-key** (R-UX-18) — S. If nothing follows the prefix within
   `[ui] which_key_delay` (400 ms; `0` turns it off), a compact menu of the next keys appears,
   grouped and as bound. Keys typed before it appears work as today. *Done (2026-10-22):*
@@ -1543,8 +1550,8 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
   clamps and the keys (SPEC §11.2h).
 
 Suggested order: UX1.23 → UX1.0 → UX1.1–1.2 → UX1.4–1.8 → UX1.9, UX1.24, UX1.17 → UX1.14–1.15 → UX1.12 →
-UX1.19 → UX1.3 (after its spike) → the rest. Of what's open: UX1.25, then UX1.22 (the tour
-can then show the quick terminal).
+UX1.19 → UX1.3 (after its spike) → the rest. Of what's open: UX1.25, UX1.26, then UX1.22 (the
+tour can then show the quick terminal).
 
 ---
 
@@ -1578,10 +1585,34 @@ up), and `make parity` fails CI on a CLI command with neither a web path nor a w
   and checks, integrate, the review queue.
 - [ ] **WEB1.5 Runs and change sets** — M. Recipes, fan-out compare and pick, gates, change
   sets and their merge train.
+- [ ] **WEB1.7 TLS by default for `ptyro serve`** (R-REM-11; owner, 2026-10-23) — M. Today
+  `serve` speaks plain HTTP on loopback or Tailscale and relies on Tailscale HTTPS or a reverse
+  proxy for TLS; any other address needs `--insecure` (tokens in clear).
+  - **Default: HTTPS with a certificate ptyro makes.** On first use, a small local CA and a
+    server certificate for `localhost`, the loopback addresses, the host name, its LAN
+    addresses and its Tailscale name. Kept under `<data>/serve/tls/` (0600) and re-issued when
+    the addresses change. `--cert`/`--key` (and `[remote] tls_cert`/`tls_key`) use your own.
+  - **Phones trust it once.** Browsers reject a self-signed certificate for PWAs, service
+    workers and push. `ptyro pair` offers the CA (a QR code, and a download at `/ca.crt`), and
+    `docs/remote.md` covers installing it on iOS and Android. The pairing QR carries the
+    certificate's fingerprint, so the page can warn on a mismatch.
+  - **Plain HTTP only where TLS ends earlier, or on `--insecure`.** `--tailscale` and
+    `trusted_proxy = true` put TLS in front and talk HTTP to `127.0.0.1`, as today.
+    `--insecure` is plain HTTP anywhere, with the warning it has now.
+  - **`--local`: the local network without Tailscale.** Listen on every interface, but accept
+    only peers on loopback, private (RFC 1918, IPv6 ULA) and link-local addresses, over TLS.
+    Today that takes `--insecure`. *(Open: is `--local` "LAN peers only" as written here, or
+    "also loopback without TLS"? Decide in the task.)*
+  - The health badge and `ptyro doctor` flag a certificate that is about to expire, and a
+    `serve` running on plain HTTP off loopback.
+  - *Done when:* `ptyro serve --local` on a LAN, with the CA installed on a phone, installs the
+    PWA and gets push with no browser warning. Tests cover certificate making and renewal, the
+    peer filter, and HTTP being refused off loopback without `--insecure`.
 - [ ] **WEB1.6 Settings and health** — M. Profiles and logins, workspaces, the health badge and
   its fixes, the config (validated as `ptyro config edit` does), quit (`app.quit`).
 
-Suggested order: WEB1.0 → WEB1.1 → WEB1.2 → WEB1.3 → WEB1.4 → the rest. From WEB1.0 on, every
+Suggested order: WEB1.0 → WEB1.1 → WEB1.7 (phones need it) → WEB1.2 → WEB1.3 → WEB1.4 → the
+rest. From WEB1.0 on, every
 new feature in any milestone ships with its web part.
 
 ---

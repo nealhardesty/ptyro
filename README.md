@@ -380,8 +380,10 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
   and OpenCode uses; macOS takes `Ctrl-Space` for switching input sources, and VS Code's terminal
   on Linux and Windows and Zellij take `Ctrl-Q`. Press a prefix twice to send it to the program.
   Set your own with `[ui] prefix`, one key (`"C-]"`) or a list.
-- **Shift+Enter** reaches Claude when your terminal speaks the kitty keyboard protocol (Ghostty,
-  kitty, WezTerm, foot, recent iTerm2 and Alacritty). `Ctrl-Q ?` shows whether it's on.
+- **A new line in a prompt:** `Shift+Enter` when your terminal speaks the kitty keyboard protocol
+  (Ghostty, kitty, WezTerm, foot, recent iTerm2 and Alacritty; `Ctrl-Q ?` shows whether it's
+  on). `Ctrl+J` works in every terminal, and `Alt+Enter` does too where Option/Alt sends Meta.
+  On the web, `Shift+Enter`; with `ptyro send`, a real new line in the text (`$'one\ntwo'`). [More](docs/keys.md#several-lines-in-one-prompt).
 - **Native mouse selection:** hold Shift while dragging, or set `[ui] mouse = false`.
 - **Prompt jumps, live cwd and each shell's last command in the sidebar** need one line in
   your shell's rc file:

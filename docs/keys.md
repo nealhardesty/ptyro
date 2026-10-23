@@ -155,6 +155,26 @@ Tabs `1`–`5` (or `Tab` / `Shift-Tab`): Diff, Commits, Checks, Ports, Events.
 - **Change sets:** `⏎` shows a member's agent, `m` sends a message, `1`–`9` answer the gate,
   `c` runs checks, `p` takes a checkpoint, `r` refreshes, `Esc` goes back.
 
+## Several lines in one prompt
+
+Enter sends a prompt. To start a new line instead:
+
+| Where | New line | Notes |
+|---|---|---|
+| An agent's pane (Claude Code, Codex) | `Shift+Enter`, `Alt+Enter`, `Ctrl+J`; in Claude also `\` then Enter | All four verified through ptyro (Claude Code 2.1.309, Codex 0.164, 2026-10-23). |
+| ptyro's own boxes (the task box, rename, peek's reply) | not yet: Enter sends | ROADMAP UX1.26. Paste a multi-line text instead, or type it in the agent's pane. |
+| `ptyro send` | a real new line in the text: `ptyro send s $'line 1\nline 2'`, or a quoted string over two lines | Multi-line text is pasted, bracketed when the program asked for it, so nothing is sent early. Enter is pressed once afterwards (not with `--no-enter`). |
+| The web app | `Shift+Enter` | Enter (or Send) sends. |
+
+`Shift+Enter` needs a terminal that tells it apart from Enter, which the TUI asks for with the
+kitty keyboard protocol. That works in Ghostty, kitty, WezTerm, foot, iTerm2 3.5+ and Alacritty
+0.13+; `Ctrl-Q ?` shows whether it's on. Elsewhere (Terminal.app, older terminals) `Shift+Enter`
+arrives as a plain Enter and sends. Use `Ctrl+J`, which works everywhere, or `Alt+Enter` (on
+macOS, turn on "Use Option as Meta key" in Terminal.app, or "Esc+" for the left Option key in
+iTerm2). Inside tmux, `set -g extended-keys on` lets `Shift+Enter` through. VS Code's terminal
+needs Claude's `/terminal-setup` (it binds `Shift+Enter` to send `\` then Enter, which works
+through ptyro too).
+
 ## Copy mode
 
 `Ctrl-Q [` freezes the scrollback so you can read it while output continues.

@@ -4695,6 +4695,10 @@ learn something the hard way.
   and don't ask again for this (in this directory), `3` switch to auto mode, `4` No, Esc cancels.
   `Notification(permission_prompt)` carries only the generic message "Claude needs your
   permission".
+- **[verified 2026-10-23, 2.1.309, through ptyro]** In the prompt box a new line comes from
+  `Ctrl+J` (LF), kitty `Shift+Enter` (`CSI 13;2u`), `Alt+Enter` (`ESC CR`) and `\` then Enter;
+  a bare CR submits. Codex 0.164 takes `Ctrl+J`, kitty `Shift+Enter` and `Alt+Enter` the same
+  way. User guidance: docs/keys.md "Several lines in one prompt".
 - **[verified 2026-10-20, 2.1.304, M4]** Text followed immediately by `\r` in one write is
   treated as a paste and not submitted, because Claude enables the kitty keyboard protocol. Enter
   must come as its own key event after a short pause (ptyro waits 60 ms and sends the encoded
