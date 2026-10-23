@@ -614,7 +614,11 @@ impl Daemon {
             self.auto_register(&spec.cwd, spec.workspace.as_deref()).await;
         }
         let target = self.target(spec.worktree.as_deref(), &spec.cwd)?;
-        let cwd = target.as_ref().map_or_else(|| spec.cwd.clone(), |(w, _)| w.path.clone());
+        // A worktree by address starts at its root; a directory inside one stays where asked.
+        let cwd = match (&spec.worktree, &target) {
+            (Some(_), Some((w, _))) => w.path.clone(),
+            _ => spec.cwd.clone(),
+        };
         if !cwd.is_dir() {
             return Err(Error::invalid(format!("not a directory: {}", cwd.display())));
         }

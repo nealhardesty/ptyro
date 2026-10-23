@@ -1039,6 +1039,13 @@ struct SpawnSpec {
 }
 ```
 
+**[built]** Where it starts: a worktree given by address (`Worktree`) starts at its root. A
+directory (`Cwd`) starts exactly there, even inside a registered worktree; the innermost
+worktree that contains it only places the session (project, profile, sidebar). Before
+2026-10-23 a `Cwd` inside any worktree was moved to that worktree's root, and UX1.5's
+auto-registration made every directory in a repository hit it (`ptyro new -C repo/sub` ran in
+`repo`).
+
 ### 7.3 Process lifecycle state machine **[decided]**
 
 ```text

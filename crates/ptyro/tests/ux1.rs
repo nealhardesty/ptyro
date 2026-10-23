@@ -1,7 +1,7 @@
 //! UX1 end-to-end tests (ROADMAP UX1): what the out-of-the-box experience needs from a real
 //! daemon, with the fake agent standing in for the agents.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use ptyro_client::Client;
@@ -233,6 +233,29 @@ async fn the_repository_you_are_in_registers_itself_and_undo_sticks() {
     assert!(workspace(&c, "side").await.projects.contains(&added.id));
     // The sessions already there move in within a sweep.
     wait_for(&c, "two", "back in the project", |s| s.project.as_deref() == Some(&added.id)).await;
+}
+
+/// A session started in a subdirectory of a project starts there, not at the worktree's root;
+/// one started on a worktree by address starts at its root.
+#[tokio::test]
+async fn a_session_starts_in_the_directory_asked_for_inside_a_project() {
+    let w = World::new("exec sleep 60");
+    let c = w.d.client().await.unwrap();
+    let dir = repo(&w, "myrepo");
+    let sub = dir.join("deep/sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    let spec = |name: &str, cwd: &Path, worktree: Option<&str>| SpawnSpec {
+        cwd: cwd.to_path_buf(),
+        name: Some(name.into()),
+        worktree: worktree.map(str::to_owned),
+        size: Some(TermSize::new(80, 20)),
+        ..SpawnSpec::default()
+    };
+    let s = spawn(&c, spec("in-sub", &sub, None)).await;
+    assert_eq!(s.cwd, sub, "where it was asked to start");
+    assert!(s.worktree.is_some(), "still placed in the project's main checkout");
+    let at_root = spawn(&c, spec("on-wt", &sub, Some("myrepo/@root"))).await;
+    assert_eq!(at_root.cwd, dir, "a worktree by address starts at its root");
 }
 
 /// UX1.5: a shell that `cd`s into another repository puts that one in the sidebar too.
