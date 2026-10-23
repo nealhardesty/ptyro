@@ -43,7 +43,7 @@ action by name.
 | `O` | runs: fan-outs and recipes, their steps and gates, the comparison |
 | `S` | change sets: members as swimlanes, gates, issues, the ledger |
 | `t` | structured session: chat view ⇄ terminal view |
-| `j` / `k` (or `Down` / `Up`) | show the next / previous session of the workspace here, in sidebar order, across projects |
+| `j` / `k` (or `Down` / `Up`) | show the next / previous session of the workspace here, in sidebar order, across projects (quick terminals are skipped) |
 | `1` … `9` | show the session numbered N in the sidebar here |
 | `/` | find a session (fuzzy) |
 | `` ` `` | the previously shown session |

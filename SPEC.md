@@ -2355,7 +2355,7 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
     and listening ports.
   - Folding: `⏎`/`Space`, `h`/`l`, or a click. `1`–`9` number the visible session rows. In the sidebar
     `j`/`k` move the selection; after the prefix they cycle every session of the workspace in
-    tree order.
+    tree order, skipping quick terminals (§11.2h).
 - **Workspaces:** `w` opens the switcher (each workspace's profile, project and session counts, "+
   new workspace"). Views are saved per workspace (`view:<name>`), and the last workspace is
   stored under `_tui`. Opening on a session from another workspace switches to that workspace. A
