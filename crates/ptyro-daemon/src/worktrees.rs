@@ -211,7 +211,16 @@ impl Daemon {
     /// SPEC §10.3: name → profile → branch and base → `git worktree add` → marker → includes →
     /// ports → setup script → agent.
     pub async fn create_worktree(self: &Arc<Self>, mut spec: WorktreeSpec) -> Result<Reply, Error> {
-        let p = self.find_project(&spec.project)?;
+        // A path in a repository that isn't a project yet registers it (UX1.5), so
+        // `ptyro "fix it"` or `new --new-wt` works in a fresh clone.
+        let p = match self.find_project(&spec.project) {
+            Ok(p) => p,
+            Err(e) if Path::new(&spec.project).is_absolute() => self
+                .auto_register(Path::new(&spec.project), spec.workspace.as_deref())
+                .await
+                .ok_or(e)?,
+            Err(e) => return Err(e),
+        };
         let mut issue_note = None;
         if let Some(issue) = spec.issue.clone() {
             issue_note = Some(self.from_issue(&p, &issue, &mut spec).await?);
@@ -233,7 +242,19 @@ impl Daemon {
                 }
                 n
             }
-            None => names::friendly(SessionId::new().seed(), |n| taken(n) || self.name_taken(n)),
+            // From what it's for (UX1.24): `--title` or the prompt (`fix-flaky-test`), made unique;
+            // else a friendly pair.
+            None => {
+                match spec.title.as_deref().or(spec.prompt.as_deref()).and_then(names::from_text) {
+                    Some(n) if !taken(&n) => n,
+                    Some(n) => {
+                        (2..).map(|k| format!("{n}-{k}")).find(|c| !taken(c)).expect("infinite")
+                    }
+                    None => {
+                        names::friendly(SessionId::new().seed(), |n| taken(n) || self.name_taken(n))
+                    }
+                }
+            }
         };
         let explicit = spec.profile.clone().or_else(|| {
             spec.agent.as_deref().and_then(|a| ptyro_agents::split_agent(a).1.map(str::to_owned))
@@ -308,6 +329,11 @@ impl Daemon {
             status: None,
             locked: false,
             pr: None,
+            title: spec
+                .title
+                .clone()
+                .or_else(|| spec.prompt.clone())
+                .map(|t| ptyro_core::session::brief(&t, 120)),
         };
         self.put_worktree(wt.clone());
         let progress = |step: &str| {
@@ -815,6 +841,7 @@ impl Daemon {
                     status: None,
                     locked: false,
                     pr: None,
+                    title: None,
                 });
             }
         }

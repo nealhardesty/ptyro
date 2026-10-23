@@ -420,6 +420,7 @@ impl Daemon {
                     status: None,
                     locked: false,
                     pr: None,
+                    title: None,
                 });
                 if let Some(rw) = self.root_worktree(&p.id) {
                     self.watch_worktree_bg(&rw);

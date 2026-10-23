@@ -1333,7 +1333,7 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
   showing a toast that names the palette command. Once you pick a project, carry on with the
   action that asked for it. *Done (2026-10-22):* `N`, `o`, `r`, `R` and `project.trust`, and
   the wizard's "+ add a project…", via `AfterAdd`; `project.add` is bound to `P` (SPEC §11.2h).
-- [ ] **UX1.9 Prompt-first new task** (R-UX-23, R-UX-01 slugs) — M. `Ctrl-Q n` opens one box:
+- [x] **UX1.9 Prompt-first new task** (R-UX-23, R-UX-01 slugs) — M. `Ctrl-Q n` opens one box:
   "what should it do?".
   - `⏎` creates a worktree, with the name and branch slugged from the prompt (deterministic),
     starts the default agent, and delivers the prompt.
@@ -1343,7 +1343,11 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
     used in this project.
   - From the shell: `ptyro "fix the flaky test"` does the same and attaches.
   - *Done when:* end-to-end test from keys to a fake agent receiving the prompt.
-- [ ] **UX1.24 Every new thing has a name and a title** (R-UX-29; owner, 2026-10-22) — M.
+  - *Done (2026-10-22, with UX1.24):* `Overlay::Task` (preview, Tab name, `C-o` wizard);
+    `ptyro "TASK…"`, which registers the repository on the way; `tests/ux1.rs` drives it from
+    keys to the agent's prompt (SPEC §11.2h, §12.1). Tab edits the name (UX1.24) and `C-o`
+    opens the wizard, instead of Tab opening the wizard.
+- [x] **UX1.24 Every new thing has a name and a title** (R-UX-29; owner, 2026-10-22) — M.
   Today agent sessions are named `claude`, `claude-2`…, which says nothing in the sidebar, and
   the name is the only label a session has.
   - **Two fields** (SPEC §2): the **name** is the address (slugged, fixed at creation, changed
@@ -1366,6 +1370,12 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
   - *Done when:* TUI tests create a session and a worktree from a prompt, from a PR and from
     nothing, and check the suggested name, that ⏎ accepts it, that an edited name stops
     following the prompt, and that the title is shown. `make tui-parity` covers `retitle`.
+  - *Done (2026-10-22):* `names::from_text` and `names::corvid`; store v5 (`title` on sessions
+    and worktrees); `SessionInfo.title` now the title people read, `window_title` the program's;
+    `Retitle{addr, title, worktree}`, `ptyro retitle`, `ptyro wt retitle`, `--title` on `new`
+    and `wt new` (`run` takes none: its sessions are scripts); PR and issue worktrees take their
+    title. TUI and end-to-end tests cover prompts, nothing typed, suggestions, an edited name,
+    retitling and a restart (SPEC §2.1, §11.2h, §14.2).
 - [ ] **UX1.10 Where work comes from** (R-WT-05) — M. The wizard's target step offers:
   - a pasted GitHub PR or issue URL (→ `--pr` / `--issue`);
   - an existing branch (`--existing`);

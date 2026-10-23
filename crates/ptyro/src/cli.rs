@@ -43,8 +43,13 @@ pub fn daemon_start(foreground: bool, spawned: bool) -> i32 {
     }
 }
 
-pub async fn run(cmd: Option<Cmd>, json_wire: bool, remote: Option<String>) -> i32 {
-    match dispatch(cmd, json_wire, remote).await {
+pub async fn run(
+    cmd: Option<Cmd>,
+    task: Vec<String>,
+    json_wire: bool,
+    remote: Option<String>,
+) -> i32 {
+    match dispatch(cmd, task, json_wire, remote).await {
         Ok(code) => code,
         Err(e) => {
             eprintln!("ptyro: {}", e.message);
@@ -76,11 +81,17 @@ impl Ctx {
     }
 }
 
-async fn dispatch(cmd: Option<Cmd>, json_wire: bool, remote: Option<String>) -> Result<i32, Error> {
+async fn dispatch(
+    cmd: Option<Cmd>,
+    task: Vec<String>,
+    json_wire: bool,
+    remote: Option<String>,
+) -> Result<i32, Error> {
     let paths = Paths::from_env().map_err(|e| Error::internal(e.to_string()))?;
     let encoding = if json_wire { Encoding::Json } else { Encoding::MsgPack };
     let ctx = Ctx { paths, encoding, remote };
     match cmd {
+        None if !task.is_empty() => start_task(&ctx, &task.join(" ")).await,
         None => default_action(&ctx).await,
         Some(Cmd::New {
             detach,
@@ -97,6 +108,7 @@ async fn dispatch(cmd: Option<Cmd>, json_wire: bool, remote: Option<String>) -> 
             yes,
             prompt,
             prompt_file,
+            title,
             pr,
             issue,
             unqueued,
@@ -137,6 +149,7 @@ async fn dispatch(cmd: Option<Cmd>, json_wire: bool, remote: Option<String>) -> 
                 override_pin,
                 yes,
                 prompt,
+                title,
                 pr,
                 issue,
                 unqueued,
@@ -338,6 +351,24 @@ async fn dispatch(cmd: Option<Cmd>, json_wire: bool, remote: Option<String>) -> 
                 r => Err(unexpected(r)),
             }
         }
+        Some(Cmd::Retitle { target, title }) => {
+            let c = ctx.connect(false).await.map_err(no_daemon)?;
+            let title = (!title.is_empty()).then(|| title.join(" "));
+            let cleared = title.is_none();
+            match c.request(Request::Retitle { addr: target, title, worktree: false }).await? {
+                Reply::Session { info } if cleared => eprintln!("{}: title cleared", info.name),
+                Reply::Session { info } => {
+                    eprintln!("{}: {}", info.name, info.title.unwrap_or_default())
+                }
+                Reply::Worktree { info } => eprintln!(
+                    "{}: {}",
+                    info.qualified(),
+                    info.title.unwrap_or_else(|| "title cleared".into())
+                ),
+                r => return Err(unexpected(r)),
+            }
+            Ok(0)
+        }
         Some(Cmd::Adopt { session }) => {
             let c = ctx.connect(false).await.map_err(no_daemon)?;
             match c.request(Request::Adopt { addr: session }).await? {
@@ -524,6 +555,39 @@ async fn most_recent(client: &Client) -> Result<Option<SessionInfo>, Error> {
     Ok(live.or_else(|| all.last().cloned()))
 }
 
+/// `ptyro "fix the flaky test"` (UX1.9): the default agent with that as its first prompt, in a
+/// new worktree named after it when you're in a git repository (registered on the way), else
+/// right here; then attach. One word alone is more likely a mistyped command than a task.
+async fn start_task(ctx: &Ctx, task: &str) -> Result<i32, Error> {
+    if !task.trim().contains(char::is_whitespace) {
+        return Err(Error::invalid(format!(
+            "unknown command {task:?} (`ptyro --help` lists them; to start a task, give it in words: ptyro \"fix the flaky test\")"
+        )));
+    }
+    let cwd = current_dir()?;
+    let config = ptyro_core::config::Config::load(&ptyro_core::config::Config::path(&ctx.paths))
+        .unwrap_or_default();
+    let a = NewArgs {
+        agent: Some(ptyro_agents::default_agent(&config)),
+        prompt: Some(task.trim().to_owned()),
+        cwd: Some(cwd.clone()),
+        ..NewArgs::default()
+    };
+    let in_repo = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&cwd)
+        .args(["rev-parse", "--git-dir"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if in_repo {
+        crate::projects::new_in_new_worktree(ctx, a, String::new(), None).await
+    } else {
+        new(ctx, a).await
+    }
+}
+
 async fn default_action(ctx: &Ctx) -> Result<i32, Error> {
     let client = ctx.connect(true).await?;
     match most_recent(&client).await? {
@@ -550,6 +614,8 @@ pub struct NewArgs {
     pub override_pin: bool,
     pub yes: bool,
     pub prompt: Option<String>,
+    /// Its title (UX1.24).
+    pub title: Option<String>,
     pub pr: Option<u32>,
     pub issue: Option<String>,
     pub unqueued: bool,
@@ -643,6 +709,7 @@ pub async fn new(ctx: &Ctx, a: NewArgs) -> Result<i32, Error> {
         env: client_env(),
         size,
         prompt: a.prompt,
+        title: a.title,
         unqueued: a.unqueued,
         verify: a.verify,
         lead: a.lead,

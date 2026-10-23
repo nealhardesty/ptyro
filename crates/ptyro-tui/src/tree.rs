@@ -197,6 +197,7 @@ mod tests {
             last_reply: None,
             command: None,
             inner_agent: None,
+            window_title: None,
         }
     }
 
@@ -219,6 +220,7 @@ mod tests {
             status: None,
             locked: false,
             pr: None,
+            title: None,
         }
     }
 

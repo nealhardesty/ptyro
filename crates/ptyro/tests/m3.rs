@@ -797,15 +797,14 @@ async fn tui_wizard_fast_path_trusts_sets_up_and_follows_the_agent() {
         "-c",
         "echo at-root; sleep 60",
     ]);
-    // n ⏎ ⏎: the default agent, in a new worktree; the trust dialog comes first; y.
+    // n ⏎ (UX1.9, nothing typed): the default agent, in a new worktree with a random name; the
+    // trust dialog comes first; y.
     let r = run(w
         .tui(&["attach", "home-shell"])
         .snapshot(1.4)
         .send(1.5, "\\x11n")
-        .snapshot(2.0)
-        .send(2.2, "\\r")
-        .snapshot(2.6)
-        .send(2.8, "\\r")
+        .snapshot(2.2)
+        .send(2.4, "\\r")
         .snapshot(3.4)
         .send(3.6, "y")
         .snapshot(6.5)
@@ -814,14 +813,9 @@ async fn tui_wizard_fast_path_trusts_sets_up_and_follows_the_agent() {
     let start = r.at(1.4);
     assert!(start.contains("▾ proj [wrk]"), "the tree, with the pin's label: {start}");
     assert!(start.contains("@root (main)") && start.contains("home-shell"), "{start}");
-    let agents = r.at(2.0);
-    assert!(
-        agents.contains("New session in proj/@root · profile wrk — pinned by project"),
-        "{agents}"
-    );
-    assert!(agents.contains("claude  agent (default)"), "{agents}");
-    let targets = r.at(2.6);
-    assert!(targets.contains("+ new worktree in proj"), "{targets}");
+    let task = r.at(2.2);
+    assert!(task.contains("What should it do? · profile wrk — pinned by project"), "{task}");
+    assert!(task.contains("→ claude · new worktree in proj · a random name"), "{task}");
     let trust = r.at(3.4);
     assert!(
         trust.contains("Trust scripts?") && trust.contains("echo setup-ran; sleep 1"),
@@ -846,7 +840,7 @@ async fn tui_wizard_fast_path_trusts_sets_up_and_follows_the_agent() {
         sessions.iter().find(|s| s.agent.as_deref() == Some("claude")).expect("agent session");
     assert_eq!(setup.state.label(), "exited 0");
     assert!(setup.ended_ms.unwrap() <= agent.created_ms, "agent after setup");
-    assert_eq!(agent.name, "claude");
+    assert!(agent.name.starts_with("claude-"), "an agent and a corvid (UX1.24): {}", agent.name);
 }
 
 #[tokio::test]

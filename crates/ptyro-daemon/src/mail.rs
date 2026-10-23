@@ -259,6 +259,8 @@ impl Daemon {
             | Request::SendBytes { addr, .. }
             | Request::SendText { addr, .. } => own(addr),
             Request::Convert { addr, .. } => own(addr),
+            // An agent may say what it's on (its own title, UX1.24).
+            Request::Retitle { addr, .. } => own(addr),
             Request::RunCancel { id } => own_run(id),
             Request::Iterate { run: r, .. } => own_run(r),
             // Everything else: spawning, recipes and forks, configuration, projects,

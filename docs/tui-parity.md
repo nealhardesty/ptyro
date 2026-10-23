@@ -16,7 +16,7 @@ the same check through `make test`. When you add a command, add its row here.
 
 | Command | In the TUI |
 |---|---|
-| `new` | `session.new` (`n`): an agent, a shell or a command line, then where it runs; `worktree.new` (`N`) for a new worktree |
+| `new` | `session.new` (`n`): say what to do, ⏎ (or `C-o` to pick the agent, a shell or a command, and where); `worktree.new` (`N`) for a new worktree |
 | `attach` | `session.find` (`/`), the sidebar (`Tab`, `⏎`), `1`–`9`, `j`/`k` |
 | `list` | `focus.toggle`: the sidebar lists every session with its status; `session.find` (`/`) searches them |
 | `stop` | `session.stop` (`x`) |
@@ -24,6 +24,7 @@ the same check through `make test`. When you add a command, add its row here.
 | `restart` | `session.restart` (`C-r`, or `⏎` on an exited pane) |
 | `rm` | `session.stop` (`x`) on an exited session |
 | `rename` | `session.rename` (`,`) |
+| `retitle` | `session.retitle` (`,` then `C-t`) |
 | `resume` | `session.resume` (or `⏎` on a dormant pane) |
 | `hibernate` | `session.hibernate` |
 | `convert` | gap: UX1.21 (switch between the agent's own TUI and structured mode) |
@@ -78,6 +79,7 @@ the same check through `make test`. When you add a command, add its row here.
 | `wt lock` | gap: UX1.21 |
 | `wt unlock` | gap: UX1.21 |
 | `wt rename-branch` | gap: UX1.21 |
+| `wt retitle` | `worktree.retitle` |
 | `gc` | gap: UX1.12 (clean up merged worktrees) |
 | `ws ls` | `workspace.switch` (`w`) |
 | `ws new` | `workspace.switch` (`w`) → "+ new workspace" |

@@ -96,6 +96,16 @@ pub enum Overlay {
         text: String,
         action: Confirmed,
     },
+    /// `n` (UX1.9): "what should it do?", one box. ⏎ starts the default agent on it in a new
+    /// worktree named after it; Tab edits the name; `C-o` opens the full wizard.
+    Task {
+        text: String,
+        /// The name typed over the suggestion; `None` follows the prompt.
+        name: Option<String>,
+        /// Typing goes to the name, not the prompt.
+        naming: bool,
+        wizard: Wizard,
+    },
     /// Lifecycle scripts shown in full before trusting them (SPEC §10.5).
     Trust {
         scripts: ScriptsInfo,
@@ -114,6 +124,10 @@ pub struct Wizard {
     pub agent: Option<String>,
     /// For `N`: the new worktree's name.
     pub name: Option<String>,
+    /// The first prompt, from the task box (UX1.9); also the title and, slugged, the name.
+    pub prompt: Option<String>,
+    /// A name to offer, dimmed, that ⏎ takes when nothing was typed (UX1.24).
+    pub suggested: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -163,7 +177,12 @@ pub enum PromptKind {
         paths: Vec<String>,
     },
     WorktreeName(Wizard),
-    NewWorkspace,
+    /// A name for a new workspace; ⏎ on nothing takes the suggestion.
+    NewWorkspace(Option<String>),
+    /// A session's title (UX1.24): free text; empty clears it.
+    Retitle(SessionId),
+    /// A worktree's title (by id).
+    RetitleWorktree(String),
     /// Typed in the runs view (M7).
     Orch(crate::runs::OrchInput),
     /// Typed in the change-set view (M11).
@@ -173,7 +192,16 @@ pub enum PromptKind {
 impl PromptKind {
     /// The text is a name (`[a-z0-9._-]`): bad characters are marked and Tab tidies it.
     pub fn is_name(&self) -> bool {
-        matches!(self, Self::Rename(_) | Self::WorktreeName(_) | Self::NewWorkspace)
+        matches!(self, Self::Rename(_) | Self::WorktreeName(_) | Self::NewWorkspace(_))
+    }
+
+    /// The name ⏎ takes when nothing was typed (shown dimmed in the field, UX1.24).
+    pub fn suggestion(&self) -> Option<&str> {
+        match self {
+            Self::WorktreeName(w) => w.suggested.as_deref(),
+            Self::NewWorkspace(s) => s.as_deref(),
+            _ => None,
+        }
     }
 }
 
@@ -1724,7 +1752,7 @@ impl App {
             "help" => self.overlay = Some(Overlay::Help { filter: String::new(), scroll: 0 }),
             "palette" => self.open_palette(),
             "app.detach" => self.quit = Some(AttachEnd::Detached),
-            "session.new" => self.open_wizard(None),
+            "session.new" => self.open_task(None),
             "attention.next" => self.next_attention(),
             "inbox" => {
                 self.overlay =
@@ -1788,11 +1816,12 @@ impl App {
                 let (project, _) = self.context();
                 match project {
                     Some(project) => {
-                        let w = Wizard { project: Some(project), ..Wizard::default() };
+                        let suggested = Some(self.free_worktree_name(&project, None));
+                        let w = Wizard { project: Some(project), suggested, ..Wizard::default() };
                         self.resolve_for(&w);
                         self.overlay = Some(Overlay::Prompt {
                             title: format!(
-                                "{} — name (empty: a random one)",
+                                "{} — name",
                                 wizard_title(
                                     &Wizard { name: Some(String::new()), ..w.clone() },
                                     &self.projects,
@@ -1836,6 +1865,19 @@ impl App {
                 ),
                 None => self.pick_project(Some(AfterAdd::Run("project.trust"))),
             },
+            "worktree.retitle" => match self.context().1.and_then(|w| self.worktree(&w).cloned()) {
+                Some(w) => {
+                    self.overlay = Some(Overlay::Prompt {
+                        title: format!(
+                            "Title of {} (what it's for; empty clears it)",
+                            w.qualified()
+                        ),
+                        text: w.title.clone().unwrap_or_default(),
+                        kind: PromptKind::RetitleWorktree(w.id.clone()),
+                    })
+                }
+                None => self.pick_project(Some(AfterAdd::Run("worktree.retitle"))),
+            },
             "worktree.remove" => match self.context().1.and_then(|w| self.worktree(&w).cloned()) {
                 Some(w) if w.is_root => self.toast("that's the main checkout; it can't be removed"),
                 Some(w) => self.confirm_remove(&w),
@@ -1866,6 +1908,7 @@ impl App {
             | "session.kill"
             | "session.restart"
             | "session.rename"
+            | "session.retitle"
             | "session.take_control" => {
                 let target = if self.focus == Focus::Sidebar {
                     match self.selected_row() {
@@ -2206,11 +2249,12 @@ impl App {
             ),
             "session.rename" => {
                 self.overlay = Some(Overlay::Prompt {
-                    title: format!("Rename {}", info.name),
+                    title: format!("Rename {} (its address; C-t: its title)", info.name),
                     text: info.name.clone(),
                     kind: PromptKind::Rename(id),
                 });
             }
+            "session.retitle" => self.open_retitle(id),
             "session.take_control" => {
                 if let Some(size) = self.sizes.get(&id).copied() {
                     self.send(ClientMsg::Resize { session: id, size });
@@ -2223,6 +2267,17 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// The title prompt (UX1.24), filled with the current title.
+    fn open_retitle(&mut self, id: SessionId) {
+        let Some(info) = self.session(id) else { return };
+        let current = info.title.clone().filter(|t| info.window_title.as_ref() != Some(t));
+        self.overlay = Some(Overlay::Prompt {
+            title: format!("Title of {} (what people read; empty clears it)", info.name),
+            text: current.unwrap_or_default(),
+            kind: PromptKind::Retitle(id),
+        });
     }
 
     fn client_env() -> BTreeMap<String, String> {
@@ -2294,10 +2349,137 @@ impl App {
         self.request(Pending::Resolved, Request::ProfileResolve { spec });
     }
 
-    /// Step one: what to run. The default agent is first, so `n ⏎ ⏎` is the fast path.
-    pub fn open_wizard(&mut self, split: Option<Dir>) {
+    /// A workspace name to offer: a defined profile's without a workspace yet (`work`), else
+    /// `workspace-2`, `-3`… (UX1.24).
+    fn free_workspace_name(&self) -> String {
+        let taken = |n: &str| self.workspaces.iter().any(|w| w.name == n);
+        self.profiles
+            .iter()
+            .filter(|p| p.defined && p.name != ptyro_core::model::DEFAULT_PROFILE)
+            .map(|p| p.name.clone())
+            .find(|n| !taken(n))
+            .unwrap_or_else(|| {
+                (2..).map(|k| format!("workspace-{k}")).find(|n| !taken(n)).expect("infinite")
+            })
+    }
+
+    /// A worktree name not taken in `project`: `want` (a slug of a prompt) or a friendly pair,
+    /// with `-2`, `-3` when taken (UX1.24).
+    pub fn free_worktree_name(&self, project: &str, want: Option<&str>) -> String {
+        let taken = |n: &str| self.worktrees.iter().any(|w| w.project == project && w.name == n);
+        match want {
+            Some(n) if !taken(n) => n.to_owned(),
+            Some(n) => (2..).map(|k| format!("{n}-{k}")).find(|c| !taken(c)).expect("infinite"),
+            None => ptyro_core::names::friendly(SessionId::new().seed(), taken),
+        }
+    }
+
+    /// `n` (UX1.9): "what should it do?" in the context's project (or here).
+    pub fn open_task(&mut self, split: Option<Dir>) {
         let (project, worktree) = self.context();
-        let w = Wizard { project, worktree, split, ..Wizard::default() };
+        let wizard = Wizard { project, worktree, split, ..Wizard::default() };
+        self.resolve_for(&wizard);
+        self.overlay =
+            Some(Overlay::Task { text: String::new(), name: None, naming: false, wizard });
+    }
+
+    /// What the task box will make of what's typed: the name (an edited one, else a slug of the
+    /// prompt, else a random one when the daemon picks), the agent, and where.
+    pub fn task_plan(
+        &self,
+        text: &str,
+        name: Option<&str>,
+        w: &Wizard,
+    ) -> (Option<String>, String, String) {
+        let agent = ptyro_agents::default_agent(&self.config);
+        let slug = name.map(str::to_owned).or_else(|| ptyro_core::names::from_text(text)).map(
+            |n| match &w.project {
+                Some(p) if name.is_none() => self.free_worktree_name(p, Some(&n)),
+                _ => n,
+            },
+        );
+        let place = match w.project.as_ref().and_then(|p| self.project(p)) {
+            Some(p) => format!("new worktree in {}", p.slug),
+            None => format!("here, {}", self.here().display()),
+        };
+        (slug, agent, place)
+    }
+
+    /// The task box's ⏎: the default agent on the prompt, in a new worktree named after it (or
+    /// here, with no project). Nothing typed: today's fast path, a random name.
+    fn start_task(&mut self, text: String, name: Option<String>, w: Wizard) {
+        let text = text.trim().to_owned();
+        let (slug, agent, _) = self.task_plan(&text, name.as_deref(), &w);
+        let prompt = (!text.is_empty()).then_some(text);
+        let w = Wizard { agent: Some(agent), name: slug, prompt, ..w };
+        match w.project.clone() {
+            Some(p) => self.wizard_done(w, Target::NewWorktree(p)),
+            None => self.start_in(w, None),
+        }
+    }
+
+    fn task_key(
+        &mut self,
+        key: KeyEvent,
+        mut text: String,
+        mut name: Option<String>,
+        mut naming: bool,
+        w: Wizard,
+    ) {
+        let ctrl = key.mods.has(Mods::CTRL);
+        match key.code {
+            KeyCode::Esc => return,
+            KeyCode::Enter => {
+                if let Some(n) = name.as_deref().filter(|n| !n.is_empty())
+                    && let Some(e) = ptyro_core::names::problem(n)
+                {
+                    self.toast_err(format!("name: {e}"));
+                } else {
+                    self.start_task(text, name.filter(|n| !n.is_empty()), w);
+                    return;
+                }
+            }
+            // The full wizard: pick the agent and where, the prompt carried along.
+            KeyCode::Char { c: 'o' } if ctrl => {
+                let prompt = (!text.trim().is_empty()).then(|| text.trim().to_owned());
+                self.open_wizard_with(Wizard { prompt, name: None, ..w });
+                return;
+            }
+            KeyCode::Tab | KeyCode::BackTab => {
+                naming = !naming;
+                if naming && name.is_none() {
+                    name = self.task_plan(&text, None, &w).0;
+                }
+            }
+            KeyCode::Char { c: 'u' } if ctrl => {
+                if naming {
+                    name = Some(String::new());
+                } else {
+                    text.clear();
+                }
+            }
+            KeyCode::Backspace => {
+                if naming {
+                    name.get_or_insert_with(String::new).pop();
+                } else {
+                    text.pop();
+                }
+            }
+            KeyCode::Char { c } if !ctrl => {
+                if naming {
+                    name.get_or_insert_with(String::new).push(c);
+                } else {
+                    text.push(c);
+                }
+            }
+            _ => {}
+        }
+        self.overlay = Some(Overlay::Task { text, name, naming, wizard: w });
+    }
+
+    /// The full wizard, step one: what to run (from the task box's `C-o`). The default agent
+    /// is first.
+    fn open_wizard_with(&mut self, w: Wizard) {
         self.resolve_for(&w);
         let default = ptyro_agents::default_agent(&self.config);
         let mut agents = ptyro_agents::names(&self.config);
@@ -2408,11 +2590,15 @@ impl App {
         let agent = w.agent.clone();
         match target {
             Target::NewWorktree(project) => {
+                let agent = agent.filter(|a| !a.starts_with('@'));
                 let spec = WorktreeSpec {
                     project: project.clone(),
                     name: w.name.clone().filter(|n| !n.is_empty()),
                     setup: true,
-                    agent: agent.filter(|a| !a.starts_with('@')),
+                    // The prompt goes to the agent; with no agent it's still the title.
+                    prompt: w.prompt.clone().filter(|_| agent.is_some()),
+                    title: w.prompt.clone(),
+                    agent,
                     ..WorktreeSpec::default()
                 };
                 let req = Request::ProjectScripts { addr: project, worktree: None };
@@ -2434,7 +2620,15 @@ impl App {
             Some(a) => {
                 let cwd = if worktree.is_some() { Default::default() } else { self.here() };
                 self.spawn_spec(
-                    SpawnSpec { agent: Some(a.to_owned()), cwd, worktree, ..SpawnSpec::default() },
+                    SpawnSpec {
+                        agent: Some(a.to_owned()),
+                        cwd,
+                        worktree,
+                        prompt: w.prompt.clone(),
+                        title: w.prompt.clone(),
+                        name: w.name.clone().filter(|n| !n.is_empty()),
+                        ..SpawnSpec::default()
+                    },
                     w.split,
                 );
             }
@@ -2835,6 +3029,9 @@ impl App {
                     .saturating_sub(self.overlay_body_h(2));
                 self.overlay = Some(Overlay::Help { filter, scroll: scroll.min(max) });
             }
+            Overlay::Task { text, name, naming, wizard } => {
+                self.task_key(key, text, name, naming, wizard)
+            }
             Overlay::Picker { mut palette, purpose } => match palette.key(key) {
                 Picked::Stay => self.overlay = Some(Overlay::Picker { palette, purpose }),
                 Picked::Close => {}
@@ -2858,6 +3055,11 @@ impl App {
                 KeyCode::Char { c: 'u' } if key.mods.has(Mods::CTRL) => {
                     self.overlay = Some(Overlay::Prompt { title, text: String::new(), kind });
                 }
+                // Renaming: C-t edits the title instead (UX1.24).
+                KeyCode::Char { c: 't' } if key.mods.has(Mods::CTRL) => match kind {
+                    PromptKind::Rename(id) => self.open_retitle(id),
+                    kind => self.overlay = Some(Overlay::Prompt { title, text, kind }),
+                },
                 KeyCode::Char { c } if !key.mods.has(Mods::CTRL) => {
                     text.push(c);
                     self.overlay = Some(Overlay::Prompt { title, text, kind });
@@ -2986,7 +3188,7 @@ impl App {
                 self.overlay = Some(Overlay::Prompt {
                     title: "New workspace — name".into(),
                     text: String::new(),
-                    kind: PromptKind::NewWorkspace,
+                    kind: PromptKind::NewWorkspace(Some(self.free_workspace_name())),
                 });
             }
             (Target::Editor(name), Purpose::Editor(wt)) => self.open_editor(&wt, &name),
@@ -3041,7 +3243,7 @@ impl App {
                     return Err(format!("{}/{t} exists", x.project_slug));
                 }
             }
-            PromptKind::NewWorkspace if !t.is_empty() => {
+            PromptKind::NewWorkspace(_) if !t.is_empty() => {
                 name(t)?;
                 if self.workspaces.iter().any(|w| w.name == t) {
                     return Err(format!("workspace {t} exists"));
@@ -3083,7 +3285,13 @@ impl App {
                 }
             }
             PromptKind::WorktreeName(mut w) => {
-                w.name = Some(text.trim().to_owned());
+                // Nothing typed: the name it offered (UX1.24).
+                let typed = text.trim().to_owned();
+                w.name = Some(if typed.is_empty() {
+                    w.suggested.clone().unwrap_or_default()
+                } else {
+                    typed
+                });
                 // Then: which agent (shell for none).
                 let mut items: Vec<Item> = ptyro_agents::names(&self.config)
                     .into_iter()
@@ -3135,8 +3343,25 @@ impl App {
             }
             PromptKind::Orch(input) => self.orch_input(input, text),
             PromptKind::Sets(input) => self.sets_input(input, text),
-            PromptKind::NewWorkspace => {
-                let name = text.trim().to_owned();
+            PromptKind::Retitle(id) => {
+                let title = Some(text.trim().to_owned()).filter(|t| !t.is_empty());
+                let done = if title.is_some() { "retitled" } else { "title cleared" };
+                self.request(
+                    Pending::Done(done.into()),
+                    Request::Retitle { addr: id.full(), title, worktree: false },
+                );
+            }
+            PromptKind::RetitleWorktree(id) => {
+                let title = Some(text.trim().to_owned()).filter(|t| !t.is_empty());
+                let done = if title.is_some() { "retitled" } else { "title cleared" };
+                self.request(
+                    Pending::Done(done.into()),
+                    Request::Retitle { addr: id, title, worktree: true },
+                );
+            }
+            PromptKind::NewWorkspace(suggested) => {
+                let typed = text.trim().to_owned();
+                let name = if typed.is_empty() { suggested.unwrap_or_default() } else { typed };
                 if !name.is_empty() {
                     let req =
                         Request::WorkspaceNew { name: name.clone(), profile: None, notify: None };
@@ -4099,7 +4324,7 @@ mod tests {
         assert_eq!(shows(&app, 1), None);
         let shown = screen(&app);
         assert!(shown.contains("Nothing running in main yet"), "{shown}");
-        assert!(shown.contains("start an agent or a shell"), "{shown}");
+        assert!(shown.contains("start a task: say what to do"), "{shown}");
     }
 
     #[test]
@@ -4415,6 +4640,118 @@ mod tests {
         assert_eq!(labels, ["here", "+ add a project…"]);
     }
 
+    fn key(app: &mut App, code: KeyCode, mods: Mods) {
+        app.overlay_key(KeyEvent::new(code, mods));
+    }
+
+    /// A project, its main checkout, and the workspace `main` holding it.
+    fn with_project(app: &mut App) {
+        app.projects.push(project("p1", "myrepo"));
+        app.worktrees.push(root("p1"));
+        app.workspaces.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "w", "name": "main", "profile": "default", "projects": ["p1"],
+                "notify": "all", "created_ms": 0,
+            }))
+            .unwrap(),
+        );
+    }
+
+    #[test]
+    fn the_task_box_names_the_work_after_what_you_type() {
+        let mut app = app();
+        with_project(&mut app);
+        app.run(&Command { action: "session.new", arg: None });
+        let shown = screen(&app);
+        assert!(shown.contains("What should it do?"), "{shown}");
+        assert!(
+            shown.contains("→ claude · new worktree in myrepo · a random name"),
+            "an empty ⏎ is the old n ⏎ ⏎: {shown}"
+        );
+        typed(&mut app, "Fix the flaky test in tests/api.rs");
+        let shown = screen(&app);
+        assert!(shown.contains("→ fix-flaky-test · claude · new worktree in myrepo"), "{shown}");
+        // A worktree by that name exists: the next free one.
+        let mut taken = root("p1");
+        taken.id = "w2".into();
+        taken.name = "fix-flaky-test".into();
+        taken.is_root = false;
+        app.worktrees.push(taken);
+        assert!(screen(&app).contains("→ fix-flaky-test-2 ·"));
+        // Tab edits the name: it starts from the suggestion and stops following the prompt.
+        key(&mut app, KeyCode::Tab, Mods::NONE);
+        typed(&mut app, "\x08\x08");
+        typed(&mut app, "-x");
+        assert!(screen(&app).contains("→ fix-flaky-test-x ·"), "{}", screen(&app));
+        key(&mut app, KeyCode::Tab, Mods::NONE);
+        typed(&mut app, " now");
+        assert!(screen(&app).contains("→ fix-flaky-test-x ·"), "the edited name stays");
+        // A bad name says why, and ⏎ keeps the box.
+        key(&mut app, KeyCode::Tab, Mods::NONE);
+        typed(&mut app, "/");
+        assert!(screen(&app).contains("✗ name:"), "{}", screen(&app));
+        key(&mut app, KeyCode::Enter, Mods::NONE);
+        assert!(matches!(app.overlay, Some(Overlay::Task { .. })));
+        // C-o: the full wizard, the prompt carried along.
+        key(&mut app, KeyCode::Char { c: 'o' }, Mods(Mods::CTRL));
+        match &app.overlay {
+            Some(Overlay::Picker { purpose: Purpose::Agent(w), .. }) => {
+                assert_eq!(w.prompt.as_deref(), Some("Fix the flaky test in tests/api.rs now"));
+            }
+            _ => panic!("the agent picker"),
+        }
+    }
+
+    #[test]
+    fn create_dialogs_offer_a_name_that_enter_takes() {
+        let mut app = app();
+        with_project(&mut app);
+        app.run(&Command { action: "worktree.new", arg: None });
+        let Some(Overlay::Prompt { kind: PromptKind::WorktreeName(w), .. }) = &app.overlay else {
+            panic!("the name prompt")
+        };
+        let offered = w.suggested.clone().unwrap();
+        let shown = screen(&app);
+        assert!(
+            shown.contains(&offered) && shown.contains(&format!("⏎ takes {offered}")),
+            "{shown}"
+        );
+        typed(&mut app, "\n");
+        match &app.overlay {
+            Some(Overlay::Picker { purpose: Purpose::Agent(w), .. }) => {
+                assert_eq!(w.name.as_deref(), Some(offered.as_str()))
+            }
+            _ => panic!("then the agent"),
+        }
+        // A workspace: a profile's name, else workspace-2.
+        app.overlay = None;
+        app.picked(Target::NewWorkspace, Purpose::Workspace);
+        assert!(screen(&app).contains("workspace-2"));
+    }
+
+    #[test]
+    fn a_title_shows_where_people_read_and_rename_can_switch_to_it() {
+        let mut app = app();
+        let mut s = session("fix-flaky-test");
+        s.title = Some("Fix the flaky test in tests/api.rs".into());
+        s.window_title = Some("fix-flaky-test".into());
+        app.panes.get_mut(&1).unwrap().session = Some(s.id);
+        app.sessions = vec![s.clone()];
+        let shown = screen(&app);
+        assert!(shown.contains("task Fix the flaky"), "the row: {shown}");
+        assert!(shown.contains("· Fix the flaky test in tests/api.rs"), "the header: {shown}");
+        // A window title alone isn't a title.
+        let mut w = session("plain");
+        w.title = Some("vim".into());
+        w.window_title = Some("vim".into());
+        assert_eq!(crate::ui::session_title(&w), None);
+        // `,` renames; C-t there edits the title instead, filled with it.
+        app.run(&Command { action: "session.rename", arg: None });
+        key(&mut app, KeyCode::Char { c: 't' }, Mods(Mods::CTRL));
+        assert_eq!(prompt_text(&app), Some("Fix the flaky test in tests/api.rs"));
+        assert!(matches!(&app.overlay, Some(Overlay::Prompt { kind: PromptKind::Retitle(_), .. })));
+    }
+
     #[test]
     fn a_bad_name_is_flagged_as_it_is_typed_and_enter_keeps_it() {
         let mut app = app();
@@ -4446,7 +4783,7 @@ mod tests {
     #[test]
     fn workspace_and_fanout_prompts_are_checked_too() {
         let app = app();
-        let ws = PromptKind::NewWorkspace;
+        let ws = PromptKind::NewWorkspace(None);
         assert!(app.prompt_check(&ws, "").is_ok(), "empty cancels");
         assert!(app.prompt_check(&ws, "Side Job").unwrap_err().contains("'S' (uppercase)"));
         assert!(app.prompt_check(&ws, "side-job").is_ok());

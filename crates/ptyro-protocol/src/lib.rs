@@ -247,6 +247,15 @@ pub enum Request {
         #[serde(default)]
         force: bool,
     },
+    /// Change what a session (`worktree`: a worktree) is titled, for people to read; `None`
+    /// clears it (UX1.24). Its name, the address, stays.
+    Retitle {
+        addr: String,
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        worktree: bool,
+    },
     /// An agent started by hand in this shell session becomes a session of its own, managed like
     /// `new --agent` (hooks, hibernation, mail), resuming the same conversation (UX1.4).
     Adopt {

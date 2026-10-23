@@ -33,7 +33,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("app.detach", "Detach (sessions keep running)"),
     a(
         "session.new",
-        "New session: pick an agent, then where (n ⏎ ⏎: the default agent in a new worktree)",
+        "New task: say what to do; ⏎ starts the default agent on it in a new worktree (C-o: pick)",
     ),
     a("session.command", "New session running a command line (empty: your shell)"),
     a("worktree.new", "New worktree of this project (+ an agent), after its setup script"),
@@ -44,6 +44,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("project.add", "Add a git repository to this workspace (discovered under discover.roots)"),
     a("project.trust", "Review and trust this project's scripts"),
     a("worktree.remove", "Remove this worktree (refuses if work would be lost)"),
+    a("worktree.retitle", "Change this worktree's title: what it's for, for people to read"),
     a("session.next", "Show the next session in this pane"),
     a("session.prev", "Show the previous session in this pane"),
     ActionSpec {
@@ -68,7 +69,8 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("session.stop", "Stop the session (HUP→TERM→KILL); removes it if it already exited"),
     a("session.kill", "Kill the session's process group now (SIGKILL)"),
     a("session.restart", "Run an exited session's command again"),
-    a("session.rename", "Rename the session"),
+    a("session.rename", "Rename the session: its address (C-t in the dialog: its title)"),
+    a("session.retitle", "Change the session's title: what it's about, for people to read"),
     a("session.take_control", "Take control: resize the session to this pane"),
     a("focus.toggle", "Move focus between the sidebar and the pane"),
     a("sidebar.toggle", "Show or hide the sidebar"),

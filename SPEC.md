@@ -110,6 +110,7 @@ Status markers used below:
 | **Project** | A registered git repository (its main checkout path). A project may appear in several workspaces. |
 | **Worktree** | An isolated `git worktree` checkout of a project on its own branch, created and tracked by ptyro. The project's main checkout is also represented as a (special, non-deletable) worktree named `@root`. |
 | **Session** | One process running in one ptyro-owned PTY, with its own terminal state — an agent (`claude`, `codex`, …) or a plain shell/command. Sessions are what you attach to. |
+| **Name / title** | **[built UX1.24]** Sessions and worktrees have both. The **name** is the address (`[a-z0-9._-]`, fixed at creation, changed only by `rename`): `ptyro send fix-flaky-test …`. The **title** is free text people read (the task, a PR's title) and changes freely (`retitle`). By default a name is made from the title or prompt (`fix-flaky-test`), else `<agent>-<corvid>` (`claude-rook`), else a friendly pair; the title is the prompt. |
 | **Agent** | A configured session kind backed by an adapter (`claude`, `codex`, `gemini`, `opencode`, `shell`, or a user-defined generic command). |
 | **Conversation** | The agent's own notion of a chat (Claude `session_id`, Codex `thread_id`, …). A ptyro session *has* zero or one current conversation id; resuming a dormant session reuses it. Never confuse the two ids. |
 | **Pane** | A rectangle in a client's layout that displays one session. Panes are client-side view state; sessions are daemon-side. |
@@ -892,6 +893,9 @@ Push messages have no id.
   OSC 133 `C`/`D`). The TUI's sidebar rows show them (§11.2h).
 - `SessionInfo` gains `inner_agent`, `SpawnSpec` gains `resume`, and a new request, `Adopt{addr}`,
   makes an agent started by hand in a shell a managed session (§8.7).
+- Titles (§2.1): `SpawnSpec.title` and `WorktreeSpec.title`, `WorktreeInfo.title`, and
+  `Retitle{addr, title, worktree}`. `SessionInfo.title` now means the title people read (its own,
+  else its first prompt, else the window title), and the window title is `window_title`.
 - `ProjectRemove` gains `release` (let the project's running sessions go instead of refusing),
   and a new event, `ProjectAutoAdded{info, workspace, notes}`, says a repository registered on
   its own (§10.1).
@@ -2443,6 +2447,18 @@ learning anything up front.
   opens every row. The row in focus (and any that wants you) wraps its task and reply over two
   lines. Drawing, clicks and scrolling share one line layout, so a row is one target however
   many lines it takes.
+- **`n` asks what to do** (UX1.9). One box, "What should it do?", with a preview under it:
+  `→ fix-flaky-test · claude · new worktree in myrepo`. ⏎ starts the default agent on it in a
+  new worktree named after it (here, with no project), the prompt also its title. Tab edits the
+  name, which starts from the suggestion and stops following the prompt; a bad name says why and
+  ⏎ waits. `C-o` opens the full wizard (agent, then where) with the prompt carried along. An
+  empty ⏎ is the old `n ⏎ ⏎`: the default agent in a new worktree with a random name.
+- **Names and titles** (UX1.24, §2.1). Create dialogs offer a name, dimmed, that ⏎ takes and
+  typing replaces: `N`'s worktree name (a friendly pair) and a new workspace's (a profile without
+  one, else `workspace-2`). Rows and headers show the title: the session's `task` line and its
+  header, a worktree's ` — title` when its name doesn't say it all. An agent named after its
+  worktree shows as its program under it. `,` renames (the address); `C-t` there edits the title
+  instead (`session.retitle`); `worktree.retitle` titles a worktree.
 - **Messages offer the next step** (`toast.act`, `u` after the prefix or in the sidebar): a
   message may carry one follow-up, shown with its key (`registered myrepo in main · C-q u
   undo`), kept up 10 s. "Nothing yanked yet" offers copy mode.
@@ -2547,6 +2563,10 @@ mouse), drag to select (copy mode), drag split borders.
 
 - `ptyro` with no args: attach the TUI (auto-start the daemon). **[built M1]** It attaches to the
   newest live session, else the newest one, else starts a shell session.
+- **[built UX1.9]** `ptyro "fix the flaky test"` (words, not a command): the default agent with
+  that as its first prompt, in a new worktree named after it in the repository you're in
+  (registered on the way, §10.1), or right here outside one; then it attaches. One word alone is
+  refused as a likely mistyped command.
 - **[built M1]** Attaching from inside a ptyro session is refused unless `PTYRO_ALLOW_NESTED=1`
   (a nested TUI fights over the prefix key).
 - All listing/query commands support `--json` (stable schemas, documented in `docs/cli-json.md`)
@@ -3202,6 +3222,10 @@ makes resumable agents `dormant` (§7.5), and mutes persist in `kv`.
 - `lease` (holder, pattern, project, exclusive, reason, expiry).
 
 No `changeset_*` tables: a change set (M11) is a run whose projection carries its members, contract and train (§15.7.2).
+
+**[built UX1.24] Store v5** (migration 5): `session.title` and `worktree.title`. A session's
+upsert also rewrites its `worktree_id` and `project_id`, since a session can now move into a
+project registered after it started (§10.1).
 
 ---
 

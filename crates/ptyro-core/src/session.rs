@@ -91,8 +91,13 @@ pub struct SessionInfo {
     pub viewers: u32,
     #[serde(default)]
     pub controller: Option<ClientId>,
+    /// What it's about, for people to read (UX1.24): `--title`, `ptyro retitle`, else its first
+    /// prompt; else the program's window title. The `name` is its address.
     #[serde(default)]
     pub title: Option<String>,
+    /// The window title the program set (OSC 0/2), whatever `title` says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_title: Option<String>,
     /// Name of the foreground process (e.g. `vim` inside a shell), when known.
     #[serde(default)]
     pub foreground: Option<String>,
@@ -376,4 +381,7 @@ pub struct SpawnSpec {
     /// Resume this conversation of the agent instead of starting one (UX1.4: adopting).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume: Option<String>,
+    /// Its title, for people to read (UX1.24); default: the prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }

@@ -32,7 +32,7 @@ use clap_complete::ArgValueCandidates;
     version,
     about = "A terminal-native home for your coding agents",
     long_about = "A terminal-native home for your coding agents.\n\nRun with no arguments to attach to the most recent session (or start a shell session).",
-    after_help = "Sessions keep running in the background daemon when you detach (Ctrl-Q d)."
+    after_help = "Sessions keep running in the background daemon when you detach (Ctrl-Q d).\n\nStart on a task: `ptyro \"fix the flaky test\"` runs your default agent in a new worktree of the repository you're in (or here, outside one) with that as its first prompt, and attaches."
 )]
 struct Cli {
     /// Talk to the daemon in JSON instead of MessagePack (debugging).
@@ -44,6 +44,9 @@ struct Cli {
     remote: Option<String>,
     #[command(subcommand)]
     cmd: Option<Cmd>,
+    /// A task for your default agent, in a new worktree of the repository you're in (UX1.9)
+    #[arg(value_name = "TASK", num_args = 0..)]
+    task: Vec<String>,
 }
 
 #[derive(Subcommand)]
@@ -93,6 +96,9 @@ enum Cmd {
         /// Read the prompt from a file
         #[arg(long)]
         prompt_file: Option<PathBuf>,
+        /// What it's for, for people to read (default: the prompt); the name stays its address
+        #[arg(long)]
+        title: Option<String>,
         /// In a new worktree checked out from this pull request (number or URL)
         #[arg(long, value_parser = parse_number, conflicts_with_all = ["wt", "issue"])]
         pr: Option<u32>,
@@ -474,6 +480,14 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
+    /// Change a session's title, what people read; no title clears it. Its name, the address,
+    /// stays (`ptyro rename` changes that; `ptyro wt retitle` titles a worktree)
+    Retitle {
+        #[arg(add = ArgValueCandidates::new(complete::sessions))]
+        target: String,
+        /// The new title (several words are joined)
+        title: Vec<String>,
+    },
     /// Make the Claude you started by hand in a shell session a managed session (hooks,
     /// hibernation, mail), resuming the same conversation
     Adopt {
@@ -848,7 +862,7 @@ fn main() {
                 .enable_all()
                 .build()
                 .expect("tokio runtime");
-            rt.block_on(cli::run(cmd, cli.json_wire, cli.remote))
+            rt.block_on(cli::run(cmd, cli.task, cli.json_wire, cli.remote))
         }
     };
     std::process::exit(code);
@@ -875,6 +889,34 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
+    }
+
+    #[test]
+    fn words_alone_are_a_task_and_commands_stay_commands() {
+        use clap::Parser;
+        let parse = |argv: &'static [&'static str]| {
+            std::thread::Builder::new()
+                .stack_size(32 << 20)
+                .spawn(move || {
+                    super::Cli::try_parse_from(argv).map(|c| (c.cmd.is_some(), c.task)).ok()
+                })
+                .unwrap()
+                .join()
+                .unwrap()
+        };
+        assert_eq!(
+            parse(&["ptyro", "fix the flaky test"]),
+            Some((false, vec!["fix the flaky test".to_owned()]))
+        );
+        assert_eq!(
+            parse(&["ptyro", "fix", "it", "now"]).map(|(c, t)| (c, t.len())),
+            Some((false, 3))
+        );
+        assert_eq!(parse(&["ptyro", "ls"]), Some((true, vec![])));
+        // Global flags still go before a command.
+        assert_eq!(parse(&["ptyro", "--json-wire", "ls", "--json"]), Some((true, vec![])));
+        assert_eq!(parse(&["ptyro", "--remote", "box", "ls"]), Some((true, vec![])));
+        assert_eq!(parse(&["ptyro"]), Some((false, vec![])));
     }
 
     #[test]

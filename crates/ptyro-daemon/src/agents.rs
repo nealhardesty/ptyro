@@ -252,10 +252,16 @@ impl Daemon {
                         let first = m.first_prompt.is_none();
                         if first {
                             m.first_prompt = Some(text.chars().take(500).collect());
+                            // Typed by hand, it's what the session is about (UX1.24).
+                            if m.title.is_none() {
+                                m.title = Some(ptyro_core::session::brief(&text, 120));
+                            }
                         }
                         first
                     };
                     if first {
+                        s.save(None);
+                        changed = true;
                         self.after_first_prompt(s, &text).await;
                     }
                 }

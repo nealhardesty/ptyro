@@ -37,7 +37,9 @@ Conventions:
 | `created_ms`, `ended_ms` | number, number? | |
 | `viewers` | number | clients showing it |
 | `controller` | string? | client id that sizes it |
-| `title`, `foreground` | string? | window title, foreground process name (argv[0] when the kernel's name is a version, like Claude's) |
+| `title` | string? | what people read: its own (`--title`, `retitle`), else its first prompt, else the window title |
+| `window_title` | string? | the window title its program set |
+| `foreground` | string? | foreground process name (argv[0] when the kernel's name is a version, like Claude's) |
 | `profile` | string | fixed for its lifetime |
 | `worktree`, `project`, `workspace` | string? | worktree id, project id, home workspace name |
 | `agent` | string? | configured agent name |
@@ -147,7 +149,7 @@ A structured session's transcript, oldest first. `ChatItem` is `{id, at_ms, rev,
 - `ptyro project discover --json` → `[path]`
 - `ptyro ws ls --json` → `[{id, name, profile, notify, projects: [project id], created_ms}]`
 - `ptyro wt ls --json`, `wt status W --json` → Worktree:
-  - fields: `{id, project, project_slug, name, path, branch?, base?, is_root, state, locked, profile?, ports?: {base, count}, created_ms, last_used_ms?, removed_ms?, status?}`;
+  - fields: `{id, project, project_slug, name, path, branch?, base?, is_root, state, locked, profile?, ports?: {base, count}, created_ms, last_used_ms?, removed_ms?, status?, title?}` (`title`: what it's for, for people to read);
   - `status` is `{head, branch, upstream?, ahead, behind, base_ahead, base_behind, staged, modified, untracked, conflicts, insertions, deletions, subject, at_ms}`.
 - `ptyro wt new … --json` → `{info: Worktree, setup?: Session, agent?: Session, agent_pending, untrusted?, notes}`
 - `ptyro gc --json` → `[{worktree: Worktree, reasons: [string]}]`

@@ -117,7 +117,7 @@ expression: "Value::Object(all)"
         "status": "string"
       },
       "task": "string",
-      "title": null,
+      "title": "string",
       "turns": "number",
       "viewers": "number",
       "workspace": "string",
@@ -226,7 +226,7 @@ expression: "Value::Object(all)"
         "status": "string"
       },
       "task": "string",
-      "title": null,
+      "title": "string",
       "turns": "number",
       "viewers": "number",
       "workspace": "string",

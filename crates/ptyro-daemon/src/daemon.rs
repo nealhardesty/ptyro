@@ -374,6 +374,7 @@ impl Daemon {
                 adapter,
                 conversation: r.conversation.clone(),
                 ended_ms: r.ended_ms,
+                title: r.title.clone(),
                 structured: r
                     .launch
                     .as_ref()
@@ -650,6 +651,8 @@ impl Daemon {
             (None, false) => (spec.argv.clone(), SessionKind::Command),
         };
         let id = SessionId::new();
+        // What it's for (UX1.24): `--title`, else the prompt it starts with.
+        let wording = spec.title.clone().or_else(|| spec.prompt.clone());
         let name = match spec.name {
             Some(n) => {
                 names::validate(&n).map_err(Error::invalid)?;
@@ -658,10 +661,13 @@ impl Daemon {
                 }
                 n
             }
-            // Agents are named after themselves (`claude`, `claude-2`): under a worktree in the
-            // sidebar that reads better than a random name.
-            None => match &agent {
-                Some(a) if names::validate(a).is_ok() => self.free_name(a),
+            // A name says what it's for: from its title or prompt (`fix-flaky-test`), else the
+            // agent and a corvid (`claude-rook`, never `claude-2`), else a friendly pair.
+            None => match (wording.as_deref().and_then(names::from_text), &agent) {
+                (Some(n), _) => self.free_name(&n),
+                (None, Some(a)) if names::validate(a).is_ok() => {
+                    names::corvid(id.seed(), a, |n| self.name_taken(n))
+                }
                 _ => names::friendly(id.seed(), |n| self.name_taken(n)),
             },
         };
@@ -696,6 +702,7 @@ impl Daemon {
                 "--structured drives an agent over its protocol: give it --agent",
             ));
         }
+        let prompt_text = prompt.clone();
         let start = agent.map(|name| crate::launch::AgentStart {
             name,
             resume: spec.resume.clone(),
@@ -718,6 +725,12 @@ impl Daemon {
                 agent: start,
             })
             .await?;
+        // Its title: `--title`, else the prompt (a snippet's text, not its `@name`).
+        let title = spec.title.clone().or(prompt_text).map(|t| ptyro_core::session::brief(&t, 120));
+        if title.is_some() {
+            s.meta.lock().expect("meta").title = title;
+            s.save(None);
+        }
         match verify {
             Some(check) => self.set_verify(&s, Some(check), None)?,
             None => self.auto_verify(&s),
@@ -726,6 +739,23 @@ impl Daemon {
             self.lead_start(&s, Some(p));
         }
         Ok(s)
+    }
+
+    /// `Retitle` (UX1.24): a session's title, or a worktree's. Free text, at most 120
+    /// characters; empty or `None` clears it (a session then shows its window title).
+    fn retitle(&self, addr: &str, title: Option<String>, worktree: bool) -> Result<Reply, Error> {
+        let title = title.map(|t| ptyro_core::session::brief(&t, 120)).filter(|t| !t.is_empty());
+        if !worktree {
+            let s = self.resolve(addr)?;
+            s.meta.lock().expect("meta").title = title;
+            s.save(None);
+            let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(&s) });
+            return Ok(Reply::Session { info: self.info(&s) });
+        }
+        let mut w = self.find_worktree(addr)?;
+        w.title = title;
+        self.put_worktree(w.clone());
+        Ok(Reply::Worktree { info: w })
     }
 
     /// Run an exited session's command again in place: same id, name, cwd, size and profile, new
@@ -1118,6 +1148,7 @@ impl Daemon {
                 self.convert(&addr, structured, force).await
             }
             Request::Adopt { addr } => self.adopt(&addr).await,
+            Request::Retitle { addr, title, worktree } => self.retitle(&addr, title, worktree),
             Request::ChatGet { addr } => {
                 let s = self.resolve(&addr)?;
                 let st = s.structured.as_ref().ok_or_else(|| {

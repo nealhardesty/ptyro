@@ -97,12 +97,19 @@ Every key starts with the **prefix**, `Ctrl-Q` (or `Ctrl-Space`). `Ctrl-Q ?` lis
 **2. Detach and come back.** Press `Ctrl-Q d`. Everything keeps running in the daemon. Run
 `ptyro` again and you're back on the same screen.
 
-**3. An agent in its own worktree.** Press `Ctrl-Q n`, then `⏎` `⏎`: Claude in a fresh
-worktree on its own branch. Or from the shell, with a first prompt:
+**3. An agent on a task, in its own worktree.** Press `Ctrl-Q n`, type what it should do, and
+press `⏎`: Claude starts on it in a fresh worktree, on its own branch, named after the task
+(`fix-flaky-test`; the box shows the name before you press `⏎`, and Tab changes it). Or from
+the shell:
 
 ```bash
-ptyro new -d --agent claude --new-wt --prompt "fix the flaky test in tests/api.rs"
+ptyro "fix the flaky test in tests/api.rs"     # the same, then attach
+ptyro new -d --agent claude --new-wt --prompt "fix the flaky test in tests/api.rs"   # detached
 ```
+
+Every session and worktree has a **name** (its address: `ptyro send fix-flaky-test …`) and a
+**title** (what people read, the task by default). `ptyro retitle` and `ptyro wt retitle` change
+the title, `ptyro rename` the name.
 
 **4. See who needs you.** The sidebar shows each session's status. `⚑` means it wants you.
 
@@ -312,7 +319,7 @@ All after the prefix, `Ctrl-Q` or `Ctrl-Space`. The full list is in [`docs/keys.
 |---|---|
 | `?` / `:` | every key / the command palette |
 | `d` | detach (everything keeps running) |
-| `n` / `N` | new session / new worktree |
+| `n` / `N` | new task (say what to do) / new worktree |
 | `a` / `p` / `i` | next session that needs you / peek and answer / inbox |
 | `j` `k` / `1`…`9` / `/` | next / previous / Nth session / find one |
 | `v` / `s` | split side by side / stacked |

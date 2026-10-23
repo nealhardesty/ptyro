@@ -195,7 +195,18 @@ impl Daemon {
     ) -> Result<Option<PrInfo>, Error> {
         let pr = self.pr_lookup(wt).await?;
         let p = pr.clone();
-        self.update_worktree(&wt.id, move |w| w.pr = p);
+        // A worktree made for a PR reads as that PR (UX1.24), unless it has a title: stored.
+        let titled = wt.title.is_none() && p.as_ref().is_some_and(|pr| !pr.title.is_empty());
+        let title = p.as_ref().map(|pr| format!("#{} {}", pr.number, pr.title));
+        let updated = self.update_worktree(&wt.id, move |w| {
+            if titled {
+                w.title = title;
+            }
+            w.pr = p;
+        });
+        if titled && let Some(w) = updated {
+            self.put_worktree(w);
+        }
         Ok(pr)
     }
 
@@ -224,6 +235,9 @@ impl Daemon {
             .to_owned();
         if spec.name.is_none() {
             spec.name = Some(format!("issue-{n}"));
+        }
+        if spec.title.is_none() && !title.is_empty() {
+            spec.title = Some(format!("#{n} {title}"));
         }
         if spec.branch.is_none() {
             spec.branch = Some(if slug.is_empty() {

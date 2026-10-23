@@ -100,6 +100,9 @@ pub struct Meta {
     /// An agent started by hand in this shell, in the foreground now (UX1.4).
     #[serde(default)]
     pub inner_agent: Option<String>,
+    /// Its title, for people to read (UX1.24): `--title`, `retitle`, else its first prompt.
+    #[serde(default)]
+    pub title: Option<String>,
     /// Claude's messaging socket, from the hook environment (M4.18).
     pub messaging: Option<String>,
     /// A prompt waits to be typed once the agent is ready.
@@ -207,6 +210,7 @@ pub struct DormantSpec {
     pub conversation: Option<String>,
     pub ended_ms: Option<u64>,
     pub structured: Option<String>,
+    pub title: Option<String>,
 }
 
 /// The shared plumbing every session gets.
@@ -285,6 +289,7 @@ fn new_meta(
         command_since_ms: None,
         command: None,
         inner_agent: None,
+        title: None,
         messaging: None,
         prompt_pending: false,
         last_prompt_ms: None,
@@ -381,6 +386,7 @@ impl Session {
         meta.adapter = d.adapter;
         meta.conversation = d.conversation;
         meta.structured = d.structured;
+        meta.title = d.title;
         let exited = watch::Sender::new(true);
         Arc::new(Self {
             id,
@@ -475,7 +481,8 @@ impl Session {
             ended_ms: meta.ended_ms,
             viewers: meta.viewers,
             controller: meta.controller,
-            title,
+            title: meta.title.clone().or_else(|| title.clone()),
+            window_title: title,
             foreground,
             live_cwd,
             program_status: meta.program_status.clone(),
@@ -532,6 +539,7 @@ impl Session {
             script: m.place.script,
             launch,
             conversation: m.conversation,
+            title: m.title,
         });
     }
 

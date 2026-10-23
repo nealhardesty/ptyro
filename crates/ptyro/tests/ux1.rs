@@ -33,7 +33,7 @@ impl World {
         std::fs::write(&sh, format!("#!/bin/sh\n{shell}\n")).unwrap();
         std::fs::set_permissions(&sh, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
         let config = format!(
-            "[attention]\nmin_work = \"1s\"\n[agents.claude]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\n"
+            "[attention]\nmin_work = \"1s\"\n[worktrees]\nfetch = false\n[agents.claude]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\n"
         );
         let (hs, ss) = (h.to_string_lossy().into_owned(), sh.to_string_lossy().into_owned());
         let env = [("HOME", hs.as_str()), ("GIT_CONFIG_NOSYSTEM", "1"), ("SHELL", ss.as_str())];
@@ -41,7 +41,6 @@ impl World {
         Self { home, d }
     }
 
-    #[allow(dead_code)]
     fn home(&self) -> PathBuf {
         self.home.path().canonicalize().unwrap()
     }
@@ -365,4 +364,137 @@ async fn adopting_a_hand_started_claude_resumes_its_conversation() {
     w.d.wait_for_text(&c, &adopted.name, "session=conv-1234", WAIT).await.unwrap();
     let screen = w.d.wait_for_text(&c, &adopted.name, "resumed=", WAIT).await.unwrap();
     assert!(screen.contains("resumed=true"), "{screen}");
+}
+
+/// UX1.24: a name says what it's for and a title says it in words; both survive a restart.
+#[tokio::test]
+async fn sessions_and_worktrees_are_named_and_titled_after_what_they_are_for() {
+    let mut w = World::new("exec sleep 60");
+    let dir = repo(&w, "myrepo");
+    let c = w.d.client().await.unwrap();
+    let agent = |name: Option<&str>, prompt: Option<&str>| SpawnSpec {
+        agent: Some("claude".into()),
+        cwd: std::env::temp_dir(),
+        name: name.map(Into::into),
+        prompt: prompt.map(Into::into),
+        size: Some(TermSize::new(100, 20)),
+        ..SpawnSpec::default()
+    };
+    let s = spawn(&c, agent(None, Some("say fix the flaky test"))).await;
+    assert_eq!(s.name, "say-fix-flaky", "named after its prompt");
+    assert_eq!(s.title.as_deref(), Some("say fix the flaky test"));
+    let plain = spawn(&c, agent(None, None)).await;
+    assert!(
+        plain.name.starts_with("claude-") && !plain.name.ends_with(char::is_numeric),
+        "an agent and a corvid, not claude-2: {}",
+        plain.name
+    );
+    // A worktree for a prompt: named and titled after it.
+    let spec = ptyro_core::model::WorktreeSpec {
+        project: dir.to_string_lossy().into_owned(),
+        prompt: Some("say add a user tier".into()),
+        agent: Some("claude".into()),
+        fetch: Some(false),
+        ..Default::default()
+    };
+    let wt = match c.request(Request::WorktreeNew { spec }).await.unwrap() {
+        Reply::WorktreeCreated { info, .. } => info,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(wt.name, "say-add-user");
+    assert_eq!(wt.title.as_deref(), Some("say add a user tier"));
+    // Retitle: the title changes, the name (the address) doesn't.
+    let r = c
+        .request(Request::Retitle {
+            addr: s.name.clone(),
+            title: Some("Flaky test, round 2".into()),
+            worktree: false,
+        })
+        .await
+        .unwrap();
+    let Reply::Session { info } = r else { panic!("{r:?}") };
+    assert_eq!(
+        (info.name.as_str(), info.title.as_deref()),
+        ("say-fix-flaky", Some("Flaky test, round 2"))
+    );
+    c.request(Request::Retitle {
+        addr: "myrepo/say-add-user".into(),
+        title: Some("Tiers".into()),
+        worktree: true,
+    })
+    .await
+    .unwrap();
+    // Both are kept: after a daemon restart the agent comes back dormant with its title, and
+    // the worktree keeps its own.
+    drop(c);
+    w.d.restart().unwrap();
+    let c = w.d.client().await.unwrap();
+    let back = wait_for(&c, "say-fix-flaky", "back, dormant", |s| {
+        s.state == ptyro_core::session::ProcessState::Dormant
+    })
+    .await;
+    assert_eq!(back.title.as_deref(), Some("Flaky test, round 2"));
+    let Reply::Worktrees { worktrees } =
+        c.request(Request::WorktreeList { project: None }).await.unwrap()
+    else {
+        panic!()
+    };
+    let t = worktrees.iter().find(|x| x.name == "say-add-user").unwrap();
+    assert_eq!(t.title.as_deref(), Some("Tiers"));
+}
+
+/// UX1.9, end to end from keys: `C-q n`, say what to do, ⏎: the default agent gets the prompt,
+/// in a new worktree named after it, and the pane follows it.
+#[tokio::test]
+async fn the_task_box_starts_an_agent_on_what_you_typed() {
+    let w = World::new("exec sleep 60");
+    let dir = repo(&w, "proj");
+    let c = w.d.client().await.unwrap();
+    // A shell in the repository (which registers it) to attach to.
+    spawn(
+        &c,
+        SpawnSpec {
+            cwd: dir.clone(),
+            name: Some("sh0".into()),
+            size: Some(TermSize::new(80, 20)),
+            ..SpawnSpec::default()
+        },
+    )
+    .await;
+    let mut script =
+        ptyro_testkit::headless::Script::new(vec![BIN.to_owned(), "attach".into(), "sh0".into()])
+            .size(110, 24)
+            .timeout(9.0)
+            .env("HOME", &w.home().to_string_lossy());
+    for (k, v) in w.d.env() {
+        script = script.env(&k, &v);
+    }
+    let r = ptyro_testkit::headless::run(
+        script
+            .send(1.5, "\\x11n")
+            .send(1.9, "work 0.3")
+            .snapshot(2.4)
+            .send(2.6, "\\r")
+            .snapshot(6.5)
+            .send(7.0, "\\x11d"),
+    )
+    .await
+    .expect("headless run");
+    let typed = r.at(2.4);
+    assert!(typed.contains("What should it do?"), "{typed}");
+    assert!(typed.contains("→ work-0-3 · claude · new worktree in proj"), "{typed}");
+    let s = wait_for(&c, "work-0-3", "the agent, given the prompt", |s| {
+        s.task.as_deref() == Some("work 0.3")
+    })
+    .await;
+    assert_eq!(s.title.as_deref(), Some("work 0.3"));
+    let Reply::Worktrees { worktrees } =
+        c.request(Request::WorktreeList { project: None }).await.unwrap()
+    else {
+        panic!()
+    };
+    let wt = worktrees.iter().find(|x| x.name == "work-0-3").expect("its worktree");
+    assert_eq!(s.worktree.as_deref(), Some(wt.id.as_str()));
+    assert_eq!(wt.title.as_deref(), Some("work 0.3"));
+    assert!(r.at(6.5).contains("work 0.3"), "the pane follows the agent: {}", r.at(6.5));
 }

@@ -191,6 +191,10 @@ pub struct WorktreeInfo {
     /// Its pull request, when `gh` found one (M6.5).
     #[serde(default)]
     pub pr: Option<PrInfo>,
+    /// What it's for, for people to read (UX1.24): the prompt it was made for, a PR's or an
+    /// issue's title, or `--title`. The `name` is its address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 impl WorktreeInfo {
@@ -324,6 +328,9 @@ pub struct WorktreeSpec {
     /// Put the worktree here instead of `worktrees.location` (a change set's member, M11).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<std::path::PathBuf>,
+    /// Its title (UX1.24); default: the prompt, else the PR's or issue's title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 fn yes() -> bool {

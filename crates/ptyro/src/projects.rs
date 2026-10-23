@@ -127,6 +127,12 @@ pub enum WsCmd {
 
 #[derive(Subcommand)]
 pub enum WtCmd {
+    /// Change a worktree's title, what people read; no title clears it (its name stays)
+    Retitle {
+        worktree: String,
+        /// The new title (several words are joined)
+        title: Vec<String>,
+    },
     /// List worktrees
     Ls {
         #[arg(long)]
@@ -159,6 +165,9 @@ pub enum WtCmd {
         /// The agent's first prompt (with --agent)
         #[arg(long, requires = "agent")]
         prompt: Option<String>,
+        /// What it's for, for people to read (default: the prompt; its name comes from it too)
+        #[arg(long)]
+        title: Option<String>,
         /// Don't run the setup script
         #[arg(long)]
         no_setup: bool,
@@ -694,6 +703,8 @@ pub async fn new_in_new_worktree(
         size: if a.detach { a.size } else { ptyro_tui::pane_size(&ctx.paths) },
         env: client_env(),
         setup: true,
+        // Named and titled after what it's for (UX1.24); the session below gets the prompt.
+        title: a.title.clone().or_else(|| a.prompt.clone().filter(|p| !p.starts_with('@'))),
         ..WorktreeSpec::default()
     };
     let reply = create(&c, spec, a.yes).await?;
@@ -782,6 +793,20 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
             }
             Ok(0)
         }
+        WtCmd::Retitle { worktree, title } => {
+            let title = (!title.is_empty()).then(|| title.join(" "));
+            let Reply::Worktree { info } =
+                c.request(Request::Retitle { addr: worktree, title, worktree: true }).await?
+            else {
+                return Err(Error::internal("unexpected reply"));
+            };
+            eprintln!(
+                "{}: {}",
+                info.qualified(),
+                info.title.unwrap_or_else(|| "title cleared".into())
+            );
+            Ok(0)
+        }
         WtCmd::New {
             name,
             project,
@@ -791,6 +816,7 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
             pr,
             issue,
             prompt,
+            title,
             no_setup,
             no_fetch,
             agent,
@@ -811,6 +837,7 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
                 pr,
                 issue,
                 prompt,
+                title,
                 base,
                 fetch: no_fetch.then_some(false),
                 setup: !no_setup,

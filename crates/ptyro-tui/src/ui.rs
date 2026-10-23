@@ -65,6 +65,11 @@ fn progress_bar(p: u8) -> String {
     format!("▕{}{}▏{p}%", "█".repeat(filled), "░".repeat(6 - filled))
 }
 
+/// The title people gave a session (UX1.24), not one its program put in the window title.
+pub(crate) fn session_title(s: &SessionInfo) -> Option<&str> {
+    s.title.as_deref().filter(|t| s.window_title.as_deref() != Some(*t) && *t != s.name)
+}
+
 fn what(s: &SessionInfo) -> String {
     if let Some(role) = &s.script {
         return role.trim_start_matches("run:").to_owned();
@@ -329,6 +334,16 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
                         fg(app, c),
                     ));
                 }
+                // What it's for (UX1.24), last so a narrow sidebar cuts it first, and only when
+                // its name or PR doesn't already say it.
+                let pr_title = w.pr.as_ref().map(|pr| format!("#{} {}", pr.number, pr.title));
+                if let Some(title) = w.title.as_deref().filter(|t| {
+                    Some(*t) != pr_title.as_deref()
+                        && (ptyro_core::names::from_text(t).as_deref() != Some(w.name.as_str())
+                            || t.split_whitespace().count() > 3)
+                }) {
+                    spans.push(Span::styled(format!(" — {title}"), fg(app, t.dim)));
+                }
                 Line::from(spans)
             }
             Row::Session(id) => {
@@ -361,20 +376,32 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
                         Span::styled(num, fg(app, t.dim))
                     },
                     Span::styled(format!("{g} "), fg(app, gc)),
-                    // Under its worktree, `brisk-rook.setup` is just `setup`.
+                    // Under its worktree, `brisk-rook.setup` is just `setup`, and the agent
+                    // named after the worktree (`fix-flaky-test`) is just its program.
                     Span::styled(
                         s.worktree
                             .as_deref()
                             .and_then(|w| app.worktree(w))
                             .and_then(|w| {
-                                s.name.strip_prefix(&format!("{}.", w.name.trim_start_matches('@')))
+                                let wt = w.name.trim_start_matches('@');
+                                if s.name == wt {
+                                    return Some(what(s));
+                                }
+                                s.name.strip_prefix(&format!("{wt}.")).map(str::to_owned)
                             })
-                            .unwrap_or(&s.name)
-                            .to_owned(),
+                            .unwrap_or_else(|| s.name.clone()),
                         name_style,
                     ),
                 ];
-                if s.script.is_none() && s.agent.as_deref() != Some(s.name.as_str()) {
+                let same_as_worktree = s
+                    .worktree
+                    .as_deref()
+                    .and_then(|w| app.worktree(w))
+                    .is_some_and(|w| w.name == s.name);
+                if s.script.is_none()
+                    && !same_as_worktree
+                    && s.agent.as_deref() != Some(s.name.as_str())
+                {
                     spans.push(Span::styled(format!(" {}", what(s)), fg(app, t.dim)));
                 }
                 if let Some(r) = &s.status
@@ -572,8 +599,9 @@ fn session_details(
     } else if let Some(a) = &s.inner_agent {
         items.push(("◌", format!("{a} by hand, status off its screen"), t.dim));
     }
-    if let Some(task) = &s.task {
-        items.push(("task", task.clone(), t.text));
+    // Its title (`--title`, `retitle`, else the first prompt), not a window title (UX1.24).
+    if let Some(task) = session_title(s).or(s.task.as_deref()) {
+        items.push(("task", task.to_owned(), t.text));
     }
     let working = s.status.as_ref().is_some_and(|r| r.status == AgentStatus::Working);
     if let Some(reply) = s.last_reply.as_ref().filter(|_| !working) {
@@ -747,7 +775,7 @@ fn empty_pane(app: &App) -> Vec<Line<'static>> {
             ]));
         }
     };
-    offer(key("session.new"), "start an agent or a shell");
+    offer(key("session.new"), "start a task: say what to do");
     if !app.tree().project_ids().is_empty() {
         offer(key("worktree.new"), "a new worktree with an agent");
     }
@@ -838,9 +866,10 @@ fn draw_header(
                     base.fg(app.depth.fit(t.error)),
                 ));
             }
-            if let Some(cache) = app.caches.get(&s.id)
-                && let Some(title) =
-                    cache.title.as_deref().filter(|t| !t.is_empty() && *t != s.name)
+            // Its title, else the program's window title.
+            let window = app.caches.get(&s.id).and_then(|c| c.title.as_deref());
+            if let Some(title) =
+                session_title(s).or(window).filter(|t| !t.is_empty() && *t != s.name)
             {
                 left.push(Span::styled(format!(" · {title}"), base.fg(app.depth.fit(t.dim))));
             }
@@ -1014,7 +1043,7 @@ fn prefix_hint(app: &App) -> String {
     };
     [
         (&["app.detach"][..], "detach"),
-        (&["session.new"], "new"),
+        (&["session.new"], "task"),
         (&["worktree.new"], "worktree"),
         (&["workspace.switch"], "workspace"),
         (&["session.find"], "find"),
@@ -1127,6 +1156,68 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                 r.y + 1,
             ));
         }
+        Overlay::Task { text, name, naming, wizard } => {
+            let r = boxed(area, 76, 6);
+            f.render_widget(Clear, r);
+            let (slug, agent, place) = app.task_plan(text, name.as_deref(), wizard);
+            let caret = fg(app, t.accent);
+            let field = |label: &str, value: &str, on: bool, placeholder: &str| {
+                let mut v = vec![Span::styled(
+                    format!("{label:>5} "),
+                    if on { caret.add_modifier(Modifier::BOLD) } else { fg(app, t.dim) },
+                )];
+                if value.is_empty() {
+                    v.push(Span::styled(placeholder.to_owned(), fg(app, t.dim)));
+                } else {
+                    v.push(Span::raw(value.to_owned()));
+                }
+                Line::from(v)
+            };
+            let shown_name = name.clone().or_else(|| slug.clone()).unwrap_or_default();
+            let bad =
+                name.as_deref().filter(|n| !n.is_empty()).and_then(ptyro_core::names::problem);
+            let preview = match (&bad, text.trim().is_empty() && name.is_none()) {
+                (Some(e), _) => Line::styled(format!("✗ name: {e}"), fg(app, t.error)),
+                (None, true) => {
+                    Line::styled(format!("→ {agent} · {place} · a random name"), fg(app, t.dim))
+                }
+                (None, false) => Line::styled(
+                    format!(
+                        "→ {} · {agent} · {place}",
+                        if shown_name.is_empty() {
+                            "a random name".into()
+                        } else {
+                            shown_name.clone()
+                        }
+                    ),
+                    fg(app, t.done),
+                ),
+            };
+            let lines = vec![
+                field("do", text, !naming, "fix the flaky test in tests/api.rs"),
+                field(
+                    "name",
+                    name.as_deref().unwrap_or(""),
+                    *naming,
+                    slug.as_deref().unwrap_or("(from what you type)"),
+                ),
+                preview,
+                Line::styled("⏎ start · Tab name · C-o pick agent & where · Esc", fg(app, t.dim)),
+            ];
+            // Which profile it runs under, and why (SPEC §10.10), as the wizard says it.
+            let profile =
+                app.resolved.as_deref().map(|p| format!(" · profile {p}")).unwrap_or_default();
+            f.render_widget(
+                Paragraph::new(lines).block(block(format!("What should it do?{profile}"))),
+                r,
+            );
+            let (row, col) = if *naming {
+                (2, name.as_deref().unwrap_or("").chars().count())
+            } else {
+                (1, text.chars().count())
+            };
+            f.set_cursor_position(Position::new(r.x + 7 + col as u16, r.y + row));
+        }
         Overlay::Prompt { title, text, kind } => {
             let r = boxed(area, 70, 4);
             f.render_widget(Clear, r);
@@ -1139,6 +1230,11 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                     let style = if ptyro_core::names::allowed(c) { Style::new() } else { bad };
                     Span::styled(c.to_string(), style)
                 }));
+            } else if text.is_empty()
+                && let Some(s) = kind.suggestion()
+            {
+                // The name it offers, dimmed: ⏎ takes it, typing replaces it (UX1.24).
+                field.push(Span::styled(s.to_owned(), fg(app, t.dim)));
             } else {
                 field.push(Span::raw(text.clone()));
             }
@@ -1153,9 +1249,10 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                     Line::styled(format!("✗ {e}{fix}"), fg(app, t.error))
                 }
                 Ok(note) => Line::styled(
-                    match note {
-                        Some(n) => format!("⏎ ok ({n}) · Esc cancel · C-u clear"),
-                        None => "⏎ ok · Esc cancel · C-u clear".into(),
+                    match (note, text.is_empty().then(|| kind.suggestion()).flatten()) {
+                        (_, Some(s)) => format!("⏎ takes {s} · or type another · Esc cancel"),
+                        (Some(n), _) => format!("⏎ ok ({n}) · Esc cancel · C-u clear"),
+                        (None, _) => "⏎ ok · Esc cancel · C-u clear".into(),
                     },
                     fg(app, t.dim),
                 ),
@@ -1488,7 +1585,7 @@ pub fn tour_pages(app: &App) -> Vec<(String, Vec<String>)> {
             format!("`{}` lists every key; `{}` runs any action by name.", k("help"), k("palette")),
         ]),
         ("sessions".into(), vec![
-            format!("`{}`  new session: pick an agent and where it runs (⏎ ⏎ = default agent in a new worktree)", k("session.new")),
+            format!("`{}`  new task: say what to do, ⏎: the default agent on it, in a new worktree named after it", k("session.new")),
             format!("`{}`  new worktree with an agent", k("worktree.new")),
             format!("`{}` / `{}`  next / previous session · `{}` find one", k("session.next"), k("session.prev"), k("session.find")),
             format!("`{}`  the sidebar: j/k move, ⏎ opens, x stops, Space marks", k("focus.toggle")),

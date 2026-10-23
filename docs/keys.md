@@ -26,7 +26,7 @@ action by name.
 | `?` | help: every key |
 | `:` or `C-p` | command palette |
 | `d` or `q` | detach (sessions keep running) |
-| `n` | new session wizard: what to run, then where |
+| `n` | new task: say what to do, ⏎ starts the default agent on it in a new worktree named after it (Tab edits the name, `C-o` picks the agent and where, an empty ⏎ is a random name) |
 | `N` | new worktree of this project (+ an agent), after its setup script |
 | `w` | switch workspace |
 | `o` | open the worktree in an editor (`[editors]`; nvim opens inside ptyro) |
@@ -59,7 +59,7 @@ action by name.
 | `]` | paste what you last copied |
 | `x` / `X` | stop the session (with confirmation) / kill it now. The pane moves on to the nearest other session (`[ui] on_stop`); `` ` `` brings the stopped one back |
 | `C-r` | run an exited session's command again |
-| `,` | rename the session |
+| `,` | rename the session (its address); `C-t` in the dialog edits its title instead |
 | `=` | take control: size the session to your pane (when another client resized it) |
 | `C-l` | redraw everything |
 
@@ -77,7 +77,7 @@ Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.
 | `⏎` | open the session, or fold and unfold a project or worktree |
 | `h` / `l` (or `Left` / `Right`) | fold / unfold |
 | `Space` | mark a session for broadcast (`b`) |
-| `n` / `N` | new session here / new worktree |
+| `n` / `N` | new task here / new worktree |
 | `a` `p` `i` `e` | next attention / peek / inbox / why this status |
 | `x` / `X` | stop a session (`x` again removes it) or remove a worktree (refuses to lose work) / kill. Its pane shows the next session |
 | `R` | restart an exited session |
