@@ -480,6 +480,17 @@ impl Daemon {
         let id: SessionId = session.parse().map_err(|_| Error::invalid("bad session id"))?;
         let s = self.session_soon(id).await.ok_or_else(|| Error::not_found(session))?;
         let adapter = s.adapter().unwrap_or_else(|| adapter.to_owned());
+        // Codex's `notify` also reports its side threads (the one that writes the conversation's
+        // title, SPEC §20.2): only the session's own conversation counts.
+        if adapter == "codex"
+            && event == "notify"
+            && let Some(thread) = payload.get("thread-id").and_then(|t| t.as_str())
+            && let Some(own) = s.meta.lock().expect("meta").conversation.clone()
+            && own != thread
+        {
+            s.record_event("hook", serde_json::json!({ "adapter": adapter, "event": event, "ignored": "another thread" }));
+            return Ok(Reply::Done);
+        }
         let mut signals: Vec<Sourced> = ptyro_agents::adapter(&adapter)
             .on_hook(event, &payload)
             .into_iter()

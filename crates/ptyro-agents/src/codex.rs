@@ -43,9 +43,16 @@ fn hooks_need_review(screen: &str) -> bool {
         && (l.contains("need review") || l.contains("needs review") || l.contains("review hooks"))
 }
 
+/// The timeout ptyro gives a hook, in seconds. It is written into the hook and hashed, so the
+/// trust hash doesn't depend on Codex's defaults. Codex 0.164 clamps `interrupt` to 1–3 s
+/// (default 1; SPEC §20.2), and its other hooks default to 600.
+fn hook_timeout(event_snake: &str) -> u32 {
+    if matches!(event_snake, "session_end" | "interrupt") { 1 } else { 600 }
+}
+
 /// The trust hash Codex pins a command hook with (SPEC §8.4; Codex-internal, golden-tested).
 pub fn trust_hash(event_snake: &str, command: &str) -> String {
-    let timeout = if event_snake == "session_end" { 1 } else { 600 };
+    let timeout = hook_timeout(event_snake);
     // Keys written in sorted order, so the compact form is key-sorted even if some dependency
     // turns on serde_json's `preserve_order`.
     let v = json!({ "event_name": event_snake, "hooks": [{ "async": false, "command": command, "timeout": timeout, "type": "command" }] });
@@ -126,8 +133,9 @@ impl Codex {
             let cmd = format!("{ptyro} hook codex {ev}");
             a.push("-c".into());
             a.push(format!(
-                "hooks.{ev}=[{{hooks=[{{type=\"command\",command={}}}]}}]",
-                toml_str(&cmd)
+                "hooks.{ev}=[{{hooks=[{{type=\"command\",command={},timeout={}}}]}}]",
+                toml_str(&cmd),
+                hook_timeout(snake)
             ));
             state.push(format!(
                 "{}={{trusted_hash={}}}",
@@ -224,6 +232,10 @@ impl Adapter for Codex {
             "PostToolUse" => out.push(Signal::status(AgentStatus::Working)),
             "PermissionRequest" => out.push(Signal::blocked("permission", Some(tool()))),
             "Stop" => {
+                // Only the session's own thread runs hooks, so this reply is the turn's.
+                if let Some(m) = str_of(p, "last_assistant_message") {
+                    out.push(Signal::Reply { text: m.to_owned() });
+                }
                 out.push(Signal::status(AgentStatus::Idle));
                 out.push(Signal::TurnEnd);
             }
@@ -323,13 +335,29 @@ mod tests {
 
     #[test]
     fn trust_hashes_match_codex_bit_for_bit() {
+        for version in ["0.143.0", "0.164.0"] {
+            let p = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("tests/fixtures/codex-{version}/trust-hashes.json"));
+            let f: Value = serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
+            let base = f["command"].as_str().unwrap();
+            for v in f["vectors"].as_array().unwrap() {
+                let ev = v["event_name"].as_str().unwrap();
+                // 0.164's vectors are ptyro's own hooks: the command ends with the event.
+                let cmd =
+                    v["event"].as_str().map_or_else(|| base.to_owned(), |e| format!("{base} {e}"));
+                let want = v["trusted_hash"].as_str().unwrap();
+                assert_eq!(trust_hash(ev, &cmd), want, "{version} {ev}");
+            }
+        }
+        // Every hook ptyro installs is covered by the newest fixture.
         let p = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/codex-0.143.0/trust-hashes.json");
+            .join("tests/fixtures/codex-0.164.0/trust-hashes.json");
         let f: Value = serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
-        let cmd = f["command"].as_str().unwrap();
-        for v in f["vectors"].as_array().unwrap() {
-            let ev = v["event_name"].as_str().unwrap();
-            assert_eq!(trust_hash(ev, cmd), v["trusted_hash"].as_str().unwrap(), "{ev}");
+        for (_, snake) in EVENTS {
+            assert!(
+                f["vectors"].as_array().unwrap().iter().any(|v| v["event_name"] == *snake),
+                "{snake} has no vector"
+            );
         }
     }
 
@@ -357,7 +385,7 @@ mod tests {
             mcp: None,
         };
         let a = Codex.launch(&ctx).unwrap().argv;
-        assert!(a.iter().any(|x| x == "hooks.PermissionRequest=[{hooks=[{type=\"command\",command=\"/bin/ptyro hook codex PermissionRequest\"}]}]"), "{a:?}");
+        assert!(a.iter().any(|x| x == "hooks.PermissionRequest=[{hooks=[{type=\"command\",command=\"/bin/ptyro hook codex PermissionRequest\",timeout=600}]}]"), "{a:?}");
         let state = a.iter().find(|x| x.starts_with("hooks.state=")).unwrap();
         assert!(
             state.contains(
@@ -389,6 +417,14 @@ mod tests {
             n.contains(&Signal::TurnEnd)
                 && n.contains(&Signal::Notify { text: "All tests pass.".into() })
                 && n.contains(&Signal::Reply { text: "All tests pass.\nDetails".into() })
+        );
+        // 0.164's Stop carries the turn's reply (live capture, 2026-10-23).
+        let p = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/codex-0.164.0/hooks/Stop.json");
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
+        let stop = Codex.on_hook("Stop", &v);
+        assert!(
+            stop.contains(&Signal::Reply { text: "ok".into() }) && stop.contains(&Signal::TurnEnd)
         );
         assert_eq!(Codex.on_title("⠋ codex"), Some(Signal::status(AgentStatus::Working)));
         assert_eq!(Codex.on_title("codex"), None);

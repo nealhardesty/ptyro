@@ -1351,16 +1351,21 @@ The relay also forwards `CLAUDE_CODE_MESSAGING_TOKEN` with the socket path.
   hook as `hooks.state."<source>:<event>:<group>:<handler>".trusted_hash`.
 - **Hook injection** **[decided 2026-10-20, verified M0.4 on 0.143.0]**: entirely through `-c`,
   nothing written to `~/.codex`:
-  1. One `-c 'hooks.<Event>=[{hooks=[{type="command",command="ptyro hook codex <event>"}]}]'` per
-     event. These become the *session-flags* layer (key source `/<session-flags>/config.toml`).
+  1. One `-c 'hooks.<Event>=[{hooks=[{type="command",command="ptyro hook codex <event>",timeout=<t>}]}]'`
+     per event, the timeout written out (600, or 1 for `Interrupt`) so the hash below never rests
+     on Codex's defaults. These become the *session-flags* layer (key source `/<session-flags>/config.toml`).
   2. One `-c 'hooks.state={"/<session-flags>/config.toml:<event_snake>:0:0"={trusted_hash="sha256:<h>"}, …}'`.
      Codex reads hook trust from the user layer **and the session-flags layer**
      (`hook_states_from_stack`), so this pre-trusts *exactly our* hooks for this invocation. It does
      not bypass trust for repo or user hooks, which `--dangerously-bypass-hook-trust` would.
   3. `<h>` = SHA-256 hex of the compact, key-sorted JSON of
      `{"event_name": "<event_snake>", "hooks": [{"type":"command","command":"<cmd>","timeout":600,"async":false}]}`.
-     `timeout` is normalized to 600, or 1 for `session_end`; `matcher` is omitted when absent.
-     Reproduced bit-for-bit for 6 events (`crates/ptyro-agents/tests/fixtures/codex-0.143.0/trust-hashes.json`). The
+     `timeout` is the resolved one: ptyro's explicit value, else Codex's default (600; 1 for
+     `session_end` and, from 0.164, `interrupt`, which 0.164 also clamps to 1–3 s). `matcher` is
+     omitted when absent. Reproduced bit-for-bit for 6 events on 0.143.0 and for all 9 ptyro
+     installs on 0.164.0 (`crates/ptyro-agents/tests/fixtures/codex-<version>/trust-hashes.json`;
+     0.164's from `codex app-server`'s `hooks/list`, which reports each hook's `currentHash`,
+     `trustStatus` and `timeoutSec` without a login: the way to check a new version). The
      identity is Codex-internal and may change between versions, so the adapter golden-tests it per
      supported version. When a version mismatches, Codex shows "hooks need review" instead of
      running them: ptyro detects that screen text and falls back to `notify` + title parsing,
@@ -1382,9 +1387,15 @@ The relay also forwards `CLAUDE_CODE_MESSAGING_TOKEN` with the socket path.
   `check_for_update_on_startup = false` via `-c` is the likely fix **[unverified]**.
 - **Conversation id:** cannot be pre-assigned; learned from `SessionStart.session_id` **[verified:
   present, UUIDv7-style, plus `transcript_path`]**, `notify` `thread-id`, or `thread.started` in exec
-  mode. Fixtures: `crates/ptyro-agents/tests/fixtures/codex-0.143.0/hooks/`. `Stop`, `PermissionRequest` and `notify`
-  payloads are **not yet captured** (no working Codex login when recorded; re-test after
-  `codex login`).
+  mode. Fixtures: `crates/ptyro-agents/tests/fixtures/codex-0.143.0/hooks/`, and
+  `codex-0.164.0/hooks/Stop.json`. `PermissionRequest` is **not yet captured**.
+- **Task and reply** **[verified 2026-10-23, 0.164.0]**: `UserPromptSubmit.prompt` is the task;
+  `Stop.last_assistant_message` is the turn's reply (the sidebar's `task` and `last`, §11.2h).
+  `notify` also carries `last-assistant-message`, but it fires for Codex's side threads too: after
+  each first turn, a separate thread (its own `thread-id`, same `client: "codex-tui"`) writes the
+  conversation's title and reports `{"title":"…"}` as its reply. Side threads run no hooks. The
+  daemon drops a `notify` whose `thread-id` isn't the session's conversation, so a side thread can
+  neither replace the reply, end a turn, nor take over the conversation id that resume uses.
 - **Status signals:** `UserPromptSubmit` → working; `PermissionRequest` → blocked(permission);
   `Stop`/`notify agent-turn-complete` → idle; process exit → exited. Codex's OSC 0 title
   (`tui.terminal_title`, spinner) is a fallback signal.
@@ -1396,7 +1407,10 @@ The relay also forwards `CLAUDE_CODE_MESSAGING_TOKEN` with the socket path.
 **[built M4]** As designed. One `-c hooks.<Event>` per event in `SessionStart`,
 `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `Stop`, `Interrupt` and
 `SubagentStart/Stop`, plus a matching `hooks.state` with trust hashes golden-tested against the
-0.143.0 fixture, and a `notify` that chains the user's own.
+0.143.0 and 0.164.0 fixtures, and a `notify` that chains the user's own. **[fixed 2026-10-23]**
+Before, `Interrupt` was hashed with 600 s; 0.164 resolves it to 1 s, so every Codex session
+stopped on "hooks need review" and, skipped, ran no hooks: no task, no reply, status from the
+title alone.
 - `projects={…trusted}` is passed for a worktree only when the project's main checkout is trusted
   in that Codex home, or `trust_worktrees = true`.
 - `on_title` reads the braille spinner (working). `on_screen` recognises the update prompt, the
@@ -4704,7 +4718,13 @@ learn something the hard way.
   the TUI, `remote-control`.
 - **[docs]** No flag to pre-assign a session id; no `Notification` hook event; non-managed hooks need
   trust review. `notify = [...]` receives JSON `{type:"agent-turn-complete", thread-id, turn-id, cwd,
-  last-assistant-message, …}`. https://learn.chatgpt.com/docs/hooks
+  client, input-messages, last-assistant-message}` [verified 2026-10-23, 0.164.0], also for
+  side threads (§8.4). https://learn.chatgpt.com/docs/hooks
+- **[verified 2026-10-23, 0.164.0]** `codex app-server` `hooks/list {cwds}` returns every hook
+  with `key`, `currentHash`, `trustStatus` (`managed|untrusted|trusted|modified`), `timeoutSec`
+  and `source` (`user`, `sessionFlags`, …), with no login. `Interrupt`'s timeout defaults to 1
+  and is clamped to at most 3. Codex 0.164 also emits OSC 7501 status reports [observed], which
+  ptyro's generic OSC 7501 reader already takes as status.
 - **[observed]** Sessions stored at `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`, plus
   `state_*.sqlite`.
 - **[verified 2026-10-20, 0.143.0 + source]** Hook trust and session-flag trust are covered in

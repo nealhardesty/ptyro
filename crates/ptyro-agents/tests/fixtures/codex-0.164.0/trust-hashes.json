@@ -1,0 +1,61 @@
+{
+  "codex_version": "0.164.0",
+  "note": "currentHash values reported by Codex itself (app-server hooks/list, 2026-10-23) for the hooks ptyro passes as -c session flags; command = '<command> <Event>'. Codex 0.164 resolves interrupt's timeout to 1 s (clamped 1-3), the others to 600 (SPEC \u00a78.4, \u00a720.2).",
+  "command": "/Users/neal/dev/ptyro/target/debug/ptyro hook codex",
+  "vectors": [
+    {
+      "event_name": "pre_tool_use",
+      "event": "PreToolUse",
+      "timeout": 600,
+      "trusted_hash": "sha256:e78f2106d205dbb67fbccb851489b1d26bd500f10446343faa0c9739f7134652"
+    },
+    {
+      "event_name": "permission_request",
+      "event": "PermissionRequest",
+      "timeout": 600,
+      "trusted_hash": "sha256:5120923571328c1b8fdc54fc104cddbcf43cef797c6b287237eb1b00198e94de"
+    },
+    {
+      "event_name": "post_tool_use",
+      "event": "PostToolUse",
+      "timeout": 600,
+      "trusted_hash": "sha256:2405bb637b67994330fb62b9b893fe6ca790ccb90647eaca8167152bbc2a3a66"
+    },
+    {
+      "event_name": "session_start",
+      "event": "SessionStart",
+      "timeout": 600,
+      "trusted_hash": "sha256:8039111148c9258add18218e85287c9c5588d6a85db177a354a3005b78a3147c"
+    },
+    {
+      "event_name": "user_prompt_submit",
+      "event": "UserPromptSubmit",
+      "timeout": 600,
+      "trusted_hash": "sha256:24bfc3fe46ebaab5cea9a4951b3c8429631a76bff5531f6382f94e0f8453c9b3"
+    },
+    {
+      "event_name": "subagent_start",
+      "event": "SubagentStart",
+      "timeout": 600,
+      "trusted_hash": "sha256:d657b3017b8a00a24e4822956608f84faa434b8913047ee8f4b03cbd46817b73"
+    },
+    {
+      "event_name": "subagent_stop",
+      "event": "SubagentStop",
+      "timeout": 600,
+      "trusted_hash": "sha256:8ee937c91df47aaf82462797122d5fa3943e38d7b6898df45fc1af59641ef735"
+    },
+    {
+      "event_name": "stop",
+      "event": "Stop",
+      "timeout": 600,
+      "trusted_hash": "sha256:414ee7784518c41aac8dc51da1fe78958a598c8158bf97affb2b03964d2e0162"
+    },
+    {
+      "event_name": "interrupt",
+      "event": "Interrupt",
+      "timeout": 1,
+      "trusted_hash": "sha256:c24418c40929874217fe77e3e940424443a17f35c2d8565dd44bfca462e6b783"
+    }
+  ]
+}

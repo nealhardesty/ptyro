@@ -316,6 +316,25 @@ async fn codex_gemini_antigravity_and_opencode_adapters() {
         assert!(Instant::now() < deadline, "the user's notify wasn't chained");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    // Codex's side thread (it writes the title) reports through notify too: ignored, so it
+    // neither replaces the reply nor the conversation.
+    let before = get(&c, "cx").await;
+    c.request(Request::Hook {
+        session: before.id.full(),
+        adapter: "codex".into(),
+        event: "notify".into(),
+        payload: serde_json::json!({
+            "type": "agent-turn-complete",
+            "thread-id": "side-thread",
+            "last-assistant-message": "{\"title\":\"Fix it\"}",
+        }),
+        env: Default::default(),
+    })
+    .await
+    .unwrap();
+    let after = get(&c, "cx").await;
+    assert_eq!(after.conversation, before.conversation);
+    assert_eq!(after.last_reply, before.last_reply);
     // Permission prompts: keys for codex and gemini, the API for OpenCode.
     for name in ["cx", "gm", "oc"] {
         send(&c, name, "ask make deploy").await;
