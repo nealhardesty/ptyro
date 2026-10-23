@@ -75,6 +75,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("focus.toggle", "Move focus between the sidebar and the pane"),
     a("sidebar.toggle", "Show or hide the sidebar"),
     a("toast.act", "Do what the last message offers: undo it, or fix what it reports"),
+    a("row.menu", "Everything you can do with this session, worktree or project, with its keys"),
     a("sidebar.wider", "Make the sidebar a column wider (also: drag its edge)"),
     a("sidebar.narrower", "Make the sidebar a column narrower (also: drag its edge)"),
     a("sidebar.zoom", "Everything at once: the sidebar fills the screen, every row open (toggle)"),
@@ -216,6 +217,7 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Prefix, "\\", "sidebar.toggle"),
     (Table::Prefix, "Z", "sidebar.zoom"),
     (Table::Prefix, "u", "toast.act"),
+    (Table::Prefix, ".", "row.menu"),
     (Table::Prefix, "P", "project.add"),
     (Table::Prefix, "v", "pane.split_right"),
     (Table::Prefix, "s", "pane.split_down"),
@@ -273,6 +275,7 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Nav, "\\", "sidebar.toggle"),
     (Table::Nav, "z", "sidebar.zoom"),
     (Table::Nav, "u", "toast.act"),
+    (Table::Nav, ".", "row.menu"),
     (Table::Nav, "P", "project.add"),
     (Table::Nav, "A", "session.adopt"),
     (Table::Nav, ">", "sidebar.wider"),
@@ -396,6 +399,14 @@ impl Keymap {
         }
         out.sort_by(|a, b| (a.0, order(a.2.action), &a.1).cmp(&(b.0, order(b.2.action), &b.1)));
         out
+    }
+
+    /// The key bound to `action` in `table` (no prefix shown), if any.
+    pub fn key_in(&self, table: Table, action: &str) -> Option<String> {
+        self.bindings
+            .iter()
+            .find(|((t, _), (_, c))| *t == table && c.action == action && c.arg.is_none())
+            .map(|((_, label), _)| label.clone())
     }
 
     /// The key shown next to an action in the palette (prefix table first).

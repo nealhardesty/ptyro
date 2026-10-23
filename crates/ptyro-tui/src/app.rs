@@ -146,6 +146,8 @@ pub enum Purpose {
     Script(String),
     /// Add a project, then carry on (UX1.6).
     AddProject(Option<AfterAdd>),
+    /// A row's actions (UX1.15): run with that row selected in the sidebar.
+    RowMenu(Row),
 }
 
 /// What asked for a project when there was none (UX1.6): done once the project is added.
@@ -292,6 +294,8 @@ pub enum Pending {
     Compare(String),
     /// A change set's ledger, for the set view (M11).
     CsLog(String),
+    /// The context worktree's scripts, for an open palette (UX1.18).
+    PaletteScripts(String),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -457,6 +461,8 @@ pub struct App {
     sidebar_row: Option<Row>,
     sidebar_sel: usize,
     pub prefix: bool,
+    /// When the prefix was pressed (the which-key menu follows, UX1.14).
+    pub prefix_at: Option<Instant>,
     pub overlay: Option<Overlay>,
     pub toast: Option<Toast>,
     pub buffer: Option<String>,
@@ -548,6 +554,7 @@ impl App {
             sidebar_row: None,
             sidebar_sel: 0,
             prefix: false,
+            prefix_at: None,
             overlay: opts_tour.then_some(Overlay::Tour { page: 0 }),
             toast: None,
             buffer: None,
@@ -987,6 +994,24 @@ impl App {
         if self.config.ui.clock {
             self.dirty = true;
         }
+    }
+
+    fn start_prefix(&mut self) {
+        self.prefix = true;
+        self.prefix_at = Some(Instant::now());
+    }
+
+    /// When the which-key menu is due, while the prefix waits for its key (UX1.14).
+    pub fn which_key_due(&self) -> Option<Instant> {
+        let delay = self.config.ui.which_key_delay;
+        (self.prefix && delay > 0)
+            .then(|| self.prefix_at.map(|t| t + Duration::from_millis(delay)))
+            .flatten()
+    }
+
+    /// The which-key menu shows: the prefix waited long enough for its key.
+    pub fn which_key_shown(&self) -> bool {
+        self.which_key_due().is_some_and(|t| Instant::now() >= t)
     }
 
     pub fn toast(&mut self, text: impl Into<String>) {
@@ -1485,6 +1510,19 @@ impl App {
             (Pending::Discovered(then), Ok(Reply::Paths { paths })) => {
                 self.open_add_project(paths, then)
             }
+            (Pending::PaletteScripts(wt), Ok(Reply::Scripts { scripts })) => {
+                let place = self.worktree(&wt).map(WorktreeInfo::qualified).unwrap_or_default();
+                if let Some(Overlay::Picker { palette, purpose: Purpose::Palette }) =
+                    &mut self.overlay
+                {
+                    palette.extend(scripts.names.iter().map(|n| Item {
+                        label: format!("script {}", n.trim_start_matches("run:")),
+                        detail: format!("run it in {place}"),
+                        key: None,
+                        target: Target::RunScript(wt.clone(), n.clone()),
+                    }));
+                }
+            }
             (Pending::Scripts(wt), Ok(Reply::Scripts { scripts })) => {
                 self.open_script_picker(wt, scripts)
             }
@@ -1644,7 +1682,7 @@ impl App {
             // The prefix always works: it closes whatever is open and starts a command.
             if self.keymap.is_prefix(key) && !matches!(self.overlay, Some(Overlay::Prompt { .. })) {
                 self.overlay = None;
-                self.prefix = true;
+                self.start_prefix();
                 return;
             }
             self.overlay_key(key);
@@ -1652,7 +1690,7 @@ impl App {
         }
         if self.orch.is_some() && !self.prefix {
             if self.keymap.is_prefix(key) {
-                self.prefix = true;
+                self.start_prefix();
             } else {
                 self.orch_key(key);
             }
@@ -1660,7 +1698,7 @@ impl App {
         }
         if self.sets_view.is_some() && !self.prefix {
             if self.keymap.is_prefix(key) {
-                self.prefix = true;
+                self.start_prefix();
             } else {
                 self.sets_key(key);
             }
@@ -1668,7 +1706,7 @@ impl App {
         }
         if self.inspector.is_some() && !self.prefix {
             if self.keymap.is_prefix(key) {
-                self.prefix = true;
+                self.start_prefix();
             } else {
                 self.inspector_key(key);
             }
@@ -1697,7 +1735,7 @@ impl App {
             return;
         }
         if self.keymap.is_prefix(key) {
-            self.prefix = true;
+            self.start_prefix();
             return;
         }
         if let Some(cmd) = self.keymap.lookup(Table::Global, key).cloned() {
@@ -2013,6 +2051,7 @@ impl App {
                     Focus::Sidebar => Focus::Pane,
                 };
             }
+            "row.menu" => self.open_row_menu(),
             "toast.act" => match self.toast.take().and_then(|t| t.offer) {
                 Some(Offer { then: Then::Run(cmd), .. }) => self.run(&cmd),
                 Some(Offer { then: Then::Send(req, done), .. }) => {
@@ -2500,6 +2539,166 @@ impl App {
             None => format!("here, {}", self.here().display()),
         };
         (slug, agent, place)
+    }
+
+    /// A key for `action` where the focus is: the sidebar's own (no prefix), else after the
+    /// prefix.
+    fn hint_key(&self, action: &str) -> Option<String> {
+        if self.focus == Focus::Sidebar
+            && let Some(k) = self.keymap.key_in(Table::Nav, action)
+        {
+            return Some(k);
+        }
+        self.keymap.key_for(action)
+    }
+
+    /// The status bar's hint for what's selected (UX1.16): what you'd most likely do next with
+    /// it, and the key. `None` when there's nothing in particular.
+    pub fn context_hint(&self) -> Option<String> {
+        let row = match self.focus {
+            Focus::Sidebar => self.selected_row()?,
+            Focus::Pane => Row::Session(self.focused_session()?),
+        };
+        let with = |action: &str, what: &str| self.hint_key(action).map(|k| format!("{k} {what}"));
+        let worktree_hint = |w: &WorktreeInfo| {
+            if w.pr.as_ref().is_some_and(|p| p.state == "MERGED") && !w.is_root {
+                return with("worktree.finish", "clean up (merged)")
+                    .or_else(|| with("worktree.remove", "clean up (merged)"));
+            }
+            let changed = w.status.as_ref().is_some_and(|s| s.insertions + s.deletions > 0);
+            changed.then(|| with("inspector", "review its changes")).flatten()
+        };
+        match row {
+            Row::Session(id) => {
+                let s = self.session(id)?;
+                if s.state == ProcessState::Dormant {
+                    return Some("⏎ resumes it".into());
+                }
+                if !s.state.is_live() {
+                    let restart = if self.focus == Focus::Sidebar { "R" } else { "⏎" };
+                    return Some(format!(
+                        "{restart} restart · {}",
+                        with("session.stop", "remove").unwrap_or_default()
+                    ));
+                }
+                if s.status.as_ref().is_some_and(|r| r.status == AgentStatus::Blocked) {
+                    return with("peek", "answer it");
+                }
+                if s.inner_agent.as_deref() == Some("claude") {
+                    return with("session.adopt", "adopt it (hooks, resume)");
+                }
+                if let Some(w) = s.worktree.as_deref().and_then(|w| self.worktree(w))
+                    && s.status.as_ref().is_none_or(|r| r.status != AgentStatus::Working)
+                    && let Some(h) = worktree_hint(w)
+                {
+                    return Some(h);
+                }
+                if self.attention_order(false).iter().any(|a| *a != id) {
+                    return with("attention.next", "who needs you");
+                }
+                None
+            }
+            Row::Worktree(w) => self
+                .worktree(&w)
+                .and_then(worktree_hint)
+                .or_else(|| with("session.new", "start a task here")),
+            Row::Project(_) => with("worktree.new", "new worktree"),
+            Row::Set(_) | Row::Group(_) => None,
+        }
+    }
+
+    /// The actions that apply to a row (UX1.15), for its menu: a session's, a worktree's, a
+    /// project's. Only what makes sense now (a stopped session restarts, a live one stops).
+    pub fn row_actions(&self, row: &Row) -> Vec<&'static str> {
+        match row {
+            Row::Session(id) => {
+                let Some(s) = self.session(*id) else { return Vec::new() };
+                let mut v = vec!["peek"];
+                if s.state == ProcessState::Dormant {
+                    v.push("session.resume");
+                } else if !s.state.is_live() {
+                    v.push("session.restart");
+                }
+                if s.inner_agent.as_deref() == Some("claude") {
+                    v.push("session.adopt");
+                }
+                v.extend(["session.retitle", "session.rename", "session.explain"]);
+                if s.kind == SessionKind::Agent && s.state.is_live() {
+                    v.extend(["session.hibernate", "session.mute"]);
+                    if s.structured.is_some() {
+                        v.push("view.chat");
+                    }
+                }
+                if s.worktree.is_some() {
+                    v.extend(["inspector", "worktree.open", "script.run", "script.pick"]);
+                }
+                v.push("pane.split_right");
+                if s.state.is_live() {
+                    v.extend(["session.stop", "session.kill"]);
+                } else {
+                    v.push("session.stop");
+                }
+                v
+            }
+            Row::Worktree(w) => {
+                let root = self.worktree(w).is_some_and(|w| w.is_root);
+                let mut v = vec!["session.new", "shell.here", "inspector", "worktree.finish"];
+                v.extend(["worktree.open", "script.run", "script.pick", "worktree.retitle"]);
+                if !root {
+                    v.extend(["worktree.archive", "worktree.remove"]);
+                }
+                v
+            }
+            Row::Project(_) => vec![
+                "session.new",
+                "worktree.new",
+                "shell.here",
+                "project.trust",
+                "script.pick",
+                "worktree.open",
+            ],
+            Row::Set(_) => vec!["sets"],
+            Row::Group(_) => Vec::new(),
+        }
+    }
+
+    /// `.` / right-click (UX1.15): the row's actions, with their keys. In the pane, the focused
+    /// session's.
+    fn open_row_menu(&mut self) {
+        let row = match (self.focus, self.selected_row(), self.focused_session()) {
+            (Focus::Sidebar, Some(r), _) => r,
+            (_, _, Some(id)) => Row::Session(id),
+            _ => {
+                self.toast_offer(
+                    "nothing here yet",
+                    false,
+                    run_offer("start a task", "session.new"),
+                );
+                return;
+            }
+        };
+        let title = match &row {
+            Row::Session(id) => self.session(*id).map(|s| format!("Session {}", s.name)),
+            Row::Worktree(w) => self.worktree(w).map(|w| format!("Worktree {}", w.qualified())),
+            Row::Project(p) => self.project(p).map(|p| format!("Project {}", p.slug)),
+            Row::Set(_) => Some("Change set".into()),
+            Row::Group(_) => None,
+        };
+        let items: Vec<Item> = self
+            .row_actions(&row)
+            .into_iter()
+            .filter_map(|a| keymap::spec(a))
+            .map(|a| Item {
+                label: a.id.into(),
+                detail: a.desc.into(),
+                key: self.keymap.key_for(a.id),
+                target: Target::Action(Command { action: a.id, arg: None }),
+            })
+            .collect();
+        self.overlay = Some(Overlay::Picker {
+            palette: Palette::new(title.unwrap_or_else(|| "Actions".into()), items),
+            purpose: Purpose::RowMenu(row),
+        });
     }
 
     /// The task box's ⏎: the default agent on the prompt, in a new worktree named after it (or
@@ -3032,6 +3231,28 @@ impl App {
         for s in self.session_items(false) {
             items.push(Item { label: format!("go {}", s.label), ..s });
         }
+        // Worktrees and projects (UX1.18): go to them.
+        let here = self.tree().project_ids();
+        for w in self.worktrees.iter().filter(|w| here.contains(&w.project)) {
+            items.push(Item {
+                label: format!("worktree {}", w.qualified()),
+                detail: [w.branch.clone(), w.title.clone()]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join(" · "),
+                key: None,
+                target: Target::Worktree(w.id.clone()),
+            });
+        }
+        for p in self.projects.iter().filter(|p| here.contains(&p.id)) {
+            items.push(Item {
+                label: format!("project {}", p.slug),
+                detail: p.root.display().to_string(),
+                key: None,
+                target: Target::Project(p.id.clone()),
+            });
+        }
         for w in &self.workspaces {
             if w.name != self.workspace {
                 items.push(Item {
@@ -3058,6 +3279,14 @@ impl App {
             palette: Palette::new("Command palette", items),
             purpose: Purpose::Palette,
         });
+        // The context worktree's scripts join as soon as the daemon says what they are.
+        if let (Some(project), Some(wt)) = self.context() {
+            let addr = self.worktree(&wt).map_or_else(|| wt.clone(), WorktreeInfo::qualified);
+            self.request(
+                Pending::PaletteScripts(wt),
+                Request::ProjectScripts { addr: project, worktree: Some(addr) },
+            );
+        }
     }
 
     fn overlay_key(&mut self, key: KeyEvent) {
@@ -3313,7 +3542,39 @@ impl App {
             (Target::AddProject, Purpose::Target(w)) => {
                 self.pick_project(Some(AfterAdd::Targets(w)))
             }
+            // A row's action: with that row selected, so it's what the action works on.
+            (Target::Action(cmd), Purpose::RowMenu(row)) => {
+                let rows = self.rows();
+                if let Some(i) = rows.iter().position(|r| *r == row) {
+                    self.set_sel(&rows, i);
+                }
+                self.focus = Focus::Sidebar;
+                self.run(&cmd);
+            }
             (Target::Action(cmd), _) => self.run(&cmd),
+            // From the palette: go to a worktree (its first session) or a project.
+            (Target::Worktree(id), _) => {
+                let rows = self.rows();
+                if let Some(i) = rows.iter().position(|r| *r == Row::Worktree(id.clone())) {
+                    self.set_sel(&rows, i);
+                }
+                match self.sessions.iter().find(|s| s.worktree.as_deref() == Some(id.as_str())) {
+                    Some(s) => {
+                        let sid = s.id;
+                        self.show(sid, None);
+                    }
+                    None => self.focus = Focus::Sidebar,
+                }
+            }
+            (Target::Project(id), _) => {
+                self.collapsed.remove(&id);
+                let rows = self.rows();
+                if let Some(i) = rows.iter().position(|r| *r == Row::Project(id.clone())) {
+                    self.set_sel(&rows, i);
+                }
+                self.focus = Focus::Sidebar;
+            }
+            (Target::RunScript(wt, name), _) => self.run_script(wt, Some(name)),
             (Target::Session(id), _) => self.show(id, split),
             (Target::Theme(name), _) => self.set_theme(name),
             (Target::NewShell, _) => self.spawn(Vec::new(), split, None),
@@ -3664,6 +3925,20 @@ impl App {
             && side.contains((x, y).into())
         {
             match m.kind {
+                // Right-click: that row's actions (UX1.15).
+                K::Down(crossterm::event::MouseButton::Right) => {
+                    let rows = self.rows();
+                    let body = crate::ui::sidebar_body(self, side);
+                    let row = y
+                        .checked_sub(side.y + 1)
+                        .and_then(|l| body.lines.get(l as usize + body.skip))
+                        .map(|(i, _)| *i);
+                    if let Some(i) = row.filter(|i| rows.get(*i).is_some_and(Row::selectable)) {
+                        self.set_sel(&rows, i);
+                        self.focus = Focus::Sidebar;
+                        self.open_row_menu();
+                    }
+                }
                 K::Down(_) => {
                     let rows = self.rows();
                     let body = crate::ui::sidebar_body(self, side);
@@ -4914,6 +5189,115 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_pause_after_the_prefix_shows_what_each_key_does() {
+        let mut app = app();
+        app.prefix = true;
+        app.prefix_at = Some(Instant::now());
+        assert!(!screen(&app).contains("then…"), "not before the delay");
+        app.prefix_at = Some(Instant::now() - Duration::from_secs(1));
+        let shown = screen(&app);
+        assert!(shown.contains("C-q then…"), "{shown}");
+        for want in ["n a task", "a who needs you", "D diff & ship", ". its actions", "? all keys"]
+        {
+            assert!(shown.contains(want), "{want}: {shown}");
+        }
+        // Rebinding shows: `y` now zooms.
+        let mut config = Config::default();
+        config.keys.insert("y".into(), "pane.zoom".into());
+        config.keys.insert("z".into(), "none".into());
+        app.keymap = Keymap::new(&config).0;
+        assert!(screen(&app).contains("y zoom"));
+        app.config.ui.which_key_delay = 0;
+        assert!(!screen(&app).contains("then…"), "0 turns it off");
+    }
+
+    #[test]
+    fn a_row_s_menu_lists_what_applies_and_runs_it_there() {
+        let mut app = app();
+        with_project(&mut app);
+        let mut live = session("live");
+        live.worktree = Some("p1-root".into());
+        live.project = Some("p1".into());
+        let mut gone = session("gone");
+        gone.state = ProcessState::Exited { code: Some(1), signal: None };
+        app.sessions = vec![live.clone(), gone.clone()];
+        let live_actions = app.row_actions(&Row::Session(live.id));
+        assert!(live_actions.contains(&"session.stop") && live_actions.contains(&"inspector"));
+        assert!(!live_actions.contains(&"session.restart"));
+        let gone_actions = app.row_actions(&Row::Session(gone.id));
+        assert!(
+            gone_actions.contains(&"session.restart") && !gone_actions.contains(&"session.kill")
+        );
+        assert!(!app.row_actions(&Row::Worktree("p1-root".into())).contains(&"worktree.remove"));
+        // Right-click a row: its menu, keys shown; pick one and it runs on that row.
+        let lines = sidebar(&app);
+        let y = lines.iter().position(|l| l.contains("gone")).unwrap() as u16;
+        use crossterm::event::{MouseButton, MouseEventKind as K};
+        app.on_mouse(&mouse(K::Down(MouseButton::Right), 3, y));
+        let shown = screen(&app);
+        assert!(shown.contains("Session gone") && shown.contains("session.restart"), "{shown}");
+        assert!(shown.contains("C-q C-r"), "with its key: {shown}");
+        app.overlay = None;
+        app.focus = Focus::Pane;
+        app.panes.get_mut(&1).unwrap().session = Some(live.id);
+        app.run(&Command { action: "row.menu", arg: None });
+        assert!(screen(&app).contains("Session live"), "in the pane: the focused session's");
+    }
+
+    #[test]
+    fn the_status_bar_hints_what_to_do_with_what_s_selected() {
+        let mut app = app();
+        let mut asker = session("asker");
+        status(&mut asker, AgentStatus::Blocked, Some("permission"), Some("Bash: rm"));
+        let mut gone = session("gone");
+        gone.state = ProcessState::Exited { code: Some(0), signal: None };
+        app.sessions = vec![asker.clone(), gone.clone()];
+        app.panes.get_mut(&1).unwrap().session = Some(asker.id);
+        assert_eq!(app.context_hint().as_deref(), Some("C-q p answer it"));
+        assert!(screen(&app).contains("C-q p answer it"));
+        // In the sidebar, its own keys (no prefix).
+        app.focus = Focus::Sidebar;
+        let rows = app.rows();
+        let i = rows.iter().position(|r| *r == Row::Session(gone.id)).unwrap();
+        app.set_sel(&rows, i);
+        assert_eq!(app.context_hint().as_deref(), Some("R restart · x remove"));
+    }
+
+    #[test]
+    fn the_palette_finds_worktrees_projects_and_scripts_too() {
+        let mut app = app();
+        with_project(&mut app);
+        app.run(&Command { action: "palette", arg: None });
+        typed(&mut app, "worktree p1");
+        assert!(screen(&app).contains("worktree p1/@root"), "{}", screen(&app));
+        key(&mut app, KeyCode::Char { c: 'u' }, Mods(Mods::CTRL));
+        typed(&mut app, "project my");
+        assert!(screen(&app).contains("project myrepo"), "{}", screen(&app));
+        key(&mut app, KeyCode::Char { c: 'u' }, Mods(Mods::CTRL));
+        // Scripts arrive after it opened, and the query applies to them.
+        typed(&mut app, "dev");
+        let scripts: ScriptsInfo = serde_json::from_value(serde_json::json!({
+            "project": "myrepo", "text": "", "trusted": true, "fingerprint": "f",
+            "names": ["setup", "run:dev"],
+        }))
+        .unwrap();
+        app.on_reply(AppMsg::Reply(
+            Pending::PaletteScripts("p1-root".into()),
+            Ok(Reply::Scripts { scripts }),
+        ));
+        let shown = screen(&app);
+        assert!(
+            shown.contains("script dev") && shown.contains("run it in p1/@root"),
+            "{shown}"
+        );
+        // A project: selected in the sidebar.
+        app.overlay = None;
+        app.picked(Target::Project("p1".into()), Purpose::Palette);
+        assert_eq!(app.focus, Focus::Sidebar);
+        assert_eq!(app.selected_row(), Some(Row::Project("p1".into())));
     }
 
     #[test]

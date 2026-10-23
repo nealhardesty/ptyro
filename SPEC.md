@@ -2476,6 +2476,25 @@ learning anything up front.
   "where" step offers "+ add a project…" after "here" when there is none, then goes on to the
   new project's targets. `project.add` has a key: `P` (after the prefix, or in the sidebar), and
   the empty sidebar names it.
+- **Which-key** (UX1.14): when no key follows the prefix within `[ui] which_key_delay` (400 ms;
+  0: never), a menu of the next keys appears above the status bar, in five groups (start, go,
+  panes, work, this), as bound now; keys typed before it work as always. The event loop wakes at
+  the deadline, not on its 250 ms tick.
+- **A row's menu** (UX1.15, `row.menu`: `.` after the prefix or in the sidebar, or a
+  right-click): every action that applies to that row now, with its key. A session's (peek,
+  resume or restart, adopt, title, rename, explain, hibernate, mute, its worktree's inspector,
+  editor and scripts, split, stop or kill), a worktree's (a task there, a shell, the inspector,
+  finish, editor, scripts, title, archive, remove), a project's. Picked, it runs with that row
+  selected, so it works on that row. In a pane, `.` is the focused session's.
+- **Hints follow the selection** (UX1.16): with no message up, the status bar says what you'd
+  do next with the selected row (the focused session in a pane), with the key as it works
+  there: `C-q p answer it` (blocked), `R restart · x remove` (exited, in the sidebar), `⏎
+  resumes it` (dormant), adopting a hand-started Claude, `D review its changes` (a worktree
+  with changes), clean up a merged one, `a who needs you`.
+- **The palette finds everything** (UX1.18): besides actions, sessions, workspaces and themes,
+  the workspace's worktrees (going to one shows its first session) and projects (selected in the
+  sidebar), and the context worktree's scripts, which join once the daemon answers. Every line
+  shows its key.
 - **The sidebar resizes** (UX1.7, UX1.8): drag its edge (the divider column), or press `<` / `>`
   with the sidebar focused (`sidebar.narrower` / `sidebar.wider`, a column at a time). The width
   stays within 12–80 and leaves the panes at least 21 columns, and is saved with the workspace's
@@ -3001,6 +3020,7 @@ show_ports = true
 confirm_quit = false
 on_stop = "next"                 # after you stop a pane's session: next (its neighbour) | stay
 sidebar_detail = "auto"          # lines under each session row: auto | compact | full
+which_key_delay = 400            # ms after the prefix before the which-key menu; 0: never
 
 [daemon]
 scrollback_lines = 5000          # in memory; older lines come from the recording (§7.6)

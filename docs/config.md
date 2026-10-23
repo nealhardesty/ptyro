@@ -23,6 +23,7 @@ theme = "ptyro-light"     # ptyro-dark (default), ptyro-light, high-contrast, or
 tint_borders = true       # colour pane dividers with the session's profile
 # on_stop = "stay"        # after you stop a pane's session, keep showing it (default: the next one)
 # sidebar_detail = "full" # lines under each row (task, now, last…): auto (default) | compact | full
+# which_key_delay = 0     # ms after the prefix before the menu of next keys shows; 0: never (default 400)
 # mouse = false           # let the terminal own the mouse (native selection)
 
 [worktrees]

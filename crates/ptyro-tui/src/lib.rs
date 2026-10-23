@@ -180,7 +180,12 @@ async fn event_loop(app: &mut App, tui: &mut ratatui::DefaultTerminal) -> Result
             last_draw = Instant::now();
         }
         let next_draw = last_draw + FRAME;
+        // The which-key menu, once the prefix has waited for its key (UX1.14).
+        let which_key = app.which_key_due().filter(|t| *t > Instant::now());
         tokio::select! {
+            () = tokio::time::sleep_until(which_key.unwrap_or_else(Instant::now).into()), if which_key.is_some() => {
+                app.dirty = true;
+            }
             msg = recv(&mut app.pushes) => match msg {
                 Some(msg) => app.on_server(msg),
                 None => app.lost("connection closed"),

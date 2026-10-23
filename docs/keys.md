@@ -15,6 +15,9 @@ There are two so that one always gets through (SPEC §21.2):
 To use other keys, set one or a list: `prefix = "C-]"` or `prefix = ["C-]", "C-q"]`. A list you set
 replaces both defaults. `C-]` needs AltGr on some non-US layouts.
 
+Don't know the next key? Pause after the prefix: a menu of the keys that follow appears
+(`[ui] which_key_delay`, 400 ms; `0` turns it off). `.` (after the prefix, or in the sidebar, or a
+right-click on a row) lists everything you can do with that session, worktree or project.
 `Ctrl-Q ?` lists every binding as it is configured right now, and `ptyro tour` is a
 60-second walkthrough. `Ctrl-Q :` (or `Ctrl-Q C-p`) opens the palette, which runs any
 action by name.
@@ -53,6 +56,7 @@ action by name.
 | `Tab` | move focus between the sidebar and the pane |
 | `\` | show or hide the sidebar |
 | `u` | do what the last message offers: undo it, or fix what it reports |
+| `.` | what you can do with the focused session (its menu) |
 | `P` | add a project (pick from the repositories ptyro found) |
 | `Z` | everything at once: the sidebar fills the screen with every row open (`⏎` opens one, `Z` or `Esc` goes back) |
 | `[` or `PageUp` | copy mode |
@@ -86,6 +90,7 @@ Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.
 | `z` | everything at once: the sidebar full-screen, every row open |
 | `<` / `>` | the sidebar a column narrower / wider (or drag its edge) |
 | `u` / `P` | do what the last message offers / add a project |
+| `.` | everything you can do with this row (a session, worktree or project), with the keys |
 | `A` | adopt the Claude started by hand in this shell: a managed session, same conversation |
 | `w` `o` `r` | workspace / editor / run script |
 | `v` `s` | split |
@@ -146,13 +151,15 @@ Tabs `1`–`5` (or `Tab`): Diff, Commits, Checks, Ports, Events.
 - Wheel up to scroll back.
 - Drag to select (copied on release). Hold `Shift` for the terminal's own selection, or set
   `[ui] mouse = false`.
-- Click to focus. Clicking a project or worktree row folds it.
+- Click to focus. Clicking a project or worktree row folds it. Right-click a row for its menu.
 - Drag a divider to resize panes, or the sidebar's edge to resize the sidebar. Either is saved
   with the workspace's layout.
 
 ## The palette
 
-`Ctrl-Q :` runs any action by name, including ones with no default key: `project.add`
+`Ctrl-Q :` runs any action by name, goes to any session, worktree or project, and runs the
+current project's scripts; each line shows its key, so it teaches them. Actions with no default
+key include: `project.add`
 (pick from repos under `[discover] roots`), `project.trust`, `worktree.remove`,
 `session.command` (a session running a command line), `session.resume`, `session.hibernate`,
 `session.mute`, `notify.test`, `theme.next`, `config.edit`.

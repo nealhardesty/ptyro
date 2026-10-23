@@ -121,6 +121,116 @@ pub fn draw(app: &App, f: &mut Frame<'_>) {
     }
     if let Some(o) = &app.overlay {
         draw_overlay(app, f, o, area);
+    } else if app.which_key_shown() {
+        draw_which_key(app, f, area);
+    }
+}
+
+/// The menu after the prefix (UX1.14): what each next key does, grouped, as bound now.
+const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
+    (
+        "start",
+        &[
+            ("session.new", "a task"),
+            ("worktree.new", "worktree"),
+            ("project.add", "project"),
+            ("workspace.switch", "workspace"),
+            ("palette", "any action"),
+        ],
+    ),
+    (
+        "go",
+        &[
+            ("attention.next", "who needs you"),
+            ("peek", "peek & answer"),
+            ("inbox", "inbox"),
+            ("session.find", "find"),
+            ("session.next", "next"),
+            ("sidebar.zoom", "everything"),
+        ],
+    ),
+    (
+        "panes",
+        &[
+            ("pane.split_right", "split │"),
+            ("pane.split_down", "split ─"),
+            ("pane.zoom", "zoom"),
+            ("pane.close", "close"),
+            ("focus.toggle", "sidebar"),
+            ("copy.enter", "scroll back"),
+        ],
+    ),
+    (
+        "work",
+        &[
+            ("inspector", "diff & ship"),
+            ("review.queue", "to review"),
+            ("runs", "runs"),
+            ("sets", "change sets"),
+            ("script.run", "run script"),
+            ("worktree.open", "editor"),
+        ],
+    ),
+    (
+        "this",
+        &[
+            ("row.menu", "its actions"),
+            ("session.rename", "rename"),
+            ("session.stop", "stop"),
+            ("toast.act", "undo / fix"),
+            ("app.detach", "detach"),
+            ("help", "all keys"),
+        ],
+    ),
+];
+
+fn draw_which_key(app: &App, f: &mut Frame<'_>, area: Rect) {
+    let t = &app.theme;
+    let prefix = format!("{} ", key_label(&app.keymap.prefix));
+    let key = |action: &str| {
+        app.keymap.key_for(action).and_then(|k| k.strip_prefix(&prefix).map(str::to_owned))
+    };
+    let columns: Vec<(&str, Vec<(String, &str)>)> = WHICH_KEY
+        .iter()
+        .map(|(group, items)| {
+            (*group, items.iter().filter_map(|(a, label)| Some((key(a)?, *label))).collect())
+        })
+        .collect();
+    let rows = columns.iter().map(|(_, v)| v.len()).max().unwrap_or(0) as u16;
+    let col_w = 19u16;
+    let w = (col_w * columns.len() as u16 + 2).min(area.width);
+    let h = (rows + 3).min(area.height.saturating_sub(1));
+    let r = Rect {
+        x: area.x + area.width.saturating_sub(w) / 2,
+        y: area.bottom().saturating_sub(h + 1),
+        width: w,
+        height: h,
+    };
+    f.render_widget(Clear, r);
+    let block = Block::default().borders(Borders::ALL).border_style(fg(app, t.border_focus)).title(
+        Span::styled(
+            format!(" {}then… (Esc: never mind) ", prefix),
+            fg(app, t.accent).add_modifier(Modifier::BOLD),
+        ),
+    );
+    f.render_widget(block, r);
+    for (i, (group, items)) in columns.iter().enumerate() {
+        let x = r.x + 1 + col_w * i as u16;
+        let mut lines =
+            vec![Line::styled(format!(" {group}"), fg(app, t.dim).add_modifier(Modifier::ITALIC))];
+        for (k, label) in items {
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {k:>3} "), fg(app, t.accent).add_modifier(Modifier::BOLD)),
+                Span::styled((*label).to_owned(), fg(app, t.text)),
+            ]));
+        }
+        let col = Rect {
+            x,
+            y: r.y + 1,
+            width: col_w.min(r.right().saturating_sub(x + 1)),
+            height: h.saturating_sub(2),
+        };
+        f.render_widget(Paragraph::new(lines), col);
     }
 }
 
@@ -951,6 +1061,9 @@ fn draw_status(app: &App, f: &mut Frame<'_>, r: Rect) {
         ));
     } else if app.prefix {
         left.push(Span::styled(prefix_hint(app), bar));
+    } else if let Some(hint) = app.context_hint() {
+        // What you'd do next with what's selected (UX1.16).
+        left.push(Span::styled(hint, bar.fg(app.depth.fit(t.accent))));
     }
     let (live, working, blocked) = app.counts();
     let mut right = Vec::new();

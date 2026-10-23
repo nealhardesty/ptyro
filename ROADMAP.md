@@ -1403,25 +1403,30 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
 
 ### Learn nothing up front
 
-- [ ] **UX1.14 Which-key** (R-UX-18) — S. If nothing follows the prefix within
+- [x] **UX1.14 Which-key** (R-UX-18) — S. If nothing follows the prefix within
   `[ui] which_key_delay` (400 ms; `0` turns it off), a compact menu of the next keys appears,
-  grouped and as bound. Keys typed before it appears work as today.
-- [ ] **UX1.15 Row menu** (R-UX-19) — S. `.` in the sidebar, or a right-click, opens every
+  grouped and as bound. Keys typed before it appears work as today. *Done (2026-10-22):*
+  `draw_which_key`; the event loop wakes at the deadline (SPEC §11.2h).
+- [x] **UX1.15 Row menu** (R-UX-19) — S. `.` in the sidebar, or a right-click, opens every
   action that applies to that row. For a worktree: open a session here, shell, diff, finish,
   PR, pair, run script, open in editor, archive, remove. For a session: peek, rename, restart,
   hibernate, explain, mute. It is the palette filtered to the row, and it shows each key.
-- [ ] **UX1.16 Context hints** (R-UX-28) — S. The status bar's hints follow the selection:
+  *Done (2026-10-22):* `App::row_actions` (state-aware), right-click; actions of tasks still to
+  come (finish, archive, a shell here) join as they land.
+- [x] **UX1.16 Context hints** (R-UX-28) — S. The status bar's hints follow the selection:
   blocked → `p answer`, a diff → `D review`, merged → `x clean up`, an exited session →
-  `C-r restart`.
+  `C-r restart`. *Done (2026-10-22):* `App::context_hint`, keys as they work where the focus
+  is.
 - [x] **UX1.17 Errors offer the fix** (R-UX-27) — S. Audit the ~50 `toast(` calls in
   `crates/ptyro-tui/src/app.rs`: none names a command to type. Each either does the obvious
   thing (UX1.6) or carries a key that does it ("not in a worktree · `N` new one").
   *Done (2026-10-22):* `toast_offer` with `Then::{Run, Send, Edit}` behind `C-q u`; the daemon's
   CLI hints map to actions (`SUGGESTED`); a test fails on any toast that names a command (SPEC
   §11.2h). The copy-mode "set up `ptyro shell-init`" hint becomes UX1.20's offer.
-- [ ] **UX1.18 The palette searches everything** (R-UX-09) — S. Actions, sessions, worktrees,
+- [x] **UX1.18 The palette searches everything** (R-UX-09) — S. Actions, sessions, worktrees,
   projects, `[scripts.*]` and recipes in one fuzzy list, each with its key, so the palette
-  teaches the keys.
+  teaches the keys. *Done (2026-10-22):* worktrees, projects and the context worktree's scripts
+  (fetched as it opens); recipes join with UX1.21's recipe runner.
 - [ ] **UX1.19 First run and home in the TUI** (R-UX-25) — M.
   - No config yet: `ptyro` opens `init` as a screen. Found agents, accounts and repos are
     checkboxes, and ⏎ writes the config. CLI `ptyro init` stays as the scripted form.

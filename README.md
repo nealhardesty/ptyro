@@ -91,8 +91,9 @@ The repository you're in becomes a **project** by itself, so it shows in the sid
 worktrees. The status bar says so, and `Ctrl-Q u` undoes it (it then stays out until you add
 it). `Ctrl-Q P` adds another repository; `[discover] auto_register = false` turns this off.
 
-Every key starts with the **prefix**, `Ctrl-Q` (or `Ctrl-Space`). `Ctrl-Q ?` lists the keys;
-`ptyro tour` walks you through them.
+Every key starts with the **prefix**, `Ctrl-Q` (or `Ctrl-Space`). Pause after it and a menu of
+the next keys appears; `Ctrl-Q ?` lists them all, and `ptyro tour` walks you through them. The
+status bar says what you'd do next with what's selected (`C-q p answer it`).
 
 **2. Detach and come back.** Press `Ctrl-Q d`. Everything keeps running in the daemon. Run
 `ptyro` again and you're back on the same screen.
@@ -317,7 +318,7 @@ All after the prefix, `Ctrl-Q` or `Ctrl-Space`. The full list is in [`docs/keys.
 
 | Key | Does |
 |---|---|
-| `?` / `:` | every key / the command palette |
+| `?` / `:` / `.` | every key / the command palette (any action, session, worktree, project or script) / what you can do with this session |
 | `d` | detach (everything keeps running) |
 | `n` / `N` | new task (say what to do) / new worktree |
 | `a` / `p` / `i` | next session that needs you / peek and answer / inbox |

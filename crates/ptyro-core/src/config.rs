@@ -37,6 +37,8 @@ pub struct Ui {
     pub on_stop: OnStop,
     /// How much a sidebar row says under its first line (UX1.2).
     pub sidebar_detail: SidebarDetail,
+    /// Milliseconds after the prefix before the menu of next keys appears (UX1.14); 0: never.
+    pub which_key_delay: u64,
 }
 
 /// `[ui] sidebar_detail`: the lines under each session row (what it wants, what it's on, its
@@ -79,6 +81,7 @@ impl Default for Ui {
             tint_borders: false,
             on_stop: OnStop::Next,
             sidebar_detail: SidebarDetail::Auto,
+            which_key_delay: 400,
         }
     }
 }

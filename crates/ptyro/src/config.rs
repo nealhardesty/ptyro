@@ -94,6 +94,7 @@ const STARTER: &str = r#"# ptyro configuration. Every key is optional; see SPEC 
 # mouse = true
 # on_stop = "next"         # after you stop a pane's session: next (its neighbour) | stay
 # sidebar_detail = "auto"  # lines under each session row: auto | compact | full
+# which_key_delay = 400    # ms after the prefix before the menu of next keys; 0: never
 
 [daemon]
 # scrollback_lines = 10000
