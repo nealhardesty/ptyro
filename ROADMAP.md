@@ -11,8 +11,9 @@ Conventions:
   that demo works on Linux *and* macOS.
 - `[ ]` todo · `[~]` in progress · `[x]` done · `(spike)` = experiment whose result is written back
   into SPEC §20 / §21 before dependent work starts.
-- **The TUI is first class** (SPEC §1.3): a task is done when it works completely in the TUI,
-  and its **Done when** demo runs there. The CLI must be complete too.
+- **The CLI, the TUI and the web are all first class** (SPEC §1.3): a task is done when it
+  works completely in all three, and its **Done when** demo runs in the TUI. The CLI and the TUI
+  are always in parity; the web part lands in the same change, and a missing one is a defect.
 - Estimates are rough focused-effort sizes: **S** ≤ 1 day, **M** 2–4 days, **L** 1–2 weeks.
 
 ## Overview
@@ -33,6 +34,7 @@ Conventions:
 | **M11** | Change sets | One coordinated change across several repos: lead + member agents, contract, integration overlay, set checkpoints, merge train (done) |
 | **H1** | Hardening review | ~120 findings of a full code review fixed (security, crashes, correctness, build) (done) |
 | **UX1** | Out of the box (top priority) | From `cd repo && ptyro` to a shipped, cleaned-up worktree by keys alone; sidebar rows that say what's going on |
+| **WEB1** | Web parity | The web client does what the CLI and TUI do, and the parity check covers it |
 | **Backlog** | Later / maybe | Editor, tasks, jj, libghostty, relay, … |
 
 Critical path: **M0 → M1 → M2 → M3 → M4** gives a daily-driver. M5 can interleave with M3/M4.
@@ -1543,6 +1545,44 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
 Suggested order: UX1.23 → UX1.0 → UX1.1–1.2 → UX1.4–1.8 → UX1.9, UX1.24, UX1.17 → UX1.14–1.15 → UX1.12 →
 UX1.19 → UX1.3 (after its spike) → the rest. Of what's open: UX1.25, then UX1.22 (the tour
 can then show the quick terminal).
+
+---
+
+## WEB1 — Web parity (2026-10-23)
+
+Goal: the web client (`ptyro serve`'s PWA, `web/src`) is a first-class client beside the CLI
+and the TUI (SPEC §1.3, owner 2026-10-23). Today (M9.3) it lists sessions with their status,
+shows a live terminal, sends replies and keys, answers permission prompts, shows the inbox and
+structured chats, and takes push notifications. It can't start, stop or restart anything, or
+touch worktrees, projects, review and PRs, runs, change sets, profiles or settings. R-UX-31.
+
+**Done when:** from a phone, with only `ptyro serve` and a paired device, you can do the UX1
+demo (start a task in a new worktree, answer it, review its diff, finish it into a PR, clean
+up), and `make parity` fails CI on a CLI command with neither a web path nor a waiver.
+
+- [ ] **WEB1.0 The parity check covers the web** — S. `docs/tui-parity.md` becomes
+  `docs/parity.md` with a web column (`web: <view or button>`, `waived:`, or `gap: WEB1.x`), and
+  `make parity` (`make tui-parity` stays as an alias) checks both columns against the command
+  tree. Web gaps fail only with `STRICT=1` until WEB1 is done, then always, like UX1.0 did.
+  *Done when:* CI lists every web gap, and fails on a new command with no web row.
+- [ ] **WEB1.1 Audit** — S. Fill the web column for every command: what the web does today,
+  else a gap with the WEB1 task that closes it. Write the result to the table and to this
+  milestone.
+- [ ] **WEB1.2 Sessions** — M. New task (the UX1.9 box), new session, stop, kill, restart,
+  resume, hibernate, rename, retitle, adopt, summarize, explain, mute; the row menu's actions as
+  a session's menu.
+- [ ] **WEB1.3 Worktrees and projects** — M. The sidebar's tree, a new worktree (from a PR,
+  an issue, a branch, your changes), finish, archive, restore, remove, scripts, ports; projects
+  add, trust, pin.
+- [ ] **WEB1.4 Review and ship** — L. The diff inspector (comments to the agent), commit, PR
+  and checks, integrate, the review queue.
+- [ ] **WEB1.5 Runs and change sets** — M. Recipes, fan-out compare and pick, gates, change
+  sets and their merge train.
+- [ ] **WEB1.6 Settings and health** — M. Profiles and logins, workspaces, the health badge and
+  its fixes, the config (validated as `ptyro config edit` does), quit (`app.quit`).
+
+Suggested order: WEB1.0 → WEB1.1 → WEB1.2 → WEB1.3 → WEB1.4 → the rest. From WEB1.0 on, every
+new feature in any milestone ships with its web part.
 
 ---
 

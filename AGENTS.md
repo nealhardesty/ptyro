@@ -23,12 +23,16 @@ they suggest. It feeds candidate work into `ROADMAP.md`.
   `R-` id in the ROADMAP task.
 - Take ideas, never code. Verified technical facts move to SPEC §20.
 
-**The TUI is first class** (SPEC §1.3). Every feature must work completely in the
-TUI, and be discoverable there, before it counts as done. The CLI must be complete
-too, but it follows the TUI.
-- A new CLI command needs its TUI path (a key, the palette, the row menu) or a
-  waiver with a reason, as a row in `docs/tui-parity.md`. `make tui-parity`
-  checks this, and CI runs the same check through `make test`.
+**The CLI, the TUI and the web are all first class** (SPEC §1.3). Every feature must
+work completely, and be discoverable, in each before it counts as done.
+- The CLI and the TUI are ALWAYS in parity. A new CLI command needs its TUI path (a
+  key, the palette, the row menu) or a waiver with a reason, as a row in
+  `docs/tui-parity.md`. `make tui-parity` checks this, and CI runs the same check
+  through `make test`.
+- Build the web client's part in the same change. A feature missing from the web is
+  a defect, not follow-up work; ROADMAP WEB1 tracks today's gaps.
+- Waive only commands that another program runs (an agent's own mail, hooks), never
+  something that isn't built yet.
 - Out of the box comes first: sensible defaults, no setup the user must know
   about, and errors that offer the fix instead of naming a command to type.
 

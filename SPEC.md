@@ -86,12 +86,19 @@ Status markers used below:
   (OSC 7501); heuristics are a labelled fallback with explicit low confidence.
 - **Never lose work.** No automatic deletion of a worktree with uncommitted or unpushed changes, ever.
 - **Agent-native, not agent-specific.** Adapters declare capabilities; the core never hard-codes Claude.
-- **The TUI is first class.** *(owner, 2026-10-22; this replaces "the TUI is optional")* Every
-  workflow must be complete, discoverable and polished in the TUI, and must work there without
-  the user learning anything up front: defaults set up, errors that offer the fix, keys shown
-  where they apply. The CLI must be complete too (goal 5), for scripts and agents, but it
-  follows the TUI. `docs/tui-parity.md` maps every command to its TUI path, and `make tui-parity`
-  (also part of `make test`) fails when one has neither a path nor a waiver.
+- **Three first-class clients: the CLI, the TUI and the web.** *(owner, 2026-10-23; widens
+  "the TUI is first class" of 2026-10-22, which replaced "the TUI is optional")* Every workflow
+  must be complete, discoverable and polished in each, and must work there without the user
+  learning anything up front: defaults set up, errors that offer the fix, keys (or buttons)
+  shown where they apply.
+  - **The CLI and the TUI are always in parity.** A feature isn't done until both have it.
+    `docs/tui-parity.md` maps every command to its TUI path, and `make tui-parity` (also part
+    of `make test`) fails when one has neither a path nor a waiver.
+  - **The web ships with them.** A feature is built for the web client (`ptyro serve`, the
+    PWA, §16) in the same change. A web gap is a defect to fix, not a later milestone; ROADMAP
+    WEB1 closes today's gaps and adds the web to the parity check.
+  - Waivers are for commands that are another program's tool (agents' own mail, hooks, shell
+    completions), never for "not built yet".
 - **Boring persistence, sharp terminal.** SQLite + plain files for state; all the cleverness goes
   into terminal fidelity and the attach experience.
 - **Small surface, deep quality.** Fewer features, each one polished, before breadth.
