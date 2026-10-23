@@ -192,6 +192,9 @@ pub struct SessionInfo {
     /// What it's doing, in a line, from a small model (`[summaries]`, UX1.3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<Summary>,
+    /// Its worktree's (or directory's) quick terminal (UX1.25): one shell, reused, and quiet.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub quick: bool,
 }
 
 /// A session's summary (UX1.3): `text` was made after turn `turn`, at `at_ms`.
@@ -395,4 +398,7 @@ pub struct SpawnSpec {
     /// Its title, for people to read (UX1.24); default: the prompt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Make it the quick terminal of where it starts (UX1.25; `QuickShell` reuses it).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub quick: bool,
 }

@@ -116,9 +116,10 @@ impl App {
     pub fn open_inspector(&mut self) {
         let wt = match (self.focus, self.selected_row()) {
             (crate::app::Focus::Sidebar, Some(crate::tree::Row::Worktree(w))) => Some(w),
-            (crate::app::Focus::Sidebar, Some(crate::tree::Row::Session(id))) => {
-                self.session(id).and_then(|s| s.worktree.clone())
-            }
+            (
+                crate::app::Focus::Sidebar,
+                Some(crate::tree::Row::Session(id) | crate::tree::Row::Quick(id)),
+            ) => self.session(id).and_then(|s| s.worktree.clone()),
             _ => self
                 .focused_session()
                 .and_then(|id| self.session(id))

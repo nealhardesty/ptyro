@@ -76,7 +76,7 @@ impl Daemon {
         let live: Vec<String> = self
             .sessions_in(&wt.id)
             .iter()
-            .filter(|s| s.is_live())
+            .filter(|s| s.busy())
             .map(|s| s.meta.lock().expect("meta").name.clone())
             .collect();
         if !live.is_empty() && !stop_sessions {
@@ -295,7 +295,7 @@ impl Daemon {
         if !merged || wt.is_root || !self.config().worktrees.archive_on_merge {
             return;
         }
-        if self.sessions_in(&wt.id).iter().any(|s| s.is_live()) {
+        if self.sessions_in(&wt.id).iter().any(|s| s.busy()) {
             return;
         }
         let (me, id, label) = (Arc::clone(self), wt.id.clone(), wt.qualified());

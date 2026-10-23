@@ -12,6 +12,9 @@ pub enum Row {
     Project(String),
     Worktree(String),
     Session(SessionId),
+    /// A quick terminal (UX1.25): last under its worktree, with no number, and not one of the
+    /// sessions `j`/`k` cycle through.
+    Quick(SessionId),
     /// A non-selectable label (`other sessions`).
     Group(String),
     /// A change set (its run id), above its lead (M11.11).
@@ -21,6 +24,14 @@ pub enum Row {
 impl Row {
     pub fn selectable(&self) -> bool {
         !matches!(self, Self::Group(_))
+    }
+
+    /// The session a session or quick-terminal row stands for.
+    pub fn session(&self) -> Option<SessionId> {
+        match self {
+            Self::Session(id) | Self::Quick(id) => Some(*id),
+            _ => None,
+        }
     }
 }
 
@@ -122,11 +133,13 @@ impl Inputs<'_> {
                 if honour_collapse && self.collapsed.contains(&w.id) {
                     continue;
                 }
-                for s in
-                    self.sessions.iter().filter(|s| s.worktree.as_deref() == Some(w.id.as_str()))
-                {
-                    rows.push(Row::Session(s.id));
-                }
+                let (quick, sessions): (Vec<&SessionInfo>, Vec<&SessionInfo>) = self
+                    .sessions
+                    .iter()
+                    .filter(|s| s.worktree.as_deref() == Some(w.id.as_str()))
+                    .partition(|s| s.quick);
+                rows.extend(sessions.into_iter().map(|s| Row::Session(s.id)));
+                rows.extend(quick.into_iter().map(|s| Row::Quick(s.id)));
             }
         }
         let others = self.others(&projects);
@@ -134,7 +147,10 @@ impl Inputs<'_> {
             if !projects.is_empty() {
                 rows.push(Row::Group("other sessions".into()));
             }
+            let (quick, others): (Vec<&SessionInfo>, Vec<&SessionInfo>) =
+                others.into_iter().partition(|s| s.quick);
             rows.extend(others.into_iter().map(|s| Row::Session(s.id)));
+            rows.extend(quick.into_iter().map(|s| Row::Quick(s.id)));
         }
         rows
     }
@@ -199,6 +215,7 @@ mod tests {
             inner_agent: None,
             summary: None,
             window_title: None,
+            quick: false,
         }
     }
 
@@ -309,5 +326,56 @@ mod tests {
         let nodes = [crate::sets::SetNode { run: "r-1".into(), lead: Some(lead.full()) }];
         let with = Inputs { workspace: "side", sets: &nodes, ..i };
         assert_eq!(with.rows(), vec![Row::Set("r-1".into()), Row::Session(lead)]);
+    }
+
+    #[test]
+    fn a_quick_terminal_is_its_worktree_s_last_line_and_not_cycled_through() {
+        let ws = [WorkspaceInfo {
+            id: "w".into(),
+            name: "main".into(),
+            profile: "default".into(),
+            notify: "all".into(),
+            projects: vec!["p".into()],
+            created_ms: 0,
+        }];
+        let projects = [ProjectInfo {
+            id: "p".into(),
+            slug: "app".into(),
+            root: "/app".into(),
+            default_branch: None,
+            remote_url: None,
+            pin: None,
+            created_ms: 0,
+            last_used_ms: None,
+        }];
+        let worktrees = [wt("root", "p", true, 1)];
+        let quick = |name, wt| SessionInfo { quick: true, ..session(name, wt, Some("p"), None) };
+        let sessions = [
+            quick("app.shell", Some("root")),
+            session("claude", Some("root"), Some("p"), None),
+            quick("notes.shell", None),
+        ];
+        let collapsed = HashSet::new();
+        let i = Inputs {
+            workspace: "main",
+            workspaces: &ws,
+            projects: &projects,
+            worktrees: &worktrees,
+            sessions: &sessions,
+            collapsed: &collapsed,
+            sets: &[],
+        };
+        assert_eq!(
+            i.rows(),
+            vec![
+                Row::Project("p".into()),
+                Row::Worktree("root".into()),
+                Row::Session(sessions[1].id),
+                Row::Quick(sessions[0].id),
+                Row::Group("other sessions".into()),
+                Row::Quick(sessions[2].id),
+            ]
+        );
+        assert_eq!(i.sessions(), vec![sessions[1].id], "j/k and numbers skip quick terminals");
     }
 }

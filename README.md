@@ -146,6 +146,11 @@ a row's menu (`.`), makes one at any time.
 - `Ctrl-Q p` peeks without switching: `y` allows a permission prompt, `n` denies, or type a
   reply.
 - `Ctrl-Q i` opens the inbox. From the shell: `ptyro status`.
+- `Ctrl-Q Ctrl-T` (or `Ctrl-Q !`) opens the worktree's **quick terminal**: one shell per
+  worktree, in a drawer below the pane. Press it again to focus it, and once more to hide it;
+  the shell keeps running, and its `›_ shell` line sits under the worktree in the sidebar.
+  `ptyro shell` opens it from outside, and `ptyro shell --read` prints its screen, so you can
+  tell an agent to "look at the error in my terminal".
 
 ## Features
 

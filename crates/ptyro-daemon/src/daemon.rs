@@ -370,6 +370,7 @@ impl Daemon {
                     workspace: r.workspace.clone(),
                     agent: r.agent.clone(),
                     script: r.script.clone(),
+                    quick: false,
                 },
                 adapter,
                 conversation: r.conversation.clone(),
@@ -682,6 +683,7 @@ impl Daemon {
             workspace: Some(workspace),
             agent: agent.clone(),
             script: None,
+            quick: spec.quick && agent.is_none(),
         };
         // `@review` names a prompt snippet from the project's `[prompts]` (SPEC §13.3).
         let prompt = match spec.prompt.as_deref().and_then(|p| p.strip_prefix('@')) {
@@ -1152,6 +1154,9 @@ impl Daemon {
                 self.convert(&addr, structured, force).await
             }
             Request::Adopt { addr } => self.adopt(&addr).await,
+            Request::QuickShell { worktree, cwd, create, env, size, workspace } => {
+                self.quick_shell(worktree, cwd, create, env, size, workspace).await
+            }
             Request::Retitle { addr, title, worktree } => self.retitle(&addr, title, worktree),
             Request::Summarize { addr } => self.summarize_now(&addr).await,
             Request::ChatGet { addr } => {

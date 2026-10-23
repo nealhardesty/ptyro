@@ -907,6 +907,10 @@ Push messages have no id.
 - `WorktreeSpec.take_changes`, `Branches{project}` → `Branches{names}`, and
   `ProjectSuggest{addr, apply}` → `Suggestions{suggestions}` (§10.3, §10.4).
 
+**[built UX1.25] Protocol 1.13** (additive): `SessionInfo.quick` and `SpawnSpec.quick`, and
+`QuickShell{worktree?, cwd, create, env, size?, workspace?}` → `Session`: a worktree's (or
+directory's) quick terminal, started when there's none and `create` is set (§11.2h).
+
 ### 6.5 Screen frames
 
 ```rust
@@ -1986,7 +1990,7 @@ branches, no sessions for N days.
   (`Git::checkpoint`: a private index, untracked included, ignored not, parent HEAD) goes to
   `refs/ptyro/archive/<name>` (`-2`, `-3` when taken), then the worktree is removed with the
   branch kept. It can't lose work, so it never refuses; running sessions refuse unless
-  `stop_sessions`. The archive list is kv `archive:list` (`ArchiveEntry`, newest first;
+  `stop_sessions` (a quick terminal at its prompt doesn't count, UX1.25). The archive list is kv `archive:list` (`ArchiveEntry`, newest first;
   `WorktreeArchives`, `ptyro wt archives`).
 - **Restore** (`WorktreeRestore`, `ptyro wt restore [project/]name`): the branch checked out at
   its old path (when free), no setup, then `Git::restore` puts the snapshot back with the changes
@@ -2602,7 +2606,42 @@ learning anything up front.
   work it would lose offers `a`: archive instead. `worktree.archive`, `worktree.restore` (a picker
   of archived worktrees) and `worktree.gc` (stale ones; ⏎ archives) are in the palette.
 - **A companion shell** (UX1.13, `shell.here`: `!` after the prefix or in the sidebar): your
-  shell in the selected worktree, under its profile, split beside the pane.
+  shell in the selected worktree, under its profile. **[built UX1.25]** It is now the
+  **quick terminal**, below.
+- **The quick terminal** (UX1.25, `shell.here`: `C-t` or `!` after the prefix, `!` in the
+  sidebar, `⏎` on its line; `crates/ptyro-tui/src/quick.rs`, `crates/ptyro-daemon/src/quick.rs`):
+  - **One per worktree**, shared by its sessions; outside any worktree (an empty pane, a
+    session in a plain directory), one per directory. `QuickShell {worktree?, cwd, create, env,
+    size?, workspace?}` finds it (by address, else the worktree `cwd` is in, else `cwd`) and,
+    with `create`, starts it: `$SHELL -l` under the worktree's profile, named
+    `<worktree>.shell` (`<project>.shell` for the main checkout, `<dir>.shell` outside one),
+    `SessionInfo.quick` and `Place.quick` set. Finding is `read` scope for paired devices,
+    starting `full`.
+  - **A drawer** split off below the focused pane (`Drawer {host, pane}` in the saved view),
+    30% of its height at first. It's one pane more than `MAX_PANES` allows for splits
+    (`MAX_WITH_DRAWER`). `+`/`-` and dragging resize it, and hiding keeps its share
+    (`drawer_share`). A zoomed pane keeps its drawer below it. Closing the host closes the drawer;
+    closing the drawer hides it.
+  - **One key, three steps** (as VS Code's terminal panel): hidden → shown and focused; shown
+    but not focused → focused; focused → hidden, focus back on the host. Hiding only closes the
+    pane: the daemon keeps the shell, so it outlives a detach, and the view brings the drawer
+    back. When the shell is gone (a daemon restart: shells aren't restored), the restored drawer
+    closes instead of showing another session. Its header shows `›_` and the key (`C-q C-t
+    hide`, or `focus` while another pane has focus).
+  - **In the sidebar** it's a line of its own, last under its worktree (`Row::Quick`): `›_ shell`
+    and what runs in it (the command, else the foreground program, else the last command with
+    `✓`/`✗`). It has no number, `j`/`k` skip it, and it never fills an empty pane. Its row menu
+    shows or hides it, adopts, renames, explains and stops it.
+  - **Quiet:** `raise` drops its attention and notifications, except `blocked` (an agent started
+    in it that waits for you). `exit` forgets it (no exited row; the name is free again), and the
+    TUI closes its drawer.
+  - **It doesn't hold up its worktree:** removing, archiving and `archive_on_merge` refuse only
+    for sessions that are `busy()`. A quick terminal at its prompt (its shell is the PTY's
+    foreground process group) isn't busy, and is stopped with the worktree; one running a
+    command is.
+  - **CLI:** `ptyro shell [WORKTREE]` attaches with it open in the drawer, `--json` prints it,
+    and `--read [--scrollback [N]]` prints its screen without ever starting one. An agent asked
+    to "look at the error in my terminal" can run `ptyro shell --read` from its worktree.
 - **A row's menu** (UX1.15, `row.menu`: `.` after the prefix or in the sidebar, or a
   right-click): every action that applies to that row now, with its key. A session's (peek,
   resume or restart, adopt, title, rename, explain, hibernate, mute, its worktree's inspector,

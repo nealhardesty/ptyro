@@ -175,6 +175,11 @@ impl Daemon {
                 }
                 self.run_member_changed(&s).await;
                 let _ = self.events.send(DomainEvent::SessionExited { info: self.info(&s) });
+                // `exit` in a quick terminal closes it; the next one starts fresh (UX1.25).
+                if s.is_quick() {
+                    s.save(None);
+                    self.forget_session(s.id);
+                }
             }
         }
     }
@@ -390,6 +395,11 @@ impl Daemon {
         text: String,
     ) {
         if self.watched(s.id) {
+            return;
+        }
+        // A quick terminal is quiet (UX1.25), but an agent started in it that waits for you
+        // still says so.
+        if s.is_quick() && kind != AttentionKind::Blocked {
             return;
         }
         {

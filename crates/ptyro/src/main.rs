@@ -507,6 +507,23 @@ enum Cmd {
         #[arg(add = ArgValueCandidates::new(complete::sessions))]
         session: String,
     },
+    /// Your worktree's quick terminal: one shell per worktree (or directory), reused, which the
+    /// TUI shows as a drawer under the pane (`C-q C-t`). Attaches, starting it if there's none
+    Shell {
+        /// The worktree (default: the one you're in)
+        #[arg(add = ArgValueCandidates::new(complete::worktrees))]
+        worktree: Option<String>,
+        /// Print the session as JSON instead of attaching (starting it if there's none)
+        #[arg(long, conflicts_with = "read")]
+        json: bool,
+        /// Print its screen instead, what you'd see: `ptyro shell --read` from an agent shows
+        /// it the error in your terminal. Never starts one
+        #[arg(long)]
+        read: bool,
+        /// With --read: up to N lines of scrollback above the screen (all of it without N)
+        #[arg(long, requires = "read", num_args = 0..=1, default_missing_value = "4294967295")]
+        scrollback: Option<u32>,
+    },
     /// Serve the web app and the protocol over WebSocket for paired devices (phones)
     Serve {
         /// Listen here (default `[remote] listen`, 127.0.0.1:7091)
