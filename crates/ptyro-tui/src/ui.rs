@@ -589,6 +589,39 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
                 detail = session_details(app, s, lead, width, near || app.sidebar_zoom);
                 Line::from(spans)
             }
+            // A quick terminal (UX1.25): one quiet line, last under its worktree, saying what
+            // runs in it; bright while its drawer is open.
+            Row::Quick(id) => {
+                let Some(s) = sessions.get(id).copied() else { continue };
+                let indent = if s.worktree.as_deref().and_then(|w| app.worktree(w)).is_some() {
+                    "     "
+                } else {
+                    " "
+                };
+                let open = app.drawer_session() == Some(s.id);
+                let mut name_style = fg(app, if open { t.text } else { t.dim });
+                if Some(s.id) == focused {
+                    name_style =
+                        name_style.add_modifier(Modifier::BOLD).fg(app.depth.fit(t.accent));
+                }
+                let mut spans = vec![
+                    Span::styled(format!("{indent}  "), Style::new()),
+                    Span::styled("›_ ", fg(app, if open { t.accent } else { t.dim })),
+                    Span::styled("shell", name_style),
+                ];
+                if let Some(r) = &s.status
+                    && r.status == AgentStatus::Blocked
+                {
+                    spans.push(Span::styled(
+                        format!(" ⚠ {}", r.kind.as_deref().unwrap_or("needs you")),
+                        fg(app, t.blocked),
+                    ));
+                }
+                if let Some(doing) = quick_doing(s) {
+                    spans.push(Span::styled(format!(" {doing}"), fg(app, t.dim)));
+                }
+                Line::from(spans)
+            }
             Row::Group(label) => {
                 Line::styled(format!(" {label}"), fg(app, t.dim).add_modifier(Modifier::ITALIC))
             }
@@ -660,6 +693,29 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
 /// The lines under a session's first line (UX1.2), starting at column `lead`: what it wants,
 /// what it's on, its task and last reply, or a shell's command. `wide` lets the long ones wrap
 /// once, for the row in focus.
+/// What a quick terminal's line says it's doing: the command running (`cargo test`, `vim`),
+/// else the last one and how it went (`✓ make` / `✗ make`), else nothing.
+fn quick_doing(s: &SessionInfo) -> Option<String> {
+    let shell = s.argv.first().map(|a| a.rsplit('/').next().unwrap_or(a).trim_start_matches('-'));
+    match &s.command {
+        Some(c) if c.ended_ms.is_none() => Some(
+            c.text
+                .as_deref()
+                .map_or_else(|| "running".into(), |t| ptyro_core::session::brief(t, 40)),
+        ),
+        _ if s.foreground.is_some()
+            && s.foreground.as_deref().map(|f| f.trim_start_matches('-')) != shell =>
+        {
+            s.foreground.clone()
+        }
+        Some(c) => {
+            let mark = if c.exit.unwrap_or(0) == 0 { "✓" } else { "✗" };
+            c.text.as_deref().map(|t| format!("{mark} {}", ptyro_core::session::brief(t, 40)))
+        }
+        None => None,
+    }
+}
+
 fn session_details(
     app: &App,
     s: &SessionInfo,
@@ -789,6 +845,17 @@ fn draw_panes(app: &App, f: &mut Frame<'_>) {
                 .and_then(|s| profile_color(app, &s.profile))
         })
         .flatten();
+    // Zoomed with its drawer (UX1.25): the one divider between them.
+    let rects = app.pane_rects();
+    if app.zoom
+        && let [(_, top), _] = rects[..]
+    {
+        for x in top.left()..top.right() {
+            if let Some(c) = f.buffer_mut().cell_mut(Position::new(x, top.bottom())) {
+                c.set_symbol("─").set_style(fg(app, tint.unwrap_or(t.border)));
+            }
+        }
+    }
     if !app.zoom {
         for d in app.layout.dividers(app.main_area()) {
             let symbol = match d.dir {
@@ -805,7 +872,7 @@ fn draw_panes(app: &App, f: &mut Frame<'_>) {
         }
     }
     let mut cursor = None;
-    for (pane, rect) in app.pane_rects() {
+    for (pane, rect) in rects {
         let focused = pane == app.focused && app.focus == Focus::Pane;
         let state = app.panes.get(&pane);
         let session = state.and_then(|p| p.session);
@@ -934,7 +1001,15 @@ fn draw_header(
                 left.push(Span::styled("▌", base.fg(app.depth.fit(c))));
             }
             let (g, gc) = glyph(app, s);
+            let drawer = app.drawer.is_some_and(|d| d.pane == pane);
+            let g = if drawer { "›_" } else { g };
             left.push(Span::styled(format!(" {g} "), base.fg(app.depth.fit(gc))));
+            if drawer && let Some(k) = app.quick_key() {
+                right.push(Span::styled(
+                    format!(" {k} {} ", if focused { "hide" } else { "focus" }),
+                    base.fg(app.depth.fit(t.dim)),
+                ));
+            }
             let name = if focused {
                 base.fg(app.depth.fit(t.accent)).add_modifier(Modifier::BOLD)
             } else {

@@ -230,7 +230,10 @@ async fn dispatch(
                 let addr = info.id.full();
                 client.request(Request::Kill { addr: addr.clone(), signal }).await?;
                 if signal.is_none() && !keep {
-                    client.request(Request::Remove { addr }).await?;
+                    // A quick terminal forgets itself once it exits (UX1.25).
+                    if !info.quick {
+                        client.request(Request::Remove { addr }).await?;
+                    }
                     eprintln!("killed {}", info.name);
                 } else {
                     eprintln!("signalled {}", info.name);
@@ -405,6 +408,9 @@ async fn dispatch(
                 }
                 r => Err(unexpected(r)),
             }
+        }
+        Some(Cmd::Shell { worktree, json, read, scrollback }) => {
+            quick_shell(&ctx, worktree, json, read, scrollback).await
         }
         Some(Cmd::Serve { listen, insecure, tailscale, managed }) => {
             crate::serve::run(&ctx, listen, insecure, tailscale, managed).await
@@ -800,6 +806,41 @@ pub async fn attach(
 ) -> Result<i32, Error> {
     attach_with(ctx, client, info, ptyro_tui::Options { raw, view_only, ..Default::default() })
         .await
+}
+
+/// `ptyro shell` (UX1.25): the quick terminal here, attached in the TUI's drawer, as JSON, or
+/// its screen.
+async fn quick_shell(
+    ctx: &Ctx,
+    worktree: Option<String>,
+    json: bool,
+    read: bool,
+    scrollback: Option<u32>,
+) -> Result<i32, Error> {
+    let attaching = !json && !read;
+    if attaching {
+        check_attachable()?;
+    }
+    let client =
+        if read { ctx.connect(false).await.map_err(no_daemon)? } else { ctx.connect(true).await? };
+    let req = Request::QuickShell {
+        worktree,
+        cwd: current_dir()?,
+        create: !read,
+        env: client_env(),
+        size: None,
+        workspace: None,
+    };
+    let info = session_of(client.request(req).await?)?;
+    if read {
+        drop(client);
+        return crate::script::read(ctx, info.id.full(), scrollback, false, false).await;
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&info).unwrap_or_default());
+        return Ok(0);
+    }
+    attach_with(ctx, client, Some(info), ptyro_tui::Options::default()).await
 }
 
 pub async fn attach_with(

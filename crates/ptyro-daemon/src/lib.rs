@@ -19,6 +19,7 @@ mod launch;
 mod mail;
 mod notifier;
 mod push;
+mod quick;
 mod registry;
 mod review;
 mod runs;

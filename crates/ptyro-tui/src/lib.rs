@@ -16,6 +16,7 @@ mod outer;
 #[doc(hidden)] // public for the benches
 pub mod paint;
 pub mod palette;
+mod quick;
 mod runs;
 mod sets;
 pub mod theme;

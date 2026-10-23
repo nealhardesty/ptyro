@@ -32,7 +32,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 12 };
+pub const PROTO: Version = Version { major: 1, minor: 13 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -265,6 +265,23 @@ pub enum Request {
     /// `new --agent` (hooks, hibernation, mail), resuming the same conversation (UX1.4).
     Adopt {
         addr: String,
+    },
+    /// The quick terminal (UX1.25) of `worktree` (an address), else of the worktree `cwd` is in,
+    /// else of `cwd`: one shell each, reused. With `create`, one starts when there's none
+    /// (spawned as `Spawn` would, `env` and `size` included). Replies `Session`.
+    QuickShell {
+        #[serde(default)]
+        worktree: Option<String>,
+        cwd: PathBuf,
+        #[serde(default)]
+        create: bool,
+        #[serde(default)]
+        env: BTreeMap<String, String>,
+        #[serde(default)]
+        size: Option<TermSize>,
+        /// Its home workspace, for one outside any project (default `main`).
+        #[serde(default)]
+        workspace: Option<String>,
     },
     /// A structured session's whole transcript (M10).
     ChatGet {

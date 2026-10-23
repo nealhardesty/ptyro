@@ -608,6 +608,7 @@ impl Daemon {
                 workspace: Some(workspace),
                 agent: None,
                 script: Some(role),
+                quick: false,
             },
             replace: false,
             agent: None,
@@ -635,9 +636,11 @@ impl Daemon {
             .ok_or_else(|| Error::missing("project", &wt.project))?;
         let sessions = self.sessions_in(&wt.id);
         let live: Vec<&Arc<Session>> = sessions.iter().filter(|s| s.is_live()).collect();
-        if !live.is_empty() && !opts.stop_sessions {
+        // A quick terminal at its prompt goes with its worktree (UX1.25).
+        let busy: Vec<&&Arc<Session>> = live.iter().filter(|s| s.busy()).collect();
+        if !busy.is_empty() && !opts.stop_sessions {
             let names: Vec<String> =
-                live.iter().map(|s| s.meta.lock().expect("meta").name.clone()).collect();
+                busy.iter().map(|s| s.meta.lock().expect("meta").name.clone()).collect();
             return Err(Error::conflict(format!(
                 "refusing to remove {}: {} session(s) running in it ({}); stop them or use --stop-sessions",
                 wt.qualified(),

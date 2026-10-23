@@ -27,6 +27,7 @@ use crate::copy::{CopyMode, Outcome as CopyOutcome, Pos, SelMode};
 use crate::keymap::{self, Command, Keymap, Table};
 use crate::layout::{Dir, Layout, PaneId, Toward};
 use crate::palette::{Item, Palette, Picked, Target};
+use crate::quick::Drawer;
 use crate::theme::{Depth, Theme};
 use crate::tree::{self, Row};
 use crate::{AttachEnd, Options};
@@ -41,6 +42,15 @@ pub struct SavedView {
     pub zoom: bool,
     pub sidebar: bool,
     pub sidebar_width: u16,
+    /// The quick terminal's drawer (UX1.25), and its share of its host's height.
+    #[serde(default)]
+    pub drawer: Option<Drawer>,
+    #[serde(default = "drawer_share")]
+    pub drawer_share: f32,
+}
+
+fn drawer_share() -> f32 {
+    crate::quick::DRAWER_SHARE
 }
 
 /// Where the TUI remembers which workspace it showed last.
@@ -333,6 +343,8 @@ pub enum Pending {
         then: CopyStart,
     },
     Done(String),
+    /// A quick terminal to show in the drawer (UX1.25).
+    Quick,
     List,
     Registry,
     Saved,
@@ -555,6 +567,9 @@ pub struct App {
     pub sidebar_width: u16,
     /// The sidebar fills the screen with every row open: everything at once (UX1.2).
     pub sidebar_zoom: bool,
+    /// The quick terminal's drawer, when open, and the share of its host it takes (UX1.25).
+    pub drawer: Option<Drawer>,
+    pub drawer_share: f32,
     /// The selected sidebar row, and its index when last set (the fallback once it's gone).
     sidebar_row: Option<Row>,
     sidebar_sel: usize,
@@ -632,6 +647,8 @@ impl App {
             sidebar: config.ui.sidebar && !opts.raw,
             sidebar_width: config.ui.sidebar_width,
             sidebar_zoom: false,
+            drawer: None,
+            drawer_share: crate::quick::DRAWER_SHARE,
             opts,
             connect,
             paths,
@@ -794,13 +811,15 @@ impl App {
         self.panes = HashMap::from([(1, PaneState::default())]);
         self.focused = 1;
         self.zoom = false;
+        self.drawer = None;
         if !self.opts.raw
             && let Some(client) = &self.client
             && let Ok(Reply::View { view: Some(v) }) =
                 client.request(Request::LoadView { name: self.workspace.clone() }).await
             && let Ok(saved) = serde_json::from_value::<SavedView>(v)
         {
-            let ordered_all = self.ordered();
+            let mut ordered_all = self.ordered();
+            ordered_all.extend(self.sessions.iter().filter(|s| s.quick).map(|s| s.id));
             self.layout = saved.layout.sanitize();
             self.panes = self
                 .layout
@@ -822,9 +841,13 @@ impl App {
             self.zoom = saved.zoom;
             self.sidebar = saved.sidebar;
             self.sidebar_width = saved.sidebar_width.clamp(12, 80);
+            self.restore_drawer(saved.drawer, saved.drawer_share);
         }
         let ordered = self.ordered();
-        let want = self.opts.focus.take().or_else(|| {
+        // `ptyro shell` asks for a quick terminal: it opens in the drawer (UX1.25).
+        let focus = self.opts.focus.take();
+        let quick = focus.filter(|id| self.session(*id).is_some_and(|s| s.quick));
+        let want = focus.filter(|_| quick.is_none()).or_else(|| {
             let shown = self.panes.get(&self.focused).and_then(|p| p.session);
             shown.or_else(|| {
                 ordered
@@ -851,6 +874,9 @@ impl App {
             }
         }
         self.sync();
+        if let Some(id) = quick {
+            self.toggle_quick(Some(id), None, None);
+        }
     }
 
     fn client(&self) -> Option<&Arc<Client>> {
@@ -918,6 +944,13 @@ impl App {
     pub fn pane_rects(&self) -> Vec<(PaneId, Rect)> {
         let main = self.main_area();
         if self.zoom {
+            // A zoomed pane keeps its drawer, and the drawer zooms with its host (UX1.25).
+            if let Some(d) = self.drawer
+                && (self.focused == d.host || self.focused == d.pane)
+            {
+                let (top, _, bottom) = self.layout.stacked(main, d.pane);
+                return vec![(d.host, top), (d.pane, bottom)];
+            }
             return vec![(self.focused, main)];
         }
         self.layout.rects(main)
@@ -999,6 +1032,15 @@ impl App {
 
     /// Remove `pane` from the layout; focus (and zoom) leave it if it had them. False for the last pane.
     fn close_pane(&mut self, pane: PaneId) -> bool {
+        // The drawer goes with its host; closing the drawer is hiding it (UX1.25).
+        match self.drawer {
+            Some(d) if d.pane == pane => {
+                self.hide_drawer();
+                return true;
+            }
+            Some(d) if d.host == pane => self.hide_drawer(),
+            _ => {}
+        }
         if !self.layout.close(pane) {
             return false;
         }
@@ -1056,7 +1098,7 @@ impl App {
         self.view_changed();
     }
 
-    fn view_changed(&mut self) {
+    pub(crate) fn view_changed(&mut self) {
         if !self.opts.raw && !self.opts.view_only {
             self.view_dirty_since = Some(Instant::now());
         }
@@ -1076,6 +1118,8 @@ impl App {
             zoom: self.zoom,
             sidebar: self.sidebar,
             sidebar_width: self.sidebar_width,
+            drawer: self.drawer,
+            drawer_share: self.drawer_share,
         };
         if let Ok(view) = serde_json::to_value(saved) {
             self.request(Pending::Saved, Request::SaveView { name: self.workspace.clone(), view });
@@ -1237,6 +1281,10 @@ impl App {
                     }
                     self.sync();
                     return;
+                }
+                // `exit` in the quick terminal: its drawer closes (UX1.25).
+                if self.drawer_session() == Some(id) {
+                    self.hide_drawer();
                 }
                 // The order as it was, so "the next one" means the one after it in the sidebar.
                 let order = self.ordered();
@@ -1407,6 +1455,11 @@ impl App {
                 let id = info.id;
                 self.upsert(info);
                 self.show(id, split);
+            }
+            (Pending::Quick, Ok(Reply::Session { info })) => {
+                let id = info.id;
+                self.upsert(info);
+                self.open_drawer(id);
             }
             (Pending::Spawned { split, spec }, Err(e))
                 if e.code == ErrorCode::NeedsConfirmation =>
@@ -2102,10 +2155,7 @@ impl App {
             }
             "peek" => {
                 let target = if self.focus == Focus::Sidebar {
-                    match self.selected_row() {
-                        Some(Row::Session(id)) => Some(id),
-                        _ => None,
-                    }
+                    self.selected_row().and_then(|r| r.session())
                 } else {
                     self.attention_order(false).first().copied().or(focused)
                 };
@@ -2117,10 +2167,7 @@ impl App {
             "session.resume" | "session.hibernate" | "session.explain" | "session.mute"
             | "session.adopt" | "session.summarize" => {
                 let target = if self.focus == Focus::Sidebar {
-                    match self.selected_row() {
-                        Some(Row::Session(id)) => Some(id),
-                        _ => None,
-                    }
+                    self.selected_row().and_then(|r| r.session())
                 } else {
                     focused
                 };
@@ -2256,13 +2303,12 @@ impl App {
             }
             "worktree.gc" => self.request(Pending::Gc, Request::Gc),
             "shell.here" => {
-                let (_, wt) = self.context();
-                let spec = SpawnSpec {
-                    cwd: if wt.is_some() { Default::default() } else { self.here() },
-                    worktree: wt,
-                    ..SpawnSpec::default()
+                // A quick terminal row is that one; anything else is where you are.
+                let want = match (self.focus, self.selected_row()) {
+                    (Focus::Sidebar, Some(Row::Quick(id))) => Some(id),
+                    _ => None,
                 };
-                self.spawn_spec(spec, Some(Dir::Right));
+                self.toggle_quick(want, None, None);
             }
             "worktree.retitle" => match self.context().1.and_then(|w| self.worktree(&w).cloned()) {
                 Some(w) => {
@@ -2311,7 +2357,7 @@ impl App {
             | "session.take_control" => {
                 let target = if self.focus == Focus::Sidebar {
                     match self.selected_row() {
-                        Some(Row::Session(id)) => Some(id),
+                        Some(Row::Session(id) | Row::Quick(id)) => Some(id),
                         Some(Row::Worktree(w)) if cmd.action == "session.stop" => {
                             if let Some(w) = self.worktree(&w).cloned().filter(|w| !w.is_root) {
                                 // Merged: clean up by archiving, which never refuses (UX1.12).
@@ -2630,6 +2676,10 @@ impl App {
                     self.sidebar_zoom = false;
                     self.show(id, None)
                 }
+                Some(Row::Quick(id)) if cmd.action == "nav.open" => {
+                    self.sidebar_zoom = false;
+                    self.toggle_quick(Some(id), None, None);
+                }
                 Some(Row::Set(run)) if cmd.action == "nav.open" => self.open_sets(Some(run)),
                 Some(Row::Project(id) | Row::Worktree(id) | Row::Set(id)) => {
                     let collapse = match cmd.action {
@@ -2749,7 +2799,7 @@ impl App {
         });
     }
 
-    fn client_env() -> BTreeMap<String, String> {
+    pub(crate) fn client_env() -> BTreeMap<String, String> {
         ptyro_pty::CLIENT_ENV
             .iter()
             .filter_map(|k| std::env::var(k).ok().map(|v| ((*k).to_owned(), v)))
@@ -2902,6 +2952,7 @@ impl App {
     pub fn context_hint(&self) -> Option<String> {
         let row = match self.focus {
             Focus::Sidebar => self.selected_row()?,
+            Focus::Pane if self.in_drawer() => Row::Quick(self.focused_session()?),
             Focus::Pane => Row::Session(self.focused_session()?),
         };
         let with = |action: &str, what: &str| self.hint_key(action).map(|k| format!("{k} {what}"));
@@ -2948,6 +2999,18 @@ impl App {
                 .and_then(worktree_hint)
                 .or_else(|| with("session.new", "start a task here")),
             Row::Project(_) => with("worktree.new", "new worktree"),
+            // A quick terminal (UX1.25): the key that shows or hides it.
+            Row::Quick(id) => {
+                let s = self.session(id)?;
+                if s.status.as_ref().is_some_and(|r| r.status == AgentStatus::Blocked) {
+                    return with("peek", "answer it");
+                }
+                if self.focus == Focus::Pane {
+                    return self.quick_key().map(|k| format!("{k} hide it"));
+                }
+                let open = self.drawer_session() == Some(id);
+                Some(format!("⏎ {} it", if open { "hide" } else { "show" }))
+            }
             Row::Set(_) | Row::Group(_) => None,
         }
     }
@@ -3256,6 +3319,19 @@ impl App {
                 "script.pick",
                 "worktree.open",
             ],
+            // A quick terminal (UX1.25): show or hide it, and what a shell offers.
+            Row::Quick(id) => {
+                let Some(s) = self.session(*id) else { return Vec::new() };
+                let mut v = vec!["shell.here"];
+                if s.status.as_ref().is_some_and(|r| r.status == AgentStatus::Blocked) {
+                    v.push("peek");
+                }
+                if s.inner_agent.as_deref() == Some("claude") {
+                    v.push("session.adopt");
+                }
+                v.extend(["session.rename", "session.explain", "session.stop"]);
+                v
+            }
             Row::Set(_) => vec!["sets"],
             Row::Group(_) => Vec::new(),
         }
@@ -3266,6 +3342,7 @@ impl App {
     fn open_row_menu(&mut self) {
         let row = match (self.focus, self.selected_row(), self.focused_session()) {
             (Focus::Sidebar, Some(r), _) => r,
+            (_, _, Some(id)) if self.in_drawer() => Row::Quick(id),
             (_, _, Some(id)) => Row::Session(id),
             _ => {
                 self.toast_offer(
@@ -3278,6 +3355,7 @@ impl App {
         };
         let title = match &row {
             Row::Session(id) => self.session(*id).map(|s| format!("Session {}", s.name)),
+            Row::Quick(_) => Some("Quick terminal".into()),
             Row::Worktree(w) => self.worktree(w).map(|w| format!("Worktree {}", w.qualified())),
             Row::Project(p) => self.project(p).map(|p| format!("Project {}", p.slug)),
             Row::Set(_) => Some("Change set".into()),
@@ -4750,6 +4828,10 @@ impl App {
                             self.set_sel(&rows, row);
                             self.show(id, None);
                         }
+                        Some(Row::Quick(id)) => {
+                            self.set_sel(&rows, row);
+                            self.toggle_quick(Some(id), None, None);
+                        }
                         Some(Row::Set(run)) => {
                             self.set_sel(&rows, row);
                             self.open_sets(Some(run));
@@ -4956,7 +5038,7 @@ impl App {
                 Row::Worktree(w) => {
                     return (self.worktree(w).map(|x| x.project.clone()), Some(w.clone()));
                 }
-                Row::Session(id) => {
+                Row::Session(id) | Row::Quick(id) => {
                     if let Some(s) = self.session(*id) {
                         return (s.project.clone(), s.worktree.clone());
                     }
@@ -5001,7 +5083,10 @@ impl App {
         self.panes = HashMap::from([(1, PaneState::default())]);
         self.focused = 1;
         self.zoom = false;
+        self.drawer = None;
         let ordered = self.ordered();
+        let quick: Vec<SessionId> =
+            self.sessions.iter().filter(|s| s.quick).map(|s| s.id).collect();
         if let Some(saved) = view.and_then(|v| serde_json::from_value::<SavedView>(v).ok()) {
             self.layout = saved.layout.sanitize();
             self.panes = self
@@ -5015,7 +5100,7 @@ impl App {
                         .cloned()
                         .flatten()
                         .and_then(|s| s.parse::<SessionId>().ok())
-                        .filter(|id| ordered.contains(id));
+                        .filter(|id| ordered.contains(id) || quick.contains(id));
                     (p, PaneState { session, ..PaneState::default() })
                 })
                 .collect();
@@ -5024,6 +5109,7 @@ impl App {
             self.zoom = saved.zoom;
             self.sidebar = saved.sidebar;
             self.sidebar_width = saved.sidebar_width.clamp(12, 80);
+            self.restore_drawer(saved.drawer, saved.drawer_share);
         }
         for pane in self.layout.panes() {
             if self.panes.get(&pane).is_some_and(|p| p.session.is_none()) {
@@ -6511,5 +6597,204 @@ mod tests {
         );
         // Free text isn't a name: anything goes.
         assert!(app.prompt_check(&PromptKind::Broadcast(Vec::new()), "Fix /it/ now!").is_ok());
+    }
+
+    // ── the quick terminal (UX1.25) ──────────────────────────────────────
+
+    /// A project with two agents in its main checkout, the first shown.
+    fn with_agents(app: &mut App) -> (SessionId, SessionId) {
+        with_project(app);
+        let (a, b) = (
+            placed("claude", Some("p1"), Some("p1-root")),
+            placed("codex", Some("p1"), Some("p1-root")),
+        );
+        app.sessions.extend([a.clone(), b.clone()]);
+        app.show(a.id, None);
+        (a.id, b.id)
+    }
+
+    fn quick(name: &str, worktree: Option<&str>) -> SessionInfo {
+        let mut s = placed(name, worktree.map(|_| "p1"), worktree);
+        s.quick = true;
+        s.argv = vec!["/bin/zsh".into(), "-l".into()];
+        s
+    }
+
+    /// The first `shell.here` asks the daemon; here it answers with `shell`.
+    fn answered(app: &mut App, shell: &SessionInfo) {
+        app.run(&Command { action: "shell.here", arg: None });
+        assert!(app.drawer.is_none(), "nothing to show until the daemon answers");
+        app.on_reply(AppMsg::Reply(Pending::Quick, Ok(Reply::Session { info: shell.clone() })));
+    }
+
+    fn here(app: &mut App) {
+        app.run(&Command { action: "shell.here", arg: None });
+    }
+
+    #[test]
+    fn one_key_shows_focuses_and_hides_one_quick_terminal() {
+        let mut app = app();
+        let (agent, _) = with_agents(&mut app);
+        let host = app.focused;
+        let shell = quick("myrepo.shell", Some("p1-root"));
+        answered(&mut app, &shell);
+        // Shown below the agent, and focused.
+        let d = app.drawer.expect("a drawer");
+        assert_eq!((d.host, app.focused), (host, d.pane));
+        assert_eq!(shows(&app, d.pane).as_deref(), Some("myrepo.shell"));
+        let rects: HashMap<PaneId, Rect> = app.pane_rects().into_iter().collect();
+        assert!(rects[&d.pane].y > rects[&host].y && rects[&d.pane].height < rects[&host].height);
+        assert!(screen(&app).contains("hide"), "the drawer says how to hide it");
+        // Focused: hidden, and focus is back on the agent. The shell itself stays.
+        here(&mut app);
+        assert!(app.drawer.is_none());
+        assert_eq!((app.focused, app.focused_session()), (host, Some(agent)));
+        assert_eq!(app.layout.panes().len(), 1);
+        // Again: the same shell, no new one asked for (it's known and live).
+        here(&mut app);
+        let d = app.drawer.expect("shown again");
+        assert_eq!(app.panes[&d.pane].session, Some(shell.id));
+        // Shown but not focused: focused, not hidden.
+        app.focused = host;
+        here(&mut app);
+        assert_eq!(app.focused, d.pane);
+        assert!(app.drawer.is_some());
+    }
+
+    #[test]
+    fn sessions_of_a_worktree_share_its_quick_terminal_and_c_q_c_t_toggles_it() {
+        let mut app = app();
+        let (_, codex) = with_agents(&mut app);
+        let shell = quick("myrepo.shell", Some("p1-root"));
+        app.sessions.push(shell.clone());
+        // From the other agent of the same worktree, by the keys: the same shell.
+        app.show(codex, None);
+        let press = |app: &mut App, c: char| {
+            app.on_key(&crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char(c),
+                crossterm::event::KeyModifiers::CONTROL,
+            ))
+        };
+        press(&mut app, 'q');
+        press(&mut app, 't');
+        let d = app.drawer.expect("C-q C-t opens it");
+        assert_eq!(app.panes[&d.pane].session, Some(shell.id));
+        press(&mut app, 'q');
+        press(&mut app, 't');
+        assert!(app.drawer.is_none(), "and closes it");
+        // Not one of the sessions j/k and numbers go through, and never filled into a pane.
+        assert!(!app.ordered().contains(&shell.id));
+        assert!(!app.numbered().contains(&shell.id));
+    }
+
+    #[test]
+    fn with_no_worktree_the_quick_terminal_is_the_directory_s() {
+        let mut app = app();
+        // An empty pane: no session, no project.
+        here(&mut app);
+        let cwd = std::env::current_dir().unwrap();
+        let mut shell = quick("home.shell", None);
+        shell.cwd = cwd.clone();
+        app.on_reply(AppMsg::Reply(Pending::Quick, Ok(Reply::Session { info: shell.clone() })));
+        assert_eq!(app.drawer_session(), Some(shell.id));
+        assert_eq!(app.quick_of(None, &cwd), Some(shell.id));
+        // It's in the sidebar, as a quiet line of its own.
+        assert!(app.rows().contains(&Row::Quick(shell.id)));
+        assert!(screen(&app).contains("›_ shell"), "{}", screen(&app));
+    }
+
+    #[test]
+    fn the_quick_terminal_s_line_toggles_it_and_says_what_runs() {
+        let mut app = app();
+        with_agents(&mut app);
+        let mut shell = quick("myrepo.shell", Some("p1-root"));
+        shell.command = Some(ptyro_core::session::ShellCommand {
+            text: Some("cargo test".into()),
+            started_ms: 0,
+            ended_ms: None,
+            exit: None,
+        });
+        app.sessions.push(shell.clone());
+        let rows = app.rows();
+        let i = rows.iter().position(|r| *r == Row::Quick(shell.id)).expect("its line");
+        assert!(matches!(rows[i - 1], Row::Session(_)), "last under its worktree");
+        assert!(screen(&app).contains("›_ shell cargo test"), "{}", screen(&app));
+        app.focus = Focus::Sidebar;
+        app.set_sel(&rows, i);
+        assert_eq!(app.context_hint().as_deref(), Some("⏎ show it"));
+        app.run(&Command { action: "nav.open", arg: None });
+        assert_eq!(app.drawer_session(), Some(shell.id));
+        app.focus = Focus::Sidebar;
+        app.set_sel(&app.rows(), i);
+        assert_eq!(app.context_hint().as_deref(), Some("⏎ hide it"));
+        assert!(app.row_actions(&Row::Quick(shell.id)).contains(&"shell.here"));
+        // A finished command: how it went.
+        let s = app.sessions.iter_mut().find(|s| s.id == shell.id).unwrap();
+        s.command.as_mut().unwrap().ended_ms = Some(1);
+        s.command.as_mut().unwrap().exit = Some(1);
+        assert!(screen(&app).contains("›_ shell ✗ cargo test"));
+    }
+
+    #[test]
+    fn exit_closes_the_drawer_and_the_next_press_asks_for_a_fresh_one() {
+        let mut app = app();
+        let (agent, _) = with_agents(&mut app);
+        let shell = quick("myrepo.shell", Some("p1-root"));
+        answered(&mut app, &shell);
+        app.on_server(ServerMsg::Event { event: DomainEvent::SessionRemoved { id: shell.id } });
+        assert!(app.drawer.is_none());
+        assert_eq!(app.layout.panes().len(), 1);
+        assert_eq!(app.focused_session(), Some(agent), "the agent's pane didn't move on");
+        assert_eq!(app.quick_of(Some("p1-root"), std::path::Path::new("")), None);
+    }
+
+    #[test]
+    fn a_zoomed_pane_keeps_its_drawer_and_closing_the_host_takes_it_along() {
+        let mut app = app();
+        with_agents(&mut app);
+        let host = app.focused;
+        let right = app.layout.split(host, Dir::Right).unwrap();
+        app.panes.insert(right, PaneState::default());
+        let shell = quick("myrepo.shell", Some("p1-root"));
+        answered(&mut app, &shell);
+        let d = app.drawer.unwrap();
+        app.zoom = true;
+        let shown: Vec<PaneId> = app.pane_rects().into_iter().map(|(p, _)| p).collect();
+        assert_eq!(shown, vec![host, d.pane], "zoomed with its drawer");
+        app.zoom = false;
+        // Five panes are fine with a drawer: four of your own plus it.
+        assert!(app.layout.panes().len() <= crate::layout::MAX_WITH_DRAWER);
+        app.focused = host;
+        app.run(&Command { action: "pane.close", arg: None });
+        assert!(app.drawer.is_none());
+        assert_eq!(app.layout.panes(), vec![right], "the drawer went with its host");
+    }
+
+    #[test]
+    fn the_drawer_and_its_height_come_back_with_the_view() {
+        let mut app = app();
+        with_agents(&mut app);
+        let shell = quick("myrepo.shell", Some("p1-root"));
+        answered(&mut app, &shell);
+        let d = app.drawer.unwrap();
+        app.run(&Command { action: "pane.taller", arg: None });
+        let share = app.layout.below_share(d.pane).unwrap();
+        assert!(share > crate::quick::DRAWER_SHARE);
+        let saved = serde_json::json!({
+            "v": 1, "layout": app.layout, "focus": d.pane, "zoom": false, "sidebar": true,
+            "sidebar_width": 30, "drawer": app.drawer, "drawer_share": share,
+            "panes": app.panes.iter().map(|(k, p)| (k.to_string(), p.session.map(|s| s.full()))).collect::<HashMap<_, _>>(),
+        });
+        app.apply_view(Some(saved.clone()));
+        assert_eq!(app.drawer, Some(d));
+        assert_eq!(app.drawer_session(), Some(shell.id));
+        // Hidden, it remembers how tall it was.
+        here(&mut app);
+        assert!((app.drawer_share - share).abs() < 1e-6);
+        // After a daemon restart the shell is gone: the drawer closes instead of showing another.
+        app.sessions.retain(|s| s.id != shell.id);
+        app.apply_view(Some(saved));
+        assert!(app.drawer.is_none());
+        assert_eq!(app.layout.panes().len(), 1);
     }
 }

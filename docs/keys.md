@@ -56,7 +56,7 @@ action by name.
 | `Tab` | move focus between the sidebar and the pane |
 | `\` | show or hide the sidebar |
 | `u` | do what the last message offers: undo it, or fix what it reports |
-| `!` | a shell beside you, in this worktree and its profile |
+| `C-t` or `!` | the quick terminal: this worktree's shell in a drawer below the pane. Again focuses it, and once more hides it (the shell keeps running) |
 | `H` | home: who needs you, PRs, recent projects and repositories found; ⏎ starts a task there |
 | `M` | mend: what the health badge (`⚕` in the status bar) found, each with its fix |
 | `.` | what you can do with the focused session (its menu) |
@@ -98,7 +98,7 @@ Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.
 | `<` / `>` | the sidebar a column narrower / wider (or drag its edge) |
 | `u` / `P` | do what the last message offers / add a project |
 | `.` | everything you can do with this row (a session, worktree or project), with the keys |
-| `F` / `!` | finish this worktree (commit, then a PR or integrate) / a shell in it |
+| `F` / `!` | finish this worktree (commit, then a PR or integrate) / its quick terminal (`⏎` on its `›_ shell` line shows or hides it too) |
 | `H` / `M` | home / mend what the health badge found |
 | `A` | adopt the Claude started by hand in this shell: a managed session, same conversation |
 | `w` `o` `r` | workspace / editor / run script |

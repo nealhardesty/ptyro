@@ -64,6 +64,7 @@ Conventions:
 | `last_reply` | string? | the agent's last message once its turn ended, trimmed to 300 characters |
 | `command` | `{text?, started_ms, ended_ms?, exit?}`? | a shell's running (no `ended_ms`) or last command, from `ptyro shell-init` |
 | `summary` | `{text, turn, at_ms}`? | a small model's line on it (`[summaries]`): made after turn `turn`, at `at_ms` |
+| `quick` | bool | its worktree's (or directory's) quick terminal (`ptyro shell`); only present when true |
 | `inner_agent` | string? | the adapter of an agent started by hand in this shell, while it's in the foreground (its status is then read off its screen) |
 
 `Status`: `{status, kind?, detail?, confidence, source, since_ms, progress?}`.

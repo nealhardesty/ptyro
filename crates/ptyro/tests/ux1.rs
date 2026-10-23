@@ -767,3 +767,144 @@ async fn a_finished_turn_is_summarized_in_a_line() {
     }
     assert!(prompt.exists());
 }
+
+async fn quick(
+    c: &Client,
+    worktree: Option<&str>,
+    cwd: &Path,
+    create: bool,
+) -> Result<SessionInfo, ptyro_core::Error> {
+    let req = Request::QuickShell {
+        worktree: worktree.map(Into::into),
+        cwd: cwd.to_owned(),
+        create,
+        env: Default::default(),
+        size: Some(TermSize::new(80, 12)),
+        workspace: None,
+    };
+    match c.request(req).await? {
+        Reply::Session { info } => Ok(info),
+        other => panic!("{other:?}"),
+    }
+}
+
+async fn listed(c: &Client) -> Vec<SessionInfo> {
+    match c.request(Request::List).await.unwrap() {
+        Reply::Sessions { sessions } => sessions,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// UX1.25: one quick terminal per worktree (or directory), reused; quiet but for a blocked
+/// agent in it; at its prompt it goes with its worktree, running something it holds it up; and
+/// `exit` forgets it.
+#[tokio::test]
+async fn a_quick_terminal_is_one_per_worktree_quiet_and_goes_with_it() {
+    // An interactive shell with job control: a command runs as the foreground process group.
+    let w = World::new("exec /bin/sh -i");
+    let dir = repo(&w, "myrepo");
+    let c = w.d.client().await.unwrap();
+    let spec = ptyro_core::model::WorktreeSpec {
+        project: dir.to_string_lossy().into_owned(),
+        name: Some("feat".into()),
+        fetch: Some(false),
+        ..Default::default()
+    };
+    let wt = match c.request(Request::WorktreeNew { spec }).await.unwrap() {
+        Reply::WorktreeCreated { info, .. } => info,
+        other => panic!("{other:?}"),
+    };
+    let none = quick(&c, Some("myrepo/feat"), Path::new(""), false).await.unwrap_err();
+    assert_eq!(none.code, ptyro_core::ErrorCode::NotFound, "finding never starts one");
+    let shell = quick(&c, Some("myrepo/feat"), Path::new(""), true).await.unwrap();
+    assert!(shell.quick);
+    assert_eq!(
+        (shell.name.as_str(), shell.worktree.as_deref()),
+        ("feat.shell", Some(wt.id.as_str()))
+    );
+    // From anywhere in the worktree, by address or by directory: the same one.
+    std::fs::create_dir_all(wt.path.join("src")).unwrap();
+    assert_eq!(quick(&c, None, &wt.path.join("src"), true).await.unwrap().id, shell.id);
+    assert_eq!(quick(&c, Some("myrepo/feat"), Path::new(""), true).await.unwrap().id, shell.id);
+    // `ptyro shell`: the same one, as JSON or its screen (what an agent reads).
+    let out =
+        w.d.cmd().args(["shell", "--json"]).current_dir(wt.path.join("src")).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let info: SessionInfo = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(info.id, shell.id);
+    let out = w.d.cmd().args(["shell", "feat", "--read"]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = w.d.cmd().args(["shell", "--read"]).current_dir(w.home()).output().unwrap();
+    assert!(!out.status.success(), "--read never starts one");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no quick terminal"));
+    // Outside any worktree: the directory's own.
+    let notes = w.home().join("notes");
+    std::fs::create_dir_all(&notes).unwrap();
+    let loose = quick(&c, None, &notes, true).await.unwrap();
+    assert_ne!(loose.id, shell.id);
+    assert_eq!((loose.name.as_str(), loose.worktree.as_deref()), ("notes.shell", None));
+    assert_eq!(quick(&c, None, &notes, false).await.unwrap().id, loose.id);
+
+    // Quiet: an error says nothing; an agent in it that waits for you does.
+    let report = |state: &str| Request::Report {
+        addr: shell.id.full(),
+        state: state.into(),
+        kind: None,
+        msg: None,
+        progress: None,
+    };
+    c.request(report("error")).await.unwrap();
+    let s = wait_for(&c, &shell.name, "errored", |s| {
+        s.status.as_ref().is_some_and(|r| r.status == AgentStatus::Errored)
+    })
+    .await;
+    assert!(s.attention.is_none(), "{:?}", s.attention);
+    c.request(report("blocked")).await.unwrap();
+    wait_for(&c, &shell.name, "blocked raises attention", |s| s.attention.is_some()).await;
+
+    // Running something, it holds up removing the worktree; at its prompt it goes with it.
+    let send = |text: &str| Request::SendText {
+        addr: shell.id.full(),
+        text: text.into(),
+        enter: true,
+        wait_ready_ms: None,
+    };
+    c.request(send("sleep 30")).await.unwrap();
+    wait_for(&c, &shell.name, "sleep in the foreground", |s| {
+        s.foreground.as_deref() == Some("sleep")
+    })
+    .await;
+    let remove =
+        || Request::WorktreeRemove { addr: "myrepo/feat".into(), opts: Default::default() };
+    let refused = c.request(remove()).await.unwrap_err();
+    assert!(refused.message.contains("feat.shell"), "{}", refused.message);
+    c.request(Request::SendBytes { addr: shell.id.full(), bytes: b"\x03".to_vec() }).await.unwrap();
+    wait_for(&c, &shell.name, "back at its prompt", |s| {
+        s.foreground.as_deref().is_some_and(|f| f != "sleep")
+    })
+    .await;
+    c.request(remove()).await.unwrap();
+    let deadline = Instant::now() + WAIT;
+    while listed(&c).await.iter().any(|s| s.id == shell.id) {
+        assert!(Instant::now() < deadline, "the quick terminal went with its worktree");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // `exit` forgets it, quietly; the next one is a fresh shell.
+    c.request(Request::SendText {
+        addr: loose.id.full(),
+        text: "exit".into(),
+        enter: true,
+        wait_ready_ms: None,
+    })
+    .await
+    .unwrap();
+    let deadline = Instant::now() + WAIT;
+    while listed(&c).await.iter().any(|s| s.id == loose.id) {
+        assert!(Instant::now() < deadline, "exit forgets it");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let fresh = quick(&c, None, &notes, true).await.unwrap();
+    assert_ne!(fresh.id, loose.id);
+    assert_eq!(fresh.name, "notes.shell", "its name is free again");
+}

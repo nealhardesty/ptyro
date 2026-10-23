@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 
 pub type PaneId = u32;
 pub const MAX_PANES: usize = 4;
+/// With the quick terminal's drawer (UX1.25), which doesn't count against [`MAX_PANES`].
+pub const MAX_WITH_DRAWER: usize = MAX_PANES + 1;
 const MIN_RATIO: f32 = 0.1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -169,27 +171,35 @@ impl Layout {
 
     /// Split `pane`; the new pane goes right of or below it. `None` at [`MAX_PANES`].
     pub fn split(&mut self, pane: PaneId, dir: Dir) -> Option<PaneId> {
-        if self.panes().len() >= MAX_PANES {
+        self.split_at(pane, dir, 0.5, MAX_PANES)
+    }
+
+    /// Split `pane` with `ratio` for its own half; `None` once there are `limit` panes.
+    pub fn split_at(&mut self, pane: PaneId, dir: Dir, ratio: f32, limit: usize) -> Option<PaneId> {
+        if self.panes().len() >= limit {
             return None;
         }
         let new = self.next;
-        fn go(n: &mut Node, pane: PaneId, dir: Dir, new: PaneId) -> bool {
+        let ratio = ratio.clamp(MIN_RATIO, 1.0 - MIN_RATIO);
+        fn go(n: &mut Node, pane: PaneId, dir: Dir, ratio: f32, new: PaneId) -> bool {
             match n {
                 Node::Pane { id } if *id == pane => {
                     let old = std::mem::replace(n, Node::Pane { id: 0 });
                     *n = Node::Split {
                         dir,
-                        ratio: 0.5,
+                        ratio,
                         a: Box::new(old),
                         b: Box::new(Node::Pane { id: new }),
                     };
                     true
                 }
                 Node::Pane { .. } => false,
-                Node::Split { a, b, .. } => go(a, pane, dir, new) || go(b, pane, dir, new),
+                Node::Split { a, b, .. } => {
+                    go(a, pane, dir, ratio, new) || go(b, pane, dir, ratio, new)
+                }
             }
         }
-        if go(&mut self.root, pane, dir, new) {
+        if go(&mut self.root, pane, dir, ratio, new) {
             self.next += 1;
             Some(new)
         } else {
@@ -306,11 +316,31 @@ impl Layout {
         Some(n)
     }
 
+    /// The share of a stacked split that `pane` takes when it's that split's lower half (the
+    /// quick terminal's drawer under its host).
+    pub fn below_share(&self, pane: PaneId) -> Option<f32> {
+        fn go(n: &Node, pane: PaneId) -> Option<f32> {
+            let Node::Split { dir, ratio, a, b } = n else { return None };
+            if *dir == Dir::Down && matches!(**b, Node::Pane { id } if id == pane) {
+                return Some(1.0 - *ratio);
+            }
+            go(a, pane).or_else(|| go(b, pane))
+        }
+        go(&self.root, pane)
+    }
+
+    /// `area` stacked as `pane`'s split would stack it: the top, the divider and the bottom
+    /// (a zoomed pane with its drawer).
+    pub fn stacked(&self, area: Rect, lower: PaneId) -> (Rect, Rect, Rect) {
+        let share = self.below_share(lower).unwrap_or(0.3);
+        split_rect(area, Dir::Down, 1.0 - share)
+    }
+
     /// Rebuild `next` after deserializing (it isn't trusted).
     pub fn sanitize(mut self) -> Self {
         let max = self.panes().into_iter().max().unwrap_or(0);
         self.next = self.next.max(max + 1);
-        if self.panes().len() > MAX_PANES {
+        if self.panes().len() > MAX_WITH_DRAWER {
             return Self::default();
         }
         self
@@ -366,6 +396,23 @@ mod tests {
         let d = l.dividers(AREA)[0].clone();
         l.drag(&d, 75, 0);
         assert!((l.rects(AREA)[0].1.width as i32 - 75).abs() <= 1);
+    }
+
+    #[test]
+    fn a_drawer_goes_below_with_its_share_and_past_the_limit() {
+        let mut l = Layout::default();
+        let mut last = 1;
+        for _ in 0..3 {
+            last = l.split(last, Dir::Right).unwrap();
+        }
+        assert!(l.split(1, Dir::Down).is_none(), "four panes are the most for splits");
+        let d = l.split_at(1, Dir::Down, 0.7, MAX_WITH_DRAWER).expect("the drawer is one more");
+        assert!((l.below_share(d).unwrap() - 0.3).abs() < 1e-6);
+        assert_eq!(l.below_share(1), None, "the host is the upper half");
+        let (top, div, bottom) = l.stacked(AREA, d);
+        assert_eq!((top.y, div.height, bottom.bottom()), (0, 1, AREA.height));
+        assert!(bottom.height < top.height);
+        assert!(l.split_at(1, Dir::Down, 0.7, MAX_WITH_DRAWER).is_none());
     }
 
     #[test]

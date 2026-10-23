@@ -61,7 +61,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("worktree.gc", "Stale worktrees (merged, gone, unused): pick one to archive it"),
     a(
         "shell.here",
-        "A shell beside you, in this worktree and its profile (a companion to its agent)",
+        "The quick terminal: this worktree's shell in a drawer below; again focuses, then hides it",
     ),
     a("session.next", "Show the next session in sidebar order (across projects) here"),
     a("session.prev", "Show the previous session in sidebar order (across projects) here"),
@@ -334,6 +334,7 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Prefix, "u", "toast.act"),
     (Table::Prefix, ".", "row.menu"),
     (Table::Prefix, "!", "shell.here"),
+    (Table::Prefix, "C-t", "shell.here"),
     (Table::Prefix, "H", "home"),
     (Table::Prefix, "M", "health"),
     (Table::Prefix, "P", "project.add"),

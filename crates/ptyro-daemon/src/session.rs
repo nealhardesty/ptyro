@@ -48,6 +48,9 @@ pub struct Place {
     pub workspace: Option<String>,
     pub agent: Option<String>,
     pub script: Option<String>,
+    /// The quick terminal of its worktree or directory (UX1.25).
+    #[serde(default)]
+    pub quick: bool,
 }
 
 pub struct Term {
@@ -519,6 +522,7 @@ impl Session {
             command: meta.command.clone(),
             inner_agent: meta.inner_agent.clone(),
             summary: meta.summary.clone(),
+            quick: meta.place.quick,
         }
     }
 
@@ -665,6 +669,21 @@ impl Session {
 
     pub fn is_live(&self) -> bool {
         self.meta.lock().expect("meta").state.is_live()
+    }
+
+    /// Its worktree's or directory's quick terminal (UX1.25).
+    pub fn is_quick(&self) -> bool {
+        self.meta.lock().expect("meta").place.quick
+    }
+
+    /// Running something that removing its worktree would cut short: any live session but a
+    /// quick terminal at its prompt (its shell is the foreground process group).
+    pub fn busy(&self) -> bool {
+        let (live, quick, pid) = {
+            let m = self.meta.lock().expect("meta");
+            (m.state.is_live(), m.place.quick, m.pid)
+        };
+        live && !(quick && pid.is_some() && self.foreground_pid() == pid)
     }
 
     /// The PTY's foreground process group (a running tool, or the agent itself).

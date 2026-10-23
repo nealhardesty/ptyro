@@ -149,7 +149,7 @@ impl App {
 
     fn selected_session_name(&self) -> Option<String> {
         let id = match (self.focus, self.selected_row()) {
-            (crate::app::Focus::Sidebar, Some(Row::Session(id))) => Some(id),
+            (crate::app::Focus::Sidebar, Some(Row::Session(id) | Row::Quick(id))) => Some(id),
             _ => self.focused_session(),
         };
         id.and_then(|id| self.session(id)).map(|s| s.name.clone())

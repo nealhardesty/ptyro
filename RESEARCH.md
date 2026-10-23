@@ -2616,6 +2616,7 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 | R-UX-27 | **Errors offer the fix**: no toast names a command to type; it carries a key that does it | owner (2026-10-22) | UX1 | S | ★★★ | → UX1.17 (2026-10-22) |
 | R-UX-28 | **Context hints**: the status bar's hints follow the selection (blocked → answer, diff → review, merged → clean up) | owner (2026-10-22) | UX1 | S | ★★ | → UX1.16 (2026-10-22) |
 | R-UX-29 | **Name and title**: every create dialog shows a suggested name (from the prompt, PR or branch) that ⏎ accepts; a fixed, slugged name for addresses and a separate free-text title for people | owner (2026-10-22); dmux, Claude agent view (prompt-named tasks) | UX1 | M | ★★★ | → UX1.24, built 2026-10-22 |
+| R-UX-30 | **Quick terminal**: one shell per worktree in a bottom drawer that one key toggles (hidden → show and focus, unfocused → focus, focused → hide), instead of a new shell per press; a quiet child line in the sidebar | owner (2026-10-23); VS Code terminal panel toggle, Ghostty quick terminal [U 2026-10-23] | UX1 | M | ★★ | → UX1.25, built 2026-10-23 |
 | R-WT-10 | **Setup suggestions on first use**: lockfiles suggest a setup script, ignored `.env*` files suggest a `.worktreeinclude`, written to local config after a yes | owner (2026-10-22); Conductor, Superset (setup scripts) | UX1 | S | ★★ | → UX1.11, built 2026-10-22 |
 
 #### Orchestration (R-ORC)
@@ -2920,3 +2921,7 @@ follow you over SSH, and tmux plugins can't enforce policy. ptyro does all three
   summary through `claude -p` costs $0.00065 and takes 1–2.5 s [V 2026-10-23, Claude Code
   2.1.309], so the resident "concierge" (option B) is not needed for summaries. It stays open
   for cross-session questions (SPEC §21, question 9).
+- **2026-10-23 (quick terminal):** The owner asked for one terminal per task that a key
+  toggles, instead of a new shell on every press. R-UX-30, promoted to UX1.25: one per worktree,
+  a drawer at the bottom, VS Code's three-step toggle, `C-q C-t` (Ctrl-T alone is every
+  agent's, SPEC §20.5), and a quiet child line in the sidebar.

@@ -1423,6 +1423,49 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
 - [x] **UX1.13 Companion shell** (R-UX-03) — S. One key opens a shell in the selected
   worktree, with the same profile environment, split beside the agent. *Done (2026-10-22):*
   `shell.here`, `!` after the prefix or in the sidebar, and in the row menu.
+- [x] **UX1.25 Quick terminal** (R-UX-30; owner, 2026-10-23) — M. This changes UX1.13's
+  companion shell. Today `!` starts a **new** shell, split to the right, every time it's
+  pressed, so a few presses leave several shells. Instead:
+  - **One per worktree.** `shell.here` brings up the worktree's quick terminal, and starts it
+    only if there isn't one. Sessions in the same worktree share it. Outside a worktree (an
+    empty pane, the home screen, no project), it belongs to the current directory instead.
+    It runs under the worktree's profile, as the companion shell does today.
+  - **A drawer at the bottom** of the focused pane, about 30% of its height. `+` / `-` resize
+    it, and the size is kept with the view. In a zoomed pane it opens inside the zoom.
+  - **One key, three steps** (as VS Code's terminal panel works): hidden → show it and focus
+    it; shown but not focused → focus it; focused → hide it, and focus goes back to the pane
+    above. Hiding never stops the shell. The daemon owns it, so it outlives a detach.
+  - **Keys:** `C-q C-t` and `!` (prefix and sidebar). Ctrl-T alone stays with the program in
+    the pane: all four agents bind it (SPEC §20.5), and so do readline and fzf. Anyone who
+    wants a global key can bind one in `[keys]` (`"global:…" = "shell.here"`).
+  - **In the sidebar** it is a child line of its worktree (`›_ shell`, with the last command
+    from UX1.2's OSC 133 line). It has no number, never raises attention and never lands in
+    the inbox (R-DD-15's quiet flag, scoped to it). Clicking or ⏎ on that line toggles it the
+    same way.
+  - **Lifecycle:** after `exit`, the next press starts a fresh one. Archiving or removing the
+    worktree stops it with the worktree's sessions. Removing an agent session leaves it alone.
+  - **CLI:** `ptyro shell [WORKTREE]` reuses the quick terminal (or starts one) and attaches;
+    `--json` prints its address without attaching. `ptyro read` works on it as on any
+    session, so an agent can be told "look at the error in my terminal".
+  - *Done when:* TUI tests press the key three times (show, hide, show again) and get one
+    shell, with the right focus each time. Two sessions in one worktree share the shell, and an
+    empty pane gets one in the current directory. It survives a detach and a reattach, a new one
+    starts after `exit`, and its row stays quiet while its commands run. `make tui-parity`
+    covers `ptyro shell`.
+  - *Done (2026-10-23):* `QuickShell` and `SessionInfo.quick` (protocol 1.13),
+    `crates/ptyro-daemon/src/quick.rs` and `crates/ptyro-tui/src/quick.rs` (`Drawer`, `Row::Quick`).
+    TUI tests cover the three steps, sharing, the no-worktree case, `C-q C-t`, the sidebar line,
+    `exit`, zoom, closing the host and the saved view. `tests/ux1.rs` covers finding versus
+    starting, quiet attention, removal while busy and at the prompt, `exit`, and `ptyro shell
+    --json`/`--read` (SPEC §11.2h, §6.4). **Differs from the plan, or goes further:**
+    - `exit` forgets the shell outright (no exited row), so its name is free again and the
+      drawer just closes.
+    - An agent started in it that blocks still raises attention: quiet, but never silent about
+      a question.
+    - `ptyro shell --read` prints its screen and never starts one; `--json` prints it.
+    - A quick terminal at its prompt doesn't hold up removing, archiving or `archive_on_merge`;
+      one running a command does (`Session::busy`).
+    - The header names the key that hides it.
 
 ### Learn nothing up front
 
@@ -1498,7 +1541,8 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
   clamps and the keys (SPEC §11.2h).
 
 Suggested order: UX1.23 → UX1.0 → UX1.1–1.2 → UX1.4–1.8 → UX1.9, UX1.24, UX1.17 → UX1.14–1.15 → UX1.12 →
-UX1.19 → UX1.3 (after its spike) → the rest.
+UX1.19 → UX1.3 (after its spike) → the rest. Of what's open: UX1.25, then UX1.22 (the tour
+can then show the quick terminal).
 
 ---
 
