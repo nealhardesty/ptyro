@@ -33,6 +33,8 @@ pub enum Target {
     Project(String),
     /// Palette: run this lifecycle or run script in this worktree.
     RunScript(String, String),
+    /// Health: fix finding N (UX1.20).
+    Fix(usize),
 }
 
 #[derive(Debug, Clone)]

@@ -194,6 +194,10 @@ pub enum Purpose {
     RowMenu(Row),
     /// Home (UX1.19): what to do next.
     Home,
+    /// What the doctor found, to fix (UX1.20).
+    Health,
+    /// `ptyro <these args> <the pick>`, in a split (UX1.20, UX1.21).
+    Cli(Vec<String>),
     /// How to finish this worktree (UX1.12): a PR, or integrate.
     Finish(String),
     /// An archived worktree to bring back.
@@ -279,6 +283,8 @@ pub enum Confirmed {
     Integrate(String),
     /// Archive this worktree, stopping what runs in it (UX1.12).
     Archive(String),
+    /// Add a line to a file: a health fix (UX1.20).
+    Append(std::path::PathBuf, String),
     /// Send this request, then show this (runs view: cancel, pick, discard).
     Send(Box<Request>, String),
 }
@@ -389,6 +395,8 @@ pub enum AppMsg {
     Reply(Pending, Result<Reply, Error>),
     /// A workspace's saved view, after switching to it.
     View(String, Result<Reply, Error>),
+    /// What `ptyro doctor` found (UX1.20).
+    Health(Vec<crate::health::Check>),
 }
 
 /// One pane's live state.
@@ -556,6 +564,9 @@ pub struct App {
     context_hint: Option<String>,
     /// The first-run screen (UX1.19), drawn over everything.
     pub first_run: Option<crate::onboard::FirstRun>,
+    /// What the doctor found, for the badge (UX1.20).
+    pub health: crate::health::Health,
+    pub started: Instant,
 }
 
 fn no_color() -> bool {
@@ -646,6 +657,8 @@ impl App {
             after_add: None,
             context_hint: None,
             first_run: None,
+            health: crate::health::Health::default(),
+            started: Instant::now(),
         }
     }
 
@@ -1070,6 +1083,7 @@ impl App {
         if self.config.ui.clock {
             self.dirty = true;
         }
+        self.health_tick(self.started);
     }
 
     fn start_prefix(&mut self) {
@@ -1346,6 +1360,10 @@ impl App {
         self.dirty = true;
         let (pending, res) = match msg {
             AppMsg::Reply(p, r) => (p, r),
+            AppMsg::Health(checks) => {
+                self.got_health(checks);
+                return;
+            }
             AppMsg::View(name, r) => {
                 // Switched on again since: that view is stale.
                 if name != self.workspace {
@@ -2314,6 +2332,23 @@ impl App {
             }
             "row.menu" => self.open_row_menu(),
             "home" => self.open_home(),
+            "health" => self.open_health(),
+            "daemon.logs" => self.run_cli(&["daemon".into(), "logs".into(), "-f".into()]),
+            "daemon.status" => self.run_cli(&["daemon".into(), "status".into()]),
+            "daemon.restart" => self.run_cli(&["daemon".into(), "restart".into()]),
+            "daemon.upgrade" => self.run_cli(&["daemon".into(), "upgrade".into()]),
+            "daemon.service" => self.run_cli(&["daemon".into(), "install-service".into()]),
+            "daemon.unservice" => self.run_cli(&["daemon".into(), "uninstall-service".into()]),
+            "doctor" => self.run_cli(&["doctor".into()]),
+            "integrations" => self.run_cli(&["integrations".into(), "ls".into()]),
+            "integrations.install" | "integrations.uninstall" => {
+                let verb = cmd.action.trim_start_matches("integrations.");
+                self.pick_cli(
+                    &format!("{verb} which agent's integration?"),
+                    &["integrations", verb],
+                    &[("gemini", "a linked extension"), ("antigravity", "its hooks")],
+                );
+            }
             "first.run" => self.open_first_run(),
             "toast.act" => match self.toast.take().and_then(|t| t.offer) {
                 Some(Offer { then: Then::Run(cmd), .. }) => self.run(&cmd),
@@ -2697,7 +2732,7 @@ impl App {
     }
 
     /// A spawn in the focused session's directory (or the current one).
-    fn spawn(&mut self, argv: Vec<String>, split: Option<Dir>, name: Option<String>) {
+    pub(crate) fn spawn(&mut self, argv: Vec<String>, split: Option<Dir>, name: Option<String>) {
         let spec = SpawnSpec { argv, cwd: self.here(), name, ..SpawnSpec::default() };
         self.spawn_spec(spec, split);
     }
@@ -2880,6 +2915,23 @@ impl App {
             Row::Project(_) => with("worktree.new", "new worktree"),
             Row::Set(_) | Row::Group(_) => None,
         }
+    }
+
+    /// Pick one of `choices`, then `ptyro <args> <choice>` runs in a split.
+    pub(crate) fn pick_cli(&mut self, title: &str, args: &[&str], choices: &[(&str, &str)]) {
+        let items = choices
+            .iter()
+            .map(|(c, d)| Item {
+                label: (*c).to_owned(),
+                detail: (*d).to_owned(),
+                key: None,
+                target: Target::Path((*c).into()),
+            })
+            .collect();
+        self.overlay = Some(Overlay::Picker {
+            palette: Palette::new(title, items),
+            purpose: Purpose::Cli(args.iter().map(|a| (*a).to_owned()).collect()),
+        });
     }
 
     /// The actions that apply to a row (UX1.15), for its menu: a session's, a worktree's, a
@@ -3856,6 +3908,7 @@ impl App {
                 );
             }
             Confirmed::KeepPin(_) => {}
+            Confirmed::Append(file, line) => self.append_line(file, line),
             Confirmed::Archive(id) => {
                 self.request(
                     Pending::Done(String::new()),
@@ -3927,6 +3980,10 @@ impl App {
                     self.confirm_archive(&w);
                 }
             }
+            (Target::Path(arg), Purpose::Cli(mut args)) => {
+                args.push(arg.to_string_lossy().into_owned());
+                self.run_cli(&args);
+            }
             (Target::Path(addr), Purpose::Restore) => {
                 self.request(
                     Pending::Done("restored".into()),
@@ -3957,6 +4014,7 @@ impl App {
                 );
             }
             (target, Purpose::Home) => self.home_picked(target),
+            (Target::Fix(i), Purpose::Health) => self.fix(i),
             // A row's action: with that row selected, so it's what the action works on.
             (Target::Action(cmd), Purpose::RowMenu(row)) => {
                 let rows = self.rows();
@@ -5936,6 +5994,73 @@ mod tests {
         let labels: Vec<String> =
             (0..palette.filtered.len()).map(|i| palette.item(i).label.clone()).collect();
         assert_eq!(labels, ["⚑ asker", "▸ myrepo", "+ other", "a shell, here"], "known repos once");
+    }
+
+    #[test]
+    fn the_health_badge_lists_what_the_doctor_found_with_fixes() {
+        let mut app = app();
+        let check = |section: &str, name: &str, level: &str, text: &str| crate::health::Check {
+            section: section.into(),
+            name: name.into(),
+            level: level.into(),
+            text: text.into(),
+        };
+        app.got_health(vec![
+            check("terminal", "TERM", "ok", "xterm-256color"),
+            check(
+                "daemon",
+                "running",
+                "warn",
+                "not this ptyro: `ptyro daemon upgrade` (sessions keep running)",
+            ),
+            check(
+                "profile work",
+                "claude",
+                "warn",
+                "not logged in (`ptyro profile login <profile> claude`)",
+            ),
+        ]);
+        let shell = usize::from(crate::health::shell_init_missing().is_some());
+        let n = 2 + shell;
+        assert_eq!(app.health.findings.len(), n);
+        assert!(screen(&app).contains(&format!("⚕ {n}")), "the badge");
+        assert!(app.toast.as_ref().unwrap().text.contains("C-q M shows them"));
+        let m = app.keymap.lookup(Table::Prefix, KeyEvent::char('M')).cloned().unwrap();
+        app.run(&m);
+        let shown = screen(&app);
+        assert!(shown.contains("Health: ⏎ fixes one"), "{shown}");
+        assert!(shown.contains("! daemon running"), "{shown}");
+        // The same findings again: not announced twice.
+        app.overlay = None;
+        app.toast = None;
+        app.got_health(vec![
+            check("daemon", "running", "warn", "not this ptyro: `ptyro daemon upgrade`"),
+            check(
+                "profile work",
+                "claude",
+                "warn",
+                "not logged in (`ptyro profile login <profile> claude`)",
+            ),
+        ]);
+        assert!(app.toast.is_none());
+        // A file fix asks first, then appends.
+        let dir = tempfile::tempdir().unwrap();
+        let rc = dir.path().join(".zshrc");
+        app.health.findings.push(crate::health::Finding {
+            problem: false,
+            what: "shell integration".into(),
+            text: "missing".into(),
+            fix: Some(crate::health::Fix::Append { file: rc.clone(), line: "eval x".into() }),
+        });
+        let i = app.health.findings.len() - 1;
+        app.fix(i);
+        assert!(matches!(
+            app.overlay,
+            Some(Overlay::Confirm { action: Confirmed::Append(..), .. })
+        ));
+        key(&mut app, KeyCode::Char { c: 'y' }, Mods::NONE);
+        assert!(std::fs::read_to_string(&rc).unwrap().contains("eval x"));
+        assert_eq!(app.health.findings.len(), i, "fixed: off the list");
     }
 
     #[test]

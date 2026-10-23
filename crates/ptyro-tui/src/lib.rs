@@ -5,6 +5,7 @@
 mod app;
 pub mod chat;
 pub mod copy;
+mod health;
 mod inspector;
 pub mod keymap;
 mod keys;

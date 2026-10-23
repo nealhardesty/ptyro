@@ -46,9 +46,9 @@ the same check through `make test`. When you add a command, add its row here.
 | `mute` | `session.mute`; a project or workspace: gap: UX1.21 |
 | `notify test` | `notify.test` |
 | `usage` | shown: the status bar and the sidebar title show the rate limits of the focused session's profile |
-| `integrations ls` | gap: UX1.20 (the health badge lists what's missing) |
-| `integrations install` | gap: UX1.20 |
-| `integrations uninstall` | gap: UX1.20 |
+| `integrations ls` | `integrations` (in a split); the health badge says what's missing |
+| `integrations install` | `integrations.install` |
+| `integrations uninstall` | `integrations.uninstall` |
 
 ## Projects, worktrees, workspaces
 
@@ -107,7 +107,7 @@ the same check through `make test`. When you add a command, add its row here.
 | `profile login` | gap: UX1.21 |
 | `profile sync` | gap: UX1.21 |
 | `profile detect` | `first.run` finds them, as accounts to tick |
-| `profile doctor` | gap: UX1.20 |
+| `profile doctor` | `health`: the badge's findings include each profile's logins |
 
 ## Review and ship
 
@@ -221,19 +221,19 @@ the same check through `make test`. When you add a command, add its row here.
 | Command | In the TUI |
 |---|---|
 | `init` | `first.run`: the first run as a screen (it opens on its own the first time); terminal checks and shell extras are `doctor`'s (UX1.20) |
-| `doctor` | gap: UX1.20 (the health badge) |
+| `doctor` | `health` (`M`): the badge's findings, each with its fix; `doctor` runs the full one in a split |
 | `tour` | `help.tour` |
 | `config edit` | `config.edit` (validated when you save; changes apply live) |
 | `config check` | `config.edit`: saving checks it, and a bad config shows as an error |
 | `config show` | gap: UX1.21 |
 | `config path` | `config.edit` (opens it) |
 | `completions` | waived: shell setup, for typing commands in a shell |
-| `shell-init` | gap: UX1.20 (offers to add the line to your rc file) |
+| `shell-init` | `health` (`M`): when it's missing, a finding whose fix adds the line to your rc file |
 | `daemon start` | waived: the TUI starts the daemon when it isn't running |
 | `daemon stop` | waived: stopping the daemon from its own client ends the TUI; sessions with resume come back with `daemon restart --hibernate` |
-| `daemon restart` | gap: UX1.20 |
-| `daemon status` | gap: UX1.20 |
-| `daemon logs` | gap: UX1.20 |
-| `daemon upgrade` | gap: UX1.20 (a newer binary: "upgrade the daemon live? `u`") |
-| `daemon install-service` | gap: UX1.20 |
-| `daemon uninstall-service` | gap: UX1.20 |
+| `daemon restart` | `daemon.restart` (in a split; this TUI reconnects) |
+| `daemon status` | `daemon.status`; the health badge has its warnings |
+| `daemon logs` | `daemon.logs` (followed, in a split) |
+| `daemon upgrade` | `daemon.upgrade`; a daemon running another binary is a health finding whose fix this is |
+| `daemon install-service` | `daemon.service` |
+| `daemon uninstall-service` | `daemon.unservice` |

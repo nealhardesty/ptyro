@@ -2529,6 +2529,15 @@ learning anything up front.
   0: never), a menu of the next keys appears above the status bar, in five groups (start, go,
   panes, work, this), as bound now; keys typed before it work as always. The event loop wakes at
   the deadline, not on its 250 ms tick.
+- **The health badge** (UX1.20, `crates/ptyro-tui/src/health.rs`): `ptyro doctor --quick --json`
+  runs in the background 20 s after attaching and every 10 min; its warnings and problems, plus a
+  missing `ptyro shell-init` line in your shell's rc file (the TUI's own check), show as `⚕ N` in
+  the status bar (red with a problem), announced once when there are more. `health` (`M`)
+  lists them, ⏎ fixes one: a tmux option set now and offered for `~/.tmux.conf`; `chmod 600`;
+  a line appended to a file (asked first); or the `` `ptyro …` `` command the finding names
+  (`<profile>` filled in from its section), run in a split. `run_cli` (a `ptyro` command in a
+  split, its output kept) is also the TUI path of `doctor`, `daemon.status|logs|restart|
+  upgrade|service|unservice` and `integrations[.install|.uninstall]`.
 - **The first run and home** (UX1.19, `crates/ptyro-tui/src/onboard.rs`). When `ptyro` had to
   start the first session itself (`Options::welcome`):
   - with no config file (and `PTYRO_FIRST_RUN` not `0`): the first run, over everything. Agents

@@ -464,23 +464,23 @@ async fn the_task_box_starts_an_agent_on_what_you_typed() {
     let mut script =
         ptyro_testkit::headless::Script::new(vec![BIN.to_owned(), "attach".into(), "sh0".into()])
             .size(110, 24)
-            .timeout(9.0)
+            .timeout(11.0)
             .env("HOME", &w.home().to_string_lossy());
     for (k, v) in w.d.env() {
         script = script.env(&k, &v);
     }
     let r = ptyro_testkit::headless::run(
         script
-            .send(1.5, "\\x11n")
-            .send(1.9, "work 0.3")
-            .snapshot(2.4)
-            .send(2.6, "\\r")
-            .snapshot(6.5)
-            .send(7.0, "\\x11d"),
+            .send(2.0, "\\x11n")
+            .send(2.6, "work 0.3")
+            .snapshot(3.4)
+            .send(3.6, "\\r")
+            .snapshot(8.5)
+            .send(9.0, "\\x11d"),
     )
     .await
     .expect("headless run");
-    let typed = r.at(2.4);
+    let typed = r.at(3.4);
     assert!(typed.contains("What should it do?"), "{typed}");
     assert!(typed.contains("→ work-0-3 · claude · new worktree in proj"), "{typed}");
     let s = wait_for(&c, "work-0-3", "the agent, given the prompt", |s| {
@@ -496,7 +496,7 @@ async fn the_task_box_starts_an_agent_on_what_you_typed() {
     let wt = worktrees.iter().find(|x| x.name == "work-0-3").expect("its worktree");
     assert_eq!(s.worktree.as_deref(), Some(wt.id.as_str()));
     assert_eq!(wt.title.as_deref(), Some("work 0.3"));
-    assert!(r.at(6.5).contains("work 0.3"), "the pane follows the agent: {}", r.at(6.5));
+    assert!(r.at(8.5).contains("work 0.3"), "the pane follows the agent: {}", r.at(8.5));
 }
 
 /// UX1.12: archiving keeps everything, uncommitted and untracked work included; restoring puts

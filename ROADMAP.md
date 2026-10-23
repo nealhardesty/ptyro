@@ -1448,10 +1448,12 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
     a first session (`Options::welcome`); `H` and `first.run` any time. A TUI test ticks and
     writes; `tests/ux1.rs` opens a fresh `ptyro` on it once (SPEC §11.2h). The terminal checks
     and shell extras of `ptyro init` are the health badge's (UX1.20).
-- [ ] **UX1.20 Health badge** (R-UX-24) — M. The doctor's findings appear as a status-bar
+- [x] **UX1.20 Health badge** (R-UX-24) — M. The doctor's findings appear as a status-bar
   badge, and a key opens them, each with a fix: add the `shell-init` line (after a yes), tmux
   options, an agent not logged in (`profile login`), broken hooks, or a newer installed binary
-  ("upgrade the daemon live? `u`").
+  ("upgrade the daemon live? `u`"). *Done (2026-10-22):* `crates/ptyro-tui/src/health.rs`: the
+  doctor in the background, the TUI's own shell-init check, `M` with a fix per finding, and
+  `run_cli` for the daemon's and integrations' commands (SPEC §11.2h).
 - [ ] **UX1.21 TUI parity gaps** — L, split as UX1.0 lists them. Today (2026-10-22) the TUI
   cannot:
   - run a recipe, or create a change set;

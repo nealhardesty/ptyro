@@ -177,6 +177,7 @@ const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
     (
         "this",
         &[
+            ("health", "mend"),
             ("row.menu", "its actions"),
             ("session.rename", "rename"),
             ("session.stop", "stop"),
@@ -1109,6 +1110,15 @@ fn draw_status(app: &App, f: &mut Frame<'_>, r: Rect) {
     }
     for (ws, n) in app.other_workspace_attention() {
         right.push(Span::styled(format!("{ws} ⚑{n} "), bar.fg(app.depth.fit(t.search))));
+    }
+    // What the doctor found (UX1.20): `M` mends it.
+    if !app.health.findings.is_empty() {
+        let bad = app.health.findings.iter().any(|f| f.problem);
+        right.push(Span::styled(
+            format!("⚕ {} ", app.health.findings.len()),
+            bar.fg(app.depth.fit(if bad { t.error } else { t.blocked }))
+                .add_modifier(Modifier::BOLD),
+        ));
     }
     let gates = app.open_gates();
     if gates > 0 {

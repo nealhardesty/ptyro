@@ -376,7 +376,9 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
   `eval "$(ptyro shell-init zsh)"` (or `bash`; fish: `ptyro shell-init fish | source`).
 - **Completions:** `source <(ptyro completions zsh)` (or bash, fish…). **Start at login:**
   `ptyro daemon install-service` (systemd or launchd).
-- **Something odd?** Run `ptyro doctor`. `ptyro daemon logs` shows the daemon's log, and
+- **Something odd?** A `⚕` in the status bar means the doctor found something: `Ctrl-Q M` lists
+  it, each with its fix (the shell-init line, tmux options, a login, a daemon upgrade). Or run
+  `ptyro doctor`. `ptyro daemon logs` shows the daemon's log, and
   `PTYRO_LOG=debug` makes it chatty. `Ctrl-Q C-l` redraws the screen.
 - **Recordings** of each session (for `ptyro replay` and `ptyro export`) can hold secrets that
   scrolled past. Turn them off with `[recorder] enabled = false`.
