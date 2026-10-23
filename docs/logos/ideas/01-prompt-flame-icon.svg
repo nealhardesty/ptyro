@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="ptyro icon: Prompt Flame"><defs>
+<linearGradient id="fg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffd93b"/><stop offset=".45" stop-color="#ff8a1f"/><stop offset="1" stop-color="#f2331d"/></linearGradient>
+<linearGradient id="fi" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fffbd0"/><stop offset="1" stop-color="#ffc83a"/></linearGradient>
+<linearGradient id="gg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#b6ffcf"/><stop offset="1" stop-color="#18c964"/></linearGradient>
+<linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#080c20"/><stop offset="1" stop-color="#26346b"/></linearGradient>
+<filter id="glow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="9"/></filter>
+</defs><rect width="512" height="512" rx="112" fill="#15101f"/><path d="M256 64C270 150 380 190 380 310C380 390 324 448 256 448C188 448 132 390 132 310C132 250 168 222 190 190C196 220 214 236 228 238C214 170 236 110 256 64Z" fill="url(#fg)" transform="translate(0 4)"/><path d="M196 292L262 344L196 396" fill="none" stroke="#15101f" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/><path d="M290 398H338" stroke="#15101f" stroke-width="30" stroke-linecap="round"/></svg>

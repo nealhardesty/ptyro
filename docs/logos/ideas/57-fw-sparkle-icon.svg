@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="ptyro icon: Fireworks: Sparkle"><defs>
+<linearGradient id="fg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffd93b"/><stop offset=".45" stop-color="#ff8a1f"/><stop offset="1" stop-color="#f2331d"/></linearGradient>
+<linearGradient id="fi" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fffbd0"/><stop offset="1" stop-color="#ffc83a"/></linearGradient>
+<linearGradient id="gg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#b6ffcf"/><stop offset="1" stop-color="#18c964"/></linearGradient>
+<linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#080c20"/><stop offset="1" stop-color="#26346b"/></linearGradient>
+<filter id="glow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="9"/></filter>
+</defs><rect width="512" height="512" rx="112" fill="#0b0f2a"/><path d="M256 28C264 168 344 248 484 256C344 264 264 344 256 484C248 344 168 264 28 256C168 248 248 168 256 28Z" fill="#ffd23f"/><circle cx="112.0" cy="112.0" r="22" fill="#ff7a45" stroke="none" stroke-width="0"/><circle cx="400.0" cy="112.0" r="22" fill="#3ddc84" stroke="none" stroke-width="0"/><circle cx="400.0" cy="400.0" r="22" fill="#4da3ff" stroke="none" stroke-width="0"/><circle cx="112.0" cy="400.0" r="22" fill="#b57bff" stroke="none" stroke-width="0"/><circle cx="256.0" cy="256.0" r="26" fill="#0b0f2a" stroke="none" stroke-width="0"/></svg>
