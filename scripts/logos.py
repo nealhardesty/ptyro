@@ -1628,14 +1628,34 @@ def bento_ink():
             + pane(336, 266, 120, 190, "#16a34a", 14, f) + check(396, 362, 1.1, "#16a34a"))
 
 
+def fireworks_ink():
+    """05 Fireworks, inverted for white backgrounds: a light tile, deeper colours, navy ink."""
+    cols = ["#e8531f", "#16a34a", "#2d6cdf", "#8b45e6"]
+    out = [tile("#eef2f7")]
+    for k in range(12):
+        a = math.radians(k * 30 + 15)
+        x1, y1 = 256 + 76 * math.cos(a), 256 + 76 * math.sin(a)
+        x2, y2 = 256 + 150 * math.cos(a), 256 + 150 * math.sin(a)
+        x3, y3 = 256 + 196 * math.cos(a), 256 + 196 * math.sin(a)
+        out.append(f'<path d="M{x1:.1f} {y1:.1f}L{x2:.1f} {y2:.1f}" stroke="{cols[k % 4]}" stroke-width="18" '
+                   f'stroke-linecap="round"/><circle cx="{x3:.1f}" cy="{y3:.1f}" r="13" fill="{cols[k % 4]}"/>')
+    out.append('<circle cx="256" cy="256" r="58" fill="#ffffff" stroke="#14192b" stroke-width="10"/>'
+               '<path d="M236 232L264 256L236 280M272 284H290" fill="none" stroke="#14192b" '
+               'stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>')
+    return "".join(out)
+
+
 def brand(out):
-    """The chosen logo (91 Bento Three) as flat files in out/: dark, and inverted for white backgrounds."""
-    for name, body, bg, ink, accent in [
-            ("ptyro", bento_3(), BN, "#e6edf3", BLUE),
-            ("ptyro-on-white", bento_ink(), "#ffffff", "#14192b", "#2d6cdf")]:
-        with open(f"{out}/{name.replace('ptyro', 'ptyro-icon', 1)}.svg", "w") as f:
+    """The chosen logo (91 Bento Three) and its backup (05 Fireworks) as flat files in out/: each on
+    dark, and inverted for white backgrounds (the logo then has a solid white background)."""
+    for suffix, body, bg, ink, accent in [
+            ("", bento_3(), BN, "#e6edf3", BLUE),
+            ("-on-white", bento_ink(), "#ffffff", "#14192b", "#2d6cdf"),
+            ("-alt", fireworks(), "#0b0f2a", "#ffffff", "#ffd93b"),
+            ("-alt-on-white", fireworks_ink(), "#ffffff", "#14192b", "#e08a00")]:
+        with open(f"{out}/ptyro-icon{suffix}.svg", "w") as f:
             f.write(svg(512, 512, body, "ptyro icon"))
-        with open(f"{out}/{name.replace('ptyro', 'ptyro-logo', 1)}.svg", "w") as f:
+        with open(f"{out}/ptyro-logo{suffix}.svg", "w") as f:
             f.write(lockup(body, bg, ink, accent))
 
 
@@ -1663,7 +1683,14 @@ def main(out):
                 '<img src="ptyro-logo.png" alt="ptyro logo" width="480"> <img src="ptyro-icon.png" alt="ptyro icon" width="120">\n\n'
                 '<img src="ptyro-logo-on-white.png" alt="ptyro logo for white backgrounds" width="480"> '
                 '<img src="ptyro-icon-on-white.png" alt="ptyro icon for white backgrounds" width="120">\n\n'
-                "`ptyro-logo` · `ptyro-icon` · `ptyro-logo-on-white` · `ptyro-icon-on-white`, each as `.svg` and `.png`\n\n")
+                "`ptyro-logo` · `ptyro-icon` · `ptyro-logo-on-white` · `ptyro-icon-on-white`, each as `.svg` and `.png`\n\n"
+                "# The backup logo\n\n"
+                "From concept 05 (Fireworks), the alternate if the chosen logo does not work out. Same two sets, "
+                "with `-alt` in the name.\n\n"
+                '<img src="ptyro-logo-alt.png" alt="ptyro alternate logo" width="480"> <img src="ptyro-icon-alt.png" alt="ptyro alternate icon" width="120">\n\n'
+                '<img src="ptyro-logo-alt-on-white.png" alt="ptyro alternate logo for white backgrounds" width="480"> '
+                '<img src="ptyro-icon-alt-on-white.png" alt="ptyro alternate icon for white backgrounds" width="120">\n\n'
+                "`ptyro-logo-alt` · `ptyro-icon-alt` · `ptyro-logo-alt-on-white` · `ptyro-icon-alt-on-white`, each as `.svg` and `.png`\n\n")
         for i, (base, title, blurb) in enumerate(rows):
             if i in heads:
                 f.write(f"# {heads[i]}\n\n")

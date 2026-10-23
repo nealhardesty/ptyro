@@ -12,6 +12,16 @@ From concept 91 (Bento Three). Use the dark set on dark or colourful pages and t
 
 `ptyro-logo` · `ptyro-icon` · `ptyro-logo-on-white` · `ptyro-icon-on-white`, each as `.svg` and `.png`
 
+# The backup logo
+
+From concept 05 (Fireworks), the alternate if the chosen logo does not work out. Same two sets, with `-alt` in the name.
+
+<img src="ptyro-logo-alt.png" alt="ptyro alternate logo" width="480"> <img src="ptyro-icon-alt.png" alt="ptyro alternate icon" width="120">
+
+<img src="ptyro-logo-alt-on-white.png" alt="ptyro alternate logo for white backgrounds" width="480"> <img src="ptyro-icon-alt-on-white.png" alt="ptyro alternate icon for white backgrounds" width="120">
+
+`ptyro-logo-alt` · `ptyro-icon-alt` · `ptyro-logo-alt-on-white` · `ptyro-icon-alt-on-white`, each as `.svg` and `.png`
+
 # The flame
 
 ## 01. Prompt Flame
