@@ -553,3 +553,116 @@ async fn archive_keeps_uncommitted_work_and_restore_brings_it_back() {
         "uncommitted again: {status}"
     );
 }
+
+fn git_out(w: &World, dir: &std::path::Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("HOME", w.home())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// UX1.10: a new worktree can take the main checkout's uncommitted work, or check out an
+/// existing branch.
+#[tokio::test]
+async fn work_moves_into_a_worktree_or_starts_from_a_branch() {
+    let w = World::new("exec sleep 60");
+    let dir = repo(&w, "myrepo");
+    git(&w.home(), &dir, &["branch", "spike"]);
+    std::fs::write(dir.join("README"), "edited in main\n").unwrap();
+    std::fs::write(dir.join("todo.txt"), "new\n").unwrap();
+    let c = w.d.client().await.unwrap();
+    let new = |spec: ptyro_core::model::WorktreeSpec| {
+        let c = &c;
+        async move {
+            match c.request(Request::WorktreeNew { spec }).await.unwrap() {
+                Reply::WorktreeCreated { info, notes, .. } => (info, notes),
+                other => panic!("{other:?}"),
+            }
+        }
+    };
+    let (wt, notes) = new(ptyro_core::model::WorktreeSpec {
+        project: dir.to_string_lossy().into_owned(),
+        name: Some("moved".into()),
+        take_changes: true,
+        fetch: Some(false),
+        ..Default::default()
+    })
+    .await;
+    assert!(
+        notes.iter().any(|n| n.contains("took the main checkout's uncommitted changes")),
+        "{notes:?}"
+    );
+    assert_eq!(std::fs::read_to_string(wt.path.join("README")).unwrap(), "edited in main\n");
+    assert!(wt.path.join("todo.txt").exists());
+    assert!(git_out(&w, &dir, &["status", "--porcelain"]).trim().is_empty(), "main is clean now");
+    assert!(
+        !git_out(&w, &dir, &["rev-parse", "refs/ptyro/taken/moved"]).trim().is_empty(),
+        "a copy"
+    );
+    // Nothing left to take: refused, nothing made.
+    let e = c
+        .request(Request::WorktreeNew {
+            spec: ptyro_core::model::WorktreeSpec {
+                project: dir.to_string_lossy().into_owned(),
+                take_changes: true,
+                fetch: Some(false),
+                ..Default::default()
+            },
+        })
+        .await
+        .unwrap_err();
+    assert!(e.message.contains("nothing to take"), "{}", e.message);
+    // Branches a worktree could check out: `spike` (main and `ptyro/moved` have worktrees).
+    let Reply::Branches { names } =
+        c.request(Request::Branches { project: "myrepo".into() }).await.unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(names, vec!["spike".to_owned()]);
+}
+
+/// UX1.11: a project's first worktree gets what its lockfile and `.env` imply, written to
+/// `.ptyro.local.toml` after a yes, trusted, and never offered again.
+#[tokio::test]
+async fn a_first_worktree_is_offered_its_setup_once() {
+    let w = World::new("exec sleep 60");
+    let dir = repo(&w, "web");
+    std::fs::write(dir.join("package-lock.json"), "{}").unwrap();
+    std::fs::write(dir.join(".gitignore"), ".env\n").unwrap();
+    std::fs::write(dir.join(".env"), "TOKEN=1\n").unwrap();
+    git(&w.home(), &dir, &["add", "package-lock.json", ".gitignore"]);
+    git(&w.home(), &dir, &["commit", "-qm", "deps"]);
+    let c = w.d.client().await.unwrap();
+    c.request(Request::ProjectAdd { path: dir.clone(), workspace: None }).await.unwrap();
+    let suggest = |apply: Option<bool>| {
+        let c = &c;
+        async move {
+            match c.request(Request::ProjectSuggest { addr: "web".into(), apply }).await.unwrap() {
+                Reply::Suggestions { suggestions } => suggestions,
+                other => panic!("{other:?}"),
+            }
+        }
+    };
+    let s = suggest(None).await;
+    assert_eq!(
+        (s.setup.as_deref(), s.from.as_deref()),
+        (Some("npm ci"), Some("package-lock.json"))
+    );
+    assert_eq!(s.copy, vec![".env".to_owned()]);
+    assert!(!s.offered);
+    let after = suggest(Some(true)).await;
+    assert!(after.offered && after.setup.is_none(), "taken: nothing more to suggest: {after:?}");
+    let local = std::fs::read_to_string(dir.join(".ptyro.local.toml")).unwrap();
+    assert!(local.contains("setup = \"npm ci\"") && local.contains("copy = [\".env\"]"), "{local}");
+    let Reply::Scripts { scripts } =
+        c.request(Request::ProjectScripts { addr: "web".into(), worktree: None }).await.unwrap()
+    else {
+        panic!()
+    };
+    assert!(scripts.trusted, "the scripts you just approved are trusted");
+}

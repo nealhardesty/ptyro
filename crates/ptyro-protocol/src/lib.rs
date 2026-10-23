@@ -414,6 +414,19 @@ pub enum Request {
     },
     /// Stale worktrees (never removes anything).
     Gc,
+    /// A project's branches a worktree could check out (UX1.10): local ones not checked out
+    /// anywhere, then the main remote's without a local branch.
+    Branches {
+        project: String,
+    },
+    /// What a project's first worktree could use (UX1.11): a setup script from its lockfile,
+    /// `.env` files to copy. `apply`: `Some(true)` writes them to `.ptyro.local.toml`,
+    /// `Some(false)` declines; either way they're never offered again.
+    ProjectSuggest {
+        addr: String,
+        #[serde(default)]
+        apply: Option<bool>,
+    },
     /// Archive a worktree (UX1.12): snapshot its files, keep its branch, remove it. Never loses
     /// work, so it doesn't refuse the way removing does. `stop_sessions` stops what runs in it.
     WorktreeArchive {
@@ -1056,6 +1069,12 @@ pub enum Reply {
     },
     Archives {
         entries: Vec<ptyro_core::model::ArchiveEntry>,
+    },
+    Branches {
+        names: Vec<String>,
+    },
+    Suggestions {
+        suggestions: ptyro_core::model::SetupSuggestions,
     },
     Profiles {
         profiles: Vec<ProfileInfo>,

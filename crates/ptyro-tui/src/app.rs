@@ -106,6 +106,12 @@ pub enum Overlay {
         naming: bool,
         wizard: Wizard,
     },
+    /// A project's first worktree (UX1.11): what ptyro found it needs; y writes it locally.
+    Suggest {
+        suggestions: ptyro_core::model::SetupSuggestions,
+        spec: Box<WorktreeSpec>,
+        split: Option<Dir>,
+    },
     /// Lifecycle scripts shown in full before trusting them (SPEC §10.5).
     Trust {
         scripts: ScriptsInfo,
@@ -128,6 +134,44 @@ pub struct Wizard {
     pub prompt: Option<String>,
     /// A name to offer, dimmed, that ⏎ takes when nothing was typed (UX1.24).
     pub suggested: Option<String>,
+    /// Where the work comes from (UX1.10): a PR, an issue, an existing branch, or the main
+    /// checkout's uncommitted changes.
+    pub pr: Option<u32>,
+    pub issue: Option<String>,
+    pub branch: Option<String>,
+    pub take: bool,
+}
+
+/// A PR or an issue named in text (UX1.10): a GitHub URL, or `pr 12` / `issue 12`.
+pub fn work_source(text: &str) -> Option<(Option<u32>, Option<String>)> {
+    let t = text.trim();
+    let number_after = |key: &str| {
+        t.split(key).nth(1).and_then(|r| {
+            r.trim_start_matches('#')
+                .split(|c: char| !c.is_ascii_digit())
+                .next()?
+                .parse::<u32>()
+                .ok()
+        })
+    };
+    if t.contains("github.com/") && t.contains("/pull/") {
+        return number_after("/pull/").map(|n| (Some(n), None));
+    }
+    if t.contains("github.com/") && t.contains("/issues/") {
+        return number_after("/issues/")
+            .map(|_| (None, Some(t.split_whitespace().next().unwrap_or(t).to_owned())));
+    }
+    let lower = t.to_lowercase();
+    let rest = |p: &str| {
+        lower.strip_prefix(p).and_then(|r| r.trim().trim_start_matches('#').parse::<u32>().ok())
+    };
+    if let Some(n) = rest("pr ").or_else(|| rest("pr#")) {
+        return Some((Some(n), None));
+    }
+    if let Some(n) = rest("issue ").or_else(|| rest("issue#")) {
+        return Some((None, Some(n.to_string())));
+    }
+    None
 }
 
 #[derive(Debug, Clone)]
@@ -154,6 +198,8 @@ pub enum Purpose {
     Restore,
     /// A stale worktree to clean up (archive).
     Gc,
+    /// The existing branch a new worktree checks out (UX1.10).
+    Branch(Wizard),
 }
 
 /// What asked for a project when there was none (UX1.6): done once the project is added.
@@ -191,6 +237,8 @@ pub enum PromptKind {
     Retitle(SessionId),
     /// A worktree's title (by id).
     RetitleWorktree(String),
+    /// A PR or issue to start a worktree from (UX1.10).
+    WorkSource(Wizard),
     /// Typed in the runs view (M7).
     Orch(crate::runs::OrchInput),
     /// Typed in the change-set view (M11).
@@ -308,6 +356,14 @@ pub enum Pending {
     Archives,
     /// Stale worktrees, for the clean-up picker.
     Gc,
+    /// The project's branches, for the wizard (UX1.10).
+    Branches(Wizard),
+    /// Setup suggestions before a project's first worktree (UX1.11).
+    Suggest(Box<WorktreeSpec>, Option<Dir>),
+    /// They were written: check the scripts (trust) again, then create.
+    Suggested(Box<WorktreeSpec>, Option<Dir>),
+    /// `project.suggest`: say what was found, offering to use it.
+    SuggestShow(String),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1489,11 +1545,83 @@ impl App {
                         then: AfterTrust::Create(spec, split),
                         scroll: 0,
                     });
+                } else if !scripts.names.iter().any(|n| n == "setup") && spec.setup {
+                    // No setup yet: on a project's first worktree, what ptyro found (UX1.11).
+                    let addr = spec.project.clone();
+                    self.request(
+                        Pending::Suggest(spec, split),
+                        Request::ProjectSuggest { addr, apply: None },
+                    );
                 } else {
                     self.create_worktree(*spec, split);
                 }
             }
             (Pending::PreCreate(spec, split), Err(_)) => self.create_worktree(*spec, split),
+            (Pending::Suggest(spec, split), Ok(Reply::Suggestions { suggestions })) => {
+                if suggestions.offered || suggestions.is_empty() {
+                    self.create_worktree(*spec, split);
+                } else {
+                    self.overlay = Some(Overlay::Suggest { suggestions, spec, split });
+                }
+            }
+            (Pending::Suggest(spec, split), Err(_)) => self.create_worktree(*spec, split),
+            (Pending::SuggestShow(project), Ok(Reply::Suggestions { suggestions: s })) => {
+                if s.is_empty() {
+                    self.toast(format!(
+                        "{}: nothing to suggest (its config has what it needs)",
+                        s.project
+                    ));
+                } else {
+                    let mut found = Vec::new();
+                    if let Some(cmd) = &s.setup {
+                        found.push(format!("setup: {cmd}"));
+                    }
+                    if !s.copy.is_empty() {
+                        found.push(format!("copy {}", s.copy.join(", ")));
+                    }
+                    self.toast_offer(
+                        format!("{}: {}", s.project, found.join(" · ")),
+                        false,
+                        Offer {
+                            label: "use them (.ptyro.local.toml)".into(),
+                            then: Then::Send(
+                                Box::new(Request::ProjectSuggest {
+                                    addr: project,
+                                    apply: Some(true),
+                                }),
+                                "written to .ptyro.local.toml".into(),
+                            ),
+                        },
+                    );
+                }
+            }
+            (Pending::Suggested(spec, split), Ok(_)) => {
+                self.toast("written to .ptyro.local.toml (yours, not committed)");
+                let addr = spec.project.clone();
+                self.request(
+                    Pending::PreCreate(spec, split),
+                    Request::ProjectScripts { addr, worktree: None },
+                );
+            }
+            (Pending::Branches(w), Ok(Reply::Branches { names })) => {
+                if names.is_empty() {
+                    self.toast("no branch to check out: every one has a worktree");
+                } else {
+                    let items = names
+                        .into_iter()
+                        .map(|b| Item {
+                            label: b.clone(),
+                            detail: "check it out in a new worktree".into(),
+                            key: None,
+                            target: Target::Path(b.into()),
+                        })
+                        .collect();
+                    self.overlay = Some(Overlay::Picker {
+                        palette: Palette::new("On which branch?", items),
+                        purpose: Purpose::Branch(w),
+                    });
+                }
+            }
             (Pending::Removed(_), Ok(Reply::Removed { notes })) => self.toast(notes.join(" · ")),
             (Pending::Removed(id), Err(e)) if e.code == ErrorCode::DirtyWorktree => {
                 self.overlay = Some(Overlay::Confirm {
@@ -2013,6 +2141,13 @@ impl App {
                 None => self.pick_project(Some(AfterAdd::Run("script.pick"))),
             },
             "project.add" => self.pick_project(None),
+            "project.suggest" => match self.context().0 {
+                Some(p) => self.request(
+                    Pending::SuggestShow(p.clone()),
+                    Request::ProjectSuggest { addr: p, apply: None },
+                ),
+                None => self.pick_project(Some(AfterAdd::Run("project.suggest"))),
+            },
             "project.trust" => match self.context().0 {
                 Some(p) => self.request(
                     Pending::TrustDialog(AfterTrust::Nothing),
@@ -2639,6 +2774,18 @@ impl App {
         w: &Wizard,
     ) -> (Option<String>, String, String) {
         let agent = ptyro_agents::default_agent(&self.config);
+        // A PR or issue pasted in: a worktree on it (UX1.10).
+        if let Some((pr, issue)) = work_source(text) {
+            let slug = name.map(str::to_owned).or_else(|| pr.map(|n| format!("pr-{n}")));
+            let place = match (pr, &issue) {
+                (Some(n), _) => format!("PR #{n}'s branch, in a new worktree"),
+                (None, Some(i)) => {
+                    format!("a new worktree for issue {}", i.rsplit('/').next().unwrap_or(i))
+                }
+                _ => String::new(),
+            };
+            return (slug, agent, place);
+        }
         let slug = name.map(str::to_owned).or_else(|| ptyro_core::names::from_text(text)).map(
             |n| match &w.project {
                 Some(p) if name.is_none() => self.free_worktree_name(p, Some(&n)),
@@ -2817,6 +2964,12 @@ impl App {
     fn start_task(&mut self, text: String, name: Option<String>, w: Wizard) {
         let text = text.trim().to_owned();
         let (slug, agent, _) = self.task_plan(&text, name.as_deref(), &w);
+        if let (Some((pr, issue)), Some(p)) = (work_source(&text), w.project.clone()) {
+            // The issue's text becomes the prompt (the daemon's); a PR's agent starts on its branch.
+            let w = Wizard { agent: Some(agent), name: slug, pr, issue, ..w };
+            self.wizard_done(w, Target::NewWorktree(p));
+            return;
+        }
         let prompt = (!text.is_empty()).then_some(text);
         let w = Wizard { agent: Some(agent), name: slug, prompt, ..w };
         match w.project.clone() {
@@ -2961,6 +3114,35 @@ impl App {
                 target: Target::Worktree(x.id.clone()),
             });
         }
+        // Where else the work can come from (UX1.10).
+        if let Some(p) = &project {
+            items.push(Item {
+                label: "+ from a PR or an issue…".into(),
+                detail: "paste its URL, or its number".into(),
+                key: None,
+                target: Target::Action(Command { action: "wizard.from", arg: None }),
+            });
+            items.push(Item {
+                label: "+ on an existing branch…".into(),
+                detail: "a branch without a worktree, local or the remote's".into(),
+                key: None,
+                target: Target::Action(Command { action: "wizard.branch", arg: None }),
+            });
+            let dirty = self
+                .worktrees
+                .iter()
+                .find(|x| x.project == p.id && x.is_root)
+                .and_then(|x| x.status.as_ref())
+                .is_some_and(|s| s.dirty() > 0);
+            if dirty {
+                items.push(Item {
+                    label: "+ with my uncommitted changes".into(),
+                    detail: format!("a new worktree takes them from {}'s main checkout", p.slug),
+                    key: None,
+                    target: Target::Action(Command { action: "wizard.take", arg: None }),
+                });
+            }
+        }
         let here = self.here().display().to_string();
         items.push(Item { label: "here".into(), detail: here, key: None, target: Target::Here });
         if project.is_none() {
@@ -3006,6 +3188,12 @@ impl App {
                     prompt: w.prompt.clone().filter(|_| agent.is_some()),
                     title: w.prompt.clone(),
                     agent,
+                    // Where the work comes from (UX1.10).
+                    pr: w.pr,
+                    issue: w.issue.clone(),
+                    existing: w.branch.is_some(),
+                    branch: w.branch.clone(),
+                    take_changes: w.take,
                     ..WorktreeSpec::default()
                 };
                 let req = Request::ProjectScripts { addr: project, worktree: None };
@@ -3498,6 +3686,24 @@ impl App {
             Overlay::Task { text, name, naming, wizard } => {
                 self.task_key(key, text, name, naming, wizard)
             }
+            Overlay::Suggest { suggestions, spec, split } => match key.code {
+                KeyCode::Char { c: 'y' | 'Y' } | KeyCode::Enter => {
+                    // Written (and trusted when they're its only scripts); then the usual check.
+                    let addr = spec.project.clone();
+                    self.request(
+                        Pending::Suggested(spec, split),
+                        Request::ProjectSuggest { addr, apply: Some(true) },
+                    );
+                }
+                KeyCode::Char { c: 'n' | 'N' } | KeyCode::Esc => {
+                    self.request(
+                        Pending::Done(String::new()),
+                        Request::ProjectSuggest { addr: spec.project.clone(), apply: Some(false) },
+                    );
+                    self.create_worktree(*spec, split);
+                }
+                _ => self.overlay = Some(Overlay::Suggest { suggestions, spec, split }),
+            },
             Overlay::Picker { mut palette, purpose } => match palette.key(key) {
                 Picked::Stay => self.overlay = Some(Overlay::Picker { palette, purpose }),
                 Picked::Close => {}
@@ -3663,6 +3869,32 @@ impl App {
                 t @ (Target::NewWorktree(_) | Target::Worktree(_) | Target::Here),
                 Purpose::Target(w),
             ) => self.wizard_done(w, t),
+            // The wizard's other sources (UX1.10).
+            (Target::Action(Command { action: "wizard.from", .. }), Purpose::Target(w)) => {
+                self.overlay = Some(Overlay::Prompt {
+                    title: "From which PR or issue? (its URL, `pr 12` or `issue 34`)".into(),
+                    text: String::new(),
+                    kind: PromptKind::WorkSource(w),
+                });
+            }
+            (Target::Action(Command { action: "wizard.branch", .. }), Purpose::Target(w)) => {
+                let project = w.project.clone().unwrap_or_default();
+                self.request(Pending::Branches(w), Request::Branches { project });
+            }
+            (Target::Action(Command { action: "wizard.take", .. }), Purpose::Target(w)) => {
+                let project = w.project.clone().unwrap_or_default();
+                self.wizard_done(Wizard { take: true, ..w }, Target::NewWorktree(project));
+            }
+            (Target::Path(b), Purpose::Branch(w)) => {
+                let project = w.project.clone().unwrap_or_default();
+                let branch = b.to_string_lossy().into_owned();
+                let w = Wizard {
+                    name: w.name.clone().or_else(|| ptyro_core::names::from_text(&branch)),
+                    branch: Some(branch),
+                    ..w
+                };
+                self.wizard_done(w, Target::NewWorktree(project));
+            }
             (Target::Workspace(name), _) => self.switch_workspace(name),
             (Target::NewWorkspace, _) => {
                 self.overlay = Some(Overlay::Prompt {
@@ -3886,6 +4118,13 @@ impl App {
                     Request::Retitle { addr: id.full(), title, worktree: false },
                 );
             }
+            PromptKind::WorkSource(w) => match work_source(&text) {
+                Some((pr, issue)) => {
+                    let project = w.project.clone().unwrap_or_default();
+                    self.wizard_done(Wizard { pr, issue, ..w }, Target::NewWorktree(project));
+                }
+                None => self.toast_err("not a PR or issue: paste its GitHub URL, or `pr 12`"),
+            },
             PromptKind::RetitleWorktree(id) => {
                 let title = Some(text.trim().to_owned()).filter(|t| !t.is_empty());
                 let done = if title.is_some() { "retitled" } else { "title cleared" };
@@ -5522,6 +5761,84 @@ mod tests {
         for a in ["worktree.finish", "worktree.archive", "shell.here"] {
             assert!(actions.contains(&a) && keymap::spec(a).is_some(), "{a}");
         }
+    }
+
+    #[test]
+    fn prs_and_issues_are_recognised_in_text() {
+        assert_eq!(work_source("https://github.com/acme/app/pull/123"), Some((Some(123), None)));
+        assert_eq!(
+            work_source("https://github.com/acme/app/pull/123/files"),
+            Some((Some(123), None))
+        );
+        assert_eq!(
+            work_source("https://github.com/acme/app/issues/45"),
+            Some((None, Some("https://github.com/acme/app/issues/45".into())))
+        );
+        assert_eq!(work_source("pr 7"), Some((Some(7), None)));
+        assert_eq!(work_source("PR #7"), Some((Some(7), None)));
+        assert_eq!(work_source("issue 9"), Some((None, Some("9".into()))));
+        assert_eq!(work_source("fix the pr template"), None);
+        assert_eq!(work_source("pr seven"), None);
+    }
+
+    #[test]
+    fn work_can_come_from_a_pr_a_branch_or_your_changes() {
+        let mut app = app();
+        with_project(&mut app);
+        // The task box takes a pasted PR.
+        app.run(&Command { action: "session.new", arg: None });
+        typed(&mut app, "https://github.com/acme/app/pull/12");
+        assert!(screen(&app).contains("→ pr-12 · claude · PR #12's branch, in a new worktree"));
+        // The wizard's "where": a PR or issue, a branch, and (the main checkout is dirty) your
+        // changes.
+        app.overlay = None;
+        let st = ptyro_core::model::RepoStatus { modified: 2, ..Default::default() };
+        app.worktrees[0].status = Some(st);
+        app.open_targets(Wizard { project: Some("p1".into()), ..Wizard::default() });
+        let Some(Overlay::Picker { palette, .. }) = &app.overlay else { panic!() };
+        let labels: Vec<&str> =
+            (0..palette.filtered.len()).map(|i| palette.item(i).label.as_str()).collect();
+        for want in [
+            "+ from a PR or an issue…",
+            "+ on an existing branch…",
+            "+ with my uncommitted changes",
+        ] {
+            assert!(labels.contains(&want), "{want}: {labels:?}");
+        }
+    }
+
+    #[test]
+    fn a_first_worktree_offers_what_the_project_needs() {
+        let mut app = app();
+        with_project(&mut app);
+        let spec = WorktreeSpec { project: "p1".into(), setup: true, ..WorktreeSpec::default() };
+        let suggestions = ptyro_core::model::SetupSuggestions {
+            project: "myrepo".into(),
+            setup: Some("pnpm install --frozen-lockfile".into()),
+            from: Some("pnpm-lock.yaml".into()),
+            copy: vec![".env".into()],
+            offered: false,
+        };
+        app.on_reply(AppMsg::Reply(
+            Pending::Suggest(Box::new(spec.clone()), None),
+            Ok(Reply::Suggestions { suggestions: suggestions.clone() }),
+        ));
+        let shown = screen(&app);
+        assert!(
+            shown.contains("pnpm-lock.yaml → setup: pnpm install --frozen-lockfile"),
+            "{shown}"
+        );
+        assert!(shown.contains(".env → copied into each worktree"), "{shown}");
+        key(&mut app, KeyCode::Char { c: 'n' }, Mods::NONE);
+        assert!(app.overlay.is_none(), "declined: the worktree is made without them");
+        // Offered once: not again.
+        app.on_reply(AppMsg::Reply(
+            Pending::Suggest(Box::new(spec), None),
+            Ok(Reply::Suggestions {
+                suggestions: ptyro_core::model::SetupSuggestions { offered: true, ..suggestions },
+            }),
+        ));
+        assert!(app.overlay.is_none());
     }
 
     #[test]

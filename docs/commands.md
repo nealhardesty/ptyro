@@ -28,7 +28,7 @@ Conventions:
 | `ptyro "TASK…"` | the default agent on that task, in a new worktree named after it (here, outside a repository); then attach |
 | `ptyro new [-d] [-n NAME] [-C DIR] [--size COLSxROWS] [--json] [-- CMD…]` | start a session; attaches unless `-d`. No `--agent` means your shell, or `CMD` |
 | `ptyro new … --agent A[@PROFILE] [--profile P] [--override-pin] [-y]` | start an agent: `claude`, `codex`, `gemini`, `opencode`, or one from `[agents]` |
-| `ptyro new … --wt W \| --new-wt [NAME] [--project P] \| --pr N\|URL \| --issue N\|URL` | where: an existing worktree, a new one, one on a PR's branch, or one for an issue |
+| `ptyro new … --wt W \| --new-wt [NAME] [--project P] \| --pr N\|URL \| --issue N\|URL \| --take-changes` | where: an existing worktree, a new one, one on a PR's branch, one for an issue, or one that takes the main checkout's uncommitted changes |
 | `ptyro new … --prompt TEXT\|@SNIPPET \| --prompt-file F` · `--title T` | the first prompt, typed once the agent's input box is really there · its title (default: the prompt; the name comes from it too) |
 | `ptyro new … --verify CHECK` · `--structured` · `--unqueued` | verified-done · drive it over its protocol (chat view) · skip the review queue's hold |
 | `ptyro new … --lead [--max-workers N] [--lead-agent A]` | a lead agent with `ptyro mcp` (default 4 workers) |
@@ -75,7 +75,8 @@ Conventions:
 | `ptyro project trust [P] [-y]` / `untrust [P]` | review and trust a project's scripts |
 | `ptyro project config [P] [--explain] [--json]` | the effective project config, and where each value came from |
 | `ptyro project discover [--refresh]` · `pin P PROFILE` · `unpin P` | find repos under `[discover] roots` · pin a project to a profile |
-| `ptyro wt new [NAME] [-p P] [--base REF] [--branch B [--existing]] [--pr N\|URL \| --issue N\|URL] [-a A [--prompt P]] [--profile P] [--no-setup] [--no-fetch] [--attach]` | create a worktree (optionally with an agent) |
+| `ptyro project suggest [P] [--apply\|--decline] [--json]` | what the project needs (a setup script from its lockfile, `.env` files to copy); `--apply` writes it to `.ptyro.local.toml`. A first worktree asks on its own |
+| `ptyro wt new [NAME] [-p P] [--base REF] [--branch B [--existing]] [--pr N\|URL \| --issue N\|URL \| --take-changes] [-a A [--prompt P]] [--title T] [--profile P] [--no-setup] [--no-fetch] [--attach]` | create a worktree (optionally with an agent); `--take-changes` moves the main checkout's uncommitted work into it |
 | `ptyro wt ls [--project P]` / `status [W]` / `log [W]` | list worktrees / repository status / commits since the base |
 | `ptyro wt diff [W] [--against base\|upstream\|last-turn\|head] [--stat]` | a worktree's changes |
 | `ptyro wt commit [W] -m MSG [-a] [-- FILES…]` / `--ask-agent` | commit as the worktree's profile / ask its agent to |

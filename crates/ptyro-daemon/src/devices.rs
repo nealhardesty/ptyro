@@ -108,6 +108,7 @@ pub fn needed(req: &Request) -> Scope {
         | CheckpointList { .. }
         | CheckpointDiff { .. }
         | WorktreeArchives { .. }
+        | Branches { .. }
         | ProfileList
         | ReviewList { .. }
         | ReviewQueue

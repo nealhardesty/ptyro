@@ -1376,19 +1376,25 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
     and `wt new` (`run` takes none: its sessions are scripts); PR and issue worktrees take their
     title. TUI and end-to-end tests cover prompts, nothing typed, suggestions, an edited name,
     retitling and a restart (SPEC §2.1, §11.2h, §14.2).
-- [ ] **UX1.10 Where work comes from** (R-WT-05) — M. The wizard's target step offers:
+- [x] **UX1.10 Where work comes from** (R-WT-05) — M. The wizard's target step offers:
   - a pasted GitHub PR or issue URL (→ `--pr` / `--issue`);
   - an existing branch (`--existing`);
   - "take my uncommitted changes": they move from `@root` into the new worktree
     (`ptyro new --take-changes`), stashed safely if anything fails.
-- [ ] **UX1.11 Setup suggestions on first use** (R-WT-10) — S. On a project's first worktree,
+  - *Done (2026-10-22):* `WorktreeSpec.take_changes` (a copy at `refs/ptyro/taken/<name>`;
+    the main checkout is cleaned only once the changes are in), `Branches`, `work_source` in
+    the task box and the wizard. `tests/ux1.rs` moves changes and lists branches (SPEC §10.3).
+- [x] **UX1.11 Setup suggestions on first use** (R-WT-10) — S. On a project's first worktree,
   ptyro suggests what it detects:
   - lockfiles suggest a setup script (`pnpm-lock.yaml` → `pnpm install --frozen-lockfile`,
     `uv.lock` → `uv sync`, …);
   - ignored `.env*` files at the root suggest a `.worktreeinclude`.
 
   The suggestions are shown in the trust dialog and written to the local (uncommitted) project
-  config only after a yes. Never on later worktrees.
+  config only after a yes. Never on later worktrees. *Done (2026-10-22):*
+  `crates/ptyro-daemon/src/suggest.rs`, `ptyro project suggest`, the TUI's dialog before the first
+  worktree and `project.suggest`; the CLI asks on a terminal. Written to `.ptyro.local.toml`
+  and trusted when they're the only scripts; asked once (SPEC §10.4).
 - [x] **UX1.12 Finish and clean up** (R-WT-06, R-WT-09) — M. A worktree's **finish** action
   (row menu and inspector):
   - commit, with the agent asked for the message;

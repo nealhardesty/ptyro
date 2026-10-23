@@ -273,7 +273,27 @@ impl Daemon {
         }
         let mut notes: Vec<String> = res.warning.into_iter().chain(issue_note).collect();
         notes.push(format!("profile {} ({})", res.profile, res.reason.label()));
-        let (source, branch) = match (spec.pr, spec.existing, spec.branch.clone()) {
+        // `take_changes` (UX1.10): the main checkout's uncommitted work, snapshot first; the
+        // worktree starts where the main checkout is, so the changes apply as they were.
+        let taken = if spec.take_changes {
+            let root = p.root.clone();
+            Some(
+                blocking(move || -> Result<ptyro_git::orch::Snapshot, Error> {
+                    let git = Git::new();
+                    if git.status(&root, None).map_err(git_err)?.dirty() == 0 {
+                        return Err(Error::invalid(
+                            "nothing to take: the main checkout has no uncommitted changes",
+                        ));
+                    }
+                    git.checkpoint(&root, "ptyro: changes taken into a new worktree")
+                        .map_err(git_err)
+                })
+                .await??,
+            )
+        } else {
+            None
+        };
+        let (mut source, branch) = match (spec.pr, spec.existing, spec.branch.clone()) {
             (Some(n), _, b) => {
                 let branch = b.unwrap_or_else(|| format!("pr/{n}"));
                 let remote = Git::new()
@@ -296,6 +316,11 @@ impl Daemon {
                 (Source::NewBranch { branch: branch.clone(), base }, branch)
             }
         };
+        if let Some(head) = taken.as_ref().and_then(|t| t.head.clone())
+            && let Source::NewBranch { base, .. } = &mut source
+        {
+            *base = head;
+        }
         let base = match &source {
             Source::NewBranch { base, .. } => Some(base.clone()),
             _ => root_wt.base.clone(),
@@ -382,6 +407,27 @@ impl Daemon {
                 self.drop_worktree(wt);
                 return Err(e);
             }
+        }
+        if let Some(t) = taken {
+            // A copy first; the main checkout gives its changes up only once they're here.
+            let (root, path, commit, refname) =
+                (p.root.clone(), path.clone(), t.commit, format!("refs/ptyro/taken/{name}"));
+            let shown = refname.clone();
+            let moved = blocking(move || -> Result<(), ptyro_git::GitError> {
+                let git = Git::new();
+                git.update_ref(&root, &refname, &commit)?;
+                git.restore(&path, &commit)?;
+                git.run(&root, &["reset", "-q", "--hard"])?;
+                git.run(&root, &["clean", "-q", "-fd"])?;
+                Ok(())
+            })
+            .await?;
+            notes.push(match moved {
+                Ok(()) => format!("took the main checkout's uncommitted changes (a copy stays at {shown})"),
+                Err(e) => format!(
+                    "couldn't move the main checkout's changes ({e}); they're still there, and a copy is at {shown}"
+                ),
+            });
         }
         let cfg = ProjectConfig::load(&p.root, &path).unwrap_or(root_cfg);
         progress("copying files git doesn't carry");
@@ -1003,6 +1049,50 @@ impl Daemon {
             }
             Request::WorktreeRestore { addr } => self.restore_worktree(&addr).await,
             Request::WorktreeArchives { project } => self.list_archives(project.as_deref()).await,
+            Request::ProjectSuggest { addr, apply } => self.project_suggest(&addr, apply).await,
+            Request::Branches { project } => {
+                let p = self.find_project(&project)?;
+                let used: Vec<String> = {
+                    let reg = self.registry.lock().expect("registry");
+                    reg.worktrees
+                        .iter()
+                        .filter(|w| w.project == p.id)
+                        .filter_map(|w| w.branch.clone())
+                        .collect()
+                };
+                let root = p.root.clone();
+                let names = blocking(move || {
+                    let git = Git::new();
+                    let refs = |pattern: &str| -> Vec<String> {
+                        git.run(
+                            &root,
+                            &[
+                                "for-each-ref",
+                                "--sort=-committerdate",
+                                "--format=%(refname:short)",
+                                pattern,
+                            ],
+                        )
+                        .map(|o| o.lines().map(str::to_owned).collect())
+                        .unwrap_or_default()
+                    };
+                    let local = refs("refs/heads/");
+                    let remote = git.main_remote(&root).map(|r| r.name);
+                    let mut names: Vec<String> =
+                        local.iter().filter(|b| !used.contains(b)).cloned().collect();
+                    if let Some(r) = remote {
+                        for b in refs(&format!("refs/remotes/{r}/")) {
+                            let short = b.strip_prefix(&format!("{r}/")).unwrap_or(&b).to_owned();
+                            if short != "HEAD" && !local.contains(&short) {
+                                names.push(short);
+                            }
+                        }
+                    }
+                    names
+                })
+                .await?;
+                Ok(Reply::Branches { names })
+            }
             Request::WorktreeFinish { addr, integrate } => {
                 self.finish_worktree(&addr, integrate).await
             }

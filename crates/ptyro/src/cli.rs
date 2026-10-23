@@ -109,6 +109,7 @@ async fn dispatch(
             prompt,
             prompt_file,
             title,
+            take_changes,
             pr,
             issue,
             unqueued,
@@ -150,6 +151,7 @@ async fn dispatch(
                 yes,
                 prompt,
                 title,
+                take_changes,
                 pr,
                 issue,
                 unqueued,
@@ -157,7 +159,9 @@ async fn dispatch(
                 lead,
                 structured,
             };
-            let new_wt = new_wt.or_else(|| (a.pr.is_some() || a.issue.is_some()).then(String::new));
+            let new_wt = new_wt.or_else(|| {
+                (a.pr.is_some() || a.issue.is_some() || a.take_changes).then(String::new)
+            });
             match new_wt {
                 Some(wt_name) => {
                     crate::projects::new_in_new_worktree(&ctx, a, wt_name, project).await
@@ -616,6 +620,8 @@ pub struct NewArgs {
     pub prompt: Option<String>,
     /// Its title (UX1.24).
     pub title: Option<String>,
+    /// A new worktree taking the main checkout's changes (UX1.10).
+    pub take_changes: bool,
     pub pr: Option<u32>,
     pub issue: Option<String>,
     pub unqueued: bool,

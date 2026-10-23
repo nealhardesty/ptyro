@@ -56,6 +56,7 @@ the same check through `make test`. When you add a command, add its row here.
 |---|---|
 | `project add` | `project.add`: pick from discovered repositories, or "here" |
 | `project discover` | `project.add` (it discovers) |
+| `project suggest` | `project.suggest`; a project's first worktree offers it on its own |
 | `project ls` | shown: the sidebar lists the workspace's projects |
 | `project show` | gap: UX1.21 |
 | `project rm` | gap: UX1.21 |

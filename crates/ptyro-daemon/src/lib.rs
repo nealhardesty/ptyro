@@ -26,6 +26,7 @@ mod serve_child;
 mod session;
 mod sidecar;
 mod structured;
+mod suggest;
 mod usage;
 mod verify;
 mod watchdog;

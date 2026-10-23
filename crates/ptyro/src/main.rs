@@ -99,6 +99,9 @@ enum Cmd {
         /// What it's for, for people to read (default: the prompt); the name stays its address
         #[arg(long)]
         title: Option<String>,
+        /// In a new worktree that takes the main checkout's uncommitted changes with it
+        #[arg(long, conflicts_with_all = ["wt", "pr", "issue"])]
+        take_changes: bool,
         /// In a new worktree checked out from this pull request (number or URL)
         #[arg(long, value_parser = parse_number, conflicts_with_all = ["wt", "issue"])]
         pr: Option<u32>,

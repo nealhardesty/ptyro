@@ -2577,7 +2577,7 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 | R-WT-02 | `ptyro new --pr 1234`: worktree from a PR head | Claude `--worktree "#1234"`, git-gtr, Jean, workmux | M6 | S | ★★ | **built M6.6** (2026-10-20): `new --pr N|URL` |
 | R-WT-03 | **Import competitors' committed config** as setup/run sources, shown in the trust dialog: `.claude/launch.json` (`autoPort`), `.conductor/settings.toml`, `.superset/config.json`, `.codex/` environments, `copilot-setup-steps.yml`, `.cursor/environment.json` | Claude desktop, Conductor, Superset, Codex, Copilot, Cursor | M3 | M | ★★★ | **built M5.10** (2026-10-20) |
 | R-WT-04 | `symlink = [...]` next to copy rules (`node_modules`, caches) | workmux | M3 | S | ★★ | new |
-| R-WT-05 | Move work between checkout and worktree: `ptyro new --take-changes`; `ptyro wt adopt <session>` promotes a main-checkout session into a worktree; `ptyro pause`/`resume` frees the branch | workmux, Codex app, claude-squad | M3 / M6 | M | ★★ | `--take-changes` → UX1.10 (2026-10-22); `wt adopt`, pause/resume still new |
+| R-WT-05 | Move work between checkout and worktree: `ptyro new --take-changes`; `ptyro wt adopt <session>` promotes a main-checkout session into a worktree; `ptyro pause`/`resume` frees the branch | workmux, Codex app, claude-squad | M3 / M6 | M | ★★ | `--take-changes` → UX1.10, built 2026-10-22; `wt adopt`, pause/resume still new |
 | R-WT-06 | **Safe archive / shelve**: snapshot to `refs/ptyro/archive/<wt>`, remove the worktree, keep the branch; `ptyro wt restore`. A third option beside "refuse removal" | VS Code, andyrewlee/amux | M3 | S | ★★ | → UX1.12, built 2026-10-22 |
 | R-WT-07 | `ptyro adopt <path>` for worktrees created outside ptyro | andyrewlee/amux | M3 | S | ★ | new |
 | R-WT-08 | Run and surface the dev server per worktree (URL in sidebar) on the allocated port | uzi, Superset, cmux | M3 / M4 | S | ★★ | new |
@@ -2616,7 +2616,7 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 | R-UX-27 | **Errors offer the fix**: no toast names a command to type; it carries a key that does it | owner (2026-10-22) | UX1 | S | ★★★ | → UX1.17 (2026-10-22) |
 | R-UX-28 | **Context hints**: the status bar's hints follow the selection (blocked → answer, diff → review, merged → clean up) | owner (2026-10-22) | UX1 | S | ★★ | → UX1.16 (2026-10-22) |
 | R-UX-29 | **Name and title**: every create dialog shows a suggested name (from the prompt, PR or branch) that ⏎ accepts; a fixed, slugged name for addresses and a separate free-text title for people | owner (2026-10-22); dmux, Claude agent view (prompt-named tasks) | UX1 | M | ★★★ | → UX1.24, built 2026-10-22 |
-| R-WT-10 | **Setup suggestions on first use**: lockfiles suggest a setup script, ignored `.env*` files suggest a `.worktreeinclude`, written to local config after a yes | owner (2026-10-22); Conductor, Superset (setup scripts) | UX1 | S | ★★ | → UX1.11 (2026-10-22) |
+| R-WT-10 | **Setup suggestions on first use**: lockfiles suggest a setup script, ignored `.env*` files suggest a `.worktreeinclude`, written to local config after a yes | owner (2026-10-22); Conductor, Superset (setup scripts) | UX1 | S | ★★ | → UX1.11, built 2026-10-22 |
 
 #### Orchestration (R-ORC)
 

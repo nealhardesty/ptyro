@@ -43,6 +43,10 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("script.pick", "Pick a lifecycle script to run in this worktree"),
     a("project.add", "Add a git repository to this workspace (discovered under discover.roots)"),
     a("project.trust", "Review and trust this project's scripts"),
+    a(
+        "project.suggest",
+        "What this project needs (a setup script from its lockfile, .env copies), to use",
+    ),
     a("worktree.remove", "Remove this worktree (refuses if work would be lost)"),
     a("worktree.retitle", "Change this worktree's title: what it's for, for people to read"),
     a(

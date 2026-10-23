@@ -1269,6 +1269,39 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                 r.y + 1,
             ));
         }
+        Overlay::Suggest { suggestions: s, .. } => {
+            let mut lines = vec![
+                Line::styled(
+                    format!("{}'s first worktree. ptyro found what it needs:", s.project),
+                    Style::new().add_modifier(Modifier::BOLD),
+                ),
+                Line::raw(""),
+            ];
+            if let Some(cmd) = &s.setup {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("  {} → setup: ", s.from.as_deref().unwrap_or("?")),
+                        fg(app, t.dim),
+                    ),
+                    Span::styled(cmd.clone(), fg(app, t.accent)),
+                ]));
+            }
+            if !s.copy.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled(format!("  {} → ", s.copy.join(", ")), fg(app, t.dim)),
+                    Span::styled("copied into each worktree (git ignores them)", fg(app, t.accent)),
+                ]));
+            }
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(
+                "Written to .ptyro.local.toml: yours, not committed. Asked only once.",
+                fg(app, t.dim),
+            ));
+            lines.push(Line::styled("y use them · n not now (and not again)", fg(app, t.accent)));
+            let r = boxed(area, 84, lines.len() as u16 + 2);
+            f.render_widget(Clear, r);
+            f.render_widget(Paragraph::new(lines).block(block("Set up worktrees?".into())), r);
+        }
         Overlay::Task { text, name, naming, wizard } => {
             let r = boxed(area, 76, 6);
             f.render_widget(Clear, r);

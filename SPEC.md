@@ -901,6 +901,8 @@ Push messages have no id.
 - `ProjectRemove` gains `release` (let the project's running sessions go instead of refusing),
   and a new event, `ProjectAutoAdded{info, workspace, notes}`, says a repository registered on
   its own (§10.1).
+- `WorktreeSpec.take_changes`, `Branches{project}` → `Branches{names}`, and
+  `ProjectSuggest{addr, apply}` → `Suggestions{suggestions}` (§10.3, §10.4).
 
 ### 6.5 Screen frames
 
@@ -1770,6 +1772,18 @@ Branch-name templates: `{name}`, `{user}`, `{date}`, `{issue}`, `{slug}`; option
 (optional): after the first agent turn, offer a branch name derived from the first prompt
 (`ptyro wt rename-branch`; never automatic once pushed).
 
+**[built UX1.10] Where work comes from.**
+- **`take_changes`** (`new --take-changes`, `wt new --take-changes`, the wizard's "+ with my
+  uncommitted changes" when the main checkout is dirty): the main checkout's work is snapshot
+  first (`Git::checkpoint`; refused when there's none), the new branch starts at the main
+  checkout's HEAD, the snapshot is restored into the worktree (uncommitted, untracked
+  untracked), a copy goes to `refs/ptyro/taken/<name>`, and only then is the main checkout
+  reset and cleaned. If restoring fails the main checkout keeps its changes.
+- **`Branches{project}`**: local branches without a worktree, newest first, then the main
+  remote's without a local one: the wizard's "+ on an existing branch…".
+- The task box and the wizard's "+ from a PR or an issue…" take a GitHub PR or issue URL, or
+  `pr 12` / `issue 34` (`app::work_source`): `--pr` / `--issue`, a PR worktree named `pr-12`.
+
 **[built M3]**
 - **Profile:** the worktree's profile is resolved like a session's, against the project's
   `@root`, and stored on the worktree; `default` is stored as such. Git runs with that
@@ -1809,6 +1823,19 @@ Branch-name templates: `{name}`, `{user}`, `{date}`, `{issue}`, `{slug}`; option
 - **Ignoring shared entries:** an entry the main checkout ignores is also added as `/<entry>` to
   `.git/info/exclude`. A symlinked `node_modules` is a *file* to git, which `node_modules/` doesn't
   match, so without this every removal would see "untracked work".
+
+**[built UX1.11] Setup suggestions** (`crates/ptyro-daemon/src/suggest.rs`,
+`ProjectSuggest{addr, apply}`, `ptyro project suggest`): before a project's first worktree, a
+lockfile implies a setup script (`pnpm-lock.yaml` → `pnpm install --frozen-lockfile`, `bun.lock`,
+`yarn.lock`, `package-lock.json` → `npm ci`, `uv.lock` → `uv sync`, `poetry.lock`, `Pipfile.lock`,
+`Gemfile.lock`, `composer.lock`, `mix.lock`, `go.sum`; the first found), and ignored `.env` /
+`.env.*` files at the root (not `*.example`, `*.sample`, `*.template`) are offered as `[worktree]
+copy`, unless the project has a setup script, a `.worktreeinclude` or `copy` already. A yes
+writes them into `.ptyro.local.toml` (`toml_edit`: what's there and its comments stay; nothing is
+overwritten) and excludes that file in `.git/info/exclude`; when they're then the project's only
+scripts, they are trusted. Yes or no, kv `suggested:<project>` keeps it from asking again. The
+TUI asks in a dialog before creating the first worktree (then the usual trust check); the CLI
+asks on a terminal; `project.suggest` shows them any time.
 
 ### 10.5 Lifecycle scripts and trust **[decided]**
 

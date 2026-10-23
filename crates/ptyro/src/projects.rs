@@ -84,6 +84,17 @@ pub enum ProjectCmd {
         #[arg(long)]
         json: bool,
     },
+    /// What ptyro found the project needs (a setup script from its lockfile, .env files to
+    /// copy into worktrees); --apply writes them to .ptyro.local.toml, --decline says no
+    Suggest {
+        project: Option<String>,
+        #[arg(long, conflicts_with = "decline")]
+        apply: bool,
+        #[arg(long)]
+        decline: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -193,6 +204,10 @@ pub enum WtCmd {
         /// What it's for, for people to read (default: the prompt; its name comes from it too)
         #[arg(long)]
         title: Option<String>,
+        /// Move the main checkout's uncommitted changes into it (a copy stays at
+        /// refs/ptyro/taken/<name>)
+        #[arg(long, conflicts_with_all = ["pr", "issue", "existing"])]
+        take_changes: bool,
         /// Don't run the setup script
         #[arg(long)]
         no_setup: bool,
@@ -584,6 +599,36 @@ pub async fn project(ctx: &Ctx, cmd: ProjectCmd) -> Result<i32, Error> {
             c.request(Request::ProjectPin { addr: project, profile: None }).await?;
             Ok(0)
         }
+        ProjectCmd::Suggest { project, apply, decline, json } => {
+            let apply = (apply || decline).then_some(apply);
+            let Reply::Suggestions { suggestions: s } =
+                c.request(Request::ProjectSuggest { addr: project_addr(project)?, apply }).await?
+            else {
+                return Err(Error::internal("unexpected reply"));
+            };
+            if json {
+                print_json(&s);
+                return Ok(0);
+            }
+            if s.is_empty() {
+                eprintln!("{}: nothing to suggest", s.project);
+            }
+            if let Some(cmd) = &s.setup {
+                println!("setup: {cmd}   (from {})", s.from.as_deref().unwrap_or("?"));
+            }
+            if !s.copy.is_empty() {
+                println!("copy into each worktree: {}", s.copy.join(", "));
+            }
+            match apply {
+                Some(true) => eprintln!("written to .ptyro.local.toml"),
+                Some(false) => eprintln!("not offered again"),
+                None if !s.is_empty() => {
+                    eprintln!("`ptyro project suggest --apply` writes them to .ptyro.local.toml")
+                }
+                None => {}
+            }
+            Ok(0)
+        }
         ProjectCmd::Discover { refresh, json } => {
             let Reply::Paths { paths } = c.request(Request::Discover { refresh }).await? else {
                 return Err(Error::internal("unexpected reply"));
@@ -660,6 +705,7 @@ pub async fn ws(ctx: &Ctx, cmd: WsCmd) -> Result<i32, Error> {
 
 /// Create a worktree, asking about guards on a TTY.
 async fn create(c: &Client, spec: WorktreeSpec, yes: bool) -> Result<Reply, Error> {
+    offer_suggestions(c, &spec.project).await;
     with_confirmation(c, Request::WorktreeNew { spec }, yes, |r| {
         if let Request::WorktreeNew { spec } = r {
             spec.override_pin = true;
@@ -667,6 +713,30 @@ async fn create(c: &Client, spec: WorktreeSpec, yes: bool) -> Result<Reply, Erro
         }
     })
     .await
+}
+
+/// A project's first worktree, on a TTY (UX1.11): offer what ptyro found it needs, once.
+async fn offer_suggestions(c: &Client, project: &str) {
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        return;
+    }
+    let Ok(Reply::Suggestions { suggestions: s }) =
+        c.request(Request::ProjectSuggest { addr: project.into(), apply: None }).await
+    else {
+        return;
+    };
+    if s.offered || s.is_empty() {
+        return;
+    }
+    eprintln!("{}'s first worktree. ptyro found:", s.project);
+    if let Some(cmd) = &s.setup {
+        eprintln!("  {} → setup = \"{cmd}\"", s.from.as_deref().unwrap_or("?"));
+    }
+    if !s.copy.is_empty() {
+        eprintln!("  {} → copied into each worktree (git ignores them)", s.copy.join(", "));
+    }
+    let take = confirm("Write these to .ptyro.local.toml (yours, not committed)?");
+    let _ = c.request(Request::ProjectSuggest { addr: project.into(), apply: Some(take) }).await;
 }
 
 /// On a TTY, offer to trust untrusted scripts and run setup now.
@@ -730,6 +800,7 @@ pub async fn new_in_new_worktree(
         setup: true,
         // Named and titled after what it's for (UX1.24); the session below gets the prompt.
         title: a.title.clone().or_else(|| a.prompt.clone().filter(|p| !p.starts_with('@'))),
+        take_changes: a.take_changes,
         ..WorktreeSpec::default()
     };
     let reply = create(&c, spec, a.yes).await?;
@@ -904,6 +975,7 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
             issue,
             prompt,
             title,
+            take_changes,
             no_setup,
             no_fetch,
             agent,
@@ -925,6 +997,7 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
                 issue,
                 prompt,
                 title,
+                take_changes,
                 base,
                 fetch: no_fetch.then_some(false),
                 setup: !no_setup,
