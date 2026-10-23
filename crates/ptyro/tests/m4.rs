@@ -140,6 +140,14 @@ async fn wait_for(
     }
 }
 
+/// The names a selector expands to.
+async fn resolve(c: &Client, sel: &str) -> Vec<String> {
+    match c.request(Request::Resolve { addr: sel.into() }).await.expect("resolve") {
+        Reply::Sessions { sessions } => sessions.into_iter().map(|s| s.name).collect(),
+        other => panic!("{other:?}"),
+    }
+}
+
 fn is(s: &SessionInfo, st: AgentStatus) -> bool {
     s.status.as_ref().is_some_and(|r| r.status == st)
 }
@@ -193,6 +201,9 @@ async fn claude_adapter_status_attention_answer_and_usage() {
     // Blocked on a permission: attention says exactly what; the answer goes in as keys.
     send(&c, "cl", "ask npm install").await;
     let s = wait_for(&c, "cl", "blocked", |s| is(s, AgentStatus::Blocked)).await;
+    // Status selectors follow the status ptyro shows, here from hooks (not only self-reports).
+    assert_eq!(resolve(&c, "@blocked").await, ["cl"]);
+    assert_eq!(resolve(&c, "@working").await, Vec::<String>::new());
     let r = s.status.clone().unwrap();
     assert_eq!(
         (r.kind.as_deref(), r.detail.as_deref()),
@@ -207,6 +218,8 @@ async fn claude_adapter_status_attention_answer_and_usage() {
     w.ok(&["answer", "cl", "allow"]);
     w.d.wait_for_text(&c, "cl", "answer: yes", WAIT).await.unwrap();
     let s = wait_for(&c, "cl", "idle again", |s| is(s, AgentStatus::Idle)).await;
+    assert_eq!(resolve(&c, "@idle").await, ["cl"]);
+    assert_eq!(resolve(&c, "@blocked").await, Vec::<String>::new());
     assert!(
         s.attention.as_ref().is_none_or(|a| a.kind != AttentionKind::Blocked),
         "answering clears it"

@@ -160,7 +160,9 @@ Run 1──* Session  (orchestration membership, optional)
 **[built M2]** Implemented now: handles (`7f3k`, `s:7f3k`, full id), names, `@last`, `@focused`
 (the session most recently focused in any TUI, reported with `ClientMsg::Focus`), and the multi
 selectors `@all`, `@live` (alias `@running`), `@exited`, `@working`/`@blocked`/`@idle`/`@done`/`@error`
-(by program status), name globs (`build-*`, `a?c`), and `,` to join several (`a,b,@blocked`).
+(the status `ptyro status` shows, whatever its source; until 2026-10-23 only self-reports
+counted, so hook-driven agents never matched), name globs (`build-*`, `a?c`), and `,` to join
+several (`a,b,@blocked`).
 Results follow the session list's order without duplicates. Single-target requests accept a
 selector only if it matches exactly one session (otherwise `ambiguous`). The CLI expands
 selectors with `Request::Resolve`, so `ptyro kill @exited`, `ptyro send 'agent-*' …` and

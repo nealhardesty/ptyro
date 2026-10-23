@@ -506,20 +506,15 @@ impl Daemon {
     }
 
     /// Selectors (SPEC §2.3), joined with `,`: anything [`resolve`] takes, plus `@all`, `@live`
-    /// (`@running`), `@exited`, `@working`/`@blocked`/`@idle`/`@done`/`@error` (program status), and
-    /// name globs with `*` and `?`. Order follows the session list; duplicates are dropped.
+    /// (`@running`), `@exited`, `@working`/`@blocked`/`@idle`/`@done`/`@error` (the status engine's
+    /// verdict, whatever its source: hooks, self-reports, the screen), and name globs with `*` and
+    /// `?`. Order follows the session list; duplicates are dropped.
     pub fn resolve_many(&self, selector: &str) -> Result<Vec<Arc<Session>>, Error> {
         let sessions = self.sessions();
         let mut picked: Vec<SessionId> = Vec::new();
         for part in selector.split(',').map(str::trim).filter(|p| !p.is_empty()) {
-            let status_is = |s: &Session, want: &str| {
-                s.meta
-                    .lock()
-                    .expect("meta")
-                    .program_status
-                    .as_ref()
-                    .is_some_and(|p| p.state == want)
-            };
+            let status_is =
+                |s: &Session, want: &str| s.status().is_some_and(|st| st.label() == want);
             let found: Vec<SessionId> = match part {
                 "@all" => sessions.iter().map(|s| s.id).collect(),
                 "@live" | "@running" => {
