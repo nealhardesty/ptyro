@@ -4,7 +4,7 @@
 
 # The chosen logo
 
-From concept 91 (Bento Three). Use the dark set on dark or colourful pages and the `-on-white` set on white or light ones (its background is transparent).
+From concept 91 (Bento Three). Use the dark set on dark or colourful pages and the `-on-white` set on white or light ones (its logo has a solid white background).
 
 <img src="ptyro-logo.png" alt="ptyro logo" width="480"> <img src="ptyro-icon.png" alt="ptyro icon" width="120">
 

@@ -1632,7 +1632,7 @@ def brand(out):
     """The chosen logo (91 Bento Three) as flat files in out/: dark, and inverted for white backgrounds."""
     for name, body, bg, ink, accent in [
             ("ptyro", bento_3(), BN, "#e6edf3", BLUE),
-            ("ptyro-on-white", bento_ink(), None, "#14192b", "#2d6cdf")]:
+            ("ptyro-on-white", bento_ink(), "#ffffff", "#14192b", "#2d6cdf")]:
         with open(f"{out}/{name.replace('ptyro', 'ptyro-icon', 1)}.svg", "w") as f:
             f.write(svg(512, 512, body, "ptyro icon"))
         with open(f"{out}/{name.replace('ptyro', 'ptyro-logo', 1)}.svg", "w") as f:
@@ -1659,7 +1659,7 @@ def main(out):
                 "are needed.\n\n"
                 "# The chosen logo\n\n"
                 "From concept 91 (Bento Three). Use the dark set on dark or colourful pages and the "
-                "`-on-white` set on white or light ones (its background is transparent).\n\n"
+                "`-on-white` set on white or light ones (its logo has a solid white background).\n\n"
                 '<img src="ptyro-logo.png" alt="ptyro logo" width="480"> <img src="ptyro-icon.png" alt="ptyro icon" width="120">\n\n'
                 '<img src="ptyro-logo-on-white.png" alt="ptyro logo for white backgrounds" width="480"> '
                 '<img src="ptyro-icon-on-white.png" alt="ptyro icon for white backgrounds" width="120">\n\n'
