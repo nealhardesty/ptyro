@@ -658,6 +658,9 @@ mod tests {
             run: None,
             held: false,
             structured: None,
+            task: None,
+            last_reply: None,
+            command: None,
         };
         let mut r = StatusRecord::new(status, Confidence::High, SignalSource::Hook);
         r.since_ms = since;

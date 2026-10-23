@@ -171,6 +171,40 @@ pub struct SessionInfo {
     /// A structured session's protocol (`stream-json`, `app-server`, `acp`, `opencode`; M10).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structured: Option<String>,
+    /// What it was asked to do: the first prompt typed into it, trimmed (UX1.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
+    /// The agent's last message, once its turn ended, trimmed (UX1.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_reply: Option<String>,
+    /// A shell's command, running or last finished (OSC 133 `C`/`D`; UX1.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<ShellCommand>,
+}
+
+/// A shell's current or last command, from OSC 133 marks (`ptyro shell-init`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShellCommand {
+    /// The command line, when the shell sends it (`133;C;cmdline=…`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    pub started_ms: u64,
+    /// Unset while it runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<i32>,
+}
+
+/// At most `max` characters of `text`'s first non-empty lines joined by spaces, `…` when cut.
+pub fn brief(text: &str, max: usize) -> String {
+    let joined = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if joined.chars().count() <= max {
+        return joined;
+    }
+    let mut s: String = joined.chars().take(max.saturating_sub(1)).collect();
+    s.push('…');
+    s
 }
 
 /// A session's verified-done check (M7.9): a turn counts as done only once `check` passes.

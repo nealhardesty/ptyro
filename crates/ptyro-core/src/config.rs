@@ -35,6 +35,22 @@ pub struct Ui {
     pub tint_borders: bool,
     /// What a pane shows after you stop its session from the TUI (UX1.23).
     pub on_stop: OnStop,
+    /// How much a sidebar row says under its first line (UX1.2).
+    pub sidebar_detail: SidebarDetail,
+}
+
+/// `[ui] sidebar_detail`: the lines under each session row (what it wants, what it's on, its
+/// task and last reply, a shell's command).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SidebarDetail {
+    /// Every row while they all fit; else the selected, focused, blocked and attention rows.
+    #[default]
+    Auto,
+    /// One line per row.
+    Compact,
+    /// Every row, always.
+    Full,
 }
 
 /// What a pane does once you stop the session it shows (`[ui] on_stop`).
@@ -62,6 +78,7 @@ impl Default for Ui {
             show_ports: true,
             tint_borders: false,
             on_stop: OnStop::Next,
+            sidebar_detail: SidebarDetail::Auto,
         }
     }
 }

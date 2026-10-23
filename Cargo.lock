@@ -2263,6 +2263,7 @@ dependencies = [
  "pty-process",
  "ptyro-core",
  "rustix",
+ "tempfile",
  "tokio",
 ]
 

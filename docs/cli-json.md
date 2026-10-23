@@ -37,7 +37,7 @@ Conventions:
 | `created_ms`, `ended_ms` | number, number? | |
 | `viewers` | number | clients showing it |
 | `controller` | string? | client id that sizes it |
-| `title`, `foreground` | string? | window title, foreground process name |
+| `title`, `foreground` | string? | window title, foreground process name (argv[0] when the kernel's name is a version, like Claude's) |
 | `profile` | string | fixed for its lifetime |
 | `worktree`, `project`, `workspace` | string? | worktree id, project id, home workspace name |
 | `agent` | string? | configured agent name |
@@ -58,6 +58,9 @@ Conventions:
 | `last_output_ms` | number? | when its screen last changed |
 | `held` | bool | its permission prompt is held for an exact answer from any client (M9.5) |
 | `structured` | string? | a structured session's protocol: `stream-json`, `app-server`, `acp` or `opencode` (M10) |
+| `task` | string? | the first prompt typed into it, trimmed to 200 characters |
+| `last_reply` | string? | the agent's last message once its turn ended, trimmed to 300 characters |
+| `command` | `{text?, started_ms, ended_ms?, exit?}`? | a shell's running (no `ended_ms`) or last command, from `ptyro shell-init` |
 
 `Status`: `{status, kind?, detail?, confidence, source, since_ms, progress?}`.
 - `status` is `unknown`, `starting`, `working`, `blocked`, `idle`, `done` or `error`.

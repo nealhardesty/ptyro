@@ -58,6 +58,8 @@ pub enum TermEvent {
     PromptMark {
         mark: char,
         exit: Option<i32>,
+        /// `C;cmdline=…` (or kitty's percent-encoded `cmdline_url=…`): the command line.
+        cmdline: Option<String>,
     },
     /// OSC 9;4 (ConEmu) progress: state 0 clear, 1 normal, 2 error, 3 indeterminate, 4 paused.
     Progress {
@@ -635,10 +637,31 @@ fn side_channel_osc(body: &[u8]) -> Option<TermEvent> {
             Some(TermEvent::Cwd(percent_decode(path).into()))
         }
         "133" => {
-            let mut parts = rest.split(';');
+            let mut parts = rest.splitn(2, ';');
             let mark = parts.next()?.chars().next()?;
-            let exit = if mark == 'D' { parts.next().and_then(|e| e.parse().ok()) } else { None };
-            matches!(mark, 'A' | 'B' | 'C' | 'D').then_some(TermEvent::PromptMark { mark, exit })
+            let params = parts.next().unwrap_or("");
+            let exit = if mark == 'D' {
+                params.split(';').next().and_then(|e| e.parse().ok())
+            } else {
+                None
+            };
+            // The command line is the last parameter, so it may hold `;` itself.
+            let cmdline = (mark == 'C')
+                .then(|| {
+                    params.find("cmdline=").map(|i| params[i + 8..].to_owned()).or_else(|| {
+                        params.find("cmdline_url=").map(|i| {
+                            percent_decode(params[i + 12..].split(';').next().unwrap_or(""))
+                        })
+                    })
+                })
+                .flatten()
+                .map(|c| c.trim().to_owned())
+                .filter(|c| !c.is_empty());
+            matches!(mark, 'A' | 'B' | 'C' | 'D').then_some(TermEvent::PromptMark {
+                mark,
+                exit,
+                cmdline,
+            })
         }
         // iTerm2's session status: `21337;key=value;…` with a state-like key [unverified shape].
         "21337" => {
@@ -851,10 +874,38 @@ mod tests {
             ev,
             vec![
                 TermEvent::Cwd("/tmp/a b".into()),
-                TermEvent::PromptMark { mark: 'D', exit: Some(2) },
+                TermEvent::PromptMark { mark: 'D', exit: Some(2), cmdline: None },
                 TermEvent::Progress { state: 1, percent: Some(42) },
                 TermEvent::Notification("9;done".into()),
             ]
+        );
+    }
+
+    #[test]
+    fn a_command_mark_carries_its_command_line() {
+        let mut emu = AlacrittyEmulator::new(TermSize::new(10, 3), 100);
+        let marks = |emu: &mut AlacrittyEmulator, bytes: &[u8]| {
+            feed(emu, bytes)
+                .events
+                .into_iter()
+                .filter_map(|e| match e {
+                    TermEvent::PromptMark { mark, cmdline, .. } => Some((mark, cmdline)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        // Ours (raw, `;` kept), kitty's percent-encoded one, and none at all.
+        assert_eq!(
+            marks(&mut emu, b"\x1b]133;C;cmdline=make test; echo ok\x07"),
+            vec![('C', Some("make test; echo ok".into()))]
+        );
+        assert_eq!(
+            marks(&mut emu, b"\x1b]133;C;cmdline_url=cargo%20t\x07"),
+            vec![('C', Some("cargo t".into()))]
+        );
+        assert_eq!(
+            marks(&mut emu, b"\x1b]133;C\x07\x1b]133;C;cmdline=\x07"),
+            vec![('C', None), ('C', None)]
         );
     }
 

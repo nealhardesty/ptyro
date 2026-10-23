@@ -193,6 +193,9 @@ mod tests {
             run: None,
             held: false,
             structured: None,
+            task: None,
+            last_reply: None,
+            command: None,
         }
     }
 

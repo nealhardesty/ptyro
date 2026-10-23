@@ -108,11 +108,20 @@ ptyro new -d --agent claude --new-wt --prompt "fix the flaky test in tests/api.r
  ▾ myrepo [work]              │ (Claude, full fidelity, in its own worktree)
    ▾ @root (main)             │
      1 • shell zsh            │
+         last cargo test ✓ 41s│
    ▾ brisk-rook +42 −7 ●      │
-     2 ⚠ claude permission ⚑ │
-     3 ● codex  Bash: cargo t │
+     2 ◉ claude ⚠ permission 3m
+         wants Bash: npm i…   │
+         C-q p y/a/n answers  │
+     3 ● codex 2m             │
+         now Bash: cargo test │
+         task fix the flaky … │
  ptyro                main [work] 3 live · 1 working · 1 blocked  ✉2  C-q ? help 14:02
 ```
+
+Each row says what that session is doing: what a blocked agent wants and the keys that answer
+it, the step an agent is on, its task and last reply, a shell's last command. `[ui]
+sidebar_detail = "compact"` keeps one line per row.
 
 - `Ctrl-Q a` jumps to the next session that needs you (blocked first).
 - `Ctrl-Q p` peeks without switching: `y` allows a permission prompt, `n` denies, or type a
@@ -306,6 +315,7 @@ All after the prefix, `Ctrl-Q` or `Ctrl-Space`. The full list is in [`docs/keys.
 | `v` / `s` | split side by side / stacked |
 | `h` `l` / `z` / `c` | move between panes / zoom / close pane |
 | `Tab` | focus the sidebar (`⏎` open, `x` stop or remove, `e` why this status) |
+| `Z` | everything at once: every session and what it's doing, full-screen |
 | `[` | copy mode: scroll back, search (`/`), select (`v`), copy (`y`) |
 | `D` / `Q` | inspector / review queue |
 | `O` / `S` | runs / change sets |
@@ -341,7 +351,8 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
 - **Shift+Enter** reaches Claude when your terminal speaks the kitty keyboard protocol (Ghostty,
   kitty, WezTerm, foot, recent iTerm2 and Alacritty). `Ctrl-Q ?` shows whether it's on.
 - **Native mouse selection:** hold Shift while dragging, or set `[ui] mouse = false`.
-- **Prompt jumps and live cwd** need one line in your shell's rc file:
+- **Prompt jumps, live cwd and each shell's last command in the sidebar** need one line in
+  your shell's rc file:
   `eval "$(ptyro shell-init zsh)"` (or `bash`; fish: `ptyro shell-init fish | source`).
 - **Completions:** `source <(ptyro completions zsh)` (or bash, fish…). **Start at login:**
   `ptyro daemon install-service` (systemd or launchd).

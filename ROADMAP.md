@@ -1243,12 +1243,14 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
   - *Done (2026-10-22):* `neighbour()` and `App::move_on` in `crates/ptyro-tui/src/app.rs`, with
     tests for the ranking, removal, splits and `on_stop`; the empty pane says what to do next
     (SPEC §11.2h).
-- [ ] **UX1.1 Real program names** (R-UX-20) — S. Claude Code's process is named after its
+- [x] **UX1.1 Real program names** (R-UX-20) — S. Claude Code's process is named after its
   version, so the foreground probe shows `2.1.309` (SPEC §20 when verified on Linux). When the
   name looks like a version, or is a known launcher, use argv[0] and the known-agent table, so
   the row says `claude`. `ptyro ls`'s COMMAND column has the same bug. *Done when:* a session
   running Claude shows `claude`, not a version, in the TUI and in `ptyro ls`.
-- [ ] **UX1.2 Multi-line sidebar rows** (R-UX-20) — M. Line 1 is unchanged: number, status
+  *Done (2026-10-22):* `ptyro_pty::process_name` reads argv[0] when the kernel's name looks like
+  a version (verified against Claude 2.1.291 and 2.1.309 on macOS; SPEC §20.5).
+- [x] **UX1.2 Multi-line sidebar rows** (R-UX-20) — M. Line 1 is unchanged: number, status
   glyph, program, and the time in this state. Up to two more lines follow, and only when they
   add something:
   - blocked: what it wants, plus the answering keys (`y allow · n deny`);
@@ -1261,6 +1263,11 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
   rows open up and the rest stay compact. Numbering, `j`/`k` and mouse hit-testing follow the
   taller rows. A zoomed sidebar with every row open is the "everything at once" summary view.
   *Done when:* golden screens for each state at each detail level.
+  *Done (2026-10-22):* `SessionInfo` gains `task`, `last_reply` and `command` (protocol 1.12);
+  `ptyro shell-init` sends the command line with OSC 133 `C` (bash gains `C` at all, from 4.4);
+  `ui::sidebar_body` lays out rows for drawing and clicks alike. TUI tests cover each state,
+  the three detail levels and clicking a detail line; `tests/ux1.rs` checks the daemon end to
+  end (SPEC §11.2h).
 - [ ] **UX1.3 LLM summaries, opt-in** (R-UX-01; owner approved 2026-10-22) — M, spike first.
   `[summaries] enabled = true` replaces the task and last-reply lines with a short summary of
   the current step.

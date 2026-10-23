@@ -52,6 +52,7 @@ action by name.
 | `<` `>` `+` `-` | narrower / wider / taller / shorter |
 | `Tab` | move focus between the sidebar and the pane |
 | `\` | show or hide the sidebar |
+| `Z` | everything at once: the sidebar fills the screen with every row open (`⏎` opens one, `Z` or `Esc` goes back) |
 | `[` or `PageUp` | copy mode |
 | `]` | paste what you last copied |
 | `x` / `X` | stop the session (with confirmation) / kill it now. The pane moves on to the nearest other session (`[ui] on_stop`); `` ` `` brings the stopped one back |
@@ -80,6 +81,7 @@ Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.
 | `R` | restart an exited session |
 | `,` | rename |
 | `D` `O` `S` | inspector / runs / change sets |
+| `z` | everything at once: the sidebar full-screen, every row open |
 | `w` `o` `r` | workspace / editor / run script |
 | `v` `s` | split |
 | `1` … `9`, `/` | jump to a session / find one |

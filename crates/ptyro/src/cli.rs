@@ -807,6 +807,16 @@ if [ -n "$PTYRO" ] && [ -z "$__ptyro_integrated" ]; then
   }
   PROMPT_COMMAND="__ptyro_prompt${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
   PS1="$PS1\[\e]133;B\a\]"
+  # bash 4.4+: PS0 runs as a command starts; it sends the command line along.
+  if [ "${BASH_VERSINFO[0]}" -gt 4 ] || { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]}" -ge 4 ]; }; then
+    __ptyro_preexec() {
+      local c
+      c=$(HISTTIMEFORMAT= builtin history 1)
+      c="${c#*[0-9] }"; c="${c# }"; c="${c//[[:cntrl:]]/ }"
+      printf '\e]133;C;cmdline=%s\a' "${c:0:200}"
+    }
+    PS0='$(__ptyro_preexec)'"$PS0"
+  fi
 fi
 "#
         }
@@ -819,7 +829,10 @@ if [[ -n $PTYRO && -z $__ptyro_integrated ]]; then
     local s=$?
     printf '\e]133;D;%s\a\e]7;file://%s%s\a\e]133;A\a' "$s" "$HOST" "$PWD"
   }
-  __ptyro_preexec() { printf '\e]133;C\a' }
+  __ptyro_preexec() {
+    local c=${1//[[:cntrl:]]/ }
+    printf '\e]133;C;cmdline=%s\a' "${c[1,200]}"
+  }
   add-zsh-hook precmd __ptyro_precmd
   add-zsh-hook preexec __ptyro_preexec
   PS1="$PS1%{"$'\e]133;B\a'"%}"
@@ -834,7 +847,7 @@ if set -q PTYRO; and not set -q __ptyro_integrated
     printf '\e]133;D;%s\a\e]7;file://%s%s\a\e]133;A\a' $status (hostname) $PWD
   end
   function __ptyro_preexec --on-event fish_preexec
-    printf '\e]133;C\a'
+    printf '\e]133;C;cmdline=%s\a' (string replace -ra '[[:cntrl:]]' ' ' -- "$argv[1]" | string sub -l 200)
   end
 end
 "#

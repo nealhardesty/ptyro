@@ -383,6 +383,38 @@ mod tests {
         let _ = signal_group(c.pid, Signal::KILL);
     }
 
+    /// Claude Code runs as `…/versions/2.1.309` behind a `claude` symlink: the name shown is
+    /// argv[0]'s, not the version the kernel reports. Linux only: macOS kills a copied system
+    /// binary (it loses its signature), and the probe's parts have unit tests there.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_program_named_like_a_version_shows_its_argv0() {
+        let dir = tempfile::tempdir().unwrap();
+        // The real file has the version's name (the kernel names a process after the resolved
+        // file); `claude` is a symlink to it, as the installer sets it up.
+        let exe = dir.path().join("9.8.7");
+        let sleep = ["/bin/sleep", "/usr/bin/sleep"].into_iter().find(|p| Path::new(p).exists());
+        std::fs::copy(sleep.unwrap(), &exe).unwrap();
+        let link = dir.path().join("claude");
+        std::os::unix::fs::symlink(&exe, &link).unwrap();
+        let script = format!("exec {} 3", link.display());
+        let argv: Vec<String> = vec!["sh".into(), "-c".into(), script];
+        let env = child_env(std::env::vars_os(), []);
+        let c =
+            spawn(SpawnRequest { argv: &argv, cwd: dir.path(), env, size: TermSize::new(20, 5) })
+                .unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            let name = foreground(&c.master).map(|(n, _)| n);
+            if name.as_deref() == Some("claude") {
+                break;
+            }
+            assert!(tokio::time::Instant::now() < deadline, "shown as {name:?}");
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+        let _ = signal_group(c.pid, Signal::KILL);
+    }
+
     #[tokio::test]
     async fn probes_report_foreground_and_cwd() {
         let argv: Vec<String> = ["sh", "-c", "sleep 2"].map(String::from).into();

@@ -2,10 +2,44 @@
 
 use std::path::PathBuf;
 
-#[cfg(target_os = "linux")]
+/// The name to show for `pid`: the kernel's, unless that is a version number. Claude Code's
+/// installer runs it as `~/.local/share/claude/versions/2.1.309` through a `claude` symlink, so
+/// the kernel calls it `2.1.309` while argv[0] still says `claude` (SPEC §20.5); then argv[0]
+/// wins.
 pub fn process_name(pid: u32) -> Option<String> {
+    let name = kernel_name(pid)?;
+    Some(if looks_like_version(&name) { shown_name(name, argv0(pid)) } else { name })
+}
+
+/// The kernel's name, unless argv[0] names something better than a version.
+fn shown_name(kernel: String, arg0: Option<String>) -> String {
+    arg0.filter(|a| !a.is_empty() && !looks_like_version(a)).unwrap_or(kernel)
+}
+
+/// `2.1.309`, `v1.4`: digits and dots (a leading `v` allowed), at least one dot.
+pub fn looks_like_version(s: &str) -> bool {
+    let s = s.strip_prefix('v').unwrap_or(s);
+    s.starts_with(|c: char| c.is_ascii_digit())
+        && s.contains('.')
+        && s.chars().all(|c| c.is_ascii_digit() || c == '.')
+}
+
+/// The basename of argv[0].
+fn basename(arg0: &[u8]) -> String {
+    let s = String::from_utf8_lossy(arg0);
+    s.rsplit('/').next().unwrap_or(&s).trim_start_matches('-').to_owned()
+}
+
+#[cfg(target_os = "linux")]
+fn kernel_name(pid: u32) -> Option<String> {
     let s = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
     Some(s.trim_end().to_owned())
+}
+
+#[cfg(target_os = "linux")]
+fn argv0(pid: u32) -> Option<String> {
+    let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    cmdline.split(|b| *b == 0).next().map(basename)
 }
 
 #[cfg(target_os = "linux")]
@@ -15,11 +49,40 @@ pub fn cwd_of(pid: u32) -> Option<PathBuf> {
 
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)] // libproc has no safe wrapper; each call is bounded by the buffer we pass.
-pub fn process_name(pid: u32) -> Option<String> {
+fn kernel_name(pid: u32) -> Option<String> {
     let mut buf = [0u8; 256];
     // SAFETY: `buf` is valid for `buf.len()` bytes and proc_name writes at most that many.
     let n = unsafe { libc::proc_name(pid as i32, buf.as_mut_ptr().cast(), buf.len() as u32) };
     (n > 0).then(|| String::from_utf8_lossy(&buf[..n as usize]).into_owned())
+}
+
+/// argv[0] from `KERN_PROCARGS2`: an `int` argc, the executable's path, NUL padding, then the
+/// arguments. Only our own user's processes are readable, which is all a PTY's are.
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)] // sysctl has no safe wrapper; it writes at most `len` bytes into `buf`.
+fn argv0(pid: u32) -> Option<String> {
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as i32];
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut len = buf.len();
+    // SAFETY: `mib` holds 3 ints, `buf` is valid for `len` bytes; no new value is set.
+    let rc = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            mib.len() as u32,
+            buf.as_mut_ptr().cast(),
+            &raw mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc != 0 || len <= 4 {
+        return None;
+    }
+    let rest = &buf[4..len.min(buf.len())];
+    let exe_end = rest.iter().position(|b| *b == 0)?;
+    let args = &rest[exe_end..];
+    let start = args.iter().position(|b| *b != 0)?;
+    args[start..].split(|b| *b == 0).next().map(basename)
 }
 
 #[cfg(target_os = "macos")]
@@ -67,7 +130,12 @@ pub fn parent_pid(_pid: u32) -> Option<u32> {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn process_name(_pid: u32) -> Option<String> {
+fn kernel_name(_pid: u32) -> Option<String> {
+    None
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn argv0(_pid: u32) -> Option<String> {
     None
 }
 
@@ -109,4 +177,36 @@ pub fn local_time_hm() -> Option<(u8, u8)> {
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     let ok = unsafe { !libc::localtime_r(&t, &mut tm).is_null() };
     ok.then_some((tm.tm_hour as u8, tm.tm_min as u8))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn versions_are_recognised() {
+        for v in ["2.1.309", "v1.4", "0.143.0"] {
+            assert!(super::looks_like_version(v), "{v}");
+        }
+        for n in ["claude", "node", "zsh", "python3.12", "2fa", "123", "v", ""] {
+            assert!(!super::looks_like_version(n), "{n}");
+        }
+        assert_eq!(super::basename(b"/usr/bin/claude"), "claude");
+        assert_eq!(super::basename(b"-zsh"), "zsh", "a login shell's dash");
+    }
+
+    #[test]
+    fn a_version_name_gives_way_to_argv0() {
+        let shown = |k: &str, a: Option<&str>| super::shown_name(k.into(), a.map(Into::into));
+        assert_eq!(shown("2.1.309", Some("claude")), "claude");
+        assert_eq!(shown("2.1.309", Some("")), "2.1.309");
+        assert_eq!(shown("2.1.309", Some("2.1.309")), "2.1.309");
+        assert_eq!(shown("2.1.309", None), "2.1.309");
+    }
+
+    /// argv[0] parsing (`/proc/<pid>/cmdline`, macOS `KERN_PROCARGS2`) on this very process.
+    #[test]
+    fn argv0_reads_our_own() {
+        let me = std::env::args().next().unwrap();
+        let want = me.rsplit('/').next().unwrap().to_owned();
+        assert_eq!(super::argv0(std::process::id()), Some(want));
+    }
 }

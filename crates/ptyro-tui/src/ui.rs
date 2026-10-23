@@ -2,7 +2,8 @@
 
 use ptyro_core::SessionId;
 use ptyro_core::config::key_label;
-use ptyro_core::session::SessionInfo;
+use ptyro_core::session::{SessionInfo, SessionKind};
+use ptyro_core::status::AgentStatus;
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -82,10 +83,14 @@ pub fn draw(app: &App, f: &mut Frame<'_>) {
     if app.opts.raw {
         draw_raw(app, f, area);
     } else {
-        if let Some(side) = app.sidebar_area() {
+        if let Some(side) = app.sidebar_area().filter(|_| !app.sidebar_zoom) {
             draw_sidebar(app, f, side);
         }
         draw_panes(app, f);
+        if let Some(side) = app.sidebar_area().filter(|_| app.sidebar_zoom) {
+            f.render_widget(Clear, Rect { width: side.width + 1, ..side });
+            draw_sidebar(app, f, side);
+        }
         if app.inspector.is_some() {
             let h =
                 if app.config.ui.status_bar { area.height.saturating_sub(1) } else { area.height };
@@ -176,8 +181,6 @@ fn diffstat(app: &App, w: &ptyro_core::model::WorktreeInfo) -> Vec<Span<'static>
 
 fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
     let t = &app.theme;
-    let shown: Vec<SessionId> = app.panes.values().filter_map(|p| p.session).collect();
-    let focused = app.focused_session();
     let mut title = vec![
         Span::styled(" WORKSPACE ", fg(app, t.dim)),
         Span::styled(app.workspace.clone(), fg(app, t.accent).add_modifier(Modifier::BOLD)),
@@ -199,7 +202,55 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
             fg(app, if hot { t.blocked } else { t.dim }),
         ));
     }
+    let body = sidebar_body(app, area);
     let mut lines = vec![Line::from(title)];
+    lines.extend(body.lines.into_iter().skip(body.skip).map(|(_, l)| l));
+    if body.empty {
+        let prefix = key_label(&app.keymap.prefix);
+        lines.push(Line::styled(format!("  none yet: {prefix} n"), fg(app, t.dim)));
+        if app.projects.is_empty() {
+            lines.push(Line::styled(
+                format!("  add a repo: {prefix} : project.add"),
+                fg(app, t.dim),
+            ));
+        }
+    }
+    let mut hint = if app.sidebar_zoom {
+        " everything at once · ⏎ open · p peek · z or Esc back".to_string()
+    } else if app.focus == Focus::Sidebar {
+        " ⏎ open/fold · n new · x stop · Esc".to_string()
+    } else {
+        format!(" {} Tab: sidebar · w workspaces", key_label(&app.keymap.prefix))
+    };
+    truncate_width(&mut hint, area.width as usize);
+    f.render_widget(Paragraph::new(lines), Rect { height: area.height.saturating_sub(1), ..area });
+    f.render_widget(
+        Paragraph::new(Line::styled(hint, fg(app, t.dim))),
+        Rect { y: area.bottom().saturating_sub(1), height: 1, ..area },
+    );
+    // The divider between sidebar and panes.
+    let div = Rect { x: area.right(), width: 1, ..area };
+    let col = if app.focus == Focus::Sidebar { t.border_focus } else { t.border };
+    for y in div.top()..div.bottom() {
+        if let Some(c) = f.buffer_mut().cell_mut(Position::new(div.x, y)) {
+            c.set_symbol("│").set_style(fg(app, col));
+        }
+    }
+}
+
+/// The sidebar's tree as screen lines, each with the index of its row in `app.rows()` (a
+/// session row may take several, UX1.2), and how many lines scroll off the top to keep the
+/// selection in view. Drawing and clicking share it.
+pub(crate) struct SidebarBody {
+    pub lines: Vec<(usize, Line<'static>)>,
+    pub skip: usize,
+    pub empty: bool,
+}
+
+pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
+    let t = &app.theme;
+    let shown: Vec<SessionId> = app.panes.values().filter_map(|p| p.session).collect();
+    let focused = app.focused_session();
     // Built once per frame; numbers and sessions looked up by id.
     let rows = app.rows();
     let sel = app.sel_index(&rows);
@@ -207,8 +258,17 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
         App::numbered_from(&rows).into_iter().enumerate().map(|(n, id)| (id, n)).collect();
     let sessions: std::collections::HashMap<SessionId, &SessionInfo> =
         app.sessions.iter().map(|s| (s.id, s)).collect();
+    let width = area.width as usize;
+    // Less the title and the hint line.
+    let room = area.height.saturating_sub(2) as usize;
+    let mut firsts: Vec<(usize, Line<'static>)> = Vec::new();
+    // Each session row's detail lines, as wide (the row in focus) and as narrow.
+    let mut details: Vec<Vec<Line<'static>>> = Vec::new();
+    let mut close: Vec<bool> = Vec::new();
     for (i, row) in rows.iter().enumerate() {
-        let mut line = match row {
+        let mut detail = Vec::new();
+        let mut near = false;
+        let line = match row {
             Row::Project(id) => {
                 let Some(p) = app.project(id) else { continue };
                 let arrow = if app.collapsed.contains(id) { "▸" } else { "▾" };
@@ -321,6 +381,14 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
                         fg(app, t.blocked),
                     ));
                 }
+                // How long it has been working or waiting for you.
+                if let Some(r) = s.status.as_ref().filter(|r| {
+                    s.state.is_live()
+                        && matches!(r.status, AgentStatus::Working | AgentStatus::Blocked)
+                        && ptyro_core::now_ms().saturating_sub(r.since_ms) >= 10_000
+                }) {
+                    spans.push(Span::styled(format!(" {}", ago(r.since_ms)), fg(app, t.dim)));
+                }
                 if s.attention.is_some()
                     && s.status
                         .as_ref()
@@ -367,6 +435,13 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
                     spans.push(Span::raw(" "));
                     spans.push(b);
                 }
+                // In focus, or wanting you: always opened up, with room to wrap.
+                near = Some(s.id) == focused
+                    || (app.focus == Focus::Sidebar && i == sel)
+                    || s.attention.is_some()
+                    || s.status.as_ref().is_some_and(|r| r.status == AgentStatus::Blocked);
+                let lead = indent.len() + 4;
+                detail = session_details(app, s, lead, width, near || app.sidebar_zoom);
                 Line::from(spans)
             }
             Row::Group(label) => {
@@ -389,53 +464,159 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
                 ])
             }
         };
-        if app.focus == Focus::Sidebar && i == sel {
-            line = line.style(if t.monochrome {
-                Style::new().add_modifier(Modifier::REVERSED)
-            } else {
-                Style::new().bg(app.depth.fit(t.selection_bg))
-            });
-        }
-        lines.push(line);
+        firsts.push((i, line));
+        details.push(detail);
+        close.push(near);
     }
-    if rows.is_empty() {
-        let prefix = key_label(&app.keymap.prefix);
-        lines.push(Line::styled(format!("  none yet: {prefix} n"), fg(app, t.dim)));
-        if app.projects.is_empty() {
-            lines.push(Line::styled(
-                format!("  add a repo: {prefix} : project.add"),
-                fg(app, t.dim),
-            ));
+    use ptyro_core::config::SidebarDetail;
+    let all: usize = firsts.len() + details.iter().map(Vec::len).sum::<usize>();
+    let open_all = app.sidebar_zoom
+        || match app.config.ui.sidebar_detail {
+            SidebarDetail::Full => true,
+            SidebarDetail::Compact => false,
+            SidebarDetail::Auto => all <= room,
+        };
+    let compact = app.config.ui.sidebar_detail == SidebarDetail::Compact && !app.sidebar_zoom;
+    let mut lines = Vec::new();
+    let (mut sel_first, mut sel_last) = (0, 0);
+    for (((i, first), detail), near) in firsts.into_iter().zip(details).zip(close) {
+        if i == sel {
+            sel_first = lines.len();
+        }
+        lines.push((i, first));
+        if !compact && (open_all || near) {
+            lines.extend(detail.into_iter().map(|l| (i, l)));
+        }
+        if i == sel {
+            sel_last = lines.len().saturating_sub(1);
         }
     }
-    let mut hint = if app.focus == Focus::Sidebar {
-        " ⏎ open/fold · n new · x stop · Esc".to_string()
+    if app.focus == Focus::Sidebar {
+        let style = if t.monochrome {
+            Style::new().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::new().bg(app.depth.fit(t.selection_bg))
+        };
+        for (i, l) in &mut lines {
+            if *i == sel {
+                *l = std::mem::take(l).style(style);
+            }
+        }
+    }
+    // Keep the selection in view in a long tree: all of it, else its first line.
+    let skip = if app.focus == Focus::Sidebar && sel_last >= room {
+        (sel_last + 1 - room).min(sel_first)
     } else {
-        format!(" {} Tab: sidebar · w workspaces", key_label(&app.keymap.prefix))
+        0
     };
-    truncate_width(&mut hint, area.width as usize);
-    let body = Rect { height: area.height.saturating_sub(1), ..area };
-    // Keep the selection visible in a long tree.
-    let skip = app.sidebar_skip(area, sel);
-    let lines: Vec<Line<'_>> = lines
-        .into_iter()
-        .enumerate()
-        .filter(|(i, _)| *i == 0 || *i > skip)
-        .map(|(_, l)| l)
-        .collect();
-    f.render_widget(Paragraph::new(lines), body);
-    f.render_widget(
-        Paragraph::new(Line::styled(hint, fg(app, t.dim))),
-        Rect { y: area.bottom().saturating_sub(1), height: 1, ..area },
-    );
-    // The divider between sidebar and panes.
-    let div = Rect { x: area.right(), width: 1, ..area };
-    let col = if app.focus == Focus::Sidebar { t.border_focus } else { t.border };
-    for y in div.top()..div.bottom() {
-        if let Some(c) = f.buffer_mut().cell_mut(Position::new(div.x, y)) {
-            c.set_symbol("│").set_style(fg(app, col));
+    SidebarBody { empty: rows.is_empty(), lines, skip }
+}
+
+/// The lines under a session's first line (UX1.2), starting at column `lead`: what it wants,
+/// what it's on, its task and last reply, or a shell's command. `wide` lets the long ones wrap
+/// once, for the row in focus.
+fn session_details(
+    app: &App,
+    s: &SessionInfo,
+    lead: usize,
+    width: usize,
+    wide: bool,
+) -> Vec<Line<'static>> {
+    use ptyro_core::session::ProcessState;
+    let t = &app.theme;
+    let key = |action: &str| {
+        let k = app.keymap.key_for(action).unwrap_or_default();
+        // In the sidebar its keys need no prefix.
+        if app.focus == Focus::Sidebar { k.rsplit(' ').next().unwrap_or(&k).to_owned() } else { k }
+    };
+    let mut items: Vec<(&str, String, Color)> = Vec::new();
+    let live = s.state.is_live();
+    if s.state == ProcessState::Dormant {
+        items.push(("☾", "dormant · ⏎ resumes it".into(), t.dim));
+    } else if !live {
+        let when = s.ended_ms.map(|m| format!(" {} ago", ago(m))).unwrap_or_default();
+        items.push(("■", format!("{}{when} · ⏎ restart", s.state.label()), t.exited));
+    }
+    if live && let Some(r) = &s.status {
+        match r.status {
+            AgentStatus::Blocked => {
+                let want = r
+                    .detail
+                    .clone()
+                    .or_else(|| s.attention.as_ref().map(|a| a.text.clone()))
+                    .or_else(|| r.kind.clone())
+                    .unwrap_or_else(|| "you".into());
+                items.push(("wants", want, t.blocked));
+                let answer =
+                    if r.kind.as_deref() == Some("permission") { "y/a/n answers" } else { "reply" };
+                items.push(("", format!("{} {answer} · ⏎ open", key("peek")), t.dim));
+            }
+            AgentStatus::Errored => {
+                let why = r.detail.clone().or_else(|| r.kind.clone()).unwrap_or_default();
+                items.push(("✗", why, t.error));
+            }
+            AgentStatus::Working if s.kind != SessionKind::Shell => {
+                let now = s.activity.clone().or_else(|| r.detail.clone());
+                items.push(("now", now.unwrap_or_else(|| "working".into()), t.working));
+            }
+            _ => {}
         }
     }
+    if let Some(task) = &s.task {
+        items.push(("task", task.clone(), t.text));
+    }
+    let working = s.status.as_ref().is_some_and(|r| r.status == AgentStatus::Working);
+    if let Some(reply) = s.last_reply.as_ref().filter(|_| !working) {
+        items.push(("last", reply.clone(), t.dim));
+    }
+    if s.kind == SessionKind::Shell
+        && let Some(c) = &s.command
+    {
+        let text = c.text.clone().or_else(|| s.foreground.clone()).unwrap_or_default();
+        match c.ended_ms {
+            None if live => {
+                let took = dur(ptyro_core::now_ms().saturating_sub(c.started_ms));
+                items.push(("now", format!("{text} · {took}"), t.working));
+            }
+            None => {}
+            Some(end) => {
+                let (mark, color) = match c.exit {
+                    Some(0) | None => ("✓".to_owned(), t.done),
+                    Some(e) => (format!("✗{e}"), t.error),
+                };
+                let took = dur(end.saturating_sub(c.started_ms));
+                items.push(("last", format!("{text} {mark} · {took} · {} ago", ago(end)), color));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let pad = " ".repeat(lead);
+    for (label, text, color) in items {
+        let label = if label.is_empty() { String::new() } else { format!("{label} ") };
+        let room = width.saturating_sub(lead + label.chars().count()).max(4);
+        let mut rest = text;
+        for n in 0..if wide { 2 } else { 1 } {
+            let mut part = rest.clone();
+            truncate_width(&mut part, room);
+            let more = part.len() < rest.len();
+            // The last line we may use: cut with an ellipsis.
+            if more && (n == 1 || !wide) {
+                truncate_width(&mut part, room.saturating_sub(1));
+                part.push('…');
+            }
+            let head = if n == 0 { label.clone() } else { " ".repeat(label.chars().count()) };
+            out.push(Line::from(vec![
+                Span::raw(pad.clone()),
+                Span::styled(head, fg(app, t.dim)),
+                Span::styled(part.clone(), fg(app, color)),
+            ]));
+            if !more || part.ends_with('…') {
+                break;
+            }
+            rest = rest[part.len()..].trim_start().to_owned();
+        }
+    }
+    out
 }
 
 fn draw_panes(app: &App, f: &mut Frame<'_>) {

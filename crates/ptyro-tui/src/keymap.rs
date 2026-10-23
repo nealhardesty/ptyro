@@ -68,6 +68,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("session.take_control", "Take control: resize the session to this pane"),
     a("focus.toggle", "Move focus between the sidebar and the pane"),
     a("sidebar.toggle", "Show or hide the sidebar"),
+    a("sidebar.zoom", "Everything at once: the sidebar fills the screen, every row open (toggle)"),
     a("pane.split_right", "Split: open a session beside this pane"),
     a("pane.split_down", "Split: open a session below this pane"),
     a("pane.close", "Close this pane (the session keeps running)"),
@@ -204,6 +205,7 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Prefix, "=", "session.take_control"),
     (Table::Prefix, "Tab", "focus.toggle"),
     (Table::Prefix, "\\", "sidebar.toggle"),
+    (Table::Prefix, "Z", "sidebar.zoom"),
     (Table::Prefix, "v", "pane.split_right"),
     (Table::Prefix, "s", "pane.split_down"),
     (Table::Prefix, "c", "pane.close"),
@@ -258,6 +260,7 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Nav, "?", "help"),
     (Table::Nav, ":", "palette"),
     (Table::Nav, "\\", "sidebar.toggle"),
+    (Table::Nav, "z", "sidebar.zoom"),
     (Table::Nav, "v", "pane.split_right"),
     (Table::Nav, "s", "pane.split_down"),
 ];

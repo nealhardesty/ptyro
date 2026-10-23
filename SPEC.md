@@ -468,7 +468,8 @@ image is used to re-exec the *old* binary (kept at `state/daemon.prev`).
   alone, and so is a job inside a shell session: it has its own group, and its shell can `fg` it.
 - **Inspection** (polled ≤ 1 Hz, only for visible or recently-active sessions):
   - foreground process group: `tcgetpgrp(master)`; name via `/proc/<pid>/comm` (Linux) or
-    `proc_name` (macOS);
+    `proc_name` (macOS). **[built UX1.1]** A name that is a version number (`2.1.309`) gives way
+    to argv[0]'s basename (`/proc/<pid>/cmdline`, macOS `KERN_PROCARGS2`), §20.5;
   - cwd: `/proc/<pid>/cwd` (Linux) / `proc_pidinfo(PROC_PIDVNODEPATHINFO)` (macOS), preferring
     OSC 7 reports from the shell when present;
   - listening TCP ports of the process tree (Linux `/proc/net/tcp*` + fd inodes; macOS `libproc`) —
@@ -883,6 +884,12 @@ Push messages have no id.
 **[built] Protocol 1.11** (additive):
 - A new event, `SessionResumed{session}`: the session's own process suspended itself on Ctrl-Z,
   and the daemon resumed it (§5.1). Older clients skip events they can't read.
+
+**[built UX1] Protocol 1.12** (additive):
+- `SessionInfo` gains `task` (the first prompt, at most 200 characters), `last_reply` (the
+  agent's last message once its turn ended, at most 300) and `command`
+  (`ShellCommand{text?, started_ms, ended_ms?, exit?}`: a shell's running or last command, from
+  OSC 133 `C`/`D`). The TUI's sidebar rows show them (§11.2h).
 
 ### 6.5 Screen frames
 
@@ -2369,6 +2376,28 @@ learning anything up front.
   neighbour, a removed session's split closes and the last pane shows the empty state: what to
   do next (`n`, `N` when the workspace has a project, `/` when other workspaces have sessions,
   `?`), with the keys as bound. In raw attach, only the attached session's removal ends it.
+- **Programs are named** (UX1.1): the sidebar, headers and `ptyro ls` show `claude`, not the
+  version its installer names the file after (§5.1, §20.5).
+- **Rows say what's going on** (UX1.2). Under a session's first line (now with how long it has
+  been working or blocked) come up to a few lines, each only when it has something to say:
+  - blocked: `wants` what (the permission's tool, the question), then the keys that answer it;
+  - working: `now` the current step (the hook's tool summary);
+  - errored: why;
+  - an agent: `task`, its first prompt, and once its turn ends, `last`, its reply;
+  - a shell: `now` its running command and for how long, or `last` the one that finished, with
+    its exit (`✓`, `✗101`), duration and age. `ptyro shell-init` now sends the command line
+    with OSC 133 `C` (`cmdline=`; kitty's `cmdline_url=` is read too): zsh and fish always,
+    bash from 4.4 (`PS0`), which before had no `C` mark at all;
+  - exited: its exit and age, `⏎ restart`; dormant: `⏎ resumes it`.
+
+  `[ui] sidebar_detail`: `auto` (the default) opens every row while they all fit, else only
+  the selected, focused, blocked and attention rows; `compact` keeps one line per row; `full`
+  opens every row. The row in focus (and any that wants you) wraps its task and reply over two
+  lines. Drawing, clicks and scrolling share one line layout, so a row is one target however
+  many lines it takes.
+- **Everything at once** (`Z`, `z` in the sidebar; `sidebar.zoom`): the sidebar fills the
+  screen with every row open and wrapped. It is drawn over the panes, which keep their size, so
+  no session is resized for a look. `⏎` opens a session and goes back; `Z`, `z` or `Esc` go back.
 
 ### 11.3 Default key map (after prefix) **[built M2; differs from the proposal where noted]**
 
@@ -2882,6 +2911,7 @@ sidebar_width = 30
 show_ports = true
 confirm_quit = false
 on_stop = "next"                 # after you stop a pane's session: next (its neighbour) | stay
+sidebar_detail = "auto"          # lines under each session row: auto | compact | full
 
 [daemon]
 scrollback_lines = 5000          # in memory; older lines come from the recording (§7.6)
@@ -4466,6 +4496,12 @@ learn something the hard way.
     by bits.
   - Its xterm encoder ignores DECCKM. In application-cursor mode, unmodified arrows/Home/End must
     become `ESC O x`. `ptyro-term` patches this, unit-tested in `crates/ptyro-term/src/input.rs`.
+- **[verified 2026-10-22, macOS 25.6, Claude Code 2.1.291–2.1.309]** Claude Code's native
+  installer puts each release at `~/.local/share/claude/versions/<version>` and points
+  `~/.local/bin/claude` at it, so the kernel names the process after the version (`ps` `ucomm`
+  `2.1.309`, `/proc/<pid>/comm` on Linux) while argv[0] stays `claude`. The foreground probe uses
+  argv[0] when the kernel's name looks like a version (UX1.1). A copy of a macOS system binary
+  is killed at exec (code signing), so that end-to-end test runs on Linux only.
 - **[verified 2026-10-22, macOS 25.6]** SIGTSTP sent to a PTY's session leader is discarded,
   because its process group is orphaned (POSIX; Linux does the same). After `killpg(TSTP)` the
   process is still `Ss+`, while SIGSTOP stops it (`Ts+`). Claude Code 2.1.309 on Ctrl-Z resets

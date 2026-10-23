@@ -357,6 +357,8 @@ pub struct App {
     pub focus: Focus,
     pub sidebar: bool,
     pub sidebar_width: u16,
+    /// The sidebar fills the screen with every row open: everything at once (UX1.2).
+    pub sidebar_zoom: bool,
     /// The selected sidebar row, and its index when last set (the fallback once it's gone).
     sidebar_row: Option<Row>,
     sidebar_sel: usize,
@@ -420,6 +422,7 @@ impl App {
             terminal_focused: true,
             sidebar: config.ui.sidebar && !opts.raw,
             sidebar_width: config.ui.sidebar_width,
+            sidebar_zoom: false,
             opts,
             connect,
             paths,
@@ -678,6 +681,14 @@ impl App {
 
     pub fn sidebar_area(&self) -> Option<Rect> {
         let main = self.main_area();
+        if self.sidebar_zoom {
+            // Over the panes, which keep their size: nothing is resized for a look.
+            return Some(Rect {
+                width: self.area.width.saturating_sub(1),
+                height: main.height,
+                ..self.area
+            });
+        }
         (main.x > self.area.x).then_some(Rect {
             x: self.area.x,
             y: self.area.y,
@@ -1394,6 +1405,7 @@ impl App {
         }
         self.focused = pane;
         self.focus = Focus::Pane;
+        self.sidebar_zoom = false;
         // A session from another workspace brings its workspace along.
         if let Some(s) = self.session(id).cloned()
             && !self.ordered().contains(&id)
@@ -1453,14 +1465,6 @@ impl App {
     fn set_sel(&mut self, rows: &[Row], i: usize) {
         self.sidebar_sel = i;
         self.sidebar_row = rows.get(i).cloned();
-    }
-
-    /// Rows scrolled off the top of the sidebar (in `area`) to keep row `sel` visible; drawing
-    /// and clicking share it.
-    pub fn sidebar_skip(&self, area: Rect, sel: usize) -> usize {
-        // Less the title and the hint line.
-        let visible = area.height.saturating_sub(2) as usize;
-        if self.focus == Focus::Sidebar && sel >= visible { sel + 1 - visible } else { 0 }
     }
 
     // ── terminal input ──────────────────────────────────────────────────────
@@ -1796,6 +1800,10 @@ impl App {
                 };
                 self.session_action(cmd.action, id);
             }
+            "focus.toggle" if self.sidebar_zoom => {
+                self.sidebar_zoom = false;
+                self.focus = Focus::Pane;
+            }
             "focus.toggle" => {
                 self.focus = match self.focus {
                     Focus::Pane if self.sidebar_area().is_some() => {
@@ -1816,6 +1824,21 @@ impl App {
                     }
                     Focus::Sidebar => Focus::Pane,
                 };
+            }
+            "sidebar.zoom" => {
+                self.sidebar_zoom = !self.sidebar_zoom;
+                if self.sidebar_zoom {
+                    let rows = self.rows();
+                    if let Some(i) = self
+                        .focused_session()
+                        .and_then(|id| rows.iter().position(|r| *r == Row::Session(id)))
+                    {
+                        self.set_sel(&rows, i);
+                    }
+                    self.focus = Focus::Sidebar;
+                } else {
+                    self.focus = Focus::Pane;
+                }
             }
             "sidebar.toggle" => {
                 self.sidebar = !self.sidebar;
@@ -1998,7 +2021,10 @@ impl App {
                 }
             }
             "nav.open" | "nav.collapse" | "nav.expand" => match self.selected_row() {
-                Some(Row::Session(id)) if cmd.action == "nav.open" => self.show(id, None),
+                Some(Row::Session(id)) if cmd.action == "nav.open" => {
+                    self.sidebar_zoom = false;
+                    self.show(id, None)
+                }
                 Some(Row::Set(run)) if cmd.action == "nav.open" => self.open_sets(Some(run)),
                 Some(Row::Project(id) | Row::Worktree(id) | Row::Set(id)) => {
                     let collapse = match cmd.action {
@@ -3124,10 +3150,12 @@ impl App {
             match m.kind {
                 K::Down(_) => {
                     let rows = self.rows();
-                    let skip = self.sidebar_skip(side, self.sel_index(&rows));
-                    // The title line has no row.
-                    let row = y.checked_sub(side.y + 1).map(|r| r as usize + skip);
-                    let row = row.unwrap_or(usize::MAX);
+                    let body = crate::ui::sidebar_body(self, side);
+                    // The title line has no row; a row may span several lines (UX1.2).
+                    let row = y
+                        .checked_sub(side.y + 1)
+                        .and_then(|l| body.lines.get(l as usize + body.skip))
+                        .map_or(usize::MAX, |(i, _)| *i);
                     match rows.get(row).cloned() {
                         Some(Row::Session(id)) => {
                             self.set_sel(&rows, row);
@@ -3935,6 +3963,136 @@ mod tests {
         app.confirmed(Confirmed::Stop(a.id));
         app.on_event(exited(&a));
         assert_eq!(shows(&app, 1).as_deref(), Some("a"));
+    }
+
+    fn status(s: &mut SessionInfo, st: AgentStatus, kind: Option<&str>, detail: Option<&str>) {
+        use ptyro_core::status::{Confidence, SignalSource, StatusRecord};
+        let mut r = StatusRecord::new(st, Confidence::High, SignalSource::Hook);
+        r.kind = kind.map(Into::into);
+        r.detail = detail.map(Into::into);
+        r.since_ms = ptyro_core::now_ms() - 125_000;
+        s.status = Some(r);
+    }
+
+    /// The sidebar's columns of the screen, one string per line.
+    fn sidebar(app: &App) -> Vec<String> {
+        screen(app).lines().map(|l| l.chars().take(30).collect::<String>()).collect()
+    }
+
+    fn rows_say(app: &App, want: &str) -> bool {
+        sidebar(app).iter().any(|l| l.contains(want))
+    }
+
+    #[test]
+    fn session_rows_say_what_each_one_is_doing() {
+        let mut app = app();
+        let mut working = session("fixer");
+        working.kind = SessionKind::Agent;
+        working.agent = Some("claude".into());
+        working.foreground = Some("claude".into());
+        working.task = Some("fix the flaky test in tests/api.rs".into());
+        working.activity = Some("Bash: cargo test".into());
+        status(&mut working, AgentStatus::Working, None, None);
+        let mut blocked = session("asker");
+        blocked.kind = SessionKind::Agent;
+        status(&mut blocked, AgentStatus::Blocked, Some("permission"), Some("Bash: npm i"));
+        let mut idle = session("done-one");
+        idle.kind = SessionKind::Agent;
+        idle.task = Some("add --json".into());
+        idle.last_reply = Some("All tests pass.".into());
+        status(&mut idle, AgentStatus::Idle, None, None);
+        let mut shell = session("sh");
+        shell.command = Some(ptyro_core::session::ShellCommand {
+            text: Some("cargo test".into()),
+            started_ms: ptyro_core::now_ms() - 50_000,
+            ended_ms: Some(ptyro_core::now_ms() - 9_000),
+            exit: Some(101),
+        });
+        app.sessions = vec![working, blocked, idle, shell];
+        let lines = sidebar(&app);
+        let has = |w: &str| lines.iter().any(|l| l.contains(w));
+        assert!(has("fixer claude 2m"), "line 1: the program, and how long: {lines:#?}");
+        assert!(has("now Bash: cargo test"), "{lines:#?}");
+        assert!(has("task fix the flaky"), "{lines:#?}");
+        assert!(has("wants Bash: npm i"), "{lines:#?}");
+        assert!(has("y/a/n answers"), "{lines:#?}");
+        assert!(has("last All tests pass."), "{lines:#?}");
+        assert!(has("last cargo test ✗101"), "{lines:#?}");
+        assert!(!lines.iter().any(|l| l.contains("2.1.")), "never a version");
+
+        // Compact: one line each.
+        app.config.ui.sidebar_detail = ptyro_core::config::SidebarDetail::Compact;
+        assert!(!rows_say(&app, "task fix") && !rows_say(&app, "wants"));
+        assert!(rows_say(&app, "fixer"));
+    }
+
+    #[test]
+    fn when_rows_dont_fit_only_the_ones_in_focus_or_wanting_you_open_up() {
+        let mut app = app();
+        let mut many: Vec<SessionInfo> = (0..14)
+            .map(|n| {
+                let mut s = session(&format!("s{n:02}"));
+                s.task = Some(format!("task number {n}"));
+                s
+            })
+            .collect();
+        status(&mut many[7], AgentStatus::Blocked, Some("question"), Some("which db?"));
+        app.panes.get_mut(&1).unwrap().session = Some(many[3].id);
+        app.sessions = many;
+        // 14 rows and 16 detail lines don't fit in 27: the focused and blocked rows open.
+        assert!(rows_say(&app, "task number 3"), "the focused one");
+        assert!(rows_say(&app, "wants which db?"), "the blocked one");
+        assert!(!rows_say(&app, "task number 5"), "the rest stay one line");
+        app.config.ui.sidebar_detail = ptyro_core::config::SidebarDetail::Full;
+        assert!(rows_say(&app, "task number 0"));
+    }
+
+    #[test]
+    fn a_click_on_a_detail_line_picks_its_session() {
+        let mut app = app();
+        let mut a = session("alpha");
+        a.task = Some("first task".into());
+        let b = session("beta");
+        app.sessions = vec![a.clone(), b.clone()];
+        let lines = sidebar(&app);
+        let y = lines.iter().position(|l| l.contains("first task")).unwrap() as u16;
+        let beta = lines.iter().position(|l| l.contains("beta")).unwrap() as u16;
+        let click = |row: u16| crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: 3,
+            row,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        };
+        app.on_mouse(&click(beta));
+        assert_eq!(app.focused_session(), Some(b.id));
+        app.on_mouse(&click(y));
+        assert_eq!(app.focused_session(), Some(a.id), "its detail line is part of its row");
+    }
+
+    #[test]
+    fn everything_at_once_opens_every_row_without_resizing_a_session() {
+        let mut app = app();
+        let sessions: Vec<SessionInfo> = (0..14)
+            .map(|n| {
+                let mut s = session(&format!("s{n:02}"));
+                s.task = Some(format!("the task of session number {n}, which is long"));
+                s
+            })
+            .collect();
+        app.panes.get_mut(&1).unwrap().session = Some(sessions[0].id);
+        app.sessions = sessions.clone();
+        let main = app.main_area();
+        app.run(&Command { action: "sidebar.zoom", arg: None });
+        assert_eq!(app.main_area(), main, "the panes keep their size");
+        let shown = screen(&app);
+        assert!(shown.contains("the task of session number 9, which is long"), "{shown}");
+        assert!(shown.contains("everything at once"), "{shown}");
+        // ⏎ on a row opens it and goes back.
+        app.nav_move(4);
+        app.run(&Command { action: "nav.open", arg: None });
+        assert!(!app.sidebar_zoom);
+        assert_eq!(app.focus, Focus::Pane);
+        assert_ne!(app.focused_session(), Some(sessions[0].id));
     }
 
     #[test]
