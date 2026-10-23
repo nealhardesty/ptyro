@@ -434,6 +434,7 @@ behave the same. (License and advisory checks run there through the cargo-deny a
 | `make tui-parity` | check that every CLI command has a TUI path or a waiver in [`docs/tui-parity.md`](docs/tui-parity.md) (`STRICT=0` only lists gaps) |
 | `make doc` / `make clean` | API docs / remove build output |
 | `make sandbox` / `make sandbox-clean` | a throwaway ptyro (own daemon, store, worktrees) with a demo repo / delete it. It isolates ptyro's state, not a security sandbox: agents still run as you |
+| `make reset` | start ptyro over, to try the first run again: lists what it removes (sessions, worktrees with any uncommitted work flagged, the login service, integrations, config, data, state), then asks. `YES=1` skips the question unless uncommitted work would be lost (then you type `delete`). Your repositories and their branches stay. With `PTYRO_HOME` set it resets that home only. Run it from a plain terminal, not inside ptyro |
 | `make orchestrate-demo` (`ARGS=tui\|clean`) | fan-out, a gated recipe and a lead over MCP, with fake agents |
 | `make changeset-demo` (`ARGS=tui\|clean`) | a change set across three repos, contract to merge train, with fake agents |
 | `make verify-claude` | check the Claude adapter against the real Claude Code on your machine (one tiny turn) |
