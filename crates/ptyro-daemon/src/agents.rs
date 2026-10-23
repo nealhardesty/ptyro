@@ -270,7 +270,23 @@ impl Daemon {
                         self.after_first_prompt(s, &text).await;
                     }
                 }
-                Signal::TurnEnd => self.after_turn(s).await,
+                // The agent's own turn ends count (once per turn: Stop, notify and OSC 7501 `done`
+                // can all end the same one); its working and idle flickers don't.
+                Signal::TurnEnd => {
+                    if !self.counts_turn_ends(s) {
+                        self.after_turn(s).await;
+                    } else if matches!(
+                        s.status(),
+                        Some(AgentStatus::Working | AgentStatus::Blocked)
+                    ) {
+                        let mut m = s.meta.lock().expect("meta");
+                        m.turn_end_seen = m.turn_open;
+                    } else if self.close_turn(s) {
+                        self.turn_ended(s).await;
+                        self.after_turn(s).await;
+                        changed = true;
+                    }
+                }
                 Signal::Child { id, kind, running } => {
                     let warn = {
                         let mut m = s.meta.lock().expect("meta");
@@ -320,25 +336,63 @@ impl Daemon {
         }
     }
 
+    /// Whether its turns are the agent's own turn ends (`Signal::TurnEnd`: hooks, `notify`,
+    /// OSC 7501 `done`, a structured driver) rather than every working → idle. Startup noise
+    /// (output, an agent's own "working" while it loads) then never counts as a turn.
+    pub(crate) fn counts_turn_ends(&self, s: &Session) -> bool {
+        if s.structured.is_some() {
+            return true;
+        }
+        if s.kind() != SessionKind::Agent {
+            return false;
+        }
+        let (adapter, agent) = {
+            let m = s.meta.lock().expect("meta");
+            (m.adapter.clone(), m.place.agent.clone())
+        };
+        let Some(adapter) = adapter else { return false };
+        ptyro_agents::adapter(&adapter).caps().turn_end_signal
+            && agent.is_none_or(|a| ptyro_agents::def(&self.config(), &a).hooks())
+    }
+
+    /// Closes the open turn; whether one was open.
+    fn close_turn(&self, s: &Session) -> bool {
+        let mut m = s.meta.lock().expect("meta");
+        m.turn_end_seen = false;
+        std::mem::take(&mut m.turn_open)
+    }
+
+    /// A turn finished: count it, then checkpoint, verify, tell a lead, look for collisions
+    /// (M7) and summarize (UX1.3).
+    async fn turn_ended(self: &Arc<Self>, s: &Arc<Session>) {
+        s.meta.lock().expect("meta").turns += 1;
+        if s.kind() == SessionKind::Agent {
+            self.checkpoint_turn(s);
+            self.verify_after_turn(s);
+            self.notice_lead(s, "done");
+            self.radar_after_turn(s);
+            self.run_member_changed(s).await;
+        }
+        if s.kind() == SessionKind::Agent || s.meta.lock().expect("meta").inner_agent.is_some() {
+            self.summarize_after(s);
+        }
+    }
+
     async fn on_transition(self: &Arc<Self>, s: &Arc<Session>, t: &Transition) {
         if t.to.status == AgentStatus::Working {
-            s.meta.lock().expect("meta").last_reply = None;
+            let mut m = s.meta.lock().expect("meta");
+            m.last_reply = None;
+            m.turn_open = true;
         }
         if t.from == Some(AgentStatus::Working)
             && matches!(t.to.status, AgentStatus::Idle | AgentStatus::Done)
         {
-            s.meta.lock().expect("meta").turns += 1;
-            if s.kind() == SessionKind::Agent {
-                // M7: checkpoint the turn, verify it, tell a lead, look for collisions.
-                self.checkpoint_turn(s);
-                self.verify_after_turn(s);
-                self.notice_lead(s, "done");
-                self.radar_after_turn(s);
-                self.run_member_changed(s).await;
-            }
-            if s.kind() == SessionKind::Agent || s.meta.lock().expect("meta").inner_agent.is_some()
-            {
-                self.summarize_after(s);
+            if !self.counts_turn_ends(s) {
+                self.close_turn(s);
+                self.turn_ended(s).await;
+            } else if s.meta.lock().expect("meta").turn_end_seen && self.close_turn(s) {
+                self.turn_ended(s).await;
+                self.after_turn(s).await;
             }
         }
         if t.to.status == AgentStatus::Blocked && s.kind() == SessionKind::Agent {

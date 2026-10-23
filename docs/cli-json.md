@@ -56,7 +56,7 @@ Conventions:
 | `dangerous` | bool | started with permission-skipping arguments |
 | `prompt_pending` | bool | a `--prompt` waits to be typed |
 | `last_prompt_ms` | number? | when ptyro last typed a prompt into it |
-| `turns` | number | completed turns (working → idle/done) |
+| `turns` | number | completed turns: the agent's own turn ends, else working → idle/done (SPEC §9.3b) |
 | `last_output_ms` | number? | when its screen last changed |
 | `held` | bool, missing when false | its permission prompt is held for an exact answer from any client (M9.5) |
 | `structured` | string, missing when not structured | a structured session's protocol: `stream-json`, `app-server`, `acp` or `opencode` (M10) |

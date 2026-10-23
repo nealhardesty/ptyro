@@ -322,6 +322,11 @@ async fn codex_gemini_antigravity_and_opencode_adapters() {
         } else {
             assert!(s.conversation.is_some(), "{adapter} conversation");
         }
+        // One turn, however many ways it ended (Codex: Stop, notify and OSC 7501 `done`) and
+        // whatever its startup looked like.
+        wait_for(&c, name, "a turn", |s| s.turns >= 1).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(get(&c, name).await.turns, 1, "{adapter}");
     }
     // Codex: the chained notify program got the turn's JSON.
     let deadline = Instant::now() + WAIT;
@@ -348,6 +353,34 @@ async fn codex_gemini_antigravity_and_opencode_adapters() {
     let after = get(&c, "cx").await;
     assert_eq!(after.conversation, before.conversation);
     assert_eq!(after.last_reply, before.last_reply);
+    // Working, then idle with no turn end (Codex starting up: its own "working", then
+    // SessionStart) is not a turn; a turn that ends twice (Stop, then notify) is one.
+    let hook = |event: &str, payload: serde_json::Value| Request::Hook {
+        session: before.id.full(),
+        adapter: "codex".into(),
+        event: event.into(),
+        payload,
+        env: Default::default(),
+    };
+    let thread = before.conversation.clone().unwrap();
+    for (event, payload) in [
+        ("PreToolUse", serde_json::json!({ "tool_name": "Bash" })),
+        ("SessionStart", serde_json::json!({})),
+    ] {
+        c.request(hook(event, payload)).await.unwrap();
+    }
+    assert_eq!(get(&c, "cx").await.turns, before.turns, "startup noise isn't a turn");
+    for (event, payload) in [
+        ("UserPromptSubmit", serde_json::json!({ "prompt": "again" })),
+        ("Stop", serde_json::json!({ "last_assistant_message": "done" })),
+        (
+            "notify",
+            serde_json::json!({ "type": "agent-turn-complete", "thread-id": thread, "last-assistant-message": "done" }),
+        ),
+    ] {
+        c.request(hook(event, payload)).await.unwrap();
+    }
+    assert_eq!(get(&c, "cx").await.turns, before.turns + 1, "one turn, ended twice");
     // Permission prompts: keys for codex and gemini, the API for OpenCode.
     for name in ["cx", "gm", "oc"] {
         send(&c, name, "ask make deploy").await;

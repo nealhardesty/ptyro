@@ -115,8 +115,16 @@ pub struct Meta {
     pub prompt_pending: bool,
     /// When ptyro last typed a prompt (with Enter) into it.
     pub last_prompt_ms: Option<u64>,
-    /// Completed turns (working → idle/done).
+    /// Completed turns: the agent's own turn ends, else working → idle/done
+    /// (`Daemon::counts_turn_ends`).
     pub turns: u32,
+    /// It has worked since the last turn it finished: the next turn end counts.
+    #[serde(default)]
+    pub turn_open: bool,
+    /// Its turn end came while the status was still working (OSC 7501 `done` before Claude's
+    /// Stop hook decides): the turn counts once the status moves to idle.
+    #[serde(default)]
+    pub turn_end_seen: bool,
     /// The worktree's state when the current (or last) turn started (`git stash create`).
     pub turn_base: Option<String>,
     pub turn_started_ms: u64,
@@ -302,6 +310,8 @@ fn new_meta(
         prompt_pending: false,
         last_prompt_ms: None,
         turns: 0,
+        turn_open: false,
+        turn_end_seen: false,
         turn_base: None,
         turn_started_ms: 0,
         last_reply: None,

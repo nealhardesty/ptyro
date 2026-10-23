@@ -157,7 +157,7 @@ pub struct SessionInfo {
     /// this, so it never mistakes the idle before the prompt for the end of the turn.
     #[serde(default)]
     pub last_prompt_ms: Option<u64>,
-    /// Completed turns (working → idle or done).
+    /// Completed turns: the agent's own turn ends, else working → idle or done (SPEC §9.3b).
     #[serde(default)]
     pub turns: u32,
     /// When it last changed its screen (`wait --stall`).

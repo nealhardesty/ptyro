@@ -1589,6 +1589,27 @@ Fusion rules:
 Counts bytes written to the PTY by the child per 250 ms bucket, ignoring cursor-blink-only and
 spinner-only redraws (rows whose text didn't change). Derives `active` / `quiet`; never `blocked`.
 
+### 9.3b Turns **[built 2026-10-23]**
+
+A turn is what the agent did between a prompt and its answer. Its end runs the turn-end work:
+`turns` + 1, the checkpoint (§15.6), verified-done (M7.9), the lead's `worker_done` notice,
+the collision radar, run members, the summary (UX1.3) and the `after_turn` script.
+- **Agents with a turn-end signal** (every built-in adapter whose hooks are on, and every
+  structured session): the turn ends at the agent's own end, `Signal::TurnEnd` (Claude's and
+  Codex's `Stop`, Codex's `notify`, Gemini's `AfterAgent`, OpenCode's `session.idle`, OSC 7501
+  `done`, a driver's turn end). It counts once, and only if the session has worked since the
+  last one, so a turn that several sources end (Codex sends `Stop`, `notify` and OSC 7501
+  `done`) is one turn. Start-up noise is none: the output heuristic, or an agent's own
+  "working" while it loads, followed by `SessionStart`'s idle. An end that arrives while the
+  status still says working (OSC 7501 `done` before Claude's Stop hook has decided) counts when
+  the status moves to idle, so a Stop hook that bounces the turn keeps it open. A turn you
+  interrupt has no end and runs on into the next one.
+- **Everything else** (a generic program, a shell, an agent with `hooks = false`): every
+  working → idle or done is a turn, as before.
+
+Before this rule, every working → idle counted. A Codex 0.164 session counted three turns for
+its first prompt, and its lead heard "done" twice before any work was done.
+
 ### 9.4 Attention
 
 - A session gains **attention** when it transitions to `Blocked`, `Idle` (after `Working` for
