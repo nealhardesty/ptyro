@@ -346,6 +346,39 @@ pub enum Then {
     Run(Command),
     /// Send this request; toast the text once it's done.
     Send(Box<Request>, String),
+    /// Open this file in `$EDITOR`, in a split.
+    Edit(std::path::PathBuf),
+}
+
+/// An offer to run a TUI action.
+fn run_offer(label: &str, action: &'static str) -> Offer {
+    Offer { label: label.into(), then: Then::Run(Command { action, arg: None }) }
+}
+
+/// The CLI commands error messages suggest, and the TUI action that does each (UX1.17): a
+/// message that names one offers that action instead of leaving you to type it. Longest first.
+const SUGGESTED: &[(&str, &str, &str)] = &[
+    ("`ptyro project trust", "project.trust", "review and trust them"),
+    ("`ptyro project add", "project.add", "add a project"),
+    ("`ptyro status --explain", "session.explain", "see why"),
+    ("`ptyro new --structured", "session.new", "start one"),
+    ("`ptyro new --agent", "session.new", "start one"),
+    ("`ptyro new", "session.new", "start one"),
+    ("`ptyro wt diff", "inspector", "inspect it"),
+    ("`ptyro pr fix", "inspector", "inspect its checks"),
+    ("`ptyro pr watch", "inspector", "inspect its checks"),
+    ("`ptyro events", "inspector", "see its events"),
+    ("`ptyro run retry", "runs", "see the run"),
+    ("`ptyro fanout", "runs", "see runs"),
+    ("`ptyro config edit", "config.edit", "edit the config"),
+];
+
+/// What a message suggests doing, as a TUI action (see [`SUGGESTED`]).
+pub fn offer_for(message: &str) -> Option<Offer> {
+    SUGGESTED
+        .iter()
+        .find(|(cli, _, _)| message.contains(cli))
+        .map(|(_, action, label)| run_offer(label, action))
 }
 
 enum Drag {
@@ -595,10 +628,11 @@ impl App {
         };
         let (ended, gates) = (unread(ptyro_core::status::AttentionKind::Run), self.open_gates());
         if ended + gates > 0 {
-            self.toast(format!(
-                "while you were away: {ended} run update(s), {gates} gate(s) waiting — {} O",
-                ptyro_core::config::key_label(&self.keymap.prefix)
-            ));
+            self.toast_offer(
+                format!("while you were away: {ended} run update(s), {gates} gate(s) waiting"),
+                false,
+                run_offer("see them", "runs"),
+            );
         }
     }
 
@@ -1304,7 +1338,15 @@ impl App {
             }
             (Pending::TrustDialog(then), Ok(Reply::Scripts { scripts })) => {
                 if scripts.text.is_empty() {
-                    self.toast("this project has no scripts (.ptyro.toml [scripts])");
+                    let file = self.project(&scripts.project).map(|p| p.root.join(".ptyro.toml"));
+                    match file {
+                        Some(f) => self.toast_offer(
+                            "this project has no scripts yet",
+                            false,
+                            Offer { label: "add some in .ptyro.toml".into(), then: Then::Edit(f) },
+                        ),
+                        None => self.toast("this project has no scripts yet"),
+                    }
                 } else if scripts.trusted {
                     self.after_trust(then);
                 } else {
@@ -1449,11 +1491,11 @@ impl App {
             (Pending::Spawned { .. } | Pending::Done(_), Err(e))
                 if e.code == ErrorCode::UntrustedProject =>
             {
-                self.toast_err(format!(
-                    "{} ({} : → project.trust)",
+                self.toast_offer(
                     e.message,
-                    ptyro_core::config::key_label(&self.keymap.prefix)
-                ));
+                    true,
+                    run_offer("review and trust them", "project.trust"),
+                );
             }
             (Pending::Scrollback { pane, session, then }, Ok(Reply::Scrollback { doc })) => {
                 if self.panes.get(&pane).is_some_and(|p| p.session == Some(session)) {
@@ -1486,7 +1528,10 @@ impl App {
                 }
             }
             (Pending::Saved, Ok(_)) => {}
-            (_, Err(e)) => self.toast_err(e.message),
+            (_, Err(e)) => match offer_for(&e.message) {
+                Some(offer) => self.toast_offer(e.message, true, offer),
+                None => self.toast_err(e.message),
+            },
             _ => {}
         }
     }
@@ -1639,11 +1684,15 @@ impl App {
             match self.keymap.lookup(Table::Prefix, key).cloned() {
                 Some(cmd) => self.run(&cmd),
                 None if key.code == KeyCode::Esc => {}
-                None => self.toast(format!(
-                    "{} {}: not bound ({0} ? lists keys)",
-                    ptyro_core::config::key_label(&self.keymap.prefix),
-                    ptyro_core::config::key_label(&keymap::normalize(key))
-                )),
+                None => self.toast_offer(
+                    format!(
+                        "{} {}: not bound",
+                        ptyro_core::config::key_label(&self.keymap.prefix),
+                        ptyro_core::config::key_label(&keymap::normalize(key))
+                    ),
+                    false,
+                    run_offer("list the keys", "help"),
+                ),
             }
             return;
         }
@@ -1783,7 +1832,11 @@ impl App {
                     focused
                 };
                 let Some(id) = target else {
-                    self.toast("no session here");
+                    self.toast_offer(
+                        "no session here",
+                        false,
+                        run_offer("start one", "session.new"),
+                    );
                     return;
                 };
                 let addr = id.full();
@@ -1925,7 +1978,11 @@ impl App {
                     focused
                 };
                 let Some(id) = target else {
-                    self.toast("no session here");
+                    self.toast_offer(
+                        "no session here",
+                        false,
+                        run_offer("start one", "session.new"),
+                    );
                     return;
                 };
                 self.session_action(cmd.action, id);
@@ -1946,10 +2003,11 @@ impl App {
                         Focus::Sidebar
                     }
                     Focus::Pane => {
-                        self.toast(format!(
-                            "the sidebar is hidden ({} \\ shows it)",
-                            ptyro_core::config::key_label(&self.keymap.prefix)
-                        ));
+                        self.toast_offer(
+                            "the sidebar is hidden",
+                            false,
+                            run_offer("show it", "sidebar.toggle"),
+                        );
                         Focus::Pane
                     }
                     Focus::Sidebar => Focus::Pane,
@@ -1959,6 +2017,17 @@ impl App {
                 Some(Offer { then: Then::Run(cmd), .. }) => self.run(&cmd),
                 Some(Offer { then: Then::Send(req, done), .. }) => {
                     self.request(Pending::Done(done), *req)
+                }
+                Some(Offer { then: Then::Edit(path), .. }) => {
+                    let editor = std::env::var("VISUAL")
+                        .or_else(|_| std::env::var("EDITOR"))
+                        .unwrap_or_else(|_| "vi".into());
+                    let argv: Vec<String> = editor
+                        .split_whitespace()
+                        .map(str::to_owned)
+                        .chain(std::iter::once(path.to_string_lossy().into_owned()))
+                        .collect();
+                    self.spawn(argv, Some(Dir::Down), None);
                 }
                 None => self.toast("nothing to undo or fix right now"),
             },
@@ -2064,9 +2133,27 @@ impl App {
                             self.chat_terminal.insert(id);
                         }
                     }
-                    None => self.toast(
-                        "only structured sessions have a chat view (`ptyro new --structured`)",
-                    ),
+                    None => match self.focused_session().filter(|id| {
+                        self.session(*id).is_some_and(|s| s.kind == SessionKind::Agent)
+                    }) {
+                        // An agent in its own UI: offer to switch it, same conversation (M10.6).
+                        Some(id) => self.toast_offer(
+                            "only structured sessions have a chat view",
+                            false,
+                            Offer {
+                                label: "switch this one".into(),
+                                then: Then::Send(
+                                    Box::new(Request::Convert {
+                                        addr: id.full(),
+                                        structured: true,
+                                        force: false,
+                                    }),
+                                    "switching to structured mode (same conversation)…".into(),
+                                ),
+                            },
+                        ),
+                        None => self.toast("only an agent's structured session has a chat view"),
+                    },
                 }
             }
             "view.redraw" => {
@@ -2128,7 +2215,11 @@ impl App {
                 self.marked
                     .retain(|id| self.sessions.iter().any(|s| s.id == *id && s.state.is_live()));
                 if self.marked.is_empty() {
-                    self.toast("mark sessions with Space in the sidebar first (Tab focuses it)");
+                    self.toast_offer(
+                        "mark sessions with Space in the sidebar first",
+                        false,
+                        run_offer("go to the sidebar", "focus.toggle"),
+                    );
                     return;
                 }
                 let names: Vec<String> = self
@@ -2206,7 +2297,11 @@ impl App {
 
     pub fn set_theme(&mut self, name: String) {
         self.theme = Theme::resolve(&self.config, &name, no_color());
-        self.toast(format!("theme {name} (set ui.theme in config to keep it)"));
+        self.toast_offer(
+            format!("theme {name} (set ui.theme to keep it)"),
+            false,
+            run_offer("edit the config", "config.edit"),
+        );
         self.theme_name = name;
     }
 
@@ -2240,9 +2335,11 @@ impl App {
                     Request::Kill { addr, signal: Some(9) },
                 );
             }
-            "session.restart" if info.state.is_live() => {
-                self.toast(format!("{} is still running", info.name))
-            }
+            "session.restart" if info.state.is_live() => self.toast_offer(
+                format!("{} is still running", info.name),
+                false,
+                run_offer("stop it", "session.stop"),
+            ),
             "session.restart" => self.request(
                 Pending::Done(format!("restarted {}", info.name)),
                 Request::Restart { addr },
@@ -2758,7 +2855,18 @@ impl App {
 
     fn open_script_picker(&mut self, wt: String, scripts: ScriptsInfo) {
         if scripts.names.is_empty() {
-            self.toast("no scripts in .ptyro.toml");
+            let file = self
+                .worktree(&wt)
+                .and_then(|w| self.project(&w.project))
+                .map(|p| p.root.join(".ptyro.toml"));
+            match file {
+                Some(f) => self.toast_offer(
+                    "no scripts yet",
+                    false,
+                    Offer { label: "add some in .ptyro.toml".into(), then: Then::Edit(f) },
+                ),
+                None => self.toast("no scripts yet"),
+            }
             return;
         }
         let items = scripts
@@ -3094,10 +3202,11 @@ impl App {
                         spec.setup = false;
                         self.create_worktree(*spec, split);
                     }
-                    self.toast(format!(
-                        "not trusted; `ptyro project trust {}` later",
-                        scripts.project
-                    ));
+                    self.toast_offer(
+                        format!("{}'s scripts not trusted", scripts.project),
+                        false,
+                        run_offer("trust them after all", "project.trust"),
+                    );
                 }
                 KeyCode::Down | KeyCode::Char { c: 'j' } => {
                     // Three header lines above the scripts.
@@ -4750,6 +4859,61 @@ mod tests {
         key(&mut app, KeyCode::Char { c: 't' }, Mods(Mods::CTRL));
         assert_eq!(prompt_text(&app), Some("Fix the flaky test in tests/api.rs"));
         assert!(matches!(&app.overlay, Some(Overlay::Prompt { kind: PromptKind::Retitle(_), .. })));
+    }
+
+    #[test]
+    fn messages_offer_the_fix_instead_of_a_command_to_type() {
+        let mut app = app();
+        // An error naming a CLI command offers its TUI action.
+        let o = offer_for("not trusted: review with `ptyro project trust myrepo`").unwrap();
+        assert!(matches!(o.then, Then::Run(Command { action: "project.trust", .. })), "{o:?}");
+        assert!(offer_for("something broke").is_none());
+        let act = |app: &mut App| {
+            let c = app.keymap.lookup(Table::Prefix, KeyEvent::char('u')).cloned().unwrap();
+            app.run(&c);
+        };
+        // An unbound key: `C-q u` lists the keys.
+        app.prefix = true;
+        app.on_key(&crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('y'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert_eq!(app.toast.as_ref().unwrap().text, "C-q y: not bound · C-q u list the keys");
+        act(&mut app);
+        assert!(matches!(app.overlay, Some(Overlay::Help { .. })));
+        // Broadcast with nothing marked: `C-q u` goes to the sidebar to mark some.
+        app.overlay = None;
+        app.sessions = vec![session("a")];
+        app.run(&Command { action: "broadcast", arg: None });
+        act(&mut app);
+        assert_eq!(app.focus, Focus::Sidebar);
+    }
+
+    /// No message the TUI writes tells you to type a command (UX1.17): it offers the fix.
+    #[test]
+    fn no_toast_names_a_command_to_type() {
+        for (file, src) in [
+            ("app.rs", include_str!("app.rs")),
+            ("inspector.rs", include_str!("inspector.rs")),
+            ("runs.rs", include_str!("runs.rs")),
+            ("sets.rs", include_str!("sets.rs")),
+        ] {
+            let lines: Vec<&str> = src.lines().collect();
+            for (i, l) in lines.iter().enumerate() {
+                if !(l.contains("toast(") || l.contains("toast_err(") || l.contains("toast_offer("))
+                {
+                    continue;
+                }
+                // The call and the lines of its arguments.
+                let call = lines[i..(i + 6).min(lines.len())].join(" ");
+                let call = call.split(';').next().unwrap_or("");
+                assert!(
+                    !call.contains("`ptyro ") && !call.contains(": project."),
+                    "{file}:{}: a message names a command to type: {call}",
+                    i + 1
+                );
+            }
+        }
     }
 
     #[test]

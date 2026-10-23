@@ -2461,7 +2461,13 @@ learning anything up front.
   instead (`session.retitle`); `worktree.retitle` titles a worktree.
 - **Messages offer the next step** (`toast.act`, `u` after the prefix or in the sidebar): a
   message may carry one follow-up, shown with its key (`registered myrepo in main · C-q u
-  undo`), kept up 10 s. "Nothing yanked yet" offers copy mode.
+  undo`), kept up 10 s. **Errors offer the fix** (UX1.17): no message the TUI writes names a
+  command to type (a test reads the sources to keep it so). Instead: an unbound key offers the
+  key list; untrusted scripts, trusting them; a project without scripts, its `.ptyro.toml` in
+  `$EDITOR` (`Then::Edit`); a hidden sidebar, showing it; "no session here", starting one; a
+  chat view on a terminal agent, switching it to structured mode; nothing marked for broadcast,
+  the sidebar; the runs view's gates and the away digest, the runs. A daemon error that
+  suggests a CLI command offers its TUI action when there is one (`app::SUGGESTED`).
 - **A repository registered on its own** (UX1.5, §10.1) says so with an undo; a profile pin its
   rules suggest still asks "keep the pin? [Y/n]".
 - **No project? Pick one, then carry on** (UX1.6). `N`, `o`, `r`, `R` and `project.trust` with no

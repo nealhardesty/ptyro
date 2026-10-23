@@ -1413,9 +1413,12 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
 - [ ] **UX1.16 Context hints** (R-UX-28) — S. The status bar's hints follow the selection:
   blocked → `p answer`, a diff → `D review`, merged → `x clean up`, an exited session →
   `C-r restart`.
-- [ ] **UX1.17 Errors offer the fix** (R-UX-27) — S. Audit the ~50 `toast(` calls in
+- [x] **UX1.17 Errors offer the fix** (R-UX-27) — S. Audit the ~50 `toast(` calls in
   `crates/ptyro-tui/src/app.rs`: none names a command to type. Each either does the obvious
   thing (UX1.6) or carries a key that does it ("not in a worktree · `N` new one").
+  *Done (2026-10-22):* `toast_offer` with `Then::{Run, Send, Edit}` behind `C-q u`; the daemon's
+  CLI hints map to actions (`SUGGESTED`); a test fails on any toast that names a command (SPEC
+  §11.2h). The copy-mode "set up `ptyro shell-init`" hint becomes UX1.20's offer.
 - [ ] **UX1.18 The palette searches everything** (R-UX-09) — S. Actions, sessions, worktrees,
   projects, `[scripts.*]` and recipes in one fuzzy list, each with its key, so the palette
   teaches the keys.

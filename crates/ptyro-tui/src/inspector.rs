@@ -126,7 +126,17 @@ impl App {
         };
         match wt {
             Some(w) => self.inspect(w),
-            None => self.toast("no worktree here: the inspector shows a worktree's changes"),
+            None => self.toast_offer(
+                "no worktree here: the inspector shows a worktree's changes",
+                false,
+                crate::app::Offer {
+                    label: "make one".into(),
+                    then: crate::app::Then::Run(crate::keymap::Command {
+                        action: "worktree.new",
+                        arg: None,
+                    }),
+                },
+            ),
         }
     }
 
@@ -254,7 +264,17 @@ impl App {
                             wait_ready_ms: Some(300_000),
                         },
                     ),
-                    None => self.toast("no agent runs in this worktree"),
+                    None => self.toast_offer(
+                        "no agent runs in this worktree",
+                        false,
+                        crate::app::Offer {
+                            label: "start one".into(),
+                            then: crate::app::Then::Run(crate::keymap::Command {
+                                action: "session.new",
+                                arg: None,
+                            }),
+                        },
+                    ),
                 }
             }
             _ => {}
