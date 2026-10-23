@@ -21,7 +21,7 @@ STRICT ?= 1
 
 .DEFAULT_GOAL := help
 .PHONY: help rust-install build release install test fmt fmt-check lint deny doc check ci clean tools \
-        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean orchestrate-demo changeset-demo verify-claude verify-structured tui-parity reset
+        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean orchestrate-demo changeset-demo verify-claude verify-structured tui-parity reset logos
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -54,6 +54,12 @@ lint: ## Clippy with warnings as errors
 
 deny: ## License/advisory/source checks (needs `make tools`)
 	$(CARGO) deny check
+
+logos: ## Render docs/logos (SVG by scripts/logos.py, PNG by rsvg-convert)
+	python3 -I scripts/logos.py docs/logos
+	@command -v rsvg-convert >/dev/null || { echo 'rsvg-convert not found (brew install librsvg / apt install librsvg2-bin)'; exit 1; }
+	@for f in docs/logos/*.svg docs/logos/riffs/*.svg; do rsvg-convert "$$f" -o "$${f%.svg}.png" || exit 1; done
+	@echo "rendered $$(ls docs/logos/*.png docs/logos/riffs/*.png | wc -l | tr -d ' ') PNGs in docs/logos"
 
 tui-parity: ## Check every CLI command has a TUI path or a waiver (docs/tui-parity.md); STRICT=0 only lists gaps
 	PTYRO_PARITY_STRICT=$(STRICT) $(CARGO) test -p ptyro --bin ptyro parity -- --nocapture

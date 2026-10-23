@@ -411,6 +411,7 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
 | [`docs/changesets.md`](docs/changesets.md) | Change sets: one change across several repos, from contract to merge train |
 | [`docs/compat.md`](docs/compat.md) | Which programs and terminals work inside ptyro, and how well |
 | [`docs/fixtures.md`](docs/fixtures.md) | Recording and sanitising test fixtures |
+| [`docs/logos/`](docs/logos/README.md) | Logo and icon concepts (SVG and PNG), plus riffs on the shortlist |
 | [`SPEC.md`](SPEC.md) | Architecture, protocol, formats, configuration, CLI, security, verified facts |
 | [`ROADMAP.md`](ROADMAP.md) | Milestones and tasks: everything that doesn't exist yet |
 | [`RESEARCH.md`](RESEARCH.md) | Competitor landscape and the idea funnel that feeds the roadmap |
@@ -434,6 +435,7 @@ behave the same. (License and advisory checks run there through the cargo-deny a
 | `make check` / `make ci` | what CI runs except `deny` (fmt-check, lint, test, smoke) / everything, `deny` included |
 | `make tools` / `make deny` | install cargo-deny / license, advisory and source checks |
 | `make tui-parity` | check that every CLI command has a TUI path or a waiver in [`docs/tui-parity.md`](docs/tui-parity.md) (`STRICT=0` only lists gaps) |
+| `make logos` | render the logo concepts in [`docs/logos`](docs/logos) (SVG and PNG; PNGs need `rsvg-convert`) |
 | `make doc` / `make clean` | API docs / remove build output |
 | `make sandbox` / `make sandbox-clean` | a throwaway ptyro (own daemon, store, worktrees) with a demo repo / delete it. It isolates ptyro's state, not a security sandbox: agents still run as you |
 | `make reset` | start ptyro over, to try the first run again: lists what it removes (sessions, worktrees with any uncommitted work flagged, the login service, integrations, config, data, state), then asks. `YES=1` skips the question unless uncommitted work would be lost (then you type `delete`). Your repositories and their branches stay. With `PTYRO_HOME` set it resets that home only. Run it from a plain terminal, not inside ptyro |
