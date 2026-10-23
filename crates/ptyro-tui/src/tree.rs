@@ -196,6 +196,7 @@ mod tests {
             task: None,
             last_reply: None,
             command: None,
+            inner_agent: None,
         }
     }
 

@@ -86,6 +86,7 @@ Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.
 | `z` | everything at once: the sidebar full-screen, every row open |
 | `<` / `>` | the sidebar a column narrower / wider (or drag its edge) |
 | `u` / `P` | do what the last message offers / add a project |
+| `A` | adopt the Claude started by hand in this shell: a managed session, same conversation |
 | `w` `o` `r` | workspace / editor / run script |
 | `v` `s` | split |
 | `1` … `9`, `/` | jump to a session / find one |

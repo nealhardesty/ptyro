@@ -27,6 +27,7 @@ the same check through `make test`. When you add a command, add its row here.
 | `resume` | `session.resume` (or `⏎` on a dormant pane) |
 | `hibernate` | `session.hibernate` |
 | `convert` | gap: UX1.21 (switch between the agent's own TUI and structured mode) |
+| `adopt` | `session.adopt` (`A` on a shell row running Claude) |
 | `status` | `session.explain` (`e` in the sidebar) says why; the sidebar and pane headers show the status |
 | `answer` | `peek` (`p`): `y` allow, `a` always, `n` deny |
 | `read` | `copy.enter` (`[`): the scrollback, searchable; the pane shows the screen |

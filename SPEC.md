@@ -890,6 +890,8 @@ Push messages have no id.
   agent's last message once its turn ended, at most 300) and `command`
   (`ShellCommand{text?, started_ms, ended_ms?, exit?}`: a shell's running or last command, from
   OSC 133 `C`/`D`). The TUI's sidebar rows show them (§11.2h).
+- `SessionInfo` gains `inner_agent`, `SpawnSpec` gains `resume`, and a new request, `Adopt{addr}`,
+  makes an agent started by hand in a shell a managed session (§8.7).
 - `ProjectRemove` gains `release` (let the project's running sessions go instead of refusing),
   and a new event, `ProjectAutoAdded{info, workspace, notes}`, says a repository registered on
   its own (§10.1).
@@ -1471,6 +1473,30 @@ terminationReason, error}` with camelCase fields, configured in `~/.gemini/confi
 `generic`, OSC 7501 from any program is trusted like any other emitter. 7501 `done` maps to
 `Done` (task complete), not `Idle`, because `done_means_idle` is false for generic tools.
 
+**[built UX1.4] An agent started by hand in a shell session.** Once a second, a live `shell`
+session's foreground process is matched against the agents (a configured agent's command, else
+a built-in's program: `claude`, `codex`, `gemini`, `opencode`, `agy`). While one is in the
+foreground:
+- `SessionInfo.inner_agent` names its adapter, and the TUI reads `zsh › claude ◌`; the session
+  isn't renamed.
+- What the shell said no longer holds (OSC 133 `C` was one long "working"): the engine forgets
+  its sources and its status (`Engine::forget_sources`), and the shell's `C` marks set no status.
+- The status comes from that adapter's hook-free sources, at **low** confidence: its titles,
+  and `Adapter::screen_status`. Claude: its dialogs (trust, login), a permission dialog ("Do
+  you want to proceed?" / "Do you want to make this…", named by its first line, `Bash
+  command`) → blocked, "esc to interrupt" → working, else idle. Codex the same with its own
+  words [unverified]; the others, titles only. A high-confidence source (an agent that speaks
+  OSC 7501) still wins.
+- Once it exits, the engine forgets again, and the shell's own marks take over.
+
+**Adopt** (`Request::Adopt`, `ptyro adopt SESSION`, the TUI's `session.adopt`, `A` in the
+sidebar), Claude only so far: refused while it's working; else the daemon finds the
+conversation it's in (the newest transcript in `<config dir>/projects/<cwd, every
+non-alphanumeric a dash>/`, under the shell's profile's `CLAUDE_CONFIG_DIR`, §20.1), types
+`Ctrl-U /exit ⏎`, waits up to 10 s for the shell to come back, and spawns a managed agent session
+in the same directory and profile with `SpawnSpec.resume`, so it gets hooks, hibernation and
+mail, in the same conversation.
+
 ---
 
 ## 9. Status engine and attention
@@ -1677,7 +1703,7 @@ modes, other-workspace badges and the per-workspace inbox tabs.
   - at spawn, in the session's workspace (`SpawnSpec.workspace`, else the one the TUI showed
     last, its `_tui` view, else `main`);
   - when a running session's directory moves into one (OSC 7, else the foreground process's
-    cwd), from a sweep every 5 s that looks at each (session, directory) once. A session outside
+    cwd), from a sweep every 2 s that looks at each (session, directory) once. A session outside
     every project moves in; one already in a project stays there (its worktree lock and profile
     are its own), and only the new repository is registered;
   - once at start, for the sessions an earlier daemon or a live upgrade left running.
@@ -2398,6 +2424,8 @@ learning anything up front.
   `?`), with the keys as bound. In raw attach, only the attached session's removal ends it.
 - **Programs are named** (UX1.1): the sidebar, headers and `ptyro ls` show `claude`, not the
   version its installer names the file after (§5.1, §20.5).
+- **An agent started by hand in a shell** (UX1.4, §8.7) reads `zsh › claude` with the `◌`
+  of a guess, and a detail line offers adopting it (`A` in the sidebar).
 - **Rows say what's going on** (UX1.2). Under a session's first line (now with how long it has
   been working or blocked) come up to a few lines, each only when it has something to say:
   - blocked: `wants` what (the permission's tool, the question), then the keys that answer it;
@@ -4532,6 +4560,11 @@ learn something the hard way.
     by bits.
   - Its xterm encoder ignores DECCKM. In application-cursor mode, unmodified arrows/Home/End must
     become `ESC O x`. `ptyro-term` patches this, unit-tested in `crates/ptyro-term/src/input.rs`.
+- **[verified 2026-10-22, Claude Code 2.1.309]** Claude keeps each conversation's transcript at
+  `<config dir>/projects/<cwd with every non-alphanumeric character a dash>/<conversation
+  id>.jsonl` (`/Users/me/dev/easy_llm_wrapper` → `-Users-me-dev-easy-llm-wrapper`); the newest one
+  there is the conversation a Claude started in that directory is in. Adopting one (UX1.4)
+  resumes it.
 - **[verified 2026-10-22, macOS 25.6, Claude Code 2.1.291–2.1.309]** Claude Code's native
   installer puts each release at `~/.local/share/claude/versions/<version>` and points
   `~/.local/bin/claude` at it, so the kernel names the process after the version (`ps` `ucomm`

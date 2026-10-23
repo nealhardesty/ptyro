@@ -698,7 +698,7 @@ impl Daemon {
         }
         let start = agent.map(|name| crate::launch::AgentStart {
             name,
-            resume: None,
+            resume: spec.resume.clone(),
             prompt,
             command: None,
             mcp: spec.lead.is_some() || spec.mcp,
@@ -1117,6 +1117,7 @@ impl Daemon {
             Request::Convert { addr, structured, force } => {
                 self.convert(&addr, structured, force).await
             }
+            Request::Adopt { addr } => self.adopt(&addr).await,
             Request::ChatGet { addr } => {
                 let s = self.resolve(&addr)?;
                 let st = s.structured.as_ref().ok_or_else(|| {

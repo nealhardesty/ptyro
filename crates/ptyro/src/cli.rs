@@ -338,6 +338,19 @@ async fn dispatch(cmd: Option<Cmd>, json_wire: bool, remote: Option<String>) -> 
                 r => Err(unexpected(r)),
             }
         }
+        Some(Cmd::Adopt { session }) => {
+            let c = ctx.connect(false).await.map_err(no_daemon)?;
+            match c.request(Request::Adopt { addr: session }).await? {
+                Reply::Session { info } => {
+                    eprintln!(
+                        "{} runs Claude as a managed session now, same conversation — attach with `ptyro attach {}`",
+                        info.name, info.name
+                    );
+                    Ok(0)
+                }
+                r => Err(unexpected(r)),
+            }
+        }
         Some(Cmd::Serve { listen, insecure, tailscale, managed }) => {
             crate::serve::run(&ctx, listen, insecure, tailscale, managed).await
         }

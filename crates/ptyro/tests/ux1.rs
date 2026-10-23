@@ -47,6 +47,14 @@ impl World {
     }
 }
 
+/// ptyro under another name, so its process is called that: a hard link (the kernel names a
+/// process after the path it was started by), else a copy.
+fn named(path: &std::path::Path) {
+    if std::fs::hard_link(BIN, path).is_err() {
+        std::fs::copy(BIN, path).unwrap();
+    }
+}
+
 async fn spawn(c: &Client, spec: SpawnSpec) -> SessionInfo {
     match c.request(Request::Spawn { spec }).await.expect("spawn") {
         Reply::Session { info } => info,
@@ -250,4 +258,111 @@ async fn a_shell_that_moves_into_a_repository_registers_it() {
     assert_eq!(ps.len(), 1);
     assert_eq!(s.project.as_deref(), Some(ps[0].id.as_str()));
     assert_eq!(ps[0].slug, "other");
+}
+
+/// UX1.4: Claude typed into a shell session isn't one long "working" command: the session
+/// notes it (`zsh › claude`) and reads its status off its screen, at low confidence.
+#[tokio::test]
+async fn an_agent_started_by_hand_in_a_shell_reports_idle_blocked_and_working() {
+    // A real process named `claude` (ptyro by another name), started from the shell after an
+    // OSC 133 `C`, which used to mean "working" for good.
+    let w = World::new("exec sleep 60");
+    let claude = w.home().join("claude");
+    named(&claude);
+    let script = format!(
+        "printf '\\033]133;C;cmdline=claude\\007'; exec {} fake-agent --no-probe --claude-screen",
+        claude.display()
+    );
+    std::fs::write(w.home().join("fake-shell"), format!("#!/bin/sh\n{script}\n")).unwrap();
+    let c = w.d.client().await.unwrap();
+    let sh = SpawnSpec {
+        cwd: std::env::temp_dir(),
+        name: Some("sh".into()),
+        size: Some(TermSize::new(100, 20)),
+        ..SpawnSpec::default()
+    };
+    spawn(&c, sh).await;
+    let status = |s: &SessionInfo| s.status.as_ref().map(|r| (r.status, r.confidence, r.source));
+    use ptyro_core::status::{Confidence, SignalSource};
+    let s = wait_for(&c, "sh", "idle, read off Claude's screen", |s| {
+        s.inner_agent.is_some()
+            && status(s) == Some((AgentStatus::Idle, Confidence::Low, SignalSource::Screen))
+    })
+    .await;
+    assert_eq!(s.inner_agent.as_deref(), Some("claude"));
+    assert_eq!(s.foreground.as_deref(), Some("claude"));
+
+    let type_in = |text: &'static str| {
+        let c = &c;
+        async move {
+            c.request(Request::SendText {
+                addr: "sh".into(),
+                text: text.into(),
+                enter: true,
+                wait_ready_ms: None,
+            })
+            .await
+            .unwrap();
+        }
+    };
+    type_in("ask npm install").await;
+    let s = wait_for(&c, "sh", "blocked on its permission dialog", |s| {
+        status(s).is_some_and(|(st, _, _)| st == AgentStatus::Blocked)
+    })
+    .await;
+    assert_eq!(s.status.unwrap().kind.as_deref(), Some("permission"));
+    type_in("y").await;
+    wait_for(&c, "sh", "idle once answered", |s| {
+        status(s).is_some_and(|(st, _, _)| st == AgentStatus::Idle)
+    })
+    .await;
+    type_in("work 2.5").await;
+    wait_for(&c, "sh", "working while it says so", |s| {
+        status(s).is_some_and(|(st, _, _)| st == AgentStatus::Working)
+    })
+    .await;
+    wait_for(&c, "sh", "idle again after", |s| {
+        status(s).is_some_and(|(st, _, _)| st == AgentStatus::Idle)
+    })
+    .await;
+}
+
+/// UX1.4: adopting the Claude started by hand: it exits, and a managed session resumes the
+/// conversation it was in (its newest transcript for that directory).
+#[tokio::test]
+async fn adopting_a_hand_started_claude_resumes_its_conversation() {
+    let w = World::new("exec sleep 60");
+    let claude = w.home().join("claude");
+    named(&claude);
+    let work = w.home().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let script = format!("exec {} fake-agent --no-probe --claude-screen", claude.display());
+    std::fs::write(w.home().join("fake-shell"), format!("#!/bin/sh\n{script}\n")).unwrap();
+    // Claude's transcript of the conversation it's in, where Claude keeps them.
+    let slug: String = work
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
+        .collect();
+    let transcripts = w.home().join(".claude/projects").join(slug);
+    std::fs::create_dir_all(&transcripts).unwrap();
+    std::fs::write(transcripts.join("conv-1234.jsonl"), "{}\n").unwrap();
+    let c = w.d.client().await.unwrap();
+    let sh = SpawnSpec {
+        cwd: work.clone(),
+        name: Some("sh".into()),
+        size: Some(TermSize::new(100, 20)),
+        ..SpawnSpec::default()
+    };
+    spawn(&c, sh).await;
+    wait_for(&c, "sh", "Claude in its foreground", |s| s.inner_agent.is_some()).await;
+    let adopted = match c.request(Request::Adopt { addr: "sh".into() }).await.unwrap() {
+        Reply::Session { info } => info,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(adopted.agent.as_deref(), Some("claude"));
+    assert_eq!(adopted.conversation.as_deref(), Some("conv-1234"));
+    w.d.wait_for_text(&c, &adopted.name, "session=conv-1234", WAIT).await.unwrap();
+    let screen = w.d.wait_for_text(&c, &adopted.name, "resumed=", WAIT).await.unwrap();
+    assert!(screen.contains("resumed=true"), "{screen}");
 }

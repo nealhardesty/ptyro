@@ -180,6 +180,10 @@ pub struct SessionInfo {
     /// A shell's command, running or last finished (OSC 133 `C`/`D`; UX1.2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<ShellCommand>,
+    /// The adapter of an agent started by hand in this shell session, while it's in the
+    /// foreground (UX1.4): its status then comes from its screen, at low confidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inner_agent: Option<String>,
 }
 
 /// A shell's current or last command, from OSC 133 marks (`ptyro shell-init`).
@@ -369,4 +373,7 @@ pub struct SpawnSpec {
     /// Give the agent `ptyro mcp` (a change set's lead, M11; `lead` implies it).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub mcp: bool,
+    /// Resume this conversation of the agent instead of starting one (UX1.4: adopting).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume: Option<String>,
 }

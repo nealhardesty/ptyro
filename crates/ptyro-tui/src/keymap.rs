@@ -56,6 +56,10 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("inbox", "The inbox: everything that wanted you, per workspace"),
     a("peek", "Peek at a session's screen and what it wants; reply or answer inline"),
     a("session.resume", "Resume a dormant agent into its conversation"),
+    a(
+        "session.adopt",
+        "Adopt the Claude started by hand in this shell: a managed session, same conversation",
+    ),
     a("session.hibernate", "Stop an idle agent, keeping it resumable"),
     a("session.explain", "Why is it in this state? The status engine's recent decisions"),
     a("session.mute", "Mute this session's notifications for an hour (the inbox still gets them)"),
@@ -268,6 +272,7 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Nav, "z", "sidebar.zoom"),
     (Table::Nav, "u", "toast.act"),
     (Table::Nav, "P", "project.add"),
+    (Table::Nav, "A", "session.adopt"),
     (Table::Nav, ">", "sidebar.wider"),
     (Table::Nav, "<", "sidebar.narrower"),
     (Table::Nav, "v", "pane.split_right"),

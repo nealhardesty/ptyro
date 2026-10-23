@@ -97,6 +97,9 @@ pub struct Meta {
     /// The shell's current or last command (UX1.2).
     #[serde(default)]
     pub command: Option<ptyro_core::session::ShellCommand>,
+    /// An agent started by hand in this shell, in the foreground now (UX1.4).
+    #[serde(default)]
+    pub inner_agent: Option<String>,
     /// Claude's messaging socket, from the hook environment (M4.18).
     pub messaging: Option<String>,
     /// A prompt waits to be typed once the agent is ready.
@@ -281,6 +284,7 @@ fn new_meta(
         first_prompt: None,
         command_since_ms: None,
         command: None,
+        inner_agent: None,
         messaging: None,
         prompt_pending: false,
         last_prompt_ms: None,
@@ -501,6 +505,7 @@ impl Session {
             task: meta.first_prompt.as_deref().map(|p| ptyro_core::session::brief(p, 200)),
             last_reply: meta.last_reply.as_deref().map(|r| ptyro_core::session::brief(r, 300)),
             command: meta.command.clone(),
+            inner_agent: meta.inner_agent.clone(),
         }
     }
 
@@ -837,6 +842,8 @@ impl Session {
                         }
                         'C' if kind == SessionKind::Shell => {
                             let mut m = self.meta.lock().expect("meta");
+                            // An agent started by hand says what it's doing itself (UX1.4).
+                            let inner = m.inner_agent.is_some();
                             m.command_since_ms = Some(now_ms());
                             m.command = Some(ptyro_core::session::ShellCommand {
                                 text: cmdline.map(|c| ptyro_core::session::brief(&c, 200)),
@@ -845,7 +852,9 @@ impl Session {
                                 exit: None,
                             });
                             drop(m);
-                            signals.push(high(Signal::status(AgentStatus::Working)));
+                            if !inner {
+                                signals.push(high(Signal::status(AgentStatus::Working)));
+                            }
                         }
                         'D' => {
                             let mut m = self.meta.lock().expect("meta");
@@ -871,10 +880,16 @@ impl Session {
                     continue;
                 }
                 TermEvent::Title(Some(t)) => {
-                    if let Some(sig) =
-                        self.adapter().and_then(|a| ptyro_agents::adapter(&a).on_title(&t))
+                    // An agent started by hand in a shell: its title too, at low confidence.
+                    let inner = self.meta.lock().expect("meta").inner_agent.clone();
+                    let (adapter, confidence) = match (self.adapter(), inner) {
+                        (Some(a), _) => (Some(a), Confidence::Medium),
+                        (None, Some(a)) => (Some(a), Confidence::Low),
+                        (None, None) => (None, Confidence::Medium),
+                    };
+                    if let Some(sig) = adapter.and_then(|a| ptyro_agents::adapter(&a).on_title(&t))
                     {
-                        signals.push(sourced(sig, SignalSource::Title, Confidence::Medium));
+                        signals.push(sourced(sig, SignalSource::Title, confidence));
                     }
                     continue;
                 }

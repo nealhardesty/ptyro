@@ -474,6 +474,13 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
+    /// Make the Claude you started by hand in a shell session a managed session (hooks,
+    /// hibernation, mail), resuming the same conversation
+    Adopt {
+        /// The shell session it runs in
+        #[arg(add = ArgValueCandidates::new(complete::sessions))]
+        session: String,
+    },
     /// Serve the web app and the protocol over WebSocket for paired devices (phones)
     Serve {
         /// Listen here (default `[remote] listen`, 127.0.0.1:7091)

@@ -38,6 +38,7 @@ Conventions:
 | `ptyro restart SESSIONS…` / `rm SESSIONS…` / `rename SESSION NAME` | run exited sessions again / forget them / rename |
 | `ptyro resume SESSIONS…` / `hibernate SESSIONS…` | relaunch dormant agents / stop idle ones, keeping them resumable |
 | `ptyro convert SESSION [--to tui\|structured] [--force]` | switch an agent between its own TUI and structured mode, same conversation |
+| `ptyro adopt SESSION` | the Claude you started by hand in a shell session becomes a managed session (hooks, hibernation, mail), same conversation |
 
 ## Scripting
 

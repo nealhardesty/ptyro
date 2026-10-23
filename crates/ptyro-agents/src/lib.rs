@@ -75,6 +75,21 @@ pub fn adapter(id: &str) -> Box<dyn Adapter> {
     }
 }
 
+/// The adapter of the agent `program` (a process name, `claude`) runs, when it is one: a
+/// configured agent's command, else a built-in's (UX1.4: an agent started by hand in a shell).
+pub fn adapter_for_program(config: &Config, program: &str) -> Option<String> {
+    let base = |p: &str| p.rsplit('/').next().unwrap_or(p).to_owned();
+    let configured = names(config).into_iter().find(|a| {
+        command(config, a).and_then(|c| c.first().map(|p| base(p))).as_deref() == Some(program)
+    });
+    let builtin = || BUILTIN.iter().find(|(_, p)| *p == program).map(|(n, _)| (*n).to_owned());
+    configured
+        .map(|a| adapter_name(config, &a))
+        .filter(|a| a != "generic")
+        .or_else(|| builtin().map(|n| adapter_name(config, &n)))
+        .filter(|a| a != "generic")
+}
+
 /// Every agent name: built-ins, then configured ones.
 pub fn names(config: &Config) -> Vec<String> {
     let mut v: Vec<String> = BUILTIN.iter().map(|(n, _)| (*n).to_owned()).collect();
@@ -144,6 +159,20 @@ pub fn login_argv(target: &str) -> Option<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn programs_name_their_agents() {
+        let config = Config::default();
+        assert_eq!(super::adapter_for_program(&config, "claude").as_deref(), Some("claude"));
+        assert_eq!(super::adapter_for_program(&config, "agy").as_deref(), Some("antigravity"));
+        assert_eq!(super::adapter_for_program(&config, "zsh"), None);
+        let mut config = Config::default();
+        config.agents.insert(
+            "mine".into(),
+            toml::from_str("command = [\"/opt/bin/my-agent\"]\nadapter = \"codex\"").unwrap(),
+        );
+        assert_eq!(super::adapter_for_program(&config, "my-agent").as_deref(), Some("codex"));
+    }
+
     use super::*;
 
     #[test]

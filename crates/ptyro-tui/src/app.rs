@@ -1744,7 +1744,8 @@ impl App {
                     None => self.toast("nothing to peek at"),
                 }
             }
-            "session.resume" | "session.hibernate" | "session.explain" | "session.mute" => {
+            "session.resume" | "session.hibernate" | "session.explain" | "session.mute"
+            | "session.adopt" => {
                 let target = if self.focus == Focus::Sidebar {
                     match self.selected_row() {
                         Some(Row::Session(id)) => Some(id),
@@ -1764,6 +1765,13 @@ impl App {
                     }
                     "session.hibernate" => self
                         .request(Pending::Done("hibernated".into()), Request::Hibernate { addr }),
+                    "session.adopt" => {
+                        self.toast("adopting: Claude exits here and comes back managed…");
+                        self.request(
+                            Pending::Spawned { split: None, spec: Box::default() },
+                            Request::Adopt { addr },
+                        )
+                    }
                     "session.mute" => self.request(
                         Pending::Done("notifications muted for 1h".into()),
                         Request::Mute { target: addr, minutes: Some(60), unmute: false },
@@ -4201,6 +4209,21 @@ mod tests {
         app.config.ui.sidebar_detail = ptyro_core::config::SidebarDetail::Compact;
         assert!(!rows_say(&app, "task fix") && !rows_say(&app, "wants"));
         assert!(rows_say(&app, "fixer"));
+    }
+
+    #[test]
+    fn an_agent_started_in_a_shell_reads_shell_then_agent_and_offers_adopting() {
+        let mut app = app();
+        let mut sh = session("sh");
+        sh.argv = vec!["/bin/zsh".into(), "-l".into()];
+        sh.foreground = Some("claude".into());
+        sh.inner_agent = Some("claude".into());
+        status(&mut sh, AgentStatus::Idle, None, None);
+        sh.status.as_mut().unwrap().confidence = ptyro_core::status::Confidence::Low;
+        app.sessions = vec![sh];
+        let lines = sidebar(&app);
+        assert!(lines.iter().any(|l| l.contains("◌ sh zsh › claude")), "{lines:#?}");
+        assert!(lines.iter().any(|l| l.contains("A adopts it")), "{lines:#?}");
     }
 
     #[test]

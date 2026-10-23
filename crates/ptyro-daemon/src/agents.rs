@@ -1001,7 +1001,11 @@ impl Daemon {
     async fn heuristic_tick(self: &Arc<Self>) {
         let now = now_ms();
         for s in self.sessions() {
-            if !s.is_live() || s.kind() == SessionKind::Shell {
+            if !s.is_live() {
+                continue;
+            }
+            if s.kind() == SessionKind::Shell {
+                self.inner_agent_tick(&s).await;
                 continue;
             }
             // Before the first hook: dialogs only the screen shows (trust, login, updates).
@@ -1079,6 +1083,111 @@ impl Daemon {
                 .await;
             }
         }
+    }
+
+    /// A shell session with an agent in its foreground, started by hand (UX1.4): note which
+    /// one, drop what the shell said (one long "working" command), and read its status off its
+    /// screen at low confidence until it exits. Then the shell speaks for itself again.
+    async fn inner_agent_tick(self: &Arc<Self>, s: &Arc<Session>) {
+        let config = self.config();
+        let fg = s.foreground_pid().and_then(ptyro_pty::process_name);
+        let now = fg.as_deref().and_then(|p| ptyro_agents::adapter_for_program(&config, p));
+        let was = s.meta.lock().expect("meta").inner_agent.clone();
+        if now != was {
+            s.meta.lock().expect("meta").inner_agent = now.clone();
+            s.engine.lock().expect("engine").forget_sources(true);
+            s.record_event("inner_agent", serde_json::json!({ "agent": now }));
+            let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(s) });
+        }
+        let Some(adapter) = now else { return };
+        let screen = s.read_screen(ptyro_protocol::ScreenFormat::Plain);
+        if let Some(signal) = ptyro_agents::adapter(&adapter).screen_status(&screen) {
+            let low = Sourced { signal, source: SignalSource::Screen, confidence: Confidence::Low };
+            self.apply_queued(s, vec![low]).await;
+        }
+    }
+
+    /// `Adopt` (UX1.4): the Claude started by hand in a shell session leaves (`/exit` at its
+    /// prompt) and comes back as a managed agent session in the same place, under the shell's
+    /// profile, resuming the conversation it was in (its newest transcript for that directory).
+    pub(crate) async fn adopt(self: &Arc<Self>, addr: &str) -> Result<Reply, Error> {
+        let s = self.resolve(addr)?;
+        let (inner, profile, workspace, name) = {
+            let m = s.meta.lock().expect("meta");
+            (
+                m.inner_agent.clone(),
+                m.place.profile.clone(),
+                m.place.workspace.clone(),
+                m.name.clone(),
+            )
+        };
+        let Some(agent) = inner else {
+            return Err(Error::invalid(format!(
+                "{name} has no agent in its foreground to adopt (start one with `claude` there first)"
+            )));
+        };
+        if agent != "claude" {
+            return Err(Error::new(
+                ErrorCode::Unsupported,
+                format!(
+                    "adopting works for Claude so far; start {agent} with `ptyro new --agent {agent}`"
+                ),
+            ));
+        }
+        if s.status() == Some(AgentStatus::Working) {
+            return Err(Error::conflict(format!(
+                "{name}'s Claude is in the middle of a turn: adopt it once it's idle"
+            )));
+        }
+        let info = self.info(&s);
+        let cwd = info.live_cwd.clone().unwrap_or_else(|| info.cwd.clone());
+        let config = self.config();
+        let root = self.paths.data.join("profiles");
+        let plan =
+            ptyro_agents::profile::plan(&config, &profile, &root, &mut |_, _| Ok(String::new()))
+                .map_err(Error::invalid)?;
+        let dir = plan
+            .shown
+            .iter()
+            .find(|(k, _)| k == "CLAUDE_CONFIG_DIR")
+            .map(|(_, v)| std::path::PathBuf::from(v))
+            .or_else(|| {
+                std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".claude"))
+            })
+            .ok_or_else(|| Error::internal("no HOME"))?;
+        let conversation =
+            ptyro_agents::claude::latest_conversation(&dir, &cwd).ok_or_else(|| {
+                Error::missing("conversation", format!("Claude's transcript for {}", cwd.display()))
+            })?;
+        // Leave it: clear the input line, then /exit, and wait for the shell to come back.
+        s.write_raw(b"\x15/exit\r");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let fg = s.foreground_pid().and_then(ptyro_pty::process_name);
+            if fg.as_deref().and_then(|p| ptyro_agents::adapter_for_program(&config, p)).is_none() {
+                break;
+            }
+            if std::time::Instant::now() > deadline {
+                return Err(Error::new(
+                    ErrorCode::Timeout,
+                    format!("{name}'s Claude didn't exit; type /exit there, then adopt again"),
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let spec = ptyro_core::session::SpawnSpec {
+            agent: Some(agent),
+            cwd,
+            profile: Some(profile),
+            workspace,
+            size: Some(info.size),
+            resume: Some(conversation),
+            confirmed: true,
+            ..Default::default()
+        };
+        let new = self.spawn(spec).await?;
+        s.record_event("adopted", serde_json::json!({ "into": new.id.full() }));
+        Ok(Reply::Session { info: self.info(&new) })
     }
 
     async fn hibernate_tick(self: &Arc<Self>) {

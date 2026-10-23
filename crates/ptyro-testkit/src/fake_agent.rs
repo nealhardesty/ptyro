@@ -27,6 +27,9 @@ pub fn main(args: &[String]) -> i32 {
         return crate::fake_adapters::main(args);
     }
     let quiet = args.iter().any(|a| a == "--no-probe");
+    // Draw what Claude Code's screen shows while working and asking (UX1.4: an agent started by
+    // hand in a shell, read off its screen).
+    let claude = args.iter().any(|a| a == "--claude-screen");
     let stdin = std::io::stdin();
     let psp = !quiet && probe_psp(&stdin);
     let mut out = std::io::stdout();
@@ -54,6 +57,22 @@ pub fn main(args: &[String]) -> i32 {
         let Some(Ok(line)) = lines.next() else { return 0 };
         let (cmd, rest) = line.trim().split_once(' ').unwrap_or((line.trim(), ""));
         match cmd {
+            "ask" if claude => {
+                let _ = write!(
+                    out,
+                    "\r\n Bash command\r\n   {rest}\r\n Do you want to proceed?\r\n ❯ 1. Yes\r\n   2. No\r\n"
+                );
+                let _ = out.flush();
+                let answer = lines.next().and_then(Result::ok).unwrap_or_default();
+                let _ = write!(out, "\x1b[2J\x1b[Hanswer: {}\r\n", answer.trim());
+            }
+            "/exit" if claude => return 0,
+            "work" if claude => {
+                let _ = write!(out, "✻ Working… (esc to interrupt)");
+                let _ = out.flush();
+                std::thread::sleep(Duration::from_secs_f64(rest.parse().unwrap_or(1.0)));
+                let _ = write!(out, "\r\x1b[2Kworked\r\n");
+            }
             "ask" => {
                 report(&mut out, "state=blocked:kind=question");
                 let _ = write!(out, "{rest} [y/n] ");

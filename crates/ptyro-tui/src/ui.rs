@@ -69,9 +69,13 @@ fn what(s: &SessionInfo) -> String {
     if let Some(role) = &s.script {
         return role.trim_start_matches("run:").to_owned();
     }
-    s.foreground.clone().unwrap_or_else(|| {
-        s.argv.first().map(|a| a.rsplit('/').next().unwrap_or(a).to_owned()).unwrap_or_default()
-    })
+    let program =
+        s.argv.first().map(|a| a.rsplit('/').next().unwrap_or(a).to_owned()).unwrap_or_default();
+    // An agent started by hand in a shell (UX1.4): `zsh › claude`.
+    if let Some(agent) = &s.inner_agent {
+        return format!("{program} › {}", s.foreground.as_deref().unwrap_or(agent));
+    }
+    s.foreground.clone().unwrap_or(program)
 }
 
 pub(crate) fn fg(app: &App, c: Color) -> Style {
@@ -561,6 +565,12 @@ fn session_details(
             }
             _ => {}
         }
+    }
+    // An agent started by hand in a shell: a guess off its screen, and what adopting gives.
+    if s.inner_agent.as_deref() == Some("claude") {
+        items.push(("◌", "by hand · A adopts it: hooks, resume".into(), t.dim));
+    } else if let Some(a) = &s.inner_agent {
+        items.push(("◌", format!("{a} by hand, status off its screen"), t.dim));
     }
     if let Some(task) = &s.task {
         items.push(("task", task.clone(), t.text));

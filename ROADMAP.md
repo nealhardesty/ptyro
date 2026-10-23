@@ -1286,7 +1286,7 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
     the daemon so B can replace A.
   - *Done when:* with a fake agent and a fake summariser, rows show summaries that update per
     turn. `make verify-claude` checks one real summary.
-- [ ] **UX1.4 Agents started inside a shell session** (R-AGT-09) — M. Typing `claude` in a
+- [x] **UX1.4 Agents started inside a shell session** (R-AGT-09) — M. Typing `claude` in a
   `shell` session leaves it a shell. The sidebar shows the foreground process. Status still
   comes from OSC 133, which reports the whole Claude run as one long **working** command, even
   while Claude waits for you. Proposed fix:
@@ -1300,6 +1300,11 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
   - Looking through `node`/`npx` launchers belongs with detection manifests (R-DD-05).
   - *Done when:* a shell session running a fake Claude shows idle and blocked, not a solid
     working.
+  - *Done (2026-10-22):* `inner_agent_tick` in `crates/ptyro-daemon/src/agents.rs`,
+    `Adapter::screen_status` (Claude, Codex), `Engine::forget_sources`; adopt for Claude
+    (`ptyro adopt`, `A` in the sidebar), resuming the newest transcript. `tests/ux1.rs` runs a
+    process really named `claude` through idle, blocked and working, and adopts one (SPEC §8.7).
+    Looking through `node`/`npx` launchers is still R-DD-05's.
 
 ### Projects and worktrees without setup
 

@@ -20,7 +20,7 @@ use crate::session::Session;
 /// The kv key of the repositories never to register on their own (their roots).
 const DECLINED: &str = "autoreg:declined";
 /// How often running sessions' directories are looked at for a new repository.
-const SWEEP: Duration = Duration::from_secs(5);
+const SWEEP: Duration = Duration::from_secs(2);
 
 impl Daemon {
     pub(crate) async fn load_declined(&self) {

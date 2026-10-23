@@ -247,6 +247,11 @@ pub enum Request {
         #[serde(default)]
         force: bool,
     },
+    /// An agent started by hand in this shell session becomes a session of its own, managed like
+    /// `new --agent` (hooks, hibernation, mail), resuming the same conversation (UX1.4).
+    Adopt {
+        addr: String,
+    },
     /// A structured session's whole transcript (M10).
     ChatGet {
         addr: String,
