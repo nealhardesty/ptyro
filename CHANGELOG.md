@@ -11,6 +11,9 @@ Generated from git history by `make changelog` (scripts/changelog.sh); edit comm
 
 ### Fixes
 
+- fix: status selectors match the status ptyro shows, not only self-reports (756c003)
+- fix: Codex sessions show their task and last reply again (hooks trusted on Codex 0.164) (c504202)
+- fix: a session started in a subdirectory of a project starts there, not at the worktree root (1335cb1)
 - fix: resume a session that suspends itself on Ctrl-Z, and say so (d39aa8a)
 - fix: removing a session closes the panes showing it instead of leaving them empty (8dcae2f)
 - fix: a worker's turn summary is its own reply, not the screen's last line (92a8ef3)
@@ -19,6 +22,10 @@ Generated from git history by `make changelog` (scripts/changelog.sh); edit comm
 
 ### Documentation
 
+- docs: j/k and the sidebar numbers skip quick terminals (1eb53e5)
+- docs: roadmap UX1.25, a quick terminal per worktree that one key toggles (6a3a8a9)
+- docs: bring keys, config, CLI and spec docs in line with the code (7178a8d)
+- docs: regenerate CHANGELOG.md (0905e9f)
 - docs: roadmap UX1, out of the box, and make the TUI first class (c3293c7)
 - docs: roadmap an agent started inside a shell session (R-AGT-09) (ebf6f77)
 - docs: roadmap registering a project from the TUI when there is none (8659085)
@@ -27,6 +34,7 @@ Generated from git history by `make changelog` (scripts/changelog.sh); edit comm
 
 ### Other
 
+- UX1.25: a quick terminal per worktree, in a drawer one key toggles (25ede4d)
 - UX1.21: every CLI command has a TUI path, and the check is strict (785c15c)
 - UX1.20: a health badge with a fix for each finding (168adf6)
 - UX1.19: a first run in the TUI, and home (baad19c)
