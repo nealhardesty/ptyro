@@ -82,6 +82,7 @@ Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.
 | `,` | rename |
 | `D` `O` `S` | inspector / runs / change sets |
 | `z` | everything at once: the sidebar full-screen, every row open |
+| `<` / `>` | the sidebar a column narrower / wider (or drag its edge) |
 | `w` `o` `r` | workspace / editor / run script |
 | `v` `s` | split |
 | `1` … `9`, `/` | jump to a session / find one |
@@ -142,7 +143,8 @@ Tabs `1`–`5` (or `Tab`): Diff, Commits, Checks, Ports, Events.
 - Drag to select (copied on release). Hold `Shift` for the terminal's own selection, or set
   `[ui] mouse = false`.
 - Click to focus. Clicking a project or worktree row folds it.
-- Drag a divider to resize.
+- Drag a divider to resize panes, or the sidebar's edge to resize the sidebar. Either is saved
+  with the workspace's layout.
 
 ## The palette
 

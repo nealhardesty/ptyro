@@ -294,7 +294,12 @@ pub struct Toast {
 
 enum Drag {
     Divider(crate::layout::Divider),
-    Select { pane: PaneId, started: bool },
+    /// The sidebar's right edge (UX1.7).
+    Sidebar,
+    Select {
+        pane: PaneId,
+        started: bool,
+    },
 }
 
 pub struct App {
@@ -1825,6 +1830,8 @@ impl App {
                     Focus::Sidebar => Focus::Pane,
                 };
             }
+            "sidebar.wider" => self.set_sidebar_width(self.sidebar_width + 1),
+            "sidebar.narrower" => self.set_sidebar_width(self.sidebar_width.saturating_sub(1)),
             "sidebar.zoom" => {
                 self.sidebar_zoom = !self.sidebar_zoom;
                 if self.sidebar_zoom {
@@ -2041,6 +2048,17 @@ impl App {
                 _ => {}
             },
             other => self.toast(format!("{other}: not available yet")),
+        }
+    }
+
+    /// The sidebar's width, kept within 12–80 and leaving the panes at least 21 columns, saved
+    /// with the workspace's view (UX1.7, UX1.8).
+    fn set_sidebar_width(&mut self, width: u16) {
+        let max = 80.min(self.area.width.saturating_sub(22)).max(12);
+        let w = width.clamp(12, max);
+        if w != self.sidebar_width {
+            self.sidebar_width = w;
+            self.view_changed();
         }
     }
 
@@ -3111,6 +3129,14 @@ impl App {
         }
         // Dragging a divider or a selection continues wherever the mouse goes.
         match (&self.drag, m.kind) {
+            (Some(Drag::Sidebar), K::Drag(_)) => {
+                self.set_sidebar_width(x);
+                return;
+            }
+            (Some(Drag::Sidebar), K::Up(_)) => {
+                self.drag = None;
+                return;
+            }
             (Some(Drag::Divider(d)), K::Drag(_)) => {
                 let d = d.clone();
                 self.layout.drag(&d, x, y);
@@ -3143,6 +3169,15 @@ impl App {
                 return;
             }
             _ => {}
+        }
+        // The sidebar's edge: drag it to resize the sidebar (UX1.7).
+        if let Some(side) = self.sidebar_area().filter(|_| !self.sidebar_zoom)
+            && matches!(m.kind, K::Down(crossterm::event::MouseButton::Left))
+            && x == side.right()
+            && y < side.bottom()
+        {
+            self.drag = Some(Drag::Sidebar);
+            return;
         }
         if let Some(side) = self.sidebar_area()
             && side.contains((x, y).into())
@@ -4093,6 +4128,56 @@ mod tests {
         assert!(!app.sidebar_zoom);
         assert_eq!(app.focus, Focus::Pane);
         assert_ne!(app.focused_session(), Some(sessions[0].id));
+    }
+
+    fn mouse(
+        kind: crossterm::event::MouseEventKind,
+        column: u16,
+        row: u16,
+    ) -> crossterm::event::MouseEvent {
+        crossterm::event::MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn the_sidebar_resizes_by_its_edge_and_by_keys_within_bounds() {
+        use crossterm::event::{MouseButton, MouseEventKind as K};
+        let mut app = app();
+        app.sessions = vec![session("a")];
+        assert_eq!(app.sidebar_width, 30);
+        // Grab the edge (the divider column), drag it right, let go.
+        app.on_mouse(&mouse(K::Down(MouseButton::Left), 30, 5));
+        app.on_mouse(&mouse(K::Drag(MouseButton::Left), 42, 5));
+        app.on_mouse(&mouse(K::Up(MouseButton::Left), 42, 5));
+        assert_eq!(app.sidebar_width, 42);
+        assert_eq!(app.main_area().x, 43, "the panes start after it");
+        // Too far either way: 12 at least, and the panes keep 21 columns (100 wide: 78).
+        app.on_mouse(&mouse(K::Down(MouseButton::Left), 42, 5));
+        app.on_mouse(&mouse(K::Drag(MouseButton::Left), 2, 5));
+        assert_eq!(app.sidebar_width, 12);
+        app.on_mouse(&mouse(K::Drag(MouseButton::Left), 99, 5));
+        assert_eq!(app.sidebar_width, 78);
+        app.on_mouse(&mouse(K::Up(MouseButton::Left), 99, 5));
+        // A click elsewhere doesn't grab it.
+        app.on_mouse(&mouse(K::Down(MouseButton::Left), 50, 5));
+        app.on_mouse(&mouse(K::Drag(MouseButton::Left), 20, 5));
+        assert_eq!(app.sidebar_width, 78);
+        app.on_mouse(&mouse(K::Up(MouseButton::Left), 20, 5));
+        // In the sidebar, < and > move it a column at a time, within the same bounds.
+        app.focus = Focus::Sidebar;
+        let key = |c| KeyEvent::new(KeyCode::Char { c }, Mods::NONE);
+        let narrower = app.keymap.lookup(Table::Nav, key('<')).cloned().unwrap();
+        let wider = app.keymap.lookup(Table::Nav, key('>')).cloned().unwrap();
+        app.run(&narrower);
+        assert_eq!(app.sidebar_width, 77);
+        app.run(&wider);
+        app.run(&wider);
+        assert_eq!(app.sidebar_width, 78);
+        assert!(app.view_dirty_since.is_some(), "saved with the workspace's view");
     }
 
     #[test]

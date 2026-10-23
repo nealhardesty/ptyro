@@ -1424,13 +1424,16 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
 
 ### Sidebar
 
-- [ ] **UX1.7 Drag to resize the sidebar** — S. SPEC §11 says the sidebar is resizable, but
+- [x] **UX1.7 Drag to resize the sidebar** — S. SPEC §11 says the sidebar is resizable, but
   today only `[ui] sidebar_width` sets it. Divider drag (M2.15) covers splits between panes
   only. Dragging the sidebar's right edge sets the width, kept within 12–80 and saved with the
   workspace's view like the rest of the layout.
-- [ ] **UX1.8 Sidebar width keys** — S. With the sidebar focused, `<` / `>` narrow and widen
+- [x] **UX1.8 Sidebar width keys** — S. With the sidebar focused, `<` / `>` narrow and widen
   it a column at a time. These match the pane-resize keys after the prefix, and both are free
   in the sidebar. They share the 12–80 clamp and the saved view with the drag above.
+  *Done (2026-10-22, with UX1.7):* `App::set_sidebar_width` (12–80, the panes keep 21 columns),
+  `Drag::Sidebar`, `sidebar.wider` / `sidebar.narrower`; one TUI test covers the drag, the
+  clamps and the keys (SPEC §11.2h).
 
 Suggested order: UX1.23 → UX1.0 → UX1.1–1.2 → UX1.4–1.8 → UX1.9, UX1.24, UX1.17 → UX1.14–1.15 → UX1.12 →
 UX1.19 → UX1.3 (after its spike) → the rest.

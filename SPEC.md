@@ -2395,6 +2395,10 @@ learning anything up front.
   opens every row. The row in focus (and any that wants you) wraps its task and reply over two
   lines. Drawing, clicks and scrolling share one line layout, so a row is one target however
   many lines it takes.
+- **The sidebar resizes** (UX1.7, UX1.8): drag its edge (the divider column), or press `<` / `>`
+  with the sidebar focused (`sidebar.narrower` / `sidebar.wider`, a column at a time). The width
+  stays within 12–80 and leaves the panes at least 21 columns, and is saved with the workspace's
+  view like the rest of the layout; `[ui] sidebar_width` is only the starting width.
 - **Everything at once** (`Z`, `z` in the sidebar; `sidebar.zoom`): the sidebar fills the
   screen with every row open and wrapped. It is drawn over the panes, which keep their size, so
   no session is resized for a look. `⏎` opens a session and goes back; `Z`, `z` or `Esc` go back.
