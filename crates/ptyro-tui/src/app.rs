@@ -312,6 +312,8 @@ pub enum Confirmed {
     Append(std::path::PathBuf, String),
     /// Send this request, then show this (runs view: cancel, pick, discard).
     Send(Box<Request>, String),
+    /// Quit ptyro: stop every session and the daemon (`daemon stop --force`).
+    Quit,
 }
 
 #[derive(Debug, Clone)]
@@ -363,6 +365,8 @@ pub enum Pending {
     Explain(SessionId),
     /// `session.summarize` (UX1.3): toast the summary.
     Summarized,
+    /// `app.quit`: the daemon is stopping.
+    Quit,
     /// Replies for an inspector that has moved on (another worktree, diff base or load) are
     /// dropped.
     InspectDiff {
@@ -583,6 +587,9 @@ pub struct App {
     pub area: Rect,
     pub dirty: bool,
     pub quit: Option<AttachEnd>,
+    /// `app.quit` was confirmed: the daemon going away ends the TUI instead of reconnecting
+    /// (which would start a new one).
+    quitting: bool,
     pub lost_since: Option<Instant>,
     view_dirty_since: Option<Instant>,
     last_list: Instant,
@@ -684,6 +691,7 @@ impl App {
             area,
             dirty: true,
             quit: None,
+            quitting: false,
             lost_since: None,
             view_dirty_since: None,
             last_list: Instant::now(),
@@ -899,6 +907,12 @@ impl App {
     }
 
     pub fn lost(&mut self, reason: &str) {
+        if self.quitting {
+            self.client = None;
+            self.pushes = None;
+            self.quit = Some(AttachEnd::Stopped);
+            return;
+        }
         if self.client.is_some() {
             self.toast_err(format!("lost the daemon ({reason}); reconnecting…"));
         }
@@ -1632,6 +1646,11 @@ impl App {
             (Pending::Done(_), Ok(Reply::Pr { info: Some(pr) })) => {
                 self.toast(format!("PR #{}: {}", pr.number, pr.url));
             }
+            (Pending::Quit, Ok(_)) => self.quit = Some(AttachEnd::Stopped),
+            (Pending::Quit, Err(e)) => {
+                self.quitting = false;
+                self.toast_err(format!("ptyro didn't stop: {}", e.message));
+            }
             (Pending::Summarized, Ok(Reply::Session { info })) => {
                 let text = info.summary.map(|s| s.text).unwrap_or_default();
                 let text = format!("≈ {}: {text}", info.name);
@@ -2147,6 +2166,7 @@ impl App {
             "help" => self.overlay = Some(Overlay::Help { filter: String::new(), scroll: 0 }),
             "palette" => self.open_palette(),
             "app.detach" => self.quit = Some(AttachEnd::Detached),
+            "app.quit" => self.confirm_quit(),
             "session.new" => self.open_task(None),
             "attention.next" => self.next_attention(),
             "inbox" => {
@@ -3877,6 +3897,34 @@ impl App {
         });
     }
 
+    /// "Quit ptyro?", saying what stops: agents that can resume hibernate, the rest end.
+    fn confirm_quit(&mut self) {
+        let live: Vec<&SessionInfo> = self.sessions.iter().filter(|s| s.state.is_live()).collect();
+        let (sleep, end): (Vec<&SessionInfo>, Vec<&SessionInfo>) =
+            live.iter().partition(|s| s.kind == SessionKind::Agent && s.conversation.is_some());
+        let names = |v: &[&SessionInfo]| {
+            let mut n: Vec<&str> = v.iter().take(4).map(|s| s.name.as_str()).collect();
+            if v.len() > 4 {
+                n.push("…");
+            }
+            n.join(", ")
+        };
+        let mut text = String::from("Quit ptyro: stop the daemon and every session?");
+        if !sleep.is_empty() {
+            text.push_str(&format!(
+                "\n{} agent(s) hibernate and resume next time: {}",
+                sleep.len(),
+                names(&sleep)
+            ));
+        }
+        if !end.is_empty() {
+            text.push_str(&format!("\n{} session(s) end for good: {}", end.len(), names(&end)));
+        }
+        let detach = self.keymap.key_for("app.detach").unwrap_or_else(|| "detach".into());
+        text.push_str(&format!("\n[y/N] · {detach} detaches instead, keeping everything running"));
+        self.overlay = Some(Overlay::Confirm { action: Confirmed::Quit, text });
+    }
+
     fn confirm_archive(&mut self, w: &WorktreeInfo) {
         let live = self
             .sessions
@@ -4223,6 +4271,11 @@ impl App {
     fn confirmed(&mut self, action: Confirmed) {
         match action {
             Confirmed::Send(req, toast) => self.request(Pending::Done(toast), *req),
+            Confirmed::Quit => {
+                self.quitting = true;
+                self.toast("stopping ptyro…");
+                self.request(Pending::Quit, Request::Shutdown { force: true });
+            }
             Confirmed::Integrate(wt) => self.request(
                 Pending::Done(String::new()),
                 Request::WorktreeIntegrate {
@@ -5612,6 +5665,33 @@ mod tests {
         assert!(!app.layout.contains(right));
         assert_eq!(app.focused, 1);
         assert_eq!(shows(&app, 1).as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn quitting_asks_says_what_stops_and_ends_without_reconnecting() {
+        let mut app = app();
+        let mut agent = session("claude-rook");
+        agent.kind = SessionKind::Agent;
+        agent.conversation = Some("c1".into());
+        app.sessions = vec![agent, session("zsh")];
+        app.run(&Command { action: "app.quit", arg: None });
+        let Some(Overlay::Confirm { action: Confirmed::Quit, text }) = &app.overlay else {
+            panic!("{:?}", app.overlay.is_some())
+        };
+        assert!(text.contains("1 agent(s) hibernate and resume next time: claude-rook"), "{text}");
+        assert!(text.contains("1 session(s) end for good: zsh"), "{text}");
+        assert!(text.contains("C-q d detaches instead"), "{text}");
+        // Enter is no.
+        key(&mut app, KeyCode::Enter, Mods::NONE);
+        assert!(app.overlay.is_none() && !app.quitting);
+
+        app.run(&Command { action: "app.quit", arg: None });
+        key(&mut app, KeyCode::Char { c: 'y' }, Mods::NONE);
+        assert!(app.quitting);
+        // The daemon closing the connection ends it: no reconnecting (that would start one).
+        app.lost("connection closed");
+        assert!(matches!(app.quit, Some(AttachEnd::Stopped)));
+        assert!(app.lost_since.is_none(), "not waiting to reconnect");
     }
 
     #[test]

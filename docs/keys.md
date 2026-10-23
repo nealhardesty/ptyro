@@ -29,6 +29,7 @@ action by name.
 | `?` | help: every key |
 | `:` or `C-p` | command palette |
 | `d` or `q` | detach (sessions keep running) |
+| `C-d` | quit ptyro: stop every session and the daemon, after a yes (agents hibernate and resume next time) |
 | `n` | new task: say what to do, ⏎ starts the default agent on it in a new worktree named after it (Tab edits the name, `C-o` picks the agent and where, an empty ⏎ is a random name) |
 | `N` | new worktree of this project (+ an agent), after its setup script |
 | `w` | switch workspace |

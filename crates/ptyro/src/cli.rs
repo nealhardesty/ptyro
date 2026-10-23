@@ -869,6 +869,12 @@ pub async fn attach_with(
             eprintln!("[no sessions left]");
             Ok(0)
         }
+        Ok(AttachEnd::Stopped) => {
+            eprintln!(
+                "[ptyro stopped: agents that can resume come back dormant; `ptyro` starts it again]"
+            );
+            Ok(0)
+        }
         Ok(AttachEnd::Lost(reason)) => {
             Err(Error::new(ErrorCode::DaemonUnavailable, format!("lost the daemon: {reason}")))
         }

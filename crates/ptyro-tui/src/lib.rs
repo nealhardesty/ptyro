@@ -54,6 +54,8 @@ pub enum AttachEnd {
     Gone,
     /// The daemon went away and didn't come back.
     Lost(String),
+    /// The user quit ptyro (`app.quit`): the daemon and its sessions stopped.
+    Stopped,
 }
 
 #[derive(Debug, Clone, Default)]

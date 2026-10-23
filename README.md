@@ -101,7 +101,10 @@ the next keys appears; `Ctrl-Q ?` lists them all, and `ptyro tour` walks you thr
 status bar says what you'd do next with what's selected (`C-q p answer it`).
 
 **2. Detach and come back.** Press `Ctrl-Q d`. Everything keeps running in the daemon. Run
-`ptyro` again and you're back on the same screen.
+`ptyro` again and you're back on the same screen. To stop ptyro altogether, press `Ctrl-Q
+Ctrl-D`: it lists what will stop and asks first. Agents that can resume hibernate and come back
+dormant next time; shells and other programs end. From a shell, `ptyro daemon stop --force`
+does the same.
 
 **3. An agent on a task, in its own worktree.** Press `Ctrl-Q n`, type what it should do, and
 press `⏎`: Claude starts on it in a fresh worktree, on its own branch, named after the task
@@ -337,6 +340,7 @@ All after the prefix, `Ctrl-Q` or `Ctrl-Space`. The full list is in [`docs/keys.
 |---|---|
 | `?` / `:` / `.` | every key / the command palette (any action, session, worktree, project or script) / what you can do with this session |
 | `d` | detach (everything keeps running) |
+| `C-d` | quit ptyro: stop every session and the daemon (asks first; agents hibernate) |
 | `n` / `N` | new task (say what to do) / new worktree |
 | `a` / `p` / `i` | next session that needs you / peek and answer / inbox |
 | `j` `k` / `1`…`9` / `/` | next / previous / Nth session / find one |

@@ -2706,6 +2706,12 @@ learning anything up front.
   with the sidebar focused (`sidebar.narrower` / `sidebar.wider`, a column at a time). The width
   stays within 12–80 and leaves the panes at least 21 columns, and is saved with the workspace's
   view like the rest of the layout; `[ui] sidebar_width` is only the starting width.
+- **Quit ptyro** (`app.quit`, `C-d` after the prefix; the which-key menu's "this" group and the
+  help list it beside detach): a confirmation names what stops (agents that can resume
+  hibernate, the rest end for good) and offers detaching instead; `y` sends
+  `Shutdown{force: true}`, the same as `ptyro daemon stop --force`. Once it's confirmed, the
+  daemon closing the connection ends the TUI (`AttachEnd::Stopped`, "[ptyro stopped…]")
+  instead of reconnecting, which would start a new daemon.
 - **Everything at once** (`Z`, `z` in the sidebar; `sidebar.zoom`): the sidebar fills the
   screen with every row open and wrapped. It is drawn over the panes, which keep their size, so
   no session is resized for a look. `⏎` opens a session and goes back; `Z`, `z` or `Esc` go back.
@@ -2767,6 +2773,7 @@ The full sidebar table (no prefix) is in [`docs/keys.md`](docs/keys.md#in-the-si
 | `w` | workspace switcher (shows each workspace's profile label and attention badges) |
 | `S` | change sets (§15.5.10): the list; in the sidebar on a set row, that set |
 | `d` | detach (TUI exits, everything keeps running) |
+| `C-d` | quit ptyro (`app.quit`): after a yes, stop the daemon and every session, then exit |
 | `q` | quit TUI (same as detach; never kills sessions) |
 
 Mouse: click to focus panes/sidebar items, wheel scrolls scrollback (unless the child grabbed the

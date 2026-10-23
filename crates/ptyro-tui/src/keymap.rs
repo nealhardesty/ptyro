@@ -31,6 +31,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("help", "Show key bindings"),
     a("palette", "Command palette: run any action, jump to any session"),
     a("app.detach", "Detach (sessions keep running)"),
+    a("app.quit", "Quit ptyro: stop every session and the daemon (agents hibernate, resumable)"),
     a(
         "session.new",
         "New task: say what to do; ⏎ starts the default agent on it in a new worktree (C-o: pick)",
@@ -303,6 +304,7 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Prefix, "C-p", "palette"),
     (Table::Prefix, "d", "app.detach"),
     (Table::Prefix, "q", "app.detach"),
+    (Table::Prefix, "C-d", "app.quit"),
     (Table::Prefix, "n", "session.new"),
     (Table::Prefix, "N", "worktree.new"),
     (Table::Prefix, "w", "workspace.switch"),

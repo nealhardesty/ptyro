@@ -233,7 +233,7 @@ row here: its TUI action, or `waived:` and why.
 | `completions` | waived: shell setup, for typing commands in a shell |
 | `shell-init` | `health` (`M`): when it's missing, a finding whose fix adds the line to your rc file |
 | `daemon start` | waived: the TUI starts the daemon when it isn't running |
-| `daemon stop` | waived: stopping the daemon from its own client ends the TUI; sessions with resume come back with `daemon restart --hibernate` |
+| `daemon stop` | `app.quit` (`C-d` after the prefix): asks, then stops every session and the daemon and exits |
 | `daemon restart` | `daemon.restart` (in a split; this TUI reconnects) |
 | `daemon status` | `daemon.status`; the health badge has its warnings |
 | `daemon logs` | `daemon.logs` (followed, in a split) |

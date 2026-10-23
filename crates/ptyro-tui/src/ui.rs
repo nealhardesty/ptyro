@@ -183,6 +183,7 @@ const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
             ("session.stop", "stop"),
             ("toast.act", "undo / fix"),
             ("app.detach", "detach"),
+            ("app.quit", "quit all"),
             ("help", "all keys"),
         ],
     ),
@@ -1830,6 +1831,7 @@ pub fn tour_pages(app: &App) -> Vec<(String, Vec<String>)> {
             format!("`{}` / `{}`  next / previous session · `{}` find one", k("session.next"), k("session.prev"), k("session.find")),
             format!("`{}`  the sidebar: j/k move, ⏎ opens, x stops, Space marks", k("focus.toggle")),
             format!("`{}`  detach: everything keeps running; `ptyro` comes back", k("app.detach")),
+            format!("`{}`  quit ptyro: stop every session and the daemon (agents hibernate, resumable)", k("app.quit")),
         ]),
         ("who needs you".into(), vec![
             "● working   ⚠ blocked (on what)   ○ idle   ✓ done   ✗ error   ☾ dormant   ◌ a guess".into(),

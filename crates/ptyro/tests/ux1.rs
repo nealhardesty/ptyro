@@ -908,3 +908,28 @@ async fn a_quick_terminal_is_one_per_worktree_quiet_and_goes_with_it() {
     assert_ne!(fresh.id, loose.id);
     assert_eq!(fresh.name, "notes.shell", "its name is free again");
 }
+
+/// `C-q C-d` asks, and `y` stops every session and the daemon, then ends the TUI.
+#[tokio::test]
+async fn quitting_from_the_tui_stops_the_daemon() {
+    let d = TempDaemon::start(BIN).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(&d.paths.config).unwrap();
+    std::fs::write(d.paths.config.join("config.toml"), "").unwrap();
+    let mut s = ptyro_testkit::headless::Script::new(vec![BIN.to_owned()])
+        .size(110, 30)
+        .timeout(20.0)
+        .env("HOME", &home.path().to_string_lossy());
+    for (k, v) in d.env() {
+        s = s.env(&k, &v);
+    }
+    // `y` only once the dialog says what stops: the shell this TUI opened ends for good.
+    let r = ptyro_testkit::headless::run(
+        s.send_when("WORKSPACE", "\\x11\\x04").send_when("1 session(s) end for good", "y"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.exit, Some(0), "{}", r.screen);
+    assert!(r.screen.contains("[ptyro stopped"), "{}", r.screen);
+    assert!(d.client().await.is_err(), "the daemon is gone");
+}

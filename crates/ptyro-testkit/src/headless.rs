@@ -27,6 +27,9 @@ pub struct Script {
     pub env: Vec<(String, String)>,
     /// Stop as soon as the screen contains this text (after the last send).
     pub until: Option<String>,
+    /// Sent in order, each once the screen shows its text (`send_when`): no guessing how long
+    /// a busy machine takes to draw.
+    pub sends_when: Vec<(String, Vec<u8>)>,
 }
 
 impl Script {
@@ -42,12 +45,20 @@ impl Script {
             ansi: false,
             env: vec![],
             until: None,
+            sends_when: vec![],
         }
     }
 
     /// Send `text` (with `\r \e \xHH` escapes) at `secs` after start.
     pub fn send(mut self, secs: f64, text: &str) -> Self {
         self.sends.push((Duration::from_secs_f64(secs), unescape(text).expect("valid escapes")));
+        self
+    }
+
+    /// Send `text` (escapes as for `send`) once the screen shows `shown`, after the
+    /// `send_when`s before it.
+    pub fn send_when(mut self, shown: &str, text: &str) -> Self {
+        self.sends_when.push((shown.into(), unescape(text).expect("valid escapes")));
         self
     }
 
@@ -157,6 +168,7 @@ pub async fn run(mut s: Script) -> Result<Report> {
     let mut sends = s.sends.into_iter().peekable();
     let mut resizes = s.resizes.into_iter().peekable();
     let mut snapshots = s.snapshots.into_iter().peekable();
+    let mut sends_when = std::mem::take(&mut s.sends_when).into_iter().peekable();
     let mut report = Report::default();
     let mut buf = vec![0u8; 64 * 1024];
     loop {
@@ -216,6 +228,13 @@ pub async fn run(mut s: Script) -> Result<Report> {
                     report.log.push(format!("{t:>7.3}s status {state} {msg:?}"))
                 }
                 TermEvent::Title(_) => {}
+            }
+        }
+        if let Some((shown, _)) = sends_when.peek() {
+            tracker.update(&mut emu);
+            if render(&emu, &mut tracker, false).contains(shown.as_str()) {
+                let (_, bytes) = sends_when.next().expect("peeked");
+                child.writer.write_all(&bytes).await?;
             }
         }
         if let Some(needle) = &s.until
