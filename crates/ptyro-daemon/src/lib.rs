@@ -193,13 +193,33 @@ fn watch_config(
     Some(debouncer)
 }
 
+/// The socket file's identity, to remove it on the way out only if it is still this daemon's.
+fn file_id(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(path).ok().map(|m| (m.dev(), m.ino()))
+}
+
+fn remove_if_ours(path: &Path, ours: Option<(u64, u64)>) {
+    if ours.is_some() && file_id(path) == ours {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 fn bind(socket: &Path) -> Result<UnixListener> {
     if socket.exists() {
-        if std::os::unix::net::UnixStream::connect(socket).is_ok() {
-            bail!("{} is in use by another process", socket.display());
+        // Only a refused connection proves nobody listens. Any other failure (a sandbox that
+        // forbids connecting, say) leaves the socket alone: it may be another daemon's.
+        match std::os::unix::net::UnixStream::connect(socket) {
+            Ok(_) => bail!("{} is in use by another process", socket.display()),
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+                std::fs::remove_file(socket)
+                    .with_context(|| format!("remove stale {}", socket.display()))?;
+            }
+            Err(e) => bail!(
+                "{} exists and can't be checked ({e}); not replacing it (another daemon may use it)",
+                socket.display()
+            ),
         }
-        std::fs::remove_file(socket)
-            .with_context(|| format!("remove stale {}", socket.display()))?;
     }
     let old = rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o077));
     let listener = UnixListener::bind(socket);
@@ -226,6 +246,7 @@ async fn serve(
         None => bind(&paths.socket)?,
     };
     let socket = paths.socket.clone();
+    let socket_id = file_id(&socket);
     let config_path = Config::path(&paths);
     let mut config_error = None;
     let config = match Config::load(&config_path) {
@@ -347,7 +368,7 @@ async fn serve(
     tracing::info!("shutting down");
     daemon.serve_child.kill();
     drop(listener);
-    let _ = std::fs::remove_file(&socket);
+    remove_if_ours(&socket, socket_id);
     // SIGTERM means `stop --hibernate` (SPEC §4.4); until hibernation exists (M4), stop gracefully.
     daemon.stop_all().await;
     if let Some(store) = &daemon.store {
@@ -356,4 +377,31 @@ async fn serve(
     tokio::time::sleep(Duration::from_millis(100)).await;
     tracing::info!("bye");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_socket_is_replaced_only_when_nobody_listens_and_removed_only_if_ours() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("ptyro.sock");
+        let first = bind(&path).unwrap();
+        let err = bind(&path).unwrap_err().to_string();
+        assert!(err.contains("in use"), "{err}");
+        // Gone quiet: a refused connection proves it stale, so it's replaced.
+        drop(first);
+        let second = bind(&path).unwrap();
+        let ours = file_id(&path);
+        // Another daemon replaced the file meanwhile: leave its socket alone.
+        drop(second);
+        std::fs::remove_file(&path).unwrap();
+        let third = bind(&path).unwrap();
+        remove_if_ours(&path, ours);
+        assert!(path.exists(), "not ours any more");
+        remove_if_ours(&path, file_id(&path));
+        assert!(!path.exists());
+        drop(third);
+    }
 }

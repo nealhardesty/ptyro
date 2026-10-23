@@ -3381,6 +3381,13 @@ deterministic, so every client finds it. The daemon refuses a socket directory o
 uid and tightens it to `0700` (a shared `/tmp` could otherwise be pre-seeded). `PTYRO_SOCKET`
 overrides the socket path alone.
 
+**[fixed 2026-10-23]** A daemon replaces an existing socket file only when connecting to it is
+*refused* (nobody listens); any other failure leaves it alone and the daemon refuses to start,
+saying why. On the way out it removes the socket only if the file is still the one it bound
+(same device and inode). Before, any failed connection counted as stale. A daemon started
+under a sandbox that forbids connecting (and with an outer session's `PTYRO_SOCKET`) deleted a
+running daemon's socket, so new clients could no longer reach it.
+
 ### 14.2 Database
 
 SQLite (bundled), WAL, `foreign_keys=ON`, migrations embedded with `rusqlite_migration`
