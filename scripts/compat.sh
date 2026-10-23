@@ -37,7 +37,7 @@ echo "|---|---|---|---|"
 check "vim: edit, :wq" vim "vim --version" \
   --send '1.0:ihello from vim\e' --send '1.5::wq\r' --expect 'saved: hello from vim' \
   -- sh -c 'vim -u NONE -N "$HOME/v.txt"; echo "saved: $(cat "$HOME/v.txt")"; sleep 1'
-check "less: G, /search" less "less --version" \
+check "less: G, ?search" less "less --version" \
   --send '1.0:G' --send '2.0:?line 250\r' --expect 'line 250' --expect 'line 251' \
   -- less "$WORK/lines.txt"
 check "htop" htop "htop --version" --send '2.0:\e[B' --expect 'PID' --expect 'F10Quit' -- htop

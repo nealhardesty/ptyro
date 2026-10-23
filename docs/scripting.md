@@ -170,7 +170,7 @@ Recipes and fan-outs are runs, which a script can start, wait for and read:
 ```sh
 #!/bin/sh
 run=$(ptyro fanout --agents claude,codex -p "Fix the flaky test in src/net" --test)
-ptyro run wait "$run" --timeout 1h || exit 1          # 0 succeeded, 1 failed, 7 timeout
+ptyro run wait "$run" --timeout 1h || exit 1          # 0 succeeded, 1 failed, 5 cancelled, 7 timeout
 best=$(ptyro compare "$run" --json | jq -r '.candidates[0].step')
 ptyro pick "$run" "$best" --pr                        # push + PR from the winner
 ptyro discard "$run" --force

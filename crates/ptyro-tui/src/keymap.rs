@@ -44,8 +44,8 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("project.add", "Add a git repository to this workspace (discovered under discover.roots)"),
     a("project.trust", "Review and trust this project's scripts"),
     a("worktree.remove", "Remove this worktree (refuses if work would be lost)"),
-    a("session.next", "Show the next session in this pane"),
-    a("session.prev", "Show the previous session in this pane"),
+    a("session.next", "Show the next session in sidebar order (across projects) here"),
+    a("session.prev", "Show the previous session in sidebar order (across projects) here"),
     ActionSpec {
         id: "session.focus",
         desc: "Show session N (sidebar order) in this pane",

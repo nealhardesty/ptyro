@@ -54,7 +54,7 @@ serve = true
 listen = "127.0.0.1:7091"   # loopback or a Tailscale address (100.64.0.0/10); others need insecure = true
 # public_url = "https://workbox.tailnet.ts.net"   # what QR codes point at (found automatically with Tailscale)
 approval_wait = "10m"       # how long a held Claude permission prompt waits for your phone
-push = true                 # Web Push for blocked / errored / done / idle (notifications.on)
+push = true                 # Web Push for the kinds in notifications.on
 # push_hosts = ["ntfy.example.com"]   # a self-hosted push service, besides the browsers' own
 # trusted_proxy = true     # a reverse proxy on this machine fronts serve (automatic for tailscale serve)
 ```
@@ -163,7 +163,7 @@ through their protocol for structured sessions.
 | DNS rebinding (a page whose name resolves to your machine) | Requests must be addressed to an IP, `localhost`, `public_url`'s host or the tailnet name; others get 421. |
 | Forged `X-Forwarded-For` to dodge the lockout | Only believed from loopback with `trusted_proxy` (or under `tailscale serve`), and only its last entry. |
 | Clickjacking, injected scripts | A strict CSP (`default-src 'none'`, scripts only from the app itself), `X-Frame-Options: DENY`, no third-party requests. |
-| Push payload snooping | Web Push is end-to-end encrypted (RFC 8291) for the device; push services see ciphertext. VAPID (RFC 8292) identifies your daemon. Subscriptions are accepted only for the browsers' push services, so a device can't make the daemon post elsewhere. |
+| Push payload snooping | Web Push is end-to-end encrypted (RFC 8291) for the device; push services see ciphertext. VAPID (RFC 8292) identifies your daemon. Subscriptions are accepted only for the browsers' push services (and the hosts in `[remote] push_hosts`), so a device can't make the daemon post elsewhere. |
 | An agent approving prompts, or pairing a device for itself | An agent can't answer permission prompts or gates, type into a session that is blocked on one, pair or revoke devices, or trust a repository's scripts, from any client. See below for what this does and doesn't stop. Devices can't pair devices. |
 
 Remote input is equivalent to running commands as you. Pair only devices you control. `approve`

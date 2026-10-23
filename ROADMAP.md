@@ -85,9 +85,9 @@ promoted into the M1 crates (the `pty-pane` spike became `ptyro-term`, `ptyro-pt
       reply before DA1). **S** *Done 2026-10-20:* every state seen; 7501 runs 50–80 ms ahead of
       hooks. This led to a status-fusion fix: most recent wins among high-confidence sources
       (SPEC §9.2).
-- [~] **M0.7** CI: GitHub Actions matrix (ubuntu-latest, macos-latest): fmt, clippy, test, deny;
-      cache; nightly-free. **S** *Written* (`.github/workflows/ci.yml` → `make check` + cargo-deny);
-      unproven until the branch is pushed.
+- [x] **M0.7** CI: GitHub Actions matrix (ubuntu-latest, macos-latest): fmt, clippy, test, deny;
+      cache; nightly-free. **S** *Written* (`.github/workflows/ci.yml` → `make check` + cargo-deny).
+      *Done 2026-10-23:* `ci` runs green on master on both platforms.
 - [x] **M0.8** `docs/compat.md` skeleton (the manual compatibility matrix from SPEC §18.2) and
       `docs/fixtures.md` (how to record `.ptylog` fixtures). **S**
 - [x] **M0.9** Decide §21.1 (license: MIT) and §21.2 (prefix: `Ctrl-Space`, configurable; changed to `Ctrl-Q` plus `Ctrl-Space` on 2026-10-22) with the owner. **S**
@@ -363,7 +363,7 @@ Goal: ptyro *knows* what every agent is doing and tells you exactly when you're 
 - [x] **M4.4** Status engine (§9): reducer, precedence & staleness rules, persisted transitions,
       `status --explain`. Fixture-driven tests from M0.3–M0.5 payloads. **M**
       *Done:* `engine.rs`: high sources are peers (newest wins; a weaker one within 250 ms is deferred, not dropped), medium after `stale_after`, low last; strong details survive weak refreshes; a 64-entry explain ring (`ptyro status S --explain`, TUI `e`); every transition persisted with its previous confidence and work time. Tests replay the M0 fixtures.
-- [x] **M4.5** Attention model + "next attention" (`a`) + inbox (`i`) + peek (`p`) with inline
+- [x] **M4.5** (R-UX-02) Attention model + "next attention" (`a`) + inbox (`i`) + peek (`p`) with inline
       reply. **L**
       *Done:* attention raised unless the session is watched (focused pane *and* focused terminal, mode 1004); `a` with `attention.scope`; `i` inbox with per-workspace tabs; `p` peek with `y`/`a`/`n` answers and a typed reply; `ptyro answer`.
 - [x] **M4.6** Notifier: channels (inbox, bell, OSC 9/777 via controller with tmux passthrough,
@@ -410,7 +410,7 @@ Goal: ptyro *knows* what every agent is doing and tells you exactly when you're 
       - History via `ccusage --json` when installed.
       - Shown per profile in the status bar and sidebar, with a "rate-limited until T" state. **M**
       *Done:* the statusline relay (chains to the user's `statusLine`), opt-in Codex side app-server (`[agents.codex] usage = true`), `StopFailure(rate_limit)` → "limited until T", `ptyro usage` (+ `ccusage` when installed), sidebar and status-bar meters. Codex meters unverified (401).
-- [x] **M4.18** Claude native bridges (R-ORC-01). **Spike first.**
+- [x] **M4.18** Claude native bridges (R-ORC-01, R-AGT-02). **Spike first.**
       - Learn `CLAUDE_CODE_MESSAGING_SOCKET`/`_TOKEN` from the hook env and deliver NDJSON over the
         socket. Verify the token / own-child rule and `crossSessionInbound`.
       - Ingest the Notification types `agent_needs_input` / `agent_completed`, plus `TeammateIdle`
@@ -603,7 +603,7 @@ Goal: close the loop from "agent finished" to "merged", without leaving ptyro.
       - A `max_unreviewed` policy queues new spawns and fan-outs past the limit.
       - Digest notifications. **M**
       *Done:* `review queue` (TUI `Q`) ranks worktrees whose agent finished a turn you haven't reviewed. The score weighs checks, diff size, files, errors and time waiting; each item has reasons and the agent's last line. The evidence bundle is the inspector. `review done` (or sending comments) counts as reviewed. `review.max_unreviewed` holds new agent spawns in a queue (`Queued` reply; `--unqueued` skips it) and starts them as room appears. A digest notification goes out at most every `review.digest`. Since M7, verified-done counts too: +25 "verified", −25 "claims done; its check fails".
-- [x] **M6.10** PR-event loop (R-GIT-01). Builds on M6.5.
+- [x] **M6.10** PR-event loop (R-GIT-01, R-ORC-08). Builds on M6.5.
       - `ptyro watch-pr`, automatic for PRs ptyro opened, polls `gh pr checks` and review threads.
       - New CI failures (with a log tail) and review comments go to the owning session. Delivery is
         only when the agent is idle, and tagged with where it came from.
@@ -771,7 +771,7 @@ Goal: trust it with a week of uninterrupted work.
       `send --wait` (never typing twice), `run wait` and `events --follow` reconnect; runs carry
       on. Two bugs the soak found are fixed: a request on a dead connection hung forever, and a
       hook's `blocked` was lost to heuristics after the upgrade.
-- [x] **M8.2** Recorder (§7.6): ring-buffered `pty.log`, scrollback for exited/dormant sessions
+- [x] **M8.2** (R-OBS-03) Recorder (§7.6): ring-buffered `pty.log`, scrollback for exited/dormant sessions
       after restart, `ptyro replay`, `ptyro export --asciicast|--text`. **M**
       *Done:* a framed format with output, resize, keyframe and start records, in a two-file
       ring (`[recorder] max_bytes`, 16 MiB; `0600`). Dormant agents show their last screen after
@@ -861,14 +861,14 @@ Stress-running the suites in parallel found and fixed three older races:
 
 Goal: check on and steer your agents from another machine or your phone, safely.
 
-- [x] **M9.1** `ptyro proxy` + `ptyro --remote ssh://host` / `attach --remote` (local TUI, remote
+- [x] **M9.1** (R-REM-01) `ptyro proxy` + `ptyro --remote ssh://host` / `attach --remote` (local TUI, remote
       daemon over SSH stdio). **M**
       *Done:* `--remote [ssh://][user@]host[:port]` (or `PTYRO_REMOTE`) for every command and
       the TUI. ssh runs with BatchMode, finds ptyro in the usual install dirs, and is
       replaceable (`PTYRO_SSH`). Frames are zstd-compressed, the Hello says `via ssh://host`,
       and failures quote ssh's stderr. `ptyro proxy` bridges stdio to the daemon socket. A
       failed remote `ls` is an error, not "no sessions".
-- [x] **M9.2** WebSocket transport (`ptyro serve`), device tokens (`ptyro pair` with terminal QR
+- [x] **M9.2** (R-REM-02, R-SEC-02) WebSocket transport (`ptyro serve`), device tokens (`ptyro pair` with terminal QR
       code, `ptyro devices ls|revoke`), hashed storage, audit events for remote input. **L**
       *Done:*
       - `ptyro serve` is a separate process (hyper + tungstenite) with a strict CSP;
@@ -882,7 +882,7 @@ Goal: check on and steer your agents from another machine or your phone, safely.
       - Revocation closes live connections. Pairing is local only, by QR code (`#pair=`
         fragment). `remote` events record each action on a session.
       - `POST /api/request` serves notification actions.
-- [x] **M9.3** Web client/PWA (TypeScript): session list + status, inbox, canvas terminal view from
+- [x] **M9.3** (R-REM-03) Web client/PWA (TypeScript): session list + status, inbox, canvas terminal view from
       `ScreenFrame`s, quick reply, mobile layout, install as PWA. **L**
       *Done:* `web/src` (TS, no dependencies) → `web/dist` (committed, embedded;
       `make web`/`web-check`).
@@ -1039,7 +1039,7 @@ undo, and a ship train that's honest about partial states (SPEC §15.5).
 - [x] **M11.10** Lead MCP tools (`cs_*`, SPEC §15.5.9), with no push/merge tools by design. **M**
       *Done:* plus `cs_contract_submit` and `cs_log`; the daemon refuses shipping ops from any
       agent.
-- [x] **M11.11** TUI: set node in the sidebar, set view with swimlanes (`prefix S`), attention
+- [x] **M11.11** (R-ORC-14) TUI: set node in the sidebar, set view with swimlanes (`prefix S`), attention
       roll-up, ledger timeline. **L**
 - [x] **M11.12** Templates (`~/.config/ptyro/changesets/*.toml`, trusted hub repos) and
       `cs new --template`. **S**

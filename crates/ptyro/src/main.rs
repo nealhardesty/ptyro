@@ -633,7 +633,7 @@ enum Cmd {
     },
     /// The inbox: what wanted you, newest first
     Inbox {
-        /// Every workspace (default: all; or --workspace)
+        /// Only this workspace (default: all)
         #[arg(long)]
         workspace: Option<String>,
         /// Only unread entries

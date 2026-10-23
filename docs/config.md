@@ -12,7 +12,8 @@ ptyro reads two kinds of file. Both are optional.
 apply live. `ptyro config check` validates the file, `ptyro config show` prints the effective
 configuration with defaults filled in, and `ptyro config path` prints where it is.
 
-The full schema is in [`SPEC.md`](../SPEC.md). This page covers the settings people change most.
+The full schema is in [`SPEC.md`](../SPEC.md) §13. This page covers the settings people change
+most; `ptyro config show` lists every key with the value in effect.
 
 ## Your config: `~/.config/ptyro/config.toml`
 
@@ -22,10 +23,16 @@ prefix = "C-]"            # one key or a list; default ["C-q", "C-Space"]
 theme = "ptyro-light"     # ptyro-dark (default), ptyro-light, high-contrast, or your own
 tint_borders = true       # colour pane dividers with the session's profile
 # mouse = false           # let the terminal own the mouse (native selection)
+# confirm_kill = false    # x stops a session without asking
+# sidebar = false         # start with the sidebar hidden (`\` toggles it)
+# sidebar_width = 30      # at least 12
+# status_bar = false
+# clock = false           # no clock in the status bar
+# show_ports = false      # hide listening ports in the sidebar and pane headers
 
 [worktrees]
 location = "sibling"      # data (default: ptyro's data dir) | sibling (<repo>.worktrees/) | in-repo
-branch_template = "{user}/{name}"   # {name} {user} {date} {slug}; default ptyro/{name}
+branch_template = "{user}/{name}"   # {name} {user} {date} {issue} {slug}; default ptyro/{name}
 
 [ports]
 range = "20000-29999"     # each worktree gets `count` ports from here
@@ -143,8 +150,8 @@ Other rules:
 ```toml
 [notifications]
 channels = ["inbox", "osc", "bell", "desktop", "sinks"]
-on = ["blocked", "errored", "done", "idle"]
-quiet_hours = "22:00-07:00"          # inbox only (blocked still breaks through)
+on = ["blocked", "errored", "done", "idle", "gate", "run"]   # the default
+quiet_hours = "22:00-07:00"          # inbox only, except [attention] breakthrough (blocked, gate)
 # desktop_command = ["my-notifier", "--title", "{title}", "{body}"]   # instead of notify-send
 
 [[notifications.sinks]]
@@ -217,7 +224,8 @@ auto = true                          # ...for every agent session in this projec
 - **A repository can never define agent commands or profiles.** Those live only in your config.
 
 Scripts and sessions in a worktree see `PTYRO_PROJECT`, `PTYRO_ROOT_PATH`, `PTYRO_WORKTREE_PATH`,
-`PTYRO_WORKTREE_NAME`, `PTYRO_BRANCH` and `PTYRO_PORT`. `[compat] conductor_env = true` (in your
+`PTYRO_WORKTREE_NAME`, `PTYRO_BRANCH`, `PTYRO_PORT` and `PTYRO_PORT_COUNT`. Every session also
+gets `PTYRO_SESSION_ID` and `PTYRO_SOCKET`. `[compat] conductor_env = true` (in your
 config) adds the `CONDUCTOR_*` names, so Conductor setup scripts run unchanged.
 
 ## Where files live
@@ -229,9 +237,20 @@ ptyro follows the XDG directories:
 | `~/.config/ptyro/` | `config.toml`, `recipes/`, `changesets/` (templates) |
 | `~/.local/share/ptyro/` | `ptyro.db`, `worktrees/`, `sessions/<id>/pty.log` (recordings) |
 | `~/.local/state/ptyro/` | logs, `crashes/` |
-| `$XDG_RUNTIME_DIR/ptyro/` | the daemon's socket |
+| `$XDG_RUNTIME_DIR/ptyro/` | the daemon's socket (without `XDG_RUNTIME_DIR`, as on macOS: `$TMPDIR/ptyro-<uid>/`; a path too long for a socket falls back to `/tmp/ptyro-<uid>-<hash>/`) |
 
 Set `PTYRO_HOME` to keep everything under one directory instead. `make sandbox` does exactly that.
 
-Other environment variables: `PTYRO_REMOTE` (like `--remote`), `PTYRO_LOG=debug` (a chatty
-daemon log), and `NO_COLOR`.
+Other environment variables:
+
+| Variable | Does |
+|---|---|
+| `PTYRO_CONFIG` | use this config file instead of `config.toml` |
+| `PTYRO_SOCKET` | use this socket path |
+| `PTYRO_REMOTE` | like `--remote` |
+| `PTYRO_SSH`, `PTYRO_REMOTE_BIN` | the ssh command and the remote ptyro ([remote.md](remote.md)) |
+| `PTYRO_LOG` | the daemon's log filter, e.g. `debug` |
+| `PTYRO_COMPRESS=1` | compress frames on a local connection too (always on with `--remote`) |
+| `PTYRO_NO_AUTOSPAWN=1` | don't start the daemon when none is running |
+| `PTYRO_ALLOW_NESTED=1` | allow the TUI inside a ptyro session |
+| `NO_COLOR` | no colour in CLI output |

@@ -8,7 +8,9 @@ Conventions:
 - `[x]` is optional, `A|B` is a choice, `…` repeats.
 - Every command takes `--remote [ssh://][user@]host[:port]` (or `PTYRO_REMOTE`) to act on another
   machine's daemon over ssh.
-- `--json` output shapes are in [`cli-json.md`](cli-json.md).
+- Listing and query commands take `--json`; the shapes are in [`cli-json.md`](cli-json.md).
+- Aliases: `a` (attach), `ls` (list), `runs`, `recipes`, `changeset`, `gates`, `leases`,
+  `checkpoints` / `ckpt`, `projects`, `workspace`, `worktree`, `profiles`, `report-agent`.
 - Durations look like `30s`, `10m`, `2h`.
 
 ## Naming sessions and worktrees
@@ -16,7 +18,8 @@ Conventions:
 - **`SESSION`** is a name (`brisk-rook`), `project/name`, a short handle from `ptyro ls`
   (`x7k2`), `@last`, or `@focused` (what your TUI shows).
 - **`SESSIONS…`**: where several are allowed you can also use a glob (`'build-*'`), `@all`,
-  `@live`, `@exited`, `@working` or `@blocked`, joined with commas (`ptyro rm @exited`).
+  `@live` (or `@running`), `@exited`, `@working`, `@blocked`, `@idle`, `@done` or `@error`, joined
+  with commas (`ptyro rm @exited`).
 - **`W`** (a worktree) is `project/name` (`myrepo/@root` is the main checkout), a unique name, or
   a path. It defaults to the worktree you're in.
 
@@ -34,7 +37,7 @@ Conventions:
 | `ptyro attach [SESSION] [-w WS] [--raw] [--view-only]` | open the TUI on a session; `--raw`: that session only, no chrome |
 | `ptyro list` (alias `ls`) `[-a] [--status S] [-p P] [-w WS] [--json]` | sessions: where they run, profile, ports; `-a` adds earlier daemon runs |
 | `ptyro stop SESSIONS…` | stop gracefully, keeping them listed (agents finish their turn first) |
-| `ptyro kill SESSIONS… [--keep] [-s SIGNAL]` | stop (HUP → TERM → KILL) and remove |
+| `ptyro kill SESSIONS… [--keep] [-s N]` (a signal number, e.g. `-s 9`) | stop (HUP → TERM → KILL) and remove |
 | `ptyro restart SESSIONS…` / `rm SESSIONS…` / `rename SESSION NAME` | run exited sessions again / forget them / rename |
 | `ptyro resume SESSIONS…` / `hibernate SESSIONS…` | relaunch dormant agents / stop idle ones, keeping them resumable |
 | `ptyro convert SESSION [--to tui\|structured] [--force]` | switch an agent between its own TUI and structured mode, same conversation |
@@ -106,14 +109,14 @@ Conventions:
 | `ptyro compare R [--refresh] [--json]` | rank candidates by evidence: tests, diff, time |
 | `ptyro pick R C [--cherry-pick \| --pr \| --apply [--path F]… [--hunk F:N]…] [--into T]` | take a candidate (default: merge) |
 | `ptyro discard R [C] [--force]` / `iterate R [C] TEXT` | remove the others / a follow-up prompt |
-| `ptyro recipe ls\|show NAME\|validate FILE\|graph R [--format mermaid]` | recipes: list, read, check, draw |
-| `ptyro recipe run R [--var k=v]… [--base REF] [--trust FP] [--wait] [--json]` | start a recipe |
-| `ptyro run ls [--active] [--tree]` / `show R` / `events R` / `wait R [--gate] [--timeout D]` | runs and their steps |
-| `ptyro run cancel R` / `retry R STEP` / `fork R --from STEP [--set k=v]` / `lead SESSION` | control runs; make an existing agent a lead |
+| `ptyro recipe ls\|show NAME\|validate FILE\|graph R [--format mermaid\|dot]` (each with `[--project P]`) | recipes: list, read, check, draw |
+| `ptyro recipe run R [--var k=v]… [--project P] [--base REF] [--trust FP] [--wait] [--json]` | start a recipe |
+| `ptyro run ls [--active] [--tree]` / `show R` / `events R` / `wait R [--gate] [--timeout D]` | runs and their steps (`wait`: exit 0 succeeded, 1 failed, 5 cancelled, 7 timeout) |
+| `ptyro run cancel R` / `retry R STEP` / `fork R --from STEP [--set k=v]` / `lead SESSION [--max-workers N] [--agent A]…` | control runs; make an existing agent a lead |
 | `ptyro gate ls [--all]` / `resolve ID CHOICE [--note N] [--key K]` | what runs wait on you for / answer |
-| `ptyro msg send TO TEXT [--kind K] [--interrupt]` / `check [--wait D]` / `ls` / `ack [IDS]` | the mailbox between agents and you (`TO`: `@lead`, `@user`, `@all`, `@idle`, `@<agent>`, a name) |
-| `ptyro lease claim PATTERN… [--exclusive] [--ttl D] [--as S]` / `release` / `ls` | file leases |
-| `ptyro radar [--project P]` | overlapping worktrees and predicted conflicts |
+| `ptyro msg send TO TEXT [--kind K] [--interrupt] [--run R] [--reply-to ID] [--key K]` / `check [--me S] [--since ID] [--wait D]` / `ls [--run R] [-n N]` / `ack [IDS] [--me S]` | the mailbox between agents and you (`TO`: `@lead`, `@user`, `@all`, `@idle`, `@<agent>`, a name) |
+| `ptyro lease claim PATTERN… [--exclusive] [--ttl D] [--reason TEXT] [--as S]` / `release [PATTERN…] [--as S]` / `ls` | file leases (`claim` exits 5 when refused) |
+| `ptyro radar [--project P]` | overlapping worktrees and predicted conflicts (exit 1 when it predicts one) |
 | `ptyro checkpoint ls [S\|W]` / `diff S N [M] [--stat]` / `restore S\|W [N] [--turn T] [-y]` | the worktree after every agent turn |
 | `ptyro verify SESSION [CHECK] [--max-bounces N]` / `--off` | verified-done for a session |
 | `ptyro mcp` | the MCP server a lead agent gets (started for it) |
@@ -124,11 +127,11 @@ See [`changesets.md`](changesets.md) for the walkthrough.
 
 | Command | Does |
 |---|---|
-| `ptyro cs new NAME --projects A,B… [--template T] [--layout lead\|solo\|manual] [--lead AGENT] [--agent M=A]… [--depends M:D+E]… [--base M=REF]… [-p GOAL \| --prompt-file F \| --from-issue N] [--gates contract,push,land \| --no-gates] [--integration CMD]… [--overlay] [--json]` | start a change set |
+| `ptyro cs new NAME --projects A,B… [--template T] [--layout lead\|solo\|manual] [--lead AGENT] [--agent M=A]… [--depends M:D+E]… [--base M=REF]… [-p GOAL \| --prompt-file F \| --from-issue N] [--gates contract,push,land \| --no-gates] [--integration CMD]… [--overlay] [--workspace WS] [--trust FP] [--json]` | start a change set (`--trust`: the fingerprint of a hub template you reviewed) |
 | `ptyro cs ls` / `show SET` (alias `status`) / `log SET [-f]` | change sets / one set with its issues and actions / its ledger |
 | `ptyro cs msg SET TO TEXT [--kind K] [--interrupt]` | a message on the set (`TO`: a member, `@lead`, `@all`) |
-| `ptyro cs ready SET [NOTE]` / `blocked SET ON [NOTE]` / `assign SET M TASK` / `ask SET QUESTION [--option O]…` | from inside the set: readiness, blockers, a member's task, a question for you |
-| `ptyro cs contract SET [show [--rev N] \| edit \| diff [FILE] \| history \| submit \| revise FILE [--diff] [--affects …] \| approve \| reject NOTE]` | the contract and its revisions |
+| `ptyro cs ready SET [NOTE]` / `blocked SET ON [NOTE]` (both `[--member M]`) / `assign SET M TASK` / `ask SET QUESTION [--option O]…` | from inside the set: readiness, blockers, a member's task, a question for you |
+| `ptyro cs contract SET [show [--rev N] \| edit \| diff [FILE] [--a REV] [--b REV] \| history \| submit [-m MSG] \| revise FILE [--diff] [--affects …] [-m MSG] \| approve [--note N] \| reject NOTE]` | the contract and its revisions |
 | `ptyro cs diff SET M` / `check SET` / `overlay SET [auto\|go\|rust\|node\|python\|compose\|off] [--member M]` | a member's changes / integration and contract checks / build against siblings |
 | `ptyro cs checkpoint SET [LABEL]` / `checkpoints SET` / `restore SET N [--force]` | undo across every repo |
 | `ptyro cs commit SET -m MSG` / `push SET [-y]` / `pr SET [--draft]` / `land SET [-y] [--no-wait]` | lockstep git and the merge train |
@@ -170,11 +173,11 @@ See [`remote.md`](remote.md).
 | Code | Meaning |
 |---|---|
 | `0` | ok (`wait`: got there) |
-| `1` | error (`doctor`: found a problem; `pr checks`: a check fails) |
+| `1` | error (`doctor`: found a problem; `pr checks`: a check fails; `run wait`: the run failed; `radar`: a predicted conflict; `cs check`: not ok; `daemon upgrade`: rolled back) |
 | `2` | invalid arguments |
 | `3` | not found |
 | `4` | ambiguous: a handle or selector matched several |
-| `5` | conflict: unsaved work, a profile question needing `--yes` / `--override-pin`, or (`wait`) the session exited first |
+| `5` | conflict: unsaved work, a profile question needing `--yes` / `--override-pin`, (`wait`) the session exited first, (`run wait`) the run was cancelled, or (`lease claim`) refused |
 | `6` | untrusted scripts |
 | `7` | timeout (`wait`, `send --wait-ready`), `--stall` saw no output, or (`pr checks`) checks still running |
 | `8` | no daemon |

@@ -94,7 +94,7 @@ const STARTER: &str = r#"# ptyro configuration. Every key is optional; see SPEC 
 # mouse = true
 
 [daemon]
-# scrollback_lines = 10000
+# scrollback_lines = 5000
 
 [keys]
 # Rebind after-prefix keys: "key" = "action [args]"; "none" unbinds. `C-q ?` lists actions.

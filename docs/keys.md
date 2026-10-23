@@ -32,7 +32,7 @@ action by name.
 | `o` | open the worktree in an editor (`[editors]`; nvim opens inside ptyro) |
 | `r` / `R` | run the project's default run script / pick a lifecycle script |
 | `a` | jump to the session that needs you most (blocked first) |
-| `p` | peek at a session and answer it without switching |
+| `p` | peek at the session that needs you most (else this one) and answer it without switching |
 | `i` | the inbox: everything that wanted you, per workspace |
 | `b` | broadcast one prompt into every session marked with `Space` in the sidebar |
 | `D` | the inspector: diff, comments, commit, PR, checks, ports, events |
@@ -40,8 +40,8 @@ action by name.
 | `O` | runs: fan-outs and recipes, their steps and gates, the comparison |
 | `S` | change sets: members as swimlanes, gates, issues, the ledger |
 | `t` | structured session: chat view ⇄ terminal view |
-| `j` / `k` (or `Down` / `Up`) | next / previous session in this pane |
-| `1` … `9` | the Nth session in this pane |
+| `j` / `k` (or `Down` / `Up`) | show the next / previous session of the workspace here, in sidebar order, across projects |
+| `1` … `9` | show the session numbered N in the sidebar here |
 | `/` | find a session (fuzzy) |
 | `` ` `` | the previously shown session |
 | `v` / `s` | split: a session beside / below this pane |
@@ -52,9 +52,9 @@ action by name.
 | `<` `>` `+` `-` | narrower / wider / taller / shorter |
 | `Tab` | move focus between the sidebar and the pane |
 | `\` | show or hide the sidebar |
-| `[` or `PageUp` | copy mode |
+| `[` / `PageUp` | copy mode / copy mode, one page up |
 | `]` | paste what you last copied |
-| `x` / `X` | stop the session (with confirmation) / kill it now |
+| `x` / `X` | stop the session (asks first unless `[ui] confirm_kill = false`; an exited one is removed) / kill it now |
 | `C-r` | run an exited session's command again |
 | `,` | rename the session |
 | `=` | take control: size the session to your pane (when another client resized it) |
@@ -64,6 +64,9 @@ action by name.
 `fg` it back, so when it suspends itself (Claude does), ptyro resumes it straight away and
 says so.
 
+In a pane whose session has exited, `⏎` runs it again; in a dormant one, `⏎` resumes it.
+`Ctrl-Q D`, `O` and `S` close their view again when it is already open.
+
 ## In the sidebar
 
 Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.
@@ -71,9 +74,10 @@ Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.
 | Key | Does |
 |---|---|
 | `j` / `k`, `g` / `G` | next / previous, first / last |
-| `⏎` | open the session, or fold and unfold a project or worktree |
+| `⏎` | open the session or change set, or fold and unfold a project or worktree |
 | `h` / `l` (or `Left` / `Right`) | fold / unfold |
-| `Space` | mark a session for broadcast (`b`) |
+| `Space` | mark a session for broadcast; on a project or worktree, fold or unfold |
+| `b` | broadcast one prompt into the marked sessions |
 | `n` / `N` | new session here / new worktree |
 | `a` `p` `i` `e` | next attention / peek / inbox / why this status |
 | `x` / `X` | stop a session or remove a worktree (refuses to lose work) / kill |
@@ -83,39 +87,53 @@ Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.
 | `w` `o` `r` | workspace / editor / run script |
 | `v` `s` | split |
 | `1` … `9`, `/` | jump to a session / find one |
+| `?` `:` `\` | help / palette / hide the sidebar |
 | `Tab` or `Esc` | back to the pane |
 
 ## Peek and permission prompts
 
-In peek (`Ctrl-Q p`), `y` allows a permission prompt, `a` always allows, `n` denies. Or type
-a reply and press `⏎`.
+In peek (`Ctrl-Q p`), with nothing typed and the session blocked, `y` allows a permission
+prompt, `a` always allows, `n` denies. Or type a reply and press `⏎`. `⏎` with nothing typed
+switches to the session; `Esc` closes peek.
 
-In a structured session's chat view, type into the pane and press `⏎` to send. On a permission
-card, `a` allows, `A` always allows, `d` denies. `Ctrl-C` interrupts the turn.
+In a structured session's chat view, type into the pane and press `⏎` to send; `Shift-⏎` or
+`Alt-⏎` adds a line, `Esc` clears the draft, `PageUp` / `PageDown` scroll. On a permission card,
+with nothing typed: `a`, `y`, `1` or `⏎` allows, `A` or `2` always allows, `d`, `n`, `3` or `Esc`
+denies. `Ctrl-C` clears the draft, or interrupts the turn when the draft is empty.
+
+## The inbox (`Ctrl-Q i`)
+
+`j` / `k` move, `Tab` cycles this workspace, the others and All. `⏎` opens the entry's session
+(or the run, for a gate or run entry), `p` peeks at it, `r` marks it read, `R` marks all read,
+`q` or `Esc` closes.
 
 ## The inspector (`Ctrl-Q D`)
 
-Tabs `1`–`5` (or `Tab`): Diff, Commits, Checks, Ports, Events.
+Tabs `1`–`5` (or `Tab` / `Shift-Tab`): Diff, Commits, Checks, Ports, Events.
 
 | Key | Does |
 |---|---|
-| `j` / `k`, `n` / `p` | move / next and previous file |
+| `j` / `k`, `d` / `u` (`PageDown` / `PageUp`) | move a line / 20 lines |
+| `n` / `p` (`]` / `[`, `J` / `K`, `Right` / `Left`) | next / previous file |
 | `a` | what to diff against: base, unpushed, last turn, uncommitted |
 | `s` | side by side |
-| `c` / `x` | comment on a line / drop a comment |
+| `c` or `⏎` / `x` | comment on a line / drop a comment |
 | `S` | send every comment to the agent as one prompt (once its turn is over) |
 | `Space` / `C` | mark files / commit them (or everything) as the worktree's profile |
 | `E` / `A` | commit in your editor / ask the agent to commit |
-| `P` | push and open a draft PR |
+| `P` | push and open a PR (a draft while `[github] draft = true`, the default) |
 | `I` | integrate: rebase onto main and fast-forward it |
 | `f` / `m` / `w` | Checks tab: send failing logs to the agent / auto-merge / watch |
 | `r` / `q` | refresh / close |
 
 ## Runs (`Ctrl-Q O`) and change sets (`Ctrl-Q S`)
 
-- **Runs:** `⏎` opens a run, `c` opens the comparison (`m` merge, `p` PR, `d` discard,
-  `i` iterate), `1`–`9` answer a gate (`n` with a note), `r` retries a step, `x` cancels,
-  `F` starts a fan-out.
+- **Runs:** `⏎` opens a run, `c` opens the comparison, `x` cancels, `F` starts a fan-out.
+  - In a run: `1`–`9` answer a gate (`n` with a note), `⏎` shows the step's session, `D`
+    inspects its worktree, `r` retries a step, `x` cancels.
+  - In the comparison: `m` merges, `C` cherry-picks, `p` opens a PR (each asks first), `d`
+    discards one, `X` discards the rest, `i` / `I` sends a follow-up to one / all, `R` re-runs
+    the evidence, `D` inspects, `⏎` shows the candidate's session.
 - **Change sets:** `⏎` shows a member's agent, `m` sends a message, `1`–`9` answer the gate,
   `c` runs checks, `p` takes a checkpoint, `r` refreshes, `Esc` goes back.
 
@@ -125,14 +143,15 @@ Tabs `1`–`5` (or `Tab`): Diff, Commits, Checks, Ports, Events.
 
 | Key | Does |
 |---|---|
-| `h j k l w b e 0 ^ $` | move |
+| `h j k l w b e 0 ^ $`, arrows, `Home` / `End` | move (a count works: `5j`) |
+| `H` / `M` / `L` | top / middle / bottom of the screen |
 | `gg` / `G` | top / bottom (`gg` at the top loads older history from the recording) |
-| `C-u` / `C-d`, `C-b` / `C-f` | half page / page |
+| `C-u` / `C-d`, `C-b` / `C-f` (`PageUp` / `PageDown`), `C-y` / `C-e` | half page / page / line |
 | `/` / `?`, then `n` / `N` | search forward / backward, next / previous match |
-| `[` / `]` | previous / next shell prompt (needs `ptyro shell-init`) |
-| `v` / `V` / `C-v` | select characters / lines / a block |
-| `y` or `⏎` | copy to your terminal's clipboard (works over SSH and in tmux) |
-| `q` or `Esc` | leave |
+| `[` / `]` (or `{` / `}`) | previous / next shell prompt (needs `ptyro shell-init`) |
+| `v` / `V` / `C-v` | select characters / lines / a block (`o` jumps to the other end) |
+| `y` or `⏎` / `Y` | copy the selection / the line to your terminal's clipboard (works over SSH and in tmux) |
+| `q`, `Esc` or `C-c` | leave (`Esc` first clears a selection) |
 
 ## Mouse
 
@@ -147,7 +166,13 @@ Tabs `1`–`5` (or `Tab`): Diff, Commits, Checks, Ports, Events.
 `Ctrl-Q :` runs any action by name, including ones with no default key: `project.add`
 (pick from repos under `[discover] roots`), `project.trust`, `worktree.remove`,
 `session.command` (a session running a command line), `session.resume`, `session.hibernate`,
-`session.mute`, `notify.test`, `theme.next`, `config.edit`.
+`session.mute`, `notify.test`, `theme.next`, `config.edit`, `help.tour`.
+
+## Other overlays
+
+- **Review queue** (`Ctrl-Q Q`): `⏎` opens the inspector, `d` marks it reviewed.
+- **Tour** (`ptyro tour`, `help.tour`): `→` / `⏎` next, `←` / `h` / `Backspace` back, `q` / `Esc` leave.
+- **Trust** (a project's scripts): `y` trusts, `n` goes on without them, `j` / `k` scroll.
 
 ## Rebinding
 
@@ -158,4 +183,4 @@ Tabs `1`–`5` (or `Tab`): Diff, Commits, Checks, Ports, Events.
 "nav:J" = "nav.down"                 # in the sidebar
 ```
 
-The action names are the ones the palette and `Ctrl-Q ?` show.
+The action names are the ones `Ctrl-Q ?` shows (the palette leaves out `nav.*` and `session.focus N`).

@@ -154,8 +154,8 @@ selectors `@all`, `@live` (alias `@running`), `@exited`, `@working`/`@blocked`/`
 Results follow the session list's order without duplicates. Single-target requests accept a
 selector only if it matches exactly one session (otherwise `ambiguous`). The CLI expands
 selectors with `Request::Resolve`, so `ptyro kill @exited`, `ptyro send 'agent-*' …` and
-`ptyro rm @all` work. `myrepo/name`, `@attention` and `@run:` arrive with projects, attention and
-runs.
+`ptyro rm @all` work. `myrepo/name` arrived with projects (M3). `@attention` and `@run:<id>` are
+**not built yet** (`@run:` works only as a mailbox recipient).
 
 **[built M3]** `project/name` resolves a session by project and name. Projects are addressed by
 slug, id suffix (≥ 4) or any path inside one of their checkouts. Worktrees are addressed by
@@ -219,6 +219,8 @@ ptyro/
 │   ├── ptyro-agents/          # adapters: claude, codex, gemini, opencode, shell, generic
 │   ├── ptyro-git/             # worktree ops (git CLI), fast reads (gix, optional)
 │   ├── ptyro-store/           # rusqlite schema, migrations, store actor
+│   ├── ptyro-drive/           # structured-session drivers: Claude stream-json, Codex
+│   │                          #   app-server, ACP, OpenCode server (M10, §7.1)
 │   ├── ptyro-run/             # orchestration as data: recipes, templates, conditions, the
 │   │                          #   event-sourced run state, the pure engine (M7, §15.6)
 │   ├── ptyro-tui/             # ratatui client
@@ -1074,7 +1076,7 @@ Without a recorder (M8) a dormant pane shows a "☾ dormant: ⏎ resumes" card, 
 - Raw PTY output is appended to `data/sessions/<id>/pty.log` in a simple framed format
   (`[u32 len][u64 µs-since-start][bytes]`), ring-truncated at `recorder.max_bytes` (default 16 MiB).
 - Uses: (1) scrollback for `Exited`/`Dormant` sessions after daemon restart; (2) `ptyro replay`
-  (time-faithful playback in a pane); (3) `ptyro export --asciicast` (asciinema v2); (4) debugging
+  (time-faithful playback in a pane); (3) `ptyro export --format asciicast` (asciinema v2); (4) debugging
   emulator bugs from real-world byte streams (attach the log to an issue).
 - Per-agent opt-out (`record = false`) and global `recorder.enabled`. Logs may contain secrets that
   scrolled through the terminal: files are `0600`, and `ptyro gc` prunes logs of removed sessions.
@@ -1493,7 +1495,7 @@ Fusion rules:
 - Lower-confidence sources (4–6) only apply when no high-confidence source has spoken for
   `stale_after` (default 5 min), so a missed hook can't freeze the state forever.
 - `UserPromptSubmit`/`working` clears `Blocked` and `Idle`.
-- Every transition is persisted (`session_events`, §14.3) — powers timelines, metrics, and debugging
+- Every transition is persisted (`session_events`, §14.2) — powers timelines, metrics, and debugging
   of adapters ("why did it say blocked?" → `ptyro status --explain`).
 - Heuristic-only sessions show their status with a visible low-confidence marker (e.g. `◌`), never
   pretend certainty. **[decided]**
@@ -2197,7 +2199,8 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
   refused and the text stays; in name prompts Tab applies the suggested fix (`My Feat/2` →
   `my-feat-2`). Renaming a session to its own name does nothing.
 - **Copy mode** (`prefix [` or `PageUp`, the mouse wheel, or a drag): §11.3 below.
-- **Exited sessions** stay on screen, greyed, with a banner "exited N — ⏎ restart · x remove".
+- **Exited sessions** stay on screen, greyed, with a banner "<name> exited N — ⏎ restart · C-q x
+  remove" ("⏎ resume" on a dormant one).
 - **Multiple clients:** `--view-only` never sends input, resize or focus; `=` takes control.
   A session larger than the pane is cropped with a "viewing at C×R" badge, and the view
   **auto-pans to keep the cursor visible**.
@@ -2220,8 +2223,9 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
   - Rows show the pin's profile label (in its colour), the branch when it isn't the default
     `ptyro/<name>`, `+N −M` lines changed, a `●` dirty marker, the worktree state when not ready,
     and listening ports.
-  - Folding: `⏎`/`Space`, `h`/`l`, or a click. `1`–`9` number the visible session rows, and
-    `j`/`k` cycle every session of the workspace in tree order.
+  - Folding: `⏎`/`Space`, `h`/`l`, or a click. `1`–`9` number the visible session rows. In the sidebar
+    `j`/`k` move the selection; after the prefix they cycle every session of the workspace in
+    tree order.
 - **Workspaces:** `w` opens the switcher (each workspace's profile, project and session counts, "+
   new workspace"). Views are saved per workspace (`view:<name>`), and the last workspace is
   stored under `_tui`. Opening on a session from another workspace switches to that workspace. A
@@ -2265,12 +2269,15 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
   compact `⚑N` badges for other workspaces, and `✉N` unread.
 - **`a`** jumps to the next attention. Order: blocked > errored > done > idle > exited >
   notification, oldest first, within `attention.scope`.
-- **`p` (peek)** pops up the selected session's screen and its pending question without
-  switching: `y`/`a`/`n` answer a permission; typing writes a reply that `⏎` sends; `⏎` with
+- **`p` (peek)** pops up the screen and pending question of the session that needs you most
+  (else the focused one; in the sidebar, the selected one) without switching: with nothing typed,
+  `y`/`a`/`n` answer a permission; typing writes a reply that `⏎` sends; `⏎` with
   nothing typed opens the session.
 - **`i` (inbox):** one tab per workspace plus All (`Tab` switches), newest first, unread marked.
-  `j`/`k` move; `⏎` opens the session, which marks its entries read.
-- **`e`** explains the status (the engine's ring).
+  `j`/`k` move; `⏎` opens the session (or the run, for a gate or run entry) and marks the entry
+  read; `p` peeks, `r` marks one read, `R` all.
+- **`e`** (in the sidebar) explains the selected session's status (the engine's ring); elsewhere
+  it is the palette's `session.explain`.
 - **Palette:** `session.resume`, `session.hibernate`, `session.mute`, `notify.test`.
 - **Dormant panes** show a resume card; `⏎` (or focus, with `resume_on_focus`) resumes.
 - The TUI reports its terminal's focus (mode 1004) with `Focus`, so watching only counts while
@@ -2301,10 +2308,11 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
     - a file list (marks: `◆` staged for commit, `💬N` comments) next to the hunks;
     - unified with old/new line numbers, or side by side (`s`);
     - against the base, the upstream, the last turn or HEAD (`a` cycles);
-    - keys: `j/k` lines, `n/p` files, `c`/`⏎` comment on the cursor line, `x` drop it, `S` send
-      all comments to the agent, `Space` mark a file, `C` commit the marked files (or
-      everything) with a message, `A` ask the agent to commit, `P` push and open a (draft) PR,
-      `I` integrate (asks first).
+    - keys: `j/k` lines, `d`/`u` 20 lines, `n/p` (or `]`/`[`) files, `c`/`⏎` comment on the
+      cursor line, `x` drop it, `S` send all comments to the agent, `Space` mark a file, `C`
+      commit the marked files (or everything) with a message, `E` commit in your editor, `A` ask
+      the agent to commit, `P` push and open a PR (a draft while `github.draft`), `I` integrate
+      (asks first), `r` refresh, `q` close.
   - **Commits** since the base.
   - **Checks:** the PR, its review state and each check. `f` sends the failing logs to the
     agent, `m` turns on auto-merge, `w` watches.
@@ -2365,21 +2373,26 @@ action's key. Differences from the proposal below:
 
 **[built M7]** `O` opens the runs view (§11.2g), in the sidebar too.
 
-**[built M4]** `a`, `i` and `p` work as listed. `e` explains the focused session's status. In the
-sidebar, `a`/`i`/`p`/`e` work without the prefix.
+**[built M4]** `a`, `i` and `p` work as listed (`p` after the prefix peeks at the session that
+needs you most). In the sidebar, `a`/`i`/`p` work without the prefix, and `e` explains the
+selected session's status; `e` has no key after the prefix (palette: `session.explain`).
+
+**[built M10]** `t` toggles a structured session between the chat view and the terminal view.
+
+The full sidebar table (no prefix) is in [`docs/keys.md`](docs/keys.md#in-the-sidebar).
 
 | Key | Action |
 |---|---|
 | `?` | help overlay (searchable) |
 | `:` / `Ctrl-p` | command palette (every command, fuzzy) |
-| `n` | new session (picker: agent → target worktree/new worktree → name → optional prompt) |
+| `n` | new session (wizard: agent → target worktree/new worktree) |
 | `N` | new worktree (+ agent) wizard |
 | `j` / `k`, `↑` / `↓` | next / previous session in sidebar order |
 | `1`…`9` | focus session by sidebar index |
 | `a` | jump to next session needing attention |
-| `p` | **peek**: popup with the last screen + pending question of the selected session; reply inline without switching |
+| `p` | **peek**: popup with the last screen + pending question of the session that needs you most (in the sidebar: the selected one); reply inline without switching |
 | `i` | inbox |
-| `/` | fuzzy find session/worktree/project |
+| `/` | fuzzy find a session |
 | `Tab` | toggle focus sidebar ↔ pane |
 | `s` / `v` | split horizontal / vertical with a picked session |
 | `h`/`l` (in split) | move focus between panes |
@@ -2391,7 +2404,7 @@ sidebar, `a`/`i`/`p`/`e` work without the prefix.
 | `x` | stop session (confirm); `X` kill |
 | `b` | broadcast prompt to selected sessions (multi-select with `space` in sidebar) |
 | `w` | workspace switcher (shows each workspace's profile label and attention badges) |
-| `S` | change-set view (§15.5.10), when the focused session belongs to a set |
+| `S` | change sets (§15.5.10): the list; in the sidebar on a set row, that set |
 | `d` | detach (TUI exits, everything keeps running) |
 | `q` | quit TUI (same as detach; never kills sessions) |
 
@@ -2412,7 +2425,7 @@ mouse), drag to select (copy mode), drag split borders.
 ### 11.5 Overlays and views
 
 - **Peek** (above), **Inbox**, **Command palette**, **Help**.
-- **New session/worktree wizard** (fast path: `n`, `Enter`, `Enter` = Claude in a new worktree of
+- **New session/worktree wizard** (fast path: `n`, `Enter`, `Enter` = the default agent in a new worktree of
   the current project with a random name).
 - **Inspector** (M6): Diff (file list + side-by-side/unified hunks, syntax highlighted via
   `syntect` optional), Commits, Checks, Ports, Events (status timeline — "why is it blocked?").
@@ -2434,6 +2447,10 @@ mouse), drag to select (copy mode), drag split borders.
 - Destructive commands ask for confirmation on a TTY; `--yes` for scripts.
 
 ### 12.2 Command tree **[proposed]**
+
+The proposal as written. Built syntax differs in places (`export --format asciicast|text|ptylog`,
+`gate resolve ID CHOICE`, `wt new --no-setup`, `profile env P [--json]`, `verify S [CHECK]`);
+[`docs/commands.md`](docs/commands.md) and `ptyro <command> --help` are the reference.
 
 ```text
 ptyro                                  # TUI
@@ -2642,7 +2659,7 @@ and then removes the session unless `--keep`. Still to come from this tree: `--v
   `radar [--project] [--json]` (exit 1 when a merge would conflict).
 - **Checkpoints:** `checkpoint ls [S|W] [--json]`, `checkpoint diff S N [M] [--stat]`,
   `checkpoint restore S|W [N] [--turn T] [--yes]` (alias `ckpt`).
-- **Agents:** `verify S CHECK [--max-bounces N] | --off`; `new … --verify CHECK`,
+- **Agents:** `verify S [CHECK] [--max-bounces N] | --off`; `new … --verify CHECK`,
   `new … --lead [--max-workers N] [--lead-agent A]…`; `mcp` (stdio MCP server, §15.6).
 - **`pr create`:**
   - pushes with `--set-upstream` under the profile (its SSH key);
@@ -2772,8 +2789,8 @@ change (debounced) and emits `ConfigReloaded`.
 - On a change it re-reads the file and broadcasts `ConfigReloaded { error }`. On error it keeps
   the old config.
 - TUIs re-read the file and apply key bindings and theme live. New sessions use the new
-  `scrollback_lines`, new subscriptions the new `frame_interval_ms`. `log_level` takes effect at
-  the next daemon start.
+  `scrollback_lines`, new subscriptions the new `frame_interval_ms`. `daemon.log_level` is
+  accepted but not read yet; set the daemon's log level with `PTYRO_LOG` (env-filter syntax).
 - A broken config never stops the daemon: it starts on defaults and logs the error.
 
 **[built M3]**
@@ -2796,7 +2813,7 @@ change (debounced) and emits `ConfigReloaded`.
 - `[attention]`: `scope`, `breakthrough`, `stale_after`, `min_work`, `resume_on_focus`.
 - `[notifications]`:
   - `channels` (default `inbox, osc, bell`);
-  - `on` (default `blocked, errored, done, idle`);
+  - `on` (default `blocked, errored, done, idle, gate, run`);
   - `quiet_hours = "22:00-07:00"`, `coalesce`, `desktop_command`;
   - `[[notifications.sinks]]` with `type = ntfy|pushover|slack|discord|telegram|command` and a
     per-sink `on`;
@@ -2851,13 +2868,12 @@ prefix = ["C-q", "C-Space"]  # or one key: "C-]"
 theme = "ptyro-dark"
 sidebar_width = 30
 show_ports = true
-confirm_quit = false
+confirm_kill = true              # x asks before stopping a session
 
 [daemon]
 scrollback_lines = 5000          # in memory; older lines come from the recording (§7.6)
 restore_on_start = "dormant"     # dormant | resume | none
 frame_interval_ms = 8
-log_level = "info"
 
 [recorder]
 enabled = true
@@ -2865,14 +2881,12 @@ max_bytes = "16MiB"
 
 [notifications]
 channels = ["inbox", "osc", "bell"]      # + "desktop", later "push"
-on = ["blocked", "errored", "done", "idle"]
+on = ["blocked", "errored", "done", "idle", "gate", "run"]
 quiet_hours = "22:00-07:00"
-min_work = "10s"
 
 [worktrees]
 location = "data"                         # data | sibling | in-repo
 branch_template = "ptyro/{name}"
-names = "corvid"                          # word list for friendly names
 
 [ports]
 range = "20000-29999"
@@ -2915,6 +2929,7 @@ guard = "confirm"                          # confirm | refuse | warn
 
 [attention]
 scope = "current-first"                    # current-first | current | global (§9.6)
+min_work = "10s"
 
 [editors]
 default = "nvim"
@@ -2927,7 +2942,7 @@ zed = { command = ["zed", "{path}"] }
 "global:M-1" = "session.focus 1"
 
 [remote]
-enabled = false
+serve = false                              # the daemon runs `ptyro serve` itself
 ```
 
 ### 13.3 Project config `.ptyro.toml` (example)
@@ -4474,8 +4489,8 @@ learn something the hard way.
   before awaiting (`watch::Ref` is not `Send`). Wrap such futures in `async { … .await; }`.
 - Never `fork()` after starting a tokio runtime; spawn the daemon as a fresh process instead.
 - Reattach redraw trick (shpool, dtach): if the size didn't change, resize to rows−1 and back to
-  force full-screen apps to repaint. With daemon-side emulation we rarely need it, but keep it as a
-  `ptyro redraw <session>` escape hatch.
+  force full-screen apps to repaint. With daemon-side emulation we rarely need it; the escape
+  hatch is the TUI's `C-l` (`view.redraw`), and there is no `ptyro redraw` command.
 - tmux passthrough for OSC to the outer terminal: `ESC P tmux; <seq with ESC doubled> ESC \`,
   requires `set -g allow-passthrough on`.
 - **[verified M3]** `tokio::sync::watch::Sender::send` *drops the value* when there are no
@@ -4659,7 +4674,7 @@ Checked against each tool's documentation on 2026-10-20. Marks: [V] official doc
    and Zellij take Ctrl-Q. A list the user sets replaces the default. The user-facing wording is in
    `docs/keys.md`. `ptyro init` asks for comma-separated keys and warns only when `C-Space` is the
    sole prefix on macOS.
-3. **Codex & Gemini hook injection** — which mechanism works without touching user config (M0.4/M0.5).
+3. ~~**Codex & Gemini hook injection**~~ — **decided 2026-10-20:** Codex entirely through `-c` flags, nothing written to `~/.codex`; Gemini through a ptyro extension linked once, opt-in (§8.4, §8.5, M0.4/M0.5).
 4. ~~**Claude hooks injection**~~ — **decided 2026-10-20:** `--plugin-dir`; both mechanisms are additive (§8.2, M0.3).
 5. **Should the TUI offer a raw-passthrough fast path** when it is the only client and sizes match
    (enables image protocols like kitty graphics)? Deferred until someone needs images.
@@ -4667,7 +4682,7 @@ Checked against each tool's documentation on 2026-10-20. Marks: [V] official doc
    policy (§9.6) *and* a profile (§10.10); the owner runs several accounts side by side, switching
    today via shell aliases with separate config dirs (→ `ptyro init` adoption, §10.10). `default`
    becomes `isolate = true` once any profile is defined (decided 2026-10-20).
-7. **Antigravity CLI** adapter — research once Gemini users migrate.
+7. ~~**Antigravity CLI** adapter~~ — built from its docs as M4.21 (§8.6b); unverified against a real install.
 8. **Change sets (§15.5)** — **direction decided 2026-10-20:** one lead plus one agent per member
    repo, validated by the hands-on experiment M11.0 before the machinery is built. Still open:
    should the lead be allowed to edit member code in `solo` layout only, or never; do the contract

@@ -56,8 +56,8 @@ Conventions:
 | `last_prompt_ms` | number? | when ptyro last typed a prompt into it |
 | `turns` | number | completed turns (working → idle/done) |
 | `last_output_ms` | number? | when its screen last changed |
-| `held` | bool | its permission prompt is held for an exact answer from any client (M9.5) |
-| `structured` | string? | a structured session's protocol: `stream-json`, `app-server`, `acp` or `opencode` (M10) |
+| `held` | bool, missing when false | its permission prompt is held for an exact answer from any client (M9.5) |
+| `structured` | string, missing when not structured | a structured session's protocol: `stream-json`, `app-server`, `acp` or `opencode` (M10) |
 
 `Status`: `{status, kind?, detail?, confidence, source, since_ms, progress?}`.
 - `status` is `unknown`, `starting`, `working`, `blocked`, `idle`, `done` or `error`.
@@ -99,8 +99,8 @@ A structured session's transcript, oldest first. `ChatItem` is `{id, at_ms, rev,
 ### `ptyro wait … --json` and `ptyro send … --wait --json` → `[Outcome]`
 
 `{session, name, reached, state, detail?, turns, matched?, waited_ms}`.
-- `state` is `idle`, `blocked`, `done`, `error`, `exited`, `removed`, `matched`, `stalled` or
-  `timeout`.
+- `state` is the session's status where it ended up (`working`, `blocked`, `idle`, `done`,
+  `error`, `dormant`, `exited`, …), or `removed`, `matched`, `stalled` or `timeout`.
 - `matched` is the text the `--match` regex found.
 
 ### `ptyro events --json` (NDJSON, oldest first)
@@ -262,6 +262,7 @@ Pinned by `crates/ptyro/tests/m11.rs`.
   the address it last connected from; `push` counts its Web Push subscriptions; `pending`: its
   pairing code hasn't been claimed yet.
 
+## Setup, config and the daemon
 
 - `ptyro doctor --json`, `ptyro profile doctor --json` → `[{section, name, level, text}]`.
   `level` is `ok`, `note`, `warn` or `problem`; any `problem` makes the exit code 1.
