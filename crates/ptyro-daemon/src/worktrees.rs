@@ -998,6 +998,14 @@ impl Daemon {
             }
             Request::WorktreeNew { spec } => self.create_worktree(spec).await,
             Request::WorktreeRemove { addr, opts } => self.remove_worktree(&addr, opts).await,
+            Request::WorktreeArchive { addr, stop_sessions } => {
+                self.archive_worktree(&addr, stop_sessions).await
+            }
+            Request::WorktreeRestore { addr } => self.restore_worktree(&addr).await,
+            Request::WorktreeArchives { project } => self.list_archives(project.as_deref()).await,
+            Request::WorktreeFinish { addr, integrate } => {
+                self.finish_worktree(&addr, integrate).await
+            }
             Request::WorktreeRefresh { addr } => {
                 let wt = self.find_worktree(&addr)?;
                 let info = self.refresh_status(&wt.id).await.unwrap_or(wt);

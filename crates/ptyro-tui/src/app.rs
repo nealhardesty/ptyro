@@ -148,6 +148,12 @@ pub enum Purpose {
     AddProject(Option<AfterAdd>),
     /// A row's actions (UX1.15): run with that row selected in the sidebar.
     RowMenu(Row),
+    /// How to finish this worktree (UX1.12): a PR, or integrate.
+    Finish(String),
+    /// An archived worktree to bring back.
+    Restore,
+    /// A stale worktree to clean up (archive).
+    Gc,
 }
 
 /// What asked for a project when there was none (UX1.6): done once the project is added.
@@ -221,6 +227,8 @@ pub enum Confirmed {
     KeepPin(String),
     /// Integrate this worktree into the main branch (M6.7).
     Integrate(String),
+    /// Archive this worktree, stopping what runs in it (UX1.12).
+    Archive(String),
     /// Send this request, then show this (runs view: cancel, pick, discard).
     Send(Box<Request>, String),
 }
@@ -296,6 +304,10 @@ pub enum Pending {
     CsLog(String),
     /// The context worktree's scripts, for an open palette (UX1.18).
     PaletteScripts(String),
+    /// Archived worktrees, for the restore picker (UX1.12).
+    Archives,
+    /// Stale worktrees, for the clean-up picker.
+    Gc,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1485,9 +1497,61 @@ impl App {
             (Pending::Removed(_), Ok(Reply::Removed { notes })) => self.toast(notes.join(" · ")),
             (Pending::Removed(id), Err(e)) if e.code == ErrorCode::DirtyWorktree => {
                 self.overlay = Some(Overlay::Confirm {
-                    text: format!("{}\n\nDiscard that work and remove it anyway? [y/N]", e.message),
+                    text: format!(
+                        "{}\n\na: archive it instead (its work is kept; restore brings it back)\ny: discard that work and remove it · n: neither",
+                        e.message
+                    ),
                     action: Confirmed::RemoveWorktree { id, force: true },
                 });
+            }
+            (Pending::Gc, Ok(Reply::Gc { entries })) => {
+                if entries.is_empty() {
+                    self.toast("nothing stale: every worktree is in use");
+                } else {
+                    let items = entries
+                        .iter()
+                        .map(|e| Item {
+                            label: e.worktree.qualified(),
+                            detail: e.reasons.join(" · "),
+                            key: None,
+                            target: Target::Worktree(e.worktree.id.clone()),
+                        })
+                        .collect();
+                    self.overlay = Some(Overlay::Picker {
+                        palette: Palette::new(
+                            "Stale worktrees: ⏎ archives one (its work is kept)",
+                            items,
+                        ),
+                        purpose: Purpose::Gc,
+                    });
+                }
+            }
+            (Pending::Archives, Ok(Reply::Archives { entries })) => {
+                if entries.is_empty() {
+                    self.toast("nothing archived yet");
+                } else {
+                    let items = entries
+                        .iter()
+                        .map(|e| Item {
+                            label: format!("{}/{}", e.project_slug, e.name),
+                            detail: format!(
+                                "{} · archived {} ago{}",
+                                e.branch,
+                                crate::ui::ago(e.archived_ms),
+                                e.title.as_deref().map(|t| format!(" · {t}")).unwrap_or_default()
+                            ),
+                            key: None,
+                            target: Target::Path(std::path::PathBuf::from(format!(
+                                "{}/{}",
+                                e.project_slug, e.name
+                            ))),
+                        })
+                        .collect();
+                    self.overlay = Some(Overlay::Picker {
+                        palette: Palette::new("Restore an archived worktree", items),
+                        purpose: Purpose::Restore,
+                    });
+                }
             }
             (Pending::ProjectAdded(then), Ok(Reply::Project { info, notes })) => {
                 upsert_by(&mut self.projects, info.clone(), |p| p.id.clone());
@@ -1956,6 +2020,48 @@ impl App {
                 ),
                 None => self.pick_project(Some(AfterAdd::Run("project.trust"))),
             },
+            "worktree.finish" | "worktree.archive" => {
+                match self.context().1.and_then(|w| self.worktree(&w).cloned()) {
+                    Some(w) if w.is_root => {
+                        self.toast("that's the main checkout: finish a worktree of it")
+                    }
+                    Some(w) if cmd.action == "worktree.archive" => self.confirm_archive(&w),
+                    Some(w) => {
+                        let items = vec![
+                            Item {
+                                label: "a pull request".into(),
+                                detail: "commit what's left, push, open a PR".into(),
+                                key: Some("p".into()),
+                                target: Target::Action(Command { action: "pr", arg: None }),
+                            },
+                            Item {
+                                label: "integrate".into(),
+                                detail: "commit what's left, rebase onto the main branch and fast-forward it".into(),
+                                key: Some("i".into()),
+                                target: Target::Action(Command { action: "integrate", arg: None }),
+                            },
+                        ];
+                        self.overlay = Some(Overlay::Picker {
+                            palette: Palette::new(format!("Finish {}", w.qualified()), items),
+                            purpose: Purpose::Finish(w.id.clone()),
+                        });
+                    }
+                    None => self.pick_project(Some(AfterAdd::Run("worktree.finish"))),
+                }
+            }
+            "worktree.restore" => {
+                self.request(Pending::Archives, Request::WorktreeArchives { project: None })
+            }
+            "worktree.gc" => self.request(Pending::Gc, Request::Gc),
+            "shell.here" => {
+                let (_, wt) = self.context();
+                let spec = SpawnSpec {
+                    cwd: if wt.is_some() { Default::default() } else { self.here() },
+                    worktree: wt,
+                    ..SpawnSpec::default()
+                };
+                self.spawn_spec(spec, Some(Dir::Right));
+            }
             "worktree.retitle" => match self.context().1.and_then(|w| self.worktree(&w).cloned()) {
                 Some(w) => {
                     self.overlay = Some(Overlay::Prompt {
@@ -2006,7 +2112,12 @@ impl App {
                         Some(Row::Session(id)) => Some(id),
                         Some(Row::Worktree(w)) if cmd.action == "session.stop" => {
                             if let Some(w) = self.worktree(&w).cloned().filter(|w| !w.is_root) {
-                                self.confirm_remove(&w);
+                                // Merged: clean up by archiving, which never refuses (UX1.12).
+                                if w.pr.as_ref().is_some_and(|p| p.state == "MERGED") {
+                                    self.confirm_archive(&w);
+                                } else {
+                                    self.confirm_remove(&w);
+                                }
                             }
                             return;
                         }
@@ -3159,6 +3270,24 @@ impl App {
         });
     }
 
+    fn confirm_archive(&mut self, w: &WorktreeInfo) {
+        let live = self
+            .sessions
+            .iter()
+            .filter(|s| s.worktree.as_deref() == Some(w.id.as_str()) && s.state.is_live())
+            .count();
+        let note =
+            if live > 0 { format!(" Its {live} running session(s) stop.") } else { String::new() };
+        self.overlay = Some(Overlay::Confirm {
+            text: format!(
+                "Archive {} ({})? Its branch and a snapshot of its files are kept; restore brings it back.{note} [Y/n]",
+                w.qualified(),
+                w.branch.as_deref().unwrap_or("-")
+            ),
+            action: Confirmed::Archive(w.id.clone()),
+        });
+    }
+
     fn confirm_remove(&mut self, w: &WorktreeInfo) {
         let live = self
             .sessions
@@ -3406,6 +3535,13 @@ impl App {
             Overlay::Confirm { action, text } => match (key.code, &action) {
                 // "Keep the pin? [Y/n]": Enter keeps it.
                 (KeyCode::Enter, Confirmed::KeepPin(_)) => {}
+                // Archiving loses nothing: Enter agrees.
+                (KeyCode::Enter, Confirmed::Archive(_)) => self.confirmed(action),
+                // A removal that would lose work: `a` archives it instead (UX1.12).
+                (KeyCode::Char { c: 'a' | 'A' }, Confirmed::RemoveWorktree { id, force: true }) => {
+                    let id = id.clone();
+                    self.confirmed(Confirmed::Archive(id));
+                }
                 (KeyCode::Char { c: 'n' | 'N' }, Confirmed::KeepPin(id)) => {
                     let id = id.clone();
                     self.request(
@@ -3497,6 +3633,12 @@ impl App {
                 );
             }
             Confirmed::KeepPin(_) => {}
+            Confirmed::Archive(id) => {
+                self.request(
+                    Pending::Done(String::new()),
+                    Request::WorktreeArchive { addr: id, stop_sessions: true },
+                );
+            }
         }
     }
 
@@ -3531,6 +3673,17 @@ impl App {
             }
             (Target::Editor(name), Purpose::Editor(wt)) => self.open_editor(&wt, &name),
             (Target::Script(name), Purpose::Script(wt)) => self.run_script(wt, Some(name)),
+            (Target::Worktree(id), Purpose::Gc) => {
+                if let Some(w) = self.worktree(&id).cloned() {
+                    self.confirm_archive(&w);
+                }
+            }
+            (Target::Path(addr), Purpose::Restore) => {
+                self.request(
+                    Pending::Done("restored".into()),
+                    Request::WorktreeRestore { addr: addr.to_string_lossy().into_owned() },
+                );
+            }
             (Target::Path(path), purpose) => {
                 let then = match purpose {
                     Purpose::AddProject(then) => then,
@@ -3541,6 +3694,18 @@ impl App {
             }
             (Target::AddProject, Purpose::Target(w)) => {
                 self.pick_project(Some(AfterAdd::Targets(w)))
+            }
+            (Target::Action(Command { action, .. }), Purpose::Finish(id)) => {
+                let integrate = action == "integrate";
+                self.toast(if integrate {
+                    "finishing: committing what's left, then integrating…"
+                } else {
+                    "finishing: committing what's left, then a PR…"
+                });
+                self.request(
+                    Pending::Done(String::new()),
+                    Request::WorktreeFinish { addr: id, integrate },
+                );
             }
             // A row's action: with that row selected, so it's what the action works on.
             (Target::Action(cmd), Purpose::RowMenu(row)) => {
@@ -5289,15 +5454,74 @@ mod tests {
             Ok(Reply::Scripts { scripts }),
         ));
         let shown = screen(&app);
-        assert!(
-            shown.contains("script dev") && shown.contains("run it in p1/@root"),
-            "{shown}"
-        );
+        assert!(shown.contains("script dev") && shown.contains("run it in p1/@root"), "{shown}");
         // A project: selected in the sidebar.
         app.overlay = None;
         app.picked(Target::Project("p1".into()), Purpose::Palette);
         assert_eq!(app.focus, Focus::Sidebar);
         assert_eq!(app.selected_row(), Some(Row::Project("p1".into())));
+    }
+
+    fn feature(app: &mut App, merged: bool) -> WorktreeInfo {
+        let mut w = root("p1");
+        w.id = "p1-feat".into();
+        w.name = "feat".into();
+        w.is_root = false;
+        w.branch = Some("ptyro/feat".into());
+        if merged {
+            w.pr = Some(
+                serde_json::from_value(serde_json::json!({
+                    "number": 7, "url": "u", "title": "Add five", "state": "MERGED", "draft": false,
+                    "checks": [], "automerge": false, "ours": true, "at_ms": 0,
+                }))
+                .unwrap(),
+            );
+        }
+        app.worktrees.push(w.clone());
+        w
+    }
+
+    #[test]
+    fn finishing_and_cleaning_up_a_worktree() {
+        let mut app = app();
+        with_project(&mut app);
+        let w = feature(&mut app, true);
+        app.focus = Focus::Sidebar;
+        let rows = app.rows();
+        let i = rows.iter().position(|r| *r == Row::Worktree(w.id.clone())).unwrap();
+        app.set_sel(&rows, i);
+        // Merged: the hint says clean up, and `x` archives (it never refuses) instead of removing.
+        assert!(app.context_hint().unwrap().contains("clean up (merged)"));
+        let x = app.keymap.lookup(Table::Nav, KeyEvent::char('x')).cloned().unwrap();
+        app.run(&x);
+        match &app.overlay {
+            Some(Overlay::Confirm { action: Confirmed::Archive(id), text }) => {
+                assert_eq!(id, &w.id);
+                assert!(text.contains("snapshot of its files are kept"), "{text}");
+            }
+            _ => panic!("archive, not remove"),
+        }
+        // Finish: a PR or integrating.
+        app.overlay = None;
+        let f = app.keymap.lookup(Table::Nav, KeyEvent::char('F')).cloned().unwrap();
+        app.run(&f);
+        let shown = screen(&app);
+        assert!(shown.contains("Finish p1/feat") && shown.contains("a pull request"), "{shown}");
+        assert!(shown.contains("integrate"), "{shown}");
+        // A removal that would lose work offers archiving instead.
+        app.overlay = None;
+        app.on_reply(AppMsg::Reply(
+            Pending::Removed(w.id.clone()),
+            Err(Error::new(ErrorCode::DirtyWorktree, "refusing to remove p1/feat")),
+        ));
+        assert!(screen(&app).contains("a: archive it instead"));
+        key(&mut app, KeyCode::Char { c: 'a' }, Mods::NONE);
+        assert!(app.overlay.is_none(), "archived (the request went out)");
+        // The row menu has them all, the companion shell too.
+        let actions = app.row_actions(&Row::Worktree(w.id.clone()));
+        for a in ["worktree.finish", "worktree.archive", "shell.here"] {
+            assert!(actions.contains(&a) && keymap::spec(a).is_some(), "{a}");
+        }
     }
 
     #[test]

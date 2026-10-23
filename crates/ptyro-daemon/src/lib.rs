@@ -12,6 +12,7 @@ mod devices;
 mod diag;
 mod engine;
 mod evidence;
+mod finish;
 mod github;
 mod handoff;
 mod launch;

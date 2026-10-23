@@ -498,3 +498,58 @@ async fn the_task_box_starts_an_agent_on_what_you_typed() {
     assert_eq!(wt.title.as_deref(), Some("work 0.3"));
     assert!(r.at(6.5).contains("work 0.3"), "the pane follows the agent: {}", r.at(6.5));
 }
+
+/// UX1.12: archiving keeps everything, uncommitted and untracked work included; restoring puts
+/// it back as it was.
+#[tokio::test]
+async fn archive_keeps_uncommitted_work_and_restore_brings_it_back() {
+    let w = World::new("exec sleep 60");
+    let dir = repo(&w, "myrepo");
+    let c = w.d.client().await.unwrap();
+    let spec = ptyro_core::model::WorktreeSpec {
+        project: dir.to_string_lossy().into_owned(),
+        name: Some("feat".into()),
+        fetch: Some(false),
+        ..Default::default()
+    };
+    let wt = match c.request(Request::WorktreeNew { spec }).await.unwrap() {
+        Reply::WorktreeCreated { info, .. } => info,
+        other => panic!("{other:?}"),
+    };
+    std::fs::write(wt.path.join("README"), "changed\n").unwrap();
+    std::fs::write(wt.path.join("notes.txt"), "untracked\n").unwrap();
+    // Removing refuses (work would be lost); archiving doesn't, and loses nothing.
+    let refused = c
+        .request(Request::WorktreeRemove { addr: "myrepo/feat".into(), opts: Default::default() })
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, ptyro_core::ErrorCode::DirtyWorktree);
+    let Reply::Notes { notes } = c
+        .request(Request::WorktreeArchive { addr: "myrepo/feat".into(), stop_sessions: false })
+        .await
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert!(notes[0].contains("refs/ptyro/archive/feat"), "{notes:?}");
+    assert!(!wt.path.exists());
+    let Reply::Worktree { info } =
+        c.request(Request::WorktreeRestore { addr: "feat".into() }).await.unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(info.branch.as_deref(), Some("ptyro/feat"));
+    assert_eq!(std::fs::read_to_string(info.path.join("README")).unwrap(), "changed\n");
+    assert_eq!(std::fs::read_to_string(info.path.join("notes.txt")).unwrap(), "untracked\n");
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&info.path)
+        .args(["status", "--porcelain"])
+        .output()
+        .unwrap();
+    let status = String::from_utf8_lossy(&status.stdout);
+    assert!(
+        status.contains(" M README") && status.contains("?? notes.txt"),
+        "uncommitted again: {status}"
+    );
+}

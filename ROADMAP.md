@@ -1389,7 +1389,7 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
 
   The suggestions are shown in the trust dialog and written to the local (uncommitted) project
   config only after a yes. Never on later worktrees.
-- [ ] **UX1.12 Finish and clean up** (R-WT-06, R-WT-09) — M. A worktree's **finish** action
+- [x] **UX1.12 Finish and clean up** (R-WT-06, R-WT-09) — M. A worktree's **finish** action
   (row menu and inspector):
   - commit, with the agent asked for the message;
   - then PR or integrate, your choice.
@@ -1398,8 +1398,14 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
   snapshotted to `refs/ptyro/archive/<wt>` and the worktree removed (`ptyro wt archive` /
   `restore`), instead of only refusing. `gc.archive_on_merge` makes it automatic. *Done when:*
   an end-to-end test goes from finish to merged (fake `gh`) to archived and restored.
-- [ ] **UX1.13 Companion shell** (R-UX-03) — S. One key opens a shell in the selected
-  worktree, with the same profile environment, split beside the agent.
+  *Done (2026-10-22):* `crates/ptyro-daemon/src/finish.rs`; `ptyro wt finish|archive|restore|
+  archives`; `gc` offers archiving; the TUI's `F`, merged `x`, "a: archive instead" and
+  `worktree.gc`. The setting is `[worktrees] archive_on_merge` (there's no `[gc]` section).
+  `tests/m6.rs` goes from finish to a PR, merged, archived and restored; `tests/ux1.rs` keeps
+  uncommitted and untracked work through archive and restore (SPEC §10.8).
+- [x] **UX1.13 Companion shell** (R-UX-03) — S. One key opens a shell in the selected
+  worktree, with the same profile environment, split beside the agent. *Done (2026-10-22):*
+  `shell.here`, `!` after the prefix or in the sidebar, and in the row menu.
 
 ### Learn nothing up front
 

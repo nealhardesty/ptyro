@@ -894,7 +894,10 @@ async fn tui_workspaces_tree_folding_and_worktree_removal() {
     assert!(r.at(2.9).contains("Remove worktree lib/dirty (ptyro/dirty)?"), "{}", r.at(2.9));
     let refused = r.at(3.8);
     assert!(refused.contains("1 untracked file") && refused.contains("scratch.txt"), "{refused}");
-    assert!(refused.contains("Discard that work"), "{refused}");
+    assert!(
+        refused.contains("discard that work") && refused.contains("a: archive it instead"),
+        "{refused}"
+    );
     assert!(dirty.path.exists(), "nothing removed without consent");
     let switcher = r.at(4.7);
     assert!(

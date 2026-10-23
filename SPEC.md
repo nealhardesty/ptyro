@@ -896,6 +896,8 @@ Push messages have no id.
 - Titles (§2.1): `SpawnSpec.title` and `WorktreeSpec.title`, `WorktreeInfo.title`, and
   `Retitle{addr, title, worktree}`. `SessionInfo.title` now means the title people read (its own,
   else its first prompt, else the window title), and the window title is `window_title`.
+- `WorktreeArchive{addr, stop_sessions}`, `WorktreeRestore{addr}`, `WorktreeArchives{project}`
+  → `Archives{entries}`, and `WorktreeFinish{addr, integrate}` (§10.8).
 - `ProjectRemove` gains `release` (let the project's running sessions go instead of refusing),
   and a new event, `ProjectAutoAdded{info, workspace, notes}`, says a repository registered on
   its own (§10.1).
@@ -1942,6 +1944,26 @@ branches, no sessions for N days.
 - **gc** reports directories that are gone, branches merged into the base, and worktrees without
   sessions for `worktrees.stale_days` (default 14). It asks before each removal and never forces.
 
+**[built UX1.12] Archive, restore and finish** (`crates/ptyro-daemon/src/finish.rs`):
+- **Archive** (`WorktreeArchive`, `ptyro wt archive`): a snapshot commit of the files as they are
+  (`Git::checkpoint`: a private index, untracked included, ignored not, parent HEAD) goes to
+  `refs/ptyro/archive/<name>` (`-2`, `-3` when taken), then the worktree is removed with the
+  branch kept. It can't lose work, so it never refuses; running sessions refuse unless
+  `stop_sessions`. The archive list is kv `archive:list` (`ArchiveEntry`, newest first;
+  `WorktreeArchives`, `ptyro wt archives`).
+- **Restore** (`WorktreeRestore`, `ptyro wt restore [project/]name`): the branch checked out at
+  its old path (when free), no setup, then `Git::restore` puts the snapshot back with the changes
+  uncommitted again, untracked files untracked. The entry leaves the list.
+- **Finish** (`WorktreeFinish`, `ptyro wt finish [--integrate]`): when there are changes, the
+  worktree's live agent (not mid-turn) is asked to commit and its turn awaited (up to 10 min,
+  or 1 min if it never starts); what's left is committed as the worktree's profile with its
+  title as the message (`Work on <name>` without one). Then a PR (`github.draft` decides draft)
+  or integrating. Progress goes out as `WorktreeProgress`.
+- **Archive on merge** (`[worktrees] archive_on_merge`, default off): a PR refresh that sees a PR
+  it knew open now merged archives the worktree, when nothing runs in it. A first sighting
+  doesn't count, so a worktree restored after its PR merged stays.
+- `ptyro gc` asks per stale worktree: `a` archive (keeps the work), `r` remove, ⏎ skip.
+
 ### 10.9 Repository status
 
 Per worktree, refreshed on `notify` file events (debounced 500 ms) and after every agent turn:
@@ -2480,6 +2502,13 @@ learning anything up front.
   0: never), a menu of the next keys appears above the status bar, in five groups (start, go,
   panes, work, this), as bound now; keys typed before it work as always. The event loop wakes at
   the deadline, not on its 250 ms tick.
+- **Finish and clean up** (UX1.12, §10.8): `worktree.finish` (`F` in the sidebar, the row menu)
+  asks "a pull request" or "integrate", then runs it while messages say how far it got. A merged
+  worktree's hint is "clean up", and `x` on it archives instead of removing. A removal refused for
+  work it would lose offers `a`: archive instead. `worktree.archive`, `worktree.restore` (a picker
+  of archived worktrees) and `worktree.gc` (stale ones; ⏎ archives) are in the palette.
+- **A companion shell** (UX1.13, `shell.here`: `!` after the prefix or in the sidebar): your
+  shell in the selected worktree, under its profile, split beside the pane.
 - **A row's menu** (UX1.15, `row.menu`: `.` after the prefix or in the sidebar, or a
   right-click): every action that applies to that row now, with its key. A session's (peek,
   resume or restart, adopt, title, rename, explain, hibernate, mute, its worktree's inspector,
@@ -3041,6 +3070,7 @@ min_work = "10s"
 [worktrees]
 location = "data"                         # data | sibling | in-repo
 branch_template = "ptyro/{name}"
+archive_on_merge = false                  # archive a worktree once its PR merges (UX1.12)
 names = "corvid"                          # word list for friendly names
 
 [ports]

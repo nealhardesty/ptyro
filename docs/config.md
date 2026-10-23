@@ -29,6 +29,7 @@ tint_borders = true       # colour pane dividers with the session's profile
 [worktrees]
 location = "sibling"      # data (default: ptyro's data dir) | sibling (<repo>.worktrees/) | in-repo
 branch_template = "{user}/{name}"   # {name} {user} {date} {slug}; default ptyro/{name}
+archive_on_merge = true   # archive a worktree once its PR merges (default false); `wt restore` brings it back
 
 [ports]
 range = "20000-29999"     # each worktree gets `count` ports from here

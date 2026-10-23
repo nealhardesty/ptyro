@@ -414,6 +414,29 @@ pub enum Request {
     },
     /// Stale worktrees (never removes anything).
     Gc,
+    /// Archive a worktree (UX1.12): snapshot its files, keep its branch, remove it. Never loses
+    /// work, so it doesn't refuse the way removing does. `stop_sessions` stops what runs in it.
+    WorktreeArchive {
+        addr: String,
+        #[serde(default)]
+        stop_sessions: bool,
+    },
+    /// Bring an archived worktree back as it was (`name`, or `project/name`).
+    WorktreeRestore {
+        addr: String,
+    },
+    /// Archived worktrees, newest first.
+    WorktreeArchives {
+        #[serde(default)]
+        project: Option<String>,
+    },
+    /// Finish a worktree (UX1.12): commit what's left (its agent asked for the message, else
+    /// its title is the message), then open a PR, or `integrate` into the main branch.
+    WorktreeFinish {
+        addr: String,
+        #[serde(default)]
+        integrate: bool,
+    },
 
     // ── profiles (SPEC §10.10) ──
     ProfileList,
@@ -1030,6 +1053,9 @@ pub enum Reply {
     },
     Gc {
         entries: Vec<GcEntry>,
+    },
+    Archives {
+        entries: Vec<ptyro_core::model::ArchiveEntry>,
     },
     Profiles {
         profiles: Vec<ProfileInfo>,

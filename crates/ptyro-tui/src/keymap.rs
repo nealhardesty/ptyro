@@ -45,6 +45,20 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("project.trust", "Review and trust this project's scripts"),
     a("worktree.remove", "Remove this worktree (refuses if work would be lost)"),
     a("worktree.retitle", "Change this worktree's title: what it's for, for people to read"),
+    a(
+        "worktree.finish",
+        "Finish this worktree: commit what's left (its agent writes the message), then a PR or integrate",
+    ),
+    a(
+        "worktree.archive",
+        "Archive this worktree: its branch and a snapshot of its files are kept, the checkout goes",
+    ),
+    a("worktree.restore", "Bring an archived worktree back, as it was"),
+    a("worktree.gc", "Stale worktrees (merged, gone, unused): pick one to archive it"),
+    a(
+        "shell.here",
+        "A shell beside you, in this worktree and its profile (a companion to its agent)",
+    ),
     a("session.next", "Show the next session in this pane"),
     a("session.prev", "Show the previous session in this pane"),
     ActionSpec {
@@ -218,6 +232,7 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Prefix, "Z", "sidebar.zoom"),
     (Table::Prefix, "u", "toast.act"),
     (Table::Prefix, ".", "row.menu"),
+    (Table::Prefix, "!", "shell.here"),
     (Table::Prefix, "P", "project.add"),
     (Table::Prefix, "v", "pane.split_right"),
     (Table::Prefix, "s", "pane.split_down"),
@@ -276,6 +291,8 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Nav, "z", "sidebar.zoom"),
     (Table::Nav, "u", "toast.act"),
     (Table::Nav, ".", "row.menu"),
+    (Table::Nav, "!", "shell.here"),
+    (Table::Nav, "F", "worktree.finish"),
     (Table::Nav, "P", "project.add"),
     (Table::Nav, "A", "session.adopt"),
     (Table::Nav, ">", "sidebar.wider"),

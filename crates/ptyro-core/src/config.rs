@@ -644,6 +644,8 @@ pub struct Worktrees {
     pub stale_days: u32,
     /// Name the branch after the first prompt (until it's pushed; M3.16).
     pub auto_rename_branch: bool,
+    /// Archive a worktree when its PR merges and nothing runs in it (UX1.12).
+    pub archive_on_merge: bool,
 }
 
 impl Default for Worktrees {
@@ -656,6 +658,7 @@ impl Default for Worktrees {
             watch: true,
             stale_days: 14,
             auto_rename_branch: false,
+            archive_on_merge: false,
         }
     }
 }

@@ -204,6 +204,12 @@ impl Daemon {
             }
             w.pr = p;
         });
+        // `[worktrees] archive_on_merge` (UX1.12): when a PR seen open becomes merged. Not on a
+        // first sighting, so a worktree restored after its PR merged isn't archived again.
+        let was_open = wt.pr.as_ref().is_some_and(|p| p.state != "MERGED");
+        if was_open && let Some(w) = &updated {
+            self.archive_if_merged(w);
+        }
         if titled && let Some(w) = updated {
             self.put_worktree(w);
         }

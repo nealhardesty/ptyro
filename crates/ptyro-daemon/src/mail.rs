@@ -241,6 +241,8 @@ impl Daemon {
             | Request::Cs { .. } => true,
             // Shipping, only with `destructive`.
             Request::WorktreeRemove { .. }
+            | Request::WorktreeArchive { .. }
+            | Request::WorktreeFinish { .. }
             | Request::WorktreeIntegrate { .. }
             | Request::WorktreeCommit { .. }
             | Request::WorktreePair { .. }

@@ -80,7 +80,11 @@ the same check through `make test`. When you add a command, add its row here.
 | `wt unlock` | gap: UX1.21 |
 | `wt rename-branch` | gap: UX1.21 |
 | `wt retitle` | `worktree.retitle` |
-| `gc` | gap: UX1.12 (clean up merged worktrees) |
+| `wt finish` | `worktree.finish` (`F` in the sidebar): a PR or integrate |
+| `wt archive` | `worktree.archive` (or `x` on a merged worktree) |
+| `wt restore` | `worktree.restore`: pick from the archived ones |
+| `wt archives` | `worktree.restore` lists them |
+| `gc` | `worktree.gc`: stale worktrees, ⏎ archives one; a merged worktree's `x` archives it |
 | `ws ls` | `workspace.switch` (`w`) |
 | `ws new` | `workspace.switch` (`w`) → "+ new workspace" |
 | `ws set` | gap: UX1.21 |

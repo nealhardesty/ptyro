@@ -2578,10 +2578,10 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 | R-WT-03 | **Import competitors' committed config** as setup/run sources, shown in the trust dialog: `.claude/launch.json` (`autoPort`), `.conductor/settings.toml`, `.superset/config.json`, `.codex/` environments, `copilot-setup-steps.yml`, `.cursor/environment.json` | Claude desktop, Conductor, Superset, Codex, Copilot, Cursor | M3 | M | ★★★ | **built M5.10** (2026-10-20) |
 | R-WT-04 | `symlink = [...]` next to copy rules (`node_modules`, caches) | workmux | M3 | S | ★★ | new |
 | R-WT-05 | Move work between checkout and worktree: `ptyro new --take-changes`; `ptyro wt adopt <session>` promotes a main-checkout session into a worktree; `ptyro pause`/`resume` frees the branch | workmux, Codex app, claude-squad | M3 / M6 | M | ★★ | `--take-changes` → UX1.10 (2026-10-22); `wt adopt`, pause/resume still new |
-| R-WT-06 | **Safe archive / shelve**: snapshot to `refs/ptyro/archive/<wt>`, remove the worktree, keep the branch; `ptyro wt restore`. A third option beside "refuse removal" | VS Code, andyrewlee/amux | M3 | S | ★★ | → UX1.12 (2026-10-22) |
+| R-WT-06 | **Safe archive / shelve**: snapshot to `refs/ptyro/archive/<wt>`, remove the worktree, keep the branch; `ptyro wt restore`. A third option beside "refuse removal" | VS Code, andyrewlee/amux | M3 | S | ★★ | → UX1.12, built 2026-10-22 |
 | R-WT-07 | `ptyro adopt <path>` for worktrees created outside ptyro | andyrewlee/amux | M3 | S | ★ | new |
 | R-WT-08 | Run and surface the dev server per worktree (URL in sidebar) on the allocated port | uzi, Superset, cmux | M3 / M4 | S | ★★ | new |
-| R-WT-09 | `ptyro gc --merged/--closed` and `gc.archive_on_merge = true`, running the safe-removal matrix | git-gtr, Jean, Claude, VS Code | M6 | S | ★★ | → UX1.12 (2026-10-22) |
+| R-WT-09 | `ptyro gc --merged/--closed` and `gc.archive_on_merge = true`, running the safe-removal matrix | git-gtr, Jean, Claude, VS Code | M6 | S | ★★ | → UX1.12, built 2026-10-22 |
 
 #### TUI and UX (R-UX)
 
@@ -2589,7 +2589,7 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 |---|---|---|---|---|---|---|
 | R-UX-01 | Derived names and summaries: deterministic slug from the prompt by default; optional cheap-model branch names, row summaries and commit messages using the session's own profile account | dmux, Claude agent view | M4+ | M | ★ | slugs → UX1.9 and UX1.24, LLM summaries → UX1.3 (opt-in, owner 2026-10-22); branch names and commit messages still new |
 | R-UX-02 | **Actionable inbox**: peek the pending question, reply inline, numbered choice by digit, **snooze** until next transition, jump to newest unread, cycle unread without marking read | Claude agent view, tuios, iTerm2, cmux | M4 | M | ★★★ | partly built M4.5: peek, inline reply, y/a/n answers, newest-first inbox per workspace; snooze open (2026-10-20) |
-| R-UX-03 | Companion-shell key per task (same worktree and profile env); **scratch sessions** (no project, temp dir) | AoE | M3 | S | ★★ | companion shell → UX1.13 (2026-10-22); scratch sessions still new |
+| R-UX-03 | Companion-shell key per task (same worktree and profile env); **scratch sessions** (no project, temp dir) | AoE | M3 | S | ★★ | companion shell → UX1.13, built 2026-10-22; scratch sessions still new |
 | R-UX-04 | `ptyro project scan ~/dev` bulk registration | ccmanager | M3 | S | ★ | new |
 | R-UX-05 | Publish a **JSON Schema** for `config.toml` and `.ptyro.toml`; document config as agent-editable | Conductor, Warp | M5 | S | ★★ | new |
 | R-UX-06 | One-line agent-written note per session (`ptyro note`, or OSC 7501 `msg`) shown in the sidebar | Orca worktree comments | M4 | S | ★ | new |

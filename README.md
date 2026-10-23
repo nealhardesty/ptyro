@@ -162,8 +162,12 @@ command = "pnpm dev --port $PTYRO_PORT"   # Ctrl-Q r runs it
 default = true
 ```
 
-`ptyro wt rm` (or `x` in the sidebar) refuses to remove a worktree with running sessions,
-uncommitted or unpushed work, or stashes, and lists exactly what would be lost. ptyro also reads
+When the work is done, `F` on its row (or `ptyro wt finish`) commits what's left, asking its agent
+for the message, and opens a PR (or integrates it). Once the PR merges, `x` cleans it up by
+**archiving**: its branch and a snapshot of every file are kept, the checkout goes, and `ptyro wt
+restore` brings it back as it was. `ptyro wt rm` refuses to remove a worktree with running
+sessions, uncommitted or unpushed work, or stashes, lists exactly what would be lost, and offers
+archiving instead. ptyro also reads
 setup config written for Conductor, Superset, the Codex app, Claude Desktop, Cursor and Copilot.
 Details: [`docs/config.md`](docs/config.md).
 

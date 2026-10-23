@@ -369,6 +369,22 @@ pub struct GcEntry {
     pub reasons: Vec<String>,
 }
 
+/// An archived worktree (UX1.12): its branch kept, its files (committed or not) in a snapshot
+/// commit under `refs/ptyro/archive/`, so `wt restore` brings it back as it was.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArchiveEntry {
+    pub project: String,
+    pub project_slug: String,
+    pub name: String,
+    pub branch: String,
+    /// The ref holding the snapshot (`refs/ptyro/archive/<name>`).
+    pub snapshot: String,
+    pub path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub archived_ms: u64,
+}
+
 /// What a diff is taken against (SPEC §11.5 inspector, M6.2).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

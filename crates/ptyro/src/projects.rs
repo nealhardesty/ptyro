@@ -127,6 +127,31 @@ pub enum WsCmd {
 
 #[derive(Subcommand)]
 pub enum WtCmd {
+    /// Finish a worktree: commit what's left (its agent asked to; else its title is the message),
+    /// then push and open a PR (default) or --integrate into the main branch
+    Finish {
+        worktree: Option<String>,
+        /// Rebase onto the main branch and fast-forward it, instead of a PR
+        #[arg(long)]
+        integrate: bool,
+    },
+    /// Archive a worktree: a snapshot of its files and its branch are kept, the worktree goes;
+    /// `wt restore` brings it back as it was. Never loses work, so it doesn't refuse like `rm`
+    Archive {
+        worktree: Option<String>,
+        /// Stop the sessions running in it first
+        #[arg(long)]
+        stop_sessions: bool,
+    },
+    /// Bring an archived worktree back as it was (`name` or `project/name`)
+    Restore { worktree: String },
+    /// Archived worktrees, newest first
+    Archives {
+        #[arg(short, long)]
+        project: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Change a worktree's title, what people read; no title clears it (its name stays)
     Retitle {
         worktree: String,
@@ -793,6 +818,68 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
             }
             Ok(0)
         }
+        WtCmd::Finish { worktree, integrate } => {
+            let addr = wt_addr(worktree)?;
+            eprintln!(
+                "finishing {addr}: committing what's left, then {}…",
+                if integrate { "integrating" } else { "a PR" }
+            );
+            let Reply::Notes { notes: n } =
+                c.request(Request::WorktreeFinish { addr, integrate }).await?
+            else {
+                return Err(Error::internal("unexpected reply"));
+            };
+            notes(&n);
+            Ok(0)
+        }
+        WtCmd::Archive { worktree, stop_sessions } => {
+            let addr = wt_addr(worktree)?;
+            let Reply::Notes { notes: n } =
+                c.request(Request::WorktreeArchive { addr, stop_sessions }).await?
+            else {
+                return Err(Error::internal("unexpected reply"));
+            };
+            notes(&n);
+            Ok(0)
+        }
+        WtCmd::Restore { worktree } => {
+            let Reply::Worktree { info } =
+                c.request(Request::WorktreeRestore { addr: worktree }).await?
+            else {
+                return Err(Error::internal("unexpected reply"));
+            };
+            eprintln!(
+                "restored {} on {} at {}",
+                info.qualified(),
+                info.branch.as_deref().unwrap_or("-"),
+                info.path.display()
+            );
+            Ok(0)
+        }
+        WtCmd::Archives { project, json } => {
+            let Reply::Archives { entries } =
+                c.request(Request::WorktreeArchives { project }).await?
+            else {
+                return Err(Error::internal("unexpected reply"));
+            };
+            if json {
+                print_json(&entries);
+                return Ok(0);
+            }
+            if entries.is_empty() {
+                eprintln!("nothing archived");
+            }
+            for e in &entries {
+                println!(
+                    "{:<28} {:<8} {:<24} {}",
+                    truncate(&format!("{}/{}", e.project_slug, e.name), 28),
+                    age(e.archived_ms),
+                    truncate(&e.branch, 24),
+                    e.title.as_deref().unwrap_or("")
+                );
+            }
+            Ok(0)
+        }
         WtCmd::Retitle { worktree, title } => {
             let title = (!title.is_empty()).then(|| title.join(" "));
             let Reply::Worktree { info } =
@@ -1066,6 +1153,23 @@ async fn open(ctx: &Ctx, c: Client, addr: String, editor: Option<String>) -> Res
     Ok(0)
 }
 
+/// `a` archive (keeps everything), `r` remove, else skip; `None` without a terminal.
+fn ask_archive_or_remove(what: &str) -> Option<bool> {
+    use std::io::{BufRead, IsTerminal, Write};
+    if !std::io::stdin().is_terminal() {
+        return None;
+    }
+    eprint!("{what}: a archive (keeps its work) · r remove · ⏎ skip ");
+    let _ = std::io::stderr().flush();
+    let mut line = String::new();
+    let _ = std::io::stdin().lock().read_line(&mut line);
+    match line.trim() {
+        "a" | "A" => Some(true),
+        "r" | "R" => Some(false),
+        _ => None,
+    }
+}
+
 pub async fn gc(ctx: &Ctx, dry_run: bool, json: bool) -> Result<i32, Error> {
     let c = ctx.connect(false).await.map_err(no_daemon)?;
     let Reply::Gc { entries } = c.request(Request::Gc).await? else {
@@ -1093,10 +1197,22 @@ pub async fn gc(ctx: &Ctx, dry_run: bool, json: bool) -> Result<i32, Error> {
     }
     for e in entries {
         let w = e.worktree;
-        if !confirm(&format!("remove {}?", w.qualified())) {
+        // Archiving keeps everything (UX1.12); removing refuses when work would be lost.
+        let req = match ask_archive_or_remove(&w.qualified()) {
+            Some(true) => Request::WorktreeArchive { addr: w.id.clone(), stop_sessions: false },
+            Some(false) => {
+                Request::WorktreeRemove { addr: w.id.clone(), opts: RemoveOpts::default() }
+            }
+            None => continue,
+        };
+        if let Request::WorktreeArchive { .. } = req {
+            match c.request(req).await {
+                Ok(Reply::Notes { notes: n }) => n.iter().for_each(|l| eprintln!("  {l}")),
+                Ok(other) => return Err(unexpected(other)),
+                Err(e) => eprintln!("  {}", e.message),
+            }
             continue;
         }
-        let req = Request::WorktreeRemove { addr: w.id.clone(), opts: RemoveOpts::default() };
         match c.request(req).await {
             Ok(Reply::Removed { notes: n }) => n.iter().for_each(|l| eprintln!("  {l}")),
             Ok(other) => return Err(unexpected(other)),
