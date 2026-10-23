@@ -273,6 +273,23 @@ impl Adapter for Codex {
         }
     }
 
+    fn screen_status(&self, screen: &str) -> Option<Signal> {
+        if let Some(s) = self.on_screen(screen) {
+            return Some(s);
+        }
+        // [unverified] Its approval overlay and its working line.
+        if screen.contains("Would you like to run the following command?")
+            || screen.contains("Would you like to make the following edits?")
+        {
+            return Some(Signal::blocked("permission", None));
+        }
+        Some(if screen.to_lowercase().contains("esc to interrupt") {
+            Signal::status(AgentStatus::Working)
+        } else {
+            Signal::status(AgentStatus::Idle)
+        })
+    }
+
     fn ready(&self, screen: &str) -> bool {
         // The composer line; the update prompt and trust dialog come before it (SPEC §8.4).
         screen.lines().any(|l| l.trim_start().starts_with("› ") || l.trim() == "›")

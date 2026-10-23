@@ -15,6 +15,9 @@ There are two so that one always gets through (SPEC §21.2):
 To use other keys, set one or a list: `prefix = "C-]"` or `prefix = ["C-]", "C-q"]`. A list you set
 replaces both defaults. `C-]` needs AltGr on some non-US layouts.
 
+Don't know the next key? Pause after the prefix: a menu of the keys that follow appears
+(`[ui] which_key_delay`, 400 ms; `0` turns it off). `.` (after the prefix, or in the sidebar, or a
+right-click on a row) lists everything you can do with that session, worktree or project.
 `Ctrl-Q ?` lists every binding as it is configured right now, and `ptyro tour` is a
 60-second walkthrough. `Ctrl-Q :` (or `Ctrl-Q C-p`) opens the palette, which runs any
 action by name.
@@ -26,7 +29,7 @@ action by name.
 | `?` | help: every key |
 | `:` or `C-p` | command palette |
 | `d` or `q` | detach (sessions keep running) |
-| `n` | new session wizard: what to run, then where |
+| `n` | new task: say what to do, ⏎ starts the default agent on it in a new worktree named after it (Tab edits the name, `C-o` picks the agent and where, an empty ⏎ is a random name) |
 | `N` | new worktree of this project (+ an agent), after its setup script |
 | `w` | switch workspace |
 | `o` | open the worktree in an editor (`[editors]`; nvim opens inside ptyro) |
@@ -52,11 +55,18 @@ action by name.
 | `<` `>` `+` `-` | narrower / wider / taller / shorter |
 | `Tab` | move focus between the sidebar and the pane |
 | `\` | show or hide the sidebar |
+| `u` | do what the last message offers: undo it, or fix what it reports |
+| `!` | a shell beside you, in this worktree and its profile |
+| `H` | home: who needs you, PRs, recent projects and repositories found; ⏎ starts a task there |
+| `M` | mend: what the health badge (`⚕` in the status bar) found, each with its fix |
+| `.` | what you can do with the focused session (its menu) |
+| `P` | add a project (pick from the repositories ptyro found) |
+| `Z` | everything at once: the sidebar fills the screen with every row open (`⏎` opens one, `Z` or `Esc` goes back) |
 | `[` / `PageUp` | copy mode / copy mode, one page up |
 | `]` | paste what you last copied |
-| `x` / `X` | stop the session (asks first unless `[ui] confirm_kill = false`; an exited one is removed) / kill it now |
+| `x` / `X` | stop the session (asks first unless `[ui] confirm_kill = false`; an exited one is removed) / kill it now. The pane moves on to the nearest other session (`[ui] on_stop`); `` ` `` brings the stopped one back |
 | `C-r` | run an exited session's command again |
-| `,` | rename the session |
+| `,` | rename the session (its address); `C-t` in the dialog edits its title instead |
 | `=` | take control: size the session to your pane (when another client resized it) |
 | `C-l` | redraw everything |
 
@@ -78,12 +88,19 @@ Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.
 | `h` / `l` (or `Left` / `Right`) | fold / unfold |
 | `Space` | mark a session for broadcast; on a project or worktree, fold or unfold |
 | `b` | broadcast one prompt into the marked sessions |
-| `n` / `N` | new session here / new worktree |
+| `n` / `N` | new task here / new worktree |
 | `a` `p` `i` `e` | next attention / peek / inbox / why this status |
-| `x` / `X` | stop a session or remove a worktree (refuses to lose work) / kill |
+| `x` / `X` | stop a session (`x` again removes it) or remove a worktree (refuses to lose work, and offers archiving instead; a merged one is archived) / kill. Its pane shows the next session |
 | `R` | restart an exited session |
 | `,` | rename |
 | `D` `O` `S` | inspector / runs / change sets |
+| `z` | everything at once: the sidebar full-screen, every row open |
+| `<` / `>` | the sidebar a column narrower / wider (or drag its edge) |
+| `u` / `P` | do what the last message offers / add a project |
+| `.` | everything you can do with this row (a session, worktree or project), with the keys |
+| `F` / `!` | finish this worktree (commit, then a PR or integrate) / a shell in it |
+| `H` / `M` | home / mend what the health badge found |
+| `A` | adopt the Claude started by hand in this shell: a managed session, same conversation |
 | `w` `o` `r` | workspace / editor / run script |
 | `v` `s` | split |
 | `1` … `9`, `/` | jump to a session / find one |
@@ -158,15 +175,19 @@ Tabs `1`–`5` (or `Tab` / `Shift-Tab`): Diff, Commits, Checks, Ports, Events.
 - Wheel up to scroll back.
 - Drag to select (copied on release). Hold `Shift` for the terminal's own selection, or set
   `[ui] mouse = false`.
-- Click to focus. Clicking a project or worktree row folds it.
-- Drag a divider to resize.
+- Click to focus. Clicking a project or worktree row folds it. Right-click a row for its menu.
+- Drag a divider to resize panes, or the sidebar's edge to resize the sidebar. Either is saved
+  with the workspace's layout.
 
 ## The palette
 
-`Ctrl-Q :` runs any action by name, including ones with no default key: `project.add`
+`Ctrl-Q :` runs any action by name, goes to any session, worktree or project, and runs the
+current project's scripts; each line shows its key, so it teaches them. Actions with no default
+key include: `project.add`
 (pick from repos under `[discover] roots`), `project.trust`, `worktree.remove`,
 `session.command` (a session running a command line), `session.resume`, `session.hibernate`,
-`session.mute`, `notify.test`, `theme.next`, `config.edit`, `help.tour`.
+`session.mute`, `session.summarize` (a `≈` line from a small model), `notify.test`,
+`theme.next`, `config.edit`, `help.tour`.
 
 ## Other overlays
 
@@ -183,4 +204,6 @@ Tabs `1`–`5` (or `Tab` / `Shift-Tab`): Diff, Commits, Checks, Ports, Events.
 "nav:J" = "nav.down"                 # in the sidebar
 ```
 
-The action names are the ones `Ctrl-Q ?` shows (the palette leaves out `nav.*` and `session.focus N`).
+The action names are the ones `Ctrl-Q ?` shows (the palette leaves out `nav.*` and
+`session.focus N`). Every CLI command has one ([`tui-parity.md`](tui-parity.md) lists them); the
+ones that run a `ptyro` command do so in a split below, asking for what they need first.

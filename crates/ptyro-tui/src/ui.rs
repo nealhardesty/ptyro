@@ -2,7 +2,8 @@
 
 use ptyro_core::SessionId;
 use ptyro_core::config::key_label;
-use ptyro_core::session::SessionInfo;
+use ptyro_core::session::{SessionInfo, SessionKind};
+use ptyro_core::status::AgentStatus;
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -64,13 +65,22 @@ fn progress_bar(p: u8) -> String {
     format!("▕{}{}▏{p}%", "█".repeat(filled), "░".repeat(6 - filled))
 }
 
+/// The title people gave a session (UX1.24), not one its program put in the window title.
+pub(crate) fn session_title(s: &SessionInfo) -> Option<&str> {
+    s.title.as_deref().filter(|t| s.window_title.as_deref() != Some(*t) && *t != s.name)
+}
+
 fn what(s: &SessionInfo) -> String {
     if let Some(role) = &s.script {
         return role.trim_start_matches("run:").to_owned();
     }
-    s.foreground.clone().unwrap_or_else(|| {
-        s.argv.first().map(|a| a.rsplit('/').next().unwrap_or(a).to_owned()).unwrap_or_default()
-    })
+    let program =
+        s.argv.first().map(|a| a.rsplit('/').next().unwrap_or(a).to_owned()).unwrap_or_default();
+    // An agent started by hand in a shell (UX1.4): `zsh › claude`.
+    if let Some(agent) = &s.inner_agent {
+        return format!("{program} › {}", s.foreground.as_deref().unwrap_or(agent));
+    }
+    s.foreground.clone().unwrap_or(program)
 }
 
 pub(crate) fn fg(app: &App, c: Color) -> Style {
@@ -82,10 +92,14 @@ pub fn draw(app: &App, f: &mut Frame<'_>) {
     if app.opts.raw {
         draw_raw(app, f, area);
     } else {
-        if let Some(side) = app.sidebar_area() {
+        if let Some(side) = app.sidebar_area().filter(|_| !app.sidebar_zoom) {
             draw_sidebar(app, f, side);
         }
         draw_panes(app, f);
+        if let Some(side) = app.sidebar_area().filter(|_| app.sidebar_zoom) {
+            f.render_widget(Clear, Rect { width: side.width + 1, ..side });
+            draw_sidebar(app, f, side);
+        }
         if app.inspector.is_some() {
             let h =
                 if app.config.ui.status_bar { area.height.saturating_sub(1) } else { area.height };
@@ -105,8 +119,122 @@ pub fn draw(app: &App, f: &mut Frame<'_>) {
             draw_status(app, f, Rect { y: area.bottom() - 1, height: 1, ..area });
         }
     }
+    if app.first_run.is_some() {
+        crate::onboard::draw(app, f, area);
+    }
     if let Some(o) = &app.overlay {
         draw_overlay(app, f, o, area);
+    } else if app.which_key_shown() {
+        draw_which_key(app, f, area);
+    }
+}
+
+/// The menu after the prefix (UX1.14): what each next key does, grouped, as bound now.
+const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
+    (
+        "start",
+        &[
+            ("session.new", "a task"),
+            ("worktree.new", "worktree"),
+            ("project.add", "project"),
+            ("workspace.switch", "workspace"),
+            ("palette", "any action"),
+        ],
+    ),
+    (
+        "go",
+        &[
+            ("attention.next", "who needs you"),
+            ("peek", "peek & answer"),
+            ("inbox", "inbox"),
+            ("session.find", "find"),
+            ("session.next", "next"),
+            ("sidebar.zoom", "everything"),
+        ],
+    ),
+    (
+        "panes",
+        &[
+            ("pane.split_right", "split │"),
+            ("pane.split_down", "split ─"),
+            ("pane.zoom", "zoom"),
+            ("pane.close", "close"),
+            ("focus.toggle", "sidebar"),
+            ("copy.enter", "scroll back"),
+        ],
+    ),
+    (
+        "work",
+        &[
+            ("inspector", "diff & ship"),
+            ("review.queue", "to review"),
+            ("runs", "runs"),
+            ("sets", "change sets"),
+            ("script.run", "run script"),
+            ("worktree.open", "editor"),
+        ],
+    ),
+    (
+        "this",
+        &[
+            ("health", "mend"),
+            ("row.menu", "its actions"),
+            ("session.rename", "rename"),
+            ("session.stop", "stop"),
+            ("toast.act", "undo / fix"),
+            ("app.detach", "detach"),
+            ("help", "all keys"),
+        ],
+    ),
+];
+
+fn draw_which_key(app: &App, f: &mut Frame<'_>, area: Rect) {
+    let t = &app.theme;
+    let prefix = format!("{} ", key_label(&app.keymap.prefix));
+    let key = |action: &str| {
+        app.keymap.key_for(action).and_then(|k| k.strip_prefix(&prefix).map(str::to_owned))
+    };
+    let columns: Vec<(&str, Vec<(String, &str)>)> = WHICH_KEY
+        .iter()
+        .map(|(group, items)| {
+            (*group, items.iter().filter_map(|(a, label)| Some((key(a)?, *label))).collect())
+        })
+        .collect();
+    let rows = columns.iter().map(|(_, v)| v.len()).max().unwrap_or(0) as u16;
+    let col_w = 19u16;
+    let w = (col_w * columns.len() as u16 + 2).min(area.width);
+    let h = (rows + 3).min(area.height.saturating_sub(1));
+    let r = Rect {
+        x: area.x + area.width.saturating_sub(w) / 2,
+        y: area.bottom().saturating_sub(h + 1),
+        width: w,
+        height: h,
+    };
+    f.render_widget(Clear, r);
+    let block = Block::default().borders(Borders::ALL).border_style(fg(app, t.border_focus)).title(
+        Span::styled(
+            format!(" {}then… (Esc: never mind) ", prefix),
+            fg(app, t.accent).add_modifier(Modifier::BOLD),
+        ),
+    );
+    f.render_widget(block, r);
+    for (i, (group, items)) in columns.iter().enumerate() {
+        let x = r.x + 1 + col_w * i as u16;
+        let mut lines =
+            vec![Line::styled(format!(" {group}"), fg(app, t.dim).add_modifier(Modifier::ITALIC))];
+        for (k, label) in items {
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {k:>3} "), fg(app, t.accent).add_modifier(Modifier::BOLD)),
+                Span::styled((*label).to_owned(), fg(app, t.text)),
+            ]));
+        }
+        let col = Rect {
+            x,
+            y: r.y + 1,
+            width: col_w.min(r.right().saturating_sub(x + 1)),
+            height: h.saturating_sub(2),
+        };
+        f.render_widget(Paragraph::new(lines), col);
     }
 }
 
@@ -176,8 +304,6 @@ fn diffstat(app: &App, w: &ptyro_core::model::WorktreeInfo) -> Vec<Span<'static>
 
 fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
     let t = &app.theme;
-    let shown: Vec<SessionId> = app.panes.values().filter_map(|p| p.session).collect();
-    let focused = app.focused_session();
     let mut title = vec![
         Span::styled(" WORKSPACE ", fg(app, t.dim)),
         Span::styled(app.workspace.clone(), fg(app, t.accent).add_modifier(Modifier::BOLD)),
@@ -199,7 +325,55 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
             fg(app, if hot { t.blocked } else { t.dim }),
         ));
     }
+    let body = sidebar_body(app, area);
     let mut lines = vec![Line::from(title)];
+    lines.extend(body.lines.into_iter().skip(body.skip).map(|(_, l)| l));
+    if body.empty {
+        let key = |a: &str| app.keymap.key_for(a).unwrap_or_else(|| a.to_owned());
+        lines.push(Line::styled(format!("  none yet: {}", key("session.new")), fg(app, t.dim)));
+        if app.tree().project_ids().is_empty() {
+            lines.push(Line::styled(
+                format!("  add a repo: {}", key("project.add")),
+                fg(app, t.dim),
+            ));
+        }
+    }
+    let mut hint = if app.sidebar_zoom {
+        " everything at once · ⏎ open · p peek · z or Esc back".to_string()
+    } else if app.focus == Focus::Sidebar {
+        " ⏎ open/fold · n new · x stop · Esc".to_string()
+    } else {
+        format!(" {} Tab: sidebar · w workspaces", key_label(&app.keymap.prefix))
+    };
+    truncate_width(&mut hint, area.width as usize);
+    f.render_widget(Paragraph::new(lines), Rect { height: area.height.saturating_sub(1), ..area });
+    f.render_widget(
+        Paragraph::new(Line::styled(hint, fg(app, t.dim))),
+        Rect { y: area.bottom().saturating_sub(1), height: 1, ..area },
+    );
+    // The divider between sidebar and panes.
+    let div = Rect { x: area.right(), width: 1, ..area };
+    let col = if app.focus == Focus::Sidebar { t.border_focus } else { t.border };
+    for y in div.top()..div.bottom() {
+        if let Some(c) = f.buffer_mut().cell_mut(Position::new(div.x, y)) {
+            c.set_symbol("│").set_style(fg(app, col));
+        }
+    }
+}
+
+/// The sidebar's tree as screen lines, each with the index of its row in `app.rows()` (a
+/// session row may take several, UX1.2), and how many lines scroll off the top to keep the
+/// selection in view. Drawing and clicking share it.
+pub(crate) struct SidebarBody {
+    pub lines: Vec<(usize, Line<'static>)>,
+    pub skip: usize,
+    pub empty: bool,
+}
+
+pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
+    let t = &app.theme;
+    let shown: Vec<SessionId> = app.panes.values().filter_map(|p| p.session).collect();
+    let focused = app.focused_session();
     // Built once per frame; numbers and sessions looked up by id.
     let rows = app.rows();
     let sel = app.sel_index(&rows);
@@ -207,8 +381,17 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
         App::numbered_from(&rows).into_iter().enumerate().map(|(n, id)| (id, n)).collect();
     let sessions: std::collections::HashMap<SessionId, &SessionInfo> =
         app.sessions.iter().map(|s| (s.id, s)).collect();
+    let width = area.width as usize;
+    // Less the title and the hint line.
+    let room = area.height.saturating_sub(2) as usize;
+    let mut firsts: Vec<(usize, Line<'static>)> = Vec::new();
+    // Each session row's detail lines, as wide (the row in focus) and as narrow.
+    let mut details: Vec<Vec<Line<'static>>> = Vec::new();
+    let mut close: Vec<bool> = Vec::new();
     for (i, row) in rows.iter().enumerate() {
-        let mut line = match row {
+        let mut detail = Vec::new();
+        let mut near = false;
+        let line = match row {
             Row::Project(id) => {
                 let Some(p) = app.project(id) else { continue };
                 let arrow = if app.collapsed.contains(id) { "▸" } else { "▾" };
@@ -265,6 +448,16 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
                         fg(app, c),
                     ));
                 }
+                // What it's for (UX1.24), last so a narrow sidebar cuts it first, and only when
+                // its name or PR doesn't already say it.
+                let pr_title = w.pr.as_ref().map(|pr| format!("#{} {}", pr.number, pr.title));
+                if let Some(title) = w.title.as_deref().filter(|t| {
+                    Some(*t) != pr_title.as_deref()
+                        && (ptyro_core::names::from_text(t).as_deref() != Some(w.name.as_str())
+                            || t.split_whitespace().count() > 3)
+                }) {
+                    spans.push(Span::styled(format!(" — {title}"), fg(app, t.dim)));
+                }
                 Line::from(spans)
             }
             Row::Session(id) => {
@@ -297,20 +490,32 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
                         Span::styled(num, fg(app, t.dim))
                     },
                     Span::styled(format!("{g} "), fg(app, gc)),
-                    // Under its worktree, `brisk-rook.setup` is just `setup`.
+                    // Under its worktree, `brisk-rook.setup` is just `setup`, and the agent
+                    // named after the worktree (`fix-flaky-test`) is just its program.
                     Span::styled(
                         s.worktree
                             .as_deref()
                             .and_then(|w| app.worktree(w))
                             .and_then(|w| {
-                                s.name.strip_prefix(&format!("{}.", w.name.trim_start_matches('@')))
+                                let wt = w.name.trim_start_matches('@');
+                                if s.name == wt {
+                                    return Some(what(s));
+                                }
+                                s.name.strip_prefix(&format!("{wt}.")).map(str::to_owned)
                             })
-                            .unwrap_or(&s.name)
-                            .to_owned(),
+                            .unwrap_or_else(|| s.name.clone()),
                         name_style,
                     ),
                 ];
-                if s.script.is_none() && s.agent.as_deref() != Some(s.name.as_str()) {
+                let same_as_worktree = s
+                    .worktree
+                    .as_deref()
+                    .and_then(|w| app.worktree(w))
+                    .is_some_and(|w| w.name == s.name);
+                if s.script.is_none()
+                    && !same_as_worktree
+                    && s.agent.as_deref() != Some(s.name.as_str())
+                {
                     spans.push(Span::styled(format!(" {}", what(s)), fg(app, t.dim)));
                 }
                 if let Some(r) = &s.status
@@ -320,6 +525,14 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
                         format!(" ⚠ {}", r.kind.as_deref().unwrap_or("needs you")),
                         fg(app, t.blocked),
                     ));
+                }
+                // How long it has been working or waiting for you.
+                if let Some(r) = s.status.as_ref().filter(|r| {
+                    s.state.is_live()
+                        && matches!(r.status, AgentStatus::Working | AgentStatus::Blocked)
+                        && ptyro_core::now_ms().saturating_sub(r.since_ms) >= 10_000
+                }) {
+                    spans.push(Span::styled(format!(" {}", ago(r.since_ms)), fg(app, t.dim)));
                 }
                 if s.attention.is_some()
                     && s.status
@@ -367,6 +580,13 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
                     spans.push(Span::raw(" "));
                     spans.push(b);
                 }
+                // In focus, or wanting you: always opened up, with room to wrap.
+                near = Some(s.id) == focused
+                    || (app.focus == Focus::Sidebar && i == sel)
+                    || s.attention.is_some()
+                    || s.status.as_ref().is_some_and(|r| r.status == AgentStatus::Blocked);
+                let lead = indent.len() + 4;
+                detail = session_details(app, s, lead, width, near || app.sidebar_zoom);
                 Line::from(spans)
             }
             Row::Group(label) => {
@@ -389,53 +609,172 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
                 ])
             }
         };
-        if app.focus == Focus::Sidebar && i == sel {
-            line = line.style(if t.monochrome {
-                Style::new().add_modifier(Modifier::REVERSED)
-            } else {
-                Style::new().bg(app.depth.fit(t.selection_bg))
-            });
-        }
-        lines.push(line);
+        firsts.push((i, line));
+        details.push(detail);
+        close.push(near);
     }
-    if rows.is_empty() {
-        let prefix = key_label(&app.keymap.prefix);
-        lines.push(Line::styled(format!("  none yet: {prefix} n"), fg(app, t.dim)));
-        if app.projects.is_empty() {
-            lines.push(Line::styled(
-                format!("  add a repo: {prefix} : project.add"),
-                fg(app, t.dim),
-            ));
+    use ptyro_core::config::SidebarDetail;
+    let all: usize = firsts.len() + details.iter().map(Vec::len).sum::<usize>();
+    let open_all = app.sidebar_zoom
+        || match app.config.ui.sidebar_detail {
+            SidebarDetail::Full => true,
+            SidebarDetail::Compact => false,
+            SidebarDetail::Auto => all <= room,
+        };
+    let compact = app.config.ui.sidebar_detail == SidebarDetail::Compact && !app.sidebar_zoom;
+    let mut lines = Vec::new();
+    let (mut sel_first, mut sel_last) = (0, 0);
+    for (((i, first), detail), near) in firsts.into_iter().zip(details).zip(close) {
+        if i == sel {
+            sel_first = lines.len();
+        }
+        lines.push((i, first));
+        if !compact && (open_all || near) {
+            lines.extend(detail.into_iter().map(|l| (i, l)));
+        }
+        if i == sel {
+            sel_last = lines.len().saturating_sub(1);
         }
     }
-    let mut hint = if app.focus == Focus::Sidebar {
-        " ⏎ open/fold · n new · x stop · Esc".to_string()
+    if app.focus == Focus::Sidebar {
+        let style = if t.monochrome {
+            Style::new().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::new().bg(app.depth.fit(t.selection_bg))
+        };
+        for (i, l) in &mut lines {
+            if *i == sel {
+                *l = std::mem::take(l).style(style);
+            }
+        }
+    }
+    // Keep the selection in view in a long tree: all of it, else its first line.
+    let skip = if app.focus == Focus::Sidebar && sel_last >= room {
+        (sel_last + 1 - room).min(sel_first)
     } else {
-        format!(" {} Tab: sidebar · w workspaces", key_label(&app.keymap.prefix))
+        0
     };
-    truncate_width(&mut hint, area.width as usize);
-    let body = Rect { height: area.height.saturating_sub(1), ..area };
-    // Keep the selection visible in a long tree.
-    let skip = app.sidebar_skip(area, sel);
-    let lines: Vec<Line<'_>> = lines
-        .into_iter()
-        .enumerate()
-        .filter(|(i, _)| *i == 0 || *i > skip)
-        .map(|(_, l)| l)
-        .collect();
-    f.render_widget(Paragraph::new(lines), body);
-    f.render_widget(
-        Paragraph::new(Line::styled(hint, fg(app, t.dim))),
-        Rect { y: area.bottom().saturating_sub(1), height: 1, ..area },
-    );
-    // The divider between sidebar and panes.
-    let div = Rect { x: area.right(), width: 1, ..area };
-    let col = if app.focus == Focus::Sidebar { t.border_focus } else { t.border };
-    for y in div.top()..div.bottom() {
-        if let Some(c) = f.buffer_mut().cell_mut(Position::new(div.x, y)) {
-            c.set_symbol("│").set_style(fg(app, col));
+    SidebarBody { empty: rows.is_empty(), lines, skip }
+}
+
+/// The lines under a session's first line (UX1.2), starting at column `lead`: what it wants,
+/// what it's on, its task and last reply, or a shell's command. `wide` lets the long ones wrap
+/// once, for the row in focus.
+fn session_details(
+    app: &App,
+    s: &SessionInfo,
+    lead: usize,
+    width: usize,
+    wide: bool,
+) -> Vec<Line<'static>> {
+    use ptyro_core::session::ProcessState;
+    let t = &app.theme;
+    let key = |action: &str| {
+        let k = app.keymap.key_for(action).unwrap_or_default();
+        // In the sidebar its keys need no prefix.
+        if app.focus == Focus::Sidebar { k.rsplit(' ').next().unwrap_or(&k).to_owned() } else { k }
+    };
+    let mut items: Vec<(&str, String, Color)> = Vec::new();
+    let live = s.state.is_live();
+    if s.state == ProcessState::Dormant {
+        items.push(("☾", "dormant · ⏎ resumes it".into(), t.dim));
+    } else if !live {
+        let when = s.ended_ms.map(|m| format!(" {} ago", ago(m))).unwrap_or_default();
+        items.push(("■", format!("{}{when} · ⏎ restart", s.state.label()), t.exited));
+    }
+    if live && let Some(r) = &s.status {
+        match r.status {
+            AgentStatus::Blocked => {
+                let want = r
+                    .detail
+                    .clone()
+                    .or_else(|| s.attention.as_ref().map(|a| a.text.clone()))
+                    .or_else(|| r.kind.clone())
+                    .unwrap_or_else(|| "you".into());
+                items.push(("wants", want, t.blocked));
+                let answer =
+                    if r.kind.as_deref() == Some("permission") { "y/a/n answers" } else { "reply" };
+                items.push(("", format!("{} {answer} · ⏎ open", key("peek")), t.dim));
+            }
+            AgentStatus::Errored => {
+                let why = r.detail.clone().or_else(|| r.kind.clone()).unwrap_or_default();
+                items.push(("✗", why, t.error));
+            }
+            AgentStatus::Working if s.kind != SessionKind::Shell => {
+                let now = s.activity.clone().or_else(|| r.detail.clone());
+                items.push(("now", now.unwrap_or_else(|| "working".into()), t.working));
+            }
+            _ => {}
         }
     }
+    // An agent started by hand in a shell: a guess off its screen, and what adopting gives.
+    if s.inner_agent.as_deref() == Some("claude") {
+        items.push(("◌", "by hand · A adopts it: hooks, resume".into(), t.dim));
+    } else if let Some(a) = &s.inner_agent {
+        items.push(("◌", format!("{a} by hand, status off its screen"), t.dim));
+    }
+    // Its title (`--title`, `retitle`, else the first prompt), not a window title (UX1.24).
+    if let Some(task) = session_title(s).or(s.task.as_deref()) {
+        items.push(("task", task.to_owned(), t.text));
+    }
+    let working = s.status.as_ref().is_some_and(|r| r.status == AgentStatus::Working);
+    // A small model's line on it (UX1.3): this turn's says what its last reply would.
+    let summary = s.summary.as_ref().filter(|_| !working && live);
+    if let Some(sm) = summary {
+        items.push(("≈", sm.text.clone(), t.text));
+    }
+    let summarized = summary.is_some_and(|sm| sm.turn >= s.turns);
+    if let Some(reply) = s.last_reply.as_ref().filter(|_| !working && !summarized) {
+        items.push(("last", reply.clone(), t.dim));
+    }
+    if s.kind == SessionKind::Shell
+        && let Some(c) = &s.command
+    {
+        let text = c.text.clone().or_else(|| s.foreground.clone()).unwrap_or_default();
+        match c.ended_ms {
+            None if live => {
+                let took = dur(ptyro_core::now_ms().saturating_sub(c.started_ms));
+                items.push(("now", format!("{text} · {took}"), t.working));
+            }
+            None => {}
+            Some(end) => {
+                let (mark, color) = match c.exit {
+                    Some(0) | None => ("✓".to_owned(), t.done),
+                    Some(e) => (format!("✗{e}"), t.error),
+                };
+                let took = dur(end.saturating_sub(c.started_ms));
+                items.push(("last", format!("{text} {mark} · {took} · {} ago", ago(end)), color));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let pad = " ".repeat(lead);
+    for (label, text, color) in items {
+        let label = if label.is_empty() { String::new() } else { format!("{label} ") };
+        let room = width.saturating_sub(lead + label.chars().count()).max(4);
+        let mut rest = text;
+        for n in 0..if wide { 2 } else { 1 } {
+            let mut part = rest.clone();
+            truncate_width(&mut part, room);
+            let more = part.len() < rest.len();
+            // The last line we may use: cut with an ellipsis.
+            if more && (n == 1 || !wide) {
+                truncate_width(&mut part, room.saturating_sub(1));
+                part.push('…');
+            }
+            let head = if n == 0 { label.clone() } else { " ".repeat(label.chars().count()) };
+            out.push(Line::from(vec![
+                Span::raw(pad.clone()),
+                Span::styled(head, fg(app, t.dim)),
+                Span::styled(part.clone(), fg(app, color)),
+            ]));
+            if !more || part.ends_with('…') {
+                break;
+            }
+            rest = rest[part.len()..].trim_start().to_owned();
+        }
+    }
+    out
 }
 
 fn draw_panes(app: &App, f: &mut Frame<'_>) {
@@ -474,14 +813,10 @@ fn draw_panes(app: &App, f: &mut Frame<'_>) {
         let inner = app.inner(rect);
         draw_header(app, f, Rect { height: 1, ..rect }, inner, info, pane, focused);
         let Some(id) = session else {
-            let msg = format!(
-                "No session here.  {k} n  new · {k} /  find · {k} c  close pane",
-                k = key_label(&app.keymap.prefix)
-            );
-            f.render_widget(
-                Paragraph::new(Line::styled(msg, fg(app, t.dim)).centered()),
-                centered_line(inner),
-            );
+            let lines = empty_pane(app);
+            let h = (lines.len() as u16).min(inner.height);
+            let r = Rect { y: inner.y + inner.height.saturating_sub(h) / 2, height: h, ..inner };
+            f.render_widget(Paragraph::new(lines).centered(), r);
             continue;
         };
         if let Some(c) = state.and_then(|p| p.copy.as_ref()) {
@@ -541,8 +876,37 @@ fn draw_panes(app: &App, f: &mut Frame<'_>) {
     }
 }
 
-fn centered_line(r: Rect) -> Rect {
-    Rect { y: r.y + r.height / 2, height: 1.min(r.height), ..r }
+/// What an empty pane offers (UX1.23): the next thing to do, with the keys that do it.
+fn empty_pane(app: &App) -> Vec<Line<'static>> {
+    let t = &app.theme;
+    let key = |action: &str| app.keymap.key_for(action);
+    let mut lines = vec![
+        Line::styled(
+            format!("Nothing running in {} yet", app.workspace),
+            fg(app, t.text).add_modifier(Modifier::BOLD),
+        ),
+        Line::raw(""),
+    ];
+    let mut offer = |k: Option<String>, what: &str| {
+        if let Some(k) = k {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{k:>9}  "), fg(app, t.accent).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{what:<34}"), fg(app, t.dim)),
+            ]));
+        }
+    };
+    offer(key("session.new"), "start a task: say what to do");
+    if !app.tree().project_ids().is_empty() {
+        offer(key("worktree.new"), "a new worktree with an agent");
+    }
+    if app.sessions.iter().any(|s| app.home_of(s) != app.workspace) {
+        offer(key("session.find"), "a session from another workspace");
+    }
+    if app.layout.panes().len() > 1 {
+        offer(key("pane.close"), "close this pane");
+    }
+    offer(key("help"), "every key");
+    lines
 }
 
 fn draw_header(
@@ -622,9 +986,10 @@ fn draw_header(
                     base.fg(app.depth.fit(t.error)),
                 ));
             }
-            if let Some(cache) = app.caches.get(&s.id)
-                && let Some(title) =
-                    cache.title.as_deref().filter(|t| !t.is_empty() && *t != s.name)
+            // Its title, else the program's window title.
+            let window = app.caches.get(&s.id).and_then(|c| c.title.as_deref());
+            if let Some(title) =
+                session_title(s).or(window).filter(|t| !t.is_empty() && *t != s.name)
             {
                 left.push(Span::styled(format!(" · {title}"), base.fg(app.depth.fit(t.dim))));
             }
@@ -706,6 +1071,9 @@ fn draw_status(app: &App, f: &mut Frame<'_>, r: Rect) {
         ));
     } else if app.prefix {
         left.push(Span::styled(prefix_hint(app), bar));
+    } else if let Some(hint) = app.context_hint() {
+        // What you'd do next with what's selected (UX1.16).
+        left.push(Span::styled(hint, bar.fg(app.depth.fit(t.accent))));
     }
     let (live, working, blocked) = app.counts();
     let mut right = Vec::new();
@@ -748,6 +1116,15 @@ fn draw_status(app: &App, f: &mut Frame<'_>, r: Rect) {
     }
     for (ws, n) in app.other_workspace_attention() {
         right.push(Span::styled(format!("{ws} ⚑{n} "), bar.fg(app.depth.fit(t.search))));
+    }
+    // What the doctor found (UX1.20): `M` mends it.
+    if !app.health.findings.is_empty() {
+        let bad = app.health.findings.iter().any(|f| f.problem);
+        right.push(Span::styled(
+            format!("⚕ {} ", app.health.findings.len()),
+            bar.fg(app.depth.fit(if bad { t.error } else { t.blocked }))
+                .add_modifier(Modifier::BOLD),
+        ));
     }
     let gates = app.open_gates();
     if gates > 0 {
@@ -798,7 +1175,7 @@ fn prefix_hint(app: &App) -> String {
     };
     [
         (&["app.detach"][..], "detach"),
-        (&["session.new"], "new"),
+        (&["session.new"], "task"),
         (&["worktree.new"], "worktree"),
         (&["workspace.switch"], "workspace"),
         (&["session.find"], "find"),
@@ -911,6 +1288,101 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                 r.y + 1,
             ));
         }
+        Overlay::Suggest { suggestions: s, .. } => {
+            let mut lines = vec![
+                Line::styled(
+                    format!("{}'s first worktree. ptyro found what it needs:", s.project),
+                    Style::new().add_modifier(Modifier::BOLD),
+                ),
+                Line::raw(""),
+            ];
+            if let Some(cmd) = &s.setup {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("  {} → setup: ", s.from.as_deref().unwrap_or("?")),
+                        fg(app, t.dim),
+                    ),
+                    Span::styled(cmd.clone(), fg(app, t.accent)),
+                ]));
+            }
+            if !s.copy.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled(format!("  {} → ", s.copy.join(", ")), fg(app, t.dim)),
+                    Span::styled("copied into each worktree (git ignores them)", fg(app, t.accent)),
+                ]));
+            }
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(
+                "Written to .ptyro.local.toml: yours, not committed. Asked only once.",
+                fg(app, t.dim),
+            ));
+            lines.push(Line::styled("y use them · n not now (and not again)", fg(app, t.accent)));
+            let r = boxed(area, 84, lines.len() as u16 + 2);
+            f.render_widget(Clear, r);
+            f.render_widget(Paragraph::new(lines).block(block("Set up worktrees?".into())), r);
+        }
+        Overlay::Task { text, name, naming, wizard } => {
+            let r = boxed(area, 76, 6);
+            f.render_widget(Clear, r);
+            let (slug, agent, place) = app.task_plan(text, name.as_deref(), wizard);
+            let caret = fg(app, t.accent);
+            let field = |label: &str, value: &str, on: bool, placeholder: &str| {
+                let mut v = vec![Span::styled(
+                    format!("{label:>5} "),
+                    if on { caret.add_modifier(Modifier::BOLD) } else { fg(app, t.dim) },
+                )];
+                if value.is_empty() {
+                    v.push(Span::styled(placeholder.to_owned(), fg(app, t.dim)));
+                } else {
+                    v.push(Span::raw(value.to_owned()));
+                }
+                Line::from(v)
+            };
+            let shown_name = name.clone().or_else(|| slug.clone()).unwrap_or_default();
+            let bad =
+                name.as_deref().filter(|n| !n.is_empty()).and_then(ptyro_core::names::problem);
+            let preview = match (&bad, text.trim().is_empty() && name.is_none()) {
+                (Some(e), _) => Line::styled(format!("✗ name: {e}"), fg(app, t.error)),
+                (None, true) => {
+                    Line::styled(format!("→ {agent} · {place} · a random name"), fg(app, t.dim))
+                }
+                (None, false) => Line::styled(
+                    format!(
+                        "→ {} · {agent} · {place}",
+                        if shown_name.is_empty() {
+                            "a random name".into()
+                        } else {
+                            shown_name.clone()
+                        }
+                    ),
+                    fg(app, t.done),
+                ),
+            };
+            let lines = vec![
+                field("do", text, !naming, "fix the flaky test in tests/api.rs"),
+                field(
+                    "name",
+                    name.as_deref().unwrap_or(""),
+                    *naming,
+                    slug.as_deref().unwrap_or("(from what you type)"),
+                ),
+                preview,
+                Line::styled("⏎ start · Tab name · C-o pick agent & where · Esc", fg(app, t.dim)),
+            ];
+            // Which profile it runs under, and why (SPEC §10.10), as the wizard says it.
+            let profile =
+                app.resolved.as_deref().map(|p| format!(" · profile {p}")).unwrap_or_default();
+            f.render_widget(
+                Paragraph::new(lines).block(block(format!("What should it do?{profile}"))),
+                r,
+            );
+            let (row, col) = if *naming {
+                (2, name.as_deref().unwrap_or("").chars().count())
+            } else {
+                (1, text.chars().count())
+            };
+            f.set_cursor_position(Position::new(r.x + 7 + col as u16, r.y + row));
+        }
         Overlay::Prompt { title, text, kind } => {
             let r = boxed(area, 70, 4);
             f.render_widget(Clear, r);
@@ -923,6 +1395,11 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                     let style = if ptyro_core::names::allowed(c) { Style::new() } else { bad };
                     Span::styled(c.to_string(), style)
                 }));
+            } else if text.is_empty()
+                && let Some(s) = kind.suggestion()
+            {
+                // The name it offers, dimmed: ⏎ takes it, typing replaces it (UX1.24).
+                field.push(Span::styled(s.to_owned(), fg(app, t.dim)));
             } else {
                 field.push(Span::raw(text.clone()));
             }
@@ -937,9 +1414,10 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                     Line::styled(format!("✗ {e}{fix}"), fg(app, t.error))
                 }
                 Ok(note) => Line::styled(
-                    match note {
-                        Some(n) => format!("⏎ ok ({n}) · Esc cancel · C-u clear"),
-                        None => "⏎ ok · Esc cancel · C-u clear".into(),
+                    match (note, text.is_empty().then(|| kind.suggestion()).flatten()) {
+                        (_, Some(s)) => format!("⏎ takes {s} · or type another · Esc cancel"),
+                        (Some(n), _) => format!("⏎ ok ({n}) · Esc cancel · C-u clear"),
+                        (None, _) => "⏎ ok · Esc cancel · C-u clear".into(),
                     },
                     fg(app, t.dim),
                 ),
@@ -1272,7 +1750,7 @@ pub fn tour_pages(app: &App) -> Vec<(String, Vec<String>)> {
             format!("`{}` lists every key; `{}` runs any action by name.", k("help"), k("palette")),
         ]),
         ("sessions".into(), vec![
-            format!("`{}`  new session: pick an agent and where it runs (⏎ ⏎ = default agent in a new worktree)", k("session.new")),
+            format!("`{}`  new task: say what to do, ⏎: the default agent on it, in a new worktree named after it", k("session.new")),
             format!("`{}`  new worktree with an agent", k("worktree.new")),
             format!("`{}` / `{}`  next / previous session · `{}` find one", k("session.next"), k("session.prev"), k("session.find")),
             format!("`{}`  the sidebar: j/k move, ⏎ opens, x stops, Space marks", k("focus.toggle")),

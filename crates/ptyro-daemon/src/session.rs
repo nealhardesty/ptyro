@@ -94,6 +94,18 @@ pub struct Meta {
     pub first_prompt: Option<String>,
     /// When the shell's current command started (OSC 133 `C`).
     pub command_since_ms: Option<u64>,
+    /// The shell's current or last command (UX1.2).
+    #[serde(default)]
+    pub command: Option<ptyro_core::session::ShellCommand>,
+    /// An agent started by hand in this shell, in the foreground now (UX1.4).
+    #[serde(default)]
+    pub inner_agent: Option<String>,
+    /// Its latest summary (UX1.3), and whether one is being made.
+    pub summary: Option<ptyro_core::session::Summary>,
+    pub summarizing: bool,
+    /// Its title, for people to read (UX1.24): `--title`, `retitle`, else its first prompt.
+    #[serde(default)]
+    pub title: Option<String>,
     /// Claude's messaging socket, from the hook environment (M4.18).
     pub messaging: Option<String>,
     /// A prompt waits to be typed once the agent is ready.
@@ -201,6 +213,7 @@ pub struct DormantSpec {
     pub conversation: Option<String>,
     pub ended_ms: Option<u64>,
     pub structured: Option<String>,
+    pub title: Option<String>,
 }
 
 /// The shared plumbing every session gets.
@@ -277,6 +290,11 @@ fn new_meta(
         dangerous: false,
         first_prompt: None,
         command_since_ms: None,
+        command: None,
+        inner_agent: None,
+        summary: None,
+        summarizing: false,
+        title: None,
         messaging: None,
         prompt_pending: false,
         last_prompt_ms: None,
@@ -373,6 +391,7 @@ impl Session {
         meta.adapter = d.adapter;
         meta.conversation = d.conversation;
         meta.structured = d.structured;
+        meta.title = d.title;
         let exited = watch::Sender::new(true);
         Arc::new(Self {
             id,
@@ -467,7 +486,8 @@ impl Session {
             ended_ms: meta.ended_ms,
             viewers: meta.viewers,
             controller: meta.controller,
-            title,
+            title: meta.title.clone().or_else(|| title.clone()),
+            window_title: title,
             foreground,
             live_cwd,
             program_status: meta.program_status.clone(),
@@ -494,6 +514,11 @@ impl Session {
             run: meta.run.as_ref().map(|(r, step)| format!("{r}/{step}")),
             held: false,
             structured: self.structured.as_ref().map(|s| s.protocol.clone()),
+            task: meta.first_prompt.as_deref().map(|p| ptyro_core::session::brief(p, 200)),
+            last_reply: meta.last_reply.as_deref().map(|r| ptyro_core::session::brief(r, 300)),
+            command: meta.command.clone(),
+            inner_agent: meta.inner_agent.clone(),
+            summary: meta.summary.clone(),
         }
     }
 
@@ -520,6 +545,7 @@ impl Session {
             script: m.place.script,
             launch,
             conversation: m.conversation,
+            title: m.title,
         });
     }
 
@@ -816,7 +842,7 @@ impl Session {
                         (state != 0).then_some(Progress { state, percent });
                     DomainEvent::SessionUpdated { info: self.info(String::new()) }
                 }
-                TermEvent::PromptMark { mark, exit } => {
+                TermEvent::PromptMark { mark, exit, cmdline } => {
                     match mark {
                         'A' => {
                             let was = self.was_active();
@@ -829,12 +855,28 @@ impl Session {
                             }
                         }
                         'C' if kind == SessionKind::Shell => {
-                            self.meta.lock().expect("meta").command_since_ms = Some(now_ms());
-                            signals.push(high(Signal::status(AgentStatus::Working)));
+                            let mut m = self.meta.lock().expect("meta");
+                            // An agent started by hand says what it's doing itself (UX1.4).
+                            let inner = m.inner_agent.is_some();
+                            m.command_since_ms = Some(now_ms());
+                            m.command = Some(ptyro_core::session::ShellCommand {
+                                text: cmdline.map(|c| ptyro_core::session::brief(&c, 200)),
+                                started_ms: now_ms(),
+                                ended_ms: None,
+                                exit: None,
+                            });
+                            drop(m);
+                            if !inner {
+                                signals.push(high(Signal::status(AgentStatus::Working)));
+                            }
                         }
                         'D' => {
                             let mut m = self.meta.lock().expect("meta");
                             m.last_command_exit = exit;
+                            if let Some(c) = m.command.as_mut().filter(|c| c.ended_ms.is_none()) {
+                                c.ended_ms = Some(now_ms());
+                                c.exit = exit;
+                            }
                             let ran = m.command_since_ms.take();
                             drop(m);
                             if kind == SessionKind::Shell && ran.is_some() {
@@ -852,10 +894,16 @@ impl Session {
                     continue;
                 }
                 TermEvent::Title(Some(t)) => {
-                    if let Some(sig) =
-                        self.adapter().and_then(|a| ptyro_agents::adapter(&a).on_title(&t))
+                    // An agent started by hand in a shell: its title too, at low confidence.
+                    let inner = self.meta.lock().expect("meta").inner_agent.clone();
+                    let (adapter, confidence) = match (self.adapter(), inner) {
+                        (Some(a), _) => (Some(a), Confidence::Medium),
+                        (None, Some(a)) => (Some(a), Confidence::Low),
+                        (None, None) => (None, Confidence::Medium),
+                    };
+                    if let Some(sig) = adapter.and_then(|a| ptyro_agents::adapter(&a).on_title(&t))
                     {
-                        signals.push(sourced(sig, SignalSource::Title, Confidence::Medium));
+                        signals.push(sourced(sig, SignalSource::Title, confidence));
                     }
                     continue;
                 }

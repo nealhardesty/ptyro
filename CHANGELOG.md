@@ -6,6 +6,47 @@ Generated from git history by `make changelog` (scripts/changelog.sh); edit comm
 
 ### Features
 
+- feat: UX1.3 opt-in summaries, a line from a small model after each turn (14c227b)
+- feat: TUI prompts check input as it's typed instead of failing after ⏎ (cb13820)
+
+### Fixes
+
+- fix: resume a session that suspends itself on Ctrl-Z, and say so (d39aa8a)
+- fix: removing a session closes the panes showing it instead of leaving them empty (8dcae2f)
+- fix: a worker's turn summary is its own reply, not the screen's last line (92a8ef3)
+- fix: changeset-demo waits for member turns to end before restoring the set checkpoint (346e6c0)
+- fix: the collision radar no longer warns a finished fan-out's candidates about each other; deflake m10/m11 (deaeac2)
+
+### Documentation
+
+- docs: roadmap UX1, out of the box, and make the TUI first class (c3293c7)
+- docs: roadmap an agent started inside a shell session (R-AGT-09) (ebf6f77)
+- docs: roadmap registering a project from the TUI when there is none (8659085)
+- docs: roadmap sidebar resizing by drag and by keys (e90d0ba)
+- docs: README install points at the prebuilt release tarballs; the Homebrew tap is not published yet (14ccc66)
+
+### Other
+
+- UX1.21: every CLI command has a TUI path, and the check is strict (785c15c)
+- UX1.20: a health badge with a fix for each finding (168adf6)
+- UX1.19: a first run in the TUI, and home (baad19c)
+- UX1.10, UX1.11: work from a PR, a branch or your changes, and a first worktree's setup (4a5f116)
+- UX1.12, UX1.13: finish a worktree, archive it when done, and a shell beside its agent (b650c01)
+- UX1.14, UX1.15, UX1.16, UX1.18: learn the keys by using them (d19e23b)
+- UX1.17: messages offer the fix instead of a command to type (7950068)
+- UX1.9, UX1.24: say what to do, and everything has a name and a title (f2622a0)
+- UX1.4: an agent started by hand in a shell says what it's doing, and can be adopted (4660f2c)
+- UX1.5, UX1.6: the repository you're in is a project, and "no project" asks for one (c39ab10)
+- UX1.7, UX1.8: resize the sidebar by dragging its edge, or with < and > (e6ab1c4)
+- UX1.1, UX1.2: sidebar rows say what each session is doing (da00a98)
+- UX1.0: make tui-parity holds every CLI command to a TUI path (9f0ef3f)
+- UX1.23: a removed or stopped session's pane shows the next one (08ecae1)
+- test: verify-claude checks that Claude's Stop carries the turn's reply (62f2fb4)
+
+## v0.0.2 (2026-10-22)
+
+### Features
+
 - feat: Ctrl-Q and Ctrl-Space are both prefixes by default (6e35691)
 - feat: the default prefix is Ctrl-Q (7fab60a)
 
@@ -38,12 +79,14 @@ Generated from git history by `make changelog` (scripts/changelog.sh); edit comm
 
 ### Documentation
 
+- docs: regenerate CHANGELOG.md (cc3d84b)
 - docs: regenerate CHANGELOG.md (90b7fa8)
 - docs: regenerate CHANGELOG.md (d735931)
 - docs: regenerate CHANGELOG.md (30eb521)
 
 ### Other
 
+- release: v0.0.2 (2830a04)
 - build: make bump sets the release version (6f2a902)
 - Ignore local git config file in .gitignore- Add /.gitconfig entry to .gitignore so a repo-local git identity file is not accidentally committedCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com> (f0d84af)
 - Fix rust install (no homebrew, real install) (8c85e6c)

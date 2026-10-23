@@ -1215,14 +1215,18 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
 
 ### First class, and seeing what's going on
 
-- [ ] **UX1.0 TUI first, enforced** (R-UX-21) — S
+- [x] **UX1.0 TUI first, enforced** (R-UX-21) — S
   - SPEC §1.3, `AGENTS.md`, README and these conventions say the TUI is first class (done
     2026-10-22 with this milestone).
   - `make tui-parity`, run in CI: it lists the CLI command tree (from clap) and the palette's
     actions and fails on a command with no TUI path unless `docs/tui-parity.md` waives it with a
     reason (e.g. `ptyro hook`, `ptyro proxy`).
   - *Done when:* CI fails on a new CLI command without a TUI action or a waiver.
-- [ ] **UX1.23 A removed session's pane shows the next one** (owner, 2026-10-22; high priority)
+  - *Done (2026-10-22):* `crates/ptyro/src/parity.rs` walks the clap tree and checks it against
+    the table in `docs/tui-parity.md` (an action, `shown:`, `waived:` or `gap: UX1.x`). It runs
+    in `make test`; `make tui-parity` lists the 76 gaps left and `STRICT=1` fails on them. UX1
+    is finished when `STRICT=1` passes.
+- [x] **UX1.23 A removed session's pane shows the next one** (owner, 2026-10-22; high priority)
   — S.
   - **Today:** when the shown session is removed (`x` on an exited session, `X`, `ptyro kill` /
     `rm`), a split closes, but the last pane takes the first not-shown session in tree order,
@@ -1236,12 +1240,17 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
     (the default) the pane moves on too, and `C-r` / the sidebar bring the exited one back.
   - *Done when:* TUI tests remove the middle, the last and the only session, in one pane and
     in splits, and the pane shows the expected neighbour each time.
-- [ ] **UX1.1 Real program names** (R-UX-20) — S. Claude Code's process is named after its
+  - *Done (2026-10-22):* `neighbour()` and `App::move_on` in `crates/ptyro-tui/src/app.rs`, with
+    tests for the ranking, removal, splits and `on_stop`; the empty pane says what to do next
+    (SPEC §11.2h).
+- [x] **UX1.1 Real program names** (R-UX-20) — S. Claude Code's process is named after its
   version, so the foreground probe shows `2.1.309` (SPEC §20 when verified on Linux). When the
   name looks like a version, or is a known launcher, use argv[0] and the known-agent table, so
   the row says `claude`. `ptyro ls`'s COMMAND column has the same bug. *Done when:* a session
   running Claude shows `claude`, not a version, in the TUI and in `ptyro ls`.
-- [ ] **UX1.2 Multi-line sidebar rows** (R-UX-20) — M. Line 1 is unchanged: number, status
+  *Done (2026-10-22):* `ptyro_pty::process_name` reads argv[0] when the kernel's name looks like
+  a version (verified against Claude 2.1.291 and 2.1.309 on macOS; SPEC §20.5).
+- [x] **UX1.2 Multi-line sidebar rows** (R-UX-20) — M. Line 1 is unchanged: number, status
   glyph, program, and the time in this state. Up to two more lines follow, and only when they
   add something:
   - blocked: what it wants, plus the answering keys (`y allow · n deny`);
@@ -1254,7 +1263,12 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
   rows open up and the rest stay compact. Numbering, `j`/`k` and mouse hit-testing follow the
   taller rows. A zoomed sidebar with every row open is the "everything at once" summary view.
   *Done when:* golden screens for each state at each detail level.
-- [ ] **UX1.3 LLM summaries, opt-in** (R-UX-01; owner approved 2026-10-22) — M, spike first.
+  *Done (2026-10-22):* `SessionInfo` gains `task`, `last_reply` and `command` (protocol 1.12);
+  `ptyro shell-init` sends the command line with OSC 133 `C` (bash gains `C` at all, from 4.4);
+  `ui::sidebar_body` lays out rows for drawing and clicks alike. TUI tests cover each state,
+  the three detail levels and clicking a detail line; `tests/ux1.rs` checks the daemon end to
+  end (SPEC §11.2h).
+- [x] **UX1.3 LLM summaries, opt-in** (R-UX-01; owner approved 2026-10-22) — M, spike first.
   `[summaries] enabled = true` replaces the task and last-reply lines with a short summary of
   the current step.
   - It uses the cheapest model of the session's own agent and **the session's own profile
@@ -1272,7 +1286,18 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
     the daemon so B can replace A.
   - *Done when:* with a fake agent and a fake summariser, rows show summaries that update per
     turn. `make verify-claude` checks one real summary.
-- [ ] **UX1.4 Agents started inside a shell session** (R-AGT-09) — M. Typing `claude` in a
+  - *Done (2026-10-23):* option A, `crates/ptyro-daemon/src/summary.rs`: `[summaries] enabled`,
+    `daily_cap` and `command` (default `claude -p --model haiku`). It runs under the session's
+    profile, after each finished turn and each new block, one at a time per session, with the
+    prompt redacted. `≈` replaces `last` on the row, and the task stays. `session.summarize` and
+    `ptyro summarize` make one on demand. Tests: `tests/ux1.rs` (fake agent, fake summariser,
+    redaction) and the TUI row test. `make verify-claude` makes a real one: $0.00065, 1–2.5 s
+    (SPEC §20.1). **Differs from the plan:**
+    - One configurable command, not a `Summarizer` trait. Option B would be a new command or
+      mode, and is left open as SPEC §21 question 9.
+    - Codex and Gemini sessions are summarised with the same command (Claude's Haiku on that
+      profile's account), not with their own agent's cheapest model.
+- [x] **UX1.4 Agents started inside a shell session** (R-AGT-09) — M. Typing `claude` in a
   `shell` session leaves it a shell. The sidebar shows the foreground process. Status still
   comes from OSC 133, which reports the whole Claude run as one long **working** command, even
   while Claude waits for you. Proposed fix:
@@ -1286,10 +1311,15 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
   - Looking through `node`/`npx` launchers belongs with detection manifests (R-DD-05).
   - *Done when:* a shell session running a fake Claude shows idle and blocked, not a solid
     working.
+  - *Done (2026-10-22):* `inner_agent_tick` in `crates/ptyro-daemon/src/agents.rs`,
+    `Adapter::screen_status` (Claude, Codex), `Engine::forget_sources`; adopt for Claude
+    (`ptyro adopt`, `A` in the sidebar), resuming the newest transcript. `tests/ux1.rs` runs a
+    process really named `claude` through idle, blocked and working, and adopts one (SPEC §8.7).
+    Looking through `node`/`npx` launchers is still R-DD-05's.
 
 ### Projects and worktrees without setup
 
-- [ ] **UX1.5 Auto-register the repo you're in** (R-UX-22; owner chose auto with undo,
+- [x] **UX1.5 Auto-register the repo you're in** (R-UX-22; owner chose auto with undo,
   2026-10-22) — S. Running `ptyro` inside a git repository that isn't a project yet just opens a
   shell session, and then `Ctrl-Q N` says "no project here yet". Instead, register it in the
   *current* workspace and toast "registered `myrepo` · `u` undo". A profile pin that `match`
@@ -1304,11 +1334,17 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
   - *Done when:* an end-to-end test opens ptyro in a fresh repo and `N` works at once, and a
     session that `cd`s into another repo puts that repo in the sidebar. Undo forgets the
     project.
-- [ ] **UX1.6 "No project" opens the picker** — S. When `worktree.new` (or anything else that
+  - *Done (2026-10-22):* `crates/ptyro-daemon/src/autoreg.rs`; `ProjectRemove{release}` and
+    `ProjectAutoAdded`; the TUI's undo through `toast.act` (`C-q u`). `tests/ux1.rs` covers
+    spawn, undo, declining, the last-shown workspace and a shell moving into a repo (SPEC
+    §10.1). A session already in a project that moves to another repo stays where it is; only
+    the new repo is registered.
+- [x] **UX1.6 "No project" opens the picker** — S. When `worktree.new` (or anything else that
   needs a project) finds none, open the `project.add` discovery picker directly instead of
   showing a toast that names the palette command. Once you pick a project, carry on with the
-  action that asked for it.
-- [ ] **UX1.9 Prompt-first new task** (R-UX-23, R-UX-01 slugs) — M. `Ctrl-Q n` opens one box:
+  action that asked for it. *Done (2026-10-22):* `N`, `o`, `r`, `R` and `project.trust`, and
+  the wizard's "+ add a project…", via `AfterAdd`; `project.add` is bound to `P` (SPEC §11.2h).
+- [x] **UX1.9 Prompt-first new task** (R-UX-23, R-UX-01 slugs) — M. `Ctrl-Q n` opens one box:
   "what should it do?".
   - `⏎` creates a worktree, with the name and branch slugged from the prompt (deterministic),
     starts the default agent, and delivers the prompt.
@@ -1318,20 +1354,59 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
     used in this project.
   - From the shell: `ptyro "fix the flaky test"` does the same and attaches.
   - *Done when:* end-to-end test from keys to a fake agent receiving the prompt.
-- [ ] **UX1.10 Where work comes from** (R-WT-05) — M. The wizard's target step offers:
+  - *Done (2026-10-22, with UX1.24):* `Overlay::Task` (preview, Tab name, `C-o` wizard);
+    `ptyro "TASK…"`, which registers the repository on the way; `tests/ux1.rs` drives it from
+    keys to the agent's prompt (SPEC §11.2h, §12.1). Tab edits the name (UX1.24) and `C-o`
+    opens the wizard, instead of Tab opening the wizard.
+- [x] **UX1.24 Every new thing has a name and a title** (R-UX-29; owner, 2026-10-22) — M.
+  Today agent sessions are named `claude`, `claude-2`…, which says nothing in the sidebar, and
+  the name is the only label a session has.
+  - **Two fields** (SPEC §2): the **name** is the address (slugged, fixed at creation, changed
+    only by rename); the **title** is free text people read (the task, a PR title, later a
+    UX1.3 summary) and may change freely. Sessions and worktrees get both; `SessionInfo.title`
+    already exists and is unused, and the protocol and store gain the worktree's.
+  - **Every create dialog shows the name**: new session, new worktree, workspace and project.
+    It is never blank and never required. It is filled with a dimmed suggestion that ⏎ accepts;
+    typing replaces it, and the as-typed checks and Tab fix apply as today. In UX1.9's one box
+    it is a preview line under the prompt (`→ fix-flaky-test · claude · new worktree`), and Tab
+    edits it, so the fast path gains no step.
+  - **The suggestion** comes from the best thing known: a slug of the prompt › the PR or issue
+    title › the branch › the worktree's name › `<agent>-<corvid>` (`claude-rook`, not
+    `claude-2`). It follows the prompt as you type until you edit the name, then stops. The
+    title defaults to the prompt (trimmed), else the PR or issue title, else nothing.
+  - The sidebar and header show the title when there is one and the name otherwise, with the
+    name still visible for typing. UX1.2's detail lines use the title. `ptyro rename` changes
+    the name; `ptyro retitle` (and `,` offering both) changes the title. `ptyro new`, `run` and
+    `wt new` take `--title`.
+  - *Done when:* TUI tests create a session and a worktree from a prompt, from a PR and from
+    nothing, and check the suggested name, that ⏎ accepts it, that an edited name stops
+    following the prompt, and that the title is shown. `make tui-parity` covers `retitle`.
+  - *Done (2026-10-22):* `names::from_text` and `names::corvid`; store v5 (`title` on sessions
+    and worktrees); `SessionInfo.title` now the title people read, `window_title` the program's;
+    `Retitle{addr, title, worktree}`, `ptyro retitle`, `ptyro wt retitle`, `--title` on `new`
+    and `wt new` (`run` takes none: its sessions are scripts); PR and issue worktrees take their
+    title. TUI and end-to-end tests cover prompts, nothing typed, suggestions, an edited name,
+    retitling and a restart (SPEC §2.1, §11.2h, §14.2).
+- [x] **UX1.10 Where work comes from** (R-WT-05) — M. The wizard's target step offers:
   - a pasted GitHub PR or issue URL (→ `--pr` / `--issue`);
   - an existing branch (`--existing`);
   - "take my uncommitted changes": they move from `@root` into the new worktree
     (`ptyro new --take-changes`), stashed safely if anything fails.
-- [ ] **UX1.11 Setup suggestions on first use** (R-WT-10) — S. On a project's first worktree,
+  - *Done (2026-10-22):* `WorktreeSpec.take_changes` (a copy at `refs/ptyro/taken/<name>`;
+    the main checkout is cleaned only once the changes are in), `Branches`, `work_source` in
+    the task box and the wizard. `tests/ux1.rs` moves changes and lists branches (SPEC §10.3).
+- [x] **UX1.11 Setup suggestions on first use** (R-WT-10) — S. On a project's first worktree,
   ptyro suggests what it detects:
   - lockfiles suggest a setup script (`pnpm-lock.yaml` → `pnpm install --frozen-lockfile`,
     `uv.lock` → `uv sync`, …);
   - ignored `.env*` files at the root suggest a `.worktreeinclude`.
 
   The suggestions are shown in the trust dialog and written to the local (uncommitted) project
-  config only after a yes. Never on later worktrees.
-- [ ] **UX1.12 Finish and clean up** (R-WT-06, R-WT-09) — M. A worktree's **finish** action
+  config only after a yes. Never on later worktrees. *Done (2026-10-22):*
+  `crates/ptyro-daemon/src/suggest.rs`, `ptyro project suggest`, the TUI's dialog before the first
+  worktree and `project.suggest`; the CLI asks on a terminal. Written to `.ptyro.local.toml`
+  and trusted when they're the only scripts; asked once (SPEC §10.4).
+- [x] **UX1.12 Finish and clean up** (R-WT-06, R-WT-09) — M. A worktree's **finish** action
   (row menu and inspector):
   - commit, with the agent asked for the message;
   - then PR or integrate, your choice.
@@ -1340,37 +1415,57 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
   snapshotted to `refs/ptyro/archive/<wt>` and the worktree removed (`ptyro wt archive` /
   `restore`), instead of only refusing. `gc.archive_on_merge` makes it automatic. *Done when:*
   an end-to-end test goes from finish to merged (fake `gh`) to archived and restored.
-- [ ] **UX1.13 Companion shell** (R-UX-03) — S. One key opens a shell in the selected
-  worktree, with the same profile environment, split beside the agent.
+  *Done (2026-10-22):* `crates/ptyro-daemon/src/finish.rs`; `ptyro wt finish|archive|restore|
+  archives`; `gc` offers archiving; the TUI's `F`, merged `x`, "a: archive instead" and
+  `worktree.gc`. The setting is `[worktrees] archive_on_merge` (there's no `[gc]` section).
+  `tests/m6.rs` goes from finish to a PR, merged, archived and restored; `tests/ux1.rs` keeps
+  uncommitted and untracked work through archive and restore (SPEC §10.8).
+- [x] **UX1.13 Companion shell** (R-UX-03) — S. One key opens a shell in the selected
+  worktree, with the same profile environment, split beside the agent. *Done (2026-10-22):*
+  `shell.here`, `!` after the prefix or in the sidebar, and in the row menu.
 
 ### Learn nothing up front
 
-- [ ] **UX1.14 Which-key** (R-UX-18) — S. If nothing follows the prefix within
+- [x] **UX1.14 Which-key** (R-UX-18) — S. If nothing follows the prefix within
   `[ui] which_key_delay` (400 ms; `0` turns it off), a compact menu of the next keys appears,
-  grouped and as bound. Keys typed before it appears work as today.
-- [ ] **UX1.15 Row menu** (R-UX-19) — S. `.` in the sidebar, or a right-click, opens every
+  grouped and as bound. Keys typed before it appears work as today. *Done (2026-10-22):*
+  `draw_which_key`; the event loop wakes at the deadline (SPEC §11.2h).
+- [x] **UX1.15 Row menu** (R-UX-19) — S. `.` in the sidebar, or a right-click, opens every
   action that applies to that row. For a worktree: open a session here, shell, diff, finish,
   PR, pair, run script, open in editor, archive, remove. For a session: peek, rename, restart,
   hibernate, explain, mute. It is the palette filtered to the row, and it shows each key.
-- [ ] **UX1.16 Context hints** (R-UX-28) — S. The status bar's hints follow the selection:
+  *Done (2026-10-22):* `App::row_actions` (state-aware), right-click; actions of tasks still to
+  come (finish, archive, a shell here) join as they land.
+- [x] **UX1.16 Context hints** (R-UX-28) — S. The status bar's hints follow the selection:
   blocked → `p answer`, a diff → `D review`, merged → `x clean up`, an exited session →
-  `C-r restart`.
-- [ ] **UX1.17 Errors offer the fix** (R-UX-27) — S. Audit the ~50 `toast(` calls in
+  `C-r restart`. *Done (2026-10-22):* `App::context_hint`, keys as they work where the focus
+  is.
+- [x] **UX1.17 Errors offer the fix** (R-UX-27) — S. Audit the ~50 `toast(` calls in
   `crates/ptyro-tui/src/app.rs`: none names a command to type. Each either does the obvious
   thing (UX1.6) or carries a key that does it ("not in a worktree · `N` new one").
-- [ ] **UX1.18 The palette searches everything** (R-UX-09) — S. Actions, sessions, worktrees,
+  *Done (2026-10-22):* `toast_offer` with `Then::{Run, Send, Edit}` behind `C-q u`; the daemon's
+  CLI hints map to actions (`SUGGESTED`); a test fails on any toast that names a command (SPEC
+  §11.2h). The copy-mode "set up `ptyro shell-init`" hint becomes UX1.20's offer.
+- [x] **UX1.18 The palette searches everything** (R-UX-09) — S. Actions, sessions, worktrees,
   projects, `[scripts.*]` and recipes in one fuzzy list, each with its key, so the palette
-  teaches the keys.
-- [ ] **UX1.19 First run and home in the TUI** (R-UX-25) — M.
+  teaches the keys. *Done (2026-10-22):* worktrees, projects and the context worktree's scripts
+  (fetched as it opens); recipes join with UX1.21's recipe runner.
+- [x] **UX1.19 First run and home in the TUI** (R-UX-25) — M.
   - No config yet: `ptyro` opens `init` as a screen. Found agents, accounts and repos are
     checkboxes, and ⏎ writes the config. CLI `ptyro init` stays as the scripted form.
   - Outside any repo with no sessions: a home screen with recent and discovered repos (⏎ opens
     one, auto-registering it), who needs you, and PRs waiting.
-- [ ] **UX1.20 Health badge** (R-UX-24) — M. The doctor's findings appear as a status-bar
+  - *Done (2026-10-22):* `crates/ptyro-tui/src/onboard.rs`; the CLI marks the TUI it opens on
+    a first session (`Options::welcome`); `H` and `first.run` any time. A TUI test ticks and
+    writes; `tests/ux1.rs` opens a fresh `ptyro` on it once (SPEC §11.2h). The terminal checks
+    and shell extras of `ptyro init` are the health badge's (UX1.20).
+- [x] **UX1.20 Health badge** (R-UX-24) — M. The doctor's findings appear as a status-bar
   badge, and a key opens them, each with a fix: add the `shell-init` line (after a yes), tmux
   options, an agent not logged in (`profile login`), broken hooks, or a newer installed binary
-  ("upgrade the daemon live? `u`").
-- [ ] **UX1.21 TUI parity gaps** — L, split as UX1.0 lists them. Today (2026-10-22) the TUI
+  ("upgrade the daemon live? `u`"). *Done (2026-10-22):* `crates/ptyro-tui/src/health.rs`: the
+  doctor in the background, the TUI's own shell-init check, `M` with a fix per finding, and
+  `run_cli` for the daemon's and integrations' commands (SPEC §11.2h).
+- [x] **UX1.21 TUI parity gaps** — L, split as UX1.0 lists them. Today (2026-10-22) the TUI
   cannot:
   - run a recipe, or create a change set;
   - run `gc` or archive;
@@ -1381,21 +1476,28 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
   - start `serve`.
 
   Each gets a palette action and, where it is frequent, a key or a row-menu entry.
+  *Done (2026-10-22):* the frequent ones native; the long tail through
+  `crates/ptyro-tui/src/cli_actions.rs` (a `ptyro …` template per action, its words from the
+  selection, a pick or a question, run in a split). `docs/tui-parity.md` has no gaps, and the
+  check is strict by default now (SPEC §11.2h).
 - [ ] **UX1.22 Interactive tour** (R-UX-26) — S. `ptyro tour` (and the first run's last step)
   does the steps with a fake agent in a throwaway repo: new task, answer a prompt, review the
   diff, finish. It replaces the pages.
 
 ### Sidebar
 
-- [ ] **UX1.7 Drag to resize the sidebar** — S. SPEC §11 says the sidebar is resizable, but
+- [x] **UX1.7 Drag to resize the sidebar** — S. SPEC §11 says the sidebar is resizable, but
   today only `[ui] sidebar_width` sets it. Divider drag (M2.15) covers splits between panes
   only. Dragging the sidebar's right edge sets the width, kept within 12–80 and saved with the
   workspace's view like the rest of the layout.
-- [ ] **UX1.8 Sidebar width keys** — S. With the sidebar focused, `<` / `>` narrow and widen
+- [x] **UX1.8 Sidebar width keys** — S. With the sidebar focused, `<` / `>` narrow and widen
   it a column at a time. These match the pane-resize keys after the prefix, and both are free
   in the sidebar. They share the 12–80 clamp and the saved view with the drag above.
+  *Done (2026-10-22, with UX1.7):* `App::set_sidebar_width` (12–80, the panes keep 21 columns),
+  `Drag::Sidebar`, `sidebar.wider` / `sidebar.narrower`; one TUI test covers the drag, the
+  clamps and the keys (SPEC §11.2h).
 
-Suggested order: UX1.23 → UX1.0 → UX1.1–1.2 → UX1.4–1.8 → UX1.9, UX1.17 → UX1.14–1.15 → UX1.12 →
+Suggested order: UX1.23 → UX1.0 → UX1.1–1.2 → UX1.4–1.8 → UX1.9, UX1.24, UX1.17 → UX1.14–1.15 → UX1.12 →
 UX1.19 → UX1.3 (after its spike) → the rest.
 
 ---

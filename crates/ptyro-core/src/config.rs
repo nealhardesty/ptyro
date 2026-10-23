@@ -33,6 +33,37 @@ pub struct Ui {
     pub show_ports: bool,
     /// Tint pane borders with the session's profile colour (SPEC §10.10).
     pub tint_borders: bool,
+    /// What a pane shows after you stop its session from the TUI (UX1.23).
+    pub on_stop: OnStop,
+    /// How much a sidebar row says under its first line (UX1.2).
+    pub sidebar_detail: SidebarDetail,
+    /// Milliseconds after the prefix before the menu of next keys appears (UX1.14); 0: never.
+    pub which_key_delay: u64,
+}
+
+/// `[ui] sidebar_detail`: the lines under each session row (what it wants, what it's on, its
+/// task and last reply, a shell's command).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SidebarDetail {
+    /// Every row while they all fit; else the selected, focused, blocked and attention rows.
+    #[default]
+    Auto,
+    /// One line per row.
+    Compact,
+    /// Every row, always.
+    Full,
+}
+
+/// What a pane does once you stop the session it shows (`[ui] on_stop`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OnStop {
+    /// Show the nearest other session (the stopped one stays in the sidebar).
+    #[default]
+    Next,
+    /// Keep showing the stopped session's last screen.
+    Stay,
 }
 
 impl Default for Ui {
@@ -48,6 +79,9 @@ impl Default for Ui {
             confirm_kill: true,
             show_ports: true,
             tint_borders: false,
+            on_stop: OnStop::Next,
+            sidebar_detail: SidebarDetail::Auto,
+            which_key_delay: 400,
         }
     }
 }
@@ -391,6 +425,45 @@ pub struct Config {
     pub recorder: Recorder,
     pub remote: Remote,
     pub clipboard: Clipboard,
+    pub summaries: Summaries,
+}
+
+/// A one-line summary of what a session is doing, from a small, cheap model (UX1.3, SPEC
+/// §11.2h). Off unless you turn it on: it sends a trimmed, redacted view of the session to the
+/// model's provider.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Summaries {
+    /// Summarize each agent's turn when it ends or stops to ask (`ptyro summarize` works
+    /// either way).
+    pub enabled: bool,
+    /// At most this many summaries a day for each profile (each is about $0.0007 with Haiku).
+    pub daily_cap: u32,
+    /// The summarizer: reads the prompt on stdin, prints the summary (or Claude's
+    /// `--output-format json`). It runs under the session's profile, so on its account.
+    pub command: Vec<String>,
+}
+
+impl Default for Summaries {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            daily_cap: 200,
+            command: [
+                "claude",
+                "-p",
+                "--model",
+                "haiku",
+                "--output-format",
+                "json",
+                "--strict-mcp-config",
+                "--tools",
+                "",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+        }
+    }
 }
 
 /// OSC 52 from programs in sessions (SPEC §5.7, §17).
@@ -610,6 +683,8 @@ pub struct Worktrees {
     pub stale_days: u32,
     /// Name the branch after the first prompt (until it's pushed; M3.16).
     pub auto_rename_branch: bool,
+    /// Archive a worktree when its PR merges and nothing runs in it (UX1.12).
+    pub archive_on_merge: bool,
 }
 
 impl Default for Worktrees {
@@ -622,6 +697,7 @@ impl Default for Worktrees {
             watch: true,
             stale_days: 14,
             auto_rename_branch: false,
+            archive_on_merge: false,
         }
     }
 }
@@ -662,6 +738,8 @@ pub struct Discover {
     /// Where to look for git repositories (SPEC §10.1).
     pub roots: Vec<String>,
     pub depth: u8,
+    /// Register the repository a session runs in when it isn't a project yet (UX1.5).
+    pub auto_register: bool,
 }
 
 impl Default for Discover {
@@ -669,6 +747,7 @@ impl Default for Discover {
         Self {
             roots: ["~/src", "~/dev", "~/code", "~/projects"].map(String::from).into(),
             depth: 3,
+            auto_register: true,
         }
     }
 }

@@ -180,6 +180,11 @@ const MIGRATIONS: &[M<'static>] = &[
         created_at INTEGER NOT NULL
     );",
     ),
+    // UX1.24: a title, for people to read, beside the name.
+    M::up(
+        "ALTER TABLE session ADD COLUMN title TEXT;
+    ALTER TABLE worktree ADD COLUMN title TEXT;",
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -226,6 +231,9 @@ pub struct SessionRecord {
     pub launch: Option<serde_json::Value>,
     /// The agent's conversation id (resume, SPEC §7.4).
     pub conversation: Option<String>,
+    /// Its title (UX1.24).
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 /// A trust approval (SPEC §10.5).
@@ -305,11 +313,12 @@ impl Store {
         self.spawn(move |c| {
             c.execute(
                 "INSERT INTO session (id, name, kind, argv, cwd, state, pid, daemon_run, created_at, ended_at,
-                                      profile, worktree_id, project_id, workspace, agent, script, launch, conversation_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+                                      profile, worktree_id, project_id, workspace, agent, script, launch, conversation_id, title)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
                  ON CONFLICT(id) DO UPDATE SET name = ?2, state = ?6, pid = ?7, ended_at = ?10, daemon_run = ?8,
                                                launch = COALESCE(?17, launch), argv = ?4, profile = ?11,
-                                               conversation_id = COALESCE(?18, conversation_id)",
+                                               conversation_id = COALESCE(?18, conversation_id), title = ?19,
+                                               worktree_id = ?12, project_id = ?13",
                 params![
                     r.id,
                     r.name,
@@ -329,6 +338,7 @@ impl Store {
                     r.script,
                     r.launch.as_ref().map(serde_json::Value::to_string),
                     r.conversation,
+                    r.title,
                 ],
             )?;
             Ok(())
@@ -499,7 +509,7 @@ impl Store {
         self.call(move |c| {
             let mut st = c.prepare(
                 "SELECT id, name, kind, argv, cwd, state, pid, daemon_run, created_at, ended_at,
-                        profile, worktree_id, project_id, workspace, agent, script, launch, conversation_id
+                        profile, worktree_id, project_id, workspace, agent, script, launch, conversation_id, title
                  FROM session ORDER BY created_at DESC LIMIT ?1",
             )?;
             let mut rows = st.query(params![limit as i64])?;
@@ -525,6 +535,7 @@ impl Store {
                     script: r.get(15)?,
                     launch: launch.map(|l| serde_json::from_str(&l)).transpose()?,
                     conversation: r.get(17)?,
+                    title: r.get(18)?,
                 });
             }
             Ok(out)
@@ -615,7 +626,7 @@ impl Store {
             }
             let mut st = c.prepare(
                 "SELECT w.id, w.project_id, p.slug, w.name, w.path, w.branch, w.base, w.is_root, w.profile, w.state,
-                        w.port_base, w.port_count, w.created_at, w.removed_at, w.last_used_at
+                        w.port_base, w.port_count, w.created_at, w.removed_at, w.last_used_at, w.title
                  FROM worktree w JOIN project p ON p.id = w.project_id
                  WHERE w.state != 'removed' ORDER BY w.is_root DESC, w.created_at",
             )?;
@@ -642,6 +653,7 @@ impl Store {
                     status: None,
                     locked: false,
                     pr: None,
+                    title: r.get(15)?,
                 });
             }
             let mut st = c.prepare("SELECT project_id, scope, fingerprint, approved_at FROM trust")?;
@@ -721,10 +733,11 @@ impl Store {
         self.spawn(move |c| {
             c.execute(
                 "INSERT INTO worktree (id, project_id, name, path, branch, base, is_root, profile, state,
-                                       port_base, port_count, created_at, removed_at, last_used_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                                       port_base, port_count, created_at, removed_at, last_used_at, title)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
                  ON CONFLICT(id) DO UPDATE SET name = ?3, path = ?4, branch = ?5, base = ?6, profile = ?8, state = ?9,
-                                               port_base = ?10, port_count = ?11, removed_at = ?13, last_used_at = ?14",
+                                               port_base = ?10, port_count = ?11, removed_at = ?13, last_used_at = ?14,
+                                               title = ?15",
                 params![
                     w.id,
                     w.project,
@@ -740,6 +753,7 @@ impl Store {
                     w.created_ms as i64,
                     w.removed_ms.map(|m| m as i64),
                     w.last_used_ms.map(|m| m as i64),
+                    w.title,
                 ],
             )?;
             Ok(())
@@ -831,6 +845,7 @@ mod tests {
             script: None,
             launch: Some(serde_json::json!({"argv": ["sh"]})),
             conversation: None,
+            title: Some(format!("the title of {id}")),
         }
     }
 
@@ -916,6 +931,7 @@ mod tests {
             status: None,
             locked: false,
             pr: None,
+            title: Some("Fix the login bug".into()),
         };
         s.save_worktree(wt.clone());
         s.save_trust(TrustRow {

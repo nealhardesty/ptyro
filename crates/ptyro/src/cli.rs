@@ -43,8 +43,13 @@ pub fn daemon_start(foreground: bool, spawned: bool) -> i32 {
     }
 }
 
-pub async fn run(cmd: Option<Cmd>, json_wire: bool, remote: Option<String>) -> i32 {
-    match dispatch(cmd, json_wire, remote).await {
+pub async fn run(
+    cmd: Option<Cmd>,
+    task: Vec<String>,
+    json_wire: bool,
+    remote: Option<String>,
+) -> i32 {
+    match dispatch(cmd, task, json_wire, remote).await {
         Ok(code) => code,
         Err(e) => {
             eprintln!("ptyro: {}", e.message);
@@ -76,11 +81,17 @@ impl Ctx {
     }
 }
 
-async fn dispatch(cmd: Option<Cmd>, json_wire: bool, remote: Option<String>) -> Result<i32, Error> {
+async fn dispatch(
+    cmd: Option<Cmd>,
+    task: Vec<String>,
+    json_wire: bool,
+    remote: Option<String>,
+) -> Result<i32, Error> {
     let paths = Paths::from_env().map_err(|e| Error::internal(e.to_string()))?;
     let encoding = if json_wire { Encoding::Json } else { Encoding::MsgPack };
     let ctx = Ctx { paths, encoding, remote };
     match cmd {
+        None if !task.is_empty() => start_task(&ctx, &task.join(" ")).await,
         None => default_action(&ctx).await,
         Some(Cmd::New {
             detach,
@@ -97,6 +108,8 @@ async fn dispatch(cmd: Option<Cmd>, json_wire: bool, remote: Option<String>) -> 
             yes,
             prompt,
             prompt_file,
+            title,
+            take_changes,
             pr,
             issue,
             unqueued,
@@ -137,14 +150,19 @@ async fn dispatch(cmd: Option<Cmd>, json_wire: bool, remote: Option<String>) -> 
                 override_pin,
                 yes,
                 prompt,
+                title,
+                take_changes,
                 pr,
                 issue,
                 unqueued,
                 verify,
                 lead,
                 structured,
+                welcome: false,
             };
-            let new_wt = new_wt.or_else(|| (a.pr.is_some() || a.issue.is_some()).then(String::new));
+            let new_wt = new_wt.or_else(|| {
+                (a.pr.is_some() || a.issue.is_some() || a.take_changes).then(String::new)
+            });
             match new_wt {
                 Some(wt_name) => {
                     crate::projects::new_in_new_worktree(&ctx, a, wt_name, project).await
@@ -338,6 +356,56 @@ async fn dispatch(cmd: Option<Cmd>, json_wire: bool, remote: Option<String>) -> 
                 r => Err(unexpected(r)),
             }
         }
+        Some(Cmd::Retitle { target, title }) => {
+            let c = ctx.connect(false).await.map_err(no_daemon)?;
+            let title = (!title.is_empty()).then(|| title.join(" "));
+            let cleared = title.is_none();
+            match c.request(Request::Retitle { addr: target, title, worktree: false }).await? {
+                Reply::Session { info } if cleared => eprintln!("{}: title cleared", info.name),
+                Reply::Session { info } => {
+                    eprintln!("{}: {}", info.name, info.title.unwrap_or_default())
+                }
+                Reply::Worktree { info } => eprintln!(
+                    "{}: {}",
+                    info.qualified(),
+                    info.title.unwrap_or_else(|| "title cleared".into())
+                ),
+                r => return Err(unexpected(r)),
+            }
+            Ok(0)
+        }
+        Some(Cmd::Summarize { session, json }) => {
+            let c = ctx.connect(false).await.map_err(no_daemon)?;
+            match c.request(Request::Summarize { addr: session }).await? {
+                Reply::Session { info } => {
+                    let summary = info.summary.unwrap_or_else(|| ptyro_core::session::Summary {
+                        text: String::new(),
+                        turn: info.turns,
+                        at_ms: 0,
+                    });
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&summary).unwrap_or_default());
+                    } else {
+                        println!("{}: {}", info.name, summary.text);
+                    }
+                    Ok(0)
+                }
+                r => Err(unexpected(r)),
+            }
+        }
+        Some(Cmd::Adopt { session }) => {
+            let c = ctx.connect(false).await.map_err(no_daemon)?;
+            match c.request(Request::Adopt { addr: session }).await? {
+                Reply::Session { info } => {
+                    eprintln!(
+                        "{} runs Claude as a managed session now, same conversation — attach with `ptyro attach {}`",
+                        info.name, info.name
+                    );
+                    Ok(0)
+                }
+                r => Err(unexpected(r)),
+            }
+        }
         Some(Cmd::Serve { listen, insecure, tailscale, managed }) => {
             crate::serve::run(&ctx, listen, insecure, tailscale, managed).await
         }
@@ -511,6 +579,39 @@ async fn most_recent(client: &Client) -> Result<Option<SessionInfo>, Error> {
     Ok(live.or_else(|| all.last().cloned()))
 }
 
+/// `ptyro "fix the flaky test"` (UX1.9): the default agent with that as its first prompt, in a
+/// new worktree named after it when you're in a git repository (registered on the way), else
+/// right here; then attach. One word alone is more likely a mistyped command than a task.
+async fn start_task(ctx: &Ctx, task: &str) -> Result<i32, Error> {
+    if !task.trim().contains(char::is_whitespace) {
+        return Err(Error::invalid(format!(
+            "unknown command {task:?} (`ptyro --help` lists them; to start a task, give it in words: ptyro \"fix the flaky test\")"
+        )));
+    }
+    let cwd = current_dir()?;
+    let config = ptyro_core::config::Config::load(&ptyro_core::config::Config::path(&ctx.paths))
+        .unwrap_or_default();
+    let a = NewArgs {
+        agent: Some(ptyro_agents::default_agent(&config)),
+        prompt: Some(task.trim().to_owned()),
+        cwd: Some(cwd.clone()),
+        ..NewArgs::default()
+    };
+    let in_repo = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&cwd)
+        .args(["rev-parse", "--git-dir"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if in_repo {
+        crate::projects::new_in_new_worktree(ctx, a, String::new(), None).await
+    } else {
+        new(ctx, a).await
+    }
+}
+
 async fn default_action(ctx: &Ctx) -> Result<i32, Error> {
     let client = ctx.connect(true).await?;
     match most_recent(&client).await? {
@@ -518,7 +619,7 @@ async fn default_action(ctx: &Ctx) -> Result<i32, Error> {
         Some(_) => attach(ctx, client, None, false, false).await,
         None => {
             drop(client);
-            new(ctx, NewArgs::default()).await
+            new(ctx, NewArgs { welcome: true, ..NewArgs::default() }).await
         }
     }
 }
@@ -537,6 +638,12 @@ pub struct NewArgs {
     pub override_pin: bool,
     pub yes: bool,
     pub prompt: Option<String>,
+    /// Its title (UX1.24).
+    pub title: Option<String>,
+    /// A new worktree taking the main checkout's changes (UX1.10).
+    pub take_changes: bool,
+    /// `ptyro` with nothing running: the TUI opens on the first run or home (UX1.19).
+    pub welcome: bool,
     pub pr: Option<u32>,
     pub issue: Option<String>,
     pub unqueued: bool,
@@ -630,6 +737,7 @@ pub async fn new(ctx: &Ctx, a: NewArgs) -> Result<i32, Error> {
         env: client_env(),
         size,
         prompt: a.prompt,
+        title: a.title,
         unqueued: a.unqueued,
         verify: a.verify,
         lead: a.lead,
@@ -651,7 +759,8 @@ pub async fn new(ctx: &Ctx, a: NewArgs) -> Result<i32, Error> {
     }
     let info = session_of(reply)?;
     if attaching {
-        return attach(ctx, client, Some(info), false, false).await;
+        let tui = ptyro_tui::Options { welcome: a.welcome, ..Default::default() };
+        return attach_with(ctx, client, Some(info), tui).await;
     }
     if a.json {
         println!("{}", serde_json::to_string_pretty(&info).unwrap_or_default());
@@ -807,6 +916,16 @@ if [ -n "$PTYRO" ] && [ -z "$__ptyro_integrated" ]; then
   }
   PROMPT_COMMAND="__ptyro_prompt${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
   PS1="$PS1\[\e]133;B\a\]"
+  # bash 4.4+: PS0 runs as a command starts; it sends the command line along.
+  if [ "${BASH_VERSINFO[0]}" -gt 4 ] || { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]}" -ge 4 ]; }; then
+    __ptyro_preexec() {
+      local c
+      c=$(HISTTIMEFORMAT= builtin history 1)
+      c="${c#*[0-9] }"; c="${c# }"; c="${c//[[:cntrl:]]/ }"
+      printf '\e]133;C;cmdline=%s\a' "${c:0:200}"
+    }
+    PS0='$(__ptyro_preexec)'"$PS0"
+  fi
 fi
 "#
         }
@@ -819,7 +938,10 @@ if [[ -n $PTYRO && -z $__ptyro_integrated ]]; then
     local s=$?
     printf '\e]133;D;%s\a\e]7;file://%s%s\a\e]133;A\a' "$s" "$HOST" "$PWD"
   }
-  __ptyro_preexec() { printf '\e]133;C\a' }
+  __ptyro_preexec() {
+    local c=${1//[[:cntrl:]]/ }
+    printf '\e]133;C;cmdline=%s\a' "${c[1,200]}"
+  }
   add-zsh-hook precmd __ptyro_precmd
   add-zsh-hook preexec __ptyro_preexec
   PS1="$PS1%{"$'\e]133;B\a'"%}"
@@ -834,7 +956,7 @@ if set -q PTYRO; and not set -q __ptyro_integrated
     printf '\e]133;D;%s\a\e]7;file://%s%s\a\e]133;A\a' $status (hostname) $PWD
   end
   function __ptyro_preexec --on-event fish_preexec
-    printf '\e]133;C\a'
+    printf '\e]133;C;cmdline=%s\a' (string replace -ra '[[:cntrl:]]' ' ' -- "$argv[1]" | string sub -l 200)
   end
 end
 "#

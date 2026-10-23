@@ -493,6 +493,7 @@ async fn forward_events(
             // Workspace, project and worktree news goes to every watcher.
             DomainEvent::ProjectUpdated { .. }
             | DomainEvent::ProjectRemoved { .. }
+            | DomainEvent::ProjectAutoAdded { .. }
             | DomainEvent::WorkspaceUpdated { .. }
             | DomainEvent::WorkspaceRemoved { .. }
             | DomainEvent::WorktreeUpdated { .. }

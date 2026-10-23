@@ -92,9 +92,15 @@ const STARTER: &str = r#"# ptyro configuration. Every key is optional; see SPEC 
 # sidebar = true
 # sidebar_width = 30
 # mouse = true
+# on_stop = "next"         # after you stop a pane's session: next (its neighbour) | stay
+# sidebar_detail = "auto"  # lines under each session row: auto | compact | full
+# which_key_delay = 400    # ms after the prefix before the menu of next keys; 0: never
 
 [daemon]
 # scrollback_lines = 5000
+
+[summaries]
+# enabled = true           # a `≈` line after each agent turn, from a small model on its account
 
 [keys]
 # Rebind after-prefix keys: "key" = "action [args]"; "none" unbinds. `C-q ?` lists actions.

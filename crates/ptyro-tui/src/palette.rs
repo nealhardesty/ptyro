@@ -27,6 +27,14 @@ pub enum Target {
     Editor(String),
     Script(String),
     Path(std::path::PathBuf),
+    /// Wizard: there's no project here; pick one to add, then carry on (UX1.6).
+    AddProject,
+    /// Palette: go to this project in the sidebar (UX1.18).
+    Project(String),
+    /// Palette: run this lifecycle or run script in this worktree.
+    RunScript(String, String),
+    /// Health: fix finding N (UX1.20).
+    Fix(usize),
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +75,12 @@ impl Palette {
         };
         p.refilter();
         p
+    }
+
+    /// More items, arrived after it opened (a project's scripts, UX1.18); the query applies.
+    pub fn extend(&mut self, more: impl IntoIterator<Item = Item>) {
+        self.items.extend(more);
+        self.refilter();
     }
 
     pub fn item(&self, i: usize) -> &Item {

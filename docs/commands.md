@@ -28,19 +28,23 @@ Conventions:
 | Command | Does |
 |---|---|
 | `ptyro` | attach to the most recent session (or start a shell session) |
+| `ptyro "TASK…"` | the default agent on that task, in a new worktree named after it (here, outside a repository); then attach |
 | `ptyro new [-d] [-n NAME] [-C DIR] [--size COLSxROWS] [--json] [-- CMD…]` | start a session; attaches unless `-d`. No `--agent` means your shell, or `CMD` |
 | `ptyro new … --agent A[@PROFILE] [--profile P] [--override-pin] [-y]` | start an agent: `claude`, `codex`, `gemini`, `opencode`, or one from `[agents]` |
-| `ptyro new … --wt W \| --new-wt [NAME] [--project P] \| --pr N\|URL \| --issue N\|URL` | where: an existing worktree, a new one, one on a PR's branch, or one for an issue |
-| `ptyro new … --prompt TEXT\|@SNIPPET \| --prompt-file F` | the first prompt, typed once the agent's input box is really there |
+| `ptyro new … --wt W \| --new-wt [NAME] [--project P] \| --pr N\|URL \| --issue N\|URL \| --take-changes` | where: an existing worktree, a new one, one on a PR's branch, one for an issue, or one that takes the main checkout's uncommitted changes |
+| `ptyro new … --prompt TEXT\|@SNIPPET \| --prompt-file F` · `--title T` | the first prompt, typed once the agent's input box is really there · its title (default: the prompt; the name comes from it too) |
 | `ptyro new … --verify CHECK` · `--structured` · `--unqueued` | verified-done · drive it over its protocol (chat view) · skip the review queue's hold |
 | `ptyro new … --lead [--max-workers N] [--lead-agent A]` | a lead agent with `ptyro mcp` (default 4 workers) |
 | `ptyro attach [SESSION] [-w WS] [--raw] [--view-only]` | open the TUI on a session; `--raw`: that session only, no chrome |
 | `ptyro list` (alias `ls`) `[-a] [--status S] [-p P] [-w WS] [--json]` | sessions: where they run, profile, ports; `-a` adds earlier daemon runs |
 | `ptyro stop SESSIONS…` | stop gracefully, keeping them listed (agents finish their turn first) |
 | `ptyro kill SESSIONS… [--keep] [-s N]` (a signal number, e.g. `-s 9`) | stop (HUP → TERM → KILL) and remove |
-| `ptyro restart SESSIONS…` / `rm SESSIONS…` / `rename SESSION NAME` | run exited sessions again / forget them / rename |
+| `ptyro restart SESSIONS…` / `rm SESSIONS…` / `rename SESSION NAME` | run exited sessions again / forget them / rename (the address) |
+| `ptyro retitle SESSION [TITLE…]` | change its title, what people read (none: clear it) |
 | `ptyro resume SESSIONS…` / `hibernate SESSIONS…` | relaunch dormant agents / stop idle ones, keeping them resumable |
 | `ptyro convert SESSION [--to tui\|structured] [--force]` | switch an agent between its own TUI and structured mode, same conversation |
+| `ptyro summarize SESSION [--json]` | what it's doing, in a line, from a small model (`[summaries] command`, on its profile's account); works with summaries off |
+| `ptyro adopt SESSION` | the Claude you started by hand in a shell session becomes a managed session (hooks, hibernation, mail), same conversation |
 
 ## Scripting
 
@@ -71,11 +75,12 @@ Conventions:
 
 | Command | Does |
 |---|---|
-| `ptyro project add [PATH] [--workspace W]` / `ls` / `show [P]` / `rm P` | register / list / inspect / forget repositories |
+| `ptyro project add [PATH] [--workspace W]` / `ls` / `show [P]` / `rm P` | register (to the workspace the TUI showed last, unless `--workspace`) / list / inspect / forget repositories. The repository a session runs in registers by itself; `rm` keeps it from doing so again |
 | `ptyro project trust [P] [-y]` / `untrust [P]` | review and trust a project's scripts |
 | `ptyro project config [P] [--explain] [--json]` | the effective project config, and where each value came from |
 | `ptyro project discover [--refresh]` · `pin P PROFILE` · `unpin P` | find repos under `[discover] roots` · pin a project to a profile |
-| `ptyro wt new [NAME] [-p P] [--base REF] [--branch B [--existing]] [--pr N\|URL \| --issue N\|URL] [-a A [--prompt P]] [--profile P] [--no-setup] [--no-fetch] [--attach]` | create a worktree (optionally with an agent) |
+| `ptyro project suggest [P] [--apply\|--decline] [--json]` | what the project needs (a setup script from its lockfile, `.env` files to copy); `--apply` writes it to `.ptyro.local.toml`. A first worktree asks on its own |
+| `ptyro wt new [NAME] [-p P] [--base REF] [--branch B [--existing]] [--pr N\|URL \| --issue N\|URL \| --take-changes] [-a A [--prompt P]] [--title T] [--profile P] [--no-setup] [--no-fetch] [--attach]` | create a worktree (optionally with an agent); `--take-changes` moves the main checkout's uncommitted work into it |
 | `ptyro wt ls [--project P]` / `status [W]` / `log [W]` | list worktrees / repository status / commits since the base |
 | `ptyro wt diff [W] [--against base\|upstream\|last-turn\|head] [--stat]` | a worktree's changes |
 | `ptyro wt commit [W] -m MSG [-a] [-- FILES…]` / `--ask-agent` | commit as the worktree's profile / ask its agent to |
@@ -84,7 +89,10 @@ Conventions:
 | `ptyro wt run W [SCRIPT] [--attach]` / `open [W] [-e EDITOR]` | run a lifecycle script / open in an editor |
 | `ptyro wt rm W [--force [-y]] [--stop-sessions] [--keep-branch]` | remove safely: refuses, listing what would be lost |
 | `ptyro wt lock\|unlock W` / `rename-branch W [NEW]` | manual lock / rename the branch (never once pushed) |
-| `ptyro gc [--dry-run] [--json]` | stale worktrees (gone, merged, unused); asks before removing each |
+| `ptyro wt retitle W [TITLE…]` | change a worktree's title (`wt new --title`, else its prompt, PR or issue) |
+| `ptyro wt finish [W] [--integrate]` | commit what's left (its agent asked to; else its title is the message), then a PR, or integrate |
+| `ptyro wt archive [W] [--stop-sessions]` / `restore [P/]NAME` / `archives [-p P] [--json]` | keep its branch and a snapshot of its files, remove the checkout (never loses work) / bring it back as it was / list them |
+| `ptyro gc [--dry-run] [--json]` | stale worktrees (gone, merged, unused); asks for each: archive, remove or skip |
 | `ptyro ws ls\|new\|set\|rm\|rename\|add\|remove …` | workspaces: `new NAME [--profile P] [--notify all\|badge\|mute]`, `add WS PROJECT` |
 | `ptyro profile ls\|show\|new\|rm\|rename\|env\|login\|sync\|detect\|doctor …` | profiles; `detect [--apply]` finds your existing multi-account setups; edits keep your config's comments |
 

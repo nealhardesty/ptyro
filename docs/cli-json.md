@@ -37,7 +37,9 @@ Conventions:
 | `created_ms`, `ended_ms` | number, number? | |
 | `viewers` | number | clients showing it |
 | `controller` | string? | client id that sizes it |
-| `title`, `foreground` | string? | window title, foreground process name |
+| `title` | string? | what people read: its own (`--title`, `retitle`), else its first prompt, else the window title |
+| `window_title` | string? | the window title its program set |
+| `foreground` | string? | foreground process name (argv[0] when the kernel's name is a version, like Claude's) |
 | `profile` | string | fixed for its lifetime |
 | `worktree`, `project`, `workspace` | string? | worktree id, project id, home workspace name |
 | `agent` | string? | configured agent name |
@@ -58,6 +60,11 @@ Conventions:
 | `last_output_ms` | number? | when its screen last changed |
 | `held` | bool, missing when false | its permission prompt is held for an exact answer from any client (M9.5) |
 | `structured` | string, missing when not structured | a structured session's protocol: `stream-json`, `app-server`, `acp` or `opencode` (M10) |
+| `task` | string? | the first prompt typed into it, trimmed to 200 characters |
+| `last_reply` | string? | the agent's last message once its turn ended, trimmed to 300 characters |
+| `command` | `{text?, started_ms, ended_ms?, exit?}`? | a shell's running (no `ended_ms`) or last command, from `ptyro shell-init` |
+| `summary` | `{text, turn, at_ms}`? | a small model's line on it (`[summaries]`): made after turn `turn`, at `at_ms` |
+| `inner_agent` | string? | the adapter of an agent started by hand in this shell, while it's in the foreground (its status is then read off its screen) |
 
 `Status`: `{status, kind?, detail?, confidence, source, since_ms, progress?}`.
 - `status` is `unknown`, `starting`, `working`, `blocked`, `idle`, `done` or `error`.
@@ -143,7 +150,7 @@ A structured session's transcript, oldest first. `ChatItem` is `{id, at_ms, rev,
 - `ptyro project discover --json` → `[path]`
 - `ptyro ws ls --json` → `[{id, name, profile, notify, projects: [project id], created_ms}]`
 - `ptyro wt ls --json`, `wt status W --json` → Worktree:
-  - fields: `{id, project, project_slug, name, path, branch?, base?, is_root, state, locked, profile?, ports?: {base, count}, created_ms, last_used_ms?, removed_ms?, status?}`;
+  - fields: `{id, project, project_slug, name, path, branch?, base?, is_root, state, locked, profile?, ports?: {base, count}, created_ms, last_used_ms?, removed_ms?, status?, title?}` (`title`: what it's for, for people to read);
   - `status` is `{head, branch, upstream?, ahead, behind, base_ahead, base_behind, staged, modified, untracked, conflicts, insertions, deletions, subject, at_ms}`.
 - `ptyro wt new … --json` → `{info: Worktree, setup?: Session, agent?: Session, agent_pending, untrusted?, notes}`
 - `ptyro gc --json` → `[{worktree: Worktree, reasons: [string]}]`

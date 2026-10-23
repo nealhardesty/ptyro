@@ -193,6 +193,12 @@ mod tests {
             run: None,
             held: false,
             structured: None,
+            task: None,
+            last_reply: None,
+            command: None,
+            inner_agent: None,
+            summary: None,
+            window_title: None,
         }
     }
 
@@ -215,6 +221,7 @@ mod tests {
             status: None,
             locked: false,
             pr: None,
+            title: None,
         }
     }
 

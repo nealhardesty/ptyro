@@ -16,10 +16,12 @@ ARGS ?=
 NAME ?=
 SIZE ?= 100x30
 FIXTURES := crates/ptyro-term/tests/fixtures
+# For `make tui-parity`: 0 lists the gaps docs/tui-parity.md has instead of failing on them.
+STRICT ?= 1
 
 .DEFAULT_GOAL := help
 .PHONY: help rust-install build release install test fmt fmt-check lint deny doc check ci clean tools \
-        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean orchestrate-demo changeset-demo verify-claude verify-structured
+        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean orchestrate-demo changeset-demo verify-claude verify-structured tui-parity
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -52,6 +54,9 @@ lint: ## Clippy with warnings as errors
 
 deny: ## License/advisory/source checks (needs `make tools`)
 	$(CARGO) deny check
+
+tui-parity: ## Check every CLI command has a TUI path or a waiver (docs/tui-parity.md); STRICT=0 only lists gaps
+	PTYRO_PARITY_STRICT=$(STRICT) $(CARGO) test -p ptyro --bin ptyro parity -- --nocapture
 
 doc: ## Build API docs
 	$(CARGO) doc --workspace --no-deps

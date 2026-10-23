@@ -41,7 +41,9 @@ pub struct Daemon {
     /// The session most recently focused in any TUI (`@focused`).
     focused: Mutex<Option<SessionId>>,
     /// Views saved while the store is unavailable.
-    views: Mutex<BTreeMap<String, serde_json::Value>>,
+    pub(crate) views: Mutex<BTreeMap<String, serde_json::Value>>,
+    /// Repository roots never to register on their own (UX1.5).
+    pub(crate) declined: Mutex<std::collections::HashSet<std::path::PathBuf>>,
     /// Workspaces, projects, worktrees and trust (SPEC §14.2), mirrored to the store.
     pub registry: Mutex<Registry>,
     /// Resolved secrets kept for `secret_ttl` (memory only, SPEC §10.10).
@@ -173,6 +175,7 @@ impl Daemon {
             config: RwLock::new(config),
             focused: Mutex::new(None),
             views: Mutex::new(BTreeMap::new()),
+            declined: Mutex::new(std::collections::HashSet::new()),
             registry: Mutex::new(registry),
             secrets: Mutex::new(HashMap::new()),
             status_tx,
@@ -371,6 +374,7 @@ impl Daemon {
                 adapter,
                 conversation: r.conversation.clone(),
                 ended_ms: r.ended_ms,
+                title: r.title.clone(),
                 structured: r
                     .launch
                     .as_ref()
@@ -605,8 +609,16 @@ impl Daemon {
             return Err(Error::invalid(format!("--profile {a} contradicts the agent's @{b}")));
         }
         let explicit = spec.profile.clone().or(agent_profile);
+        // The repository it starts in becomes a project, so it shows in the sidebar (UX1.5).
+        if spec.worktree.is_none() {
+            self.auto_register(&spec.cwd, spec.workspace.as_deref()).await;
+        }
         let target = self.target(spec.worktree.as_deref(), &spec.cwd)?;
-        let cwd = target.as_ref().map_or_else(|| spec.cwd.clone(), |(w, _)| w.path.clone());
+        // A worktree by address starts at its root; a directory inside one stays where asked.
+        let cwd = match (&spec.worktree, &target) {
+            (Some(_), Some((w, _))) => w.path.clone(),
+            _ => spec.cwd.clone(),
+        };
         if !cwd.is_dir() {
             return Err(Error::invalid(format!("not a directory: {}", cwd.display())));
         }
@@ -643,6 +655,8 @@ impl Daemon {
             (None, false) => (spec.argv.clone(), SessionKind::Command),
         };
         let id = SessionId::new();
+        // What it's for (UX1.24): `--title`, else the prompt it starts with.
+        let wording = spec.title.clone().or_else(|| spec.prompt.clone());
         let name = match spec.name {
             Some(n) => {
                 names::validate(&n).map_err(Error::invalid)?;
@@ -651,10 +665,13 @@ impl Daemon {
                 }
                 n
             }
-            // Agents are named after themselves (`claude`, `claude-2`): under a worktree in the
-            // sidebar that reads better than a random name.
-            None => match &agent {
-                Some(a) if names::validate(a).is_ok() => self.free_name(a),
+            // A name says what it's for: from its title or prompt (`fix-flaky-test`), else the
+            // agent and a corvid (`claude-rook`, never `claude-2`), else a friendly pair.
+            None => match (wording.as_deref().and_then(names::from_text), &agent) {
+                (Some(n), _) => self.free_name(&n),
+                (None, Some(a)) if names::validate(a).is_ok() => {
+                    names::corvid(id.seed(), a, |n| self.name_taken(n))
+                }
                 _ => names::friendly(id.seed(), |n| self.name_taken(n)),
             },
         };
@@ -689,9 +706,10 @@ impl Daemon {
                 "--structured drives an agent over its protocol: give it --agent",
             ));
         }
+        let prompt_text = prompt.clone();
         let start = agent.map(|name| crate::launch::AgentStart {
             name,
-            resume: None,
+            resume: spec.resume.clone(),
             prompt,
             command: None,
             mcp: spec.lead.is_some() || spec.mcp,
@@ -711,6 +729,12 @@ impl Daemon {
                 agent: start,
             })
             .await?;
+        // Its title: `--title`, else the prompt (a snippet's text, not its `@name`).
+        let title = spec.title.clone().or(prompt_text).map(|t| ptyro_core::session::brief(&t, 120));
+        if title.is_some() {
+            s.meta.lock().expect("meta").title = title;
+            s.save(None);
+        }
         match verify {
             Some(check) => self.set_verify(&s, Some(check), None)?,
             None => self.auto_verify(&s),
@@ -719,6 +743,23 @@ impl Daemon {
             self.lead_start(&s, Some(p));
         }
         Ok(s)
+    }
+
+    /// `Retitle` (UX1.24): a session's title, or a worktree's. Free text, at most 120
+    /// characters; empty or `None` clears it (a session then shows its window title).
+    fn retitle(&self, addr: &str, title: Option<String>, worktree: bool) -> Result<Reply, Error> {
+        let title = title.map(|t| ptyro_core::session::brief(&t, 120)).filter(|t| !t.is_empty());
+        if !worktree {
+            let s = self.resolve(addr)?;
+            s.meta.lock().expect("meta").title = title;
+            s.save(None);
+            let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(&s) });
+            return Ok(Reply::Session { info: self.info(&s) });
+        }
+        let mut w = self.find_worktree(addr)?;
+        w.title = title;
+        self.put_worktree(w.clone());
+        Ok(Reply::Worktree { info: w })
     }
 
     /// Run an exited session's command again in place: same id, name, cwd, size and profile, new
@@ -1110,6 +1151,9 @@ impl Daemon {
             Request::Convert { addr, structured, force } => {
                 self.convert(&addr, structured, force).await
             }
+            Request::Adopt { addr } => self.adopt(&addr).await,
+            Request::Retitle { addr, title, worktree } => self.retitle(&addr, title, worktree),
+            Request::Summarize { addr } => self.summarize_now(&addr).await,
             Request::ChatGet { addr } => {
                 let s = self.resolve(&addr)?;
                 let st = s.structured.as_ref().ok_or_else(|| {

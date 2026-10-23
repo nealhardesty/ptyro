@@ -101,6 +101,25 @@ fn on_screen(screen: &str) -> Option<Signal> {
     None
 }
 
+/// The conversation Claude last wrote in `cwd`: the newest transcript under
+/// `<config dir>/projects/<cwd, every non-alphanumeric a dash>/` (`/Users/me/dev/x` →
+/// `-Users-me-dev-x`) [verified 2026-10-22, Claude Code 2.1.309]. Adopting a Claude started by
+/// hand resumes it (UX1.4).
+pub fn latest_conversation(config_dir: &std::path::Path, cwd: &std::path::Path) -> Option<String> {
+    let slug: String = cwd
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
+        .collect();
+    std::fs::read_dir(config_dir.join("projects").join(slug))
+        .ok()?
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "jsonl"))
+        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+        .max_by_key(|(t, _)| *t)
+        .and_then(|(_, p)| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+}
+
 /// Quote a path for a hook `command` (run by a shell).
 pub fn shell_word(s: &str) -> String {
     if s.chars().all(|c| c.is_ascii_alphanumeric() || "/._-+:@".contains(c)) {
@@ -263,6 +282,27 @@ impl Adapter for Claude {
         on_screen(screen)
     }
 
+    fn screen_status(&self, screen: &str) -> Option<Signal> {
+        if let Some(s) = on_screen(screen) {
+            return Some(s);
+        }
+        if screen.contains("Do you want to proceed?") || screen.contains("Do you want to make this")
+        {
+            // The dialog's first line names the tool: "Bash command", "Edit file".
+            let what = screen
+                .lines()
+                .map(|l| l.trim_matches(['│', ' ', '╭', '╰', '─']))
+                .find(|l| l.ends_with("command") || l.ends_with("file"))
+                .map(str::to_owned);
+            return Some(Signal::blocked("permission", what));
+        }
+        Some(if screen.to_lowercase().contains("esc to interrupt") {
+            Signal::status(AgentStatus::Working)
+        } else {
+            Signal::status(AgentStatus::Idle)
+        })
+    }
+
     fn answer(&self, d: Decision) -> Option<Vec<u8>> {
         // The permission dialog: 1 Yes · 2 Yes, don't ask again · Esc No (SPEC §20.1).
         Some(match d {
@@ -299,6 +339,38 @@ mod tests {
     use super::*;
     use ptyro_core::config::AgentDef;
     use std::path::Path;
+
+    #[test]
+    fn a_hookless_claude_s_screen_says_working_blocked_or_idle() {
+        let c = Claude;
+        let st = |screen: &str| match c.screen_status(screen) {
+            Some(Signal::Status { status, kind, detail, .. }) => (status, kind, detail),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(st("✻ Pondering… (esc to interrupt · 12s)").0, AgentStatus::Working);
+        assert_eq!(st("╭──╮\n│ > │\n╰──╯\n  ? for shortcuts").0, AgentStatus::Idle);
+        let (s, kind, what) =
+            st("│ Bash command │\n│   npm install │\n│ Do you want to proceed? │\n│ ❯ 1. Yes │");
+        assert_eq!(
+            (s, kind.as_deref(), what.as_deref()),
+            (AgentStatus::Blocked, Some("permission"), Some("Bash command"))
+        );
+        assert_eq!(st("Do you trust the files in this folder?").0, AgentStatus::Blocked);
+    }
+
+    #[test]
+    fn the_latest_conversation_is_the_newest_transcript_for_the_directory() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join("projects/-Users-me-dev-my-repo");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("old-id.jsonl"), "{}").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(dir.join("new-id.jsonl"), "{}").unwrap();
+        std::fs::write(dir.join("notes.txt"), "").unwrap();
+        let cwd = Path::new("/Users/me/dev/my_repo");
+        assert_eq!(latest_conversation(home.path(), cwd).as_deref(), Some("new-id"));
+        assert_eq!(latest_conversation(home.path(), Path::new("/elsewhere")), None);
+    }
 
     fn fixture(name: &str) -> Value {
         let p = Path::new(env!("CARGO_MANIFEST_DIR"))

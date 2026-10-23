@@ -131,6 +131,13 @@ pub trait Adapter: Send + Sync {
         let _ = screen;
         None
     }
+    /// The status the screen shows, for an agent started by hand in a shell session, so with
+    /// none of ptyro's hooks (UX1.4): working, blocked on a dialog, else idle. Low confidence;
+    /// `None` when this agent's screen says nothing ptyro can read.
+    fn screen_status(&self, screen: &str) -> Option<Signal> {
+        let _ = screen;
+        None
+    }
     /// Whether the screen shows the input box (prompt delivery fallback, SPEC §8.2/§8.4).
     fn ready(&self, screen: &str) -> bool {
         let _ = screen;

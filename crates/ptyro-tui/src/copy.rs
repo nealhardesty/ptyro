@@ -471,7 +471,7 @@ impl CopyMode {
                     self.note = Some(if self.prompts.iter().any(|p| *p) {
                         "no more prompts".into()
                     } else {
-                        "no prompt marks: set up `ptyro shell-init`".into()
+                        "no prompt marks: C-q M sets up shell integration".into()
                     });
                     break;
                 }

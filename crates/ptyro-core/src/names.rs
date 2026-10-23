@@ -42,6 +42,45 @@ pub fn friendly(seed: u128, taken: impl Fn(&str) -> bool) -> String {
     (2..).map(|k| format!("{base}-{k}")).find(|n| !taken(n)).expect("infinite")
 }
 
+/// `claude-rook`: `prefix` and a corvid, not `claude-2` (UX1.24). Falls back to
+/// [`friendly`]'s two-word names, then numbers, when every corvid is taken.
+pub fn corvid(seed: u128, prefix: &str, taken: impl Fn(&str) -> bool) -> String {
+    let c = CORVIDS.len() as u128;
+    for i in 0..c {
+        let name = format!("{prefix}-{}", CORVIDS[((seed + i) % c) as usize]);
+        if !taken(&name) {
+            return name;
+        }
+    }
+    let base = friendly(seed, |n| taken(&format!("{prefix}-{n}")));
+    format!("{prefix}-{base}")
+}
+
+/// Words a name made from a sentence leaves out.
+const FILLER: &[&str] = &[
+    "a", "an", "the", "and", "or", "of", "in", "on", "at", "to", "for", "with", "from", "by",
+    "into", "is", "are", "be", "it", "its", "this", "that", "these", "those", "my", "our", "your",
+    "please", "can", "could", "would", "should", "you", "we", "i", "me", "so", "some", "all",
+    "just", "also",
+];
+
+/// A name from free text (a prompt, a PR's title): its first three meaningful words, slugged.
+/// `"Fix the flaky test in tests/api.rs"` → `fix-flaky-test`. `None` when nothing is left.
+pub fn from_text(text: &str) -> Option<String> {
+    let lower = text.to_lowercase();
+    let words: Vec<&str> = lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty() && !FILLER.contains(w))
+        .take(3)
+        .collect();
+    let mut name = words.join("-");
+    if name.len() > 32 {
+        name.truncate(32);
+        name = name.trim_end_matches('-').to_owned();
+    }
+    validate(&name).is_ok().then_some(name)
+}
+
 /// A character a name may hold.
 pub fn allowed(c: char) -> bool {
     c.is_ascii_lowercase() || c.is_ascii_digit() || "._-".contains(c)
@@ -99,6 +138,30 @@ pub fn tidy(raw: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn names_from_what_its_for() {
+        assert_eq!(
+            from_text("Fix the flaky test in tests/api.rs").as_deref(),
+            Some("fix-flaky-test")
+        );
+        assert_eq!(from_text("please add --json to `ls`").as_deref(), Some("add-json-ls"));
+        assert_eq!(from_text("#12 Users get a tier: free or pro").as_deref(), Some("12-users-get"));
+        assert_eq!(from_text("the a an"), None, "nothing meaningful left");
+        assert_eq!(from_text("12345"), None, "all digits isn't a name");
+        assert_eq!(from_text("日本語のテスト"), None);
+        let long = from_text("supercalifragilisticexpialidocious antidisestablishment").unwrap();
+        assert!(long.len() <= 32 && !long.ends_with('-'), "{long}");
+        // An agent and a corvid, never `claude-2`.
+        let taken = ["claude-rook".to_owned()];
+        let n = corvid(0, "claude", |n| taken.iter().any(|t| t == n));
+        assert!(n.starts_with("claude-") && n != "claude-rook", "{n}");
+        let all = |n: &str| n.split('-').count() == 2;
+        assert!(
+            corvid(3, "claude", all).split('-').count() > 2,
+            "every corvid taken: a longer name"
+        );
+    }
 
     #[test]
     fn avoids_taken_names() {

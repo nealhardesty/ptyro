@@ -84,22 +84,38 @@ session keeps running.
 
 ```bash
 cd ~/dev/myrepo
-ptyro project add       # once per repository
 ptyro                   # open the TUI (a shell session to start with)
 ```
 
-Every key starts with the **prefix**, `Ctrl-Q` (or `Ctrl-Space`). `Ctrl-Q ?` lists the keys;
-`ptyro tour` walks you through them.
+The very first time, with no config yet, ptyro shows what it found (your agents, the accounts in
+your shell setup, your repositories) as a list to tick, and writes the config from that. Outside a
+repository, it opens **home**: who needs you, PRs, recent projects and repositories found, each a
+`⏎` away from a task (`Ctrl-Q H` brings it back).
+
+The repository you're in becomes a **project** by itself, so it shows in the sidebar ready for
+worktrees. The status bar says so, and `Ctrl-Q u` undoes it (it then stays out until you add
+it). `Ctrl-Q P` adds another repository; `[discover] auto_register = false` turns this off.
+
+Every key starts with the **prefix**, `Ctrl-Q` (or `Ctrl-Space`). Pause after it and a menu of
+the next keys appears; `Ctrl-Q ?` lists them all, and `ptyro tour` walks you through them. The
+status bar says what you'd do next with what's selected (`C-q p answer it`).
 
 **2. Detach and come back.** Press `Ctrl-Q d`. Everything keeps running in the daemon. Run
 `ptyro` again and you're back on the same screen.
 
-**3. An agent in its own worktree.** Press `Ctrl-Q n`, then `⏎` `⏎`: Claude in a fresh
-worktree on its own branch. Or from the shell, with a first prompt:
+**3. An agent on a task, in its own worktree.** Press `Ctrl-Q n`, type what it should do, and
+press `⏎`: Claude starts on it in a fresh worktree, on its own branch, named after the task
+(`fix-flaky-test`; the box shows the name before you press `⏎`, and Tab changes it). Or from
+the shell:
 
 ```bash
-ptyro new -d --agent claude --new-wt --prompt "fix the flaky test in tests/api.rs"
+ptyro "fix the flaky test in tests/api.rs"     # the same, then attach
+ptyro new -d --agent claude --new-wt --prompt "fix the flaky test in tests/api.rs"   # detached
 ```
+
+Every session and worktree has a **name** (its address: `ptyro send fix-flaky-test …`) and a
+**title** (what people read, the task by default). `ptyro retitle` and `ptyro wt retitle` change
+the title, `ptyro rename` the name.
 
 **4. See who needs you.** The sidebar shows each session's status. `⚑` means it wants you.
 
@@ -108,11 +124,23 @@ ptyro new -d --agent claude --new-wt --prompt "fix the flaky test in tests/api.r
  ▾ myrepo [work]              │ (Claude, full fidelity, in its own worktree)
    ▾ @root (main)             │
      1 • shell zsh            │
+         last cargo test ✓ 41s│
    ▾ brisk-rook +42 −7 ●      │
-     2 ⚠ claude permission ⚑ │
-     3 ● codex  Bash: cargo t │
+     2 ◉ claude ⚠ permission 3m
+         wants Bash: npm i…   │
+         C-q p y/a/n answers  │
+     3 ● codex 2m             │
+         now Bash: cargo test │
+         task fix the flaky … │
  ptyro                main [work] 3 live · 1 working · 1 blocked  ✉2  C-q ? help 14:02
 ```
+
+Each row says what that session is doing: what a blocked agent wants and the keys that answer
+it, the step an agent is on, its task and last reply, a shell's last command. `[ui]
+sidebar_detail = "compact"` keeps one line per row. Turn on `[summaries] enabled = true` and,
+after each turn, a small model (Claude's Haiku, on that session's own profile account, about
+$0.0007 each) writes a `≈` line saying what it did. `ptyro summarize SESSION`, or *summarize* in
+a row's menu (`.`), makes one at any time.
 
 - `Ctrl-Q a` jumps to the next session that needs you (blocked first).
 - `Ctrl-Q p` peeks without switching: `y` allows a permission prompt, `n` denies, or type a
@@ -142,8 +170,12 @@ command = "pnpm dev --port $PTYRO_PORT"   # Ctrl-Q r runs it
 default = true
 ```
 
-`ptyro wt rm` (or `x` in the sidebar) refuses to remove a worktree with running sessions,
-uncommitted or unpushed work, or stashes, and lists exactly what would be lost. ptyro also reads
+When the work is done, `F` on its row (or `ptyro wt finish`) commits what's left, asking its agent
+for the message, and opens a PR (or integrates it). Once the PR merges, `x` cleans it up by
+**archiving**: its branch and a snapshot of every file are kept, the checkout goes, and `ptyro wt
+restore` brings it back as it was. `ptyro wt rm` refuses to remove a worktree with running
+sessions, uncommitted or unpushed work, or stashes, lists exactly what would be lost, and offers
+archiving instead. ptyro also reads
 setup config written for Conductor, Superset, the Codex app, Claude Desktop, Cursor and Copilot.
 Details: [`docs/config.md`](docs/config.md).
 
@@ -298,14 +330,15 @@ All after the prefix, `Ctrl-Q` or `Ctrl-Space`. The full list is in [`docs/keys.
 
 | Key | Does |
 |---|---|
-| `?` / `:` | every key / the command palette |
+| `?` / `:` / `.` | every key / the command palette (any action, session, worktree, project or script) / what you can do with this session |
 | `d` | detach (everything keeps running) |
-| `n` / `N` | new session / new worktree |
+| `n` / `N` | new task (say what to do) / new worktree |
 | `a` / `p` / `i` | next session that needs you / peek and answer / inbox |
 | `j` `k` / `1`…`9` / `/` | next / previous / Nth session / find one |
 | `v` / `s` | split side by side / stacked |
 | `h` `l` / `z` / `c` | move between panes / zoom / close pane |
 | `Tab` | focus the sidebar (`⏎` open, `x` stop or remove, `e` why this status) |
+| `Z` | everything at once: every session and what it's doing, full-screen |
 | `[` | copy mode: scroll back, search (`/`), select (`v`), copy (`y`) |
 | `D` / `Q` | inspector / review queue |
 | `O` / `S` | runs / change sets |
@@ -341,11 +374,14 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
 - **Shift+Enter** reaches Claude when your terminal speaks the kitty keyboard protocol (Ghostty,
   kitty, WezTerm, foot, recent iTerm2 and Alacritty). `Ctrl-Q ?` shows whether it's on.
 - **Native mouse selection:** hold Shift while dragging, or set `[ui] mouse = false`.
-- **Prompt jumps and live cwd** need one line in your shell's rc file:
+- **Prompt jumps, live cwd and each shell's last command in the sidebar** need one line in
+  your shell's rc file:
   `eval "$(ptyro shell-init zsh)"` (or `bash`; fish: `ptyro shell-init fish | source`).
 - **Completions:** `source <(ptyro completions zsh)` (or bash, fish…). **Start at login:**
   `ptyro daemon install-service` (systemd or launchd).
-- **Something odd?** Run `ptyro doctor`. `ptyro daemon logs` shows the daemon's log, and
+- **Something odd?** A `⚕` in the status bar means the doctor found something: `Ctrl-Q M` lists
+  it, each with its fix (the shell-init line, tmux options, a login, a daemon upgrade). Or run
+  `ptyro doctor`. `ptyro daemon logs` shows the daemon's log, and
   `PTYRO_LOG=debug` makes it chatty. `Ctrl-Q C-l` redraws the screen.
 - **Recordings** of each session (for `ptyro replay` and `ptyro export`) can hold secrets that
   scrolled past. Turn them off with `[recorder] enabled = false`.
@@ -356,6 +392,7 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
 |---|---|
 | [`docs/commands.md`](docs/commands.md) | Every command, how to name sessions, and the exit codes |
 | [`docs/keys.md`](docs/keys.md) | Every key: prefix, sidebar, inspector, copy mode, mouse, rebinding |
+| [`docs/tui-parity.md`](docs/tui-parity.md) | Every command, and how to do it in the TUI |
 | [`docs/config.md`](docs/config.md) | Configuration: your config, profiles, notifications, `.ptyro.toml`, file locations |
 | [`docs/scripting.md`](docs/scripting.md) | Scripting recipes, and a snippet that teaches agents to use ptyro |
 | [`docs/cli-json.md`](docs/cli-json.md) | Every `--json` output and the exit codes |
@@ -385,6 +422,7 @@ behave the same. (License and advisory checks run there through the cargo-deny a
 | `make fmt` / `fmt-check` / `lint` | format / fail if unformatted / clippy with warnings as errors |
 | `make check` / `make ci` | what CI runs except `deny` (fmt-check, lint, test, smoke) / everything, `deny` included |
 | `make tools` / `make deny` | install cargo-deny / license, advisory and source checks |
+| `make tui-parity` | check that every CLI command has a TUI path or a waiver in [`docs/tui-parity.md`](docs/tui-parity.md) (`STRICT=0` only lists gaps) |
 | `make doc` / `make clean` | API docs / remove build output |
 | `make sandbox` / `make sandbox-clean` | a throwaway ptyro (own daemon, store, worktrees) with a demo repo / delete it. It isolates ptyro's state, not a security sandbox: agents still run as you |
 | `make orchestrate-demo` (`ARGS=tui\|clean`) | fan-out, a gated recipe and a lead over MCP, with fake agents |

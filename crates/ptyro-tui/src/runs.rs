@@ -75,12 +75,17 @@ impl App {
         if opened > before
             && let Some((_, g)) = run.state.open_gates().last()
         {
-            self.toast(format!(
-                "gate {}: {} ({} O to answer)",
-                g.id,
-                g.ask,
-                ptyro_core::config::key_label(&self.keymap.prefix)
-            ));
+            self.toast_offer(
+                format!("gate {}: {}", g.id, g.ask),
+                false,
+                crate::app::Offer {
+                    label: "answer it".into(),
+                    then: crate::app::Then::Run(crate::keymap::Command {
+                        action: "runs",
+                        arg: None,
+                    }),
+                },
+            );
         }
         let id = run.state.id.clone();
         let set = run.state.changeset.is_some();
@@ -294,9 +299,17 @@ impl App {
                                     kind: PromptKind::Orch(OrchInput::FanoutAgents { project }),
                                 })
                             }
-                            None => {
-                                self.toast("focus a session in a project first (fan-outs need one)")
-                            }
+                            None => self.toast_offer(
+                                "a fan-out needs a project: focus a session in one",
+                                false,
+                                crate::app::Offer {
+                                    label: "add a project".into(),
+                                    then: crate::app::Then::Run(crate::keymap::Command {
+                                        action: "project.add",
+                                        arg: None,
+                                    }),
+                                },
+                            ),
                         }
                         return;
                     }
@@ -589,7 +602,7 @@ pub fn draw(app: &App, f: &mut Frame<'_>, area: Rect) {
                     if o.loading {
                         "loading…"
                     } else {
-                        "No runs yet. `ptyro fanout`, `ptyro recipe run`, or F here."
+                        "No runs yet: F gives one task to several agents and compares what they do"
                     },
                     fg(app, t.dim),
                 ));

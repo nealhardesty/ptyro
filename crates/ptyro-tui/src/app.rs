@@ -96,6 +96,22 @@ pub enum Overlay {
         text: String,
         action: Confirmed,
     },
+    /// `n` (UX1.9): "what should it do?", one box. ⏎ starts the default agent on it in a new
+    /// worktree named after it; Tab edits the name; `C-o` opens the full wizard.
+    Task {
+        text: String,
+        /// The name typed over the suggestion; `None` follows the prompt.
+        name: Option<String>,
+        /// Typing goes to the name, not the prompt.
+        naming: bool,
+        wizard: Wizard,
+    },
+    /// A project's first worktree (UX1.11): what ptyro found it needs; y writes it locally.
+    Suggest {
+        suggestions: ptyro_core::model::SetupSuggestions,
+        spec: Box<WorktreeSpec>,
+        split: Option<Dir>,
+    },
     /// Lifecycle scripts shown in full before trusting them (SPEC §10.5).
     Trust {
         scripts: ScriptsInfo,
@@ -114,6 +130,48 @@ pub struct Wizard {
     pub agent: Option<String>,
     /// For `N`: the new worktree's name.
     pub name: Option<String>,
+    /// The first prompt, from the task box (UX1.9); also the title and, slugged, the name.
+    pub prompt: Option<String>,
+    /// A name to offer, dimmed, that ⏎ takes when nothing was typed (UX1.24).
+    pub suggested: Option<String>,
+    /// Where the work comes from (UX1.10): a PR, an issue, an existing branch, or the main
+    /// checkout's uncommitted changes.
+    pub pr: Option<u32>,
+    pub issue: Option<String>,
+    pub branch: Option<String>,
+    pub take: bool,
+}
+
+/// A PR or an issue named in text (UX1.10): a GitHub URL, or `pr 12` / `issue 12`.
+pub fn work_source(text: &str) -> Option<(Option<u32>, Option<String>)> {
+    let t = text.trim();
+    let number_after = |key: &str| {
+        t.split(key).nth(1).and_then(|r| {
+            r.trim_start_matches('#')
+                .split(|c: char| !c.is_ascii_digit())
+                .next()?
+                .parse::<u32>()
+                .ok()
+        })
+    };
+    if t.contains("github.com/") && t.contains("/pull/") {
+        return number_after("/pull/").map(|n| (Some(n), None));
+    }
+    if t.contains("github.com/") && t.contains("/issues/") {
+        return number_after("/issues/")
+            .map(|_| (None, Some(t.split_whitespace().next().unwrap_or(t).to_owned())));
+    }
+    let lower = t.to_lowercase();
+    let rest = |p: &str| {
+        lower.strip_prefix(p).and_then(|r| r.trim().trim_start_matches('#').parse::<u32>().ok())
+    };
+    if let Some(n) = rest("pr ").or_else(|| rest("pr#")) {
+        return Some((Some(n), None));
+    }
+    if let Some(n) = rest("issue ").or_else(|| rest("issue#")) {
+        return Some((None, Some(n.to_string())));
+    }
+    None
 }
 
 #[derive(Debug, Clone)]
@@ -130,7 +188,40 @@ pub enum Purpose {
     Workspace,
     Editor(String),
     Script(String),
-    AddProject,
+    /// Add a project, then carry on (UX1.6).
+    AddProject(Option<AfterAdd>),
+    /// A row's actions (UX1.15): run with that row selected in the sidebar.
+    RowMenu(Row),
+    /// Home (UX1.19): what to do next.
+    Home,
+    /// What the doctor found, to fix (UX1.20).
+    Health,
+    /// `ptyro <these args> <the pick>`, in a split (UX1.20, UX1.21).
+    Cli(Vec<String>),
+    /// A word of a `ptyro …` command being put together (UX1.21).
+    CliPick(Box<crate::cli_actions::CliJob>),
+    /// The profile to pin this project to.
+    Pin(String),
+    /// This workspace's profile, or how it notifies.
+    WorkspaceProfile,
+    WorkspaceNotify,
+    /// How to finish this worktree (UX1.12): a PR, or integrate.
+    Finish(String),
+    /// An archived worktree to bring back.
+    Restore,
+    /// A stale worktree to clean up (archive).
+    Gc,
+    /// The existing branch a new worktree checks out (UX1.10).
+    Branch(Wizard),
+}
+
+/// What asked for a project when there was none (UX1.6): done once the project is added.
+#[derive(Debug, Clone)]
+pub enum AfterAdd {
+    /// Re-run this action, in the new project's main checkout.
+    Run(&'static str),
+    /// The wizard's second step, in the new project.
+    Targets(Wizard),
 }
 
 #[derive(Debug, Clone)]
@@ -153,7 +244,22 @@ pub enum PromptKind {
         paths: Vec<String>,
     },
     WorktreeName(Wizard),
-    NewWorkspace,
+    /// A name for a new workspace; ⏎ on nothing takes the suggestion.
+    NewWorkspace(Option<String>),
+    /// A session's title (UX1.24): free text; empty clears it.
+    Retitle(SessionId),
+    /// A worktree's title (by id).
+    RetitleWorktree(String),
+    /// A PR or issue to start a worktree from (UX1.10).
+    WorkSource(Wizard),
+    /// A word for a `ptyro …` command being put together (UX1.21); `true`: `k=v` variables.
+    CliAsk(Box<crate::cli_actions::CliJob>, bool),
+    /// A branch's new name, for this worktree (by id).
+    RenameBranch(String),
+    /// A PR to go to (UX1.21).
+    OpenPr,
+    /// A workspace's new name.
+    RenameWorkspace(String),
     /// Typed in the runs view (M7).
     Orch(crate::runs::OrchInput),
     /// Typed in the change-set view (M11).
@@ -163,7 +269,16 @@ pub enum PromptKind {
 impl PromptKind {
     /// The text is a name (`[a-z0-9._-]`): bad characters are marked and Tab tidies it.
     pub fn is_name(&self) -> bool {
-        matches!(self, Self::Rename(_) | Self::WorktreeName(_) | Self::NewWorkspace)
+        matches!(self, Self::Rename(_) | Self::WorktreeName(_) | Self::NewWorkspace(_))
+    }
+
+    /// The name ⏎ takes when nothing was typed (shown dimmed in the field, UX1.24).
+    pub fn suggestion(&self) -> Option<&str> {
+        match self {
+            Self::WorktreeName(w) => w.suggested.as_deref(),
+            Self::NewWorkspace(s) => s.as_deref(),
+            _ => None,
+        }
     }
 }
 
@@ -181,6 +296,10 @@ pub enum Confirmed {
     KeepPin(String),
     /// Integrate this worktree into the main branch (M6.7).
     Integrate(String),
+    /// Archive this worktree, stopping what runs in it (UX1.12).
+    Archive(String),
+    /// Add a line to a file: a health fix (UX1.20).
+    Append(std::path::PathBuf, String),
     /// Send this request, then show this (runs view: cancel, pick, discard).
     Send(Box<Request>, String),
 }
@@ -223,13 +342,15 @@ pub enum Pending {
     TrustDialog(AfterTrust),
     Trusted(AfterTrust),
     Removed(String),
-    ProjectAdded,
-    Discovered,
+    ProjectAdded(Option<AfterAdd>),
+    Discovered(Option<AfterAdd>),
     Scripts(String),
     /// Check the project's scripts are trusted before creating a worktree.
     PreCreate(Box<WorktreeSpec>, Option<Dir>),
     Peek(SessionId),
     Explain(SessionId),
+    /// `session.summarize` (UX1.3): toast the summary.
+    Summarized,
     /// Replies for an inspector that has moved on (another worktree, diff base or load) are
     /// dropped.
     InspectDiff {
@@ -254,6 +375,23 @@ pub enum Pending {
     Compare(String),
     /// A change set's ledger, for the set view (M11).
     CsLog(String),
+    /// The context worktree's scripts, for an open palette (UX1.18).
+    PaletteScripts(String),
+    /// Archived worktrees, for the restore picker (UX1.12).
+    Archives,
+    /// Stale worktrees, for the clean-up picker.
+    Gc,
+    /// The project's branches, for the wizard (UX1.10).
+    Branches(Wizard),
+    /// Setup suggestions before a project's first worktree (UX1.11).
+    Suggest(Box<WorktreeSpec>, Option<Dir>),
+    /// They were written: check the scripts (trust) again, then create.
+    Suggested(Box<WorktreeSpec>, Option<Dir>),
+    /// The repositories for the first run, and for home (UX1.19).
+    FirstRunRepos,
+    Home,
+    /// `project.suggest`: say what was found, offering to use it.
+    SuggestShow(String),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -274,6 +412,8 @@ pub enum AppMsg {
     Reply(Pending, Result<Reply, Error>),
     /// A workspace's saved view, after switching to it.
     View(String, Result<Reply, Error>),
+    /// What `ptyro doctor` found (UX1.20).
+    Health(Vec<crate::health::Check>),
 }
 
 /// One pane's live state.
@@ -290,11 +430,67 @@ pub struct Toast {
     pub text: String,
     pub error: bool,
     pub until: Instant,
+    /// What `toast.act` (`C-q u`) does about it: undo it, or fix it (UX1.5, UX1.17).
+    pub offer: Option<Offer>,
+}
+
+/// A message's one follow-up, run by `toast.act` while the message shows.
+#[derive(Debug, Clone)]
+pub struct Offer {
+    /// What it does, for the message: "undo", "new one".
+    pub label: String,
+    pub then: Then,
+}
+
+#[derive(Debug, Clone)]
+pub enum Then {
+    /// Run a TUI action.
+    Run(Command),
+    /// Send this request; toast the text once it's done.
+    Send(Box<Request>, String),
+    /// Open this file in `$EDITOR`, in a split.
+    Edit(std::path::PathBuf),
+}
+
+/// An offer to run a TUI action.
+fn run_offer(label: &str, action: &'static str) -> Offer {
+    Offer { label: label.into(), then: Then::Run(Command { action, arg: None }) }
+}
+
+/// The CLI commands error messages suggest, and the TUI action that does each (UX1.17): a
+/// message that names one offers that action instead of leaving you to type it. Longest first.
+const SUGGESTED: &[(&str, &str, &str)] = &[
+    ("`ptyro project trust", "project.trust", "review and trust them"),
+    ("`ptyro project add", "project.add", "add a project"),
+    ("`ptyro status --explain", "session.explain", "see why"),
+    ("`ptyro new --structured", "session.new", "start one"),
+    ("`ptyro new --agent", "session.new", "start one"),
+    ("`ptyro new", "session.new", "start one"),
+    ("`ptyro wt diff", "inspector", "inspect it"),
+    ("`ptyro pr fix", "inspector", "inspect its checks"),
+    ("`ptyro pr watch", "inspector", "inspect its checks"),
+    ("`ptyro events", "inspector", "see its events"),
+    ("`ptyro run retry", "runs", "see the run"),
+    ("`ptyro fanout", "runs", "see runs"),
+    ("`ptyro config edit", "config.edit", "edit the config"),
+];
+
+/// What a message suggests doing, as a TUI action (see [`SUGGESTED`]).
+pub fn offer_for(message: &str) -> Option<Offer> {
+    SUGGESTED
+        .iter()
+        .find(|(cli, _, _)| message.contains(cli))
+        .map(|(_, action, label)| run_offer(label, action))
 }
 
 enum Drag {
     Divider(crate::layout::Divider),
-    Select { pane: PaneId, started: bool },
+    /// The sidebar's right edge (UX1.7).
+    Sidebar,
+    Select {
+        pane: PaneId,
+        started: bool,
+    },
 }
 
 pub struct App {
@@ -357,10 +553,14 @@ pub struct App {
     pub focus: Focus,
     pub sidebar: bool,
     pub sidebar_width: u16,
+    /// The sidebar fills the screen with every row open: everything at once (UX1.2).
+    pub sidebar_zoom: bool,
     /// The selected sidebar row, and its index when last set (the fallback once it's gone).
     sidebar_row: Option<Row>,
     sidebar_sel: usize,
     pub prefix: bool,
+    /// When the prefix was pressed (the which-key menu follows, UX1.14).
+    pub prefix_at: Option<Instant>,
     pub overlay: Option<Overlay>,
     pub toast: Option<Toast>,
     pub buffer: Option<String>,
@@ -373,6 +573,19 @@ pub struct App {
     last_list: Instant,
     drag: Option<Drag>,
     reported_focus: Option<(SessionId, bool)>,
+    /// Sessions this TUI stopped: their panes move on when they exit (`[ui] on_stop`, UX1.23).
+    stopping: HashSet<SessionId>,
+    /// A project just added, and what to do in it once its main checkout is known (UX1.6).
+    after_add: Option<(String, AfterAdd)>,
+    /// The project `context()` answers while an `after_add` runs.
+    context_hint: Option<String>,
+    /// The first-run screen (UX1.19), drawn over everything.
+    pub first_run: Option<crate::onboard::FirstRun>,
+    /// What the doctor found, for the badge (UX1.20).
+    pub health: crate::health::Health,
+    /// The last `ptyro …` command run in a split (`run_cli`).
+    pub last_cli: Option<Vec<String>>,
+    pub started: Instant,
 }
 
 fn no_color() -> bool {
@@ -418,6 +631,7 @@ impl App {
             terminal_focused: true,
             sidebar: config.ui.sidebar && !opts.raw,
             sidebar_width: config.ui.sidebar_width,
+            sidebar_zoom: false,
             opts,
             connect,
             paths,
@@ -445,6 +659,7 @@ impl App {
             sidebar_row: None,
             sidebar_sel: 0,
             prefix: false,
+            prefix_at: None,
             overlay: opts_tour.then_some(Overlay::Tour { page: 0 }),
             toast: None,
             buffer: None,
@@ -457,6 +672,13 @@ impl App {
             last_list: Instant::now(),
             drag: None,
             reported_focus: None,
+            stopping: HashSet::new(),
+            after_add: None,
+            context_hint: None,
+            first_run: None,
+            health: crate::health::Health::default(),
+            last_cli: None,
+            started: Instant::now(),
         }
     }
 
@@ -522,10 +744,11 @@ impl App {
         };
         let (ended, gates) = (unread(ptyro_core::status::AttentionKind::Run), self.open_gates());
         if ended + gates > 0 {
-            self.toast(format!(
-                "while you were away: {ended} run update(s), {gates} gate(s) waiting — {} O",
-                ptyro_core::config::key_label(&self.keymap.prefix)
-            ));
+            self.toast_offer(
+                format!("while you were away: {ended} run update(s), {gates} gate(s) waiting"),
+                false,
+                run_offer("see them", "runs"),
+            );
         }
     }
 
@@ -675,6 +898,14 @@ impl App {
 
     pub fn sidebar_area(&self) -> Option<Rect> {
         let main = self.main_area();
+        if self.sidebar_zoom {
+            // Over the panes, which keep their size: nothing is resized for a look.
+            return Some(Rect {
+                width: self.area.width.saturating_sub(1),
+                height: main.height,
+                ..self.area
+            });
+        }
         (main.x > self.area.x).then_some(Rect {
             x: self.area.x,
             y: self.area.y,
@@ -779,6 +1010,52 @@ impl App {
         true
     }
 
+    /// Panes showing `gone` show its neighbour instead (UX1.23). `removed`: it's leaving the
+    /// list, so a pane with no neighbour to show closes (a split) or shows the empty state
+    /// (the last pane); a stopped one stays put when there's nothing else to show.
+    fn move_on(&mut self, gone: SessionId, order: &[SessionId], removed: bool) {
+        let Some(info) = self.session(gone).cloned() else { return };
+        let mut panes: Vec<PaneId> =
+            self.panes.iter().filter(|(_, p)| p.session == Some(gone)).map(|(k, _)| *k).collect();
+        // The focused pane picks first: it gets the nearest neighbour.
+        panes.sort_by_key(|p| (*p != self.focused, *p));
+        for pane in panes {
+            let shown: Vec<SessionId> = self
+                .panes
+                .iter()
+                .filter(|(k, _)| **k != pane)
+                .filter_map(|(_, p)| p.session)
+                .collect();
+            match neighbour(order, &info, &self.sessions, &shown) {
+                Some(next) => {
+                    if let Some(p) = self.panes.get_mut(&pane) {
+                        p.session = Some(next);
+                        p.copy = None;
+                        p.loading = false;
+                        // `` ` `` brings a stopped session back; a removed one is gone.
+                        p.last = (!removed).then_some(gone);
+                    }
+                    if pane == self.focused {
+                        let rows = self.rows();
+                        if let Some(i) = rows.iter().position(|r| *r == Row::Session(next)) {
+                            self.set_sel(&rows, i);
+                        }
+                    }
+                }
+                None if removed => {
+                    if !self.close_pane(pane)
+                        && let Some(p) = self.panes.get_mut(&pane)
+                    {
+                        p.session = None;
+                        p.copy = None;
+                    }
+                }
+                None => {}
+            }
+        }
+        self.view_changed();
+    }
+
     fn view_changed(&mut self) {
         if !self.opts.raw && !self.opts.view_only {
             self.view_dirty_since = Some(Instant::now());
@@ -826,6 +1103,25 @@ impl App {
         if self.config.ui.clock {
             self.dirty = true;
         }
+        self.health_tick(self.started);
+    }
+
+    fn start_prefix(&mut self) {
+        self.prefix = true;
+        self.prefix_at = Some(Instant::now());
+    }
+
+    /// When the which-key menu is due, while the prefix waits for its key (UX1.14).
+    pub fn which_key_due(&self) -> Option<Instant> {
+        let delay = self.config.ui.which_key_delay;
+        (self.prefix && delay > 0)
+            .then(|| self.prefix_at.map(|t| t + Duration::from_millis(delay)))
+            .flatten()
+    }
+
+    /// The which-key menu shows: the prefix waited long enough for its key.
+    pub fn which_key_shown(&self) -> bool {
+        self.which_key_due().is_some_and(|t| Instant::now() >= t)
     }
 
     pub fn toast(&mut self, text: impl Into<String>) {
@@ -833,6 +1129,7 @@ impl App {
             text: text.into(),
             error: false,
             until: Instant::now() + Duration::from_secs(3),
+            offer: None,
         });
         self.dirty = true;
     }
@@ -842,6 +1139,20 @@ impl App {
             text: text.into(),
             error: true,
             until: Instant::now() + Duration::from_secs(6),
+            offer: None,
+        });
+        self.dirty = true;
+    }
+
+    /// A message with a follow-up that `toast.act` runs (`C-q u`): it stays up longer, and says
+    /// which key does what.
+    pub fn toast_offer(&mut self, text: impl Into<String>, error: bool, offer: Offer) {
+        let key = self.keymap.key_for("toast.act").unwrap_or_else(|| "toast.act".into());
+        self.toast = Some(Toast {
+            text: format!("{} · {key} {}", text.into(), offer.label),
+            error,
+            until: Instant::now() + Duration::from_secs(10),
+            offer: Some(offer),
         });
         self.dirty = true;
     }
@@ -896,7 +1207,16 @@ impl App {
                 if self.opts.raw && self.focused_session() == Some(info.id) {
                     self.quit = Some(AttachEnd::Exited(info.state.clone()));
                 }
+                let id = info.id;
                 self.upsert(info);
+                // You stopped it here: its panes move on, and it stays in the sidebar.
+                if self.stopping.remove(&id)
+                    && !self.opts.raw
+                    && self.config.ui.on_stop == ptyro_core::config::OnStop::Next
+                {
+                    let order = self.ordered();
+                    self.move_on(id, &order, false);
+                }
             }
             DomainEvent::SessionRestarted { info } => {
                 let id = info.id;
@@ -909,32 +1229,22 @@ impl App {
                 self.sync();
             }
             DomainEvent::SessionRemoved { id } => {
-                self.sessions.retain(|s| s.id != id);
-                let mut emptied = Vec::new();
-                for (pane, p) in &mut self.panes {
-                    if p.session == Some(id) {
-                        p.session = None;
-                        p.copy = None;
-                        emptied.push(*pane);
-                    }
-                    if p.last == Some(id) {
-                        p.last = None;
-                    }
-                }
+                self.stopping.remove(&id);
                 if self.opts.raw {
-                    self.quit = Some(AttachEnd::Gone);
+                    self.sessions.retain(|s| s.id != id);
+                    if self.focused_session() == Some(id) {
+                        self.quit = Some(AttachEnd::Gone);
+                    }
                     self.sync();
                     return;
                 }
-                // Its panes close; the last pane can't, so it shows a session not shown yet.
-                for pane in emptied {
-                    if !self.close_pane(pane) {
-                        let shown: Vec<SessionId> =
-                            self.panes.values().filter_map(|p| p.session).collect();
-                        let next = self.ordered().into_iter().find(|id| !shown.contains(id));
-                        if let Some(p) = self.panes.get_mut(&pane) {
-                            p.session = next;
-                        }
+                // The order as it was, so "the next one" means the one after it in the sidebar.
+                let order = self.ordered();
+                self.move_on(id, &order, true);
+                self.sessions.retain(|s| s.id != id);
+                for p in self.panes.values_mut() {
+                    if p.last == Some(id) {
+                        p.last = None;
                     }
                 }
                 self.view_changed();
@@ -996,6 +1306,29 @@ impl App {
                 upsert_by(&mut self.projects, info, |p| p.id.clone())
             }
             DomainEvent::ProjectRemoved { id } => self.projects.retain(|p| p.id != id),
+            DomainEvent::ProjectAutoAdded { info, workspace, notes } => {
+                upsert_by(&mut self.projects, info.clone(), |p| p.id.clone());
+                let undo = Request::ProjectRemove { addr: info.id.clone(), release: true };
+                let done = format!("forgot {}; it won't be registered on its own again", info.slug);
+                self.toast_offer(
+                    format!("registered {} in {workspace}", info.slug),
+                    false,
+                    Offer { label: "undo".into(), then: Then::Send(Box::new(undo), done) },
+                );
+                // A pin its rules suggest still asks, as adding it by hand does (SPEC §10.10).
+                if self.overlay.is_none()
+                    && notes.iter().any(|n| n.starts_with("pinned to profile"))
+                    && let Some(pin) = &info.pin
+                {
+                    self.overlay = Some(Overlay::Confirm {
+                        text: format!(
+                            "{} matches profile {pin}'s rules and is now pinned to it. Keep the pin? [Y/n]",
+                            info.slug
+                        ),
+                        action: Confirmed::KeepPin(info.id.clone()),
+                    });
+                }
+            }
             DomainEvent::WorkspaceUpdated { info } => {
                 upsert_by(&mut self.workspaces, info, |w| w.id.clone())
             }
@@ -1007,7 +1340,8 @@ impl App {
                 }
             }
             DomainEvent::WorktreeUpdated { info } => {
-                upsert_by(&mut self.worktrees, info, |w| w.id.clone())
+                upsert_by(&mut self.worktrees, info, |w| w.id.clone());
+                self.try_after_add();
             }
             DomainEvent::WorktreeRemoved { id } => self.worktrees.retain(|w| w.id != id),
             DomainEvent::WorktreeProgress { worktree, step } => {
@@ -1046,6 +1380,10 @@ impl App {
         self.dirty = true;
         let (pending, res) = match msg {
             AppMsg::Reply(p, r) => (p, r),
+            AppMsg::Health(checks) => {
+                self.got_health(checks);
+                return;
+            }
             AppMsg::View(name, r) => {
                 // Switched on again since: that view is stale.
                 if name != self.workspace {
@@ -1139,7 +1477,15 @@ impl App {
             }
             (Pending::TrustDialog(then), Ok(Reply::Scripts { scripts })) => {
                 if scripts.text.is_empty() {
-                    self.toast("this project has no scripts (.ptyro.toml [scripts])");
+                    let file = self.project(&scripts.project).map(|p| p.root.join(".ptyro.toml"));
+                    match file {
+                        Some(f) => self.toast_offer(
+                            "this project has no scripts yet",
+                            false,
+                            Offer { label: "add some in .ptyro.toml".into(), then: Then::Edit(f) },
+                        ),
+                        None => self.toast("this project has no scripts yet"),
+                    }
                 } else if scripts.trusted {
                     self.after_trust(then);
                 } else {
@@ -1233,6 +1579,16 @@ impl App {
             (Pending::Done(_), Ok(Reply::Pr { info: Some(pr) })) => {
                 self.toast(format!("PR #{}: {}", pr.number, pr.url));
             }
+            (Pending::Summarized, Ok(Reply::Session { info })) => {
+                let text = info.summary.map(|s| s.text).unwrap_or_default();
+                let text = format!("≈ {}: {text}", info.name);
+                if self.config.summaries.enabled {
+                    self.toast(text);
+                } else {
+                    let every = "after every turn: [summaries] enabled = true";
+                    self.toast_offer(text, false, run_offer(every, "config.edit"));
+                }
+            }
             (Pending::Explain(id), Ok(Reply::Explain { lines })) => {
                 // Newest last: start at the bottom.
                 let scroll = lines.len().saturating_sub(self.overlay_body_h(2));
@@ -1245,20 +1601,148 @@ impl App {
                         then: AfterTrust::Create(spec, split),
                         scroll: 0,
                     });
+                } else if !scripts.names.iter().any(|n| n == "setup") && spec.setup {
+                    // No setup yet: on a project's first worktree, what ptyro found (UX1.11).
+                    let addr = spec.project.clone();
+                    self.request(
+                        Pending::Suggest(spec, split),
+                        Request::ProjectSuggest { addr, apply: None },
+                    );
                 } else {
                     self.create_worktree(*spec, split);
                 }
             }
             (Pending::PreCreate(spec, split), Err(_)) => self.create_worktree(*spec, split),
+            (Pending::Suggest(spec, split), Ok(Reply::Suggestions { suggestions })) => {
+                if suggestions.offered || suggestions.is_empty() {
+                    self.create_worktree(*spec, split);
+                } else {
+                    self.overlay = Some(Overlay::Suggest { suggestions, spec, split });
+                }
+            }
+            (Pending::Suggest(spec, split), Err(_)) => self.create_worktree(*spec, split),
+            (Pending::SuggestShow(project), Ok(Reply::Suggestions { suggestions: s })) => {
+                if s.is_empty() {
+                    self.toast(format!(
+                        "{}: nothing to suggest (its config has what it needs)",
+                        s.project
+                    ));
+                } else {
+                    let mut found = Vec::new();
+                    if let Some(cmd) = &s.setup {
+                        found.push(format!("setup: {cmd}"));
+                    }
+                    if !s.copy.is_empty() {
+                        found.push(format!("copy {}", s.copy.join(", ")));
+                    }
+                    self.toast_offer(
+                        format!("{}: {}", s.project, found.join(" · ")),
+                        false,
+                        Offer {
+                            label: "use them (.ptyro.local.toml)".into(),
+                            then: Then::Send(
+                                Box::new(Request::ProjectSuggest {
+                                    addr: project,
+                                    apply: Some(true),
+                                }),
+                                "written to .ptyro.local.toml".into(),
+                            ),
+                        },
+                    );
+                }
+            }
+            (Pending::Suggested(spec, split), Ok(_)) => {
+                self.toast("written to .ptyro.local.toml (yours, not committed)");
+                let addr = spec.project.clone();
+                self.request(
+                    Pending::PreCreate(spec, split),
+                    Request::ProjectScripts { addr, worktree: None },
+                );
+            }
+            (Pending::Branches(w), Ok(Reply::Branches { names })) => {
+                if names.is_empty() {
+                    self.toast("no branch to check out: every one has a worktree");
+                } else {
+                    let items = names
+                        .into_iter()
+                        .map(|b| Item {
+                            label: b.clone(),
+                            detail: "check it out in a new worktree".into(),
+                            key: None,
+                            target: Target::Path(b.into()),
+                        })
+                        .collect();
+                    self.overlay = Some(Overlay::Picker {
+                        palette: Palette::new("On which branch?", items),
+                        purpose: Purpose::Branch(w),
+                    });
+                }
+            }
             (Pending::Removed(_), Ok(Reply::Removed { notes })) => self.toast(notes.join(" · ")),
             (Pending::Removed(id), Err(e)) if e.code == ErrorCode::DirtyWorktree => {
                 self.overlay = Some(Overlay::Confirm {
-                    text: format!("{}\n\nDiscard that work and remove it anyway? [y/N]", e.message),
+                    text: format!(
+                        "{}\n\na: archive it instead (its work is kept; restore brings it back)\ny: discard that work and remove it · n: neither",
+                        e.message
+                    ),
                     action: Confirmed::RemoveWorktree { id, force: true },
                 });
             }
-            (Pending::ProjectAdded, Ok(Reply::Project { info, notes })) => {
+            (Pending::Gc, Ok(Reply::Gc { entries })) => {
+                if entries.is_empty() {
+                    self.toast("nothing stale: every worktree is in use");
+                } else {
+                    let items = entries
+                        .iter()
+                        .map(|e| Item {
+                            label: e.worktree.qualified(),
+                            detail: e.reasons.join(" · "),
+                            key: None,
+                            target: Target::Worktree(e.worktree.id.clone()),
+                        })
+                        .collect();
+                    self.overlay = Some(Overlay::Picker {
+                        palette: Palette::new(
+                            "Stale worktrees: ⏎ archives one (its work is kept)",
+                            items,
+                        ),
+                        purpose: Purpose::Gc,
+                    });
+                }
+            }
+            (Pending::Archives, Ok(Reply::Archives { entries })) => {
+                if entries.is_empty() {
+                    self.toast("nothing archived yet");
+                } else {
+                    let items = entries
+                        .iter()
+                        .map(|e| Item {
+                            label: format!("{}/{}", e.project_slug, e.name),
+                            detail: format!(
+                                "{} · archived {} ago{}",
+                                e.branch,
+                                crate::ui::ago(e.archived_ms),
+                                e.title.as_deref().map(|t| format!(" · {t}")).unwrap_or_default()
+                            ),
+                            key: None,
+                            target: Target::Path(std::path::PathBuf::from(format!(
+                                "{}/{}",
+                                e.project_slug, e.name
+                            ))),
+                        })
+                        .collect();
+                    self.overlay = Some(Overlay::Picker {
+                        palette: Palette::new("Restore an archived worktree", items),
+                        purpose: Purpose::Restore,
+                    });
+                }
+            }
+            (Pending::ProjectAdded(then), Ok(Reply::Project { info, notes })) => {
                 upsert_by(&mut self.projects, info.clone(), |p| p.id.clone());
+                if let Some(then) = then {
+                    self.after_add = Some((info.id.clone(), then));
+                    self.try_after_add();
+                }
                 let pinned = notes.iter().any(|n| n.starts_with("pinned to profile"));
                 self.toast(format!("added {} {}", info.slug, notes.join(" · ")));
                 if pinned && let Some(pin) = &info.pin {
@@ -1271,18 +1755,36 @@ impl App {
                     });
                 }
             }
-            (Pending::Discovered, Ok(Reply::Paths { paths })) => self.open_add_project(paths),
+            (Pending::FirstRunRepos, Ok(Reply::Paths { paths })) => self.first_run_repos(paths),
+            (Pending::Home, Ok(Reply::Paths { paths })) => self.show_home(paths),
+            (Pending::Home, Err(_)) => self.show_home(Vec::new()),
+            (Pending::Discovered(then), Ok(Reply::Paths { paths })) => {
+                self.open_add_project(paths, then)
+            }
+            (Pending::PaletteScripts(wt), Ok(Reply::Scripts { scripts })) => {
+                let place = self.worktree(&wt).map(WorktreeInfo::qualified).unwrap_or_default();
+                if let Some(Overlay::Picker { palette, purpose: Purpose::Palette }) =
+                    &mut self.overlay
+                {
+                    palette.extend(scripts.names.iter().map(|n| Item {
+                        label: format!("script {}", n.trim_start_matches("run:")),
+                        detail: format!("run it in {place}"),
+                        key: None,
+                        target: Target::RunScript(wt.clone(), n.clone()),
+                    }));
+                }
+            }
             (Pending::Scripts(wt), Ok(Reply::Scripts { scripts })) => {
                 self.open_script_picker(wt, scripts)
             }
             (Pending::Spawned { .. } | Pending::Done(_), Err(e))
                 if e.code == ErrorCode::UntrustedProject =>
             {
-                self.toast_err(format!(
-                    "{} ({} : → project.trust)",
+                self.toast_offer(
                     e.message,
-                    ptyro_core::config::key_label(&self.keymap.prefix)
-                ));
+                    true,
+                    run_offer("review and trust them", "project.trust"),
+                );
             }
             (Pending::Scrollback { pane, session, then }, Ok(Reply::Scrollback { doc })) => {
                 if self.panes.get(&pane).is_some_and(|p| p.session == Some(session)) {
@@ -1315,7 +1817,10 @@ impl App {
                 }
             }
             (Pending::Saved, Ok(_)) => {}
-            (_, Err(e)) => self.toast_err(e.message),
+            (_, Err(e)) => match offer_for(&e.message) {
+                Some(offer) => self.toast_offer(e.message, true, offer),
+                None => self.toast_err(e.message),
+            },
             _ => {}
         }
     }
@@ -1346,6 +1851,7 @@ impl App {
         }
         self.focused = pane;
         self.focus = Focus::Pane;
+        self.sidebar_zoom = false;
         // A session from another workspace brings its workspace along.
         if let Some(s) = self.session(id).cloned()
             && !self.ordered().contains(&id)
@@ -1402,17 +1908,9 @@ impl App {
         rows.get(self.sel_index(&rows)).cloned()
     }
 
-    fn set_sel(&mut self, rows: &[Row], i: usize) {
+    pub(crate) fn set_sel(&mut self, rows: &[Row], i: usize) {
         self.sidebar_sel = i;
         self.sidebar_row = rows.get(i).cloned();
-    }
-
-    /// Rows scrolled off the top of the sidebar (in `area`) to keep row `sel` visible; drawing
-    /// and clicking share it.
-    pub fn sidebar_skip(&self, area: Rect, sel: usize) -> usize {
-        // Less the title and the hint line.
-        let visible = area.height.saturating_sub(2) as usize;
-        if self.focus == Focus::Sidebar && sel >= visible { sel + 1 - visible } else { 0 }
     }
 
     // ── terminal input ──────────────────────────────────────────────────────
@@ -1431,11 +1929,15 @@ impl App {
             }
             return;
         }
+        if self.first_run.is_some() && !self.prefix && !self.keymap.is_prefix(key) {
+            self.first_run_key(key);
+            return;
+        }
         if self.overlay.is_some() {
             // The prefix always works: it closes whatever is open and starts a command.
             if self.keymap.is_prefix(key) && !matches!(self.overlay, Some(Overlay::Prompt { .. })) {
                 self.overlay = None;
-                self.prefix = true;
+                self.start_prefix();
                 return;
             }
             self.overlay_key(key);
@@ -1443,7 +1945,7 @@ impl App {
         }
         if self.orch.is_some() && !self.prefix {
             if self.keymap.is_prefix(key) {
-                self.prefix = true;
+                self.start_prefix();
             } else {
                 self.orch_key(key);
             }
@@ -1451,7 +1953,7 @@ impl App {
         }
         if self.sets_view.is_some() && !self.prefix {
             if self.keymap.is_prefix(key) {
-                self.prefix = true;
+                self.start_prefix();
             } else {
                 self.sets_key(key);
             }
@@ -1459,7 +1961,7 @@ impl App {
         }
         if self.inspector.is_some() && !self.prefix {
             if self.keymap.is_prefix(key) {
-                self.prefix = true;
+                self.start_prefix();
             } else {
                 self.inspector_key(key);
             }
@@ -1475,16 +1977,20 @@ impl App {
             match self.keymap.lookup(Table::Prefix, key).cloned() {
                 Some(cmd) => self.run(&cmd),
                 None if key.code == KeyCode::Esc => {}
-                None => self.toast(format!(
-                    "{} {}: not bound ({0} ? lists keys)",
-                    ptyro_core::config::key_label(&self.keymap.prefix),
-                    ptyro_core::config::key_label(&keymap::normalize(key))
-                )),
+                None => self.toast_offer(
+                    format!(
+                        "{} {}: not bound",
+                        ptyro_core::config::key_label(&self.keymap.prefix),
+                        ptyro_core::config::key_label(&keymap::normalize(key))
+                    ),
+                    false,
+                    run_offer("list the keys", "help"),
+                ),
             }
             return;
         }
         if self.keymap.is_prefix(key) {
-            self.prefix = true;
+            self.start_prefix();
             return;
         }
         if let Some(cmd) = self.keymap.lookup(Table::Global, key).cloned() {
@@ -1588,7 +2094,7 @@ impl App {
             "help" => self.overlay = Some(Overlay::Help { filter: String::new(), scroll: 0 }),
             "palette" => self.open_palette(),
             "app.detach" => self.quit = Some(AttachEnd::Detached),
-            "session.new" => self.open_wizard(None),
+            "session.new" => self.open_task(None),
             "attention.next" => self.next_attention(),
             "inbox" => {
                 self.overlay =
@@ -1608,7 +2114,8 @@ impl App {
                     None => self.toast("nothing to peek at"),
                 }
             }
-            "session.resume" | "session.hibernate" | "session.explain" | "session.mute" => {
+            "session.resume" | "session.hibernate" | "session.explain" | "session.mute"
+            | "session.adopt" | "session.summarize" => {
                 let target = if self.focus == Focus::Sidebar {
                     match self.selected_row() {
                         Some(Row::Session(id)) => Some(id),
@@ -1618,7 +2125,11 @@ impl App {
                     focused
                 };
                 let Some(id) = target else {
-                    self.toast("no session here");
+                    self.toast_offer(
+                        "no session here",
+                        false,
+                        run_offer("start one", "session.new"),
+                    );
                     return;
                 };
                 let addr = id.full();
@@ -1628,6 +2139,17 @@ impl App {
                     }
                     "session.hibernate" => self
                         .request(Pending::Done("hibernated".into()), Request::Hibernate { addr }),
+                    "session.adopt" => {
+                        self.toast("adopting: Claude exits here and comes back managed…");
+                        self.request(
+                            Pending::Spawned { split: None, spec: Box::default() },
+                            Request::Adopt { addr },
+                        )
+                    }
+                    "session.summarize" => {
+                        self.toast("summarizing (a small model, on its profile's account)…");
+                        self.request(Pending::Summarized, Request::Summarize { addr })
+                    }
                     "session.mute" => self.request(
                         Pending::Done("notifications muted for 1h".into()),
                         Request::Mute { target: addr, minutes: Some(60), unmute: false },
@@ -1644,11 +2166,12 @@ impl App {
                 let (project, _) = self.context();
                 match project {
                     Some(project) => {
-                        let w = Wizard { project: Some(project), ..Wizard::default() };
+                        let suggested = Some(self.free_worktree_name(&project, None));
+                        let w = Wizard { project: Some(project), suggested, ..Wizard::default() };
                         self.resolve_for(&w);
                         self.overlay = Some(Overlay::Prompt {
                             title: format!(
-                                "{} — name (empty: a random one)",
+                                "{} — name",
                                 wizard_title(
                                     &Wizard { name: Some(String::new()), ..w.clone() },
                                     &self.projects,
@@ -1660,20 +2183,17 @@ impl App {
                             kind: PromptKind::WorktreeName(w),
                         });
                     }
-                    None => self.toast(format!(
-                        "no project here yet: {} : project.add",
-                        ptyro_core::config::key_label(&self.keymap.prefix)
-                    )),
+                    None => self.pick_project(Some(AfterAdd::Run("worktree.new"))),
                 }
             }
             "workspace.switch" => self.open_workspaces(),
             "worktree.open" => match self.context().1 {
                 Some(wt) => self.open_editors(wt),
-                None => self.toast("not in a worktree (sessions started in a project are)"),
+                None => self.pick_project(Some(AfterAdd::Run("worktree.open"))),
             },
             "script.run" => match self.context().1 {
                 Some(wt) => self.run_script(wt, None),
-                None => self.toast("not in a worktree"),
+                None => self.pick_project(Some(AfterAdd::Run("script.run"))),
             },
             "script.pick" => match self.context().1 {
                 Some(wt) => {
@@ -1685,17 +2205,77 @@ impl App {
                         Request::ProjectScripts { addr: project, worktree: Some(addr) },
                     );
                 }
-                None => self.toast("not in a worktree"),
+                None => self.pick_project(Some(AfterAdd::Run("script.pick"))),
             },
-            "project.add" => {
-                self.request(Pending::Discovered, Request::Discover { refresh: false })
-            }
+            "project.add" => self.pick_project(None),
+            "project.suggest" => match self.context().0 {
+                Some(p) => self.request(
+                    Pending::SuggestShow(p.clone()),
+                    Request::ProjectSuggest { addr: p, apply: None },
+                ),
+                None => self.pick_project(Some(AfterAdd::Run("project.suggest"))),
+            },
             "project.trust" => match self.context().0 {
                 Some(p) => self.request(
                     Pending::TrustDialog(AfterTrust::Nothing),
                     Request::ProjectScripts { addr: p, worktree: None },
                 ),
-                None => self.toast("no project here"),
+                None => self.pick_project(Some(AfterAdd::Run("project.trust"))),
+            },
+            "worktree.finish" | "worktree.archive" => {
+                match self.context().1.and_then(|w| self.worktree(&w).cloned()) {
+                    Some(w) if w.is_root => {
+                        self.toast("that's the main checkout: finish a worktree of it")
+                    }
+                    Some(w) if cmd.action == "worktree.archive" => self.confirm_archive(&w),
+                    Some(w) => {
+                        let items = vec![
+                            Item {
+                                label: "a pull request".into(),
+                                detail: "commit what's left, push, open a PR".into(),
+                                key: Some("p".into()),
+                                target: Target::Action(Command { action: "pr", arg: None }),
+                            },
+                            Item {
+                                label: "integrate".into(),
+                                detail: "commit what's left, rebase onto the main branch and fast-forward it".into(),
+                                key: Some("i".into()),
+                                target: Target::Action(Command { action: "integrate", arg: None }),
+                            },
+                        ];
+                        self.overlay = Some(Overlay::Picker {
+                            palette: Palette::new(format!("Finish {}", w.qualified()), items),
+                            purpose: Purpose::Finish(w.id.clone()),
+                        });
+                    }
+                    None => self.pick_project(Some(AfterAdd::Run("worktree.finish"))),
+                }
+            }
+            "worktree.restore" => {
+                self.request(Pending::Archives, Request::WorktreeArchives { project: None })
+            }
+            "worktree.gc" => self.request(Pending::Gc, Request::Gc),
+            "shell.here" => {
+                let (_, wt) = self.context();
+                let spec = SpawnSpec {
+                    cwd: if wt.is_some() { Default::default() } else { self.here() },
+                    worktree: wt,
+                    ..SpawnSpec::default()
+                };
+                self.spawn_spec(spec, Some(Dir::Right));
+            }
+            "worktree.retitle" => match self.context().1.and_then(|w| self.worktree(&w).cloned()) {
+                Some(w) => {
+                    self.overlay = Some(Overlay::Prompt {
+                        title: format!(
+                            "Title of {} (what it's for; empty clears it)",
+                            w.qualified()
+                        ),
+                        text: w.title.clone().unwrap_or_default(),
+                        kind: PromptKind::RetitleWorktree(w.id.clone()),
+                    })
+                }
+                None => self.pick_project(Some(AfterAdd::Run("worktree.retitle"))),
             },
             "worktree.remove" => match self.context().1.and_then(|w| self.worktree(&w).cloned()) {
                 Some(w) if w.is_root => self.toast("that's the main checkout; it can't be removed"),
@@ -1727,13 +2307,19 @@ impl App {
             | "session.kill"
             | "session.restart"
             | "session.rename"
+            | "session.retitle"
             | "session.take_control" => {
                 let target = if self.focus == Focus::Sidebar {
                     match self.selected_row() {
                         Some(Row::Session(id)) => Some(id),
                         Some(Row::Worktree(w)) if cmd.action == "session.stop" => {
                             if let Some(w) = self.worktree(&w).cloned().filter(|w| !w.is_root) {
-                                self.confirm_remove(&w);
+                                // Merged: clean up by archiving, which never refuses (UX1.12).
+                                if w.pr.as_ref().is_some_and(|p| p.state == "MERGED") {
+                                    self.confirm_archive(&w);
+                                } else {
+                                    self.confirm_remove(&w);
+                                }
                             }
                             return;
                         }
@@ -1743,10 +2329,18 @@ impl App {
                     focused
                 };
                 let Some(id) = target else {
-                    self.toast("no session here");
+                    self.toast_offer(
+                        "no session here",
+                        false,
+                        run_offer("start one", "session.new"),
+                    );
                     return;
                 };
                 self.session_action(cmd.action, id);
+            }
+            "focus.toggle" if self.sidebar_zoom => {
+                self.sidebar_zoom = false;
+                self.focus = Focus::Pane;
             }
             "focus.toggle" => {
                 self.focus = match self.focus {
@@ -1760,14 +2354,70 @@ impl App {
                         Focus::Sidebar
                     }
                     Focus::Pane => {
-                        self.toast(format!(
-                            "the sidebar is hidden ({} \\ shows it)",
-                            ptyro_core::config::key_label(&self.keymap.prefix)
-                        ));
+                        self.toast_offer(
+                            "the sidebar is hidden",
+                            false,
+                            run_offer("show it", "sidebar.toggle"),
+                        );
                         Focus::Pane
                     }
                     Focus::Sidebar => Focus::Pane,
                 };
+            }
+            "row.menu" => self.open_row_menu(),
+            "home" => self.open_home(),
+            "health" => self.open_health(),
+            "daemon.logs" => self.run_cli(&["daemon".into(), "logs".into(), "-f".into()]),
+            "daemon.status" => self.run_cli(&["daemon".into(), "status".into()]),
+            "daemon.restart" => self.run_cli(&["daemon".into(), "restart".into()]),
+            "daemon.upgrade" => self.run_cli(&["daemon".into(), "upgrade".into()]),
+            "daemon.service" => self.run_cli(&["daemon".into(), "install-service".into()]),
+            "daemon.unservice" => self.run_cli(&["daemon".into(), "uninstall-service".into()]),
+            "doctor" => self.run_cli(&["doctor".into()]),
+            "integrations" => self.run_cli(&["integrations".into(), "ls".into()]),
+            "integrations.install" | "integrations.uninstall" => {
+                let verb = cmd.action.trim_start_matches("integrations.");
+                self.pick_cli(
+                    &format!("{verb} which agent's integration?"),
+                    &["integrations", verb],
+                    &[("gemini", "a linked extension"), ("antigravity", "its hooks")],
+                );
+            }
+            "first.run" => self.open_first_run(),
+            "toast.act" => match self.toast.take().and_then(|t| t.offer) {
+                Some(Offer { then: Then::Run(cmd), .. }) => self.run(&cmd),
+                Some(Offer { then: Then::Send(req, done), .. }) => {
+                    self.request(Pending::Done(done), *req)
+                }
+                Some(Offer { then: Then::Edit(path), .. }) => {
+                    let editor = std::env::var("VISUAL")
+                        .or_else(|_| std::env::var("EDITOR"))
+                        .unwrap_or_else(|_| "vi".into());
+                    let argv: Vec<String> = editor
+                        .split_whitespace()
+                        .map(str::to_owned)
+                        .chain(std::iter::once(path.to_string_lossy().into_owned()))
+                        .collect();
+                    self.spawn(argv, Some(Dir::Down), None);
+                }
+                None => self.toast("nothing to undo or fix right now"),
+            },
+            "sidebar.wider" => self.set_sidebar_width(self.sidebar_width + 1),
+            "sidebar.narrower" => self.set_sidebar_width(self.sidebar_width.saturating_sub(1)),
+            "sidebar.zoom" => {
+                self.sidebar_zoom = !self.sidebar_zoom;
+                if self.sidebar_zoom {
+                    let rows = self.rows();
+                    if let Some(i) = self
+                        .focused_session()
+                        .and_then(|id| rows.iter().position(|r| *r == Row::Session(id)))
+                    {
+                        self.set_sel(&rows, i);
+                    }
+                    self.focus = Focus::Sidebar;
+                } else {
+                    self.focus = Focus::Pane;
+                }
             }
             "sidebar.toggle" => {
                 self.sidebar = !self.sidebar;
@@ -1835,10 +2485,14 @@ impl App {
             "copy.page_up" => self.enter_copy(CopyStart::Keys { page_up: true }),
             "paste.buffer" => match self.buffer.clone() {
                 Some(text) => self.forward(InputEvent::Paste { text }),
-                None => self.toast(format!(
-                    "nothing yanked yet (copy mode: {} [ … y)",
-                    ptyro_core::config::key_label(&self.keymap.prefix)
-                )),
+                None => self.toast_offer(
+                    "nothing yanked yet",
+                    false,
+                    Offer {
+                        label: "copy something".into(),
+                        then: Then::Run(Command { action: "copy.enter", arg: None }),
+                    },
+                ),
             },
             "view.chat" => {
                 match self
@@ -1850,9 +2504,27 @@ impl App {
                             self.chat_terminal.insert(id);
                         }
                     }
-                    None => self.toast(
-                        "only structured sessions have a chat view (`ptyro new --structured`)",
-                    ),
+                    None => match self.focused_session().filter(|id| {
+                        self.session(*id).is_some_and(|s| s.kind == SessionKind::Agent)
+                    }) {
+                        // An agent in its own UI: offer to switch it, same conversation (M10.6).
+                        Some(id) => self.toast_offer(
+                            "only structured sessions have a chat view",
+                            false,
+                            Offer {
+                                label: "switch this one".into(),
+                                then: Then::Send(
+                                    Box::new(Request::Convert {
+                                        addr: id.full(),
+                                        structured: true,
+                                        force: false,
+                                    }),
+                                    "switching to structured mode (same conversation)…".into(),
+                                ),
+                            },
+                        ),
+                        None => self.toast("only an agent's structured session has a chat view"),
+                    },
                 }
             }
             "view.redraw" => {
@@ -1914,7 +2586,11 @@ impl App {
                 self.marked
                     .retain(|id| self.sessions.iter().any(|s| s.id == *id && s.state.is_live()));
                 if self.marked.is_empty() {
-                    self.toast("mark sessions with Space in the sidebar first (Tab focuses it)");
+                    self.toast_offer(
+                        "mark sessions with Space in the sidebar first",
+                        false,
+                        run_offer("go to the sidebar", "focus.toggle"),
+                    );
                     return;
                 }
                 let names: Vec<String> = self
@@ -1950,7 +2626,10 @@ impl App {
                 }
             }
             "nav.open" | "nav.collapse" | "nav.expand" => match self.selected_row() {
-                Some(Row::Session(id)) if cmd.action == "nav.open" => self.show(id, None),
+                Some(Row::Session(id)) if cmd.action == "nav.open" => {
+                    self.sidebar_zoom = false;
+                    self.show(id, None)
+                }
                 Some(Row::Set(run)) if cmd.action == "nav.open" => self.open_sets(Some(run)),
                 Some(Row::Project(id) | Row::Worktree(id) | Row::Set(id)) => {
                     let collapse = match cmd.action {
@@ -1966,7 +2645,19 @@ impl App {
                 }
                 _ => {}
             },
-            other => self.toast(format!("{other}: not available yet")),
+            other if crate::cli_actions::template(other).is_some() => self.start_cli(other),
+            other => self.native_extra(other),
+        }
+    }
+
+    /// The sidebar's width, kept within 12–80 and leaving the panes at least 21 columns, saved
+    /// with the workspace's view (UX1.7, UX1.8).
+    fn set_sidebar_width(&mut self, width: u16) {
+        let max = 80.min(self.area.width.saturating_sub(22)).max(12);
+        let w = width.clamp(12, max);
+        if w != self.sidebar_width {
+            self.sidebar_width = w;
+            self.view_changed();
         }
     }
 
@@ -1978,7 +2669,11 @@ impl App {
 
     pub fn set_theme(&mut self, name: String) {
         self.theme = Theme::resolve(&self.config, &name, no_color());
-        self.toast(format!("theme {name} (set ui.theme in config to keep it)"));
+        self.toast_offer(
+            format!("theme {name} (set ui.theme to keep it)"),
+            false,
+            run_offer("edit the config", "config.edit"),
+        );
         self.theme_name = name;
     }
 
@@ -1998,30 +2693,37 @@ impl App {
                     action: Confirmed::Stop(id),
                 });
             }
-            "session.stop" => self.request(
-                Pending::Done(format!("stopped {}", info.name)),
-                Request::Kill { addr, signal: None },
-            ),
+            "session.stop" => {
+                self.stopping.insert(id);
+                self.request(
+                    Pending::Done(format!("stopped {}", info.name)),
+                    Request::Kill { addr, signal: None },
+                );
+            }
             "session.kill" => {
+                self.stopping.insert(id);
                 self.request(
                     Pending::Done(format!("killed {}", info.name)),
                     Request::Kill { addr, signal: Some(9) },
                 );
             }
-            "session.restart" if info.state.is_live() => {
-                self.toast(format!("{} is still running", info.name))
-            }
+            "session.restart" if info.state.is_live() => self.toast_offer(
+                format!("{} is still running", info.name),
+                false,
+                run_offer("stop it", "session.stop"),
+            ),
             "session.restart" => self.request(
                 Pending::Done(format!("restarted {}", info.name)),
                 Request::Restart { addr },
             ),
             "session.rename" => {
                 self.overlay = Some(Overlay::Prompt {
-                    title: format!("Rename {}", info.name),
+                    title: format!("Rename {} (its address; C-t: its title)", info.name),
                     text: info.name.clone(),
                     kind: PromptKind::Rename(id),
                 });
             }
+            "session.retitle" => self.open_retitle(id),
             "session.take_control" => {
                 if let Some(size) = self.sizes.get(&id).copied() {
                     self.send(ClientMsg::Resize { session: id, size });
@@ -2036,6 +2738,17 @@ impl App {
         }
     }
 
+    /// The title prompt (UX1.24), filled with the current title.
+    fn open_retitle(&mut self, id: SessionId) {
+        let Some(info) = self.session(id) else { return };
+        let current = info.title.clone().filter(|t| info.window_title.as_ref() != Some(t));
+        self.overlay = Some(Overlay::Prompt {
+            title: format!("Title of {} (what people read; empty clears it)", info.name),
+            text: current.unwrap_or_default(),
+            kind: PromptKind::Retitle(id),
+        });
+    }
+
     fn client_env() -> BTreeMap<String, String> {
         ptyro_pty::CLIENT_ENV
             .iter()
@@ -2044,7 +2757,7 @@ impl App {
     }
 
     /// "Here": the focused session's directory, else the TUI's own.
-    fn here(&self) -> std::path::PathBuf {
+    pub(crate) fn here(&self) -> std::path::PathBuf {
         self.focused_session()
             .and_then(|id| self.session(id))
             .and_then(|s| s.live_cwd.clone().or_else(|| Some(s.cwd.clone())))
@@ -2054,7 +2767,7 @@ impl App {
     }
 
     /// A spawn in the focused session's directory (or the current one).
-    fn spawn(&mut self, argv: Vec<String>, split: Option<Dir>, name: Option<String>) {
+    pub(crate) fn spawn(&mut self, argv: Vec<String>, split: Option<Dir>, name: Option<String>) {
         let spec = SpawnSpec { argv, cwd: self.here(), name, ..SpawnSpec::default() };
         self.spawn_spec(spec, split);
     }
@@ -2105,10 +2818,569 @@ impl App {
         self.request(Pending::Resolved, Request::ProfileResolve { spec });
     }
 
-    /// Step one: what to run. The default agent is first, so `n ⏎ ⏎` is the fast path.
-    pub fn open_wizard(&mut self, split: Option<Dir>) {
+    /// A workspace name to offer: a defined profile's without a workspace yet (`work`), else
+    /// `workspace-2`, `-3`… (UX1.24).
+    fn free_workspace_name(&self) -> String {
+        let taken = |n: &str| self.workspaces.iter().any(|w| w.name == n);
+        self.profiles
+            .iter()
+            .filter(|p| p.defined && p.name != ptyro_core::model::DEFAULT_PROFILE)
+            .map(|p| p.name.clone())
+            .find(|n| !taken(n))
+            .unwrap_or_else(|| {
+                (2..).map(|k| format!("workspace-{k}")).find(|n| !taken(n)).expect("infinite")
+            })
+    }
+
+    /// A worktree name not taken in `project`: `want` (a slug of a prompt) or a friendly pair,
+    /// with `-2`, `-3` when taken (UX1.24).
+    pub fn free_worktree_name(&self, project: &str, want: Option<&str>) -> String {
+        let taken = |n: &str| self.worktrees.iter().any(|w| w.project == project && w.name == n);
+        match want {
+            Some(n) if !taken(n) => n.to_owned(),
+            Some(n) => (2..).map(|k| format!("{n}-{k}")).find(|c| !taken(c)).expect("infinite"),
+            None => ptyro_core::names::friendly(SessionId::new().seed(), taken),
+        }
+    }
+
+    /// `n` (UX1.9): "what should it do?" in the context's project (or here).
+    pub fn open_task(&mut self, split: Option<Dir>) {
         let (project, worktree) = self.context();
-        let w = Wizard { project, worktree, split, ..Wizard::default() };
+        let wizard = Wizard { project, worktree, split, ..Wizard::default() };
+        self.resolve_for(&wizard);
+        self.overlay =
+            Some(Overlay::Task { text: String::new(), name: None, naming: false, wizard });
+    }
+
+    /// What the task box will make of what's typed: the name (an edited one, else a slug of the
+    /// prompt, else a random one when the daemon picks), the agent, and where.
+    pub fn task_plan(
+        &self,
+        text: &str,
+        name: Option<&str>,
+        w: &Wizard,
+    ) -> (Option<String>, String, String) {
+        let agent = ptyro_agents::default_agent(&self.config);
+        // A PR or issue pasted in: a worktree on it (UX1.10).
+        if let Some((pr, issue)) = work_source(text) {
+            let slug = name.map(str::to_owned).or_else(|| pr.map(|n| format!("pr-{n}")));
+            let place = match (pr, &issue) {
+                (Some(n), _) => format!("PR #{n}'s branch, in a new worktree"),
+                (None, Some(i)) => {
+                    format!("a new worktree for issue {}", i.rsplit('/').next().unwrap_or(i))
+                }
+                _ => String::new(),
+            };
+            return (slug, agent, place);
+        }
+        let slug = name.map(str::to_owned).or_else(|| ptyro_core::names::from_text(text)).map(
+            |n| match &w.project {
+                Some(p) if name.is_none() => self.free_worktree_name(p, Some(&n)),
+                _ => n,
+            },
+        );
+        let place = match w.project.as_ref().and_then(|p| self.project(p)) {
+            Some(p) => format!("new worktree in {}", p.slug),
+            None => format!("here, {}", self.here().display()),
+        };
+        (slug, agent, place)
+    }
+
+    /// A key for `action` where the focus is: the sidebar's own (no prefix), else after the
+    /// prefix.
+    fn hint_key(&self, action: &str) -> Option<String> {
+        if self.focus == Focus::Sidebar
+            && let Some(k) = self.keymap.key_in(Table::Nav, action)
+        {
+            return Some(k);
+        }
+        self.keymap.key_for(action)
+    }
+
+    /// The status bar's hint for what's selected (UX1.16): what you'd most likely do next with
+    /// it, and the key. `None` when there's nothing in particular.
+    pub fn context_hint(&self) -> Option<String> {
+        let row = match self.focus {
+            Focus::Sidebar => self.selected_row()?,
+            Focus::Pane => Row::Session(self.focused_session()?),
+        };
+        let with = |action: &str, what: &str| self.hint_key(action).map(|k| format!("{k} {what}"));
+        let worktree_hint = |w: &WorktreeInfo| {
+            if w.pr.as_ref().is_some_and(|p| p.state == "MERGED") && !w.is_root {
+                return with("worktree.finish", "clean up (merged)")
+                    .or_else(|| with("worktree.remove", "clean up (merged)"));
+            }
+            let changed = w.status.as_ref().is_some_and(|s| s.insertions + s.deletions > 0);
+            changed.then(|| with("inspector", "review its changes")).flatten()
+        };
+        match row {
+            Row::Session(id) => {
+                let s = self.session(id)?;
+                if s.state == ProcessState::Dormant {
+                    return Some("⏎ resumes it".into());
+                }
+                if !s.state.is_live() {
+                    let restart = if self.focus == Focus::Sidebar { "R" } else { "⏎" };
+                    return Some(format!(
+                        "{restart} restart · {}",
+                        with("session.stop", "remove").unwrap_or_default()
+                    ));
+                }
+                if s.status.as_ref().is_some_and(|r| r.status == AgentStatus::Blocked) {
+                    return with("peek", "answer it");
+                }
+                if s.inner_agent.as_deref() == Some("claude") {
+                    return with("session.adopt", "adopt it (hooks, resume)");
+                }
+                if let Some(w) = s.worktree.as_deref().and_then(|w| self.worktree(w))
+                    && s.status.as_ref().is_none_or(|r| r.status != AgentStatus::Working)
+                    && let Some(h) = worktree_hint(w)
+                {
+                    return Some(h);
+                }
+                if self.attention_order(false).iter().any(|a| *a != id) {
+                    return with("attention.next", "who needs you");
+                }
+                None
+            }
+            Row::Worktree(w) => self
+                .worktree(&w)
+                .and_then(worktree_hint)
+                .or_else(|| with("session.new", "start a task here")),
+            Row::Project(_) => with("worktree.new", "new worktree"),
+            Row::Set(_) | Row::Group(_) => None,
+        }
+    }
+
+    /// The UX1.21 actions done here rather than through the CLI.
+    fn native_extra(&mut self, action: &str) {
+        let (project, wt) = self.context();
+        let worktree = wt.as_deref().and_then(|w| self.worktree(w)).cloned();
+        let need_wt = |me: &mut Self| {
+            me.toast_offer("pick a worktree first", false, run_offer("make one", "worktree.new"))
+        };
+        match action {
+            "session.convert" => {
+                match self.focused_session().and_then(|id| self.session(id)).cloned() {
+                    Some(s) if s.kind == SessionKind::Agent => {
+                        let structured = s.structured.is_none();
+                        self.request(
+                            Pending::Spawned { split: None, spec: Box::default() },
+                            Request::Convert { addr: s.id.full(), structured, force: false },
+                        );
+                        self.toast(if structured {
+                            "to structured mode, same conversation…"
+                        } else {
+                            "to its own UI, same conversation…"
+                        });
+                    }
+                    _ => self.toast("only an agent session converts"),
+                }
+            }
+            "project.remove" | "project.untrust" | "project.pin" | "project.unpin"
+            | "project.leave" => {
+                let Some(p) = project.and_then(|p| self.project(&p).cloned()) else {
+                    self.pick_project(None);
+                    return;
+                };
+                match action {
+                    "project.remove" => {
+                        self.overlay = Some(Overlay::Confirm {
+                            text: format!(
+                                "Forget project {}? Its worktrees stay on disk, and it won't register on its own again. [y/N]",
+                                p.slug
+                            ),
+                            action: Confirmed::Send(
+                                Box::new(Request::ProjectRemove { addr: p.id, release: false }),
+                                "forgotten".into(),
+                            ),
+                        });
+                    }
+                    "project.untrust" => self.request(
+                        Pending::Done("scripts no longer trusted".into()),
+                        Request::ProjectUntrust { addr: p.id },
+                    ),
+                    "project.unpin" => self.request(
+                        Pending::Done("unpinned".into()),
+                        Request::ProjectPin { addr: p.id, profile: None },
+                    ),
+                    "project.leave" => self.request(
+                        Pending::Done(format!("{} left {}", p.slug, self.workspace)),
+                        Request::WorkspaceMember {
+                            name: self.workspace.clone(),
+                            project: p.id,
+                            remove: true,
+                        },
+                    ),
+                    _ => {
+                        let items = self
+                            .profiles
+                            .iter()
+                            .map(|x| Item {
+                                label: x.name.clone(),
+                                detail: x.label.clone(),
+                                key: None,
+                                target: Target::Path(x.name.clone().into()),
+                            })
+                            .collect();
+                        self.overlay = Some(Overlay::Picker {
+                            palette: Palette::new(
+                                format!("Pin {} to which profile?", p.slug),
+                                items,
+                            ),
+                            purpose: Purpose::Pin(p.id),
+                        });
+                    }
+                }
+            }
+            "worktree.lock" | "worktree.unlock" => match worktree {
+                Some(w) => self.request(
+                    Pending::Done(
+                        if action == "worktree.lock" { "locked" } else { "unlocked" }.into(),
+                    ),
+                    Request::WorktreeLock { addr: w.id, lock: action == "worktree.lock" },
+                ),
+                None => need_wt(self),
+            },
+            "worktree.pair" | "worktree.unpair" => match worktree {
+                Some(w) => self.request(
+                    Pending::Done(String::new()),
+                    Request::WorktreePair {
+                        addr: w.id,
+                        off: action == "worktree.unpair",
+                        refresh: false,
+                    },
+                ),
+                None => need_wt(self),
+            },
+            "worktree.rename_branch" => match worktree {
+                Some(w) => {
+                    self.overlay = Some(Overlay::Prompt {
+                        title: format!(
+                            "Rename {}'s branch (empty: from its first commit)",
+                            w.qualified()
+                        ),
+                        text: w.branch.clone().unwrap_or_default(),
+                        kind: PromptKind::RenameBranch(w.id),
+                    });
+                }
+                None => need_wt(self),
+            },
+            "workspace.rename" => {
+                self.overlay = Some(Overlay::Prompt {
+                    title: format!("Rename workspace {}", self.workspace),
+                    text: self.workspace.clone(),
+                    kind: PromptKind::RenameWorkspace(self.workspace.clone()),
+                });
+            }
+            "workspace.remove" => {
+                let name = self.workspace.clone();
+                self.overlay = Some(Overlay::Confirm {
+                    text: format!("Remove workspace {name}? Its projects stay registered. [y/N]"),
+                    action: Confirmed::Send(
+                        Box::new(Request::WorkspaceRemove { name }),
+                        "workspace removed".into(),
+                    ),
+                });
+            }
+            "workspace.profile" => {
+                let items = self
+                    .profiles
+                    .iter()
+                    .map(|x| Item {
+                        label: x.name.clone(),
+                        detail: x.label.clone(),
+                        key: None,
+                        target: Target::Path(x.name.clone().into()),
+                    })
+                    .collect();
+                self.overlay = Some(Overlay::Picker {
+                    palette: Palette::new(
+                        format!("Workspace {} runs as which profile?", self.workspace),
+                        items,
+                    ),
+                    purpose: Purpose::WorkspaceProfile,
+                });
+            }
+            "workspace.notify" => {
+                let items = [
+                    ("all", "notify for everything"),
+                    ("badge", "only a badge in the status bar"),
+                    ("mute", "nothing"),
+                ]
+                .iter()
+                .map(|(n, d)| Item {
+                    label: (*n).into(),
+                    detail: (*d).into(),
+                    key: None,
+                    target: Target::Path((*n).into()),
+                })
+                .collect();
+                self.overlay = Some(Overlay::Picker {
+                    palette: Palette::new(
+                        format!("How does {} notify you?", self.workspace),
+                        items,
+                    ),
+                    purpose: Purpose::WorkspaceNotify,
+                });
+            }
+            "workspace.mute" | "project.mute" => {
+                let target = if action == "workspace.mute" {
+                    Some(format!("workspace:{}", self.workspace))
+                } else {
+                    project.and_then(|p| self.project(&p).map(|p| format!("project:{}", p.slug)))
+                };
+                match target {
+                    Some(target) => self.request(
+                        Pending::Done("muted for 1h (the inbox still gets them)".into()),
+                        Request::Mute { target, minutes: Some(60), unmute: false },
+                    ),
+                    None => self.pick_project(None),
+                }
+            }
+            "pr.open" => {
+                self.overlay = Some(Overlay::Prompt {
+                    title: "Which PR? (its number, `pr 12`, or URL)".into(),
+                    text: String::new(),
+                    kind: PromptKind::OpenPr,
+                });
+            }
+            other => self.toast(format!("{other}: not available yet")),
+        }
+    }
+
+    /// `pr.open`: the worktree that has this PR (its session), else a new one on it.
+    fn open_pr(&mut self, text: &str) {
+        let t = text.trim();
+        let number = t.parse::<u32>().ok().or_else(|| work_source(t).and_then(|(pr, _)| pr));
+        let Some(n) = number else {
+            self.toast_err("not a PR: its number, `pr 12`, or its URL");
+            return;
+        };
+        if let Some(w) =
+            self.worktrees.iter().find(|w| w.pr.as_ref().is_some_and(|p| p.number == n)).cloned()
+        {
+            match self
+                .sessions
+                .iter()
+                .find(|s| s.worktree.as_deref() == Some(w.id.as_str()))
+                .map(|s| s.id)
+            {
+                Some(id) => self.show(id, None),
+                None => self.picked(Target::Worktree(w.id), Purpose::Palette),
+            }
+            return;
+        }
+        let Some(p) = self.context().0 else {
+            self.pick_project(None);
+            return;
+        };
+        let agent = ptyro_agents::default_agent(&self.config);
+        let w = Wizard {
+            project: Some(p.clone()),
+            agent: Some(agent),
+            pr: Some(n),
+            name: Some(format!("pr-{n}")),
+            ..Wizard::default()
+        };
+        self.wizard_done(w, Target::NewWorktree(p));
+    }
+
+    /// Pick one of `choices`, then `ptyro <args> <choice>` runs in a split.
+    pub(crate) fn pick_cli(&mut self, title: &str, args: &[&str], choices: &[(&str, &str)]) {
+        let items = choices
+            .iter()
+            .map(|(c, d)| Item {
+                label: (*c).to_owned(),
+                detail: (*d).to_owned(),
+                key: None,
+                target: Target::Path((*c).into()),
+            })
+            .collect();
+        self.overlay = Some(Overlay::Picker {
+            palette: Palette::new(title, items),
+            purpose: Purpose::Cli(args.iter().map(|a| (*a).to_owned()).collect()),
+        });
+    }
+
+    /// The actions that apply to a row (UX1.15), for its menu: a session's, a worktree's, a
+    /// project's. Only what makes sense now (a stopped session restarts, a live one stops).
+    pub fn row_actions(&self, row: &Row) -> Vec<&'static str> {
+        match row {
+            Row::Session(id) => {
+                let Some(s) = self.session(*id) else { return Vec::new() };
+                let mut v = vec!["peek"];
+                if s.state == ProcessState::Dormant {
+                    v.push("session.resume");
+                } else if !s.state.is_live() {
+                    v.push("session.restart");
+                }
+                if s.inner_agent.as_deref() == Some("claude") {
+                    v.push("session.adopt");
+                }
+                v.extend(["session.retitle", "session.rename", "session.explain"]);
+                if s.state.is_live() {
+                    v.push("session.summarize");
+                }
+                if s.kind == SessionKind::Agent && s.state.is_live() {
+                    v.extend(["session.hibernate", "session.mute"]);
+                    if s.structured.is_some() {
+                        v.push("view.chat");
+                    }
+                }
+                if s.worktree.is_some() {
+                    v.extend(["inspector", "worktree.open", "script.run", "script.pick"]);
+                }
+                v.push("pane.split_right");
+                if s.state.is_live() {
+                    v.extend(["session.stop", "session.kill"]);
+                } else {
+                    v.push("session.stop");
+                }
+                v
+            }
+            Row::Worktree(w) => {
+                let root = self.worktree(w).is_some_and(|w| w.is_root);
+                let mut v = vec!["session.new", "shell.here", "inspector", "worktree.finish"];
+                v.extend(["worktree.open", "script.run", "script.pick", "worktree.retitle"]);
+                if !root {
+                    v.extend(["worktree.archive", "worktree.remove"]);
+                }
+                v
+            }
+            Row::Project(_) => vec![
+                "session.new",
+                "worktree.new",
+                "shell.here",
+                "project.trust",
+                "script.pick",
+                "worktree.open",
+            ],
+            Row::Set(_) => vec!["sets"],
+            Row::Group(_) => Vec::new(),
+        }
+    }
+
+    /// `.` / right-click (UX1.15): the row's actions, with their keys. In the pane, the focused
+    /// session's.
+    fn open_row_menu(&mut self) {
+        let row = match (self.focus, self.selected_row(), self.focused_session()) {
+            (Focus::Sidebar, Some(r), _) => r,
+            (_, _, Some(id)) => Row::Session(id),
+            _ => {
+                self.toast_offer(
+                    "nothing here yet",
+                    false,
+                    run_offer("start a task", "session.new"),
+                );
+                return;
+            }
+        };
+        let title = match &row {
+            Row::Session(id) => self.session(*id).map(|s| format!("Session {}", s.name)),
+            Row::Worktree(w) => self.worktree(w).map(|w| format!("Worktree {}", w.qualified())),
+            Row::Project(p) => self.project(p).map(|p| format!("Project {}", p.slug)),
+            Row::Set(_) => Some("Change set".into()),
+            Row::Group(_) => None,
+        };
+        let items: Vec<Item> = self
+            .row_actions(&row)
+            .into_iter()
+            .filter_map(|a| keymap::spec(a))
+            .map(|a| Item {
+                label: a.id.into(),
+                detail: a.desc.into(),
+                key: self.keymap.key_for(a.id),
+                target: Target::Action(Command { action: a.id, arg: None }),
+            })
+            .collect();
+        self.overlay = Some(Overlay::Picker {
+            palette: Palette::new(title.unwrap_or_else(|| "Actions".into()), items),
+            purpose: Purpose::RowMenu(row),
+        });
+    }
+
+    /// The task box's ⏎: the default agent on the prompt, in a new worktree named after it (or
+    /// here, with no project). Nothing typed: today's fast path, a random name.
+    fn start_task(&mut self, text: String, name: Option<String>, w: Wizard) {
+        let text = text.trim().to_owned();
+        let (slug, agent, _) = self.task_plan(&text, name.as_deref(), &w);
+        if let (Some((pr, issue)), Some(p)) = (work_source(&text), w.project.clone()) {
+            // The issue's text becomes the prompt (the daemon's); a PR's agent starts on its branch.
+            let w = Wizard { agent: Some(agent), name: slug, pr, issue, ..w };
+            self.wizard_done(w, Target::NewWorktree(p));
+            return;
+        }
+        let prompt = (!text.is_empty()).then_some(text);
+        let w = Wizard { agent: Some(agent), name: slug, prompt, ..w };
+        match w.project.clone() {
+            Some(p) => self.wizard_done(w, Target::NewWorktree(p)),
+            None => self.start_in(w, None),
+        }
+    }
+
+    fn task_key(
+        &mut self,
+        key: KeyEvent,
+        mut text: String,
+        mut name: Option<String>,
+        mut naming: bool,
+        w: Wizard,
+    ) {
+        let ctrl = key.mods.has(Mods::CTRL);
+        match key.code {
+            KeyCode::Esc => return,
+            KeyCode::Enter => {
+                if let Some(n) = name.as_deref().filter(|n| !n.is_empty())
+                    && let Some(e) = ptyro_core::names::problem(n)
+                {
+                    self.toast_err(format!("name: {e}"));
+                } else {
+                    self.start_task(text, name.filter(|n| !n.is_empty()), w);
+                    return;
+                }
+            }
+            // The full wizard: pick the agent and where, the prompt carried along.
+            KeyCode::Char { c: 'o' } if ctrl => {
+                let prompt = (!text.trim().is_empty()).then(|| text.trim().to_owned());
+                self.open_wizard_with(Wizard { prompt, name: None, ..w });
+                return;
+            }
+            KeyCode::Tab | KeyCode::BackTab => {
+                naming = !naming;
+                if naming && name.is_none() {
+                    name = self.task_plan(&text, None, &w).0;
+                }
+            }
+            KeyCode::Char { c: 'u' } if ctrl => {
+                if naming {
+                    name = Some(String::new());
+                } else {
+                    text.clear();
+                }
+            }
+            KeyCode::Backspace => {
+                if naming {
+                    name.get_or_insert_with(String::new).pop();
+                } else {
+                    text.pop();
+                }
+            }
+            KeyCode::Char { c } if !ctrl => {
+                if naming {
+                    name.get_or_insert_with(String::new).push(c);
+                } else {
+                    text.push(c);
+                }
+            }
+            _ => {}
+        }
+        self.overlay = Some(Overlay::Task { text, name, naming, wizard: w });
+    }
+
+    /// The full wizard, step one: what to run (from the task box's `C-o`). The default agent
+    /// is first.
+    fn open_wizard_with(&mut self, w: Wizard) {
         self.resolve_for(&w);
         let default = ptyro_agents::default_agent(&self.config);
         let mut agents = ptyro_agents::names(&self.config);
@@ -2150,10 +3422,12 @@ impl App {
         });
     }
 
-    /// Step two: where. A new worktree of the current project first.
+    /// Step two: where. A new worktree of the current project first; with no project, after
+    /// "here", adding one (then a new worktree in it).
     fn open_targets(&mut self, w: Wizard) {
         let mut items = Vec::new();
-        if let Some(p) = w.project.as_ref().and_then(|p| self.project(p)) {
+        let project = w.project.as_ref().and_then(|p| self.project(p)).cloned();
+        if let Some(p) = &project {
             items.push(Item {
                 label: format!("+ new worktree in {}", p.slug),
                 detail: "an isolated checkout on a new branch, random name".into(),
@@ -2181,8 +3455,45 @@ impl App {
                 target: Target::Worktree(x.id.clone()),
             });
         }
+        // Where else the work can come from (UX1.10).
+        if let Some(p) = &project {
+            items.push(Item {
+                label: "+ from a PR or an issue…".into(),
+                detail: "paste its URL, or its number".into(),
+                key: None,
+                target: Target::Action(Command { action: "wizard.from", arg: None }),
+            });
+            items.push(Item {
+                label: "+ on an existing branch…".into(),
+                detail: "a branch without a worktree, local or the remote's".into(),
+                key: None,
+                target: Target::Action(Command { action: "wizard.branch", arg: None }),
+            });
+            let dirty = self
+                .worktrees
+                .iter()
+                .find(|x| x.project == p.id && x.is_root)
+                .and_then(|x| x.status.as_ref())
+                .is_some_and(|s| s.dirty() > 0);
+            if dirty {
+                items.push(Item {
+                    label: "+ with my uncommitted changes".into(),
+                    detail: format!("a new worktree takes them from {}'s main checkout", p.slug),
+                    key: None,
+                    target: Target::Action(Command { action: "wizard.take", arg: None }),
+                });
+            }
+        }
         let here = self.here().display().to_string();
         items.push(Item { label: "here".into(), detail: here, key: None, target: Target::Here });
+        if project.is_none() {
+            items.push(Item {
+                label: "+ add a project…".into(),
+                detail: "pick a repository, then start in a new worktree of it".into(),
+                key: None,
+                target: Target::AddProject,
+            });
+        }
         let title = wizard_title(&w, &self.projects, &self.worktrees, self.resolved.as_deref());
         self.overlay = Some(Overlay::Picker {
             palette: Palette::new(title, items),
@@ -2209,11 +3520,21 @@ impl App {
         let agent = w.agent.clone();
         match target {
             Target::NewWorktree(project) => {
+                let agent = agent.filter(|a| !a.starts_with('@'));
                 let spec = WorktreeSpec {
                     project: project.clone(),
                     name: w.name.clone().filter(|n| !n.is_empty()),
                     setup: true,
-                    agent: agent.filter(|a| !a.starts_with('@')),
+                    // The prompt goes to the agent; with no agent it's still the title.
+                    prompt: w.prompt.clone().filter(|_| agent.is_some()),
+                    title: w.prompt.clone(),
+                    agent,
+                    // Where the work comes from (UX1.10).
+                    pr: w.pr,
+                    issue: w.issue.clone(),
+                    existing: w.branch.is_some(),
+                    branch: w.branch.clone(),
+                    take_changes: w.take,
                     ..WorktreeSpec::default()
                 };
                 let req = Request::ProjectScripts { addr: project, worktree: None };
@@ -2235,7 +3556,15 @@ impl App {
             Some(a) => {
                 let cwd = if worktree.is_some() { Default::default() } else { self.here() };
                 self.spawn_spec(
-                    SpawnSpec { agent: Some(a.to_owned()), cwd, worktree, ..SpawnSpec::default() },
+                    SpawnSpec {
+                        agent: Some(a.to_owned()),
+                        cwd,
+                        worktree,
+                        prompt: w.prompt.clone(),
+                        title: w.prompt.clone(),
+                        name: w.name.clone().filter(|n| !n.is_empty()),
+                        ..SpawnSpec::default()
+                    },
                     w.split,
                 );
             }
@@ -2365,7 +3694,18 @@ impl App {
 
     fn open_script_picker(&mut self, wt: String, scripts: ScriptsInfo) {
         if scripts.names.is_empty() {
-            self.toast("no scripts in .ptyro.toml");
+            let file = self
+                .worktree(&wt)
+                .and_then(|w| self.project(&w.project))
+                .map(|p| p.root.join(".ptyro.toml"));
+            match file {
+                Some(f) => self.toast_offer(
+                    "no scripts yet",
+                    false,
+                    Offer { label: "add some in .ptyro.toml".into(), then: Then::Edit(f) },
+                ),
+                None => self.toast("no scripts yet"),
+            }
             return;
         }
         let items = scripts
@@ -2397,7 +3737,36 @@ impl App {
         }
     }
 
-    fn open_add_project(&mut self, paths: Vec<std::path::PathBuf>) {
+    /// The discovery picker; once a project is picked and added, `then` (UX1.6).
+    fn pick_project(&mut self, then: Option<AfterAdd>) {
+        self.request(Pending::Discovered(then), Request::Discover { refresh: false })
+    }
+
+    /// Once the project `after_add` waits for has its main checkout here, do what asked for it.
+    fn try_after_add(&mut self) {
+        let Some((project, _)) = &self.after_add else { return };
+        if !self.worktrees.iter().any(|w| w.project == *project && w.is_root) {
+            return;
+        }
+        let Some((project, then)) = self.after_add.take() else { return };
+        self.context_hint = Some(project.clone());
+        match then {
+            AfterAdd::Run(action) => self.run(&Command { action, arg: None }),
+            AfterAdd::Targets(w) => {
+                let root = self.root_of(&project);
+                let w = Wizard { project: Some(project), worktree: root, ..w };
+                self.resolve_for(&w);
+                self.open_targets(w);
+            }
+        }
+        self.context_hint = None;
+    }
+
+    fn root_of(&self, project: &str) -> Option<String> {
+        self.worktrees.iter().find(|w| w.project == project && w.is_root).map(|w| w.id.clone())
+    }
+
+    fn open_add_project(&mut self, paths: Vec<std::path::PathBuf>, then: Option<AfterAdd>) {
         let mut items = Vec::new();
         if let Ok(here) = std::env::current_dir() {
             items.push(Item {
@@ -2417,8 +3786,34 @@ impl App {
             });
         }
         self.overlay = Some(Overlay::Picker {
-            palette: Palette::new(format!("Add a project to {}", self.workspace), items),
-            purpose: Purpose::AddProject,
+            palette: Palette::new(
+                match &then {
+                    Some(_) => {
+                        format!("No project here yet: pick one to add to {}", self.workspace)
+                    }
+                    None => format!("Add a project to {}", self.workspace),
+                },
+                items,
+            ),
+            purpose: Purpose::AddProject(then),
+        });
+    }
+
+    fn confirm_archive(&mut self, w: &WorktreeInfo) {
+        let live = self
+            .sessions
+            .iter()
+            .filter(|s| s.worktree.as_deref() == Some(w.id.as_str()) && s.state.is_live())
+            .count();
+        let note =
+            if live > 0 { format!(" Its {live} running session(s) stop.") } else { String::new() };
+        self.overlay = Some(Overlay::Confirm {
+            text: format!(
+                "Archive {} ({})? Its branch and a snapshot of its files are kept; restore brings it back.{note} [Y/n]",
+                w.qualified(),
+                w.branch.as_deref().unwrap_or("-")
+            ),
+            action: Confirmed::Archive(w.id.clone()),
         });
     }
 
@@ -2494,6 +3889,28 @@ impl App {
         for s in self.session_items(false) {
             items.push(Item { label: format!("go {}", s.label), ..s });
         }
+        // Worktrees and projects (UX1.18): go to them.
+        let here = self.tree().project_ids();
+        for w in self.worktrees.iter().filter(|w| here.contains(&w.project)) {
+            items.push(Item {
+                label: format!("worktree {}", w.qualified()),
+                detail: [w.branch.clone(), w.title.clone()]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join(" · "),
+                key: None,
+                target: Target::Worktree(w.id.clone()),
+            });
+        }
+        for p in self.projects.iter().filter(|p| here.contains(&p.id)) {
+            items.push(Item {
+                label: format!("project {}", p.slug),
+                detail: p.root.display().to_string(),
+                key: None,
+                target: Target::Project(p.id.clone()),
+            });
+        }
         for w in &self.workspaces {
             if w.name != self.workspace {
                 items.push(Item {
@@ -2520,6 +3937,14 @@ impl App {
             palette: Palette::new("Command palette", items),
             purpose: Purpose::Palette,
         });
+        // The context worktree's scripts join as soon as the daemon says what they are.
+        if let (Some(project), Some(wt)) = self.context() {
+            let addr = self.worktree(&wt).map_or_else(|| wt.clone(), WorktreeInfo::qualified);
+            self.request(
+                Pending::PaletteScripts(wt),
+                Request::ProjectScripts { addr: project, worktree: Some(addr) },
+            );
+        }
     }
 
     fn overlay_key(&mut self, key: KeyEvent) {
@@ -2599,6 +4024,27 @@ impl App {
                     .saturating_sub(self.overlay_body_h(2));
                 self.overlay = Some(Overlay::Help { filter, scroll: scroll.min(max) });
             }
+            Overlay::Task { text, name, naming, wizard } => {
+                self.task_key(key, text, name, naming, wizard)
+            }
+            Overlay::Suggest { suggestions, spec, split } => match key.code {
+                KeyCode::Char { c: 'y' | 'Y' } | KeyCode::Enter => {
+                    // Written (and trusted when they're its only scripts); then the usual check.
+                    let addr = spec.project.clone();
+                    self.request(
+                        Pending::Suggested(spec, split),
+                        Request::ProjectSuggest { addr, apply: Some(true) },
+                    );
+                }
+                KeyCode::Char { c: 'n' | 'N' } | KeyCode::Esc => {
+                    self.request(
+                        Pending::Done(String::new()),
+                        Request::ProjectSuggest { addr: spec.project.clone(), apply: Some(false) },
+                    );
+                    self.create_worktree(*spec, split);
+                }
+                _ => self.overlay = Some(Overlay::Suggest { suggestions, spec, split }),
+            },
             Overlay::Picker { mut palette, purpose } => match palette.key(key) {
                 Picked::Stay => self.overlay = Some(Overlay::Picker { palette, purpose }),
                 Picked::Close => {}
@@ -2622,6 +4068,11 @@ impl App {
                 KeyCode::Char { c: 'u' } if key.mods.has(Mods::CTRL) => {
                     self.overlay = Some(Overlay::Prompt { title, text: String::new(), kind });
                 }
+                // Renaming: C-t edits the title instead (UX1.24).
+                KeyCode::Char { c: 't' } if key.mods.has(Mods::CTRL) => match kind {
+                    PromptKind::Rename(id) => self.open_retitle(id),
+                    kind => self.overlay = Some(Overlay::Prompt { title, text, kind }),
+                },
                 KeyCode::Char { c } if !key.mods.has(Mods::CTRL) => {
                     text.push(c);
                     self.overlay = Some(Overlay::Prompt { title, text, kind });
@@ -2631,6 +4082,13 @@ impl App {
             Overlay::Confirm { action, text } => match (key.code, &action) {
                 // "Keep the pin? [Y/n]": Enter keeps it.
                 (KeyCode::Enter, Confirmed::KeepPin(_)) => {}
+                // Archiving loses nothing: Enter agrees.
+                (KeyCode::Enter, Confirmed::Archive(_)) => self.confirmed(action),
+                // A removal that would lose work: `a` archives it instead (UX1.12).
+                (KeyCode::Char { c: 'a' | 'A' }, Confirmed::RemoveWorktree { id, force: true }) => {
+                    let id = id.clone();
+                    self.confirmed(Confirmed::Archive(id));
+                }
                 (KeyCode::Char { c: 'n' | 'N' }, Confirmed::KeepPin(id)) => {
                     let id = id.clone();
                     self.request(
@@ -2656,10 +4114,11 @@ impl App {
                         spec.setup = false;
                         self.create_worktree(*spec, split);
                     }
-                    self.toast(format!(
-                        "not trusted; `ptyro project trust {}` later",
-                        scripts.project
-                    ));
+                    self.toast_offer(
+                        format!("{}'s scripts not trusted", scripts.project),
+                        false,
+                        run_offer("trust them after all", "project.trust"),
+                    );
                 }
                 KeyCode::Down | KeyCode::Char { c: 'j' } => {
                     // Three header lines above the scripts.
@@ -2696,6 +4155,7 @@ impl App {
                 },
             ),
             Confirmed::Stop(id) => {
+                self.stopping.insert(id);
                 let name = self.session(id).map(|s| s.name.clone()).unwrap_or_default();
                 self.request(
                     Pending::Done(format!("stopped {name}")),
@@ -2720,10 +4180,17 @@ impl App {
                 );
             }
             Confirmed::KeepPin(_) => {}
+            Confirmed::Append(file, line) => self.append_line(file, line),
+            Confirmed::Archive(id) => {
+                self.request(
+                    Pending::Done(String::new()),
+                    Request::WorktreeArchive { addr: id, stop_sessions: true },
+                );
+            }
         }
     }
 
-    fn picked(&mut self, target: Target, purpose: Purpose) {
+    pub(crate) fn picked(&mut self, target: Target, purpose: Purpose) {
         let split = match purpose {
             Purpose::Split(d) => Some(d),
             _ => None,
@@ -2744,21 +4211,142 @@ impl App {
                 t @ (Target::NewWorktree(_) | Target::Worktree(_) | Target::Here),
                 Purpose::Target(w),
             ) => self.wizard_done(w, t),
+            // The wizard's other sources (UX1.10).
+            (Target::Action(Command { action: "wizard.from", .. }), Purpose::Target(w)) => {
+                self.overlay = Some(Overlay::Prompt {
+                    title: "From which PR or issue? (its URL, `pr 12` or `issue 34`)".into(),
+                    text: String::new(),
+                    kind: PromptKind::WorkSource(w),
+                });
+            }
+            (Target::Action(Command { action: "wizard.branch", .. }), Purpose::Target(w)) => {
+                let project = w.project.clone().unwrap_or_default();
+                self.request(Pending::Branches(w), Request::Branches { project });
+            }
+            (Target::Action(Command { action: "wizard.take", .. }), Purpose::Target(w)) => {
+                let project = w.project.clone().unwrap_or_default();
+                self.wizard_done(Wizard { take: true, ..w }, Target::NewWorktree(project));
+            }
+            (Target::Path(b), Purpose::Branch(w)) => {
+                let project = w.project.clone().unwrap_or_default();
+                let branch = b.to_string_lossy().into_owned();
+                let w = Wizard {
+                    name: w.name.clone().or_else(|| ptyro_core::names::from_text(&branch)),
+                    branch: Some(branch),
+                    ..w
+                };
+                self.wizard_done(w, Target::NewWorktree(project));
+            }
             (Target::Workspace(name), _) => self.switch_workspace(name),
             (Target::NewWorkspace, _) => {
                 self.overlay = Some(Overlay::Prompt {
                     title: "New workspace — name".into(),
                     text: String::new(),
-                    kind: PromptKind::NewWorkspace,
+                    kind: PromptKind::NewWorkspace(Some(self.free_workspace_name())),
                 });
             }
             (Target::Editor(name), Purpose::Editor(wt)) => self.open_editor(&wt, &name),
             (Target::Script(name), Purpose::Script(wt)) => self.run_script(wt, Some(name)),
-            (Target::Path(path), _) => {
+            (Target::Worktree(id), Purpose::Gc) => {
+                if let Some(w) = self.worktree(&id).cloned() {
+                    self.confirm_archive(&w);
+                }
+            }
+            (Target::Path(word), Purpose::CliPick(mut job)) => {
+                job.done.push(word.to_string_lossy().into_owned());
+                self.cli_step(*job);
+            }
+            (Target::Path(p), Purpose::Pin(project)) => self.request(
+                Pending::Done("pinned".into()),
+                Request::ProjectPin {
+                    addr: project,
+                    profile: Some(p.to_string_lossy().into_owned()),
+                },
+            ),
+            (Target::Path(p), Purpose::WorkspaceProfile) => self.request(
+                Pending::Done("workspace profile set".into()),
+                Request::WorkspaceSet {
+                    name: self.workspace.clone(),
+                    profile: Some(p.to_string_lossy().into_owned()),
+                    notify: None,
+                },
+            ),
+            (Target::Path(n), Purpose::WorkspaceNotify) => self.request(
+                Pending::Done("workspace notifications set".into()),
+                Request::WorkspaceSet {
+                    name: self.workspace.clone(),
+                    profile: None,
+                    notify: Some(n.to_string_lossy().into_owned()),
+                },
+            ),
+            (Target::Path(arg), Purpose::Cli(mut args)) => {
+                args.push(arg.to_string_lossy().into_owned());
+                self.run_cli(&args);
+            }
+            (Target::Path(addr), Purpose::Restore) => {
+                self.request(
+                    Pending::Done("restored".into()),
+                    Request::WorktreeRestore { addr: addr.to_string_lossy().into_owned() },
+                );
+            }
+            (Target::Path(path), purpose) => {
+                let then = match purpose {
+                    Purpose::AddProject(then) => then,
+                    _ => None,
+                };
                 let workspace = Some(self.workspace.clone());
-                self.request(Pending::ProjectAdded, Request::ProjectAdd { path, workspace });
+                self.request(Pending::ProjectAdded(then), Request::ProjectAdd { path, workspace });
+            }
+            (Target::AddProject, Purpose::Target(w)) => {
+                self.pick_project(Some(AfterAdd::Targets(w)))
+            }
+            (Target::Action(Command { action, .. }), Purpose::Finish(id)) => {
+                let integrate = action == "integrate";
+                self.toast(if integrate {
+                    "finishing: committing what's left, then integrating…"
+                } else {
+                    "finishing: committing what's left, then a PR…"
+                });
+                self.request(
+                    Pending::Done(String::new()),
+                    Request::WorktreeFinish { addr: id, integrate },
+                );
+            }
+            (target, Purpose::Home) => self.home_picked(target),
+            (Target::Fix(i), Purpose::Health) => self.fix(i),
+            // A row's action: with that row selected, so it's what the action works on.
+            (Target::Action(cmd), Purpose::RowMenu(row)) => {
+                let rows = self.rows();
+                if let Some(i) = rows.iter().position(|r| *r == row) {
+                    self.set_sel(&rows, i);
+                }
+                self.focus = Focus::Sidebar;
+                self.run(&cmd);
             }
             (Target::Action(cmd), _) => self.run(&cmd),
+            // From the palette: go to a worktree (its first session) or a project.
+            (Target::Worktree(id), _) => {
+                let rows = self.rows();
+                if let Some(i) = rows.iter().position(|r| *r == Row::Worktree(id.clone())) {
+                    self.set_sel(&rows, i);
+                }
+                match self.sessions.iter().find(|s| s.worktree.as_deref() == Some(id.as_str())) {
+                    Some(s) => {
+                        let sid = s.id;
+                        self.show(sid, None);
+                    }
+                    None => self.focus = Focus::Sidebar,
+                }
+            }
+            (Target::Project(id), _) => {
+                self.collapsed.remove(&id);
+                let rows = self.rows();
+                if let Some(i) = rows.iter().position(|r| *r == Row::Project(id.clone())) {
+                    self.set_sel(&rows, i);
+                }
+                self.focus = Focus::Sidebar;
+            }
+            (Target::RunScript(wt, name), _) => self.run_script(wt, Some(name)),
             (Target::Session(id), _) => self.show(id, split),
             (Target::Theme(name), _) => self.set_theme(name),
             (Target::NewShell, _) => self.spawn(Vec::new(), split, None),
@@ -2797,7 +4385,7 @@ impl App {
                     return Err(format!("{}/{t} exists", x.project_slug));
                 }
             }
-            PromptKind::NewWorkspace if !t.is_empty() => {
+            PromptKind::NewWorkspace(_) if !t.is_empty() => {
                 name(t)?;
                 if self.workspaces.iter().any(|w| w.name == t) {
                     return Err(format!("workspace {t} exists"));
@@ -2839,7 +4427,13 @@ impl App {
                 }
             }
             PromptKind::WorktreeName(mut w) => {
-                w.name = Some(text.trim().to_owned());
+                // Nothing typed: the name it offered (UX1.24).
+                let typed = text.trim().to_owned();
+                w.name = Some(if typed.is_empty() {
+                    w.suggested.clone().unwrap_or_default()
+                } else {
+                    typed
+                });
                 // Then: which agent (shell for none).
                 let mut items: Vec<Item> = ptyro_agents::names(&self.config)
                     .into_iter()
@@ -2891,8 +4485,51 @@ impl App {
             }
             PromptKind::Orch(input) => self.orch_input(input, text),
             PromptKind::Sets(input) => self.sets_input(input, text),
-            PromptKind::NewWorkspace => {
-                let name = text.trim().to_owned();
+            PromptKind::Retitle(id) => {
+                let title = Some(text.trim().to_owned()).filter(|t| !t.is_empty());
+                let done = if title.is_some() { "retitled" } else { "title cleared" };
+                self.request(
+                    Pending::Done(done.into()),
+                    Request::Retitle { addr: id.full(), title, worktree: false },
+                );
+            }
+            PromptKind::CliAsk(job, vars) => self.cli_answer(*job, &text, vars),
+            PromptKind::RenameBranch(id) => {
+                let branch = Some(text.trim().to_owned()).filter(|b| !b.is_empty());
+                self.request(
+                    Pending::Done("branch renamed".into()),
+                    Request::WorktreeRenameBranch { addr: id, branch },
+                );
+            }
+            PromptKind::RenameWorkspace(old) => {
+                let new_name = text.trim().to_owned();
+                if !new_name.is_empty() && new_name != old {
+                    self.request(
+                        Pending::Done(format!("workspace {new_name}")),
+                        Request::WorkspaceRename { name: old, new_name: new_name.clone() },
+                    );
+                    self.workspace = new_name;
+                }
+            }
+            PromptKind::OpenPr => self.open_pr(&text),
+            PromptKind::WorkSource(w) => match work_source(&text) {
+                Some((pr, issue)) => {
+                    let project = w.project.clone().unwrap_or_default();
+                    self.wizard_done(Wizard { pr, issue, ..w }, Target::NewWorktree(project));
+                }
+                None => self.toast_err("not a PR or issue: paste its GitHub URL, or `pr 12`"),
+            },
+            PromptKind::RetitleWorktree(id) => {
+                let title = Some(text.trim().to_owned()).filter(|t| !t.is_empty());
+                let done = if title.is_some() { "retitled" } else { "title cleared" };
+                self.request(
+                    Pending::Done(done.into()),
+                    Request::Retitle { addr: id, title, worktree: true },
+                );
+            }
+            PromptKind::NewWorkspace(suggested) => {
+                let typed = text.trim().to_owned();
+                let name = if typed.is_empty() { suggested.unwrap_or_default() } else { typed };
                 if !name.is_empty() {
                     let req =
                         Request::WorkspaceNew { name: name.clone(), profile: None, notify: None };
@@ -3032,6 +4669,14 @@ impl App {
         }
         // Dragging a divider or a selection continues wherever the mouse goes.
         match (&self.drag, m.kind) {
+            (Some(Drag::Sidebar), K::Drag(_)) => {
+                self.set_sidebar_width(x);
+                return;
+            }
+            (Some(Drag::Sidebar), K::Up(_)) => {
+                self.drag = None;
+                return;
+            }
             (Some(Drag::Divider(d)), K::Drag(_)) => {
                 let d = d.clone();
                 self.layout.drag(&d, x, y);
@@ -3065,16 +4710,41 @@ impl App {
             }
             _ => {}
         }
+        // The sidebar's edge: drag it to resize the sidebar (UX1.7).
+        if let Some(side) = self.sidebar_area().filter(|_| !self.sidebar_zoom)
+            && matches!(m.kind, K::Down(crossterm::event::MouseButton::Left))
+            && x == side.right()
+            && y < side.bottom()
+        {
+            self.drag = Some(Drag::Sidebar);
+            return;
+        }
         if let Some(side) = self.sidebar_area()
             && side.contains((x, y).into())
         {
             match m.kind {
+                // Right-click: that row's actions (UX1.15).
+                K::Down(crossterm::event::MouseButton::Right) => {
+                    let rows = self.rows();
+                    let body = crate::ui::sidebar_body(self, side);
+                    let row = y
+                        .checked_sub(side.y + 1)
+                        .and_then(|l| body.lines.get(l as usize + body.skip))
+                        .map(|(i, _)| *i);
+                    if let Some(i) = row.filter(|i| rows.get(*i).is_some_and(Row::selectable)) {
+                        self.set_sel(&rows, i);
+                        self.focus = Focus::Sidebar;
+                        self.open_row_menu();
+                    }
+                }
                 K::Down(_) => {
                     let rows = self.rows();
-                    let skip = self.sidebar_skip(side, self.sel_index(&rows));
-                    // The title line has no row.
-                    let row = y.checked_sub(side.y + 1).map(|r| r as usize + skip);
-                    let row = row.unwrap_or(usize::MAX);
+                    let body = crate::ui::sidebar_body(self, side);
+                    // The title line has no row; a row may span several lines (UX1.2).
+                    let row = y
+                        .checked_sub(side.y + 1)
+                        .and_then(|l| body.lines.get(l as usize + body.skip))
+                        .map_or(usize::MAX, |(i, _)| *i);
                     match rows.get(row).cloned() {
                         Some(Row::Session(id)) => {
                             self.set_sel(&rows, row);
@@ -3268,6 +4938,9 @@ impl App {
     /// The worktree (and project) a new session would go in: the selected sidebar row's, else
     /// the focused session's, else the workspace's first project's main checkout.
     pub fn context(&self) -> (Option<String>, Option<String>) {
+        if let Some(p) = &self.context_hint {
+            return (Some(p.clone()), self.root_of(p));
+        }
         if self.focus == Focus::Sidebar
             && let Some(r) = self.selected_row()
         {
@@ -3621,6 +5294,37 @@ impl App {
     }
 }
 
+/// What a pane shows once `gone` leaves it (UX1.23): live sessions first (a dormant one never:
+/// showing it would wake it), then the nearest place (same worktree, then project, then
+/// anywhere), then the nearest in the sidebar's `order`, the one after before the one before.
+/// `shown` (in other panes) are skipped.
+fn neighbour(
+    order: &[SessionId],
+    gone: &SessionInfo,
+    sessions: &[SessionInfo],
+    shown: &[SessionId],
+) -> Option<SessionId> {
+    let at = order.iter().position(|id| *id == gone.id).unwrap_or(0);
+    let same = |a: &Option<String>, b: &Option<String>| a.is_some() && a == b;
+    order
+        .iter()
+        .enumerate()
+        .filter(|(_, id)| **id != gone.id && !shown.contains(id))
+        .filter_map(|(i, id)| sessions.iter().find(|s| s.id == *id).map(|s| (i, s)))
+        .filter(|(_, s)| s.state != ProcessState::Dormant)
+        .min_by_key(|(i, s)| {
+            let place = if same(&s.worktree, &gone.worktree) {
+                0
+            } else if same(&s.project, &gone.project) {
+                1
+            } else {
+                2
+            };
+            (!s.state.is_live(), place, i.abs_diff(at), *i < at)
+        })
+        .map(|(_, s)| s.id)
+}
+
 /// Where `anchor` is in `rows`; once it's gone, the selectable row nearest `fallback` (its
 /// index when it was selected).
 fn anchor_index(rows: &[Row], anchor: Option<&Row>, fallback: usize) -> usize {
@@ -3741,6 +5445,1029 @@ mod tests {
         })
     }
 
+    fn placed(name: &str, project: Option<&str>, worktree: Option<&str>) -> SessionInfo {
+        let mut s = session(name);
+        s.project = project.map(Into::into);
+        s.worktree = worktree.map(Into::into);
+        s
+    }
+
+    fn shows(app: &App, pane: PaneId) -> Option<String> {
+        let id = app.panes.get(&pane)?.session?;
+        app.session(id).map(|s| s.name.clone())
+    }
+
+    #[test]
+    fn the_neighbour_is_live_nearby_and_after_first() {
+        let (a, b, c) = (session("a"), session("b"), session("c"));
+        let all = vec![a.clone(), b.clone(), c.clone()];
+        let order: Vec<SessionId> = all.iter().map(|s| s.id).collect();
+        // The one after, else the one before.
+        assert_eq!(neighbour(&order, &b, &all, &[]), Some(c.id));
+        assert_eq!(neighbour(&order, &c, &all, &[]), Some(b.id));
+        // Shown in another pane: skipped.
+        assert_eq!(neighbour(&order, &b, &all, &[c.id]), Some(a.id));
+        assert_eq!(neighbour(&order, &b, &all, &[a.id, c.id]), None);
+
+        // Live beats exited, and a dormant agent is never picked (showing it would wake it).
+        let mut exited = session("exited");
+        exited.state = ProcessState::Exited { code: Some(0), signal: None };
+        let mut dormant = session("dormant");
+        dormant.state = ProcessState::Dormant;
+        let gone = session("gone");
+        let all = vec![gone.clone(), dormant.clone(), exited.clone(), a.clone()];
+        let order: Vec<SessionId> = all.iter().map(|s| s.id).collect();
+        assert_eq!(neighbour(&order, &gone, &all, &[]), Some(a.id));
+        assert_eq!(neighbour(&order, &gone, &all, &[a.id]), Some(exited.id));
+        assert_eq!(neighbour(&order, &gone, &all, &[a.id, exited.id]), None);
+
+        // Same worktree beats same project beats elsewhere, however far down.
+        let gone = placed("gone", Some("p"), Some("w1"));
+        let near = placed("near", None, None);
+        let project = placed("project", Some("p"), Some("w2"));
+        let worktree = placed("worktree", Some("p"), Some("w1"));
+        let all = vec![gone.clone(), near.clone(), project.clone(), worktree.clone()];
+        let order: Vec<SessionId> = all.iter().map(|s| s.id).collect();
+        assert_eq!(neighbour(&order, &gone, &all, &[]), Some(worktree.id));
+        assert_eq!(neighbour(&order, &gone, &all, &[worktree.id]), Some(project.id));
+    }
+
+    #[test]
+    fn a_removed_session_s_pane_shows_the_next_one() {
+        let mut app = app();
+        let (a, b, c) = (session("a"), session("b"), session("c"));
+        app.sessions = vec![a.clone(), b.clone(), c.clone()];
+        app.panes.get_mut(&1).unwrap().session = Some(b.id);
+        app.on_event(DomainEvent::SessionRemoved { id: b.id });
+        assert_eq!(shows(&app, 1).as_deref(), Some("c"), "the one after it");
+        app.on_event(DomainEvent::SessionRemoved { id: c.id });
+        assert_eq!(shows(&app, 1).as_deref(), Some("a"), "the last one: the one before");
+        app.on_event(DomainEvent::SessionRemoved { id: a.id });
+        assert_eq!(shows(&app, 1), None);
+        let shown = screen(&app);
+        assert!(shown.contains("Nothing running in main yet"), "{shown}");
+        assert!(shown.contains("start a task: say what to do"), "{shown}");
+    }
+
+    #[test]
+    fn in_splits_a_pane_takes_a_session_not_shown_else_closes() {
+        let mut app = app();
+        let (a, b, c) = (session("a"), session("b"), session("c"));
+        app.sessions = vec![a.clone(), b.clone(), c.clone()];
+        let right = app.layout.split(1, Dir::Right).unwrap();
+        app.panes.insert(right, PaneState::default());
+        app.panes.get_mut(&1).unwrap().session = Some(a.id);
+        app.panes.get_mut(&right).unwrap().session = Some(b.id);
+        app.focused = right;
+        app.on_event(DomainEvent::SessionRemoved { id: b.id });
+        assert_eq!(shows(&app, right).as_deref(), Some("c"));
+        // Only `a` is left, and the other pane shows it: this split closes.
+        app.on_event(DomainEvent::SessionRemoved { id: c.id });
+        assert!(!app.layout.contains(right));
+        assert_eq!(app.focused, 1);
+        assert_eq!(shows(&app, 1).as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn a_session_stopped_here_moves_its_pane_on_unless_on_stop_is_stay() {
+        let mut app = app();
+        let (a, b) = (session("a"), session("b"));
+        app.sessions = vec![a.clone(), b.clone()];
+        app.panes.get_mut(&1).unwrap().session = Some(a.id);
+        let exited = |s: &SessionInfo| {
+            let mut s = s.clone();
+            s.state = ProcessState::Exited { code: Some(0), signal: None };
+            DomainEvent::SessionExited { info: s }
+        };
+        // Exiting on its own (not stopped here): the pane keeps showing it, with ⏎ restart.
+        app.on_event(exited(&b));
+        assert_eq!(shows(&app, 1).as_deref(), Some("a"));
+        app.confirmed(Confirmed::Stop(a.id));
+        app.on_event(exited(&a));
+        assert_eq!(shows(&app, 1).as_deref(), Some("b"), "an exited one beats nothing");
+        assert_eq!(app.panes[&1].last, Some(a.id), "` brings the stopped one back");
+        assert!(app.session(a.id).is_some(), "it stays in the sidebar");
+
+        let mut app = self::app();
+        app.config.ui.on_stop = ptyro_core::config::OnStop::Stay;
+        app.sessions = vec![a.clone(), b.clone()];
+        app.panes.get_mut(&1).unwrap().session = Some(a.id);
+        app.confirmed(Confirmed::Stop(a.id));
+        app.on_event(exited(&a));
+        assert_eq!(shows(&app, 1).as_deref(), Some("a"));
+    }
+
+    fn status(s: &mut SessionInfo, st: AgentStatus, kind: Option<&str>, detail: Option<&str>) {
+        use ptyro_core::status::{Confidence, SignalSource, StatusRecord};
+        let mut r = StatusRecord::new(st, Confidence::High, SignalSource::Hook);
+        r.kind = kind.map(Into::into);
+        r.detail = detail.map(Into::into);
+        r.since_ms = ptyro_core::now_ms() - 125_000;
+        s.status = Some(r);
+    }
+
+    /// The sidebar's columns of the screen, one string per line.
+    fn sidebar(app: &App) -> Vec<String> {
+        screen(app).lines().map(|l| l.chars().take(30).collect::<String>()).collect()
+    }
+
+    fn rows_say(app: &App, want: &str) -> bool {
+        sidebar(app).iter().any(|l| l.contains(want))
+    }
+
+    #[test]
+    fn session_rows_say_what_each_one_is_doing() {
+        let mut app = app();
+        let mut working = session("fixer");
+        working.kind = SessionKind::Agent;
+        working.agent = Some("claude".into());
+        working.foreground = Some("claude".into());
+        working.task = Some("fix the flaky test in tests/api.rs".into());
+        working.activity = Some("Bash: cargo test".into());
+        status(&mut working, AgentStatus::Working, None, None);
+        let mut blocked = session("asker");
+        blocked.kind = SessionKind::Agent;
+        status(&mut blocked, AgentStatus::Blocked, Some("permission"), Some("Bash: npm i"));
+        let mut idle = session("done-one");
+        idle.kind = SessionKind::Agent;
+        idle.task = Some("add --json".into());
+        idle.last_reply = Some("All tests pass.".into());
+        status(&mut idle, AgentStatus::Idle, None, None);
+        let mut shell = session("sh");
+        shell.command = Some(ptyro_core::session::ShellCommand {
+            text: Some("cargo test".into()),
+            started_ms: ptyro_core::now_ms() - 50_000,
+            ended_ms: Some(ptyro_core::now_ms() - 9_000),
+            exit: Some(101),
+        });
+        app.sessions = vec![working, blocked, idle, shell];
+        let lines = sidebar(&app);
+        let has = |w: &str| lines.iter().any(|l| l.contains(w));
+        assert!(has("fixer claude 2m"), "line 1: the program, and how long: {lines:#?}");
+        assert!(has("now Bash: cargo test"), "{lines:#?}");
+        assert!(has("task fix the flaky"), "{lines:#?}");
+        assert!(has("wants Bash: npm i"), "{lines:#?}");
+        assert!(has("y/a/n answers"), "{lines:#?}");
+        assert!(has("last All tests pass."), "{lines:#?}");
+        assert!(has("last cargo test ✗101"), "{lines:#?}");
+        assert!(!lines.iter().any(|l| l.contains("2.1.")), "never a version");
+
+        // Compact: one line each.
+        app.config.ui.sidebar_detail = ptyro_core::config::SidebarDetail::Compact;
+        assert!(!rows_say(&app, "task fix") && !rows_say(&app, "wants"));
+        assert!(rows_say(&app, "fixer"));
+    }
+
+    #[test]
+    fn a_summary_stands_in_for_its_turns_last_reply() {
+        let mut app = app();
+        let mut idle = session("done-one");
+        idle.kind = SessionKind::Agent;
+        idle.turns = 2;
+        idle.last_reply = Some("I changed 14 files and ran the suite twice.".into());
+        idle.summary = Some(ptyro_core::session::Summary {
+            text: "Fixed the login test; waiting for review".into(),
+            turn: 2,
+            at_ms: ptyro_core::now_ms(),
+        });
+        status(&mut idle, AgentStatus::Idle, None, None);
+        app.sessions = vec![idle];
+        assert!(rows_say(&app, "≈ Fixed the login test"), "{:#?}", sidebar(&app));
+        assert!(!rows_say(&app, "last I changed"), "the summary says it: {:#?}", sidebar(&app));
+        // From an earlier turn: both.
+        app.sessions[0].turns = 3;
+        assert!(rows_say(&app, "≈ Fixed") && rows_say(&app, "last I changed"));
+        // Working: what it does now instead.
+        status(&mut app.sessions[0], AgentStatus::Working, None, None);
+        assert!(!rows_say(&app, "≈ Fixed"));
+        assert!(app.row_actions(&Row::Session(app.sessions[0].id)).contains(&"session.summarize"));
+    }
+
+    #[test]
+    fn an_agent_started_in_a_shell_reads_shell_then_agent_and_offers_adopting() {
+        let mut app = app();
+        let mut sh = session("sh");
+        sh.argv = vec!["/bin/zsh".into(), "-l".into()];
+        sh.foreground = Some("claude".into());
+        sh.inner_agent = Some("claude".into());
+        status(&mut sh, AgentStatus::Idle, None, None);
+        sh.status.as_mut().unwrap().confidence = ptyro_core::status::Confidence::Low;
+        app.sessions = vec![sh];
+        let lines = sidebar(&app);
+        assert!(lines.iter().any(|l| l.contains("◌ sh zsh › claude")), "{lines:#?}");
+        assert!(lines.iter().any(|l| l.contains("A adopts it")), "{lines:#?}");
+    }
+
+    #[test]
+    fn when_rows_dont_fit_only_the_ones_in_focus_or_wanting_you_open_up() {
+        let mut app = app();
+        let mut many: Vec<SessionInfo> = (0..14)
+            .map(|n| {
+                let mut s = session(&format!("s{n:02}"));
+                s.task = Some(format!("task number {n}"));
+                s
+            })
+            .collect();
+        status(&mut many[7], AgentStatus::Blocked, Some("question"), Some("which db?"));
+        app.panes.get_mut(&1).unwrap().session = Some(many[3].id);
+        app.sessions = many;
+        // 14 rows and 16 detail lines don't fit in 27: the focused and blocked rows open.
+        assert!(rows_say(&app, "task number 3"), "the focused one");
+        assert!(rows_say(&app, "wants which db?"), "the blocked one");
+        assert!(!rows_say(&app, "task number 5"), "the rest stay one line");
+        app.config.ui.sidebar_detail = ptyro_core::config::SidebarDetail::Full;
+        assert!(rows_say(&app, "task number 0"));
+    }
+
+    #[test]
+    fn a_click_on_a_detail_line_picks_its_session() {
+        let mut app = app();
+        let mut a = session("alpha");
+        a.task = Some("first task".into());
+        let b = session("beta");
+        app.sessions = vec![a.clone(), b.clone()];
+        let lines = sidebar(&app);
+        let y = lines.iter().position(|l| l.contains("first task")).unwrap() as u16;
+        let beta = lines.iter().position(|l| l.contains("beta")).unwrap() as u16;
+        let click = |row: u16| crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: 3,
+            row,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        };
+        app.on_mouse(&click(beta));
+        assert_eq!(app.focused_session(), Some(b.id));
+        app.on_mouse(&click(y));
+        assert_eq!(app.focused_session(), Some(a.id), "its detail line is part of its row");
+    }
+
+    #[test]
+    fn everything_at_once_opens_every_row_without_resizing_a_session() {
+        let mut app = app();
+        let sessions: Vec<SessionInfo> = (0..14)
+            .map(|n| {
+                let mut s = session(&format!("s{n:02}"));
+                s.task = Some(format!("the task of session number {n}, which is long"));
+                s
+            })
+            .collect();
+        app.panes.get_mut(&1).unwrap().session = Some(sessions[0].id);
+        app.sessions = sessions.clone();
+        let main = app.main_area();
+        app.run(&Command { action: "sidebar.zoom", arg: None });
+        assert_eq!(app.main_area(), main, "the panes keep their size");
+        let shown = screen(&app);
+        assert!(shown.contains("the task of session number 9, which is long"), "{shown}");
+        assert!(shown.contains("everything at once"), "{shown}");
+        // ⏎ on a row opens it and goes back.
+        app.nav_move(4);
+        app.run(&Command { action: "nav.open", arg: None });
+        assert!(!app.sidebar_zoom);
+        assert_eq!(app.focus, Focus::Pane);
+        assert_ne!(app.focused_session(), Some(sessions[0].id));
+    }
+
+    fn mouse(
+        kind: crossterm::event::MouseEventKind,
+        column: u16,
+        row: u16,
+    ) -> crossterm::event::MouseEvent {
+        crossterm::event::MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn the_sidebar_resizes_by_its_edge_and_by_keys_within_bounds() {
+        use crossterm::event::{MouseButton, MouseEventKind as K};
+        let mut app = app();
+        app.sessions = vec![session("a")];
+        assert_eq!(app.sidebar_width, 30);
+        // Grab the edge (the divider column), drag it right, let go.
+        app.on_mouse(&mouse(K::Down(MouseButton::Left), 30, 5));
+        app.on_mouse(&mouse(K::Drag(MouseButton::Left), 42, 5));
+        app.on_mouse(&mouse(K::Up(MouseButton::Left), 42, 5));
+        assert_eq!(app.sidebar_width, 42);
+        assert_eq!(app.main_area().x, 43, "the panes start after it");
+        // Too far either way: 12 at least, and the panes keep 21 columns (100 wide: 78).
+        app.on_mouse(&mouse(K::Down(MouseButton::Left), 42, 5));
+        app.on_mouse(&mouse(K::Drag(MouseButton::Left), 2, 5));
+        assert_eq!(app.sidebar_width, 12);
+        app.on_mouse(&mouse(K::Drag(MouseButton::Left), 99, 5));
+        assert_eq!(app.sidebar_width, 78);
+        app.on_mouse(&mouse(K::Up(MouseButton::Left), 99, 5));
+        // A click elsewhere doesn't grab it.
+        app.on_mouse(&mouse(K::Down(MouseButton::Left), 50, 5));
+        app.on_mouse(&mouse(K::Drag(MouseButton::Left), 20, 5));
+        assert_eq!(app.sidebar_width, 78);
+        app.on_mouse(&mouse(K::Up(MouseButton::Left), 20, 5));
+        // In the sidebar, < and > move it a column at a time, within the same bounds.
+        app.focus = Focus::Sidebar;
+        let key = |c| KeyEvent::new(KeyCode::Char { c }, Mods::NONE);
+        let narrower = app.keymap.lookup(Table::Nav, key('<')).cloned().unwrap();
+        let wider = app.keymap.lookup(Table::Nav, key('>')).cloned().unwrap();
+        app.run(&narrower);
+        assert_eq!(app.sidebar_width, 77);
+        app.run(&wider);
+        app.run(&wider);
+        assert_eq!(app.sidebar_width, 78);
+        assert!(app.view_dirty_since.is_some(), "saved with the workspace's view");
+    }
+
+    fn project(id: &str, slug: &str) -> ProjectInfo {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "slug": slug, "root": format!("/r/{slug}"), "created_ms": 0,
+        }))
+        .unwrap()
+    }
+
+    fn root(project: &str) -> WorktreeInfo {
+        serde_json::from_value(serde_json::json!({
+            "id": format!("{project}-root"), "project": project, "project_slug": project,
+            "name": "@root", "path": "/r", "is_root": true, "state": "ready", "created_ms": 0,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_project_registered_on_its_own_says_so_and_offers_an_undo() {
+        let mut app = app();
+        app.on_event(DomainEvent::ProjectAutoAdded {
+            info: project("p1", "myrepo"),
+            workspace: "main".into(),
+            notes: Vec::new(),
+        });
+        assert!(app.project("p1").is_some());
+        let t = app.toast.as_ref().unwrap();
+        assert_eq!(t.text, "registered myrepo in main · C-q u undo");
+        assert!(matches!(
+            &t.offer,
+            Some(Offer { then: Then::Send(req, _), .. })
+                if matches!(**req, Request::ProjectRemove { release: true, .. })
+        ));
+        // `C-q u` takes it (the request goes to the daemon) and clears the message.
+        let act = app.keymap.lookup(Table::Prefix, KeyEvent::char('u')).cloned().unwrap();
+        app.run(&act);
+        assert!(app.toast.is_none());
+        app.run(&act);
+        assert_eq!(app.toast.as_ref().unwrap().text, "nothing to undo or fix right now");
+    }
+
+    #[test]
+    fn with_no_project_an_action_carries_on_once_one_is_added() {
+        let mut app = app();
+        // `N` with no project asks for one; once it's added and its checkout is known, `N`
+        // goes on as if it had been there all along.
+        app.run(&Command { action: "worktree.new", arg: None });
+        assert!(app.overlay.is_none(), "the picker opens once discovery answers");
+        app.projects.push(project("p1", "myrepo"));
+        app.after_add = Some(("p1".into(), AfterAdd::Run("worktree.new")));
+        app.try_after_add();
+        assert!(app.after_add.is_some(), "waits for the project's main checkout");
+        app.on_event(DomainEvent::WorktreeUpdated { info: root("p1") });
+        assert!(app.after_add.is_none());
+        match &app.overlay {
+            Some(Overlay::Prompt { kind: PromptKind::WorktreeName(w), title, .. }) => {
+                assert_eq!(w.project.as_deref(), Some("p1"));
+                assert!(title.contains("myrepo"), "{title}");
+            }
+            _ => panic!("the new-worktree prompt, in the new project"),
+        }
+        // The wizard's "where" offers adding one when there's none (after "here").
+        app.overlay = None;
+        app.projects.clear();
+        app.worktrees.clear();
+        app.open_targets(Wizard::default());
+        let Some(Overlay::Picker { palette, .. }) = &app.overlay else { panic!() };
+        let labels: Vec<&str> =
+            (0..palette.filtered.len()).map(|i| palette.item(i).label.as_str()).collect();
+        assert_eq!(labels, ["here", "+ add a project…"]);
+    }
+
+    fn key(app: &mut App, code: KeyCode, mods: Mods) {
+        app.overlay_key(KeyEvent::new(code, mods));
+    }
+
+    /// A project, its main checkout, and the workspace `main` holding it.
+    fn with_project(app: &mut App) {
+        app.projects.push(project("p1", "myrepo"));
+        app.worktrees.push(root("p1"));
+        app.workspaces.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "w", "name": "main", "profile": "default", "projects": ["p1"],
+                "notify": "all", "created_ms": 0,
+            }))
+            .unwrap(),
+        );
+    }
+
+    #[test]
+    fn the_task_box_names_the_work_after_what_you_type() {
+        let mut app = app();
+        with_project(&mut app);
+        app.run(&Command { action: "session.new", arg: None });
+        let shown = screen(&app);
+        assert!(shown.contains("What should it do?"), "{shown}");
+        assert!(
+            shown.contains("→ claude · new worktree in myrepo · a random name"),
+            "an empty ⏎ is the old n ⏎ ⏎: {shown}"
+        );
+        typed(&mut app, "Fix the flaky test in tests/api.rs");
+        let shown = screen(&app);
+        assert!(shown.contains("→ fix-flaky-test · claude · new worktree in myrepo"), "{shown}");
+        // A worktree by that name exists: the next free one.
+        let mut taken = root("p1");
+        taken.id = "w2".into();
+        taken.name = "fix-flaky-test".into();
+        taken.is_root = false;
+        app.worktrees.push(taken);
+        assert!(screen(&app).contains("→ fix-flaky-test-2 ·"));
+        // Tab edits the name: it starts from the suggestion and stops following the prompt.
+        key(&mut app, KeyCode::Tab, Mods::NONE);
+        typed(&mut app, "\x08\x08");
+        typed(&mut app, "-x");
+        assert!(screen(&app).contains("→ fix-flaky-test-x ·"), "{}", screen(&app));
+        key(&mut app, KeyCode::Tab, Mods::NONE);
+        typed(&mut app, " now");
+        assert!(screen(&app).contains("→ fix-flaky-test-x ·"), "the edited name stays");
+        // A bad name says why, and ⏎ keeps the box.
+        key(&mut app, KeyCode::Tab, Mods::NONE);
+        typed(&mut app, "/");
+        assert!(screen(&app).contains("✗ name:"), "{}", screen(&app));
+        key(&mut app, KeyCode::Enter, Mods::NONE);
+        assert!(matches!(app.overlay, Some(Overlay::Task { .. })));
+        // C-o: the full wizard, the prompt carried along.
+        key(&mut app, KeyCode::Char { c: 'o' }, Mods(Mods::CTRL));
+        match &app.overlay {
+            Some(Overlay::Picker { purpose: Purpose::Agent(w), .. }) => {
+                assert_eq!(w.prompt.as_deref(), Some("Fix the flaky test in tests/api.rs now"));
+            }
+            _ => panic!("the agent picker"),
+        }
+    }
+
+    #[test]
+    fn create_dialogs_offer_a_name_that_enter_takes() {
+        let mut app = app();
+        with_project(&mut app);
+        app.run(&Command { action: "worktree.new", arg: None });
+        let Some(Overlay::Prompt { kind: PromptKind::WorktreeName(w), .. }) = &app.overlay else {
+            panic!("the name prompt")
+        };
+        let offered = w.suggested.clone().unwrap();
+        let shown = screen(&app);
+        assert!(
+            shown.contains(&offered) && shown.contains(&format!("⏎ takes {offered}")),
+            "{shown}"
+        );
+        typed(&mut app, "\n");
+        match &app.overlay {
+            Some(Overlay::Picker { purpose: Purpose::Agent(w), .. }) => {
+                assert_eq!(w.name.as_deref(), Some(offered.as_str()))
+            }
+            _ => panic!("then the agent"),
+        }
+        // A workspace: a profile's name, else workspace-2.
+        app.overlay = None;
+        app.picked(Target::NewWorkspace, Purpose::Workspace);
+        assert!(screen(&app).contains("workspace-2"));
+    }
+
+    #[test]
+    fn a_title_shows_where_people_read_and_rename_can_switch_to_it() {
+        let mut app = app();
+        let mut s = session("fix-flaky-test");
+        s.title = Some("Fix the flaky test in tests/api.rs".into());
+        s.window_title = Some("fix-flaky-test".into());
+        app.panes.get_mut(&1).unwrap().session = Some(s.id);
+        app.sessions = vec![s.clone()];
+        let shown = screen(&app);
+        assert!(shown.contains("task Fix the flaky"), "the row: {shown}");
+        assert!(shown.contains("· Fix the flaky test in tests/api.rs"), "the header: {shown}");
+        // A window title alone isn't a title.
+        let mut w = session("plain");
+        w.title = Some("vim".into());
+        w.window_title = Some("vim".into());
+        assert_eq!(crate::ui::session_title(&w), None);
+        // `,` renames; C-t there edits the title instead, filled with it.
+        app.run(&Command { action: "session.rename", arg: None });
+        key(&mut app, KeyCode::Char { c: 't' }, Mods(Mods::CTRL));
+        assert_eq!(prompt_text(&app), Some("Fix the flaky test in tests/api.rs"));
+        assert!(matches!(&app.overlay, Some(Overlay::Prompt { kind: PromptKind::Retitle(_), .. })));
+    }
+
+    #[test]
+    fn messages_offer_the_fix_instead_of_a_command_to_type() {
+        let mut app = app();
+        // An error naming a CLI command offers its TUI action.
+        let o = offer_for("not trusted: review with `ptyro project trust myrepo`").unwrap();
+        assert!(matches!(o.then, Then::Run(Command { action: "project.trust", .. })), "{o:?}");
+        assert!(offer_for("something broke").is_none());
+        let act = |app: &mut App| {
+            let c = app.keymap.lookup(Table::Prefix, KeyEvent::char('u')).cloned().unwrap();
+            app.run(&c);
+        };
+        // An unbound key: `C-q u` lists the keys.
+        app.prefix = true;
+        app.on_key(&crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('y'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert_eq!(app.toast.as_ref().unwrap().text, "C-q y: not bound · C-q u list the keys");
+        act(&mut app);
+        assert!(matches!(app.overlay, Some(Overlay::Help { .. })));
+        // Broadcast with nothing marked: `C-q u` goes to the sidebar to mark some.
+        app.overlay = None;
+        app.sessions = vec![session("a")];
+        app.run(&Command { action: "broadcast", arg: None });
+        act(&mut app);
+        assert_eq!(app.focus, Focus::Sidebar);
+    }
+
+    /// No message the TUI writes tells you to type a command (UX1.17): it offers the fix.
+    #[test]
+    fn no_toast_names_a_command_to_type() {
+        for (file, src) in [
+            ("app.rs", include_str!("app.rs")),
+            ("inspector.rs", include_str!("inspector.rs")),
+            ("runs.rs", include_str!("runs.rs")),
+            ("sets.rs", include_str!("sets.rs")),
+        ] {
+            let lines: Vec<&str> = src.lines().collect();
+            for (i, l) in lines.iter().enumerate() {
+                if !(l.contains("toast(") || l.contains("toast_err(") || l.contains("toast_offer("))
+                {
+                    continue;
+                }
+                // The call and the lines of its arguments.
+                let call = lines[i..(i + 6).min(lines.len())].join(" ");
+                let call = call.split(';').next().unwrap_or("");
+                assert!(
+                    !call.contains("`ptyro ") && !call.contains(": project."),
+                    "{file}:{}: a message names a command to type: {call}",
+                    i + 1
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_pause_after_the_prefix_shows_what_each_key_does() {
+        let mut app = app();
+        app.prefix = true;
+        app.prefix_at = Some(Instant::now());
+        assert!(!screen(&app).contains("then…"), "not before the delay");
+        app.prefix_at = Some(Instant::now() - Duration::from_secs(1));
+        let shown = screen(&app);
+        assert!(shown.contains("C-q then…"), "{shown}");
+        for want in ["n a task", "a who needs you", "D diff & ship", ". its actions", "? all keys"]
+        {
+            assert!(shown.contains(want), "{want}: {shown}");
+        }
+        // Rebinding shows: `y` now zooms.
+        let mut config = Config::default();
+        config.keys.insert("y".into(), "pane.zoom".into());
+        config.keys.insert("z".into(), "none".into());
+        app.keymap = Keymap::new(&config).0;
+        assert!(screen(&app).contains("y zoom"));
+        app.config.ui.which_key_delay = 0;
+        assert!(!screen(&app).contains("then…"), "0 turns it off");
+    }
+
+    #[test]
+    fn a_row_s_menu_lists_what_applies_and_runs_it_there() {
+        let mut app = app();
+        with_project(&mut app);
+        let mut live = session("live");
+        live.worktree = Some("p1-root".into());
+        live.project = Some("p1".into());
+        let mut gone = session("gone");
+        gone.state = ProcessState::Exited { code: Some(1), signal: None };
+        app.sessions = vec![live.clone(), gone.clone()];
+        let live_actions = app.row_actions(&Row::Session(live.id));
+        assert!(live_actions.contains(&"session.stop") && live_actions.contains(&"inspector"));
+        assert!(!live_actions.contains(&"session.restart"));
+        let gone_actions = app.row_actions(&Row::Session(gone.id));
+        assert!(
+            gone_actions.contains(&"session.restart") && !gone_actions.contains(&"session.kill")
+        );
+        assert!(!app.row_actions(&Row::Worktree("p1-root".into())).contains(&"worktree.remove"));
+        // Right-click a row: its menu, keys shown; pick one and it runs on that row.
+        let lines = sidebar(&app);
+        let y = lines.iter().position(|l| l.contains("gone")).unwrap() as u16;
+        use crossterm::event::{MouseButton, MouseEventKind as K};
+        app.on_mouse(&mouse(K::Down(MouseButton::Right), 3, y));
+        let shown = screen(&app);
+        assert!(shown.contains("Session gone") && shown.contains("session.restart"), "{shown}");
+        assert!(shown.contains("C-q C-r"), "with its key: {shown}");
+        app.overlay = None;
+        app.focus = Focus::Pane;
+        app.panes.get_mut(&1).unwrap().session = Some(live.id);
+        app.run(&Command { action: "row.menu", arg: None });
+        assert!(screen(&app).contains("Session live"), "in the pane: the focused session's");
+    }
+
+    #[test]
+    fn the_status_bar_hints_what_to_do_with_what_s_selected() {
+        let mut app = app();
+        let mut asker = session("asker");
+        status(&mut asker, AgentStatus::Blocked, Some("permission"), Some("Bash: rm"));
+        let mut gone = session("gone");
+        gone.state = ProcessState::Exited { code: Some(0), signal: None };
+        app.sessions = vec![asker.clone(), gone.clone()];
+        app.panes.get_mut(&1).unwrap().session = Some(asker.id);
+        assert_eq!(app.context_hint().as_deref(), Some("C-q p answer it"));
+        assert!(screen(&app).contains("C-q p answer it"));
+        // In the sidebar, its own keys (no prefix).
+        app.focus = Focus::Sidebar;
+        let rows = app.rows();
+        let i = rows.iter().position(|r| *r == Row::Session(gone.id)).unwrap();
+        app.set_sel(&rows, i);
+        assert_eq!(app.context_hint().as_deref(), Some("R restart · x remove"));
+    }
+
+    #[test]
+    fn the_palette_finds_worktrees_projects_and_scripts_too() {
+        let mut app = app();
+        with_project(&mut app);
+        app.run(&Command { action: "palette", arg: None });
+        typed(&mut app, "worktree p1");
+        assert!(screen(&app).contains("worktree p1/@root"), "{}", screen(&app));
+        key(&mut app, KeyCode::Char { c: 'u' }, Mods(Mods::CTRL));
+        typed(&mut app, "project my");
+        assert!(screen(&app).contains("project myrepo"), "{}", screen(&app));
+        key(&mut app, KeyCode::Char { c: 'u' }, Mods(Mods::CTRL));
+        // Scripts arrive after it opened, and the query applies to them.
+        typed(&mut app, "dev");
+        let scripts: ScriptsInfo = serde_json::from_value(serde_json::json!({
+            "project": "myrepo", "text": "", "trusted": true, "fingerprint": "f",
+            "names": ["setup", "run:dev"],
+        }))
+        .unwrap();
+        app.on_reply(AppMsg::Reply(
+            Pending::PaletteScripts("p1-root".into()),
+            Ok(Reply::Scripts { scripts }),
+        ));
+        let shown = screen(&app);
+        assert!(shown.contains("script dev") && shown.contains("run it in p1/@root"), "{shown}");
+        // A project: selected in the sidebar.
+        app.overlay = None;
+        app.picked(Target::Project("p1".into()), Purpose::Palette);
+        assert_eq!(app.focus, Focus::Sidebar);
+        assert_eq!(app.selected_row(), Some(Row::Project("p1".into())));
+    }
+
+    fn feature(app: &mut App, merged: bool) -> WorktreeInfo {
+        let mut w = root("p1");
+        w.id = "p1-feat".into();
+        w.name = "feat".into();
+        w.is_root = false;
+        w.branch = Some("ptyro/feat".into());
+        if merged {
+            w.pr = Some(
+                serde_json::from_value(serde_json::json!({
+                    "number": 7, "url": "u", "title": "Add five", "state": "MERGED", "draft": false,
+                    "checks": [], "automerge": false, "ours": true, "at_ms": 0,
+                }))
+                .unwrap(),
+            );
+        }
+        app.worktrees.push(w.clone());
+        w
+    }
+
+    #[test]
+    fn finishing_and_cleaning_up_a_worktree() {
+        let mut app = app();
+        with_project(&mut app);
+        let w = feature(&mut app, true);
+        app.focus = Focus::Sidebar;
+        let rows = app.rows();
+        let i = rows.iter().position(|r| *r == Row::Worktree(w.id.clone())).unwrap();
+        app.set_sel(&rows, i);
+        // Merged: the hint says clean up, and `x` archives (it never refuses) instead of removing.
+        assert!(app.context_hint().unwrap().contains("clean up (merged)"));
+        let x = app.keymap.lookup(Table::Nav, KeyEvent::char('x')).cloned().unwrap();
+        app.run(&x);
+        match &app.overlay {
+            Some(Overlay::Confirm { action: Confirmed::Archive(id), text }) => {
+                assert_eq!(id, &w.id);
+                assert!(text.contains("snapshot of its files are kept"), "{text}");
+            }
+            _ => panic!("archive, not remove"),
+        }
+        // Finish: a PR or integrating.
+        app.overlay = None;
+        let f = app.keymap.lookup(Table::Nav, KeyEvent::char('F')).cloned().unwrap();
+        app.run(&f);
+        let shown = screen(&app);
+        assert!(shown.contains("Finish p1/feat") && shown.contains("a pull request"), "{shown}");
+        assert!(shown.contains("integrate"), "{shown}");
+        // A removal that would lose work offers archiving instead.
+        app.overlay = None;
+        app.on_reply(AppMsg::Reply(
+            Pending::Removed(w.id.clone()),
+            Err(Error::new(ErrorCode::DirtyWorktree, "refusing to remove p1/feat")),
+        ));
+        assert!(screen(&app).contains("a: archive it instead"));
+        key(&mut app, KeyCode::Char { c: 'a' }, Mods::NONE);
+        assert!(app.overlay.is_none(), "archived (the request went out)");
+        // The row menu has them all, the companion shell too.
+        let actions = app.row_actions(&Row::Worktree(w.id.clone()));
+        for a in ["worktree.finish", "worktree.archive", "shell.here"] {
+            assert!(actions.contains(&a) && keymap::spec(a).is_some(), "{a}");
+        }
+    }
+
+    #[test]
+    fn prs_and_issues_are_recognised_in_text() {
+        assert_eq!(work_source("https://github.com/acme/app/pull/123"), Some((Some(123), None)));
+        assert_eq!(
+            work_source("https://github.com/acme/app/pull/123/files"),
+            Some((Some(123), None))
+        );
+        assert_eq!(
+            work_source("https://github.com/acme/app/issues/45"),
+            Some((None, Some("https://github.com/acme/app/issues/45".into())))
+        );
+        assert_eq!(work_source("pr 7"), Some((Some(7), None)));
+        assert_eq!(work_source("PR #7"), Some((Some(7), None)));
+        assert_eq!(work_source("issue 9"), Some((None, Some("9".into()))));
+        assert_eq!(work_source("fix the pr template"), None);
+        assert_eq!(work_source("pr seven"), None);
+    }
+
+    #[test]
+    fn work_can_come_from_a_pr_a_branch_or_your_changes() {
+        let mut app = app();
+        with_project(&mut app);
+        // The task box takes a pasted PR.
+        app.run(&Command { action: "session.new", arg: None });
+        typed(&mut app, "https://github.com/acme/app/pull/12");
+        assert!(screen(&app).contains("→ pr-12 · claude · PR #12's branch, in a new worktree"));
+        // The wizard's "where": a PR or issue, a branch, and (the main checkout is dirty) your
+        // changes.
+        app.overlay = None;
+        let st = ptyro_core::model::RepoStatus { modified: 2, ..Default::default() };
+        app.worktrees[0].status = Some(st);
+        app.open_targets(Wizard { project: Some("p1".into()), ..Wizard::default() });
+        let Some(Overlay::Picker { palette, .. }) = &app.overlay else { panic!() };
+        let labels: Vec<&str> =
+            (0..palette.filtered.len()).map(|i| palette.item(i).label.as_str()).collect();
+        for want in [
+            "+ from a PR or an issue…",
+            "+ on an existing branch…",
+            "+ with my uncommitted changes",
+        ] {
+            assert!(labels.contains(&want), "{want}: {labels:?}");
+        }
+    }
+
+    #[test]
+    fn a_first_worktree_offers_what_the_project_needs() {
+        let mut app = app();
+        with_project(&mut app);
+        let spec = WorktreeSpec { project: "p1".into(), setup: true, ..WorktreeSpec::default() };
+        let suggestions = ptyro_core::model::SetupSuggestions {
+            project: "myrepo".into(),
+            setup: Some("pnpm install --frozen-lockfile".into()),
+            from: Some("pnpm-lock.yaml".into()),
+            copy: vec![".env".into()],
+            offered: false,
+        };
+        app.on_reply(AppMsg::Reply(
+            Pending::Suggest(Box::new(spec.clone()), None),
+            Ok(Reply::Suggestions { suggestions: suggestions.clone() }),
+        ));
+        let shown = screen(&app);
+        assert!(
+            shown.contains("pnpm-lock.yaml → setup: pnpm install --frozen-lockfile"),
+            "{shown}"
+        );
+        assert!(shown.contains(".env → copied into each worktree"), "{shown}");
+        key(&mut app, KeyCode::Char { c: 'n' }, Mods::NONE);
+        assert!(app.overlay.is_none(), "declined: the worktree is made without them");
+        // Offered once: not again.
+        app.on_reply(AppMsg::Reply(
+            Pending::Suggest(Box::new(spec), None),
+            Ok(Reply::Suggestions {
+                suggestions: ptyro_core::model::SetupSuggestions { offered: true, ..suggestions },
+            }),
+        ));
+        assert!(app.overlay.is_none());
+    }
+
+    #[test]
+    fn the_first_run_ticks_what_to_use_and_writes_the_config() {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path().to_path_buf();
+        let paths = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| h.clone())).unwrap();
+        let connect = ConnectOptions::new(paths.clone(), ptyro_protocol::ClientKind::Tui);
+        let mut app = App::new(
+            Options::default(),
+            connect,
+            paths,
+            Config::default(),
+            false,
+            Rect::new(0, 0, 100, 30),
+        );
+        use crate::onboard::{Choice, ChoiceKind, FirstRun};
+        app.first_run = Some(FirstRun {
+            agents: vec![
+                ("claude".into(), "claude".into(), true),
+                ("codex".into(), "codex".into(), false),
+            ],
+            choices: vec![
+                Choice {
+                    section: "accounts",
+                    label: "profile work".into(),
+                    detail: "claude ~/.claude-work".into(),
+                    on: true,
+                    kind: ChoiceKind::Profile(
+                        "[profiles.work]\nclaude = \"~/.claude-work\"\n".into(),
+                    ),
+                },
+                Choice {
+                    section: "notifications",
+                    label: "desktop notifications".into(),
+                    detail: String::new(),
+                    on: false,
+                    kind: ChoiceKind::Desktop,
+                },
+            ],
+            sel: 0,
+        });
+        app.first_run_repos(vec!["/src/alpha".into()]);
+        let shown = screen(&app);
+        assert!(shown.contains("Welcome to ptyro"), "{shown}");
+        assert!(shown.contains("✓ claude (default)") && !shown.contains("✓ codex"), "{shown}");
+        assert!(shown.contains("[x] profile work") && shown.contains("[ ] alpha"), "{shown}");
+        // j j: past the repository to notifications; Space ticks it; ⏎ writes the config.
+        let k = |app: &mut App, code| app.first_run_key(KeyEvent::new(code, Mods::NONE));
+        k(&mut app, KeyCode::Char { c: 'j' });
+        k(&mut app, KeyCode::Char { c: 'j' });
+        k(&mut app, KeyCode::Char { c: ' ' });
+        k(&mut app, KeyCode::Enter);
+        assert!(app.first_run.is_none());
+        let text = std::fs::read_to_string(Config::path(&app.paths)).unwrap();
+        assert!(text.contains("[profiles.work]") && text.contains("\"desktop\""), "{text}");
+        assert!(app.toast.as_ref().unwrap().text.contains("1 profile(s), 0 project(s)"));
+        assert!(app.toast.as_ref().unwrap().text.contains("take the 60-second tour"));
+    }
+
+    #[test]
+    fn home_lists_what_to_do_next() {
+        let mut app = app();
+        with_project(&mut app);
+        let mut asker = session("asker");
+        asker.attention = Some(
+            serde_json::from_value(serde_json::json!({
+                "kind": "blocked", "since_ms": 1, "text": "wants permission: Bash: rm",
+            }))
+            .unwrap(),
+        );
+        app.sessions = vec![asker];
+        app.show_home(vec!["/r/myrepo".into(), "/src/other".into()]);
+        let Some(Overlay::Picker { palette, purpose: Purpose::Home }) = &app.overlay else {
+            panic!("home")
+        };
+        let labels: Vec<String> =
+            (0..palette.filtered.len()).map(|i| palette.item(i).label.clone()).collect();
+        assert_eq!(labels, ["⚑ asker", "▸ myrepo", "+ other", "a shell, here"], "known repos once");
+    }
+
+    #[test]
+    fn the_health_badge_lists_what_the_doctor_found_with_fixes() {
+        let mut app = app();
+        let check = |section: &str, name: &str, level: &str, text: &str| crate::health::Check {
+            section: section.into(),
+            name: name.into(),
+            level: level.into(),
+            text: text.into(),
+        };
+        app.got_health(vec![
+            check("terminal", "TERM", "ok", "xterm-256color"),
+            check(
+                "daemon",
+                "running",
+                "warn",
+                "not this ptyro: `ptyro daemon upgrade` (sessions keep running)",
+            ),
+            check(
+                "profile work",
+                "claude",
+                "warn",
+                "not logged in (`ptyro profile login <profile> claude`)",
+            ),
+        ]);
+        let shell = usize::from(crate::health::shell_init_missing().is_some());
+        let n = 2 + shell;
+        assert_eq!(app.health.findings.len(), n);
+        assert!(screen(&app).contains(&format!("⚕ {n}")), "the badge");
+        assert!(app.toast.as_ref().unwrap().text.contains("C-q M shows them"));
+        let m = app.keymap.lookup(Table::Prefix, KeyEvent::char('M')).cloned().unwrap();
+        app.run(&m);
+        let shown = screen(&app);
+        assert!(shown.contains("Health: ⏎ fixes one"), "{shown}");
+        assert!(shown.contains("! daemon running"), "{shown}");
+        // The same findings again: not announced twice.
+        app.overlay = None;
+        app.toast = None;
+        app.got_health(vec![
+            check("daemon", "running", "warn", "not this ptyro: `ptyro daemon upgrade`"),
+            check(
+                "profile work",
+                "claude",
+                "warn",
+                "not logged in (`ptyro profile login <profile> claude`)",
+            ),
+        ]);
+        assert!(app.toast.is_none());
+        // A file fix asks first, then appends.
+        let dir = tempfile::tempdir().unwrap();
+        let rc = dir.path().join(".zshrc");
+        app.health.findings.push(crate::health::Finding {
+            problem: false,
+            what: "shell integration".into(),
+            text: "missing".into(),
+            fix: Some(crate::health::Fix::Append { file: rc.clone(), line: "eval x".into() }),
+        });
+        let i = app.health.findings.len() - 1;
+        app.fix(i);
+        assert!(matches!(
+            app.overlay,
+            Some(Overlay::Confirm { action: Confirmed::Append(..), .. })
+        ));
+        key(&mut app, KeyCode::Char { c: 'y' }, Mods::NONE);
+        assert!(std::fs::read_to_string(&rc).unwrap().contains("eval x"));
+        assert_eq!(app.health.findings.len(), i, "fixed: off the list");
+    }
+
+    #[test]
+    fn the_cli_s_long_tail_runs_with_what_is_selected_picked_or_typed() {
+        let mut app = app();
+        app.profiles = vec![
+            serde_json::from_value(serde_json::json!({
+                "name": "work", "label": "wrk", "defined": true, "isolate": false,
+                "dirs": {}, "vars": [],
+            }))
+            .unwrap(),
+        ];
+        // Two picks: the profile, then the agent.
+        app.run(&Command { action: "profile.login", arg: None });
+        typed(&mut app, "work\n");
+        typed(&mut app, "claude\n");
+        assert_eq!(
+            app.last_cli.as_deref(),
+            Some(&["profile", "login", "work", "claude"].map(String::from)[..])
+        );
+        // A question and variables.
+        app.run(&Command { action: "recipe.run", arg: None });
+        typed(&mut app, "implement-and-review\n");
+        typed(&mut app, "task=add json, n=2\n");
+        assert_eq!(
+            app.last_cli.clone().unwrap(),
+            ["recipe", "run", "implement-and-review", "--var", "task=add json", "--var", "n=2"]
+        );
+        // The selected session, a choice, and a file.
+        let s = session("worker");
+        app.panes.get_mut(&1).unwrap().session = Some(s.id);
+        app.sessions = vec![s];
+        app.run(&Command { action: "session.export", arg: None });
+        typed(&mut app, "text\n");
+        typed(&mut app, "out.txt\n");
+        assert_eq!(
+            app.last_cli.clone().unwrap(),
+            ["export", "worker", "--format", "text", "-o", "out.txt"]
+        );
+        // An optional word left empty: left out.
+        app.run(&Command { action: "session.verify", arg: None });
+        typed(&mut app, "\n");
+        assert_eq!(app.last_cli.clone().unwrap(), ["verify", "worker"]);
+        // Nothing selected that it needs: it says what to pick.
+        app.last_cli = None;
+        app.run(&Command { action: "set.push", arg: None });
+        assert!(app.last_cli.is_none());
+        assert!(app.toast.as_ref().unwrap().text.contains("pick a change set first"));
+    }
+
+    #[test]
+    fn opening_a_pr_goes_to_its_worktree_s_session() {
+        let mut app = app();
+        with_project(&mut app);
+        let w = feature(&mut app, true);
+        let mut s = session("feat-agent");
+        s.worktree = Some(w.id.clone());
+        s.project = Some("p1".into());
+        app.sessions = vec![s.clone()];
+        app.run(&Command { action: "pr.open", arg: None });
+        typed(&mut app, "7\n");
+        assert_eq!(app.focused_session(), Some(s.id));
+    }
+
     #[test]
     fn a_bad_name_is_flagged_as_it_is_typed_and_enter_keeps_it() {
         let mut app = app();
@@ -3772,7 +6499,7 @@ mod tests {
     #[test]
     fn workspace_and_fanout_prompts_are_checked_too() {
         let app = app();
-        let ws = PromptKind::NewWorkspace;
+        let ws = PromptKind::NewWorkspace(None);
         assert!(app.prompt_check(&ws, "").is_ok(), "empty cancels");
         assert!(app.prompt_check(&ws, "Side Job").unwrap_err().contains("'S' (uppercase)"));
         assert!(app.prompt_check(&ws, "side-job").is_ok());

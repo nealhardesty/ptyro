@@ -23,6 +23,11 @@ struct World {
 
 impl World {
     fn new(extra: &str) -> Self {
+        Self::with_worktrees("", extra)
+    }
+
+    /// `worktrees`: more keys for its `[worktrees]` table.
+    fn with_worktrees(worktrees: &str, extra: &str) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-m6-").tempdir().unwrap();
         let h = home.path().canonicalize().unwrap();
         std::fs::write(
@@ -50,7 +55,7 @@ impl World {
             ("PTYRO_TEST_FAST_POLL", "1"),
         ];
         let config = format!(
-            "[attention]\nmin_work = \"1s\"\n[worktrees]\nfetch = false\n[agents.claude]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\n{extra}"
+            "[attention]\nmin_work = \"1s\"\n[worktrees]\nfetch = false\n{worktrees}[agents.claude]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\n{extra}"
         );
         let d = TempDaemon::start_with(BIN, &env, Some(&config)).unwrap();
         Self { home, gh, d }
@@ -559,4 +564,41 @@ async fn inspector_tabs_and_last_turn() {
         "queue: {}",
         r.at(4.6)
     );
+}
+
+/// UX1.12: finish commits what's left (no agent: its title is the message) and opens a PR; once
+/// the PR merges, `[worktrees] archive_on_merge` archives it, and it can come back.
+#[test]
+fn finish_then_archive_on_merge() {
+    let w = World::with_worktrees("archive_on_merge = true\n", "");
+    let root = w.project("app");
+    w.ok(&["wt", "new", "feat", "--project", "app", "--title", "Add five"]);
+    let path = PathBuf::from(
+        w.json(&["wt", "status", "app/feat", "--json"])["path"].as_str().unwrap().to_owned(),
+    );
+    std::fs::write(path.join("f.txt"), "one\ntwo\nthree\nfour\nfive\n").unwrap();
+    std::fs::write(path.join("new.txt"), "new\n").unwrap();
+    let out = w.ok(&["wt", "finish", "app/feat"]);
+    assert!(out.contains("committed") && out.contains("\"Add five\""), "{out}");
+    assert!(out.contains("PR #7"), "{out}");
+    assert_eq!(w.git(&path, &["log", "-1", "--format=%s"]).trim(), "Add five");
+    assert!(w.git(&path, &["status", "--porcelain"]).trim().is_empty(), "everything committed");
+    // The PR merges: the worktree is archived on its own, its branch kept.
+    let pr: Value =
+        serde_json::from_str(&std::fs::read_to_string(w.gh.join("pr.json")).unwrap()).unwrap();
+    let mut merged = pr.clone();
+    merged["state"] = json!("MERGED");
+    w.gh_file("pr.json", &merged);
+    w.ok(&["pr", "status", "app/feat", "--refresh"]);
+    w.until("archived once merged", || {
+        w.json(&["wt", "archives", "--json"]).as_array().is_some_and(|a| !a.is_empty())
+    });
+    assert!(!path.exists(), "the checkout is gone");
+    assert!(w.git(&root, &["branch", "--list", "ptyro/feat"]).contains("ptyro/feat"), "kept");
+    let archived = w.json(&["wt", "archives", "--json"]);
+    assert_eq!(archived[0]["title"], "Add five");
+    // Back, as it was.
+    w.ok(&["wt", "restore", "app/feat"]);
+    assert!(path.join("new.txt").exists());
+    assert!(w.json(&["wt", "archives", "--json"]).as_array().unwrap().is_empty());
 }

@@ -107,6 +107,8 @@ pub fn needed(req: &Request) -> Scope {
         | Radar { .. }
         | CheckpointList { .. }
         | CheckpointDiff { .. }
+        | WorktreeArchives { .. }
+        | Branches { .. }
         | ProfileList
         | ReviewList { .. }
         | ReviewQueue
@@ -136,7 +138,10 @@ pub fn needed(req: &Request) -> Scope {
         | Iterate { .. }
         | RunCancel { .. }
         | RunRetry { .. }
-        | Convert { .. } => Scope::Control,
+        | Convert { .. }
+        | Retitle { .. }
+        | Summarize { .. }
+        | Adopt { .. } => Scope::Control,
         // A configured agent (its command comes from the user's config) is control; any other
         // command line is full.
         // A verify check, a lead or `ptyro mcp` is a command line of its own: full.

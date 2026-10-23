@@ -205,7 +205,7 @@ pub async fn run(mut s: Script) -> Result<Report> {
                 TermEvent::Bell => report.log.push(format!("{t:>7.3}s bell")),
                 TermEvent::Clipboard(c) => report.log.push(format!("{t:>7.3}s clipboard {c:?}")),
                 TermEvent::Cwd(p) => report.log.push(format!("{t:>7.3}s cwd {}", p.display())),
-                TermEvent::PromptMark { mark, exit } => {
+                TermEvent::PromptMark { mark, exit, .. } => {
                     report.log.push(format!("{t:>7.3}s osc133 {mark} {exit:?}"))
                 }
                 TermEvent::Progress { state, percent } => {

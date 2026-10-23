@@ -91,8 +91,13 @@ pub struct SessionInfo {
     pub viewers: u32,
     #[serde(default)]
     pub controller: Option<ClientId>,
+    /// What it's about, for people to read (UX1.24): `--title`, `ptyro retitle`, else its first
+    /// prompt; else the program's window title. The `name` is its address.
     #[serde(default)]
     pub title: Option<String>,
+    /// The window title the program set (OSC 0/2), whatever `title` says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_title: Option<String>,
     /// Name of the foreground process (e.g. `vim` inside a shell), when known.
     #[serde(default)]
     pub foreground: Option<String>,
@@ -171,6 +176,55 @@ pub struct SessionInfo {
     /// A structured session's protocol (`stream-json`, `app-server`, `acp`, `opencode`; M10).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structured: Option<String>,
+    /// What it was asked to do: the first prompt typed into it, trimmed (UX1.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
+    /// The agent's last message, once its turn ended, trimmed (UX1.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_reply: Option<String>,
+    /// A shell's command, running or last finished (OSC 133 `C`/`D`; UX1.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<ShellCommand>,
+    /// The adapter of an agent started by hand in this shell session, while it's in the
+    /// foreground (UX1.4): its status then comes from its screen, at low confidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inner_agent: Option<String>,
+    /// What it's doing, in a line, from a small model (`[summaries]`, UX1.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<Summary>,
+}
+
+/// A session's summary (UX1.3): `text` was made after turn `turn`, at `at_ms`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Summary {
+    pub text: String,
+    pub turn: u32,
+    pub at_ms: u64,
+}
+
+/// A shell's current or last command, from OSC 133 marks (`ptyro shell-init`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShellCommand {
+    /// The command line, when the shell sends it (`133;C;cmdline=…`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    pub started_ms: u64,
+    /// Unset while it runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<i32>,
+}
+
+/// At most `max` characters of `text`'s first non-empty lines joined by spaces, `…` when cut.
+pub fn brief(text: &str, max: usize) -> String {
+    let joined = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if joined.chars().count() <= max {
+        return joined;
+    }
+    let mut s: String = joined.chars().take(max.saturating_sub(1)).collect();
+    s.push('…');
+    s
 }
 
 /// A session's verified-done check (M7.9): a turn counts as done only once `check` passes.
@@ -335,4 +389,10 @@ pub struct SpawnSpec {
     /// Give the agent `ptyro mcp` (a change set's lead, M11; `lead` implies it).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub mcp: bool,
+    /// Resume this conversation of the agent instead of starting one (UX1.4: adopting).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume: Option<String>,
+    /// Its title, for people to read (UX1.24); default: the prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }

@@ -22,6 +22,9 @@ most; `ptyro config show` lists every key with the value in effect.
 prefix = "C-]"            # one key or a list; default ["C-q", "C-Space"]
 theme = "ptyro-light"     # ptyro-dark (default), ptyro-light, high-contrast, or your own
 tint_borders = true       # colour pane dividers with the session's profile
+# on_stop = "stay"        # after you stop a pane's session, keep showing it (default: the next one)
+# sidebar_detail = "full" # lines under each row (task, now, last…): auto (default) | compact | full
+# which_key_delay = 0     # ms after the prefix before the menu of next keys shows; 0: never (default 400)
 # mouse = false           # let the terminal own the mouse (native selection)
 # confirm_kill = false    # x stops a session without asking
 # sidebar = false         # start with the sidebar hidden (`\` toggles it)
@@ -33,13 +36,15 @@ tint_borders = true       # colour pane dividers with the session's profile
 [worktrees]
 location = "sibling"      # data (default: ptyro's data dir) | sibling (<repo>.worktrees/) | in-repo
 branch_template = "{user}/{name}"   # {name} {user} {date} {issue} {slug}; default ptyro/{name}
+archive_on_merge = true   # archive a worktree once its PR merges (default false); `wt restore` brings it back
 
 [ports]
 range = "20000-29999"     # each worktree gets `count` ports from here
 count = 10
 
 [discover]
-roots = ["~/dev", "~/src"]   # where `project.add` in the palette looks for repositories
+roots = ["~/dev", "~/src"]   # where `project.add` (`Ctrl-Q P`) looks for repositories
+# auto_register = false      # don't make the repository a session runs in a project by itself
 
 [editors]
 default = "nvim"
@@ -79,6 +84,13 @@ message_ttl = "24h"                       # undelivered messages expire
 [daemon]
 scrollback_lines = 5000                   # kept in memory per session; older lines come from the recording
 # restore_on_start = "resume"             # relaunch every dormant agent when the daemon starts
+
+[summaries]
+enabled = true                            # a `≈` line after each agent turn, from a small model (default off)
+# daily_cap = 200                         # per profile, per day
+# command = ["claude", "-p", "--model", "haiku", "--output-format", "json", "--strict-mcp-config", "--tools", ""]
+                                          # any command: the prompt on stdin, the summary on stdout;
+                                          # it runs on the session's profile account, with secrets redacted
 
 [recorder]
 enabled = true                            # record every session's output (per agent: record = false)

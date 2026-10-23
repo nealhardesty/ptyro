@@ -2215,6 +2215,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
+ "toml_edit",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -2263,6 +2264,7 @@ dependencies = [
  "pty-process",
  "ptyro-core",
  "rustix",
+ "tempfile",
  "tokio",
 ]
 
@@ -2344,6 +2346,7 @@ dependencies = [
  "rustix",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "unicode-width",
 ]

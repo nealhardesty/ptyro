@@ -191,6 +191,10 @@ pub struct WorktreeInfo {
     /// Its pull request, when `gh` found one (M6.5).
     #[serde(default)]
     pub pr: Option<PrInfo>,
+    /// What it's for, for people to read (UX1.24): the prompt it was made for, a PR's or an
+    /// issue's title, or `--title`. The `name` is its address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 impl WorktreeInfo {
@@ -324,6 +328,37 @@ pub struct WorktreeSpec {
     /// Put the worktree here instead of `worktrees.location` (a change set's member, M11).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<std::path::PathBuf>,
+    /// Its title (UX1.24); default: the prompt, else the PR's or issue's title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Move the main checkout's uncommitted changes into it (UX1.10): it starts at the main
+    /// checkout's HEAD, the changes go with it, and a copy stays at `refs/ptyro/taken/<name>`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub take_changes: bool,
+}
+
+/// What ptyro found a project needs, for its first worktree (UX1.11).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetupSuggestions {
+    pub project: String,
+    /// A setup script, from a lockfile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup: Option<String>,
+    /// The file that suggested it (`pnpm-lock.yaml`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// Ignored files at the root to copy into each worktree (`.env`).
+    #[serde(default)]
+    pub copy: Vec<String>,
+    /// Offered already (taken or declined): never again on its own.
+    #[serde(default)]
+    pub offered: bool,
+}
+
+impl SetupSuggestions {
+    pub fn is_empty(&self) -> bool {
+        self.setup.is_none() && self.copy.is_empty()
+    }
 }
 
 fn yes() -> bool {
@@ -360,6 +395,22 @@ pub struct RemoveOpts {
 pub struct GcEntry {
     pub worktree: WorktreeInfo,
     pub reasons: Vec<String>,
+}
+
+/// An archived worktree (UX1.12): its branch kept, its files (committed or not) in a snapshot
+/// commit under `refs/ptyro/archive/`, so `wt restore` brings it back as it was.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArchiveEntry {
+    pub project: String,
+    pub project_slug: String,
+    pub name: String,
+    pub branch: String,
+    /// The ref holding the snapshot (`refs/ptyro/archive/<name>`).
+    pub snapshot: String,
+    pub path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub archived_ms: u64,
 }
 
 /// What a diff is taken against (SPEC §11.5 inspector, M6.2).

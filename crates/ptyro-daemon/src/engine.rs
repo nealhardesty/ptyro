@@ -241,6 +241,21 @@ impl Engine {
         self.last_applied = None;
     }
 
+    /// Start over on who spoke last: a different program took over the terminal (UX1.4: an agent
+    /// started in a shell, or back to the shell), so what the shell said no longer holds.
+    /// `clear` drops the status too.
+    pub fn forget_sources(&mut self, clear: bool) {
+        self.last_high_ms = None;
+        self.last_medium_ms = None;
+        self.last_applied = None;
+        self.deferred = None;
+        if clear {
+            self.record = None;
+            self.activity = None;
+            self.working_since = None;
+        }
+    }
+
     /// When high-confidence sources last spoke (for the heuristic and the roster poll).
     pub fn high_quiet_ms(&self, now: u64) -> u64 {
         self.last_high_ms.map_or(u64::MAX, |t| now.saturating_sub(t))

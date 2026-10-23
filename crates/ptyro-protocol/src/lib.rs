@@ -32,7 +32,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 11 };
+pub const PROTO: Version = Version { major: 1, minor: 12 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -247,6 +247,25 @@ pub enum Request {
         #[serde(default)]
         force: bool,
     },
+    /// Change what a session (`worktree`: a worktree) is titled, for people to read; `None`
+    /// clears it (UX1.24). Its name, the address, stays.
+    Retitle {
+        addr: String,
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        worktree: bool,
+    },
+    /// A summary of what a session is doing, from `[summaries] command`, now (UX1.3); replies
+    /// `Session` with it in `summary`.
+    Summarize {
+        addr: String,
+    },
+    /// An agent started by hand in this shell session becomes a session of its own, managed like
+    /// `new --agent` (hooks, hibernation, mail), resuming the same conversation (UX1.4).
+    Adopt {
+        addr: String,
+    },
     /// A structured session's whole transcript (M10).
     ChatGet {
         addr: String,
@@ -283,7 +302,8 @@ pub enum Request {
     },
 
     // ── projects (SPEC §10.1) ──
-    /// Register the repository containing `path`; added to `workspace` (default `main`).
+    /// Register the repository containing `path`; added to `workspace` (default: the one the
+    /// TUI showed last, else `main`).
     ProjectAdd {
         path: PathBuf,
         #[serde(default)]
@@ -293,9 +313,13 @@ pub enum Request {
     ProjectGet {
         addr: String,
     },
-    /// Forget a project (its worktrees stay on disk).
+    /// Forget a project (its worktrees stay on disk). It is never registered on its own again
+    /// (UX1.5). `release`: let its running sessions go instead of refusing (they keep running,
+    /// outside any project), as undoing an automatic registration does.
     ProjectRemove {
         addr: String,
+        #[serde(default)]
+        release: bool,
     },
     /// Pin to a profile, or unpin with `None` (SPEC §10.10).
     ProjectPin {
@@ -395,6 +419,42 @@ pub enum Request {
     },
     /// Stale worktrees (never removes anything).
     Gc,
+    /// A project's branches a worktree could check out (UX1.10): local ones not checked out
+    /// anywhere, then the main remote's without a local branch.
+    Branches {
+        project: String,
+    },
+    /// What a project's first worktree could use (UX1.11): a setup script from its lockfile,
+    /// `.env` files to copy. `apply`: `Some(true)` writes them to `.ptyro.local.toml`,
+    /// `Some(false)` declines; either way they're never offered again.
+    ProjectSuggest {
+        addr: String,
+        #[serde(default)]
+        apply: Option<bool>,
+    },
+    /// Archive a worktree (UX1.12): snapshot its files, keep its branch, remove it. Never loses
+    /// work, so it doesn't refuse the way removing does. `stop_sessions` stops what runs in it.
+    WorktreeArchive {
+        addr: String,
+        #[serde(default)]
+        stop_sessions: bool,
+    },
+    /// Bring an archived worktree back as it was (`name`, or `project/name`).
+    WorktreeRestore {
+        addr: String,
+    },
+    /// Archived worktrees, newest first.
+    WorktreeArchives {
+        #[serde(default)]
+        project: Option<String>,
+    },
+    /// Finish a worktree (UX1.12): commit what's left (its agent asked for the message, else
+    /// its title is the message), then open a PR, or `integrate` into the main branch.
+    WorktreeFinish {
+        addr: String,
+        #[serde(default)]
+        integrate: bool,
+    },
 
     // ── profiles (SPEC §10.10) ──
     ProfileList,
@@ -1012,6 +1072,15 @@ pub enum Reply {
     Gc {
         entries: Vec<GcEntry>,
     },
+    Archives {
+        entries: Vec<ptyro_core::model::ArchiveEntry>,
+    },
+    Branches {
+        names: Vec<String>,
+    },
+    Suggestions {
+        suggestions: ptyro_core::model::SetupSuggestions,
+    },
     Profiles {
         profiles: Vec<ProfileInfo>,
     },
@@ -1299,6 +1368,13 @@ pub enum DomainEvent {
     },
     ProjectRemoved {
         id: String,
+    },
+    /// A repository a session runs in was registered on its own (UX1.5), in `workspace`.
+    ProjectAutoAdded {
+        info: ProjectInfo,
+        workspace: String,
+        #[serde(default)]
+        notes: Vec<String>,
     },
     WorkspaceUpdated {
         info: WorkspaceInfo,
