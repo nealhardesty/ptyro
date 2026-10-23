@@ -57,6 +57,7 @@ action by name.
 | `\` | show or hide the sidebar |
 | `u` | do what the last message offers: undo it, or fix what it reports |
 | `!` | a shell beside you, in this worktree and its profile |
+| `H` | home: who needs you, PRs, recent projects and repositories found; ⏎ starts a task there |
 | `.` | what you can do with the focused session (its menu) |
 | `P` | add a project (pick from the repositories ptyro found) |
 | `Z` | everything at once: the sidebar fills the screen with every row open (`⏎` opens one, `Z` or `Esc` goes back) |
@@ -93,6 +94,7 @@ Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.
 | `u` / `P` | do what the last message offers / add a project |
 | `.` | everything you can do with this row (a session, worktree or project), with the keys |
 | `F` / `!` | finish this worktree (commit, then a PR or integrate) / a shell in it |
+| `H` | home |
 | `A` | adopt the Claude started by hand in this shell: a managed session, same conversation |
 | `w` `o` `r` | workspace / editor / run script |
 | `v` `s` | split |

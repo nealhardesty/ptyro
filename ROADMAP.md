@@ -1439,11 +1439,15 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
   projects, `[scripts.*]` and recipes in one fuzzy list, each with its key, so the palette
   teaches the keys. *Done (2026-10-22):* worktrees, projects and the context worktree's scripts
   (fetched as it opens); recipes join with UX1.21's recipe runner.
-- [ ] **UX1.19 First run and home in the TUI** (R-UX-25) — M.
+- [x] **UX1.19 First run and home in the TUI** (R-UX-25) — M.
   - No config yet: `ptyro` opens `init` as a screen. Found agents, accounts and repos are
     checkboxes, and ⏎ writes the config. CLI `ptyro init` stays as the scripted form.
   - Outside any repo with no sessions: a home screen with recent and discovered repos (⏎ opens
     one, auto-registering it), who needs you, and PRs waiting.
+  - *Done (2026-10-22):* `crates/ptyro-tui/src/onboard.rs`; the CLI marks the TUI it opens on
+    a first session (`Options::welcome`); `H` and `first.run` any time. A TUI test ticks and
+    writes; `tests/ux1.rs` opens a fresh `ptyro` on it once (SPEC §11.2h). The terminal checks
+    and shell extras of `ptyro init` are the health badge's (UX1.20).
 - [ ] **UX1.20 Health badge** (R-UX-24) — M. The doctor's findings appear as a status-bar
   badge, and a key opens them, each with a fix: add the `shell-init` line (after a yes), tmux
   options, an agent not logged in (`profile login`), broken hooks, or a newer installed binary

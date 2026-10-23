@@ -158,6 +158,7 @@ async fn dispatch(
                 verify,
                 lead,
                 structured,
+                welcome: false,
             };
             let new_wt = new_wt.or_else(|| {
                 (a.pr.is_some() || a.issue.is_some() || a.take_changes).then(String::new)
@@ -599,7 +600,7 @@ async fn default_action(ctx: &Ctx) -> Result<i32, Error> {
         Some(_) => attach(ctx, client, None, false, false).await,
         None => {
             drop(client);
-            new(ctx, NewArgs::default()).await
+            new(ctx, NewArgs { welcome: true, ..NewArgs::default() }).await
         }
     }
 }
@@ -622,6 +623,8 @@ pub struct NewArgs {
     pub title: Option<String>,
     /// A new worktree taking the main checkout's changes (UX1.10).
     pub take_changes: bool,
+    /// `ptyro` with nothing running: the TUI opens on the first run or home (UX1.19).
+    pub welcome: bool,
     pub pr: Option<u32>,
     pub issue: Option<String>,
     pub unqueued: bool,
@@ -737,7 +740,8 @@ pub async fn new(ctx: &Ctx, a: NewArgs) -> Result<i32, Error> {
     }
     let info = session_of(reply)?;
     if attaching {
-        return attach(ctx, client, Some(info), false, false).await;
+        let tui = ptyro_tui::Options { welcome: a.welcome, ..Default::default() };
+        return attach_with(ctx, client, Some(info), tui).await;
     }
     if a.json {
         println!("{}", serde_json::to_string_pretty(&info).unwrap_or_default());

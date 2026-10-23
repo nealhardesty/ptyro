@@ -192,6 +192,8 @@ pub enum Purpose {
     AddProject(Option<AfterAdd>),
     /// A row's actions (UX1.15): run with that row selected in the sidebar.
     RowMenu(Row),
+    /// Home (UX1.19): what to do next.
+    Home,
     /// How to finish this worktree (UX1.12): a PR, or integrate.
     Finish(String),
     /// An archived worktree to bring back.
@@ -362,6 +364,9 @@ pub enum Pending {
     Suggest(Box<WorktreeSpec>, Option<Dir>),
     /// They were written: check the scripts (trust) again, then create.
     Suggested(Box<WorktreeSpec>, Option<Dir>),
+    /// The repositories for the first run, and for home (UX1.19).
+    FirstRunRepos,
+    Home,
     /// `project.suggest`: say what was found, offering to use it.
     SuggestShow(String),
 }
@@ -549,6 +554,8 @@ pub struct App {
     after_add: Option<(String, AfterAdd)>,
     /// The project `context()` answers while an `after_add` runs.
     context_hint: Option<String>,
+    /// The first-run screen (UX1.19), drawn over everything.
+    pub first_run: Option<crate::onboard::FirstRun>,
 }
 
 fn no_color() -> bool {
@@ -638,6 +645,7 @@ impl App {
             stopping: HashSet::new(),
             after_add: None,
             context_hint: None,
+            first_run: None,
         }
     }
 
@@ -1699,6 +1707,9 @@ impl App {
                     });
                 }
             }
+            (Pending::FirstRunRepos, Ok(Reply::Paths { paths })) => self.first_run_repos(paths),
+            (Pending::Home, Ok(Reply::Paths { paths })) => self.show_home(paths),
+            (Pending::Home, Err(_)) => self.show_home(Vec::new()),
             (Pending::Discovered(then), Ok(Reply::Paths { paths })) => {
                 self.open_add_project(paths, then)
             }
@@ -1849,7 +1860,7 @@ impl App {
         rows.get(self.sel_index(&rows)).cloned()
     }
 
-    fn set_sel(&mut self, rows: &[Row], i: usize) {
+    pub(crate) fn set_sel(&mut self, rows: &[Row], i: usize) {
         self.sidebar_sel = i;
         self.sidebar_row = rows.get(i).cloned();
     }
@@ -1868,6 +1879,10 @@ impl App {
             {
                 self.forward(InputEvent::Key { key });
             }
+            return;
+        }
+        if self.first_run.is_some() && !self.prefix && !self.keymap.is_prefix(key) {
+            self.first_run_key(key);
             return;
         }
         if self.overlay.is_some() {
@@ -2298,6 +2313,8 @@ impl App {
                 };
             }
             "row.menu" => self.open_row_menu(),
+            "home" => self.open_home(),
+            "first.run" => self.open_first_run(),
             "toast.act" => match self.toast.take().and_then(|t| t.offer) {
                 Some(Offer { then: Then::Run(cmd), .. }) => self.run(&cmd),
                 Some(Offer { then: Then::Send(req, done), .. }) => {
@@ -2670,7 +2687,7 @@ impl App {
     }
 
     /// "Here": the focused session's directory, else the TUI's own.
-    fn here(&self) -> std::path::PathBuf {
+    pub(crate) fn here(&self) -> std::path::PathBuf {
         self.focused_session()
             .and_then(|id| self.session(id))
             .and_then(|s| s.live_cwd.clone().or_else(|| Some(s.cwd.clone())))
@@ -3848,7 +3865,7 @@ impl App {
         }
     }
 
-    fn picked(&mut self, target: Target, purpose: Purpose) {
+    pub(crate) fn picked(&mut self, target: Target, purpose: Purpose) {
         let split = match purpose {
             Purpose::Split(d) => Some(d),
             _ => None,
@@ -3939,6 +3956,7 @@ impl App {
                     Request::WorktreeFinish { addr: id, integrate },
                 );
             }
+            (target, Purpose::Home) => self.home_picked(target),
             // A row's action: with that row selected, so it's what the action works on.
             (Target::Action(cmd), Purpose::RowMenu(row)) => {
                 let rows = self.rows();
@@ -5839,6 +5857,85 @@ mod tests {
             }),
         ));
         assert!(app.overlay.is_none());
+    }
+
+    #[test]
+    fn the_first_run_ticks_what_to_use_and_writes_the_config() {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path().to_path_buf();
+        let paths = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| h.clone())).unwrap();
+        let connect = ConnectOptions::new(paths.clone(), ptyro_protocol::ClientKind::Tui);
+        let mut app = App::new(
+            Options::default(),
+            connect,
+            paths,
+            Config::default(),
+            false,
+            Rect::new(0, 0, 100, 30),
+        );
+        use crate::onboard::{Choice, ChoiceKind, FirstRun};
+        app.first_run = Some(FirstRun {
+            agents: vec![
+                ("claude".into(), "claude".into(), true),
+                ("codex".into(), "codex".into(), false),
+            ],
+            choices: vec![
+                Choice {
+                    section: "accounts",
+                    label: "profile work".into(),
+                    detail: "claude ~/.claude-work".into(),
+                    on: true,
+                    kind: ChoiceKind::Profile(
+                        "[profiles.work]\nclaude = \"~/.claude-work\"\n".into(),
+                    ),
+                },
+                Choice {
+                    section: "notifications",
+                    label: "desktop notifications".into(),
+                    detail: String::new(),
+                    on: false,
+                    kind: ChoiceKind::Desktop,
+                },
+            ],
+            sel: 0,
+        });
+        app.first_run_repos(vec!["/src/alpha".into()]);
+        let shown = screen(&app);
+        assert!(shown.contains("Welcome to ptyro"), "{shown}");
+        assert!(shown.contains("✓ claude (default)") && !shown.contains("✓ codex"), "{shown}");
+        assert!(shown.contains("[x] profile work") && shown.contains("[ ] alpha"), "{shown}");
+        // j j: past the repository to notifications; Space ticks it; ⏎ writes the config.
+        let k = |app: &mut App, code| app.first_run_key(KeyEvent::new(code, Mods::NONE));
+        k(&mut app, KeyCode::Char { c: 'j' });
+        k(&mut app, KeyCode::Char { c: 'j' });
+        k(&mut app, KeyCode::Char { c: ' ' });
+        k(&mut app, KeyCode::Enter);
+        assert!(app.first_run.is_none());
+        let text = std::fs::read_to_string(Config::path(&app.paths)).unwrap();
+        assert!(text.contains("[profiles.work]") && text.contains("\"desktop\""), "{text}");
+        assert!(app.toast.as_ref().unwrap().text.contains("1 profile(s), 0 project(s)"));
+        assert!(app.toast.as_ref().unwrap().text.contains("take the 60-second tour"));
+    }
+
+    #[test]
+    fn home_lists_what_to_do_next() {
+        let mut app = app();
+        with_project(&mut app);
+        let mut asker = session("asker");
+        asker.attention = Some(
+            serde_json::from_value(serde_json::json!({
+                "kind": "blocked", "since_ms": 1, "text": "wants permission: Bash: rm",
+            }))
+            .unwrap(),
+        );
+        app.sessions = vec![asker];
+        app.show_home(vec!["/r/myrepo".into(), "/src/other".into()]);
+        let Some(Overlay::Picker { palette, purpose: Purpose::Home }) = &app.overlay else {
+            panic!("home")
+        };
+        let labels: Vec<String> =
+            (0..palette.filtered.len()).map(|i| palette.item(i).label.clone()).collect();
+        assert_eq!(labels, ["⚑ asker", "▸ myrepo", "+ other", "a shell, here"], "known repos once");
     }
 
     #[test]

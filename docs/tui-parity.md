@@ -106,7 +106,7 @@ the same check through `make test`. When you add a command, add its row here.
 | `profile env` | waived: prints `export` lines for your shell to `eval`; sessions get the environment already |
 | `profile login` | gap: UX1.21 |
 | `profile sync` | gap: UX1.21 |
-| `profile detect` | gap: UX1.19 (the first run finds them) |
+| `profile detect` | `first.run` finds them, as accounts to tick |
 | `profile doctor` | gap: UX1.20 |
 
 ## Review and ship
@@ -220,7 +220,7 @@ the same check through `make test`. When you add a command, add its row here.
 
 | Command | In the TUI |
 |---|---|
-| `init` | gap: UX1.19 (the first run, as a screen) |
+| `init` | `first.run`: the first run as a screen (it opens on its own the first time); terminal checks and shell extras are `doctor`'s (UX1.20) |
 | `doctor` | gap: UX1.20 (the health badge) |
 | `tour` | `help.tour` |
 | `config edit` | `config.edit` (validated when you save; changes apply live) |

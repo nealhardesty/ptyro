@@ -87,6 +87,11 @@ cd ~/dev/myrepo
 ptyro                   # open the TUI (a shell session to start with)
 ```
 
+The very first time, with no config yet, ptyro shows what it found (your agents, the accounts in
+your shell setup, your repositories) as a list to tick, and writes the config from that. Outside a
+repository, it opens **home**: who needs you, PRs, recent projects and repositories found, each a
+`⏎` away from a task (`Ctrl-Q H` brings it back).
+
 The repository you're in becomes a **project** by itself, so it shows in the sidebar ready for
 worktrees. The status bar says so, and `Ctrl-Q u` undoes it (it then stays out until you add
 it). `Ctrl-Q P` adds another repository; `[discover] auto_register = false` turns this off.

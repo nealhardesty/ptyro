@@ -2611,7 +2611,7 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 | R-UX-22 | **Auto-register the repo you're in**, in the current workspace, with an undo toast instead of a question | owner (2026-10-22) | UX1 | S | ★★★ | → UX1.5 (2026-10-22) |
 | R-UX-23 | **Prompt-first new task**: `n` is one box ("what should it do?"); ⏎ = worktree + branch named from the prompt + default agent + the prompt delivered; `ptyro "task"` from the shell | owner (2026-10-22); Claude agent view, dmux (prompt-named tasks) | UX1 | M | ★★★ | → UX1.9 (2026-10-22) |
 | R-UX-24 | **Health badge**: the doctor's findings in the status bar, each with a key that fixes it (shell-init line, tmux options, daemon upgrade) | owner (2026-10-22) | UX1 | M | ★★ | → UX1.20 (2026-10-22) |
-| R-UX-25 | **First run and home screen in the TUI**: `init` as a checklist screen; outside a repo, recent and discovered repos instead of a bare shell | owner (2026-10-22) | UX1 | M | ★★ | → UX1.19 (2026-10-22) |
+| R-UX-25 | **First run and home screen in the TUI**: `init` as a checklist screen; outside a repo, recent and discovered repos instead of a bare shell | owner (2026-10-22) | UX1 | M | ★★ | → UX1.19, built 2026-10-22 |
 | R-UX-26 | **Interactive tour**: do the steps with a fake agent instead of reading pages | owner (2026-10-22) | UX1 | S | ★ | → UX1.22 (2026-10-22) |
 | R-UX-27 | **Errors offer the fix**: no toast names a command to type; it carries a key that does it | owner (2026-10-22) | UX1 | S | ★★★ | → UX1.17 (2026-10-22) |
 | R-UX-28 | **Context hints**: the status bar's hints follow the selection (blocked → answer, diff → review, merged → clean up) | owner (2026-10-22) | UX1 | S | ★★ | → UX1.16 (2026-10-22) |

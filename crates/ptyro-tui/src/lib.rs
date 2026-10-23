@@ -9,6 +9,7 @@ mod inspector;
 pub mod keymap;
 mod keys;
 pub mod layout;
+mod onboard;
 mod outer;
 #[doc(hidden)] // public for the benches
 pub mod paint;
@@ -66,6 +67,8 @@ pub struct Options {
     pub follow_worktree: Option<String>,
     /// Start the guided tour (`ptyro tour`).
     pub tour: bool,
+    /// `ptyro` started the first session itself: the first run (no config yet) or home (UX1.19).
+    pub welcome: bool,
 }
 
 const FRAME: Duration = Duration::from_millis(8);
@@ -165,6 +168,7 @@ async fn event_loop(app: &mut App, tui: &mut ratatui::DefaultTerminal) -> Result
         return Ok(AttachEnd::Lost(e));
     }
     app.restore_view().await;
+    app.welcome();
     let mut events = EventStream::new();
     let mut last_draw = Instant::now() - FRAME;
     let mut cursor_shape = None;

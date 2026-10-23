@@ -119,6 +119,9 @@ pub fn draw(app: &App, f: &mut Frame<'_>) {
             draw_status(app, f, Rect { y: area.bottom() - 1, height: 1, ..area });
         }
     }
+    if app.first_run.is_some() {
+        crate::onboard::draw(app, f, area);
+    }
     if let Some(o) = &app.overlay {
         draw_overlay(app, f, o, area);
     } else if app.which_key_shown() {

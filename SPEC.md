@@ -2529,6 +2529,19 @@ learning anything up front.
   0: never), a menu of the next keys appears above the status bar, in five groups (start, go,
   panes, work, this), as bound now; keys typed before it work as always. The event loop wakes at
   the deadline, not on its 250 ms tick.
+- **The first run and home** (UX1.19, `crates/ptyro-tui/src/onboard.rs`). When `ptyro` had to
+  start the first session itself (`Options::welcome`):
+  - with no config file (and `PTYRO_FIRST_RUN` not `0`): the first run, over everything. Agents
+    found on `PATH` (the default marked), accounts `detect()` finds in your shell setup (ticked),
+    repositories under `[discover] roots` (the one you're in ticked; it registers on its own
+    anyway), desktop notifications (not ticked). Space ticks, ⏎ writes `config.toml` (0600,
+    created only if absent, checked before writing) and registers the ticked repositories in
+    the current workspace, then offers the tour; Esc writes an empty config so it never comes
+    back. `first.run` opens it again; `ptyro init` stays the terminal's version, with the
+    terminal checks and shell extras;
+  - else, when the workspace has no project: **home** (`home`, `H`), one list of who needs you,
+    worktrees with PRs and their checks, projects (most recently used first; ⏎ starts a task
+    there), repositories found (⏎ adds one, then the task box), and a shell here.
 - **Finish and clean up** (UX1.12, §10.8): `worktree.finish` (`F` in the sidebar, the row menu)
   asks "a pull request" or "integrate", then runs it while messages say how far it got. A merged
   worktree's hint is "clean up", and `x` on it archives instead of removing. A removal refused for

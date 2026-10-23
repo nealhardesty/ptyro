@@ -666,3 +666,32 @@ async fn a_first_worktree_is_offered_its_setup_once() {
     };
     assert!(scripts.trusted, "the scripts you just approved are trusted");
 }
+
+/// UX1.19: on a fresh machine (no config, nothing running) `ptyro` opens the first run; once
+/// it's done, never again.
+#[tokio::test]
+async fn a_fresh_ptyro_opens_the_first_run_once() {
+    let d = TempDaemon::start(BIN).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let script = |d: &TempDaemon| {
+        let mut s = ptyro_testkit::headless::Script::new(vec![BIN.to_owned()])
+            .size(110, 30)
+            .timeout(5.0)
+            .env("HOME", &home.path().to_string_lossy());
+        for (k, v) in d.env() {
+            s = s.env(&k, &v);
+        }
+        s
+    };
+    let r = ptyro_testkit::headless::run(
+        script(&d).snapshot(2.0).send(2.2, "\x1b").snapshot(2.8).send(3.0, "\\x11d"),
+    )
+    .await
+    .unwrap();
+    assert!(r.at(2.0).contains("Welcome to ptyro"), "{}", r.at(2.0));
+    assert!(!r.at(2.8).contains("Welcome to ptyro"), "Esc skips: {}", r.at(2.8));
+    assert!(d.paths.config.join("config.toml").exists(), "a config now, so it won't come back");
+    let r =
+        ptyro_testkit::headless::run(script(&d).snapshot(2.0).send(2.2, "\\x11d")).await.unwrap();
+    assert!(!r.at(2.0).contains("Welcome to ptyro"), "{}", r.at(2.0));
+}
