@@ -178,4 +178,6 @@ key include: `project.add`
 "nav:J" = "nav.down"                 # in the sidebar
 ```
 
-The action names are the ones the palette and `Ctrl-Q ?` show.
+The action names are the ones the palette and `Ctrl-Q ?` show. Every CLI command has one
+([`tui-parity.md`](tui-parity.md) lists them); the ones that run a `ptyro` command do so in a
+split below, asking for what they need first.

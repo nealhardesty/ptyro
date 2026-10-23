@@ -279,6 +279,7 @@ impl App {
     /// `ptyro <args>` in a split below: its output stays readable once it's done. The CLI's
     /// long tail reaches the TUI this way (UX1.20, UX1.21), interactive ones included.
     pub fn run_cli(&mut self, args: &[String]) {
+        self.last_cli = Some(args.to_vec());
         let exe = std::env::current_exe()
             .map_or_else(|_| "ptyro".to_owned(), |p| p.to_string_lossy().into_owned());
         let argv: Vec<String> = std::iter::once(exe).chain(args.iter().cloned()).collect();

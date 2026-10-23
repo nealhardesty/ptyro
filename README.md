@@ -419,7 +419,7 @@ behave the same. (License and advisory checks run there through the cargo-deny a
 | `make fmt` / `fmt-check` / `lint` | format / fail if unformatted / clippy with warnings as errors |
 | `make check` / `make ci` | what CI runs except `deny` (fmt-check, lint, test, smoke) / everything, `deny` included |
 | `make tools` / `make deny` | install cargo-deny / license, advisory and source checks |
-| `make tui-parity` (`STRICT=1`) | check that every CLI command has a TUI path or a waiver in [`docs/tui-parity.md`](docs/tui-parity.md), and list the gaps left (`STRICT=1` fails on them) |
+| `make tui-parity` | check that every CLI command has a TUI path or a waiver in [`docs/tui-parity.md`](docs/tui-parity.md) (`STRICT=0` only lists gaps) |
 | `make doc` / `make clean` | API docs / remove build output |
 | `make sandbox` / `make sandbox-clean` | a throwaway ptyro (own daemon, store, worktrees) with a demo repo / delete it. It isolates ptyro's state, not a security sandbox: agents still run as you |
 | `make orchestrate-demo` (`ARGS=tui\|clean`) | fan-out, a gated recipe and a lead over MCP, with fake agents |

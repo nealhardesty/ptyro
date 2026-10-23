@@ -198,6 +198,13 @@ pub enum Purpose {
     Health,
     /// `ptyro <these args> <the pick>`, in a split (UX1.20, UX1.21).
     Cli(Vec<String>),
+    /// A word of a `ptyro …` command being put together (UX1.21).
+    CliPick(Box<crate::cli_actions::CliJob>),
+    /// The profile to pin this project to.
+    Pin(String),
+    /// This workspace's profile, or how it notifies.
+    WorkspaceProfile,
+    WorkspaceNotify,
     /// How to finish this worktree (UX1.12): a PR, or integrate.
     Finish(String),
     /// An archived worktree to bring back.
@@ -245,6 +252,14 @@ pub enum PromptKind {
     RetitleWorktree(String),
     /// A PR or issue to start a worktree from (UX1.10).
     WorkSource(Wizard),
+    /// A word for a `ptyro …` command being put together (UX1.21); `true`: `k=v` variables.
+    CliAsk(Box<crate::cli_actions::CliJob>, bool),
+    /// A branch's new name, for this worktree (by id).
+    RenameBranch(String),
+    /// A PR to go to (UX1.21).
+    OpenPr,
+    /// A workspace's new name.
+    RenameWorkspace(String),
     /// Typed in the runs view (M7).
     Orch(crate::runs::OrchInput),
     /// Typed in the change-set view (M11).
@@ -566,6 +581,8 @@ pub struct App {
     pub first_run: Option<crate::onboard::FirstRun>,
     /// What the doctor found, for the badge (UX1.20).
     pub health: crate::health::Health,
+    /// The last `ptyro …` command run in a split (`run_cli`).
+    pub last_cli: Option<Vec<String>>,
     pub started: Instant,
 }
 
@@ -658,6 +675,7 @@ impl App {
             context_hint: None,
             first_run: None,
             health: crate::health::Health::default(),
+            last_cli: None,
             started: Instant::now(),
         }
     }
@@ -2611,7 +2629,8 @@ impl App {
                 }
                 _ => {}
             },
-            other => self.toast(format!("{other}: not available yet")),
+            other if crate::cli_actions::template(other).is_some() => self.start_cli(other),
+            other => self.native_extra(other),
         }
     }
 
@@ -2915,6 +2934,240 @@ impl App {
             Row::Project(_) => with("worktree.new", "new worktree"),
             Row::Set(_) | Row::Group(_) => None,
         }
+    }
+
+    /// The UX1.21 actions done here rather than through the CLI.
+    fn native_extra(&mut self, action: &str) {
+        let (project, wt) = self.context();
+        let worktree = wt.as_deref().and_then(|w| self.worktree(w)).cloned();
+        let need_wt = |me: &mut Self| {
+            me.toast_offer("pick a worktree first", false, run_offer("make one", "worktree.new"))
+        };
+        match action {
+            "session.convert" => {
+                match self.focused_session().and_then(|id| self.session(id)).cloned() {
+                    Some(s) if s.kind == SessionKind::Agent => {
+                        let structured = s.structured.is_none();
+                        self.request(
+                            Pending::Spawned { split: None, spec: Box::default() },
+                            Request::Convert { addr: s.id.full(), structured, force: false },
+                        );
+                        self.toast(if structured {
+                            "to structured mode, same conversation…"
+                        } else {
+                            "to its own UI, same conversation…"
+                        });
+                    }
+                    _ => self.toast("only an agent session converts"),
+                }
+            }
+            "project.remove" | "project.untrust" | "project.pin" | "project.unpin"
+            | "project.leave" => {
+                let Some(p) = project.and_then(|p| self.project(&p).cloned()) else {
+                    self.pick_project(None);
+                    return;
+                };
+                match action {
+                    "project.remove" => {
+                        self.overlay = Some(Overlay::Confirm {
+                            text: format!(
+                                "Forget project {}? Its worktrees stay on disk, and it won't register on its own again. [y/N]",
+                                p.slug
+                            ),
+                            action: Confirmed::Send(
+                                Box::new(Request::ProjectRemove { addr: p.id, release: false }),
+                                "forgotten".into(),
+                            ),
+                        });
+                    }
+                    "project.untrust" => self.request(
+                        Pending::Done("scripts no longer trusted".into()),
+                        Request::ProjectUntrust { addr: p.id },
+                    ),
+                    "project.unpin" => self.request(
+                        Pending::Done("unpinned".into()),
+                        Request::ProjectPin { addr: p.id, profile: None },
+                    ),
+                    "project.leave" => self.request(
+                        Pending::Done(format!("{} left {}", p.slug, self.workspace)),
+                        Request::WorkspaceMember {
+                            name: self.workspace.clone(),
+                            project: p.id,
+                            remove: true,
+                        },
+                    ),
+                    _ => {
+                        let items = self
+                            .profiles
+                            .iter()
+                            .map(|x| Item {
+                                label: x.name.clone(),
+                                detail: x.label.clone(),
+                                key: None,
+                                target: Target::Path(x.name.clone().into()),
+                            })
+                            .collect();
+                        self.overlay = Some(Overlay::Picker {
+                            palette: Palette::new(
+                                format!("Pin {} to which profile?", p.slug),
+                                items,
+                            ),
+                            purpose: Purpose::Pin(p.id),
+                        });
+                    }
+                }
+            }
+            "worktree.lock" | "worktree.unlock" => match worktree {
+                Some(w) => self.request(
+                    Pending::Done(
+                        if action == "worktree.lock" { "locked" } else { "unlocked" }.into(),
+                    ),
+                    Request::WorktreeLock { addr: w.id, lock: action == "worktree.lock" },
+                ),
+                None => need_wt(self),
+            },
+            "worktree.pair" | "worktree.unpair" => match worktree {
+                Some(w) => self.request(
+                    Pending::Done(String::new()),
+                    Request::WorktreePair {
+                        addr: w.id,
+                        off: action == "worktree.unpair",
+                        refresh: false,
+                    },
+                ),
+                None => need_wt(self),
+            },
+            "worktree.rename_branch" => match worktree {
+                Some(w) => {
+                    self.overlay = Some(Overlay::Prompt {
+                        title: format!(
+                            "Rename {}'s branch (empty: from its first commit)",
+                            w.qualified()
+                        ),
+                        text: w.branch.clone().unwrap_or_default(),
+                        kind: PromptKind::RenameBranch(w.id),
+                    });
+                }
+                None => need_wt(self),
+            },
+            "workspace.rename" => {
+                self.overlay = Some(Overlay::Prompt {
+                    title: format!("Rename workspace {}", self.workspace),
+                    text: self.workspace.clone(),
+                    kind: PromptKind::RenameWorkspace(self.workspace.clone()),
+                });
+            }
+            "workspace.remove" => {
+                let name = self.workspace.clone();
+                self.overlay = Some(Overlay::Confirm {
+                    text: format!("Remove workspace {name}? Its projects stay registered. [y/N]"),
+                    action: Confirmed::Send(
+                        Box::new(Request::WorkspaceRemove { name }),
+                        "workspace removed".into(),
+                    ),
+                });
+            }
+            "workspace.profile" => {
+                let items = self
+                    .profiles
+                    .iter()
+                    .map(|x| Item {
+                        label: x.name.clone(),
+                        detail: x.label.clone(),
+                        key: None,
+                        target: Target::Path(x.name.clone().into()),
+                    })
+                    .collect();
+                self.overlay = Some(Overlay::Picker {
+                    palette: Palette::new(
+                        format!("Workspace {} runs as which profile?", self.workspace),
+                        items,
+                    ),
+                    purpose: Purpose::WorkspaceProfile,
+                });
+            }
+            "workspace.notify" => {
+                let items = [
+                    ("all", "notify for everything"),
+                    ("badge", "only a badge in the status bar"),
+                    ("mute", "nothing"),
+                ]
+                .iter()
+                .map(|(n, d)| Item {
+                    label: (*n).into(),
+                    detail: (*d).into(),
+                    key: None,
+                    target: Target::Path((*n).into()),
+                })
+                .collect();
+                self.overlay = Some(Overlay::Picker {
+                    palette: Palette::new(
+                        format!("How does {} notify you?", self.workspace),
+                        items,
+                    ),
+                    purpose: Purpose::WorkspaceNotify,
+                });
+            }
+            "workspace.mute" | "project.mute" => {
+                let target = if action == "workspace.mute" {
+                    Some(format!("workspace:{}", self.workspace))
+                } else {
+                    project.and_then(|p| self.project(&p).map(|p| format!("project:{}", p.slug)))
+                };
+                match target {
+                    Some(target) => self.request(
+                        Pending::Done("muted for 1h (the inbox still gets them)".into()),
+                        Request::Mute { target, minutes: Some(60), unmute: false },
+                    ),
+                    None => self.pick_project(None),
+                }
+            }
+            "pr.open" => {
+                self.overlay = Some(Overlay::Prompt {
+                    title: "Which PR? (its number, `pr 12`, or URL)".into(),
+                    text: String::new(),
+                    kind: PromptKind::OpenPr,
+                });
+            }
+            other => self.toast(format!("{other}: not available yet")),
+        }
+    }
+
+    /// `pr.open`: the worktree that has this PR (its session), else a new one on it.
+    fn open_pr(&mut self, text: &str) {
+        let t = text.trim();
+        let number = t.parse::<u32>().ok().or_else(|| work_source(t).and_then(|(pr, _)| pr));
+        let Some(n) = number else {
+            self.toast_err("not a PR: its number, `pr 12`, or its URL");
+            return;
+        };
+        if let Some(w) =
+            self.worktrees.iter().find(|w| w.pr.as_ref().is_some_and(|p| p.number == n)).cloned()
+        {
+            match self
+                .sessions
+                .iter()
+                .find(|s| s.worktree.as_deref() == Some(w.id.as_str()))
+                .map(|s| s.id)
+            {
+                Some(id) => self.show(id, None),
+                None => self.picked(Target::Worktree(w.id), Purpose::Palette),
+            }
+            return;
+        }
+        let Some(p) = self.context().0 else {
+            self.pick_project(None);
+            return;
+        };
+        let agent = ptyro_agents::default_agent(&self.config);
+        let w = Wizard {
+            project: Some(p.clone()),
+            agent: Some(agent),
+            pr: Some(n),
+            name: Some(format!("pr-{n}")),
+            ..Wizard::default()
+        };
+        self.wizard_done(w, Target::NewWorktree(p));
     }
 
     /// Pick one of `choices`, then `ptyro <args> <choice>` runs in a split.
@@ -3980,6 +4233,33 @@ impl App {
                     self.confirm_archive(&w);
                 }
             }
+            (Target::Path(word), Purpose::CliPick(mut job)) => {
+                job.done.push(word.to_string_lossy().into_owned());
+                self.cli_step(*job);
+            }
+            (Target::Path(p), Purpose::Pin(project)) => self.request(
+                Pending::Done("pinned".into()),
+                Request::ProjectPin {
+                    addr: project,
+                    profile: Some(p.to_string_lossy().into_owned()),
+                },
+            ),
+            (Target::Path(p), Purpose::WorkspaceProfile) => self.request(
+                Pending::Done("workspace profile set".into()),
+                Request::WorkspaceSet {
+                    name: self.workspace.clone(),
+                    profile: Some(p.to_string_lossy().into_owned()),
+                    notify: None,
+                },
+            ),
+            (Target::Path(n), Purpose::WorkspaceNotify) => self.request(
+                Pending::Done("workspace notifications set".into()),
+                Request::WorkspaceSet {
+                    name: self.workspace.clone(),
+                    profile: None,
+                    notify: Some(n.to_string_lossy().into_owned()),
+                },
+            ),
             (Target::Path(arg), Purpose::Cli(mut args)) => {
                 args.push(arg.to_string_lossy().into_owned());
                 self.run_cli(&args);
@@ -4194,6 +4474,25 @@ impl App {
                     Request::Retitle { addr: id.full(), title, worktree: false },
                 );
             }
+            PromptKind::CliAsk(job, vars) => self.cli_answer(*job, &text, vars),
+            PromptKind::RenameBranch(id) => {
+                let branch = Some(text.trim().to_owned()).filter(|b| !b.is_empty());
+                self.request(
+                    Pending::Done("branch renamed".into()),
+                    Request::WorktreeRenameBranch { addr: id, branch },
+                );
+            }
+            PromptKind::RenameWorkspace(old) => {
+                let new_name = text.trim().to_owned();
+                if !new_name.is_empty() && new_name != old {
+                    self.request(
+                        Pending::Done(format!("workspace {new_name}")),
+                        Request::WorkspaceRename { name: old, new_name: new_name.clone() },
+                    );
+                    self.workspace = new_name;
+                }
+            }
+            PromptKind::OpenPr => self.open_pr(&text),
             PromptKind::WorkSource(w) => match work_source(&text) {
                 Some((pr, issue)) => {
                     let project = w.project.clone().unwrap_or_default();
@@ -6061,6 +6360,68 @@ mod tests {
         key(&mut app, KeyCode::Char { c: 'y' }, Mods::NONE);
         assert!(std::fs::read_to_string(&rc).unwrap().contains("eval x"));
         assert_eq!(app.health.findings.len(), i, "fixed: off the list");
+    }
+
+    #[test]
+    fn the_cli_s_long_tail_runs_with_what_is_selected_picked_or_typed() {
+        let mut app = app();
+        app.profiles = vec![
+            serde_json::from_value(serde_json::json!({
+                "name": "work", "label": "wrk", "defined": true, "isolate": false,
+                "dirs": {}, "vars": [],
+            }))
+            .unwrap(),
+        ];
+        // Two picks: the profile, then the agent.
+        app.run(&Command { action: "profile.login", arg: None });
+        typed(&mut app, "work\n");
+        typed(&mut app, "claude\n");
+        assert_eq!(
+            app.last_cli.as_deref(),
+            Some(&["profile", "login", "work", "claude"].map(String::from)[..])
+        );
+        // A question and variables.
+        app.run(&Command { action: "recipe.run", arg: None });
+        typed(&mut app, "implement-and-review\n");
+        typed(&mut app, "task=add json, n=2\n");
+        assert_eq!(
+            app.last_cli.clone().unwrap(),
+            ["recipe", "run", "implement-and-review", "--var", "task=add json", "--var", "n=2"]
+        );
+        // The selected session, a choice, and a file.
+        let s = session("worker");
+        app.panes.get_mut(&1).unwrap().session = Some(s.id);
+        app.sessions = vec![s];
+        app.run(&Command { action: "session.export", arg: None });
+        typed(&mut app, "text\n");
+        typed(&mut app, "out.txt\n");
+        assert_eq!(
+            app.last_cli.clone().unwrap(),
+            ["export", "worker", "--format", "text", "-o", "out.txt"]
+        );
+        // An optional word left empty: left out.
+        app.run(&Command { action: "session.verify", arg: None });
+        typed(&mut app, "\n");
+        assert_eq!(app.last_cli.clone().unwrap(), ["verify", "worker"]);
+        // Nothing selected that it needs: it says what to pick.
+        app.last_cli = None;
+        app.run(&Command { action: "set.push", arg: None });
+        assert!(app.last_cli.is_none());
+        assert!(app.toast.as_ref().unwrap().text.contains("pick a change set first"));
+    }
+
+    #[test]
+    fn opening_a_pr_goes_to_its_worktree_s_session() {
+        let mut app = app();
+        with_project(&mut app);
+        let w = feature(&mut app, true);
+        let mut s = session("feat-agent");
+        s.worktree = Some(w.id.clone());
+        s.project = Some("p1".into());
+        app.sessions = vec![s.clone()];
+        app.run(&Command { action: "pr.open", arg: None });
+        typed(&mut app, "7\n");
+        assert_eq!(app.focused_session(), Some(s.id));
     }
 
     #[test]

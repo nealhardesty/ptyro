@@ -6,8 +6,8 @@
 //!   so the palette and `?` list it; the rest says where (a key in a view, a tab);
 //! - `shown: …`: always on screen (the sidebar, the status bar), nothing to run;
 //! - `waived: …`: no TUI path on purpose, and why;
-//! - `gap: UX1.x …`: missing, and the roadmap task that closes it. `PTYRO_PARITY_STRICT=1`
-//!   (set by `make tui-parity`) fails on these too.
+//! - `gap: …`: missing. UX1 closed every one; a gap fails the check (`PTYRO_PARITY_STRICT=0`
+//!   only lists them, while one is being worked on).
 //!
 //! The check fails on a command with no row, a row for a command that doesn't exist, a cell in
 //! none of these forms, and an action that doesn't exist.
@@ -115,7 +115,7 @@ fn every_cli_command_has_a_tui_path_or_a_waiver() {
              or a row saying `waived: why` (SPEC §1.3)"
         ));
     }
-    let strict = std::env::var_os("PTYRO_PARITY_STRICT").is_some_and(|v| v == "1");
+    let strict = std::env::var_os("PTYRO_PARITY_STRICT").is_none_or(|v| v != "0");
     if strict {
         problems.extend(gaps.iter().map(|g| format!("gap {g}")));
     } else if !gaps.is_empty() {

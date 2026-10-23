@@ -1454,7 +1454,7 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
   ("upgrade the daemon live? `u`"). *Done (2026-10-22):* `crates/ptyro-tui/src/health.rs`: the
   doctor in the background, the TUI's own shell-init check, `M` with a fix per finding, and
   `run_cli` for the daemon's and integrations' commands (SPEC §11.2h).
-- [ ] **UX1.21 TUI parity gaps** — L, split as UX1.0 lists them. Today (2026-10-22) the TUI
+- [x] **UX1.21 TUI parity gaps** — L, split as UX1.0 lists them. Today (2026-10-22) the TUI
   cannot:
   - run a recipe, or create a change set;
   - run `gc` or archive;
@@ -1465,6 +1465,10 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
   - start `serve`.
 
   Each gets a palette action and, where it is frequent, a key or a row-menu entry.
+  *Done (2026-10-22):* the frequent ones native; the long tail through
+  `crates/ptyro-tui/src/cli_actions.rs` (a `ptyro …` template per action, its words from the
+  selection, a pick or a question, run in a split). `docs/tui-parity.md` has no gaps, and the
+  check is strict by default now (SPEC §11.2h).
 - [ ] **UX1.22 Interactive tour** (R-UX-26) — S. `ptyro tour` (and the first run's last step)
   does the steps with a fake agent in a throwaway repo: new task, answer a prompt, review the
   diff, finish. It replaces the pages.

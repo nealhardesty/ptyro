@@ -5,12 +5,13 @@ every command and how the TUI does it, so it doubles as a "how do I … in the T
 Keys are the defaults, after the prefix (`Ctrl-Q` or `Ctrl-Space`). Every action named in
 backticks is also in the palette (`Ctrl-Q :`), with its key.
 
-A few commands have no TUI path on purpose, each with its reason (`waived:`). The rest that
-don't have one yet are marked `gap:`, with the roadmap task that closes it.
+A few commands have no TUI path on purpose, each with its reason (`waived:`). Every other
+command has one: the TUI is first class (SPEC §1.3).
 
-`make tui-parity` checks this page against the real command tree. It fails when a command has
-no row, or a row names a command or action that doesn't exist, and (strictly) on any gap. CI runs
-the same check through `make test`. When you add a command, add its row here.
+`make tui-parity` checks this page against the real command tree, and CI runs the same check
+through `make test`. It fails when a command has no row, a row names a command or an action that
+doesn't exist, or a row is a `gap:` (a TUI path still missing). When you add a command, add its
+row here: its TUI action, or `waived:` and why.
 
 ## Sessions
 
@@ -27,7 +28,7 @@ the same check through `make test`. When you add a command, add its row here.
 | `retitle` | `session.retitle` (`,` then `C-t`) |
 | `resume` | `session.resume` (or `⏎` on a dormant pane) |
 | `hibernate` | `session.hibernate` |
-| `convert` | gap: UX1.21 (switch between the agent's own TUI and structured mode) |
+| `convert` | `session.convert` (the row menu, the palette) |
 | `adopt` | `session.adopt` (`A` on a shell row running Claude) |
 | `status` | `session.explain` (`e` in the sidebar) says why; the sidebar and pane headers show the status |
 | `answer` | `peek` (`p`): `y` allow, `a` always, `n` deny |
@@ -43,7 +44,7 @@ the same check through `make test`. When you add a command, add its row here.
 | Command | In the TUI |
 |---|---|
 | `inbox` | `inbox` (`i`) |
-| `mute` | `session.mute`; a project or workspace: gap: UX1.21 |
+| `mute` | `session.mute`; a whole project or workspace: `project.mute`, `workspace.mute` |
 | `notify test` | `notify.test` |
 | `usage` | shown: the status bar and the sidebar title show the rate limits of the focused session's profile |
 | `integrations ls` | `integrations` (in a split); the health badge says what's missing |
@@ -58,13 +59,13 @@ the same check through `make test`. When you add a command, add its row here.
 | `project discover` | `project.add` (it discovers) |
 | `project suggest` | `project.suggest`; a project's first worktree offers it on its own |
 | `project ls` | shown: the sidebar lists the workspace's projects |
-| `project show` | gap: UX1.21 |
-| `project rm` | gap: UX1.21 |
+| `project show` | `project.show` (in a split) |
+| `project rm` | `project.remove` (asks first) |
 | `project trust` | `project.trust` |
-| `project untrust` | gap: UX1.21 |
-| `project config` | gap: UX1.21 |
-| `project pin` | gap: UX1.21 (today only "keep the pin? [Y/n]" after adding) |
-| `project unpin` | gap: UX1.21 |
+| `project untrust` | `project.untrust` |
+| `project config` | `project.config` (with where each value comes from, in a split) |
+| `project pin` | `project.pin`: pick the profile |
+| `project unpin` | `project.unpin` |
 | `wt new` | `worktree.new` (`N`), or `session.new` (`n`) → "+ new worktree" |
 | `wt ls` | shown: the sidebar lists every worktree under its project |
 | `wt rm` | `worktree.remove` (`x` on a worktree row) |
@@ -73,13 +74,13 @@ the same check through `make test`. When you add a command, add its row here.
 | `wt log` | `inspector` (`D`), Commits tab |
 | `wt commit` | `inspector` (`D`): `C` commits, `A` asks the agent |
 | `wt integrate` | `inspector` (`D`): `I` |
-| `wt pair` | gap: UX1.21 |
-| `wt unpair` | gap: UX1.21 |
+| `wt pair` | `worktree.pair` |
+| `wt unpair` | `worktree.unpair` |
 | `wt run` | `script.run` (`r`), `script.pick` (`R`) |
 | `wt open` | `worktree.open` (`o`) |
-| `wt lock` | gap: UX1.21 |
-| `wt unlock` | gap: UX1.21 |
-| `wt rename-branch` | gap: UX1.21 |
+| `wt lock` | `worktree.lock` |
+| `wt unlock` | `worktree.unlock` |
+| `wt rename-branch` | `worktree.rename_branch` |
 | `wt retitle` | `worktree.retitle` |
 | `wt finish` | `worktree.finish` (`F` in the sidebar): a PR or integrate |
 | `wt archive` | `worktree.archive` (or `x` on a merged worktree) |
@@ -88,24 +89,24 @@ the same check through `make test`. When you add a command, add its row here.
 | `gc` | `worktree.gc`: stale worktrees, ⏎ archives one; a merged worktree's `x` archives it |
 | `ws ls` | `workspace.switch` (`w`) |
 | `ws new` | `workspace.switch` (`w`) → "+ new workspace" |
-| `ws set` | gap: UX1.21 |
-| `ws rm` | gap: UX1.21 |
-| `ws rename` | gap: UX1.21 |
+| `ws set` | `workspace.profile` and `workspace.notify` |
+| `ws rm` | `workspace.remove` (asks first) |
+| `ws rename` | `workspace.rename` |
 | `ws add` | `project.add` (adds to the current workspace) |
-| `ws remove` | gap: UX1.21 |
+| `ws remove` | `project.leave`: takes the selected project out of this workspace |
 
 ## Profiles
 
 | Command | In the TUI |
 |---|---|
-| `profile ls` | gap: UX1.21 |
-| `profile show` | gap: UX1.21 |
-| `profile new` | gap: UX1.21 |
-| `profile rm` | gap: UX1.21 |
-| `profile rename` | gap: UX1.21 |
+| `profile ls` | `profile.list` (in a split) |
+| `profile show` | `profile.show`: pick it |
+| `profile new` | `profile.new` |
+| `profile rm` | `profile.remove`: pick it |
+| `profile rename` | `profile.rename` |
 | `profile env` | waived: prints `export` lines for your shell to `eval`; sessions get the environment already |
-| `profile login` | gap: UX1.21 |
-| `profile sync` | gap: UX1.21 |
+| `profile login` | `profile.login`: pick the profile and the agent; it logs in, in a split (a health finding offers it too) |
+| `profile sync` | `profile.sync` |
 | `profile detect` | `first.run` finds them, as accounts to tick |
 | `profile doctor` | `health`: the badge's findings include each profile's logins |
 
@@ -126,8 +127,8 @@ the same check through `make test`. When you add a command, add its row here.
 | `pr automerge` | `inspector` (`D`), Checks tab: `m` |
 | `pr watch` | `inspector` (`D`), Checks tab: `w` |
 | `watch-pr` | `inspector` (`D`), Checks tab: `w` |
-| `pr reply` | gap: UX1.21 |
-| `pr open` | gap: UX1.21 |
+| `pr reply` | `pr.reply` |
+| `pr open` | `pr.open`: its worktree and session, or a new worktree on it |
 
 ## Orchestration
 
@@ -144,48 +145,48 @@ the same check through `make test`. When you add a command, add its row here.
 | `run wait` | waived: for scripts; gates and finished runs reach the inbox and notifications |
 | `run cancel` | `runs` (`O`): `x` |
 | `run retry` | `runs` (`O`): `r` on a step |
-| `run fork` | gap: UX1.21 |
-| `run lead` | gap: UX1.21 |
-| `recipe ls` | gap: UX1.21 |
-| `recipe show` | gap: UX1.21 |
-| `recipe run` | gap: UX1.21 |
+| `run fork` | `run.fork` |
+| `run lead` | `session.lead` |
+| `recipe ls` | `recipe.list` (in a split) |
+| `recipe show` | `recipe.show` |
+| `recipe run` | `recipe.run`: its name and variables; then the runs view (`O`) |
 | `recipe validate` | waived: for recipe authors, in their editor or CI |
 | `recipe graph` | waived: draws a recipe as Mermaid text for documents |
 | `gate ls` | `runs` (`O`): open gates show on their run; the status bar counts them |
 | `gate resolve` | `runs` (`O`): `1`–`9` answer, `n` with a note |
-| `msg send` | gap: UX1.21 (today only to a change set's members, `sets` `m`) |
+| `msg send` | `session.message`; to a change set's members, `sets` `m` |
 | `msg check` | waived: an agent's own mailbox; your messages reach the inbox |
 | `msg ls` | `inbox` (`i`): messages to you |
 | `msg ack` | waived: an agent acknowledging its own mail |
 | `lease claim` | waived: agents claim the files they edit |
 | `lease release` | waived: agents release their own claims |
-| `lease ls` | gap: UX1.21 |
-| `radar` | gap: UX1.21 |
-| `checkpoint ls` | gap: UX1.21 |
-| `checkpoint diff` | gap: UX1.21 |
-| `checkpoint restore` | gap: UX1.21 |
-| `verify` | gap: UX1.21 |
+| `lease ls` | `leases` (in a split) |
+| `radar` | `radar` |
+| `checkpoint ls` | `checkpoint.list` |
+| `checkpoint diff` | `checkpoint.diff` |
+| `checkpoint restore` | `checkpoint.restore` (it asks first, in a split) |
+| `verify` | `session.verify` |
 | `mcp` | waived: the MCP server a lead agent talks to; ptyro starts it for the agent |
 
 ## Change sets
 
 | Command | In the TUI |
 |---|---|
-| `cs new` | gap: UX1.21 |
-| `cs templates` | gap: UX1.21 (with `cs new`) |
+| `cs new` | `sets.new`: its name, projects and goal |
+| `cs templates` | `sets.templates` |
 | `cs ls` | `sets` (`S`) |
 | `cs show` | `sets` (`S`): `⏎` on a set |
 | `cs log` | `sets` (`S`): the ledger, as a timeline |
 | `cs msg` | `sets` (`S`): `m` |
 | `cs check` | `sets` (`S`): `c` |
 | `cs checkpoint` | `sets` (`S`): `p` |
-| `cs checkpoints` | gap: UX1.21 |
-| `cs restore` | gap: UX1.21 |
+| `cs checkpoints` | `set.checkpoints` |
+| `cs restore` | `set.restore` |
 | `cs diff` | `sets` (`S`): `⏎` on a member, then `inspector` (`D`) on its worktree |
-| `cs contract show` | gap: UX1.21 |
-| `cs contract edit` | gap: UX1.21 |
-| `cs contract diff` | gap: UX1.21 |
-| `cs contract history` | gap: UX1.21 |
+| `cs contract show` | `set.contract` → show |
+| `cs contract edit` | `set.contract` → edit (your editor, in a split) |
+| `cs contract diff` | `set.contract` → diff |
+| `cs contract history` | `set.contract` → history |
 | `cs contract approve` | `sets` (`S`): `1`–`9` answer the contract gate |
 | `cs contract reject` | `sets` (`S`): answer the contract gate with a note |
 | `cs contract submit` | waived: the lead agent submits the contract |
@@ -194,27 +195,27 @@ the same check through `make test`. When you add a command, add its row here.
 | `cs blocked` | waived: run by a member agent inside the set |
 | `cs assign` | waived: run by the lead agent inside the set |
 | `cs ask` | waived: run by an agent inside the set; the question reaches you as a gate |
-| `cs overlay` | gap: UX1.21 |
-| `cs commit` | gap: UX1.21 |
-| `cs push` | gap: UX1.21 (the push gate answers in `sets`) |
-| `cs pr` | gap: UX1.21 |
-| `cs land` | gap: UX1.21 (the land gate answers in `sets`) |
-| `cs add` | gap: UX1.21 |
-| `cs drop` | gap: UX1.21 |
-| `cs rm` | gap: UX1.21 |
+| `cs overlay` | `set.overlay` |
+| `cs commit` | `set.commit` |
+| `cs push` | `set.push` (or the push gate in `sets`) |
+| `cs pr` | `set.pr` |
+| `cs land` | `set.land` (or the land gate in `sets`) |
+| `cs add` | `set.add` |
+| `cs drop` | `set.drop` |
+| `cs rm` | `set.remove` |
 
 ## Remote, phone and recordings
 
 | Command | In the TUI |
 |---|---|
-| `serve` | gap: UX1.21 |
-| `pair` | gap: UX1.21 (the QR code in an overlay) |
-| `devices ls` | gap: UX1.21 |
-| `devices revoke` | gap: UX1.21 |
-| `devices push-test` | gap: UX1.21 |
+| `serve` | `remote.serve` (in a split) |
+| `pair` | `remote.pair`: the QR code, in a split, to scan |
+| `devices ls` | `devices.list` |
+| `devices revoke` | `devices.revoke` |
+| `devices push-test` | `devices.push_test` |
 | `proxy` | waived: the bridge `--remote` runs over ssh on the other machine |
-| `replay` | gap: UX1.21 |
-| `export` | gap: UX1.21 |
+| `replay` | `session.replay` (plays in a split) |
+| `export` | `session.export`: the format and the file |
 
 ## Setup, config and the daemon
 
@@ -225,7 +226,7 @@ the same check through `make test`. When you add a command, add its row here.
 | `tour` | `help.tour` |
 | `config edit` | `config.edit` (validated when you save; changes apply live) |
 | `config check` | `config.edit`: saving checks it, and a bad config shows as an error |
-| `config show` | gap: UX1.21 |
+| `config show` | `config.show` (in a split) |
 | `config path` | `config.edit` (opens it) |
 | `completions` | waived: shell setup, for typing commands in a shell |
 | `shell-init` | `health` (`M`): when it's missing, a finding whose fix adds the line to your rc file |

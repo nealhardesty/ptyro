@@ -16,8 +16,8 @@ ARGS ?=
 NAME ?=
 SIZE ?= 100x30
 FIXTURES := crates/ptyro-term/tests/fixtures
-# For `make tui-parity`: 1 also fails on the gaps docs/tui-parity.md lists.
-STRICT ?= 0
+# For `make tui-parity`: 0 lists the gaps docs/tui-parity.md has instead of failing on them.
+STRICT ?= 1
 
 .DEFAULT_GOAL := help
 .PHONY: help rust-install build release install test fmt fmt-check lint deny doc check ci clean tools \
@@ -55,7 +55,7 @@ lint: ## Clippy with warnings as errors
 deny: ## License/advisory/source checks (needs `make tools`)
 	$(CARGO) deny check
 
-tui-parity: ## Check every CLI command has a TUI path or a waiver (docs/tui-parity.md); lists the gaps left (STRICT=1 fails on them)
+tui-parity: ## Check every CLI command has a TUI path or a waiver (docs/tui-parity.md); STRICT=0 only lists gaps
 	PTYRO_PARITY_STRICT=$(STRICT) $(CARGO) test -p ptyro --bin ptyro parity -- --nocapture
 
 doc: ## Build API docs

@@ -4,6 +4,7 @@
 
 mod app;
 pub mod chat;
+mod cli_actions;
 pub mod copy;
 mod health;
 mod inspector;

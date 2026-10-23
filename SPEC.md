@@ -2529,6 +2529,17 @@ learning anything up front.
   0: never), a menu of the next keys appears above the status bar, in five groups (start, go,
   panes, work, this), as bound now; keys typed before it work as always. The event loop wakes at
   the deadline, not on its 250 ms tick.
+- **Everything the CLI does** (UX1.21): `docs/tui-parity.md` now has no gaps, and
+  `make tui-parity` (part of `make test`) fails on any. The frequent and visual ones are native:
+  `session.convert`, `project.remove|untrust|pin|unpin|leave|mute`, `worktree.lock|unlock|pair|
+  unpair|rename_branch`, `workspace.rename|remove|profile|notify|mute`, `pr.open` (the PR's
+  worktree and session, else a new worktree on it). The long tail is
+  `crates/ptyro-tui/src/cli_actions.rs`: a table of `ptyro …` templates whose words come from the
+  selection (`{session}`, `{worktree}`, `{project}`, `{set}`), a pick (`{profile}`, `{agent}`,
+  `{choose:…}`) or a question (`{ask:…}`, optional when left empty; `{vars}` → `--var k=v`), then
+  run in a split: profiles (login included), recipes, checkpoints, verify, messages, PR replies,
+  leases, the radar, every change-set command, serving, pairing (its QR code in the split),
+  devices, replay and export, `config show`.
 - **The health badge** (UX1.20, `crates/ptyro-tui/src/health.rs`): `ptyro doctor --quick --json`
   runs in the background 20 s after attaching and every 10 min; its warnings and problems, plus a
   missing `ptyro shell-init` line in your shell's rc file (the TUI's own check), show as `⚕ N` in
