@@ -27,6 +27,8 @@ pub enum Target {
     Editor(String),
     Script(String),
     Path(std::path::PathBuf),
+    /// Wizard: there's no project here; pick one to add, then carry on (UX1.6).
+    AddProject,
 }
 
 #[derive(Debug, Clone)]

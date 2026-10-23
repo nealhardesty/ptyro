@@ -130,7 +130,17 @@ pub enum Purpose {
     Workspace,
     Editor(String),
     Script(String),
-    AddProject,
+    /// Add a project, then carry on (UX1.6).
+    AddProject(Option<AfterAdd>),
+}
+
+/// What asked for a project when there was none (UX1.6): done once the project is added.
+#[derive(Debug, Clone)]
+pub enum AfterAdd {
+    /// Re-run this action, in the new project's main checkout.
+    Run(&'static str),
+    /// The wizard's second step, in the new project.
+    Targets(Wizard),
 }
 
 #[derive(Debug, Clone)]
@@ -223,8 +233,8 @@ pub enum Pending {
     TrustDialog(AfterTrust),
     Trusted(AfterTrust),
     Removed(String),
-    ProjectAdded,
-    Discovered,
+    ProjectAdded(Option<AfterAdd>),
+    Discovered(Option<AfterAdd>),
     Scripts(String),
     /// Check the project's scripts are trusted before creating a worktree.
     PreCreate(Box<WorktreeSpec>, Option<Dir>),
@@ -290,6 +300,24 @@ pub struct Toast {
     pub text: String,
     pub error: bool,
     pub until: Instant,
+    /// What `toast.act` (`C-q u`) does about it: undo it, or fix it (UX1.5, UX1.17).
+    pub offer: Option<Offer>,
+}
+
+/// A message's one follow-up, run by `toast.act` while the message shows.
+#[derive(Debug, Clone)]
+pub struct Offer {
+    /// What it does, for the message: "undo", "new one".
+    pub label: String,
+    pub then: Then,
+}
+
+#[derive(Debug, Clone)]
+pub enum Then {
+    /// Run a TUI action.
+    Run(Command),
+    /// Send this request; toast the text once it's done.
+    Send(Box<Request>, String),
 }
 
 enum Drag {
@@ -382,6 +410,10 @@ pub struct App {
     reported_focus: Option<(SessionId, bool)>,
     /// Sessions this TUI stopped: their panes move on when they exit (`[ui] on_stop`, UX1.23).
     stopping: HashSet<SessionId>,
+    /// A project just added, and what to do in it once its main checkout is known (UX1.6).
+    after_add: Option<(String, AfterAdd)>,
+    /// The project `context()` answers while an `after_add` runs.
+    context_hint: Option<String>,
 }
 
 fn no_color() -> bool {
@@ -468,6 +500,8 @@ impl App {
             drag: None,
             reported_focus: None,
             stopping: HashSet::new(),
+            after_add: None,
+            context_hint: None,
         }
     }
 
@@ -898,6 +932,7 @@ impl App {
             text: text.into(),
             error: false,
             until: Instant::now() + Duration::from_secs(3),
+            offer: None,
         });
         self.dirty = true;
     }
@@ -907,6 +942,20 @@ impl App {
             text: text.into(),
             error: true,
             until: Instant::now() + Duration::from_secs(6),
+            offer: None,
+        });
+        self.dirty = true;
+    }
+
+    /// A message with a follow-up that `toast.act` runs (`C-q u`): it stays up longer, and says
+    /// which key does what.
+    pub fn toast_offer(&mut self, text: impl Into<String>, error: bool, offer: Offer) {
+        let key = self.keymap.key_for("toast.act").unwrap_or_else(|| "toast.act".into());
+        self.toast = Some(Toast {
+            text: format!("{} · {key} {}", text.into(), offer.label),
+            error,
+            until: Instant::now() + Duration::from_secs(10),
+            offer: Some(offer),
         });
         self.dirty = true;
     }
@@ -1060,6 +1109,29 @@ impl App {
                 upsert_by(&mut self.projects, info, |p| p.id.clone())
             }
             DomainEvent::ProjectRemoved { id } => self.projects.retain(|p| p.id != id),
+            DomainEvent::ProjectAutoAdded { info, workspace, notes } => {
+                upsert_by(&mut self.projects, info.clone(), |p| p.id.clone());
+                let undo = Request::ProjectRemove { addr: info.id.clone(), release: true };
+                let done = format!("forgot {}; it won't be registered on its own again", info.slug);
+                self.toast_offer(
+                    format!("registered {} in {workspace}", info.slug),
+                    false,
+                    Offer { label: "undo".into(), then: Then::Send(Box::new(undo), done) },
+                );
+                // A pin its rules suggest still asks, as adding it by hand does (SPEC §10.10).
+                if self.overlay.is_none()
+                    && notes.iter().any(|n| n.starts_with("pinned to profile"))
+                    && let Some(pin) = &info.pin
+                {
+                    self.overlay = Some(Overlay::Confirm {
+                        text: format!(
+                            "{} matches profile {pin}'s rules and is now pinned to it. Keep the pin? [Y/n]",
+                            info.slug
+                        ),
+                        action: Confirmed::KeepPin(info.id.clone()),
+                    });
+                }
+            }
             DomainEvent::WorkspaceUpdated { info } => {
                 upsert_by(&mut self.workspaces, info, |w| w.id.clone())
             }
@@ -1071,7 +1143,8 @@ impl App {
                 }
             }
             DomainEvent::WorktreeUpdated { info } => {
-                upsert_by(&mut self.worktrees, info, |w| w.id.clone())
+                upsert_by(&mut self.worktrees, info, |w| w.id.clone());
+                self.try_after_add();
             }
             DomainEvent::WorktreeRemoved { id } => self.worktrees.retain(|w| w.id != id),
             DomainEvent::WorktreeProgress { worktree, step } => {
@@ -1321,8 +1394,12 @@ impl App {
                     action: Confirmed::RemoveWorktree { id, force: true },
                 });
             }
-            (Pending::ProjectAdded, Ok(Reply::Project { info, notes })) => {
+            (Pending::ProjectAdded(then), Ok(Reply::Project { info, notes })) => {
                 upsert_by(&mut self.projects, info.clone(), |p| p.id.clone());
+                if let Some(then) = then {
+                    self.after_add = Some((info.id.clone(), then));
+                    self.try_after_add();
+                }
                 let pinned = notes.iter().any(|n| n.starts_with("pinned to profile"));
                 self.toast(format!("added {} {}", info.slug, notes.join(" · ")));
                 if pinned && let Some(pin) = &info.pin {
@@ -1335,7 +1412,9 @@ impl App {
                     });
                 }
             }
-            (Pending::Discovered, Ok(Reply::Paths { paths })) => self.open_add_project(paths),
+            (Pending::Discovered(then), Ok(Reply::Paths { paths })) => {
+                self.open_add_project(paths, then)
+            }
             (Pending::Scripts(wt), Ok(Reply::Scripts { scripts })) => {
                 self.open_script_picker(wt, scripts)
             }
@@ -1717,20 +1796,17 @@ impl App {
                             kind: PromptKind::WorktreeName(w),
                         });
                     }
-                    None => self.toast(format!(
-                        "no project here yet: {} : project.add",
-                        ptyro_core::config::key_label(&self.keymap.prefix)
-                    )),
+                    None => self.pick_project(Some(AfterAdd::Run("worktree.new"))),
                 }
             }
             "workspace.switch" => self.open_workspaces(),
             "worktree.open" => match self.context().1 {
                 Some(wt) => self.open_editors(wt),
-                None => self.toast("not in a worktree (sessions started in a project are)"),
+                None => self.pick_project(Some(AfterAdd::Run("worktree.open"))),
             },
             "script.run" => match self.context().1 {
                 Some(wt) => self.run_script(wt, None),
-                None => self.toast("not in a worktree"),
+                None => self.pick_project(Some(AfterAdd::Run("script.run"))),
             },
             "script.pick" => match self.context().1 {
                 Some(wt) => {
@@ -1742,17 +1818,15 @@ impl App {
                         Request::ProjectScripts { addr: project, worktree: Some(addr) },
                     );
                 }
-                None => self.toast("not in a worktree"),
+                None => self.pick_project(Some(AfterAdd::Run("script.pick"))),
             },
-            "project.add" => {
-                self.request(Pending::Discovered, Request::Discover { refresh: false })
-            }
+            "project.add" => self.pick_project(None),
             "project.trust" => match self.context().0 {
                 Some(p) => self.request(
                     Pending::TrustDialog(AfterTrust::Nothing),
                     Request::ProjectScripts { addr: p, worktree: None },
                 ),
-                None => self.toast("no project here"),
+                None => self.pick_project(Some(AfterAdd::Run("project.trust"))),
             },
             "worktree.remove" => match self.context().1.and_then(|w| self.worktree(&w).cloned()) {
                 Some(w) if w.is_root => self.toast("that's the main checkout; it can't be removed"),
@@ -1830,6 +1904,13 @@ impl App {
                     Focus::Sidebar => Focus::Pane,
                 };
             }
+            "toast.act" => match self.toast.take().and_then(|t| t.offer) {
+                Some(Offer { then: Then::Run(cmd), .. }) => self.run(&cmd),
+                Some(Offer { then: Then::Send(req, done), .. }) => {
+                    self.request(Pending::Done(done), *req)
+                }
+                None => self.toast("nothing to undo or fix right now"),
+            },
             "sidebar.wider" => self.set_sidebar_width(self.sidebar_width + 1),
             "sidebar.narrower" => self.set_sidebar_width(self.sidebar_width.saturating_sub(1)),
             "sidebar.zoom" => {
@@ -1913,10 +1994,14 @@ impl App {
             "copy.page_up" => self.enter_copy(CopyStart::Keys { page_up: true }),
             "paste.buffer" => match self.buffer.clone() {
                 Some(text) => self.forward(InputEvent::Paste { text }),
-                None => self.toast(format!(
-                    "nothing yanked yet (copy mode: {} [ … y)",
-                    ptyro_core::config::key_label(&self.keymap.prefix)
-                )),
+                None => self.toast_offer(
+                    "nothing yanked yet",
+                    false,
+                    Offer {
+                        label: "copy something".into(),
+                        then: Then::Run(Command { action: "copy.enter", arg: None }),
+                    },
+                ),
             },
             "view.chat" => {
                 match self
@@ -2246,10 +2331,12 @@ impl App {
         });
     }
 
-    /// Step two: where. A new worktree of the current project first.
+    /// Step two: where. A new worktree of the current project first; with no project, after
+    /// "here", adding one (then a new worktree in it).
     fn open_targets(&mut self, w: Wizard) {
         let mut items = Vec::new();
-        if let Some(p) = w.project.as_ref().and_then(|p| self.project(p)) {
+        let project = w.project.as_ref().and_then(|p| self.project(p)).cloned();
+        if let Some(p) = &project {
             items.push(Item {
                 label: format!("+ new worktree in {}", p.slug),
                 detail: "an isolated checkout on a new branch, random name".into(),
@@ -2279,6 +2366,14 @@ impl App {
         }
         let here = self.here().display().to_string();
         items.push(Item { label: "here".into(), detail: here, key: None, target: Target::Here });
+        if project.is_none() {
+            items.push(Item {
+                label: "+ add a project…".into(),
+                detail: "pick a repository, then start in a new worktree of it".into(),
+                key: None,
+                target: Target::AddProject,
+            });
+        }
         let title = wizard_title(&w, &self.projects, &self.worktrees, self.resolved.as_deref());
         self.overlay = Some(Overlay::Picker {
             palette: Palette::new(title, items),
@@ -2493,7 +2588,36 @@ impl App {
         }
     }
 
-    fn open_add_project(&mut self, paths: Vec<std::path::PathBuf>) {
+    /// The discovery picker; once a project is picked and added, `then` (UX1.6).
+    fn pick_project(&mut self, then: Option<AfterAdd>) {
+        self.request(Pending::Discovered(then), Request::Discover { refresh: false })
+    }
+
+    /// Once the project `after_add` waits for has its main checkout here, do what asked for it.
+    fn try_after_add(&mut self) {
+        let Some((project, _)) = &self.after_add else { return };
+        if !self.worktrees.iter().any(|w| w.project == *project && w.is_root) {
+            return;
+        }
+        let Some((project, then)) = self.after_add.take() else { return };
+        self.context_hint = Some(project.clone());
+        match then {
+            AfterAdd::Run(action) => self.run(&Command { action, arg: None }),
+            AfterAdd::Targets(w) => {
+                let root = self.root_of(&project);
+                let w = Wizard { project: Some(project), worktree: root, ..w };
+                self.resolve_for(&w);
+                self.open_targets(w);
+            }
+        }
+        self.context_hint = None;
+    }
+
+    fn root_of(&self, project: &str) -> Option<String> {
+        self.worktrees.iter().find(|w| w.project == project && w.is_root).map(|w| w.id.clone())
+    }
+
+    fn open_add_project(&mut self, paths: Vec<std::path::PathBuf>, then: Option<AfterAdd>) {
         let mut items = Vec::new();
         if let Ok(here) = std::env::current_dir() {
             items.push(Item {
@@ -2513,8 +2637,16 @@ impl App {
             });
         }
         self.overlay = Some(Overlay::Picker {
-            palette: Palette::new(format!("Add a project to {}", self.workspace), items),
-            purpose: Purpose::AddProject,
+            palette: Palette::new(
+                match &then {
+                    Some(_) => {
+                        format!("No project here yet: pick one to add to {}", self.workspace)
+                    }
+                    None => format!("Add a project to {}", self.workspace),
+                },
+                items,
+            ),
+            purpose: Purpose::AddProject(then),
         });
     }
 
@@ -2851,9 +2983,16 @@ impl App {
             }
             (Target::Editor(name), Purpose::Editor(wt)) => self.open_editor(&wt, &name),
             (Target::Script(name), Purpose::Script(wt)) => self.run_script(wt, Some(name)),
-            (Target::Path(path), _) => {
+            (Target::Path(path), purpose) => {
+                let then = match purpose {
+                    Purpose::AddProject(then) => then,
+                    _ => None,
+                };
                 let workspace = Some(self.workspace.clone());
-                self.request(Pending::ProjectAdded, Request::ProjectAdd { path, workspace });
+                self.request(Pending::ProjectAdded(then), Request::ProjectAdd { path, workspace });
+            }
+            (Target::AddProject, Purpose::Target(w)) => {
+                self.pick_project(Some(AfterAdd::Targets(w)))
             }
             (Target::Action(cmd), _) => self.run(&cmd),
             (Target::Session(id), _) => self.show(id, split),
@@ -3384,6 +3523,9 @@ impl App {
     /// The worktree (and project) a new session would go in: the selected sidebar row's, else
     /// the focused session's, else the workspace's first project's main checkout.
     pub fn context(&self) -> (Option<String>, Option<String>) {
+        if let Some(p) = &self.context_hint {
+            return (Some(p.clone()), self.root_of(p));
+        }
         if self.focus == Focus::Sidebar
             && let Some(r) = self.selected_row()
         {
@@ -4178,6 +4320,76 @@ mod tests {
         app.run(&wider);
         assert_eq!(app.sidebar_width, 78);
         assert!(app.view_dirty_since.is_some(), "saved with the workspace's view");
+    }
+
+    fn project(id: &str, slug: &str) -> ProjectInfo {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "slug": slug, "root": format!("/r/{slug}"), "created_ms": 0,
+        }))
+        .unwrap()
+    }
+
+    fn root(project: &str) -> WorktreeInfo {
+        serde_json::from_value(serde_json::json!({
+            "id": format!("{project}-root"), "project": project, "project_slug": project,
+            "name": "@root", "path": "/r", "is_root": true, "state": "ready", "created_ms": 0,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_project_registered_on_its_own_says_so_and_offers_an_undo() {
+        let mut app = app();
+        app.on_event(DomainEvent::ProjectAutoAdded {
+            info: project("p1", "myrepo"),
+            workspace: "main".into(),
+            notes: Vec::new(),
+        });
+        assert!(app.project("p1").is_some());
+        let t = app.toast.as_ref().unwrap();
+        assert_eq!(t.text, "registered myrepo in main · C-q u undo");
+        assert!(matches!(
+            &t.offer,
+            Some(Offer { then: Then::Send(req, _), .. })
+                if matches!(**req, Request::ProjectRemove { release: true, .. })
+        ));
+        // `C-q u` takes it (the request goes to the daemon) and clears the message.
+        let act = app.keymap.lookup(Table::Prefix, KeyEvent::char('u')).cloned().unwrap();
+        app.run(&act);
+        assert!(app.toast.is_none());
+        app.run(&act);
+        assert_eq!(app.toast.as_ref().unwrap().text, "nothing to undo or fix right now");
+    }
+
+    #[test]
+    fn with_no_project_an_action_carries_on_once_one_is_added() {
+        let mut app = app();
+        // `N` with no project asks for one; once it's added and its checkout is known, `N`
+        // goes on as if it had been there all along.
+        app.run(&Command { action: "worktree.new", arg: None });
+        assert!(app.overlay.is_none(), "the picker opens once discovery answers");
+        app.projects.push(project("p1", "myrepo"));
+        app.after_add = Some(("p1".into(), AfterAdd::Run("worktree.new")));
+        app.try_after_add();
+        assert!(app.after_add.is_some(), "waits for the project's main checkout");
+        app.on_event(DomainEvent::WorktreeUpdated { info: root("p1") });
+        assert!(app.after_add.is_none());
+        match &app.overlay {
+            Some(Overlay::Prompt { kind: PromptKind::WorktreeName(w), title, .. }) => {
+                assert_eq!(w.project.as_deref(), Some("p1"));
+                assert!(title.contains("myrepo"), "{title}");
+            }
+            _ => panic!("the new-worktree prompt, in the new project"),
+        }
+        // The wizard's "where" offers adding one when there's none (after "here").
+        app.overlay = None;
+        app.projects.clear();
+        app.worktrees.clear();
+        app.open_targets(Wizard::default());
+        let Some(Overlay::Picker { palette, .. }) = &app.overlay else { panic!() };
+        let labels: Vec<&str> =
+            (0..palette.filtered.len()).map(|i| palette.item(i).label.as_str()).collect();
+        assert_eq!(labels, ["here", "+ add a project…"]);
     }
 
     #[test]

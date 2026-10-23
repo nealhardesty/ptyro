@@ -52,6 +52,8 @@ action by name.
 | `<` `>` `+` `-` | narrower / wider / taller / shorter |
 | `Tab` | move focus between the sidebar and the pane |
 | `\` | show or hide the sidebar |
+| `u` | do what the last message offers: undo it, or fix what it reports |
+| `P` | add a project (pick from the repositories ptyro found) |
 | `Z` | everything at once: the sidebar fills the screen with every row open (`⏎` opens one, `Z` or `Esc` goes back) |
 | `[` or `PageUp` | copy mode |
 | `]` | paste what you last copied |
@@ -83,6 +85,7 @@ Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.
 | `D` `O` `S` | inspector / runs / change sets |
 | `z` | everything at once: the sidebar full-screen, every row open |
 | `<` / `>` | the sidebar a column narrower / wider (or drag its edge) |
+| `u` / `P` | do what the last message offers / add a project |
 | `w` `o` `r` | workspace / editor / run script |
 | `v` `s` | split |
 | `1` … `9`, `/` | jump to a session / find one |

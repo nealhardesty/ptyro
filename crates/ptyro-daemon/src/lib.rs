@@ -3,6 +3,7 @@
 
 mod agents;
 mod approvals;
+mod autoreg;
 mod background;
 mod changesets;
 mod conn;
@@ -301,8 +302,10 @@ async fn serve(
         daemon.prune_recordings().await;
     }
     daemon.load_devices().await;
+    daemon.load_declined().await;
     daemon.start_serve_supervisor();
     daemon.restore_dormant().await;
+    daemon.start_auto_register();
     daemon.start_mail().await;
     daemon.start_runs().await;
     let _watcher = watch_config(&daemon, &config_path);

@@ -283,7 +283,8 @@ pub enum Request {
     },
 
     // ── projects (SPEC §10.1) ──
-    /// Register the repository containing `path`; added to `workspace` (default `main`).
+    /// Register the repository containing `path`; added to `workspace` (default: the one the
+    /// TUI showed last, else `main`).
     ProjectAdd {
         path: PathBuf,
         #[serde(default)]
@@ -293,9 +294,13 @@ pub enum Request {
     ProjectGet {
         addr: String,
     },
-    /// Forget a project (its worktrees stay on disk).
+    /// Forget a project (its worktrees stay on disk). It is never registered on its own again
+    /// (UX1.5). `release`: let its running sessions go instead of refusing (they keep running,
+    /// outside any project), as undoing an automatic registration does.
     ProjectRemove {
         addr: String,
+        #[serde(default)]
+        release: bool,
     },
     /// Pin to a profile, or unpin with `None` (SPEC §10.10).
     ProjectPin {
@@ -1299,6 +1304,13 @@ pub enum DomainEvent {
     },
     ProjectRemoved {
         id: String,
+    },
+    /// A repository a session runs in was registered on its own (UX1.5), in `workspace`.
+    ProjectAutoAdded {
+        info: ProjectInfo,
+        workspace: String,
+        #[serde(default)]
+        notes: Vec<String>,
     },
     WorkspaceUpdated {
         info: WorkspaceInfo,

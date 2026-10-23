@@ -34,7 +34,8 @@ range = "20000-29999"     # each worktree gets `count` ports from here
 count = 10
 
 [discover]
-roots = ["~/dev", "~/src"]   # where `project.add` in the palette looks for repositories
+roots = ["~/dev", "~/src"]   # where `project.add` (`Ctrl-Q P`) looks for repositories
+# auto_register = false      # don't make the repository a session runs in a project by itself
 
 [editors]
 default = "nvim"

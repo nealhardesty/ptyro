@@ -1303,7 +1303,7 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
 
 ### Projects and worktrees without setup
 
-- [ ] **UX1.5 Auto-register the repo you're in** (R-UX-22; owner chose auto with undo,
+- [x] **UX1.5 Auto-register the repo you're in** (R-UX-22; owner chose auto with undo,
   2026-10-22) — S. Running `ptyro` inside a git repository that isn't a project yet just opens a
   shell session, and then `Ctrl-Q N` says "no project here yet". Instead, register it in the
   *current* workspace and toast "registered `myrepo` · `u` undo". A profile pin that `match`
@@ -1318,10 +1318,16 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
   - *Done when:* an end-to-end test opens ptyro in a fresh repo and `N` works at once, and a
     session that `cd`s into another repo puts that repo in the sidebar. Undo forgets the
     project.
-- [ ] **UX1.6 "No project" opens the picker** — S. When `worktree.new` (or anything else that
+  - *Done (2026-10-22):* `crates/ptyro-daemon/src/autoreg.rs`; `ProjectRemove{release}` and
+    `ProjectAutoAdded`; the TUI's undo through `toast.act` (`C-q u`). `tests/ux1.rs` covers
+    spawn, undo, declining, the last-shown workspace and a shell moving into a repo (SPEC
+    §10.1). A session already in a project that moves to another repo stays where it is; only
+    the new repo is registered.
+- [x] **UX1.6 "No project" opens the picker** — S. When `worktree.new` (or anything else that
   needs a project) finds none, open the `project.add` discovery picker directly instead of
   showing a toast that names the palette command. Once you pick a project, carry on with the
-  action that asked for it.
+  action that asked for it. *Done (2026-10-22):* `N`, `o`, `r`, `R` and `project.trust`, and
+  the wizard's "+ add a project…", via `AfterAdd`; `project.add` is bound to `P` (SPEC §11.2h).
 - [ ] **UX1.9 Prompt-first new task** (R-UX-23, R-UX-01 slugs) — M. `Ctrl-Q n` opens one box:
   "what should it do?".
   - `⏎` creates a worktree, with the name and branch slugged from the prompt (deterministic),

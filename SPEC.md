@@ -890,6 +890,9 @@ Push messages have no id.
   agent's last message once its turn ended, at most 300) and `command`
   (`ShellCommand{text?, started_ms, ended_ms?, exit?}`: a shell's running or last command, from
   OSC 133 `C`/`D`). The TUI's sidebar rows show them (§11.2h).
+- `ProjectRemove` gains `release` (let the project's running sessions go instead of refusing),
+  and a new event, `ProjectAutoAdded{info, workspace, notes}`, says a repository registered on
+  its own (§10.1).
 
 ### 6.5 Screen frames
 
@@ -1669,6 +1672,23 @@ modes, other-workspace badges and the per-workspace inbox tabs.
 - `remote_url` is `origin`'s URL, else the first remote's.
 - Every project gets an `@root` worktree row for its main checkout. It is never locked or
   removable.
+- **[built UX1.5] The repository you're in is a project.** A session whose directory is in a git
+  repository that isn't one registers it (`crates/ptyro-daemon/src/autoreg.rs`):
+  - at spawn, in the session's workspace (`SpawnSpec.workspace`, else the one the TUI showed
+    last, its `_tui` view, else `main`);
+  - when a running session's directory moves into one (OSC 7, else the foreground process's
+    cwd), from a sweep every 5 s that looks at each (session, directory) once. A session outside
+    every project moves in; one already in a project stays there (its worktree lock and profile
+    are its own), and only the new repository is registered;
+  - once at start, for the sessions an earlier daemon or a live upgrade left running.
+
+  Not registered: your home directory (a dotfiles repository would claim everything), anything
+  under ptyro's data directory, and **declined** roots. `project rm` declines its root (kv
+  `autoreg:declined`), and adding it by hand lifts that. `ProjectRemove{release: true}` (the
+  TUI's undo) lets the project's running sessions go first, instead of refusing; they keep
+  running outside any project. Clients hear `ProjectAutoAdded{info, workspace, notes}`.
+  `[discover] auto_register = false` turns it off. `project add` without `--workspace` uses the
+  workspace the TUI showed last.
 - Discovery walks `[discover] roots` (depth 3). It stops at repositories and skips hidden dirs,
   `node_modules`, `target`, `vendor` and `venv`, and caches the result for an hour in kv
   `discover:cache`. The CLI command is `project discover`; in the TUI it's the palette's
@@ -2395,6 +2415,17 @@ learning anything up front.
   opens every row. The row in focus (and any that wants you) wraps its task and reply over two
   lines. Drawing, clicks and scrolling share one line layout, so a row is one target however
   many lines it takes.
+- **Messages offer the next step** (`toast.act`, `u` after the prefix or in the sidebar): a
+  message may carry one follow-up, shown with its key (`registered myrepo in main · C-q u
+  undo`), kept up 10 s. "Nothing yanked yet" offers copy mode.
+- **A repository registered on its own** (UX1.5, §10.1) says so with an undo; a profile pin its
+  rules suggest still asks "keep the pin? [Y/n]".
+- **No project? Pick one, then carry on** (UX1.6). `N`, `o`, `r`, `R` and `project.trust` with no
+  project open the discovery picker ("No project here yet: pick one to add to main") and, once
+  the project is added and its main checkout has arrived, run as asked there. The wizard's
+  "where" step offers "+ add a project…" after "here" when there is none, then goes on to the
+  new project's targets. `project.add` has a key: `P` (after the prefix, or in the sidebar), and
+  the empty sidebar names it.
 - **The sidebar resizes** (UX1.7, UX1.8): drag its edge (the divider column), or press `<` / `>`
   with the sidebar focused (`sidebar.narrower` / `sidebar.wider`, a column at a time). The width
   stays within 12–80 and leaves the panes at least 21 columns, and is saved with the workspace's
@@ -2944,6 +2975,7 @@ count = 10
 
 [discover]
 roots = ["~/dev", "~/src"]
+auto_register = true             # the repository a session runs in becomes a project (§10.1)
 
 [agents.claude]
 adapter = "claude"

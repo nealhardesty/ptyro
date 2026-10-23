@@ -320,7 +320,11 @@ impl Daemon {
         path: PathBuf,
         workspace: Option<String>,
     ) -> Result<Reply, Error> {
-        let ws = self.find_workspace(workspace.as_deref().unwrap_or(MAIN_WORKSPACE))?;
+        let workspace = match workspace {
+            Some(w) => w,
+            None => self.last_workspace().await,
+        };
+        let ws = self.find_workspace(&workspace)?;
         let facts = tokio::task::spawn_blocking(move || -> Result<_, Error> {
             let git = Git::new();
             let root = git.main_root(&path).map_err(git_err)?;
@@ -432,19 +436,25 @@ impl Daemon {
         Ok(Reply::Project { info: project, notes })
     }
 
-    fn project_remove(&self, addr: &str) -> Result<Reply, Error> {
+    fn project_remove(&self, addr: &str, release: bool) -> Result<Reply, Error> {
         let p = self.find_project(addr)?;
         let worktrees: Vec<WorktreeInfo> = {
             let reg = self.registry.lock().expect("registry");
             reg.worktrees.iter().filter(|w| w.project == p.id).cloned().collect()
         };
-        let live: Vec<String> = worktrees
+        let in_it: Vec<Arc<crate::session::Session>> = worktrees
             .iter()
             .flat_map(|w| self.sessions_in(&w.id))
             .filter(|s| s.is_live())
-            .map(|s| s.meta.lock().expect("meta").name.clone())
             .collect();
-        if !live.is_empty() {
+        let live: Vec<String> =
+            in_it.iter().map(|s| s.meta.lock().expect("meta").name.clone()).collect();
+        if release {
+            // They keep running, outside any project.
+            for s in &in_it {
+                self.place_session(s, None);
+            }
+        } else if !live.is_empty() {
             return Err(Error::conflict(format!(
                 "{} has running sessions ({}); stop them first",
                 p.slug,
@@ -465,6 +475,7 @@ impl Daemon {
             store.delete_project(p.id.clone());
         }
         let _ = self.events.send(DomainEvent::ProjectRemoved { id: p.id.clone() });
+        self.decline(&p.root);
         let kept: Vec<String> =
             worktrees.iter().filter(|w| !w.is_root).map(|w| w.path.display().to_string()).collect();
         let mut notes = vec![format!("forgot {}", p.slug)];
@@ -623,14 +634,21 @@ impl Daemon {
 
     pub(crate) async fn handle_registry(self: &Arc<Self>, req: Request) -> Result<Reply, Error> {
         match req {
-            Request::ProjectAdd { path, workspace } => self.project_add(path, workspace).await,
+            Request::ProjectAdd { path, workspace } => {
+                let reply = self.project_add(path, workspace).await?;
+                // Added by hand: it may register on its own again.
+                if let Reply::Project { info, .. } = &reply {
+                    self.undecline(&info.root);
+                }
+                Ok(reply)
+            }
             Request::ProjectList => Ok(Reply::Projects {
                 projects: self.registry.lock().expect("registry").projects.clone(),
             }),
             Request::ProjectGet { addr } => {
                 Ok(Reply::Project { info: self.find_project(&addr)?, notes: Vec::new() })
             }
-            Request::ProjectRemove { addr } => self.project_remove(&addr),
+            Request::ProjectRemove { addr, release } => self.project_remove(&addr, release),
             Request::ProjectPin { addr, profile } => self.project_pin(&addr, profile),
             Request::ProjectScripts { addr, worktree } => {
                 let p = self.find_project(&addr)?;

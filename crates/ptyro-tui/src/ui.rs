@@ -206,11 +206,11 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
     let mut lines = vec![Line::from(title)];
     lines.extend(body.lines.into_iter().skip(body.skip).map(|(_, l)| l));
     if body.empty {
-        let prefix = key_label(&app.keymap.prefix);
-        lines.push(Line::styled(format!("  none yet: {prefix} n"), fg(app, t.dim)));
-        if app.projects.is_empty() {
+        let key = |a: &str| app.keymap.key_for(a).unwrap_or_else(|| a.to_owned());
+        lines.push(Line::styled(format!("  none yet: {}", key("session.new")), fg(app, t.dim)));
+        if app.tree().project_ids().is_empty() {
             lines.push(Line::styled(
-                format!("  add a repo: {prefix} : project.add"),
+                format!("  add a repo: {}", key("project.add")),
                 fg(app, t.dim),
             ));
         }

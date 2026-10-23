@@ -421,7 +421,7 @@ pub async fn project(ctx: &Ctx, cmd: ProjectCmd) -> Result<i32, Error> {
         }
         ProjectCmd::Rm { project } => {
             let Reply::Removed { notes: n } =
-                c.request(Request::ProjectRemove { addr: project }).await?
+                c.request(Request::ProjectRemove { addr: project, release: false }).await?
             else {
                 return Err(Error::internal("unexpected reply"));
             };

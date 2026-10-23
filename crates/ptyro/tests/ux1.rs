@@ -117,3 +117,137 @@ exec sleep 30";
     // The program is named, never a version (UX1.1).
     assert!(s.foreground.as_deref().is_none_or(|f| !f.starts_with(char::is_numeric)), "{s:?}");
 }
+
+fn git(home: &std::path::Path, dir: &std::path::Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("HOME", home)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+}
+
+/// A repository with one commit, under the world's home.
+fn repo(w: &World, name: &str) -> PathBuf {
+    let dir = w.home().join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    git(&w.home(), &dir, &["init", "-q"]);
+    std::fs::write(dir.join("README"), "hi\n").unwrap();
+    git(&w.home(), &dir, &["add", "."]);
+    git(&w.home(), &dir, &["commit", "-qm", "first"]);
+    dir
+}
+
+async fn projects(c: &Client) -> Vec<ptyro_core::model::ProjectInfo> {
+    match c.request(Request::ProjectList).await.unwrap() {
+        Reply::Projects { projects } => projects,
+        other => panic!("{other:?}"),
+    }
+}
+
+async fn workspace(c: &Client, name: &str) -> ptyro_core::model::WorkspaceInfo {
+    match c.request(Request::WorkspaceList).await.unwrap() {
+        Reply::Workspaces { workspaces } => {
+            workspaces.into_iter().find(|w| w.name == name).expect("workspace")
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// UX1.5: the repository a session runs in is a project, in that session's workspace; undoing
+/// it lets the session go and keeps it from coming back; adding by hand lifts that.
+#[tokio::test]
+async fn the_repository_you_are_in_registers_itself_and_undo_sticks() {
+    let w = World::new("exec sleep 60");
+    let mut c = w.d.client().await.unwrap();
+    let mut events = c.pushes();
+    c.send(ptyro_protocol::ClientMsg::WatchEvents).unwrap();
+    let dir = repo(&w, "myrepo");
+    c.request(Request::WorkspaceNew { name: "side".into(), profile: None, notify: None })
+        .await
+        .unwrap();
+    let spec = |name: &str| SpawnSpec {
+        cwd: dir.clone(),
+        name: Some(name.into()),
+        workspace: Some("side".into()),
+        size: Some(TermSize::new(80, 20)),
+        ..SpawnSpec::default()
+    };
+    let s = spawn(&c, spec("one")).await;
+    let ps = projects(&c).await;
+    let p = ps.iter().find(|p| p.slug == "myrepo").expect("registered at spawn");
+    assert_eq!(s.project.as_deref(), Some(p.id.as_str()), "and the session is in it");
+    assert!(s.worktree.is_some(), "under its main checkout");
+    assert!(workspace(&c, "side").await.projects.contains(&p.id), "in the session's workspace");
+    // Clients hear that it happened (the TUI offers an undo).
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let msg = tokio::time::timeout_at(deadline.into(), events.recv()).await.unwrap().unwrap();
+        if let ptyro_protocol::ServerMsg::Event {
+            event: ptyro_protocol::DomainEvent::ProjectAutoAdded { info, workspace, .. },
+        } = msg
+        {
+            assert_eq!((info.slug.as_str(), workspace.as_str()), ("myrepo", "side"));
+            break;
+        }
+    }
+
+    // Undo: the project goes, its running session lets go of it and keeps running.
+    c.request(Request::ProjectRemove { addr: p.id.clone(), release: true }).await.unwrap();
+    assert!(projects(&c).await.is_empty());
+    let one = wait_for(&c, "one", "out of the project", |s| s.project.is_none()).await;
+    assert!(one.state.is_live());
+    // …and a new session there doesn't bring it back.
+    let two = spawn(&c, spec("two")).await;
+    assert!(two.project.is_none() && projects(&c).await.is_empty(), "declined stays declined");
+    // Adding it by hand works, goes to the workspace the TUI showed last, and lifts the decline.
+    c.request(Request::SaveView {
+        name: "_tui".into(),
+        view: serde_json::json!({ "workspace": "side" }),
+    })
+    .await
+    .unwrap();
+    let added = match c
+        .request(Request::ProjectAdd { path: dir.clone(), workspace: None })
+        .await
+        .unwrap()
+    {
+        Reply::Project { info, .. } => info,
+        other => panic!("{other:?}"),
+    };
+    assert!(workspace(&c, "side").await.projects.contains(&added.id));
+    // The sessions already there move in within a sweep.
+    wait_for(&c, "two", "back in the project", |s| s.project.as_deref() == Some(&added.id)).await;
+}
+
+/// UX1.5: a shell that `cd`s into another repository puts that one in the sidebar too.
+#[tokio::test]
+async fn a_shell_that_moves_into_a_repository_registers_it() {
+    let w = World::new("exec sleep 60");
+    let other = repo(&w, "other");
+    // OSC 7 says where the shell is now.
+    let script =
+        format!("sleep 0.5; printf '\\033]7;file://host{}\\007'; exec sleep 60", other.display());
+    std::fs::write(w.home().join("fake-shell"), format!("#!/bin/sh\n{script}\n")).unwrap();
+    let c = w.d.client().await.unwrap();
+    spawn(
+        &c,
+        SpawnSpec {
+            cwd: std::env::temp_dir(),
+            name: Some("wanderer".into()),
+            size: Some(TermSize::new(80, 20)),
+            ..SpawnSpec::default()
+        },
+    )
+    .await;
+    let s =
+        wait_for(&c, "wanderer", "placed in the repository it moved to", |s| s.project.is_some())
+            .await;
+    let ps = projects(&c).await;
+    assert_eq!(ps.len(), 1);
+    assert_eq!(s.project.as_deref(), Some(ps[0].id.as_str()));
+    assert_eq!(ps[0].slug, "other");
+}

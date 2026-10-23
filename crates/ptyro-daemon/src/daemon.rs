@@ -41,7 +41,9 @@ pub struct Daemon {
     /// The session most recently focused in any TUI (`@focused`).
     focused: Mutex<Option<SessionId>>,
     /// Views saved while the store is unavailable.
-    views: Mutex<BTreeMap<String, serde_json::Value>>,
+    pub(crate) views: Mutex<BTreeMap<String, serde_json::Value>>,
+    /// Repository roots never to register on their own (UX1.5).
+    pub(crate) declined: Mutex<std::collections::HashSet<std::path::PathBuf>>,
     /// Workspaces, projects, worktrees and trust (SPEC §14.2), mirrored to the store.
     pub registry: Mutex<Registry>,
     /// Resolved secrets kept for `secret_ttl` (memory only, SPEC §10.10).
@@ -173,6 +175,7 @@ impl Daemon {
             config: RwLock::new(config),
             focused: Mutex::new(None),
             views: Mutex::new(BTreeMap::new()),
+            declined: Mutex::new(std::collections::HashSet::new()),
             registry: Mutex::new(registry),
             secrets: Mutex::new(HashMap::new()),
             status_tx,
@@ -605,6 +608,10 @@ impl Daemon {
             return Err(Error::invalid(format!("--profile {a} contradicts the agent's @{b}")));
         }
         let explicit = spec.profile.clone().or(agent_profile);
+        // The repository it starts in becomes a project, so it shows in the sidebar (UX1.5).
+        if spec.worktree.is_none() {
+            self.auto_register(&spec.cwd, spec.workspace.as_deref()).await;
+        }
         let target = self.target(spec.worktree.as_deref(), &spec.cwd)?;
         let cwd = target.as_ref().map_or_else(|| spec.cwd.clone(), |(w, _)| w.path.clone());
         if !cwd.is_dir() {

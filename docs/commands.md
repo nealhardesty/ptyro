@@ -68,7 +68,7 @@ Conventions:
 
 | Command | Does |
 |---|---|
-| `ptyro project add [PATH] [--workspace W]` / `ls` / `show [P]` / `rm P` | register / list / inspect / forget repositories |
+| `ptyro project add [PATH] [--workspace W]` / `ls` / `show [P]` / `rm P` | register (to the workspace the TUI showed last, unless `--workspace`) / list / inspect / forget repositories. The repository a session runs in registers by itself; `rm` keeps it from doing so again |
 | `ptyro project trust [P] [-y]` / `untrust [P]` | review and trust a project's scripts |
 | `ptyro project config [P] [--explain] [--json]` | the effective project config, and where each value came from |
 | `ptyro project discover [--refresh]` · `pin P PROFILE` · `unpin P` | find repos under `[discover] roots` · pin a project to a profile |

@@ -693,6 +693,8 @@ pub struct Discover {
     /// Where to look for git repositories (SPEC §10.1).
     pub roots: Vec<String>,
     pub depth: u8,
+    /// Register the repository a session runs in when it isn't a project yet (UX1.5).
+    pub auto_register: bool,
 }
 
 impl Default for Discover {
@@ -700,6 +702,7 @@ impl Default for Discover {
         Self {
             roots: ["~/src", "~/dev", "~/code", "~/projects"].map(String::from).into(),
             depth: 3,
+            auto_register: true,
         }
     }
 }
