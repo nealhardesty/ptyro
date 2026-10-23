@@ -81,6 +81,10 @@ pub const ACTIONS: &[ActionSpec] = &[
     ),
     a("session.hibernate", "Stop an idle agent, keeping it resumable"),
     a("session.explain", "Why is it in this state? The status engine's recent decisions"),
+    a(
+        "session.summarize",
+        "Summarize it: what it's doing, in a line, from a small model ([summaries])",
+    ),
     a("session.mute", "Mute this session's notifications for an hour (the inbox still gets them)"),
     a("notify.test", "Send a test notification through every channel and sink"),
     a("session.last", "Show the previously shown session here"),

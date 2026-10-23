@@ -349,6 +349,8 @@ pub enum Pending {
     PreCreate(Box<WorktreeSpec>, Option<Dir>),
     Peek(SessionId),
     Explain(SessionId),
+    /// `session.summarize` (UX1.3): toast the summary.
+    Summarized,
     /// Replies for an inspector that has moved on (another worktree, diff base or load) are
     /// dropped.
     InspectDiff {
@@ -1577,6 +1579,16 @@ impl App {
             (Pending::Done(_), Ok(Reply::Pr { info: Some(pr) })) => {
                 self.toast(format!("PR #{}: {}", pr.number, pr.url));
             }
+            (Pending::Summarized, Ok(Reply::Session { info })) => {
+                let text = info.summary.map(|s| s.text).unwrap_or_default();
+                let text = format!("≈ {}: {text}", info.name);
+                if self.config.summaries.enabled {
+                    self.toast(text);
+                } else {
+                    let every = "after every turn: [summaries] enabled = true";
+                    self.toast_offer(text, false, run_offer(every, "config.edit"));
+                }
+            }
             (Pending::Explain(id), Ok(Reply::Explain { lines })) => {
                 // Newest last: start at the bottom.
                 let scroll = lines.len().saturating_sub(self.overlay_body_h(2));
@@ -2103,7 +2115,7 @@ impl App {
                 }
             }
             "session.resume" | "session.hibernate" | "session.explain" | "session.mute"
-            | "session.adopt" => {
+            | "session.adopt" | "session.summarize" => {
                 let target = if self.focus == Focus::Sidebar {
                     match self.selected_row() {
                         Some(Row::Session(id)) => Some(id),
@@ -2133,6 +2145,10 @@ impl App {
                             Pending::Spawned { split: None, spec: Box::default() },
                             Request::Adopt { addr },
                         )
+                    }
+                    "session.summarize" => {
+                        self.toast("summarizing (a small model, on its profile's account)…");
+                        self.request(Pending::Summarized, Request::Summarize { addr })
                     }
                     "session.mute" => self.request(
                         Pending::Done("notifications muted for 1h".into()),
@@ -3203,6 +3219,9 @@ impl App {
                     v.push("session.adopt");
                 }
                 v.extend(["session.retitle", "session.rename", "session.explain"]);
+                if s.state.is_live() {
+                    v.push("session.summarize");
+                }
                 if s.kind == SessionKind::Agent && s.state.is_live() {
                     v.extend(["session.hibernate", "session.mute"]);
                     if s.structured.is_some() {
@@ -5597,6 +5616,31 @@ mod tests {
         app.config.ui.sidebar_detail = ptyro_core::config::SidebarDetail::Compact;
         assert!(!rows_say(&app, "task fix") && !rows_say(&app, "wants"));
         assert!(rows_say(&app, "fixer"));
+    }
+
+    #[test]
+    fn a_summary_stands_in_for_its_turns_last_reply() {
+        let mut app = app();
+        let mut idle = session("done-one");
+        idle.kind = SessionKind::Agent;
+        idle.turns = 2;
+        idle.last_reply = Some("I changed 14 files and ran the suite twice.".into());
+        idle.summary = Some(ptyro_core::session::Summary {
+            text: "Fixed the login test; waiting for review".into(),
+            turn: 2,
+            at_ms: ptyro_core::now_ms(),
+        });
+        status(&mut idle, AgentStatus::Idle, None, None);
+        app.sessions = vec![idle];
+        assert!(rows_say(&app, "≈ Fixed the login test"), "{:#?}", sidebar(&app));
+        assert!(!rows_say(&app, "last I changed"), "the summary says it: {:#?}", sidebar(&app));
+        // From an earlier turn: both.
+        app.sessions[0].turns = 3;
+        assert!(rows_say(&app, "≈ Fixed") && rows_say(&app, "last I changed"));
+        // Working: what it does now instead.
+        status(&mut app.sessions[0], AgentStatus::Working, None, None);
+        assert!(!rows_say(&app, "≈ Fixed"));
+        assert!(app.row_actions(&Row::Session(app.sessions[0].id)).contains(&"session.summarize"));
     }
 
     #[test]

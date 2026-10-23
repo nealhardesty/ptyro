@@ -100,6 +100,9 @@ pub struct Meta {
     /// An agent started by hand in this shell, in the foreground now (UX1.4).
     #[serde(default)]
     pub inner_agent: Option<String>,
+    /// Its latest summary (UX1.3), and whether one is being made.
+    pub summary: Option<ptyro_core::session::Summary>,
+    pub summarizing: bool,
     /// Its title, for people to read (UX1.24): `--title`, `retitle`, else its first prompt.
     #[serde(default)]
     pub title: Option<String>,
@@ -289,6 +292,8 @@ fn new_meta(
         command_since_ms: None,
         command: None,
         inner_agent: None,
+        summary: None,
+        summarizing: false,
         title: None,
         messaging: None,
         prompt_pending: false,
@@ -513,6 +518,7 @@ impl Session {
             last_reply: meta.last_reply.as_deref().map(|r| ptyro_core::session::brief(r, 300)),
             command: meta.command.clone(),
             inner_agent: meta.inner_agent.clone(),
+            summary: meta.summary.clone(),
         }
     }
 

@@ -662,6 +662,7 @@ mod tests {
             last_reply: None,
             command: None,
             inner_agent: None,
+            summary: None,
             window_title: None,
         };
         let mut r = StatusRecord::new(status, Confidence::High, SignalSource::Hook);

@@ -718,7 +718,13 @@ fn session_details(
         items.push(("task", task.to_owned(), t.text));
     }
     let working = s.status.as_ref().is_some_and(|r| r.status == AgentStatus::Working);
-    if let Some(reply) = s.last_reply.as_ref().filter(|_| !working) {
+    // A small model's line on it (UX1.3): this turn's says what its last reply would.
+    let summary = s.summary.as_ref().filter(|_| !working && live);
+    if let Some(sm) = summary {
+        items.push(("≈", sm.text.clone(), t.text));
+    }
+    let summarized = summary.is_some_and(|sm| sm.turn >= s.turns);
+    if let Some(reply) = s.last_reply.as_ref().filter(|_| !working && !summarized) {
         items.push(("last", reply.clone(), t.dim));
     }
     if s.kind == SessionKind::Shell

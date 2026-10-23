@@ -374,6 +374,25 @@ async fn dispatch(
             }
             Ok(0)
         }
+        Some(Cmd::Summarize { session, json }) => {
+            let c = ctx.connect(false).await.map_err(no_daemon)?;
+            match c.request(Request::Summarize { addr: session }).await? {
+                Reply::Session { info } => {
+                    let summary = info.summary.unwrap_or_else(|| ptyro_core::session::Summary {
+                        text: String::new(),
+                        turn: info.turns,
+                        at_ms: 0,
+                    });
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&summary).unwrap_or_default());
+                    } else {
+                        println!("{}: {}", info.name, summary.text);
+                    }
+                    Ok(0)
+                }
+                r => Err(unexpected(r)),
+            }
+        }
         Some(Cmd::Adopt { session }) => {
             let c = ctx.connect(false).await.map_err(no_daemon)?;
             match c.request(Request::Adopt { addr: session }).await? {

@@ -256,6 +256,11 @@ pub enum Request {
         #[serde(default)]
         worktree: bool,
     },
+    /// A summary of what a session is doing, from `[summaries] command`, now (UX1.3); replies
+    /// `Session` with it in `summary`.
+    Summarize {
+        addr: String,
+    },
     /// An agent started by hand in this shell session becomes a session of its own, managed like
     /// `new --agent` (hooks, hibernation, mail), resuming the same conversation (UX1.4).
     Adopt {

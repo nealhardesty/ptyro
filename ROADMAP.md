@@ -1268,7 +1268,7 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
   `ui::sidebar_body` lays out rows for drawing and clicks alike. TUI tests cover each state,
   the three detail levels and clicking a detail line; `tests/ux1.rs` checks the daemon end to
   end (SPEC §11.2h).
-- [ ] **UX1.3 LLM summaries, opt-in** (R-UX-01; owner approved 2026-10-22) — M, spike first.
+- [x] **UX1.3 LLM summaries, opt-in** (R-UX-01; owner approved 2026-10-22) — M, spike first.
   `[summaries] enabled = true` replaces the task and last-reply lines with a short summary of
   the current step.
   - It uses the cheapest model of the session's own agent and **the session's own profile
@@ -1286,6 +1286,17 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
     the daemon so B can replace A.
   - *Done when:* with a fake agent and a fake summariser, rows show summaries that update per
     turn. `make verify-claude` checks one real summary.
+  - *Done (2026-10-23):* option A, `crates/ptyro-daemon/src/summary.rs`: `[summaries] enabled`,
+    `daily_cap` and `command` (default `claude -p --model haiku`). It runs under the session's
+    profile, after each finished turn and each new block, one at a time per session, with the
+    prompt redacted. `≈` replaces `last` on the row, and the task stays. `session.summarize` and
+    `ptyro summarize` make one on demand. Tests: `tests/ux1.rs` (fake agent, fake summariser,
+    redaction) and the TUI row test. `make verify-claude` makes a real one: $0.00065, 1–2.5 s
+    (SPEC §20.1). **Differs from the plan:**
+    - One configurable command, not a `Summarizer` trait. Option B would be a new command or
+      mode, and is left open as SPEC §21 question 9.
+    - Codex and Gemini sessions are summarised with the same command (Claude's Haiku on that
+      profile's account), not with their own agent's cheapest model.
 - [x] **UX1.4 Agents started inside a shell session** (R-AGT-09) — M. Typing `claude` in a
   `shell` session leaves it a shell. The sidebar shows the foreground process. Status still
   comes from OSC 133, which reports the whole Claude run as one long **working** command, even

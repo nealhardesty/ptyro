@@ -2587,7 +2587,7 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 
 | ID | Idea | Seen in | Fit | Size | Pri | Status |
 |---|---|---|---|---|---|---|
-| R-UX-01 | Derived names and summaries: deterministic slug from the prompt by default; optional cheap-model branch names, row summaries and commit messages using the session's own profile account | dmux, Claude agent view | M4+ | M | ★ | slugs → UX1.9 and UX1.24, LLM summaries → UX1.3 (opt-in, owner 2026-10-22); branch names and commit messages still new |
+| R-UX-01 | Derived names and summaries: deterministic slug from the prompt by default; optional cheap-model branch names, row summaries and commit messages using the session's own profile account | dmux, Claude agent view | M4+ | M | ★ | slugs → UX1.9 and UX1.24, LLM summaries → **UX1.3 done** (opt-in, Haiku per turn, 2026-10-23); branch names and commit messages still new |
 | R-UX-02 | **Actionable inbox**: peek the pending question, reply inline, numbered choice by digit, **snooze** until next transition, jump to newest unread, cycle unread without marking read | Claude agent view, tuios, iTerm2, cmux | M4 | M | ★★★ | partly built M4.5: peek, inline reply, y/a/n answers, newest-first inbox per workspace; snooze open (2026-10-20) |
 | R-UX-03 | Companion-shell key per task (same worktree and profile env); **scratch sessions** (no project, temp dir) | AoE | M3 | S | ★★ | companion shell → UX1.13, built 2026-10-22; scratch sessions still new |
 | R-UX-04 | `ptyro project scan ~/dev` bulk registration | ccmanager | M3 | S | ★ | new |
@@ -2916,3 +2916,7 @@ follow you over SSH, and tmux plugins can't enforce policy. ptyro does all three
 - **2026-10-22 (naming):** The owner split a session's label in two: a fixed name to type and a
   changeable title to read, with a suggested name in every create dialog. R-UX-29, promoted to
   UX1.24. R-UX-01's prompt slugs feed the suggestion.
+- **2026-10-23 (summaries):** UX1.3 is built as a stateless call per turn. A measured Haiku
+  summary through `claude -p` costs $0.00065 and takes 1–2.5 s [V 2026-10-23, Claude Code
+  2.1.309], so the resident "concierge" (option B) is not needed for summaries. It stays open
+  for cross-session questions (SPEC §21, question 9).

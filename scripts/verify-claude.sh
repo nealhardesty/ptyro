@@ -1,8 +1,9 @@
 #!/bin/sh
 # Verify the Claude adapter against the real Claude Code on this machine (M4.3): hooks through
 # ptyro's plugin, the folder-trust dialog, prompt delivery, a permission prompt answered by ptyro,
-# and resume. Spends one tiny turn on your default Claude account. Uses a throwaway ptyro home
-# under target/verify-claude; your Claude login and settings are used as they are.
+# resume and one summary (UX1.3). Spends one tiny turn and one Haiku call on your default Claude
+# account. Uses a throwaway ptyro home under target/verify-claude; your Claude login and settings
+# are used as they are.
 set -u
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -51,6 +52,9 @@ wait_for "idle" 60 && pass "back to idle after the turn" || fail "not idle: $(st
   && pass "Stop carried the turn's reply (last_assistant_message)" \
   || fail "no reply from Stop: summaries fall back to the screen (SPEC §20.1)"
 [ -f "$dir/proj/verified.txt" ] && pass "the approved command ran" || fail "verified.txt missing"
+# UX1.3: one real summary through the default `[summaries] command` (Haiku, about $0.0007).
+sum=$("$bin" summarize v 2>&1)
+echo "$sum" | grep -q '^v: ..*' && pass "summary: ${sum#v: }" || fail "no summary: $sum"
 "$bin" inbox | grep -q "wants permission" && pass "the inbox has the permission entry" || fail "inbox"
 conv=$("$bin" status v | sed -n 's/.*conversation //p')
 [ -n "$conv" ] && pass "the session has a conversation id ($conv)" || fail "no conversation id: the resume check would pass vacuously"

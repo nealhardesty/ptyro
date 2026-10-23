@@ -99,6 +99,9 @@ const STARTER: &str = r#"# ptyro configuration. Every key is optional; see SPEC 
 [daemon]
 # scrollback_lines = 10000
 
+[summaries]
+# enabled = true           # a `≈` line after each agent turn, from a small model on its account
+
 [keys]
 # Rebind after-prefix keys: "key" = "action [args]"; "none" unbinds. `C-q ?` lists actions.
 # "a" = "session.next"

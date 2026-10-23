@@ -491,6 +491,15 @@ enum Cmd {
         /// The new title (several words are joined)
         title: Vec<String>,
     },
+    /// What a session is doing, in a line, from a small model (`[summaries] command`; it runs
+    /// on the session's profile's account, about $0.0007 a time with Haiku)
+    Summarize {
+        #[arg(add = ArgValueCandidates::new(complete::sessions))]
+        session: String,
+        /// Print the summary as JSON (`text`, `turn`, `at_ms`)
+        #[arg(long)]
+        json: bool,
+    },
     /// Make the Claude you started by hand in a shell session a managed session (hooks,
     /// hibernation, mail), resuming the same conversation
     Adopt {

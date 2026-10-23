@@ -22,6 +22,11 @@ struct World {
 impl World {
     /// A daemon whose `claude` is the fake agent, and whose `$SHELL` is `shell` (a script).
     fn new(shell: &str) -> Self {
+        Self::with_config(shell, "")
+    }
+
+    /// The same, with `extra` appended to its config (whole sections).
+    fn with_config(shell: &str, extra: &str) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-ux1-").tempdir().unwrap();
         let h = home.path().canonicalize().unwrap();
         std::fs::write(
@@ -33,7 +38,7 @@ impl World {
         std::fs::write(&sh, format!("#!/bin/sh\n{shell}\n")).unwrap();
         std::fs::set_permissions(&sh, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
         let config = format!(
-            "[attention]\nmin_work = \"1s\"\n[worktrees]\nfetch = false\n[agents.claude]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\n"
+            "[attention]\nmin_work = \"1s\"\n[worktrees]\nfetch = false\n[agents.claude]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\n{extra}"
         );
         let (hs, ss) = (h.to_string_lossy().into_owned(), sh.to_string_lossy().into_owned());
         let env = [("HOME", hs.as_str()), ("GIT_CONFIG_NOSYSTEM", "1"), ("SHELL", ss.as_str())];
@@ -694,4 +699,48 @@ async fn a_fresh_ptyro_opens_the_first_run_once() {
     let r =
         ptyro_testkit::headless::run(script(&d).snapshot(2.0).send(2.2, "\\x11d")).await.unwrap();
     assert!(!r.at(2.0).contains("Welcome to ptyro"), "{}", r.at(2.0));
+}
+
+/// UX1.3: with `[summaries]` on, a finished turn gets a line from the summarizer, which reads a
+/// redacted prompt on stdin; `Summarize` asks for one now.
+#[tokio::test]
+async fn a_finished_turn_is_summarized_in_a_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let (prompt, script) = (dir.path().join("prompt.txt"), dir.path().join("summarizer"));
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\ncat > '{}'\necho '{{\"type\":\"result\",\"is_error\":false,\"result\":\"Fixing the flaky login test.\"}}'\n",
+            prompt.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let extra = format!("[summaries]\nenabled = true\ncommand = [\"{}\"]\n", script.display());
+    let w = World::with_config("exec sleep 30", &extra);
+    let c = w.d.client().await.unwrap();
+    let agent = SpawnSpec {
+        agent: Some("claude".into()),
+        cwd: std::env::temp_dir(),
+        name: Some("cl".into()),
+        size: Some(TermSize::new(100, 20)),
+        prompt: Some("work 0.3 fix login, key sk-ant-api03-abcdefghijklmnopqrst".into()),
+        ..SpawnSpec::default()
+    };
+    spawn(&c, agent).await;
+    let s = wait_for(&c, "cl", "summarized", |s| s.summary.is_some()).await;
+    let sm = s.summary.unwrap();
+    assert_eq!(sm.text, "Fixing the flaky login test.");
+    assert_eq!(sm.turn, s.turns);
+    let sent = std::fs::read_to_string(&prompt).unwrap();
+    assert!(sent.contains("Asked to: work 0.3 fix login"), "{sent}");
+    assert!(sent.contains("<redacted>") && !sent.contains("sk-ant-api03"), "{sent}");
+
+    // On request, too.
+    std::fs::remove_file(&prompt).unwrap();
+    match c.request(Request::Summarize { addr: "cl".into() }).await.unwrap() {
+        Reply::Session { info } => assert!(info.summary.is_some()),
+        other => panic!("{other:?}"),
+    }
+    assert!(prompt.exists());
 }

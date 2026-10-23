@@ -189,6 +189,17 @@ pub struct SessionInfo {
     /// foreground (UX1.4): its status then comes from its screen, at low confidence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inner_agent: Option<String>,
+    /// What it's doing, in a line, from a small model (`[summaries]`, UX1.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<Summary>,
+}
+
+/// A session's summary (UX1.3): `text` was made after turn `turn`, at `at_ms`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Summary {
+    pub text: String,
+    pub turn: u32,
+    pub at_ms: u64,
 }
 
 /// A shell's current or last command, from OSC 133 marks (`ptyro shell-init`).

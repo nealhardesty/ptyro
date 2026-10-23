@@ -331,9 +331,16 @@ impl Daemon {
                 self.radar_after_turn(s);
                 self.run_member_changed(s).await;
             }
+            if s.kind() == SessionKind::Agent || s.meta.lock().expect("meta").inner_agent.is_some()
+            {
+                self.summarize_after(s);
+            }
         }
         if t.to.status == AgentStatus::Blocked && s.kind() == SessionKind::Agent {
             self.notice_lead(s, "blocked");
+        }
+        if t.to.status == AgentStatus::Blocked && t.from != Some(AgentStatus::Blocked) {
+            self.summarize_after(s);
         }
         // Answered in the agent's own dialog: a held hook has nothing left to wait for.
         if t.from == Some(AgentStatus::Blocked) && t.to.status != AgentStatus::Blocked {

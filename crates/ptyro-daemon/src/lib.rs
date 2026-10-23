@@ -27,6 +27,7 @@ mod session;
 mod sidecar;
 mod structured;
 mod suggest;
+mod summary;
 mod usage;
 mod verify;
 mod watchdog;

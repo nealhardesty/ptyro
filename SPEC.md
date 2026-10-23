@@ -72,9 +72,10 @@ Status markers used below:
   sessions, splits, scrollback, copy, navigation. Not tmux's full command language.
 - Being a terminal emulator *application*. ptyro runs inside your terminal (Ghostty, kitty, WezTerm,
   Alacritty, iTerm2, foot, …), possibly inside tmux.
-- Being an agent. ptyro hosts agents; it never calls an LLM API itself. The one planned exception
-  is opt-in session summaries (ROADMAP UX1.3, approved 2026-10-22). They use the cheapest model of
-  the session's own agent and profile account, and they are off by default.
+- Being an agent. ptyro hosts agents; it never calls an LLM API itself. The one exception is
+  opt-in session summaries (**[built UX1.3]**, approved 2026-10-22, §11.2h). They run a small
+  model's CLI (Claude's Haiku by default) on the session's own profile account, and they are off
+  by default.
 - Built-in editor, task tracker (**back-burnered**; see ROADMAP Backlog).
 - Windows native. WSL2 is expected to work like Linux. **[decided]**
 
@@ -133,13 +134,13 @@ Run 1──* Session  (orchestration membership, optional)
 - Every entity has a **ULID** (`01JB…`), sortable by creation time, stored in full.
 - Humans see a short, unique **handle**: `s:7f3k` (sessions), `w:…` (worktrees), `p:…` (projects),
   computed as the shortest unambiguous lowercase Crockford-base32 suffix (min 4 chars).
-- Sessions and worktrees also get a **name** and, planned, a **title** (ROADMAP UX1.24):
+- Sessions and worktrees also get a **name** and a **title** (**[built UX1.24]**):
   - The **name** is the address: `[a-z0-9._-]`, 1–64 characters, chosen at creation and changed
     only by an explicit rename. Session names are globally unique; worktree names are unique per
     project. Defaults are below.
-  - The **title** is free text for people to read: the task, a PR title, a summary (UX1.3). It
-    may change at any time, is never an address, and is shown in the sidebar and headers, not
-    used in commands. Without one, the name stands in.
+  - The **title** is free text for people to read: the task, a PR title. It may change at any
+    time (`retitle`), is never an address, and is shown in the sidebar and headers, not used in
+    commands. Without one, the name stands in. A summary (UX1.3) is its own line, not the title.
   - The friendly-name generator draws from a corvid-themed word list (`brisk-rook`,
     `quiet-jackdaw`, `sly-magpie`; `ptyro_core::names`).
 - **Address syntax** used across CLI and protocol (resolved by the daemon):
@@ -170,10 +171,10 @@ runs.
 slug, id suffix (≥ 4) or any path inside one of their checkouts. Worktrees are addressed by
 `project/name` (`myrepo/@root` is the main checkout), a unique name, an id suffix, or a path
 inside them, so CLI commands default to the worktree you're standing in. Ids are lowercase ULIDs
-(`ptyro_core::model::new_id`). Default names as built: worktrees get a corvid name; agent
-sessions get the agent's name (`claude`, `claude-2`); script sessions get `<worktree>.<script>`;
-other sessions get a corvid name. UX1.24 replaces these defaults with a suggestion that every
-create dialog shows. `SessionInfo.title` exists in the protocol but is not set yet.
+(`ptyro_core::model::new_id`). **[built UX1.24]** Default names: from the title or prompt
+(`fix-flaky-test`, made unique), else for an agent session the agent and a corvid
+(`claude-rook`), else a friendly pair. Script sessions get `<worktree>.<script>`. Create dialogs
+show the suggestion before ⏎ (§11.2h).
 
 ---
 
@@ -898,6 +899,8 @@ Push messages have no id.
   else its first prompt, else the window title), and the window title is `window_title`.
 - `WorktreeArchive{addr, stop_sessions}`, `WorktreeRestore{addr}`, `WorktreeArchives{project}`
   → `Archives{entries}`, and `WorktreeFinish{addr, integrate}` (§10.8).
+- `SessionInfo` gains `summary` (`Summary{text, turn, at_ms}`), and a new request,
+  `Summarize{addr}` (control scope), makes one now and replies `Session` (§11.2h).
 - `ProjectRemove` gains `release` (let the project's running sessions go instead of refusing),
   and a new event, `ProjectAutoAdded{info, workspace, notes}`, says a repository registered on
   its own (§10.1).
@@ -2496,6 +2499,30 @@ learning anything up front.
   opens every row. The row in focus (and any that wants you) wraps its task and reply over two
   lines. Drawing, clicks and scrolling share one line layout, so a row is one target however
   many lines it takes.
+- **Summaries, opt-in** (UX1.3, `crates/ptyro-daemon/src/summary.rs`). With `[summaries] enabled
+  = true`, a one-line summary is made each time an agent's turn ends (an agent session, or one
+  started by hand in a shell) and each time a session newly blocks. It shows as `≈ …` on the
+  row. It replaces `last` while it describes the current turn, and is hidden while the session
+  works. `session.summarize` (the row menu, the palette) and `ptyro summarize SESSION` make one
+  now, enabled or not.
+  - **How:** `[summaries] command` (default `claude -p --model haiku --output-format json
+    --strict-mcp-config --tools ""`) reads the prompt on stdin and prints the summary, or
+    Claude's JSON, whose `result` is used. It runs 1.5 s after the turn ends, so the reply lands
+    first. It runs under the session's profile environment, so on that profile's account, in
+    `<data>/summaries` (no project files, no tools), with a 60 s limit. Only one runs at a time
+    per session; a turn that ended meanwhile gets its own afterwards.
+  - **What it's sent:** the session's kind, title, task, status and what it waits on, its last
+    reply (≤ 1500 characters), a shell's command, and the last 25 lines of its screen. The
+    profile's secret values become `<secret:NAME>`. Anything shaped like a credential (`KEY=…`
+    for token/secret/password keys, `Bearer …`, known token prefixes, long mixed runs of letters
+    and digits) becomes `<redacted>`.
+  - **Limits:** `daily_cap` (200) per profile per UTC day, counted in memory. On a failure (not
+    logged in, over the cap) the rule-based lines stay; the error shows only when you asked for
+    the summary directly.
+  - **Spike result (2026-10-23):** option A, a stateless call per turn, is what's built. One
+    summary costs $0.0006 and takes 1–2.5 s (§20.1). Option B, a resident per-profile
+    "concierge" session, is not built: at this price and speed it would only pay off for
+    answering questions across sessions, which stays open (§21, question 9).
 - **`n` asks what to do** (UX1.9). One box, "What should it do?", with a preview under it:
   `→ fix-flaky-test · claude · new worktree in myrepo`. ⏎ starts the default agent on it in a
   new worktree named after it (here, with no project), the prompt also its title. Tab edits the
@@ -3120,6 +3147,11 @@ log_level = "info"
 [recorder]
 enabled = true
 max_bytes = "16MiB"
+
+[summaries]                       # opt-in one-line summaries from a small model (§11.2h)
+enabled = false
+daily_cap = 200                   # per profile, per UTC day
+command = ["claude", "-p", "--model", "haiku", "--output-format", "json", "--strict-mcp-config", "--tools", ""]
 
 [notifications]
 channels = ["inbox", "osc", "bell"]      # + "desktop", later "push"
@@ -4316,6 +4348,7 @@ command): ptyro doesn't confine that.
 | Socket hijack by other local users | dir `0700`, socket `0600`, peer-uid check on accept |
 | Cloned repo runs arbitrary code | scripts/recipes require fingerprinted trust; agent executables only from user config |
 | Code ptyro runs for a repository: scripts, `after_turn`, verify checks, git (security review M3) | trust pins a script's *text*, not the files it calls, and agents edit those files: trusting `cargo test` trusts the tests. Scripts, `after_turn` and checks run as the user, with the daemon's environment and network, outside any agent sandbox; this is documented, not sandboxed (§10.5, §15.6.5, docs/config.md). Background git runs no repository code: `core.fsmonitor=false` always, `core.hooksPath=/dev/null` except for the operations the user asked for (commit, push, merge, rebase, cherry-pick, a new worktree), diffs with `--no-ext-diff --no-textconv` (§10.9) |
+| Session content sent to a model provider by summaries (UX1.3) | off by default; on, only a trimmed view goes (§11.2h), through the session's own profile, so its own account and provider. The profile's secret values and anything shaped like a credential are replaced before sending; the summariser runs with no tools, no MCP servers and no project directory |
 | Agents' own permission prompts bypassed | ptyro never auto-answers permission prompts unless the user configured an explicit policy; "dangerous" agent args require `dangerous = true` and show a ⚠ badge |
 | Paste injection (`ESC[201~` in pasted text) | every ESC and C1 CSI is removed from bracketed-paste payloads, so nothing can close the bracket (a one-pass removal of `ESC[201~` was beatable by nesting) |
 | Malicious escape sequences from child output | emulator is the only consumer; clients render cells, not raw bytes; OSC 52 read denied; title length capped; OSC 7501 messages length-capped (4096); OSC 9/777/99 notifications stripped of controls and capped (1024); query replies never echo what the program sent (XTGETTCAP answers only hex names: echoing a non-hex request typed child output into the shell); sizes from the wire clamped (2×1 … 1000×500); combining marks capped per cell (16) both in what alacritty stores (a filter before its parser, escape-aware, split-UTF-8-safe) and in what frames report, frames budgeted (8 MiB), style tables bounded |
@@ -4498,6 +4531,12 @@ learn something the hard way.
   turn's last reply (session event `reply`). In the live run `Stop` came ~10 ms *before* 7501 `done`. ptyro maps it to
   `Signal::Reply`, the summary of a `worker_done`, a run's `last_message` and the review queue.
   OSC 7501 `done` can arrive before the `Stop` hook, so the lead's notice waits up to 1 s for it.
+- **[verified 2026-10-23, 2.1.309; `make verify-claude`]** `claude -p --model haiku
+  --output-format json --strict-mcp-config --tools ""`, with a ~400-character prompt on stdin,
+  prints one JSON object with `is_error`, `result` (the text) and `total_cost_usd`. The alias
+  resolved to `claude-haiku-5-5`. One summary cost $0.00065 (3.1k cache-creation tokens, most of
+  them Claude Code's own system prompt) and took 1.1 s (`duration_ms`), or 2.4 s wall clock with
+  startup. This is the default `[summaries] command` (§11.2h).
 - **[verified in binary]** `idle_prompt` notifications are delayed by `messageIdleNotifThresholdMs`
   (default 60 000 ms) ⇒ use `Stop` for "turn ended", not `idle_prompt`.
 - **[docs]** `--resume` does not restore `--settings`, `--mcp-config`, `--plugin-dir`, `--add-dir`.
@@ -4948,3 +4987,7 @@ Checked against each tool's documentation on 2026-10-20. Marks: [V] official doc
    should the lead be allowed to edit member code in `solo` layout only, or never; do the contract
    checks belong in the template or in each repo's `.ptyro.toml`; and how deep should the merge
    train integrate with forge-native merge queues?
+9. **A resident summariser ("concierge")** — the UX1.3 spike's option B (owner's idea,
+   2026-10-22): one long-lived, cheap structured session per profile, fed turn digests, that
+   could answer "what's going on?" across sessions or act as the default lead. Per-turn
+   summaries don't need it (§11.2h, §20.1); revisit when cross-session questions are wanted.

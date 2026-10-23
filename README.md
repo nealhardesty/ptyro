@@ -137,7 +137,10 @@ the title, `ptyro rename` the name.
 
 Each row says what that session is doing: what a blocked agent wants and the keys that answer
 it, the step an agent is on, its task and last reply, a shell's last command. `[ui]
-sidebar_detail = "compact"` keeps one line per row.
+sidebar_detail = "compact"` keeps one line per row. Turn on `[summaries] enabled = true` and,
+after each turn, a small model (Claude's Haiku, on that session's own profile account, about
+$0.0007 each) writes a `≈` line saying what it did. `ptyro summarize SESSION`, or *summarize* in
+a row's menu (`.`), makes one at any time.
 
 - `Ctrl-Q a` jumps to the next session that needs you (blocked first).
 - `Ctrl-Q p` peeks without switching: `y` allows a permission prompt, `n` denies, or type a

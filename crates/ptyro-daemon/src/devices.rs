@@ -140,6 +140,7 @@ pub fn needed(req: &Request) -> Scope {
         | RunRetry { .. }
         | Convert { .. }
         | Retitle { .. }
+        | Summarize { .. }
         | Adopt { .. } => Scope::Control,
         // A configured agent (its command comes from the user's config) is control; any other
         // command line is full.

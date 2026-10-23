@@ -30,6 +30,7 @@ row here: its TUI action, or `waived:` and why.
 | `hibernate` | `session.hibernate` |
 | `convert` | `session.convert` (the row menu, the palette) |
 | `adopt` | `session.adopt` (`A` on a shell row running Claude) |
+| `summarize` | `session.summarize` (the row menu, the palette); with `[summaries] enabled` the sidebar shows one (`≈`) after every turn |
 | `status` | `session.explain` (`e` in the sidebar) says why; the sidebar and pane headers show the status |
 | `answer` | `peek` (`p`): `y` allow, `a` always, `n` deny |
 | `read` | `copy.enter` (`[`): the scrollback, searchable; the pane shows the screen |

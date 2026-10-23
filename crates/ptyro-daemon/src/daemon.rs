@@ -1149,6 +1149,7 @@ impl Daemon {
             }
             Request::Adopt { addr } => self.adopt(&addr).await,
             Request::Retitle { addr, title, worktree } => self.retitle(&addr, title, worktree),
+            Request::Summarize { addr } => self.summarize_now(&addr).await,
             Request::ChatGet { addr } => {
                 let s = self.resolve(&addr)?;
                 let st = s.structured.as_ref().ok_or_else(|| {

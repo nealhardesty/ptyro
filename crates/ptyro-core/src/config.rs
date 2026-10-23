@@ -425,6 +425,45 @@ pub struct Config {
     pub recorder: Recorder,
     pub remote: Remote,
     pub clipboard: Clipboard,
+    pub summaries: Summaries,
+}
+
+/// A one-line summary of what a session is doing, from a small, cheap model (UX1.3, SPEC
+/// §11.2h). Off unless you turn it on: it sends a trimmed, redacted view of the session to the
+/// model's provider.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Summaries {
+    /// Summarize each agent's turn when it ends or stops to ask (`ptyro summarize` works
+    /// either way).
+    pub enabled: bool,
+    /// At most this many summaries a day for each profile (each is about $0.0007 with Haiku).
+    pub daily_cap: u32,
+    /// The summarizer: reads the prompt on stdin, prints the summary (or Claude's
+    /// `--output-format json`). It runs under the session's profile, so on its account.
+    pub command: Vec<String>,
+}
+
+impl Default for Summaries {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            daily_cap: 200,
+            command: [
+                "claude",
+                "-p",
+                "--model",
+                "haiku",
+                "--output-format",
+                "json",
+                "--strict-mcp-config",
+                "--tools",
+                "",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+        }
+    }
 }
 
 /// OSC 52 from programs in sessions (SPEC §5.7, §17).

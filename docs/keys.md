@@ -167,7 +167,8 @@ current project's scripts; each line shows its key, so it teaches them. Actions 
 key include: `project.add`
 (pick from repos under `[discover] roots`), `project.trust`, `worktree.remove`,
 `session.command` (a session running a command line), `session.resume`, `session.hibernate`,
-`session.mute`, `notify.test`, `theme.next`, `config.edit`.
+`session.mute`, `session.summarize` (a `≈` line from a small model), `notify.test`,
+`theme.next`, `config.edit`.
 
 ## Rebinding
 
