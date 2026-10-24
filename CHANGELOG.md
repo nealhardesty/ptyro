@@ -6,11 +6,19 @@ Generated from git history by `make changelog` (scripts/changelog.sh); edit comm
 
 ### Features
 
+- feat: WEB1.7 ptyro serve speaks HTTPS by default, with a certificate it makes (77213ae)
+- feat: WEB1.0, WEB1.1 the parity check covers the web, and every command is audited for it (8b4e407)
+- feat: UX1.22 the tour, done for real: a task to clean-up with a pretend agent (fecac74)
+- feat: UX1.26 several lines in ptyro's own boxes; a paste stays in the box (c7a77a1)
+- feat: make reset starts ptyro over, after a summary and a yes (4d4426e)
+- feat: quit ptyro from the TUI (C-q C-d): every session and the daemon stop, after a yes (263ffcb)
 - feat: UX1.3 opt-in summaries, a line from a small model after each turn (14c227b)
 - feat: TUI prompts check input as it's typed instead of failing after ⏎ (cb13820)
 
 ### Fixes
 
+- fix: a daemon never deletes another daemon's socket (95a1ea7)
+- fix: a turn is the agent's own turn end, counted once, not every working → idle (94c4bf4)
 - fix: status selectors match the status ptyro shows, not only self-reports (756c003)
 - fix: Codex sessions show their task and last reply again (hooks trusted on Codex 0.164) (c504202)
 - fix: a session started in a subdirectory of a project starts there, not at the worktree root (1335cb1)
@@ -22,6 +30,9 @@ Generated from git history by `make changelog` (scripts/changelog.sh); edit comm
 
 ### Documentation
 
+- docs: several lines in one prompt, in every client; roadmap UX1.26 and TLS by default (WEB1.7) (79b7e08)
+- docs: the CLI, the TUI and the web are all first class; roadmap WEB1, web parity (83d635a)
+- docs: regenerate CHANGELOG.md (43dfeef)
 - docs: j/k and the sidebar numbers skip quick terminals (1eb53e5)
 - docs: roadmap UX1.25, a quick terminal per worktree that one key toggles (6a3a8a9)
 - docs: bring keys, config, CLI and spec docs in line with the code (7178a8d)
@@ -34,6 +45,7 @@ Generated from git history by `make changelog` (scripts/changelog.sh); edit comm
 
 ### Other
 
+- test: UX1's "Done when" end to end, and the fixes closing UX1 out (2cd1ec8)
 - UX1.25: a quick terminal per worktree, in a drawer one key toggles (25ede4d)
 - UX1.21: every CLI command has a TUI path, and the check is strict (785c15c)
 - UX1.20: a health badge with a fix for each finding (168adf6)
