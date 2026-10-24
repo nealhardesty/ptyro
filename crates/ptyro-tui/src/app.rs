@@ -78,10 +78,6 @@ pub enum Overlay {
         screen: String,
         reply: String,
     },
-    /// The tour (`ptyro tour`, palette `help.tour`).
-    Tour {
-        page: usize,
-    },
     /// Worktrees ready for review, best first (M6.9); ⏎ opens the inspector.
     ReviewQueue {
         items: Vec<ptyro_core::model::ReviewItem>,
@@ -603,6 +599,8 @@ pub struct App {
     pub area: Rect,
     pub dirty: bool,
     pub quit: Option<AttachEnd>,
+    /// The tour's coach (UX1.22), when this TUI runs `ptyro tour`.
+    pub tour: Option<crate::tour::Tour>,
     /// `app.quit` was confirmed: the daemon going away ends the TUI instead of reconnecting
     /// (which would start a new one).
     quitting: bool,
@@ -700,7 +698,8 @@ impl App {
             sidebar_sel: 0,
             prefix: false,
             prefix_at: None,
-            overlay: opts_tour.then_some(Overlay::Tour { page: 0 }),
+            overlay: None,
+            tour: opts_tour.then(crate::tour::Tour::default),
             toast: None,
             buffer: None,
             controller: HashMap::new(),
@@ -1163,6 +1162,12 @@ impl App {
 
     /// Periodic work: toast expiry, debounced view saves, the sidebar's foreground names.
     pub fn tick(&mut self) {
+        if let Some(mut tour) = self.tour.take() {
+            if tour.advance(self) {
+                self.dirty = true;
+            }
+            self.tour = Some(tour);
+        }
         if self.toast.as_ref().is_some_and(|t| Instant::now() > t.until) {
             self.toast = None;
             self.dirty = true;
@@ -2327,7 +2332,10 @@ impl App {
                     Some(w) if w.is_root => {
                         self.toast("that's the main checkout: finish a worktree of it")
                     }
-                    Some(w) if cmd.action == "worktree.archive" => self.confirm_archive(&w),
+                    // Shipped: finishing it is cleaning up (the hint says so, UX1.12).
+                    Some(w) if cmd.action == "worktree.archive" || w.shipped() => {
+                        self.confirm_archive(&w)
+                    }
                     Some(w) => {
                         let items = vec![
                             Item {
@@ -2344,7 +2352,8 @@ impl App {
                             },
                         ];
                         self.overlay = Some(Overlay::Picker {
-                            palette: Palette::new(format!("Finish {}", w.qualified()), items),
+                            palette: Palette::new(format!("Finish {}", w.qualified()), items)
+                                .with_hotkeys(),
                             purpose: Purpose::Finish(w.id.clone()),
                         });
                     }
@@ -2413,8 +2422,9 @@ impl App {
                         Some(Row::Session(id) | Row::Quick(id)) => Some(id),
                         Some(Row::Worktree(w)) if cmd.action == "session.stop" => {
                             if let Some(w) = self.worktree(&w).cloned().filter(|w| !w.is_root) {
-                                // Merged: clean up by archiving, which never refuses (UX1.12).
-                                if w.pr.as_ref().is_some_and(|p| p.state == "MERGED") {
+                                // Shipped (merged, or integrated into main): clean up by archiving,
+                                // which never refuses (UX1.12).
+                                if w.shipped() {
                                     self.confirm_archive(&w);
                                 } else {
                                     self.confirm_remove(&w);
@@ -2703,7 +2713,14 @@ impl App {
                     kind: PromptKind::Broadcast(self.marked.clone()),
                 });
             }
-            "help.tour" => self.overlay = Some(Overlay::Tour { page: 0 }),
+            // The tour runs in a ptyro of its own: this TUI steps aside for it, then comes back.
+            "help.tour" => match self.tour {
+                Some(_) => {
+                    self.tour = Some(crate::tour::Tour::default());
+                    self.toast("the tour starts over");
+                }
+                None => self.quit = Some(AttachEnd::Tour),
+            },
             "inspector" => {
                 if self.inspector.take().is_none() {
                     self.open_inspector();
@@ -3010,9 +3027,13 @@ impl App {
         };
         let with = |action: &str, what: &str| self.hint_key(action).map(|k| format!("{k} {what}"));
         let worktree_hint = |w: &WorktreeInfo| {
-            if w.pr.as_ref().is_some_and(|p| p.state == "MERGED") && !w.is_root {
-                return with("worktree.finish", "clean up (merged)")
-                    .or_else(|| with("worktree.remove", "clean up (merged)"));
+            if w.shipped() {
+                let what = if w.pr.as_ref().is_some_and(|p| p.state == "MERGED") {
+                    "clean up (merged)"
+                } else {
+                    "clean up (in main)"
+                };
+                return with("worktree.finish", what).or_else(|| with("worktree.remove", what));
             }
             let changed = w.status.as_ref().is_some_and(|s| s.insertions + s.deletions > 0);
             changed.then(|| with("inspector", "review its changes")).flatten()
@@ -4117,18 +4138,6 @@ impl App {
         match overlay {
             Overlay::Inbox { selected, tab } => self.inbox_key(key, selected, tab),
             Overlay::Peek { session, screen, reply } => self.peek_key(key, session, screen, reply),
-            Overlay::Tour { page } => {
-                let last = crate::ui::tour_pages(self).len() - 1;
-                let page = match key.code {
-                    KeyCode::Esc | KeyCode::Char { c: 'q' } => return,
-                    KeyCode::Left | KeyCode::Backspace | KeyCode::Char { c: 'h' } => {
-                        page.saturating_sub(1)
-                    }
-                    _ if page == last => return,
-                    _ => page + 1,
-                };
-                self.overlay = Some(Overlay::Tour { page });
-            }
             Overlay::ReviewQueue { items, mut selected } => {
                 match key.code {
                     KeyCode::Esc | KeyCode::Char { c: 'q' } => return,
@@ -5712,6 +5721,61 @@ mod tests {
     }
 
     #[test]
+    fn the_tour_moves_on_as_each_step_is_done_and_says_the_keys() {
+        use crate::tour::Step;
+        let mut app = app();
+        with_project(&mut app);
+        let w = feature(&mut app, false);
+        app.tour = Some(crate::tour::Tour::default());
+        let step = |app: &mut App| {
+            app.tick();
+            app.tour.as_ref().unwrap().step
+        };
+        let coach = |app: &App| app.tour.as_ref().unwrap().coach(app).1.join(" ");
+        assert_eq!(step(&mut app), Step::Task);
+        assert!(coach(&app).contains("Press C-q n"), "{}", coach(&app));
+        // A shell is no task; the agent the task box started, in its own worktree, is.
+        let mut agent = session("fix-typo");
+        agent.kind = SessionKind::Agent;
+        agent.task = Some("fix the typo".into());
+        agent.worktree = Some(w.id.clone());
+        status(&mut agent, AgentStatus::Working, None, None);
+        app.sessions = vec![session("zsh"), agent];
+        assert_eq!(step(&mut app), Step::Answer);
+        status(&mut app.sessions[1], AgentStatus::Blocked, Some("permission"), Some("Bash: sed"));
+        assert_eq!(step(&mut app), Step::Answer);
+        assert!(coach(&app).contains("Press C-q p to peek, then y"), "{}", coach(&app));
+        // Answered: it works again.
+        status(&mut app.sessions[1], AgentStatus::Working, None, None);
+        assert_eq!(step(&mut app), Step::Review);
+        app.inspector = Some(crate::inspector::Inspector::new(w.id.clone()));
+        assert_eq!(step(&mut app), Step::Finish);
+        assert!(coach(&app).contains("press F on it; pick integrate"), "{}", coach(&app));
+        // Integrated, clean, at that commit: shipped.
+        for x in app.worktrees.iter_mut().filter(|x| x.id == w.id) {
+            x.integrated = Some("abc1234ffff".into());
+            x.status = Some(
+                serde_json::from_value(serde_json::json!({
+                    "head": "abc1234", "ahead": 0, "behind": 0, "base_ahead": 0, "base_behind": 0,
+                    "staged": 0, "modified": 0, "untracked": 0, "conflicts": 0, "insertions": 0,
+                    "deletions": 0, "at_ms": 0
+                }))
+                .unwrap(),
+            );
+        }
+        assert_eq!(step(&mut app), Step::CleanUp);
+        app.worktrees.retain(|x| x.id != w.id);
+        assert_eq!(step(&mut app), Step::Done);
+        assert!(coach(&app).contains("C-q d leaves the tour"), "{}", coach(&app));
+        // `help.tour` inside the tour starts it over (outside, the TUI steps aside for it).
+        app.run(&Command { action: "help.tour", arg: None });
+        assert_eq!(app.tour.as_ref().unwrap().step, Step::Task);
+        let mut plain = self::app();
+        plain.run(&Command { action: "help.tour", arg: None });
+        assert!(matches!(plain.quit, Some(AttachEnd::Tour)));
+    }
+
+    #[test]
     fn text_boxes_take_several_lines_and_pastes_stay_in_them() {
         let mut app = app();
         let task = |app: &App| match &app.overlay {
@@ -6422,13 +6486,43 @@ mod tests {
             }
             _ => panic!("archive, not remove"),
         }
-        // Finish: a PR or integrating.
+        // `F`, as the hint says, cleans it up too.
         app.overlay = None;
         let f = app.keymap.lookup(Table::Nav, KeyEvent::char('F')).cloned().unwrap();
+        app.run(&f);
+        assert!(matches!(
+            &app.overlay,
+            Some(Overlay::Confirm { action: Confirmed::Archive(_), .. })
+        ));
+        // Not shipped yet: finish is a PR or integrating.
+        app.overlay = None;
+        app.worktrees.iter_mut().for_each(|x| x.pr = None);
         app.run(&f);
         let shown = screen(&app);
         assert!(shown.contains("Finish p1/feat") && shown.contains("a pull request"), "{shown}");
         assert!(shown.contains("integrate"), "{shown}");
+        // Integrated into main, clean, at that commit: shipped too ("in main"); a new commit
+        // there makes it unshipped again.
+        app.overlay = None;
+        let status = |head: &str| ptyro_core::model::RepoStatus {
+            head: Some(head.into()),
+            ..serde_json::from_value(serde_json::json!({
+                "ahead": 0, "behind": 0, "base_ahead": 0, "base_behind": 0, "staged": 0,
+                "modified": 0, "untracked": 0, "conflicts": 0, "insertions": 0, "deletions": 0,
+                "at_ms": 0
+            }))
+            .unwrap()
+        };
+        for x in app.worktrees.iter_mut().filter(|x| x.id == w.id) {
+            x.integrated = Some("0e2da8484aaaa".into());
+            x.status = Some(status("0e2da8484"));
+        }
+        assert!(app.context_hint().unwrap().contains("clean up (in main)"));
+        assert!(screen(&app).contains("in main"), "{}", screen(&app));
+        for x in app.worktrees.iter_mut().filter(|x| x.id == w.id) {
+            x.status = Some(status("1f00ba7"));
+        }
+        assert!(!app.context_hint().unwrap_or_default().contains("clean up"));
         // A removal that would lose work offers archiving instead.
         app.overlay = None;
         app.on_reply(AppMsg::Reply(
@@ -6578,7 +6672,7 @@ mod tests {
         let text = std::fs::read_to_string(Config::path(&app.paths)).unwrap();
         assert!(text.contains("[profiles.work]") && text.contains("\"desktop\""), "{text}");
         assert!(app.toast.as_ref().unwrap().text.contains("1 profile(s), 0 project(s)"));
-        assert!(app.toast.as_ref().unwrap().text.contains("take the 60-second tour"));
+        assert!(app.toast.as_ref().unwrap().text.contains("take the tour"));
     }
 
     #[test]

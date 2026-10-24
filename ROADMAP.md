@@ -1538,9 +1538,17 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
   `crates/ptyro-tui/src/cli_actions.rs` (a `ptyro …` template per action, its words from the
   selection, a pick or a question, run in a split). `docs/tui-parity.md` has no gaps, and the
   check is strict by default now (SPEC §11.2h).
-- [ ] **UX1.22 Interactive tour** (R-UX-26) — S. `ptyro tour` (and the first run's last step)
+- [x] **UX1.22 Interactive tour** (R-UX-26) — S. `ptyro tour` (and the first run's last step)
   does the steps with a fake agent in a throwaway repo: new task, answer a prompt, review the
   diff, finish. It replaces the pages.
+  *Done (2026-10-23):* `crates/ptyro/src/tour.rs` runs a ptyro of its own (its own home, your
+  `[ui]` and `[keys]`, a demo repository, the fake agent in tour mode) and deletes it after;
+  `crates/ptyro-tui/src/tour.rs` is the coach, five steps that move on when done (task, answer,
+  review, finish into main, clean up). From a TUI, `help.tour` steps aside for the tour and
+  comes back. It needed, and got: integrated worktrees count as shipped (`in main`, `F`/`x`
+  clean up; before, only a merged PR did, and `F` on one reopened the finish picker); one-key
+  choices in the finish picker; a fake agent that commits when finish asks. `tests/ux1.rs` takes
+  the whole tour in a headless terminal in about 6 s, and a stale tour is swept by the next.
 
 ### Sidebar
 

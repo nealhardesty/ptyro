@@ -20,6 +20,7 @@ mod script;
 mod serve;
 mod service;
 mod ship;
+mod tour;
 
 use std::path::PathBuf;
 
@@ -644,8 +645,13 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// A 60-second tour of the TUI's keys
-    Tour,
+    /// The tour: start a task, answer the agent, review, finish and clean up, for real, with a
+    /// pretend agent in a ptyro of its own (deleted afterwards)
+    Tour {
+        /// Internal: the coach on this ptyro (what the tour itself runs)
+        #[arg(long, hide = true)]
+        here: bool,
+    },
     /// Print shell integration (prompt marks and cwd reporting) for your shell's rc file
     ShellInit {
         #[arg(value_enum)]

@@ -223,7 +223,8 @@ async fn dispatch(
         }
         Some(Cmd::Init { yes, dry_run }) => crate::init::run(&ctx, yes, dry_run).await,
         Some(Cmd::Doctor { quick, json }) => crate::doctor::run_cmd(&ctx, quick, json).await,
-        Some(Cmd::Tour) => run_tour(&ctx).await,
+        Some(Cmd::Tour { here: false }) => run_tour(&ctx).await,
+        Some(Cmd::Tour { here: true }) => tour_here(&ctx).await,
         Some(Cmd::Kill { sessions, signal, keep }) => {
             let client = ctx.connect(false).await.map_err(no_daemon)?;
             for info in targets(&client, &sessions).await? {
@@ -525,8 +526,14 @@ async fn upgrade(ctx: &Ctx, binary: Option<std::path::PathBuf>, json: bool) -> R
     }
 }
 
-/// `ptyro tour`: the TUI with the tour on top (a shell to try keys in, if nothing runs yet).
+/// `ptyro tour` (UX1.22): the daily loop with a pretend agent, in a ptyro of its own.
 pub async fn run_tour(ctx: &Ctx) -> Result<i32, Error> {
+    crate::tour::run(ctx).await
+}
+
+/// `ptyro tour --here`: the TUI with the tour's coach, on this ptyro (the tour's own, which
+/// `run_tour` sets up). A shell to start from, if nothing runs yet.
+async fn tour_here(ctx: &Ctx) -> Result<i32, Error> {
     check_attachable()?;
     let client = ctx.connect(true).await?;
     let info = match most_recent(&client).await? {
@@ -856,7 +863,19 @@ pub async fn attach_with(
     let paths = ctx.paths.clone();
     tui.workspace = tui.workspace.or_else(|| info.as_ref().and_then(|i| i.workspace.clone()));
     tui.focus = info.map(|i| i.id);
-    match ptyro_tui::run(opts, &paths, tui).await {
+    let mut end = ptyro_tui::run(opts.clone(), &paths, tui.clone()).await;
+    // Asked for the tour: it runs in a ptyro of its own, then this TUI comes back.
+    while matches!(end, Ok(AttachEnd::Tour)) {
+        run_tour(ctx).await?;
+        end = ptyro_tui::run(
+            opts.clone(),
+            &paths,
+            ptyro_tui::Options { welcome: false, ..tui.clone() },
+        )
+        .await;
+    }
+    match end {
+        Ok(AttachEnd::Tour) => unreachable!("handled above"),
         Ok(AttachEnd::Detached) => {
             eprintln!("[detached]");
             Ok(0)

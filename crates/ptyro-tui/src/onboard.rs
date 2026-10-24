@@ -189,7 +189,7 @@ impl App {
             did,
             false,
             Offer {
-                label: "take the 60-second tour".into(),
+                label: "take the tour".into(),
                 then: Then::Run(Command { action: "help.tour", arg: None }),
             },
         );

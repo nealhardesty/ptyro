@@ -29,6 +29,8 @@
 //!
 //! With `PTYRO_FAKE_TURNS=1` it treats prose like a real agent: a line `Label: <command>` runs
 //! the command, and any other line is a short turn (recipes' prompts and follow-ups).
+//! With `PTYRO_FAKE_TOUR=1` (`ptyro tour`) any prose is a task: it asks before running a command,
+//! then fixes the typo in `greeting.txt` (or, told no, leaves it).
 //! With `PTYRO_FAKE_PASTE=1` it asks for bracketed paste, as Claude and Codex do: a pasted
 //! prompt over several lines is one short turn that says it back (`prompt over N lines: …`).
 //! | `exit` | SessionEnd, exit 0 |
@@ -337,6 +339,76 @@ impl Fake {
         }
     }
 
+    /// The tour's task (`PTYRO_FAKE_TOUR=1`): look around, ask before running a command, then
+    /// fix the typo in `greeting.txt` and say so. Told no, it leaves the file alone.
+    fn tour_turn(&self, out: &mut std::io::Stdout, prompt: &str) {
+        self.turn(out, prompt, |out| {
+            let _ = writeln!(out, "Looking at greeting.txt…");
+            std::thread::sleep(Duration::from_millis(800));
+            let fix = "sed -i.bak 's/Helo/Hello/' greeting.txt && rm greeting.txt.bak";
+            let answer = self.ask_permission(out, fix);
+            let tool = json!({ "tool_name": "Bash", "tool_input": { "command": fix } });
+            if answer == "no" {
+                self.hook("PermissionDenied", tool);
+                let msg = "OK, I left greeting.txt as it was.".to_owned();
+                let _ = writeln!(out, "{msg}");
+                return msg;
+            }
+            self.report(out, "state=working:msg=Zml4aW5n");
+            let text = std::fs::read_to_string("greeting.txt").unwrap_or_default();
+            let _ = std::fs::write("greeting.txt", text.replace("Helo", "Hello"));
+            self.hook("PostToolUse", tool);
+            std::thread::sleep(Duration::from_millis(500));
+            let msg = "Fixed the typo in greeting.txt: \"Helo\" is \"Hello\" now.".to_owned();
+            let _ = writeln!(out, "{msg}");
+            msg
+        });
+    }
+
+    /// A permission prompt for `command`, answered by key or by ptyro's decision: "yes",
+    /// "always" or "no" (printed as `answer: …`).
+    fn ask_permission(&self, out: &mut std::io::Stdout, rest: &str) -> &'static str {
+        let f = self;
+        let tool = json!({ "tool_name": "Bash", "tool_input": { "command": rest } });
+        f.hook("PreToolUse", tool.clone());
+        // Claude's PermissionRequest runs alongside its dialog (and may answer it).
+        let (decided_tx, decided) = std::sync::mpsc::channel();
+        match f.adapter.as_str() {
+                    "gemini" => f.hook("Notification", json!({ "notification_type": "ToolPermission", "message": format!("Allow Bash: {rest}") })),
+                    "opencode" => f.oc(json!({ "type": "permission.asked", "properties": { "sessionID": f.session, "id": "per_1", "title": format!("Bash: {rest}") } })),
+                    "claude" => {
+                        let (cmds, payload) = f.hook_prep("PermissionRequest", tool.clone());
+                        std::thread::spawn(move || {
+                            let _ = decided_tx.send(run_hooks(&cmds, &payload));
+                        });
+                    }
+                    _ => f.hook("PermissionRequest", tool.clone()),
+                }
+        f.report(out, "state=blocked:kind=permission:msg=YXBwcm92ZQ");
+        let _ = write!(
+            out,
+            "\r\nDo you want to proceed?\r\n❯ 1. Yes\r\n  2. Yes, and don't ask again\r\n  3. No (esc)\r\n"
+        );
+        let _ = out.flush();
+        let answer = if f.adapter == "opencode" {
+            f.oc.as_ref().map_or("no", |s| s.wait_answer())
+        } else if f.adapter == "claude" {
+            match key_or_decision(&decided) {
+                Err(true) | Ok(b'1' | b'y') => "yes",
+                Ok(b'2' | b'a') => "always",
+                _ => "no",
+            }
+        } else {
+            match read_key() {
+                b'1' | b'y' => "yes",
+                b'2' | b'a' => "always",
+                _ => "no",
+            }
+        };
+        let _ = writeln!(out, "answer: {answer}");
+        answer
+    }
+
     fn turn_complete(&self, msg: &str, out: &mut std::io::Stdout) {
         match self.adapter.as_str() {
             "codex" => {
@@ -545,42 +617,7 @@ pub fn main(args: &[String]) -> i32 {
             }
             "ask" => {
                 let tool = json!({ "tool_name": "Bash", "tool_input": { "command": rest } });
-                f.hook("PreToolUse", tool.clone());
-                // Claude's PermissionRequest runs alongside its dialog (and may answer it).
-                let (decided_tx, decided) = std::sync::mpsc::channel();
-                match f.adapter.as_str() {
-                    "gemini" => f.hook("Notification", json!({ "notification_type": "ToolPermission", "message": format!("Allow Bash: {rest}") })),
-                    "opencode" => f.oc(json!({ "type": "permission.asked", "properties": { "sessionID": f.session, "id": "per_1", "title": format!("Bash: {rest}") } })),
-                    "claude" => {
-                        let (cmds, payload) = f.hook_prep("PermissionRequest", tool.clone());
-                        std::thread::spawn(move || {
-                            let _ = decided_tx.send(run_hooks(&cmds, &payload));
-                        });
-                    }
-                    _ => f.hook("PermissionRequest", tool.clone()),
-                }
-                f.report(&mut out, "state=blocked:kind=permission:msg=YXBwcm92ZQ");
-                let _ = write!(
-                    out,
-                    "\r\nDo you want to proceed?\r\n❯ 1. Yes\r\n  2. Yes, and don't ask again\r\n  3. No (esc)\r\n"
-                );
-                let _ = out.flush();
-                let answer = if f.adapter == "opencode" {
-                    f.oc.as_ref().map_or("no", |s| s.wait_answer())
-                } else if f.adapter == "claude" {
-                    match key_or_decision(&decided) {
-                        Err(true) | Ok(b'1' | b'y') => "yes",
-                        Ok(b'2' | b'a') => "always",
-                        _ => "no",
-                    }
-                } else {
-                    match read_key() {
-                        b'1' | b'y' => "yes",
-                        b'2' | b'a' => "always",
-                        _ => "no",
-                    }
-                };
-                let _ = writeln!(out, "answer: {answer}");
+                let answer = f.ask_permission(&mut out, rest);
                 if answer == "no" {
                     f.hook("PermissionDenied", tool);
                     f.report(&mut out, "state=idle");
@@ -740,6 +777,34 @@ pub fn main(args: &[String]) -> i32 {
                     std::fs::write(&path, json!({ "scores": scores, "notes": notes }).to_string());
                 let _ = writeln!(out, "judged {} candidate(s)", scores.len());
                 f.turn(&mut out, &line, |_| "judged".into());
+            }
+            // The tour's finish asks its agent to commit: it does, with a message saying what.
+            _ if std::env::var("PTYRO_FAKE_TOUR").is_ok()
+                && line.starts_with("[via ptyro] Please commit") =>
+            {
+                f.turn(&mut out, &line, |out| {
+                    let ok = std::process::Command::new("sh")
+                        .args([
+                            "-c",
+                            "git add -A && git commit -q -m 'Fix the typo in greeting.txt'",
+                        ])
+                        .status()
+                        .is_ok_and(|s| s.success());
+                    let msg = if ok {
+                        "Committed: Fix the typo in greeting.txt"
+                    } else {
+                        "Nothing to commit"
+                    };
+                    let _ = writeln!(out, "{msg}");
+                    msg.into()
+                });
+            }
+            // `PTYRO_FAKE_TOUR=1` (`ptyro tour`): any prose is a task, done like an agent would.
+            _ if std::env::var("PTYRO_FAKE_TOUR").is_ok()
+                && !line.starts_with("[via ptyro: verify]")
+                && !line.starts_with("<ptyro-message") =>
+            {
+                f.tour_turn(&mut out, &line);
             }
             _ if line.starts_with("[via ptyro: verify]")
                 || line.starts_with("<ptyro-message")

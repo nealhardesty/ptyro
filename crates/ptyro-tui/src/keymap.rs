@@ -149,7 +149,10 @@ pub const ACTIONS: &[ActionSpec] = &[
         "Sidebar: mark the selected session for broadcast, or fold/unfold a project or worktree",
     ),
     a("broadcast", "Type one prompt into every marked session (each once it's ready)"),
-    a("help.tour", "The 60-second tour of ptyro's keys"),
+    a(
+        "help.tour",
+        "The tour: start a task, answer it, review, finish and clean up, with a pretend agent",
+    ),
     a(
         "inspector",
         "Inspector: the worktree's diff (comment, commit, PR), commits, checks, ports, events",

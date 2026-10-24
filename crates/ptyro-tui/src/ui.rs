@@ -118,6 +118,9 @@ pub fn draw(app: &App, f: &mut Frame<'_>) {
         if app.config.ui.status_bar && area.height > 2 {
             draw_status(app, f, Rect { y: area.bottom() - 1, height: 1, ..area });
         }
+        if let Some(tour) = &app.tour {
+            draw_coach(app, f, area, tour);
+        }
     }
     if app.first_run.is_some() {
         crate::onboard::draw(app, f, area);
@@ -127,6 +130,55 @@ pub fn draw(app: &App, f: &mut Frame<'_>) {
     } else if app.which_key_shown() {
         draw_which_key(app, f, area);
     }
+}
+
+/// The tour's coach (UX1.22): bottom right, above the status bar, never in the way of keys.
+fn draw_coach(app: &App, f: &mut Frame<'_>, area: Rect, tour: &crate::tour::Tour) {
+    let t = &app.theme;
+    let (title, lines) = tour.coach(app);
+    let width = 58.min(area.width.saturating_sub(2));
+    let inner = width.saturating_sub(2) as usize;
+    let mut rows: Vec<Line<'_>> = Vec::new();
+    for l in &lines {
+        for row in textwrap_simple(l, inner) {
+            rows.push(Line::raw(row));
+        }
+    }
+    let height = (rows.len() as u16 + 2).min(area.height.saturating_sub(2));
+    let bottom = area.bottom().saturating_sub(u16::from(app.config.ui.status_bar));
+    let r = Rect {
+        x: area.right().saturating_sub(width + 1),
+        y: bottom.saturating_sub(height),
+        width,
+        height,
+    };
+    f.render_widget(Clear, r);
+    f.render_widget(
+        Paragraph::new(rows).block(
+            Block::default().borders(Borders::ALL).border_style(fg(app, t.accent)).title(
+                Span::styled(format!(" {title} "), fg(app, t.accent).add_modifier(Modifier::BOLD)),
+            ),
+        ),
+        r,
+    );
+}
+
+/// `text` wrapped at spaces into rows of at most `width` columns.
+fn textwrap_simple(text: &str, width: usize) -> Vec<String> {
+    use unicode_width::UnicodeWidthStr;
+    let mut rows = vec![String::new()];
+    for word in text.split(' ') {
+        let row = rows.last_mut().expect("a row");
+        if !row.is_empty() && row.width() + 1 + word.width() > width {
+            rows.push(word.to_owned());
+        } else {
+            if !row.is_empty() {
+                row.push(' ');
+            }
+            row.push_str(word);
+        }
+    }
+    rows
 }
 
 /// The menu after the prefix (UX1.14): what each next key does, grouped, as bound now.
@@ -430,6 +482,10 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
                     spans.push(Span::styled(format!(" {}", w.state.label()), fg(app, t.error)));
                 }
                 spans.extend(diffstat(app, w));
+                // Integrated into the main branch, and nothing new since (UX1.12).
+                if w.shipped() && w.pr.is_none() {
+                    spans.push(Span::styled(" in main", fg(app, t.done)));
+                }
                 // Its PR and checks (M6.5).
                 if let Some(pr) = &w.pr {
                     let (pass, fail, pending) = pr.tally();
@@ -1662,39 +1718,6 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                 input.y + reply_cursor.1,
             ));
         }
-        Overlay::Tour { page } => {
-            let pages = tour_pages(app);
-            let (title, body) = &pages[(*page).min(pages.len() - 1)];
-            let r = boxed(area, 76, (body.len() as u16 + 6).min(area.height));
-            f.render_widget(Clear, r);
-            let mut lines: Vec<Line<'_>> = vec![Line::raw("")];
-            for l in body {
-                // `key` spans in backticks are drawn in the accent colour.
-                let mut spans = Vec::new();
-                for (i, part) in l.split('`').enumerate() {
-                    spans.push(if i % 2 == 1 {
-                        Span::styled(
-                            part.to_owned(),
-                            fg(app, t.accent).add_modifier(Modifier::BOLD),
-                        )
-                    } else {
-                        Span::raw(part.to_owned())
-                    });
-                }
-                lines.push(Line::from(spans));
-            }
-            lines.push(Line::raw(""));
-            lines.push(Line::styled(
-                format!("{}/{} · → or ⏎ next · ← back · q leave", page + 1, pages.len()),
-                fg(app, t.dim),
-            ));
-            f.render_widget(
-                Paragraph::new(lines)
-                    .wrap(ratatui::widgets::Wrap { trim: false })
-                    .block(block(format!("Tour: {title}"))),
-                r,
-            );
-        }
         Overlay::ReviewQueue { items, selected } => {
             let r =
                 boxed(area, 100, (items.len() as u16 * 2 + 4).min(area.height.saturating_sub(2)));
@@ -1926,57 +1949,6 @@ pub(crate) fn edit_rows(
 /// The key that starts a new line, as this terminal can send it.
 pub(crate) fn newline_hint(app: &App) -> &'static str {
     if app.kitty { "⇧⏎ new line" } else { "C-j new line" }
-}
-
-/// The tour's pages: (title, lines), keys as the user's keymap binds them.
-pub fn tour_pages(app: &App) -> Vec<(String, Vec<String>)> {
-    let k = |action: &str| app.keymap.key_for(action).unwrap_or_else(|| "(unbound)".into());
-    let prefix = ptyro_core::config::key_label(&app.keymap.prefix);
-    vec![
-        ("welcome".into(), vec![
-            "ptyro keeps your agents and shells running in a background daemon,".into(),
-            "each in its own git worktree if you like, and tells you which one needs you.".into(),
-            String::new(),
-            format!("Everything starts with the prefix, `{prefix}`, then a key."),
-            format!("`{}` lists every key; `{}` runs any action by name.", k("help"), k("palette")),
-        ]),
-        ("sessions".into(), vec![
-            format!("`{}`  new task: say what to do, ⏎: the default agent on it, in a new worktree named after it", k("session.new")),
-            format!("`{}`  new worktree with an agent", k("worktree.new")),
-            format!("`{}` / `{}`  next / previous session · `{}` find one", k("session.next"), k("session.prev"), k("session.find")),
-            format!("`{}`  the sidebar: j/k move, ⏎ opens, x stops, Space marks", k("focus.toggle")),
-            format!("`{}`  detach: everything keeps running; `ptyro` comes back", k("app.detach")),
-            format!("`{}`  quit ptyro: stop every session and the daemon (agents hibernate, resumable)", k("app.quit")),
-        ]),
-        ("who needs you".into(), vec![
-            "● working   ⚠ blocked (on what)   ○ idle   ✓ done   ✗ error   ☾ dormant   ◌ a guess".into(),
-            "⚑ wants your attention (it finished, or asks something)".into(),
-            "✔ done and verified   ↩ sent back to fix a failing check   ✘ claims done, check fails".into(),
-            String::new(),
-            format!("`{}`  jump to the next session that needs you", k("attention.next")),
-            format!("`{}`  peek at it and answer without switching (y / a / n, or type a reply)", k("peek")),
-            format!("`{}`  the inbox · `{}`  why does it show this status?", k("inbox"), k("session.explain")),
-        ]),
-        ("panes".into(), vec![
-            format!("`{}` / `{}`  split beside / below with another session", k("pane.split_right"), k("pane.split_down")),
-            format!("`{}`  zoom · `{}`  close the pane (the session keeps running)", k("pane.zoom"), k("pane.close")),
-            format!("`{}`  copy mode: scroll back, / search, v select, y copy", k("copy.enter")),
-            format!("Mark sessions with Space in the sidebar, then `{}` types one prompt into all of them.", k("broadcast")),
-        ]),
-        ("many agents".into(), vec![
-            format!("`{}`  runs: fan-outs and recipes, their steps and gates (1-9 answers a gate)", k("runs")),
-            "  c compares a fan-out's candidates, ranked by tests and evidence; m merges the best".into(),
-            "`ptyro fanout --agents claude,codex,gemini --prompt-file task.md --test` from the shell".into(),
-            "`ptyro recipe ls` · `ptyro new --agent claude --lead` gives an agent workers of its own".into(),
-        ]),
-        ("from scripts".into(), vec![
-            "Everything works from the shell too, for scripts and other agents:".into(),
-            String::new(),
-            "`ptyro new -d --agent claude --new-wt --prompt \"fix the flaky test\"`".into(),
-            "`ptyro wait @working --for idle` · `ptyro read NAME` · `ptyro send NAME TEXT --wait`".into(),
-            "`ptyro doctor` checks agents, logins and integrations · `ptyro tour` shows this again".into(),
-        ]),
-    ]
 }
 
 #[cfg(test)]

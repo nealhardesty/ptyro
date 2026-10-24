@@ -654,6 +654,7 @@ impl Store {
                     locked: false,
                     pr: None,
                     title: r.get(15)?,
+                    integrated: None,
                 });
             }
             let mut st = c.prepare("SELECT project_id, scope, fingerprint, approved_at FROM trust")?;
@@ -932,6 +933,7 @@ mod tests {
             locked: false,
             pr: None,
             title: Some("Fix the login bug".into()),
+            integrated: None,
         };
         s.save_worktree(wt.clone());
         s.save_trust(TrustRow {

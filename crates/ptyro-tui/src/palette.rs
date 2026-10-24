@@ -61,6 +61,9 @@ pub struct Palette {
     pub filtered: Vec<usize>,
     pub selected: usize,
     matcher: Matcher,
+    /// A short choice (finish: `p` a PR, `i` integrate): with nothing typed, an item's one-letter
+    /// key picks it. Off, typing always filters (the palette's keys are only shown).
+    hotkeys: bool,
 }
 
 impl Palette {
@@ -72,9 +75,16 @@ impl Palette {
             items,
             selected: 0,
             matcher: Matcher::new(Config::DEFAULT),
+            hotkeys: false,
         };
         p.refilter();
         p
+    }
+
+    /// One-letter item keys pick their item (see `hotkeys`).
+    pub fn with_hotkeys(mut self) -> Self {
+        self.hotkeys = true;
+        self
     }
 
     /// More items, arrived after it opened (a project's scripts, UX1.18); the query applies.
@@ -137,6 +147,16 @@ impl Palette {
                 self.query.clear();
                 self.refilter();
             }
+            (KeyCode::Char { c }, false)
+                if self.hotkeys
+                    && self.query.is_empty()
+                    && let Some(i) = self
+                        .items
+                        .iter()
+                        .position(|i| i.key.as_deref() == Some(c.encode_utf8(&mut [0; 4]))) =>
+            {
+                return Picked::Pick(self.items[i].target.clone());
+            }
             (KeyCode::Char { c }, false) => {
                 self.query.push(c);
                 self.selected = 0;
@@ -165,6 +185,26 @@ mod tests {
         for c in s.chars() {
             p.key(KeyEvent::char(c));
         }
+    }
+
+    #[test]
+    fn a_short_choice_picks_by_its_key_and_the_palette_only_filters() {
+        let keyed = |label: &str, k: &str| Item { key: Some(k.into()), ..item(label) };
+        let items = || vec![keyed("a pull request", "p"), keyed("integrate", "i")];
+        let mut p = Palette::new("Finish", items()).with_hotkeys();
+        assert!(
+            matches!(p.key(KeyEvent::char('i')), Picked::Pick(Target::Theme(t)) if t == "integrate")
+        );
+        // Once a filter is typed (starting with a letter that isn't a key), letters filter.
+        let mut p = Palette::new("Finish", items()).with_hotkeys();
+        typed(&mut p, "rq");
+        assert_eq!(p.query, "rq");
+        typed(&mut p, "i");
+        assert_eq!(p.query, "rqi");
+        // Without hotkeys (the palette), a letter always filters.
+        let mut p = Palette::new("Palette", items());
+        assert!(matches!(p.key(KeyEvent::char('i')), Picked::Stay));
+        assert_eq!(p.query, "i");
     }
 
     #[test]

@@ -466,7 +466,7 @@ fn other_tools_config_becomes_scripts() {
 }
 
 #[tokio::test]
-async fn tui_broadcast_and_tour() {
+async fn tui_broadcast_and_a_tour_of_its_own() {
     let w = World::new("");
     w.ok(&["new", "-d", "-n", "b1", "--agent", "claude"]);
     w.ok(&["new", "-d", "-n", "b2", "--agent", "claude"]);
@@ -495,22 +495,18 @@ async fn tui_broadcast_and_tour() {
         let screen = w.ok(&["read", s]);
         assert!(screen.contains("worked: broadcasted"), "{s}: {screen}");
     }
+    // The tour (UX1.22) runs a ptyro of its own: leaving it at its first step, this daemon has
+    // none of its project or sessions, and its own are as they were.
     let tour = ptyro_testkit::headless::run(
         w.tui(&["tour"])
-            .snapshot(1.2)
-            .send(1.4, "\\r")
-            .snapshot(1.8)
-            .send(2.0, "q")
-            .snapshot(2.3)
-            .send(2.5, "\\x11d"),
+            .timeout(30.0)
+            .send_when("Tour 1/5: start a task", "\\x11d")
+            .until("the tour is over"),
     )
     .await
     .unwrap();
-    assert!(
-        tour.at(1.2).contains("Tour: welcome") && tour.at(1.2).contains("1/6"),
-        "{}",
-        tour.at(1.2)
-    );
-    assert!(tour.at(1.8).contains("Tour: sessions"), "{}", tour.at(1.8));
-    assert!(!tour.at(2.3).contains("Tour:"), "q leaves the tour");
+    assert!(tour.screen.contains("the tour is over"), "{}", tour.screen);
+    assert!(!w.ok(&["project", "ls"]).contains("demo"), "the tour's project stays its own");
+    let ls = w.ok(&["ls"]);
+    assert!(ls.contains("b1") && ls.contains("b2") && ls.lines().count() == 3, "{ls}");
 }

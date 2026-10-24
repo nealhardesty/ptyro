@@ -80,6 +80,9 @@ fn copy_files(from: &Path, to: &Path, files: &[String]) -> Result<(), Error> {
     Ok(())
 }
 
+/// The kv key of integrated worktrees: id → the commit that went into the main branch.
+const INTEGRATED: &str = "worktrees:integrated";
+
 impl Daemon {
     pub(crate) async fn handle_review(self: &Arc<Self>, req: Request) -> Result<Reply, Error> {
         match req {
@@ -591,69 +594,110 @@ impl Daemon {
         }
         let env = self.tool_env(&wt).await?;
         let (root, path) = (p.root.clone(), wt.path.clone());
-        let notes = blocking(move || -> Result<Vec<String>, Error> {
-            let git = Git::with_env(env);
-            if git.dirty(&path) {
-                return Err(Error::new(
-                    ErrorCode::DirtyWorktree,
-                    "commit (or stash) the worktree's changes first",
-                ));
-            }
-            if !git.branch_exists(&root, &target) {
-                return Err(Error::missing("branch", &target));
-            }
-            let mut notes = Vec::new();
-            let at = git.checked_out_at(&root, &target);
-            if cherry_pick {
-                let dest = at.ok_or_else(|| {
+        let (notes, integrated) =
+            blocking(move || -> Result<(Vec<String>, Option<String>), Error> {
+                let git = Git::with_env(env);
+                if git.dirty(&path) {
+                    return Err(Error::new(
+                        ErrorCode::DirtyWorktree,
+                        "commit (or stash) the worktree's changes first",
+                    ));
+                }
+                if !git.branch_exists(&root, &target) {
+                    return Err(Error::missing("branch", &target));
+                }
+                let mut notes = Vec::new();
+                // The worktree's own commit when its branch is now in the target (not a cherry-pick,
+                // whose copies are other commits).
+                let mut integrated = None;
+                let at = git.checked_out_at(&root, &target);
+                if cherry_pick {
+                    let dest = at.ok_or_else(|| {
                     Error::conflict(format!(
                         "cherry-pick needs {target} checked out somewhere (the main checkout, say)"
                     ))
                 })?;
-                if git.dirty(&dest) {
-                    return Err(Error::new(
-                        ErrorCode::DirtyWorktree,
-                        format!("{} has uncommitted changes", dest.display()),
-                    ));
-                }
-                let from = git
-                    .merge_base(&path, &target, "HEAD")
-                    .ok_or_else(|| Error::invalid("no common history"))?;
-                let n = git.log(&path, &from).map_err(git_err)?.len();
-                if n == 0 {
-                    return Err(Error::conflict(format!("{branch} has nothing beyond {target}")));
-                }
-                git.cherry_pick(&dest, &format!("{from}..{branch}")).map_err(git_err)?;
-                notes.push(format!("cherry-picked {n} commit(s) from {branch} onto {target}"));
-            } else {
-                git.rebase(&path, &target).map_err(git_err)?;
-                notes.push(format!("rebased {branch} onto {target}"));
-                let head = git.rev(&path, "HEAD").ok_or_else(|| Error::internal("no HEAD"))?;
-                match at {
-                    Some(dest) => {
-                        git.merge_ff(&dest, &head).map_err(git_err)?;
-                        notes.push(format!("fast-forwarded {target} in {}", dest.display()));
+                    if git.dirty(&dest) {
+                        return Err(Error::new(
+                            ErrorCode::DirtyWorktree,
+                            format!("{} has uncommitted changes", dest.display()),
+                        ));
                     }
-                    None => {
-                        git.move_branch(&root, &target, &head).map_err(git_err)?;
-                        notes.push(format!("fast-forwarded {target}"));
+                    let from = git
+                        .merge_base(&path, &target, "HEAD")
+                        .ok_or_else(|| Error::invalid("no common history"))?;
+                    let n = git.log(&path, &from).map_err(git_err)?.len();
+                    if n == 0 {
+                        return Err(Error::conflict(format!(
+                            "{branch} has nothing beyond {target}"
+                        )));
+                    }
+                    git.cherry_pick(&dest, &format!("{from}..{branch}")).map_err(git_err)?;
+                    notes.push(format!("cherry-picked {n} commit(s) from {branch} onto {target}"));
+                } else {
+                    git.rebase(&path, &target).map_err(git_err)?;
+                    notes.push(format!("rebased {branch} onto {target}"));
+                    let head = git.rev(&path, "HEAD").ok_or_else(|| Error::internal("no HEAD"))?;
+                    integrated = Some(head.clone());
+                    match at {
+                        Some(dest) => {
+                            git.merge_ff(&dest, &head).map_err(git_err)?;
+                            notes.push(format!("fast-forwarded {target} in {}", dest.display()));
+                        }
+                        None => {
+                            git.move_branch(&root, &target, &head).map_err(git_err)?;
+                            notes.push(format!("fast-forwarded {target}"));
+                        }
                     }
                 }
-            }
-            if push {
-                let remote =
-                    git.main_remote(&root).map(|r| r.name).unwrap_or_else(|| "origin".into());
-                git.run(&root, &["push", "--quiet", &remote, &target]).map_err(git_err)?;
-                notes.push(format!("pushed {target} to {remote}"));
-            }
-            Ok(notes)
-        })
-        .await??;
-        let _ = self.refresh_status(&wt.id).await;
+                if push {
+                    let remote =
+                        git.main_remote(&root).map(|r| r.name).unwrap_or_else(|| "origin".into());
+                    git.run(&root, &["push", "--quiet", &remote, &target]).map_err(git_err)?;
+                    notes.push(format!("pushed {target} to {remote}"));
+                }
+                Ok((notes, integrated))
+            })
+            .await??;
+        if let Some(head) = integrated {
+            self.mark_integrated(&wt.id, head);
+        }
+        if let Some(w) = self.refresh_status(&wt.id).await {
+            self.archive_if_merged(&w);
+        }
         if let Some(r) = self.root_worktree(&p.id) {
             let _ = self.refresh_status(&r.id).await;
         }
         Ok(Reply::Notes { notes })
+    }
+
+    /// Remember that `id`'s work up to `head` is in the main branch: its row then offers
+    /// cleaning up, like a merged PR (`WorktreeInfo::shipped`). Kept in kv across restarts.
+    fn mark_integrated(&self, id: &str, head: String) {
+        let all: serde_json::Map<String, serde_json::Value> = {
+            let mut reg = self.registry.lock().expect("registry");
+            if let Some(w) = reg.worktrees.iter_mut().find(|w| w.id == id) {
+                w.integrated = Some(head);
+            }
+            reg.worktrees
+                .iter()
+                .filter_map(|w| w.integrated.clone().map(|h| (w.id.clone(), h.into())))
+                .collect()
+        };
+        self.save_kv(INTEGRATED, all.into());
+    }
+
+    pub(crate) async fn load_integrated(&self) {
+        let Some(store) = &self.store else { return };
+        let Ok(Some(serde_json::Value::Object(all))) = store.kv_get(INTEGRATED.into()).await else {
+            return;
+        };
+        let mut reg = self.registry.lock().expect("registry");
+        for w in reg.worktrees.iter_mut() {
+            if let Some(h) = all.get(&w.id).and_then(|h| h.as_str()) {
+                w.integrated = Some(h.to_owned());
+            }
+        }
     }
 
     // ── pair mode (M6.7) ───────────────────────────────────────────────────

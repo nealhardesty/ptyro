@@ -326,7 +326,10 @@ pub async fn run(ctx: &Ctx, yes: bool, dry_run: bool) -> Result<i32, Error> {
     eprintln!(
         "done. `ptyro` opens the TUI; `ptyro doctor` checks everything; `ptyro tour` shows the keys."
     );
-    if interactive && !yes && ask.yes_no("take the 60-second tour now?", true) {
+    if interactive
+        && !yes
+        && ask.yes_no("take the tour now? (a task, start to finish, with a pretend agent)", true)
+    {
         drop(c);
         return crate::cli::run_tour(ctx).await;
     }

@@ -328,6 +328,7 @@ async fn serve(
     }
     daemon.load_devices().await;
     daemon.load_declined().await;
+    daemon.load_integrated().await;
     daemon.start_serve_supervisor();
     daemon.restore_dormant().await;
     daemon.start_auto_register();

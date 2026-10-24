@@ -170,7 +170,7 @@ See [`remote.md`](remote.md).
 |---|---|
 | `ptyro init [-y] [--dry-run]` | detect agents, accounts and repositories, then write your config |
 | `ptyro doctor [--quick] [--json]` | diagnose agents, logins, integrations, terminal, tmux, daemon, git |
-| `ptyro tour` | the 60-second tour of the TUI's keys |
+| `ptyro tour` | the daily loop for real (task, answer, review, finish, clean up) with a pretend agent in a ptyro of its own, deleted afterwards |
 | `ptyro config path\|check\|show\|edit` | your config; `edit` opens `$EDITOR` and validates |
 | `ptyro daemon start [--foreground]` / `status [--json]` / `logs [-n N] [-f]` | the background daemon (it starts by itself); `status` includes its health |
 | `ptyro daemon stop\|restart [--hibernate] [--force]` | stop it; `--hibernate` brings resumable agents back dormant |

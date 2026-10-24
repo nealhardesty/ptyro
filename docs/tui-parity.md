@@ -225,7 +225,7 @@ row here: its TUI action, or `waived:` and why.
 |---|---|
 | `init` | `first.run`: the first run as a screen (it opens on its own the first time); terminal checks and shell extras are `doctor`'s (UX1.20) |
 | `doctor` | `health` (`M`): the badge's findings, each with its fix; `doctor` runs the full one in a split |
-| `tour` | `help.tour` |
+| `tour` | `help.tour` (the TUI steps aside for the tour, then comes back) |
 | `config edit` | `config.edit` (validated when you save; changes apply live) |
 | `config check` | `config.edit`: saving checks it, and a bad config shows as an error |
 | `config show` | `config.show` (in a split) |

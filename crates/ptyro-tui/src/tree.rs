@@ -239,6 +239,7 @@ mod tests {
             locked: false,
             pr: None,
             title: None,
+            integrated: None,
         }
     }
 

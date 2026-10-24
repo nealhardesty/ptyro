@@ -977,3 +977,39 @@ async fn quitting_from_the_tui_stops_the_daemon() {
     assert!(r.screen.contains("[ptyro stopped"), "{}", r.screen);
     assert!(d.client().await.is_err(), "the daemon is gone");
 }
+
+/// UX1.22: `ptyro tour` is the daily loop for real: a task, its permission prompt answered from
+/// peek, its diff reviewed, finished into main, cleaned up. Each key goes in once the coach
+/// asks for it. The tour runs in a ptyro of its own and deletes it afterwards.
+#[tokio::test]
+async fn the_tour_walks_the_loop_for_real_and_cleans_up() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join(".gitconfig"), "[init]\n\tdefaultBranch = main\n").unwrap();
+    let script = ptyro_testkit::headless::Script::new(vec![BIN.to_owned(), "tour".into()])
+        .size(120, 32)
+        .timeout(90.0)
+        .env("HOME", &home.path().to_string_lossy())
+        .env("GIT_CONFIG_NOSYSTEM", "1");
+    let r = ptyro_testkit::headless::run(
+        script
+            .send_when("Tour 1/5: start a task", "\\x11n")
+            .send_when("What should it do?", "fix the typo in greeting.txt")
+            .send_when("fix-typo-greeting", "\\r")
+            .send_when("to peek, then y", "\\x11p")
+            .send_when("y allow", "y")
+            .send_when("Tour 3/5", "")
+            .send_when("It's done", "\\x11D")
+            .send_when("Tour 4/5", "q")
+            .send_when("Tour 4/5", "\\x11\\t")
+            .send_when("Tour 4/5", "F")
+            .send_when("Finish ", "i")
+            .send_when("Tour 5/5", "F")
+            .send_when("snapshot", "\\r")
+            .send_when("that's the loop", "\\x11d")
+            .until("the tour is over"),
+    )
+    .await
+    .expect("headless run");
+    // Its last words come after its daemon stopped and its directory was deleted.
+    assert!(r.screen.contains("the tour is over"), "{}", r.screen);
+}

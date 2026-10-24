@@ -97,7 +97,9 @@ worktrees. The status bar says so, and `Ctrl-Q u` undoes it (it then stays out u
 it). `Ctrl-Q P` adds another repository; `[discover] auto_register = false` turns this off.
 
 Every key starts with the **prefix**, `Ctrl-Q` (or `Ctrl-Space`). Pause after it and a menu of
-the next keys appears; `Ctrl-Q ?` lists them all, and `ptyro tour` walks you through them. The
+the next keys appears; `Ctrl-Q ?` lists them all, and `ptyro tour` lets you try the whole loop
+(a task, its permission prompt, the review, finishing and cleaning up) with a pretend agent in a
+throwaway repository, deleted afterwards. The
 status bar says what you'd do next with what's selected (`C-q p answer it`).
 
 **2. Detach and come back.** Press `Ctrl-Q d`. Everything keeps running in the daemon. Run

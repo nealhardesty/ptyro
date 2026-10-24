@@ -18,8 +18,9 @@ replaces both defaults. `C-]` needs AltGr on some non-US layouts.
 Don't know the next key? Pause after the prefix: a menu of the keys that follow appears
 (`[ui] which_key_delay`, 400 ms; `0` turns it off). `.` (after the prefix, or in the sidebar, or a
 right-click on a row) lists everything you can do with that session, worktree or project.
-`Ctrl-Q ?` lists every binding as it is configured right now, and `ptyro tour` is a
-60-second walkthrough. `Ctrl-Q :` (or `Ctrl-Q C-p`) opens the palette, which runs any
+`Ctrl-Q ?` lists every binding as it is configured right now, and `ptyro tour` (or
+`help.tour` in the palette) has you do the whole loop for real, with a pretend agent in a ptyro
+of its own. `Ctrl-Q :` (or `Ctrl-Q C-p`) opens the palette, which runs any
 action by name.
 
 ## After the prefix
@@ -213,7 +214,11 @@ key include: `project.add`
 ## Other overlays
 
 - **Review queue** (`Ctrl-Q Q`): `⏎` opens the inspector, `d` marks it reviewed.
-- **Tour** (`ptyro tour`, `help.tour`): `→` / `⏎` next, `←` / `h` / `Backspace` back, `q` / `Esc` leave.
+- **Tour** (`ptyro tour`, `help.tour`): a coach in the corner says what to do next, with your keys;
+  it never takes keys itself. Leave with `Ctrl-Q d`; everything the tour made is deleted.
+  `help.tour` again starts it over.
+- **Finish** (`F` on a worktree): `p` a pull request, `i` integrate. On a worktree whose work is
+  in main already (`in main` or `merged` on its row), `F` and `x` clean it up (archive).
 - **Trust** (a project's scripts): `y` trusts, `n` goes on without them, `j` / `k` scroll.
 
 ## Rebinding

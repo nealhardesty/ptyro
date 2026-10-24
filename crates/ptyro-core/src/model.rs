@@ -195,12 +195,34 @@ pub struct WorktreeInfo {
     /// issue's title, or `--title`. The `name` is its address.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// The commit ptyro integrated into the main branch (`wt integrate`, finish): its work is
+    /// in main for as long as the worktree stays there, clean.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrated: Option<String>,
 }
 
 impl WorktreeInfo {
     /// `myrepo/brisk-rook`, `myrepo/@root`.
     pub fn qualified(&self) -> String {
         format!("{}/{}", self.project_slug, self.name)
+    }
+
+    /// Its work has shipped, so cleaning it up loses nothing: its PR merged, or ptyro
+    /// integrated it into the main branch and nothing changed since.
+    pub fn shipped(&self) -> bool {
+        if self.is_root {
+            return false;
+        }
+        if self.pr.as_ref().is_some_and(|p| p.state == "MERGED") {
+            return true;
+        }
+        match (&self.integrated, &self.status) {
+            (Some(at), Some(s)) => {
+                s.dirty() == 0
+                    && s.head.as_deref().is_some_and(|h| !h.is_empty() && at.starts_with(h))
+            }
+            _ => false,
+        }
     }
 }
 

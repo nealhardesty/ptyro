@@ -20,6 +20,7 @@ mod quick;
 mod runs;
 mod sets;
 pub mod theme;
+pub mod tour;
 pub mod tree;
 mod ui;
 
@@ -56,6 +57,9 @@ pub enum AttachEnd {
     Lost(String),
     /// The user quit ptyro (`app.quit`): the daemon and its sessions stopped.
     Stopped,
+    /// The user asked for the tour (`help.tour`): it runs in a ptyro of its own, then this TUI
+    /// comes back.
+    Tour,
 }
 
 #[derive(Debug, Clone, Default)]

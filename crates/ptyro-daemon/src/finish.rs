@@ -288,11 +288,11 @@ impl Daemon {
         Ok(s.dirty() > 0)
     }
 
-    /// `[worktrees] archive_on_merge`: its PR merged and nothing runs in it, so archive it. The
-    /// caller decides that it just merged (it saw the PR open before).
+    /// `[worktrees] archive_on_merge`: its work shipped (its PR merged, or it was integrated
+    /// into the main branch) and nothing runs in it, so archive it. The caller decides that it
+    /// just shipped.
     pub(crate) fn archive_if_merged(self: &Arc<Self>, wt: &WorktreeInfo) {
-        let merged = wt.pr.as_ref().is_some_and(|p| p.state == "MERGED");
-        if !merged || wt.is_root || !self.config().worktrees.archive_on_merge {
+        if !wt.shipped() || !self.config().worktrees.archive_on_merge {
             return;
         }
         if self.sessions_in(&wt.id).iter().any(|s| s.busy()) {
@@ -301,7 +301,7 @@ impl Daemon {
         let (me, id, label) = (Arc::clone(self), wt.id.clone(), wt.qualified());
         tokio::spawn(async move {
             match me.archive_worktree(&id, false).await {
-                Ok(_) => tracing::info!("archived {label}: its PR merged"),
+                Ok(_) => tracing::info!("archived {label}: its work shipped"),
                 Err(e) => tracing::warn!("archive on merge, {label}: {}", e.message),
             }
         });

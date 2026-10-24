@@ -359,6 +359,7 @@ impl Daemon {
                 .clone()
                 .or_else(|| spec.prompt.clone())
                 .map(|t| ptyro_core::session::brief(&t, 120)),
+            integrated: None,
         };
         self.put_worktree(wt.clone());
         let progress = |step: &str| {
@@ -891,6 +892,7 @@ impl Daemon {
                     locked: false,
                     pr: None,
                     title: None,
+                    integrated: None,
                 });
             }
         }

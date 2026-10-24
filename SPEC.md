@@ -2463,15 +2463,8 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
   project or worktree row it still folds. `b` (in the sidebar, or after the prefix) opens one
   prompt for every marked session. Each gets it once it's ready (`wait_ready_ms`, never typed
   into a dialog), and the marks clear.
-- **Tour:** `ptyro tour` (palette `help.tour`, and offered at the end of `ptyro init`) is five
-  pages of keys, generated from the user's own key map:
-  1. welcome;
-  2. sessions;
-  3. who needs you;
-  4. panes;
-  5. from scripts.
-
-  `→`/`⏎` next, `←` back, `q` leaves. With no sessions it starts a shell to try them in.
+- **Tour:** `ptyro tour` (palette `help.tour`, and offered at the end of `ptyro init`). *(Was
+  five pages of keys; UX1.22 replaced them with the hands-on tour in §11.2h.)*
 - `ptyro attach --workspace W` opens a workspace's own view.
 
 ### 11.2f What M6 added **[built M6]**
@@ -2521,7 +2514,6 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
   claimed only (the check still fails).
 - **The morning digest:** on attach, a toast sums up run updates and waiting gates since you
   last read the inbox.
-- The tour has a "many agents" page.
 
 ### 11.2h What UX1 added **[built UX1]**
 
@@ -2562,6 +2554,37 @@ learning anything up front.
   opens every row. The row in focus (and any that wants you) wraps its task and reply over two
   lines. Drawing, clicks and scrolling share one line layout, so a row is one target however
   many lines it takes.
+- **The tour, done for real** (UX1.22; `ptyro tour`, palette `help.tour`, the first run's last
+  step and `ptyro init`'s). It runs a ptyro of its own (`crates/ptyro/src/tour.rs`):
+  - its `PTYRO_HOME` under the system temp dir (`ptyro-tour-<pid>-<ms>`), with none of the outer
+    session's `PTYRO_SOCKET`/`PTYRO_SESSION_ID`;
+  - a config with your `[ui]` and `[keys]` (so its keys are yours) and one agent, `claude`,
+    which is the built-in fake in tour mode (`PTYRO_FAKE_TOUR`, `PTYRO_FAKE_PASTE`);
+  - a demo repository whose `greeting.txt` has a typo.
+
+  The TUI runs as a child (`ptyro tour --here`) in the demo repository. When it ends the
+  tour's daemon is stopped and its directory deleted; a tour that couldn't clean up (killed, its
+  terminal closed) is swept by the next one. From a TUI, `help.tour` exits into the tour
+  (`AttachEnd::Tour`) and the TUI comes back after it.
+
+  The coach (`crates/ptyro-tui/src/tour.rs`) sits bottom right and never takes keys. Each step
+  names the keys as bound (or as they work where the focus is) and moves on when it's done:
+  1. start a task (`n`): an agent with a task, in a worktree of its own;
+  2. answer it (`p`, `y`): it blocked on a permission and got going again (or its turn ended);
+  3. review (`D`): the inspector is open on its worktree;
+  4. finish (sidebar `F`, integrate): its agent commits, ptyro integrates into main;
+  5. clean up (`F` or `x`): the worktree is archived.
+
+  The pretend agent asks before running `sed` on `greeting.txt`, fixes the typo once allowed
+  (leaves it, told no), and commits when finish asks. `help.tour` inside the tour starts it over.
+- **Shipped worktrees** (UX1.12, UX1.22): `WorktreeInfo::shipped()` is true when the PR merged,
+  or when ptyro integrated it into the main branch (`WorktreeInfo.integrated`, the commit, kept
+  in kv across restarts) and the worktree is still clean at that commit. A shipped worktree's
+  row says `in main` (or `merged`), its hint is "clean up", `F` and `x` archive it, and
+  `archive_on_merge` archives it on its own. Before, only a merged PR counted, and `F` on a
+  merged worktree opened the finish picker again despite the hint.
+- **Short choices pick by key** (`Palette::with_hotkeys`): in the finish picker, `p` (a PR) and
+  `i` (integrate) pick their item while nothing is typed. In the palette, keys are only shown.
 - **Several lines in ptyro's own boxes** (UX1.26): in the task box, peek's reply and the
   prompts for free text (a broadcast, a review comment, a commit message), `Shift+Enter`,
   `Alt+Enter` and `Ctrl+J` start a new line (`app::is_newline_key`; without the kitty keyboard
@@ -3114,7 +3137,7 @@ and then removes the session unless `--keep`. Still to come from this tree: `--v
 5. Choose prefix keys, worktree location, notifications.
 6. Write `~/.config/ptyro/config.toml` with comments; offer to install shell completions and the
    systemd/launchd service.
-7. Offer a 60-second guided tour in the TUI.
+7. Offer the tour (`ptyro tour`, §11.2h).
 
 **[built M5]**
 1. **Terminal:** the doctor's terminal and tmux checks.
