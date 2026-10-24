@@ -189,3 +189,26 @@ main.replay { display: grid; gap: 8px; padding: 8px; }
 .row small { color: var(--muted); font-weight: 400; }
 .revive { display: flex; gap: 10px; align-items: center; margin: 8px 12px 0; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
 .revive span { flex: 1; color: var(--muted); }
+
+/* review */
+.comments-bar { display: flex; gap: 8px; align-items: center; padding: 8px 10px; background: var(--panel); border: 1px solid var(--warn); border-radius: 10px; }
+.comments-bar b { flex: 1; }
+.diff { display: grid; gap: 8px; }
+.dfile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.dfile summary { padding: 9px 10px; cursor: pointer; display: flex; gap: 6px; align-items: center; }
+.dname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; font-size: 13px; direction: rtl; text-align: left; }
+.hunk-head { padding: 3px 10px; color: var(--muted); background: color-mix(in srgb, var(--accent) 10%, transparent); font: 12px ui-monospace, Menlo, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dlines { overflow-x: auto; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.dl { display: flex; white-space: pre; cursor: pointer; min-width: max-content; }
+.dl:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.dl .ln { width: 38px; flex: none; text-align: right; padding-right: 6px; color: var(--muted); user-select: none; }
+.dl .sign { width: 14px; flex: none; text-align: center; }
+.dl.add { background: color-mix(in srgb, var(--ok) 16%, transparent); } .dl.del { background: color-mix(in srgb, var(--bad) 16%, transparent); }
+b.add, .add { color: var(--ok); } b.del, .del { color: var(--bad); }
+.dl.add .tx, .dl.del .tx { color: var(--text); }
+.dcomment { display: flex; gap: 8px; align-items: center; margin: 2px 8px 4px 54px; padding: 6px 10px; border-left: 3px solid var(--warn); background: var(--bg); border-radius: 0 8px 8px 0; font: 13px system-ui, sans-serif; white-space: normal; }
+.dcomment span { flex: 1; }
+.dcomment .icon { background: none; border: none; padding: 0 4px; color: var(--muted); }
+.pr-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-weight: 600; }
+.bucket { display: inline-block; width: 16px; text-align: center; }
+.bucket.pass { color: var(--ok); } .bucket.fail, .bucket.cancel { color: var(--bad); } .bucket.pending { color: var(--warn); }

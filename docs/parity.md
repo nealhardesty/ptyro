@@ -82,10 +82,10 @@ and why.
 | `wt ls` | shown: the sidebar lists every worktree under its project | `projects`: every worktree under its project, with its changes, PR and sessions |
 | `wt rm` | `worktree.remove` (`x` on a worktree row) | `worktree.remove`: a worktree's ⋯ menu (offers to archive when it has unsaved work) |
 | `wt status` | shown: the sidebar's diffstat and dirty marker; `inspector` (`D`) for the details | `worktree.status`: a worktree's page, and its row on the Projects tab |
-| `wt diff` | `inspector` (`D`), Diff tab; `a` picks what to diff against | gap: WEB1.4 (review and ship) |
-| `wt log` | `inspector` (`D`), Commits tab | gap: WEB1.4 (review and ship) |
-| `wt commit` | `inspector` (`D`): `C` commits, `A` asks the agent | gap: WEB1.4 (review and ship) |
-| `wt integrate` | `inspector` (`D`): `I` | gap: WEB1.4 (review and ship) |
+| `wt diff` | `inspector` (`D`), Diff tab; `a` picks what to diff against | `review.diff`: a worktree's Changes tab; `review.against` picks what to diff against |
+| `wt log` | `inspector` (`D`), Commits tab | `worktree.log`: a worktree's Commits tab |
+| `wt commit` | `inspector` (`D`): `C` commits, `A` asks the agent | `worktree.commit`: Commit… on the Changes tab (pick the files, write the message); `worktree.ask_commit` asks the agent |
+| `wt integrate` | `inspector` (`D`): `I` | `worktree.integrate`: Merge into main… on the Commits tab |
 | `wt pair` | `worktree.pair` | `worktree.pair`: a worktree's ⋯ menu |
 | `wt unpair` | `worktree.unpair` | `worktree.unpair`: a worktree's ⋯ menu |
 | `wt run` | `script.run` (`r`), `script.pick` (`R`) | `worktree.run`: a worktree's ⋯ menu: pick a script; it opens its session |
@@ -126,21 +126,21 @@ and why.
 
 | Command | In the TUI | On the web |
 |---|---|---|
-| `review add` | `inspector` (`D`): `c` on a line | gap: WEB1.4 (review and ship) |
-| `review ls` | `inspector` (`D`): comments show on their lines | gap: WEB1.4 (review and ship) |
-| `review rm` | `inspector` (`D`): `x` on a comment | gap: WEB1.4 (review and ship) |
-| `review send` | `inspector` (`D`): `S` | gap: WEB1.4 (review and ship) |
-| `review queue` | `review.queue` (`Q`) | gap: WEB1.4 (review and ship) |
-| `review done` | `review.queue` (`Q`): `d` | gap: WEB1.4 (review and ship) |
-| `pr create` | `inspector` (`D`): `P` | gap: WEB1.4 (review and ship) |
-| `pr status` | `inspector` (`D`), Checks tab; the worktree row shows `#N` and its checks | gap: WEB1.4 (review and ship) |
-| `pr checks` | `inspector` (`D`), Checks tab | gap: WEB1.4 (review and ship) |
-| `pr fix` | `inspector` (`D`), Checks tab: `f` | gap: WEB1.4 (review and ship) |
-| `pr automerge` | `inspector` (`D`), Checks tab: `m` | gap: WEB1.4 (review and ship) |
-| `pr watch` | `inspector` (`D`), Checks tab: `w` | gap: WEB1.4 (review and ship) |
-| `watch-pr` | `inspector` (`D`), Checks tab: `w` | gap: WEB1.4 (review and ship) |
-| `pr reply` | `pr.reply` | gap: WEB1.4 (review and ship) |
-| `pr open` | `pr.open`: its worktree and session, or a new worktree on it | gap: WEB1.4 (review and ship) |
+| `review add` | `inspector` (`D`): `c` on a line | `review.add`: tap a line on the Changes tab |
+| `review ls` | `inspector` (`D`): comments show on their lines | `review.list`: comments show under their lines, counted in a bar |
+| `review rm` | `inspector` (`D`): `x` on a comment | `review.rm`: ✕ on a comment, or Clear |
+| `review send` | `inspector` (`D`): `S` | `review.send`: Send to agent, on the comments bar |
+| `review queue` | `review.queue` (`Q`) | `review.queue`: More → Review queue |
+| `review done` | `review.queue` (`Q`): `d` | `review.done`: a queue item's menu → Mark reviewed |
+| `pr create` | `inspector` (`D`): `P` | `pr.create`: the Checks tab, with no PR yet |
+| `pr status` | `inspector` (`D`), Checks tab; the worktree row shows `#N` and its checks | `pr.checks`: a worktree's Checks tab; its row shows `#N` and its checks |
+| `pr checks` | `inspector` (`D`), Checks tab | `pr.checks`: a worktree's Checks tab |
+| `pr fix` | `inspector` (`D`), Checks tab: `f` | `pr.fix`: the Checks tab: Fix N failing |
+| `pr automerge` | `inspector` (`D`), Checks tab: `m` | `pr.automerge`: the Checks tab |
+| `pr watch` | `inspector` (`D`), Checks tab: `w` | `pr.watch`: the Checks tab |
+| `watch-pr` | `inspector` (`D`), Checks tab: `w` | `pr.watch`: the Checks tab |
+| `pr reply` | `pr.reply` | `pr.reply`: the Checks tab: Reply… |
+| `pr open` | `pr.open`: its worktree and session, or a new worktree on it | `pr.open`: ⎘ on the Review queue: its worktree and session, or a new worktree on it |
 
 ## Orchestration
 
