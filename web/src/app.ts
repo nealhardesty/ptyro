@@ -7,7 +7,7 @@ import { Screen } from "./screen.js";
 import type { Frame, InboxEntry, Session } from "./screen.js";
 import { conn, token } from "./conn.js";
 import { css, F } from "./color.js";
-import { actions, ago, h, patch, tipOf, ui, views } from "./kit.js";
+import { actions, ago, h, patch, sheet, tipOf, ui, views } from "./kit.js";
 import type { Child } from "./kit.js";
 import { data, loadAll, onEvent } from "./data.js";
 import "./projects.js";
@@ -267,10 +267,25 @@ function sessionCard(s: Session): HTMLElement {
 /// Marking sessions to type into several at once (`broadcast`).
 let selecting = false;
 
+/// The search box above the list (`session.find`): one element that stays, so typing keeps its
+/// focus while the cards under it are replaced.
+let query = "";
+const searchBox = h("input", { class: "search", type: "search", placeholder: "Find a session", "aria-label": "Find a session", autocapitalize: "off", autocomplete: "off", title: tipOf("session.find") });
+const searchBar = h("div", { class: "searchbar" }, searchBox);
+let listCards: () => Node[] = () => [];
+searchBox.addEventListener("input", () => {
+  query = searchBox.value.trim().toLowerCase();
+  const list = document.querySelector<HTMLElement>("main.list .cards");
+  if (list) patch(list, listCards());
+});
+const matches = (s: Session): boolean => !query || [s.name, s.title, s.agent, s.project, s.worktree, s.task, s.activity, statusOf(s)].some((x) => x?.toLowerCase().includes(query));
+
 function listView(): HTMLElement {
   const order = ["blocked", "errored", "working", "starting", "done", "idle", "unknown", "shell", "dormant", "exited"];
-  const all = [...app.sessions.values()].filter((s) => !s.quick).sort((a, b) => order.indexOf(statusOf(a)) - order.indexOf(statusOf(b)) || a.name.localeCompare(b.name));
-  const body = all.length ? all.map(sessionCard) : [h("div", { class: "empty" },
+  const everything = [...app.sessions.values()].filter((s) => !s.quick).sort((a, b) => order.indexOf(statusOf(a)) - order.indexOf(statusOf(b)) || a.name.localeCompare(b.name));
+  const all = everything;
+  listCards = () => { const f = everything.filter(matches); return f.length ? f.map(sessionCard) : [h("p", { class: "empty" }, `Nothing matches “${query}”.`)]; };
+  const body = all.length ? listCards() : [h("div", { class: "empty" },
     h("p", {}, "Nothing is running."),
     h("button", { class: "primary", title: tipOf("session.new"), onclick: () => newTask() }, "Start a task"),
     data.projects.size ? null : h("p", {}, h("a", { href: "#/setup", title: tipOf("first.run") }, "Set up ptyro first: your agents, accounts and repositories")))];
@@ -284,7 +299,7 @@ function listView(): HTMLElement {
   const head = header("ptyro", false,
     all.length > 1 ? h("button", { class: "icon", title: tipOf("session.broadcast"), onclick: () => { selecting = true; render(); } }, "☑") : null,
     h("button", { class: "icon plus", title: tipOf("session.new"), "aria-label": "New task", onclick: () => newTask() }, "＋"));
-  return h("div", {}, head, tools, h("main", { class: "list", title: tip("sessions") }, ...body,
+  return h("div", {}, head, tools, all.length > 6 || query ? searchBar : null, h("main", { class: "list", title: tip("sessions") }, h("div", { class: "cards" }, ...body),
     h("a", { class: "foot-link", href: "#/history", title: tipOf("session.history") }, "Earlier sessions")));
 }
 
@@ -473,7 +488,12 @@ function render(): void {
   const r = route();
   if (r.view !== "session" || r.id !== app.viewing) subscribe(r.view === "session" ? r.id! : null);
   const view = withTabs(r.view, r.view === "session" ? sessionView(r.id!) : r.view === "inbox" ? inboxView() : views.has(r.view) ? views.get(r.view)!(r.id ?? "") : listView());
+  if (conn.state !== "open") view.prepend(h("div", { class: "offline", role: "status" }, conn.state === "connecting" ? "Connecting…" : "Offline: reconnecting…"));
   if (root.firstChild !== view || root.childNodes.length !== 1) root.replaceChildren(view);
+  // The number of agents waiting on you, in the tab's title and on an installed app's icon.
+  const waiting = [...app.sessions.values()].filter((x) => x.status?.status === "blocked" && x.state.t === "running").length;
+  document.title = waiting ? `(${waiting}) ptyro` : "ptyro";
+  (navigator as Navigator & { setAppBadge?: (n: number) => Promise<void>; clearAppBadge?: () => Promise<void> })[waiting ? "setAppBadge" : "clearAppBadge"]?.(waiting)?.catch(() => {});
   const t = app.toast ? h("div", { class: "toast" }, app.toast) : null;
   for (const old of view.querySelectorAll(":scope > .toast")) old.remove();
   if (t) view.append(t);
@@ -606,6 +626,20 @@ ui.toast = toast;
 ui.header = header;
 ui.push = () => void enablePush();
 ui.forget = () => { void forget(); };
+
+// Keys, for a desktop: n new task, / find, g then s p r e m go to a tab, ? this list.
+let goKey = 0;
+document.addEventListener("keydown", (e) => {
+  const t = e.target as HTMLElement;
+  if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable || document.querySelector(".scrim") || !token()) return;
+  const tabs: Record<string, string> = { s: "#/", p: "#/p", r: "#/runs", e: "#/sets", m: "#/more", i: "#/inbox" };
+  if (goKey && Date.now() - goKey < 1500 && tabs[e.key]) { goKey = 0; location.hash = tabs[e.key]; e.preventDefault(); return; }
+  goKey = 0;
+  if (e.key === "g") goKey = Date.now();
+  else if (e.key === "n") { e.preventDefault(); newTask(); }
+  else if (e.key === "/") { e.preventDefault(); if (route().view !== "list") location.hash = "#/"; setTimeout(() => (searchBox.isConnected ? searchBox : document.querySelector<HTMLInputElement>("input.search"))?.focus(), 50); }
+  else if (e.key === "?") sheet("Keys", [h("dl", { class: "facts" }, ...([["n", "New task"], ["/", "Find a session"], ["g s", "Sessions"], ["g p", "Projects"], ["g r", "Runs"], ["g e", "Change sets"], ["g i", "Inbox"], ["g m", "More"], ["Esc", "Close a dialog"]] as [string, string][]).flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
+});
 
 window.addEventListener("hashchange", () => { takePairCode(); render(); });
 window.addEventListener("resize", paint);

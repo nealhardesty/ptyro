@@ -28,7 +28,7 @@ its row: its TUI action and its web one, or `waived:` and why.
 |---|---|---|
 | `new` | `session.new` (`n`): say what to do, ⏎ (or `C-o` to pick the agent, a shell or a command, and where); `worktree.new` (`N`) for a new worktree | `session.new` (＋ in the session list): the task, the agent, and where: a new worktree (from the main branch, a PR, an issue, a branch or your changes), an existing one, or a shell or command |
 | `attach` | `session.find` (`/`), the sidebar (`Tab`, `⏎`), `1`–`9`, `j`/`k` | `session.open`: tap it in the list; its live screen, or its chat |
-| `list` | `focus.toggle`: the sidebar lists every session with its status; `session.find` (`/`) searches them | `sessions`: every session with its status, who needs you first |
+| `list` | `focus.toggle`: the sidebar lists every session with its status; `session.find` (`/`) searches them | `sessions`: every session with its status, who needs you first; `session.find` (`/`) filters them |
 | `stop` | `session.stop` (`x`) | `session.stop`: the session's ⋯ menu |
 | `kill` | `session.kill` (`X`) | `session.kill`: the session's ⋯ menu |
 | `restart` | `session.restart` (`C-r`, or `⏎` on an exited pane) | `session.restart`: the session's ⋯ menu |

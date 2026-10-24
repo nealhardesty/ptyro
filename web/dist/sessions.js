@@ -31,6 +31,7 @@ const ACTIONS = {
     "session.replay": "Play the session's recording back",
     "session.export": "Save the session's recording as text or asciicast",
     "session.history": "Sessions from earlier, with their recordings",
+    "session.find": "Find a session by name, title, project, agent or status",
 };
 const tip = actions(ACTIONS);
 const live = (s) => s.state.t === "running";

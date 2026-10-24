@@ -142,7 +142,7 @@ function runsView(): HTMLElement {
     h("button", { class: "icon", title: tip("recipe.list"), "aria-label": "Recipes", onclick: () => go("#/recipes") }, "📜"),
     h("button", { class: "icon plus", title: tip("fanout"), "aria-label": "Start a run", onclick: newRunMenu }, "＋")),
     h("main", { class: "list", title: tip("runs") },
-      ...open.map(gateCard),
+      open.length ? h("div", { class: "gates", title: tip("gate.list") }, ...open.map(gateCard)) : null,
       pending(runs, "") ?? (mine!.length ? h("div", { class: "rows" }, ...mine!.map(runCard)) : h("div", { class: "empty" }, h("p", {}, "No runs yet."), h("button", { class: "primary", onclick: newRunMenu }, "Start one")))));
 }
 
@@ -471,7 +471,7 @@ function setView(rest: string): HTMLElement {
         const word = i.report.members[m.name] ?? "";
         const live = i.live[m.name] ?? {};
         const bits = [live.ahead ? `+${live.ahead} commit(s)` : "", live.dirty ? "uncommitted" : "", m.pr ? `PR #${m.pr}` : "", m.overlay ? `overlay ${m.overlay}` : "", m.landed ?? ""].filter(Boolean).join(", ");
-        return row(h("span", {}, markOf(word), " ", m.name, " ", badge(word || "idle")), `${m.project} · ${m.branch}${bits ? ` · ${bits}` : ""}`, m.depends_on?.length ? `after ${m.depends_on.join(", ")}` : "", { onclick: () => setMemberMenu(i, m) });
+        return row(h("span", {}, markOf(word), " ", m.name, " ", badge(word || "idle")), `${data.projects.get(m.project)?.slug ?? m.project} · ${m.branch}${bits ? ` · ${bits}` : ""}`, m.depends_on?.length ? `after ${m.depends_on.join(", ")}` : "", { onclick: () => setMemberMenu(i, m) });
       }))));
   })();
   return h("div", {}, ui.header(name, "#/sets"), h("main", { class: "stack" }, body));

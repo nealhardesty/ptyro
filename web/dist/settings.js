@@ -96,6 +96,9 @@ function fixesFor(c) {
     const prof = String(c.section).match(/^profile (.+)$/);
     if (prof && ["claude", "codex", "gemini", "opencode", "gh"].includes(c.name) && c.level !== "ok")
         out.push({ label: `Log in to ${c.name} as ${prof[1]}`, run: () => profileLogin(prof[1], c.name) });
+    if (c.section === "ptyro" && c.name === "config mode")
+        out.push({ label: "Make it private (mode 600)", hint: "Saves it again as it is", run: async () => { const g = await doHost("config.get"); if (g && await doHost("config.save", { text: g.text }, "Saved: only you can read it"))
+                health.reload(""); } });
     if (c.section === "ptyro" && c.name.startsWith("config"))
         out.push({ label: "Edit the config", run: () => go("#/config") });
     if (c.section === "remote" || /restart/.test(c.text))
@@ -142,6 +145,7 @@ function pairAnother() {
         const link = `${location.origin}/#pair=${r.code}`;
         const s = sheet(`Pair ${v.name}`, [
             h("p", { class: "intro" }, `Open this on the device (or scan the code). It works once, for ${Math.round((r.expires_ms - Date.now()) / 60000)} minutes.`),
+            /^(localhost|127\.|\[::1\])/.test(location.hostname) ? h("p", { class: "form-err" }, "This address only reaches this computer. Open this page by its network address (the one `ptyro pair` prints) to make a link another device can use.") : null,
             qrBox(link),
             h("pre", { class: "block" }, link),
         ], [
@@ -374,18 +378,23 @@ function tourView() {
     return h("div", {}, ui.header("Tour", "#/more"), h("main", { class: "stack", title: tip("help.tour") }, h("p", { class: "intro" }, "ptyro's daily loop, done for real: start a task, answer the agent, review what it changed, finish it, clean up. It runs in a ptyro of its own, with a demo repository and a pretend agent: your sessions, projects and config are never touched, and it all goes away when you end the tour."), conn.scope !== "full" ? h("p", { class: "empty" }, "Starting a tour needs a device paired with --scope full.") : bar(h("button", { class: "primary", onclick: startTour }, "Start the tour")), h("p", { class: "sub" }, "It opens in a new tab served from this computer (localhost), so open this page from the computer that runs ptyro. The tour's own page has a coach that says what to do next.")));
 }
 async function startTour() {
+    // Open the tab now, inside the tap, or a popup blocker refuses it once the tour is ready.
+    const tab = window.open("about:blank", "_blank");
     const b = sheet("Starting the tour…", [h("p", { class: "intro" }, "⏳ Making a ptyro of its own, a demo repository and a pretend agent.")]);
     try {
         const r = await host("tour.start");
         b.close();
-        if (location.hostname !== "localhost" && location.hostname !== "127.0.0.1" && !location.hostname.startsWith("[")) {
-            textSheet("The tour is ready", `It listens on this computer only. Open this on the computer that runs ptyro:\n\n${r.url}`);
+        const local = ["localhost", "127.0.0.1"].includes(location.hostname) || location.hostname.startsWith("[");
+        if (local && tab) {
+            tab.location.href = r.url;
+            return;
         }
-        else
-            window.open(r.url, "_blank");
+        tab?.close();
+        textSheet("The tour is ready", `It listens on this computer only, so open this link in a browser on the computer that runs ptyro:\n\n${r.url}`);
     }
     catch (e) {
         b.close();
+        tab?.close();
         hostFail(e);
     }
 }

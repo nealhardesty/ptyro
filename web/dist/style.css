@@ -238,3 +238,10 @@ canvas.qr { width: 220px; height: 220px; image-rendering: pixelated; justify-sel
   background: var(--panel); border: 1px solid var(--accent); border-radius: 12px; box-shadow: 0 6px 24px rgba(0,0,0,0.35); display: grid; gap: 4px; font-size: 14px; }
 .coach .say { font-family: ui-monospace, Menlo, monospace; background: var(--bg); padding: 4px 8px; border-radius: 6px; }
 .coach button { justify-self: end; margin-top: 4px; }
+header .icon, .sheet-head .icon { min-width: 36px; min-height: 36px; display: inline-grid; place-items: center; }
+.gates { display: grid; gap: 8px; }
+
+.offline { text-align: center; padding: 6px; font-size: 13px; background: var(--warn); color: #fff; }
+.searchbar { padding: 8px 8px 0; }
+.cards { display: grid; gap: 8px; }
+kbd { font: 12px ui-monospace, Menlo, monospace; padding: 1px 6px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; background: var(--panel); }

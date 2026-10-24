@@ -140,7 +140,7 @@ let openSheets: Sheet[] = [];
 /// page (so re-renders leave it alone) and closes on Esc or a tap outside it.
 export function sheet(title: string, body: Child[], foot: Child[] = []): Sheet {
   const scrim = h("div", { class: "scrim" });
-  const el = h("div", { class: "sheet", role: "dialog", "aria-label": title },
+  const el = h("div", { class: "sheet", role: "dialog", "aria-modal": "true", "aria-label": title },
     h("div", { class: "sheet-head" }, h("h2", {}, title), h("button", { class: "icon", "aria-label": "Close", onclick: () => s.close() }, "✕")),
     h("div", { class: "sheet-body" }, ...body),
     foot.length ? h("div", { class: "sheet-foot" }, ...foot) : null);

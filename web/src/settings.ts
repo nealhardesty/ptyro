@@ -97,6 +97,7 @@ function fixesFor(c: any): Item[] {
   const out: Item[] = [];
   const prof = String(c.section).match(/^profile (.+)$/);
   if (prof && ["claude", "codex", "gemini", "opencode", "gh"].includes(c.name) && c.level !== "ok") out.push({ label: `Log in to ${c.name} as ${prof[1]}`, run: () => profileLogin(prof[1], c.name) });
+  if (c.section === "ptyro" && c.name === "config mode") out.push({ label: "Make it private (mode 600)", hint: "Saves it again as it is", run: async () => { const g = await doHost("config.get"); if (g && await doHost("config.save", { text: g.text }, "Saved: only you can read it")) health.reload(""); } });
   if (c.section === "ptyro" && c.name.startsWith("config")) out.push({ label: "Edit the config", run: () => go("#/config") });
   if (c.section === "remote" || /restart/.test(c.text)) out.push({ label: "Restart ptyro", run: () => restartDaemon() });
   if (c.section === "daemon" && /binary|upgrade|older|newer/i.test(c.text)) out.push({ label: "Upgrade the daemon", run: () => upgradeDaemon() });
@@ -153,6 +154,7 @@ function pairAnother(): void {
     const link = `${location.origin}/#pair=${r.code}`;
     const s = sheet(`Pair ${v.name}`, [
       h("p", { class: "intro" }, `Open this on the device (or scan the code). It works once, for ${Math.round((r.expires_ms - Date.now()) / 60000)} minutes.`),
+      /^(localhost|127\.|\[::1\])/.test(location.hostname) ? h("p", { class: "form-err" }, "This address only reaches this computer. Open this page by its network address (the one `ptyro pair` prints) to make a link another device can use.") : null,
       qrBox(link),
       h("pre", { class: "block" }, link),
     ], [
@@ -389,14 +391,17 @@ function tourView(): HTMLElement {
 }
 
 async function startTour(): Promise<void> {
+  // Open the tab now, inside the tap, or a popup blocker refuses it once the tour is ready.
+  const tab = window.open("about:blank", "_blank");
   const b = sheet("Starting the tour…", [h("p", { class: "intro" }, "⏳ Making a ptyro of its own, a demo repository and a pretend agent.")]);
   try {
     const r = await host("tour.start");
     b.close();
-    if (location.hostname !== "localhost" && location.hostname !== "127.0.0.1" && !location.hostname.startsWith("[")) {
-      textSheet("The tour is ready", `It listens on this computer only. Open this on the computer that runs ptyro:\n\n${r.url}`);
-    } else window.open(r.url, "_blank");
-  } catch (e) { b.close(); hostFail(e); }
+    const local = ["localhost", "127.0.0.1"].includes(location.hostname) || location.hostname.startsWith("[");
+    if (local && tab) { tab.location.href = r.url; return; }
+    tab?.close();
+    textSheet("The tour is ready", `It listens on this computer only, so open this link in a browser on the computer that runs ptyro:\n\n${r.url}`);
+  } catch (e) { b.close(); tab?.close(); hostFail(e); }
 }
 
 // the coach, in a tour's own page (`ptyro.tour` is set when its pairing link says so)
