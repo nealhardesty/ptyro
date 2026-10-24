@@ -220,3 +220,21 @@ b.add, .add { color: var(--ok); } b.del, .del { color: var(--bad); }
 .issue { padding: 10px 12px; border: 1px solid var(--bad); border-radius: 10px; background: var(--panel); display: grid; gap: 2px; }
 .prompt.gate .actions { flex-wrap: wrap; }
 .sub { color: var(--muted); font-size: 13px; }
+
+/* settings */
+.lvl { display: inline-block; width: 16px; text-align: center; font-weight: 700; }
+.lvl.ok { color: var(--ok); } .lvl.warn { color: var(--warn); } .lvl.bad { color: var(--bad); }
+.row.wrap .sub { white-space: normal; }
+.meter { padding: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; display: grid; gap: 6px; }
+.meter-row { display: grid; grid-template-columns: 34px 1fr 40px; gap: 8px; align-items: center; font-size: 13px; }
+.meter-row .sub { grid-column: 2 / -1; margin-top: -4px; }
+.bar-track { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+.bar-fill { height: 100%; background: var(--ok); } .bar-fill.warn { background: var(--warn); } .bar-fill.bad { background: var(--bad); }
+textarea.code { width: 100%; font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--panel); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px; padding: 10px; tab-size: 2; white-space: pre; overflow: auto; }
+.ok-note { color: var(--ok); margin: 0; white-space: pre-wrap; font-size: 13px; }
+canvas.qr { width: 220px; height: 220px; image-rendering: pixelated; justify-self: center; background: #fff; border-radius: 8px; }
+.coach { position: fixed; left: 8px; right: 8px; bottom: calc(60px + env(safe-area-inset-bottom)); z-index: 15; max-width: 520px; margin: 0 auto; padding: 12px 14px;
+  background: var(--panel); border: 1px solid var(--accent); border-radius: 12px; box-shadow: 0 6px 24px rgba(0,0,0,0.35); display: grid; gap: 4px; font-size: 14px; }
+.coach .say { font-family: ui-monospace, Menlo, monospace; background: var(--bg); padding: 4px 8px; border-radius: 6px; }
+.coach button { justify-self: end; margin-top: 4px; }

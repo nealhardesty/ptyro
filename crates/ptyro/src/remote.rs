@@ -134,6 +134,21 @@ pub async fn pair(
          for {} to open it (Ctrl-C stops waiting; the link keeps working)…",
         device.name
     );
+    println!(
+        "This device may {}.\n",
+        match scope {
+            Scope::Read =>
+                "watch: sessions, screens and the inbox. `--scope approve` also answers prompts",
+            Scope::Approve =>
+                "watch and answer prompts and gates. `--scope control` also types into sessions, \
+                and starts configured agents; `--scope full` is the whole web app: tasks and \
+                worktrees, review and ship, the config, devices",
+            Scope::Control =>
+                "watch, answer, type and start configured agents. `--scope full` is the whole \
+                web app: worktrees, review and ship, the config, devices",
+            Scope::Full => "do everything the web app does, and anything you can on this machine",
+        }
+    );
     if std::env::var_os("PTYRO_SESSION_ID").is_some() {
         eprintln!(
             "note: this pane is recorded and readable by paired devices and agents; until the \

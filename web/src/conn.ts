@@ -83,3 +83,17 @@ export class Conn {
 
 export const conn = new Conn();
 
+
+/// Something the machine does for the app (`POST /api/host`, `crates/ptyro/src/host.rs`): the
+/// config file, the doctor, profiles… A device with `full` scope only.
+export async function host(op: string, args: Record<string, unknown> = {}): Promise<any> {
+  const r = await fetch("/api/host", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token() ?? ""}` },
+    body: JSON.stringify({ op, ...args }),
+  });
+  if (!r.ok) throw new Error(r.status === 401 ? "this device isn't paired any more" : await r.text());
+  const o = await r.json();
+  if (o.t === "err") throw Object.assign(new Error(o.error.message), { code: o.error.code });
+  return o.reply;
+}

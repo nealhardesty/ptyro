@@ -1,7 +1,7 @@
 # Every command, in the TUI and on the web
 
 The CLI, the TUI and the web app are all first class (SPEC §1.3): what the CLI does, you can do
-in the TUI and, once ROADMAP WEB1 is done, on the web. This page lists every command, how the
+in the TUI and on the web. This page lists every command, how the
 TUI does it and how the web app does, so it doubles as a "how do I … in the TUI (or on my
 phone)" guide. TUI keys are the defaults, after the prefix (`Ctrl-Q` or `Ctrl-Space`); every TUI
 action named in backticks is also in the palette (`Ctrl-Q :`), with its key. A web action in
@@ -18,10 +18,9 @@ A cell is one of:
 `make parity` (`make tui-parity` is the same) checks this page against the real command tree,
 the TUI's actions and the web app's, and CI runs it through `make test`. It fails when a command
 has no row, a row names a command or an action that doesn't exist, or a cell is in none of these
-forms. A TUI `gap:` always fails: the CLI and the TUI are always in parity. A web gap is listed
-(`make parity` counts them by task) and fails with `WEB_STRICT=1`, which becomes the default once
-WEB1 is done. When you add a command, add its row: its TUI action and its web one, or `waived:`
-and why.
+forms. A TUI `gap:` always fails: the CLI and the TUI are always in parity. A web gap fails too
+(`WEB_STRICT=0` only lists them, while one is being worked on). When you add a command, add
+its row: its TUI action and its web one, or `waived:` and why.
 
 ## Sessions
 
@@ -57,11 +56,11 @@ and why.
 |---|---|---|
 | `inbox` | `inbox` (`i`) | `inbox`; `inbox.read` marks it read |
 | `mute` | `session.mute`; a whole project or workspace: `project.mute`, `workspace.mute` | `session.mute`: ⋯ → Mute notifications |
-| `notify test` | `notify.test` | gap: WEB1.6 (settings and health) |
-| `usage` | shown: the status bar and the sidebar title show the rate limits of the focused session's profile | gap: WEB1.6 (settings and health) |
-| `integrations ls` | `integrations` (in a split); the health badge says what's missing | gap: WEB1.6 (settings and health) |
-| `integrations install` | `integrations.install` | gap: WEB1.6 (settings and health) |
-| `integrations uninstall` | `integrations.uninstall` | gap: WEB1.6 (settings and health) |
+| `notify test` | `notify.test` | `notify.test`: More → Notifications → Send a test |
+| `usage` | shown: the status bar and the sidebar title show the rate limits of the focused session's profile | `usage`: More → Usage: each account's limits as meters |
+| `integrations ls` | `integrations` (in a split); the health badge says what's missing | `integrations`: More → Integrations |
+| `integrations install` | `integrations.install` | `integrations`: More → Integrations: tap one → Install |
+| `integrations uninstall` | `integrations.uninstall` | `integrations`: More → Integrations: tap one → Uninstall |
 
 ## Projects, worktrees, workspaces
 
@@ -111,16 +110,16 @@ and why.
 
 | Command | In the TUI | On the web |
 |---|---|---|
-| `profile ls` | `profile.list` (in a split) | gap: WEB1.6 (settings and health) |
-| `profile show` | `profile.show`: pick it | gap: WEB1.6 (settings and health) |
-| `profile new` | `profile.new` | gap: WEB1.6 (settings and health) |
-| `profile rm` | `profile.remove`: pick it | gap: WEB1.6 (settings and health) |
-| `profile rename` | `profile.rename` | gap: WEB1.6 (settings and health) |
+| `profile ls` | `profile.list` (in a split) | `profile.list`: More → Profiles |
+| `profile show` | `profile.show`: pick it | `profile.show`: tap a profile |
+| `profile new` | `profile.new` | `profile.new`: ＋ on Profiles, adopting directories you have |
+| `profile rm` | `profile.remove`: pick it | `profile.remove`: a profile's page (asks; offers to force when it's in use) |
+| `profile rename` | `profile.rename` | `profile.rename`: a profile's page |
 | `profile env` | waived: prints `export` lines for your shell to `eval`; sessions get the environment already | waived: prints `export` lines for a shell on the computer to `eval` |
-| `profile login` | `profile.login`: pick the profile and the agent; it logs in, in a split (a health finding offers it too) | gap: WEB1.6 (settings and health) |
-| `profile sync` | `profile.sync` | gap: WEB1.6 (settings and health) |
-| `profile detect` | `first.run` finds them, as accounts to tick | gap: WEB1.6 (settings and health) |
-| `profile doctor` | `health`: the badge's findings include each profile's logins | gap: WEB1.6 (settings and health) |
+| `profile login` | `profile.login`: pick the profile and the agent; it logs in, in a split (a health finding offers it too) | `profile.login`: a profile's page, or a health finding's fix: the tool's own login, in a session |
+| `profile sync` | `profile.sync` | `profile.sync`: a profile's page |
+| `profile detect` | `first.run` finds them, as accounts to tick | `profile.detect`: 🔍 on Profiles: the accounts found, to tick |
+| `profile doctor` | `health`: the badge's findings include each profile's logins | `profile.doctor`: Check on a profile's page |
 
 ## Review and ship
 
@@ -221,9 +220,9 @@ and why.
 | Command | In the TUI | On the web |
 |---|---|---|
 | `serve` | `remote.serve` (in a split) | waived: it serves the web app; the web app can't start the thing it runs on |
-| `pair` | `remote.pair`: the QR code, in a split, to scan | `pair`: this device's half (the link or QR code); making a code for another device: gap WEB1.6 |
-| `devices ls` | `devices.list` | gap: WEB1.6 (settings and health) |
-| `devices revoke` | `devices.revoke` | gap: WEB1.6 (settings and health) |
+| `pair` | `remote.pair`: the QR code, in a split, to scan | `pair`: this device's half (the link or QR code); `pair.device` makes a link and a QR code for another device (More → Devices → ＋) |
+| `devices ls` | `devices.list` | `devices.list`: More → Devices |
+| `devices revoke` | `devices.revoke` | `devices.revoke`: a device's menu |
 | `devices push-test` | `devices.push_test` | `notifications`: turning them on sends this device a test |
 | `proxy` | waived: the bridge `--remote` runs over ssh on the other machine | waived: the bridge `--remote` runs over ssh between two computers |
 | `replay` | `session.replay` (plays in a split) | `session.replay`: ⋯ → Replay: its recording as a player with a scrubber and speeds; `session.history` lists earlier sessions |
@@ -233,20 +232,20 @@ and why.
 
 | Command | In the TUI | On the web |
 |---|---|---|
-| `init` | `first.run`: the first run as a screen (it opens on its own the first time); terminal checks and shell extras are `doctor`'s (UX1.20) | gap: WEB1.6 (settings and health) |
-| `doctor` | `health` (`M`): the badge's findings, each with its fix; `doctor` runs the full one in a split | gap: WEB1.6 (settings and health) |
-| `tour` | `help.tour` (the TUI steps aside for the tour, then comes back) | gap: WEB1.6 (settings and health) |
-| `config edit` | `config.edit` (validated when you save; changes apply live) | gap: WEB1.6 (settings and health) |
-| `config check` | `config.edit`: saving checks it, and a bad config shows as an error | gap: WEB1.6 (settings and health) |
-| `config show` | `config.show` (in a split) | gap: WEB1.6 (settings and health) |
-| `config path` | `config.edit` (opens it) | gap: WEB1.6 (settings and health) |
+| `init` | `first.run`: the first run as a screen (it opens on its own the first time); terminal checks and shell extras are `doctor`'s (UX1.20) | `first.run`: More → Set up ptyro (the Sessions tab offers it with no project): your agents, accounts and repositories |
+| `doctor` | `health` (`M`): the badge's findings, each with its fix; `doctor` runs the full one in a split | `health`: More → Health: every check with its fix (log in, edit the config, restart…) |
+| `tour` | `help.tour` (the TUI steps aside for the tour, then comes back) | `help.tour`: More → Take the tour: a ptyro of its own on a free local port, opened in a new tab with a coach |
+| `config edit` | `config.edit` (validated when you save; changes apply live) | `config.edit`: More → Configuration: an editor, checked as you save, applied at once |
+| `config check` | `config.edit`: saving checks it, and a bad config shows as an error | `config.check`: Check on the editor, without saving |
+| `config show` | `config.show` (in a split) | `config.show`: Show effective on the editor |
+| `config path` | `config.edit` (opens it) | `config.path`: the editor says where the file is |
 | `completions` | waived: shell setup, for typing commands in a shell | waived: shell setup on the computer, for typing commands there |
 | `shell-init` | `health` (`M`): when it's missing, a finding whose fix adds the line to your rc file | waived: a line in the computer's shell rc file, for its shells |
 | `daemon start` | waived: the TUI starts the daemon when it isn't running | waived: `serve` runs with the daemon; with no daemon there is no web app to ask |
-| `daemon stop` | `app.quit` (`C-d` after the prefix): asks, then stops every session and the daemon and exits | gap: WEB1.6 (settings and health) |
-| `daemon restart` | `daemon.restart` (in a split; this TUI reconnects) | gap: WEB1.6 (settings and health) |
-| `daemon status` | `daemon.status`; the health badge has its warnings | gap: WEB1.6 (settings and health) |
-| `daemon logs` | `daemon.logs` (followed, in a split) | gap: WEB1.6 (settings and health) |
-| `daemon upgrade` | `daemon.upgrade`; a daemon running another binary is a health finding whose fix this is | gap: WEB1.6 (settings and health) |
-| `daemon install-service` | `daemon.service` | gap: WEB1.6 (settings and health) |
-| `daemon uninstall-service` | `daemon.unservice` | gap: WEB1.6 (settings and health) |
+| `daemon stop` | `app.quit` (`C-d` after the prefix): asks, then stops every session and the daemon and exits | `daemon.stop`: More → Daemon → Stop (asks first; the app goes offline with it) |
+| `daemon restart` | `daemon.restart` (in a split; this TUI reconnects) | `daemon.restart`: More → Daemon → Restart (asks first; the app reconnects) |
+| `daemon status` | `daemon.status`; the health badge has its warnings | `daemon.status`: More → Daemon |
+| `daemon logs` | `daemon.logs` (followed, in a split) | `daemon.logs`: More → Daemon → Logs |
+| `daemon upgrade` | `daemon.upgrade`; a daemon running another binary is a health finding whose fix this is | `daemon.upgrade`: More → Daemon → Upgrade, or a health finding's fix |
+| `daemon install-service` | `daemon.service` | `daemon.service`: More → Daemon → Install the service |
+| `daemon uninstall-service` | `daemon.unservice` | `daemon.unservice`: More → Daemon → Remove it |

@@ -1126,10 +1126,15 @@ impl Daemon {
             }
             Request::Editors => {
                 let config = self.config();
-                Ok(Reply::Editors { names: config.editor_names(), default: config.default_editor() })
+                Ok(Reply::Editors {
+                    names: config.editor_names(),
+                    default: config.default_editor(),
+                })
             }
             Request::WorktreeOpen { addr, editor } => self.open_worktree(&addr, editor).await,
-            Request::ProjectConfig { addr } => Ok(Reply::Text { text: self.project_config(&addr)? }),
+            Request::ProjectConfig { addr } => {
+                Ok(Reply::Text { text: self.project_config(&addr)? })
+            }
             Request::Replay { addr } => Ok(Reply::Replay { replay: self.replay(&addr)? }),
             Request::Export { addr, format } => {
                 Ok(Reply::Text { text: self.export(&addr, &format)? })

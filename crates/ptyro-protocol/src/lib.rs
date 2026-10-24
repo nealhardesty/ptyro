@@ -209,7 +209,7 @@ pub enum Request {
         #[serde(default)]
         binary: Option<PathBuf>,
     },
-    /// Pair a device (M9.2): only from this machine, never from a device. Answers a pairing
+    /// Pair a device (M9.2): from this machine, or from a device with `full` scope. Answers a pairing
     /// code (`Pairing`): single-use, short-lived, what `ptyro pair` prints. The device's token
     /// comes from claiming it.
     DevicePair {

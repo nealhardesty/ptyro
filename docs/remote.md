@@ -159,9 +159,9 @@ used).
 | `read` | see sessions, screens, transcripts, status, the inbox, runs |
 | `approve` (default) | also answer permission prompts and gates, clear attention, mute |
 | `control` | also type into sessions, stop/resume/convert them, start *configured* agents |
-| `full` | everything a local client can (any command line, config, upgrades) |
+| `full` | everything a local client can (any command line, worktrees and shipping, the config, upgrades, pairing devices): what the whole web app needs |
 
-Pairing and revoking only work from the machine itself, never from a device.
+Pairing and revoking work from the machine itself, and from a device paired with `--scope full` (the web app's Devices page).
 
 ### 3. Use it
 
@@ -176,6 +176,35 @@ notifications there). Tap 🔔 to turn notifications on; a test notification arr
   tool calls with output and diffs, permission cards. "Terminal" switches to the screen view.
 - **Notifications** for a blocked agent have Allow / Deny buttons on platforms that show actions
   (Android, desktop Chrome). Tapping one answers without opening the app.
+
+### The whole app
+
+Everything the CLI does, the web app does, in tabs along the bottom (the list of commands and
+where each lives is [`parity.md`](parity.md)). `ptyro pair --scope full` gives a device all of it;
+a device with less sees the pages and is told what it lacks.
+
+- **Sessions**: ＋ starts a task (the task, the agent, and where: a new worktree, from a PR, an
+  issue, a branch or your uncommitted changes; an existing one; a shell). A session's **⋯**: stop,
+  restart, rename, summarize, hibernate, scrollback, events, replay, save its recording. ☑ types one
+  thing into several.
+- **Projects**: the sidebar's tree. A worktree's page has its sessions and status; **Changes** is
+  the diff, where tapping a line comments for the agent and one button sends them all; **Commits**,
+  **Checks** (the PR and its CI), **Finish** (a PR, or merge into main), archive, remove.
+- **Runs** and **Sets**: fan-outs and recipes, gates waiting for you, the compare-and-pick view,
+  change sets with their contract, checks, checkpoints and merge train.
+- **More**: health (each finding with its fix), usage, devices (pair another with a link and a QR
+  code), profiles and logins, the config editor (checked as you save, applied at once),
+  integrations, the daemon (logs, upgrade, restart, login service), first-run setup, and a tour.
+
+Changing the machine (the config file, profiles, the login service, the daemon's restart, the
+tour) goes through `POST /api/host`, which `ptyro serve` accepts from a `full` device only, and
+only when it runs on the same machine as the daemon (not with `--remote`).
+
+**The tour** (More → Take the tour) starts a ptyro of its own, with a demo repository and a pretend
+agent, and a second `ptyro serve` for it on a free port of this computer (loopback, plain HTTP),
+and opens it in a new tab with a coach: start a task, answer the agent, review, finish, clean up.
+It's reachable from this computer only, so it opens from a browser on it. "End the tour" stops
+its daemon and deletes everything it made; one left behind is swept the next time a tour starts.
 
 ### Remote approvals
 
@@ -197,6 +226,7 @@ through their protocol for structured sessions.
 | The pairing link read off a screen, scrollback or recording | It is a code, not the token: claimed once, within 10 minutes, then worthless. `ptyro pair` reports who claimed it and from where; failed claims count toward the lockout. During those minutes it *is* a credential, so prefer a plain terminal. |
 | Token guessing | 256-bit tokens and codes; 10 failed logins or pairing claims from one address lock it out for 10 minutes, at most 4 logins from one address are in flight at once, and `ptyro serve` takes at most 256 connections. |
 | A stale notification or link approving a newer prompt | Every answer names the prompt it was shown (its `since`); if the agent asks something else by then, the answer is refused ("that prompt changed") instead of approving it. Approve/deny links carry it too. |
+| A paired phone changing the machine | The config file, profiles, the login service, the daemon's restart and the tour need a `full` device (`POST /api/host` checks that with the daemon, which is the authority on scopes). A `control` device can type, answer and stop what it started; it can't start any command, write the config or pair a device. |
 | Strangers steering an agent through a PR | PR review comments reach the agent only from the repository's owner, members and collaborators; anyone else's come to you. |
 | A lost phone | `ptyro devices revoke ID`: immediate, and live connections close. |
 | A browser posing as a local client | `ptyro serve` rewrites every Hello to `kind: web` with its real origin; the daemon holds web clients to their device's scope. |
@@ -206,7 +236,7 @@ through their protocol for structured sessions.
 | Forged `X-Forwarded-For` to dodge the lockout | Only believed from loopback with `trusted_proxy` (or under `tailscale serve`), and only its last entry. |
 | Clickjacking, injected scripts | A strict CSP (`default-src 'none'`, scripts only from the app itself), `X-Frame-Options: DENY`, no third-party requests. |
 | Push payload snooping | Web Push is end-to-end encrypted (RFC 8291) for the device; push services see ciphertext. VAPID (RFC 8292) identifies your daemon. Subscriptions are accepted only for the browsers' push services (and the hosts in `[remote] push_hosts`), so a device can't make the daemon post elsewhere. |
-| An agent approving prompts, or pairing a device for itself | An agent can't answer permission prompts or gates, type into a session that is blocked on one, pair or revoke devices, or trust a repository's scripts, from any client. See below for what this does and doesn't stop. Devices can't pair devices. |
+| An agent approving prompts, or pairing a device for itself | An agent can't answer permission prompts or gates, type into a session that is blocked on one, pair or revoke devices, or trust a repository's scripts, from any client. See below for what this does and doesn't stop. Devices can't pair devices, except one paired with `--scope full`, which can run any command as you anyway. |
 
 Remote input is equivalent to running commands as you. Pair only devices you control. `approve`
 is the default: enough for notifications and approvals; pair with `--scope control` to type

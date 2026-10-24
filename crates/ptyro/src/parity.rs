@@ -13,8 +13,8 @@
 //! The check fails on a command with no row, a row for a command that doesn't exist, a cell in
 //! none of these forms, and an action that doesn't exist. A TUI gap fails it too, since the CLI
 //! and the TUI are always in parity (`PTYRO_PARITY_STRICT=0` only lists them, while one is being
-//! worked on). A web gap is listed, and fails with `PTYRO_PARITY_WEB_STRICT=1` (the default once
-//! ROADMAP WEB1 is done).
+//! worked on). A web gap fails too (ROADMAP WEB1 is done); `PTYRO_PARITY_WEB_STRICT=0` only lists
+//! them, while one is being worked on.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -84,10 +84,16 @@ fn rows() -> Vec<Row> {
 fn web_actions() -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     for (file, src) in WEB_SOURCES {
-        let start = src.find("const ACTIONS = {").unwrap_or_else(|| panic!("web/src/{file} has `const ACTIONS`"));
+        let start = src
+            .find("const ACTIONS = {")
+            .unwrap_or_else(|| panic!("web/src/{file} has `const ACTIONS`"));
         let body = &src[start..];
-        let body = &body[..body.find("} as const;").unwrap_or_else(|| panic!("ACTIONS in web/src/{file} ends with `}} as const;`"))];
-        out.extend(body.lines().filter_map(|l| l.trim().strip_prefix('"')?.split_once("\":").map(|(k, _)| k.to_owned())));
+        let body = &body[..body
+            .find("} as const;")
+            .unwrap_or_else(|| panic!("ACTIONS in web/src/{file} ends with `}} as const;`"))];
+        out.extend(body.lines().filter_map(|l| {
+            l.trim().strip_prefix('"')?.split_once("\":").map(|(k, _)| k.to_owned())
+        }));
     }
     out
 }
@@ -189,7 +195,7 @@ fn every_cli_command_has_a_tui_path_and_a_web_path_or_a_waiver() {
     } else if !tui_gaps.is_empty() {
         eprintln!("{} TUI gap(s) left:\n  {}", tui_gaps.len(), tui_gaps.join("\n  "));
     }
-    let web_strict = std::env::var_os("PTYRO_PARITY_WEB_STRICT").is_some_and(|v| v == "1");
+    let web_strict = std::env::var_os("PTYRO_PARITY_WEB_STRICT").is_none_or(|v| v != "0");
     let total: usize = web_gaps.values().map(Vec::len).sum();
     if total > 0 {
         let by_task: Vec<String> =

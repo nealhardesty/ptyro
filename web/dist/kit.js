@@ -60,6 +60,10 @@ export const ui = {
     toast: (_text) => { },
     /// A page's top bar: the title, a back arrow, and extra controls on its right.
     header: (title, _back, ..._extra) => h("header", {}, h("h1", {}, title)),
+    /// Turn notifications on for this device.
+    push: () => { },
+    /// Forget this device's pairing.
+    forget: () => { },
 };
 export const views = new Map();
 // ── polling: data that changes without an event ─────────────────────────────────────────────

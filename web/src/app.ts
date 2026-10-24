@@ -9,12 +9,13 @@ import { conn, token } from "./conn.js";
 import { css, F } from "./color.js";
 import { actions, ago, h, patch, tipOf, ui, views } from "./kit.js";
 import type { Child } from "./kit.js";
-import { loadAll, onEvent } from "./data.js";
+import { data, loadAll, onEvent } from "./data.js";
 import "./projects.js";
 import "./review.js";
 import "./runs.js";
 import "./settings.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
+import { coach } from "./settings.js";
 
 interface ChatItem { id: string; t: string; [k: string]: any }
 
@@ -56,8 +57,10 @@ async function idbSet(key: string, value: string | null): Promise<void> {
 }
 
 function takePairCode(): void {
-  const m = location.hash.match(/^#pair=([A-Za-z0-9_\-]+)$/);
+  const m = location.hash.match(/^#pair=([A-Za-z0-9_\-]+)(&tour=1)?$/);
   if (m) {
+    // A tour's own ptyro (`ptyro tour` on the web): its pages show the coach.
+    if (m[2]) localStorage.setItem("ptyro.tour", "1");
     history.replaceState(null, "", location.pathname + "#/");
     void claim(m[1]);
   }
@@ -269,7 +272,8 @@ function listView(): HTMLElement {
   const all = [...app.sessions.values()].filter((s) => !s.quick).sort((a, b) => order.indexOf(statusOf(a)) - order.indexOf(statusOf(b)) || a.name.localeCompare(b.name));
   const body = all.length ? all.map(sessionCard) : [h("div", { class: "empty" },
     h("p", {}, "Nothing is running."),
-    h("button", { class: "primary", title: tipOf("session.new"), onclick: () => newTask() }, "Start a task"))];
+    h("button", { class: "primary", title: tipOf("session.new"), onclick: () => newTask() }, "Start a task"),
+    data.projects.size ? null : h("p", {}, h("a", { href: "#/setup", title: tipOf("first.run") }, "Set up ptyro first: your agents, accounts and repositories")))];
   const picked = [...marked].filter((id) => app.sessions.has(id));
   const tools = selecting
     ? h("div", { class: "select-bar" },
@@ -462,7 +466,7 @@ function render(): void {
   if (conn.state === "rejected") {
     root.replaceChildren(h("div", {}, header("ptyro", false), h("main", { class: "center" },
       h("p", {}, conn.reason),
-      h("button", { title: tip("unpair"), onclick: async () => { localStorage.removeItem("ptyro.token"); await idbSet("token", null).catch(() => {}); location.reload(); } }, "Forget this pairing"),
+      h("button", { title: tip("unpair"), onclick: () => void forget() }, "Forget this pairing"),
     )));
     return;
   }
@@ -474,6 +478,7 @@ function render(): void {
   for (const old of view.querySelectorAll(":scope > .toast")) old.remove();
   if (t) view.append(t);
   paint();
+  coach();
 }
 
 function subscribe(id: string | null): void {
@@ -483,6 +488,15 @@ function subscribe(id: string | null): void {
     app.screens.set(id, new Screen());
     conn.send({ t: "subscribe", session: id, size: null, control: false });
   }
+}
+
+/// Forget this device's pairing (the token here; `ptyro devices revoke` ends it for good).
+async function forget(): Promise<void> {
+  localStorage.removeItem("ptyro.token");
+  localStorage.removeItem("ptyro.tour");
+  await idbSet("token", null).catch(() => {});
+  location.hash = "#/";
+  location.reload();
 }
 
 function pairView(): HTMLElement {
@@ -590,6 +604,8 @@ conn.onState = render;
 ui.render = render;
 ui.toast = toast;
 ui.header = header;
+ui.push = () => void enablePush();
+ui.forget = () => { void forget(); };
 
 window.addEventListener("hashchange", () => { takePairCode(); render(); });
 window.addEventListener("resize", paint);

@@ -6,12 +6,13 @@ import { Screen } from "./screen.js";
 import { conn, token } from "./conn.js";
 import { css, F } from "./color.js";
 import { actions, ago, h, patch, tipOf, ui, views } from "./kit.js";
-import { loadAll, onEvent } from "./data.js";
+import { data, loadAll, onEvent } from "./data.js";
 import "./projects.js";
 import "./review.js";
 import "./runs.js";
 import "./settings.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
+import { coach } from "./settings.js";
 // What this app does, by name: the Web column of docs/parity.md names these, and `make parity`
 // checks every name it uses is here (SPEC §1.3, ROADMAP WEB1). Each is its control's tooltip.
 const ACTIONS = {
@@ -48,8 +49,11 @@ async function idbSet(key, value) {
     });
 }
 function takePairCode() {
-    const m = location.hash.match(/^#pair=([A-Za-z0-9_\-]+)$/);
+    const m = location.hash.match(/^#pair=([A-Za-z0-9_\-]+)(&tour=1)?$/);
     if (m) {
+        // A tour's own ptyro (`ptyro tour` on the web): its pages show the coach.
+        if (m[2])
+            localStorage.setItem("ptyro.tour", "1");
         history.replaceState(null, "", location.pathname + "#/");
         void claim(m[1]);
     }
@@ -258,7 +262,7 @@ let selecting = false;
 function listView() {
     const order = ["blocked", "errored", "working", "starting", "done", "idle", "unknown", "shell", "dormant", "exited"];
     const all = [...app.sessions.values()].filter((s) => !s.quick).sort((a, b) => order.indexOf(statusOf(a)) - order.indexOf(statusOf(b)) || a.name.localeCompare(b.name));
-    const body = all.length ? all.map(sessionCard) : [h("div", { class: "empty" }, h("p", {}, "Nothing is running."), h("button", { class: "primary", title: tipOf("session.new"), onclick: () => newTask() }, "Start a task"))];
+    const body = all.length ? all.map(sessionCard) : [h("div", { class: "empty" }, h("p", {}, "Nothing is running."), h("button", { class: "primary", title: tipOf("session.new"), onclick: () => newTask() }, "Start a task"), data.projects.size ? null : h("p", {}, h("a", { href: "#/setup", title: tipOf("first.run") }, "Set up ptyro first: your agents, accounts and repositories")))];
     const picked = [...marked].filter((id) => app.sessions.has(id));
     const tools = selecting
         ? h("div", { class: "select-bar" }, h("span", {}, `${picked.length} selected`), h("button", { class: "small primary", disabled: !picked.length, title: tipOf("session.broadcast"), onclick: () => { broadcast(picked); selecting = false; render(); } }, "Type to them"), h("button", { class: "small", onclick: () => { selecting = false; marked.clear(); render(); } }, "Cancel"))
@@ -421,7 +425,7 @@ function render() {
         return;
     }
     if (conn.state === "rejected") {
-        root.replaceChildren(h("div", {}, header("ptyro", false), h("main", { class: "center" }, h("p", {}, conn.reason), h("button", { title: tip("unpair"), onclick: async () => { localStorage.removeItem("ptyro.token"); await idbSet("token", null).catch(() => { }); location.reload(); } }, "Forget this pairing"))));
+        root.replaceChildren(h("div", {}, header("ptyro", false), h("main", { class: "center" }, h("p", {}, conn.reason), h("button", { title: tip("unpair"), onclick: () => void forget() }, "Forget this pairing"))));
         return;
     }
     const r = route();
@@ -436,6 +440,7 @@ function render() {
     if (t)
         view.append(t);
     paint();
+    coach();
 }
 function subscribe(id) {
     if (app.viewing)
@@ -445,6 +450,14 @@ function subscribe(id) {
         app.screens.set(id, new Screen());
         conn.send({ t: "subscribe", session: id, size: null, control: false });
     }
+}
+/// Forget this device's pairing (the token here; `ptyro devices revoke` ends it for good).
+async function forget() {
+    localStorage.removeItem("ptyro.token");
+    localStorage.removeItem("ptyro.tour");
+    await idbSet("token", null).catch(() => { });
+    location.hash = "#/";
+    location.reload();
 }
 function pairView() {
     const input = h("input", { placeholder: "Paste the link from `ptyro pair`", autocomplete: "off", title: tip("pair") });
@@ -566,6 +579,8 @@ conn.onState = render;
 ui.render = render;
 ui.toast = toast;
 ui.header = header;
+ui.push = () => void enablePush();
+ui.forget = () => { void forget(); };
 window.addEventListener("hashchange", () => { takePairCode(); render(); });
 window.addEventListener("resize", paint);
 takePairCode();

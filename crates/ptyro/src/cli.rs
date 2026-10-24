@@ -66,6 +66,11 @@ pub struct Ctx {
 }
 
 impl Ctx {
+    /// For this machine's own daemon (what `ptyro serve` does host operations with).
+    pub fn local(paths: Paths) -> Self {
+        Self { paths, encoding: Encoding::MsgPack, remote: None }
+    }
+
     fn options(&self, kind: ClientKind, autospawn: bool) -> ConnectOptions {
         let mut o = ConnectOptions::new(self.paths.clone(), kind);
         o.autospawn = autospawn;

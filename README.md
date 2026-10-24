@@ -298,9 +298,18 @@ ptyro devices revoke ID        # cut a device off at once
 ptyro --remote me@workbox      # the TUI (or any command) on another machine, over ssh
 ```
 
-The web app lists your agents (blocked ones on top, with Allow / Deny), the inbox, and a live
-view of any session with a reply box. Push notifications carry Allow / Deny where the platform
-shows actions. Each device gets a scope (`read`, `approve` by default, `control` or `full`). Setup and the threat model:
+The web app does everything the CLI does, laid out for a phone: a tab for sessions (blocked ones
+on top, with Allow / Deny, a live view, a reply box, a menu for stop, restart, rename, summarize,
+scrollback, replay…), one for projects and worktrees (start a task in a new worktree, from a PR,
+an issue or your changes; finish it into a PR; archive it), the diff with line comments for the
+agent, commits and checks, the review queue, runs, fan-outs and change sets, and **More**:
+health with its fixes, devices (pair another with a link and a QR code), profiles and logins, the
+config editor, the daemon and its logs, first-run setup and a tour. Push notifications carry
+Allow / Deny where the platform shows actions.
+
+Each device gets a scope (`read`, `approve` by default, `control` or `full`). Pair with
+`ptyro pair phone --scope full` for the whole app (it changes your machine: worktrees, the
+config, devices), `--scope control` to answer, type and stop. Setup and the threat model:
 [`docs/remote.md`](docs/remote.md).
 
 ### Structured sessions
@@ -436,7 +445,7 @@ behave the same. (License and advisory checks run there through the cargo-deny a
 | `make fmt` / `fmt-check` / `lint` | format / fail if unformatted / clippy with warnings as errors |
 | `make check` / `make ci` | what CI runs except `deny` (fmt-check, lint, test, smoke) / everything, `deny` included |
 | `make tools` / `make deny` | install cargo-deny / license, advisory and source checks |
-| `make parity` (or `make tui-parity`) | check that every CLI command has a TUI path and a web path, or a waiver, in [`docs/parity.md`](docs/parity.md); it counts the web gaps left by ROADMAP task (`WEB_STRICT=1` fails on them; `STRICT=0` only lists TUI gaps) |
+| `make parity` (or `make tui-parity`) | check that every CLI command has a TUI path and a web path, or a waiver, in [`docs/parity.md`](docs/parity.md); a gap fails it (`STRICT=0` / `WEB_STRICT=0` only list TUI / web gaps) |
 | `make doc` / `make clean` | API docs / remove build output |
 | `make sandbox` / `make sandbox-clean` | a throwaway ptyro (own daemon, store, worktrees) with a demo repo / delete it. It isolates ptyro's state, not a security sandbox: agents still run as you |
 | `make reset` | start ptyro over, to try the first run again: lists what it removes (sessions, worktrees with any uncommitted work flagged, the login service, integrations, config, data, state), then asks. `YES=1` skips the question unless uncommitted work would be lost (then you type `delete`). Your repositories and their branches stay. With `PTYRO_HOME` set it resets that home only. Run it from a plain terminal, not inside ptyro |

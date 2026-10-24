@@ -83,6 +83,14 @@ fn first_version(text: &str) -> Option<String> {
 }
 
 pub async fn run_cmd(ctx: &Ctx, quick: bool, json: bool) -> Result<i32, Error> {
+    let r = collect(ctx, quick, true).await;
+    print(&r, json);
+    Ok(exit_code(&r))
+}
+
+/// Every check, in order. `terminal`: also the terminal this process runs in (a web page has
+/// none worth checking).
+pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Report {
     let config_path = Config::path(&ctx.paths);
     let mut r = Report::default();
     let config = match Config::load(&config_path) {
@@ -120,12 +128,13 @@ pub async fn run_cmd(ctx: &Ctx, quick: bool, json: bool) -> Result<i32, Error> {
     );
     daemon(ctx, &config, quick, &mut r).await;
     remote(ctx, &config, &mut r);
-    terminal(&mut r).await;
+    if terminal_too {
+        terminal(&mut r).await;
+    }
     git(&mut r).await;
     agents(&config, &mut r).await;
     profiles(ctx, &config, None, &mut r).await;
-    print(&r, json);
-    Ok(exit_code(&r))
+    r
 }
 
 /// `ptyro serve` (WEB1.7): plain HTTP where tokens would cross a network, and its certificate.
@@ -160,12 +169,18 @@ fn remote(ctx: &Ctx, config: &Config, r: &mut Report) {
 
 /// `ptyro profile doctor [NAME]`.
 pub async fn profile_doctor(ctx: &Ctx, only: Option<String>, json: bool) -> Result<i32, Error> {
+    let r = profile_checks(ctx, only).await?;
+    print(&r, json);
+    Ok(exit_code(&r))
+}
+
+/// The profile checks alone.
+pub(crate) async fn profile_checks(ctx: &Ctx, only: Option<String>) -> Result<Report, Error> {
     let config =
         Config::load(&Config::path(&ctx.paths)).map_err(|e| Error::invalid(e.to_string()))?;
     let mut r = Report::default();
     profiles(ctx, &config, only, &mut r).await;
-    print(&r, json);
-    Ok(exit_code(&r))
+    Ok(r)
 }
 
 fn exit_code(r: &Report) -> i32 {

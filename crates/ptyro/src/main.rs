@@ -6,6 +6,7 @@ mod complete;
 mod config;
 mod cs;
 mod doctor;
+mod host;
 mod init;
 mod mcp;
 mod orch;

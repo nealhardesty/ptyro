@@ -98,9 +98,8 @@ Status markers used below:
   - **The web ships with them.** A feature is built for the web client (`ptyro serve`, the
     PWA, §16) in the same change; its web path is a control registered in `ACTIONS`
     (`web/src/app.ts`, each its tooltip), which the check reads. A web gap is a defect to fix,
-    not a later milestone: until ROADMAP WEB1 is done a cell may say `gap: WEB1.x` and
-    `make parity` counts them by task; `WEB_STRICT=1` fails on them, and becomes the default
-    with WEB1.
+    not a later milestone: a web gap fails `make parity`, like a TUI one (`WEB_STRICT=0` only
+    lists them, while one is being worked on). ROADMAP WEB1 closed them all.
   - Waivers are for commands that are another program's tool (agents' own mail, hooks, shell
     completions), never for "not built yet".
 - **Boring persistence, sharp terminal.** SQLite + plain files for state; all the cleverness goes
@@ -925,6 +924,18 @@ Push messages have no id.
 **[built UX1.25] Protocol 1.13** (additive): `SessionInfo.quick` and `SpawnSpec.quick`, and
 `QuickShell{worktree?, cwd, create, env, size?, workspace?}` → `Session`: a worktree's (or
 directory's) quick terminal, started when there's none and `create` is set (§11.2h).
+
+**[built WEB1] Protocol 1.14** (additive), for the web client (§16.4): `Welcome.scope` (what a
+paired device may do; absent for a local client); `Agents` → `Agents{agents:[{name, program,
+installed}], default}`; `Editors` → `Editors{names, default}`; `WorktreeOpen{addr, editor?}`
+(a terminal editor starts as a `Session`, any other on the daemon's machine: `Notes`; `control`);
+`ProjectConfig{addr}` → `Text{text}` (the merged config with where each value comes from);
+`Replay{addr}` → `Replay{replay:{size, duration_ms, steps:[{at_ms, keyframe, delta}], truncated}}`
+(a recording as screen frames, sampled to about 300 steps, at most about 6 MB; the web player
+applies them like a live screen); `Export{addr, format}` → `Text` (`asciicast` or `text`).
+`Kill` and `Remove` (stopping what you started) are `control` scope, as the scope's description
+always said. A device with `full` scope may `DevicePair` and `DeviceRevoke` (a code is still only
+claimed by `ptyro serve`).
 
 ### 6.5 Screen frames
 
@@ -4468,7 +4479,8 @@ embedded with `include_bytes!`, with no dependencies or third-party requests.
 - **PWA:** a manifest, icons (rendered by `scripts/icons.py`), and a service worker with an
   offline shell, push display, and Allow/Deny notification actions answered through
   `/api/request` with the token from IndexedDB.
-- **Pairing:** `ptyro pair` (scope `approve` unless `--scope`) prints a QR code (`qrcode`,
+- **Pairing:** `ptyro pair` (scope `approve` unless `--scope`; it says what the scope may do)
+  prints a QR code (`qrcode`,
   Dense1x2) for `<base>/#pair=<code>`. The base is `--url`, `[remote] public_url`, the Tailscale
   HTTPS name when `tailscale serve` proxies to our port, or `http://<listen>`.
   - **Why a code [security review M2]:** what is printed stays in scrollback and in the session
@@ -4491,6 +4503,43 @@ embedded with `include_bytes!`, with no dependencies or third-party requests.
   `Urgency: high` for blocked, errored and gate.
 - **Housekeeping:** a 404/410 drops the subscription. Pushes follow the notifier's filters (kind
   in `notifications.on`, mutes, quiet hours, coalescing) and run in the background.
+
+**[built WEB1] The web client is first class** (§1.3): everything the CLI does, it does, each
+control a named action in an `ACTIONS` table (its tooltip) that `docs/parity.md` and `make parity`
+check. It speaks the protocol over its WebSocket, and a few things a browser can't do itself
+(files, subprocesses) over `POST /api/host`.
+- **Structure** (`web/src`): `conn.ts` (the connection, `host()`), `kit.ts` (the DOM helper,
+  sheets, menus, forms, caches that re-render when data arrives, polling), `data.ts` (projects,
+  worktrees, workspaces, agents: loaded at connect, kept by domain events), `flow.ts` (starting
+  work: the project's scripts to trust, a profile guard's question, the review queue's wait),
+  one module per kind of work (`sessions`, `projects`, `review`, `runs`, `settings`), `qr.ts`
+  (a QR encoder, so pairing another device needs no library), `color.ts`, `app.ts` (the router,
+  the tab bar, the session page, push).
+- **Navigation:** a bottom tab bar (Sessions, Projects, Runs, Sets, More) and hash routes
+  (`#/s/<id>`, `#/wt/<id>/<tab>`, `#/run/<id>`, `#/set/<name>/contract`, …). Dialogs are sheets
+  that slide up on a phone and close with the page they belong to.
+- **Scope-aware:** `Welcome.scope` says what the device may do; the daemon refuses the rest and
+  its message names the `ptyro pair --scope` that would work. Pages that change the machine say
+  so and need `full`.
+- **Host operations** (`crates/ptyro/src/host.rs`, `POST /api/host` with `Authorization: Bearer
+  <token>`; the token must be a `full` device's, which `serve` checks by asking the daemon for
+  the device list, and `serve` must not be `--remote`): `config.get|check|save|show` (checked as
+  `ptyro config check` does, written 0600 atomically, the daemon told to reload), `doctor`,
+  `profile.new|rm|rename|sync|detect|detect_apply|login|doctor`, `integrations.ls|install|
+  uninstall`, `service.install|uninstall`, `daemon.logs|restart|stop`, `tour.start|end`. The work
+  is the CLI's own (`profiles.rs`, `doctor.rs`, `config.rs` expose it as functions; the rest runs
+  the CLI as a subprocess), so the two cannot drift.
+- **The web tour:** `tour.start` makes what `ptyro tour` makes (a throwaway directory with its own
+  ptyro home, a demo repository, the pretend agent) and also starts a `ptyro serve` of its own
+  there on a free loopback port, paired with a `full` device, and returns its link (with
+  `&tour=1`). That page shows a coach (`settings.ts`) that follows the same five steps as the
+  TUI's and moves on by what it sees; "End the tour" runs `tour.end` there, which stops that
+  daemon, deletes the directory and exits. Stale tours are swept at the next start. A tour listens
+  on this computer only, so it is opened from a browser on it.
+- **Replay and scrollback:** `Replay` (above) feeds a canvas player (scrubber, 1–8×);
+  `ReadScrollback` renders as coloured, searchable text.
+- **Diff and review:** `WorktreeDiff` renders per file and hunk; tapping a line adds a
+  `ReviewComment` for the agent; the comments batch into one prompt (`ReviewSend`).
 
 ### 16.5 E2E relay (much later)
 

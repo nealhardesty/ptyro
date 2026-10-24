@@ -347,7 +347,7 @@ function newSet(): void {
     const chosen = [...picks].filter(([, c]) => c.checked).map(([p]) => p);
     if (!name.value.trim()) { err.textContent = "Name it."; return; }
     if (!chosen.length && !tpl.value) { err.textContent = "Pick the projects, or a template."; return; }
-    const spec = (trust: string | null) => ({ name: name.value.trim(), projects: chosen, template: tpl.value || null, lead: null, layout: layout.value, goal: goal.value.trim() || null, from_issue: null, depends: {}, agents: {}, bases: {}, gates: null, integration: [], workspace: null, overlay: null, env: {}, trust });
+    const spec = (trust: string | null) => ({ name: name.value.trim(), projects: chosen, template: tpl.value || null, lead: null, layout: layout.value, goal: goal.value.trim() || null, from_issue: null, depends: {}, agents: {}, bases: {}, gates: null, integration: [], workspace: null, overlay: false, env: {}, trust });
     try {
       let r: any;
       try { r = await conn.request({ t: "cs", op: { op: "new", spec: spec(null) } }); } catch (e) {
@@ -486,8 +486,8 @@ function addMember(name: string): void {
 }
 
 // the contract
-const contract = new Cache<any>((name) => conn.request({ t: "cs", op: { op: "contract", set: name, action: { action: "show", rev: null } } }).then((r) => r.value));
-const contractLog = new Cache<any[]>((name) => conn.request({ t: "cs", op: { op: "contract", set: name, action: { action: "history" } } }).then((r) => asArray(r.value)));
+const contract = new Cache<any>((name) => conn.request({ t: "cs", op: { op: "contract", set: name, action: { do: "show", rev: null } } }).then((r) => r.value));
+const contractLog = new Cache<any[]>((name) => conn.request({ t: "cs", op: { op: "contract", set: name, action: { do: "history" } } }).then((r) => asArray(r.value)));
 
 function contractView(name: string): HTMLElement {
   const c = contract.get(name);
@@ -501,11 +501,11 @@ function contractView(name: string): HTMLElement {
         h("button", { class: "deny", title: tip("set.contract_reject"), onclick: () => resolveGate(waiting, "revise", true) }, "Send back…"))) : null,
     h("div", { class: "pr-head" }, c.draft ? badge("draft: no revision yet") : badge(`r${c.n} by ${c.by}`), c.approved ? badge(`approved by ${c.approved}`, "ok") : null),
     bar(
-      h("button", { class: "primary", title: tip("set.contract_edit"), onclick: () => form("Revise the contract", [{ key: "text", label: "CONTRACT.md", type: "textarea", rows: 16, value: c.text ?? "", required: true }, { key: "summary", label: "What changed", value: "edited by the human" }], "Save a revision", async (v) => { await conn.request({ t: "cs", op: { op: "contract", set: name, action: { action: "revise", text: v.text, diff: null, affects: [], summary: v.summary || null } } }); contract.reload(name); contractLog.reload(name); set.reload(name); }) }, "Edit"),
-      h("button", { onclick: async () => { const v = await csOp({ op: "contract", set: name, action: { action: "diff", a: null, b: null, file: null } }); if (v) textSheet(v.same ? "No drift" : "Revision to revision", v.same ? `The file matches contract r${v.a}.` : v.diff); } }, "Diff"),
+      h("button", { class: "primary", title: tip("set.contract_edit"), onclick: () => form("Revise the contract", [{ key: "text", label: "CONTRACT.md", type: "textarea", rows: 16, value: c.text ?? "", required: true }, { key: "summary", label: "What changed", value: "edited by the human" }], "Save a revision", async (v) => { await conn.request({ t: "cs", op: { op: "contract", set: name, action: { do: "revise", text: v.text, diff: null, affects: [], summary: v.summary || null } } }); contract.reload(name); contractLog.reload(name); set.reload(name); }) }, "Edit"),
+      h("button", { onclick: async () => { const v = await csOp({ op: "contract", set: name, action: { do: "diff", a: null, b: null, file: null } }); if (v) textSheet(v.same ? "No drift" : "Revision to revision", v.same ? `The file matches contract r${v.a}.` : v.diff); } }, "Diff"),
       h("button", { class: "icon", "aria-label": "Refresh", onclick: () => { contract.reload(name); contractLog.reload(name); } }, "↻")),
     h("pre", { class: "block" }, c.text ?? ""),
-    section("History", pending(contractLog, name) ?? h("div", { class: "rows" }, ...hist!.map((r) => row(`r${r.n} · by ${r.by}`, `${r.summary ?? ""}${r.affects?.length ? ` · affects ${r.affects.join(", ")}` : ""}`, r.approved ? badge("approved", "ok") : ago(r.at_ms), { onclick: async () => { const v = await csOp({ op: "contract", set: name, action: { action: "show", rev: r.n } }); if (v) textSheet(`Contract r${r.n}`, v.text); } })))));
+    section("History", pending(contractLog, name) ?? h("div", { class: "rows" }, ...hist!.map((r) => row(`r${r.n} · by ${r.by}`, `${r.summary ?? ""}${r.affects?.length ? ` · affects ${r.affects.join(", ")}` : ""}`, r.approved ? badge("approved", "ok") : ago(r.at_ms), { onclick: async () => { const v = await csOp({ op: "contract", set: name, action: { do: "show", rev: r.n } }); if (v) textSheet(`Contract r${r.n}`, v.text); } })))));
   return h("div", {}, ui.header("Contract", `#/set/${enc(name)}`), h("main", { class: "stack" }, body));
 }
 

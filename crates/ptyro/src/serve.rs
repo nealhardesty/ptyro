@@ -68,6 +68,7 @@ const ASSETS: &[(&str, &str, &[u8])] = &[
     js!("flow"),
     js!("kit"),
     js!("projects"),
+    js!("qr"),
     js!("review"),
     js!("runs"),
     js!("screen"),
@@ -113,6 +114,8 @@ struct State {
     hosts: Vec<String>,
     /// The CA phones trust once (`/ca.crt`), when serving HTTPS.
     ca_pem: Option<String>,
+    /// The daemon is on another machine (`--remote`): host operations would act on this one.
+    remote: bool,
 }
 
 /// One login in progress (see [`State::begin`]); dropping it ends it.
@@ -304,6 +307,7 @@ pub async fn run(
         trust_proxy: fronted,
         hosts,
         ca_pem: tls.as_ref().filter(|_| !own_cert).map(|t| t.ca_pem.clone()),
+        remote: ctx.remote.is_some(),
     });
     let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
     if managed {
@@ -501,6 +505,10 @@ async fn handle(
         },
         (&Method::POST, "/api/request") => match st.begin(ip) {
             Some(login) if !st.locked_out(ip) => api_request(req, &st, via, ip, login).await,
+            _ => busy(),
+        },
+        (&Method::POST, "/api/host") => match st.begin(ip) {
+            Some(login) if !st.locked_out(ip) => api_host(req, &st, via, ip, login).await,
             _ => busy(),
         },
         (&Method::POST, "/api/pair") => match st.begin(ip) {
@@ -726,6 +734,91 @@ async fn api_request(
     respond(StatusCode::OK, "application/json", out.to_string())
 }
 
+/// `{"op": …}` with a device token of `full` scope: something the machine does for the web app
+/// (the config file, the doctor, profiles, the daemon's log…), `crate::host`.
+async fn api_host(
+    req: Request<Incoming>,
+    st: &State,
+    via: String,
+    ip: IpAddr,
+    login: Pending,
+) -> Response<Body> {
+    let token = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::to_owned);
+    let Some(token) = token else {
+        return respond(StatusCode::UNAUTHORIZED, "text/plain", "a device token is required");
+    };
+    let body = match Limited::new(req.into_body(), 1 << 20).collect().await {
+        Ok(b) => b.to_bytes(),
+        Err(_) => return respond(StatusCode::PAYLOAD_TOO_LARGE, "text/plain", "too large"),
+    };
+    let Ok(args) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return respond(StatusCode::BAD_REQUEST, "text/plain", "expected a JSON request");
+    };
+    let mut opts = ptyro_client::ConnectOptions::new(st.ctx_paths.clone(), ClientKind::Web);
+    opts.token = Some(token);
+    opts.encoding = Encoding::Json;
+    let client = ptyro_client::Client::connect_via(&opts, &via).await;
+    drop(login);
+    let client = match client {
+        Ok(c) => c,
+        Err(e) => {
+            if matches!(e, ptyro_client::ClientError::Rejected(_)) {
+                st.failed(ip);
+                return respond(StatusCode::UNAUTHORIZED, "text/plain", "unauthorized");
+            }
+            return respond(StatusCode::BAD_GATEWAY, "text/plain", e.to_string());
+        }
+    };
+    let err = |code: &str, message: &str| {
+        respond(
+            StatusCode::OK,
+            "application/json",
+            serde_json::json!({ "t": "err", "error": { "code": code, "message": message } })
+                .to_string(),
+        )
+    };
+    // Only a device that may do anything may change the machine: asking for the device list is
+    // `full`'s alone, so it doubles as the check.
+    if let Err(e) = client.request(ptyro_protocol::Request::DeviceList).await {
+        return if e.code == ptyro_core::ErrorCode::PermissionDenied {
+            err(
+                "permission_denied",
+                "this device can't change the machine: pair it with `ptyro pair --scope full`",
+            )
+        } else {
+            err("internal", &e.message)
+        };
+    }
+    if st.remote {
+        return err(
+            "unsupported",
+            "this ptyro serve talks to a daemon on another machine; do that on the machine that runs it",
+        );
+    }
+    let op = args["op"].as_str().unwrap_or("").to_owned();
+    let ctx = crate::cli::Ctx::local(st.ctx_paths.clone());
+    let out = match tokio::time::timeout(
+        Duration::from_secs(90),
+        crate::host::run(&ctx, &op, &args),
+    )
+    .await
+    {
+        Ok(Ok(v)) => serde_json::json!({ "t": "ok", "reply": v }),
+        Ok(Err(e)) => {
+            serde_json::json!({ "t": "err", "error": { "code": e.code, "message": e.message } })
+        }
+        Err(_) => {
+            serde_json::json!({ "t": "err", "error": { "code": "timeout", "message": "timed out" } })
+        }
+    };
+    respond(StatusCode::OK, "application/json", out.to_string())
+}
+
 /// `{"code": "ptp_…"}` → `{"token": "ptd_…", "device": DeviceInfo}`: the web app trades the
 /// pairing code from `ptyro pair` for its token, once. A wrong code counts as a failed login.
 async fn api_pair(
@@ -833,6 +926,7 @@ mod tests {
             trust_proxy: false,
             hosts: Vec::new(),
             ca_pem: None,
+            remote: false,
         });
         let ip: IpAddr = "1.2.3.4".parse().unwrap();
         let held: Vec<Pending> = (0..MAX_PENDING).map(|_| st.begin(ip).unwrap()).collect();

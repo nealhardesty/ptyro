@@ -2229,6 +2229,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
+ "toml",
  "toml_edit",
  "tracing",
  "tracing-appender",

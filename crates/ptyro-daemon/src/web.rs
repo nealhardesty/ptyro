@@ -2,9 +2,9 @@
 //! read from the config or from disk themselves, here as requests, since a browser can do
 //! neither.
 
-use ptyro_core::{Error, ErrorCode, TermSize};
 use ptyro_core::session::SpawnSpec;
-use ptyro_protocol::{AgentChoice, Reply, ReplayDoc, ReplayStep};
+use ptyro_core::{Error, ErrorCode, TermSize};
+use ptyro_protocol::{AgentChoice, ReplayDoc, ReplayStep, Reply};
 use ptyro_term::record::{self, Timed};
 use ptyro_term::{AlacrittyEmulator, Emulator, FrameTracker, StyleTable};
 
@@ -81,7 +81,11 @@ impl Daemon {
             let keyframe = since.is_none();
             let delta = tracker.build(emu, since, &mut styles);
             since = Some(tracker.seq());
-            let cost = delta.rows.iter().map(|r| r.runs.iter().map(|x| x.text.len() + 48).sum::<usize>()).sum::<usize>();
+            let cost = delta
+                .rows
+                .iter()
+                .map(|r| r.runs.iter().map(|x| x.text.len() + 48).sum::<usize>())
+                .sum::<usize>();
             steps.push(ReplayStep { at_ms, keyframe, delta });
             cost
         };
@@ -97,7 +101,8 @@ impl Daemon {
             sink.replies.clear();
             sink.events.clear();
             let ms = r.t_us / 1000;
-            if (ms >= next || i + 1 == recs.len()) && !matches!(r.record, record::Record::Start(_)) {
+            if (ms >= next || i + 1 == recs.len()) && !matches!(r.record, record::Record::Start(_))
+            {
                 tracker.update(&mut emu);
                 bytes += snap(&emu, &mut tracker, ms);
                 next = ms + interval_ms;
@@ -147,7 +152,8 @@ impl Daemon {
             )
         })?;
         let path = info.path.to_string_lossy().into_owned();
-        let mut argv: Vec<String> = def.command.iter().map(|a| a.replace("{path}", &path)).collect();
+        let mut argv: Vec<String> =
+            def.command.iter().map(|a| a.replace("{path}", &path)).collect();
         if !def.command.iter().any(|a| a.contains("{path}")) {
             argv.push(path);
         }
@@ -162,7 +168,8 @@ impl Daemon {
             let s = self.spawn(spec).await?;
             return Ok(Reply::Session { info: self.info(&s) });
         }
-        let (prog, args) = argv.split_first().ok_or_else(|| Error::invalid("empty editor command"))?;
+        let (prog, args) =
+            argv.split_first().ok_or_else(|| Error::invalid("empty editor command"))?;
         std::process::Command::new(prog)
             .args(args)
             .current_dir(&info.path)
@@ -171,13 +178,16 @@ impl Daemon {
             .stderr(std::process::Stdio::null())
             .spawn()
             .map_err(|e| Error::new(ErrorCode::NotFound, format!("{prog}: {e}")))?;
-        Ok(Reply::Notes { notes: vec![format!("opened {} in {name}, on the computer", info.qualified())] })
+        Ok(Reply::Notes {
+            notes: vec![format!("opened {} in {name}, on the computer", info.qualified())],
+        })
     }
 
     /// `project config --explain`.
     pub(crate) fn project_config(&self, addr: &str) -> Result<String, Error> {
         let p = self.find_project(addr)?;
-        let cfg = ptyro_core::project::ProjectConfig::load(&p.root, &p.root).map_err(Error::invalid)?;
+        let cfg =
+            ptyro_core::project::ProjectConfig::load(&p.root, &p.root).map_err(Error::invalid)?;
         let mut out = toml::to_string_pretty(&cfg).map_err(|e| Error::internal(e.to_string()))?;
         out.push_str("\n# where each value comes from\n");
         for (k, from) in &cfg.origin {

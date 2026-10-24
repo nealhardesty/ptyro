@@ -396,18 +396,23 @@ async fn scopes_revocation_and_lockout() {
     let mut tab = Phone::signed_in(serve.port, &ctl).await;
     tab.ok(json!({ "t": "send_text", "addr": "sh1", "text": "from the tablet", "enter": true, "wait_ready_ms": null })).await;
     w.wait_screen("sh1", "from the tablet");
-    // Control can't run arbitrary commands, and nobody remote pairs devices.
+    // Control can't run arbitrary commands, and only a full device pairs devices.
     let o = tab.request(json!({ "t": "spawn", "spec": { "argv": ["sh"], "cwd": "/" } })).await;
     assert!(
         o["t"] == "err" && o["error"]["message"].as_str().is_some_and(|m| m.contains("needs full")),
         "{o}"
     );
-    let mut lap = Phone::signed_in(serve.port, &full).await;
-    let o = lap.request(json!({ "t": "device_pair", "name": "x", "scope": "full" })).await;
+    let o = tab.request(json!({ "t": "device_pair", "name": "x", "scope": "full" })).await;
     assert!(
-        o["t"] == "err" && o["error"]["message"].as_str().unwrap().contains("only on the machine"),
+        o["t"] == "err" && o["error"]["message"].as_str().unwrap().contains("paired and revoked"),
         "{o}"
     );
+    let mut lap = Phone::signed_in(serve.port, &full).await;
+    let made = lap.ok(json!({ "t": "device_pair", "name": "slate", "scope": "approve" })).await;
+    assert!(made["code"].as_str().unwrap().starts_with("ptp_"), "{made}");
+    // Claiming is `ptyro serve`'s, for a device that isn't one yet: never a device's.
+    let o = lap.request(json!({ "t": "device_claim", "code": "ptp_x", "via": null })).await;
+    assert_eq!(o["t"], "err", "{o}");
 
     // Revoke: the live connection gets a goodbye, and the token stops working.
     w.ok(&["devices", "revoke", &ctl_id]);
@@ -958,4 +963,166 @@ async fn serve_uses_your_own_certificate() {
     assert!(!w.d.paths.data.join("serve/tls/ca.pem").exists(), "none made");
     let _ = child.kill();
     let _ = child.wait();
+}
+
+/// `POST /api/host` with a bearer token → (status, the JSON body).
+fn host(port: u16, token: Option<&str>, body: &Value) -> (u16, Value) {
+    let body = body.to_string();
+    let auth = token.map(|t| format!("Authorization: Bearer {t}\r\n")).unwrap_or_default();
+    let (code, text) = http(
+        port,
+        &format!(
+            "POST /api/host HTTP/1.1\r\nHost: 127.0.0.1\r\n{auth}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        ),
+    );
+    let json = text
+        .split("\r\n\r\n")
+        .nth(1)
+        .and_then(|b| serde_json::from_str(b).ok())
+        .unwrap_or(Value::Null);
+    (code, json)
+}
+
+/// ROADMAP WEB1: what the web app asks of the daemon and of the machine.
+#[tokio::test]
+async fn the_web_app_asks_the_daemon_and_the_machine() {
+    let w = World::new("", &[]);
+    let serve = w.serve();
+    let (_, ctl) = w.pair(&serve, "tablet", "control");
+    let (_, full) = w.pair(&serve, "laptop", "full");
+    let welcome = |p: Value| p["scope"].clone();
+
+    // The welcome says what the device may do.
+    let (_, first) = Phone::hello(
+        serve.port,
+        json!({ "kind": "web", "version": "web", "pid": 0, "token": ctl }),
+    )
+    .await;
+    assert_eq!(welcome(first), "control");
+    let mut lap = Phone::signed_in(serve.port, &full).await;
+    let mut tab = Phone::signed_in(serve.port, &ctl).await;
+
+    // The agents it can start and the editors it can open a worktree in.
+    let a = tab.ok(json!({ "t": "agents" })).await;
+    assert_eq!(a["default"], "claude", "{a}");
+    let claude = a["agents"].as_array().unwrap().iter().find(|x| x["name"] == "claude").unwrap();
+    assert_eq!(claude["installed"], true, "{a}");
+    let e = tab.ok(json!({ "t": "editors" })).await;
+    assert!(e["names"].as_array().unwrap().iter().any(|n| n == "nvim"), "{e}");
+
+    // A session's recording: exported as text and asciicast, replayed as screen frames. A
+    // control device stops what it started.
+    w.ok(&["new", "-d", "-n", "rec", "--", "sh", "-c", "echo recorded-line; sleep 30"]);
+    w.wait_screen("rec", "recorded-line");
+    let t = tab.ok(json!({ "t": "export", "addr": "rec", "format": "text" })).await;
+    assert!(t["text"].as_str().unwrap().contains("recorded-line"), "{t}");
+    let c = tab.ok(json!({ "t": "export", "addr": "rec", "format": "asciicast" })).await;
+    assert!(c["text"].as_str().unwrap().starts_with("{\"version\":2"), "{c}");
+    let o = tab.request(json!({ "t": "export", "addr": "rec", "format": "mp4" })).await;
+    assert_eq!(o["t"], "err", "{o}");
+    let r = tab.ok(json!({ "t": "replay", "addr": "rec" })).await;
+    let steps = r["replay"]["steps"].as_array().unwrap();
+    assert!(!steps.is_empty() && steps[0]["keyframe"] == true, "{r}");
+    assert!(steps[1..].iter().all(|s| s["keyframe"] == false));
+    let shown = serde_json::to_string(&r).unwrap();
+    assert!(
+        shown.contains("recorded-line") || shown.contains("recorded"),
+        "the replay carries the output"
+    );
+    tab.ok(json!({ "t": "kill", "addr": "rec", "signal": null })).await;
+    tab.ok(json!({ "t": "remove", "addr": "rec" })).await;
+
+    // A project's configuration, with where each value comes from.
+    let repo = w.home().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"],
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    w.ok(&["project", "add", repo.to_str().unwrap()]);
+    let cfg = lap.ok(json!({ "t": "project_config", "addr": "repo" })).await;
+    assert!(cfg["text"].as_str().unwrap().contains("where each value comes from"), "{cfg}");
+
+    // The machine: a full device reads, checks and saves the config; others are refused.
+    let (code, v) = host(serve.port, Some(&full), &json!({ "op": "config.get" }));
+    assert_eq!((code, &v["t"]), (200, &json!("ok")), "{v}");
+    assert!(v["reply"]["path"].as_str().unwrap().ends_with("config.toml"), "{v}");
+    let (_, v) = host(serve.port, Some(&full), &json!({ "op": "config.check", "text": "[ui\n" }));
+    assert_eq!(v["t"], "err", "a broken config is refused: {v}");
+    let (_, v) = host(
+        serve.port,
+        Some(&full),
+        &json!({ "op": "config.check", "text": "[ui]\nsidebar_width = 31\n" }),
+    );
+    assert_eq!(v["t"], "ok", "{v}");
+    let text = format!(
+        "[attention]\nmin_work = \"1s\"\n[agents.claude]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\n[ui]\nsidebar_width = 33\n"
+    );
+    let (_, v) = host(serve.port, Some(&full), &json!({ "op": "config.save", "text": text }));
+    assert_eq!(v["t"], "ok", "{v}");
+    assert!(w.ok(&["config", "show"]).contains("sidebar_width = 33"));
+    let (code, v) = host(serve.port, Some(&ctl), &json!({ "op": "config.get" }));
+    assert_eq!(code, 200);
+    assert_eq!(v["error"]["code"], "permission_denied", "{v}");
+    assert_eq!(host(serve.port, None, &json!({ "op": "config.get" })).0, 401);
+    assert_eq!(host(serve.port, Some("ptd_nope"), &json!({ "op": "config.get" })).0, 401);
+    let (_, v) = host(serve.port, Some(&full), &json!({ "op": "rm -rf" }));
+    assert_eq!(v["t"], "err", "{v}");
+
+    // Profiles through the same functions as the CLI.
+    let (_, v) = host(
+        serve.port,
+        Some(&full),
+        &json!({ "op": "profile.new", "name": "work", "label": "Work", "git_email": "me@work.example" }),
+    );
+    assert_eq!(v["t"], "ok", "{v}");
+    assert!(w.ok(&["profile", "ls"]).contains("work"));
+    let (_, v) = host(serve.port, Some(&full), &json!({ "op": "profile.new", "name": "work" }));
+    assert_eq!(v["error"]["code"], "conflict", "{v}");
+    let (_, v) = host(serve.port, Some(&full), &json!({ "op": "profile.rm", "name": "work" }));
+    assert_eq!(v["t"], "ok", "{v}");
+    assert!(!w.ok(&["profile", "ls"]).contains("work"));
+
+    // The daemon's own log and the doctor's checks.
+    let (_, v) = host(serve.port, Some(&full), &json!({ "op": "daemon.logs", "lines": 5 }));
+    assert_eq!(v["t"], "ok", "{v}");
+    let (_, v) = host(serve.port, Some(&full), &json!({ "op": "doctor", "quick": true }));
+    let checks = v["reply"]["checks"].as_array().unwrap_or_else(|| panic!("{v}"));
+    assert!(
+        checks
+            .iter()
+            .any(|c| c["section"] == "daemon" && c["name"] == "running" && c["level"] == "ok"),
+        "{v}"
+    );
+    // A tour is for its own ptyro only: this one refuses to end itself.
+    let (_, v) = host(serve.port, Some(&full), &json!({ "op": "tour.end" }));
+    assert_eq!(v["error"]["code"], "invalid", "{v}");
+}
+
+/// The web app's QR encoder (pairing another device from the web): structure a scanner relies
+/// on, in `web/test/qr.mjs`. Skipped without Node.
+#[test]
+fn the_web_apps_qr_codes_are_well_formed() {
+    if std::process::Command::new("node").arg("--version").output().is_err() {
+        eprintln!("node not found: skipping the QR check");
+        return;
+    }
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web/test/qr.mjs");
+    let out = std::process::Command::new("node").arg(script).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
 }

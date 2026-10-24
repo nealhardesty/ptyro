@@ -57,7 +57,15 @@ pub fn run(paths: &Paths, cmd: ConfigCmd) -> Result<i32, Error> {
 
 /// Validate the file, including key bindings and action names; returns notes.
 fn check(path: &std::path::Path) -> Result<Vec<String>, String> {
-    let config = Config::load(path).map_err(|e| e.to_string())?;
+    check_config(Config::load(path).map_err(|e| e.to_string())?, path)
+}
+
+/// `check` for text that isn't saved yet (the web app's editor).
+pub(crate) fn check_text(text: &str, path: &std::path::Path) -> Result<Vec<String>, String> {
+    check_config(Config::parse(text).map_err(|e| e.to_string())?, path)
+}
+
+fn check_config(config: Config, path: &std::path::Path) -> Result<Vec<String>, String> {
     let mut notes: Vec<String> = config
         .reserved_in_use()
         .into_iter()
@@ -83,7 +91,7 @@ fn check(path: &std::path::Path) -> Result<Vec<String>, String> {
     Ok(notes)
 }
 
-const STARTER: &str = r#"# ptyro configuration. Every key is optional; see SPEC §13 for all of them.
+pub(crate) const STARTER: &str = r#"# ptyro configuration. Every key is optional; see SPEC §13 for all of them.
 # Changes apply live (the daemon reloads this file when it changes).
 
 [ui]

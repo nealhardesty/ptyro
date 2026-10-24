@@ -57,6 +57,10 @@ export const ui = {
   toast: (_text: string) => {},
   /// A page's top bar: the title, a back arrow, and extra controls on its right.
   header: (title: string, _back: boolean | string, ..._extra: Child[]): HTMLElement => h("header", {}, h("h1", {}, title)),
+  /// Turn notifications on for this device.
+  push: () => {},
+  /// Forget this device's pairing.
+  forget: () => {},
 };
 
 /// A view: `#/<name>/<rest>`. Views are built on every render, so they read what's loaded and

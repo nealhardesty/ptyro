@@ -1,6 +1,6 @@
 //! Paired devices (SPEC §16.3, M9.2): long random tokens, stored only as SHA-256 hashes, each
 //! with a scope the daemon enforces on every request and keystroke the device sends. Pairing
-//! and revoking happen only from this machine. Every remote action that touches a session is
+//! and revoking happen only from this machine, or from a device with `full` scope. Every remote action that touches a session is
 //! written to that session's event log.
 
 use ptyro_core::secret::{ct_eq, token};
@@ -135,6 +135,8 @@ pub fn needed(req: &Request) -> Scope {
         | SendBytes { .. }
         | Resume { .. }
         | Hibernate { .. }
+        | Kill { .. }
+        | Remove { .. }
         | Restart { .. }
         | Rename { .. }
         | MsgPost { .. }
@@ -247,13 +249,16 @@ impl Daemon {
     /// Hold a device to its scope; record what it did to sessions.
     pub(crate) fn guard_device(&self, req: &Request, caller: Caller) -> Result<(), Error> {
         let Some(g) = caller.grant else { return Ok(()) };
-        if matches!(
-            req,
-            Request::DevicePair { .. } | Request::DeviceClaim { .. } | Request::DeviceRevoke { .. }
-        ) {
+        // A code is claimed by `ptyro serve` for a device that isn't one yet. Pairing and
+        // revoking are the machine's own, and a device with `full` scope's, which can run any
+        // command as you already (the web app's Devices page).
+        if matches!(req, Request::DeviceClaim { .. })
+            || (matches!(req, Request::DevicePair { .. } | Request::DeviceRevoke { .. })
+                && g.scope < Scope::Full)
+        {
             return Err(Error::new(
                 ErrorCode::PermissionDenied,
-                "devices are paired and revoked only on the machine that runs ptyro",
+                "devices are paired and revoked on the machine that runs ptyro, or from a device paired with `--scope full`",
             ));
         }
         let need = needed(req);
@@ -576,5 +581,16 @@ mod tests {
         }
         assert_eq!(needed(&Request::Upgrade { binary: None }), Scope::Full);
         assert_eq!(needed(&Request::DeviceList), Scope::Full);
+        // Stopping what you started is control's, as the scope's description says; starting any
+        // command, making worktrees and shipping aren't.
+        assert_eq!(needed(&Request::Kill { addr: "x".into(), signal: None }), Scope::Control);
+        assert_eq!(needed(&Request::Remove { addr: "x".into() }), Scope::Control);
+        assert_eq!(needed(&Request::Agents), Scope::Read);
+        assert_eq!(needed(&Request::Replay { addr: "x".into() }), Scope::Read);
+        assert_eq!(needed(&Request::Editors), Scope::Read);
+        assert_eq!(
+            needed(&Request::WorktreeOpen { addr: "x".into(), editor: None }),
+            Scope::Control
+        );
     }
 }

@@ -17,9 +17,9 @@ NAME ?=
 SIZE ?= 100x30
 FIXTURES := crates/ptyro-term/tests/fixtures
 # For `make parity`: STRICT=0 lists TUI gaps in docs/parity.md instead of failing on them;
-# WEB_STRICT=1 fails on web gaps too (the default once ROADMAP WEB1 is done).
+# WEB_STRICT=0 lists web gaps instead of failing on them (ROADMAP WEB1 is done: they fail).
 STRICT ?= 1
-WEB_STRICT ?= 0
+WEB_STRICT ?= 1
 
 .DEFAULT_GOAL := help
 .PHONY: help rust-install build release install test fmt fmt-check lint deny doc check ci clean tools \
@@ -57,7 +57,7 @@ lint: ## Clippy with warnings as errors
 deny: ## License/advisory/source checks (needs `make tools`)
 	$(CARGO) deny check
 
-parity: ## Check every CLI command has a TUI path and a web path, or a waiver (docs/parity.md); lists web gaps; WEB_STRICT=1 fails on them, STRICT=0 only lists TUI gaps
+parity: ## Check every CLI command has a TUI path and a web path, or a waiver (docs/parity.md); a gap fails; STRICT=0 / WEB_STRICT=0 only list TUI / web gaps
 	PTYRO_PARITY_STRICT=$(STRICT) PTYRO_PARITY_WEB_STRICT=$(WEB_STRICT) $(CARGO) test -p ptyro --bin ptyro parity -- --nocapture
 
 tui-parity: parity ## The same as `make parity`

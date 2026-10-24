@@ -34,13 +34,13 @@ Conventions:
 | **M11** | Change sets | One coordinated change across several repos: lead + member agents, contract, integration overlay, set checkpoints, merge train (done) |
 | **H1** | Hardening review | ~120 findings of a full code review fixed (security, crashes, correctness, build) (done) |
 | **UX1** | Out of the box | From `cd repo && ptyro` to a shipped, cleaned-up worktree by keys alone; sidebar rows that say what's going on (done) |
-| **WEB1** | Web parity | The web client does what the CLI and TUI do, and the parity check covers it |
+| **WEB1** | Web parity | The web client does what the CLI and TUI do, and the parity check covers it (done) |
 | **Backlog** | Later / maybe | Editor, tasks, jj, libghostty, relay, … |
 
 Critical path: **M0 → M1 → M2 → M3 → M4** gives a daily-driver. M5 can interleave with M3/M4.
 M6–M10 are largely independent of each other after M5. M11 builds on M6 (PRs) and M7 (runs,
 mailbox, `ptyro mcp`); its experiment M11.0 can run as soon as M5 exists. UX1, the owner's top
-priority from 2026-10-22, is done (2026-10-23); **WEB1 is next**.
+priority from 2026-10-22, is done (2026-10-23), and so is WEB1 (2026-10-24).
 
 ---
 
@@ -1590,6 +1590,10 @@ shows a live terminal, sends replies and keys, answers permission prompts, shows
 structured chats, and takes push notifications. It can't start, stop or restart anything, or
 touch worktrees, projects, review and PRs, runs, change sets, profiles or settings. R-UX-31.
 
+**Done (2026-10-24): all of WEB1.** 0 web gaps in `docs/parity.md`, and `make parity` fails on
+one. The device needs `--scope full` for the whole app (`control`: answer, type, stop; the pages
+that change the machine say so). *Not checked here:* the app on a real phone.
+
 **Done when:** from a phone, with only `ptyro serve` and a paired device, you can do the UX1
 demo (start a task in a new worktree, answer it, review its diff, finish it into a PR, clean
 up), and `make parity` fails CI on a CLI command with neither a web path nor a waiver.
@@ -1615,25 +1619,59 @@ up), and `make parity` fails CI on a CLI command with neither a web path nor a w
   `completions`, `shell-init`, `daemon start`, and the TUI's waivers). 151 are gaps, by task
   below. Found on the way: the empty session list says "Start one with `ptyro new` on your
   computer" (WEB1.2 gives it the action instead).
-- [ ] **WEB1.2 Sessions** — M. New task (the UX1.9 box), new session, stop, kill, restart,
+- [x] **WEB1.2 Sessions** — M. New task (the UX1.9 box), new session, stop, kill, restart,
   resume, hibernate, rename, retitle, adopt, summarize, explain, mute; the row menu's actions as
   a session's menu. From the audit (20): `new`, `stop`, `kill`, `restart`, `rm`, `rename`,
   `retitle`, `resume`, `hibernate`, `convert`, `adopt`, `shell`, `summarize`, `broadcast`,
   `events`, `mute`, `msg send`, `verify`, `replay`, `export`; and `read`'s scrollback.
-- [ ] **WEB1.3 Worktrees and projects** — M. The sidebar's tree, a new worktree (from a PR,
+  *Done (2026-10-24):* the web app got a kit (sheets that slide up on a phone, menus, forms,
+  caches that re-render as data arrives), a router with a tab bar, and a data model fed by the
+  daemon's events. **＋** on the Sessions tab is the new-task sheet (the task, the agent, and
+  where: a new worktree from the main branch, a PR, an issue, a branch or your changes; an
+  existing worktree; a shell or a command), asking about the project's scripts and a profile
+  guard like the TUI does. A session's **⋯** is the row menu: stop, kill, restart, resume,
+  hibernate, convert, adopt, rename, title, summarize, why this status, mute, message, verify,
+  a shell in its worktree, scrollback (coloured, searchable), events, replay (a canvas player,
+  scrubber, 1–8×) and saving the recording; ☑ marks several sessions to type into at once;
+  *Earlier sessions* lists what ended. New daemon requests `Agents`, `Replay`, `Export`; the
+  welcome carries the device's scope (protocol 1.14, SPEC §6.4). *Found on the way:* `Kill` and
+  `Remove` were `full` though the scope's own description said `control`.
+- [x] **WEB1.3 Worktrees and projects** — M. The sidebar's tree, a new worktree (from a PR,
   an issue, a branch, your changes), finish, archive, restore, remove, scripts, ports; projects
   add, trust, pin. From the audit (40): `project` (add, discover, suggest, ls, show, rm,
   trust, untrust, config, pin, unpin), `wt` (new, ls, rm, status, pair, unpair, run, open,
   lock, unlock, rename-branch, retitle, finish, archive, restore, archives), `gc`, `ws` (ls,
   new, set, rm, rename, add, remove), `lease ls`, `radar`, `checkpoint` (ls, diff, restore).
-- [ ] **WEB1.4 Review and ship** — L. The diff inspector (comments to the agent), commit, PR
+  *Done (2026-10-24):* the Projects tab is the sidebar's tree (workspace chips, each project's
+  worktrees with changes, PR and sessions, ＋ Task); a project's page (path, remote, pin,
+  scripts with a review-then-trust, configuration with where each value comes from,
+  suggestions, workspaces, forget); a worktree's page (sessions, status, ⋯: editor, run script,
+  pair mode, lock, title, rename branch, archive, remove, which offers to archive instead when
+  it holds unsaved work; Finish: a PR or merge into main; Checkpoints), Archived, 🧹 clean-up,
+  Workspaces, Leases and the collision Radar. New daemon requests `Editors`, `WorktreeOpen`
+  (control), `ProjectConfig`.
+- [x] **WEB1.4 Review and ship** — L. The diff inspector (comments to the agent), commit, PR
   and checks, integrate, the review queue. From the audit (19): `wt diff`, `wt log`,
   `wt commit`, `wt integrate`, `review` (add, ls, rm, send, queue, done), `pr` (create,
   status, checks, fix, automerge, watch, reply, open), `watch-pr`.
-- [ ] **WEB1.5 Runs and change sets** — M. Recipes, fan-out compare and pick, gates, change
+  *Done (2026-10-24):* a worktree's **Changes** tab is the diff inspector (what to diff against;
+  per file and hunk; tap a line to leave a comment that shows under it; one bar to send them to
+  the agent as a prompt or clear them; Commit… with the files to pick, or ask the agent to);
+  **Commits** (and Merge into main: rebase or cherry-pick, push); **Checks** (the PR, its
+  checks with links, open one, fix the failing, auto-merge, watch, reply); More → Review queue,
+  with ⎘ to open a PR's worktree or make one on it.
+- [x] **WEB1.5 Runs and change sets** — M. Recipes, fan-out compare and pick, gates, change
   sets and their merge train. From the audit (42): `fanout`, `compare`, `pick`, `discard`,
   `iterate`, `run` (ls, show, events, cancel, retry, fork, lead), `recipe` (ls, show, run),
   `gate` (ls, resolve), and every `cs` command but the agents' own (23).
+  *Done (2026-10-24):* the Runs tab (open gates on top with their options and a note; runs;
+  ＋ a fan-out, a recipe or a lead; 📜 recipes with their variables and source), a run's page
+  (steps and why they ended, retry, fork, events, cancel), the compare view (each candidate
+  ranked with its tests, judge and reasons; take it by merge, cherry-pick, PR or some files;
+  follow up; discard) and the Sets tab (a set's members with what to do about each issue, its
+  gates, the contract with its history, diff and an editor that records a revision, approve or
+  send back, ledger, checks, checkpoints and restore, overlay, commit, push, PRs, land, add,
+  drop, remove). Both poll while open.
 - [x] **WEB1.7 TLS by default for `ptyro serve`** (R-REM-11; owner, 2026-10-23) — M. Today
   `serve` speaks plain HTTP on loopback or Tailscale and relies on Tailscale HTTPS or a reverse
   proxy for TLS; any other address needs `--insecure` (tokens in clear).
@@ -1675,12 +1713,25 @@ up), and `make parity` fails CI on a CLI command with neither a web path nor a w
     the owner's to try. **Dropped:** the pairing QR carrying the fingerprint for the page to
     check, since a page can't see the certificate its own connection uses; `pair` prints the
     fingerprint for you to compare in the phone's certificate details instead.
-- [ ] **WEB1.6 Settings and health** — M. Profiles and logins, workspaces, the health badge and
+- [x] **WEB1.6 Settings and health** — M. Profiles and logins, workspaces, the health badge and
   its fixes, the config (validated as `ptyro config edit` does), quit (`app.quit`). From the
   audit (30): `notify test`, `usage`, `integrations` (ls, install, uninstall), `profile` (ls,
   show, new, rm, rename, login, sync, detect, doctor), `devices ls`, `devices revoke`, `pair`
   for another device, `init`, `doctor`, `tour`, `config` (edit, check, show, path), `daemon`
   (stop, restart, status, logs, upgrade, install-service, uninstall-service).
+  *Done (2026-10-24):* the More tab: this device (its scope, notifications and a test), Health
+  (every `ptyro doctor` check with its fix: log in, edit the config, restart…), Usage meters,
+  Devices (list, revoke, pair another with a link and a QR code drawn by `web/src/qr.ts`),
+  Profiles (new, find my accounts, log in, sync, check, rename, remove), Configuration (an editor
+  checked as `config check` does, applied at once), Integrations, the Daemon (status, logs,
+  upgrade, restart, stop, the login service), Set up (the first run: agents, accounts,
+  repositories) and the Tour. What a browser can't do itself goes through `POST /api/host`
+  (`crates/ptyro/src/host.rs`; `full` devices only), which shares the CLI's own functions
+  (`profiles.rs`, `doctor.rs`, `config.rs`). The tour is the real one: a throwaway ptyro with its
+  own `serve` on a free local port, opened in a new tab with a coach that follows the same five
+  steps and ends by deleting it all; it was walked through for real (task, Allow, diff, merge,
+  archive, end). A `full` device may now pair and revoke devices. `ptyro pair` says what the scope
+  it made may do. `make parity` now fails on web gaps (`WEB_STRICT=0` only lists them).
 
 Suggested order: WEB1.0 → WEB1.1 → WEB1.7 (phones need it) → WEB1.2 → WEB1.3 → WEB1.4 → the
 rest. From WEB1.0 on, every
