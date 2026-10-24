@@ -2562,6 +2562,14 @@ learning anything up front.
   opens every row. The row in focus (and any that wants you) wraps its task and reply over two
   lines. Drawing, clicks and scrolling share one line layout, so a row is one target however
   many lines it takes.
+- **Several lines in ptyro's own boxes** (UX1.26): in the task box, peek's reply and the
+  prompts for free text (a broadcast, a review comment, a commit message), `Shift+Enter`,
+  `Alt+Enter` and `Ctrl+J` start a new line (`app::is_newline_key`; without the kitty keyboard
+  protocol only the last two can be told from Enter, and the hint says `C-j`). The box wraps and
+  grows to a third of the screen, keeping its end in view (`ui::edit_rows`). A paste goes into
+  the open box, new lines kept where it takes several, and never on to the session behind it,
+  which it used to. Names, titles and command lines stay single-line. The daemon types a
+  multi-line prompt as one bracketed paste, so the agent gets one prompt.
 - **Summaries, opt-in** (UX1.3, `crates/ptyro-daemon/src/summary.rs`). With `[summaries] enabled
   = true`, a one-line summary is made each time an agent's turn ends (an agent session, or one
   started by hand in a shell) and each time a session newly blocks. It shows as `≈ …` on the

@@ -29,6 +29,8 @@
 //!
 //! With `PTYRO_FAKE_TURNS=1` it treats prose like a real agent: a line `Label: <command>` runs
 //! the command, and any other line is a short turn (recipes' prompts and follow-ups).
+//! With `PTYRO_FAKE_PASTE=1` it asks for bracketed paste, as Claude and Codex do: a pasted
+//! prompt over several lines is one short turn that says it back (`prompt over N lines: …`).
 //! | `exit` | SessionEnd, exit 0 |
 //!
 //! Like Claude, a Stop hook that answers `{"decision":"block"}` keeps the turn going (the fake
@@ -470,6 +472,11 @@ pub fn main(args: &[String]) -> i32 {
     f.hook("SessionStart", json!({ "source": if f.resumed { "resume" } else { "startup" } }));
     f.oc(json!({ "type": "session.created", "properties": { "info": { "id": f.session } } }));
     f.report(&mut out, "state=idle");
+    // `PTYRO_FAKE_PASTE=1`: bracketed paste, as real agents ask for, so a pasted prompt over
+    // several lines is one prompt. Off, each line is its own command (the scripted tests).
+    if std::env::var("PTYRO_FAKE_PASTE").is_ok() {
+        let _ = write!(out, "\x1b[?2004h");
+    }
     let stdin = std::io::stdin();
     loop {
         let _ = write!(out, "> ");
@@ -477,6 +484,30 @@ pub fn main(args: &[String]) -> i32 {
         let mut line = String::new();
         if stdin.lock().read_line(&mut line).unwrap_or(0) == 0 {
             return 0;
+        }
+        // The cooked terminal splits a paste at its new lines: join it up to its end mark (the
+        // Enter after it ends that last line).
+        if line.contains("\x1b[200~") {
+            while !line.contains("\x1b[201~") {
+                let mut more = String::new();
+                if stdin.lock().read_line(&mut more).unwrap_or(0) == 0 {
+                    break;
+                }
+                line.push_str(&more);
+            }
+            line = line.replace("\x1b[200~", "").replace("\x1b[201~", "");
+            let text = line.trim().to_owned();
+            if text.contains('\n') {
+                // A prompt over several lines: one short turn, said back whole.
+                f.turn(&mut out, &text, |o| {
+                    let n = text.lines().count();
+                    let said = format!("prompt over {n} lines: {}", text.replace('\n', " ⏎ "));
+                    let _ = writeln!(o, "{said}");
+                    said
+                });
+                continue;
+            }
+            line = text;
         }
         let mut line = line.trim().to_owned();
         // `PTYRO_FAKE_TURNS=1`: act like a real agent on prose. A prompt line `Label: cmd` runs

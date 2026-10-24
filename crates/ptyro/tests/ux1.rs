@@ -497,20 +497,18 @@ async fn the_task_box_starts_an_agent_on_what_you_typed() {
     for (k, v) in w.d.env() {
         script = script.env(&k, &v);
     }
+    // Keys go in once the screen shows what they wait for: ⏎ only once the box previews the
+    // name, agent and place it will use.
     let r = ptyro_testkit::headless::run(
         script
-            .send(2.0, "\\x11n")
-            .send(2.6, "work 0.3")
-            .snapshot(3.4)
-            .send(3.6, "\\r")
-            .snapshot(8.5)
-            .send(9.0, "\\x11d"),
+            .timeout(30.0)
+            .send_when("WORKSPACE", "\\x11n")
+            .send_when("What should it do?", "work 0.3")
+            .send_when("→ work-0-3 · claude · new worktree in proj", "\\r")
+            .until("> work 0.3"),
     )
     .await
     .expect("headless run");
-    let typed = r.at(3.4);
-    assert!(typed.contains("What should it do?"), "{typed}");
-    assert!(typed.contains("→ work-0-3 · claude · new worktree in proj"), "{typed}");
     let s = wait_for(&c, "work-0-3", "the agent, given the prompt", |s| {
         s.task.as_deref() == Some("work 0.3")
     })
@@ -524,7 +522,53 @@ async fn the_task_box_starts_an_agent_on_what_you_typed() {
     let wt = worktrees.iter().find(|x| x.name == "work-0-3").expect("its worktree");
     assert_eq!(s.worktree.as_deref(), Some(wt.id.as_str()));
     assert_eq!(wt.title.as_deref(), Some("work 0.3"));
-    assert!(r.at(8.5).contains("work 0.3"), "the pane follows the agent: {}", r.at(8.5));
+    assert!(r.screen.contains("> work 0.3"), "the pane follows the agent: {}", r.screen);
+}
+
+/// UX1.26: the task box takes several lines (Ctrl+J here; Shift+Enter and Alt+Enter too), and
+/// the agent gets them as one prompt.
+#[tokio::test]
+async fn the_task_box_takes_several_lines_as_one_prompt() {
+    // The fake agent takes pastes the way Claude and Codex do (bracketed, one prompt).
+    let w = World::with_config("exec sleep 60", "[agents.claude.env]\nPTYRO_FAKE_PASTE = \"1\"\n");
+    let dir = repo(&w, "proj");
+    let c = w.d.client().await.unwrap();
+    spawn(
+        &c,
+        SpawnSpec {
+            cwd: dir.clone(),
+            name: Some("sh0".into()),
+            size: Some(TermSize::new(80, 20)),
+            ..SpawnSpec::default()
+        },
+    )
+    .await;
+    let mut script =
+        ptyro_testkit::headless::Script::new(vec![BIN.to_owned(), "attach".into(), "sh0".into()])
+            .size(110, 24)
+            .timeout(30.0)
+            .env("HOME", &w.home().to_string_lossy());
+    for (k, v) in w.d.env() {
+        script = script.env(&k, &v);
+    }
+    let r = ptyro_testkit::headless::run(
+        script
+            .send_when("WORKSPACE", "\\x11n")
+            .send_when("What should it do?", "fix the login")
+            .send_when("fix the login", "\\x0a")
+            .send_when("new line", "and the logout")
+            .send_when("and the logout", "\\r")
+            .until("prompt over 2 lines"),
+    )
+    .await
+    .expect("headless run");
+    assert!(
+        r.screen.contains("prompt over 2 lines: fix the login ⏎ and the logout"),
+        "{}",
+        r.screen
+    );
+    let s = wait_for(&c, "fix-login-logout", "the agent", |s| s.task.is_some()).await;
+    assert_eq!(s.task.as_deref(), Some("fix the login and the logout"));
 }
 
 /// UX1.12: archiving keeps everything, uncommitted and untracked work included; restoring puts

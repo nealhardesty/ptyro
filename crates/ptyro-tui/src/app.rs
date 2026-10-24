@@ -276,7 +276,23 @@ pub enum PromptKind {
     Sets(crate::sets::SetsInput),
 }
 
+/// A key that starts a new line in a text box instead of sending it (UX1.26): Shift+Enter
+/// (with the kitty keyboard protocol), Alt+Enter, or Ctrl+J (every terminal).
+pub(crate) fn is_newline_key(key: &KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Enter => key.mods.has(Mods::SHIFT | Mods::ALT | Mods::META),
+        KeyCode::Char { c: 'j' } => key.mods.has(Mods::CTRL),
+        _ => false,
+    }
+}
+
 impl PromptKind {
+    /// Free text that may run over several lines (UX1.26): a prompt for agents, a comment, a
+    /// commit message. Names, titles and command lines stay on one line.
+    pub fn multiline(&self) -> bool {
+        matches!(self, Self::Broadcast(_) | Self::ReviewComment { .. } | Self::CommitMessage { .. })
+    }
+
     /// The text is a name (`[a-z0-9._-]`): bad characters are marked and Tab tidies it.
     pub fn is_name(&self) -> bool {
         matches!(self, Self::Rename(_) | Self::WorktreeName(_) | Self::NewWorkspace(_))
@@ -2116,12 +2132,29 @@ impl App {
     }
 
     pub fn on_paste(&mut self, text: String) {
-        if let Some(Overlay::Prompt { text: t, .. }) = &mut self.overlay {
-            t.push_str(&text.replace(['\n', '\r'], " "));
-            self.dirty = true;
-            return;
+        // Into the box that's open, new lines kept where it takes several (UX1.26); never on
+        // to the session behind it.
+        let lines = text.replace("\r\n", "\n").replace('\r', "\n");
+        let flat = || lines.replace('\n', " ");
+        match &mut self.overlay {
+            Some(Overlay::Prompt { text: t, kind, .. }) => {
+                t.push_str(&if kind.multiline() { lines.clone() } else { flat() });
+            }
+            Some(Overlay::Task { text: t, name, naming, .. }) => {
+                if *naming {
+                    name.get_or_insert_with(String::new).push_str(&flat());
+                } else {
+                    t.push_str(&lines);
+                }
+            }
+            Some(Overlay::Peek { reply, .. }) => reply.push_str(&lines),
+            Some(_) => {}
+            None => {
+                self.forward(InputEvent::Paste { text });
+                return;
+            }
         }
-        self.forward(InputEvent::Paste { text });
+        self.dirty = true;
     }
 
     pub fn on_focus(&mut self, gained: bool) {
@@ -3428,6 +3461,12 @@ impl App {
         let ctrl = key.mods.has(Mods::CTRL);
         match key.code {
             KeyCode::Esc => return,
+            // A new line in what it should do; a name stays one word.
+            _ if is_newline_key(&key) => {
+                if !naming {
+                    text.push('\n');
+                }
+            }
             KeyCode::Enter => {
                 if let Some(n) = name.as_deref().filter(|n| !n.is_empty())
                     && let Some(e) = ptyro_core::names::problem(n)
@@ -4178,6 +4217,10 @@ impl App {
             },
             Overlay::Prompt { title, mut text, kind } => match key.code {
                 KeyCode::Esc => {}
+                _ if kind.multiline() && is_newline_key(&key) => {
+                    text.push('\n');
+                    self.overlay = Some(Overlay::Prompt { title, text, kind });
+                }
                 // The problem is already on screen; keep what was typed so it can be fixed.
                 KeyCode::Enter if self.prompt_check(&kind, &text).is_err() => {
                     self.overlay = Some(Overlay::Prompt { title, text, kind });
@@ -5252,6 +5295,7 @@ impl App {
         let ctrl = key.mods.has(Mods::CTRL);
         match key.code {
             KeyCode::Esc => return,
+            _ if is_newline_key(&key) => reply.push('\n'),
             // With nothing typed, y/a/n answer a permission prompt.
             KeyCode::Char { c: c @ ('y' | 'a' | 'n') } if reply.is_empty() && blocked && !ctrl => {
                 let decision = match c {
@@ -5665,6 +5709,59 @@ mod tests {
         assert!(!app.layout.contains(right));
         assert_eq!(app.focused, 1);
         assert_eq!(shows(&app, 1).as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn text_boxes_take_several_lines_and_pastes_stay_in_them() {
+        let mut app = app();
+        let task = |app: &App| match &app.overlay {
+            Some(Overlay::Task { text, name, .. }) => (text.clone(), name.clone()),
+            _ => panic!("the task box closed"),
+        };
+        app.overlay = Some(Overlay::Task {
+            text: String::new(),
+            name: None,
+            naming: false,
+            wizard: Wizard::default(),
+        });
+        // Shift+Enter, Alt+Enter and Ctrl+J each start a new line; Enter alone would send.
+        for (code, mods) in [
+            (KeyCode::Enter, Mods(Mods::SHIFT)),
+            (KeyCode::Enter, Mods(Mods::ALT)),
+            (KeyCode::Char { c: 'j' }, Mods(Mods::CTRL)),
+        ] {
+            key(&mut app, KeyCode::Char { c: 'a' }, Mods::NONE);
+            key(&mut app, code, mods);
+        }
+        assert_eq!(task(&app).0, "a\na\na\n");
+        // A paste keeps its new lines (and doesn't reach the session behind the box).
+        app.on_paste("one\r\ntwo".into());
+        assert_eq!(task(&app).0, "a\na\na\none\ntwo");
+        // The name stays one word.
+        key(&mut app, KeyCode::Tab, Mods::NONE);
+        key(&mut app, KeyCode::Char { c: 'j' }, Mods(Mods::CTRL));
+        app.on_paste("x\ny".into());
+        assert_eq!(task(&app).1.as_deref().map(|n| n.ends_with("x y")), Some(true));
+
+        // Peek's reply, and a broadcast prompt: several lines. A rename: one.
+        let id = SessionId::new();
+        app.overlay =
+            Some(Overlay::Peek { session: id, screen: String::new(), reply: "hi".into() });
+        key(&mut app, KeyCode::Enter, Mods(Mods::SHIFT));
+        app.on_paste("there".into());
+        assert!(matches!(&app.overlay, Some(Overlay::Peek { reply, .. }) if reply == "hi\nthere"));
+        for (kind, want) in
+            [(PromptKind::Broadcast(vec![id]), "a\n"), (PromptKind::Rename(id), "a")]
+        {
+            app.overlay = Some(Overlay::Prompt { title: String::new(), text: "a".into(), kind });
+            key(&mut app, KeyCode::Char { c: 'j' }, Mods(Mods::CTRL));
+            assert!(
+                matches!(&app.overlay, Some(Overlay::Prompt { text, .. }) if text == want),
+                "{want:?}"
+            );
+        }
+        app.on_paste("b\nc".into());
+        assert!(matches!(&app.overlay, Some(Overlay::Prompt { text, .. }) if text == "ab c"));
     }
 
     #[test]

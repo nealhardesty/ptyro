@@ -162,7 +162,7 @@ Enter sends a prompt. To start a new line instead:
 | Where | New line | Notes |
 |---|---|---|
 | An agent's pane (Claude Code, Codex) | `Shift+Enter`, `Alt+Enter`, `Ctrl+J`; in Claude also `\` then Enter | All four verified through ptyro (Claude Code 2.1.309, Codex 0.164, 2026-10-23). |
-| ptyro's own boxes (the task box, rename, peek's reply) | not yet: Enter sends | ROADMAP UX1.26. Paste a multi-line text instead, or type it in the agent's pane. |
+| ptyro's own boxes: the task box, peek's reply, a broadcast, a review comment, a commit message | `Shift+Enter`, `Alt+Enter`, `Ctrl+J` | The box grows as you type (up to a third of the screen), and a paste keeps its new lines. Names, titles and command lines stay on one line. The hint line names the key your terminal can send. |
 | `ptyro send` | a real new line in the text: `ptyro send s $'line 1\nline 2'`, or a quoted string over two lines | Multi-line text is pasted, bracketed when the program asked for it, so nothing is sent early. Enter is pressed once afterwards (not with `--no-enter`). |
 | The web app | `Shift+Enter` | Enter (or Send) sends. |
 

@@ -1471,13 +1471,19 @@ All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
 
 ### Learn nothing up front
 
-- [ ] **UX1.26 Several lines in ptyro's own boxes** (owner, 2026-10-23) — S. In the task box
+- [x] **UX1.26 Several lines in ptyro's own boxes** (owner, 2026-10-23) — S. In the task box
   (UX1.9), peek's reply and the other text prompts, Enter sends and nothing makes a new line,
   while the agents' panes, `ptyro send` and the web all take several lines (docs/keys.md).
   `Shift+Enter`, `Alt+Enter` and `Ctrl+J` insert a new line. The box grows up to a third of the
   screen and wraps, and the hint line says which key makes a new line. Pasting keeps its new
   lines. Name prompts (rename, a new worktree's name) stay single-line. *Done when:* TUI tests
   type a two-line task with each key, and the agent receives one prompt with both lines.
+  *Done (2026-10-23):* the task box, peek's reply and free-text prompts (broadcast, review
+  comment, commit message) take a new line from each key, wrap and grow (`ui::edit_rows`), and
+  keep a paste's new lines. A paste with a box open used to reach the session behind it. A TUI
+  test types with each key; `tests/ux1.rs` types a two-line task and the fake agent
+  (`PTYRO_FAKE_PASTE=1`: bracketed paste, as Claude and Codex) gets one prompt. The task box
+  test now waits for what's on screen, not a clock (`send_when`), and runs in 3.6 s.
 - [x] **UX1.14 Which-key** (R-UX-18) — S. If nothing follows the prefix within
   `[ui] which_key_delay` (400 ms; `0` turns it off), a compact menu of the next keys appears,
   grouped and as bound. Keys typed before it appears work as today. *Done (2026-10-22):*

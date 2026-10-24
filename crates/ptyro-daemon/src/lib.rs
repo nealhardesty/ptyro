@@ -387,11 +387,12 @@ mod tests {
     async fn a_socket_is_replaced_only_when_nobody_listens_and_removed_only_if_ours() {
         let d = tempfile::tempdir().unwrap();
         let path = d.path().join("ptyro.sock");
-        let first = bind(&path).unwrap();
+        // Someone listens: refused.
+        let live = std::os::unix::net::UnixListener::bind(&path).unwrap();
         let err = bind(&path).unwrap_err().to_string();
         assert!(err.contains("in use"), "{err}");
-        // Gone quiet: a refused connection proves it stale, so it's replaced.
-        drop(first);
+        // Gone quiet (closed, the file left behind): a refused connection proves it stale.
+        drop(live);
         let second = bind(&path).unwrap();
         let ours = file_id(&path);
         // Another daemon replaced the file meanwhile: leave its socket alone.

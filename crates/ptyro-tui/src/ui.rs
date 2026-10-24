@@ -1398,7 +1398,10 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
             f.render_widget(Paragraph::new(lines).block(block("Set up worktrees?".into())), r);
         }
         Overlay::Task { text, name, naming, wizard } => {
-            let r = boxed(area, 76, 6);
+            let (do_rows, do_cursor) =
+                edit_rows(text, "   do ", 72, (area.height / 3).max(1) as usize);
+            let do_h = if text.is_empty() { 1 } else { do_rows.len() as u16 };
+            let r = boxed(area, 76, do_h + 5);
             f.render_widget(Clear, r);
             let (slug, agent, place) = app.task_plan(text, name.as_deref(), wizard);
             let caret = fg(app, t.accent);
@@ -1434,8 +1437,24 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                     fg(app, t.done),
                 ),
             };
-            let lines = vec![
-                field("do", text, !naming, "fix the flaky test in tests/api.rs"),
+            let what: Vec<Line<'_>> = if text.is_empty() {
+                vec![field("do", text, !naming, "fix the flaky test in tests/api.rs")]
+            } else {
+                let on = if *naming { fg(app, t.dim) } else { caret.add_modifier(Modifier::BOLD) };
+                do_rows
+                    .iter()
+                    .enumerate()
+                    .map(|(i, row)| match i {
+                        0 if row.starts_with("   do ") => Line::from(vec![
+                            Span::styled("   do ", on),
+                            Span::raw(row["   do ".len()..].to_owned()),
+                        ]),
+                        _ => Line::raw(row.clone()),
+                    })
+                    .collect()
+            };
+            let mut lines = what;
+            lines.extend([
                 field(
                     "name",
                     name.as_deref().unwrap_or(""),
@@ -1443,8 +1462,14 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                     slug.as_deref().unwrap_or("(from what you type)"),
                 ),
                 preview,
-                Line::styled("⏎ start · Tab name · C-o pick agent & where · Esc", fg(app, t.dim)),
-            ];
+                Line::styled(
+                    format!(
+                        "⏎ start · {} · Tab name · C-o pick agent & where · Esc",
+                        newline_hint(app)
+                    ),
+                    fg(app, t.dim),
+                ),
+            ]);
             // Which profile it runs under, and why (SPEC §10.10), as the wizard says it.
             let profile =
                 app.resolved.as_deref().map(|p| format!(" · profile {p}")).unwrap_or_default();
@@ -1452,19 +1477,25 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                 Paragraph::new(lines).block(block(format!("What should it do?{profile}"))),
                 r,
             );
-            let (row, col) = if *naming {
-                (2, name.as_deref().unwrap_or("").chars().count())
+            let (col, row) = if *naming {
+                (7 + name.as_deref().unwrap_or("").chars().count() as u16, 1 + do_h)
+            } else if text.is_empty() {
+                (7, 1)
             } else {
-                (1, text.chars().count())
+                (1 + do_cursor.0, 1 + do_cursor.1)
             };
-            f.set_cursor_position(Position::new(r.x + 7 + col as u16, r.y + row));
+            f.set_cursor_position(Position::new(r.x + col, r.y + row));
         }
         Overlay::Prompt { title, text, kind } => {
-            let r = boxed(area, 70, 4);
-            f.render_widget(Clear, r);
             // Checked as it's typed: characters a name can't hold are marked where they are.
             let check = app.prompt_check(kind, text);
             let bad = fg(app, t.error).add_modifier(Modifier::UNDERLINED);
+            let simple = !(kind.is_name() && check.is_err())
+                && !(text.is_empty() && kind.suggestion().is_some());
+            let (rows, cursor) = edit_rows(text, "› ", 66, (area.height / 3).max(1) as usize);
+            let rows_h = if simple { rows.len() as u16 } else { 1 };
+            let r = boxed(area, 70, rows_h + 3);
+            f.render_widget(Clear, r);
             let mut field = vec![Span::styled("› ", fg(app, t.accent))];
             if kind.is_name() && check.is_err() {
                 field.extend(text.chars().map(|c| {
@@ -1476,8 +1507,6 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
             {
                 // The name it offers, dimmed: ⏎ takes it, typing replaces it (UX1.24).
                 field.push(Span::styled(s.to_owned(), fg(app, t.dim)));
-            } else {
-                field.push(Span::raw(text.clone()));
             }
             let help = match check {
                 Err(e) => {
@@ -1489,18 +1518,40 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                         .unwrap_or_default();
                     Line::styled(format!("✗ {e}{fix}"), fg(app, t.error))
                 }
-                Ok(note) => Line::styled(
-                    match (note, text.is_empty().then(|| kind.suggestion()).flatten()) {
-                        (_, Some(s)) => format!("⏎ takes {s} · or type another · Esc cancel"),
-                        (Some(n), _) => format!("⏎ ok ({n}) · Esc cancel · C-u clear"),
-                        (None, _) => "⏎ ok · Esc cancel · C-u clear".into(),
-                    },
-                    fg(app, t.dim),
-                ),
+                Ok(note) => {
+                    let nl = if kind.multiline() {
+                        format!(" · {}", newline_hint(app))
+                    } else {
+                        String::new()
+                    };
+                    Line::styled(
+                        match (note, text.is_empty().then(|| kind.suggestion()).flatten()) {
+                            (_, Some(s)) => format!("⏎ takes {s} · or type another · Esc cancel"),
+                            (Some(n), _) => format!("⏎ ok ({n}){nl} · Esc cancel · C-u clear"),
+                            (None, _) => format!("⏎ ok{nl} · Esc cancel · C-u clear"),
+                        },
+                        fg(app, t.dim),
+                    )
+                }
             };
-            let lines = vec![Line::from(field), help];
+            let mut lines: Vec<Line<'_>> = if simple {
+                rows.iter()
+                    .enumerate()
+                    .map(|(i, row)| match i {
+                        0 if row.starts_with("› ") => Line::from(vec![
+                            Span::styled("› ", fg(app, t.accent)),
+                            Span::raw(row["› ".len()..].to_owned()),
+                        ]),
+                        _ => Line::raw(row.clone()),
+                    })
+                    .collect()
+            } else {
+                vec![Line::from(field)]
+            };
+            lines.push(help);
             f.render_widget(Paragraph::new(lines).block(block(title.clone())), r);
-            f.set_cursor_position(Position::new(r.x + 3 + text.chars().count() as u16, r.y + 1));
+            let (col, row) = if simple { cursor } else { (2 + text.chars().count() as u16, 0) };
+            f.set_cursor_position(Position::new(r.x + 1 + col, r.y + 1 + row));
         }
         Overlay::Confirm { text, .. } => {
             let widest = text.lines().map(|l| l.chars().count()).max().unwrap_or(0) as u16;
@@ -1563,7 +1614,14 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                     lines.push(Line::styled(format!("⚑ {}", a.text), fg(app, t.search)));
                 }
             }
-            let body_h = r.height.saturating_sub(6) as usize;
+            let (reply_rows, reply_cursor) = edit_rows(
+                reply,
+                "› ",
+                r.width.saturating_sub(2) as usize,
+                (area.height / 3).max(1) as usize,
+            );
+            let input_h = reply_rows.len() as u16 + 1;
+            let body_h = r.height.saturating_sub(5 + input_h) as usize;
             let shown: Vec<&str> = screen.lines().filter(|l| !l.trim().is_empty()).collect();
             for l in &shown[shown.len().saturating_sub(body_h)..] {
                 lines.push(Line::styled(format!(" {l}"), fg(app, t.dim)));
@@ -1572,30 +1630,36 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                 .and_then(|s| s.status.as_ref())
                 .is_some_and(|r| r.status == ptyro_core::status::AgentStatus::Blocked);
             let hint = if blocked && reply.is_empty() {
-                "y allow · a always · n deny · type a reply · ⏎ open · Esc"
+                "y allow · a always · n deny · type a reply · ⏎ open · Esc".to_owned()
             } else {
-                "type a reply, ⏎ sends it · empty ⏎ opens the session · Esc"
+                format!(
+                    "type a reply, ⏎ sends it, {} · empty ⏎ opens the session · Esc",
+                    newline_hint(app)
+                )
             };
             f.render_widget(Paragraph::new(lines).block(block(format!("Peek {name}"))), r);
             let input = Rect {
-                y: r.bottom().saturating_sub(3),
-                height: 2,
+                y: r.bottom().saturating_sub(1 + input_h),
+                height: input_h,
                 x: r.x + 1,
                 width: r.width.saturating_sub(2),
             };
-            f.render_widget(
-                Paragraph::new(vec![
-                    Line::from(vec![
+            let mut field: Vec<Line<'_>> = reply_rows
+                .iter()
+                .enumerate()
+                .map(|(i, row)| match i {
+                    0 if row.starts_with("› ") => Line::from(vec![
                         Span::styled("› ", fg(app, t.accent)),
-                        Span::raw(reply.clone()),
+                        Span::raw(row["› ".len()..].to_owned()),
                     ]),
-                    Line::styled(hint, fg(app, t.dim)),
-                ]),
-                input,
-            );
+                    _ => Line::raw(row.clone()),
+                })
+                .collect();
+            field.push(Line::styled(hint, fg(app, t.dim)));
+            f.render_widget(Paragraph::new(field), input);
             f.set_cursor_position(Position::new(
-                input.x + 2 + reply.chars().count() as u16,
-                input.y,
+                input.x + reply_cursor.0,
+                input.y + reply_cursor.1,
             ));
         }
         Overlay::Tour { page } => {
@@ -1813,6 +1877,57 @@ pub fn dur(ms: u64) -> String {
     }
 }
 
+/// Text being typed, laid out for a box `width` columns wide (UX1.26): split at its new lines
+/// and wrapped, each row behind `first` (the first row) or as many spaces, at most `max_rows`
+/// rows, scrolled so the end (where the cursor is) stays in view. Returns the rows and the
+/// cursor's column and row within them.
+pub(crate) fn edit_rows(
+    text: &str,
+    first: &str,
+    width: usize,
+    max_rows: usize,
+) -> (Vec<String>, (u16, u16)) {
+    use unicode_width::UnicodeWidthChar;
+    let indent = unicode_width::UnicodeWidthStr::width(first);
+    let room = width.saturating_sub(indent).max(1);
+    let mut rows: Vec<String> = Vec::new();
+    let mut col = 0;
+    for line in text.split('\n') {
+        let mut row = String::new();
+        col = 0;
+        for c in line.chars() {
+            let w = c.width().unwrap_or(0);
+            if col + w > room {
+                rows.push(std::mem::take(&mut row));
+                col = 0;
+            }
+            row.push(c);
+            col += w;
+        }
+        rows.push(row);
+    }
+    // The cursor sits after the text; on a full row it starts the next one.
+    if col >= room {
+        rows.push(String::new());
+        col = 0;
+    }
+    let skip = rows.len().saturating_sub(max_rows.max(1));
+    let pad = " ".repeat(indent);
+    let shown: Vec<String> = rows
+        .into_iter()
+        .enumerate()
+        .skip(skip)
+        .map(|(i, r)| format!("{}{r}", if i == 0 { first } else { &pad }))
+        .collect();
+    let cursor = ((indent + col) as u16, shown.len().saturating_sub(1) as u16);
+    (shown, cursor)
+}
+
+/// The key that starts a new line, as this terminal can send it.
+pub(crate) fn newline_hint(app: &App) -> &'static str {
+    if app.kitty { "⇧⏎ new line" } else { "C-j new line" }
+}
+
 /// The tour's pages: (title, lines), keys as the user's keymap binds them.
 pub fn tour_pages(app: &App) -> Vec<(String, Vec<String>)> {
     let k = |action: &str| app.keymap.key_for(action).unwrap_or_else(|| "(unbound)".into());
@@ -1866,6 +1981,29 @@ pub fn tour_pages(app: &App) -> Vec<(String, Vec<String>)> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn typed_text_wraps_splits_at_new_lines_and_keeps_its_end_in_view() {
+        use super::edit_rows;
+        // One row, cursor after it.
+        assert_eq!(edit_rows("hi", "› ", 10, 3), (vec!["› hi".into()], (4, 0)));
+        // New lines split; later rows are indented under the first.
+        let (rows, cur) = edit_rows("one\ntwo", "› ", 10, 3);
+        assert_eq!(rows, ["› one", "  two"]);
+        assert_eq!(cur, (5, 1));
+        // A row fills (8 columns of room) and wraps; a full last row puts the cursor on the next.
+        let (rows, cur) = edit_rows("abcdefghij", "› ", 10, 3);
+        assert_eq!(rows, ["› abcdefgh", "  ij"]);
+        assert_eq!(cur, (4, 1));
+        let (rows, cur) = edit_rows("abcdefgh", "› ", 10, 3);
+        assert_eq!(rows, ["› abcdefgh", "  "]);
+        assert_eq!(cur, (2, 1));
+        // Too many rows: the end stays in view. Wide characters count two columns.
+        let (rows, cur) = edit_rows("1\n2\n3\n4", "› ", 10, 2);
+        assert_eq!(rows, ["  3", "  4"]);
+        assert_eq!(cur, (3, 1));
+        assert_eq!(edit_rows("日本語日本", "› ", 10, 3).0, ["› 日本語日", "  本"]);
+    }
+
     #[test]
     fn truncation_counts_columns_not_bytes() {
         let mut s = " ⏎ open/fold · n new".to_owned();

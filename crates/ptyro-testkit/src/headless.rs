@@ -62,6 +62,12 @@ impl Script {
         self
     }
 
+    /// Stop once the screen shows `shown`, after every send.
+    pub fn until(mut self, shown: &str) -> Self {
+        self.until = Some(shown.into());
+        self
+    }
+
     pub fn snapshot(mut self, secs: f64) -> Self {
         self.snapshots.push(Duration::from_secs_f64(secs));
         self
@@ -239,6 +245,7 @@ pub async fn run(mut s: Script) -> Result<Report> {
         }
         if let Some(needle) = &s.until
             && start.elapsed() >= last_send
+            && sends_when.peek().is_none()
         {
             tracker.update(&mut emu);
             if render(&emu, &mut tracker, false).contains(needle.as_str()) {
