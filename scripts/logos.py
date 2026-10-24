@@ -1834,6 +1834,233 @@ TENT = [
     ("tent-mono", "Tentabot: Mono", "One dark silhouette on orange, a single cream task: the long-distance version.", tent_mono, "#ff7a45", ("#2b0f54", "#2b0f54")),
 ]
 
+# -- riffs on 135 Tentabot: Four Corners: a bigger head, then a cat-robot ----------------------
+
+CORNERS = [(88, 88), (424, 88), (88, 424), (424, 424)]
+
+
+def cathead(cx, cy, w, h, body="#f4f7fb", screen=BN, face=GREEN, inner="#ff9ec4", eyes="chev", whisk=True):
+    """The cat-robot: the robot's head with ears, a nose and mouth, whiskers and `> <`, `^ ^` or `- -` eyes."""
+    x, y, k, ex = cx - w / 2, cy - h / 2, h * .17, w * .2
+    st = f'fill="none" stroke="{face}" stroke-width="{h * .1:.1f}" stroke-linecap="round" stroke-linejoin="round"'
+    ear = lambda s, c, dx=0, dy=0: (f'<path d="M{cx + s * (w * .42 - dx):.1f} {y + h * .3 + dy:.1f}L{cx + s * (w * .4 - dx):.1f} {y - h * .3 + dy:.1f}'
+                                    f'L{cx + s * (w * .12 + dx):.1f} {y + dy:.1f}Z" fill="{c}" stroke="{c}" stroke-width="{h * .06:.1f}" stroke-linejoin="round"/>')
+    out = [ear(-1, body), ear(1, body), ear(-1, inner, w * .07, h * .08), ear(1, inner, w * .07, h * .08)]
+    if whisk:
+        for s in (-1, 1):
+            for dy, ang in ((.06, -.14), (.18, .1)):
+                out.append(f'<path d="M{cx + s * w * .5:.1f} {cy + h * dy:.1f}L{cx + s * (w * .5 + w * .22):.1f} {cy + h * (dy + ang):.1f}" '
+                           f'stroke="{body}" stroke-width="{h * .04:.1f}" stroke-linecap="round"/>')
+    out.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{w}" height="{h}" rx="{h * .32:.1f}" fill="{body}"/>'
+               f'<rect x="{x + w * .09:.1f}" y="{y + h * .14:.1f}" width="{w * .82:.1f}" height="{h * .72:.1f}" rx="{h * .22:.1f}" fill="{screen}"/>')
+    ey = cy - h * .06
+    for s in (-1, 1):
+        px = cx + s * ex
+        if eyes == "chev":
+            out.append(f'<path d="M{px + s * k * .6:.1f} {ey - k:.1f}L{px - s * k * .6:.1f} {ey:.1f}L{px + s * k * .6:.1f} {ey + k:.1f}" {st}/>')
+        elif eyes == "happy":
+            out.append(f'<path d="M{px - k:.1f} {ey + k * .5:.1f}Q{px:.1f} {ey - k * 1.1:.1f} {px + k:.1f} {ey + k * .5:.1f}" {st}/>')
+        else:
+            out.append(f'<path d="M{px - k:.1f} {ey:.1f}Q{px:.1f} {ey + k * .7:.1f} {px + k:.1f} {ey:.1f}" {st}/>')
+    m, d = cy + h * .2, w * .07
+    out.append(f'<path d="M{cx - d:.1f} {m:.1f}Q{cx - d / 2:.1f} {m + h * .1:.1f} {cx:.1f} {m:.1f}Q{cx + d / 2:.1f} {m + h * .1:.1f} {cx + d:.1f} {m:.1f}" {st}/>'
+               f'<path d="M{cx - h * .06:.1f} {cy + h * .06:.1f}H{cx + h * .06:.1f}L{cx:.1f} {cy + h * .14:.1f}Z" fill="{inner}" stroke="{inner}" '
+               f'stroke-width="{h * .03:.1f}" stroke-linejoin="round"/>')
+    return "".join(out)
+
+
+def outline(cx, cy, s, col, glyph, rx=None):
+    """A task drawn as a bordered pane, like the bento panes."""
+    return (card(cx, cy, s, PANE, glyph, col, rx)
+            + f'<rect x="{cx - s / 2:.1f}" y="{cy - s / 2:.1f}" width="{s}" height="{s}" rx="{rx or s * .26:.1f}" fill="none" stroke="{col}" stroke-width="{s * .12:.1f}"/>')
+
+
+def yarn(cx, cy, s, col, glyph=None, ink=BN):
+    """A task as a ball of yarn, with a loose thread."""
+    r = s / 2
+    return (f'<path d="M{cx + r * .6:.1f} {cy + r * .8:.1f}Q{cx + r * 1.3:.1f} {cy + r * 1.2:.1f} {cx + r * 1.1:.1f} {cy + r * .5:.1f}" fill="none" stroke="{col}" '
+            f'stroke-width="{s * .07:.1f}" stroke-linecap="round"/>' + dot(cx, cy, r, col)
+            + f'<path d="M{cx - r * .8:.1f} {cy - r * .1:.1f}Q{cx:.1f} {cy + r * .5:.1f} {cx + r * .8:.1f} {cy - r * .3:.1f}'
+              f'M{cx - r * .6:.1f} {cy - r * .6:.1f}Q{cx + r * .1:.1f} {cy:.1f} {cx + r * .7:.1f} {cy + r * .5:.1f}'
+              f'M{cx - r * .3:.1f} {cy + r * .85:.1f}Q{cx + r * .1:.1f} {cy + r * .3:.1f} {cx + r * .3:.1f} {cy - r * .85:.1f}" fill="none" '
+              f'stroke="{ink}" stroke-opacity=".45" stroke-width="{s * .06:.1f}" stroke-linecap="round"/>')
+
+
+def paw(cx, cy, r, col):
+    return (dot(cx, cy + r * .2, r, col) + "".join(dot(cx + dx * r, cy - r * .85 + abs(dx) * r * .35, r * .36, col) for dx in (-.9, 0, .9)))
+
+
+def crossbot(bg, head, limb, ink=BN, s=96, sw=26, cardf=card, tasks=None, pos=CORNERS, tail=""):
+    """Four tentacles from a head at the centre to four tasks, one in each corner."""
+    tasks = tasks or AGENT
+    out = [tile(bg) if bg else ""]
+    for k, (x, y) in enumerate(pos):
+        sx, sy = 256 + (x - 256) * .38, 262 + (y - 262) * .3
+        out.append(f'<path d="M{sx:.1f} {sy:.1f}Q{(sx + x) / 2 + (30 if k % 2 else -30):.1f} {(sy + y) / 2 + (-30 if k < 2 else 30):.1f} {x} {y}" '
+                   f'fill="none" stroke="{limb}" stroke-width="{sw}" stroke-linecap="round"/>')
+    out.append(tail)
+    out += [cardf(x, y, s, tasks[k], GLYPHS[k], ink) if cardf is card else cardf(x, y, s, tasks[k], GLYPHS[k]) for k, (x, y) in enumerate(pos)]
+    return "".join(out) + head
+
+
+def big_1():
+    return crossbot("#14192b", bothead(256, 268, 224, 172), "#cdd6e4")
+
+
+def big_light():
+    return crossbot(CREAM, bothead(256, 268, 224, 172, "#ffffff", "#1c2040"), "#2d3a5c", "#1c2040",
+                    tasks=["#2d6cdf", "#e69500", "#16a34a", "#e8531f"])
+
+
+def big_panes():
+    return crossbot(BN, bothead(256, 268, 224, 172), "#cdd6e4", cardf=lambda x, y, s, c, g: outline(x, y, s, c, g), s=104, sw=22)
+
+
+def big_round():
+    return crossbot("#2b1055", bothead(256, 268, 224, 172, "#ffe3f0", "#2b1055"), "#ff7eb6", "#2b1055",
+                    cardf=lambda x, y, s, c, g, ink=None: card(x, y, s, c, g, "#2b1055", s / 2))
+
+
+def big_sunset():
+    return ('<defs><clipPath id="tc"><rect width="512" height="512" rx="112"/></clipPath></defs><g clip-path="url(#tc)">'
+            '<rect width="512" height="512" fill="#2b0f54"/><circle cx="256" cy="300" r="190" fill="#ffd23f"/>'
+            + "".join(f'<rect x="0" y="{y}" width="512" height="{h}" fill="#2b0f54"/>' for y, h in [(350, 8), (386, 12), (424, 16)])
+            + crossbot(None, bothead(256, 268, 224, 172, "#1a0b2e", "#1a0b2e", GOLD, "#ff5d8f"), "#1a0b2e", "#2b0f54") + "</g>")
+
+
+def big_pixel():
+    rows = ["....A....", ".HHHHHHH.", "HHHHHHHHH", "HKKHHHKKH", "HHHHHHHHH", ".HHHHHHH.", "..HH.HH.."]
+    out = [tile(SQB)]
+    for k, (x, y) in enumerate([(70, 70), (442, 70), (70, 442), (442, 442)]):
+        sx, sy = 256 + (x - 256) * .4, 256 + (y - 256) * .4
+        out.append(f'<path d="M{sx:.1f} {sy:.1f}L{x} {sy:.1f}L{x} {y}" fill="none" stroke="#f0f3f6" stroke-width="22" stroke-linejoin="round"/>')
+    for k, (x, y) in enumerate([(70, 70), (442, 70), (70, 442), (442, 442)]):
+        out.append(f'<rect x="{x - 40}" y="{y - 40}" width="80" height="80" rx="12" fill="{AGENT[k]}"/>')
+    return "".join(out) + spr(rows, "#f0f3f6", 36, oy=130, gap=4, extra={"A": GOLD, "H": "#f0f3f6", "K": SQB})
+
+
+def big_neon():
+    glow = lambda x: f'<g filter="url(#glow)" opacity=".75">{x}</g>' + x
+    base = crossbot("#07060f", bothead(256, 268, 224, 172, "#fdf4ff", "#07060f", "#7df9ff", "#ff2bd6"), "#ff2bd6", "#07060f",
+                    tasks=["#7df9ff", "#ff2bd6", "#faff5c", "#9dff7a"])
+    return base[:base.index("/>") + 2] + glow(base[base.index("/>") + 2:])
+
+
+def big_close():
+    return ('<defs><clipPath id="tc"><rect width="512" height="512" rx="112"/></clipPath></defs><g clip-path="url(#tc)">'
+            + crossbot("#12b5a6", bothead(256, 272, 300, 230), "#f4f7fb", "#12b5a6", s=120, sw=32,
+                       pos=[(60, 60), (452, 60), (60, 452), (452, 452)]) + "</g>")
+
+
+def big_mono():
+    ink = "#2b0f54"
+    out = [f'<rect width="512" height="512" rx="112" fill="#ff7a45"/>']
+    for k, (x, y) in enumerate(CORNERS):
+        sx, sy = 256 + (x - 256) * .38, 262 + (y - 262) * .3
+        out.append(f'<path d="M{sx:.1f} {sy:.1f}Q{(sx + x) / 2 + (30 if k % 2 else -30):.1f} {(sy + y) / 2 + (-30 if k < 2 else 30):.1f} {x} {y}" '
+                   f'fill="none" stroke="{ink}" stroke-width="28" stroke-linecap="round"/>' + dot(x, y, 40, "#fff1c9" if k == 3 else ink))
+    return "".join(out) + bothead(256, 268, 224, 172, ink, "#ff7a45", ink, ink)
+
+
+def big_badge():
+    return (tile("#101826") + '<circle cx="256" cy="256" r="214" fill="#1b2a4a" stroke="#9fb4e0" stroke-width="8"/>'
+            + crossbot(None, bothead(256, 270, 214, 164), "#9fb4e0", "#1b2a4a", s=78, sw=20,
+                       pos=[(130, 130), (382, 130), (130, 382), (382, 382)]))
+
+
+def cat_1():
+    return crossbot("#14192b", cathead(256, 280, 224, 168), "#cdd6e4")
+
+
+def cat_black():
+    return crossbot("#ffb21f", cathead(256, 280, 224, 168, "#1a1a24", "#1a1a24", "#ffd23f", "#ff7aa2"), "#1a1a24", "#1a1a24",
+                    tasks=["#4da3ff", "#ffffff", "#3ddc84", "#ff5d8f"])
+
+
+def cat_calico():
+    h = cathead(256, 280, 224, 168, "#ff9d4a", "#2b1a12", "#ffe3b8", "#ffd1b0")
+    patch = ('<path d="M160 176L166 146L194 170Z" fill="#fff6e8" stroke="#fff6e8" stroke-width="5" stroke-linejoin="round"/>'
+             '<path d="M352 176L346 146L318 170Z" fill="#3b2a22" stroke="#3b2a22" stroke-width="5" stroke-linejoin="round"/>')
+    return crossbot("#1b2a4a", h + patch, "#ff9d4a", "#1b2a4a", tasks=["#4da3ff", "#3ddc84", "#b57bff", "#ffd23f"])
+
+
+def cat_yarn():
+    return crossbot("#2b1055", cathead(256, 280, 224, 168, "#ffe3f0", "#2b1055", "#3ddc84", "#ff7eb6", "happy"), "#ff7eb6", "#2b1055",
+                    s=104, cardf=lambda x, y, s, c, g: yarn(x, y, s, c, g, "#2b1055"))
+
+
+def cat_paws():
+    out = [tile("#0f4c5c")]
+    pos = CORNERS
+    cards = "".join(card(x, y, 92, AGENT[k], GLYPHS[k], "#0f4c5c") for k, (x, y) in enumerate(pos))
+    arms = ""
+    for k, (x, y) in enumerate(pos):
+        sx, sy = 256 + (x - 256) * .38, 262 + (y - 262) * .3
+        ex, ey = x + (50 if x < 256 else -50), y + (50 if y < 256 else -50)
+        arms += (f'<path d="M{sx:.1f} {sy:.1f}Q{(sx + ex) / 2 + (26 if k % 2 else -26):.1f} {(sy + ey) / 2:.1f} {ex} {ey}" fill="none" '
+                 'stroke="#f4f7fb" stroke-width="26" stroke-linecap="round"/>')
+    paws = "".join(paw(x + (48 if x < 256 else -48), y + (52 if y < 256 else -44), 18, "#f4f7fb") for x, y in pos)
+    return "".join(out) + arms + cards + paws + cathead(256, 280, 224, 168, "#f4f7fb", BN, GREEN, "#ff9ec4")
+
+
+CATP = ["HH.......HH", "HHH.....HHH", "HHHHHHHHHHH", "HHKHHHHHKHH", "HHHHHNHHHHH", ".HHHHHHHHH.", "..HHHHHHH..",
+        ".H..H.H..H.", ".H..H.H..H.", ".1..2.3..4."]
+
+
+def cat_pixel():
+    return tile(SQB) + spr(CATP, "#f0f3f6", 40, gap=4, extra={"H": "#f0f3f6", "K": SQB, "N": "#ff9ec4", "1": BLUE, "2": AMBER, "3": GREEN, "4": AGENT[0]})
+
+
+def cat_nap():
+    z = "".join(f'<path d="M{x} {y}h{s}l{-s} {s}h{s}" fill="none" stroke="#9fb4e0" stroke-width="{max(5, s // 4)}" stroke-linecap="round" '
+                f'stroke-linejoin="round"/>' for x, y, s in [(332, 120, 26), (372, 80, 20), (402, 52, 14)])
+    return crossbot("#101826", cathead(256, 290, 224, 168, "#e6edf3", BN, "#9fb4e0", "#ff9ec4", "sleep"), "#cdd6e4",
+                    tasks=["#3b4a7a", "#3b4a7a", "#3b4a7a", AMBER], tail=z)
+
+
+def cat_light():
+    return crossbot(CREAM, cathead(256, 280, 224, 168, "#ffffff", "#1c2040", "#16a34a", "#ff6b9d"), "#2d3a5c", "#1c2040",
+                    tasks=["#2d6cdf", "#e69500", "#16a34a", "#e8531f"])
+
+
+def cat_moon():
+    return ('<defs><clipPath id="tc"><rect width="512" height="512" rx="112"/></clipPath></defs><g clip-path="url(#tc)">'
+            '<rect width="512" height="512" fill="#0b1230"/><circle cx="256" cy="262" r="176" fill="#f6f3ec"/>'
+            '<circle cx="190" cy="200" r="24" fill="#e3ddcd"/><circle cx="330" cy="330" r="34" fill="#e3ddcd"/>'
+            + "".join(dot(x, y, 3, "#fff") for x, y in [(60, 220), (450, 190), (250, 40), (120, 480), (400, 480)])
+            + crossbot(None, cathead(256, 280, 224, 168, "#0b1230", "#0b1230", GOLD, "#ff5d8f"), "#0b1230", "#0b1230", tasks=TASKS[:4]) + "</g>")
+
+
+def cat_bento():
+    return crossbot(BN, cathead(256, 280, 224, 168), "#cdd6e4", s=104, sw=22, cardf=lambda x, y, s, c, g: outline(x, y, s, c, g))
+
+
+BIG = [
+    ("big-head", "Tentabot Big: Head", "Four Corners with a bigger head, shorter arms, and the tasks pulled in.", big_1, "#14192b", ("#e6edf3", AGENT[2])),
+    ("big-light", "Tentabot Big: Light", "The big head on cream, in deeper colours.", big_light, CREAM, ("#1c2040", "#2d6cdf")),
+    ("big-panes", "Tentabot Big: Panes", "The big head, with the four tasks as bordered bento panes.", big_panes, BN, ("#e6edf3", BLUE)),
+    ("big-round", "Tentabot Big: Round", "Big head, round tasks, on plum.", big_round, "#2b1055", ("#ffe3f0", "#ff7eb6")),
+    ("big-sunset", "Tentabot Big: Sunset", "A silhouetted big head in front of a striped sun, four coloured tasks in the corners.", big_sunset, "#2b0f54", ("#fff1c9", GOLD)),
+    ("big-pixel", "Tentabot Big: Pixel", "A pixel-art big head with four square-pixel tasks on L-shaped arms.", big_pixel, SQB, ("#f0f3f6", GREEN)),
+    ("big-neon", "Tentabot Big: Neon", "Magenta arms and cyan eyes on near-black: the synthwave bot.", big_neon, "#07060f", ("#fdf4ff", "#ff2bd6")),
+    ("big-close", "Tentabot Big: Close-up", "A very big head: the tasks are pushed to the edges and cropped.", big_close, "#12b5a6", ("#ffffff", GOLD)),
+    ("big-mono", "Tentabot Big: Mono", "One dark big-headed silhouette on orange, a single cream task.", big_mono, "#ff7a45", ("#2b0f54", "#2b0f54")),
+    ("big-badge", "Tentabot Big: Badge", "The big head inside a round badge, four tasks on its diagonals.", big_badge, "#101826", ("#e6edf3", BLUE)),
+]
+
+CATS = [
+    ("cat-corners", "Tentacat: Four Corners", "The big-headed robot grows ears, a nose and whiskers: four tentacles, four tasks.", cat_1, "#14192b", ("#e6edf3", "#ff9ec4")),
+    ("cat-black", "Tentacat: Black Cat", "A black cat-bot with gold eyes on amber, tasks in the corners.", cat_black, "#ffb21f", ("#1a1a24", "#1a1a24")),
+    ("cat-calico", "Tentacat: Calico", "An orange cat-bot with white and brown patches.", cat_calico, "#1b2a4a", ("#ffe3b8", "#ff9d4a")),
+    ("cat-yarn", "Tentacat: Yarn", "The four tasks are balls of yarn, each with a loose thread.", cat_yarn, "#2b1055", ("#ffe3f0", "#ff7eb6")),
+    ("cat-paws", "Tentacat: Paws", "Tentacles end in paws, one on each task.", cat_paws, "#0f4c5c", ("#f4f7fb", "#ff9ec4")),
+    ("cat-pixel", "Tentacat: Pixel", "The pixel cat-bot: two pixel ears, a pink nose, four pixel tentacles.", cat_pixel, SQB, ("#f0f3f6", "#ff9ec4")),
+    ("cat-nap", "Tentacat: Nap", "Eyes shut, three tasks dim and Zs rising: only one task is awake.", cat_nap, "#101826", ("#e6edf3", AMBER)),
+    ("cat-light", "Tentacat: Light", "The cat-bot on cream, in deeper colours.", cat_light, CREAM, ("#1c2040", "#2d6cdf")),
+    ("cat-moon", "Tentacat: Moon", "A black cat silhouetted on a full moon, tasks in the dark corners.", cat_moon, "#0b1230", ("#f6f3ec", "#7aa2ff")),
+    ("cat-bento", "Tentacat: Bento", "The cat-bot with its tasks as bordered bento panes.", cat_bento, BN, ("#e6edf3", AGENT[2])),
+]
+
 
 PARENTS = ["05 Fireworks", "22 Hub", "23 Chain", "25 Squad", "28 Bento", "48 Sunset ptero", "45 Low poly"]
 
@@ -1929,10 +2156,12 @@ THEMES = ["The flame", "No fire", "Many agents at once", "The merge train", "Pte
 def main(out):
     """Every image goes in out/ideas/; out/README.md is the one gallery that lists all of them."""
     ideas = f"{out}/ideas"
-    rows = emit(ICONS, 1, ideas) + emit(RIFFS, 51, ideas) + emit(TENT, 121, ideas)
+    rows = emit(ICONS, 1, ideas) + emit(RIFFS, 51, ideas) + emit(TENT, 121, ideas) + emit(BIG, 141, ideas) + emit(CATS, 151, ideas)
     brand(out)
     heads = {i * 10: t for i, t in enumerate(THEMES)}
     heads.update({50 + i * 10: f"Riffs on {p}" for i, p in enumerate(PARENTS)})
+    heads[140] = "Riffs on 135 Tentabot: Four Corners, with a bigger head"
+    heads[150] = "Tentacats: cat-robots with a bigger head (riffs on 135)"
     heads[120] = "Tentacle bots: a cute robot handling coloured tasks (riffs on 13 Octopus, 17 Robot, 05, 25, 28 and more)"
     with open(f"{out}/README.md", "w") as f:
         f.write("# ptyro logos\n\n"
@@ -1940,7 +2169,8 @@ def main(out):
                 "and PNG. Every image file is in [`ideas/`](ideas/). Concepts 01–50 explore themes; 51–120 are ten "
                 "riffs on each of seven favourites (05, 22, 23, 25, 28, 48, 45), built from few shapes, thick strokes "
                 "and strong contrast so they read from a distance; 121–140 are twenty tentacle bots, a cute robot "
-                "handling coloured tasks, drawn in the style of the favourites. Generated by `scripts/logos.py`; run "
+                "handling coloured tasks, drawn in the style of the favourites; 141–150 give 135 a bigger head and "
+                "151–160 turn it into a cat-robot. Generated by `scripts/logos.py`; run "
                 "`make logos` to rebuild (PNGs need `rsvg-convert`). The wordmark is drawn, not typeset, so no fonts "
                 "are needed.\n\n"
                 "# The chosen logo\n\n"
