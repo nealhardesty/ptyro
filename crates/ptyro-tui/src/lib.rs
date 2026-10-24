@@ -13,6 +13,7 @@ mod keys;
 pub mod layout;
 mod onboard;
 mod outer;
+mod pad;
 #[doc(hidden)] // public for the benches
 pub mod paint;
 pub mod palette;

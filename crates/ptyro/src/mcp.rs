@@ -124,6 +124,27 @@ fn tools() -> Vec<Value> {
             false,
         ),
         tool(
+            "scratchpad_read",
+            "The owner's scratchpad: one Markdown notes file for ideas and bugs (also $PTYRO_SCRATCHPAD). Its text and revision.",
+            json!({}),
+            &[],
+            false,
+        ),
+        tool(
+            "scratchpad_todo",
+            "The scratchpad's open `- [ ]` items with line numbers (`all` for ticked ones too).",
+            json!({ "all": json!({ "type": "boolean", "description": "ticked items too" }) }),
+            &[],
+            false,
+        ),
+        tool(
+            "scratchpad_add",
+            "Add a line to the owner's scratchpad, stamped with your name and worktree: a `- [ ]` item (a bug you found, a follow-up), or a plain note. Don't edit the file otherwise.",
+            json!({ "text": s("what to note"), "section": s("under this heading"), "note": json!({ "type": "boolean", "description": "a plain bullet, not an item" }) }),
+            &["text"],
+            false,
+        ),
+        tool(
             "check_messages",
             "Messages for you (workers report with `ptyro msg send @lead`), after a cursor; can wait for the first one.",
             json!({ "since": s("last message id you saw"), "wait_s": n("wait up to this long for one") }),
@@ -202,7 +223,14 @@ fn cs_tools() -> Vec<Value> {
     let n = |d: &str| json!({ "type": "integer", "description": d });
     let list =
         |d: &str| json!({ "type": "array", "items": { "type": "string" }, "description": d });
-    let keep = ["check_messages", "ack", "post_message"];
+    let keep = [
+        "check_messages",
+        "ack",
+        "post_message",
+        "scratchpad_read",
+        "scratchpad_todo",
+        "scratchpad_add",
+    ];
     let mut v = vec![
         tool(
             "cs_status",
@@ -468,6 +496,33 @@ impl Server {
                     .await?;
                 match r {
                     Reply::Posted { ids, to } => Ok(json!({ "ids": ids, "to": to })),
+                    other => Err(crate::cli::unexpected(other)),
+                }
+            }
+            "scratchpad_read" => match self.client.request(Request::ScratchGet).await? {
+                Reply::Scratch { doc } => {
+                    Ok(json!({ "path": doc.path, "rev": doc.rev, "text": doc.text }))
+                }
+                other => Err(crate::cli::unexpected(other)),
+            },
+            "scratchpad_todo" => {
+                let all = a.get("all").and_then(Value::as_bool).unwrap_or(false);
+                match self.client.request(Request::ScratchTodo { all }).await? {
+                    Reply::ScratchItems { rev, items } => Ok(json!({ "rev": rev, "items": items })),
+                    other => Err(crate::cli::unexpected(other)),
+                }
+            }
+            "scratchpad_add" => {
+                let req = Request::ScratchAdd {
+                    text: need(a, "text")?,
+                    section: arg(a, "section").map(str::to_owned),
+                    note: a.get("note").and_then(Value::as_bool).unwrap_or(false),
+                    stamp: true,
+                    session: Some(self.lead.clone()),
+                    cwd: None,
+                };
+                match self.client.request(req).await? {
+                    Reply::Scratch { doc } => Ok(json!({ "added": true, "open": doc.open })),
                     other => Err(crate::cli::unexpected(other)),
                 }
             }

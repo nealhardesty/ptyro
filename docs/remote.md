@@ -219,3 +219,14 @@ it can do anything you can, by means ptyro never sees. ptyro tells an agent's re
 the requesting process (its ancestry, its POSIX session, the environment it was started with);
 a process that leaves all three looks like you at a plain shell, and is treated like you
 (SPEC §17).
+
+## Notes (the scratchpad)
+
+The web app has a **Notes** page (`✎` in the header): the scratchpad file (`$PTYRO_SCRATCHPAD`) in a
+box that saves as you type and merges with anything written meanwhile (a CLI `add`, an editor);
+a Preview in which tapping a checkbox ticks the item; the open items; a find box; and the saved
+copies, from which one can be put back. The session list has a quick-add box, and each session a
+`✎` button that fills it with the session's task and a link back. Writing needs a device paired
+with `--scope control`; a read-only device reads. The app is also a **share target**: share text
+or a link to ptyro from the phone's share sheet and it is added to the pad. While ptyro is
+unreachable, adds and edits wait in the browser (IndexedDB) and are sent in order on reconnect.

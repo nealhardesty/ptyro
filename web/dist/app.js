@@ -3,6 +3,7 @@
 // protocol (JSON encoding) over `ptyro serve`'s WebSocket, signed in with a device token from
 // `ptyro pair`. No dependencies, no third-party requests.
 import { Screen } from "./screen.js";
+import { initNotes, notesConnected, notesEvent, notesLink, notesNeedsLoad, notesLoad, notesNoteButton, notesQuickAdd, notesShown, notesStart, notesView } from "./notes.js";
 // What this app does, by name: the Web column of docs/parity.md names these, and `make parity`
 // checks every name it uses is here (SPEC §1.3, ROADMAP WEB1). Each is its control's tooltip.
 const ACTIONS = {
@@ -15,6 +16,12 @@ const ACTIONS = {
     "inbox": "The inbox: what happened while you were away",
     "inbox.read": "Mark everything in the inbox read",
     "notifications": "Notifications on this device (a test is sent)",
+    "scratchpad": "The scratchpad: your notes file, edited here; it saves as you type",
+    "scratchpad.add": "Add a line to the scratchpad, stamped with the time",
+    "scratchpad.items": "The scratchpad's open items (- [ ] lines)",
+    "scratchpad.tick": "Tick or untick an item in the scratchpad",
+    "scratchpad.history": "Saved copies of the scratchpad; put one back",
+    "scratchpad.note": "Note this session in the scratchpad",
     "pair": "Pair this device with the link or QR code from `ptyro pair`",
     "unpair": "Forget this device's pairing",
 };
@@ -354,12 +361,12 @@ async function answer(id, decision) {
 function header(title, back) {
     const unread = app.inbox.filter((e) => !e.read_ms).length;
     const dot = h("span", { class: `dot ${conn.state}`, title: conn.state });
-    return h("header", {}, back ? h("a", { class: "back", href: "#/" }, "‹") : h("img", { class: "logo", src: "/icon.svg", alt: "" }), h("h1", {}, title), dot, h("a", { class: "inbox-link", href: "#/inbox", title: tip("inbox") }, "✉", unread ? h("b", {}, String(unread)) : null), h("button", { class: "icon", title: tip("notifications"), onclick: () => void enablePush() }, "🔔"));
+    return h("header", {}, back ? h("a", { class: "back", href: "#/" }, "‹") : h("img", { class: "logo", src: "/icon.svg", alt: "" }), h("h1", {}, title), dot, notesLink(), h("a", { class: "inbox-link", href: "#/inbox", title: tip("inbox") }, "✉", unread ? h("b", {}, String(unread)) : null), h("button", { class: "icon", title: tip("notifications"), onclick: () => void enablePush() }, "🔔"));
 }
 function sessionCard(s) {
     const st = statusOf(s);
     const detail = s.status?.status === "blocked" ? s.status.detail ?? s.attention?.text : s.activity ?? s.status?.detail ?? s.title;
-    const card = h("a", { class: `card ${st}`, href: `#/s/${encodeURIComponent(s.id)}`, title: tip("session.open") }, h("span", { class: "glyph" }, GLYPH[st] ?? "·"), h("div", { class: "main" }, h("div", { class: "name" }, s.name, s.agent ? h("small", {}, ` ${s.agent}`) : null), h("div", { class: "sub" }, [st, s.project, s.worktree].filter(Boolean).join(" · ")), detail ? h("div", { class: "detail" }, detail) : null), h("time", {}, s.status ? ago(s.status.since_ms) : ago(s.created_ms)));
+    const card = h("a", { class: `card ${st}`, href: `#/s/${encodeURIComponent(s.id)}`, title: tip("session.open") }, h("span", { class: "glyph" }, GLYPH[st] ?? "·"), h("div", { class: "main" }, h("div", { class: "name" }, s.name, s.agent ? h("small", {}, ` ${s.agent}`) : null), h("div", { class: "sub" }, [st, s.project, s.worktree].filter(Boolean).join(" · ")), detail ? h("div", { class: "detail" }, detail) : null), h("time", {}, s.status ? ago(s.status.since_ms) : ago(s.created_ms)), notesNoteButton(s, true));
     if (s.status?.status === "blocked" && s.state.t === "running") {
         return h("div", { class: "blocked-wrap" }, card, h("div", { class: "actions", title: tip("answer") }, h("button", { class: "allow", onclick: () => void answer(s.id, "allow") }, "Allow"), h("button", { class: "deny", onclick: () => void answer(s.id, "deny") }, "Deny")));
     }
@@ -369,8 +376,12 @@ function listView() {
     const order = ["blocked", "errored", "working", "starting", "done", "idle", "unknown", "shell", "dormant", "exited"];
     const all = [...app.sessions.values()].sort((a, b) => order.indexOf(statusOf(a)) - order.indexOf(statusOf(b)) || a.name.localeCompare(b.name));
     const body = all.length ? all.map(sessionCard) : [h("p", { class: "empty" }, "No sessions. Start one with `ptyro new` on your computer.")];
-    return h("div", {}, header("ptyro", false), h("main", { class: "list", title: tip("sessions") }, ...body));
+    // Patched in place, so the scratchpad's quick-add box keeps its focus across renders.
+    listEl ??= h("div", {});
+    patch(listEl, [header("ptyro", false), notesQuickAdd(), h("main", { class: "list", title: tip("sessions") }, ...body)]);
+    return listEl;
 }
+let listEl = null;
 function inboxView() {
     const items = app.inbox.map((e) => h("a", { class: `entry ${e.read_ms ? "read" : ""}`, href: `#/s/${encodeURIComponent(e.session)}` }, h("span", { class: `kind ${e.kind}` }, e.kind), h("div", { class: "main" }, h("div", { class: "name" }, e.title), h("div", { class: "detail" }, e.body)), h("time", {}, ago(e.at_ms))));
     const mark = h("button", { class: "small", title: tip("inbox.read"), onclick: async () => { await conn.request({ t: "inbox_mark", all: true, read: true }); await refresh(); } }, "Mark all read");
@@ -453,7 +464,7 @@ function sessionView(id) {
         h("div", { class: `pill ${st}` }, GLYPH[st] ?? "·", " ", st, s.status?.detail && !blocked ? ` · ${s.status.detail}` : "", s.status ? ` · ${ago(s.status.since_ms)}` : ""),
         ...(blocked ? [h("section", { class: "prompt" }, h("div", {}, h("b", {}, s.status?.kind === "permission" ? "Wants permission" : "Waiting for you"), s.held ? h("span", { class: "tag", title: "answers go to the agent as a decision" }, "exact") : null), h("pre", {}, s.status?.detail ?? s.attention?.text ?? ""), h("div", { class: "actions", title: tip("answer") }, h("button", { class: "allow", onclick: () => void answer(id, "allow") }, "Allow"), h("button", { class: "always", onclick: () => void answer(id, "always") }, "Always"), h("button", { class: "deny", onclick: () => void answer(id, "deny") }, "Deny")))] : []),
         chat ? sh.chat : sh.termWrap,
-        h("div", { class: "keys", title: tip("session.keys") }, ...KEYS.map(([label, code]) => h("button", { onclick: () => sendKey(id, code) }, label)), h("button", { onclick: () => sendKey(id, { t: "char", c: "c" }, 4) }, "^C"), s.structured
+        h("div", { class: "keys", title: tip("session.keys") }, ...KEYS.map(([label, code]) => h("button", { onclick: () => sendKey(id, code) }, label)), h("button", { onclick: () => sendKey(id, { t: "char", c: "c" }, 4) }, "^C"), notesNoteButton(s, false), s.structured
             ? h("button", { title: tip("session.view"), onclick: () => { if (!app.termView.delete(id))
                     app.termView.add(id); render(); } }, app.termView.has(id) ? "Chat" : "Terminal")
             : h("button", { class: app.fit ? "on" : "", title: tip("session.view"), onclick: () => { app.fit = !app.fit; paint(); render(); } }, app.fit ? "Fit" : "1:1")),
@@ -546,7 +557,9 @@ function render() {
     const r = route();
     if (r.view !== "session" || r.id !== app.viewing)
         subscribe(r.view === "session" ? r.id : null);
-    const view = r.view === "session" ? sessionView(r.id) : r.view === "inbox" ? inboxView() : listView();
+    if (notesNeedsLoad())
+        void notesLoad();
+    const view = location.hash === "#/notes" ? notesView() : r.view === "session" ? sessionView(r.id) : r.view === "inbox" ? inboxView() : listView();
     if (root.firstChild !== view || root.childNodes.length !== 1)
         root.replaceChildren(view);
     const t = app.toast ? h("div", { class: "toast" }, app.toast) : null;
@@ -622,6 +635,7 @@ conn.listeners.add((msg) => {
             conn.send({ t: "subscribe", session: app.viewing, size: null, control: false });
         }
         void refresh();
+        notesConnected();
         return;
     }
     if (msg.t === "chat") {
@@ -673,12 +687,17 @@ conn.listeners.add((msg) => {
             app.inbox.unshift(e.entry);
             render();
         }
+        else if (e.t === "scratch_changed") {
+            notesEvent(e);
+        }
     }
 });
 conn.onState = render;
-window.addEventListener("hashchange", () => { takePairCode(); render(); });
+window.addEventListener("hashchange", () => { takePairCode(); notesShown(); render(); });
 window.addEventListener("resize", paint);
 takePairCode();
+initNotes({ request: (r) => conn.request(r), connected: () => conn.state === "open", toast, render, header, tip });
+notesStart();
 if ("serviceWorker" in navigator)
     void navigator.serviceWorker.register("/sw.js");
 render();

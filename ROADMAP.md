@@ -36,7 +36,7 @@ Conventions:
 | **UX1** | Out of the box | From `cd repo && ptyro` to a shipped, cleaned-up worktree by keys alone; sidebar rows that say what's going on (done) |
 | **WEB1** | Web parity | The web client does what the CLI and TUI do, and the parity check covers it |
 | **CFG1** | One configuration panel | Every option editable in the TUI (then the web); new options must join it |
-| **NOTE1** | The scratchpad | One persistent notepad file: a key opens it in your editor, `PTYRO_SCRATCHPAD` finds it, items become tasks, the web edits it |
+| **NOTE1** | The scratchpad | One persistent notepad file: a key opens it in your editor, `PTYRO_SCRATCHPAD` finds it, items become tasks, the web edits it (done) |
 | **Backlog** | Later / maybe | Editor, tasks, jj, libghostty, relay, … |
 
 Critical path: **M0 → M1 → M2 → M3 → M4** gives a daily-driver. M5 can interleave with M3/M4.
@@ -1771,7 +1771,9 @@ can find (owner 2026-10-24, R-UX-32). The CLI, the TUI and the web are all first
   synced folder or a git repo). Markdown, so checkboxes and headings work, but nothing needs
   them. ptyro never owns the only copy: it is a file you can `cat`, `grep` and back up.
 - **`PTYRO_SCRATCHPAD`** is set in every session ptyro starts (agents, shells, the quick
-  terminal, recipes, scripts), next to `PTYRO_SESSION_ID` (SPEC §5.1 env table). Agents are told
+  terminal, recipes, scripts), next to `PTYRO_SESSION_ID` (SPEC §5.1 env table). Only `[scratchpad] path`
+  moves the file; the variable is never read as an override (a daemon started inside another ptyro
+  would adopt that one's pad). Agents are told
   nothing by default; an agent that finds the variable can read the pad, and `ptyro scratchpad
   add` is the polite way to write to it.
 - **Never lose a word.** Writes from ptyro are atomic appends or whole-file replaces with a
@@ -1782,7 +1784,7 @@ can find (owner 2026-10-24, R-UX-32). The CLI, the TUI and the web are all first
   else the `[editors]` default, else `$VISUAL`/`$EDITOR`, else `nvim`/`vim`/`nano`, whichever is
   found). nvim and vim start with `autoread` so an append from elsewhere appears without a prompt.
 
-- [ ] **NOTE1.0 The file, the variable and the CLI** — S. The path, creation on first use with a
+- [x] **NOTE1.0 The file, the variable and the CLI** — S. The path, creation on first use with a
   short header explaining itself (`# Scratchpad`, how to add to it), `PTYRO_SCRATCHPAD` in every
   session's environment (and `PTYRO_SCRATCHPAD` honoured as an override of the path), and
   `ptyro scratchpad`:
@@ -1797,7 +1799,7 @@ can find (owner 2026-10-24, R-UX-32). The CLI, the TUI and the web are all first
   - `log` and `restore [rev]` for the history; `--json` on all of them.
   *Done when:* a test starts a session, finds `PTYRO_SCRATCHPAD` in its environment, appends from
   it, and `cat`s the line back; the file survives a daemon restart and a live upgrade.
-- [ ] **NOTE1.1 The pane** — M. A key (chosen with `docs/keys.md` in hand; also the palette and
+- [x] **NOTE1.1 The pane** — M. A key (chosen with `docs/keys.md` in hand; also the palette and
   the home screen) brings up the scratchpad in the editor, **in its own pane like the quick
   terminal** (UX1.25): one editor session for the pad, started once and kept running, so the
   cursor, scroll and undo are exactly where you left them. The same three steps as the quick
@@ -1810,7 +1812,7 @@ can find (owner 2026-10-24, R-UX-32). The CLI, the TUI and the web are all first
   "found tools" line and the error offer to pick one.
   *Done when:* a TUI test types into the pad, hides it, switches worktree, shows it, and the text
   and cursor are there; killing the editor and pressing the key brings it back.
-- [ ] **NOTE1.2 Capture from anywhere** — M. The point of a scratchpad is that adding to it takes
+- [x] **NOTE1.2 Capture from anywhere** — M. The point of a scratchpad is that adding to it takes
   no thought:
   - a one-line **quick add** box (`Ctrl-Q` + the pad key with Shift, or the row menu's "note this")
     that appends without opening the editor, stamped with where you were;
@@ -1819,7 +1821,7 @@ can find (owner 2026-10-24, R-UX-32). The CLI, the TUI and the web are all first
   - when a gate, a failed check or a blocked agent needs a thought you can't give now, "note for
     later" adds it as an item that links back (`ptyro://session/<handle>`).
   *Done when:* each of these is a tested key path, listed in `docs/keys.md` and `docs/parity.md`.
-- [ ] **NOTE1.3 Items become work** — M. A `- [ ]` line is a task waiting to happen.
+- [x] **NOTE1.3 Items become work** — M. A `- [ ]` line is a task waiting to happen.
   - `ptyro scratchpad start [n|text]` (TUI: `⏎` on an item in the pad's **picker**, a fuzzy list of
     open items over the editor) starts a UX1.9 task with the item as the prompt, in a new worktree
     on the current project; the item is tagged `[wt:<name>]` so it's traceable.
@@ -1831,14 +1833,14 @@ can find (owner 2026-10-24, R-UX-32). The CLI, the TUI and the web are all first
     your notes from theirs.
   *Done when:* a test adds a bug as an item, starts it as a task, finishes the worktree, and sees the
   item ticked with the PR.
-- [ ] **NOTE1.4 Protocol and live sync** — S. `scratchpad.get`, `scratchpad.put` (with the revision
+- [x] **NOTE1.4 Protocol and live sync** — S. `scratchpad.get`, `scratchpad.put` (with the revision
   it was based on; a stale one is refused with the current text), `scratchpad.append`,
   `scratchpad.history`, `scratchpad.restore`, and an event `scratchpad.changed` from a file watcher
   (`notify`, so an edit from any program reaches every client). Scopes: `read` reads, `control`
   writes. Writes from the web and agents never silently overwrite: three-way merge on the last
   revision seen, and on a conflict both texts are kept with markers.
   *Done when:* a test edits the file from outside and a connected client sees the event.
-- [ ] **NOTE1.5 The web** — M. A **Notes** view (WEB1.x, same change): the pad as an editable
+- [x] **NOTE1.5 The web** — M. A **Notes** view (WEB1.x, same change): the pad as an editable
   document that autosaves and merges as NOTE1.4 says, with a Markdown preview toggle in which
   checkboxes tick with a tap, a find box, and a history sheet to restore from. On the session list
   a **quick-add** box and the open-item count. The PWA is a **Web Share Target**
@@ -1846,7 +1848,7 @@ can find (owner 2026-10-24, R-UX-32). The CLI, the TUI and the web are all first
   share sheet appends it to the pad. Works offline: edits queue in IndexedDB and merge on reconnect.
   *Done when:* from a phone, share a link into the pad, tick an item, and see both on the
   desktop's open pane without reloading.
-- [ ] **NOTE1.6 Configuration, docs and tests** — S. `[scratchpad]` (`path`, `mode`, `editor`,
+- [x] **NOTE1.6 Configuration, docs and tests** — S. `[scratchpad]` (`path`, `mode`, `editor`,
   `keep`, `tick_on_finish`) in the schema and the panel (CFG1), a README section, `docs/keys.md`,
   `docs/config.md`, `docs/scripting.md` (the variable and `add` for hooks and scripts), the
   parity rows, a `make` target if any fixture needs one, and SPEC §5.1 (the variable) and §16 updated.
@@ -1859,6 +1861,26 @@ can find (owner 2026-10-24, R-UX-32). The CLI, the TUI and the web are all first
 inside a worktree `echo "login times out on safari" | ptyro scratchpad add -` lands as a stamped
 item; `⏎` on it starts an agent on it; the PR merging ticks it; and on your phone you share a
 link into it and see it in the desktop pane.
+
+**Done (2026-10-24): NOTE1.0–NOTE1.6** (NOTE1.7 stays a maybe). SPEC §13.6 has the design; the
+CLI is `ptyro scratchpad` (`pad`), `make scratchpad-demo` walks through it, and `docs/parity.md`
+has its rows. How it differs from the plan above:
+- **Keys:** `C-q ;` toggles the pad, `C-q '` adds a line, `C-q "` lists the open items (`+` and `=`
+  were taken). In copy mode `a` sends the selection; in the inbox `n` notes an entry. In the items
+  list, tick, show-ticked and editor are `Ctrl-X`, `Ctrl-A`, `Ctrl-E` (plain letters search).
+- **Stamp format:** after the checkbox: the time, then the worktree in backticks, then `by` and the
+  agent in backticks, then the words (`2026-10-24 14:02 · … · words`), so it parses without
+  guessing; tags (`[wt:project/name]`, `(#42)`) go at the end.
+- **Watching** is a 700 ms poll of the file's mtime and size, not `notify`: the same on Linux and
+  macOS and on synced folders. History keeps every state for an hour, then thins out.
+- **`start` on the web** is the one gap, and it is closed by WEB1.2's new-task box (the cell says
+  so); the `✎ N` count is in the status bar (`[ui] status_bar`) and on the home screen, not a sidebar
+  footer; agent-added items show `by <agent>` rather than dimmed.
+- **Not done:** an item started where there is no project isn't tagged `[wt:…]`; the popup swallows
+  mouse clicks rather than closing on a click outside; the web's Notes page and share target were
+  type-checked and unit-tested but not tried on a real phone.
+- **Also:** `ptyro doctor` checks the file and the editor; a lead's `ptyro mcp` has
+  `scratchpad_read`, `scratchpad_todo` and `scratchpad_add`.
 
 ---
 

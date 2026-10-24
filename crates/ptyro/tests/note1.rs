@@ -33,7 +33,7 @@ impl World {
         std::fs::write(&ed, "#!/bin/sh\necho \"EDITING $*\"\nexec sleep 60\n").unwrap();
         std::fs::set_permissions(&ed, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
         let config = format!(
-            "[worktrees]\nfetch = false\n[scratchpad]\neditor = \"{}\"\n{extra}",
+            "[worktrees]\nfetch = false\n[agents.claude]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\n[scratchpad]\neditor = \"{}\"\n{extra}",
             ed.display()
         );
         let hs = h.to_string_lossy().into_owned();
@@ -364,4 +364,43 @@ async fn ticking_on_finish_can_be_turned_off() {
     };
     c.request(Request::WorktreeRemove { addr: info.id, opts: Default::default() }).await.unwrap();
     assert!(get(&c).await.text.contains("- [ ] keep me open [wt:myrepo/keep]"));
+}
+
+/// NOTE1.3: what an agent adds is stamped with its name and where it works, so you can tell it
+/// from your own notes.
+#[tokio::test]
+async fn an_agent_s_note_says_who_wrote_it() {
+    let w = World::new("");
+    let c = w.d.client().await.unwrap();
+    let spec = SpawnSpec {
+        agent: Some("claude".into()),
+        cwd: w.home(),
+        name: Some("scribe".into()),
+        size: Some(TermSize::new(100, 20)),
+        prompt: Some("work 5 busy".into()),
+        ..SpawnSpec::default()
+    };
+    let Reply::Session { .. } = c.request(Request::Spawn { spec }).await.unwrap() else { panic!() };
+    let r = c
+        .request(Request::ScratchAdd {
+            text: "the retry loop never backs off".into(),
+            section: Some("Found by agents".into()),
+            note: false,
+            stamp: true,
+            session: Some("scribe".into()),
+            cwd: None,
+        })
+        .await
+        .unwrap();
+    let Reply::Scratch { doc } = r else { panic!("{r:?}") };
+    assert!(doc.text.contains("## Found by agents\n\n- [ ] "), "{}", doc.text);
+    let Reply::ScratchItems { items, .. } =
+        c.request(Request::ScratchTodo { all: false }).await.unwrap()
+    else {
+        panic!()
+    };
+    let it = items.iter().find(|i| i.text.contains("retry loop")).expect("item");
+    assert_eq!(it.by.as_deref(), Some("scribe"));
+    assert!(it.whence.is_some() && it.at.is_some(), "{it:?}");
+    assert_eq!(it.section.as_deref(), Some("Found by agents"));
 }

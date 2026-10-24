@@ -92,6 +92,13 @@ enabled = true                            # a `≈` line after each agent turn, 
                                           # any command: the prompt on stdin, the summary on stdout;
                                           # it runs on the session's profile account, with secrets redacted
 
+[scratchpad]
+# mode = "drawer"                         # how C-q ; shows it: drawer | popup | pane
+# editor = "nvim"                         # a command line; default: [editors], $VISUAL, $EDITOR, nvim/vim/nano/vi
+# path = "~/Sync/pad.md"                  # default: scratchpad.md in ptyro's data directory
+# keep = 30                               # days of saved copies (the newest 20 always stay)
+# tick_on_finish = false                  # leave an item open when its worktree is merged or removed
+
 [recorder]
 enabled = true                            # record every session's output (per agent: record = false)
 max_bytes = "16MiB"                       # per session, as a ring
@@ -251,7 +258,7 @@ ptyro follows the XDG directories:
 | Path | Holds |
 |---|---|
 | `~/.config/ptyro/` | `config.toml`, `recipes/`, `changesets/` (templates) |
-| `~/.local/share/ptyro/` | `ptyro.db`, `worktrees/`, `sessions/<id>/pty.log` (recordings) |
+| `~/.local/share/ptyro/` | `ptyro.db`, `worktrees/`, `sessions/<id>/pty.log` (recordings), `scratchpad.md` and `scratchpad.history/` |
 | `~/.local/state/ptyro/` | logs, `crashes/` |
 | `$XDG_RUNTIME_DIR/ptyro/` | the daemon's socket (without `XDG_RUNTIME_DIR`, as on macOS: `$TMPDIR/ptyro-<uid>/`; a path too long for a socket falls back to `/tmp/ptyro-<uid>-<hash>/`) |
 

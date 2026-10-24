@@ -5,6 +5,7 @@
 
 import { Screen } from "./screen.js";
 import type { Color, Frame, InboxEntry, Outcome, Session } from "./screen.js";
+import { initNotes, notesConnected, notesEvent, notesLink, notesNeedsLoad, notesLoad, notesNoteButton, notesQuickAdd, notesShown, notesStart, notesView } from "./notes.js";
 
 interface ChatItem { id: string; t: string; [k: string]: any }
 
@@ -20,6 +21,12 @@ const ACTIONS = {
   "inbox": "The inbox: what happened while you were away",
   "inbox.read": "Mark everything in the inbox read",
   "notifications": "Notifications on this device (a test is sent)",
+  "scratchpad": "The scratchpad: your notes file, edited here; it saves as you type",
+  "scratchpad.add": "Add a line to the scratchpad, stamped with the time",
+  "scratchpad.items": "The scratchpad's open items (- [ ] lines)",
+  "scratchpad.tick": "Tick or untick an item in the scratchpad",
+  "scratchpad.history": "Saved copies of the scratchpad; put one back",
+  "scratchpad.note": "Note this session in the scratchpad",
   "pair": "Pair this device with the link or QR code from `ptyro pair`",
   "unpair": "Forget this device's pairing",
 } as const;
@@ -331,6 +338,7 @@ function header(title: string, back: boolean): HTMLElement {
     back ? h("a", { class: "back", href: "#/" }, "‹") : h("img", { class: "logo", src: "/icon.svg", alt: "" }),
     h("h1", {}, title),
     dot,
+    notesLink(),
     h("a", { class: "inbox-link", href: "#/inbox", title: tip("inbox") }, "✉", unread ? h("b", {}, String(unread)) : null),
     h("button", { class: "icon", title: tip("notifications"), onclick: () => void enablePush() }, "🔔"),
   );
@@ -347,6 +355,7 @@ function sessionCard(s: Session): HTMLElement {
       detail ? h("div", { class: "detail" }, detail) : null,
     ),
     h("time", {}, s.status ? ago(s.status.since_ms) : ago(s.created_ms)),
+    notesNoteButton(s, true),
   );
   if (s.status?.status === "blocked" && s.state.t === "running") {
     return h("div", { class: "blocked-wrap" }, card,
@@ -362,8 +371,12 @@ function listView(): HTMLElement {
   const order = ["blocked", "errored", "working", "starting", "done", "idle", "unknown", "shell", "dormant", "exited"];
   const all = [...app.sessions.values()].sort((a, b) => order.indexOf(statusOf(a)) - order.indexOf(statusOf(b)) || a.name.localeCompare(b.name));
   const body = all.length ? all.map(sessionCard) : [h("p", { class: "empty" }, "No sessions. Start one with `ptyro new` on your computer.")];
-  return h("div", {}, header("ptyro", false), h("main", { class: "list", title: tip("sessions") }, ...body));
+  // Patched in place, so the scratchpad's quick-add box keeps its focus across renders.
+  listEl ??= h("div", {});
+  patch(listEl, [header("ptyro", false), notesQuickAdd(), h("main", { class: "list", title: tip("sessions") }, ...body)]);
+  return listEl;
 }
+let listEl: HTMLElement | null = null;
 
 function inboxView(): HTMLElement {
   const items = app.inbox.map((e) => h("a", { class: `entry ${e.read_ms ? "read" : ""}`, href: `#/s/${encodeURIComponent(e.session)}` },
@@ -463,6 +476,7 @@ function sessionView(id: string): HTMLElement {
     h("div", { class: "keys", title: tip("session.keys") },
       ...KEYS.map(([label, code]) => h("button", { onclick: () => sendKey(id, code) }, label)),
       h("button", { onclick: () => sendKey(id, { t: "char", c: "c" }, 4) }, "^C"),
+      notesNoteButton(s, false),
       s.structured
         ? h("button", { title: tip("session.view"), onclick: () => { if (!app.termView.delete(id)) app.termView.add(id); render(); } }, app.termView.has(id) ? "Chat" : "Terminal")
         : h("button", { class: app.fit ? "on" : "", title: tip("session.view"), onclick: () => { app.fit = !app.fit; paint(); render(); } }, app.fit ? "Fit" : "1:1"),
@@ -558,7 +572,8 @@ function render(): void {
   }
   const r = route();
   if (r.view !== "session" || r.id !== app.viewing) subscribe(r.view === "session" ? r.id! : null);
-  const view = r.view === "session" ? sessionView(r.id!) : r.view === "inbox" ? inboxView() : listView();
+  if (notesNeedsLoad()) void notesLoad();
+  const view = location.hash === "#/notes" ? notesView() : r.view === "session" ? sessionView(r.id!) : r.view === "inbox" ? inboxView() : listView();
   if (root.firstChild !== view || root.childNodes.length !== 1) root.replaceChildren(view);
   const t = app.toast ? h("div", { class: "toast" }, app.toast) : null;
   for (const old of view.querySelectorAll(":scope > .toast")) old.remove();
@@ -632,6 +647,7 @@ conn.listeners.add((msg) => {
       conn.send({ t: "subscribe", session: app.viewing, size: null, control: false });
     }
     void refresh();
+    notesConnected();
     return;
   }
   if (msg.t === "chat") {
@@ -670,14 +686,18 @@ conn.listeners.add((msg) => {
     } else if (e.t === "inbox_added") {
       app.inbox.unshift(e.entry);
       render();
+    } else if (e.t === "scratch_changed") {
+      notesEvent(e);
     }
   }
 });
 conn.onState = render;
 
-window.addEventListener("hashchange", () => { takePairCode(); render(); });
+window.addEventListener("hashchange", () => { takePairCode(); notesShown(); render(); });
 window.addEventListener("resize", paint);
 takePairCode();
+initNotes({ request: (r) => conn.request(r), connected: () => conn.state === "open", toast, render, header, tip });
+notesStart();
 if ("serviceWorker" in navigator) void navigator.serviceWorker.register("/sw.js");
 render();
 conn.connect();

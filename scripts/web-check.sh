@@ -10,7 +10,7 @@ cp -R web "$tmp/web"
 (cd "$tmp/web" && $TSC -p tsconfig.app.json && $TSC -p tsconfig.sw.json)
 python3 -I scripts/icons.py "$tmp/web/dist"
 status=0
-for f in app.js screen.js sw.js icon-192.png icon-512.png apple-touch-icon.png; do
+for f in app.js screen.js pad.js notes.js sw.js icon-192.png icon-512.png apple-touch-icon.png; do
   case $f in
     # The compressed bytes depend on the zlib build (zlib vs zlib-ng): compare the pixels.
     *.png) same() { python3 -I scripts/icons.py --same "$1" "$2"; } ;;

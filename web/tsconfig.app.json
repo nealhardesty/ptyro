@@ -10,5 +10,5 @@
     "removeComments": false,
     "newLine": "lf"
   },
-  "files": ["src/screen.ts", "src/app.ts"]
+  "files": ["src/screen.ts", "src/pad.ts", "src/notes.ts", "src/app.ts"]
 }

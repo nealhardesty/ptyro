@@ -288,6 +288,24 @@ ptyro cs pr add-user-tier && ptyro cs land add-user-tier
 `Ctrl-Q S` shows the set as swimlanes. `make changeset-demo` runs one with fake agents. The
 guide: [`docs/changesets.md`](docs/changesets.md).
 
+### The scratchpad
+
+One notes file for ideas and the bugs you're chasing, the same in every session and restart:
+
+```bash
+ptyro scratchpad                 # open it in your editor (Ctrl-Q ; in the TUI: a drawer you toggle)
+ptyro scratchpad add "login times out on safari"   # a stamped - [ ] item, from anywhere
+git diff --stat | ptyro scratchpad add -           # or from a pipe
+ptyro scratchpad todo            # the open items;  done 12  ticks one;  start 12  makes it a task
+echo $PTYRO_SCRATCHPAD           # every shell and agent can find the file (plain Markdown)
+```
+
+In the TUI, `C-q ;` shows the pad and `C-q '` adds a line without opening it; `C-q "` lists the
+open items, and `⏎` on one starts an agent on it in a new worktree, ticked once its PR merges.
+The web app has a Notes view that saves as you type (and merges with whoever else is writing),
+and your phone's share sheet can send links and text to it. Old copies are kept
+(`ptyro scratchpad log`, `restore`). Settings: `[scratchpad]` in the config (`docs/config.md`).
+
 ### Your phone and other machines
 
 ```bash
@@ -355,6 +373,7 @@ All after the prefix, `Ctrl-Q` or `Ctrl-Space`. The full list is in [`docs/keys.
 | `D` / `Q` | inspector / review queue |
 | `O` / `S` | runs / change sets |
 | `w` / `o` / `r` | switch workspace / open in editor / run the default run script |
+| `;` / `'` / `"` | the scratchpad / add a line to it / its open items |
 
 ## Configuration
 
@@ -442,6 +461,7 @@ behave the same. (License and advisory checks run there through the cargo-deny a
 | `make reset` | start ptyro over, to try the first run again: lists what it removes (sessions, worktrees with any uncommitted work flagged, the login service, integrations, config, data, state), then asks. `YES=1` skips the question unless uncommitted work would be lost (then you type `delete`). Your repositories and their branches stay. With `PTYRO_HOME` set it resets that home only. Run it from a plain terminal, not inside ptyro |
 | `make orchestrate-demo` (`ARGS=tui\|clean`) | fan-out, a gated recipe and a lead over MCP, with fake agents |
 | `make changeset-demo` (`ARGS=tui\|clean`) | a change set across three repos, contract to merge train, with fake agents |
+| `make scratchpad-demo` (`ARGS=tui\|clean`) | the scratchpad in a throwaway ptyro: items added, listed, ticked, restored; `tui` opens it |
 | `make verify-claude` | check the Claude adapter against the real Claude Code on your machine (one tiny turn) |
 | `make verify-structured` | check structured mode against the real agents here |
 | `make headless CMD=… ARGS=…` | run a program in ptyro's emulator without a terminal; prints screen and status |

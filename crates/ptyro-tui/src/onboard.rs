@@ -204,6 +204,14 @@ impl App {
 
     pub(crate) fn show_home(&mut self, discovered: Vec<PathBuf>) {
         let mut items: Vec<Item> = Vec::new();
+        if self.pad_open > 0 {
+            items.push(Item {
+                label: format!("✎ scratchpad · {} open", self.pad_open),
+                detail: "search the items, tick one, start one as a task".into(),
+                key: self.keymap.key_for("scratchpad.items"),
+                target: Target::Action(Command { action: "scratchpad.items", arg: None }),
+            });
+        }
         for id in self.attention_order(true) {
             let Some(s) = self.session(id) else { continue };
             let why = s.attention.as_ref().map(|a| a.text.clone()).unwrap_or_default();

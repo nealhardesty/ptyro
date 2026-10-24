@@ -37,6 +37,8 @@ pub enum Outcome {
     Yank(String),
     /// `gg` at the very top: fetch the older lines from the recording (M8.2).
     MoreHistory,
+    /// Add this text to the scratchpad (NOTE1.2), then leave copy mode.
+    Note(String),
 }
 
 #[derive(Debug, Clone)]
@@ -421,6 +423,9 @@ impl CopyMode {
                 );
                 return Outcome::Yank(text);
             }
+            (KeyCode::Char { c: 'a' }, false) if self.selection.is_some() => {
+                return Outcome::Note(self.selected_text());
+            }
             (KeyCode::Char { c: '/' }, false) => self.input = Some((true, String::new())),
             (KeyCode::Char { c: '?' }, false) => self.input = Some((false, String::new())),
             (KeyCode::Char { c: 'n' }, false) => {
@@ -692,6 +697,15 @@ mod tests {
         assert_eq!(keys(&mut c, "k0ve"), Outcome::Stay);
         assert_eq!(c.selected_text(), "hello");
         assert_eq!(keys(&mut c, "wey"), Outcome::Yank("hello world".into()));
+    }
+
+    #[test]
+    fn a_sends_the_selection_to_the_scratchpad() {
+        let d = doc(&["$ echo hello world", "hello world", "$"], &[], &[0, 2], 1);
+        let mut c = CopyMode::new(&d, 3);
+        assert_eq!(keys(&mut c, "a"), Outcome::Stay, "nothing selected, nothing to send");
+        keys(&mut c, "k0ve");
+        assert_eq!(keys(&mut c, "a"), Outcome::Note("hello".into()));
     }
 
     #[test]

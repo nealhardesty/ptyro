@@ -112,6 +112,9 @@ pub fn draw(app: &App, f: &mut Frame<'_>) {
                 if app.config.ui.status_bar { area.height.saturating_sub(1) } else { area.height };
             crate::inspector::draw(app, f, Rect { height: h, ..area });
         }
+        if let Some(id) = app.pad_popup {
+            draw_pad_popup(app, f, area, id);
+        }
         if app.orch.is_some() {
             let h =
                 if app.config.ui.status_bar { area.height.saturating_sub(1) } else { area.height };
@@ -136,6 +139,38 @@ pub fn draw(app: &App, f: &mut Frame<'_>) {
         draw_overlay(app, f, o, area);
     } else if app.which_key_shown() {
         draw_which_key(app, f, area);
+    }
+}
+
+/// The scratchpad's editor as a window over everything (NOTE1.1, `[scratchpad] mode = "popup"`).
+fn draw_pad_popup(app: &App, f: &mut Frame<'_>, area: Rect, id: SessionId) {
+    let t = &app.theme;
+    let r = crate::pad::popup_rect(area);
+    f.render_widget(Clear, r);
+    let mut path = app.config.scratchpad_path(&app.paths.data).display().to_string();
+    // The end of a long path is the part that says which file.
+    let room = (r.width as usize).saturating_sub(34).max(12);
+    if path.chars().count() > room {
+        let tail: String =
+            path.chars().rev().take(room - 1).collect::<Vec<_>>().into_iter().rev().collect();
+        path = format!("…{tail}");
+    }
+    let close = app.pad_key().map(|k| format!(" · {k} closes")).unwrap_or_default();
+    let block = Block::default().borders(Borders::ALL).border_style(fg(app, t.border_focus)).title(
+        Span::styled(
+            format!(" ✎ Scratchpad · {path}{close} "),
+            fg(app, t.accent).add_modifier(Modifier::BOLD),
+        ),
+    );
+    let inner = block.inner(r);
+    f.render_widget(block, r);
+    let Some(cache) = app.caches.get(&id) else { return };
+    paint::screen(cache, f.buffer_mut(), inner, app.depth, false);
+    if app.overlay.is_none()
+        && !app.prefix
+        && let Some(p) = paint::cursor(cache, inner)
+    {
+        f.set_cursor_position(p);
     }
 }
 
@@ -1066,9 +1101,22 @@ fn draw_header(
             }
             let (g, gc) = glyph(app, s);
             let drawer = app.drawer.is_some_and(|d| d.pane == pane);
-            let g = if drawer { "›_" } else { g };
+            let g = if s.pad {
+                "✎"
+            } else if drawer {
+                "›_"
+            } else {
+                g
+            };
             left.push(Span::styled(format!(" {g} "), base.fg(app.depth.fit(gc))));
-            if drawer && let Some(k) = app.quick_key() {
+            if s.pad
+                && let Some(k) = app.pad_key()
+            {
+                right.push(Span::styled(
+                    format!(" {k} {} ", if focused { "hide" } else { "focus" }),
+                    base.fg(app.depth.fit(t.dim)),
+                ));
+            } else if drawer && let Some(k) = app.quick_key() {
                 right.push(Span::styled(
                     format!(" {k} {} ", if focused { "hide" } else { "focus" }),
                     base.fg(app.depth.fit(t.dim)),
@@ -1270,6 +1318,12 @@ fn draw_status(app: &App, f: &mut Frame<'_>, r: Rect) {
         right.push(Span::styled(
             format!("⏸ {gates} gate(s) "),
             bar.fg(app.depth.fit(t.blocked)).add_modifier(Modifier::BOLD),
+        ));
+    }
+    if app.pad_open > 0 {
+        right.push(Span::styled(
+            format!("✎ {} ", app.pad_open),
+            bar.fg(app.depth.fit(t.accent)).add_modifier(Modifier::BOLD),
         ));
     }
     let unread = app.unread();
@@ -1656,7 +1710,7 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
             }
             let name = tab.clone().unwrap_or_else(|| "all workspaces".into());
             let title = format!(
-                "Inbox · {name} — ⏎ go · p peek · r read · R all read · Tab next tab · Esc"
+                "Inbox · {name} — ⏎ go · p peek · n note it · r read · R all read · Tab next tab · Esc"
             );
             f.render_widget(Paragraph::new(lines).block(block(title)), r);
         }

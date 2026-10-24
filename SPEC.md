@@ -500,6 +500,7 @@ image is used to re-exec the *old* binary (kept at `state/daemon.prev`).
   | `TERM_PROGRAM` / `TERM_PROGRAM_VERSION` | `ptyro` / crate version |
   | `PTYRO` | `1` |
   | `PTYRO_SESSION_ID` | session ULID |
+  | `PTYRO_SCRATCHPAD` | path of the scratchpad file (§13.6), in every session |
   | `PTYRO_PROFILE` | the session's profile name (§10.10) |
   | `PTYRO_SOCKET` | daemon socket path (for `ptyro hook` and nested `ptyro` CLI use) |
   | `PTYRO_PROJECT`, `PTYRO_WORKTREE_PATH`, `PTYRO_WORKTREE_NAME`, `PTYRO_BRANCH`, `PTYRO_PORT` | when in a worktree (§10.6) |
@@ -3412,6 +3413,61 @@ command = "pnpm test"
 review = "Review the diff against origin/main and list risks."
 ```
 
+### 13.6 The scratchpad **[built NOTE1]**
+
+One persistent notes file for ideas and bugs: plain Markdown, the same in every session and
+workspace, found by `$PTYRO_SCRATCHPAD`. ptyro never owns the only copy: it is a file you can
+`cat`, `grep`, sync and back up.
+
+- **Where:** `<data>/scratchpad.md`, or `[scratchpad] path` (`~` expands; a symlink is written
+  through, so the real file in a synced folder is replaced in place). The daemon makes it, with a
+  short header, when it starts. `PTYRO_SCRATCHPAD` is set in the environment of every session
+  (`launch.rs`, after the profile and worktree variables, and listed in `ptyro_pty`'s strip list so
+  an enclosing ptyro's value never leaks into a nested one).
+- **Items.** A line `- [ ]` / `- [x]` (or `* [ ]`) is an item. `ptyro scratchpad add` writes
+  `- [ ] 2026-10-24 14:02 · `ptyro/bugs` · by `claude-rook` · the words`: the local time, the
+  worktree (else the directory) it was run in, and for an agent the session's name; further lines
+  are indented two spaces and belong to the item. Tags go at the end: `[wt:project/name]` (the
+  worktree started from it) and `(#42)` (the pull request that finished it). Under `## Heading`
+  with `--section`. `--no-stamp` leaves the stamp off, `--note` writes a plain bullet. An item is
+  selected by its line number or by words in exactly one open item.
+- **Writes.** `ptyro_core::scratchpad::Pad` is the only code that changes the file. An add is a
+  single append (`O_APPEND`), so an editor with the file open sees only added bytes; anything else
+  is a temp file and a rename. Every change first saves what was there to `<data>/scratchpad.history/
+  <ms>-<rev>.md` (`rev` is the first 12 hex digits of the text's SHA-256). Copies thin out: all of
+  them for an hour, one per ten minutes for a day, one per hour until `[scratchpad] keep` days
+  (30); the newest 20 and a cap of 400 always hold. A change seen from outside (an editor saving as
+  you type) is saved at most every 15 s.
+- **Merging.** `ScratchPut{base, text}` writes `text` that was edited from revision `base`. If the
+  file still is `base` it is written as is; otherwise the daemon three-way merges by lines
+  (`similar` Myers diff against the text of `base`, kept in a ring of the last 64 revisions, else
+  from the history): edits to different lines combine; two appends at the same place both stay (the
+  file's first); the same lines changed two ways are both kept between `<<<<<<< on disk`,
+  `=======` and `>>>>>>> your edit`. With no copy of `base` the whole of both is kept that way. The
+  reply says whether the text came back different (`merged`) and how many regions clashed.
+- **Watching.** The daemon looks at the file's mtime and size every 700 ms; a revision it hasn't
+  announced becomes `ScratchChanged{rev, open, by}` to every client watching events (`by` is
+  `file` for a change made outside the daemon). Polling, not inotify: it is the same on Linux and
+  macOS, works on network and synced folders, and a pad is a few KB.
+- **The pane.** `ScratchPane{create}` runs the editor as one session (`SessionInfo.pad`): `[scratchpad]
+  editor`, else the `[editors]` default when it runs inside a terminal, else `$VISUAL`/`$EDITOR`,
+  else the first of nvim, vim, nano, vi on `PATH`. vim and nvim start with `autoread` and a
+  `checktime` autocommand so an append from elsewhere shows without a prompt. The session is quiet
+  like a quick terminal (`Session::is_quick`) and forgotten when the editor exits; clients keep it
+  out of the sidebar, numbering and counts. `[scratchpad] mode` (`drawer`, `popup`, `pane`) is how
+  the TUI shows it.
+- **Items become work.** `ptyro scratchpad start` (TUI: ⏎ in the items picker) starts a task like
+  `ptyro "…"` with the item's text (and its indented lines) as the prompt, in a new worktree; the
+  new worktree's spec carries `pad_item` (the line), and the daemon tags the item `[wt:…]` when it
+  is created. When that worktree's PR is seen merged (the GitHub poller) or the worktree is
+  removed, the daemon ticks the item with the PR number (`[scratchpad] tick_on_finish`, default on).
+- **Agents.** A lead's `ptyro mcp` has `scratchpad_read`, `scratchpad_todo` and `scratchpad_add`
+  (the add is stamped with the lead's name). Agents are not told about the pad by default; one
+  that finds the variable can read it and should add with `ptyro scratchpad add`.
+- **Scopes.** Reading (`ScratchGet`, `ScratchTodo`, `ScratchHistory`) needs `read`; writing
+  (`ScratchPut`, `ScratchAdd`, `ScratchMark`, `ScratchRestore`) needs `control`; starting the
+  editor session is `full`.
+
 ---
 
 ## 14. Storage: files, directories, database
@@ -3422,7 +3478,7 @@ review = "Review the diff against origin/main and list risks."
 | Kind | Path | Contents |
 |---|---|---|
 | config | `~/.config/ptyro/` | `config.toml`, `themes/`, `recipes/` |
-| data | `~/.local/share/ptyro/` | `ptyro.db`, `worktrees/`, `sessions/<id>/pty.log`, `integrations/`, `profiles/<name>/<agent>/` (managed profile dirs, `0700`) |
+| data | `~/.local/share/ptyro/` | `ptyro.db`, `worktrees/`, `sessions/<id>/pty.log`, `scratchpad.md` + `scratchpad.history/` (§13.6), `integrations/`, `profiles/<name>/<agent>/` (managed profile dirs, `0700`) |
 | state | `~/.local/state/ptyro/` | `daemon.lock`, `daemon.log*`, `daemon.prev` |
 | runtime | Linux `$XDG_RUNTIME_DIR/ptyro/`; macOS `$TMPDIR/ptyro-<uid>/`; `PTYRO_HOME/run/` | `ptyro.sock` |
 

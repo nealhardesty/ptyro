@@ -316,9 +316,8 @@ async fn log(ctx: &Ctx, json: bool) -> Result<i32, Error> {
         println!("{}", serde_json::to_string_pretty(&snapshots).unwrap_or_default());
         return Ok(0);
     }
-    let now = ptyro_core::now_ms();
     for s in &snapshots {
-        println!("{}  {:>8} ago  {} lines", s.rev, age(now.saturating_sub(s.at_ms)), s.lines);
+        println!("{}  {:>5} ago  {} lines", s.rev, age(s.at_ms), s.lines);
     }
     if snapshots.is_empty() {
         eprintln!("no saved copies yet");

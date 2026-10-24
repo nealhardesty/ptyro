@@ -37,6 +37,8 @@ export interface Session {
   last_output_ms?: number | null;
   created_ms: number;
   title?: string | null;
+  task?: string | null;
+  last_reply?: string | null;
   held?: boolean;
   structured?: { protocol: string } | null;
 }

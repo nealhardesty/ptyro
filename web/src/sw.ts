@@ -6,7 +6,7 @@
 const sw = self as unknown as ServiceWorkerGlobalScope;
 
 const SHELL = "ptyro-shell-v1";
-const FILES = ["/", "/app.js", "/screen.js", "/style.css", "/manifest.webmanifest", "/icon.svg", "/icon-192.png"];
+const FILES = ["/", "/app.js", "/screen.js", "/pad.js", "/notes.js", "/style.css", "/manifest.webmanifest", "/icon.svg", "/icon-192.png"];
 
 sw.addEventListener("install", (e) => {
   e.waitUntil(caches.open(SHELL).then((c) => c.addAll(FILES)).then(() => sw.skipWaiting()));
@@ -26,7 +26,7 @@ sw.addEventListener("fetch", (e) => {
   e.respondWith(
     fetch(e.request)
       .then((r) => {
-        if (r.ok && FILES.includes(url.pathname)) {
+        if (r.ok && FILES.includes(url.pathname) && !url.search) {
           const copy = r.clone();
           void caches.open(SHELL).then((c) => c.put(e.request, copy));
         }

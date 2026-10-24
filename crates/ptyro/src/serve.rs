@@ -53,6 +53,8 @@ const ASSETS: &[(&str, &str, &[u8])] = &[
     ("/index.html", "text/html; charset=utf-8", include_bytes!("../../../web/dist/index.html")),
     ("/app.js", "text/javascript; charset=utf-8", include_bytes!("../../../web/dist/app.js")),
     ("/screen.js", "text/javascript; charset=utf-8", include_bytes!("../../../web/dist/screen.js")),
+    ("/pad.js", "text/javascript; charset=utf-8", include_bytes!("../../../web/dist/pad.js")),
+    ("/notes.js", "text/javascript; charset=utf-8", include_bytes!("../../../web/dist/notes.js")),
     ("/sw.js", "text/javascript; charset=utf-8", include_bytes!("../../../web/dist/sw.js")),
     ("/style.css", "text/css; charset=utf-8", include_bytes!("../../../web/dist/style.css")),
     (

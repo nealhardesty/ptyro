@@ -60,8 +60,8 @@ The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every sessio
 | `scratchpad edit` | `scratchpad.toggle` (`C-q ;`): the pad in your editor, in a drawer under the pane (or a popup, or a pane: `[scratchpad] mode`); again focuses it, then hides it (the editor keeps running). `--pane` is the same session | `scratchpad`: the Notes view, edited in the page; it saves as you type and merges with other writers |
 | `scratchpad path` | shown: its path heads the open-items list (`scratchpad.items`) and the history list | shown: its path heads the Notes view |
 | `scratchpad cat` | `scratchpad.toggle`: you read it in the editor; `scratchpad.items` lists the open items | `scratchpad`: the Notes view, or its Preview |
-| `scratchpad add` | `scratchpad.add` (`C-q +`): one line, stamped with where you are, without opening the editor; `scratchpad.note` (the row menu, `n` in copy mode and in the inbox) adds the selected row's task, a selection or an inbox entry | `scratchpad.add`: the quick-add box on the session list and in the Notes view; the share sheet adds to it; `scratchpad.note` on a session card |
-| `scratchpad todo` | `scratchpad.items` (`C-q =`): the open items, searchable | `scratchpad.items`: the open items beside the text |
+| `scratchpad add` | `scratchpad.add` (`C-q '`): one line, stamped with where you are, without opening the editor; `scratchpad.note` (the row menu, `a` in copy mode, `n` in the inbox) adds the selected row's task, a selection or an inbox entry | `scratchpad.add`: the quick-add box on the session list and in the Notes view; the share sheet adds to it; `scratchpad.note` on a session card |
+| `scratchpad todo` | `scratchpad.items` (`C-q "`): the open items, searchable | `scratchpad.items`: the open items beside the text |
 | `scratchpad done` | `scratchpad.items` (`x` ticks, or unticks) | `scratchpad.tick`: tap a checkbox in the Preview |
 | `scratchpad start` | `scratchpad.items` (`⏎` starts the item as a task in a new worktree) | gap: WEB1.2 (sessions: the new-task box) |
 | `scratchpad log` | `scratchpad.history` | `scratchpad.history`: saved copies |
