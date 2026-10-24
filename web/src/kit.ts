@@ -64,6 +64,16 @@ export const ui = {
 export type View = (rest: string) => HTMLElement;
 export const views = new Map<string, View>();
 
+// ── polling: data that changes without an event ─────────────────────────────────────────────
+
+const polls = new Map<string, number>();
+/// Call `fn` every `ms` while the page is the one that asked (any other page clears it).
+export function poll(name: string, fn: () => void, ms = 4000): void {
+  if (polls.has(name)) return;
+  polls.set(name, window.setInterval(() => { if (document.visibilityState === "visible") fn(); }, ms));
+}
+window.addEventListener("hashchange", () => { for (const t of polls.values()) clearInterval(t); polls.clear(); });
+
 // ── asking the daemon ───────────────────────────────────────────────────────────────────────
 
 export const errText = (e: unknown): string => (e as Error)?.message || String(e);
@@ -97,6 +107,12 @@ export class Cache<T> {
   }
   error(key: string): string | undefined { return this.errors.get(key); }
   set(key: string, v: T): void { this.data.set(key, v); }
+  /// Fetch `key` again, keeping what's shown until the new data arrives (no flicker).
+  refresh(key: string): void {
+    if (this.loading.has(key) || conn.state !== "open") return;
+    this.loading.add(key);
+    this.fetcher(key).then((v) => { this.data.set(key, v); this.errors.delete(key); }, () => {}).finally(() => { this.loading.delete(key); ui.render(); });
+  }
   /// Forget `key` (everything without one) and load again.
   reload(key?: string): void {
     if (key === undefined) { this.data.clear(); this.errors.clear(); } else { this.data.delete(key); this.errors.delete(key); }
