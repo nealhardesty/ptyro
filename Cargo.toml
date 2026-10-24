@@ -67,7 +67,7 @@ unicode-width = "0.2.2"
 zstd = { version = "0.13.3", default-features = false }
 # Web Push (M9.4): VAPID signatures and RFC 8291 payload encryption.
 p256 = { version = "0.13.2", default-features = false, features = ["ecdh", "ecdsa", "std"] }
-hkdf = "0.12.4"
+hkdf = "0.13.0"
 # `ptyro serve` speaks HTTPS with a certificate it makes (WEB1.7); ring, no C toolchain beyond cc.
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12", "logging"] }
