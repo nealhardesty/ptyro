@@ -24,7 +24,24 @@ pub fn parse_size(s: &str) -> Result<TermSize, String> {
     Ok(TermSize::new(cols, rows))
 }
 
-pub fn daemon_start(foreground: bool, spawned: bool) -> i32 {
+pub fn daemon_start(foreground: bool, spawned: bool, serve: bool) -> i32 {
+    if serve {
+        // Written before it starts, so the daemon reads it as its first config.
+        let paths = match Paths::from_env() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("ptyro: {e}");
+                return 1;
+            }
+        };
+        match ptyro_core::config::set_serve(&ptyro_core::config::Config::path(&paths), true, None) {
+            Ok(notes) => notes.iter().for_each(|n| eprintln!("web app: {n}")),
+            Err(e) => {
+                eprintln!("ptyro: {}", e.message);
+                return e.code.exit_code();
+            }
+        }
+    }
     if spawned {
         // Leave the client's session and process group so its terminal closing can't hang us
         // up. Done before any runtime exists: we never fork an initialized tokio process.
@@ -35,6 +52,17 @@ pub fn daemon_start(foreground: bool, spawned: bool) -> i32 {
         Err(e) => {
             eprintln!("ptyro: {e:#}");
             if e.to_string().contains("already running") {
+                if serve {
+                    // The daemon that is running reads the config it was just given.
+                    eprintln!(
+                        "ptyro: the daemon was already running; the web app starts in it now (`ptyro web`)"
+                    );
+                    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build();
+                    if let (Ok(rt), Ok(paths)) = (rt, Paths::from_env()) {
+                        let ctx = Ctx::local(paths);
+                        let _ = rt.block_on(crate::webapp::ask(&ctx, Some(true), None));
+                    }
+                }
                 ErrorCode::Conflict.exit_code()
             } else {
                 1
@@ -423,6 +451,9 @@ async fn dispatch(
         Some(Cmd::Serve { listen, insecure, local, cert, key, tailscale, managed }) => {
             let own = cert.zip(key);
             crate::serve::run(&ctx, listen, insecure, local, own, tailscale, managed).await
+        }
+        Some(Cmd::Web { action, via, pair, json }) => {
+            crate::webapp::run(&ctx, &action, via, json, pair).await
         }
         Some(Cmd::Pair { name, scope, url, json }) => {
             crate::remote::pair(&ctx, name, &scope, url, json).await
@@ -1305,6 +1336,15 @@ async fn daemon(ctx: &Ctx, cmd: DaemonCmd) -> Result<i32, Error> {
                 println!("  clients   {}", status.clients);
                 println!("  socket    {}", status.socket.display());
                 println!("  logs      {}", status.log_dir.display());
+                if let Some(w) = &status.web {
+                    let l = crate::webapp::lines(w);
+                    println!("  web app   {}", l.join("\n            "));
+                    if !w.wanted && w.by_hand.is_none() {
+                        println!(
+                            "            `ptyro web on` has the daemon run it, for your phone"
+                        );
+                    }
+                }
                 if status.generation > 0 {
                     println!(
                         "  upgrades  {} (last {} ago{})",

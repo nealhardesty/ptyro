@@ -938,6 +938,15 @@ applies them like a live screen); `Export{addr, format}` → `Text` (`asciicast`
 always said. A device with `full` scope may `DevicePair` and `DeviceRevoke` (a code is still only
 claimed by `ptyro serve`).
 
+**[built WEB1.9] Protocol 1.16** (additive), the web app's server as a setting (§16.3):
+`Web{on?, via?}` → `Web{web, notes}`. With `on` left out it asks how the server is; `Some(true)` or
+`Some(false)` turns `[remote] serve` on or off (`full` scope): the daemon edits the config file
+(`ptyro_core::config::set_serve`, comments and the rest kept), reloads it, starts or stops the
+server at once and waits up to 12 s for it to say where it listens. `via` (`tailscale`, `lan`,
+`here`) says how phones reach it, else the config's own choice stands, else Tailscale when it is
+running on this machine, else `lan`. `DaemonStatus.web` carries the same `WebServe{wanted, up, pid,
+url, listen, ca_fingerprint, since_ms, restarts, last_exit, by_hand, log}`.
+
 ### 6.5 Screen frames
 
 ```rust
@@ -3260,6 +3269,7 @@ change (debounced) and emits `ConfigReloaded`.
   256 KiB), and agents take `record = false`. Only `[remote]` is still reserved. The default
   `[daemon] scrollback_lines` is 5000 (§7.6).
   **[built M9]** `[remote]` is typed: `listen = "127.0.0.1:7091"`, `public_url`, `serve = false`,
+  `tailscale = false` (run `tailscale serve` in front, as `--tailscale` does),
   `insecure = false`, `approval_wait = "10m"`, `push = true`, `push_hosts = []` (push services a
   device may subscribe with besides the browsers': FCM, Mozilla, Apple, Windows). `trusted_proxy
   = false` (believe a loopback peer's `X-Forwarded-For`; on by itself under `tailscale serve`). No section is
@@ -4466,6 +4476,36 @@ revocable (`ptyro devices ls|revoke`).
 **[built M9]** `ptyro serve` is its own process (hyper + tokio-tungstenite), so the daemon stays a
 local socket. With `[remote] serve = true` the daemon supervises it (backoff, `state/serve.log`,
 killed before a live upgrade, restarted by the next image).
+
+**[built WEB1.9] The server is a setting you can find and turn on.** Decision (owner, 2026-10-24):
+it stays a supervised child process, not code inside the daemon. The daemon owns every PTY and
+is local-socket-only by design; the network-facing HTTP/TLS code belongs in a process that can
+crash, restart and be killed for a live upgrade without touching a session. What the person sees
+is "the web is up when the daemon is".
+- **One switch, five doors.** `ptyro web on|off|status [--via tailscale|lan|here] [--pair]`;
+  `ptyro daemon start --serve`; the question in `ptyro init`; the TUI's `remote.web`,
+  `remote.web_on`, `remote.web_off`; and the web app's More → Web app. All of them are
+  `Request::Web` (§6.4) or the same `set_serve` on the config file, so they cannot disagree.
+- **It reacts at once.** The supervisor waits on a wake-up, not only its 3 s look, so a config
+  reload (the file edited by hand, `ReloadConfig`) or the switch starts or stops the server
+  immediately and resets the backoff.
+- **It knows how it is.** The server writes `state/serve.json` (pid, URL, CA fingerprint) when it
+  listens; the daemon starts the record afresh with each child it starts, and trusts it only when
+  its pid is the child's. `DaemonStatus.web` has `up`, the URL, how long, how many restarts and
+  how the last run ended (its exit status and its last line of `serve.log`, e.g. the port is
+  taken). A `ptyro serve` someone started by hand (a live pid in the record that isn't the
+  child) shows as `by_hand`: the daemon's can't share its port, and the hand one won't come back.
+- **Where it shows.** `ptyro daemon status` (a `web app` line), `ptyro doctor` (`web app`: ok, a
+  note when off or starting, a warning for a by-hand server, a problem with the fix when it fails,
+  e.g. "another program holds 127.0.0.1:7091: pick another port"), and More → Web app, which
+  also turns it on or off and pairs a device.
+- **Reaching it.** On with nothing chosen, `set_serve` picks Tailscale when `tailscale status`
+  says Running (`[remote] tailscale = true`: `ptyro serve --tailscale` runs `tailscale serve`),
+  else this network (`local = true`: HTTPS from ptyro's certificate, private addresses only).
+  Any way the config already has (`tailscale`, `local`, `insecure`, `trusted_proxy`,
+  `public_url`, `tls_cert`) is kept. Nothing opens to anyone until a device is paired.
+- **After a reboot.** The daemon runs it, so it is up when the daemon is; `ptyro web on` and
+  `ptyro init` say when the login service isn't installed (`ptyro daemon install-service`).
 - **Routes:** `/` and the embedded app; `/ws`; `POST /api/request` (`Authorization: Bearer`,
   one request, JSON outcome); `POST /api/pair` (`{code}` → `{token, device}`: a `DeviceClaim`
   over a local connection; a refused code counts as a failed login); `/healthz`.

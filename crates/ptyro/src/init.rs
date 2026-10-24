@@ -169,6 +169,11 @@ pub async fn run(ctx: &Ctx, yes: bool, dry_run: bool) -> Result<i32, Error> {
     }
     let location = ask.line("  where worktrees go (data, sibling, in-repo)", "data");
     let desktop = ask.yes_no("  desktop notifications when an agent needs you?", false);
+    let phone = !current.remote.serve
+        && ask.outside(
+            "  run the web app for your phone? (the daemon serves it on a port and keeps it up; \
+             you pair a phone next)",
+        );
 
     // ── the config ──
     let mut changes: Vec<String> = Vec::new();
@@ -251,6 +256,15 @@ pub async fn run(ctx: &Ctx, yes: bool, dry_run: bool) -> Result<i32, Error> {
         eprintln!("  wrote {}", path.display());
     }
 
+    // ── the web app ──
+    if phone {
+        section("web app");
+        for n in ptyro_core::config::set_serve(&path, true, None)? {
+            eprintln!("  {n}");
+        }
+        eprintln!("  [remote] serve = true: the daemon runs it from now on");
+    }
+
     // ── projects ──
     section("projects");
     let c = ctx.connect(true).await?;
@@ -319,13 +333,42 @@ pub async fn run(ctx: &Ctx, yes: bool, dry_run: bool) -> Result<i32, Error> {
     } else {
         eprintln!("  completions: add `{line}` to {rc}");
     }
-    if ask.outside("  start the daemon at login (a systemd/launchd service)?") {
+    // The web app is up once the daemon has picked the setting up.
+    let mut web_url = None;
+    if phone || current.remote.serve {
+        for _ in 0..50 {
+            if let Ok((w, _)) = crate::webapp::ask(ctx, None, None).await
+                && w.up
+            {
+                web_url = w.url;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        }
+        match &web_url {
+            Some(u) => eprintln!("  ✓ web app up at {u}"),
+            None => eprintln!("  web app not up yet: `ptyro web` says why"),
+        }
+    }
+    let at_login = if phone || current.remote.serve {
+        "  start the daemon at login, so the web app is up after a reboot (a systemd/launchd service)?"
+    } else {
+        "  start the daemon at login (a systemd/launchd service)?"
+    };
+    if !crate::service::installed() && ask.outside(at_login) {
         crate::service::install(ctx, false)?;
     }
     eprintln!();
     eprintln!(
         "done. `ptyro` opens the TUI; `ptyro doctor` checks everything; `ptyro tour` shows the keys."
     );
+    if phone
+        && web_url.is_some()
+        && interactive
+        && ask.yes_no("show the QR code for your phone now?", true)
+    {
+        crate::remote::pair(ctx, "phone".into(), "control", None, false).await?;
+    }
     if interactive
         && !yes
         && ask.yes_no("take the tour now? (a task, start to finish, with a pretend agent)", true)

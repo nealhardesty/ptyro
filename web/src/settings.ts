@@ -38,6 +38,10 @@ const ACTIONS = {
   "daemon.stop": "Stop every session and the daemon",
   "daemon.service": "Start ptyro at login (a systemd or launchd service)",
   "daemon.unservice": "Remove the login service",
+  "web.status": "The web app's server: whether it is up, its address, and who started it",
+  "web.on": "Have the daemon run the web app's server, now and whenever it starts",
+  "web.off": "Stop the daemon running the web app's server (paired devices stay paired)",
+  "web.logs": "What the web app's server has said, the latest lines",
   "first.run": "First-run setup: your agents, accounts and repositories",
   "help.tour": "A tour: ptyro's daily loop with a pretend agent, in a throwaway ptyro of its own",
 } as const;
@@ -71,6 +75,7 @@ function moreView(): HTMLElement {
     ["Profiles", "Accounts agents run under", "#/profiles"],
     ["Configuration", "Your config file", "#/config"],
     ["Integrations", "Agents that need installing once", "#/integrations"],
+    ["Web app", "The server your phone opens: up, its address, on or off", "#/web"],
     ["Daemon", "Version, logs, restart, login service", "#/daemon"],
     ["Set up ptyro", "Your agents, accounts and repositories", "#/setup"],
     ["Take the tour", "ptyro's daily loop with a pretend agent", "#/tour"],
@@ -360,6 +365,76 @@ async function showLogs(): Promise<void> {
   requestAnimationFrame(() => { const pre = s.el.querySelector("pre"); if (pre) pre.scrollTop = pre.scrollHeight; });
 }
 
+// ── the web app's own server (WEB1.9) ───────────────────────────────────────────────────────
+
+const VIA: [string, string, string][] = [
+  ["", "Keep what the config says", "Or pick for me: Tailscale if it is up here, else this network"],
+  ["tailscale", "Over Tailscale", "HTTPS on your tailnet, a certificate phones already trust"],
+  ["lan", "On this network", "Phones on the same Wi-Fi or LAN, over HTTPS; trust ptyro's certificate once"],
+  ["here", "This computer only", "Nothing else can reach it"],
+];
+
+async function setWeb(on: boolean, via?: string): Promise<void> {
+  try {
+    const r = await conn.request({ t: "web", on, via: via || null });
+    status.reload("");
+    const notes: string[] = r.notes ?? [];
+    if (on && r.web.up) ui.toast(`Up at ${r.web.url}`);
+    else if (!on) ui.toast("Stopped. Paired devices stay paired.");
+    if (notes.length > (on && r.web.up ? 0 : 1)) showNotes(on ? "The web app" : "Stopped", notes);
+    else if (notes.length && !(on && r.web.up)) ui.toast(notes[0]);
+  } catch (e) { hostFail(e); }
+}
+
+function turnWebOn(): void {
+  menu("Run the web app with the daemon", VIA.map(([v, label, hint]): Item => ({ label, hint, run: () => void setWeb(true, v) })));
+}
+
+function turnWebOff(): void {
+  const here = location.origin;
+  confirm("Stop the web app's server?", `The daemon stops serving it and won't start it again. If this page is served from ${here}, it goes away with it: turn it back on with \`ptyro web on\` at the computer. Paired devices stay paired.`, "Stop it", () => void setWeb(false), false);
+}
+
+async function showWebLogs(): Promise<void> {
+  const r = await doHost("web.logs", { lines: 300 });
+  if (!r) return;
+  const s = textSheet("The web server's log", r.text || "(nothing yet)");
+  requestAnimationFrame(() => { const pre = s.el.querySelector("pre"); if (pre) pre.scrollTop = pre.scrollHeight; });
+}
+
+function webView(): HTMLElement {
+  poll("web", () => status.refresh(""), 4000);
+  const st = status.get("");
+  const w = st?.web;
+  const full = conn.scope === "full";
+  const body = pending(status, "") ?? (!w ? h("p", { class: "empty" }, "This daemon is older than this app and can't say. Upgrade it (More → Daemon).") : (() => {
+    const state = w.up ? badge("up", "ok") : w.wanted ? badge(w.last_exit ? "failing" : "starting", w.last_exit ? "bad" : "info") : badge("off", "");
+    const byHand = w.by_hand && !w.wanted;
+    const lines: string[] = [];
+    if (w.by_hand && w.wanted) lines.push(`A \`ptyro serve\` you started by hand (pid ${w.by_hand}) holds the port. Stop it (Ctrl-C) and the daemon's takes over.`);
+    if (byHand) lines.push(`This page comes from a \`ptyro serve\` you started by hand (pid ${w.by_hand}): it ends with that terminal, and it won't be back after a restart. Have the daemon run it instead.`);
+    return h("div", { class: "stack-in", title: tip("web.status") },
+      h("p", { class: "pr-head" }, state, " ", w.up ? "The web app is running" : w.wanted ? "The daemon is starting the web app" : "The daemon isn't serving the web app"),
+      facts([
+        ["Address", w.url ? h("span", {}, h("code", {}, w.url), " ", h("button", { class: "small", onclick: () => void navigator.clipboard?.writeText(w.url).then(() => ui.toast("Copied"), () => ui.toast("Couldn't copy")) }, "Copy")) : null],
+        ["Listens on", w.listen],
+        ["Run by", w.pid ? `the daemon (pid ${w.pid})` : byHand ? "you, by hand" : null],
+        ["Up for", w.since_ms ? ago(w.since_ms) : null],
+        ["Restarted", w.restarts ? `${w.restarts} time${w.restarts === 1 ? "" : "s"} since the daemon started` : null],
+        ["Last stop", w.wanted && !w.up ? w.last_exit : null],
+        ["Certificate", w.ca_fingerprint ? h("span", { class: "sub" }, `ptyro's own; SHA-256 ${w.ca_fingerprint}`) : null],
+      ]),
+      ...lines.map((l) => h("p", { class: "form-err" }, l)),
+      !w.wanted ? h("p", { class: "intro" }, "Turning it on makes the daemon run a web server: it listens on a port and comes back whenever the daemon does. Nothing opens to anyone until you pair a device, and each can be revoked.") : null,
+      w.wanted && !w.up && w.last_exit ? h("p", { class: "intro" }, "It keeps trying again, a little slower each time. The log says why; ", h("a", { href: "#/health" }, "Health"), " has the fix.") : null,
+      full ? bar(
+        w.wanted ? h("button", { class: "deny", title: tip("web.off"), onclick: turnWebOff }, "Stop serving") : h("button", { class: "primary", title: tip("web.on"), onclick: turnWebOn }, "Run it with the daemon"),
+        h("button", { title: tip("pair.device"), onclick: pairAnother }, "Pair a device…"),
+        h("button", { title: tip("web.logs"), onclick: () => void showWebLogs() }, "Log")) : h("p", { class: "intro" }, "Turning it on or off needs a device paired with ", h("code", {}, "ptyro pair --scope full"), "."));
+  })());
+  return h("div", {}, ui.header("Web app", "#/more"), h("main", { class: "stack" }, body));
+}
+
 // ── first-run setup ─────────────────────────────────────────────────────────────────────────
 
 const setupChecks = new Cache<any[]>(() => host("doctor", { quick: true }).then((r) => r.checks));
@@ -465,5 +540,6 @@ views.set("profile", profileView);
 views.set("config", () => configView());
 views.set("integrations", () => integrationsView());
 views.set("daemon", () => daemonView());
+views.set("web", () => webView());
 views.set("setup", () => setupView());
 views.set("tour", () => tourView());

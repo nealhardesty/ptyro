@@ -309,7 +309,8 @@ and your phone's share sheet can send links and text to it. Old copies are kept
 ### Your phone and other machines
 
 ```bash
-ptyro serve --local            # the web app over HTTPS on your LAN (or --tailscale: Tailscale HTTPS)
+ptyro web on                   # the daemon runs the web app's server, and keeps it up (Tailscale
+                               # HTTPS if it is running, else HTTPS on your LAN); `ptyro web` says how it is
 ptyro pair phone               # a one-time QR code (10 min): scan it and the phone is signed in;
                                # the first time, it says how to trust ptyro's certificate
 ptyro devices revoke ID        # cut a device off at once
@@ -324,6 +325,12 @@ agent, commits and checks, the review queue, runs, fan-outs and change sets, and
 health with its fixes, devices (pair another with a link and a QR code), profiles and logins, the
 config editor, the daemon and its logs, first-run setup and a tour. Push notifications carry
 Allow / Deny where the platform shows actions.
+
+`ptyro init` asks whether to run it, `ptyro daemon start --serve` turns it on with the daemon,
+`ptyro web off` stops it, and in the TUI and the web app it is **More → Web app**. It is a
+supervised `ptyro serve`, so a daemon restart or live upgrade brings it back, and `ptyro doctor`
+says why when it won't start (a port taken by something else, say). `ptyro serve` by hand still
+works for trying it out.
 
 Each device gets a scope (`read`, `approve` by default, `control` or `full`). Pair with
 `ptyro pair phone --scope full` for the whole app (it changes your machine: worktrees, the

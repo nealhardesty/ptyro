@@ -78,9 +78,28 @@ your company's CA, say: phones that trust its issuer need nothing installed, and
 phone gets Tailscale's HTTPS name and a certificate it already trusts, nothing to install. ptyro
 then speaks plain HTTP on loopback, where only `tailscale serve` reaches it.
 
-To keep it running, set `[remote] serve = true` in `~/.config/ptyro/config.toml`. The daemon
-then starts `ptyro serve` itself, restarts it if it dies, and keeps it through live upgrades.
-Its log is `~/.local/state/ptyro/serve.log`.
+**Have the daemon run it.** `ptyro web on` (or the question in `ptyro init`, or `ptyro daemon start
+--serve`, or More → Web app in the web app, or `remote.web_on` in the TUI) sets `[remote] serve = true`
+in `~/.config/ptyro/config.toml`. The daemon then starts `ptyro serve` itself, restarts it if it
+dies, and keeps it through live upgrades and restarts. Its log is `~/.local/state/ptyro/serve.log`.
+
+```bash
+ptyro web on                    # on: Tailscale HTTPS if it is running here, else HTTPS on this network
+ptyro web on --via lan          # or choose: tailscale, lan (this Wi-Fi), here (this computer only)
+ptyro web                       # how it is: up at <address>, since when, who runs it, what's wrong
+ptyro pair                      # then a QR code for the phone (or `ptyro web on --pair`)
+ptyro web off                   # stop it; paired devices stay paired
+```
+
+What turning it on changes: the daemon runs a web server that listens on `[remote] listen` (or
+every private-network interface with `lan`), and it comes back whenever the daemon does. Install
+the login service (`ptyro daemon install-service`) and it is up after a reboot too; the phone is
+paired once and stays paired. Nothing opens to anyone until a device is paired, and each can be
+revoked. Turning it off from the web app ends the page you are looking at, so it asks first.
+
+If it won't start, `ptyro web` and `ptyro doctor` say why: most often the port is taken (a
+`ptyro serve` you started by hand, which `ptyro web` names with its pid; or another program).
+Stop it, or set another `listen`; the daemon tries again on its own.
 
 ```toml
 [remote]
@@ -93,6 +112,7 @@ listen = "127.0.0.1:7091"   # loopback or a Tailscale address; `local = true` fo
 approval_wait = "10m"       # how long a held Claude permission prompt waits for your phone
 push = true                 # Web Push for the kinds in notifications.on
 # push_hosts = ["ntfy.example.com"]   # a self-hosted push service, besides the browsers' own
+# tailscale = true         # run `tailscale serve` in front: the phone gets Tailscale's HTTPS name
 # trusted_proxy = true     # a reverse proxy on this machine fronts serve (plain HTTP on loopback)
 # insecure = true          # plain HTTP, on any address: tokens cross the network in clear
 ```

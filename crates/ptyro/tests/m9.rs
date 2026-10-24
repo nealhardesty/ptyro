@@ -782,6 +782,105 @@ fn the_daemon_runs_serve_and_keeps_it_through_upgrades() {
     assert!(err.contains("--local") && err.contains("in clear"), "{err}");
 }
 
+/// WEB1.9: the web app's server is a setting. `ptyro web on` has the daemon run it (the config
+/// file says so, nothing else in it moves), `daemon status` and the doctor say where it is,
+/// `web off` takes the port back, and a daemon restart brings it up again by itself.
+#[test]
+fn the_web_app_is_a_setting_the_daemon_keeps() {
+    let port = free_port();
+    let mut w =
+        World::new(&format!("[remote]\ninsecure = true\nlisten = \"127.0.0.1:{port}\"\n"), &[]);
+    let config_path = std::path::PathBuf::from(w.ok(&["config", "path"]).trim());
+    let status = |w: &World| -> serde_json::Value {
+        let out = w.ok(&["daemon", "status", "--json"]);
+        serde_json::from_str::<serde_json::Value>(&out).unwrap()["web"].clone()
+    };
+    let closed = |port: u16| {
+        let deadline = Instant::now() + WAIT;
+        while std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            assert!(Instant::now() < deadline, "the port stayed open");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+
+    // Off by default, and it says how to turn it on.
+    let web = status(&w);
+    assert_eq!(web["wanted"], false);
+    assert_eq!(web["up"], false);
+    let said = w.ok(&["web"]);
+    assert!(said.contains("off") && said.contains("ptyro web on"), "{said}");
+
+    // A way to be reached that isn't one of ours is refused, and changes nothing.
+    let bad = w.cli(&["web", "on", "--via", "carrier-pigeon"]);
+    assert!(!bad.status.success());
+
+    // On: up, with its address, before the command returns.
+    let said = w.ok(&["web", "on"]);
+    assert!(said.contains("up at http://127.0.0.1:"), "{said}");
+    assert!(said.contains("ptyro pair"), "{said}");
+    wait_http(port);
+    assert_eq!(
+        http(port, "GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").0,
+        200
+    );
+    let web = status(&w);
+    assert_eq!((web["wanted"].clone(), web["up"].clone()), (true.into(), true.into()), "{web}");
+    assert!(web["url"].as_str().unwrap().contains(&port.to_string()), "{web}");
+    assert!(web["pid"].as_u64().is_some());
+
+    // The file keeps the rest of itself.
+    let config = std::fs::read_to_string(&config_path).unwrap();
+    assert!(config.contains("serve = true") && config.contains("insecure = true"), "{config}");
+
+    // The doctor and `daemon status` show it.
+    let doctor: serde_json::Value =
+        serde_json::from_str(&w.ok(&["doctor", "--quick", "--json"])).unwrap();
+    let check = doctor.as_array().unwrap().iter().find(|c| c["name"] == "web app");
+    let check = check.unwrap_or_else(|| panic!("no web app check in {doctor}"));
+    assert_eq!(check["level"], "ok", "{check}");
+    assert!(w.ok(&["daemon", "status"]).contains("web app   up at"));
+
+    // A paired phone still works through a daemon restart: the server comes back with it.
+    w.d.restart().unwrap();
+    wait_http(port);
+    let deadline = Instant::now() + WAIT;
+    while status(&w)["up"] != true {
+        assert!(Instant::now() < deadline, "the web app didn't come back with the daemon");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    // Off: the port is free, devices and all stay as they were, and it stays off.
+    let said = w.ok(&["web", "off"]);
+    assert!(said.contains("off"), "{said}");
+    closed(port);
+    assert_eq!(status(&w)["wanted"], false);
+    assert!(std::fs::read_to_string(&config_path).unwrap().contains("serve = false"));
+
+    // A `ptyro serve` started by hand is noticed, and the daemon doesn't fight it for the port.
+    let by_hand =
+        w.d.cmd()
+            .args(["serve", "--insecure", "--listen", &format!("127.0.0.1:{port}")])
+            .env("HOME", w.home())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+    wait_http(port);
+    let deadline = Instant::now() + WAIT;
+    let web = loop {
+        let web = status(&w);
+        if web["by_hand"].is_number() || Instant::now() > deadline {
+            break web;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(web["by_hand"].as_u64(), Some(u64::from(by_hand.id())), "{web}");
+    assert!(w.ok(&["web"]).contains("started by hand"));
+    let mut by_hand = by_hand;
+    let _ = by_hand.kill();
+    let _ = by_hand.wait();
+}
+
 /// The web app's TypeScript screen model (web/dist/screen.js), fed live frames through
 /// `ptyro serve`, shows exactly what the daemon's own screen does: colours, wide characters,
 /// combining marks and wrapped lines included. Skipped without Node.
@@ -1011,6 +1110,30 @@ fn host(port: u16, token: Option<&str>, body: &Value) -> (u16, Value) {
         .and_then(|b| serde_json::from_str(b).ok())
         .unwrap_or(Value::Null);
     (code, json)
+}
+
+/// WEB1.9: a device may ask how the web app's server is; turning it on or off is `full`.
+#[tokio::test]
+async fn only_a_full_device_changes_the_web_apps_server() {
+    let w = World::new("", &[]);
+    let serve = w.serve();
+    let (_, ctl) = w.pair(&serve, "tablet", "control");
+    let (_, full) = w.pair(&serve, "laptop", "full");
+    let mut tab = Phone::signed_in(serve.port, &ctl).await;
+    let mut lap = Phone::signed_in(serve.port, &full).await;
+
+    // The tablet may look.
+    let r = tab.ok(json!({ "t": "web" })).await;
+    assert_eq!(r["web"]["wanted"], false, "{r}");
+
+    // It may not change it, and the setting didn't move.
+    let r = tab.request(json!({ "t": "web", "on": true })).await;
+    assert_eq!(r["t"], "err", "{r}");
+    assert!(w.ok(&["web"]).contains("off"));
+
+    // The laptop may: off is off, with nothing to say.
+    let r = lap.ok(json!({ "t": "web", "on": false })).await;
+    assert_eq!(r["web"]["wanted"], false, "{r}");
 }
 
 /// ROADMAP WEB1: what the web app asks of the daemon and of the machine.

@@ -191,6 +191,34 @@ fn scratchpad(ctx: &Ctx, config: &Config, r: &mut Report) {
     }
 }
 
+/// The web app's server (WEB1.9): wanted and up, wanted and failing, or off.
+fn web_app(w: &ptyro_protocol::WebServe, r: &mut Report) {
+    const S: &str = "remote";
+    let mut lines = crate::webapp::lines(w);
+    let (level, head) = match (w.wanted, w.up, w.by_hand) {
+        (true, true, _) => (Level::Ok, lines.remove(0)),
+        // Just started: the certificate and the port take a moment.
+        (true, false, _) if w.last_exit.is_none() => {
+            (Level::Note, "on, starting (check again in a moment)".into())
+        }
+        (true, false, None) => (Level::Problem, lines.remove(0)),
+        (true, false, Some(_)) => (Level::Warn, lines.remove(0)),
+        (false, _, Some(_)) => (Level::Warn, lines.remove(0)),
+        (false, _, None) => (
+            Level::Note,
+            "off: `ptyro web on` has the daemon serve the web app for your phone".into(),
+        ),
+    };
+    let rest = lines.into_iter().filter(|l| !l.starts_with("its log") && !(w.up && l.starts_with("restarted"))).collect::<Vec<_>>();
+    let text = std::iter::once(head).chain(rest).collect::<Vec<_>>().join("; ");
+    let fix = if level == Level::Problem {
+        format!(" ({}; log: {})", crate::webapp::next(w), w.log.display())
+    } else {
+        String::new()
+    };
+    r.add(S, "web app", level, format!("{text}{fix}"));
+}
+
 /// `ptyro serve` (WEB1.7): plain HTTP where tokens would cross a network, and its certificate.
 fn remote(ctx: &Ctx, config: &Config, r: &mut Report) {
     let listen = config.remote.listen.parse::<std::net::SocketAddr>().ok();
@@ -335,6 +363,9 @@ async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
                 }
             ),
         );
+    }
+    if let Ok(Reply::Web { web, .. }) = c.request(Request::Web { on: None, via: None }).await {
+        web_app(&web, r);
     }
     let Ok(Reply::Doctor { report }) = c.request(Request::Doctor).await else { return };
     for v in &report.leaked_vars {

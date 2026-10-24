@@ -24,6 +24,7 @@ mod service;
 mod ship;
 mod tls;
 mod tour;
+mod webapp;
 
 use std::path::PathBuf;
 
@@ -568,6 +569,22 @@ enum Cmd {
         #[arg(long, hide = true)]
         managed: bool,
     },
+    /// The web app for your phone: have the daemon run its server (`on`), stop it (`off`), or say
+    /// how it is (`status`, the default)
+    Web {
+        #[arg(default_value = "status", value_parser = ["on", "off", "status"])]
+        action: String,
+        /// How phones reach it when turning it on: tailscale (HTTPS over your tailnet), lan (this
+        /// network, HTTPS from a certificate ptyro makes) or here (this computer only). Default:
+        /// what the config says, else Tailscale if it is up, else lan
+        #[arg(long, value_parser = ["tailscale", "lan", "here"])]
+        via: Option<String>,
+        /// With `on`: then show the pairing QR code for a phone
+        #[arg(long)]
+        pair: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Pair a phone or browser: prints a one-time QR code that opens the web app signed in
     Pair {
         /// What to call it in `ptyro devices`
@@ -842,6 +859,10 @@ enum DaemonCmd {
         /// Internal: started by a client; detach from its terminal
         #[arg(long, hide = true)]
         spawned: bool,
+        /// Also turn on the web app's server (`[remote] serve`), which the daemon runs and
+        /// restarts: the same as `ptyro web on`
+        #[arg(long)]
+        serve: bool,
     },
     /// Stop the daemon
     Stop {
@@ -912,8 +933,8 @@ fn main() {
     complete::handle(Cli::command);
     let cli = Cli::parse();
     let code = match cli.cmd {
-        Some(Cmd::Daemon { cmd: DaemonCmd::Start { foreground, spawned } }) => {
-            cli::daemon_start(foreground, spawned)
+        Some(Cmd::Daemon { cmd: DaemonCmd::Start { foreground, spawned, serve } }) => {
+            cli::daemon_start(foreground, spawned, serve)
         }
         Some(Cmd::FakeAgent { args }) => ptyro_testkit::fake_agent::main(&args),
         Some(Cmd::FakeGh { args }) => ptyro_testkit::fake_gh::main(&args),

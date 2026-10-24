@@ -867,6 +867,7 @@ impl Daemon {
             upgraded_ms: Some(self.upgraded_ms.load(Ordering::Relaxed)).filter(|t| *t > 0),
             rolled_back: self.rolled_back.load(Ordering::Relaxed),
             metrics: Some(self.metrics()),
+            web: Some(self.web_status()),
         }
     }
 
@@ -1148,9 +1149,17 @@ impl Daemon {
                 Ok(Reply::SelfTest { result: self.self_test(&adapter).await? })
             }
             Request::ReloadConfig => match self.reload_config() {
-                None => Ok(Reply::Done),
+                None => {
+                    // The web server follows `[remote] serve` at once, not at its next look.
+                    self.serve_child.wake();
+                    Ok(Reply::Done)
+                }
                 Some(e) => Err(Error::invalid(e)),
             },
+            Request::Web { on: None, .. } => {
+                Ok(Reply::Web { web: self.web_status(), notes: Vec::new() })
+            }
+            Request::Web { on: Some(on), via } => self.web_set(on, via.as_deref()).await,
             Request::Shutdown { force } => {
                 let live = self.sessions().iter().filter(|s| s.is_live()).count();
                 if live > 0 && !force {

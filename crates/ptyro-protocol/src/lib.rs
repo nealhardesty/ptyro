@@ -33,7 +33,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 15 };
+pub const PROTO: Version = Version { major: 1, minor: 16 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -653,6 +653,17 @@ pub enum Request {
         addr: String,
         format: String,
     },
+    /// The web app's server, when the daemon runs it (`[remote] serve`, 1.16): `None` asks how
+    /// it is; `Some(true)` or `Some(false)` turns the setting on or off (edits the config file)
+    /// and starts or stops it. `via` says how phones reach it when turning it on: `tailscale`,
+    /// `lan` (this network) or `here` (this computer only); left out, a choice is made if none
+    /// is set. Replies `Web`. Turning it on or off is `full` scope.
+    Web {
+        #[serde(default)]
+        on: Option<bool>,
+        #[serde(default)]
+        via: Option<String>,
+    },
     /// Send a test notification through every configured channel and sink.
     NotifyTest,
 
@@ -1066,6 +1077,35 @@ pub struct DaemonStatus {
     /// Health (M8.5).
     #[serde(default)]
     pub metrics: Option<Metrics>,
+    /// The web app's server (1.16).
+    #[serde(default)]
+    pub web: Option<WebServe>,
+}
+
+/// The web app's server, `ptyro serve`, as the daemon sees it (`[remote] serve`, SPEC §16.3).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebServe {
+    /// `[remote] serve` is on: the daemon runs the server and brings it back when it dies.
+    pub wanted: bool,
+    /// It is listening now (it has said where).
+    pub up: bool,
+    pub pid: Option<u32>,
+    /// What phones open (the address `ptyro pair` puts in its link).
+    pub url: Option<String>,
+    /// Where it listens, as configured.
+    pub listen: String,
+    /// SHA-256 of the certificate authority ptyro made, to check it against when trusting it.
+    pub ca_fingerprint: Option<String>,
+    pub since_ms: Option<u64>,
+    /// Times the daemon started it again after it died.
+    pub restarts: u32,
+    /// How the last run ended, and the end of what it said then.
+    pub last_exit: Option<String>,
+    /// A `ptyro serve` someone started by hand is running (its pid): the daemon's can't share
+    /// its port, and it won't come back after a restart.
+    pub by_hand: Option<u32>,
+    /// The server's log.
+    pub log: PathBuf,
 }
 
 /// An agent a session can run (`Request::Agents`).
@@ -1245,6 +1285,11 @@ pub enum Reply {
     Agents {
         agents: Vec<AgentChoice>,
         default: String,
+    },
+    /// How the web app's server is, and what a change did (`Request::Web`).
+    Web {
+        web: WebServe,
+        notes: Vec<String>,
     },
     Replay {
         replay: ReplayDoc,

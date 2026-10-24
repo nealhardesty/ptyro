@@ -34,7 +34,7 @@ Conventions:
 | **M11** | Change sets | One coordinated change across several repos: lead + member agents, contract, integration overlay, set checkpoints, merge train (done) |
 | **H1** | Hardening review | ~120 findings of a full code review fixed (security, crashes, correctness, build) (done) |
 | **UX1** | Out of the box | From `cd repo && ptyro` to a shipped, cleaned-up worktree by keys alone; sidebar rows that say what's going on (done) |
-| **WEB1** | Web parity | The web client does what the CLI and TUI do, and the parity check covers it (done) |
+| **WEB1** | Web parity | The web client does what the CLI and TUI do, and the parity check covers it (done, but WEB1.8: a real terminal) |
 | **CFG1** | One configuration panel | Every option editable in the TUI (then the web); new options must join it |
 | **NOTE1** | The scratchpad | One persistent notepad file: a key opens it in your editor, `PTYRO_SCRATCHPAD` finds it, items become tasks, the web edits it (done) |
 | **Backlog** | Later / maybe | Editor, tasks, jj, libghostty, relay, … |
@@ -42,7 +42,7 @@ Conventions:
 Critical path: **M0 → M1 → M2 → M3 → M4** gives a daily-driver. M5 can interleave with M3/M4.
 M6–M10 are largely independent of each other after M5. M11 builds on M6 (PRs) and M7 (runs,
 mailbox, `ptyro mcp`); its experiment M11.0 can run as soon as M5 exists. UX1, the owner's top
-priority from 2026-10-22, is done (2026-10-23), and so is WEB1 (2026-10-24).
+priority from 2026-10-22, is done (2026-10-23), and so is WEB1 (2026-10-24), but WEB1.8 (a real terminal in the web).
 
 ---
 
@@ -1592,7 +1592,7 @@ shows a live terminal, sends replies and keys, answers permission prompts, shows
 structured chats, and takes push notifications. It can't start, stop or restart anything, or
 touch worktrees, projects, review and PRs, runs, change sets, profiles or settings. R-UX-31.
 
-**Done (2026-10-24): all of WEB1.** 0 web gaps in `docs/parity.md`, and `make parity` fails on
+**Done (2026-10-24): all of WEB1 but WEB1.8.** 0 web gaps in `docs/parity.md`, and `make parity` fails on
 one. The device needs `--scope full` for the whole app (`control`: answer, type, stop; the pages
 that change the machine say so). *Not checked here:* the app on a real phone.
 
@@ -1756,7 +1756,7 @@ up), and `make parity` fails CI on a CLI command with neither a web path nor a w
   - *Done when:* from a phone, `nvim` and `claude` are usable by keystroke, scrollback and
     selection work, and the web test (`web/test`) types into a real session and compares it with
     `ptyro read`.
-- [ ] **WEB1.9 The web server starts with the daemon, as a setting** — S. (owner 2026-10-24)
+- [x] **WEB1.9 The web server starts with the daemon, as a setting** — S. (owner 2026-10-24; done 2026-10-24)
   `[remote] serve = true` already makes the daemon supervise `ptyro serve --managed` (M9.2, SPEC
   §16.3), but nobody finds it: it is a config key, off by default, with no UI. Make it a setting
   you can turn on (the config panel, CFG1; `ptyro init`'s question; `ptyro daemon start --serve`;
@@ -1768,6 +1768,16 @@ up), and `make parity` fails CI on a CLI command with neither a web path nor a w
   without touching a session. The user-visible result is the same ("the web is up when the
   daemon is"). *Done when:* a fresh install answers "yes" to one question and the phone can
   pair after a daemon restart, with no `ptyro serve` typed.
+  *Done:* `ptyro web on|off|status` (`--via tailscale|lan|here`, `--pair`), `ptyro daemon start
+  --serve`, the `ptyro init` question (never answered by `--yes`), the TUI's `remote.web*` actions
+  and the web app's More → Web app all flip `[remote] serve` through one function
+  (`config::set_serve`) or the daemon's `Request::Web` (protocol 1.16). The supervisor wakes at
+  once; `daemon status`, the doctor and the web page say whether it is up, where, since when, how
+  it last ended and whether a by-hand `ptyro serve` holds the port. New key `[remote] tailscale`.
+  Tests: `the_web_app_is_a_setting_the_daemon_keeps`, `only_a_full_device_changes_the_web_apps_server`,
+  `serving_the_web_app_is_one_setting…`. *Not done:* the CFG1 config panel (it doesn't exist yet;
+  `remote.serve` and `remote.tailscale` must join it), and a QR code on the TUI's `remote.web_on`
+  (it prints `ptyro pair` as the next step).
 
 Suggested order: WEB1.0 → WEB1.1 → WEB1.7 (phones need it) → WEB1.2 → WEB1.3 → WEB1.4 → the
 rest (WEB1.8's spike can run any time; WEB1.9 is small and can go first). From WEB1.0 on, every
@@ -1924,8 +1934,8 @@ has its rows. How it differs from the plan above:
   guessing; tags (`[wt:project/name]`, `(#42)`) go at the end.
 - **Watching** is a 700 ms poll of the file's mtime and size, not `notify`: the same on Linux and
   macOS and on synced folders. History keeps every state for an hour, then thins out.
-- **`start` on the web** is the one gap, and it is closed by WEB1.2's new-task box (the cell says
-  so); the `✎ N` count is in the status bar (`[ui] status_bar`) and on the home screen, not a sidebar
+- **`start` on the web** was the one gap, and is closed: Start on an open item opens the new-task
+  box with its text (`scratchpad.start`); the `✎ N` count is in the status bar (`[ui] status_bar`) and on the home screen, not a sidebar
   footer; agent-added items show `by <agent>` rather than dimmed.
 - **Not done:** an item started where there is no project isn't tagged `[wt:…]`; the popup swallows
   mouse clicks rather than closing on a click outside; the web's Notes page and share target were

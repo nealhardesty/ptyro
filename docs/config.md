@@ -111,6 +111,7 @@ listen = "127.0.0.1:7091"
 # tls_key = "~/certs/privkey.pem"         #   and its key
 approval_wait = "10m"                     # held Claude permission prompts wait this long for a phone
 # push_hosts = ["ntfy.example.com"]       # self-hosted push services (UnifiedPush, ntfy)
+# tailscale = true                        # run `tailscale serve` in front: the phone gets Tailscale's HTTPS name
 # trusted_proxy = true                   # a reverse proxy on this machine fronts serve (plain HTTP on loopback)
 # insecure = true                        # plain HTTP instead of HTTPS, any address (tokens in clear)
 

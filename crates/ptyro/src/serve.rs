@@ -183,6 +183,7 @@ pub async fn run(
         .with_writer(std::io::stderr)
         .try_init();
     let config = Config::load(&Config::path(&ctx.paths)).unwrap_or_default();
+    let tailscale = tailscale || config.remote.tailscale;
     let insecure = insecure || config.remote.insecure;
     let local = local || config.remote.local;
     let listen = listen.unwrap_or_else(|| match local {

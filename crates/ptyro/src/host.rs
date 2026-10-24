@@ -212,6 +212,13 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
                 json!({ "path": newest.path(), "text": all[all.len().saturating_sub(lines)..].join("\n") }),
             )
         }
+        "web.logs" => {
+            let path = ctx.paths.state.join("serve.log");
+            let lines = a["lines"].as_u64().unwrap_or(200).min(5000) as usize;
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            let all: Vec<&str> = text.lines().collect();
+            Ok(json!({ "path": path, "text": all[all.len().saturating_sub(lines)..].join("\n") }))
+        }
         // These end the connection that asked: they go on by themselves, and the app reconnects.
         "daemon.restart" => {
             detached(&["daemon", "restart", "--force"])?;

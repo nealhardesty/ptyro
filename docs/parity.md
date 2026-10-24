@@ -236,6 +236,7 @@ The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every sessio
 | Command | In the TUI | On the web |
 |---|---|---|
 | `serve` | `remote.serve` (in a split) | waived: it serves the web app; the web app can't start the thing it runs on |
+| `web` | `remote.web` (is it up, where, what next), `remote.web_on`, `remote.web_off` (in a split); the health badge has its findings | `web.status`: More → Web app: up or not, the address (copy it), who runs it, the log (`web.logs`); `web.on` (asks how phones reach it) and `web.off` |
 | `pair` | `remote.pair`: the QR code, in a split, to scan | `pair`: this device's half (the link or QR code); `pair.device` makes a link and a QR code for another device (More → Devices → ＋) |
 | `devices ls` | `devices.list` | `devices.list`: More → Devices |
 | `devices revoke` | `devices.revoke` | `devices.revoke`: a device's menu |
@@ -248,7 +249,7 @@ The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every sessio
 
 | Command | In the TUI | On the web |
 |---|---|---|
-| `init` | `first.run`: the first run as a screen (it opens on its own the first time); terminal checks and shell extras are `doctor`'s (UX1.20) | `first.run`: More → Set up ptyro (the Sessions tab offers it with no project): your agents, accounts and repositories |
+| `init` | `first.run`: the first run as a screen (it opens on its own the first time); terminal checks and shell extras are `doctor`'s (UX1.20) | `first.run`: More → Set up ptyro (the Sessions tab offers it with no project): your agents, accounts and repositories (the web app for a phone is `web.on`, More → Web app) |
 | `doctor` | `health` (`M`): the badge's findings, each with its fix; `doctor` runs the full one in a split | `health`: More → Health: every check with its fix (log in, edit the config, restart…) |
 | `tour` | `help.tour` (the TUI steps aside for the tour, then comes back) | `help.tour`: More → Take the tour: a ptyro of its own on a free local port, opened in a new tab with a coach |
 | `config edit` | `config.edit` (validated when you save; changes apply live) | `config.edit`: More → Configuration: an editor, checked as you save, applied at once |
@@ -260,7 +261,7 @@ The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every sessio
 | `daemon start` | waived: the TUI starts the daemon when it isn't running | waived: `serve` runs with the daemon; with no daemon there is no web app to ask |
 | `daemon stop` | `app.quit` (`C-d` after the prefix): asks, then stops every session and the daemon and exits | `daemon.stop`: More → Daemon → Stop (asks first; the app goes offline with it) |
 | `daemon restart` | `daemon.restart` (in a split; this TUI reconnects) | `daemon.restart`: More → Daemon → Restart (asks first; the app reconnects) |
-| `daemon status` | `daemon.status`; the health badge has its warnings | `daemon.status`: More → Daemon |
+| `daemon status` | `daemon.status`; `remote.web` is the web app's line; the health badge has its warnings | `daemon.status`: More → Daemon; More → Web app (`web.status`) is the web app's line |
 | `daemon logs` | `daemon.logs` (followed, in a split) | `daemon.logs`: More → Daemon → Logs |
 | `daemon upgrade` | `daemon.upgrade`; a daemon running another binary is a health finding whose fix this is | `daemon.upgrade`: More → Daemon → Upgrade, or a health finding's fix |
 | `daemon install-service` | `daemon.service` | `daemon.service`: More → Daemon → Install the service |

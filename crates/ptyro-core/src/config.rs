@@ -454,6 +454,96 @@ impl Default for Scratchpad {
     }
 }
 
+/// Turn `[remote] serve` on or off in the config file (`ptyro web`, `ptyro daemon start --serve`,
+/// and the daemon's own `Request::Web`; WEB1.9), keeping the rest of the file as it is. When
+/// turning it on, say how phones reach it with `via` (`tailscale`, `lan` or `here`), else keep
+/// what the config already has, else pick: Tailscale when it is up on this machine, else this
+/// network. Returns what that chose, for the person to read.
+pub fn set_serve(path: &Path, on: bool, via: Option<&str>) -> Result<Vec<String>, crate::Error> {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let mut doc: toml_edit::DocumentMut =
+        text.parse().map_err(|e| crate::Error::invalid(format!("{}: {e}", path.display())))?;
+    let before = Config::parse(&text).unwrap_or_default();
+    let remote = doc.entry("remote").or_insert(toml_edit::table());
+    let Some(remote) = remote.as_table_mut() else {
+        return Err(crate::Error::invalid(format!("{}: [remote] is not a table", path.display())));
+    };
+    remote.insert("serve", toml_edit::value(on));
+    let mut notes = Vec::new();
+    if on {
+        let r = &before.remote;
+        let has = r.tailscale
+            || r.local
+            || r.insecure
+            || r.trusted_proxy
+            || r.public_url.is_some()
+            || r.tls_cert.is_some();
+        let pick = match via {
+            Some(v @ ("tailscale" | "lan" | "here")) => Some(v),
+            Some(other) => {
+                return Err(crate::Error::invalid(format!(
+                    "{other:?}: how should phones reach it? tailscale, lan or here"
+                )));
+            }
+            None if has => None,
+            None if tailscale_running() => Some("tailscale"),
+            None => Some("lan"),
+        };
+        if let Some(pick) = pick {
+            for (key, value) in [("tailscale", pick == "tailscale"), ("local", pick == "lan")] {
+                if value || remote.contains_key(key) {
+                    remote.insert(key, toml_edit::value(value));
+                }
+            }
+            notes.push(
+                match pick {
+                    "tailscale" => "phones reach it over Tailscale HTTPS (`[remote] tailscale`): on your tailnet, with a certificate they already trust",
+                    "lan" => "phones reach it from this network (`[remote] local`): over HTTPS with a certificate ptyro makes, for private addresses only; trust it once from /ca.crt",
+                    _ => "it is reachable from this computer only (`[remote] listen` is loopback); for a phone, `ptyro web on --via tailscale` or `--via lan`",
+                }
+                .to_owned(),
+            );
+        }
+    }
+    let new = doc.to_string();
+    Config::parse(&new)
+        .map_err(|e| crate::Error::invalid(format!("the config would be invalid: {e}")))?;
+    if new != text {
+        write_private(path, &new)?;
+    }
+    Ok(notes)
+}
+
+/// Tailscale is installed and connected on this machine.
+fn tailscale_running() -> bool {
+    std::process::Command::new("tailscale")
+        .args(["status", "--json"])
+        .output()
+        .ok()
+        .and_then(|o| serde_json::from_slice::<serde_json::Value>(&o.stdout).ok())
+        .is_some_and(|v| v["BackendState"] == "Running")
+}
+
+/// Write a file only its owner reads (a config can hold keys), replacing it whole.
+fn write_private(path: &Path, text: &str) -> Result<(), crate::Error> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let io = |p: &Path, e: std::io::Error| crate::Error::internal(format!("{}: {e}", p.display()));
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| io(dir, e))?;
+    }
+    let tmp = path.with_extension("toml.tmp");
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)
+        .map_err(|e| io(&tmp, e))?;
+    f.write_all(text.as_bytes()).map_err(|e| io(&tmp, e))?;
+    std::fs::rename(&tmp, path).map_err(|e| io(path, e))
+}
+
 impl Config {
     /// Where the scratchpad file is: `[scratchpad] path`, else `scratchpad.md` in `data`.
     pub fn scratchpad_path(&self, data: &std::path::Path) -> PathBuf {
@@ -612,6 +702,9 @@ pub struct Remote {
     pub public_url: Option<String>,
     /// The daemon runs `ptyro serve` itself (and restarts it).
     pub serve: bool,
+    /// Put Tailscale HTTPS in front of the server (`ptyro serve --tailscale`): your phone opens
+    /// `https://<machine>.<tailnet>.ts.net`, with a certificate it already trusts.
+    pub tailscale: bool,
     /// Speak plain HTTP instead of HTTPS, on any address (tokens would cross the network in
     /// clear). Without it, `ptyro serve` speaks HTTPS with a certificate it makes, except behind
     /// `tailscale serve` or a `trusted_proxy`, which end TLS before it (SPEC §16.3).
@@ -643,6 +736,7 @@ impl Default for Remote {
             listen: "127.0.0.1:7091".into(),
             public_url: None,
             serve: false,
+            tailscale: false,
             insecure: false,
             local: false,
             tls_cert: None,
@@ -1477,6 +1571,46 @@ pub fn key_label(k: &KeyEvent) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn serving_the_web_app_is_one_setting_that_keeps_the_rest_of_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let write = |t: &str| std::fs::write(&path, t).unwrap();
+        let read = || std::fs::read_to_string(&path).unwrap();
+
+        // No file yet: one is made, private, with the setting and a way to be reached.
+        let notes = set_serve(&path, true, Some("lan")).unwrap();
+        assert!(notes[0].contains("this network"), "{notes:?}");
+        let c = Config::load(&path).unwrap();
+        assert!(c.remote.serve && c.remote.local && !c.remote.tailscale);
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+
+        // Comments and other sections stay; a way already chosen is kept, not replaced.
+        write("# mine\n[ui]\nprefix = \"C-a\" # why not\n[remote]\ntailscale = true\n");
+        let notes = set_serve(&path, true, None).unwrap();
+        assert!(notes.is_empty(), "{notes:?}");
+        let t = read();
+        assert!(
+            t.contains("# mine") && t.contains("# why not") && t.contains("serve = true"),
+            "{t}"
+        );
+        assert!(Config::load(&path).unwrap().remote.tailscale);
+
+        // Off changes nothing else; `here` switches the others off.
+        set_serve(&path, false, None).unwrap();
+        assert!(!Config::load(&path).unwrap().remote.serve);
+        assert!(Config::load(&path).unwrap().remote.tailscale);
+        set_serve(&path, true, Some("here")).unwrap();
+        let c = Config::load(&path).unwrap();
+        assert!(c.remote.serve && !c.remote.tailscale && !c.remote.local);
+
+        // A way we don't know is refused before anything is written.
+        let before = read();
+        assert!(set_serve(&path, true, Some("pigeon")).is_err());
+        assert_eq!(read(), before);
+    }
 
     #[test]
     fn dangerous_args_are_caught_in_every_spelling() {
