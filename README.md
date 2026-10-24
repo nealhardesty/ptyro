@@ -411,7 +411,7 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
 | [`docs/changesets.md`](docs/changesets.md) | Change sets: one change across several repos, from contract to merge train |
 | [`docs/compat.md`](docs/compat.md) | Which programs and terminals work inside ptyro, and how well |
 | [`docs/fixtures.md`](docs/fixtures.md) | Recording and sanitising test fixtures |
-| [`docs/logos/`](docs/logos/README.md) | Logo and icon concepts (SVG and PNG), with the images in `ideas/`, including riffs on the shortlist and 40 tentacle-bot and cat-robot concepts (121–160) |
+| [`docs/logos/`](docs/logos/README.md) | Logo and icon concepts (SVG and PNG), with the images in `ideas/`, including riffs on the shortlist and 45 tentacle-bot and cat-robot concepts (121–165) |
 | [`SPEC.md`](SPEC.md) | Architecture, protocol, formats, configuration, CLI, security, verified facts |
 | [`ROADMAP.md`](ROADMAP.md) | Milestones and tasks: everything that doesn't exist yet |
 | [`RESEARCH.md`](RESEARCH.md) | Competitor landscape and the idea funnel that feeds the roadmap |

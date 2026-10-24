@@ -1584,11 +1584,13 @@ def arm(x0, y0, x1, y1, col, sw=22, bend=0.0):
             f'fill="none" stroke="{col}" stroke-width="{sw}" stroke-linecap="round"/>')
 
 
-def card(cx, cy, s, col, glyph, ink=BN, rx=None):
+def card(cx, cy, s, col, glyph, ink=BN, rx=None, tidy=False):
     """A task: a coloured rounded square, centred on (cx, cy), with a glyph on it."""
     k = s / 80
-    g = {"chev": chev(cx - 14 * k, cy - 18 * k, 26 * k, 36 * k, ink, 11 * k),
-         "check": check(cx, cy, k * .9, ink), "bang": bang(cx, cy - 7 * k, k * .8, ink),
+    # tidy: the glyphs' ink centred on the tile, not their anchor points
+    g = {"chev": chev(cx - 14 * k + (k if tidy else 0), cy - 18 * k, 26 * k, 36 * k, ink, 11 * k),
+         "check": check(cx - .9 * k, cy + .9 * k, k * .9, ink) if tidy else check(cx, cy, k * .9, ink),
+         "bang": bang(cx, cy - 2.1 * k, k * .6, ink) if tidy else bang(cx, cy - 7 * k, k * .8, ink),
          "bars": bar(cx - 20 * k, cy - 12 * k, 40 * k, ink, 11 * k) + bar(cx - 20 * k, cy + 12 * k, 26 * k, ink, 11 * k)}[glyph]
     return (f'<rect x="{cx - s / 2:.1f}" y="{cy - s / 2:.1f}" width="{s}" height="{s}" rx="{rx or s * .26:.1f}" '
             f'fill="{col}"/>' + g)
@@ -1839,13 +1841,13 @@ TENT = [
 CORNERS = [(88, 88), (424, 88), (88, 424), (424, 424)]
 
 
-def cathead(cx, cy, w, h, body="#f4f7fb", screen=BN, face=GREEN, inner="#ff9ec4", eyes="chev", whisk=True):
+def cathead(cx, cy, w, h, body="#f4f7fb", screen=BN, face=GREEN, inner="#ff9ec4", eyes="chev", whisk=True, ears=True):
     """The cat-robot: the robot's head with ears, a nose and mouth, whiskers and `> <`, `^ ^` or `- -` eyes."""
     x, y, k, ex = cx - w / 2, cy - h / 2, h * .17, w * .2
     st = f'fill="none" stroke="{face}" stroke-width="{h * .1:.1f}" stroke-linecap="round" stroke-linejoin="round"'
     ear = lambda s, c, dx=0, dy=0: (f'<path d="M{cx + s * (w * .42 - dx):.1f} {y + h * .3 + dy:.1f}L{cx + s * (w * .4 - dx):.1f} {y - h * .3 + dy:.1f}'
                                     f'L{cx + s * (w * .12 + dx):.1f} {y + dy:.1f}Z" fill="{c}" stroke="{c}" stroke-width="{h * .06:.1f}" stroke-linejoin="round"/>')
-    out = [ear(-1, body), ear(1, body), ear(-1, inner, w * .07, h * .08), ear(1, inner, w * .07, h * .08)]
+    out = [ear(-1, body), ear(1, body), ear(-1, inner, w * .07, h * .08), ear(1, inner, w * .07, h * .08)] if ears else []
     if whisk:
         for s in (-1, 1):
             for dy, ang in ((.06, -.14), (.18, .1)):
@@ -2062,6 +2064,51 @@ CATS = [
 ]
 
 
+BIGC = [(98, 98), (414, 98), (98, 414), (414, 414)]
+
+
+def earless(bg, body, limb, ink, face, nose, tasks=None, cardf=None, head=None):
+    """151 Tentacat with no ears and bigger tasks, their glyphs centred."""
+    cardf = cardf or (lambda x, y, s, c, g: card(x, y, s, c, g, ink, tidy=True))
+    return crossbot(bg, head or cathead(256, 270, 224, 168, body, ink if bg == BN else BN, face, nose, ears=False), limb, ink,
+                    s=124, sw=28, cardf=cardf, tasks=tasks, pos=BIGC)
+
+
+def eless_1():
+    return earless("#14192b", "#f4f7fb", "#cdd6e4", BN, GREEN, "#ff9ec4")
+
+
+def eless_panes():
+    return earless(BN, "#f4f7fb", "#cdd6e4", BN, GREEN, "#ff9ec4",
+                   cardf=lambda x, y, s, c, g: outline(x, y, s, c, g))
+
+
+def eless_round():
+    return earless("#0f4c5c", "#f4f7fb", "#f4f7fb", "#0f4c5c", GREEN, "#ff9ec4",
+                   cardf=lambda x, y, s, c, g: card(x, y, s, c, g, "#0f4c5c", s / 2, tidy=True))
+
+
+def eless_black():
+    return earless("#ffb21f", "#1a1a24", "#1a1a24", "#1a1a24", "#ffd23f", "#ff7aa2", ["#4da3ff", "#ffffff", "#3ddc84", "#ff5d8f"],
+                   head=cathead(256, 270, 224, 168, "#1a1a24", "#1a1a24", "#ffd23f", "#ff7aa2", ears=False))
+
+
+def eless_neon():
+    base = earless("#07060f", "#fdf4ff", "#ff2bd6", "#07060f", "#7df9ff", "#ff2bd6", ["#7df9ff", "#ff2bd6", "#faff5c", "#9dff7a"],
+                   head=cathead(256, 270, 224, 168, "#fdf4ff", "#07060f", "#7df9ff", "#ff2bd6", ears=False))
+    i = base.index("/>") + 2
+    return base[:i] + f'<g filter="url(#glow)" opacity=".75">{base[i:]}</g>' + base[i:]
+
+
+EARLESS = [
+    ("nose-big", "Tentacat Plain: Big Tasks", "151 with the ears gone and the tasks bigger, their glyphs centred.", eless_1, "#14192b", ("#e6edf3", "#ff9ec4")),
+    ("nose-panes", "Tentacat Plain: Panes", "Earless, with big bordered bento panes for tasks.", eless_panes, BN, ("#e6edf3", AGENT[2])),
+    ("nose-round", "Tentacat Plain: Round", "Earless, with big round tasks on teal.", eless_round, "#0f4c5c", ("#f4f7fb", "#ff9ec4")),
+    ("nose-black", "Tentacat Plain: Black", "An earless black cat-bot on amber, with big tasks.", eless_black, "#ffb21f", ("#1a1a24", "#1a1a24")),
+    ("nose-neon", "Tentacat Plain: Neon", "Earless, glowing magenta arms and big neon tasks.", eless_neon, "#07060f", ("#fdf4ff", "#ff2bd6")),
+]
+
+
 PARENTS = ["05 Fireworks", "22 Hub", "23 Chain", "25 Squad", "28 Bento", "48 Sunset ptero", "45 Low poly"]
 
 # ── the wordmark: "ptyro" drawn as strokes on a 20×8 grid (x-height 2..6, descender to 8) ─────
@@ -2156,11 +2203,12 @@ THEMES = ["The flame", "No fire", "Many agents at once", "The merge train", "Pte
 def main(out):
     """Every image goes in out/ideas/; out/README.md is the one gallery that lists all of them."""
     ideas = f"{out}/ideas"
-    rows = emit(ICONS, 1, ideas) + emit(RIFFS, 51, ideas) + emit(TENT, 121, ideas) + emit(BIG, 141, ideas) + emit(CATS, 151, ideas)
+    rows = emit(ICONS, 1, ideas) + emit(RIFFS, 51, ideas) + emit(TENT, 121, ideas) + emit(BIG, 141, ideas) + emit(CATS, 151, ideas) + emit(EARLESS, 161, ideas)
     brand(out)
     heads = {i * 10: t for i, t in enumerate(THEMES)}
     heads.update({50 + i * 10: f"Riffs on {p}" for i, p in enumerate(PARENTS)})
     heads[140] = "Riffs on 135 Tentabot: Four Corners, with a bigger head"
+    heads[160] = "Riffs on 151 Tentacat: no ears, bigger tasks"
     heads[150] = "Tentacats: cat-robots with a bigger head (riffs on 135)"
     heads[120] = "Tentacle bots: a cute robot handling coloured tasks (riffs on 13 Octopus, 17 Robot, 05, 25, 28 and more)"
     with open(f"{out}/README.md", "w") as f:
@@ -2170,7 +2218,8 @@ def main(out):
                 "riffs on each of seven favourites (05, 22, 23, 25, 28, 48, 45), built from few shapes, thick strokes "
                 "and strong contrast so they read from a distance; 121–140 are twenty tentacle bots, a cute robot "
                 "handling coloured tasks, drawn in the style of the favourites; 141–150 give 135 a bigger head and "
-                "151–160 turn it into a cat-robot. Generated by `scripts/logos.py`; run "
+                "151–160 turn it into a cat-robot; "
+                "161–165 drop the ears and enlarge the tasks. Generated by `scripts/logos.py`; run "
                 "`make logos` to rebuild (PNGs need `rsvg-convert`). The wordmark is drawn, not typeset, so no fonts "
                 "are needed.\n\n"
                 "# The chosen logo\n\n"
