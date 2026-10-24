@@ -73,7 +73,7 @@ rustls = { version = "0.23.46", default-features = false, features = ["ring", "s
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12", "logging"] }
 rcgen = { version = "0.13.2", default-features = false, features = ["ring", "pem"] }
 time = { version = "0.3.55", default-features = false, features = ["std"] }
-aes-gcm = { version = "0.10.3", default-features = false, features = ["aes", "alloc"] }
+aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "alloc"] }
 # ptyro serve (M9.2): HTTP and WebSocket.
 hyper = { version = "1.12.0", features = ["server", "http1"] }
 hyper-util = { version = "0.1.21", features = ["tokio"] }
