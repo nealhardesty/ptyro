@@ -1571,6 +1571,270 @@ RIFFS = [
     ("poly-chevron", "Low Poly: Prompt", "A prompt chevron cut across the faceted wings.", poly_chevron, LP, ("#e9f7ff", "#06d6a0")),
 ]
 
+# -- tentacle bots: a cute multi-armed robot handling coloured tasks ------------------------
+
+TASKS = [BLUE, AMBER, GREEN, AGENT[0], AGENT[3], "#ff5d8f"]
+GLYPHS = ["chev", "bang", "check", "bars", "chev", "check"]
+
+
+def arm(x0, y0, x1, y1, col, sw=22, bend=0.0):
+    """A tentacle from (x0, y0) to (x1, y1): an S-curve, swaying by bend (in pixels)."""
+    my = (y0 + y1) / 2
+    return (f'<path d="M{x0:.1f} {y0:.1f}C{x0 + bend:.1f} {my:.1f} {x1 - bend:.1f} {my:.1f} {x1:.1f} {y1:.1f}" '
+            f'fill="none" stroke="{col}" stroke-width="{sw}" stroke-linecap="round"/>')
+
+
+def card(cx, cy, s, col, glyph, ink=BN, rx=None):
+    """A task: a coloured rounded square, centred on (cx, cy), with a glyph on it."""
+    k = s / 80
+    g = {"chev": chev(cx - 14 * k, cy - 18 * k, 26 * k, 36 * k, ink, 11 * k),
+         "check": check(cx, cy, k * .9, ink), "bang": bang(cx, cy - 7 * k, k * .8, ink),
+         "bars": bar(cx - 20 * k, cy - 12 * k, 40 * k, ink, 11 * k) + bar(cx - 20 * k, cy + 12 * k, 26 * k, ink, 11 * k)}[glyph]
+    return (f'<rect x="{cx - s / 2:.1f}" y="{cy - s / 2:.1f}" width="{s}" height="{s}" rx="{rx or s * .26:.1f}" '
+            f'fill="{col}"/>' + g)
+
+
+def bothead(cx, cy, w, h, body="#f4f7fb", screen=BN, face=GREEN, ant=GOLD):
+    """The robot: a rounded head with a dark screen, a `> <` face and an antenna."""
+    x, y, k, ex = cx - w / 2, cy - h / 2, h * .17, w * .2
+    st = f'fill="none" stroke="{face}" stroke-width="{h * .1:.1f}" stroke-linecap="round" stroke-linejoin="round"'
+    return (f'<path d="M{cx} {y:.1f}v{-h * .2:.1f}" stroke="{body}" stroke-width="{h * .07:.1f}" stroke-linecap="round"/>'
+            + dot(cx, y - h * .24, h * .1, ant)
+            + f'<rect x="{x:.1f}" y="{y:.1f}" width="{w}" height="{h}" rx="{h * .3:.1f}" fill="{body}"/>'
+            + f'<rect x="{x + w * .09:.1f}" y="{y + h * .14:.1f}" width="{w * .82:.1f}" height="{h * .72:.1f}" '
+              f'rx="{h * .2:.1f}" fill="{screen}"/>'
+            + f'<path d="M{cx - ex - k * .6:.1f} {cy - k:.1f}L{cx - ex + k * .6:.1f} {cy:.1f}L{cx - ex - k * .6:.1f} {cy + k:.1f}'
+              f'M{cx + ex + k * .6:.1f} {cy - k:.1f}L{cx + ex - k * .6:.1f} {cy:.1f}L{cx + ex + k * .6:.1f} {cy + k:.1f}" {st}/>'
+            + f'<path d="M{cx - w * .08:.1f} {cy + h * .27:.1f}H{cx + w * .08:.1f}" {st}/>')
+
+
+def tentabot(bg, body, limb, screen, tasks=TASKS):
+    """Six tentacles fanning out under the head, each holding a task."""
+    out = [tile(bg)]
+    for i in range(6):
+        x0, x1 = 196 + i * 24, 66 + i * 76
+        out.append(arm(x0, 262, x1, 392, limb, 22, 40))
+    out.append(bothead(256, 170, 230, 170, body, screen))
+    out += [card(66 + i * 76, 424, 62, tasks[i], GLYPHS[i], screen) for i in range(6)]
+    return "".join(out)
+
+
+def tent_1():
+    return tentabot("#1b1f3a", "#f4f7fb", "#cdd6e4", BN)
+
+
+def tent_light():
+    return tentabot(CREAM, "#ffffff", "#2d3a5c", "#1c2040", ["#2d6cdf", "#e69500", "#16a34a", "#e8531f", "#8b45e6", "#d6336c"])
+
+
+def tent_bento():
+    return (tile(BN) + pane(56, 56, 260, 400, BLUE, 18)
+            + arm(250, 240, 380, 150, "#cdd6e4", 20, -40) + arm(250, 270, 380, 360, "#cdd6e4", 20, -40)
+            + pane(336, 56, 120, 190, AMBER, 14) + bang(396, 144, 1, AMBER)
+            + pane(336, 266, 120, 190, GREEN, 14) + check(396, 362, 1.1, GREEN)
+            + arm(150, 300, 150, 410, "#cdd6e4", 20, 30) + bothead(186, 200, 190, 140) + card(150, 420, 56, AGENT[0], "chev"))
+
+
+def tent_fireworks():
+    out = [tile("#0b0f2a")]
+    for k in range(12):
+        a = math.radians(k * 30 + 15)
+        c, b = AGENT[k % 4], (28 if k % 2 else -28)
+        mx, my = 256 + 110 * math.cos(a) - b * math.sin(a), 256 + 110 * math.sin(a) + b * math.cos(a)
+        ex, ey = 256 + 190 * math.cos(a), 256 + 190 * math.sin(a)
+        out.append(f'<path d="M256 256Q{mx:.1f} {my:.1f} {ex:.1f} {ey:.1f}" fill="none" stroke="{c}" stroke-width="16" '
+                   f'stroke-linecap="round"/>' + dot(ex, ey, 17, c, "#0b0f2a", 5))
+    return "".join(out) + bothead(256, 262, 150, 112)
+
+
+TB = ["....A......", "..HHHHHHH..", ".HHHHHHHHH.", ".HHKHHHKHH.", ".HHHHHHHHH.", "..HHHHHHH..",
+      ".H.H.H.H.H.", ".H.H.H.H.H.", "H..H.H.H..H", "1..2.3.4..5"]
+
+
+def tent_squad():
+    return tile(SQB) + spr(TB, "#f0f3f6", 40, gap=4, extra={"A": GOLD, "H": "#f0f3f6", "K": SQB, "1": BLUE,
+                                                              "2": AMBER, "3": GREEN, "4": AGENT[0], "5": AGENT[3]})
+
+
+def tent_hub():
+    out = [tile(CH)]
+    pts = [(256 + 176 * math.cos(math.radians(60 * k - 90)), 256 + 176 * math.sin(math.radians(60 * k - 90))) for k in range(6)]
+    out += [arm(256, 256, x, y, "#3a4766", 18, 30 * (1 if k % 2 else -1)) for k, (x, y) in enumerate(pts)]
+    out.append(bothead(256, 266, 150, 112))
+    out += [dot(x, y, 42, TASKS[k]) + card(x, y, 52, TASKS[k], GLYPHS[k], CH, 26) for k, (x, y) in enumerate(pts)]
+    return "".join(out)
+
+
+def tent_chain():
+    out = [tile(CH), '<rect x="36" y="330" width="440" height="130" rx="65" fill="#1f2638"/>']
+    for k in range(4):
+        x = 100 + k * 104
+        out.append(arm(196 + k * 40, 250, x, 360, "#cdd6e4", 20, 30) + card(x, 394, 76, AGENT[k], "chev", CH))
+    return "".join(out) + bothead(256, 150, 220, 160)
+
+
+def tent_juggle():
+    out = [tile("#2b1055")]
+    for k, (x, y) in enumerate([(70, 170), (150, 76), (256, 110), (362, 76), (442, 170)]):
+        out.append(arm(180 + k * 38, 380, x, y + 36, "#ff7eb6", 18, -50 if x < 256 else 50)
+                   + card(x, y, 64, TASKS[k], GLYPHS[k], "#2b1055"))
+    return "".join(out) + bothead(256, 400, 220, 140, "#ffe3f0", "#2b1055")
+
+
+def tent_list():
+    out = [tile(BN)]
+    for k in range(4):
+        y = 92 + k * 100
+        out.append(arm(150, 256, 232, y, "#cdd6e4", 16, 30)
+                   + f'<rect x="232" y="{y - 36}" width="244" height="72" rx="36" fill="{TASKS[k]}"/>'
+                   + check(272, y, .8, BN) + bar(310, y, 120, BN, 14))
+    return "".join(out) + bothead(104, 256, 150, 124)
+
+
+def tent_sunset():
+    return ('<rect width="512" height="512" rx="112" fill="#2b0f54"/><circle cx="256" cy="290" r="170" fill="#ffd23f"/>'
+            + "".join(f'<rect x="80" y="{y}" width="352" height="{h}" fill="#2b0f54"/>' for y, h in [(330, 8), (366, 12), (404, 16)])
+            + "".join(arm(196 + i * 30, 330, 90 + i * 83, 200 + (i % 2) * 40, "#1a0b2e", 22, 40) + dot(90 + i * 83, 200 + (i % 2) * 40, 18, AGENT[i % 4])
+                      for i in range(5))
+            + bothead(256, 360, 220, 150, "#1a0b2e", "#1a0b2e", GOLD, "#ff5d8f"))
+
+
+def tent_poly():
+    T = lambda pts, c: f'<polygon points="{pts}" fill="{c}" stroke="{c}" stroke-width="2" stroke-linejoin="round"/>'
+    out = [tile(LP)]
+    for i in range(5):
+        x, xe = 168 + i * 44, 56 + i * 100
+        out.append(T(f"{x - 16},250 {x + 16},250 {xe},400", ["#20a39e", "#2ec4b6"][i % 2])
+                   + T(f"{xe - 28},400 {xe + 28},400 {xe},440", TASKS[i]))
+    return "".join(out) + (T("256,60 396,130 396,230 256,290 116,230 116,130", "#2ec4b6")
+                           + T("256,60 396,130 256,160", "#06d6a0") + T("256,60 116,130 256,160", "#3a86ff")
+                           + T("116,130 256,160 256,290 116,230", "#20a39e") + T("396,130 256,160 256,290 396,230", "#3d5a80")
+                           + chev(200, 170, 40, 70, "#fff", 16) + chev(312, 170, -40, 70, "#fff", 16))
+
+
+def tent_closeup():
+    out = [tile("#12b5a6")]
+    for i in range(4):
+        x = 100 + i * 104
+        out.append(arm(160 + i * 64, 330, x, 450, "#f4f7fb", 30, 30) + card(x, 484, 92, TASKS[i], GLYPHS[i], "#12b5a6"))
+    return ('<defs><clipPath id="tc"><rect width="512" height="512" rx="112"/></clipPath></defs><g clip-path="url(#tc)">'
+            + "".join(out) + bothead(256, 210, 340, 250, "#f4f7fb", BN) + "</g>")
+
+
+def tent_badge():
+    ring = "".join(f'<path d="M{256 + 210 * math.cos(math.radians(a)):.1f} {256 + 210 * math.sin(math.radians(a)):.1f}'
+                   f'A210 210 0 0 1 {256 + 210 * math.cos(math.radians(a + 82)):.1f} {256 + 210 * math.sin(math.radians(a + 82)):.1f}" '
+                   f'fill="none" stroke="{AGENT[k]}" stroke-width="22" stroke-linecap="round"/>' for k, a in enumerate(range(-86, 274, 90)))
+    out = [tile("#101826"), ring, '<circle cx="256" cy="256" r="190" fill="#1b2a4a"/>']
+    for k in range(4):
+        a = math.radians(k * 90 + 45)
+        out.append(arm(256, 256, 256 + 150 * math.cos(a), 256 + 150 * math.sin(a), "#9fb4e0", 16, 30)
+                   + dot(256 + 150 * math.cos(a), 256 + 150 * math.sin(a), 24, AGENT[k]))
+    return "".join(out) + bothead(256, 256, 170, 124)
+
+
+def tent_kanban():
+    out = [tile("#0f2a3a")]
+    for c in range(3):
+        x = 52 + c * 140
+        out.append(f'<rect x="{x}" y="250" width="124" height="214" rx="26" fill="#173a50"/>'
+                   f'<rect x="{x + 14}" y="{264 + 0}" width="96" height="48" rx="14" fill="{TASKS[c]}"/>'
+                   f'<rect x="{x + 14}" y="326" width="96" height="48" rx="14" fill="{TASKS[(c + 3) % 6]}" opacity=".8"/>'
+                   f'<rect x="{x + 14}" y="388" width="96" height="48" rx="14" fill="{TASKS[(c + 1) % 6]}" opacity=".55"/>')
+        out.append(arm(216 + c * 40, 190, x + 62, 262, "#e6edf3", 18, 20 - c * 20))
+    return "".join(out) + bothead(256, 110, 200, 120, "#e6edf3")
+
+
+def tent_cross():
+    out = [tile("#14192b")]
+    for k, (x, y) in enumerate([(100, 100), (412, 100), (100, 412), (412, 412)]):
+        out.append(arm(256, 256, x, y, "#cdd6e4", 24, 0) + card(x, y, 116, AGENT[k], GLYPHS[k], "#14192b"))
+    return "".join(out) + bothead(256, 270, 180, 136)
+
+
+def spiral(cx, cy, r0, a0, turns, d):
+    n = 40
+    return "".join(("M" if i == 0 else "L") + f"{cx + (r0 * (1 - .85 * i / n)) * math.cos(a0 + d * turns * 2 * math.pi * i / n):.1f} "
+                   f"{cy + (r0 * (1 - .85 * i / n)) * math.sin(a0 + d * turns * 2 * math.pi * i / n):.1f}" for i in range(n + 1))
+
+
+def tent_curl():
+    out = [tile("#2b1055")]
+    for k, (cx, cy, r, d, sx) in enumerate([(92, 380, 60, -1, 190), (420, 380, 60, 1, 322), (190, 440, 36, 1, 232), (322, 440, 36, -1, 280)]):
+        tipx, tipy = cx + r * math.cos(math.pi * (1.5 if d < 0 else 1.5)), cy + r * math.sin(math.pi * 1.5)
+        out.append(f'<path d="M{sx} 290C{sx} 340 {tipx:.1f} 320 {tipx:.1f} {tipy:.1f}{spiral(cx, cy, r, -math.pi / 2, 1.4, d).replace("M", "L", 1)}" '
+                   f'fill="none" stroke="#ff7eb6" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>')
+        ex, ey = [float(v) for v in spiral(cx, cy, r, -math.pi / 2, 1.4, d).split("L")[-1].split()]
+        out.append(dot(ex, ey, 17, AGENT[k], "#2b1055", 5))
+    return "".join(out) + bothead(256, 170, 230, 170, "#ffe3f0", "#2b1055")
+
+
+def tent_cheer():
+    out = [tile("#0c8f84")]
+    for k in range(5):
+        x, y = 56 + k * 100, 130 + abs(k - 2) * 30
+        out.append(arm(190 + k * 33, 380, x, y + 20, "#f4f7fb", 20, -40 if x < 256 else 40)
+                   + f'<path d="M{x} {y + 20}V{y - 50}" stroke="#f4f7fb" stroke-width="8" stroke-linecap="round"/>'
+                   f'<path d="M{x + 4} {y - 50}H{x + 52}L{x + 36} {y - 30}L{x + 52} {y - 10}H{x + 4}Z" fill="{TASKS[k]}" '
+                   f'stroke="{TASKS[k]}" stroke-width="6" stroke-linejoin="round"/>')
+    return "".join(out) + bothead(256, 410, 220, 130, "#f4f7fb", BN)
+
+
+def tent_plugs():
+    out = [tile("#101826"), '<rect x="40" y="410" width="432" height="62" rx="24" fill="#1f2a40"/>']
+    for k in range(4):
+        x = 88 + k * 112
+        out.append(arm(200 + k * 38, 230, x, 330, "#9fb4e0", 18, 30)
+                   + f'<rect x="{x - 30}" y="326" width="60" height="50" rx="14" fill="{AGENT[k]}"/>'
+                   f'<path d="M{x - 12} 376V404M{x + 12} 376V404" stroke="#e6edf3" stroke-width="9" stroke-linecap="round"/>'
+                   f'<rect x="{x - 22}" y="424" width="44" height="12" rx="6" fill="#0a0e17"/>')
+    return "".join(out) + bothead(256, 130, 220, 150)
+
+
+def tent_orbit():
+    out = [tile("#0b0d1c"), '<circle cx="256" cy="256" r="172" fill="none" stroke="#3b4a7a" stroke-width="7" stroke-dasharray="6 18" stroke-linecap="round"/>']
+    for k in range(4):
+        a = math.radians(k * 90 + 45)
+        x, y = 256 + 172 * math.cos(a), 256 + 172 * math.sin(a)
+        out.append(arm(256, 256, x, y, "#6f86c8", 14, 26))
+    for k in range(4):
+        a = math.radians(k * 90 + 45)
+        out.append(card(256 + 172 * math.cos(a), 256 + 172 * math.sin(a), 84, AGENT[k], GLYPHS[k], "#0b0d1c"))
+    return "".join(out) + bothead(256, 266, 140, 104)
+
+
+def tent_mono():
+    ink, out = "#2b0f54", ['<rect width="512" height="512" rx="112" fill="#ff7a45"/>']
+    for i in range(5):
+        x, xe = 186 + i * 35, 80 + i * 88
+        out.append(arm(x, 270, xe, 410, ink, 24, 40) + dot(xe, 420, 28, "#fff1c9" if i == 2 else ink))
+    return "".join(out) + bothead(256, 170, 240, 180, ink, "#ff7a45", ink, ink)
+
+
+TENT = [
+    ("tent-six", "Tentabot: Six Arms", "A cheerful robot, six tentacles, six tasks in six colours: the octopus with a screen for a face.", tent_1, "#1b1f3a", ("#f4f7fb", GOLD)),
+    ("tent-light", "Tentabot: Light", "The six-armed robot on cream, in deeper colours for white pages.", tent_light, CREAM, ("#1c2040", "#2d6cdf")),
+    ("tent-bento", "Tentabot: Bento", "The three-pane bento, with the robot in the big pane reaching tasks into the small ones.", tent_bento, BN, ("#e6edf3", BLUE)),
+    ("tent-fireworks", "Tentabot: Fireworks", "Twelve wavy tentacles burst out of the robot, each ending in a coloured task.", tent_fireworks, "#0b0f2a", ("#ffffff", "#ffd93b")),
+    ("tent-squad", "Tentabot: Squad", "The pixel robot with five pixel tentacles, a coloured task at the end of each.", tent_squad, SQB, ("#f0f3f6", GREEN)),
+    ("tent-hub", "Tentabot: Hub", "The robot at the centre, six tentacles out to six round tasks.", tent_hub, CH, ("#e6edf3", AGENT[1])),
+    ("tent-chain", "Tentabot: Chain", "Four tentacles hold a row of four chevron tiles: the train, hand-delivered.", tent_chain, CH, ("#e6edf3", AGENT[0])),
+    ("tent-juggle", "Tentabot: Juggler", "Five tentacles tossing five coloured tasks in the air.", tent_juggle, "#2b1055", ("#ffe3f0", "#ff7eb6")),
+    ("tent-list", "Tentabot: Checklist", "Four tentacles, four tasks, one tick each.", tent_list, BN, ("#e6edf3", GREEN)),
+    ("tent-sunset", "Tentabot: Sunset", "A silhouetted robot waves coloured tasks in front of a striped sun.", clipped(tent_sunset), "#2b0f54", ("#fff1c9", GOLD)),
+    ("tent-poly", "Tentabot: Low Poly", "A faceted head and faceted tentacles with coloured tips.", tent_poly, LP, ("#e9f7ff", "#06d6a0")),
+    ("tent-closeup", "Tentabot: Close-up", "A huge head and four fat tentacles, tasks cropped by the edge of the tile.", tent_closeup, "#12b5a6", ("#ffffff", GOLD)),
+    ("tent-badge", "Tentabot: Badge", "The robot inside a four-colour ring, one tentacle to each colour.", tent_badge, "#101826", ("#e6edf3", BLUE)),
+    ("tent-kanban", "Tentabot: Kanban", "The robot above three columns of tasks, a tentacle dropping into each.", tent_kanban, "#0f2a3a", ("#e6edf3", AMBER)),
+    ("tent-cross", "Tentabot: Four Corners", "Four straight tentacles, four big tasks, one in each corner.", tent_cross, "#14192b", ("#e6edf3", AGENT[2])),
+    ("tent-curl", "Tentabot: Curls", "Four curled tentacles, a coloured dot at the end of each curl.", tent_curl, "#2b1055", ("#ffe3f0", "#ff7eb6")),
+    ("tent-cheer", "Tentabot: Cheer", "Five tentacles wave five coloured flags: the build is green.", tent_cheer, "#0c8f84", ("#ffffff", GOLD)),
+    ("tent-plugs", "Tentabot: Plugs", "Four tentacles plug four coloured connectors into a socket strip: one pipe per session.", tent_plugs, "#101826", ("#e6edf3", AGENT[3])),
+    ("tent-orbit", "Tentabot: Orbit", "Four tasks on an orbit, each tethered to the robot by a tentacle.", tent_orbit, "#0b0d1c", ("#e6edf3", "#6f86c8")),
+    ("tent-mono", "Tentabot: Mono", "One dark silhouette on orange, a single cream task: the long-distance version.", tent_mono, "#ff7a45", ("#2b0f54", "#2b0f54")),
+]
+
+
 PARENTS = ["05 Fireworks", "22 Hub", "23 Chain", "25 Squad", "28 Bento", "48 Sunset ptero", "45 Low poly"]
 
 # ── the wordmark: "ptyro" drawn as strokes on a 20×8 grid (x-height 2..6, descender to 8) ─────
@@ -1665,16 +1929,18 @@ THEMES = ["The flame", "No fire", "Many agents at once", "The merge train", "Pte
 def main(out):
     """Every image goes in out/ideas/; out/README.md is the one gallery that lists all of them."""
     ideas = f"{out}/ideas"
-    rows = emit(ICONS, 1, ideas) + emit(RIFFS, 51, ideas)
+    rows = emit(ICONS, 1, ideas) + emit(RIFFS, 51, ideas) + emit(TENT, 121, ideas)
     brand(out)
     heads = {i * 10: t for i, t in enumerate(THEMES)}
     heads.update({50 + i * 10: f"Riffs on {p}" for i, p in enumerate(PARENTS)})
+    heads[120] = "Tentacle bots: a cute robot handling coloured tasks (riffs on 13 Octopus, 17 Robot, 05, 25, 28 and more)"
     with open(f"{out}/README.md", "w") as f:
         f.write("# ptyro logos\n\n"
                 f"{len(rows)} concepts, each as a wide **logo** (1200×400) and a square **icon** (512×512), in SVG "
                 "and PNG. Every image file is in [`ideas/`](ideas/). Concepts 01–50 explore themes; 51–120 are ten "
                 "riffs on each of seven favourites (05, 22, 23, 25, 28, 48, 45), built from few shapes, thick strokes "
-                "and strong contrast so they read from a distance. Generated by `scripts/logos.py`; run "
+                "and strong contrast so they read from a distance; 121–140 are twenty tentacle bots, a cute robot "
+                "handling coloured tasks, drawn in the style of the favourites. Generated by `scripts/logos.py`; run "
                 "`make logos` to rebuild (PNGs need `rsvg-convert`). The wordmark is drawn, not typeset, so no fonts "
                 "are needed.\n\n"
                 "# The chosen logo\n\n"
