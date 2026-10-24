@@ -35,6 +35,7 @@ Conventions:
 | **H1** | Hardening review | ~120 findings of a full code review fixed (security, crashes, correctness, build) (done) |
 | **UX1** | Out of the box | From `cd repo && ptyro` to a shipped, cleaned-up worktree by keys alone; sidebar rows that say what's going on (done) |
 | **WEB1** | Web parity | The web client does what the CLI and TUI do, and the parity check covers it |
+| **CFG1** | One configuration panel | Every option editable in the TUI (then the web); new options must join it |
 | **Backlog** | Later / maybe | Editor, tasks, jj, libghostty, relay, … |
 
 Critical path: **M0 → M1 → M2 → M3 → M4** gives a daily-driver. M5 can interleave with M3/M4.
@@ -1682,9 +1683,79 @@ up), and `make parity` fails CI on a CLI command with neither a web path nor a w
   for another device, `init`, `doctor`, `tour`, `config` (edit, check, show, path), `daemon`
   (stop, restart, status, logs, upgrade, install-service, uninstall-service).
 
+- [ ] **WEB1.8 A real terminal in the web** — L. (owner 2026-10-24) Today the web draws the
+  daemon's screen frames to a canvas (M9.3), so it *shows* a session live, but it can't *drive*
+  one: the only input is the reply box (`SendText` + Enter, a line at a time) and a key bar. Make
+  the session view a terminal you type in: every key goes to the session as it is pressed
+  (the daemon's encoder, so DECCKM, kitty flags and bracketed paste are right), paste, IME, the
+  phone's soft keyboard with a modifier row (Esc, Ctrl, Alt, Tab, arrows), mouse (SGR, when
+  the app asks), scrollback with touch/wheel scrolling, selection and copy (OSC 52 included),
+  a follow-the-cursor/fit mode, and resize that follows the viewport when this device has
+  `control` scope. Starts with a spike:
+  - *(spike)* **Consume or build?** Candidates: xterm.js (MIT; wants a raw byte stream, which
+    the protocol doesn't send the web, and would be a second emulator beside the daemon's),
+    a libghostty-vt WASM build (a second emulator, and Zig in the build), and our own: the
+    daemon already emulates and sends row deltas, so what's missing is input, scrollback,
+    selection and a faster draw loop, not parsing. Lean: **our own**, extending
+    `web/src/screen.ts` and the canvas drawer (no dependencies, in keeping with §16.4's embedded,
+    zero-third-party app). The spike measures a deltas-only renderer against xterm.js on a phone
+    (latency per keystroke, `htop`/`nvim`/Claude redraw, battery) and writes the verdict into SPEC
+    §16.4 / §20. Check the idea funnel (RESEARCH.md Part III) first, and add the options there.
+  - *Done when:* from a phone, `nvim` and `claude` are usable by keystroke, scrollback and
+    selection work, and the web test (`web/test`) types into a real session and compares it with
+    `ptyro read`.
+- [ ] **WEB1.9 The web server starts with the daemon, as a setting** — S. (owner 2026-10-24)
+  `[remote] serve = true` already makes the daemon supervise `ptyro serve --managed` (M9.2, SPEC
+  §16.3), but nobody finds it: it is a config key, off by default, with no UI. Make it a setting
+  you can turn on (the config panel, CFG1; `ptyro init`'s question; `ptyro daemon start --serve`;
+  the web's own settings, WEB1.6), show in `ptyro daemon status` and the health badge whether it
+  is up and at what URL, and say what turning it on changes (a listening port; `pair` next).
+  *Decision to record:* keep it a supervised child process rather than build it into the
+  daemon. The daemon owns every PTY and is local-socket-only by design; the network-facing
+  HTTP/TLS code belongs in a process that can crash, restart and be killed for a live upgrade
+  without touching a session. The user-visible result is the same ("the web is up when the
+  daemon is"). *Done when:* a fresh install answers "yes" to one question and the phone can
+  pair after a daemon restart, with no `ptyro serve` typed.
+
 Suggested order: WEB1.0 → WEB1.1 → WEB1.7 (phones need it) → WEB1.2 → WEB1.3 → WEB1.4 → the
-rest. From WEB1.0 on, every
+rest (WEB1.8's spike can run any time; WEB1.9 is small and can go first). From WEB1.0 on, every
 new feature in any milestone ships with its web part.
+
+---
+
+## CFG1 — One configuration panel (2026-10-24)
+
+Goal: every configuration option can be found and changed from inside ptyro, with no
+hand-editing of TOML (owner 2026-10-24). Today `ptyro config edit` opens the file in an editor
+(commented, validated on save); the panel is the front door for people who don't want to know
+the keys.
+
+**The rule going forward:** a new configuration option isn't done until it is in the panel
+(and the web's), like the CLI/TUI/web parity rule (SPEC §1.3). The panel reads the schema, so
+the cost of that rule is a description and a type on the key, not UI code.
+
+- [ ] **CFG1.0 A schema the panel reads** — M. One description per key in `ptyro-core`'s config
+  (`config.rs`): name, section, type (bool, int with range, enum with choices, string, list,
+  duration, path), default, one-line help, and whether it applies live or needs a restart.
+  `ptyro config show` and the commented file from `config edit` come from the same table, and a
+  test fails when a field of the config structs has no entry (so a new option can't skip the
+  panel). Agent commands, args, env and profiles stay user-config only (SPEC §13.1).
+  *Done when:* the test lists every key and fails on a new one without a description.
+- [ ] **CFG1.1 The TUI panel** — L. `Ctrl-Q ,` and the palette: sections on the left, keys on
+  the right with the value in effect, its default, and where it comes from (user, project,
+  local). `/` searches keys and help. Edit in place by type (toggle, choose from a list, a number
+  with its range, a text box; lists and tables open a sub-form); invalid values are refused with
+  the reason. Writes the user `config.toml` keeping its comments (`toml_edit`), applies live
+  where the key allows, and says "restart the daemon" with a button where it doesn't.
+  Reset-to-default per key. A project tab for `.ptyro.toml` / `.ptyro.local.toml`. Profiles,
+  agents and editors get their own sub-forms (add, rename, remove).
+  *Done when:* an end-to-end TUI test changes a bool, an enum, a list and a number from the
+  panel, the file on disk has them with its comments kept, and the live daemon used them.
+- [ ] **CFG1.2 CLI parity** — S. `ptyro config get|set|unset <key>` against the same schema (so
+  scripts and the panel agree), with `parity.md` rows for them.
+- [ ] **CFG1.3 The web panel** — M. The same schema served to the web (a `config.schema`
+  request, scope `full`) and a settings view that renders it. Lands with WEB1.6 (its `config`
+  row); until then the cell says `gap: CFG1.3`.
 
 ---
 
