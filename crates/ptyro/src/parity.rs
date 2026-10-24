@@ -5,7 +5,7 @@
 //! Each row of that file's tables names a command, then how the TUI does it, then the web app:
 //! - `` `action` … ``: the first backticked word is an action: a TUI action
 //!   (`ptyro_tui::keymap::ACTIONS`, so the palette and `?` list it) or a web one (`ACTIONS` in
-//!   `web/src/app.ts`, each a control's tooltip); the rest says where;
+//!   `web/src/*.ts`, each a control's tooltip); the rest says where;
 //! - `shown: …`: always on screen, nothing to run;
 //! - `waived: …`: no path on purpose, and why;
 //! - `gap: TASK …`: missing, and the ROADMAP task that brings it.
@@ -19,7 +19,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 const DOC: &str = include_str!("../../../docs/parity.md");
-const WEB_APP: &str = include_str!("../../../web/src/app.ts");
+/// The web app's sources that register actions: the core and one module per kind of work.
+const WEB_SOURCES: [(&str, &str); 6] = [
+    ("app.ts", include_str!("../../../web/src/app.ts")),
+    ("sessions.ts", include_str!("../../../web/src/sessions.ts")),
+    ("projects.ts", include_str!("../../../web/src/projects.ts")),
+    ("review.ts", include_str!("../../../web/src/review.ts")),
+    ("runs.ts", include_str!("../../../web/src/runs.ts")),
+    ("settings.ts", include_str!("../../../web/src/settings.ts")),
+];
 
 /// Every runnable command, `wt new` style, without hidden ones (internal helpers).
 fn commands() -> BTreeSet<String> {
@@ -72,14 +80,16 @@ fn rows() -> Vec<Row> {
         .collect()
 }
 
-/// The web app's actions: the keys of `const ACTIONS = { … } as const;` in `web/src/app.ts`.
+/// The web app's actions: the keys of each source's `const ACTIONS = { … } as const;`.
 fn web_actions() -> BTreeSet<String> {
-    let start = WEB_APP.find("const ACTIONS = {").expect("web/src/app.ts has `const ACTIONS`");
-    let body = &WEB_APP[start..];
-    let body = &body[..body.find("} as const;").expect("ACTIONS ends with `} as const;`")];
-    body.lines()
-        .filter_map(|l| l.trim().strip_prefix('"')?.split_once("\":").map(|(k, _)| k.to_owned()))
-        .collect()
+    let mut out = BTreeSet::new();
+    for (file, src) in WEB_SOURCES {
+        let start = src.find("const ACTIONS = {").unwrap_or_else(|| panic!("web/src/{file} has `const ACTIONS`"));
+        let body = &src[start..];
+        let body = &body[..body.find("} as const;").unwrap_or_else(|| panic!("ACTIONS in web/src/{file} ends with `}} as const;`"))];
+        out.extend(body.lines().filter_map(|l| l.trim().strip_prefix('"')?.split_once("\":").map(|(k, _)| k.to_owned())));
+    }
+    out
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -135,7 +145,7 @@ fn classify(cell: &str, client: Client, web: &BTreeSet<String>) -> Result<Path, 
             Err(format!("{action:?} is not a TUI action (crates/ptyro-tui/src/keymap.rs ACTIONS)"))
         }
         (false, false, Client::Web) => {
-            Err(format!("{action:?} is not a web action (ACTIONS in web/src/app.ts)"))
+            Err(format!("{action:?} is not a web action (ACTIONS in web/src/*.ts)"))
         }
     }
 }

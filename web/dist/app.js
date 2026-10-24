@@ -3,6 +3,15 @@
 // protocol (JSON encoding) over `ptyro serve`'s WebSocket, signed in with a device token from
 // `ptyro pair`. No dependencies, no third-party requests.
 import { Screen } from "./screen.js";
+import { conn, token } from "./conn.js";
+import { css, F } from "./color.js";
+import { actions, ago, h, patch, tipOf, ui, views } from "./kit.js";
+import { loadAll, onEvent } from "./data.js";
+import "./projects.js";
+import "./review.js";
+import "./runs.js";
+import "./settings.js";
+import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
 // What this app does, by name: the Web column of docs/parity.md names these, and `make parity`
 // checks every name it uses is here (SPEC §1.3, ROADMAP WEB1). Each is its control's tooltip.
 const ACTIONS = {
@@ -18,8 +27,7 @@ const ACTIONS = {
     "pair": "Pair this device with the link or QR code from `ptyro pair`",
     "unpair": "Forget this device's pairing",
 };
-const tip = (a) => ACTIONS[a];
-const PROTO = { major: 1, minor: 8 };
+const tip = actions(ACTIONS);
 // ── storage: the token lives in localStorage (page) and IndexedDB (the service worker) ────────
 const db = () => new Promise((ok, err) => {
     const r = indexedDB.open("ptyro", 1);
@@ -76,116 +84,7 @@ function useToken(t) {
     if (conn.state === "rejected" || !conn.ws)
         conn.connect();
 }
-const token = () => localStorage.getItem("ptyro.token");
-class Conn {
-    ws = null;
-    nextId = 1;
-    pending = new Map();
-    listeners = new Set();
-    state = "closed";
-    reason = "";
-    backoff = 500;
-    onState = () => { };
-    connect() {
-        const t = token();
-        if (!t)
-            return;
-        this.state = "connecting";
-        this.onState();
-        const ws = new WebSocket(location.origin.replace(/^http/, "ws") + "/ws");
-        this.ws = ws;
-        ws.onopen = () => {
-            ws.send(JSON.stringify({ t: "hello", proto: PROTO, client: { kind: "web", version: "web", pid: 0, token: t }, features: [] }));
-        };
-        ws.onmessage = (ev) => {
-            let msg;
-            try {
-                msg = JSON.parse(typeof ev.data === "string" ? ev.data : "");
-            }
-            catch {
-                return;
-            }
-            if (msg.t === "welcome") {
-                this.state = "open";
-                this.backoff = 500;
-                this.onState();
-                ws.send(JSON.stringify({ t: "watch_events" }));
-                for (const l of this.listeners)
-                    l({ t: "connected" });
-            }
-            else if (msg.t === "reject") {
-                this.state = "rejected";
-                this.reason = msg.reason;
-                this.onState();
-            }
-            else if (msg.t === "response") {
-                const p = this.pending.get(msg.id);
-                if (p) {
-                    this.pending.delete(msg.id);
-                    p(msg.outcome);
-                }
-            }
-            else if (msg.t === "goodbye") {
-                this.reason = msg.reason;
-                this.backoff = 300; // an upgrade: the next image answers in a moment
-            }
-            else {
-                for (const l of this.listeners)
-                    l(msg);
-            }
-        };
-        ws.onclose = () => {
-            if (this.ws !== ws)
-                return; // replaced by a newer connection (a new pairing)
-            for (const p of this.pending.values())
-                p({ t: "err", error: { code: "daemon_unavailable", message: "connection lost" } });
-            this.pending.clear();
-            if (this.state === "rejected")
-                return;
-            this.state = "closed";
-            this.onState();
-            setTimeout(() => this.connect(), this.backoff);
-            this.backoff = Math.min(this.backoff * 2, 10_000);
-        };
-    }
-    send(msg) {
-        if (this.ws?.readyState === WebSocket.OPEN)
-            this.ws.send(JSON.stringify(msg));
-    }
-    request(req) {
-        return new Promise((ok, err) => {
-            if (this.state !== "open")
-                return err(new Error("not connected"));
-            const id = this.nextId++;
-            this.pending.set(id, (o) => (o.t === "ok" ? ok(o.reply) : err(Object.assign(new Error(o.error.message), { code: o.error.code }))));
-            this.send({ t: "request", id, req });
-        });
-    }
-}
-const conn = new Conn();
 // ── drawing ─────────────────────────────────────────────────────────────────────────────────
-const BASE16 = [
-    "#1b1f24", "#ff7b72", "#3fb950", "#d29922", "#58a6ff", "#bc8cff", "#39c5cf", "#c9d1d9",
-    "#6e7681", "#ffa198", "#56d364", "#e3b341", "#79c0ff", "#d2a8ff", "#56d4dd", "#f0f6fc",
-];
-function indexed(i) {
-    if (i < 16)
-        return BASE16[i];
-    if (i < 232) {
-        const n = i - 16, l = [0, 95, 135, 175, 215, 255];
-        return `rgb(${l[Math.floor(n / 36)]},${l[Math.floor(n / 6) % 6]},${l[n % 6]})`;
-    }
-    const g = 8 + (i - 232) * 10;
-    return `rgb(${g},${g},${g})`;
-}
-function css(c, fallback) {
-    if (!c || c.t === "default")
-        return fallback;
-    if (c.t === "indexed")
-        return indexed(c.i);
-    return `rgb(${c.r},${c.g},${c.b})`;
-}
-const F = { BOLD: 1, DIM: 2, ITALIC: 4, UNDERLINE: 8, INVERSE: 256, HIDDEN: 512, STRIKE: 1024 };
 function draw(canvas, s, fit) {
     const wrap = canvas.parentElement;
     const dpr = window.devicePixelRatio || 1;
@@ -252,33 +151,6 @@ function draw(canvas, s, fit) {
         ctx.globalAlpha = 1;
     }
 }
-function h(tag, attrs = {}, ...kids) {
-    const el = document.createElement(tag);
-    for (const [k, v] of Object.entries(attrs)) {
-        if (k.startsWith("on") && typeof v === "function")
-            el.addEventListener(k.slice(2), v);
-        else if (k === "class")
-            el.className = v;
-        else if (v === true)
-            el.setAttribute(k, "");
-        else if (v !== false && v != null)
-            el.setAttribute(k, String(v));
-    }
-    for (const c of kids)
-        if (c)
-            el.append(c);
-    return el;
-}
-function ago(ms) {
-    const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
-    if (s < 60)
-        return `${s}s`;
-    if (s < 3600)
-        return `${Math.floor(s / 60)}m`;
-    if (s < 86400)
-        return `${Math.floor(s / 3600)}h`;
-    return `${Math.floor(s / 86400)}d`;
-}
 const GLYPH = { working: "●", blocked: "⚠", idle: "○", done: "✓", errored: "✗", starting: "◌", unknown: "·" };
 function statusOf(s) {
     if (s.state.t === "exited" || s.state.t === "failed")
@@ -302,6 +174,7 @@ const app = {
     toast: "",
 };
 const root = document.getElementById("app");
+/// `#/s/<id>` a session, `#/inbox`, `#/<name>/<rest>` a registered view (kit.ts), else the list.
 function route() {
     const m = location.hash.match(/^#\/s\/(.+)$/);
     if (m) {
@@ -314,7 +187,19 @@ function route() {
     }
     if (location.hash === "#/inbox")
         return { view: "inbox" };
+    const v = location.hash.match(/^#\/([a-z]+)(?:\/(.*))?$/);
+    if (v && views.has(v[1]))
+        return { view: v[1], id: v[2] ?? "" };
     return { view: "list" };
+}
+/// The tabs along the bottom of a top-level page; the active one is the page's.
+const TABS = [["list", "#/", "Sessions"], ["p", "#/p", "Projects"], ["runs", "#/runs", "Runs"], ["sets", "#/sets", "Sets"], ["more", "#/more", "More"]];
+function withTabs(view, page) {
+    if (!TABS.some(([v]) => v === view))
+        return page;
+    page.classList.add("tabbed");
+    page.append(h("nav", { class: "tabs" }, ...TABS.map(([v, href, label]) => h("a", { href, class: v === view ? "on" : "" }, label))));
+    return page;
 }
 async function refresh() {
     try {
@@ -351,25 +236,35 @@ async function answer(id, decision) {
             toast(e.message);
     }
 }
-function header(title, back) {
+/// `back`: true goes to the session list; a string is where it goes instead.
+function header(title, back, ...extra) {
     const unread = app.inbox.filter((e) => !e.read_ms).length;
     const dot = h("span", { class: `dot ${conn.state}`, title: conn.state });
-    return h("header", {}, back ? h("a", { class: "back", href: "#/" }, "‹") : h("img", { class: "logo", src: "/icon.svg", alt: "" }), h("h1", {}, title), dot, h("a", { class: "inbox-link", href: "#/inbox", title: tip("inbox") }, "✉", unread ? h("b", {}, String(unread)) : null), h("button", { class: "icon", title: tip("notifications"), onclick: () => void enablePush() }, "🔔"));
+    return h("header", {}, back ? h("a", { class: "back", href: typeof back === "string" ? back : "#/", "aria-label": "Back" }, "‹") : h("img", { class: "logo", src: "/icon.svg", alt: "" }), h("h1", {}, title), ...extra, dot, h("a", { class: "inbox-link", href: "#/inbox", title: tip("inbox") }, "✉", unread ? h("b", {}, String(unread)) : null), h("button", { class: "icon", title: tip("notifications"), onclick: () => void enablePush() }, "🔔"));
 }
 function sessionCard(s) {
     const st = statusOf(s);
     const detail = s.status?.status === "blocked" ? s.status.detail ?? s.attention?.text : s.activity ?? s.status?.detail ?? s.title;
-    const card = h("a", { class: `card ${st}`, href: `#/s/${encodeURIComponent(s.id)}`, title: tip("session.open") }, h("span", { class: "glyph" }, GLYPH[st] ?? "·"), h("div", { class: "main" }, h("div", { class: "name" }, s.name, s.agent ? h("small", {}, ` ${s.agent}`) : null), h("div", { class: "sub" }, [st, s.project, s.worktree].filter(Boolean).join(" · ")), detail ? h("div", { class: "detail" }, detail) : null), h("time", {}, s.status ? ago(s.status.since_ms) : ago(s.created_ms)));
+    const card = h("a", { class: `card ${st}${selecting && marked.has(s.id) ? " picked" : ""}`, href: selecting ? "#/" : `#/s/${encodeURIComponent(s.id)}`, title: tip("session.open"),
+        onclick: selecting ? (e) => { e.preventDefault(); if (!marked.delete(s.id))
+            marked.add(s.id); render(); } : undefined }, h("span", { class: "glyph" }, selecting ? (marked.has(s.id) ? "☑" : "☐") : GLYPH[st] ?? "·"), h("div", { class: "main" }, h("div", { class: "name" }, s.name, s.agent ? h("small", {}, ` ${s.agent}`) : null), h("div", { class: "sub" }, [st, s.project, s.worktree].filter(Boolean).join(" · ")), detail ? h("div", { class: "detail" }, detail) : null), h("time", {}, s.status ? ago(s.status.since_ms) : ago(s.created_ms)));
     if (s.status?.status === "blocked" && s.state.t === "running") {
         return h("div", { class: "blocked-wrap" }, card, h("div", { class: "actions", title: tip("answer") }, h("button", { class: "allow", onclick: () => void answer(s.id, "allow") }, "Allow"), h("button", { class: "deny", onclick: () => void answer(s.id, "deny") }, "Deny")));
     }
     return card;
 }
+/// Marking sessions to type into several at once (`broadcast`).
+let selecting = false;
 function listView() {
     const order = ["blocked", "errored", "working", "starting", "done", "idle", "unknown", "shell", "dormant", "exited"];
-    const all = [...app.sessions.values()].sort((a, b) => order.indexOf(statusOf(a)) - order.indexOf(statusOf(b)) || a.name.localeCompare(b.name));
-    const body = all.length ? all.map(sessionCard) : [h("p", { class: "empty" }, "No sessions. Start one with `ptyro new` on your computer.")];
-    return h("div", {}, header("ptyro", false), h("main", { class: "list", title: tip("sessions") }, ...body));
+    const all = [...app.sessions.values()].filter((s) => !s.quick).sort((a, b) => order.indexOf(statusOf(a)) - order.indexOf(statusOf(b)) || a.name.localeCompare(b.name));
+    const body = all.length ? all.map(sessionCard) : [h("div", { class: "empty" }, h("p", {}, "Nothing is running."), h("button", { class: "primary", title: tipOf("session.new"), onclick: () => newTask() }, "Start a task"))];
+    const picked = [...marked].filter((id) => app.sessions.has(id));
+    const tools = selecting
+        ? h("div", { class: "select-bar" }, h("span", {}, `${picked.length} selected`), h("button", { class: "small primary", disabled: !picked.length, title: tipOf("session.broadcast"), onclick: () => { broadcast(picked); selecting = false; render(); } }, "Type to them"), h("button", { class: "small", onclick: () => { selecting = false; marked.clear(); render(); } }, "Cancel"))
+        : null;
+    const head = header("ptyro", false, all.length > 1 ? h("button", { class: "icon", title: tipOf("session.broadcast"), onclick: () => { selecting = true; render(); } }, "☑") : null, h("button", { class: "icon plus", title: tipOf("session.new"), "aria-label": "New task", onclick: () => newTask() }, "＋"));
+    return h("div", {}, head, tools, h("main", { class: "list", title: tip("sessions") }, ...body, h("a", { class: "foot-link", href: "#/history", title: tipOf("session.history") }, "Earlier sessions")));
 }
 function inboxView() {
     const items = app.inbox.map((e) => h("a", { class: `entry ${e.read_ms ? "read" : ""}`, href: `#/s/${encodeURIComponent(e.session)}` }, h("span", { class: `kind ${e.kind}` }, e.kind), h("div", { class: "main" }, h("div", { class: "name" }, e.title), h("div", { class: "detail" }, e.body)), h("time", {}, ago(e.at_ms))));
@@ -383,22 +278,6 @@ function sendKey(id, code, mods = 0) {
     conn.send({ t: "input", session: id, event: { t: "key", key: { code, mods } } });
 }
 let shell = null;
-/// Make `kids` the children of `parent`, in order, without moving nodes already there in that
-/// order (a moved node loses focus and composition).
-function patch(parent, kids) {
-    const keep = new Set(kids);
-    for (const c of [...parent.childNodes])
-        if (!keep.has(c))
-            c.remove();
-    let at = parent.firstChild;
-    for (const k of kids) {
-        if (k === at) {
-            at = at.nextSibling;
-            continue;
-        }
-        parent.insertBefore(k, at);
-    }
-}
 function sessionShell(id) {
     if (shell?.id === id)
         return shell;
@@ -449,7 +328,7 @@ function sessionView(id) {
     if (chat)
         updateChat(id, sh);
     patch(sh.el, [
-        header(s.name, true),
+        header(s.name, true, h("button", { class: "icon", title: tipOf("session.menu"), "aria-label": "More", onclick: () => sessionMenu(s) }, "⋯")),
         h("div", { class: `pill ${st}` }, GLYPH[st] ?? "·", " ", st, s.status?.detail && !blocked ? ` · ${s.status.detail}` : "", s.status ? ` · ${ago(s.status.since_ms)}` : ""),
         ...(blocked ? [h("section", { class: "prompt" }, h("div", {}, h("b", {}, s.status?.kind === "permission" ? "Wants permission" : "Waiting for you"), s.held ? h("span", { class: "tag", title: "answers go to the agent as a decision" }, "exact") : null), h("pre", {}, s.status?.detail ?? s.attention?.text ?? ""), h("div", { class: "actions", title: tip("answer") }, h("button", { class: "allow", onclick: () => void answer(id, "allow") }, "Allow"), h("button", { class: "always", onclick: () => void answer(id, "always") }, "Always"), h("button", { class: "deny", onclick: () => void answer(id, "deny") }, "Deny")))] : []),
         chat ? sh.chat : sh.termWrap,
@@ -546,7 +425,7 @@ function render() {
     const r = route();
     if (r.view !== "session" || r.id !== app.viewing)
         subscribe(r.view === "session" ? r.id : null);
-    const view = r.view === "session" ? sessionView(r.id) : r.view === "inbox" ? inboxView() : listView();
+    const view = withTabs(r.view, r.view === "session" ? sessionView(r.id) : r.view === "inbox" ? inboxView() : views.has(r.view) ? views.get(r.view)(r.id ?? "") : listView());
     if (root.firstChild !== view || root.childNodes.length !== 1)
         root.replaceChildren(view);
     const t = app.toast ? h("div", { class: "toast" }, app.toast) : null;
@@ -622,6 +501,7 @@ conn.listeners.add((msg) => {
             conn.send({ t: "subscribe", session: app.viewing, size: null, control: false });
         }
         void refresh();
+        void loadAll();
         return;
     }
     if (msg.t === "chat") {
@@ -655,6 +535,10 @@ conn.listeners.add((msg) => {
     }
     if (msg.t === "event") {
         const e = msg.event;
+        if (onEvent(e)) {
+            render();
+            return;
+        }
         if (e.info && (e.t === "session_created" || e.t === "session_updated" || e.t === "session_exited" || e.t === "session_restarted")) {
             app.sessions.set(e.info.id, e.info);
             if (e.t === "session_restarted" && e.info.id === app.viewing) {
@@ -675,7 +559,11 @@ conn.listeners.add((msg) => {
         }
     }
 });
+useSessions(() => app.sessions);
 conn.onState = render;
+ui.render = render;
+ui.toast = toast;
+ui.header = header;
 window.addEventListener("hashchange", () => { takePairCode(); render(); });
 window.addEventListener("resize", paint);
 takePairCode();

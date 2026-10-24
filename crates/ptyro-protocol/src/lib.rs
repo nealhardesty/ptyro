@@ -32,7 +32,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 13 };
+pub const PROTO: Version = Version { major: 1, minor: 14 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -573,6 +573,18 @@ pub enum Request {
         unmute: bool,
     },
     Usage,
+    /// The agents a session can run (built-in and configured) and which is the default, for
+    /// clients that don't read the config themselves (the web app's new-session form).
+    Agents,
+    /// A session's recording as screen frames, to play back (`ptyro replay`, for the web).
+    Replay {
+        addr: String,
+    },
+    /// A session's recording as `asciicast` or `text` (`ptyro export`, for the web).
+    Export {
+        addr: String,
+        format: String,
+    },
     /// Send a test notification through every configured channel and sink.
     NotifyTest,
 
@@ -988,6 +1000,36 @@ pub struct DaemonStatus {
     pub metrics: Option<Metrics>,
 }
 
+/// An agent a session can run (`Request::Agents`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentChoice {
+    pub name: String,
+    /// The program it runs.
+    pub program: String,
+    /// The program is on `PATH`.
+    pub installed: bool,
+}
+
+/// One step of a replay: the screen at `at_ms` into the recording, as a keyframe or the changes
+/// since the step before.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReplayStep {
+    pub at_ms: u64,
+    pub keyframe: bool,
+    pub delta: ScreenDelta,
+}
+
+/// A recording to play back (`Request::Replay`), sampled to a few hundred steps.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReplayDoc {
+    pub size: TermSize,
+    pub duration_ms: u64,
+    pub steps: Vec<ReplayStep>,
+    /// The recording was longer than what fits in one reply: this is its start.
+    #[serde(default)]
+    pub truncated: bool,
+}
+
 /// What the daemon's watchdog measures (M8.5).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Metrics {
@@ -1112,6 +1154,17 @@ pub enum Reply {
     },
     Usage {
         usage: Vec<Usage>,
+    },
+    Agents {
+        agents: Vec<AgentChoice>,
+        default: String,
+    },
+    Replay {
+        replay: ReplayDoc,
+    },
+    /// A document as text (an export, a file).
+    Text {
+        text: String,
     },
     /// What a notification test did, per channel.
     Notified {
@@ -1463,6 +1516,9 @@ pub enum ServerMsg {
         #[serde(default)]
         features: Vec<String>,
         started_ms: u64,
+        /// What a paired device may do (1.14); absent for a local client, which may do anything.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<Scope>,
     },
     Reject {
         reason: String,

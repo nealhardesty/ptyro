@@ -38,7 +38,18 @@ export interface Session {
   created_ms: number;
   title?: string | null;
   held?: boolean;
-  structured?: { protocol: string } | null;
+  structured?: string | null;
+  task?: string | null;
+  last_reply?: string | null;
+  inner_agent?: string | null;
+  quick?: boolean;
+  profile?: string;
+  run?: string | null;
+  summary?: { text: string; turn: number; at_ms: number } | null;
+  verify?: { check: string; [k: string]: any } | null;
+  command?: { text?: string | null; exit?: number | null } | null;
+  ports?: number[];
+  turns?: number;
 }
 export interface InboxEntry { id: number; session: string; session_name: string; at_ms: number; kind: string; title: string; body: string; read_ms?: number | null }
 export type Outcome = { t: "ok"; reply: any } | { t: "err"; error: { code: string; message: string } };

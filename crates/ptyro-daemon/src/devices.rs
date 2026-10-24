@@ -110,6 +110,9 @@ pub fn needed(req: &Request) -> Scope {
         | WorktreeArchives { .. }
         | Branches { .. }
         | ProfileList
+        | Agents
+        | Replay { .. }
+        | Export { .. }
         | ReviewList { .. }
         | ReviewQueue
         | PrGet { .. }

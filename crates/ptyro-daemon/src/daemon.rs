@@ -1120,6 +1120,14 @@ impl Daemon {
                 Ok(Reply::Events { events })
             }
             Request::Doctor => Ok(Reply::Doctor { report: self.doctor() }),
+            Request::Agents => {
+                let (agents, default) = self.agent_choices();
+                Ok(Reply::Agents { agents, default })
+            }
+            Request::Replay { addr } => Ok(Reply::Replay { replay: self.replay(&addr)? }),
+            Request::Export { addr, format } => {
+                Ok(Reply::Text { text: self.export(&addr, &format)? })
+            }
             Request::SelfTest { adapter } => {
                 Ok(Reply::SelfTest { result: self.self_test(&adapter).await? })
             }

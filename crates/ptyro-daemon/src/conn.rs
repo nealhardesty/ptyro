@@ -109,6 +109,7 @@ pub async fn serve(daemon: Arc<Daemon>, stream: UnixStream, pid: Option<u32>) {
         client_id: id,
         features: if compress { vec![ptyro_protocol::FEATURE_ZSTD.into()] } else { vec![] },
         started_ms: daemon.started_ms,
+        scope: grant.map(|g| g.scope),
     };
     let Ok(b) = encode(&welcome, enc) else { return };
     if framed.send(b).await.is_err() {

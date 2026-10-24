@@ -48,11 +48,31 @@ use crate::cli::Ctx;
 type Body = Full<Bytes>;
 
 /// The web app, built from `web/src` by `make web` (committed, so a plain `cargo build` has it).
+macro_rules! js {
+    ($name:literal) => {
+        (
+            concat!("/", $name, ".js"),
+            "text/javascript; charset=utf-8",
+            include_bytes!(concat!("../../../web/dist/", $name, ".js")),
+        )
+    };
+}
+
 const ASSETS: &[(&str, &str, &[u8])] = &[
     ("/", "text/html; charset=utf-8", include_bytes!("../../../web/dist/index.html")),
     ("/index.html", "text/html; charset=utf-8", include_bytes!("../../../web/dist/index.html")),
-    ("/app.js", "text/javascript; charset=utf-8", include_bytes!("../../../web/dist/app.js")),
-    ("/screen.js", "text/javascript; charset=utf-8", include_bytes!("../../../web/dist/screen.js")),
+    js!("app"),
+    js!("color"),
+    js!("conn"),
+    js!("data"),
+    js!("flow"),
+    js!("kit"),
+    js!("projects"),
+    js!("review"),
+    js!("runs"),
+    js!("screen"),
+    js!("sessions"),
+    js!("settings"),
     ("/sw.js", "text/javascript; charset=utf-8", include_bytes!("../../../web/dist/sw.js")),
     ("/style.css", "text/css; charset=utf-8", include_bytes!("../../../web/dist/style.css")),
     (

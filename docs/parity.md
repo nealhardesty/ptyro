@@ -27,28 +27,28 @@ and why.
 
 | Command | In the TUI | On the web |
 |---|---|---|
-| `new` | `session.new` (`n`): say what to do, ⏎ (or `C-o` to pick the agent, a shell or a command, and where); `worktree.new` (`N`) for a new worktree | gap: WEB1.2 (sessions) |
+| `new` | `session.new` (`n`): say what to do, ⏎ (or `C-o` to pick the agent, a shell or a command, and where); `worktree.new` (`N`) for a new worktree | `session.new` (＋ in the session list): the task, the agent, and where: a new worktree (from the main branch, a PR, an issue, a branch or your changes), an existing one, or a shell or command |
 | `attach` | `session.find` (`/`), the sidebar (`Tab`, `⏎`), `1`–`9`, `j`/`k` | `session.open`: tap it in the list; its live screen, or its chat |
 | `list` | `focus.toggle`: the sidebar lists every session with its status; `session.find` (`/`) searches them | `sessions`: every session with its status, who needs you first |
-| `stop` | `session.stop` (`x`) | gap: WEB1.2 (sessions) |
-| `kill` | `session.kill` (`X`) | gap: WEB1.2 (sessions) |
-| `restart` | `session.restart` (`C-r`, or `⏎` on an exited pane) | gap: WEB1.2 (sessions) |
-| `rm` | `session.stop` (`x`) on an exited session | gap: WEB1.2 (sessions) |
-| `rename` | `session.rename` (`,`) | gap: WEB1.2 (sessions) |
-| `retitle` | `session.retitle` (`,` then `C-t`) | gap: WEB1.2 (sessions) |
-| `resume` | `session.resume` (or `⏎` on a dormant pane) | gap: WEB1.2 (sessions) |
-| `hibernate` | `session.hibernate` | gap: WEB1.2 (sessions) |
-| `convert` | `session.convert` (the row menu, the palette) | gap: WEB1.2 (sessions) |
-| `adopt` | `session.adopt` (`A` on a shell row running Claude) | gap: WEB1.2 (sessions) |
-| `shell` | `shell.here` (`C-t`, `!`; `⏎` on its `›_ shell` line): the worktree's quick terminal in a drawer below the pane; again focuses it, then hides it. `--read` is `copy.enter` (`[`) in the drawer | gap: WEB1.2 (sessions) |
-| `summarize` | `session.summarize` (the row menu, the palette); with `[summaries] enabled` the sidebar shows one (`≈`) after every turn | gap: WEB1.2 (sessions) |
+| `stop` | `session.stop` (`x`) | `session.stop`: the session's ⋯ menu |
+| `kill` | `session.kill` (`X`) | `session.kill`: the session's ⋯ menu |
+| `restart` | `session.restart` (`C-r`, or `⏎` on an exited pane) | `session.restart`: the session's ⋯ menu |
+| `rm` | `session.stop` (`x`) on an exited session | `session.stop`: ⋯ on an exited session removes it |
+| `rename` | `session.rename` (`,`) | `session.rename`: the session's ⋯ menu |
+| `retitle` | `session.retitle` (`,` then `C-t`) | `session.retitle`: the session's ⋯ menu |
+| `resume` | `session.resume` (or `⏎` on a dormant pane) | `session.resume`: the session's ⋯ menu |
+| `hibernate` | `session.hibernate` | `session.hibernate`: the session's ⋯ menu |
+| `convert` | `session.convert` (the row menu, the palette) | `session.convert`: ⋯ → Show as a chat / the terminal UI |
+| `adopt` | `session.adopt` (`A` on a shell row running Claude) | `session.adopt`: ⋯ on a shell running Claude |
+| `shell` | `shell.here` (`C-t`, `!`; `⏎` on its `›_ shell` line): the worktree's quick terminal in a drawer below the pane; again focuses it, then hides it. `--read` is `copy.enter` (`[`) in the drawer | `session.shell`: ⋯ → A shell in its worktree (a terminal page, with keys and a reply box); a worktree's page has it too |
+| `summarize` | `session.summarize` (the row menu, the palette); with `[summaries] enabled` the sidebar shows one (`≈`) after every turn | `session.summarize`: the session's ⋯ menu |
 | `status` | `session.explain` (`e` in the sidebar) says why; the sidebar and pane headers show the status | `sessions`: each card and the session's page say its status and why it waits |
 | `answer` | `peek` (`p`): `y` allow, `a` always, `n` deny | `answer`: Allow, Always or Deny on its card and its page (exact decisions for a held Claude prompt) |
-| `read` | `copy.enter` (`[`): the scrollback, searchable; the pane shows the screen | `session.open`: the live screen, or the chat (the scrollback: gap WEB1.2) |
+| `read` | `copy.enter` (`[`): the scrollback, searchable; the pane shows the screen | `session.open`: the live screen, or the chat; `session.scrollback` (⋯ → Scrollback) is its scrollback, searchable |
 | `send` | `peek` (`p`): type a reply; or type into the pane | `session.reply`: Enter sends, Shift+Enter starts a new line; `session.keys` for keys |
-| `broadcast` | `broadcast` (`b`): mark sessions with `Space` in the sidebar first | gap: WEB1.2 (sessions) |
+| `broadcast` | `broadcast` (`b`): mark sessions with `Space` in the sidebar first | `session.broadcast`: ☑ in the session list, pick sessions, then type once |
 | `wait` | waived: for scripts; the TUI shows status changes as they happen and notifies you | waived: for scripts; the web app shows status changes as they happen and notifies you |
-| `events` | `inspector` (`D`), Events tab (`5`) | gap: WEB1.2 (sessions) |
+| `events` | `inspector` (`D`), Events tab (`5`) | `session.events`: ⋯ → Events |
 | `report` | waived: run by programs inside a session to report their own state | waived: run by programs inside a session to report their own state |
 
 ## Attention and notifications
@@ -56,7 +56,7 @@ and why.
 | Command | In the TUI | On the web |
 |---|---|---|
 | `inbox` | `inbox` (`i`) | `inbox`; `inbox.read` marks it read |
-| `mute` | `session.mute`; a whole project or workspace: `project.mute`, `workspace.mute` | gap: WEB1.2 (sessions) |
+| `mute` | `session.mute`; a whole project or workspace: `project.mute`, `workspace.mute` | `session.mute`: ⋯ → Mute notifications |
 | `notify test` | `notify.test` | gap: WEB1.6 (settings and health) |
 | `usage` | shown: the status bar and the sidebar title show the rate limits of the focused session's profile | gap: WEB1.6 (settings and health) |
 | `integrations ls` | `integrations` (in a split); the health badge says what's missing | gap: WEB1.6 (settings and health) |
@@ -166,7 +166,7 @@ and why.
 | `recipe graph` | waived: draws a recipe as Mermaid text for documents | waived: draws a recipe as Mermaid text for documents |
 | `gate ls` | `runs` (`O`): open gates show on their run; the status bar counts them | gap: WEB1.5 (runs and change sets) |
 | `gate resolve` | `runs` (`O`): `1`–`9` answer, `n` with a note | gap: WEB1.5 (runs and change sets) |
-| `msg send` | `session.message`; to a change set's members, `sets` `m` | gap: WEB1.2 (sessions) |
+| `msg send` | `session.message`; to a change set's members, `sets` `m` | `session.message`: ⋯ → Message |
 | `msg check` | waived: an agent's own mailbox; your messages reach the inbox | waived: an agent's own mailbox; your messages reach the inbox |
 | `msg ls` | `inbox` (`i`): messages to you | `inbox`: messages to you |
 | `msg ack` | waived: an agent acknowledging its own mail | waived: an agent acknowledging its own mail |
@@ -177,7 +177,7 @@ and why.
 | `checkpoint ls` | `checkpoint.list` | gap: WEB1.3 (worktrees and projects) |
 | `checkpoint diff` | `checkpoint.diff` | gap: WEB1.3 (worktrees and projects) |
 | `checkpoint restore` | `checkpoint.restore` (it asks first, in a split) | gap: WEB1.3 (worktrees and projects) |
-| `verify` | `session.verify` | gap: WEB1.2 (sessions) |
+| `verify` | `session.verify` | `session.verify`: ⋯ → Verify when done |
 | `mcp` | waived: the MCP server a lead agent talks to; ptyro starts it for the agent | waived: the MCP server a lead agent talks to; ptyro starts it for the agent |
 
 ## Change sets
@@ -226,8 +226,8 @@ and why.
 | `devices revoke` | `devices.revoke` | gap: WEB1.6 (settings and health) |
 | `devices push-test` | `devices.push_test` | `notifications`: turning them on sends this device a test |
 | `proxy` | waived: the bridge `--remote` runs over ssh on the other machine | waived: the bridge `--remote` runs over ssh between two computers |
-| `replay` | `session.replay` (plays in a split) | gap: WEB1.2 (sessions) |
-| `export` | `session.export`: the format and the file | gap: WEB1.2 (sessions) |
+| `replay` | `session.replay` (plays in a split) | `session.replay`: ⋯ → Replay: its recording as a player with a scrubber and speeds; `session.history` lists earlier sessions |
+| `export` | `session.export`: the format and the file | `session.export`: ⋯ → Save its recording (text or asciicast, as a download) |
 
 ## Setup, config and the daemon
 

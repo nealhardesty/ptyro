@@ -32,6 +32,7 @@ mod summary;
 mod usage;
 mod verify;
 mod watchdog;
+mod web;
 mod worktrees;
 
 use std::fs::{DirBuilder, File, TryLockError};
