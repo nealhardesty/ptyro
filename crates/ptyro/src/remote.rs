@@ -22,13 +22,42 @@ pub async fn proxy(ctx: &Ctx) -> Result<i32, Error> {
 
 /// Where the web app is reached from a phone: `--url`, `[remote] public_url`, Tailscale HTTPS
 /// in front of the listen port, or the listen address itself.
-pub fn base_url(config: &Config, explicit: Option<String>) -> String {
+pub fn base_url(config: &Config, explicit: Option<String>, https: bool) -> String {
+    let scheme = if https { "https" } else { "http" };
     explicit
         .or_else(|| config.remote.public_url.clone())
         .or_else(|| tailscale_url(&config.remote.listen))
-        .unwrap_or_else(|| format!("http://{}", config.remote.listen))
+        .unwrap_or_else(|| format!("{scheme}://{}", config.remote.listen))
         .trim_end_matches('/')
         .to_owned()
+}
+
+/// What a running `ptyro serve` serves (`state/serve.json`), so `ptyro pair` points phones at
+/// it: its URL and, over HTTPS, its CA's fingerprint.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct Served {
+    pub pid: u32,
+    pub url: String,
+    pub ca_fingerprint: Option<String>,
+}
+
+pub fn record_serve(paths: &ptyro_core::paths::Paths, url: &str, ca: Option<&str>) {
+    let s =
+        Served { pid: std::process::id(), url: url.into(), ca_fingerprint: ca.map(str::to_owned) };
+    let _ = std::fs::create_dir_all(&paths.state);
+    let _ = std::fs::write(
+        paths.state.join("serve.json"),
+        serde_json::to_string(&s).unwrap_or_default(),
+    );
+}
+
+/// The running `ptyro serve`'s record, if it's still running.
+pub fn served(paths: &ptyro_core::paths::Paths) -> Option<Served> {
+    let s: Served =
+        serde_json::from_str(&std::fs::read_to_string(paths.state.join("serve.json")).ok()?)
+            .ok()?;
+    let pid = rustix::process::Pid::from_raw(i32::try_from(s.pid).ok()?)?;
+    rustix::process::test_kill_process(pid).is_ok().then_some(s)
 }
 
 /// `https://<machine>.<tailnet>.ts.net` when `tailscale serve` proxies to our port.
@@ -76,7 +105,14 @@ pub async fn pair(
         r => return Err(unexpected(r)),
     };
     let config = Config::load(&Config::path(&ctx.paths)).unwrap_or_default();
-    let base = base_url(&config, url);
+    // The running `ptyro serve`'s own address (it knows its flags); else what config implies.
+    let served = served(&ctx.paths);
+    let https = !(config.remote.insecure || config.remote.trusted_proxy);
+    let base = match (&url, &served) {
+        (None, Some(s)) if config.remote.public_url.is_none() => s.url.clone(),
+        _ => base_url(&config, url, https),
+    };
+    let ca = served.as_ref().and_then(|s| s.ca_fingerprint.clone());
     // What we print stays in scrollback and recordings, so it is a code the web app trades
     // (once, within minutes) for the token, never the token. It travels in the fragment:
     // browsers never send that to a server or put it in logs.
@@ -84,7 +120,7 @@ pub async fn pair(
     if json {
         println!(
             "{}",
-            serde_json::json!({ "device": device, "url": link, "expires_ms": expires_ms })
+            serde_json::json!({ "device": device, "url": link, "expires_ms": expires_ms, "ca": ca.as_ref().map(|f| serde_json::json!({ "url": format!("{base}/ca.crt"), "sha256": f })) })
         );
         return Ok(0);
     }
@@ -104,10 +140,21 @@ pub async fn pair(
              link is used or expires, so is the link. A plain terminal keeps it to you."
         );
     }
-    if !base.starts_with("https://") && !base.contains("127.0.0.1") && !base.contains("localhost") {
+    if let Some(f) = &ca {
+        println!(
+            "First time on this phone? Open {base}/ca.crt and trust it (iPhone: Settings → \
+             General → VPN & Device Management, then About → Certificate Trust Settings; Android: \
+             Settings → Security → Install a certificate). Its SHA-256 is {f}. docs/remote.md has \
+             the steps.\n"
+        );
+    } else if !base.starts_with("https://")
+        && !base.contains("127.0.0.1")
+        && !base.contains("localhost")
+    {
         eprintln!(
             "note: {base} isn't HTTPS, so phones won't install the app or show notifications. \
-             `ptyro serve --tailscale` puts Tailscale HTTPS in front (docs/remote.md)."
+             Drop `insecure` (ptyro speaks HTTPS by default), or put Tailscale HTTPS in front \
+             with `ptyro serve --tailscale` (docs/remote.md)."
         );
     }
     // Who claimed it tells the user it was their phone (a code read off a recording would

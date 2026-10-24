@@ -6,7 +6,7 @@ There are two ways in:
 | From | How | Auth | Encryption |
 |---|---|---|---|
 | Another computer | `ptyro --remote host …` (the CLI and the TUI) | your ssh login | ssh |
-| A phone or any browser | `ptyro serve` + the web app | a paired device token | Tailscale or TLS in front |
+| A phone or any browser | `ptyro serve` + the web app | a paired device token | HTTPS: ptyro's own certificate, or Tailscale's, or your proxy's |
 
 Everything is off until you turn it on. The daemon's clients reach it through a local socket;
 it opens a TCP port of its own only for approve/deny links in notifications, when you set
@@ -35,14 +35,48 @@ daemon's socket (starting it if needed). Frames are compressed (zstd) on this pa
 
 ## From your phone: `ptyro serve`
 
-### 1. Serve, with HTTPS in front
+### 1. Serve, over HTTPS
 
-Phones need HTTPS to install the app and to show notifications. With Tailscale this is one
-flag:
+Phones need HTTPS to install the app and to show notifications, and `ptyro serve` speaks it by
+default, with a certificate it makes. Pick how the phone reaches it:
 
 ```bash
-ptyro serve --tailscale          # listens on 127.0.0.1:7091 and runs `tailscale serve` for HTTPS
+ptyro serve --local       # your LAN (and tailnet): every interface, local addresses only, HTTPS
+ptyro serve --tailscale   # your tailnet: Tailscale's own HTTPS name and certificate in front
+ptyro serve               # this machine only (127.0.0.1:7091), HTTPS
 ```
+
+**ptyro's certificate.** The first time, `ptyro serve` makes a small certificate authority (CA)
+and a certificate it signs for this machine: `localhost`, its name (and `<name>.local`), its LAN
+and Tailscale addresses. They're kept in `~/.local/share/ptyro/serve/tls/` (the keys `0600`); the
+certificate is renewed before it ends, and when the machine's addresses change, and the CA stays
+the same. A phone trusts the CA once. `ptyro pair` says where it is (`https://<address>/ca.crt`)
+and its SHA-256, so you can check it's yours:
+
+- **iPhone, iPad:** open `https://<address>/ca.crt` in Safari and allow the download. Then
+  Settings → General → VPN & Device Management → *ptyro local CA* → Install, and Settings →
+  General → About → Certificate Trust Settings → turn on *ptyro local CA*.
+- **Android:** download it from the same address, then Settings → Security (or Security &
+  privacy) → More → Encryption & credentials → Install a certificate → CA certificate.
+- **A desktop browser:** add `ca.crt` to the system's trusted roots (macOS: Keychain Access →
+  System → drag it in → Always Trust), or accept the warning once.
+
+Then open the address `ptyro pair` shows. Anyone who could reach `serve` still needs a paired
+device's token; the certificate only keeps it private on the way.
+
+**Your own certificate.** `ptyro serve --cert fullchain.pem --key privkey.pem` (or
+`tls_cert` and `tls_key` under `[remote]`) uses a certificate you have, from Let's Encrypt or
+your company's CA, say: phones that trust its issuer need nothing installed, and there's no
+`/ca.crt`. The files are read again every 12 hours, so a renewed certificate is picked up.
+
+**`--local`** listens on every interface and lets in only this machine, private networks
+(10/8, 172.16/12, 192.168/16, IPv6 unique local), link-local addresses and tailnets
+(100.64.0.0/10); anyone else's connection is dropped before TLS. Set `local = true` under
+`[remote]` to keep it.
+
+**Tailscale.** `ptyro serve --tailscale` runs `tailscale serve` in front of `127.0.0.1:7091`: the
+phone gets Tailscale's HTTPS name and a certificate it already trusts, nothing to install. ptyro
+then speaks plain HTTP on loopback, where only `tailscale serve` reaches it.
 
 To keep it running, set `[remote] serve = true` in `~/.config/ptyro/config.toml`. The daemon
 then starts `ptyro serve` itself, restarts it if it dies, and keeps it through live upgrades.
@@ -51,15 +85,19 @@ Its log is `~/.local/state/ptyro/serve.log`.
 ```toml
 [remote]
 serve = true
-listen = "127.0.0.1:7091"   # loopback or a Tailscale address (100.64.0.0/10); others need insecure = true
+listen = "127.0.0.1:7091"   # loopback or a Tailscale address; `local = true` for your LAN
+# local = true              # every interface, local addresses only, over HTTPS
+# tls_cert = "~/certs/fullchain.pem"   # your own certificate instead of ptyro's (with tls_key)
+# tls_key = "~/certs/privkey.pem"
 # public_url = "https://workbox.tailnet.ts.net"   # what QR codes point at (found automatically with Tailscale)
 approval_wait = "10m"       # how long a held Claude permission prompt waits for your phone
 push = true                 # Web Push for the kinds in notifications.on
 # push_hosts = ["ntfy.example.com"]   # a self-hosted push service, besides the browsers' own
-# trusted_proxy = true     # a reverse proxy on this machine fronts serve (automatic for tailscale serve)
+# trusted_proxy = true     # a reverse proxy on this machine fronts serve (plain HTTP on loopback)
+# insecure = true          # plain HTTP, on any address: tokens cross the network in clear
 ```
 
-**Without Tailscale.** Put a TLS reverse proxy in front of `127.0.0.1:7091`. Caddy:
+**Your own reverse proxy.** Put a TLS proxy in front of `127.0.0.1:7091`. Caddy:
 
 ```caddyfile
 ptyro.example.com {
@@ -67,10 +105,14 @@ ptyro.example.com {
 }
 ```
 
-Set `public_url = "https://ptyro.example.com"` and `trusted_proxy = true`. The proxy must pass
-WebSocket upgrades on `/ws` (Caddy and nginx with `proxy_http_version 1.1` + `Upgrade` headers
-do). It refuses to listen on a non-loopback, non-Tailscale address unless you pass `--insecure`:
-on plain HTTP, tokens would cross the network in clear.
+Set `public_url = "https://ptyro.example.com"` and `trusted_proxy = true`: ptyro then speaks
+plain HTTP on loopback, where only the proxy reaches it (it refuses another address in that
+mode). The proxy must pass WebSocket upgrades on `/ws` (Caddy and nginx with
+`proxy_http_version 1.1` + `Upgrade` headers do).
+
+**Plain HTTP.** `--insecure` (or `insecure = true`) makes `ptyro serve` speak plain HTTP, on any
+address. Tokens then cross the network in clear, phones won't install the app or show
+notifications, and `ptyro doctor` (and the TUI's health badge) says so when it isn't loopback.
 
 **Client addresses behind a proxy.** The login lockout and the audit trail go by the client's
 address. With `trusted_proxy = true`, a request from loopback takes it from the *last*

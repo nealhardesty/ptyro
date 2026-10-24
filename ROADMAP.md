@@ -1634,7 +1634,7 @@ up), and `make parity` fails CI on a CLI command with neither a web path nor a w
   sets and their merge train. From the audit (42): `fanout`, `compare`, `pick`, `discard`,
   `iterate`, `run` (ls, show, events, cancel, retry, fork, lead), `recipe` (ls, show, run),
   `gate` (ls, resolve), and every `cs` command but the agents' own (23).
-- [ ] **WEB1.7 TLS by default for `ptyro serve`** (R-REM-11; owner, 2026-10-23) — M. Today
+- [x] **WEB1.7 TLS by default for `ptyro serve`** (R-REM-11; owner, 2026-10-23) — M. Today
   `serve` speaks plain HTTP on loopback or Tailscale and relies on Tailscale HTTPS or a reverse
   proxy for TLS; any other address needs `--insecure` (tokens in clear).
   - **Default: HTTPS with a certificate ptyro makes.** On first use, a small local CA and a
@@ -1650,13 +1650,31 @@ up), and `make parity` fails CI on a CLI command with neither a web path nor a w
     `--insecure` is plain HTTP anywhere, with the warning it has now.
   - **`--local`: the local network without Tailscale.** Listen on every interface, but accept
     only peers on loopback, private (RFC 1918, IPv6 ULA) and link-local addresses, over TLS.
-    Today that takes `--insecure`. *(Open: is `--local` "LAN peers only" as written here, or
-    "also loopback without TLS"? Decide in the task.)*
+    Today that takes `--insecure`. *(Decided 2026-10-23: LAN peers only, loopback and tailnets
+    included, always over TLS; plain HTTP stays `--insecure`'s.)*
   - The health badge and `ptyro doctor` flag a certificate that is about to expire, and a
     `serve` running on plain HTTP off loopback.
   - *Done when:* `ptyro serve --local` on a LAN, with the CA installed on a phone, installs the
     PWA and gets push with no browser warning. Tests cover certificate making and renewal, the
     peer filter, and HTTP being refused off loopback without `--insecure`.
+  - *Done (2026-10-23):* `crates/ptyro/src/tls.rs` and `serve`: HTTPS by default with a local
+    CA (made once, `ca.pem` never changes) and a server certificate it signs (397 days, renewed
+    with < 30 days left or a missing name, at start and every 12 h while running), `/ca.crt`,
+    `--local` (every interface, local peers only, over TLS), `--cert`/`--key` and `[remote]
+    tls_cert`/`tls_key` for your own (re-read every 12 h). Plain HTTP only behind `--tailscale`,
+    a detected `tailscale serve` or `trusted_proxy` (and then on loopback only), or with
+    `--insecure`. `ptyro pair` points at the running `serve`'s `https://` address
+    (`state/serve.json`) and says how to trust the CA, with its SHA-256; `docs/remote.md` has
+    the iPhone, Android and desktop steps. `ptyro doctor` and the health badge warn on plain
+    HTTP off loopback and on a certificate that wasn't renewed. Tests: certificate making,
+    renewal, a lost CA, key modes, the peer filter, names; `tests/m9.rs` speaks real TLS
+    (trusted for `localhost` and `127.0.0.1`, refused for another name, `/ca.crt`, plain HTTP
+    unanswered, the WebSocket over `wss://`, `pair`'s `https://` link) and serves your own
+    certificate. `curl` over this machine's LAN address with `serve --local`, trusting only the
+    CA, gets in. **Not checked here:** a real phone installing the PWA and getting push; that's
+    the owner's to try. **Dropped:** the pairing QR carrying the fingerprint for the page to
+    check, since a page can't see the certificate its own connection uses; `pair` prints the
+    fingerprint for you to compare in the phone's certificate details instead.
 - [ ] **WEB1.6 Settings and health** — M. Profiles and logins, workspaces, the health badge and
   its fixes, the config (validated as `ptyro config edit` does), quit (`app.quit`). From the
   audit (30): `notify test`, `usage`, `integrations` (ls, install, uninstall), `profile` (ls,

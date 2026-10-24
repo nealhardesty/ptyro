@@ -2688,7 +2688,7 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 | R-REM-06 | Port "portals": forward detected dev-server ports through the relay to the phone | Amp, cmux | M9 | M | ★ | new |
 | R-REM-07 | Publish the WebSocket protocol as a **stable, versioned API** with small TS/Python clients | Paseo SDK, OpenHands Agent Server | M9.2 | M | ★★ | new |
 | R-REM-08 | Phone → file/photo into the worktree, referenced in the prompt | Claude Remote Control | M9 | S | ★ | new |
-| R-REM-11 | **TLS by default for `serve`**: a self-made local CA and server certificate (phones install the CA once, offered at pairing); plain HTTP only behind Tailscale/a trusted proxy or with `--insecure`; `--local` admits only LAN peers | owner (2026-10-23) | WEB1 | M | ★★★ | → WEB1.7 (2026-10-23) |
+| R-REM-11 | **TLS by default for `serve`**: a self-made local CA and server certificate (phones install the CA once, offered at pairing); plain HTTP only behind Tailscale/a trusted proxy or with `--insecure`; `--local` admits only LAN peers | owner (2026-10-23) | WEB1 | M | ★★★ | **WEB1.7 done** (2026-10-23) |
 | R-REM-09 | **Share links**: `ptyro share <session> [--readonly\|--steer] [--ttl 1h] [--allow github:alice]` (upterm-style forge-key auth); status-aware sharing | upterm, sshx, Warp Oz, Happy multiplayer | M9 | M | ★★ | new |
 | R-REM-10 | Reconnect-transparent remote TUI (sequence-numbered stream, resend frame diff); optional predictive echo; document mosh/ET as transport | mosh, ET, sshx | M9.1 | M | ★★ | new |
 

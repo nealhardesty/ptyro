@@ -20,6 +20,7 @@ mod script;
 mod serve;
 mod service;
 mod ship;
+mod tls;
 mod tour;
 
 use std::path::PathBuf;
@@ -530,9 +531,21 @@ enum Cmd {
         /// Listen here (default `[remote] listen`, 127.0.0.1:7091)
         #[arg(long)]
         listen: Option<String>,
-        /// Also allow addresses other than loopback and Tailscale (plain HTTP: tokens in clear)
+        /// Plain HTTP instead of HTTPS, on any address (tokens in clear). Without it ptyro speaks
+        /// HTTPS with a certificate it makes; phones trust it once, from /ca.crt
         #[arg(long)]
         insecure: bool,
+        /// Listen on every interface, letting in only this machine, private networks and
+        /// tailnets (over HTTPS)
+        #[arg(long)]
+        local: bool,
+        /// Your own certificate (a PEM chain, leaf first) instead of the one ptyro makes; with
+        /// --key
+        #[arg(long, requires = "key")]
+        cert: Option<PathBuf>,
+        /// The key for --cert (PEM)
+        #[arg(long, requires = "cert")]
+        key: Option<PathBuf>,
         /// Put Tailscale HTTPS in front (`tailscale serve`), then print the URL to open
         #[arg(long)]
         tailscale: bool,

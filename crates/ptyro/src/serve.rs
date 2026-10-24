@@ -91,6 +91,8 @@ struct State {
     trust_proxy: bool,
     /// Host names (lowercase, no port) requests may carry besides IP addresses and localhost.
     hosts: Vec<String>,
+    /// The CA phones trust once (`/ca.crt`), when serving HTTPS.
+    ca_pem: Option<String>,
 }
 
 /// One login in progress (see [`State::begin`]); dropping it ends it.
@@ -143,6 +145,8 @@ pub async fn run(
     ctx: &Ctx,
     listen: Option<String>,
     insecure: bool,
+    local: bool,
+    own: Option<(std::path::PathBuf, std::path::PathBuf)>,
     tailscale: bool,
     managed: bool,
 ) -> Result<i32, Error> {
@@ -154,39 +158,132 @@ pub async fn run(
         .with_writer(std::io::stderr)
         .try_init();
     let config = Config::load(&Config::path(&ctx.paths)).unwrap_or_default();
-    let listen = listen.unwrap_or_else(|| config.remote.listen.clone());
+    let insecure = insecure || config.remote.insecure;
+    let local = local || config.remote.local;
+    let listen = listen.unwrap_or_else(|| match local {
+        // Every interface, on the configured port.
+        true => format!("0.0.0.0:{}", config.remote.listen.rsplit(':').next().unwrap_or("7091")),
+        false => config.remote.listen.clone(),
+    });
     let addr: SocketAddr = listen
         .parse()
         .map_err(|e| Error::invalid(format!("--listen {listen}: {e} (like 127.0.0.1:7091)")))?;
-    if !safe_address(addr.ip()) && !insecure && !config.remote.insecure {
+    // TLS ends before us (`tailscale serve`, a reverse proxy on this machine): plain HTTP, on
+    // loopback, where only that proxy reaches us. Else HTTPS, unless asked for plain HTTP.
+    let fronted = tailscale
+        || config.remote.trusted_proxy
+        || crate::remote::tailscale_url(&addr.to_string()).is_some();
+    let plain = insecure || fronted;
+    if plain && !insecure && !addr.ip().is_loopback() {
         return Err(Error::invalid(format!(
-            "{addr} isn't loopback or a Tailscale address: device tokens would cross the network \
-             in clear. Use Tailscale (`--tailscale`), a TLS reverse proxy to 127.0.0.1, or pass \
-             --insecure if you know the network"
+            "{addr}: behind Tailscale HTTPS or a reverse proxy, listen on 127.0.0.1 (the proxy \
+             reaches us there), or drop `trusted_proxy` to speak HTTPS on {addr} yourself"
         )));
     }
+    if !safe_address(addr.ip()) && !local && !insecure {
+        return Err(Error::invalid(format!(
+            "{addr} isn't loopback or a Tailscale address: `--local` lets in this machine, private \
+             networks and tailnets only (over HTTPS), and `--insecure` everyone, in clear"
+        )));
+    }
+    let tailnet = tailnet_names();
+    let mut cert_names: Vec<String> = tailnet.clone();
+    cert_names.extend(config.remote.public_url.iter().filter_map(|u| url_host(u)));
+    if !addr.ip().is_unspecified() {
+        cert_names.push(addr.ip().to_string());
+    }
+    let tls_dir = crate::tls::dir(&ctx.paths.data);
+    // Your own certificate (flags, else config), or the one ptyro makes.
+    let own = own.or_else(|| {
+        let (c, k) = (config.remote.tls_cert.as_ref()?, config.remote.tls_key.as_ref()?);
+        let path = ptyro_core::config::expand_home;
+        Some((path(c), path(k)))
+    });
+    let tls = match (&own, plain) {
+        (_, true) => None,
+        (Some((cert, key)), false) => Some(crate::tls::Tls {
+            config: crate::tls::from_files(cert, key)?,
+            ca_pem: String::new(),
+            ca_fingerprint: String::new(),
+            names: Vec::new(),
+        }),
+        (None, false) => {
+            let names = crate::tls::names_for(&cert_names);
+            Some(crate::tls::load_or_make(&tls_dir, &names, time::OffsetDateTime::now_utc())?)
+        }
+    };
+    let own_cert = own.is_some() && !plain;
+    // Listening means ready: the certificate exists before anyone can connect.
     let listener = TcpListener::bind(addr)
         .await
         .map_err(|e| Error::internal(format!("listen on {addr}: {e}")))?;
     if tailscale {
         tailscale_front(addr)?;
     }
+    // What phones open: an address they can reach (this machine's LAN address under --local).
+    let shown_addr = if addr.ip().is_unspecified() {
+        let lan = crate::tls::local_addresses().into_iter().find(|ip| !ip.is_loopback());
+        SocketAddr::new(lan.unwrap_or(IpAddr::from([127, 0, 0, 1])), addr.port())
+    } else {
+        addr
+    };
     let mut shown = config.clone();
-    shown.remote.listen = addr.to_string();
-    let base = crate::remote::base_url(&shown, None);
-    let fronted = crate::remote::tailscale_url(&shown.remote.listen).is_some();
+    shown.remote.listen = shown_addr.to_string();
+    let base = crate::remote::base_url(&shown, None, tls.is_some());
     let mut hosts: Vec<String> =
         config.remote.public_url.iter().chain([&base]).filter_map(|u| url_host(u)).collect();
-    hosts.extend(tailnet_names());
-    eprintln!(
-        "ptyro serve: listening on http://{addr}; phones open {base} (pair one with `ptyro pair`)"
-    );
+    hosts.extend(tailnet);
+    if let Some(t) = &tls {
+        hosts.extend(t.names.iter().cloned());
+    }
+    let ca = tls.as_ref().filter(|_| !own_cert).map(|t| t.ca_fingerprint.as_str());
+    crate::remote::record_serve(&ctx.paths, &base, ca);
+    match &tls {
+        Some(_) if own_cert => eprintln!(
+            "ptyro serve: listening on https://{addr}, with your certificate; phones open {base} \
+             (pair one with `ptyro pair`)"
+        ),
+        Some(t) => eprintln!(
+            "ptyro serve: listening on https://{addr}{}; phones open {base} (pair one with \
+             `ptyro pair`; the first time, trust ptyro's certificate from {base}/ca.crt, \
+             SHA-256 {})",
+            if local { ", for this machine, private networks and tailnets" } else { "" },
+            t.ca_fingerprint
+        ),
+        None => eprintln!(
+            "ptyro serve: listening on http://{addr}; phones open {base} (pair one with `ptyro pair`)"
+        ),
+    }
+    let acceptor = tls.as_ref().map(|t| Arc::new(Mutex::new(Arc::clone(&t.config))));
+    if let Some(current) = &acceptor {
+        // Renewed while it runs: a fresh certificate before this one ends.
+        let (current, dir, names) = (Arc::clone(current), tls_dir.clone(), cert_names.clone());
+        let own = own.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(12 * 3600)).await;
+                let fresh = match &own {
+                    Some((cert, key)) => crate::tls::from_files(cert, key),
+                    None => {
+                        let names = crate::tls::names_for(&names);
+                        crate::tls::load_or_make(&dir, &names, time::OffsetDateTime::now_utc())
+                            .map(|t| t.config)
+                    }
+                };
+                match fresh {
+                    Ok(c) => *current.lock().expect("tls") = c,
+                    Err(e) => tracing::warn!("renewing the certificate: {}", e.message),
+                }
+            }
+        });
+    }
     let state = Arc::new(State {
         ctx_paths: ctx.paths.clone(),
         failures: Mutex::new(HashMap::new()),
         pending: Mutex::new(HashMap::new()),
-        trust_proxy: config.remote.trusted_proxy || tailscale || fronted,
+        trust_proxy: fronted,
         hosts,
+        ca_pem: tls.as_ref().filter(|_| !own_cert).map(|t| t.ca_pem.clone()),
     });
     let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
     if managed {
@@ -201,6 +298,11 @@ pub async fn run(
                 continue;
             }
         };
+        // `--local`: only this machine, private networks and tailnets get in.
+        if local && !crate::tls::local_peer(peer.ip()) {
+            tracing::debug!(%peer, "not a local address");
+            continue;
+        }
         // Over the limit: drop it (a WebSocket keeps its slot until it closes).
         let Ok(slot) = Arc::clone(&slots).try_acquire_owned() else {
             tracing::debug!(%peer, "too many connections");
@@ -208,14 +310,29 @@ pub async fn run(
         };
         let slot = Arc::new(slot);
         let st = Arc::clone(&state);
+        let tls = acceptor
+            .as_ref()
+            .map(|c| tokio_rustls::TlsAcceptor::from(Arc::clone(&c.lock().expect("tls"))));
         tokio::spawn(async move {
             let svc = service_fn(move |req| handle(req, Arc::clone(&st), peer, Arc::clone(&slot)));
-            let _ = hyper::server::conn::http1::Builder::new()
+            let http = hyper::server::conn::http1::Builder::new()
                 .timer(hyper_util::rt::TokioTimer::new())
                 .header_read_timeout(Duration::from_secs(10))
-                .serve_connection(TokioIo::new(stream), svc)
-                .with_upgrades()
-                .await;
+                .clone();
+            match tls {
+                Some(tls) => {
+                    let Ok(Ok(stream)) =
+                        tokio::time::timeout(Duration::from_secs(10), tls.accept(stream)).await
+                    else {
+                        tracing::debug!(%peer, "TLS handshake failed");
+                        return;
+                    };
+                    let _ = http.serve_connection(TokioIo::new(stream), svc).with_upgrades().await;
+                }
+                None => {
+                    let _ = http.serve_connection(TokioIo::new(stream), svc).with_upgrades().await;
+                }
+            }
         });
     }
 }
@@ -371,6 +488,20 @@ async fn handle(
             _ => busy(),
         },
         (&Method::GET, "/healthz") => respond(StatusCode::OK, "text/plain", "ok"),
+        // The CA this machine's certificate comes from, for a phone to trust once.
+        (&Method::GET, "/ca.crt") => match &st.ca_pem {
+            Some(pem) => {
+                let mut r = respond(StatusCode::OK, "application/x-x509-ca-cert", pem.clone());
+                r.headers_mut().insert(
+                    header::CONTENT_DISPOSITION,
+                    HeaderValue::from_static("attachment; filename=\"ptyro-ca.crt\""),
+                );
+                r
+            }
+            None => {
+                respond(StatusCode::NOT_FOUND, "text/plain", "this ptyro serve speaks plain HTTP")
+            }
+        },
         (&Method::GET | &Method::HEAD, p) => match ASSETS.iter().find(|(a, _, _)| *a == p) {
             Some((_, ctype, data)) => {
                 let mut r = respond(StatusCode::OK, ctype, Bytes::from_static(data));
@@ -681,6 +812,7 @@ mod tests {
             pending: Mutex::new(HashMap::new()),
             trust_proxy: false,
             hosts: Vec::new(),
+            ca_pem: None,
         });
         let ip: IpAddr = "1.2.3.4".parse().unwrap();
         let held: Vec<Pending> = (0..MAX_PENDING).map(|_| st.begin(ip).unwrap()).collect();

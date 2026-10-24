@@ -99,9 +99,13 @@ max_bytes = "16MiB"                       # per session, as a ring
 [remote]
 serve = true                              # the daemon runs `ptyro serve` (docs/remote.md)
 listen = "127.0.0.1:7091"
+# local = true                            # every interface, local addresses only (your LAN, tailnet)
+# tls_cert = "~/certs/fullchain.pem"      # your own certificate instead of the one ptyro makes
+# tls_key = "~/certs/privkey.pem"         #   and its key
 approval_wait = "10m"                     # held Claude permission prompts wait this long for a phone
 # push_hosts = ["ntfy.example.com"]       # self-hosted push services (UnifiedPush, ntfy)
-# trusted_proxy = true                   # a reverse proxy on this machine fronts serve
+# trusted_proxy = true                   # a reverse proxy on this machine fronts serve (plain HTTP on loopback)
+# insecure = true                        # plain HTTP instead of HTTPS, any address (tokens in clear)
 
 [clipboard]
 # allow_write = false                     # programs' OSC 52 copies don't reach your clipboard

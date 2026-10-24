@@ -152,7 +152,7 @@ See [`remote.md`](remote.md).
 
 | Command | Does |
 |---|---|
-| `ptyro serve [--listen ADDR] [--tailscale] [--insecure]` | the web app and the protocol over WebSocket for paired devices |
+| `ptyro serve [--listen ADDR] [--local] [--cert PEM --key PEM] [--tailscale] [--insecure]` | the web app and the protocol over WebSocket for paired devices, over HTTPS with a certificate ptyro makes (phones trust its CA once, from `/ca.crt`); `--local` lets in your LAN and tailnet; `--cert`/`--key` use your own certificate; `--insecure` is plain HTTP |
 | `ptyro pair [NAME] [--scope read\|approve\|control\|full] [--url URL] [--json]` | pair a phone or browser: a QR code with a one-time code (10 minutes; scope `approve` by default), then waits for the device |
 | `ptyro devices [ls \| revoke ID \| push-test]` | paired devices |
 | `ptyro --remote HOST …` / `ptyro proxy` | any command against another machine's daemon / the bridge it runs there |

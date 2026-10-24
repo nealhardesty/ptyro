@@ -589,7 +589,7 @@ async function enablePush() {
         return;
     }
     if (!isSecureContext) {
-        toast("Notifications need HTTPS (`ptyro serve --tailscale`).");
+        toast("Notifications need HTTPS: open the https:// address `ptyro pair` shows (ptyro serve speaks HTTPS unless it was started with --insecure).");
         return;
     }
     const perm = await Notification.requestPermission();

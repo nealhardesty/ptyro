@@ -4391,8 +4391,8 @@ machine's (docs/remote.md).
 
 ### 16.3 WebSocket server
 
-`ptyro serve --listen 127.0.0.1:7091` (or a Tailscale address) exposes the protocol over WebSocket
-(TLS optional, recommended via Tailscale/`tailscale serve` or a reverse proxy). Auth: long random
+`ptyro serve --listen 127.0.0.1:7091` (or a Tailscale address, or `--local`) exposes the protocol
+over WebSocket, over HTTPS by default (**[built WEB1.7]**, below). Auth: long random
 device tokens (`ptyro pair` prints a one-time code the device trades for one), stored hashed;
 revocable (`ptyro devices ls|revoke`).
 
@@ -4413,9 +4413,32 @@ killed before a live upgrade, restarted by the next image).
 - **Host check (DNS rebinding):** a request whose `Host` isn't an IP address, `localhost`
   (`*.localhost`), `public_url`'s host or this machine's MagicDNS name (full and short, from
   `tailscale status --json`) gets 421. No `Host` passes (not a browser).
-- **Addresses:** loopback and Tailscale (100.64.0.0/10, fd7a:115c:a1e0::/48) only, unless
-  `--insecure` or `[remote] insecure`. `--tailscale` runs `tailscale serve --bg --https=443
-  http://127.0.0.1:<port>`.
+- **Addresses:** loopback and Tailscale (100.64.0.0/10, fd7a:115c:a1e0::/48), unless `--local`
+  (or `[remote] local`) or `--insecure` (or `[remote] insecure`). `--local` listens on every
+  interface (`0.0.0.0:<port>`) and drops a connection from anything but loopback, RFC 1918,
+  IPv6 unique local, link-local and 100.64.0.0/10, before TLS. `--tailscale` runs
+  `tailscale serve --bg --https=443 http://127.0.0.1:<port>`.
+- **HTTPS** **[built WEB1.7]** (`crates/ptyro/src/tls.rs`): unless TLS ends earlier (`--tailscale`,
+  `tailscale serve` already fronting the port, `[remote] trusted_proxy`), where `serve` speaks
+  plain HTTP and only on loopback, or `--insecure`, which is plain HTTP anywhere. The certificates
+  live in `<data>/serve/tls/`:
+  - a CA (ECDSA P-256, ten years, `ptyro local CA (<host>)`), made once; `ca.pem` never changes,
+    since it's what phones installed (rcgen can't read a certificate back, so `tls.json` keeps
+    its name, dates and serial, and the CA is remade from those and its key to sign with);
+  - a server certificate it signs (397 days, under Apple's 825-day limit for user-installed
+    roots; `serverAuth`), for `localhost`, the loopback addresses, the host name and
+    `<host>.local`, the addresses traffic to a LAN and a tailnet leaves from (a connected UDP
+    socket, nothing sent), the listen address, Tailscale names and `public_url`'s host. Re-issued
+    with fewer than 30 days left or a name missing (names seen before stay), at start and every
+    12 h while it runs, swapped in for new connections.
+
+  `--cert`/`--key` (or `[remote] tls_cert`/`tls_key`) use your own certificate instead: no CA,
+  no `/ca.crt`, the files read again every 12 h. It is made (or read) before `serve` binds, so a
+  listening port means ready. `GET /ca.crt` serves the CA
+  (`application/x-x509-ca-cert`). `serve` records its URL and the CA's SHA-256 in
+  `state/serve.json`; `ptyro pair` uses them while that `serve` runs, so the QR code is its
+  `https://` address, and says where to get the CA and how to trust it. `ptyro doctor` (so the
+  health badge) warns on plain HTTP off loopback and on a certificate that wasn't renewed.
 - **Devices:** kept in the store's `kv` (`devices`): id, name, scope, SHA-256 of the token,
   created/last seen/via, push subscriptions, and, until claimed, the pairing code's SHA-256 and
   expiry. Tokens are `ptd_` + 32 bytes from `/dev/urandom` (no fallback), checked in constant

@@ -413,8 +413,9 @@ async fn dispatch(
         Some(Cmd::Shell { worktree, json, read, scrollback }) => {
             quick_shell(&ctx, worktree, json, read, scrollback).await
         }
-        Some(Cmd::Serve { listen, insecure, tailscale, managed }) => {
-            crate::serve::run(&ctx, listen, insecure, tailscale, managed).await
+        Some(Cmd::Serve { listen, insecure, local, cert, key, tailscale, managed }) => {
+            let own = cert.zip(key);
+            crate::serve::run(&ctx, listen, insecure, local, own, tailscale, managed).await
         }
         Some(Cmd::Pair { name, scope, url, json }) => {
             crate::remote::pair(&ctx, name, &scope, url, json).await

@@ -561,8 +561,17 @@ pub struct Remote {
     pub public_url: Option<String>,
     /// The daemon runs `ptyro serve` itself (and restarts it).
     pub serve: bool,
-    /// Allow a plain-HTTP listener on other addresses (tokens would cross the network in clear).
+    /// Speak plain HTTP instead of HTTPS, on any address (tokens would cross the network in
+    /// clear). Without it, `ptyro serve` speaks HTTPS with a certificate it makes, except behind
+    /// `tailscale serve` or a `trusted_proxy`, which end TLS before it (SPEC §16.3).
     pub insecure: bool,
+    /// Listen on every interface, and let in only this machine, private networks, link-local
+    /// addresses and tailnets (`ptyro serve --local`).
+    pub local: bool,
+    /// Your own certificate (a PEM chain, leaf first) and its key, instead of the one ptyro
+    /// makes: phones that trust its issuer need nothing installed (`--cert`, `--key`).
+    pub tls_cert: Option<String>,
+    pub tls_key: Option<String>,
     /// How long Claude's permission prompt waits for a phone's answer (its own dialog stays
     /// open the whole time; the first answer wins).
     pub approval_wait: String,
@@ -584,6 +593,9 @@ impl Default for Remote {
             public_url: None,
             serve: false,
             insecure: false,
+            local: false,
+            tls_cert: None,
+            tls_key: None,
             approval_wait: "10m".into(),
             push: true,
             push_hosts: Vec::new(),

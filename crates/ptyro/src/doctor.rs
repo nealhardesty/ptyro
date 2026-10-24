@@ -119,12 +119,43 @@ pub async fn run_cmd(ctx: &Ctx, quick: bool, json: bool) -> Result<i32, Error> {
         ),
     );
     daemon(ctx, &config, quick, &mut r).await;
+    remote(ctx, &config, &mut r);
     terminal(&mut r).await;
     git(&mut r).await;
     agents(&config, &mut r).await;
     profiles(ctx, &config, None, &mut r).await;
     print(&r, json);
     Ok(exit_code(&r))
+}
+
+/// `ptyro serve` (WEB1.7): plain HTTP where tokens would cross a network, and its certificate.
+fn remote(ctx: &Ctx, config: &Config, r: &mut Report) {
+    let listen = config.remote.listen.parse::<std::net::SocketAddr>().ok();
+    let off_loopback = config.remote.local || listen.is_some_and(|a| !a.ip().is_loopback());
+    if config.remote.insecure && off_loopback {
+        r.add(
+            "remote",
+            "plain HTTP",
+            Level::Warn,
+            "`ptyro serve` speaks plain HTTP off this machine (`[remote] insecure`): device tokens \
+             cross the network in clear. Without it ptyro speaks HTTPS (`ptyro config edit`)",
+        );
+    }
+    let Some(ends) = crate::tls::expires(&crate::tls::dir(&ctx.paths.data)) else { return };
+    let days = (ends - time::OffsetDateTime::now_utc()).whole_days();
+    let (level, text) = if days < 0 {
+        (Level::Problem, "ptyro serve's certificate has ended: `ptyro serve` makes a new one when it starts (`ptyro daemon restart` restarts a managed one)".to_owned())
+    } else if days < crate::tls::RENEW_DAYS {
+        (
+            Level::Warn,
+            format!(
+                "ptyro serve's certificate ends in {days} days and wasn't renewed: `ptyro serve` renews it when it starts (`ptyro daemon restart` restarts a managed one)"
+            ),
+        )
+    } else {
+        (Level::Ok, format!("ptyro serve's HTTPS certificate is good for {days} more days"))
+    };
+    r.add("remote", "certificate", level, text);
 }
 
 /// `ptyro profile doctor [NAME]`.

@@ -291,8 +291,9 @@ guide: [`docs/changesets.md`](docs/changesets.md).
 ### Your phone and other machines
 
 ```bash
-ptyro serve --tailscale        # the web app over Tailscale HTTPS
-ptyro pair phone               # a one-time QR code (10 min): scan it and the phone is signed in
+ptyro serve --local            # the web app over HTTPS on your LAN (or --tailscale: Tailscale HTTPS)
+ptyro pair phone               # a one-time QR code (10 min): scan it and the phone is signed in;
+                               # the first time, it says how to trust ptyro's certificate
 ptyro devices revoke ID        # cut a device off at once
 ptyro --remote me@workbox      # the TUI (or any command) on another machine, over ssh
 ```

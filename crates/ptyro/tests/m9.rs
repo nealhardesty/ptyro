@@ -86,7 +86,8 @@ impl World {
         let child = self
             .d
             .cmd()
-            .args(["serve", "--listen", &format!("127.0.0.1:{port}")])
+            // Plain HTTP: these tests speak the protocol; `serve_speaks_https_by_default` the TLS.
+            .args(["serve", "--insecure", "--listen", &format!("127.0.0.1:{port}")])
             .env("HOME", self.home())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -746,7 +747,10 @@ async fn web_push_end_to_end() {
 #[test]
 fn the_daemon_runs_serve_and_keeps_it_through_upgrades() {
     let port = free_port();
-    let w = World::new(&format!("[remote]\nserve = true\nlisten = \"127.0.0.1:{port}\"\n"), &[]);
+    let w = World::new(
+        &format!("[remote]\nserve = true\ninsecure = true\nlisten = \"127.0.0.1:{port}\"\n"),
+        &[],
+    );
     wait_http(port);
     assert_eq!(
         http(port, "GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").0,
@@ -764,10 +768,13 @@ fn the_daemon_runs_serve_and_keeps_it_through_upgrades() {
         assert!(Instant::now() < deadline, "serve didn't come back after the upgrade");
         std::thread::sleep(Duration::from_millis(100));
     }
-    // An address that isn't loopback or Tailscale needs --insecure.
-    let out = w.cli(&["serve", "--listen", "0.0.0.0:0"]);
+    // An address that isn't loopback or Tailscale needs --local (LAN peers, HTTPS) or
+    // --insecure (anyone, in clear); this world's config says `insecure`, so a fresh one.
+    let fresh = World::new("", &[]);
+    let out = fresh.cli(&["serve", "--listen", "0.0.0.0:0"]);
     assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("in clear"));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("--local") && err.contains("in clear"), "{err}");
 }
 
 /// The web app's TypeScript screen model (web/dist/screen.js), fed live frames through
@@ -800,4 +807,155 @@ fn the_web_screen_model_matches_the_daemon() {
     let daemon = w.ok(&["read", "web1"]).trim_end().to_owned();
     assert_eq!(web, daemon, "the web client and the daemon disagree");
     assert!(web.contains("漢字") && web.contains("e\u{301}"), "{web}");
+}
+
+/// WEB1.7: `ptyro serve` speaks HTTPS by default, with a certificate from a CA it made, which a
+/// phone trusts once (`/ca.crt`): valid for `localhost` and `127.0.0.1`; plain HTTP gets nothing;
+/// the web app's WebSocket works over it; `ptyro pair` points at the `https://` address.
+#[tokio::test]
+async fn serve_speaks_https_by_default() {
+    use rustls::pki_types::{CertificateDer, ServerName, pem::PemObject};
+    let w = World::new("", &[]);
+    let port = free_port();
+    let mut child =
+        w.d.cmd()
+            .args(["serve", "--listen", &format!("127.0.0.1:{port}")])
+            .env("HOME", w.home())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+    wait_http(port);
+    let ca_path = w.d.paths.data.join("serve/tls/ca.pem");
+    let ca_pem = std::fs::read_to_string(&ca_path).expect("the CA, made on first use");
+    let mut roots = rustls::RootCertStore::empty();
+    for c in CertificateDer::pem_slice_iter(ca_pem.as_bytes()) {
+        roots.add(c.unwrap()).unwrap();
+    }
+    let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+    let client = std::sync::Arc::new(
+        rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_root_certificates(roots)
+            .with_no_client_auth(),
+    );
+    let tls = |name: ServerName<'static>| {
+        let client = std::sync::Arc::clone(&client);
+        async move {
+            let tcp = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+            tokio_rustls::TlsConnector::from(client).connect(name, tcp).await
+        }
+    };
+    let get = |name: ServerName<'static>, path: &'static str| {
+        let tls = &tls;
+        async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let mut s = tls(name).await.expect("a certificate the CA vouches for");
+            let req =
+                format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+            s.write_all(req.as_bytes()).await.unwrap();
+            let mut out = Vec::new();
+            let _ = s.read_to_end(&mut out).await;
+            String::from_utf8_lossy(&out).into_owned()
+        }
+    };
+    // Trusted for its names and its address.
+    for name in [
+        ServerName::try_from("localhost").unwrap(),
+        ServerName::from(std::net::IpAddr::from([127, 0, 0, 1])),
+    ] {
+        let r = get(name, "/healthz").await;
+        assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    }
+    // The CA, for a phone to trust once.
+    let r = get(ServerName::try_from("localhost").unwrap(), "/ca.crt").await;
+    assert!(r.contains("application/x-x509-ca-cert") && r.contains(ca_pem.trim()), "{r}");
+    // Not a name it holds: refused by the client, as a phone's browser would.
+    assert!(tls(ServerName::try_from("example.com").unwrap()).await.is_err());
+    // Plain HTTP to it: no answer a browser would show.
+    let (code, _) =
+        http(port, "GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+    assert_ne!(code, 200);
+    // The web app's WebSocket, over TLS (wss): hello without a token is answered (and refused).
+    let s = tls(ServerName::try_from("localhost").unwrap()).await.unwrap();
+    let (mut ws, _) =
+        tokio_tungstenite::client_async(format!("wss://localhost:{port}/ws"), s).await.unwrap();
+    let hello = json!({ "t": "hello", "proto": { "major": 1, "minor": 8 }, "client": { "kind": "web", "version": "web", "pid": 0 }, "features": [] });
+    ws.send(Message::text(hello.to_string())).await.unwrap();
+    let first = loop {
+        match ws.next().await.unwrap().unwrap() {
+            Message::Text(t) => break serde_json::from_str::<Value>(&t).unwrap(),
+            _ => continue,
+        }
+    };
+    assert_eq!(first["t"], "reject", "{first}");
+    // `ptyro pair` sends phones to this serve's https address, and says how to trust it.
+    let paired: Value = serde_json::from_str(&w.ok(&["pair", "--json", "phone"])).unwrap();
+    assert!(
+        paired["url"].as_str().unwrap().starts_with(&format!("https://127.0.0.1:{port}/")),
+        "{paired}"
+    );
+    assert_eq!(paired["ca"]["url"], format!("https://127.0.0.1:{port}/ca.crt"));
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// WEB1.7: `--cert`/`--key` serve your own certificate (phones that trust its issuer need
+/// nothing installed), and there is no ptyro CA to hand out.
+#[tokio::test]
+async fn serve_uses_your_own_certificate() {
+    use rustls::pki_types::{CertificateDer, ServerName};
+    let w = World::new("", &[]);
+    let key = rcgen::KeyPair::generate().unwrap();
+    let cert = rcgen::CertificateParams::new(vec!["localhost".to_owned()])
+        .unwrap()
+        .self_signed(&key)
+        .unwrap();
+    let (cert_path, key_path) = (w.home().join("mine.pem"), w.home().join("mine-key.pem"));
+    std::fs::write(&cert_path, cert.pem()).unwrap();
+    std::fs::write(&key_path, key.serialize_pem()).unwrap();
+    let port = free_port();
+    let mut child =
+        w.d.cmd()
+            .args(["serve", "--listen", &format!("127.0.0.1:{port}"), "--cert"])
+            .arg(&cert_path)
+            .arg("--key")
+            .arg(&key_path)
+            .env("HOME", w.home())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+    wait_http(port);
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(CertificateDer::from(cert.der().to_vec())).unwrap();
+    let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+    let client = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let get = |path: &'static str| {
+        let client = std::sync::Arc::new(client.clone());
+        async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let tcp = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+            let mut s = tokio_rustls::TlsConnector::from(client)
+                .connect(ServerName::try_from("localhost").unwrap(), tcp)
+                .await
+                .expect("your certificate");
+            let req =
+                format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+            s.write_all(req.as_bytes()).await.unwrap();
+            let mut out = Vec::new();
+            let _ = s.read_to_end(&mut out).await;
+            String::from_utf8_lossy(&out).into_owned()
+        }
+    };
+    assert!(get("/healthz").await.starts_with("HTTP/1.1 200"));
+    assert!(get("/ca.crt").await.starts_with("HTTP/1.1 404"), "no CA of ptyro's to trust");
+    assert!(!w.d.paths.data.join("serve/tls/ca.pem").exists(), "none made");
+    let _ = child.kill();
+    let _ = child.wait();
 }
