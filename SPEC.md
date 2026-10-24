@@ -92,11 +92,15 @@ Status markers used below:
   learning anything up front: defaults set up, errors that offer the fix, keys (or buttons)
   shown where they apply.
   - **The CLI and the TUI are always in parity.** A feature isn't done until both have it.
-    `docs/tui-parity.md` maps every command to its TUI path, and `make tui-parity` (also part
-    of `make test`) fails when one has neither a path nor a waiver.
+    `docs/parity.md` maps every command to its TUI path and its web path, and `make parity`
+    (also part of `make test`; `make tui-parity` is the same) fails when a command has no TUI
+    path and no waiver.
   - **The web ships with them.** A feature is built for the web client (`ptyro serve`, the
-    PWA, §16) in the same change. A web gap is a defect to fix, not a later milestone; ROADMAP
-    WEB1 closes today's gaps and adds the web to the parity check.
+    PWA, §16) in the same change; its web path is a control registered in `ACTIONS`
+    (`web/src/app.ts`, each its tooltip), which the check reads. A web gap is a defect to fix,
+    not a later milestone: until ROADMAP WEB1 is done a cell may say `gap: WEB1.x` and
+    `make parity` counts them by task; `WEB_STRICT=1` fails on them, and becomes the default
+    with WEB1.
   - Waivers are for commands that are another program's tool (agents' own mail, hooks, shell
     completions), never for "not built yet".
 - **Boring persistence, sharp terminal.** SQLite + plain files for state; all the cleverness goes
@@ -2659,7 +2663,7 @@ learning anything up front.
   0: never), a menu of the next keys appears above the status bar, in five groups (start, go,
   panes, work, this), as bound now; keys typed before it work as always. The event loop wakes at
   the deadline, not on its 250 ms tick.
-- **Everything the CLI does** (UX1.21): `docs/tui-parity.md` now has no gaps, and
+- **Everything the CLI does** (UX1.21): `docs/parity.md`'s TUI column has no gaps, and
   `make tui-parity` (part of `make test`) fails on any. The frequent and visual ones are native:
   `session.convert`, `project.remove|untrust|pin|unpin|leave|mute`, `worktree.lock|unlock|pair|
   unpair|rename_branch`, `workspace.rename|remove|profile|notify|mute`, `pr.open` (the PR's

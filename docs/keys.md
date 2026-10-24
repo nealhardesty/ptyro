@@ -231,5 +231,5 @@ key include: `project.add`
 ```
 
 The action names are the ones `Ctrl-Q ?` shows (the palette leaves out `nav.*` and
-`session.focus N`). Every CLI command has one ([`tui-parity.md`](tui-parity.md) lists them); the
+`session.focus N`). Every CLI command has one ([`parity.md`](parity.md) lists them); the
 ones that run a `ptyro` command do so in a split below, asking for what they need first.

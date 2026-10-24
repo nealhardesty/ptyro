@@ -1594,24 +1594,46 @@ touch worktrees, projects, review and PRs, runs, change sets, profiles or settin
 demo (start a task in a new worktree, answer it, review its diff, finish it into a PR, clean
 up), and `make parity` fails CI on a CLI command with neither a web path nor a waiver.
 
-- [ ] **WEB1.0 The parity check covers the web** — S. `docs/tui-parity.md` becomes
+- [x] **WEB1.0 The parity check covers the web** — S. `docs/tui-parity.md` becomes
   `docs/parity.md` with a web column (`web: <view or button>`, `waived:`, or `gap: WEB1.x`), and
   `make parity` (`make tui-parity` stays as an alias) checks both columns against the command
   tree. Web gaps fail only with `STRICT=1` until WEB1 is done, then always, like UX1.0 did.
   *Done when:* CI lists every web gap, and fails on a new command with no web row.
-- [ ] **WEB1.1 Audit** — S. Fill the web column for every command: what the web does today,
+  *Done (2026-10-23):* `docs/parity.md` (moved from `docs/tui-parity.md`) has a web column; a
+  web action is a control registered in `ACTIONS` in `web/src/app.ts` (its tooltip), which
+  `crates/ptyro/src/parity.rs` reads, so a cell can't name a control that isn't there. `make
+  parity` (in `make test`, so in CI; `make tui-parity` is the same) fails on a command with no
+  web cell or a bad one, and prints the web gaps counted by task; `WEB_STRICT=1` fails on them.
+- [x] **WEB1.1 Audit** — S. Fill the web column for every command: what the web does today,
   else a gap with the WEB1 task that closes it. Write the result to the table and to this
   milestone.
+  *Done (2026-10-23):* 183 commands. The web does 10: `attach` and `read` (a session's live
+  screen or chat; its scrollback is a WEB1.2 gap), `list` and `status` (the session list),
+  `answer` (Allow, Always, Deny), `send` (the reply box, the key bar), `inbox` and `msg ls`,
+  `pair` (this device's half) and `devices push-test` (turning notifications on). 22 are waived
+  (another program runs them, or they only make sense on the computer: `serve`, `proxy`,
+  `completions`, `shell-init`, `daemon start`, and the TUI's waivers). 151 are gaps, by task
+  below. Found on the way: the empty session list says "Start one with `ptyro new` on your
+  computer" (WEB1.2 gives it the action instead).
 - [ ] **WEB1.2 Sessions** — M. New task (the UX1.9 box), new session, stop, kill, restart,
   resume, hibernate, rename, retitle, adopt, summarize, explain, mute; the row menu's actions as
-  a session's menu.
+  a session's menu. From the audit (20): `new`, `stop`, `kill`, `restart`, `rm`, `rename`,
+  `retitle`, `resume`, `hibernate`, `convert`, `adopt`, `shell`, `summarize`, `broadcast`,
+  `events`, `mute`, `msg send`, `verify`, `replay`, `export`; and `read`'s scrollback.
 - [ ] **WEB1.3 Worktrees and projects** — M. The sidebar's tree, a new worktree (from a PR,
   an issue, a branch, your changes), finish, archive, restore, remove, scripts, ports; projects
-  add, trust, pin.
+  add, trust, pin. From the audit (40): `project` (add, discover, suggest, ls, show, rm,
+  trust, untrust, config, pin, unpin), `wt` (new, ls, rm, status, pair, unpair, run, open,
+  lock, unlock, rename-branch, retitle, finish, archive, restore, archives), `gc`, `ws` (ls,
+  new, set, rm, rename, add, remove), `lease ls`, `radar`, `checkpoint` (ls, diff, restore).
 - [ ] **WEB1.4 Review and ship** — L. The diff inspector (comments to the agent), commit, PR
-  and checks, integrate, the review queue.
+  and checks, integrate, the review queue. From the audit (19): `wt diff`, `wt log`,
+  `wt commit`, `wt integrate`, `review` (add, ls, rm, send, queue, done), `pr` (create,
+  status, checks, fix, automerge, watch, reply, open), `watch-pr`.
 - [ ] **WEB1.5 Runs and change sets** — M. Recipes, fan-out compare and pick, gates, change
-  sets and their merge train.
+  sets and their merge train. From the audit (42): `fanout`, `compare`, `pick`, `discard`,
+  `iterate`, `run` (ls, show, events, cancel, retry, fork, lead), `recipe` (ls, show, run),
+  `gate` (ls, resolve), and every `cs` command but the agents' own (23).
 - [ ] **WEB1.7 TLS by default for `ptyro serve`** (R-REM-11; owner, 2026-10-23) — M. Today
   `serve` speaks plain HTTP on loopback or Tailscale and relies on Tailscale HTTPS or a reverse
   proxy for TLS; any other address needs `--insecure` (tokens in clear).
@@ -1636,7 +1658,11 @@ up), and `make parity` fails CI on a CLI command with neither a web path nor a w
     PWA and gets push with no browser warning. Tests cover certificate making and renewal, the
     peer filter, and HTTP being refused off loopback without `--insecure`.
 - [ ] **WEB1.6 Settings and health** — M. Profiles and logins, workspaces, the health badge and
-  its fixes, the config (validated as `ptyro config edit` does), quit (`app.quit`).
+  its fixes, the config (validated as `ptyro config edit` does), quit (`app.quit`). From the
+  audit (30): `notify test`, `usage`, `integrations` (ls, install, uninstall), `profile` (ls,
+  show, new, rm, rename, login, sync, detect, doctor), `devices ls`, `devices revoke`, `pair`
+  for another device, `init`, `doctor`, `tour`, `config` (edit, check, show, path), `daemon`
+  (stop, restart, status, logs, upgrade, install-service, uninstall-service).
 
 Suggested order: WEB1.0 → WEB1.1 → WEB1.7 (phones need it) → WEB1.2 → WEB1.3 → WEB1.4 → the
 rest. From WEB1.0 on, every

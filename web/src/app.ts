@@ -8,6 +8,24 @@ import type { Color, Frame, InboxEntry, Outcome, Session } from "./screen.js";
 
 interface ChatItem { id: string; t: string; [k: string]: any }
 
+// What this app does, by name: the Web column of docs/parity.md names these, and `make parity`
+// checks every name it uses is here (SPEC §1.3, ROADMAP WEB1). Each is its control's tooltip.
+const ACTIONS = {
+  "sessions": "Every session: what it's doing, and who needs you first",
+  "session.open": "A session's live screen, or its chat",
+  "session.reply": "Type to the session; Enter sends, Shift+Enter starts a new line",
+  "session.keys": "Keys for the session: arrows, Esc, Tab, Enter, Ctrl-C",
+  "session.view": "Chat or terminal; the terminal fitted or 1:1",
+  "answer": "Answer what it asks: allow once, always, or deny",
+  "inbox": "The inbox: what happened while you were away",
+  "inbox.read": "Mark everything in the inbox read",
+  "notifications": "Notifications on this device (a test is sent)",
+  "pair": "Pair this device with the link or QR code from `ptyro pair`",
+  "unpair": "Forget this device's pairing",
+} as const;
+type Action = keyof typeof ACTIONS;
+const tip = (a: Action): string => ACTIONS[a];
+
 const PROTO = { major: 1, minor: 8 };
 
 // ── storage: the token lives in localStorage (page) and IndexedDB (the service worker) ────────
@@ -313,15 +331,15 @@ function header(title: string, back: boolean): HTMLElement {
     back ? h("a", { class: "back", href: "#/" }, "‹") : h("img", { class: "logo", src: "/icon.svg", alt: "" }),
     h("h1", {}, title),
     dot,
-    h("a", { class: "inbox-link", href: "#/inbox", title: "Inbox" }, "✉", unread ? h("b", {}, String(unread)) : null),
-    h("button", { class: "icon", title: "Notifications", onclick: () => void enablePush() }, "🔔"),
+    h("a", { class: "inbox-link", href: "#/inbox", title: tip("inbox") }, "✉", unread ? h("b", {}, String(unread)) : null),
+    h("button", { class: "icon", title: tip("notifications"), onclick: () => void enablePush() }, "🔔"),
   );
 }
 
 function sessionCard(s: Session): HTMLElement {
   const st = statusOf(s);
   const detail = s.status?.status === "blocked" ? s.status.detail ?? s.attention?.text : s.activity ?? s.status?.detail ?? s.title;
-  const card = h("a", { class: `card ${st}`, href: `#/s/${encodeURIComponent(s.id)}` },
+  const card = h("a", { class: `card ${st}`, href: `#/s/${encodeURIComponent(s.id)}`, title: tip("session.open") },
     h("span", { class: "glyph" }, GLYPH[st] ?? "·"),
     h("div", { class: "main" },
       h("div", { class: "name" }, s.name, s.agent ? h("small", {}, ` ${s.agent}`) : null),
@@ -332,7 +350,7 @@ function sessionCard(s: Session): HTMLElement {
   );
   if (s.status?.status === "blocked" && s.state.t === "running") {
     return h("div", { class: "blocked-wrap" }, card,
-      h("div", { class: "actions" },
+      h("div", { class: "actions", title: tip("answer") },
         h("button", { class: "allow", onclick: () => void answer(s.id, "allow") }, "Allow"),
         h("button", { class: "deny", onclick: () => void answer(s.id, "deny") }, "Deny"),
       ));
@@ -344,7 +362,7 @@ function listView(): HTMLElement {
   const order = ["blocked", "errored", "working", "starting", "done", "idle", "unknown", "shell", "dormant", "exited"];
   const all = [...app.sessions.values()].sort((a, b) => order.indexOf(statusOf(a)) - order.indexOf(statusOf(b)) || a.name.localeCompare(b.name));
   const body = all.length ? all.map(sessionCard) : [h("p", { class: "empty" }, "No sessions. Start one with `ptyro new` on your computer.")];
-  return h("div", {}, header("ptyro", false), h("main", { class: "list" }, ...body));
+  return h("div", {}, header("ptyro", false), h("main", { class: "list", title: tip("sessions") }, ...body));
 }
 
 function inboxView(): HTMLElement {
@@ -353,7 +371,7 @@ function inboxView(): HTMLElement {
     h("div", { class: "main" }, h("div", { class: "name" }, e.title), h("div", { class: "detail" }, e.body)),
     h("time", {}, ago(e.at_ms)),
   ));
-  const mark = h("button", { class: "small", onclick: async () => { await conn.request({ t: "inbox_mark", all: true, read: true }); await refresh(); } }, "Mark all read");
+  const mark = h("button", { class: "small", title: tip("inbox.read"), onclick: async () => { await conn.request({ t: "inbox_mark", all: true, read: true }); await refresh(); } }, "Mark all read");
   return h("div", {}, header("Inbox", true), h("main", { class: "list" }, items.length ? mark : null, ...(items.length ? items : [h("p", { class: "empty" }, "Nothing here.")])));
 }
 
@@ -395,7 +413,7 @@ function patch(parent: HTMLElement, kids: Node[]): void {
 
 function sessionShell(id: string): Shell {
   if (shell?.id === id) return shell;
-  const reply = h("textarea", { rows: 2, enterkeyhint: "send" });
+  const reply = h("textarea", { rows: 2, enterkeyhint: "send", title: tip("session.reply") });
   reply.value = app.drafts.get(id) ?? "";
   reply.addEventListener("input", () => app.drafts.set(id, reply.value));
   const send = async () => {
@@ -436,18 +454,18 @@ function sessionView(id: string): HTMLElement {
     ...(blocked ? [h("section", { class: "prompt" },
       h("div", {}, h("b", {}, s.status?.kind === "permission" ? "Wants permission" : "Waiting for you"), s.held ? h("span", { class: "tag", title: "answers go to the agent as a decision" }, "exact") : null),
       h("pre", {}, s.status?.detail ?? s.attention?.text ?? ""),
-      h("div", { class: "actions" },
+      h("div", { class: "actions", title: tip("answer") },
         h("button", { class: "allow", onclick: () => void answer(id, "allow") }, "Allow"),
         h("button", { class: "always", onclick: () => void answer(id, "always") }, "Always"),
         h("button", { class: "deny", onclick: () => void answer(id, "deny") }, "Deny"),
       ))] : []),
     chat ? sh.chat : sh.termWrap,
-    h("div", { class: "keys" },
+    h("div", { class: "keys", title: tip("session.keys") },
       ...KEYS.map(([label, code]) => h("button", { onclick: () => sendKey(id, code) }, label)),
       h("button", { onclick: () => sendKey(id, { t: "char", c: "c" }, 4) }, "^C"),
       s.structured
-        ? h("button", { onclick: () => { if (!app.termView.delete(id)) app.termView.add(id); render(); } }, app.termView.has(id) ? "Chat" : "Terminal")
-        : h("button", { class: app.fit ? "on" : "", onclick: () => { app.fit = !app.fit; paint(); render(); } }, app.fit ? "Fit" : "1:1"),
+        ? h("button", { title: tip("session.view"), onclick: () => { if (!app.termView.delete(id)) app.termView.add(id); render(); } }, app.termView.has(id) ? "Chat" : "Terminal")
+        : h("button", { class: app.fit ? "on" : "", title: tip("session.view"), onclick: () => { app.fit = !app.fit; paint(); render(); } }, app.fit ? "Fit" : "1:1"),
     ),
     sh.replyRow,
   ]);
@@ -534,7 +552,7 @@ function render(): void {
   if (conn.state === "rejected") {
     root.replaceChildren(h("div", {}, header("ptyro", false), h("main", { class: "center" },
       h("p", {}, conn.reason),
-      h("button", { onclick: async () => { localStorage.removeItem("ptyro.token"); await idbSet("token", null).catch(() => {}); location.reload(); } }, "Forget this pairing"),
+      h("button", { title: tip("unpair"), onclick: async () => { localStorage.removeItem("ptyro.token"); await idbSet("token", null).catch(() => {}); location.reload(); } }, "Forget this pairing"),
     )));
     return;
   }
@@ -558,7 +576,7 @@ function subscribe(id: string | null): void {
 }
 
 function pairView(): HTMLElement {
-  const input = h("input", { placeholder: "Paste the link from `ptyro pair`", autocomplete: "off" });
+  const input = h("input", { placeholder: "Paste the link from `ptyro pair`", autocomplete: "off", title: tip("pair") });
   return h("main", { class: "center pair" },
     h("img", { src: "/icon.svg", width: 72, height: 72, alt: "" }),
     h("h1", {}, "ptyro"),

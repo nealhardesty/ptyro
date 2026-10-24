@@ -1,20 +1,25 @@
-//! `make tui-parity` (ROADMAP UX1.0, SPEC §1.3): the TUI is first class, so every CLI command
-//! has a TUI path, or a waiver with a reason, in `docs/tui-parity.md`.
+//! `make parity` (ROADMAP UX1.0, WEB1.0; SPEC §1.3): the CLI, the TUI and the web app are all
+//! first class, so every CLI command has a TUI path and a web path, or a waiver with a reason, in
+//! `docs/parity.md`.
 //!
-//! Each row of that file's table names a command and says how the TUI does it:
-//! - `` `action` … ``: the first backticked word is a TUI action (`crate::keymap::ACTIONS`),
-//!   so the palette and `?` list it; the rest says where (a key in a view, a tab);
-//! - `shown: …`: always on screen (the sidebar, the status bar), nothing to run;
-//! - `waived: …`: no TUI path on purpose, and why;
-//! - `gap: …`: missing. UX1 closed every one; a gap fails the check (`PTYRO_PARITY_STRICT=0`
-//!   only lists them, while one is being worked on).
+//! Each row of that file's tables names a command, then how the TUI does it, then the web app:
+//! - `` `action` … ``: the first backticked word is an action: a TUI action
+//!   (`ptyro_tui::keymap::ACTIONS`, so the palette and `?` list it) or a web one (`ACTIONS` in
+//!   `web/src/app.ts`, each a control's tooltip); the rest says where;
+//! - `shown: …`: always on screen, nothing to run;
+//! - `waived: …`: no path on purpose, and why;
+//! - `gap: TASK …`: missing, and the ROADMAP task that brings it.
 //!
 //! The check fails on a command with no row, a row for a command that doesn't exist, a cell in
-//! none of these forms, and an action that doesn't exist.
+//! none of these forms, and an action that doesn't exist. A TUI gap fails it too, since the CLI
+//! and the TUI are always in parity (`PTYRO_PARITY_STRICT=0` only lists them, while one is being
+//! worked on). A web gap is listed, and fails with `PTYRO_PARITY_WEB_STRICT=1` (the default once
+//! ROADMAP WEB1 is done).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-const DOC: &str = include_str!("../../../docs/tui-parity.md");
+const DOC: &str = include_str!("../../../docs/parity.md");
+const WEB_APP: &str = include_str!("../../../web/src/app.ts");
 
 /// Every runnable command, `wt new` style, without hidden ones (internal helpers).
 fn commands() -> BTreeSet<String> {
@@ -45,15 +50,42 @@ fn commands() -> BTreeSet<String> {
         .unwrap()
 }
 
-/// `(command, cell)` for each table row: `| `wt new` | `worktree.new` … |`.
-fn rows() -> Vec<(String, String)> {
+struct Row {
+    command: String,
+    tui: String,
+    /// `None`: the row has no web cell.
+    web: Option<String>,
+}
+
+/// Each table row: `| `wt new` | `worktree.new` … | gap: WEB1.3 … |`.
+fn rows() -> Vec<Row> {
     DOC.lines()
         .filter_map(|l| {
             let cells: Vec<&str> = l.trim().strip_prefix('|')?.split('|').map(str::trim).collect();
-            let cmd = cells.first()?.strip_prefix('`')?.strip_suffix('`')?;
-            Some((cmd.to_owned(), cells.get(1).copied().unwrap_or("").to_owned()))
+            let command = cells.first()?.strip_prefix('`')?.strip_suffix('`')?;
+            Some(Row {
+                command: command.to_owned(),
+                tui: cells.get(1).copied().unwrap_or("").to_owned(),
+                web: cells.get(2).copied().filter(|c| !c.is_empty()).map(str::to_owned),
+            })
         })
         .collect()
+}
+
+/// The web app's actions: the keys of `const ACTIONS = { … } as const;` in `web/src/app.ts`.
+fn web_actions() -> BTreeSet<String> {
+    let start = WEB_APP.find("const ACTIONS = {").expect("web/src/app.ts has `const ACTIONS`");
+    let body = &WEB_APP[start..];
+    let body = &body[..body.find("} as const;").expect("ACTIONS ends with `} as const;`")];
+    body.lines()
+        .filter_map(|l| l.trim().strip_prefix('"')?.split_once("\":").map(|(k, _)| k.to_owned()))
+        .collect()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Client {
+    Tui,
+    Web,
 }
 
 #[derive(Debug, PartialEq)]
@@ -61,10 +93,24 @@ enum Path {
     Action,
     Shown,
     Waived,
-    Gap,
+    /// The ROADMAP task that brings it (`WEB1.2`).
+    Gap(String),
 }
 
-fn classify(cell: &str) -> Result<Path, String> {
+/// A ROADMAP task id: `UX1.21`, `WEB1.3`, `M9.4`.
+fn task_id(s: &str) -> Option<&str> {
+    let id = s.split(|c: char| c.is_whitespace() || c == '(' || c == ',').next()?;
+    let (m, n) = id.split_once('.')?;
+    let letters = m.trim_end_matches(|c: char| c.is_ascii_digit());
+    (!letters.is_empty()
+        && letters.chars().all(|c| c.is_ascii_uppercase())
+        && letters.len() < m.len()
+        && !n.is_empty()
+        && n.chars().all(|c| c.is_ascii_digit()))
+    .then_some(id)
+}
+
+fn classify(cell: &str, client: Client, web: &BTreeSet<String>) -> Result<Path, String> {
     let words = |p: &str| cell.strip_prefix(p).is_some_and(|r| r.trim().len() > 3);
     if words("waived:") {
         return Ok(Path::Waived);
@@ -73,65 +119,105 @@ fn classify(cell: &str) -> Result<Path, String> {
         return Ok(Path::Shown);
     }
     if let Some(r) = cell.strip_prefix("gap:") {
-        return if r.trim().starts_with("UX1.") {
-            Ok(Path::Gap)
-        } else {
-            Err("a gap names the roadmap task that closes it (`gap: UX1.21 …`)".into())
-        };
+        return task_id(r.trim()).map(|t| Path::Gap(t.to_owned())).ok_or_else(|| {
+            "a gap names the roadmap task that closes it (`gap: WEB1.2 …`)".to_owned()
+        });
     }
     let action = cell.strip_prefix('`').and_then(|r| r.split('`').next()).unwrap_or("");
-    if ptyro_tui::keymap::spec(action).is_some() {
-        Ok(Path::Action)
-    } else if action.is_empty() {
-        Err("starts with neither a `action`, shown:, waived: nor gap:".into())
-    } else {
-        Err(format!("{action:?} is not a TUI action (crates/ptyro-tui/src/keymap.rs ACTIONS)"))
+    let known = match client {
+        Client::Tui => ptyro_tui::keymap::spec(action).is_some(),
+        Client::Web => web.contains(action),
+    };
+    match (known, action.is_empty(), client) {
+        (true, _, _) => Ok(Path::Action),
+        (false, true, _) => Err("starts with neither a `action`, shown:, waived: nor gap:".into()),
+        (false, false, Client::Tui) => {
+            Err(format!("{action:?} is not a TUI action (crates/ptyro-tui/src/keymap.rs ACTIONS)"))
+        }
+        (false, false, Client::Web) => {
+            Err(format!("{action:?} is not a web action (ACTIONS in web/src/app.ts)"))
+        }
     }
 }
 
 #[test]
-fn every_cli_command_has_a_tui_path_or_a_waiver() {
+fn every_cli_command_has_a_tui_path_and_a_web_path_or_a_waiver() {
     let commands = commands();
-    let rows = rows();
+    let web = web_actions();
     let mut problems = Vec::new();
     let mut seen = BTreeSet::new();
-    let mut gaps = Vec::new();
-    for (cmd, cell) in &rows {
+    let (mut tui_gaps, mut web_gaps) = (Vec::new(), BTreeMap::<String, Vec<String>>::new());
+    for row in rows() {
+        let cmd = &row.command;
         if !seen.insert(cmd.clone()) {
             problems.push(format!("`{cmd}`: listed twice"));
         }
         if !commands.contains(cmd) {
             problems.push(format!("`{cmd}`: no such command (renamed or removed?)"));
         }
-        match classify(cell) {
-            Ok(Path::Gap) => gaps.push(format!("`{cmd}`: {cell}")),
+        match classify(&row.tui, Client::Tui, &web) {
+            Ok(Path::Gap(_)) => tui_gaps.push(format!("`{cmd}`: {}", row.tui)),
             Ok(_) => {}
-            Err(e) => problems.push(format!("`{cmd}`: {e}")),
+            Err(e) => problems.push(format!("`{cmd}` (TUI): {e}")),
+        }
+        match row.web.as_deref().map(|c| classify(c, Client::Web, &web)) {
+            None => problems.push(format!("`{cmd}`: no web cell (its row has two columns)")),
+            Some(Ok(Path::Gap(t))) => web_gaps.entry(t).or_default().push(cmd.clone()),
+            Some(Ok(_)) => {}
+            Some(Err(e)) => problems.push(format!("`{cmd}` (web): {e}")),
         }
     }
     for cmd in commands.iter().filter(|c| !seen.contains(*c)) {
         problems.push(format!(
-            "`{cmd}`: not in docs/tui-parity.md. Give it a TUI path (an action in the palette), \
-             or a row saying `waived: why` (SPEC §1.3)"
+            "`{cmd}`: not in docs/parity.md. Give it a TUI path (an action in the palette) and a \
+             web one, or say `waived: why` (SPEC §1.3)"
         ));
     }
     let strict = std::env::var_os("PTYRO_PARITY_STRICT").is_none_or(|v| v != "0");
     if strict {
-        problems.extend(gaps.iter().map(|g| format!("gap {g}")));
-    } else if !gaps.is_empty() {
-        eprintln!("{} TUI gap(s) left:\n  {}", gaps.len(), gaps.join("\n  "));
+        problems.extend(tui_gaps.iter().map(|g| format!("TUI gap {g}")));
+    } else if !tui_gaps.is_empty() {
+        eprintln!("{} TUI gap(s) left:\n  {}", tui_gaps.len(), tui_gaps.join("\n  "));
     }
-    assert!(problems.is_empty(), "TUI parity (docs/tui-parity.md):\n  {}", problems.join("\n  "));
+    let web_strict = std::env::var_os("PTYRO_PARITY_WEB_STRICT").is_some_and(|v| v == "1");
+    let total: usize = web_gaps.values().map(Vec::len).sum();
+    if total > 0 {
+        let by_task: Vec<String> =
+            web_gaps.iter().map(|(t, cmds)| format!("{t}: {}", cmds.len())).collect();
+        eprintln!("{total} web gap(s) left, by ROADMAP task: {}", by_task.join(", "));
+        if web_strict {
+            for (t, cmds) in &web_gaps {
+                problems.push(format!("web gap {t}: {}", cmds.join(", ")));
+            }
+        }
+    }
+    assert!(problems.is_empty(), "parity (docs/parity.md):\n  {}", problems.join("\n  "));
+}
+
+#[test]
+fn the_web_apps_actions_are_read_from_its_source() {
+    let web = web_actions();
+    for a in ["sessions", "answer", "session.reply", "inbox"] {
+        assert!(web.contains(a), "{a} in {web:?}");
+    }
 }
 
 #[test]
 fn cells_are_classified() {
-    assert_eq!(classify("`worktree.new`, then type a name"), Ok(Path::Action));
-    assert_eq!(classify("shown: the sidebar's diffstat"), Ok(Path::Shown));
-    assert_eq!(classify("waived: run by programs inside a session"), Ok(Path::Waived));
-    assert_eq!(classify("gap: UX1.21 (profiles)"), Ok(Path::Gap));
-    assert!(classify("gap: later").is_err());
-    assert!(classify("waived:").is_err(), "a waiver says why");
-    assert!(classify("`no.such.action`").unwrap_err().contains("not a TUI action"));
-    assert!(classify("the inspector").is_err());
+    let web: BTreeSet<String> = ["answer".to_owned()].into();
+    let tui = |c: &str| classify(c, Client::Tui, &web);
+    assert_eq!(tui("`worktree.new`, then type a name"), Ok(Path::Action));
+    assert_eq!(tui("shown: the sidebar's diffstat"), Ok(Path::Shown));
+    assert_eq!(tui("waived: run by programs inside a session"), Ok(Path::Waived));
+    assert_eq!(tui("gap: UX1.21 (profiles)"), Ok(Path::Gap("UX1.21".into())));
+    assert!(tui("gap: later").is_err());
+    assert!(tui("waived:").is_err(), "a waiver says why");
+    assert!(tui("`no.such.action`").unwrap_err().contains("not a TUI action"));
+    assert!(tui("the inspector").is_err());
+    let w = |c: &str| classify(c, Client::Web, &web);
+    assert_eq!(w("`answer`: Allow on its card"), Ok(Path::Action));
+    assert_eq!(w("gap: WEB1.2 (sessions)"), Ok(Path::Gap("WEB1.2".into())));
+    assert!(w("`worktree.new`").unwrap_err().contains("not a web action"));
+    assert_eq!(task_id("M9.4 x"), Some("M9.4"));
+    assert_eq!(task_id("WEB1 x"), None);
 }
