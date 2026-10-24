@@ -787,7 +787,10 @@ fn the_daemon_runs_serve_and_keeps_it_through_upgrades() {
 /// `web off` takes the port back, and a daemon restart brings it up again by itself.
 #[test]
 fn the_web_app_is_a_setting_the_daemon_keeps() {
-    let port = free_port();
+    // Held until the instant before it is wanted: other tests pick "free" ports too, and this
+    // one is not bound until `web on`, minutes into a busy run.
+    let hold = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = hold.local_addr().unwrap().port();
     let mut w =
         World::new(&format!("[remote]\ninsecure = true\nlisten = \"127.0.0.1:{port}\"\n"), &[]);
     let config_path = std::path::PathBuf::from(w.ok(&["config", "path"]).trim());
@@ -815,6 +818,7 @@ fn the_web_app_is_a_setting_the_daemon_keeps() {
     assert!(!bad.status.success());
 
     // On: up, with its address, before the command returns.
+    drop(hold);
     let said = w.ok(&["web", "on"]);
     assert!(said.contains("up at http://127.0.0.1:"), "{said}");
     assert!(said.contains("ptyro pair"), "{said}");
@@ -845,7 +849,36 @@ fn the_web_app_is_a_setting_the_daemon_keeps() {
     wait_http(port);
     let deadline = Instant::now() + WAIT;
     while status(&w)["up"] != true {
-        assert!(Instant::now() < deadline, "the web app didn't come back with the daemon");
+        assert!(
+            Instant::now() < deadline,
+            "the web app didn't come back with the daemon: {}\n{}",
+            status(&w),
+            String::from_utf8_lossy(
+                &std::process::Command::new("ps")
+                    .args(["-ax", "-o", "pid,ppid,etime,command"])
+                    .output()
+                    .unwrap()
+                    .stdout
+            )
+            .lines()
+            .filter(|l| l.contains("serve --managed") || l.contains("daemon start"))
+            .collect::<Vec<_>>()
+            .join("\n")
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    // A daemon that dies without a word (kill -9) leaves its server behind with the socket file:
+    // the server notices it is orphaned and leaves, so the next daemon's can have the port.
+    w.d.crash();
+    w.d.restart().unwrap();
+    let deadline = Instant::now() + WAIT;
+    while status(&w)["up"] != true {
+        assert!(
+            Instant::now() < deadline,
+            "the web app didn't come back after a crash: {}",
+            status(&w)
+        );
         std::thread::sleep(Duration::from_millis(100));
     }
 

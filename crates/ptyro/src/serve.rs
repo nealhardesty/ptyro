@@ -367,14 +367,24 @@ pub async fn run(
     }
 }
 
-/// Started by the daemon: leave when it's gone for good (its socket missing for 30 s).
+/// Started by the daemon: leave when it is gone (it is our parent), or its socket has been
+/// missing for 30 s.
 async fn exit_with_daemon(socket: std::path::PathBuf) {
+    // The daemon that started us is our parent: when it is gone (killed, crashed, replaced) the
+    // next one starts a server of its own, and ours would hold the port for good. A crash leaves
+    // the socket file behind, so the file alone can't say.
+    let parent = std::os::unix::process::parent_id();
     let mut missing = 0;
-    loop {
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        missing = if socket.exists() { 0 } else { missing + 1 };
-        if missing >= 6 {
+    for tick in 0u64.. {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        if std::os::unix::process::parent_id() != parent {
             std::process::exit(0);
+        }
+        if tick % 5 == 4 {
+            missing = if socket.exists() { 0 } else { missing + 1 };
+            if missing >= 6 {
+                std::process::exit(0);
+            }
         }
     }
 }

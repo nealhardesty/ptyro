@@ -4515,6 +4515,10 @@ is "the web is up when the daemon is".
   else this network (`local = true`: HTTPS from ptyro's certificate, private addresses only).
   Any way the config already has (`tailscale`, `local`, `insecure`, `trusted_proxy`,
   `public_url`, `tls_cert`) is kept. Nothing opens to anyone until a device is paired.
+- **No orphans.** A managed `ptyro serve` leaves within a second of its parent daemon going
+  (`getppid` changes), however it went: a crash leaves the socket file behind, so the file alone
+  can't say, and the next daemon's server would never get the port (`m9`: the daemon is killed
+  with SIGKILL and its replacement's server comes up).
 - **After a reboot.** The daemon runs it, so it is up when the daemon is; `ptyro web on` and
   `ptyro init` say when the login service isn't installed (`ptyro daemon install-service`).
 - **Routes:** `/` and the embedded app; `/ws`; `POST /api/request` (`Authorization: Bearer`,
