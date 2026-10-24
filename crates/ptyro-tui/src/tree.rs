@@ -81,6 +81,10 @@ impl Inputs<'_> {
         self.sessions
             .iter()
             .filter(|s| {
+                // The scratchpad's editor is in no list (NOTE1.1).
+                if s.pad {
+                    return false;
+                }
                 let under_project = s.project.as_ref().is_some_and(|p| shown_projects.contains(p))
                     && s.worktree
                         .as_ref()
@@ -136,7 +140,7 @@ impl Inputs<'_> {
                 let (quick, sessions): (Vec<&SessionInfo>, Vec<&SessionInfo>) = self
                     .sessions
                     .iter()
-                    .filter(|s| s.worktree.as_deref() == Some(w.id.as_str()))
+                    .filter(|s| s.worktree.as_deref() == Some(w.id.as_str()) && !s.pad)
                     .partition(|s| s.quick);
                 rows.extend(sessions.into_iter().map(|s| Row::Session(s.id)));
                 rows.extend(quick.into_iter().map(|s| Row::Quick(s.id)));
@@ -216,6 +220,7 @@ mod tests {
             summary: None,
             window_title: None,
             quick: false,
+            pad: false,
         }
     }
 

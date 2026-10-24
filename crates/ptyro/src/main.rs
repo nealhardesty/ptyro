@@ -10,6 +10,7 @@ mod host;
 mod init;
 mod mcp;
 mod orch;
+mod pad;
 #[cfg(test)]
 mod parity;
 mod profiles;
@@ -526,6 +527,19 @@ enum Cmd {
         /// With --read: up to N lines of scrollback above the screen (all of it without N)
         #[arg(long, requires = "read", num_args = 0..=1, default_missing_value = "4294967295")]
         scrollback: Option<u32>,
+    },
+    /// The scratchpad: one notes file for ideas and bugs (`$PTYRO_SCRATCHPAD`), the same in every
+    /// session. Opens in your editor, here; `--pane` opens it as a session (`C-q ;` in the TUI)
+    #[command(visible_alias = "pad")]
+    Scratchpad {
+        #[command(subcommand)]
+        cmd: Option<pad::PadCmd>,
+        /// Open it as a session of its own (the editor, kept running) and attach
+        #[arg(long)]
+        pane: bool,
+        /// With --pane: print the session as JSON instead of attaching
+        #[arg(long, requires = "pane")]
+        json: bool,
     },
     /// Serve the web app and the protocol over WebSocket for paired devices (phones)
     Serve {

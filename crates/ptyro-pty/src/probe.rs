@@ -179,6 +179,26 @@ pub fn local_time_hm() -> Option<(u8, u8)> {
     ok.then_some((tm.tm_hour as u8, tm.tm_min as u8))
 }
 
+/// Local date and time as `2026-10-24 14:02` (honouring `TZ`), for the scratchpad's stamps.
+#[allow(unsafe_code)] // localtime_r has no std equivalent; it writes only into `tm`.
+pub fn local_datetime() -> Option<String> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+    let t = libc::time_t::try_from(now).ok()?;
+    // SAFETY: `tm` is a zeroed out-parameter owned by this frame; localtime_r is reentrant.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    let ok = unsafe { !libc::localtime_r(&t, &mut tm).is_null() };
+    ok.then(|| {
+        format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}",
+            tm.tm_year + 1900,
+            tm.tm_mon + 1,
+            tm.tm_mday,
+            tm.tm_hour,
+            tm.tm_min
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

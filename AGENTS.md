@@ -35,6 +35,8 @@ work completely, and be discoverable, in each before it counts as done.
   `make parity` counts those.
 - Waive only commands that another program runs (an agent's own mail, hooks), never
   something that isn't built yet.
+- Every configuration option is editable in the configuration panel (ROADMAP CFG1), in the TUI
+  and the web. A new option gets its schema entry (type, default, help) in the same change.
 - Out of the box comes first: sensible defaults, no setup the user must know
   about, and errors that offer the fix instead of naming a command to type.
 

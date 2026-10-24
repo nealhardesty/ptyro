@@ -158,7 +158,7 @@ impl App {
         let live = self
             .drawer_session()
             .and_then(|id| self.session(id))
-            .is_some_and(|s| s.quick && s.state.is_live());
+            .is_some_and(|s| (s.quick || s.pad) && s.state.is_live());
         if self.drawer.is_some() && !live {
             self.hide_drawer();
         }

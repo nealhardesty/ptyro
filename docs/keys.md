@@ -59,6 +59,9 @@ action by name.
 | `\` | show or hide the sidebar |
 | `u` | do what the last message offers: undo it, or fix what it reports |
 | `C-t` or `!` | the quick terminal: this worktree's shell in a drawer below the pane. Again focuses it, and once more hides it (the shell keeps running) |
+| `;` | the scratchpad: your notes file in the editor, shown as `[scratchpad] mode` says (below). Again focuses it, and once more hides it (the editor keeps running) |
+| `'` | add a line to the scratchpad without opening it (stamped with the time and where you are) |
+| `"` | the scratchpad's open items: type to search, `⏎` starts one as a task, `Ctrl-X` ticks it, `Ctrl-A` shows ticked ones, `Ctrl-E` opens the editor |
 | `H` | home: who needs you, PRs, recent projects and repositories found; ⏎ starts a task there |
 | `M` | mend: what the health badge (`⚕` in the status bar) found, each with its fix |
 | `.` | what you can do with the focused session (its menu) |
@@ -100,6 +103,7 @@ Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.
 | `<` / `>` | the sidebar a column narrower / wider (or drag its edge) |
 | `u` / `P` | do what the last message offers / add a project |
 | `.` | everything you can do with this row (a session, worktree or project), with the keys |
+| `;` / `'` | the scratchpad / add a line to it |
 | `F` / `!` | finish this worktree (commit, then a PR or integrate) / its quick terminal (`⏎` on its `›_ shell` line shows or hides it too) |
 | `H` / `M` | home / mend what the health badge found |
 | `A` | adopt the Claude started by hand in this shell: a managed session, same conversation |
@@ -123,8 +127,9 @@ denies. `Ctrl-C` clears the draft, or interrupts the turn when the draft is empt
 ## The inbox (`Ctrl-Q i`)
 
 `j` / `k` move, `Tab` cycles this workspace, the others and All. `⏎` opens the entry's session
-(or the run, for a gate or run entry), `p` peeks at it, `r` marks it read, `R` marks all read,
-`q` or `Esc` closes.
+(or the run, for a gate or run entry), `p` peeks at it, `n` notes it to the scratchpad (a line you
+can edit, with a link back to the session), `r` marks it read, `R` marks all read, `q` or `Esc`
+closes.
 
 ## The inspector (`Ctrl-Q D`)
 
@@ -190,7 +195,26 @@ through ptyro too).
 | `[` / `]` (or `{` / `}`) | previous / next shell prompt (needs `ptyro shell-init`) |
 | `v` / `V` / `C-v` | select characters / lines / a block (`o` jumps to the other end) |
 | `y` or `⏎` / `Y` | copy the selection / the line to your terminal's clipboard (works over SSH and in tmux) |
+| `a` | add the selection to the scratchpad, quoted, as a note |
 | `q`, `Esc` or `C-c` | leave (`Esc` first clears a selection) |
+
+## The scratchpad (`Ctrl-Q ;`)
+
+One notes file for ideas and bugs, the same in every session (`$PTYRO_SCRATCHPAD`; `ptyro
+scratchpad` on the command line). Its key opens it in your editor (`[scratchpad] editor`, else
+`$VISUAL` / `$EDITOR`, else nvim, vim, nano or vi) as one session that keeps running, so your
+cursor and undo are where you left them. `[scratchpad] mode` says where it shows:
+
+- `drawer` (the default): below the focused pane, like the quick terminal (they share the one
+  drawer; `+` / `-` resize it);
+- `popup`: a window over everything, about 80% by 70% of the screen. The editor has the keyboard;
+  only the prefix reaches ptyro, so `Ctrl-Q ;` closes it;
+- `pane`: a pane beside the focused one. The key closes it.
+
+Closing hides it; quitting the editor (`:q`) ends it, and the next press starts a new one. The
+status bar shows `✎ 7` when seven `- [ ]` items are open. `Ctrl-Q '` adds a line without opening
+the pad, and the row menu's "note this" (`.`, then `scratchpad.note`) starts that line from a
+session's task. The palette also has `scratchpad.history`: saved copies, `⏎` puts one back.
 
 ## Mouse
 
@@ -209,7 +233,7 @@ key include: `project.add`
 (pick from repos under `[discover] roots`), `project.trust`, `worktree.remove`,
 `session.command` (a session running a command line), `session.resume`, `session.hibernate`,
 `session.mute`, `session.summarize` (a `≈` line from a small model), `notify.test`,
-`theme.next`, `config.edit`, `help.tour`.
+`theme.next`, `config.edit`, `help.tour`, `scratchpad.history`, `scratchpad.note`.
 
 ## Other overlays
 

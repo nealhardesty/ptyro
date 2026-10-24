@@ -426,6 +426,57 @@ pub struct Config {
     pub remote: Remote,
     pub clipboard: Clipboard,
     pub summaries: Summaries,
+    pub scratchpad: Scratchpad,
+}
+
+/// The scratchpad (NOTE1, SPEC §13.6): one notes file, opened in your editor in a pane.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Scratchpad {
+    /// Where the file lives (default: `scratchpad.md` in ptyro's data directory). Point it into a
+    /// synced folder or a repository to share it between machines.
+    pub path: Option<String>,
+    /// How its key shows it: `drawer` (below the pane, like the quick terminal), `popup` (a
+    /// window over everything) or `pane` (a pane of its own beside the others).
+    pub mode: String,
+    /// The editor, as a command line (`"nvim"`, `"hx"`, `"code -w"`); default: `[editors]`
+    /// default, else `$VISUAL`, `$EDITOR`, then nvim, vim, nano or vi, whichever is installed.
+    pub editor: Option<String>,
+    /// How many days of saved copies to keep (the newest 20 always stay).
+    pub keep: u64,
+    /// Tick an item once the worktree started from it is merged or cleaned up.
+    pub tick_on_finish: bool,
+}
+
+impl Default for Scratchpad {
+    fn default() -> Self {
+        Self { path: None, mode: "drawer".into(), editor: None, keep: 30, tick_on_finish: true }
+    }
+}
+
+impl Config {
+    /// Where the scratchpad file is: `[scratchpad] path`, else `scratchpad.md` in `data`.
+    pub fn scratchpad_path(&self, data: &std::path::Path) -> PathBuf {
+        match &self.scratchpad.path {
+            Some(p) if !p.trim().is_empty() => expand_home(p.trim()),
+            _ => data.join("scratchpad.md"),
+        }
+    }
+}
+
+impl Scratchpad {
+    fn validate(&self) -> Result<(), String> {
+        if !["drawer", "popup", "pane"].contains(&self.mode.as_str()) {
+            return Err(format!("scratchpad.mode: {:?} (drawer, popup or pane)", self.mode));
+        }
+        if self.keep == 0 {
+            return Err("scratchpad.keep: at least 1 day".into());
+        }
+        if self.editor.as_deref().is_some_and(|e| e.split_whitespace().next().is_none()) {
+            return Err("scratchpad.editor: must not be empty".into());
+        }
+        Ok(())
+    }
 }
 
 /// A one-line summary of what a session is doing, from a small, cheap model (UX1.3, SPEC
@@ -947,6 +998,7 @@ impl Config {
     }
 
     fn validate(&self) -> Result<(), String> {
+        self.scratchpad.validate()?;
         if self.ui.prefix.keys().is_empty() {
             return Err("ui.prefix: needs at least one key".into());
         }
@@ -1169,6 +1221,30 @@ impl Config {
         BUILTIN_EDITORS
             .contains(&name)
             .then(|| EditorDef { command: vec![name.into(), "{path}".into()], inside })
+    }
+
+    /// The scratchpad's editor as argv (`{path}` may stand for the file): `[scratchpad] editor`,
+    /// else the default editor of `[editors]` (only a terminal one when `terminal`), else
+    /// `$VISUAL` / `$EDITOR`, else the first of nvim, vim, nano and vi that is installed.
+    pub fn scratchpad_editor(&self, terminal: bool) -> Option<Vec<String>> {
+        let words = |l: &str| l.split_whitespace().map(str::to_owned).collect::<Vec<_>>();
+        if let Some(e) = &self.scratchpad.editor {
+            return Some(words(e));
+        }
+        if let Some(EditorEntry::Name(n)) = self.editors.get("default")
+            && let Some(def) = self.editor(n)
+            && (def.inside || !terminal)
+        {
+            return Some(def.command);
+        }
+        for var in ["VISUAL", "EDITOR"] {
+            if let Ok(v) = std::env::var(var)
+                && !v.trim().is_empty()
+            {
+                return Some(words(&v));
+            }
+        }
+        crate::scratchpad::fallback_editor().map(|e| vec![e])
     }
 
     /// `editors.default`, else `$VISUAL`/`$EDITOR` if it names a known editor, else `nvim`.

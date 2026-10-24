@@ -14,6 +14,7 @@ import "./projects.js";
 import "./review.js";
 import "./runs.js";
 import "./settings.js";
+import { initNotes, notesConnected, notesEvent, notesLink, notesNeedsLoad, notesLoad, notesNoteButton, notesQuickAdd, notesShown, notesStart, notesView } from "./notes.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
 import { coach } from "./settings.js";
 
@@ -31,6 +32,13 @@ const ACTIONS = {
   "inbox": "The inbox: what happened while you were away",
   "inbox.read": "Mark everything in the inbox read",
   "notifications": "Notifications on this device (a test is sent)",
+  "scratchpad": "The scratchpad: your notes file, edited here; it saves as you type",
+  "scratchpad.add": "Add a line to the scratchpad, stamped with the time",
+  "scratchpad.items": "The scratchpad's open items (- [ ] lines)",
+  "scratchpad.start": "Start an open item as a task in a new worktree",
+  "scratchpad.tick": "Tick or untick an item in the scratchpad",
+  "scratchpad.history": "Saved copies of the scratchpad; put one back",
+  "scratchpad.note": "Note this session in the scratchpad",
   "pair": "Pair this device with the link or QR code from `ptyro pair`",
   "unpair": "Forget this device's pairing",
 } as const;
@@ -236,6 +244,7 @@ function header(title: string, back: boolean | string, ...extra: Child[]): HTMLE
     h("h1", {}, title),
     ...extra,
     dot,
+    notesLink(),
     h("a", { class: "inbox-link", href: "#/inbox", title: tip("inbox") }, "✉", unread ? h("b", {}, String(unread)) : null),
     h("button", { class: "icon", title: tip("notifications"), onclick: () => void enablePush() }, "🔔"),
   );
@@ -253,6 +262,7 @@ function sessionCard(s: Session): HTMLElement {
       detail ? h("div", { class: "detail" }, detail) : null,
     ),
     h("time", {}, s.status ? ago(s.status.since_ms) : ago(s.created_ms)),
+    notesNoteButton(s, true),
   );
   if (s.status?.status === "blocked" && s.state.t === "running") {
     return h("div", { class: "blocked-wrap" }, card,
@@ -299,7 +309,7 @@ function listView(): HTMLElement {
   const head = header("ptyro", false,
     all.length > 1 ? h("button", { class: "icon", title: tipOf("session.broadcast"), onclick: () => { selecting = true; render(); } }, "☑") : null,
     h("button", { class: "icon plus", title: tipOf("session.new"), "aria-label": "New task", onclick: () => newTask() }, "＋"));
-  return h("div", {}, head, tools, all.length > 6 || query ? searchBar : null, h("main", { class: "list", title: tip("sessions") }, h("div", { class: "cards" }, ...body),
+  return h("div", {}, head, tools, all.length > 6 || query ? searchBar : null, notesQuickAdd(), h("main", { class: "list", title: tip("sessions") }, h("div", { class: "cards" }, ...body),
     h("a", { class: "foot-link", href: "#/history", title: tipOf("session.history") }, "Earlier sessions")));
 }
 
@@ -392,6 +402,7 @@ function sessionView(id: string): HTMLElement {
     h("div", { class: "keys", title: tip("session.keys") },
       ...KEYS.map(([label, code]) => h("button", { onclick: () => sendKey(id, code) }, label)),
       h("button", { onclick: () => sendKey(id, { t: "char", c: "c" }, 4) }, "^C"),
+      notesNoteButton(s, false),
       s.structured
         ? h("button", { title: tip("session.view"), onclick: () => { if (!app.termView.delete(id)) app.termView.add(id); render(); } }, app.termView.has(id) ? "Chat" : "Terminal")
         : h("button", { class: app.fit ? "on" : "", title: tip("session.view"), onclick: () => { app.fit = !app.fit; paint(); render(); } }, app.fit ? "Fit" : "1:1"),
@@ -487,7 +498,8 @@ function render(): void {
   }
   const r = route();
   if (r.view !== "session" || r.id !== app.viewing) subscribe(r.view === "session" ? r.id! : null);
-  const view = withTabs(r.view, r.view === "session" ? sessionView(r.id!) : r.view === "inbox" ? inboxView() : views.has(r.view) ? views.get(r.view)!(r.id ?? "") : listView());
+  if (notesNeedsLoad()) void notesLoad();
+  const view = withTabs(r.view, location.hash === "#/notes" ? notesView() : r.view === "session" ? sessionView(r.id!) : r.view === "inbox" ? inboxView() : views.has(r.view) ? views.get(r.view)!(r.id ?? "") : listView());
   if (conn.state !== "open") view.prepend(h("div", { class: "offline", role: "status" }, conn.state === "connecting" ? "Connecting…" : "Offline: reconnecting…"));
   if (root.firstChild !== view || root.childNodes.length !== 1) root.replaceChildren(view);
   // The number of agents waiting on you, in the tab's title and on an installed app's icon.
@@ -577,6 +589,7 @@ conn.listeners.add((msg) => {
     }
     void refresh();
     void loadAll();
+    notesConnected();
     return;
   }
   if (msg.t === "chat") {
@@ -616,6 +629,8 @@ conn.listeners.add((msg) => {
     } else if (e.t === "inbox_added") {
       app.inbox.unshift(e.entry);
       render();
+    } else if (e.t === "scratch_changed") {
+      notesEvent(e);
     }
   }
 });
@@ -641,9 +656,11 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === "?") sheet("Keys", [h("dl", { class: "facts" }, ...([["n", "New task"], ["/", "Find a session"], ["g s", "Sessions"], ["g p", "Projects"], ["g r", "Runs"], ["g e", "Change sets"], ["g i", "Inbox"], ["g m", "More"], ["Esc", "Close a dialog"]] as [string, string][]).flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
 });
 
-window.addEventListener("hashchange", () => { takePairCode(); render(); });
+window.addEventListener("hashchange", () => { takePairCode(); notesShown(); render(); });
 window.addEventListener("resize", paint);
 takePairCode();
+initNotes({ request: (r) => conn.request(r), connected: () => conn.state === "open", toast, render, header, tip });
+notesStart();
 if ("serviceWorker" in navigator) void navigator.serviceWorker.register("/sw.js");
 render();
 conn.connect();

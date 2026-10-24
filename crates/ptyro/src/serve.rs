@@ -74,6 +74,8 @@ const ASSETS: &[(&str, &str, &[u8])] = &[
     js!("screen"),
     js!("sessions"),
     js!("settings"),
+    js!("pad"),
+    js!("notes"),
     ("/sw.js", "text/javascript; charset=utf-8", include_bytes!("../../../web/dist/sw.js")),
     ("/style.css", "text/css; charset=utf-8", include_bytes!("../../../web/dist/style.css")),
     (

@@ -270,6 +270,17 @@ Pinned by `crates/ptyro/tests/m11.rs`.
   the address it last connected from; `push` counts its Web Push subscriptions; `pending`: its
   pairing code hasn't been claimed yet.
 
+## Scratchpad (NOTE1)
+
+- `ptyro scratchpad cat --json`, `scratchpad add --json` → `{path, rev, text, open, done}`: `rev` is
+  the first 12 hex digits of the text's SHA-256, `open` and `done` count `- [ ]` and `- [x]` items.
+- `ptyro scratchpad todo --json` → `{rev, items: [Item]}`; `Item`: `{line, done, text, section?, at?,
+  whence?, by?, worktree?, pr?}`. `line` is 1-based; `at` is `2026-10-24 14:02` from the stamp;
+  `whence` the worktree or directory it was added in; `by` the agent that added it; `worktree`
+  the `[wt:…]` tag; `pr` the `(#N)` that finished it.
+- `ptyro scratchpad log --json` → `[{rev, at_ms, bytes, lines}]`, newest first.
+- `ptyro scratchpad --pane --json` → a `Session` (the editor; `pad: true`).
+
 ## Setup, config and the daemon
 
 - `ptyro doctor --json`, `ptyro profile doctor --json` → `[{section, name, level, text}]`.

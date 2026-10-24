@@ -128,6 +128,7 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Repor
     );
     daemon(ctx, &config, quick, &mut r).await;
     remote(ctx, &config, &mut r);
+    scratchpad(ctx, &config, &mut r);
     if terminal_too {
         terminal(&mut r).await;
     }
@@ -135,6 +136,59 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Repor
     agents(&config, &mut r).await;
     profiles(ctx, &config, None, &mut r).await;
     r
+}
+
+/// The scratchpad (NOTE1): the file can be written, and there is a terminal editor for its pane.
+fn scratchpad(ctx: &Ctx, config: &Config, r: &mut Report) {
+    let path = config.scratchpad_path(&ctx.paths.data);
+    let pad = ptyro_core::scratchpad::Pad::new(
+        path.clone(),
+        ctx.paths.data.join("scratchpad.history"),
+        config.scratchpad.keep,
+    );
+    match pad.ensure() {
+        Ok(()) if std::fs::OpenOptions::new().append(true).open(&path).is_ok() => {
+            r.add(
+                "scratchpad",
+                "file",
+                Level::Ok,
+                format!("{} (also $PTYRO_SCRATCHPAD)", path.display()),
+            );
+        }
+        Ok(()) => r.add(
+            "scratchpad",
+            "file",
+            Level::Problem,
+            format!(
+                "{} isn't writable (`chmod u+w {}`, or set [scratchpad] path)",
+                path.display(),
+                path.display()
+            ),
+        ),
+        Err(e) => r.add(
+            "scratchpad",
+            "file",
+            Level::Problem,
+            format!("{}: {e} (set [scratchpad] path in `ptyro config edit`)", path.display()),
+        ),
+    }
+    match config.scratchpad_editor(true) {
+        Some(cmd) if which(&cmd[0]).is_some() || cmd[0].contains('/') => {
+            r.add("scratchpad", "editor", Level::Ok, cmd.join(" "));
+        }
+        Some(cmd) => r.add(
+            "scratchpad",
+            "editor",
+            Level::Warn,
+            format!("{} not found: the pane can't start it (install it, or set [scratchpad] editor)", cmd[0]),
+        ),
+        None => r.add(
+            "scratchpad",
+            "editor",
+            Level::Warn,
+            "no terminal editor found (install nvim, vim or nano, or set [scratchpad] editor): `C-q ;` can't open the pad",
+        ),
+    }
 }
 
 /// `ptyro serve` (WEB1.7): plain HTTP where tokens would cross a network, and its certificate.

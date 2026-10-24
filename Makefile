@@ -23,7 +23,7 @@ WEB_STRICT ?= 1
 
 .DEFAULT_GOAL := help
 .PHONY: help rust-install build release install test fmt fmt-check lint deny doc check ci clean tools \
-        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean orchestrate-demo changeset-demo verify-claude verify-structured tui-parity parity reset
+        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean scratchpad-demo orchestrate-demo changeset-demo verify-claude verify-structured tui-parity parity reset
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -90,6 +90,9 @@ sandbox-clean: build ## Stop the sandbox's daemon and delete it
 
 reset: build ## Start ptyro over: stop it, remove its worktrees, service, config and data (summary, then asks; YES=1 skips asking unless work would be lost)
 	YES=$(YES) scripts/reset.sh
+
+scratchpad-demo: build ## NOTE1 in the sandbox: a pad with items, the CLI walkthrough (ARGS=tui to open the TUI on it, ARGS=clean)
+	scripts/scratchpad-demo.sh $(ARGS)
 
 orchestrate-demo: build ## M7 with fake agents: fan-out + compare + pick, a gated recipe, a lead over MCP (ARGS=tui|clean)
 	scripts/orchestrate-demo.sh $(ARGS)

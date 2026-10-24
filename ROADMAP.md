@@ -35,6 +35,8 @@ Conventions:
 | **H1** | Hardening review | ~120 findings of a full code review fixed (security, crashes, correctness, build) (done) |
 | **UX1** | Out of the box | From `cd repo && ptyro` to a shipped, cleaned-up worktree by keys alone; sidebar rows that say what's going on (done) |
 | **WEB1** | Web parity | The web client does what the CLI and TUI do, and the parity check covers it (done) |
+| **CFG1** | One configuration panel | Every option editable in the TUI (then the web); new options must join it |
+| **NOTE1** | The scratchpad | One persistent notepad file: a key opens it in your editor, `PTYRO_SCRATCHPAD` finds it, items become tasks, the web edits it (done) |
 | **Backlog** | Later / maybe | Editor, tasks, jj, libghostty, relay, … |
 
 Critical path: **M0 → M1 → M2 → M3 → M4** gives a daily-driver. M5 can interleave with M3/M4.
@@ -1733,9 +1735,203 @@ up), and `make parity` fails CI on a CLI command with neither a web path nor a w
   archive, end). A `full` device may now pair and revoke devices. `ptyro pair` says what the scope
   it made may do. `make parity` now fails on web gaps (`WEB_STRICT=0` only lists them).
 
+- [ ] **WEB1.8 A real terminal in the web** — L. (owner 2026-10-24) Today the web draws the
+  daemon's screen frames to a canvas (M9.3), so it *shows* a session live, but it can't *drive*
+  one: the only input is the reply box (`SendText` + Enter, a line at a time) and a key bar. Make
+  the session view a terminal you type in: every key goes to the session as it is pressed
+  (the daemon's encoder, so DECCKM, kitty flags and bracketed paste are right), paste, IME, the
+  phone's soft keyboard with a modifier row (Esc, Ctrl, Alt, Tab, arrows), mouse (SGR, when
+  the app asks), scrollback with touch/wheel scrolling, selection and copy (OSC 52 included),
+  a follow-the-cursor/fit mode, and resize that follows the viewport when this device has
+  `control` scope. Starts with a spike:
+  - *(spike)* **Consume or build?** Candidates: xterm.js (MIT; wants a raw byte stream, which
+    the protocol doesn't send the web, and would be a second emulator beside the daemon's),
+    a libghostty-vt WASM build (a second emulator, and Zig in the build), and our own: the
+    daemon already emulates and sends row deltas, so what's missing is input, scrollback,
+    selection and a faster draw loop, not parsing. Lean: **our own**, extending
+    `web/src/screen.ts` and the canvas drawer (no dependencies, in keeping with §16.4's embedded,
+    zero-third-party app). The spike measures a deltas-only renderer against xterm.js on a phone
+    (latency per keystroke, `htop`/`nvim`/Claude redraw, battery) and writes the verdict into SPEC
+    §16.4 / §20. Check the idea funnel (RESEARCH.md Part III) first, and add the options there.
+  - *Done when:* from a phone, `nvim` and `claude` are usable by keystroke, scrollback and
+    selection work, and the web test (`web/test`) types into a real session and compares it with
+    `ptyro read`.
+- [ ] **WEB1.9 The web server starts with the daemon, as a setting** — S. (owner 2026-10-24)
+  `[remote] serve = true` already makes the daemon supervise `ptyro serve --managed` (M9.2, SPEC
+  §16.3), but nobody finds it: it is a config key, off by default, with no UI. Make it a setting
+  you can turn on (the config panel, CFG1; `ptyro init`'s question; `ptyro daemon start --serve`;
+  the web's own settings, WEB1.6), show in `ptyro daemon status` and the health badge whether it
+  is up and at what URL, and say what turning it on changes (a listening port; `pair` next).
+  *Decision to record:* keep it a supervised child process rather than build it into the
+  daemon. The daemon owns every PTY and is local-socket-only by design; the network-facing
+  HTTP/TLS code belongs in a process that can crash, restart and be killed for a live upgrade
+  without touching a session. The user-visible result is the same ("the web is up when the
+  daemon is"). *Done when:* a fresh install answers "yes" to one question and the phone can
+  pair after a daemon restart, with no `ptyro serve` typed.
+
 Suggested order: WEB1.0 → WEB1.1 → WEB1.7 (phones need it) → WEB1.2 → WEB1.3 → WEB1.4 → the
-rest. From WEB1.0 on, every
+rest (WEB1.8's spike can run any time; WEB1.9 is small and can go first). From WEB1.0 on, every
 new feature in any milestone ships with its web part.
+
+---
+
+## CFG1 — One configuration panel (2026-10-24)
+
+Goal: every configuration option can be found and changed from inside ptyro, with no
+hand-editing of TOML (owner 2026-10-24). Today `ptyro config edit` opens the file in an editor
+(commented, validated on save); the panel is the front door for people who don't want to know
+the keys.
+
+**The rule going forward:** a new configuration option isn't done until it is in the panel
+(and the web's), like the CLI/TUI/web parity rule (SPEC §1.3). The panel reads the schema, so
+the cost of that rule is a description and a type on the key, not UI code.
+
+- [ ] **CFG1.0 A schema the panel reads** — M. One description per key in `ptyro-core`'s config
+  (`config.rs`): name, section, type (bool, int with range, enum with choices, string, list,
+  duration, path), default, one-line help, and whether it applies live or needs a restart.
+  `ptyro config show` and the commented file from `config edit` come from the same table, and a
+  test fails when a field of the config structs has no entry (so a new option can't skip the
+  panel). Agent commands, args, env and profiles stay user-config only (SPEC §13.1).
+  *Done when:* the test lists every key and fails on a new one without a description.
+- [ ] **CFG1.1 The TUI panel** — L. `Ctrl-Q ,` and the palette: sections on the left, keys on
+  the right with the value in effect, its default, and where it comes from (user, project,
+  local). `/` searches keys and help. Edit in place by type (toggle, choose from a list, a number
+  with its range, a text box; lists and tables open a sub-form); invalid values are refused with
+  the reason. Writes the user `config.toml` keeping its comments (`toml_edit`), applies live
+  where the key allows, and says "restart the daemon" with a button where it doesn't.
+  Reset-to-default per key. A project tab for `.ptyro.toml` / `.ptyro.local.toml`. Profiles,
+  agents and editors get their own sub-forms (add, rename, remove).
+  *Done when:* an end-to-end TUI test changes a bool, an enum, a list and a number from the
+  panel, the file on disk has them with its comments kept, and the live daemon used them.
+- [ ] **CFG1.2 CLI parity** — S. `ptyro config get|set|unset <key>` against the same schema (so
+  scripts and the panel agree), with `parity.md` rows for them.
+- [ ] **CFG1.3 The web panel** — M. The same schema served to the web (a `config.schema`
+  request, scope `full`) and a settings view that renders it. Lands with WEB1.6 (its `config`
+  row); until then the cell says `gap: CFG1.3`.
+
+---
+
+## NOTE1 — The scratchpad (2026-10-24)
+
+Goal: one always-available notepad for ideas and bugs you're working, that survives every
+session and restart, opens in your editor in one key, and is plain text that shells and agents
+can find (owner 2026-10-24, R-UX-32). The CLI, the TUI and the web are all first class (SPEC §1.3).
+
+**Design.**
+- **One file, plain text.** `<data>/scratchpad.md` (`[scratchpad] path` moves it, e.g. into a
+  synced folder or a git repo). Markdown, so checkboxes and headings work, but nothing needs
+  them. ptyro never owns the only copy: it is a file you can `cat`, `grep` and back up.
+- **`PTYRO_SCRATCHPAD`** is set in every session ptyro starts (agents, shells, the quick
+  terminal, recipes, scripts), next to `PTYRO_SESSION_ID` (SPEC §5.1 env table). Only `[scratchpad] path`
+  moves the file; the variable is never read as an override (a daemon started inside another ptyro
+  would adopt that one's pad). Agents are told
+  nothing by default; an agent that finds the variable can read the pad, and `ptyro scratchpad
+  add` is the polite way to write to it.
+- **Never lose a word.** Writes from ptyro are atomic appends or whole-file replaces with a
+  revision check; a snapshot is kept before every change from the web or the CLI, and daily
+  (`<data>/scratchpad.history/`, 30 days, `[scratchpad] keep`), so `ptyro scratchpad restore`
+  undoes a bad merge or an agent's mistake.
+- **Editing is the editor's job.** The pad opens in the default editor (`[scratchpad] editor`,
+  else the `[editors]` default, else `$VISUAL`/`$EDITOR`, else `nvim`/`vim`/`nano`, whichever is
+  found). nvim and vim start with `autoread` so an append from elsewhere appears without a prompt.
+
+- [x] **NOTE1.0 The file, the variable and the CLI** — S. The path, creation on first use with a
+  short header explaining itself (`# Scratchpad`, how to add to it), `PTYRO_SCRATCHPAD` in every
+  session's environment (and `PTYRO_SCRATCHPAD` honoured as an override of the path), and
+  `ptyro scratchpad`:
+  - no arguments: open it in the editor (waits, like `git commit`; from a ptyro pane it opens
+    the pane, NOTE1.1);
+  - `path`, `cat` (`--tail N`), `edit`;
+  - `add <text…>` (or stdin: `git diff --stat | ptyro scratchpad add -`): appends a stamped bullet
+    — `- [ ] 2026-10-24 14:02 · ptyro/bugs-roadmap-requests · <text>` — with the time, and the
+    worktree and session it came from when run inside one (`--no-stamp`, `--section Bugs` to
+    append under a heading, created if missing);
+  - `todo [--json]`: the open `- [ ]` items, with line numbers; `done <n|text>` ticks one;
+  - `log` and `restore [rev]` for the history; `--json` on all of them.
+  *Done when:* a test starts a session, finds `PTYRO_SCRATCHPAD` in its environment, appends from
+  it, and `cat`s the line back; the file survives a daemon restart and a live upgrade.
+- [x] **NOTE1.1 The pane** — M. A key (chosen with `docs/keys.md` in hand; also the palette and
+  the home screen) brings up the scratchpad in the editor, **in its own pane like the quick
+  terminal** (UX1.25): one editor session for the pad, started once and kept running, so the
+  cursor, scroll and undo are exactly where you left them. The same three steps as the quick
+  terminal (hidden → show and focus; shown → focus; focused → hide), the same drawer
+  (`+` / `-` resize), and it follows you across worktrees and projects, since there is only one.
+  `[scratchpad] mode = "drawer" | "popup" | "pane"`: a centred popup over everything (a
+  floating window about 80% by 70%, closed with the same key), or a normal pane in the sidebar's
+  list. The session is kept out of the sidebar's counts and numbering as quick terminals are.
+  If the editor dies, the next press starts it again; if no editor is found, `init`'s
+  "found tools" line and the error offer to pick one.
+  *Done when:* a TUI test types into the pad, hides it, switches worktree, shows it, and the text
+  and cursor are there; killing the editor and pressing the key brings it back.
+- [x] **NOTE1.2 Capture from anywhere** — M. The point of a scratchpad is that adding to it takes
+  no thought:
+  - a one-line **quick add** box (`Ctrl-Q` + the pad key with Shift, or the row menu's "note this")
+    that appends without opening the editor, stamped with where you were;
+  - in copy mode, a key sends the selection to the pad (quoted, with its session and time);
+  - on a session row, "note this" adds a line pre-filled with the task or the agent's last message;
+  - when a gate, a failed check or a blocked agent needs a thought you can't give now, "note for
+    later" adds it as an item that links back (`ptyro://session/<handle>`).
+  *Done when:* each of these is a tested key path, listed in `docs/keys.md` and `docs/parity.md`.
+- [x] **NOTE1.3 Items become work** — M. A `- [ ]` line is a task waiting to happen.
+  - `ptyro scratchpad start [n|text]` (TUI: `⏎` on an item in the pad's **picker**, a fuzzy list of
+    open items over the editor) starts a UX1.9 task with the item as the prompt, in a new worktree
+    on the current project; the item is tagged `[wt:<name>]` so it's traceable.
+  - When that worktree's PR merges or the worktree is cleaned up, the item is ticked (`- [x]`, with
+    the PR number) — `[scratchpad] tick_on_finish`, default on.
+  - The sidebar's footer and the home screen show the open count (`✎ 7`); the health badge doesn't.
+  - `ptyro mcp` exposes `scratchpad_read`, `scratchpad_add` and `scratchpad_todo` to a lead agent
+    (M7.x), writes stamped with the agent, and shown dimmed in the pad's picker so you can tell
+    your notes from theirs.
+  *Done when:* a test adds a bug as an item, starts it as a task, finishes the worktree, and sees the
+  item ticked with the PR.
+- [x] **NOTE1.4 Protocol and live sync** — S. `scratchpad.get`, `scratchpad.put` (with the revision
+  it was based on; a stale one is refused with the current text), `scratchpad.append`,
+  `scratchpad.history`, `scratchpad.restore`, and an event `scratchpad.changed` from a file watcher
+  (`notify`, so an edit from any program reaches every client). Scopes: `read` reads, `control`
+  writes. Writes from the web and agents never silently overwrite: three-way merge on the last
+  revision seen, and on a conflict both texts are kept with markers.
+  *Done when:* a test edits the file from outside and a connected client sees the event.
+- [x] **NOTE1.5 The web** — M. A **Notes** view (WEB1.x, same change): the pad as an editable
+  document that autosaves and merges as NOTE1.4 says, with a Markdown preview toggle in which
+  checkboxes tick with a tap, a find box, and a history sheet to restore from. On the session list
+  a **quick-add** box and the open-item count. The PWA is a **Web Share Target**
+  (`share_target` in the manifest): sharing text, a link or a screenshot's text from the phone's
+  share sheet appends it to the pad. Works offline: edits queue in IndexedDB and merge on reconnect.
+  *Done when:* from a phone, share a link into the pad, tick an item, and see both on the
+  desktop's open pane without reloading.
+- [x] **NOTE1.6 Configuration, docs and tests** — S. `[scratchpad]` (`path`, `mode`, `editor`,
+  `keep`, `tick_on_finish`) in the schema and the panel (CFG1), a README section, `docs/keys.md`,
+  `docs/config.md`, `docs/scripting.md` (the variable and `add` for hooks and scripts), the
+  parity rows, a `make` target if any fixture needs one, and SPEC §5.1 (the variable) and §16 updated.
+- [ ] **NOTE1.7 (later) Pads that follow context** — M. A per-project pad
+  (`<repo>/.ptyro/scratchpad.md`, git-excluded) beside the global one with `PTYRO_PROJECT_SCRATCHPAD`,
+  `ptyro scratchpad --project`, and a key that cycles global → project → worktree. Only if the single
+  pad turns out to be too noisy in use.
+
+**Done when:** you press one key anywhere in ptyro and are typing in your pad; from a shell
+inside a worktree `echo "login times out on safari" | ptyro scratchpad add -` lands as a stamped
+item; `⏎` on it starts an agent on it; the PR merging ticks it; and on your phone you share a
+link into it and see it in the desktop pane.
+
+**Done (2026-10-24): NOTE1.0–NOTE1.6** (NOTE1.7 stays a maybe). SPEC §13.6 has the design; the
+CLI is `ptyro scratchpad` (`pad`), `make scratchpad-demo` walks through it, and `docs/parity.md`
+has its rows. How it differs from the plan above:
+- **Keys:** `C-q ;` toggles the pad, `C-q '` adds a line, `C-q "` lists the open items (`+` and `=`
+  were taken). In copy mode `a` sends the selection; in the inbox `n` notes an entry. In the items
+  list, tick, show-ticked and editor are `Ctrl-X`, `Ctrl-A`, `Ctrl-E` (plain letters search).
+- **Stamp format:** after the checkbox: the time, then the worktree in backticks, then `by` and the
+  agent in backticks, then the words (`2026-10-24 14:02 · … · words`), so it parses without
+  guessing; tags (`[wt:project/name]`, `(#42)`) go at the end.
+- **Watching** is a 700 ms poll of the file's mtime and size, not `notify`: the same on Linux and
+  macOS and on synced folders. History keeps every state for an hour, then thins out.
+- **`start` on the web** is the one gap, and it is closed by WEB1.2's new-task box (the cell says
+  so); the `✎ N` count is in the status bar (`[ui] status_bar`) and on the home screen, not a sidebar
+  footer; agent-added items show `by <agent>` rather than dimmed.
+- **Not done:** an item started where there is no project isn't tagged `[wt:…]`; the popup swallows
+  mouse clicks rather than closing on a click outside; the web's Notes page and share target were
+  type-checked and unit-tested but not tried on a real phone.
+- **Also:** `ptyro doctor` checks the file and the editor; a lead's `ptyro mcp` has
+  `scratchpad_read`, `scratchpad_todo` and `scratchpad_add`.
 
 ---
 

@@ -346,6 +346,9 @@ impl Daemon {
         }
         extra.push(("PTYRO_SESSION_ID", id_str.as_os_str()));
         extra.push(("PTYRO_SOCKET", socket.as_os_str()));
+        // The scratchpad (NOTE1.0): shells, agents and scripts find the notes file here.
+        let pad = self.pad_path().into_os_string();
+        extra.push(("PTYRO_SCRATCHPAD", pad.as_os_str()));
         ptyro_pty::child_env(plan.strip(self.base_env.iter().cloned()), extra)
     }
 

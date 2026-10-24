@@ -210,6 +210,13 @@ impl Daemon {
         if was_open && let Some(w) = &updated {
             self.archive_if_merged(w);
         }
+        // The scratchpad item this worktree was started from is done (NOTE1.3).
+        if let Some(pr) = &updated.as_ref().and_then(|w| w.pr.clone())
+            && pr.state == "MERGED"
+            && wt.pr.as_ref().is_none_or(|p| p.state != "MERGED")
+        {
+            self.pad_finished(&wt.qualified(), Some(u64::from(pr.number)));
+        }
         if titled && let Some(w) = updated {
             self.put_worktree(w);
         }

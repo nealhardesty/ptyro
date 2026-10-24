@@ -195,6 +195,10 @@ pub struct SessionInfo {
     /// Its worktree's (or directory's) quick terminal (UX1.25): one shell, reused, and quiet.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub quick: bool,
+    /// The scratchpad's editor (NOTE1.1): one, in a pane or drawer of its own, kept out of the
+    /// sidebar.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pad: bool,
 }
 
 /// A session's summary (UX1.3): `text` was made after turn `turn`, at `at_ms`.
@@ -401,4 +405,7 @@ pub struct SpawnSpec {
     /// Make it the quick terminal of where it starts (UX1.25; `QuickShell` reuses it).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub quick: bool,
+    /// Make it the scratchpad's editor (NOTE1.1; `ScratchPane` reuses it).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pad: bool,
 }

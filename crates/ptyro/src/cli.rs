@@ -164,6 +164,7 @@ async fn dispatch(
                 lead,
                 structured,
                 welcome: false,
+                pad_item: None,
             };
             let new_wt = new_wt.or_else(|| {
                 (a.pr.is_some() || a.issue.is_some() || a.take_changes).then(String::new)
@@ -415,6 +416,7 @@ async fn dispatch(
                 r => Err(unexpected(r)),
             }
         }
+        Some(Cmd::Scratchpad { cmd, pane, json }) => crate::pad::run(&ctx, cmd, pane, json).await,
         Some(Cmd::Shell { worktree, json, read, scrollback }) => {
             quick_shell(&ctx, worktree, json, read, scrollback).await
         }
@@ -631,6 +633,42 @@ async fn start_task(ctx: &Ctx, task: &str) -> Result<i32, Error> {
     }
 }
 
+/// `ptyro scratchpad start`: the item's words as a task, like `ptyro "…"`, and the new worktree
+/// is noted on the item (NOTE1.3).
+pub async fn start_pad_task(
+    ctx: &Ctx,
+    prompt: &str,
+    agent: Option<String>,
+    line: u32,
+) -> Result<i32, Error> {
+    let cwd = current_dir()?;
+    let config = ptyro_core::config::Config::load(&ptyro_core::config::Config::path(&ctx.paths))
+        .unwrap_or_default();
+    let a = NewArgs {
+        agent: Some(agent.unwrap_or_else(|| ptyro_agents::default_agent(&config))),
+        prompt: Some(prompt.to_owned()),
+        cwd: Some(cwd.clone()),
+        pad_item: Some(line),
+        ..NewArgs::default()
+    };
+    if in_git_repo(&cwd) {
+        crate::projects::new_in_new_worktree(ctx, a, String::new(), None).await
+    } else {
+        new(ctx, a).await
+    }
+}
+
+fn in_git_repo(dir: &std::path::Path) -> bool {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "--git-dir"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
 async fn default_action(ctx: &Ctx) -> Result<i32, Error> {
     let client = ctx.connect(true).await?;
     match most_recent(&client).await? {
@@ -672,6 +710,8 @@ pub struct NewArgs {
     pub lead: Option<serde_json::Value>,
     /// Structured mode (M10).
     pub structured: bool,
+    /// Started from the scratchpad item on this line (NOTE1.3).
+    pub pad_item: Option<u32>,
 }
 
 /// The variables a session should see from this client (SSH agent, display).

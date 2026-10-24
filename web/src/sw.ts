@@ -8,7 +8,7 @@ const sw = self as unknown as ServiceWorkerGlobalScope;
 const SHELL = "ptyro-shell-v2";
 const FILES = [
   "/", "/style.css", "/manifest.webmanifest", "/icon.svg", "/icon-192.png",
-  ...["app", "color", "conn", "data", "flow", "kit", "projects", "qr", "review", "runs", "screen", "sessions", "settings"].map((m) => `/${m}.js`),
+  ...["app", "color", "conn", "data", "flow", "kit", "projects", "qr", "review", "runs", "screen", "sessions", "settings", "pad", "notes"].map((m) => `/${m}.js`),
 ];
 
 sw.addEventListener("install", (e) => {
@@ -29,7 +29,7 @@ sw.addEventListener("fetch", (e) => {
   e.respondWith(
     fetch(e.request)
       .then((r) => {
-        if (r.ok && FILES.includes(url.pathname)) {
+        if (r.ok && FILES.includes(url.pathname) && !url.search) {
           const copy = r.clone();
           void caches.open(SHELL).then((c) => c.put(e.request, copy));
         }

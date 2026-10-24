@@ -15,6 +15,7 @@ pub mod model;
 pub mod names;
 pub mod paths;
 pub mod project;
+pub mod scratchpad;
 pub mod screen;
 pub mod secret;
 pub mod session;

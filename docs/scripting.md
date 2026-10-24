@@ -134,6 +134,23 @@ ptyro wt run app/fix-login dev
 ptyro wait fix-login.dev --match 'ready on|listening' --timeout 2m
 ```
 
+### Notes from scripts
+
+`$PTYRO_SCRATCHPAD` is set in every session, so a hook or a script can leave a note or read the
+open items:
+
+```bash
+# a failing nightly check becomes an item, with the log tail under it
+make test 2>&1 | tail -20 | ptyro scratchpad add --section Nightly -
+
+# what's open, as JSON
+ptyro scratchpad todo --json | jq -r '.items[] | "\(.line) \(.text)"'
+
+# start every open bug as a task (each gets its own worktree and agent)
+ptyro scratchpad todo --json | jq -r '.items[] | select(.section=="Bugs") | .line' |
+  while read n; do ptyro scratchpad start "$n"; done
+```
+
 ## Teach your agents ptyro (an AGENTS.md / skill snippet)
 
 Agents running inside ptyro can drive other sessions with the same commands. Paste this into a
@@ -156,6 +173,9 @@ Use these commands; they print JSON with `--json`:
 - `ptyro lease claim 'src/api/**' --exclusive --reason "…"`: keep others out of files you're
   changing; `ptyro lease release` when done. `ptyro radar` shows who else is changing what.
 - `ptyro checkpoint ls`: your worktree after each of your turns (the human can restore one).
+- `ptyro scratchpad add "…"`: note something for the human (a bug you found but didn't fix, a
+  follow-up) in their scratchpad, `$PTYRO_SCRATCHPAD`, stamped with your name; `ptyro scratchpad
+  todo` lists what they've noted. Add with the command; don't edit the file.
 
 Rules: never `ptyro kill` or `ptyro wt rm` sessions or worktrees you didn't create; never answer
 another session's permission prompt (`ptyro answer`) or a gate; the human does that (ptyro

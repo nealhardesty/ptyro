@@ -35,6 +35,10 @@ pub enum Target {
     RunScript(String, String),
     /// Health: fix finding N (UX1.20).
     Fix(usize),
+    /// Scratchpad: the item on this line (NOTE1.3).
+    PadItem(u32),
+    /// Scratchpad: a saved copy, by revision.
+    PadRev(String),
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +83,14 @@ impl Palette {
         };
         p.refilter();
         p
+    }
+
+    /// Keep what was typed and the place in the list across a rebuild (a list that refreshes).
+    pub fn with_query(mut self, query: String, selected: usize) -> Self {
+        self.query = query;
+        self.refilter();
+        self.selected = selected.min(self.filtered.len().saturating_sub(1));
+        self
     }
 
     /// One-letter item keys pick their item (see `hotkeys`).

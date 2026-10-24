@@ -125,7 +125,11 @@ pub fn needed(req: &Request) -> Scope {
         | PushSubscribe { .. }
         | PushUnsubscribe { .. }
         | PushTest
-        | ChatGet { .. } => Scope::Read,
+        | ChatGet { .. }
+        | ScratchGet
+        | ScratchTodo { .. }
+        | ScratchHistory
+        | ScratchPane { create: false, .. } => Scope::Read,
         Answer { .. }
         | GateResolve { .. }
         | ClearAttention { .. }
@@ -149,6 +153,10 @@ pub fn needed(req: &Request) -> Scope {
         | Retitle { .. }
         | Summarize { .. }
         | WorktreeOpen { .. }
+        | ScratchPut { .. }
+        | ScratchAdd { .. }
+        | ScratchMark { .. }
+        | ScratchRestore { .. }
         | Adopt { .. } => Scope::Control,
         // Finding one reads; starting one is a shell: full.
         QuickShell { create: false, .. } => Scope::Read,

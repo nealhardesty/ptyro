@@ -245,3 +245,44 @@ header .icon, .sheet-head .icon { min-width: 36px; min-height: 36px; display: in
 .searchbar { padding: 8px 8px 0; }
 .cards { display: grid; gap: 8px; }
 kbd { font: 12px ui-monospace, Menlo, monospace; padding: 1px 6px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; background: var(--panel); }
+/* The scratchpad (NOTE1.5) */
+.inbox-link b.open { background: var(--accent); }
+.card .note { align-self: flex-start; padding: 2px 8px; color: var(--muted); }
+.quick-wrap { display: flex; gap: 8px; align-items: center; padding: 8px 8px 0; flex-wrap: wrap; }
+.quick-add { display: flex; gap: 6px; flex: 1 1 220px; min-width: 0; }
+.quick-input, .pad-find { flex: 1; min-width: 0; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--text); font: inherit; }
+.badge { color: var(--accent); font-size: 13px; white-space: nowrap; }
+.notes { display: flex; flex-direction: column; min-height: 100dvh; }
+.pad-head { display: flex; gap: 10px; align-items: center; padding: 6px 12px 0; font-size: 13px; color: var(--muted); }
+.pad-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.pad-bar { display: flex; gap: 6px; padding: 8px; overflow-x: auto; }
+.pad-bar button { padding: 6px 10px; }
+.pad-bar button.on { border-color: var(--accent); }
+.pad-bar .pad-find { flex: 1 1 120px; min-width: 90px; }
+.pad-text { flex: 1; min-height: 50vh; margin: 0 8px; padding: 10px; resize: none; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 2; }
+.pad-preview { flex: 1; min-height: 50vh; margin: 0 8px; padding: 6px 14px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--panel); overflow-wrap: anywhere; }
+.pad-preview a { color: var(--accent); text-decoration: underline; }
+.pad-preview .md-h { margin: 14px 0 6px; }
+.pad-preview pre { overflow: auto; padding: 8px; background: var(--bg); border-radius: 6px; }
+.pad-preview blockquote { margin: 6px 0; padding-left: 10px; border-left: 3px solid var(--line); color: var(--muted); }
+.md-li { display: flex; gap: 8px; align-items: baseline; padding: 4px 0; }
+.md-li input { width: 20px; height: 20px; flex: none; align-self: center; }
+.md-li.done span { color: var(--muted); text-decoration: line-through; }
+.md-li.d1 { margin-left: 18px; } .md-li.d2 { margin-left: 36px; } .md-li.d3 { margin-left: 54px; } .md-li.d4 { margin-left: 72px; }
+.banner { margin: 6px 8px; padding: 8px 12px; border: 1px solid var(--warn); border-radius: 8px; font-size: 13px;
+  display: flex; gap: 10px; align-items: center; justify-content: space-between; }
+.banner.bad { border-color: var(--bad); }
+.sheet { margin: 6px 8px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+  display: grid; gap: 6px; max-height: 40vh; overflow: auto; }
+.snap { display: flex; justify-content: space-between; align-items: center; text-align: left; }
+.snap small { color: var(--muted); }
+.snap.on { border-color: var(--bad); }
+.pad-items { margin: 8px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.pad-items summary { cursor: pointer; padding: 4px 0; }
+.pad-item { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; border-top: 1px solid var(--line); }
+.pad-item .main { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.pad-item small, .muted { color: var(--muted); }

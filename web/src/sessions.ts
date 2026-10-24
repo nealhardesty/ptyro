@@ -61,7 +61,7 @@ const numberIn = (t: string): number | undefined => {
 
 /// The new-task sheet (UX1.9): what to do, which agent, and where. `where` preselects a
 /// project (`p:<id>`) or a worktree (`w:<id>`).
-export function newTask(where?: string): void {
+export function newTask(where?: string, task?: string): void {
   const projects = [...data.projects.values()];
   const wts = liveWorktrees();
   if (!projects.length) {
@@ -80,6 +80,7 @@ export function newTask(where?: string): void {
   ];
   const input = (el: HTMLElement) => el as HTMLInputElement & HTMLSelectElement & HTMLTextAreaElement;
   const prompt = input(h("textarea", { rows: 3, placeholder: "What should it do? e.g. “fix the flaky login test”", autocapitalize: "sentences" }));
+  if (task) prompt.value = task;
   const agent = input(h("select", {}, ...agentOptions.map(([v, l]) => h("option", { value: v }, l))));
   agent.value = data.defaultAgent in Object.fromEntries(agentOptions) ? data.defaultAgent : agentOptions[0][0];
   const command = input(h("input", { placeholder: "e.g. npm run dev", autocapitalize: "off", spellcheck: "false" }));

@@ -64,6 +64,23 @@ pub const ACTIONS: &[ActionSpec] = &[
         "shell.here",
         "The quick terminal: this worktree's shell in a drawer below; again focuses, then hides it",
     ),
+    a(
+        "scratchpad.toggle",
+        "The scratchpad: your notes file in the editor, in a drawer, popup or pane ([scratchpad] mode); again focuses, then hides it",
+    ),
+    a(
+        "scratchpad.add",
+        "Add a line to the scratchpad without opening it, stamped with where you are",
+    ),
+    a(
+        "scratchpad.items",
+        "The scratchpad's open items: search them, tick one, start one as a task",
+    ),
+    a("scratchpad.history", "The scratchpad's saved copies: put one back"),
+    a(
+        "scratchpad.note",
+        "Note this to the scratchpad: the selected session's task, or what you type",
+    ),
     a("session.next", "Show the next session in sidebar order (across projects) here"),
     a("session.prev", "Show the previous session in sidebar order (across projects) here"),
     ActionSpec {
@@ -339,6 +356,9 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Prefix, "u", "toast.act"),
     (Table::Prefix, ".", "row.menu"),
     (Table::Prefix, "!", "shell.here"),
+    (Table::Prefix, ";", "scratchpad.toggle"),
+    (Table::Prefix, "'", "scratchpad.add"),
+    (Table::Prefix, "\"", "scratchpad.items"),
     (Table::Prefix, "C-t", "shell.here"),
     (Table::Prefix, "H", "home"),
     (Table::Prefix, "M", "health"),
@@ -401,6 +421,8 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Nav, "u", "toast.act"),
     (Table::Nav, ".", "row.menu"),
     (Table::Nav, "!", "shell.here"),
+    (Table::Nav, ";", "scratchpad.toggle"),
+    (Table::Nav, "'", "scratchpad.add"),
     (Table::Nav, "H", "home"),
     (Table::Nav, "M", "health"),
     (Table::Nav, "F", "worktree.finish"),

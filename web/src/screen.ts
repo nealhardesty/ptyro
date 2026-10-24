@@ -37,10 +37,10 @@ export interface Session {
   last_output_ms?: number | null;
   created_ms: number;
   title?: string | null;
-  held?: boolean;
-  structured?: string | null;
   task?: string | null;
   last_reply?: string | null;
+  held?: boolean;
+  structured?: string | null;
   inner_agent?: string | null;
   quick?: boolean;
   profile?: string;
