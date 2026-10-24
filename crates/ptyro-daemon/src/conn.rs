@@ -219,11 +219,13 @@ impl Conn {
                     let _ = out.send(ServerMsg::Response { id, outcome }).await;
                 });
             }
-            // A device watches a session at its own size; it never resizes it under the
-            // person at the terminal.
+            // A device watches a session at its own size and never resizes it under the person at
+            // the terminal, unless it has `control` scope and asks: then it may take control (its
+            // clipboard writes reach it, its size counts), like the TUI (WEB1.8, SPEC §5.8).
             ClientMsg::Subscribe { session, size, control } if self.caller.grant.is_some() => {
-                let _ = (size, control);
-                self.subscribe(session, None, false).await
+                let may =
+                    self.caller.grant.is_some_and(|g| g.scope >= ptyro_protocol::Scope::Control);
+                self.subscribe(session, size.filter(|_| may), control && may).await
             }
             ClientMsg::Subscribe { session, size, control } => {
                 self.subscribe(session, size, control).await
@@ -247,6 +249,8 @@ impl Conn {
                             return;
                         }
                         self.daemon.audit(&s, g, "typed");
+                        // Typing from a phone makes it the controller, as typing at the terminal does.
+                        self.take_control(&s).await;
                     } else {
                         // An agent's keys pass the same guard as its `send` (M7.6): typing
                         // into a blocked session, or outside its run, is refused.
@@ -265,7 +269,8 @@ impl Conn {
                     s.input(&event).await;
                 }
             }
-            ClientMsg::Resize { .. } if self.caller.grant.is_some() => {}
+            ClientMsg::Resize { .. }
+                if self.caller.grant.is_some_and(|g| g.scope < ptyro_protocol::Scope::Control) => {}
             ClientMsg::Resize { session, size } => {
                 self.sizes.insert(session, size);
                 if let Some(s) = self.daemon.session(session) {

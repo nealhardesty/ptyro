@@ -10,8 +10,10 @@ export interface Run { style: number; text: string; wide?: boolean; clusters?: n
 export interface RowUpdate { y: number; runs: Run[]; wrapped?: boolean }
 export interface Cursor { x: number; y: number; visible: boolean; shape?: string }
 export interface Size { cols: number; rows: number }
+export interface Modes { mouse: boolean; alt_screen: boolean; bracketed_paste: boolean; focus_events: boolean; kitty_keyboard: boolean; app_cursor: boolean }
 export interface Delta {
   size?: Size;
+  modes?: Modes;
   styles?: { id: number; style: Style }[];
   rows?: RowUpdate[];
   cursor?: Cursor;
@@ -67,9 +69,25 @@ export function runCells(run: Run): string[] {
   return out;
 }
 
+/// A row's cells from its runs (a wide cell is followed by its spacer).
+export function cellsOf(runs: Run[], max = Infinity): Cell[] {
+  const cells: Cell[] = [];
+  for (const run of runs) {
+    for (const t of runCells(run)) {
+      cells.push({ t, s: run.style, wide: run.wide });
+      if (run.wide) cells.push({ t: "", s: run.style, spacer: true });
+    }
+  }
+  return cells.length > max ? cells.slice(0, max) : cells;
+}
+
 export class Screen {
   size: Size = { cols: 80, rows: 24 };
   rows: Cell[][] = [];
+  /// A row continues on the next one (a long line the terminal wrapped).
+  wraps: boolean[] = [];
+  /// What the program asked of the terminal: the mouse, the alternate screen, bracketed paste…
+  modes: Modes = { mouse: false, alt_screen: false, bracketed_paste: false, focus_events: false, kitty_keyboard: false, app_cursor: false };
   styles = new Map<number, Style>();
   cursor: Cursor = { x: 0, y: 0, visible: true };
   seq = 0;
@@ -83,21 +101,16 @@ export class Screen {
   }
 
   apply(f: Frame): void {
-    if (f.keyframe) { this.styles.clear(); this.rows = []; this.title = ""; }
+    if (f.keyframe) { this.styles.clear(); this.rows = []; this.wraps = []; this.title = ""; }
     if (f.delta.size) this.reshape(f.delta.size);
     else if (f.keyframe) this.reshape(this.size);
     for (const d of f.delta.styles ?? []) this.styles.set(d.id, d.style);
     for (const r of f.delta.rows ?? []) {
       if (r.y >= this.rows.length) continue;
-      const cells: Cell[] = [];
-      for (const run of r.runs) {
-        for (const t of runCells(run)) {
-          cells.push({ t, s: run.style, wide: run.wide });
-          if (run.wide) cells.push({ t: "", s: run.style, spacer: true });
-        }
-      }
-      this.rows[r.y] = cells.slice(0, this.size.cols);
+      this.rows[r.y] = cellsOf(r.runs, this.size.cols);
+      this.wraps[r.y] = !!r.wrapped;
     }
+    if (f.delta.modes) this.modes = f.delta.modes;
     if (f.delta.cursor) this.cursor = f.delta.cursor;
     if (f.delta.title !== undefined) this.title = f.delta.title;
     this.seq = f.seq;

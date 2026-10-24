@@ -5,10 +5,10 @@
 /// <reference lib="webworker" />
 const sw = self as unknown as ServiceWorkerGlobalScope;
 
-const SHELL = "ptyro-shell-v2";
+const SHELL = "ptyro-shell-v3";
 const FILES = [
   "/", "/style.css", "/manifest.webmanifest", "/icon.svg", "/icon-192.png",
-  ...["app", "color", "conn", "data", "flow", "kit", "projects", "qr", "review", "runs", "screen", "sessions", "settings", "pad", "notes"].map((m) => `/${m}.js`),
+  ...["app", "color", "conn", "data", "flow", "kit", "projects", "qr", "review", "runs", "screen", "sessions", "settings", "pad", "notes", "grid", "keys", "term"].map((m) => `/${m}.js`),
 ];
 
 sw.addEventListener("install", (e) => {

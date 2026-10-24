@@ -197,7 +197,27 @@ notifications there). Tap 🔔 to turn notifications on; a test notification arr
 - **Notifications** for a blocked agent have Allow / Deny buttons on platforms that show actions
   (Android, desktop Chrome). Tapping one answers without opening the app.
 
-### The whole app
+### A terminal in the browser
+
+With a device of `control` scope or more, the session page's screen takes keys: tap it (or click
+it) and type. It is the daemon's own terminal, so `vim`, `htop`, `claude` and your shell behave as
+they do in the TUI: arrows, Ctrl and Alt combinations, F-keys, bracketed paste, the mouse when the
+program wants it (hold Shift to select instead).
+
+- **On a phone**, the row under the screen has Esc, Tab, Ctrl, Alt and ⇧ (tap one for the next key,
+  tap again to hold it), arrows (hold to repeat), Home/End/PgUp/PgDn, Ctrl-C/D/Z/L/R, punctuation,
+  F1–F12 and Paste. **Aa** has text size, fit or 1:1, the on-screen keyboard on or off (off keeps a
+  hardware keyboard's keys without covering the screen), find, and *Resize the session to this
+  screen* (everyone attached sees the new size; whoever types last decides).
+- **History.** Scroll with the wheel or a drag; **↓ Live** returns (any key does too).
+- **Selecting.** Drag with a mouse, double-click a word, triple-click a line; on a touch screen
+  hold, then drag. The bar copies, selects everything, opens a link, or steps through find
+  results. A program that copies to the clipboard (OSC 52) puts it on yours, or offers a Copy
+  button when the browser wants a tap.
+- **Below `control`** the screen is still live and you can scroll, select and copy, but nothing
+  you type reaches the session.
+
+## The whole app
 
 Everything the CLI does, the web app does, in tabs along the bottom (the list of commands and
 where each lives is [`parity.md`](parity.md)). `ptyro pair --scope full` gives a device all of it;

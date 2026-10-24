@@ -27,7 +27,7 @@ its row: its TUI action and its web one, or `waived:` and why.
 | Command | In the TUI | On the web |
 |---|---|---|
 | `new` | `session.new` (`n`): say what to do, ⏎ (or `C-o` to pick the agent, a shell or a command, and where); `worktree.new` (`N`) for a new worktree | `session.new` (＋ in the session list): the task, the agent, and where: a new worktree (from the main branch, a PR, an issue, a branch or your changes), an existing one, or a shell or command |
-| `attach` | `session.find` (`/`), the sidebar (`Tab`, `⏎`), `1`–`9`, `j`/`k` | `session.open`: tap it in the list; its live screen, or its chat |
+| `attach` | `session.find` (`/`), the sidebar (`Tab`, `⏎`), `1`–`9`, `j`/`k` | `session.open`: tap it in the list; its live screen, or its chat. The screen is a terminal: `term.type` (tap it and type: every key goes to the session as it is pressed, with `term.keys` for Esc, Ctrl, Alt, arrows and F-keys), `term.mouse`, `term.resize` |
 | `list` | `focus.toggle`: the sidebar lists every session with its status; `session.find` (`/`) searches them | `sessions`: every session with its status, who needs you first; `session.find` (`/`) filters them |
 | `stop` | `session.stop` (`x`) | `session.stop`: the session's ⋯ menu |
 | `kill` | `session.kill` (`X`) | `session.kill`: the session's ⋯ menu |
@@ -43,8 +43,8 @@ its row: its TUI action and its web one, or `waived:` and why.
 | `summarize` | `session.summarize` (the row menu, the palette); with `[summaries] enabled` the sidebar shows one (`≈`) after every turn | `session.summarize`: the session's ⋯ menu |
 | `status` | `session.explain` (`e` in the sidebar) says why; the sidebar and pane headers show the status | `sessions`: each card and the session's page say its status and why it waits |
 | `answer` | `peek` (`p`): `y` allow, `a` always, `n` deny | `answer`: Allow, Always or Deny on its card and its page (exact decisions for a held Claude prompt) |
-| `read` | `copy.enter` (`[`): the scrollback, searchable; the pane shows the screen | `session.open`: the live screen, or the chat; `session.scrollback` (⋯ → Scrollback) is its scrollback, searchable |
-| `send` | `peek` (`p`): type a reply; or type into the pane | `session.reply`: Enter sends, Shift+Enter starts a new line; `session.keys` for keys |
+| `read` | `copy.enter` (`[`): the scrollback, searchable; the pane shows the screen | `session.open`: the live screen, or the chat; `term.scroll` (wheel or drag: its history), `term.select` and `term.copy` (long-press and drag, double-click a word), `term.find` (Aa → Find in the history), `term.link`; `session.scrollback` (⋯ → Scrollback) is all of it as text, searchable |
+| `send` | `peek` (`p`): type a reply; or type into the pane | `session.reply`: Enter sends, Shift+Enter starts a new line; `term.type` types into the session key by key (`term.paste` pastes, `term.keys` for the keys a phone lacks); `session.keys` for a chat's keys |
 | `broadcast` | `broadcast` (`b`): mark sessions with `Space` in the sidebar first | `session.broadcast`: ☑ in the session list, pick sessions, then type once |
 | `wait` | waived: for scripts; the TUI shows status changes as they happen and notifies you | waived: for scripts; the web app shows status changes as they happen and notifies you |
 | `events` | `inspector` (`D`), Events tab (`5`) | `session.events`: ⋯ → Events |

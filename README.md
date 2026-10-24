@@ -317,7 +317,9 @@ ptyro devices revoke ID        # cut a device off at once
 ptyro --remote me@workbox      # the TUI (or any command) on another machine, over ssh
 ```
 
-The web app does everything the CLI does, laid out for a phone: a tab for sessions (blocked ones
+The web app does everything the CLI does, laid out for a phone, and its session screen is a real terminal: tap it and type (every key goes to the session as you press it, soft keyboards and a hardware keyboard alike), a key row gives a phone Esc, Tab, Ctrl and Alt (tap once for the next key, twice to hold), arrows and F-keys, scroll back through the history, select and copy text (long-press, or drag), paste, click and scroll in `vim`, `htop` and Claude when they ask for the mouse, find in the scrollback, open links, and size the session to your screen. It needs `--scope control` or `full`; a read-only device watches.
+
+The rest of the app: a tab for sessions (blocked ones
 on top, with Allow / Deny, a live view, a reply box, a menu for stop, restart, rename, summarize,
 scrollback, replay…), one for projects and worktrees (start a task in a new worktree, from a PR,
 an issue or your changes; finish it into a PR; archive it), the diff with line comments for the

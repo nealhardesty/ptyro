@@ -6,7 +6,7 @@
 import { Screen } from "./screen.js";
 import type { Frame, InboxEntry, Session } from "./screen.js";
 import { conn, token } from "./conn.js";
-import { css, F } from "./color.js";
+import { Term } from "./term.js";
 import { actions, ago, h, patch, sheet, tipOf, ui, views } from "./kit.js";
 import type { Child } from "./kit.js";
 import { data, loadAll, onEvent } from "./data.js";
@@ -101,64 +101,6 @@ function useToken(t: string): void {
   if (conn.state === "rejected" || !conn.ws) conn.connect();
 }
 
-// ── drawing ─────────────────────────────────────────────────────────────────────────────────
-
-function draw(canvas: HTMLCanvasElement, s: Screen, fit: boolean): void {
-  const wrap = canvas.parentElement as HTMLElement;
-  const dpr = window.devicePixelRatio || 1;
-  const cs = getComputedStyle(document.documentElement);
-  const FG = cs.getPropertyValue("--term-fg").trim() || "#e6edf3";
-  const BG = cs.getPropertyValue("--term-bg").trim() || "#0d1117";
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  const family = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-  // Fit the session's width to the screen; otherwise a readable size and horizontal scroll.
-  ctx.font = `100px ${family}`;
-  const ratio = ctx.measureText("M").width / 100;
-  const avail = wrap.clientWidth - 8;
-  const px = fit ? Math.max(5, Math.min(16, avail / (s.size.cols * ratio))) : 13;
-  const cw = px * ratio, ch = Math.round(px * 1.25);
-  const w = Math.ceil(cw * s.size.cols), h = ch * s.size.rows;
-  canvas.style.width = `${w}px`;
-  canvas.style.height = `${h}px`;
-  // Resizing the backing store reallocates it: only when the size changed.
-  const bw = Math.ceil(w * dpr), bh = Math.ceil(h * dpr);
-  if (canvas.width !== bw) canvas.width = bw;
-  if (canvas.height !== bh) canvas.height = bh;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = BG;
-  ctx.fillRect(0, 0, w, h);
-  ctx.textBaseline = "top";
-  for (let y = 0; y < s.rows.length; y++) {
-    const row = s.rows[y];
-    for (let x = 0; x < row.length; x++) {
-      const c = row[x];
-      if (c.spacer) continue;
-      const st = s.styles.get(c.s) ?? {};
-      const flags = st.flags ?? 0;
-      let fg = css(st.fg, FG), bg = css(st.bg, BG);
-      if (flags & F.INVERSE) [fg, bg] = [bg, fg];
-      const width = c.wide ? 2 : 1;
-      if (bg !== BG) { ctx.fillStyle = bg; ctx.fillRect(x * cw, y * ch, cw * width + 0.5, ch); }
-      if (!c.t || c.t === " " || flags & F.HIDDEN) continue;
-      ctx.font = `${flags & F.ITALIC ? "italic " : ""}${flags & F.BOLD ? "bold " : ""}${px}px ${family}`;
-      ctx.globalAlpha = flags & F.DIM ? 0.6 : 1;
-      ctx.fillStyle = fg;
-      ctx.fillText(c.t, x * cw, y * ch + (ch - px) / 2);
-      if (flags & F.UNDERLINE) ctx.fillRect(x * cw, y * ch + ch - 2, cw * width, 1);
-      if (flags & F.STRIKE) ctx.fillRect(x * cw, y * ch + ch / 2, cw * width, 1);
-      ctx.globalAlpha = 1;
-    }
-  }
-  if (s.cursor.visible && s.cursor.y < s.size.rows) {
-    ctx.globalAlpha = 0.55;
-    ctx.fillStyle = FG;
-    const under = s.cursor.shape === "underline";
-    ctx.fillRect(s.cursor.x * cw, s.cursor.y * ch + (under ? ch - 2 : 0), s.cursor.shape === "bar" ? 2 : cw, under ? 2 : ch);
-    ctx.globalAlpha = 1;
-  }
-}
-
 const GLYPH: Record<string, string> = { working: "●", blocked: "⚠", idle: "○", done: "✓", errored: "✗", starting: "◌", unknown: "·" };
 
 function statusOf(s: Session): string {
@@ -179,7 +121,6 @@ const app = {
   /// Unsent replies, per session.
   drafts: new Map<string, string>(),
   viewing: null as string | null,
-  fit: true,
   toast: "",
 };
 
@@ -323,14 +264,6 @@ function inboxView(): HTMLElement {
   return h("div", {}, header("Inbox", true), h("main", { class: "list" }, items.length ? mark : null, ...(items.length ? items : [h("p", { class: "empty" }, "Nothing here.")])));
 }
 
-const KEYS: [string, object][] = [
-  ["Esc", { t: "esc" }], ["Tab", { t: "tab" }], ["↑", { t: "up" }], ["↓", { t: "down" }], ["←", { t: "left" }], ["→", { t: "right" }], ["⏎", { t: "enter" }],
-];
-
-function sendKey(id: string, code: object, mods = 0): void {
-  conn.send({ t: "input", session: id, event: { t: "key", key: { code, mods } } });
-}
-
 /// The open session's page. Its textarea, terminal and chat stay in the DOM across renders
 /// (updated in place) so the reply draft, caret, IME composition, open details and the chat's
 /// scroll position survive the events that re-render everything around them.
@@ -339,13 +272,17 @@ interface Shell {
   el: HTMLElement;
   replyRow: HTMLElement;
   reply: HTMLTextAreaElement;
-  canvas: HTMLCanvasElement;
-  termWrap: HTMLElement;
+  term: Term;
   chat: HTMLElement;
   chatEls: Map<string, { key: string; el: HTMLElement }>;
   empty: HTMLElement;
 }
 let shell: Shell | null = null;
+
+/// This device may type into the session: `control` scope or more, and it is running.
+function canType(id: string): boolean {
+  return (conn.scope === "control" || conn.scope === "full") && app.sessions.get(id)?.state.t === "running";
+}
 
 function sessionShell(id: string): Shell {
   if (shell?.id === id) return shell;
@@ -361,14 +298,21 @@ function sessionShell(id: string): Shell {
     } catch (e) { toast((e as Error).message); }
   };
   reply.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); void send(); } });
-  const canvas = h("canvas", { class: "term" });
+  const term = new Term({
+    id: () => id,
+    screen: () => app.screens.get(id),
+    canType: () => canType(id),
+    send: (m) => conn.send(m),
+    request: (r) => conn.request(r),
+    toast,
+    changed: render,
+  });
   const chat = h("div", { class: "chat" });
   requestAnimationFrame(() => { chat.scrollTop = chat.scrollHeight; });
   shell = {
-    id, reply, canvas, chat,
+    id, reply, term, chat,
     el: h("div", { class: "session" }),
     replyRow: h("div", { class: "reply" }, reply, h("button", { class: "send", onclick: () => void send() }, "Send")),
-    termWrap: h("div", { class: "term-wrap" }, canvas),
     chatEls: new Map(),
     empty: h("p", { class: "empty" }, "Nothing yet."),
   };
@@ -386,7 +330,7 @@ function sessionView(id: string): HTMLElement {
   if (chat) updateChat(id, sh);
   patch(sh.el, [
     header(s.name, true, h("button", { class: "icon", title: tipOf("session.menu"), "aria-label": "More", onclick: () => sessionMenu(s) }, "⋯")),
-    h("div", { class: `pill ${st}` }, GLYPH[st] ?? "·", " ", st, s.status?.detail && !blocked ? ` · ${s.status.detail}` : "", s.status ? ` · ${ago(s.status.since_ms)}` : ""),
+    h("div", { class: `pill ${st}` }, GLYPH[st] ?? "·", " ", st, s.status?.detail && !blocked ? ` · ${s.status.detail}` : "", s.status ? ` · ${ago(s.status.since_ms)}` : "", !chat && app.screens.get(id)?.title ? ` · ${app.screens.get(id)!.title}` : ""),
     ...(blocked ? [h("section", { class: "prompt" },
       h("div", {}, h("b", {}, s.status?.kind === "permission" ? "Wants permission" : "Waiting for you"), s.held ? h("span", { class: "tag", title: "answers go to the agent as a decision" }, "exact") : null),
       h("pre", {}, s.status?.detail ?? s.attention?.text ?? ""),
@@ -398,17 +342,19 @@ function sessionView(id: string): HTMLElement {
     ...(s.state.t === "dormant" ? [h("section", { class: "revive" }, h("span", {}, "Hibernated: its conversation is kept."), h("button", { class: "primary", title: tipOf("session.resume"), onclick: () => void conn.request({ t: "resume", addr: id }).then(() => toast("Resumed"), (e) => toast((e as Error).message)) }, "Resume"))]
       : s.state.t !== "running" ? [h("section", { class: "revive" }, h("span", {}, s.state.t === "failed" ? "It failed to run." : s.state.code != null ? `Exited with ${s.state.code}.` : "Exited."),
           h("button", { class: "primary", title: tipOf("session.restart"), onclick: () => void conn.request({ t: "restart", addr: id }).then(() => toast("Restarted"), (e) => toast((e as Error).message)) }, "Restart"))] : []),
-    chat ? sh.chat : sh.termWrap,
-    h("div", { class: "keys", title: tip("session.keys") },
-      ...KEYS.map(([label, code]) => h("button", { onclick: () => sendKey(id, code) }, label)),
-      h("button", { onclick: () => sendKey(id, { t: "char", c: "c" }, 4) }, "^C"),
+    chat ? sh.chat : sh.term.el,
+    ...(chat ? [h("div", { class: "keys", title: tip("session.keys") },
+      ...([["Esc", { t: "esc" }], ["Tab", { t: "tab" }], ["↑", { t: "up" }], ["↓", { t: "down" }], ["←", { t: "left" }], ["→", { t: "right" }], ["⏎", { t: "enter" }]] as [string, object][]).map(([label, code]) => h("button", { onclick: () => sh.term.key({ code: code as any, mods: 0 }) }, label)),
+      h("button", { onclick: () => sh.term.key({ code: { t: "char", c: "c" }, mods: 4 }) }, "^C"),
       notesNoteButton(s, false),
-      s.structured
-        ? h("button", { title: tip("session.view"), onclick: () => { if (!app.termView.delete(id)) app.termView.add(id); render(); } }, app.termView.has(id) ? "Chat" : "Terminal")
-        : h("button", { class: app.fit ? "on" : "", title: tip("session.view"), onclick: () => { app.fit = !app.fit; paint(); render(); } }, app.fit ? "Fit" : "1:1"),
-    ),
-    sh.replyRow,
-  ]);
+      h("button", { title: tip("session.view"), onclick: () => { if (!app.termView.delete(id)) app.termView.add(id); render(); } }, app.termView.has(id) ? "Chat" : "Terminal"))]
+      : [canType(id) ? sh.term.keybar : null,
+         h("div", { class: "keys term-more" }, notesNoteButton(s, false),
+           s.structured ? h("button", { title: tip("session.view"), onclick: () => { if (!app.termView.delete(id)) app.termView.add(id); render(); } }, "Chat") : null,
+           h("button", { title: tipOf("term.options"), onclick: () => sh.term.options() }, "Aa"),
+           canType(id) ? null : h("span", { class: "sub" }, "Watching: this device may look, not type"))]),
+    canType(id) ? sh.replyRow : null,
+  ].filter((x): x is HTMLElement => !!x));
   return sh.el;
 }
 
@@ -479,9 +425,8 @@ function chatItem(id: string, it: ChatItem): HTMLElement | null {
 }
 
 function paint(): void {
-  if (!shell || shell.id !== app.viewing || !shell.canvas.isConnected) return;
-  const s = app.screens.get(app.viewing);
-  if (s) draw(shell.canvas, s, app.fit);
+  if (!shell || shell.id !== app.viewing || !shell.term.canvas.isConnected) return;
+  shell.term.paint();
 }
 
 function render(): void {
@@ -514,7 +459,10 @@ function render(): void {
 }
 
 function subscribe(id: string | null): void {
-  if (app.viewing) conn.send({ t: "unsubscribe", session: app.viewing });
+  if (app.viewing) {
+    if (shell?.id === app.viewing) shell.term.release();
+    conn.send({ t: "unsubscribe", session: app.viewing });
+  }
   app.viewing = id;
   if (id) {
     app.screens.set(id, new Screen());
@@ -586,6 +534,7 @@ conn.listeners.add((msg) => {
     if (app.viewing) {
       app.screens.set(app.viewing, new Screen());
       conn.send({ t: "subscribe", session: app.viewing, size: null, control: false });
+      if (shell?.id === app.viewing) shell.term.reassert();
     }
     void refresh();
     void loadAll();
@@ -608,9 +557,11 @@ conn.listeners.add((msg) => {
     const s = app.screens.get(f.session);
     if (s) {
       s.apply(f);
-      if (f.session === app.viewing) paint();
+      if (f.session === app.viewing && shell?.id === f.session) shell.term.onFrame();
     }
-    conn.send({ t: "ack", session: f.session, seq: f.seq });
+    // Acked once drawn, so a slow screen gets fewer, bigger deltas; a hidden tab doesn't wait.
+    const ack = () => conn.send({ t: "ack", session: f.session, seq: f.seq });
+    if (document.hidden) ack(); else requestAnimationFrame(ack);
     return;
   }
   if (msg.t === "event") {
@@ -629,6 +580,10 @@ conn.listeners.add((msg) => {
     } else if (e.t === "inbox_added") {
       app.inbox.unshift(e.entry);
       render();
+    } else if (e.t === "bell") {
+      if (shell && shell.id === e.session) shell.term.bell();
+    } else if (e.t === "clipboard") {
+      if (shell && shell.id === e.session) shell.term.fromProgram(e.text);
     } else if (e.t === "scratch_changed") {
       notesEvent(e);
     }
@@ -657,7 +612,6 @@ document.addEventListener("keydown", (e) => {
 });
 
 window.addEventListener("hashchange", () => { takePairCode(); notesShown(); render(); });
-window.addEventListener("resize", paint);
 takePairCode();
 initNotes({ request: (r) => conn.request(r), connected: () => conn.state === "open", toast, render, header, tip });
 notesStart();

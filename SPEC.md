@@ -652,6 +652,13 @@ viewers render the session at its true size: letterboxed (padding) if their pane
 with a "viewing at 120×40" badge and pan keys if smaller. A `--view-only` client never becomes the
 controller.
 
+**[built WEB1.8]** A paired device watches at the session's own size and never resizes it under
+the person at the terminal, unless it has `control` scope and says so: typing from the web makes
+it the controller (its OSC 52 clipboard writes then reach it), and `Subscribe{size, control:
+true}` or `Resize` from it sizes the session like the TUI's own would. The web app does that only
+when asked ("Resize the session to this screen"), remembers the size it saw and puts it back when
+that is turned off or the page is left. Whoever types last decides, as everywhere else.
+
 ---
 
 ## 6. Client/daemon protocol
@@ -946,6 +953,10 @@ server at once and waits up to 12 s for it to say where it listens. `via` (`tail
 `here`) says how phones reach it, else the config's own choice stands, else Tailscale when it is
 running on this machine, else `lan`. `DaemonStatus.web` carries the same `WebServe{wanted, up, pid,
 url, listen, ca_fingerprint, since_ms, restarts, last_exit, by_hand, log}`.
+
+**[built WEB1.8] Protocol 1.17** (behaviour; no new message): a device with `control` scope may
+`Subscribe` with `control` and a `size`, and `Resize`; its `Input` takes control of the session
+(§5.8). Devices below `control` still watch at the session's size and their input is refused.
 
 ### 6.5 Screen frames
 
@@ -4559,8 +4570,8 @@ is "the web is up when the daemon is".
 ### 16.4 Web client / PWA
 
 A small TypeScript client served by `ptyro serve` (assets embedded with `rust-embed`): session list
-with status, attention inbox, a terminal view rendering `ScreenFrame`s to a canvas (no xterm.js
-needed, because the daemon already emulates), quick-reply box (sends `Paste` + Enter), approve/deny
+with status, attention inbox, a terminal you type into (below) rendering `ScreenFrame`s to a canvas (no
+xterm.js needed, because the daemon already emulates), quick-reply box (`SendText`), approve/deny
 buttons for permission prompts, push notifications via Web Push. Installable on phones as a PWA.
 
 **[built M9]** The app is TypeScript (`web/src`) compiled by `tsc` 5.9.3 into `web/dist`, which is
@@ -4636,6 +4647,49 @@ check. It speaks the protocol over its WebSocket, and a few things a browser can
   `ReadScrollback` renders as coloured, searchable text.
 - **Diff and review:** `WorktreeDiff` renders per file and hunk; tapping a line adds a
   `ReviewComment` for the agent; the comments batch into one prompt (`ReviewSend`).
+
+**[built WEB1.8] A real terminal in the web.** The session page's screen is a terminal
+(`web/src/term.ts`; the DOM-free parts are `keys.ts` and `grid.ts`, tested by `web/test/term.mjs`).
+Decision (spike, §20.5): **our own**, extending the canvas drawer; no xterm.js, no second
+emulator, no WASM.
+- **Typing.** Tap the screen (or click it) and every key goes to the session as it is pressed, as
+  an abstract `KeyEvent` (§5.5) in `ClientMsg::Input`; the daemon encodes it against the
+  program's own modes (DECCKM, kitty flags), which only it knows. A hidden `<textarea>` takes the
+  keys, so soft keyboards and IME composition work (`beforeinput` and composition events carry
+  what a phone's keyboard says; a keydown of 229 or `Unidentified` is left to them), hardware
+  keyboards get Ctrl/Alt/Shift combinations, F-keys, Option-as-Alt on a Mac (the physical key
+  decides), and Cmd stays the browser's (copy, paste). Paste is `Input::Paste` (bracketed by the
+  daemon when the program asked); focus in and out is `Input::Focus` when it asked for that.
+  Needs `control` scope and a running session; below it the page is a viewer (and says so).
+- **The key row.** Esc, Tab, sticky Ctrl, Alt and Shift (tap: the next key; tap again: held),
+  arrows that repeat while held, Home/End/PgUp/PgDn/Del, Ctrl-C/D/Z/L/R/A/E/W, the punctuation
+  a phone keyboard buries, F1–F12, Paste, and Aa (the options). Buttons don't take focus from the
+  terminal, so the keyboard stays up. The reply box (a whole line, dictation-friendly) stays for
+  when the terminal isn't being typed into.
+- **Mouse.** When the program turned the mouse on (`ScreenModes.mouse`), clicks, drags and the
+  wheel go to it as `Input::Mouse` with cell coordinates (hold Shift for the browser's own
+  selection); otherwise a drag selects. A full-screen program without mouse gets the wheel as
+  arrow keys, as terminals do.
+- **Scrollback.** Wheel, drag or flick (with momentum) scrolls back: the first scroll fetches
+  `ReadScrollback` (5000 lines) and the window moves over that frozen document; a "↓ Live" button
+  (and any key typed) returns, and says when output came meanwhile. Shift+PgUp/PgDn page.
+- **Selection.** Mouse: drag, double-click a word, triple-click a line. Touch: long-press selects
+  the word, drag extends (the edges scroll the history). Selecting freezes the document so output
+  doesn't move it; the bar offers Copy, All, Paste, Open (a link), and ↑ ↓ after a find. Copy
+  text joins wrapped lines (`RowUpdate.wrapped`) and trims trailing blanks, wide characters count
+  once. Copy tries the synchronous `execCommand` inside the tap first, then the clipboard API
+  with a timeout (a permission prompt nobody sees would hang it). A program's OSC 52 copy
+  (`DomainEvent::Clipboard`, sent to the controller) is written the same way, or offered behind a
+  Copy button when the browser wants a tap. Find (`Aa`, or the context menu) searches the whole
+  document; Ctrl/Cmd-click opens a link; the bell flashes the frame and buzzes.
+- **Size.** Fit (the whole screen shrunk to the width) or 1:1 at a text size (8–24 px, Ctrl+wheel
+  zooms) with a sideways scroll that follows the cursor; and, when asked, "Resize the session to
+  this screen": the page computes columns and rows from its box above the soft keyboard
+  (`visualViewport`) and sends them (§5.8), restoring the old size afterwards.
+- **Drawing.** Only the rows whose cells changed are painted (a row's cell array is replaced by
+  the frame that changes it, so identity says), in a `requestAnimationFrame`; the frame is acked
+  after it is drawn, so a slow phone gets fewer, bigger deltas, and a hidden tab acks at once.
+  `localStorage["ptyro.debug"]="1"` exposes `ptyroTerm.stats` (paints, rows drawn, ms).
 
 ### 16.5 E2E relay (much later)
 
@@ -5071,6 +5125,20 @@ learn something the hard way.
   `session.idle`, `POST /session/:id/abort`. Tested only against the fake.
 
 ### 20.5 Terminal & Rust ecosystem
+
+- **[spike WEB1.8, 2026-10-24] Web terminal: consume or build?** Verdict: **build, on the
+  daemon's frames**; no xterm.js (MIT; wants a raw byte stream that the protocol doesn't send the
+  web, so it would be a second emulator to keep in step with the daemon's, and ~300 KB of
+  third-party code in an app whose CSP is `script-src 'self'` and which has no dependencies), no
+  libghostty-vt WASM (a second emulator again, Zig in the build, no stable API). What a viewer
+  lacked was never parsing: it was input, scrollback, selection and a draw loop that paints less.
+  *Measured here* (Chrome on macOS, a 186×42 session, loopback; not on a phone): key to the echo
+  frame at the browser's socket p50 2.5 ms, p90 3.3 ms, max 10.6 ms (60 keys, `ptyro serve`
+  included); a paint of the changed rows ~1 ms on average, 2.4 ms worst, while `seq 1 4000`
+  scrolled by. A phone core is several times slower, which still leaves a frame's budget.
+  *Not measured:* xterm.js beside it (it can't be installed from here), a real phone, battery.
+  The numbers come from `ptyroTerm.stats` and a ten-line WebSocket script; a phone owner can read
+  the first from the console.
 
 - **[verified crates.io 2026-10-19]** versions in §3.5. `bincode` 3.0.0 is a tombstone release
   (RUSTSEC-2025-0141). `wezterm-term` is not published on crates.io.

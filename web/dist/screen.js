@@ -13,9 +13,25 @@ export function runCells(run) {
     }
     return out;
 }
+/// A row's cells from its runs (a wide cell is followed by its spacer).
+export function cellsOf(runs, max = Infinity) {
+    const cells = [];
+    for (const run of runs) {
+        for (const t of runCells(run)) {
+            cells.push({ t, s: run.style, wide: run.wide });
+            if (run.wide)
+                cells.push({ t: "", s: run.style, spacer: true });
+        }
+    }
+    return cells.length > max ? cells.slice(0, max) : cells;
+}
 export class Screen {
     size = { cols: 80, rows: 24 };
     rows = [];
+    /// A row continues on the next one (a long line the terminal wrapped).
+    wraps = [];
+    /// What the program asked of the terminal: the mouse, the alternate screen, bracketed paste…
+    modes = { mouse: false, alt_screen: false, bracketed_paste: false, focus_events: false, kitty_keyboard: false, app_cursor: false };
     styles = new Map();
     cursor = { x: 0, y: 0, visible: true };
     seq = 0;
@@ -31,6 +47,7 @@ export class Screen {
         if (f.keyframe) {
             this.styles.clear();
             this.rows = [];
+            this.wraps = [];
             this.title = "";
         }
         if (f.delta.size)
@@ -42,16 +59,11 @@ export class Screen {
         for (const r of f.delta.rows ?? []) {
             if (r.y >= this.rows.length)
                 continue;
-            const cells = [];
-            for (const run of r.runs) {
-                for (const t of runCells(run)) {
-                    cells.push({ t, s: run.style, wide: run.wide });
-                    if (run.wide)
-                        cells.push({ t: "", s: run.style, spacer: true });
-                }
-            }
-            this.rows[r.y] = cells.slice(0, this.size.cols);
+            this.rows[r.y] = cellsOf(r.runs, this.size.cols);
+            this.wraps[r.y] = !!r.wrapped;
         }
+        if (f.delta.modes)
+            this.modes = f.delta.modes;
         if (f.delta.cursor)
             this.cursor = f.delta.cursor;
         if (f.delta.title !== undefined)

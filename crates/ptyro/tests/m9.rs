@@ -1112,6 +1112,144 @@ fn host(port: u16, token: Option<&str>, body: &Value) -> (u16, Value) {
     (code, json)
 }
 
+/// WEB1.8: a device with `control` scope may take control of a session and size it to its own
+/// screen; one that only watches never resizes it under the person at the terminal.
+#[tokio::test]
+async fn a_control_device_may_size_a_session_and_a_watching_one_may_not() {
+    let w = World::new("", &[]);
+    let serve = w.serve();
+    let (_, ctl) = w.pair(&serve, "typist", "control");
+    let (_, ro) = w.pair(&serve, "watcher", "approve");
+    w.ok(&["new", "-d", "-n", "sz", "--size", "80x24", "--", "sh", "-c", "sleep 120"]);
+    let id = w.json(&["status", "sz", "--json"])["session"]["id"].as_str().unwrap().to_owned();
+    let size = || {
+        let v = w.json(&["status", "sz", "--json"]);
+        (
+            v["session"]["size"]["cols"].as_u64().unwrap(),
+            v["session"]["size"]["rows"].as_u64().unwrap(),
+        )
+    };
+    let wait = |want: (u64, u64)| {
+        let deadline = Instant::now() + WAIT;
+        while size() != want {
+            assert!(Instant::now() < deadline, "the session stayed {:?}, wanted {want:?}", size());
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+
+    let mut watcher = Phone::signed_in(serve.port, &ro).await;
+    watcher.send(json!({ "t": "subscribe", "session": id, "size": { "cols": 120, "rows": 40 }, "control": true })).await;
+    watcher
+        .send(json!({ "t": "resize", "session": id, "size": { "cols": 120, "rows": 40 } }))
+        .await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(size(), (80, 24), "a watching device resized the session");
+
+    let mut typist = Phone::signed_in(serve.port, &ctl).await;
+    typist.send(json!({ "t": "subscribe", "session": id, "size": { "cols": 100, "rows": 30 }, "control": true })).await;
+    wait((100, 30));
+    typist.send(json!({ "t": "resize", "session": id, "size": { "cols": 90, "rows": 20 } })).await;
+    wait((90, 20));
+}
+
+/// WEB1.8: the web terminal's keyboard and selection (web/dist/keys.js, grid.js) against a real
+/// session. The keys a browser makes are pressed into a session that reads its own raw input,
+/// and what it received is what the TypeScript said it would send; a selection over the
+/// scrollback copies what `ptyro read --scrollback` prints. Skipped without Node.
+#[test]
+fn the_web_terminal_types_into_a_real_session() {
+    if std::process::Command::new("node").arg("--version").output().is_err() {
+        eprintln!("node not found: skipping the web terminal check");
+        return;
+    }
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web/test/term.mjs");
+    let node = |args: &[&str]| {
+        let out = std::process::Command::new("node").arg(&script).args(args).output().unwrap();
+        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    };
+    assert_eq!(node(&["units"]), "ok");
+    let plan: Value = serde_json::from_str(&node(&["plan"])).unwrap();
+    let (count, hex) = (plan["count"].as_u64().unwrap(), plan["hex"].as_str().unwrap().to_owned());
+
+    let w = World::new("", &[]);
+    let serve = w.serve();
+    let (_, token) = w.pair(&serve, "typist", "control");
+    let url = format!("ws://127.0.0.1:{}/ws", serve.port);
+
+    // A program in raw mode with bracketed paste on, printing the bytes it was sent.
+    let cmd = format!(
+        "printf '\\033[?2004h'; stty raw -echo opost onlcr; echo READY; dd bs=1 count={count} 2>/dev/null | od -An -tx1 -v; sleep 60"
+    );
+    w.ok(&["new", "-d", "-n", "keys", "--size", "80x24", "--", "sh", "-c", &cmd]);
+    w.wait_screen("keys", "READY");
+    node(&["type", &url, &token, "keys"]);
+    let deadline = Instant::now() + WAIT;
+    let got = loop {
+        let screen = w.ok(&["read", "keys"]);
+        let bytes: Vec<String> = screen
+            .split_whitespace()
+            .filter(|t| t.len() == 2 && t.chars().all(|c| c.is_ascii_hexdigit()))
+            .map(str::to_owned)
+            .collect();
+        if bytes.len() as u64 >= count || Instant::now() > deadline {
+            break bytes.join(" ");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(
+        got,
+        hex,
+        "the session received other bytes than the keys the page sends:\n{}",
+        w.ok(&["read", "keys"])
+    );
+
+    // A read-only device may not type, whatever it sends.
+    let (_, ro) = w.pair(&serve, "watcher", "read");
+    w.ok(&[
+        "new",
+        "-d",
+        "-n",
+        "quiet",
+        "--",
+        "sh",
+        "-c",
+        "stty raw -echo opost onlcr; echo READY; cat -v; sleep 60",
+    ]);
+    w.wait_screen("quiet", "READY");
+    node(&["type", &url, &ro, "quiet"]);
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!w.ok(&["read", "quiet"]).contains("^["), "a read-only device typed");
+
+    // A selection over the scrollback copies what `read --scrollback` prints.
+    w.ok(&[
+        "new",
+        "-d",
+        "-n",
+        "long",
+        "--size",
+        "40x10",
+        "--",
+        "sh",
+        "-c",
+        "seq 1 100; echo THE-END; sleep 60",
+    ]);
+    w.wait_screen("long", "THE-END");
+    let doc: Value = serde_json::from_str(&node(&["scroll", &url, &token, "long"])).unwrap();
+    assert!(doc["history"].as_u64().unwrap() > 90, "{doc}");
+    let norm = |t: &str| {
+        let mut lines: Vec<String> = t.lines().map(|l| l.trim_end().to_owned()).collect();
+        while lines.last().is_some_and(String::is_empty) {
+            lines.pop();
+        }
+        lines.join("\n")
+    };
+    let copied = norm(doc["text"].as_str().unwrap());
+    let read = norm(&w.ok(&["read", "long", "--scrollback"]));
+    assert_eq!(copied, read, "what a select-all copies is what `read --scrollback` prints");
+    assert!(copied.starts_with("1\n2\n3") && copied.ends_with("100\nTHE-END"), "{copied}");
+}
+
 /// WEB1.9: a device may ask how the web app's server is; turning it on or off is `full`.
 #[tokio::test]
 async fn only_a_full_device_changes_the_web_apps_server() {

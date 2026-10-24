@@ -68,8 +68,26 @@ button.small { justify-self: end; padding: 4px 10px; font-size: 13px; }
 .prompt { margin: 8px 12px; padding: 12px; border: 1px solid var(--bad); border-radius: 10px; background: var(--panel); display: grid; gap: 8px; }
 .prompt pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 13px; }
 .tag { margin-left: 8px; font-size: 11px; padding: 1px 6px; border-radius: 6px; background: var(--accent); color: #fff; }
-.term-wrap { flex: 1; overflow: auto; padding: 4px; background: var(--term-bg); margin: 8px 0 0; }
-canvas.term { display: block; }
+.term-box { position: relative; flex: 1; display: flex; flex-direction: column; min-height: 38vh; margin: 8px 0 0; }
+.term-wrap { flex: 1; overflow: auto; padding: 4px; background: var(--term-bg); overscroll-behavior: contain; }
+.term-box.bell { box-shadow: inset 0 0 0 3px var(--warn); }
+.term-box.typing { outline: 2px solid var(--accent); outline-offset: -2px; }
+canvas.term { display: block; touch-action: pan-x; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; cursor: text; }
+.term-input { position: absolute; left: 0; bottom: 0; width: 2px; height: 2px; padding: 0; border: 0; opacity: 0.01; resize: none; pointer-events: none; font-size: 16px; }
+.term-live { position: absolute; right: 12px; bottom: 12px; z-index: 3; background: var(--accent); color: #fff; border-color: transparent; font-weight: 600; box-shadow: 0 2px 10px #0006; }
+.term-sel { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 4; display: flex; gap: 6px; padding: 5px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 4px 16px #0007; }
+.term-sel button { padding: 6px 14px; }
+.term-sel .primary { background: var(--accent); color: #fff; border-color: transparent; font-weight: 600; }
+.term-badge { position: absolute; right: 12px; top: 8px; z-index: 3; font-size: 12px; padding: 2px 9px; border-radius: 10px; background: color-mix(in srgb, var(--panel) 90%, transparent); border: 1px solid var(--line); color: var(--muted); pointer-events: none; }
+body.typing .session { height: var(--vvh, 100dvh); min-height: 0; }
+body.typing .reply { display: none; }
+.term-copy { position: fixed; left: -9999px; top: 0; opacity: 0; }
+body.typing .session > .pill, body.typing .session > .revive { display: none; }
+.term-keys button { min-width: 38px; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+.term-keys button.mod.on { border-color: var(--accent); color: var(--accent); }
+.term-keys button.mod.lock { background: var(--accent); color: #fff; }
+.term-more { justify-content: flex-end; align-items: center; padding-top: 0; border-top: 0; }
+.term-more .sub { margin-right: auto; font-size: 12px; color: var(--muted); }
 .keys { display: flex; gap: 6px; padding: 6px 8px; overflow-x: auto; border-top: 1px solid var(--line); }
 .keys button { padding: 6px 10px; min-width: 40px; }
 .keys button.on { border-color: var(--accent); }

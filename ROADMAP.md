@@ -34,7 +34,7 @@ Conventions:
 | **M11** | Change sets | One coordinated change across several repos: lead + member agents, contract, integration overlay, set checkpoints, merge train (done) |
 | **H1** | Hardening review | ~120 findings of a full code review fixed (security, crashes, correctness, build) (done) |
 | **UX1** | Out of the box | From `cd repo && ptyro` to a shipped, cleaned-up worktree by keys alone; sidebar rows that say what's going on (done) |
-| **WEB1** | Web parity | The web client does what the CLI and TUI do, and the parity check covers it (done, but WEB1.8: a real terminal) |
+| **WEB1** | Web parity | The web client does what the CLI and TUI do, and the parity check covers it (done) |
 | **CFG1** | One configuration panel | Every option editable in the TUI (then the web); new options must join it |
 | **NOTE1** | The scratchpad | One persistent notepad file: a key opens it in your editor, `PTYRO_SCRATCHPAD` finds it, items become tasks, the web edits it (done) |
 | **Backlog** | Later / maybe | Editor, tasks, jj, libghostty, relay, … |
@@ -42,7 +42,7 @@ Conventions:
 Critical path: **M0 → M1 → M2 → M3 → M4** gives a daily-driver. M5 can interleave with M3/M4.
 M6–M10 are largely independent of each other after M5. M11 builds on M6 (PRs) and M7 (runs,
 mailbox, `ptyro mcp`); its experiment M11.0 can run as soon as M5 exists. UX1, the owner's top
-priority from 2026-10-22, is done (2026-10-23), and so is WEB1 (2026-10-24), but WEB1.8 (a real terminal in the web).
+priority from 2026-10-22, is done (2026-10-23), and so is WEB1 (2026-10-24).
 
 ---
 
@@ -1592,7 +1592,7 @@ shows a live terminal, sends replies and keys, answers permission prompts, shows
 structured chats, and takes push notifications. It can't start, stop or restart anything, or
 touch worktrees, projects, review and PRs, runs, change sets, profiles or settings. R-UX-31.
 
-**Done (2026-10-24): all of WEB1 but WEB1.8.** 0 web gaps in `docs/parity.md`, and `make parity` fails on
+**Done (2026-10-24): all of WEB1.** 0 web gaps in `docs/parity.md`, and `make parity` fails on
 one. The device needs `--scope full` for the whole app (`control`: answer, type, stop; the pages
 that change the machine say so). *Not checked here:* the app on a real phone.
 
@@ -1735,7 +1735,7 @@ up), and `make parity` fails CI on a CLI command with neither a web path nor a w
   archive, end). A `full` device may now pair and revoke devices. `ptyro pair` says what the scope
   it made may do. `make parity` now fails on web gaps (`WEB_STRICT=0` only lists them).
 
-- [ ] **WEB1.8 A real terminal in the web** — L. (owner 2026-10-24) Today the web draws the
+- [x] **WEB1.8 A real terminal in the web** — L. (owner 2026-10-24; done 2026-10-24) Today the web draws the
   daemon's screen frames to a canvas (M9.3), so it *shows* a session live, but it can't *drive*
   one: the only input is the reply box (`SendText` + Enter, a line at a time) and a key bar. Make
   the session view a terminal you type in: every key goes to the session as it is pressed
@@ -1756,6 +1756,21 @@ up), and `make parity` fails CI on a CLI command with neither a web path nor a w
   - *Done when:* from a phone, `nvim` and `claude` are usable by keystroke, scrollback and
     selection work, and the web test (`web/test`) types into a real session and compares it with
     `ptyro read`.
+  *Done:* **our own**, in `web/src/term.ts` (+ DOM-free `keys.ts`, `grid.ts`): every key as pressed
+  through a hidden textarea (soft keyboards, IME, Option-as-Alt, Cmd stays the browser's), a key
+  row with sticky Ctrl/Alt/Shift and held-to-repeat arrows, paste, focus events, mouse when the
+  program asks (Shift selects), the wheel as arrows in full-screen programs, scrollback with
+  momentum over a frozen `ReadScrollback` document, selection (word, line, drag, long-press, edge
+  scroll) and copy (wrapped lines joined), OSC 52, find, links, bell, resize-to-screen (devices
+  with `control` scope may now take control and size a session, protocol 1.17), only changed rows
+  painted. Spike verdict and numbers in SPEC §20.5 (xterm.js and libghostty-vt WASM rejected: a
+  second emulator each). Tests: `web/test/term.mjs` (keys, soft keyboards, words, selection, links,
+  find) and m9's `the_web_terminal_types_into_a_real_session` (the keys the page sends reach a raw
+  session byte for byte; a read-only device can't type; select-all equals `read --scrollback`),
+  `a_control_device_may_size_a_session_and_a_watching_one_may_not`. *Not checked:* a real phone's
+  soft keyboard and touch gestures (the touch paths are written to the pointer-events and
+  `beforeinput` standards and were exercised with a mouse, synthetic wheel events and the
+  `type` action, not a finger), xterm.js side by side, battery.
 - [x] **WEB1.9 The web server starts with the daemon, as a setting** — S. (owner 2026-10-24; done 2026-10-24)
   `[remote] serve = true` already makes the daemon supervise `ptyro serve --managed` (M9.2, SPEC
   §16.3), but nobody finds it: it is a config key, off by default, with no UI. Make it a setting

@@ -209,7 +209,10 @@ fn web_app(w: &ptyro_protocol::WebServe, r: &mut Report) {
             "off: `ptyro web on` has the daemon serve the web app for your phone".into(),
         ),
     };
-    let rest = lines.into_iter().filter(|l| !l.starts_with("its log") && !(w.up && l.starts_with("restarted"))).collect::<Vec<_>>();
+    let rest = lines
+        .into_iter()
+        .filter(|l| !l.starts_with("its log") && !(w.up && l.starts_with("restarted")))
+        .collect::<Vec<_>>();
     let text = std::iter::once(head).chain(rest).collect::<Vec<_>>().join("; ");
     let fix = if level == Level::Problem {
         format!(" ({}; log: {})", crate::webapp::next(w), w.log.display())
