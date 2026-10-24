@@ -600,5 +600,6 @@ fn finish_then_archive_on_merge() {
     // Back, as it was.
     w.ok(&["wt", "restore", "app/feat"]);
     assert!(path.join("new.txt").exists());
-    assert!(w.json(&["wt", "archives", "--json"]).as_array().unwrap().is_empty());
+    let left = w.json(&["wt", "archives", "--json"]);
+    assert!(left.as_array().unwrap().is_empty(), "{left:#}");
 }

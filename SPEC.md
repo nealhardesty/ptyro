@@ -2048,7 +2048,10 @@ branches, no sessions for N days.
   or integrating. Progress goes out as `WorktreeProgress`.
 - **Archive on merge** (`[worktrees] archive_on_merge`, default off): a PR refresh that sees a PR
   it knew open now merged archives the worktree, when nothing runs in it. A first sighting
-  doesn't count, so a worktree restored after its PR merged stays.
+  doesn't count, so a worktree restored after its PR merged stays. Integrating it into the main
+  branch counts too (`WorktreeInfo::shipped`). A worktree is archived by one archive at a time:
+  a second one while it runs is refused (before, a PR poll and a refresh seeing the same merge
+  could both snapshot it and both list it).
 - `ptyro gc` asks per stale worktree: `a` archive (keeps the work), `r` remove, ⏎ skip.
 
 ### 10.9 Repository status
@@ -2534,7 +2537,9 @@ learning anything up front.
   do next (`n`, `N` when the workspace has a project, `/` when other workspaces have sessions,
   `?`), with the keys as bound. In raw attach, only the attached session's removal ends it.
 - **Programs are named** (UX1.1): the sidebar, headers and `ptyro ls` show `claude`, not the
-  version its installer names the file after (§5.1, §20.5).
+  version its installer names the file after (§5.1, §20.5). An agent session's row names its
+  agent as configured (`claude`, `claude-work`) whatever its process is called (a wrapper
+  script, a launcher).
 - **An agent started by hand in a shell** (UX1.4, §8.7) reads `zsh › claude` with the `◌`
   of a guess, and a detail line offers adopting it (`A` in the sidebar).
 - **Rows say what's going on** (UX1.2). Under a session's first line (now with how long it has
@@ -2639,7 +2644,11 @@ learning anything up front.
   the sidebar; the runs view's gates and the away digest, the runs. A daemon error that
   suggests a CLI command offers its TUI action when there is one (`app::SUGGESTED`).
 - **A repository registered on its own** (UX1.5, §10.1) says so with an undo; a profile pin its
-  rules suggest still asks "keep the pin? [Y/n]".
+  rules suggest still asks "keep the pin? [Y/n]". The sweep (every 2 s) places any session
+  outside every project whose directory is in one now, a project added by hand since included,
+  and tries a (session, directory) again when registering failed rather than said no (git
+  failing inside a repository, the store busy); a directory that isn't a repository, your home
+  or a declined one is settled.
 - **No project? Pick one, then carry on** (UX1.6). `N`, `o`, `r`, `R` and `project.trust` with no
   project open the discovery picker ("No project here yet: pick one to add to main") and, once
   the project is added and its main checkout has arrived, run as asked there. The wizard's

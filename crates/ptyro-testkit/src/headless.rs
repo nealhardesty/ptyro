@@ -30,6 +30,8 @@ pub struct Script {
     /// Sent in order, each once the screen shows its text (`send_when`): no guessing how long
     /// a busy machine takes to draw.
     pub sends_when: Vec<(String, Vec<u8>)>,
+    /// Where the program starts (default: this process's directory).
+    pub cwd: Option<PathBuf>,
 }
 
 impl Script {
@@ -46,6 +48,7 @@ impl Script {
             env: vec![],
             until: None,
             sends_when: vec![],
+            cwd: None,
         }
     }
 
@@ -59,6 +62,11 @@ impl Script {
     /// `send_when`s before it.
     pub fn send_when(mut self, shown: &str, text: &str) -> Self {
         self.sends_when.push((shown.into(), unescape(text).expect("valid escapes")));
+        self
+    }
+
+    pub fn cwd(mut self, dir: &std::path::Path) -> Self {
+        self.cwd = Some(dir.to_path_buf());
         self
     }
 
@@ -157,7 +165,10 @@ pub async fn run(mut s: Script) -> Result<Report> {
         std::env::vars_os(),
         extra.iter().map(|(k, v)| (k.as_str(), v.as_os_str())),
     );
-    let cwd = std::env::current_dir()?;
+    let cwd = match &s.cwd {
+        Some(d) => d.clone(),
+        None => std::env::current_dir()?,
+    };
     let mut child =
         ptyro_pty::spawn(ptyro_pty::SpawnRequest { argv: &s.argv, cwd: &cwd, env, size: s.size })?;
     let mut emu = AlacrittyEmulator::new(s.size, 1000);

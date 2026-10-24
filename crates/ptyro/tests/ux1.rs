@@ -12,7 +12,9 @@ use ptyro_protocol::{Reply, Request};
 use ptyro_testkit::TempDaemon;
 
 const BIN: &str = env!("CARGO_BIN_EXE_ptyro");
-const WAIT: Duration = Duration::from_secs(15);
+// Generous: auto-registration runs git a few times, which takes seconds on a loaded machine;
+// a wait ends as soon as what it waits for is true.
+const WAIT: Duration = Duration::from_secs(45);
 
 struct World {
     home: tempfile::TempDir,
@@ -748,24 +750,29 @@ async fn a_fresh_ptyro_opens_the_first_run_once() {
     let script = |d: &TempDaemon| {
         let mut s = ptyro_testkit::headless::Script::new(vec![BIN.to_owned()])
             .size(110, 30)
-            .timeout(5.0)
+            .timeout(30.0)
             .env("HOME", &home.path().to_string_lossy());
         for (k, v) in d.env() {
             s = s.env(&k, &v);
         }
         s
     };
+    // Esc only once the first run is on screen (it never is: the run times out); it writes a
+    // config, so the next start skips it.
     let r = ptyro_testkit::headless::run(
-        script(&d).snapshot(2.0).send(2.2, "\x1b").snapshot(2.8).send(3.0, "\\x11d"),
+        script(&d)
+            .send_when("Welcome to ptyro", "\x1b")
+            .send_when("WORKSPACE", "\\x11d")
+            .until("[detached]"),
     )
     .await
     .unwrap();
-    assert!(r.at(2.0).contains("Welcome to ptyro"), "{}", r.at(2.0));
-    assert!(!r.at(2.8).contains("Welcome to ptyro"), "Esc skips: {}", r.at(2.8));
+    assert!(r.screen.contains("[detached]"), "{}", r.screen);
     assert!(d.paths.config.join("config.toml").exists(), "a config now, so it won't come back");
-    let r =
-        ptyro_testkit::headless::run(script(&d).snapshot(2.0).send(2.2, "\\x11d")).await.unwrap();
-    assert!(!r.at(2.0).contains("Welcome to ptyro"), "{}", r.at(2.0));
+    // The second start: the TUI as soon as it's drawn, with no first run over it.
+    let r = ptyro_testkit::headless::run(script(&d).until("WORKSPACE")).await.unwrap();
+    assert!(r.screen.contains("WORKSPACE"), "{}", r.screen);
+    assert!(!r.screen.contains("Welcome to ptyro"), "{}", r.screen);
 }
 
 /// UX1.3: with `[summaries]` on, a finished turn gets a line from the summarizer, which reads a
@@ -1012,4 +1019,133 @@ async fn the_tour_walks_the_loop_for_real_and_cleans_up() {
     .expect("headless run");
     // Its last words come after its daemon stopped and its directory was deleted.
     assert!(r.screen.contains("the tour is over"), "{}", r.screen);
+}
+
+/// UX1's "Done when", as written: on a fresh machine with only `claude` installed and no
+/// config, `cd myrepo && ptyro` registers the repo; `Ctrl-Q n`, a task, `⏎` puts Claude to work
+/// in a new worktree named after it; its row shows the task and, while it's blocked, what it
+/// wants and the keys that answer it; finishing commits and opens a PR, and once it merges one
+/// key cleans up. By keys alone. (`claude` here is the pretend agent, `gh` the fake one.)
+#[tokio::test]
+async fn ux1_done_when_from_a_fresh_machine_to_a_merged_and_cleaned_up_pr() {
+    let tmp = tempfile::Builder::new().prefix("ptyro-ux1-done-").tempdir().unwrap();
+    let h = tmp.path().canonicalize().unwrap();
+    std::fs::write(
+        h.join(".gitconfig"),
+        "[user]\n\tname = Owner\n\temail = owner@example.com\n[init]\n\tdefaultBranch = main\n",
+    )
+    .unwrap();
+    // Only `claude` installed (the pretend one), and a `gh`.
+    let bin = h.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let exe = |name: &str, body: String| {
+        std::fs::write(bin.join(name), format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(
+            bin.join(name),
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+    };
+    exe(
+        "claude",
+        format!(
+            "PTYRO_FAKE_TOUR=1 PTYRO_FAKE_PASTE=1 exec \"{BIN}\" fake-agent --as claude \"$@\""
+        ),
+    );
+    exe("gh", format!("exec \"{BIN}\" fake-gh \"$@\""));
+    let gh = h.join("gh-state");
+    std::fs::create_dir_all(&gh).unwrap();
+    // myrepo, cloned from a "remote" (where the PR's branch is pushed).
+    let git = |dir: &Path, args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("HOME", &h)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    };
+    git(&h, &["init", "-q", "--bare", "myrepo.git"]);
+    git(&h, &["clone", "-q", "myrepo.git", "myrepo"]);
+    let repo = h.join("myrepo");
+    std::fs::write(repo.join("greeting.txt"), "Helo, world!\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "A greeting"]);
+    git(&repo, &["push", "-q", "origin", "main"]);
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
+    let (hs, gs) = (h.to_string_lossy().into_owned(), gh.to_string_lossy().into_owned());
+    let env = [
+        ("HOME", hs.as_str()),
+        ("GIT_CONFIG_NOSYSTEM", "1"),
+        ("SHELL", "/bin/sh"),
+        ("PATH", path.as_str()),
+        ("PTYRO_FAKE_GH", gs.as_str()),
+        ("PTYRO_TEST_FAST_POLL", "1"),
+    ];
+    // No config at all.
+    let d = TempDaemon::start_with(BIN, &env, None).unwrap();
+    assert!(!d.paths.config.join("config.toml").exists());
+    // The PR merges on the forge once it's open.
+    let merger = {
+        let gh = gh.clone();
+        std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(120);
+            while Instant::now() < deadline {
+                if let Ok(t) = std::fs::read_to_string(gh.join("pr.json"))
+                    && let Ok(mut pr) = serde_json::from_str::<serde_json::Value>(&t)
+                {
+                    pr["state"] = serde_json::json!("MERGED");
+                    std::fs::write(gh.join("pr.json"), pr.to_string()).unwrap();
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            false
+        })
+    };
+    let mut script = ptyro_testkit::headless::Script::new(vec![BIN.to_owned()])
+        .cwd(&repo)
+        .size(120, 32)
+        .timeout(120.0);
+    for (k, v) in env.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).chain(d.env()) {
+        script = script.env(&k, &v);
+    }
+    let r = ptyro_testkit::headless::run(
+        script
+            // 1. The first run (no config): ⏎ keeps what it found, myrepo included.
+            .send_when("Welcome to ptyro", "\\r")
+            .send_when("WORKSPACE", "\\x11n")
+            // 2. A task, ⏎.
+            .send_when("What should it do?", "fix the typo in greeting.txt")
+            .send_when("fix-typo-greeting", "\\r")
+            // 3. Blocked: its row says what it wants, and the keys; answered from peek.
+            .send_when("y/a/n answers", "\\x11p")
+            .send_when("y allow", "y")
+            // 4. Finish into a PR, from the sidebar.
+            .send_when("Fixed the typo", "\\x11\\t")
+            .send_when("Fixed the typo", "F")
+            .send_when("a pull request", "p")
+            // Merged: one key cleans up (F, as the hint says), ⏎ agrees.
+            .send_when("clean up (merged)", "F")
+            .send_when("snapshot", "\\r")
+            .send_when("archived", "\\x11d")
+            .until("[detached]"),
+    )
+    .await
+    .expect("headless run");
+    assert!(merger.join().unwrap(), "a PR was opened");
+    assert!(r.screen.contains("[detached]"), "{}", r.screen);
+    let c = d.client().await.unwrap();
+    let Reply::Projects { projects } = c.request(Request::ProjectList).await.unwrap() else {
+        panic!()
+    };
+    assert_eq!(projects.iter().map(|p| p.slug.as_str()).collect::<Vec<_>>(), ["myrepo"]);
+    let Reply::Archives { entries } =
+        c.request(Request::WorktreeArchives { project: None }).await.unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(entries.len(), 1, "cleaned up: archived, its branch kept");
+    assert_eq!(entries[0].name, "fix-typo-greeting");
 }

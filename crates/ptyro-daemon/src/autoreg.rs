@@ -79,25 +79,41 @@ impl Daemon {
         dir: &Path,
         workspace: Option<&str>,
     ) -> Option<ProjectInfo> {
+        self.try_register(dir, workspace).await.ok().flatten()
+    }
+
+    /// `auto_register`, telling a failure (`Err`: worth trying again) from a no (`Ok(None)`:
+    /// not a repository, your home, declined, a project already).
+    async fn try_register(
+        self: &Arc<Self>,
+        dir: &Path,
+        workspace: Option<&str>,
+    ) -> Result<Option<ProjectInfo>, ()> {
         if !self.config().discover.auto_register {
-            return None;
+            return Ok(None);
         }
         let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
         if self.in_a_project(&dir) {
-            return None;
+            return Ok(None);
         }
         let probe = dir.clone();
-        let root = tokio::task::spawn_blocking(move || Git::new().main_root(&probe).ok())
+        let Some(root) = tokio::task::spawn_blocking(move || Git::new().main_root(&probe).ok())
             .await
             .ok()
-            .flatten()?;
+            .flatten()
+        else {
+            // No repository, or git failed on one (slow, busy): only the second is worth
+            // another try.
+            let in_repo = dir.ancestors().any(|d| d.join(".git").exists());
+            return if in_repo { Err(()) } else { Ok(None) };
+        };
         let root = root.canonicalize().unwrap_or(root);
         let home = std::env::var_os("HOME").map(PathBuf::from).and_then(|h| h.canonicalize().ok());
         if home.as_deref() == Some(root.as_path())
             || self.declined.lock().expect("declined").contains(&root)
             || root.starts_with(&self.paths.data)
         {
-            return None;
+            return Ok(None);
         }
         let workspace = match workspace {
             Some(w) if self.find_workspace(w).is_ok() => w.to_owned(),
@@ -111,12 +127,12 @@ impl Daemon {
                     workspace,
                     notes,
                 });
-                Some(info)
+                Ok(Some(info))
             }
-            Ok(_) => None,
+            Ok(_) => Ok(None),
             Err(e) => {
                 tracing::debug!("auto-register {}: {}", dir.display(), e.message);
-                None
+                Err(())
             }
         }
     }
@@ -142,12 +158,18 @@ impl Daemon {
     }
 
     /// A session outside every project, in a repository: register it (unless it is a project
-    /// already) and move the session in.
-    async fn adopt_dir(self: &Arc<Self>, s: &Arc<Session>, dir: &Path) {
+    /// already) and move the session in. `false`: registering failed, so try again later.
+    async fn adopt_dir(self: &Arc<Self>, s: &Arc<Session>, dir: &Path) -> bool {
         let ws = s.meta.lock().expect("meta").place.workspace.clone();
-        if self.in_a_project(dir) || self.auto_register(dir, ws.as_deref()).await.is_some() {
+        let registered = if self.in_a_project(dir) {
+            Ok(true)
+        } else {
+            self.try_register(dir, ws.as_deref()).await.map(|p| p.is_some())
+        };
+        if registered == Ok(true) {
             self.place_session(s, Some(dir));
         }
+        registered.is_ok()
     }
 
     /// Where a session is now: the shell's report (OSC 7), else its foreground process's
@@ -170,18 +192,27 @@ impl Daemon {
                 if me.config().discover.auto_register {
                     for s in me.sessions().into_iter().filter(|s| s.is_live()) {
                         let dir = me.current_dir(&s);
+                        let placed = s.meta.lock().expect("meta").place.project.is_some();
+                        // Outside every project, in one now (added by hand since, say): move in.
+                        // Cheap (no git), so not once only.
+                        if !placed && me.in_a_project(&dir) {
+                            me.place_session(&s, Some(&dir));
+                            continue;
+                        }
                         if !seen.insert((s.id, dir.clone())) {
                             continue;
                         }
-                        let placed = s.meta.lock().expect("meta").place.project.is_some();
-                        if placed {
+                        let settled = if placed {
                             // Elsewhere now: its new repository joins the sidebar too.
-                            if !me.in_a_project(&dir) {
-                                let ws = s.meta.lock().expect("meta").place.workspace.clone();
-                                me.auto_register(&dir, ws.as_deref()).await;
-                            }
+                            let ws = s.meta.lock().expect("meta").place.workspace.clone();
+                            me.in_a_project(&dir)
+                                || me.try_register(&dir, ws.as_deref()).await.is_ok()
                         } else {
-                            me.adopt_dir(&s, &dir).await;
+                            me.adopt_dir(&s, &dir).await
+                        };
+                        // Registering failed (the store busy, say): the next sweep tries again.
+                        if !settled {
+                            seen.remove(&(s.id, dir));
                         }
                     }
                 }

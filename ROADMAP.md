@@ -33,14 +33,14 @@ Conventions:
 | **M10** | Structured sessions | ACP / stream-json / app-server sessions with a native chat view (done) |
 | **M11** | Change sets | One coordinated change across several repos: lead + member agents, contract, integration overlay, set checkpoints, merge train (done) |
 | **H1** | Hardening review | ~120 findings of a full code review fixed (security, crashes, correctness, build) (done) |
-| **UX1** | Out of the box (top priority) | From `cd repo && ptyro` to a shipped, cleaned-up worktree by keys alone; sidebar rows that say what's going on |
+| **UX1** | Out of the box | From `cd repo && ptyro` to a shipped, cleaned-up worktree by keys alone; sidebar rows that say what's going on (done) |
 | **WEB1** | Web parity | The web client does what the CLI and TUI do, and the parity check covers it |
 | **Backlog** | Later / maybe | Editor, tasks, jj, libghostty, relay, … |
 
 Critical path: **M0 → M1 → M2 → M3 → M4** gives a daily-driver. M5 can interleave with M3/M4.
 M6–M10 are largely independent of each other after M5. M11 builds on M6 (PRs) and M7 (runs,
-mailbox, `ptyro mcp`); its experiment M11.0 can run as soon as M5 exists. **UX1 is the current
-priority** (owner, 2026-10-22).
+mailbox, `ptyro mcp`); its experiment M11.0 can run as soon as M5 exists. UX1, the owner's top
+priority from 2026-10-22, is done (2026-10-23); **WEB1 is next**.
 
 ---
 
@@ -1214,6 +1214,19 @@ agents. Ideas come from RESEARCH R-UX-18…28 and R-WT-10, plus the funnel ids n
 4. The worktree's finish flow commits and opens a PR, and once it merges, one key cleans up.
 
 All of it works by keys alone, and `make tui-parity` passes. Linux and macOS.
+
+**Done (2026-10-23).** `tests/ux1.rs` runs the four steps above as written, by keys in a
+headless terminal (`ux1_done_when_from_a_fresh_machine_to_a_merged_and_cleaned_up_pr`, ~9 s): a
+home with no config and only `claude` on `PATH` (the pretend agent), a repository with a
+remote, a fake `gh`; the first run registers the repository, the task box starts the agent in
+`fix-typo-greeting`, its blocked row says what it wants and `y/a/n answers`, peek answers it,
+`F` → a pull request commits (the agent writes the message) and opens it, the PR merges, and
+`F` (the hint's key) cleans up. `make tui-parity` passes. Checked on macOS; CI runs it on Linux.
+Closing it out also fixed: an agent session's row names its agent (a wrapper or launcher was
+shown by its process name); the auto-registration sweep places a session in a project added
+after it looked, and retries a registration that failed (both flaked under load); two archives
+of one worktree at once (a PR poll and a refresh both seeing it merge) could list it twice; the
+UX1 tests wait for what's on screen, not a clock.
 
 ### First class, and seeing what's going on
 

@@ -67,6 +67,17 @@ impl Daemon {
                 wt.qualified()
             )));
         }
+        // One at a time per worktree: two at once would both snapshot it and both list it.
+        if !self.archiving.lock().expect("archiving").insert(wt.id.clone()) {
+            return Err(Error::conflict(format!("{} is being archived already", wt.qualified())));
+        }
+        struct Done<'a>(&'a Daemon, String);
+        impl Drop for Done<'_> {
+            fn drop(&mut self) {
+                self.0.archiving.lock().expect("archiving").remove(&self.1);
+            }
+        }
+        let _done = Done(self, wt.id.clone());
         let branch = wt.branch.clone().ok_or_else(|| {
             Error::invalid(format!(
                 "{} has no branch (a detached checkout): remove it",

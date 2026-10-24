@@ -44,6 +44,9 @@ pub struct Daemon {
     pub(crate) views: Mutex<BTreeMap<String, serde_json::Value>>,
     /// Repository roots never to register on their own (UX1.5).
     pub(crate) declined: Mutex<std::collections::HashSet<std::path::PathBuf>>,
+    /// Worktrees being archived now: one archive each (a PR poll and a refresh can both see
+    /// it merge).
+    pub(crate) archiving: Mutex<std::collections::HashSet<String>>,
     /// Workspaces, projects, worktrees and trust (SPEC §14.2), mirrored to the store.
     pub registry: Mutex<Registry>,
     /// Resolved secrets kept for `secret_ttl` (memory only, SPEC §10.10).
@@ -176,6 +179,7 @@ impl Daemon {
             focused: Mutex::new(None),
             views: Mutex::new(BTreeMap::new()),
             declined: Mutex::new(std::collections::HashSet::new()),
+            archiving: Mutex::new(std::collections::HashSet::new()),
             registry: Mutex::new(registry),
             secrets: Mutex::new(HashMap::new()),
             status_tx,

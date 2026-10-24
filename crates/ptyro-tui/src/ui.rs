@@ -80,6 +80,13 @@ fn what(s: &SessionInfo) -> String {
     if let Some(agent) = &s.inner_agent {
         return format!("{program} › {}", s.foreground.as_deref().unwrap_or(agent));
     }
+    // An agent session is its agent, whatever its process is called (a wrapper script, a
+    // launcher, the tour's pretend one).
+    if s.kind == SessionKind::Agent
+        && let Some(agent) = &s.agent
+    {
+        return agent.clone();
+    }
     s.foreground.clone().unwrap_or(program)
 }
 
