@@ -66,3 +66,5 @@ export const liveWorktrees = () => [...data.worktrees.values()].filter((w) => w.
 /// Does this device's scope allow `need`? (The daemon decides; this only hides what would fail.)
 const RANK = { read: 0, approve: 1, control: 2, full: 3 };
 export const can = (need) => (RANK[conn.scope] ?? 3) >= RANK[need];
+/// Tabs of a worktree's page, added by the modules that own them (review, checkpoints…).
+export const wtTabs = [];

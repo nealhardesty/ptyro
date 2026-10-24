@@ -87,7 +87,7 @@ export async function createWorktree(spec) {
         return undefined;
     for (const n of r.notes ?? [])
         ui.toast(n);
-    const into = r.agent ?? r.setup;
-    go(into ? `#/s/${enc(into.id)}` : `#/wt/${enc(r.info.id)}`);
+    // Its agent's session; while setup still runs, the worktree's page, which lists what's going on.
+    go(r.agent ? `#/s/${enc(r.agent.id)}` : `#/wt/${enc(r.info.id)}`);
     return r;
 }

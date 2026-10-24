@@ -137,6 +137,9 @@ export function sheet(title: string, body: Child[], foot: Child[] = []): Sheet {
   return s;
 }
 
+// A sheet belongs to the page it was opened on.
+window.addEventListener("hashchange", () => { for (const s of [...openSheets]) s.close(); });
+
 export interface Item { label: string; hint?: string; danger?: boolean; run: () => unknown; disabled?: boolean; title?: string }
 
 /// A list of things to do; choosing one closes the sheet and runs it. Falsy entries are skipped,

@@ -86,6 +86,8 @@ export function newTask(where?: string): void {
   placeSel.value = where && place.some(([v]) => v === where) ? where : place[0][0];
   const source = input(h("select", {}, ...SOURCES.map(([v, l]) => h("option", { value: v }, l))));
   const which = input(h("input", { placeholder: "", autocapitalize: "off", spellcheck: "false" }));
+  const names = h("datalist", { id: "branch-names" });
+  which.setAttribute("list", "branch-names");
   const name = input(h("input", { placeholder: "a friendly name is picked for you", autocapitalize: "off", spellcheck: "false" }));
   const err = h("p", { class: "form-err" });
   const commandRow = h("label", { class: "field" }, h("span", {}, "Command"), command);
@@ -101,13 +103,17 @@ export function newTask(where?: string): void {
     which.placeholder = source.value === "pr" ? "number or URL" : source.value === "issue" ? "number or URL" : "branch name";
     prompt.hidden = agent.value === "@shell" || agent.value === "@command";
   };
-  for (const el of [agent, placeSel, source]) el.addEventListener("change", sync);
+  const loadBranches = () => {
+    if (source.value !== "branch" || !placeSel.value.startsWith("p:")) return;
+    conn.request({ t: "branches", project: placeSel.value.slice(2) }).then((r) => names.replaceChildren(...(r.names as string[]).map((n) => h("option", { value: n }))), () => {});
+  };
+  for (const el of [agent, placeSel, source]) el.addEventListener("change", () => { sync(); loadBranches(); });
   sync();
   const go1 = h("button", { class: "primary" }, "Start");
   const s = sheet("New task", [
     h("label", { class: "field" }, h("span", {}, "Task"), prompt),
     h("label", { class: "field" }, h("span", {}, "Agent"), agent), commandRow,
-    h("label", { class: "field" }, h("span", {}, "Where"), placeSel), sourceRow, whichRow, nameRow, err,
+    h("label", { class: "field" }, h("span", {}, "Where"), placeSel), sourceRow, whichRow, names, nameRow, err,
   ], [h("button", { onclick: () => s.close() }, "Cancel"), go1]);
   go1.addEventListener("click", async () => {
     err.textContent = "";
@@ -480,6 +486,8 @@ function historyView(): HTMLElement {
 // ── wiring ──────────────────────────────────────────────────────────────────────────────────
 
 let sessionsRef: () => Map<string, Session> = () => new Map();
+/// Every session the app knows.
+export const allSessions = (): Map<string, Session> => sessionsRef();
 /// The app's session map, for views that title themselves by session.
 export function useSessions(get: () => Map<string, Session>): void { sessionsRef = get; setSessionNames((id) => get().get(id)?.name ?? id); }
 

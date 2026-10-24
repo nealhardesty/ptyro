@@ -366,6 +366,9 @@ function sessionView(id: string): HTMLElement {
         h("button", { class: "always", onclick: () => void answer(id, "always") }, "Always"),
         h("button", { class: "deny", onclick: () => void answer(id, "deny") }, "Deny"),
       ))] : []),
+    ...(s.state.t === "dormant" ? [h("section", { class: "revive" }, h("span", {}, "Hibernated: its conversation is kept."), h("button", { class: "primary", title: tipOf("session.resume"), onclick: () => void conn.request({ t: "resume", addr: id }).then(() => toast("Resumed"), (e) => toast((e as Error).message)) }, "Resume"))]
+      : s.state.t !== "running" ? [h("section", { class: "revive" }, h("span", {}, s.state.t === "failed" ? "It failed to run." : s.state.code != null ? `Exited with ${s.state.code}.` : "Exited."),
+          h("button", { class: "primary", title: tipOf("session.restart"), onclick: () => void conn.request({ t: "restart", addr: id }).then(() => toast("Restarted"), (e) => toast((e as Error).message)) }, "Restart"))] : []),
     chat ? sh.chat : sh.termWrap,
     h("div", { class: "keys", title: tip("session.keys") },
       ...KEYS.map(([label, code]) => h("button", { onclick: () => sendKey(id, code) }, label)),

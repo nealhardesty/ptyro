@@ -3,7 +3,8 @@
 //! neither.
 
 use ptyro_core::{Error, ErrorCode, TermSize};
-use ptyro_protocol::{AgentChoice, ReplayDoc, ReplayStep};
+use ptyro_core::session::SpawnSpec;
+use ptyro_protocol::{AgentChoice, Reply, ReplayDoc, ReplayStep};
 use ptyro_term::record::{self, Timed};
 use ptyro_term::{AlacrittyEmulator, Emulator, FrameTracker, StyleTable};
 
@@ -127,5 +128,69 @@ impl Daemon {
             }
             other => Err(Error::invalid(format!("unknown format {other:?} (asciicast, text)"))),
         }
+    }
+
+    /// `wt open`: a terminal editor runs as a session in the worktree; any other opens on this
+    /// computer, where the daemon runs.
+    pub(crate) async fn open_worktree(
+        self: &std::sync::Arc<Self>,
+        addr: &str,
+        editor: Option<String>,
+    ) -> Result<Reply, Error> {
+        let info = self.find_worktree(addr)?;
+        let config = self.config();
+        let name = editor.unwrap_or_else(|| config.default_editor());
+        let def = config.editor(&name).ok_or_else(|| {
+            Error::new(
+                ErrorCode::NotFound,
+                format!("no editor {name:?} (known: {})", config.editor_names().join(", ")),
+            )
+        })?;
+        let path = info.path.to_string_lossy().into_owned();
+        let mut argv: Vec<String> = def.command.iter().map(|a| a.replace("{path}", &path)).collect();
+        if !def.command.iter().any(|a| a.contains("{path}")) {
+            argv.push(path);
+        }
+        if def.inside {
+            let spec = SpawnSpec {
+                argv,
+                cwd: info.path.clone(),
+                worktree: Some(info.id.clone()),
+                confirmed: true,
+                ..SpawnSpec::default()
+            };
+            let s = self.spawn(spec).await?;
+            return Ok(Reply::Session { info: self.info(&s) });
+        }
+        let (prog, args) = argv.split_first().ok_or_else(|| Error::invalid("empty editor command"))?;
+        std::process::Command::new(prog)
+            .args(args)
+            .current_dir(&info.path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| Error::new(ErrorCode::NotFound, format!("{prog}: {e}")))?;
+        Ok(Reply::Notes { notes: vec![format!("opened {} in {name}, on the computer", info.qualified())] })
+    }
+
+    /// `project config --explain`.
+    pub(crate) fn project_config(&self, addr: &str) -> Result<String, Error> {
+        let p = self.find_project(addr)?;
+        let cfg = ptyro_core::project::ProjectConfig::load(&p.root, &p.root).map_err(Error::invalid)?;
+        let mut out = toml::to_string_pretty(&cfg).map_err(|e| Error::internal(e.to_string()))?;
+        out.push_str("\n# where each value comes from\n");
+        for (k, from) in &cfg.origin {
+            out.push_str(&format!("#   {k:<28} {from}\n"));
+        }
+        for i in &cfg.imported {
+            for n in &i.notes {
+                out.push_str(&format!("#   {}: {n}\n", i.file));
+            }
+        }
+        if cfg.origin.is_empty() {
+            out.push_str("#   (nothing set: everything is a default)\n");
+        }
+        Ok(out)
     }
 }

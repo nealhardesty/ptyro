@@ -6,7 +6,7 @@ import { ui } from "./kit.js";
 
 export interface Project { id: string; slug: string; root: string; default_branch?: string | null; remote_url?: string | null; pin?: string | null; created_ms: number; last_used_ms?: number | null }
 export interface RepoStatus { branch?: string | null; head?: string | null; ahead?: number; behind?: number; staged?: number; unstaged?: number; untracked?: number; conflicted?: number; insertions?: number; deletions?: number; [k: string]: any }
-export interface PrInfo { number: number; state: string; url: string; title?: string; draft?: boolean; checks?: string; review?: string; [k: string]: any }
+export interface PrInfo { number: number; state: string; url: string; title?: string; draft?: boolean; checks?: any[]; review?: string; [k: string]: any }
 export interface Worktree {
   id: string; project: string; project_slug: string; name: string; path: string; branch?: string | null; base?: string | null;
   is_root: boolean; profile?: string | null; state: string; ports?: any; created_ms: number; last_used_ms?: number | null;
@@ -65,3 +65,6 @@ export const liveWorktrees = (): Worktree[] => [...data.worktrees.values()].filt
 /// Does this device's scope allow `need`? (The daemon decides; this only hides what would fail.)
 const RANK: Record<string, number> = { read: 0, approve: 1, control: 2, full: 3 };
 export const can = (need: "approve" | "control" | "full"): boolean => (RANK[conn.scope] ?? 3) >= RANK[need];
+
+/// Tabs of a worktree's page, added by the modules that own them (review, checkpoints…).
+export const wtTabs: { id: string; label: string; render: (w: Worktree) => HTMLElement }[] = [];

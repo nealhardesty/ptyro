@@ -576,6 +576,20 @@ pub enum Request {
     /// The agents a session can run (built-in and configured) and which is the default, for
     /// clients that don't read the config themselves (the web app's new-session form).
     Agents,
+    /// The editors a worktree can be opened in (built in and configured) and the default.
+    Editors,
+    /// Open a worktree in an editor (default: `editors.default`): a terminal editor starts as a
+    /// session (replies `Session`), any other on the computer running the daemon (`Notes`).
+    WorktreeOpen {
+        addr: String,
+        #[serde(default)]
+        editor: Option<String>,
+    },
+    /// A project's configuration as TOML, with where each value comes from (`project config
+    /// --explain`), as `Text`.
+    ProjectConfig {
+        addr: String,
+    },
     /// A session's recording as screen frames, to play back (`ptyro replay`, for the web).
     Replay {
         addr: String,
@@ -1161,6 +1175,10 @@ pub enum Reply {
     },
     Replay {
         replay: ReplayDoc,
+    },
+    Editors {
+        names: Vec<String>,
+        default: String,
     },
     /// A document as text (an export, a file).
     Text {

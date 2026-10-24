@@ -172,3 +172,20 @@ pre.block { margin: 0; padding: 10px; background: var(--panel); border: 1px soli
 main.replay { display: grid; gap: 8px; padding: 8px; }
 .replay-bar { display: flex; gap: 10px; align-items: center; } .replay-bar input { flex: 1; }
 .replay-time { color: var(--muted); font-size: 12px; min-width: 90px; text-align: right; }
+
+/* projects, worktrees */
+.chips { display: flex; gap: 6px; padding: 8px 10px 0; overflow-x: auto; }
+.chips button { padding: 5px 12px; border-radius: 16px; font-size: 13px; white-space: nowrap; }
+.chips button.on { background: var(--accent); color: #fff; border-color: transparent; }
+.tabs-in { border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.stack-in { display: grid; gap: 12px; }
+.proj { display: grid; gap: 6px; margin-bottom: 8px; }
+.proj-head { display: flex; align-items: center; gap: 8px; padding: 6px 4px 0; }
+.proj-name { font-weight: 700; font-size: 16px; }
+.spacer { flex: 1; }
+.foot-links { display: flex; justify-content: center; gap: 18px; padding: 14px; color: var(--muted); font-size: 13px; flex-wrap: wrap; }
+.glyph.working { color: var(--accent); } .glyph.blocked, .glyph.errored { color: var(--bad); } .glyph.done, .glyph.idle { color: var(--ok); }
+.row.dim { opacity: 0.6; }
+.row small { color: var(--muted); font-weight: 400; }
+.revive { display: flex; gap: 10px; align-items: center; margin: 8px 12px 0; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.revive span { flex: 1; color: var(--muted); }

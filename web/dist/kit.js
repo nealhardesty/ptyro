@@ -137,6 +137,9 @@ export function sheet(title, body, foot = []) {
     openSheets.push(s);
     return s;
 }
+// A sheet belongs to the page it was opened on.
+window.addEventListener("hashchange", () => { for (const s of [...openSheets])
+    s.close(); });
 /// A list of things to do; choosing one closes the sheet and runs it. Falsy entries are skipped,
 /// so a menu can say `cond && {…}`.
 export function menu(title, items) {

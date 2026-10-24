@@ -67,45 +67,45 @@ and why.
 
 | Command | In the TUI | On the web |
 |---|---|---|
-| `project add` | `project.add`: pick from discovered repositories, or "here" | gap: WEB1.3 (worktrees and projects) |
-| `project discover` | `project.add` (it discovers) | gap: WEB1.3 (worktrees and projects) |
-| `project suggest` | `project.suggest`; a project's first worktree offers it on its own | gap: WEB1.3 (worktrees and projects) |
-| `project ls` | shown: the sidebar lists the workspace's projects | gap: WEB1.3 (worktrees and projects) |
-| `project show` | `project.show` (in a split) | gap: WEB1.3 (worktrees and projects) |
-| `project rm` | `project.remove` (asks first) | gap: WEB1.3 (worktrees and projects) |
-| `project trust` | `project.trust` | gap: WEB1.3 (worktrees and projects) |
-| `project untrust` | `project.untrust` | gap: WEB1.3 (worktrees and projects) |
-| `project config` | `project.config` (with where each value comes from, in a split) | gap: WEB1.3 (worktrees and projects) |
-| `project pin` | `project.pin`: pick the profile | gap: WEB1.3 (worktrees and projects) |
-| `project unpin` | `project.unpin` | gap: WEB1.3 (worktrees and projects) |
-| `wt new` | `worktree.new` (`N`), or `session.new` (`n`) → "+ new worktree" | gap: WEB1.3 (worktrees and projects) |
-| `wt ls` | shown: the sidebar lists every worktree under its project | gap: WEB1.3 (worktrees and projects) |
-| `wt rm` | `worktree.remove` (`x` on a worktree row) | gap: WEB1.3 (worktrees and projects) |
-| `wt status` | shown: the sidebar's diffstat and dirty marker; `inspector` (`D`) for the details | gap: WEB1.3 (worktrees and projects) |
+| `project add` | `project.add`: pick from discovered repositories, or "here" | `project.add`: ＋ on the Projects tab: pick a repository found on the computer, or give a path |
+| `project discover` | `project.add` (it discovers) | `project.add`: it lists the repositories it found |
+| `project suggest` | `project.suggest`; a project's first worktree offers it on its own | `project.suggest`: a project's ⋯ menu |
+| `project ls` | shown: the sidebar lists the workspace's projects | `projects`: the Projects tab lists every project with its worktrees; its workspace chips filter them (`workspace.switch`) |
+| `project show` | `project.show` (in a split) | `project.show`: tap a project's name |
+| `project rm` | `project.remove` (asks first) | `project.remove`: a project's ⋯ menu (asks first) |
+| `project trust` | `project.trust` | `project.trust`: a project's page: review the scripts, then trust |
+| `project untrust` | `project.untrust` | `project.untrust`: a project's page |
+| `project config` | `project.config` (with where each value comes from, in a split) | `project.config`: a project's ⋯ menu, with where each value comes from |
+| `project pin` | `project.pin`: pick the profile | `project.pin`: a project's ⋯ menu: pick the profile |
+| `project unpin` | `project.unpin` | `project.pin`: a project's ⋯ menu → Unpin |
+| `wt new` | `worktree.new` (`N`), or `session.new` (`n`) → "+ new worktree" | `worktree.new`: ＋ Task on a project, or `session.new` with "in a new worktree" |
+| `wt ls` | shown: the sidebar lists every worktree under its project | `projects`: every worktree under its project, with its changes, PR and sessions |
+| `wt rm` | `worktree.remove` (`x` on a worktree row) | `worktree.remove`: a worktree's ⋯ menu (offers to archive when it has unsaved work) |
+| `wt status` | shown: the sidebar's diffstat and dirty marker; `inspector` (`D`) for the details | `worktree.status`: a worktree's page, and its row on the Projects tab |
 | `wt diff` | `inspector` (`D`), Diff tab; `a` picks what to diff against | gap: WEB1.4 (review and ship) |
 | `wt log` | `inspector` (`D`), Commits tab | gap: WEB1.4 (review and ship) |
 | `wt commit` | `inspector` (`D`): `C` commits, `A` asks the agent | gap: WEB1.4 (review and ship) |
 | `wt integrate` | `inspector` (`D`): `I` | gap: WEB1.4 (review and ship) |
-| `wt pair` | `worktree.pair` | gap: WEB1.3 (worktrees and projects) |
-| `wt unpair` | `worktree.unpair` | gap: WEB1.3 (worktrees and projects) |
-| `wt run` | `script.run` (`r`), `script.pick` (`R`) | gap: WEB1.3 (worktrees and projects) |
-| `wt open` | `worktree.open` (`o`) | gap: WEB1.3 (worktrees and projects) |
-| `wt lock` | `worktree.lock` | gap: WEB1.3 (worktrees and projects) |
-| `wt unlock` | `worktree.unlock` | gap: WEB1.3 (worktrees and projects) |
-| `wt rename-branch` | `worktree.rename_branch` | gap: WEB1.3 (worktrees and projects) |
-| `wt retitle` | `worktree.retitle` | gap: WEB1.3 (worktrees and projects) |
-| `wt finish` | `worktree.finish` (`F` in the sidebar): a PR or integrate | gap: WEB1.3 (worktrees and projects) |
-| `wt archive` | `worktree.archive` (or `x` on a merged worktree) | gap: WEB1.3 (worktrees and projects) |
-| `wt restore` | `worktree.restore`: pick from the archived ones | gap: WEB1.3 (worktrees and projects) |
-| `wt archives` | `worktree.restore` lists them | gap: WEB1.3 (worktrees and projects) |
-| `gc` | `worktree.gc`: stale worktrees, ⏎ archives one; a merged worktree's `x` archives it | gap: WEB1.3 (worktrees and projects) |
-| `ws ls` | `workspace.switch` (`w`) | gap: WEB1.3 (worktrees and projects) |
-| `ws new` | `workspace.switch` (`w`) → "+ new workspace" | gap: WEB1.3 (worktrees and projects) |
-| `ws set` | `workspace.profile` and `workspace.notify` | gap: WEB1.3 (worktrees and projects) |
-| `ws rm` | `workspace.remove` (asks first) | gap: WEB1.3 (worktrees and projects) |
-| `ws rename` | `workspace.rename` | gap: WEB1.3 (worktrees and projects) |
-| `ws add` | `project.add` (adds to the current workspace) | gap: WEB1.3 (worktrees and projects) |
-| `ws remove` | `project.leave`: takes the selected project out of this workspace | gap: WEB1.3 (worktrees and projects) |
+| `wt pair` | `worktree.pair` | `worktree.pair`: a worktree's ⋯ menu |
+| `wt unpair` | `worktree.unpair` | `worktree.unpair`: a worktree's ⋯ menu |
+| `wt run` | `script.run` (`r`), `script.pick` (`R`) | `worktree.run`: a worktree's ⋯ menu: pick a script; it opens its session |
+| `wt open` | `worktree.open` (`o`) | `worktree.open`: a worktree's ⋯ menu: pick the editor (a terminal editor opens as a session) |
+| `wt lock` | `worktree.lock` | `worktree.lock`: a worktree's ⋯ menu |
+| `wt unlock` | `worktree.unlock` | `worktree.unlock`: a worktree's ⋯ menu |
+| `wt rename-branch` | `worktree.rename_branch` | `worktree.rename_branch`: a worktree's ⋯ menu |
+| `wt retitle` | `worktree.retitle` | `worktree.retitle`: a worktree's ⋯ menu |
+| `wt finish` | `worktree.finish` (`F` in the sidebar): a PR or integrate | `worktree.finish`: Finish on a worktree's page: a PR, or merge into the main branch |
+| `wt archive` | `worktree.archive` (or `x` on a merged worktree) | `worktree.archive`: a worktree's ⋯ menu |
+| `wt restore` | `worktree.restore`: pick from the archived ones | `worktree.restore`: Archived (Projects tab): tap one |
+| `wt archives` | `worktree.restore` lists them | `worktree.restore`: Archived lists them |
+| `gc` | `worktree.gc`: stale worktrees, ⏎ archives one; a merged worktree's `x` archives it | `worktree.gc`: 🧹 on the Projects tab: stale worktrees, archive one |
+| `ws ls` | `workspace.switch` (`w`) | `workspace.switch`: chips on the Projects tab; Workspaces lists them |
+| `ws new` | `workspace.switch` (`w`) → "+ new workspace" | `workspace.new`: ＋ on Workspaces |
+| `ws set` | `workspace.profile` and `workspace.notify` | `workspace.set`: a workspace's menu: its profile and notifications |
+| `ws rm` | `workspace.remove` (asks first) | `workspace.remove`: a workspace's menu (asks first) |
+| `ws rename` | `workspace.rename` | `workspace.rename`: a workspace's menu |
+| `ws add` | `project.add` (adds to the current workspace) | `workspace.member`: a project's ⋯ menu → Workspaces |
+| `ws remove` | `project.leave`: takes the selected project out of this workspace | `workspace.member`: a project's ⋯ menu → Workspaces |
 
 ## Profiles
 
@@ -172,11 +172,11 @@ and why.
 | `msg ack` | waived: an agent acknowledging its own mail | waived: an agent acknowledging its own mail |
 | `lease claim` | waived: agents claim the files they edit | waived: agents claim the files they edit |
 | `lease release` | waived: agents release their own claims | waived: agents release their own claims |
-| `lease ls` | `leases` (in a split) | gap: WEB1.3 (worktrees and projects) |
-| `radar` | `radar` | gap: WEB1.3 (worktrees and projects) |
-| `checkpoint ls` | `checkpoint.list` | gap: WEB1.3 (worktrees and projects) |
-| `checkpoint diff` | `checkpoint.diff` | gap: WEB1.3 (worktrees and projects) |
-| `checkpoint restore` | `checkpoint.restore` (it asks first, in a split) | gap: WEB1.3 (worktrees and projects) |
+| `lease ls` | `leases` (in a split) | `leases`: Leases on the Projects tab |
+| `radar` | `radar` | `radar`: Radar on the Projects tab, or a project's ⋯ menu |
+| `checkpoint ls` | `checkpoint.list` | `checkpoint.list`: a worktree's Checkpoints tab |
+| `checkpoint diff` | `checkpoint.diff` | `checkpoint.diff`: a checkpoint's menu |
+| `checkpoint restore` | `checkpoint.restore` (it asks first, in a split) | `checkpoint.restore`: a checkpoint's menu (asks first; the state now is checkpointed) |
 | `verify` | `session.verify` | `session.verify`: ⋯ → Verify when done |
 | `mcp` | waived: the MCP server a lead agent talks to; ptyro starts it for the agent | waived: the MCP server a lead agent talks to; ptyro starts it for the agent |
 

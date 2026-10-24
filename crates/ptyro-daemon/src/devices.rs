@@ -111,6 +111,8 @@ pub fn needed(req: &Request) -> Scope {
         | Branches { .. }
         | ProfileList
         | Agents
+        | Editors
+        | ProjectConfig { .. }
         | Replay { .. }
         | Export { .. }
         | ReviewList { .. }
@@ -144,6 +146,7 @@ pub fn needed(req: &Request) -> Scope {
         | Convert { .. }
         | Retitle { .. }
         | Summarize { .. }
+        | WorktreeOpen { .. }
         | Adopt { .. } => Scope::Control,
         // Finding one reads; starting one is a shell: full.
         QuickShell { create: false, .. } => Scope::Read,
