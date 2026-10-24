@@ -122,6 +122,8 @@ pub struct Daemon {
     /// Claude permission prompts held for a remote answer (M9.5).
     pub(crate) held: Mutex<HashMap<SessionId, crate::approvals::Held>>,
     pub(crate) serve_child: crate::serve_child::ServeChild,
+    /// The scratchpad's revisions and write lock (NOTE1).
+    pub(crate) pad_state: crate::scratchpad::PadState,
     // ── change sets (M11) ──
     /// Per set name: its actor's memory and the push or land in progress.
     pub(crate) cs: Mutex<HashMap<String, crate::changesets::CsLive>>,
@@ -229,6 +231,7 @@ impl Daemon {
             vapid: Mutex::new(None),
             held: Mutex::new(HashMap::new()),
             serve_child: crate::serve_child::ServeChild::default(),
+            pad_state: crate::scratchpad::PadState::default(),
             cs: Mutex::new(HashMap::new()),
             launching: Mutex::new(Default::default()),
             kv_gens: Arc::new(Mutex::new(HashMap::new())),
@@ -375,6 +378,7 @@ impl Daemon {
                     agent: r.agent.clone(),
                     script: r.script.clone(),
                     quick: false,
+                    pad: false,
                 },
                 adapter,
                 conversation: r.conversation.clone(),
@@ -683,6 +687,7 @@ impl Daemon {
             agent: agent.clone(),
             script: None,
             quick: spec.quick && agent.is_none(),
+            pad: spec.pad && agent.is_none(),
         };
         // `@review` names a prompt snippet from the project's `[prompts]` (SPEC §13.3).
         let prompt = match spec.prompt.as_deref().and_then(|p| p.strip_prefix('@')) {
@@ -1155,6 +1160,18 @@ impl Daemon {
             Request::Adopt { addr } => self.adopt(&addr).await,
             Request::QuickShell { worktree, cwd, create, env, size, workspace } => {
                 self.quick_shell(worktree, cwd, create, env, size, workspace).await
+            }
+            Request::ScratchGet => self.scratch_get(),
+            Request::ScratchPut { base, text } => self.scratch_put(&base, &text, None),
+            Request::ScratchAdd { text, section, note, stamp, session, cwd } => {
+                self.scratch_add(&text, section, note, stamp, session.as_deref(), cwd.as_deref())
+            }
+            Request::ScratchTodo { all } => self.scratch_todo(all),
+            Request::ScratchMark { sel, mark } => self.scratch_mark(&sel, &mark),
+            Request::ScratchHistory => self.scratch_history(),
+            Request::ScratchRestore { rev } => self.scratch_restore(&rev),
+            Request::ScratchPane { create, env, size, workspace } => {
+                self.scratch_pane(create, env, size, workspace).await
             }
             Request::Retitle { addr, title, worktree } => self.retitle(&addr, title, worktree),
             Request::Summarize { addr } => self.summarize_now(&addr).await,

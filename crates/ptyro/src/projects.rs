@@ -801,6 +801,7 @@ pub async fn new_in_new_worktree(
         // Named and titled after what it's for (UX1.24); the session below gets the prompt.
         title: a.title.clone().or_else(|| a.prompt.clone().filter(|p| !p.starts_with('@'))),
         take_changes: a.take_changes,
+        pad_item: a.pad_item,
         ..WorktreeSpec::default()
     };
     let reply = create(&c, spec, a.yes).await?;

@@ -1357,6 +1357,7 @@ impl App {
                 }
             }
             DomainEvent::Notification { .. } => {}
+            DomainEvent::ScratchChanged { .. } => {}
             DomainEvent::InboxAdded { entry } => {
                 // An open inbox keeps the same entry selected (it's above it, in its tab).
                 let shown = |tab: Option<&str>| {

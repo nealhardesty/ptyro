@@ -501,6 +501,7 @@ async fn forward_events(
             | DomainEvent::WorktreeProgress { .. }
             | DomainEvent::InboxAdded { .. }
             | DomainEvent::UsageUpdated { .. }
+            | DomainEvent::ScratchChanged { .. }
             | DomainEvent::RunUpdated { .. } => {
                 let watching = interest.lock().expect("interest").watch_all;
                 if watching && out.send(ServerMsg::Event { event }).await.is_err() {

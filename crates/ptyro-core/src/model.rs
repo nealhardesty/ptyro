@@ -334,6 +334,10 @@ pub struct WorktreeSpec {
     /// Size for its sessions.
     #[serde(default)]
     pub size: Option<crate::TermSize>,
+    /// Started from the scratchpad item on this line (NOTE1.3): the item is tagged with the
+    /// worktree, and ticked once it is merged or cleaned up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pad_item: Option<u32>,
     /// The client's SSH agent and display variables.
     #[serde(default)]
     pub env: BTreeMap<String, String>,

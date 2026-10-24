@@ -102,6 +102,11 @@ const STARTER: &str = r#"# ptyro configuration. Every key is optional; see SPEC 
 [summaries]
 # enabled = true           # a `≈` line after each agent turn, from a small model on its account
 
+[scratchpad]
+# mode = "drawer"          # how its key shows it: drawer | popup | pane
+# editor = "nvim"          # default: [editors], $VISUAL, $EDITOR, then nvim, vim, nano, vi
+# path = "~/Sync/pad.md"   # default: scratchpad.md in ptyro's data directory
+
 [keys]
 # Rebind after-prefix keys: "key" = "action [args]"; "none" unbinds. `C-q ?` lists actions.
 # "a" = "session.next"

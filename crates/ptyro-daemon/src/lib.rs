@@ -23,6 +23,7 @@ mod quick;
 mod registry;
 mod review;
 mod runs;
+mod scratchpad;
 mod serve_child;
 mod session;
 mod sidecar;
@@ -330,6 +331,7 @@ async fn serve(
     daemon.load_declined().await;
     daemon.load_integrated().await;
     daemon.start_serve_supervisor();
+    daemon.start_pad_watcher();
     daemon.restore_dormant().await;
     daemon.start_auto_register();
     daemon.start_mail().await;

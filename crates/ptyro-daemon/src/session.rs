@@ -51,6 +51,9 @@ pub struct Place {
     /// The quick terminal of its worktree or directory (UX1.25).
     #[serde(default)]
     pub quick: bool,
+    /// The scratchpad's editor (NOTE1.1).
+    #[serde(default)]
+    pub pad: bool,
 }
 
 pub struct Term {
@@ -533,6 +536,7 @@ impl Session {
             inner_agent: meta.inner_agent.clone(),
             summary: meta.summary.clone(),
             quick: meta.place.quick,
+            pad: meta.place.pad,
         }
     }
 
@@ -683,7 +687,8 @@ impl Session {
 
     /// Its worktree's or directory's quick terminal (UX1.25).
     pub fn is_quick(&self) -> bool {
-        self.meta.lock().expect("meta").place.quick
+        let m = self.meta.lock().expect("meta");
+        m.place.quick || m.place.pad
     }
 
     /// Running something that removing its worktree would cut short: any live session but a

@@ -15,7 +15,9 @@ pub mod handoff;
 mod ports;
 mod probe;
 pub use ports::listening_ports;
-pub use probe::{cwd_of, exec_env_var, local_time_hm, parent_pid, process_name, session_leader};
+pub use probe::{
+    cwd_of, exec_env_var, local_datetime, local_time_hm, parent_pid, process_name, session_leader,
+};
 
 /// Variables that would make the child talk to the *outer* terminal or multiplexer, or that mark
 /// a *parent* Claude Code session (SPEC §5.1, §20.1).
@@ -63,6 +65,7 @@ pub const STRIP_ENV: &[&str] = &[
     "PTYRO_BRANCH",
     "PTYRO_PORT",
     "PTYRO_PORT_COUNT",
+    "PTYRO_SCRATCHPAD",
 ];
 
 /// Variables a client may pass along with a spawn so sessions see the *client's* SSH agent and
