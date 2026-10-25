@@ -776,4 +776,81 @@ mod tests {
             assert_eq!(&back, e);
         }
     }
+
+    fn gate_run() -> RunState {
+        let mut s = RunState::replay("r1", &[]);
+        s.apply(&RunEvent::GateOpened {
+            step: "g".into(),
+            gate: Gate {
+                id: "g-1".into(),
+                options: vec!["yes".into(), "no".into()],
+                ..Gate::default()
+            },
+        });
+        s
+    }
+
+    fn answer(choice: &str, by: &str, key: Option<&str>) -> RunEvent {
+        RunEvent::GateResolved {
+            step: "g".into(),
+            choice: choice.into(),
+            note: None,
+            by: by.into(),
+            key: key.map(str::to_owned),
+            at: 9,
+        }
+    }
+
+    #[test]
+    fn an_answer_with_no_open_gate_changes_nothing() {
+        let mut s = RunState::replay("r1", &[]);
+        s.apply(&answer("yes", "cli", None));
+        assert!(s.steps["g"].gate.is_none());
+        assert_ne!(s.steps["g"].status, StepStatus::Running);
+        assert!(s.open_gates().is_empty());
+    }
+
+    #[test]
+    fn the_first_answer_and_its_key_stand_when_the_log_holds_two() {
+        let mut s = gate_run();
+        s.apply(&answer("yes", "phone", Some("k1")));
+        s.apply(&answer("no", "timeout", Some("k2")));
+        let g = s.steps["g"].gate.as_ref().unwrap();
+        assert_eq!(g.choice.as_deref(), Some("yes"));
+        assert_eq!((g.by.as_deref(), g.key.as_deref()), (Some("phone"), Some("k1")));
+        assert_eq!(g.resolved_ms, Some(9));
+        assert_eq!(s.steps["g"].status, StepStatus::Running);
+        assert_eq!(s.status, RunStatus::Running);
+    }
+
+    #[test]
+    fn replaying_the_same_events_twice_gives_the_same_state() {
+        let evs = vec![
+            RunEvent::GateOpened {
+                step: "g".into(),
+                gate: Gate { id: "g-1".into(), options: vec!["yes".into()], ..Gate::default() },
+            },
+            answer("yes", "cli", None),
+            answer("yes", "cli", None),
+        ];
+        let a = RunState::replay("r1", &evs);
+        let b = RunState::replay("r1", &evs);
+        assert_eq!(serde_json::to_value(&a).unwrap(), serde_json::to_value(&b).unwrap());
+        assert_eq!(a.steps["g"].gate.as_ref().unwrap().choice.as_deref(), Some("yes"));
+    }
+
+    #[test]
+    fn a_gate_reopened_after_a_reset_can_be_answered_again() {
+        let mut s = gate_run();
+        s.apply(&answer("yes", "cli", None));
+        s.apply(&RunEvent::StepReset { step: "g".into() });
+        s.apply(&RunEvent::GateOpened {
+            step: "g".into(),
+            gate: Gate { id: "g-2".into(), options: vec!["yes".into()], ..Gate::default() },
+        });
+        assert_eq!(s.open_gates().len(), 1);
+        s.apply(&answer("yes", "cli", None));
+        assert!(s.open_gates().is_empty());
+        assert_eq!(s.steps["g"].gate.as_ref().unwrap().id, "g-2");
+    }
 }

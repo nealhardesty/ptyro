@@ -197,6 +197,14 @@ pub enum StoreError {
     Json(#[from] serde_json::Error),
     #[error("the store thread has stopped")]
     Closed,
+    /// A database a newer ptyro wrote: its schema isn't one this build knows, and migrating
+    /// "down" would lose data. It is left exactly as it was.
+    #[error(
+        "{path} was written by a newer ptyro (its schema is version {found}; this ptyro knows up to {known}). \
+         Install the newer ptyro again (`ptyro daemon upgrade` switches the daemon to it), or move {path} \
+         aside to start with an empty history. It has not been changed"
+    )]
+    TooNew { path: String, found: i64, known: usize },
 }
 
 pub type Result<T, E = StoreError> = std::result::Result<T, E>;
@@ -288,8 +296,63 @@ fn opt_ms(v: Option<i64>) -> Option<u64> {
     v.map(|v| v as u64)
 }
 
+/// What the schema version of the database at `path` allows, decided before anything is written to
+/// it: a database from a newer ptyro is refused untouched ([`StoreError::TooNew`]); one from an
+/// older ptyro is copied to `<path>.bak-v<its version>` before its migrations run (the two
+/// newest copies are kept), so a bad migration never costs the history.
+fn prepare(path: &Path) -> Result<()> {
+    let known = MIGRATIONS.len();
+    let Ok(conn) = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
+        return Ok(()); // not there yet, or not readable: opening it says which
+    };
+    let Ok(found) = conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0)) else {
+        return Ok(());
+    };
+    if found > known as i64 {
+        return Err(StoreError::TooNew { path: path.display().to_string(), found, known });
+    }
+    if found > 0 && (found as usize) < known {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let copy = path.with_file_name(format!("{name}.bak-v{found}"));
+        // `VACUUM INTO` reads a consistent snapshot, WAL included, and never changes the original.
+        if !copy.exists()
+            && let Err(e) = conn.execute("VACUUM INTO ?1", [copy.display().to_string()])
+        {
+            tracing::warn!(
+                "ptyro store: couldn't copy {} before migrating it: {e}",
+                path.display()
+            );
+        }
+        prune_backups(path, &name);
+    }
+    Ok(())
+}
+
+/// Keep the two newest `<name>.bak-v<N>` files next to the database.
+fn prune_backups(path: &Path, name: &str) {
+    let Some(dir) = path.parent() else { return };
+    let prefix = format!("{name}.bak-v");
+    let mut found: Vec<(u32, std::path::PathBuf)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let v = e.file_name().to_string_lossy().strip_prefix(&prefix)?.parse().ok()?;
+            Some((v, e.path()))
+        })
+        .collect();
+    found.sort_by_key(|(v, _)| std::cmp::Reverse(*v));
+    for (_, old) in found.into_iter().skip(2) {
+        let _ = std::fs::remove_file(old);
+    }
+}
+
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
+        prepare(path)?;
         Self::start(Connection::open(path)?)
     }
 
@@ -858,6 +921,194 @@ mod tests {
     #[test]
     fn migrations_are_valid() {
         Migrations::from_slice(MIGRATIONS).validate().unwrap();
+    }
+
+    /// A database as ptyro left it at schema `version`, with a row in every table that exists
+    /// then (what the first `version` migrations make, and rows only they know how to write).
+    fn database_at(path: &Path, version: usize) {
+        let mut c = Connection::open(path).unwrap();
+        Migrations::from_slice(&MIGRATIONS[..version]).to_latest(&mut c).unwrap();
+        let state = serde_json::to_string(&ProcessState::Running).unwrap();
+        let kind = serde_json::to_string(&SessionKind::Shell).unwrap();
+        c.execute(
+            "INSERT INTO session (id, name, kind, argv, cwd, state, pid, daemon_run, created_at)
+             VALUES ('old-1', 'my-shell', ?1, '[\"sh\"]', '/', ?2, 7, 'run-0', 1000)",
+            params![kind, state],
+        )
+        .unwrap();
+        c.execute("INSERT INTO kv (key, value, updated_at) VALUES ('k', '{\"a\":1}', 5)", [])
+            .unwrap();
+        if version >= 2 {
+            c.execute_batch(
+                "INSERT INTO workspace (id, name, created_at, updated_at) VALUES ('w1', 'main', 1, 1);
+                 INSERT INTO project (id, slug, root_path, created_at) VALUES ('p1', 'repo', '/r', 1);
+                 INSERT INTO trust (project_id, scope, fingerprint, approved_at) VALUES ('p1', 'scripts', 'abc', 1);",
+            )
+            .unwrap();
+        }
+        if version >= 3 {
+            c.execute_batch(
+                "INSERT INTO inbox (session_id, session_name, at, kind, title, body)
+                 VALUES ('old-1', 'my-shell', 1, 'done', 'finished', 'b');",
+            )
+            .unwrap();
+        }
+        if version >= 4 {
+            c.execute_batch(
+                "INSERT INTO run (id, kind, name, status, state, created_at)
+                 VALUES ('r1', 'recipe', 'ship', 'running', '{}', 1);
+                 INSERT INTO lease (id, holder, pattern, exclusive, expires_at, created_at)
+                 VALUES ('l1', 'old-1', 'src/**', 1, 9999999999999, 1);",
+            )
+            .unwrap();
+        }
+        c.pragma_update(None, "user_version", version as i64).unwrap();
+    }
+
+    async fn count(s: &Store, table: &'static str) -> i64 {
+        s.call(
+            move |c| Ok(c.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))?),
+        )
+        .await
+        .unwrap()
+    }
+
+    /// Every schema ptyro ever shipped opens with this build: nothing is lost, every row still
+    /// reads (the columns later versions added take their defaults), and the database ends at
+    /// the latest version.
+    #[tokio::test]
+    async fn a_database_from_every_earlier_version_migrates_and_keeps_its_data() {
+        for version in 1..=MIGRATIONS.len() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("ptyro.db");
+            database_at(&path, version);
+            let s = Store::open(&path).unwrap_or_else(|e| panic!("from v{version}: {e}"));
+            let latest = MIGRATIONS.len() as i64;
+            let at: i64 = s
+                .call(|c| Ok(c.pragma_query_value(None, "user_version", |r| r.get(0))?))
+                .await
+                .unwrap();
+            assert_eq!(at, latest, "from v{version}");
+            let history = s.history(10).await.unwrap();
+            assert_eq!(history.len(), 1, "from v{version}");
+            let old = &history[0];
+            assert_eq!(
+                (old.id.as_str(), old.name.as_str(), old.pid),
+                ("old-1", "my-shell", Some(7))
+            );
+            assert_eq!(
+                old.profile, "default",
+                "a column added later has its default (from v{version})"
+            );
+            assert_eq!(old.title, None);
+            assert_eq!(s.kv_get("k".into()).await.unwrap(), Some(serde_json::json!({"a": 1})));
+            if version >= 2 {
+                let reg = s.load_registry().await.unwrap();
+                assert_eq!(reg.projects.len(), 1, "from v{version}");
+                assert_eq!(reg.workspaces.len(), 1);
+                assert_eq!(reg.trust.len(), 1);
+            }
+            if version >= 3 {
+                assert_eq!(count(&s, "inbox").await, 1, "from v{version}");
+            }
+            if version >= 4 {
+                assert_eq!(
+                    (count(&s, "run").await, count(&s, "lease").await),
+                    (1, 1),
+                    "from v{version}"
+                );
+            }
+            // And it works afterwards: a write after migrating reads back.
+            s.save_session(record("new-1", "run-1"));
+            s.flush().await.unwrap();
+            assert_eq!(s.history(10).await.unwrap().len(), 2, "from v{version}");
+        }
+    }
+
+    /// An older database is copied beside itself before its migrations run, once, and only the
+    /// two newest copies stay.
+    #[tokio::test]
+    async fn an_older_database_is_copied_aside_before_it_is_migrated() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ptyro.db");
+        database_at(&path, 3);
+        // Two copies from earlier upgrades are already there.
+        std::fs::write(dir.path().join("ptyro.db.bak-v1"), b"old").unwrap();
+        std::fs::write(dir.path().join("ptyro.db.bak-v2"), b"older").unwrap();
+        drop(Store::open(&path).unwrap());
+        let copy = dir.path().join("ptyro.db.bak-v3");
+        assert!(copy.exists(), "the copy of what it was");
+        assert!(!dir.path().join("ptyro.db.bak-v1").exists(), "only the two newest stay");
+        assert!(dir.path().join("ptyro.db.bak-v2").exists());
+        // The copy is the database as it was: version 3, its data, none of the later tables.
+        let c = Connection::open(&copy).unwrap();
+        let v: i64 = c.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+        assert_eq!(v, 3);
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM session", [], |r| r.get::<_, i64>(0)).unwrap(),
+            1
+        );
+        assert!(c.query_row("SELECT count(*) FROM run", [], |r| r.get::<_, i64>(0)).is_err());
+        // Opening it again changes nothing: it is current, so there is nothing to copy.
+        drop(c);
+        let before = std::fs::read(&copy).unwrap();
+        drop(Store::open(&path).unwrap());
+        assert_eq!(std::fs::read(&copy).unwrap(), before);
+        assert_eq!(
+            std::fs::read_dir(dir.path())
+                .unwrap()
+                .flatten()
+                .filter(|e| e.file_name().to_string_lossy().contains(".bak-v"))
+                .count(),
+            2
+        );
+        // A fresh database has nothing to copy.
+        let fresh = dir.path().join("fresh.db");
+        drop(Store::open(&fresh).unwrap());
+        assert!(!dir.path().join("fresh.db.bak-v0").exists());
+    }
+
+    /// A database a newer ptyro wrote is refused with what to do, and not one byte of it changes
+    /// (no migration, no WAL switch, no copy).
+    #[test]
+    fn a_database_from_a_newer_ptyro_is_refused_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ptyro.db");
+        database_at(&path, MIGRATIONS.len());
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch("CREATE TABLE from_the_future (x TEXT); INSERT INTO from_the_future VALUES ('data');")
+                .unwrap();
+            c.pragma_update(None, "user_version", MIGRATIONS.len() as i64 + 3).unwrap();
+        }
+        let before = std::fs::read(&path).unwrap();
+        let err = Store::open(&path).err().expect("refused");
+        assert!(
+            matches!(err, StoreError::TooNew { found, known, .. } if found == known as i64 + 3),
+            "{err:?}"
+        );
+        let said = err.to_string();
+        assert!(
+            said.contains("newer ptyro")
+                && said.contains("ptyro daemon upgrade")
+                && said.contains("not been changed"),
+            "{said}"
+        );
+        assert!(said.contains(&path.display().to_string()), "{said}");
+        assert_eq!(std::fs::read(&path).unwrap(), before, "the file is exactly as it was");
+        let names: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n != "ptyro.db" && !n.ends_with("-wal") && !n.ends_with("-shm"))
+            .collect();
+        assert!(names.is_empty(), "no copies or leftovers: {names:?}");
+        // The data is still there for the newer ptyro that wrote it.
+        let c = Connection::open(&path).unwrap();
+        assert_eq!(
+            c.query_row("SELECT x FROM from_the_future", [], |r| r.get::<_, String>(0)).unwrap(),
+            "data"
+        );
     }
 
     fn record(id: &str, run: &str) -> SessionRecord {

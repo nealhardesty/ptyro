@@ -78,6 +78,22 @@ jobs:
         with: { node-version: "22" }
       - run: make web-check web-test
 
+  # The web app in a real browser (Chrome is on the runner image); Node drives it over the
+  # DevTools protocol, with no packages to install. Required here: a runner without Chrome fails.
+  web-e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PTYRO_REQUIRE_BROWSER: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: "22" }
+      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: make web-e2e
+
   # Licenses, advisories, yanked crates and sources (deny.toml), through the same make target a
   # developer runs (`make tools` installs cargo-deny; the cache keeps it between runs).
   deny:

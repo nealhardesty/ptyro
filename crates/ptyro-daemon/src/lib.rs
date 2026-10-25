@@ -61,6 +61,27 @@ pub struct Options {
     pub foreground: bool,
 }
 
+/// Fuzzing and tests: read a handoff image the way an upgraded daemon does (the MessagePack
+/// image, then each session's compressed emulator), without adopting any file descriptor.
+#[doc(hidden)]
+pub fn decode_handoff_image(bytes: &[u8]) -> Result<usize, String> {
+    let image: handoff::Image = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?;
+    for s in &image.sessions {
+        session::Session::decode_emulator(s).map_err(|e| e.to_string())?;
+    }
+    Ok(image.sessions.len())
+}
+
+/// The same for one session's compressed emulator image (what `SessionImage::emu` holds).
+#[doc(hidden)]
+pub fn decode_handoff_emulator(bytes: &[u8]) -> Result<(), String> {
+    let raw = zstd::stream::decode_all(bytes).map_err(|e| e.to_string())?;
+    let image: ptyro_term::emulator::EmuImage =
+        rmp_serde::from_slice(&raw).map_err(|e| e.to_string())?;
+    drop(ptyro_term::AlacrittyEmulator::from_image(image));
+    Ok(())
+}
+
 /// Run the daemon until it is told to stop. Blocks; builds its own tokio runtime.
 pub fn run(opts: Options) -> Result<()> {
     let paths = Paths::from_env().context("resolve paths")?;
@@ -283,6 +304,7 @@ async fn serve(
     };
     set_log_level(&config.daemon.log_level);
     let db = paths.data.join("ptyro.db");
+    let mut store_error = None;
     let store = match Store::open(&db) {
         Ok(s) => Some(s),
         Err(e) => {
@@ -290,6 +312,10 @@ async fn serve(
                 "store {} unavailable: {e}; session history and saved views are off",
                 db.display()
             );
+            // Said where people look, not only in the log: what it means and what to do.
+            store_error = Some(format!(
+                "ptyro's database isn't available, so session history and saved views are off: {e}"
+            ));
             None
         }
     };
@@ -327,6 +353,9 @@ async fn serve(
         }
     }
     if let Some(e) = config_error {
+        daemon.warn(e);
+    }
+    if let Some(e) = store_error {
         daemon.warn(e);
     }
     daemon.ensure_main_workspace();

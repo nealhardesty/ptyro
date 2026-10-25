@@ -11,6 +11,7 @@
 //! | `review_comments.json` | `gh api …/pulls/N/comments` |
 //! | `conversation.json` | `gh pr view N --json comments` |
 //! | `issue.json` | `gh issue view` |
+//! | `head.txt` | the branch's real tip: a `pr merge --match-head-commit` for another commit fails |
 //! | `body.txt`, `replies.txt` | what was posted (written; `pr edit --body` rewrites it) |
 //!
 //! With `PTYRO_FAKE_GH_PER_REPO=1` each repository (the basename of the directory gh runs in)
@@ -105,6 +106,13 @@ pub fn main(args: &[String]) -> i32 {
             let mut pr: Value = read(&dir, "pr.json")
                 .and_then(|t| serde_json::from_str(&t).ok())
                 .unwrap_or(json!({}));
+            if let Some(want) = arg(args, "--match-head-commit")
+                && let Some(tip) = read(&dir, "head.txt")
+                && tip.trim() != want
+            {
+                eprintln!("Head branch was modified. Review and try the merge again.");
+                return 1;
+            }
             if rest.contains(&"--disable-auto") {
                 pr["autoMergeRequest"] = Value::Null;
             } else if rest.contains(&"--auto") {

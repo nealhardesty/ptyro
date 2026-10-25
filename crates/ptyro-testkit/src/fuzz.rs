@@ -17,6 +17,11 @@ pub const TARGETS: &[(&str, Target)] = &[
     ("input", input),
     ("recipe", recipe),
     ("record", record),
+    ("settings", settings),
+    ("imports", imports),
+    ("hostjson", hostjson),
+    ("handoff", handoff),
+    ("parsers", parsers),
 ];
 
 pub fn target(name: &str) -> Option<fn(&[u8])> {
@@ -191,6 +196,140 @@ pub fn record(data: &[u8]) {
     }
 }
 
+/// The settings editor on arbitrary files, keys and typed input: no panics, and whatever it
+/// writes is a file that still checks (it never saves half of an edit).
+pub fn settings(data: &[u8]) {
+    use ptyro_core::settings::{self, Lookups, Scope};
+    let text = String::from_utf8_lossy(data);
+    let mut parts = text.splitn(5, '\n');
+    let head = data.first().copied().unwrap_or(0);
+    let scope = if head & 1 == 0 { Scope::User } else { Scope::Project };
+    let (file, key, value, extra) = (
+        parts.next().unwrap_or(""),
+        parts.next().unwrap_or(""),
+        parts.next().unwrap_or(""),
+        parts.next().unwrap_or(""),
+    );
+    // Half the time edit a real setting's key, so the typed parsers are reached.
+    let real;
+    let key = if head & 2 == 0 && !settings::SETTINGS.is_empty() {
+        real = settings::SETTINGS[usize::from(head >> 2) % settings::SETTINGS.len()]
+            .key
+            .replace('*', if key.is_empty() { "x" } else { key });
+        real.as_str()
+    } else {
+        key
+    };
+    let lk =
+        Lookups { themes: vec!["dark".into()], actions: vec![("a".into(), "an action".into())] };
+    let ok = |_: &str| Ok(());
+    let file = if head & 4 == 0 { file.to_owned() } else { settings::starter() };
+    let verify = |r: Result<String, String>| {
+        if let Ok(new) = r {
+            assert!(settings::check(scope, &new).is_ok(), "an edit saved an invalid file");
+        }
+    };
+    verify(settings::set(scope, &file, key, value, &lk, &ok));
+    verify(settings::unset(scope, &file, key, &ok));
+    verify(settings::add(
+        scope,
+        &file,
+        key,
+        value,
+        &[(extra, value), ("command", extra)],
+        &lk,
+        &ok,
+    ));
+    verify(settings::remove(scope, &file, key, value, &ok));
+    verify(settings::rename(scope, &file, key, value, extra, &ok));
+    let _ = settings::check(scope, &file);
+    if let Some(st) = settings::find(key) {
+        let _ = settings::parse_input(st, value, &lk);
+    }
+    let _ = settings::split(key);
+}
+
+/// The importers of other tools' files (a checkout's own, so untrusted): no panics.
+pub fn imports(data: &[u8]) {
+    use ptyro_core::imports;
+    let text = String::from_utf8_lossy(data);
+    let _ = imports::conductor(&text);
+    let _ = imports::conductor_json(&text);
+    let _ = imports::superset(std::path::Path::new("/tmp/checkout"), &text);
+    let _ = imports::codex(&text);
+    let _ = imports::claude_launch(&text);
+    let _ = imports::cursor(&text);
+    let _ = imports::copilot(&text);
+    let _ = imports::strip_json_comments(&text);
+    let w = imports::sh_word(&text);
+    assert!(!w.contains('\0') || text.contains('\0'), "a NUL from nowhere");
+}
+
+/// The host API's pure layers: requests and replies as JSON text (a browser sends these), and
+/// the setting-edit commands the settings panel sends. Never panic; whatever decodes re-encodes.
+pub fn hostjson(data: &[u8]) {
+    use ptyro_protocol::{ClientMsg, Reply, Request, ServerMsg};
+    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(data) {
+        if let Ok(r) = serde_json::from_value::<Request>(v.clone()) {
+            let again = serde_json::to_value(&r).expect("a request encodes");
+            assert!(serde_json::from_value::<Request>(again).is_ok(), "re-decode");
+        }
+        let _ = serde_json::from_value::<Reply>(v.clone());
+        let _ = serde_json::from_value::<ClientMsg>(v.clone());
+        let _ = serde_json::from_value::<ServerMsg>(v.clone());
+        // The settings panel's op: {"op": "...", "key": "...", "value": "..."} against a file.
+        let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("");
+        let _ = ptyro_core::settings::set(
+            ptyro_core::settings::Scope::User,
+            "",
+            s("key"),
+            s("value"),
+            &ptyro_core::settings::Lookups::default(),
+            &|_: &str| Ok(()),
+        );
+        let _ = ptyro_core::names::validate(s("name"));
+    }
+}
+
+/// The handoff image a new daemon reads from the old one: arbitrary bytes as the whole image,
+/// and as one session's compressed emulator (valid ones are mutated from a real screen).
+pub fn handoff(data: &[u8]) {
+    let _ = ptyro_daemon::decode_handoff_image(data);
+    let _ = ptyro_daemon::decode_handoff_emulator(data);
+}
+
+/// Configuration values and files, and the small text formats around them.
+pub fn parsers(data: &[u8]) {
+    use ptyro_core::{config, names, project::ProjectConfig, scratchpad};
+    let text = String::from_utf8_lossy(data);
+    let _ = config::Config::parse(&text);
+    let _ = ProjectConfig::parse(&text);
+    let _ = config::parse_duration(&text);
+    let _ = config::parse_bytes(&text);
+    let _ = config::parse_quiet_hours(&text);
+    let _ = config::parse_color(&text);
+    let _ = config::parse_key(&text);
+    let _ = config::expand_home(&text);
+    let _ = config::dangerous_arg(&[text.to_string()]);
+    let _ = names::validate(&text);
+    let _ = names::problem(&text);
+    let _ = names::tidy(&text);
+    let _ = names::from_text(&text);
+    let (a, rest) = text.split_once('\u{1}').unwrap_or((&text, ""));
+    let (b, c) = rest.split_once('\u{1}').unwrap_or((rest, ""));
+    let merged = scratchpad::merge3(a, b, c);
+    let _ = scratchpad::rev(&merged.text);
+    let _ = scratchpad::insert_under(a, b, c);
+    let line = u32::from(data.first().copied().unwrap_or(1) % 12);
+    for item in scratchpad::items(a) {
+        let _ = scratchpad::body(a, &item);
+    }
+    let _ = scratchpad::select(a, b);
+    let _ = scratchpad::tick(a, line, Some(1));
+    let _ = scratchpad::untick(a, line);
+    let _ = scratchpad::tag_worktree(a, line, b);
+}
+
 /// Seeds for the mutation runner: real escape sequences, protocol frames, recipes.
 pub fn seeds(target: &str) -> Vec<Vec<u8>> {
     let mut v: Vec<Vec<u8>> = vec![Vec::new(), b"hello\r\n".to_vec()];
@@ -238,6 +377,62 @@ pub fn seeds(target: &str) -> Vec<Vec<u8>> {
             r.extend_from_slice(&[0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 9]);
             r.extend_from_slice(b"hello");
             v.push(r);
+        }
+        "settings" => {
+            for s in [
+                "\n\n\n\n",
+                "[ui]\ntheme = \"dark\"\n\nui.theme\ndark\n",
+                "# c\n[agents.x]\ncommand = \"x\"\n\nagents\nx\ncommand\ny",
+                "[[hooks]]\n\n\u{0}\u{3}\n1h\n",
+            ] {
+                v.push(s.as_bytes().to_vec());
+            }
+        }
+        "imports" => {
+            for s in [
+                "[scripts]\nsetup = \"npm i\"\n",
+                "{\"scripts\": {\"setup\": [\"npm i\"]}}",
+                "{\"setup\": [\"a\"], // c\n\"run\": \"b\"}",
+                "version = 1\n[[actions]]\nname = \"x\"\ncommand = \"y\"\n",
+                "{\"configurations\": [{\"name\": \"a\", \"runtimeExecutable\": \"x\", \"runtimeArgs\": [\"1\"]}]}",
+                "{\"install\": \"npm i\", \"start\": \"npm run dev\"}",
+                "jobs:\n  copilot-setup-steps:\n    steps:\n      - run: make\n",
+            ] {
+                v.push(s.as_bytes().to_vec());
+            }
+        }
+        "hostjson" => {
+            for s in [
+                r#"{"op":"list"}"#,
+                r#"{"key":"ui.theme","value":"dark","name":"a"}"#,
+                r#"{"type":"Request","id":1,"req":"List"}"#,
+                r#"{"Request":{"id":2,"req":{"RunList":{"active":true,"limit":5}}}}"#,
+            ] {
+                v.push(s.as_bytes().to_vec());
+            }
+        }
+        "handoff" => {
+            let mut e = AlacrittyEmulator::new(TermSize::new(40, 10), 100);
+            e.feed(b"hello\r\n\x1b[31mred\x1b[0m", &mut FeedOutput::default());
+            if let Ok(raw) = rmp_serde::to_vec(&e.image())
+                && let Ok(z) = zstd::bulk::compress(&raw, 1)
+            {
+                v.push(z);
+                v.push(raw);
+            }
+        }
+        "parsers" => {
+            for s in [
+                "[daemon]\nlog = \"info\"\n",
+                "10s",
+                "5 GiB",
+                "22:00-07:00",
+                "#ff8800",
+                "C-q c",
+                "- [ ] a\n- [x] b\n\u{1}- [ ] a\n\u{1}- [ ] c\n",
+            ] {
+                v.push(s.as_bytes().to_vec());
+            }
         }
         _ => v.push(vec![0, 1, 2, 3, 255, 254, 27, 91]),
     }
@@ -321,4 +516,20 @@ pub fn mutate(rng: &mut Rng, input: &[u8], corpus: &[Vec<u8>]) -> Vec<u8> {
     }
     v.truncate(64 * 1024);
     v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every target takes every one of its seeds, and its seeds cut short, without panicking.
+    #[test]
+    fn every_target_survives_its_seeds() {
+        for (name, f) in TARGETS {
+            for seed in seeds(name) {
+                f(&seed);
+                f(&seed[..seed.len() / 2]);
+            }
+        }
+    }
 }

@@ -498,7 +498,7 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
 ## Development
 
 Everything runs through `make`; `make` on its own lists the targets. CI calls the same targets
-(`make check`, `make msrv`, `make deny`, `make fuzz-smoke`, `make web-check`, `make installer-check`),
+(`make check`, `make msrv`, `make deny`, `make fuzz-smoke`, `make web-check`, `make web-e2e`, `make installer-check`),
 never raw `cargo`, so local runs and CI behave the same.
 
 | Target | Does |
@@ -509,10 +509,11 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make run ARGS="ls"` / `make try CMD=claude` | run the dev build with arguments / start `CMD` in a new session and attach |
 | `make test` / `make smoke` | all tests / quick end-to-end checks of the PTY and emulator |
 | `make fmt` / `fmt-check` / `lint` | format / fail if unformatted / clippy with warnings as errors |
-| `make check` / `make ci` | fmt-check, lint, doc, lock-check, ratchet, test, smoke: CI's main job on every platform / those plus `deny`, `web-check`, `msrv`, `fuzz-smoke` and `installer-check`: everything CI runs |
+| `make check` / `make ci` | fmt-check, lint, doc, lock-check, ratchet, test, smoke: CI's main job on every platform / those plus `deny`, `web-check`, `web-e2e`, `msrv`, `fuzz-smoke` and `installer-check`: everything CI runs |
 | `make lock-check` / `make ratchet` / `make ratchet-update` | fail if `Cargo.lock` is out of date / fail if a crate has more `unwrap()`/`expect()` in non-test code than `scripts/unwrap-baseline.txt` allows (only ever lower it) / write the current counts as the baseline |
 | `make msrv` | type-check with the oldest compiler `rust-version` promises (installs it) |
 | `make web-test` | the web app's logic tests that need no daemon (settings, terminal keys and selection, QR codes; needs Node) |
+| `make web-e2e` | the web app in a real headless Chrome, driven from Node over the DevTools protocol (no packages): the session list, a new task, answering a permission prompt, the settings panel with undo, typing into the terminal, going offline. Skips without Chrome unless `PTYRO_REQUIRE_BROWSER=1` (CI sets it) |
 | `make tools` / `make deny` | install cargo-deny / license, advisory and source checks |
 | `make parity` (or `make tui-parity`) | check that every CLI command has a TUI path and a web path, or a waiver, in [`docs/parity.md`](docs/parity.md); a gap fails it (`STRICT=0` / `WEB_STRICT=0` only list TUI / web gaps) |
 | `make doc` / `make clean` | API docs (warnings fail) / remove build output |
@@ -525,7 +526,7 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make verify-structured` | check structured mode against the real agents here |
 | `make headless CMD=… ARGS=…` | run a program in ptyro's emulator without a terminal; prints screen and status |
 | `make fixture NAME=… SIZE=… CMD=…` / `make snapshots` | record a golden-test fixture (sanitise it!) / accept golden snapshots (screens, `--json` shapes, rc-file detection) |
-| `make fuzz-smoke` (`FUZZ_SECONDS=5`) / `make fuzz` (`TARGET=… SECONDS=…`) | mutation fuzzing on stable (CI) / coverage-guided `cargo fuzz` (nightly) |
+| `make fuzz-smoke` (`FUZZ_SECONDS=5`) / `make fuzz` (`TARGET=… SECONDS=…`) | mutation fuzzing on stable (CI) of eleven targets: the emulator, protocol, input, recipes, recordings, the settings editor, other tools' config files, the host API's JSON, the live-upgrade image and every config parser / coverage-guided `cargo fuzz` (nightly) |
 | `make proptest-deep` | 20k-case property test of the frame protocol |
 | `make compat` (`VTTEST=…`) | headless compatibility sweep → a table for `docs/compat.md` |
 | `make bench` / `make criterion` | emulator parse speed, daemon throughput, idle CPU, key latency (Linux) / micro-benchmarks (`target/criterion`) |

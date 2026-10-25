@@ -2036,12 +2036,26 @@ into another repository, deep links to Settings load, dialogs keep their size, O
   `make reset` as a wrapper; TUI actions and web (More → Daemon). SPEC §14.5, `docs/uninstall.md`.
   *Still open here:* `ptyro update` (download, verify, replace, `daemon upgrade`; the installer
   is the manual version), `ptyro restore`, a Homebrew tap, and a "newer version exists" notice.
-- [ ] **H2.4 Tests that don't exist yet.** A table test of every `Request` variant's scope
-  (exhaustive `match`, so a new one forces a decision); store migration and downgrade fixtures;
-  a handoff image from the previous release; the live-upgrade race with an in-flight launch;
-  `land_pr` and gate-closing; notification sinks failing (timeout, 500, DNS) without blocking the
-  status engine; a web end-to-end (jsdom or Playwright) for new-session, answer and settings.
-  Fuzz targets for the host API, settings edits, imports and the handoff decoder.
+- [x] **H2.4 Tests that didn't exist.** *Done 2026-10-25.* Scope: an exhaustive `match` in
+  `devices::needed` and `tests/scopes.rs` (a table of every request's scope, checked against the
+  protocol enum, and 300+ requests from devices of each scope). Storage: a database from every
+  earlier schema version, a newer one refused with a message and left untouched, a backup before
+  migrating; the live-upgrade image pinned by a fixture, forward/back compatible and garbage
+  refused; an upgrade during a slow launch (`tests/upgrade_race.rs`), and a second upgrade after
+  a rollback. Features: failing, hanging, refused and unresolvable notification sinks never block
+  status and leak no secret (a bug: failures weren't logged at the default level, and the log
+  and `notify test` could carry the URL; fixed, `tests/sinks.rs`); the merge train waits when CI
+  hasn't started and refuses a moved head (`tests/land.rs`, fake `gh` enforces
+  `--match-head-commit`); gates answered once and not after a run ends (`tests/gates.rs`). The web
+  app in a real headless Chrome with no packages, over the DevTools protocol (`make web-e2e`: the
+  list, a new task, answering a prompt, settings with undo and refusal, the terminal, offline;
+  required in CI on Linux). Five new fuzz targets (settings editor, importers, host JSON, handoff
+  image, parsers): no crash found. *Not done:* `settings_op` lives in the `ptyro` binary, so
+  `hostjson` mirrors its shape instead of driving the real parser; a full handoff `Image` has
+  only its fixture as a seed; the Linux and arm64 runs of the browser test are CI's first;
+  a hung desktop notifier (`desktop()`, a blocking command) can still delay delivery by up to
+  20 s; the `Push*` requests are `read` scope (a read-only phone may register push endpoints),
+  deliberate but a write.
 - [ ] **H2.5 Profile isolation is not a boundary.** `HOME` is shared, so a profile with no
   `git.ssh_key` still reaches the default Keychain credential helper, `~/.ssh` keys, `~/.aws` and
   the client's `SSH_AUTH_SOCK`. Isolation removes credential-shaped *variables* (many more now),

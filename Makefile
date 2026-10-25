@@ -23,7 +23,7 @@ WEB_STRICT ?= 1
 
 .DEFAULT_GOAL := help
 .PHONY: help rust-install build release install test fmt fmt-check lint deny doc check ci clean tools \
-        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-check ratchet ratchet-update lock-check msrv sbom installer-check dist-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean scratchpad-demo orchestrate-demo changeset-demo verify-claude verify-structured tui-parity parity reset
+        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update lock-check msrv sbom installer-check dist-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean scratchpad-demo orchestrate-demo changeset-demo verify-claude verify-structured tui-parity parity reset
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -82,7 +82,7 @@ msrv: ## Type-check the workspace with the oldest supported compiler (installs i
 
 check: fmt-check lint doc lock-check ratchet test smoke ## What CI's main job runs: fmt-check, lint, doc, lock-check, ratchet, test, smoke
 
-ci: check deny web-check msrv fuzz-smoke installer-check ## Everything CI runs: check, deny, web-check, msrv, fuzz-smoke and installer-check
+ci: check deny web-check web-e2e msrv fuzz-smoke installer-check ## Everything CI runs: check, deny, web-check, web-e2e, msrv, fuzz-smoke and installer-check
 
 tools: ## Install developer tools (cargo-deny)
 	$(CARGO) install --locked cargo-deny
@@ -168,6 +168,9 @@ web-test: ## The web app's logic tests that need no daemon (needs Node)
 	node web/test/qr.mjs
 	node web/test/kit.mjs
 	node web/test/assets.mjs
+
+web-e2e: ## The web app in a real headless Chrome (needs Node and Chrome; PTYRO_REQUIRE_BROWSER=1 fails instead of skipping)
+	$(CARGO) test -p ptyro --test web_e2e -- --nocapture
 
 web-check: ## Check that the committed web/dist matches web/src (CI)
 	TSC="$(TSC)" scripts/web-check.sh

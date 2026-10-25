@@ -4880,16 +4880,24 @@ spike smoke) plus cargo-deny (`deny.toml`: licenses, advisories, bans, sources);
 are built on tags later. CI only ever calls make targets.
 
 **[built M8]**
-- **Fuzzing.** Six targets live in `ptyro-testkit::fuzz`:
+- **Fuzzing.** Eleven targets live in `ptyro-testkit::fuzz`:
   - `sniff`: the same findings however the reads are split;
   - `emulator`: random bytes, resizes and image round trips;
   - `protocol`: the decoder, with or without zstd;
   - `input`: encoding never lets a paste close bracketed-paste mode;
   - `recipe`: the parser and validator;
-  - `record`: torn and garbled recordings.
+  - `record`: torn and garbled recordings;
+  - `settings` (H2.4): the settings editor's `set`/`unset`/`add`/`remove`/`rename`/`check` on arbitrary
+    files, keys and values: never a panic, and what it saves still checks;
+  - `imports`: the seven importers of other tools' files (YAML, JSON, TOML), strip and quote
+    helpers, on hostile nesting and aliases;
+  - `hostjson`: arbitrary JSON as `Request`, `Reply`, `ClientMsg` and `ServerMsg` and the host
+    API's parsing helpers;
+  - `handoff`: arbitrary bytes as a live-upgrade image and as one session's compressed emulator;
+  - `parsers`: every config and project parser, `names`, and the scratchpad's merge, stamp and tick.
 
   They're shared by two front ends. `ptyro-fuzz`, a stable-Rust mutation runner with seeds,
-  replay and saved crashes, runs 20 s per target in CI (`make fuzz-smoke`). `fuzz/` is a
+  replay and saved crashes, runs 20 s per target in CI (`make fuzz-smoke`, about four minutes). `fuzz/` is a
   cargo-fuzz crate (`make fuzz`, nightly). First long run (2026-10-21): 240 s per target, about
   1.05 billion runs, no crash.
 - **Benchmarks.** `make criterion` covers parse, frame build, scrollback, handoff image and TUI
@@ -4933,6 +4941,19 @@ are built on tags later. CI only ever calls make targets.
   it; the daemon uses them everywhere, so one buggy handler no longer poisons a session's state
   into failing every later request. The data may be half-updated (what the panicking code was
   doing); the daemon keeps serving the rest. A request that panics still gets an error reply.
+- **What is tested, beyond the unit tests (H2.4).** `needed()` in the daemon's `devices.rs` is an
+  exhaustive `match` on `Request`: a new request doesn't compile until someone decides its scope;
+  `crates/ptyro/tests/scopes.rs` keeps a table of every request's scope (checked against the
+  protocol's enum both ways) and proves it with real devices of each scope. The store is tested
+  against a database from every earlier schema version, refuses one from a newer ptyro with a
+  message, and backs an older one up before migrating (`<db>.bak-v<N>`, two kept). The
+  live-upgrade image has a committed fixture (`PTYRO_UPDATE_FIXTURES=1` regenerates it, on
+  purpose), and an upgrade begun during a slow launch waits for it (`tests/upgrade_race.rs`).
+  Notification sinks that fail or hang don't hold up status and leak no secret into a log
+  (`tests/sinks.rs`); `land` waits for CI to exist and merges only what it checked
+  (`tests/land.rs`); gates are answered once (`tests/gates.rs`). The web app runs in a real
+  headless Chrome driven from Node over the DevTools protocol, with no packages
+  (`make web-e2e`, `web/test/e2e.mjs`, `tests/web_e2e.rs`; CI requires it).
 - **Docs are tested against the code.** `make parity` (every command has a row in
   `docs/parity.md`), and tests that every command has a line in `docs/commands.md`, every `make`
   target is in the README, and every default key is in `docs/keys.md` fail the build when a doc

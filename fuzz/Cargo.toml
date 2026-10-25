@@ -62,3 +62,38 @@ path = "fuzz_targets/record.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "settings"
+path = "fuzz_targets/settings.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "imports"
+path = "fuzz_targets/imports.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hostjson"
+path = "fuzz_targets/hostjson.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "handoff"
+path = "fuzz_targets/handoff.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parsers"
+path = "fuzz_targets/parsers.rs"
+test = false
+doc = false
+bench = false

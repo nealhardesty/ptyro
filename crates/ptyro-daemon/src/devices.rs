@@ -89,8 +89,10 @@ fn ships_code(step: &str) -> bool {
     step.starts_with("push-") || step.starts_with("land-")
 }
 
-/// The scope a request needs from a device. Anything not listed needs `full`, so a new request
-/// is safe by default.
+/// The scope a request needs from a device. The match is exhaustive, with no catch-all: a new
+/// request is a compile error until someone decides its scope here (`tests/scopes.rs` then
+/// checks the decision against a table and against a daemon). What reaches the machine itself,
+/// or changes what ptyro is, is `full`.
 pub fn needed(req: &Request) -> Scope {
     use Request::*;
     match req {
@@ -191,7 +193,11 @@ pub fn needed(req: &Request) -> Scope {
         {
             Scope::Control
         }
-        _ => Scope::Full,
+        // The same requests when they start something: a shell, a command line of its own, a
+        // new pad pane, switching the web app's server on or off.
+        Spawn { .. } | QuickShell { .. } | ScratchPane { .. } | Web { .. } => Scope::Full,
+        // Everything else changes the machine, the config, the daemon or who may talk to it.
+        Shutdown { .. } | Upgrade { .. } | DevicePair { .. } | DeviceClaim { .. } | DeviceList | DeviceRevoke { .. } | SaveView { .. } | ReloadConfig | ProjectAdd { .. } | ProjectRemove { .. } | ProjectPin { .. } | ProjectScripts { .. } | ProjectTrust { .. } | ProjectUntrust { .. } | Discover { .. } | WorkspaceNew { .. } | WorkspaceSet { .. } | WorkspaceRename { .. } | WorkspaceRemove { .. } | WorkspaceMember { .. } | WorktreeNew { .. } | WorktreeRemove { .. } | WorktreeRefresh { .. } | WorktreeRun { .. } | WorktreeLock { .. } | WorktreeRenameBranch { .. } | Gc | ProjectSuggest { .. } | WorktreeArchive { .. } | WorktreeRestore { .. } | WorktreeFinish { .. } | ProfileEnv { .. } | ProfileRename { .. } | ProfileResolve { .. } | Hook { .. } | StatusLine { .. } | Report { .. } | NotifyTest | Doctor | SelfTest { .. } | WorktreeCommit { .. } | WorktreeIntegrate { .. } | WorktreePair { .. } | PrCreate { .. } | PrFix { .. } | PrAutomerge { .. } | PrWatch { .. } | PrReply { .. } | ReviewRemove { .. } | ReviewDone { .. } | RunFork { .. } | RecipeRun { .. } | Fanout { .. } | Pick { .. } | Discard { .. } | MsgCheck { .. } | MsgAck { .. } | LeaseClaim { .. } | LeaseRelease { .. } | CheckpointRestore { .. } | SetVerify { .. } | LeadStart { .. } | Lead { .. } | Cs { .. } => Scope::Full,
     }
 }
 

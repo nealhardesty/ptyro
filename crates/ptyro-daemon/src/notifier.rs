@@ -240,9 +240,13 @@ impl Daemon {
                 for sink in sinks {
                     let kind = sink.kind();
                     let (me2, n) = (Arc::clone(&me), note2.clone());
+                    let secrets = literal_secrets(&sink);
                     let r = tokio::task::spawn_blocking(move || me2.send_sink(&sink, &n))
                         .await
                         .unwrap_or_else(|e| Err(e.to_string()));
+                    // What a failing sink says can carry the secret it was sent to: its URL's
+                    // path is the key, its token a header. Neither goes to a log or a client.
+                    let r = r.map_err(|e| redact(&e, &secrets));
                     out.push(format!("{kind}: {}", r.unwrap_or_else(|e| format!("failed: {e}"))));
                 }
                 out
@@ -252,7 +256,11 @@ impl Daemon {
             } else {
                 tokio::spawn(async move {
                     for r in job.await {
-                        tracing::debug!("sink {r}");
+                        if r.contains(": failed: ") {
+                            tracing::warn!("notification sink {r}");
+                        } else {
+                            tracing::debug!("sink {r}");
+                        }
                     }
                 });
             }
@@ -635,6 +643,55 @@ fn ascii(s: &str) -> String {
     s.chars().map(|c| if c.is_ascii() && !c.is_control() { c } else { '?' }).collect()
 }
 
+/// The secrets written into a sink's configuration (a command that produces one is not here: it
+/// never appears in the config).
+fn literal_secrets(sink: &SinkDef) -> Vec<String> {
+    let lit = |s: &Secret| match s {
+        Secret::Literal(v) => Some(v.clone()),
+        Secret::Command { .. } => None,
+    };
+    match sink {
+        SinkDef::Ntfy { url, token, .. } => {
+            let path = url.split_once("://").map_or(url.as_str(), |(_, r)| r);
+            path.split_once('/')
+                .map(|(_, p)| p.to_owned())
+                .into_iter()
+                .chain(token.as_ref().and_then(lit))
+                .collect()
+        }
+        SinkDef::Pushover { token, user, .. } => {
+            [token, user].into_iter().filter_map(lit).collect()
+        }
+        SinkDef::Slack { webhook, .. } | SinkDef::Discord { webhook, .. } => {
+            lit(webhook).into_iter().collect()
+        }
+        SinkDef::Telegram { token, .. } => lit(token).into_iter().collect(),
+        SinkDef::Command { .. } => Vec::new(),
+    }
+}
+
+/// `text` with the sink's literal secrets gone, and any URL cut back to its host.
+fn redact(text: &str, secrets: &[String]) -> String {
+    let mut out = text.to_owned();
+    for s in secrets.iter().filter(|s| s.len() > 2) {
+        out = out.replace(s.as_str(), "***");
+        // A URL-embedded secret may appear without its leading path separators or quoted.
+        if let Some((_, rest)) = s.split_once("://") {
+            out = out.replace(rest, "***");
+        }
+    }
+    out.split(' ')
+        .map(|w| match w.split_once("://") {
+            Some((scheme, rest)) if scheme.ends_with("http") || scheme.ends_with("https") => {
+                let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+                format!("{scheme}://{host}/…")
+            }
+            _ => w.to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 pub(crate) fn curl(cfg: &[String]) -> Result<String, String> {
     let mut child = std::process::Command::new("curl")
         .args([
@@ -865,5 +922,35 @@ mod tests {
     fn curl_quoting() {
         assert_eq!(quote("a \"b\"\nc"), "\"a \\\"b\\\"\\nc\"");
         assert_eq!(html("<b>&"), "&lt;b&gt;&amp;");
+    }
+
+    #[test]
+    fn failures_carry_no_secrets() {
+        let sink = SinkDef::Ntfy {
+            url: "http://127.0.0.1:9/secret-topic".into(),
+            token: Some(Secret::Literal("tk_s3cr3t".into())),
+            on: vec![],
+        };
+        let secrets = literal_secrets(&sink);
+        assert_eq!(secrets, ["secret-topic", "tk_s3cr3t"]);
+        let e = redact(
+            "HTTP 500 bad reply from http://127.0.0.1:9/secret-topic?token=tk_s3cr3t (tk_s3cr3t)",
+            &secrets,
+        );
+        assert!(
+            !e.contains("secret-topic") && !e.contains("tk_s3cr3t") && !e.contains("token="),
+            "{e}"
+        );
+        assert!(e.contains("http://127.0.0.1:9/"), "the host stays: {e}");
+        let tg = SinkDef::Telegram {
+            token: Secret::Literal("123:ABCdef".into()),
+            chat_id: "1".into(),
+            on: vec![],
+        };
+        let e = redact(
+            "failed https://api.telegram.org/bot123:ABCdef/sendMessage",
+            &literal_secrets(&tg),
+        );
+        assert!(!e.contains("ABCdef"), "{e}");
     }
 }

@@ -45,6 +45,14 @@ use crate::daemon::Daemon;
 /// How long `land_pr` waits for a PR's first check runs to appear before taking "none" to mean
 /// "this repository has no CI".
 const NO_CHECKS_GRACE_MS: u64 = 120_000;
+
+/// The grace period for a PR with no checks; tests shorten it with `PTYRO_TEST_LAND_GRACE_MS`.
+fn no_checks_grace_ms() -> u64 {
+    std::env::var("PTYRO_TEST_LAND_GRACE_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(NO_CHECKS_GRACE_MS)
+}
 use crate::mail::Caller;
 use crate::session::Session;
 use crate::worktrees::blocking;
@@ -2940,14 +2948,16 @@ impl Daemon {
             // at all get a couple of minutes' grace and are then merged on the rest of their
             // state.
             let unknown =
-                pr.checks.is_empty() && now_ms().saturating_sub(started) < NO_CHECKS_GRACE_MS;
+                pr.checks.is_empty() && now_ms().saturating_sub(started) < no_checks_grace_ms();
             if !unknown && !pr.checks.iter().any(|c| c.bucket == "pending") {
                 break;
             }
             if now_ms() > deadline {
                 return Err(format!("PR #{n}'s checks were still pending after an hour"));
             }
-            tokio::time::sleep(Duration::from_secs(15)).await;
+            let wait =
+                if std::env::var_os("PTYRO_TEST_FAST_POLL").is_some() { 300 } else { 15_000 };
+            tokio::time::sleep(Duration::from_millis(wait)).await;
         }
         let method = format!("--{}", self.config().github.merge_method);
         let mut args = vec!["pr".into(), "merge".into(), n.to_string(), method];

@@ -342,6 +342,16 @@ impl Daemon {
     }
 }
 
+/// An image's bytes as an [`Image`], or why this binary can't read them.
+fn decode(bytes: &[u8]) -> Result<Image, String> {
+    let img =
+        rmp_serde::from_slice::<Image>(bytes).map_err(|e| format!("unreadable image: {e}"))?;
+    if img.version != IMAGE_VERSION {
+        return Err(format!("image version {} (this binary reads {IMAGE_VERSION})", img.version));
+    }
+    Ok(img)
+}
+
 /// At startup: an image handed to us by the previous daemon, if any. A refused image re-execs
 /// the previous binary (`daemon.prev`), which wrote it; this never returns in that case.
 pub fn take_image(state_dir: &Path) -> Option<Inherited> {
@@ -357,11 +367,9 @@ pub fn take_image(state_dir: &Path) -> Option<Inherited> {
     let dup = rustix::io::fcntl_dupfd_cloexec(&fd, 0).ok();
     let parsed = ptyro_pty::handoff::read_image(fd)
         .map_err(|e| e.to_string())
-        .and_then(|b| rmp_serde::from_slice::<Image>(&b).map_err(|e| e.to_string()))
+        .and_then(|b| decode(&b))
         .and_then(|img| {
-            if img.version != IMAGE_VERSION {
-                Err(format!("image version {} (this binary reads {IMAGE_VERSION})", img.version))
-            } else if std::env::var_os(ENV_TEST_REFUSE).is_some() && !rolled_back {
+            if std::env::var_os(ENV_TEST_REFUSE).is_some() && !rolled_back {
                 Err("refused for a test (PTYRO_TEST_REFUSE_HANDOFF)".into())
             } else {
                 Ok(img)
@@ -389,6 +397,158 @@ pub fn take_image(state_dir: &Path) -> Option<Inherited> {
             }
             tracing::error!("handoff refused ({why}); starting fresh: the old sessions are lost");
             None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FIXTURE: &str = "tests/fixtures/handoff-image-v1.msgpack";
+
+    /// An image like the one the current code writes: one live shell, a focused session, an
+    /// OpenCode sidecar. Fixed values, so the bytes are the same on every run.
+    fn sample() -> Image {
+        let meta = serde_json::json!({
+            "name": "build", "kind": "shell", "argv": ["/bin/zsh"], "cwd": "/work",
+            "state": {"t": "running"}, "pid": 4242, "client_env": {"TERM": "xterm-256color"},
+            "place": {"profile": "default"}, "ports": [3000], "children": [],
+            "dangerous": false, "summarizing": false, "prompt_pending": false,
+            "turns": 2, "turn_started_ms": 1_700_000_000_000u64,
+        });
+        let session = SessionImage {
+            id: "0190aaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee".into(),
+            meta: serde_json::from_value(meta).unwrap(),
+            status: None,
+            activity: Some("tests".into()),
+            emu: vec![0x90],
+            master_fd: Some(9),
+            last_output_ms: 1_700_000_000_500,
+            output_bytes: 1234,
+            done_means_idle: false,
+            stale_after_ms: 30_000,
+            engine_clocks: [Some(1), None, Some(3)],
+            structured: None,
+        };
+        Image {
+            version: IMAGE_VERSION,
+            binary: "0.0.5".into(),
+            run_id: "run-fixture".into(),
+            started_ms: 1_700_000_000_000,
+            generation: 3,
+            listener_fd: 4,
+            foreground: false,
+            focused: Some(session.id.clone()),
+            sessions: vec![session],
+            sidecars: vec![("0190aaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee".into(), 4096, "pw".into())],
+            written_ms: 1_700_000_001_000,
+            counters: [10, 20, 1],
+        }
+    }
+
+    fn fixture_path() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE)
+    }
+
+    /// `PTYRO_UPDATE_FIXTURES=1 cargo test -p ptyro-daemon handoff` rewrites the fixture. Do
+    /// that only together with a new `IMAGE_VERSION` (or a change that older images survive):
+    /// the committed file is what the previous release wrote, and an upgrade must read it.
+    #[test]
+    fn the_committed_image_still_decodes() {
+        let path = fixture_path();
+        if std::env::var_os("PTYRO_UPDATE_FIXTURES").is_some() {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, rmp_serde::to_vec_named(&sample()).unwrap()).unwrap();
+        }
+        let bytes = std::fs::read(&path).expect("the fixture is committed");
+        let img = decode(&bytes).expect("the committed image decodes");
+        let want = sample();
+        assert_eq!(img.version, want.version);
+        assert_eq!(img.generation, 3);
+        assert_eq!(img.counters, [10, 20, 1]);
+        assert_eq!(img.sidecars, want.sidecars);
+        assert_eq!(img.focused, want.focused);
+        let (got, want) = (&img.sessions[0], &want.sessions[0]);
+        assert_eq!(
+            (&got.id, &got.meta.name, got.meta.pid),
+            (&want.id, &want.meta.name, Some(4242))
+        );
+        assert_eq!(got.master_fd, Some(9));
+        assert_eq!(got.engine_clocks, [Some(1), None, Some(3)]);
+        assert_eq!(got.meta.ports, vec![3000]);
+    }
+
+    /// What the code writes now is what the fixture holds: a change to `Image` that alters the
+    /// bytes fails here, so it is made on purpose (regenerate, and keep decoding the old one).
+    #[test]
+    fn the_current_code_writes_the_committed_image() {
+        let bytes = std::fs::read(fixture_path()).expect("the fixture is committed");
+        assert_eq!(
+            rmp_serde::to_vec_named(&sample()).unwrap(),
+            bytes,
+            "the image format changed: bump IMAGE_VERSION or keep old images readable, then \
+             regenerate with PTYRO_UPDATE_FIXTURES=1"
+        );
+    }
+
+    fn as_value(img: &Image) -> serde_json::Value {
+        serde_json::to_value(img).unwrap()
+    }
+
+    fn encode(v: &serde_json::Value) -> Vec<u8> {
+        rmp_serde::to_vec_named(v).unwrap()
+    }
+
+    #[test]
+    fn fields_a_newer_ptyro_added_are_ignored() {
+        let mut v = as_value(&sample());
+        v["from_the_future"] = serde_json::json!({"a": [1, 2]});
+        v["sessions"][0]["also_new"] = serde_json::json!(true);
+        let img = decode(&encode(&v)).expect("unknown fields are skipped");
+        assert_eq!(img.sessions.len(), 1);
+    }
+
+    #[test]
+    fn fields_an_older_ptyro_never_wrote_take_their_defaults() {
+        let mut v = as_value(&sample());
+        let obj = v.as_object_mut().unwrap();
+        obj.remove("counters");
+        let session = obj["sessions"][0].as_object_mut().unwrap().clone();
+        let mut session = session;
+        for k in ["engine_clocks", "structured"] {
+            session.remove(k);
+        }
+        obj["sessions"][0] = session.into();
+        let img = decode(&encode(&v)).expect("optional fields may be missing");
+        assert_eq!(img.counters, [0, 0, 0]);
+        assert_eq!(img.sessions[0].engine_clocks, [None, None, None]);
+        assert!(img.sessions[0].structured.is_none());
+    }
+
+    #[test]
+    fn an_image_of_another_version_is_refused_with_a_reason() {
+        let mut v = as_value(&sample());
+        v["version"] = serde_json::json!(IMAGE_VERSION + 1);
+        let e = decode(&encode(&v)).err().expect("refused");
+        assert!(e.contains("image version") && e.contains("this binary reads"), "{e}");
+    }
+
+    #[test]
+    fn a_garbage_or_truncated_image_is_refused_not_a_panic() {
+        let good = std::fs::read(fixture_path()).unwrap();
+        assert!(decode(&[]).is_err());
+        assert!(decode(b"not a handoff image").is_err());
+        assert!(decode(&[0xff; 64]).is_err());
+        for cut in [1, good.len() / 3, good.len() / 2, good.len() - 1] {
+            let e = decode(&good[..cut]).err().expect("truncated image refused");
+            assert!(e.starts_with("unreadable image"), "{e}");
+        }
+        // Flipped bytes either still decode or are refused; they never panic.
+        for i in (0..good.len()).step_by(7) {
+            let mut bad = good.clone();
+            bad[i] ^= 0xa5;
+            let _ = decode(&bad);
         }
     }
 }
