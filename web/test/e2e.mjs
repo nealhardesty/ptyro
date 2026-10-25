@@ -136,7 +136,8 @@ try {
     } catch (e) {
       failed++;
       const shot = await tab.screenshot(join(tmpdir(), `ptyro-e2e-${name}.png`)).catch(() => "no screenshot");
-      say(`FAIL ${name}: ${e.message}\n     screenshot: ${shot}`);
+      const page = await tab.eval(`location.href + "\\n" + document.body.innerText.slice(0, 600) + "\\n" + (document.querySelector(".sheet")?.outerHTML ?? "(no sheet)").slice(0, 600)`).catch(() => "(page unreadable)");
+      say(`FAIL ${name}: ${e.message}\n     screenshot: ${shot}\n     page: ${String(page).replace(/\n/g, "\n       ")}`);
     }
   }
 } finally {

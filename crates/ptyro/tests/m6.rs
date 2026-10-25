@@ -371,6 +371,9 @@ fn pull_requests_and_the_pr_event_loop() {
     assert_eq!(w.cli(&["pr", "status", "svc/fix"]).status.code(), Some(3));
     std::fs::write(path.join("fix.txt"), "fixed\n").unwrap();
     w.ok(&["wt", "commit", "svc/fix", "-m", "Fix the bug", "--all"]);
+    // (The comment exists before the first poll, which can start as soon as the PR does; written
+    // after, a slow machine's first poll saw none and the comment was news.)
+    w.gh_file("review_comments.json", &json!([{"id": 1, "user": {"login": "rev"}, "author_association": "COLLABORATOR", "path": "fix.txt", "line": 1, "body": "old comment"}]));
     w.ok(&["pr", "create", "svc/fix", "--ready", "--title", "Fix the bug"]);
     let st = w.ok(&["pr", "status", "svc/fix"]);
     assert!(st.contains("#7 Fix the bug [open]"), "{st}");
@@ -379,7 +382,6 @@ fn pull_requests_and_the_pr_event_loop() {
         "--ready"
     );
     // The baseline: an old comment is not news.
-    w.gh_file("review_comments.json", &json!([{"id": 1, "user": {"login": "rev"}, "author_association": "COLLABORATOR", "path": "fix.txt", "line": 1, "body": "old comment"}]));
     w.until("the first poll", || {
         std::fs::read_to_string(w.gh.join("calls.log")).unwrap().contains("pulls/7/comments")
     });
