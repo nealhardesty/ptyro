@@ -869,7 +869,8 @@ enum ConfigCmd {
         #[arg(add = ArgValueCandidates::new(complete::settings))]
         key: String,
         /// The value: `on`/`off`, a number, `30s`, text; several words make a list or a command
-        #[arg(required = true, num_args = 1.., allow_hyphen_values = true)]
+        /// (after `--` when one starts with a dash)
+        #[arg(required = true, num_args = 1..)]
         value: Vec<String>,
         /// Into a repository's `.ptyro.local.toml` (yours), or its `.ptyro.toml` with --shared
         #[arg(short, long, num_args = 0..=1, default_missing_value = "")]
@@ -896,7 +897,6 @@ enum ConfigCmd {
         name: Option<String>,
         /// Its settings, as FIELD=VALUE (`command="aider --model sonnet"`); a binding's action
         /// or a prompt's text is `value=…`; a sink's `type=ntfy`
-        #[arg(allow_hyphen_values = true)]
         fields: Vec<String>,
         #[arg(short, long, num_args = 0..=1, default_missing_value = "")]
         project: Option<String>,

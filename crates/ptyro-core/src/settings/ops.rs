@@ -164,22 +164,39 @@ fn applies(keys: &[String]) -> Apply {
     worst
 }
 
-/// Make `op` in `layer`'s file and write it. Nothing is written unless the whole new file is
-/// valid (`extra` is the caller's own check of it).
-pub fn apply(layer: &Layer, op: &Op, lk: &Lookups, extra: Extra<'_>) -> Result<Done, String> {
+/// The file `op` would make from `before`, checked, without writing it.
+fn compute(
+    layer: &Layer,
+    before: &str,
+    op: &Op,
+    lk: &Lookups,
+    extra: Extra<'_>,
+) -> Result<String, String> {
     let scope = layer.scope();
-    let before = layer.read()?;
-    let after = match op {
-        Op::Set { key, value } => super::set(scope, &before, key, value, lk, extra)?,
-        Op::Unset { key } => super::unset(scope, &before, key, extra)?,
+    match op {
+        Op::Set { key, value } => super::set(scope, before, key, value, lk, extra),
+        Op::Unset { key } => super::unset(scope, before, key, extra),
         Op::Add { path, name, fields } => {
             let f: Vec<(&str, &str)> =
                 fields.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-            super::add(scope, &before, path, name, &f, lk, extra)?
+            super::add(scope, before, path, name, &f, lk, extra)
         }
-        Op::Remove { path, name } => super::remove(scope, &before, path, name, extra)?,
-        Op::Rename { path, from, to } => super::rename(scope, &before, path, from, to, extra)?,
-    };
+        Op::Remove { path, name } => super::remove(scope, before, path, name, extra),
+        Op::Rename { path, from, to } => super::rename(scope, before, path, from, to, extra),
+    }
+}
+
+/// Whether `op` would be accepted, and the file it would make: nothing is written. A form
+/// checks as you type with this.
+pub fn preview(layer: &Layer, op: &Op, lk: &Lookups, extra: Extra<'_>) -> Result<String, String> {
+    compute(layer, &layer.read()?, op, lk, extra)
+}
+
+/// Make `op` in `layer`'s file and write it. Nothing is written unless the whole new file is
+/// valid (`extra` is the caller's own check of it).
+pub fn apply(layer: &Layer, op: &Op, lk: &Lookups, extra: Extra<'_>) -> Result<Done, String> {
+    let before = layer.read()?;
+    let after = compute(layer, &before, op, lk, extra)?;
     let changed = after != before;
     let keys = op.keys();
     let apply = applies(&keys);

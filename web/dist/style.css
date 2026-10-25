@@ -304,3 +304,65 @@ kbd { font: 12px ui-monospace, Menlo, monospace; padding: 1px 6px; border: 1px s
 .pad-item { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; border-top: 1px solid var(--line); }
 .pad-item .main { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .pad-item small, .muted { color: var(--muted); }
+
+/* settings panel (CFG1.3) */
+.cfg-main { display: grid; gap: 10px; padding: 10px 12px 90px; max-width: 1100px; margin: 0 auto; width: 100%; box-sizing: border-box; }
+.cfg-top { display: grid; gap: 8px; position: sticky; top: 0; z-index: 3; background: var(--bg); padding: 6px 0; }
+.cfg-chips { padding: 0; }
+.cfg-chips button.on { background: var(--accent); color: #fff; border-color: transparent; }
+.cfg-project { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); }
+.cfg-project select { padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font: inherit; }
+.cfg-cols { display: block; }
+.cfg-nav { display: none; }
+.cfg.home .cfg-nav { display: none; }
+@media (min-width: 880px) {
+  .cfg-cols { display: grid; grid-template-columns: 230px 1fr; gap: 20px; align-items: start; }
+  .cfg-nav { display: grid !important; gap: 2px; position: sticky; top: 120px; max-height: calc(100dvh - 140px); overflow: auto; }
+  .cfg.home .cfg-body .rows { display: none; }
+}
+.cfg-link { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; color: var(--text); text-decoration: none; }
+.cfg-link:hover { background: var(--panel); } .cfg-link.on { background: var(--panel); font-weight: 600; box-shadow: inset 3px 0 0 var(--accent); }
+.cfg-link.file { color: var(--muted); font-size: 13px; margin-top: 8px; }
+.cfg-sep { margin: 10px 10px 2px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.cfg-body { display: grid; gap: 10px; align-content: start; min-width: 0; }
+.cfg-h { margin: 14px 2px 0; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.set { display: grid; gap: 6px; padding: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.set.changed { border-left: 3px solid var(--accent); }
+.set.flash { animation: flash 1.6s ease-out; }
+@keyframes flash { from { box-shadow: 0 0 0 3px var(--accent); } }
+.set-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.set-head label { font-weight: 600; text-transform: capitalize; }
+.set-head .grow { flex: 1; }
+.set-help { margin: 0; color: var(--muted); font-size: 13.5px; }
+.set-foot { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+.set-foot span { flex: 1; min-width: 12ch; }
+.set-where { font-size: 12px; color: var(--accent); text-decoration: none; }
+.set input[type=text], .set input[type=number], .set input[type=password], .set input[type=search], .set select, .set textarea {
+  width: 100%; box-sizing: border-box; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; }
+.set textarea.code, .set textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; resize: vertical; }
+.ctl { display: grid; gap: 4px; } .ctl small { color: var(--muted); font-size: 12px; }
+.row-ctl { grid-template-columns: 1fr auto; align-items: center; }
+.swatch { width: 44px; height: 38px; padding: 2px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); }
+.checks { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.checks label { display: inline-flex; align-items: center; gap: 6px; }
+.switch { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; }
+.switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.switch .track { width: 44px; height: 26px; border-radius: 13px; background: var(--line); position: relative; transition: background 0.15s; flex: none; }
+.switch .track::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: transform 0.15s; box-shadow: 0 1px 2px rgba(0,0,0,0.3); }
+.switch input:checked + .track { background: var(--ok); } .switch input:checked + .track::after { transform: translateX(18px); }
+.switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+.switch .state { color: var(--muted); font-size: 13px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { border: none; border-radius: 0; padding: 5px 12px; background: var(--panel); color: var(--text); }
+.seg button.on { background: var(--accent); color: #fff; }
+.banner { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); font-size: 14px; }
+.banner.bad { border-color: var(--bad); } .banner.warn { border-color: var(--warn); }
+.add-row { justify-self: start; padding: 8px 12px; border-radius: 8px; border: 1px dashed var(--line); background: none; color: var(--accent); }
+.set.map textarea, .set.map input { margin-top: 2px; }
+a.button { display: inline-block; padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); text-decoration: none; }
+.captured { padding: 14px; text-align: center; font: 600 16px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+.snack { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(70px + env(safe-area-inset-bottom)); z-index: 15; display: flex; gap: 12px; align-items: center;
+  max-width: min(92vw, 640px); padding: 10px 14px; border-radius: 12px; background: #222; color: #fff; box-shadow: 0 6px 24px rgba(0,0,0,0.35); font-size: 14px; }
+.snack.bad { background: var(--bad); }
+.snack[hidden] { display: none; }
+.snack button { background: #444; color: #fff; border-color: transparent; }

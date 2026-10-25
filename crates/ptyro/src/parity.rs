@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const DOC: &str = include_str!("../../../docs/parity.md");
 /// The web app's sources that register actions: the core and one module per kind of work.
-const WEB_SOURCES: [(&str, &str); 7] = [
+const WEB_SOURCES: [(&str, &str); 8] = [
     ("app.ts", include_str!("../../../web/src/app.ts")),
     ("sessions.ts", include_str!("../../../web/src/sessions.ts")),
     ("projects.ts", include_str!("../../../web/src/projects.ts")),
@@ -28,6 +28,7 @@ const WEB_SOURCES: [(&str, &str); 7] = [
     ("runs.ts", include_str!("../../../web/src/runs.ts")),
     ("settings.ts", include_str!("../../../web/src/settings.ts")),
     ("term.ts", include_str!("../../../web/src/term.ts")),
+    ("panel.ts", include_str!("../../../web/src/panel.ts")),
 ];
 
 /// Every runnable command, `wt new` style, without hidden ones (internal helpers).

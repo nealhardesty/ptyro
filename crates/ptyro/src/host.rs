@@ -89,6 +89,48 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
             }
             Ok(json!({ "notes": notes }))
         }
+        // ── the settings panel (CFG1.3): the schema, a view of the values, one change at a time ──
+        "settings.schema" => Ok(json!({
+            "user": ptyro_core::settings::schema_json(ptyro_core::settings::Scope::User),
+            "project": ptyro_core::settings::schema_json(ptyro_core::settings::Scope::Project),
+        })),
+        "settings.view" => {
+            let layer = settings_layer(ctx, a).await?;
+            Ok(settings_view(&layer))
+        }
+        "settings.apply" => {
+            let layer = settings_layer(ctx, a).await?;
+            let op = settings_op(&a["change"])?;
+            let lk = crate::config::lookups();
+            let extra = |t: &str| {
+                if layer.scope() == ptyro_core::settings::Scope::User {
+                    crate::config::semantic(t)
+                } else {
+                    Ok(())
+                }
+            };
+            // `dry`: only whether it would be accepted (a form checking as you type).
+            if a["dry"].as_bool().unwrap_or(false) {
+                ptyro_core::settings::preview(&layer, &op, &lk, &extra)
+                    .map_err(|e| Error::new(ErrorCode::Invalid, e))?;
+                return Ok(json!({ "ok": true }));
+            }
+            let done = ptyro_core::settings::apply(&layer, &op, &lk, &extra)
+                .map_err(|e| Error::new(ErrorCode::Invalid, e))?;
+            Ok(json!({
+                "changed": done.changed, "notes": done.notes, "apply": done.apply, "before": done.before,
+                "view": settings_view(&layer),
+            }))
+        }
+        "settings.restore" => {
+            let layer = settings_layer(ctx, a).await?;
+            let user = layer.scope() == ptyro_core::settings::Scope::User;
+            ptyro_core::settings::restore(&layer, str_of(a, "text")?, &|t: &str| {
+                if user { crate::config::semantic(t) } else { Ok(()) }
+            })
+            .map_err(|e| Error::new(ErrorCode::Invalid, e))?;
+            Ok(json!({ "view": settings_view(&layer) }))
+        }
         "config.show" => {
             let config = Config::load(&config_path)
                 .map_err(|e| Error::new(ErrorCode::Invalid, e.to_string()))?;
@@ -235,4 +277,62 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
 
         other => Err(Error::invalid(format!("no such operation: {other}"))),
     }
+}
+
+/// The file a settings call is about: yours, or with `project` the repository's (`shared` for the
+/// committed one).
+async fn settings_layer(ctx: &Ctx, a: &Value) -> Result<ptyro_core::settings::Layer, Error> {
+    use ptyro_core::settings::Layer;
+    if a["scope"].as_str() != Some("project") {
+        return Ok(Layer::User(Config::path(&ctx.paths)));
+    }
+    let addr = str_of(a, "project")?.to_owned();
+    let c = ctx.connect(false).await?;
+    let ptyro_protocol::Reply::Project { info, .. } =
+        c.request(ptyro_protocol::Request::ProjectGet { addr }).await?
+    else {
+        return Err(Error::internal("unexpected reply"));
+    };
+    Ok(if a["shared"].as_bool().unwrap_or(false) {
+        Layer::Shared(info.root)
+    } else {
+        Layer::Local(info.root)
+    })
+}
+
+fn settings_view(layer: &ptyro_core::settings::Layer) -> Value {
+    let mut v = ptyro_core::settings::view(layer, &crate::config::lookups()).to_json();
+    v["layer"] = json!({
+        "kind": match layer {
+            ptyro_core::settings::Layer::User(_) => "user",
+            ptyro_core::settings::Layer::Shared(_) => "shared",
+            ptyro_core::settings::Layer::Local(_) => "local",
+        },
+        "path": layer.path(),
+    });
+    v
+}
+
+fn settings_op(v: &Value) -> Result<ptyro_core::settings::Op, Error> {
+    use ptyro_core::settings::Op;
+    let s = |k: &str| str_of(v, k).map(str::to_owned);
+    Ok(match v["t"].as_str() {
+        Some("set") => Op::Set { key: s("key")?, value: s("value")? },
+        Some("unset") => Op::Unset { key: s("key")? },
+        Some("add") => Op::Add {
+            path: s("path")?,
+            name: v["name"].as_str().unwrap_or_default().to_owned(),
+            fields: v["fields"]
+                .as_object()
+                .map(|m| {
+                    m.iter()
+                        .filter_map(|(k, x)| Some((k.clone(), x.as_str()?.to_owned())))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        },
+        Some("remove") => Op::Remove { path: s("path")?, name: s("name")? },
+        Some("rename") => Op::Rename { path: s("path")?, from: s("from")?, to: s("to")? },
+        other => return Err(Error::invalid(format!("no such change: {other:?}"))),
+    })
 }

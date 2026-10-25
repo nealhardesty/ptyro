@@ -35,7 +35,7 @@ Conventions:
 | **H1** | Hardening review | ~120 findings of a full code review fixed (security, crashes, correctness, build) (done) |
 | **UX1** | Out of the box | From `cd repo && ptyro` to a shipped, cleaned-up worktree by keys alone; sidebar rows that say what's going on (done) |
 | **WEB1** | Web parity | The web client does what the CLI and TUI do, and the parity check covers it (done) |
-| **CFG1** | One configuration panel | Every option editable in the TUI (then the web); new options must join it |
+| **CFG1** | One configuration panel | Every option editable in the TUI, on the web and with `ptyro config set`, from one schema; new options must join it (done) |
 | **NOTE1** | The scratchpad | One persistent notepad file: a key opens it in your editor, `PTYRO_SCRATCHPAD` finds it, items become tasks, the web edits it (done) |
 | **Backlog** | Later / maybe | Editor, tasks, jj, libghostty, relay, … |
 
@@ -1790,9 +1790,8 @@ up), and `make parity` fails CI on a CLI command with neither a web path nor a w
   once; `daemon status`, the doctor and the web page say whether it is up, where, since when, how
   it last ended and whether a by-hand `ptyro serve` holds the port. New key `[remote] tailscale`.
   Tests: `the_web_app_is_a_setting_the_daemon_keeps`, `only_a_full_device_changes_the_web_apps_server`,
-  `serving_the_web_app_is_one_setting…`. *Not done:* the CFG1 config panel (it doesn't exist yet;
-  `remote.serve` and `remote.tailscale` must join it), and a QR code on the TUI's `remote.web_on`
-  (it prints `ptyro pair` as the next step).
+  `serving_the_web_app_is_one_setting…`. *Since:* `remote.serve` and `remote.tailscale` are in the CFG1 panel. *Not done:* a QR code on
+  the TUI's `remote.web_on` (it prints `ptyro pair` as the next step).
 
 Suggested order: WEB1.0 → WEB1.1 → WEB1.7 (phones need it) → WEB1.2 → WEB1.3 → WEB1.4 → the
 rest (WEB1.8's spike can run any time; WEB1.9 is small and can go first). From WEB1.0 on, every
@@ -1811,28 +1810,56 @@ the keys.
 (and the web's), like the CLI/TUI/web parity rule (SPEC §1.3). The panel reads the schema, so
 the cost of that rule is a description and a type on the key, not UI code.
 
-- [ ] **CFG1.0 A schema the panel reads** — M. One description per key in `ptyro-core`'s config
-  (`config.rs`): name, section, type (bool, int with range, enum with choices, string, list,
-  duration, path), default, one-line help, and whether it applies live or needs a restart.
-  `ptyro config show` and the commented file from `config edit` come from the same table, and a
-  test fails when a field of the config structs has no entry (so a new option can't skip the
-  panel). Agent commands, args, env and profiles stay user-config only (SPEC §13.1).
-  *Done when:* the test lists every key and fails on a new one without a description.
-- [ ] **CFG1.1 The TUI panel** — L. `Ctrl-Q ,` and the palette: sections on the left, keys on
-  the right with the value in effect, its default, and where it comes from (user, project,
-  local). `/` searches keys and help. Edit in place by type (toggle, choose from a list, a number
-  with its range, a text box; lists and tables open a sub-form); invalid values are refused with
-  the reason. Writes the user `config.toml` keeping its comments (`toml_edit`), applies live
-  where the key allows, and says "restart the daemon" with a button where it doesn't.
-  Reset-to-default per key. A project tab for `.ptyro.toml` / `.ptyro.local.toml`. Profiles,
-  agents and editors get their own sub-forms (add, rename, remove).
-  *Done when:* an end-to-end TUI test changes a bool, an enum, a list and a number from the
-  panel, the file on disk has them with its comments kept, and the live daemon used them.
-- [ ] **CFG1.2 CLI parity** — S. `ptyro config get|set|unset <key>` against the same schema (so
-  scripts and the panel agree), with `parity.md` rows for them.
-- [ ] **CFG1.3 The web panel** — M. The same schema served to the web (a `config.schema`
-  request, scope `full`) and a settings view that renders it. Lands with WEB1.6 (its `config`
-  row); until then the cell says `gap: CFG1.3`.
+- [x] **CFG1.0 A schema the panel reads** — M. *Done 2026-10-24.* One description per key in
+  `ptyro-core`'s `settings.rs`: section, kind (bool, number with a range, text, path, one of,
+  several of, a list, a command, a duration, a size, a time window, a colour, an address, a
+  secret, a table), one line of help, when a change applies (`live`, `next`, `restart`),
+  advanced or not, and which sink type a field is for. Defaults come from `Config::default()`,
+  not a second copy. `ptyro config edit`'s first file is generated from it (every ordinary
+  setting, commented out, with its help). A test walks every config struct and fails when a
+  field has no entry or an entry has no field; others check each choice loads, each default is a
+  choice, and every default typed back gives the same config. Edits are text to text
+  (`set|unset|add|remove|rename`), keeping the file's comments and order, validated whole before
+  anything is written. SPEC §13.7. Agent commands, env and profile secrets stay in the file
+  (`opaque`): the panel opens it at their table.
+  - Made true on the way: `daemon.log_level` is read (it never was), live, with `PTYRO_LOG`
+    winning; a `[remote]` change starts the supervised web app again with it; `daemon.log_level`
+    is validated.
+- [x] **CFG1.1 The TUI panel** — L. *Done 2026-10-24.* `C-q C` (not `,`, which renames) and a
+  `setting <key>` entry in the palette for every setting. Sections on the left with how many you
+  changed, settings on the right with the value, its default, where it comes from (and the line)
+  and when a change applies. `/` searches keys, help and values; `m` shows only what you
+  changed; `A` the advanced ones. Edit by kind: ⏎ or space toggles a switch; a list of choices
+  (the theme shows as you move over it, `Esc` puts it back; the action list for a key binding
+  is searchable); a set toggles each choice; numbers step with `+`/`-`; a box checks the value
+  against the real parser as you type and stays open with the reason; keys are captured by
+  pressing them (`ui.prefix`, a new binding). Agents, themes, editors, key bindings, notification
+  services and a repository's run scripts and prompts are added (a service asks for what its
+  type needs, and is written whole), renamed and removed; profiles run `profile.new|rename|
+  remove` (they set up account folders). `r` resets, `u` undoes. A repository's own sections
+  follow yours, saving to `.ptyro.local.toml` or, with `s`, the committed `.ptyro.toml`. A
+  setting that needs a daemon restart says so and `!` does it. A config that doesn't load
+  still opens, on defaults, with the reason. *Tests:* 22 panel tests, and an end-to-end one that
+  drives the real TUI in a terminal: a switch, a choice, a number and a list change, the file
+  keeps its comments, and the running daemon uses the new `discover.roots`.
+- [x] **CFG1.2 CLI parity** — S. *Done 2026-10-24.* `ptyro config list [section] [--changed]
+  [--json]`, `get [--explain]`, `set`, `unset`, `add`, `rm`, `rename`, `schema` (all with
+  `--project [name]` and `--shared`), `edit [key]` opens the file at that setting; keys
+  complete in the shell; a wrong name says what you probably meant. `parity.md` rows for each.
+- [x] **CFG1.3 The web panel** — M. *Done 2026-10-24.* More → Settings: sections (two panes on
+  a wide screen), search, Changed and Advanced filters, a repository picker with Mine/Shared,
+  and a control for each kind (a switch, a select with what each choice means, a number, a box
+  checked as you type, a list one per line, colours with a picker, press-the-keys, sets as
+  checkboxes). Add, rename and remove with forms that ask for what a new thing needs; an Undo on
+  every change; a banner with Restart now for settings that need it; the raw file one tap away
+  and openable at a setting. Host calls `settings.schema|view|apply|restore` (full scope).
+  Built once per route and updated in place, so typing survives the app's re-renders. Driven
+  in Chrome against a sandbox: a switch, a refused number with its reason, undo, search, an
+  agent added, a repository's script written to `.ptyro.local.toml`.
+
+*Not done:* the web panel and the TUI panel weren't tried on a phone or in other terminals than
+the test one; secrets typed into the panel are stored as written (use `!program args` to keep
+them out of the file).
 
 ---
 

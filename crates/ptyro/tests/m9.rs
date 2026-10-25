@@ -836,6 +836,24 @@ fn the_web_app_is_a_setting_the_daemon_keeps() {
     let config = std::fs::read_to_string(&config_path).unwrap();
     assert!(config.contains("serve = true") && config.contains("insecure = true"), "{config}");
 
+    // A `[remote]` setting changed from the settings commands starts the server again with it.
+    let before = status(&w)["pid"].as_u64().unwrap();
+    w.ok(&["config", "set", "remote.approval_wait", "5m"]);
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let web = status(&w);
+        if web["up"] == true && web["pid"].as_u64().is_some_and(|p| p != before) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the web app wasn't started again: {web}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    wait_http(port);
+    // The daemon's log level is a setting it follows while it runs.
+    w.ok(&["config", "set", "daemon.log_level", "debug"]);
+    assert!(!w.cli(&["config", "set", "daemon.log_level", "loud"]).status.success());
+    w.ok(&["config", "unset", "daemon.log_level", "remote.approval_wait"]);
+
     // The doctor and `daemon status` show it.
     let doctor: serde_json::Value =
         serde_json::from_str(&w.ok(&["doctor", "--quick", "--json"])).unwrap();
@@ -1430,6 +1448,41 @@ async fn the_web_app_asks_the_daemon_and_the_machine() {
     // A tour is for its own ptyro only: this one refuses to end itself.
     let (_, v) = host(serve.port, Some(&full), &json!({ "op": "tour.end" }));
     assert_eq!(v["error"]["code"], "invalid", "{v}");
+}
+
+/// CFG1.3: the web settings panel's logic (`web/test/config.mjs`), and through `ptyro serve` the
+/// calls it makes: the schema, the values with where they come from, a checked change that keeps
+/// the file's comments, undo, and a device without full scope being refused. Skipped without Node.
+#[test]
+fn the_web_settings_panel_logic_and_calls_work() {
+    if std::process::Command::new("node").arg("--version").output().is_err() {
+        eprintln!("node not found: skipping the web settings check");
+        return;
+    }
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web/test/config.mjs");
+    let run = |args: &[&str]| {
+        let out = std::process::Command::new("node").arg(&script).args(args).output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    run(&["units"]);
+    let w = World::new("# mine\n[ui]\nmouse = false # kept\n", &[]);
+    let serve = w.serve();
+    let (_, full) = w.pair(&serve, "laptop", "full");
+    let (_, ctl) = w.pair(&serve, "phone", "control");
+    run(&["host", &format!("http://127.0.0.1:{}", serve.port), &full]);
+    // The comments survived everything the script did.
+    let file = std::fs::read_to_string(w.d.paths.config.join("config.toml")).unwrap();
+    assert!(file.contains("# mine\n[ui]\nmouse = false # kept\n"), "{file}");
+    // Changing settings is for full scope.
+    for op in ["settings.schema", "settings.view", "settings.apply", "settings.restore"] {
+        let (code, v) = host(serve.port, Some(&ctl), &json!({ "op": op, "scope": "user" }));
+        assert_eq!(v["error"]["code"], "permission_denied", "{op}: {code} {v}");
+    }
 }
 
 /// The web app's QR encoder (pairing another device from the web): structure a scanner relies

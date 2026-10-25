@@ -11,6 +11,7 @@ import "./projects.js";
 import "./review.js";
 import "./runs.js";
 import "./settings.js";
+import "./panel.js";
 import { initNotes, notesConnected, notesEvent, notesLink, notesNeedsLoad, notesLoad, notesNoteButton, notesQuickAdd, notesShown, notesStart, notesView } from "./notes.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
 import { coach } from "./settings.js";

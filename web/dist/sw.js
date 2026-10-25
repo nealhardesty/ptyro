@@ -4,10 +4,10 @@
 // where the platform shows actions) through `POST /api/request` with this device's token.
 /// <reference lib="webworker" />
 const sw = self;
-const SHELL = "ptyro-shell-v3";
+const SHELL = "ptyro-shell-v4";
 const FILES = [
     "/", "/style.css", "/manifest.webmanifest", "/icon.svg", "/icon-192.png",
-    ...["app", "color", "conn", "data", "flow", "kit", "projects", "qr", "review", "runs", "screen", "sessions", "settings", "pad", "notes", "grid", "keys", "term"].map((m) => `/${m}.js`),
+    ...["app", "color", "conn", "data", "flow", "kit", "projects", "qr", "review", "runs", "screen", "sessions", "settings", "pad", "notes", "grid", "keys", "term", "panel", "cfgkit"].map((m) => `/${m}.js`),
 ];
 sw.addEventListener("install", (e) => {
     e.waitUntil(caches.open(SHELL).then((c) => c.addAll(FILES)).then(() => sw.skipWaiting()));

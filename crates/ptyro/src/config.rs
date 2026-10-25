@@ -139,6 +139,14 @@ async fn run_paths(paths: &Paths, cmd: ConfigCmd, ctx: &Ctx) -> Result<i32, Erro
         }
         ConfigCmd::Add { collection, name, fields, project, shared } => {
             let layer = layer(ctx, project.as_deref(), shared).await?;
+            // A sink has no name: whatever stands where it would is its first field.
+            let (name, fields) = match (&name, settings::collection(&collection).map(|c| c.layout))
+            {
+                (Some(n), Some(settings::Layout::Array)) => {
+                    (None, std::iter::once(n.clone()).chain(fields).collect::<Vec<_>>())
+                }
+                _ => (name, fields),
+            };
             let mut f = Vec::new();
             for x in &fields {
                 let (k, v) = x.split_once('=').ok_or_else(|| {

@@ -64,6 +64,7 @@ action by name.
 | `"` | the scratchpad's open items: type to search, `⏎` starts one as a task, `Ctrl-X` ticks it, `Ctrl-A` shows ticked ones, `Ctrl-E` opens the editor |
 | `H` | home: who needs you, PRs, recent projects and repositories found; ⏎ starts a task there |
 | `M` | mend: what the health badge (`⚕` in the status bar) found, each with its fix |
+| `C` | settings: every option, searchable, edited in place (`/` search · `m` only what you changed · `u` undo · `r` reset · `n` add · `d` remove · `R` rename · `s` save a repository's settings to the shared file · `!` restart the daemon when a setting needs it) |
 | `.` | what you can do with the focused session (its menu) |
 | `P` | add a project (pick from the repositories ptyro found) |
 | `Z` | everything at once: the sidebar fills the screen with every row open (`⏎` opens one, `Z` or `Esc` goes back) |

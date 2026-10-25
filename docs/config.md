@@ -8,7 +8,16 @@ ptyro reads two kinds of file. Both are optional.
 | `.ptyro.toml` in a repository | the project's (committed) | worktree setup, scripts, ports, prompt snippets, verified-done |
 | `.ptyro.local.toml` beside it | yours (not committed) | overrides for `.ptyro.toml` |
 
-`ptyro config edit` creates a commented `config.toml` and validates it when you save. Changes
+**You don't have to edit these files.** Settings (`C-q C` in the TUI, More → Settings on the
+web) shows every option below with what it does, its default and where its value comes from,
+and changes it in place, keeping the file's comments; `ptyro config list|get|set|unset|add|rm|rename`
+do the same from a script (`--project` for a repository's own file; `--shared` for the committed
+one). Each setting says when a change shows: at once, for sessions started afterwards, or after
+a daemon restart (which the panel offers). A new option isn't done until it has its entry in
+`ptyro-core`'s settings table (SPEC §13.7); a test fails without one.
+
+`ptyro config edit` creates a commented `config.toml` (every ordinary setting, with its default
+and what it does, all commented out) and validates it when you save. Changes
 apply live. `ptyro config check` validates the file, `ptyro config show` prints the effective
 configuration with defaults filled in, and `ptyro config path` prints where it is.
 

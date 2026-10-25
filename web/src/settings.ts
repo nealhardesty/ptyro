@@ -73,7 +73,7 @@ function moreView(): HTMLElement {
     ["Usage", "Your accounts' limits", "#/usage"],
     ["Devices", "Phones and browsers paired with ptyro", "#/devices"],
     ["Profiles", "Accounts agents run under", "#/profiles"],
-    ["Configuration", "Your config file", "#/config"],
+    ["Settings", "Every option, searchable, with what it does", "#/settings"],
     ["Integrations", "Agents that need installing once", "#/integrations"],
     ["Web app", "The server your phone opens: up, its address, on or off", "#/web"],
     ["Daemon", "Version, logs, restart, login service", "#/daemon"],
@@ -283,6 +283,14 @@ function removeProfile(name: string, force = false): void {
 
 const cfg = new Cache<any>(() => host("config.get"));
 let draft: string | null = null;
+/// A line of the file to put the cursor on when the editor opens (the settings panel's "in the file").
+let atLine: number | null = null;
+
+/// Open the config file's editor at `line` (1-based; 0: the top).
+export function editConfigAt(line: number): void {
+  atLine = line > 0 ? line : null;
+  go("#/config");
+}
 
 function configView(): HTMLElement {
   const c = cfg.get("");
@@ -292,6 +300,16 @@ function configView(): HTMLElement {
     ta.value = draft ?? "";
     const status = h("p", { class: "form-err" });
     ta.addEventListener("input", () => { draft = ta.value; status.textContent = ""; });
+    if (atLine) {
+      const line = atLine;
+      atLine = null;
+      requestAnimationFrame(() => {
+        const at = ta.value.split("\n").slice(0, line - 1).reduce((n, l) => n + l.length + 1, 0);
+        ta.focus();
+        ta.setSelectionRange(at, at);
+        ta.scrollTop = Math.max(0, (line - 4) * 19);
+      });
+    }
     const check = async (save: boolean) => {
       status.className = "form-err";
       try {
@@ -307,7 +325,7 @@ function configView(): HTMLElement {
         h("button", { title: tip("config.show"), onclick: async () => { const r = await doHost("config.show"); if (r) textSheet("The effective config", r.text); } }, "Show effective"),
         h("button", { onclick: () => download("config.toml", ta.value) }, "Download")));
   })();
-  return h("div", {}, ui.header("Configuration", "#/more"), h("main", { class: "stack", title: tip("config.edit") }, body));
+  return h("div", {}, ui.header("config.toml", "#/settings"), h("main", { class: "stack", title: tip("config.edit") }, body));
 }
 
 // ── integrations ────────────────────────────────────────────────────────────────────────────

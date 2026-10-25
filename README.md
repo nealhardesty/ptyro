@@ -395,8 +395,26 @@ All after the prefix, `Ctrl-Q` or `Ctrl-Space`. The full list is in [`docs/keys.
 
 ## Configuration
 
-Your config is `~/.config/ptyro/config.toml`; it's optional. `ptyro config edit` creates a
-commented one and validates it when you save. Changes apply live.
+Your config is `~/.config/ptyro/config.toml`; it's optional, and you never have to know its keys:
+**Settings** (`C-q C` in the TUI, More → Settings on the web, or `setting …` in the palette) lists
+every option by section or by search, with what it does, its default and where its value comes
+from, and changes it in place: a switch, a list of choices, a number, a box that says why a value
+is wrong as you type. Your file keeps its comments, a bad value is refused, `u` undoes, and
+changes apply live (a few say they apply to new sessions, or need the daemon restarted, and
+offer it). A repository's own settings (`.ptyro.toml`, or your `.ptyro.local.toml`) are in the
+same place. The same from a script:
+
+```sh
+ptyro config list --changed        # what you've set, and where each comes from
+ptyro config get ui.theme --explain
+ptyro config set ui.sidebar_width 40
+ptyro config set discover.roots ~/work ~/src
+ptyro config set scripts.setup "make deps" --project     # .ptyro.local.toml of this repository
+ptyro config add agents aider command="aider --model sonnet"
+ptyro config unset ui.theme        # back to the default
+```
+
+`ptyro config edit [key]` opens the file itself (at that setting) and validates it when you save.
 
 ```toml
 [ui]

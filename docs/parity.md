@@ -252,10 +252,18 @@ The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every sessio
 | `init` | `first.run`: the first run as a screen (it opens on its own the first time); terminal checks and shell extras are `doctor`'s (UX1.20) | `first.run`: More → Set up ptyro (the Sessions tab offers it with no project): your agents, accounts and repositories (the web app for a phone is `web.on`, More → Web app) |
 | `doctor` | `health` (`M`): the badge's findings, each with its fix; `doctor` runs the full one in a split | `health`: More → Health: every check with its fix (log in, edit the config, restart…) |
 | `tour` | `help.tour` (the TUI steps aside for the tour, then comes back) | `help.tour`: More → Take the tour: a ptyro of its own on a free local port, opened in a new tab with a coach |
-| `config edit` | `config.edit` (validated when you save; changes apply live) | `config.edit`: More → Configuration: an editor, checked as you save, applied at once |
+| `config edit` | `config.edit` (validated when you save; changes apply live); `config.panel` has `e` for the file and `o` to open it at a setting | `config.edit`: More → Settings → Edit config.toml directly: an editor, checked as you save, applied at once; `settings.file` opens it at a setting |
 | `config check` | `config.edit`: saving checks it, and a bad config shows as an error | `config.check`: Check on the editor, without saving |
 | `config show` | `config.show` (in a split) | `config.show`: Show effective on the editor |
 | `config path` | `config.edit` (opens it) | `config.path`: the editor says where the file is |
+| `config list` | `config.panel` (`C`): every setting by section, with its value, default and where it comes from; `m` shows only what you changed; the palette lists each as `setting <key>` | `settings`: More → Settings: sections, with a count of what you changed; `settings.search` finds one by name, what it does or its value |
+| `config get` | `config.panel`: the row's detail says its default, where it comes from and when a change applies | `settings`: each setting says its default, its file and line, and when a change applies |
+| `config set` | `config.panel`: ⏎ or space changes the setting by its kind (a switch, a list of choices, a number with `+`/`-`, a box that says why a value is wrong as you type); the daemon and every open screen pick it up | `settings.set`: a switch, a list, a box checked as you type; `settings.keys` presses keys instead of typing their names; `settings.target` saves a repository's to your file or the shared one |
+| `config unset` | `config.panel`: `r` puts a setting back to its default; `u` undoes the last change | `settings.reset`: Reset on a setting; `settings.undo`: Undo on the message after any change |
+| `config add` | `config.panel`: ⏎ on `+ Add …` in Agents, Themes, Key bindings (press the key), Notifications, Scratchpad and editors; Profiles run `profile.new` | `settings.add`: ＋ Add … under an agent, theme, editor, key binding, notification service, run script or prompt |
+| `config rm` | `config.panel`: `d` on a member, asking first | `settings.remove`: Remove on a member's page, asking first |
+| `config rename` | `config.panel`: `R` on a member | `settings.rename`: Rename on a member's page |
+| `config schema` | waived: for programs that build forms of their own (the web app is one); people use the panel | waived: for programs that build forms of their own (the web app is one) |
 | `completions` | waived: shell setup, for typing commands in a shell | waived: shell setup on the computer, for typing commands there |
 | `shell-init` | `health` (`M`): when it's missing, a finding whose fix adds the line to your rc file | waived: a line in the computer's shell rc file, for its shells |
 | `daemon start` | waived: the TUI starts the daemon when it isn't running | waived: `serve` runs with the daemon; with no daemon there is no web app to ask |

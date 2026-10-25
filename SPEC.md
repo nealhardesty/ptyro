@@ -3445,6 +3445,43 @@ command = "pnpm test"
 review = "Review the diff against origin/main and list risks."
 ```
 
+### 13.7 The settings schema and panel **[built CFG1]**
+
+Every configuration key has one description, in `ptyro-core` (`settings.rs`): its **section**
+(the panel's groups), its **kind** (bool, number with a range, text, path, one of a fixed few,
+one of what exists (themes, agents, editors, actions), several of a fixed few, a list, a command,
+a duration, a size, a time window, a colour, an address, a secret, or a table the panel leaves to
+the file), one line of **help**, when a change **applies** (`live`: the daemon and every open
+screen reload the file; `next`: sessions started from then on; `restart`: when the daemon
+starts), whether it is **advanced**, and, for a notification service, which `type` it is for.
+Defaults are not repeated: they come from `Config::default()`. Named things (agents, profiles,
+themes, editors, key bindings, notification services, and a repository's run scripts and
+prompts) are **collections**: their fields are the entries whose key reads `agents.*.command`.
+
+- **A test fails when a field has no entry** (and when an entry has no field), so an option
+  can't skip the panel. A new option needs its entry in the same change as its field.
+- **Edits are text to text** with `toml_edit` (`settings::set|unset|add|remove|rename`): the
+  file's comments, order and spelling stay, a value replaces in place keeping the comment on its
+  line, and nothing is written unless the whole new file passes the parser the daemon loads with
+  (plus, for your config, the TUI's own check of key bindings and themes). The refusal names the
+  setting and why. `settings::preview` does the same without writing, for forms that check as
+  you type; `settings::restore` puts a file back (undo).
+- **Layers**: your `config.toml` (written private, 0600), and for a repository its
+  `.ptyro.toml` (committed) or `.ptyro.local.toml` (yours; added to `.git/info/exclude`). Agents,
+  profiles, keys and the rest are refused in a repository (§13.1). A value says where it comes
+  from (`default`, your config, `.ptyro.toml`, `.ptyro.local.toml`) and the line.
+- **Surfaces**: `ptyro config list|get|set|unset|add|rm|rename|schema` (the CLI; `--project` for
+  a repository, `--shared` for the committed file); the TUI's panel, `C-q C` and the palette
+  (every setting is a palette entry, `setting ui.theme`); the web's Settings page, over the host
+  calls `settings.schema`, `settings.view`, `settings.apply` (`dry` only checks) and
+  `settings.restore`, which need full scope. The first `config edit` starts from a commented
+  file generated from the table (`settings::starter`).
+- **What applies when** is true to the code: `daemon.log_level` follows the file while the daemon
+  runs (`PTYRO_LOG` wins when set); a `[remote]` change starts a supervised web app again
+  with it; `notifications.callback.*` binds when the daemon starts, so a change says so and
+  offers the restart; scrollback, recording, ports, agents and profiles apply to what starts
+  next.
+
 ### 13.6 The scratchpad **[built NOTE1]**
 
 One persistent notes file for ideas and bugs: plain Markdown, the same in every session and
