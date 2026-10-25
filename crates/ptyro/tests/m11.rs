@@ -398,7 +398,9 @@ fn done_when_a_set_drafts_approves_builds_restores_and_lands() {
         "{body}"
     );
     assert!(!w.git(&root.join("web"), &["show", "--stat", "HEAD"]).contains("node_modules"));
-    // The train: every member merged into its main, in order.
+    // The train: every member merged into its main, in order. (It won't start while an agent is
+    // in a turn: the restore above reached them, and a slow machine is still reading it.)
+    w.settle("tier");
     w.ok(&["cs", "land", "tier", "--yes"]);
     let info = w.show("tier");
     assert_eq!(info["set"]["phase"], "landed", "{info:#}");

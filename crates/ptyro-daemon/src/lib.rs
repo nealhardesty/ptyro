@@ -457,8 +457,11 @@ mod tests {
             }
         };
         let ours = file_id(&path);
-        // Another daemon replaced the file meanwhile: leave its socket alone.
+        // Another daemon replaced the file meanwhile: leave its socket alone. (The old file is
+        // kept linked while that happens: a file system may hand a freed inode number straight
+        // to the next file made, and then "another file" would look like ours.)
         drop(second);
+        std::fs::hard_link(&path, d.path().join("old.sock")).unwrap();
         std::fs::remove_file(&path).unwrap();
         let third = bind(&path).unwrap();
         remove_if_ours(&path, ours);
