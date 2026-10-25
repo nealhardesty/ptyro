@@ -11,7 +11,7 @@ use aes_gcm::{Aes128Gcm, Nonce};
 use hkdf::Hkdf;
 use p256::ecdsa::signature::Signer;
 use p256::ecdsa::{Signature, SigningKey};
-use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::elliptic_curve::sec1::ToSec1Point;
 use p256::{PublicKey, SecretKey};
 use ptyro_core::secret::{b64url, random_bytes, unb64url};
 use ptyro_core::{Error, now_ms};
@@ -47,7 +47,7 @@ impl Vapid {
 
     /// The uncompressed public point, base64url: `applicationServerKey` in the browser.
     pub fn public_b64(&self) -> String {
-        b64url(self.secret.public_key().to_encoded_point(false).as_bytes())
+        b64url(self.secret.public_key().to_sec1_point(false).as_bytes())
     }
 
     /// `Authorization: vapid t=…, k=…` for one endpoint.
@@ -104,7 +104,7 @@ pub fn encrypt(
     salt: &[u8; 16],
 ) -> Result<Vec<u8>, String> {
     let ua = PublicKey::from_sec1_bytes(ua_public).map_err(|_| "bad p256dh key")?;
-    let as_public = as_secret.public_key().to_encoded_point(false);
+    let as_public = as_secret.public_key().to_sec1_point(false);
     let shared = p256::ecdh::diffie_hellman(as_secret.to_nonzero_scalar(), ua.as_affine());
     // IKM = HKDF(auth_secret, ecdh_secret, "WebPush: info" || 0 || ua_public || as_public)
     let mut info = b"WebPush: info\0".to_vec();
@@ -271,7 +271,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            b64url(as_secret.public_key().to_encoded_point(false).as_bytes()),
+            b64url(as_secret.public_key().to_sec1_point(false).as_bytes()),
             "BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8"
         );
         let ua_public = unb64url("BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4").unwrap();

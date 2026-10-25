@@ -586,12 +586,12 @@ fn remote_over_ssh() {
 /// Decrypt a Web Push body the way a browser does (RFC 8291), with the subscription's keys.
 fn decrypt(body: &[u8], ua_secret: &p256::SecretKey, auth: &[u8]) -> Vec<u8> {
     use aes_gcm::aead::{Aead, KeyInit};
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
+    use p256::elliptic_curve::sec1::ToSec1Point;
     let salt = &body[..16];
     let idlen = body[20] as usize;
     let as_public = &body[21..21 + idlen];
     let ct = &body[21 + idlen..];
-    let ua_public = ua_secret.public_key().to_encoded_point(false);
+    let ua_public = ua_secret.public_key().to_sec1_point(false);
     let shared = p256::ecdh::diffie_hellman(
         ua_secret.to_nonzero_scalar(),
         p256::PublicKey::from_sec1_bytes(as_public).unwrap().as_affine(),
@@ -687,8 +687,8 @@ async fn web_push_end_to_end() {
     let endpoint = format!("http://127.0.0.1:{}/push/abc", listener.local_addr().unwrap().port());
     let ua = p256::SecretKey::from_slice(&[7u8; 32]).unwrap();
     let auth = [9u8; 16];
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
-    let p256dh = b64url(ua.public_key().to_encoded_point(false).as_bytes());
+    use p256::elliptic_curve::sec1::ToSec1Point;
+    let p256dh = b64url(ua.public_key().to_sec1_point(false).as_bytes());
     phone.ok(json!({ "t": "push_subscribe", "sub": { "endpoint": endpoint, "p256dh": p256dh, "auth": b64url(&auth) } })).await;
 
     let rx = std::thread::spawn(move || {

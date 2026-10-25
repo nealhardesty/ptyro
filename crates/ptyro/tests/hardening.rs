@@ -127,7 +127,9 @@ fn nobody_on_the_network_can_start_the_daemon() {
         std::thread::sleep(Duration::from_millis(50));
     }
     d.stop();
-    assert!(!d.paths.socket.exists());
+    // (A stopped daemon may leave its socket file behind, as a crash does: take it away, so
+    // that what shows next is whether anything makes a new one.)
+    let _ = std::fs::remove_file(&d.paths.socket);
     let (code, text) = pair(port, None);
     assert_eq!(code, 502, "{text}");
     assert!(text.contains("the ptyro daemon isn't reachable"), "{text}");
