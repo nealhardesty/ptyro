@@ -253,6 +253,13 @@ fn env<'a>(cmd: &'a mut Command, home: &Path) -> &'a mut Command {
     for k in OUTER {
         cmd.env_remove(k);
     }
+    // HOME is the tour's own directory too: it holds a `.gitconfig` with an identity. (The
+    // `GIT_AUTHOR_*` variables below don't reach the pretend agent: ptyro scrubs a session's
+    // git identity variables, as it must, and a machine with no identity of its own, such as a
+    // fresh Linux box, would make the agent's commit fail.)
+    if let Some(dir) = home.parent() {
+        cmd.env("HOME", dir);
+    }
     cmd.env("PTYRO_HOME", home)
         .env("PTYRO_ALLOW_NESTED", "1")
         .env("GIT_AUTHOR_NAME", "ptyro tour")
@@ -267,6 +274,13 @@ fn prepare(exe: &Path, home: &Path, demo: &Path, mine: &str) -> Result<(), Error
     std::fs::create_dir_all(home.join("config")).map_err(|e| io("the tour's directory", e))?;
     std::fs::write(home.join("config").join("config.toml"), config(exe, mine))
         .map_err(|e| io("the tour's config", e))?;
+    if let Some(dir) = home.parent() {
+        std::fs::write(
+            dir.join(".gitconfig"),
+            "[user]\n\tname = ptyro tour\n\temail = tour@ptyro.invalid\n[init]\n\tdefaultBranch = main\n",
+        )
+        .map_err(|e| io("the tour's git identity", e))?;
+    }
     std::fs::create_dir_all(demo).map_err(|e| io("the demo repository", e))?;
     std::fs::write(demo.join("greeting.txt"), GREETING).map_err(|e| io("greeting.txt", e))?;
     std::fs::write(
