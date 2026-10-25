@@ -541,9 +541,10 @@ impl Keymap {
         let order = |a: &str| ACTIONS.iter().position(|s| s.id == a).unwrap_or(usize::MAX);
         let mut out: Vec<(Table, String, Command)> = Vec::new();
         for ((t, label), (_, c)) in &self.bindings {
+            // Only the default digit keys fold: `y` bound to `session.focus 2` is its own line.
             if c.action == "session.focus"
                 && c.arg.as_deref().is_some_and(|a| a.len() == 1)
-                && label.len() == 1
+                && c.arg.as_deref() == Some(label.as_str())
             {
                 if c.arg.as_deref() == Some("1") {
                     out.push((
@@ -562,22 +563,28 @@ impl Keymap {
 
     /// The key bound to `action` in `table` (no prefix shown), if any.
     pub fn key_in(&self, table: Table, action: &str) -> Option<String> {
-        self.bindings
+        self.keys_of(table, action).into_iter().next()
+    }
+
+    /// The keys bound to `action` in `table`, the ones to show first first: a single character
+    /// (`j`) over a named key (`Down`) or a chord (`C-p`), then by name.
+    fn keys_of(&self, table: Table, action: &str) -> Vec<String> {
+        let mut keys: Vec<String> = self
+            .bindings
             .iter()
-            .find(|((t, _), (_, c))| *t == table && c.action == action && c.arg.is_none())
+            .filter(|((t, _), (_, c))| *t == table && c.action == action && c.arg.is_none())
             .map(|((_, label), _)| label.clone())
+            .collect();
+        keys.sort_by(|a, b| {
+            (a.chars().count() > 1, a.len(), a).cmp(&(b.chars().count() > 1, b.len(), b))
+        });
+        keys
     }
 
     /// The key shown next to an action in the palette (prefix table first).
     pub fn key_for(&self, action: &str) -> Option<String> {
         let prefix = key_label(&self.prefix);
-        let find = |t: Table| {
-            self.bindings
-                .iter()
-                .filter(|((table, _), (_, c))| *table == t && c.action == action && c.arg.is_none())
-                .map(|((_, label), _)| label.clone())
-                .next()
-        };
+        let find = |t: Table| self.keys_of(t, action).into_iter().next();
         find(Table::Global).or_else(|| find(Table::Prefix).map(|k| format!("{prefix} {k}")))
     }
 }

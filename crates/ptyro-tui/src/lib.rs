@@ -84,6 +84,8 @@ pub struct Options {
 
 const FRAME: Duration = Duration::from_millis(8);
 const RECONNECT_FOR: Duration = Duration::from_secs(15);
+/// One try at reaching the daemon again (it connects, then asks for the lists): a stall is a failure.
+const RECONNECT_STEP: Duration = Duration::from_secs(5);
 
 /// The size a session started from this terminal should have: the focused pane's, given the
 /// sidebar and status bar the TUI will draw.
@@ -175,8 +177,10 @@ async fn recv<T>(rx: &mut Option<tokio::sync::mpsc::UnboundedReceiver<T>>) -> Op
 }
 
 async fn event_loop(app: &mut App, tui: &mut ratatui::DefaultTerminal) -> Result<AttachEnd> {
-    if let Err(e) = app.connect().await {
-        return Ok(AttachEnd::Lost(e));
+    match tokio::time::timeout(RECONNECT_STEP * 3, app.connect()).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Ok(AttachEnd::Lost(e)),
+        Err(_) => return Ok(AttachEnd::Lost("the daemon did not answer".into())),
     }
     app.restore_view().await;
     app.welcome();
@@ -184,9 +188,20 @@ async fn event_loop(app: &mut App, tui: &mut ratatui::DefaultTerminal) -> Result
     let mut last_draw = Instant::now() - FRAME;
     let mut cursor_shape = None;
     let mut tick = tokio::time::interval(Duration::from_millis(250));
+    // Whether the terminal is capturing the mouse: follows `[ui] mouse` as the file changes.
+    let mut mouse_on = app.config.ui.mouse;
     loop {
         if let Some(end) = app.quit.take() {
             return Ok(end);
+        }
+        if app.config.ui.mouse != mouse_on {
+            mouse_on = app.config.ui.mouse;
+            let mut out = std::io::stdout();
+            if mouse_on {
+                let _ = execute!(out, EnableMouseCapture);
+            } else {
+                let _ = execute!(out, DisableMouseCapture);
+            }
         }
         if app.dirty && last_draw.elapsed() >= FRAME {
             sync_cursor_shape(app, &mut cursor_shape);
@@ -221,7 +236,10 @@ async fn event_loop(app: &mut App, tui: &mut ratatui::DefaultTerminal) -> Result
             _ = tick.tick() => {
                 app.tick();
                 if let Some(since) = app.lost_since {
-                    if app.connect().await.is_ok() {
+                    // A daemon that takes the socket and then stalls must not freeze the screen:
+                    // a reconnect that takes long is given up on and tried again.
+                    let again = tokio::time::timeout(RECONNECT_STEP, app.connect()).await;
+                    if again.is_ok_and(|r| r.is_ok()) {
                         app.toast("reconnected");
                         app.restore_view().await;
                     } else if since.elapsed() > RECONNECT_FOR {

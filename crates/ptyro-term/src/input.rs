@@ -181,7 +181,7 @@ pub fn encode_mouse(ev: &MouseEvent, modes: &TermModes) -> Vec<u8> {
     if ev.mods.has(Mods::CTRL) {
         code += 16;
     }
-    let (x, y) = (ev.x + 1, ev.y + 1);
+    let (x, y) = (ev.x.saturating_add(1), ev.y.saturating_add(1));
     if modes.sgr_mouse {
         let end = if release { 'm' } else { 'M' };
         return format!("\x1b[<{code};{x};{y}{end}").into_bytes();

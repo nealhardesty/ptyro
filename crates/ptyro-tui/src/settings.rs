@@ -135,6 +135,11 @@ impl LineEdit {
 enum Then {
     /// Set this key to the answer.
     Set(String),
+    /// Set a member of a map (a prompt's text) to the answer.
+    SetMember {
+        path: &'static str,
+        name: String,
+    },
     /// A step of making a member: the answer is the next field.
     Make(Make),
     Rename {
@@ -235,6 +240,8 @@ impl Pick {
 struct Undo {
     layer: Layer,
     before: String,
+    /// The file as the change left it: undo only puts back over exactly that.
+    after: String,
     label: String,
 }
 
@@ -380,6 +387,18 @@ impl Panel {
     pub fn refresh(&mut self) {
         self.uview = settings::view(&self.user, &self.lk);
         self.pview = self.project_layer().map(|l| settings::view(&l, &self.lk));
+        // A member opened here that has gone (removed by something else, or renumbered): back out.
+        if let Some((path, name)) = &self.drill {
+            let project = Self::is_project(self.section());
+            let there = self
+                .view(project)
+                .members
+                .iter()
+                .any(|(p, names)| p == path && names.contains(name));
+            if !there {
+                self.drill = None;
+            }
+        }
         self.clamp();
     }
 
@@ -650,6 +669,38 @@ impl Panel {
         }
     }
 
+    /// The file that has `path.name` (a member of a collection), or where one would go: yours for
+    /// user settings; for a repository's, the one of its two files that holds it.
+    fn holder(&self, path: &str, name: &str) -> Layer {
+        let project = settings::collection(path)
+            .and_then(|c| settings::section(c.section))
+            .is_some_and(|s| s.scope == Scope::Project);
+        if !project {
+            return self.user.clone();
+        }
+        let Some(p) = &self.project else { return self.user.clone() };
+        let (local, shared) = (Layer::Local(p.root.clone()), Layer::Shared(p.root.clone()));
+        let has = |l: &Layer| {
+            let text = l.read().unwrap_or_default();
+            settings::members(&text, path).iter().any(|m| m == name)
+                || settings::is_set(&text, &format!("{path}.{name}"))
+        };
+        if has(&local) {
+            local
+        } else if has(&shared) {
+            shared
+        } else {
+            self.project_layer().unwrap_or_else(|| self.user.clone())
+        }
+    }
+
+    /// Take a binding or a prompt out.
+    fn unbind(&mut self, path: &'static str, name: &str) -> Vec<Action> {
+        let layer = self.holder(path, name);
+        let what = if path == "keys" { "unbound" } else { "removed" };
+        self.change(layer, Op::Unset { key: format!("{path}.{name}") }, &format!("{name} {what}"))
+    }
+
     fn extra_for(layer: &Layer) -> fn(&str) -> Result<(), String> {
         if layer.scope() == Scope::User { semantic } else { no_extra }
     }
@@ -662,6 +713,7 @@ impl Panel {
                     self.undo.push(Undo {
                         layer: layer.clone(),
                         before: done.before.clone(),
+                        after: done.after.clone(),
                         label: label.to_owned(),
                     });
                     if self.undo.len() > 50 {
@@ -716,7 +768,7 @@ impl Panel {
             return vec![];
         };
         let extra = Self::extra_for(&u.layer);
-        match settings::restore(&u.layer, &u.before, &extra) {
+        match settings::restore(&u.layer, &u.before, Some(&u.after), &extra) {
             Ok(()) => {
                 self.refresh();
                 self.note = Some((format!("undone: {}", u.label), false));
@@ -888,27 +940,13 @@ impl Panel {
                     let e = self.entry(p, i).clone();
                     return self.reset(&e);
                 }
-                Some(Row::Binding { path, name, .. }) => {
-                    let layer = self.user.clone();
-                    return self.change(
-                        layer,
-                        Op::Unset { key: format!("{path}.{name}") },
-                        &format!("{name} unbound"),
-                    );
-                }
+                Some(Row::Binding { path, name, .. }) => return self.unbind(path, &name),
                 Some(Row::Member { path, name, .. }) => return self.ask_remove(path, &name),
                 _ => {}
             },
             KeyCode::Char { c: 'd' } => match row {
                 Some(Row::Member { path, name, .. }) => return self.ask_remove(path, &name),
-                Some(Row::Binding { path, name, .. }) => {
-                    let layer = self.user.clone();
-                    return self.change(
-                        layer,
-                        Op::Unset { key: format!("{path}.{name}") },
-                        &format!("{name} unbound"),
-                    );
-                }
+                Some(Row::Binding { path, name, .. }) => return self.unbind(path, &name),
                 _ => {}
             },
             KeyCode::Char { c: 'R' } => {
@@ -975,6 +1013,11 @@ impl Panel {
         let e = self.entry(project, i).clone();
         let Kind::Int { min, max } = e.setting.kind else { return vec![] };
         let cur = e.value.as_i64().unwrap_or(min);
+        if cur < min || cur > max {
+            // Set by hand beyond the usual range: + and - don't pull it back.
+            self.note = Some((format!("{} is outside {min} to {max}: type a value", e.key), false));
+            return vec![];
+        }
         let step = if matches!(by, -1 | 1) && (max - min) > 500 { 10 } else { 1 };
         let to = (cur + by * step).clamp(min, max);
         if to == cur {
@@ -996,6 +1039,17 @@ impl Panel {
                 Some(col) => self.add(col),
                 None => vec![],
             },
+            Row::Binding { path: "prompts", name, value } => {
+                self.modal = Some(Modal::Input {
+                    title: format!("prompt {name}: the text a new session starts from"),
+                    hint: String::new(),
+                    edit: LineEdit::with(&value),
+                    secret: false,
+                    then: Then::SetMember { path: "prompts", name },
+                    check: None,
+                });
+                vec![]
+            }
             Row::Binding { path, name, value } => {
                 let items = self.action_items();
                 self.modal = Some(Modal::Pick(Pick {
@@ -1052,7 +1106,9 @@ impl Panel {
             Kind::Bool => {
                 // Off → on → (default, when it can be unset): a plain switch for the rest.
                 let cur = e.value.as_bool();
-                let to = !cur.unwrap_or(false);
+                // Unset, it is what the setting says it falls back to ("on" or "off").
+                let fallback = e.setting.otherwise.starts_with("on");
+                let to = !cur.unwrap_or(fallback);
                 let optional = e.default.is_null();
                 if optional && cur == Some(true) && e.origin != Origin::Default {
                     return self.set(e, "off");
@@ -1400,11 +1456,7 @@ impl Panel {
             Modal::Confirm { text, then } => match key.code {
                 KeyCode::Char { c: 'y' | 'Y' } | KeyCode::Enter => match then {
                     Confirmed::Remove { path, name } => {
-                        let layer =
-                            settings::section(settings::collection(path).map_or("", |c| c.section))
-                                .filter(|s| s.scope == Scope::Project)
-                                .and_then(|_| self.project_layer())
-                                .unwrap_or_else(|| self.user.clone());
+                        let layer = self.holder(path, &name);
                         self.drill = None;
                         let acts = self.change(
                             layer,
@@ -1430,11 +1482,16 @@ impl Panel {
                 let Some(e) = self.find_entry(&key) else { return vec![] };
                 self.set(&e, &answer)
             }
+            Then::SetMember { path, name } => {
+                let layer = self.holder(path, &name);
+                self.change(
+                    layer,
+                    Op::Set { key: format!("{path}.{name}"), value: answer },
+                    &format!("{name} changed"),
+                )
+            }
             Then::Rename { path, from } => {
-                let layer = settings::section(settings::collection(path).map_or("", |c| c.section))
-                    .filter(|s| s.scope == Scope::Project)
-                    .and_then(|_| self.project_layer())
-                    .unwrap_or_else(|| self.user.clone());
+                let layer = self.holder(path, &from);
                 let to = answer.trim().to_owned();
                 let acts = self.change(
                     layer,
@@ -1502,13 +1559,19 @@ impl Panel {
                         .join(","),
                     None => match p.current() {
                         Some((v, _)) => v.clone(),
+                        None if key == "ui.theme" => return vec![Action::Theme(None)],
                         None => return vec![],
                     },
                 };
                 // Nothing chosen from a set is an empty list.
                 let value =
                     if p.on.is_some() && value.is_empty() { "[]".to_owned() } else { value };
-                self.set(&e, &value)
+                let mut acts = self.set(&e, &value);
+                // A theme tried on screen goes back when the change wasn't made.
+                if key == "ui.theme" && acts.is_empty() {
+                    acts.push(Action::Theme(None));
+                }
+                acts
             }
             PickThen::Make(mut make) => {
                 let Some((kind, _)) = p.current().cloned() else { return vec![] };
@@ -1536,7 +1599,7 @@ impl Panel {
         match then {
             CaptureThen::Prefix => {
                 let Some(e) = self.find_entry("ui.prefix") else { return vec![] };
-                self.set(&e, &keys.join(", "))
+                self.set(&e, &serde_json::to_string(&keys).unwrap_or_default())
             }
             CaptureThen::Binding => {
                 let key = keys.first().cloned().unwrap_or_default();
@@ -2108,7 +2171,12 @@ fn detail_lines<'a>(app: &App, p: &Panel, row: &Row, w: usize, d: &mut Vec<Line<
                 format!("{path}.{name}"),
                 fg(app, t.accent).add_modifier(Modifier::BOLD),
             )));
-            d.push(Line::from(Span::styled("⏎ picks what it runs · d unbinds it. A key with global: in front works without the prefix.", dim)));
+            let hint = if *path == "prompts" {
+                "⏎ edits its text · d removes it. A new session starts from it with --prompt @name."
+            } else {
+                "⏎ picks what it runs · d unbinds it. A key with global: in front works without the prefix."
+            };
+            d.push(Line::from(Span::styled(hint, dim)));
         }
         Row::Add { path, .. } => {
             let col = settings::collection(path).expect("collection");

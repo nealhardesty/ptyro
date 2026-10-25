@@ -240,21 +240,47 @@ impl App {
 
     /// A typed answer: the word (none when empty), or `--var` pairs.
     pub(crate) fn cli_answer(&mut self, mut job: CliJob, text: &str, vars: bool) {
-        let t = text.trim();
-        if vars {
-            for kv in t.split(',').map(str::trim).filter(|kv| kv.contains('=')) {
-                job.done.push("--var".into());
-                job.done.push(kv.to_owned());
-            }
-        } else if !t.is_empty() {
-            job.done.push(t.to_owned());
-        }
+        add_answer(&mut job.done, text, vars);
         self.cli_step(job);
+    }
+}
+
+/// Put a typed answer on the command: the word, or `--var` pairs. An empty answer leaves the
+/// word out, and the flag that was to carry it (`-o`, `--from`) with it, so an optional
+/// argument skipped never leaves `-o` dangling.
+fn add_answer(done: &mut Vec<String>, text: &str, vars: bool) {
+    let t = text.trim();
+    if vars {
+        for kv in t.split(',').map(str::trim).filter(|kv| kv.contains('=')) {
+            done.push("--var".into());
+            done.push(kv.to_owned());
+        }
+    } else if !t.is_empty() {
+        done.push(t.to_owned());
+    } else if done.last().is_some_and(|w| w.len() > 1 && w.starts_with('-')) {
+        done.pop();
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_skipped_answer_takes_its_flag_with_it() {
+        let words = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        let mut done = words(&["export", "s", "--format", "text", "-o"]);
+        super::add_answer(&mut done, "  ", false);
+        assert_eq!(done, words(&["export", "s", "--format", "text"]));
+        super::add_answer(&mut done, "out.txt", false);
+        assert_eq!(done.last().map(String::as_str), Some("out.txt"));
+        // A positional that is empty leaves nothing behind either.
+        let mut done = words(&["cs", "new", "x"]);
+        super::add_answer(&mut done, "", false);
+        assert_eq!(done, words(&["cs", "new", "x"]));
+        let mut done = words(&["recipe", "run", "r"]);
+        super::add_answer(&mut done, "a=1, b=2", true);
+        assert_eq!(done, words(&["recipe", "run", "r", "--var", "a=1", "--var", "b=2"]));
+    }
+
     #[test]
     fn every_template_is_an_action_and_every_word_is_known() {
         for (action, words) in super::TEMPLATES {

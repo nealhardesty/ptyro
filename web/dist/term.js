@@ -88,12 +88,28 @@ export class Term {
         this.badge = h("div", { class: "term-badge" });
         this.badge.hidden = true;
         this.el = h("div", { class: "term-box" }, this.wrap, this.input, this.live, this.bar, this.badge);
-        if (store.get("debug", "") || localStorage.getItem("ptyro.debug"))
+        if (store.get("debug", "") || (() => { try {
+            return localStorage.getItem("ptyro.debug");
+        }
+        catch {
+            return null;
+        } })())
             window.ptyroTerm = this;
         this.keybar = this.buildKeybar();
         this.selectionBar();
         this.wire();
         this.setKeyboard();
+    }
+    /// Listeners to take off when this terminal is done with (its session was left for another).
+    offs = [];
+    clip = { sheet: null, text: "", quietUntil: 0 };
+    /// This terminal is no longer shown: release the session and everything it hooked up.
+    dispose() {
+        this.release();
+        for (const off of this.offs.splice(0))
+            off();
+        this.clip.sheet?.close();
+        this.el.remove();
     }
     // ── what is shown ────────────────────────────────────────────────────────────────────────
     view() {
@@ -375,11 +391,20 @@ export class Term {
     /// A program wrote to the clipboard (OSC 52). A page may only write it from a tap, so when
     /// the browser says no, the text is offered with a button that is one.
     fromProgram(text) {
-        void this.toClipboard(text, "Copied by the program").then((ok) => {
-            if (ok)
-                return;
-            const s = sheet("The program copied this", [h("pre", { class: "block" }, text)], [h("button", { class: "primary", onclick: () => { void this.toClipboard(text, "Copied").then(() => s.close()); } }, "Copy")]);
-        });
+        // Anything printed to the terminal can ask (a `cat` of a hostile file), and the clipboard is
+        // what you paste into a shell next: so it asks you, once, and not again for a while if you
+        // say no. Requests that arrive while the question is open only change what it would copy.
+        const c = this.clip;
+        c.text = text;
+        if (c.sheet || Date.now() < c.quietUntil)
+            return;
+        const shown = text.length > 400 ? `${text.slice(0, 400)}…` : text;
+        const s = sheet("A program wants to copy this", [h("p", { class: "intro" }, `${text.length} characters, from the program in this session. It goes to your clipboard only if you copy it.`), h("pre", { class: "block" }, shown)], [
+            h("button", { onclick: () => { c.quietUntil = Date.now() + 30_000; s.close(); } }, "Ignore"),
+            h("button", { class: "primary", onclick: () => { void this.toClipboard(c.text, "Copied").then(() => s.close()); } }, "Copy"),
+        ]);
+        c.sheet = s;
+        s.onClose(() => { c.sheet = null; });
     }
     /// Put text on the clipboard: the old way first, which works inside the tap that asked, then
     /// the clipboard API (which can wait for a permission nobody sees, so it gets a second or two).
@@ -513,12 +538,17 @@ export class Term {
             e.clipboardData?.setData("text/plain", t);
             this.host.toast(`Copied ${t.length} characters`);
         });
-        window.visualViewport?.addEventListener("resize", () => { if (this.typing) {
+        // Listeners on the window and an observer outlive this terminal unless `dispose` takes them off.
+        const onVv = () => { if (this.typing) {
             this.fitViewport();
             this.followCursorNow();
-        } this.resizeSession(); });
-        window.addEventListener("resize", () => { this.schedule(true); this.resizeSession(); });
-        new ResizeObserver(() => { this.schedule(true); this.resizeSession(); }).observe(this.wrap);
+        } this.resizeSession(); };
+        const onWin = () => { this.schedule(true); this.resizeSession(); };
+        window.visualViewport?.addEventListener("resize", onVv);
+        window.addEventListener("resize", onWin);
+        const ro = new ResizeObserver(onWin);
+        ro.observe(this.wrap);
+        this.offs.push(() => { window.visualViewport?.removeEventListener("resize", onVv); window.removeEventListener("resize", onWin); ro.disconnect(); });
         // pointer: select, scroll, click
         const c = this.canvas;
         c.addEventListener("pointerdown", (e) => this.onDown(e));
@@ -666,7 +696,18 @@ export class Term {
                 return;
             t.mode = "select";
             navigator.vibrate?.(12);
-            void this.startSelect({ clientX: t.x, clientY: t.y }, "word").then(() => { this.dragging = true; });
+            // The selection arrives with the scrollback it is in. A finger lifted before then has
+            // already let go: the selection stays, with its Copy bar, and isn't a drag in progress.
+            void this.startSelect({ clientX: t.x, clientY: t.y }, "word").then(() => {
+                if (this.touch === t) {
+                    this.dragging = true;
+                    return;
+                }
+                this.dragging = false;
+                this.schedule();
+                this.updateChrome();
+                this.placeBar();
+            });
         }, 420);
     }
     onMove(e) {

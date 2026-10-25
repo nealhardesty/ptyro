@@ -55,6 +55,9 @@ pub const STRIP_ENV: &[&str] = &[
     "CLAUDE_CODE_SESSION_ID",
     "CLAUDE_EFFORT",
     "CLAUDE_PID",
+    // The IDE bridge of a Claude Code the daemon was started from.
+    "CLAUDE_CODE_SSE_PORT",
+    "ENABLE_IDE_INTEGRATION",
     // Ours, from an enclosing ptyro session: re-set for the new session where they apply.
     "PTYRO_SESSION_ID",
     "PTYRO_PROFILE",
@@ -68,6 +71,10 @@ pub const STRIP_ENV: &[&str] = &[
     "PTYRO_SCRATCHPAD",
 ];
 
+/// Prefixes stripped the same way (`CLAUDE_CODE_IDE_*`). Not `CLAUDE_CODE_*`: a profile's own
+/// `CLAUDE_CODE_OAUTH_TOKEN` and the like are set for the session and must survive.
+pub const STRIP_ENV_PREFIXES: &[&str] = &["CLAUDE_CODE_IDE_"];
+
 /// Variables a client may pass along with a spawn so sessions see the *client's* SSH agent and
 /// display, like tmux's `update-environment` (SPEC §5.1).
 pub const CLIENT_ENV: &[&str] =
@@ -79,8 +86,13 @@ pub fn child_env<'a>(
     base: impl IntoIterator<Item = (OsString, OsString)>,
     extra: impl IntoIterator<Item = (&'a str, &'a OsStr)>,
 ) -> Vec<(OsString, OsString)> {
-    let mut env: Vec<(OsString, OsString)> =
-        base.into_iter().filter(|(k, _)| !STRIP_ENV.iter().any(|s| OsStr::new(s) == k)).collect();
+    let mut env: Vec<(OsString, OsString)> = base
+        .into_iter()
+        .filter(|(k, _)| {
+            !STRIP_ENV.iter().any(|s| OsStr::new(s) == k)
+                && !STRIP_ENV_PREFIXES.iter().any(|p| k.to_string_lossy().starts_with(p))
+        })
+        .collect();
     let mut set = |k: &str, v: &OsStr| {
         env.retain(|(ek, _)| ek != k);
         env.push((k.into(), v.to_owned()));
@@ -236,6 +248,23 @@ pub fn foreground(master: &OwnedFd) -> Option<(String, Option<PathBuf>)> {
 mod tests {
     use super::*;
     use tokio::io::AsyncReadExt;
+
+    #[test]
+    fn a_parent_claudes_ide_bridge_is_not_inherited_but_a_profiles_login_is() {
+        let base = [
+            ("CLAUDE_CODE_SSE_PORT", "1234"),
+            ("ENABLE_IDE_INTEGRATION", "true"),
+            ("CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL", "1"),
+            ("CLAUDE_CODE_OAUTH_TOKEN", "profile-token"),
+            ("PATH", "/usr/bin"),
+        ]
+        .map(|(k, v)| (OsString::from(k), OsString::from(v)));
+        let env = child_env(base, []);
+        let has = |k: &str| env.iter().any(|(ek, _)| ek == k);
+        assert!(!has("CLAUDE_CODE_SSE_PORT") && !has("ENABLE_IDE_INTEGRATION"));
+        assert!(!has("CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL"));
+        assert!(has("CLAUDE_CODE_OAUTH_TOKEN") && has("PATH"));
+    }
 
     #[test]
     fn env_policy_strips_and_sets() {

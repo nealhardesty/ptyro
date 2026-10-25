@@ -182,7 +182,18 @@ struct MarkLimit {
     carry: Vec<u8>,
     /// Where an escape sequence is (its bytes aren't text: they never reset the count).
     esc: Esc,
+    /// Bytes of the OSC/DCS/APC string being read.
+    str_len: usize,
+    /// `str_len` went past [`MAX_STRING`] during this read.
+    over: bool,
 }
+
+/// How much of one OSC/DCS/APC string reaches the parser: vte (with `std`) buffers a whole OSC
+/// payload before dispatching it, so a program that never ends one would grow it without limit.
+/// Past this the rest of the string is dropped, until its terminator, which still passes. It
+/// holds the largest clipboard write ([`MAX_CLIPBOARD`] as base64) and then some, so a payload
+/// cut here is still over that limit and is refused, never delivered short.
+const MAX_STRING: usize = 2 << 20;
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 enum Esc {
@@ -199,26 +210,49 @@ enum Esc {
 }
 
 impl MarkLimit {
-    /// Track an ASCII or control byte; `true` when it is printed text.
+    /// The state after the byte that follows an ESC.
+    fn after_esc(b: u8) -> Esc {
+        match b {
+            b'[' => Esc::Csi,
+            b']' | b'P' | b'_' | b'^' | b'X' => Esc::Str,
+            0x20..=0x2f => Esc::Start,
+            0x1b => Esc::Start,
+            _ => Esc::Ground,
+        }
+    }
+
+    /// Track an ASCII or control byte as vte's parser does; `true` when it is printed text.
     fn ascii(&mut self, b: u8) -> bool {
-        self.esc = match (self.esc, b) {
+        let before = self.esc;
+        self.esc = match (before, b) {
+            // CAN and SUB end whatever is open, wherever it is.
+            (_, 0x18 | 0x1a) => Esc::Ground,
             (Esc::Str, 0x07) | (Esc::StrStop, b'\\') => Esc::Ground,
             (Esc::Str | Esc::StrStop, 0x1b) => Esc::StrStop,
-            (Esc::Str | Esc::StrStop, _) => Esc::Str,
+            (Esc::Str, _) => Esc::Str,
+            // ESC inside a string ends it and starts the next sequence with this byte.
+            (Esc::StrStop, b) => Self::after_esc(b),
             (_, 0x1b) => Esc::Start,
-            (Esc::Start, b'[') => Esc::Csi,
-            (Esc::Start, b']' | b'P' | b'_' | b'^' | b'X') => Esc::Str,
-            (Esc::Start, 0x20..=0x2f) => Esc::Start,
-            (Esc::Start, _) => Esc::Ground,
+            (Esc::Start, b) => Self::after_esc(b),
             (Esc::Csi, 0x40..=0x7e) => Esc::Ground,
             (Esc::Csi, _) => Esc::Csi,
             (Esc::Ground, _) => return (0x20..0x7f).contains(&b),
         };
+        if self.esc == Esc::Str {
+            self.str_len = if before == Esc::Str { self.str_len + 1 } else { 0 };
+            self.over |= self.str_len > MAX_STRING;
+        }
         false
+    }
+
+    /// Whether the byte at `i` of the string being read is dropped (a payload past the cap).
+    fn drops(&self, b: u8) -> bool {
+        self.esc == Esc::Str && self.str_len > MAX_STRING && !matches!(b, 0x07 | 0x18 | 0x1a | 0x1b)
     }
 
     fn filter<'a>(&mut self, bytes: &'a [u8]) -> std::borrow::Cow<'a, [u8]> {
         use std::borrow::Cow;
+        self.over = false;
         // Combining marks start at U+0300 (lead byte 0xCC): ASCII and Latin-1 text only needs
         // the escape state followed.
         if self.carry.is_empty() && !bytes.iter().any(|b| *b >= 0xCC) {
@@ -229,6 +263,7 @@ impl MarkLimit {
             } else {
                 0
             };
+            let saved = (self.run, self.esc, self.str_len);
             for &b in &bytes[from..] {
                 if b < 0x80 && self.ascii(b) {
                     self.run = 0;
@@ -236,7 +271,12 @@ impl MarkLimit {
                     self.run = 0; // a Latin-1 letter: a base character
                 }
             }
-            return Cow::Borrowed(bytes);
+            if !self.over {
+                return Cow::Borrowed(bytes);
+            }
+            // A string went past the cap in this read: go again, dropping what is past it.
+            (self.run, self.esc, self.str_len) = saved;
+            self.over = false;
         }
         let mut input = std::mem::take(&mut self.carry);
         input.extend_from_slice(bytes);
@@ -245,23 +285,34 @@ impl MarkLimit {
         while i < input.len() {
             let b = input[i];
             if b < 0x80 {
+                let drop = self.drops(b) && self.esc == Esc::Str;
                 if self.ascii(b) {
                     self.run = 0;
                 }
-                out.push(b);
+                if !drop {
+                    out.push(b);
+                }
                 i += 1;
                 continue;
             }
-            let len = match b {
+            let mut len = match b {
                 0xC0..=0xDF => 2,
                 0xE0..=0xEF => 3,
                 0xF0..=0xF7 => 4,
                 _ => 1,
             };
-            if i + len > input.len() {
+            // A lead byte not followed by continuation bytes is one invalid byte: what follows
+            // is read on its own (it may be the ESC or the BEL that ends a string).
+            let have = (1..len)
+                .take_while(|k| input.get(i + k).is_some_and(|c| (0x80..=0xBF).contains(c)))
+                .count();
+            if i + len > input.len() && have == input.len() - i - 1 {
                 // Split across reads: finish it next time.
                 self.carry = input[i..].to_vec();
                 break;
+            }
+            if have + 1 < len {
+                len = 1;
             }
             let chunk = &input[i..i + len];
             i += len;
@@ -278,10 +329,30 @@ impl MarkLimit {
                     self.run = 0;
                 }
             }
+            if self.esc == Esc::Str {
+                self.str_len += len;
+                if self.str_len > MAX_STRING {
+                    continue;
+                }
+            }
             out.extend_from_slice(chunk);
         }
         Cow::Owned(out)
     }
+}
+
+/// A title is for a tab or a header: a few hundred bytes of it, never a program's whole output.
+const MAX_TITLE: usize = 512;
+
+fn clip_title(mut t: String) -> String {
+    if t.len() > MAX_TITLE {
+        let mut end = MAX_TITLE;
+        while !t.is_char_boundary(end) {
+            end -= 1;
+        }
+        t.truncate(end);
+    }
+    t
 }
 
 impl AlacrittyEmulator {
@@ -363,6 +434,7 @@ impl AlacrittyEmulator {
                     out.replies.extend_from_slice(fmt(ws).as_bytes());
                 }
                 Event::Title(t) => {
+                    let t = clip_title(t);
                     self.title = Some(t.clone());
                     out.events.push(TermEvent::Title(Some(t)));
                 }
@@ -634,7 +706,9 @@ fn side_channel_osc(body: &[u8]) -> Option<TermEvent> {
             // file://host/path, percent-encoded.
             let path = rest.strip_prefix("file://")?;
             let path = &path[path.find('/')?..];
-            Some(TermEvent::Cwd(percent_decode(path).into()))
+            // The program says where it is; a path that isn't absolute or holds a NUL isn't one.
+            let path = percent_decode(path);
+            (path.starts_with('/') && !path.contains('\0')).then(|| TermEvent::Cwd(path.into()))
         }
         "133" => {
             let mut parts = rest.splitn(2, ';');
@@ -955,6 +1029,70 @@ mod tests {
         assert_eq!(row[1].c, 'x');
         assert_eq!(row[1].zerowidth.as_ref().map(Vec::len), Some(1));
         assert_eq!(row[2].c, 'y');
+    }
+
+    #[test]
+    fn a_cancelled_sequence_does_not_hide_the_marks_that_follow() {
+        // vte ends an OSC at CAN/SUB; so must the limit, or the marks after it are never counted.
+        for end in [0x18u8, 0x1a] {
+            let mut emu = AlacrittyEmulator::new(TermSize::new(10, 2), 10);
+            let mut bytes = b"\x1b]0;t".to_vec();
+            bytes.push(end);
+            bytes.extend_from_slice(format!("e{}", "\u{301}".repeat(1000)).as_bytes());
+            feed(&mut emu, &bytes);
+            let mut row = vec![];
+            emu.row(0, &mut row);
+            assert_eq!(row[0].zerowidth.as_ref().map(Vec::len), Some(MAX_COMBINING), "{end:#x}");
+        }
+        // The same after a CSI cut short by an ASCII byte that follows a lead byte.
+        let mut emu = AlacrittyEmulator::new(TermSize::new(10, 2), 10);
+        let mut bytes = b"\x1b[1;\xc3m".to_vec();
+        bytes.extend_from_slice(format!("e{}", "\u{301}".repeat(1000)).as_bytes());
+        feed(&mut emu, &bytes);
+        let mut row = vec![];
+        emu.row(0, &mut row);
+        let last = row.iter().find(|c| c.c == 'e').expect("an e");
+        assert_eq!(last.zerowidth.as_ref().map(Vec::len), Some(MAX_COMBINING));
+    }
+
+    #[test]
+    fn a_string_that_never_ends_is_not_buffered_without_end() {
+        let mut m = MarkLimit::default();
+        let mut big = b"\x1b]52;c;".to_vec();
+        big.extend(std::iter::repeat_n(b'A', 3_000_000));
+        let out = m.filter(&big).into_owned();
+        assert!(out.len() <= MAX_STRING + 16, "{}", out.len());
+        // Still inside it on the next read, still dropping; the terminator passes.
+        let out = m.filter(&[b'B'; 1000]).into_owned();
+        assert!(out.is_empty());
+        let out = m.filter(b"\x07ok").into_owned();
+        assert_eq!(out, b"\x07ok");
+        // Short ones are untouched, and so is ordinary output.
+        let mut m = MarkLimit::default();
+        assert_eq!(m.filter(b"\x1b]0;title\x07 hi").as_ref(), b"\x1b]0;title\x07 hi");
+        // An OSC 8 hyperlink longer than the cap on a line is cut, the text after it is not.
+        let mut m = MarkLimit::default();
+        let mut link = b"\x1b]8;;".to_vec();
+        link.extend(std::iter::repeat_n(b'x', 3_000_000));
+        link.extend_from_slice(b"\x1b\\text");
+        let out = m.filter(&link).into_owned();
+        assert!(out.ends_with(b"\x1b\\text") && out.len() < MAX_STRING + 100, "{}", out.len());
+    }
+
+    #[test]
+    fn titles_are_clipped_and_osc7_must_be_an_absolute_path() {
+        let mut emu = AlacrittyEmulator::new(TermSize::new(10, 2), 10);
+        feed(&mut emu, format!("\x1b]0;{}\x07", "é".repeat(2000)).as_bytes());
+        assert!(emu.title().unwrap().len() <= 512);
+        assert!(emu.title().unwrap().chars().all(|c| c == 'é'));
+        let out = feed(&mut emu, b"\x1b]7;file://host/tmp/x%20y\x07");
+        assert!(
+            out.events
+                .iter()
+                .any(|e| matches!(e, TermEvent::Cwd(p) if p.as_os_str() == "/tmp/x y"))
+        );
+        let out = feed(&mut emu, b"\x1b]7;file://host/tmp/a%00b\x07");
+        assert!(!out.events.iter().any(|e| matches!(e, TermEvent::Cwd(_))));
     }
 
     #[test]

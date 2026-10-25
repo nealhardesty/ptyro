@@ -187,7 +187,7 @@ impl Daemon {
         for (s, pid) in live {
             let ports = found.get(&pid).cloned().unwrap_or_default();
             let changed = {
-                let mut m = s.meta.lock().expect("meta");
+                let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 let changed = m.ports != ports;
                 m.ports = ports;
                 changed

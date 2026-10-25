@@ -145,6 +145,8 @@ main.stack { padding: 10px; display: grid; gap: 10px; align-content: start; }
 input.search, .field input, .field select, .field textarea { width: 100%; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--line);
   background: var(--panel); color: var(--text); font: inherit; }
 .field textarea { resize: vertical; }
+/* iOS zooms the page on focusing a field under 16px, and stays zoomed */
+@media (hover: none) { input, select, textarea { font-size: max(16px, 1em); } }
 .bar { display: flex; gap: 8px; flex-wrap: wrap; }
 .facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; font-size: 14px; }
 .facts dt { color: var(--muted); } .facts dd { margin: 0; min-width: 0; word-break: break-word; }
@@ -294,7 +296,7 @@ kbd { font: 12px ui-monospace, Menlo, monospace; padding: 1px 6px; border: 1px s
 .banner { margin: 6px 8px; padding: 8px 12px; border: 1px solid var(--warn); border-radius: 8px; font-size: 13px;
   display: flex; gap: 10px; align-items: center; justify-content: space-between; }
 .banner.bad { border-color: var(--bad); }
-.sheet { margin: 6px 8px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+.pad-history { margin: 6px 8px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
   display: grid; gap: 6px; max-height: 40vh; overflow: auto; }
 .snap { display: flex; justify-content: space-between; align-items: center; text-align: left; }
 .snap small { color: var(--muted); }
@@ -366,3 +368,4 @@ a.button { display: inline-block; padding: 7px 12px; border-radius: 8px; border:
 .snack.bad { background: var(--bad); }
 .snack[hidden] { display: none; }
 .snack button { background: #444; color: #fff; border-color: transparent; }
+@media (hover: none) { .set input, .set select, .set textarea, input.search { font-size: 16px; } }

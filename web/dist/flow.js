@@ -16,7 +16,9 @@ export async function withConfirm(req, key) {
             return undefined;
         }
         return new Promise((ok) => {
+            let said = false;
             const s = confirm("Are you sure?", e.message, "Go ahead", async () => {
+                said = true;
                 try {
                     ok(await send(true));
                 }
@@ -25,8 +27,9 @@ export async function withConfirm(req, key) {
                     ok(undefined);
                 }
             }, false);
-            s.el.addEventListener("mousedown", (ev) => { if (ev.target === s.el)
-                ok(undefined); });
+            // Cancel, Esc, ✕ and a tap outside all answer "no" (after the button's own handler had its turn).
+            s.onClose(() => setTimeout(() => { if (!said)
+                ok(undefined); }, 0));
         });
     }
 }
@@ -36,9 +39,10 @@ export async function startSession(spec, then = "open") {
     let r = await withConfirm({ t: "spawn", spec: full }, "spec");
     if (r?.t === "queued") {
         const again = await new Promise((ok) => {
-            const s = confirm("Waiting for review", `${r.unreviewed} worktrees are waiting for you to review them. Start this one anyway?`, "Start anyway", () => ok(true), false);
-            s.el.addEventListener("mousedown", (ev) => { if (ev.target === s.el)
-                ok(false); });
+            let said = false;
+            const s = confirm("Waiting for review", `${r.unreviewed} worktrees are waiting for you to review them. Start this one anyway?`, "Start anyway", () => { said = true; ok(true); }, false);
+            s.onClose(() => setTimeout(() => { if (!said)
+                ok(false); }, 0));
         });
         if (!again)
             return undefined;
@@ -69,11 +73,11 @@ export async function createWorktree(spec) {
                 h("p", { class: "intro" }, `${scripts.project} has scripts that run when a worktree is made (${scripts.names.join(", ")}). They run on your computer, as you. Read them first.`),
                 h("pre", { class: "block" }, scripts.text),
             ], [
-                h("button", { onclick: () => { s.close(); ok(false); } }, "Not now"),
-                h("button", { class: "primary", onclick: () => { s.close(); ok(true); } }, "Trust and run"),
+                h("button", { onclick: () => { ok(false); s.close(); } }, "Not now"),
+                h("button", { class: "primary", onclick: () => { ok(true); s.close(); } }, "Trust and run"),
             ]);
-            s.el.addEventListener("mousedown", (ev) => { if (ev.target === s.el)
-                ok(null); });
+            // Esc, ✕ or a tap outside: do nothing at all (an answer already given wins).
+            s.onClose(() => ok(null));
         });
         if (yes === null)
             return undefined;

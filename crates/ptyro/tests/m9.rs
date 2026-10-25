@@ -1485,6 +1485,27 @@ fn the_web_settings_panel_logic_and_calls_work() {
     }
 }
 
+/// The web app's own logic, with no daemon: its helpers and request timeouts (`kit.mjs`), and that
+/// the service worker's file list, the server's asset list and the built modules agree
+/// (`assets.mjs`). Skipped without Node.
+#[test]
+fn the_web_apps_helpers_and_asset_lists_agree() {
+    if std::process::Command::new("node").arg("--version").output().is_err() {
+        eprintln!("node not found: skipping the web helper checks");
+        return;
+    }
+    for name in ["kit.mjs", "assets.mjs"] {
+        let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web/test").join(name);
+        let out = std::process::Command::new("node").arg(script).output().unwrap();
+        assert!(
+            out.status.success(),
+            "{name}: {}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
 /// The web app's QR encoder (pairing another device from the web): structure a scanner relies
 /// on, in `web/test/qr.mjs`. Skipped without Node.
 #[test]

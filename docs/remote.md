@@ -64,6 +64,14 @@ and its SHA-256, so you can check it's yours:
 Then open the address `ptyro pair` shows. Anyone who could reach `serve` still needs a paired
 device's token; the certificate only keeps it private on the way.
 
+**What trusting the CA means.** A device that trusts `ca.crt` trusts that CA for *every* site, not
+only yours: whoever can read its key (`~/.local/share/ptyro/serve/tls/ca-key.pem`, mode 0600,
+valid ten years) could make a certificate for any site that such a device would accept. So keep
+that directory out of backups and synced folders. To start over, stop `ptyro serve`, delete
+`~/.local/share/ptyro/serve/tls/`, start it again, and trust the new `ca.crt` on each device
+(then remove the old one). Prefer `--tailscale` or your own certificate when you can: neither
+needs a CA on your phone.
+
 **Your own certificate.** `ptyro serve --cert fullchain.pem --key privkey.pem` (or
 `tls_cert` and `tls_key` under `[remote]`) uses a certificate you have, from Let's Encrypt or
 your company's CA, say: phones that trust its issuer need nothing installed, and there's no

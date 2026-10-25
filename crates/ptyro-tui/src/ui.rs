@@ -9,6 +9,7 @@ use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, Focus, Overlay};
 use crate::keymap::{ACTIONS, Table};
@@ -207,7 +208,6 @@ fn draw_coach(app: &App, f: &mut Frame<'_>, area: Rect, tour: &crate::tour::Tour
 
 /// `text` wrapped at spaces into rows of at most `width` columns.
 fn textwrap_simple(text: &str, width: usize) -> Vec<String> {
-    use unicode_width::UnicodeWidthStr;
     let mut rows = vec![String::new()];
     for word in text.split(' ') {
         let row = rows.last_mut().expect("a row");
@@ -436,9 +436,12 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
     let mut hint = if app.sidebar_zoom {
         " everything at once · ⏎ open · p peek · z or Esc back".to_string()
     } else if app.focus == Focus::Sidebar {
-        " ⏎ open/fold · n new · x stop · Esc".to_string()
+        // The keys as they are bound now, not as they were by default.
+        let nav = |a: &str| app.keymap.key_in(Table::Nav, a).unwrap_or_else(|| a.to_owned());
+        format!(" ⏎ open/fold · {} new · {} stop · Esc", nav("session.new"), nav("session.stop"))
     } else {
-        format!(" {} Tab: sidebar · w workspaces", key_label(&app.keymap.prefix))
+        let any = |a: &str| app.keymap.key_for(a).unwrap_or_else(|| a.to_owned());
+        format!(" {} sidebar · {} workspaces", any("focus.toggle"), any("workspace.switch"))
     };
     truncate_width(&mut hint, area.width as usize);
     f.render_widget(Paragraph::new(lines), Rect { height: area.height.saturating_sub(1), ..area });
@@ -977,7 +980,11 @@ fn draw_panes(app: &App, f: &mut Frame<'_>) {
         let session = state.and_then(|p| p.session);
         let info = session.and_then(|id| app.session(id));
         let inner = app.inner(rect);
-        draw_header(app, f, Rect { height: 1, ..rect }, inner, info, pane, focused);
+        // (A pane too short for a header has none: `inner` is all of it, and a header drawn
+        // anyway would sit on the session's first row.)
+        if inner.y > rect.y {
+            draw_header(app, f, Rect { height: 1, ..rect }, inner, info, pane, focused);
+        }
         let Some(id) = session else {
             let lines = empty_pane(app);
             let h = (lines.len() as u16).min(inner.height);
@@ -1015,10 +1022,10 @@ fn draw_panes(app: &App, f: &mut Frame<'_>) {
                 "restart"
             };
             let text = format!(
-                " {} {} — ⏎ {action} · {} x remove ",
+                " {} {} — ⏎ {action} · {} remove ",
                 info.map_or("", |i| i.name.as_str()),
                 state.label(),
-                key_label(&app.keymap.prefix)
+                app.keymap.key_for("session.stop").unwrap_or_else(|| "session.stop".into())
             );
             let bar = Rect { y: inner.bottom().saturating_sub(1), height: 1, ..inner };
             f.render_widget(
@@ -1349,7 +1356,14 @@ fn draw_status(app: &App, f: &mut Frame<'_>, r: Rect) {
     {
         right.push(Span::styled(format!("{h:02}:{m:02} "), bar));
     }
-    let used: u16 = right.iter().map(|s| s.width() as u16).sum();
+    // The left side (the mode, a message, the prefix hint) keeps room to be read: on a narrow
+    // terminal the right side gives up its first, least urgent items (workspace, profile, limits)
+    // and keeps the counts and the clock.
+    let min_left = 24u16.min(r.width / 2);
+    let mut used: u16 = right.iter().map(|s| s.width() as u16).sum();
+    while used > r.width.saturating_sub(min_left) && right.len() > 1 {
+        used -= right.remove(0).width() as u16;
+    }
     f.render_widget(
         Paragraph::new(Line::from(left)).style(bar),
         Rect { width: r.width.saturating_sub(used), ..r },
@@ -1399,6 +1413,13 @@ pub(crate) fn truncate_width(s: &mut String, width: usize) {
     }
 }
 
+/// How wide a line of text can be in a box that asked for `want` columns, `chrome` of them
+/// borders and padding: `boxed` squeezes a box on a narrow terminal, and text wrapped for the
+/// width it asked for would run out of it.
+pub(crate) fn fit_width(area: Rect, want: u16, chrome: u16) -> usize {
+    want.min(area.width.saturating_sub(4)).saturating_sub(chrome).max(8) as usize
+}
+
 pub(crate) fn boxed(area: Rect, w: u16, h: u16) -> Rect {
     let w = w.min(area.width.saturating_sub(4)).max(10.min(area.width));
     let h = h.min(area.height.saturating_sub(2)).max(3.min(area.height));
@@ -1425,9 +1446,13 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
             let r = boxed(area, 88, area.height.saturating_sub(4));
             f.render_widget(Clear, r);
             let lines = help_lines(app, filter);
-            let total = ACTIONS.len();
+            // (Only what has a key is listed; the palette, `C-q :`, runs the rest.)
+            let total = app.keymap.bindings().len();
             let title = if filter.is_empty() {
-                format!("Keys ({total} actions) — type to filter, Esc closes")
+                format!(
+                    "Keys ({total} bindings) — type to filter, Esc closes; the rest of the {} actions are in the palette",
+                    ACTIONS.len()
+                )
             } else {
                 format!("Keys matching {filter:?}")
             };
@@ -1449,11 +1474,17 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                 let item = palette.item(i);
                 let key = item.key.clone().unwrap_or_default();
                 let mut text = format!(" {}  {}", item.label, item.detail);
-                let room = inner_w.saturating_sub(key.chars().count() + 2);
-                if text.chars().count() > room {
-                    text = text.chars().take(room.saturating_sub(1)).collect::<String>() + "…";
+                // Display columns, not characters: a wide name takes two.
+                let room = inner_w.saturating_sub(UnicodeWidthStr::width(key.as_str()) + 2);
+                if UnicodeWidthStr::width(text.as_str()) > room {
+                    truncate_width(&mut text, room.saturating_sub(1));
+                    text.push('…');
                 }
-                let pad = inner_w.saturating_sub(text.chars().count() + key.chars().count() + 1);
+                let pad = inner_w.saturating_sub(
+                    UnicodeWidthStr::width(text.as_str())
+                        + UnicodeWidthStr::width(key.as_str())
+                        + 1,
+                );
                 let style = if i == palette.selected {
                     if t.monochrome {
                         Style::new().add_modifier(Modifier::REVERSED)
@@ -1478,7 +1509,7 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
             }
             f.render_widget(Paragraph::new(lines).block(block(palette.title.clone())), r);
             f.set_cursor_position(Position::new(
-                r.x + 3 + palette.query.chars().count() as u16,
+                r.x + 3 + UnicodeWidthStr::width(palette.query.as_str()) as u16,
                 r.y + 1,
             ));
         }
@@ -1510,14 +1541,21 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                 "Written to .ptyro.local.toml: yours, not committed. Asked only once.",
                 fg(app, t.dim),
             ));
-            lines.push(Line::styled("y use them · n not now (and not again)", fg(app, t.accent)));
+            lines.push(Line::styled(
+                "y use them · n not now (and not again) · Esc cancels",
+                fg(app, t.accent),
+            ));
             let r = boxed(area, 84, lines.len() as u16 + 2);
             f.render_widget(Clear, r);
             f.render_widget(Paragraph::new(lines).block(block("Set up worktrees?".into())), r);
         }
         Overlay::Task { text, name, naming, wizard } => {
-            let (do_rows, do_cursor) =
-                edit_rows(text, "   do ", 72, (area.height / 3).max(1) as usize);
+            let (do_rows, do_cursor) = edit_rows(
+                text,
+                "   do ",
+                fit_width(area, 76, 4),
+                (area.height / 3).max(1) as usize,
+            );
             let do_h = if text.is_empty() { 1 } else { do_rows.len() as u16 };
             let r = boxed(area, 76, do_h + 5);
             f.render_widget(Clear, r);
@@ -1610,7 +1648,8 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
             let bad = fg(app, t.error).add_modifier(Modifier::UNDERLINED);
             let simple = !(kind.is_name() && check.is_err())
                 && !(text.is_empty() && kind.suggestion().is_some());
-            let (rows, cursor) = edit_rows(text, "› ", 66, (area.height / 3).max(1) as usize);
+            let (rows, cursor) =
+                edit_rows(text, "› ", fit_width(area, 70, 4), (area.height / 3).max(1) as usize);
             let rows_h = if simple { rows.len() as u16 } else { 1 };
             let r = boxed(area, 70, rows_h + 3);
             f.render_widget(Clear, r);
@@ -1672,11 +1711,23 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
             f.set_cursor_position(Position::new(r.x + 1 + col, r.y + 1 + row));
         }
         Overlay::Confirm { text, .. } => {
-            let widest = text.lines().map(|l| l.chars().count()).max().unwrap_or(0) as u16;
-            let r = boxed(area, widest + 6, text.lines().count() as u16 + 2);
+            let widest = text.lines().map(UnicodeWidthStr::width).max().unwrap_or(0) as u16;
+            // Wrapped to the box (it is narrower than the text on a small terminal, and the
+            // `[y/N]` at the end must stay in view): as many rows as the wrapped lines take.
+            let inner =
+                widest.saturating_add(6).min(area.width.saturating_sub(4)).saturating_sub(2).max(8)
+                    as usize;
+            let rows: usize =
+                text.lines().map(|l| UnicodeWidthStr::width(l).div_ceil(inner).max(1)).sum();
+            let r = boxed(area, widest + 6, rows as u16 + 2);
             f.render_widget(Clear, r);
             let lines: Vec<Line<'_>> = text.lines().map(|l| Line::raw(l.to_owned())).collect();
-            f.render_widget(Paragraph::new(lines).block(block("Confirm".into())), r);
+            f.render_widget(
+                Paragraph::new(lines)
+                    .wrap(ratatui::widgets::Wrap { trim: false })
+                    .block(block("Confirm".into())),
+                r,
+            );
         }
         Overlay::Inbox { selected, tab } => {
             let r = boxed(area, 100, area.height.saturating_sub(4));
@@ -1690,8 +1741,9 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                 let mark = if e.read_ms.is_none() { "●" } else { " " };
                 let mut text =
                     format!("{mark} {:<12} {:<6} {} — {}", e.kind.label(), when, e.title, e.body);
-                if text.chars().count() > width {
-                    text = text.chars().take(width.saturating_sub(1)).collect::<String>() + "…";
+                if UnicodeWidthStr::width(text.as_str()) > width {
+                    truncate_width(&mut text, width.saturating_sub(1));
+                    text.push('…');
                 }
                 let mut style = match e.kind {
                     ptyro_core::status::AttentionKind::Blocked => fg(app, t.blocked),
@@ -1744,9 +1796,10 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
             for l in &shown[shown.len().saturating_sub(body_h)..] {
                 lines.push(Line::styled(format!(" {l}"), fg(app, t.dim)));
             }
-            let blocked = info
-                .and_then(|s| s.status.as_ref())
-                .is_some_and(|r| r.status == ptyro_core::status::AgentStatus::Blocked);
+            let blocked = info.and_then(|s| s.status.as_ref()).is_some_and(|r| {
+                r.status == ptyro_core::status::AgentStatus::Blocked
+                    && r.kind.as_deref() == Some("permission")
+            });
             let hint = if blocked && reply.is_empty() {
                 "y allow · a always · n deny · type a reply · ⏎ open · Esc".to_owned()
             } else {
@@ -1785,7 +1838,10 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                 boxed(area, 100, (items.len() as u16 * 2 + 4).min(area.height.saturating_sub(2)));
             f.render_widget(Clear, r);
             let mut lines: Vec<Line<'_>> = Vec::new();
-            for (n, it) in items.iter().enumerate() {
+            // Two lines an item: scroll so the selected one is always in view.
+            let per = (r.height.saturating_sub(2) / 2).max(1) as usize;
+            let first = (*selected + 1).saturating_sub(per);
+            for (n, it) in items.iter().enumerate().skip(first).take(per) {
                 let sel = n == *selected;
                 let style =
                     if sel { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new() };
@@ -1871,7 +1927,7 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
             };
             f.render_widget(
                 Paragraph::new(Line::styled(
-                    "y trust (asks again if they change) · n not now · j/k scroll",
+                    "y trust (asks again if they change) · n go on without them · Esc cancel · j/k scroll",
                     fg(app, t.accent),
                 )),
                 foot,

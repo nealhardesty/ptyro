@@ -162,7 +162,10 @@ impl Daemon {
         for s in self.sessions() {
             let b = s.memory_estimate();
             total += b;
-            sessions.push((s.meta.lock().expect("meta").name.clone(), b));
+            sessions.push((
+                s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name.clone(),
+                b,
+            ));
         }
         sessions.sort_by_key(|(_, b)| std::cmp::Reverse(*b));
         Metrics {

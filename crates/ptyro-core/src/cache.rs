@@ -80,6 +80,11 @@ impl ScreenCache {
         } else if keyframe {
             self.reshape(self.size);
         }
+        if keyframe {
+            // A keyframe is the whole screen: marks for rows it doesn't mention are gone too.
+            self.wrapped.fill(false);
+            self.prompts.fill(false);
+        }
         for def in &d.styles {
             self.styles.insert(def.id, def.style);
         }

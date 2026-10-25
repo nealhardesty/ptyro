@@ -5,7 +5,7 @@
 
 import { Screen } from "./screen.js";
 import type { Frame, InboxEntry, Session } from "./screen.js";
-import { conn, token } from "./conn.js";
+import { conn, store, token } from "./conn.js";
 import { Term } from "./term.js";
 import { actions, ago, h, patch, sheet, tipOf, ui, views } from "./kit.js";
 import type { Child } from "./kit.js";
@@ -68,16 +68,15 @@ async function idbSet(key: string, value: string | null): Promise<void> {
 function takePairCode(): void {
   const m = location.hash.match(/^#pair=([A-Za-z0-9_\-]+)(&tour=1)?$/);
   if (m) {
-    // A tour's own ptyro (`ptyro tour` on the web): its pages show the coach.
-    if (m[2]) localStorage.setItem("ptyro.tour", "1");
     history.replaceState(null, "", location.pathname + "#/");
-    void claim(m[1]);
+    // A tour's own ptyro (`ptyro tour` on the web): its pages show the coach, once the code is good.
+    void claim(m[1], !!m[2]);
   }
 }
 /// Why the last pairing attempt failed (shown on the pairing screen).
 let pairNote = "";
 /// Trade the one-time code from `ptyro pair` for this device's token (`POST /api/pair`).
-async function claim(code: string): Promise<void> {
+async function claim(code: string, tour = false): Promise<void> {
   pairNote = "Pairing…";
   render();
   try {
@@ -89,17 +88,22 @@ async function claim(code: string): Promise<void> {
     if (!r.ok) throw new Error(await r.text());
     const { token } = await r.json();
     pairNote = "";
+    if (tour) store.set("ptyro.tour", "1");
     useToken(token);
   } catch (e) {
     pairNote = `Pairing failed: ${(e as Error).message || e}`;
+    // (With a pairing already in place the pairing screen isn't showing: say it here.)
+    if (store.get("ptyro.token")) toast(pairNote);
   }
   render();
 }
 /// Store a device token and sign in with it (also from a tab that was open, unpaired).
 function useToken(t: string): void {
-  localStorage.setItem("ptyro.token", t);
-  void idbSet("token", t);
-  if (conn.state === "rejected" || !conn.ws) conn.connect();
+  store.set("ptyro.token", t);
+  idbSet("token", t).catch(() => {});
+  // A new token may mean new rights (a pairing again for a wider scope): sign in afresh.
+  conn.reset();
+  conn.connect();
 }
 
 const GLYPH: Record<string, string> = { working: "●", blocked: "⚠", idle: "○", done: "✓", errored: "✗", starting: "◌", unknown: "·" };
@@ -287,6 +291,8 @@ function canType(id: string): boolean {
 
 function sessionShell(id: string): Shell {
   if (shell?.id === id) return shell;
+  // The terminal of the session left behind: its listeners and its canvas go.
+  shell?.term.dispose();
   const reply = h("textarea", { rows: 2, enterkeyhint: "send", title: tip("session.reply") });
   reply.value = app.drafts.get(id) ?? "";
   reply.addEventListener("input", () => app.drafts.set(id, reply.value));
@@ -463,6 +469,8 @@ function subscribe(id: string | null): void {
   if (app.viewing) {
     if (shell?.id === app.viewing) shell.term.release();
     conn.send({ t: "unsubscribe", session: app.viewing });
+    // Its screen is no use unsubscribed (a new subscription starts with a keyframe).
+    app.screens.delete(app.viewing);
   }
   app.viewing = id;
   if (id) {
@@ -473,9 +481,16 @@ function subscribe(id: string | null): void {
 
 /// Forget this device's pairing (the token here; `ptyro devices revoke` ends it for good).
 async function forget(): Promise<void> {
-  localStorage.removeItem("ptyro.token");
-  localStorage.removeItem("ptyro.tour");
+  store.remove("ptyro.token");
+  store.remove("ptyro.tour");
+  store.remove("ptyro.padq");
   await idbSet("token", null).catch(() => {});
+  await idbSet("padq", null).catch(() => {});
+  // This device's push subscription goes too: nothing should be sent to a device that forgot.
+  try {
+    const reg = await Promise.race([navigator.serviceWorker.ready, new Promise<undefined>((ok) => setTimeout(() => ok(undefined), 1500))]);
+    await (await reg?.pushManager.getSubscription())?.unsubscribe();
+  } catch { /* no service worker, or none to forget */ }
   location.hash = "#/";
   location.reload();
 }
@@ -592,6 +607,13 @@ conn.listeners.add((msg) => {
 });
 useSessions(() => app.sessions);
 conn.onState = render;
+// Typing while the connection is down goes nowhere: say so (not for every key).
+let droppedAt = 0;
+conn.onDropped = (m) => {
+  if (m.t !== "input" || Date.now() - droppedAt < 4000) return;
+  droppedAt = Date.now();
+  toast("Not sent: offline. It reconnects by itself.");
+};
 ui.render = render;
 ui.toast = toast;
 ui.header = header;

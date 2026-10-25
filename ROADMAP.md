@@ -37,6 +37,7 @@ Conventions:
 | **WEB1** | Web parity | The web client does what the CLI and TUI do, and the parity check covers it (done) |
 | **CFG1** | One configuration panel | Every option editable in the TUI, on the web and with `ptyro config set`, from one schema; new options must join it (done) |
 | **NOTE1** | The scratchpad | One persistent notepad file: a key opens it in your editor, `PTYRO_SCRATCHPAD` finds it, items become tasks, the web edits it (done) |
+| **H2** | Second hardening review | A review of the whole codebase by nine independent readers: ~150 findings verified and fixed, the rest listed here (partly done) |
 | **Backlog** | Later / maybe | Editor, tasks, jj, libghostty, relay, … |
 
 Critical path: **M0 → M1 → M2 → M3 → M4** gives a daily-driver. M5 can interleave with M3/M4.
@@ -1984,6 +1985,75 @@ has its rows. How it differs from the plan above:
   type-checked and unit-tested but not tried on a real phone.
 - **Also:** `ptyro doctor` checks the file and the editor; a lead's `ptyro mcp` has
   `scratchpad_read`, `scratchpad_todo` and `scratchpad_add`.
+
+---
+
+## H2 — Second hardening review (2026-10-24)
+
+Nine reviewers each read a slice of the code (daemon runtime, daemon features, TUI, the rest of
+the TUI with the new settings code, the `ptyro` binary and web server, core/protocol/store/client,
+orchestration/agents/git/pty/term, the web app) and a tenth audited the project as a whole
+(docs against code, tests, CI, release, operations). Each finding was re-read in the code before
+a fix; six fixers then changed what held up, with tests. *Done:* ~150 items, among them: a reply
+over 16 MiB no longer wedges a connection; the client checks who owns the daemon's socket; a YAML
+alias bomb, a symlinked or endless `.ptyro.toml` and symlink escapes through `worktree.share`,
+pair mode, change-set overlays and `record export` are refused; generated cargo/go/compose
+config can't be injected; `{{…}}` in quotes in a recipe's shell command is refused; a resume id
+can't be a flag; an agent can't report or hook for another session; `Compare`, `always` and
+land/push gates need `control`; a late or double gate answer can't revive a finished step;
+`land` waits for CI to exist and merges only the commit it checked; archive stops sessions first
+and keeps small ignored files; a restore never moves a branch backwards; a cross-site page can't
+lock you out of your own web app, bodies time out, connections are capped; the tour's directory
+is private; the settings editor keeps the comments above a key, refuses to undo over a file
+changed since, locks against concurrent writers and never sends a token to a client; the TUI no
+longer switches workspace before the daemon agrees, answers a question with letters instead of
+"deny", and ignores mouse and paste behind full-screen views; the web app's undo can't write
+into another repository, deep links to Settings load, dialogs keep their size, OSC 52 asks first.
+
+*Open, ranked* (each is a task when picked up):
+- [ ] **H2.1 Mutex poisoning cascades.** 500+ `lock().expect(..)` in the daemon: one panic while a
+  lock is held fails every later request touching it. Poison-tolerant locks (or `parking_lot`)
+  everywhere, then a clippy `unwrap_used` ratchet for non-test code. (Session `meta`/`term` are done.)
+- [ ] **H2.2 Release and CI.** `release.yml` doesn't run `deny`, `fuzz-smoke` or the macOS
+  `check`; nothing signs or attests the tarballs (no provenance, no SBOM; macOS binaries aren't
+  notarized, so a downloaded tarball needs `xattr -d com.apple.quarantine`); no MSRV or
+  `aarch64-linux` job; CI calls the cargo-deny action, not `make deny`; `make doc` isn't in
+  CI; CI should fail when Node is missing instead of skipping the web tests.
+- [ ] **H2.3 The binary install's lifecycle.** No `ptyro uninstall`/`reset` (only `make reset`
+  from a checkout), no backup/export of ptyro's state, no `ptyro update`, no Homebrew tap (and no
+  "a newer version exists" notice). Each needs its CLI/TUI/web trio (SPEC §1.3).
+- [ ] **H2.4 Tests that don't exist yet.** A table test of every `Request` variant's scope
+  (exhaustive `match`, so a new one forces a decision); store migration and downgrade fixtures;
+  a handoff image from the previous release; the live-upgrade race with an in-flight launch;
+  `land_pr` and gate-closing; notification sinks failing (timeout, 500, DNS) without blocking the
+  status engine; a web end-to-end (jsdom or Playwright) for new-session, answer and settings.
+  Fuzz targets for the host API, settings edits, imports and the handoff decoder.
+- [ ] **H2.5 Profile isolation is not a boundary.** `HOME` is shared, so a profile with no
+  `git.ssh_key` still reaches the default Keychain credential helper, `~/.ssh` keys, `~/.aws` and
+  the client's `SSH_AUTH_SOCK`. Isolation removes credential-shaped *variables* (many more now),
+  not files. Decide (a managed `HOME`? an empty `GIT_CONFIG_GLOBAL` and no agent socket by
+  default?) or say so loudly in the profile docs. Related: finish M0.10.
+- [ ] **H2.6 The local CA is trusted for every site.** It has no name constraints, because adding
+  them would break phones that already trust it. Documented, with a rotation recipe
+  (docs/remote.md); a constrained CA with an explicit migration is the fix.
+- [ ] **H2.7 Smaller, confirmed, not done:** the first WebSocket message may be 16 MiB before
+  login (the library can't change the limit after the handshake); scrollback memory grows with
+  terminal width × history (cap total cells); a pid can be recycled between a group's death and
+  a late `SIGKILL`; `daemon.lock` is released across the live-upgrade `exec`; the fd-inheritance
+  window of a live upgrade should exclude other spawns; saved views are keyed by workspace name
+  (a rename orphans one); removing a workspace leaves its projects in none; a gate-held change-set
+  job blocks `cs rm` for up to a day; `serve.log` isn't rotated; editors started by the daemon
+  are never `wait`ed; raw `SendBytes` bypasses the typing lock; keystrokes typed during the
+  terminal-colour query at startup are lost; `ptyro-testkit` and its `PTYRO_TEST_*` knobs ship
+  in release builds; the Windows "unsupported" message only shows after dependencies fail (it
+  belongs in `ptyro-core`); a few config values still have no format check (`remote.public_url`,
+  `callback.listen`, a certificate without its key).
+- [ ] **H2.8 Accessibility.** The web terminal is a canvas with no text view for a screen reader
+  (a "text view" mode, like the chat view, would do); the TUI has `NO_COLOR` and a
+  high-contrast theme and nothing else. SPEC doesn't say whether this is a goal.
+- [ ] **H2.9 Unverified on hardware:** Android Gboard backspace in the web terminal and its
+  composition, iOS `visualViewport` panning, push on a real phone, Tailscale mode, a real
+  Claude/Codex/Gemini turn per adapter (see "Left for the owner" above).
 
 ---
 

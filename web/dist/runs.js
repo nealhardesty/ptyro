@@ -3,7 +3,7 @@
 // checks, checkpoints and merge train.
 import { conn } from "./conn.js";
 import { data } from "./data.js";
-import { actions, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, pending, poll, row, section, sheet, textSheet, ui, views } from "./kit.js";
+import { actions, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, openWeb, pending, poll, row, safeDecode, section, sheet, textSheet, ui, views } from "./kit.js";
 import { allSessions } from "./sessions.js";
 const ACTIONS = {
     "runs": "Runs: recipes, fan-outs and leads, with the gates waiting for you",
@@ -48,7 +48,6 @@ const ACTIONS = {
     "set.remove": "Remove the set and its worktrees",
 };
 const tip = actions(ACTIONS);
-const rid = () => Math.random().toString(36).slice(2, 10);
 const asArray = (v) => (Array.isArray(v) ? v : []);
 const GLYPH = { running: "●", waiting: "⚠", succeeded: "✓", failed: "✗", cancelled: "–", pending: "○", skipped: "–", crashed: "✗" };
 const KIND_OF = { succeeded: "ok", failed: "bad", crashed: "bad", waiting: "warn", running: "info" };
@@ -57,7 +56,7 @@ const status = (s) => badge(`${GLYPH[s] ?? "·"} ${s}`, KIND_OF[s] ?? "");
 const gates = new Cache(() => conn.request({ t: "gate_list", all: false }).then((r) => r.gates));
 function resolveGate(g, choice, withNote = false) {
     const send = async (note) => {
-        await conn.request({ t: "gate_resolve", id: g.gate.id, choice, note, key: rid(), by: "web" });
+        await conn.request({ t: "gate_resolve", id: g.gate.id, choice, note, key: `${g.gate.id}:${choice}`, by: "web" });
         ui.toast(`Answered: ${choice}`);
         gates.refresh("");
         runs.refresh("");
@@ -71,7 +70,7 @@ function resolveGate(g, choice, withNote = false) {
     form(`${choice}: add a note`, [{ key: "note", label: "Note", type: "textarea", rows: 3, placeholder: "It goes back with the answer" }], choice, (v) => send(v.note || null));
 }
 function gateCard(g) {
-    return h("section", { class: "prompt gate", title: tip("gate.resolve") }, h("div", {}, h("b", {}, g.gate.ask), " ", h("a", { class: "sub", href: `#/run/${enc(g.run)}` }, `${g.run} · ${g.step}`)), h("div", { class: "actions" }, ...g.gate.options.map((o, i) => h("button", { class: i === 0 ? "allow" : /stop|no|reject|deny|cancel/i.test(o) ? "deny" : "", onclick: () => resolveGate(g, o) }, o)), h("button", { class: "small", onclick: () => menu("Answer with a note", g.gate.options.map((o) => ({ label: o, run: () => resolveGate(g, o, true) }))) }, "+ note")));
+    return h("section", { class: "prompt gate", title: tip("gate.resolve") }, h("div", {}, h("b", {}, g.gate.ask), " ", h("a", { class: "sub", href: `#/run/${enc(g.run)}` }, `${g.run} · ${g.step}`)), h("div", { class: "actions" }, ...g.gate.options.map((o, i) => h("button", { class: /^(stop|no|reject|deny|cancel)/i.test(o) ? "deny" : /^(allow|approve|yes|ok|go|continue|accept)/i.test(o) ? "allow" : "", onclick: () => resolveGate(g, o) }, o)), h("button", { class: "small", onclick: () => menu("Answer with a note", g.gate.options.map((o) => ({ label: o, run: () => resolveGate(g, o, true) }))) }, "+ note")));
 }
 // ── the Runs tab ────────────────────────────────────────────────────────────────────────────
 const runs = new Cache(() => conn.request({ t: "run_list", active: false, limit: 60 }).then((r) => r.runs));
@@ -159,7 +158,7 @@ function forkForm(r, from) {
 }
 const runEvents = new Cache((id) => conn.request({ t: "run_events", id }).then((r) => r.events));
 function runView(rest) {
-    const id = decodeURIComponent(rest);
+    const id = safeDecode(rest);
     if (id.endsWith("/events"))
         return runEventsView(id.slice(0, -7));
     poll("run", () => run.refresh(id));
@@ -219,7 +218,7 @@ function candidateCard(id, c) {
     return h("section", { class: `cand ${c.picked ? "picked" : ""} ${c.discarded ? "dim" : ""}` }, h("div", { class: "cand-head" }, h("b", {}, `#${c.rank} ${c.step}`), " ", c.agent ? badge(c.agent) : null, " ", status(c.status), c.picked ? badge("picked", "ok") : null, c.discarded ? badge("discarded") : null, c.verified === true ? badge("verified", "ok") : c.verified === false ? badge("not verified", "bad") : null), h("div", { class: "sub" }, `${c.files} file${c.files === 1 ? "" : "s"} · +${c.added} −${c.removed} · ${c.hunks} hunks · ${Math.round(c.duration_ms / 1000)}s${c.tests != null ? ` · tests ${c.tests === 0 ? "✓" : `✗ (${c.tests})`}` : ""}${c.broke_tests ? " · broke tests" : ""}${c.judge != null ? ` · judge ${c.judge}/10` : ""}`), c.reasons?.length ? h("div", { class: "sub" }, c.reasons.slice(0, 3).join(" · ")) : null, c.last_message ? h("div", { class: "detail" }, c.last_message) : null, !c.discarded ? bar(h("button", { class: "small primary", title: tip("pick"), onclick: () => pickMenu(id, c) }, "Take"), h("button", { class: "small", title: tip("iterate"), onclick: () => iterateForm(id, c) }, "Follow up"), c.worktree ? h("button", { class: "small", onclick: () => go(`#/wt/${enc(c.worktree)}/changes`) }, "Changes") : null, sessionId ? h("button", { class: "small", onclick: () => go(`#/s/${enc(sessionId)}`) }, "Session") : null, h("button", { class: "small", title: tip("discard"), onclick: () => confirm(`Discard ${c.step}?`, "Its worktree is removed, if that loses nothing.", "Discard", async () => { await ask({ t: "discard", run: id, candidate: c.step, force: false }, "Discarded"); compare.reload(id); }) }, "Discard")) : null);
 }
 function compareView(rest) {
-    const id = decodeURIComponent(rest);
+    const id = safeDecode(rest);
     poll("compare", () => compare.refresh(id), 6000);
     const d = compare.get(id);
     const body = pending(compare, id, "Comparing the candidates…") ?? h("div", { class: "stack-in", title: tip("compare") }, ...d.warnings.map((w) => h("p", { class: "form-err" }, w)), h("div", { class: "sub" }, `against ${d.base ?? "the main branch"}${d.base_tests != null ? ` (its tests ${d.base_tests === 0 ? "pass" : "fail"})` : ""}`), bar(h("button", { title: tip("iterate"), onclick: () => iterateForm(id) }, "Follow up with all"), h("button", { title: tip("discard"), onclick: () => confirm("Discard the rest?", "Every candidate that wasn't picked has its worktree removed, if that loses nothing.", "Discard them", async () => { await ask({ t: "discard", run: id, candidate: null, force: false }, "Discarded"); compare.reload(id); }) }, "Discard the rest"), h("button", { class: "icon", "aria-label": "Run the evidence again", onclick: () => { conn.request({ t: "compare", run: id, refresh: true }).then((r) => { compare.set(id, r.doc); ui.render(); }, (e) => ui.toast(errText(e))); } }, "↻")), ...d.candidates.map((c) => candidateCard(id, c)), d.top_difference ? section("Between the top two", h("pre", { class: "block" }, d.top_difference)) : null);
@@ -317,7 +316,13 @@ function newSet() {
                         const fp = e.code === "untrusted_project" ? e.message.split("--trust ").pop() : null;
                         if (!fp)
                             throw e;
-                        const yes = await new Promise((ok) => confirm("Trust this template?", e.message, "Trust and go on", () => ok(true), false).el.addEventListener("mousedown", () => setTimeout(() => ok(false), 0)));
+                        // Only "Trust and go on" says yes; Cancel, Esc, ✕ and a tap outside all say no.
+                        const yes = await new Promise((ok) => {
+                            let said = false;
+                            const c = confirm("Trust this template?", e.message, "Trust and go on", () => { said = true; ok(true); }, false);
+                            c.onClose(() => setTimeout(() => { if (!said)
+                                ok(false); }, 0));
+                        });
                         if (!yes)
                             return;
                         r = await conn.request({ t: "cs", op: { op: "new", spec: spec(fp.trim()) } });
@@ -356,7 +361,7 @@ function setMemberMenu(i, m) {
                 textSheet(`${m.name}: changes`, v.diff || "No changes."); } },
         { title: tip("set.message"), label: "Message it…", run: () => msgSet(name, m.name) },
         { title: tip("set.overlay"), label: "Wire it to its siblings…", run: () => overlaySet(name, m.name) },
-        m.pr_url && { label: `Pull request #${m.pr}`, run: () => window.open(m.pr_url, "_blank", "noreferrer") },
+        m.pr_url && { label: `Pull request #${m.pr}`, run: () => openWeb(m.pr_url) },
         { title: tip("set.drop"), label: "Take it out of the set", danger: true, run: () => confirm(`Drop ${m.name}?`, "It leaves the set; its worktree stays unless it can't.", "Drop", async () => { await csOp({ op: "drop", set: name, member: m.name, force: false }, "Dropped"); set.reload(name); }) },
     ]);
 }
@@ -411,7 +416,7 @@ function shipMenu(i) {
 }
 function setView(rest) {
     const [raw, sub] = rest.split("/");
-    const name = decodeURIComponent(raw);
+    const name = safeDecode(raw);
     if (sub === "contract")
         return contractView(name);
     if (sub === "log")

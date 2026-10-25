@@ -57,23 +57,94 @@ pub fn discover(checkout: &Path) -> Vec<Imported> {
     out
 }
 
+/// The most a repository's config or another tool's setup file may be: they are small, and what
+/// a cloned repository sends us is not to be read without bounds.
+pub const MAX_FILE: u64 = 1 << 20;
+/// The most a YAML file may be (a YAML parser can expand aliases into a very large tree).
+const MAX_YAML: usize = 256 << 10;
+
+/// Read a file a repository (or you) put in a checkout: never through a symlink a clone brought
+/// (`.ptyro.toml -> /dev/zero`, `.cursor/environment.json -> ~/.aws/credentials`), only a regular
+/// file, at most [`MAX_FILE`], and inside `checkout`. `Ok(None)` when it isn't there. With
+/// `follow_links` (your own `.ptyro.local.toml`, which a dotfiles manager may link) a link is
+/// followed, but what it leads to must still be a regular file.
+pub fn read_repo_file(
+    checkout: &Path,
+    path: &Path,
+    follow_links: bool,
+) -> Result<Option<String>, String> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    let shown = path.strip_prefix(checkout).unwrap_or(path).display().to_string();
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("{shown}: {e}")),
+    };
+    if meta.file_type().is_symlink() && !follow_links {
+        return Err(format!(
+            "{shown} is a symbolic link; ptyro doesn't follow links in a repository's files (copy the file in instead)"
+        ));
+    }
+    if !follow_links {
+        // A directory on the way may be the link (`.github -> ~/somewhere`).
+        let (a, b) = (std::fs::canonicalize(checkout), std::fs::canonicalize(path));
+        if let (Ok(a), Ok(b)) = (a, b)
+            && !b.starts_with(&a)
+        {
+            return Err(format!("{shown} leads outside the repository"));
+        }
+    }
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true);
+    // NONBLOCK so a FIFO can't hold us; it is refused below anyway.
+    opts.custom_flags(opts_flags(follow_links) | rustix::fs::OFlags::NONBLOCK.bits() as i32);
+    let file = opts.open(path).map_err(|e| format!("{shown}: {e}"))?;
+    let meta = file.metadata().map_err(|e| format!("{shown}: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("{shown} is not a regular file"));
+    }
+    if meta.len() > MAX_FILE {
+        return Err(format!("{shown} is larger than {} KiB", MAX_FILE >> 10));
+    }
+    let mut text = String::new();
+    file.take(MAX_FILE + 1)
+        .read_to_string(&mut text)
+        .map_err(|e| format!("{shown}: {e} (it must be UTF-8 text)"))?;
+    if text.len() as u64 > MAX_FILE {
+        return Err(format!("{shown} is larger than {} KiB", MAX_FILE >> 10));
+    }
+    Ok(Some(text))
+}
+
+fn opts_flags(follow_links: bool) -> i32 {
+    if follow_links { 0 } else { rustix::fs::OFlags::NOFOLLOW.bits() as i32 }
+}
+
 fn read(
     checkout: &Path,
     rel: &str,
     parse: impl FnOnce(&str) -> Result<Imported, String>,
 ) -> Option<Imported> {
-    let text = std::fs::read_to_string(checkout.join(rel)).ok()?;
+    let not_imported = |why: String| Imported {
+        tool: tool_of(rel),
+        file: rel.to_owned(),
+        notes: vec![format!("{rel} not imported: {why}")],
+        ..Imported::default()
+    };
+    let text = match read_repo_file(checkout, &checkout.join(rel), false) {
+        Ok(Some(t)) => t,
+        Ok(None) => return None,
+        Err(e) => return Some(not_imported(e)),
+    };
     Some(match parse(&text) {
         Ok(mut i) => {
             i.file = rel.to_owned();
             i
         }
-        Err(e) => Imported {
-            tool: tool_of(rel),
-            file: rel.to_owned(),
-            notes: vec![format!("{rel} not imported: {e}")],
-            ..Imported::default()
-        },
+        // A parser's message can quote the offending line, which may be someone's secret
+        // (a file that isn't what its name says): the first line says where, that's enough.
+        Err(e) => not_imported(e.lines().next().unwrap_or("it can't be read").to_owned()),
     })
 }
 
@@ -95,6 +166,37 @@ fn codex_file(checkout: &Path) -> Option<String> {
         .collect();
     names.sort();
     names.first().map(|n| format!(".codex/environments/{n}"))
+}
+
+/// A word in double quotes in which only the port variable expands (`$PTYRO_PORT`,
+/// `$((PTYRO_PORT + 1))`): everything else in it, `$(…)`, backticks, quotes and backslashes,
+/// stays text, as it was in the file.
+fn dq_port(a: &str) -> String {
+    let mut out = String::from("\"");
+    let mut rest = a;
+    while let Some(c) = rest.chars().next() {
+        if rest.starts_with("$PTYRO_PORT") {
+            out.push_str("$PTYRO_PORT");
+            rest = &rest["$PTYRO_PORT".len()..];
+            continue;
+        }
+        if let Some(r) = rest.strip_prefix("$((PTYRO_PORT + ")
+            && let Some(end) = r.find("))")
+            && r[..end].bytes().all(|b| b.is_ascii_digit())
+        {
+            let n = end + "$((PTYRO_PORT + ".len() + 2;
+            out.push_str(&rest[..n]);
+            rest = &rest[n..];
+            continue;
+        }
+        if matches!(c, '\\' | '"' | '`' | '$') {
+            out.push('\\');
+        }
+        out.push(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    out.push('"');
+    out
 }
 
 /// Quote one word for `sh`.
@@ -223,10 +325,12 @@ fn script_of(lines: &[String], cwd: Option<&str>) -> Option<String> {
 /// it with `{before, after}`; a missing key falls back to `.superset/<key>.sh`.
 pub fn superset(checkout: &Path, text: &str) -> Result<Imported, String> {
     let v: Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
-    let local: Value = std::fs::read_to_string(checkout.join(".superset/config.local.json"))
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or(Value::Null);
+    let local: Value =
+        read_repo_file(checkout, &checkout.join(".superset/config.local.json"), false)
+            .ok()
+            .flatten()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or(Value::Null);
     let mut i = Imported { tool: "superset", ..Imported::default() };
     let list = |v: &Value| -> Option<Vec<String>> {
         v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect())
@@ -365,7 +469,7 @@ pub fn claude_launch(text: &str) -> Result<Imported, String> {
         }
         let words: Vec<String> = argv
             .iter()
-            .map(|a| if a.contains("PTYRO_PORT") { format!("\"{a}\"") } else { sh_word(a) })
+            .map(|a| if a.contains("PTYRO_PORT") { dq_port(a) } else { sh_word(a) })
             .collect();
         let cmd = format!("{}{prefix}{}", env_prefix(&env), words.join(" "));
         let first = i.scripts.run.is_empty();
@@ -405,11 +509,47 @@ pub fn cursor(text: &str) -> Result<Imported, String> {
     Ok(i)
 }
 
+/// Whether a YAML text is safe to hand to the parser: small, no anchors (`&a`) for aliases (`*a`)
+/// to expand (a few lines of nested aliases become billions of nodes), and not nested so deeply
+/// that the parser's recursion could overflow the stack.
+fn yaml_is_plain(text: &str) -> Result<(), String> {
+    if text.len() > MAX_YAML {
+        return Err(format!("larger than {} KiB", MAX_YAML >> 10));
+    }
+    let (mut depth, mut deepest) = (0usize, 0usize);
+    let mut prev = ' ';
+    for c in text.chars() {
+        match c {
+            '[' | '{' => {
+                depth += 1;
+                deepest = deepest.max(depth);
+            }
+            ']' | '}' => depth = depth.saturating_sub(1),
+            // `&name` after a space, a colon or a bracket is an anchor.
+            c if prev == '&' && (c.is_alphanumeric() || c == '_' || c == '-') => {
+                return Err("it uses YAML anchors and aliases, which aren't imported".into());
+            }
+            _ => {}
+        }
+        // (`&` alone, as in `a && b`, is a shell operator, not an anchor: it needs a name after.)
+        prev = if c == '&' && matches!(prev, ' ' | '\t' | '\n' | ':' | '[' | '{' | ',' | '-') {
+            '&'
+        } else {
+            c
+        };
+    }
+    if deepest > 64 {
+        return Err("nested too deeply".into());
+    }
+    Ok(())
+}
+
 /// `copilot-setup-steps.yml`: the `copilot-setup-steps` job's `run:` steps, in order, with
 /// their `working-directory`. `uses:` steps (checkout, setup-node…) and steps with `${{ }}`
 /// expressions can't run outside GitHub Actions, so they're listed in the notes instead.
 pub fn copilot(text: &str) -> Result<Imported, String> {
     use yaml_rust2::{Yaml, YamlLoader};
+    yaml_is_plain(text)?;
     let docs = YamlLoader::load_from_str(text).map_err(|e| e.to_string())?;
     let doc = docs.first().ok_or("empty file")?;
     let job = &doc["jobs"]["copilot-setup-steps"];
@@ -498,3 +638,112 @@ pub fn strip_json_comments(text: &str) -> String {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod quoting {
+    use super::*;
+
+    #[test]
+    fn only_the_port_variable_expands_in_an_imported_argument() {
+        assert_eq!(dq_port("--port=$PTYRO_PORT"), "\"--port=$PTYRO_PORT\"");
+        assert_eq!(dq_port("--p=$((PTYRO_PORT + 2))"), "\"--p=$((PTYRO_PORT + 2))\"");
+        assert_eq!(dq_port("x$(curl evil)$PTYRO_PORT"), "\"x\\$(curl evil)$PTYRO_PORT\"");
+        assert_eq!(dq_port("a\"b`c\\d$PTYRO_PORT"), "\"a\\\"b\\`c\\\\d$PTYRO_PORT\"");
+        // The shell reads back exactly the text.
+        let out = std::process::Command::new("sh")
+            .args([
+                "-c",
+                &format!("PTYRO_PORT=7; printf %s {}", dq_port("q\"`id`$(id)$PTYRO_PORT\\")),
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "q\"`id`$(id)7\\");
+    }
+}
+
+#[cfg(test)]
+mod hostile_files {
+    use super::*;
+    use crate::project::ProjectConfig;
+
+    #[test]
+    fn a_yaml_alias_bomb_is_refused_before_it_is_parsed() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join(".github/workflows");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut y = String::from("a: &a [x]\n");
+        for (n, prev) in ('b'..='j').zip('a'..) {
+            y.push_str(&format!("{n}: &{n} [{}]\n", format!("*{prev},").repeat(9)));
+        }
+        std::fs::write(dir.join("copilot-setup-steps.yml"), y).unwrap();
+        let t = std::time::Instant::now();
+        let found = discover(d.path());
+        assert!(t.elapsed().as_secs() < 2, "refused, not expanded");
+        assert!(found.iter().any(|i| i.notes.iter().any(|n| n.contains("anchors"))), "{found:?}");
+        // Ordinary workflows (shell `&&`, globs) still import.
+        let ok = "jobs:\n  copilot-setup-steps:\n    steps:\n      - run: make a && make b\n      - run: ls *.txt\n";
+        std::fs::write(dir.join("copilot-setup-steps.yml"), ok).unwrap();
+        let found = discover(d.path());
+        assert!(
+            found.iter().any(|i| i
+                .scripts
+                .setup
+                .as_deref()
+                .is_some_and(|s| s.contains("make a && make b"))),
+            "{found:?}"
+        );
+        // And deep nesting is refused.
+        std::fs::write(dir.join("copilot-setup-steps.yml"), format!("x: {}\n", "[".repeat(5000)))
+            .unwrap();
+        assert!(discover(d.path()).iter().any(|i| i.notes.iter().any(|n| n.contains("deeply"))));
+    }
+
+    #[test]
+    fn repository_files_are_never_read_through_links_or_without_bounds() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("repo");
+        std::fs::create_dir_all(root.join(".cursor")).unwrap();
+        let secret = d.path().join("secret.json");
+        std::fs::write(&secret, "{\"AWS_SECRET\": \"hunter2\" nope").unwrap();
+        // A link to a file elsewhere: refused, and nothing it holds is quoted.
+        std::os::unix::fs::symlink(&secret, root.join(".cursor/environment.json")).unwrap();
+        let found = discover(&root);
+        let notes = found.iter().flat_map(|i| i.notes.clone()).collect::<Vec<_>>().join("\n");
+        assert!(notes.contains("symbolic link") && !notes.contains("hunter2"), "{notes}");
+        // A real file that doesn't parse: only where, never the line.
+        std::fs::remove_file(root.join(".cursor/environment.json")).unwrap();
+        std::fs::write(root.join(".cursor/environment.json"), "{\"AWS_SECRET\": \"hunter2\" nope")
+            .unwrap();
+        let notes =
+            discover(&root).iter().flat_map(|i| i.notes.clone()).collect::<Vec<_>>().join("\n");
+        assert!(notes.contains("not imported") && !notes.contains("hunter2"), "{notes}");
+        // The committed config: a link is refused; the local one may be a link to a file.
+        std::fs::write(root.join(".git"), "").unwrap();
+        std::os::unix::fs::symlink("/dev/zero", root.join(".ptyro.toml")).unwrap();
+        let e = ProjectConfig::load(&root, &root).unwrap_err();
+        assert!(e.contains("symbolic link"), "{e}");
+        std::fs::remove_file(root.join(".ptyro.toml")).unwrap();
+        std::fs::write(root.join(".ptyro.toml"), vec![b'#'; (MAX_FILE + 10) as usize]).unwrap();
+        assert!(ProjectConfig::load(&root, &root).unwrap_err().contains("larger than"));
+        std::fs::remove_file(root.join(".ptyro.toml")).unwrap();
+        std::fs::write(d.path().join("mine.toml"), "[project]\nbase = \"origin/dev\"\n").unwrap();
+        std::os::unix::fs::symlink(d.path().join("mine.toml"), root.join(".ptyro.local.toml"))
+            .unwrap();
+        assert_eq!(
+            ProjectConfig::load(&root, &root).unwrap().project.base.as_deref(),
+            Some("origin/dev")
+        );
+        std::fs::remove_file(root.join(".ptyro.local.toml")).unwrap();
+        std::os::unix::fs::symlink("/dev/zero", root.join(".ptyro.local.toml")).unwrap();
+        assert!(ProjectConfig::load(&root, &root).unwrap_err().contains("not a regular file"));
+        // A directory on the way that is a link out of the repository.
+        std::fs::remove_file(root.join(".ptyro.local.toml")).unwrap();
+        let out = d.path().join("elsewhere");
+        std::fs::create_dir_all(out.join("workflows")).unwrap();
+        std::fs::write(out.join("workflows/copilot-setup-steps.yml"), "jobs: {}\n").unwrap();
+        std::os::unix::fs::symlink(&out, root.join(".github")).unwrap();
+        let notes =
+            discover(&root).iter().flat_map(|i| i.notes.clone()).collect::<Vec<_>>().join("\n");
+        assert!(notes.contains("outside the repository"), "{notes}");
+    }
+}

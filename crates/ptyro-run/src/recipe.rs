@@ -722,6 +722,17 @@ impl Recipe {
                     }
                 }
             }
+            // Text run by `sh -c`: a placeholder there must stand bare, so its quoting holds.
+            for (field, text) in &texts {
+                if matches!(
+                    *field,
+                    "run" | "done_when.run" | "loop.until" | "verify.tests" | "verify.repro"
+                ) {
+                    for p in template::shell_problems(text) {
+                        errs.push(format!("{at}: {field}: {p}"));
+                    }
+                }
+            }
             for (field, text) in texts {
                 match template::references(text) {
                     Ok(refs) => {
@@ -1029,6 +1040,19 @@ gate = "both?"
         assert!(e.contains("bad duration"), "{e}");
         let e = errors("name = \"x\"\n[[step]]\nid = \"a\"\nrun = \"true\"\nbogus = 1\n");
         assert!(e.contains("unknown field"), "{e}");
+        // Shell text: a placeholder inside quotes would let a value end them.
+        let e = errors(
+            "name = \"x\"\nvars = { v = { default = \"1\" } }\n[[step]]\nid = \"a\"\nrun = \"echo '{{vars.v}}'\"\n[[step]]\nid = \"b\"\nneeds = [\"a\"]\nrun = \"test \\\"{{steps.a.outputs.x}}\\\"\"\n",
+        );
+        assert!(e.contains("step \"a\": run: {{vars.v}} stands inside quotes"), "{e}");
+        assert!(e.contains("step \"b\": run: {{steps.a.outputs.x}} stands inside quotes"), "{e}");
+        // Bare is what is wanted (and prompts, which no shell reads, may quote freely).
+        assert!(Recipe::parse(
+            "name = \"x\"\nvars = { v = { default = \"1\" } }\n[[step]]\nid = \"a\"\nrun = \"echo {{vars.v}} && true\"\n[[step]]\nid = \"b\"\nneeds = [\"a\"]\nspawn = { agent = \"claude\" }\nprompt = \"say '{{vars.v}}'\"\n"
+        )
+        .unwrap()
+        .validate()
+        .is_ok());
         let e = errors(
             "name = \"x\"\n[[step]]\nid = \"a\"\nrun = \"true\"\n[[step]]\nid = \"b\"\nif = \"steps.a.status == \"\nrun = \"x\"\nneeds=[\"a\"]\n",
         );

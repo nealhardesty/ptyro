@@ -111,6 +111,24 @@ impl Inspector {
     }
 }
 
+/// Whether comment `c` is on this line: a new-file line by its number, a removed line by its
+/// old number and its own text. A comment that remembers the line's code must match it, so a
+/// comment on removed line 10 is not drawn (or deleted) on the added line 10.
+fn comment_on(
+    c: &ReviewComment,
+    path: &str,
+    new: Option<u32>,
+    old: Option<u32>,
+    text: &str,
+) -> bool {
+    c.path == path
+        && match (new, old) {
+            (Some(n), _) => c.line == n && c.code.as_deref().is_none_or(|x| x == text),
+            (None, Some(o)) => c.line == o && c.code.as_deref() == Some(text),
+            (None, None) => false,
+        }
+}
+
 impl App {
     /// `D`: the worktree of the selected sidebar row or the focused session.
     pub fn open_inspector(&mut self) {
@@ -207,9 +225,11 @@ impl App {
             self.inspector_load();
             return;
         }
-        if code == KeyCode::Tab {
+        // Shift-Tab arrives as BackTab on most terminals, and as Tab with Shift on others.
+        if code == KeyCode::Tab || code == KeyCode::BackTab {
             let at = TABS.iter().position(|(t, _)| *t == i.tab).unwrap_or(0);
-            i.tab = TABS[(at + if shift { 4 } else { 1 }) % 5].0;
+            let back = shift || code == KeyCode::BackTab;
+            i.tab = TABS[(at + if back { 4 } else { 1 }) % 5].0;
             self.inspector = Some(i);
             self.inspector_load();
             return;
@@ -357,8 +377,12 @@ impl App {
                 }
             }
             (_, Some('x')) => {
-                if let Some((path, line, _)) = i.at_cursor()
-                    && let Some(c) = i.comments.iter().find(|c| c.path == path && c.line == line)
+                if let Some((path, line, code)) = i.at_cursor()
+                    && let Some(c) = i.comments.iter().find(|c| {
+                        c.path == path
+                            && c.line == line
+                            && c.code.as_deref().is_none_or(|x| x == code)
+                    })
                 {
                     self.request(
                         Pending::InspectComments(i.worktree.clone()),
@@ -702,7 +726,28 @@ fn draw_diff(app: &App, i: &Inspector, f: &mut Frame<'_>, area: Rect) {
     let Some(file) = doc.files.get(i.file) else { return };
     let rs = rows(file);
     let h = hunks.height as usize;
-    let top = i.cursor.saturating_sub(h / 2).min(rs.len().saturating_sub(h));
+    // The lines the rows take: the file's header, a note for a binary file, then each row and
+    // the comments under it. The window is chosen so the cursor's row is always inside it.
+    let room = h.saturating_sub(1 + usize::from(file.binary)).max(1);
+    let height_of = |r: &DRow| -> usize {
+        1 + match *r {
+            DRow::Line(hk, l) => {
+                let d = &file.hunks[hk].lines[l];
+                i.comments
+                    .iter()
+                    .filter(|c| comment_on(c, &file.path, d.new, d.old, &d.text))
+                    .count()
+            }
+            DRow::Hunk(_) => 0,
+        }
+    };
+    let mut top = i.cursor.saturating_sub(room / 2).min(rs.len().saturating_sub(1));
+    while top < i.cursor
+        && rs[top..=i.cursor.min(rs.len().saturating_sub(1))].iter().map(height_of).sum::<usize>()
+            > room
+    {
+        top += 1;
+    }
     let mut out: Vec<Line<'_>> = Vec::new();
     let mut header =
         vec![Span::styled(file.path.clone(), fg(app, t.accent).add_modifier(Modifier::BOLD))];
@@ -715,7 +760,12 @@ fn draw_diff(app: &App, i: &Inspector, f: &mut Frame<'_>, area: Rect) {
         out.push(Line::styled("binary file", fg(app, t.dim)));
     }
     let half = (hunks.width.saturating_sub(1) / 2) as usize;
-    for (n, r) in rs.iter().enumerate().skip(top).take(h.saturating_sub(1)) {
+    let mut used = 0;
+    for (n, r) in rs.iter().enumerate().skip(top) {
+        if used >= room {
+            break;
+        }
+        used += height_of(r);
         let cursor = n == i.cursor;
         let line = match *r {
             DRow::Hunk(hk) => Line::styled(
@@ -765,14 +815,7 @@ fn draw_diff(app: &App, i: &Inspector, f: &mut Frame<'_>, area: Rect) {
         // Comments under their line.
         if let DRow::Line(hk, l) = *r {
             let d = &file.hunks[hk].lines[l];
-            // A line number names a new-file line; a removed line only matches its own text.
-            let here = |c: &&ReviewComment| {
-                c.path == file.path
-                    && match d.new {
-                        Some(n) => c.line == n,
-                        None => d.old == Some(c.line) && c.code.as_deref() == Some(d.text.as_str()),
-                    }
-            };
+            let here = |c: &&ReviewComment| comment_on(c, &file.path, d.new, d.old, &d.text);
             for c in i.comments.iter().filter(here) {
                 out.push(Line::styled(format!("          💬 {}", c.text), fg(app, t.search)));
             }

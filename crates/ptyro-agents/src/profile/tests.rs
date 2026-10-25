@@ -233,3 +233,102 @@ fn shares_link_but_never_overwrite_or_share_credentials() {
     let again = sync_shares_from(&c, "work", &home.join("managed"), defaults);
     assert!(again.contains(&ShareOutcome::AlreadyLinked(work.join("CLAUDE.md"))));
 }
+
+#[test]
+fn isolation_scrubs_credentials_by_shape_but_not_what_the_profile_sets() {
+    let base = [
+        ("HOME", "/home/u"),
+        ("PATH", "/usr/bin"),
+        ("OPENAI_BASE_URL", "https://corp.example/v1"),
+        ("OPENAI_ORG_ID", "org-1"),
+        ("AZURE_OPENAI_ENDPOINT", "https://x"),
+        ("OPENROUTER_API_KEY", "sk-or"),
+        ("XAI_API_KEY", "xai"),
+        ("MISTRAL_API_KEY", "m"),
+        ("GH_HOST", "ghe.example"),
+        ("GH_ENTERPRISE_TOKEN", "t"),
+        ("GITHUB_ENTERPRISE_TOKEN", "t"),
+        ("GIT_ASKPASS", "/bin/pw"),
+        ("SSH_ASKPASS", "/bin/pw"),
+        ("GIT_SSH", "/bin/ssh2"),
+        ("GIT_CONFIG_COUNT", "1"),
+        ("GIT_CONFIG_KEY_0", "credential.helper"),
+        ("GIT_CONFIG_VALUE_0", "store"),
+        ("GIT_CONFIG_PARAMETERS", "'a=b'"),
+        ("AWS_SHARED_CREDENTIALS_FILE", "/home/u/.aws/c"),
+        ("DATABASE_PASSWORD", "pw"),
+        ("SOME_CORP_TOKEN", "t"),
+        ("TERM", "xterm"),
+        ("EDITOR", "vi"),
+    ];
+    let c = config();
+    let work = env_of(&c, "work", &base);
+    for gone in
+        base.iter().map(|(k, _)| *k).filter(|k| !["HOME", "PATH", "TERM", "EDITOR"].contains(k))
+    {
+        assert!(!work.contains_key(gone), "{gone} leaked into an isolated profile");
+    }
+    for kept in ["HOME", "PATH", "TERM", "EDITOR"] {
+        assert!(work.contains_key(kept), "{kept} is not a credential");
+    }
+    // What the profile itself sets comes after the scrub.
+    assert_eq!(work.get("AWS_PROFILE").map(String::as_str), Some("acme"));
+    assert_eq!(
+        work.get("NPM_TOKEN").map(String::as_str),
+        Some("resolved:pass npm:profiles.work.secrets.NPM_TOKEN")
+    );
+    assert_eq!(work.get("GH_TOKEN").map(String::as_str), Some("ghp_literal"));
+    // A profile that opts out of isolation keeps them.
+    let open = Config::parse(&format!("{CONFIG}\n[profiles.default]\nisolate = false\n")).unwrap();
+    assert!(env_of(&open, "default", &base).contains_key("OPENROUTER_API_KEY"));
+}
+
+#[test]
+fn credential_files_are_refused_however_they_are_spelled() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let default_claude = home.join(".claude");
+    std::fs::create_dir_all(&default_claude).unwrap();
+    std::fs::write(default_claude.join(".credentials.json"), "secret").unwrap();
+    let work = home.join("claude-work");
+    std::fs::create_dir_all(&work).unwrap();
+    // (The config parser refuses most of these; the planner must hold on its own.)
+    let mut c =
+        Config::parse(&format!("[profiles.work]\nclaude = \"{}\"\n", work.display())).unwrap();
+    c.profiles.get_mut("work").unwrap().share.insert(
+        "claude".into(),
+        [
+            ".credentials.json/",
+            "./.credentials.json",
+            ".Credentials.JSON",
+            "x/../.credentials.json",
+            "../.claude/.credentials.json",
+            "/etc/passwd",
+            ".",
+            "",
+        ]
+        .map(String::from)
+        .to_vec(),
+    );
+    let defaults = |a: &str| (a == "claude").then(|| default_claude.clone());
+    let out = sync_shares_from(&c, "work", &home.join("managed"), defaults);
+    assert_eq!(out.len(), 8, "{out:?}");
+    assert!(out.iter().all(|o| matches!(o, ShareOutcome::Refused(_))), "{out:?}");
+    assert!(!work.join(".credentials.json").exists());
+    assert_eq!(share_path("a//b/./c").unwrap(), PathBuf::from("a/b/c"));
+}
+
+#[test]
+fn env_files_know_quotes_comments_and_bad_names() {
+    let v = parse_env_file(
+        "A=1 # one\nB=\"x # not a comment\" # but this is\nC='it''s'\nD=\"line\\nbreak \\\"q\\\" \\$HOME\"\n1BAD=x\nBAD KEY=x\nE=http://h/#frag\n=nokey\nexport F=\n",
+    );
+    let m: BTreeMap<_, _> = v.into_iter().collect();
+    assert_eq!(m["A"], "1");
+    assert_eq!(m["B"], "x # not a comment");
+    assert_eq!(m["C"], "it");
+    assert_eq!(m["D"], "line\nbreak \"q\" $HOME");
+    assert_eq!(m["E"], "http://h/#frag");
+    assert_eq!(m["F"], "");
+    assert_eq!(m.len(), 6, "{m:?}");
+}

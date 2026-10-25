@@ -47,14 +47,27 @@ impl Daemon {
         let (me, s) = (Arc::clone(self), Arc::clone(s));
         tokio::spawn(async move {
             // The server comes up a moment after the TUI; reconnect while the session lives.
-            while s.is_live() {
+            // A restart reuses the session id with a new server: this loop belongs to the old one
+            // once the entry says otherwise, and must not tidy away the new one's.
+            let mine = |me: &Daemon| {
+                me.sidecars
+                    .lock()
+                    .expect("sidecars")
+                    .get(&s.id)
+                    .is_some_and(|(p, pw)| *p == port && *pw == password)
+            };
+            while s.is_live() && mine(&me) {
                 if let Err(e) = me.follow_events(&s, port, &password).await {
                     tracing::debug!(session = %s.id, "opencode events: {e}");
                 }
-                me.sidecar_live.lock().expect("sidecar_live").remove(&s.id);
+                if mine(&me) {
+                    me.sidecar_live.lock().expect("sidecar_live").remove(&s.id);
+                }
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
-            me.sidecars.lock().expect("sidecars").remove(&s.id);
+            if mine(&me) {
+                me.sidecars.lock().expect("sidecars").remove(&s.id);
+            }
         });
     }
 

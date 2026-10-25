@@ -162,7 +162,18 @@ impl Daemon {
         if !target.is_file() {
             return Err(Error::missing("binary", target.display()));
         }
-        let versions = accepts(&target).map_err(|e| Error::new(ErrorCode::Unsupported, e))?;
+        // Asking the other binary runs it: off the runtime, and not forever.
+        let probe = target.clone();
+        let versions = tokio::time::timeout(
+            Duration::from_secs(15),
+            tokio::task::spawn_blocking(move || accepts(&probe)),
+        )
+        .await
+        .map_err(|_| {
+            Error::new(ErrorCode::Timeout, format!("{} didn't answer in 15 s", target.display()))
+        })?
+        .map_err(|e| Error::internal(e.to_string()))?
+        .map_err(|e| Error::new(ErrorCode::Unsupported, e))?;
         if !versions.contains(&IMAGE_VERSION) {
             return Err(Error::new(
                 ErrorCode::Unsupported,
@@ -182,14 +193,29 @@ impl Daemon {
         } else {
             running_binary()
         };
-        if let Err(e) = std::fs::copy(&src, &prev) {
-            self.upgrading.store(false, Ordering::SeqCst);
-            return Err(Error::internal(format!(
-                "keeping the current binary as {}: {e}",
-                prev.display()
-            )));
+        // After a rollback this process runs from `daemon.prev` itself: it is already the copy
+        // (and writing over a running executable fails, or worse). Otherwise copy beside it and
+        // rename, so a crash leaves the old rollback binary whole.
+        let already =
+            prev.exists() && std::fs::canonicalize(&src).ok() == std::fs::canonicalize(&prev).ok();
+        if !already {
+            let (from, to_tmp, to_prev) = (src.clone(), prev.with_extension("tmp"), prev.clone());
+            let copied = tokio::task::spawn_blocking(move || {
+                std::fs::copy(&from, &to_tmp).and_then(|_| std::fs::rename(&to_tmp, &to_prev))
+            })
+            .await
+            .map_err(std::io::Error::other)
+            .and_then(|r| r);
+            if let Err(e) = copied {
+                self.upgrading.store(false, Ordering::SeqCst);
+                return Err(Error::internal(format!(
+                    "keeping the current binary as {}: {e}",
+                    prev.display()
+                )));
+            }
         }
-        let to = version_of(&target);
+        let probe = target.clone();
+        let to = tokio::task::spawn_blocking(move || version_of(&probe)).await.unwrap_or_default();
         let sessions = self.sessions().len() as u32;
         let me = Arc::clone(self);
         let target2 = target.clone();
@@ -227,6 +253,25 @@ impl Daemon {
     }
 
     async fn hand_off(self: &Arc<Self>, target: &Path) -> std::io::Result<()> {
+        // A launch that took its claim before `upgrading` was set is still on its way into the
+        // session list (a secret command can take 20 s). Handing off now would snapshot without
+        // it, and its terminal would close on the exec.
+        let wait = std::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let busy = {
+                let c = self.launching.lock().expect("launching");
+                !c.0.is_empty() || !c.1.is_empty()
+            };
+            if !busy {
+                break;
+            }
+            if std::time::Instant::now() >= wait {
+                return Err(std::io::Error::other(
+                    "a session is still starting, so the upgrade waited and then gave up; try again in a moment",
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
         let started = now_ms();
         let _ = self.goodbye.send(Some("the daemon is upgrading; reconnecting".into()));
         // The managed `ptyro serve` (M9.2) goes; the next image starts its own.

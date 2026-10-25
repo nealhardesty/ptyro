@@ -50,6 +50,10 @@ fn color(reply: &[u8], prefix: &[u8]) -> Option<[u8; 3]> {
     let end = rest.iter().position(|&b| b == 0x07 || b == 0x1b).unwrap_or(rest.len());
     let s = std::str::from_utf8(&rest[..end]).ok()?;
     let mut parts = s.split('/').map(|p| {
+        // 1 to 4 hex digits: more is not a colour (and `1 << 32` would overflow).
+        if p.is_empty() || p.len() > 4 || !p.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
         let v = u32::from_str_radix(p, 16).ok()?;
         let max = (1u32 << (4 * p.len() as u32)) - 1;
         Some((v * 255 / max.max(1)) as u8)
@@ -71,5 +75,9 @@ mod tests {
         assert_eq!(color(r, b"\x1b]10;"), Some([255, 128, 0]));
         assert_eq!(color(r, b"\x1b]11;"), Some([0x1c, 0x1c, 0x1c]));
         assert_eq!(color(b"\x1b[?6c", b"\x1b]10;"), None);
+        // Too many digits, a sign, nothing: no colour (and no overflow).
+        assert_eq!(color(b"\x1b]10;rgb:ffffffff/00000000/00000000\x07", b"\x1b]10;"), None);
+        assert_eq!(color(b"\x1b]10;rgb:+fff/0/0\x07", b"\x1b]10;"), None);
+        assert_eq!(color(b"\x1b]10;rgb:/0/0\x07", b"\x1b]10;"), None);
     }
 }

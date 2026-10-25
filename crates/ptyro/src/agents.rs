@@ -340,6 +340,28 @@ async fn agent_home(ctx: &Ctx, profile: Option<&str>) -> Result<PathBuf, Error> 
     Ok(base.join(".gemini"))
 }
 
+/// Antigravity's `hooks.json`: `None` when there is none, the parsed object when there is. A file
+/// that exists and doesn't parse as a JSON object (comments, a trailing comma, an array) is the
+/// user's own: refuse, don't replace it with a guess.
+fn read_hooks(file: &std::path::Path) -> Result<Option<serde_json::Value>, Error> {
+    let text = match std::fs::read_to_string(file) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(Error::internal(format!("{}: {e}", file.display()))),
+    };
+    match serde_json::from_str::<serde_json::Value>(&text) {
+        Ok(v) if v.is_object() => Ok(Some(v)),
+        Ok(_) => Err(Error::invalid(format!(
+            "{} isn't a JSON object, so ptyro won't change it; add its hooks by hand or fix the file",
+            file.display()
+        ))),
+        Err(e) => Err(Error::invalid(format!(
+            "{} isn't plain JSON ({e}), so ptyro won't rewrite it; remove the comments or trailing commas and run this again",
+            file.display()
+        ))),
+    }
+}
+
 pub async fn integrations(ctx: &Ctx, cmd: IntegrationsCmd) -> Result<i32, Error> {
     let ptyro = std::env::current_exe()
         .map_or_else(|_| "ptyro".into(), |p| p.to_string_lossy().into_owned());
@@ -449,10 +471,14 @@ pub async fn integrations(ctx: &Ctx, cmd: IntegrationsCmd) -> Result<i32, Error>
                 let ours: serde_json::Value =
                     serde_json::from_str(&ptyro_agents::others::agy_hooks(&ptyro))
                         .unwrap_or_default();
-                let mut cur: serde_json::Value = std::fs::read_to_string(&file)
-                    .ok()
-                    .and_then(|t| serde_json::from_str(&t).ok())
-                    .unwrap_or_else(|| serde_json::json!({ "hooks": {} }));
+                let mut cur =
+                    read_hooks(&file)?.unwrap_or_else(|| serde_json::json!({ "hooks": {} }));
+                if cur.get("hooks").is_some_and(|h| !h.is_object()) {
+                    return Err(Error::invalid(format!(
+                        "{}: \"hooks\" isn't an object, so ptyro won't change it",
+                        file.display()
+                    )));
+                }
                 // Merge: add our command hooks per event, never replace the user's.
                 for (ev, groups) in ours["hooks"].as_object().cloned().unwrap_or_default() {
                     let list = cur["hooks"][&ev].as_array().cloned().unwrap_or_default();
@@ -465,8 +491,11 @@ pub async fn integrations(ctx: &Ctx, cmd: IntegrationsCmd) -> Result<i32, Error>
                 }
                 std::fs::create_dir_all(file.parent().unwrap_or(&home))
                     .map_err(|e| Error::internal(e.to_string()))?;
-                std::fs::write(&file, serde_json::to_string_pretty(&cur).unwrap_or_default())
-                    .map_err(|e| Error::internal(e.to_string()))?;
+                crate::config::write_atomic(
+                    &file,
+                    &serde_json::to_string_pretty(&cur).unwrap_or_default(),
+                    0o644,
+                )?;
                 eprintln!(
                     "added ptyro's hooks to {} (inert outside ptyro; [unverified] against agy)",
                     file.display()
@@ -482,10 +511,14 @@ pub async fn integrations(ctx: &Ctx, cmd: IntegrationsCmd) -> Result<i32, Error>
                 let config = Config::load(&Config::path(&ctx.paths)).unwrap_or_default();
                 let argv = ptyro_agents::command(&config, "gemini")
                     .unwrap_or_else(|| vec!["gemini".into()]);
-                let status = std::process::Command::new(&argv[0])
-                    .args(&argv[1..])
-                    .args(["extensions", "uninstall", "ptyro"])
-                    .status();
+                let mut cmd = std::process::Command::new(&argv[0]);
+                cmd.args(&argv[1..]).args(["extensions", "uninstall", "ptyro"]);
+                // The profile it was installed under, not the default account's.
+                if profile.is_some() {
+                    let home = agent_home(ctx, profile.as_deref()).await?;
+                    cmd.env("GEMINI_CLI_HOME", home.parent().unwrap_or(&home));
+                }
+                let status = cmd.status();
                 eprintln!(
                     "{}",
                     if status.is_ok_and(|s| s.success()) {
@@ -499,23 +532,50 @@ pub async fn integrations(ctx: &Ctx, cmd: IntegrationsCmd) -> Result<i32, Error>
             "antigravity" | "agy" => {
                 let home = agent_home(ctx, profile.as_deref()).await?;
                 let file = home.join("config/hooks.json");
-                let mut cur: serde_json::Value = std::fs::read_to_string(&file)
-                    .ok()
-                    .and_then(|t| serde_json::from_str(&t).ok())
-                    .unwrap_or_default();
+                // A file that isn't there has nothing of ours; one that doesn't parse is the user's
+                // to look at (it is not rewritten from a guess).
+                let mut cur = read_hooks(&file)?.unwrap_or_default();
                 if let Some(hooks) = cur["hooks"].as_object_mut() {
                     for groups in hooks.values_mut() {
                         if let Some(list) = groups.as_array_mut() {
                             list.retain(|g| !g.to_string().contains("hook antigravity"));
                         }
                     }
-                    std::fs::write(&file, serde_json::to_string_pretty(&cur).unwrap_or_default())
-                        .map_err(|e| Error::internal(e.to_string()))?;
+                    crate::config::write_atomic(
+                        &file,
+                        &serde_json::to_string_pretty(&cur).unwrap_or_default(),
+                        0o644,
+                    )?;
                 }
                 eprintln!("removed ptyro's hooks from {}", file.display());
                 Ok(0)
             }
             other => Err(Error::invalid(format!("nothing to uninstall for {other}"))),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_hooks_file_that_is_not_plain_json_is_never_rewritten() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("hooks.json");
+        assert_eq!(read_hooks(&f).unwrap(), None, "no file: nothing of the user's to lose");
+        std::fs::write(&f, "{ // mine\n \"hooks\": {} }").unwrap();
+        let e = read_hooks(&f).unwrap_err();
+        assert!(
+            e.message.contains("isn't plain JSON") && e.message.contains("hooks.json"),
+            "{}",
+            e.message
+        );
+        std::fs::write(&f, "[1]").unwrap();
+        assert!(read_hooks(&f).unwrap_err().message.contains("isn't a JSON object"));
+        std::fs::write(&f, r#"{"hooks":{"Stop":[]}}"#).unwrap();
+        assert!(read_hooks(&f).unwrap().is_some());
+        // The file the user had is untouched by all of that.
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), r#"{"hooks":{"Stop":[]}}"#);
     }
 }

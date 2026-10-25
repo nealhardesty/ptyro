@@ -53,7 +53,7 @@ impl Daemon {
 
     async fn summarize(self: &Arc<Self>, s: &Arc<Session>) -> Result<(), Error> {
         let (turn, profile) = {
-            let mut m = s.meta.lock().expect("meta");
+            let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if m.summarizing {
                 return Err(Error::conflict(format!("{} is being summarized already", m.name)));
             }
@@ -62,7 +62,7 @@ impl Daemon {
         };
         let made = self.make_summary(s, &profile).await;
         let again = {
-            let mut m = s.meta.lock().expect("meta");
+            let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             m.summarizing = false;
             if let Ok(text) = &made {
                 m.summary = Some(Summary { text: text.clone(), turn, at_ms: now_ms() });
@@ -164,7 +164,12 @@ impl Daemon {
         add("Doing", info.activity.as_ref().map(|a| format!("{a:?}")));
         add(
             "Last reply",
-            s.meta.lock().expect("meta").last_reply.as_deref().map(|r| brief(r, 1500)),
+            s.meta
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .last_reply
+                .as_deref()
+                .map(|r| brief(r, 1500)),
         );
         add(
             "Command",

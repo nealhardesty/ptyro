@@ -455,7 +455,7 @@ fn a_change_goes_to_the_layer_it_names_and_can_be_undone() {
     );
     assert_eq!(user.read().unwrap(), before);
     // The caller's own check can refuse too.
-    let no = |_: &str| Err("nope".to_owned());
+    let no = |t: &str| if t.contains("clock") { Err("nope".to_owned()) } else { Ok(()) };
     assert_eq!(
         apply(&user, &Op::Set { key: "ui.clock".into(), value: "no".into() }, &lk, &no)
             .unwrap_err(),
@@ -475,9 +475,9 @@ fn a_change_goes_to_the_layer_it_names_and_can_be_undone() {
     assert_eq!(d.apply, Apply::Restart);
     assert!(d.notes[0].contains("daemon restart"));
     // Undo puts the file back, as long as it still loads.
-    restore(&user, &d.before, &none).unwrap();
+    restore(&user, &d.before, Some(&d.after), &none).unwrap();
     assert_eq!(user.read().unwrap(), d.before);
-    assert!(restore(&user, "[ui\n", &none).is_err());
+    assert!(restore(&user, "[ui\n", None, &none).is_err());
 
     // A repository's two files: shared is committed, local is kept out of git.
     let repo = dir.path().join("repo");
@@ -536,4 +536,138 @@ fn the_view_opens_even_when_the_config_does_not_load() {
     let j = v.to_json();
     assert!(j["entries"].as_array().unwrap().len() > 80 && j["problem"].is_string());
     assert!(schema_json(Scope::User)["settings"].as_array().unwrap().len() > 100);
+}
+
+#[test]
+fn comments_above_a_key_survive_changing_it_and_renaming_its_table_member() {
+    let lk = Lookups::default();
+    let text = "[ui]\n# how it looks\n# (see the docs)\ntheme = \"ptyro-light\" # now\n\n# my agent\n[agents.a]\n# the program\ncommand = [\"x\"]\n";
+    let out = set(Scope::User, text, "ui.theme", "high-contrast", &lk, &none).unwrap();
+    assert_eq!(out, text.replace("ptyro-light", "high-contrast"));
+    let out = rename(Scope::User, text, "agents", "a", "b", &none).unwrap();
+    assert!(out.contains("# the program\ncommand"), "{out}");
+    let out = set(Scope::User, text, "agents.a.command", "y -z", &lk, &none).unwrap();
+    assert!(out.contains("# the program\ncommand = [\"y\", \"-z\"]"), "{out}");
+}
+
+#[test]
+fn undo_refuses_to_overwrite_a_file_changed_since() {
+    let lk = Lookups::default();
+    let dir = tempfile::tempdir().unwrap();
+    let user = Layer::User(dir.path().join("config.toml"));
+    let d =
+        apply(&user, &Op::Set { key: "ui.clock".into(), value: "no".into() }, &lk, &none).unwrap();
+    // Somebody edits the file by hand.
+    user.write(&format!("{}[daemon]\nscrollback_lines = 10\n", d.after)).unwrap();
+    let e = restore(&user, &d.before, Some(&d.after), &none).unwrap_err();
+    assert!(e.contains("changed since"), "{e}");
+    assert!(user.read().unwrap().contains("scrollback_lines = 10"));
+}
+
+#[test]
+fn a_secret_is_never_sent_to_a_client_as_text() {
+    let lk = Lookups::default();
+    let dir = tempfile::tempdir().unwrap();
+    let user = Layer::User(dir.path().join("config.toml"));
+    apply(
+        &user,
+        &Op::Add {
+            path: "notifications.sinks".into(),
+            name: String::new(),
+            fields: vec![
+                ("type".into(), "slack".into()),
+                ("webhook".into(), "https://hooks.example/SECRET".into()),
+            ],
+        },
+        &lk,
+        &none,
+    )
+    .unwrap();
+    let v = view(&user, &lk).to_json();
+    let text = v.to_string();
+    assert!(!text.contains("SECRET"), "{text}");
+    let e = v["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["key"] == "notifications.sinks.0.webhook")
+        .unwrap();
+    assert_eq!(e["value"], "••••");
+}
+
+#[test]
+fn a_partial_override_in_one_repository_file_is_fine_when_the_other_completes_it() {
+    let lk = Lookups::default();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    std::fs::write(root.join(".ptyro.toml"), "[scripts.run.dev]\ncommand = \"make dev\"\n")
+        .unwrap();
+    let local = Layer::Local(root.clone());
+    let d = apply(
+        &local,
+        &Op::Set { key: "scripts.run.dev.default".into(), value: "yes".into() },
+        &lk,
+        &none,
+    )
+    .unwrap();
+    assert!(d.changed && d.after.contains("default = true"), "{}", d.after);
+    // A local file that nothing completes is refused.
+    let e = apply(
+        &local,
+        &Op::Set { key: "scripts.run.other.default".into(), value: "yes".into() },
+        &lk,
+        &none,
+    )
+    .unwrap_err();
+    assert!(e.contains("command"), "{e}");
+}
+
+#[test]
+fn names_with_dots_builtin_theme_names_and_credential_accounts_are_refused() {
+    let lk = Lookups::default();
+    assert!(
+        add(Scope::User, "", "agents", "my.agent", &[], &lk, &none).unwrap_err().contains("dot")
+    );
+    assert!(
+        add(Scope::User, "", "themes", "ptyro-light", &[], &lk, &none)
+            .unwrap_err()
+            .contains("taken")
+    );
+    let text = "[profiles.w]\nclaude = { dir = \"~/c\", token = \"t\" }\n";
+    assert!(
+        unset(Scope::User, text, "profiles.w.claude", &none).unwrap_err().contains("credentials")
+    );
+    assert!(
+        set(Scope::User, text, "profiles.w.claude", "~/d", &lk, &none)
+            .unwrap_err()
+            .contains("credentials")
+    );
+}
+
+#[test]
+fn a_config_with_one_bad_binding_can_still_have_other_settings_changed() {
+    let lk = Lookups::default();
+    let dir = tempfile::tempdir().unwrap();
+    let user = Layer::User(dir.path().join("config.toml"));
+    user.write("[keys]\n\"x\" = \"nope\"\n").unwrap();
+    // The caller's check fails on the file as it is; it blames nothing new.
+    let fails = |t: &str| if t.contains("nope") { Err("bad binding".to_owned()) } else { Ok(()) };
+    let d =
+        apply(&user, &Op::Set { key: "ui.clock".into(), value: "no".into() }, &lk, &fails).unwrap();
+    assert!(d.changed);
+    // But a fresh problem is still refused.
+    user.write("").unwrap();
+    assert!(
+        apply(
+            &user,
+            &Op::Add {
+                path: "keys".into(),
+                name: "y".into(),
+                fields: vec![("value".into(), "nope".into())]
+            },
+            &lk,
+            &fails
+        )
+        .is_err()
+    );
 }

@@ -83,7 +83,23 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
             let text = str_of(a, "text")?;
             let notes = crate::config::check_text(text, &config_path)
                 .map_err(|e| Error::new(ErrorCode::Invalid, e))?;
-            crate::config::write_private(&config_path, text)?;
+            // `base`: the text the editor was opened on. If the file is something else now (the
+            // settings page, a command or an editor changed it), saving would silently undo that.
+            let base = a["base"].as_str();
+            crate::config::with_lock(&config_path, || {
+                if let Some(base) = base {
+                    let now = std::fs::read_to_string(&config_path).unwrap_or_default();
+                    let was =
+                        if now.is_empty() { ptyro_core::settings::starter() } else { now.clone() };
+                    if now != base && was != base {
+                        return Err(Error::new(
+                            ErrorCode::Conflict,
+                            "the file changed since you opened it: reload it to see what changed, then save again",
+                        ));
+                    }
+                }
+                crate::config::write_private(&config_path, text)
+            })?;
             if let Ok(c) = ctx.connect(false).await {
                 let _ = c.request(ptyro_protocol::Request::ReloadConfig).await;
             }
@@ -118,16 +134,24 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
             let done = ptyro_core::settings::apply(&layer, &op, &lk, &extra)
                 .map_err(|e| Error::new(ErrorCode::Invalid, e))?;
             Ok(json!({
-                "changed": done.changed, "notes": done.notes, "apply": done.apply, "before": done.before,
+                "changed": done.changed, "notes": done.notes, "apply": done.apply,
+                "before": done.before, "after": done.after,
                 "view": settings_view(&layer),
             }))
         }
         "settings.restore" => {
             let layer = settings_layer(ctx, a).await?;
             let user = layer.scope() == ptyro_core::settings::Scope::User;
-            ptyro_core::settings::restore(&layer, str_of(a, "text")?, &|t: &str| {
-                if user { crate::config::semantic(t) } else { Ok(()) }
-            })
+            // `expect`: the file as the change left it. If it is something else now, putting the
+            // old text back would undo what happened since.
+            ptyro_core::settings::restore(
+                &layer,
+                str_of(a, "text")?,
+                a["expect"].as_str(),
+                &|t: &str| {
+                    if user { crate::config::semantic(t) } else { Ok(()) }
+                },
+            )
             .map_err(|e| Error::new(ErrorCode::Invalid, e))?;
             Ok(json!({ "view": settings_view(&layer) }))
         }
@@ -248,18 +272,12 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
                     Error::new(ErrorCode::NotFound, format!("no daemon logs in {}", dir.display()))
                 })?;
             let lines = a["lines"].as_u64().unwrap_or(200).min(5000) as usize;
-            let text = std::fs::read_to_string(newest.path()).unwrap_or_default();
-            let all: Vec<&str> = text.lines().collect();
-            Ok(
-                json!({ "path": newest.path(), "text": all[all.len().saturating_sub(lines)..].join("\n") }),
-            )
+            Ok(json!({ "path": newest.path(), "text": tail(&newest.path(), lines) }))
         }
         "web.logs" => {
             let path = ctx.paths.state.join("serve.log");
             let lines = a["lines"].as_u64().unwrap_or(200).min(5000) as usize;
-            let text = std::fs::read_to_string(&path).unwrap_or_default();
-            let all: Vec<&str> = text.lines().collect();
-            Ok(json!({ "path": path, "text": all[all.len().saturating_sub(lines)..].join("\n") }))
+            Ok(json!({ "path": path, "text": tail(&path, lines) }))
         }
         // These end the connection that asked: they go on by themselves, and the app reconnects.
         "daemon.restart" => {
@@ -277,6 +295,27 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
 
         other => Err(Error::invalid(format!("no such operation: {other}"))),
     }
+}
+
+/// The last `lines` lines of a log, read from its end: a log can be large, and asking for its
+/// tail must not read it all.
+fn tail(path: &std::path::Path, lines: usize) -> String {
+    use std::io::{Read, Seek, SeekFrom};
+    const WINDOW: u64 = 1 << 20;
+    let Ok(mut f) = std::fs::File::open(path) else { return String::new() };
+    let len = f.metadata().map_or(0, |m| m.len());
+    let start = len.saturating_sub(WINDOW);
+    let mut buf = Vec::new();
+    if f.seek(SeekFrom::Start(start)).is_err() || f.take(WINDOW).read_to_end(&mut buf).is_err() {
+        return String::new();
+    }
+    let text = String::from_utf8_lossy(&buf);
+    let mut all: Vec<&str> = text.lines().collect();
+    // Started mid-line: the first piece is not a whole line.
+    if start > 0 && !all.is_empty() {
+        all.remove(0);
+    }
+    all[all.len().saturating_sub(lines)..].join("\n")
 }
 
 /// The file a settings call is about: yours, or with `project` the repository's (`shared` for the
@@ -335,4 +374,24 @@ fn settings_op(v: &Value) -> Result<ptyro_core::settings::Op, Error> {
         Some("rename") => Op::Rename { path: s("path")?, from: s("from")?, to: s("to")? },
         other => return Err(Error::invalid(format!("no such change: {other:?}"))),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_logs_tail_is_read_from_its_end() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("serve.log");
+        assert_eq!(tail(&p, 3), "");
+        std::fs::write(&p, "one\ntwo\nthree\nfour\n").unwrap();
+        assert_eq!(tail(&p, 2), "three\nfour");
+        assert_eq!(tail(&p, 99), "one\ntwo\nthree\nfour");
+        // A log much bigger than the window: the last lines, whole, without reading the rest.
+        let big: String = (0..300_000).map(|i| format!("line {i}\n")).collect();
+        std::fs::write(&p, &big).unwrap();
+        assert!(big.len() > 2 << 20);
+        assert_eq!(tail(&p, 2), "line 299998\nline 299999");
+    }
 }

@@ -68,6 +68,8 @@ const fn c(value: &'static str, help: &'static str) -> Choice {
 #[serde(rename_all = "snake_case")]
 pub enum Source {
     Themes,
+    /// The themes built in: what a theme of yours can start from.
+    BuiltinThemes,
     Agents,
     Editors,
     /// Every TUI action (`session.next`…), for key bindings.
@@ -376,7 +378,7 @@ pub const COLLECTIONS: &[Collection] = &[
         section: "themes",
         noun: "theme",
         layout: Layout::Tables,
-        reserved: &[],
+        reserved: &["ptyro-dark", "ptyro-light", "high-contrast"],
         starter: &[("base", "ptyro-dark")],
     },
     Collection {
@@ -634,7 +636,7 @@ pub const SETTINGS: &[Setting] = &[
     s("daemon.scrollback_lines", "daemon", int(0, 1_000_000), "Lines of history kept in memory for each session.").new_only(),
     s("daemon.frame_interval_ms", "daemon", int(1, 1000), "The most often a screen is sent to a client, in milliseconds.").adv().new_only(),
     s("daemon.log_level", "daemon", pick(LOG_LEVEL), "How much the daemon writes to its log. (PTYRO_LOG, when set, wins.)"),
-    s("daemon.restore_on_start", "daemon", pick(RESTORE), "What agent sessions of an earlier daemon become when it starts."),
+    s("daemon.restore_on_start", "daemon", pick(RESTORE), "What agent sessions of an earlier daemon become when it starts.").restart(),
     s("recorder.enabled", "daemon", Kind::Bool, "Record every session's output with timing, for replay and deep scrollback.").new_only(),
     s("recorder.max_bytes", "daemon", Kind::Bytes, "The most one session's recording takes, like 16MiB (at least 256KiB).").new_only(),
     s("clipboard.allow_write", "daemon", Kind::Bool, "Let programs in sessions copy to your clipboard (OSC 52). Reads are always refused."),
@@ -666,7 +668,7 @@ pub const SETTINGS: &[Setting] = &[
     s("agents.*.record", "agents", Kind::Bool, "Record this agent's sessions.").new_only().or("on"),
     s("agents.*.protocol", "agents", pick(PROTOCOLS), "The structured protocol `ptyro new --structured` speaks with it.").new_only().or("from its adapter"),
     // ── Themes ──
-    s("themes.*.base", "themes", dynamic(Source::Themes), "A built-in theme to start from.").or("none"),
+    s("themes.*.base", "themes", dynamic(Source::BuiltinThemes), "A built-in theme to start from.").or("none"),
     s("themes.*.accent", "themes", Kind::Color, "Highlights and the focused item."),
     s("themes.*.text", "themes", Kind::Color, "Ordinary text."),
     s("themes.*.dim", "themes", Kind::Color, "Quiet text."),
@@ -720,7 +722,7 @@ pub const SETTINGS: &[Setting] = &[
     s("verify.auto", "project", Kind::Bool, "Verify every agent session in this project's worktrees, not only recipe steps."),
     // ── Project scripts ──
     s("scripts.setup", "scripts", Kind::Script, "Runs once in each new worktree.").or("none"),
-    s("scripts.archive", "scripts", Kind::Script, "Runs when a worktree is archived.").or("none"),
+    s("scripts.archive", "scripts", Kind::Script, "Runs before a worktree is archived or removed.").or("none"),
     s("scripts.after_turn", "scripts", Kind::Script, "Runs after each agent turn, like a linter.").or("none"),
     s("scripts.run_mode", "scripts", pick(RUN_MODE), "Whether run scripts of different worktrees may run together."),
     s("scripts.run.*.command", "scripts", Kind::Script, "What it runs; $PTYRO_PORT is this worktree's port."),
@@ -807,6 +809,9 @@ pub fn options(
     let named =
         |names: Vec<String>, what: &str| names.into_iter().map(|n| (n, what.to_owned())).collect();
     match source {
+        Source::BuiltinThemes => {
+            lk.themes.iter().map(|t| (t.clone(), "built in".to_owned())).collect()
+        }
         Source::Themes => {
             let mut v: Vec<(String, String)> =
                 lk.themes.iter().map(|t| (t.clone(), "built in".to_owned())).collect();
@@ -1150,7 +1155,9 @@ fn put(
 ) -> Result<(), String> {
     let name = seg.last().ok_or("no key")?.clone();
     let table = container_mut(doc.as_table_mut(), seg, true)?.ok_or("no such place in the file")?;
-    match table.get(&name) {
+    // Change the value where it stands: the key keeps the comment lines above it, and the value
+    // the one after it. (`insert` over an existing key would drop the lines above.)
+    match table.get_mut(&name) {
         Some(old) if old.is_table() || old.is_array_of_tables() => {
             return Err(format!("{} is a table in the file; edit it there", seg.join(".")));
         }
@@ -1158,10 +1165,12 @@ fn put(
             if let Some(v) = old.as_value() {
                 *value.decor_mut() = v.decor().clone();
             }
+            *old = toml_edit::Item::Value(value);
         }
-        None => {}
+        None => {
+            table.insert(&name, toml_edit::Item::Value(value));
+        }
     }
-    table.insert(&name, toml_edit::Item::Value(value));
     Ok(())
 }
 
@@ -1171,8 +1180,13 @@ pub fn check(scope: Scope, text: &str) -> Result<(), String> {
         Scope::User => Config::parse(text).map(|_| ()),
         Scope::Project => {
             let t = ProjectConfig::parse(text)?;
-            let c: ProjectConfig =
-                t.try_into().map_err(|e: toml::de::Error| e.to_string().trim_end().to_owned())?;
+            // One layer may be a partial override of the other (`[scripts.run.dev] default = true`):
+            // what is missing is checked on the merge (`settings::ops`).
+            let c: ProjectConfig = match t.try_into::<ProjectConfig>() {
+                Ok(c) => c,
+                Err(e) if e.to_string().contains("missing field") => return Ok(()),
+                Err(e) => return Err(e.to_string().trim_end().to_owned()),
+            };
             if c.project.base.as_deref().is_some_and(|b| b.trim_start().starts_with('-')) {
                 return Err("project.base: must not start with `-`".into());
             }
@@ -1320,6 +1334,15 @@ pub fn unset(scope: Scope, text: &str, key: &str, extra: Extra<'_>) -> Result<St
     let mut doc = parse_doc(text)?;
     let seg = split(key);
     let name = seg.last().ok_or("no key")?.clone();
+    // An account with credentials is a table of its own: not removed by a reset.
+    if matches!(find(key).map(|s| s.kind), Some(Kind::Path))
+        && key.starts_with("profiles.")
+        && item_at(&doc, &seg).is_some_and(toml_edit::Item::is_table_like)
+    {
+        return Err(format!(
+            "{key} has credentials set in the file; remove it there (`ptyro config edit`)"
+        ));
+    }
     let gone = container_mut(doc.as_table_mut(), &seg, false)?.and_then(|t| t.remove(&name));
     if gone.is_none() {
         return Err(format!("{key} isn't set in the file"));
@@ -1383,6 +1406,9 @@ pub fn add(
                 return Err(format!("{name:?} is taken by a setting of its own"));
             }
             crate::names::validate(name).map_err(|e| format!("{name:?}: {e}"))?;
+            if name.contains('.') {
+                return Err(format!("{name:?}: a dot can't be used in a {} name here", col.noun));
+            }
             let full = [base, vec![name.to_owned()]].concat();
             if item_at(&doc, &full).is_some() {
                 return Err(format!("there is already a {} called {name:?}", col.noun));
@@ -1530,6 +1556,9 @@ pub fn rename(
     }
     if matches!(col.layout, Layout::Tables) {
         crate::names::validate(to).map_err(|e| format!("{to:?}: {e}"))?;
+        if to.contains('.') {
+            return Err(format!("{to:?}: a dot can't be used in a {} name here", col.noun));
+        }
     }
     let mut doc = parse_doc(text)?;
     let seg: Vec<String> = path.split('.').map(str::to_owned).collect();
@@ -1539,8 +1568,12 @@ pub fn rename(
     if t.contains_key(to) {
         return Err(format!("there is already a {} called {to:?}", col.noun));
     }
+    let decor = t.get_key_value(from).map(|(k, _)| k.leaf_decor().clone());
     let item = t.remove(from).ok_or_else(|| format!("there is no {} called {from:?}", col.noun))?;
     t.insert(to, item);
+    if let (Some(d), Some(mut k)) = (decor, t.key_mut(to)) {
+        *k.leaf_decor_mut() = d;
+    }
     finish(scope, &format!("{path}.{to}"), doc.to_string(), extra)
 }
 
@@ -1713,7 +1746,7 @@ pub fn starter() -> String {
     let mut out = String::from(
         "# ptyro configuration. Every key is optional, and what is commented out is the default.\n\
          # Changes apply as soon as you save (the daemon and open screens reload this file).\n\
-         # `ptyro config list` shows every setting; the panel (`C-q ,`) edits them without this file.\n",
+         # `ptyro config list` shows every setting; Settings (the `config.panel` key, `C-q C` by default) edits them without this file.\n",
     );
     let mut tables: Vec<&str> = Vec::new();
     for st in settings(Scope::User)

@@ -6,7 +6,7 @@ import { conn } from "./conn.js";
 import { data, liveWorktrees, wtTabs } from "./data.js";
 import type { Worktree } from "./data.js";
 import { createWorktree } from "./flow.js";
-import { actions, ago, ask, badge, bar, Cache, confirm, enc, errText, form, go, h, menu, pending, row, section, sheet, ui, views } from "./kit.js";
+import { actions, ago, ask, badge, bar, Cache, confirm, enc, errText, form, go, h, menu, pending, row, section, sheet, ui, views, webHref } from "./kit.js";
 import { allSessions } from "./sessions.js";
 import { prBadge } from "./projects.js";
 
@@ -37,7 +37,10 @@ type Against = "base" | "upstream" | "last_turn" | "head";
 const AGAINST: [Against, string][] = [["base", "Base"], ["upstream", "Unpushed"], ["last_turn", "Last turn"], ["head", "Uncommitted"]];
 const against = new Map<string, Against>();
 
-const key = (w: Worktree, extra = ""): string => `${w.id}|${w.status?.at_ms ?? 0}|${extra}`;
+// The diff is cached by worktree and comparison; a newer git status refreshes it in place (the
+// diff on screen stays until the new one arrives), instead of being a new key that shows "Reading…".
+const key = (w: Worktree, extra = ""): string => `${w.id}|0|${extra}`;
+const stamped = new Map<string, number>();
 const diffs = new Cache<any>((k) => { const [id, , a] = k.split("|"); return conn.request({ t: "worktree_diff", addr: id, against: a }).then((r) => r.doc); });
 const comments = new Cache<any[]>((id) => conn.request({ t: "review_list", addr: id }).then((r) => r.comments));
 const commits = new Cache<any[]>((k) => conn.request({ t: "worktree_log", addr: k.split("|")[0] }).then((r) => r.commits));
@@ -90,7 +93,9 @@ function diffFile(w: Worktree, f: any, byLine: Map<string, any[]>, open: boolean
         h("span", { class: "ln" }, String(l.old ?? "")), h("span", { class: "ln" }, String(l.new ?? "")),
         h("span", { class: "sign" }, l.kind === "added" ? "+" : l.kind === "removed" ? "−" : " "), h("span", { class: "tx" }, l.text || " "));
       pre.append(line);
-      for (const c of byLine.get(`${f.path}:${n}`) ?? []) {
+      // A comment is on a line number and the line's text: a removed line 10 and an added line 10
+      // are different lines.
+      for (const c of (byLine.get(`${f.path}:${n}`) ?? []).filter((c) => c.code == null || c.code === l.text)) {
         pre.append(h("div", { class: "dcomment" }, h("span", {}, c.text),
           h("button", { class: "icon", "aria-label": "Remove the comment", title: tip("review.rm"), onclick: async () => { await ask({ t: "review_remove", addr: w.id, id: c.id }); comments.reload(w.id); } }, "✕")));
       }
@@ -130,6 +135,8 @@ function changesTab(w: Worktree): HTMLElement {
   const a = against.get(w.id) ?? "base";
   const k = key(w, a);
   const doc = diffs.get(k);
+  const at = w.status?.at_ms ?? 0;
+  if (doc !== undefined && stamped.get(k) !== at) { stamped.set(k, at); diffs.refresh(k); } else if (!stamped.has(k)) stamped.set(k, at);
   const list = comments.get(w.id) ?? [];
   const byLine = new Map<string, any[]>();
   for (const c of list) byLine.set(`${c.path}:${c.line}`, [...(byLine.get(`${c.path}:${c.line}`) ?? []), c]);
@@ -205,7 +212,7 @@ function checksTab(w: Worktree): HTMLElement {
   const checks = pr.checks as any[];
   const failing = checks.filter((c) => ["fail", "cancel"].includes(c.bucket));
   return h("div", { class: "stack-in", title: tip("pr.checks") },
-    h("div", { class: "pr-head" }, h("a", { href: pr.url, target: "_blank", rel: "noreferrer" }, `#${pr.number} ${pr.title}`), " ", prBadge(w) ?? badge(pr.state), pr.review ? badge(pr.review.replace(/_/g, " ").toLowerCase()) : null, pr.automerge ? badge("auto-merge", "info") : null),
+    h("div", { class: "pr-head" }, (webHref(pr.url) ? h("a", { href: webHref(pr.url)!, target: "_blank", rel: "noreferrer" }, `#${pr.number} ${pr.title}`) : h("span", {}, `#${pr.number} ${pr.title}`)), " ", prBadge(w) ?? badge(pr.state), pr.review ? badge(pr.review.replace(/_/g, " ").toLowerCase()) : null, pr.automerge ? badge("auto-merge", "info") : null),
     bar(
       failing.length ? h("button", { class: "primary", title: tip("pr.fix"), onclick: async () => { await ask({ t: "pr_fix", addr: w.id }, "Sent the failing checks to the agent"); } }, `Fix ${failing.length} failing`) : null,
       h("button", { title: tip("pr.automerge"), onclick: () => menu("Auto-merge", [
@@ -219,7 +226,7 @@ function checksTab(w: Worktree): HTMLElement {
       h("button", { title: tip("pr.reply"), onclick: () => replyPr(w) }, "Reply…"),
       h("button", { class: "icon", "aria-label": "Refresh", onclick: () => prs.reload(w.id) }, "↻")),
     section("Checks", checks.length ? h("div", { class: "rows" }, ...checks.map((c) => row(
-      h("span", {}, h("span", { class: `bucket ${c.bucket}` }, BUCKET[c.bucket] ?? "·"), " ", c.name), c.workflow ?? "", c.link ? h("a", { href: c.link, target: "_blank", rel: "noreferrer" }, "log") : null)))
+      h("span", {}, h("span", { class: `bucket ${c.bucket}` }, BUCKET[c.bucket] ?? "·"), " ", c.name), c.workflow ?? "", webHref(c.link) ? h("a", { href: webHref(c.link)!, target: "_blank", rel: "noreferrer" }, "log") : null)))
       : h("p", { class: "sub" }, "No checks reported.")));
 }
 

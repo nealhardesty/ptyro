@@ -460,12 +460,24 @@ impl Default for Scratchpad {
 /// what the config already has, else pick: Tailscale when it is up on this machine, else this
 /// network. Returns what that chose, for the person to read.
 pub fn set_serve(path: &Path, on: bool, via: Option<&str>) -> Result<Vec<String>, crate::Error> {
-    let text = std::fs::read_to_string(path).unwrap_or_default();
+    // Only a file that isn't there is empty: one that can't be read (permissions, not UTF-8) must
+    // not be replaced by a near-empty config.
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => {
+            return Err(crate::Error::internal(format!(
+                "{}: {e} (it is left as it is)",
+                path.display()
+            )));
+        }
+    };
     let mut doc: toml_edit::DocumentMut =
         text.parse().map_err(|e| crate::Error::invalid(format!("{}: {e}", path.display())))?;
     let before = Config::parse(&text).unwrap_or_default();
     let remote = doc.entry("remote").or_insert(toml_edit::table());
-    let Some(remote) = remote.as_table_mut() else {
+    // (`remote = { … }` is a table too.)
+    let Some(remote) = remote.as_table_like_mut() else {
         return Err(crate::Error::invalid(format!("{}: [remote] is not a table", path.display())));
     };
     remote.insert("serve", toml_edit::value(on));
@@ -524,24 +536,40 @@ fn tailscale_running() -> bool {
         .is_some_and(|v| v["BackendState"] == "Running")
 }
 
-/// Write a file only its owner reads (a config can hold keys), replacing it whole.
+/// Write a file only its owner reads (a config can hold keys), replacing it whole: to a temp
+/// file of its own name beside it, synced, then renamed over it, so a crash leaves the old file
+/// or the new one and two writers never share a temp file. A symlinked file (dotfiles managers)
+/// stays a symlink: the file it points at is what is replaced.
 pub(crate) fn write_private(path: &Path, text: &str) -> Result<(), crate::Error> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let io = |p: &Path, e: std::io::Error| crate::Error::internal(format!("{}: {e}", p.display()));
-    if let Some(dir) = path.parent() {
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if let Some(dir) = target.parent() {
         std::fs::create_dir_all(dir).map_err(|e| io(dir, e))?;
     }
-    let tmp = path.with_extension("toml.tmp");
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&tmp)
-        .map_err(|e| io(&tmp, e))?;
-    f.write_all(text.as_bytes()).map_err(|e| io(&tmp, e))?;
-    std::fs::rename(&tmp, path).map_err(|e| io(path, e))
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let tmp = target.with_extension(format!(
+        "toml.{}.{}.tmp",
+        std::process::id(),
+        N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let write = || -> Result<(), crate::Error> {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)
+            .map_err(|e| io(&tmp, e))?;
+        f.write_all(text.as_bytes()).map_err(|e| io(&tmp, e))?;
+        f.sync_all().map_err(|e| io(&tmp, e))?;
+        std::fs::rename(&tmp, &target).map_err(|e| io(&target, e))
+    };
+    let r = write();
+    if r.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    r
 }
 
 impl Config {
@@ -559,8 +587,8 @@ impl Scratchpad {
         if !["drawer", "popup", "pane"].contains(&self.mode.as_str()) {
             return Err(format!("scratchpad.mode: {:?} (drawer, popup or pane)", self.mode));
         }
-        if self.keep == 0 {
-            return Err("scratchpad.keep: at least 1 day".into());
+        if self.keep == 0 || self.keep > 3650 {
+            return Err("scratchpad.keep: 1 to 3650 days".into());
         }
         if self.editor.as_deref().is_some_and(|e| e.split_whitespace().next().is_none()) {
             return Err("scratchpad.editor: must not be empty".into());
@@ -1131,6 +1159,8 @@ impl Config {
             ("github.poll", &self.github.poll),
             ("github.escalate_after", &self.github.escalate_after),
             ("review.digest", &self.review.digest),
+            ("orchestration.lease_ttl", &self.orchestration.lease_ttl),
+            ("orchestration.message_ttl", &self.orchestration.message_ttl),
         ] {
             parse_duration(v).map_err(|e| format!("{k}: {e}"))?;
         }
@@ -1163,8 +1193,25 @@ impl Config {
                 ));
             }
         }
-        if self.ui.sidebar_width < 12 {
-            return Err("ui.sidebar_width: must be at least 12".into());
+        if !(12..=500).contains(&self.ui.sidebar_width) {
+            return Err("ui.sidebar_width: must be 12 to 500".into());
+        }
+        if self.discover.depth > 32 {
+            return Err("discover.depth: at most 32".into());
+        }
+        if self.github.log_lines > 5000 {
+            return Err("github.log_lines: at most 5000".into());
+        }
+        if self.summaries.command.is_empty() {
+            return Err("summaries.command: must not be empty".into());
+        }
+        if self.notifications.desktop_command.as_ref().is_some_and(Vec::is_empty) {
+            return Err("notifications.desktop_command: must not be empty (leave it out)".into());
+        }
+        for (i, s) in self.notifications.sinks.iter().enumerate() {
+            if matches!(s, SinkDef::Command { command, .. } if command.is_empty()) {
+                return Err(format!("notifications.sinks[{i}].command: must not be empty"));
+            }
         }
         if !(1..=1000).contains(&self.daemon.frame_interval_ms) {
             return Err("daemon.frame_interval_ms: must be 1–1000".into());
@@ -1280,7 +1327,14 @@ pub fn dangerous_arg(argv: &[String]) -> Option<String> {
             Some((f, v)) if f.starts_with('-') => (f, Some(v)),
             _ => (arg.as_str(), None),
         };
-        if DANGEROUS_FLAGS.contains(&flag) {
+        // `npx -y @google/gemini-cli`: that `-y` is the package runner's own ("yes, install it").
+        let runner_flag = flag == "-y"
+            && i > 0
+            && matches!(
+                argv[i - 1].rsplit('/').next().unwrap_or(""),
+                "npx" | "bunx" | "pnpx" | "uvx" | "dlx" | "exec"
+            );
+        if DANGEROUS_FLAGS.contains(&flag) && !runner_flag {
             return Some(arg.clone());
         }
         for (names, bad) in DANGEROUS_VALUES {
@@ -1394,8 +1448,15 @@ impl ProfileDef {
                 return Err(format!("share.{agent}: not an agent (use one of {PROFILE_AGENTS:?})"));
             }
             for e in entries {
-                let leaf = e.rsplit('/').next().unwrap_or(e);
-                if CREDENTIAL_FILES.contains(&leaf) {
+                // As the filesystem reads it: `.credentials.json/`, `x/.` and `.Credentials.json`
+                // (a case-insensitive disk) are the same file.
+                let leaf = e.split('/').rfind(|c| !c.is_empty() && *c != ".").unwrap_or("");
+                if leaf.is_empty() {
+                    return Err(format!(
+                        "share.{agent}: {e:?} must name something in the agent's dir"
+                    ));
+                }
+                if CREDENTIAL_FILES.iter().any(|c| c.eq_ignore_ascii_case(leaf)) {
                     return Err(format!(
                         "share.{agent}: {e:?} holds credentials and is never shared"
                     ));
@@ -1430,7 +1491,12 @@ pub fn parse_duration(s: &str) -> Result<std::time::Duration, String> {
         "d" => 86_400,
         _ => return Err(format!("bad duration unit in {s:?} (use s, m, h or d)")),
     };
-    let secs = n.checked_mul(mult).ok_or_else(|| format!("duration {s:?} is too long"))?;
+    // Ten years is longer than anything here means; the cap keeps millisecond arithmetic honest.
+    const LONGEST: u64 = 10 * 365 * 86_400;
+    let secs = n
+        .checked_mul(mult)
+        .filter(|s| *s <= LONGEST)
+        .ok_or_else(|| format!("duration {s:?} is too long (at most 10 years)"))?;
     Ok(std::time::Duration::from_secs(secs))
 }
 
@@ -1438,7 +1504,12 @@ pub fn parse_duration(s: &str) -> Result<std::time::Duration, String> {
 pub fn expand_home(p: &str) -> PathBuf {
     match p.strip_prefix('~') {
         Some(rest) if rest.is_empty() || rest.starts_with('/') => {
-            let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+            // Never a relative path (it would land in whatever directory the daemon is in).
+            let home = std::env::var_os("HOME")
+                .filter(|h| !h.is_empty())
+                .map(PathBuf::from)
+                .or_else(|| etcetera::home_dir().ok())
+                .unwrap_or_else(|| PathBuf::from("/"));
             home.join(rest.trim_start_matches('/'))
         }
         _ => PathBuf::from(p),
@@ -1480,6 +1551,7 @@ pub fn parse_color(s: &str) -> Result<ConfigColor, String> {
     let s = s.trim();
     if let Some(hex) = s.strip_prefix('#') {
         if hex.len() == 6
+            && hex.bytes().all(|b| b.is_ascii_hexdigit())
             && let Ok(v) = u32::from_str_radix(hex, 16)
         {
             return Ok(ConfigColor::Rgb((v >> 16) as u8, (v >> 8) as u8, v as u8));
@@ -1850,5 +1922,126 @@ code = { command = ["code", "{path}"] }
         assert_eq!(parse_color("bright-blue").unwrap(), ConfigColor::Indexed(12));
         assert_eq!(parse_color("245").unwrap(), ConfigColor::Indexed(245));
         assert!(parse_color("teal-ish").is_err());
+    }
+}
+
+#[cfg(test)]
+mod hardening {
+    use super::*;
+
+    fn argv(s: &str) -> Vec<String> {
+        s.split_whitespace().map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn a_package_runners_yes_flag_is_not_the_agents() {
+        for ok in ["npx -y @google/gemini-cli", "bunx -y gemini", "pnpm dlx -y gemini-cli"] {
+            assert_eq!(dangerous_arg(&argv(ok)), None, "{ok}");
+        }
+        // Anywhere else it still skips prompts.
+        assert_eq!(dangerous_arg(&argv("npx @google/gemini-cli -y")).as_deref(), Some("-y"));
+        assert_eq!(dangerous_arg(&argv("gemini -y")).as_deref(), Some("-y"));
+        assert!(
+            Config::parse("[agents.gemini]\ncommand = [\"npx\", \"-y\", \"@google/gemini-cli\"]\n")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn durations_and_numbers_are_bounded() {
+        assert!(parse_duration("3650d").is_ok());
+        assert!(parse_duration("99999999999999d").unwrap_err().contains("too long"));
+        assert!(parse_duration("18446744073709551615s").is_err());
+        for (bad, key) in [
+            ("[orchestration]\nlease_ttl = \"soon\"\n", "orchestration.lease_ttl"),
+            ("[orchestration]\nmessage_ttl = \"24 hours\"\n", "orchestration.message_ttl"),
+            ("[scratchpad]\nkeep = 300000000000\n", "scratchpad.keep"),
+            ("[ui]\nsidebar_width = 60000\n", "ui.sidebar_width"),
+            ("[discover]\ndepth = 200\n", "discover.depth"),
+            ("[github]\nlog_lines = 100000\n", "github.log_lines"),
+            ("[summaries]\ncommand = []\n", "summaries.command"),
+            ("[notifications]\ndesktop_command = []\n", "notifications.desktop_command"),
+            ("[[notifications.sinks]]\ntype = \"command\"\ncommand = []\n", "command"),
+        ] {
+            let e = Config::parse(bad).unwrap_err();
+            assert!(e.contains(key), "{bad}: {e}");
+        }
+    }
+
+    #[test]
+    fn colours_take_only_hex_digits_and_home_is_never_relative() {
+        assert!(parse_color("#+fffff").is_err());
+        assert!(parse_color("#12345g").is_err());
+        assert_eq!(parse_color("#ff0080").unwrap(), ConfigColor::Rgb(255, 0, 128));
+        assert!(expand_home("~/x").is_absolute());
+    }
+
+    #[test]
+    fn sharing_a_credential_file_is_refused_however_it_is_spelled() {
+        for spelling in [
+            ".credentials.json",
+            ".credentials.json/",
+            "./.credentials.json",
+            "sub/.Credentials.json",
+            ".credentials.json/.",
+        ] {
+            let text = format!("[profiles.work.share]\nclaude = [{spelling:?}]\n");
+            let e = Config::parse(&text).unwrap_err();
+            assert!(e.contains("credentials"), "{spelling}: {e}");
+        }
+        assert!(Config::parse("[profiles.work.share]\nclaude = [\".\"]\n").is_err());
+        assert!(
+            Config::parse("[profiles.work.share]\nclaude = [\"CLAUDE.md\", \"skills\"]\n").is_ok()
+        );
+    }
+
+    #[test]
+    fn web_on_edits_an_inline_table_and_leaves_an_unreadable_file_alone() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("config.toml");
+        std::fs::write(&path, "# mine\nremote = { insecure = true }\n").unwrap();
+        set_serve(&path, true, Some("here")).unwrap();
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            after.contains("# mine")
+                && after.contains("serve = true")
+                && after.contains("insecure = true"),
+            "{after}"
+        );
+        // Not UTF-8: it is not "empty", so nothing replaces it.
+        let bytes = b"# caf\xe9\n[ui]\nmouse = false\n";
+        std::fs::write(&path, bytes).unwrap();
+        assert!(set_serve(&path, true, Some("here")).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        // A missing file is made.
+        let fresh = d.path().join("new/config.toml");
+        set_serve(&fresh, true, Some("here")).unwrap();
+        assert!(std::fs::read_to_string(&fresh).unwrap().contains("serve = true"));
+    }
+
+    #[test]
+    fn writing_a_config_keeps_a_symlink_and_never_shares_a_temp_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let real = d.path().join("dotfiles/ptyro.toml");
+        std::fs::create_dir_all(real.parent().unwrap()).unwrap();
+        std::fs::write(&real, "[ui]\nmouse = false\n").unwrap();
+        let link = d.path().join("config.toml");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        write_private(&link, "[ui]\nmouse = true\n").unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink(), "still a link");
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "[ui]\nmouse = true\n");
+        assert_eq!(std::fs::metadata(&real).unwrap().permissions().mode() & 0o777, 0o600);
+        // Two writers at once: each gets its own temp file and the file is one of the two.
+        let a = std::thread::spawn({
+            let l = link.clone();
+            move || (0..50).for_each(|_| write_private(&l, "[ui]\nmouse = false\n").unwrap())
+        });
+        (0..50).for_each(|_| write_private(&link, "[ui]\nmouse = true\n").unwrap());
+        a.join().unwrap();
+        let text = std::fs::read_to_string(&real).unwrap();
+        assert!(Config::parse(&text).is_ok(), "{text:?}");
+        let left: Vec<_> = std::fs::read_dir(real.parent().unwrap()).unwrap().collect();
+        assert_eq!(left.len(), 1, "no temp files left: {left:?}");
     }
 }

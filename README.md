@@ -27,7 +27,7 @@ recipes, or coordinate one change across several repositories.
 
 ## Status
 
-Pre-1.0 (version 0.0.2, the first tagged release), public for early testing. Every
+Pre-1.0 (version 0.0.x), public for early testing. Every
 feature milestone (M1–M11) is built and covered by tests, most of them against scripted fake
 agents. Day-to-day use so far is mainly Claude Code on Linux. Some features have not been run
 against the real thing yet: the phone app on a real phone, OpenCode, Gemini and Codex structured
@@ -489,7 +489,8 @@ behave the same. (License and advisory checks run there through the cargo-deny a
 | `make run ARGS="ls"` / `make try CMD=claude` | run the dev build with arguments / start `CMD` in a new session and attach |
 | `make test` / `make smoke` | all tests / quick end-to-end checks of the PTY and emulator |
 | `make fmt` / `fmt-check` / `lint` | format / fail if unformatted / clippy with warnings as errors |
-| `make check` / `make ci` | what CI runs except `deny` (fmt-check, lint, test, smoke) / everything, `deny` included |
+| `make check` / `make ci` | fmt-check, lint, test, smoke / those plus `deny`, `web-check` and `fuzz-smoke`: everything CI runs |
+| `make web-test` | the web app's logic tests that need no daemon (settings, terminal keys and selection, QR codes; needs Node) |
 | `make tools` / `make deny` | install cargo-deny / license, advisory and source checks |
 | `make parity` (or `make tui-parity`) | check that every CLI command has a TUI path and a web path, or a waiver, in [`docs/parity.md`](docs/parity.md); a gap fails it (`STRICT=0` / `WEB_STRICT=0` only list TUI / web gaps) |
 | `make doc` / `make clean` | API docs / remove build output |

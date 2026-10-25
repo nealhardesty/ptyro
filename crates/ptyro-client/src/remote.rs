@@ -11,13 +11,28 @@ use tokio::task::JoinHandle;
 
 use crate::ClientError;
 
-/// `[ssh://][user@]host[:port]` → (`[user@]host`, port).
+/// `[ssh://][user@]host[:port]` → (`[user@]host`, port). An IPv6 address is written
+/// `[fe80::1]:22` (or bare, with no port): ssh wants it without the brackets.
 pub fn parse(target: &str) -> (String, Option<u16>) {
     let t = target.strip_prefix("ssh://").unwrap_or(target).trim_end_matches('/');
-    match t.rsplit_once(':') {
-        Some((dest, port)) if port.parse::<u16>().is_ok() => (dest.to_owned(), port.parse().ok()),
-        _ => (t.to_owned(), None),
+    let (user, host) = match t.rsplit_once('@') {
+        Some((u, h)) => (format!("{u}@"), h),
+        None => (String::new(), t),
+    };
+    if let Some(rest) = host.strip_prefix('[')
+        && let Some((addr, after)) = rest.split_once(']')
+    {
+        let port = after.strip_prefix(':').and_then(|p| p.parse::<u16>().ok());
+        return (format!("{user}{addr}"), port);
     }
+    // Two or more colons and no brackets: an IPv6 address, which has no port to split off.
+    if host.matches(':').count() == 1
+        && let Some((h, port)) = host.rsplit_once(':')
+        && let Ok(p) = port.parse::<u16>()
+    {
+        return (format!("{user}{h}"), Some(p));
+    }
+    (format!("{user}{host}"), None)
 }
 
 /// The host alone, for the audit trail.
@@ -116,6 +131,12 @@ mod tests {
         assert_eq!(parse("box"), ("box".into(), None));
         assert_eq!(parse("me@box.tail.ts.net"), ("me@box.tail.ts.net".into(), None));
         assert_eq!(host_of("ssh://me@box:22"), "box");
+        // IPv6: brackets with a port, or a bare address with none.
+        assert_eq!(parse("[::1]:2222"), ("::1".into(), Some(2222)));
+        assert_eq!(parse("ssh://me@[fe80::1]:22"), ("me@fe80::1".into(), Some(22)));
+        assert_eq!(parse("me@fe80::1"), ("me@fe80::1".into(), None));
+        assert_eq!(parse("[fe80::1]"), ("fe80::1".into(), None));
+        assert_eq!(host_of("me@[fe80::1]:22"), "fe80::1");
         assert!(remote_command("ptyro").ends_with("exec \"$0\" proxy' ptyro"));
         assert!(remote_command("/opt/my ptyro").ends_with(" '/opt/my ptyro'"));
     }

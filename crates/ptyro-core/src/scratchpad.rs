@@ -74,6 +74,12 @@ pub struct Entry {
     pub by: Option<String>,
 }
 
+/// Text for inside a stamp: one line, with neither the backtick nor the ` · ` that
+/// [`unstamp`] reads the stamp back by.
+fn stamp_text(s: &str) -> String {
+    s.replace(['\n', '\r'], " ").replace('`', "'").replace(" · ", " - ")
+}
+
 impl Entry {
     /// The line (and indented continuation lines) this entry is.
     pub fn render(&self) -> String {
@@ -82,10 +88,10 @@ impl Entry {
             head.push_str(at);
             head.push_str(" · ");
             if let Some(w) = &self.whence {
-                head.push_str(&format!("`{w}` · "));
+                head.push_str(&format!("`{}` · ", stamp_text(w)));
             }
             if let Some(b) = &self.by {
-                head.push_str(&format!("by `{b}` · "));
+                head.push_str(&format!("by `{}` · ", stamp_text(b)));
             }
         }
         let mut lines = self.text.trim_end().lines();
@@ -163,24 +169,51 @@ impl Pad {
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
 
-    /// Replace the file (atomically), saving what it held first.
+    /// Replace the file (atomically), saving what it held first. A file that isn't UTF-8 text
+    /// is left alone: the lossy copy we'd save and write back would be the only one left.
     pub fn write(&self, text: &str) -> std::io::Result<()> {
-        if let Ok(old) = self.read()
-            && old != text
-        {
+        self.ensure()?;
+        let real = self.real();
+        let bytes = std::fs::read(&real)?;
+        let Ok(old) = String::from_utf8(bytes) else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "the scratchpad isn't valid UTF-8 text; fix it in your editor first (it is left as it is)",
+            ));
+        };
+        if old != text {
             let _ = self.snapshot(&old);
         }
-        let real = self.real();
-        let tmp = real.with_extension("md.tmp");
-        std::fs::write(&tmp, text)?;
-        std::fs::rename(&tmp, &real)
+        // A temp file of its own beside it, with the file's own permissions (a private pad stays
+        // private), so two writers never share one.
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let tmp = real.with_extension(format!(
+            "md.{}.{}.tmp",
+            std::process::id(),
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let put = || -> std::io::Result<()> {
+            std::fs::write(&tmp, text)?;
+            if let Ok(m) = std::fs::metadata(&real) {
+                std::fs::set_permissions(&tmp, m.permissions())?;
+            }
+            std::fs::rename(&tmp, &real)
+        };
+        let r = put();
+        if r.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        r
     }
 
     /// Add to the end with a single append, so an editor with the file open sees only the
     /// added bytes.
     pub fn append_raw(&self, text: &str) -> std::io::Result<()> {
         let cur = self.read()?;
-        let _ = self.snapshot(&cur);
+        // (Only text we can read back whole is worth a copy.)
+        if std::fs::read(&self.path).is_ok_and(|b| std::str::from_utf8(&b).is_ok()) {
+            let _ = self.snapshot(&cur);
+        }
         let mut f = std::fs::OpenOptions::new().append(true).open(self.real())?;
         let mut add = String::new();
         if !cur.is_empty() && !cur.ends_with('\n') {
@@ -249,7 +282,7 @@ impl Pad {
     fn prune(&self) {
         let files = self.list_files();
         let now = crate::now_ms();
-        let cutoff = now.saturating_sub(self.keep_days * 86_400_000);
+        let cutoff = now.saturating_sub(self.keep_days.saturating_mul(86_400_000));
         let n = files.len();
         let mut seen = std::collections::HashSet::new();
         for (i, (at, _, p)) in files.iter().enumerate().rev() {
@@ -294,17 +327,27 @@ impl Pad {
         if rev_prefix.is_empty() {
             return None;
         }
-        let mut hits =
-            self.list_files().into_iter().rev().filter(|(_, r, _)| r.starts_with(rev_prefix));
-        let (_, _, p) = hits.next()?;
+        let hits: Vec<_> = self
+            .list_files()
+            .into_iter()
+            .rev()
+            .filter(|(_, r, _)| r.starts_with(rev_prefix))
+            .collect();
+        // An exact revision, or a prefix that picks one copy: never "the newest that starts so".
+        let (_, _, p) = match hits.as_slice() {
+            [one] => one,
+            many => many.iter().find(|(_, r, _)| r == rev_prefix)?,
+        };
         std::fs::read_to_string(p).ok()
     }
 
     /// Put a saved copy back (what's there now is saved first). Returns the new text.
     pub fn restore(&self, rev_prefix: &str) -> Result<String, String> {
-        let text = self
-            .snapshot_text(rev_prefix)
-            .ok_or_else(|| format!("no saved copy {rev_prefix:?} (`ptyro scratchpad log`)"))?;
+        let text = self.snapshot_text(rev_prefix).ok_or_else(|| {
+            format!(
+                "no saved copy {rev_prefix:?}, or more than one starts so (`ptyro scratchpad log`)"
+            )
+        })?;
         self.write(&text).map_err(|e| e.to_string())?;
         Ok(text)
     }
@@ -339,6 +382,9 @@ impl Pad {
     }
 }
 
+/// The most text a scratchpad write (`ScratchPut`) may carry; the daemon refuses more.
+pub const MAX_PAD_BYTES: usize = 4 << 20;
+
 const MARK_OURS: &str = "<<<<<<< on disk";
 const MARK_MID: &str = "=======";
 const MARK_THEIRS: &str = ">>>>>>> your edit";
@@ -364,9 +410,14 @@ struct Change {
 }
 
 fn changes(base: &[String], new: &[String]) -> Vec<Change> {
-    use similar::{DiffOp, capture_diff_slices};
+    use similar::DiffOp;
     let mut out = Vec::new();
-    for op in capture_diff_slices(similar::Algorithm::Myers, base, new) {
+    // A pad of unrelated lines can make a diff slow: after a couple of seconds the answer is
+    // coarser (still correct), not later.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    for op in
+        similar::capture_diff_slices_deadline(similar::Algorithm::Myers, base, new, Some(deadline))
+    {
         match op {
             DiffOp::Equal { .. } => {}
             DiffOp::Delete { old_index, old_len, .. } => {
@@ -486,6 +537,8 @@ fn heading(line: &str) -> Option<(usize, &str)> {
 /// `entry` at the end of `section` (a heading's text, any level, any case), after its last
 /// non-blank line; the section is made at the end of the file when there is none.
 pub fn insert_under(text: &str, section: &str, entry: &str) -> String {
+    // A heading is one line, whatever the caller sent.
+    let section = &section.replace(['\n', '\r'], " ");
     let lines = lines_of(text);
     let at = lines.iter().position(|l| {
         heading(l.trim_end()).is_some_and(|(_, h)| h.eq_ignore_ascii_case(section.trim()))
@@ -670,7 +723,9 @@ pub fn tick(text: &str, line: u32, pr: Option<u64>) -> Result<String, String> {
 /// Untick it again.
 pub fn untick(text: &str, line: u32) -> Result<String, String> {
     edit_line(text, line, |l| {
-        let at = l.find("[x]").or_else(|| l.find("[X]")).ok_or("not a ticked item")?;
+        // The checkbox is the first `[` of a checkbox line; a `[x]` in the text isn't it.
+        let (done, _) = checkbox(l).ok_or("not a ticked item")?;
+        let at = l.find('[').filter(|_| done).ok_or("not a ticked item")?;
         Ok(format!("{}[ ]{}", &l[..at], &l[at + 3..]))
     })
 }
@@ -967,5 +1022,96 @@ mod tests {
         assert_eq!(a.last().unwrap(), "/p.md");
         let b = editor_argv(&["hx".into(), "{path}".into()], Path::new("/p.md"));
         assert_eq!(b, ["hx", "/p.md"]);
+    }
+}
+
+#[cfg(test)]
+mod hardening {
+    use super::*;
+
+    #[test]
+    fn a_stamp_and_a_section_stay_on_their_own_line() {
+        let e = Entry {
+            text: "do it".into(),
+            at: Some("2026-10-24 10:00".into()),
+            whence: Some("a`b · c\nd".into()),
+            by: Some("me".into()),
+            ..Entry::default()
+        };
+        let line = e.render();
+        assert_eq!(line.matches('\n').count(), 1, "{line:?}");
+        assert!(line.contains("`a'b - c d` · by `me` · do it"), "{line:?}");
+        let out = insert_under("# Pad\n", "Bugs\n- [ ] injected", "- [ ] x\n");
+        assert!(out.contains("## Bugs - [ ] injected\n"), "{out:?}");
+        assert!(!out.contains("\n- [ ] injected"), "{out:?}");
+    }
+
+    fn pad(d: &std::path::Path) -> Pad {
+        Pad::new(d.join("scratchpad.md"), d.join("hist"), 30)
+    }
+
+    #[test]
+    fn unticking_changes_the_checkbox_not_a_look_alike_in_the_text() {
+        let t = "- [X] see [x] docs\n";
+        assert_eq!(untick(t, 1).unwrap(), "- [ ] see [x] docs\n");
+        assert!(untick("- [ ] open\n", 1).is_err());
+        assert!(untick("plain [x] line\n", 1).is_err());
+    }
+
+    #[test]
+    fn a_pad_that_is_not_utf8_is_never_rewritten_lossily() {
+        let d = tempfile::tempdir().unwrap();
+        let p = pad(d.path());
+        p.ensure().unwrap();
+        let bytes = b"# Pad\n- [ ] caf\xe9\n".to_vec();
+        std::fs::write(&p.path, &bytes).unwrap();
+        assert!(p.write("# new\n").is_err());
+        assert_eq!(std::fs::read(&p.path).unwrap(), bytes, "untouched");
+        // Adding a line appends bytes and keeps the rest exactly.
+        p.append_raw("- [ ] more\n").unwrap();
+        assert!(std::fs::read(&p.path).unwrap().starts_with(&bytes));
+        assert!(p.list_files().is_empty(), "no lossy snapshot was saved");
+    }
+
+    #[test]
+    fn writing_keeps_a_private_pads_permissions_and_leaves_no_temp_files() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let p = pad(d.path());
+        p.ensure().unwrap();
+        std::fs::set_permissions(&p.path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        p.write("# one\n").unwrap();
+        p.write("# two\n").unwrap();
+        assert_eq!(std::fs::metadata(&p.path).unwrap().permissions().mode() & 0o777, 0o600);
+        let names: Vec<_> = std::fs::read_dir(d.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.iter().all(|n| !n.ends_with(".tmp")), "{names:?}");
+    }
+
+    #[test]
+    fn a_saved_copy_is_found_by_its_revision_or_a_prefix_that_picks_one() {
+        let d = tempfile::tempdir().unwrap();
+        let p = pad(d.path());
+        std::fs::create_dir_all(&p.history).unwrap();
+        for (at, rev) in [(1_000u64, "aaaa1111"), (2_000, "aaaa2222"), (3_000, "bbbb3333")] {
+            std::fs::write(p.history.join(format!("{at}-{rev}.md")), rev).unwrap();
+        }
+        assert_eq!(p.snapshot_text("bbbb").as_deref(), Some("bbbb3333"));
+        assert_eq!(p.snapshot_text("aaaa2").as_deref(), Some("aaaa2222"));
+        assert_eq!(p.snapshot_text("aaaa"), None, "two copies start so: not the newest of them");
+        assert_eq!(p.snapshot_text("aaaa1111").as_deref(), Some("aaaa1111"));
+        assert_eq!(p.snapshot_text("zz"), None);
+        assert!(p.restore("aaaa").unwrap_err().contains("more than one"));
+    }
+
+    #[test]
+    fn a_huge_keep_does_not_overflow_the_cutoff() {
+        let d = tempfile::tempdir().unwrap();
+        let p = Pad::new(d.path().join("p.md"), d.path().join("h"), u64::MAX);
+        p.write("# a\n").unwrap();
+        p.write("# b\n").unwrap();
+        assert_eq!(p.list_files().len(), 2, "both copies kept: nothing pruned as 'too old'");
     }
 }

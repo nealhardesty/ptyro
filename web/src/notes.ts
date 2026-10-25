@@ -2,6 +2,7 @@
 // queue and the share target. Self-contained: app.ts gives it a few hooks (`initNotes`) and
 // mounts what it returns; the Markdown reader and the queue are in pad.ts.
 
+import { sheet } from "./kit.js";
 import { newTask } from "./sessions.js";
 import type { Session } from "./screen.js";
 import { Queue, noteFor, parseMarkdown, shareLine } from "./pad.js";
@@ -104,6 +105,9 @@ const pad = {
   base: "",
   dirty: false,
   saving: false,
+  /// Saves refused one after another: each waits longer, and after a few it stops until you type again.
+  fails: 0,
+  failure: "",
   timer: 0,
   readOnly: false,
   conflict: false,
@@ -207,14 +211,22 @@ async function padSave(): Promise<void> {
   pad.saving = true;
   try {
     const r = await ctx.request({ t: "scratch_put", base, text });
+    pad.fails = 0;
+    pad.failure = "";
     afterPut(r.doc, text, r.conflicts);
   } catch (e) {
     if (denied(e)) padRefused();
     else if (!ctx.connected()) { await queue.push({ k: "put", base, text }); queued(); }
-    else { pad.dirty = true; ctx.toast((e as Error).message); }
+    else {
+      // The daemon said no: trying again at once would only repeat it. Back off, then stop and say so.
+      pad.dirty = true;
+      pad.fails++;
+      pad.failure = (e as Error).message;
+      if (pad.fails <= 1) ctx.toast(pad.failure);
+    }
   } finally {
     pad.saving = false;
-    if (pad.dirty && !pad.readOnly) padSaveSoon(200);
+    if (pad.dirty && !pad.readOnly && pad.fails < 6) padSaveSoon(Math.min(30_000, 200 * 2 ** pad.fails));
     ctx.render();
   }
 }
@@ -279,9 +291,16 @@ async function padAdd(text: string): Promise<boolean> {
   }
 }
 
-async function padTick(line: number, done: boolean): Promise<void> {
+async function padTick(line: number, done: boolean, expect = ""): Promise<void> {
   await padSave();
   try {
+    // The line number is from what this page last saw: if the pad changed since (an agent, another
+    // device), the same number may be another item. Look first.
+    if (expect) {
+      const r = await ctx.request({ t: "scratch_get" });
+      const at = String(r.doc.text ?? "").split("\n")[line - 1] ?? "";
+      if (!at.includes(expect.slice(0, 40))) { ctx.toast("The pad changed meanwhile: it is up to date now. Tap again."); await padLoad(); return; }
+    }
     await ctx.request({ t: "scratch_mark", sel: String(line), mark: done ? { done: { pr: null } } : "open" });
     await padLoad();
   } catch (e) {
@@ -356,7 +375,7 @@ function previewEls(src: string): HTMLElement[] {
       case "hr": return h("hr");
       case "li": {
         const box = b.check === null ? null : h("input", { type: "checkbox", title: ctx.tip("scratchpad.tick"), checked: b.check, disabled: pad.readOnly || null });
-        if (box) box.addEventListener("change", () => void padTick(b.line, box.checked));
+        if (box) box.addEventListener("change", () => void padTick(b.line, box.checked, b.inl.map((x: { text?: string }) => x.text ?? "").join("")));
         return h("div", { class: `md-li d${Math.min(b.indent, 4)} ${b.check ? "done" : ""}` }, box ?? "• ", h("span", {}, ...inlineEls(b.inl)));
       }
     }
@@ -374,6 +393,7 @@ function shellOf(): PadShell {
   ta.readOnly = pad.readOnly;
   ta.addEventListener("input", () => {
     pad.dirty = true;
+    pad.fails = 0;
     padSaveSoon();
   });
   ta.addEventListener("blur", () => void padSave());
@@ -405,10 +425,12 @@ function notesPage(): HTMLElement {
       h("button", { class: history ? "on" : "", title: ctx.tip("scratchpad.history"), onclick: () => void padHistory() }, "History")),
   ];
   if (pad.readOnly) parts.push(h("div", { class: "banner" }, "Read-only: this device is paired without control. Pair it again with `ptyro pair --scope control` to write."));
+  if (pad.fails >= 6) parts.push(h("div", { class: "banner bad" }, `This page can't save the scratchpad: ${pad.failure}`,
+    h("button", { class: "small", onclick: () => { pad.fails = 0; void padSave(); } }, "Try again")));
   if (pad.conflict) parts.push(h("div", { class: "banner bad" }, "Another change clashed with yours: both versions are kept between <<<<<<< markers. Fix the text and it saves.",
     h("button", { class: "small", onclick: () => { pad.conflict = false; ctx.render(); } }, "Got it")));
   if (history) {
-    parts.push(h("section", { class: "sheet", title: ctx.tip("scratchpad.history") },
+    parts.push(h("section", { class: "pad-history", title: ctx.tip("scratchpad.history") },
       h("b", {}, "Saved copies"),
       ...(history.length ? history.map((s) => h("button", { class: `snap ${pad.confirm === s.rev ? "on" : ""}`, onclick: () => void padRestore(s.rev) },
         `${agoOf(s.at_ms)} ago · ${s.lines} lines`, h("small", {}, pad.confirm === s.rev ? "tap again to put it back" : s.rev))) : [h("p", { class: "empty" }, "No saved copies yet.")])));
@@ -420,7 +442,7 @@ function notesPage(): HTMLElement {
   parts.push(h("details", { class: "pad-items", title: ctx.tip("scratchpad.items"), open: items.length > 0 && items.length <= 8 || null },
     h("summary", {}, `Open items (${items.length})`),
     ...(items.length ? items.map((i) => h("div", { class: "pad-item" },
-      h("button", { class: "small", title: ctx.tip("scratchpad.tick"), disabled: pad.readOnly || null, onclick: () => void padTick(i.line, true) }, "☐"),
+      h("button", { class: "small", title: ctx.tip("scratchpad.tick"), disabled: pad.readOnly || null, onclick: () => void padTick(i.line, true, i.text) }, "☐"),
       h("div", { class: "main" }, h("div", {}, i.text), h("small", {}, padTags(i))),
       h("button", { class: "small", title: ctx.tip("scratchpad.start"), onclick: () => newTask(undefined, i.text) }, "Start"))) : [h("p", { class: "empty" }, "Nothing open. Add a line below.")]),
   ));
@@ -456,7 +478,13 @@ function takeShare(): void {
   if (!["title", "text", "url"].some((k) => q.has(k))) return;
   const line = shareLine(q);
   history.replaceState(null, "", "/" + (location.hash || "#/"));
-  if (line) void padAdd(line);
+  // A link anyone can make: nothing goes into the pad (which agents read) without being seen first.
+  if (line) {
+    const s = sheet("Add this to the scratchpad?", [h("pre", { class: "block" }, line)], [
+      h("button", { onclick: () => s.close() }, "No"),
+      h("button", { class: "primary", onclick: () => { s.close(); void padAdd(line); } }, "Add"),
+    ]);
+  }
 }
 
 

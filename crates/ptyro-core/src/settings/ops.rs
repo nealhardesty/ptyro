@@ -45,8 +45,23 @@ impl Layer {
         }
     }
 
+    /// A repository's file is a file of its own: a link there (the repository is someone
+    /// else's) is never followed, read or written.
+    fn check_plain(&self) -> Result<(), String> {
+        if let Self::Shared(_) | Self::Local(_) = self
+            && std::fs::symlink_metadata(self.path()).is_ok_and(|m| !m.is_file())
+        {
+            return Err(format!(
+                "{} is not a plain file (a link?): edit it by hand",
+                self.path().display()
+            ));
+        }
+        Ok(())
+    }
+
     /// The file's text; a file that isn't there yet is empty.
     pub fn read(&self) -> Result<String, String> {
+        self.check_plain()?;
         match std::fs::read_to_string(self.path()) {
             Ok(t) => Ok(t),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
@@ -57,18 +72,40 @@ impl Layer {
     /// Write the file whole (the user's config private to them; the local one kept out of git).
     pub fn write(&self, text: &str) -> Result<(), String> {
         let path = self.path();
+        self.check_plain()?;
         match self {
             Self::User(_) => {
                 crate::config::write_private(&path, text).map_err(|e| e.to_string())?
             }
             Self::Shared(_) | Self::Local(_) => {
-                std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+                // Whole or not at all: a daemon reading it meanwhile never sees half.
+                let tmp = path.with_extension(format!("toml.{}.tmp", std::process::id()));
+                std::fs::write(&tmp, text).map_err(|e| format!("{}: {e}", tmp.display()))?;
+                std::fs::rename(&tmp, &path).map_err(|e| {
+                    let _ = std::fs::remove_file(&tmp);
+                    format!("{}: {e}", path.display())
+                })?;
             }
         }
         if let Self::Local(root) = self {
             exclude_from_git(root);
         }
         Ok(())
+    }
+
+    /// Hold the file's lock while it is read, changed and written, so two changes made at the
+    /// same moment (the web, the TUI, the CLI) both land. Released when dropped.
+    fn lock(&self) -> Option<std::fs::File> {
+        let path = self.path();
+        let name = format!("{}.lock", path.file_name()?.to_string_lossy());
+        let f = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path.with_file_name(name))
+            .ok()?;
+        f.lock().ok()?;
+        Some(f)
     }
 
     /// The repository's two files, or the user's.
@@ -173,17 +210,66 @@ fn compute(
     extra: Extra<'_>,
 ) -> Result<String, String> {
     let scope = layer.scope();
-    match op {
-        Op::Set { key, value } => super::set(scope, before, key, value, lk, extra),
-        Op::Unset { key } => super::unset(scope, before, key, extra),
+    // The caller's own check judges the change, not what was already wrong: a config with one
+    // bad key binding can still have its other settings changed.
+    let broken_before = extra(before).is_err();
+    let extra = |new: &str| if broken_before { Ok(()) } else { extra(new) };
+    let after = match op {
+        Op::Set { key, value } => super::set(scope, before, key, value, lk, &extra),
+        Op::Unset { key } => super::unset(scope, before, key, &extra),
         Op::Add { path, name, fields } => {
             let f: Vec<(&str, &str)> =
                 fields.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-            super::add(scope, before, path, name, &f, lk, extra)
+            super::add(scope, before, path, name, &f, lk, &extra)
         }
-        Op::Remove { path, name } => super::remove(scope, before, path, name, extra),
-        Op::Rename { path, from, to } => super::rename(scope, before, path, from, to, extra),
+        Op::Remove { path, name } => super::remove(scope, before, path, name, &extra),
+        Op::Rename { path, from, to } => super::rename(scope, before, path, from, to, &extra),
+    }?;
+    // A repository's two files are one config: a partial override is fine when the other file
+    // completes it, and the merge is what must load.
+    if let Layer::Shared(_) | Layer::Local(_) = layer {
+        let other = match layer {
+            Layer::Shared(r) => Layer::Local(r.clone()),
+            _ => Layer::Shared(match layer {
+                Layer::Local(r) => r.clone(),
+                _ => unreachable!("matched above"),
+            }),
+        };
+        let other_text = other.read()?;
+        let (shared, local) = if matches!(layer, Layer::Shared(_)) {
+            (&after, &other_text)
+        } else {
+            (&other_text, &after)
+        };
+        check_merged(shared, local)?;
     }
+    Ok(after)
+}
+
+/// Whether `.ptyro.toml` and `.ptyro.local.toml`, merged, make a project config that loads.
+fn check_merged(shared: &str, local: &str) -> Result<(), String> {
+    fn merge(into: &mut toml::Table, from: toml::Table) {
+        for (k, v) in from {
+            match (into.get_mut(&k), v) {
+                (Some(toml::Value::Table(a)), toml::Value::Table(b)) => merge(a, b),
+                (_, v) => {
+                    into.insert(k, v);
+                }
+            }
+        }
+    }
+    let mut merged = ProjectConfig::parse(shared)?;
+    merge(&mut merged, ProjectConfig::parse(local)?);
+    let c: ProjectConfig =
+        merged.try_into().map_err(|e: toml::de::Error| e.to_string().trim_end().to_owned())?;
+    if c.project.base.as_deref().is_some_and(|b| b.trim_start().starts_with('-')) {
+        return Err("project.base: must not start with `-`".into());
+    }
+    if let Some(t) = &c.worktree.branch_template {
+        crate::model::check_branch_template(t)
+            .map_err(|e| format!("worktree.branch_template: {e}"))?;
+    }
+    Ok(())
 }
 
 /// Whether `op` would be accepted, and the file it would make: nothing is written. A form
@@ -195,6 +281,9 @@ pub fn preview(layer: &Layer, op: &Op, lk: &Lookups, extra: Extra<'_>) -> Result
 /// Make `op` in `layer`'s file and write it. Nothing is written unless the whole new file is
 /// valid (`extra` is the caller's own check of it).
 pub fn apply(layer: &Layer, op: &Op, lk: &Lookups, extra: Extra<'_>) -> Result<Done, String> {
+    // The user's config is shared with the daemon's own edits and every other client; a
+    // repository's files are not given a stray lock file.
+    let _lock = if matches!(layer, Layer::User(_)) { layer.lock() } else { None };
     let before = layer.read()?;
     let after = compute(layer, &before, op, lk, extra)?;
     let changed = after != before;
@@ -222,8 +311,23 @@ pub fn apply(layer: &Layer, op: &Op, lk: &Lookups, extra: Extra<'_>) -> Result<D
     Ok(Done { before, after, changed, notes, apply })
 }
 
-/// Put a file back as it was (undo), after checking it still loads.
-pub fn restore(layer: &Layer, text: &str, extra: Extra<'_>) -> Result<(), String> {
+/// Put a file back as it was (undo), after checking it still loads. With `expect`, only when
+/// the file still reads exactly that (what the change being undone left).
+pub fn restore(
+    layer: &Layer,
+    text: &str,
+    expect: Option<&str>,
+    extra: Extra<'_>,
+) -> Result<(), String> {
+    // Only what was made is undone: a file someone else has changed since is left alone.
+    if let Some(expect) = expect
+        && layer.read()? != expect
+    {
+        return Err(format!(
+            "{} changed since that change, so it isn't put back over what is there now",
+            layer.path().display()
+        ));
+    }
     super::check(layer.scope(), text)?;
     extra(text)?;
     layer.write(text)
@@ -233,6 +337,7 @@ impl Source {
     pub fn name(self) -> &'static str {
         match self {
             Self::Themes => "themes",
+            Self::BuiltinThemes => "builtin_themes",
             Self::Agents => "agents",
             Self::Editors => "editors",
             Self::Actions => "actions",
@@ -241,8 +346,14 @@ impl Source {
     }
 }
 
-const SOURCES: [Source; 5] =
-    [Source::Themes, Source::Agents, Source::Editors, Source::Actions, Source::RunScripts];
+const SOURCES: [Source; 6] = [
+    Source::Themes,
+    Source::BuiltinThemes,
+    Source::Agents,
+    Source::Editors,
+    Source::Actions,
+    Source::RunScripts,
+];
 
 /// Everything the panel needs to show a family of settings.
 #[derive(Debug, Clone)]
@@ -319,10 +430,19 @@ pub fn view(layer: &Layer, lk: &Lookups) -> View {
 impl Entry {
     /// For the web: the entry without the schema it points at (the client has that already).
     pub fn to_json(&self) -> Value {
+        // A token isn't sent where it is only shown: a program that prints it is (that isn't one).
+        let value = if matches!(self.setting.kind, super::Kind::Secret) {
+            match &self.value {
+                Value::String(_) => json!("••••"),
+                other => other.clone(),
+            }
+        } else {
+            self.value.clone()
+        };
         json!({
             "key": self.key,
             "setting": self.setting.key,
-            "value": self.value,
+            "value": value,
             "default": self.default,
             "shown": self.shown(),
             "default_shown": self.default_shown(),

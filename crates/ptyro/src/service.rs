@@ -47,7 +47,15 @@ fn launchd_path() -> PathBuf {
 
 /// systemd quotes: `"…"` with `\` and `"` escaped, `%` doubled (specifiers).
 fn sd_quote(s: &str) -> String {
-    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"").replace('%', "%%"))
+    // (A newline in a value would end the line and start another directive.)
+    format!(
+        "\"{}\"",
+        s.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('%', "%%")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+    )
 }
 
 pub fn systemd_unit(exe: &str, env: &[(&str, String)]) -> String {
@@ -149,6 +157,8 @@ pub fn install(ctx: &Ctx, dry_run: bool) -> Result<i32, Error> {
         if running {
             eprintln!("a daemon is already running: launchd takes over at your next login");
         } else {
+            // Loaded but not running (a stopped job): bootstrap would fail on it, so clear it first.
+            let _ = sh(&["launchctl", "bootout", &format!("gui/{uid}/{LABEL}")], dry_run);
             sh(
                 &[
                     "launchctl",
@@ -178,12 +188,18 @@ pub fn install(ctx: &Ctx, dry_run: bool) -> Result<i32, Error> {
 }
 
 pub fn uninstall(ctx: &Ctx, dry_run: bool) -> Result<i32, Error> {
-    let _ = ctx;
     if cfg!(target_os = "macos") {
         let path = launchd_path();
         let uid = rustix::process::getuid().as_raw().to_string();
-        // bootout stops the job; it's fine if it isn't loaded.
-        let _ = sh(&["launchctl", "bootout", &format!("gui/{uid}/{LABEL}")], dry_run);
+        // bootout stops the job, and a daemon launchd started is that job: a running daemon (and
+        // the sessions in it) is left alone, as on Linux. Without one it's fine if it isn't loaded.
+        if daemon_running(ctx) {
+            eprintln!(
+                "a daemon is running: it keeps running (launchd forgets the job at your next login); `ptyro daemon stop` stops it"
+            );
+        } else {
+            let _ = sh(&["launchctl", "bootout", &format!("gui/{uid}/{LABEL}")], dry_run);
+        }
         remove(&path, dry_run)?;
     } else {
         let path = systemd_path();
@@ -213,6 +229,13 @@ fn remove(path: &std::path::Path, dry_run: bool) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_newline_in_a_value_cannot_start_a_directive() {
+        let u = systemd_unit("/bin/ptyro", &[("PATH", "/a\nExecStartPre=/bin/evil".to_owned())]);
+        assert!(!u.lines().any(|l| l.starts_with("ExecStartPre")), "{u}");
+        assert!(u.contains("Environment=\"PATH=/a\\nExecStartPre=/bin/evil\""), "{u}");
+    }
 
     #[test]
     fn units_quote_and_carry_the_environment() {

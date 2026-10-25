@@ -73,6 +73,51 @@ fn str_of(v: &Value, k: &str) -> String {
     v[k].as_str().unwrap_or_default().to_owned()
 }
 
+/// How long one `gh` call may take: a stalled network or credential helper must not hold the PR
+/// poller (and every request that asks `gh`) forever.
+const GH_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// `Command::output`, killed after `limit`: `TimedOut` when it was. Both pipes are read on
+/// threads, so a chatty command can't fill one and wait.
+fn output_bounded(
+    mut cmd: std::process::Command,
+    limit: Duration,
+) -> std::io::Result<std::process::Output> {
+    use std::io::Read;
+    cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+    let mut child = cmd.spawn()?;
+    let drain = |mut pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(p) = pipe.as_mut() {
+                let _ = p.read_to_end(&mut buf);
+            }
+            buf
+        })
+    };
+    let out = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let err = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let deadline = std::time::Instant::now() + limit;
+    let status = loop {
+        match child.try_wait()? {
+            Some(s) => break s,
+            None if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "timed out"));
+            }
+        }
+    };
+    Ok(std::process::Output {
+        status,
+        stdout: out.join().unwrap_or_default(),
+        stderr: err.join().unwrap_or_default(),
+    })
+}
+
 impl Daemon {
     /// The profile a worktree's tools run as.
     pub(crate) fn wt_profile(&self, wt: &WorktreeInfo) -> String {
@@ -109,13 +154,22 @@ impl Daemon {
                 .env("GH_PROMPT_DISABLED", "1")
                 .env("NO_COLOR", "1")
                 .stdin(std::process::Stdio::null());
-            c.output()
+            output_bounded(c, GH_TIMEOUT)
         })
         .await?;
         let out = match out {
             Ok(o) => o,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 return Err(gh_err("the GitHub CLI (`gh`) isn't installed: PR features need it"));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                return Err(Error::new(
+                    ErrorCode::Timeout,
+                    format!(
+                        "gh didn't answer within {}s (offline, or waiting on a login?)",
+                        GH_TIMEOUT.as_secs()
+                    ),
+                ));
             }
             Err(e) => return Err(Error::internal(format!("gh: {e}"))),
         };
@@ -131,7 +185,11 @@ impl Daemon {
         }
     }
 
-    async fn gh_json(self: &Arc<Self>, wt: &WorktreeInfo, args: &[&str]) -> Result<Value, Error> {
+    pub(crate) async fn gh_json(
+        self: &Arc<Self>,
+        wt: &WorktreeInfo,
+        args: &[&str],
+    ) -> Result<Value, Error> {
         let out = self.gh(wt, args.iter().map(|a| (*a).to_owned()).collect()).await?;
         serde_json::from_str(&out)
             .map_err(|e| Error::internal(format!("gh printed something unexpected: {e}")))
@@ -437,7 +495,7 @@ impl Daemon {
         let s = self
             .owner(&wt)
             .ok_or_else(|| Error::missing("agent session", format!("in {}", wt.qualified())))?;
-        let name = s.meta.lock().expect("meta").name.clone();
+        let name = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name.clone();
         self.deliver_when_idle(&s, msg);
         Ok(Reply::Notes {
             notes: vec![format!(

@@ -54,6 +54,9 @@ pub struct Health {
     pub running: bool,
     /// How many there were when last announced (a new one is announced once).
     pub announced: usize,
+    /// A fresh result that arrived while the mend list was open: its rows point into
+    /// `findings`, so it is taken once the list is closed.
+    pub deferred: Option<Vec<Check>>,
 }
 
 /// The command a doctor message suggests: the first `` `ptyro …` `` in it, with a
@@ -73,6 +76,18 @@ pub fn suggested_cli(c: &Check) -> Option<Vec<String>> {
     (!words.is_empty() && !words.iter().any(|w| w.starts_with('<'))).then_some(words)
 }
 
+/// The path in "`<path> is 644: …`" (the doctor's wording): everything before the mode, so a
+/// path with a space in it stays whole.
+fn private_path(text: &str) -> Option<&str> {
+    text.rmatch_indices(" is ").find_map(|(i, _)| {
+        let mode = &text[i + 4..];
+        (mode.len() >= 4
+            && mode.as_bytes()[..3].iter().all(u8::is_ascii_digit)
+            && mode.as_bytes()[3] == b':')
+            .then_some(&text[..i])
+    })
+}
+
 /// A doctor check as a finding: only warnings and problems, with the fix its text implies.
 pub fn finding(c: &Check) -> Option<Finding> {
     let problem = match c.level.as_str() {
@@ -83,7 +98,7 @@ pub fn finding(c: &Check) -> Option<Finding> {
     let fix = if c.section == "tmux" {
         Some(Fix::Tmux { name: c.name.clone(), value: "on".into() })
     } else if c.name == "config mode" {
-        c.text.split_whitespace().next().map(|p| Fix::Private(PathBuf::from(p)))
+        private_path(&c.text).map(|p| Fix::Private(PathBuf::from(p)))
     } else {
         suggested_cli(c).map(Fix::Cli)
     };
@@ -111,6 +126,11 @@ pub fn shell_init_missing() -> Option<(PathBuf, String)> {
 impl App {
     /// Periodically, in the background (from `tick`).
     pub(crate) fn health_tick(&mut self, started: Instant) {
+        if !self.health_open()
+            && let Some(checks) = self.health.deferred.take()
+        {
+            self.got_health(checks);
+        }
         if self.health.running || self.client.is_none() || self.opts.raw {
             return;
         }
@@ -142,8 +162,20 @@ impl App {
         });
     }
 
+    /// The mend list is on screen (its rows are numbers into the findings).
+    fn health_open(&self) -> bool {
+        matches!(
+            self.overlay,
+            Some(crate::app::Overlay::Picker { purpose: crate::app::Purpose::Health, .. })
+        )
+    }
+
     pub(crate) fn got_health(&mut self, checks: Vec<Check>) {
         self.health.running = false;
+        if self.health_open() {
+            self.health.deferred = Some(checks);
+            return;
+        }
         let mut findings: Vec<Finding> = checks.iter().filter_map(finding).collect();
         if let Some((rc, line)) = shell_init_missing() {
             findings.push(Finding {
@@ -225,6 +257,11 @@ impl App {
             }
             Some(Fix::Private(path)) => {
                 use std::os::unix::fs::PermissionsExt;
+                // Only a file: 600 on a directory would shut its owner out of it.
+                if !path.is_file() {
+                    self.toast_err(format!("{} isn't a file I can make private", path.display()));
+                    return;
+                }
                 match std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)) {
                     Ok(()) => {
                         self.health.findings.remove(i);
@@ -328,6 +365,11 @@ mod tests {
         let private =
             finding(&check("ptyro", "config mode", "warn", "/h/c.toml is 644: …")).unwrap();
         assert_eq!(private.fix, Some(Fix::Private("/h/c.toml".into())));
+        // A path with a space in it is one path, not its first word.
+        let spaced =
+            finding(&check("ptyro", "config mode", "warn", "/Users/John Smith/c.toml is 644: …"))
+                .unwrap();
+        assert_eq!(spaced.fix, Some(Fix::Private("/Users/John Smith/c.toml".into())));
         // A placeholder it can't fill: no fix rather than a wrong one.
         assert!(suggested_cli(&check("x", "y", "warn", "run `ptyro thing <name>`")).is_none());
     }

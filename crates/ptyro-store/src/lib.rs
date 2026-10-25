@@ -255,6 +255,35 @@ pub struct Registry {
     pub trust: Vec<TrustRow>,
 }
 
+const SESSION_COLS: &str = "id, name, kind, argv, cwd, state, pid, daemon_run, created_at, ended_at, \
+                            profile, worktree_id, project_id, workspace, agent, script, launch, conversation_id, title";
+
+/// A `session` row, as selected by [`SESSION_COLS`].
+fn session_row(r: &rusqlite::Row<'_>) -> Result<SessionRecord> {
+    let launch: Option<String> = r.get(16)?;
+    Ok(SessionRecord {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        kind: serde_json::from_str(&r.get::<_, String>(2)?)?,
+        argv: serde_json::from_str(&r.get::<_, String>(3)?)?,
+        cwd: r.get(4)?,
+        state: serde_json::from_str(&r.get::<_, String>(5)?)?,
+        pid: r.get(6)?,
+        daemon_run: r.get(7)?,
+        created_ms: r.get::<_, i64>(8)? as u64,
+        ended_ms: opt_ms(r.get(9)?),
+        profile: r.get(10)?,
+        worktree: r.get(11)?,
+        project: r.get(12)?,
+        workspace: r.get(13)?,
+        agent: r.get(14)?,
+        script: r.get(15)?,
+        launch: launch.map(|l| serde_json::from_str(&l)).transpose()?,
+        conversation: r.get(17)?,
+        title: r.get(18)?,
+    })
+}
+
 fn opt_ms(v: Option<i64>) -> Option<u64> {
     v.map(|v| v as u64)
 }
@@ -269,10 +298,12 @@ impl Store {
     }
 
     fn start(mut conn: Connection) -> Result<Self> {
+        // First: the pragmas below take locks too, and a second opener (a daemon starting in a
+        // race, `sqlite3`, a backup) should wait for them, not fail the store for good.
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         Migrations::from_slice(MIGRATIONS).to_latest(&mut conn)?;
         let (tx, rx) = mpsc::channel::<Job>();
         std::thread::Builder::new()
@@ -304,7 +335,8 @@ impl Store {
     pub fn spawn(&self, f: impl FnOnce(&mut Connection) -> Result<()> + Send + 'static) {
         let _ = self.tx.send(Box::new(move |c| {
             if let Err(e) = f(c) {
-                eprintln!("ptyro store: {e}");
+                // (An autospawned daemon's stderr is /dev/null: the log is where this is read.)
+                tracing::warn!("ptyro store: {e}");
             }
         }));
     }
@@ -415,11 +447,22 @@ impl Store {
 
     /// Dormant sessions to bring back (oldest first).
     pub async fn dormant(&self) -> Result<Vec<SessionRecord>> {
-        let all = self.history(10_000).await?;
-        let mut v: Vec<SessionRecord> =
-            all.into_iter().filter(|r| r.state == ProcessState::Dormant).collect();
-        v.reverse();
-        Ok(v)
+        let dormant = serde_json::to_string(&ProcessState::Dormant)?;
+        self.call(move |c| {
+            let mut st = c.prepare(&format!(
+                "SELECT {SESSION_COLS} FROM session WHERE state = ?1 ORDER BY created_at ASC"
+            ))?;
+            let mut rows = st.query(params![dormant])?;
+            let mut out = Vec::new();
+            while let Some(r) = rows.next()? {
+                match session_row(r) {
+                    Ok(rec) => out.push(rec),
+                    Err(e) => tracing::warn!("skipping an unreadable session record: {e}"),
+                }
+            }
+            Ok(out)
+        })
+        .await
     }
 
     pub async fn inbox_add(&self, e: InboxEntry) -> Result<i64> {
@@ -504,39 +547,20 @@ impl Store {
         .await
     }
 
-    /// Newest first.
+    /// Newest first. A row this build can't read (written by a newer one, or damaged) is
+    /// skipped and logged, not allowed to hide every other session.
     pub async fn history(&self, limit: usize) -> Result<Vec<SessionRecord>> {
         self.call(move |c| {
-            let mut st = c.prepare(
-                "SELECT id, name, kind, argv, cwd, state, pid, daemon_run, created_at, ended_at,
-                        profile, worktree_id, project_id, workspace, agent, script, launch, conversation_id, title
-                 FROM session ORDER BY created_at DESC LIMIT ?1",
-            )?;
+            let mut st = c.prepare(&format!(
+                "SELECT {SESSION_COLS} FROM session ORDER BY created_at DESC LIMIT ?1"
+            ))?;
             let mut rows = st.query(params![limit as i64])?;
             let mut out = Vec::new();
             while let Some(r) = rows.next()? {
-                let launch: Option<String> = r.get(16)?;
-                out.push(SessionRecord {
-                    id: r.get(0)?,
-                    name: r.get(1)?,
-                    kind: serde_json::from_str(&r.get::<_, String>(2)?)?,
-                    argv: serde_json::from_str(&r.get::<_, String>(3)?)?,
-                    cwd: r.get(4)?,
-                    state: serde_json::from_str(&r.get::<_, String>(5)?)?,
-                    pid: r.get(6)?,
-                    daemon_run: r.get(7)?,
-                    created_ms: r.get::<_, i64>(8)? as u64,
-                    ended_ms: opt_ms(r.get(9)?),
-                    profile: r.get(10)?,
-                    worktree: r.get(11)?,
-                    project: r.get(12)?,
-                    workspace: r.get(13)?,
-                    agent: r.get(14)?,
-                    script: r.get(15)?,
-                    launch: launch.map(|l| serde_json::from_str(&l)).transpose()?,
-                    conversation: r.get(17)?,
-                    title: r.get(18)?,
-                });
+                match session_row(r) {
+                    Ok(rec) => out.push(rec),
+                    Err(e) => tracing::warn!("skipping an unreadable session record: {e}"),
+                }
             }
             Ok(out)
         })
@@ -848,6 +872,72 @@ mod tests {
             conversation: None,
             title: Some(format!("the title of {id}")),
         }
+    }
+
+    /// A session row this build can't decode (a state a newer build wrote) hides nothing else,
+    /// and dormant sessions are found however many newer rows there are.
+    #[tokio::test]
+    async fn one_unreadable_row_does_not_hide_the_rest() {
+        let s = Store::open_in_memory().unwrap();
+        let mut dormant = record("sleeper", "old");
+        dormant.agent = Some("claude".into());
+        dormant.conversation = Some("conv-9".into());
+        dormant.state = ProcessState::Dormant;
+        dormant.created_ms = 1;
+        s.save_session(dormant);
+        s.save_session(record("fine", "run"));
+        s.call(|c| {
+            c.execute(
+                "INSERT INTO session (id, name, kind, argv, cwd, state, daemon_run, created_at, profile)
+                 VALUES ('from-the-future', 'x', '\"shell\"', '[]', '/', '{\"t\":\"a_new_state\"}', 'run', 5, 'default')",
+                [],
+            )?;
+            // Plenty of newer rows after the dormant one: the old `history(10_000)` limit.
+            for n in 0..30 {
+                c.execute(
+                    "INSERT INTO session (id, name, kind, argv, cwd, state, daemon_run, created_at, profile)
+                     VALUES (?1, ?1, '\"shell\"', '[]', '/', '{\"t\":\"exited\",\"code\":0}', 'run', ?2, 'default')",
+                    params![format!("e{n}"), 100 + n],
+                )?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let h = s.history(1000).await.unwrap();
+        assert!(h.iter().any(|r| r.id == "fine") && h.iter().all(|r| r.id != "from-the-future"));
+        let d = s.dormant().await.unwrap();
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert_eq!(d[0].id, "sleeper");
+    }
+
+    /// A run event with a sequence number already stored is skipped, not a reason to lose the
+    /// projection that came with it.
+    #[tokio::test]
+    async fn a_repeated_run_event_does_not_abort_the_transaction() {
+        let s = Store::open_in_memory().unwrap();
+        let row = RunRow {
+            id: "r-dup".into(),
+            kind: "recipe".into(),
+            name: "n".into(),
+            recipe_src: None,
+            recipe_sha: None,
+            status: "running".into(),
+            state: serde_json::json!({}),
+            project: None,
+            lead: None,
+            forked_from: None,
+            fork_step: None,
+            created_ms: 1,
+            ended_ms: None,
+        };
+        let ev = |seq: u64| (seq, 1, "note".to_owned(), None, serde_json::json!({"e": "note"}));
+        s.run_append(row.clone(), vec![ev(1), ev(2)]);
+        let mut done = row;
+        done.status = "succeeded".into();
+        s.run_append(done, vec![ev(2), ev(3)]);
+        assert_eq!(s.run("r-dup".into()).await.unwrap().unwrap().status, "succeeded");
+        assert_eq!(s.run_events("r-dup".into()).await.unwrap().len(), 3);
     }
 
     #[tokio::test]

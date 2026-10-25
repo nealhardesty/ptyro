@@ -54,6 +54,56 @@ fn signature(doc: &ptyro_core::model::DiffDoc) -> u64 {
     h.finish()
 }
 
+/// The lock that serializes gathering a run's evidence.
+fn gather_lock(run: &str) -> Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: std::sync::Mutex<BTreeMap<String, Arc<tokio::sync::Mutex<()>>>> =
+        std::sync::Mutex::new(BTreeMap::new());
+    let mut m = LOCKS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    Arc::clone(m.entry(run.to_owned()).or_default())
+}
+
+/// The new name in a `diff --git a/X b/Y` line, unquoted as git quotes it (`"b/\303\244"`).
+fn header_name(file: &str) -> String {
+    let head = file.lines().next().unwrap_or("");
+    let rest = head.strip_prefix("diff --git ").unwrap_or(head);
+    let unquote = |q: &str| -> String {
+        let inner = q.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(q);
+        let (mut bytes, mut it) = (Vec::new(), inner.bytes().peekable());
+        while let Some(b) = it.next() {
+            if b != b'\\' {
+                bytes.push(b);
+                continue;
+            }
+            match it.next() {
+                Some(b'n') => bytes.push(b'\n'),
+                Some(b't') => bytes.push(b'\t'),
+                Some(d @ b'0'..=b'7') => {
+                    let mut v = u32::from(d - b'0');
+                    for _ in 0..2 {
+                        match it.peek() {
+                            Some(n @ b'0'..=b'7') => {
+                                v = v * 8 + u32::from(n - b'0');
+                                it.next();
+                            }
+                            _ => break,
+                        }
+                    }
+                    bytes.push(v as u8);
+                }
+                Some(other) => bytes.push(other),
+                None => {}
+            }
+        }
+        String::from_utf8_lossy(&bytes).into_owned()
+    };
+    let name = if let Some(i) = rest.rfind(" \"b/") {
+        unquote(&rest[i + 1..]).strip_prefix("b/").map(str::to_owned)
+    } else {
+        rest.rfind(" b/").map(|i| rest[i + 3..].to_owned())
+    };
+    name.unwrap_or_default()
+}
+
 /// Keep only the chosen files and hunks (`FILE:N`, 1-based) of a unified diff.
 pub fn filter_patch(patch: &str, paths: &[String], hunks: &[String]) -> String {
     let mut out = String::new();
@@ -65,11 +115,13 @@ pub fn filter_patch(patch: &str, paths: &[String], hunks: &[String]) -> String {
         if file.trim().is_empty() {
             continue;
         }
+        // A binary file or a pure rename has no `+++` line, and git quotes odd names: the
+        // `diff --git` line is the one every file has.
         let name = file
             .lines()
             .find_map(|l| l.strip_prefix("+++ b/").or_else(|| l.strip_prefix("--- a/")))
-            .unwrap_or("")
-            .to_owned();
+            .map(str::to_owned)
+            .unwrap_or_else(|| header_name(&file));
         let wanted_hunks: Vec<usize> = hunks
             .iter()
             .filter_map(|h| h.rsplit_once(':'))
@@ -395,7 +447,8 @@ impl Daemon {
             ..Default::default()
         };
         let Ok(s) = self.spawn(spec).await else { return };
-        s.meta.lock().expect("meta").run = Some((run.to_owned(), step.to_owned()));
+        s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).run =
+            Some((run.to_owned(), step.to_owned()));
         self.emit(run, vec![RunEvent::SessionAdded { session: s.id.full() }]);
         let t = ptyro_run::recipe::TimeoutFull {
             start: Some("3m".into()),
@@ -455,6 +508,10 @@ impl Daemon {
                 let v = verify.as_ref().and_then(|v| v.verify.clone()).unwrap_or_default();
                 let sid = verify.as_ref().map_or_else(|| "compare".to_owned(), |v| v.id.clone());
                 let ctx = self.run_info(run).map(|i| i.state.context(&i.dir)).unwrap_or_default();
+                // One gathering per run at a time: they share scratch directories and logs, and
+                // one's cleanup would delete the other's.
+                let lock = gather_lock(run);
+                let _one = lock.lock().await;
                 let (f, b) = self.gather(run, &sid, &ids, &v, &ctx).await?;
                 if let Some(v) = &verify {
                     self.emit(
@@ -869,7 +926,7 @@ impl Daemon {
                     self.deliver_when_idle(&s, text.clone());
                     notes.push(format!(
                         "{c}: sent to {} (typed once its turn is over)",
-                        s.meta.lock().expect("meta").name
+                        s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name
                     ));
                 }
                 Ok(Reply::Notes { notes })
@@ -896,5 +953,24 @@ mod tests {
         assert!(second.contains("+q") && !second.contains("+y"), "{second}");
         assert!(second.starts_with("diff --git a/a.txt"));
         assert!(filter_patch(patch, &["nope".into()], &[]).is_empty());
+    }
+
+    #[test]
+    fn binary_files_renames_and_quoted_names_are_found_by_their_header() {
+        // No `+++` line in any of these: only the `diff --git` line has the name.
+        let patch = concat!(
+            "diff --git a/img.png b/img.png\nindex 1..2 100644\nBinary files a/img.png and b/img.png differ\n",
+            "diff --git a/old.txt b/new name.txt\nsimilarity index 100%\nrename from old.txt\nrename to new name.txt\n",
+            "diff --git \"a/\\303\\244.txt\" \"b/\\303\\244.txt\"\nindex 1..2 100644\nBinary files differ\n",
+        );
+        assert!(filter_patch(patch, &["img.png".into()], &[]).contains("img.png"));
+        let renamed = filter_patch(patch, &["new name.txt".into()], &[]);
+        assert!(
+            renamed.contains("rename to new name.txt") && !renamed.contains("img.png"),
+            "{renamed}"
+        );
+        let quoted = filter_patch(patch, &["ä.txt".into()], &[]);
+        assert!(quoted.contains("Binary files differ") && !quoted.contains("img.png"), "{quoted}");
+        assert_eq!(header_name("diff --git a/x y b/x y\n"), "x y");
     }
 }

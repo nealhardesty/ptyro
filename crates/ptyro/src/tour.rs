@@ -18,15 +18,47 @@ const GREETING: &str = "Helo, world!\n";
 /// Variables of the outer ptyro the tour must not see (they would point it at your daemon).
 const OUTER: &[&str] = &["PTYRO_SOCKET", "PTYRO_SESSION_ID", "PTYRO_CONFIG", "PTYRO_PROFILE"];
 
+/// Tours at once, from the web app.
+const MAX_TOURS: usize = 2;
+
+/// Tours of ours whose directories are there (the stale ones are swept first).
+fn running_tours() -> usize {
+    let Ok(dir) = std::fs::read_dir(std::env::temp_dir()) else { return 0 };
+    dir.flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("ptyro-tour-"))
+        .filter(|e| {
+            std::fs::symlink_metadata(e.path()).is_ok_and(|m| {
+                std::os::unix::fs::MetadataExt::uid(&m) == ptyro_core::paths::current_uid()
+            })
+        })
+        .count()
+}
+
+/// A new directory for a tour, `ptyro-tour-<pid>-<ms>` in the temp directory, made by us alone
+/// (mode 0700, and it must not exist): a name anyone can guess, in a directory everyone can
+/// write to, must never be one somebody else made first.
+fn make_dir() -> Result<std::path::PathBuf, Error> {
+    use std::os::unix::fs::DirBuilderExt;
+    for tries in 0..100u64 {
+        let dir = std::env::temp_dir().join(format!(
+            "ptyro-tour-{}-{}",
+            std::process::id(),
+            ptyro_core::now_ms() + tries
+        ));
+        match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(Error::internal(format!("{}: {e}", dir.display()))),
+        }
+    }
+    Err(Error::internal("no free name for the tour's directory"))
+}
+
 pub async fn run(ctx: &Ctx) -> Result<i32, Error> {
     crate::cli::check_attachable()?;
     let exe = std::env::current_exe().map_err(|e| Error::internal(format!("ptyro's path: {e}")))?;
     sweep(&exe);
-    let dir = std::env::temp_dir().join(format!(
-        "ptyro-tour-{}-{}",
-        std::process::id(),
-        ptyro_core::now_ms()
-    ));
+    let dir = make_dir()?;
     let home = dir.join("ptyro");
     let demo = dir.join("demo");
     let mine = std::fs::read_to_string(Config::path(&ctx.paths)).unwrap_or_default();
@@ -58,23 +90,46 @@ pub async fn run(ctx: &Ctx) -> Result<i32, Error> {
 pub async fn web_start(ctx: &Ctx) -> Result<serde_json::Value, Error> {
     use std::os::unix::process::CommandExt;
     let exe = std::env::current_exe().map_err(|e| Error::internal(format!("ptyro's path: {e}")))?;
-    sweep(&exe);
-    let dir = std::env::temp_dir().join(format!(
-        "ptyro-tour-{}-{}",
-        std::process::id(),
-        ptyro_core::now_ms()
-    ));
+    // Each tour is a daemon, a server and a repository: a few, not as many as are asked for.
+    if running_tours() >= MAX_TOURS {
+        return Err(Error::invalid(
+            "a tour is already running here: end it (the tour's coach has an End button) before starting another",
+        ));
+    }
+    // (Git and the file system, off the runtime's threads: the server answers others meanwhile.)
+    let make = {
+        let exe = exe.clone();
+        tokio::task::spawn_blocking(move || {
+            sweep(&exe);
+            make_dir()
+        })
+    };
+    let dir = make.await.map_err(|e| Error::internal(e.to_string()))??;
     let home = dir.join("ptyro");
     let demo = dir.join("demo");
     let mine = std::fs::read_to_string(Config::path(&ctx.paths)).unwrap_or_default();
-    prepare(&exe, &home, &demo, &mine)?;
+    {
+        let (exe, home, demo) = (exe.clone(), home.clone(), demo.clone());
+        let prep = tokio::task::spawn_blocking(move || prepare(&exe, &home, &demo, &mine)).await;
+        if let Err(e) = prep.map_err(|e| Error::internal(e.to_string())).and_then(|r| r) {
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(e);
+        }
+    }
     let fail = |what: &str, dir: &Path, exe: &Path, home: &Path, e: String| {
         let _ = env(&mut Command::new(exe), home).args(["daemon", "stop", "--force"]).output();
         let _ = std::fs::remove_dir_all(dir);
         Error::internal(format!("{what}: {e}"))
     };
     // The tour's daemon starts with its first project.
-    let added = env(&mut Command::new(&exe), &home).args(["project", "add"]).arg(&demo).output();
+    let added = {
+        let (exe, home, demo) = (exe.clone(), home.clone(), demo.clone());
+        tokio::task::spawn_blocking(move || {
+            env(&mut Command::new(&exe), &home).args(["project", "add"]).arg(&demo).output()
+        })
+        .await
+        .map_err(|e| Error::internal(e.to_string()))?
+    };
     if !added.as_ref().is_ok_and(|o| o.status.success()) {
         return Err(fail("the tour's project", &dir, &exe, &home, format!("{added:?}")));
     }
@@ -98,18 +153,25 @@ pub async fn web_start(ctx: &Ctx) -> Result<serde_json::Value, Error> {
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
-    let out = env(&mut Command::new(&exe), &home)
-        .args([
-            "pair",
-            "--scope",
-            "full",
-            "--json",
-            "--url",
-            &format!("http://127.0.0.1:{port}"),
-            "tour",
-        ])
-        .output()
-        .map_err(|e| fail("pairing the tour", &dir, &exe, &home, e.to_string()))?;
+    let out = {
+        let (exe2, home2) = (exe.clone(), home.clone());
+        tokio::task::spawn_blocking(move || {
+            env(&mut Command::new(&exe2), &home2)
+                .args([
+                    "pair",
+                    "--scope",
+                    "full",
+                    "--json",
+                    "--url",
+                    &format!("http://127.0.0.1:{port}"),
+                    "tour",
+                ])
+                .output()
+        })
+        .await
+        .map_err(|e| Error::internal(e.to_string()))?
+        .map_err(|e| fail("pairing the tour", &dir, &exe, &home, e.to_string()))?
+    };
     let url = serde_json::from_slice::<serde_json::Value>(&out.stdout)
         .ok()
         .and_then(|v| v["url"].as_str().map(str::to_owned))
@@ -166,9 +228,14 @@ fn sweep(exe: &Path) {
         else {
             continue;
         };
-        let alive = rustix::process::Pid::from_raw(pid)
-            .is_some_and(|p| rustix::process::test_kill_process(p).is_ok());
-        if alive {
+        // Another user's tour is theirs to clean up: a pid we may not signal is alive, not gone.
+        let alive = rustix::process::Pid::from_raw(pid).is_some_and(|p| {
+            !matches!(rustix::process::test_kill_process(p), Err(rustix::io::Errno::SRCH))
+        });
+        let ours = std::fs::symlink_metadata(e.path()).is_ok_and(|m| {
+            std::os::unix::fs::MetadataExt::uid(&m) == ptyro_core::paths::current_uid()
+        });
+        if alive || !ours {
             continue;
         }
         let _ = env(&mut Command::new(exe), &e.path().join("ptyro"))
@@ -307,5 +374,19 @@ mod tests {
         );
         assert_eq!(agent["env"]["PTYRO_FAKE_TOUR"].as_str(), Some("1"));
         assert!(Config::parse(&config(&PathBuf::from("/bin/ptyro"), "not toml")).is_ok());
+    }
+
+    #[test]
+    fn a_tours_directory_is_ours_alone_and_new() {
+        let a = make_dir().unwrap();
+        let b = make_dir().unwrap();
+        assert_ne!(a, b);
+        let mode =
+            std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&a).unwrap().permissions());
+        assert_eq!(mode & 0o777, 0o700);
+        assert!(a.file_name().unwrap().to_string_lossy().starts_with("ptyro-tour-"));
+        assert!(running_tours() >= 2);
+        let _ = std::fs::remove_dir(&a);
+        let _ = std::fs::remove_dir(&b);
     }
 }

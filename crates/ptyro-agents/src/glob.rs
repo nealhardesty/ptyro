@@ -8,31 +8,43 @@ pub fn matches(pattern: &str, text: &str) -> bool {
     }
     let p: Vec<char> = pattern.chars().collect();
     let t: Vec<char> = text.chars().collect();
-    go(&p, &t)
+    // Each (pattern position, text position) is decided once, so a pattern with several `*` or
+    // `**` against a long path costs its product, not an exponential.
+    go(&p, 0, &t, 0, &mut std::collections::HashMap::new())
 }
 
-fn go(p: &[char], t: &[char]) -> bool {
-    match p {
-        [] => t.is_empty(),
-        ['*', '*', '/', rest @ ..] => {
+type Memo = std::collections::HashMap<(usize, usize), bool>;
+
+fn go(p: &[char], pi: usize, t: &[char], ti: usize, memo: &mut Memo) -> bool {
+    if let Some(&known) = memo.get(&(pi, ti)) {
+        return known;
+    }
+    let rest_t = &t[ti.min(t.len())..];
+    let hit = match &p[pi.min(p.len())..] {
+        [] => rest_t.is_empty(),
+        ['*', '*', '/', ..] => {
             // `**/` is zero or more whole directories: the rest starts at a segment boundary.
-            (0..=t.len()).any(|i| (i == 0 || t[i - 1] == '/') && go(rest, &t[i..]))
+            (ti..=t.len()).any(|i| (i == 0 || t[i - 1] == '/') && go(p, pi + 3, t, i, memo))
         }
-        ['*', '*', rest @ ..] => (0..=t.len()).any(|i| go(rest, &t[i..])),
-        ['*', rest @ ..] => {
-            for i in 0..=t.len() {
-                if go(rest, &t[i..]) {
-                    return true;
+        ['*', '*', ..] => (ti..=t.len()).any(|i| go(p, pi + 2, t, i, memo)),
+        ['*', ..] => {
+            let mut found = false;
+            for i in ti..=t.len() {
+                if go(p, pi + 1, t, i, memo) {
+                    found = true;
+                    break;
                 }
                 if t.get(i) == Some(&'/') {
-                    return false;
+                    break;
                 }
             }
-            false
+            found
         }
-        ['?', rest @ ..] => t.first().is_some_and(|c| *c != '/') && go(rest, &t[1..]),
-        [c, rest @ ..] => t.first() == Some(c) && go(rest, &t[1..]),
-    }
+        ['?', ..] => rest_t.first().is_some_and(|c| *c != '/') && go(p, pi + 1, t, ti + 1, memo),
+        [c, ..] => rest_t.first() == Some(c) && go(p, pi + 1, t, ti + 1, memo),
+    };
+    memo.insert((pi, ti), hit);
+    hit
 }
 
 #[cfg(test)]
@@ -60,5 +72,15 @@ mod tests {
         assert!(!matches("a/**/b", "a/xb"));
         assert!(!matches("a/**/b", "a/x/yb"));
         assert!(matches("a/**", "a/x/y") && matches("a**", "abc/d"));
+    }
+
+    #[test]
+    fn many_wildcards_against_a_long_path_stay_fast() {
+        let text = "a/".repeat(2000) + "z";
+        let pat = "**/*/**/*/**/*/**/*/**/*/**/*/nope";
+        let start = std::time::Instant::now();
+        assert!(!matches(pat, &text));
+        assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
+        assert!(matches("**/*/z", &text));
     }
 }

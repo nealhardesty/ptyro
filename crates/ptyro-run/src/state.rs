@@ -506,14 +506,18 @@ impl RunState {
             }
             RunEvent::GateResolved { step, choice, note, by, key, at } => {
                 let s = self.step_mut(step);
-                if let Some(g) = &mut s.gate {
+                // The first answer stands: a second one (a timeout racing a phone's tap, a
+                // double tap) or one for a step that has ended is ignored, never reopening it.
+                let open = s.status == StepStatus::Waiting
+                    && s.gate.as_ref().is_some_and(|g| g.choice.is_none());
+                if let Some(g) = s.gate.as_mut().filter(|_| open) {
                     g.choice = Some(choice.clone());
                     g.note = note.clone();
                     g.by = Some(by.clone());
                     g.key = key.clone();
                     g.resolved_ms = Some(*at);
+                    s.status = StepStatus::Running;
                 }
-                s.status = StepStatus::Running;
                 self.refresh_waiting();
             }
             RunEvent::Outputs { step, outputs } => {
@@ -730,6 +734,42 @@ mod tests {
         });
         assert_eq!(s2.status, RunStatus::Running);
         assert!(s2.open_gates().is_empty());
+        // The first answer stands: a second one (a timeout racing a tap) changes nothing.
+        s2.apply(&RunEvent::GateResolved {
+            step: "g".into(),
+            choice: "reject".into(),
+            note: None,
+            by: "timeout".into(),
+            key: None,
+            at: 6,
+        });
+        assert_eq!(s2.steps["g"].gate.as_ref().unwrap().choice.as_deref(), Some("approve"));
+        // And a step that has ended is never put back to running by a late answer.
+        s2.apply(&RunEvent::StepEnded {
+            step: "g".into(),
+            status: StepStatus::Failed,
+            reason: Some("cancelled".into()),
+            decided_by: None,
+            at: 7,
+        });
+        let mut ended = s.clone();
+        ended.apply(&RunEvent::StepEnded {
+            step: "g".into(),
+            status: StepStatus::Cancelled,
+            reason: None,
+            decided_by: None,
+            at: 6,
+        });
+        ended.apply(&RunEvent::GateResolved {
+            step: "g".into(),
+            choice: "approve".into(),
+            note: None,
+            by: "phone".into(),
+            key: None,
+            at: 8,
+        });
+        assert_eq!(ended.steps["g"].status, StepStatus::Cancelled);
+        assert!(ended.steps["g"].gate.as_ref().unwrap().choice.is_none());
         // Round-trips as JSON (the store keeps events as JSON).
         for e in &evs {
             let back: RunEvent = serde_json::from_str(&serde_json::to_string(e).unwrap()).unwrap();

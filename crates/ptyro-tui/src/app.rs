@@ -56,6 +56,9 @@ fn drawer_share() -> f32 {
 /// Where the TUI remembers which workspace it showed last.
 pub const LAST_WORKSPACE: &str = "_tui";
 
+/// The widest the sidebar gets (the settings schema's range ends here too).
+const SIDEBAR_MAX: u16 = 120;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Pane,
@@ -301,7 +304,13 @@ impl PromptKind {
 
     /// The text is a name (`[a-z0-9._-]`): bad characters are marked and Tab tidies it.
     pub fn is_name(&self) -> bool {
-        matches!(self, Self::Rename(_) | Self::WorktreeName(_) | Self::NewWorkspace(_))
+        matches!(
+            self,
+            Self::Rename(_)
+                | Self::WorktreeName(_)
+                | Self::NewWorkspace(_)
+                | Self::RenameWorkspace(_)
+        )
     }
 
     /// The name ⏎ takes when nothing was typed (shown dimmed in the field, UX1.24).
@@ -367,6 +376,10 @@ pub enum Pending {
         then: CopyStart,
     },
     Done(String),
+    /// A workspace was renamed: the TUI follows it once the daemon has agreed.
+    WorkspaceRenamed(String),
+    /// A workspace was made: switch to it once the daemon has agreed.
+    WorkspaceMade(String),
     /// A quick terminal to show in the drawer (UX1.25).
     Quick,
     /// The scratchpad's editor to show (NOTE1.1).
@@ -634,6 +647,8 @@ pub struct App {
     pub lost_since: Option<Instant>,
     view_dirty_since: Option<Instant>,
     last_list: Instant,
+    /// The sessions the last `List` reply named (to tell "gone" from "newer than the reply").
+    last_listed: HashSet<SessionId>,
     drag: Option<Drag>,
     reported_focus: Option<(SessionId, bool)>,
     /// Sessions this TUI stopped: their panes move on when they exit (`[ui] on_stop`, UX1.23).
@@ -693,7 +708,7 @@ impl App {
             runs: Vec::new(),
             terminal_focused: true,
             sidebar: config.ui.sidebar && !opts.raw,
-            sidebar_width: config.ui.sidebar_width,
+            sidebar_width: config.ui.sidebar_width.clamp(12, SIDEBAR_MAX),
             sidebar_zoom: false,
             drawer: None,
             drawer_share: crate::quick::DRAWER_SHARE,
@@ -741,6 +756,7 @@ impl App {
             lost_since: None,
             view_dirty_since: None,
             last_list: Instant::now(),
+            last_listed: HashSet::new(),
             drag: None,
             reported_focus: None,
             stopping: HashSet::new(),
@@ -764,6 +780,7 @@ impl App {
             Reply::Sessions { sessions } => sessions,
             _ => Vec::new(),
         };
+        self.last_listed = sessions.iter().map(|s| s.id).collect();
         self.sessions = sessions;
         self.load_registry(&client).await;
         self.client = Some(Arc::clone(&client));
@@ -830,7 +847,20 @@ impl App {
 
     /// Restore the saved view (unless raw or view-only), then make sure `opts.focus` is shown.
     pub async fn restore_view(&mut self) {
+        // A layout changed while the daemon was away is newer than the one it kept: send it
+        // first, and stay on the workspace it belongs to, instead of loading the old one over it.
+        let unsaved = self.view_dirty_since.is_some() && !self.opts.raw && !self.opts.view_only;
+        if unsaved
+            && let Some(client) = &self.client
+            && let Some(reqs) = self.view_requests()
+        {
+            for r in reqs {
+                let _ = client.request(r).await;
+            }
+            self.view_dirty_since = None;
+        }
         if self.opts.workspace.is_none()
+            && !unsaved
             && !self.opts.raw
             && let Some(client) = &self.client
             && let Ok(Reply::View { view: Some(v) }) =
@@ -866,6 +896,11 @@ impl App {
 
     /// Load the current workspace's saved view.
     async fn load_view(&mut self) {
+        // The scratchpad's popup is a session of the daemon we were connected to: gone with it
+        // (it would swallow every key and click, showing nothing).
+        if let Some(id) = self.pad_popup.filter(|id| self.session(*id).is_none()) {
+            self.pad_gone(id);
+        }
         self.layout = Layout::default();
         self.panes = HashMap::from([(1, PaneState::default())]);
         self.focused = 1;
@@ -899,7 +934,7 @@ impl App {
                 if self.layout.contains(saved.focus) { saved.focus } else { self.layout.first() };
             self.zoom = saved.zoom;
             self.sidebar = saved.sidebar;
-            self.sidebar_width = saved.sidebar_width.clamp(12, 80);
+            self.sidebar_width = saved.sidebar_width.clamp(12, SIDEBAR_MAX);
             self.restore_drawer(saved.drawer, saved.drawer_share);
         }
         let ordered = self.ordered();
@@ -949,7 +984,25 @@ impl App {
     }
 
     pub(crate) fn request(&self, pending: Pending, req: Request) {
-        let Some(client) = self.client().cloned() else { return };
+        let Some(client) = self.client().cloned() else {
+            // Not connected (the daemon is restarting): say so for what the person asked for,
+            // instead of silently doing nothing. Background refreshes just try again.
+            if !matches!(
+                pending,
+                Pending::Saved
+                    | Pending::List
+                    | Pending::Registry
+                    | Pending::Resolved
+                    | Pending::PadItems { .. }
+            ) {
+                let why = "not connected: waiting for the daemon to come back";
+                let _ = self.tx.send(AppMsg::Reply(
+                    pending,
+                    Err(ptyro_core::Error::new(ErrorCode::DaemonUnavailable, why)),
+                ));
+            }
+            return;
+        };
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let res = client.request(req).await;
@@ -980,7 +1033,7 @@ impl App {
         if !self.opts.raw && self.config.ui.status_bar && a.height > 2 {
             a.height -= 1;
         }
-        if self.sidebar && !self.zoom && a.width > self.sidebar_width + 20 {
+        if self.sidebar && !self.zoom && a.width > self.sidebar_width.saturating_add(20) {
             a.x += self.sidebar_width + 1;
             a.width -= self.sidebar_width + 1;
         }
@@ -1041,6 +1094,10 @@ impl App {
     /// Subscribe to what's visible, unsubscribe the rest, size every visible session to its pane,
     /// and tell the daemon what's focused.
     pub fn sync(&mut self) {
+        // Keys never go to a sidebar nobody can see (zoomed pane, narrow terminal).
+        if self.focus == Focus::Sidebar && self.sidebar_area().is_none() {
+            self.focus = Focus::Pane;
+        }
         let rects = self.pane_rects();
         let mut visible: HashMap<SessionId, TermSize> = HashMap::new();
         for (pane, rect) in &rects {
@@ -1174,11 +1231,8 @@ impl App {
         self.sync();
     }
 
-    pub fn save_view(&mut self) {
-        self.view_dirty_since = None;
-        if self.opts.raw || self.opts.view_only {
-            return;
-        }
+    /// The requests that save this workspace's view and remember it as the last one.
+    fn view_requests(&self) -> Option<[Request; 2]> {
         let saved = SavedView {
             v: 1,
             layout: self.layout.clone(),
@@ -1190,13 +1244,29 @@ impl App {
             drawer: self.drawer,
             drawer_share: self.drawer_share,
         };
-        if let Ok(view) = serde_json::to_value(saved) {
-            self.request(Pending::Saved, Request::SaveView { name: self.workspace.clone(), view });
-            let last = serde_json::json!({ "workspace": self.workspace });
-            self.request(
-                Pending::Saved,
-                Request::SaveView { name: LAST_WORKSPACE.into(), view: last },
-            );
+        let view = serde_json::to_value(saved).ok()?;
+        let last = serde_json::json!({ "workspace": self.workspace });
+        Some([
+            Request::SaveView { name: self.workspace.clone(), view },
+            Request::SaveView { name: LAST_WORKSPACE.into(), view: last },
+        ])
+    }
+
+    pub fn save_view(&mut self) {
+        if self.opts.raw || self.opts.view_only {
+            self.view_dirty_since = None;
+            return;
+        }
+        // With no daemon to take it the change stays unsaved (and is saved on reconnect):
+        // clearing the flag here would drop a layout changed during an outage.
+        if self.client.is_none() {
+            return;
+        }
+        self.view_dirty_since = None;
+        if let Some(reqs) = self.view_requests() {
+            for r in reqs {
+                self.request(Pending::Saved, r);
+            }
         }
     }
 
@@ -1296,6 +1366,60 @@ impl App {
         }
     }
 
+    /// A `List` reply (every 2 s, and after events were lost): it is the truth about what
+    /// exists, so a session it no longer names (whose removal event never came) is gone from
+    /// panes and every per-session map. One made by an event after the reply was asked for
+    /// isn't in it yet and stays.
+    fn got_list(&mut self, listed: Vec<SessionInfo>) {
+        let named: HashSet<SessionId> = listed.iter().map(|s| s.id).collect();
+        let gone: Vec<SessionId> = self
+            .sessions
+            .iter()
+            .map(|s| s.id)
+            .filter(|id| self.last_listed.contains(id) && !named.contains(id))
+            .collect();
+        if !gone.is_empty() && !self.opts.raw {
+            let order = self.ordered();
+            for id in &gone {
+                if self.is_pad(*id) {
+                    self.pad_gone(*id);
+                } else if self.drawer_session() == Some(*id) {
+                    self.hide_drawer();
+                }
+                self.move_on(*id, &order, true);
+            }
+        }
+        let newer: Vec<SessionInfo> = self
+            .sessions
+            .iter()
+            .filter(|s| !self.last_listed.contains(&s.id) && !named.contains(&s.id))
+            .cloned()
+            .collect();
+        self.sessions = listed;
+        self.sessions.extend(newer);
+        for id in gone {
+            self.forget_session(id);
+        }
+        self.last_listed = named;
+    }
+
+    /// Drop what is kept per session once it is gone (these maps would only grow).
+    fn forget_session(&mut self, id: SessionId) {
+        self.stopping.remove(&id);
+        self.marked.retain(|m| *m != id);
+        self.chats.remove(&id);
+        self.chat_terminal.remove(&id);
+        self.controller.remove(&id);
+        self.caches.remove(&id);
+        self.sizes.remove(&id);
+        self.subscribed.remove(&id);
+        for p in self.panes.values_mut() {
+            if p.last == Some(id) {
+                p.last = None;
+            }
+        }
+    }
+
     pub(crate) fn upsert(&mut self, info: SessionInfo) {
         match self.sessions.iter_mut().find(|s| s.id == info.id) {
             Some(s) => *s = info,
@@ -1368,11 +1492,7 @@ impl App {
                 let order = self.ordered();
                 self.move_on(id, &order, true);
                 self.sessions.retain(|s| s.id != id);
-                for p in self.panes.values_mut() {
-                    if p.last == Some(id) {
-                        p.last = None;
-                    }
-                }
+                self.forget_session(id);
                 self.view_changed();
             }
             DomainEvent::ControllerChanged { session, controller } => {
@@ -1499,7 +1619,16 @@ impl App {
                 self.keymap = keymap;
                 self.theme_name = config.ui.theme.clone();
                 self.theme = Theme::resolve(&config, &self.theme_name, no_color());
-                self.config = config;
+                let old = std::mem::replace(&mut self.config, config);
+                // What a change to the file does at once, beyond what is read each time it is
+                // used: the sidebar's visibility and width follow the file when the file moved.
+                // (The mouse is the event loop's, which toggles terminal capture to match.)
+                if old.ui.sidebar != self.config.ui.sidebar && !self.opts.raw {
+                    self.sidebar = self.config.ui.sidebar;
+                }
+                if old.ui.sidebar_width != self.config.ui.sidebar_width {
+                    self.set_sidebar_width(self.config.ui.sidebar_width);
+                }
                 match errors.first() {
                     Some(e) => self.toast_err(format!("config: {e}")),
                     None if say => self.toast("config reloaded"),
@@ -1532,6 +1661,27 @@ impl App {
                 return;
             }
         };
+        // A reply that opens a dialog must not replace the box someone is typing in: it is
+        // held aside while the reply is handled, then put back (and the reply said so).
+        // (A peek's own screen arrives into the box it fills in: that one is not held.)
+        let held = match &self.overlay {
+            Some(Overlay::Prompt { .. } | Overlay::Task { .. } | Overlay::Peek { .. })
+                if !matches!(pending, Pending::Peek(_)) =>
+            {
+                self.overlay.take()
+            }
+            _ => None,
+        };
+        self.handle_reply(pending, res);
+        if let Some(h) = held {
+            if self.overlay.is_some() {
+                self.toast("a reply arrived while you were typing: ask again when you're done");
+            }
+            self.overlay = Some(h);
+        }
+    }
+
+    fn handle_reply(&mut self, pending: Pending, res: Result<Reply, ptyro_core::Error>) {
         match (pending, res) {
             (
                 p @ (Pending::Pad
@@ -1540,7 +1690,7 @@ impl App {
                 | Pending::PadHistory),
                 r,
             ) => self.pad_reply(p, r),
-            (Pending::List, Ok(Reply::Sessions { sessions })) => self.sessions = sessions,
+            (Pending::List, Ok(Reply::Sessions { sessions })) => self.got_list(sessions),
             (Pending::Registry, Ok(Reply::Profiles { profiles })) => self.profiles = profiles,
             (Pending::Spawned { split, .. }, Ok(Reply::Session { info })) => {
                 if std::mem::take(&mut self.close_inspector_after) {
@@ -1963,6 +2113,14 @@ impl App {
                 }
                 self.toast_err(e.message);
             }
+            (Pending::WorkspaceRenamed(name), Ok(_)) => {
+                self.workspace = name.clone();
+                self.toast(format!("workspace {name}"));
+            }
+            (Pending::WorkspaceMade(name), Ok(_)) => {
+                self.toast(format!("workspace {name} created"));
+                self.switch_workspace(name);
+            }
             (Pending::Done(msg), Ok(_)) => {
                 if !msg.is_empty() {
                     self.toast(msg);
@@ -1982,15 +2140,24 @@ impl App {
     /// Show `id` in the focused pane, or in a new split.
     pub fn show(&mut self, id: SessionId, split: Option<Dir>) {
         let pane = match split {
+            // The drawer hangs from its host: splitting it would nest a pane inside it.
+            Some(_) if self.drawer.is_some_and(|d| d.pane == self.focused) => {
+                self.toast_err("the drawer can't be split: focus another pane first");
+                return;
+            }
             Some(dir) => match self.layout.split(self.focused, dir) {
                 Some(p) => {
                     self.panes.insert(p, PaneState::default());
                     self.zoom = false;
                     p
                 }
+                // Not shown in the pane that has a session already: that one stays as it is.
                 None => {
-                    self.toast_err(format!("at most {} panes", crate::layout::MAX_PANES));
-                    self.focused
+                    self.toast_err(format!(
+                        "at most {} panes: close one to open another (it is in the sidebar)",
+                        crate::layout::MAX_PANES
+                    ));
+                    return;
                 }
             },
             None => self.focused,
@@ -2095,6 +2262,9 @@ impl App {
                 self.start_prefix();
                 return;
             }
+            // A prefix still waiting when the overlay came up (a dialog an event opened) must
+            // not turn the overlay's closing key into a command afterwards.
+            self.prefix = false;
             self.overlay_key(key);
             return;
         }
@@ -2157,7 +2327,8 @@ impl App {
             self.run(&cmd);
             return;
         }
-        if self.in_copy() {
+        // (With the sidebar focused, the sidebar's keys: copy mode waits in its pane.)
+        if self.focus == Focus::Pane && self.in_copy() {
             self.copy_key(key);
             return;
         }
@@ -2203,11 +2374,21 @@ impl App {
         self.forward(InputEvent::Key { key });
     }
 
+    /// A full-screen view (inspector, runs, change sets, first run) is drawn over the panes:
+    /// the mouse and pastes are not for what is hidden under it.
+    fn full_view(&self) -> bool {
+        self.inspector.is_some()
+            || self.orch.is_some()
+            || self.sets_view.is_some()
+            || self.first_run.is_some()
+    }
+
     pub fn on_paste(&mut self, text: String) {
         // Into the box that's open, new lines kept where it takes several (UX1.26); never on
         // to the session behind it.
         let lines = text.replace("\r\n", "\n").replace('\r', "\n");
         let flat = || lines.replace('\n', " ");
+        let (full, copying) = (self.full_view(), self.in_copy());
         match &mut self.overlay {
             Some(Overlay::Prompt { text: t, kind, .. }) => {
                 t.push_str(&if kind.multiline() { lines.clone() } else { flat() });
@@ -2221,11 +2402,18 @@ impl App {
             }
             Some(Overlay::Peek { reply, .. }) => reply.push_str(&lines),
             Some(Overlay::Settings(p)) => p.paste(&text),
+            Some(Overlay::Picker { palette, .. }) => palette.paste(&text),
+            Some(Overlay::Help { filter, scroll }) => {
+                filter.push_str(&flat());
+                *scroll = 0;
+            }
             Some(_) => {}
+            None if full => {}
             None if self.pad_popup.is_some() => {
                 self.forward_popup(InputEvent::Paste { text });
                 return;
             }
+            None if copying => {}
             None => {
                 self.forward(InputEvent::Paste { text });
                 return;
@@ -2550,11 +2738,17 @@ impl App {
                         Focus::Sidebar
                     }
                     Focus::Pane => {
-                        self.toast_offer(
-                            "the sidebar is hidden",
-                            false,
-                            run_offer("show it", "sidebar.toggle"),
-                        );
+                        if !self.sidebar {
+                            self.toast_offer(
+                                "the sidebar is hidden",
+                                false,
+                                run_offer("show it", "sidebar.toggle"),
+                            );
+                        } else if self.zoom {
+                            self.toast("the sidebar is hidden while a pane is zoomed");
+                        } else {
+                            self.toast("the terminal is too narrow for the sidebar");
+                        }
                         Focus::Pane
                     }
                     Focus::Sidebar => Focus::Pane,
@@ -2851,7 +3045,7 @@ impl App {
     /// The sidebar's width, kept within 12–80 and leaving the panes at least 21 columns, saved
     /// with the workspace's view (UX1.7, UX1.8).
     fn set_sidebar_width(&mut self, width: u16) {
-        let max = 80.min(self.area.width.saturating_sub(22)).max(12);
+        let max = SIDEBAR_MAX.min(self.area.width.saturating_sub(22)).max(12);
         let w = width.clamp(12, max);
         if w != self.sidebar_width {
             self.sidebar_width = w;
@@ -4255,7 +4449,7 @@ impl App {
             Overlay::Help { mut filter, mut scroll } => {
                 match key.code {
                     KeyCode::Esc => return,
-                    KeyCode::Char { c: 'q' } if filter.is_empty() => return,
+                    KeyCode::Char { c: 'c' } if key.mods.has(Mods::CTRL) => return,
                     KeyCode::Char { c: 'u' } if key.mods.has(Mods::CTRL) => filter.clear(),
                     KeyCode::Down => scroll += 1,
                     KeyCode::Up => scroll = scroll.saturating_sub(1),
@@ -4296,7 +4490,9 @@ impl App {
                         Request::ProjectSuggest { addr, apply: Some(true) },
                     );
                 }
-                KeyCode::Char { c: 'n' | 'N' } | KeyCode::Esc => {
+                // Esc backs out of the whole thing; `n` is the answer "no, and don't ask again".
+                KeyCode::Esc => self.toast("not created"),
+                KeyCode::Char { c: 'n' | 'N' } => {
                     self.request(
                         Pending::Done(String::new()),
                         Request::ProjectSuggest { addr: spec.project.clone(), apply: Some(false) },
@@ -4385,7 +4581,9 @@ impl App {
                     };
                     self.request(Pending::Trusted(then), req);
                 }
-                KeyCode::Char { c: 'n' | 'N' } | KeyCode::Esc | KeyCode::Char { c: 'q' } => {
+                // Esc and q back out; n goes on without running the scripts.
+                KeyCode::Esc | KeyCode::Char { c: 'q' } => self.toast("cancelled"),
+                KeyCode::Char { c: 'n' | 'N' } => {
                     if let AfterTrust::Create(mut spec, split) = then {
                         // Still make the worktree, just without running its scripts.
                         spec.setup = false;
@@ -4660,9 +4858,13 @@ impl App {
             // A row's action: with that row selected, so it's what the action works on.
             (Target::Action(cmd), Purpose::RowMenu(row)) => {
                 let rows = self.rows();
-                if let Some(i) = rows.iter().position(|r| *r == row) {
-                    self.set_sel(&rows, i);
-                }
+                // Its row went while the menu was open: running the action would hit whichever
+                // row is nearest now (a kill meant for A landing on B).
+                let Some(i) = rows.iter().position(|r| *r == row) else {
+                    self.toast("that row is gone");
+                    return;
+                };
+                self.set_sel(&rows, i);
                 self.focus = Focus::Sidebar;
                 self.run(&cmd);
             }
@@ -4730,6 +4932,18 @@ impl App {
                 }
             }
             PromptKind::NewWorkspace(_) if !t.is_empty() => {
+                name(t)?;
+                if self.workspaces.iter().any(|w| w.name == t) {
+                    return Err(format!("workspace {t} exists"));
+                }
+            }
+            PromptKind::RenameWorkspace(old) => {
+                if old == "main" {
+                    return Err("the main workspace can't be renamed".into());
+                }
+                if t.is_empty() || t == old {
+                    return Ok(Some("unchanged".into()));
+                }
                 name(t)?;
                 if self.workspaces.iter().any(|w| w.name == t) {
                     return Err(format!("workspace {t} exists"));
@@ -4853,11 +5067,13 @@ impl App {
             PromptKind::RenameWorkspace(old) => {
                 let new_name = text.trim().to_owned();
                 if !new_name.is_empty() && new_name != old {
+                    // The name changes here once the daemon has accepted it: it refuses `main`
+                    // and bad names, and a rename that failed must not leave this TUI on a
+                    // workspace that doesn't exist.
                     self.request(
-                        Pending::Done(format!("workspace {new_name}")),
-                        Request::WorkspaceRename { name: old, new_name: new_name.clone() },
+                        Pending::WorkspaceRenamed(new_name.clone()),
+                        Request::WorkspaceRename { name: old, new_name },
                     );
-                    self.workspace = new_name;
                 }
             }
             PromptKind::OpenPr => self.open_pr(&text),
@@ -4882,8 +5098,7 @@ impl App {
                 if !name.is_empty() {
                     let req =
                         Request::WorkspaceNew { name: name.clone(), profile: None, notify: None };
-                    self.request(Pending::Done(format!("workspace {name} created")), req);
-                    self.switch_workspace(name);
+                    self.request(Pending::WorkspaceMade(name), req);
                 }
             }
             PromptKind::Broadcast(ids) => {
@@ -4934,6 +5149,16 @@ impl App {
     }
 
     fn start_copy(&mut self, pane: PaneId, doc: &ScrollbackDoc, then: CopyStart) {
+        // A drag let go of before the scrollback arrived selects nothing: entering copy mode
+        // now would leave a selection nobody is dragging.
+        if matches!(then, CopyStart::Drag { .. })
+            && !matches!(self.drag, Some(Drag::Select { pane: p, .. }) if p == pane)
+        {
+            if let Some(p) = self.panes.get_mut(&pane) {
+                p.loading = false;
+            }
+            return;
+        }
         let height = self
             .pane_rects()
             .iter()
@@ -5032,6 +5257,9 @@ impl App {
             }
             return;
         }
+        if self.full_view() {
+            return;
+        }
         // Dragging a divider or a selection continues wherever the mouse goes.
         match (&self.drag, m.kind) {
             (Some(Drag::Sidebar), K::Drag(_)) => {
@@ -5092,8 +5320,10 @@ impl App {
                 K::Down(crossterm::event::MouseButton::Right) => {
                     let rows = self.rows();
                     let body = crate::ui::sidebar_body(self, side);
+                    // (Not the hint line along the bottom: it has no row.)
                     let row = y
                         .checked_sub(side.y + 1)
+                        .filter(|l| *l < side.height.saturating_sub(2))
                         .and_then(|l| body.lines.get(l as usize + body.skip))
                         .map(|(i, _)| *i);
                     if let Some(i) = row.filter(|i| rows.get(*i).is_some_and(Row::selectable)) {
@@ -5108,6 +5338,7 @@ impl App {
                     // The title line has no row; a row may span several lines (UX1.2).
                     let row = y
                         .checked_sub(side.y + 1)
+                        .filter(|l| *l < side.height.saturating_sub(2))
                         .and_then(|l| body.lines.get(l as usize + body.skip))
                         .map_or(usize::MAX, |(i, _)| *i);
                     match rows.get(row).cloned() {
@@ -5177,7 +5408,14 @@ impl App {
             let mut mouse = crate::keys::mouse(m);
             mouse.x = cx;
             mouse.y = cy;
-            self.forward(InputEvent::Mouse { mouse });
+            // To the session of the pane under the pointer, not the focused one: the
+            // coordinates are this pane's.
+            if let Some(id) = self.panes.get(&pane).and_then(|p| p.session)
+                && !self.opts.view_only
+                && self.session(id).is_some_and(|s| s.state.is_live())
+            {
+                self.send(ClientMsg::Input { session: id, event: InputEvent::Mouse { mouse } });
+            }
             return;
         }
         match m.kind {
@@ -5395,7 +5633,7 @@ impl App {
                 if self.layout.contains(saved.focus) { saved.focus } else { self.layout.first() };
             self.zoom = saved.zoom;
             self.sidebar = saved.sidebar;
-            self.sidebar_width = saved.sidebar_width.clamp(12, 80);
+            self.sidebar_width = saved.sidebar_width.clamp(12, SIDEBAR_MAX);
             self.restore_drawer(saved.drawer, saved.drawer_share);
         }
         for pane in self.layout.panes() {
@@ -5479,10 +5717,11 @@ impl App {
     }
 
     fn peek_key(&mut self, key: KeyEvent, session: SessionId, screen: String, mut reply: String) {
-        let blocked = self
-            .session(session)
-            .and_then(|s| s.status.as_ref())
-            .is_some_and(|r| r.status == AgentStatus::Blocked);
+        // y/a/n answer a permission prompt only: a question wants a typed reply, and "no, use
+        // sqlite" must not start by answering "deny".
+        let blocked = self.session(session).and_then(|s| s.status.as_ref()).is_some_and(|r| {
+            r.status == AgentStatus::Blocked && r.kind.as_deref() == Some("permission")
+        });
         let ctrl = key.mods.has(Mods::CTRL);
         match key.code {
             KeyCode::Esc => return,
@@ -5903,6 +6142,183 @@ mod tests {
             shown.contains("sidebar_width") && shown.contains("How wide the sidebar is"),
             "{shown}"
         );
+    }
+
+    fn agent(name: &str, kind: &str) -> SessionInfo {
+        let mut s = session(name);
+        s.kind = SessionKind::Agent;
+        status(&mut s, AgentStatus::Blocked, Some(kind), Some("it wants you"));
+        s
+    }
+
+    #[test]
+    fn a_question_is_typed_into_and_only_a_permission_prompt_answers_on_a_key() {
+        let mut app = app();
+        let q = agent("asker", "question");
+        let id = q.id;
+        app.sessions = vec![q];
+        app.overlay =
+            Some(Overlay::Peek { session: id, screen: String::new(), reply: String::new() });
+        typed(&mut app, "no, use sqlite");
+        let Some(Overlay::Peek { reply, .. }) = &app.overlay else { panic!("still open") };
+        assert_eq!(reply, "no, use sqlite", "the first n is part of the reply");
+        assert!(app.rx.try_recv().is_err(), "nothing was answered");
+        // A permission prompt still answers on a bare key.
+        app.sessions = vec![agent("asker", "permission")];
+        let id = app.sessions[0].id;
+        app.overlay =
+            Some(Overlay::Peek { session: id, screen: String::new(), reply: String::new() });
+        app.overlay_key(KeyEvent::char('n'));
+        assert!(app.overlay.is_none());
+        let Ok(AppMsg::Reply(Pending::Done(what), _)) = app.rx.try_recv() else {
+            panic!("an answer was asked for")
+        };
+        assert_eq!(what, "answered deny");
+    }
+
+    #[test]
+    fn a_workspace_rename_the_daemon_refuses_does_not_move_the_tui() {
+        let mut app = app();
+        app.workspace = "main".into();
+        // `main` can't be renamed: the prompt itself says so.
+        let ws = PromptKind::RenameWorkspace("main".into());
+        assert!(app.prompt_check(&ws, "work").unwrap_err().contains("can't be renamed"));
+        // A refusal that comes back leaves the name alone; an acceptance moves it.
+        app.workspace = "side".into();
+        app.on_reply(AppMsg::Reply(
+            Pending::WorkspaceRenamed("work".into()),
+            Err(ptyro_core::Error::new(ErrorCode::Invalid, "no")),
+        ));
+        assert_eq!(app.workspace, "side");
+        app.on_reply(AppMsg::Reply(Pending::WorkspaceRenamed("work".into()), Ok(Reply::Done)));
+        assert_eq!(app.workspace, "work");
+        // A new workspace is switched to only once it exists.
+        app.on_reply(AppMsg::Reply(
+            Pending::WorkspaceMade("fresh".into()),
+            Err(ptyro_core::Error::new(ErrorCode::Invalid, "no")),
+        ));
+        assert_eq!(app.workspace, "work");
+        app.on_reply(AppMsg::Reply(Pending::WorkspaceMade("fresh".into()), Ok(Reply::Done)));
+        assert_eq!(app.workspace, "fresh");
+    }
+
+    #[test]
+    fn a_late_reply_does_not_replace_the_box_being_typed_in() {
+        let mut app = app();
+        let s = session("a");
+        let id = s.id;
+        app.sessions = vec![s];
+        app.overlay = Some(Overlay::Prompt {
+            title: "Rename".into(),
+            text: "half-typed".into(),
+            kind: PromptKind::Rename(id),
+        });
+        app.on_reply(AppMsg::Reply(Pending::Explain(id), Ok(Reply::Explain { lines: Vec::new() })));
+        let Some(Overlay::Prompt { text, .. }) = &app.overlay else {
+            panic!("the box is still there")
+        };
+        assert_eq!(text, "half-typed");
+        assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("while you were typing")));
+        // With nothing being typed, the reply opens its dialog as before.
+        app.overlay = None;
+        app.on_reply(AppMsg::Reply(Pending::Explain(id), Ok(Reply::Explain { lines: Vec::new() })));
+        assert!(matches!(app.overlay, Some(Overlay::Explain { .. })));
+    }
+
+    #[test]
+    fn a_row_menu_for_a_row_that_went_does_nothing() {
+        let mut app = app();
+        let s = session("gone");
+        let id = s.id;
+        // (The row isn't in the tree: it was removed while the menu was open.)
+        app.picked(
+            Target::Action(Command { action: "session.kill", arg: None }),
+            Purpose::RowMenu(Row::Session(id)),
+        );
+        assert!(app.overlay.is_none(), "no kill dialog for whatever row is nearest");
+        assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("gone")));
+    }
+
+    #[test]
+    fn the_wheel_does_not_reach_panes_hidden_under_a_full_screen_view() {
+        let mut app = app();
+        let s = session("shell");
+        app.panes.get_mut(&1).unwrap().session = Some(s.id);
+        app.sessions = vec![s];
+        app.inspector = Some(crate::inspector::Inspector::new("w".into()));
+        app.on_mouse(&mouse(crossterm::event::MouseEventKind::ScrollUp, 60, 10));
+        let p = &app.panes[&1];
+        assert!(p.copy.is_none() && !p.loading, "no copy mode started behind the inspector");
+    }
+
+    #[test]
+    fn a_list_reply_drops_the_sessions_it_no_longer_names_and_keeps_newer_ones() {
+        let mut app = app();
+        let (a, b) = (session("a"), session("b"));
+        let (aid, bid) = (a.id, b.id);
+        app.sessions = vec![a.clone(), b];
+        app.last_listed = [aid, bid].into_iter().collect();
+        app.panes.get_mut(&1).unwrap().session = Some(bid);
+        app.marked = vec![bid];
+        // A session an event made after the reply was asked for isn't in it yet.
+        let c = session("c");
+        let cid = c.id;
+        app.sessions.push(c);
+        app.got_list(vec![a]);
+        let names: Vec<&str> = app.sessions.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["a", "c"], "b's removal event was lost; c is newer than the reply");
+        let shown = app.panes[&1].session;
+        assert!(shown == Some(aid) || shown == Some(cid), "the pane moved on from b: {shown:?}");
+        assert!(app.marked.is_empty());
+        assert!(!app.last_listed.contains(&cid), "c shows in the next reply");
+    }
+
+    #[test]
+    fn a_layout_changed_while_disconnected_stays_unsaved() {
+        let mut app = app();
+        app.view_dirty_since = Some(Instant::now());
+        app.client = None;
+        app.save_view();
+        assert!(app.view_dirty_since.is_some(), "kept to be saved when the daemon is back");
+    }
+
+    #[test]
+    fn help_can_be_searched_for_words_starting_with_q_and_shows_custom_focus_keys() {
+        let mut app = app();
+        app.overlay = Some(Overlay::Help { filter: String::new(), scroll: 0 });
+        typed(&mut app, "quit");
+        let Some(Overlay::Help { filter, .. }) = &app.overlay else { panic!("still open") };
+        assert_eq!(filter, "quit");
+        // A key of your own bound to `session.focus 2` is its own line, not folded into 1…9.
+        let mut config = Config::default();
+        config.keys.insert("y".into(), "session.focus 2".into());
+        let (map, errors) = Keymap::new(&config);
+        assert!(errors.is_empty(), "{errors:?}");
+        let b = map.bindings();
+        assert!(b.iter().any(|(_, k, c)| k == "y" && c.arg.as_deref() == Some("2")), "{b:?}");
+        assert!(b.iter().any(|(_, k, _)| k == "1…9"), "the default digits still fold");
+    }
+
+    #[test]
+    fn the_key_shown_for_an_action_is_the_plain_one() {
+        let (map, _) = Keymap::new(&Config::default());
+        assert_eq!(map.key_for("session.next").as_deref(), Some("C-q j"));
+        assert_eq!(map.key_for("palette").as_deref(), Some("C-q :"));
+        assert_eq!(map.key_in(Table::Nav, "nav.down").as_deref(), Some("j"));
+    }
+
+    #[test]
+    fn a_new_pane_at_the_limit_leaves_the_one_that_is_there_alone() {
+        let mut app = app();
+        let (a, b) = (session("a"), session("b"));
+        app.sessions = vec![a.clone(), b.clone()];
+        app.panes.get_mut(&1).unwrap().session = Some(a.id);
+        for _ in 0..crate::layout::MAX_PANES {
+            app.show(b.id, Some(Dir::Right));
+        }
+        let shown_a = app.panes.values().filter(|p| p.session == Some(a.id)).count();
+        assert_eq!(shown_a, 1, "a is still shown after the limit was hit");
+        assert!(app.layout.panes().len() <= crate::layout::MAX_PANES);
     }
 
     fn placed(name: &str, project: Option<&str>, worktree: Option<&str>) -> SessionInfo {

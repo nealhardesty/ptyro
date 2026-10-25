@@ -1,7 +1,7 @@
 // Settings and health (ROADMAP WEB1.6): the More tab: this device, the doctor's findings with
 // their fixes, usage, devices and pairing another, profiles and their logins, the config file,
 // agent integrations, the daemon, first-run setup and the tour.
-import { conn, host, token } from "./conn.js";
+import { conn, host, store, token } from "./conn.js";
 import { data } from "./data.js";
 import { actions, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, form, go, h, menu, pending, poll, row, section, sheet, textSheet, ui, views } from "./kit.js";
 import { qrMatrix } from "./qr.js";
@@ -282,6 +282,20 @@ function removeProfile(name, force = false) {
 // ── the config ──────────────────────────────────────────────────────────────────────────────
 const cfg = new Cache(() => host("config.get"));
 let draft = null;
+/// Edits typed in the editor and not saved.
+let draftDirty = false;
+/// The settings panel (or anything else) changed the file since the editor read it.
+let cfgStale = false;
+/// The file was changed elsewhere: the editor reads it again next time (and warns when it has
+/// edits of its own that would be saved over it).
+export function cfgChanged() {
+    cfgStale = true;
+    if (!draftDirty) {
+        draft = null;
+        cfg.reload("");
+        cfgStale = false;
+    }
+}
 /// A line of the file to put the cursor on when the editor opens (the settings panel's "in the file").
 let atLine = null;
 /// Open the config file's editor at `line` (1-based; 0: the top).
@@ -294,10 +308,11 @@ function configView() {
     const body = conn.scope !== "full" ? h("p", { class: "empty" }, "Editing the config needs a device paired with --scope full.") : pending(cfg, "") ?? (() => {
         if (draft === null)
             draft = c.text;
+        const behind = cfgStale && draftDirty;
         const ta = h("textarea", { class: "code", rows: 22, spellcheck: "false", autocapitalize: "off", "aria-label": "config.toml" });
         ta.value = draft ?? "";
         const status = h("p", { class: "form-err" });
-        ta.addEventListener("input", () => { draft = ta.value; status.textContent = ""; });
+        ta.addEventListener("input", () => { draft = ta.value; draftDirty = true; status.textContent = ""; });
         if (atLine) {
             const line = atLine;
             atLine = null;
@@ -311,19 +326,24 @@ function configView() {
         const check = async (save) => {
             status.className = "form-err";
             try {
-                const r = await host(save ? "config.save" : "config.check", { text: ta.value });
+                // `base` is the file as this editor read it: if it has changed since, the save is refused.
+                const r = await host(save ? "config.save" : "config.check", save && c.exists ? { text: ta.value, base: c.text } : { text: ta.value });
                 status.className = "ok-note";
                 status.textContent = `${save ? "Saved: it applies at once." : "Looks right."}${r.notes.length ? `\n${r.notes.join("\n")}` : ""}`;
                 if (save) {
                     cfg.set("", { ...c, text: ta.value, exists: true });
                     draft = null;
+                    draftDirty = false;
+                    cfgStale = false;
                 }
             }
             catch (e) {
-                status.textContent = errText(e);
+                status.textContent = e.code === "conflict" ? `${errText(e)}\nThe file changed since you opened this editor (from Settings, or by hand): reload it, then make your edit again.` : errText(e);
+                if (e.code === "conflict")
+                    cfgStale = true;
             }
         };
-        return h("div", { class: "stack-in" }, h("div", { class: "sub", title: tip("config.path") }, c.exists ? c.path : `${c.path} (not there yet: saving creates it)`), ta, status, bar(h("button", { title: tip("config.check"), onclick: () => void check(false) }, "Check"), h("button", { class: "primary", title: tip("config.edit"), onclick: () => void check(true) }, "Save"), h("button", { title: tip("config.show"), onclick: async () => { const r = await doHost("config.show"); if (r)
+        return h("div", { class: "stack-in" }, h("div", { class: "sub", title: tip("config.path") }, c.exists ? c.path : `${c.path} (not there yet: saving creates it)`), behind ? h("div", { class: "banner warn" }, "The file changed since you started editing (from Settings, or by hand). Saving this replaces those changes. ", h("button", { class: "small", onclick: () => { draft = null; draftDirty = false; cfgStale = false; cfg.reload(""); } }, "Discard my edits and reload")) : null, ta, status, bar(h("button", { title: tip("config.check"), onclick: () => void check(false) }, "Check"), h("button", { class: "primary", title: tip("config.edit"), onclick: () => void check(true) }, "Save"), h("button", { title: tip("config.show"), onclick: async () => { const r = await doHost("config.show"); if (r)
                 textSheet("The effective config", r.text); } }, "Show effective"), h("button", { onclick: () => download("config.toml", ta.value) }, "Download")));
     })();
     return h("div", {}, ui.header("config.toml", "#/settings"), h("main", { class: "stack", title: tip("config.edit") }, body));
@@ -536,7 +556,7 @@ const COACH = [
 let coachEl = null;
 /// Called after every render: the coach shows on a tour's own pages and says what's next.
 export function coach() {
-    if (localStorage.getItem("ptyro.tour") !== "1" || !token()) {
+    if (store.get("ptyro.tour") !== "1" || !token()) {
         coachEl?.remove();
         coachEl = null;
         return;
@@ -544,7 +564,7 @@ export function coach() {
     advanceTour();
     const lines = COACH[tour.step];
     const el = h("aside", { class: "coach", "aria-live": "polite" }, h("b", {}, tour.step < 5 ? `Tour ${tour.step + 1}/5 · ${STEPS[tour.step]}` : "Tour done"), ...lines.map((l, i) => h("div", { class: i === 1 && tour.step === 0 ? "say" : "" }, l)), h("button", { class: tour.step === 5 ? "primary small" : "small", onclick: () => confirm("End the tour?", "Its ptyro, repository and agent are deleted. Your own ptyro is untouched.", "End the tour", async () => { if (await doHost("tour.end")) {
-            localStorage.removeItem("ptyro.tour");
+            store.remove("ptyro.tour");
             ui.toast("The tour is over");
             setTimeout(() => window.close(), 800);
         } }, false) }, "End the tour"));

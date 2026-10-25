@@ -350,10 +350,26 @@ async fn serve(
         daemon.prune_recordings().await;
     }
     daemon.load_devices().await;
+    daemon.load_used_links().await;
     daemon.load_declined().await;
     daemon.load_integrated().await;
     daemon.start_serve_supervisor();
     daemon.start_pad_watcher();
+    // Retention (SPEC §14.2) is applied once a day while the daemon runs, not only at its start.
+    {
+        let d = Arc::clone(&daemon);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(24 * 3600)).await;
+                if let Some(store) = &d.store
+                    && let Err(e) = store.prune().await
+                {
+                    tracing::warn!("store prune: {e}");
+                }
+                d.prune_recordings().await;
+            }
+        });
+    }
     daemon.restore_dormant().await;
     daemon.start_auto_register();
     daemon.start_mail().await;
@@ -373,7 +389,16 @@ async fn serve(
             // While handing off, new clients wait in the backlog for the next image.
             _ = goodbye.changed() => {}
             accepted = listener.accept(), if !upgrading => {
-                let Ok((stream, _)) = accepted else { continue };
+                let (stream, _) = match accepted {
+                    Ok(a) => a,
+                    Err(e) => {
+                        // Out of descriptors (EMFILE) fails at once, every time: without a pause
+                        // this loop would spin at full speed until one is free.
+                        tracing::warn!("accept failed: {e}");
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
+                    }
+                };
                 match stream.peer_cred() {
                     Ok(cred) if cred.uid() == uid => {
                         let pid = cred.pid().and_then(|p| u32::try_from(p).ok());
@@ -418,7 +443,19 @@ mod tests {
         assert!(err.contains("in use"), "{err}");
         // Gone quiet (closed, the file left behind): a refused connection proves it stale.
         drop(live);
-        let second = bind(&path).unwrap();
+        // (A busy machine can take a moment to start refusing connections to a closed socket;
+        // until it does, `bind` rightly leaves the file alone.)
+        let start = std::time::Instant::now();
+        let second = loop {
+            match bind(&path) {
+                Ok(l) => break l,
+                Err(e) if start.elapsed() < Duration::from_secs(5) => {
+                    assert!(e.to_string().contains("in use"), "{e}");
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(e) => panic!("{e}"),
+            }
+        };
         let ours = file_id(&path);
         // Another daemon replaced the file meanwhile: leave its socket alone.
         drop(second);

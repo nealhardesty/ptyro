@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use futures::{SinkExt, StreamExt};
 use ptyro_core::paths::Paths;
 use ptyro_core::{ClientId, Error, ErrorCode};
+use ptyro_protocol::MAX_FRAME;
 use ptyro_protocol::{
     ClientInfo, ClientKind, ClientMsg, Encoding, Outcome, OuterTerm, PROTO, Reply, Request,
     ServerMsg, decode, encode, framing,
@@ -188,15 +189,34 @@ impl Client {
         let (mut sink, mut stream) = framed.split();
         let (tx, mut rx) = mpsc::unbounded_channel::<ClientMsg>();
         let enc = opts.encoding;
+        let pending: Pending = Arc::new(Mutex::new(Some(HashMap::new())));
+        let writer_pending = Arc::clone(&pending);
         tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
-                let Ok(bytes) = encode(&msg, enc) else { continue };
-                if sink.send(bytes).await.is_err() {
-                    break;
+                // A message that can't be sent whole (too big for a frame, or unencodable) fails
+                // its own request; the connection and everything else on it carry on.
+                let sent = match encode(&msg, enc) {
+                    Ok(bytes) if bytes.len() > MAX_FRAME => Err(format!(
+                        "the request is too large to send ({} bytes; the limit is {MAX_FRAME})",
+                        bytes.len()
+                    )),
+                    Ok(bytes) => {
+                        if sink.send(bytes).await.is_err() {
+                            break;
+                        }
+                        Ok(())
+                    }
+                    Err(e) => Err(format!("the request can't be encoded: {e}")),
+                };
+                if let (Err(why), ClientMsg::Request { id, .. }) = (sent, &msg) {
+                    let tx =
+                        writer_pending.lock().expect("pending").as_mut().and_then(|p| p.remove(id));
+                    if let Some(tx) = tx {
+                        let _ = tx.send(Outcome::Err { error: Error::invalid(why) });
+                    }
                 }
             }
         });
-        let pending: Pending = Arc::new(Mutex::new(Some(HashMap::new())));
         let (push_tx, push_rx) = mpsc::unbounded_channel();
         let reader_pending = Arc::clone(&pending);
         let reader = tokio::spawn(async move {
@@ -263,6 +283,16 @@ impl Client {
             Some(p) => p.insert(id, tx),
             None => return Err(lost()),
         };
+        // A caller that gives up (a timeout drops this future) must not leave its entry behind.
+        struct Forget<'a>(&'a Pending, u32);
+        impl Drop for Forget<'_> {
+            fn drop(&mut self) {
+                if let Some(p) = self.0.lock().expect("pending").as_mut() {
+                    p.remove(&self.1);
+                }
+            }
+        }
+        let _forget = Forget(&self.pending, id);
         self.send(ClientMsg::Request { id, req })?;
         let outcome = rx.await.map_err(|_| lost())?;
         outcome.into()
@@ -284,13 +314,30 @@ impl Client {
 /// The daemon's socket, starting the daemon first when allowed and none is listening. `ptyro
 /// proxy` bridges this to ssh.
 pub async fn connect_raw(opts: &ConnectOptions) -> Result<UnixStream, ClientError> {
-    match UnixStream::connect(&opts.paths.socket).await {
+    let stream = match UnixStream::connect(&opts.paths.socket).await {
         Ok(s) => Ok(s),
         Err(e) if opts.autospawn && is_absent(&e) => spawn_daemon(opts).await,
         Err(e) if is_absent(&e) => {
             Err(ClientError::Unavailable(format!("no daemon at {}", opts.paths.socket.display())))
         }
         Err(e) => Err(e.into()),
+    }?;
+    ours(&stream, opts)?;
+    Ok(stream)
+}
+
+/// Whether the process on the other end of the socket is ours: tokens, typed input and prompts go
+/// down it, so a socket another user made in a shared directory must not be talked to.
+fn ours(stream: &UnixStream, opts: &ConnectOptions) -> Result<(), ClientError> {
+    match stream.peer_cred() {
+        Ok(c) if c.uid() == ptyro_core::paths::current_uid() => Ok(()),
+        Ok(c) => Err(ClientError::Unavailable(format!(
+            "{} is another user's (uid {}), not yours: refusing to talk to it. Remove it or set PTYRO_HOME / PTYRO_SOCKET to a private place",
+            opts.paths.socket.display(),
+            c.uid()
+        ))),
+        // A platform that can't say: nothing to check against.
+        Err(_) => Ok(()),
     }
 }
 
@@ -330,17 +377,31 @@ async fn spawn_daemon(opts: &ConnectOptions) -> Result<UnixStream, ClientError> 
         .spawn()
         .map_err(|e| ClientError::Unavailable(format!("cannot start {}: {e}", exe.display())))?;
     let start = Instant::now();
+    let mut exited: Option<(Instant, std::process::ExitStatus)> = None;
     loop {
         match UnixStream::connect(&opts.paths.socket).await {
-            Ok(s) => return Ok(s),
+            Ok(s) => {
+                // The daemon is ours to reap when it ends; nobody else will.
+                if exited.is_none() {
+                    std::thread::spawn(move || {
+                        let _ = child.wait();
+                    });
+                }
+                return Ok(s);
+            }
             Err(e) if !is_absent(&e) => return Err(e.into()),
             Err(_) => {}
         }
-        if let Ok(Some(status)) = child.try_wait() {
-            // Lost a race with another client's daemon? Then the socket is about to appear.
-            if let Ok(s) = UnixStream::connect(&opts.paths.socket).await {
-                return Ok(s);
-            }
+        if exited.is_none()
+            && let Ok(Some(status)) = child.try_wait()
+        {
+            // It may have lost the race with another client's daemon, which has the lock but
+            // hasn't bound the socket yet: keep waiting for that socket, a little while.
+            exited = Some((Instant::now(), status));
+        }
+        if let Some((at, status)) = exited
+            && at.elapsed() > Duration::from_secs(3)
+        {
             return Err(ClientError::Unavailable(format!(
                 "daemon exited during startup ({status}); see logs in {}",
                 opts.paths.log_dir().display()
@@ -360,6 +421,107 @@ async fn spawn_daemon(opts: &ConnectOptions) -> Result<UnixStream, ClientError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ptyro_protocol::MAX_FRAME;
+
+    fn opts(dir: &std::path::Path) -> ConnectOptions {
+        let home = dir.to_path_buf();
+        let paths = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| home.clone())).unwrap();
+        ConnectOptions::new(paths, ClientKind::Test)
+    }
+
+    /// A daemon that only says welcome and answers every request `Done`.
+    fn fake_daemon(b: tokio::io::DuplexStream) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut f = Framed::new(b, framing());
+            let _hello = f.next().await;
+            let welcome = ServerMsg::Welcome {
+                proto: PROTO,
+                daemon_version: "test".into(),
+                client_id: ClientId(1),
+                features: vec![],
+                started_ms: 0,
+                scope: None,
+            };
+            f.send(encode(&welcome, Encoding::MsgPack).unwrap()).await.unwrap();
+            while let Some(Ok(bytes)) = f.next().await {
+                if let Ok((ClientMsg::Request { id, .. }, _)) = decode::<ClientMsg>(&bytes) {
+                    let done =
+                        ServerMsg::Response { id, outcome: Outcome::Ok { reply: Reply::Done } };
+                    f.send(encode(&done, Encoding::MsgPack).unwrap()).await.unwrap();
+                }
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn a_request_too_big_for_a_frame_fails_alone_and_the_connection_lives() {
+        let d = tempfile::tempdir().unwrap();
+        let (a, b) = tokio::io::duplex(1 << 16);
+        let _server = fake_daemon(b);
+        let c = Client::handshake(a, &opts(d.path()), None).await.unwrap();
+        let big = Request::Rename { addr: "x".repeat(MAX_FRAME + 1), name: "n".into() };
+        let e = tokio::time::timeout(Duration::from_secs(10), c.request(big))
+            .await
+            .expect("answered, not hung")
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::Invalid);
+        assert!(e.message.contains("too large"), "{}", e.message);
+        // The next request on the same connection works, and nothing is left pending.
+        let r = c.request(Request::Rename { addr: "a".into(), name: "b".into() }).await.unwrap();
+        assert!(matches!(r, Reply::Done));
+        assert!(c.pending.lock().unwrap().as_ref().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_caller_that_gives_up_leaves_no_pending_entry() {
+        let d = tempfile::tempdir().unwrap();
+        let (a, b) = tokio::io::duplex(1 << 16);
+        // A daemon that never answers requests.
+        let _server = tokio::spawn(async move {
+            let mut f = Framed::new(b, framing());
+            let _ = f.next().await;
+            let welcome = ServerMsg::Welcome {
+                proto: PROTO,
+                daemon_version: "t".into(),
+                client_id: ClientId(1),
+                features: vec![],
+                started_ms: 0,
+                scope: None,
+            };
+            f.send(encode(&welcome, Encoding::MsgPack).unwrap()).await.unwrap();
+            while f.next().await.is_some() {}
+        });
+        let c = Client::handshake(a, &opts(d.path()), None).await.unwrap();
+        let r = tokio::time::timeout(Duration::from_millis(100), c.request(Request::List)).await;
+        assert!(r.is_err(), "timed out");
+        assert!(c.pending.lock().unwrap().as_ref().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_socket_of_ours_is_talked_to_and_losing_the_start_race_keeps_waiting() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let mut o = opts(d.path());
+        std::fs::create_dir_all(o.paths.socket.parent().unwrap()).unwrap();
+        // A "daemon" that exits at once, as one that finds another holding the lock does; the
+        // other's socket appears a moment later.
+        let exe = d.path().join("quick-exit");
+        std::fs::write(&exe, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        o.autospawn = true;
+        o.daemon_exe = Some(exe);
+        let sock = o.paths.socket.clone();
+        let listener = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            let l = tokio::net::UnixListener::bind(&sock).unwrap();
+            let _ = l.accept().await;
+        });
+        let s = connect_raw(&o).await.expect("waited for the socket the winner bound");
+        // It is ours (the same user made it), so it passed the owner check.
+        assert_eq!(s.peer_cred().unwrap().uid(), ptyro_core::paths::current_uid());
+        drop(s);
+        listener.abort();
+    }
 
     #[test]
     fn unreadable_responses_still_name_their_request() {

@@ -31,8 +31,8 @@ work completely, and be discoverable, in each before it counts as done.
   `make test`.
 - Build the web client's part in the same change: a web action (in `ACTIONS`,
   `web/src/app.ts`) in the row's web cell. A feature missing from the web is a defect,
-  not follow-up work; until ROADMAP WEB1 is done the cell may say `gap: WEB1.x`, and
-  `make parity` counts those.
+  not follow-up work: a web `gap:` fails `make parity` (`PTYRO_PARITY_WEB_STRICT=0` only
+  lists them, while one is being worked on).
 - Waive only commands that another program runs (an agent's own mail, hooks), never
   something that isn't built yet.
 - Every configuration option is editable in the configuration panel (ROADMAP CFG1), in the TUI

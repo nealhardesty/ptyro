@@ -39,22 +39,26 @@ pub struct Suggestion {
 impl Suggestion {
     /// The profile as a `[profiles.<name>]` table for `config.toml`.
     pub fn to_toml(&self) -> String {
+        // Every string through the TOML writer: a path or a name can hold a quote or a control
+        // character, which Rust's `{:?}` escapes in ways TOML doesn't read.
+        let q = |s: &dyn std::fmt::Display| toml::Value::String(s.to_string()).to_string();
         let mut s = format!("[profiles.{}]\n", self.profile);
         for (agent, dir) in &self.dirs {
-            s.push_str(&format!("{agent} = {:?}\n", dir));
+            s.push_str(&format!("{agent} = {}\n", q(dir)));
         }
         if self.git_name.is_some() || self.git_email.is_some() {
             let mut parts = Vec::new();
             if let Some(n) = &self.git_name {
-                parts.push(format!("name = {n:?}"));
+                parts.push(format!("name = {}", q(n)));
             }
             if let Some(e) = &self.git_email {
-                parts.push(format!("email = {e:?}"));
+                parts.push(format!("email = {}", q(e)));
             }
             s.push_str(&format!("git = {{ {} }}\n", parts.join(", ")));
         }
         if !self.match_paths.is_empty() {
-            s.push_str(&format!("match = {{ paths = {:?} }}\n", self.match_paths));
+            let paths: Vec<String> = self.match_paths.iter().map(|p| q(p)).collect();
+            s.push_str(&format!("match = {{ paths = [{}] }}\n", paths.join(", ")));
         }
         s
     }

@@ -100,7 +100,8 @@ impl Daemon {
     pub(crate) fn statusline(&self, session: &str, payload: &Value) -> Result<Reply, Error> {
         let id = session.parse().map_err(|_| Error::invalid("bad session id"))?;
         let s = self.session(id).ok_or_else(|| Error::not_found(session))?;
-        let profile = s.meta.lock().expect("meta").place.profile.clone();
+        let profile =
+            s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).place.profile.clone();
         self.put_usage(claude_usage(&profile, payload));
         Ok(Reply::Done)
     }
@@ -108,7 +109,7 @@ impl Daemon {
     /// A rate-limit failure: the account is limited until its fullest window resets.
     pub(crate) fn rate_limited(&self, s: &Session) {
         let (profile, adapter) = {
-            let m = s.meta.lock().expect("meta");
+            let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             (m.place.profile.clone(), m.adapter.clone().unwrap_or_else(|| "agent".into()))
         };
         let mut u = self
@@ -142,9 +143,16 @@ impl Daemon {
     /// Codex rate limits for a session's profile, through a side app-server (opt-in). One per
     /// profile; it lives while that profile has Codex sessions.
     pub(crate) fn start_codex_usage(self: &Arc<Self>, s: &Arc<Session>) {
-        let profile = s.meta.lock().expect("meta").place.profile.clone();
-        let agent =
-            s.meta.lock().expect("meta").place.agent.clone().unwrap_or_else(|| "codex".into());
+        let profile =
+            s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).place.profile.clone();
+        let agent = s
+            .meta
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .place
+            .agent
+            .clone()
+            .unwrap_or_else(|| "codex".into());
         if ptyro_agents::def(&self.config(), &agent).usage != Some(true) {
             return;
         }
@@ -196,7 +204,12 @@ impl Daemon {
             let any = self.sessions().iter().any(|s| {
                 s.is_live()
                     && s.adapter().as_deref() == Some("codex")
-                    && s.meta.lock().expect("meta").place.profile == profile
+                    && s.meta
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .place
+                        .profile
+                        == profile
             });
             if !any {
                 return Ok(());

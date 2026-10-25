@@ -142,7 +142,7 @@ impl Daemon {
     pub(crate) fn place_session(&self, s: &Arc<Session>, dir: Option<&Path>) {
         let target = dir.and_then(|d| self.target(None, d).ok().flatten());
         {
-            let mut m = s.meta.lock().expect("meta");
+            let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let (worktree, project) = match &target {
                 Some((w, p)) => (Some(w.id.clone()), Some(p.id.clone())),
                 None => (None, None),
@@ -160,7 +160,13 @@ impl Daemon {
     /// A session outside every project, in a repository: register it (unless it is a project
     /// already) and move the session in. `false`: registering failed, so try again later.
     async fn adopt_dir(self: &Arc<Self>, s: &Arc<Session>, dir: &Path) -> bool {
-        let ws = s.meta.lock().expect("meta").place.workspace.clone();
+        let ws = s
+            .meta
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .place
+            .workspace
+            .clone();
         let registered = if self.in_a_project(dir) {
             Ok(true)
         } else {
@@ -192,7 +198,13 @@ impl Daemon {
                 if me.config().discover.auto_register {
                     for s in me.sessions().into_iter().filter(|s| s.is_live()) {
                         let dir = me.current_dir(&s);
-                        let placed = s.meta.lock().expect("meta").place.project.is_some();
+                        let placed = s
+                            .meta
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .place
+                            .project
+                            .is_some();
                         // Outside every project, in one now (added by hand since, say): move in.
                         // Cheap (no git), so not once only.
                         if !placed && me.in_a_project(&dir) {
@@ -204,7 +216,13 @@ impl Daemon {
                         }
                         let settled = if placed {
                             // Elsewhere now: its new repository joins the sidebar too.
-                            let ws = s.meta.lock().expect("meta").place.workspace.clone();
+                            let ws = s
+                                .meta
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .place
+                                .workspace
+                                .clone();
                             me.in_a_project(&dir)
                                 || me.try_register(&dir, ws.as_deref()).await.is_ok()
                         } else {

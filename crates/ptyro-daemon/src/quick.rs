@@ -72,7 +72,7 @@ impl Daemon {
     /// The live quick terminal of a worktree (by id), or of a directory outside any.
     fn quick_of(&self, worktree: Option<&str>, cwd: &Path) -> Option<Arc<Session>> {
         self.sessions().into_iter().find(|s| {
-            let m = s.meta.lock().expect("meta");
+            let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             m.place.quick
                 && m.state.is_live()
                 && match worktree {

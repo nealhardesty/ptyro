@@ -26,7 +26,7 @@ impl Paths {
     /// Resolve with an explicit variable lookup (testable without touching the real environment).
     pub fn resolve(var: impl Fn(&str) -> Option<PathBuf>) -> std::io::Result<Self> {
         let uid = rustix::process::getuid().as_raw();
-        let mut paths = if let Some(home) = var("PTYRO_HOME") {
+        let mut paths = if let Some(home) = var("PTYRO_HOME").map(absolute) {
             Self {
                 config: home.join("config"),
                 data: home.join("data"),
@@ -50,7 +50,17 @@ impl Paths {
                 socket: PathBuf::new(),
             }
         };
-        paths.socket = match var("PTYRO_SOCKET") {
+        paths.socket = match var("PTYRO_SOCKET").map(absolute) {
+            Some(s) if s.as_os_str().len() > MAX_SOCKET_PATH + 3 => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "PTYRO_SOCKET is {} bytes, more than a socket path can be ({} at most): use a shorter one",
+                        s.as_os_str().len(),
+                        MAX_SOCKET_PATH + 3
+                    ),
+                ));
+            }
             Some(s) => s,
             None => short_enough(paths.runtime.join("ptyro.sock"), uid),
         };
@@ -64,6 +74,17 @@ impl Paths {
     pub fn log_dir(&self) -> PathBuf {
         self.state.clone()
     }
+}
+
+/// The user this process runs as.
+pub fn current_uid() -> u32 {
+    rustix::process::getuid().as_raw()
+}
+
+/// Relative to where this process is now, as an absolute path: the daemon detaches into its own
+/// directory, so a relative `PTYRO_HOME` would otherwise mean two places.
+fn absolute(p: PathBuf) -> PathBuf {
+    std::path::absolute(&p).unwrap_or(p)
 }
 
 /// A socket path that fits `sun_path`. Deep directories (macOS `$TMPDIR`, test temp dirs) fall
@@ -100,6 +121,15 @@ mod tests {
         assert!(p.socket.as_os_str().len() <= MAX_SOCKET_PATH);
         let again = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| deep.clone())).unwrap();
         assert_eq!(p.socket, again.socket);
+    }
+
+    #[test]
+    fn a_relative_home_is_made_absolute_and_a_too_long_socket_is_refused() {
+        let p = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| PathBuf::from("rel/home"))).unwrap();
+        assert!(p.config.is_absolute() && p.socket.is_absolute(), "{p:?}");
+        let long = PathBuf::from(format!("/{}", "s".repeat(120)));
+        let e = Paths::resolve(|k| (k == "PTYRO_SOCKET").then(|| long.clone())).unwrap_err();
+        assert!(e.to_string().contains("PTYRO_SOCKET"), "{e}");
     }
 
     #[test]

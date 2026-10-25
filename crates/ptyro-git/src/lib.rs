@@ -76,6 +76,10 @@ pub struct Safety {
     pub unpushed: Vec<String>,
     /// Stash entries made on this branch.
     pub stashes: Vec<String>,
+    /// Files and folders git ignores (`.env`, `node_modules`): removing the worktree deletes
+    /// them, and no commit has them. Not a reason to refuse (every build leaves some); a
+    /// reason to say so.
+    pub ignored: Vec<String>,
 }
 
 impl Safety {
@@ -84,6 +88,21 @@ impl Safety {
             && self.untracked.is_empty()
             && self.unpushed.is_empty()
             && self.stashes.is_empty()
+    }
+
+    /// One line about the ignored files removal would delete, when there are any.
+    pub fn ignored_note(&self) -> Option<String> {
+        if self.ignored.is_empty() {
+            return None;
+        }
+        let shown: Vec<&str> = self.ignored.iter().take(4).map(String::as_str).collect();
+        let more = self.ignored.len().saturating_sub(shown.len());
+        Some(format!(
+            "{} ignored file(s) or folder(s) go with it and are in no commit: {}{}",
+            self.ignored.len(),
+            shown.join(", "),
+            if more > 0 { format!(" … and {more} more") } else { String::new() }
+        ))
     }
 
     /// A precise, human report: what's at risk, with the first few items of each kind.
@@ -117,6 +136,34 @@ pub enum BranchFate {
     Keep(String),
 }
 
+/// Subcommands that read or hash file contents, so config-named filters and converters can run.
+const TOUCHES_CONTENT: &[&str] = &[
+    "add",
+    "status",
+    "diff",
+    "diff-index",
+    "diff-files",
+    "stash",
+    "merge-tree",
+    "show",
+    "write-tree",
+    "read-tree",
+    "update-index",
+    "checkout",
+    "reset",
+    "clean",
+    "ls-files",
+];
+
+/// The same directory, whatever the spelling (symlinks, `..`, a trailing slash).
+fn same_path(a: &Path, b: &Path) -> bool {
+    a == b
+        || match (a.canonicalize(), b.canonicalize()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        }
+}
+
 fn lines(s: &str) -> impl Iterator<Item = &str> {
     s.lines().map(str::trim_end).filter(|l| !l.is_empty())
 }
@@ -143,7 +190,14 @@ impl Git {
         let mut c = Command::new("git");
         c.arg("-C").arg(dir).args(["-c", "core.fsmonitor=false"]);
         if !hooks {
-            c.args(["-c", "core.hooksPath=/dev/null"]);
+            c.args(["-c", "core.hooksPath=/dev/null", "-c", "diff.external="]);
+            // Filters, merge drivers and diff converters are commands the repository's config
+            // names and its `.gitattributes` selects: both are files an agent can write.
+            if args.first().is_some_and(|a| TOUCHES_CONTENT.contains(a)) {
+                for kv in self.driver_overrides(dir) {
+                    c.args(["-c", &kv]);
+                }
+            }
         }
         c.args(args);
         if let Some(env) = &self.env {
@@ -155,6 +209,30 @@ impl Git {
         // own `git add`/`commit` running at the same moment would fail.
         c.env("GIT_OPTIONAL_LOCKS", "0");
         c
+    }
+
+    /// `key=` settings that turn off every filter, merge driver and diff converter the
+    /// repository (or the user) configures, for the commands ptyro runs in the background.
+    fn driver_overrides(&self, dir: &Path) -> Vec<String> {
+        let mut c = Command::new("git");
+        c.arg("-C").arg(dir).args([
+            "config",
+            "--get-regexp",
+            r"^(filter|merge|diff)\..*\.(clean|smudge|process|driver|textconv|command|required)$",
+        ]);
+        if let Some(env) = &self.env {
+            c.env_clear().envs(env.iter().map(|(k, v)| (k, v)));
+        }
+        c.stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+        let Ok(out) = c.output() else { return Vec::new() };
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|l| l.split_whitespace().next())
+            .map(|key| {
+                // An emptied `required` filter would fail the command that uses it.
+                if key.ends_with(".required") { format!("{key}=false") } else { format!("{key}=") }
+            })
+            .collect()
     }
 
     fn output(&self, dir: &Path, args: &[&str]) -> Result<Output> {
@@ -323,19 +401,34 @@ impl Git {
 
     /// Validate a branch name the way git does.
     pub fn check_branch_name(&self, name: &str) -> Result<()> {
-        if self.ok(Path::new("."), &["check-ref-format", "--branch", name])
-            && !name.starts_with('-')
-        {
+        // (Needs no repository: not run in the daemon's own directory, which may be gone.)
+        let nowhere = std::env::temp_dir();
+        if self.ok(&nowhere, &["check-ref-format", "--branch", name]) && !name.starts_with('-') {
             Ok(())
         } else {
             Err(GitError::Invalid(format!("{name:?} is not a valid branch name")))
         }
     }
 
+    /// A revision or ref that comes from a config file, a request or a pull request, before it
+    /// is a positional argument to git: never an option, and no whitespace or control
+    /// characters (git has none in a ref).
+    pub fn check_rev_arg(&self, what: &str, rev: &str) -> Result<()> {
+        if rev.is_empty()
+            || rev.starts_with('-')
+            || rev.chars().any(|c| c.is_control() || c.is_whitespace())
+        {
+            return Err(GitError::Invalid(format!("{what} {rev:?} is not a valid git revision")));
+        }
+        Ok(())
+    }
+
     /// Fetch `what` (a branch or refspec) from `remote`. Failures are reported, not fatal, by
     /// callers: offline work must keep working.
     pub fn fetch(&self, root: &Path, remote: &str, what: &str) -> Result<()> {
-        self.run(root, &["fetch", "--quiet", remote, what]).map(drop)
+        self.check_rev_arg("remote", remote)?;
+        self.check_rev_arg("branch", what)?;
+        self.run(root, &["fetch", "--quiet", "--", remote, what]).map(drop)
     }
 
     /// `git worktree add` (SPEC §10.3 step 2).
@@ -344,6 +437,7 @@ impl Git {
         match source {
             Source::NewBranch { branch, base } => {
                 self.check_branch_name(branch)?;
+                self.check_rev_arg("base", base)?;
                 if self.branch_exists(root, branch) {
                     return Err(GitError::Invalid(format!(
                         "branch {branch} already exists (use it with --branch {branch} --existing)"
@@ -353,6 +447,7 @@ impl Git {
                 self.run_hooked(root, &["worktree", "add", "--no-track", "-b", branch, &p, base])?;
             }
             Source::Existing { branch } => {
+                self.check_branch_name(branch)?;
                 if self.branch_exists(root, branch) {
                     self.run_hooked(root, &["worktree", "add", &p, branch])?;
                 } else if let Some(r) = self.main_remote(root)
@@ -371,7 +466,8 @@ impl Git {
             }
             Source::PullRequest { number, branch, remote } => {
                 self.check_branch_name(branch)?;
-                self.fetch(root, remote, &format!("pull/{number}/head:{branch}"))?;
+                // Into `refs/heads/<branch>` explicitly, never by a name git has to guess at.
+                self.fetch(root, remote, &format!("pull/{number}/head:refs/heads/{branch}"))?;
                 self.run_hooked(root, &["worktree", "add", &p, branch])?;
             }
         }
@@ -379,7 +475,8 @@ impl Git {
     }
 
     pub fn worktree_list(&self, root: &Path) -> Result<Vec<WorktreeEntry>> {
-        let out = self.run(root, &["worktree", "list", "--porcelain"])?;
+        // NUL-separated, so a path with a newline in it is one path.
+        let out = self.run(root, &["worktree", "list", "--porcelain", "-z"])?;
         Ok(parse_worktree_list(&out))
     }
 
@@ -396,6 +493,18 @@ impl Git {
         match self.run(root, &["worktree", "unlock", &p]) {
             Err(GitError::Failed { message, .. }) if message.contains("not locked") => Ok(()),
             other => other.map(drop),
+        }
+    }
+
+    /// Take ptyro's own lock off (`ptyro:<id>`, which keeps a worktree with live sessions from
+    /// being pruned); a lock the user set with `git worktree lock` stays. `true` when the
+    /// worktree is unlocked afterwards.
+    pub fn unlock_ours(&self, root: &Path, path: &Path) -> Result<bool> {
+        let entry = self.worktree_list(root)?.into_iter().find(|e| same_path(&e.path, path));
+        match entry.and_then(|e| e.locked) {
+            None => Ok(true),
+            Some(reason) if reason.starts_with("ptyro:") => self.unlock(root, path).map(|()| true),
+            Some(_) => Ok(false),
         }
     }
 
@@ -500,6 +609,11 @@ impl Git {
             let out = self.run(path, &args)?;
             s.unpushed = lines(&out).map(str::to_owned).collect();
         }
+        // Ignored files and folders (folders as one entry): what only this directory holds.
+        s.ignored = self
+            .run(path, &["ls-files", "--others", "--ignored", "--exclude-standard", "--directory"])
+            .map(|o| lines(&o).map(str::to_owned).collect())
+            .unwrap_or_default();
         if let Some(branch) = branch {
             let out = self.run(path, &["stash", "list", "--format=%gd %gs"]).unwrap_or_default();
             let on = [format!(" On {branch}: "), format!(" WIP on {branch}: ")];
@@ -649,7 +763,10 @@ impl Git {
 pub fn parse_worktree_list(out: &str) -> Vec<WorktreeEntry> {
     let mut v = Vec::new();
     let mut cur: Option<WorktreeEntry> = None;
-    for l in out.lines() {
+    // `-z` ends each field with NUL and each entry with an empty one; plain output is lines.
+    let fields: Vec<&str> =
+        if out.contains('\0') { out.split('\0').collect() } else { out.lines().collect() };
+    for l in fields {
         if l.is_empty() {
             v.extend(cur.take());
             continue;

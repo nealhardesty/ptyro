@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { MOD, Sticky, inputKeys, keyInput, keyOf, pasteInput } from "../dist/keys.js";
 import { docOf, selText, wordAt, lastUsed, ordered, span, urlAt, findIn } from "../dist/grid.js";
 
-const dom = (key, o = {}) => ({ key, ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...o });
+const dom = (key, o = {}) => ({ key, ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, getModifierState: (k) => k === "AltGraph" && !!o.altGraph, ...o });
 const hex = (...b) => b.map((x) => x.toString(16).padStart(2, "0"));
 const utf8 = (s) => [...new TextEncoder().encode(s)];
 
@@ -61,6 +61,12 @@ if (mode === "units") {
   assert.deepEqual(keyOf(dom("ArrowUp", { shiftKey: true })), { code: { t: "up" }, mods: MOD.SHIFT });
   assert.deepEqual(keyOf(dom("F12")), { code: { t: "f", n: 12 }, mods: 0 });
   assert.deepEqual(pasteInput("a\r\nb\rc"), { t: "paste", text: "a\nb\nc" });
+  // AltGr and a layout's Option characters are typed characters, not Ctrl+Alt+letter / Alt+letter.
+  assert.deepEqual(keyOf(dom("@", { ctrlKey: true, altKey: true, altGraph: true, code: "KeyQ" })), { code: { t: "char", c: "@" }, mods: 0 });
+  assert.deepEqual(keyOf(dom("|", { altKey: true, code: "Digit7" })), { code: { t: "char", c: "|" }, mods: 0 });
+  assert.deepEqual(keyOf(dom("x", { altKey: true, code: "KeyX" })), { code: { t: "char", c: "x" }, mods: MOD.ALT }, "Alt+x on a US layout is still Alt+x");
+  // A sticky modifier is for the first character of an inserted run.
+  assert.deepEqual(inputKeys("insertText", "ab", MOD.CTRL).map((k) => k.mods), [MOD.CTRL, 0]);
   assert.deepEqual(inputKeys("insertText", "a\n").map((k) => k.code.t), ["char", "enter"]);
   // Sticky modifiers: once, then held, then off.
   const s = new Sticky();

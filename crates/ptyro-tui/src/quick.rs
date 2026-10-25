@@ -124,6 +124,7 @@ impl App {
         let Some(pane) =
             self.layout.split_at(host, Dir::Down, 1.0 - self.drawer_share, MAX_WITH_DRAWER)
         else {
+            self.toast_err("no room for the drawer: close a pane first");
             return;
         };
         self.panes.insert(pane, PaneState { session: Some(id), ..PaneState::default() });

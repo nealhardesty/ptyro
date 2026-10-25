@@ -353,9 +353,10 @@ impl CopyMode {
             }
             (KeyCode::Char { c: '0' }, false) | (KeyCode::Home, _) => self.cursor.col = 0,
             (KeyCode::Char { c: '^' }, false) => {
-                self.cursor.col = self.rows[self.cursor.row]
-                    .iter()
-                    .position(|c| !c.text.trim().is_empty())
+                self.cursor.col = self
+                    .rows
+                    .get(self.cursor.row)
+                    .and_then(|r| r.iter().position(|c| !c.text.trim().is_empty()))
                     .unwrap_or(0);
             }
             (KeyCode::Char { c: '$' }, false) | (KeyCode::End, _) => {
@@ -464,6 +465,7 @@ impl CopyMode {
 
     fn jump_prompt(&mut self, forward: bool) {
         let n = self.take_count();
+        let mut moved = false;
         for _ in 0..n {
             let found = if forward {
                 (self.cursor.row + 1..self.rows.len()).find(|&r| self.is_prompt(r))
@@ -471,7 +473,10 @@ impl CopyMode {
                 (0..self.cursor.row).rev().find(|&r| self.is_prompt(r))
             };
             match found {
-                Some(r) => self.cursor = Pos { row: r, col: 0 },
+                Some(r) => {
+                    self.cursor = Pos { row: r, col: 0 };
+                    moved = true;
+                }
                 None => {
                     self.note = Some(if self.prompts.iter().any(|p| *p) {
                         "no more prompts".into()
@@ -482,7 +487,7 @@ impl CopyMode {
                 }
             }
         }
-        if forward || self.note.is_none() {
+        if moved {
             // Show the prompt near the top, with its output below.
             self.top =
                 self.cursor.row.saturating_sub(1).min(self.rows.len().saturating_sub(self.height));

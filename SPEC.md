@@ -139,7 +139,7 @@ Workspace *──* Project 1──* Worktree 1──* Session 0..1── Convers
 Run 1──* Session  (orchestration membership, optional)
 ```
 
-### 2.3 Identifiers **[proposed]**
+### 2.3 Identifiers **[decided]**
 
 - Every entity has a **ULID** (`01JB…`), sortable by creation time, stored in full.
 - Humans see a short, unique **handle**: `s:7f3k` (sessions), `w:…` (worktrees), `p:…` (projects),
@@ -226,7 +226,7 @@ show the suggestion before ⏎ (§11.2h).
   styled runs), not raw bytes. New clients get a keyframe instantly, slow clients skip frames instead
   of buffering forever, and a phone can render without a full VT emulator.
 
-### 3.3 Cargo workspace layout **[proposed]**
+### 3.3 Cargo workspace layout **[decided]**
 
 ```text
 ptyro/
@@ -275,7 +275,7 @@ Boundary rules **[decided]**:
 | WSL2 | Tier 2 (Linux build; tested occasionally) |
 | Windows native | Not supported (ConPTY is a different world; revisit much later) |
 
-MSRV: latest stable at project start, pinned in `rust-toolchain.toml`; edition 2024. **[proposed]**
+MSRV: latest stable at project start, pinned in `rust-toolchain.toml`; edition 2024. **[decided]**
 
 ### 3.5 Core dependencies **[proposed — versions checked on crates.io 2026-10-19]**
 
@@ -308,7 +308,7 @@ replies — see §5.3), `tarpc`/`jsonrpsee` (our traffic is server-push streams)
 
 ## 4. Process and threading model (daemon internals)
 
-### 4.1 Startup **[proposed]**
+### 4.1 Startup **[decided]**
 
 1. Resolve paths (§14.1). Create runtime dir with mode `0700`.
 2. Acquire an exclusive lock on `state/daemon.lock` (std `File::try_lock`); write pid. If locked,
@@ -328,7 +328,7 @@ the planned ready pipe and equally robust (a second client racing the first simp
 socket). Users may instead run the
 daemon under a systemd user unit or a launchd agent (`ptyro daemon install-service`).
 
-### 4.2 Actors **[proposed]**
+### 4.2 Actors **[decided]**
 
 Everything is message passing over `tokio::sync::mpsc`; no shared mutable state across actors except
 `Arc<watch>` snapshots for read-mostly data.
@@ -467,7 +467,7 @@ image is used to re-exec the *old* binary (kept at `state/daemon.prev`).
 
 ## 5. Terminal layer: PTYs, emulation, input, queries
 
-### 5.1 PTY management (`ptyro-pty`) **[proposed]**
+### 5.1 PTY management (`ptyro-pty`) **[decided]**
 
 - Open with `pty-process` (`Pty::new()`, `pts()`, `Command::spawn(pts)`): child becomes session
   leader with the PTY as controlling terminal (`setsid` + `TIOCSCTTY`).
@@ -514,7 +514,7 @@ image is used to re-exec the *old* binary (kept at `state/daemon.prev`).
   Removing `TMUX` matters concretely: with `$TMUX` set, Claude Code clamps to 256 colours and probes
   tmux instead of its terminal for OSC 7501 (§20).
 
-### 5.2 The `Emulator` trait (`ptyro-term`) **[proposed]**
+### 5.2 The `Emulator` trait (`ptyro-term`) **[decided]**
 
 ```rust
 pub trait Emulator: Send {
@@ -553,7 +553,7 @@ output, no query replies, limited graphemes, and heavy memory with large scrollb
 rewriting away from its vt100 fork for these reasons). `tui-term` is a thin vt100→ratatui widget;
 painting styled runs into a ratatui `Buffer` ourselves is ~100 lines and avoids coupling.
 
-### 5.4 Row versioning (how deltas are computed) **[proposed]**
+### 5.4 Row versioning (how deltas are computed) **[decided]**
 
 - The session keeps `seq: u64`, incremented once per *batch* of output processed (not per byte).
 - Each visible row `r` has `row_ver[r] = seq` of its last modification (from emulator damage).
@@ -578,7 +578,7 @@ painting styled runs into a ratatui `Buffer` ourselves is ~100 lines and avoids 
   tmux's copy mode freezes. 10 000 lines of 200 columns is about 1 MB of msgpack, built in a few
   milliseconds.
 
-### 5.5 Input (client → child) **[proposed]**
+### 5.5 Input (client → child) **[decided]**
 
 Clients do **not** send raw bytes for keys; they send abstract events and the daemon encodes them
 against the **child's current modes** (only the daemon knows them):
@@ -601,7 +601,7 @@ The TUI asks the *outer* terminal for kitty keyboard enhancement
 (`PushKeyboardEnhancementFlags`) when supported, so it can distinguish `Ctrl-I`/`Tab`,
 `Shift-Enter`, etc., and therefore re-encode them faithfully for Claude Code.
 
-### 5.6 Query responder **[proposed]**
+### 5.6 Query responder **[decided]**
 
 The daemon answers, on behalf of the (possibly absent) outer terminal:
 
@@ -700,7 +700,7 @@ Welcome { proto: Version, daemon_version: String, client_id: ClientId,
   exists) and explains that running sessions will be hibernated/lost.
 - `minor` and `features` gate optional behaviour (e.g. `"scroll-op"`, `"acp-sessions"`).
 
-### 6.4 Message catalogue (protocol v1, **[proposed]**)
+### 6.4 Message catalogue (protocol v1, **[decided]**; the current minor is `PROTO` in `ptyro-protocol`)
 
 Requests carry `id: u32`; the daemon answers with `Response { id, result: Ok(..) | Err(Error) }`.
 Push messages have no id.
@@ -1115,7 +1115,7 @@ auto-registration made every directory in a repository hit it (`ptyro new -C rep
 - `Dormant` = process not running but resumable; the last screen is shown dimmed with a
   "⏎ resume" hint.
 
-### 7.4 Hibernation **[proposed]**
+### 7.4 Hibernation **[decided]**
 
 Long-idle agents cost memory and sometimes subscription slots. Optional per agent
 (`hibernate_after = "2h"`, default off):
@@ -1201,7 +1201,7 @@ Without a recorder (M8) a dormant pane shows a "☾ dormant: ⏎ resumes" card, 
 
 ## 8. Agent adapters
 
-### 8.1 Adapter trait (`ptyro-agents`) **[proposed]**
+### 8.1 Adapter trait (`ptyro-agents`) **[decided]**
 
 ```rust
 #[async_trait]
@@ -1675,7 +1675,7 @@ its first prompt, and its lead heard "done" twice before any work was done.
 - Rate limit: coalesce per session per 10 s.
 - Notification titles carry the session's profile label (`[work] brisk-rook wants permission…`).
 
-### 9.6 Workspace-scoped attention **[proposed]**
+### 9.6 Workspace-scoped attention **[decided]**
 
 Every session has a **home workspace**: the one it was created from in the TUI. For CLI spawns it is
 `--workspace`, else the only workspace containing its project, else the controlling TUI's current
@@ -2071,11 +2071,16 @@ branches, no sessions for N days.
 - **Archive** (`WorktreeArchive`, `ptyro wt archive`): a snapshot commit of the files as they are
   (`Git::checkpoint`: a private index, untracked included, ignored not, parent HEAD) goes to
   `refs/ptyro/archive/<name>` (`-2`, `-3` when taken), then the worktree is removed with the
-  branch kept. It can't lose work, so it never refuses; running sessions refuse unless
-  `stop_sessions` (a quick terminal at its prompt doesn't count, UX1.25). The archive list is kv `archive:list` (`ArchiveEntry`, newest first;
-  `WorktreeArchives`, `ptyro wt archives`).
+  branch kept. Running sessions refuse unless `stop_sessions`, and they are stopped *before* the
+  snapshot, so what they write on the way out is in it (a quick terminal at its prompt doesn't
+  count, UX1.25). The snapshot leaves out ignored files, so small ones (a `.env`) are kept
+  beside it in `data/archive-extras/` and put back on restore, and an ignored file too big to
+  keep makes the archive refuse and name it, so nothing is lost silently. The archive list is
+  kv `archive:list` (`ArchiveEntry`, newest first; read and written under a lock, errors
+  propagated, the entry written after the removal; `WorktreeArchives`, `ptyro wt archives`).
 - **Restore** (`WorktreeRestore`, `ptyro wt restore [project/]name`): the branch checked out at
-  its old path (when free), no setup, then `Git::restore` puts the snapshot back with the changes
+  its old path (when free), no setup, then `Git::restore_onto_tip` (it refuses when the branch
+  has moved since) puts the snapshot back with the changes
   uncommitted again, untracked files untracked. The entry leaves the list.
 - **Finish** (`WorktreeFinish`, `ptyro wt finish [--integrate]`): when there are changes, the
   worktree's live agent (not mid-turn) is asked to commit and its turn awaited (up to 10 min,
@@ -2237,7 +2242,11 @@ explicit error. `ptyro profile rename` rewrites every reference.
    `OPENAI_API_KEY`, `CODEX_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`,
    `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_PROJECT`, `GH_TOKEN`, `GITHUB_TOKEN`,
    `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_PROFILE`, plus
-   `scrub_extra`. An exported `ANTHROPIC_API_KEY` otherwise silently overrides a subscription login.
+   `scrub_extra`. An isolated profile also loses every variable with a credential-shaped name:
+   `AWS_*`, `AZURE_*`, `GOOGLE_*`, `GH_*`, `GITHUB_*`, `OPENAI_*`, `ANTHROPIC_*`, `XAI_*`,
+   `MISTRAL_*`, `OPENROUTER_*`, `GIT_CONFIG_*`, and any ending `_API_KEY`, `_TOKEN`, `_SECRET`,
+   `_PASSWORD` or `_ASKPASS` (the profile's own `env`, `secrets` and account tokens, applied
+   next, put back what it wants). An exported `ANTHROPIC_API_KEY` otherwise silently overrides a subscription login.
    `SSH_AUTH_SOCK` is kept; use `ssh_key` (which sets `IdentitiesOnly=yes`) to pin a key.
 3. Apply the profile: agent dirs, git/gh settings, `env_file`, `env`, resolved `secrets`.
 4. Apply adapter variables (§8) and ptyro variables (§5.1), including `PTYRO_PROFILE=<name>`.
@@ -2345,7 +2354,7 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
 
 ## 11. The TUI
 
-### 11.1 Layout **[proposed]**
+### 11.1 Layout **[decided]**
 
 ```text
 ┌ ptyro ─ main ───────────────────────────────────────────── 3 working · 1 blocked · ✉ 2 ┐
@@ -2901,7 +2910,7 @@ mouse), drag to select (copy mode), drag split borders.
 - Addresses per §2.3. Multi-target commands accept `@blocked`, `@all`, etc.
 - Destructive commands ask for confirmation on a TTY; `--yes` for scripts.
 
-### 12.2 Command tree **[proposed]**
+### 12.2 Command tree **[decided]**
 
 The proposal as written. Built syntax differs in places (`export --format asciicast|text|ptylog`,
 `gate resolve ID CHOICE`, `wt new --no-setup`, `profile env P [--json]`, `verify S [CHECK]`);
@@ -4607,6 +4616,18 @@ is "the web is up when the daemon is".
   takes control or resizes a session. Revocation bumps an epoch, and the device's live
   connections get `Goodbye{"this device was revoked"}`. Approve-or-higher actions on a session
   are recorded as `remote` events with the device's name.
+  - **What `control` means (hardening review, 2026-10-24):** it may *steer* sessions: type into
+    them (a shell included: typing into a shell is running commands as you), start configured
+    agents, stop things. It is not "can't run commands"; only `full` reaches the machine itself
+    (config, host operations). `Compare` (it runs a project's checks and may start a judge
+    agent), answering `always`, and the change-set `push-*` and `land-*` gates need `control`;
+    `read` can see screens, scrollback, recordings and diffs, so a lost `read` device is a
+    secrets leak too. A gate answered from a device is recorded under the device's name.
+  - **Agents calling the daemon (`Hook`, `StatusLine`, `Report`) speak for their own session
+    only:** a caller the daemon places in session X can't report on or feed hooks for Y. Under a
+    run policy the allow-list applies. Verified-done's `deny_cmds`, leases and fences are
+    tripwires for an agent that is behaving, not a sandbox (`bash -c`, `sed -i`, links get past
+    them).
 
 ### 16.4 Web client / PWA
 

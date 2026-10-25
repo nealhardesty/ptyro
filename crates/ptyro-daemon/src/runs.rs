@@ -221,6 +221,9 @@ impl Daemon {
             return Ok(addr.to_owned());
         }
         let bare = addr.trim_start_matches("r-");
+        if bare.is_empty() {
+            return Err(Error::invalid("name the run: its id, or a part of it that only it has"));
+        }
         let m: Vec<&String> =
             runs.keys().filter(|k| k.trim_start_matches("r-").contains(bare)).collect();
         match m.as_slice() {
@@ -355,7 +358,8 @@ impl Daemon {
                         st.step_of_session(sid).map(str::to_owned)
                     };
                     if let (Some(step), Ok(s)) = (step, self.resolve(sid)) {
-                        s.meta.lock().expect("meta").run = Some((row.id.clone(), step));
+                        s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).run =
+                            Some((row.id.clone(), step));
                     }
                 }
             }
@@ -984,7 +988,12 @@ impl Daemon {
                     // Agents start once setup has finished (and only if it worked).
                     let _ =
                         tokio::time::timeout(Duration::from_secs(1200), setup.wait_exit()).await;
-                    let state = setup.meta.lock().expect("meta").state.clone();
+                    let state = setup
+                        .meta
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .state
+                        .clone();
                     if !matches!(state, ProcessState::Exited { code: Some(0), .. }) {
                         return Err(Error::conflict(format!(
                             "{}'s setup script failed ({})",
@@ -1118,7 +1127,7 @@ impl Daemon {
         ctx: &Value,
     ) {
         {
-            let mut m = s.meta.lock().expect("meta");
+            let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             m.run = Some((run.to_owned(), step.to_owned()));
             m.guard = def.guard.as_ref().map(|g| Guard {
                 deny_paths: g.deny_paths.clone(),
@@ -1133,7 +1142,7 @@ impl Daemon {
             }
         }
         let (conversation, worktree) = {
-            let m = s.meta.lock().expect("meta");
+            let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             (m.conversation.clone(), m.place.worktree.clone())
         };
         self.emit(
@@ -1285,7 +1294,8 @@ impl Daemon {
                 }
             }
         }
-        let wt = s.meta.lock().expect("meta").place.worktree.clone();
+        let wt =
+            s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).place.worktree.clone();
         if let Some(wt) = wt.and_then(|w| self.worktree_by_id(&w)) {
             res.end_ref = self.snapshot_ref(&wt, run, &def.id, n, "end").await;
         }
@@ -1490,11 +1500,18 @@ impl Daemon {
         self.enlist(run, &def.id, &s, def, &ctx).await;
         self.reset_verify(&s);
         // The follow-up keeps the original step's tie: its session still belongs to it.
-        s.meta.lock().expect("meta").run = Some((run.to_owned(), sd.to.clone()));
+        s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).run =
+            Some((run.to_owned(), sd.to.clone()));
         self.deliver_when_idle(&s, ptyro_run::template::render(&sd.text, &ctx));
         // Wait for delivery, so the idle before it doesn't count.
         let typed_by = now_ms() + 120_000;
-        while !s.meta.lock().expect("meta").last_prompt_ms.is_some_and(|p| p >= started) {
+        while !s
+            .meta
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .last_prompt_ms
+            .is_some_and(|p| p >= started)
+        {
             if now_ms() > typed_by || !s.is_live() {
                 return Ok(StepResult::fail(
                     "failed",
@@ -1778,6 +1795,15 @@ impl Daemon {
             .await;
     }
 
+    /// Whether the run or the step a gate waits in is over: answering it would only wake a
+    /// step that has already ended.
+    fn gate_is_closed(&self, run: &str, step: &str) -> bool {
+        let runs = self.runs.lock().expect("runs");
+        runs.get(run).is_none_or(|e| {
+            e.state.status.is_over() || e.state.steps.get(step).is_some_and(|s| s.status.is_over())
+        })
+    }
+
     pub(crate) fn find_gate(&self, id: &str) -> Option<(String, String, Gate)> {
         let runs = self.runs.lock().expect("runs");
         runs.values().find_map(|e| {
@@ -1801,7 +1827,16 @@ impl Daemon {
         by: &str,
     ) -> Result<GateInfo, Error> {
         let id = id.trim();
+        // One answer at a time: the check that it is still open and the event that closes it
+        // are one step, so two taps (or a timeout and a tap) can't both be recorded.
+        static ANSWERING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _one = ANSWERING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let (run, step, g) = self.find_gate(id).ok_or_else(|| Error::missing("gate", id))?;
+        if g.choice.is_none() && self.gate_is_closed(&run, &step) {
+            return Err(Error::conflict(format!(
+                "gate {id} belongs to a step that has already ended, so there is nothing left to answer"
+            )));
+        }
         if let Some(prev) = &g.choice {
             if key.is_some() && g.key == key || prev == choice {
                 return Ok(GateInfo { run, step, gate: g });
@@ -2322,16 +2357,22 @@ impl Daemon {
             Request::Fanout { spec } => self.fanout(spec).await,
             Request::GateList { all } => {
                 let runs = self.runs.lock().expect("runs");
-                let mut v: Vec<GateInfo> =
-                    runs.values()
-                        .flat_map(|e| {
-                            e.state.steps.iter().filter_map(|(sid, s)| {
-                                s.gate.clone().filter(|g| all || g.choice.is_none()).map(|g| {
-                                    GateInfo { run: e.state.id.clone(), step: sid.clone(), gate: g }
-                                })
-                            })
+                let mut v: Vec<GateInfo> = runs
+                    .values()
+                    .flat_map(|e| {
+                        e.state.steps.iter().filter_map(|(sid, s)| {
+                            // An unanswered gate of a step that is over is no question.
+                            let open = !e.state.status.is_over() && !s.status.is_over();
+                            s.gate.clone().filter(|g| all || (g.choice.is_none() && open)).map(
+                                |g| GateInfo {
+                                    run: e.state.id.clone(),
+                                    step: sid.clone(),
+                                    gate: g,
+                                },
+                            )
                         })
-                        .collect();
+                    })
+                    .collect();
                 v.sort_by_key(|g| g.gate.opened_ms);
                 Ok(Reply::Gates { gates: v })
             }
@@ -2450,7 +2491,11 @@ impl Daemon {
 
     /// A session ended a turn, exited or got blocked: a lead hears about its workers (M7.7).
     pub(crate) async fn run_member_changed(self: &Arc<Self>, s: &Arc<Session>) {
-        let Some((run, step)) = s.meta.lock().expect("meta").run.clone() else { return };
+        let Some((run, step)) =
+            s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).run.clone()
+        else {
+            return;
+        };
         let (kind, ended) = {
             let runs = self.runs.lock().expect("runs");
             let Some(e) = runs.get(&run) else { return };
@@ -2459,13 +2504,19 @@ impl Daemon {
         };
         // A lead's worker step lasts as long as its session.
         if kind == RunKind::Lead && step != "lead" && !ended && !s.is_live() {
-            let failed = matches!(s.meta.lock().expect("meta").state, ProcessState::Exited { code: Some(c), .. } if c != 0);
+            let failed = matches!(s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).state, ProcessState::Exited { code: Some(c), .. } if c != 0);
             self.emit(
                 &run,
                 vec![RunEvent::StepEnded {
                     step,
                     status: if failed { StepStatus::Failed } else { StepStatus::Succeeded },
-                    reason: Some(s.meta.lock().expect("meta").state.label()),
+                    reason: Some(
+                        s.meta
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .state
+                            .label(),
+                    ),
                     decided_by: Some("status".into()),
                     at: now_ms(),
                 }],

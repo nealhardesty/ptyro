@@ -22,6 +22,8 @@ export interface DomKey {
   metaKey: boolean;
   isComposing?: boolean;
   keyCode?: number;
+  /// `KeyboardEvent.getModifierState`: AltGraph says the layout made this character itself.
+  getModifierState?: (k: string) => boolean;
 }
 
 const NAMED: Record<string, KeyCode> = {
@@ -39,7 +41,11 @@ export function keyOf(e: DomKey, sticky = 0): KeyEvent | null {
   if (MODIFIER_KEYS.has(e.key)) return null;
   // Cmd (macOS) is the browser's: copy, paste, tabs. A sticky Super from the key row isn't.
   if (e.metaKey) return null;
-  let mods = sticky | (e.ctrlKey ? MOD.CTRL : 0) | (e.altKey ? MOD.ALT : 0);
+  // AltGr (Windows reports it as Ctrl+Alt) and the Option key on a Mac with a layout that puts
+  // `@ [ ] { } | \` under it make a character: the program gets that character, not Ctrl+Alt+letter.
+  const altGr = e.getModifierState?.("AltGraph") === true;
+  const typed = e.key.length === 1 && e.key >= " " && e.key <= "~";
+  let mods = sticky | (e.ctrlKey && !altGr ? MOD.CTRL : 0) | (e.altKey && !altGr ? MOD.ALT : 0);
   const named = NAMED[e.key];
   if (named) {
     // Shift+Tab is its own key; every other named key carries Shift as a modifier.
@@ -51,9 +57,10 @@ export function keyOf(e: DomKey, sticky = 0): KeyEvent | null {
   if (e.key === " " || [...e.key].length === 1) {
     let c = e.key;
     // Option on a Mac types å, ∂, ç…: the terminal wants Alt+a. The physical key says which.
-    if (e.altKey && e.code) {
+    if (e.altKey && !altGr && e.code) {
       const m = /^Key([A-Z])$/.exec(e.code) ?? /^Digit(\d)$/.exec(e.code);
-      if (m) c = e.shiftKey ? m[1].toUpperCase() : m[1].toLowerCase();
+      if (m && typed && e.key.toLowerCase() !== m[1].toLowerCase()) mods &= ~MOD.ALT; // the layout's own `@`, `|`…: a typed character
+      else if (m) c = e.shiftKey ? m[1].toUpperCase() : m[1].toLowerCase();
     }
     // Ctrl+Shift+letter is the letter with both modifiers, not an upper-case control code.
     if (mods & MOD.CTRL) { c = c.toLowerCase(); if (e.shiftKey) mods |= MOD.SHIFT; }
@@ -70,7 +77,8 @@ export function inputKeys(inputType: string, data: string | null, sticky = 0): K
     case "insertText":
     case "insertCompositionText":
     case "insertReplacementText":
-      return [...(data ?? "")].map((c) => c === "\n" ? { code: { t: "enter" } as KeyCode, mods: 0 } : { code: { t: "char", c } as KeyCode, mods: sticky });
+      // A sticky Ctrl or Alt is for the first character only: Ctrl-pasting "abc" is Ctrl+a, then b and c.
+      return [...(data ?? "")].map((c, i) => c === "\n" ? { code: { t: "enter" } as KeyCode, mods: 0 } : { code: { t: "char", c } as KeyCode, mods: i === 0 ? sticky : 0 });
     case "insertLineBreak":
     case "insertParagraph":
       return [{ code: { t: "enter" }, mods: 0 }];

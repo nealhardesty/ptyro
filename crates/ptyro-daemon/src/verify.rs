@@ -58,7 +58,7 @@ impl Daemon {
                 format!("{name} (add [scripts.run.{name}] to .ptyro.toml)"),
             )
         })?;
-        if !self.is_trusted(&p.id, &cfg.scripts.fingerprint()) {
+        if !self.is_trusted(&p.id, &cfg.trust_fingerprint()) {
             return Err(Error::new(
                 ErrorCode::UntrustedProject,
                 format!(
@@ -108,27 +108,22 @@ impl Daemon {
             .stdout(std::process::Stdio::piped())
             .process_group(0)
             .kill_on_drop(true);
-        let child =
-            c.spawn().map_err(|e| Error::internal(format!("cannot run `{command}`: {e}")))?;
-        // Its own process group, killed whole on a timeout or an abort: `cargo test` under the
-        // shell goes too, not just the shell.
-        let _group = crate::verify::GroupGuard(child.id());
-        let out = match tokio::time::timeout(CHECK_TIMEOUT, child.wait_with_output()).await {
-            Ok(Ok(o)) => o,
-            Ok(Err(e)) => return Err(Error::internal(format!("`{command}`: {e}"))),
-            Err(_) => {
-                return Ok(Evidence {
-                    command: command.to_owned(),
-                    exit_code: 124,
-                    tail: format!("timed out after {} minutes", CHECK_TIMEOUT.as_secs() / 60),
-                    tree: None,
-                    at_ms: now_ms(),
-                    duration_ms: started.elapsed().as_millis() as u64,
-                });
-            }
-        };
-        let text = String::from_utf8_lossy(&out.stdout).into_owned();
-        let _ = std::fs::write(log, &text);
+        // Its output goes to the log file as it is written, never into the daemon's memory:
+        // a check that prints without end is stopped at a size, not at the daemon's death.
+        let ran = run_to_log(c, log, CHECK_TIMEOUT, CHECK_LOG_CAP)
+            .await
+            .map_err(|e| Error::internal(format!("cannot run `{command}`: {e}")))?;
+        if let Some(why) = &ran.stopped {
+            return Ok(Evidence {
+                command: command.to_owned(),
+                exit_code: if why.starts_with("timed out") { 124 } else { 125 },
+                tail: format!("{why}\n{}", crate::runs::tail(&ran.text, 20)),
+                tree: None,
+                at_ms: now_ms(),
+                duration_ms: started.elapsed().as_millis() as u64,
+            });
+        }
+        let text = ran.text;
         let path = dir.to_path_buf();
         let tree = blocking(move || {
             ptyro_git::Git::new().checkpoint(&path, "ptyro check").ok().map(|s| s.tree)
@@ -138,7 +133,7 @@ impl Daemon {
         .flatten();
         Ok(Evidence {
             command: command.to_owned(),
-            exit_code: out.status.code().unwrap_or(-1),
+            exit_code: ran.code.unwrap_or(-1),
             tail: crate::runs::tail(&text, 40),
             tree,
             at_ms: now_ms(),
@@ -177,14 +172,16 @@ impl Daemon {
                 })
             }
         };
-        s.meta.lock().expect("meta").verify = v;
+        s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).verify = v;
         let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(s) });
         Ok(())
     }
 
     /// A new step or prompt: the bounce count starts again.
     pub(crate) fn reset_verify(&self, s: &Arc<Session>) {
-        if let Some(v) = &mut s.meta.lock().expect("meta").verify {
+        if let Some(v) =
+            &mut s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).verify
+        {
             v.bounces = 0;
             v.state = VerifyState::Pending;
         }
@@ -192,7 +189,9 @@ impl Daemon {
 
     /// Project `[verify] auto = true`: every agent in its worktrees is verified.
     pub(crate) fn auto_verify(&self, s: &Arc<Session>) {
-        if s.kind() != SessionKind::Agent || s.meta.lock().expect("meta").verify.is_some() {
+        if s.kind() != SessionKind::Agent
+            || s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).verify.is_some()
+        {
             return;
         }
         let Some(wt) = s
@@ -219,7 +218,7 @@ impl Daemon {
     /// Run the session's check for the turn that just ended. `Some(reason)`: bounce it.
     async fn verify_turn(self: &Arc<Self>, s: &Arc<Session>) -> Option<String> {
         let (v, wt) = {
-            let mut m = s.meta.lock().expect("meta");
+            let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let wt = m.place.worktree.clone();
             let v = m.verify.as_mut()?;
             v.state = VerifyState::Checking;
@@ -247,7 +246,9 @@ impl Daemon {
                 ev.command, ev.exit_code, v.bounces + 1, v.max_bounces, crate::runs::tail(&ev.tail, 25)
             )
         });
-        if let Some(v) = &mut s.meta.lock().expect("meta").verify {
+        if let Some(v) =
+            &mut s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).verify
+        {
             v.state = if passed {
                 VerifyState::Passed
             } else if bounce {
@@ -266,7 +267,7 @@ impl Daemon {
 
     /// Claude's Stop hook: check before the turn is allowed to end. `Some(stdout)` blocks it.
     pub(crate) async fn verify_stop_hook(self: &Arc<Self>, s: &Arc<Session>) -> Option<String> {
-        s.meta.lock().expect("meta").verify.as_ref()?;
+        s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).verify.as_ref()?;
         let reason = self.verify_turn(s).await?;
         Some(json!({ "decision": "block", "reason": reason }).to_string())
     }
@@ -274,7 +275,7 @@ impl Daemon {
     /// Agents without a blocking Stop hook: check after the turn, bounce with a follow-up.
     pub(crate) fn verify_after_turn(self: &Arc<Self>, s: &Arc<Session>) {
         let fresh = {
-            let m = s.meta.lock().expect("meta");
+            let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let Some(v) = &m.verify else { return };
             // The Stop hook already decided this turn.
             v.last.as_ref().is_some_and(|e| e.at_ms + 2000 >= now_ms())
@@ -312,7 +313,7 @@ impl Daemon {
     /// After an agent turn: checkpoint the worktree if it changed since the last checkpoint.
     pub(crate) fn checkpoint_turn(self: &Arc<Self>, s: &Arc<Session>) {
         let (wt, name, turn) = {
-            let m = s.meta.lock().expect("meta");
+            let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             (m.place.worktree.clone(), m.name.clone(), m.turns)
         };
         let Some(wt) = wt.and_then(|w| self.worktree_by_id(&w)) else { return };
@@ -525,11 +526,11 @@ impl Daemon {
     ) -> Option<String> {
         let (tool, files, command) = tool_target(adapter, payload);
         let (guard, wt) = {
-            let m = s.meta.lock().expect("meta");
+            let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             (m.guard.clone(), m.place.worktree.clone())
         };
         let root = wt.as_deref().and_then(|w| self.worktree_by_id(w)).map(|w| w.path);
-        let cwd = s.meta.lock().expect("meta").cwd.clone();
+        let cwd = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).cwd.clone();
         // The path a guard or lease sees: relative to the worktree, `..` folded and symlinks
         // resolved, so `src/../.github/x` or a link can't slip past a pattern.
         let rel =
@@ -571,7 +572,8 @@ impl Daemon {
         if let Some(r) = self.cs_fence(s, &files) {
             return Some(r);
         }
-        let project = s.meta.lock().expect("meta").place.project.clone();
+        let project =
+            s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).place.project.clone();
         let me = s.id.full();
         let leases = self.leases.lock().expect("leases");
         for f in &files {
@@ -585,7 +587,13 @@ impl Daemon {
             }) {
                 let who = self
                     .resolve(&l.holder)
-                    .map(|h| h.meta.lock().expect("meta").name.clone())
+                    .map(|h| {
+                        h.meta
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .name
+                            .clone()
+                    })
                     .unwrap_or_else(|_| l.holder.clone());
                 let until = crate::agents::human(l.expires_ms.saturating_sub(now_ms()));
                 return Some(format!(
@@ -597,6 +605,82 @@ impl Daemon {
         let _ = tool;
         None
     }
+}
+
+/// The most a check may write before it is stopped, and the most of it kept in memory (the tail).
+pub(crate) const CHECK_LOG_CAP: u64 = 64 << 20;
+const CHECK_TAIL_BYTES: u64 = 256 << 10;
+
+/// How a command run by [`run_to_log`] ended.
+pub(crate) struct Ran {
+    pub code: Option<i32>,
+    pub success: bool,
+    /// The end of its output (the whole of it is in the log file).
+    pub text: String,
+    /// Why it was stopped: it ran out of time, or wrote too much.
+    pub stopped: Option<String>,
+}
+
+/// Run `c` with stdout and stderr going straight to `log`, in its own process group, killed
+/// after `limit` or when the log passes `cap` bytes.
+pub(crate) async fn run_to_log(
+    mut c: tokio::process::Command,
+    log: &Path,
+    limit: Duration,
+    cap: u64,
+) -> std::io::Result<Ran> {
+    use std::io::{Read, Seek, SeekFrom};
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(log)?;
+    c.stdout(std::process::Stdio::from(file.try_clone()?))
+        .stderr(std::process::Stdio::from(file))
+        .stdin(std::process::Stdio::null())
+        .process_group(0)
+        .kill_on_drop(true);
+    let mut child = c.spawn()?;
+    // The whole group goes when this returns early or is dropped: `cargo test` under the shell
+    // goes too, not just the shell.
+    let _group = GroupGuard(child.id());
+    let deadline = Instant::now() + limit;
+    let (mut status, mut stopped) = (None, None);
+    loop {
+        tokio::select! {
+            r = child.wait() => {
+                status = Some(r?);
+                break;
+            }
+            () = tokio::time::sleep(Duration::from_millis(500)) => {
+                if std::fs::metadata(log).map_or(0, |m| m.len()) > cap {
+                    stopped = Some(format!("wrote more than {} KiB of output; stopped", cap >> 10));
+                } else if Instant::now() >= deadline {
+                    stopped = Some(format!("timed out after {} minutes", limit.as_secs() / 60));
+                }
+                if stopped.is_some() {
+                    let _ = child.start_kill();
+                    let _ = ptyro_pty::signal_group(child.id().unwrap_or(0), ptyro_pty::Signal::KILL);
+                    let _ = child.wait().await;
+                    break;
+                }
+            }
+        }
+    }
+    let mut text = Vec::new();
+    if let Ok(mut f) = std::fs::File::open(log) {
+        let len = f.metadata().map_or(0, |m| m.len());
+        let _ = f.seek(SeekFrom::Start(len.saturating_sub(CHECK_TAIL_BYTES)));
+        let _ = f.read_to_end(&mut text);
+    }
+    Ok(Ran {
+        code: status.and_then(|s| s.code()),
+        success: status.is_some_and(|s| s.success()),
+        text: String::from_utf8_lossy(&text).into_owned(),
+        stopped,
+    })
 }
 
 /// Kills a process group when dropped (a check that timed out, or a step that was aborted).
@@ -697,5 +781,35 @@ mod tests {
         assert!(!command_matches("echo git push", "git push"));
         assert!(deny_output("claude", "no").contains("permissionDecision"));
         assert!(deny_output("gemini", "no").contains("\"deny\""));
+    }
+
+    #[tokio::test]
+    async fn a_check_that_prints_without_end_is_stopped_and_only_its_tail_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("check.log");
+        let mut c = tokio::process::Command::new("sh");
+        c.arg("-c").arg("while :; do echo 0123456789abcdef0123456789abcdef; done");
+        let ran = run_to_log(c, &log, Duration::from_secs(30), 256 << 10).await.unwrap();
+        assert!(ran.stopped.as_deref().is_some_and(|w| w.contains("output")), "{:?}", ran.stopped);
+        assert!(!ran.success && ran.text.len() as u64 <= CHECK_TAIL_BYTES);
+        // A normal check: its exit code, its output, nothing stopped.
+        let mut c = tokio::process::Command::new("sh");
+        c.arg("-c").arg("echo out; echo err >&2; exit 3");
+        let ran = run_to_log(c, &log, Duration::from_secs(30), 1 << 20).await.unwrap();
+        assert_eq!((ran.code, ran.success, ran.stopped.is_none()), (Some(3), false, true));
+        assert!(ran.text.contains("out") && ran.text.contains("err"), "{}", ran.text);
+        let mode = std::os::unix::fs::PermissionsExt::mode(
+            &std::fs::metadata(&log).unwrap().permissions(),
+        );
+        assert_eq!(mode & 0o077, 0, "a check's log is private");
+        // And one that outlives its time is killed with its group.
+        let mut c = tokio::process::Command::new("sh");
+        c.arg("-c").arg("sleep 60");
+        let ran = run_to_log(c, &log, Duration::from_millis(600), 1 << 20).await.unwrap();
+        assert!(
+            ran.stopped.as_deref().is_some_and(|w| w.starts_with("timed out")),
+            "{:?}",
+            ran.stopped
+        );
     }
 }

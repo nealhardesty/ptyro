@@ -143,7 +143,7 @@ impl Daemon {
                 let Some(s) = self.session(id) else { return };
                 s.engine.lock().expect("engine").clear();
                 let (state, kind, started) = {
-                    let m = s.meta.lock().expect("meta");
+                    let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     (m.state.clone(), m.kind, s.id.created_ms())
                 };
                 let ran = now_ms().saturating_sub(started);
@@ -240,8 +240,12 @@ impl Daemon {
                     s.engine.lock().expect("engine").activity = Some(text);
                     changed = true;
                 }
+                Signal::Conversation { id } if !conversation_id_ok(&id) => {
+                    // It would be handed to the agent's CLI on resume: never an option.
+                    tracing::warn!(session = %s.id, "ignoring a conversation id that isn't one");
+                }
                 Signal::Conversation { id } => {
-                    let mut m = s.meta.lock().expect("meta");
+                    let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     if m.conversation.as_deref() != Some(id.as_str()) {
                         m.conversation = Some(id);
                         drop(m);
@@ -253,7 +257,8 @@ impl Daemon {
                     self.verify_on_prompt(s, &text);
                     self.mail_seen(s, &text);
                     let first = {
-                        let mut m = s.meta.lock().expect("meta");
+                        let mut m =
+                            s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                         let first = m.first_prompt.is_none();
                         if first {
                             m.first_prompt = Some(text.chars().take(500).collect());
@@ -279,7 +284,8 @@ impl Daemon {
                         s.status(),
                         Some(AgentStatus::Working | AgentStatus::Blocked)
                     ) {
-                        let mut m = s.meta.lock().expect("meta");
+                        let mut m =
+                            s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                         m.turn_end_seen = m.turn_open;
                     } else if self.close_turn(s) {
                         self.turn_ended(s).await;
@@ -289,7 +295,8 @@ impl Daemon {
                 }
                 Signal::Child { id, kind, running } => {
                     let warn = {
-                        let mut m = s.meta.lock().expect("meta");
+                        let mut m =
+                            s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                         match m.children.iter_mut().find(|c| c.id == id) {
                             Some(c) => c.running = running,
                             None => m.children.push(Child { id, kind, running }),
@@ -318,10 +325,12 @@ impl Daemon {
                 Signal::Notify { text } => notes.push(text),
                 Signal::Reply { text } => {
                     s.record_event("reply", serde_json::json!({ "chars": text.chars().count() }));
-                    s.meta.lock().expect("meta").last_reply = Some(text);
+                    s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).last_reply =
+                        Some(text);
                 }
                 Signal::Messaging { socket } => {
-                    s.meta.lock().expect("meta").messaging = Some(socket)
+                    s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).messaging =
+                        Some(socket)
                 }
             }
         }
@@ -347,7 +356,7 @@ impl Daemon {
             return false;
         }
         let (adapter, agent) = {
-            let m = s.meta.lock().expect("meta");
+            let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             (m.adapter.clone(), m.place.agent.clone())
         };
         let Some(adapter) = adapter else { return false };
@@ -357,7 +366,7 @@ impl Daemon {
 
     /// Closes the open turn; whether one was open.
     fn close_turn(&self, s: &Session) -> bool {
-        let mut m = s.meta.lock().expect("meta");
+        let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         m.turn_end_seen = false;
         std::mem::take(&mut m.turn_open)
     }
@@ -365,7 +374,7 @@ impl Daemon {
     /// A turn finished: count it, then checkpoint, verify, tell a lead, look for collisions
     /// (M7) and summarize (UX1.3).
     async fn turn_ended(self: &Arc<Self>, s: &Arc<Session>) {
-        s.meta.lock().expect("meta").turns += 1;
+        s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).turns += 1;
         if s.kind() == SessionKind::Agent {
             self.checkpoint_turn(s);
             self.verify_after_turn(s);
@@ -373,14 +382,20 @@ impl Daemon {
             self.radar_after_turn(s);
             self.run_member_changed(s).await;
         }
-        if s.kind() == SessionKind::Agent || s.meta.lock().expect("meta").inner_agent.is_some() {
+        if s.kind() == SessionKind::Agent
+            || s.meta
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .inner_agent
+                .is_some()
+        {
             self.summarize_after(s);
         }
     }
 
     async fn on_transition(self: &Arc<Self>, s: &Arc<Session>, t: &Transition) {
         if t.to.status == AgentStatus::Working {
-            let mut m = s.meta.lock().expect("meta");
+            let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             m.last_reply = None;
             m.turn_open = true;
         }
@@ -390,7 +405,9 @@ impl Daemon {
             if !self.counts_turn_ends(s) {
                 self.close_turn(s);
                 self.turn_ended(s).await;
-            } else if s.meta.lock().expect("meta").turn_end_seen && self.close_turn(s) {
+            } else if s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).turn_end_seen
+                && self.close_turn(s)
+            {
                 self.turn_ended(s).await;
                 self.after_turn(s).await;
             }
@@ -421,7 +438,13 @@ impl Daemon {
                 self.snapshot_turn(s);
             }
             // Someone answered, or it got going again: what it wanted is no longer pending.
-            let had = s.meta.lock().expect("meta").attention.take().is_some();
+            let had = s
+                .meta
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .attention
+                .take()
+                .is_some();
             if had {
                 let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(s) });
             }
@@ -457,7 +480,7 @@ impl Daemon {
             return;
         }
         {
-            let mut m = s.meta.lock().expect("meta");
+            let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             // Keep the more urgent one if it's still pending.
             if m.attention.as_ref().is_some_and(|a| a.kind < kind) && kind != AttentionKind::Exited
             {
@@ -470,7 +493,13 @@ impl Daemon {
     }
 
     pub fn clear_attention(self: &Arc<Self>, s: &Arc<Session>) {
-        let had = s.meta.lock().expect("meta").attention.take().is_some();
+        let had = s
+            .meta
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .attention
+            .take()
+            .is_some();
         if had {
             let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(s) });
         }
@@ -494,7 +523,10 @@ impl Daemon {
             self.clear_attention(&s);
             // Opening a dormant agent resumes it (SPEC §7.4).
             let resume = self.config.read().expect("config").attention.resume_on_focus;
-            if resume && s.meta.lock().expect("meta").state == ProcessState::Dormant {
+            if resume
+                && s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).state
+                    == ProcessState::Dormant
+            {
                 let me = Arc::clone(self);
                 tokio::spawn(async move {
                     if let Err(e) = me.resume(&s.id.full()).await {
@@ -539,7 +571,12 @@ impl Daemon {
         if adapter == "codex"
             && event == "notify"
             && let Some(thread) = payload.get("thread-id").and_then(|t| t.as_str())
-            && let Some(own) = s.meta.lock().expect("meta").conversation.clone()
+            && let Some(own) = s
+                .meta
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .conversation
+                .clone()
             && own != thread
         {
             s.record_event("hook", serde_json::json!({ "adapter": adapter, "event": event, "ignored": "another thread" }));
@@ -568,7 +605,7 @@ impl Daemon {
             && let Some(out) = self.verify_stop_hook(&s).await
         {
             s.record_event("bounced", serde_json::json!({}));
-            let run = s.meta.lock().expect("meta").run.clone();
+            let run = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).run.clone();
             if let Some((run, step)) = run {
                 self.emit(
                     &run,
@@ -592,7 +629,7 @@ impl Daemon {
                 serde_json::json!({ "tool": payload.get("tool_name"), "reason": reason }),
             );
             let (run, name) = {
-                let m = s.meta.lock().expect("meta");
+                let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 (m.run.clone(), m.name.clone())
             };
             if let Some((run, _)) = run {
@@ -700,7 +737,7 @@ impl Daemon {
         let started = now_ms();
         s.send_text(text, enter).await;
         {
-            let mut m = s.meta.lock().expect("meta");
+            let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             m.prompt_pending = false;
             if enter {
                 m.last_prompt_ms = Some(started);
@@ -732,7 +769,7 @@ impl Daemon {
                     ErrorCode::Timeout,
                     format!(
                         "{} wasn't ready for input within {}",
-                        s.meta.lock().expect("meta").name,
+                        s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name,
                         human(timeout_ms)
                     ),
                 ));
@@ -744,7 +781,7 @@ impl Daemon {
     /// Type `prompt` into the agent once it's ready (SPEC §8.2).
     pub(crate) fn deliver_prompt(self: &Arc<Self>, s: Arc<Session>, prompt: String) {
         let me = Arc::clone(self);
-        s.meta.lock().expect("meta").prompt_pending = true;
+        s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).prompt_pending = true;
         tokio::spawn(async move {
             let start = now_ms();
             // Typing into a dialog could pick its preselected answer ("No, exit"): wait for
@@ -761,7 +798,10 @@ impl Daemon {
                 }
                 // Waiting on a dialog is fine (the user may answer it); give up only on silence.
                 if r != Readiness::Blocked && now_ms().saturating_sub(start) > 120_000 {
-                    s.meta.lock().expect("meta").prompt_pending = false;
+                    s.meta
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .prompt_pending = false;
                     let me = Arc::clone(&me);
                     me.raise(
                         &s,
@@ -805,7 +845,7 @@ impl Daemon {
 
     async fn after_turn(self: &Arc<Self>, s: &Arc<Session>) {
         let (agent, wt) = {
-            let m = s.meta.lock().expect("meta");
+            let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             (m.place.agent.clone(), m.place.worktree.clone())
         };
         let (Some(agent), Some(wt_id)) = (agent, wt) else { return };
@@ -815,14 +855,14 @@ impl Daemon {
         let Some(wt) = self.worktree_by_id(&wt_id) else { return };
         let Some(p) = self.project_by_id(&wt.project) else { return };
         let cfg = ptyro_core::project::ProjectConfig::load(&p.root, &wt.path).unwrap_or_default();
-        if cfg.scripts.after_turn.is_none() || !self.is_trusted(&p.id, &cfg.scripts.fingerprint()) {
+        if cfg.scripts.after_turn.is_none() || !self.is_trusted(&p.id, &cfg.trust_fingerprint()) {
             return;
         }
         // One after_turn session per worktree, run again each turn.
-        let existing = self
-            .sessions_in(&wt.id)
-            .into_iter()
-            .find(|x| x.meta.lock().expect("meta").place.script.as_deref() == Some("after_turn"));
+        let existing = self.sessions_in(&wt.id).into_iter().find(|x| {
+            x.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).place.script.as_deref()
+                == Some("after_turn")
+        });
         match existing {
             Some(x) if x.is_live() => {}
             Some(x) => {
@@ -883,7 +923,13 @@ impl Daemon {
             return Err(Error::invalid("only running agent sessions hibernate"));
         }
         let resumable = s.adapter().is_some_and(|a| ptyro_agents::adapter(&a).caps().resume);
-        if !resumable || s.meta.lock().expect("meta").conversation.is_none() {
+        if !resumable
+            || s.meta
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .conversation
+                .is_none()
+        {
             return Err(Error::new(
                 ErrorCode::Unsupported,
                 "ptyro doesn't know this agent's conversation id, so it couldn't resume it",
@@ -911,7 +957,7 @@ impl Daemon {
         if s.kind() != SessionKind::Agent {
             return Err(Error::invalid("only agent sessions switch modes"));
         }
-        let name = s.meta.lock().expect("meta").name.clone();
+        let name = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name.clone();
         if s.structured.is_some() == structured {
             return Err(Error::conflict(format!(
                 "{name} already runs {}",
@@ -921,7 +967,13 @@ impl Daemon {
         let adapter = s.adapter().unwrap_or_else(|| "generic".into());
         let def = ptyro_agents::def(
             &self.config(),
-            &s.meta.lock().expect("meta").place.agent.clone().unwrap_or_default(),
+            &s.meta
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .place
+                .agent
+                .clone()
+                .unwrap_or_default(),
         );
         if structured && def.protocol.is_none() && ptyro_drive::protocol_for(&adapter).is_none() {
             return Err(Error::new(
@@ -929,7 +981,7 @@ impl Daemon {
                 format!("{adapter} has no structured mode"),
             ));
         }
-        if s.meta.lock().expect("meta").conversation.is_none() {
+        if s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).conversation.is_none() {
             return Err(Error::new(
                 ErrorCode::Unsupported,
                 format!(
@@ -961,7 +1013,7 @@ impl Daemon {
         if s.is_live() {
             return Ok(Reply::Session { info: self.info(&s) });
         }
-        let m = s.meta.lock().expect("meta").clone();
+        let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
         let conv = m.conversation.clone().ok_or_else(|| {
             Error::new(ErrorCode::Unsupported, "no conversation id known for this session")
         })?;
@@ -1022,7 +1074,7 @@ impl Daemon {
         if st.as_ref().map(|r| r.status) != Some(AgentStatus::Blocked) {
             return Err(Error::conflict(format!(
                 "{} isn't waiting on a prompt",
-                s.meta.lock().expect("meta").name
+                s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name
             )));
         }
         if let (Some(want), Some(r)) = (expect, &st)
@@ -1030,7 +1082,7 @@ impl Daemon {
         {
             return Err(Error::conflict(format!(
                 "that prompt changed since you saw it: {} now asks {}; look again before answering",
-                s.meta.lock().expect("meta").name,
+                s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name,
                 r.detail.clone().unwrap_or_else(|| "something else".into())
             )));
         }
@@ -1108,7 +1160,7 @@ impl Daemon {
                 {
                     self.warn(format!(
                         "Codex is holding ptyro's hooks for review in {}: this Codex version hashes hooks differently, so its status is a guess (report your `codex --version`)",
-                        s.meta.lock().expect("meta").name
+                        s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name
                     ));
                 }
                 self.apply_queued(
@@ -1180,9 +1232,11 @@ impl Daemon {
         let config = self.config();
         let fg = s.foreground_pid().and_then(ptyro_pty::process_name);
         let now = fg.as_deref().and_then(|p| ptyro_agents::adapter_for_program(&config, p));
-        let was = s.meta.lock().expect("meta").inner_agent.clone();
+        let was =
+            s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).inner_agent.clone();
         if now != was {
-            s.meta.lock().expect("meta").inner_agent = now.clone();
+            s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).inner_agent =
+                now.clone();
             s.engine.lock().expect("engine").forget_sources(true);
             s.record_event("inner_agent", serde_json::json!({ "agent": now }));
             let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(s) });
@@ -1201,7 +1255,7 @@ impl Daemon {
     pub(crate) async fn adopt(self: &Arc<Self>, addr: &str) -> Result<Reply, Error> {
         let s = self.resolve(addr)?;
         let (inner, profile, workspace, name) = {
-            let m = s.meta.lock().expect("meta");
+            let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             (
                 m.inner_agent.clone(),
                 m.place.profile.clone(),
@@ -1286,7 +1340,7 @@ impl Daemon {
                 continue;
             }
             let (agent, viewers, conv) = {
-                let m = s.meta.lock().expect("meta");
+                let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 (m.place.agent.clone(), m.viewers, m.conversation.is_some())
             };
             let Some(after) = agent
@@ -1333,7 +1387,13 @@ impl Daemon {
         // One roster per Claude account.
         let mut by_profile: HashMap<String, Vec<Arc<Session>>> = HashMap::new();
         for s in quiet {
-            let p = s.meta.lock().expect("meta").place.profile.clone();
+            let p = s
+                .meta
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .place
+                .profile
+                .clone();
             by_profile.entry(p).or_default().push(s);
         }
         for (profile, sessions) in by_profile {
@@ -1357,7 +1417,12 @@ impl Daemon {
                 continue;
             };
             for s in sessions {
-                let conv = s.meta.lock().expect("meta").conversation.clone();
+                let conv = s
+                    .meta
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .conversation
+                    .clone();
                 let Some(row) = list.iter().find(|r| r["sessionId"].as_str() == conv.as_deref())
                 else {
                     continue;
@@ -1450,5 +1515,40 @@ mod tests {
             )
             .is_none()
         );
+    }
+}
+
+/// What a conversation id may look like: letters, digits and `._:-`, starting with a letter or
+/// digit, so it can never read as an option (`--dangerously-skip-permissions`) when it is given
+/// to an agent's `--resume`.
+pub(crate) fn conversation_id_ok(id: &str) -> bool {
+    id.len() <= 200
+        && id.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || "._:-".contains(c))
+}
+
+#[cfg(test)]
+mod id_tests {
+    use super::conversation_id_ok;
+
+    #[test]
+    fn a_conversation_id_is_never_an_option() {
+        for ok in ["0b0f2a8e-6a3f-4f9d-9a41-3d7f2c1d9e55", "ses_2f9aB", "latest", "thread:1.2"] {
+            assert!(conversation_id_ok(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "--dangerously-skip-permissions",
+            "-y",
+            "a b",
+            "a;b",
+            "x\ny",
+            "$(id)",
+            "..",
+            ".hidden",
+            &"a".repeat(201),
+        ] {
+            assert!(!conversation_id_ok(bad), "{bad:?}");
+        }
     }
 }

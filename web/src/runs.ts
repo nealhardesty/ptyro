@@ -4,7 +4,7 @@
 
 import { conn } from "./conn.js";
 import { data } from "./data.js";
-import { actions, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, pending, poll, row, section, sheet, textSheet, ui, views } from "./kit.js";
+import { actions, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, openWeb, pending, poll, row, safeDecode, section, sheet, textSheet, ui, views } from "./kit.js";
 import type { Child, Field, Item } from "./kit.js";
 import { allSessions } from "./sessions.js";
 
@@ -52,7 +52,6 @@ const ACTIONS = {
 } as const;
 const tip = actions(ACTIONS);
 
-const rid = (): string => Math.random().toString(36).slice(2, 10);
 const asArray = (v: any): any[] => (Array.isArray(v) ? v : []);
 
 const GLYPH: Record<string, string> = { running: "●", waiting: "⚠", succeeded: "✓", failed: "✗", cancelled: "–", pending: "○", skipped: "–", crashed: "✗" };
@@ -65,7 +64,7 @@ const gates = new Cache<any[]>(() => conn.request({ t: "gate_list", all: false }
 
 function resolveGate(g: any, choice: string, withNote = false): void {
   const send = async (note: string | null) => {
-    await conn.request({ t: "gate_resolve", id: g.gate.id, choice, note, key: rid(), by: "web" });
+    await conn.request({ t: "gate_resolve", id: g.gate.id, choice, note, key: `${g.gate.id}:${choice}`, by: "web" });
     ui.toast(`Answered: ${choice}`);
     gates.refresh(""); runs.refresh(""); run.refresh(g.run); sets.refresh("");
   };
@@ -77,7 +76,7 @@ function gateCard(g: any): HTMLElement {
   return h("section", { class: "prompt gate", title: tip("gate.resolve") },
     h("div", {}, h("b", {}, g.gate.ask), " ", h("a", { class: "sub", href: `#/run/${enc(g.run)}` }, `${g.run} · ${g.step}`)),
     h("div", { class: "actions" },
-      ...g.gate.options.map((o: string, i: number) => h("button", { class: i === 0 ? "allow" : /stop|no|reject|deny|cancel/i.test(o) ? "deny" : "", onclick: () => resolveGate(g, o) }, o)),
+      ...g.gate.options.map((o: string, i: number) => h("button", { class: /^(stop|no|reject|deny|cancel)/i.test(o) ? "deny" : /^(allow|approve|yes|ok|go|continue|accept)/i.test(o) ? "allow" : "", onclick: () => resolveGate(g, o) }, o)),
       h("button", { class: "small", onclick: () => menu("Answer with a note", g.gate.options.map((o: string): Item => ({ label: o, run: () => resolveGate(g, o, true) }))) }, "+ note")));
 }
 
@@ -174,7 +173,7 @@ function forkForm(r: any, from: string): void {
 const runEvents = new Cache<any[]>((id) => conn.request({ t: "run_events", id }).then((r) => r.events));
 
 function runView(rest: string): HTMLElement {
-  const id = decodeURIComponent(rest);
+  const id = safeDecode(rest);
   if (id.endsWith("/events")) return runEventsView(id.slice(0, -7));
   poll("run", () => run.refresh(id));
   const r = run.get(id);
@@ -257,7 +256,7 @@ function candidateCard(id: string, c: any): HTMLElement {
 }
 
 function compareView(rest: string): HTMLElement {
-  const id = decodeURIComponent(rest);
+  const id = safeDecode(rest);
   poll("compare", () => compare.refresh(id), 6000);
   const d = compare.get(id);
   const body = pending(compare, id, "Comparing the candidates…") ?? h("div", { class: "stack-in", title: tip("compare") },
@@ -353,7 +352,12 @@ function newSet(): void {
       try { r = await conn.request({ t: "cs", op: { op: "new", spec: spec(null) } }); } catch (e) {
         const fp = (e as { code?: string }).code === "untrusted_project" ? (e as Error).message.split("--trust ").pop() : null;
         if (!fp) throw e;
-        const yes = await new Promise<boolean>((ok) => confirm("Trust this template?", (e as Error).message, "Trust and go on", () => ok(true), false).el.addEventListener("mousedown", () => setTimeout(() => ok(false), 0)));
+        // Only "Trust and go on" says yes; Cancel, Esc, ✕ and a tap outside all say no.
+        const yes = await new Promise<boolean>((ok) => {
+          let said = false;
+          const c = confirm("Trust this template?", (e as Error).message, "Trust and go on", () => { said = true; ok(true); }, false);
+          c.onClose(() => setTimeout(() => { if (!said) ok(false); }, 0));
+        });
         if (!yes) return;
         r = await conn.request({ t: "cs", op: { op: "new", spec: spec(fp.trim()) } });
       }
@@ -392,7 +396,7 @@ function setMemberMenu(i: any, m: any): void {
     { title: tip("set.diff"), label: "What it changed", run: async () => { const v = await csOp({ op: "diff", set: name, member: m.name }); if (v) textSheet(`${m.name}: changes`, v.diff || "No changes."); } },
     { title: tip("set.message"), label: "Message it…", run: () => msgSet(name, m.name) },
     { title: tip("set.overlay"), label: "Wire it to its siblings…", run: () => overlaySet(name, m.name) },
-    m.pr_url && { label: `Pull request #${m.pr}`, run: () => window.open(m.pr_url, "_blank", "noreferrer") },
+    m.pr_url && { label: `Pull request #${m.pr}`, run: () => openWeb(m.pr_url) },
     { title: tip("set.drop"), label: "Take it out of the set", danger: true, run: () => confirm(`Drop ${m.name}?`, "It leaves the set; its worktree stays unless it can't.", "Drop", async () => { await csOp({ op: "drop", set: name, member: m.name, force: false }, "Dropped"); set.reload(name); }) },
   ]);
 }
@@ -439,7 +443,7 @@ function shipMenu(i: any): void {
 
 function setView(rest: string): HTMLElement {
   const [raw, sub] = rest.split("/");
-  const name = decodeURIComponent(raw);
+  const name = safeDecode(raw);
   if (sub === "contract") return contractView(name);
   if (sub === "log") return ledgerView(name);
   if (sub === "checkpoints") return setCheckpointsView(name);

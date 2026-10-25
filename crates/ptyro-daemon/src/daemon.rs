@@ -47,6 +47,8 @@ pub struct Daemon {
     /// Worktrees being archived now: one archive each (a PR poll and a refresh can both see
     /// it merge).
     pub(crate) archiving: Mutex<std::collections::HashSet<String>>,
+    /// The archive list is read, changed and written back whole: one editor at a time.
+    pub(crate) archive_list: tokio::sync::Mutex<()>,
     /// Workspaces, projects, worktrees and trust (SPEC §14.2), mirrored to the store.
     pub registry: Mutex<Registry>,
     /// Resolved secrets kept for `secret_ttl` (memory only, SPEC §10.10).
@@ -182,6 +184,7 @@ impl Daemon {
             views: Mutex::new(BTreeMap::new()),
             declined: Mutex::new(std::collections::HashSet::new()),
             archiving: Mutex::new(std::collections::HashSet::new()),
+            archive_list: tokio::sync::Mutex::new(()),
             registry: Mutex::new(registry),
             secrets: Mutex::new(HashMap::new()),
             status_tx,
@@ -484,7 +487,10 @@ impl Daemon {
                 )),
             };
         }
-        if let Some(s) = sessions.iter().find(|s| s.meta.lock().expect("meta").name == addr) {
+        if let Some(s) = sessions
+            .iter()
+            .find(|s| s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name == addr)
+        {
             return Ok(Arc::clone(s));
         }
         if let Some((project, name)) = addr.split_once('/') {
@@ -492,7 +498,7 @@ impl Daemon {
             return sessions
                 .iter()
                 .find(|s| {
-                    let m = s.meta.lock().expect("meta");
+                    let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     m.name == name && m.place.project.as_deref() == Some(project.id.as_str())
                 })
                 .cloned()
@@ -542,7 +548,12 @@ impl Daemon {
                 p if p.contains(['*', '?']) => sessions
                     .iter()
                     .filter(|s| {
-                        let name = s.meta.lock().expect("meta").name.clone();
+                        let name = s
+                            .meta
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .name
+                            .clone();
                         glob(p, &name)
                     })
                     .map(|s| s.id)
@@ -560,7 +571,9 @@ impl Daemon {
 
     pub(crate) fn name_taken(&self, name: &str) -> bool {
         self.launching.lock().expect("launching").1.contains(name)
-            || self.sessions().iter().any(|s| s.meta.lock().expect("meta").name == name)
+            || self.sessions().iter().any(|s| {
+                s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name == name
+            })
     }
 
     /// `name`, or `name-2`, `name-3`… whichever is free.
@@ -575,7 +588,15 @@ impl Daemon {
     pub fn sessions_in(&self, worktree: &str) -> Vec<Arc<Session>> {
         self.sessions()
             .into_iter()
-            .filter(|s| s.meta.lock().expect("meta").place.worktree.as_deref() == Some(worktree))
+            .filter(|s| {
+                s.meta
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .place
+                    .worktree
+                    .as_deref()
+                    == Some(worktree)
+            })
             .collect()
     }
 
@@ -738,7 +759,7 @@ impl Daemon {
         // Its title: `--title`, else the prompt (a snippet's text, not its `@name`).
         let title = spec.title.clone().or(prompt_text).map(|t| ptyro_core::session::brief(&t, 120));
         if title.is_some() {
-            s.meta.lock().expect("meta").title = title;
+            s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).title = title;
             s.save(None);
         }
         match verify {
@@ -757,7 +778,7 @@ impl Daemon {
         let title = title.map(|t| ptyro_core::session::brief(&t, 120)).filter(|t| !t.is_empty());
         if !worktree {
             let s = self.resolve(addr)?;
-            s.meta.lock().expect("meta").title = title;
+            s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).title = title;
             s.save(None);
             let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(&s) });
             return Ok(Reply::Session { info: self.info(&s) });
@@ -775,7 +796,7 @@ impl Daemon {
         if old.is_live() {
             return Err(Error::conflict("session is still running; kill it first"));
         }
-        let meta = old.meta.lock().expect("meta").clone();
+        let meta = old.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
         if !ptyro_agents::profile::exists(&self.config(), &meta.place.profile) {
             return Err(Error::new(
                 ErrorCode::NotFound,
@@ -883,6 +904,11 @@ impl Daemon {
     ) -> Result<Reply, Error> {
         self.guard_caller(&req, caller)?;
         self.guard_device(&req, caller)?;
+        // A gate a paired device answers is attributed to that device, whatever it says.
+        let mut req = req;
+        if let (Request::GateResolve { by, .. }, Some(g)) = (&mut req, caller.grant) {
+            *by = Some(self.device_name(g.device));
+        }
         match req {
             req @ (Request::DevicePair { .. }
             | Request::DeviceClaim { .. }
@@ -982,7 +1008,7 @@ impl Daemon {
                 }
                 // A removed dormant session must not come back at the next start.
                 {
-                    let mut m = s.meta.lock().expect("meta");
+                    let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     if m.state == ptyro_core::session::ProcessState::Dormant {
                         m.state =
                             ptyro_core::session::ProcessState::Exited { code: None, signal: None };
@@ -1028,7 +1054,10 @@ impl Daemon {
                     None => {
                         s.send_text(&text, enter).await;
                         if enter {
-                            s.meta.lock().expect("meta").last_prompt_ms = Some(now_ms());
+                            s.meta
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .last_prompt_ms = Some(now_ms());
                         }
                     }
                 }
@@ -1141,9 +1170,21 @@ impl Daemon {
             Request::ProjectConfig { addr } => {
                 Ok(Reply::Text { text: self.project_config(&addr)? })
             }
-            Request::Replay { addr } => Ok(Reply::Replay { replay: self.replay(&addr)? }),
+            // Reading a recording and running the emulator over it is work for a thread of its
+            // own, not for the one every other request waits on.
+            Request::Replay { addr } => {
+                let me = Arc::clone(self);
+                let replay = tokio::task::spawn_blocking(move || me.replay(&addr))
+                    .await
+                    .map_err(|e| Error::internal(e.to_string()))??;
+                Ok(Reply::Replay { replay })
+            }
             Request::Export { addr, format } => {
-                Ok(Reply::Text { text: self.export(&addr, &format)? })
+                let me = Arc::clone(self);
+                let text = tokio::task::spawn_blocking(move || me.export(&addr, &format))
+                    .await
+                    .map_err(|e| Error::internal(e.to_string()))??;
+                Ok(Reply::Text { text })
             }
             Request::SelfTest { adapter } => {
                 Ok(Reply::SelfTest { result: self.self_test(&adapter).await? })
@@ -1299,7 +1340,11 @@ impl Daemon {
         let live: Vec<_> = self.sessions().into_iter().filter(|s| s.is_live()).collect();
         for s in &live {
             let resumable = s.kind() == SessionKind::Agent
-                && s.meta.lock().expect("meta").conversation.is_some()
+                && s.meta
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .conversation
+                    .is_some()
                 && s.adapter().is_some_and(|a| ptyro_agents::adapter(&a).caps().resume);
             if resumable {
                 s.hibernating.store(true, std::sync::atomic::Ordering::Relaxed);

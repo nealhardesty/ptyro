@@ -124,6 +124,11 @@ impl Git {
         let old = self.rev(path, "HEAD");
         if let Some(o) = old.as_deref().filter(|o| parent.as_deref() != Some(*o)) {
             self.update_ref(path, BEFORE_RESTORE, o)?;
+            // Also where removing this worktree can't take it: a per-worktree ref goes with it.
+            let ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis());
+            let _ = self.run(path, &["update-ref", &format!("refs/ptyro/before-restore/{ms}"), o]);
         }
         match &parent {
             Some(p) => self.run(path, &["reset", "-q", "--hard", p])?,
@@ -136,6 +141,26 @@ impl Git {
             self.run(path, &["reset", "-q"])?;
         }
         Ok(())
+    }
+
+    /// [`Git::restore`] for putting an archived worktree back: refuses when its branch is no
+    /// longer where the snapshot was taken (it has moved on since: an integrate, a commit from
+    /// another checkout), because restoring would reset the branch backwards.
+    pub fn restore_onto_tip(&self, path: &Path, ckpt: &str) -> Result<()> {
+        let ckpt_rev = self
+            .rev(path, ckpt)
+            .ok_or_else(|| GitError::Invalid(format!("no checkpoint {ckpt}")))?;
+        if let (Some(parent), Some(head)) =
+            (self.rev(path, &format!("{ckpt_rev}^")), self.rev(path, "HEAD"))
+            && parent != head
+        {
+            return Err(GitError::Invalid(format!(
+                "its branch has moved since it was archived (now {}, archived at {}); restoring would reset it backwards",
+                &head[..head.len().min(8)],
+                &parent[..parent.len().min(8)]
+            )));
+        }
+        self.restore(path, ckpt)
     }
 
     /// Files `a` and `b` would conflict on if merged (`git merge-tree --write-tree`, git ≥ 2.38).
@@ -306,6 +331,31 @@ mod tests {
         // The work tree is exactly the checkpoint's tree, and the index is HEAD's.
         assert_eq!(g.checkpoint(p, "again").unwrap().tree, s.tree);
         assert!(g.run(p, &["diff", "--cached", "--name-only"]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_archive_is_not_put_back_over_a_branch_that_moved() {
+        let d = repo();
+        let p = d.path();
+        let g = Git::new();
+        std::fs::write(p.join("b.txt"), "b\n").unwrap();
+        let snap = g.checkpoint(p, "snap").unwrap();
+        // At the snapshot's parent: fine.
+        g.restore_onto_tip(p, &snap.commit).unwrap();
+        // The branch moves on; restoring would reset it backwards.
+        std::fs::write(p.join("later.txt"), "x\n").unwrap();
+        git(p, &["add", "later.txt"]);
+        git(p, &["commit", "-q", "-m", "later"]);
+        let err = g.restore_onto_tip(p, &snap.commit).unwrap_err();
+        assert!(err.to_string().contains("has moved since it was archived"), "{err}");
+        assert!(p.join("later.txt").exists(), "nothing was reset");
+        // The ordinary restore (a checkpoint of a live session) still moves it and keeps the old tip.
+        let moved = g.rev(p, "HEAD").unwrap();
+        g.restore(p, &snap.commit).unwrap();
+        let kept = g
+            .run(p, &["for-each-ref", "--format=%(objectname)", "refs/ptyro/before-restore/"])
+            .unwrap();
+        assert!(kept.contains(&moved), "{kept}");
     }
 
     #[test]

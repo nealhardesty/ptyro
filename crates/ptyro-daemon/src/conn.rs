@@ -124,14 +124,40 @@ pub async fn serve(daemon: Arc<Daemon>, stream: UnixStream, pid: Option<u32>) {
 
     let (mut sink, mut stream) = framed.split();
     let (out, mut out_rx) = mpsc::channel::<ServerMsg>(64);
-    let writer = tokio::spawn(async move {
+    let mut writer = tokio::spawn(async move {
         while let Some(msg) = out_rx.recv().await {
             let bytes = if compress {
                 ptyro_protocol::encode_compressed(&msg, enc)
             } else {
                 encode(&msg, enc)
             };
-            let Ok(bytes) = bytes else { continue };
+            // A message too big for a frame (a whole scrollback, a huge chat) is answered, if it
+            // was a response, with the reason; either way the connection lives on. Only a real
+            // write failure ends it.
+            let bytes = match bytes {
+                Ok(b) if b.len() <= ptyro_protocol::MAX_FRAME => b,
+                other => {
+                    let why = match &other {
+                        Ok(b) => format!(
+                            "the reply is too large ({} bytes; the limit is {}): ask for less",
+                            b.len(),
+                            ptyro_protocol::MAX_FRAME
+                        ),
+                        Err(e) => format!("the reply can't be encoded: {e}"),
+                    };
+                    tracing::warn!("client {id}: {why}");
+                    let ServerMsg::Response { id: rid, .. } = &msg else { continue };
+                    let error = ptyro_core::Error::invalid(why);
+                    let reply = ServerMsg::Response {
+                        id: *rid,
+                        outcome: ptyro_protocol::Outcome::Err { error },
+                    };
+                    match encode(&reply, enc) {
+                        Ok(b) => b,
+                        Err(_) => continue,
+                    }
+                }
+            };
             if sink.send(bytes).await.is_err() {
                 break;
             }
@@ -201,7 +227,11 @@ pub async fn serve(daemon: Arc<Daemon>, stream: UnixStream, pid: Option<u32>) {
     events.abort();
     drop(conn);
     drop(out);
-    let _ = writer.await;
+    // The writer ends once every sender is gone; a long request (a gate, a wait) still holds
+    // one, so don't wait for it for ever: the client is gone.
+    if tokio::time::timeout(std::time::Duration::from_secs(2), &mut writer).await.is_err() {
+        writer.abort();
+    }
     daemon.clients.fetch_sub(1, Ordering::Relaxed);
     tracing::debug!(client = %id, "disconnected");
 }
@@ -215,7 +245,19 @@ impl Conn {
                 let out = self.out.clone();
                 let caller = self.caller;
                 tokio::spawn(async move {
-                    let outcome = daemon.handle_as(req, caller).await.into();
+                    // A request that panics still gets an answer: its caller isn't left waiting.
+                    let work = tokio::spawn(async move { daemon.handle_as(req, caller).await });
+                    let outcome: ptyro_protocol::Outcome = match work.await {
+                        Ok(r) => r.into(),
+                        Err(e) => {
+                            tracing::error!("a request panicked: {e}");
+                            ptyro_protocol::Outcome::Err {
+                                error: ptyro_core::Error::internal(
+                                    "the daemon hit an internal error handling this request (see its log)",
+                                ),
+                            }
+                        }
+                    };
                     let _ = out.send(ServerMsg::Response { id, outcome }).await;
                 });
             }

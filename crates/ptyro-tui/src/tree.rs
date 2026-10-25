@@ -86,9 +86,15 @@ impl Inputs<'_> {
                     return false;
                 }
                 let under_project = s.project.as_ref().is_some_and(|p| shown_projects.contains(p))
-                    && s.worktree
-                        .as_ref()
-                        .is_some_and(|w| self.worktrees.iter().any(|x| x.id == *w));
+                    // (A worktree that is gone shows no rows, so its sessions go to "other sessions"
+                    // instead of vanishing from the list.)
+                    && s.worktree.as_ref().is_some_and(|w| {
+                        self.worktrees.iter().any(|x| {
+                            x.id == *w
+                                && x.state != WorktreeState::Removed
+                                && shown_projects.contains(&x.project)
+                        })
+                    });
                 let home = s.workspace.as_deref().unwrap_or(MAIN_WORKSPACE);
                 let under_set =
                     self.sets.iter().any(|n| n.lead.as_deref() == Some(s.id.full().as_str()));
@@ -141,6 +147,10 @@ impl Inputs<'_> {
                     .sessions
                     .iter()
                     .filter(|s| s.worktree.as_deref() == Some(w.id.as_str()) && !s.pad)
+                    // A change set's lead has its row under the set, not twice.
+                    .filter(|s| {
+                        !self.sets.iter().any(|n| n.lead.as_deref() == Some(s.id.full().as_str()))
+                    })
                     .partition(|s| s.quick);
                 rows.extend(sessions.into_iter().map(|s| Row::Session(s.id)));
                 rows.extend(quick.into_iter().map(|s| Row::Quick(s.id)));
@@ -246,6 +256,51 @@ mod tests {
             title: None,
             integrated: None,
         }
+    }
+
+    #[test]
+    fn a_removed_worktrees_sessions_and_a_set_lead_show_once() {
+        let ws = vec![WorkspaceInfo {
+            id: "w".into(),
+            name: "main".into(),
+            profile: "default".into(),
+            notify: "all".into(),
+            projects: vec!["p".into()],
+            created_ms: 0,
+        }];
+        let projects = vec![ProjectInfo {
+            id: "p".into(),
+            slug: "app".into(),
+            root: "/app".into(),
+            default_branch: None,
+            remote_url: None,
+            pin: None,
+            created_ms: 0,
+            last_used_ms: None,
+        }];
+        let mut gone = wt("t9", "p", false, 9);
+        gone.state = WorktreeState::Removed;
+        let worktrees = vec![wt("root", "p", true, 1), gone];
+        let orphan = session("orphan", Some("t9"), Some("p"), Some("main"));
+        let lead = session("lead", Some("root"), Some("p"), Some("main"));
+        let sessions = vec![orphan.clone(), lead.clone()];
+        let nodes = [crate::sets::SetNode { run: "r-1".into(), lead: Some(lead.id.full()) }];
+        let collapsed = HashSet::new();
+        let rows = Inputs {
+            workspace: "main",
+            workspaces: &ws,
+            projects: &projects,
+            worktrees: &worktrees,
+            sessions: &sessions,
+            collapsed: &collapsed,
+            sets: &nodes,
+        }
+        .rows();
+        // The session of a removed worktree has no worktree row to hang under: it is listed with
+        // the others rather than vanishing, and the change set's lead is under the set only.
+        assert_eq!(rows.iter().filter(|r| **r == Row::Session(orphan.id)).count(), 1, "{rows:?}");
+        assert_eq!(rows.iter().filter(|r| **r == Row::Session(lead.id)).count(), 1, "{rows:?}");
+        assert_eq!(rows[0], Row::Set("r-1".into()));
     }
 
     #[test]

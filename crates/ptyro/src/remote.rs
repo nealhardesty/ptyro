@@ -39,11 +39,23 @@ pub struct Served {
     pub pid: u32,
     pub url: String,
     pub ca_fingerprint: Option<String>,
+    /// Where it listens, to tell it from a process that only has its pid now.
+    #[serde(default)]
+    pub listen: Option<String>,
 }
 
-pub fn record_serve(paths: &ptyro_core::paths::Paths, url: &str, ca: Option<&str>) {
-    let s =
-        Served { pid: std::process::id(), url: url.into(), ca_fingerprint: ca.map(str::to_owned) };
+pub fn record_serve(
+    paths: &ptyro_core::paths::Paths,
+    url: &str,
+    ca: Option<&str>,
+    listen: std::net::SocketAddr,
+) {
+    let s = Served {
+        pid: std::process::id(),
+        url: url.into(),
+        ca_fingerprint: ca.map(str::to_owned),
+        listen: Some(listen.to_string()),
+    };
     let _ = std::fs::create_dir_all(&paths.state);
     let _ = std::fs::write(
         paths.state.join("serve.json"),
@@ -57,7 +69,67 @@ pub fn served(paths: &ptyro_core::paths::Paths) -> Option<Served> {
         serde_json::from_str(&std::fs::read_to_string(paths.state.join("serve.json")).ok()?)
             .ok()?;
     let pid = rustix::process::Pid::from_raw(i32::try_from(s.pid).ok()?)?;
-    rustix::process::test_kill_process(pid).is_ok().then_some(s)
+    if rustix::process::test_kill_process(pid).is_err() {
+        return None;
+    }
+    // A pid can be reused after a crash: what listens where it said it would settles it.
+    if let Some(addr) = s.listen.as_deref().and_then(|l| l.parse::<std::net::SocketAddr>().ok()) {
+        let addr = if addr.ip().is_unspecified() {
+            std::net::SocketAddr::new(std::net::Ipv4Addr::LOCALHOST.into(), addr.port())
+        } else {
+            addr
+        };
+        std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).ok()?;
+    }
+    Some(s)
+}
+
+/// Whether `tailscale serve status --json` has a handler proxying to `127.0.0.1:<port>` (or
+/// `localhost`): the port must be exactly it, not one it starts with.
+pub fn proxies_to(status: &serde_json::Value, port: &str) -> bool {
+    proxy_targets(status).iter().any(|p| {
+        let rest = p.split_once("://").map_or(p.as_str(), |x| x.1);
+        let authority = rest.split('/').next().unwrap_or("");
+        authority == format!("127.0.0.1:{port}") || authority == format!("localhost:{port}")
+    })
+}
+
+fn proxy_targets(status: &serde_json::Value) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(web) = status["Web"].as_object() {
+        for site in web.values() {
+            for h in site["Handlers"].as_object().into_iter().flat_map(|m| m.values()) {
+                if let Some(p) = h["Proxy"].as_str() {
+                    out.push(p.to_owned());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// What `tailscale serve` already has on :443 when it is not a proxy to `port` (so replacing it
+/// would break it), as a short description.
+pub fn serves_443_elsewhere(status: &serde_json::Value, port: u16) -> Option<String> {
+    let web = status["Web"].as_object()?;
+    let on_443: Vec<&serde_json::Value> =
+        web.iter().filter(|(k, _)| k.ends_with(":443")).map(|(_, v)| v).collect();
+    if on_443.is_empty() {
+        return None;
+    }
+    let mut theirs = Vec::new();
+    for site in on_443 {
+        for h in site["Handlers"].as_object().into_iter().flat_map(|m| m.values()) {
+            let what = h["Proxy"]
+                .as_str()
+                .or_else(|| h["Path"].as_str())
+                .or_else(|| h["Text"].as_str().map(|_| "some text"))
+                .unwrap_or("something");
+            theirs.push(what.to_owned());
+        }
+    }
+    let ours = proxies_to(status, &port.to_string());
+    (!ours && !theirs.is_empty()).then(|| theirs.join(", "))
 }
 
 /// `https://<machine>.<tailnet>.ts.net` when `tailscale serve` proxies to our port.
@@ -67,9 +139,8 @@ pub fn tailscale_url(listen: &str) -> Option<String> {
         .args(["serve", "status", "--json"])
         .output()
         .ok()?;
-    let text = String::from_utf8_lossy(&serve.stdout);
-    if !(text.contains(&format!("127.0.0.1:{port}")) || text.contains(&format!("localhost:{port}")))
-    {
+    let status: serde_json::Value = serde_json::from_slice(&serve.stdout).ok()?;
+    if !proxies_to(&status, port) {
         return None;
     }
     let status =
@@ -167,9 +238,10 @@ pub async fn pair(
         && !base.contains("localhost")
     {
         eprintln!(
-            "note: {base} isn't HTTPS, so phones won't install the app or show notifications. \
-             Drop `insecure` (ptyro speaks HTTPS by default), or put Tailscale HTTPS in front \
-             with `ptyro serve --tailscale` (docs/remote.md)."
+            "note: {base} isn't HTTPS, so phones won't install the app or show notifications, \
+             and the pairing code in the link crosses the network in clear. Drop `insecure` \
+             (ptyro speaks HTTPS by default), or put Tailscale HTTPS in front with \
+             `ptyro serve --tailscale` (docs/remote.md)."
         );
     }
     // Who claimed it tells the user it was their phone (a code read off a recording would
@@ -248,5 +320,41 @@ pub async fn devices(ctx: &Ctx, cmd: Option<DevicesCmd>) -> Result<i32, Error> {
             }
             Ok(0)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn status(proxy: &str) -> serde_json::Value {
+        serde_json::json!({
+            "TCP": { "443": { "HTTPS": true } },
+            "Web": { "box.tail1234.ts.net:443": { "Handlers": { "/": { "Proxy": proxy } } } }
+        })
+    }
+
+    #[test]
+    fn the_port_must_be_the_port_and_not_the_start_of_one() {
+        let s = status("http://127.0.0.1:7091");
+        assert!(proxies_to(&s, "7091"));
+        assert!(!proxies_to(&s, "709"), "a prefix of the port isn't the port");
+        assert!(!proxies_to(&s, "70910"));
+        assert!(proxies_to(&status("http://localhost:7091"), "7091"));
+        assert!(proxies_to(&status("127.0.0.1:7091/x"), "7091"));
+        assert!(!proxies_to(&status("http://example.com:7091"), "7091"));
+        assert!(!proxies_to(&serde_json::json!({}), "7091"));
+    }
+
+    #[test]
+    fn something_else_on_443_is_not_ours_to_replace() {
+        // Ours already, or nothing there: fine to (re)point it.
+        assert_eq!(serves_443_elsewhere(&status("http://127.0.0.1:7091"), 7091), None);
+        assert_eq!(serves_443_elsewhere(&serde_json::json!({}), 7091), None);
+        // Another service: say what.
+        assert_eq!(
+            serves_443_elsewhere(&status("http://127.0.0.1:3000"), 7091).as_deref(),
+            Some("http://127.0.0.1:3000")
+        );
     }
 }

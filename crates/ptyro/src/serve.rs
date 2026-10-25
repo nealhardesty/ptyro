@@ -108,13 +108,35 @@ const FAILURE_WINDOW: Duration = Duration::from_secs(600);
 /// Logins from one address still waiting for the daemon's answer: more are refused, so
 /// parallel guesses can't outrun the lockout.
 const MAX_PENDING: u32 = 4;
+/// Logins from every address together, still waiting for the daemon's answer: each can hold a
+/// large first message in memory before it proves who it is.
+const MAX_PENDING_TOTAL: u32 = 16;
 /// Open connections in all.
 const MAX_CONNECTIONS: usize = 256;
+/// Open connections from one address (one machine can't take every slot); behind a proxy on this
+/// machine every client shares the loopback address, so that one gets more.
+const MAX_PER_ADDR: u32 = 32;
+const MAX_PER_PROXY: u32 = 192;
+/// The whole body of a request, once its headers are in: a client that sends a length and then
+/// stops can't hold a connection forever.
+const BODY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// [`BODY_TIMEOUT`], or `PTYRO_TEST_BODY_TIMEOUT_MS` (a test that waits for it).
+fn body_timeout() -> Duration {
+    std::env::var("PTYRO_TEST_BODY_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map_or(BODY_TIMEOUT, Duration::from_millis)
+}
+/// A WebSocket that has said nothing, not even a pong to our pings, for this long is gone.
+const WS_SILENCE: Duration = Duration::from_secs(70);
 
 struct State {
     ctx_paths: ptyro_core::paths::Paths,
     failures: Mutex<HashMap<IpAddr, (u32, Instant)>>,
     pending: Mutex<HashMap<IpAddr, u32>>,
+    /// Open connections per peer address.
+    open: Mutex<HashMap<IpAddr, u32>>,
     /// A local proxy fronts us, so its `X-Forwarded-For` names the real client.
     trust_proxy: bool,
     /// Host names (lowercase, no port) requests may carry besides IP addresses and localhost.
@@ -133,7 +155,7 @@ struct Pending {
 
 impl Drop for Pending {
     fn drop(&mut self) {
-        let mut p = self.st.pending.lock().expect("pending");
+        let mut p = self.st.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(n) = p.get_mut(&self.ip) {
             *n -= 1;
             if *n == 0 {
@@ -143,10 +165,58 @@ impl Drop for Pending {
     }
 }
 
+/// One open connection from an address (see [`State::open_from`]); dropping it frees the place.
+struct Open {
+    st: Arc<State>,
+    ip: IpAddr,
+}
+
+impl Drop for Open {
+    fn drop(&mut self) {
+        let mut o = self.st.open.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(n) = o.get_mut(&self.ip) {
+            *n -= 1;
+            if *n == 0 {
+                o.remove(&self.ip);
+            }
+        }
+    }
+}
+
+/// Who a failed login counts against. An IPv6 attacker has a whole /64 of addresses to rotate
+/// through, so the network counts, not the address.
+fn lockout_key(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v) if v.to_ipv4_mapped().is_none() => {
+            let mut o = v.octets();
+            o[8..].fill(0);
+            IpAddr::V6(o.into())
+        }
+        other => other,
+    }
+}
+
 impl State {
-    /// Start a login from `ip`, unless it has [`MAX_PENDING`] going already.
+    /// A place for a connection from `ip`, unless it has its share already.
+    fn open_from(self: &Arc<Self>, ip: IpAddr) -> Option<Open> {
+        let cap = if ip.is_loopback() { MAX_PER_PROXY } else { MAX_PER_ADDR };
+        let mut o = self.open.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let n = o.entry(ip).or_insert(0);
+        if *n >= cap {
+            return None;
+        }
+        *n += 1;
+        Some(Open { st: Arc::clone(self), ip })
+    }
+
+    /// Start a login from `ip`, unless it has [`MAX_PENDING`] going already, or there are
+    /// [`MAX_PENDING_TOTAL`] in all.
     fn begin(self: &Arc<Self>, ip: IpAddr) -> Option<Pending> {
-        let mut p = self.pending.lock().expect("pending");
+        let ip = lockout_key(ip);
+        let mut p = self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if p.values().sum::<u32>() >= MAX_PENDING_TOTAL {
+            return None;
+        }
         let n = p.entry(ip).or_insert(0);
         if *n >= MAX_PENDING {
             return None;
@@ -156,12 +226,14 @@ impl State {
     }
 
     fn locked_out(&self, ip: IpAddr) -> bool {
-        let f = self.failures.lock().expect("failures");
+        let ip = lockout_key(ip);
+        let f = self.failures.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         f.get(&ip).is_some_and(|(n, t)| *n >= MAX_FAILURES && t.elapsed() < FAILURE_WINDOW)
     }
 
     fn failed(&self, ip: IpAddr) {
-        let mut f = self.failures.lock().expect("failures");
+        let ip = lockout_key(ip);
+        let mut f = self.failures.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         f.retain(|_, (_, t)| t.elapsed() < FAILURE_WINDOW);
         let e = f.entry(ip).or_insert((0, Instant::now()));
         e.0 += 1;
@@ -261,14 +333,14 @@ pub async fn run(
     let mut shown = config.clone();
     shown.remote.listen = shown_addr.to_string();
     let base = crate::remote::base_url(&shown, None, tls.is_some());
+    // Names answered to now: a name the certificate held once (`tls.json` keeps them so it need
+    // not be remade) doesn't stay allowed after it is no longer configured.
     let mut hosts: Vec<String> =
         config.remote.public_url.iter().chain([&base]).filter_map(|u| url_host(u)).collect();
     hosts.extend(tailnet);
-    if let Some(t) = &tls {
-        hosts.extend(t.names.iter().cloned());
-    }
+    hosts.extend(crate::tls::names_for(&cert_names));
     let ca = tls.as_ref().filter(|_| !own_cert).map(|t| t.ca_fingerprint.as_str());
-    crate::remote::record_serve(&ctx.paths, &base, ca);
+    crate::remote::record_serve(&ctx.paths, &base, ca, addr);
     match &tls {
         Some(_) if own_cert => eprintln!(
             "ptyro serve: listening on https://{addr}, with your certificate; phones open {base} \
@@ -312,6 +384,7 @@ pub async fn run(
         ctx_paths: ctx.paths.clone(),
         failures: Mutex::new(HashMap::new()),
         pending: Mutex::new(HashMap::new()),
+        open: Mutex::new(HashMap::new()),
         trust_proxy: fronted,
         hosts,
         ca_pem: tls.as_ref().filter(|_| !own_cert).map(|t| t.ca_pem.clone()),
@@ -342,10 +415,15 @@ pub async fn run(
         };
         let slot = Arc::new(slot);
         let st = Arc::clone(&state);
+        let Some(open) = st.open_from(peer.ip()) else {
+            tracing::debug!(%peer, "too many connections from one address");
+            continue;
+        };
         let tls = acceptor
             .as_ref()
             .map(|c| tokio_rustls::TlsAcceptor::from(Arc::clone(&c.lock().expect("tls"))));
         tokio::spawn(async move {
+            let _open = open;
             let svc = service_fn(move |req| handle(req, Arc::clone(&st), peer, Arc::clone(&slot)));
             let http = hyper::server::conn::http1::Builder::new()
                 .timer(hyper_util::rt::TokioTimer::new())
@@ -392,9 +470,20 @@ async fn exit_with_daemon(socket: std::path::PathBuf) {
 }
 
 /// `tailscale serve --bg` HTTPS → our port. It changes Tailscale's config, which `--tailscale`
-/// asks for; `tailscale serve reset` undoes it.
+/// asks for; `tailscale serve reset` undoes it. Something else already served on :443 is not
+/// replaced: it would stop working with no word.
 fn tailscale_front(addr: SocketAddr) -> Result<(), Error> {
     let target = format!("http://127.0.0.1:{}", addr.port());
+    if let Ok(status) =
+        std::process::Command::new("tailscale").args(["serve", "status", "--json"]).output()
+        && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&status.stdout)
+        && let Some(other) = crate::remote::serves_443_elsewhere(&v, addr.port())
+    {
+        return Err(Error::invalid(format!(
+            "tailscale already serves {other} on :443, and `--tailscale` would replace it. Stop \
+             that first (`tailscale serve --https=443 off`), or serve ptyro some other way"
+        )));
+    }
     let out = std::process::Command::new("tailscale")
         .args(["serve", "--bg", "--https=443", &target])
         .output()
@@ -428,6 +517,8 @@ fn secure(h: &mut hyper::HeaderMap) {
     h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     h.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    // Answers carry tokens and screens: nothing keeps them (assets say otherwise for themselves).
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     h.insert(
         "permissions-policy",
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
@@ -485,9 +576,19 @@ fn host_ok(host: Option<&str>, names: &[String]) -> bool {
 /// nothing. Without a trusted proxy the header is ignored: any local process could send it.
 fn via(req: &Request<Incoming>, peer: SocketAddr, trust_proxy: bool) -> (String, IpAddr) {
     let hdr = |n: &str| req.headers().get(n).and_then(|v| v.to_str().ok()).map(str::to_owned);
+    let xff = forwarded_for(req.headers());
+    if trust_proxy && peer.ip().is_loopback() && xff.is_none() {
+        // Every client then looks like loopback: one lockout, one limit, for all of them.
+        static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            tracing::warn!(
+                "a trusted proxy sent no X-Forwarded-For: its clients share one failed-login lockout; configure the proxy to add it"
+            );
+        }
+    }
     if trust_proxy
         && peer.ip().is_loopback()
-        && let Some(xff) = hdr("x-forwarded-for")
+        && let Some(xff) = xff
     {
         let real = last_hop(&xff).to_owned();
         let ip = real.parse().unwrap_or(peer.ip());
@@ -495,6 +596,30 @@ fn via(req: &Request<Incoming>, peer: SocketAddr, trust_proxy: bool) -> (String,
         return (format!("ws:{real}{who}"), ip);
     }
     (format!("ws:{peer}"), peer.ip())
+}
+
+/// The CSRF defence for what changes state or opens a session: a request that says which page it
+/// came from (`Origin`, always sent by a browser for a WebSocket and a POST) must come from this
+/// server's own page, or a page the visitor happens to have open could use it. Requests with no
+/// `Origin` are not browsers' (a script, `curl`, the notification actions).
+fn origin_ok(origin: Option<&str>, host: Option<&str>, names: &[String]) -> bool {
+    let Some(origin) = origin else { return true };
+    let Some((_, authority)) = origin.split_once("://") else { return false };
+    let authority = authority.trim_end_matches('/').to_ascii_lowercase();
+    if host.is_some_and(|h| authority == h.trim_end_matches('.').to_ascii_lowercase()) {
+        return true;
+    }
+    // Behind a proxy the Host may be rewritten: the names this server is configured for count.
+    names.contains(&strip_port(&authority).to_owned())
+}
+
+/// Every `X-Forwarded-For` header line as one list. A proxy may add its entry as a line of its
+/// own instead of extending the client's: all lines count, and the last entry of the last line
+/// is the proxy's.
+fn forwarded_for(headers: &hyper::HeaderMap) -> Option<String> {
+    let lines: Vec<&str> =
+        headers.get_all("x-forwarded-for").iter().filter_map(|v| v.to_str().ok()).collect();
+    (!lines.is_empty()).then(|| lines.join(","))
 }
 
 fn last_hop(xff: &str) -> &str {
@@ -512,8 +637,19 @@ async fn handle(
         tracing::debug!(%peer, ?host, "unexpected Host");
         return Ok(respond(StatusCode::MISDIRECTED_REQUEST, "text/plain", "unexpected Host"));
     }
-    let (via, ip) = via(&req, peer, st.trust_proxy);
     let path = req.uri().path().to_owned();
+    // Cross-site: refused before it can count as anyone's failed login.
+    if (path == "/ws" || req.method() == Method::POST)
+        && !origin_ok(
+            req.headers().get(header::ORIGIN).and_then(|v| v.to_str().ok()),
+            host,
+            &st.hosts,
+        )
+    {
+        tracing::debug!(%peer, "cross-site request refused");
+        return Ok(respond(StatusCode::FORBIDDEN, "text/plain", "cross-site request refused"));
+    }
+    let (via, ip) = via(&req, peer, st.trust_proxy);
     let busy =
         || respond(StatusCode::TOO_MANY_REQUESTS, "text/plain", "too many logins; try later");
     Ok(match (req.method(), path.as_str()) {
@@ -639,7 +775,8 @@ where
         let _ = wtx.send(Message::Close(None)).await;
         return;
     };
-    let opts = ptyro_client::ConnectOptions::new(st.ctx_paths.clone(), ClientKind::Web);
+    let mut opts = ptyro_client::ConnectOptions::new(st.ctx_paths.clone(), ClientKind::Web);
+    opts.autospawn = false;
     let sock = match ptyro_client::connect_raw(&opts).await {
         Ok(s) => s,
         Err(e) => {
@@ -653,6 +790,8 @@ where
         return;
     }
     let mut ping = tokio::time::interval(Duration::from_secs(25));
+    // Anything from the browser, a pong included, proves it is still there.
+    let mut heard = Instant::now();
     let mut welcomed = false;
     // Counts against MAX_PENDING until the daemon answers the Hello.
     let mut login = Some(login);
@@ -660,12 +799,14 @@ where
         tokio::select! {
             m = wrx.next() => match m {
                 Some(Ok(Message::Text(t))) => {
+                    heard = Instant::now();
                     if dtx.send(Bytes::copy_from_slice(t.as_bytes())).await.is_err() { break; }
                 }
                 Some(Ok(Message::Binary(b))) => {
+                    heard = Instant::now();
                     if dtx.send(b).await.is_err() { break; }
                 }
-                Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_))) => {}
+                Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_))) => heard = Instant::now(),
                 _ => break,
             },
             f = drx.next() => match f {
@@ -693,11 +834,29 @@ where
                 _ => break,
             },
             _ = ping.tick() => {
+                // A phone that left the Wi-Fi never closes: stop holding its place.
+                if heard.elapsed() > WS_SILENCE { break; }
                 if wtx.send(Message::Ping(Bytes::new())).await.is_err() { break; }
             }
         }
     }
     let _ = wtx.send(Message::Close(None)).await;
+}
+
+/// A request's body: at most `limit` bytes, and all of it within [`BODY_TIMEOUT`].
+async fn read_body(body: Incoming, limit: usize) -> Result<Bytes, (StatusCode, &'static str)> {
+    match tokio::time::timeout(body_timeout(), Limited::new(body, limit).collect()).await {
+        Ok(Ok(b)) => Ok(b.to_bytes()),
+        Ok(Err(_)) => Err((StatusCode::PAYLOAD_TOO_LARGE, "too large")),
+        Err(_) => Err((StatusCode::REQUEST_TIMEOUT, "the body didn't arrive")),
+    }
+}
+
+/// What a browser is told when the daemon can't be reached (the cause, with a path in it, goes to
+/// the log).
+fn daemon_unavailable(e: &dyn std::fmt::Display) -> Response<Body> {
+    tracing::warn!("daemon: {e}");
+    respond(StatusCode::BAD_GATEWAY, "text/plain", "the ptyro daemon isn't reachable")
 }
 
 /// One request for one token, answered as JSON: `{"t":"ok","reply":…}` or
@@ -718,14 +877,16 @@ async fn api_request(
     let Some(token) = token else {
         return respond(StatusCode::UNAUTHORIZED, "text/plain", "a device token is required");
     };
-    let body = match Limited::new(req.into_body(), 1 << 20).collect().await {
-        Ok(b) => b.to_bytes(),
-        Err(_) => return respond(StatusCode::PAYLOAD_TOO_LARGE, "text/plain", "too large"),
+    let body = match read_body(req.into_body(), 1 << 20).await {
+        Ok(b) => b,
+        Err((code, why)) => return respond(code, "text/plain", why),
     };
     let Ok(request) = serde_json::from_slice::<ptyro_protocol::Request>(&body) else {
         return respond(StatusCode::BAD_REQUEST, "text/plain", "expected a JSON request");
     };
     let mut opts = ptyro_client::ConnectOptions::new(st.ctx_paths.clone(), ClientKind::Web);
+    // Anyone who can reach this port could otherwise start a daemon.
+    opts.autospawn = false;
     opts.token = Some(token);
     opts.encoding = Encoding::Json;
     let client = ptyro_client::Client::connect_via(&opts, &via).await;
@@ -737,7 +898,7 @@ async fn api_request(
                 st.failed(ip);
                 return respond(StatusCode::UNAUTHORIZED, "text/plain", "unauthorized");
             }
-            return respond(StatusCode::BAD_GATEWAY, "text/plain", e.to_string());
+            return daemon_unavailable(&e);
         }
     };
     let out = match tokio::time::timeout(Duration::from_secs(30), client.request(request)).await {
@@ -770,14 +931,16 @@ async fn api_host(
     let Some(token) = token else {
         return respond(StatusCode::UNAUTHORIZED, "text/plain", "a device token is required");
     };
-    let body = match Limited::new(req.into_body(), 1 << 20).collect().await {
-        Ok(b) => b.to_bytes(),
-        Err(_) => return respond(StatusCode::PAYLOAD_TOO_LARGE, "text/plain", "too large"),
+    let body = match read_body(req.into_body(), 1 << 20).await {
+        Ok(b) => b,
+        Err((code, why)) => return respond(code, "text/plain", why),
     };
     let Ok(args) = serde_json::from_slice::<serde_json::Value>(&body) else {
         return respond(StatusCode::BAD_REQUEST, "text/plain", "expected a JSON request");
     };
     let mut opts = ptyro_client::ConnectOptions::new(st.ctx_paths.clone(), ClientKind::Web);
+    // Anyone who can reach this port could otherwise start a daemon.
+    opts.autospawn = false;
     opts.token = Some(token);
     opts.encoding = Encoding::Json;
     let client = ptyro_client::Client::connect_via(&opts, &via).await;
@@ -789,7 +952,7 @@ async fn api_host(
                 st.failed(ip);
                 return respond(StatusCode::UNAUTHORIZED, "text/plain", "unauthorized");
             }
-            return respond(StatusCode::BAD_GATEWAY, "text/plain", e.to_string());
+            return daemon_unavailable(&e);
         }
     };
     let err = |code: &str, message: &str| {
@@ -850,18 +1013,19 @@ async fn api_pair(
     struct Claim {
         code: String,
     }
-    let body = match Limited::new(req.into_body(), 4096).collect().await {
-        Ok(b) => b.to_bytes(),
-        Err(_) => return respond(StatusCode::PAYLOAD_TOO_LARGE, "text/plain", "too large"),
+    let body = match read_body(req.into_body(), 4096).await {
+        Ok(b) => b,
+        Err((code, why)) => return respond(code, "text/plain", why),
     };
     let Ok(Claim { code }) = serde_json::from_slice(&body) else {
         return respond(StatusCode::BAD_REQUEST, "text/plain", "expected {\"code\": …}");
     };
     // A local client of the daemon: the claim is the one thing it asks for here.
-    let opts = ptyro_client::ConnectOptions::new(st.ctx_paths.clone(), ClientKind::Proxy);
+    let mut opts = ptyro_client::ConnectOptions::new(st.ctx_paths.clone(), ClientKind::Proxy);
+    opts.autospawn = false;
     let client = match ptyro_client::Client::connect(&opts).await {
         Ok(c) => c,
-        Err(e) => return respond(StatusCode::BAD_GATEWAY, "text/plain", e.to_string()),
+        Err(e) => return daemon_unavailable(&e),
     };
     let claim = ptyro_protocol::Request::DeviceClaim { code, via: Some(via) };
     let out = tokio::time::timeout(Duration::from_secs(10), client.request(claim)).await;
@@ -876,7 +1040,10 @@ async fn api_pair(
             st.failed(ip);
             respond(StatusCode::UNAUTHORIZED, "text/plain", e.message)
         }
-        Ok(Err(e)) => respond(StatusCode::BAD_GATEWAY, "text/plain", e.message),
+        Ok(Err(e)) => {
+            tracing::warn!("pairing: {}", e.message);
+            respond(StatusCode::BAD_GATEWAY, "text/plain", "the code wasn't accepted")
+        }
         Ok(Ok(_)) | Err(_) => respond(StatusCode::BAD_GATEWAY, "text/plain", "no answer"),
     }
 }
@@ -884,6 +1051,16 @@ async fn api_pair(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_forwarded_line_of_its_own_cannot_hide_behind_the_clients() {
+        let mut h = hyper::HeaderMap::new();
+        h.append("x-forwarded-for", HeaderValue::from_static("9.9.9.9"));
+        // The proxy appended its own line: the client's line before it proves nothing.
+        h.append("x-forwarded-for", HeaderValue::from_static("1.2.3.4"));
+        assert_eq!(last_hop(&forwarded_for(&h).unwrap()), "1.2.3.4");
+        assert_eq!(forwarded_for(&hyper::HeaderMap::new()), None);
+    }
 
     #[test]
     fn the_proxy_added_address_counts() {
@@ -941,6 +1118,7 @@ mod tests {
             .unwrap(),
             failures: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
+            open: Mutex::new(HashMap::new()),
             trust_proxy: false,
             hosts: Vec::new(),
             ca_pem: None,
@@ -959,6 +1137,78 @@ mod tests {
             st.failed(ip);
             assert!(!st.failures.lock().unwrap().contains_key(&old));
         }
+    }
+
+    #[test]
+    fn a_page_from_elsewhere_cannot_use_the_server() {
+        let names = vec!["box.tail1234.ts.net".to_owned()];
+        // Not from a browser (no Origin), or from this server's own page.
+        assert!(origin_ok(None, Some("127.0.0.1:7091"), &names));
+        assert!(origin_ok(Some("http://127.0.0.1:7091"), Some("127.0.0.1:7091"), &names));
+        assert!(origin_ok(
+            Some("https://BOX.tail1234.ts.net"),
+            Some("box.tail1234.ts.net"),
+            &names
+        ));
+        // A proxy that rewrote Host: the configured name still counts.
+        assert!(origin_ok(Some("https://box.tail1234.ts.net"), Some("127.0.0.1:7091"), &names));
+        // Another site, another port of this machine, `null`, junk.
+        for bad in [
+            "https://evil.example",
+            "http://127.0.0.1:9999",
+            "http://localhost:7091",
+            "null",
+            "file://",
+            "evil",
+        ] {
+            assert!(!origin_ok(Some(bad), Some("127.0.0.1:7091"), &names), "{bad}");
+        }
+    }
+
+    #[test]
+    fn an_ipv6_network_is_one_address_to_the_lockout() {
+        let a: IpAddr = "2001:db8:1:2::1".parse().unwrap();
+        let b: IpAddr = "2001:db8:1:2:ffff::9".parse().unwrap();
+        let c: IpAddr = "2001:db8:1:3::1".parse().unwrap();
+        assert_eq!(lockout_key(a), lockout_key(b));
+        assert_ne!(lockout_key(a), lockout_key(c));
+        let v4: IpAddr = "1.2.3.4".parse().unwrap();
+        assert_eq!(lockout_key(v4), v4);
+        assert_eq!(
+            lockout_key("::ffff:1.2.3.4".parse().unwrap()),
+            "::ffff:1.2.3.4".parse::<IpAddr>().unwrap()
+        );
+    }
+
+    #[test]
+    fn one_address_cannot_take_every_place() {
+        let st = Arc::new(State {
+            ctx_paths: ptyro_core::paths::Paths::resolve(|k| {
+                (k == "PTYRO_HOME").then(|| "/nonexistent".into())
+            })
+            .unwrap(),
+            failures: Mutex::new(HashMap::new()),
+            pending: Mutex::new(HashMap::new()),
+            open: Mutex::new(HashMap::new()),
+            trust_proxy: false,
+            hosts: Vec::new(),
+            ca_pem: None,
+            remote: false,
+        });
+        let ip: IpAddr = "1.2.3.4".parse().unwrap();
+        let held: Vec<Open> = (0..MAX_PER_ADDR).map(|_| st.open_from(ip).unwrap()).collect();
+        assert!(st.open_from(ip).is_none());
+        assert!(st.open_from("5.6.7.8".parse().unwrap()).is_some(), "others still get in");
+        drop(held);
+        assert!(st.open.lock().unwrap().len() <= 1);
+        assert!(st.open_from(ip).is_some(), "places come back");
+        // Logins waiting on the daemon are capped in all, whoever they come from.
+        let mut all = Vec::new();
+        for n in 0..MAX_PENDING_TOTAL {
+            let ip: IpAddr = format!("10.0.{}.{}", n / 4, n % 250 + 1).parse().unwrap();
+            all.push(st.begin(ip).unwrap());
+        }
+        assert!(st.begin("9.9.9.9".parse().unwrap()).is_none());
     }
 
     #[test]

@@ -5,37 +5,72 @@
 /// <reference lib="webworker" />
 const sw = self as unknown as ServiceWorkerGlobalScope;
 
-const SHELL = "ptyro-shell-v4";
+// The shell is one generation: every file of it, named by a hash of their bytes. The cache is
+// only ever replaced as a whole, so a flaky network can't give a page `app.js` from one version of
+// ptyro and `settings.js` from another (the import of a name that isn't there is a blank app).
+const SHELL = "ptyro-shell-";
 const FILES = [
-  "/", "/style.css", "/manifest.webmanifest", "/icon.svg", "/icon-192.png",
+  "/", "/style.css", "/manifest.webmanifest", "/icon.svg", "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png",
   ...["app", "color", "conn", "data", "flow", "kit", "projects", "qr", "review", "runs", "screen", "sessions", "settings", "pad", "notes", "grid", "keys", "term", "panel", "cfgkit"].map((m) => `/${m}.js`),
 ];
 
+const hex = (b: ArrayBuffer): string => [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("");
+
+/// Fetch every file fresh; when all of them came, keep them as a generation of their own and
+/// drop the others. Nothing changes if any one is missing.
+async function snapshot(): Promise<void> {
+  const got = await Promise.all(FILES.map(async (f) => {
+    const r = await fetch(f, { cache: "reload" });
+    if (!r.ok) throw new Error(`${f}: ${r.status}`);
+    return [f, r] as const;
+  }));
+  const bodies = await Promise.all(got.map(([, r]) => r.clone().arrayBuffer()));
+  const all = new Uint8Array(bodies.reduce((n, b) => n + b.byteLength, 0));
+  let at = 0;
+  for (const b of bodies) { all.set(new Uint8Array(b), at); at += b.byteLength; }
+  const name = SHELL + hex(await crypto.subtle.digest("SHA-256", all)).slice(0, 16);
+  if (!(await caches.keys()).includes(name)) {
+    const c = await caches.open(name);
+    for (const [f, r] of got) await c.put(f, r);
+  }
+  for (const k of await caches.keys()) if (k.startsWith(SHELL) && k !== name) await caches.delete(k);
+}
+
+/// The generation to answer from when the network can't.
+async function shell(): Promise<Cache | null> {
+  const name = (await caches.keys()).filter((k) => k.startsWith(SHELL)).sort().pop();
+  return name ? caches.open(name) : null;
+}
+
+let refreshed = 0;
+/// After a page has loaded from the network, look again at most every ten minutes: ptyro may have
+/// been upgraded since the generation was made.
+function refreshSoon(): void {
+  if (Date.now() - refreshed < 600_000) return;
+  refreshed = Date.now();
+  void snapshot().catch(() => { refreshed = 0; });
+}
+
 sw.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(SHELL).then((c) => c.addAll(FILES)).then(() => sw.skipWaiting()));
+  e.waitUntil(snapshot().then(() => sw.skipWaiting()));
 });
 
 sw.addEventListener("activate", (e) => {
   e.waitUntil((async () => {
-    for (const k of await caches.keys()) if (k !== SHELL) await caches.delete(k);
+    // Anything from before generations had names goes.
+    for (const k of await caches.keys()) if (k.startsWith("ptyro-shell-v")) await caches.delete(k);
     await sw.clients.claim();
   })());
 });
 
-// Network first (the app updates with ptyro), the cached shell when offline. Never the API.
+// Network first (the app updates with ptyro), the cached generation when offline. Never the API.
 sw.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== "GET" || url.origin !== location.origin || url.pathname.startsWith("/api") || url.pathname === "/ws") return;
   e.respondWith(
     fetch(e.request)
-      .then((r) => {
-        if (r.ok && FILES.includes(url.pathname) && !url.search) {
-          const copy = r.clone();
-          void caches.open(SHELL).then((c) => c.put(e.request, copy));
-        }
-        return r;
-      })
-      .catch(async () => (await caches.match(e.request)) ?? (await caches.match("/")) ?? Response.error()),
+      .then((r) => { if (r.ok && url.pathname === "/") refreshSoon(); return r; })
+      .catch(async () => (await (await shell())?.match(url.search ? url.pathname : e.request)) ?? (await (await shell())?.match("/")) ?? Response.error()),
   );
 });
 
@@ -46,6 +81,8 @@ interface Payload { title: string; body: string; session?: string | null; kind: 
 sw.addEventListener("push", (e) => {
   let p: Payload;
   try { p = e.data?.json() as Payload; } catch { p = { title: "ptyro", body: e.data?.text() ?? "", kind: "notification", tag: "ptyro" }; }
+  // A push with no data (a wake-up) still shows something rather than throwing.
+  p ??= { title: "ptyro", body: "Something needs you", kind: "notification", tag: "ptyro" };
   const actions = p.kind === "blocked" && p.session ? [{ action: "allow", title: "Allow" }, { action: "deny", title: "Deny" }] : [];
   e.waitUntil(sw.registration.showNotification(p.title, {
     body: p.body,

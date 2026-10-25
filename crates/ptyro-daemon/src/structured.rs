@@ -161,9 +161,9 @@ impl Structured {
                 let ctrl = key.mods.has(Mods::CTRL);
                 if self.has_pending() && self.draft.lock().expect("draft").is_empty() {
                     let d = match key.code {
-                        KeyCode::Char { c: 'a' | 'y' | '1' } | KeyCode::Enter if !ctrl => {
-                            Some(Decision::Allow)
-                        }
+                        // (Not Enter: a return typed ahead, or a double tap, must not approve a
+                        // tool call the person hasn't read.)
+                        KeyCode::Char { c: 'a' | 'y' | '1' } if !ctrl => Some(Decision::Allow),
                         KeyCode::Char { c: 'A' | '2' } if !ctrl => Some(Decision::Always),
                         KeyCode::Char { c: 'd' | 'n' | '3' } | KeyCode::Esc if !ctrl => {
                             Some(Decision::Deny)
@@ -469,7 +469,7 @@ async fn driver_loop(session: Arc<Session>, st: Arc<Structured>, r: Resume) {
     tokio::time::sleep(Duration::from_millis(200)).await;
     let tail: Vec<String> = st.stderr_tail.lock().expect("stderr").iter().cloned().collect();
     let failed = !matches!(
-        session.meta.lock().expect("meta").state,
+        session.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).state,
         ptyro_core::session::ProcessState::Exited { code: Some(0), .. }
     );
     if failed && !tail.is_empty() {
@@ -594,8 +594,19 @@ async fn follow_sse(
 
 // ── the terminal view of a transcript ─────────────────────────────────────────────────────────
 
+/// Text from an agent or a tool as the pane may draw it: no control characters, so it can't
+/// move the cursor, erase the line above, or open an OSC (a tool title that rewrote the
+/// "wants permission" line would be a spoofed prompt).
+fn plain(s: &str) -> String {
+    s.chars().filter(|c| !c.is_control()).collect()
+}
+
 fn crlf(s: &str) -> String {
-    s.replace("\r\n", "\n").replace('\n', "\r\n")
+    s.replace("\r\n", "\n")
+        .chars()
+        .filter(|c| *c == '\n' || *c == '\t' || !c.is_control())
+        .collect::<String>()
+        .replace('\n', "\r\n")
 }
 
 /// The bytes that show `it` (given what's been shown before).
@@ -638,7 +649,11 @@ fn render(r: &mut Render, it: &ChatItem) -> Vec<u8> {
         ChatBody::Tool { name, title, status, output, diff, .. } => {
             if r.seen.insert(it.id.clone()) {
                 newline(r, &mut out);
-                out.push_str(&format!("\x1b[33m▸ {name}\x1b[0m {}\r\n", crlf(title)));
+                out.push_str(&format!(
+                    "\x1b[33m▸ {}\x1b[0m {}\r\n",
+                    plain(name),
+                    plain(title.lines().next().unwrap_or(""))
+                ));
             }
             let settled =
                 matches!(status, ToolStatus::Done | ToolStatus::Failed | ToolStatus::Declined);
@@ -663,7 +678,7 @@ fn render(r: &mut Render, it: &ChatItem) -> Vec<u8> {
                         } else {
                             "2"
                         };
-                        out.push_str(&format!("    \x1b[{c}m{l}\x1b[0m\r\n"));
+                        out.push_str(&format!("    \x1b[{c}m{}\x1b[0m\r\n", plain(l)));
                     }
                 }
                 if let Some(o) = output.as_deref().filter(|o| !o.trim().is_empty()) {
@@ -676,7 +691,7 @@ fn render(r: &mut Render, it: &ChatItem) -> Vec<u8> {
                     for l in show {
                         out.push_str(&format!(
                             "    \x1b[2m{}\x1b[0m\r\n",
-                            l.chars().take(200).collect::<String>()
+                            plain(&l.chars().take(200).collect::<String>())
                         ));
                     }
                     if lines.len() > 4 {
@@ -689,15 +704,16 @@ fn render(r: &mut Render, it: &ChatItem) -> Vec<u8> {
             if decided.is_none() && r.seen.insert(it.id.clone()) {
                 newline(r, &mut out);
                 out.push_str(&format!(
-                    "\x1b[1;31m⚠ wants permission\x1b[0m {tool}: {}\r\n  \x1b[2m[a] allow  [A] always  [d] deny\x1b[0m\r\n",
-                    crlf(title.lines().next().unwrap_or(""))
+                    "\x1b[1;31m⚠ wants permission\x1b[0m {}: {}\r\n  \x1b[2m[a] allow  [A] always  [d] deny\x1b[0m\r\n",
+                    plain(tool),
+                    plain(title.lines().next().unwrap_or(""))
                 ));
             }
             if let Some(d) = decided
                 && r.settled.insert(it.id.clone())
             {
                 newline(r, &mut out);
-                out.push_str(&format!("  \x1b[2m→ {d}\x1b[0m\r\n"));
+                out.push_str(&format!("  \x1b[2m→ {}\x1b[0m\r\n", plain(&d.to_string())));
             }
         }
         ChatBody::Plan { steps } => {
@@ -705,8 +721,8 @@ fn render(r: &mut Render, it: &ChatItem) -> Vec<u8> {
             let now = steps
                 .iter()
                 .find(|s| s.status == "in_progress")
-                .map(|s| s.text.as_str())
-                .unwrap_or("");
+                .map(|s| plain(&s.text))
+                .unwrap_or_default();
             let line = format!(
                 "☰ plan {done}/{}{}",
                 steps.len(),
@@ -732,7 +748,7 @@ fn render(r: &mut Render, it: &ChatItem) -> Vec<u8> {
         ChatBody::TurnEnd { stop, cost_micro_usd, duration_ms, .. } => {
             if r.seen.insert(it.id.clone()) {
                 newline(r, &mut out);
-                let mut parts = vec![stop.clone()];
+                let mut parts = vec![plain(stop)];
                 if let Some(c) = cost_micro_usd {
                     parts.push(format!("${:.4}", *c as f64 / 1e6));
                 }

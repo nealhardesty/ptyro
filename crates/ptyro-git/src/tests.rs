@@ -344,3 +344,112 @@ fn background_calls_run_no_repository_code() {
     assert!(seen().contains(&"pre-commit".to_owned()), "{:?}", seen());
     assert!(!seen().contains(&"fsmonitor".to_owned()), "{:?}", seen());
 }
+
+#[test]
+fn refs_from_outside_never_become_options() {
+    let f = fixture();
+    let wt = f.base.join("wts/x");
+    for base in ["--orphan", "-f", "a b", "x\ny", ""] {
+        let src = Source::NewBranch { branch: "ptyro/x".into(), base: base.into() };
+        let err = f.git.worktree_add(&f.root, &wt, &src).unwrap_err();
+        assert!(err.to_string().contains("not a valid git revision"), "{base:?}: {err}");
+    }
+    assert!(!wt.exists());
+    let err = f.git.fetch(&f.root, "origin", "--upload-pack=touch /tmp/x").unwrap_err();
+    assert!(err.to_string().contains("not a valid git revision"), "{err}");
+    assert!(f.git.fetch(&f.root, "-x", "main").is_err());
+    // An existing branch's name is checked like any other.
+    let src = Source::Existing { branch: "-evil".into() };
+    assert!(
+        f.git
+            .worktree_add(&f.root, &wt, &src)
+            .unwrap_err()
+            .to_string()
+            .contains("valid branch name")
+    );
+    // A good fetch and a good worktree still work.
+    f.git.fetch(&f.root, "origin", "main").unwrap();
+    let src = Source::NewBranch { branch: "ptyro/x".into(), base: "origin/main".into() };
+    f.git.worktree_add(&f.root, &wt, &src).unwrap();
+}
+
+#[test]
+fn background_calls_run_no_filter_or_diff_driver_from_the_config() {
+    let f = fixture();
+    let marker = f.base.join("PWNED");
+    std::fs::write(f.root.join(".gitattributes"), "*.dat filter=evil diff=evil\n").unwrap();
+    f.git.run(&f.root, &["add", ".gitattributes"]).unwrap();
+    f.git.run(&f.root, &["commit", "-q", "-m", "attrs"]).unwrap();
+    for (k, v) in [
+        ("filter.evil.clean", format!("touch {}; cat", marker.display())),
+        ("filter.evil.required", "true".to_owned()),
+        ("diff.evil.textconv", format!("touch {}; cat", marker.display())),
+    ] {
+        f.git.run(&f.root, &["config", k, &v]).unwrap();
+    }
+    std::fs::write(f.root.join("x.dat"), "data").unwrap();
+    // What ptyro runs by itself: a status, a checkpoint, a diff.
+    f.git.run(&f.root, &["status", "--porcelain"]).unwrap();
+    assert!(!marker.exists(), "a config-named filter ran in status");
+    f.git.checkpoint(&f.root, "c").unwrap();
+    assert!(!marker.exists(), "a config-named filter ran in the checkpoint");
+    f.git.run(&f.root, &["diff", "--stat"]).unwrap();
+    assert!(!marker.exists(), "a config-named filter ran in diff");
+    // The user's own `git add` (through ptyro's hooked path) is theirs to run.
+    f.git.run_hooked(&f.root, &["add", "x.dat"]).unwrap();
+}
+
+#[test]
+fn safety_lists_ignored_files_without_refusing_for_them() {
+    let f = fixture();
+    let wt = f.base.join("wts/ign");
+    let src = Source::NewBranch { branch: "ptyro/ign".into(), base: "origin/main".into() };
+    f.git.worktree_add(&f.root, &wt, &src).unwrap();
+    std::fs::write(wt.join(".env"), "SECRET=1").unwrap();
+    std::fs::create_dir(wt.join("node_modules")).unwrap();
+    std::fs::write(wt.join("node_modules/x.js"), "x").unwrap();
+    let s = f.git.safety(&wt, Some("ptyro/ign"), Some("origin/main")).unwrap();
+    assert!(s.is_clean(), "ignored files are not a reason to refuse: {}", s.report());
+    assert_eq!(s.ignored.len(), 2, "{:?}", s.ignored);
+    let note = s.ignored_note().unwrap();
+    assert!(
+        note.contains(".env") && note.contains("node_modules") && note.contains("in no commit"),
+        "{note}"
+    );
+}
+
+#[test]
+fn only_ptyros_own_lock_is_taken_off_before_removal() {
+    let f = fixture();
+    let wt = f.base.join("wts/lk");
+    let src = Source::NewBranch { branch: "ptyro/lk".into(), base: "origin/main".into() };
+    f.git.worktree_add(&f.root, &wt, &src).unwrap();
+    assert!(f.git.unlock_ours(&f.root, &wt).unwrap(), "nothing locked");
+    f.git.lock(&f.root, &wt, "ptyro:01abc").unwrap();
+    assert!(f.git.unlock_ours(&f.root, &wt).unwrap());
+    assert!(f.git.worktree_list(&f.root).unwrap().iter().all(|e| e.locked.is_none()));
+    // The user's own `git worktree lock`: kept, so a plain removal is refused.
+    f.git
+        .run(&f.root, &["worktree", "lock", "--reason", "mine, hands off", &wt.to_string_lossy()])
+        .unwrap();
+    assert!(!f.git.unlock_ours(&f.root, &wt).unwrap());
+    assert!(f.git.worktree_remove(&f.root, &wt, false).is_err());
+    assert!(wt.exists());
+}
+
+#[test]
+fn a_worktree_path_with_a_newline_is_one_path() {
+    let f = fixture();
+    let wt = f.base.join("wts/line\nbreak");
+    let src = Source::NewBranch { branch: "ptyro/nl".into(), base: "origin/main".into() };
+    f.git.worktree_add(&f.root, &wt, &src).unwrap();
+    let list = f.git.worktree_list(&f.root).unwrap();
+    assert!(
+        list.iter().any(|e| e.path == wt && e.branch.as_deref() == Some("ptyro/nl")),
+        "{list:?}"
+    );
+    // The plain-lines format parses as before.
+    let plain = "worktree /a\nHEAD abc\nbranch refs/heads/x\n\nworktree /b\nHEAD def\ndetached\nlocked why\n";
+    let l = parse_worktree_list(plain);
+    assert_eq!((l.len(), l[1].locked.as_deref()), (2, Some("why")));
+}

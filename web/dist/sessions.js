@@ -348,10 +348,15 @@ function rowEl(doc, styles, runs) {
     return line;
 }
 let scrollQuery = "";
+/// The page as built: every re-render (a session event, the clock) would otherwise throw away the
+/// reader's place and the text typed in the search box, and rebuild up to 20,000 rows.
+let scrollPage = null;
 function scrollView(id) {
     const s = [...sessionsRef().values()].find((x) => x.id === id);
     const title = s ? `${s.name} · scrollback` : "Scrollback";
     const doc = scroll.get(id);
+    if (doc && scrollPage && scrollPage.id === id && scrollPage.q === scrollQuery && scrollPage.doc === doc)
+        return scrollPage.el;
     const body = pending(scroll, id) ?? (() => {
         const styles = new Map(doc.styles.map((d) => [d.id, d.style]));
         const q = scrollQuery.toLowerCase();
@@ -377,7 +382,9 @@ function scrollView(id) {
     })();
     const search = h("input", { class: "search", type: "search", placeholder: "Search", value: scrollQuery, "aria-label": "Search the scrollback", autocapitalize: "off" });
     search.addEventListener("change", () => { scrollQuery = search.value; ui.render(); });
-    return h("div", { class: "page" }, ui.header(title, id ? `#/s/${enc(id)}` : true, h("button", { class: "icon", title: "Load again", onclick: () => scroll.reload(id) }, "↻")), h("main", { class: "stack", title: tip("session.scrollback") }, search, body));
+    const page = h("div", { class: "page" }, ui.header(title, id ? `#/s/${enc(id)}` : true, h("button", { class: "icon", title: "Load again", onclick: () => scroll.reload(id) }, "↻")), h("main", { class: "stack", title: tip("session.scrollback") }, search, body));
+    scrollPage = doc ? { id, q: scrollQuery, doc, el: page } : null;
+    return page;
 }
 // ── events ──────────────────────────────────────────────────────────────────────────────────
 const events = new Cache((id) => conn.request({ t: "events", session: id, limit: 300 }).then((r) => r.events));
@@ -458,8 +465,15 @@ function drawReplay(p) {
         ctx.globalAlpha = 1;
     }));
 }
+/// Players that may have a timer running: leaving the page stops them.
+const players = new Set();
+window.addEventListener("hashchange", () => { for (const p of players) {
+    clearTimeout(p.timer);
+    p.playing = false;
+} players.clear(); });
 function play(p) {
     clearTimeout(p.timer);
+    players.add(p);
     if (!p.playing)
         return;
     const steps = p.doc.steps;

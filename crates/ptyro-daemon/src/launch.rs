@@ -354,6 +354,15 @@ impl Daemon {
 
     /// The one way sessions start.
     pub(crate) async fn launch(self: &Arc<Self>, l: Launch) -> Result<Arc<Session>, Error> {
+        // The conversation to resume goes to the agent's CLI as an argument: a client (a
+        // control device may start a configured agent) or a hook payload must not pick a flag.
+        if let Some(r) = l.agent.as_ref().and_then(|a| a.resume.as_deref())
+            && !crate::agents::conversation_id_ok(r)
+        {
+            return Err(Error::invalid(format!(
+                "{r:?} isn't a conversation id (letters, digits and . _ : -)"
+            )));
+        }
         // Held until the session is in the list: no second relaunch of the same session, no
         // second session with the same name, nothing that a handoff in progress would miss.
         let _claim = Claim::take(self, &l)?;
@@ -533,7 +542,7 @@ impl Daemon {
         };
         // A relaunch in place keeps the session's part in a run.
         let carried = self.session(l.id).map(|old| {
-            let m = old.meta.lock().expect("meta");
+            let m = old.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             (m.run.clone(), m.verify.clone(), m.guard.clone())
         });
         let spawned_session = match structured {
@@ -561,7 +570,7 @@ impl Daemon {
             Error::new(code, format!("cannot start session: {e}"))
         })?;
         if let Some((run, verify, guard)) = carried.filter(|_| l.replace) {
-            let mut m = session.meta.lock().expect("meta");
+            let mut m = session.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             m.run = run;
             m.verify = verify;
             m.guard = guard;

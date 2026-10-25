@@ -3,7 +3,7 @@
 // scripts, ports, pair mode, locks, leases, the collision radar, checkpoints and the clean-up.
 import { conn } from "./conn.js";
 import { data, liveWorktrees, wtTabs } from "./data.js";
-import { actions, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, pending, row, section, sheet, textSheet, ui, views } from "./kit.js";
+import { actions, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, pending, row, safeDecode, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
 import { newTask, openQuickShell, allSessions } from "./sessions.js";
 const ACTIONS = {
     "projects": "Projects and their worktrees, with what each is doing",
@@ -348,7 +348,7 @@ function worktreeMenu(w) {
 }
 let tab = "overview";
 function worktreeView(rest) {
-    const [id, which] = rest.split("/").map(decodeURIComponent);
+    const [id, which] = rest.split("/").map(safeDecode);
     const w = data.worktrees.get(id);
     if (!w)
         return h("div", {}, ui.header("Worktree", "#/p"), h("main", { class: "stack" }, h("p", { class: "empty" }, conn.state === "open" ? "No such worktree (it may have been removed)." : "Connecting…")));
@@ -359,7 +359,7 @@ function worktreeView(rest) {
     const st = w.status;
     const overview = h("div", { class: "stack-in" }, bar(h("button", { class: "primary", title: tip("worktree.new"), onclick: () => newTask(`w:${w.id}`) }, "New session"), h("button", { title: tip("worktree.finish"), onclick: () => finish(w) }, "Finish"), h("button", { onclick: () => void openQuickShell(w) }, "Shell")), section("Sessions", sess.length ? h("div", { class: "rows" }, ...sess.map((s) => row(h("span", {}, h("span", { class: `glyph ${statusOf(s)}` }, STATUS_GLYPH[statusOf(s)] ?? "·"), " ", s.name, s.agent ? h("small", {}, ` ${s.agent}`) : null), s.activity ?? s.title ?? statusOf(s), ago(s.status?.since_ms ?? s.created_ms), { href: `#/s/${enc(s.id)}` }))) : h("p", { class: "sub" }, "Nothing is running here.")), section("Status", h("div", { title: tip("worktree.status") }, facts([
         ["Branch", w.branch], ["Base", w.base], ["Changes", st ? `${summary(w)}${st.subject ? ` — ${st.subject}` : ""}` : ""],
-        ["Pull request", w.pr ? h("a", { href: w.pr.url, target: "_blank", rel: "noreferrer" }, `#${w.pr.number} ${w.pr.title}`) : null],
+        ["Pull request", w.pr ? (webHref(w.pr.url) ? h("a", { href: webHref(w.pr.url), target: "_blank", rel: "noreferrer" }, `#${w.pr.number} ${w.pr.title}`) : h("span", {}, `#${w.pr.number} ${w.pr.title}`)) : null],
         ["Merged into main", w.integrated ? w.integrated.slice(0, 8) : null],
         ["Ports", w.ports ? `${w.ports.base}–${w.ports.base + w.ports.count - 1}` : null],
         ["Profile", w.profile], ["Path", w.path], ["State", w.state === "ready" ? null : w.state]
@@ -406,7 +406,7 @@ function leasesView() {
 }
 const radar = new Cache((id) => conn.request({ t: "radar", project: id || null }).then((r) => r.radar));
 function radarView(rest) {
-    const id = decodeURIComponent(rest);
+    const id = safeDecode(rest);
     const r = radar.get(id);
     const body = pending(radar, id, "Comparing worktrees…") ?? (() => {
         const ov = r.overlaps;

@@ -160,6 +160,10 @@ enum WriterMsg {
     Resize(TermSize),
 }
 
+/// Messages waiting for a child to read them. Past this the child isn't reading at all (it is
+/// stopped, or stuck), and what arrives for it is dropped rather than kept for ever.
+const WRITER_QUEUE: usize = 8192;
+
 pub struct Session {
     pub id: SessionId,
     pub meta: Mutex<Meta>,
@@ -167,9 +171,10 @@ pub struct Session {
     /// Bumped whenever the screen changes or the process state does; subscriptions wait on it.
     pub changed: watch::Sender<u64>,
     exited: watch::Sender<bool>,
-    /// Unbounded on purpose: the reader must never wait for the writer (a child that stops
-    /// reading input while still writing output would otherwise deadlock both).
-    writer: mpsc::UnboundedSender<WriterMsg>,
+    /// Bounded, and never waited on (`try_send`): the reader must never wait for the writer (a
+    /// child that stops reading input while still writing output would otherwise deadlock
+    /// both), and a child that never reads must not make the daemon queue without end.
+    writer: mpsc::Sender<WriterMsg>,
     master: Option<OwnedFd>,
     events: broadcast::Sender<DomainEvent>,
     store: Option<Store>,
@@ -334,7 +339,7 @@ impl Session {
         })?;
         let mut emu = AlacrittyEmulator::new(s.size, s.scrollback);
         let tracker = FrameTracker::new(&mut emu);
-        let (writer_tx, writer_rx) = mpsc::unbounded_channel();
+        let (writer_tx, writer_rx) = mpsc::channel(WRITER_QUEUE);
         let recorder = open_recorder(s.record.as_ref(), s.size);
         let mut meta = new_meta(s.name, s.kind, s.argv, s.cwd, s.place);
         meta.state = ProcessState::Running;
@@ -400,7 +405,7 @@ impl Session {
     ) -> Arc<Self> {
         let mut emu = AlacrittyEmulator::new(size, scrollback);
         let tracker = FrameTracker::new(&mut emu);
-        let (writer_tx, _) = mpsc::unbounded_channel();
+        let (writer_tx, _) = mpsc::channel(1);
         let mut meta = new_meta(d.name, d.kind, d.argv, d.cwd, d.place);
         meta.state = ProcessState::Dormant;
         meta.ended_ms = d.ended_ms;
@@ -436,11 +441,11 @@ impl Session {
     }
 
     pub fn kind(&self) -> SessionKind {
-        self.meta.lock().expect("meta").kind
+        self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).kind
     }
 
     pub fn adapter(&self) -> Option<String> {
-        self.meta.lock().expect("meta").adapter.clone()
+        self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).adapter.clone()
     }
 
     pub fn status(&self) -> Option<AgentStatus> {
@@ -456,10 +461,17 @@ impl Session {
     fn write_input(&self, bytes: Vec<u8>, ctrl_z: bool) {
         let suspending = ctrl_z.then(|| self.watch_suspend()).flatten();
         if !bytes.is_empty() {
-            let _ = self.writer.send(WriterMsg::Bytes(bytes));
+            self.queue(WriterMsg::Bytes(bytes));
         }
         if let Some(watch) = suspending {
             tokio::spawn(watch);
+        }
+    }
+
+    /// Queue something for the child's input; full means it isn't reading, so drop it.
+    fn queue(&self, msg: WriterMsg) {
+        if self.writer.try_send(msg).is_err() {
+            tracing::debug!(session = %self.id, "its input queue is full: dropped");
         }
     }
 
@@ -470,9 +482,9 @@ impl Session {
     }
 
     pub fn info(&self, handle: String) -> SessionInfo {
-        let meta = self.meta.lock().expect("meta");
+        let meta = self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let (size, title) = {
-            let term = self.term.lock().expect("term");
+            let term = self.term.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             (term.emu.size(), term.emu.title().map(str::to_owned))
         };
         let fg = meta
@@ -543,7 +555,7 @@ impl Session {
     /// Remember this session in the store (fire and forget); `launch` only when it changes.
     pub fn save(&self, launch: Option<serde_json::Value>) {
         let Some(store) = &self.store else { return };
-        let m = self.meta.lock().expect("meta").clone();
+        let m = self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
         store.save_session(SessionRecord {
             id: self.id.full(),
             name: m.name,
@@ -574,18 +586,18 @@ impl Session {
     }
 
     pub fn rename(&self, name: String) {
-        self.meta.lock().expect("meta").name = name.clone();
+        self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name = name.clone();
         self.record_event("rename", serde_json::json!({ "name": name }));
         self.save(None);
     }
 
     pub fn size(&self) -> TermSize {
-        self.term.lock().expect("term").emu.size()
+        self.term.lock().unwrap_or_else(std::sync::PoisonError::into_inner).emu.size()
     }
 
     /// The last `lines` lines of history plus the screen, frozen (SPEC §5.4).
     pub fn scrollback(&self, lines: u32) -> ptyro_core::screen::ScrollbackDoc {
-        let term = self.term.lock().expect("term");
+        let term = self.term.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         ptyro_term::frame::scrollback_doc(&term.emu, lines)
     }
 
@@ -593,7 +605,7 @@ impl Session {
     /// replayed into a scratch emulator with room for `lines` (M8.2, M8.3).
     pub fn scrollback_deep(&self, lines: u32) -> ptyro_core::screen::ScrollbackDoc {
         let (have, size) = {
-            let term = self.term.lock().expect("term");
+            let term = self.term.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             (term.emu.scrollback_len(), term.emu.size())
         };
         let dir = self.record_dir.lock().expect("record_dir").clone();
@@ -619,7 +631,7 @@ impl Session {
     /// restart, M8.2).
     pub fn load_recording(&self, dir: PathBuf) {
         if let Ok(recs) = ptyro_term::record::read_dir(&dir) {
-            let mut term = self.term.lock().expect("term");
+            let mut term = self.term.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let term = &mut *term;
             ptyro_term::record::replay(&recs, &mut term.emu);
             term.tracker.update(&mut term.emu);
@@ -672,7 +684,7 @@ impl Session {
 
     /// Roughly what its terminal state costs in memory (alacritty keeps ≈ 24 bytes a cell).
     pub fn memory_estimate(&self) -> u64 {
-        let term = self.term.lock().expect("term");
+        let term = self.term.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let size = term.emu.size();
         ((term.emu.scrollback_len() + size.rows as usize) * size.cols as usize * 24) as u64
     }
@@ -682,12 +694,12 @@ impl Session {
     }
 
     pub fn is_live(&self) -> bool {
-        self.meta.lock().expect("meta").state.is_live()
+        self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).state.is_live()
     }
 
     /// Its worktree's or directory's quick terminal (UX1.25).
     pub fn is_quick(&self) -> bool {
-        let m = self.meta.lock().expect("meta");
+        let m = self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         m.place.quick || m.place.pad
     }
 
@@ -695,7 +707,7 @@ impl Session {
     /// quick terminal at its prompt (its shell is the foreground process group).
     pub fn busy(&self) -> bool {
         let (live, quick, pid) = {
-            let m = self.meta.lock().expect("meta");
+            let m = self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             (m.state.is_live(), m.place.quick, m.pid)
         };
         live && !(quick && pid.is_some() && self.foreground_pid() == pid)
@@ -707,7 +719,7 @@ impl Session {
     }
 
     pub fn pid(&self) -> Option<u32> {
-        self.meta.lock().expect("meta").pid
+        self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pid
     }
 
     pub(crate) fn bump(&self) {
@@ -726,7 +738,12 @@ impl Session {
                 let _ = pause.wait_for(|p| !*p).await;
                 self.io.parked.fetch_sub(1, Ordering::SeqCst);
             }
-            let deadline = self.term.lock().expect("term").emu.sync_deadline();
+            let deadline = self
+                .term
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .emu
+                .sync_deadline();
             let read = tokio::select! {
                 r = reader.read(&mut buf) => Some(r),
                 () = sleep_until(deadline) => None,
@@ -735,7 +752,7 @@ impl Session {
             let mut out = FeedOutput::default();
             let mut n_read = 0;
             let changed = {
-                let mut term = self.term.lock().expect("term");
+                let mut term = self.term.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 let term = &mut *term;
                 match read {
                     // Linux reports EIO once the child side is gone: any error is EOF.
@@ -756,7 +773,7 @@ impl Session {
                 self.output_bytes.fetch_add(n_read as u64, Ordering::Relaxed);
             }
             if !out.replies.is_empty() {
-                let _ = self.writer.send(WriterMsg::Bytes(out.replies));
+                self.queue(WriterMsg::Bytes(out.replies));
             }
             self.handle_events(out.events);
             if changed {
@@ -802,7 +819,7 @@ impl Session {
             at_ms: now_ms(),
         });
         drop(p);
-        self.meta.lock().expect("meta").program_status = raw;
+        self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).program_status = raw;
     }
 
     fn was_active(&self) -> bool {
@@ -859,7 +876,8 @@ impl Session {
                     continue;
                 }
                 TermEvent::Cwd(path) => {
-                    let mut meta = self.meta.lock().expect("meta");
+                    let mut meta =
+                        self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     if meta.reported_cwd.as_ref() == Some(&path) {
                         continue;
                     }
@@ -872,7 +890,7 @@ impl Session {
                     if self.psp.lock().expect("psp").seen {
                         continue;
                     }
-                    self.meta.lock().expect("meta").progress =
+                    self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).progress =
                         (state != 0).then_some(Progress { state, percent });
                     DomainEvent::SessionUpdated { info: self.info(String::new()) }
                 }
@@ -889,7 +907,8 @@ impl Session {
                             }
                         }
                         'C' if kind == SessionKind::Shell => {
-                            let mut m = self.meta.lock().expect("meta");
+                            let mut m =
+                                self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                             // An agent started by hand says what it's doing itself (UX1.4).
                             let inner = m.inner_agent.is_some();
                             m.command_since_ms = Some(now_ms());
@@ -905,7 +924,8 @@ impl Session {
                             }
                         }
                         'D' => {
-                            let mut m = self.meta.lock().expect("meta");
+                            let mut m =
+                                self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                             m.last_command_exit = exit;
                             if let Some(c) = m.command.as_mut().filter(|c| c.ended_ms.is_none()) {
                                 c.ended_ms = Some(now_ms());
@@ -929,7 +949,12 @@ impl Session {
                 }
                 TermEvent::Title(Some(t)) => {
                     // An agent started by hand in a shell: its title too, at low confidence.
-                    let inner = self.meta.lock().expect("meta").inner_agent.clone();
+                    let inner = self
+                        .meta
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .inner_agent
+                        .clone();
                     let (adapter, confidence) = match (self.adapter(), inner) {
                         (Some(a), _) => (Some(a), Confidence::Medium),
                         (None, Some(a)) => (Some(a), Confidence::Low),
@@ -975,7 +1000,7 @@ impl Session {
 
     pub(crate) fn finish(self: &Arc<Self>, state: ProcessState) {
         {
-            let mut meta = self.meta.lock().expect("meta");
+            let mut meta = self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             // Hibernated agents stay resumable (SPEC §7.4).
             meta.state = if self.hibernating.load(Ordering::Relaxed) && meta.conversation.is_some()
             {
@@ -989,7 +1014,8 @@ impl Session {
         self.psp.lock().expect("psp").drop_active();
         self.psp_raw();
         tracing::info!(session = %self.id, "exited");
-        let state = self.meta.lock().expect("meta").state.clone();
+        let state =
+            self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).state.clone();
         self.record_event("process", serde_json::to_value(&state).unwrap_or_default());
         self.save(None);
         // send_replace: `send` drops the value when nobody is waiting yet, and a later
@@ -1010,7 +1036,7 @@ impl Session {
             return;
         }
         let bytes = {
-            let term = self.term.lock().expect("term");
+            let term = self.term.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             ptyro_term::input::encode(event, &term.emu.modes())
         };
         self.write_input(bytes, is_ctrl_z(event));
@@ -1055,13 +1081,13 @@ impl Session {
         }
         let _typist = self.typing.lock().await;
         let bytes = if text.contains('\n') {
-            let term = self.term.lock().expect("term");
+            let term = self.term.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             ptyro_term::input::encode_paste(text, &term.emu.modes())
         } else {
             text.as_bytes().to_vec()
         };
         if !bytes.is_empty() {
-            let _ = self.writer.send(WriterMsg::Bytes(bytes));
+            self.queue(WriterMsg::Bytes(bytes));
         }
         if enter {
             // Enter as a real key press, after a pause: agents treat a burst ending in `\r` as
@@ -1080,7 +1106,7 @@ impl Session {
 
     pub async fn resize(&self, size: TermSize) {
         let changed = {
-            let mut term = self.term.lock().expect("term");
+            let mut term = self.term.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let term = &mut *term;
             if term.emu.size() == size {
                 return;
@@ -1091,18 +1117,22 @@ impl Session {
         if let Some(r) = self.recorder.lock().expect("recorder").as_mut() {
             let _ = r.resize(size);
         }
-        let _ = self.writer.send(WriterMsg::Resize(size));
+        self.queue(WriterMsg::Resize(size));
         if changed {
             self.bump();
         }
     }
 
     pub fn set_default_colors(&self, fg: Option<[u8; 3]>, bg: Option<[u8; 3]>) {
-        self.term.lock().expect("term").emu.set_default_colors(fg, bg);
+        self.term
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .emu
+            .set_default_colors(fg, bg);
     }
 
     pub fn read_screen(&self, format: ScreenFormat) -> String {
-        let mut term = self.term.lock().expect("term");
+        let mut term = self.term.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let term = &mut *term;
         let mut cache = ScreenCache::new(term.emu.size());
         let delta = term.tracker.build(&term.emu, None, &mut StyleTable::default());
@@ -1123,7 +1153,9 @@ impl Session {
                 })?;
                 ptyro_pty::signal_group(pid, sig)
             }
-            None if self.meta.lock().expect("meta").kind == SessionKind::Script => {
+            None if self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).kind
+                == SessionKind::Script =>
+            {
                 ptyro_pty::terminate_with(pid, self.wait_exit(), SCRIPT_STOP).await;
                 Ok(())
             }
@@ -1172,7 +1204,7 @@ impl Session {
     /// master is made inheritable, so it stays open across `execve`.
     pub fn image(&self) -> std::io::Result<SessionImage> {
         let emu = {
-            let mut term = self.term.lock().expect("term");
+            let mut term = self.term.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             // Compact MessagePack (cells as arrays, not maps), then zstd: screens are repetitive,
             // so a 10k-line history shrinks ~50×.
             let raw = rmp_serde::to_vec(&term.emu.image()).map_err(std::io::Error::other)?;
@@ -1194,7 +1226,7 @@ impl Session {
         };
         Ok(SessionImage {
             id: self.id.full(),
-            meta: self.meta.lock().expect("meta").clone(),
+            meta: self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone(),
             status,
             activity,
             emu,
@@ -1240,7 +1272,7 @@ impl Session {
         let piped =
             structured_img.as_ref().is_some_and(crate::structured::StructuredImage::has_pipes);
         let live = (img.master_fd.is_some() || piped) && meta.state.is_live() && meta.pid.is_some();
-        let (writer_tx, writer_rx) = mpsc::unbounded_channel();
+        let (writer_tx, writer_rx) = mpsc::channel(WRITER_QUEUE);
         let mut halves = None;
         // Always take an inherited master: one we don't use is closed, not left inheritable.
         let inherited = img.master_fd.map(ptyro_pty::handoff::adopt).transpose()?;
@@ -1321,7 +1353,7 @@ impl Session {
         let (child, resume) = crate::structured::spawn_child(&s, &st, start)?;
         let mut emu = AlacrittyEmulator::new(s.size, s.scrollback);
         let tracker = FrameTracker::new(&mut emu);
-        let (writer_tx, _) = mpsc::unbounded_channel();
+        let (writer_tx, _) = mpsc::channel(1);
         let recorder = open_recorder(s.record.as_ref(), s.size);
         let mut meta = new_meta(s.name, s.kind, s.argv, s.cwd, s.place);
         meta.state = ProcessState::Running;
@@ -1383,7 +1415,7 @@ impl Session {
             return;
         }
         let changed = {
-            let mut term = self.term.lock().expect("term");
+            let mut term = self.term.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let term = &mut *term;
             self.record(bytes, term);
             let mut out = FeedOutput::default();
@@ -1428,7 +1460,7 @@ async fn sleep_until(t: Option<std::time::Instant>) {
     }
 }
 
-async fn writer_task(mut w: ptyro_pty::OwnedWritePty, mut rx: mpsc::UnboundedReceiver<WriterMsg>) {
+async fn writer_task(mut w: ptyro_pty::OwnedWritePty, mut rx: mpsc::Receiver<WriterMsg>) {
     while let Some(msg) = rx.recv().await {
         let ok = match msg {
             WriterMsg::Bytes(b) => w.write_all(&b).await.is_ok(),

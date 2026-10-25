@@ -40,6 +40,10 @@ use ptyro_run::{Gate, Policy, RunEvent, RunKind, RunStatus, StepStatus};
 use serde_json::{Value, json};
 
 use crate::daemon::Daemon;
+
+/// How long `land_pr` waits for a PR's first check runs to appear before taking "none" to mean
+/// "this repository has no CI".
+const NO_CHECKS_GRACE_MS: u64 = 120_000;
 use crate::mail::Caller;
 use crate::session::Session;
 use crate::worktrees::blocking;
@@ -201,7 +205,7 @@ impl Daemon {
         if s.kind() != SessionKind::Agent {
             return (Role::Human, None);
         }
-        let name = s.meta.lock().expect("meta").name.clone();
+        let name = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name.clone();
         match self.set_of_session(&s.id.full()) {
             Some((r, role)) if run.is_none_or(|x| x == r) => (role, Some(s)),
             _ => (Role::Outsider(name), Some(s)),
@@ -355,6 +359,16 @@ impl Daemon {
             }
             CsOp::Contract { action, .. } => {
                 let run = run.unwrap_or_default();
+                // A person may compare the contract with a file of theirs; an agent would be
+                // asking the daemon to read any file it can, past its own permission prompts.
+                if matches!(action, ContractAction::Diff { file: Some(_), .. })
+                    && !matches!(role, Role::Human)
+                {
+                    return Err(Error::new(
+                        ErrorCode::PermissionDenied,
+                        "an agent can't diff the contract against a file; the user can",
+                    ));
+                }
                 let by = match &role {
                     Role::Lead => "lead".to_owned(),
                     Role::Member(m) => m.clone(),
@@ -851,7 +865,8 @@ impl Daemon {
         };
         let s = self.spawn(spec).await?;
         let sid = s.id.full();
-        s.meta.lock().expect("meta").run = Some((run.to_owned(), "lead".into()));
+        s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).run =
+            Some((run.to_owned(), "lead".into()));
         self.emit(
             run,
             vec![
@@ -903,7 +918,8 @@ impl Daemon {
         };
         let s = self.spawn(spec).await?;
         let sid = s.id.full();
-        s.meta.lock().expect("meta").run = Some((run.to_owned(), m.name.clone()));
+        s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).run =
+            Some((run.to_owned(), m.name.clone()));
         let n = self
             .run_info(run)
             .and_then(|i| i.state.steps.get(&m.name).map(|x| x.attempts.len() as u32))
@@ -998,8 +1014,13 @@ impl Daemon {
             .collect();
         let contract_gate = gates.iter().any(|g| g.step.starts_with("contract"));
         let report = set.report(&live, contract_gate);
-        let name_of =
-            |id: &str| self.resolve(id).map(|s| s.meta.lock().expect("meta").name.clone()).ok();
+        let name_of = |id: &str| {
+            self.resolve(id)
+                .map(|s| {
+                    s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name.clone()
+                })
+                .ok()
+        };
         Ok(ChangeSetInfo {
             run: run.to_owned(),
             status: info.state.status.label().to_owned(),
@@ -1119,6 +1140,28 @@ impl Daemon {
         } else {
             vec![self.cs_address(&set, run, to)?]
         };
+        // An agent writes to the set (its members and lead) or to the user: not to any session
+        // of yours it can name.
+        if !matches!(role, Role::Human) {
+            let own: Vec<String> = set
+                .members
+                .iter()
+                .filter_map(|m| m.session.clone())
+                .chain(self.run_info(run).and_then(|i| i.state.lead))
+                .collect();
+            for t in &targets {
+                let id = self.resolve(t).map_or_else(|_| t.clone(), |s| s.id.full());
+                if t != "@user" && !own.contains(&id) {
+                    return Err(Error::new(
+                        ErrorCode::PermissionDenied,
+                        format!(
+                            "{t} isn't in {}: members write to the set, its lead or the user",
+                            set.name
+                        ),
+                    ));
+                }
+            }
+        }
         if targets.is_empty() {
             return Err(Error::missing(
                 "recipient",
@@ -1555,9 +1598,12 @@ impl Daemon {
 
     /// Wait for a gate's answer (`None`: the run ended).
     async fn wait_gate(self: &Arc<Self>, run: &str, step: &str) -> Option<String> {
+        // A gate nobody answers must not hold the set's one job slot (and with it `cs push`,
+        // `cs land` and `cs rm`) for ever: a day, then it is as if the run had ended.
+        let give_up = now_ms().saturating_add(24 * 60 * 60 * 1000);
         loop {
             let info = self.run_info(run)?;
-            if info.state.status.is_over() {
+            if info.state.status.is_over() || now_ms() > give_up {
                 return None;
             }
             if let Some(c) = info
@@ -1632,8 +1678,9 @@ impl Daemon {
                 let changed = set.contract_head().is_none_or(|h| h.sha != sha_of(&text));
                 let skeleton = text == cs::contract_skeleton(&set) || text.trim().is_empty();
                 // r1 waits for the lead's first turn to end (or an explicit submit).
-                let lead_spoke =
-                    lead.as_ref().is_none_or(|s| s.meta.lock().expect("meta").turns > 0);
+                let lead_spoke = lead.as_ref().is_none_or(|s| {
+                    s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).turns > 0
+                });
                 let gate_open =
                     info.state.open_gates().iter().any(|(s, _)| s.starts_with("contract"));
                 if changed && !skeleton && lead_spoke && !gate_open {
@@ -1759,7 +1806,7 @@ impl Daemon {
                         .unwrap_or_else(|| "its agent errored".into()),
                 )
             } else if !live {
-                match &s.meta.lock().expect("meta").state {
+                match &s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).state {
                     ProcessState::Exited { code: Some(c), .. } if *c != 0 => {
                         Some(format!("its agent exited with {c}"))
                     }
@@ -1825,7 +1872,7 @@ impl Daemon {
                 continue;
             }
             let clean = matches!(
-                s.meta.lock().expect("meta").state,
+                s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).state,
                 ProcessState::Exited { code: Some(0) | None, .. }
             );
             let recent = self
@@ -2028,7 +2075,7 @@ impl Daemon {
         }
         let (run, role) = self.set_of_session(&s.id.full())?;
         let set = self.set_state(&run).ok()?;
-        let cwd = s.meta.lock().expect("meta").cwd.clone();
+        let cwd = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).cwd.clone();
         let root = real_path(Path::new(&set.root));
         let tmp = real_path(&std::env::temp_dir());
         let homes: Vec<(String, PathBuf)> =
@@ -2131,36 +2178,25 @@ impl Daemon {
     ) -> CheckResult {
         let started = now_ms();
         let mut c = tokio::process::Command::new("sh");
-        c.arg("-c")
-            .arg(cmd)
-            .current_dir(dir)
-            .env_clear()
-            .envs(env)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .process_group(0)
-            .kill_on_drop(true);
-        let out = match c.spawn() {
-            Ok(child) => {
-                // The whole group goes on a timeout, not just `sh`.
-                let _group = crate::verify::GroupGuard(child.id());
-                tokio::time::timeout(Duration::from_secs(30 * 60), child.wait_with_output()).await
-            }
-            Err(e) => Ok(Err(e)),
-        };
-        let (ok, code, text) = match out {
-            Ok(Ok(o)) => (
-                o.status.success(),
-                o.status.code(),
-                format!(
-                    "{}{}",
-                    String::from_utf8_lossy(&o.stdout),
-                    String::from_utf8_lossy(&o.stderr)
-                ),
-            ),
-            Ok(Err(e)) => (false, None, e.to_string()),
-            Err(_) => (false, None, "timed out after 30 minutes".into()),
+        c.arg("-c").arg(cmd).current_dir(dir).env_clear().envs(env);
+        // Its output goes to a file as it is written (never held in memory), and the group is
+        // stopped on a timeout or when it writes too much.
+        let log =
+            self.paths.state.join(format!("cs-check-{}.log", ptyro_agents::adapter::random_hex()));
+        let ran = crate::verify::run_to_log(
+            c,
+            &log,
+            Duration::from_secs(30 * 60),
+            crate::verify::CHECK_LOG_CAP,
+        )
+        .await;
+        let _ = std::fs::remove_file(&log);
+        let (ok, code, text) = match ran {
+            Ok(r) => match r.stopped {
+                Some(why) => (false, None, format!("{why}\n{}", r.text)),
+                None => (r.success, r.code, r.text),
+            },
+            Err(e) => (false, None, e.to_string()),
         };
         CheckResult {
             command: cmd.to_owned(),
@@ -2896,7 +2932,8 @@ impl Daemon {
 
     /// Wait for a PR's checks, then merge it.
     async fn land_pr(self: &Arc<Self>, wt: &WorktreeInfo, n: u32) -> Result<String, String> {
-        let deadline = now_ms() + 60 * 60 * 1000;
+        let started = now_ms();
+        let deadline = started + 60 * 60 * 1000;
         loop {
             let pr = self.refresh_pr(wt).await.map_err(|e| e.message)?.ok_or("its PR is gone")?;
             if pr.state == "MERGED" {
@@ -2914,7 +2951,13 @@ impl Daemon {
             if !fail.is_empty() {
                 return Err(format!("CI failed on PR #{n}: {}", fail.join(", ")));
             }
-            if !pr.checks.iter().any(|c| c.bucket == "pending") {
+            // A PR pushed a moment ago has no check runs yet, and `gh` answers with none when it
+            // can't ask either: that is "not known yet", not "green". Repositories with no CI
+            // at all get a couple of minutes' grace and are then merged on the rest of their
+            // state.
+            let unknown =
+                pr.checks.is_empty() && now_ms().saturating_sub(started) < NO_CHECKS_GRACE_MS;
+            if !unknown && !pr.checks.iter().any(|c| c.bucket == "pending") {
                 break;
             }
             if now_ms() > deadline {
@@ -2923,9 +2966,16 @@ impl Daemon {
             tokio::time::sleep(Duration::from_secs(15)).await;
         }
         let method = format!("--{}", self.config().github.merge_method);
-        self.gh(wt, vec!["pr".into(), "merge".into(), n.to_string(), method])
-            .await
-            .map_err(|e| e.message)?;
+        let mut args = vec!["pr".into(), "merge".into(), n.to_string(), method];
+        // Merge the commit whose checks were looked at: a push since then is merged unseen
+        // otherwise.
+        if let Ok(v) =
+            self.gh_json(wt, &["pr", "view", &n.to_string(), "--json", "headRefOid"]).await
+            && let Some(sha) = v["headRefOid"].as_str().filter(|s| !s.is_empty())
+        {
+            args.extend(["--match-head-commit".into(), sha.to_owned()]);
+        }
+        self.gh(wt, args).await.map_err(|e| e.message)?;
         Ok(format!("PR #{n} merged"))
     }
 
@@ -3517,6 +3567,19 @@ fn overlay_files(
                     let link = mp.join("node_modules").join(dep);
                     if let Some(parent) = link.parent() {
                         std::fs::create_dir_all(parent).map_err(cs_err)?;
+                        // `node_modules` (or a scope folder) that is a link out of the member
+                        // would have the swap below happen somewhere else.
+                        let inside = std::fs::canonicalize(parent)
+                            .ok()
+                            .zip(std::fs::canonicalize(&mp).ok())
+                            .is_some_and(|(p, root)| p.starts_with(root));
+                        if !inside {
+                            notes.push(format!(
+                                "{}: node_modules leads out of the member; skipped",
+                                m.name
+                            ));
+                            continue;
+                        }
                     }
                     if std::fs::symlink_metadata(&link).is_ok() {
                         let aside = link.with_file_name(format!(
@@ -3687,7 +3750,7 @@ mod tests {
         assert!(
             std::fs::read_to_string(root.join("web/compose.override.yml"))
                 .unwrap()
-                .contains("context: ../api")
+                .contains("context: \"../api\"")
         );
     }
 }

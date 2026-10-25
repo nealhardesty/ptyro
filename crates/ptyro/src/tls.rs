@@ -46,7 +46,9 @@ pub struct Tls {
     pub ca_pem: String,
     /// SHA-256 of the CA certificate (`AB:CD:…`), for checking it on a phone.
     pub ca_fingerprint: String,
-    /// What it holds, for messages.
+    /// What it holds (every name it was ever made for; what the server answers to now comes from
+    /// its configuration, not from here).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub names: Vec<String>,
 }
 
@@ -212,16 +214,8 @@ fn fingerprint(der: &[u8]) -> String {
 }
 
 fn write_private(path: &Path, text: &str) -> Result<(), Error> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)
-        .map_err(|e| Error::internal(format!("{}: {e}", path.display())))?;
-    f.write_all(text.as_bytes()).map_err(|e| Error::internal(format!("{}: {e}", path.display())))
+    // Keys: 0600 from the first byte, replaced whole, never left half-written.
+    crate::config::write_atomic(path, text, 0o600)
 }
 
 /// This machine's name (`uname -n`), without a domain.
@@ -273,6 +267,11 @@ pub fn names_for(extra: &[String]) -> Vec<String> {
 
 /// Whether a peer may connect under `--local`: this machine, a private network (RFC 1918,
 /// IPv6 unique local), link-local, or a tailnet (100.64.0.0/10).
+///
+/// 100.64.0.0/10 is the carrier-grade NAT range, which Tailscale uses for tailnets; on a mobile
+/// carrier or a provider that NATs it is shared with other customers, not private to you. Under
+/// `--local` on such a network, the tailnet's own ACLs are not what keeps strangers out: the
+/// device token is (and the lockout).
 pub fn local_peer(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v) => {

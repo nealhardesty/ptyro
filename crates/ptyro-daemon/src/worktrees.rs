@@ -135,6 +135,22 @@ fn bring_files(git: &Git, root: &Path, dst: &Path, cfg: &ProjectConfig) -> Vec<S
         if !from.exists() || to.exists() || rel.contains("..") || rel.starts_with('/') {
             continue;
         }
+        // Never through a link in the new worktree either: a tracked `a -> ~/.ssh` with
+        // `share = ["a/x"]` would put the link or the copy inside its target.
+        let rel_path = Path::new(rel);
+        let linked = rel_path.components().any(|c| !matches!(c, std::path::Component::Normal(_)))
+            || rel_path.ancestors().any(|a| {
+                !a.as_os_str().is_empty()
+                    && std::fs::symlink_metadata(dst.join(a))
+                        .is_ok_and(|m| m.file_type().is_symlink())
+            });
+        if linked {
+            notes.push(format!("{rel}: not shared, a link in the worktree leads out of it"));
+            continue;
+        }
+        if let Some(parent) = to.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         let symlink = || std::os::unix::fs::symlink(&from, &to);
         let how = match cfg.worktree.share_mode {
             ShareMode::Symlink => symlink().map(|()| "linked"),
@@ -321,6 +337,15 @@ impl Daemon {
         {
             *base = head;
         }
+        // A branch that came from elsewhere (a PR from a fork, a branch someone else made)
+        // carries its own `.ptyro.toml`. What may be copied out of your checkout, and what may be
+        // shared, is your checkout's say, not that file's: its scripts are trust-gated, this isn't.
+        let foreign = matches!(source, Source::PullRequest { .. } | Source::Existing { .. });
+        let own_files = (
+            root_cfg.worktree.copy.clone(),
+            root_cfg.worktree.share.clone(),
+            root_cfg.worktree.share_mode,
+        );
         let base = match &source {
             Source::NewBranch { base, .. } => Some(base.clone()),
             _ => root_wt.base.clone(),
@@ -411,13 +436,28 @@ impl Daemon {
         }
         if let Some(t) = taken {
             // A copy first; the main checkout gives its changes up only once they're here.
-            let (root, path, commit, refname) =
-                (p.root.clone(), path.clone(), t.commit, format!("refs/ptyro/taken/{name}"));
+            let (root, path, commit, tree, refname) = (
+                p.root.clone(),
+                path.clone(),
+                t.commit,
+                t.tree,
+                format!("refs/ptyro/taken/{name}"),
+            );
             let shown = refname.clone();
             let moved = blocking(move || -> Result<(), ptyro_git::GitError> {
                 let git = Git::new();
                 git.update_ref(&root, &refname, &commit)?;
                 git.restore(&path, &commit)?;
+                // Fetching and checking out took a while: whatever was written in the main
+                // checkout since the snapshot isn't in the worktree, so don't wipe it.
+                let now = git.checkpoint(&root, "ptyro: re-checking before taking changes")?;
+                if now.tree != tree {
+                    return Err(ptyro_git::GitError::Failed {
+                        args: "take changes".into(),
+                        message: "the main checkout changed while the worktree was being made"
+                            .into(),
+                    });
+                }
                 git.run(&root, &["reset", "-q", "--hard"])?;
                 git.run(&root, &["clean", "-q", "-fd"])?;
                 Ok(())
@@ -430,23 +470,32 @@ impl Daemon {
                 ),
             });
         }
-        let cfg = ProjectConfig::load(&p.root, &path).unwrap_or(root_cfg);
+        let mut cfg = ProjectConfig::load(&p.root, &path).unwrap_or(root_cfg);
+        if foreign {
+            (cfg.worktree.copy, cfg.worktree.share, cfg.worktree.share_mode) = own_files;
+        }
         progress("copying files git doesn't carry");
         let file_notes = {
             let (root, path, cfg) = (p.root.clone(), path.clone(), cfg.clone());
             blocking(move || bring_files(&Git::new(), &root, &path, &cfg)).await?
         };
         notes.extend(file_notes);
-        wt.ports = self.allocate_ports();
-        match wt.ports {
-            Some(b) => notes.push(format!("ports {}-{}", b.base, b.base + b.count - 1)),
-            None => notes.push("no free port block (see [ports] in config)".into()),
-        }
         wt.state = WorktreeState::Ready;
         if let Ok(s) = Git::new().status(&path, base.as_deref()) {
             wt.status = Some(s);
         }
-        self.put_worktree(wt.clone());
+        {
+            // Two worktrees made at once must not be given the same block: choosing one and
+            // recording it are one step.
+            static PORTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let _one = PORTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            wt.ports = self.allocate_ports();
+            match wt.ports {
+                Some(b) => notes.push(format!("ports {}-{}", b.base, b.base + b.count - 1)),
+                None => notes.push("no free port block (see [ports] in config)".into()),
+            }
+            self.put_worktree(wt.clone());
+        }
         self.watch_worktree_bg(&wt);
         // Setup: only trusted scripts run (SPEC §10.5).
         let scripts = self.scripts_info(&p, &wt)?;
@@ -568,7 +617,7 @@ impl Daemon {
                 (role, cmd)
             }
         };
-        let fp = cfg.scripts.fingerprint();
+        let fp = cfg.trust_fingerprint();
         if !self.is_trusted(&p.id, &fp) {
             return Err(Error::new(
                 ErrorCode::UntrustedProject,
@@ -583,7 +632,7 @@ impl Daemon {
                 .sessions()
                 .into_iter()
                 .filter(|s| {
-                    let m = s.meta.lock().expect("meta");
+                    let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     m.state.is_live()
                         && m.place.project.as_deref() == Some(p.id.as_str())
                         && m.place.worktree.as_deref() != Some(wt.id.as_str())
@@ -645,8 +694,12 @@ impl Daemon {
         // A quick terminal at its prompt goes with its worktree (UX1.25).
         let busy: Vec<&&Arc<Session>> = live.iter().filter(|s| s.busy()).collect();
         if !busy.is_empty() && !opts.stop_sessions {
-            let names: Vec<String> =
-                busy.iter().map(|s| s.meta.lock().expect("meta").name.clone()).collect();
+            let names: Vec<String> = busy
+                .iter()
+                .map(|s| {
+                    s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name.clone()
+                })
+                .collect();
             return Err(Error::conflict(format!(
                 "refusing to remove {}: {} session(s) running in it ({}); stop them or use --stop-sessions",
                 wt.qualified(),
@@ -675,6 +728,10 @@ impl Daemon {
             if !safety.is_clean() {
                 notes.push(format!("discarded: {}", safety.report().replace("\n  ", "; ")));
             }
+            // Not a reason to refuse (every build leaves some), but the person should hear it.
+            if let Some(n) = safety.ignored_note() {
+                notes.push(n);
+            }
         }
         futures::future::join_all(live.iter().map(|s| s.kill(None))).await;
         let _ = self.events.send(DomainEvent::WorktreeProgress {
@@ -683,7 +740,7 @@ impl Daemon {
         });
         if exists {
             let cfg = ProjectConfig::load(&p.root, &wt.path).unwrap_or_default();
-            if cfg.scripts.archive.is_some() && self.is_trusted(&p.id, &cfg.scripts.fingerprint()) {
+            if cfg.scripts.archive.is_some() && self.is_trusted(&p.id, &cfg.trust_fingerprint()) {
                 match self.run_script(&wt, Some("archive"), None, BTreeMap::new()).await {
                     Ok(s) => {
                         if tokio::time::timeout(ARCHIVE_TIMEOUT, s.wait_exit()).await.is_err() {
@@ -692,7 +749,11 @@ impl Daemon {
                         } else {
                             notes.push(format!(
                                 "archive script {}",
-                                s.meta.lock().expect("meta").state.label()
+                                s.meta
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                    .state
+                                    .label()
                             ));
                         }
                         self.forget_session(s.id);
@@ -712,7 +773,9 @@ impl Daemon {
         let git_notes = blocking(move || -> Result<Vec<String>, Error> {
             let git = Git::new();
             let mut notes = Vec::new();
-            let _ = git.unlock(&root, &path);
+            // Ptyro's own lock goes; a lock the user set (`git worktree lock`) stays, and with
+            // it a refusal to remove unless they forced it.
+            let _ = git.unlock_ours(&root, &path);
             if path.exists() {
                 git.worktree_remove(&root, &path, force).map_err(git_err)?;
             } else {
@@ -993,10 +1056,9 @@ impl Daemon {
             .ok_or_else(|| Error::invalid("the worktree has no branch (detached)"))?;
         let cfg = ProjectConfig::load(&p.root, &wt.path).unwrap_or_default();
         // The first prompt someone gave an agent here names the work best (M3.16).
-        let prompt = self
-            .sessions_in(&wt.id)
-            .iter()
-            .find_map(|s| s.meta.lock().expect("meta").first_prompt.clone());
+        let prompt = self.sessions_in(&wt.id).iter().find_map(|s| {
+            s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).first_prompt.clone()
+        });
         let new = match new {
             Some(n) => n,
             None if prompt.is_some() => {
@@ -1215,5 +1277,48 @@ mod tests {
             worktree_path(WorktreeLocation::InRepo, data, &p, "n").0,
             PathBuf::from("/src/app/.ptyro/worktrees/n")
         );
+    }
+
+    fn repo(dir: &Path) -> Git {
+        let g = Git::new();
+        for args in [
+            vec!["init", "-q", "-b", "main"],
+            vec!["config", "user.email", "t@e"],
+            vec!["config", "user.name", "t"],
+        ] {
+            g.run(dir, &args).unwrap();
+        }
+        g
+    }
+
+    /// A pull request's own checkout can hold a tracked link `a -> ~/.ssh`; with `share =
+    /// ["a/x"]` the share (a link, or a copy of the main checkout's `a/x`) must not land in it.
+    #[test]
+    fn sharing_never_writes_through_a_link_in_the_new_worktree() {
+        let d = tempfile::tempdir().unwrap();
+        let (root, dst, outside) =
+            (d.path().join("root"), d.path().join("wt"), d.path().join("outside"));
+        for p in [&root, &dst, &outside] {
+            std::fs::create_dir_all(p).unwrap();
+        }
+        let git = repo(&root);
+        std::fs::create_dir_all(root.join("a/x")).unwrap();
+        std::fs::write(root.join("a/x/big"), "heavy").unwrap();
+        std::os::unix::fs::symlink(&outside, dst.join("a")).unwrap();
+        let mut cfg = ProjectConfig::default();
+        cfg.worktree.share = vec!["a/x".into()];
+        cfg.worktree.share_mode = ShareMode::Copy;
+        let notes = bring_files(&git, &root, &dst, &cfg);
+        assert!(
+            std::fs::read_dir(&outside).unwrap().next().is_none(),
+            "nothing in the link's target"
+        );
+        assert!(notes.iter().any(|n| n.contains("leads out of it")), "{notes:?}");
+        // The same share into a plain worktree works.
+        let plain = d.path().join("plain");
+        std::fs::create_dir_all(&plain).unwrap();
+        cfg.worktree.share_mode = ShareMode::Symlink;
+        bring_files(&git, &root, &plain, &cfg);
+        assert!(plain.join("a/x").exists());
     }
 }

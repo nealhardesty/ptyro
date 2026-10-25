@@ -70,8 +70,22 @@ fn hash(token: &str) -> String {
     Sha256::digest(token.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Push subscriptions kept for one device.
+const MAX_PUSH_PER_DEVICE: usize = 10;
+
 fn id_num(id: &str) -> u64 {
     u64::from_str_radix(id, 16).unwrap_or(0)
+}
+
+/// "Always allow": a standing permission, not an answer to one prompt.
+fn is_always(decision: &str) -> bool {
+    ptyro_agents::Decision::parse(decision) == Some(ptyro_agents::Decision::Always)
+}
+
+/// A gate that lets code ship (a change set's push or its merge train) is answered with control
+/// or better; the other gates are approve's.
+fn ships_code(step: &str) -> bool {
+    step.starts_with("push-") || step.starts_with("land-")
 }
 
 /// The scope a request needs from a device. Anything not listed needs `full`, so a new request
@@ -101,7 +115,6 @@ pub fn needed(req: &Request) -> Scope {
         | RunGet { .. }
         | RunEvents { .. }
         | GateList { .. }
-        | Compare { .. }
         | MsgList { .. }
         | LeaseList
         | Radar { .. }
@@ -131,6 +144,7 @@ pub fn needed(req: &Request) -> Scope {
         | ScratchTodo { .. }
         | ScratchHistory
         | ScratchPane { create: false, .. } => Scope::Read,
+        Answer { decision, .. } if is_always(decision) => Scope::Control,
         Answer { .. }
         | GateResolve { .. }
         | ClearAttention { .. }
@@ -150,6 +164,9 @@ pub fn needed(req: &Request) -> Scope {
         | Iterate { .. }
         | RunCancel { .. }
         | RunRetry { .. }
+        // Gathering the evidence runs the recipe's checks in the candidates' worktrees and may
+        // start a judge agent: not a read.
+        | Compare { .. }
         | Convert { .. }
         | Retitle { .. }
         | Summarize { .. }
@@ -283,6 +300,15 @@ impl Daemon {
                 ),
             ));
         }
+        if let Request::GateResolve { id, .. } = req
+            && g.scope < Scope::Control
+            && self.find_gate(id.trim()).is_some_and(|(_, step, _)| ships_code(&step))
+        {
+            return Err(Error::new(
+                ErrorCode::PermissionDenied,
+                "this gate lets code ship: answering it needs control (`ptyro pair --scope control`)",
+            ));
+        }
         if need >= Scope::Approve
             && let Some(s) = target(req).and_then(|a| self.resolve(a).ok())
         {
@@ -414,6 +440,17 @@ impl Daemon {
                     Error::invalid("push subscriptions belong to a paired device")
                 })?;
                 url_ok(&sub.endpoint, &self.config().remote.push_hosts)?;
+                // base64url keys of the sizes browsers make (P-256 point 87 chars, auth 22).
+                let b64 = |s: &str, max: usize| {
+                    !s.is_empty()
+                        && s.len() <= max
+                        && s.bytes().all(|b| {
+                            b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'='
+                        })
+                };
+                if sub.endpoint.len() > 1024 || !b64(&sub.p256dh, 128) || !b64(&sub.auth, 64) {
+                    return Err(Error::invalid("that isn't a push subscription a browser makes"));
+                }
                 {
                     let mut devices = self.devices.lock().expect("devices");
                     // One endpoint belongs to one device.
@@ -422,6 +459,10 @@ impl Daemon {
                     }
                     if let Some(d) = devices.iter_mut().find(|d| id_num(&d.id) == g.device) {
                         d.push.push(sub);
+                        // A browser has a handful; the oldest go first, so a device can't make
+                        // every notification a thousand requests.
+                        let extra = d.push.len().saturating_sub(MAX_PUSH_PER_DEVICE);
+                        d.push.drain(..extra);
                     }
                 }
                 self.save_devices();
@@ -588,6 +629,16 @@ mod tests {
         ] {
             assert!(url_ok(bad, &[]).is_err(), "{bad}");
         }
+        // Gathering a compare's evidence runs the project's checks: control's, not a read.
+        assert_eq!(needed(&Request::Compare { run: "r".into(), refresh: false }), Scope::Control);
+        // "Always" is a standing permission; one allow or deny is approve's.
+        let ans = |d: &str| Request::Answer { addr: "a".into(), decision: d.into(), expect: None };
+        assert_eq!(needed(&ans("allow")), Scope::Approve);
+        assert_eq!(needed(&ans("always")), Scope::Control);
+        assert_eq!(needed(&ans("a")), Scope::Control);
+        assert!(
+            ships_code("push-1700000000000") && ships_code("land-api") && !ships_code("review")
+        );
         assert_eq!(needed(&Request::Upgrade { binary: None }), Scope::Full);
         assert_eq!(needed(&Request::DeviceList), Scope::Full);
         // Stopping what you started is control's, as the scope's description says; starting any

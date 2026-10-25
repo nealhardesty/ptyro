@@ -21,6 +21,9 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::daemon::Daemon;
+
+/// The kv key of the approve/deny links already used.
+const USED_LINKS: &str = "notify:used-links";
 use crate::session::Session;
 
 /// One notification, as channels see it.
@@ -387,7 +390,7 @@ impl Daemon {
 
     fn muted(&self, s: &Session) -> bool {
         let (project, workspace) = {
-            let m = s.meta.lock().expect("meta");
+            let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             (m.place.project.clone(), m.place.workspace.clone())
         };
         let now = now_ms();
@@ -471,6 +474,20 @@ impl Daemon {
         (Some(mk("allow")), Some(mk("deny")))
     }
 
+    /// The links used before the last restart (so they can't be used again).
+    pub(crate) async fn load_used_links(&self) {
+        let Some(store) = &self.store else { return };
+        if let Ok(Some(v)) = store.kv_get(USED_LINKS.into()).await
+            && let Ok(m) = serde_json::from_value::<std::collections::HashMap<String, u64>>(v)
+        {
+            let now = now_ms();
+            self.used_links
+                .lock()
+                .expect("used_links")
+                .extend(m.into_iter().filter(|(_, e)| *e > now));
+        }
+    }
+
     /// Check a token: signature, expiry, single use. Returns (session, decision, the prompt).
     fn redeem(
         &self,
@@ -491,6 +508,13 @@ impl Daemon {
         if consume {
             used.retain(|_, exp| *exp > now_ms());
             used.insert(nonce, v["e"].as_u64().unwrap_or(0));
+            // Single use survives a restart or an upgrade: the nonces are kept until they expire.
+            if let Some(store) = self.store.clone() {
+                let snapshot = serde_json::to_value(&*used).unwrap_or_default();
+                tokio::spawn(async move {
+                    let _ = store.kv_set(USED_LINKS.into(), snapshot).await;
+                });
+            }
         }
         let d = v["d"].as_str().and_then(Decision::parse).ok_or("this link is not valid")?;
         Ok((v["s"].as_str().unwrap_or_default().to_owned(), d, v["p"].as_u64()))

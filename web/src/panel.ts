@@ -14,7 +14,7 @@ import type { Collection, Entry, Schema, Section, Setting, View } from "./cfgkit
 import { data } from "./data.js";
 import { actions, badge, bar, confirm, enc, errText, form, go, h, row, sheet, ui, views } from "./kit.js";
 import type { Child } from "./kit.js";
-import { editConfigAt } from "./settings.js";
+import { cfgChanged, editConfigAt } from "./settings.js";
 
 const ACTIONS = {
   "settings": "Settings: every option in sections, with what it does, its default and where its value comes from",
@@ -34,7 +34,7 @@ const ACTIONS = {
 const tip = actions(ACTIONS);
 
 type Scope = "user" | "project";
-interface Undo { scope: Scope; shared: boolean; text: string; label: string }
+interface Undo { scope: Scope; shared: boolean; project: string; text: string; after: string; label: string }
 interface Schemas { user: Schema; project: Schema }
 
 const st = {
@@ -52,6 +52,9 @@ const st = {
   error: "",
   loading: false,
   focusKey: "",
+  /// Answers older than the newest request for the same file are not shown.
+  gen: { user: 0, project: 0 } as Record<Scope, number>,
+  undoing: false,
 };
 
 const remember = (k: string, v: string): void => { try { localStorage.setItem(k, v); } catch { /* private window */ } };
@@ -68,15 +71,25 @@ const projectName = (): string => data.projects.get(st.projectId)?.slug ?? "";
 
 // ── loading and changing ────────────────────────────────────────────────────────────────────
 
-const projectArgs = (scope: Scope, shared = st.shared): Record<string, unknown> => (scope === "project" ? { scope, project: st.projectId, shared } : { scope });
+const projectArgs = (scope: Scope, shared = st.shared, project = st.projectId): Record<string, unknown> => (scope === "project" ? { scope, project, shared } : { scope });
 
 async function load(): Promise<void> {
   if (conn.scope !== "full") return;
   st.loading = true;
+  const project = st.projectId;
+  const gu = ++st.gen.user, gp = ++st.gen.project;
   try {
     if (!st.schema) st.schema = await host("settings.schema");
-    st.user = await host("settings.view", projectArgs("user"));
-    st.project = st.projectId ? await host("settings.view", projectArgs("project")).catch((e) => { st.error = errText(e); return null; }) : null;
+    const user = await host("settings.view", projectArgs("user"));
+    if (gu === st.gen.user) st.user = user;
+    if (project) {
+      const view = await host("settings.view", projectArgs("project", st.shared, project)).catch((e) => {
+        // A repository that is gone: forget it instead of failing for ever.
+        if (/no such|not found|isn't registered/i.test(errText(e))) { st.projectId = ""; remember("ptyro.cfg.project", ""); } else st.error = errText(e);
+        return null;
+      });
+      if (gp === st.gen.project && project === st.projectId) st.project = view;
+    } else st.project = null;
     st.error = st.error && st.project ? "" : st.error;
   } catch (e) {
     st.error = errText(e);
@@ -88,13 +101,20 @@ async function load(): Promise<void> {
 /// Apply one change. Resolves whether it was accepted; a refusal shows under `at`.
 async function change(scope: Scope, op: Record<string, unknown>, label: string, opts: { shared?: boolean; at?: (msg: string) => void; quiet?: boolean } = {}): Promise<boolean> {
   const shared = opts.shared ?? st.shared;
+  const project = st.projectId;
+  const gen = ++st.gen[scope];
   try {
-    const r = await host("settings.apply", { ...projectArgs(scope, shared), change: op });
-    if (scope === "user") st.user = r.view; else st.project = r.view;
+    const r = await host("settings.apply", { ...projectArgs(scope, shared, project), change: op });
+    // The newest answer for a file wins; a repository switched away from meanwhile isn't shown.
+    if (gen === st.gen[scope] && (scope === "user" || project === st.projectId)) {
+      if (scope === "user") st.user = r.view; else st.project = r.view;
+    }
     opts.at?.("");
     if (r.changed) {
-      st.undo.push({ scope, shared, text: r.before, label });
+      st.undo.push({ scope, shared, project, text: r.before, after: r.after ?? "", label });
       if (st.undo.length > 40) st.undo.shift();
+      // The raw file editor reads the file again next time.
+      cfgChanged();
       const key = String(op.key ?? op.path ?? "");
       if (r.apply === "restart") st.restart.add(key);
     }
@@ -107,20 +127,37 @@ async function change(scope: Scope, op: Record<string, unknown>, label: string, 
   }
 }
 
+/// A change to something a repository's two files could hold (a prompt, a run script): in the
+/// file being saved to, and when that doesn't have it, in the other one.
+async function changeHeld(scope: Scope, op: Record<string, unknown>, label: string, opts: { at?: (msg: string) => void } = {}): Promise<boolean> {
+  if (scope === "user") return change(scope, op, label, opts);
+  let first = "";
+  if (await change(scope, op, label, { at: (m) => { first = m; } })) { opts.at?.(""); return true; }
+  if (/isn't set|no .* called|there is no/i.test(first) && await change(scope, op, label, { shared: !st.shared, at: () => {} })) { opts.at?.(""); return true; }
+  opts.at?.(first);
+  return false;
+}
+
 /// Whether a value would be accepted, without writing it (typing in a box shows the reason).
 async function would(scope: Scope, op: Record<string, unknown>): Promise<string> {
   try { await host("settings.apply", { ...projectArgs(scope), change: op, dry: true }); return ""; } catch (e) { return errText(e); }
 }
 
 async function undo(): Promise<void> {
-  const u = st.undo.pop();
+  if (st.undoing) return;
+  const u = st.undo[st.undo.length - 1];
   if (!u) { page?.snack("Nothing to undo", false); return; }
+  st.undoing = true;
   try {
-    const r = await host("settings.restore", { ...projectArgs(u.scope, u.shared), text: u.text });
-    if (u.scope === "user") st.user = r.view; else st.project = r.view;
+    // Only over the file as that change left it: anything done since is not lost.
+    const r = await host("settings.restore", { ...projectArgs(u.scope, u.shared, u.project), text: u.text, expect: u.after || undefined });
+    st.undo.pop();
+    st.gen[u.scope]++;
+    if (u.scope === "user") st.user = r.view; else if (u.project === st.projectId) st.project = r.view;
+    cfgChanged();
     page?.snack(`Undone: ${u.label}`, false);
     page?.paintBody();
-  } catch (e) { page?.snack(`Can't undo: ${errText(e)}`, false, true); }
+  } catch (e) { page?.snack(`Can't undo: ${errText(e)}`, false, true); } finally { st.undoing = false; }
 }
 
 // ── one setting ─────────────────────────────────────────────────────────────────────────────
@@ -130,11 +167,16 @@ interface Ctl { el: HTMLElement; focus?: HTMLElement }
 /// The layer a value is reset in: the file that has it.
 const resetShared = (e: Entry): boolean => e.origin === "project";
 
+/// A route part, decoded; a malformed one stays as it is instead of throwing in render.
+const safeDecode = (s: string): string => { try { return decodeURIComponent(s); } catch { return s; } };
+
+let cardIds = 0;
 function card(e: Entry, s: Setting, scope: Scope, view: View): HTMLElement {
-  const id = `cfg-${e.key.replace(/[^a-z0-9]/gi, "-")}`;
+  const id = `cfg-${++cardIds}`;
   const err = h("p", { class: "form-err", role: "alert" });
   const showErr = (m: string): void => { err.textContent = m; };
-  const set = (text: string): Promise<boolean> => change(scope, { t: "set", key: e.key, value: text }, `${e.key} = ${text.length > 40 ? `${text.slice(0, 40)}…` : text}`, { at: showErr });
+  const shownText = (text: string): string => (s.kind.t === "secret" ? "••••" : text.length > 40 ? `${text.slice(0, 40)}…` : text);
+  const set = (text: string): Promise<boolean> => change(scope, { t: "set", key: e.key, value: text }, `${e.key} = ${shownText(text)}`, { at: showErr });
   const reset = (): Promise<boolean> => change(scope, { t: "unset", key: e.key }, `${e.key} reset`, { shared: resetShared(e), at: showErr });
   const refresh = (): void => page?.repaint(e.key);
   const ctl = control(e, s, scope, view, id, async (text) => { if (await set(text)) refresh(); }, async () => { if (await reset()) refresh(); }, showErr);
@@ -166,6 +208,8 @@ function control(e: Entry, s: Setting, scope: Scope, view: View, id: string, com
     let timer = 0;
     el.addEventListener("input", () => {
       clearTimeout(timer);
+      // (A token isn't sent on every pause: it is checked when it is saved.)
+      if (s.kind.t === "secret") return;
       timer = window.setTimeout(async () => showErr(await would(scope, { t: "set", key: e.key, value: toText(el.value) })), 250);
     });
     el.addEventListener("change", () => { if (el.value.trim() === "" && !(el instanceof HTMLTextAreaElement)) { if (e.origin !== "default") void reset(); return; } void commit(toText(el.value)); });
@@ -268,7 +312,8 @@ function captureKeys(done: (labels: string[]) => void): void {
     h("button", { class: "primary", onclick: () => { s.close(); if (labels.length) done(labels); } }, "Done"),
   ]);
   const on = (ev: KeyboardEvent): void => {
-    if (ev.key === "Escape") return;
+    // Escape, and Tab or Enter on their own, are the dialog's: how a keyboard gets to its buttons.
+    if (ev.key === "Escape" || ((ev.key === "Tab" || ev.key === "Enter") && !ev.ctrlKey && !ev.altKey && !ev.metaKey)) return;
     ev.preventDefault();
     ev.stopPropagation();
     if (ev.key === "Backspace" && !ev.ctrlKey && !ev.altKey) labels.pop();
@@ -288,7 +333,7 @@ function actionOptions(view: View): HTMLElement {
   return dl;
 }
 
-function mapRows(c: Collection, view: View): HTMLElement {
+function mapRows(c: Collection, view: View, scope: Scope): HTMLElement {
   const items = view.maps.find((m) => m.path === c.path)?.items ?? [];
   const isKeys = c.path === "keys";
   const rows = items.map(([name, value]) => {
@@ -298,11 +343,12 @@ function mapRows(c: Collection, view: View): HTMLElement {
       : h("textarea", { rows: 2, class: "code", "aria-label": `${name}'s text` });
     input.value = value;
     input.addEventListener("change", async () => {
-      if (await change("user", { t: "set", key: `${c.path}.${name}`, value: input.value }, `${name} → ${input.value}`, { at: (m) => (err.textContent = m) })) page?.paintBody();
+      // (What was typed is on screen already: nothing is rebuilt under the cursor.)
+      await changeHeld(scope, { t: "set", key: `${c.path}.${name}`, value: input.value }, `${name} → ${input.value.length > 40 ? `${input.value.slice(0, 40)}…` : input.value}`, { at: (m) => (err.textContent = m) });
     });
     return h("div", { class: "set map" },
       h("div", { class: "set-head" }, h("code", {}, name), h("span", { class: "grow" }),
-        h("button", { class: "small deny", title: tip("settings.remove"), onclick: async () => { if (await change("user", { t: "unset", key: `${c.path}.${name}` }, `${name} removed`)) page?.paintBody(); } }, isKeys ? "Unbind" : "Remove")),
+        h("button", { class: "small deny", title: tip("settings.remove"), onclick: async () => { if (await changeHeld(scope, { t: "unset", key: `${c.path}.${name}` }, `${name} removed`)) page?.paintBody(); } }, isKeys ? "Unbind" : "Remove")),
       input, err);
   });
   return h("div", { class: "stack-in" }, isKeys ? actionOptions(view) : null, ...(rows.length ? rows : [h("p", { class: "empty" }, `No ${c.noun}s yet.`)]));
@@ -348,6 +394,7 @@ function addMember(c: Collection, scope: Scope): void {
 }
 
 function bindingSheet(view: View, finish: (name: string, fields: Record<string, string>) => Promise<void>): void {
+  let busy = false;
   const key = h("input", { type: "text", spellcheck: "false", autocapitalize: "off", placeholder: "x, C-a, global:M-1", "aria-label": "Key" });
   const act = h("input", { type: "text", list: "cfg-actions", spellcheck: "false", autocapitalize: "off", placeholder: "session.next", "aria-label": "Runs" });
   const err = h("p", { class: "form-err" });
@@ -358,11 +405,14 @@ function bindingSheet(view: View, finish: (name: string, fields: Record<string, 
     h("label", { class: "field" }, h("span", {}, "Runs"), act),
     err,
   ], [h("button", { onclick: () => s.close() }, "Cancel"), h("button", { class: "primary", onclick: async () => {
-    try { await finish(key.value.trim(), { value: act.value.trim() }); s.close(); } catch (e) { err.textContent = errText(e); }
+    if (busy) return;
+    busy = true;
+    try { await finish(key.value.trim(), { value: act.value.trim() }); s.close(); } catch (e) { err.textContent = errText(e); } finally { busy = false; }
   } }, "Add")]);
 }
 
 function sinkSheet(types: { value: string; help: string }[], finish: (name: string, fields: Record<string, string>) => Promise<void>): void {
+  let busy = false;
   const type = h("select", { "aria-label": "Where" }, ...types.map((t) => h("option", { value: t.value }, `${t.value} — ${t.help}`)));
   const fieldsBox = h("div", { class: "stack-in" });
   const inputs = new Map<string, HTMLInputElement>();
@@ -383,7 +433,9 @@ function sinkSheet(types: { value: string; help: string }[], finish: (name: stri
     h("button", { class: "primary", onclick: async () => {
       const f: Record<string, string> = { type: type.value };
       for (const [k, i] of inputs) if (i.value.trim()) f[k] = i.value.trim();
-      try { await finish("", f); s.close(); } catch (e) { err.textContent = errText(e); }
+      if (busy) return;
+      busy = true;
+      try { await finish("", f); s.close(); } catch (e) { err.textContent = errText(e); } finally { busy = false; }
     } }, "Add"),
   ]);
 }
@@ -395,7 +447,7 @@ let page: Page | null = null;
 
 function build(rest: string): Page {
   const [first, ...more] = rest.split("/");
-  const member = more.length ? decodeURIComponent(more.join("/")) : "";
+  const member = more.length ? safeDecode(more.join("/")) : "";
   const body = h("div", { class: "cfg-body" });
   const nav = h("nav", { class: "cfg-nav", "aria-label": "Sections" });
   const banners = h("div", { class: "cfg-banners" });
@@ -491,7 +543,7 @@ function build(rest: string): Page {
     out.push(...cards(view.entries.filter((e) => !e.member && settingOf(e)?.section === sec.id), view, scope));
     for (const c of collectionsOf().filter((x) => x.section === sec.id)) {
       out.push(h("h3", { class: "cfg-h" }, c.path === "keys" ? "Your key bindings" : c.path === "notifications.sinks" ? "Notification services" : c.path === "scripts.run" ? "Run scripts" : c.path[0].toUpperCase() + c.path.slice(1)));
-      out.push(typeof c.layout === "object" ? mapRows(c, view) : memberRows(c, view, scope));
+      out.push(typeof c.layout === "object" ? mapRows(c, view, scope) : memberRows(c, view, scope));
       if (typeof c.layout === "object") out.push(h("button", { class: "add-row", title: tip("settings.add"), onclick: () => addMember(c, scope) }, `＋ Add ${article(c.noun)} ${c.noun}`));
     }
     return out;
@@ -510,10 +562,10 @@ function build(rest: string): Page {
       : bar(
         c.layout !== "array" ? h("button", { title: tip("settings.rename"), onclick: () => form(`Rename ${name}`, [{ key: "to", label: "New name", value: name, required: true }], "Rename", async (v) => {
           let why = "";
-          if (!(await change(scope, { t: "rename", path, from: name, to: String(v.to) }, `${name} is now ${v.to}`, { at: (m) => { why = m; } }))) throw new Error(why);
+          if (!(await changeHeld(scope, { t: "rename", path, from: name, to: String(v.to) }, `${name} is now ${v.to}`, { at: (m) => { why = m; } }))) throw new Error(why);
           go(`#/settings/${path}/${enc(String(v.to))}`);
         }) }, "Rename") : null,
-        h("button", { class: "deny", title: tip("settings.remove"), onclick: () => confirm(`Remove ${c.noun} ${name}?`, "Everything set in it goes too.", "Remove", async () => { if (await change(scope, { t: "remove", path, name }, `removed ${c.noun} ${name}`)) go(`#/settings/${c.section}`); }) }, "Remove"));
+        h("button", { class: "deny", title: tip("settings.remove"), onclick: () => confirm(`Remove ${c.noun} ${name}?`, "Everything set in it goes too.", "Remove", async () => { if (await changeHeld(scope, { t: "remove", path, name }, `removed ${c.noun} ${name}`)) go(`#/settings/${c.section}`); }) }, "Remove"));
     return [actionsBar, ...cards(fields, view, scope)];
   }
 
@@ -566,14 +618,15 @@ function build(rest: string): Page {
   /// One setting again, after it changed, without touching the fields around it.
   function repaint(key: string): void {
     const old = body.querySelector(`[data-key="${CSS.escape(key)}"]`);
-    if (!old || st.query.trim()) { paintBody(); return; }
+    if (!old) { paintBody(); return; }
     const e = [st.user, st.project].flatMap((v) => v?.entries ?? []).find((x) => x.key === key);
     const s = e && settingOf(e);
     const scope: Scope = s ? scopeOf(s.section) : "user";
     const view = viewOf(scope);
     if (!e || !s || !view) { paintBody(); return; }
     // A sink's type decides which of its other fields show; a changed filter hides this one.
-    if (st.modified || e.setting.endsWith(".type") || e.setting.endsWith(".command")) { paintBody(); return; }
+    // A sink's type decides which of its other fields show.
+    if (e.setting.endsWith(".type") && !st.query.trim()) { paintBody(); return; }
     old.replaceWith(card(e, s, scope, view));
     paintNav();
     paintBanners();
@@ -594,10 +647,26 @@ function build(rest: string): Page {
 }
 
 /// `#/settings`, `#/settings/<section>`, `#/settings/<collection>/<member>`.
+let seenScope = "";
+let seenProjects = -1;
 function settingsView(rest: string): HTMLElement {
   if (!page || page.rest !== rest) {
     page = build(rest);
-    if (!st.user || conn.scope === "full") void load();
+    seenScope = conn.scope;
+    seenProjects = data.projects.size;
+    if (conn.scope === "full") void load();
+  } else {
+    // The connection said what this device may do after the page was built (a reload on this
+    // route), or the repositories arrived: show what they allow.
+    if (conn.scope !== seenScope) {
+      seenScope = conn.scope;
+      if (conn.scope === "full" && !st.user && !st.loading) void load();
+      page.paint();
+    }
+    if (data.projects.size !== seenProjects) {
+      seenProjects = data.projects.size;
+      page.paint();
+    }
   }
   for (const stale of page.el.querySelectorAll(":scope > .offline")) stale.remove();
   return page.el;

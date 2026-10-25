@@ -62,6 +62,22 @@ fn open_append(path: &Path) -> io::Result<File> {
     OpenOptions::new().create(true).read(true).append(true).mode(0o600).open(path)
 }
 
+/// A recording that begins with another magic than ours is another version's (a rollback, or a
+/// newer build): leave it be, under another name, rather than truncate it as torn.
+fn set_aside_unknown(path: &Path) {
+    let Ok(f) = File::open(path) else { return };
+    let mut magic = [0u8; MAGIC.len()];
+    if f.metadata().is_ok_and(|m| m.len() >= magic.len() as u64)
+        && f.read_exact_at(&mut magic, 0).is_ok()
+        && &magic != MAGIC
+    {
+        let _ = std::fs::rename(
+            path,
+            path.with_extension(format!("log.unrecognised-{}", now_unix_ms())),
+        );
+    }
+}
+
 /// Bytes at the start of `file` that are the magic and whole records; 0 when the magic itself
 /// is torn or wrong.
 fn valid_len(file: &File) -> io::Result<u64> {
@@ -94,6 +110,7 @@ impl Recorder {
         std::fs::create_dir_all(dir)?;
         let _ = std::fs::set_permissions(dir, std::os::unix::fs::PermissionsExt::from_mode(0o700));
         let path = dir.join("pty.log");
+        set_aside_unknown(&path);
         let mut file = open_append(&path)?;
         // Continue after the last whole record: appending after a torn one (a crash mid-write)
         // would make everything after it misparse.
@@ -419,6 +436,30 @@ mod tests {
         let recs = read_dir(&dir).unwrap();
         assert!(matches!(&recs.last().unwrap().record, Record::Output(b) if b == b"three"));
         assert_eq!(rec.len, std::fs::metadata(&p).unwrap().len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_recording_in_another_format_is_set_aside_not_truncated() {
+        let dir = tempfile_dir();
+        let p = dir.join("pty.log");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&p, b"PTYLOG99-from-another-version-with-real-content").unwrap();
+        let mut rec = Recorder::open(&dir, TermSize::new(20, 4), 64 * 1024).unwrap();
+        rec.output(b"fresh", || unreachable!()).unwrap();
+        let kept: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("unrecognised"))
+            .collect();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(
+            std::fs::read(kept[0].path()).unwrap(),
+            b"PTYLOG99-from-another-version-with-real-content"
+        );
+        assert!(
+            matches!(&read_dir(&dir).unwrap().last().unwrap().record, Record::Output(b) if b == b"fresh")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

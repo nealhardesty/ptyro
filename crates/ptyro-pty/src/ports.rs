@@ -11,11 +11,17 @@ pub fn listening_ports(leaders: &[u32]) -> BTreeMap<u32, Vec<u16>> {
     let children = process_tree();
     let mut trees: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
     for &leader in leaders {
+        // A set, not a scan of the list: a fork bomb makes thousands of descendants.
+        let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::from([leader]);
         let mut all = vec![leader];
         let mut i = 0;
         while i < all.len() {
             if let Some(kids) = children.get(&all[i]) {
-                all.extend(kids.iter().copied().filter(|k| !all.contains(k)).collect::<Vec<_>>());
+                for k in kids {
+                    if seen.insert(*k) {
+                        all.push(*k);
+                    }
+                }
             }
             i += 1;
         }

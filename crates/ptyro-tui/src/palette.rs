@@ -133,6 +133,13 @@ impl Palette {
         self.selected = self.selected.min(self.filtered.len().saturating_sub(1));
     }
 
+    /// Pasted text goes to the query (one line; never a hotkey).
+    pub fn paste(&mut self, text: &str) {
+        self.query.push_str(&text.replace(['\r', '\n'], " "));
+        self.selected = 0;
+        self.refilter();
+    }
+
     pub fn key(&mut self, k: KeyEvent) -> Picked {
         let ctrl = k.mods.has(Mods::CTRL);
         match (k.code, ctrl) {

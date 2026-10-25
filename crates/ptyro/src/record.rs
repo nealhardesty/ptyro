@@ -123,7 +123,9 @@ pub async fn export(
     };
     match output {
         Some(p) => {
-            std::fs::write(&p, &bytes)
+            // A recording can hold what was pasted or printed: only the owner reads it, and a
+            // link planted at the name isn't followed.
+            write_new_private(&p, &bytes)
                 .map_err(|e| Error::invalid(format!("{}: {e}", p.display())))?;
             eprintln!("wrote {} ({} bytes) from session {id}", p.display(), bytes.len());
         }
@@ -132,4 +134,54 @@ pub async fn export(
         }
     }
     Ok(0)
+}
+
+/// Write `bytes` to `p` (0600), replacing a file of ours there but never writing through a
+/// symlink or into someone else's file.
+fn write_new_private(p: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    match std::fs::symlink_metadata(p) {
+        Ok(m) if m.file_type().is_symlink() => {
+            return Err(std::io::Error::other(
+                "is a symbolic link; remove it or choose another name",
+            ));
+        }
+        Ok(m) if m.is_file() => std::fs::remove_file(p)?,
+        Ok(_) => return Err(std::io::Error::other("exists and isn't a file")),
+        Err(_) => {}
+    }
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .open(p)?;
+    f.write_all(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_export_is_private_and_never_written_through_a_link() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("s.cast");
+        write_new_private(&p, b"one").unwrap();
+        let mode =
+            std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&p).unwrap().permissions());
+        assert_eq!(mode & 0o777, 0o600);
+        // Again: a file of ours is replaced.
+        write_new_private(&p, b"two").unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), b"two");
+        // A link planted at the name is refused, and what it points at is left alone.
+        let target = d.path().join("elsewhere");
+        std::fs::write(&target, "keep").unwrap();
+        let link = d.path().join("link.cast");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(write_new_private(&link, b"x").is_err());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep");
+        // A directory isn't a file to replace.
+        assert!(write_new_private(d.path(), b"x").is_err());
+    }
 }

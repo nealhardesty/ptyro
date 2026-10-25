@@ -285,7 +285,7 @@ impl Daemon {
         wt: &WorktreeInfo,
     ) -> Result<ptyro_core::model::ScriptsInfo, Error> {
         let cfg = ProjectConfig::load(&p.root, &wt.path).map_err(Error::invalid)?;
-        let fp = cfg.scripts.fingerprint();
+        let fp = cfg.trust_fingerprint();
         let mut names: Vec<String> = Vec::new();
         if let Some((n, _)) = cfg.scripts.run_script(None) {
             names.push(format!("run:{n}"));
@@ -449,8 +449,10 @@ impl Daemon {
             .flat_map(|w| self.sessions_in(&w.id))
             .filter(|s| s.is_live())
             .collect();
-        let live: Vec<String> =
-            in_it.iter().map(|s| s.meta.lock().expect("meta").name.clone()).collect();
+        let live: Vec<String> = in_it
+            .iter()
+            .map(|s| s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name.clone())
+            .collect();
         if release {
             // They keep running, outside any project.
             for s in &in_it {
@@ -584,7 +586,7 @@ impl Daemon {
             (reg.workspaces.clone(), reg.projects.clone(), reg.worktrees.clone())
         };
         for s in self.sessions() {
-            let mut m = s.meta.lock().expect("meta");
+            let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if m.place.profile == old {
                 m.place.profile = new.into();
             }
@@ -706,7 +708,8 @@ impl Daemon {
                 self.put_workspace(w.clone());
                 for s in self.sessions() {
                     let moved = {
-                        let mut m = s.meta.lock().expect("meta");
+                        let mut m =
+                            s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                         let moved = m.place.workspace.as_deref() == Some(name.as_str());
                         if moved {
                             m.place.workspace = Some(new_name.clone());
@@ -734,7 +737,8 @@ impl Daemon {
                 // Its sessions keep running; they now live in main.
                 for s in self.sessions() {
                     let moved = {
-                        let mut m = s.meta.lock().expect("meta");
+                        let mut m =
+                            s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                         let moved = m.place.workspace.as_deref() == Some(name.as_str());
                         if moved {
                             m.place.workspace = Some(MAIN_WORKSPACE.into());
@@ -832,6 +836,35 @@ pub fn scan_repos(roots: &[PathBuf], depth: u8) -> Vec<PathBuf> {
     out
 }
 
+/// `path` resolved, remembered for half a minute: this runs under the registry lock for every
+/// worktree on every sweep, and a checkout on a slow or stale mount must cost its syscall once,
+/// not on every call.
+fn canonical(path: &Path) -> std::path::PathBuf {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    static CACHE: Mutex<Option<HashMap<std::path::PathBuf, (std::path::PathBuf, Instant)>>> =
+        Mutex::new(None);
+    let now = Instant::now();
+    {
+        let mut guard = CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let map = guard.get_or_insert_with(HashMap::new);
+        if let Some((c, at)) = map.get(path)
+            && now.duration_since(*at) < Duration::from_secs(30)
+        {
+            return c.clone();
+        }
+    }
+    let c = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut guard = CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let map = guard.get_or_insert_with(HashMap::new);
+    if map.len() > 1024 {
+        map.clear();
+    }
+    map.insert(path.to_path_buf(), (c.clone(), now));
+    c
+}
+
 /// The worktree whose checkout holds `path` (already resolved), innermost first. Both sides are
 /// compared resolved: on macOS a checkout under /var or /tmp really lives in /private.
 pub(crate) fn innermost<'a>(
@@ -839,7 +872,7 @@ pub(crate) fn innermost<'a>(
     path: &Path,
 ) -> Option<&'a WorktreeInfo> {
     worktrees
-        .map(|w| (w, w.path.canonicalize().unwrap_or_else(|_| w.path.clone())))
+        .map(|w| (w, canonical(&w.path)))
         .filter(|(_, root)| path.starts_with(root))
         .max_by_key(|(_, root)| root.as_os_str().len())
         .map(|(w, _)| w)

@@ -2180,6 +2180,7 @@ dependencies = [
  "ptyro-core",
  "ptyro-protocol",
  "serde",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
@@ -2308,6 +2309,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

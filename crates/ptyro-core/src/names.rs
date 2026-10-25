@@ -116,6 +116,17 @@ pub fn problem(name: &str) -> Option<String> {
     if name.starts_with('.') {
         return Some("must not start with .".into());
     }
+    // A name becomes part of a branch (`ptyro/<name>`) and is given to git as a word: what git
+    // refuses in a ref, or reads as an option, is refused here, not late inside `git worktree add`.
+    if name.starts_with('-') {
+        return Some("must not start with -".into());
+    }
+    if name.contains("..") {
+        return Some("must not contain .. (git refuses it in a branch name)".into());
+    }
+    if name.ends_with('.') || name.ends_with(".lock") {
+        return Some("must not end with . or .lock (git refuses it in a branch name)".into());
+    }
     None
 }
 
@@ -173,10 +184,10 @@ mod tests {
 
     #[test]
     fn dot_names_are_refused() {
-        for bad in [".", "..", ".hidden", "", "123", "A"] {
+        for bad in [".", "..", ".hidden", "", "123", "A", "-x", "x..y", "a.", "x.lock", "-"] {
             assert!(validate(bad).is_err(), "{bad:?}");
         }
-        for good in ["a.b", "x..y", "v1.2", "brisk-rook"] {
+        for good in ["a.b", "v1.2", "brisk-rook", "x.locked", "a-b"] {
             assert!(validate(good).is_ok(), "{good:?}");
         }
     }

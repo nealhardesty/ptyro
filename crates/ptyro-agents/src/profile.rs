@@ -49,6 +49,31 @@ pub const CREDENTIAL_VARS: &[&str] = &[
     "AWS_PROFILE",
 ];
 
+/// More inherited credentials and endpoints, by shape, removed with [`CREDENTIAL_VARS`] when a
+/// profile isolates: the list above cannot name every provider's variables. A profile's own
+/// `env`, `secrets` and account tokens are set after, so they survive.
+pub const CREDENTIAL_PREFIXES: &[&str] = &[
+    "AWS_",
+    "AZURE_",
+    "GOOGLE_",
+    "GH_",
+    "GITHUB_",
+    "OPENAI_",
+    "ANTHROPIC_",
+    "XAI_",
+    "MISTRAL_",
+    "OPENROUTER_",
+    "GIT_CONFIG_",
+];
+
+/// Variable names ending like a secret.
+pub const CREDENTIAL_SUFFIXES: &[&str] =
+    &["_API_KEY", "_TOKEN", "_SECRET", "_SECRET_KEY", "_PASSWORD", "_ASKPASS"];
+
+/// Other exact names that carry a credential or point git or ssh at somebody's own config.
+pub const CREDENTIAL_EXTRA: &[&str] =
+    &["GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH", "GIT_CONFIG_SYSTEM", "NETRC"];
+
 /// Agents (and `gh`) whose config dir a profile sets, in a stable order.
 const ACCOUNTS: &[&str] = &["claude", "codex", "gemini", "opencode", "gh"];
 
@@ -138,6 +163,8 @@ pub struct Plan {
     /// Exact names removed from the base environment.
     pub remove: Vec<String>,
     pub remove_prefixes: Vec<String>,
+    /// Names ending like these are removed too (`_TOKEN`, `_API_KEY`).
+    pub remove_suffixes: Vec<String>,
     /// Real values, applied in order.
     pub set: Vec<(String, String)>,
     /// The same, with secrets shown as `<secret:NAME>`: safe to store, log and print.
@@ -157,6 +184,7 @@ impl Plan {
                 let k = k.to_string_lossy();
                 !self.remove.iter().any(|r| *r == k)
                     && !self.remove_prefixes.iter().any(|p| k.starts_with(p.as_str()))
+                    && !self.remove_suffixes.iter().any(|s| k.ends_with(s.as_str()))
             })
             .collect()
     }
@@ -204,7 +232,9 @@ pub fn plan(
         ..Plan::default()
     };
     if isolates(config, name) {
-        p.remove.extend(CREDENTIAL_VARS.iter().map(|s| (*s).to_owned()));
+        p.remove.extend(CREDENTIAL_VARS.iter().chain(CREDENTIAL_EXTRA).map(|s| (*s).to_owned()));
+        p.remove_prefixes.extend(CREDENTIAL_PREFIXES.iter().map(|s| (*s).to_owned()));
+        p.remove_suffixes.extend(CREDENTIAL_SUFFIXES.iter().map(|s| (*s).to_owned()));
         p.remove.extend(d.scrub_extra.iter().cloned());
     }
     let put = |p: &mut Plan, k: &str, v: String, shown: Option<String>| {
@@ -323,15 +353,48 @@ pub fn parse_env_file(text: &str) -> Vec<(String, String)> {
         }
         let line = line.strip_prefix("export ").unwrap_or(line);
         let Some((k, v)) = line.split_once('=') else { continue };
-        let v = v.trim();
-        let v = v
-            .strip_prefix('"')
-            .and_then(|v| v.strip_suffix('"'))
-            .or_else(|| v.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
-            .unwrap_or(v);
-        out.push((k.trim().to_owned(), v.to_owned()));
+        let k = k.trim();
+        // A name a shell could export: anything else would only fail later, in the child.
+        if k.is_empty()
+            || k.starts_with(|c: char| c.is_ascii_digit())
+            || !k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            continue;
+        }
+        out.push((k.to_owned(), env_value(v.trim())));
     }
     out
+}
+
+/// A value as `sh` reads it from an env file: `"double"` (with `\n \" \\ \$` escapes), `'single'`
+/// (literal), or bare (up to a ` #` comment).
+fn env_value(v: &str) -> String {
+    if let Some(rest) = v.strip_prefix('"') {
+        let mut out = String::new();
+        let mut chars = rest.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                '"' => return out,
+                '\\' => match chars.next() {
+                    Some('n') => out.push('\n'),
+                    Some('t') => out.push('\t'),
+                    Some(o @ ('"' | '\\' | '$' | '`')) => out.push(o),
+                    Some(o) => {
+                        out.push('\\');
+                        out.push(o);
+                    }
+                    None => out.push('\\'),
+                },
+                c => out.push(c),
+            }
+        }
+        // No closing quote: keep what was written, as before.
+        return format!("\"{rest}");
+    }
+    if let Some(rest) = v.strip_prefix('\'') {
+        return rest.split_once('\'').map_or_else(|| format!("'{rest}"), |(s, _)| s.to_owned());
+    }
+    v.split_once(" #").map_or(v, |(a, _)| a).trim_end().to_owned()
 }
 
 /// What clients may know about a profile (no secret values).
@@ -376,6 +439,21 @@ pub enum ShareOutcome {
     Refused(String),
 }
 
+/// A `share` entry as a relative path of plain names, or `None` for one that is empty, absolute
+/// or climbs out (`..`).
+fn share_path(entry: &str) -> Option<PathBuf> {
+    use std::path::Component;
+    let mut rel = PathBuf::new();
+    for c in Path::new(entry).components() {
+        match c {
+            Component::Normal(n) => rel.push(n),
+            Component::CurDir => {}
+            _ => return None,
+        }
+    }
+    (!rel.as_os_str().is_empty()).then_some(rel)
+}
+
 /// Symlink each `share` entry from the agent's default dir into the profile's dir. Never
 /// overwrites, never shares credentials, and skips profiles whose dir *is* the default dir.
 pub fn sync_shares(config: &Config, name: &str, managed_root: &Path) -> Vec<ShareOutcome> {
@@ -400,12 +478,21 @@ pub fn sync_shares_from(
             continue;
         }
         for e in entries {
-            let leaf = e.rsplit('/').next().unwrap_or(e);
-            if CREDENTIAL_FILES.contains(&leaf) {
+            // By components: `.credentials.json/`, `x/.`, `./.Credentials.json` and the like
+            // are the same file, and `..` or an absolute path is no `share` entry at all.
+            let Some(rel) = share_path(e) else {
+                out.push(ShareOutcome::Refused(format!("{agent}/{e} is not a path inside it")));
+                continue;
+            };
+            let holds = rel.iter().any(|c| {
+                let c = c.to_string_lossy().to_lowercase();
+                CREDENTIAL_FILES.iter().any(|f| f.to_lowercase() == c)
+            });
+            if holds {
                 out.push(ShareOutcome::Refused(format!("{agent}/{e} holds credentials")));
                 continue;
             }
-            let (src, dst) = (src_root.join(e), dst_root.join(e));
+            let (src, dst) = (src_root.join(&rel), dst_root.join(&rel));
             if !src.exists() {
                 out.push(ShareOutcome::MissingSource(src));
                 continue;

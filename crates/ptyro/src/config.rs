@@ -398,29 +398,81 @@ fn check_config(config: Config, path: &std::path::Path) -> Result<Vec<String>, S
 /// Write the config (or any file that may hold secrets) atomically: the file 0600, directories
 /// created for it 0700. Replacing a file also tightens an older, looser one.
 pub(crate) fn write_private(path: &std::path::Path, text: &str) -> Result<(), Error> {
-    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
-    let err =
-        |p: &std::path::Path, e: std::io::Error| Error::internal(format!("{}: {e}", p.display()));
+    use std::os::unix::fs::DirBuilderExt;
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
             .create(dir)
-            .map_err(|e| err(dir, e))?;
+            .map_err(|e| Error::internal(format!("{}: {e}", dir.display())))?;
     }
-    let tmp = path.with_extension("toml.tmp");
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
+    write_atomic(path, text, 0o600)
+}
+
+/// Replace `path` with `text` whole: written to a uniquely named file beside it (so two writers
+/// never share one), flushed to disk, then renamed over it, so a crash leaves the old file or
+/// the new one and never an empty one. A symlink is followed: the file it points at is what
+/// changes, so a config kept in a dotfiles repository stays a link.
+pub(crate) fn write_atomic(path: &std::path::Path, text: &str, mode: u32) -> Result<(), Error> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let err =
+        |p: &std::path::Path, e: std::io::Error| Error::internal(format!("{}: {e}", p.display()));
+    // Where the file really is (a dangling link is replaced where it points).
+    let target = match std::fs::canonicalize(path) {
+        Ok(real) => real,
+        Err(_) => match std::fs::read_link(path) {
+            Ok(to) => path.parent().map_or(to.clone(), |d| d.join(&to)),
+            Err(_) => path.to_path_buf(),
+        },
+    };
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let name =
+        target.file_name().map_or_else(|| "file".into(), |n| n.to_string_lossy().into_owned());
+    let tmp = target.with_file_name(format!(
+        ".{name}.{}.{}.{}.tmp",
+        std::process::id(),
+        ptyro_core::now_ms(),
+        N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let written = (|| -> std::io::Result<()> {
+        let mut f =
+            std::fs::OpenOptions::new().write(true).create_new(true).mode(mode).open(&tmp)?;
+        f.write_all(text.as_bytes())?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, &target)
+    })();
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(err(&target, e));
+    }
+    // (The new name is only durable once its directory is.)
+    if let Some(dir) = target.parent()
+        && let Ok(d) = std::fs::File::open(dir)
+    {
+        let _ = d.sync_all();
+    }
+    Ok(())
+}
+
+/// Hold an exclusive advisory lock on `<file>.lock` while `f` runs, so two writers (the web app,
+/// a CLI, a TUI) don't both read the file, change it and lose each other's change. A lock that
+/// can't be taken (a read-only directory) is not a reason to refuse the write.
+pub(crate) fn with_lock<T>(path: &std::path::Path, f: impl FnOnce() -> T) -> T {
+    let lock = path.with_file_name(format!(
+        ".{}.lock",
+        path.file_name().map_or_else(|| "file".into(), |n| n.to_string_lossy().into_owned())
+    ));
+    let guard = std::fs::OpenOptions::new()
         .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&tmp)
-        .map_err(|e| err(&tmp, e))?;
-    // (A leftover temp file keeps its old mode through `open`.)
-    f.set_permissions(std::fs::Permissions::from_mode(0o600)).map_err(|e| err(&tmp, e))?;
-    f.write_all(text.as_bytes()).map_err(|e| err(&tmp, e))?;
-    drop(f);
-    std::fs::rename(&tmp, path).map_err(|e| err(path, e))
+        .truncate(false)
+        .write(true)
+        .open(&lock)
+        .ok()
+        .filter(|g| g.lock().is_ok());
+    let out = f();
+    drop(guard);
+    out
 }
 
 /// The file's mode when group or others can read or write it.
@@ -501,6 +553,92 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::*;
+
+    #[test]
+    fn project_takes_its_name_only_with_an_equals_sign() {
+        use clap::Parser;
+        // (The whole command tree is built on the stack: more than a test thread's 2 MiB.)
+        std::thread::Builder::new()
+            .stack_size(32 << 20)
+            .spawn(|| {
+                let parse = |args: &[&str]| {
+                    let mut v = vec!["ptyro", "config"];
+                    v.extend_from_slice(args);
+                    match crate::Cli::try_parse_from(v).unwrap().cmd {
+                        Some(crate::Cmd::Config { cmd }) => cmd,
+                        _ => panic!("not a config command"),
+                    }
+                };
+                // `-p` alone means the repository I'm in; the next word is a word of its own.
+                let ConfigCmd::List { section, project, .. } = parse(&["list", "-p", "ui"]) else {
+                    panic!()
+                };
+                assert_eq!((section.as_deref(), project.as_deref()), (Some("ui"), Some("")));
+                let ConfigCmd::List { section, project, .. } =
+                    parse(&["list", "ui", "--project=app"])
+                else {
+                    panic!()
+                };
+                assert_eq!((section.as_deref(), project.as_deref()), (Some("ui"), Some("app")));
+                let ConfigCmd::Add { collection, name, project, .. } =
+                    parse(&["add", "-p", "scripts.run", "dev", "command=make"])
+                else {
+                    panic!()
+                };
+                assert_eq!(
+                    (collection.as_str(), name.as_deref(), project.as_deref()),
+                    ("scripts.run", Some("dev"), Some(""))
+                );
+                let ConfigCmd::Set { key, value, project, shared } =
+                    parse(&["set", "x", "v", "--project", "--shared"])
+                else {
+                    panic!()
+                };
+                assert_eq!(
+                    (key.as_str(), value, project.as_deref(), shared),
+                    ("x", vec!["v".to_owned()], Some(""), true)
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn a_write_is_whole_unique_and_follows_a_link() {
+        let d = tempfile::tempdir().unwrap();
+        let real = d.path().join("dotfiles/ptyro.toml");
+        std::fs::create_dir_all(real.parent().unwrap()).unwrap();
+        std::fs::write(&real, "[ui]\nmouse = true\n").unwrap();
+        let link = d.path().join("config.toml");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        write_private(&link, "[ui]\nmouse = false\n").unwrap();
+        // The link is still a link, and the file it points at changed.
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "[ui]\nmouse = false\n");
+        // No temporary file is left, and two writers never share a name.
+        let left: Vec<_> = std::fs::read_dir(d.path().join("dotfiles"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left, ["ptyro.toml"], "{left:?}");
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let p = real.clone();
+                std::thread::spawn(move || {
+                    write_private(&p, &format!("[ui]\nsidebar_width = {}\n", 20 + i))
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap().unwrap();
+        }
+        let text = std::fs::read_to_string(&real).unwrap();
+        assert!(text.starts_with("[ui]\nsidebar_width = "), "{text:?}");
+        // The lock is exclusive and gives the closure's value back.
+        assert_eq!(with_lock(&real, || 7), 7);
+    }
 
     #[test]
     fn configs_are_written_private() {

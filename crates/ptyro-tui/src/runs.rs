@@ -595,6 +595,8 @@ pub fn draw(app: &App, f: &mut Frame<'_>, area: Rect) {
     f.render_widget(Paragraph::new(Line::styled(help, fg(app, t.dim))), foot);
     let sel_style = fg(app, t.selection_fg).bg(app.depth.fit(t.selection_bg));
     let mut lines: Vec<Line<'_>> = Vec::new();
+    // The line the selected row starts on (the scroll follows it).
+    let mut sel_line = 0usize;
     match &o.view {
         View::List => {
             if app.runs.is_empty() {
@@ -654,6 +656,7 @@ pub fn draw(app: &App, f: &mut Frame<'_>, area: Rect) {
                 let mut l = Line::from(spans);
                 if i == o.sel {
                     l = l.style(sel_style);
+                    sel_line = lines.len();
                 }
                 lines.push(l);
             }
@@ -741,6 +744,7 @@ pub fn draw(app: &App, f: &mut Frame<'_>, area: Rect) {
                 let mut l = Line::from(spans);
                 if i == o.sel {
                     l = l.style(sel_style);
+                    sel_line = lines.len();
                 }
                 lines.push(l);
                 if let Some(g) = &ss.gate {
@@ -842,6 +846,7 @@ pub fn draw(app: &App, f: &mut Frame<'_>, area: Rect) {
                     ]);
                     if i == o.sel {
                         l = l.style(sel_style);
+                        sel_line = lines.len();
                     }
                     lines.push(l);
                     lines.push(Line::styled(
@@ -883,6 +888,7 @@ pub fn draw(app: &App, f: &mut Frame<'_>, area: Rect) {
     }
     // Keep the selection in view.
     let h = body.height as usize;
-    let skip = lines.len().saturating_sub(h).min(o.sel.saturating_sub(h / 2));
+    // By the selected row's line: a row takes several in the run and compare views.
+    let skip = lines.len().saturating_sub(h).min(sel_line.saturating_sub(h / 2));
     f.render_widget(Paragraph::new(lines.into_iter().skip(skip).collect::<Vec<_>>()), body);
 }

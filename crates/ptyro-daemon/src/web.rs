@@ -52,7 +52,21 @@ impl Daemon {
     fn recording(&self, addr: &str) -> Result<(String, Vec<Timed>), Error> {
         let id = match self.resolve(addr) {
             Ok(s) => s.id.full(),
-            Err(_) => addr.to_owned(),
+            // A session of an earlier run is known by its directory's name only: an id, never a
+            // path (`../..` would read any directory's recording).
+            Err(_)
+                if !addr.is_empty()
+                    && addr.len() <= 64
+                    && addr.chars().all(|c| c.is_ascii_alphanumeric()) =>
+            {
+                addr.to_owned()
+            }
+            Err(_) => {
+                return Err(Error::new(
+                    ErrorCode::NotFound,
+                    format!("no recording of {addr:?} (is `[recorder] enabled = false`?)"),
+                ));
+            }
         };
         let dir = self.paths.data.join("sessions").join(&id);
         let recs = record::read_dir(&dir).map_err(|_| {

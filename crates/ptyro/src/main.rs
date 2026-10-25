@@ -1,5 +1,10 @@
 //! The single `ptyro` binary (SPEC §3.3, ADR 12): CLI, TUI, daemon and dev helpers.
 
+#[cfg(not(unix))]
+compile_error!(
+    "ptyro runs on Linux and macOS (Windows through WSL2); see the Requirements section of README.md"
+);
+
 mod agents;
 mod cli;
 mod complete;
@@ -845,9 +850,9 @@ enum ConfigCmd {
         /// Only what is set differently from the default
         #[arg(long)]
         changed: bool,
-        /// A repository's settings (`.ptyro.toml`) instead of your own; the project's name or
-        /// path, else the one you are in
-        #[arg(short, long, num_args = 0..=1, default_missing_value = "")]
+        /// A repository's settings (`.ptyro.toml`) instead of your own: the one you are in, or
+        /// `--project=NAME` (its name or path)
+        #[arg(short, long, num_args = 0..=1, require_equals = true, default_missing_value = "")]
         project: Option<String>,
         #[arg(long)]
         json: bool,
@@ -859,7 +864,7 @@ enum ConfigCmd {
         /// Say what it is, where it comes from and what it does
         #[arg(long)]
         explain: bool,
-        #[arg(short, long, num_args = 0..=1, default_missing_value = "")]
+        #[arg(short, long, num_args = 0..=1, require_equals = true, default_missing_value = "")]
         project: Option<String>,
         #[arg(long)]
         json: bool,
@@ -873,7 +878,7 @@ enum ConfigCmd {
         #[arg(required = true, num_args = 1..)]
         value: Vec<String>,
         /// Into a repository's `.ptyro.local.toml` (yours), or its `.ptyro.toml` with --shared
-        #[arg(short, long, num_args = 0..=1, default_missing_value = "")]
+        #[arg(short, long, num_args = 0..=1, require_equals = true, default_missing_value = "")]
         project: Option<String>,
         /// With --project: the committed `.ptyro.toml` instead of your `.ptyro.local.toml`
         #[arg(long, requires = "project")]
@@ -883,7 +888,7 @@ enum ConfigCmd {
     Unset {
         #[arg(required = true, add = ArgValueCandidates::new(complete::settings))]
         keys: Vec<String>,
-        #[arg(short, long, num_args = 0..=1, default_missing_value = "")]
+        #[arg(short, long, num_args = 0..=1, require_equals = true, default_missing_value = "")]
         project: Option<String>,
         #[arg(long, requires = "project")]
         shared: bool,
@@ -898,7 +903,7 @@ enum ConfigCmd {
         /// Its settings, as FIELD=VALUE (`command="aider --model sonnet"`); a binding's action
         /// or a prompt's text is `value=…`; a sink's `type=ntfy`
         fields: Vec<String>,
-        #[arg(short, long, num_args = 0..=1, default_missing_value = "")]
+        #[arg(short, long, num_args = 0..=1, require_equals = true, default_missing_value = "")]
         project: Option<String>,
         #[arg(long, requires = "project")]
         shared: bool,
@@ -909,7 +914,7 @@ enum ConfigCmd {
         collection: String,
         /// Its name (a sink's position, from `config list notifications`)
         name: String,
-        #[arg(short, long, num_args = 0..=1, default_missing_value = "")]
+        #[arg(short, long, num_args = 0..=1, require_equals = true, default_missing_value = "")]
         project: Option<String>,
         #[arg(long, requires = "project")]
         shared: bool,
@@ -920,14 +925,14 @@ enum ConfigCmd {
         collection: String,
         from: String,
         to: String,
-        #[arg(short, long, num_args = 0..=1, default_missing_value = "")]
+        #[arg(short, long, num_args = 0..=1, require_equals = true, default_missing_value = "")]
         project: Option<String>,
         #[arg(long, requires = "project")]
         shared: bool,
     },
     /// Print every setting's description as JSON, for tools that build forms
     Schema {
-        #[arg(short, long, num_args = 0..=1, default_missing_value = "")]
+        #[arg(short, long, num_args = 0..=1, require_equals = true, default_missing_value = "")]
         project: Option<String>,
     },
 }

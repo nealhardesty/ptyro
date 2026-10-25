@@ -163,6 +163,21 @@ impl Scripts {
     }
 }
 
+impl ProjectConfig {
+    /// What a person trusts when they trust a project's scripts: the scripts, and (when set)
+    /// which of them is the verified-done check and whether it runs after every turn. With the
+    /// defaults it is exactly [`Scripts::fingerprint`], so scripts trusted before still are.
+    pub fn trust_fingerprint(&self) -> String {
+        let v = &self.verify;
+        if v.check.is_none() && !v.auto && v.max_bounces.is_none() {
+            return self.scripts.fingerprint();
+        }
+        let canonical = serde_json::to_string(&(&self.scripts, &self.verify)).unwrap_or_default();
+        let digest = Sha256::digest(canonical.as_bytes());
+        digest.iter().map(|b| format!("{b:02x}")).collect()
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ProjectConfig {
@@ -233,9 +248,11 @@ impl ProjectConfig {
             files.push((checkout.join(LOCAL_FILE), LOCAL_FILE));
         }
         for (path, name) in files {
-            let text = match std::fs::read_to_string(&path) {
-                Ok(t) => t,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            // The committed file is whatever a clone brought: never through a link, never huge.
+            // Your own local file may be a link a dotfiles manager keeps.
+            let text = match crate::imports::read_repo_file(checkout, &path, name == LOCAL_FILE) {
+                Ok(Some(t)) => t,
+                Ok(None) => continue,
                 Err(e) => return Err(format!("{}: {e}", path.display())),
             };
             let t = Self::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;

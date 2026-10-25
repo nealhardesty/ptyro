@@ -336,6 +336,8 @@ pub fn draw(app: &App, f: &mut Frame<'_>, area: Rect) {
     f.render_widget(Paragraph::new(Line::styled(help, fg(app, t.dim))), foot);
     let sel_style = fg(app, t.selection_fg).bg(app.depth.fit(t.selection_bg));
     let mut lines: Vec<Line<'_>> = Vec::new();
+    // The line the selected row is on: the view scrolls to keep it in sight.
+    let mut sel_line = 0usize;
     match run {
         None => {
             let sets = app.set_runs();
@@ -370,6 +372,7 @@ pub fn draw(app: &App, f: &mut Frame<'_>, area: Rect) {
                 ]);
                 if i == v.sel {
                     l = l.style(sel_style);
+                    sel_line = lines.len();
                 }
                 lines.push(l);
             }
@@ -436,6 +439,7 @@ pub fn draw(app: &App, f: &mut Frame<'_>, area: Rect) {
                 ]);
                 if i == v.sel {
                     l = l.style(sel_style);
+                    sel_line = lines.len();
                 }
                 lines.push(l);
             }
@@ -526,5 +530,7 @@ pub fn draw(app: &App, f: &mut Frame<'_>, area: Rect) {
             }
         }
     }
-    f.render_widget(Paragraph::new(lines), body);
+    let h = body.height as usize;
+    let skip = lines.len().saturating_sub(h).min(sel_line.saturating_sub(h / 2));
+    f.render_widget(Paragraph::new(lines.into_iter().skip(skip).collect::<Vec<_>>()), body);
 }

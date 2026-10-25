@@ -100,26 +100,32 @@ export class Cache<T> {
   private data = new Map<string, T>();
   private loading = new Set<string>();
   private errors = new Map<string, string>();
+  /// Bumped when a key is forgotten or replaced: a reply to an older fetch is dropped.
+  private gen = new Map<string, number>();
   constructor(private fetcher: (key: string) => Promise<T>) {}
+  private start(key: string, keepErrors: boolean): void {
+    this.loading.add(key);
+    const g = (this.gen.get(key) ?? 0) + 1;
+    this.gen.set(key, g);
+    this.fetcher(key).then((v) => { if (this.gen.get(key) === g) { this.data.set(key, v); if (keepErrors) this.errors.delete(key); } }, (e) => { if (this.gen.get(key) === g && !keepErrors) this.errors.set(key, errText(e)); })
+      .finally(() => { if (this.gen.get(key) === g) this.loading.delete(key); ui.render(); });
+  }
   get(key: string): T | undefined {
-    if (!this.data.has(key) && !this.loading.has(key) && !this.errors.has(key) && conn.state === "open") {
-      this.loading.add(key);
-      this.fetcher(key).then((v) => this.data.set(key, v), (e) => this.errors.set(key, errText(e)))
-        .finally(() => { this.loading.delete(key); ui.render(); });
-    }
+    if (!this.data.has(key) && !this.loading.has(key) && !this.errors.has(key) && conn.state === "open") this.start(key, false);
     return this.data.get(key);
   }
   error(key: string): string | undefined { return this.errors.get(key); }
-  set(key: string, v: T): void { this.data.set(key, v); }
+  set(key: string, v: T): void { this.data.set(key, v); this.gen.set(key, (this.gen.get(key) ?? 0) + 1); }
   /// Fetch `key` again, keeping what's shown until the new data arrives (no flicker).
   refresh(key: string): void {
     if (this.loading.has(key) || conn.state !== "open") return;
-    this.loading.add(key);
-    this.fetcher(key).then((v) => { this.data.set(key, v); this.errors.delete(key); }, () => {}).finally(() => { this.loading.delete(key); ui.render(); });
+    this.start(key, true);
   }
-  /// Forget `key` (everything without one) and load again.
+  /// Forget `key` (everything without one) and load again. A fetch still in flight is ignored
+  /// when it lands, so it can't put the data from before the change back.
   reload(key?: string): void {
-    if (key === undefined) { this.data.clear(); this.errors.clear(); } else { this.data.delete(key); this.errors.delete(key); }
+    const keys = key === undefined ? [...new Set([...this.data.keys(), ...this.loading, ...this.errors.keys()])] : [key];
+    for (const k of keys) { this.gen.set(k, (this.gen.get(k) ?? 0) + 1); this.loading.delete(k); this.data.delete(k); this.errors.delete(k); }
     ui.render();
   }
 }
@@ -133,11 +139,15 @@ export function pending<T>(c: Cache<T>, key: string, what = "Loading…"): HTMLE
 
 // ── sheets ──────────────────────────────────────────────────────────────────────────────────
 
-export interface Sheet { el: HTMLElement; close: () => void }
+export interface Sheet { el: HTMLElement; close: () => void; /// Runs once, however it closed (✕, Esc, a tap outside, `close()`).
+  onClose: (fn: () => void) => void }
 let openSheets: Sheet[] = [];
 
+const FOCUSABLE = "a[href], button:not([disabled]), input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
+
 /// A dialog that slides up on a phone and sits in the middle on a desktop. It lives outside the
-/// page (so re-renders leave it alone) and closes on Esc or a tap outside it.
+/// page (so re-renders leave it alone) and closes on Esc or a tap outside it. Focus moves into
+/// it and comes back to where it was; the page behind is inert while it is open, and Tab stays inside.
 export function sheet(title: string, body: Child[], foot: Child[] = []): Sheet {
   const scrim = h("div", { class: "scrim" });
   const el = h("div", { class: "sheet", role: "dialog", "aria-modal": "true", "aria-label": title },
@@ -145,16 +155,50 @@ export function sheet(title: string, body: Child[], foot: Child[] = []): Sheet {
     h("div", { class: "sheet-body" }, ...body),
     foot.length ? h("div", { class: "sheet-foot" }, ...foot) : null);
   scrim.append(el);
-  const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && openSheets[openSheets.length - 1] === s) s.close(); };
+  const before = document.activeElement as HTMLElement | null;
+  const closers: (() => void)[] = [];
+  const onKey = (e: KeyboardEvent) => {
+    if (openSheets[openSheets.length - 1] !== s) return;
+    if (e.key === "Escape") { s.close(); return; }
+    if (e.key === "Tab") {
+      const f = [...el.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((x) => x.offsetParent !== null);
+      if (!f.length) return;
+      const first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && (document.activeElement === first || !el.contains(document.activeElement))) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && (document.activeElement === last || !el.contains(document.activeElement))) { e.preventDefault(); first.focus(); }
+    }
+  };
   const s: Sheet = {
     el: scrim,
-    close: () => { scrim.remove(); document.removeEventListener("keydown", onKey); openSheets = openSheets.filter((x) => x !== s); },
+    close: () => {
+      if (!openSheets.includes(s)) return;
+      scrim.remove();
+      document.removeEventListener("keydown", onKey);
+      openSheets = openSheets.filter((x) => x !== s);
+      setInert(openSheets.length > 0);
+      if (before?.isConnected) before.focus();
+      for (const f of closers.splice(0)) f();
+    },
+    onClose: (fn) => { closers.push(fn); },
   };
   scrim.addEventListener("mousedown", (e) => { if (e.target === scrim) s.close(); });
   document.addEventListener("keydown", onKey);
   document.body.append(scrim);
   openSheets.push(s);
+  setInert(true);
+  // Into the first field, else its first button (a menu, a confirmation).
+  requestAnimationFrame(() => {
+    if (!openSheets.includes(s) || el.contains(document.activeElement)) return;
+    (el.querySelector<HTMLElement>("input:not([type=checkbox]), textarea, select") ?? el.querySelector<HTMLElement>(".sheet-body button, .sheet-foot .primary, .sheet-foot button") ?? el.querySelector<HTMLElement>(FOCUSABLE))?.focus();
+  });
   return s;
+}
+
+/// The page behind a sheet can't be reached while one is open (focus, screen readers).
+function setInert(on: boolean): void {
+  const app = document.getElementById("app");
+  if (!app) return;
+  if (on) app.setAttribute("inert", ""); else app.removeAttribute("inert");
 }
 
 // A sheet belongs to the page it was opened on.
@@ -226,7 +270,10 @@ export function form(title: string, fields: Field[], label: string, go: (v: Valu
   });
   const err = h("p", { class: "form-err" });
   const submit = h("button", { class: opts.danger ? "deny" : "primary" }, label);
+  let busy = false;
   const run = async () => {
+    // A second Enter or tap while the first is being answered does nothing.
+    if (busy) return;
     const v: Values = {};
     for (const f of fields) {
       const i = inputs.get(f.key)!;
@@ -235,6 +282,7 @@ export function form(title: string, fields: Field[], label: string, go: (v: Valu
       else if ("required" in f && f.required) { err.textContent = `${f.label} is needed.`; i.focus(); return; }
     }
     err.textContent = "";
+    busy = true;
     submit.disabled = true;
     try {
       await go(v);
@@ -242,6 +290,8 @@ export function form(title: string, fields: Field[], label: string, go: (v: Valu
     } catch (e) {
       err.textContent = errText(e);
       submit.disabled = false;
+    } finally {
+      busy = false;
     }
   };
   submit.addEventListener("click", () => void run());
@@ -292,3 +342,33 @@ export function download(name: string, text: string, type = "text/plain"): void 
 /// Go to a route.
 export const go = (hash: string): void => { location.hash = hash; };
 export const enc = encodeURIComponent;
+/// `decodeURIComponent` that never throws: a malformed escape in a route (`%E0%A4%A`) is kept as typed.
+export function safeDecode(s: string): string {
+  try { return decodeURIComponent(s); } catch { return s; }
+}
+/// An address that came from data (a PR link, a check's log, a message): only `http(s)://` is ever
+/// followed. Anything else (`javascript:`, `data:`) is `null`, so it can't become a link.
+export function webHref(u: unknown): string | null {
+  if (typeof u !== "string") return null;
+  try {
+    const url = new URL(u);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.href : null;
+  } catch { return null; }
+}
+/// Same as `webHref` (the name the rest of the app reaches for).
+export const safeHref = webHref;
+/// `window.open` for a data-derived address, with the same rule as `webHref`.
+export function openWeb(u: unknown): void {
+  const href = webHref(u);
+  if (href) window.open(href, "_blank", "noopener,noreferrer");
+}
+/// Run `fn` once at a time: while one call is in flight, others return `undefined` (a double tap,
+/// a second Enter). Wrap a form's or a button's handler with it.
+export function once<A extends unknown[], R>(fn: (...a: A) => Promise<R> | R): (...a: A) => Promise<R | undefined> {
+  let busy = false;
+  return async (...a: A) => {
+    if (busy) return undefined;
+    busy = true;
+    try { return await fn(...a); } finally { busy = false; }
+  };
+}

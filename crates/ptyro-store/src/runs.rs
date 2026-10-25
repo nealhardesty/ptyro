@@ -136,7 +136,7 @@ impl Store {
             )?;
             for (seq, at, kind, step, payload) in events {
                 tx.execute(
-                    "INSERT INTO run_event (run_id, seq, at, kind, step_id, payload) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    "INSERT OR IGNORE INTO run_event (run_id, seq, at, kind, step_id, payload) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![row.id, seq as i64, at as i64, kind, step, payload.to_string()],
                 )?;
             }

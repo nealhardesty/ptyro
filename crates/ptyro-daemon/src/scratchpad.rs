@@ -142,6 +142,12 @@ impl Daemon {
         text: &str,
         by: Option<String>,
     ) -> Result<Reply, Error> {
+        if text.len() > ptyro_core::scratchpad::MAX_PAD_BYTES {
+            return Err(Error::invalid(format!(
+                "the scratchpad is limited to {} MiB",
+                ptyro_core::scratchpad::MAX_PAD_BYTES >> 20
+            )));
+        }
         let _l = self.pad_state.lock.lock().expect("pad lock");
         let pad = self.pad();
         let cur = pad.read().map_err(Self::pad_err)?;
@@ -161,7 +167,7 @@ impl Daemon {
     ) -> (Option<String>, Option<String>) {
         if let Some(s) = session.and_then(|a| self.resolve(a).ok()) {
             let (wt, name, agent, dir) = {
-                let m = s.meta.lock().expect("meta");
+                let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 (
                     m.place.worktree.clone(),
                     m.name.clone(),
@@ -296,7 +302,7 @@ impl Daemon {
     /// The live editor session, if there is one.
     fn pad_session(&self) -> Option<Arc<Session>> {
         self.sessions().into_iter().find(|s| {
-            let m = s.meta.lock().expect("meta");
+            let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             m.place.pad && m.state.is_live()
         })
     }

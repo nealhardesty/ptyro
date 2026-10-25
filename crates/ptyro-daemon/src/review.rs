@@ -3,7 +3,7 @@
 //! in the main checkout, and the review queue with its `max_unreviewed` gate and digest.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -69,13 +69,47 @@ fn apply(git: &Git, dir: &Path, patch_text: &str) -> Result<(), Error> {
     r.map(drop).map_err(|e| Error::conflict(format!("the changes don't apply cleanly ({e})")))
 }
 
+/// Copy `files` (paths relative to both) from one checkout to the other. Never through a link:
+/// an agent can leave `f -> ~/.ssh/authorized_keys` in its worktree, and a copy that followed it
+/// would write there (or carry a key out as an ordinary file). A source that is not a plain file,
+/// or a destination that is a link or sits behind one, is skipped.
 fn copy_files(from: &Path, to: &Path, files: &[String]) -> Result<(), Error> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let nofollow = rustix::fs::OFlags::NOFOLLOW.bits() as i32;
     for f in files {
-        let (src, dst) = (from.join(f), to.join(f));
+        let rel = Path::new(f);
+        if rel.is_absolute()
+            || rel.components().any(|c| !matches!(c, std::path::Component::Normal(_)))
+        {
+            continue;
+        }
+        let (src, dst) = (from.join(rel), to.join(rel));
+        let is_link =
+            |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink());
+        if !std::fs::symlink_metadata(&src).is_ok_and(|m| m.file_type().is_file())
+            || rel.ancestors().any(|a| !a.as_os_str().is_empty() && is_link(&to.join(a)))
+        {
+            continue;
+        }
         if let Some(d) = dst.parent() {
             std::fs::create_dir_all(d).map_err(|e| Error::internal(e.to_string()))?;
         }
-        std::fs::copy(&src, &dst).map_err(|e| Error::internal(format!("{f}: {e}")))?;
+        let copy = || -> std::io::Result<()> {
+            let mut input =
+                std::fs::OpenOptions::new().read(true).custom_flags(nofollow).open(&src)?;
+            let mode = input.metadata()?.permissions().mode() & 0o777;
+            let mut out = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(mode)
+                .custom_flags(nofollow)
+                .open(&dst)?;
+            std::io::copy(&mut input, &mut out)?;
+            out.flush()
+        };
+        copy().map_err(|e| Error::internal(format!("{f}: {e}")))?;
     }
     Ok(())
 }
@@ -219,7 +253,7 @@ impl Daemon {
                     .into_iter()
                     .filter(|s| s.kind() == SessionKind::Agent)
                     .filter_map(|s| {
-                        let m = s.meta.lock().expect("meta");
+                        let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                         m.turn_base.clone().map(|b| (b, m.turn_started_ms))
                     })
                     .max_by_key(|(_, at)| *at)
@@ -269,7 +303,7 @@ impl Daemon {
             let at = now_ms();
             let path = wt.path.clone();
             if let Ok(Some(sha)) = blocking(move || Git::new().snapshot(&path)).await {
-                let mut m = s.meta.lock().expect("meta");
+                let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 m.turn_base = Some(sha);
                 m.turn_started_ms = at;
             }
@@ -399,10 +433,17 @@ impl Daemon {
             };
             let finished_at = match (s.is_live(), status) {
                 (true, Some(AgentStatus::Idle | AgentStatus::Done | AgentStatus::Errored)) => since,
-                (false, _) => s.meta.lock().expect("meta").ended_ms.unwrap_or(since),
+                (false, _) => s
+                    .meta
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .ended_ms
+                    .unwrap_or(since),
                 _ => continue,
             };
-            if s.meta.lock().expect("meta").turns == 0 && s.is_live() {
+            if s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).turns == 0
+                && s.is_live()
+            {
                 continue;
             }
             if reviewed.get(&wt.id).is_some_and(|r| *r >= finished_at) {
@@ -448,7 +489,14 @@ impl Daemon {
                 reasons.push("the agent stopped with an error".into());
             }
             // Verified-done (M7.9): proven beats claimed.
-            match s.meta.lock().expect("meta").verify.as_ref().map(|v| v.state) {
+            match s
+                .meta
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .verify
+                .as_ref()
+                .map(|v| v.state)
+            {
                 Some(ptyro_core::session::VerifyState::Passed) => {
                     score += 25;
                     reasons.push("verified".into());
@@ -653,7 +701,10 @@ impl Daemon {
                 if push {
                     let remote =
                         git.main_remote(&root).map(|r| r.name).unwrap_or_else(|| "origin".into());
-                    git.run(&root, &["push", "--quiet", &remote, &target]).map_err(git_err)?;
+                    // The user asked for this push: their `pre-push` hook (a secret scanner,
+                    // say) runs like it would for their own `git push`.
+                    git.run_hooked(&root, &["push", "--quiet", "--", &remote, &target])
+                        .map_err(git_err)?;
                     notes.push(format!("pushed {target} to {remote}"));
                 }
                 Ok((notes, integrated))
@@ -772,7 +823,7 @@ impl Daemon {
 /// What the agent last said: its turn's reply when the adapter reports one, else the status
 /// detail, else the screen's last meaningful line.
 pub(crate) fn last_message(s: &crate::session::Session) -> Option<String> {
-    let reply = s.meta.lock().expect("meta").last_reply.clone();
+    let reply = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).last_reply.clone();
     reply
         .as_deref()
         .and_then(|r| r.lines().map(str::trim).find(|l| !l.is_empty()))
@@ -902,7 +953,14 @@ fn carry_back(git: &Git, root: &Path, wt: &Path, c: &Pair) -> Result<Vec<String>
         .copied
         .iter()
         .filter(|f| {
-            let (a, b) = (std::fs::read(root.join(f)).ok(), std::fs::read(wt.join(f)).ok());
+            // Plain files on both sides: a link left where a copy was is not "an edit".
+            let plain = |p: PathBuf| {
+                std::fs::symlink_metadata(&p)
+                    .is_ok_and(|m| m.file_type().is_file())
+                    .then(|| std::fs::read(p).ok())
+                    .flatten()
+            };
+            let (a, b) = (plain(root.join(f)), plain(wt.join(f)));
             a.is_some() && a != b
         })
         .cloned()
@@ -947,4 +1005,60 @@ fn pair_off(git: &Git, root: &Path, wt: &Path, c: &Pair) -> Result<Vec<String>, 
         }
     }
     Ok(notes)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::symlink;
+
+    use super::*;
+
+    #[test]
+    fn copying_between_checkouts_never_goes_through_a_link() {
+        let d = tempfile::tempdir().unwrap();
+        let (root, wt, secret) =
+            (d.path().join("root"), d.path().join("wt"), d.path().join("secret"));
+        for p in [&root, &wt, &secret] {
+            std::fs::create_dir_all(p).unwrap();
+        }
+        std::fs::write(secret.join("authorized_keys"), "mine").unwrap();
+        std::fs::write(secret.join("id_ed25519"), "PRIVATE").unwrap();
+        std::fs::write(root.join("f"), "from the main checkout").unwrap();
+        std::fs::write(root.join("ok"), "plain").unwrap();
+        // The agent's worktree: `f` was swapped for a link into the secret directory, and a
+        // planted link would carry a key out as an ordinary file.
+        symlink(secret.join("authorized_keys"), wt.join("f")).unwrap();
+        symlink(secret.join("id_ed25519"), wt.join("leak")).unwrap();
+        symlink(&secret, wt.join("dir")).unwrap();
+        std::fs::write(root.join("dir_file"), "x").unwrap();
+        copy_files(&root, &wt, &["f".into(), "ok".into(), "dir/x".into(), "../escape".into()])
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(secret.join("authorized_keys")).unwrap(),
+            "mine",
+            "not written through the link"
+        );
+        assert_eq!(
+            std::fs::read_to_string(wt.join("ok")).unwrap(),
+            "plain",
+            "a plain file still copies"
+        );
+        assert!(!secret.join("x").exists(), "nor into a linked directory");
+        assert!(!d.path().join("escape").exists());
+        // Source side: a link in the worktree is not copied into the main checkout.
+        copy_files(&wt, &root, &["leak".into()]).unwrap();
+        assert!(!root.join("leak").exists(), "a planted link is not carried out as a file");
+        // The mode comes along.
+        std::fs::set_permissions(
+            root.join("ok"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o750),
+        )
+        .unwrap();
+        std::fs::remove_file(wt.join("ok")).unwrap();
+        copy_files(&root, &wt, &["ok".into()]).unwrap();
+        let mode = std::os::unix::fs::PermissionsExt::mode(
+            &std::fs::metadata(wt.join("ok")).unwrap().permissions(),
+        );
+        assert_eq!(mode & 0o777, 0o750 & !0o022);
+    }
 }
