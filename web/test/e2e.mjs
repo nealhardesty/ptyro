@@ -50,6 +50,7 @@ const scenarios = {
     // (Projects arrive a moment after the first cards; a tap before they do offers "Add a project"
     // instead of the sheet. A person would tap again, so a fresh page does.)
     for (let tries = 0; ; tries++) {
+      await sleep(700 * (tries + 1));
       await tab.click("button.icon.plus");
       try { await tab.waitFor("the sheet", `!!document.querySelector(".sheet-foot .primary")`, 2500); break; }
       catch (e) { if (tries >= 4) throw e; await fresh("#/"); await sleep(500); }
