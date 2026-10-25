@@ -47,8 +47,13 @@ const scenarios = {
 
   // ＋, a prompt, Start: a session in a new worktree, which then shows as a card.
   async newTask() {
-    await tab.click("button.icon.plus");
-    await tab.waitFor("the sheet", `!!document.querySelector(".sheet-foot .primary")`);
+    // (Projects arrive a moment after the first cards; a tap before they do offers "Add a project"
+    // instead of the sheet. A person would tap again, so a fresh page does.)
+    for (let tries = 0; ; tries++) {
+      await tab.click("button.icon.plus");
+      try { await tab.waitFor("the sheet", `!!document.querySelector(".sheet-foot .primary")`, 2500); break; }
+      catch (e) { if (tries >= 4) throw e; await fresh("#/"); await sleep(500); }
+    }
     await tab.eval(`(() => { const t = document.querySelector("textarea"); t.value = "e2e task"; t.dispatchEvent(new Event("input", { bubbles: true })); })()`);
     await tab.click(".sheet-foot .primary");
     const made = await until("a worktree session", () => sessions().find((s) => s.name !== "cli-shell" && s.name !== "blocked1"));
