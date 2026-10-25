@@ -317,7 +317,7 @@ async fn dispatch(
         Some(Cmd::Read { session, screen: _, scrollback, ansi, plain: _, json, chat: false }) => {
             crate::script::read(&ctx, session, scrollback, ansi, json).await
         }
-        Some(Cmd::Config { cmd }) => crate::config::run(&ctx.paths, cmd),
+        Some(Cmd::Config { cmd }) => crate::config::run(&ctx, cmd).await,
         Some(Cmd::Project { cmd }) => crate::projects::project(&ctx, cmd).await,
         Some(Cmd::Pr { cmd }) => crate::ship::pr(&ctx, cmd).await,
         Some(Cmd::WatchPr { worktree, off }) => {

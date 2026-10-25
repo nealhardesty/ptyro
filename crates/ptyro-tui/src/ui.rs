@@ -1420,6 +1420,7 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
         ))
     };
     match o {
+        Overlay::Settings(p) => crate::settings::draw(app, p, f, area),
         Overlay::Help { filter, scroll } => {
             let r = boxed(area, 88, area.height.saturating_sub(4));
             f.render_widget(Clear, r);

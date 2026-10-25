@@ -39,6 +39,8 @@ pub enum Target {
     PadItem(u32),
     /// Scratchpad: a saved copy, by revision.
     PadRev(String),
+    /// Palette: this configuration option, in the settings panel (CFG1.1).
+    Setting(String),
 }
 
 #[derive(Debug, Clone)]

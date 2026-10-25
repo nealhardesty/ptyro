@@ -81,17 +81,26 @@ pub enum Source {
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum Kind {
     Bool,
-    Int { min: i64, max: i64 },
+    Int {
+        min: i64,
+        max: i64,
+    },
     /// One line of text.
     Text,
     /// A command or other text that may run over several lines in the file (shown on one).
     Script,
     Path,
-    Choice { choices: &'static [Choice] },
+    Choice {
+        choices: &'static [Choice],
+    },
     /// One of what exists: themes, agents, editors, actions.
-    Dynamic { source: Source },
+    Dynamic {
+        source: Source,
+    },
     /// Several of a fixed few.
-    Set { choices: &'static [Choice] },
+    Set {
+        choices: &'static [Choice],
+    },
     /// A list of lines of text.
     List,
     /// A list of key names (`C-q`, `M-1`).
@@ -163,7 +172,17 @@ pub struct Setting {
 }
 
 const fn s(key: &'static str, section: &'static str, kind: Kind, help: &'static str) -> Setting {
-    Setting { key, section, kind, help, apply: Apply::Live, advanced: false, when: None, otherwise: "", example: "" }
+    Setting {
+        key,
+        section,
+        kind,
+        help,
+        apply: Apply::Live,
+        advanced: false,
+        when: None,
+        otherwise: "",
+        example: "",
+    }
 }
 
 impl Setting {
@@ -209,23 +228,108 @@ pub struct Section {
 }
 
 pub const SECTIONS: &[Section] = &[
-    Section { id: "interface", title: "Interface", blurb: "How the terminal UI looks and behaves.", scope: Scope::User },
-    Section { id: "keys", title: "Key bindings", blurb: "Your own keys, on top of the defaults.", scope: Scope::User },
-    Section { id: "themes", title: "Themes", blurb: "Colour schemes of your own.", scope: Scope::User },
-    Section { id: "agents", title: "Agents", blurb: "The programs ptyro starts, and how.", scope: Scope::User },
-    Section { id: "profiles", title: "Profiles", blurb: "Accounts and identities, one per context.", scope: Scope::User },
-    Section { id: "attention", title: "Attention", blurb: "When a session needs you, and where you hear about it.", scope: Scope::User },
-    Section { id: "notifications", title: "Notifications", blurb: "How to reach you away from the screen.", scope: Scope::User },
-    Section { id: "worktrees", title: "Worktrees and ports", blurb: "Where new work goes and how it is named.", scope: Scope::User },
-    Section { id: "github", title: "GitHub and review", blurb: "Pull requests, checks and the review queue.", scope: Scope::User },
-    Section { id: "orchestration", title: "Orchestration", blurb: "Checkpoints, leases, the radar and messages between agents.", scope: Scope::User },
-    Section { id: "summaries", title: "Summaries", blurb: "A line about what each turn did, from a small model.", scope: Scope::User },
-    Section { id: "scratchpad", title: "Scratchpad and editors", blurb: "The notes file, and the editor that opens things.", scope: Scope::User },
-    Section { id: "daemon", title: "Daemon and recording", blurb: "The background service, scrollback and recordings.", scope: Scope::User },
-    Section { id: "remote", title: "Web app and remote", blurb: "Reaching ptyro from a phone or another computer.", scope: Scope::User },
-    Section { id: "project", title: "This project", blurb: "Set up for one repository.", scope: Scope::Project },
-    Section { id: "scripts", title: "Project scripts", blurb: "What runs when work starts, finishes and in between.", scope: Scope::Project },
-    Section { id: "prompts", title: "Project prompts", blurb: "Snippets for new sessions.", scope: Scope::Project },
+    Section {
+        id: "interface",
+        title: "Interface",
+        blurb: "How the terminal UI looks and behaves.",
+        scope: Scope::User,
+    },
+    Section {
+        id: "keys",
+        title: "Key bindings",
+        blurb: "Your own keys, on top of the defaults.",
+        scope: Scope::User,
+    },
+    Section {
+        id: "themes",
+        title: "Themes",
+        blurb: "Colour schemes of your own.",
+        scope: Scope::User,
+    },
+    Section {
+        id: "agents",
+        title: "Agents",
+        blurb: "The programs ptyro starts, and how.",
+        scope: Scope::User,
+    },
+    Section {
+        id: "profiles",
+        title: "Profiles",
+        blurb: "Accounts and identities, one per context.",
+        scope: Scope::User,
+    },
+    Section {
+        id: "attention",
+        title: "Attention",
+        blurb: "When a session needs you, and where you hear about it.",
+        scope: Scope::User,
+    },
+    Section {
+        id: "notifications",
+        title: "Notifications",
+        blurb: "How to reach you away from the screen.",
+        scope: Scope::User,
+    },
+    Section {
+        id: "worktrees",
+        title: "Worktrees and ports",
+        blurb: "Where new work goes and how it is named.",
+        scope: Scope::User,
+    },
+    Section {
+        id: "github",
+        title: "GitHub and review",
+        blurb: "Pull requests, checks and the review queue.",
+        scope: Scope::User,
+    },
+    Section {
+        id: "orchestration",
+        title: "Orchestration",
+        blurb: "Checkpoints, leases, the radar and messages between agents.",
+        scope: Scope::User,
+    },
+    Section {
+        id: "summaries",
+        title: "Summaries",
+        blurb: "A line about what each turn did, from a small model.",
+        scope: Scope::User,
+    },
+    Section {
+        id: "scratchpad",
+        title: "Scratchpad and editors",
+        blurb: "The notes file, and the editor that opens things.",
+        scope: Scope::User,
+    },
+    Section {
+        id: "daemon",
+        title: "Daemon and recording",
+        blurb: "The background service, scrollback and recordings.",
+        scope: Scope::User,
+    },
+    Section {
+        id: "remote",
+        title: "Web app and remote",
+        blurb: "Reaching ptyro from a phone or another computer.",
+        scope: Scope::User,
+    },
+    Section {
+        id: "project",
+        title: "This project",
+        blurb: "Set up for one repository.",
+        scope: Scope::Project,
+    },
+    Section {
+        id: "scripts",
+        title: "Project scripts",
+        blurb: "What runs when work starts, finishes and in between.",
+        scope: Scope::Project,
+    },
+    Section {
+        id: "prompts",
+        title: "Project prompts",
+        blurb: "Snippets for new sessions.",
+        scope: Scope::Project,
+    },
 ];
 
 pub fn section(id: &str) -> Option<&'static Section> {
@@ -259,14 +363,70 @@ pub enum Layout {
 }
 
 pub const COLLECTIONS: &[Collection] = &[
-    Collection { path: "keys", section: "keys", noun: "binding", layout: Layout::Map(Kind::Dynamic { source: Source::Actions }), reserved: &[], starter: &[] },
-    Collection { path: "themes", section: "themes", noun: "theme", layout: Layout::Tables, reserved: &[], starter: &[("base", "ptyro-dark")] },
-    Collection { path: "agents", section: "agents", noun: "agent", layout: Layout::Tables, reserved: &[], starter: &[] },
-    Collection { path: "profiles", section: "profiles", noun: "profile", layout: Layout::Tables, reserved: &[], starter: &[] },
-    Collection { path: "notifications.sinks", section: "notifications", noun: "sink", layout: Layout::Array, reserved: &[], starter: &[] },
-    Collection { path: "editors", section: "scratchpad", noun: "editor", layout: Layout::Tables, reserved: &["default"], starter: &[] },
-    Collection { path: "scripts.run", section: "scripts", noun: "run script", layout: Layout::Tables, reserved: &[], starter: &[] },
-    Collection { path: "prompts", section: "prompts", noun: "prompt", layout: Layout::Map(Kind::Script), reserved: &[], starter: &[] },
+    Collection {
+        path: "keys",
+        section: "keys",
+        noun: "binding",
+        layout: Layout::Map(Kind::Dynamic { source: Source::Actions }),
+        reserved: &[],
+        starter: &[],
+    },
+    Collection {
+        path: "themes",
+        section: "themes",
+        noun: "theme",
+        layout: Layout::Tables,
+        reserved: &[],
+        starter: &[("base", "ptyro-dark")],
+    },
+    Collection {
+        path: "agents",
+        section: "agents",
+        noun: "agent",
+        layout: Layout::Tables,
+        reserved: &[],
+        starter: &[],
+    },
+    Collection {
+        path: "profiles",
+        section: "profiles",
+        noun: "profile",
+        layout: Layout::Tables,
+        reserved: &[],
+        starter: &[],
+    },
+    Collection {
+        path: "notifications.sinks",
+        section: "notifications",
+        noun: "sink",
+        layout: Layout::Array,
+        reserved: &[],
+        starter: &[],
+    },
+    Collection {
+        path: "editors",
+        section: "scratchpad",
+        noun: "editor",
+        layout: Layout::Tables,
+        reserved: &["default"],
+        starter: &[],
+    },
+    Collection {
+        path: "scripts.run",
+        section: "scripts",
+        noun: "run script",
+        layout: Layout::Tables,
+        reserved: &[],
+        starter: &[],
+    },
+    Collection {
+        path: "prompts",
+        section: "prompts",
+        noun: "prompt",
+        layout: Layout::Map(Kind::Script),
+        reserved: &[],
+        starter: &[],
+    },
 ];
 
 pub fn collection(path: &str) -> Option<&'static Collection> {
@@ -328,11 +488,8 @@ const START_AGENTS: &[Choice] = &[
     c("after_setup", "once the setup script has run"),
     c("immediately", "straight away, while setup runs"),
 ];
-const MERGE: &[Choice] = &[
-    c("squash", "one commit"),
-    c("merge", "a merge commit"),
-    c("rebase", "rebase onto the base"),
-];
+const MERGE: &[Choice] =
+    &[c("squash", "one commit"), c("merge", "a merge commit"), c("rebase", "rebase onto the base")];
 const PAD_MODE: &[Choice] = &[
     c("drawer", "below the pane, like the quick terminal"),
     c("popup", "a window over everything"),
@@ -625,12 +782,9 @@ pub fn concrete(setting: &Setting, c: &Collection, name: &str) -> String {
 
 /// The settings of a collection's members (`agents.*.…`).
 pub fn fields_of(c: &Collection) -> impl Iterator<Item = &'static Setting> + '_ {
-    SETTINGS.iter().filter(move |s| {
-        s.key
-            .strip_prefix(c.path)
-            .and_then(|r| r.strip_prefix(".*."))
-            .is_some()
-    })
+    SETTINGS
+        .iter()
+        .filter(move |s| s.key.strip_prefix(c.path).and_then(|r| r.strip_prefix(".*.")).is_some())
 }
 
 // ── values ────────────────────────────────────────────────────────────────────────────────
@@ -644,21 +798,36 @@ pub struct Lookups {
 }
 
 /// What a [`Source`] offers, from the config and what the caller knows.
-pub fn options(source: Source, config: &Config, project: Option<&ProjectConfig>, lk: &Lookups) -> Vec<(String, String)> {
-    let named = |names: Vec<String>, what: &str| names.into_iter().map(|n| (n, what.to_owned())).collect();
+pub fn options(
+    source: Source,
+    config: &Config,
+    project: Option<&ProjectConfig>,
+    lk: &Lookups,
+) -> Vec<(String, String)> {
+    let named =
+        |names: Vec<String>, what: &str| names.into_iter().map(|n| (n, what.to_owned())).collect();
     match source {
         Source::Themes => {
-            let mut v: Vec<(String, String)> = lk.themes.iter().map(|t| (t.clone(), "built in".to_owned())).collect();
-            v.extend(config.themes.keys().filter(|k| !lk.themes.contains(k)).map(|k| (k.clone(), "yours".to_owned())));
+            let mut v: Vec<(String, String)> =
+                lk.themes.iter().map(|t| (t.clone(), "built in".to_owned())).collect();
+            v.extend(
+                config
+                    .themes
+                    .keys()
+                    .filter(|k| !lk.themes.contains(k))
+                    .map(|k| (k.clone(), "yours".to_owned())),
+            );
             v
         }
         Source::Agents => {
-            let mut names: BTreeSet<String> = ["claude", "codex", "gemini", "opencode"].map(String::from).into();
+            let mut names: BTreeSet<String> =
+                ["claude", "codex", "gemini", "opencode"].map(String::from).into();
             names.extend(config.agents.keys().cloned());
             named(names.into_iter().collect(), "agent")
         }
         Source::Editors => {
-            let mut names: BTreeSet<String> = crate::config::BUILTIN_EDITORS.iter().map(|s| (*s).to_owned()).collect();
+            let mut names: BTreeSet<String> =
+                crate::config::BUILTIN_EDITORS.iter().map(|s| (*s).to_owned()).collect();
             names.extend(config.editors.keys().filter(|k| *k != "default").cloned());
             named(names.into_iter().collect(), "editor")
         }
@@ -697,14 +866,28 @@ pub fn show(kind: &Kind, v: &Value) -> Option<String> {
         },
         Value::Array(a) if a.is_empty() => return None,
         Value::Array(a) => match kind {
-            Kind::Argv => a.iter().map(|x| shell_quote(x.as_str().unwrap_or_default())).collect::<Vec<_>>().join(" "),
-            _ => a.iter().map(|x| x.as_str().map_or_else(|| x.to_string(), str::to_owned)).collect::<Vec<_>>().join(", "),
+            Kind::Argv => a
+                .iter()
+                .map(|x| shell_quote(x.as_str().unwrap_or_default()))
+                .collect::<Vec<_>>()
+                .join(" "),
+            _ => a
+                .iter()
+                .map(|x| x.as_str().map_or_else(|| x.to_string(), str::to_owned))
+                .collect::<Vec<_>>()
+                .join(", "),
         },
         Value::Object(m) if m.is_empty() => return None,
         Value::Object(m) => match kind {
             // A secret that runs a program: the program is not a secret.
             Kind::Secret => m.get("command").and_then(Value::as_array).map(|a| {
-                format!("!{}", a.iter().map(|x| shell_quote(x.as_str().unwrap_or_default())).collect::<Vec<_>>().join(" "))
+                format!(
+                    "!{}",
+                    a.iter()
+                        .map(|x| shell_quote(x.as_str().unwrap_or_default()))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                )
             })?,
             _ => format!("{} entr{}", m.len(), if m.len() == 1 { "y" } else { "ies" }),
         },
@@ -784,11 +967,14 @@ fn items(input: &str) -> Result<Vec<String>, String> {
 
 fn one_of(what: &str, v: &str, choices: &[Choice]) -> Result<String, String> {
     let t = v.trim();
-    choices
-        .iter()
-        .find(|c| c.value.eq_ignore_ascii_case(t))
-        .map(|c| c.value.to_owned())
-        .ok_or_else(|| format!("{what}: {t:?} isn't one of {}", choices.iter().map(|c| c.value).collect::<Vec<_>>().join(", ")))
+    choices.iter().find(|c| c.value.eq_ignore_ascii_case(t)).map(|c| c.value.to_owned()).ok_or_else(
+        || {
+            format!(
+                "{what}: {t:?} isn't one of {}",
+                choices.iter().map(|c| c.value).collect::<Vec<_>>().join(", ")
+            )
+        },
+    )
 }
 
 fn array(v: Vec<String>) -> toml_edit::Value {
@@ -800,7 +986,11 @@ fn array(v: Vec<String>) -> toml_edit::Value {
 }
 
 /// What typing `input` for `setting` means, as the TOML value to write, or why it isn't one.
-pub fn parse_input(setting: &Setting, input: &str, lk: &Lookups) -> Result<toml_edit::Value, String> {
+pub fn parse_input(
+    setting: &Setting,
+    input: &str,
+    lk: &Lookups,
+) -> Result<toml_edit::Value, String> {
     let t = input.trim();
     let key = setting.key;
     let need = |what: &str| -> Result<(), String> {
@@ -809,7 +999,8 @@ pub fn parse_input(setting: &Setting, input: &str, lk: &Lookups) -> Result<toml_
     Ok(match setting.kind {
         Kind::Bool => truthy(t).map_err(|e| format!("{key}: {e}"))?.into(),
         Kind::Int { min, max } => {
-            let n: i64 = t.replace('_', "").parse().map_err(|_| format!("{key}: {t:?} isn't a number"))?;
+            let n: i64 =
+                t.replace('_', "").parse().map_err(|_| format!("{key}: {t:?} isn't a number"))?;
             if n < min || n > max {
                 return Err(format!("{key}: {n} is outside {min} to {max}"));
             }
@@ -876,7 +1067,9 @@ pub fn parse_input(setting: &Setting, input: &str, lk: &Lookups) -> Result<toml_
                 None => t.into(),
             }
         }
-        Kind::Opaque => return Err(format!("{key} is a table; edit it in the file (`ptyro config edit`)")),
+        Kind::Opaque => {
+            return Err(format!("{key} is a table; edit it in the file (`ptyro config edit`)"));
+        }
     })
 }
 
@@ -908,7 +1101,11 @@ fn container<'a>(root: &'a dyn TableLike, seg: &[String]) -> Option<&'a dyn Tabl
 
 /// [`container`], mutable, and made (as implicit tables, so no empty headers print) when
 /// `create` and it isn't there.
-fn container_mut<'a>(root: &'a mut dyn TableLike, seg: &[String], create: bool) -> Result<Option<&'a mut dyn TableLike>, String> {
+fn container_mut<'a>(
+    root: &'a mut dyn TableLike,
+    seg: &[String],
+    create: bool,
+) -> Result<Option<&'a mut dyn TableLike>, String> {
     let mut cur = root;
     let mut i = 0;
     while i + 1 < seg.len() {
@@ -926,11 +1123,15 @@ fn container_mut<'a>(root: &'a mut dyn TableLike, seg: &[String], create: bool) 
                 .get(i + 1)
                 .and_then(|x| x.parse().ok())
                 .ok_or_else(|| format!("{}: a position is needed", seg[..=i].join(".")))?;
-            let Some(t) = item.as_array_of_tables_mut().and_then(|a| a.get_mut(idx)) else { return Ok(None) };
+            let Some(t) = item.as_array_of_tables_mut().and_then(|a| a.get_mut(idx)) else {
+                return Ok(None);
+            };
             cur = t;
             i += 2;
         } else {
-            cur = item.as_table_like_mut().ok_or_else(|| format!("{} isn't a table in the file", seg[..=i].join(".")))?;
+            cur = item
+                .as_table_like_mut()
+                .ok_or_else(|| format!("{} isn't a table in the file", seg[..=i].join(".")))?;
             i += 1;
         }
     }
@@ -942,7 +1143,11 @@ fn item_at<'a>(doc: &'a toml_edit::DocumentMut, seg: &[String]) -> Option<&'a to
 }
 
 /// Put `value` at `seg`, keeping the comment at the end of its line when it replaces one.
-fn put(doc: &mut toml_edit::DocumentMut, seg: &[String], mut value: toml_edit::Value) -> Result<(), String> {
+fn put(
+    doc: &mut toml_edit::DocumentMut,
+    seg: &[String],
+    mut value: toml_edit::Value,
+) -> Result<(), String> {
     let name = seg.last().ok_or("no key")?.clone();
     let table = container_mut(doc.as_table_mut(), seg, true)?.ok_or("no such place in the file")?;
     match table.get(&name) {
@@ -966,12 +1171,14 @@ pub fn check(scope: Scope, text: &str) -> Result<(), String> {
         Scope::User => Config::parse(text).map(|_| ()),
         Scope::Project => {
             let t = ProjectConfig::parse(text)?;
-            let c: ProjectConfig = t.try_into().map_err(|e: toml::de::Error| e.to_string().trim_end().to_owned())?;
+            let c: ProjectConfig =
+                t.try_into().map_err(|e: toml::de::Error| e.to_string().trim_end().to_owned())?;
             if c.project.base.as_deref().is_some_and(|b| b.trim_start().starts_with('-')) {
                 return Err("project.base: must not start with `-`".into());
             }
             if let Some(t) = &c.worktree.branch_template {
-                crate::model::check_branch_template(t).map_err(|e| format!("worktree.branch_template: {e}"))?;
+                crate::model::check_branch_template(t)
+                    .map_err(|e| format!("worktree.branch_template: {e}"))?;
             }
             Ok(())
         }
@@ -988,17 +1195,48 @@ fn finish(scope: Scope, key: &str, new: String, extra: Extra<'_>) -> Result<Stri
     Ok(new)
 }
 
-fn unknown(key: &str) -> String {
-    let tail = key.rsplit('.').next().unwrap_or(key);
-    let near: Vec<&str> = SETTINGS
+/// How many single-character edits turn `a` into `b`.
+fn distance(a: &str, b: &str) -> usize {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.iter().enumerate() {
+        let mut prev = row[0];
+        row[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let cur = row[j + 1];
+            row[j + 1] = (prev + usize::from(ca != cb)).min(row[j] + 1).min(cur + 1);
+            prev = cur;
+        }
+    }
+    row[b.len()]
+}
+
+/// Why `key` isn't a setting, and the nearest ones.
+pub fn unknown(key: &str) -> String {
+    let mine: Vec<&str> = key.split('.').collect();
+    let mut near: Vec<(usize, String)> = SETTINGS
         .iter()
-        .map(|s| s.key)
-        .filter(|k| {
-            let last = k.rsplit('.').next().unwrap_or(k);
-            !tail.is_empty() && (last == tail || last.contains(tail) || tail.contains(last))
+        .filter_map(|s| {
+            // A member's name stands in for the `*`.
+            let cand: Vec<&str> = s
+                .key
+                .split('.')
+                .enumerate()
+                .map(|(i, seg)| if seg == "*" { mine.get(i).copied().unwrap_or(seg) } else { seg })
+                .collect();
+            let cand = cand.join(".");
+            let d = distance(key, &cand).min(
+                distance(
+                    mine.last().copied().unwrap_or(key),
+                    cand.rsplit('.').next().unwrap_or(&cand),
+                ) + 1,
+            );
+            (d <= 3.max(key.len() / 6)).then_some((d, cand))
         })
-        .take(3)
         .collect();
+    near.sort();
+    near.dedup_by(|a, b| a.1 == b.1);
+    let near: Vec<String> = near.into_iter().take(3).map(|(_, k)| k).collect();
     if near.is_empty() {
         format!("{key}: no such setting (`ptyro config list` shows them all)")
     } else {
@@ -1019,8 +1257,12 @@ fn target(scope: Scope, key: &str) -> Result<Target, String> {
     let Some(sec) = in_section.and_then(section) else { return Err(unknown(key)) };
     if sec.scope != scope {
         return Err(match scope {
-            Scope::User => format!("{key} is a project setting: use `--project` (it lives in the repository's .ptyro.toml)"),
-            Scope::Project => format!("{key} is a user setting: agents, profiles, keys and the rest can only be set in your own config, never in a repository (SPEC §13.1)"),
+            Scope::User => format!(
+                "{key} is a project setting: use `--project` (it lives in the repository's .ptyro.toml)"
+            ),
+            Scope::Project => format!(
+                "{key} is a user setting: agents, profiles, keys and the rest can only be set in your own config, never in a repository (SPEC §13.1)"
+            ),
         });
     }
     match (member, setting) {
@@ -1039,7 +1281,14 @@ fn map_setting(c: &Collection, kind: Kind) -> Setting {
 
 /// Set `key` to what `input` means, in the file's `text`. Everything else in the file stays as
 /// it is.
-pub fn set(scope: Scope, text: &str, key: &str, input: &str, lk: &Lookups, extra: Extra<'_>) -> Result<String, String> {
+pub fn set(
+    scope: Scope,
+    text: &str,
+    key: &str,
+    input: &str,
+    lk: &Lookups,
+    extra: Extra<'_>,
+) -> Result<String, String> {
     let value = match target(scope, key)? {
         Target::Map(c, kind) => parse_input(&map_setting(c, kind), input, lk)?,
         Target::Setting(st) => {
@@ -1048,9 +1297,14 @@ pub fn set(scope: Scope, text: &str, key: &str, input: &str, lk: &Lookups, extra
             if matches!(st.kind, Kind::Path)
                 && st.key.starts_with("profiles.*.")
                 && parse_doc(text)?.as_table().get("profiles").is_some()
-                && parse_doc(text).ok().and_then(|d| item_at(&d, &split(key)).map(toml_edit::Item::is_table_like)) == Some(true)
+                && parse_doc(text)
+                    .ok()
+                    .and_then(|d| item_at(&d, &split(key)).map(toml_edit::Item::is_table_like))
+                    == Some(true)
             {
-                return Err(format!("{key} has credentials set in the file; edit it there (`ptyro config edit`)"));
+                return Err(format!(
+                    "{key} has credentials set in the file; edit it there (`ptyro config edit`)"
+                ));
             }
             v
         }
@@ -1095,7 +1349,15 @@ pub fn required(path: &str, kind: &str) -> &'static [&'static str] {
 /// Add a member to a collection. `fields` are its settings by short name (`command`, `url`; a
 /// sink's `type`); a binding or prompt takes its action or text as `value`. The new text is
 /// checked whole, so nothing half-made is written.
-pub fn add(scope: Scope, text: &str, path: &str, name: &str, fields: &[(&str, &str)], lk: &Lookups, extra: Extra<'_>) -> Result<String, String> {
+pub fn add(
+    scope: Scope,
+    text: &str,
+    path: &str,
+    name: &str,
+    fields: &[(&str, &str)],
+    lk: &Lookups,
+    extra: Extra<'_>,
+) -> Result<String, String> {
     let col = collection(path).ok_or_else(|| format!("{path} isn't a group of named things"))?;
     if section(col.section).is_some_and(|s| s.scope != scope) {
         return Err(format!("{path} belongs to the other kind of config file"));
@@ -1140,7 +1402,11 @@ pub fn add(scope: Scope, text: &str, path: &str, name: &str, fields: &[(&str, &s
             for (k, v) in all {
                 let sk = format!("{path}.{name}.{k}");
                 let st = find(&sk).ok_or_else(|| unknown(&sk))?;
-                put(&mut doc, &[full.clone(), vec![k.to_owned()]].concat(), parse_input(st, v, lk)?)?;
+                put(
+                    &mut doc,
+                    &[full.clone(), vec![k.to_owned()]].concat(),
+                    parse_input(st, v, lk)?,
+                )?;
             }
         }
         Layout::Array => {
@@ -1158,18 +1424,24 @@ pub fn add(scope: Scope, text: &str, path: &str, name: &str, fields: &[(&str, &s
                 let st = find(&sk).ok_or_else(|| unknown(&sk))?;
                 t.insert(k, toml_edit::Item::Value(parse_input(st, v, lk)?));
             }
-            let parent = container_mut(doc.as_table_mut(), &base, true)?.ok_or("no place for it")?;
+            let parent =
+                container_mut(doc.as_table_mut(), &base, true)?.ok_or("no place for it")?;
             let last = base.last().expect("a path");
             let list = parent
                 .entry(last)
                 .or_insert_with(|| toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new()));
-            list.as_array_of_tables_mut().ok_or_else(|| format!("{path} isn't a list of tables in the file"))?.push(t);
+            list.as_array_of_tables_mut()
+                .ok_or_else(|| format!("{path} isn't a list of tables in the file"))?
+                .push(t);
         }
     }
     finish(scope, path, doc.to_string(), extra)
 }
 
-fn lookup_mut<'a>(doc: &'a mut toml_edit::DocumentMut, seg: &[String]) -> Option<&'a mut toml_edit::Item> {
+fn lookup_mut<'a>(
+    doc: &'a mut toml_edit::DocumentMut,
+    seg: &[String],
+) -> Option<&'a mut toml_edit::Item> {
     let name = seg.last()?.clone();
     container_mut(doc.as_table_mut(), seg, false).ok()??.get_mut(&name)
 }
@@ -1183,18 +1455,30 @@ pub fn members(text: &str, path: &str) -> Vec<String> {
         Some(toml_edit::Item::ArrayOfTables(a)) => (0..a.len()).map(|i| i.to_string()).collect(),
         Some(other) => other
             .as_table_like()
-            .map(|t| t.iter().map(|(k, _)| k.to_owned()).filter(|k| !col.reserved.contains(&k.as_str())).collect())
+            .map(|t| {
+                t.iter()
+                    .map(|(k, _)| k.to_owned())
+                    .filter(|k| !col.reserved.contains(&k.as_str()))
+                    .collect()
+            })
             .unwrap_or_default(),
         None => Vec::new(),
     }
 }
 
 /// Remove a member and everything in it.
-pub fn remove(scope: Scope, text: &str, path: &str, name: &str, extra: Extra<'_>) -> Result<String, String> {
+pub fn remove(
+    scope: Scope,
+    text: &str,
+    path: &str,
+    name: &str,
+    extra: Extra<'_>,
+) -> Result<String, String> {
     let col = collection(path).ok_or_else(|| format!("{path} isn't a group of named things"))?;
     let mut doc = parse_doc(text)?;
     let seg: Vec<String> = path.split('.').map(str::to_owned).collect();
-    let item = lookup_mut(&mut doc, &seg).ok_or_else(|| format!("there is no {} to remove", col.noun))?;
+    let item =
+        lookup_mut(&mut doc, &seg).ok_or_else(|| format!("there is no {} to remove", col.noun))?;
     let emptied = match item {
         toml_edit::Item::ArrayOfTables(a) => {
             let i: usize = name.parse().map_err(|_| format!("{name:?} isn't a position"))?;
@@ -1205,7 +1489,9 @@ pub fn remove(scope: Scope, text: &str, path: &str, name: &str, extra: Extra<'_>
             a.is_empty()
         }
         other => {
-            let t = other.as_table_like_mut().ok_or_else(|| format!("{path} isn't a table in the file"))?;
+            let t = other
+                .as_table_like_mut()
+                .ok_or_else(|| format!("{path} isn't a table in the file"))?;
             if t.remove(name).is_none() {
                 return Err(format!("there is no {} called {name:?}", col.noun));
             }
@@ -1213,16 +1499,24 @@ pub fn remove(scope: Scope, text: &str, path: &str, name: &str, extra: Extra<'_>
         }
     };
     if emptied && let Some((last, up)) = seg.split_last() {
-        let _ = container_mut(doc.as_table_mut(), &[up.to_vec(), vec![last.clone()]].concat(), false)
-            .ok()
-            .flatten()
-            .map(|t| t.remove(last));
+        let _ =
+            container_mut(doc.as_table_mut(), &[up.to_vec(), vec![last.clone()]].concat(), false)
+                .ok()
+                .flatten()
+                .map(|t| t.remove(last));
     }
     finish(scope, &format!("{path}.{name}"), doc.to_string(), extra)
 }
 
 /// Give a member another name, keeping what is in it.
-pub fn rename(scope: Scope, text: &str, path: &str, from: &str, to: &str, extra: Extra<'_>) -> Result<String, String> {
+pub fn rename(
+    scope: Scope,
+    text: &str,
+    path: &str,
+    from: &str,
+    to: &str,
+    extra: Extra<'_>,
+) -> Result<String, String> {
     let col = collection(path).ok_or_else(|| format!("{path} isn't a group of named things"))?;
     if matches!(col.layout, Layout::Array) {
         return Err("sinks are ordered, not named".into());
@@ -1293,7 +1587,11 @@ pub struct Entry {
 
 fn or_otherwise(setting: &Setting, kind_text: Option<String>) -> String {
     kind_text.unwrap_or_else(|| {
-        if setting.otherwise.is_empty() { "—".to_owned() } else { format!("({})", setting.otherwise) }
+        if setting.otherwise.is_empty() {
+            "—".to_owned()
+        } else {
+            format!("({})", setting.otherwise)
+        }
     })
 }
 
@@ -1345,13 +1643,16 @@ pub fn entries(scope: Scope, root: &Value, files: &[(Origin, &str)]) -> Vec<Entr
         Scope::Project => serde_json::to_value(ProjectConfig::default()),
     }
     .unwrap_or_default();
-    let docs: Vec<(Origin, &str, Option<toml_edit::Document<String>>)> =
-        files.iter().map(|(o, t)| (*o, *t, toml_edit::Document::parse((*t).to_owned()).ok())).collect();
+    let docs: Vec<(Origin, &str, Option<toml_edit::Document<String>>)> = files
+        .iter()
+        .map(|(o, t)| (*o, *t, toml_edit::Document::parse((*t).to_owned()).ok()))
+        .collect();
     let origin_of = |seg: &[String]| -> (Origin, Option<usize>) {
         let mut found = (Origin::Default, None);
         for (o, text, doc) in &docs {
             if let Some(d) = doc
-                && container(d.as_table(), seg).is_some_and(|t| seg.last().is_some_and(|l| t.contains_key(l)))
+                && container(d.as_table(), seg)
+                    .is_some_and(|t| seg.last().is_some_and(|l| t.contains_key(l)))
             {
                 found = (*o, line_of(text, d, seg));
             }
@@ -1379,7 +1680,9 @@ pub fn entries(scope: Scope, root: &Value, files: &[(Origin, &str)]) -> Vec<Entr
             continue;
         }
         let names: Vec<String> = match lookup(root, col.path) {
-            Some(Value::Object(m)) => m.keys().filter(|k| !col.reserved.contains(&k.as_str())).cloned().collect(),
+            Some(Value::Object(m)) => {
+                m.keys().filter(|k| !col.reserved.contains(&k.as_str())).cloned().collect()
+            }
             Some(Value::Array(a)) => (0..a.len()).map(|i| i.to_string()).collect(),
             _ => Vec::new(),
         };
@@ -1395,7 +1698,9 @@ pub fn entries(scope: Scope, root: &Value, files: &[(Origin, &str)]) -> Vec<Entr
 /// The bindings or prompts of a map collection, as `(name, value)`.
 pub fn map_members(root: &Value, path: &str) -> Vec<(String, String)> {
     match lookup(root, path) {
-        Some(Value::Object(m)) => m.iter().map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_owned())).collect(),
+        Some(Value::Object(m)) => {
+            m.iter().map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_owned())).collect()
+        }
         _ => Vec::new(),
     }
 }
@@ -1411,11 +1716,15 @@ pub fn starter() -> String {
          # `ptyro config list` shows every setting; the panel (`C-q ,`) edits them without this file.\n",
     );
     let mut tables: Vec<&str> = Vec::new();
-    for st in settings(Scope::User).filter(|s| !s.advanced && !s.key.contains('*') && !matches!(s.kind, Kind::Opaque)) {
+    for st in settings(Scope::User)
+        .filter(|s| !s.advanced && !s.key.contains('*') && !matches!(s.kind, Kind::Opaque))
+    {
         let Some((table, key)) = st.key.rsplit_once('.') else { continue };
         let rendered = match lookup(&defaults, st.key) {
             None | Some(Value::Null) if !st.example.is_empty() => {
-                parse_input(st, st.example, &Lookups::default()).map(|v| v.to_string().trim().to_owned()).unwrap_or_default()
+                parse_input(st, st.example, &Lookups::default())
+                    .map(|v| v.to_string().trim().to_owned())
+                    .unwrap_or_default()
             }
             None | Some(Value::Null) => String::new(),
             Some(v) => toml::to_string(&serde_json::json!({ "x": v }))

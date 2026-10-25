@@ -124,6 +124,8 @@ pub enum Overlay {
         then: AfterTrust,
         scroll: usize,
     },
+    /// Every configuration option, edited in place (CFG1.1).
+    Settings(Box<crate::settings::Panel>),
 }
 
 /// Where a new session or worktree goes, gathered by the wizard (SPEC §11.5, M3.13).
@@ -1475,14 +1477,21 @@ impl App {
             DomainEvent::ConfigReloaded { error } => match error {
                 Some(e) => self.toast_err(format!("config not applied: {e}")),
                 None => {
-                    self.reload_config();
+                    // The panel made this change (or is showing the file): it says its own.
+                    let in_panel = matches!(self.overlay, Some(Overlay::Settings(_)));
+                    self.reload_config_with(!in_panel);
+                    if let Some(Overlay::Settings(p)) = &mut self.overlay {
+                        p.refresh();
+                    }
                     self.request(Pending::Registry, Request::ProfileList);
                 }
             },
         }
     }
 
-    fn reload_config(&mut self) {
+    /// Read the config again; `say` toasts that it was (the settings panel makes the change
+    /// itself and says its own).
+    fn reload_config_with(&mut self, say: bool) {
         let path = Config::path(&self.paths);
         match Config::load(&path) {
             Ok(config) => {
@@ -1493,7 +1502,8 @@ impl App {
                 self.config = config;
                 match errors.first() {
                     Some(e) => self.toast_err(format!("config: {e}")),
-                    None => self.toast("config reloaded"),
+                    None if say => self.toast("config reloaded"),
+                    None => {}
                 }
                 self.sync();
             }
@@ -2210,6 +2220,7 @@ impl App {
                 }
             }
             Some(Overlay::Peek { reply, .. }) => reply.push_str(&lines),
+            Some(Overlay::Settings(p)) => p.paste(&text),
             Some(_) => {}
             None if self.pad_popup.is_some() => {
                 self.forward_popup(InputEvent::Paste { text });
@@ -2574,17 +2585,7 @@ impl App {
                 Some(Offer { then: Then::Send(req, done), .. }) => {
                     self.request(Pending::Done(done), *req)
                 }
-                Some(Offer { then: Then::Edit(path), .. }) => {
-                    let editor = std::env::var("VISUAL")
-                        .or_else(|_| std::env::var("EDITOR"))
-                        .unwrap_or_else(|_| "vi".into());
-                    let argv: Vec<String> = editor
-                        .split_whitespace()
-                        .map(str::to_owned)
-                        .chain(std::iter::once(path.to_string_lossy().into_owned()))
-                        .collect();
-                    self.spawn(argv, Some(Dir::Down), None);
-                }
+                Some(Offer { then: Then::Edit(path), .. }) => self.edit_file(path, None),
                 None => self.toast("nothing to undo or fix right now"),
             },
             "sidebar.wider" => self.set_sidebar_width(self.sidebar_width + 1),
@@ -2727,6 +2728,7 @@ impl App {
                     .map_or(0, |i| (i + 1) % names.len());
                 self.set_theme(names[i].clone());
             }
+            "config.panel" => self.open_settings(cmd.arg.as_deref()),
             "config.edit" => {
                 let argv = vec![
                     std::env::current_exe()
@@ -2868,7 +2870,7 @@ impl App {
         self.toast_offer(
             format!("theme {name} (set ui.theme to keep it)"),
             false,
-            run_offer("edit the config", "config.edit"),
+            run_offer("keep it in Settings", "config.panel"),
         );
         self.theme_name = name;
     }
@@ -4184,6 +4186,17 @@ impl App {
                 target: Target::Theme(t),
             });
         }
+        // Every setting, to find it by what it does (CFG1.1).
+        for s in ptyro_core::settings::settings(ptyro_core::settings::Scope::User)
+            .filter(|s| !s.key.contains('*'))
+        {
+            items.push(Item {
+                label: format!("setting {}", s.key),
+                detail: s.help.into(),
+                key: None,
+                target: Target::Setting(s.key.into()),
+            });
+        }
         self.overlay = Some(Overlay::Picker {
             palette: Palette::new("Command palette", items),
             purpose: Purpose::Palette,
@@ -4262,6 +4275,14 @@ impl App {
                     .len()
                     .saturating_sub(self.overlay_body_h(2));
                 self.overlay = Some(Overlay::Help { filter, scroll: scroll.min(max) });
+            }
+            Overlay::Settings(mut p) => {
+                let acts = p.key(key);
+                let closing = acts.contains(&crate::settings::Action::Close);
+                if !closing {
+                    self.overlay = Some(Overlay::Settings(p));
+                }
+                self.settings_actions(acts);
             }
             Overlay::Task { text, name, naming, wizard } => {
                 self.task_key(key, text, name, naming, wizard)
@@ -4393,6 +4414,65 @@ impl App {
     }
 
     /// Text rows inside a full-height overlay box (help, explain, trust), less `chrome` rows.
+    /// The settings panel (CFG1.1), on `key` when given (`ui.theme`).
+    pub fn open_settings(&mut self, key: Option<&str>) {
+        let (project, _) = self.context();
+        let proj = project
+            .and_then(|id| self.projects.iter().find(|p| p.id == id || p.slug == id))
+            .map(|p| crate::settings::Proj { name: p.slug.clone(), root: p.root.clone() });
+        let mut panel = crate::settings::Panel::new(Config::path(&self.paths), proj);
+        if let Some(k) = key {
+            panel.jump(k);
+        }
+        self.overlay = Some(Overlay::Settings(Box::new(panel)));
+    }
+
+    /// What the settings panel asked for.
+    fn settings_actions(&mut self, acts: Vec<crate::settings::Action>) {
+        use crate::settings::Action as A;
+        for a in acts {
+            match a {
+                A::Close => {
+                    // (A theme being tried goes back to the one in use.)
+                    self.theme = Theme::resolve(&self.config, &self.theme_name.clone(), no_color());
+                    self.overlay = None;
+                }
+                A::Reload => self.reload_config_with(false),
+                A::Toast(s) => self.toast(s),
+                A::ToastErr(s) => self.toast_err(s),
+                A::Theme(Some(n)) => self.theme = Theme::resolve(&self.config, &n, no_color()),
+                A::Theme(None) => {
+                    self.theme = Theme::resolve(&self.config, &self.theme_name.clone(), no_color());
+                }
+                A::Run(id) => {
+                    self.overlay = None;
+                    self.run(&Command { action: id, arg: None });
+                }
+                A::EditFile(path, line) => {
+                    self.overlay = None;
+                    self.edit_file(path, line);
+                }
+            }
+        }
+    }
+
+    /// Open a file in `$VISUAL` / `$EDITOR`, in a split, at a line when the editor knows how.
+    fn edit_file(&mut self, path: std::path::PathBuf, line: Option<usize>) {
+        let editor = std::env::var("VISUAL")
+            .or_else(|_| std::env::var("EDITOR"))
+            .unwrap_or_else(|_| "vi".into());
+        let mut argv: Vec<String> = editor.split_whitespace().map(str::to_owned).collect();
+        let prog =
+            argv.first().map(|p| p.rsplit('/').next().unwrap_or(p).to_owned()).unwrap_or_default();
+        if let Some(l) = line
+            && ["vi", "vim", "nvim", "nano", "emacs", "view", "less"].contains(&prog.as_str())
+        {
+            argv.push(format!("+{l}"));
+        }
+        argv.push(path.to_string_lossy().into_owned());
+        self.spawn(argv, Some(Dir::Down), None);
+    }
+
     fn overlay_body_h(&self, chrome: u16) -> usize {
         let r = crate::ui::boxed(self.area, 0, self.area.height.saturating_sub(4));
         r.height.saturating_sub(chrome) as usize
@@ -4612,6 +4692,7 @@ impl App {
             (Target::RunScript(wt, name), _) => self.run_script(wt, Some(name)),
             (Target::Session(id), _) => self.show(id, split),
             (Target::Theme(name), _) => self.set_theme(name),
+            (Target::Setting(key), _) => self.open_settings(Some(&key)),
             (Target::NewShell, _) => self.spawn(Vec::new(), split, None),
             _ => {}
         }
@@ -4935,6 +5016,14 @@ impl App {
         let (x, y) = (m.column, m.row);
         // The popup is modal: a click doesn't reach the panes behind it.
         if self.pad_popup.is_some() && self.overlay.is_none() {
+            return;
+        }
+        if let Some(Overlay::Settings(p)) = &mut self.overlay {
+            let acts = p.mouse(m.kind, x, y);
+            if acts.contains(&crate::settings::Action::Close) {
+                self.overlay = None;
+            }
+            self.settings_actions(acts);
             return;
         }
         if self.overlay.is_some() {
@@ -5765,6 +5854,55 @@ mod tests {
             s.push('\n');
             s
         })
+    }
+
+    #[test]
+    fn the_settings_panel_opens_from_its_key_and_draws() {
+        let mut app = app();
+        // Its key after the prefix, and the palette's action, open the same panel.
+        assert_eq!(app.keymap.key_for("config.panel").as_deref(), Some("C-q C"));
+        app.run(&Command { action: "config.panel", arg: None });
+        assert!(matches!(app.overlay, Some(Overlay::Settings(_))));
+        let shown = screen(&app);
+        assert!(
+            shown.contains("Settings")
+                && shown.contains("Interface")
+                && shown.contains("Key bindings"),
+            "{shown}"
+        );
+        // Down to the settings, and a key on one of them.
+        for k in [KeyCode::Enter, KeyCode::Down] {
+            app.overlay_key(KeyEvent::new(k, Mods::NONE));
+        }
+        let shown = screen(&app);
+        assert!(
+            shown.contains("prefix") && shown.contains("sidebar_width")
+                || shown.contains("sidebar width")
+                || shown.contains("sidebar"),
+            "{shown}"
+        );
+        // Esc twice leaves it.
+        for _ in 0..2 {
+            app.overlay_key(KeyEvent::new(KeyCode::Esc, Mods::NONE));
+        }
+        assert!(app.overlay.is_none());
+    }
+
+    #[test]
+    fn every_setting_is_in_the_palette_and_opens_the_panel_on_it() {
+        let mut app = app();
+        app.run(&Command { action: "palette", arg: None });
+        for c in "setting sidebar_width".chars() {
+            app.overlay_key(KeyEvent::char(c));
+        }
+        app.overlay_key(KeyEvent::new(KeyCode::Enter, Mods::NONE));
+        let Some(Overlay::Settings(p)) = &app.overlay else { panic!("the panel") };
+        let _ = p;
+        let shown = screen(&app);
+        assert!(
+            shown.contains("sidebar_width") && shown.contains("How wide the sidebar is"),
+            "{shown}"
+        );
     }
 
     fn placed(name: &str, project: Option<&str>, worktree: Option<&str>) -> SessionInfo {

@@ -70,7 +70,7 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
                 std::fs::read_to_string(&config_path)
                     .map_err(|e| Error::internal(format!("{}: {e}", config_path.display())))?
             } else {
-                crate::config::STARTER.to_owned()
+                ptyro_core::settings::starter()
             };
             Ok(json!({ "path": config_path, "exists": exists, "text": text }))
         }

@@ -20,6 +20,7 @@ pub mod palette;
 mod quick;
 mod runs;
 mod sets;
+pub mod settings;
 pub mod theme;
 pub mod tour;
 pub mod tree;

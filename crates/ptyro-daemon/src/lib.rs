@@ -113,9 +113,10 @@ pub(crate) fn set_log_level(level: &str) {
     if std::env::var_os("PTYRO_LOG").is_some() {
         return;
     }
-    if let (Some(handle), Ok(filter)) =
-        (LOG_FILTER.get(), tracing_subscriber::EnvFilter::try_new(level.trim().to_ascii_lowercase()))
-    {
+    if let (Some(handle), Ok(filter)) = (
+        LOG_FILTER.get(),
+        tracing_subscriber::EnvFilter::try_new(level.trim().to_ascii_lowercase()),
+    ) {
         let _ = handle.reload(filter);
     }
 }

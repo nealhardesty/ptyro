@@ -91,6 +91,31 @@ fn config() -> Config {
     Paths::from_env().ok().and_then(|p| Config::load(&Config::path(&p)).ok()).unwrap_or_default()
 }
 
+/// Settings: the fixed keys of both files, and the members of the user's agents, themes…
+pub fn settings() -> Vec<CompletionCandidate> {
+    use ptyro_core::settings::{self, Layer, Scope};
+    let layer = Paths::from_env().ok().map(|p| Layer::User(Config::path(&p)));
+    let mut out: Vec<CompletionCandidate> = layer
+        .iter()
+        .flat_map(|l| settings::view(l, &crate::config::lookups()).entries)
+        .map(|e| candidate(e.key, Some(e.setting.help.to_owned())))
+        .collect();
+    out.extend(
+        settings::settings(Scope::Project)
+            .filter(|s| !s.key.contains('*'))
+            .map(|s| candidate(s.key.to_owned(), Some(s.help.to_owned()))),
+    );
+    out
+}
+
+/// The groups of named things `config add|rm|rename` take.
+pub fn collections() -> Vec<CompletionCandidate> {
+    ptyro_core::settings::COLLECTIONS
+        .iter()
+        .map(|c| candidate(c.path.to_owned(), Some(format!("a {}", c.noun))))
+        .collect()
+}
+
 pub fn profiles() -> Vec<CompletionCandidate> {
     ptyro_agents::profile::names(&config()).into_iter().map(|p| candidate(p, None)).collect()
 }

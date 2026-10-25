@@ -58,7 +58,9 @@ impl Layer {
     pub fn write(&self, text: &str) -> Result<(), String> {
         let path = self.path();
         match self {
-            Self::User(_) => crate::config::write_private(&path, text).map_err(|e| e.to_string())?,
+            Self::User(_) => {
+                crate::config::write_private(&path, text).map_err(|e| e.to_string())?
+            }
             Self::Shared(_) | Self::Local(_) => {
                 std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
             }
@@ -73,7 +75,9 @@ impl Layer {
     pub fn files(&self) -> Vec<Layer> {
         match self {
             Self::User(_) => vec![self.clone()],
-            Self::Shared(r) | Self::Local(r) => vec![Self::Shared(r.clone()), Self::Local(r.clone())],
+            Self::Shared(r) | Self::Local(r) => {
+                vec![Self::Shared(r.clone()), Self::Local(r.clone())]
+            }
         }
     }
 }
@@ -116,7 +120,9 @@ impl Op {
     fn keys(&self) -> Vec<String> {
         match self {
             Self::Set { key, .. } | Self::Unset { key } => vec![key.clone()],
-            Self::Add { path, .. } | Self::Remove { path, .. } | Self::Rename { path, .. } => vec![path.clone()],
+            Self::Add { path, .. } | Self::Remove { path, .. } | Self::Rename { path, .. } => {
+                vec![path.clone()]
+            }
         }
     }
 }
@@ -142,8 +148,12 @@ fn applies(keys: &[String]) -> Apply {
     for k in keys {
         let a = super::find(k)
             .map(|s| s.apply)
-            .or_else(|| super::collection(k).and_then(|c| super::fields_of(c).next().map(|s| s.apply)))
-            .or_else(|| super::member_of(k).and_then(|(c, _)| super::fields_of(c).next().map(|s| s.apply)))
+            .or_else(|| {
+                super::collection(k).and_then(|c| super::fields_of(c).next().map(|s| s.apply))
+            })
+            .or_else(|| {
+                super::member_of(k).and_then(|(c, _)| super::fields_of(c).next().map(|s| s.apply))
+            })
             .unwrap_or(Apply::Live);
         worst = match (worst, a) {
             (Apply::Restart, _) | (_, Apply::Restart) => Apply::Restart,
@@ -163,7 +173,8 @@ pub fn apply(layer: &Layer, op: &Op, lk: &Lookups, extra: Extra<'_>) -> Result<D
         Op::Set { key, value } => super::set(scope, &before, key, value, lk, extra)?,
         Op::Unset { key } => super::unset(scope, &before, key, extra)?,
         Op::Add { path, name, fields } => {
-            let f: Vec<(&str, &str)> = fields.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+            let f: Vec<(&str, &str)> =
+                fields.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
             super::add(scope, &before, path, name, &f, lk, extra)?
         }
         Op::Remove { path, name } => super::remove(scope, &before, path, name, extra)?,
@@ -177,10 +188,16 @@ pub fn apply(layer: &Layer, op: &Op, lk: &Lookups, extra: Extra<'_>) -> Result<D
         layer.write(&after)?;
         notes.push(apply.says().to_owned());
         if matches!(layer, Layer::Shared(_)) {
-            notes.push(format!("written to {}, which is committed: commit it to share it", project::FILE));
+            notes.push(format!(
+                "written to {}, which is committed: commit it to share it",
+                project::FILE
+            ));
         }
         if keys.iter().any(|k| k.starts_with("scripts.")) {
-            notes.push("its scripts changed, so ptyro asks you to trust them again before they run".to_owned());
+            notes.push(
+                "its scripts changed, so ptyro asks you to trust them again before they run"
+                    .to_owned(),
+            );
         }
     } else {
         notes.push("already like that".to_owned());
@@ -207,7 +224,8 @@ impl Source {
     }
 }
 
-const SOURCES: [Source; 5] = [Source::Themes, Source::Agents, Source::Editors, Source::Actions, Source::RunScripts];
+const SOURCES: [Source; 5] =
+    [Source::Themes, Source::Agents, Source::Editors, Source::Actions, Source::RunScripts];
 
 /// Everything the panel needs to show a family of settings.
 #[derive(Debug, Clone)]
@@ -231,7 +249,8 @@ pub fn view(layer: &Layer, lk: &Lookups) -> View {
     let scope = layer.scope();
     let layers = layer.files();
     let texts: Vec<String> = layers.iter().map(|l| l.read().unwrap_or_default()).collect();
-    let files: Vec<(Origin, &str)> = layers.iter().zip(&texts).map(|(l, t)| (l.origin(), t.as_str())).collect();
+    let files: Vec<(Origin, &str)> =
+        layers.iter().zip(&texts).map(|(l, t)| (l.origin(), t.as_str())).collect();
     let mut problem = None;
     let (root, config, pconfig) = match layer {
         Layer::User(path) => {
@@ -256,7 +275,9 @@ pub fn view(layer: &Layer, lk: &Lookups) -> View {
     // The names, in the order the files have them (the merged value sorts them).
     for col in super::COLLECTIONS.iter().filter(|c| in_scope(c.section)) {
         match col.layout {
-            super::Layout::Map(_) => maps.push((col.path.to_owned(), super::map_members(&root, col.path))),
+            super::Layout::Map(_) => {
+                maps.push((col.path.to_owned(), super::map_members(&root, col.path)))
+            }
             _ => {
                 let mut names = Vec::new();
                 for t in &texts {

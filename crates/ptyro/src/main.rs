@@ -832,8 +832,104 @@ enum ConfigCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Open the config file in $EDITOR, then validate it
-    Edit,
+    /// Open the config file in $EDITOR (at a setting, if you name one), then validate it
+    Edit {
+        /// Open at this setting's line, when the file sets it
+        #[arg(add = ArgValueCandidates::new(complete::settings))]
+        key: Option<String>,
+    },
+    /// List the settings with their values and where each comes from
+    List {
+        /// Only this section (`ui`, `remote`…) or keys starting with this
+        section: Option<String>,
+        /// Only what is set differently from the default
+        #[arg(long)]
+        changed: bool,
+        /// A repository's settings (`.ptyro.toml`) instead of your own; the project's name or
+        /// path, else the one you are in
+        #[arg(short, long, num_args = 0..=1, default_missing_value = "")]
+        project: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print one setting's value
+    Get {
+        #[arg(add = ArgValueCandidates::new(complete::settings))]
+        key: String,
+        /// Say what it is, where it comes from and what it does
+        #[arg(long)]
+        explain: bool,
+        #[arg(short, long, num_args = 0..=1, default_missing_value = "")]
+        project: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Change a setting: checked first, the file's comments kept, applied live where it can be
+    Set {
+        #[arg(add = ArgValueCandidates::new(complete::settings))]
+        key: String,
+        /// The value: `on`/`off`, a number, `30s`, text; several words make a list or a command
+        #[arg(required = true, num_args = 1.., allow_hyphen_values = true)]
+        value: Vec<String>,
+        /// Into a repository's `.ptyro.local.toml` (yours), or its `.ptyro.toml` with --shared
+        #[arg(short, long, num_args = 0..=1, default_missing_value = "")]
+        project: Option<String>,
+        /// With --project: the committed `.ptyro.toml` instead of your `.ptyro.local.toml`
+        #[arg(long, requires = "project")]
+        shared: bool,
+    },
+    /// Put a setting back to its default (remove it from the file)
+    Unset {
+        #[arg(required = true, add = ArgValueCandidates::new(complete::settings))]
+        keys: Vec<String>,
+        #[arg(short, long, num_args = 0..=1, default_missing_value = "")]
+        project: Option<String>,
+        #[arg(long, requires = "project")]
+        shared: bool,
+    },
+    /// Add an agent, theme, editor, key binding, notification sink, run script or prompt
+    Add {
+        /// agents, themes, editors, keys, notifications.sinks (project: scripts.run, prompts)
+        #[arg(add = ArgValueCandidates::new(complete::collections))]
+        collection: String,
+        /// Its name (a key binding's key; a sink has none)
+        name: Option<String>,
+        /// Its settings, as FIELD=VALUE (`command="aider --model sonnet"`); a binding's action
+        /// or a prompt's text is `value=…`; a sink's `type=ntfy`
+        #[arg(allow_hyphen_values = true)]
+        fields: Vec<String>,
+        #[arg(short, long, num_args = 0..=1, default_missing_value = "")]
+        project: Option<String>,
+        #[arg(long, requires = "project")]
+        shared: bool,
+    },
+    /// Remove one of those, and everything in it
+    Rm {
+        #[arg(add = ArgValueCandidates::new(complete::collections))]
+        collection: String,
+        /// Its name (a sink's position, from `config list notifications`)
+        name: String,
+        #[arg(short, long, num_args = 0..=1, default_missing_value = "")]
+        project: Option<String>,
+        #[arg(long, requires = "project")]
+        shared: bool,
+    },
+    /// Give one of those another name
+    Rename {
+        #[arg(add = ArgValueCandidates::new(complete::collections))]
+        collection: String,
+        from: String,
+        to: String,
+        #[arg(short, long, num_args = 0..=1, default_missing_value = "")]
+        project: Option<String>,
+        #[arg(long, requires = "project")]
+        shared: bool,
+    },
+    /// Print every setting's description as JSON, for tools that build forms
+    Schema {
+        #[arg(short, long, num_args = 0..=1, default_missing_value = "")]
+        project: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
