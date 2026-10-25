@@ -1276,8 +1276,11 @@ impl Daemon {
         let path = Config::path(&self.paths);
         let error = match Config::load(&path) {
             Ok(c) => {
+                crate::set_log_level(&c.daemon.log_level);
                 *self.config.write().expect("config") = c;
                 self.secrets.lock().expect("secrets").clear();
+                // A web app running with other `[remote]` settings starts again with these.
+                self.serve_child.wake();
                 tracing::info!("config reloaded");
                 None
             }

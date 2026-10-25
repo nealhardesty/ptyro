@@ -18,6 +18,8 @@ use crate::daemon::Daemon;
 #[derive(Default)]
 struct Run {
     child: Option<std::process::Child>,
+    /// The `[remote]` settings it was started with: a change starts it again.
+    started_with: Option<ptyro_core::config::Remote>,
     since_ms: Option<u64>,
     restarts: u32,
     last_exit: Option<String>,
@@ -70,9 +72,23 @@ impl Daemon {
         tokio::spawn(async move {
             let mut backoff = Duration::from_secs(1);
             loop {
-                let want = me.config().remote.serve;
+                let remote = me.config().remote;
+                let want = remote.serve;
                 let state = {
                     let mut r = me.serve_child.run.lock().expect("serve child");
+                    // `serve` itself is the switch; anything else it was started with is read once.
+                    let changed = r.started_with.as_ref().is_some_and(|w| {
+                        ptyro_core::config::Remote { serve: remote.serve, ..w.clone() } != remote
+                    });
+                    if changed && want && r.child.is_some() {
+                        tracing::info!("[remote] changed; starting ptyro serve again");
+                        if let Some(mut c) = r.child.take() {
+                            let _ = c.kill();
+                            let _ = c.wait();
+                        }
+                        r.since_ms = None;
+                        r.started_with = None;
+                    }
                     match r.child.as_mut().map(std::process::Child::try_wait) {
                         Some(Ok(Some(status))) => {
                             r.child = None;
@@ -151,6 +167,7 @@ impl Daemon {
         tracing::info!(pid = child.id(), "started ptyro serve");
         let mut r = self.serve_child.run.lock().expect("serve child");
         r.child = Some(child);
+        r.started_with = Some(self.config().remote);
         r.since_ms = Some(now_ms());
         Ok(())
     }

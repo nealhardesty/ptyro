@@ -525,7 +525,7 @@ fn tailscale_running() -> bool {
 }
 
 /// Write a file only its owner reads (a config can hold keys), replacing it whole.
-fn write_private(path: &Path, text: &str) -> Result<(), crate::Error> {
+pub(crate) fn write_private(path: &Path, text: &str) -> Result<(), crate::Error> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let io = |p: &Path, e: std::io::Error| crate::Error::internal(format!("{}: {e}", p.display()));
@@ -1187,6 +1187,14 @@ impl Config {
         // Each ring half starts with a keyframe (≈ 60 KB at 200×60), so it must hold one.
         if self.recorder.max_bytes().map_err(|e| format!("recorder.max_bytes: {e}"))? < 256 << 10 {
             return Err("recorder.max_bytes: at least 256KiB".into());
+        }
+        if !["error", "warn", "info", "debug", "trace"]
+            .contains(&self.daemon.log_level.trim().to_ascii_lowercase().as_str())
+        {
+            return Err(format!(
+                "daemon.log_level: {:?} (error, warn, info, debug or trace)",
+                self.daemon.log_level
+            ));
         }
         if self.daemon.scrollback_lines > 1_000_000 {
             return Err("daemon.scrollback_lines: at most 1000000".into());

@@ -103,6 +103,23 @@ fn prepare_dirs(paths: &Paths) -> Result<()> {
     Ok(())
 }
 
+/// Changes the log filter while the daemon runs (`[daemon] log_level`, set by `init_logging`).
+static LOG_FILTER: std::sync::OnceLock<
+    tracing_subscriber::reload::Handle<tracing_subscriber::EnvFilter, tracing_subscriber::Registry>,
+> = std::sync::OnceLock::new();
+
+/// Apply `[daemon] log_level`. `PTYRO_LOG`, when set, is the person's explicit choice and wins.
+pub(crate) fn set_log_level(level: &str) {
+    if std::env::var_os("PTYRO_LOG").is_some() {
+        return;
+    }
+    if let (Some(handle), Ok(filter)) =
+        (LOG_FILTER.get(), tracing_subscriber::EnvFilter::try_new(level.trim().to_ascii_lowercase()))
+    {
+        let _ = handle.reload(filter);
+    }
+}
+
 fn init_logging(
     paths: &Paths,
     foreground: bool,
@@ -119,6 +136,8 @@ fn init_logging(
         .context("open daemon log")?;
     let (file, guard) = tracing_appender::non_blocking(appender);
     let filter = EnvFilter::try_from_env("PTYRO_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
+    let (filter, handle) = tracing_subscriber::reload::Layer::new(filter);
+    let _ = LOG_FILTER.set(handle);
     let stderr = foreground.then(|| fmt::layer().with_writer(std::io::stderr));
     tracing_subscriber::registry()
         .with(filter)
@@ -261,6 +280,7 @@ async fn serve(
             Config::default()
         }
     };
+    set_log_level(&config.daemon.log_level);
     let db = paths.data.join("ptyro.db");
     let store = match Store::open(&db) {
         Ok(s) => Some(s),

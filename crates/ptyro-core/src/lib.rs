@@ -19,6 +19,7 @@ pub mod scratchpad;
 pub mod screen;
 pub mod secret;
 pub mod session;
+pub mod settings;
 pub mod status;
 
 pub use error::{Error, ErrorCode};
