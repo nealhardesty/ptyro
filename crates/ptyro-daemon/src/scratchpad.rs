@@ -4,6 +4,7 @@
 //! `$PTYRO_SCRATCHPAD` in every session, a watcher that notices an editor's save, the editor as
 //! a session in a pane, and ticking an item once the worktree started from it is finished.
 
+use ptyro_core::sync::MutexExt;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -54,7 +55,7 @@ impl Daemon {
 
     fn remember(&self, text: &str) {
         let r = pad::rev(text);
-        let mut ring = self.pad_state.ring.lock().expect("pad ring");
+        let mut ring = self.pad_state.ring.locked();
         if ring.iter().any(|(k, _)| *k == r) {
             return;
         }
@@ -65,14 +66,8 @@ impl Daemon {
     }
 
     fn base_of(&self, rev: &str) -> Option<String> {
-        let found = self
-            .pad_state
-            .ring
-            .lock()
-            .expect("pad ring")
-            .iter()
-            .find(|(k, _)| k == rev)
-            .map(|(_, t)| t.clone());
+        let found =
+            self.pad_state.ring.locked().iter().find(|(k, _)| k == rev).map(|(_, t)| t.clone());
         found.or_else(|| self.pad().snapshot_text(rev))
     }
 
@@ -85,7 +80,7 @@ impl Daemon {
         self.remember(text);
         let doc = self.doc(text.to_owned());
         {
-            let mut seen = self.pad_state.seen.lock().expect("pad seen");
+            let mut seen = self.pad_state.seen.locked();
             if *seen == doc.rev {
                 return;
             }
@@ -111,13 +106,13 @@ impl Daemon {
                     }
                 } else if stat != last {
                     last = stat;
-                    let _lock = me.pad_state.lock.lock().expect("pad lock");
+                    let _lock = me.pad_state.lock.locked();
                     if let Ok(text) = pad.read() {
-                        let known = me.pad_state.seen.lock().expect("pad seen").clone();
+                        let known = me.pad_state.seen.locked().clone();
                         if known.is_empty() {
                             // First look after start: nothing to announce, but a base to merge from.
                             me.remember(&text);
-                            *me.pad_state.seen.lock().expect("pad seen") = pad::rev(&text);
+                            *me.pad_state.seen.locked() = pad::rev(&text);
                         } else if known != pad::rev(&text) {
                             let _ = pad.snapshot_lazy(&text);
                             me.pad_changed(&text, Some("file".into()));
@@ -130,7 +125,7 @@ impl Daemon {
     }
 
     pub(crate) fn scratch_get(&self) -> Result<Reply, Error> {
-        let _l = self.pad_state.lock.lock().expect("pad lock");
+        let _l = self.pad_state.lock.locked();
         let text = self.pad().read().map_err(Self::pad_err)?;
         self.remember(&text);
         Ok(Reply::Scratch { doc: self.doc(text) })
@@ -148,7 +143,7 @@ impl Daemon {
                 ptyro_core::scratchpad::MAX_PAD_BYTES >> 20
             )));
         }
-        let _l = self.pad_state.lock.lock().expect("pad lock");
+        let _l = self.pad_state.lock.locked();
         let pad = self.pad();
         let cur = pad.read().map_err(Self::pad_err)?;
         self.remember(&cur);
@@ -212,7 +207,7 @@ impl Daemon {
             whence,
             by: by.clone(),
         };
-        let _l = self.pad_state.lock.lock().expect("pad lock");
+        let _l = self.pad_state.lock.locked();
         let pad = self.pad();
         let cur = pad.read().map_err(Self::pad_err)?;
         self.remember(&cur);
@@ -228,7 +223,7 @@ impl Daemon {
     }
 
     pub(crate) fn scratch_mark(&self, sel: &str, mark: &PadMark) -> Result<Reply, Error> {
-        let _l = self.pad_state.lock.lock().expect("pad lock");
+        let _l = self.pad_state.lock.locked();
         let pad = self.pad();
         let cur = pad.read().map_err(Self::pad_err)?;
         self.remember(&cur);
@@ -250,7 +245,7 @@ impl Daemon {
     }
 
     pub(crate) fn scratch_restore(&self, rev: &str) -> Result<Reply, Error> {
-        let _l = self.pad_state.lock.lock().expect("pad lock");
+        let _l = self.pad_state.lock.locked();
         let text = self.pad().restore(rev).map_err(Error::invalid)?;
         self.pad_changed(&text, Some("cli".into()));
         Ok(Reply::Scratch { doc: self.doc(text) })
@@ -261,7 +256,7 @@ impl Daemon {
         if !self.config().scratchpad.tick_on_finish {
             return;
         }
-        let _l = self.pad_state.lock.lock().expect("pad lock");
+        let _l = self.pad_state.lock.locked();
         let pad = self.pad();
         let Ok(cur) = pad.read() else { return };
         let mine: Vec<u32> = pad::items(&cur)
@@ -288,7 +283,7 @@ impl Daemon {
 
     /// The item on `line` starts in worktree `qualified` (`WorktreeSpec::pad_item`).
     pub(crate) fn pad_started(&self, line: u32, qualified: &str) {
-        let _l = self.pad_state.lock.lock().expect("pad lock");
+        let _l = self.pad_state.lock.locked();
         let pad = self.pad();
         if let Ok(cur) = pad.read() {
             self.remember(&cur);

@@ -10,6 +10,7 @@
 //!   account), in a directory of its own (no project files, no tools), at most `daily_cap` a
 //!   day for each profile.
 
+use ptyro_core::sync::MutexExt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -116,7 +117,7 @@ impl Daemon {
     /// Counts one against today's cap for `profile` (UTC days; counted in memory).
     fn count_summary(&self, profile: &str, cap: u32) -> Result<(), Error> {
         let key = format!("summaries:{profile}:{}", now_ms() / 86_400_000);
-        let mut views = self.views.lock().expect("views");
+        let mut views = self.views.locked();
         let n = views.get(&key).and_then(serde_json::Value::as_u64).unwrap_or(0);
         if n >= u64::from(cap) {
             return Err(Error::conflict(format!(

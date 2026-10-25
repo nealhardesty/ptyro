@@ -1,6 +1,7 @@
 //! Launching sessions (SPEC §5.1, §10.6, §10.10): which profile, the environment it gets, and the
 //! one path every spawn takes (CLI, TUI, restart, scripts), so they can't drift apart.
 
+use ptyro_core::sync::MutexExt;
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::os::unix::fs::DirBuilderExt;
@@ -98,7 +99,7 @@ impl Daemon {
             return Ok(Some((wt, p)));
         }
         let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
-        let reg = self.registry.lock().expect("registry");
+        let reg = self.registry.locked();
         let ready = reg.worktrees.iter().filter(|w| w.state == WorktreeState::Ready);
         let best = crate::registry::innermost(ready, &cwd);
         Ok(best.and_then(|w| {
@@ -118,7 +119,7 @@ impl Daemon {
     ) -> Result<Resolution, Error> {
         let config = self.config();
         let ws_profile = {
-            let reg = self.registry.lock().expect("registry");
+            let reg = self.registry.locked();
             reg.workspaces.iter().find(|w| w.name == workspace).map(|w| w.profile.clone())
         };
         let inputs = Inputs {
@@ -205,7 +206,7 @@ impl Daemon {
             Secret::Command { command } => command,
         };
         if !ttl.is_zero()
-            && let Some((v, at)) = self.secrets.lock().expect("secrets").get(label)
+            && let Some((v, at)) = self.secrets.locked().get(label)
             && at.elapsed() < ttl
         {
             return Ok(v.clone());
@@ -266,10 +267,7 @@ impl Daemon {
         }
         let value = String::from_utf8_lossy(&out.stdout).trim_end_matches(['\n', '\r']).to_owned();
         if !ttl.is_zero() {
-            self.secrets
-                .lock()
-                .expect("secrets")
-                .insert(label.to_owned(), (value.clone(), Instant::now()));
+            self.secrets.locked().insert(label.to_owned(), (value.clone(), Instant::now()));
         }
         Ok(value)
     }
@@ -622,7 +620,7 @@ impl<'a> Claim<'a> {
         if daemon.upgrading.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(Error::conflict("the daemon is upgrading; try again in a moment"));
         }
-        let mut c = daemon.launching.lock().expect("launching");
+        let mut c = daemon.launching.locked();
         if l.replace {
             if !c.0.insert(l.id) {
                 return Err(Error::conflict("that session is already being restarted"));
@@ -638,7 +636,7 @@ impl<'a> Claim<'a> {
 
 impl Drop for Claim<'_> {
     fn drop(&mut self) {
-        let mut c = self.daemon.launching.lock().expect("launching");
+        let mut c = self.daemon.launching.locked();
         if let Some(id) = self.id {
             c.0.remove(&id);
         }

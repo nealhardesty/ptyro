@@ -205,7 +205,7 @@ pub enum WtCmd {
         #[arg(long)]
         title: Option<String>,
         /// Move the main checkout's uncommitted changes into it (a copy stays at
-        /// refs/ptyro/taken/<name>)
+        /// `refs/ptyro/taken/<name>`)
         #[arg(long, conflicts_with_all = ["pr", "issue", "existing"])]
         take_changes: bool,
         /// Don't run the setup script
@@ -325,7 +325,7 @@ pub enum WtCmd {
         #[arg(long)]
         attach: bool,
     },
-    /// Open the worktree in an editor ([editors]; terminal editors open as a ptyro session)
+    /// Open the worktree in an editor (\[editors\]; terminal editors open as a ptyro session)
     Open {
         #[arg(add = ArgValueCandidates::new(crate::complete::worktrees))]
         worktree: Option<String>,

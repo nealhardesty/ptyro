@@ -6,6 +6,7 @@
 //! are signed (HMAC-SHA256 with a daemon key), single-use and expiring. A GET only shows a page
 //! with a button; only the POST acts, so link previews and unfurlers can't approve anything.
 
+use ptyro_core::sync::MutexExt;
 use std::collections::HashMap;
 use std::io::Write as _;
 use std::sync::Arc;
@@ -77,7 +78,7 @@ impl Daemon {
         entry.id = match &self.store {
             Some(st) => st.inbox_add(entry.clone()).await.unwrap_or(0),
             None => {
-                let mut mem = self.inbox_mem.lock().expect("inbox");
+                let mut mem = self.inbox_mem.locked();
                 let id = mem.len() as i64 + 1;
                 mem.push(InboxEntry { id, ..entry.clone() });
                 id
@@ -111,7 +112,7 @@ impl Daemon {
         }
         let coalesce = parse_duration(&n.coalesce).map(|d| d.as_millis() as u64).unwrap_or(10_000);
         {
-            let mut last = self.last_notified.lock().expect("last_notified");
+            let mut last = self.last_notified.locked();
             let now = now_ms();
             // Blocked always gets through: it's the one that costs time.
             if kind != AttentionKind::Blocked
@@ -122,7 +123,7 @@ impl Daemon {
             last.insert(s.id, now);
         }
         let answerable = kind == AttentionKind::Blocked
-            && s.engine.lock().expect("engine").record.as_ref().is_some_and(|r| {
+            && s.engine.locked().record.as_ref().is_some_and(|r| {
                 r.status == AgentStatus::Blocked && r.kind.as_deref() == Some("permission")
             })
             && s.adapter().is_some_and(|a| ptyro_agents::adapter(&a).caps().answer);
@@ -199,7 +200,7 @@ impl Daemon {
                 since: self
                     .resolve(&note.session)
                     .ok()
-                    .and_then(|s| s.engine.lock().expect("engine").record.clone())
+                    .and_then(|s| s.engine.locked().record.clone())
                     .filter(|r| r.status == ptyro_core::status::AgentStatus::Blocked)
                     .map(|r| r.since_ms),
             };
@@ -394,7 +395,7 @@ impl Daemon {
             (m.place.project.clone(), m.place.workspace.clone())
         };
         let now = now_ms();
-        let mutes = self.mutes.lock().expect("mutes");
+        let mutes = self.mutes.locked();
         let hit = |t: &str| mutes.get(t).is_some_and(|until| until.is_none_or(|u| u > now));
         hit(&s.id.full())
             || project.is_some_and(|p| hit(&format!("project:{p}")))
@@ -416,7 +417,7 @@ impl Daemon {
         };
         let until = minutes.map(|m| now_ms() + u64::from(m) * 60_000);
         let snapshot = {
-            let mut mutes = self.mutes.lock().expect("mutes");
+            let mut mutes = self.mutes.locked();
             if unmute {
                 mutes.remove(&key);
             } else {
@@ -481,10 +482,7 @@ impl Daemon {
             && let Ok(m) = serde_json::from_value::<std::collections::HashMap<String, u64>>(v)
         {
             let now = now_ms();
-            self.used_links
-                .lock()
-                .expect("used_links")
-                .extend(m.into_iter().filter(|(_, e)| *e > now));
+            self.used_links.locked().extend(m.into_iter().filter(|(_, e)| *e > now));
         }
     }
 
@@ -501,7 +499,7 @@ impl Daemon {
             return Err("this link has expired");
         }
         let nonce = v["n"].as_str().unwrap_or_default().to_owned();
-        let mut used = self.used_links.lock().expect("used_links");
+        let mut used = self.used_links.locked();
         if used.contains_key(&nonce) {
             return Err("this link was already used");
         }

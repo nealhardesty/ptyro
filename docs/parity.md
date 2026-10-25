@@ -274,3 +274,5 @@ The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every sessio
 | `daemon upgrade` | `daemon.upgrade`; a daemon running another binary is a health finding whose fix this is | `daemon.upgrade`: More → Daemon → Upgrade, or a health finding's fix |
 | `daemon install-service` | `daemon.service` | `daemon.service`: More → Daemon → Install the service |
 | `daemon uninstall-service` | `daemon.unservice` | `daemon.unservice`: More → Daemon → Remove it |
+| `backup` | `app.backup` (in a split; the file is private, in your home directory unless you give one) | `backup.create`: More → Daemon → Back up ptyro's state: written on the computer, with what is in it and what is left out |
+| `uninstall` | `app.uninstall` (in a split: the plan, then the question; it ends this TUI and the daemon) | `uninstall.plan`: More → Daemon → Uninstall…: the plan, and the command to type on the computer (it ends the server this page comes from) |

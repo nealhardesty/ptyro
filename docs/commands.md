@@ -46,7 +46,7 @@ Conventions:
 | `ptyro summarize SESSION [--json]` | what it's doing, in a line, from a small model (`[summaries] command`, on its profile's account); works with summaries off |
 | `ptyro shell [WORKTREE] [--json] [--read [--scrollback [N]]]` | the worktree's quick terminal (one shell per worktree, or per directory outside one): attach with it in the TUI's drawer, print it as JSON, or print its screen (`--read`, which never starts one; an agent can read your terminal this way) |
 | `ptyro adopt SESSION` | the Claude you started by hand in a shell session becomes a managed session (hooks, hibernation, mail), same conversation |
-| `ptyro scratchpad [--pane [--json]]` | the scratchpad (alias `pad`): one Markdown notes file for ideas and bugs, `$PTYRO_SCRATCHPAD` in every session. No subcommand: open it in your editor, here. `--pane`: the editor as a session of its own (what `C-q ;` shows), attached |
+| `ptyro scratchpad [edit] [--pane [--json]]` | the scratchpad (alias `pad`): one Markdown notes file for ideas and bugs, `$PTYRO_SCRATCHPAD` in every session. No subcommand: open it in your editor, here. `--pane`: the editor as a session of its own (what `C-q ;` shows), attached |
 | `ptyro scratchpad path\|cat [--tail N] [--json]` | where the file is / its text (`--json`: `{path, rev, text, open, done}`) |
 | `ptyro scratchpad add [--section HEADING] [--note] [--no-stamp] [--json] TEXT…` | add a line, stamped with the time and the worktree or directory you are in (and the agent's name); `-` or a pipe reads standard input; makes a `- [ ]` item unless `--note` |
 | `ptyro scratchpad todo [--all] [--json]` | the open `- [ ]` items with line numbers (`--all`: ticked ones too) |
@@ -162,6 +162,7 @@ See [`remote.md`](remote.md).
 | `ptyro serve [--listen ADDR] [--local] [--cert PEM --key PEM] [--tailscale] [--insecure]` | the web app and the protocol over WebSocket for paired devices, over HTTPS with a certificate ptyro makes (phones trust its CA once, from `/ca.crt`); `--local` lets in your LAN and tailnet; `--cert`/`--key` use your own certificate; `--insecure` is plain HTTP |
 | `ptyro pair [NAME] [--scope read\|approve\|control\|full] [--url URL] [--json]` | pair a phone or browser: a QR code with a one-time code (10 minutes; scope `approve` by default), then waits for the device |
 | `ptyro devices [ls \| revoke ID \| push-test]` | paired devices |
+| `ptyro web [on\|off\|status] [--via tailscale\|lan\|here] [--pair] [--json]` | have the daemon run the web app's server (`ptyro daemon start --serve` too): on, off, or where it is and what to do next |
 | `ptyro --remote HOST …` / `ptyro proxy` | any command against another machine's daemon / the bridge it runs there |
 
 ## Recordings
@@ -178,11 +179,19 @@ See [`remote.md`](remote.md).
 | `ptyro init [-y] [--dry-run]` | detect agents, accounts and repositories, then write your config |
 | `ptyro doctor [--quick] [--json]` | diagnose agents, logins, integrations, terminal, tmux, daemon, git |
 | `ptyro tour` | the daily loop for real (task, answer, review, finish, clean up) with a pretend agent in a ptyro of its own, deleted afterwards |
-| `ptyro config path\|check\|show\|edit` | your config; `edit` opens `$EDITOR` and validates |
+| `ptyro config path\|check\|show\|edit [KEY]` | your config; `edit` opens `$EDITOR` (at that setting) and validates |
+| `ptyro config list [SECTION] [--changed] [--project[=NAME]] [--json]` | every setting with its value and where it comes from (default, your config, `.ptyro.toml`, `.ptyro.local.toml`); `SECTION` is `ui`, `remote`… or a key prefix |
+| `ptyro config get KEY [--explain] [--project[=NAME]] [--json]` | one value, bare for scripts; `--explain`: what it does, its default, where it is set, when a change applies |
+| `ptyro config set KEY VALUE… [--project[=NAME] [--shared]]` | change a setting: checked first, the file's comments kept, live where it can be; words make a list or a command (after `--` if one starts with a dash); `--project` writes your `.ptyro.local.toml`, `--shared` the committed `.ptyro.toml` |
+| `ptyro config unset KEY… [--project[=NAME] [--shared]]` | back to the default |
+| `ptyro config add COLLECTION [NAME] [FIELD=VALUE…]` / `rm COLLECTION NAME` / `rename COLLECTION FROM TO` | an agent, theme, editor, key binding, notification service (`notifications.sinks`, `type=ntfy url=…`), run script or prompt |
+| `ptyro config schema [--project]` | every setting's description as JSON, for tools that build forms |
 | `ptyro daemon start [--foreground]` / `status [--json]` / `logs [-n N] [-f]` | the background daemon (it starts by itself); `status` includes its health |
 | `ptyro daemon stop\|restart [--hibernate] [--force]` | stop it; `--hibernate` brings resumable agents back dormant |
 | `ptyro daemon upgrade [--binary PATH] [--json]` | switch the running daemon to a new binary without stopping sessions; exits 1 if it rolled back |
 | `ptyro daemon install-service\|uninstall-service [--dry-run]` | start the daemon at login (systemd user unit / launchd agent) |
+| `ptyro backup [-o FILE] [--with-recordings] [--with-ca] [--json]` | a private `.tar.gz` of ptyro's own state (config, a consistent copy of the database, scratchpad); never replaces a file ([`docs/uninstall.md`](uninstall.md)) |
+| `ptyro uninstall [--dry-run] [--yes] [--delete-work] [--keep-config] [--keep-data] [--keep-binary] [--backup FILE] [--purge-refs] [--json]` | take ptyro off this computer: shows what goes and what stays, asks (typing `delete` when worktrees have uncommitted work), stops the daemon, removes worktrees, directories, the login service, integrations, shell lines and the binary installed by hand ([`docs/uninstall.md`](uninstall.md)) |
 
 ## Exit codes
 

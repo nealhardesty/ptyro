@@ -262,7 +262,7 @@ pub struct InboxEntry {
     pub session_name: String,
     pub at_ms: u64,
     pub kind: AttentionKind,
-    /// "[work] brisk-rook (myrepo)".
+    /// "\[work\] brisk-rook (myrepo)".
     pub title: String,
     pub body: String,
     #[serde(default)]

@@ -19,6 +19,7 @@
 //!   trailers, dependency-ordered resumable `cs push`, linked PRs with a live sibling table, and
 //!   the gated `cs land` merge train that stops with a precise partial-state report.
 
+use ptyro_core::sync::MutexExt;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -137,7 +138,7 @@ impl Daemon {
 
     /// A set by name, run id, or `@last`.
     pub(crate) fn find_set(&self, addr: &str) -> Result<String, Error> {
-        let runs = self.runs.lock().expect("runs");
+        let runs = self.runs.locked();
         let sets: Vec<(&String, &ChangeSet, u64)> = runs
             .iter()
             .filter_map(|(id, e)| e.state.changeset.as_ref().map(|c| (id, c, e.state.created_ms)))
@@ -163,8 +164,7 @@ impl Daemon {
 
     pub(crate) fn set_state(&self, run: &str) -> Result<ChangeSet, Error> {
         self.runs
-            .lock()
-            .expect("runs")
+            .locked()
             .get(run)
             .and_then(|e| e.state.changeset.clone())
             .ok_or_else(|| Error::missing("change set", run))
@@ -180,7 +180,7 @@ impl Daemon {
 
     /// The set a session belongs to, and its role there.
     fn set_of_session(&self, sid: &str) -> Option<(String, Role)> {
-        let runs = self.runs.lock().expect("runs");
+        let runs = self.runs.locked();
         runs.iter().find_map(|(id, e)| {
             let c = e.state.changeset.as_ref()?;
             if e.state.status.is_over() {
@@ -307,7 +307,7 @@ impl Daemon {
             }
             CsOp::List => {
                 let ids: Vec<String> = {
-                    let runs = self.runs.lock().expect("runs");
+                    let runs = self.runs.locked();
                     let mut v: Vec<(u64, String)> = runs
                         .iter()
                         .filter(|(_, e)| e.state.changeset.is_some())
@@ -961,13 +961,8 @@ impl Daemon {
     // ── info and the ledger ───────────────────────────────────────────────
 
     fn member_live(&self, set: &ChangeSet) -> BTreeMap<String, MemberLive> {
-        let extra = self
-            .cs
-            .lock()
-            .expect("cs")
-            .get(&set.name)
-            .map(|l| l.out_of_fence.clone())
-            .unwrap_or_default();
+        let extra =
+            self.cs.locked().get(&set.name).map(|l| l.out_of_fence.clone()).unwrap_or_default();
         set.members
             .iter()
             .map(|m| {
@@ -1030,7 +1025,7 @@ impl Daemon {
                 .iter()
                 .filter_map(|m| Some((m.name.clone(), name_of(m.session.as_deref()?)?)))
                 .collect(),
-            job: self.cs.lock().expect("cs").get(&set.name).and_then(|l| l.job.clone()),
+            job: self.cs.locked().get(&set.name).and_then(|l| l.job.clone()),
             set,
             report,
             live,
@@ -1634,7 +1629,7 @@ impl Daemon {
     pub(crate) fn start_cs_actor(self: &Arc<Self>, run: &str) {
         let Ok(set) = self.set_state(run) else { return };
         {
-            let mut cs = self.cs.lock().expect("cs");
+            let mut cs = self.cs.locked();
             let l = cs.entry(set.name.clone()).or_default();
             if l.actor {
                 return;
@@ -1648,7 +1643,7 @@ impl Daemon {
                     break;
                 }
                 me.cs_tick(&run).await;
-                let wake = me.runs.lock().expect("runs").get(&run).map(|e| Arc::clone(&e.wake));
+                let wake = me.runs.locked().get(&run).map(|e| Arc::clone(&e.wake));
                 match wake {
                     Some(w) => {
                         let _ =
@@ -1658,7 +1653,7 @@ impl Daemon {
                 }
             }
             if let Ok(set) = me.set_state(&run)
-                && let Some(l) = me.cs.lock().expect("cs").get_mut(&set.name)
+                && let Some(l) = me.cs.locked().get_mut(&set.name)
             {
                 l.actor = false;
             }
@@ -1788,8 +1783,7 @@ impl Daemon {
             let status = s.status();
             if live && status == Some(AgentStatus::Working) {
                 self.cs
-                    .lock()
-                    .expect("cs")
+                    .locked()
                     .entry(set.name.clone())
                     .or_default()
                     .last_work
@@ -1798,8 +1792,7 @@ impl Daemon {
             let error = if live && status == Some(AgentStatus::Errored) {
                 Some(
                     s.engine
-                        .lock()
-                        .expect("engine")
+                        .locked()
                         .record
                         .as_ref()
                         .and_then(|r| r.detail.clone())
@@ -1860,8 +1853,7 @@ impl Daemon {
         // Mail waiting for an agent that exited cleanly: bring it back (once a minute at most).
         let waiting: BTreeSet<String> = self
             .mail
-            .lock()
-            .expect("mail")
+            .locked()
             .iter()
             .filter(|x| x.run.as_deref() == Some(run) && x.delivered_ms.is_none())
             .map(|x| x.recipient.clone())
@@ -1877,15 +1869,13 @@ impl Daemon {
             );
             let recent = self
                 .cs
-                .lock()
-                .expect("cs")
+                .locked()
                 .get(&set.name)
                 .and_then(|l| l.resumed.get(&sid).copied())
                 .is_some_and(|t| now.saturating_sub(t) < 60_000);
             if clean && !recent {
                 self.cs
-                    .lock()
-                    .expect("cs")
+                    .locked()
                     .entry(set.name.clone())
                     .or_default()
                     .resumed
@@ -1900,16 +1890,16 @@ impl Daemon {
             && let Some(l) = &lead
         {
             let busy = l.is_live() && l.status() == Some(AgentStatus::Working);
-            let open = self.cs.lock().expect("cs").get(&set.name).and_then(|x| x.lead_turn.clone());
+            let open = self.cs.locked().get(&set.name).and_then(|x| x.lead_turn.clone());
             match (busy, open) {
                 (true, None) => {
                     let fp = fingerprints(&set).await;
-                    self.cs.lock().expect("cs").entry(set.name.clone()).or_default().lead_turn =
+                    self.cs.locked().entry(set.name.clone()).or_default().lead_turn =
                         Some((now, fp));
                 }
                 (false, Some((start, before))) => {
                     let after = fingerprints(&set).await;
-                    let mut cs = self.cs.lock().expect("cs");
+                    let mut cs = self.cs.locked();
                     let l = cs.entry(set.name.clone()).or_default();
                     l.lead_turn = None;
                     for m in &set.members {
@@ -1929,7 +1919,7 @@ impl Daemon {
         // 5. Merges made outside the train (every 5 s).
         if matches!(set.phase, Phase::Working | Phase::Landing) {
             let due = {
-                let mut cs = self.cs.lock().expect("cs");
+                let mut cs = self.cs.locked();
                 let l = cs.entry(set.name.clone()).or_default();
                 let due = now.saturating_sub(l.last_merge_scan) > 5_000;
                 if due {
@@ -1937,7 +1927,7 @@ impl Daemon {
                 }
                 due
             };
-            if due && self.cs.lock().expect("cs").get(&set.name).is_some_and(|l| l.job.is_none()) {
+            if due && self.cs.locked().get(&set.name).is_some_and(|l| l.job.is_none()) {
                 self.scan_merges(run).await;
             }
         }
@@ -1963,7 +1953,7 @@ impl Daemon {
         let sid = s.id.full();
         let now = now_ms();
         {
-            let mut cs = self.cs.lock().expect("cs");
+            let mut cs = self.cs.locked();
             let l = cs.entry(set.name.clone()).or_default();
             if l.interrupted.get(&sid).is_some_and(|t| now.saturating_sub(*t) < 15_000) {
                 return;
@@ -1983,13 +1973,7 @@ impl Daemon {
 
     /// Remember a gate as handled; `false` if it already was.
     fn cs_mark(&self, set: &str, gate: &str) -> bool {
-        self.cs
-            .lock()
-            .expect("cs")
-            .entry(set.to_owned())
-            .or_default()
-            .handled
-            .insert(gate.to_owned())
+        self.cs.locked().entry(set.to_owned()).or_default().handled.insert(gate.to_owned())
     }
 
     /// A member merged into its base by someone else: landed, and out of order if a dependency
@@ -2550,7 +2534,7 @@ impl Daemon {
     }
 
     fn claim_job(&self, set: &str, what: &str) -> Result<(), Error> {
-        let mut cs = self.cs.lock().expect("cs");
+        let mut cs = self.cs.locked();
         let l = cs.entry(set.to_owned()).or_default();
         if let Some(j) = &l.job {
             return Err(Error::conflict(format!("{set} is busy: {j} in progress")));
@@ -2560,7 +2544,7 @@ impl Daemon {
     }
 
     fn release_job(&self, set: &str) {
-        if let Some(l) = self.cs.lock().expect("cs").get_mut(set) {
+        if let Some(l) = self.cs.locked().get_mut(set) {
             l.job = None;
         }
     }
@@ -3189,7 +3173,7 @@ impl Daemon {
         if keep.is_empty() {
             let _ = std::fs::remove_dir_all(&set.root);
         }
-        self.cs.lock().expect("cs").remove(&set.name);
+        self.cs.locked().remove(&set.name);
         Ok(json!({ "removed": removed, "kept": keep }))
     }
 
@@ -3234,8 +3218,7 @@ impl Daemon {
             }
         };
         scan(&self.paths.config.join("changesets"), "user", None);
-        let projects: Vec<ptyro_core::model::ProjectInfo> =
-            self.registry.lock().expect("registry").projects.clone();
+        let projects: Vec<ptyro_core::model::ProjectInfo> = self.registry.locked().projects.clone();
         for p in projects {
             scan(
                 &p.root.join(".ptyro").join("changesets"),

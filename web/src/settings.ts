@@ -36,6 +36,8 @@ const ACTIONS = {
   "daemon.upgrade": "Switch the daemon to the ptyro on disk, keeping every session",
   "daemon.restart": "Stop and start the daemon (sessions are stopped; agents hibernate)",
   "daemon.stop": "Stop every session and the daemon",
+  "backup.create": "Save ptyro's own state (config, database, scratchpad) to a private .tar.gz in your home directory on the computer",
+  "uninstall.plan": "What uninstalling ptyro would remove and what stays, and the command to run on the computer (it can't be done from here)",
   "daemon.service": "Start ptyro at login (a systemd or launchd service)",
   "daemon.unservice": "Remove the login service",
   "web.status": "The web app's server: whether it is up, its address, and who started it",
@@ -389,8 +391,34 @@ function daemonView(): HTMLElement {
         h("button", { class: "deny", title: tip("daemon.stop"), onclick: () => confirm("Stop the daemon?", "Every session is stopped and ptyro goes away, this app with it, until you run ptyro again on the computer.", "Stop it", async () => { if (await doHost("daemon.stop", {}, "Stopping…")) ui.toast("Stopped: run ptyro to start it again"); }) }, "Stop")),
       section("Start at login", h("p", { class: "sub" }, "A systemd or launchd service starts the daemon (and this server) when you log in."),
         bar(h("button", { title: tip("daemon.service"), onclick: async () => { const r = await doHost("service.install"); if (r) showNotes("Login service", r.notes ?? []); } }, "Install the service"),
-          h("button", { title: tip("daemon.unservice"), onclick: async () => { const r = await doHost("service.uninstall"); if (r) showNotes("Login service", r.notes ?? []); } }, "Remove it")))) : h("p", { class: "intro" }, "Logs, upgrading and the service need a device paired with --scope full."));
+          h("button", { title: tip("daemon.unservice"), onclick: async () => { const r = await doHost("service.uninstall"); if (r) showNotes("Login service", r.notes ?? []); } }, "Remove it"))),
+      section("Back up or leave", h("p", { class: "sub" }, "A backup holds your config, history, scratchpad and settings, in a private file on the computer. Uninstalling removes ptyro; your repositories stay."),
+        bar(h("button", { title: tip("backup.create"), onclick: backupNow }, "Back up ptyro's state"),
+          h("button", { class: "deny", title: tip("uninstall.plan"), onclick: showUninstall }, "Uninstall…")))) : h("p", { class: "intro" }, "Logs, upgrading and the service need a device paired with --scope full."));
   return h("div", {}, ui.header("Daemon", "#/more"), h("main", { class: "stack" }, body));
+}
+
+/// A backup of ptyro's state, written on the computer (the page can't hold a file that size, and
+/// the file belongs where the person looks for it).
+async function backupNow(): Promise<void> {
+  const r = await doHost("backup.create");
+  if (!r) return;
+  const mb = (r.bytes / (1024 * 1024)).toFixed(1);
+  textSheet("Backed up", `${r.path} (${mb} MB)\n\nIn it:\n${(r.items as string[]).map((i) => `  + ${i}`).join("\n")}\n\nNot in it:\n${(r.left_out as string[]).map((i) => `  - ${i}`).join("\n") || "  (nothing left out)"}\n\nIt is private to you (mode 600). Its README.txt says how to put it back.`);
+}
+
+/// What uninstalling would do. It is not done from here: it ends the server this page comes from
+/// (and the daemon), and asks to be typed at, so the page shows the plan and the command.
+async function showUninstall(): Promise<void> {
+  const r = await doHost("uninstall.plan");
+  if (!r) return;
+  const cmd = String(r.command);
+  sheet("Uninstall ptyro", [
+    h("p", { class: "intro" }, "This is what it would do. It isn't done from the web app: it stops the daemon and the server this page comes from, and asks you to confirm in a terminal on the computer."),
+    h("pre", { class: "block" }, String(r.text)),
+    h("p", { class: "sub" }, "To do it, run this on the computer (add --backup FILE to save a backup first; --dry-run shows this again):"),
+    h("pre", { class: "block" }, cmd),
+  ], [h("button", { onclick: () => void navigator.clipboard?.writeText(cmd).then(() => ui.toast("Copied"), () => ui.toast("Couldn't copy")) }, "Copy the command")]);
 }
 
 async function showLogs(): Promise<void> {

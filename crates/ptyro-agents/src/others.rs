@@ -262,7 +262,7 @@ pub fn opencode_event(ev: &Value) -> Vec<Signal> {
 // ── Antigravity CLI (`agy`) ───────────────────────────────────────────────
 
 /// Gemini CLI's successor for consumer accounts (2026-06-18). Hooks from its docs
-/// ([unverified]: not installed here): `SessionStart`, `PreInvocation`, `PreToolUse`,
+/// (\[unverified\]: not installed here): `SessionStart`, `PreInvocation`, `PreToolUse`,
 /// `PostToolUse`, `PostInvocation`, `Stop{fullyIdle, terminationReason, error}`, camelCase
 /// fields. It has no permission hook: blocked comes from OSC 7501 or nothing.
 pub struct Antigravity;

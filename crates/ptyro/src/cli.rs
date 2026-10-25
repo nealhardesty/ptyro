@@ -318,6 +318,33 @@ async fn dispatch(
             crate::script::read(&ctx, session, scrollback, ansi, json).await
         }
         Some(Cmd::Config { cmd }) => crate::config::run(&ctx, cmd).await,
+        Some(Cmd::Uninstall {
+            dry_run,
+            yes,
+            delete_work,
+            keep_config,
+            keep_data,
+            keep_binary,
+            backup,
+            purge_refs,
+            json,
+        }) => {
+            let opts = crate::uninstall::Opts {
+                dry_run,
+                yes,
+                delete_work,
+                keep_config,
+                keep_data,
+                keep_binary,
+                backup,
+                purge_refs,
+            };
+            crate::uninstall::run(&ctx, opts, json).await
+        }
+        Some(Cmd::Backup { output, with_recordings, with_ca, json }) => {
+            let opts = crate::backup::Opts { output, with_recordings, with_ca };
+            crate::backup::run(&ctx, opts, json).await
+        }
         Some(Cmd::Project { cmd }) => crate::projects::project(&ctx, cmd).await,
         Some(Cmd::Pr { cmd }) => crate::ship::pr(&ctx, cmd).await,
         Some(Cmd::WatchPr { worktree, off }) => {
@@ -1247,7 +1274,7 @@ pub fn age(ms: u64) -> String {
 }
 
 /// Stop the daemon; `hibernate` puts resumable agents to sleep first (SPEC §7.4).
-async fn stop_daemon(ctx: &Ctx, force: bool, hibernate: bool) -> Result<i32, Error> {
+pub(crate) async fn stop_daemon(ctx: &Ctx, force: bool, hibernate: bool) -> Result<i32, Error> {
     let client = match ctx.connect(false).await {
         Ok(c) => c,
         Err(e) if e.code == ErrorCode::DaemonUnavailable => {

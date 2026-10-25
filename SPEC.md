@@ -3674,6 +3674,31 @@ project registered after it started (§10.1).
 
 ---
 
+### 14.5 Backup and uninstall **[built H2.3]**
+
+`ptyro backup` writes a private (0600), never-overwriting `.tar.gz` of ptyro's own state: the
+config, a consistent copy of the database (`Store::backup_to`, SQLite `VACUUM INTO`, safe with the
+daemon running), the scratchpad and its saved copies, a `manifest.json` and a `README.txt` with
+the manual restore. It leaves out the agents' login directories, the recordings (`--with-recordings`)
+and the web app's CA private key (`--with-ca`). `ptyro uninstall` plans first (`--dry-run` stops
+there; read-only, never starts a daemon): the running sessions, every directory it keeps (from
+`Paths`, so `PTYRO_HOME` and `PTYRO_CONFIG` are honoured), worktrees with uncommitted changes
+(from `git status`, not the daemon's cache), unpushed commits and locks, the login service,
+integrations it installed, the shell-rc lines `ptyro init` and the mend list wrote (only those
+exact lines), a `tailscale serve` mapping it made, and the binary. Typing `delete` is required
+when a worktree has uncommitted work (`--yes` never skips it; `--delete-work` does); without a
+terminal it refuses without `--yes`; inside a ptyro session it refuses (`PTYRO_HOME` set means
+a sandbox). Order: backup, integrations, login service, stop the daemon and wait for its lock,
+worktrees (through `git worktree remove`), directories, rc lines, the binary last. Kept: the
+user's repositories, branches, `.ptyro.toml`, `.ptyro.local.toml`, `.git/info/exclude` lines and
+`refs/ptyro/*` snapshots (`--purge-refs` deletes the last). The binary is removed only from a
+place the user put it (`~/.local/bin`, `/usr/local/bin`); `~/.cargo/bin` goes through `cargo
+uninstall`; Homebrew and system paths get the package manager's command; a path under
+`/target/` is never removed. In a sandbox (`PTYRO_HOME`) only that home is touched. Web:
+`uninstall.plan` and `backup.create` host operations (full scope); the page shows the plan and
+the command, because removing ptyro ends the server the page is served by. `make reset` is a
+wrapper over it. Details: `docs/uninstall.md`.
+
 ## 15. Orchestration
 
 Orchestration grows in three deliberate levels. All levels are **deterministic engines** driven by
@@ -4879,13 +4904,39 @@ are built on tags later. CI only ever calls make targets.
   warm-up. The release soak is `DURATION=7d`.
 - **Compatibility.** `make compat` (`scripts/compat.sh`) is the headless sweep behind
   `docs/compat.md`.
-- **Releases.** `.github/workflows/release.yml` runs on `v*` tags. It does `make check`, then
-  `make changelog dist` on four platforms (x86_64/aarch64 Linux, aarch64/x86_64 macOS), then
-  `SHA256SUMS`, release notes from `scripts/changelog.sh --notes`, the formula from `make
-  homebrew-formula`, `gh release`, and a push to the tap when `HOMEBREW_TAP_TOKEN` is set.
-  `make dist` refuses a tag that doesn't match the crate version. `make bump V=patch|minor|major|X.Y.Z`
-  (`scripts/bump.sh`) sets that version, the first `version =` in the root `Cargo.toml`, and the
+- **Releases (H2.2).** `.github/workflows/release.yml` runs on `v*` tags and publishes nothing
+  unless, for the tagged commit: the tag is an ancestor of `origin/master` and equals the crate
+  version (`gate`); `make check` passes on x86_64 Linux, aarch64 Linux and aarch64 macOS
+  (`check`); `make tools deny web-check msrv fuzz-smoke` pass (`supply`); and each of the four
+  tarballs (`make changelog dist`, x86_64/aarch64 Linux, aarch64/x86_64 macOS) installs through
+  `scripts/install.sh` into a temporary prefix, runs, and is refused when tampered with (`make
+  dist-check`, `scripts/installer-check.sh`). Only then `publish` (the one job with a write token,
+  in the `release` environment) writes `SHA256SUMS`, the bill of materials (`make sbom`,
+  `scripts/sbom.py`: CycloneDX 1.5 from `Cargo.lock`, deterministic), release notes from
+  `scripts/changelog.sh --notes` and the formula from `make homebrew-formula`; signs build
+  provenance for the tarballs, the SBOM and `SHA256SUMS` (`actions/attest-build-provenance`,
+  verified with `gh attestation verify`); creates the release; and pushes to the tap when
+  `HOMEBREW_TAP_TOKEN` is set. macOS binaries are not notarized (no Apple developer account in
+  the pipeline): a browser download is quarantined and needs `xattr -d com.apple.quarantine`;
+  `scripts/install.sh` downloads with curl, which leaves no mark. `make bump V=patch|minor|major|X.Y.Z`
+  (`scripts/bump.sh`) sets the version, the first `version =` in the root `Cargo.toml`, and the
   workspace entries in `Cargo.lock`; it refuses a version whose tag exists and never commits or tags.
+- **CI (`ci.yml`)** runs the same make targets on every push: `check` on the three platforms above
+  (with Node installed and `PTYRO_REQUIRE_NODE=1`, so the web app's logic tests can't be skipped),
+  `msrv` (the oldest compiler `rust-version` claims), `fuzz-smoke`, `web`, `deny` (`make tools
+  deny`) and `installer`. `make check` is `fmt-check lint doc lock-check ratchet test smoke`:
+  rustdoc warnings and an out-of-date `Cargo.lock` fail, and so does a crate gaining
+  `unwrap()`/`expect()` in non-test code beyond `scripts/unwrap-baseline.txt` (`make ratchet`;
+  the count only goes down).
+- **Locks that survive panics (H2.1).** `ptyro_core::sync` (`MutexExt::locked`,
+  `RwLockExt::reading/writing`) take a `std` lock whether or not another thread panicked holding
+  it; the daemon uses them everywhere, so one buggy handler no longer poisons a session's state
+  into failing every later request. The data may be half-updated (what the panicking code was
+  doing); the daemon keeps serving the rest. A request that panics still gets an error reply.
+- **Docs are tested against the code.** `make parity` (every command has a row in
+  `docs/parity.md`), and tests that every command has a line in `docs/commands.md`, every `make`
+  target is in the README, and every default key is in `docs/keys.md` fail the build when a doc
+  falls behind.
 
 ### 18.3 Performance budgets (targets, measured in CI benches where feasible) **[proposed]**
 

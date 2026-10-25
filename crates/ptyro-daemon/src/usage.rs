@@ -9,6 +9,7 @@
 //!   (`primary`/`secondary`: `usedPercent`, `resetsAt`, `windowDurationMins`).
 //! - A `StopFailure` with `rate_limit` marks the profile rate-limited until the window resets.
 
+use ptyro_core::sync::MutexExt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -76,7 +77,7 @@ impl Daemon {
     pub(crate) fn put_usage(&self, mut u: Usage) {
         let key = (u.profile.clone(), u.agent.clone());
         let changed = {
-            let mut map = self.usage.lock().expect("usage");
+            let mut map = self.usage.locked();
             // Statusline JSON doesn't carry the rate-limit flag: keep it until it resets.
             if let Some(old) = map.get(&key)
                 && u.limited_until_ms.is_none()
@@ -112,21 +113,18 @@ impl Daemon {
             let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             (m.place.profile.clone(), m.adapter.clone().unwrap_or_else(|| "agent".into()))
         };
-        let mut u = self
-            .usage
-            .lock()
-            .expect("usage")
-            .get(&(profile.clone(), adapter.clone()))
-            .cloned()
-            .unwrap_or(Usage {
-                profile,
-                agent: adapter,
-                windows: Vec::new(),
-                cost_millis: None,
-                context_percent: None,
-                limited_until_ms: None,
-                at_ms: now_ms(),
-            });
+        let mut u =
+            self.usage.locked().get(&(profile.clone(), adapter.clone())).cloned().unwrap_or(
+                Usage {
+                    profile,
+                    agent: adapter,
+                    windows: Vec::new(),
+                    cost_millis: None,
+                    context_percent: None,
+                    limited_until_ms: None,
+                    at_ms: now_ms(),
+                },
+            );
         let reset =
             u.windows.iter().filter_map(|w| w.resets_at_ms).max().unwrap_or(now_ms() + 3_600_000);
         u.limited_until_ms = Some(reset);
@@ -135,7 +133,7 @@ impl Daemon {
     }
 
     pub(crate) fn usage_list(&self) -> Reply {
-        let mut usage: Vec<Usage> = self.usage.lock().expect("usage").values().cloned().collect();
+        let mut usage: Vec<Usage> = self.usage.locked().values().cloned().collect();
         usage.sort_by(|a, b| (&a.profile, &a.agent).cmp(&(&b.profile, &b.agent)));
         Reply::Usage { usage }
     }
@@ -156,7 +154,7 @@ impl Daemon {
         if ptyro_agents::def(&self.config(), &agent).usage != Some(true) {
             return;
         }
-        if !self.codex_usage.lock().expect("codex_usage").insert(profile.clone()) {
+        if !self.codex_usage.locked().insert(profile.clone()) {
             return;
         }
         let me = Arc::clone(self);
@@ -164,7 +162,7 @@ impl Daemon {
             if let Err(e) = me.codex_usage_loop(&profile, &agent).await {
                 tracing::info!(profile, "codex usage meter stopped: {e}");
             }
-            me.codex_usage.lock().expect("codex_usage").remove(&profile);
+            me.codex_usage.locked().remove(&profile);
         });
     }
 

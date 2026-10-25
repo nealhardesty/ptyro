@@ -6,6 +6,7 @@ compile_error!(
 );
 
 mod agents;
+mod backup;
 mod cli;
 mod complete;
 mod config;
@@ -29,6 +30,7 @@ mod service;
 mod ship;
 mod tls;
 mod tour;
+mod uninstall;
 mod webapp;
 
 use std::path::PathBuf;
@@ -425,7 +427,7 @@ enum Cmd {
     /// A follow-up for a candidate's agent (or all of them): `ptyro iterate @last codex "also …"`
     Iterate {
         run: String,
-        /// [CANDIDATE] TEXT
+        /// `[CANDIDATE]` TEXT
         #[arg(required = true, num_args = 1..=2)]
         args: Vec<String>,
     },
@@ -701,6 +703,52 @@ enum Cmd {
         /// Internal: the coach on this ptyro (what the tour itself runs)
         #[arg(long, hide = true)]
         here: bool,
+    },
+    /// Take ptyro off this computer: stops the daemon and every session, removes its worktrees,
+    /// config, data, login service, integrations and shell lines, and the binary when it was
+    /// installed by hand. Shows what goes and what stays first; your repositories are untouched
+    Uninstall {
+        /// Show the plan and stop
+        #[arg(long)]
+        dry_run: bool,
+        /// Don't ask "uninstall? [y/N]" (work that would be lost is still asked about)
+        #[arg(short, long)]
+        yes: bool,
+        /// For scripts that mean it: go ahead even though worktrees have uncommitted changes
+        #[arg(long)]
+        delete_work: bool,
+        /// Keep the config directory
+        #[arg(long)]
+        keep_config: bool,
+        /// Keep the data directory (history, scratchpad, profiles) and so the worktrees
+        #[arg(long)]
+        keep_data: bool,
+        /// Don't remove the ptyro program itself
+        #[arg(long)]
+        keep_binary: bool,
+        /// Save a backup here first (`ptyro backup`'s file); nothing is removed if it fails
+        #[arg(long, value_name = "FILE")]
+        backup: Option<PathBuf>,
+        /// Also delete the snapshots under refs/ptyro/ in your repositories (archived and
+        /// taken-over work)
+        #[arg(long)]
+        purge_refs: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Save ptyro's own state (config, database, scratchpad) to a private .tar.gz
+    Backup {
+        /// Where to write it (default: `~/ptyro-backup-DATE.tar.gz`); never replaces a file
+        #[arg(short, long, value_name = "FILE")]
+        output: Option<PathBuf>,
+        /// Include every session's recording (big; it holds what was on screen)
+        #[arg(long)]
+        with_recordings: bool,
+        /// Include the web app's certificate authority, with its private key
+        #[arg(long)]
+        with_ca: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Print shell integration (prompt marks and cwd reporting) for your shell's rc file
     ShellInit {

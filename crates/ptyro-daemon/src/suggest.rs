@@ -3,6 +3,7 @@
 //! writes them to `.ptyro.local.toml` (never the committed `.ptyro.toml`), and trusts them when
 //! they're the project's only scripts.
 
+use ptyro_core::sync::MutexExt;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -70,7 +71,7 @@ impl Daemon {
     async fn was_offered(&self, project: &str) -> bool {
         match &self.store {
             Some(store) => store.kv_get(Self::offered_key(project)).await.ok().flatten().is_some(),
-            None => self.views.lock().expect("views").contains_key(&Self::offered_key(project)),
+            None => self.views.locked().contains_key(&Self::offered_key(project)),
         }
     }
 
@@ -81,7 +82,7 @@ impl Daemon {
                 let _ = store.kv_set(Self::offered_key(project), v).await;
             }
             None => {
-                self.views.lock().expect("views").insert(Self::offered_key(project), v);
+                self.views.locked().insert(Self::offered_key(project), v);
             }
         }
     }
@@ -98,13 +99,8 @@ impl Daemon {
             (setup, ignored_env_files(&root, env))
         })
         .await?;
-        let first = !self
-            .registry
-            .lock()
-            .expect("registry")
-            .worktrees
-            .iter()
-            .any(|w| w.project == p.id && !w.is_root);
+        let first =
+            !self.registry.locked().worktrees.iter().any(|w| w.project == p.id && !w.is_root);
         let setup = setup.filter(|_| cfg.scripts.setup.is_none());
         Ok(SetupSuggestions {
             project: p.slug.clone(),

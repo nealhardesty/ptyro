@@ -8,6 +8,7 @@
 //! tagged with where they came from. Questions and other comments that aren't clearly a request
 //! raise attention instead of being typed into the agent.
 
+use ptyro_core::sync::MutexExt;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::sync::Arc;
@@ -231,7 +232,7 @@ impl Daemon {
                 .collect(),
             _ => Vec::new(),
         };
-        let ours = self.pr_watches.lock().expect("watches").get(&wt.id).is_some_and(|w| w.on);
+        let ours = self.pr_watches.locked().get(&wt.id).is_some_and(|w| w.on);
         Ok(Some(PrInfo {
             number,
             url: str_of(&v, "url"),
@@ -409,7 +410,7 @@ impl Daemon {
         }
         let url = self.gh(&wt, args).await?;
         {
-            let mut w = self.pr_watches.lock().expect("watches");
+            let mut w = self.pr_watches.locked();
             let e = w.entry(wt.id.clone()).or_default();
             e.on = self.config().github.watch;
             e.next_poll_ms = 0;
@@ -561,7 +562,7 @@ impl Daemon {
     pub(crate) fn pr_watch(&self, addr: &str, off: bool) -> Result<Reply, Error> {
         let wt = self.find_worktree(addr)?;
         {
-            let mut w = self.pr_watches.lock().expect("watches");
+            let mut w = self.pr_watches.locked();
             let e = w.entry(wt.id.clone()).or_default();
             e.on = !off;
             e.next_poll_ms = 0;
@@ -611,8 +612,7 @@ impl Daemon {
     }
 
     pub(crate) fn save_watches(&self) {
-        let v =
-            serde_json::to_value(&*self.pr_watches.lock().expect("watches")).unwrap_or_default();
+        let v = serde_json::to_value(&*self.pr_watches.locked()).unwrap_or_default();
         self.save_kv("pr_watches", v);
     }
 
@@ -621,7 +621,7 @@ impl Daemon {
             && let Ok(Some(v)) = store.kv_get("pr_watches".into()).await
             && let Ok(w) = serde_json::from_value::<Watches>(v)
         {
-            *self.pr_watches.lock().expect("watches") = w;
+            *self.pr_watches.locked() = w;
         }
     }
 
@@ -660,8 +660,8 @@ impl Daemon {
         let poll = if std::env::var_os("PTYRO_TEST_FAST_POLL").is_some() { 500 } else { poll };
         let now = now_ms();
         let due: Vec<WorktreeInfo> = {
-            let reg = self.registry.lock().expect("registry");
-            let w = self.pr_watches.lock().expect("watches");
+            let reg = self.registry.locked();
+            let w = self.pr_watches.locked();
             reg.worktrees
                 .iter()
                 .filter(|wt| !wt.is_root && wt.state == WorktreeState::Ready && wt.branch.is_some())
@@ -675,12 +675,7 @@ impl Daemon {
                 .collect()
         };
         for wt in due {
-            self.pr_watches
-                .lock()
-                .expect("watches")
-                .entry(wt.id.clone())
-                .or_default()
-                .next_poll_ms = now + poll;
+            self.pr_watches.locked().entry(wt.id.clone()).or_default().next_poll_ms = now + poll;
             match self.refresh_pr(&wt).await {
                 Ok(Some(pr)) => self.pr_events(&wt, &pr).await,
                 Ok(None) => {}
@@ -693,7 +688,7 @@ impl Daemon {
     /// The PR-event loop for one poll (M6.10).
     async fn pr_events(self: &Arc<Self>, wt: &WorktreeInfo, pr: &PrInfo) {
         let (on, baselined, before) = {
-            let w = self.pr_watches.lock().expect("watches");
+            let w = self.pr_watches.locked();
             let e = w.get(&wt.id).cloned().unwrap_or_default();
             (e.on, e.baselined, e.failing)
         };
@@ -707,7 +702,7 @@ impl Daemon {
         let mut messages = Vec::new();
         let mut asks = Vec::new();
         {
-            let mut w = self.pr_watches.lock().expect("watches");
+            let mut w = self.pr_watches.locked();
             let e = w.entry(wt.id.clone()).or_default();
             if !baselined {
                 // The first look is the baseline: only what happens from now on is news.
@@ -754,13 +749,7 @@ impl Daemon {
             messages.insert(0, self.failure_report(wt, pr, Some(&new_failures)).await);
         }
         if !messages.is_empty() {
-            self.pr_watches
-                .lock()
-                .expect("watches")
-                .entry(wt.id.clone())
-                .or_default()
-                .pending
-                .extend(messages);
+            self.pr_watches.locked().entry(wt.id.clone()).or_default().pending.extend(messages);
         }
         for a in asks {
             if let Some(s) = self.owner(wt).or_else(|| self.sessions_in(&wt.id).into_iter().next())
@@ -836,8 +825,7 @@ impl Daemon {
     fn flush_pending(self: &Arc<Self>) {
         let ids: Vec<String> = self
             .pr_watches
-            .lock()
-            .expect("watches")
+            .locked()
             .iter()
             .filter(|(_, w)| !w.pending.is_empty())
             .map(|(k, _)| k.clone())
@@ -848,9 +836,7 @@ impl Daemon {
             if s.status() == Some(AgentStatus::Working) || !self.ready_for_input(&s) {
                 continue;
             }
-            let msgs = std::mem::take(
-                &mut self.pr_watches.lock().expect("watches").entry(id).or_default().pending,
-            );
+            let msgs = std::mem::take(&mut self.pr_watches.locked().entry(id).or_default().pending);
             self.deliver_when_idle(&s, msgs.join("\n\n---\n\n"));
         }
         self.save_watches();
@@ -864,7 +850,7 @@ impl Daemon {
             return;
         }
         let due = {
-            let mut w = self.pr_watches.lock().expect("watches");
+            let mut w = self.pr_watches.locked();
             let e = w.entry(wt.id.clone()).or_default();
             let due = e.on
                 && !e.escalated

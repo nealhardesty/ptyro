@@ -6,6 +6,7 @@
 
 pub mod remote;
 
+use ptyro_core::sync::MutexExt;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -209,8 +210,7 @@ impl Client {
                     Err(e) => Err(format!("the request can't be encoded: {e}")),
                 };
                 if let (Err(why), ClientMsg::Request { id, .. }) = (sent, &msg) {
-                    let tx =
-                        writer_pending.lock().expect("pending").as_mut().and_then(|p| p.remove(id));
+                    let tx = writer_pending.locked().as_mut().and_then(|p| p.remove(id));
                     if let Some(tx) = tx {
                         let _ = tx.send(Outcome::Err { error: Error::invalid(why) });
                     }
@@ -227,11 +227,7 @@ impl Client {
                         // A response we can't read still answers its request: fail it rather
                         // than leave the caller waiting forever.
                         if let Some(id) = response_id(&bytes) {
-                            let tx = reader_pending
-                                .lock()
-                                .expect("pending")
-                                .as_mut()
-                                .and_then(|p| p.remove(&id));
+                            let tx = reader_pending.locked().as_mut().and_then(|p| p.remove(&id));
                             if let Some(tx) = tx {
                                 let error = Error::new(
                                     ErrorCode::ProtocolMismatch,
@@ -245,11 +241,7 @@ impl Client {
                 };
                 match msg {
                     ServerMsg::Response { id, outcome } => {
-                        let tx = reader_pending
-                            .lock()
-                            .expect("pending")
-                            .as_mut()
-                            .and_then(|p| p.remove(&id));
+                        let tx = reader_pending.locked().as_mut().and_then(|p| p.remove(&id));
                         if let Some(tx) = tx {
                             let _ = tx.send(outcome);
                         }
@@ -260,7 +252,7 @@ impl Client {
                 }
             }
             // Connection gone: fail every outstanding request, and every later one.
-            *reader_pending.lock().expect("pending") = None;
+            *reader_pending.locked() = None;
         });
         Ok(Self {
             id,
@@ -279,7 +271,7 @@ impl Client {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         let lost = || Error::new(ErrorCode::DaemonUnavailable, "connection to the daemon was lost");
-        match self.pending.lock().expect("pending").as_mut() {
+        match self.pending.locked().as_mut() {
             Some(p) => p.insert(id, tx),
             None => return Err(lost()),
         };
@@ -287,7 +279,7 @@ impl Client {
         struct Forget<'a>(&'a Pending, u32);
         impl Drop for Forget<'_> {
             fn drop(&mut self) {
-                if let Some(p) = self.0.lock().expect("pending").as_mut() {
+                if let Some(p) = self.0.locked().as_mut() {
                     p.remove(&self.1);
                 }
             }
@@ -469,7 +461,7 @@ mod tests {
         // The next request on the same connection works, and nothing is left pending.
         let r = c.request(Request::Rename { addr: "a".into(), name: "b".into() }).await.unwrap();
         assert!(matches!(r, Reply::Done));
-        assert!(c.pending.lock().unwrap().as_ref().unwrap().is_empty());
+        assert!(c.pending.locked().as_ref().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -494,7 +486,7 @@ mod tests {
         let c = Client::handshake(a, &opts(d.path()), None).await.unwrap();
         let r = tokio::time::timeout(Duration::from_millis(100), c.request(Request::List)).await;
         assert!(r.is_err(), "timed out");
-        assert!(c.pending.lock().unwrap().as_ref().unwrap().is_empty());
+        assert!(c.pending.locked().as_ref().unwrap().is_empty());
     }
 
     #[tokio::test]

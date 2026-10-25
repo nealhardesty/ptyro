@@ -2,6 +2,7 @@
 //! responder (SPEC §5.6): replies ptyro owns are produced by the side-channel scanner *before*
 //! the emulator sees the batch, so they precede the emulator's own replies (7501 before DA1).
 
+use ptyro_core::sync::MutexExt;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -148,7 +149,7 @@ struct Listener(Arc<Mutex<Vec<Event>>>);
 
 impl EventListener for Listener {
     fn send_event(&self, event: Event) {
-        self.0.lock().expect("listener lock").push(event);
+        self.0.locked().push(event);
     }
 }
 
@@ -413,7 +414,7 @@ impl AlacrittyEmulator {
     }
 
     fn drain_events(&mut self, out: &mut FeedOutput) {
-        let events = std::mem::take(&mut *self.events.0.lock().expect("listener lock"));
+        let events = std::mem::take(&mut *self.events.0.locked());
         for ev in events {
             match ev {
                 Event::PtyWrite(s) if s == ALACRITTY_DA1 => {

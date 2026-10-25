@@ -59,24 +59,43 @@ git clone https://github.com/nealhardesty/ptyro.git && cd ptyro
 make install            # builds and installs ~/.cargo/bin/ptyro
 ```
 
-Or, without a checkout:
+Or, without a checkout, a prebuilt release (Linux and macOS, x86_64 and aarch64):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nealhardesty/ptyro/master/scripts/install.sh | sh
+```
+
+It downloads the tarball for your machine, checks it against the release's `SHA256SUMS` (and its
+signed build provenance when you have `gh`), and installs `~/.local/bin/ptyro` (`PTYRO_VERSION`,
+`PTYRO_PREFIX` choose another). Or build it yourself:
 
 ```bash
 cargo install --locked --git https://github.com/nealhardesty/ptyro ptyro
 ```
 
-Make sure `~/.cargo/bin` is on your `PATH`. Or take a prebuilt tarball (Linux and macOS, x86_64
-and aarch64, with `SHA256SUMS`) from the [latest release](https://github.com/nealhardesty/ptyro/releases/latest).
-A Homebrew tap (`brew install nealhardesty/ptyro/ptyro`) is planned but not published yet. Then
-let ptyro look around:
+Make sure `~/.local/bin` (or `~/.cargo/bin`) is on your `PATH`. A Homebrew tap
+(`brew install nealhardesty/ptyro/ptyro`) is planned but not published yet.
+
+**Downloading a tarball by hand** from the [releases page](https://github.com/nealhardesty/ptyro/releases/latest)?
+Check it: `shasum -a 256 -c SHA256SUMS --ignore-missing`, and who built it:
+`gh attestation verify ptyro-<version>-<target>.tar.gz --repo nealhardesty/ptyro`. Each release
+also has its software bill of materials (`ptyro-<version>.cdx.json`, CycloneDX). The macOS
+binaries aren't notarized, and a browser marks its downloads as quarantined, so Gatekeeper
+refuses them: run `xattr -d com.apple.quarantine ptyro` once, or use the install script (curl
+doesn't set the mark). Then let ptyro look around:
 
 ```bash
 ptyro init       # finds your agents, accounts and repositories; asks a few questions
 ptyro doctor     # checks agents, logins, integrations, terminal and tmux
 ```
 
-**Upgrading** while agents run: install the new binary, then `ptyro daemon upgrade`. Every
-session keeps running.
+**Upgrading** while agents run: install the new binary (run the install script again), then
+`ptyro daemon upgrade`. Every session keeps running.
+
+**Removing ptyro:** `ptyro uninstall` shows what it keeps on your machine (sessions, worktrees
+with any uncommitted work flagged, its directories, the login service, integrations, shell-rc
+lines, the binary), asks, and removes it; `ptyro backup` saves its state first. Your repositories,
+their branches and `.ptyro.toml` stay. See [`docs/uninstall.md`](docs/uninstall.md).
 
 ## Quick start
 
@@ -467,6 +486,7 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
 | [`docs/cli-json.md`](docs/cli-json.md) | Every `--json` output and the exit codes |
 | [`docs/remote.md`](docs/remote.md) | Phones and other machines: setup, scopes, remote approvals, threat model |
 | [`docs/changesets.md`](docs/changesets.md) | Change sets: one change across several repos, from contract to merge train |
+| [`docs/uninstall.md`](docs/uninstall.md) | What `ptyro uninstall` and `ptyro backup` remove, keep and save |
 | [`docs/compat.md`](docs/compat.md) | Which programs and terminals work inside ptyro, and how well |
 | [`docs/fixtures.md`](docs/fixtures.md) | Recording and sanitising test fixtures |
 | [`SPEC.md`](SPEC.md) | Architecture, protocol, formats, configuration, CLI, security, verified facts |
@@ -478,8 +498,8 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
 ## Development
 
 Everything runs through `make`; `make` on its own lists the targets. CI calls the same targets
-(`make check`, `make fuzz-smoke`, `make web-check`), never raw `cargo`, so local runs and CI
-behave the same. (License and advisory checks run there through the cargo-deny action.)
+(`make check`, `make msrv`, `make deny`, `make fuzz-smoke`, `make web-check`, `make installer-check`),
+never raw `cargo`, so local runs and CI behave the same.
 
 | Target | Does |
 |---|---|
@@ -489,11 +509,13 @@ behave the same. (License and advisory checks run there through the cargo-deny a
 | `make run ARGS="ls"` / `make try CMD=claude` | run the dev build with arguments / start `CMD` in a new session and attach |
 | `make test` / `make smoke` | all tests / quick end-to-end checks of the PTY and emulator |
 | `make fmt` / `fmt-check` / `lint` | format / fail if unformatted / clippy with warnings as errors |
-| `make check` / `make ci` | fmt-check, lint, test, smoke / those plus `deny`, `web-check` and `fuzz-smoke`: everything CI runs |
+| `make check` / `make ci` | fmt-check, lint, doc, lock-check, ratchet, test, smoke: CI's main job on every platform / those plus `deny`, `web-check`, `msrv`, `fuzz-smoke` and `installer-check`: everything CI runs |
+| `make lock-check` / `make ratchet` / `make ratchet-update` | fail if `Cargo.lock` is out of date / fail if a crate has more `unwrap()`/`expect()` in non-test code than `scripts/unwrap-baseline.txt` allows (only ever lower it) / write the current counts as the baseline |
+| `make msrv` | type-check with the oldest compiler `rust-version` promises (installs it) |
 | `make web-test` | the web app's logic tests that need no daemon (settings, terminal keys and selection, QR codes; needs Node) |
 | `make tools` / `make deny` | install cargo-deny / license, advisory and source checks |
 | `make parity` (or `make tui-parity`) | check that every CLI command has a TUI path and a web path, or a waiver, in [`docs/parity.md`](docs/parity.md); a gap fails it (`STRICT=0` / `WEB_STRICT=0` only list TUI / web gaps) |
-| `make doc` / `make clean` | API docs / remove build output |
+| `make doc` / `make clean` | API docs (warnings fail) / remove build output |
 | `make sandbox` / `make sandbox-clean` | a throwaway ptyro (own daemon, store, worktrees) with a demo repo / delete it. It isolates ptyro's state, not a security sandbox: agents still run as you |
 | `make reset` | start ptyro over, to try the first run again: lists what it removes (sessions, worktrees with any uncommitted work flagged, the login service, integrations, config, data, state), then asks. `YES=1` skips the question unless uncommitted work would be lost (then you type `delete`). Your repositories and their branches stay. With `PTYRO_HOME` set it resets that home only. Run it from a plain terminal, not inside ptyro |
 | `make orchestrate-demo` (`ARGS=tui\|clean`) | fan-out, a gated recipe and a lead over MCP, with fake agents |
@@ -511,14 +533,22 @@ behave the same. (License and advisory checks run there through the cargo-deny a
 | `make soak` (`DURATION=10m`) | fake agents and shells with live upgrades; fails on leaks, stuck turns or lag |
 | `make web` / `make web-check` | build the web app (needs Node) / check the committed `web/dist` matches (CI) |
 | `make dist` (`TRIPLE=…`) / `changelog` / `homebrew-formula` | release tarball + `.sha256` in `dist/` / regenerate `CHANGELOG.md` / render `dist/ptyro.rb` from the checksums |
+| `make sbom` | the software bill of materials (CycloneDX) from `Cargo.lock`: `dist/ptyro-<version>.cdx.json` |
+| `make dist-check` (`TRIPLE=…`) / `make installer-check` | install the tarball in `dist/` with `scripts/install.sh` into a temp prefix and run it (a tampered tarball must be refused) / `make dist` and then that |
 | `make bump` (`V=patch\|minor\|major\|X.Y.Z`) | set the version in `Cargo.toml` and `Cargo.lock` (default: next patch); it prints the commit and tag to run |
 | `make check-macos` | type-check the workspace for macOS from Linux |
 
-To release, run `make bump V=…`, commit, then push the `vX.Y.Z` tag. Pushing a `vX.Y.Z` tag runs `dist`, `changelog` and `homebrew-formula` in CI and publishes the
-release. Only the final `publish` job gets a write token. It runs in the `release` environment,
-which holds the `HOMEBREW_TAP_TOKEN` secret (a fine-grained token that can write only to
-`nealhardesty/homebrew-ptyro`); restrict that environment to `v*` tags. Actions are pinned by
-commit SHA, and Dependabot keeps them and the crates current.
+To release, run `make bump V=…`, commit, merge to `master`, then push the `vX.Y.Z` tag. The release
+workflow first checks that the tag is on `master` and is the crate's version; runs `make check` on
+Linux (x86_64 and arm64) and macOS and, for the tagged commit, `deny`, `web-check`, `msrv` and
+`fuzz-smoke`; builds the four tarballs (each must install through `scripts/install.sh`); and only
+then publishes: the release gets the tarballs, `SHA256SUMS`, the software bill of materials, the
+changelog notes and signed build provenance (`gh attestation verify`). Only the final `publish` job
+gets a write token. It runs in the `release` environment, which holds the `HOMEBREW_TAP_TOKEN`
+secret (a fine-grained token that can write only to `nealhardesty/homebrew-ptyro`); restrict
+that environment to `v*` tags. Actions are pinned by commit SHA, and Dependabot keeps them and the
+crates current. CI runs the same targets on every push, with Node required so the web app's
+tests can't be skipped.
 
 Found a security problem? See [`SECURITY.md`](SECURITY.md).
 

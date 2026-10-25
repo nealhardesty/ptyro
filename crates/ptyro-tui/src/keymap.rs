@@ -125,6 +125,14 @@ pub const ACTIONS: &[ActionSpec] = &[
         "Restart the daemon (agents come back dormant, resumable); this TUI reconnects",
     ),
     a("daemon.upgrade", "Switch the daemon to the installed binary, live (sessions keep running)"),
+    a(
+        "app.backup",
+        "Back up ptyro's own state (config, database, scratchpad) to a private .tar.gz, in a split",
+    ),
+    a(
+        "app.uninstall",
+        "Uninstall ptyro: shows what goes and what stays, then asks (in a split; it ends this TUI and the daemon)",
+    ),
     a("daemon.service", "Start the daemon at login (a systemd user unit or launchd agent)"),
     a("daemon.unservice", "Stop starting the daemon at login"),
     a("integrations", "The agent integrations: what's installed and what each launch gets"),
@@ -600,6 +608,24 @@ mod tests {
 
     fn ev(c: char, mods: u8) -> KeyEvent {
         KeyEvent::new(KeyCode::Char { c }, Mods(mods))
+    }
+
+    /// `docs/keys.md` is the page people read for keys: every default key after the prefix is in it.
+    #[test]
+    fn the_keys_page_lists_every_default_key() {
+        const DOC: &str = include_str!("../../../docs/keys.md");
+        // Arrow keys are described in words, as a group.
+        let words = ["Down", "Up", "S-Left", "S-Right", "S-Up", "S-Down", "PageUp"];
+        let missing: Vec<&str> = DEFAULTS
+            .iter()
+            .filter(|(table, key, _)| *table == Table::Prefix && !words.contains(key))
+            .filter(|(_, key, _)| !DOC.contains(&format!("`{key}`")))
+            .map(|(_, key, _)| *key)
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "docs/keys.md never shows these keys after the prefix: {missing:?}"
+        );
     }
 
     #[test]

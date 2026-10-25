@@ -105,6 +105,9 @@ pub const TEMPLATES: &[(&str, &[&str])] = &[
     ("devices.revoke", &["devices", "revoke", "{ask:Device id (devices.list shows them)}"]),
     ("devices.push_test", &["devices", "push-test"]),
     ("config.show", &["config", "show"]),
+    ("app.backup", &["backup"]),
+    // Detach first: the daemon stops, and this screen with it. It asks in the split.
+    ("app.uninstall", &["uninstall"]),
 ];
 
 pub fn template(action: &str) -> Option<&'static [&'static str]> {

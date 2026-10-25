@@ -8,6 +8,7 @@
 //!
 //! Clients never block any of them; they read the terminal under a short lock to build frames.
 
+use ptyro_core::sync::MutexExt;
 use std::collections::BTreeMap;
 use std::os::fd::OwnedFd;
 use std::path::PathBuf;
@@ -449,7 +450,7 @@ impl Session {
     }
 
     pub fn status(&self) -> Option<AgentStatus> {
-        self.engine.lock().expect("engine").record.as_ref().map(|r| r.status)
+        self.engine.locked().record.as_ref().map(|r| r.status)
     }
 
     /// Raw bytes to the program (answers, stop keys).
@@ -497,7 +498,7 @@ impl Session {
         let foreground = fg.map(|(name, _)| name);
         // One guard: two `lock()`s in the struct literal below would deadlock on each other.
         let (status, activity) = {
-            let e = self.engine.lock().expect("engine");
+            let e = self.engine.locked();
             (e.record.clone(), e.activity.clone())
         };
         SessionInfo {
@@ -608,7 +609,7 @@ impl Session {
             let term = self.term.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             (term.emu.scrollback_len(), term.emu.size())
         };
-        let dir = self.record_dir.lock().expect("record_dir").clone();
+        let dir = self.record_dir.locked().clone();
         if lines as usize <= have || dir.is_none() {
             return self.scrollback(lines);
         }
@@ -636,12 +637,12 @@ impl Session {
             ptyro_term::record::replay(&recs, &mut term.emu);
             term.tracker.update(&mut term.emu);
         }
-        *self.record_dir.lock().expect("record_dir") = Some(dir);
+        *self.record_dir.locked() = Some(dir);
         self.bump();
     }
 
     fn record(&self, bytes: &[u8], term: &mut Term) {
-        let mut rec = self.recorder.lock().expect("recorder");
+        let mut rec = self.recorder.locked();
         let Some(r) = rec.as_mut() else { return };
         if let Err(e) = r.output(bytes, || keyframe(term)) {
             // A full disk mustn't cost the session its output: stop recording it.
@@ -690,7 +691,7 @@ impl Session {
     }
 
     pub fn recording_bytes(&self) -> u64 {
-        self.recorder.lock().expect("recorder").as_ref().map_or(0, |r| r.bytes())
+        self.recorder.locked().as_ref().map_or(0, |r| r.bytes())
     }
 
     pub fn is_live(&self) -> bool {
@@ -809,7 +810,7 @@ impl Session {
     }
 
     fn psp_raw(&self) {
-        let p = self.psp.lock().expect("psp");
+        let p = self.psp.locked();
         let raw = p.effective().map(|r| ProgramStatus {
             state: r.state.clone(),
             kind: r.kind.clone(),
@@ -823,11 +824,7 @@ impl Session {
     }
 
     fn was_active(&self) -> bool {
-        self.psp
-            .lock()
-            .expect("psp")
-            .effective()
-            .is_some_and(|r| r.state == "working" || r.state == "blocked")
+        self.psp.locked().effective().is_some_and(|r| r.state == "working" || r.state == "blocked")
     }
 
     fn handle_events(&self, events: Vec<TermEvent>) {
@@ -851,17 +848,17 @@ impl Session {
                 TermEvent::ProgramStatus(r) => {
                     self.record_event("osc7501", serde_json::json!({ "state": r.state, "id": r.id, "kind": r.kind, "msg": r.msg }));
                     let was = self.was_active();
-                    let changed = self.psp.lock().expect("psp").report(r);
+                    let changed = self.psp.locked().report(r);
                     self.psp_raw();
                     if !changed {
                         continue;
                     }
-                    let eff = self.psp.lock().expect("psp").effective().cloned();
+                    let eff = self.psp.locked().effective().cloned();
                     signals.extend(self.psp_signals(eff.as_ref(), was).into_iter().map(high));
                     DomainEvent::SessionUpdated { info: self.info(String::new()) }
                 }
                 TermEvent::Reset => {
-                    self.psp.lock().expect("psp").reset();
+                    self.psp.locked().reset();
                     self.psp_raw();
                     continue;
                 }
@@ -887,7 +884,7 @@ impl Session {
                 }
                 TermEvent::Progress { state, percent } => {
                     // OSC 9;4 stops counting once the program speaks OSC 7501 (spec rev 0.4).
-                    if self.psp.lock().expect("psp").seen {
+                    if self.psp.locked().seen {
                         continue;
                     }
                     self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).progress =
@@ -898,9 +895,9 @@ impl Session {
                     match mark {
                         'A' => {
                             let was = self.was_active();
-                            if self.psp.lock().expect("psp").drop_active() {
+                            if self.psp.locked().drop_active() {
                                 self.psp_raw();
-                                let eff = self.psp.lock().expect("psp").effective().cloned();
+                                let eff = self.psp.locked().effective().cloned();
                                 signals.extend(
                                     self.psp_signals(eff.as_ref(), was).into_iter().map(high),
                                 );
@@ -1011,7 +1008,7 @@ impl Session {
             meta.ended_ms = Some(now_ms());
             meta.pid = None;
         }
-        self.psp.lock().expect("psp").drop_active();
+        self.psp.locked().drop_active();
         self.psp_raw();
         tracing::info!(session = %self.id, "exited");
         let state =
@@ -1114,7 +1111,7 @@ impl Session {
             term.emu.resize(size);
             term.tracker.update(&mut term.emu)
         };
-        if let Some(r) = self.recorder.lock().expect("recorder").as_mut() {
+        if let Some(r) = self.recorder.locked().as_mut() {
             let _ = r.resize(size);
         }
         self.queue(WriterMsg::Resize(size));
@@ -1211,7 +1208,7 @@ impl Session {
             zstd::bulk::compress(&raw, 1)?
         };
         let (status, activity, stale, engine_clocks) = {
-            let e = self.engine.lock().expect("engine");
+            let e = self.engine.locked();
             (e.record.clone(), e.activity.clone(), e.stale_after_ms, e.clocks())
         };
         // Before the struct literal: its `self.meta.lock()` temporary lives to the end of the

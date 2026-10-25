@@ -14,6 +14,7 @@
 //! **PreToolUse.** Before a tool runs, file leases held by other sessions and the step's guard
 //! (`deny_paths`, `deny_cmds`) can deny it, with a reason the agent reads.
 
+use ptyro_core::sync::MutexExt;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -153,14 +154,8 @@ impl Daemon {
         let v = match check {
             None => None,
             Some(c) => {
-                let wt = s
-                    .meta
-                    .lock()
-                    .expect("meta")
-                    .place
-                    .worktree
-                    .clone()
-                    .and_then(|w| self.worktree_by_id(&w));
+                let wt =
+                    s.meta.locked().place.worktree.clone().and_then(|w| self.worktree_by_id(&w));
                 let wt = wt
                     .ok_or_else(|| Error::invalid("verified-done needs a session in a worktree"))?;
                 // Resolve now: an untrusted or missing script is an error at set time.
@@ -194,14 +189,7 @@ impl Daemon {
         {
             return;
         }
-        let Some(wt) = s
-            .meta
-            .lock()
-            .expect("meta")
-            .place
-            .worktree
-            .clone()
-            .and_then(|w| self.worktree_by_id(&w))
+        let Some(wt) = s.meta.locked().place.worktree.clone().and_then(|w| self.worktree_by_id(&w))
         else {
             return;
         };
@@ -296,13 +284,8 @@ impl Daemon {
     /// bounce is outstanding: hooks arrive on their own connections, so a busy machine can deliver
     /// the turn's own prompt after that turn was already checked and bounced.
     pub(crate) fn verify_on_prompt(&self, s: &Arc<Session>, text: &str) {
-        let bounced = s
-            .meta
-            .lock()
-            .expect("meta")
-            .verify
-            .as_ref()
-            .is_some_and(|v| v.state == VerifyState::Bounced);
+        let bounced =
+            s.meta.locked().verify.as_ref().is_some_and(|v| v.state == VerifyState::Bounced);
         if !text.contains(BOUNCE_MARK) && !bounced {
             self.reset_verify(s);
         }
@@ -393,14 +376,7 @@ impl Daemon {
     /// The worktree and session (if one) an address names: a session, else a worktree.
     fn ckpt_target(&self, addr: &str) -> Result<(WorktreeInfo, Option<Arc<Session>>), Error> {
         if let Ok(s) = self.resolve(addr) {
-            let wt = s
-                .meta
-                .lock()
-                .expect("meta")
-                .place
-                .worktree
-                .clone()
-                .and_then(|w| self.worktree_by_id(&w));
+            let wt = s.meta.locked().place.worktree.clone().and_then(|w| self.worktree_by_id(&w));
             return Ok((
                 wt.ok_or_else(|| Error::invalid("that session isn't in a worktree"))?,
                 Some(s),
@@ -575,7 +551,7 @@ impl Daemon {
         let project =
             s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).place.project.clone();
         let me = s.id.full();
-        let leases = self.leases.lock().expect("leases");
+        let leases = self.leases.locked();
         for f in &files {
             let r = rel(f);
             if let Some(l) = leases.iter().find(|l| {

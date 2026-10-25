@@ -2,6 +2,7 @@
 //! comments batched into a prompt for its agent, integrating into the target branch, pair mode
 //! in the main checkout, and the review queue with its `max_unreviewed` gate and digest.
 
+use ptyro_core::sync::MutexExt;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -172,7 +173,7 @@ impl Daemon {
                     return Err(Error::invalid("an empty comment"));
                 }
                 let comments = {
-                    let mut all = self.review_comments.lock().expect("review");
+                    let mut all = self.review_comments.locked();
                     let list = all.entry(wt.id.clone()).or_default();
                     let id = list.iter().map(|c| c.id).max().unwrap_or(0) + 1;
                     list.push(ReviewComment { id, path, line, code, text, at_ms: now_ms() });
@@ -183,19 +184,14 @@ impl Daemon {
             }
             Request::ReviewList { addr } => {
                 let wt = self.find_worktree(&addr)?;
-                let comments = self
-                    .review_comments
-                    .lock()
-                    .expect("review")
-                    .get(&wt.id)
-                    .cloned()
-                    .unwrap_or_default();
+                let comments =
+                    self.review_comments.locked().get(&wt.id).cloned().unwrap_or_default();
                 Ok(Reply::Comments { comments })
             }
             Request::ReviewRemove { addr, id } => {
                 let wt = self.find_worktree(&addr)?;
                 let comments = {
-                    let mut all = self.review_comments.lock().expect("review");
+                    let mut all = self.review_comments.locked();
                     let list = all.entry(wt.id.clone()).or_default();
                     match id {
                         Some(i) => list.retain(|c| c.id != i),
@@ -287,14 +283,7 @@ impl Daemon {
     /// At the start of each agent turn: remember the worktree's state, for "diff against the
     /// last turn" (never touches the index, the stash list or any file).
     pub(crate) fn snapshot_turn(self: &Arc<Self>, s: &Arc<crate::session::Session>) {
-        let Some(wt) = s
-            .meta
-            .lock()
-            .expect("meta")
-            .place
-            .worktree
-            .clone()
-            .and_then(|w| self.worktree_by_id(&w))
+        let Some(wt) = s.meta.locked().place.worktree.clone().and_then(|w| self.worktree_by_id(&w))
         else {
             return;
         };
@@ -318,8 +307,7 @@ impl Daemon {
         note: Option<String>,
     ) -> Result<Reply, Error> {
         let wt = self.find_worktree(addr)?;
-        let comments =
-            self.review_comments.lock().expect("review").get(&wt.id).cloned().unwrap_or_default();
+        let comments = self.review_comments.locked().get(&wt.id).cloned().unwrap_or_default();
         if comments.is_empty() {
             return Err(Error::conflict(format!(
                 "no review comments on {} to send",
@@ -350,7 +338,7 @@ impl Daemon {
         tokio::spawn(async move {
             if me.deliver_idle(&s2, &text).await {
                 {
-                    let mut all = me.review_comments.lock().expect("review");
+                    let mut all = me.review_comments.locked();
                     if let Some(v) = all.get_mut(&wid) {
                         v.drain(..sent.min(v.len()));
                         if v.is_empty() {
@@ -366,16 +354,14 @@ impl Daemon {
     }
 
     pub(crate) fn mark_reviewed(&self, wt: &str) {
-        self.reviewed.lock().expect("reviewed").insert(wt.to_owned(), now_ms());
+        self.reviewed.locked().insert(wt.to_owned(), now_ms());
         self.save_review_state();
     }
 
     pub(crate) fn save_review_state(&self) {
-        let comments = serde_json::to_value(&*self.review_comments.lock().expect("review"))
-            .unwrap_or_default();
-        let reviewed =
-            serde_json::to_value(&*self.reviewed.lock().expect("reviewed")).unwrap_or_default();
-        let pairs = serde_json::to_value(&*self.pairs.lock().expect("pairs")).unwrap_or_default();
+        let comments = serde_json::to_value(&*self.review_comments.locked()).unwrap_or_default();
+        let reviewed = serde_json::to_value(&*self.reviewed.locked()).unwrap_or_default();
+        let pairs = serde_json::to_value(&*self.pairs.locked()).unwrap_or_default();
         self.save_kv("review_comments", comments);
         self.save_kv("reviewed", reviewed);
         self.save_kv("pairs", pairs);
@@ -386,28 +372,27 @@ impl Daemon {
         if let Ok(Some(v)) = store.kv_get("review_comments".into()).await
             && let Ok(c) = serde_json::from_value(v)
         {
-            *self.review_comments.lock().expect("review") = c;
+            *self.review_comments.locked() = c;
         }
         if let Ok(Some(v)) = store.kv_get("reviewed".into()).await
             && let Ok(r) = serde_json::from_value(v)
         {
-            *self.reviewed.lock().expect("reviewed") = r;
+            *self.reviewed.locked() = r;
         }
         if let Ok(Some(v)) = store.kv_get("pairs".into()).await
             && let Ok(p) = serde_json::from_value(v)
         {
-            *self.pairs.lock().expect("pairs") = p;
+            *self.pairs.locked() = p;
         }
     }
 
     /// Worktrees whose agent finished a turn you haven't reviewed, best first (M6.9).
     pub(crate) fn review_queue(&self) -> Vec<ReviewItem> {
         let now = now_ms();
-        let reviewed = self.reviewed.lock().expect("reviewed").clone();
+        let reviewed = self.reviewed.locked().clone();
         let worktrees: Vec<WorktreeInfo> = self
             .registry
-            .lock()
-            .expect("registry")
+            .locked()
             .worktrees
             .iter()
             .filter(|w| !w.is_root && w.state == WorktreeState::Ready)
@@ -428,7 +413,7 @@ impl Daemon {
             // The newest agent decides: done with its turn (idle, done, error, exited).
             let Some(s) = agents.iter().max_by_key(|s| s.id.created_ms()) else { continue };
             let (status, since) = {
-                let e = s.engine.lock().expect("engine");
+                let e = s.engine.locked();
                 (e.record.as_ref().map(|r| r.status), e.record.as_ref().map_or(0, |r| r.since_ms))
             };
             let finished_at = match (s.is_live(), status) {
@@ -535,7 +520,7 @@ impl Daemon {
 
     /// Hold an agent spawn until the queue has room (M6.9). Returns its position.
     pub(crate) fn queue_spawn(&self, spec: SpawnSpec) -> u32 {
-        let mut q = self.spawn_queue.lock().expect("spawn_queue");
+        let mut q = self.spawn_queue.locked();
         q.push_back(spec);
         q.len() as u32
     }
@@ -550,7 +535,7 @@ impl Daemon {
             loop {
                 tokio::time::sleep(Duration::from_secs(3)).await;
                 while me.review_gate().is_none() {
-                    let Some(spec) = me.spawn_queue.lock().expect("spawn_queue").pop_front() else {
+                    let Some(spec) = me.spawn_queue.locked().pop_front() else {
                         break;
                     };
                     if let Err(e) = me.spawn(spec).await {
@@ -726,7 +711,7 @@ impl Daemon {
     /// cleaning up, like a merged PR (`WorktreeInfo::shipped`). Kept in kv across restarts.
     fn mark_integrated(&self, id: &str, head: String) {
         let all: serde_json::Map<String, serde_json::Value> = {
-            let mut reg = self.registry.lock().expect("registry");
+            let mut reg = self.registry.locked();
             if let Some(w) = reg.worktrees.iter_mut().find(|w| w.id == id) {
                 w.integrated = Some(head);
             }
@@ -743,7 +728,7 @@ impl Daemon {
         let Ok(Some(serde_json::Value::Object(all))) = store.kv_get(INTEGRATED.into()).await else {
             return;
         };
-        let mut reg = self.registry.lock().expect("registry");
+        let mut reg = self.registry.locked();
         for w in reg.worktrees.iter_mut() {
             if let Some(h) = all.get(&w.id).and_then(|h| h.as_str()) {
                 w.integrated = Some(h.to_owned());
@@ -758,7 +743,7 @@ impl Daemon {
         let p = self
             .project_by_id(&wt.project)
             .ok_or_else(|| Error::missing("project", &wt.project))?;
-        let current = self.pairs.lock().expect("pairs").get(&p.id).cloned();
+        let current = self.pairs.locked().get(&p.id).cloned();
         if let Some(c) = &current
             && c.worktree != wt.id
         {
@@ -802,7 +787,7 @@ impl Daemon {
         })
         .await??;
         {
-            let mut pairs = self.pairs.lock().expect("pairs");
+            let mut pairs = self.pairs.locked();
             match result.0 {
                 Some(pair) => {
                     pairs.insert(p.id.clone(), pair);
@@ -828,7 +813,7 @@ pub(crate) fn last_message(s: &crate::session::Session) -> Option<String> {
         .as_deref()
         .and_then(|r| r.lines().map(str::trim).find(|l| !l.is_empty()))
         .map(|l| l.chars().take(140).collect())
-        .or_else(|| s.engine.lock().expect("engine").record.as_ref().and_then(|r| r.detail.clone()))
+        .or_else(|| s.engine.locked().record.as_ref().and_then(|r| r.detail.clone()))
         .or_else(|| last_line(&s.read_screen(ptyro_protocol::ScreenFormat::Plain)))
 }
 

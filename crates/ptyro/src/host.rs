@@ -280,6 +280,24 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
             Ok(json!({ "path": path, "text": tail(&path, lines) }))
         }
         // These end the connection that asked: they go on by themselves, and the app reconnects.
+        // ── leaving: what an uninstall would remove (read-only), and a backup of ptyro's state ──
+        "uninstall.plan" => {
+            let env = crate::uninstall::Env::current();
+            let plan =
+                crate::uninstall::plan(ctx, &env, &crate::uninstall::Opts::default()).await?;
+            Ok(
+                json!({ "plan": plan, "text": crate::uninstall::render(&plan, &env), "command": plan.command }),
+            )
+        }
+        "backup.create" => {
+            let opts = crate::backup::Opts {
+                output: opt(a, "output").map(std::path::PathBuf::from),
+                with_recordings: a["with_recordings"].as_bool().unwrap_or(false),
+                with_ca: false,
+            };
+            let made = crate::backup::create(ctx, &opts).await?;
+            Ok(json!(made))
+        }
         "daemon.restart" => {
             detached(&["daemon", "restart", "--force"])?;
             Ok(json!({ "started": true }))

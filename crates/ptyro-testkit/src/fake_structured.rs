@@ -13,6 +13,7 @@
 //! diff), `sh <cmd>` (runs it; a Bash tool call with its output), `fail` (the turn errors),
 //! anything else (`you said: …`).
 
+use ptyro_core::sync::MutexExt;
 use std::io::{BufRead, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc;
@@ -474,7 +475,7 @@ struct Oc {
 }
 
 fn event(st: &Arc<Mutex<Oc>>, v: Value) {
-    let mut s = st.lock().expect("oc");
+    let mut s = st.locked();
     let msg = format!("data: {v}\n\n");
     s.clients.retain_mut(|c| c.write_all(msg.as_bytes()).and_then(|()| c.flush()).is_ok());
 }
@@ -538,7 +539,7 @@ fn handle(conn: TcpStream, st: &Arc<Mutex<Oc>>, password: &str) {
     }
     let mut parts = head.split_whitespace();
     let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
-    let sid = st.lock().expect("oc").session.clone();
+    let sid = st.locked().session.clone();
     match (method, path) {
         ("POST", "/session") => reply(&conn, "200 OK", &json!({ "id": sid }).to_string()),
         ("GET", "/event") => {
@@ -548,7 +549,7 @@ fn handle(conn: TcpStream, st: &Arc<Mutex<Oc>>, password: &str) {
                 "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n\r\n"
             );
             let _ = c.flush();
-            st.lock().expect("oc").clients.push(c);
+            st.locked().clients.push(c);
         }
         ("POST", p) if p.ends_with("/prompt_async") => {
             let text = body["parts"][0]["text"].as_str().unwrap_or("").to_owned();
@@ -557,7 +558,7 @@ fn handle(conn: TcpStream, st: &Arc<Mutex<Oc>>, password: &str) {
             std::thread::spawn(move || oc_turn(&st, &text));
         }
         ("POST", p) if p.contains("/permissions/") => {
-            let pending = st.lock().expect("oc").pending.take();
+            let pending = st.locked().pending.take();
             if let Some((_, tx)) = pending {
                 let _ = tx.send(body["response"].as_str().unwrap_or("reject").to_owned());
             }
@@ -569,13 +570,13 @@ fn handle(conn: TcpStream, st: &Arc<Mutex<Oc>>, password: &str) {
 }
 
 fn oc_turn(st: &Arc<Mutex<Oc>>, text: &str) {
-    let sid = st.lock().expect("oc").session.clone();
+    let sid = st.locked().session.clone();
     event(
         st,
         json!({ "type": "session.status", "properties": { "sessionID": sid, "status": { "type": "busy" } } }),
     );
     let n = {
-        let mut s = st.lock().expect("oc");
+        let mut s = st.locked();
         s.n += 1;
         s.n
     };
@@ -612,7 +613,7 @@ fn oc_turn(st: &Arc<Mutex<Oc>>, text: &str) {
             Step::Ask { id, title } => {
                 let pid = format!("per_{n}");
                 let (tx, rx) = mpsc::channel();
-                st.lock().expect("oc").pending = Some((pid.clone(), tx));
+                st.locked().pending = Some((pid.clone(), tx));
                 event(
                     st,
                     json!({ "type": "permission.asked", "properties": { "id": pid, "sessionID": sid, "title": title } }),

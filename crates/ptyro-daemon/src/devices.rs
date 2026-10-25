@@ -4,6 +4,7 @@
 //! written to that session's event log.
 
 use ptyro_core::secret::{ct_eq, token};
+use ptyro_core::sync::MutexExt;
 use ptyro_core::{Error, ErrorCode, now_ms};
 use ptyro_protocol::{DeviceInfo, PushSub, Reply, Request, Scope};
 use serde::{Deserialize, Serialize};
@@ -218,12 +219,12 @@ impl Daemon {
         if let Ok(Some(v)) = store.kv_get(KV_KEY.into()).await
             && let Ok(list) = serde_json::from_value::<Vec<DeviceRecord>>(v)
         {
-            *self.devices.lock().expect("devices") = list;
+            *self.devices.locked() = list;
         }
     }
 
     pub(crate) fn save_devices(&self) {
-        let v = serde_json::to_value(&*self.devices.lock().expect("devices")).unwrap_or_default();
+        let v = serde_json::to_value(&*self.devices.locked()).unwrap_or_default();
         self.save_kv(KV_KEY, v);
     }
 
@@ -231,7 +232,7 @@ impl Daemon {
     /// matches first.
     pub(crate) fn authenticate(&self, token: Option<&str>, via: Option<&str>) -> Option<Grant> {
         let h = hash(token?);
-        let mut devices = self.devices.lock().expect("devices");
+        let mut devices = self.devices.locked();
         let mut found = None;
         for (i, d) in devices.iter().enumerate() {
             if d.pairing.is_none() && ct_eq(d.token_sha256.as_bytes(), h.as_bytes()) {
@@ -248,7 +249,7 @@ impl Daemon {
     fn prune_pairings(&self) {
         let now = now_ms();
         let pruned = {
-            let mut d = self.devices.lock().expect("devices");
+            let mut d = self.devices.locked();
             let before = d.len();
             d.retain(|x| x.pairing.as_ref().is_none_or(|p| p.expires_ms > now));
             before != d.len()
@@ -260,13 +261,12 @@ impl Daemon {
 
     /// Still paired (revocation closes live connections).
     pub(crate) fn device_valid(&self, device: u64) -> bool {
-        self.devices.lock().expect("devices").iter().any(|d| id_num(&d.id) == device)
+        self.devices.locked().iter().any(|d| id_num(&d.id) == device)
     }
 
     pub(crate) fn device_name(&self, device: u64) -> String {
         self.devices
-            .lock()
-            .expect("devices")
+            .locked()
             .iter()
             .find(|d| id_num(&d.id) == device)
             .map_or_else(|| format!("device {device:012x}"), |d| d.name.clone())
@@ -360,7 +360,7 @@ impl Daemon {
                 };
                 let device = rec.info();
                 self.prune_pairings();
-                self.devices.lock().expect("devices").push(rec);
+                self.devices.locked().push(rec);
                 self.save_devices();
                 tracing::info!(device = %device.id, name = %device.name, scope = device.scope.label(), "pairing code issued");
                 Ok(Reply::Pairing { device, code, expires_ms })
@@ -370,7 +370,7 @@ impl Daemon {
                 let h = hash(&code);
                 let token = token("ptd_").map_err(|e| Error::internal(format!("random: {e}")))?;
                 let device = {
-                    let mut devices = self.devices.lock().expect("devices");
+                    let mut devices = self.devices.locked();
                     let mut found = None;
                     for (i, d) in devices.iter().enumerate() {
                         if d.pairing
@@ -400,18 +400,12 @@ impl Daemon {
             Request::DeviceList => {
                 self.prune_pairings();
                 Ok(Reply::Devices {
-                    devices: self
-                        .devices
-                        .lock()
-                        .expect("devices")
-                        .iter()
-                        .map(DeviceRecord::info)
-                        .collect(),
+                    devices: self.devices.locked().iter().map(DeviceRecord::info).collect(),
                 })
             }
             Request::DeviceRevoke { id } => {
                 let removed = {
-                    let mut d = self.devices.lock().expect("devices");
+                    let mut d = self.devices.locked();
                     // Names needn't be unique: by name, only when it names one device.
                     let named = d.iter().filter(|x| x.name == id).count();
                     if named > 1 && !d.iter().any(|x| x.id == id) {
@@ -452,7 +446,7 @@ impl Daemon {
                     return Err(Error::invalid("that isn't a push subscription a browser makes"));
                 }
                 {
-                    let mut devices = self.devices.lock().expect("devices");
+                    let mut devices = self.devices.locked();
                     // One endpoint belongs to one device.
                     for d in devices.iter_mut() {
                         d.push.retain(|p| p.endpoint != sub.endpoint);
@@ -470,7 +464,7 @@ impl Daemon {
             }
             Request::PushUnsubscribe { endpoint } => {
                 // A device removes its own subscriptions only; a local client, any.
-                for d in self.devices.lock().expect("devices").iter_mut() {
+                for d in self.devices.locked().iter_mut() {
                     if caller.grant.is_some_and(|g| id_num(&d.id) != g.device) {
                         continue;
                     }

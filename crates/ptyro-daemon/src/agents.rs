@@ -7,6 +7,7 @@
 //! wait for theirs, [`Daemon::apply_queued`]), so status, the inbox and notifications can never
 //! disagree: a Blocked transition and a Working one never interleave.
 
+use ptyro_core::sync::{MutexExt, RwLockExt};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -133,7 +134,7 @@ impl Daemon {
             }
             Feed::Flush(id) => {
                 let Some(s) = self.session(id) else { return };
-                let t = s.engine.lock().expect("engine").flush(now_ms());
+                let t = s.engine.locked().flush(now_ms());
                 if let Some(t) = t {
                     self.on_transition(&s, &t).await;
                     let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(&s) });
@@ -141,7 +142,7 @@ impl Daemon {
             }
             Feed::Exited(id) => {
                 let Some(s) = self.session(id) else { return };
-                s.engine.lock().expect("engine").clear();
+                s.engine.locked().clear();
                 let (state, kind, started) = {
                     let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     (m.state.clone(), m.kind, s.id.created_ms())
@@ -185,7 +186,7 @@ impl Daemon {
     }
 
     pub(crate) fn min_work_ms(&self) -> u64 {
-        ms(&self.config.read().expect("config").attention.min_work)
+        ms(&self.config.reading().attention.min_work)
     }
 
     /// Apply signals in the feed's order, and wait until they are (hooks, reports and ticks):
@@ -207,7 +208,7 @@ impl Daemon {
             match sg.signal {
                 Signal::Status { status, kind, detail, progress } => {
                     let (t, deferred) = {
-                        let mut e = s.engine.lock().expect("engine");
+                        let mut e = s.engine.locked();
                         let t = e.apply(
                             Input {
                                 source: sg.source,
@@ -237,7 +238,7 @@ impl Daemon {
                     }
                 }
                 Signal::Activity { text } => {
-                    s.engine.lock().expect("engine").activity = Some(text);
+                    s.engine.locked().activity = Some(text);
                     changed = true;
                 }
                 Signal::Conversation { id } if !conversation_id_ok(&id) => {
@@ -312,8 +313,7 @@ impl Daemon {
                     if let Some(n) = warn
                         && !s
                             .meta
-                            .lock()
-                            .expect("meta")
+                            .locked()
                             .attention
                             .as_ref()
                             .is_some_and(|a| a.text.contains("teammates"))
@@ -461,7 +461,7 @@ impl Daemon {
 
     /// Whether someone is looking at it right now (shown in a focused pane of a focused terminal).
     pub fn watched(&self, id: SessionId) -> bool {
-        self.viewing.lock().expect("viewing").values().any(|(sid, focused)| *sid == id && *focused)
+        self.viewing.locked().values().any(|(sid, focused)| *sid == id && *focused)
     }
 
     /// Set attention (unless watched) and send it to the inbox and notifier.
@@ -518,11 +518,11 @@ impl Daemon {
         session: SessionId,
         terminal_focused: bool,
     ) {
-        self.viewing.lock().expect("viewing").insert(client, (session, terminal_focused));
+        self.viewing.locked().insert(client, (session, terminal_focused));
         if terminal_focused && let Some(s) = self.session(session) {
             self.clear_attention(&s);
             // Opening a dormant agent resumes it (SPEC §7.4).
-            let resume = self.config.read().expect("config").attention.resume_on_focus;
+            let resume = self.config.reading().attention.resume_on_focus;
             if resume
                 && s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).state
                     == ProcessState::Dormant
@@ -538,7 +538,7 @@ impl Daemon {
     }
 
     pub fn forget_client(&self, client: ptyro_core::ClientId) {
-        self.viewing.lock().expect("viewing").remove(&client);
+        self.viewing.locked().remove(&client);
     }
 
     // ── hooks and self reports ─────────────────────────────────────────────
@@ -681,7 +681,7 @@ impl Daemon {
     }
 
     pub fn explain(&self, s: &Session) -> Vec<ptyro_protocol::ExplainLine> {
-        s.engine.lock().expect("engine").explain.iter().cloned().collect()
+        s.engine.locked().explain.iter().cloned().collect()
     }
 
     // ── prompts ────────────────────────────────────────────────────────────
@@ -700,7 +700,7 @@ impl Daemon {
         }
         let adapter = ptyro_agents::adapter(&s.adapter().unwrap_or_else(|| "generic".into()));
         let (record, never_high) = {
-            let e = s.engine.lock().expect("engine");
+            let e = s.engine.locked();
             (e.record.clone(), e.high_quiet_ms(now_ms()) == u64::MAX)
         };
         if record.as_ref().is_some_and(|r| r.status == AgentStatus::Blocked) {
@@ -820,14 +820,7 @@ impl Daemon {
         if !self.config().worktrees.auto_rename_branch {
             return;
         }
-        let Some(wt) = s
-            .meta
-            .lock()
-            .expect("meta")
-            .place
-            .worktree
-            .clone()
-            .and_then(|w| self.worktree_by_id(&w))
+        let Some(wt) = s.meta.locked().place.worktree.clone().and_then(|w| self.worktree_by_id(&w))
         else {
             return;
         };
@@ -1070,7 +1063,7 @@ impl Daemon {
         expect: Option<u64>,
     ) -> Result<Reply, Error> {
         let s = self.resolve(addr)?;
-        let st = s.engine.lock().expect("engine").record.clone();
+        let st = s.engine.locked().record.clone();
         if st.as_ref().map(|r| r.status) != Some(AgentStatus::Blocked) {
             return Err(Error::conflict(format!(
                 "{} isn't waiting on a prompt",
@@ -1150,7 +1143,7 @@ impl Daemon {
             }
             // Before the first hook: dialogs only the screen shows (trust, login, updates).
             if s.kind() == SessionKind::Agent
-                && s.engine.lock().expect("engine").high_quiet_ms(now) == u64::MAX
+                && s.engine.locked().high_quiet_ms(now) == u64::MAX
                 && let Some(a) = s.adapter()
                 && let Some(signal) = ptyro_agents::adapter(&a)
                     .on_screen(&s.read_screen(ptyro_protocol::ScreenFormat::Plain))
@@ -1176,7 +1169,7 @@ impl Daemon {
             }
             let last = s.last_output_ms.load(Ordering::Relaxed);
             let (status, low, fresh) = {
-                let e = s.engine.lock().expect("engine");
+                let e = s.engine.locked();
                 (
                     e.record.as_ref().map(|r| r.status),
                     e.record.as_ref().is_none_or(|r| r.confidence == Confidence::Low),
@@ -1237,7 +1230,7 @@ impl Daemon {
         if now != was {
             s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).inner_agent =
                 now.clone();
-            s.engine.lock().expect("engine").forget_sources(true);
+            s.engine.locked().forget_sources(true);
             s.record_event("inner_agent", serde_json::json!({ "agent": now }));
             let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(s) });
         }
@@ -1351,7 +1344,7 @@ impl Daemon {
                 continue;
             };
             let idle_for = {
-                let e = s.engine.lock().expect("engine");
+                let e = s.engine.locked();
                 e.record
                     .as_ref()
                     .filter(|r| r.status == AgentStatus::Idle)
@@ -1379,7 +1372,7 @@ impl Daemon {
             .sessions()
             .into_iter()
             .filter(|s| s.is_live() && s.adapter().as_deref() == Some("claude"))
-            .filter(|s| s.engine.lock().expect("engine").high_quiet_ms(now) >= ROSTER_AFTER_MS)
+            .filter(|s| s.engine.locked().high_quiet_ms(now) >= ROSTER_AFTER_MS)
             .collect();
         if quiet.is_empty() {
             return;

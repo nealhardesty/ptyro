@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 /// The name to show for `pid`: the kernel's, unless that is a version number. Claude Code's
 /// installer runs it as `~/.local/share/claude/versions/2.1.309` through a `claude` symlink, so
-/// the kernel calls it `2.1.309` while argv[0] still says `claude` (SPEC §20.5); then argv[0]
+/// the kernel calls it `2.1.309` while argv\[0\] still says `claude` (SPEC §20.5); then argv\[0\]
 /// wins.
 pub fn process_name(pid: u32) -> Option<String> {
     let name = kernel_name(pid)?;

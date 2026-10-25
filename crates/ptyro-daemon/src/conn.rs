@@ -1,6 +1,7 @@
 //! One client connection (SPEC §6): handshake, requests, subscriptions with frame pacing and
 //! acks, input routing, controller tracking (SPEC §5.8) and event delivery.
 
+use ptyro_core::sync::MutexExt;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -281,7 +282,7 @@ impl Conn {
             ClientMsg::Input { session, event } => {
                 // Lifecycle scripts are read-only (SPEC §7.1); stop them with `x`.
                 let script = |s: &Arc<Session>| {
-                    s.meta.lock().expect("meta").kind == ptyro_core::session::SessionKind::Script
+                    s.meta.locked().kind == ptyro_core::session::SessionKind::Script
                 };
                 if let Some(s) = self.daemon.session(session).filter(|s| s.is_live() && !script(s))
                 {
@@ -316,13 +317,13 @@ impl Conn {
             ClientMsg::Resize { session, size } => {
                 self.sizes.insert(session, size);
                 if let Some(s) = self.daemon.session(session) {
-                    let controller = s.meta.lock().expect("meta").controller;
+                    let controller = s.meta.locked().controller;
                     if controller.is_none_or(|c| c == self.id) {
                         self.take_control(&s).await;
                     }
                 }
             }
-            ClientMsg::WatchEvents => self.interest.lock().expect("interest").watch_all = true,
+            ClientMsg::WatchEvents => self.interest.locked().watch_all = true,
             // A paired device doesn't move `@focused` or quiet notifications (M9.2).
             ClientMsg::Focus { .. } if self.caller.grant.is_some() => {}
             ClientMsg::Focus { session, terminal_focused } => {
@@ -348,8 +349,8 @@ impl Conn {
         if control {
             self.take_control(&session).await;
         }
-        session.meta.lock().expect("meta").viewers += 1;
-        self.interest.lock().expect("interest").subscribed.insert(id);
+        session.meta.locked().viewers += 1;
+        self.interest.locked().subscribed.insert(id);
         let (acks, acks_rx) = watch::channel(0u64);
         let interval = self.daemon.frame_interval();
         let chat = session
@@ -368,10 +369,10 @@ impl Conn {
                 c.abort();
             }
             if let Some(s) = self.daemon.session(id) {
-                let mut meta = s.meta.lock().expect("meta");
+                let mut meta = s.meta.locked();
                 meta.viewers = meta.viewers.saturating_sub(1);
             }
-            self.interest.lock().expect("interest").subscribed.remove(&id);
+            self.interest.locked().subscribed.remove(&id);
         }
     }
 
@@ -387,7 +388,7 @@ impl Conn {
     /// The most recently active client controls the session and its size (SPEC §5.8).
     async fn take_control(&mut self, s: &Arc<Session>) {
         let changed = {
-            let mut meta = s.meta.lock().expect("meta");
+            let mut meta = s.meta.locked();
             let changed = meta.controller != Some(self.id);
             meta.controller = Some(self.id);
             changed
@@ -412,7 +413,7 @@ impl Conn {
             self.unsubscribe(id);
         }
         for s in self.daemon.sessions() {
-            let mut meta = s.meta.lock().expect("meta");
+            let mut meta = s.meta.locked();
             if meta.controller == Some(self.id) {
                 meta.controller = None;
                 drop(meta);
@@ -440,7 +441,7 @@ async fn stream_frames(
     loop {
         changed.borrow_and_update();
         let frame = {
-            let mut term = session.term.lock().expect("term");
+            let mut term = session.term.locked();
             let term = &mut *term;
             let seq = term.tracker.seq();
             if sent == Some(seq) {
@@ -551,7 +552,7 @@ async fn forward_events(
             | DomainEvent::UsageUpdated { .. }
             | DomainEvent::ScratchChanged { .. }
             | DomainEvent::RunUpdated { .. } => {
-                let watching = interest.lock().expect("interest").watch_all;
+                let watching = interest.locked().watch_all;
                 if watching && out.send(ServerMsg::Event { event }).await.is_err() {
                     return;
                 }
@@ -570,14 +571,14 @@ async fn forward_events(
             | DomainEvent::Notify { session, .. } => *session,
         };
         let wanted = {
-            let i = interest.lock().expect("interest");
+            let i = interest.locked();
             i.watch_all || i.subscribed.contains(&session)
         };
         // Clipboard writes go only to the controller (SPEC §17).
         let allowed = match &event {
-            DomainEvent::Clipboard { .. } => daemon
-                .session(session)
-                .is_some_and(|s| s.meta.lock().expect("meta").controller == Some(me)),
+            DomainEvent::Clipboard { .. } => {
+                daemon.session(session).is_some_and(|s| s.meta.locked().controller == Some(me))
+            }
             _ => true,
         };
         if wanted && allowed && out.send(ServerMsg::Event { event }).await.is_err() {

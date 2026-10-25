@@ -589,6 +589,16 @@ impl Store {
         .await
     }
 
+    /// A consistent copy of the database at `path` (SQLite's `VACUUM INTO`), safe while the daemon
+    /// is writing it: the copy is one moment of the data, never half of two. `path` must not exist.
+    pub async fn backup_to(&self, path: std::path::PathBuf) -> Result<()> {
+        self.call(move |c| {
+            c.execute("VACUUM INTO ?1", params![path.to_string_lossy().into_owned()])?;
+            Ok(())
+        })
+        .await
+    }
+
     /// Retention (SPEC §14.2): events older than 90 days, ended sessions older than 30 days.
     pub async fn prune(&self) -> Result<()> {
         self.call(|c| {
@@ -1095,5 +1105,25 @@ mod tests {
             assert_eq!(s.kv_get("k".into()).await.unwrap(), Some(serde_json::json!(1)));
         });
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_backup_is_a_whole_copy_that_opens_on_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("ptyro.db");
+        let store = Store::open(&db).unwrap();
+        store.kv_set("view:a".into(), serde_json::json!({ "n": 1 })).await.unwrap();
+        let copy = dir.path().join("copy.db");
+        store.backup_to(copy.clone()).await.unwrap();
+        // Written after the copy: not in it.
+        store.kv_set("view:b".into(), serde_json::json!({ "n": 2 })).await.unwrap();
+        let again = Store::open(&copy).unwrap();
+        assert_eq!(
+            again.kv_get("view:a".into()).await.unwrap(),
+            Some(serde_json::json!({ "n": 1 }))
+        );
+        assert_eq!(again.kv_get("view:b".into()).await.unwrap(), None);
+        // It won't write over a file that is there.
+        assert!(store.backup_to(copy).await.is_err());
     }
 }

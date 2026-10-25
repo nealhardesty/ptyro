@@ -1,6 +1,7 @@
 //! The daemon's background work: repository status on file changes (debounced, SPEC §10.9),
 //! listening ports per session (SPEC §10.7), and worktree locks following session lifetimes.
 
+use ptyro_core::sync::MutexExt;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,7 +32,7 @@ impl Daemon {
         if !self.config().worktrees.watch || wt.state != WorktreeState::Ready {
             return;
         }
-        if self.watchers.lock().expect("watchers").contains_key(&wt.id) {
+        if self.watchers.locked().contains_key(&wt.id) {
             return;
         }
         // Registering a recursive watch can take seconds on a big tree: not under the lock.
@@ -63,16 +64,16 @@ impl Daemon {
             tracing::warn!(worktree = %wt.qualified(), "cannot watch ({e}); refreshing periodically instead");
             return;
         }
-        self.watchers.lock().expect("watchers").entry(wt.id.clone()).or_insert(debouncer);
+        self.watchers.locked().entry(wt.id.clone()).or_insert(debouncer);
     }
 
     pub fn unwatch(&self, id: &str) {
-        self.watchers.lock().expect("watchers").remove(id);
+        self.watchers.locked().remove(id);
     }
 
     pub fn unwatch_project(&self, project: &str) {
         let ids: Vec<String> = {
-            let reg = self.registry.lock().expect("registry");
+            let reg = self.registry.locked();
             reg.worktrees.iter().filter(|w| w.project == project).map(|w| w.id.clone()).collect()
         };
         for id in ids {
@@ -84,8 +85,7 @@ impl Daemon {
     pub fn start_background(self: &Arc<Self>) {
         let ready: Vec<WorktreeInfo> = self
             .registry
-            .lock()
-            .expect("registry")
+            .locked()
             .worktrees
             .iter()
             .filter(|w| w.state == WorktreeState::Ready)
@@ -94,7 +94,7 @@ impl Daemon {
         for w in &ready {
             self.watch_worktree_bg(w);
         }
-        if let Some(mut rx) = self.status_rx.lock().expect("status_rx").take() {
+        if let Some(mut rx) = self.status_rx.locked().take() {
             let me = Arc::clone(self);
             tokio::spawn(async move {
                 while let Some(first) = rx.recv().await {
@@ -147,7 +147,7 @@ impl Daemon {
                 let (active, idle) = (since_active >= ACTIVE_REFRESH, since_idle >= IDLE_REFRESH);
                 if active || idle {
                     let ids: Vec<String> = {
-                        let reg = me.registry.lock().expect("registry");
+                        let reg = me.registry.locked();
                         reg.worktrees.iter().map(|w| w.id.clone()).collect()
                     };
                     for id in ids {

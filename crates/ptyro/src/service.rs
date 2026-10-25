@@ -141,6 +141,11 @@ fn daemon_running(ctx: &Ctx) -> bool {
     std::fs::File::open(&lock).is_ok_and(|f| f.try_lock_shared().is_err())
 }
 
+/// Where the login service's file is (whether or not it is installed).
+pub fn file() -> std::path::PathBuf {
+    if cfg!(target_os = "macos") { launchd_path() } else { systemd_path() }
+}
+
 /// The login service is installed (`ptyro daemon install-service`).
 pub fn installed() -> bool {
     if cfg!(target_os = "macos") { launchd_path().exists() } else { systemd_path().exists() }

@@ -1,6 +1,7 @@
 //! Workspaces, projects and profiles (SPEC §2.1, §10.1, §10.10): addressing, persistence and the
 //! requests that manage them. Worktree operations are in `worktrees.rs`.
 
+use ptyro_core::sync::MutexExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -37,21 +38,21 @@ impl Daemon {
     // ── lookups ─────────────────────────────────────────────────────────────
 
     pub fn project_by_id(&self, id: &str) -> Option<ProjectInfo> {
-        self.registry.lock().expect("registry").projects.iter().find(|p| p.id == id).cloned()
+        self.registry.locked().projects.iter().find(|p| p.id == id).cloned()
     }
 
     pub fn worktree_by_id(&self, id: &str) -> Option<WorktreeInfo> {
-        self.registry.lock().expect("registry").worktrees.iter().find(|w| w.id == id).cloned()
+        self.registry.locked().worktrees.iter().find(|w| w.id == id).cloned()
     }
 
     pub fn root_worktree(&self, project: &str) -> Option<WorktreeInfo> {
-        let reg = self.registry.lock().expect("registry");
+        let reg = self.registry.locked();
         reg.worktrees.iter().find(|w| w.project == project && w.is_root).cloned()
     }
 
     /// A project by slug, id (or a ≥4-character id suffix), or a path inside one of its checkouts.
     pub fn find_project(&self, addr: &str) -> Result<ProjectInfo, Error> {
-        let reg = self.registry.lock().expect("registry");
+        let reg = self.registry.locked();
         let addr = addr.trim().strip_prefix("p:").unwrap_or(addr.trim());
         if let Some(p) = reg.projects.iter().find(|p| p.slug == addr || p.id == addr) {
             return Ok(p.clone());
@@ -83,14 +84,14 @@ impl Daemon {
         if addr.starts_with(['/', '.', '~']) {
             let path = ptyro_core::config::expand_home(addr);
             let path = path.canonicalize().unwrap_or(path);
-            let reg = self.registry.lock().expect("registry");
+            let reg = self.registry.locked();
             return innermost(reg.worktrees.iter(), &path)
                 .cloned()
                 .ok_or_else(|| Error::missing("worktree", addr));
         }
         if let Some((project, name)) = addr.split_once('/') {
             let p = self.find_project(project)?;
-            let reg = self.registry.lock().expect("registry");
+            let reg = self.registry.locked();
             return reg
                 .worktrees
                 .iter()
@@ -98,7 +99,7 @@ impl Daemon {
                 .cloned()
                 .ok_or_else(|| Error::missing("worktree", addr));
         }
-        let reg = self.registry.lock().expect("registry");
+        let reg = self.registry.locked();
         let named: Vec<_> = reg.worktrees.iter().filter(|w| w.name == addr).collect();
         match named.as_slice() {
             [one] => return Ok((*one).clone()),
@@ -124,7 +125,7 @@ impl Daemon {
     }
 
     pub fn find_workspace(&self, name: &str) -> Result<WorkspaceInfo, Error> {
-        let reg = self.registry.lock().expect("registry");
+        let reg = self.registry.locked();
         reg.workspaces
             .iter()
             .find(|w| w.name == name)
@@ -136,7 +137,7 @@ impl Daemon {
 
     pub(crate) fn put_worktree(&self, w: WorktreeInfo) {
         {
-            let mut reg = self.registry.lock().expect("registry");
+            let mut reg = self.registry.locked();
             match reg.worktrees.iter_mut().find(|o| o.id == w.id) {
                 Some(o) => *o = w.clone(),
                 None => reg.worktrees.push(w.clone()),
@@ -155,7 +156,7 @@ impl Daemon {
         f: impl FnOnce(&mut WorktreeInfo),
     ) -> Option<WorktreeInfo> {
         let w = {
-            let mut reg = self.registry.lock().expect("registry");
+            let mut reg = self.registry.locked();
             let w = reg.worktrees.iter_mut().find(|o| o.id == id)?;
             f(w);
             w.clone()
@@ -165,7 +166,7 @@ impl Daemon {
     }
 
     pub(crate) fn drop_worktree(&self, mut w: WorktreeInfo) {
-        self.registry.lock().expect("registry").worktrees.retain(|o| o.id != w.id);
+        self.registry.locked().worktrees.retain(|o| o.id != w.id);
         w.state = WorktreeState::Removed;
         w.removed_ms = Some(now_ms());
         w.ports = None;
@@ -182,7 +183,7 @@ impl Daemon {
         let project = w.project.clone();
         self.put_worktree(w);
         let p = {
-            let mut reg = self.registry.lock().expect("registry");
+            let mut reg = self.registry.locked();
             reg.projects.iter_mut().find(|p| p.id == project).map(|p| {
                 p.last_used_ms = Some(now_ms());
                 p.clone()
@@ -195,7 +196,7 @@ impl Daemon {
 
     pub(crate) fn put_project(&self, p: ProjectInfo) {
         {
-            let mut reg = self.registry.lock().expect("registry");
+            let mut reg = self.registry.locked();
             match reg.projects.iter_mut().find(|o| o.id == p.id) {
                 Some(o) => *o = p.clone(),
                 None => reg.projects.push(p.clone()),
@@ -209,7 +210,7 @@ impl Daemon {
 
     pub(crate) fn put_workspace(&self, w: WorkspaceInfo) {
         {
-            let mut reg = self.registry.lock().expect("registry");
+            let mut reg = self.registry.locked();
             match reg.workspaces.iter_mut().find(|o| o.id == w.id) {
                 Some(o) => *o = w.clone(),
                 None => reg.workspaces.push(w.clone()),
@@ -223,13 +224,7 @@ impl Daemon {
 
     /// `main` always exists (SPEC §2.1).
     pub fn ensure_main_workspace(&self) {
-        let exists = self
-            .registry
-            .lock()
-            .expect("registry")
-            .workspaces
-            .iter()
-            .any(|w| w.name == MAIN_WORKSPACE);
+        let exists = self.registry.locked().workspaces.iter().any(|w| w.name == MAIN_WORKSPACE);
         if !exists {
             self.put_workspace(WorkspaceInfo {
                 id: new_id(),
@@ -250,7 +245,7 @@ impl Daemon {
 
     /// Trust for one scope: `scripts`, or `recipe:<name>` for a repo's recipes (M7.4).
     pub fn is_trusted_as(&self, project: &str, scope: &str, fingerprint: &str) -> bool {
-        let reg = self.registry.lock().expect("registry");
+        let reg = self.registry.locked();
         reg.trust
             .iter()
             .any(|t| t.project == project && t.scope == scope && t.fingerprint == fingerprint)
@@ -268,7 +263,7 @@ impl Daemon {
             approved_ms: now_ms(),
         };
         {
-            let mut reg = self.registry.lock().expect("registry");
+            let mut reg = self.registry.locked();
             reg.trust.retain(|t| !(t.project == project && t.scope == scope));
             reg.trust.push(row.clone());
         }
@@ -342,14 +337,7 @@ impl Daemon {
         // otherwise both find it new and register it twice.
         let _one = self.project_adding.lock().await;
         let mut notes = Vec::new();
-        let existing = self
-            .registry
-            .lock()
-            .expect("registry")
-            .projects
-            .iter()
-            .find(|p| p.root == root)
-            .cloned();
+        let existing = self.registry.locked().projects.iter().find(|p| p.root == root).cloned();
         let project = match existing {
             Some(p) => {
                 notes.push(format!("{} is already registered", p.slug));
@@ -361,7 +349,7 @@ impl Daemon {
                     root.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default()
                 }));
                 let slug = {
-                    let reg = self.registry.lock().expect("registry");
+                    let reg = self.registry.locked();
                     let taken = |s: &str| reg.projects.iter().any(|p| p.slug == s);
                     if taken(&base_slug) {
                         (2..)
@@ -441,7 +429,7 @@ impl Daemon {
     fn project_remove(&self, addr: &str, release: bool) -> Result<Reply, Error> {
         let p = self.find_project(addr)?;
         let worktrees: Vec<WorktreeInfo> = {
-            let reg = self.registry.lock().expect("registry");
+            let reg = self.registry.locked();
             reg.worktrees.iter().filter(|w| w.project == p.id).cloned().collect()
         };
         let in_it: Vec<Arc<crate::session::Session>> = worktrees
@@ -466,7 +454,7 @@ impl Daemon {
             )));
         }
         {
-            let mut reg = self.registry.lock().expect("registry");
+            let mut reg = self.registry.locked();
             reg.projects.retain(|o| o.id != p.id);
             reg.worktrees.retain(|w| w.project != p.id);
             reg.trust.retain(|t| t.project != p.id);
@@ -567,7 +555,7 @@ impl Daemon {
                 .map_err(|e| Error::internal(e.to_string()))?;
         }
         let (workspaces, projects, worktrees) = {
-            let mut reg = self.registry.lock().expect("registry");
+            let mut reg = self.registry.locked();
             for w in &mut reg.workspaces {
                 if w.profile == old {
                     w.profile = new.into();
@@ -646,9 +634,9 @@ impl Daemon {
                 }
                 Ok(reply)
             }
-            Request::ProjectList => Ok(Reply::Projects {
-                projects: self.registry.lock().expect("registry").projects.clone(),
-            }),
+            Request::ProjectList => {
+                Ok(Reply::Projects { projects: self.registry.locked().projects.clone() })
+            }
             Request::ProjectGet { addr } => {
                 Ok(Reply::Project { info: self.find_project(&addr)?, notes: Vec::new() })
             }
@@ -671,16 +659,16 @@ impl Daemon {
             }
             Request::ProjectUntrust { addr } => {
                 let p = self.find_project(&addr)?;
-                self.registry.lock().expect("registry").trust.retain(|t| t.project != p.id);
+                self.registry.locked().trust.retain(|t| t.project != p.id);
                 if let Some(store) = &self.store {
                     store.delete_trust(p.id.clone(), SCRIPTS_SCOPE.into());
                 }
                 Ok(Reply::Done)
             }
             Request::Discover { refresh } => self.discover(refresh).await,
-            Request::WorkspaceList => Ok(Reply::Workspaces {
-                workspaces: self.registry.lock().expect("registry").workspaces.clone(),
-            }),
+            Request::WorkspaceList => {
+                Ok(Reply::Workspaces { workspaces: self.registry.locked().workspaces.clone() })
+            }
             Request::WorkspaceNew { name, profile, notify } => {
                 self.workspace_new(&name, profile, notify)
             }
@@ -730,7 +718,7 @@ impl Daemon {
                     return Err(Error::invalid("the main workspace always exists"));
                 }
                 let w = self.find_workspace(&name)?;
-                self.registry.lock().expect("registry").workspaces.retain(|o| o.id != w.id);
+                self.registry.locked().workspaces.retain(|o| o.id != w.id);
                 if let Some(store) = &self.store {
                     store.delete_workspace(w.id.clone());
                 }

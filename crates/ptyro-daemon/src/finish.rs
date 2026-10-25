@@ -8,6 +8,7 @@
 //! - **archive on merge** (`[worktrees] archive_on_merge`): when its PR merges and nothing runs
 //!   in it.
 
+use ptyro_core::sync::MutexExt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -36,7 +37,7 @@ impl Daemon {
                 .kv_get(ARCHIVES.into())
                 .await
                 .map_err(|e| Error::internal(format!("reading the archive list: {e}")))?,
-            None => self.views.lock().expect("views").get(ARCHIVES).cloned(),
+            None => self.views.locked().get(ARCHIVES).cloned(),
         };
         match v {
             None => Ok(Vec::new()),
@@ -53,7 +54,7 @@ impl Daemon {
                 .await
                 .map_err(|e| Error::internal(format!("saving the archive list: {e}"))),
             None => {
-                self.views.lock().expect("views").insert(ARCHIVES.into(), v);
+                self.views.locked().insert(ARCHIVES.into(), v);
                 Ok(())
             }
         }
@@ -79,13 +80,13 @@ impl Daemon {
             )));
         }
         // One at a time per worktree: two at once would both snapshot it and both list it.
-        if !self.archiving.lock().expect("archiving").insert(wt.id.clone()) {
+        if !self.archiving.locked().insert(wt.id.clone()) {
             return Err(Error::conflict(format!("{} is being archived already", wt.qualified())));
         }
         struct Done<'a>(&'a Daemon, String);
         impl Drop for Done<'_> {
             fn drop(&mut self) {
-                self.0.archiving.lock().expect("archiving").remove(&self.1);
+                self.0.archiving.locked().remove(&self.1);
             }
         }
         let _done = Done(self, wt.id.clone());

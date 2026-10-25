@@ -14,6 +14,7 @@
 //! the connecting process's ancestry names the session it runs in, so an agent that shells out
 //! to `ptyro` directly gets the same limits as one using the MCP tools.
 
+use ptyro_core::sync::MutexExt;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -331,10 +332,10 @@ impl Daemon {
     pub async fn start_mail(self: &Arc<Self>) {
         if let Some(store) = &self.store {
             if let Ok(rows) = store.messages_open().await {
-                *self.mail.lock().expect("mail") = rows;
+                *self.mail.locked() = rows;
             }
             if let Ok(l) = store.leases().await {
-                *self.leases.lock().expect("leases") = l;
+                *self.leases.locked() = l;
             }
         }
         let me = Arc::clone(self);
@@ -400,8 +401,7 @@ impl Daemon {
                     .iter()
                     .filter(|s| {
                         s.meta
-                            .lock()
-                            .expect("meta")
+                            .locked()
                             .place
                             .agent
                             .as_deref()
@@ -472,7 +472,7 @@ impl Daemon {
                 .map(|d| d.as_millis() as u64)
         });
         let (prev, hop) = {
-            let mail = self.mail.lock().expect("mail");
+            let mail = self.mail.locked();
             let prev: Vec<MessageRow> = match &key {
                 Some(k) => mail
                     .iter()
@@ -503,7 +503,7 @@ impl Daemon {
             return Err(Error::missing("recipient", format!("{to} (nobody matches right now)")));
         }
         let rows = {
-            let mut mail = self.mail.lock().expect("mail");
+            let mut mail = self.mail.locked();
             let mut rows = Vec::new();
             for r in recipients {
                 let queued =
@@ -596,7 +596,7 @@ impl Daemon {
 
     fn mark(&self, id: &str, f: impl Fn(&mut MessageRow)) {
         let row = {
-            let mut mail = self.mail.lock().expect("mail");
+            let mut mail = self.mail.locked();
             let Some(m) = mail.iter_mut().find(|m| m.id == id) else { return };
             f(m);
             m.clone()
@@ -609,7 +609,7 @@ impl Daemon {
         let _pass = self.mail_pass.lock().await;
         let now = now_ms();
         let waiting: BTreeMap<String, Vec<MessageRow>> = {
-            let mut mail = self.mail.lock().expect("mail");
+            let mut mail = self.mail.locked();
             mail.retain(|m| m.acked_ms.is_none() && m.expires_ms.is_none_or(|e| e > now));
             mail.iter().filter(|m| m.delivered_ms.is_none() && m.recipient != "@user").fold(
                 BTreeMap::new(),
@@ -701,8 +701,7 @@ impl Daemon {
         let me = s.id.full();
         let ids: Vec<String> = self
             .mail
-            .lock()
-            .expect("mail")
+            .locked()
             .iter()
             .filter(|m| m.recipient == me && m.seen_ms.is_none() && text.contains(&m.id))
             .map(|m| m.id.clone())
@@ -727,8 +726,7 @@ impl Daemon {
         loop {
             let mine: Vec<MessageRow> = self
                 .mail
-                .lock()
-                .expect("mail")
+                .locked()
                 .iter()
                 .filter(|m| {
                     m.recipient == me
@@ -850,7 +848,7 @@ impl Daemon {
         let mut refused = Vec::new();
         let mut saved = Vec::new();
         {
-            let mut leases = self.leases.lock().expect("leases");
+            let mut leases = self.leases.locked();
             leases.retain(|l| l.expires_ms > now);
             for p in patterns {
                 let p = p.trim().trim_start_matches("./").to_owned();
@@ -899,8 +897,7 @@ impl Daemon {
         }
         let mine = self
             .leases
-            .lock()
-            .expect("leases")
+            .locked()
             .iter()
             .filter(|l| l.holder == me)
             .map(|l| self.lease_view(l))
@@ -914,7 +911,7 @@ impl Daemon {
             Err(_) => holder.to_owned(),
         };
         let gone: Vec<String> = {
-            let mut leases = self.leases.lock().expect("leases");
+            let mut leases = self.leases.locked();
             let gone = leases
                 .iter()
                 .filter(|l| {
@@ -942,8 +939,7 @@ impl Daemon {
     pub(crate) fn lease_list(&self) -> Vec<Lease> {
         let now = now_ms();
         self.leases
-            .lock()
-            .expect("leases")
+            .locked()
             .iter()
             .filter(|l| l.expires_ms > now)
             .map(|l| self.lease_view(l))
@@ -962,8 +958,7 @@ impl Daemon {
         let p = self.find_project(project)?;
         let wts: Vec<WorktreeInfo> = self
             .registry
-            .lock()
-            .expect("registry")
+            .locked()
             .worktrees
             .iter()
             .filter(|w| {
@@ -1069,7 +1064,7 @@ impl Daemon {
                 }
                 let sig =
                     format!("{}|{}|{}|{}", o.a, o.b, o.files.join(","), o.conflicts.join(","));
-                if !me.radar_seen.lock().expect("radar").insert(sig) {
+                if !me.radar_seen.locked().insert(sig) {
                     continue;
                 }
                 let body = format!(
@@ -1474,8 +1469,7 @@ impl Daemon {
                 let wt = match self.resolve(&worktree) {
                     Ok(s) => s
                         .meta
-                        .lock()
-                        .expect("meta")
+                        .locked()
                         .place
                         .worktree
                         .clone()
@@ -1762,12 +1756,7 @@ impl Daemon {
                 };
                 let me = if me == "@user" { me } else { self.resolve(&me)?.id.full() };
                 for id in ids {
-                    let ok = self
-                        .mail
-                        .lock()
-                        .expect("mail")
-                        .iter()
-                        .any(|m| m.id == id && m.recipient == me);
+                    let ok = self.mail.locked().iter().any(|m| m.id == id && m.recipient == me);
                     if ok {
                         self.mark(&id, |x| {
                             x.acked_ms = Some(now_ms());
@@ -1786,8 +1775,7 @@ impl Daemon {
                     }
                     None => self
                         .mail
-                        .lock()
-                        .expect("mail")
+                        .locked()
                         .iter()
                         .filter(|m| run.is_none() || m.run == run)
                         .cloned()

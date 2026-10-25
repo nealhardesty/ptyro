@@ -1,0 +1,12 @@
+ptyro 3
+ptyro-agents 2
+ptyro-client 3
+ptyro-core 2
+ptyro-daemon 6
+ptyro-git 1
+ptyro-protocol 0
+ptyro-pty 0
+ptyro-run 0
+ptyro-store 0
+ptyro-term 3
+ptyro-tui 16

@@ -39,6 +39,7 @@
 //! "works" again and stops again). A verified-done bounce (`[via ptyro: verify]…`) and mail
 //! (`<ptyro-message …>`) are prompts: they fire UserPromptSubmit and end a short turn.
 
+use ptyro_core::sync::MutexExt;
 use std::collections::BTreeMap;
 use std::io::{BufRead, Read, Write};
 use std::os::fd::AsFd;
@@ -862,7 +863,7 @@ impl OcServer {
         if line.starts_with("GET /event") {
             let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n\r\n");
             let _ = sock.write_all(b"data: {\"type\":\"server.connected\",\"properties\":{}}\n\n");
-            self.clients.lock().expect("clients").push(sock);
+            self.clients.locked().push(sock);
         } else if line.starts_with("POST /session/") && line.contains("/permissions/") {
             let answer = if req.contains("\"reject\"") {
                 "no"
@@ -871,7 +872,7 @@ impl OcServer {
             } else {
                 "yes"
             };
-            *self.answer.lock().expect("answer") = Some(answer);
+            *self.answer.locked() = Some(answer);
             self.cond.notify_all();
             let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ntrue");
         } else {
@@ -881,11 +882,11 @@ impl OcServer {
 
     fn emit(&self, ev: Value) {
         let msg = format!("data: {ev}\n\n");
-        self.clients.lock().expect("clients").retain_mut(|c| c.write_all(msg.as_bytes()).is_ok());
+        self.clients.locked().retain_mut(|c| c.write_all(msg.as_bytes()).is_ok());
     }
 
     fn wait_answer(&self) -> &'static str {
-        let mut a = self.answer.lock().expect("answer");
+        let mut a = self.answer.locked();
         while a.is_none() {
             a = self.cond.wait(a).expect("answer");
         }

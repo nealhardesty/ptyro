@@ -15,6 +15,7 @@
 //! its backlog for the few milliseconds it takes. If the new binary refuses the image (another
 //! version), it re-execs `daemon.prev`, which reads its own image.
 
+use ptyro_core::sync::MutexExt;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -73,12 +74,12 @@ pub struct Reaper {
 impl Reaper {
     pub fn watch(&self, pid: u32) -> oneshot::Receiver<ptyro_pty::handoff::Ended> {
         let (tx, rx) = oneshot::channel();
-        self.pids.lock().expect("reaper").insert(pid, tx);
+        self.pids.locked().insert(pid, tx);
         rx
     }
 
     fn sweep(&self) {
-        let mut pids = self.pids.lock().expect("reaper");
+        let mut pids = self.pids.locked();
         let done: Vec<(u32, ptyro_pty::handoff::Ended)> = pids
             .keys()
             .filter_map(|&p| match ptyro_pty::handoff::try_reap(p) {
@@ -108,7 +109,7 @@ impl Reaper {
                     }
                     None => tokio::time::sleep(Duration::from_secs(1)).await,
                 }
-                if !me.pids.lock().expect("reaper").is_empty() {
+                if !me.pids.locked().is_empty() {
                     me.sweep();
                 }
             }
@@ -259,7 +260,7 @@ impl Daemon {
         let wait = std::time::Instant::now() + Duration::from_secs(30);
         loop {
             let busy = {
-                let c = self.launching.lock().expect("launching");
+                let c = self.launching.locked();
                 !c.0.is_empty() || !c.1.is_empty()
             };
             if !busy {
@@ -310,8 +311,7 @@ impl Daemon {
             focused: self.focused_id().map(|i| i.full()),
             sidecars: self
                 .sidecars
-                .lock()
-                .expect("sidecars")
+                .locked()
                 .iter()
                 .map(|(k, (p, pw))| (k.full(), *p, pw.clone()))
                 .collect(),

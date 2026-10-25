@@ -4,6 +4,7 @@
 //! would. Workspaces, projects and worktrees live in [`Registry`] (another lock), mirrored to the
 //! store; their operations are in `registry.rs`, `worktrees.rs` and `launch.rs`.
 
+use ptyro_core::sync::{MutexExt, RwLockExt};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -287,7 +288,7 @@ impl Daemon {
     }
 
     pub(crate) fn focused_id(&self) -> Option<SessionId> {
-        *self.focused.lock().expect("focused")
+        *self.focused.locked()
     }
 
     /// Bring the previous image's sessions back (live upgrade, M8.1).
@@ -330,7 +331,7 @@ impl Daemon {
 
     /// Start the signal processor and the agent ticks. Call once, inside the runtime.
     pub fn start_agents(self: &Arc<Self>) {
-        if let Some(rx) = self.feed_rx.lock().expect("feed").take() {
+        if let Some(rx) = self.feed_rx.locked().take() {
             self.start_feed(rx);
         }
         self.start_agent_ticks();
@@ -343,7 +344,7 @@ impl Daemon {
         if let Ok(Some(v)) = store.kv_get("mutes".into()).await
             && let Ok(m) = serde_json::from_value(v)
         {
-            *self.mutes.lock().expect("mutes") = m;
+            *self.mutes.locked() = m;
         }
         let mode = self.config().daemon.restore_on_start;
         if mode == ptyro_core::config::RestoreOnStart::None {
@@ -434,11 +435,11 @@ impl Daemon {
     }
 
     pub fn config(&self) -> Config {
-        self.config.read().expect("config").clone()
+        self.config.reading().clone()
     }
 
     pub fn sessions(&self) -> Vec<Arc<Session>> {
-        self.sessions.read().expect("sessions").clone()
+        self.sessions.reading().clone()
     }
 
     pub fn session(&self, id: SessionId) -> Option<Arc<Session>> {
@@ -453,26 +454,24 @@ impl Daemon {
     }
 
     pub fn set_focused(&self, id: SessionId) {
-        *self.focused.lock().expect("focused") = Some(id);
+        *self.focused.locked() = Some(id);
     }
 
     pub fn frame_interval(&self) -> std::time::Duration {
-        std::time::Duration::from_millis(
-            self.config.read().expect("config").daemon.frame_interval_ms,
-        )
+        std::time::Duration::from_millis(self.config.reading().daemon.frame_interval_ms)
     }
 
     /// One session (SPEC §2.3): `@last`, `@focused`, a full id, `s:<handle>`, an exact name,
     /// `project/name`, or a handle (id suffix). Exact names win over handles. Selectors that can
     /// match several sessions are an error here unless they match exactly one; use
-    /// [`resolve_many`].
+    /// `resolve_many`.
     pub fn resolve(&self, addr: &str) -> Result<Arc<Session>, Error> {
         let sessions = self.sessions();
         let addr = addr.trim();
         match addr {
             "@last" => return sessions.last().cloned().ok_or_else(|| Error::not_found(addr)),
             "@focused" => {
-                let id = *self.focused.lock().expect("focused");
+                let id = *self.focused.locked();
                 return id.and_then(|id| self.session(id)).ok_or_else(|| Error::not_found(addr));
             }
             _ => {}
@@ -519,7 +518,7 @@ impl Daemon {
         }
     }
 
-    /// Selectors (SPEC §2.3), joined with `,`: anything [`resolve`] takes, plus `@all`, `@live`
+    /// Selectors (SPEC §2.3), joined with `,`: anything `resolve` takes, plus `@all`, `@live`
     /// (`@running`), `@exited`, `@working`/`@blocked`/`@idle`/`@done`/`@error` (the status engine's
     /// verdict, whatever its source: hooks, self-reports, the screen), and name globs with `*` and
     /// `?`. Order follows the session list; duplicates are dropped.
@@ -570,7 +569,7 @@ impl Daemon {
     }
 
     pub(crate) fn name_taken(&self, name: &str) -> bool {
-        self.launching.lock().expect("launching").1.contains(name)
+        self.launching.locked().1.contains(name)
             || self.sessions().iter().any(|s| {
                 s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name == name
             })
@@ -601,12 +600,12 @@ impl Daemon {
     }
 
     pub(crate) fn push_session(&self, s: Arc<Session>) {
-        self.sessions.write().expect("sessions").push(s);
+        self.sessions.writing().push(s);
     }
 
     pub(crate) fn forget_session(&self, id: SessionId) {
-        self.sessions.write().expect("sessions").retain(|o| o.id != id);
-        self.last_notified.lock().expect("last_notified").remove(&id);
+        self.sessions.writing().retain(|o| o.id != id);
+        self.last_notified.locked().remove(&id);
         let _ = self.events.send(DomainEvent::SessionRemoved { id });
     }
 
@@ -842,7 +841,7 @@ impl Daemon {
     pub(crate) fn save_kv(&self, key: &str, value: serde_json::Value) {
         let Some(store) = self.store.clone() else { return };
         let generation = {
-            let mut g = self.kv_gens.lock().expect("kv_gens");
+            let mut g = self.kv_gens.locked();
             let e = g.entry(key.to_owned()).or_default();
             *e += 1;
             *e
@@ -851,7 +850,7 @@ impl Daemon {
             (Arc::clone(&self.kv_gens), Arc::clone(&self.kv_writer), key.to_owned());
         tokio::spawn(async move {
             let _one = writer.lock().await;
-            if gens.lock().expect("kv_gens").get(&key) != Some(&generation) {
+            if gens.locked().get(&key) != Some(&generation) {
                 return;
             }
             if let Err(e) = store.kv_set(key.clone(), value).await {
@@ -862,7 +861,7 @@ impl Daemon {
 
     /// Put a relaunched session in its slot; `false` when the slot is gone (it was removed).
     pub(crate) fn replace_session(&self, new: &Arc<Session>) -> bool {
-        let mut sessions = self.sessions.write().expect("sessions");
+        let mut sessions = self.sessions.writing();
         match sessions.iter_mut().find(|s| s.id == new.id) {
             Some(slot) => {
                 *slot = Arc::clone(new);
@@ -1000,7 +999,7 @@ impl Daemon {
             }
             Request::Remove { addr } => {
                 let s = self.resolve(&addr)?;
-                if self.launching.lock().expect("launching").0.contains(&s.id) {
+                if self.launching.locked().0.contains(&s.id) {
                     return Err(Error::conflict("the session is restarting; remove it after"));
                 }
                 if s.is_live() {
@@ -1084,7 +1083,7 @@ impl Daemon {
                         .await
                         .map_err(|e| Error::internal(e.to_string()))?,
                     None => {
-                        self.views.lock().expect("views").insert(name, view);
+                        self.views.locked().insert(name, view);
                     }
                 }
                 Ok(Reply::Done)
@@ -1095,7 +1094,7 @@ impl Daemon {
                         .kv_get(format!("view:{name}"))
                         .await
                         .map_err(|e| Error::internal(e.to_string()))?,
-                    None => self.views.lock().expect("views").get(&name).cloned(),
+                    None => self.views.locked().get(&name).cloned(),
                 };
                 Ok(Reply::View { view })
             }
@@ -1249,7 +1248,7 @@ impl Daemon {
                 let st = s.structured.as_ref().ok_or_else(|| {
                     Error::invalid("not a structured session (`ptyro new --structured`)")
                 })?;
-                Ok(Reply::Transcript { items: st.chat.lock().expect("chat").items.clone() })
+                Ok(Reply::Transcript { items: st.chat.locked().items.clone() })
             }
             Request::Hibernate { addr } => self.hibernate(&addr).await,
             Request::ClearAttention { addr } => {
@@ -1270,7 +1269,7 @@ impl Daemon {
                         .await
                         .map_err(|e| Error::internal(e.to_string()))?,
                     None => {
-                        let mem = self.inbox_mem.lock().expect("inbox");
+                        let mem = self.inbox_mem.locked();
                         mem.iter()
                             .rev()
                             .filter(|e| {
@@ -1294,7 +1293,7 @@ impl Daemon {
                     }
                     None => {
                         let at = read.then(now_ms);
-                        for e in self.inbox_mem.lock().expect("inbox").iter_mut() {
+                        for e in self.inbox_mem.locked().iter_mut() {
                             if ids.contains(&e.id)
                                 || (all && session.as_ref().is_none_or(|s| *s == e.session))
                             {
@@ -1318,8 +1317,8 @@ impl Daemon {
         let error = match Config::load(&path) {
             Ok(c) => {
                 crate::set_log_level(&c.daemon.log_level);
-                *self.config.write().expect("config") = c;
-                self.secrets.lock().expect("secrets").clear();
+                *self.config.writing() = c;
+                self.secrets.locked().clear();
                 // A web app running with other `[remote]` settings starts again with these.
                 self.serve_child.wake();
                 tracing::info!("config reloaded");
@@ -1360,7 +1359,7 @@ impl Daemon {
         asked: Option<&str>,
         project: Option<&ptyro_core::model::ProjectInfo>,
     ) -> Result<String, Error> {
-        let reg = self.registry.lock().expect("registry");
+        let reg = self.registry.locked();
         if let Some(name) = asked {
             return reg
                 .workspaces

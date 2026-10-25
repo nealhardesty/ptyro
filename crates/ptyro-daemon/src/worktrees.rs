@@ -2,6 +2,7 @@
 //! the safety matrix; lifecycle scripts; locks while sessions run; repository status;
 //! reconciliation with `git worktree list`; gc.
 
+use ptyro_core::sync::MutexExt;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -185,14 +186,8 @@ impl Daemon {
         let config = self.config();
         let (lo, hi) = config.ports.bounds().ok()?;
         let count = config.ports.count;
-        let taken: Vec<PortBlock> = self
-            .registry
-            .lock()
-            .expect("registry")
-            .worktrees
-            .iter()
-            .filter_map(|w| w.ports)
-            .collect();
+        let taken: Vec<PortBlock> =
+            self.registry.locked().worktrees.iter().filter_map(|w| w.ports).collect();
         let mut base = u32::from(lo);
         while base + u32::from(count) - 1 <= u32::from(hi) {
             let b = base as u16;
@@ -247,7 +242,7 @@ impl Daemon {
         let config = self.config();
         let root_cfg = ProjectConfig::load(&p.root, &p.root).map_err(Error::invalid)?;
         let taken = |n: &str| {
-            let reg = self.registry.lock().expect("registry");
+            let reg = self.registry.locked();
             reg.worktrees.iter().any(|w| w.project == p.id && w.name == n)
         };
         let name = match spec.name.clone() {
@@ -854,7 +849,7 @@ impl Daemon {
     /// `git worktree lock` worktrees with live sessions, unlock the rest (SPEC §10.3 step 3).
     pub async fn sync_locks(self: &Arc<Self>) {
         let worktrees: Vec<WorktreeInfo> = {
-            let reg = self.registry.lock().expect("registry");
+            let reg = self.registry.locked();
             reg.worktrees
                 .iter()
                 .filter(|w| !w.is_root && w.state == WorktreeState::Ready)
@@ -887,7 +882,7 @@ impl Daemon {
     /// SPEC §7.5: missing directories are marked (never pruned); unknown ptyro-marked worktrees
     /// are adopted again; every project has its `@root`.
     pub async fn reconcile(self: &Arc<Self>) {
-        let projects = self.registry.lock().expect("registry").projects.clone();
+        let projects = self.registry.locked().projects.clone();
         for p in projects {
             let root = p.root.clone();
             let listed = blocking(move || {
@@ -911,7 +906,7 @@ impl Daemon {
                 continue;
             };
             let known: Vec<WorktreeInfo> = {
-                let reg = self.registry.lock().expect("registry");
+                let reg = self.registry.locked();
                 reg.worktrees.iter().filter(|w| w.project == p.id).cloned().collect()
             };
             for w in &known {
@@ -966,14 +961,8 @@ impl Daemon {
             }
         }
         // ptyro's locks don't survive a daemon that's gone: start from what git says.
-        let ids: Vec<String> = self
-            .registry
-            .lock()
-            .expect("registry")
-            .worktrees
-            .iter()
-            .map(|w| w.id.clone())
-            .collect();
+        let ids: Vec<String> =
+            self.registry.locked().worktrees.iter().map(|w| w.id.clone()).collect();
         for id in &ids {
             let _ = self.status_tx.send(id.clone());
         }
@@ -983,7 +972,7 @@ impl Daemon {
     async fn gc(self: &Arc<Self>) -> Result<Reply, Error> {
         let stale_days = self.config().worktrees.stale_days;
         let worktrees: Vec<WorktreeInfo> = {
-            let reg = self.registry.lock().expect("registry");
+            let reg = self.registry.locked();
             reg.worktrees.iter().filter(|w| !w.is_root).cloned().collect()
         };
         let mut entries = Vec::new();
@@ -1103,7 +1092,7 @@ impl Daemon {
         match req {
             Request::WorktreeList { project } => {
                 let pid = project.map(|p| self.find_project(&p)).transpose()?.map(|p| p.id);
-                let reg = self.registry.lock().expect("registry");
+                let reg = self.registry.locked();
                 let worktrees = reg
                     .worktrees
                     .iter()
@@ -1126,7 +1115,7 @@ impl Daemon {
             Request::Branches { project } => {
                 let p = self.find_project(&project)?;
                 let used: Vec<String> = {
-                    let reg = self.registry.lock().expect("registry");
+                    let reg = self.registry.locked();
                     reg.worktrees
                         .iter()
                         .filter(|w| w.project == p.id)

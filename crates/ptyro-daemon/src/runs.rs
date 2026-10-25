@@ -8,6 +8,7 @@
 //! and picks every in-flight step up again (agents resume their own conversation when they can,
 //! scripts count as crashed, gates and timers keep their absolute deadlines).
 
+use ptyro_core::sync::MutexExt;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -147,7 +148,7 @@ impl Daemon {
     }
 
     pub(crate) fn run_info(&self, id: &str) -> Option<RunInfo> {
-        let runs = self.runs.lock().expect("runs");
+        let runs = self.runs.locked();
         runs.get(id).map(|e| self.info_of(e, &runs))
     }
 
@@ -159,7 +160,7 @@ impl Daemon {
         }
         let at = now_ms();
         let (row, rows, info, wake) = {
-            let mut runs = self.runs.lock().expect("runs");
+            let mut runs = self.runs.locked();
             let Some(e) = runs.get_mut(id) else { return };
             let mut rows = Vec::new();
             for ev in evs {
@@ -200,16 +201,16 @@ impl Daemon {
     }
 
     fn run_state(&self, id: &str) -> Option<RunState> {
-        self.runs.lock().expect("runs").get(id).map(|e| e.state.clone())
+        self.runs.locked().get(id).map(|e| e.state.clone())
     }
 
     fn run_recipe(&self, id: &str) -> Option<Arc<Recipe>> {
-        self.runs.lock().expect("runs").get(id).and_then(|e| e.recipe.clone())
+        self.runs.locked().get(id).and_then(|e| e.recipe.clone())
     }
 
     /// Resolve a run address: an id, a unique id prefix/suffix, or `@last`.
     pub(crate) fn find_run(&self, addr: &str) -> Result<String, Error> {
-        let runs = self.runs.lock().expect("runs");
+        let runs = self.runs.locked();
         if addr == "@last" {
             return runs
                 .values()
@@ -252,7 +253,7 @@ impl Daemon {
     ) -> String {
         let id = loop {
             let id = ptyro_run::short_id("r", 6);
-            if !self.runs.lock().expect("runs").contains_key(&id) {
+            if !self.runs.locked().contains_key(&id) {
                 break id;
             }
         };
@@ -268,7 +269,7 @@ impl Daemon {
         let sha = src.as_deref().map(ptyro_run::recipe::sha).unwrap_or_default();
         let _ = std::fs::create_dir_all(self.run_dir(&id));
         let has_recipe = recipe.is_some();
-        self.runs.lock().expect("runs").insert(
+        self.runs.locked().insert(
             id.clone(),
             RunEntry {
                 state: RunState::new(&id),
@@ -334,7 +335,7 @@ impl Daemon {
             let policy: Option<Policy> = serde_json::from_value(row.state["policy"].clone()).ok();
             let recipe = row.recipe_src.as_deref().and_then(|s| Recipe::parse(s).ok());
             let has_recipe = recipe.is_some();
-            self.runs.lock().expect("runs").insert(
+            self.runs.locked().insert(
                 row.id.clone(),
                 RunEntry {
                     state,
@@ -375,7 +376,7 @@ impl Daemon {
         // Finished runs stay listable.
         if let Ok(rows) = store.runs(false, 200).await {
             for row in rows {
-                if self.runs.lock().expect("runs").contains_key(&row.id) {
+                if self.runs.locked().contains_key(&row.id) {
                     continue;
                 }
                 let Ok(state) = serde_json::from_value::<RunState>(row.state["state"].clone())
@@ -383,7 +384,7 @@ impl Daemon {
                     continue;
                 };
                 let recipe = row.recipe_src.as_deref().and_then(|s| Recipe::parse(s).ok());
-                self.runs.lock().expect("runs").insert(
+                self.runs.locked().insert(
                     row.id.clone(),
                     RunEntry {
                         state,
@@ -496,7 +497,7 @@ impl Daemon {
     async fn actor(self: Arc<Self>, id: String) {
         loop {
             let Some((st, recipe, wake)) = ({
-                let runs = self.runs.lock().expect("runs");
+                let runs = self.runs.locked();
                 runs.get(&id)
                     .and_then(|e| Some((e.state.clone(), e.recipe.clone()?, Arc::clone(&e.wake))))
             }) else {
@@ -599,7 +600,7 @@ impl Daemon {
         }
         // A step that has just ended may not have removed its task yet: it isn't cancelled.
         let tasks: Vec<(String, AbortHandle)> = {
-            let mut runs = self.runs.lock().expect("runs");
+            let mut runs = self.runs.locked();
             runs.get_mut(id)
                 .map(|e| {
                     let over =
@@ -673,7 +674,7 @@ impl Daemon {
         entry.id = match &self.store {
             Some(st) => st.inbox_add(entry.clone()).await.unwrap_or(0),
             None => {
-                let mut mem = self.inbox_mem.lock().expect("inbox");
+                let mut mem = self.inbox_mem.locked();
                 let n = mem.len() as i64 + 1;
                 mem.push(InboxEntry { id: n, ..entry.clone() });
                 n
@@ -711,7 +712,7 @@ impl Daemon {
     }
 
     async fn cancel_step(self: &Arc<Self>, id: &str, step: &str, reason: &str) {
-        let task = self.runs.lock().expect("runs").get_mut(id).and_then(|e| e.tasks.remove(step));
+        let task = self.runs.locked().get_mut(id).and_then(|e| e.tasks.remove(step));
         if let Some(t) = task {
             t.abort();
         }
@@ -749,7 +750,7 @@ impl Daemon {
     fn spawn_step(self: &Arc<Self>, id: &str, step: &str, resume: bool) {
         let (me, run, sid) = (Arc::clone(self), id.to_owned(), step.to_owned());
         let h = tokio::spawn(async move { me.exec_step(run, sid, resume).await });
-        if let Some(e) = self.runs.lock().expect("runs").get_mut(id) {
+        if let Some(e) = self.runs.locked().get_mut(id) {
             e.tasks.insert(step.to_owned(), h.abort_handle());
         }
     }
@@ -777,7 +778,7 @@ impl Daemon {
                 break;
             }
         }
-        if let Some(e) = self.runs.lock().expect("runs").get_mut(&run) {
+        if let Some(e) = self.runs.locked().get_mut(&run) {
             e.tasks.remove(&step);
         }
     }
@@ -822,7 +823,7 @@ impl Daemon {
             return false;
         }
         let (retry, n) = {
-            let runs = self.runs.lock().expect("runs");
+            let runs = self.runs.locked();
             let Some(e) = runs.get(run) else { return false };
             let ss = e.state.steps.get(step).cloned().unwrap_or_default();
             let budget_ok = e
@@ -1022,12 +1023,7 @@ impl Daemon {
 
     pub(crate) fn free_worktree_name(&self, project: &str, want: &str) -> String {
         let taken = |n: &str| {
-            self.registry
-                .lock()
-                .expect("registry")
-                .worktrees
-                .iter()
-                .any(|w| w.project == project && w.name == n)
+            self.registry.locked().worktrees.iter().any(|w| w.project == project && w.name == n)
         };
         if !taken(want) {
             return want.to_owned();
@@ -1320,7 +1316,7 @@ impl Daemon {
         o.insert("last_message".into(), json!(crate::review::last_message(s)));
         // A structured session knows exactly what it said and did (M10).
         if let Some(st) = &s.structured {
-            let chat = st.chat.lock().expect("chat");
+            let chat = st.chat.locked();
             if let Some(t) = chat.items.iter().rev().find_map(|i| match &i.body {
                 ptyro_core::chat::ChatBody::Assistant { text, .. } if !text.trim().is_empty() => {
                     Some(text.clone())
@@ -1718,7 +1714,7 @@ impl Daemon {
                 gate
             }
         };
-        let wake = self.runs.lock().expect("runs").get(run).map(|e| Arc::clone(&e.wake));
+        let wake = self.runs.locked().get(run).map(|e| Arc::clone(&e.wake));
         let mut deadline = gate.deadline_ms;
         loop {
             let now = self
@@ -1798,14 +1794,14 @@ impl Daemon {
     /// Whether the run or the step a gate waits in is over: answering it would only wake a
     /// step that has already ended.
     fn gate_is_closed(&self, run: &str, step: &str) -> bool {
-        let runs = self.runs.lock().expect("runs");
+        let runs = self.runs.locked();
         runs.get(run).is_none_or(|e| {
             e.state.status.is_over() || e.state.steps.get(step).is_some_and(|s| s.status.is_over())
         })
     }
 
     pub(crate) fn find_gate(&self, id: &str) -> Option<(String, String, Gate)> {
-        let runs = self.runs.lock().expect("runs");
+        let runs = self.runs.locked();
         runs.values().find_map(|e| {
             e.state.steps.iter().find_map(|(sid, s)| {
                 s.gate
@@ -2137,7 +2133,7 @@ impl Daemon {
     pub(crate) async fn handle_runs(self: &Arc<Self>, req: Request) -> Result<Reply, Error> {
         match req {
             Request::RunList { active, limit } => {
-                let runs = self.runs.lock().expect("runs");
+                let runs = self.runs.locked();
                 let mut v: Vec<RunInfo> = runs
                     .values()
                     .filter(|e| !active || !e.state.status.is_over())
@@ -2197,8 +2193,7 @@ impl Daemon {
                     return Err(Error::conflict(format!("step {step} is running")));
                 }
                 // A step waiting at a gate still has its task: stop it, or two would answer.
-                if let Some(t) =
-                    self.runs.lock().expect("runs").get_mut(&id).and_then(|e| e.tasks.remove(&step))
+                if let Some(t) = self.runs.locked().get_mut(&id).and_then(|e| e.tasks.remove(&step))
                 {
                     t.abort();
                 }
@@ -2237,7 +2232,7 @@ impl Daemon {
             Request::RunFork { id, from, set } => {
                 let id = self.find_run(&id)?;
                 let (st, recipe, src, policy) = {
-                    let runs = self.runs.lock().expect("runs");
+                    let runs = self.runs.locked();
                     let e = runs.get(&id).ok_or_else(|| Error::missing("run", &id))?;
                     (e.state.clone(), e.recipe.clone(), e.src.clone(), e.policy.clone())
                 };
@@ -2356,7 +2351,7 @@ impl Daemon {
             }
             Request::Fanout { spec } => self.fanout(spec).await,
             Request::GateList { all } => {
-                let runs = self.runs.lock().expect("runs");
+                let runs = self.runs.locked();
                 let mut v: Vec<GateInfo> = runs
                     .values()
                     .flat_map(|e| {
@@ -2497,7 +2492,7 @@ impl Daemon {
             return;
         };
         let (kind, ended) = {
-            let runs = self.runs.lock().expect("runs");
+            let runs = self.runs.locked();
             let Some(e) = runs.get(&run) else { return };
             e.wake.notify_one();
             (e.state.kind, e.state.steps.get(&step).is_none_or(|x| x.status.is_over()))
@@ -2534,7 +2529,7 @@ impl Daemon {
     /// A session can be in two runs (a lead's fan-out worker is in the fan-out and the
     /// lead's run): the one with a policy wins, so the stricter rules always apply.
     pub(crate) fn run_of_session(&self, id: &str) -> Option<(String, Option<Policy>, bool)> {
-        let runs = self.runs.lock().expect("runs");
+        let runs = self.runs.locked();
         runs.values()
             .filter(|e| !e.state.status.is_over() && e.state.sessions.iter().any(|x| x == id))
             .max_by_key(|e| {

@@ -13,6 +13,14 @@ Include what you ran, what you expected, what happened, and the ptyro version (`
 and OS. You should get an answer within a week. A fix comes with a credit in the changelog unless
 you'd rather not be named.
 
+## Verifying a release
+
+Every release tarball, `SHA256SUMS` and the software bill of materials (`ptyro-<version>.cdx.json`)
+carry signed build provenance: `gh attestation verify <file> --repo nealhardesty/ptyro` proves
+which workflow run, on which commit of this repository, built it. `scripts/install.sh` checks the
+checksum (and the provenance when `gh` is installed) before it installs anything. The macOS
+binaries are not notarized.
+
 ## What counts
 
 The model is described in [SPEC §17](SPEC.md#17-security-model). In short, these are in scope:

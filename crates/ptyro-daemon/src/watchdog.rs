@@ -2,6 +2,7 @@
 //! keeps running on a fresh one, and a watchdog that measures the daemon's health for
 //! `ptyro daemon status` (memory, fds, tasks, how late the runtime runs).
 
+use ptyro_core::sync::MutexExt;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -107,7 +108,7 @@ impl Lag {
                 let t = Instant::now();
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 let late = t.elapsed().saturating_sub(Duration::from_secs(1)).as_millis() as u64;
-                let mut s = me.samples.lock().expect("lag");
+                let mut s = me.samples.locked();
                 s.push_back(late);
                 if s.len() > 60 {
                     s.pop_front();
@@ -117,7 +118,7 @@ impl Lag {
     }
 
     fn stats(&self) -> (u64, u64) {
-        let s = self.samples.lock().expect("lag");
+        let s = self.samples.locked();
         let mut v: Vec<u64> = s.iter().copied().collect();
         v.sort_unstable();
         let max = v.last().copied().unwrap_or(0);

@@ -9,6 +9,7 @@
 //! - a live upgrade parks the driver between lines and carries its state, the transcript and
 //!   the pipes into the next image, like a PTY session's.
 
+use ptyro_core::sync::MutexExt;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::os::fd::OwnedFd;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -137,7 +138,7 @@ impl Structured {
 
     pub fn send_text(&self, s: &Session, text: &str, enter: bool) {
         if enter {
-            let mut d = self.draft.lock().expect("draft");
+            let mut d = self.draft.locked();
             let full = format!("{}{text}", std::mem::take(&mut *d));
             drop(d);
             self.clear_draft_line(s);
@@ -145,7 +146,7 @@ impl Structured {
                 let _ = self.tx.send(Msg::Prompt(full));
             }
         } else {
-            self.draft.lock().expect("draft").push_str(text);
+            self.draft.locked().push_str(text);
             self.redraw_draft(s);
         }
     }
@@ -154,12 +155,12 @@ impl Structured {
     pub fn key(&self, s: &Session, ev: &InputEvent) {
         match ev {
             InputEvent::Paste { text } => {
-                self.draft.lock().expect("draft").push_str(text);
+                self.draft.locked().push_str(text);
                 self.redraw_draft(s);
             }
             InputEvent::Key { key } if key.kind != KeyKind::Release => {
                 let ctrl = key.mods.has(Mods::CTRL);
-                if self.has_pending() && self.draft.lock().expect("draft").is_empty() {
+                if self.has_pending() && self.draft.locked().is_empty() {
                     let d = match key.code {
                         // (Not Enter: a return typed ahead, or a double tap, must not approve a
                         // tool call the person hasn't read.)
@@ -177,29 +178,29 @@ impl Structured {
                 }
                 match key.code {
                     KeyCode::Char { c: 'c' } if ctrl => {
-                        let had = !self.draft.lock().expect("draft").is_empty();
+                        let had = !self.draft.locked().is_empty();
                         if had {
-                            self.draft.lock().expect("draft").clear();
+                            self.draft.locked().clear();
                             self.redraw_draft(s);
                         } else {
                             self.interrupt();
                         }
                     }
                     KeyCode::Enter if key.mods.has(Mods::SHIFT) || key.mods.has(Mods::ALT) => {
-                        self.draft.lock().expect("draft").push('\n');
+                        self.draft.locked().push('\n');
                         self.redraw_draft(s);
                     }
                     KeyCode::Enter => self.send_text(s, "", true),
                     KeyCode::Backspace => {
-                        self.draft.lock().expect("draft").pop();
+                        self.draft.locked().pop();
                         self.redraw_draft(s);
                     }
                     KeyCode::Esc => {
-                        self.draft.lock().expect("draft").clear();
+                        self.draft.locked().clear();
                         self.redraw_draft(s);
                     }
                     KeyCode::Char { c } if !ctrl && !key.mods.has(Mods::ALT) => {
-                        self.draft.lock().expect("draft").push(c);
+                        self.draft.locked().push(c);
                         self.redraw_draft(s);
                     }
                     _ => {}
@@ -211,17 +212,17 @@ impl Structured {
     }
 
     fn bump_chat(&self) {
-        let rev = self.chat.lock().expect("chat").rev;
+        let rev = self.chat.locked().rev;
         self.chat_rev.send_modify(|r| *r = rev.max(*r + 1));
     }
 
     fn draft_line(&self) -> Vec<u8> {
-        let d = self.draft.lock().expect("draft").replace('\n', "⏎");
+        let d = self.draft.locked().replace('\n', "⏎");
         format!("\r\x1b[2K\x1b[1;36m› \x1b[0m{d}").into_bytes()
     }
 
     fn redraw_draft(&self, s: &Session) {
-        let mut r = self.render.lock().expect("render");
+        let mut r = self.render.locked();
         if r.mid_line {
             return;
         }
@@ -231,7 +232,7 @@ impl Structured {
     }
 
     fn clear_draft_line(&self, s: &Session) {
-        let mut r = self.render.lock().expect("render");
+        let mut r = self.render.locked();
         if r.draft_shown {
             r.draft_shown = false;
             drop(r);
@@ -242,15 +243,15 @@ impl Structured {
     /// A transcript item from the driver: keep it, show it.
     fn on_item(&self, s: &Session, item: ChatItem) {
         let bytes = {
-            let mut chat = self.chat.lock().expect("chat");
+            let mut chat = self.chat.locked();
             let it = chat.upsert(item).clone();
-            let mut r = self.render.lock().expect("render");
+            let mut r = self.render.locked();
             render(&mut r, &it)
         };
         if !bytes.is_empty() {
             let mut out = Vec::new();
             let redraw = {
-                let mut r = self.render.lock().expect("render");
+                let mut r = self.render.locked();
                 if r.draft_shown {
                     out.extend_from_slice(b"\r\x1b[2K");
                 }
@@ -259,10 +260,10 @@ impl Structured {
                 was && !r.mid_line
             };
             out.extend_from_slice(&bytes);
-            let draft_wanted = !self.draft.lock().expect("draft").is_empty();
-            if redraw || (draft_wanted && !self.render.lock().expect("render").mid_line) {
+            let draft_wanted = !self.draft.locked().is_empty();
+            if redraw || (draft_wanted && !self.render.locked().mid_line) {
                 out.extend_from_slice(&self.draft_line());
-                self.render.lock().expect("render").draft_shown = true;
+                self.render.locked().draft_shown = true;
             }
             s.view(&out);
         }
@@ -270,9 +271,9 @@ impl Structured {
     }
 
     pub fn image(&self, live: bool) -> std::io::Result<StructuredImage> {
-        let (driver, buffer) = self.parked.lock().expect("parked").clone().unwrap_or_default();
+        let (driver, buffer) = self.parked.locked().clone().unwrap_or_default();
         let fds = if live {
-            match self.fds.lock().expect("fds").as_ref() {
+            match self.fds.locked().as_ref() {
                 Some(f) => Some([
                     ptyro_pty::handoff::inheritable(&f[0])?,
                     ptyro_pty::handoff::inheritable(&f[1])?,
@@ -286,9 +287,9 @@ impl Structured {
         Ok(StructuredImage {
             protocol: self.protocol.clone(),
             driver,
-            chat: self.chat.lock().expect("chat").clone(),
-            draft: self.draft.lock().expect("draft").clone(),
-            render: self.render.lock().expect("render").clone(),
+            chat: self.chat.locked().clone(),
+            draft: self.draft.locked().clone(),
+            render: self.render.locked().clone(),
             http: self.http.clone(),
             fds,
             buffer,
@@ -301,9 +302,9 @@ impl Structured {
         live: bool,
     ) -> std::io::Result<(Arc<Self>, Option<Resume>)> {
         let st = Self::new(&si.protocol, si.http.clone());
-        *st.chat.lock().expect("chat") = si.chat;
-        *st.draft.lock().expect("draft") = si.draft;
-        *st.render.lock().expect("render") = si.render;
+        *st.chat.locked() = si.chat;
+        *st.draft.locked() = si.draft;
+        *st.render.locked() = si.render;
         let resume = match (si.fds, live) {
             (Some([i, o, e]), true) => {
                 let driver = ptyro_drive::restore(&si.protocol, si.driver)
@@ -330,7 +331,7 @@ impl Structured {
 
     fn keep_fds(&self, i: &OwnedFd, o: &OwnedFd, e: &OwnedFd) -> std::io::Result<()> {
         let dup = |f: &OwnedFd| rustix::io::fcntl_dupfd_cloexec(f, 0).map_err(std::io::Error::from);
-        *self.fds.lock().expect("fds") = Some([dup(i)?, dup(o)?, dup(e)?]);
+        *self.fds.locked() = Some([dup(i)?, dup(o)?, dup(e)?]);
         Ok(())
     }
 }
@@ -385,7 +386,7 @@ async fn drain_stderr(st: Arc<Structured>, fd: OwnedFd) {
     let Ok(rx) = pipe::Receiver::from_owned_fd(fd) else { return };
     let mut lines = BufReader::new(rx).lines();
     while let Ok(Some(l)) = lines.next_line().await {
-        let mut t = st.stderr_tail.lock().expect("stderr");
+        let mut t = st.stderr_tail.locked();
         t.push_back(l.chars().take(300).collect());
         if t.len() > 20 {
             t.pop_front();
@@ -398,7 +399,7 @@ fn high(signal: ptyro_core::status::Signal) -> Sourced {
 }
 
 async fn driver_loop(session: Arc<Session>, st: Arc<Structured>, r: Resume) {
-    let Some(mut rx) = st.rx.lock().expect("rx").take() else { return };
+    let Some(mut rx) = st.rx.locked().take() else { return };
     let mut driver = r.driver;
     let Ok(mut stdin) = pipe::Sender::from_owned_fd(r.stdin) else { return };
     let Ok(mut stdout) = pipe::Receiver::from_owned_fd(r.stdout) else { return };
@@ -420,11 +421,11 @@ async fn driver_loop(session: Arc<Session>, st: Arc<Structured>, r: Resume) {
     let mut chunk = vec![0u8; 64 * 1024];
     loop {
         if *pause.borrow_and_update() {
-            *st.parked.lock().expect("parked") = Some((driver.save(), buf.clone()));
+            *st.parked.locked() = Some((driver.save(), buf.clone()));
             io.parked.fetch_add(1, Ordering::SeqCst);
             let _ = pause.wait_for(|p| !*p).await;
             io.parked.fetch_sub(1, Ordering::SeqCst);
-            *st.parked.lock().expect("parked") = None;
+            *st.parked.locked() = None;
         }
         // Whole lines only; a partial one waits for the rest.
         while let Some(i) = buf.iter().position(|b| *b == b'\n') {
@@ -467,7 +468,7 @@ async fn driver_loop(session: Arc<Session>, st: Arc<Structured>, r: Resume) {
     io.readers.fetch_sub(1, Ordering::SeqCst);
     // Whatever the agent said on its way out (not logged in, a bad flag) is worth showing.
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let tail: Vec<String> = st.stderr_tail.lock().expect("stderr").iter().cloned().collect();
+    let tail: Vec<String> = st.stderr_tail.locked().iter().cloned().collect();
     let failed = !matches!(
         session.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).state,
         ptyro_core::session::ProcessState::Exited { code: Some(0), .. }
@@ -778,8 +779,8 @@ impl Session {
     /// The transcript changes after revision `rev`, and the draft.
     pub fn chat_since(&self, rev: u64) -> Option<(u64, Vec<ChatItem>, String)> {
         let st = self.structured.as_ref()?;
-        let chat = st.chat.lock().expect("chat");
-        Some((chat.rev, chat.since(rev), st.draft.lock().expect("draft").clone()))
+        let chat = st.chat.locked();
+        Some((chat.rev, chat.since(rev), st.draft.locked().clone()))
     }
 }
 

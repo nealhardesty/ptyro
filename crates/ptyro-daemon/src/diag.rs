@@ -1,6 +1,7 @@
 //! What the daemon tells `ptyro doctor` (M5.6): its environment, the problems it noticed, and a
 //! hook self-test that runs the fake agent through an adapter's real integration.
 
+use ptyro_core::sync::MutexExt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,7 +20,7 @@ const SELF_TESTABLE: &[&str] = &["claude", "codex", "opencode"];
 impl Daemon {
     /// Remember a problem for `ptyro doctor` (once).
     pub(crate) fn warn(&self, text: String) {
-        let mut w = self.warnings.lock().expect("warnings");
+        let mut w = self.warnings.locked();
         if !w.contains(&text) {
             tracing::warn!("{text}");
             w.push(text);
@@ -39,7 +40,7 @@ impl Daemon {
             .filter(|v| var(v).is_some())
             .map(|v| (*v).to_owned())
             .collect();
-        let warnings = self.warnings.lock().expect("warnings").clone();
+        let warnings = self.warnings.locked().clone();
         let config_error =
             warnings.iter().find(|w| w.starts_with("the config didn't load")).cloned();
         DaemonDoctor { leaked_vars, path: var("PATH").unwrap_or_default(), warnings, config_error }
@@ -100,13 +101,13 @@ impl Daemon {
             |src: SignalSource| matches!(src, SignalSource::Hook | SignalSource::Sidecar);
         // Passes when the turn's start came from the integration (hooks or the sidecar).
         let ok = loop {
-            if let Some(r) = s.engine.lock().expect("engine").record.clone()
+            if let Some(r) = s.engine.locked().record.clone()
                 && seen.last() != Some(&(r.status, r.source))
             {
                 seen.push((r.status, r.source));
             }
             // Whether or not it won the race against OSC 7501, the integration must have spoken.
-            let worked = s.engine.lock().expect("engine").explain.iter().any(|l| {
+            let worked = s.engine.locked().explain.iter().any(|l| {
                 l.signal.starts_with("working")
                     && (l.source.starts_with("hook") || l.source.starts_with("sidecar"))
             });
@@ -118,8 +119,7 @@ impl Daemon {
                 break true;
             }
             // A sidecar must be listening before the turn, or its events are lost.
-            let listening = adapter != "opencode"
-                || self.sidecar_live.lock().expect("sidecar_live").contains(&s.id);
+            let listening = adapter != "opencode" || self.sidecar_live.locked().contains(&s.id);
             if !sent && listening && now_ms().saturating_sub(start) > 300 {
                 s.send_text("work 0.2 ptyro self-test", true).await;
                 sent = true;

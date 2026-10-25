@@ -37,7 +37,7 @@ Conventions:
 | **WEB1** | Web parity | The web client does what the CLI and TUI do, and the parity check covers it (done) |
 | **CFG1** | One configuration panel | Every option editable in the TUI, on the web and with `ptyro config set`, from one schema; new options must join it (done) |
 | **NOTE1** | The scratchpad | One persistent notepad file: a key opens it in your editor, `PTYRO_SCRATCHPAD` finds it, items become tasks, the web edits it (done) |
-| **H2** | Second hardening review | A review of the whole codebase by nine independent readers: ~150 findings verified and fixed, the rest listed here (partly done) |
+| **H2** | Second hardening review | A review of the whole codebase by nine independent readers: ~150 findings verified and fixed; locks, the release pipeline and uninstall done; the rest listed here |
 | **Backlog** | Later / maybe | Editor, tasks, jj, libghostty, relay, … |
 
 Critical path: **M0 → M1 → M2 → M3 → M4** gives a daily-driver. M5 can interleave with M3/M4.
@@ -2011,17 +2011,31 @@ longer switches workspace before the daemon agrees, answers a question with lett
 into another repository, deep links to Settings load, dialogs keep their size, OSC 52 asks first.
 
 *Open, ranked* (each is a task when picked up):
-- [ ] **H2.1 Mutex poisoning cascades.** 500+ `lock().expect(..)` in the daemon: one panic while a
-  lock is held fails every later request touching it. Poison-tolerant locks (or `parking_lot`)
-  everywhere, then a clippy `unwrap_used` ratchet for non-test code. (Session `meta`/`term` are done.)
-- [ ] **H2.2 Release and CI.** `release.yml` doesn't run `deny`, `fuzz-smoke` or the macOS
-  `check`; nothing signs or attests the tarballs (no provenance, no SBOM; macOS binaries aren't
-  notarized, so a downloaded tarball needs `xattr -d com.apple.quarantine`); no MSRV or
-  `aarch64-linux` job; CI calls the cargo-deny action, not `make deny`; `make doc` isn't in
-  CI; CI should fail when Node is missing instead of skipping the web tests.
-- [ ] **H2.3 The binary install's lifecycle.** No `ptyro uninstall`/`reset` (only `make reset`
-  from a checkout), no backup/export of ptyro's state, no `ptyro update`, no Homebrew tap (and no
-  "a newer version exists" notice). Each needs its CLI/TUI/web trio (SPEC §1.3).
+- [x] **H2.1 Mutex poisoning cascades.** *Done 2026-10-25.* 360-odd `lock().expect(..)` were the
+  daemon's weakest habit: one panic while a lock was held failed every later request touching it.
+  `ptyro_core::sync` (`locked`, `reading`, `writing`) takes the guard whether or not the lock is
+  poisoned, and every call across the workspace uses it; a request that panics still gets an
+  error reply (conn.rs). A ratchet (`make ratchet`, `scripts/unwrap-ratchet.py`, baseline in
+  `scripts/unwrap-baseline.txt`, part of `make check`) fails when a crate gains `unwrap()` or
+  `expect()` in non-test code; the daemon went from ~540 to 6 and the whole workspace is at 37
+  (the baseline file), which may only go down. SPEC §18.2.
+- [x] **H2.2 Release and CI.** *Done 2026-10-25.* A release now needs the tag on `master` at the
+  crate's version; `make check` on x86_64 Linux, aarch64 Linux and aarch64 macOS (Node required,
+  so the web tests can't be skipped); `deny`, `web-check`, `msrv` and `fuzz-smoke` on that
+  commit; and each platform's tarball installing through `scripts/install.sh` (a tampered one
+  refused). It publishes the tarballs, `SHA256SUMS`, a CycloneDX bill of materials (`make sbom`)
+  with signed build provenance (`gh attestation verify`). CI runs the same on every push plus
+  `doc` (warnings fail), `lock-check` and an MSRV job, and calls `make deny` instead of an
+  action. `scripts/install.sh` is the way to install a release (checksum, provenance when `gh`
+  is there, no macOS quarantine). *Not done:* macOS notarization (needs an Apple developer
+  account), `x86_64-apple-darwin` is built and install-checked at release time but not in the CI
+  matrix, nothing verifies the Homebrew formula's install.
+- [x] **H2.3 The binary install's lifecycle (uninstall and backup).** *Done 2026-10-25.* `ptyro
+  uninstall` (plan, confirm, stop, remove; keeps repositories, branches and snapshots refs;
+  `--backup`, `--purge-refs`, `--dry-run`, `--json`), `ptyro backup`, `scripts/install.sh`, and
+  `make reset` as a wrapper; TUI actions and web (More → Daemon). SPEC §14.5, `docs/uninstall.md`.
+  *Still open here:* `ptyro update` (download, verify, replace, `daemon upgrade`; the installer
+  is the manual version), `ptyro restore`, a Homebrew tap, and a "newer version exists" notice.
 - [ ] **H2.4 Tests that don't exist yet.** A table test of every `Request` variant's scope
   (exhaustive `match`, so a new one forces a decision); store migration and downgrade fixtures;
   a handoff image from the previous release; the live-upgrade race with an in-flight launch;

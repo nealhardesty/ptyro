@@ -4,6 +4,7 @@
 //! starts. A repository you forgot (`project rm`, or undoing this) is remembered and never
 //! registered on its own again; adding it by hand lifts that.
 
+use ptyro_core::sync::MutexExt;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -28,24 +29,24 @@ impl Daemon {
             && let Ok(Some(v)) = store.kv_get(DECLINED.into()).await
             && let Ok(list) = serde_json::from_value::<Vec<PathBuf>>(v)
         {
-            *self.declined.lock().expect("declined") = list.into_iter().collect();
+            *self.declined.locked() = list.into_iter().collect();
         }
     }
 
     fn save_declined(&self) {
-        let list: Vec<PathBuf> = self.declined.lock().expect("declined").iter().cloned().collect();
+        let list: Vec<PathBuf> = self.declined.locked().iter().cloned().collect();
         self.save_kv(DECLINED, serde_json::to_value(list).unwrap_or_default());
     }
 
     /// Never register `root` on its own again.
     pub(crate) fn decline(&self, root: &Path) {
-        if self.declined.lock().expect("declined").insert(root.to_path_buf()) {
+        if self.declined.locked().insert(root.to_path_buf()) {
             self.save_declined();
         }
     }
 
     pub(crate) fn undecline(&self, root: &Path) {
-        if self.declined.lock().expect("declined").remove(root) {
+        if self.declined.locked().remove(root) {
             self.save_declined();
         }
     }
@@ -55,17 +56,17 @@ impl Daemon {
     pub(crate) async fn last_workspace(&self) -> String {
         let shown = match &self.store {
             Some(store) => store.kv_get("view:_tui".into()).await.ok().flatten(),
-            None => self.views.lock().expect("views").get("_tui").cloned(),
+            None => self.views.locked().get("_tui").cloned(),
         };
         let name = shown.and_then(|v| v["workspace"].as_str().map(str::to_owned));
-        let reg = self.registry.lock().expect("registry");
+        let reg = self.registry.locked();
         name.filter(|n| reg.workspaces.iter().any(|w| w.name == *n))
             .unwrap_or_else(|| MAIN_WORKSPACE.into())
     }
 
     /// Whether a registered worktree (any state but removed) holds `dir`.
     fn in_a_project(&self, dir: &Path) -> bool {
-        let reg = self.registry.lock().expect("registry");
+        let reg = self.registry.locked();
         let known = reg.worktrees.iter().filter(|w| w.state != WorktreeState::Removed);
         crate::registry::innermost(known, dir).is_some()
     }
@@ -110,7 +111,7 @@ impl Daemon {
         let root = root.canonicalize().unwrap_or(root);
         let home = std::env::var_os("HOME").map(PathBuf::from).and_then(|h| h.canonicalize().ok());
         if home.as_deref() == Some(root.as_path())
-            || self.declined.lock().expect("declined").contains(&root)
+            || self.declined.locked().contains(&root)
             || root.starts_with(&self.paths.data)
         {
             return Ok(None);

@@ -5,6 +5,7 @@
 //! wins: a held hook's decision closes the dialog, and an answer in the dialog makes Claude
 //! ignore the hook. So holding costs the person at the terminal nothing.
 
+use ptyro_core::sync::MutexExt;
 use std::sync::Arc;
 
 use ptyro_agents::Decision;
@@ -50,15 +51,13 @@ impl Daemon {
     pub(crate) fn begin_hold(&self, s: &Arc<Session>) -> Option<Hold> {
         let wait = parse_duration(&self.config().remote.approval_wait).ok()?;
         // A device whose pairing code is still unclaimed can't answer yet.
-        if wait.is_zero()
-            || !self.devices.lock().expect("devices").iter().any(|d| d.pairing.is_none())
-        {
+        if wait.is_zero() || !self.devices.locked().iter().any(|d| d.pairing.is_none()) {
             return None;
         }
         let (tx, rx) = oneshot::channel();
         let generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // A newer prompt replaces an older one (its dialog is gone).
-        if let Some(old) = self.held.lock().expect("held").insert(s.id, Held { tx, generation }) {
+        if let Some(old) = self.held.locked().insert(s.id, Held { tx, generation }) {
             let _ = old.tx.send(None);
         }
         Some(Hold { rx, generation, wait })
@@ -68,7 +67,7 @@ impl Daemon {
     pub(crate) async fn finish_hold(&self, s: &Arc<Session>, h: Hold) -> Option<Reply> {
         let decision = tokio::time::timeout(h.wait, h.rx).await.ok().and_then(Result::ok).flatten();
         {
-            let mut held = self.held.lock().expect("held");
+            let mut held = self.held.locked();
             if held.get(&s.id).is_some_and(|x| x.generation == h.generation) {
                 held.remove(&s.id);
             }
@@ -82,7 +81,7 @@ impl Daemon {
         if matches!(d, Decision::Always) {
             return false;
         }
-        match self.held.lock().expect("held").remove(&id) {
+        match self.held.locked().remove(&id) {
             Some(h) => h.tx.send(Some(d)).is_ok(),
             None => false,
         }
@@ -90,14 +89,14 @@ impl Daemon {
 
     /// The prompt was answered elsewhere (in Claude's dialog): let the hook go.
     pub(crate) fn release_held(&self, id: SessionId) {
-        if let Some(h) = self.held.lock().expect("held").remove(&id) {
+        if let Some(h) = self.held.locked().remove(&id) {
             let _ = h.tx.send(None);
         }
     }
 
     /// For status: is a prompt held for an exact remote answer?
     pub(crate) fn is_held(&self, id: SessionId) -> bool {
-        self.held.lock().expect("held").contains_key(&id)
+        self.held.locked().contains_key(&id)
     }
 }
 

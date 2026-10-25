@@ -19,6 +19,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 const DOC: &str = include_str!("../../../docs/parity.md");
+const COMMANDS_DOC: &str = include_str!("../../../docs/commands.md");
+const README: &str = include_str!("../../../README.md");
+const MAKEFILE: &str = include_str!("../../../Makefile");
 /// The web app's sources that register actions: the core and one module per kind of work.
 const WEB_SOURCES: [(&str, &str); 8] = [
     ("app.ts", include_str!("../../../web/src/app.ts")),
@@ -238,4 +241,94 @@ fn cells_are_classified() {
     assert!(w("`worktree.new`").unwrap_err().contains("not a web action"));
     assert_eq!(task_id("M9.4 x"), Some("M9.4"));
     assert_eq!(task_id("WEB1 x"), None);
+}
+
+/// `docs/commands.md` is where people look a command up: every command is on a line of it that
+/// names its group (`ptyro config …`) and it (`set`), under its own name or its group's alias
+/// (`wt` for `worktree`). Several commands may share a line (`check|show|edit`).
+#[test]
+fn every_command_is_in_the_commands_page() {
+    let missing = std::thread::Builder::new()
+        .stack_size(32 << 20)
+        .spawn(|| {
+            fn words(s: &str) -> Vec<&str> {
+                s.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+                    .filter(|w| !w.is_empty())
+                    .collect()
+            }
+            fn walk(c: &clap::Command, path: &[String], groups: &[String], out: &mut Vec<String>) {
+                for s in c.get_subcommands().filter(|s| s.get_name() != "help" && !s.is_hide_set())
+                {
+                    let mut here = path.to_vec();
+                    here.push(s.get_name().to_owned());
+                    // What the first word may be: the name or an alias.
+                    let first: Vec<String> = if path.is_empty() {
+                        std::iter::once(s.get_name().to_owned())
+                            .chain(s.get_all_aliases().map(str::to_owned))
+                            .collect()
+                    } else {
+                        groups.to_vec()
+                    };
+                    if s.get_subcommands().next().is_some() {
+                        walk(s, &here, &first, out);
+                        continue;
+                    }
+                    let found = if path.is_empty() {
+                        first.iter().any(|f| {
+                            // `ptyro rename …`, or one of several on a line: `… / `rename …`.
+                            COMMANDS_DOC.contains(&format!("ptyro {f}"))
+                                || COMMANDS_DOC.contains(&format!("`{f} "))
+                                || COMMANDS_DOC.contains(&format!("`{f}`"))
+                        })
+                    } else {
+                        // The line names the group, then (further along) the command.
+                        let middle = here[1..here.len() - 1].join(" ");
+                        let leaf = s.get_name();
+                        first.iter().any(|f| {
+                            let head =
+                                if middle.is_empty() { f.clone() } else { format!("{f} {middle}") };
+                            COMMANDS_DOC.lines().any(|l| {
+                                l.find(&format!("ptyro {head}")).is_some_and(|i| {
+                                    words(&l[i + 6 + head.len()..]).contains(&leaf)
+                                })
+                            })
+                        })
+                    };
+                    if !found {
+                        out.push(here.join(" "));
+                    }
+                }
+            }
+            let mut out = Vec::new();
+            walk(&<crate::Cli as clap::CommandFactory>::command(), &[], &[], &mut out);
+            out
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    assert!(
+        missing.is_empty(),
+        "docs/commands.md has no line for {missing:?}: add `ptyro <group> … <command>` where it belongs"
+    );
+}
+
+/// The README's Development table is where `make` targets are explained: every target with a
+/// `##` description in the Makefile has a `make <target>` there.
+#[test]
+fn every_make_target_is_in_the_readme() {
+    let missing: Vec<&str> = MAKEFILE
+        .lines()
+        .filter_map(|l| {
+            let (target, rest) = l.split_once(':')?;
+            (rest.contains("## ")
+                && !target.is_empty()
+                && target.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+            .then_some(target)
+        })
+        .filter(|t| !README.contains(&format!("make {t}")) && !README.contains(&format!("`{t}`")))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "README.md never mentions the `make` targets {missing:?}: add them to the Development table"
+    );
 }

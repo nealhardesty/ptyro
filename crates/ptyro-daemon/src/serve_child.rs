@@ -6,6 +6,7 @@
 //! the config file, starts or stops the server at once, and says where it listens. Status
 //! (`DaemonStatus.web`) is what the CLI, the doctor and the web app's settings show.
 
+use ptyro_core::sync::MutexExt;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -34,7 +35,7 @@ pub struct ServeChild {
 
 impl ServeChild {
     pub fn kill(&self) {
-        let mut r = self.run.lock().expect("serve child");
+        let mut r = self.run.locked();
         if let Some(mut c) = r.child.take() {
             let _ = c.kill();
             let _ = c.wait();
@@ -75,7 +76,7 @@ impl Daemon {
                 let remote = me.config().remote;
                 let want = remote.serve;
                 let state = {
-                    let mut r = me.serve_child.run.lock().expect("serve child");
+                    let mut r = me.serve_child.run.locked();
                     // `serve` itself is the switch; anything else it was started with is read once.
                     let changed = r.started_with.as_ref().is_some_and(|w| {
                         ptyro_core::config::Remote { serve: remote.serve, ..w.clone() } != remote
@@ -110,8 +111,7 @@ impl Daemon {
                     (true, None) => {
                         if let Err(e) = me.spawn_serve() {
                             tracing::warn!("ptyro serve: {e}");
-                            me.serve_child.run.lock().expect("serve child").last_exit =
-                                Some(e.to_string());
+                            me.serve_child.run.locked().last_exit = Some(e.to_string());
                         }
                     }
                     (true, Some(Some(status))) => {
@@ -121,12 +121,12 @@ impl Daemon {
                         );
                         pause = backoff;
                         backoff = (backoff * 2).min(Duration::from_secs(60));
-                        me.serve_child.run.lock().expect("serve child").restarts += 1;
+                        me.serve_child.run.locked().restarts += 1;
                     }
                     (true, Some(None)) => backoff = Duration::from_secs(1),
                     (false, Some(_)) => {
                         me.serve_child.kill();
-                        me.serve_child.run.lock().expect("serve child").last_exit = None;
+                        me.serve_child.run.locked().last_exit = None;
                     }
                     (false, None) => {}
                 }
@@ -165,7 +165,7 @@ impl Daemon {
             .stderr(log)
             .spawn()?;
         tracing::info!(pid = child.id(), "started ptyro serve");
-        let mut r = self.serve_child.run.lock().expect("serve child");
+        let mut r = self.serve_child.run.locked();
         r.child = Some(child);
         r.started_with = Some(self.config().remote);
         r.since_ms = Some(now_ms());
@@ -175,7 +175,7 @@ impl Daemon {
     /// How the web app's server is.
     pub fn web_status(&self) -> WebServe {
         let config = self.config();
-        let r = self.serve_child.run.lock().expect("serve child");
+        let r = self.serve_child.run.locked();
         let mine = r.child.as_ref().map(std::process::Child::id);
         // The record `ptyro serve` writes when it is listening: its pid, URL and CA.
         let record: serde_json::Value =

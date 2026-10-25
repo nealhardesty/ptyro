@@ -937,8 +937,7 @@ fn the_web_app_is_a_setting_the_daemon_keeps() {
 /// combining marks and wrapped lines included. Skipped without Node.
 #[test]
 fn the_web_screen_model_matches_the_daemon() {
-    if std::process::Command::new("node").arg("--version").output().is_err() {
-        eprintln!("node not found: skipping the web client check");
+    if !node_available() {
         return;
     }
     let w = World::new("", &[]);
@@ -969,8 +968,7 @@ fn the_web_screen_model_matches_the_daemon() {
 /// control, while a read-only device can read and is refused every write. Skipped without Node.
 #[test]
 fn the_web_scratchpad_client_logic_works() {
-    if std::process::Command::new("node").arg("--version").output().is_err() {
-        eprintln!("node not found: skipping the web scratchpad check");
+    if !node_available() {
         return;
     }
     let w = World::new("", &[]);
@@ -1144,6 +1142,20 @@ async fn serve_uses_your_own_certificate() {
     let _ = child.wait();
 }
 
+/// Node is there. Without it the web app's logic tests are skipped, unless `PTYRO_REQUIRE_NODE` is
+/// set (CI sets it): then a missing Node fails the test instead of letting it pass unrun.
+fn node_available() -> bool {
+    let there = std::process::Command::new("node").arg("--version").output().is_ok();
+    if !there {
+        assert!(
+            std::env::var_os("PTYRO_REQUIRE_NODE").is_none(),
+            "PTYRO_REQUIRE_NODE is set but node isn't installed: the web app's tests would be skipped"
+        );
+        eprintln!("node not found: skipping a web logic test");
+    }
+    there
+}
+
 /// `POST /api/host` with a bearer token → (status, the JSON body).
 fn host(port: u16, token: Option<&str>, body: &Value) -> (u16, Value) {
     let body = body.to_string();
@@ -1209,8 +1221,7 @@ async fn a_control_device_may_size_a_session_and_a_watching_one_may_not() {
 /// scrollback copies what `ptyro read --scrollback` prints. Skipped without Node.
 #[test]
 fn the_web_terminal_types_into_a_real_session() {
-    if std::process::Command::new("node").arg("--version").output().is_err() {
-        eprintln!("node not found: skipping the web terminal check");
+    if !node_available() {
         return;
     }
     let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web/test/term.mjs");
@@ -1455,8 +1466,7 @@ async fn the_web_app_asks_the_daemon_and_the_machine() {
 /// the file's comments, undo, and a device without full scope being refused. Skipped without Node.
 #[test]
 fn the_web_settings_panel_logic_and_calls_work() {
-    if std::process::Command::new("node").arg("--version").output().is_err() {
-        eprintln!("node not found: skipping the web settings check");
+    if !node_available() {
         return;
     }
     let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web/test/config.mjs");
@@ -1490,8 +1500,7 @@ fn the_web_settings_panel_logic_and_calls_work() {
 /// (`assets.mjs`). Skipped without Node.
 #[test]
 fn the_web_apps_helpers_and_asset_lists_agree() {
-    if std::process::Command::new("node").arg("--version").output().is_err() {
-        eprintln!("node not found: skipping the web helper checks");
+    if !node_available() {
         return;
     }
     for name in ["kit.mjs", "assets.mjs"] {
@@ -1510,8 +1519,7 @@ fn the_web_apps_helpers_and_asset_lists_agree() {
 /// on, in `web/test/qr.mjs`. Skipped without Node.
 #[test]
 fn the_web_apps_qr_codes_are_well_formed() {
-    if std::process::Command::new("node").arg("--version").output().is_err() {
-        eprintln!("node not found: skipping the QR check");
+    if !node_available() {
         return;
     }
     let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web/test/qr.mjs");

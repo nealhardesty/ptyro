@@ -157,7 +157,7 @@ pub enum GateCmd {
 
 #[derive(Subcommand)]
 pub enum MsgCmd {
-    /// Send a message: TO is a session, @lead, @user, @all, @idle, @<agent> or @run:<id>
+    /// Send a message: TO is a session, @lead, @user, @all, @idle, `@<agent>` or `@run:<id>`
     Send {
         to: String,
         text: String,

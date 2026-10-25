@@ -23,7 +23,7 @@ WEB_STRICT ?= 1
 
 .DEFAULT_GOAL := help
 .PHONY: help rust-install build release install test fmt fmt-check lint deny doc check ci clean tools \
-        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean scratchpad-demo orchestrate-demo changeset-demo verify-claude verify-structured tui-parity parity reset
+        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-check ratchet ratchet-update lock-check msrv sbom installer-check dist-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean scratchpad-demo orchestrate-demo changeset-demo verify-claude verify-structured tui-parity parity reset
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -62,12 +62,27 @@ parity: ## Check every CLI command has a TUI path and a web path, or a waiver (d
 
 tui-parity: parity ## The same as `make parity`
 
-doc: ## Build API docs
-	$(CARGO) doc --workspace --no-deps
+doc: ## Build API docs (a broken link or bad markup fails)
+	RUSTDOCFLAGS="-D warnings" $(CARGO) doc --workspace --no-deps
 
-check: fmt-check lint test smoke ## fmt-check, lint, test and smoke (CI's main job)
+lock-check: ## Fail if Cargo.lock is out of date with the Cargo.toml files
+	$(CARGO) metadata --locked --format-version 1 >/dev/null
 
-ci: check deny web-check fuzz-smoke ## Everything CI runs: check, deny, web-check and fuzz-smoke
+ratchet: ## Fail if a crate has more unwrap()/expect() in non-test code than scripts/unwrap-baseline.txt allows
+	python3 scripts/unwrap-ratchet.py
+
+ratchet-update: ## Write the current unwrap()/expect() counts as the new baseline (they should only go down)
+	python3 scripts/unwrap-ratchet.py --update
+
+# The oldest compiler the workspace claims to build with (`rust-version` in Cargo.toml).
+MSRV := $(shell sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml | head -1).0
+msrv: ## Type-check the workspace with the oldest supported compiler (installs it with rustup)
+	rustup toolchain install $(MSRV) --profile minimal
+	$(CARGO) +$(MSRV) check --workspace --locked
+
+check: fmt-check lint doc lock-check ratchet test smoke ## What CI's main job runs: fmt-check, lint, doc, lock-check, ratchet, test, smoke
+
+ci: check deny web-check msrv fuzz-smoke installer-check ## Everything CI runs: check, deny, web-check, msrv, fuzz-smoke and installer-check
 
 tools: ## Install developer tools (cargo-deny)
 	$(CARGO) install --locked cargo-deny
@@ -187,6 +202,14 @@ changelog: ## Regenerate CHANGELOG.md from git history (tags → sections, commi
 
 homebrew-formula: ## Render dist/ptyro.rb from the release checksums in dist/ (all four platforms)
 	scripts/homebrew.sh
+
+sbom: ## Software bill of materials (CycloneDX) from Cargo.lock: dist/ptyro-<version>.cdx.json
+	python3 scripts/sbom.py
+
+dist-check: ## Install the tarball in dist/ with scripts/install.sh into a temp prefix and run it (after `make dist`)
+	TARGET=$(TRIPLE) scripts/installer-check.sh
+
+installer-check: dist dist-check ## Build this platform's tarball and prove the installer script installs it
 
 # Bundled C (SQLite, zstd, criterion's alloca) would need Apple's SDK, but `cargo check` never
 # links, so a stand-in compiler (scripts/check-cc.sh) lets the whole workspace be checked.

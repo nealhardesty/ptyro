@@ -4,6 +4,7 @@
 //!
 //! The server is on 127.0.0.1, so a minimal HTTP/1.1 client over a plain TCP stream is enough.
 
+use ptyro_core::sync::MutexExt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -43,30 +44,26 @@ pub type Pending = std::collections::HashMap<ptyro_core::SessionId, (String, Str
 impl Daemon {
     pub(crate) fn start_sidecar(self: &Arc<Self>, s: &Arc<Session>, sc: Sidecar) {
         let Sidecar::OpenCode { port, password } = sc;
-        self.sidecars.lock().expect("sidecars").insert(s.id, (port, password.clone()));
+        self.sidecars.locked().insert(s.id, (port, password.clone()));
         let (me, s) = (Arc::clone(self), Arc::clone(s));
         tokio::spawn(async move {
             // The server comes up a moment after the TUI; reconnect while the session lives.
             // A restart reuses the session id with a new server: this loop belongs to the old one
             // once the entry says otherwise, and must not tidy away the new one's.
             let mine = |me: &Daemon| {
-                me.sidecars
-                    .lock()
-                    .expect("sidecars")
-                    .get(&s.id)
-                    .is_some_and(|(p, pw)| *p == port && *pw == password)
+                me.sidecars.locked().get(&s.id).is_some_and(|(p, pw)| *p == port && *pw == password)
             };
             while s.is_live() && mine(&me) {
                 if let Err(e) = me.follow_events(&s, port, &password).await {
                     tracing::debug!(session = %s.id, "opencode events: {e}");
                 }
                 if mine(&me) {
-                    me.sidecar_live.lock().expect("sidecar_live").remove(&s.id);
+                    me.sidecar_live.locked().remove(&s.id);
                 }
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
             if mine(&me) {
-                me.sidecars.lock().expect("sidecars").remove(&s.id);
+                me.sidecars.locked().remove(&s.id);
             }
         });
     }
@@ -89,7 +86,7 @@ impl Daemon {
         if !status.contains(" 200") {
             return Err(std::io::Error::other(format!("server said {}", status.trim())));
         }
-        self.sidecar_live.lock().expect("sidecar_live").insert(s.id);
+        self.sidecar_live.locked().insert(s.id);
         // Headers, then events; chunked framing lines are skipped since they never start with
         // `data:`.
         let mut data = String::new();
@@ -117,14 +114,11 @@ impl Daemon {
             Some("permission.asked" | "permission.updated") => {
                 if let (Some(sid), Some(pid)) = (props["sessionID"].as_str(), props["id"].as_str())
                 {
-                    self.oc_pending
-                        .lock()
-                        .expect("oc_pending")
-                        .insert(s.id, (sid.to_owned(), pid.to_owned()));
+                    self.oc_pending.locked().insert(s.id, (sid.to_owned(), pid.to_owned()));
                 }
             }
             Some("permission.replied") => {
-                self.oc_pending.lock().expect("oc_pending").remove(&s.id);
+                self.oc_pending.locked().remove(&s.id);
             }
             _ => {}
         }
@@ -147,14 +141,12 @@ impl Daemon {
         s: &Arc<Session>,
         d: Decision,
     ) -> Result<(), Error> {
-        let (port, password) =
-            self.sidecars.lock().expect("sidecars").get(&s.id).cloned().ok_or_else(|| {
-                Error::new(ErrorCode::Unsupported, "OpenCode's server isn't connected")
-            })?;
+        let (port, password) = self.sidecars.locked().get(&s.id).cloned().ok_or_else(|| {
+            Error::new(ErrorCode::Unsupported, "OpenCode's server isn't connected")
+        })?;
         let (sid, pid) = self
             .oc_pending
-            .lock()
-            .expect("oc_pending")
+            .locked()
             .get(&s.id)
             .cloned()
             .ok_or_else(|| Error::conflict("no OpenCode permission is pending"))?;

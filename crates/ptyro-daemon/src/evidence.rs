@@ -4,6 +4,7 @@
 //! clustered, diff size and time. An LLM judge may add a score, but only as advice. The ranking
 //! is lexicographic and always shows its reasons.
 
+use ptyro_core::sync::MutexExt;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -580,7 +581,7 @@ impl Daemon {
                 .and_then(|id| self.resolve(id).ok())
                 .and_then(|sess| {
                     let st = sess.structured.as_ref()?;
-                    Some(crate::structured::tool_use(st.chat.lock().expect("chat").tool_summary()))
+                    Some(crate::structured::tool_use(st.chat.locked().tool_summary()))
                 })
                 .or_else(|| {
                     ss.outputs.get("tools").and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -936,7 +937,7 @@ impl Daemon {
     }
 
     pub(crate) fn run_recipe_pub(&self, run: &str) -> Option<Arc<ptyro_run::Recipe>> {
-        self.runs.lock().expect("runs").get(run).and_then(|e| e.recipe.clone())
+        self.runs.locked().get(run).and_then(|e| e.recipe.clone())
     }
 }
 

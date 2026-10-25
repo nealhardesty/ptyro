@@ -3,6 +3,7 @@
 //! message is encrypted for the browser (RFC 8291, `aes128gcm` from RFC 8188), so the push
 //! service only ever relays ciphertext. Delivery goes through curl, like the other sinks.
 
+use ptyro_core::sync::MutexExt;
 use std::sync::Arc;
 
 use aes_gcm::aead::{Aead, KeyInit};
@@ -166,7 +167,7 @@ impl Payload {
 
 impl Daemon {
     pub(crate) fn vapid(&self) -> Result<Arc<Vapid>, Error> {
-        let mut v = self.vapid.lock().expect("vapid");
+        let mut v = self.vapid.locked();
         if let Some(k) = v.as_ref() {
             return Ok(Arc::clone(k));
         }
@@ -183,8 +184,7 @@ impl Daemon {
     pub(crate) async fn push_all(&self, device: Option<u64>, p: Payload) -> Vec<String> {
         let subs: Vec<(String, u64, PushSub)> = self
             .devices
-            .lock()
-            .expect("devices")
+            .locked()
             .iter()
             .filter(|d| device.is_none_or(|id| u64::from_str_radix(&d.id, 16).ok() == Some(id)))
             .flat_map(|d| {
@@ -218,7 +218,7 @@ impl Daemon {
             }
         }
         if !gone.is_empty() {
-            for d in self.devices.lock().expect("devices").iter_mut() {
+            for d in self.devices.locked().iter_mut() {
                 d.push.retain(|s| !gone.contains(&s.endpoint));
             }
             self.save_devices();

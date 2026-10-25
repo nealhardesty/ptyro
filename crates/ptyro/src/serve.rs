@@ -19,6 +19,7 @@
 //! own. `X-Forwarded-For` counts only behind a proxy we trust (`[remote] trusted_proxy`, or
 //! `tailscale serve` fronting our port).
 
+use ptyro_core::sync::MutexExt;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
@@ -374,7 +375,7 @@ pub async fn run(
                     }
                 };
                 match fresh {
-                    Ok(c) => *current.lock().expect("tls") = c,
+                    Ok(c) => *current.locked() = c,
                     Err(e) => tracing::warn!("renewing the certificate: {}", e.message),
                 }
             }
@@ -419,9 +420,8 @@ pub async fn run(
             tracing::debug!(%peer, "too many connections from one address");
             continue;
         };
-        let tls = acceptor
-            .as_ref()
-            .map(|c| tokio_rustls::TlsAcceptor::from(Arc::clone(&c.lock().expect("tls"))));
+        let tls =
+            acceptor.as_ref().map(|c| tokio_rustls::TlsAcceptor::from(Arc::clone(&c.locked())));
         tokio::spawn(async move {
             let _open = open;
             let svc = service_fn(move |req| handle(req, Arc::clone(&st), peer, Arc::clone(&slot)));
@@ -1129,13 +1129,13 @@ mod tests {
         assert!(st.begin(ip).is_none());
         assert!(st.begin("5.6.7.8".parse().unwrap()).is_some());
         drop(held);
-        assert!(st.pending.lock().unwrap().is_empty());
+        assert!(st.pending.locked().is_empty());
         let old: IpAddr = "9.9.9.9".parse().unwrap();
         // (Instant can't go back further than boot.)
         if let Some(then) = Instant::now().checked_sub(FAILURE_WINDOW) {
-            st.failures.lock().unwrap().insert(old, (3, then));
+            st.failures.locked().insert(old, (3, then));
             st.failed(ip);
-            assert!(!st.failures.lock().unwrap().contains_key(&old));
+            assert!(!st.failures.locked().contains_key(&old));
         }
     }
 
@@ -1200,7 +1200,7 @@ mod tests {
         assert!(st.open_from(ip).is_none());
         assert!(st.open_from("5.6.7.8".parse().unwrap()).is_some(), "others still get in");
         drop(held);
-        assert!(st.open.lock().unwrap().len() <= 1);
+        assert!(st.open.locked().len() <= 1);
         assert!(st.open_from(ip).is_some(), "places come back");
         // Logins waiting on the daemon are capped in all, whoever they come from.
         let mut all = Vec::new();

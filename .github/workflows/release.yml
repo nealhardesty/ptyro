@@ -1,6 +1,10 @@
-# ROADMAP M8.8. Push a tag `vX.Y.Z` (matching Cargo.toml's version) to build every platform,
-# publish a GitHub release with checksums and changelog notes, and update the Homebrew tap.
-# Like CI, it calls make targets only.
+# ROADMAP M8.8, H2.2. Push a tag `vX.Y.Z` (matching Cargo.toml's version) to build every platform,
+# publish a GitHub release with checksums, a software bill of materials, signed build provenance
+# and changelog notes, and update the Homebrew tap. Like CI, it calls make targets only.
+#
+# Nothing is published unless, for the tagged commit: the tag is on master and matches the crate
+# version; the checks pass on Linux (x86_64 and arm64) and macOS; licenses, advisories and the
+# web build are clean; and every platform's tarball installs through scripts/install.sh.
 name: release
 
 on:
@@ -12,31 +16,64 @@ on:
         description: "Existing tag to (re)build, e.g. v0.1.0"
         required: true
 
-# Read-only by default; only `publish` may write (it creates the release). The build jobs run
-# every dependency's build scripts, so they never hold a write token.
+# Read-only by default; only `publish` may write (it creates the release and the attestations).
+# The build jobs run every dependency's build scripts, so they never hold a write token.
 permissions:
   contents: read
 
 env:
   CARGO_TERM_COLOR: always
+  PTYRO_REQUIRE_NODE: "1"
   TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
-  check:
+  # Is this a release anyone could have made from master?
+  gate:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { ref: "${{ env.TAG }}", fetch-depth: 0, persist-credentials: false }
+      - name: the tag is on master and is the crate's version
+        run: |
+          git fetch --quiet origin master
+          git merge-base --is-ancestor HEAD origin/master || { echo "$TAG is not on master: merge it first"; exit 1; }
+          want="v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          [ "$TAG" = "$want" ] || { echo "tag $TAG doesn't match the crate version ($want)"; exit 1; }
+
+  check:
+    needs: gate
+    name: check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { ref: "${{ env.TAG }}", persist-credentials: false }
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: "22" }
       - run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: make check
-      # The binary embeds web/dist: it must match web/src.
+
+  supply:
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { ref: "${{ env.TAG }}", persist-credentials: false }
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: "22" }
-      - run: make web-check
+      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # The binary embeds web/dist: it must match web/src. Licenses, advisories, yanked crates.
+      - run: make tools deny web-check msrv fuzz-smoke FUZZ_SECONDS=20
 
   build:
-    needs: check
+    needs: [check, supply]
     name: build (${{ matrix.triple }})
     strategy:
       fail-fast: false
@@ -48,6 +85,7 @@ jobs:
           # macos-13 is retired; macos-15-intel is the supported x86_64 image.
           - { os: macos-15-intel, triple: x86_64-apple-darwin }
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { ref: "${{ env.TAG }}", fetch-depth: 0, persist-credentials: false }
@@ -55,6 +93,8 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with: { key: "${{ matrix.triple }}" }
       - run: make changelog dist TRIPLE=${{ matrix.triple }}
+      # The tarball must install and run through the installer users will use, on its own platform.
+      - run: make dist-check TRIPLE=${{ matrix.triple }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-${{ matrix.triple }}
@@ -66,22 +106,33 @@ jobs:
     # Set the tap secret on this environment, restricted to `v*` tags (README, Development).
     environment: release
     permissions:
-      contents: write
+      contents: write        # the release
+      id-token: write        # the signed provenance
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { ref: "${{ env.TAG }}", fetch-depth: 0, persist-credentials: false }
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: { path: dist, pattern: "dist-*", merge-multiple: true }
-      - name: checksums and notes
+      - name: checksums, bill of materials and notes
         run: |
           (cd dist && cat *.sha256 > SHA256SUMS && sha256sum -c SHA256SUMS)
+          make sbom
           scripts/changelog.sh --notes "$TAG" > notes.md
           make homebrew-formula VERSION="${TAG#v}"
+      # Who built it, from what: anyone can check a download against these
+      # (`gh attestation verify <tarball> --repo nealhardesty/ptyro`).
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.cdx.json
+            dist/SHA256SUMS
       - name: GitHub release
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "ptyro $TAG" --notes-file notes.md --verify-tag
-          gh release upload "$TAG" dist/*.tar.gz dist/SHA256SUMS dist/ptyro.rb --clobber
+          gh release upload "$TAG" dist/*.tar.gz dist/*.cdx.json dist/SHA256SUMS dist/ptyro.rb --clobber
       # Needs a secret HOMEBREW_TAP_TOKEN on the `release` environment: a fine-grained token with
       # contents: write on nealhardesty/homebrew-ptyro only.
       - name: Homebrew tap
