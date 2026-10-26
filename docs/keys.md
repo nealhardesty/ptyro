@@ -1,3 +1,6 @@
+<img src="logos/ptyro-icon.png" alt="ptyro" width="72" align="right">
+
+
 # Keys
 
 Everything in the TUI starts with the **prefix**: `Ctrl-Q` or `Ctrl-Space`, whichever you like

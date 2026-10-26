@@ -1,3 +1,6 @@
+<img src="docs/logos/ptyro-icon.png" alt="ptyro" width="72" align="right">
+
+
 # ptyro — Specification
 
 > **ptyro** (pronounced *TIE-roh*, from **PTY**) is a terminal-native agent development environment:
@@ -4785,7 +4788,7 @@ embedded with `include_bytes!`, with no dependencies or third-party requests.
   1:1, at the session's own size.
 - **Input:** a reply box (`SendText`), keys, a permission card (with "exact" when the prompt is
   held), and a chat view for structured sessions.
-- **PWA:** a manifest, icons (rendered by `scripts/icons.py`), and a service worker with an
+- **PWA:** a manifest, icons (rendered from `docs/logos/ptyro-icon.svg` by `make icons`, including a separate maskable one), and a service worker with an
   offline shell, push display, and Allow/Deny notification actions answered through
   `/api/request` with the token from IndexedDB.
 - **Pairing:** `ptyro pair` prints a QR code (`qrcode`, Dense1x2) for `<base>/#pair=<code>`. The

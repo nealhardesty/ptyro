@@ -94,6 +94,11 @@ const ASSETS: &[(&str, &str, &[u8])] = &[
     ("/icon-192.png", "image/png", include_bytes!("../../../web/dist/icon-192.png")),
     ("/icon-512.png", "image/png", include_bytes!("../../../web/dist/icon-512.png")),
     (
+        "/icon-maskable-512.png",
+        "image/png",
+        include_bytes!("../../../web/dist/icon-maskable-512.png"),
+    ),
+    (
         "/apple-touch-icon.png",
         "image/png",
         include_bytes!("../../../web/dist/apple-touch-icon.png"),

@@ -1,3 +1,6 @@
+<img src="logos/ptyro-icon.png" alt="ptyro" width="72" align="right">
+
+
 # Scripting ptyro
 
 Everything the TUI does, a script can do with `ptyro` commands, and the TUI shows it live

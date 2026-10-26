@@ -1,3 +1,6 @@
+<img src="logos/ptyro-icon.png" alt="ptyro" width="72" align="right">
+
+
 # Backing up and uninstalling
 
 `ptyro backup` saves ptyro's own state; `ptyro uninstall` takes ptyro off the computer. Both say

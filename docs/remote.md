@@ -1,3 +1,6 @@
+<img src="logos/ptyro-icon.png" alt="ptyro" width="72" align="right">
+
+
 # Remote access
 
 Check on your agents and steer them from another machine or your phone (SPEC §16, ROADMAP M9).

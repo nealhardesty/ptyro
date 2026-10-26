@@ -169,7 +169,9 @@ TSC ?= npx -y -p typescript@5.9.3 tsc
 
 web: ## Build the web app (web/src → web/dist, embedded by `ptyro serve`; needs Node for tsc)
 	cd web && $(TSC) -p tsconfig.app.json && $(TSC) -p tsconfig.sw.json
-	python3 -I scripts/icons.py web/dist
+
+icons: ## Render the web app's favicon, PWA and apple-touch icons from docs/logos/ptyro-icon.svg (needs rsvg-convert)
+	scripts/icons.sh
 
 web-test: ## The web app's logic tests that need no daemon (needs Node)
 	node web/test/config.mjs units

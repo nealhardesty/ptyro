@@ -1,3 +1,6 @@
+<img src="logos/ptyro-icon.png" alt="ptyro" width="72" align="right">
+
+
 # Fixtures
 
 Real captures from real programs keep the emulator, status engine and adapters honest (SPEC §18.2).

@@ -1,3 +1,6 @@
+<img src="logos/ptyro-icon.png" alt="ptyro" width="72" align="right">
+
+
 # Compatibility matrix
 
 How well programs run inside a ptyro pane (SPEC §18.2). Update it whenever you test something, with
