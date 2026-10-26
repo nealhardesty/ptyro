@@ -375,7 +375,15 @@ async fn shell_integration_side_channels_reach_session_info() {
     .to_vec();
     let info = spawn(&c, argv, TermSize::new(40, 5)).await;
     d.wait_for_text(&c, &info.name, "ok", WAIT).await.unwrap();
-    let s = get(&c, &info.name).await;
+    // (The shell's own directory is read on a timer and can briefly stand in for the OSC 7 one.)
+    let mut s = get(&c, &info.name).await;
+    for _ in 0..100 {
+        if s.live_cwd.as_deref() == Some(std::path::Path::new("/tmp/x y")) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        s = get(&c, &info.name).await;
+    }
     assert_eq!(s.live_cwd.as_deref(), Some(std::path::Path::new("/tmp/x y")));
     assert_eq!(s.progress.map(|p| (p.state, p.percent)), Some((1, Some(40))));
     assert_eq!(s.last_command_exit, Some(3));

@@ -43,6 +43,18 @@ fn serve(d: &TempDaemon, env: &[(&str, &str)]) -> Serve {
 
 /// A raw request → (status, the whole response as text).
 fn http(port: u16, req: &str) -> (u16, String) {
+    // A server that refuses before reading the body can reset the connection under the reply
+    // (a loaded Linux runner does); that read shows as no status at all, so ask again.
+    for _ in 0..4 {
+        let r = http_once(port, req);
+        if r.0 != 0 {
+            return r;
+        }
+    }
+    http_once(port, req)
+}
+
+fn http_once(port: u16, req: &str) -> (u16, String) {
     let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
     s.write_all(req.as_bytes()).unwrap();
