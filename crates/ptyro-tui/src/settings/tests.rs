@@ -81,6 +81,8 @@ impl T {
             Row::Setting(pr, i) => Some(self.p.entry(*pr, *i).key.clone()),
             Row::Member { path, name, .. } => Some(format!("{path}.{name}")),
             Row::Binding { path, name, .. } => Some(format!("{path}.{name}")),
+            Row::Key(b) => Some(format!("keys.{}", b.name)),
+            Row::AddKey(t) => Some(format!("+keys:{t}")),
             Row::Add { path, .. } => Some(format!("+{path}")),
             _ => None,
         }
@@ -100,10 +102,10 @@ impl T {
 
 #[test]
 fn it_opens_on_the_first_section_and_lists_its_settings_with_where_they_come_from() {
-    let mut t = T::new("[ui]\ntheme = \"ptyro-light\"\n");
+    let mut t = T::new("[ui]\nprefix = \"C-a\"\n");
     assert_eq!(t.p.section().id, "interface");
     t.press("<Enter>");
-    assert_eq!(t.selected().as_deref(), Some("ui.theme"));
+    assert_eq!(t.selected().as_deref(), Some("ui.prefix"));
     let rows = t.p.rows();
     let Row::Setting(pr, i) = rows[0] else { panic!() };
     let e = t.p.entry(pr, i);
@@ -245,7 +247,8 @@ fn an_agent_is_added_edited_renamed_and_removed_without_touching_the_file() {
     assert_eq!(t.p.section().id, "agents");
     t.press("<Enter>");
     assert_eq!(t.selected().as_deref(), Some("+agents"));
-    t.press("<Enter>aider<Enter>");
+    // (It asks which program it runs; ⏎ skips that.)
+    t.press("<Enter>aider<Enter><Enter>");
     assert!(t.file().contains("[agents.aider]") && t.file().contains("# keep me"), "{}", t.file());
     assert_eq!(
         t.p.drill.as_ref().map(|(p, n)| (*p, n.as_str())),
@@ -273,23 +276,194 @@ fn an_agent_is_added_edited_renamed_and_removed_without_touching_the_file() {
 #[test]
 fn a_key_binding_is_made_by_pressing_the_key_and_picking_what_it_runs() {
     let mut t = T::new("");
-    t.p.jump("keys.x");
+    t.p.jump("keys.y");
     // Jumping to a binding that isn't there lands on the section.
     assert_eq!(t.p.section().id, "keys");
     t.press("n");
     assert!(matches!(t.p.modal, Some(Modal::Capture { .. })));
-    t.press("x");
+    t.press("y");
     let Some(Modal::Pick(p)) = &t.p.modal else { panic!("an action list") };
     assert!(p.items.len() > 100 && p.search);
     t.press("session.next");
     t.press("<Enter>");
     let c = Config::parse(&t.file()).unwrap();
-    assert_eq!(c.keys["x"], "session.next", "{}", t.file());
+    assert_eq!(c.keys["y"], "session.next", "{}", t.file());
     // It shows, and ⏎ changes what it runs; d unbinds it.
-    t.p.jump("keys.x");
-    assert_eq!(t.selected().as_deref(), Some("keys.x"));
+    t.p.jump("keys.y");
+    assert_eq!(t.selected().as_deref(), Some("keys.y"));
     t.press("d");
     assert!(Config::parse(&t.file()).unwrap().keys.is_empty());
+}
+
+fn key_row(t: &T, name: &str) -> Binding {
+    t.p.uview
+        .bindings
+        .iter()
+        .find(|b| b.name == name)
+        .unwrap_or_else(|| panic!("no key {name}"))
+        .clone()
+}
+
+#[test]
+fn the_key_bindings_section_lists_every_default_key_by_when_it_works() {
+    let t = T::new("");
+    let mut t = t;
+    t.p.jump("keys.d");
+    assert_eq!(t.selected().as_deref(), Some("keys.d"));
+    let rows = t.p.rows();
+    let titles: Vec<&str> = rows
+        .iter()
+        .filter_map(|r| match r {
+            Row::Title(s) if !s.is_empty() => Some(s.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(titles.iter().any(|s| s.starts_with("After the prefix key (C-q")), "{titles:?}");
+    assert!(titles.iter().any(|s| s.starts_with("In the sidebar")), "{titles:?}");
+    assert!(titles.iter().any(|s| s.starts_with("Anywhere")), "{titles:?}");
+    let keys: Vec<&Binding> =
+        rows.iter().filter_map(|r| if let Row::Key(b) = r { Some(b) } else { None }).collect();
+    assert_eq!(keys.len(), keymap::default_keys().len() - 2 * 8, "the digits are one row each");
+    let c = keys.iter().find(|b| b.name == "C").unwrap();
+    assert_eq!((c.action.as_str(), c.standing), ("config.panel", Standing::Default));
+    assert!(c.help.starts_with("Settings"), "{}", c.help);
+    assert!(rows.iter().any(|r| matches!(r, Row::AddKey("global"))));
+}
+
+#[test]
+fn searching_finds_a_key_by_what_it_does() {
+    let mut t = T::new("");
+    for q in ["detach", "settings", "shortcut"] {
+        t.press(&format!("/{q}"));
+        let found: Vec<String> =
+            t.p.rows()
+                .iter()
+                .filter_map(|r| if let Row::Key(b) = r { Some(b.action.clone()) } else { None })
+                .collect();
+        match q {
+            "detach" => assert!(found.contains(&"app.detach".to_owned()), "{found:?}"),
+            "settings" => assert!(found.contains(&"config.panel".to_owned()), "{found:?}"),
+            _ => assert!(found.len() > 50),
+        }
+        t.press("<Esc>");
+    }
+    // Choosing the hit goes to the key.
+    t.press("/detach<Enter>");
+    assert!(t.selected().is_some_and(|s| s.starts_with("keys.")), "{:?}", t.selected());
+    assert_eq!(t.p.section().id, "keys");
+}
+
+#[test]
+fn a_default_key_is_unbound_restored_and_given_another_action_with_one_undo_each() {
+    let mut t = T::new("# mine\n[ui]\nmouse = false # keep\n");
+    t.p.jump("keys.d");
+    t.press("d");
+    assert_eq!(Config::parse(&t.file()).unwrap().keys["d"], "none", "{}", t.file());
+    assert!(t.file().contains("# mine") && t.file().contains("# keep"));
+    assert_eq!(key_row(&t, "d").standing, Standing::Unbound);
+    assert_eq!(t.selected().as_deref(), Some("keys.d"), "the cursor stays on the key");
+    // An unbound default stays on the list; r brings it back.
+    t.press("r");
+    assert!(Config::parse(&t.file()).unwrap().keys.is_empty(), "{}", t.file());
+    assert_eq!(key_row(&t, "d").standing, Standing::Default);
+    // ⏎ is a menu: change what it runs.
+    t.press("<Enter>");
+    let Some(Modal::Pick(p)) = &t.p.modal else { panic!("a menu") };
+    let values: Vec<&str> = p.items.iter().map(|(v, _)| v.as_str()).collect();
+    assert_eq!(values, ["key", "action", "unbind"], "nothing to reset on a default");
+    t.press("<Down><Enter>");
+    t.press("session.next<Enter>");
+    let b = key_row(&t, "d");
+    assert_eq!((b.standing, b.action.as_str()), (Standing::Changed, "session.next"));
+    assert_eq!(
+        t.p.uview.bindings.iter().filter(|b| b.key == "d" && b.table == "prefix").count(),
+        1
+    );
+    // Reset, from the menu this time.
+    t.press("<Enter>");
+    let Some(Modal::Pick(p)) = &t.p.modal else { panic!("a menu") };
+    assert!(p.items.iter().any(|(v, l)| v == "reset" && l.contains("Detach")), "{:?}", p.items);
+    t.press("<Down><Down><Down><Enter>");
+    assert!(Config::parse(&t.file()).unwrap().keys.is_empty(), "{}", t.file());
+    // Undo works like any other change.
+    t.press("u");
+    assert_eq!(key_row(&t, "d").standing, Standing::Changed);
+    t.press("uuu");
+    assert_eq!(t.file(), "# mine\n[ui]\nmouse = false # keep\n");
+}
+
+#[test]
+fn changing_a_key_moves_the_binding_and_a_taken_key_asks_before_swapping() {
+    let mut t = T::new("");
+    t.p.jump("keys.d");
+    // A free key: the action moves, the old key is off.
+    t.press("<Enter><Enter>");
+    assert!(matches!(t.p.modal, Some(Modal::Capture { .. })));
+    t.press("y");
+    let keys = Config::parse(&t.file()).unwrap().keys;
+    assert_eq!((keys["y"].as_str(), keys["d"].as_str()), ("app.detach", "none"), "{}", t.file());
+    assert_eq!(t.selected().as_deref(), Some("keys.y"));
+    // Putting it back is a reset in the file.
+    t.press("<Enter><Enter>d");
+    assert!(Config::parse(&t.file()).unwrap().keys.is_empty(), "{}", t.file());
+    // A taken key: the person is asked, naming what is there; n changes nothing.
+    t.p.jump("keys.d");
+    t.press("<Enter><Enter>n");
+    let Some(Modal::Confirm { text, .. }) = &t.p.modal else {
+        panic!("a question: {:?}", t.p.modal)
+    };
+    assert!(text.contains("already runs") && text.contains("Swap them"), "{text}");
+    t.press("n");
+    assert!(t.file().is_empty() || Config::parse(&t.file()).unwrap().keys.is_empty());
+    // y swaps: n runs detach and d runs what n did, in one undo.
+    t.p.jump("keys.d");
+    t.press("<Enter><Enter>ny");
+    let keys = Config::parse(&t.file()).unwrap().keys;
+    assert_eq!(
+        (keys["n"].as_str(), keys["d"].as_str()),
+        ("app.detach", "session.new"),
+        "{}",
+        t.file()
+    );
+    t.press("u");
+    assert!(Config::parse(&t.file()).unwrap().keys.is_empty(), "{}", t.file());
+}
+
+#[test]
+fn adding_a_key_that_is_taken_warns_and_a_nav_key_is_added_in_its_own_group() {
+    let mut t = T::new("");
+    t.p.jump("keys.d");
+    t.press("n");
+    t.press("C");
+    let Some(Modal::Confirm { text, .. }) = &t.p.modal else { panic!("a question") };
+    assert!(text.contains("Settings"), "names what is there: {text}");
+    t.press("<Esc>");
+    assert!(t.p.modal.is_none() && t.file().is_empty());
+    // On a sidebar key, n adds a sidebar key.
+    t.p.jump("keys.nav:j");
+    t.press("n");
+    t.press("y");
+    t.press("session.next<Enter>");
+    assert_eq!(Config::parse(&t.file()).unwrap().keys["nav:y"], "session.next", "{}", t.file());
+    assert_eq!(key_row(&t, "nav:y").standing, Standing::Yours);
+}
+
+#[test]
+fn the_nine_session_digits_are_one_row_that_says_how_to_change_them() {
+    let mut t = T::new("");
+    t.p.jump("keys.d");
+    let rows = t.p.rows();
+    let fixed: Vec<&Binding> = rows
+        .iter()
+        .filter_map(|r| if let Row::Key(b) = r { Some(b).filter(|b| b.fixed) } else { None })
+        .collect();
+    assert_eq!(fixed.len(), 2, "after the prefix and in the sidebar");
+    let at = rows.iter().position(|r| matches!(r, Row::Key(b) if b.fixed)).unwrap();
+    t.p.cursor = at;
+    t.press("<Enter>");
+    assert!(t.p.modal.is_none() && t.note().contains("session.focus"), "{}", t.note());
+    t.press("d");
+    assert!(t.file().is_empty());
 }
 
 #[test]
@@ -480,4 +654,90 @@ fn escape_walks_back_out_and_the_mouse_picks_rows() {
         50,
     );
     assert_eq!(acts, [Action::Close]);
+}
+
+#[test]
+fn the_themes_section_picks_the_theme_and_a_new_theme_starts_from_one_you_choose() {
+    let mut t = T::new("");
+    t.go("ui.theme");
+    assert_eq!(t.p.section().id, "themes");
+    t.press("<Enter>");
+    assert!(matches!(t.p.modal, Some(Modal::Pick(_))));
+    t.press("<Esc>");
+    let col = settings::collection("themes").unwrap();
+    t.p.add(col);
+    for c in "mine".chars() {
+        t.press(&c.to_string());
+    }
+    t.press("<Enter>");
+    let Some(Modal::Pick(p)) = &t.p.modal else { panic!("no base picker") };
+    assert!(p.title.contains("mine") && p.items.iter().any(|(v, _)| v == "ptyro-light"));
+    t.press("j");
+    t.press("<Enter>");
+    assert!(
+        t.file().contains("[themes.mine]") && t.file().contains("base = \"ptyro-light\""),
+        "{}",
+        t.file()
+    );
+}
+
+#[test]
+fn a_new_agent_asks_which_program_it_runs_and_a_new_theme_is_put_in_use() {
+    let mut t = T::new("");
+    t.p.add(settings::collection("agents").unwrap());
+    t.press("pair<Enter>");
+    assert!(
+        matches!(&t.p.modal, Some(Modal::Input { hint, .. }) if hint.contains("⏎ to run it as"))
+    );
+    t.press("aider --model sonnet<Enter>");
+    let c = Config::parse(&t.file()).unwrap();
+    assert_eq!(c.agents["pair"].command.as_ref().unwrap().argv(), ["aider", "--model", "sonnet"]);
+
+    t.p.add(settings::collection("themes").unwrap());
+    t.press("mine<Enter><Enter>");
+    assert!(t.file().contains("theme = \"mine\""), "{}", t.file());
+    assert!(t.note().contains("now in use"), "{}", t.note());
+    // Removing the theme in use says so, and the default comes back instead of a broken config.
+    t.p.drill = None;
+    t.p.ask_remove("themes", "mine");
+    assert!(matches!(&t.p.modal, Some(Modal::Confirm { text, .. }) if text.contains("in use")));
+    t.press("y");
+    assert!(!t.file().contains("mine") && !t.file().contains("theme ="), "{}", t.file());
+    assert!(t.note().contains("default theme is back"), "{}", t.note());
+}
+
+#[test]
+fn an_empty_group_says_what_it_is_for_and_numbers_say_what_they_count() {
+    let mut t = T::new("");
+    t.go("ui.sidebar_width");
+    let Some(Row::Setting(p, i)) = t.p.rows().get(t.p.cursor).cloned() else { panic!() };
+    assert_eq!(t.p.entry(p, i).pretty(), "30 columns");
+    assert_eq!(label_of(t.p.entry(p, i), false, false), "sidebar width");
+    let agents = t.p.sections.iter().position(|s| s.id == "agents").unwrap();
+    t.p.set_section(agents);
+    let hints: Vec<String> =
+        t.p.rows()
+            .into_iter()
+            .filter_map(|r| if let Row::Hint(h) = r { Some(h) } else { None })
+            .collect();
+    assert!(hints.join(" ").contains("work as they are"), "{hints:?}");
+}
+
+#[test]
+fn search_finds_a_setting_by_the_words_people_type() {
+    let mut t = T::new("");
+    for word in ["color", "notify", "shortcut"] {
+        t.p.search = Some(LineEdit::with(word));
+        let n = t.p.rows().iter().filter(|r| matches!(r, Row::Setting(..))).count();
+        assert!(n > 0, "{word} finds something");
+    }
+    t.p.search = Some(LineEdit::with("sound"));
+    let keys: Vec<String> =
+        t.p.rows()
+            .iter()
+            .filter_map(|r| {
+                if let Row::Setting(p, i) = r { Some(t.p.entry(*p, *i).key.clone()) } else { None }
+            })
+            .collect();
+    assert!(keys.contains(&"notifications.channels".to_owned()), "{keys:?}");
 }

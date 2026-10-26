@@ -152,7 +152,7 @@ A structured session's transcript, oldest first. `ChatItem` is `{id, at_ms, rev,
 - `ptyro ws ls --json` → `[{id, name, profile, notify, projects: [project id], created_ms}]`
 - `ptyro wt ls --json`, `wt status W --json` → Worktree:
   - fields: `{id, project, project_slug, name, path, branch?, base?, is_root, state, locked, profile?, ports?: {base, count}, created_ms, last_used_ms?, removed_ms?, status?, title?}` (`title`: what it's for, for people to read);
-  - `status` is `{head, branch, upstream?, ahead, behind, base_ahead, base_behind, staged, modified, untracked, conflicts, insertions, deletions, subject, at_ms}`.
+  - `status` is `{head, branch, upstream?, ahead, behind, base_ahead, base_behind, staged, modified, untracked, conflicts, insertions, deletions, subject, unpushed?, pushed?, at_ms}`. `unpushed` (commits on no remote, for a branch with no upstream) and `pushed` (committed work, all of it pushed, nothing uncommitted) are missing when they do not apply (UX2.2).
 - `ptyro wt new … --json` → `{info: Worktree, setup?: Session, agent?: Session, agent_pending, untrusted?, notes}`
 - `ptyro gc --json` → `[{worktree: Worktree, reasons: [string]}]`
 - `ptyro profile ls --json` → `[{name, label, color?, defined, isolate, dirs: {agent: path}, git_email?, matches: {remotes, paths}, vars}]`
@@ -261,7 +261,11 @@ Pinned by `crates/ptyro/tests/m11.rs`.
 
 ## Remote (M9)
 
-- `ptyro pair NAME --json` → `{device: DeviceInfo, url, expires_ms}`. `url` carries a
+- `ptyro pair NAME --json` → `{device: DeviceInfo, url, expires_ms, ca, machine, warning, replaces, notes}`.
+  `url` always has its port. `warning` is the plain-words warning when the default scope (`full`)
+  was used, null when `--scope` was named; `replaces` is the `DeviceInfo` of the existing device
+  of that name that opening the link replaces (null otherwise); `notes` are fixes for a `--url`
+  whose port doesn't match; `machine` is the computer's short name. `url` carries a
   one-time pairing code in its fragment (`#pair=ptp_…`), not the token: the web app trades it
   for the token (`POST /api/pair` on `ptyro serve`) once, before `expires_ms` (10 minutes).
   `device.pending` is true until then.
@@ -272,19 +276,24 @@ Pinned by `crates/ptyro/tests/m11.rs`.
 
 ## Scratchpad (NOTE1)
 
-- `ptyro scratchpad cat --json`, `scratchpad add --json` → `{path, rev, text, open, done}`: `rev` is
-  the first 12 hex digits of the text's SHA-256, `open` and `done` count `- [ ]` and `- [x]` items.
+- `ptyro scratchpad cat --json`, `scratchpad add --json` → `{pad?, name, path, rev, text, open,
+  done}`: `rev` is the first 12 hex digits of the text's SHA-256, `open` and `done` count `- [ ]`
+  and `- [x]` items. `name` is `everywhere` or the project's slug; `pad` is `{"project": "<id>"}`
+  for a project's pad and absent for the global one (which pad a command uses: `ptyro scratchpad
+  --help`).
 - `ptyro scratchpad todo --json` → `{rev, items: [Item]}`; `Item`: `{line, done, text, section?, at?,
   whence?, by?, worktree?, pr?}`. `line` is 1-based; `at` is `2026-10-24 14:02` from the stamp;
   `whence` the worktree or directory it was added in; `by` the agent that added it; `worktree`
   the `[wt:…]` tag; `pr` the `(#N)` that finished it.
 - `ptyro scratchpad log --json` → `[{rev, at_ms, bytes, lines}]`, newest first.
-- `ptyro scratchpad --pane --json` → a `Session` (the editor; `pad: true`).
+- `ptyro scratchpad --pane --json` → a `Session` (the editor; `pad: true`, and `pad_project` with the
+  project's id when it edits a project's pad).
 
 ## Setup, config and the daemon
 
 - `ptyro doctor --json`, `ptyro profile doctor --json` → `[{section, name, level, text}]`.
   `level` is `ok`, `note`, `warn` or `problem`; any `problem` makes the exit code 1.
+- `ptyro about --json` → `{version, protocol, repository, issues, license, build: {commit?, date?, target}, exe?, system, places: [{name, path, exists}], daemon: {running, version?, protocol?, pid?, started_ms?, same?, fix?}, web?: {wanted, up, url?, text: [string]}, tools: [{name, kind, found, text}], report}`. `report` is the whole thing as text, for a bug report; `daemon.same` is `false`, with a `fix`, when the daemon is another version than this ptyro.
 - `ptyro daemon status --json` → `{version, proto: {major, minor}, pid, started_ms, sessions, live_sessions, clients, socket, log_dir, generation, upgraded_ms, rolled_back, metrics}`
   - `generation`: live upgrades since the daemon started; `upgraded_ms`: when the last one happened (or `null`); `rolled_back`: the last upgrade was refused by the new binary and rolled back.
   - `metrics`: `{rss_kib, open_fds, tasks_alive, loop_lag_ms_max, loop_lag_ms_p99, pty_readers, bytes_read, frames_sent, crashes, scrollback_bytes, sessions: [[name, bytes]]}`. Event-loop lag covers the last minute; the totals carry across upgrades.

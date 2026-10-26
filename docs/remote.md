@@ -159,6 +159,7 @@ gets `421`. That stops DNS rebinding: a web page whose own name is made to resol
 
 ```bash
 ptyro pair phone                 # a one-time QR code; scan it with the phone's camera
+                                 # (full control: it warns you; --scope approve for less)
 ptyro pair tablet --scope control
 ptyro devices                    # what's paired, last seen, from where, push on/off
 ptyro devices revoke 3f9a1c2b7e04  # the token stops working at once; open connections close
@@ -180,14 +181,23 @@ wasn't your phone, revoke it. Until then, `ptyro devices` lists the device as `u
 Tokens are 256 random bits; the daemon keeps only their SHA-256 (and the code's, until it is
 used).
 
+**The link always has its port** (`https://192.168.1.9:7091/#pair=…`, `http://[::1]:7091/…`,
+`https://box.tail1234.ts.net:443/…`), never `0.0.0.0`. If `--url` names a port ptyro isn't
+listening on, `ptyro pair` says so and prints the `--url` that works.
+
+**Pairing a name again replaces it.** `ptyro pair phone --scope full` when `phone` exists makes a
+new link; when it is opened, the old token stops working, its connections close, and the device
+has the scope you asked for now (higher or lower). `ptyro pair` says "Replacing the existing
+device 'phone' (was approve, now full)". Until the new link is opened, the old one keeps working.
+
 **Scopes.** Each includes the ones before it:
 
 | Scope | Can |
 |---|---|
 | `read` | see sessions, screens, transcripts, status, the inbox, runs |
-| `approve` (default) | also answer permission prompts and gates, clear attention, mute |
+| `approve` | also answer permission prompts and gates, clear attention, mute |
 | `control` | also type into sessions, stop/resume/convert them, start *configured* agents |
-| `full` | everything a local client can (any command line, worktrees and shipping, the config, upgrades, pairing devices): what the whole web app needs |
+| `full` (default, with a warning) | everything a local client can (any command line, worktrees and shipping, the config, upgrades, pairing devices): what the whole web app needs |
 
 Pairing and revoking work from the machine itself, and from a device paired with `--scope full` (the web app's Devices page).
 
@@ -286,9 +296,9 @@ through their protocol for structured sessions.
 | Push payload snooping | Web Push is end-to-end encrypted (RFC 8291) for the device; push services see ciphertext. VAPID (RFC 8292) identifies your daemon. Subscriptions are accepted only for the browsers' push services (and the hosts in `[remote] push_hosts`), so a device can't make the daemon post elsewhere. |
 | An agent approving prompts, or pairing a device for itself | An agent can't answer permission prompts or gates, type into a session that is blocked on one, pair or revoke devices, or trust a repository's scripts, from any client. See below for what this does and doesn't stop. Devices can't pair devices, except one paired with `--scope full`, which can run any command as you anyway. |
 
-Remote input is equivalent to running commands as you. Pair only devices you control. `approve`
-is the default: enough for notifications and approvals; pair with `--scope control` to type
-from the phone.
+Remote input is equivalent to running commands as you. Pair only devices you control. `full` is the default because the whole web app needs it, and `ptyro pair` warns you in plain
+words; pair with `--scope approve` for notifications and approvals only, or `--scope control` to
+type from the phone.
 
 **What the agent rules are for.** They stop an agent's mistake, or a prompt injection talking
 it into casual misuse ("run `ptyro send other --raw 1`", "pair a device and print the link").
@@ -300,11 +310,14 @@ a process that leaves all three looks like you at a plain shell, and is treated 
 
 ## Notes (the scratchpad)
 
-The web app has a **Notes** page (`✎` in the header): the scratchpad file (`$PTYRO_SCRATCHPAD`) in a
-box that saves as you type and merges with anything written meanwhile (a CLI `add`, an editor);
+The web app has a **Notes** page (`✎` in the header). It has a tab for the pad for everywhere
+(`$PTYRO_SCRATCHPAD`) and one for each project that has a pad (`$PTYRO_PROJECT_SCRATCHPAD`); it
+opens on the project of the session you were last looking at, else on the one for everywhere, and
+its title always says which pad it is. The pad is a box that saves as you type and merges with anything written meanwhile (a CLI `add`, an editor);
 a Preview in which tapping a checkbox ticks the item; the open items; a find box; and the saved
-copies, from which one can be put back. The session list has a quick-add box, and each session a
-`✎` button that fills it with the session's task and a link back. Writing needs a device paired
+copies, from which one can be put back. The session list has a quick-add box (a `→ myrepo` button on
+it says which pad it adds to and switches), and each session a `✎` button that fills it with the
+session's task and a link back. Writing needs a device paired
 with `--scope control`; a read-only device reads. The app is also a **share target**: share text
 or a link to ptyro from the phone's share sheet and it is added to the pad. While ptyro is
 unreachable, adds and edits wait in the browser (IndexedDB) and are sent in order on reconnect.

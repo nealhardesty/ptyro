@@ -125,22 +125,22 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "scratchpad_read",
-            "The owner's scratchpad: one Markdown notes file for ideas and bugs (also $PTYRO_SCRATCHPAD). Its text and revision.",
-            json!({}),
+            "The owner's scratchpad, a Markdown notes file for ideas and bugs: the project's own (also $PTYRO_PROJECT_SCRATCHPAD) when you work in a project, else the one for everywhere ($PTYRO_SCRATCHPAD). Its text and revision.",
+            json!({ "pad": s("project (default inside a project) or global (the one for everywhere)") }),
             &[],
             false,
         ),
         tool(
             "scratchpad_todo",
             "The scratchpad's open `- [ ]` items with line numbers (`all` for ticked ones too).",
-            json!({ "all": json!({ "type": "boolean", "description": "ticked items too" }) }),
+            json!({ "all": json!({ "type": "boolean", "description": "ticked items too" }), "pad": s("project (default inside a project) or global (the one for everywhere)") }),
             &[],
             false,
         ),
         tool(
             "scratchpad_add",
-            "Add a line to the owner's scratchpad, stamped with your name and worktree: a `- [ ]` item (a bug you found, a follow-up), or a plain note. Don't edit the file otherwise.",
-            json!({ "text": s("what to note"), "section": s("under this heading"), "note": json!({ "type": "boolean", "description": "a plain bullet, not an item" }) }),
+            "Add a line to the owner's scratchpad (the project's when you work in one, else the one for everywhere), stamped with your name and worktree: a `- [ ]` item (a bug you found, a follow-up), or a plain note. Don't edit the file otherwise.",
+            json!({ "text": s("what to note"), "section": s("under this heading"), "note": json!({ "type": "boolean", "description": "a plain bullet, not an item" }), "pad": s("project (default inside a project) or global (the one for everywhere)") }),
             &["text"],
             false,
         ),
@@ -316,6 +316,18 @@ fn cs_tools() -> Vec<Value> {
 
 fn arg<'a>(a: &'a Value, k: &str) -> Option<&'a str> {
     a.get(k).and_then(Value::as_str)
+}
+
+/// The scratchpad a tool call names (`pad`: `project` or `global`); by default the project this
+/// server runs in (an agent works in its worktree), else the one for everywhere.
+fn pad_arg(a: &Value) -> ptyro_core::scratchpad::PadSel {
+    use ptyro_core::scratchpad::PadSel;
+    let here = std::env::current_dir().unwrap_or_default();
+    match arg(a, "pad") {
+        Some("global") => PadSel::Global,
+        Some("project") => PadSel::Project(here.to_string_lossy().into_owned()),
+        _ => PadSel::Near(here),
+    }
 }
 
 fn need(a: &Value, k: &str) -> Result<String, Error> {
@@ -499,21 +511,24 @@ impl Server {
                     other => Err(crate::cli::unexpected(other)),
                 }
             }
-            "scratchpad_read" => match self.client.request(Request::ScratchGet).await? {
-                Reply::Scratch { doc } => {
-                    Ok(json!({ "path": doc.path, "rev": doc.rev, "text": doc.text }))
+            "scratchpad_read" => {
+                match self.client.request(Request::ScratchGet { pad: pad_arg(a) }).await? {
+                    Reply::Scratch { doc } => Ok(
+                        json!({ "pad": doc.name, "path": doc.path, "rev": doc.rev, "text": doc.text }),
+                    ),
+                    other => Err(crate::cli::unexpected(other)),
                 }
-                other => Err(crate::cli::unexpected(other)),
-            },
+            }
             "scratchpad_todo" => {
                 let all = a.get("all").and_then(Value::as_bool).unwrap_or(false);
-                match self.client.request(Request::ScratchTodo { all }).await? {
+                match self.client.request(Request::ScratchTodo { pad: pad_arg(a), all }).await? {
                     Reply::ScratchItems { rev, items } => Ok(json!({ "rev": rev, "items": items })),
                     other => Err(crate::cli::unexpected(other)),
                 }
             }
             "scratchpad_add" => {
                 let req = Request::ScratchAdd {
+                    pad: pad_arg(a),
                     text: need(a, "text")?,
                     section: arg(a, "section").map(str::to_owned),
                     note: a.get("note").and_then(Value::as_bool).unwrap_or(false),
@@ -522,7 +537,9 @@ impl Server {
                     cwd: None,
                 };
                 match self.client.request(req).await? {
-                    Reply::Scratch { doc } => Ok(json!({ "added": true, "open": doc.open })),
+                    Reply::Scratch { doc } => {
+                        Ok(json!({ "added": true, "pad": doc.name, "open": doc.open }))
+                    }
                     other => Err(crate::cli::unexpected(other)),
                 }
             }

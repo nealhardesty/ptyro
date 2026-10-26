@@ -56,6 +56,68 @@ export function onEvent(e) {
     }
     return true;
 }
+// ── About (UX2.1) ───────────────────────────────────────────────────────────────────────────
+/// Where ptyro lives; a test keeps these equal to Cargo.toml's `repository` and `license`.
+export const REPOSITORY = "https://github.com/nealhardesty/ptyro";
+export const ISSUES = `${REPOSITORY}/issues`;
+export const LICENSE = "MIT";
+/// The About document (`ptyro about --json`, the `about` host operation), or what the daemon's
+/// status alone says when this device may not ask the machine (anything below `full`).
+export function aboutDoc(host, status) {
+    if (host)
+        return host;
+    const d = status ?? {};
+    return {
+        version: d.version ?? "", protocol: d.proto ? `${d.proto.major}.${d.proto.minor}` : "",
+        repository: REPOSITORY, issues: ISSUES, license: LICENSE, build: {}, system: "",
+        places: [d.socket && { name: "socket", path: d.socket, exists: true }, d.log_dir && { name: "logs", path: d.log_dir, exists: true }].filter(Boolean),
+        daemon: { running: !!status, version: d.version, protocol: d.proto ? `${d.proto.major}.${d.proto.minor}` : "", pid: d.pid, started_ms: d.started_ms, same: null, fix: null },
+        web: d.web ? { wanted: d.web.wanted, up: d.web.up, url: d.web.url, text: [d.web.up ? `up at ${d.web.url}` : d.web.wanted ? "on, but not up yet" : "off"] } : null,
+        tools: [], limited: true,
+    };
+}
+/// What to paste into a bug report: the machine's own `report` when there is one, else the facts
+/// this device can see.
+export function aboutText(doc) {
+    if (doc.report)
+        return doc.report;
+    const v = (k, s) => `${k.padEnd(12)} ${s}`;
+    const d = doc.daemon ?? {};
+    return [
+        v("ptyro", `${doc.version} (protocol ${doc.protocol})`),
+        v("source", doc.repository), v("licence", doc.license), v("report", `${doc.issues} (paste this block)`),
+        v("daemon", d.running ? `running, version ${d.version} (protocol ${d.protocol}), pid ${d.pid}` : "not running"),
+        ...(doc.web ? [v("web app", doc.web.text?.[0] ?? "")] : []),
+        ...(doc.places ?? []).map((p) => v(p.name, p.path)),
+    ].join("\n") + "\n";
+}
+export function repoLeft(st) {
+    if (!st)
+        return { uncommitted: 0, unpushed: 0, notPushed: false, pushed: false };
+    const uncommitted = (st.staged ?? 0) + (st.modified ?? 0) + (st.untracked ?? 0) + (st.conflicts ?? 0);
+    const unpushed = st.upstream ? st.ahead ?? 0 : st.unpushed ?? 0;
+    return { uncommitted, unpushed, notPushed: !st.upstream && unpushed > 0, pushed: !!st.pushed };
+}
+/// `✓ pushed`, `↑2`, `● 3`, `↑2 ● 3`, `not pushed ↑2`; empty when there is nothing to say.
+export function leftWords(l) {
+    const v = [];
+    if (l.unpushed > 0)
+        v.push(l.notPushed ? `not pushed ↑${l.unpushed}` : `↑${l.unpushed}`);
+    if (l.uncommitted > 0)
+        v.push(`● ${l.uncommitted}`);
+    if (l.pushed)
+        v.push("✓ pushed");
+    return v.join(" ");
+}
+/// Its work has shipped (`WorktreeInfo::shipped`): the PR merged, or integrated and unchanged since.
+export function shipped(w) {
+    if (w.is_root)
+        return false;
+    if (w.pr?.state === "MERGED")
+        return true;
+    const st = w.status;
+    return !!(w.integrated && st && repoLeft(st).uncommitted === 0 && st.head && w.integrated.startsWith(st.head));
+}
 export const projectOf = (w) => data.projects.get(w.project);
 /// A worktree by id, name, `project/name` or the end of its id (how addresses read).
 export function findWorktree(addr) {

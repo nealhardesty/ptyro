@@ -3,8 +3,8 @@
 // agent integrations, the daemon, first-run setup and the tour.
 
 import { conn, host, store, token } from "./conn.js";
-import { data } from "./data.js";
-import { actions, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, form, go, h, menu, pending, poll, row, section, sheet, textSheet, ui, views } from "./kit.js";
+import { aboutDoc, aboutText, data } from "./data.js";
+import { actions, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, form, go, h, menu, pending, poll, row, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
 import type { Item } from "./kit.js";
 import { qrMatrix } from "./qr.js";
 import { allSessions } from "./sessions.js";
@@ -31,6 +31,7 @@ const ACTIONS = {
   "config.check": "Check the config without saving it",
   "config.show": "The effective config, with defaults filled in",
   "config.path": "Where the config file is",
+  "app.about": "About ptyro: its version, repository and licence, where its files live, the daemon and this app's server, and a block to copy into a bug report",
   "daemon.status": "The daemon: version, uptime, sessions, health",
   "daemon.logs": "The daemon's log, the latest lines",
   "daemon.upgrade": "Switch the daemon to the ptyro on disk, keeping every session",
@@ -79,6 +80,7 @@ function moreView(): HTMLElement {
     ["Integrations", "Agents that need installing once", "#/integrations"],
     ["Web app", "The server your phone opens: up, its address, on or off", "#/web"],
     ["Daemon", "Version, logs, restart, login service", "#/daemon"],
+    ["About", "Version, where to report a problem, where things live", "#/about"],
     ["Set up ptyro", "Your agents, accounts and repositories", "#/setup"],
     ["Take the tour", "ptyro's daily loop with a pretend agent", "#/tour"],
   ];
@@ -86,6 +88,7 @@ function moreView(): HTMLElement {
     section("This device", facts([
       ["Access", scope ? h("span", {}, badge(scope[1], conn.scope === "full" ? "ok" : ""), " ", scope[2]) : conn.scope],
       ["Connection", conn.state],
+      ...(conn.machine ? [["Machine", conn.machine] as [string, string]] : []),
     ]), bar(
       h("button", { onclick: () => menu("Notifications", [
         { label: "Turn them on for this device", hint: "A test is sent", run: () => ui.push() },
@@ -93,7 +96,9 @@ function moreView(): HTMLElement {
       ]) }, "🔔 Notifications"),
       h("button", { class: "deny", onclick: () => confirm("Forget this device?", "It stops showing your sessions until you pair it again. `ptyro devices revoke` ends the pairing for good.", "Forget", () => ui.forget()) }, "Forget this device"))),
     conn.scope !== "full" ? h("p", { class: "intro" }, "Some pages here change the machine and need a device paired with ", h("code", {}, "ptyro pair --scope full"), ".") : null,
-    h("div", { class: "rows" }, ...items.map(([t, s, href]) => row(t, s, "›", { href })))));
+    h("div", { class: "rows" }, ...items.map(([t, s, href]) => row(t, s, "›", { href }))),
+    // The version, quietly, where people look first (UX2.1).
+    h("p", { class: "sub more-version" }, "ptyro ", status.get("")?.version ?? "", " · ", h("a", { href: "#/about", title: tip("app.about") }, "About"))));
 }
 
 // ── health ──────────────────────────────────────────────────────────────────────────────────
@@ -152,15 +157,21 @@ function usageView(): HTMLElement {
 
 const devices = new Cache<any[]>(() => conn.request({ t: "device_list" }).then((r) => r.devices));
 
+/// What the default scope means, in plain words (the same text `ptyro pair` prints).
+const FULL_WARNING = "This device gets FULL control: it can run commands as you, change settings, and pair or revoke other devices. Pair only your own phone or browser. Pick Approve or Control below for less.";
+
 function pairAnother(): void {
   form("Pair another device", [
-    { key: "name", label: "Name", value: "phone", required: true },
-    { key: "scope", label: "May", type: "select", options: SCOPES.map(([k, l, d]): [string, string] => [k, `${l}: ${d}`]), value: "control" },
+    { key: "name", label: "Name", value: "phone", required: true, hint: "A name that exists is replaced: its old link stops working and it takes the access chosen here." },
+    { key: "scope", label: "May", type: "select", options: SCOPES.map(([k, l, d]): [string, string] => [k, `${l}: ${d}`]), value: "full" },
   ], "Make a link", async (v) => {
     const r = await conn.request({ t: "device_pair", name: v.name, scope: v.scope });
     const link = `${location.origin}/#pair=${r.code}`;
-    const s = sheet(`Pair ${v.name}`, [
+    const old = r.replaces as { name: string; scope: string } | undefined;
+    const s = sheet(`Pair ${v.name}${conn.machine ? ` with ${conn.machine}` : ""}`, [
       h("p", { class: "intro" }, `Open this on the device (or scan the code). It works once, for ${Math.round((r.expires_ms - Date.now()) / 60000)} minutes.`),
+      old ? h("p", { class: "intro" }, `Replaces the existing device ${old.name} (was ${old.scope}, now ${v.scope}) when this link is opened: its old link and token stop working.`) : null,
+      v.scope === "full" ? h("p", { class: "form-err" }, FULL_WARNING) : null,
       /^(localhost|127\.|\[::1\])/.test(location.hostname) ? h("p", { class: "form-err" }, "This address only reaches this computer. Open this page by its network address (the one `ptyro pair` prints) to make a link another device can use.") : null,
       qrBox(link),
       h("pre", { class: "block" }, link),
@@ -170,7 +181,7 @@ function pairAnother(): void {
       h("button", { class: "primary", onclick: () => { s.close(); devices.reload(""); } }, "Done"),
     ]);
     devices.reload("");
-  });
+  }, { intro: h("span", { class: "form-err" }, FULL_WARNING) });
 }
 
 function devicesView(): HTMLElement {
@@ -365,6 +376,46 @@ function integrationsView(): HTMLElement {
 // ── the daemon ──────────────────────────────────────────────────────────────────────────────
 
 const status = new Cache<any>(() => conn.request({ t: "status" }).then((r) => r.status));
+
+// ── about (UX2.1) ───────────────────────────────────────────────────────────────────────────
+
+/// Both asked together: the machine's own document (a `full` device may), and the daemon's status.
+const about = new Cache<any>(async () => {
+  const st = await conn.request({ t: "status" }).then((r) => r.status).catch(() => null);
+  const doc = conn.scope === "full" ? await host("about").catch(() => null) : null;
+  return aboutDoc(doc, st);
+});
+
+const copyText = (text: string, what = "Copied"): void => void navigator.clipboard?.writeText(text).then(() => ui.toast(what), () => ui.toast("Couldn't copy"));
+
+/// An address as a link, with a button to copy it; a path (nothing to open from a browser) as text with the button.
+function aboutValue(v: string, link = false): HTMLElement {
+  const href = link ? webHref(v) : null;
+  return h("span", { class: "about-v" }, href ? h("a", { href, target: "_blank", rel: "noreferrer" }, v) : h("code", {}, v), " ", h("button", { class: "small", title: "Copy", onclick: () => copyText(v) }, "Copy"));
+}
+
+function aboutView(): HTMLElement {
+  poll("about", () => about.refresh(""), 10_000);
+  const doc = about.get("");
+  const body = pending(about, "", "Looking…") ?? (() => {
+    const b = doc.build ?? {}, d = doc.daemon ?? {}, w = doc.web;
+    const build = [b.commit && `commit ${b.commit}`, b.date && `of ${b.date}`, b.target].filter(Boolean).join(" ");
+    return h("div", { class: "stack-in", title: tip("app.about") },
+      bar(h("button", { class: "primary", onclick: () => copyText(aboutText(doc), "Copied: paste it into your bug report") }, "Copy all, for a bug report")),
+      d.same === false ? h("p", { class: "banner warn" }, `The daemon is ${d.version} (protocol ${d.protocol}), not ${doc.version}. ${conn.scope === "full" ? "Switch it to this version: every session keeps running." : "Pair this device with --scope full to switch it, or run `ptyro daemon upgrade`."}`, " ",
+        conn.scope === "full" ? h("button", { class: "small", title: tip("daemon.upgrade"), onclick: upgradeDaemon }, "Upgrade the daemon") : null) : null,
+      section("ptyro", facts([
+        ["Version", `${doc.version} (protocol ${doc.protocol})`], ["Build", build], ["System", doc.system],
+        ["Source", aboutValue(doc.repository, true)], ["Report a problem", aboutValue(doc.issues, true)], ["Licence", doc.license]])),
+      section("Running", facts([
+        ["Daemon", d.running ? `running · ${d.version} (protocol ${d.protocol}) · pid ${d.pid} · up ${ago(d.started_ms)}` : "not running (it starts on demand)"],
+        ["Web app", w ? (w.text ?? []).join(" · ") : null]])),
+      section("Where things live", facts((doc.places ?? []).map((p: any) => [p.name[0].toUpperCase() + p.name.slice(1), aboutValue(p.path)] as [string, HTMLElement]))),
+      (doc.tools ?? []).length ? section("Tools", facts((doc.tools as any[]).map((t) => [t.name, t.text] as [string, string]))) : null,
+      doc.limited ? h("p", { class: "sub" }, "This device can't ask the computer for more (build, the config and data folders, git and the agents). Pair it with ", h("code", {}, "ptyro pair --scope full"), " to see them.") : null);
+  })();
+  return h("div", {}, ui.header("About", "#/more", h("button", { class: "icon", title: "Check again", "aria-label": "Check again", onclick: () => about.reload("") }, "↻")), h("main", { class: "stack" }, body));
+}
 
 function upgradeDaemon(): void {
   confirm("Switch the daemon to the ptyro on disk?", "Every session keeps running. The app reconnects in a moment.", "Upgrade", async () => {
@@ -603,6 +654,7 @@ views.set("profile", profileView);
 views.set("config", () => configView());
 views.set("integrations", () => integrationsView());
 views.set("daemon", () => daemonView());
+views.set("about", () => aboutView());
 views.set("web", () => webView());
 views.set("setup", () => setupView());
 views.set("tour", () => tourView());

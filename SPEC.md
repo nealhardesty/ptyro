@@ -499,7 +499,8 @@ image is used to re-exec the *old* binary (kept at `state/daemon.prev`).
   | `TERM_PROGRAM` / `TERM_PROGRAM_VERSION` | `ptyro` / crate version |
   | `PTYRO` | `1` |
   | `PTYRO_SESSION_ID` | session ULID |
-  | `PTYRO_SCRATCHPAD` | path of the scratchpad file (§13.6), in every session |
+  | `PTYRO_SCRATCHPAD` | path of the global scratchpad file (§13.6), in every session |
+  | `PTYRO_PROJECT_SCRATCHPAD` | path of the project's scratchpad, `<main checkout>/.ptyro/scratchpad.md` (§13.6), in every session that belongs to a project (next to `PTYRO_PROJECT`) |
   | `PTYRO_PROFILE` | the session's profile name (§10.10) |
   | `PTYRO_SOCKET` | daemon socket path (for `ptyro hook` and nested `ptyro` CLI use) |
   | `PTYRO_PROJECT`, `PTYRO_WORKTREE_PATH`, `PTYRO_WORKTREE_NAME`, `PTYRO_BRANCH`, `PTYRO_PORT` | when in a worktree (§10.6) |
@@ -957,6 +958,19 @@ url, listen, ca_fingerprint, since_ms, restarts, last_exit, by_hand, log}`.
 **[built WEB1.8] Protocol 1.17** (behaviour; no new message): a device with `control` scope may
 `Subscribe` with `control` and a `size`, and `Resize`; its `Input` takes control of the session
 (§5.8). Devices below `control` still watch at the session's size and their input is refused.
+
+**[built NOTE1.7] Protocol 1.18** (additive), a scratchpad per project (§13.6): every `Scratch*`
+request (`ScratchGet`, `ScratchPut`, `ScratchAdd`, `ScratchTodo`, `ScratchMark`, `ScratchHistory`,
+`ScratchRestore`, `ScratchPane`) takes an optional `pad`: `"global"` (the default, so a client
+that predates 1.18 acts on the global pad as before), `{"project": "<id, slug or a path inside
+it>"}` or, in requests only, `{"near": "<dir>"}` (the pad of the project that directory is in,
+else the global one). `ScratchPads` → `ScratchPads{pads:[{pad, name, path, open}]}` lists the pads
+that exist. `PadDoc` gains `pad` (resolved: `global`, which is left out, or `{"project": id}`) and
+`name` (`everywhere`, or the project's slug); `ScratchChanged` gains `pad` (left out for the global
+pad, so an older client reads a project's change as one more event about its only pad: a count
+that is briefly wrong until it asks again). `SessionInfo`/`SpawnSpec` gain `pad_project` (the
+project whose pad an editor session edits) and `WorktreeSpec` gains `pad_sel` (the pad of the item
+it was started from). A project that is not registered is `not_found`.
 
 ### 6.5 Screen frames
 
@@ -2111,6 +2125,23 @@ profile (§10.10).
 - **Status** is `git status --porcelain=v2 --branch` plus `rev-list --left-right` against the
   base and `diff --numstat <merge-base>`. That's the worktree's own change: committed and
   uncommitted, never the base's progress.
+- **What is left to do (UX2.2).** `RepoStatus` (crates/ptyro-core/src/model.rs) also carries
+  `unpushed` (optional: commits on no remote and not in the base, counted only for a branch with
+  no upstream, and only when the repository has a remote) and `pushed` (it has commits beyond the
+  base, nothing uncommitted, nothing to push, and somewhere to push to). Both are optional on the
+  wire, so an older daemon's status still parses. `RepoStatus::left()` is the one rule every
+  surface uses: `uncommitted` = staged + modified + untracked + conflicts; `unpushed` = `ahead`
+  when there is an upstream, else the counted commits; `not_pushed` = no upstream and commits;
+  `pushed`. Shown as `↑N` / `not pushed ↑N` (unpushed), `● N` (uncommitted) and a quiet
+  `✓ pushed`; the `+N −M` line counts only while uncommitted or unpushed work exists. A shipped
+  worktree (PR merged, or integrated) shows nothing of it, and an open PR's badge stands in for
+  `✓ pushed`. The TUI sidebar row and pane header (`diffstat` in ui.rs), `ptyro wt ls|info`
+  (`status_line`) and the web's worktree rows and page (`summary`, `repoLeft` in web/src/data.ts)
+  follow it; the web test keeps the TS mirror equal to the Rust one. Refreshing: the push moves
+  `refs/remotes/<remote>/<branch>` in the main repository's git directory, outside a linked
+  worktree, so each linked worktree's watcher also watches `.git/refs/remotes` there (the status
+  is recomputed within the 500 ms debounce); the ship, finish and push paths refresh the status
+  themselves, and the 10 s / 60 s poll covers the rest.
 - **Locks:** every git call runs with `GIT_OPTIONAL_LOCKS=0`. Without it, the background
   `git status` takes `index.lock`, and a user's or agent's concurrent `git add` fails (seen in
   the tests).
@@ -2443,8 +2474,9 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
   worktrees by creation, each with its sessions. Below them, under "other sessions", are the
   sessions whose home is this workspace but that aren't under one of its projects.
   - Rows show the pin's profile label (in its colour), the branch when it isn't the default
-    `ptyro/<name>`, `+N −M` lines changed, a `●` dirty marker, the worktree state when not ready,
-    and listening ports.
+    `ptyro/<name>`, what is left to do (`↑N` unpushed, `not pushed ↑N`, `● N` uncommitted, a
+    quiet `✓ pushed`; the `+N −M` lines only while something is left, §10.9), the worktree state
+    when not ready, and listening ports.
   - Folding: `⏎`/`Space`, `h`/`l`, or a click. `1`–`9` number the visible session rows. In the sidebar
     `j`/`k` move the selection; after the prefix they cycle every session of the workspace in
     tree order, skipping quick terminals (§11.2h).
@@ -2702,7 +2734,8 @@ learning anything up front.
   the empty sidebar names it.
 - **Which-key** (UX1.14): when no key follows the prefix within `[ui] which_key_delay` (400 ms;
   0: never), a menu of the next keys appears above the status bar, in five groups (start, go,
-  panes, work, this), as bound now; keys typed before it work as always. The event loop wakes at
+  panes, work, this: including settings, broadcast, home, last session, shell here and the
+  scratchpad), as bound now; keys typed before it work as always. The event loop wakes at
   the deadline, not on its 250 ms tick.
 - **Everything the CLI does** (UX1.21): `docs/parity.md`'s TUI column has no gaps, and
   `make tui-parity` (part of `make test`) fails on any. The frequent and visual ones are native:
@@ -2715,6 +2748,24 @@ learning anything up front.
   run in a split: profiles (login included), recipes, checkpoints, verify, messages, PR replies,
   leases, the radar, every change-set command, serving, pairing (its QR code in the split),
   devices, replay and export, `config show`.
+- **About** (UX2.1, `crates/ptyro/src/about.rs`, `crates/ptyro-tui/src/about.rs`,
+  `aboutView` in `web/src/settings.ts`). `ptyro about [--json]` is one document: the version and
+  protocol (`ptyro --version` prints the same version), the repository (`Cargo.toml`'s
+  `repository`) and its `/issues` as where to report a problem, the licence, the build (commit and
+  its date from `build.rs`, the target triple, the binary, the OS), where the config file, data,
+  logs and socket are (and whether they exist yet), the daemon (running, its version and
+  protocol, pid, uptime; `same: false` plus the fix, `ptyro daemon upgrade`, when its version or
+  protocol is not this ptyro's), the web app's server (`webapp::lines`), the tools (the doctor's own
+  `git` and agents checks, and `gh`), and `report`: all of it as text for a bug report. The TUI
+  (`app.about`, `I` after the prefix and in the sidebar) runs `ptyro about --json` like the health
+  badge runs the doctor and draws it as an overlay: `j`/`k` pick a link or path, `⏎` opens it
+  (`open` / `xdg-open`; copied instead if nothing opens it), `y` copies it, `c` copies the report,
+  `U` runs `daemon.upgrade` when the daemon differs. The addresses are OSC 8 hyperlinks: after
+  each frame `link_cells` rewrites those cells with the hyperlink escape in the symbol, over the
+  identical text, so the screen looks the same. The web app's More → About asks the `about` host
+  operation (`full` devices), and falls back to the daemon's status plus the repository, issues and
+  licence constants in `web/src/data.ts` (checked against `Cargo.toml` by `web/test/kit.mjs`) for
+  a lower scope. The help overlay's footer and the web's More page show the version.
 - **The health badge** (UX1.20, `crates/ptyro-tui/src/health.rs`): `ptyro doctor --quick --json`
   runs in the background 20 s after attaching and every 10 min; its warnings and problems, plus a
   missing `ptyro shell-init` line in your shell's rc file (the TUI's own check), show as `⚕ N` in
@@ -2819,7 +2870,8 @@ action's key. Differences from the proposal below:
   the sidebar, `]` pastes the last yank.
 - In the sidebar: `j/k/g/G` move, `⏎` opens, `x/X/R/,` act on the selected session.
 - `[keys]` in config rebinds keys (`"key" = "action [arg]"`, `"global:key"`, `"nav:key"`, `"none"`
-  unbinds); unknown actions or keys are reported by `ptyro config check` and as a toast.
+  unbinds); unknown actions or keys are reported by `ptyro config check` and as a toast. Every
+  default can be overridden or unbound; the settings panel lists them all (§13.7).
 
 **[built M3]**
 - `n` is the new-session wizard (§11.2c); a typed command line is the palette's
@@ -2947,6 +2999,7 @@ ptyro recipe ls|run <recipe> [--var k=v]
 ptyro init                             # first-run onboarding (§12.3)
 ptyro doctor                           # diagnose: agents installed/authenticated, terminal caps,
                                        #   socket perms, git version, hook integration health
+ptyro about [--json]                   # version, repository, licence, build, paths, daemon, tools
 ptyro config path|edit|check|show [--effective]
 ptyro daemon start [--foreground]|stop [--force|--hibernate]|restart|status|logs [-f]
              |upgrade|install-service|uninstall-service
@@ -3475,6 +3528,34 @@ prompts) are **collections**: their fields are the entries whose key reads `agen
   (plus, for your config, the TUI's own check of key bindings and themes). The refusal names the
   setting and why. `settings::preview` does the same without writing, for forms that check as
   you type; `settings::restore` puts a file back (undo).
+- **Plain words, everywhere.** A setting may carry a `unit` (`columns`, `days`: shown after a
+  number as `30 columns`; `config get` still prints the bare number) and `also` words a search
+  finds ("notify", "sound", "shortcut"; every colour setting also answers to "color"). A
+  collection has a `title` and an `empty` sentence (what it is for and what already works
+  without one), shown by the TUI and the web alike. A theme just made becomes `ui.theme` so
+  editing its colours shows at once; removing or renaming the theme in use moves `ui.theme` with
+  it (`settings::apply` does this, so the CLI agrees). A new agent asks which program it runs
+  (empty: its own name). `ui.theme` lives in Themes and `clipboard.allow_write` in Interface.
+  A new theme first asks which built-in theme to copy (its `base`; the TUI picker, the web's
+  "Start from" box). The `?` help ends with where to change any key (Settings → Key bindings).
+- **Key bindings list every key, defaults too.** The TUI key map owns the defaults
+  (`ptyro_tui::keymap::default_keys()`, named as `[keys]` names them: `d`, `nav:j`); a caller
+  passes them in `Lookups.keys`, and `settings::bindings` merges them with `[keys]` into
+  `Binding`s: `name`, `table` (`prefix`/`nav`/`global`), `key`, `action`, `default`, `standing`
+  (`default`, `yours`, `changed`, `unbound`), `help` (the action's description, the default's
+  while unbound), and the nine digit keys folded to one `fixed` row. They are in `View.bindings`
+  (`bindings` in the web's `settings.view`; `config list keys --json`), sorted by table then by
+  action. Keys compare as the key map does (`Q`, `S-q` and `shift-q` are one key:
+  `settings::slot`), so a change finds the line already there whatever its spelling.
+  `settings::owner` names what already runs on a key (the panels warn before taking it, and
+  `config set keys.x` prints a note). **One change, `Op::Bind { changes }`** (`{t: "bind",
+  changes: [[name, action | null]]}` on the web), sets several keys atomically, so a swap is one
+  validation and one undo: `Some(action)` binds (`"none"` unbinds), `None` takes the line out so
+  the default is back. A line that says what the default says is not written, and `"none"` on a
+  key with no default is just removed, so the file keeps only what differs. The CLI's
+  `config set|unset|add keys.<name>` go through it, so `config set keys.d none` unbinds a default
+  and `config unset keys.d` restores it. No protocol change: this is the host API and the
+  settings library, not the wire protocol.
 - **Layers**: your `config.toml` (written private, 0600), and for a repository its
   `.ptyro.toml` (committed) or `.ptyro.local.toml` (yours; added to `.git/info/exclude`). Agents,
   profiles, keys and the rest are refused in a repository (§13.1). A value says where it comes
@@ -3491,17 +3572,46 @@ prompts) are **collections**: their fields are the entries whose key reads `agen
   offers the restart; scrollback, recording, ports, agents and profiles apply to what starts
   next.
 
-### 13.6 The scratchpad **[built NOTE1]**
+### 13.6 The scratchpad **[built NOTE1, NOTE1.7]**
 
-One persistent notes file for ideas and bugs: plain Markdown, the same in every session and
-workspace, found by `$PTYRO_SCRATCHPAD`. ptyro never owns the only copy: it is a file you can
-`cat`, `grep`, sync and back up.
+Persistent notes files for ideas and bugs: plain Markdown, one for everywhere and one per project,
+found by `$PTYRO_SCRATCHPAD` and `$PTYRO_PROJECT_SCRATCHPAD`. ptyro never owns the only copy: they
+are files you can `cat`, `grep`, sync and back up.
 
-- **Where:** `<data>/scratchpad.md`, or `[scratchpad] path` (`~` expands; a symlink is written
-  through, so the real file in a synced folder is replaced in place). The daemon makes it, with a
-  short header, when it starts. `PTYRO_SCRATCHPAD` is set in the environment of every session
-  (`launch.rs`, after the profile and worktree variables, and listed in `ptyro_pty`'s strip list so
-  an enclosing ptyro's value never leaks into a nested one).
+- **Two pads (NOTE1.7).** The **global** pad is for everywhere; a **project's** pad is
+  `<main checkout>/.ptyro/scratchpad.md` of a project the daemon knows, and every worktree of the
+  project shares it (a worktree resolves to its project's `root`, never to its own directory).
+  Worktree-level pads are not built: one more level would make "where did I note that" harder, and
+  the item's `[wt:…]` tag already ties a note to a worktree. Its history is
+  `<root>/.ptyro/scratchpad.history/`, kept by the same rules as the global one.
+- **Which pad (follow where I am).** A request names its pad (`PadSel`): `Global`, `Project(id |
+  slug | path)` or `Near(dir)`. The CLI sends `Near(cwd)` by default: the project's pad when the
+  directory is in a registered project (or one of its worktrees), else the global pad;
+  `--global` sends `Global`, `--project` sends `Project(cwd)` and `--project=NAME` `Project(NAME)`
+  (an error, with the fix, when it is not a project). The TUI uses the project of the selected
+  sidebar row or the focused session (a pad's editor counts as in the project whose pad it edits,
+  `SessionInfo.pad_project`); `scratchpad.cycle` (`C-q g`, `Ctrl-G` in the add box and the items
+  list) flips a client-side choice `pad_global`; the web app uses the project of the session last
+  looked at (`#/s/…`), with tabs on the Notes page (`pick`). A client that sends no `pad` gets the
+  global pad: that is protocol 1.17 behaviour. **A change of behaviour for scripts:** `ptyro
+  scratchpad add` run inside a worktree wrote to the global pad before NOTE1.7 and now writes to the
+  project's; the command says which pad it used on standard error (`added to the myrepo project pad
+  (<path>, N open)`), `--global` restores the old target, and `$PTYRO_SCRATCHPAD` is unchanged.
+- **Making a project pad.** The daemon makes the file, with a header that says what it is and
+  that git ignores it, the first time anything asks for that pad (`Daemon::scope`). At that
+  moment it appends `/.ptyro/scratchpad.*` to the repository's `.git/info/exclude` (the common git
+  dir, so it holds for every worktree; `ptyro_git::Git::exclude`: once, idempotent, never the
+  tracked `.gitignore`). A failure to do so is logged and never fails the pad. The line covers the
+  pad, its history directory and the temp files of a write, and nothing else in `.ptyro/`, which
+  may hold committed things (`recipes/`, `changesets/`); `.ptyro.toml` is a different file and is
+  not touched. `ptyro doctor` warns when an existing project pad is not ignored.
+- **Where (the global pad):** `<data>/scratchpad.md`, or `[scratchpad] path` (`~` expands; a symlink
+  is written through, so the real file in a synced folder is replaced in place; the setting never
+  moves a project's pad). The daemon makes it, with a short header, when it starts.
+  `PTYRO_SCRATCHPAD` is set in the environment of every session (`launch.rs`, after the profile and
+  worktree variables, and listed in `ptyro_pty`'s strip list so an enclosing ptyro's value never
+  leaks into a nested one); `PTYRO_PROJECT_SCRATCHPAD` is set with `PTYRO_PROJECT` for a session in
+  a worktree, and stripped the same way.
 - **Items.** A line `- [ ]` / `- [x]` (or `* [ ]`) is an item. `ptyro scratchpad add` writes
   `- [ ] 2026-10-24 14:02 · `ptyro/bugs` · by `claude-rook` · the words`: the local time, the
   worktree (else the directory) it was run in, and for an agent the session's name; further lines
@@ -3523,11 +3633,14 @@ workspace, found by `$PTYRO_SCRATCHPAD`. ptyro never owns the only copy: it is a
   file's first); the same lines changed two ways are both kept between `<<<<<<< on disk`,
   `=======` and `>>>>>>> your edit`. With no copy of `base` the whole of both is kept that way. The
   reply says whether the text came back different (`merged`) and how many regions clashed.
-- **Watching.** The daemon looks at the file's mtime and size every 700 ms; a revision it hasn't
-  announced becomes `ScratchChanged{rev, open, by}` to every client watching events (`by` is
-  `file` for a change made outside the daemon). Polling, not inotify: it is the same on Linux and
+- **Watching.** The daemon looks at the mtime and size of the global pad and of every project pad
+  that exists every 700 ms; a revision it hasn't announced becomes `ScratchChanged{pad, rev, open,
+  by}` to every client watching events (`by` is `file` for a change made outside the daemon). The
+  revision last announced is kept per pad file. Polling, not inotify: it is the same on Linux and
   macOS, works on network and synced folders, and a pad is a few KB.
-- **The pane.** `ScratchPane{create}` runs the editor as one session (`SessionInfo.pad`): `[scratchpad]
+- **The pane.** `ScratchPane{pad, create}` runs the editor as one session per pad
+  (`SessionInfo.pad`, and `pad_project` for a project's; kept and reused, so cycling between pads
+  keeps each cursor and undo): `[scratchpad]
   editor`, else the `[editors]` default when it runs inside a terminal, else `$VISUAL`/`$EDITOR`,
   else the first of nvim, vim, nano, vi on `PATH`. vim and nvim start with `autoread` and a
   `checktime` autocommand so an append from elsewhere shows without a prompt. The session is quiet
@@ -3537,12 +3650,18 @@ workspace, found by `$PTYRO_SCRATCHPAD`. ptyro never owns the only copy: it is a
 - **Items become work.** `ptyro scratchpad start` (TUI: ⏎ in the items picker) starts a task like
   `ptyro "…"` with the item's text (and its indented lines) as the prompt, in a new worktree; the
   new worktree's spec carries `pad_item` (the line), and the daemon tags the item `[wt:…]` when it
-  is created. When that worktree's PR is seen merged (the GitHub poller) or the worktree is
-  removed, the daemon ticks the item with the PR number (`[scratchpad] tick_on_finish`, default on).
+  is created, in the pad the item is in (`pad_sel`: started from the project's pad, tagged there;
+  from the global pad, tagged there). When that worktree's PR is seen merged (the GitHub poller) or
+  the worktree is removed, the daemon ticks the item with the PR number in the global pad and in
+  the worktree's project's (`[scratchpad] tick_on_finish`, default on).
 - **Agents.** A lead's `ptyro mcp` has `scratchpad_read`, `scratchpad_todo` and `scratchpad_add`
-  (the add is stamped with the lead's name). Agents are not told about the pad by default; one
-  that finds the variable can read it and should add with `ptyro scratchpad add`.
-- **Scopes.** Reading (`ScratchGet`, `ScratchTodo`, `ScratchHistory`) needs `read`; writing
+  (the add is stamped with the lead's name); they use the pad of the project the lead works in,
+  else the global one, and take an optional `pad` (`project` or `global`). Agents are not told about
+  the pad by default; one that finds the variables can read the files, and should add with
+  `ptyro scratchpad add` (which follows the same rule from its directory).
+- **Not covered.** A project pad lives in the repository, not in `<data>`: `ptyro backup` and
+  `ptyro uninstall` leave it alone. Deleting a project from ptyro leaves its pad in the repository.
+- **Scopes.** Reading (`ScratchGet`, `ScratchTodo`, `ScratchHistory`, `ScratchPads`) needs `read`; writing
   (`ScratchPut`, `ScratchAdd`, `ScratchMark`, `ScratchRestore`) needs `control`; starting the
   editor session is `full`.
 
@@ -3556,7 +3675,7 @@ workspace, found by `$PTYRO_SCRATCHPAD`. ptyro never owns the only copy: it is a
 | Kind | Path | Contents |
 |---|---|---|
 | config | `~/.config/ptyro/` | `config.toml`, `themes/`, `recipes/` |
-| data | `~/.local/share/ptyro/` | `ptyro.db`, `worktrees/`, `sessions/<id>/pty.log`, `scratchpad.md` + `scratchpad.history/` (§13.6), `integrations/`, `profiles/<name>/<agent>/` (managed profile dirs, `0700`) |
+| data | `~/.local/share/ptyro/` | `ptyro.db`, `worktrees/`, `sessions/<id>/pty.log`, `scratchpad.md` + `scratchpad.history/` (the global pad, §13.6; a project's is `<repo>/.ptyro/scratchpad.md`), `integrations/`, `profiles/<name>/<agent>/` (managed profile dirs, `0700`) |
 | state | `~/.local/state/ptyro/` | `daemon.lock`, `daemon.log*`, `daemon.prev` |
 | runtime | Linux `$XDG_RUNTIME_DIR/ptyro/`; macOS `$TMPDIR/ptyro-<uid>/`; `PTYRO_HOME/run/` | `ptyro.sock` |
 
@@ -4673,10 +4792,39 @@ embedded with `include_bytes!`, with no dependencies or third-party requests.
 - **PWA:** a manifest, icons (rendered by `scripts/icons.py`), and a service worker with an
   offline shell, push display, and Allow/Deny notification actions answered through
   `/api/request` with the token from IndexedDB.
-- **Pairing:** `ptyro pair` (scope `approve` unless `--scope`; it says what the scope may do)
-  prints a QR code (`qrcode`,
-  Dense1x2) for `<base>/#pair=<code>`. The base is `--url`, `[remote] public_url`, the Tailscale
-  HTTPS name when `tailscale serve` proxies to our port, or `http://<listen>`.
+- **Pairing:** `ptyro pair` prints a QR code (`qrcode`, Dense1x2) for `<base>/#pair=<code>`. The
+  base is `--url`, `[remote] public_url`, the Tailscale HTTPS name when `tailscale serve` proxies
+  to our port, or `<scheme>://<listen>`.
+  - **Default scope is `full`, with a warning.** With no `--scope`, `ptyro pair` (and the TUI's
+    `remote.pair`, which runs it, and the web's Devices ＋ form, which preselects `full`) pairs
+    with `full`, because the whole web app needs it, and says so in plain words: "This device gets
+    FULL control: it can run commands as you, change settings, and pair or revoke other devices.
+    Pair only your own phone or browser. Use --scope approve … for less." (stderr before the QR
+    code; the `warning` field of `--json`; a red paragraph in the web form and in the link sheet).
+    A scope named on the command line is the owner's choice: no warning, just the one-line "This
+    device may …". The protocol's `Scope` default is `full` too (a `device_pair` without a scope).
+    Existing devices keep their scopes. No config option: a default that can be configured away
+    is a default nobody reads.
+  - **The port is always in the link.** An address ptyro builds from address+port carries the port,
+    explicitly, even when it is the scheme's own: `https://127.0.0.1:7091`, `http://[::1]:7091`,
+    `https://box.tail1234.ts.net:443`. A wildcard listen address (`0.0.0.0`, `::`) is never the
+    link: it becomes this machine's LAN address (else loopback), same port. `ptyro pair` uses the
+    address of the running `ptyro serve` (`state/serve.json`: its real `--listen`), else the config.
+    A `--url`/`public_url` that names a port is kept; if it differs from the listen port and no
+    proxy is declared (`[remote] trusted_proxy`), a note says so and prints the fixed `--url`. One
+    without a port is a proxy on the scheme's default port when `trusted_proxy` is set (so `:443` /
+    `:80` is written out); otherwise ptyro serves it itself and its listen port is added (a bare
+    host would reach nothing), with a note naming `trusted_proxy` for the proxy case. `--json`
+    carries the same URL, and `notes`. `remote::resolve_base` is the one function; it has unit
+    tests for v4, v6, hostnames, Tailscale, wildcards and `--url` with and without a port.
+  - **A name is one device.** Pairing a name that exists (case-insensitive) replaces that device:
+    the new link carries the newly asked scope (up or down), and when it is opened the old
+    token stops working and the old device's live connections are closed (as a revoke). Until
+    then the old device is untouched (an abandoned pairing cuts nobody off), and an earlier
+    unused link for the same name is dead at once. The CLI says "Replacing the existing device
+    'phone' (was approve, now full)"; `--json` has `replaces`; the web form says the same and
+    names the replacement in the sheet. The daemon replies `Pairing{replaces}` / `Paired{replaced}`.
+    A different name from the same browser is a different device (nothing links them).
   - **Why a code [security review M2]:** what is printed stays in scrollback and in the session
     recording (on by default, kept 30 days), which `read` devices and agents can read. So it is
     a pairing code (`ptp_` + 32 random bytes, stored as SHA-256), not the token. The app
@@ -4718,7 +4866,7 @@ check. It speaks the protocol over its WebSocket, and a few things a browser can
 - **Host operations** (`crates/ptyro/src/host.rs`, `POST /api/host` with `Authorization: Bearer
   <token>`; the token must be a `full` device's, which `serve` checks by asking the daemon for
   the device list, and `serve` must not be `--remote`): `config.get|check|save|show` (checked as
-  `ptyro config check` does, written 0600 atomically, the daemon told to reload), `doctor`,
+  `ptyro config check` does, written 0600 atomically, the daemon told to reload), `doctor`, `about`,
   `profile.new|rm|rename|sync|detect|detect_apply|login|doctor`, `integrations.ls|install|
   uninstall`, `service.install|uninstall`, `daemon.logs|restart|stop`, `tour.start|end`. The work
   is the CLI's own (`profiles.rs`, `doctor.rs`, `config.rs` expose it as functions; the rest runs
@@ -4778,6 +4926,24 @@ emulator, no WASM.
   after it is drawn, so a slow phone gets fewer, bigger deltas, and a hidden tab acks at once.
   `localStorage["ptyro.debug"]="1"` exposes `ptyroTerm.stats` (paints, rows drawn, ms).
 
+### 16.4a Which machine (the page title, the TUI)
+
+The daemon reports its machine's short name (`DaemonStatus.machine`, `Welcome.machine`;
+`ptyro_core::machine`): `[daemon] machine_name` if set, else on macOS the ComputerName if it is
+short and plain, else the host name up to its first dot (`.local`, `.lan`, domains dropped; an
+IPv4-looking name stays whole), printable only, 24 characters at most, `computer` if nothing is
+known. A client of a remote daemon (`--remote`, a page served by another computer) shows the
+daemon's. Surfaces: the web page title `studio · ptyro` (`(2) studio · ptyro` with agents waiting),
+a name chip and a thin top bar in a colour hashed from the name (`hue`: FNV-1a over the lowercase
+name, mod 360, the same in Rust and TypeScript) on every header, a favicon with a dot in that
+colour, the installed app's title (`apple-mobile-web-app-title`), More → This device → Machine;
+the TUI's sidebar title (`WORKSPACE main ● studio`, dropped when it doesn't fit) and the
+terminal's window title `ptyro · studio` (OSC 0, with xterm's title stack saved and restored on
+exit); `ptyro daemon status` (`machine`), `ptyro pair` ("Pairing 'phone' with studio"). The
+manifest is static and served before sign-in, so it keeps the name `ptyro` (the name is not given
+to unauthenticated requests). The name is read at connect: a changed `machine_name` shows after
+the next reconnect.
+
 ### 16.5 E2E relay (much later)
 
 For access without exposing ports: an outbound-only connection from the daemon to a relay that sees
@@ -4831,7 +4997,7 @@ command): ptyro doesn't confine that.
 | Secrets in recordings/logs | files `0600`; recorder opt-out; logs never include PTY content above `trace` |
 | Secrets in the config file (literal tokens, webhooks) | everything ptyro writes there (`config edit`, `init`, profile and pin commands) is 0600 in directories it creates 0700, replaced atomically; `ptyro doctor` warns when group or others can read or write it |
 | Data loss in worktrees | §10.8 rules; locks while running; marker files |
-| Remote access | **[built M9]** off by default; the daemon's clients use a local socket only (its one TCP port is the opt-in approve/deny link listener, loopback/Tailscale unless `insecure`). `ptyro serve` listens on loopback/Tailscale unless `--insecure`. Devices: 256-bit tokens stored hashed, compared in constant time, scopes enforced per request and keystroke, a browser's Hello rewritten to `web`, a lockout after 10 failures, revocation closes live connections, pairing only locally and through a one-time code (single use, 10 minutes, so the printed link is worthless afterwards; the token itself is never printed), `approve` by default, remote actions in the event log. The app ships a strict CSP and no third-party code. Web Push is end-to-end encrypted. Over ssh: the ssh login. E2E relay later (docs/remote.md has the threat model). |
+| Remote access | **[built M9]** off by default; the daemon's clients use a local socket only (its one TCP port is the opt-in approve/deny link listener, loopback/Tailscale unless `insecure`). `ptyro serve` listens on loopback/Tailscale unless `--insecure`. Devices: 256-bit tokens stored hashed, compared in constant time, scopes enforced per request and keystroke, a browser's Hello rewritten to `web`, a lockout after 10 failures, revocation closes live connections, pairing only locally and through a one-time code (single use, 10 minutes, so the printed link is worthless afterwards; the token itself is never printed), `full` by default with a warning (`--scope` for less), remote actions in the event log. The app ships a strict CSP and no third-party code. Web Push is end-to-end encrypted. Over ssh: the ssh login. E2E relay later (docs/remote.md has the threat model). |
 | Credentials | ptyro stores none for agents; uses the agents' own auth; remote tokens hashed; profile `secrets` resolved per spawn, memory-only, redacted everywhere |
 | An agent answering for a person, or widening what it may do (security review M1) | refused to any agent, with or without a policy, whichever client it uses: `answer` and `gate resolve`; typing (`send`, `send --raw`, a client's keystrokes) into a session that is blocked on a person (Claude's dialog preselects "Yes", so one Enter approves); pairing or revoking devices and push subscriptions; trusting scripts, recipes or templates (`project trust`, the `trust` fingerprint on new worktrees, `recipe run`, `cs new`); upgrading the daemon to another binary. Typing into an *idle* agent, mail, reading and spawning configured agents stay allowed: a lead or a script orchestrating other agents needs them (§15) |
 | Telling an agent's request from yours | the connecting process (its pid from the kernel, never from the Hello) is placed in a session by: (1) its ancestry, the nearest ancestor that is a session's process; (2) its POSIX session (`getsid`): every session's child leads its own, so a double-forked, `nohup`ed or `disown`ed process is still placed; (3) on Linux, the `PTYRO_SESSION_ID` it was exec'd with (`/proc/<pid>/environ`), which `setsid` keeps. A client's keystrokes are placed once per connection. The daemon carries no session id (the client that starts it strips it), so neither do the checks it runs. Paired devices are people and held to their scope instead. **It fails open:** a process that leaves all three (`setsid env -u PTYRO_SESSION_ID`, `systemd-run`, `ssh localhost`; on macOS, any `setsid`) looks exactly like you at a plain shell, and is treated like you. Failing closed would refuse the CLI from every terminal that isn't a ptyro session; given the boundary above, ptyro accepts the gap |

@@ -10,7 +10,7 @@ const sw = self;
 const SHELL = "ptyro-shell-";
 const FILES = [
     "/", "/style.css", "/manifest.webmanifest", "/icon.svg", "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png",
-    ...["app", "color", "conn", "data", "flow", "kit", "projects", "qr", "review", "runs", "screen", "sessions", "settings", "pad", "notes", "grid", "keys", "term", "panel", "cfgkit"].map((m) => `/${m}.js`),
+    ...["app", "color", "conn", "data", "flow", "kit", "projects", "qr", "review", "runs", "screen", "sessions", "settings", "pad", "notes", "grid", "keys", "term", "panel", "cfgkit", "machine"].map((m) => `/${m}.js`),
 ];
 const hex = (b) => [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("");
 /// Fetch every file fresh; when all of them came, keep them as a generation of their own and

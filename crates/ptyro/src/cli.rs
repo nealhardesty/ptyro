@@ -193,6 +193,7 @@ async fn dispatch(
                 structured,
                 welcome: false,
                 pad_item: None,
+                pad_sel: Default::default(),
             };
             let new_wt = new_wt.or_else(|| {
                 (a.pr.is_some() || a.issue.is_some() || a.take_changes).then(String::new)
@@ -256,6 +257,7 @@ async fn dispatch(
             Ok(0)
         }
         Some(Cmd::Init { yes, dry_run }) => crate::init::run(&ctx, yes, dry_run).await,
+        Some(Cmd::About { json }) => crate::about::run(&ctx, json).await,
         Some(Cmd::Doctor { quick, json }) => crate::doctor::run_cmd(&ctx, quick, json).await,
         Some(Cmd::Tour { here: false }) => run_tour(&ctx).await,
         Some(Cmd::Tour { here: true }) => tour_here(&ctx).await,
@@ -471,7 +473,9 @@ async fn dispatch(
                 r => Err(unexpected(r)),
             }
         }
-        Some(Cmd::Scratchpad { cmd, pane, json }) => crate::pad::run(&ctx, cmd, pane, json).await,
+        Some(Cmd::Scratchpad { cmd, everywhere, project, pane, json }) => {
+            crate::pad::run(&ctx, cmd, crate::pad::Which { everywhere, project }, pane, json).await
+        }
         Some(Cmd::Shell { worktree, json, read, scrollback }) => {
             quick_shell(&ctx, worktree, json, read, scrollback).await
         }
@@ -483,7 +487,7 @@ async fn dispatch(
             crate::webapp::run(&ctx, &action, via, json, pair).await
         }
         Some(Cmd::Pair { name, scope, url, json }) => {
-            crate::remote::pair(&ctx, name, &scope, url, json).await
+            crate::remote::pair(&ctx, name, scope.as_deref(), url, json).await
         }
         Some(Cmd::Devices { cmd }) => crate::remote::devices(&ctx, cmd).await,
         Some(Cmd::Replay { session, speed, max_idle, from }) => {
@@ -698,6 +702,7 @@ pub async fn start_pad_task(
     prompt: &str,
     agent: Option<String>,
     line: u32,
+    pad_sel: ptyro_core::scratchpad::PadSel,
 ) -> Result<i32, Error> {
     let cwd = current_dir()?;
     let config = ptyro_core::config::Config::load(&ptyro_core::config::Config::path(&ctx.paths))
@@ -707,6 +712,7 @@ pub async fn start_pad_task(
         prompt: Some(prompt.to_owned()),
         cwd: Some(cwd.clone()),
         pad_item: Some(line),
+        pad_sel,
         ..NewArgs::default()
     };
     if in_git_repo(&cwd) {
@@ -770,6 +776,8 @@ pub struct NewArgs {
     pub structured: bool,
     /// Started from the scratchpad item on this line (NOTE1.3).
     pub pad_item: Option<u32>,
+    /// Which pad that item is in (NOTE1.7).
+    pub pad_sel: ptyro_core::scratchpad::PadSel,
 }
 
 /// The variables a session should see from this client (SSH agent, display).
@@ -1357,6 +1365,9 @@ async fn daemon(ctx: &Ctx, cmd: DaemonCmd) -> Result<i32, Error> {
                     "ptyro daemon {} (protocol {}.{})",
                     status.version, status.proto.major, status.proto.minor
                 );
+                if let Some(m) = &status.machine {
+                    println!("  machine   {m}");
+                }
                 println!("  pid       {}", status.pid);
                 println!("  uptime    {}", age(status.started_ms));
                 println!("  sessions  {} ({} running)", status.sessions, status.live_sessions);

@@ -111,7 +111,7 @@ pub async fn run(
                 );
             }
             if pair {
-                return crate::remote::pair(ctx, "phone".into(), "control", None, false).await;
+                return crate::remote::pair(ctx, "phone".into(), None, None, false).await;
             }
             println!("  next: {}", next(&web));
         }

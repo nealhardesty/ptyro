@@ -9,11 +9,12 @@
 // app's re-renders (a session event, the clock).
 
 import { conn, host } from "./conn.js";
-import { APPLY, ORIGIN, article, fieldsOf, fromLines, hexOf, keyLabel, labelOf, needed, relevant, score, summary, toLines } from "./cfgkit.js";
+import { APPLY, ORIGIN, article, fieldsOf, fromLines, gist, hexOf, keyLabel, labelOf, moveChanges, nameIn, needed, ownerOf, relevant, score, summary, toLines, withUnit } from "./cfgkit.js";
+import type { Binding } from "./cfgkit.js";
 import type { Collection, Entry, Schema, Section, Setting, View } from "./cfgkit.js";
 import { data } from "./data.js";
 import { actions, badge, bar, confirm, enc, errText, form, go, h, row, sheet, ui, views } from "./kit.js";
-import type { Child } from "./kit.js";
+import type { Child, Field } from "./kit.js";
 import { cfgChanged, editConfigAt } from "./settings.js";
 
 const ACTIONS = {
@@ -26,6 +27,10 @@ const ACTIONS = {
   "settings.remove": "Remove one of those, and everything set in it",
   "settings.rename": "Give one of those another name",
   "settings.keys": "Press the keys you want instead of typing their names",
+  "settings.keychange": "Change this key: press the new one. If it is taken you are asked before the two swap",
+  "settings.keyaction": "Change what this key runs: type to search the actions by name or by what they do",
+  "settings.keyunbind": "Switch this key off. A default one stays listed, and Reset brings it back",
+  "settings.keyreset": "Put this key back to its default (a key of your own is removed)",
   "settings.project": "Choose the repository whose own settings (.ptyro.toml) you edit here",
   "settings.target": "Save a repository's settings to your own file or the committed, shared one",
   "settings.restart": "Restart the daemon for the settings that need it",
@@ -191,7 +196,7 @@ function card(e: Entry, s: Setting, scope: Scope, view: View): HTMLElement {
     ctl.el,
     err,
     h("div", { class: "set-foot" },
-      h("span", {}, `default ${e.default_shown} · from ${from}`),
+      h("span", {}, `default ${withUnit(e.default_shown, s.unit)} · from ${from}`),
       e.origin !== "default" ? h("button", { class: "small", title: tip("settings.reset"), onclick: async () => { if (await reset()) refresh(); } }, "Reset") : null,
       scope === "user" && e.line && e.origin !== "default" ? h("button", { class: "small", title: tip("settings.file"), onclick: () => editConfigAt(e.line!) }, "In the file") : null));
 }
@@ -232,7 +237,7 @@ function control(e: Entry, s: Setting, scope: Scope, view: View, id: string, com
       const el = h("input", { type: "number", id, min: k.min, max: k.max, step: 1, inputmode: "numeric", title: tip("settings.set") });
       el.value = e.value == null ? "" : String(e.value);
       typed(el);
-      return { el: h("div", { class: "ctl" }, el, h("small", {}, `${k.min} to ${k.max}`)), focus: el };
+      return { el: h("div", { class: "ctl" }, el, h("small", {}, `${s.unit ? `${s.unit} · ` : ""}${k.min} to ${k.max}`)), focus: el };
     }
     case "choice": {
       const el = sel(k.choices.map((c) => [c.value, c.value]), cur);
@@ -333,14 +338,94 @@ function actionOptions(view: View): HTMLElement {
   return dl;
 }
 
+const KEY_GROUPS: [Binding["table"], string, string][] = [
+  ["prefix", "After the prefix key", "Press the prefix key, then the key."],
+  ["nav", "In the sidebar", "While the sidebar has focus."],
+  ["global", "Anywhere", "Without the prefix: a global key takes that key from the programs in your sessions."],
+];
+
+/// One change to bindings, as one undo; resolves whether it was accepted.
+const bind = (scope: Scope, changes: [string, string | null][], label: string, opts: { at?: (m: string) => void } = {}): Promise<boolean> => change(scope, { t: "bind", changes }, label, opts);
+
+/// Every key, by when it works: each says what it does, where it stands, and can be changed.
+function keyRows(view: View, scope: Scope, only?: Binding[]): HTMLElement {
+  const kids: Child[] = [actionOptions(view)];
+  for (const [table, title, blurb] of KEY_GROUPS) {
+    if (!only) kids.push(h("h4", { class: "cfg-sub" }, title), h("p", { class: "sub" }, blurb));
+    for (const b of (only ?? view.bindings).filter((x) => x.table === table && (only || !st.modified || x.standing !== "default"))) kids.push(keyCard(b, view, scope));
+    if (!only) kids.push(h("button", { class: "add-row", title: tip("settings.add"), onclick: () => bindingSheet(view, table) }, `＋ Add a key ${KEY_GROUPS.find((g) => g[0] === table)![1].toLowerCase()}`));
+  }
+  return h("div", { class: "stack-in" }, ...kids);
+}
+
+function keyCard(b: Binding, view: View, scope: Scope): HTMLElement {
+  const err = h("p", { class: "form-err" });
+  const at = (m: string): void => { err.textContent = m; };
+  const done = (name: string): void => { st.focusKey = `keys.${name}`; page?.paintBody(); };
+  const unbound = b.standing === "unbound";
+  const kind = { default: "", yours: "info", changed: "info", unbound: "warn" }[b.standing];
+  const what = unbound ? `Unbound. It used to run ${b.default ?? ""}: ${b.help}` : `${b.help}`;
+  const head = h("div", { class: "set-head" }, h("kbd", {}, b.key), h("span", {}, b.when), badge(b.standing, kind), h("span", { class: "grow" }));
+  if (b.fixed) return h("div", { class: "set map", "data-key": `keys.${b.name}` }, head, h("p", { class: "sub" }, "These jump to a session by its number. Bind a key of your own to session.focus and a number to add more."));
+  const input = h("input", { type: "text", list: "cfg-actions", spellcheck: "false", autocapitalize: "off", placeholder: unbound ? "pick what it runs" : "", "aria-label": `what ${b.key} runs`, title: tip("settings.keyaction") });
+  input.value = unbound ? "" : b.action;
+  input.addEventListener("change", async () => {
+    const v = input.value.trim();
+    if (!v || v === b.action) { input.value = unbound ? "" : b.action; return; }
+    if (await bind(scope, [[b.name, v]], `${b.key} runs ${v}`, { at })) done(b.name);
+  });
+  const btn = (label: string, tipId: Parameters<typeof tip>[0], cls: string, run: () => void): HTMLElement => h("button", { class: `small ${cls}`, title: tip(tipId), onclick: run }, label);
+  const buttons = [
+    unbound ? null : btn("Change key", "settings.keychange", "", () => moveSheet(b, view, scope)),
+    unbound ? null : btn(b.default === null ? "Remove" : "Unbind", "settings.keyunbind", "deny", async () => { if (await bind(scope, [[b.name, b.default === null ? null : "none"]], `${b.key} ${b.default === null ? "removed" : "unbound"}`, { at })) done(b.name); }),
+    b.mine && (b.default !== null || unbound) ? btn(unbound ? "Bind it again" : "Reset", "settings.keyreset", "", async () => { if (await bind(scope, [[b.name, null]], `${b.key} is back to its default`, { at })) done(b.name); }) : null,
+  ];
+  return h("div", { class: "set map", "data-key": `keys.${b.name}` },
+    head, h("p", { class: "sub" }, what), input,
+    h("div", { class: "set-head" }, ...buttons.filter(Boolean) as HTMLElement[], b.default !== null && b.standing !== "default" ? h("small", {}, `default: ${b.default}`) : null),
+    err);
+}
+
+/// Change a key: press the new one. A key already in use is named, and the two swap on a yes.
+function moveSheet(b: Binding, view: View, scope: Scope): void {
+  let busy = false;
+  const key = h("input", { type: "text", spellcheck: "false", autocapitalize: "off", placeholder: "x, C-a, F5", "aria-label": "New key" });
+  const warn = h("p", { class: "form-err" });
+  const err = h("p", { class: "form-err" });
+  const go = h("button", { class: "primary" }, "Change key");
+  const other = (): Binding | undefined => (key.value.trim() ? ownerOf(view.bindings, nameIn(b.table, key.value.trim())) : undefined);
+  const check = (): void => {
+    const o = other();
+    const same = o && o.name === b.name;
+    warn.textContent = o && !same ? `${key.value.trim()} already runs “${gist(o.help)}”. ${o.fixed ? "It will run this instead." : `Swap: it will run “${gist(b.help)}” and ${b.key} will run “${gist(o.help)}”.`}` : "";
+    go.textContent = o && !same ? (o.fixed ? "Use it" : "Swap") : "Change key";
+  };
+  key.addEventListener("input", check);
+  const s = sheet(`Change the key for “${gist(b.help)}”`, [
+    h("p", { class: "intro" }, `Now ${b.key} (${b.when}). Press the new key, or type its name.`),
+    h("label", { class: "field" }, h("span", {}, "New key"), h("div", { class: "ctl row-ctl" }, key, h("button", { class: "small", title: tip("settings.keys"), onclick: () => captureKeys((l) => { key.value = l[0] ?? ""; check(); }) }, "Press a key…"))),
+    warn, err,
+  ], [h("button", { onclick: () => s.close() }, "Cancel"), go]);
+  go.addEventListener("click", async () => {
+    const to = key.value.trim();
+    if (busy || !to) return;
+    busy = true;
+    try {
+      const o = other();
+      if (o && o.name === b.name) { err.textContent = `${to} is already its key`; return; }
+      let why = "";
+      const name = o && !o.fixed ? o.name : nameIn(b.table, to);
+      if (await bind(scope, moveChanges(b, name, o, true), o && !o.fixed ? `${b.key} and ${to} swapped` : `“${gist(b.help)}” is now on ${to}`, { at: (m) => { why = m; } })) { s.close(); st.focusKey = `keys.${name}`; page?.paintBody(); } else err.textContent = why;
+    } finally { busy = false; }
+  });
+}
+
 function mapRows(c: Collection, view: View, scope: Scope): HTMLElement {
+  if (c.path === "keys") return keyRows(view, scope);
   const items = view.maps.find((m) => m.path === c.path)?.items ?? [];
-  const isKeys = c.path === "keys";
   const rows = items.map(([name, value]) => {
     const err = h("p", { class: "form-err" });
-    const input = isKeys
-      ? h("input", { type: "text", list: "cfg-actions", spellcheck: "false", autocapitalize: "off", "aria-label": `what ${name} runs` })
-      : h("textarea", { rows: 2, class: "code", "aria-label": `${name}'s text` });
+    const input = h("textarea", { rows: 2, class: "code", "aria-label": `${name}'s text` });
     input.value = value;
     input.addEventListener("change", async () => {
       // (What was typed is on screen already: nothing is rebuilt under the cursor.)
@@ -348,10 +433,10 @@ function mapRows(c: Collection, view: View, scope: Scope): HTMLElement {
     });
     return h("div", { class: "set map" },
       h("div", { class: "set-head" }, h("code", {}, name), h("span", { class: "grow" }),
-        h("button", { class: "small deny", title: tip("settings.remove"), onclick: async () => { if (await changeHeld(scope, { t: "unset", key: `${c.path}.${name}` }, `${name} removed`)) page?.paintBody(); } }, isKeys ? "Unbind" : "Remove")),
+        h("button", { class: "small deny", title: tip("settings.remove"), onclick: async () => { if (await changeHeld(scope, { t: "unset", key: `${c.path}.${name}` }, `${name} removed`)) page?.paintBody(); } }, "Remove")),
       input, err);
   });
-  return h("div", { class: "stack-in" }, isKeys ? actionOptions(view) : null, ...(rows.length ? rows : [h("p", { class: "empty" }, `No ${c.noun}s yet.`)]));
+  return h("div", { class: "stack-in" }, ...(rows.length ? rows : [h("p", { class: "empty" }, c.empty)]));
 }
 
 function memberRows(c: Collection, view: View, scope: Scope): HTMLElement {
@@ -361,7 +446,7 @@ function memberRows(c: Collection, view: View, scope: Scope): HTMLElement {
     const changed = fields.filter((f) => f.changed).length;
     return row(h("span", {}, c.layout === "array" ? `${n}` : n, changed ? badge(`${changed} changed`, "info") : null), summary(c.path, n, fields), "›", { href: `#/settings/${c.path}/${enc(n)}` });
   });
-  return h("div", { class: "rows" }, ...(rows.length ? rows : [h("p", { class: "empty" }, `No ${c.noun}s yet.`)]), h("button", { class: "add-row", title: tip("settings.add"), onclick: () => addMember(c, scope) }, `＋ Add ${article(c.noun)} ${c.noun}`));
+  return h("div", { class: "rows" }, ...(rows.length ? rows : [h("p", { class: "empty" }, c.empty)]), h("button", { class: "add-row", title: tip("settings.add"), onclick: () => addMember(c, scope) }, `＋ Add ${article(c.noun)} ${c.noun}`));
 }
 
 /// The sheet that makes a member: its name and what it needs, so it's valid the moment it exists.
@@ -373,9 +458,11 @@ function addMember(c: Collection, scope: Scope): void {
   const finish = async (name: string, fields: Record<string, string>): Promise<void> => {
     let why = "";
     if (!(await change(scope, { t: "add", path: c.path, name, fields }, `added ${c.noun} ${name}`.trim(), { at: (m) => { why = m; } }))) throw new Error(why);
+    // A theme just made is the one in use, so editing its colours shows at once.
+    if (c.path === "themes" && (await change("user", { t: "set", key: "ui.theme", value: name }, `ui.theme = ${name}`, { quiet: true }))) page?.snack(`Added theme ${name}, now in use: change its colours and watch them change`, true);
     if (c.layout === "tables") go(`#/settings/${c.path}/${enc(name)}`); else page?.paintBody();
   };
-  if (c.path === "keys") { bindingSheet(view, finish); return; }
+  if (c.path === "keys") { bindingSheet(view, "prefix"); return; }
   if (c.layout === "array") {
     const types = (st.schema?.user.settings.find((x) => x.key === "notifications.sinks.*.type")?.kind as { choices: { value: string; help: string }[] } | undefined)?.choices ?? [];
     sinkSheet(types, finish);
@@ -386,28 +473,43 @@ function addMember(c: Collection, scope: Scope): void {
     return;
   }
   const extra = needed(c.path, "");
-  const fields = [{ key: "name", label: "Name", required: true, hint: "letters, digits, - and _" }, ...extra.map((f) => ({ key: f, label: f, required: true })), ...(c.path === "agents" ? [{ key: "command", label: "Command", hint: "optional: the program and its arguments; default, its own name" }] : [])];
+  // A theme starts as a copy of one that exists.
+  const bases = c.path === "themes" ? (view.options.find((o) => o.source === "builtin_themes")?.options ?? []) : [];
+  const fields: Field[] = [{ key: "name", label: "Name", required: true, hint: "letters, digits, - and _" }, ...(bases.length ? [{ key: "base", label: "Start from", type: "select" as const, options: bases.map(([v, d]): [string, string] => [v, d ? `${v} — ${d}` : v]), value: c.starter.find(([k]) => k === "base")?.[1] }] : []), ...extra.map((f) => ({ key: f, label: f, required: true })), ...(c.path === "agents" ? [{ key: "command", label: "Command", hint: "optional: the program and its arguments; default, its own name" }] : [])];
   form(`New ${c.noun}`, fields, "Add", async (v) => {
     const { name, ...rest } = v;
     await finish(String(name), Object.fromEntries(Object.entries(rest).filter(([, x]) => typeof x === "string" && x !== "")) as Record<string, string>);
   });
 }
 
-function bindingSheet(view: View, finish: (name: string, fields: Record<string, string>) => Promise<void>): void {
+function bindingSheet(view: View, table: Binding["table"]): void {
   let busy = false;
-  const key = h("input", { type: "text", spellcheck: "false", autocapitalize: "off", placeholder: "x, C-a, global:M-1", "aria-label": "Key" });
-  const act = h("input", { type: "text", list: "cfg-actions", spellcheck: "false", autocapitalize: "off", placeholder: "session.next", "aria-label": "Runs" });
+  const when = KEY_GROUPS.find((g) => g[0] === table)![1].toLowerCase();
+  const key = h("input", { type: "text", spellcheck: "false", autocapitalize: "off", placeholder: "x, C-a, F5", "aria-label": "Key" });
+  const act = h("input", { type: "text", list: "cfg-actions", spellcheck: "false", autocapitalize: "off", placeholder: "type to search: detach, settings, session.next…", "aria-label": "Runs", title: tip("settings.keyaction") });
+  const warn = h("p", { class: "form-err" });
   const err = h("p", { class: "form-err" });
-  const s = sheet("New key binding", [
+  const check = (): void => {
+    const o = key.value.trim() ? ownerOf(view.bindings, nameIn(table, key.value.trim())) : undefined;
+    warn.textContent = o ? `${key.value.trim()} already runs “${gist(o.help)}”. Adding this takes the key from it.` : "";
+  };
+  key.addEventListener("input", check);
+  const s = sheet(`New key ${when}`, [
     actionOptions(view),
-    h("p", { class: "intro" }, "The key you press after the prefix. Put global: in front for one that works without it."),
-    h("label", { class: "field" }, h("span", {}, "Key"), h("div", { class: "ctl row-ctl" }, key, h("button", { class: "small", onclick: () => captureKeys((l) => { key.value = l[0] ?? ""; }) }, "Press a key…"))),
+    h("p", { class: "intro" }, table === "prefix" ? "The key you press after the prefix key." : table === "nav" ? "A key that works while the sidebar has focus." : "A key that works anywhere, without the prefix."),
+    h("label", { class: "field" }, h("span", {}, "Key"), h("div", { class: "ctl row-ctl" }, key, h("button", { class: "small", title: tip("settings.keys"), onclick: () => captureKeys((l) => { key.value = l[0] ?? ""; check(); }) }, "Press a key…"))),
+    warn,
     h("label", { class: "field" }, h("span", {}, "Runs"), act),
     err,
   ], [h("button", { onclick: () => s.close() }, "Cancel"), h("button", { class: "primary", onclick: async () => {
     if (busy) return;
     busy = true;
-    try { await finish(key.value.trim(), { value: act.value.trim() }); s.close(); } catch (e) { err.textContent = errText(e); } finally { busy = false; }
+    try {
+      let why = "";
+      const to = key.value.trim();
+      const name = (to && ownerOf(view.bindings, nameIn(table, to))?.name) || nameIn(table, to);
+      if (await bind("user", [[name, act.value.trim() || null]], `${to} runs ${act.value.trim()}`, { at: (m) => { why = m; } })) { s.close(); st.focusKey = `keys.${name}`; page?.paintBody(); } else err.textContent = why;
+    } finally { busy = false; }
   } }, "Add")]);
 }
 
@@ -542,9 +644,9 @@ function build(rest: string): Page {
     const out: Child[] = [h("p", { class: "intro" }, sec.blurb)];
     out.push(...cards(view.entries.filter((e) => !e.member && settingOf(e)?.section === sec.id), view, scope));
     for (const c of collectionsOf().filter((x) => x.section === sec.id)) {
-      out.push(h("h3", { class: "cfg-h" }, c.path === "keys" ? "Your key bindings" : c.path === "notifications.sinks" ? "Notification services" : c.path === "scripts.run" ? "Run scripts" : c.path[0].toUpperCase() + c.path.slice(1)));
+      out.push(h("h3", { class: "cfg-h" }, c.title));
       out.push(typeof c.layout === "object" ? mapRows(c, view, scope) : memberRows(c, view, scope));
-      if (typeof c.layout === "object") out.push(h("button", { class: "add-row", title: tip("settings.add"), onclick: () => addMember(c, scope) }, `＋ Add ${article(c.noun)} ${c.noun}`));
+      if (typeof c.layout === "object" && c.path !== "keys") out.push(h("button", { class: "add-row", title: tip("settings.add"), onclick: () => addMember(c, scope) }, `＋ Add ${article(c.noun)} ${c.noun}`));
     }
     return out;
   }
@@ -565,7 +667,7 @@ function build(rest: string): Page {
           if (!(await changeHeld(scope, { t: "rename", path, from: name, to: String(v.to) }, `${name} is now ${v.to}`, { at: (m) => { why = m; } }))) throw new Error(why);
           go(`#/settings/${path}/${enc(String(v.to))}`);
         }) }, "Rename") : null,
-        h("button", { class: "deny", title: tip("settings.remove"), onclick: () => confirm(`Remove ${c.noun} ${name}?`, "Everything set in it goes too.", "Remove", async () => { if (await changeHeld(scope, { t: "remove", path, name }, `removed ${c.noun} ${name}`)) go(`#/settings/${c.section}`); }) }, "Remove"));
+        h("button", { class: "deny", title: tip("settings.remove"), onclick: () => confirm(`Remove ${c.noun} ${name}?`, `Everything set in it goes too.${path === "themes" && view.entries.some((x) => x.key === "ui.theme" && x.value === name) ? " It is the theme in use: the default comes back." : ""}`, "Remove", async () => { if (await changeHeld(scope, { t: "remove", path, name }, `removed ${c.noun} ${name}`)) go(`#/settings/${c.section}`); }) }, "Remove"));
     return [actionsBar, ...cards(fields, view, scope)];
   }
 
@@ -577,18 +679,28 @@ function build(rest: string): Page {
       for (const e of view.entries) {
         const s = settingOf(e);
         if (!s || !relevant(e, s, view.entries)) continue;
-        const n = score(st.query, e.key, s.help, e.shown);
+        const n = score(st.query, e.key, s.help, e.shown, s.also);
         if (n >= 0) hits.push({ e, s, scope, n });
       }
     }
     hits.sort((a, b) => b.n - a.n || a.e.key.localeCompare(b.e.key));
-    if (!hits.length) return [h("p", { class: "empty" }, `No setting matches “${st.query}”.`)];
-    return hits.slice(0, 40).map(({ e, s, scope }) => {
+    // Keys are found by what they do: “detach”, “settings”.
+    const keyHits = (st.user?.bindings ?? [])
+      .map((b) => ({ b, n: score(st.query, `keys ${b.name}`, `${b.help} ${b.action}`, `${b.standing} ${b.when}`, "key binding shortcut") }))
+      .filter((x) => x.n >= 0)
+      .sort((x, y) => y.n - x.n);
+    if (!hits.length && !keyHits.length) return [h("p", { class: "empty" }, `No setting matches “${st.query}”. Try fewer or different words, or clear the search to browse the sections.`)];
+    const keyCards = keyHits.slice(0, 20).map(({ b }) => {
+      const c = keyCard(b, st.user!, "user");
+      c.prepend(h("a", { class: "set-where", href: "#/settings/keys" }, `Key bindings › ${b.when} › ${b.key}`));
+      return c;
+    });
+    return [...hits.slice(0, 40).map(({ e, s, scope }) => {
       const view = viewOf(scope)!;
       const c = card(e, s, scope, view);
       c.prepend(h("a", { class: "set-where", href: `#/settings/${e.member ? `${e.member[0]}/${enc(e.member[1])}` : s.section}` }, `${sectionsOf().find((x) => x.id === s.section)?.title ?? s.section} › ${e.key}`));
       return c;
-    });
+    }), ...keyCards];
   }
 
   function paintBody(): void {

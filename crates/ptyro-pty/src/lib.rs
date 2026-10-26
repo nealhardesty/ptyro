@@ -69,6 +69,7 @@ pub const STRIP_ENV: &[&str] = &[
     "PTYRO_PORT",
     "PTYRO_PORT_COUNT",
     "PTYRO_SCRATCHPAD",
+    "PTYRO_PROJECT_SCRATCHPAD",
 ];
 
 /// Prefixes stripped the same way (`CLAUDE_CODE_IDE_*`). Not `CLAUDE_CODE_*`: a profile's own

@@ -231,6 +231,7 @@ mod tests {
             window_title: None,
             quick: false,
             pad: false,
+            pad_project: None,
         }
     }
 

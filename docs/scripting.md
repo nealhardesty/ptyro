@@ -136,8 +136,17 @@ ptyro wait fix-login.dev --match 'ready on|listening' --timeout 2m
 
 ### Notes from scripts
 
-`$PTYRO_SCRATCHPAD` is set in every session, so a hook or a script can leave a note or read the
-open items:
+`$PTYRO_SCRATCHPAD` (the pad for everywhere) is set in every session, and
+`$PTYRO_PROJECT_SCRATCHPAD` (the project's own, `<repo>/.ptyro/scratchpad.md`, shared by all of
+its worktrees and kept out of git) in every session that belongs to a project, so a hook or a
+script can leave a note or read the open items.
+
+**Which pad `ptyro scratchpad` uses depends on where it runs.** Inside a project's directory or
+worktree it is the project's pad; anywhere else, the one for everywhere. Hooks and agents that
+`ptyro scratchpad add` from a worktree used to write to the pad for everywhere and now write to
+the project's; the command prints which (`added to the myrepo project pad (…)`). Say
+`--global` or `--project` to be sure whatever the directory, or write to the files named by the
+variables directly (plain Markdown, `echo >> "$PTYRO_PROJECT_SCRATCHPAD"`):
 
 ```bash
 # a failing nightly check becomes an item, with the log tail under it
@@ -145,6 +154,10 @@ make test 2>&1 | tail -20 | ptyro scratchpad add --section Nightly -
 
 # what's open, as JSON
 ptyro scratchpad todo --json | jq -r '.items[] | "\(.line) \(.text)"'
+
+# always the pad for everywhere, even from inside a worktree; or always the project's
+ptyro scratchpad --global add "rotate the API keys"
+ptyro scratchpad --project add "the migration needs a down step"
 
 # start every open bug as a task (each gets its own worktree and agent)
 ptyro scratchpad todo --json | jq -r '.items[] | select(.section=="Bugs") | .line' |
@@ -174,8 +187,9 @@ Use these commands; they print JSON with `--json`:
   changing; `ptyro lease release` when done. `ptyro radar` shows who else is changing what.
 - `ptyro checkpoint ls`: your worktree after each of your turns (the human can restore one).
 - `ptyro scratchpad add "…"`: note something for the human (a bug you found but didn't fix, a
-  follow-up) in their scratchpad, `$PTYRO_SCRATCHPAD`, stamped with your name; `ptyro scratchpad
-  todo` lists what they've noted. Add with the command; don't edit the file.
+  follow-up) in their scratchpad, stamped with your name: in a project it goes to the project's
+  pad (`$PTYRO_PROJECT_SCRATCHPAD`), else the one for everywhere (`$PTYRO_SCRATCHPAD`);
+  `ptyro scratchpad todo` lists what they've noted. Add with the command; don't edit the file.
 
 Rules: never `ptyro kill` or `ptyro wt rm` sessions or worktrees you didn't create; never answer
 another session's permission prompt (`ptyro answer`) or a gate; the human does that (ptyro

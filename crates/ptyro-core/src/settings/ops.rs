@@ -145,11 +145,32 @@ fn exclude_from_git(root: &Path) {
 /// One change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Op {
-    Set { key: String, value: String },
-    Unset { key: String },
-    Add { path: String, name: String, fields: Vec<(String, String)> },
-    Remove { path: String, name: String },
-    Rename { path: String, from: String, to: String },
+    Set {
+        key: String,
+        value: String,
+    },
+    Unset {
+        key: String,
+    },
+    Add {
+        path: String,
+        name: String,
+        fields: Vec<(String, String)>,
+    },
+    Remove {
+        path: String,
+        name: String,
+    },
+    Rename {
+        path: String,
+        from: String,
+        to: String,
+    },
+    /// Key bindings, several at once as one change (a swap is one undo): each `[keys]` name gets
+    /// `Some(action)` (`"none"` unbinds) or `None` (back to its default). See [`super::bind`].
+    Bind {
+        changes: Vec<(String, Option<String>)>,
+    },
 }
 
 impl Op {
@@ -160,6 +181,7 @@ impl Op {
             Self::Add { path, .. } | Self::Remove { path, .. } | Self::Rename { path, .. } => {
                 vec![path.clone()]
             }
+            Self::Bind { .. } => vec!["keys".to_owned()],
         }
     }
 }
@@ -214,6 +236,10 @@ fn compute(
     // bad key binding can still have its other settings changed.
     let broken_before = extra(before).is_err();
     let extra = |new: &str| if broken_before { Ok(()) } else { extra(new) };
+    // The theme in use goes with its theme: back to the default when it is removed, to the new
+    // name when it is renamed (otherwise the config would name a theme that isn't there).
+    let followed = theme_follow(scope, before, op, lk)?;
+    let before = followed.as_deref().unwrap_or(before);
     let after = match op {
         Op::Set { key, value } => super::set(scope, before, key, value, lk, &extra),
         Op::Unset { key } => super::unset(scope, before, key, &extra),
@@ -224,6 +250,7 @@ fn compute(
         }
         Op::Remove { path, name } => super::remove(scope, before, path, name, &extra),
         Op::Rename { path, from, to } => super::rename(scope, before, path, from, to, &extra),
+        Op::Bind { changes } => super::bind(scope, before, changes, lk, &extra),
     }?;
     // A repository's two files are one config: a partial override is fine when the other file
     // completes it, and the merge is what must load.
@@ -244,6 +271,52 @@ fn compute(
         check_merged(shared, local)?;
     }
     Ok(after)
+}
+
+/// The theme `ui.theme` names in `text`, if the file sets it.
+fn theme_in_use(text: &str) -> Option<String> {
+    let doc = super::parse_doc(text).ok()?;
+    let item = super::item_at(&doc, &["ui".to_owned(), "theme".to_owned()])?;
+    item.as_str().map(str::to_owned)
+}
+
+/// `before` with `ui.theme` moved off the theme `op` removes or renames, or `None` when it isn't
+/// the one in use.
+fn theme_follow(
+    scope: Scope,
+    before: &str,
+    op: &Op,
+    lk: &Lookups,
+) -> Result<Option<String>, String> {
+    let none = |_: &str| Ok(());
+    let moved = match op {
+        Op::Remove { path, name } if scope == Scope::User && path == "themes" => {
+            (theme_in_use(before).as_deref() == Some(name)).then_some(None)
+        }
+        Op::Rename { path, from, to } if scope == Scope::User && path == "themes" => {
+            (theme_in_use(before).as_deref() == Some(from)).then(|| Some(to.trim()))
+        }
+        _ => None,
+    };
+    Ok(match moved {
+        None => None,
+        Some(None) => Some(super::unset(scope, before, "ui.theme", &none)?),
+        Some(Some(to)) => Some(super::set(scope, before, "ui.theme", to, lk, &none)?),
+    })
+}
+
+/// What a theme change did to `ui.theme`, to tell the person.
+fn theme_note(before: &str, op: &Op) -> Option<String> {
+    let used = theme_in_use(before)?;
+    match op {
+        Op::Remove { path, name } if path == "themes" && *name == used => {
+            Some(format!("{name} was the theme in use, so the default theme is back"))
+        }
+        Op::Rename { path, from, to } if path == "themes" && *from == used => {
+            Some(format!("{to} is still the theme in use"))
+        }
+        _ => None,
+    }
 }
 
 /// Whether `.ptyro.toml` and `.ptyro.local.toml`, merged, make a project config that loads.
@@ -299,6 +372,7 @@ pub fn apply(layer: &Layer, op: &Op, lk: &Lookups, extra: Extra<'_>) -> Result<D
                 project::FILE
             ));
         }
+        notes.extend(theme_note(&before, op));
         if keys.iter().any(|k| k.starts_with("scripts.")) {
             notes.push(
                 "its scripts changed, so ptyro asks you to trust them again before they run"
@@ -362,6 +436,8 @@ pub struct View {
     pub entries: Vec<Entry>,
     /// The bindings or prompts of each map collection: `(name, value)`.
     pub maps: Vec<(String, Vec<(String, String)>)>,
+    /// Every key binding, defaults included (your config only).
+    pub bindings: Vec<super::Binding>,
     /// The names in each table collection, in the file's order.
     pub members: Vec<(String, Vec<String>)>,
     /// What each dynamic choice offers: `(name, what it is)`.
@@ -419,12 +495,13 @@ pub fn view(layer: &Layer, lk: &Lookups) -> View {
             }
         }
     }
+    let bindings = if in_scope("keys") { super::bindings(&root, lk) } else { Vec::new() };
     let options = SOURCES
         .iter()
         .map(|s| (s.name(), super::options(*s, &config, pconfig.as_ref(), lk)))
         .collect();
     let files = layers.iter().map(|l| (l.origin(), l.path(), l.path().exists())).collect();
-    View { scope, entries, maps, members, options, files, problem }
+    View { scope, entries, maps, bindings, members, options, files, problem }
 }
 
 impl Entry {
@@ -460,6 +537,7 @@ impl View {
             "scope": self.scope,
             "entries": self.entries.iter().map(Entry::to_json).collect::<Vec<_>>(),
             "maps": self.maps.iter().map(|(p, m)| json!({ "path": p, "items": m })).collect::<Vec<_>>(),
+            "bindings": self.bindings,
             "members": self.members.iter().map(|(p, m)| json!({ "path": p, "names": m })).collect::<Vec<_>>(),
             "options": self.options.iter().map(|(s, o)| json!({ "source": s, "options": o })).collect::<Vec<_>>(),
             "files": self.files.iter().map(|(o, p, e)| json!({ "origin": o, "path": p, "exists": e })).collect::<Vec<_>>(),

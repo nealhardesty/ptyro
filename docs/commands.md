@@ -46,7 +46,8 @@ Conventions:
 | `ptyro summarize SESSION [--json]` | what it's doing, in a line, from a small model (`[summaries] command`, on its profile's account); works with summaries off |
 | `ptyro shell [WORKTREE] [--json] [--read [--scrollback [N]]]` | the worktree's quick terminal (one shell per worktree, or per directory outside one): attach with it in the TUI's drawer, print it as JSON, or print its screen (`--read`, which never starts one; an agent can read your terminal this way) |
 | `ptyro adopt SESSION` | the Claude you started by hand in a shell session becomes a managed session (hooks, hibernation, mail), same conversation |
-| `ptyro scratchpad [edit] [--pane [--json]]` | the scratchpad (alias `pad`): one Markdown notes file for ideas and bugs, `$PTYRO_SCRATCHPAD` in every session. No subcommand: open it in your editor, here. `--pane`: the editor as a session of its own (what `C-q ;` shows), attached |
+| `ptyro scratchpad [edit] [--pane [--json]]` | the scratchpad (alias `pad`): Markdown notes files for ideas and bugs: the one for everywhere (`$PTYRO_SCRATCHPAD`) and one per project (`<repo>/.ptyro/scratchpad.md`, `$PTYRO_PROJECT_SCRATCHPAD`, git-excluded). Inside a project's directory or worktree every subcommand below uses the project's pad, anywhere else the global one; each says which it used. No subcommand: open it in your editor, here. `--pane`: the editor as a session of its own (what `C-q ;` shows), attached |
+| `ptyro scratchpad --global …` / `--project[=NAME] …` | on every subcommand: force the pad for everywhere, or a project's (the one you are in, or `NAME`: a project's slug or id). Not both. `--project` outside any project is an error that says what to do |
 | `ptyro scratchpad path\|cat [--tail N] [--json]` | where the file is / its text (`--json`: `{path, rev, text, open, done}`) |
 | `ptyro scratchpad add [--section HEADING] [--note] [--no-stamp] [--json] TEXT…` | add a line, stamped with the time and the worktree or directory you are in (and the agent's name); `-` or a pipe reads standard input; makes a `- [ ]` item unless `--note` |
 | `ptyro scratchpad todo [--all] [--json]` | the open `- [ ]` items with line numbers (`--all`: ticked ones too) |
@@ -160,7 +161,7 @@ See [`remote.md`](remote.md).
 | Command | Does |
 |---|---|
 | `ptyro serve [--listen ADDR] [--local] [--cert PEM --key PEM] [--tailscale] [--insecure]` | the web app and the protocol over WebSocket for paired devices, over HTTPS with a certificate ptyro makes (phones trust its CA once, from `/ca.crt`); `--local` lets in your LAN and tailnet; `--cert`/`--key` use your own certificate; `--insecure` is plain HTTP |
-| `ptyro pair [NAME] [--scope read\|approve\|control\|full] [--url URL] [--json]` | pair a phone or browser: a QR code with a one-time code (10 minutes; scope `approve` by default), then waits for the device |
+| `ptyro pair [NAME] [--scope read\|approve\|control\|full] [--url URL] [--json]` | pair a phone or browser: a QR code with a one-time code (10 minutes; scope `full` by default, with a warning; a name that exists is replaced), then waits for the device |
 | `ptyro devices [ls \| revoke ID \| push-test]` | paired devices |
 | `ptyro web [on\|off\|status] [--via tailscale\|lan\|here] [--pair] [--json]` | have the daemon run the web app's server (`ptyro daemon start --serve` too): on, off, or where it is and what to do next |
 | `ptyro --remote HOST …` / `ptyro proxy` | any command against another machine's daemon / the bridge it runs there |
@@ -177,6 +178,7 @@ See [`remote.md`](remote.md).
 | Command | Does |
 |---|---|
 | `ptyro init [-y] [--dry-run]` | detect agents, accounts and repositories, then write your config |
+| `ptyro about [--json]` | which ptyro this is: version and protocol, the repository, licence, build, where config, data, logs and the socket live, the daemon and web app, the tools found, and a block to paste into a bug report |
 | `ptyro doctor [--quick] [--json]` | diagnose agents, logins, integrations, terminal, tmux, daemon, git |
 | `ptyro tour` | the daily loop for real (task, answer, review, finish, clean up) with a pretend agent in a ptyro of its own, deleted afterwards |
 | `ptyro config path\|check\|show\|edit [KEY]` | your config; `edit` opens `$EDITOR` (at that setting) and validates |

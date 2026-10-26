@@ -20,16 +20,131 @@ pub async fn proxy(ctx: &Ctx) -> Result<i32, Error> {
     Ok(0)
 }
 
+/// The scope `ptyro pair` gives when none is named: the whole web app needs `full`. Every place
+/// that pairs says so in plain words (`full_warning`) and offers the lower scopes.
+pub const DEFAULT_SCOPE: Scope = Scope::Full;
+
+/// What a device with `full` scope can do, said so the owner can't miss it. Shown wherever the
+/// default scope was used (not when a scope was asked for).
+pub fn full_warning() -> &'static str {
+    "This device gets FULL control: it can run commands as you, change settings, and pair or \
+     revoke other devices. Pair only your own phone or browser. Use --scope approve (answer \
+     prompts only) or --scope control (also type into sessions) for less."
+}
+
+/// The port a URL names, if it names one (`https://[::1]:8443/x` is 8443; `https://box` none).
+pub fn url_port(url: &str) -> Option<u16> {
+    let (_, rest) = url.split_once("://")?;
+    let auth = rest.split(['/', '?', '#']).next()?;
+    let auth = auth.rsplit_once('@').map_or(auth, |x| x.1);
+    let port =
+        if auth.starts_with('[') { auth.split_once("]:")?.1 } else { auth.rsplit_once(':')?.1 };
+    port.parse().ok()
+}
+
+/// `url` with `port` written out when it names none: `https://box.ts.net` becomes
+/// `https://box.ts.net:443`, `http://[::1]` becomes `http://[::1]:7091`.
+pub fn with_port(url: &str, port: u16) -> String {
+    if url_port(url).is_some() {
+        return url.to_owned();
+    }
+    let Some((scheme, rest)) = url.split_once("://") else { return url.to_owned() };
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    format!("{scheme}://{}:{port}{}", &rest[..end], &rest[end..])
+}
+
+/// `url` with its port replaced by (or given) `port`.
+pub fn set_port(url: &str, port: u16) -> String {
+    let Some(old) = url_port(url) else { return with_port(url, port) };
+    let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let auth = rest[..end].strip_suffix(&format!(":{old}")).unwrap_or(&rest[..end]);
+    format!("{scheme}://{auth}:{port}{}", &rest[end..])
+}
+
+fn default_port(url: &str) -> u16 {
+    if url.starts_with("https://") { 443 } else { 80 }
+}
+
+/// A listen address phones can open: a wildcard (`0.0.0.0`, `::`) is every interface, not a
+/// place, so it becomes this machine's LAN address (else loopback). The port stays.
+pub fn reachable(listen: &str) -> String {
+    let Ok(addr) = listen.parse::<std::net::SocketAddr>() else { return listen.to_owned() };
+    if !addr.ip().is_unspecified() {
+        return addr.to_string();
+    }
+    let ip = crate::tls::local_addresses()
+        .into_iter()
+        .find(|ip| !ip.is_loopback() && ip.is_ipv4() == addr.is_ipv4())
+        .or_else(|| crate::tls::local_addresses().into_iter().find(|ip| !ip.is_loopback()))
+        .unwrap_or_else(|| std::net::Ipv4Addr::LOCALHOST.into());
+    std::net::SocketAddr::new(ip, addr.port()).to_string()
+}
+
 /// Where the web app is reached from a phone: `--url`, `[remote] public_url`, Tailscale HTTPS
 /// in front of the listen port, or the listen address itself.
 pub fn base_url(config: &Config, explicit: Option<String>, https: bool) -> String {
+    resolve_base(config, explicit, https, tailscale_url(&config.remote.listen)).0
+}
+
+/// The link base and what to tell the user about it. The rule (SPEC §16): the port is always
+/// written out. An address ptyro builds (listen address, Tailscale's name on 443) carries its
+/// port. An address the user gave without a port is a reverse proxy or Tailscale on the scheme's
+/// default port when ptyro sits behind one (`trusted_proxy`, or the Tailscale name), so that
+/// port is written out; otherwise ptyro itself serves it, on its listen port, which is added
+/// (a bare host would reach nothing). A given port that isn't the one ptyro listens on, with
+/// no proxy in front, is kept and warned about.
+pub fn resolve_base(
+    config: &Config,
+    explicit: Option<String>,
+    https: bool,
+    tailscale: Option<String>,
+) -> (String, Vec<String>) {
     let scheme = if https { "https" } else { "http" };
-    explicit
-        .or_else(|| config.remote.public_url.clone())
-        .or_else(|| tailscale_url(&config.remote.listen))
-        .unwrap_or_else(|| format!("{scheme}://{}", config.remote.listen))
-        .trim_end_matches('/')
-        .to_owned()
+    let listen = reachable(&config.remote.listen);
+    let listen_port = listen.rsplit(':').next().and_then(|p| p.parse::<u16>().ok());
+    let given = explicit.or_else(|| config.remote.public_url.clone());
+    let mut notes = Vec::new();
+    let url = match (given, tailscale) {
+        (Some(u), _) => {
+            let u = u.trim_end_matches('/').to_owned();
+            if u.split_once("://").is_none() {
+                notes.push(format!(
+                    "{u} has no http:// or https:// in front; use e.g. --url {scheme}://{u}"
+                ));
+                u
+            } else if url_port(&u).is_some() {
+                if let (Some(p), Some(l)) = (url_port(&u), listen_port)
+                    && p != l
+                    && !config.remote.trusted_proxy
+                {
+                    notes.push(format!(
+                        "{u} names port {p}, but ptyro listens on {l}: phones reach nothing \
+                         unless a proxy forwards {p} to it. Use --url {}, or set `[remote] \
+                         trusted_proxy = true` if a proxy does",
+                        set_port(&u, l)
+                    ));
+                }
+                u
+            } else if config.remote.trusted_proxy {
+                with_port(&u, default_port(&u))
+            } else if let Some(l) = listen_port {
+                if l != default_port(&u) {
+                    notes.push(format!(
+                        "added :{l} to {u}, the port ptyro listens on. If a reverse proxy serves \
+                         it on :{} instead, set `[remote] trusted_proxy = true`",
+                        default_port(&u)
+                    ));
+                }
+                with_port(&u, l)
+            } else {
+                with_port(&u, default_port(&u))
+            }
+        }
+        (None, Some(ts)) => with_port(ts.trim_end_matches('/'), 443),
+        (None, None) => format!("{scheme}://{listen}"),
+    };
+    (url, notes)
 }
 
 /// What a running `ptyro serve` serves (`state/serve.json`), so `ptyro pair` points phones at
@@ -165,23 +280,40 @@ pub fn qr(text: &str) -> Option<String> {
 pub async fn pair(
     ctx: &Ctx,
     name: String,
-    scope: &str,
+    scope: Option<&str>,
     url: Option<String>,
     json: bool,
 ) -> Result<i32, Error> {
-    let scope: Scope = scope.parse().map_err(Error::invalid)?;
+    // No scope named: the default, with its warning. A named one is the owner's choice.
+    let defaulted = scope.is_none();
+    let scope: Scope = scope.map_or(Ok(DEFAULT_SCOPE), str::parse).map_err(Error::invalid)?;
+    let warning = (defaulted && scope == Scope::Full).then(full_warning);
     let c = ctx.connect(true).await.map_err(no_daemon)?;
-    let (device, code, expires_ms) = match c.request(Request::DevicePair { name, scope }).await? {
-        Reply::Pairing { device, code, expires_ms } => (device, code, expires_ms),
-        r => return Err(unexpected(r)),
+    // Which machine the link opens on, for people who pair several.
+    let machine = match c.request(Request::Status).await {
+        Ok(Reply::Status { status }) => status.machine,
+        _ => None,
     };
-    let config = Config::load(&Config::path(&ctx.paths)).unwrap_or_default();
+    let (device, code, expires_ms, replaces) =
+        match c.request(Request::DevicePair { name, scope }).await? {
+            Reply::Pairing { device, code, expires_ms, replaces } => {
+                (device, code, expires_ms, replaces)
+            }
+            r => return Err(unexpected(r)),
+        };
+    let mut config = Config::load(&Config::path(&ctx.paths)).unwrap_or_default();
     // The running `ptyro serve`'s own address (it knows its flags); else what config implies.
     let served = served(&ctx.paths);
     let https = !(config.remote.insecure || config.remote.trusted_proxy);
-    let base = match (&url, &served) {
-        (None, Some(s)) if config.remote.public_url.is_none() => s.url.clone(),
-        _ => base_url(&config, url, https),
+    // `ptyro serve --listen` can differ from the config: what it listens on is what counts.
+    if let Some(l) = served.as_ref().and_then(|s| s.listen.clone()) {
+        config.remote.listen = l;
+    }
+    let (base, notes) = match (&url, &served) {
+        (None, Some(s)) if config.remote.public_url.is_none() => {
+            (with_port(&s.url, default_port(&s.url)), Vec::new())
+        }
+        _ => resolve_base(&config, url, https, tailscale_url(&config.remote.listen)),
     };
     let ca = served.as_ref().and_then(|s| s.ca_fingerprint.clone());
     // What we print stays in scrollback and recordings, so it is a code the web app trades
@@ -191,9 +323,28 @@ pub async fn pair(
     if json {
         println!(
             "{}",
-            serde_json::json!({ "device": device, "url": link, "expires_ms": expires_ms, "ca": ca.as_ref().map(|f| serde_json::json!({ "url": format!("{base}/ca.crt"), "sha256": f })) })
+            serde_json::json!({ "device": device, "url": link, "expires_ms": expires_ms, "ca": ca.as_ref().map(|f| serde_json::json!({ "url": format!("{base}/ca.crt"), "sha256": f })), "machine": machine, "warning": warning, "replaces": replaces, "notes": notes })
         );
         return Ok(0);
+    }
+    if let Some(m) = &machine {
+        println!("Pairing {:?} with {m}.\n", device.name);
+    }
+    for n in &notes {
+        eprintln!("note: {n}");
+    }
+    if let Some(w) = warning {
+        eprintln!("WARNING: {w}\n");
+    }
+    if let Some(old) = &replaces {
+        println!(
+            "Replacing the existing device {:?} ({}, was {}, now {}): its old link and token stop \
+             working when this one is opened.\n",
+            old.name,
+            old.id,
+            old.scope.label(),
+            scope.label()
+        );
     }
     if let Some(q) = qr(&link) {
         println!("{q}");
@@ -208,6 +359,8 @@ pub async fn pair(
     println!(
         "This device may {}.\n",
         match scope {
+            _ if warning.is_some() =>
+                "do everything the web app does, and anything you can on this machine (see the warning above)",
             Scope::Read =>
                 "watch: sessions, screens and the inbox. `--scope approve` also answers prompts",
             Scope::Approve =>
@@ -252,6 +405,9 @@ pub async fn pair(
         match devices.iter().find(|d| d.id == device.id) {
             Some(d) if d.pending => {}
             Some(d) => {
+                if let Some(old) = &replaces {
+                    println!("{} was {}, now {}.", old.name, old.scope.label(), d.scope.label());
+                }
                 println!(
                     "Paired {} ({}, scope {}) from {}. It stays paired until `ptyro devices revoke {}`.",
                     d.name,
@@ -332,6 +488,118 @@ mod tests {
             "TCP": { "443": { "HTTPS": true } },
             "Web": { "box.tail1234.ts.net:443": { "Handlers": { "/": { "Proxy": proxy } } } }
         })
+    }
+
+    fn cfg(listen: &str, public: Option<&str>, proxy: bool) -> Config {
+        let mut c = Config::default();
+        c.remote.listen = listen.into();
+        c.remote.public_url = public.map(str::to_owned);
+        c.remote.trusted_proxy = proxy;
+        c
+    }
+
+    fn base(c: &Config, url: Option<&str>, ts: Option<&str>) -> (String, Vec<String>) {
+        resolve_base(c, url.map(str::to_owned), true, ts.map(str::to_owned))
+    }
+
+    #[test]
+    fn ports_are_found_and_written_out() {
+        assert_eq!(url_port("https://[::1]:8443/x"), Some(8443));
+        assert_eq!(url_port("https://[::1]/x"), None);
+        assert_eq!(url_port("http://box"), None);
+        assert_eq!(url_port("http://u:p@box:81"), Some(81));
+        assert_eq!(with_port("http://[::1]", 7091), "http://[::1]:7091");
+        assert_eq!(with_port("https://box.ts.net/a?b#c", 443), "https://box.ts.net:443/a?b#c");
+        assert_eq!(with_port("http://10.0.0.5:80", 7091), "http://10.0.0.5:80");
+        assert_eq!(set_port("https://box:8443/x", 7091), "https://box:7091/x");
+        assert_eq!(set_port("https://[::1]:8443", 7091), "https://[::1]:7091");
+    }
+
+    #[test]
+    fn built_links_carry_the_port_for_v4_v6_and_hostnames() {
+        assert_eq!(
+            base(&cfg("127.0.0.1:7091", None, false), None, None).0,
+            "https://127.0.0.1:7091"
+        );
+        assert_eq!(base(&cfg("[::1]:7091", None, false), None, None).0, "https://[::1]:7091");
+        assert_eq!(
+            base(&cfg("192.168.1.9:8443", None, false), None, None).0,
+            "https://192.168.1.9:8443"
+        );
+        assert_eq!(
+            base(&cfg("localhost:7091", None, false), None, None).0,
+            "https://localhost:7091"
+        );
+    }
+
+    #[test]
+    fn a_wildcard_listen_address_is_never_the_link() {
+        for l in ["0.0.0.0:7091", "[::]:7091"] {
+            let (u, _) = base(&cfg(l, None, false), None, None);
+            assert!(u.ends_with(":7091"), "{u}");
+            assert!(!u.contains("0.0.0.0") && !u.contains("[::]"), "{u}");
+        }
+    }
+
+    #[test]
+    fn tailscale_names_get_their_port() {
+        let c = cfg("127.0.0.1:7091", None, false);
+        assert_eq!(
+            base(&c, None, Some("https://box.tail1.ts.net")).0,
+            "https://box.tail1.ts.net:443"
+        );
+    }
+
+    #[test]
+    fn a_given_url_without_a_port_gets_the_one_that_serves_it() {
+        // ptyro serves it itself: its own port.
+        let c = cfg("192.168.1.9:7091", None, false);
+        let (u, notes) = base(&c, Some("https://phone-host/"), None);
+        assert_eq!(u, "https://phone-host:7091");
+        assert!(notes.iter().any(|n| n.contains("trusted_proxy")), "{notes:?}");
+        // Behind a proxy on the scheme's port: that port, written out.
+        let c = cfg("127.0.0.1:7091", None, true);
+        assert_eq!(
+            base(&c, Some("https://ptyro.example.com"), None).0,
+            "https://ptyro.example.com:443"
+        );
+        assert_eq!(
+            resolve_base(&c, Some("http://ptyro.example.com".into()), false, None).0,
+            "http://ptyro.example.com:80"
+        );
+        // `[remote] public_url` counts as given.
+        let c = cfg("127.0.0.1:7091", Some("https://p.example.com"), true);
+        assert_eq!(base(&c, None, None).0, "https://p.example.com:443");
+    }
+
+    #[test]
+    fn a_given_port_is_kept_and_a_mismatch_is_warned_about_with_the_fix() {
+        let c = cfg("127.0.0.1:7091", None, false);
+        let (u, notes) = base(&c, Some("https://box:9000"), None);
+        assert_eq!(u, "https://box:9000");
+        assert!(
+            notes.iter().any(|n| n.contains("9000") && n.contains("--url https://box:7091")),
+            "{notes:?}"
+        );
+        // The right port: nothing to say. Behind a proxy: nothing to say either.
+        assert!(base(&c, Some("https://box:7091"), None).1.is_empty());
+        assert!(
+            base(&cfg("127.0.0.1:7091", None, true), Some("https://box:9000"), None).1.is_empty()
+        );
+        // [::1] with a port is kept as is.
+        assert_eq!(base(&c, Some("http://[::1]:7091"), None).0, "http://[::1]:7091");
+    }
+
+    #[test]
+    fn the_default_scope_is_full_and_says_what_that_means() {
+        assert_eq!(DEFAULT_SCOPE, Scope::Full);
+        assert_eq!(Scope::default(), Scope::Full);
+        let w = full_warning();
+        assert!(
+            w.contains("FULL")
+                && w.contains("run commands as you")
+                && w.contains("--scope approve")
+        );
     }
 
     #[test]

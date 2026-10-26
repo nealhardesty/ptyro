@@ -59,11 +59,13 @@ action by name.
 | `\` | show or hide the sidebar |
 | `u` | do what the last message offers: undo it, or fix what it reports |
 | `C-t` or `!` | the quick terminal: this worktree's shell in a drawer below the pane. Again focuses it, and once more hides it (the shell keeps running) |
-| `;` | the scratchpad: your notes file in the editor, shown as `[scratchpad] mode` says (below). Again focuses it, and once more hides it (the editor keeps running) |
-| `'` | add a line to the scratchpad without opening it (stamped with the time and where you are) |
-| `"` | the scratchpad's open items: type to search, `⏎` starts one as a task, `Ctrl-X` ticks it, `Ctrl-A` shows ticked ones, `Ctrl-E` opens the editor |
+| `;` | the scratchpad: your notes file in the editor, shown as `[scratchpad] mode` says (below): the project's pad when you are in a project, else the one for everywhere. Again focuses it, and once more hides it (the editor keeps running) |
+| `'` | add a line to the scratchpad without opening it (stamped with the time and where you are; the box says which pad, `Ctrl-G` switches) |
+| `"` | the scratchpad's open items: type to search, `⏎` starts one as a task, `Ctrl-X` ticks it, `Ctrl-A` shows ticked ones, `Ctrl-G` shows the other pad's, `Ctrl-E` opens the editor |
+| `g` | the other scratchpad: switches between this project's pad and the one for everywhere, in place (also `scratchpad.cycle` in the palette and the row menu) |
 | `H` | home: who needs you, PRs, recent projects and repositories found; ⏎ starts a task there |
 | `M` | mend: what the health badge (`⚕` in the status bar) found, each with its fix |
+| `I` | about ptyro: its version and protocol, the repository and where to report a problem (links: `⏎` opens, `y` copies), where config, data, logs and the socket live, whether the daemon and the web app run (`U` switches a daemon of another version to this one), the tools found, and `c` copies all of it for a bug report |
 | `C` | settings: every option, searchable, edited in place (`/` search · `m` only what you changed · `u` undo · `r` reset · `n` add · `d` remove · `R` rename · `s` save a repository's settings to the shared file · `!` restart the daemon when a setting needs it) |
 | `.` | what you can do with the focused session (its menu) |
 | `P` | add a project (pick from the repositories ptyro found) |
@@ -104,9 +106,9 @@ Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.
 | `<` / `>` | the sidebar a column narrower / wider (or drag its edge) |
 | `u` / `P` | do what the last message offers / add a project |
 | `.` | everything you can do with this row (a session, worktree or project), with the keys |
-| `;` / `'` | the scratchpad / add a line to it |
+| `;` / `'` / `g` | the scratchpad / add a line to it / its other pad |
 | `F` / `!` | finish this worktree (commit, then a PR or integrate) / its quick terminal (`⏎` on its `›_ shell` line shows or hides it too) |
-| `H` / `M` | home / mend what the health badge found |
+| `H` / `M` / `I` | home / mend what the health badge found / about ptyro |
 | `A` | adopt the Claude started by hand in this shell: a managed session, same conversation |
 | `w` `o` `r` | workspace / editor / run script |
 | `v` `s` | split |
@@ -201,8 +203,13 @@ through ptyro too).
 
 ## The scratchpad (`Ctrl-Q ;`)
 
-One notes file for ideas and bugs, the same in every session (`$PTYRO_SCRATCHPAD`; `ptyro
-scratchpad` on the command line). Its key opens it in your editor (`[scratchpad] editor`, else
+Notes for ideas and bugs. There are two pads: one for **everywhere** (`$PTYRO_SCRATCHPAD`) and one
+for **each project** (`$PTYRO_PROJECT_SCRATCHPAD`, `.ptyro/scratchpad.md` in the repository, shared
+by all its worktrees and kept out of git); `ptyro scratchpad` is the command line. The keys follow
+where you are: in a project (the selected row, or the session you are looking at) they use the
+project's pad, anywhere else the one for everywhere. `Ctrl-Q g` switches to the other one, and the
+title of the pad (or the box, or the list) always says which it is: `Scratchpad — everywhere` or
+`Scratchpad — myrepo (this project)`. Its key opens it in your editor (`[scratchpad] editor`, else
 `$VISUAL` / `$EDITOR`, else nvim, vim, nano or vi) as one session that keeps running, so your
 cursor and undo are where you left them. `[scratchpad] mode` says where it shows:
 
@@ -212,8 +219,11 @@ cursor and undo are where you left them. `[scratchpad] mode` says where it shows
   only the prefix reaches ptyro, so `Ctrl-Q ;` closes it;
 - `pane`: a pane beside the focused one. The key closes it.
 
-Closing hides it; quitting the editor (`:q`) ends it, and the next press starts a new one. The
-status bar shows `✎ 7` when seven `- [ ]` items are open. `Ctrl-Q '` adds a line without opening
+Each pad has its own editor session, started when first wanted and kept, so `Ctrl-Q g` swaps
+one for the other with each pad's cursor and undo where you left them. Closing hides it; quitting
+the editor (`:q`) ends it, and the next press starts a new one. The status bar shows `✎ 7` when
+seven `- [ ]` items are open; in a project it shows `✎ 3 +7`: 3 open in the project's pad and, dimmed,
+7 in the one for everywhere. `Ctrl-Q '` adds a line without opening
 the pad, and the row menu's "note this" (`.`, then `scratchpad.note`) starts that line from a
 session's task. The palette also has `scratchpad.history`: saved copies, `⏎` puts one back.
 
@@ -234,7 +244,7 @@ key include: `project.add`
 (pick from repos under `[discover] roots`), `project.trust`, `worktree.remove`,
 `session.command` (a session running a command line), `session.resume`, `session.hibernate`,
 `session.mute`, `session.summarize` (a `≈` line from a small model), `notify.test`,
-`theme.next`, `config.edit`, `help.tour`, `scratchpad.history`, `scratchpad.note`.
+`theme.next`, `config.edit`, `help.tour`, `scratchpad.history`, `scratchpad.note`. (`scratchpad.cycle` is `g`.)
 
 ## Other overlays
 
@@ -248,6 +258,24 @@ key include: `project.add`
 
 ## Rebinding
 
+**Every key can be changed from Settings** (`Ctrl-Q C`, then Key bindings; on the web, More →
+Settings → Key bindings). It lists every key, the defaults too, in three groups (after the
+prefix, in the sidebar, anywhere), each with what it does in plain words and where it stands:
+`default`, `yours` (a key of your own), `changed` (a default that runs something else) or
+`unbound`. Press `⏎` on one for the choices: **change its key** (press the new one; if it is
+taken you are told what runs there and asked before the two swap), **change what it runs** (a
+list you can search by name or by what the action does), **unbind** it (it stays listed, so
+you can bring it back) or **back to the default**. `d` unbinds, `r` resets, `u` undoes, and
+`/` finds a key by what it does (`detach`, `settings`). `+ Add a key…` makes a new one. The
+nine digit keys that show sessions 1 to 9 are one row; bind a key of your own to
+`session.focus` and a number to add more.
+
+From a script: `ptyro config list keys` shows every key (`--changed`: only the ones that
+differ from the defaults), `ptyro config get keys.d` what one runs,
+`ptyro config set keys.y pane.zoom` binds, `ptyro config set keys.d none` unbinds a default and
+`ptyro config unset keys.d` puts it back. In the file, only what differs from the defaults is
+kept:
+
 ```toml
 [keys]
 "y" = "pane.zoom"                    # after the prefix
@@ -255,6 +283,6 @@ key include: `project.add`
 "nav:J" = "nav.down"                 # in the sidebar
 ```
 
-The action names are the ones `Ctrl-Q ?` shows (the palette leaves out `nav.*` and
+`"none"` unbinds a key, so a default can be switched off. The action names are the ones `Ctrl-Q ?` shows (the palette leaves out `nav.*` and
 `session.focus N`). Every CLI command has one ([`parity.md`](parity.md) lists them); the
 ones that run a `ptyro` command do so in a split below, asking for what they need first.

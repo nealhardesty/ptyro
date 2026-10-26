@@ -16,6 +16,7 @@ expression: "Value::Object(all)"
     "generation": "number",
     "live_sessions": "number",
     "log_dir": "string",
+    "machine": "string",
     "metrics": {
       "bytes_read": "number",
       "crashes": "number",

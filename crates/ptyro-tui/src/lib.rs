@@ -2,6 +2,7 @@
 //! key, a palette and finder, copy mode, themes and mouse support (M2). Raw mode shows a single
 //! session with no chrome.
 
+mod about;
 mod app;
 pub mod chat;
 mod cli_actions;
@@ -124,6 +125,9 @@ pub async fn run(mut connect: ConnectOptions, paths: &Paths, opts: Options) -> R
         );
     }
     let mouse = config.ui.mouse;
+    // Keep the terminal's own title to give back on exit (xterm's title stack; terminals that
+    // lack it ignore both ends).
+    let _ = out.write_all(b"\x1b[22;0t");
     let _ = execute!(out, EnableBracketedPaste, EnableFocusChange);
     if mouse {
         let _ = execute!(out, EnableMouseCapture);
@@ -137,6 +141,7 @@ pub async fn run(mut connect: ConnectOptions, paths: &Paths, opts: Options) -> R
             let _ = execute!(out, PopKeyboardEnhancementFlags);
         }
         let _ = execute!(out, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture);
+        let _ = out.write_all(b"\x1b[23;0t");
         previous(info);
     }));
     let size = tui.size().unwrap_or_default();
@@ -165,6 +170,7 @@ pub async fn run(mut connect: ConnectOptions, paths: &Paths, opts: Options) -> R
         crossterm::cursor::SetCursorStyle::DefaultUserShape
     );
     ratatui::restore();
+    let _ = out.write_all(b"\x1b[23;0t");
     let _ = out.flush();
     result
 }
@@ -187,6 +193,7 @@ async fn event_loop(app: &mut App, tui: &mut ratatui::DefaultTerminal) -> Result
     let mut events = EventStream::new();
     let mut last_draw = Instant::now() - FRAME;
     let mut cursor_shape = None;
+    let mut titled: Option<String> = None;
     let mut tick = tokio::time::interval(Duration::from_millis(250));
     // Whether the terminal is capturing the mouse: follows `[ui] mouse` as the file changes.
     let mut mouse_on = app.config.ui.mouse;
@@ -205,7 +212,12 @@ async fn event_loop(app: &mut App, tui: &mut ratatui::DefaultTerminal) -> Result
         }
         if app.dirty && last_draw.elapsed() >= FRAME {
             sync_cursor_shape(app, &mut cursor_shape);
-            tui.draw(|f| ui::draw(app, f))?;
+            sync_title(app, &mut titled);
+            let done = tui.draw(|f| ui::draw(app, f))?;
+            let linked = about::link_cells(&app.links.borrow(), done.buffer);
+            if !linked.is_empty() {
+                about::paint_links(tui, &linked);
+            }
             app.dirty = false;
             last_draw = Instant::now();
         }
@@ -249,6 +261,25 @@ async fn event_loop(app: &mut App, tui: &mut ratatui::DefaultTerminal) -> Result
             }
         }
     }
+}
+
+/// The terminal window's title names the machine the daemon runs on (`ptyro · studio`), so
+/// several terminals, one per machine, tell apart in the window list and tab strip.
+fn sync_title(app: &App, last: &mut Option<String>) {
+    let Some(m) = app.machine.as_deref() else { return };
+    let title = window_title(m);
+    if last.as_deref() == Some(&title) {
+        return;
+    }
+    let mut out = std::io::stdout();
+    let _ = write!(out, "\x1b]0;{title}\x07");
+    let _ = out.flush();
+    *last = Some(title);
+}
+
+/// What the terminal title says: plain printable text (a machine name is cleaned already).
+pub(crate) fn window_title(machine: &str) -> String {
+    format!("ptyro \u{b7} {}", machine.chars().filter(|c| !c.is_control()).collect::<String>())
 }
 
 /// The real cursor's shape follows what the focused program asked for.

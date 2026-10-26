@@ -2,6 +2,7 @@
 
 use ptyro_core::SessionId;
 use ptyro_core::config::key_label;
+use ptyro_core::scratchpad::PadSel;
 use ptyro_core::session::{SessionInfo, SessionKind};
 use ptyro_core::status::AgentStatus;
 use ratatui::Frame;
@@ -96,6 +97,7 @@ pub(crate) fn fg(app: &App, c: Color) -> Style {
 }
 
 pub fn draw(app: &App, f: &mut Frame<'_>) {
+    app.links.borrow_mut().clear();
     let area = f.area();
     if app.opts.raw {
         draw_raw(app, f, area);
@@ -148,18 +150,33 @@ fn draw_pad_popup(app: &App, f: &mut Frame<'_>, area: Rect, id: SessionId) {
     let t = &app.theme;
     let r = crate::pad::popup_rect(area);
     f.render_widget(Clear, r);
-    let mut path = app.config.scratchpad_path(&app.paths.data).display().to_string();
-    // The end of a long path is the part that says which file.
-    let room = (r.width as usize).saturating_sub(34).max(12);
+    let sel = app.session(id).and_then(|s| s.pad_project.clone()).map(PadSel::Project);
+    let label = app.pad_label(sel.as_ref().unwrap_or(&PadSel::Global));
+    let mut path = match &sel {
+        Some(PadSel::Project(pid)) => app.projects.iter().find(|p| p.id == *pid).map_or_else(
+            || "<project>/.ptyro/scratchpad.md".into(),
+            |p| ptyro_core::scratchpad::project_pad_path(&p.root).display().to_string(),
+        ),
+        _ => app.config.scratchpad_path(&app.paths.data).display().to_string(),
+    };
+    let close = app.pad_key().map(|k| format!(" · {k} closes")).unwrap_or_default();
+    let other = app
+        .keymap
+        .key_for("scratchpad.cycle")
+        .map(|k| format!(" · {k} other pad"))
+        .unwrap_or_default();
+    // Which pad and how to leave or switch come first; the path gets what is left, and the end
+    // of a long path is the part that says which file.
+    let fixed = format!(" ✎ Scratchpad — {label}{close}{other} · ").chars().count();
+    let room = (r.width as usize).saturating_sub(fixed + 2).max(12);
     if path.chars().count() > room {
         let tail: String =
             path.chars().rev().take(room - 1).collect::<Vec<_>>().into_iter().rev().collect();
         path = format!("…{tail}");
     }
-    let close = app.pad_key().map(|k| format!(" · {k} closes")).unwrap_or_default();
     let block = Block::default().borders(Borders::ALL).border_style(fg(app, t.border_focus)).title(
         Span::styled(
-            format!(" ✎ Scratchpad · {path}{close} "),
+            format!(" ✎ Scratchpad — {label}{close}{other} · {path} "),
             fg(app, t.accent).add_modifier(Modifier::BOLD),
         ),
     );
@@ -232,6 +249,8 @@ const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
             ("worktree.new", "worktree"),
             ("project.add", "project"),
             ("workspace.switch", "workspace"),
+            ("config.panel", "settings"),
+            ("broadcast", "broadcast"),
             ("palette", "any action"),
         ],
     ),
@@ -243,6 +262,8 @@ const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
             ("inbox", "inbox"),
             ("session.find", "find"),
             ("session.next", "next"),
+            ("session.last", "last session"),
+            ("home", "home"),
             ("sidebar.zoom", "everything"),
         ],
     ),
@@ -266,6 +287,9 @@ const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
             ("sets", "change sets"),
             ("script.run", "run script"),
             ("worktree.open", "editor"),
+            ("shell.here", "shell here"),
+            ("scratchpad.toggle", "scratchpad"),
+            ("scratchpad.cycle", "other pad"),
         ],
     ),
     (
@@ -278,6 +302,7 @@ const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
             ("toast.act", "undo / fix"),
             ("app.detach", "detach"),
             ("app.quit", "quit all"),
+            ("app.about", "about"),
             ("help", "all keys"),
         ],
     ),
@@ -380,21 +405,74 @@ fn profile_badge(app: &App, profile: &str) -> Option<Span<'static>> {
     Some(Span::styled(format!("[{label}]"), style))
 }
 
-fn diffstat(app: &App, w: &ptyro_core::model::WorktreeInfo) -> Vec<Span<'static>> {
+/// What is left to do with a worktree's work (UX2.2): `↑2` unpushed commits (or `not pushed`
+/// when there is no upstream yet), `● 3` uncommitted files, the `+N −N` line counts only while
+/// either is true, and a quiet `✓ pushed` when committed work is all on the remote. A merged or
+/// integrated one says so elsewhere in the row, and an open PR's badge stands in for `✓ pushed`.
+pub(crate) fn diffstat(app: &App, w: &ptyro_core::model::WorktreeInfo) -> Vec<Span<'static>> {
     let t = &app.theme;
     let mut v = Vec::new();
-    if let Some(s) = &w.status {
+    let Some(s) = &w.status else { return v };
+    if w.shipped() {
+        return v;
+    }
+    let l = s.left();
+    if l.open() {
         if s.insertions > 0 {
             v.push(Span::styled(format!(" +{}", s.insertions), fg(app, t.done)));
         }
         if s.deletions > 0 {
             v.push(Span::styled(format!(" −{}", s.deletions), fg(app, t.error)));
         }
-        if s.dirty() > 0 {
-            v.push(Span::styled(" ●", fg(app, t.working)));
-        }
+    }
+    if l.unpushed > 0 {
+        let what = if l.not_pushed {
+            format!(" not pushed ↑{}", l.unpushed)
+        } else {
+            format!(" ↑{}", l.unpushed)
+        };
+        v.push(Span::styled(what, fg(app, t.accent)));
+    }
+    if l.uncommitted > 0 {
+        v.push(Span::styled(format!(" ● {}", l.uncommitted), fg(app, t.working)));
+    }
+    if l.pushed && w.pr.is_none() {
+        v.push(Span::styled(" ✓ pushed", fg(app, t.dim)));
     }
     v
+}
+
+/// Columns the machine marker takes: ` ● name`.
+fn machine_width(name: &str) -> usize {
+    3 + Span::raw(name).width()
+}
+
+/// ` ● studio`: the name always, with a dot in a colour that is the same for the same name
+/// everywhere (the web page uses the same hash), as a second cue and never the only one.
+fn machine_spans(app: &App, name: &str) -> Vec<Span<'static>> {
+    let (r, g, b) = hsl_rgb(f32::from(ptyro_core::machine::hue(name)), 0.55, 0.6);
+    vec![
+        Span::raw(" "),
+        Span::styled("\u{25cf}", Style::default().fg(Color::Rgb(r, g, b))),
+        Span::styled(format!(" {name}"), fg(app, app.theme.dim)),
+    ]
+}
+
+/// HSL (hue in degrees) to 8-bit RGB.
+fn hsl_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = l - c / 2.0;
+    let (r, g, b) = match h as u32 {
+        0..=59 => (c, x, 0.0),
+        60..=119 => (x, c, 0.0),
+        120..=179 => (0.0, c, x),
+        180..=239 => (0.0, x, c),
+        240..=299 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let to = |v: f32| ((v + m) * 255.0).round() as u8;
+    (to(r), to(g), to(b))
 }
 
 fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
@@ -419,6 +497,13 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
             format!(" {} {}%", w.name, w.used_percent),
             fg(app, if hot { t.blocked } else { t.dim }),
         ));
+    }
+    // The machine the daemon runs on, last and only when it fits: a narrow sidebar drops it.
+    if let Some(m) = &app.machine {
+        let used: usize = title.iter().map(Span::width).sum();
+        if used + machine_width(m) <= usize::from(area.width) {
+            title.extend(machine_spans(app, m));
+        }
     }
     let body = sidebar_body(app, area);
     let mut lines = vec![Line::from(title)];
@@ -1134,13 +1219,29 @@ fn draw_header(
             } else {
                 base.add_modifier(Modifier::BOLD)
             };
-            left.push(Span::styled(s.name.clone(), name));
-            left.push(Span::styled(format!(" · {}", what(s)), base));
-            if let Some(b) = profile_badge(app, &s.profile) {
+            if s.pad {
+                // Which pad it is, always (NOTE1.7).
+                let sel = s.pad_project.clone().map_or(PadSel::Global, PadSel::Project);
+                left.push(Span::styled(format!("Scratchpad — {}", app.pad_label(&sel)), name));
+                // (Where there is room: which pad it is matters more than how to switch.)
+                if r.width >= 90
+                    && let Some(k) = app.keymap.key_for("scratchpad.cycle")
+                {
+                    right.push(Span::styled(
+                        format!(" {k} other pad "),
+                        base.fg(app.depth.fit(t.dim)),
+                    ));
+                }
+            } else {
+                left.push(Span::styled(s.name.clone(), name));
+                left.push(Span::styled(format!(" · {}", what(s)), base));
+            }
+            if let Some(b) = profile_badge(app, &s.profile).filter(|_| !s.pad) {
                 left.push(Span::styled(" · ", base));
                 left.push(Span { style: base.patch(b.style), ..b });
             }
-            if let Some(w) = s.worktree.as_deref().and_then(|w| app.worktree(w)) {
+            if let Some(w) = s.worktree.as_deref().filter(|_| !s.pad).and_then(|w| app.worktree(w))
+            {
                 let branch = w.branch.clone().unwrap_or_else(|| "(detached)".into());
                 left.push(Span::styled(format!(" · {branch}"), base));
                 for d in diffstat(app, w) {
@@ -1187,7 +1288,7 @@ fn draw_header(
             {
                 left.push(Span::styled(format!(" · {title}"), base.fg(app.depth.fit(t.dim))));
             }
-            if let Some(cache) = app.caches.get(&s.id) {
+            if let Some(cache) = app.caches.get(&s.id).filter(|_| !s.pad) {
                 let (w, h) = (cache.size.cols, cache.size.rows);
                 if w > inner.width || h > inner.height {
                     right.push(Span::styled(
@@ -1327,11 +1428,22 @@ fn draw_status(app: &App, f: &mut Frame<'_>, r: Rect) {
             bar.fg(app.depth.fit(t.blocked)).add_modifier(Modifier::BOLD),
         ));
     }
-    if app.pad_open > 0 {
-        right.push(Span::styled(
-            format!("✎ {} ", app.pad_open),
-            bar.fg(app.depth.fit(t.accent)).add_modifier(Modifier::BOLD),
-        ));
+    // The open items: this project's pad, then the one for everywhere dimmed (`✎ 3 +7`).
+    let here = app.where_am_i().0.and_then(|p| app.pad_counts.get(&p).copied());
+    if here.unwrap_or(0) > 0 || app.pad_open > 0 {
+        let accent = bar.fg(app.depth.fit(t.accent)).add_modifier(Modifier::BOLD);
+        match here {
+            Some(n) => {
+                right.push(Span::styled(format!("✎ {n} "), accent));
+                if app.pad_open > 0 {
+                    right.push(Span::styled(
+                        format!("+{} ", app.pad_open),
+                        bar.fg(app.depth.fit(t.dim)),
+                    ));
+                }
+            }
+            None => right.push(Span::styled(format!("✎ {} ", app.pad_open), accent)),
+        }
     }
     let unread = app.unread();
     if unread > 0 {
@@ -1864,6 +1976,53 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                 r,
             );
         }
+        Overlay::About { doc, sel, scroll } => {
+            let Some(d) = doc else {
+                let r = boxed(area, 60, 3);
+                f.render_widget(Clear, r);
+                f.render_widget(
+                    Paragraph::new(Line::styled(" Looking…", fg(app, t.dim)))
+                        .block(block("About ptyro".into())),
+                    r,
+                );
+                return;
+            };
+            if d["failed"] == true {
+                let r = boxed(area, 70, 4);
+                f.render_widget(Clear, r);
+                f.render_widget(
+                    Paragraph::new(Line::styled(
+                        " `ptyro about` did not answer: run it in a terminal to see why.",
+                        fg(app, t.error),
+                    ))
+                    .block(block("About ptyro — Esc closes".into())),
+                    r,
+                );
+                return;
+            }
+            let rows = crate::about::rows(d);
+            let picks = crate::about::picks(&rows);
+            let sel_row = picks.get(*sel).copied();
+            let (all, _) = crate::about::lines(app, &rows, sel_row, 0, 0, 0, usize::MAX);
+            let r = boxed(area, 110, all.len() as u16 + 4);
+            f.render_widget(Clear, r);
+            let inner_h = r.height.saturating_sub(4) as usize;
+            let start = (*scroll).min(all.len().saturating_sub(inner_h));
+            let (lines, links) =
+                crate::about::lines(app, &rows, sel_row, start, r.x + 1, r.y + 1, inner_h);
+            let mismatch = d["daemon"]["same"] == false;
+            let footer = format!(
+                " j/k pick · ⏎ open · y copy it · c copy all, for a bug report{} · Esc",
+                if mismatch { " · U switch the daemon to this version" } else { "" }
+            );
+            let mut shown: Vec<Line<'_>> = lines.into_iter().skip(start).take(inner_h).collect();
+            while shown.len() < inner_h {
+                shown.push(Line::raw(""));
+            }
+            shown.push(Line::styled(footer, fg(app, t.dim)));
+            f.render_widget(Paragraph::new(shown).block(block("About ptyro".into())), r);
+            *app.links.borrow_mut() = links;
+        }
         Overlay::Explain { session, lines: ex, scroll } => {
             let r = boxed(area, 110, area.height.saturating_sub(4));
             f.render_widget(Clear, r);
@@ -1983,6 +2142,39 @@ pub(crate) fn help_lines<'a>(app: &'a App, filter: &str) -> Vec<Line<'a>> {
         let prefixes: Vec<String> = app.keymap.prefixes.iter().map(key_label).collect();
         lines.push(Line::styled(
             format!("── prefix: {} (twice sends it to the program) ──", prefixes.join(" or ")),
+            fg(app, t.dim),
+        ));
+        lines.push(Line::styled(
+            format!(
+                "── change any of these: {} {} (Settings → Key bindings) ──",
+                key_label(&app.keymap.prefix),
+                app.keymap.key_for("config.panel").map_or_else(
+                    || "the palette: setting keys".to_owned(),
+                    |k| k
+                        .strip_prefix(&format!("{} ", key_label(&app.keymap.prefix)))
+                        .unwrap_or(&k)
+                        .to_owned()
+                )
+            ),
+            fg(app, t.dim),
+        ));
+        lines.push(Line::styled(
+            "── a worktree's row: ↑2 two commits not pushed · not pushed ↑2 no upstream yet ──"
+                .to_owned(),
+            fg(app, t.dim),
+        ));
+        lines.push(Line::styled(
+            "──   ● 3 three files not committed · ✓ pushed all done · +N −N only while work is left ──".to_owned(),
+            fg(app, t.dim),
+        ));
+        lines.push(Line::styled(
+            format!(
+                "── ptyro {} (protocol {}.{}) · {} About: version, links, a bug report to copy ──",
+                env!("CARGO_PKG_VERSION"),
+                ptyro_protocol::PROTO.major,
+                ptyro_protocol::PROTO.minor,
+                app.keymap.key_for("app.about").unwrap_or_else(|| "the palette: about".to_owned()),
+            ),
             fg(app, t.dim),
         ));
         lines.push(Line::styled(

@@ -3,7 +3,7 @@
 // scripts, ports, pair mode, locks, leases, the collision radar, checkpoints and the clean-up.
 
 import { conn } from "./conn.js";
-import { data, liveWorktrees, wtTabs } from "./data.js";
+import { data, leftWords, liveWorktrees, repoLeft, shipped, wtTabs } from "./data.js";
 import type { Project, Worktree, Workspace } from "./data.js";
 import { actions, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, pending, row, safeDecode, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
 import type { Item } from "./kit.js";
@@ -23,7 +23,7 @@ const ACTIONS = {
   "worktree.new": "A new worktree in this project, with an agent in it if you like",
   "worktree.show": "A worktree's page: status, sessions, changes and what to do next",
   "worktree.remove": "Remove the worktree (it refuses to lose work; archive keeps it)",
-  "worktree.status": "Where the worktree stands: changes, commits ahead, its pull request",
+  "worktree.status": "Where the worktree stands: what is left to commit or push (✓ pushed when nothing is), its pull request",
   "worktree.pair": "Pair mode: show the worktree's state in the project's main checkout",
   "worktree.unpair": "Put the main checkout back, carrying edits made there into the worktree",
   "worktree.run": "Run one of the project's scripts in this worktree",
@@ -58,16 +58,20 @@ const statusOf = (s: Session): string => (s.state.t !== "running" ? s.state.t : 
 /// The sessions running in a worktree, but not its quick shell.
 const sessionsIn = (w: Worktree): Session[] => [...allSessions().values()].filter((s) => s.worktree === w.id && !s.quick);
 
-/// `+12 −3 · 2 ahead · 4 dirty`, short.
+/// What is left to do, short (UX2.2): `+12 −3 · ↑2 ● 4`, or a quiet `✓ pushed`. The line counts
+/// show only while something is uncommitted or unpushed; a merged one says `shipped`.
 function summary(w: Worktree): string {
   const st = w.status;
   if (!st) return w.state === "ready" ? "" : w.state;
   const parts: string[] = [];
-  if (st.insertions || st.deletions) parts.push(`+${st.insertions} −${st.deletions}`);
-  if (st.base_ahead) parts.push(`${st.base_ahead} ahead`);
+  const l = repoLeft(st);
+  if (shipped(w)) parts.push("shipped");
+  else {
+    if ((l.uncommitted || l.unpushed) && (st.insertions || st.deletions)) parts.push(`+${st.insertions} −${st.deletions}`);
+    const words = leftWords(l);
+    if (words) parts.push(words);
+  }
   if (st.behind) parts.push(`${st.behind} behind`);
-  const dirty = (st.staged ?? 0) + (st.modified ?? 0) + (st.untracked ?? 0);
-  if (dirty) parts.push(`${dirty} dirty`);
   if (st.conflicts) parts.push(`${st.conflicts} conflicts`);
   return parts.join(" · ") || "clean";
 }

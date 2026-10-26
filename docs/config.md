@@ -29,7 +29,7 @@ most; `ptyro config show` lists every key with the value in effect.
 ```toml
 [ui]
 prefix = "C-]"            # one key or a list; default ["C-q", "C-Space"]
-theme = "ptyro-light"     # ptyro-dark (default), ptyro-light, high-contrast, or your own
+theme = "ptyro-light"     # ptyro-dark (default), ptyro-light, high-contrast, or your own (Settings → Themes picks it; a new one starts as a copy of one you choose)
 tint_borders = true       # colour pane dividers with the session's profile
 # on_stop = "stay"        # after you stop a pane's session, keep showing it (default: the next one)
 # sidebar_detail = "full" # lines under each row (task, now, last…): auto (default) | compact | full
@@ -93,6 +93,7 @@ message_ttl = "24h"                       # undelivered messages expire
 [daemon]
 scrollback_lines = 5000                   # kept in memory per session; older lines come from the recording
 # restore_on_start = "resume"             # relaunch every dormant agent when the daemon starts
+# machine_name = "studio"                 # what the web page's title and the TUI call this computer (default: its host name)
 
 [summaries]
 enabled = true                            # a `≈` line after each agent turn, from a small model (default off)
@@ -104,7 +105,7 @@ enabled = true                            # a `≈` line after each agent turn, 
 [scratchpad]
 # mode = "drawer"                         # how C-q ; shows it: drawer | popup | pane
 # editor = "nvim"                         # a command line; default: [editors], $VISUAL, $EDITOR, nvim/vim/nano/vi
-# path = "~/Sync/pad.md"                  # default: scratchpad.md in ptyro's data directory
+# path = "~/Sync/pad.md"                  # the pad for everywhere (default: scratchpad.md in the data directory); a project's is .ptyro/scratchpad.md in its repository
 # keep = 30                               # days of saved copies (the newest 20 always stay)
 # tick_on_finish = false                  # leave an item open when its worktree is merged or removed
 
@@ -131,7 +132,9 @@ approval_wait = "10m"                     # held Claude permission prompts wait 
 "y" = "pane.zoom"         # after the prefix; "global:M-1" = "session.focus 1" needs no prefix
 ```
 
-Key bindings and the action names you can bind are in [`keys.md`](keys.md).
+Key bindings and the action names you can bind are in [`keys.md`](keys.md). Settings lists
+every key, defaults included, to change, unbind or reset from the panel; in the file only your
+changes are kept (`"none"` unbinds a default).
 
 ## Profiles: one identity per context
 
@@ -268,7 +271,7 @@ ptyro follows the XDG directories:
 | Path | Holds |
 |---|---|
 | `~/.config/ptyro/` | `config.toml`, `recipes/`, `changesets/` (templates) |
-| `~/.local/share/ptyro/` | `ptyro.db`, `worktrees/`, `sessions/<id>/pty.log` (recordings), `scratchpad.md` and `scratchpad.history/` |
+| `~/.local/share/ptyro/` | `ptyro.db`, `worktrees/`, `sessions/<id>/pty.log` (recordings), `scratchpad.md` and `scratchpad.history/` (the pad for everywhere; each project's is `.ptyro/scratchpad.md` in its repository, kept out of git) |
 | `~/.local/state/ptyro/` | logs, `crashes/` |
 | `$XDG_RUNTIME_DIR/ptyro/` | the daemon's socket (without `XDG_RUNTIME_DIR`, as on macOS: `$TMPDIR/ptyro-<uid>/`; a path too long for a socket falls back to `/tmp/ptyro-<uid>-<hash>/`) |
 
@@ -286,4 +289,5 @@ Other environment variables:
 | `PTYRO_COMPRESS=1` | compress frames on a local connection too (always on with `--remote`) |
 | `PTYRO_NO_AUTOSPAWN=1` | don't start the daemon when none is running |
 | `PTYRO_ALLOW_NESTED=1` | allow the TUI inside a ptyro session |
+| `PTYRO_SCRATCHPAD`, `PTYRO_PROJECT_SCRATCHPAD` | *set* in every session, not read: the files of the scratchpad for everywhere, and of the session's project (only in sessions that belong to one) |
 | `NO_COLOR` | no colour in CLI output |

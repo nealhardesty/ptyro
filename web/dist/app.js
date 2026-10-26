@@ -12,9 +12,10 @@ import "./review.js";
 import "./runs.js";
 import "./settings.js";
 import "./panel.js";
-import { initNotes, notesConnected, notesEvent, notesLink, notesNeedsLoad, notesLoad, notesNoteButton, notesQuickAdd, notesShown, notesStart, notesView } from "./notes.js";
+import { initNotes, notesConnected, notesEvent, notesHint, notesLink, notesNeedsLoad, notesLoad, notesNoteButton, notesQuickAdd, notesShown, notesStart, notesView } from "./notes.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
 import { coach } from "./settings.js";
+import { apply as showMachine } from "./machine.js";
 // What this app does, by name: the Web column of docs/parity.md names these, and `make parity`
 // checks every name it uses is here (SPEC §1.3, ROADMAP WEB1). Each is its control's tooltip.
 const ACTIONS = {
@@ -34,6 +35,7 @@ const ACTIONS = {
     "scratchpad.tick": "Tick or untick an item in the scratchpad",
     "scratchpad.history": "Saved copies of the scratchpad; put one back",
     "scratchpad.note": "Note this session in the scratchpad",
+    "scratchpad.pad": "Switch between this project's scratchpad and the one for everywhere",
     "pair": "Pair this device with the link or QR code from `ptyro pair`",
     "unpair": "Forget this device's pairing",
 };
@@ -189,7 +191,7 @@ async function answer(id, decision) {
 function header(title, back, ...extra) {
     const unread = app.inbox.filter((e) => !e.read_ms).length;
     const dot = h("span", { class: `dot ${conn.state}`, title: conn.state });
-    return h("header", {}, back ? h("a", { class: "back", href: typeof back === "string" ? back : "#/", "aria-label": "Back" }, "‹") : h("img", { class: "logo", src: "/icon.svg", alt: "" }), h("h1", {}, title), ...extra, dot, notesLink(), h("a", { class: "inbox-link", href: "#/inbox", title: tip("inbox") }, "✉", unread ? h("b", {}, String(unread)) : null), h("button", { class: "icon", title: tip("notifications"), onclick: () => void enablePush() }, "🔔"));
+    return h("header", {}, back ? h("a", { class: "back", href: typeof back === "string" ? back : "#/", "aria-label": "Back" }, "‹") : h("img", { class: "logo", src: "/icon.svg", alt: "" }), h("h1", {}, title), ...extra, conn.machine ? h("span", { class: "machine", title: `This ptyro runs on ${conn.machine}` }, conn.machine) : null, dot, notesLink(), h("a", { class: "inbox-link", href: "#/inbox", title: tip("inbox") }, "✉", unread ? h("b", {}, String(unread)) : null), h("button", { class: "icon", title: tip("notifications"), onclick: () => void enablePush() }, "🔔"));
 }
 function sessionCard(s) {
     const st = statusOf(s);
@@ -293,6 +295,8 @@ function sessionView(id) {
         return h("div", {}, header("…", true), h("main", {}, h("p", { class: "empty" }, conn.state === "open" ? "No such session." : "Connecting…")));
     const st = statusOf(s);
     const sh = sessionShell(id);
+    // The scratchpad follows the project you are looking at (NOTE1.7).
+    notesHint(s.project ?? null);
     sh.reply.placeholder = s.kind === "agent" ? `Reply to ${s.name}…` : "Type a line…";
     const blocked = s.status?.status === "blocked" && s.state.t === "running";
     const chat = s.structured && !app.termView.has(id);
@@ -406,7 +410,7 @@ function render() {
         root.replaceChildren(view);
     // The number of agents waiting on you, in the tab's title and on an installed app's icon.
     const waiting = [...app.sessions.values()].filter((x) => x.status?.status === "blocked" && x.state.t === "running").length;
-    document.title = waiting ? `(${waiting}) ptyro` : "ptyro";
+    showMachine(conn.machine, waiting);
     navigator[waiting ? "setAppBadge" : "clearAppBadge"]?.(waiting)?.catch(() => { });
     const t = app.toast ? h("div", { class: "toast" }, app.toast) : null;
     for (const old of view.querySelectorAll(":scope > .toast"))

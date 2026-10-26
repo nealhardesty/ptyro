@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 
 use ptyro_core::config::{Config, key_label, parse_key};
-use ptyro_core::input::{KeyCode, KeyEvent, KeyKind, Mods};
+use ptyro_core::input::KeyEvent;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Arg {
@@ -78,6 +78,10 @@ pub const ACTIONS: &[ActionSpec] = &[
     ),
     a("scratchpad.history", "The scratchpad's saved copies: put one back"),
     a(
+        "scratchpad.cycle",
+        "Switch the scratchpad between this project's pad and the one for everywhere",
+    ),
+    a(
         "scratchpad.note",
         "Note this to the scratchpad: the selected session's task, or what you type",
     ),
@@ -116,6 +120,10 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("sidebar.toggle", "Show or hide the sidebar"),
     a("toast.act", "Do what the last message offers: undo it, or fix what it reports"),
     a("home", "Home: who needs you, PRs, recent projects and repositories found, in one list"),
+    a(
+        "app.about",
+        "About ptyro: version, repository, where its files live, the daemon and web app, a bug report to copy",
+    ),
     a("health", "Mend: what the doctor found (the status bar's ⚕), each with its fix"),
     a("doctor", "Run the full doctor (agents, logins, integrations' self-tests) in a split"),
     a("daemon.logs", "Follow the daemon's log in a split"),
@@ -306,28 +314,7 @@ impl Command {
     }
 }
 
-/// Compare keys the way users think of them: release/repeat/keypad ignored, and for characters
-/// the character already says whether Shift was held (`A`, `?`), so Shift is dropped.
-pub fn normalize(k: KeyEvent) -> KeyEvent {
-    let mut mods = k.mods.0 & !(Mods::META | Mods::HYPER);
-    let code = match k.code {
-        KeyCode::Char { c } => {
-            let c = if mods & Mods::SHIFT != 0 && c.is_ascii_lowercase() {
-                c.to_ascii_uppercase()
-            } else {
-                c
-            };
-            mods &= !Mods::SHIFT;
-            KeyCode::Char { c }
-        }
-        KeyCode::BackTab => {
-            mods &= !Mods::SHIFT;
-            KeyCode::BackTab
-        }
-        other => other,
-    };
-    KeyEvent { code, mods: Mods(mods), kind: KeyKind::Press, keypad: false }
-}
+pub use ptyro_core::config::normalize_key as normalize;
 
 fn key(spec: &str) -> KeyEvent {
     normalize(parse_key(spec).expect("default key spec"))
@@ -374,9 +361,11 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Prefix, ";", "scratchpad.toggle"),
     (Table::Prefix, "'", "scratchpad.add"),
     (Table::Prefix, "\"", "scratchpad.items"),
+    (Table::Prefix, "g", "scratchpad.cycle"),
     (Table::Prefix, "C-t", "shell.here"),
     (Table::Prefix, "H", "home"),
     (Table::Prefix, "M", "health"),
+    (Table::Prefix, "I", "app.about"),
     (Table::Prefix, "C", "config.panel"),
     (Table::Prefix, "P", "project.add"),
     (Table::Prefix, "v", "pane.split_right"),
@@ -441,6 +430,7 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Nav, "'", "scratchpad.add"),
     (Table::Nav, "H", "home"),
     (Table::Nav, "M", "health"),
+    (Table::Nav, "I", "app.about"),
     (Table::Nav, "C", "config.panel"),
     (Table::Nav, "F", "worktree.finish"),
     (Table::Nav, "P", "project.add"),
@@ -450,6 +440,24 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Nav, "v", "pane.split_right"),
     (Table::Nav, "s", "pane.split_down"),
 ];
+
+/// The default bindings named as `[keys]` names them (`d`, `nav:j`), for the settings panel and
+/// `ptyro config list`: what a key does before any override.
+pub fn default_keys() -> Vec<(String, String)> {
+    let named = |table: Table, k: &str| match table {
+        Table::Prefix => k.to_owned(),
+        Table::Nav => format!("nav:{k}"),
+        Table::Global => format!("global:{k}"),
+    };
+    let mut out: Vec<(String, String)> =
+        DEFAULTS.iter().map(|(t, k, a)| (named(*t, k), (*a).to_owned())).collect();
+    for d in 1..=9 {
+        for t in [Table::Prefix, Table::Nav] {
+            out.push((named(t, &d.to_string()), format!("session.focus {d}")));
+        }
+    }
+    out
+}
 
 #[derive(Debug, Clone)]
 pub struct Keymap {
@@ -605,6 +613,7 @@ pub fn validate(config: &Config) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ptyro_core::input::{KeyCode, Mods};
 
     fn ev(c: char, mods: u8) -> KeyEvent {
         KeyEvent::new(KeyCode::Char { c }, Mods(mods))
@@ -656,6 +665,33 @@ mod tests {
         assert_eq!(m.lookup(Table::Global, ev('1', Mods::ALT)).unwrap().number(), Some(1));
         assert_eq!(errors.len(), 2, "{errors:?}");
         assert!(errors[0].contains("bogus") || errors[1].contains("bogus"));
+    }
+
+    /// The settings panel lists the defaults from `default_keys`: it must be exactly the key map's.
+    #[test]
+    fn the_listed_defaults_are_the_keymaps_own() {
+        use ptyro_core::settings::{self, Lookups};
+        let lk = Lookups {
+            themes: Vec::new(),
+            actions: ACTIONS.iter().map(|a| (a.id.to_owned(), a.desc.to_owned())).collect(),
+            keys: default_keys(),
+        };
+        let (m, _) = Keymap::new(&Config::default());
+        let rows = settings::bindings(&serde_json::Value::Null, &lk);
+        // The nine digits are one row per table; everything else is a row of its own.
+        assert_eq!(rows.len(), DEFAULTS.len() + 2, "one row per default key");
+        for b in rows.iter().filter(|b| !b.fixed) {
+            let table = match b.table {
+                "nav" => Table::Nav,
+                "global" => Table::Global,
+                _ => Table::Prefix,
+            };
+            let k = parse_key(&b.key).unwrap();
+            let c = m.lookup(table, k).unwrap_or_else(|| panic!("{} isn't bound", b.name));
+            assert_eq!(c.action, b.action.split(' ').next().unwrap(), "{}", b.name);
+            assert!(!b.help.is_empty() && !b.help.contains("not an action"), "{}", b.name);
+        }
+        assert!(rows.iter().any(|b| b.fixed && b.table == "prefix" && b.key == "1…9"));
     }
 
     #[test]

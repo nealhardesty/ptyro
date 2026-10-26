@@ -59,7 +59,7 @@ async fn the_panel_changes_a_switch_a_choice_a_number_and_a_list_and_the_daemon_
     let r = ptyro_testkit::headless::run(
         s.send_when("WORKSPACE", "\x11C")
             // The panel; ⏎ moves to the settings. Down to `clock` and ⏎ turns it off.
-            .send_when("Settings — your config", "\rjjjjjj\r")
+            .send_when("Settings — your config", "\rjjjjj\r")
             // `on_stop` is five below it: pick `stay` from its list.
             .send_when("ui.clock = off", "jjjjj\rj\r")
             // A number: search for it, jump there, and step it.
@@ -189,6 +189,40 @@ async fn config_get_set_unset_list_add_and_rm_on_the_command_line() {
     // unset puts it back.
     assert!(ptyro(&["config", "unset", "ui.theme"]).status.success());
     assert!(!file().contains("theme"), "{}", file());
+    // Every key is listed, the defaults too; one is unbound with `none`, and unset puts it back.
+    let o = ptyro(&["config", "list", "keys"]);
+    let shown = text(&o);
+    assert!(
+        shown.contains("keys after the prefix")
+            && shown.contains("keys in the sidebar")
+            && shown.lines().any(|l| l.starts_with("  d ")
+                && l.contains("app.detach")
+                && l.contains("(default)")),
+        "{shown}"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&ptyro(&["config", "get", "keys.d"]).stdout),
+        "app.detach\n"
+    );
+    let o = ptyro(&["config", "set", "keys.d", "none"]);
+    assert!(o.status.success() && text(&o).contains("unbound"), "{}", text(&o));
+    assert!(file().contains("d = \"none\"") && file().contains("# my settings"), "{}", file());
+    assert_eq!(String::from_utf8_lossy(&ptyro(&["config", "get", "keys.d"]).stdout), "none\n");
+    let o = ptyro(&["config", "list", "keys", "--changed"]);
+    let shown = text(&o);
+    assert!(
+        shown.contains("← unbound (default: app.detach)") && !shown.contains("(default)\n"),
+        "{shown}"
+    );
+    let o = ptyro(&["config", "set", "keys.q", "palette"]);
+    assert!(text(&o).contains("q ran app.detach"), "names what the key ran: {}", text(&o));
+    assert!(ptyro(&["config", "unset", "keys.d", "keys.q"]).status.success());
+    assert!(!file().contains("[keys]") || !file().contains("none"), "{}", file());
+    assert!(ptyro_core::config::Config::parse(&file()).unwrap().keys.is_empty(), "{}", file());
+    // An unknown action is refused, with nothing written.
+    let before = file();
+    let o = ptyro(&["config", "set", "keys.d", "no.such.action"]);
+    assert!(!o.status.success() && file() == before, "{}", text(&o));
     // An agent, a binding and a service are added whole, and removed.
     assert!(
         ptyro(&["config", "add", "agents", "aider", "command=aider --model sonnet"])

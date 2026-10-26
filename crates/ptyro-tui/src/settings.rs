@@ -15,8 +15,8 @@ use std::path::PathBuf;
 use ptyro_core::config::{Config, key_label};
 use ptyro_core::input::{KeyCode, KeyEvent, Mods};
 use ptyro_core::settings::{
-    self, Apply, Collection, Entry, Kind, Layer, Layout, Lookups, Op, Origin, Scope, Section,
-    Source, View,
+    self, Apply, Binding, Collection, Entry, Kind, Layer, Layout, Lookups, Op, Origin, Scope,
+    Section, Source, Standing, View,
 };
 
 use crate::app::App;
@@ -187,13 +187,25 @@ enum Modal {
 enum CaptureThen {
     /// `ui.prefix`: the keys are the setting.
     Prefix,
-    /// A new key binding: the key, then which action.
-    Binding,
+    /// A new key binding in a table (`prefix`, `nav`, `global`): the key, then which action.
+    Binding(&'static str),
+    /// Another key for an existing binding (by its `[keys]` name).
+    MoveKey(String),
 }
 
 #[derive(Debug, Clone)]
 enum Confirmed {
-    Remove { path: &'static str, name: String },
+    Remove {
+        path: &'static str,
+        name: String,
+    },
+    /// The key is in use. A new binding (`from` is `None`) takes it over, then asks what it runs;
+    /// a moved one (`from` is the key it leaves) either swaps with it or takes it over.
+    KeyOver {
+        from: Option<String>,
+        to: String,
+        swap: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -214,8 +226,10 @@ pub struct Pick {
 enum PickThen {
     Set(String),
     Make(Make),
-    /// The action for a new key binding.
+    /// The action for a key binding (by its `[keys]` name).
     BindingAction(String),
+    /// What to do with a key binding.
+    KeyMenu(String),
 }
 
 impl Pick {
@@ -258,11 +272,16 @@ enum Row {
         summary: String,
         changed: usize,
     },
+    /// A prompt (the other map collection).
     Binding {
         path: &'static str,
         name: String,
         value: String,
     },
+    /// A key, whatever it stands at: a default, yours, changed or unbound.
+    Key(Binding),
+    /// Add a key to a table (`prefix`, `nav`, `global`).
+    AddKey(&'static str),
     Add {
         path: &'static str,
         label: String,
@@ -336,6 +355,7 @@ fn lookups() -> Lookups {
     Lookups {
         themes: crate::theme::BUILTIN.iter().map(|s| (*s).to_owned()).collect(),
         actions: keymap::ACTIONS.iter().map(|a| (a.id.to_owned(), a.desc.to_owned())).collect(),
+        keys: keymap::default_keys(),
     }
 }
 
@@ -444,9 +464,9 @@ impl Panel {
         let sec = self.section();
         let project = Self::is_project(sec);
         if project && self.project.is_none() {
-            return vec![Row::Hint(
-                "These are a repository's own settings (.ptyro.toml). Open this from a session or worktree of a project to edit them.".into(),
-            )];
+            return hint_rows(
+                "These are a repository's own settings (.ptyro.toml). Open Settings from a session or worktree of a project to edit them.",
+            );
         }
         let view = self.view(project);
         let mut rows = Vec::new();
@@ -478,7 +498,11 @@ impl Panel {
             if !rows.is_empty() {
                 rows.push(Row::Title(String::new()));
             }
-            rows.push(Row::Title(title_of(col)));
+            rows.push(Row::Title(col.title.to_owned()));
+            if col.path == "keys" {
+                rows.extend(self.key_rows(view));
+                continue;
+            }
             match col.layout {
                 Layout::Map(_) => {
                     let items = view
@@ -487,6 +511,9 @@ impl Panel {
                         .find(|(p, _)| *p == col.path)
                         .map(|(_, m)| m.as_slice())
                         .unwrap_or(&[]);
+                    if items.is_empty() {
+                        rows.extend(hint_rows(col.empty));
+                    }
                     for (k, v) in items {
                         rows.push(Row::Binding {
                             path: col.path,
@@ -502,6 +529,9 @@ impl Panel {
                         .find(|(p, _)| *p == col.path)
                         .map(|(_, n)| n.as_slice())
                         .unwrap_or(&[]);
+                    if names.is_empty() {
+                        rows.extend(hint_rows(col.empty));
+                    }
                     for n in names {
                         let fields: Vec<&Entry> = view
                             .entries
@@ -534,6 +564,47 @@ impl Panel {
         rows
     }
 
+    /// Every key, by when it works: after the prefix, in the sidebar, anywhere.
+    fn key_rows(&self, view: &View) -> Vec<Row> {
+        let prefix = self
+            .find_entry("ui.prefix")
+            .and_then(|e| {
+                e.value
+                    .as_array()
+                    .and_then(|a| a.first())
+                    .and_then(|v| v.as_str().map(str::to_owned))
+            })
+            .unwrap_or_else(|| "C-q".to_owned());
+        let mut rows = Vec::new();
+        for (table, title) in [
+            ("prefix", format!("After the prefix key ({prefix}, then the key)")),
+            ("nav", "In the sidebar (while it has focus)".to_owned()),
+            (
+                "global",
+                "Anywhere, without the prefix (a global key takes the key from programs)"
+                    .to_owned(),
+            ),
+        ] {
+            rows.push(Row::Title(String::new()));
+            rows.push(Row::Title(title));
+            rows.extend(
+                view.bindings
+                    .iter()
+                    .filter(|b| {
+                        b.table == table && (!self.modified_only || b.standing != Standing::Default)
+                    })
+                    .map(|b| Row::Key(b.clone())),
+            );
+            rows.push(Row::AddKey(match table {
+                "nav" => "nav",
+                "global" => "global",
+                _ => "prefix",
+            }));
+        }
+        rows.remove(0);
+        rows
+    }
+
     fn search_rows(&self, query: &str) -> Vec<Row> {
         let words: Vec<String> =
             query.to_lowercase().split_whitespace().map(str::to_owned).collect();
@@ -548,12 +619,27 @@ impl Panel {
                 if words.is_empty() {
                     continue;
                 }
-                let hay = format!("{} {} {}", e.key, e.setting.help, e.shown()).to_lowercase();
+                let hay = format!("{} {} {} {}", e.key, e.setting.help, e.shown(), e.setting.also)
+                    .to_lowercase();
                 if words.iter().all(|w| hay.contains(w)) && self.relevant(project, e) {
                     out.push(Row::Setting(project, i));
                 }
             }
-            for (path, items) in &view.maps {
+            for b in &view.bindings {
+                let hay = format!(
+                    "keys key binding shortcut {} {} {} {} {}",
+                    b.name,
+                    b.action,
+                    b.help,
+                    b.standing.says(),
+                    b.when
+                )
+                .to_lowercase();
+                if !words.is_empty() && words.iter().all(|w| hay.contains(w)) {
+                    out.push(Row::Key(b.clone()));
+                }
+            }
+            for (path, items) in view.maps.iter().filter(|(p, _)| p != "keys") {
                 for (k, v) in items {
                     let hay = format!("{path}.{k} {v}").to_lowercase();
                     if !words.is_empty() && words.iter().all(|w| hay.contains(w)) {
@@ -570,7 +656,8 @@ impl Panel {
             out.push(Row::Hint(if words.is_empty() {
                 "type to search every setting, its help and its value".into()
             } else {
-                "no setting matches".into()
+                "no setting matches: try fewer or different words (esc goes back to the sections)"
+                    .into()
             }));
         }
         out
@@ -643,7 +730,13 @@ impl Panel {
             let rows = self.rows();
             self.cursor = rows
                 .iter()
-                .position(|r| matches!(r, Row::Binding { path, name: n, .. } if *path == c.path && *n == name))
+                .position(|r| match r {
+                    Row::Binding { path, name: n, .. } => *path == c.path && *n == name,
+                    Row::Key(b) => {
+                        c.path == "keys" && settings::slot(&b.name) == settings::slot(&name)
+                    }
+                    _ => false,
+                })
                 .unwrap_or(0);
         }
     }
@@ -701,6 +794,229 @@ impl Panel {
         self.change(layer, Op::Unset { key: format!("{path}.{name}") }, &format!("{name} {what}"))
     }
 
+    // ── key bindings ──
+
+    fn key_named(&self, name: &str) -> Option<Binding> {
+        let at = settings::slot(name);
+        self.uview.bindings.iter().find(|b| !b.fixed && settings::slot(&b.name) == at).cloned()
+    }
+
+    /// Put the cursor on the key `name`, wherever the list put it.
+    fn focus_key(&mut self, name: &str) {
+        let at = settings::slot(name);
+        let rows = self.rows();
+        if let Some(i) =
+            rows.iter().position(|r| matches!(r, Row::Key(b) if settings::slot(&b.name) == at))
+        {
+            self.cursor = i;
+        }
+        self.clamp();
+    }
+
+    /// One change to bindings, as one undo.
+    fn bind(&mut self, changes: Vec<(String, Option<String>)>, label: &str) -> Vec<Action> {
+        let layer = self.user.clone();
+        self.change(layer, Op::Bind { changes }, label)
+    }
+
+    fn key_fixed(&mut self) {
+        self.note = Some((
+            "1 to 9 show sessions 1 to 9. To change one, bind a key of your own to session.focus and a number"
+                .into(),
+            false,
+        ));
+    }
+
+    /// Switch a key off: a default is kept in the file as `none` (reset brings it back); a key of
+    /// your own is simply taken out.
+    fn key_unbind(&mut self, b: &Binding) -> Vec<Action> {
+        if b.fixed {
+            self.key_fixed();
+            return vec![];
+        }
+        if b.standing == Standing::Unbound {
+            self.note = Some((format!("{} is already unbound: r brings it back", b.key), false));
+            return vec![];
+        }
+        let (value, what) = match b.default {
+            Some(_) => (Some("none".to_owned()), "unbound (r brings it back)"),
+            None => (None, "removed"),
+        };
+        let label = format!("{} {what}", b.key);
+        let acts = self.bind(vec![(b.name.clone(), value)], &label);
+        self.focus_key(&b.name);
+        acts
+    }
+
+    /// Back to the default (a key of your own has none: it goes).
+    fn key_reset(&mut self, b: &Binding) -> Vec<Action> {
+        if b.fixed || !b.mine {
+            self.note = Some((format!("{} is already the default", b.key), false));
+            return vec![];
+        }
+        let label = match &b.default {
+            Some(d) => format!("{} is back to the default ({})", b.key, gist(&self.help_of(d))),
+            None => format!("{} removed", b.key),
+        };
+        let acts = self.bind(vec![(b.name.clone(), None)], &label);
+        self.focus_key(&b.name);
+        acts
+    }
+
+    fn help_of(&self, action: &str) -> String {
+        settings::describe(&self.lk, action)
+    }
+
+    /// What can be done with a key.
+    fn key_menu(&mut self, b: &Binding) -> Vec<Action> {
+        if b.fixed {
+            self.key_fixed();
+            return vec![];
+        }
+        let mut items: Vec<(String, String)> = Vec::new();
+        if b.standing != Standing::Unbound {
+            items.push(("key".into(), "Change its key: press the one you want".into()));
+        }
+        items.push(("action".into(), "Change what it runs".into()));
+        match b.standing {
+            Standing::Unbound => {}
+            Standing::Yours => items.push(("unbind".into(), "Remove this key".into())),
+            _ => items.push(("unbind".into(), "Unbind it: the key does nothing".into())),
+        }
+        if b.mine {
+            let label = match &b.default {
+                Some(d) => format!("Back to the default: {}", gist(&self.help_of(d))),
+                None => "Remove this key".to_owned(),
+            };
+            if !(b.default.is_none() && b.standing != Standing::Unbound) {
+                items.push(("reset".into(), label));
+            }
+        }
+        let shown = if b.standing == Standing::Unbound { "unbound" } else { b.action.as_str() };
+        self.modal = Some(Modal::Pick(Pick {
+            title: format!("{} {} ({shown}): {}", b.when, b.key, gist(&b.help)),
+            items,
+            query: String::new(),
+            search: false,
+            sel: 0,
+            on: None,
+            then: PickThen::KeyMenu(b.name.clone()),
+        }));
+        vec![]
+    }
+
+    fn key_menu_done(&mut self, name: &str, what: &str) -> Vec<Action> {
+        let Some(b) = self.key_named(name) else { return vec![] };
+        match what {
+            "key" => {
+                self.modal = Some(Modal::Capture {
+                    title: format!("Press the new key for “{}” ({})", gist(&b.help), b.when),
+                    keys: Vec::new(),
+                    then: CaptureThen::MoveKey(b.name.clone()),
+                });
+                vec![]
+            }
+            "action" => {
+                let items = self.action_items();
+                let now = b.action.split_whitespace().next().unwrap_or_default();
+                self.modal = Some(Modal::Pick(Pick {
+                    title: format!("{} {} should run", b.when, b.key),
+                    sel: items.iter().position(|(v, _)| v == now).unwrap_or(0),
+                    items,
+                    query: String::new(),
+                    search: true,
+                    on: None,
+                    then: PickThen::BindingAction(b.name.clone()),
+                }));
+                vec![]
+            }
+            "unbind" => self.key_unbind(&b),
+            _ => self.key_reset(&b),
+        }
+    }
+
+    /// Ask for a new key in `table`.
+    fn add_key(&mut self, table: &'static str) -> Vec<Action> {
+        self.modal = Some(Modal::Capture {
+            title: format!("New key binding, {} — press the key", settings::when(table)),
+            keys: Vec::new(),
+            then: CaptureThen::Binding(table),
+        });
+        vec![]
+    }
+
+    /// The key `label` in `table`, pressed to be a new binding or another key for `from`.
+    fn key_pressed(
+        &mut self,
+        table: &'static str,
+        label: &str,
+        from: Option<String>,
+    ) -> Vec<Action> {
+        let to = settings::name_in(table, label);
+        let mover = from.as_deref().and_then(|f| self.key_named(f));
+        if mover.as_ref().is_some_and(|m| settings::slot(&m.name) == settings::slot(&to)) {
+            self.note = Some((format!("{label} is already its key"), false));
+            return vec![];
+        }
+        let owner = settings::owner(&self.uview.bindings, &to).cloned();
+        let Some(o) = owner else { return self.key_placed(from, to, false) };
+        let swap = mover.is_some() && !o.fixed;
+        let what = gist(&o.help);
+        let text = match (&mover, swap) {
+            (Some(m), true) => format!(
+                "{label} already runs “{what}”. Swap them: {label} will run “{}”, and {} will run “{what}”?",
+                gist(&m.help),
+                m.key
+            ),
+            (Some(_), false) => format!("{label} already runs “{what}”. Use it for this instead?"),
+            (None, _) => {
+                format!("{label} already runs “{what}”. Use it for something else instead?")
+            }
+        };
+        self.modal = Some(Modal::Confirm { text, then: Confirmed::KeyOver { from, to, swap } });
+        vec![]
+    }
+
+    /// Settled: move `from`'s binding onto `to` (swapping with what was there), or, for a new
+    /// binding, ask what `to` runs.
+    fn key_placed(&mut self, from: Option<String>, to: String, swap: bool) -> Vec<Action> {
+        let Some(from) = from else {
+            let items = self.action_items();
+            self.modal = Some(Modal::Pick(Pick {
+                title: format!("{} should run", settings::slot(&to).1),
+                items,
+                query: String::new(),
+                search: true,
+                sel: 1,
+                on: None,
+                then: PickThen::BindingAction(to),
+            }));
+            return vec![];
+        };
+        let Some(m) = self.key_named(&from) else { return vec![] };
+        let other = settings::owner(&self.uview.bindings, &to).filter(|o| !o.fixed).cloned();
+        let mut changes = vec![(to.clone(), Some(m.action.clone()))];
+        // The old key: given to what was on the new one, or switched off (a key of your own goes).
+        changes.push(match (&other, swap) {
+            (Some(o), true) => (m.name.clone(), Some(o.action.clone())),
+            _ if m.default.is_some() => (m.name.clone(), Some("none".to_owned())),
+            _ => (m.name.clone(), None),
+        });
+        let label = match (&other, swap) {
+            (Some(o), true) => format!(
+                "{} and {} swapped ({} ↔ {})",
+                m.key,
+                settings::slot(&to).1,
+                gist(&m.help),
+                gist(&o.help)
+            ),
+            _ => format!("“{}” is now on {}", gist(&m.help), settings::slot(&to).1),
+        };
+        let acts = self.bind(changes, &label);
+        self.focus_key(&to);
+        acts
+    }
+
     fn extra_for(layer: &Layer) -> fn(&str) -> Result<(), String> {
         if layer.scope() == Scope::User { semantic } else { no_extra }
     }
@@ -725,6 +1041,7 @@ impl Panel {
                             Op::Add { path, .. }
                             | Op::Remove { path, .. }
                             | Op::Rename { path, .. } => path.clone(),
+                            Op::Bind { .. } => "keys".to_owned(),
                         };
                         self.restart.insert(key);
                     }
@@ -941,18 +1258,28 @@ impl Panel {
                     return self.reset(&e);
                 }
                 Some(Row::Binding { path, name, .. }) => return self.unbind(path, &name),
+                Some(Row::Key(b)) => return self.key_reset(&b),
                 Some(Row::Member { path, name, .. }) => return self.ask_remove(path, &name),
                 _ => {}
             },
             KeyCode::Char { c: 'd' } => match row {
                 Some(Row::Member { path, name, .. }) => return self.ask_remove(path, &name),
                 Some(Row::Binding { path, name, .. }) => return self.unbind(path, &name),
+                Some(Row::Key(b)) => return self.key_unbind(&b),
                 _ => {}
             },
             KeyCode::Char { c: 'R' } => {
                 if let Some(Row::Member { path, name, .. }) = row {
                     return self.ask_rename(path, &name);
                 }
+            }
+            KeyCode::Char { c: 'n' } if self.section().id == "keys" => {
+                let table = match row {
+                    Some(Row::Key(b)) => b.table,
+                    Some(Row::AddKey(t)) => t,
+                    _ => "prefix",
+                };
+                return self.add_key(table);
             }
             KeyCode::Char { c: 'n' } => {
                 let sec = self.section();
@@ -982,8 +1309,13 @@ impl Panel {
         } else {
             format!("the {} {name:?}", col.noun)
         };
+        let in_use = path == "themes"
+            && self.find_entry("ui.theme").is_some_and(|e| e.value.as_str() == Some(name));
         self.modal = Some(Modal::Confirm {
-            text: format!("Remove {what}, and everything set in it?"),
+            text: format!(
+                "Remove {what}, and everything set in it?{}",
+                if in_use { " It is the theme in use: the default comes back." } else { "" }
+            ),
             then: Confirmed::Remove { path, name: name.to_owned() },
         });
         vec![]
@@ -1039,6 +1371,8 @@ impl Panel {
                 Some(col) => self.add(col),
                 None => vec![],
             },
+            Row::Key(b) => self.key_menu(&b),
+            Row::AddKey(table) => self.add_key(table),
             Row::Binding { path: "prompts", name, value } => {
                 self.modal = Some(Modal::Input {
                     title: format!("prompt {name}: the text a new session starts from"),
@@ -1248,14 +1582,7 @@ impl Panel {
     fn add(&mut self, col: &'static Collection) -> Vec<Action> {
         match (col.path, col.layout) {
             ("profiles", _) => vec![Action::Run("profile.new")],
-            (_, Layout::Map(_)) if col.path == "keys" => {
-                self.modal = Some(Modal::Capture {
-                    title: "New key binding — press the key (after the prefix)".into(),
-                    keys: Vec::new(),
-                    then: CaptureThen::Binding,
-                });
-                vec![]
-            }
+            (_, Layout::Map(_)) if col.path == "keys" => self.add_key("prefix"),
             (_, Layout::Array) => {
                 let types = [
                     ("ntfy", "ntfy.sh or your own"),
@@ -1323,6 +1650,10 @@ impl Panel {
                 Some(Kind::Secret) => {
                     (true, "the token, or !program args to run one that prints it".to_owned())
                 }
+                Some(Kind::Argv) if make.path == "agents" => (
+                    false,
+                    format!("a program and its arguments, or ⏎ to run it as {:?}", make.name),
+                ),
                 Some(Kind::Argv) => (false, "a program and its arguments".to_owned()),
                 _ => (false, String::new()),
             };
@@ -1341,6 +1672,10 @@ impl Panel {
             .and_then(|_| self.project_layer())
             .unwrap_or_else(|| self.user.clone());
         let mut fields = make.fields.clone();
+        if matches!(col.layout, Layout::Tables) {
+            // (An answer left empty is a question skipped.)
+            fields.retain(|(_, v)| !v.trim().is_empty());
+        }
         let name = make.name.clone();
         if matches!(col.layout, Layout::Map(_)) {
             // (a prompt: its text came last)
@@ -1350,11 +1685,26 @@ impl Panel {
                 .collect();
         }
         let label = format!("added {} {}", col.noun, name);
-        let acts = self.change(
+        let mut acts = self.change(
             layer,
             Op::Add { path: col.path.to_owned(), name: name.clone(), fields },
             &label,
         );
+        // A theme just made is the one in use, so editing its colours shows at once.
+        if col.path == "themes"
+            && self.note.as_ref().is_some_and(|(_, err)| !*err)
+            && let Some(e) = self.find_entry("ui.theme")
+        {
+            acts.extend(self.set(&e, &name));
+            if self.note.as_ref().is_some_and(|(_, err)| !*err) {
+                self.note = Some((
+                    format!(
+                        "added theme {name}, now in use: change its colours and watch them change"
+                    ),
+                    false,
+                ));
+            }
+        }
         if self.note.as_ref().is_some_and(|(_, err)| !*err)
             && !matches!(col.layout, Layout::Map(_) | Layout::Array)
         {
@@ -1445,7 +1795,7 @@ impl Panel {
                             keys.push(label);
                         }
                         // A binding is one key: take it at once.
-                        if matches!(then, CaptureThen::Binding) {
+                        if matches!(then, CaptureThen::Binding(_) | CaptureThen::MoveKey(_)) {
                             return self.capture_done(keys, then);
                         }
                     }
@@ -1466,6 +1816,7 @@ impl Panel {
                         self.clamp();
                         acts
                     }
+                    Confirmed::KeyOver { from, to, swap } => self.key_placed(from, to, swap),
                 },
                 KeyCode::Char { c: 'n' | 'N' } | KeyCode::Esc => vec![],
                 _ => {
@@ -1515,10 +1866,28 @@ impl Panel {
                             self.note = Some((format!("a {} needs a name", col.noun), true));
                             return vec![];
                         }
-                        make.todo = match col.layout {
-                            Layout::Map(_) => vec!["text"],
+                        make.todo = match (col.layout, make.path) {
+                            (Layout::Map(_), _) => vec!["text"],
+                            // Which program it runs: optional, it runs as its own name without.
+                            (_, "agents") => vec!["command"],
                             _ => settings::required(make.path, "").to_vec(),
                         };
+                        // A theme starts as a copy of one that exists: pick which, first.
+                        if make.path == "themes" {
+                            self.modal = Some(Modal::Pick(Pick {
+                                title: format!("Start {} from which theme?", make.name),
+                                items: crate::theme::BUILTIN
+                                    .iter()
+                                    .map(|t| ((*t).to_owned(), "built in".to_owned()))
+                                    .collect(),
+                                query: String::new(),
+                                search: false,
+                                sel: 0,
+                                on: None,
+                                then: PickThen::Make(make),
+                            }));
+                            return vec![];
+                        }
                     }
                     Some(field) => {
                         let f = if field == "text" { "text" } else { field };
@@ -1539,15 +1908,6 @@ impl Panel {
     fn pick_done(&mut self, p: Pick) -> Vec<Action> {
         match p.then.clone() {
             PickThen::Set(key) => {
-                if key.starts_with("keys.") {
-                    let Some((v, _)) = p.current().cloned() else { return vec![] };
-                    let layer = self.user.clone();
-                    return self.change(
-                        layer,
-                        Op::Set { key: key.clone(), value: v.clone() },
-                        &format!("{} runs {v}", key.trim_start_matches("keys.")),
-                    );
-                }
                 let Some(e) = self.find_entry(&key) else { return vec![] };
                 let value = match &p.on {
                     Some(on) => p
@@ -1575,22 +1935,24 @@ impl Panel {
             }
             PickThen::Make(mut make) => {
                 let Some((kind, _)) = p.current().cloned() else { return vec![] };
+                if make.path == "themes" {
+                    make.fields.push(("base".into(), kind));
+                    return self.make_next(make);
+                }
                 make.fields.push(("type".into(), kind.clone()));
                 make.todo = settings::required(make.path, &kind).to_vec();
                 self.make_next(make)
             }
-            PickThen::BindingAction(key) => {
+            PickThen::BindingAction(name) => {
                 let Some((v, _)) = p.current().cloned() else { return vec![] };
-                let layer = self.user.clone();
-                self.change(
-                    layer,
-                    Op::Add {
-                        path: "keys".into(),
-                        name: key.clone(),
-                        fields: vec![("value".into(), v.clone())],
-                    },
-                    &format!("{key} runs {v}"),
-                )
+                let label = format!("{} runs {v}", settings::slot(&name).1);
+                let acts = self.bind(vec![(name.clone(), Some(v))], &label);
+                self.focus_key(&name);
+                acts
+            }
+            PickThen::KeyMenu(name) => {
+                let Some((what, _)) = p.current().cloned() else { return vec![] };
+                self.key_menu_done(&name, &what)
             }
         }
     }
@@ -1601,19 +1963,18 @@ impl Panel {
                 let Some(e) = self.find_entry("ui.prefix") else { return vec![] };
                 self.set(&e, &serde_json::to_string(&keys).unwrap_or_default())
             }
-            CaptureThen::Binding => {
+            CaptureThen::Binding(table) => {
                 let key = keys.first().cloned().unwrap_or_default();
-                let items = self.action_items();
-                self.modal = Some(Modal::Pick(Pick {
-                    title: format!("{key} should run"),
-                    items,
-                    query: String::new(),
-                    search: true,
-                    sel: 1,
-                    on: None,
-                    then: PickThen::BindingAction(key),
-                }));
-                vec![]
+                self.key_pressed(table, &key, None)
+            }
+            CaptureThen::MoveKey(from) => {
+                let key = keys.first().cloned().unwrap_or_default();
+                let table = match settings::slot(&from).0 {
+                    "nav" => "nav",
+                    "global" => "global",
+                    _ => "prefix",
+                };
+                self.key_pressed(table, &key, Some(from))
             }
         }
     }
@@ -1635,6 +1996,10 @@ impl Panel {
                     }
                     Some(Row::Binding { path, name, .. }) => {
                         let k = format!("{path}.{name}");
+                        self.jump(&k);
+                    }
+                    Some(Row::Key(b)) => {
+                        let k = format!("keys.{}", b.name);
                         self.jump(&k);
                     }
                     _ => {}
@@ -1738,24 +2103,33 @@ impl Panel {
 
 // ── words ─────────────────────────────────────────────────────────────────────────────────
 
-fn article(noun: &str) -> &'static str {
-    if noun.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" }
-}
-
-fn title_of(col: &Collection) -> String {
-    match col.path {
-        "keys" => "Your key bindings".into(),
-        "prompts" => "Prompts".into(),
-        "notifications.sinks" => "Notification services".into(),
-        "scripts.run" => "Run scripts".into(),
-        other => {
-            let mut s = other.to_owned();
-            if let Some(c) = s.get_mut(..1) {
-                c.make_ascii_uppercase();
+/// A sentence as hint rows that fit the items pane.
+fn hint_rows(text: &str) -> Vec<Row> {
+    let mut lines: Vec<String> = Vec::new();
+    for word in text.split_whitespace() {
+        match lines.last_mut() {
+            Some(l) if l.chars().count() + 1 + word.chars().count() <= 76 => {
+                l.push(' ');
+                l.push_str(word);
             }
-            s
+            _ => lines.push(word.to_owned()),
         }
     }
+    lines.into_iter().map(Row::Hint).collect()
+}
+
+/// The first few words of what an action does: “Detach”, “Command palette”.
+fn gist(help: &str) -> String {
+    let cut = help.find([':', '(', '.']).unwrap_or(help.len());
+    let mut g = help[..cut].trim().to_owned();
+    if g.is_empty() {
+        g = help.to_owned();
+    }
+    g
+}
+
+fn article(noun: &str) -> &'static str {
+    if noun.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" }
 }
 
 /// A member's one line: what it is, from its main field.
@@ -1949,6 +2323,7 @@ pub fn draw(app: &App, p: &Panel, f: &mut Frame<'_>, area: Rect) {
                 label_of(p.entry(*pr, *i), p.drill.is_some(), p.search.is_some()).chars().count(),
             ),
             Row::Member { name, .. } | Row::Binding { name, .. } => Some(name.chars().count()),
+            Row::Key(b) => Some(b.key.chars().count()),
             _ => None,
         })
         .max()
@@ -1974,7 +2349,7 @@ pub fn draw(app: &App, p: &Panel, f: &mut Frame<'_>, area: Rect) {
                 let name = pad(&label_of(e, p.drill.is_some(), p.search.is_some()), label_w + 1);
                 let tag = origin_tag(e);
                 let val_w = w.saturating_sub(2 + label_w + 1 + tag.chars().count() + 2);
-                let mut value = e.shown();
+                let mut value = e.pretty();
                 if matches!(e.setting.kind, Kind::Bool) {
                     value = if e.value.as_bool().unwrap_or(false) {
                         "[x] on".into()
@@ -2030,6 +2405,41 @@ pub fn draw(app: &App, p: &Panel, f: &mut Frame<'_>, area: Rect) {
                 spans.push(Span::styled(
                     text,
                     if is_sel { selected_style(app) } else { Style::new() },
+                ));
+            }
+            Row::Key(b) => {
+                let mark = if b.standing == Standing::Default { "  " } else { "● " };
+                let name = pad(&b.key, label_w + 1);
+                let tag = b.standing.says();
+                let what = match (b.standing, p.search.is_some()) {
+                    (Standing::Unbound, _) => format!("not bound (was: {})", gist(&b.help)),
+                    (_, true) => format!("{}: {}", b.when, gist(&b.help)),
+                    _ => b.help.clone(),
+                };
+                let val_w = w.saturating_sub(2 + label_w + 1 + tag.chars().count() + 2);
+                if is_sel {
+                    let text = format!("{mark}{name}{}", pad(&what, val_w));
+                    let text = pad(&text, w.saturating_sub(tag.chars().count() + 1));
+                    spans.push(Span::styled(format!("{text} {tag}"), selected_style(app)));
+                } else {
+                    let live = matches!(b.standing, Standing::Yours | Standing::Changed);
+                    spans.push(Span::styled(mark, fg(app, t.accent)));
+                    spans.push(Span::styled(name, Style::new().add_modifier(Modifier::BOLD)));
+                    spans.push(Span::styled(
+                        pad(&what, val_w),
+                        if b.standing == Standing::Unbound { fg(app, t.dim) } else { Style::new() },
+                    ));
+                    spans.push(Span::styled(
+                        format!(" {tag}"),
+                        if live { fg(app, t.accent) } else { fg(app, t.dim) },
+                    ));
+                }
+            }
+            Row::AddKey(table) => {
+                let text = pad(&format!("  + Add a key {}…", settings::when(table)), w);
+                spans.push(Span::styled(
+                    text,
+                    if is_sel { selected_style(app) } else { fg(app, t.accent) },
                 ));
             }
             Row::Add { label, .. } => {
@@ -2102,13 +2512,14 @@ pub fn draw(app: &App, p: &Panel, f: &mut Frame<'_>, area: Rect) {
     }
 }
 
+/// A setting's name in the list: its key without the section, in words (`sidebar width`).
 fn label_of(e: &Entry, drilled: bool, searching: bool) -> String {
     if searching {
         e.key.clone()
     } else if drilled || e.member.is_some() {
-        e.key.rsplit_once('.').map_or(e.key.clone(), |(_, k)| k.to_owned())
+        e.key.rsplit_once('.').map_or(e.key.clone(), |(_, k)| k.replace('_', " "))
     } else {
-        e.key.split_once('.').map_or(e.key.clone(), |(_, k)| k.to_owned())
+        e.key.split_once('.').map_or(e.key.clone(), |(_, k)| k.replace('_', " "))
     }
 }
 
@@ -2147,7 +2558,7 @@ fn detail_lines<'a>(app: &App, p: &Panel, row: &Row, w: usize, d: &mut Vec<Line<
                 fit(
                     &format!(
                         "default {} · from {from} · {}{kind_help}",
-                        e.default_shown(),
+                        e.default_pretty(),
                         e.setting.apply.says()
                     ),
                     w,
@@ -2174,9 +2585,51 @@ fn detail_lines<'a>(app: &App, p: &Panel, row: &Row, w: usize, d: &mut Vec<Line<
             let hint = if *path == "prompts" {
                 "⏎ edits its text · d removes it. A new session starts from it with --prompt @name."
             } else {
-                "⏎ picks what it runs · d unbinds it. A key with global: in front works without the prefix."
+                "⏎ picks what it runs · d removes it."
             };
             d.push(Line::from(Span::styled(hint, dim)));
+        }
+        Row::Key(b) => {
+            d.push(Line::from(vec![
+                Span::styled(
+                    format!("{}  {}", b.key, b.when),
+                    fg(app, t.accent).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(format!("  ({})", b.standing.says()), dim),
+            ]));
+            let (runs, id) = match b.standing {
+                Standing::Unbound => {
+                    ("Unbound. It used to run", b.default.as_deref().unwrap_or(""))
+                }
+                _ => ("Runs", b.action.as_str()),
+            };
+            d.push(Line::from(Span::raw(fit(&format!("{runs} {id}: {}", b.help), w))));
+            d.push(Line::from(Span::styled(
+                match (&b.default, b.standing) {
+                    (_, Standing::Default) => "the default · r does nothing here".to_owned(),
+                    (Some(dflt), _) => format!("the default is {dflt} · r puts it back"),
+                    (None, _) => "your own key · r or d removes it".to_owned(),
+                },
+                dim,
+            )));
+            d.push(Line::from(Span::styled(
+                if b.fixed {
+                    "these jump to a session by its number; bind your own key to session.focus N to add more"
+                } else {
+                    "⏎ for the choices: change its key, change what it runs, unbind it · d unbinds · r resets"
+                },
+                dim,
+            )));
+        }
+        Row::AddKey(table) => {
+            d.push(Line::from(Span::styled(
+                format!("Add a key {}", settings::when(table)),
+                fg(app, t.accent).add_modifier(Modifier::BOLD),
+            )));
+            d.push(Line::from(Span::styled(
+                "⏎ then press the key, then pick what it runs. If the key is taken, you are asked first.",
+                dim,
+            )));
         }
         Row::Add { path, .. } => {
             let col = settings::collection(path).expect("collection");
@@ -2308,19 +2761,28 @@ fn draw_modal(app: &App, _p: &Panel, m: &Modal, f: &mut Frame<'_>, panel: Rect) 
             ];
             f.render_widget(Paragraph::new(lines).block(block("Press keys".into())), r);
         }
-        Modal::Confirm { text, .. } => {
+        Modal::Confirm { text, then } => {
             let r = Rect {
                 x: panel.x + 6,
                 y: panel.y + panel.height / 3,
                 width: panel.width.saturating_sub(12),
-                height: 5,
+                height: 6,
             };
             f.render_widget(Clear, r);
+            let (title, answers) = match then {
+                Confirmed::Remove { .. } => ("Remove", "y removes it · n keeps it"),
+                Confirmed::KeyOver { .. } => ("That key is taken", "y or ⏎ goes ahead · n cancels"),
+            };
             let lines = vec![
                 Line::from(Span::raw(text.clone())),
-                Line::from(Span::styled("y removes it · n keeps it", fg(app, t.dim))),
+                Line::from(Span::styled(answers, fg(app, t.dim))),
             ];
-            f.render_widget(Paragraph::new(lines).block(block("Remove".into())), r);
+            f.render_widget(
+                Paragraph::new(lines)
+                    .wrap(ratatui::widgets::Wrap { trim: true })
+                    .block(block(title.into())),
+                r,
+            );
         }
     }
 }

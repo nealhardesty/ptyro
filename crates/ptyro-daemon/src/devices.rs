@@ -74,6 +74,11 @@ fn hash(token: &str) -> String {
 /// Push subscriptions kept for one device.
 const MAX_PUSH_PER_DEVICE: usize = 10;
 
+/// Device names are one device each, whatever their case.
+fn same_name(a: &str, b: &str) -> bool {
+    a.trim().eq_ignore_ascii_case(b.trim())
+}
+
 fn id_num(id: &str) -> u64 {
     u64::from_str_radix(id, 16).unwrap_or(0)
 }
@@ -143,9 +148,10 @@ pub fn needed(req: &Request) -> Scope {
         | PushUnsubscribe { .. }
         | PushTest
         | ChatGet { .. }
-        | ScratchGet
+        | ScratchGet { .. }
+        | ScratchPads
         | ScratchTodo { .. }
-        | ScratchHistory
+        | ScratchHistory { .. }
         | ScratchPane { create: false, .. } => Scope::Read,
         Answer { decision, .. } if is_always(decision) => Scope::Control,
         Answer { .. }
@@ -366,10 +372,22 @@ impl Daemon {
                 };
                 let device = rec.info();
                 self.prune_pairings();
-                self.devices.locked().push(rec);
+                let replaces = {
+                    let mut devices = self.devices.locked();
+                    // A name is one device: an earlier unused link for it is superseded now,
+                    // and a paired one is replaced when this link is claimed (not before, so
+                    // an abandoned pairing doesn't cut the phone off).
+                    devices.retain(|d| d.pairing.is_none() || !same_name(&d.name, &rec.name));
+                    let replaces = devices
+                        .iter()
+                        .find(|d| d.pairing.is_none() && same_name(&d.name, &rec.name))
+                        .map(DeviceRecord::info);
+                    devices.push(rec);
+                    replaces
+                };
                 self.save_devices();
-                tracing::info!(device = %device.id, name = %device.name, scope = device.scope.label(), "pairing code issued");
-                Ok(Reply::Pairing { device, code, expires_ms })
+                tracing::info!(device = %device.id, name = %device.name, scope = device.scope.label(), replaces = ?replaces.as_ref().map(|d| d.id.clone()), "pairing code issued");
+                Ok(Reply::Pairing { device, code, expires_ms, replaces })
             }
             Request::DeviceClaim { code, via } => {
                 self.prune_pairings();
@@ -397,11 +415,29 @@ impl Daemon {
                     d.pairing = None;
                     d.token_sha256 = hash(&token);
                     d.last_via = via;
-                    d.info()
+                    let device = d.info();
+                    // The new credentials replace the old device of the same name: its token
+                    // stops working and its connections close (they were checked against it).
+                    let before = devices.len();
+                    let mut replaced = None;
+                    devices.retain(|x| {
+                        let old = x.id != device.id
+                            && x.pairing.is_none()
+                            && same_name(&x.name, &device.name);
+                        if old && replaced.is_none() {
+                            replaced = Some(x.info());
+                        }
+                        !old
+                    });
+                    if before != devices.len() {
+                        self.devices_epoch.send_modify(|e| *e += 1);
+                    }
+                    (device, replaced)
                 };
+                let (device, replaced) = device;
                 self.save_devices();
-                tracing::info!(device = %device.id, name = %device.name, via = ?device.last_via, "paired");
-                Ok(Reply::Paired { device, token })
+                tracing::info!(device = %device.id, name = %device.name, via = ?device.last_via, replaced = ?replaced.as_ref().map(|d| d.id.clone()), "paired");
+                Ok(Reply::Paired { device, token, replaced })
             }
             Request::DeviceList => {
                 self.prune_pairings();

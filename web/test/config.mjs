@@ -3,7 +3,7 @@
 //   node web/test/config.mjs units                    search, labels, lists, key names, what shows
 //   node web/test/config.mjs host http://127.0.0.1:PORT FULL_TOKEN   against a real `ptyro serve`
 import assert from "node:assert/strict";
-import { fieldsOf, fromLines, hexOf, keyLabel, labelOf, needed, relevant, score, summary, toLines } from "../dist/cfgkit.js";
+import { fieldsOf, fromLines, gist, hexOf, keyLabel, labelOf, moveChanges, nameIn, needed, ownerOf, relevant, score, slotOf, summary, toLines, withUnit } from "../dist/cfgkit.js";
 
 const mode = process.argv[2];
 
@@ -18,6 +18,11 @@ if (mode === "units") {
   assert.equal(score("tailscale phone", "remote.tailscale", "Put Tailscale's HTTPS in front for your phone.", "off") > 0, true);
   assert.equal(score("zzz", "ui.theme", "The colour scheme.", "dark"), -1);
   assert.equal(score("", "ui.theme", "", ""), 0);
+  assert.ok(score("color", "ui.theme", "The colour scheme.", "dark", "color colour") > 0, "other spellings count");
+  assert.equal(score("color", "ui.theme", "The colour scheme.", "dark"), -1);
+  assert.equal(withUnit("30", "columns"), "30 columns");
+  assert.equal(withUnit("(never)", "days"), "(never)");
+  assert.equal(withUnit("30", ""), "30");
   assert.ok(score("dark", "ui.theme", "The colour scheme.", "ptyro-dark") > 0, "a value counts");
   // Lists are lines in a box and JSON on the wire.
   assert.equal(toLines(["~/a", "~/b"]), "~/a\n~/b");
@@ -57,6 +62,29 @@ if (mode === "units") {
   assert.deepEqual(needed("notifications.sinks", "pushover"), ["token", "user"]);
   assert.deepEqual(needed("editors", ""), ["command"]);
   assert.deepEqual(needed("agents", ""), []);
+  // Key bindings: spellings of one key are one key; a taken key is named; a move is a swap.
+  assert.equal(slotOf("Q"), "prefix:Q");
+  assert.equal(slotOf("S-q"), "prefix:Q");
+  assert.equal(slotOf("shift-q"), "prefix:Q");
+  assert.equal(slotOf("C-S-Left"), "prefix:C-S-Left");
+  assert.equal(slotOf("S-C-a"), "prefix:C-A", "as the key map does: Shift on a letter is the capital");
+  assert.equal(slotOf("nav:Return"), "nav:Enter");
+  assert.equal(slotOf("global:M-1"), "global:M-1");
+  assert.equal(slotOf("-"), "prefix:-");
+  assert.equal(nameIn("nav", "j"), "nav:j");
+  assert.equal(nameIn("prefix", "j"), "j");
+  assert.equal(gist("Detach (sessions keep running)"), "Detach");
+  assert.equal(gist("Command palette: run any action"), "Command palette");
+  const mk = (name, table, key, action, def, standing = "default", fixed = false) => ({ name, table, when: "", key, action, default: def, standing, mine: standing !== "default", help: action, fixed });
+  const all = [mk("d", "prefix", "d", "app.detach", "app.detach"), mk(":", "prefix", ":", "palette", "palette"), mk("y", "prefix", "y", "none", null, "unbound"), mk("1", "prefix", "1…9", "session.focus N", "session.focus N", "default", true)];
+  assert.equal(ownerOf(all, "S-d"), undefined, "S-d is D, another key");
+  assert.equal(ownerOf(all, "d").name, "d");
+  assert.equal(ownerOf(all, "y"), undefined, "an unbound key is free");
+  assert.equal(ownerOf(all, "nav:d"), undefined, "another table is another key");
+  assert.equal(ownerOf(all, "3").fixed, true, "a digit belongs to the 1…9 row");
+  assert.deepEqual(moveChanges(all[0], "x", undefined, true), [["x", "app.detach"], ["d", "none"]]);
+  assert.deepEqual(moveChanges(all[0], ":", all[1], true), [[":", "app.detach"], ["d", "palette"]]);
+  assert.deepEqual(moveChanges(mk("z", "prefix", "z", "palette", null, "yours"), "x", undefined, true), [["x", "palette"], ["z", null]]);
   console.log("ok");
 } else if (mode === "host") {
   const [base, token] = process.argv.slice(3);
@@ -116,6 +144,22 @@ if (mode === "units") {
   assert.ok(!r.view.members.find((m) => m.path === "agents").names.includes("pair"));
   await call("settings.apply", { scope: "user", change: { t: "remove", path: "notifications.sinks", name: "0" } });
   await call("settings.apply", { scope: "user", change: { t: "unset", key: "keys.x" } });
+  // Every key is in the view, defaults too; one change binds, unbinds, moves and swaps.
+  const key = (v, n) => v.bindings.find((b) => b.name === n);
+  assert.equal(key(view, "d").action, "app.detach");
+  assert.equal(key(view, "d").standing, "default");
+  assert.equal(key(view, "d").when, "after the prefix");
+  assert.ok(key(view, "C").help.startsWith("Settings") && key(view, "nav:j").table === "nav");
+  assert.equal(view.bindings.filter((b) => b.fixed).length, 2);
+  r = await call("settings.apply", { scope: "user", change: { t: "bind", changes: [["d", "none"]] } });
+  assert.deepEqual([key(r.view, "d").standing, key(r.view, "d").action, key(r.view, "d").default], ["unbound", "none", "app.detach"]);
+  r = await call("settings.apply", { scope: "user", change: { t: "bind", changes: [["d", null]] } });
+  assert.equal(key(r.view, "d").standing, "default");
+  r = await call("settings.apply", { scope: "user", change: { t: "bind", changes: [["w", "app.detach"], ["d", "workspace.switch"]] } });
+  assert.equal(key(r.view, "d").standing, "changed");
+  assert.equal(key(r.view, "w").action, "app.detach");
+  await assert.rejects(call("settings.apply", { scope: "user", change: { t: "bind", changes: [["d", "no.such.action"]] } }), /unknown action/);
+  await call("settings.apply", { scope: "user", change: { t: "bind", changes: [["d", null], ["w", null]] } });
   // Undo puts the file back as it was before the second change.
   r = await call("settings.restore", { scope: "user", text: before });
   assert.equal(r.view.entries.find((e) => e.key === "ui.theme").origin, "user");

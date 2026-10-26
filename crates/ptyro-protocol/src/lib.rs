@@ -12,7 +12,7 @@ use ptyro_core::model::{
     CommitInfo, DiffAgainst, DiffDoc, GcEntry, PrInfo, ProfileInfo, ProfileReason, ProjectInfo,
     RemoveOpts, ReviewComment, ReviewItem, ScriptsInfo, WorkspaceInfo, WorktreeInfo, WorktreeSpec,
 };
-use ptyro_core::scratchpad::{Item, Snapshot};
+use ptyro_core::scratchpad::{Item, PadSel, Snapshot};
 use ptyro_core::screen::{ScreenDelta, ScrollbackDoc};
 use ptyro_core::session::{HistoryEntry, SessionInfo, SpawnSpec};
 use ptyro_core::status::{AttentionKind, InboxEntry, Usage};
@@ -33,7 +33,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 17 };
+pub const PROTO: Version = Version { major: 1, minor: 18 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -87,9 +87,11 @@ pub enum Scope {
     /// Also answer permission prompts and gates, clear attention, mute.
     Approve,
     /// Also type into sessions and stop, resume or start configured agents.
-    #[default]
     Control,
-    /// Everything a local client can do (spawn any command, change config, upgrade).
+    /// Everything a local client can do (spawn any command, change config, upgrade). The
+    /// default when a pairing names no scope: the whole web app needs it, and every place that
+    /// pairs says so in plain words.
+    #[default]
     Full,
 }
 
@@ -284,17 +286,25 @@ pub enum Request {
         #[serde(default)]
         workspace: Option<String>,
     },
-    /// The scratchpad (NOTE1): its text and revision. Replies `Scratch`.
-    ScratchGet,
+    /// The scratchpad (NOTE1): its text and revision. Replies `Scratch`. Every `Scratch*`
+    /// request names its pad with `pad` (NOTE1.7); left out, it is the global one.
+    ScratchGet {
+        #[serde(default)]
+        pad: PadSel,
+    },
     /// Write `text`, edited from the revision `base`; if the file moved on meanwhile the two are
     /// merged by lines (both kept between markers where they clash). Replies `ScratchPut`.
     ScratchPut {
+        #[serde(default)]
+        pad: PadSel,
         base: String,
         text: String,
     },
     /// Add an entry (a stamped `- [ ]` item, or a note); `session` says who is adding, for the
     /// stamp's worktree and agent. Replies `Scratch`.
     ScratchAdd {
+        #[serde(default)]
+        pad: PadSel,
         text: String,
         #[serde(default)]
         section: Option<String>,
@@ -311,23 +321,37 @@ pub enum Request {
     /// The checkbox items (the open ones, unless `all`). Replies `ScratchItems`.
     ScratchTodo {
         #[serde(default)]
+        pad: PadSel,
+        #[serde(default)]
         all: bool,
     },
     /// Tick, untick or tag the item `sel` (a line number, or words in one open item). Replies
     /// `ScratchItems` with that item.
     ScratchMark {
+        #[serde(default)]
+        pad: PadSel,
         sel: String,
         mark: PadMark,
     },
     /// Saved copies of the pad, newest first. Replies `ScratchLog`.
-    ScratchHistory,
+    ScratchHistory {
+        #[serde(default)]
+        pad: PadSel,
+    },
     /// Put a saved copy back (the current text is saved first). Replies `Scratch`.
     ScratchRestore {
+        #[serde(default)]
+        pad: PadSel,
         rev: String,
     },
-    /// The scratchpad's editor session: one, in a pane. With `create`, started when there is
+    /// Every pad that exists: the global one and each project's, with its open count. Replies
+    /// `ScratchPads`.
+    ScratchPads,
+    /// The pad's editor session: one per pad, in a pane. With `create`, started when there is
     /// none (spawned as `Spawn` would, `env` and `size` included). Replies `Session`.
     ScratchPane {
+        #[serde(default)]
+        pad: PadSel,
         #[serde(default)]
         create: bool,
         #[serde(default)]
@@ -1080,6 +1104,10 @@ pub struct DaemonStatus {
     /// The web app's server (1.16).
     #[serde(default)]
     pub web: Option<WebServe>,
+    /// The short name of the computer the daemon runs on (`[daemon] machine_name`, else its host
+    /// name): what a client of a remote daemon shows, not its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
 }
 
 /// The web app's server, `ptyro serve`, as the daemon sees it (`[remote] serve`, SPEC §16.3).
@@ -1186,6 +1214,9 @@ pub enum Reply {
     },
     ScratchLog {
         snapshots: Vec<Snapshot>,
+    },
+    ScratchPads {
+        pads: Vec<PadInfo>,
     },
     Screen {
         text: String,
@@ -1401,11 +1432,18 @@ pub enum Reply {
         device: DeviceInfo,
         code: String,
         expires_ms: u64,
+        /// A device with this name is already paired: claiming this code replaces it (its
+        /// token stops working, its connections close, this scope is the one that counts).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        replaces: Option<DeviceInfo>,
     },
     /// A claimed pairing: the device's token, returned only this once.
     Paired {
         device: DeviceInfo,
         token: String,
+        /// The earlier device of the same name this claim replaced.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        replaced: Option<DeviceInfo>,
     },
     Transcript {
         items: Vec<ptyro_core::chat::ChatItem>,
@@ -1605,6 +1643,9 @@ pub enum DomainEvent {
     },
     /// The scratchpad changed, from anywhere (a client, an agent, an editor).
     ScratchChanged {
+        /// Which pad (a project's by id); the global one when absent, as older daemons sent it.
+        #[serde(default, skip_serializing_if = "PadSel::is_global")]
+        pad: PadSel,
         rev: String,
         /// Open `- [ ]` items.
         open: u32,
@@ -1649,9 +1690,27 @@ pub enum PadMark {
     Started { worktree: String },
 }
 
+/// One pad in `ScratchPads`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PadInfo {
+    /// `Global` or `Project(id)`.
+    pub pad: PadSel,
+    /// `everywhere`, or the project's name.
+    pub name: String,
+    pub path: PathBuf,
+    /// Open `- [ ]` items.
+    pub open: u32,
+}
+
 /// The scratchpad as clients see it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PadDoc {
+    /// Which pad this is (resolved: `Global` or `Project(id)`).
+    #[serde(default, skip_serializing_if = "PadSel::is_global")]
+    pub pad: PadSel,
+    /// `everywhere`, or the project's name.
+    #[serde(default)]
+    pub name: String,
     pub path: PathBuf,
     pub rev: String,
     pub text: String,
@@ -1665,6 +1724,8 @@ impl PadDoc {
         let items = ptyro_core::scratchpad::items(&text);
         let done = items.iter().filter(|i| i.done).count();
         Self {
+            pad: PadSel::Global,
+            name: "everywhere".into(),
             path,
             rev: ptyro_core::scratchpad::rev(&text),
             open: u32::try_from(items.len() - done).unwrap_or(u32::MAX),
@@ -1704,6 +1765,9 @@ pub enum ServerMsg {
         /// What a paired device may do (1.15); absent for a local client, which may do anything.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scope: Option<Scope>,
+        /// The daemon's machine (see `DaemonStatus::machine`), so a client can show it at once.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        machine: Option<String>,
     },
     Reject {
         reason: String,
@@ -1821,6 +1885,76 @@ mod tests {
             assert_eq!(back, m);
             assert_eq!(got, enc);
         }
+    }
+
+    /// NOTE1.7: a client that predates project pads sends no `pad`, and means the global one;
+    /// its events and replies carry none either.
+    #[test]
+    fn scratchpad_requests_without_a_pad_mean_the_global_one() {
+        use ptyro_core::scratchpad::PadSel;
+        let old = |json: &str| -> Request { serde_json::from_str(json).unwrap() };
+        assert!(matches!(
+            old(r#"{"t":"scratch_get"}"#),
+            Request::ScratchGet { pad: PadSel::Global }
+        ));
+        assert!(matches!(
+            old(r#"{"t":"scratch_add","text":"x"}"#),
+            Request::ScratchAdd { pad: PadSel::Global, stamp: true, .. }
+        ));
+        assert!(matches!(
+            old(r#"{"t":"scratch_put","base":"b","text":"t"}"#),
+            Request::ScratchPut { pad: PadSel::Global, .. }
+        ));
+        assert!(matches!(
+            old(r#"{"t":"scratch_todo"}"#),
+            Request::ScratchTodo { pad: PadSel::Global, all: false }
+        ));
+        assert!(matches!(old(r#"{"t":"scratch_history"}"#), Request::ScratchHistory { .. }));
+        assert!(matches!(
+            old(r#"{"t":"scratch_pane","create":true}"#),
+            Request::ScratchPane { pad: PadSel::Global, create: true, .. }
+        ));
+        // The new shape names a project, or asks for the pad near a directory.
+        assert!(matches!(
+            old(r#"{"t":"scratch_get","pad":{"project":"p1"}}"#),
+            Request::ScratchGet { pad: PadSel::Project(p) } if p == "p1"
+        ));
+        assert!(matches!(
+            old(r#"{"t":"scratch_get","pad":{"near":"/r"}}"#),
+            Request::ScratchGet { pad: PadSel::Near(_) }
+        ));
+        // An event for the global pad has no `pad` on the wire (as before); a project's has.
+        let global = serde_json::to_value(DomainEvent::ScratchChanged {
+            pad: PadSel::Global,
+            rev: "r".into(),
+            open: 1,
+            by: None,
+        })
+        .unwrap();
+        assert!(global.get("pad").is_none(), "{global}");
+        let old_event: DomainEvent =
+            serde_json::from_str(r#"{"t":"scratch_changed","rev":"r","open":2}"#).unwrap();
+        assert!(matches!(
+            old_event,
+            DomainEvent::ScratchChanged { pad: PadSel::Global, open: 2, .. }
+        ));
+        round_trip(ClientMsg::Request {
+            id: 1,
+            req: Request::ScratchAdd {
+                pad: PadSel::Project("p1".into()),
+                text: "x".into(),
+                section: None,
+                note: false,
+                stamp: true,
+                session: None,
+                cwd: None,
+            },
+        });
+        // A reply from an older daemon has no `pad` or `name` in the document.
+        let doc: PadDoc =
+            serde_json::from_str(r#"{"path":"/p","rev":"r","text":"t","open":0,"done":0}"#)
+                .unwrap();
+        assert_eq!(doc.pad, PadSel::Global);
     }
 
     #[test]

@@ -36,7 +36,8 @@ Conventions:
 | **UX1** | Out of the box | From `cd repo && ptyro` to a shipped, cleaned-up worktree by keys alone; sidebar rows that say what's going on (done) |
 | **WEB1** | Web parity | The web client does what the CLI and TUI do, and the parity check covers it (done) |
 | **CFG1** | One configuration panel | Every option editable in the TUI, on the web and with `ptyro config set`, from one schema; new options must join it (done) |
-| **NOTE1** | The scratchpad | One persistent notepad file: a key opens it in your editor, `PTYRO_SCRATCHPAD` finds it, items become tasks, the web edits it (done) |
+| **NOTE1** | The scratchpad | Persistent notepad files, one for everywhere and one per project: a key opens the one you are in, `PTYRO_SCRATCHPAD` / `PTYRO_PROJECT_SCRATCHPAD` find them, items become tasks, the web edits them (done) |
+| **UX2** | Found in use | Small things the owner's own scratchpad caught while using ptyro: an About screen, a sidebar that shows a pushed worktree as done (done) |
 | **H2** | Second hardening review | A review of the whole codebase by nine independent readers: ~150 findings verified and fixed; locks, the release pipeline and uninstall done; the rest listed here |
 | **Backlog** | Later / maybe | Editor, tasks, jj, libghostty, relay, … |
 
@@ -1956,17 +1957,26 @@ can find (owner 2026-10-24, R-UX-32). The CLI, the TUI and the web are all first
   `keep`, `tick_on_finish`) in the schema and the panel (CFG1), a README section, `docs/keys.md`,
   `docs/config.md`, `docs/scripting.md` (the variable and `add` for hooks and scripts), the
   parity rows, a `make` target if any fixture needs one, and SPEC §5.1 (the variable) and §16 updated.
-- [ ] **NOTE1.7 (later) Pads that follow context** — M. A per-project pad
-  (`<repo>/.ptyro/scratchpad.md`, git-excluded) beside the global one with `PTYRO_PROJECT_SCRATCHPAD`,
-  `ptyro scratchpad --project`, and a key that cycles global → project → worktree. Only if the single
-  pad turns out to be too noisy in use.
+- [x] **NOTE1.7 A scratchpad per project** — M. *Promoted 2026-10-26 (R-UX-33; the owner asked for a pad per
+  project), built the same day.* A per-project pad beside the global one: `<repo>/.ptyro/scratchpad.md`
+  in the project's main checkout (every worktree shares it), git-excluded without touching
+  `.gitignore`, with `PTYRO_PROJECT_SCRATCHPAD` next to `PTYRO_SCRATCHPAD`. **Default: follow where
+  I am**: in a project (a session or worktree of it, or a CLI run whose directory is in one) every
+  command and key uses the project's pad; elsewhere, the global one. `--global` and `--project`
+  force one on every `ptyro scratchpad` subcommand; a cycle key (`C-q g`) and the Notes page's
+  tabs switch. Every command, title and list says which pad it is. Worktree-level pads are out of
+  scope.
+  *Done when:* from a worktree `ptyro scratchpad add` lands in the project's pad and says so,
+  `--global` in the other; the pad's title, the status bar and the web tabs name the pad; an item
+  started from the project's pad is tagged and ticked there; an old client that names no pad
+  gets the global one.
 
 **Done when:** you press one key anywhere in ptyro and are typing in your pad; from a shell
 inside a worktree `echo "login times out on safari" | ptyro scratchpad add -` lands as a stamped
 item; `⏎` on it starts an agent on it; the PR merging ticks it; and on your phone you share a
 link into it and see it in the desktop pane.
 
-**Done (2026-10-24): NOTE1.0–NOTE1.6** (NOTE1.7 stays a maybe). SPEC §13.6 has the design; the
+**Done (2026-10-24): NOTE1.0–NOTE1.6; (2026-10-26) NOTE1.7.** SPEC §13.6 has the design; the
 CLI is `ptyro scratchpad` (`pad`), `make scratchpad-demo` walks through it, and `docs/parity.md`
 has its rows. How it differs from the plan above:
 - **Keys:** `C-q ;` toggles the pad, `C-q '` adds a line, `C-q "` lists the open items (`+` and `=`
@@ -1986,7 +1996,82 @@ has its rows. How it differs from the plan above:
 - **Also:** `ptyro doctor` checks the file and the editor; a lead's `ptyro mcp` has
   `scratchpad_read`, `scratchpad_todo` and `scratchpad_add`.
 
+**Done (2026-10-26): NOTE1.7, a scratchpad per project.** Protocol 1.18; SPEC §13.6 has the design,
+`docs/keys.md`, `docs/scripting.md` and the README the user side. How it differs from the plan:
+- **Exclude line:** `/.ptyro/scratchpad.*` in the repository's `.git/info/exclude`, not `.ptyro/`:
+  `.ptyro/` already holds committed things in some repositories (`recipes/`, `changesets/`), and
+  excluding the directory would hide new ones from `git status`. It is written once, when the pad
+  is first made (`ptyro_git::Git::exclude`, idempotent, never the tracked `.gitignore`, never
+  fails the pad). `ptyro doctor` warns when an existing project pad isn't ignored.
+- **Key:** `C-q g` cycles global ⇄ project (the prefix table's `g` was free; the sidebar's `g`
+  is "top" and unchanged); `Ctrl-G` does it inside the add box and the items list. The palette and
+  the session row menu have `scratchpad.cycle`. There are two pads to cycle between, not three:
+  worktree pads are out of scope.
+- **Behaviour change for scripts:** `ptyro scratchpad add` (and every other subcommand) run inside a
+  worktree now uses the project's pad, not the global one; it prints which. `--global` keeps the old
+  target and `$PTYRO_SCRATCHPAD` still names the global file.
+- **Who is "in a project":** a project the daemon has registered. A git repository ptyro has never
+  seen is "not in a project": it gets no `.ptyro/` directory from the scratchpad.
+- **Web:** the Notes page has a tab per pad (the global one, the project of the session last
+  looked at, and every project that has a pad); the add box has a `→ pad` button. The status bar
+  shows `✎ 3 +7` (project, then global, dimmed).
+- **Not done:** the web page and the TUI were type-checked and unit-tested but not looked at on a
+  real screen or phone; a project pad is not in `ptyro backup`, and `ptyro uninstall` leaves it in
+  the repository; an older TUI attached to a newer daemon counts a project pad's items as the global
+  pad's until it asks again.
+
 ---
+
+## UX2 — Found in use (2026-10-26)
+
+Ideas the owner wrote in their own scratchpad (NOTE1) while using ptyro, taken in as tasks. Same
+rules as everywhere: CLI, TUI and web, with the parity row.
+
+- [x] **UX2.1 An About screen** — S. *From the pad, 2026-10-24.* Somewhere obvious (More → About
+  on the web, `app.about` in the TUI and the palette, `ptyro about` or an extended `ptyro version`
+  on the CLI): the version and protocol, the GitHub repository (a link that opens), the licence,
+  where the config, data and logs live, and whether the daemon and the web app are running. It is
+  the first place someone asks "which version is this?" or "where do I report this?".
+  *Done when:* the same facts show in all three, and the version matches `ptyro --version`.
+  *Done (2026-10-26):* `ptyro about [--json]` (`crates/ptyro/src/about.rs`): version and protocol,
+  the repository and `/issues` links, licence, build (commit and its date from a new `build.rs`,
+  target, binary, OS), where config, data, logs and the socket are, the daemon (a different
+  version or protocol is flagged with `ptyro daemon upgrade` as the fix), the web app, the tools
+  (the doctor's own git and agents checks, and `gh`), and a `report` block to paste. TUI: overlay
+  `app.about` (`C-q I`, `I` in the sidebar, the palette, the which-key menu's last column, the help
+  overlay's footer with the version): `j`/`k` pick a link or path, `⏎` opens it, `y` copies it,
+  `c` copies all, `U` switches a differing daemon; the addresses are OSC 8 hyperlinks. Web: More →
+  About (and the version at the foot of More), links with Copy, "Copy all, for a bug report",
+  Upgrade the daemon; the `about` host operation feeds it. *Deviations:* `ptyro --version` is
+  unchanged (the daemon's handoff parses it), so `about` is the longer form; the TUI gets the
+  document by running `ptyro about --json` (like the health badge runs the doctor), so it reflects
+  this machine's paths, not a `--remote` one; a web device below `full` sees the daemon's facts and
+  the repository, issues and licence (constants in `web/src/data.ts`, tested against `Cargo.toml`)
+  but not the build, paths of config/data or the tools; the OSC 8 links are written over the
+  already-drawn cells after each frame, which terminals without OSC 8 simply show as text; not
+  looked at in a real terminal or browser by the agent that wrote it.
+- [x] **UX2.2 A pushed worktree stops looking dirty** — S. *From the pad, 2026-10-26.* After a
+  commit and push the sidebar row still shows the count of modified rows (`+N −N ●`), because
+  `diffstat` (`crates/ptyro-tui/src/ui.rs`) draws the diff against the base branch. Show what is
+  left to do instead: clean and pushed reads as done (a quiet `✓ pushed`), unpushed commits as
+  `↑N`, uncommitted changes as the `●`, and the line counts only while there is something
+  uncommitted or unpushed. The web's rows and the home screen follow the same rule.
+  *Done when:* commit and push in a worktree and its row changes to the pushed state within the
+  next status poll, in the TUI and on the web.
+  *Done (2026-10-26):* `RepoStatus` gains optional `unpushed` (commits on no remote, when there is
+  no upstream and the repository has a remote) and `pushed`; `RepoStatus::left()` is the one rule:
+  `● N` uncommitted, `↑N` unpushed, `not pushed ↑N` with no upstream yet, a quiet `✓ pushed` when
+  committed work is all on the remote, and the `+N −M` counts only while something is left. The
+  TUI sidebar row and pane header (`diffstat`), `ptyro wt ls`/`wt status` (a "to do" line, and the
+  new fields in `--json`), and the web's worktree rows and page (`repoLeft`, `summary`) follow it;
+  `shipped` (merged, integrated) shows nothing and an open PR's badge replaces `✓ pushed`. The
+  help overlay and README carry the legend. *Refresh:* each linked worktree's watcher now also
+  watches its own git directory (a commit) and the main repository's `refs/remotes` (a push), so
+  the row changes within the 500 ms debounce, not the 10 s / 60 s poll (the end-to-end test pushes
+  from git itself and sees `pushed` inside 8 s with no session in the worktree); the ship and
+  finish paths already refreshed. *Deviations:* there is no separate TUI "home screen" worktree
+  row (home lists PRs and repositories), so the web's Projects tab is the only other list; the
+  per-base `N ahead` count was dropped from the one-line status in favour of `↑N`/`not pushed`.
 
 ## H2 — Second hardening review (2026-10-24)
 

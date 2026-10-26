@@ -671,3 +671,168 @@ fn a_config_with_one_bad_binding_can_still_have_other_settings_changed() {
         .is_err()
     );
 }
+
+#[test]
+fn the_theme_in_use_follows_its_theme_when_that_is_renamed_or_removed() {
+    let lk = Lookups::default();
+    let dir = tempfile::tempdir().unwrap();
+    let user = Layer::User(dir.path().join("config.toml"));
+    user.write("[ui]\ntheme = \"mine\"\n\n[themes.mine]\naccent = \"#ff0000\"\n").unwrap();
+    // The real check (the TUI's) refuses a config naming a theme that doesn't exist.
+    let known = |t: &str| {
+        let c = Config::parse(t)?;
+        if c.themes.contains_key(&c.ui.theme) || c.ui.theme.starts_with("ptyro-") {
+            Ok(())
+        } else {
+            Err(format!("unknown theme {:?}", c.ui.theme))
+        }
+    };
+    let op = Op::Rename { path: "themes".into(), from: "mine".into(), to: "yours".into() };
+    let d = apply(&user, &op, &lk, &known).unwrap();
+    assert!(user.read().unwrap().contains("theme = \"yours\""), "{}", user.read().unwrap());
+    assert!(d.notes.iter().any(|n| n.contains("still the theme in use")), "{:?}", d.notes);
+    let op = Op::Remove { path: "themes".into(), name: "yours".into() };
+    let d = apply(&user, &op, &lk, &known).unwrap();
+    let text = user.read().unwrap();
+    assert!(!text.contains("theme") && !text.contains("yours"), "{text}");
+    assert!(d.notes.iter().any(|n| n.contains("default theme is back")), "{:?}", d.notes);
+}
+
+fn key_lk() -> Lookups {
+    let pairs =
+        |v: &[(&str, &str)]| v.iter().map(|(a, b)| ((*a).to_owned(), (*b).to_owned())).collect();
+    Lookups {
+        themes: Vec::new(),
+        actions: pairs(&[
+            ("app.detach", "Detach (sessions keep running)"),
+            ("palette", "Command palette"),
+            ("session.next", "Show the next session"),
+            ("nav.down", "Sidebar: next"),
+            ("session.focus", "Show session N"),
+        ]),
+        keys: pairs(&[
+            ("d", "app.detach"),
+            ("q", "app.detach"),
+            (":", "palette"),
+            ("nav:j", "nav.down"),
+            ("1", "session.focus 1"),
+            ("2", "session.focus 2"),
+        ]),
+    }
+}
+
+fn binding(all: &[Binding], name: &str) -> Binding {
+    all.iter().find(|b| b.name == name).unwrap_or_else(|| panic!("no binding {name}")).clone()
+}
+
+fn bindings_of(text: &str) -> Vec<Binding> {
+    let root = serde_json::to_value(Config::parse(text).unwrap()).unwrap();
+    bindings(&root, &key_lk())
+}
+
+#[test]
+fn every_default_key_is_listed_and_says_where_it_stands() {
+    let all = bindings_of("");
+    assert_eq!(all.len(), 6);
+    let d = binding(&all, "d");
+    assert_eq!(
+        (d.standing, d.mine, d.table, d.when),
+        (Standing::Default, false, "prefix", "after the prefix")
+    );
+    assert_eq!(d.help, "Detach (sessions keep running)");
+    // The sidebar's keys are their own, and grouped after the prefix's.
+    assert_eq!(binding(&all, "nav:j").table, "nav");
+    assert!(all.iter().position(|b| b.name == "nav:j") > all.iter().position(|b| b.name == ":"));
+    // Both detach keys sit together, in the order the help lists the actions.
+    let order: Vec<&str> = all.iter().map(|b| b.name.as_str()).collect();
+    assert_eq!(&order[..2], ["d", "q"], "{order:?}");
+
+    let all = bindings_of(
+        "[keys]\n\"d\" = \"none\"\n\":\" = \"session.next\"\n\"x\" = \"palette\"\n\"S-Q\" = \"palette\"\n\"z\" = \"none\"\n",
+    );
+    assert_eq!(binding(&all, "d").standing, Standing::Unbound);
+    assert_eq!(
+        binding(&all, "d").help,
+        "Detach (sessions keep running)",
+        "an unbound key still says what it did"
+    );
+    assert_eq!(binding(&all, "d").action, "none");
+    let c = binding(&all, ":");
+    assert_eq!(
+        (c.standing, c.action.as_str(), c.default.as_deref()),
+        (Standing::Changed, "session.next", Some("palette"))
+    );
+    assert_eq!(binding(&all, "x").standing, Standing::Yours);
+    assert_eq!(binding(&all, "z").standing, Standing::Unbound);
+    // `S-Q` is the key `Q`, not another one; a line saying the default is still the default.
+    assert_eq!(all.iter().filter(|b| b.key == "Q").count(), 1);
+    let same = bindings_of("[keys]\n\"d\" = \"app.detach\"\n");
+    assert_eq!(binding(&same, "d").standing, Standing::Default);
+}
+
+#[test]
+fn the_digits_are_one_row_until_one_is_touched() {
+    let all = bindings_of("");
+    // (the test's defaults have only two digits, so they stay apart)
+    assert!(all.iter().all(|b| !b.fixed));
+    let mut lk = key_lk();
+    lk.keys = (1..=9).map(|d| (d.to_string(), format!("session.focus {d}"))).collect();
+    let root = serde_json::to_value(Config::parse("").unwrap()).unwrap();
+    let all = bindings(&root, &lk);
+    assert_eq!(all.len(), 1);
+    assert!(all[0].fixed && all[0].key == "1…9" && all[0].action == "session.focus N");
+    let root = serde_json::to_value(Config::parse("[keys]\n\"3\" = \"none\"\n").unwrap()).unwrap();
+    let all = bindings(&root, &lk);
+    assert_eq!(all.len(), 9);
+    assert_eq!(binding(&all, "3").standing, Standing::Unbound);
+}
+
+#[test]
+fn binding_changes_keep_the_file_to_what_differs_and_are_one_change() {
+    let lk = key_lk();
+    let go = |text: &str, changes: &[(&str, Option<&str>)]| {
+        let c: Vec<(String, Option<String>)> =
+            changes.iter().map(|(k, v)| ((*k).to_owned(), v.map(str::to_owned))).collect();
+        bind(Scope::User, text, &c, &lk, &none)
+    };
+    let text = "# mine\n[ui]\nmouse = false # keep\n";
+    // Unbinding a default writes `none`; resetting takes the line out again.
+    let t = go(text, &[("d", Some("none"))]).unwrap();
+    assert_eq!(Config::parse(&t).unwrap().keys["d"], "none");
+    assert!(t.contains("# mine") && t.contains("# keep"), "{t}");
+    let t = go(&t, &[("d", None)]).unwrap();
+    assert!(Config::parse(&t).unwrap().keys.is_empty(), "{t}");
+    // Saying what the default says writes nothing; "none" on a free key writes nothing.
+    assert_eq!(go(text, &[("d", Some("app.detach"))]).unwrap(), text);
+    assert_eq!(go(text, &[("y", Some("none"))]).unwrap(), text);
+    // Moving a default key: the new key runs it, the old one is off. Moving it back is a reset.
+    let t = go(text, &[("x", Some("app.detach")), ("d", Some("none"))]).unwrap();
+    let keys = Config::parse(&t).unwrap().keys;
+    assert_eq!((keys["x"].as_str(), keys["d"].as_str()), ("app.detach", "none"));
+    let t = go(&t, &[("d", Some("app.detach")), ("x", None)]).unwrap();
+    assert!(Config::parse(&t).unwrap().keys.is_empty(), "{t}");
+    // A swap is two keys in one change.
+    let t = go(text, &[("d", Some("palette")), (":", Some("app.detach"))]).unwrap();
+    let keys = Config::parse(&t).unwrap().keys;
+    assert_eq!((keys["d"].as_str(), keys[":"].as_str()), ("palette", "app.detach"));
+    // The line is the one already there, whatever its spelling; an unknown action is refused by
+    // the caller's check and nothing is half-written.
+    let t = go("[keys]\n\"S-Z\" = \"palette\"\n", &[("Z", Some("app.detach"))]).unwrap();
+    let keys = Config::parse(&t).unwrap().keys;
+    assert_eq!((keys.len(), keys["S-Z"].as_str()), (1, "app.detach"));
+    let strict =
+        |t: &str| if t.contains("bogus") { Err("unknown action".to_owned()) } else { Ok(()) };
+    let c = vec![("x".to_owned(), Some("bogus".to_owned()))];
+    assert!(bind(Scope::User, text, &c, &lk, &strict).is_err());
+}
+
+#[test]
+fn a_key_already_in_use_is_named() {
+    let all = bindings_of("[keys]\n\"x\" = \"palette\"\n");
+    assert_eq!(owner(&all, "d").map(|b| b.action.as_str()), Some("app.detach"));
+    assert_eq!(owner(&all, "x").map(|b| b.action.as_str()), Some("palette"));
+    assert!(owner(&all, "y").is_none());
+    assert!(owner(&all, "global:d").is_none(), "another table is another key");
+    let all = bindings_of("[keys]\n\"d\" = \"none\"\n");
+    assert!(owner(&all, "d").is_none(), "an unbound key is free");
+}

@@ -149,7 +149,7 @@ the title, `ptyro rename` the name.
    ▾ @root (main)             │
      1 • shell zsh            │
          last cargo test ✓ 41s│
-   ▾ brisk-rook +42 −7 ●      │
+   ▾ brisk-rook +42 −7 ↑1 ● 3 │
      2 ◉ claude ⚠ permission 3m
          wants Bash: npm i…   │
          C-q p y/a/n answers  │
@@ -238,6 +238,12 @@ changed. Gemini and Antigravity need a one-time `ptyro integrations install`.
 | `☾` | dormant: stopped, resumes into the same conversation |
 | `⚑` | needs your attention |
 
+A worktree's row says what is left to do with its work, in the TUI, on the web and in
+`ptyro wt ls`: `● 3` three files are not committed, `↑2` two commits are not pushed (`not pushed ↑2`
+when the branch has no upstream yet), and a quiet `✓ pushed` when everything is committed and
+on the remote. The `+N −M` line counts show only while something is left, so a worktree you have
+pushed stops looking like work in progress. A merged one says so (`merged`, `in main`).
+
 Notifications always go to the inbox, and by default to your terminal and its bell. Add desktop
 notifications or a push service such as ntfy:
 
@@ -309,28 +315,43 @@ guide: [`docs/changesets.md`](docs/changesets.md).
 
 ### The scratchpad
 
-One notes file for ideas and the bugs you're chasing, the same in every session and restart:
+Notes for ideas and the bugs you're chasing that survive every session and restart. There are
+two pads: one for **everywhere**, and one for **each project**, kept in the repository at
+`.ptyro/scratchpad.md` (all of the project's worktrees share it, and git never sees it: ptyro adds
+it to the repository's `.git/info/exclude`, not your `.gitignore`). **Inside a project (a worktree,
+or its directory) every command and key uses the project's pad; anywhere else, the one for
+everywhere.** `--global` and `--project` force one, and every command says which pad it used.
 
 ```bash
 ptyro scratchpad                 # open it in your editor (Ctrl-Q ; in the TUI: a drawer you toggle)
 ptyro scratchpad add "login times out on safari"   # a stamped - [ ] item, from anywhere
 git diff --stat | ptyro scratchpad add -           # or from a pipe
 ptyro scratchpad todo            # the open items;  done 12  ticks one;  start 12  makes it a task
-echo $PTYRO_SCRATCHPAD           # every shell and agent can find the file (plain Markdown)
+ptyro scratchpad --global add "buy a new keyboard" # the pad for everywhere, even from inside a project
+ptyro scratchpad --project=api todo                # a named project's pad, from anywhere
+echo $PTYRO_SCRATCHPAD           # the pad for everywhere: every shell and agent can find the file
+echo $PTYRO_PROJECT_SCRATCHPAD   # the project's (set in sessions of a project)
 ```
+
+Scripts and agents that ran `ptyro scratchpad add` from inside a worktree used to write to the pad
+for everywhere; now they write to that project's pad, and the command says so. Add `--global`
+to keep the old behaviour. `$PTYRO_SCRATCHPAD` still points at the pad for everywhere.
 
 In the TUI, `C-q ;` shows the pad and `C-q '` adds a line without opening it; `C-q "` lists the
 open items, and `⏎` on one starts an agent on it in a new worktree, ticked once its PR merges.
-The web app has a Notes view that saves as you type (and merges with whoever else is writing),
-and your phone's share sheet can send links and text to it. Old copies are kept
-(`ptyro scratchpad log`, `restore`). Settings: `[scratchpad]` in the config (`docs/config.md`).
+`C-q g` switches between the project's pad and the one for everywhere (the title always says which
+you have, and the status bar shows `✎ 3 +7`: 3 open in the project's, 7 in the other, dimmed).
+The web app has a Notes view with a tab per pad that saves as you type (and merges with whoever
+else is writing), and your phone's share sheet can send links and text to it. Old copies are kept
+beside each pad (`ptyro scratchpad log`, `restore`). Settings: `[scratchpad]` in the config
+(`docs/config.md`); `path` moves the pad for everywhere.
 
 ### Your phone and other machines
 
 ```bash
 ptyro web on                   # the daemon runs the web app's server, and keeps it up (Tailscale
                                # HTTPS if it is running, else HTTPS on your LAN); `ptyro web` says how it is
-ptyro pair phone               # a one-time QR code (10 min): scan it and the phone is signed in;
+ptyro pair phone               # a one-time QR code (10 min; full control, it warns you): scan it and the phone is signed in;
                                # the first time, it says how to trust ptyro's certificate
 ptyro devices revoke ID        # cut a device off at once
 ptyro --remote me@workbox      # the TUI (or any command) on another machine, over ssh
@@ -347,15 +368,21 @@ health with its fixes, devices (pair another with a link and a QR code), profile
 config editor, the daemon and its logs, first-run setup and a tour. Push notifications carry
 Allow / Deny where the platform shows actions.
 
+Each page names its machine, to tell several apart: the tab title is `studio · ptyro`, with a colour
+dot on the icon and a thin bar in the header, and the TUI's sidebar and terminal title say it too.
+It is the computer's short name; `[daemon] machine_name` (Settings) changes it.
+
 `ptyro init` asks whether to run it, `ptyro daemon start --serve` turns it on with the daemon,
 `ptyro web off` stops it, and in the TUI and the web app it is **More → Web app**. It is a
 supervised `ptyro serve`, so a daemon restart or live upgrade brings it back, and `ptyro doctor`
 says why when it won't start (a port taken by something else, say). `ptyro serve` by hand still
 works for trying it out.
 
-Each device gets a scope (`read`, `approve` by default, `control` or `full`). Pair with
-`ptyro pair phone --scope full` for the whole app (it changes your machine: worktrees, the
-config, devices), `--scope control` to answer, type and stop. Setup and the threat model:
+Each device gets a scope (`read`, `approve`, `control` or `full`). `ptyro pair phone` gives
+`full` by default, the whole app (it changes your machine: worktrees, the config, devices), and
+warns you in plain words that it can run commands as you; `--scope approve` answers prompts only,
+`--scope control` also types and stops. Pairing a name that exists replaces that device with the
+new scope, up or down. Links always carry their port. Setup and the threat model:
 [`docs/remote.md`](docs/remote.md).
 
 ### Structured sessions
@@ -410,7 +437,7 @@ All after the prefix, `Ctrl-Q` or `Ctrl-Space`. The full list is in [`docs/keys.
 | `D` / `Q` | inspector / review queue |
 | `O` / `S` | runs / change sets |
 | `w` / `o` / `r` | switch workspace / open in editor / run the default run script |
-| `;` / `'` / `"` | the scratchpad / add a line to it / its open items |
+| `;` / `'` / `"` / `g` | the scratchpad / add a line to it / its open items / switch between the project's pad and the one for everywhere |
 
 ## Configuration
 
@@ -431,7 +458,12 @@ ptyro config set discover.roots ~/work ~/src
 ptyro config set scripts.setup "make deps" --project     # .ptyro.local.toml of this repository
 ptyro config add agents aider command="aider --model sonnet"
 ptyro config unset ui.theme        # back to the default
+ptyro config list keys             # every key, defaults too (--changed: only yours)
+ptyro config set keys.d none       # unbind a default key; `config unset keys.d` brings it back
 ```
+
+Every key binding is in Settings too (`C-q C` → Key bindings): change a key by pressing the
+new one (a taken key is named and swapped on a yes), change what it runs, unbind or reset it.
 
 `ptyro config edit [key]` opens the file itself (at that setting) and validates it when you save.
 
@@ -471,6 +503,11 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
   it, each with its fix (the shell-init line, tmux options, a login, a daemon upgrade). Or run
   `ptyro doctor`. `ptyro daemon logs` shows the daemon's log, and
   `PTYRO_LOG=debug` makes it chatty. `Ctrl-Q C-l` redraws the screen.
+- **Which version is this, and where do I report it?** `ptyro about` (`Ctrl-Q I` in the TUI,
+  More → About on the web): the version, the repository and issues links, the licence, where the
+  config, data, logs and socket live, whether the daemon and web app run (and whether the daemon is
+  an older ptyro), and a block to paste into a bug report: `c` copies it in the TUI, "Copy all"
+  on the web, `ptyro about --json` for scripts.
 - **Recordings** of each session (for `ptyro replay` and `ptyro export`) can hold secrets that
   scrolled past. Turn them off with `[recorder] enabled = false`.
 
@@ -521,7 +558,7 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make reset` | start ptyro over, to try the first run again: lists what it removes (sessions, worktrees with any uncommitted work flagged, the login service, integrations, config, data, state), then asks. `YES=1` skips the question unless uncommitted work would be lost (then you type `delete`). Your repositories and their branches stay. With `PTYRO_HOME` set it resets that home only. Run it from a plain terminal, not inside ptyro |
 | `make orchestrate-demo` (`ARGS=tui\|clean`) | fan-out, a gated recipe and a lead over MCP, with fake agents |
 | `make changeset-demo` (`ARGS=tui\|clean`) | a change set across three repos, contract to merge train, with fake agents |
-| `make scratchpad-demo` (`ARGS=tui\|clean`) | the scratchpad in a throwaway ptyro: items added, listed, ticked, restored; `tui` opens it |
+| `make scratchpad-demo` (`ARGS=tui\|clean`) | the scratchpad in a throwaway ptyro: items added, listed, ticked, restored, and the demo project's own pad; `tui` opens it |
 | `make verify-claude` | check the Claude adapter against the real Claude Code on your machine (one tiny turn) |
 | `make verify-structured` | check structured mode against the real agents here |
 | `make headless CMD=… ARGS=…` | run a program in ptyro's emulator without a terminal; prints screen and status |

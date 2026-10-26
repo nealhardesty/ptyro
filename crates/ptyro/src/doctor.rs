@@ -128,7 +128,7 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Repor
     );
     daemon(ctx, &config, quick, &mut r).await;
     remote(ctx, &config, &mut r);
-    scratchpad(ctx, &config, &mut r);
+    scratchpad(ctx, &config, &mut r).await;
     if terminal_too {
         terminal(&mut r).await;
     }
@@ -139,7 +139,7 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Repor
 }
 
 /// The scratchpad (NOTE1): the file can be written, and there is a terminal editor for its pane.
-fn scratchpad(ctx: &Ctx, config: &Config, r: &mut Report) {
+async fn scratchpad(ctx: &Ctx, config: &Config, r: &mut Report) {
     let path = config.scratchpad_path(&ctx.paths.data);
     let pad = ptyro_core::scratchpad::Pad::new(
         path.clone(),
@@ -152,7 +152,7 @@ fn scratchpad(ctx: &Ctx, config: &Config, r: &mut Report) {
                 "scratchpad",
                 "file",
                 Level::Ok,
-                format!("{} (also $PTYRO_SCRATCHPAD)", path.display()),
+                format!("{} (everywhere; also $PTYRO_SCRATCHPAD)", path.display()),
             );
         }
         Ok(()) => r.add(
@@ -172,6 +172,7 @@ fn scratchpad(ctx: &Ctx, config: &Config, r: &mut Report) {
             format!("{}: {e} (set [scratchpad] path in `ptyro config edit`)", path.display()),
         ),
     }
+    project_pads(ctx, r).await;
     match config.scratchpad_editor(true) {
         Some(cmd) if which(&cmd[0]).is_some() || cmd[0].contains('/') => {
             r.add("scratchpad", "editor", Level::Ok, cmd.join(" "));
@@ -188,6 +189,52 @@ fn scratchpad(ctx: &Ctx, config: &Config, r: &mut Report) {
             Level::Warn,
             "no terminal editor found (install nvim, vim or nano, or set [scratchpad] editor): `C-q ;` can't open the pad",
         ),
+    }
+}
+
+/// Each project's pad (NOTE1.7) that exists: writable, and kept out of git. Needs the daemon,
+/// which knows the projects; without it there is nothing to check.
+async fn project_pads(ctx: &Ctx, r: &mut Report) {
+    let Ok(c) = ctx.connect(false).await else { return };
+    let Ok(ptyro_protocol::Reply::ScratchPads { pads }) =
+        c.request(ptyro_protocol::Request::ScratchPads).await
+    else {
+        return;
+    };
+    for p in pads.iter().filter(|p| !p.pad.is_global()) {
+        let writable = std::fs::OpenOptions::new().append(true).open(&p.path).is_ok();
+        // `git check-ignore` says whether git would offer the file for a commit.
+        let ignored = p.path.parent().and_then(|d| d.parent()).is_some_and(|root| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(["check-ignore", "-q"])
+                .arg(&p.path)
+                .output()
+                .is_ok_and(|o| o.status.success())
+        });
+        let (level, msg) = match (writable, ignored) {
+            (false, _) => (
+                Level::Problem,
+                format!("{} isn't writable (`chmod u+w {}`)", p.path.display(), p.path.display()),
+            ),
+            (true, false) => (
+                Level::Warn,
+                format!(
+                    "{} isn't ignored by git: add `/.ptyro/scratchpad.*` to the repository's .git/info/exclude",
+                    p.path.display()
+                ),
+            ),
+            (true, true) => (
+                Level::Ok,
+                format!(
+                    "{}: {} (git ignores it; $PTYRO_PROJECT_SCRATCHPAD)",
+                    p.name,
+                    p.path.display()
+                ),
+            ),
+        };
+        r.add("scratchpad", &format!("project {}", p.name), level, msg);
     }
 }
 
@@ -477,7 +524,7 @@ pub(crate) async fn terminal(r: &mut Report) {
     }
 }
 
-async fn git(r: &mut Report) {
+pub(crate) async fn git(r: &mut Report) {
     match run(&["git".into(), "--version".into()], &[], Duration::from_secs(3)).await {
         Some((_, out)) => {
             let v = first_version(&out).unwrap_or_default();

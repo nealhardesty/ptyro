@@ -403,14 +403,17 @@ fn status_line(w: &WorktreeInfo) -> String {
         parts.push(w.state.label().to_owned());
     }
     if let Some(s) = &w.status {
-        if s.insertions + s.deletions > 0 {
+        // What is left to do (UX2.2): the line counts only while there is something to commit or
+        // push, then `↑2` / `not pushed ↑2` / `● 3`, or a quiet `✓ pushed`.
+        let l = s.left();
+        if l.open() && s.insertions + s.deletions > 0 {
             parts.push(format!("+{} -{}", s.insertions, s.deletions));
         }
-        if s.dirty() > 0 {
-            parts.push(format!("{} dirty", s.dirty()));
-        }
-        if s.base_ahead > 0 {
-            parts.push(format!("{} ahead", s.base_ahead));
+        // A merged or integrated worktree says so itself (it is not "pushed", it is in).
+        if w.shipped() {
+            parts.push("shipped".into());
+        } else if !l.quiet() {
+            parts.push(l.words());
         }
         if s.base_behind > 0 {
             parts.push(format!("{} behind", s.base_behind));
@@ -802,6 +805,7 @@ pub async fn new_in_new_worktree(
         title: a.title.clone().or_else(|| a.prompt.clone().filter(|p| !p.starts_with('@'))),
         take_changes: a.take_changes,
         pad_item: a.pad_item,
+        pad_sel: a.pad_sel.clone(),
         ..WorktreeSpec::default()
     };
     let reply = create(&c, spec, a.yes).await?;
@@ -1096,6 +1100,17 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
                 println!(
                     "  changes   {} staged, {} modified, {} untracked, {} conflicted",
                     s.staged, s.modified, s.untracked, s.conflicts
+                );
+                let words = s.left().words();
+                println!(
+                    "  to do     {}",
+                    if info.shipped() {
+                        "nothing: shipped".to_owned()
+                    } else if words.is_empty() {
+                        "nothing yet".to_owned()
+                    } else {
+                        words
+                    }
                 );
                 if let (Some(h), Some(subj)) = (&s.head, &s.subject) {
                     println!("  last      {h} {subj}");

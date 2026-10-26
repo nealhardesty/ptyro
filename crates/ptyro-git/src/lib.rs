@@ -586,7 +586,20 @@ impl Git {
                 s.deletions += it.next().and_then(|n| n.parse::<u32>().ok()).unwrap_or(0);
             }
         }
+        // Commits on no remote: what a branch with no upstream still has to push (UX2.2).
+        if s.head.is_some() && s.upstream.is_none() && self.has_remote(path) {
+            let mut args = vec!["rev-list", "--count", "HEAD", "--not", "--remotes"];
+            if let Some(b) = base.filter(|b| self.ref_exists(path, b)) {
+                args.push(b);
+            }
+            s.unpushed = self.run(path, &args).ok().and_then(|o| o.trim().parse().ok());
+        }
+        s.settle();
         Ok(s)
+    }
+
+    fn has_remote(&self, path: &Path) -> bool {
+        self.run(path, &["remote"]).is_ok_and(|o| !o.trim().is_empty())
     }
 
     /// Everything removal would lose (SPEC §10.8 step 2).

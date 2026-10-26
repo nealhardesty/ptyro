@@ -100,6 +100,51 @@ fn worktree_lifecycle_and_list() {
 }
 
 #[test]
+fn pushed_work_reads_as_done() {
+    let f = fixture();
+    let wt = f.base.join("wts/pushy");
+    let src = Source::NewBranch { branch: "ptyro/pushy".into(), base: "origin/main".into() };
+    f.git.worktree_add(&f.root, &wt, &src).unwrap();
+    let st = |f: &Fixture| f.git.status(&wt, Some("origin/main")).unwrap();
+
+    // Fresh: no commits of its own, so nothing to push and nothing finished.
+    let l = st(&f).left();
+    assert!(l.quiet() && !l.pushed, "{l:?}");
+
+    // A commit with no upstream yet: not pushed.
+    commit(&f, &wt, "a.txt", "one\n");
+    let s = st(&f);
+    assert_eq!((s.upstream.clone(), s.unpushed), (None, Some(1)));
+    let l = s.left();
+    assert!(l.not_pushed && l.unpushed == 1 && !l.pushed && l.open(), "{l:?}");
+    assert_eq!(l.words(), "not pushed ↑1");
+
+    // An uncommitted change on top.
+    std::fs::write(wt.join("b.txt"), "x").unwrap();
+    assert_eq!(st(&f).left().words(), "not pushed ↑1 ● 1");
+
+    // Pushed without -u: the remote has it, so it is not "unpushed", but still not clean.
+    f.git.run(&wt, &["push", "-q", "origin", "ptyro/pushy"]).unwrap();
+    let l = st(&f).left();
+    assert_eq!((l.unpushed, l.uncommitted, l.pushed), (0, 1, false));
+    std::fs::remove_file(wt.join("b.txt")).unwrap();
+    let l = st(&f).left();
+    assert!(l.pushed && !l.open(), "committed and pushed reads as done: {l:?}");
+    assert_eq!(l.words(), "✓ pushed");
+
+    // Upstream set, then one more commit: ahead of upstream.
+    f.git.run(&wt, &["branch", "-q", "--set-upstream-to=origin/ptyro/pushy"]).unwrap();
+    assert!(st(&f).left().pushed);
+    commit(&f, &wt, "c.txt", "two\n");
+    let s = st(&f);
+    let l = s.left();
+    assert_eq!((s.ahead, l.unpushed, l.not_pushed, l.pushed), (1, 1, false, false));
+    assert_eq!(l.words(), "↑1");
+    f.git.run(&wt, &["push", "-q"]).unwrap();
+    assert!(st(&f).left().pushed);
+}
+
+#[test]
 fn existing_branches_and_remote_branches() {
     let f = fixture();
     f.git.run(&f.root, &["branch", "feature"]).unwrap();

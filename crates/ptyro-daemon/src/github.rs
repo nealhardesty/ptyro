@@ -274,7 +274,7 @@ impl Daemon {
             && pr.state == "MERGED"
             && wt.pr.as_ref().is_none_or(|p| p.state != "MERGED")
         {
-            self.pad_finished(&wt.qualified(), Some(u64::from(pr.number)));
+            self.pad_finished(wt, Some(u64::from(pr.number)));
         }
         if titled && let Some(w) = updated {
             self.put_worktree(w);

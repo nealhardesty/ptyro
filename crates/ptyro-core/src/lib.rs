@@ -11,6 +11,7 @@ pub mod error;
 pub mod ids;
 pub mod imports;
 pub mod input;
+pub mod machine;
 pub mod model;
 pub mod names;
 pub mod paths;

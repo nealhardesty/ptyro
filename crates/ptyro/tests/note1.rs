@@ -56,6 +56,16 @@ impl World {
         )
     }
 
+    /// The same, run from `dir`.
+    fn pad_in(&self, dir: &Path, args: &[&str]) -> (bool, String, String) {
+        let out = self.d.cmd().current_dir(dir).arg("scratchpad").args(args).output().unwrap();
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    }
+
     fn file(&self) -> PathBuf {
         let (_, out, _) = self.pad(&["path"]);
         PathBuf::from(out.trim())
@@ -63,7 +73,7 @@ impl World {
 }
 
 async fn get(c: &Client) -> ptyro_protocol::PadDoc {
-    match c.request(Request::ScratchGet).await.unwrap() {
+    match c.request(Request::ScratchGet { pad: Default::default() }).await.unwrap() {
         Reply::Scratch { doc } => doc,
         other => panic!("{other:?}"),
     }
@@ -78,9 +88,9 @@ async fn changed(
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
         match tokio::time::timeout(left, pushes.recv()).await {
-            Ok(Some(ServerMsg::Event { event: DomainEvent::ScratchChanged { rev, open, by } }))
-                if want(&rev, open) =>
-            {
+            Ok(Some(ServerMsg::Event {
+                event: DomainEvent::ScratchChanged { rev, open, by, .. },
+            })) if want(&rev, open) => {
                 return (rev, open, by);
             }
             Ok(Some(_)) => {}
@@ -196,7 +206,14 @@ async fn writes_merge_and_changes_from_outside_are_announced() {
     let (ok, ..) = w.pad(&["add", "--no-stamp", "from the cli"]);
     assert!(ok);
     let edited = base.text.replacen("# Scratchpad", "# My pad", 1);
-    let r = c.request(Request::ScratchPut { base: base.rev.clone(), text: edited }).await.unwrap();
+    let r = c
+        .request(Request::ScratchPut {
+            pad: Default::default(),
+            base: base.rev.clone(),
+            text: edited,
+        })
+        .await
+        .unwrap();
     let Reply::ScratchPut { doc, merged, conflicts } = r else { panic!("{r:?}") };
     assert!(merged && conflicts == 0, "{conflicts}: {}", doc.text);
     assert!(
@@ -208,6 +225,7 @@ async fn writes_merge_and_changes_from_outside_are_announced() {
     // The same line changed two ways: both kept.
     let r = c
         .request(Request::ScratchPut {
+            pad: Default::default(),
             base: base.rev.clone(),
             text: base.text.replacen("# Scratchpad", "# Other", 1),
         })
@@ -217,7 +235,7 @@ async fn writes_merge_and_changes_from_outside_are_announced() {
     assert_eq!(conflicts, 1);
     assert!(
         doc.text.contains("<<<<<<< on disk\n# My pad")
-            && doc.text.contains("# Other\n>>>>>>> your edit"),
+            && doc.text.contains("# Other — everywhere\n>>>>>>> your edit"),
         "{}",
         doc.text
     );
@@ -239,6 +257,7 @@ async fn the_editor_is_one_session_in_a_pane() {
     let w = World::new("");
     let c = w.d.client().await.unwrap();
     let ask = |create| Request::ScratchPane {
+        pad: Default::default(),
         create,
         env: Default::default(),
         size: Some(TermSize::new(100, 20)),
@@ -292,7 +311,11 @@ async fn an_item_started_as_a_task_is_ticked_when_its_worktree_is_cleaned_up() {
 
     let (ok, ..) = w.pad(&["add", "--no-stamp", "fix the flaky test"]);
     assert!(ok);
-    let items = match c.request(Request::ScratchTodo { all: false }).await.unwrap() {
+    let items = match c
+        .request(Request::ScratchTodo { pad: Default::default(), all: false })
+        .await
+        .unwrap()
+    {
         Reply::ScratchItems { items, .. } => items,
         other => panic!("{other:?}"),
     };
@@ -325,6 +348,7 @@ async fn an_item_started_as_a_task_is_ticked_when_its_worktree_is_cleaned_up() {
     assert!(ok);
     let r = c
         .request(Request::ScratchMark {
+            pad: Default::default(),
             sel: "second".into(),
             mark: PadMark::Done { pr: Some(42) },
         })
@@ -351,10 +375,16 @@ async fn ticking_on_finish_can_be_turned_off() {
         project: dir.to_string_lossy().into_owned(),
         name: Some("keep".into()),
         fetch: Some(false),
-        pad_item: Some(match c.request(Request::ScratchTodo { all: false }).await.unwrap() {
-            Reply::ScratchItems { items, .. } => items[0].line,
-            other => panic!("{other:?}"),
-        }),
+        pad_item: Some(
+            match c
+                .request(Request::ScratchTodo { pad: Default::default(), all: false })
+                .await
+                .unwrap()
+            {
+                Reply::ScratchItems { items, .. } => items[0].line,
+                other => panic!("{other:?}"),
+            },
+        ),
         ..Default::default()
     };
     let Reply::WorktreeCreated { info, .. } =
@@ -383,6 +413,7 @@ async fn an_agent_s_note_says_who_wrote_it() {
     let Reply::Session { .. } = c.request(Request::Spawn { spec }).await.unwrap() else { panic!() };
     let r = c
         .request(Request::ScratchAdd {
+            pad: Default::default(),
             text: "the retry loop never backs off".into(),
             section: Some("Found by agents".into()),
             note: false,
@@ -395,7 +426,7 @@ async fn an_agent_s_note_says_who_wrote_it() {
     let Reply::Scratch { doc } = r else { panic!("{r:?}") };
     assert!(doc.text.contains("## Found by agents\n\n- [ ] "), "{}", doc.text);
     let Reply::ScratchItems { items, .. } =
-        c.request(Request::ScratchTodo { all: false }).await.unwrap()
+        c.request(Request::ScratchTodo { pad: Default::default(), all: false }).await.unwrap()
     else {
         panic!()
     };
@@ -403,4 +434,286 @@ async fn an_agent_s_note_says_who_wrote_it() {
     assert_eq!(it.by.as_deref(), Some("scribe"));
     assert!(it.whence.is_some() && it.at.is_some(), "{it:?}");
     assert_eq!(it.section.as_deref(), Some("Found by agents"));
+}
+
+/// A repository with one commit, as a project the daemon knows, and a worktree of it.
+async fn project_with_worktree(
+    w: &World,
+    c: &Client,
+) -> (PathBuf, ptyro_core::model::WorktreeInfo) {
+    let dir = w.home().join("myrepo");
+    std::fs::create_dir_all(&dir).unwrap();
+    git(&w.home(), &dir, &["init", "-q"]);
+    std::fs::write(dir.join("README"), "hi\n").unwrap();
+    git(&w.home(), &dir, &["add", "."]);
+    git(&w.home(), &dir, &["commit", "-qm", "first"]);
+    let spec = ptyro_core::model::WorktreeSpec {
+        project: dir.to_string_lossy().into_owned(),
+        name: Some("feature".into()),
+        fetch: Some(false),
+        ..Default::default()
+    };
+    let Reply::WorktreeCreated { info, .. } =
+        c.request(Request::WorktreeNew { spec }).await.unwrap()
+    else {
+        panic!()
+    };
+    (dir, info)
+}
+
+/// NOTE1.7: inside a project's worktree the pad is the project's (`<repo>/.ptyro/scratchpad.md`
+/// in the main checkout), kept out of git without touching `.gitignore`; elsewhere, and with
+/// `--global`, it is the global one; and every command says which it used.
+#[tokio::test]
+async fn a_project_has_a_pad_of_its_own_that_follows_where_you_are() {
+    let w = World::new("");
+    let c = w.d.client().await.unwrap();
+    let (repo, wt) = project_with_worktree(&w, &c).await;
+    // A `.ptyro/` that already holds committed things (recipes) is left as it is.
+    std::fs::create_dir_all(repo.join(".ptyro/recipes")).unwrap();
+    std::fs::write(repo.join(".ptyro/recipes/r.toml"), "x = 1\n").unwrap();
+    let global = w.file();
+    let project_file = repo.join(".ptyro/scratchpad.md");
+
+    // From the worktree (not the main checkout) the path is the main checkout's pad.
+    let (ok, out, err) = w.pad_in(&wt.path, &["path"]);
+    assert!(ok, "{err}");
+    assert_eq!(
+        PathBuf::from(out.trim()),
+        project_file.canonicalize().unwrap_or(project_file.clone())
+    );
+    let text = std::fs::read_to_string(&project_file).unwrap();
+    assert!(text.starts_with("# Scratchpad — myrepo (this project)"), "{text}");
+    // From the main checkout too; from outside, the global one; and the flags force one.
+    let (_, out, _) = w.pad_in(&repo, &["path"]);
+    assert!(out.trim().ends_with(".ptyro/scratchpad.md"), "{out}");
+    let (_, out, _) = w.pad_in(&w.home(), &["path"]);
+    assert_eq!(PathBuf::from(out.trim()), global);
+    let (_, out, _) = w.pad_in(&wt.path, &["--global", "path"]);
+    assert_eq!(PathBuf::from(out.trim()), global);
+    let (_, out, _) = w.pad_in(&wt.path, &["path", "--global"]);
+    assert_eq!(PathBuf::from(out.trim()), global, "flags work after the subcommand too");
+    let (_, out, _) = w.pad_in(&w.home(), &["--project=myrepo", "path"]);
+    assert!(out.trim().ends_with("myrepo/.ptyro/scratchpad.md"), "{out}");
+    let (ok, _, err) = w.pad_in(&w.home(), &["--project", "path"]);
+    assert!(!ok && err.contains("not inside a project"), "{err}");
+    let (ok, ..) = w.pad_in(&wt.path, &["--global", "--project", "path"]);
+    assert!(!ok, "the two flags exclude each other");
+
+    // add: from the worktree it lands in the project's pad and says so; `--global` in the other.
+    let (ok, _, err) = w.pad_in(&wt.path, &["add", "project thing"]);
+    assert!(ok, "{err}");
+    assert!(err.contains("the myrepo project pad"), "{err}");
+    let (ok, _, err) = w.pad_in(&wt.path, &["add", "--global", "global thing"]);
+    assert!(ok, "{err}");
+    assert!(err.contains("the global pad"), "{err}");
+    let (ok, ..) = w.pad_in(&wt.path, &["add", "--project", "swallowed?"]);
+    assert!(ok, "--project without a value doesn't take the words as its value");
+    let project_text = std::fs::read_to_string(&project_file).unwrap();
+    assert!(project_text.contains("project thing") && project_text.contains("swallowed?"));
+    assert!(!project_text.contains("global thing"));
+    let global_text = std::fs::read_to_string(&global).unwrap();
+    assert!(global_text.contains("global thing") && !global_text.contains("project thing"));
+    // The stamp says which worktree it was added from.
+    assert!(project_text.contains("`myrepo/feature`"), "{project_text}");
+    let (_, out, _) = w.pad_in(&wt.path, &["todo"]);
+    assert!(out.contains("project thing") && !out.contains("global thing"), "{out}");
+    let (_, out, _) = w.pad_in(&wt.path, &["--global", "todo"]);
+    assert!(out.contains("global thing") && !out.contains("project thing"), "{out}");
+    let (ok, ..) = w.pad_in(&wt.path, &["done", "project"]);
+    assert!(ok);
+    // log and restore are per pad: the project's copies live beside its pad.
+    let (_, out, _) = w.pad_in(&wt.path, &["log", "--json"]);
+    let snaps: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+    assert!(!snaps.is_empty());
+    assert!(repo.join(".ptyro/scratchpad.history").is_dir());
+    let oldest = snaps.last().unwrap()["rev"].as_str().unwrap().to_owned();
+    let (ok, _, err) = w.pad_in(&wt.path, &["restore", &oldest]);
+    assert!(ok && err.contains("myrepo project pad"), "{err}");
+    assert!(!std::fs::read_to_string(&project_file).unwrap().contains("project thing"));
+    assert!(std::fs::read_to_string(&global).unwrap().contains("global thing"), "global untouched");
+
+    // Git never offers it: the repository's own exclude file has the line once, `.gitignore`
+    // was not made, and the committed recipes are not hidden.
+    let exclude = std::fs::read_to_string(repo.join(".git/info/exclude")).unwrap();
+    assert_eq!(exclude.matches("/.ptyro/scratchpad.*").count(), 1, "{exclude}");
+    assert!(!repo.join(".gitignore").exists());
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["status", "--porcelain", "--untracked-files=all"])
+        .env("HOME", w.home())
+        .output()
+        .unwrap();
+    let status = String::from_utf8_lossy(&status.stdout).into_owned();
+    assert!(!status.contains("scratchpad"), "{status}");
+    assert!(
+        status.contains(".ptyro/recipes/r.toml"),
+        "other files in .ptyro/ still show: {status}"
+    );
+}
+
+/// NOTE1.7: sessions of a project have `$PTYRO_PROJECT_SCRATCHPAD`; others don't; the global
+/// variable is the same everywhere. The protocol names a pad, defaults to the global one, and
+/// announces a project pad's changes (made by a file save too) with the pad they are about.
+#[tokio::test]
+async fn the_variable_the_protocol_and_the_events_name_the_pad() {
+    let w = World::new("");
+    let mut c = w.d.client().await.unwrap();
+    let mut pushes = c.pushes();
+    c.send(ClientMsg::WatchEvents).unwrap();
+    let (repo, wt) = project_with_worktree(&w, &c).await;
+    let global = w.file();
+    let project_file = repo.join(".ptyro/scratchpad.md");
+
+    let sh = |name: &str, cwd: PathBuf| SpawnSpec {
+        cwd,
+        name: Some(name.into()),
+        argv: vec![
+            "sh".into(),
+            "-c".into(),
+            "echo g=$PTYRO_SCRATCHPAD p=[$PTYRO_PROJECT_SCRATCHPAD]; sleep 60".into(),
+        ],
+        size: Some(TermSize::new(240, 20)),
+        ..SpawnSpec::default()
+    };
+    c.request(Request::Spawn { spec: sh("inproject", wt.path.clone()) }).await.unwrap();
+    c.request(Request::Spawn { spec: sh("outside", w.home()) }).await.unwrap();
+    let screen = w.d.wait_for_text(&c, "inproject", "p=[/", WAIT).await.unwrap();
+    assert!(screen.contains(&format!("g={}", global.display())), "{screen}");
+    assert!(screen.contains(&format!("p=[{}]", project_file.display())), "{screen}");
+    let screen = w.d.wait_for_text(&c, "outside", "p=[", WAIT).await.unwrap();
+    assert!(
+        screen.contains("p=[]") && screen.contains(&format!("g={}", global.display())),
+        "{screen}"
+    );
+
+    // A request without a pad is the global one; naming the project (by slug, id or a path in
+    // it) is the project's; `Near` follows a directory.
+    let get = |pad| async {
+        match c.request(Request::ScratchGet { pad }).await.unwrap() {
+            Reply::Scratch { doc } => doc,
+            other => panic!("{other:?}"),
+        }
+    };
+    use ptyro_core::scratchpad::PadSel;
+    let g = get(PadSel::Global).await;
+    assert_eq!(
+        (g.pad.clone(), g.name.as_str(), g.path.clone()),
+        (PadSel::Global, "everywhere", global.clone())
+    );
+    let by_slug = get(PadSel::Project("myrepo".into())).await;
+    let PadSel::Project(id) = by_slug.pad.clone() else { panic!("{:?}", by_slug.pad) };
+    assert_eq!(by_slug.name, "myrepo");
+    assert!(by_slug.path.ends_with(".ptyro/scratchpad.md"));
+    let by_path = get(PadSel::Project(wt.path.to_string_lossy().into_owned())).await;
+    assert_eq!(by_path.path, by_slug.path, "a worktree resolves to its project's pad");
+    assert_eq!(get(PadSel::Near(wt.path.clone())).await.pad, PadSel::Project(id.clone()));
+    assert_eq!(get(PadSel::Near(w.home())).await.pad, PadSel::Global, "outside a project: global");
+    let missing = c.request(Request::ScratchGet { pad: PadSel::Project("nope".into()) }).await;
+    assert!(missing.is_err());
+    // The list of pads: the global one and the project's, with counts.
+    let Reply::ScratchPads { pads } = c.request(Request::ScratchPads).await.unwrap() else {
+        panic!()
+    };
+    assert_eq!(pads.len(), 2, "{pads:?}");
+
+    // An add to the project's pad is announced as the project's, and the global pad's count
+    // is not touched by it.
+    let r = c
+        .request(Request::ScratchAdd {
+            pad: PadSel::Project(id.clone()),
+            text: "from the protocol".into(),
+            section: None,
+            note: false,
+            stamp: false,
+            session: None,
+            cwd: None,
+        })
+        .await
+        .unwrap();
+    let Reply::Scratch { doc } = r else { panic!() };
+    assert_eq!((doc.open, doc.pad.clone()), (1, PadSel::Project(id.clone())));
+    let deadline = Instant::now() + WAIT;
+    loop {
+        match tokio::time::timeout(
+            deadline.saturating_duration_since(Instant::now()),
+            pushes.recv(),
+        )
+        .await
+        {
+            Ok(Some(ServerMsg::Event { event: DomainEvent::ScratchChanged { pad, open, .. } }))
+                if pad != PadSel::Global =>
+            {
+                assert_eq!((pad, open), (PadSel::Project(id.clone()), 1));
+                break;
+            }
+            Ok(Some(_)) => {}
+            _ => panic!("no ScratchChanged for the project pad"),
+        }
+    }
+    assert_eq!(get(PadSel::Global).await.open, 0);
+    // An editor saving the project's file is noticed too, with the pad it is about.
+    let edited =
+        format!("{}- [ ] typed in an editor\n", std::fs::read_to_string(&project_file).unwrap());
+    std::fs::write(&project_file, edited).unwrap();
+    let deadline = Instant::now() + WAIT;
+    loop {
+        match tokio::time::timeout(
+            deadline.saturating_duration_since(Instant::now()),
+            pushes.recv(),
+        )
+        .await
+        {
+            Ok(Some(ServerMsg::Event {
+                event: DomainEvent::ScratchChanged { pad: PadSel::Project(p), open: 2, by, .. },
+            })) => {
+                assert_eq!((p, by.as_deref()), (id.clone(), Some("file")));
+                break;
+            }
+            Ok(Some(_)) => {}
+            _ => panic!("no ScratchChanged for the saved file"),
+        }
+    }
+    // Over the wire, the old shape (no `pad`) still works and means the global pad.
+    let old: Request = serde_json::from_str(r#"{"t":"scratch_get"}"#).unwrap();
+    let Reply::Scratch { doc } = c.request(old).await.unwrap() else { panic!() };
+    assert_eq!(doc.path, global);
+}
+
+/// NOTE1.7: an item started from the project's pad is tagged in that pad, and ticked there
+/// when its worktree is cleaned up; the item in the global pad is left alone.
+#[tokio::test]
+async fn an_item_of_the_project_pad_is_ticked_when_its_worktree_is_cleaned_up() {
+    let w = World::new("");
+    let c = w.d.client().await.unwrap();
+    let (repo, wt) = project_with_worktree(&w, &c).await;
+    let (ok, ..) = w.pad_in(&wt.path, &["add", "--no-stamp", "fix the project thing"]);
+    assert!(ok);
+    let (ok, ..) = w.pad_in(&wt.path, &["add", "--global", "--no-stamp", "global item"]);
+    assert!(ok);
+    let (_, out, _) = w.pad_in(&wt.path, &["todo", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let line = v["items"][0]["line"].as_u64().unwrap() as u32;
+    let spec = ptyro_core::model::WorktreeSpec {
+        project: repo.to_string_lossy().into_owned(),
+        name: Some("fixit".into()),
+        fetch: Some(false),
+        pad_item: Some(line),
+        pad_sel: ptyro_core::scratchpad::PadSel::Project(wt.project.clone()),
+        ..Default::default()
+    };
+    let Reply::WorktreeCreated { info, .. } =
+        c.request(Request::WorktreeNew { spec }).await.unwrap()
+    else {
+        panic!()
+    };
+    let project_file = repo.join(".ptyro/scratchpad.md");
+    let text = std::fs::read_to_string(&project_file).unwrap();
+    assert!(text.contains("- [ ] fix the project thing [wt:myrepo/fixit]"), "{text}");
+    assert!(!std::fs::read_to_string(w.file()).unwrap().contains("[wt:"));
+    c.request(Request::WorktreeRemove { addr: info.id, opts: Default::default() }).await.unwrap();
+    let text = std::fs::read_to_string(&project_file).unwrap();
+    assert!(text.contains("- [x] fix the project thing [wt:myrepo/fixit]"), "{text}");
+    assert!(std::fs::read_to_string(w.file()).unwrap().contains("- [ ] global item"));
 }

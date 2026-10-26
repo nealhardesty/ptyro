@@ -29,6 +29,8 @@ export class Conn {
     reason = "";
     /// What this device may do (`read`, `approve`, `control`, `full`), from the welcome.
     scope = "";
+    /// The daemon's machine, from the welcome; kept when the connection drops.
+    machine = "";
     backoff = 500;
     onState = () => { };
     /// A message that was meant for the daemon and couldn't be sent (the socket is down).
@@ -60,6 +62,8 @@ export class Conn {
             if (msg.t === "welcome") {
                 this.state = "open";
                 this.scope = msg.scope ?? "full";
+                if (typeof msg.machine === "string")
+                    this.machine = msg.machine;
                 this.backoff = 500;
                 this.onState();
                 ws.send(JSON.stringify({ t: "watch_events" }));

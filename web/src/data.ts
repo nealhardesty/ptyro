@@ -5,7 +5,7 @@ import { conn } from "./conn.js";
 import { ui } from "./kit.js";
 
 export interface Project { id: string; slug: string; root: string; default_branch?: string | null; remote_url?: string | null; pin?: string | null; created_ms: number; last_used_ms?: number | null }
-export interface RepoStatus { branch?: string | null; head?: string | null; ahead?: number; behind?: number; staged?: number; unstaged?: number; untracked?: number; conflicted?: number; insertions?: number; deletions?: number; [k: string]: any }
+export interface RepoStatus { branch?: string | null; head?: string | null; ahead?: number; behind?: number; staged?: number; unstaged?: number; untracked?: number; conflicted?: number; insertions?: number; deletions?: number; upstream?: string | null; unpushed?: number | null; pushed?: boolean; [k: string]: any }
 export interface PrInfo { number: number; state: string; url: string; title?: string; draft?: boolean; checks?: any[]; review?: string; [k: string]: any }
 export interface Worktree {
   id: string; project: string; project_slug: string; name: string; path: string; branch?: string | null; base?: string | null;
@@ -52,6 +52,69 @@ export function onEvent(e: any): boolean {
     default: return false;
   }
   return true;
+}
+
+// ── About (UX2.1) ───────────────────────────────────────────────────────────────────────────
+
+/// Where ptyro lives; a test keeps these equal to Cargo.toml's `repository` and `license`.
+export const REPOSITORY = "https://github.com/nealhardesty/ptyro";
+export const ISSUES = `${REPOSITORY}/issues`;
+export const LICENSE = "MIT";
+
+/// The About document (`ptyro about --json`, the `about` host operation), or what the daemon's
+/// status alone says when this device may not ask the machine (anything below `full`).
+export function aboutDoc(host: any | null | undefined, status: any): any {
+  if (host) return host;
+  const d = status ?? {};
+  return {
+    version: d.version ?? "", protocol: d.proto ? `${d.proto.major}.${d.proto.minor}` : "",
+    repository: REPOSITORY, issues: ISSUES, license: LICENSE, build: {}, system: "",
+    places: [d.socket && { name: "socket", path: d.socket, exists: true }, d.log_dir && { name: "logs", path: d.log_dir, exists: true }].filter(Boolean),
+    daemon: { running: !!status, version: d.version, protocol: d.proto ? `${d.proto.major}.${d.proto.minor}` : "", pid: d.pid, started_ms: d.started_ms, same: null, fix: null },
+    web: d.web ? { wanted: d.web.wanted, up: d.web.up, url: d.web.url, text: [d.web.up ? `up at ${d.web.url}` : d.web.wanted ? "on, but not up yet" : "off"] } : null,
+    tools: [], limited: true,
+  };
+}
+
+/// What to paste into a bug report: the machine's own `report` when there is one, else the facts
+/// this device can see.
+export function aboutText(doc: any): string {
+  if (doc.report) return doc.report;
+  const v = (k: string, s: string): string => `${k.padEnd(12)} ${s}`;
+  const d = doc.daemon ?? {};
+  return [
+    v("ptyro", `${doc.version} (protocol ${doc.protocol})`),
+    v("source", doc.repository), v("licence", doc.license), v("report", `${doc.issues} (paste this block)`),
+    v("daemon", d.running ? `running, version ${d.version} (protocol ${d.protocol}), pid ${d.pid}` : "not running"),
+    ...(doc.web ? [v("web app", doc.web.text?.[0] ?? "")] : []),
+    ...(doc.places ?? []).map((p: any) => v(p.name, p.path)),
+  ].join("\n") + "\n";
+}
+
+/// What is left to do with a worktree's work (UX2.2), the same rule as the TUI and the CLI
+/// (`RepoStatus::left` in ptyro-core): uncommitted files, unpushed commits (ahead of the upstream,
+/// or on no remote), whether there is no upstream yet, and whether it is all committed and pushed.
+export interface Left { uncommitted: number; unpushed: number; notPushed: boolean; pushed: boolean }
+export function repoLeft(st?: RepoStatus | null): Left {
+  if (!st) return { uncommitted: 0, unpushed: 0, notPushed: false, pushed: false };
+  const uncommitted = (st.staged ?? 0) + (st.modified ?? 0) + (st.untracked ?? 0) + (st.conflicts ?? 0);
+  const unpushed = st.upstream ? st.ahead ?? 0 : st.unpushed ?? 0;
+  return { uncommitted, unpushed, notPushed: !st.upstream && unpushed > 0, pushed: !!st.pushed };
+}
+/// `✓ pushed`, `↑2`, `● 3`, `↑2 ● 3`, `not pushed ↑2`; empty when there is nothing to say.
+export function leftWords(l: Left): string {
+  const v: string[] = [];
+  if (l.unpushed > 0) v.push(l.notPushed ? `not pushed ↑${l.unpushed}` : `↑${l.unpushed}`);
+  if (l.uncommitted > 0) v.push(`● ${l.uncommitted}`);
+  if (l.pushed) v.push("✓ pushed");
+  return v.join(" ");
+}
+/// Its work has shipped (`WorktreeInfo::shipped`): the PR merged, or integrated and unchanged since.
+export function shipped(w: Worktree): boolean {
+  if (w.is_root) return false;
+  if (w.pr?.state === "MERGED") return true;
+  const st = w.status;
+  return !!(w.integrated && st && repoLeft(st).uncommitted === 0 && st.head && w.integrated.startsWith(st.head));
 }
 
 export const projectOf = (w: Worktree): Project | undefined => data.projects.get(w.project);

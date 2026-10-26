@@ -445,13 +445,13 @@ async fn scopes_revocation_and_lockout() {
 
 /// What `ptyro pair` prints lands in scrollback and recordings, so it is a code, not the
 /// token: claimed once, within minutes (here shortened), then worthless. Unclaimed, the device
-/// can't sign in; the default scope is `approve`.
+/// can't sign in; the default scope is `full`, with a warning.
 #[tokio::test]
 async fn pairing_codes_are_single_use_and_expire() {
     let w = World::new("", &[("PTYRO_TEST_PAIRING_TTL_MS", "3000")]);
     let serve = w.serve();
     let v = w.json(&["pair", "phone", "--json"]);
-    assert_eq!(v["device"]["scope"], "approve");
+    assert_eq!(v["device"]["scope"], "full");
     assert_eq!(v["device"]["pending"], true);
     let code = v["url"].as_str().unwrap().split("#pair=").nth(1).unwrap().to_owned();
     // The code is no token.
@@ -490,6 +490,140 @@ async fn pairing_codes_are_single_use_and_expire() {
         "{text}"
     );
     assert!(!text.contains("ptd_"), "{text}");
+}
+
+/// Every link carries its port, whatever the address: the listen address, a `--url` without one
+/// (ptyro serves it on its listen port) and one with a wrong one (kept, with the fix named).
+#[test]
+fn pair_links_always_carry_the_port() {
+    let w = World::new("", &[("PTYRO_TEST_PAIRING_TTL_MS", "1500")]);
+    let link = |args: &[&str]| -> (String, Value) {
+        let mut a = vec!["pair", "p", "--scope", "read", "--json"];
+        a.extend_from_slice(args);
+        let v = w.json(&a);
+        (v["url"].as_str().unwrap().to_owned(), v)
+    };
+    let (u, _) = link(&[]);
+    // The listen address, or (on a machine where Tailscale proxies to it) its HTTPS name on :443.
+    let authority = u.strip_prefix("https://").and_then(|r| r.split("/#pair=").next()).unwrap();
+    assert!(
+        authority == "127.0.0.1:7091" || authority.ends_with(".ts.net:443"),
+        "the port is in the link: {u}"
+    );
+    let (u, v) = link(&["--url", "https://phone-host.example"]);
+    assert!(u.starts_with("https://phone-host.example:7091/#pair="), "{u}");
+    assert!(v["notes"].to_string().contains("trusted_proxy"), "{v}");
+    let (u, v) = link(&["--url", "http://[::1]:7091/"]);
+    assert!(u.starts_with("http://[::1]:7091/#pair="), "{u}");
+    assert_eq!(v["notes"].as_array().unwrap().len(), 0, "{v}");
+    let (u, v) = link(&["--url", "https://box:9000"]);
+    assert!(u.starts_with("https://box:9000/#pair="), "{u}");
+    assert!(v["notes"].to_string().contains("--url https://box:7091"), "{v}");
+    // The text form prints the same link (QR and all) and the notes.
+    let out = w.cli(&["pair", "q", "--scope", "read", "--url", "https://box.example"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("https://box.example:7091/#pair=ptp_"), "{text}");
+}
+
+/// `full` is the default scope, with a plain warning; naming a scope is the owner's choice and
+/// is not nagged.
+#[test]
+fn the_default_scope_is_full_with_a_warning_and_a_named_one_has_none() {
+    let w = World::new("", &[("PTYRO_TEST_PAIRING_TTL_MS", "1500")]);
+    let v = w.json(&["pair", "a", "--json"]);
+    assert_eq!(v["device"]["scope"], "full");
+    let warn = v["warning"].as_str().unwrap();
+    assert!(warn.contains("FULL") && warn.contains("--scope approve"), "{v}");
+    let v = w.json(&["pair", "b", "--scope", "approve", "--json"]);
+    assert_eq!(v["device"]["scope"], "approve");
+    assert!(v["warning"].is_null(), "{v}");
+    let v = w.json(&["pair", "c", "--scope", "full", "--json"]);
+    assert!(v["warning"].is_null(), "an explicit full is not nagged: {v}");
+    let out = w.cli(&["pair", "d"]);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("WARNING: This device gets FULL"));
+    let out = w.cli(&["pair", "e", "--scope", "read"]);
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("WARNING"));
+}
+
+/// Pairing a name again replaces that device and takes the scope asked for now, up or down: the
+/// old token and its live connections stop at once, and nothing changes before the new link is
+/// opened.
+#[tokio::test]
+async fn pairing_a_name_again_replaces_the_device_and_takes_the_new_scope() {
+    let w = World::new("", &[("PTYRO_TEST_PAIRING_TTL_MS", "2500")]);
+    let serve = w.serve();
+    let (id1, old) = w.pair(&serve, "phone", "approve");
+    let mut live = Phone::signed_in(serve.port, &old).await;
+    // Upgrade. Until the new link is opened the old device is untouched.
+    let v = w.json(&["pair", "phone", "--scope", "full", "--json"]);
+    assert_eq!(v["replaces"]["id"], id1.as_str(), "{v}");
+    assert_eq!(v["replaces"]["scope"], "approve");
+    live.ok(json!({ "t": "list" })).await;
+    let code = v["url"].as_str().unwrap().split("#pair=").nth(1).unwrap().to_owned();
+    let (status, body) = claim(serve.port, &code);
+    assert_eq!(status, 200, "{body}");
+    let r: Value = serde_json::from_str(body.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(r["replaced"]["id"], id1.as_str(), "{r}");
+    let bye = live.until("goodbye", |m| m["t"] == "goodbye").await;
+    assert!(bye["reason"].as_str().unwrap().contains("revoked"), "{bye}");
+    let (p, _) =
+        Phone::hello(serve.port, json!({ "kind": "web", "version": "x", "pid": 0, "token": old }))
+            .await;
+    assert!(p.is_none(), "the old token is refused");
+    let devices = w.json(&["devices", "ls", "--json"]);
+    assert_eq!(devices.as_array().unwrap().len(), 1, "{devices}");
+    assert_eq!(devices[0]["scope"], "full");
+    // The new token works, with the new scope.
+    let new = r["token"].as_str().unwrap().to_owned();
+    let mut p = Phone::signed_in(serve.port, &new).await;
+    let o = p.request(json!({ "t": "spawn", "spec": { "argv": ["sh"], "cwd": "/" } })).await;
+    assert_ne!(o["t"], "err", "{o}");
+    // Downgrade: full to read.
+    let v = w.json(&["pair", "Phone", "--scope", "read", "--json"]);
+    assert_eq!(v["replaces"]["scope"], "full", "{v}");
+    let code = v["url"].as_str().unwrap().split("#pair=").nth(1).unwrap().to_owned();
+    let (status, body) = claim(serve.port, &code);
+    assert_eq!(status, 200, "{body}");
+    let devices = w.json(&["devices", "ls", "--json"]);
+    assert_eq!(devices.as_array().unwrap().len(), 1, "{devices}");
+    assert_eq!(devices[0]["scope"], "read");
+    let (p, _) =
+        Phone::hello(serve.port, json!({ "kind": "web", "version": "x", "pid": 0, "token": new }))
+            .await;
+    assert!(p.is_none(), "the replaced token is refused");
+    // An unused link is superseded by the next one for the same name.
+    let (_, first) = w.pair_code("tablet", "read");
+    let (_, second) = w.pair_code("tablet", "control");
+    assert_eq!(claim(serve.port, &first).0, 401, "the earlier link is dead");
+    assert_eq!(claim(serve.port, &second).0, 200);
+    // The text form says what happens.
+    let _ = w.json(&["pair", "tablet", "--scope", "approve", "--json"]);
+    let out = w.cli(&["pair", "tablet", "--scope", "approve"]);
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("Replacing the existing device"),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+/// The daemon names its machine (`[daemon] machine_name`, else the host name), in its status
+/// and in the pairing output; the web app and the TUI show it.
+#[test]
+fn the_daemon_reports_its_machine() {
+    let w = World::new(
+        "[daemon]\nmachine_name = \"studio\"\n",
+        &[("PTYRO_TEST_PAIRING_TTL_MS", "1500")],
+    );
+    assert_eq!(w.json(&["daemon", "status", "--json"])["machine"], "studio");
+    assert!(w.ok(&["daemon", "status"]).contains("machine   studio"));
+    assert_eq!(w.json(&["pair", "m", "--scope", "read", "--json"])["machine"], "studio");
+    let out = w.cli(&["pair", "m2", "--scope", "read"]);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("Pairing \"m2\" with studio."));
+    assert!(w.ok(&["config", "get", "daemon.machine_name"]).contains("studio"));
+    // Unset: the host name, short and plain.
+    let auto = World::new("", &[]);
+    let m = auto.json(&["daemon", "status", "--json"])["machine"].as_str().unwrap().to_owned();
+    assert!(!m.is_empty() && m.chars().count() <= 24 && !m.contains('.'), "{m}");
 }
 
 /// A stand-in for ssh: checks its arguments, then runs the remote command against the "remote"

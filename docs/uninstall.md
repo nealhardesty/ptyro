@@ -18,7 +18,7 @@ A private (mode 600) `.tar.gz` that never replaces a file that is already there.
 |---|---|
 | `config/config.toml` | your config, comments and all |
 | `data/ptyro.db` | a consistent copy of the database (SQLite `VACUUM INTO`, safe while the daemon runs): sessions' history, projects, worktree records, paired devices (as token hashes), saved views, trust |
-| `data/scratchpad.md`, `data/scratchpad.history/` | the scratchpad and its saved copies |
+| `data/scratchpad.md`, `data/scratchpad.history/` | the scratchpad for everywhere and its saved copies (a project's pad is in its repository, `.ptyro/scratchpad.md`: not backed up, and not removed by uninstall) |
 | `README.txt`, `manifest.json` | what this is, what is in it and what was left out, and how to put it back |
 
 Left out, and said so when it is: the agents' login directories under ptyro-managed profiles (log

@@ -22,7 +22,7 @@ async fn a_reply_over_the_frame_limit_is_an_error_and_the_connection_lives() {
     text.truncate(ptyro_protocol::MAX_FRAME - 200);
     let answered = tokio::time::timeout(
         Duration::from_secs(60),
-        c.request(Request::ScratchPut { base: String::new(), text }),
+        c.request(Request::ScratchPut { pad: Default::default(), base: String::new(), text }),
     )
     .await
     .expect("answered, not hung");

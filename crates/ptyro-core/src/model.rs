@@ -149,12 +149,83 @@ pub struct RepoStatus {
     pub head: Option<String>,
     #[serde(default)]
     pub subject: Option<String>,
+    /// Commits on no remote (and not in the base), counted for a branch with no upstream; `None`
+    /// when git wasn't asked or the repository has no remote at all (UX2.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unpushed: Option<u32>,
+    /// It has work of its own, all of it committed and on a remote (UX2.2).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pushed: bool,
     pub at_ms: u64,
+}
+
+/// What is left to do with a worktree's work, the same everywhere it is shown (UX2.2).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Left {
+    /// Changed files not committed yet.
+    pub uncommitted: u32,
+    /// Commits not pushed: ahead of the upstream, or on no remote.
+    pub unpushed: u32,
+    /// There are commits, and the branch has no upstream yet.
+    pub not_pushed: bool,
+    /// Work of its own, committed and pushed: nothing left to do.
+    pub pushed: bool,
 }
 
 impl RepoStatus {
     pub fn dirty(&self) -> u32 {
         self.staged + self.modified + self.untracked + self.conflicts
+    }
+
+    /// What is left to do: uncommitted changes, unpushed commits, or nothing (pushed).
+    pub fn left(&self) -> Left {
+        let unpushed =
+            if self.upstream.is_some() { self.ahead } else { self.unpushed.unwrap_or(0) };
+        Left {
+            uncommitted: self.dirty(),
+            unpushed,
+            not_pushed: self.upstream.is_none() && unpushed > 0,
+            pushed: self.pushed,
+        }
+    }
+
+    /// Fill `pushed` once the counts are in: clean, nothing unpushed, commits beyond the base, and
+    /// somewhere to push them (an upstream, or a remote that was counted against).
+    pub fn settle(&mut self) {
+        let l = self.left();
+        let remote = self.upstream.is_some() || self.unpushed.is_some();
+        self.pushed = remote && l.uncommitted == 0 && l.unpushed == 0 && self.base_ahead > 0;
+    }
+}
+
+impl Left {
+    /// Nothing to show for the worktree's own work (no commits, nothing changed).
+    pub fn quiet(&self) -> bool {
+        self.uncommitted == 0 && self.unpushed == 0 && !self.pushed
+    }
+
+    /// The line counts matter only while there is something left to do.
+    pub fn open(&self) -> bool {
+        self.uncommitted > 0 || self.unpushed > 0
+    }
+
+    /// `✓ pushed`, `↑2`, `● 3`, `↑2 ● 3`, `not pushed ↑2`: the words and marks, in the order shown.
+    pub fn words(&self) -> String {
+        let mut v: Vec<String> = Vec::new();
+        if self.unpushed > 0 {
+            v.push(if self.not_pushed {
+                format!("not pushed ↑{}", self.unpushed)
+            } else {
+                format!("↑{}", self.unpushed)
+            });
+        }
+        if self.uncommitted > 0 {
+            v.push(format!("● {}", self.uncommitted));
+        }
+        if self.pushed {
+            v.push("✓ pushed".into());
+        }
+        v.join(" ")
     }
 }
 
@@ -338,6 +409,9 @@ pub struct WorktreeSpec {
     /// worktree, and ticked once it is merged or cleaned up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pad_item: Option<u32>,
+    /// Which pad that item is in (NOTE1.7).
+    #[serde(default, skip_serializing_if = "crate::scratchpad::PadSel::is_global")]
+    pub pad_sel: crate::scratchpad::PadSel,
     /// The client's SSH agent and display variables.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
@@ -647,6 +721,45 @@ mod tests {
         assert_eq!(render_branch("{user}/{issue}-{name}", &v), "brisk-rook");
         v.insert("user", "neal".to_owned());
         assert_eq!(render_branch("{user}/{issue}-{name}", &v), "neal/brisk-rook");
+    }
+
+    #[test]
+    fn what_is_left_to_do() {
+        let st = |f: &dyn Fn(&mut RepoStatus)| {
+            let mut s = RepoStatus { base_ahead: 1, ..RepoStatus::default() };
+            f(&mut s);
+            s.settle();
+            s.left()
+        };
+        let l = st(&|s| s.unpushed = Some(0));
+        assert_eq!(l.words(), "✓ pushed", "commits, nothing left to push: done");
+        assert!(st(&|_| {}).quiet(), "no remote to push to: nothing to say");
+        // Upstream: the ahead count is what is unpushed.
+        let l = st(&|s| {
+            s.upstream = Some("origin/x".into());
+            s.ahead = 2;
+            s.modified = 1;
+            s.untracked = 2;
+        });
+        assert_eq!(l.words(), "↑2 ● 3");
+        assert!(!l.pushed && l.open() && !l.not_pushed);
+        // No upstream and commits: not pushed.
+        let l = st(&|s| s.unpushed = Some(3));
+        assert!(l.not_pushed && l.words() == "not pushed ↑3");
+        // Nothing of its own (no commits beyond the base): quiet, not "pushed".
+        let mut s = RepoStatus::default();
+        s.settle();
+        assert!(s.left().quiet() && s.left().words().is_empty());
+        // Old daemons' JSON has none of the new fields.
+        let old: RepoStatus = serde_json::from_str(
+            r#"{"ahead":0,"behind":0,"base_ahead":1,"base_behind":0,"staged":0,"modified":0,
+            "untracked":0,"conflicts":0,"insertions":0,"deletions":0,"at_ms":1}"#,
+        )
+        .unwrap();
+        assert_eq!((old.unpushed, old.pushed), (None, false));
+        let json = serde_json::to_value(RepoStatus { pushed: true, ..old }).unwrap();
+        assert_eq!(json["pushed"], true);
+        assert!(json.get("unpushed").is_none());
     }
 
     #[test]

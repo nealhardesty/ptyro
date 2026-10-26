@@ -171,6 +171,10 @@ pub struct Setting {
     pub otherwise: &'static str,
     /// A value to show when there is no default to show (the starter file, `config list`).
     pub example: &'static str,
+    /// What a number counts (`columns`, `days`), shown beside it in the panel.
+    pub unit: &'static str,
+    /// Other words for it that a search should find ("notify", "sound").
+    pub also: &'static str,
 }
 
 const fn s(key: &'static str, section: &'static str, kind: Kind, help: &'static str) -> Setting {
@@ -184,6 +188,11 @@ const fn s(key: &'static str, section: &'static str, kind: Kind, help: &'static 
         when: None,
         otherwise: "",
         example: "",
+        unit: "",
+        also: match kind {
+            Kind::Color => "color colour",
+            _ => "",
+        },
     }
 }
 
@@ -207,6 +216,14 @@ impl Setting {
     }
     const fn eg(mut self, example: &'static str) -> Self {
         self.example = example;
+        self
+    }
+    const fn unit(mut self, unit: &'static str) -> Self {
+        self.unit = unit;
+        self
+    }
+    const fn also(mut self, also: &'static str) -> Self {
+        self.also = also;
         self
     }
     const fn or(mut self, otherwise: &'static str) -> Self {
@@ -233,19 +250,19 @@ pub const SECTIONS: &[Section] = &[
     Section {
         id: "interface",
         title: "Interface",
-        blurb: "How the terminal UI looks and behaves.",
+        blurb: "How the terminal screen looks and behaves.",
         scope: Scope::User,
     },
     Section {
         id: "keys",
         title: "Key bindings",
-        blurb: "Your own keys, on top of the defaults.",
+        blurb: "Every key: see what it does, change it, unbind it or add your own.",
         scope: Scope::User,
     },
     Section {
         id: "themes",
         title: "Themes",
-        blurb: "Colour schemes of your own.",
+        blurb: "Pick the colour scheme, or make your own.",
         scope: Scope::User,
     },
     Section {
@@ -287,7 +304,7 @@ pub const SECTIONS: &[Section] = &[
     Section {
         id: "orchestration",
         title: "Orchestration",
-        blurb: "Checkpoints, leases, the radar and messages between agents.",
+        blurb: "Several agents at once: save points, file locks, overlap warnings and messages between them.",
         scope: Scope::User,
     },
     Section {
@@ -351,6 +368,10 @@ pub struct Collection {
     pub reserved: &'static [&'static str],
     /// Settings written when one is added (a command to run, a type…), so it is valid at once.
     pub starter: &'static [(&'static str, &'static str)],
+    /// The heading over its list.
+    pub title: &'static str,
+    /// What to say while there are none: what they are for, and what already works without one.
+    pub empty: &'static str,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -372,6 +393,8 @@ pub const COLLECTIONS: &[Collection] = &[
         layout: Layout::Map(Kind::Dynamic { source: Source::Actions }),
         reserved: &[],
         starter: &[],
+        title: "Key bindings",
+        empty: "No key is bound. Add one to make a shortcut.",
     },
     Collection {
         path: "themes",
@@ -380,6 +403,8 @@ pub const COLLECTIONS: &[Collection] = &[
         layout: Layout::Tables,
         reserved: &["ptyro-dark", "ptyro-light", "high-contrast"],
         starter: &[("base", "ptyro-dark")],
+        title: "Your themes",
+        empty: "None yet. ptyro-dark, ptyro-light and high-contrast are built in; add one to make colours of your own.",
     },
     Collection {
         path: "agents",
@@ -388,6 +413,8 @@ pub const COLLECTIONS: &[Collection] = &[
         layout: Layout::Tables,
         reserved: &[],
         starter: &[],
+        title: "Your agents",
+        empty: "None added. claude, codex, gemini and opencode work as they are: add one only to change how an agent starts, or to run another program.",
     },
     Collection {
         path: "profiles",
@@ -396,6 +423,8 @@ pub const COLLECTIONS: &[Collection] = &[
         layout: Layout::Tables,
         reserved: &[],
         starter: &[],
+        title: "Profiles",
+        empty: "None. One account needs no profile; add one to keep another account's logins and git identity apart.",
     },
     Collection {
         path: "notifications.sinks",
@@ -404,6 +433,8 @@ pub const COLLECTIONS: &[Collection] = &[
         layout: Layout::Array,
         reserved: &[],
         starter: &[],
+        title: "Notification services",
+        empty: "None. Add one (ntfy, Slack, Pushover…) to be told when you are away from this screen.",
     },
     Collection {
         path: "editors",
@@ -412,6 +443,8 @@ pub const COLLECTIONS: &[Collection] = &[
         layout: Layout::Tables,
         reserved: &["default"],
         starter: &[],
+        title: "Your editors",
+        empty: "None added. nvim, vim, hx, code, zed and cursor are built in (whichever is installed); add one to use another.",
     },
     Collection {
         path: "scripts.run",
@@ -420,6 +453,8 @@ pub const COLLECTIONS: &[Collection] = &[
         layout: Layout::Tables,
         reserved: &[],
         starter: &[],
+        title: "Run scripts",
+        empty: "None. A run script is a named command, like a dev server or the tests, that you start from a worktree.",
     },
     Collection {
         path: "prompts",
@@ -428,6 +463,8 @@ pub const COLLECTIONS: &[Collection] = &[
         layout: Layout::Map(Kind::Script),
         reserved: &[],
         starter: &[],
+        title: "Prompts",
+        empty: "None. A prompt is saved text a new session can start from.",
     },
 ];
 
@@ -553,30 +590,31 @@ const SINK_HOOK: &[&str] = &["slack", "discord"];
 
 pub const SETTINGS: &[Setting] = &[
     // ── Interface ──
-    s("ui.theme", "interface", dynamic(Source::Themes), "The colour scheme. Define your own under Themes."),
-    s("ui.prefix", "interface", Kind::Keys, "The keys that start a ptyro command. Any of them works; the first is the one hints show."),
+    s("ui.theme", "themes", dynamic(Source::Themes), "The terminal screen's colour scheme. Make your own below.").also("color colour dark light appearance"),
+    s("ui.prefix", "interface", Kind::Keys, "The keys that start a ptyro command (then a key; `?` lists them all). Any of them works; the first is the one hints show.").also("shortcut hotkey leader modifier keybinding"),
     s("ui.sidebar", "interface", Kind::Bool, "Show the session list down the side (`\\` toggles it)."),
-    s("ui.sidebar_width", "interface", int(12, 120), "How wide the sidebar is, in columns."),
+    s("ui.sidebar_width", "interface", int(12, 120), "How wide the sidebar is.").unit("columns"),
     s("ui.sidebar_detail", "interface", pick(DETAIL), "How much each session row says under its first line (its task, what it is on, its last reply)."),
     s("ui.status_bar", "interface", Kind::Bool, "Show the status bar along the bottom."),
     s("ui.clock", "interface", Kind::Bool, "Show the time in the status bar."),
-    s("ui.mouse", "interface", Kind::Bool, "Let ptyro take the mouse: click to focus, wheel to scroll, drag borders. Off leaves it to your terminal (native selection)."),
+    s("ui.mouse", "interface", Kind::Bool, "Let ptyro take the mouse: click to focus, wheel to scroll, drag borders. Off leaves it to your terminal, so you can select and copy text with it.").also("click scroll select copy"),
     s("ui.confirm_kill", "interface", Kind::Bool, "Ask before stopping a session."),
     s("ui.show_ports", "interface", Kind::Bool, "Show the ports a session listens on, in the sidebar and pane headers."),
     s("ui.tint_borders", "interface", Kind::Bool, "Tint pane borders with the session's profile colour."),
     s("ui.on_stop", "interface", pick(ON_STOP), "What a pane shows after you stop its session."),
-    s("ui.which_key_delay", "interface", int(0, 5000), "Milliseconds after the prefix before the menu of next keys appears. 0 never shows it."),
+    s("ui.which_key_delay", "interface", int(0, 5000), "How long after the prefix key the menu of next keys waits before it pops up. 0 never shows it.").unit("ms").also("hints popup help menu"),
+    s("clipboard.allow_write", "interface", Kind::Bool, "Let programs in sessions copy to your clipboard (OSC 52). Reads are always refused.").also("copy paste"),
     // ── Attention ──
     s("attention.scope", "attention", pick(SCOPE), "Where the next-attention key may go."),
-    s("attention.breakthrough", "attention", some(BREAKTHROUGH), "Kinds that notify you even in a workspace set to badge only."),
-    s("attention.stale_after", "attention", Kind::Duration, "A lower-confidence status applies after the better sources were quiet this long.").adv(),
-    s("attention.min_work", "attention", Kind::Duration, "An agent that stops after working at least this long wants you.").adv(),
+    s("attention.breakthrough", "attention", some(BREAKTHROUGH), "Kinds that always notify you, even in a workspace you muted to a badge."),
+    s("attention.stale_after", "attention", Kind::Duration, "If the agent's own hooks go quiet this long, fall back to guessing its status from the screen.").adv(),
+    s("attention.min_work", "attention", Kind::Duration, "An agent that stops after working at least this long counts as needing you. Shorter stops are ignored.").adv(),
     s("attention.resume_on_focus", "attention", Kind::Bool, "Opening a dormant session resumes it."),
     // ── Notifications ──
-    s("notifications.channels", "notifications", some(CHANNELS), "How ptyro tells you."),
-    s("notifications.on", "notifications", some(KINDS), "Which kinds of attention notify you."),
-    s("notifications.quiet_hours", "notifications", Kind::Window, "Only the inbox (and breakthrough kinds) between these hours, like 22:00-07:00.").or("never quiet").eg("22:00-07:00"),
-    s("notifications.coalesce", "notifications", Kind::Duration, "At most one notification per session this often."),
+    s("notifications.channels", "notifications", some(CHANNELS), "How ptyro tells you.").also("notify alert sound beep ping bell"),
+    s("notifications.on", "notifications", some(KINDS), "Which things notify you.").also("notify alert"),
+    s("notifications.quiet_hours", "notifications", Kind::Window, "Between these hours only the inbox is used, like 22:00-07:00 (kinds you set to always notify still do).").or("never quiet").eg("22:00-07:00"),
+    s("notifications.coalesce", "notifications", Kind::Duration, "At most one notification per session in this time."),
     s("notifications.desktop_command", "notifications", Kind::Argv, "Your own desktop notifier, as a command. {title} and {body} are replaced.").adv().or("the system's").eg("my-notifier --title {title} {body}"),
     s("notifications.callback.listen", "notifications", Kind::Address, "Where approve/deny links in notifications are answered, like 127.0.0.1:7591. Off unless set.").restart().or("off").eg("127.0.0.1:7591"),
     s("notifications.callback.insecure", "notifications", Kind::Bool, "Allow that address when it isn't loopback or Tailscale. The links are plain HTTP.").restart().adv(),
@@ -594,54 +632,54 @@ pub const SETTINGS: &[Setting] = &[
     s("worktrees.location", "worktrees", pick(LOCATION), "Where new worktrees are made."),
     s("worktrees.branch_template", "worktrees", Kind::Text, "How a new branch is named: {name}, {user}, {date}, {issue}, {slug}."),
     s("worktrees.start_agents", "worktrees", pick(START_AGENTS), "When agents asked for with a new worktree start."),
-    s("worktrees.fetch", "worktrees", Kind::Bool, "Fetch the base branch before making a worktree."),
+    s("worktrees.fetch", "worktrees", Kind::Bool, "Fetch the latest base branch before making a worktree, so it starts up to date."),
     s("worktrees.watch", "worktrees", Kind::Bool, "Refresh a repository's status when its files change, not only every few seconds.").adv(),
-    s("worktrees.stale_days", "worktrees", int(1, 3650), "`ptyro gc` reports a worktree with no sessions after this many days."),
+    s("worktrees.stale_days", "worktrees", int(1, 3650), "`ptyro gc` reports a worktree with no sessions after this long.").unit("days"),
     s("worktrees.auto_rename_branch", "worktrees", Kind::Bool, "Name the branch after the first prompt, until it is pushed."),
     s("worktrees.archive_on_merge", "worktrees", Kind::Bool, "Archive a worktree when its pull request merges and nothing runs in it."),
     s("ports.range", "worktrees", Kind::Text, "The ports handed out to worktrees, LOW-HIGH (LOW at least 1024).").new_only(),
-    s("ports.count", "worktrees", int(1, 1000), "Ports for each worktree.").new_only(),
+    s("ports.count", "worktrees", int(1, 1000), "Ports for each worktree.").new_only().unit("ports"),
     s("discover.roots", "worktrees", Kind::List, "Folders to look in for git repositories.").or("none"),
-    s("discover.depth", "worktrees", int(1, 10), "How deep to look in them."),
+    s("discover.depth", "worktrees", int(1, 10), "How deep to look in them.").unit("folders deep"),
     s("discover.auto_register", "worktrees", Kind::Bool, "Make the repository a session runs in a project by itself."),
     s("compat.conductor_env", "worktrees", Kind::Bool, "Also set CONDUCTOR_* variables, so Conductor's setup scripts run unchanged.").adv().new_only(),
     // ── GitHub and review ──
-    s("github.poll", "github", Kind::Duration, "Ask `gh` about a worktree's pull request this often (never more than once a minute for one).").adv(),
+    s("github.poll", "github", Kind::Duration, "How often to ask GitHub (through `gh`) about a worktree's pull request, never more than once a minute for one.").adv(),
     s("github.draft", "github", Kind::Bool, "New pull requests are drafts."),
     s("github.merge_method", "github", pick(MERGE), "How `ptyro pr automerge` merges."),
     s("github.watch", "github", Kind::Bool, "Tell an agent about new CI failures and review comments on the pull requests ptyro opened."),
-    s("github.escalate_after", "github", Kind::Duration, "Raise attention when a watched pull request stays failing or unanswered this long."),
-    s("github.log_lines", "github", int(1, 2000), "Lines of a failing check's log sent to the agent.").adv(),
-    s("review.max_unreviewed", "github", int(0, 100), "Hold new agent sessions while this many worktrees wait for review. 0 never holds."),
-    s("review.digest", "github", Kind::Duration, "A ready-for-review digest at most this often. off for never."),
+    s("github.escalate_after", "github", Kind::Duration, "Ask for your attention when a pull request stays failing or unanswered this long."),
+    s("github.log_lines", "github", int(1, 2000), "Lines of a failing check's log sent to the agent.").adv().unit("lines"),
+    s("review.max_unreviewed", "github", int(0, 100), "Hold new agent sessions while this many worktrees are waiting for your review. 0 never holds.").unit("worktrees"),
+    s("review.digest", "github", Kind::Duration, "A digest of what is ready for review, at most this often. `off` for never."),
     // ── Orchestration ──
-    s("orchestration.checkpoints", "orchestration", Kind::Bool, "Checkpoint every agent turn that changed its worktree."),
-    s("orchestration.lease_ttl", "orchestration", Kind::Duration, "How long a file lease lasts unless renewed.").adv(),
-    s("orchestration.radar", "orchestration", Kind::Bool, "Watch a project's live worktrees for overlapping changes and tell both agents."),
-    s("orchestration.message_ttl", "orchestration", Kind::Duration, "Messages expire after this long undelivered.").adv(),
+    s("orchestration.checkpoints", "orchestration", Kind::Bool, "Save a restore point (a checkpoint) after every agent turn that changed its worktree."),
+    s("orchestration.lease_ttl", "orchestration", Kind::Duration, "How long an agent's claim on a file lasts unless it renews it.").adv(),
+    s("orchestration.radar", "orchestration", Kind::Bool, "Watch a project's worktrees for agents changing the same files, and tell both."),
+    s("orchestration.message_ttl", "orchestration", Kind::Duration, "A message between agents is dropped if it was not picked up in this time.").adv(),
     // ── Summaries ──
-    s("summaries.enabled", "summaries", Kind::Bool, "A `≈` line after each agent turn, from a small model on the session's own account. It sends a trimmed, redacted view of the session to the model's provider."),
-    s("summaries.daily_cap", "summaries", int(0, 100_000), "At most this many summaries a day for each profile (about $0.0007 each with Haiku)."),
+    s("summaries.enabled", "summaries", Kind::Bool, "A one-line `≈` summary after each agent turn, written by a small model on the session's own account. It sends a trimmed, redacted view of the session to the model's provider."),
+    s("summaries.daily_cap", "summaries", int(0, 100_000), "The most summaries made for each profile in a day, to cap the cost (about $0.0007 each with Haiku). 0 makes none.").unit("a day"),
     s("summaries.command", "summaries", Kind::Argv, "The summarizer: reads the prompt on stdin, prints the summary.").adv(),
     // ── Scratchpad and editors ──
     s("scratchpad.mode", "scratchpad", pick(PAD_MODE), "How the scratchpad key shows it."),
-    s("scratchpad.editor", "scratchpad", Kind::Text, "The editor, as a command line like `nvim` or `code -w`.").or("your default editor, $VISUAL, $EDITOR, then nvim, vim, nano or vi").eg("nvim"),
-    s("scratchpad.path", "scratchpad", Kind::Path, "Where the notes file lives. Point it into a synced folder to share it between machines.").or("scratchpad.md in ptyro's data directory").eg("~/Sync/pad.md"),
-    s("scratchpad.keep", "scratchpad", int(1, 3650), "Days of saved copies to keep (the newest 20 always stay)."),
+    s("scratchpad.editor", "scratchpad", Kind::Text, "The editor for the notes file, as a command line like `nvim` or `code -w`. (Worktrees open in the editor under Editors, below.)").or("your default editor, $VISUAL, $EDITOR, then nvim, vim, nano or vi").eg("nvim"),
+    s("scratchpad.path", "scratchpad", Kind::Path, "Where the notes file for everywhere lives. Point it into a synced folder to share it between machines. (A project's own pad is `.ptyro/scratchpad.md` in its repository; this doesn't move it.)").or("scratchpad.md in ptyro's data directory").eg("~/Sync/pad.md"),
+    s("scratchpad.keep", "scratchpad", int(1, 3650), "How long saved copies of the notes are kept, for every pad (the newest 20 always stay).").unit("days"),
     s("scratchpad.tick_on_finish", "scratchpad", Kind::Bool, "Tick an item once the worktree started from it is merged or cleaned up."),
-    s("editors.default", "scratchpad", dynamic(Source::Editors), "The editor that opens a worktree.").or("the first of nvim, vim, hx, code, zed, cursor that is installed"),
+    s("editors.default", "scratchpad", dynamic(Source::Editors), "The editor that opens a worktree (the notes file has its own, above).").or("the first of nvim, vim, hx, code, zed, cursor that is installed"),
     s("editors.*.command", "scratchpad", Kind::Argv, "The program and arguments; {path} is the worktree."),
     s("editors.*.inside", "scratchpad", Kind::Bool, "Open it as a ptyro session, for terminal editors."),
     // ── Daemon and recording ──
-    s("daemon.scrollback_lines", "daemon", int(0, 1_000_000), "Lines of history kept in memory for each session.").new_only(),
-    s("daemon.frame_interval_ms", "daemon", int(1, 1000), "The most often a screen is sent to a client, in milliseconds.").adv().new_only(),
+    s("daemon.scrollback_lines", "daemon", int(0, 1_000_000), "How many lines of history each session keeps to scroll back through.").new_only().unit("lines"),
+    s("daemon.frame_interval_ms", "daemon", int(1, 1000), "The shortest wait between screen updates sent to a client. Lower is smoother and busier.").adv().new_only().unit("ms"),
     s("daemon.log_level", "daemon", pick(LOG_LEVEL), "How much the daemon writes to its log. (PTYRO_LOG, when set, wins.)"),
     s("daemon.restore_on_start", "daemon", pick(RESTORE), "What agent sessions of an earlier daemon become when it starts.").restart(),
-    s("recorder.enabled", "daemon", Kind::Bool, "Record every session's output with timing, for replay and deep scrollback.").new_only(),
+    s("daemon.machine_name", "daemon", Kind::Text, "What to call this computer in the web page's title and the TUI, to tell several apart. Letters, digits, spaces; 24 characters at most.").also("hostname computer name machine tab title").or("this computer's name").eg("studio"),
+    s("recorder.enabled", "daemon", Kind::Bool, "Record every session's output with timing, for replay and for scrolling back past what is in memory.").new_only(),
     s("recorder.max_bytes", "daemon", Kind::Bytes, "The most one session's recording takes, like 16MiB (at least 256KiB).").new_only(),
-    s("clipboard.allow_write", "daemon", Kind::Bool, "Let programs in sessions copy to your clipboard (OSC 52). Reads are always refused."),
     // ── Web app and remote ──
-    s("remote.serve", "remote", Kind::Bool, "The daemon runs the web app for your phone itself, and keeps it running."),
+    s("remote.serve", "remote", Kind::Bool, "Run the web app (for your phone or another computer) from the daemon, and keep it running."),
     s("remote.tailscale", "remote", Kind::Bool, "Put Tailscale's HTTPS in front: your phone opens https://<machine>.<tailnet>.ts.net with a certificate it already trusts."),
     s("remote.local", "remote", Kind::Bool, "Listen on every interface, letting in only this machine, private networks and tailnets."),
     s("remote.listen", "remote", Kind::Address, "Where the web app listens. Loopback and Tailscale addresses only, unless insecure.").adv(),
@@ -718,7 +756,7 @@ pub const SETTINGS: &[Setting] = &[
     s("worktree.start_agents", "project", pick(START_AGENTS), "When agents start in a new worktree here.").or("your worktrees setting"),
     s("worktree.branch_template", "project", Kind::Text, "How branches here are named.").or("your worktrees setting"),
     s("verify.check", "project", dynamic(Source::RunScripts), "A run script that must pass before an agent's turn counts as done.").or("none"),
-    s("verify.max_bounces", "project", int(0, 100), "How many times a failing check sends the agent back.").or("the default"),
+    s("verify.max_bounces", "project", int(0, 100), "How many times a failing check sends the agent back to fix it before giving up.").or("the default").unit("times"),
     s("verify.auto", "project", Kind::Bool, "Verify every agent session in this project's worktrees, not only recipe steps."),
     // ── Project scripts ──
     s("scripts.setup", "scripts", Kind::Script, "Runs once in each new worktree.").or("none"),
@@ -797,6 +835,8 @@ pub fn fields_of(c: &Collection) -> impl Iterator<Item = &'static Setting> + '_ 
 pub struct Lookups {
     pub themes: Vec<String>,
     pub actions: Vec<(String, String)>,
+    /// The default key bindings, named as `[keys]` names them (`d`, `nav:j`): `(name, action)`.
+    pub keys: Vec<(String, String)>,
 }
 
 /// What a [`Source`] offers, from the config and what the caller knows.
@@ -1628,6 +1668,14 @@ fn or_otherwise(setting: &Setting, kind_text: Option<String>) -> String {
     })
 }
 
+fn with_unit(setting: &Setting, shown: String) -> String {
+    if setting.unit.is_empty() || shown.is_empty() || !shown.chars().all(|c| c.is_ascii_digit()) {
+        shown
+    } else {
+        format!("{shown} {}", setting.unit)
+    }
+}
+
 impl Entry {
     /// The value as shown, or what it falls back to, or `—`.
     pub fn shown(&self) -> String {
@@ -1637,6 +1685,16 @@ impl Entry {
     /// The default as shown.
     pub fn default_shown(&self) -> String {
         or_otherwise(self.setting, show(&self.setting.kind, &self.default))
+    }
+
+    /// [`shown`](Self::shown), with what a number counts after it (`30 columns`).
+    pub fn pretty(&self) -> String {
+        with_unit(self.setting, self.shown())
+    }
+
+    /// [`default_shown`](Self::default_shown), the same way.
+    pub fn default_pretty(&self) -> String {
+        with_unit(self.setting, self.default_shown())
     }
 
     /// Differs from what it would be with nothing in the file.
@@ -1775,10 +1833,12 @@ pub fn starter() -> String {
         let line = format!("# {key} = {rendered}");
         out.push_str(&format!("{:<44} # {}\n", line.trim_end(), st.help));
     }
-    out.push_str("\n[keys]\n# Rebind after-prefix keys: \"key\" = \"action [args]\"; \"none\" unbinds. `C-q ?` lists actions.\n# \"a\" = \"session.next\"\n# \"global:M-1\" = \"session.focus 1\"   # global: works without the prefix\n");
+    out.push_str("\n[keys]\n# Rebind after-prefix keys: \"key\" = \"action [args]\"; \"none\" unbinds. `C-q ?` lists actions.\n# \"a\" = \"session.next\"\n# \"global:M-1\" = \"session.focus 1\"   # global: works without the prefix\n# \"d\" = \"none\"                    # unbind a default (Settings lists every key)\n");
     out
 }
 
+mod keys;
+pub use keys::*;
 mod ops;
 pub use ops::*;
 

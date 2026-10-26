@@ -55,6 +55,9 @@ pub struct Place {
     /// The scratchpad's editor (NOTE1.1).
     #[serde(default)]
     pub pad: bool,
+    /// With `pad`: the project (id) whose pad it is (NOTE1.7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pad_project: Option<String>,
 }
 
 pub struct Term {
@@ -550,6 +553,7 @@ impl Session {
             summary: meta.summary.clone(),
             quick: meta.place.quick,
             pad: meta.place.pad,
+            pad_project: meta.place.pad_project.clone(),
         }
     }
 

@@ -19,6 +19,7 @@ pub(crate) fn lookups() -> Lookups {
             .iter()
             .map(|a| (a.id.to_owned(), a.desc.to_owned()))
             .collect(),
+        keys: ptyro_tui::keymap::default_keys(),
     }
 }
 
@@ -100,6 +101,35 @@ fn change(layer: &Layer, op: &Op, what: &str) -> Result<(), Error> {
     Ok(())
 }
 
+/// The `[keys]` name when `key` is `keys.<name>` in your own config: keys are changed with
+/// [`Op::Bind`], which knows the defaults (a default can be unbound or put back).
+fn bound_key(layer: &Layer, key: &str) -> Option<String> {
+    match settings::member_of(key) {
+        Some((c, name)) if c.path == "keys" && layer.scope() == Scope::User => Some(name),
+        _ => None,
+    }
+}
+
+/// Make a key run `value` (`none` unbinds), or with `None` put it back to its default, saying
+/// what it ran before when that was something else.
+fn bind(layer: &Layer, name: &str, value: Option<String>) -> Result<i32, Error> {
+    let before = settings::view(layer, &lookups()).bindings;
+    let was =
+        value.as_ref().and_then(|v| settings::owner(&before, name).filter(|b| b.action != *v));
+    let what = match &value {
+        Some(v) if v == "none" => {
+            format!("{name} is unbound (`ptyro config unset keys.{name}` brings the default back)")
+        }
+        Some(v) => format!("{name} runs {v}"),
+        None => format!("{name} is back to its default"),
+    };
+    if let Some(b) = was {
+        eprintln!("note: {name} ran {}: {}", b.action, b.help);
+    }
+    change(layer, &Op::Bind { changes: vec![(name.to_owned(), value)] }, &what)?;
+    Ok(0)
+}
+
 fn extra_for(layer: &Layer) -> impl Fn(&str) -> Result<(), String> + use<> {
     let user = layer.scope() == Scope::User;
     move |text: &str| if user { semantic(text) } else { Ok(()) }
@@ -123,12 +153,19 @@ async fn run_paths(paths: &Paths, cmd: ConfigCmd, ctx: &Ctx) -> Result<i32, Erro
         ConfigCmd::Set { key, value, project, shared } => {
             let layer = layer(ctx, project.as_deref(), shared).await?;
             let v = value_of(&key, &value);
+            if let Some(name) = bound_key(&layer, &key) {
+                return bind(&layer, &name, Some(v));
+            }
             change(&layer, &Op::Set { key: key.clone(), value: v }, &format!("{key} is set"))?;
             Ok(0)
         }
         ConfigCmd::Unset { keys, project, shared } => {
             let layer = layer(ctx, project.as_deref(), shared).await?;
             for key in keys {
+                if let Some(name) = bound_key(&layer, &key) {
+                    bind(&layer, &name, None)?;
+                    continue;
+                }
                 change(
                     &layer,
                     &Op::Unset { key: key.clone() },
@@ -157,6 +194,19 @@ async fn run_paths(paths: &Paths, cmd: ConfigCmd, ctx: &Ctx) -> Result<i32, Erro
                 f.push((k.to_owned(), v.to_owned()));
             }
             let name = name.unwrap_or_default();
+            if collection == "keys" && layer.scope() == Scope::User {
+                let value = f.iter().find(|(k, _)| k == "value").map(|(_, v)| v.clone());
+                return bind(
+                    &layer,
+                    &name,
+                    Some(value.ok_or_else(|| {
+                        invalid(
+                            "a key needs what it runs: ptyro config add keys x value=session.next"
+                                .into(),
+                        )
+                    })?),
+                );
+            }
             change(
                 &layer,
                 &Op::Add { path: collection.clone(), name: name.clone(), fields: f },
@@ -256,12 +306,20 @@ fn list(layer: &Layer, section: Option<&str>, changed: bool, json: bool) -> Resu
     if changed {
         entries.retain(|e| e.changed());
     }
+    // Every key, the defaults too (`--changed`: only what differs from them).
+    let bindings: Vec<&settings::Binding> = view
+        .bindings
+        .iter()
+        .filter(|_| section.is_none_or(|s| s == "keys"))
+        .filter(|b| !changed || b.standing != settings::Standing::Default)
+        .collect();
     if json {
         let v = serde_json::json!({
             "problem": view.problem,
             "files": view.to_json()["files"],
             "settings": entries.iter().map(|e| e.to_json()).collect::<Vec<_>>(),
             "maps": view.maps.iter().filter(|(p, _)| section.is_none_or(|s| s == p || settings::collection(p).is_some_and(|c| c.section == s))).map(|(p, m)| serde_json::json!({ "path": p, "items": m })).collect::<Vec<_>>(),
+            "bindings": if section.is_none_or(|s| s == "keys") { bindings.clone() } else { Vec::new() },
         });
         println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
         return Ok(0);
@@ -282,7 +340,8 @@ fn list(layer: &Layer, section: Option<&str>, changed: bool, json: bool) -> Resu
         let from = if e.changed() { format!("  ← {}", e.origin.says()) } else { String::new() };
         println!("  {:<width$}  {}{from}", e.key, e.shown());
     }
-    for (path, items) in &view.maps {
+    print_bindings(&bindings);
+    for (path, items) in view.maps.iter().filter(|(p, _)| p != "keys") {
         if section
             .is_some_and(|s| s != path && settings::collection(path).is_none_or(|c| c.section != s))
             || items.is_empty()
@@ -298,9 +357,51 @@ fn list(layer: &Layer, section: Option<&str>, changed: bool, json: bool) -> Resu
     Ok(0)
 }
 
+/// The keys, grouped by when they work, named as `config set keys.<name>` takes them.
+fn print_bindings(bindings: &[&settings::Binding]) {
+    let width = bindings.iter().map(|b| b.name.len()).max().unwrap_or(0);
+    let action = bindings.iter().map(|b| b.action.len()).max().unwrap_or(0);
+    let mut last = "";
+    for b in bindings {
+        if b.when != last {
+            last = b.when;
+            println!("\nkeys {last}");
+        }
+        let tag = match (b.standing, &b.default) {
+            (settings::Standing::Default, _) => "(default)".to_owned(),
+            (settings::Standing::Yours, _) => "← yours".to_owned(),
+            (s, Some(d)) => format!("← {} (default: {d})", s.says()),
+            (s, None) => format!("← {}", s.says()),
+        };
+        println!("  {:<width$}  {:<action$}  {tag}", b.name, b.action);
+    }
+}
+
 fn get(layer: &Layer, key: &str, explain: bool, json: bool) -> Result<i32, Error> {
     let view = settings::view(layer, &lookups());
     let split = settings::split(key);
+    // A key: what it runs now, a default's too.
+    if let Some((c, name)) = settings::member_of(key)
+        && c.path == "keys"
+        && let Some(b) =
+            view.bindings.iter().find(|b| settings::slot(&b.name) == settings::slot(&name))
+    {
+        if json {
+            println!("{}", serde_json::to_string_pretty(b).unwrap_or_default());
+        } else if explain {
+            println!("{} = {}", b.name, b.action);
+            println!("  {}", b.help);
+            println!("  works:   {}", b.when);
+            println!(
+                "  default: {}",
+                b.default.as_deref().unwrap_or("(no default: a key of your own)")
+            );
+            println!("  status:  {}", b.standing.says());
+        } else {
+            println!("{}", b.action);
+        }
+        return Ok(0);
+    }
     // A binding or a prompt.
     if let Some((c, name)) = settings::member_of(key)
         && matches!(c.layout, settings::Layout::Map(_))

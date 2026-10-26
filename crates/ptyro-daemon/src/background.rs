@@ -64,6 +64,24 @@ impl Daemon {
             tracing::warn!(worktree = %wt.qualified(), "cannot watch ({e}); refreshing periodically instead");
             return;
         }
+        // A commit changes a linked worktree's own git directory (its index and reflog), and a
+        // push moves a remote-tracking ref in the main repository's: neither is inside the
+        // worktree, so watch both, and a committed or pushed worktree reads as such at once
+        // instead of at the next poll (UX2.2).
+        if !wt.is_root {
+            let own = std::fs::read_to_string(wt.path.join(".git")).ok().and_then(|t| {
+                t.trim().strip_prefix("gitdir:").map(|p| std::path::PathBuf::from(p.trim()))
+            });
+            if let Some(dir) = own.filter(|d| d.is_dir()) {
+                let _ = debouncer.watcher().watch(&dir, notify::RecursiveMode::Recursive);
+            }
+            if let Some(root) = self.project_by_id(&wt.project).map(|p| p.root) {
+                let refs = root.join(".git/refs/remotes");
+                if refs.is_dir() {
+                    let _ = debouncer.watcher().watch(&refs, notify::RecursiveMode::Recursive);
+                }
+            }
+        }
         self.watchers.locked().entry(wt.id.clone()).or_insert(debouncer);
     }
 

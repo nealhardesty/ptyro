@@ -79,5 +79,45 @@ store.set("k", "v");
   assert.equal(await waiting, "daemon_unavailable");
   assert.equal(conn.state, "closed");
 }
+
+// What is left to do with a worktree (UX2.2): the same rule as ptyro-core's `RepoStatus::left`.
+{
+  const { repoLeft, leftWords, shipped } = await import("../dist/data.js");
+  const st = (o) => ({ ahead: 0, behind: 0, staged: 0, modified: 0, untracked: 0, conflicts: 0, base_ahead: 1, ...o });
+  assert.equal(leftWords(repoLeft(st({ upstream: "origin/x", pushed: true }))), "✓ pushed");
+  assert.equal(leftWords(repoLeft(st({ upstream: "origin/x", ahead: 2, modified: 1, untracked: 2 }))), "↑2 ● 3");
+  assert.equal(leftWords(repoLeft(st({ unpushed: 3 }))), "not pushed ↑3");
+  assert.equal(leftWords(repoLeft(st({ unpushed: 3, staged: 1 }))), "not pushed ↑3 ● 1");
+  assert.equal(leftWords(repoLeft(null)), "", "nothing known, nothing said");
+  assert.equal(leftWords(repoLeft(st({}))), "", "no commits of its own, nothing to say");
+  // Old daemons' status has none of the new fields.
+  assert.equal(repoLeft({ ahead: 0, behind: 0, staged: 0 }).pushed, false);
+  const wt = (o) => ({ is_root: false, status: st({ head: "abc123def" }), ...o });
+  assert.equal(shipped(wt({ pr: { state: "MERGED" } })), true);
+  assert.equal(shipped(wt({ pr: { state: "OPEN" } })), false);
+  assert.equal(shipped(wt({ integrated: "abc123def456" })), true);
+  assert.equal(shipped(wt({ integrated: "abc123def456", status: st({ head: "abc123def", modified: 1 }) })), false);
+  assert.equal(shipped(wt({ is_root: true, pr: { state: "MERGED" } })), false);
+}
+
+// About (UX2.1): the constants match Cargo.toml, and a device that can't ask the machine still
+// gets the daemon's facts and a block to copy.
+{
+  const { REPOSITORY, ISSUES, LICENSE, aboutDoc, aboutText } = await import("../dist/data.js");
+  const { readFileSync } = await import("node:fs");
+  const cargo = readFileSync(new URL("../../Cargo.toml", import.meta.url), "utf8");
+  assert.equal(cargo.match(/^repository = "(.+)"$/m)[1], REPOSITORY);
+  assert.equal(cargo.match(/^license = "(.+)"$/m)[1], LICENSE);
+  assert.equal(ISSUES, `${REPOSITORY}/issues`);
+  const status = { version: "1.2.3", proto: { major: 1, minor: 18 }, pid: 7, started_ms: 1, socket: "/run/p.sock", log_dir: "/state", web: { wanted: true, up: true, url: "http://h:1" } };
+  const doc = aboutDoc(null, status);
+  assert.equal(doc.limited, true);
+  assert.equal(doc.protocol, "1.18");
+  const text = aboutText(doc);
+  for (const want of ["ptyro", "1.2.3 (protocol 1.18)", REPOSITORY, ISSUES, "MIT", "up at http://h:1", "/run/p.sock", "/state"]) assert.ok(text.includes(want), `${want} in:\n${text}`);
+  // The machine's own document wins, and its report is what is copied.
+  assert.equal(aboutText(aboutDoc({ report: "R", version: "x" }, status)), "R");
+  assert.equal(aboutDoc(undefined, null).daemon.running, false);
+}
 console.log("ok");
 process.exit(0);

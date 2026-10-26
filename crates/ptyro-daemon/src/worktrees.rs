@@ -562,7 +562,7 @@ impl Daemon {
         progress("ready");
         // Started from a scratchpad item (NOTE1.3): the item says where it is being worked.
         if let Some(line) = spec.pad_item {
-            self.pad_started(line, &wt.qualified());
+            self.pad_started(&spec.pad_sel, line, &wt.qualified());
         }
         Ok(Reply::WorktreeCreated {
             info: wt,
@@ -659,6 +659,7 @@ impl Daemon {
                 script: Some(role),
                 quick: false,
                 pad: false,
+                pad_project: None,
             },
             replace: false,
             agent: None,
@@ -798,7 +799,7 @@ impl Daemon {
             self.forget_session(s.id);
         }
         self.drop_worktree(wt.clone());
-        self.pad_finished(&wt.qualified(), wt.pr.as_ref().map(|p| u64::from(p.number)));
+        self.pad_finished(&wt, wt.pr.as_ref().map(|p| u64::from(p.number)));
         notes.insert(0, format!("removed {}", wt.qualified()));
         Ok(Reply::Removed { notes })
     }

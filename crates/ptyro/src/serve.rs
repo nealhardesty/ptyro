@@ -70,6 +70,7 @@ const ASSETS: &[(&str, &str, &[u8])] = &[
     js!("grid"),
     js!("keys"),
     js!("kit"),
+    js!("machine"),
     js!("projects"),
     js!("qr"),
     js!("review"),
@@ -1031,10 +1032,11 @@ async fn api_pair(
     let out = tokio::time::timeout(Duration::from_secs(10), client.request(claim)).await;
     drop(login);
     match out {
-        Ok(Ok(ptyro_protocol::Reply::Paired { device, token })) => respond(
+        Ok(Ok(ptyro_protocol::Reply::Paired { device, token, replaced })) => respond(
             StatusCode::OK,
             "application/json",
-            serde_json::json!({ "token": token, "device": device }).to_string(),
+            serde_json::json!({ "token": token, "device": device, "replaced": replaced })
+                .to_string(),
         ),
         Ok(Err(e)) if e.code == ptyro_core::ErrorCode::PermissionDenied => {
             st.failed(ip);

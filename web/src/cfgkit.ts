@@ -19,9 +19,11 @@ export interface Setting {
   when: { key: string; any: string[] } | null;
   otherwise: string;
   example: string;
+  unit: string;
+  also: string;
 }
 export interface Section { id: string; title: string; blurb: string; scope: "user" | "project" }
-export interface Collection { path: string; section: string; noun: string; layout: "tables" | "array" | { map: Kind }; reserved: string[]; starter: [string, string][] }
+export interface Collection { path: string; section: string; noun: string; layout: "tables" | "array" | { map: Kind }; reserved: string[]; starter: [string, string][]; title: string; empty: string }
 export interface Schema { sections: Section[]; settings: Setting[]; collections: Collection[] }
 
 export interface Entry {
@@ -36,10 +38,26 @@ export interface Entry {
   line: number | null;
   member: [string, string] | null;
 }
+/// One key and what it runs, defaults included (`bindings` in the view; core's `Binding`).
+export interface Binding {
+  /// What `[keys]` calls it: `d`, `nav:j`, `global:M-1`.
+  name: string;
+  table: "prefix" | "nav" | "global";
+  when: string;
+  key: string;
+  action: string;
+  default: string | null;
+  standing: "default" | "yours" | "changed" | "unbound";
+  mine: boolean;
+  help: string;
+  /// The nine digits that show a session, as one row.
+  fixed: boolean;
+}
 export interface View {
   scope: "user" | "project";
   entries: Entry[];
   maps: { path: string; items: [string, string][] }[];
+  bindings: Binding[];
   members: { path: string; names: string[] }[];
   options: { source: string; options: [string, string][] }[];
   files: { origin: string; path: string; exists: boolean }[];
@@ -76,12 +94,15 @@ export function relevant(e: Entry, setting: Setting, entries: Entry[]): boolean 
   return typeof v === "string" && w.any.includes(v);
 }
 
-/// Words typed in the search box, against a setting's key, help and shown value. Every word has
+/// A number with what it counts after it: `30` → `30 columns`.
+export const withUnit = (shown: string, unit: string): string => (unit && /^\d+$/.test(shown) ? `${shown} ${unit}` : shown);
+
+/// Words typed in the search box, against a setting's key, help, other names and shown value. Every word has
 /// to be in it (any order); a hit in the key ranks above one in the help.
-export function score(query: string, key: string, help: string, shown: string): number {
+export function score(query: string, key: string, help: string, shown: string, also = ""): number {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) return 0;
-  const k = key.toLowerCase().replace(/[_.]/g, " "), hp = help.toLowerCase(), sv = shown.toLowerCase();
+  const k = key.toLowerCase().replace(/[_.]/g, " "), hp = `${help} ${also}`.toLowerCase(), sv = shown.toLowerCase();
   let total = 0;
   for (const w of words) {
     if (k.includes(w)) total += k.split(" ").includes(w) ? 4 : 3;
@@ -145,3 +166,52 @@ export function needed(path: string, kind: string): string[] {
 }
 
 export const article = (noun: string): string => (/^[aeiou]/i.test(noun) ? "an" : "a");
+
+// ── key bindings ────────────────────────────────────────────────────────────────────────────
+
+const KEY_MODS: Record<string, string> = { C: "C", Ctrl: "C", ctrl: "C", M: "M", A: "M", Alt: "M", alt: "M", Meta: "M", S: "S", Shift: "S", shift: "S", D: "D", Super: "D", super: "D", Cmd: "D" };
+const KEY_NAMES: Record<string, string> = { space: "Space", Return: "Enter", CR: "Enter", Escape: "Esc", BTab: "BackTab", BS: "Backspace", PgUp: "PageUp", PgDn: "PageDown", Ins: "Insert", Del: "Delete" };
+
+/// The key a `[keys]` name stands for, as the key map compares it (`Q`, `S-q` and `shift-q` are one
+/// key), with its table: `prefix:Q`. Mirrors core's `settings::slot`.
+export function slotOf(name: string): string {
+  let table = "prefix";
+  let spec = name.trim();
+  if (spec.startsWith("global:")) { table = "global"; spec = spec.slice(7); } else if (spec.startsWith("nav:")) { table = "nav"; spec = spec.slice(4); }
+  const mods = new Set<string>();
+  for (;;) {
+    const m = /^([A-Za-z]+)-(.+)$/.exec(spec);
+    if (!m || !KEY_MODS[m[1]!]) break;
+    mods.add(KEY_MODS[m[1]!]!);
+    spec = m[2]!;
+  }
+  spec = KEY_NAMES[spec] ?? spec;
+  if ([...spec].length === 1) { if (mods.has("S") && /[a-z]/.test(spec)) spec = spec.toUpperCase(); mods.delete("S"); }
+  if (spec === "BackTab") mods.delete("S");
+  return `${table}:${["C", "M", "D", "S"].filter((m) => mods.has(m)).map((m) => `${m}-`).join("")}${spec}`;
+}
+
+/// The `[keys]` name of `key` in `table`.
+export const nameIn = (table: string, key: string): string => (table === "prefix" ? key : `${table}:${key}`);
+
+/// The binding that runs something on the key `name` stands for, if any: what a new one would take
+/// the key from. A folded `1…9` row owns its digits.
+export function ownerOf(bindings: Binding[], name: string): Binding | undefined {
+  const at = slotOf(name);
+  const [table, key] = [at.slice(0, at.indexOf(":")), at.slice(at.indexOf(":") + 1)];
+  return bindings.find((b) => !b.fixed && slotOf(b.name) === at && b.action !== "none") ?? bindings.find((b) => b.fixed && b.table === table && /^[1-9]$/.test(key));
+}
+
+/// The first few words of what an action does: “Detach”, “Command palette”.
+export function gist(help: string): string {
+  const cut = help.search(/[:(.]/);
+  return (cut > 0 ? help.slice(0, cut) : help).trim();
+}
+
+/// The changes that move `from`'s binding onto the key `to`, swapping with `other` when it has one.
+export function moveChanges(from: Binding, to: string, other: Binding | undefined, swap: boolean): [string, string | null][] {
+  return [
+    [to, from.action],
+    swap && other && !other.fixed ? [from.name, other.action] : from.default !== null ? [from.name, "none"] : [from.name, null],
+  ];
+}

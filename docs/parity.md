@@ -52,18 +52,25 @@ its row: its TUI action and its web one, or `waived:` and why.
 
 ## Scratchpad
 
-The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every session (ROADMAP NOTE1).
+There are two pads: one for everywhere (`$PTYRO_SCRATCHPAD`) and one per project
+(`$PTYRO_PROJECT_SCRATCHPAD`, ROADMAP NOTE1.7). Every subcommand below takes `--global` and
+`--project[=NAME]`; without them it uses the project's pad inside a project, else the global one.
+The TUI follows the same rule from where you are (the selected row, the session you are looking
+at), and the web app from the session you last looked at. The flags' TUI and web equivalent is
+the switch: `scratchpad.cycle` (`C-q g`, also the palette and the row menu; `Ctrl-G` in the add
+box and the items list) and `scratchpad.pad` (the Notes page's tabs and the add box's `→ pad`
+button).
 
 | Command | In the TUI | On the web |
 |---|---|---|
-| `scratchpad edit` | `scratchpad.toggle` (`C-q ;`): the pad in your editor, in a drawer under the pane (or a popup, or a pane: `[scratchpad] mode`); again focuses it, then hides it (the editor keeps running). `--pane` is the same session | `scratchpad`: the Notes view, edited in the page; it saves as you type and merges with other writers |
-| `scratchpad path` | shown: its path heads the open-items list (`scratchpad.items`) and the history list | shown: its path heads the Notes view |
+| `scratchpad edit` | `scratchpad.toggle` (`C-q ;`): the pad in your editor, in a drawer under the pane (or a popup, or a pane: `[scratchpad] mode`); again focuses it, then hides it (the editor keeps running). `--pane` is the same session. `scratchpad.cycle` (`C-q g`): the other pad (`--global` / `--project`) | `scratchpad`: the Notes view, edited in the page; it saves as you type and merges with other writers. `scratchpad.pad`: a tab for the pad for everywhere and one per project (`--global` / `--project`) |
+| `scratchpad path` | shown: its path heads the open-items list (`scratchpad.items`), the history list and the popup, and the pad's title says which pad it is | shown: its path heads the Notes view, whose title and tabs say which pad it is |
 | `scratchpad cat` | `scratchpad.toggle`: you read it in the editor; `scratchpad.items` lists the open items | `scratchpad`: the Notes view, or its Preview |
-| `scratchpad add` | `scratchpad.add` (`C-q '`): one line, stamped with where you are, without opening the editor; `scratchpad.note` (the row menu, `a` in copy mode, `n` in the inbox) adds the selected row's task, a selection or an inbox entry | `scratchpad.add`: the quick-add box on the session list and in the Notes view; the share sheet adds to it; `scratchpad.note` on a session card |
-| `scratchpad todo` | `scratchpad.items` (`C-q "`): the open items, searchable | `scratchpad.items`: the open items beside the text |
-| `scratchpad done` | `scratchpad.items` (`x` ticks, or unticks) | `scratchpad.tick`: tap a checkbox in the Preview |
-| `scratchpad start` | `scratchpad.items` (`⏎` starts the item as a task in a new worktree) | `scratchpad.start`: Start on an open item opens the new-task box with its text |
-| `scratchpad log` | `scratchpad.history` | `scratchpad.history`: saved copies |
+| `scratchpad add` | `scratchpad.add` (`C-q '`): one line, stamped with where you are, without opening the editor, to the pad its title names (`Ctrl-G` switches); `scratchpad.note` (the row menu, `a` in copy mode, `n` in the inbox) adds the selected row's task, a selection or an inbox entry | `scratchpad.add`: the quick-add box on the session list and in the Notes view (its `→ pad` button, `scratchpad.pad`, says which pad and switches); the share sheet adds to it; `scratchpad.note` on a session card |
+| `scratchpad todo` | `scratchpad.items` (`C-q "`): the open items, searchable (`Ctrl-G`: the other pad's) | `scratchpad.items`: the open items beside the text |
+| `scratchpad done` | `scratchpad.items` (`Ctrl-X` ticks, or unticks) | `scratchpad.tick`: tap a checkbox in the Preview |
+| `scratchpad start` | `scratchpad.items` (`⏎` starts the item as a task in a new worktree; the item is tagged in the pad it came from) | `scratchpad.start`: Start on an open item opens the new-task box with its text |
+| `scratchpad log` | `scratchpad.history` (the saved copies of the pad you would get) | `scratchpad.history`: saved copies of the pad on the page |
 | `scratchpad restore` | `scratchpad.history` (`⏎` puts one back) | `scratchpad.history` |
 
 ## Attention and notifications
@@ -94,9 +101,9 @@ The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every sessio
 | `project pin` | `project.pin`: pick the profile | `project.pin`: a project's ⋯ menu: pick the profile |
 | `project unpin` | `project.unpin` | `project.pin`: a project's ⋯ menu → Unpin |
 | `wt new` | `worktree.new` (`N`), or `session.new` (`n`) → "+ new worktree" | `worktree.new`: ＋ Task on a project, or `session.new` with "in a new worktree" |
-| `wt ls` | shown: the sidebar lists every worktree under its project | `projects`: every worktree under its project, with its changes, PR and sessions |
+| `wt ls` | shown: the sidebar lists every worktree under its project, each with what is left to do: `↑2` unpushed, `not pushed ↑2` (no upstream yet), `● 3` uncommitted, a quiet `✓ pushed` when it is all done (UX2.2) | `projects`: every worktree under its project, with its changes, PR and sessions |
 | `wt rm` | `worktree.remove` (`x` on a worktree row) | `worktree.remove`: a worktree's ⋯ menu (offers to archive when it has unsaved work) |
-| `wt status` | shown: the sidebar's diffstat and dirty marker; `inspector` (`D`) for the details | `worktree.status`: a worktree's page, and its row on the Projects tab |
+| `wt status` | shown: the sidebar's and the pane header's `↑N`, `●`, `✓ pushed` and `+N −N` (while something is left); `inspector` (`D`) for the details | `worktree.status`: a worktree's page, and its row on the Projects tab |
 | `wt diff` | `inspector` (`D`), Diff tab; `a` picks what to diff against | `review.diff`: a worktree's Changes tab; `review.against` picks what to diff against |
 | `wt log` | `inspector` (`D`), Commits tab | `worktree.log`: a worktree's Commits tab |
 | `wt commit` | `inspector` (`D`): `C` commits, `A` asks the agent | `worktree.commit`: Commit… on the Changes tab (pick the files, write the message); `worktree.ask_commit` asks the agent |
@@ -237,7 +244,7 @@ The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every sessio
 |---|---|---|
 | `serve` | `remote.serve` (in a split) | waived: it serves the web app; the web app can't start the thing it runs on |
 | `web` | `remote.web` (is it up, where, what next), `remote.web_on`, `remote.web_off` (in a split); the health badge has its findings | `web.status`: More → Web app: up or not, the address (copy it), who runs it, the log (`web.logs`); `web.on` (asks how phones reach it) and `web.off` |
-| `pair` | `remote.pair`: the QR code, in a split, to scan | `pair`: this device's half (the link or QR code); `pair.device` makes a link and a QR code for another device (More → Devices → ＋) |
+| `pair` | `remote.pair`: the QR code, in a split, to scan (full scope by default, the warning shows above the code) | `pair`: this device's half (the link or QR code); `pair.device` makes a link and a QR code for another device (More → Devices → ＋; `full` preselected, the warning in the form and the sheet; a name that exists is replaced) |
 | `devices ls` | `devices.list` | `devices.list`: More → Devices |
 | `devices revoke` | `devices.revoke` | `devices.revoke`: a device's menu |
 | `devices push-test` | `devices.push_test` | `notifications`: turning them on sends this device a test |
@@ -250,17 +257,18 @@ The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every sessio
 | Command | In the TUI | On the web |
 |---|---|---|
 | `init` | `first.run`: the first run as a screen (it opens on its own the first time); terminal checks and shell extras are `doctor`'s (UX1.20) | `first.run`: More → Set up ptyro (the Sessions tab offers it with no project): your agents, accounts and repositories (the web app for a phone is `web.on`, More → Web app) |
+| `about` | `app.about` (`I`, the palette, the sidebar's `I`): version, the repository and issues as links (`⏎` opens, `y` copies), where config, data, logs and the socket live, the daemon and web app (and `U` to switch a daemon of another version), the tools found; `c` copies all of it for a bug report | `app.about`: More → About (and the version at the foot of More): the same facts, the addresses as links with Copy, "Copy all, for a bug report", and Upgrade the daemon when it is another version |
 | `doctor` | `health` (`M`): the badge's findings, each with its fix; `doctor` runs the full one in a split | `health`: More → Health: every check with its fix (log in, edit the config, restart…) |
 | `tour` | `help.tour` (the TUI steps aside for the tour, then comes back) | `help.tour`: More → Take the tour: a ptyro of its own on a free local port, opened in a new tab with a coach |
 | `config edit` | `config.edit` (validated when you save; changes apply live); `config.panel` has `e` for the file and `o` to open it at a setting | `config.edit`: More → Settings → Edit config.toml directly: an editor, checked as you save, applied at once; `settings.file` opens it at a setting |
 | `config check` | `config.edit`: saving checks it, and a bad config shows as an error | `config.check`: Check on the editor, without saving |
 | `config show` | `config.show` (in a split) | `config.show`: Show effective on the editor |
 | `config path` | `config.edit` (opens it) | `config.path`: the editor says where the file is |
-| `config list` | `config.panel` (`C`): every setting by section, with its value, default and where it comes from; `m` shows only what you changed; the palette lists each as `setting <key>` | `settings`: More → Settings: sections, with a count of what you changed; `settings.search` finds one by name, what it does or its value |
+| `config list` | `config.panel` (`C`): every setting by section, with its value, default and where it comes from (Key bindings lists every key, defaults too, grouped by when it works); `m` shows only what you changed; the palette lists each as `setting <key>` | `settings`: More → Settings: sections, with a count of what you changed; `settings.search` finds one by name, what it does or its value; Key bindings lists every key, defaults too, with its standing (default, yours, changed, unbound) |
 | `config get` | `config.panel`: the row's detail says its default, where it comes from and when a change applies | `settings`: each setting says its default, its file and line, and when a change applies |
-| `config set` | `config.panel`: ⏎ or space changes the setting by its kind (a switch, a list of choices, a number with `+`/`-`, a box that says why a value is wrong as you type); the daemon and every open screen pick it up | `settings.set`: a switch, a list, a box checked as you type; `settings.keys` presses keys instead of typing their names; `settings.target` saves a repository's to your file or the shared one |
-| `config unset` | `config.panel`: `r` puts a setting back to its default; `u` undoes the last change | `settings.reset`: Reset on a setting; `settings.undo`: Undo on the message after any change |
-| `config add` | `config.panel`: ⏎ on `+ Add …` in Agents, Themes, Key bindings (press the key), Notifications, Scratchpad and editors; Profiles run `profile.new` | `settings.add`: ＋ Add … under an agent, theme, editor, key binding, notification service, run script or prompt |
+| `config set` | `config.panel`: ⏎ or space changes the setting by its kind (a switch, a list of choices, a number with `+`/`-`, a box that says why a value is wrong as you type); the daemon and every open screen pick it up; on a key, ⏎ is a menu: change its key (press it; a taken key asks before the two swap), change what it runs (searchable), unbind (`d`, a default stays listed) | `settings.set`: a switch, a list, a box checked as you type; `settings.keys` presses keys instead of typing their names; `settings.keychange` presses a new key for a binding (a taken key asks before swapping), `settings.keyaction` picks what it runs, `settings.keyunbind` switches a key off; `settings.target` saves a repository's to your file or the shared one |
+| `config unset` | `config.panel`: `r` puts a setting back to its default; `u` undoes the last change; on a key it brings the default back | `settings.reset`: Reset on a setting; `settings.keyreset`: Reset on a key; `settings.undo`: Undo on the message after any change |
+| `config add` | `config.panel`: ⏎ on `+ Add …` in Agents, Themes, Key bindings (one under each group: press the key, then pick what it runs; a taken key asks first), Notifications, Scratchpad and editors; Profiles run `profile.new` | `settings.add`: ＋ Add … under an agent, theme, editor, key binding, notification service, run script or prompt |
 | `config rm` | `config.panel`: `d` on a member, asking first | `settings.remove`: Remove on a member's page, asking first |
 | `config rename` | `config.panel`: `R` on a member | `settings.rename`: Rename on a member's page |
 | `config schema` | waived: for programs that build forms of their own (the web app is one); people use the panel | waived: for programs that build forms of their own (the web app is one) |
@@ -269,7 +277,7 @@ The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every sessio
 | `daemon start` | waived: the TUI starts the daemon when it isn't running | waived: `serve` runs with the daemon; with no daemon there is no web app to ask |
 | `daemon stop` | `app.quit` (`C-d` after the prefix): asks, then stops every session and the daemon and exits | `daemon.stop`: More → Daemon → Stop (asks first; the app goes offline with it) |
 | `daemon restart` | `daemon.restart` (in a split; this TUI reconnects) | `daemon.restart`: More → Daemon → Restart (asks first; the app reconnects) |
-| `daemon status` | `daemon.status`; `remote.web` is the web app's line; the health badge has its warnings | `daemon.status`: More → Daemon; More → Web app (`web.status`) is the web app's line |
+| `daemon status` | `daemon.status` (its `machine` line shows the computer's name; the sidebar title and the terminal title carry it too); `remote.web` is the web app's line; the health badge has its warnings | `daemon.status`: More → Daemon (the machine is in the page title, the header and More); More → Web app (`web.status`) is the web app's line |
 | `daemon logs` | `daemon.logs` (followed, in a split) | `daemon.logs`: More → Daemon → Logs |
 | `daemon upgrade` | `daemon.upgrade`; a daemon running another binary is a health finding whose fix this is | `daemon.upgrade`: More → Daemon → Upgrade, or a health finding's fix |
 | `daemon install-service` | `daemon.service` | `daemon.service`: More → Daemon → Install the service |

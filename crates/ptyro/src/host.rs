@@ -163,6 +163,10 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
             Ok(json!({ "path": config_path, "text": text }))
         }
 
+        // ── about (UX2.1): the same document as `ptyro about --json` ──
+        "about" => serde_json::to_value(crate::about::collect(ctx).await)
+            .map_err(|e| Error::internal(e.to_string())),
+
         // ── health ──
         "doctor" => Ok(checks(
             &crate::doctor::collect(ctx, a["quick"].as_bool().unwrap_or(false), false).await,
@@ -390,6 +394,18 @@ fn settings_op(v: &Value) -> Result<ptyro_core::settings::Op, Error> {
         },
         Some("remove") => Op::Remove { path: s("path")?, name: s("name")? },
         Some("rename") => Op::Rename { path: s("path")?, from: s("from")?, to: s("to")? },
+        Some("bind") => Op::Bind {
+            changes: v["changes"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|c| {
+                            Some((c[0].as_str()?.to_owned(), c[1].as_str().map(str::to_owned)))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        },
         other => return Err(Error::invalid(format!("no such change: {other:?}"))),
     })
 }

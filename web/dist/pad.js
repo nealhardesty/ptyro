@@ -120,6 +120,10 @@ export function parseMarkdown(src) {
     endPara();
     return blocks;
 }
+/// The pad selector the protocol takes: "global", or `{ project: id }`.
+export const padSel = (id) => (id === "global" ? "global" : { project: id });
+/// Which pad a reply, event or queued op is about (an absent selector is the global pad).
+export const padId = (pad) => pad && typeof pad === "object" && typeof pad.project === "string" ? pad.project : "global";
 /// What waits for a connection, in order. Edits coalesce: the oldest base (the daemon merges
 /// from it) with the newest text. Storage failing never breaks the page: it only forgets.
 export class Queue {
@@ -145,10 +149,10 @@ export class Queue {
     }
     async push(op) {
         if (op.k === "put") {
-            const i = this.ops.findIndex((o) => o.k === "put");
+            const i = this.ops.findIndex((o) => o.k === "put" && (o.pad ?? "global") === (op.pad ?? "global"));
             if (i >= 0) {
                 const old = this.ops[i];
-                this.ops[i] = { k: "put", base: old.base, text: op.text };
+                this.ops[i] = { k: "put", base: old.base, text: op.text, ...(op.pad ? { pad: op.pad } : {}) };
                 await this.persist();
                 return;
             }

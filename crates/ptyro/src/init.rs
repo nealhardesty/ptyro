@@ -367,7 +367,7 @@ pub async fn run(ctx: &Ctx, yes: bool, dry_run: bool) -> Result<i32, Error> {
         && interactive
         && ask.yes_no("show the QR code for your phone now?", true)
     {
-        crate::remote::pair(ctx, "phone".into(), "control", None, false).await?;
+        crate::remote::pair(ctx, "phone".into(), None, None, false).await?;
     }
     if interactive
         && !yes

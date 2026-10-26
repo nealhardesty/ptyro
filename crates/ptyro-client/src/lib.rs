@@ -433,6 +433,7 @@ mod tests {
                 features: vec![],
                 started_ms: 0,
                 scope: None,
+                machine: None,
             };
             f.send(encode(&welcome, Encoding::MsgPack).unwrap()).await.unwrap();
             while let Some(Ok(bytes)) = f.next().await {
@@ -479,6 +480,7 @@ mod tests {
                 features: vec![],
                 started_ms: 0,
                 scope: None,
+                machine: None,
             };
             f.send(encode(&welcome, Encoding::MsgPack).unwrap()).await.unwrap();
             while f.next().await.is_some() {}
