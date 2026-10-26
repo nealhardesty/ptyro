@@ -310,14 +310,11 @@ a process that leaves all three looks like you at a plain shell, and is treated 
 
 ## Notes (the scratchpad)
 
-The web app has a **Notes** page (`✎` in the header). It has a tab for the pad for everywhere
-(`$PTYRO_SCRATCHPAD`) and one for each project that has a pad (`$PTYRO_PROJECT_SCRATCHPAD`); it
-opens on the project of the session you were last looking at, else on the one for everywhere, and
-its title always says which pad it is. The pad is a box that saves as you type and merges with anything written meanwhile (a CLI `add`, an editor);
+The web app has a **Notes** page (`✎` in the header): the scratchpad file (`$PTYRO_SCRATCHPAD`) in a
+box that saves as you type and merges with anything written meanwhile (a CLI `add`, an editor);
 a Preview in which tapping a checkbox ticks the item; the open items; a find box; and the saved
-copies, from which one can be put back. The session list has a quick-add box (a `→ myrepo` button on
-it says which pad it adds to and switches), and each session a `✎` button that fills it with the
-session's task and a link back. Writing needs a device paired
+copies, from which one can be put back. The session list has a quick-add box, and each session a
+`✎` button that fills it with the session's task and a link back. Writing needs a device paired
 with `--scope control`; a read-only device reads. The app is also a **share target**: share text
 or a link to ptyro from the phone's share sheet and it is added to the pad. While ptyro is
 unreachable, adds and edits wait in the browser (IndexedDB) and are sent in order on reconnect.

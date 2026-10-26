@@ -96,18 +96,10 @@ export function parseMarkdown(src: string): Block[] {
 
 // ── the queue ──────────────────────────────────────────────────────────────────────────────
 
-/// `pad`: which pad it is for, "global" (or none: older queues) or a project's id.
 export type Op =
-  | { k: "add"; text: string; note?: boolean; pad?: string }
+  | { k: "add"; text: string; note?: boolean }
   /// An edit: `text` was typed from the revision `base`.
-  | { k: "put"; base: string; text: string; pad?: string };
-
-/// The pad selector the protocol takes: "global", or `{ project: id }`.
-export const padSel = (id: string): "global" | { project: string } => (id === "global" ? "global" : { project: id });
-
-/// Which pad a reply, event or queued op is about (an absent selector is the global pad).
-export const padId = (pad: unknown): string =>
-  pad && typeof pad === "object" && typeof (pad as { project?: unknown }).project === "string" ? (pad as { project: string }).project : "global";
+  | { k: "put"; base: string; text: string };
 
 export interface Store { load(): Promise<string | null>; save(v: string | null): Promise<void> }
 
@@ -131,10 +123,10 @@ export class Queue {
 
   async push(op: Op): Promise<void> {
     if (op.k === "put") {
-      const i = this.ops.findIndex((o) => o.k === "put" && (o.pad ?? "global") === (op.pad ?? "global"));
+      const i = this.ops.findIndex((o) => o.k === "put");
       if (i >= 0) {
         const old = this.ops[i] as Extract<Op, { k: "put" }>;
-        this.ops[i] = { k: "put", base: old.base, text: op.text, ...(op.pad ? { pad: op.pad } : {}) };
+        this.ops[i] = { k: "put", base: old.base, text: op.text };
         await this.persist();
         return;
       }

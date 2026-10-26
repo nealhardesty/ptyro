@@ -199,9 +199,6 @@ pub struct SessionInfo {
     /// sidebar.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pad: bool,
-    /// With `pad`: the project (id) whose pad it edits (NOTE1.7); none: the global pad.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pad_project: Option<String>,
 }
 
 /// A session's summary (UX1.3): `text` was made after turn `turn`, at `at_ms`.
@@ -411,7 +408,4 @@ pub struct SpawnSpec {
     /// Make it the scratchpad's editor (NOTE1.1; `ScratchPane` reuses it).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pad: bool,
-    /// With `pad`: the project (id) whose pad it edits (NOTE1.7).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pad_project: Option<String>,
 }

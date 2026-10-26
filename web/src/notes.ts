@@ -5,8 +5,7 @@
 import { sheet } from "./kit.js";
 import { newTask } from "./sessions.js";
 import type { Session } from "./screen.js";
-import { data } from "./data.js";
-import { Queue, noteFor, padId, padSel, parseMarkdown, shareLine } from "./pad.js";
+import { Queue, noteFor, parseMarkdown, shareLine } from "./pad.js";
 import type { Block, Inline, Op } from "./pad.js";
 
 /// What notes.ts needs from the app around it.
@@ -88,7 +87,7 @@ async function idbGet(key: string): Promise<string | null> {
   });
 }
 
-interface PadDoc { pad?: unknown; name?: string; path: string; rev: string; text: string; open: number; done: number }
+interface PadDoc { path: string; rev: string; text: string; open: number; done: number }
 interface PadItem { line: number; done: boolean; text: string; section?: string; at?: string; whence?: string; by?: string; worktree?: string; pr?: number }
 interface PadSnap { rev: string; at_ms: number; bytes: number; lines: number }
 
@@ -118,22 +117,13 @@ const pad = {
   history: null as PadSnap[] | null,
   /// The saved copy the next tap restores.
   confirm: "",
-  /// Open items by pad: "global", or a project's id.
-  counts: {} as Record<string, number>,
-  /// The projects that have a pad, by id: their names.
-  names: {} as Record<string, string>,
-  /// The project you were last looking at (a session's), whose pad the Notes page opens on.
-  hint: null as string | null,
-  /// The pad chosen with the tabs ("global" or a project id); none: follow `hint`.
-  pick: null as string | null,
+  open: 0,
   queued: 0,
   quickText: "",
   focusQuick: false,
   shell: null as PadShell | null,
   listEl: null as HTMLElement | null,
   quickEl: null as HTMLElement | null,
-  /// The box's label for the pad it adds to; tapping it switches pads.
-  target: null as HTMLElement | null,
 };
 
 /// The queue lives in IndexedDB, else localStorage, else only until the page closes.
@@ -147,15 +137,6 @@ const queue = new Queue({
     try { if (v === null) localStorage.removeItem("ptyro.padq"); else localStorage.setItem("ptyro.padq", v); } catch { /* none */ }
   },
 });
-
-const GLOBAL = "global";
-/// The pad shown and added to: the one picked, else the project you are in, else the global one.
-const cur = (): string => pad.pick ?? pad.hint ?? GLOBAL;
-const projectName = (id: string): string => data.projects.get(id)?.slug ?? pad.names[id] ?? id;
-/// What a pad is called, everywhere it is named.
-const labelOf = (id: string): string => (id === GLOBAL ? "everywhere" : `${projectName(id)} (this project)`);
-const openOf = (id: string = cur()): number => pad.counts[id] ?? 0;
-const sel = (id: string = cur()) => padSel(id);
 
 const denied = (e: unknown): boolean => (e as { code?: string }).code === "permission_denied";
 
@@ -175,11 +156,8 @@ function setPadText(ta: HTMLTextAreaElement, text: string): void {
 }
 
 function applyDoc(doc: PadDoc): void {
-  const id = padId(doc.pad);
-  pad.counts[id] = doc.open;
-  // A reply for the pad you have just left.
-  if (id !== cur()) return;
   pad.doc = doc;
+  pad.open = doc.open;
   if (pad.shell && !pad.dirty && !pad.saving) {
     setPadText(pad.shell.ta, doc.text);
     pad.base = doc.rev;
@@ -190,12 +168,7 @@ function applyDoc(doc: PadDoc): void {
 
 async function padLoad(): Promise<void> {
   try {
-    const [r, all] = await Promise.all([ctx.request({ t: "scratch_get", pad: sel() }), ctx.request({ t: "scratch_pads" })]);
-    for (const p of all.pads) {
-      const id = padId(p.pad);
-      pad.counts[id] = p.open;
-      if (id !== GLOBAL) pad.names[id] = p.name;
-    }
+    const r = await ctx.request({ t: "scratch_get" });
     applyDoc(r.doc);
   } catch { /* reconnecting */ }
   if (onNotes()) void padItems();
@@ -204,7 +177,7 @@ async function padLoad(): Promise<void> {
 
 async function padItems(): Promise<void> {
   try {
-    const r = await ctx.request({ t: "scratch_todo", pad: sel(), all: false });
+    const r = await ctx.request({ t: "scratch_todo", all: false });
     pad.items = r.items;
     ctx.render();
   } catch { /* reconnecting */ }
@@ -229,22 +202,21 @@ async function padSave(): Promise<void> {
   if (pad.saving) { padSaveSoon(200); return; }
   const text = sh.ta.value;
   const base = pad.base;
-  const which = cur();
   pad.dirty = false;
   if (!ctx.connected()) {
-    await queue.push({ k: "put", base, text, pad: which });
+    await queue.push({ k: "put", base, text });
     queued();
     return;
   }
   pad.saving = true;
   try {
-    const r = await ctx.request({ t: "scratch_put", pad: sel(which), base, text });
+    const r = await ctx.request({ t: "scratch_put", base, text });
     pad.fails = 0;
     pad.failure = "";
     afterPut(r.doc, text, r.conflicts);
   } catch (e) {
     if (denied(e)) padRefused();
-    else if (!ctx.connected()) { await queue.push({ k: "put", base, text, pad: which }); queued(); }
+    else if (!ctx.connected()) { await queue.push({ k: "put", base, text }); queued(); }
     else {
       // The daemon said no: trying again at once would only repeat it. Back off, then stop and say so.
       pad.dirty = true;
@@ -263,9 +235,8 @@ async function padSave(): Promise<void> {
 /// merged text; if there was, the box keeps what it has and the next save merges again from the
 /// same ancestor, so neither side's lines are lost.
 function afterPut(doc: PadDoc, sent: string, conflicts: number): void {
-  pad.counts[padId(doc.pad)] = doc.open;
-  if (padId(doc.pad) !== cur()) return;
   pad.doc = doc;
+  pad.open = doc.open;
   pad.conflict = conflicts > 0;
   const ta = pad.shell?.ta;
   const typed = !!ta && ta.value !== sent;
@@ -281,12 +252,11 @@ async function padFlush(): Promise<void> {
   let dropped = 0;
   const n = await queue.flush(async (op: Op) => {
     try {
-      if (op.k === "add") await ctx.request({ t: "scratch_add", pad: sel(op.pad ?? GLOBAL), text: op.text, section: null, note: !!op.note, stamp: true, session: null, cwd: null });
+      if (op.k === "add") await ctx.request({ t: "scratch_add", text: op.text, section: null, note: !!op.note, stamp: true, session: null, cwd: null });
       else {
-        const r = await ctx.request({ t: "scratch_put", pad: sel(op.pad ?? GLOBAL), base: op.base, text: op.text });
+        const r = await ctx.request({ t: "scratch_put", base: op.base, text: op.text });
         const typed = !!pad.shell && pad.shell.ta.value !== op.text;
-        if (padId(r.doc.pad) !== cur()) pad.counts[padId(r.doc.pad)] = r.doc.open;
-        else if (!typed) afterPut(r.doc, op.text, r.conflicts);
+        if (!typed) afterPut(r.doc, op.text, r.conflicts);
         else { pad.doc = r.doc; pad.conflict = r.conflicts > 0; }
       }
     } catch (e) {
@@ -303,17 +273,16 @@ async function padFlush(): Promise<void> {
 /// A line for the pad (`ptyro scratchpad add`), stamped by the daemon; queued while offline.
 async function padAdd(text: string): Promise<boolean> {
   if (!text.trim()) return false;
-  const which = cur();
   if (!ctx.connected()) {
-    await queue.push({ k: "add", text, pad: which });
-    ctx.toast(`Queued for the scratchpad — ${labelOf(which)}: it will be added when ptyro is reachable`);
+    await queue.push({ k: "add", text });
+    ctx.toast("Queued: it will be added when ptyro is reachable");
     queued();
     return true;
   }
   try {
-    const r = await ctx.request({ t: "scratch_add", pad: sel(which), text, section: null, note: false, stamp: true, session: null, cwd: null });
+    const r = await ctx.request({ t: "scratch_add", text, section: null, note: false, stamp: true, session: null, cwd: null });
     applyDoc(r.doc);
-    ctx.toast(`Added to the scratchpad — ${labelOf(which)}`);
+    ctx.toast("Added to the scratchpad");
     if (onNotes()) void padItems();
     return true;
   } catch (e) {
@@ -328,11 +297,11 @@ async function padTick(line: number, done: boolean, expect = ""): Promise<void> 
     // The line number is from what this page last saw: if the pad changed since (an agent, another
     // device), the same number may be another item. Look first.
     if (expect) {
-      const r = await ctx.request({ t: "scratch_get", pad: sel() });
+      const r = await ctx.request({ t: "scratch_get" });
       const at = String(r.doc.text ?? "").split("\n")[line - 1] ?? "";
       if (!at.includes(expect.slice(0, 40))) { ctx.toast("The pad changed meanwhile: it is up to date now. Tap again."); await padLoad(); return; }
     }
-    await ctx.request({ t: "scratch_mark", pad: sel(), sel: String(line), mark: done ? { done: { pr: null } } : "open" });
+    await ctx.request({ t: "scratch_mark", sel: String(line), mark: done ? { done: { pr: null } } : "open" });
     await padLoad();
   } catch (e) {
     if (denied(e)) padRefused(); else ctx.toast((e as Error).message);
@@ -342,7 +311,7 @@ async function padTick(line: number, done: boolean, expect = ""): Promise<void> 
 async function padHistory(): Promise<void> {
   if (pad.history) { pad.history = null; pad.confirm = ""; ctx.render(); return; }
   try {
-    const r = await ctx.request({ t: "scratch_history", pad: sel() });
+    const r = await ctx.request({ t: "scratch_history" });
     pad.history = r.snapshots;
   } catch (e) { ctx.toast((e as Error).message); }
   ctx.render();
@@ -351,11 +320,11 @@ async function padHistory(): Promise<void> {
 async function padRestore(rev: string): Promise<void> {
   if (pad.confirm !== rev) { pad.confirm = rev; ctx.render(); return; }
   try {
-    const r = await ctx.request({ t: "scratch_restore", pad: sel(), rev });
+    const r = await ctx.request({ t: "scratch_restore", rev });
     pad.dirty = false;
     clearTimeout(pad.timer);
     pad.doc = r.doc;
-    pad.counts[cur()] = r.doc.open;
+    pad.open = r.doc.open;
     if (pad.shell) setPadText(pad.shell.ta, r.doc.text);
     pad.base = r.doc.rev;
     pad.history = null;
@@ -366,31 +335,6 @@ async function padRestore(rev: string): Promise<void> {
     if (denied(e)) padRefused(); else ctx.toast((e as Error).message);
   }
   ctx.render();
-}
-
-/// Show another pad (`scratchpad.pad`): what was typed in this one is saved first.
-async function padPick(id: string): Promise<void> {
-  if (id === cur()) return;
-  await padSave();
-  clearTimeout(pad.timer);
-  pad.pick = id;
-  pad.doc = null;
-  pad.base = "";
-  pad.dirty = false;
-  pad.conflict = false;
-  pad.items = [];
-  pad.history = null;
-  pad.confirm = "";
-  if (pad.shell) setPadText(pad.shell.ta, "");
-  ctx.render();
-  if (ctx.connected()) await padLoad();
-  else ctx.render();
-}
-
-/// The other pad: the project's ⇄ the one for everywhere.
-function padCycle(): void {
-  if (!pad.hint && cur() === GLOBAL) { ctx.toast("You are not in a project: the scratchpad is the one for everywhere"); return; }
-  void padPick(cur() === GLOBAL ? (pad.hint ?? GLOBAL) : GLOBAL);
 }
 
 /// Move the box's selection to the next (or previous) match of the find text.
@@ -442,15 +386,6 @@ function padTags(i: PadItem): string {
   return [i.section, i.by ? `by ${i.by}` : "", i.worktree ? `→ ${i.worktree}` : "", i.whence && !i.worktree ? i.whence : "", i.at].filter(Boolean).join(" · ");
 }
 
-/// "Everywhere | ptyro | …": one tab for the pad for everywhere and one for each project that has
-/// a pad (and the project you are in), with its open count.
-function padTabs(): HTMLElement {
-  const ids = [GLOBAL, ...new Set([...(pad.hint ? [pad.hint] : []), ...Object.keys(pad.names)])];
-  return h("div", { class: "pad-tabs", role: "tablist", title: ctx.tip("scratchpad.pad") },
-    ...ids.map((id) => h("button", { role: "tab", class: id === cur() ? "on" : "", "aria-selected": id === cur() ? "true" : "false", onclick: () => void padPick(id) },
-      id === GLOBAL ? "Everywhere" : projectName(id), openOf(id) ? h("b", { class: "open" }, String(openOf(id))) : null)));
-}
-
 function shellOf(): PadShell {
   if (pad.shell) return pad.shell;
   const ta = h("textarea", { class: "pad-text", spellcheck: "false", autocapitalize: "off", autocomplete: "off", title: ctx.tip("scratchpad"), "aria-label": "Scratchpad" });
@@ -471,16 +406,14 @@ function shellOf(): PadShell {
 
 function notesPage(): HTMLElement {
   const sh = shellOf();
-  aim();
   const find = sh.find;
   const items = pad.items;
   const history = pad.history;
   const parts: Node[] = [
-    ctx.header(`Notes — ${labelOf(cur())}`, true),
-    padTabs(),
+    ctx.header("Notes", true),
     h("div", { class: "pad-head" },
       h("span", { class: "pad-path", title: pad.doc?.path ?? "" }, pad.doc?.path ?? "…"),
-      h("span", {}, `${openOf()} open`),
+      h("span", {}, `${pad.open} open`),
       pad.queued ? h("span", { class: "tag", title: "waiting for ptyro to be reachable" }, `queued (${pad.queued})`) : null,
       pad.dirty || pad.saving ? h("span", { class: "muted" }, "saving…") : null),
     h("div", { class: "pad-bar" },
@@ -522,25 +455,14 @@ function notesPage(): HTMLElement {
 function quickAdd(): HTMLElement {
   if (pad.quickEl) return pad.quickEl;
   const input = h("input", { class: "quick-input", placeholder: "Add to the scratchpad…", enterkeyhint: "send", autocomplete: "off", title: ctx.tip("scratchpad.add") });
-  pad.target = h("button", { class: "pad-target", title: ctx.tip("scratchpad.pad"), onclick: padCycle });
   const go = async () => {
     const text = input.value;
     if (await padAdd(text)) { input.value = ""; pad.quickText = ""; }
   };
   input.addEventListener("input", () => { pad.quickText = input.value; });
   input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); void go(); } });
-  pad.quickEl = h("div", { class: "quick-add" }, pad.target, input, h("button", { onclick: () => void go(), title: ctx.tip("scratchpad.add") }, "Add"));
+  pad.quickEl = h("div", { class: "quick-add" }, input, h("button", { onclick: () => void go(), title: ctx.tip("scratchpad.add") }, "Add"));
   return pad.quickEl;
-}
-
-/// Say, on the add box, which pad a line goes to.
-function aim(): void {
-  const input = pad.quickEl?.querySelector<HTMLInputElement>("input");
-  if (pad.target) {
-    pad.target.textContent = `→ ${cur() === GLOBAL ? "everywhere" : projectName(cur())}`;
-    pad.target.hidden = !pad.hint && cur() === GLOBAL;
-  }
-  if (input) input.placeholder = `Add to the scratchpad — ${labelOf(cur())}…`;
 }
 
 /// `scratchpad.note`: the session's words and a link back, ready to send.
@@ -558,7 +480,7 @@ function takeShare(): void {
   history.replaceState(null, "", "/" + (location.hash || "#/"));
   // A link anyone can make: nothing goes into the pad (which agents read) without being seen first.
   if (line) {
-    const s = sheet(`Add this to the scratchpad — ${labelOf(cur())}?`, [h("pre", { class: "block" }, line)], [
+    const s = sheet("Add this to the scratchpad?", [h("pre", { class: "block" }, line)], [
       h("button", { onclick: () => s.close() }, "No"),
       h("button", { class: "primary", onclick: () => { s.close(); void padAdd(line); } }, "Add"),
     ]);
@@ -573,20 +495,19 @@ export const notesView = (): HTMLElement => notesPage();
 
 /// The header's ✎ link, with the open count.
 export function notesLink(): HTMLElement {
-  return h("a", { class: "inbox-link", href: "#/notes", title: `${ctx.tip("scratchpad")} (${labelOf(cur())})` }, "✎", openOf() ? h("b", { class: "open" }, String(openOf())) : null);
+  return h("a", { class: "inbox-link", href: "#/notes", title: ctx.tip("scratchpad") }, "✎", pad.open ? h("b", { class: "open" }, String(pad.open)) : null);
 }
 
 /// The quick-add box with its badge, for the top of the session list. One element, patched in
 /// place, so typing isn't interrupted by the renders around it.
 export function notesQuickAdd(): HTMLElement {
   const quick = quickAdd();
-  aim();
-  const input = quick.querySelector("input") as HTMLInputElement;
+  const input = quick.firstChild as HTMLInputElement;
   if (pad.quickText !== input.value) input.value = pad.quickText;
   pad.listEl ??= h("div", { class: "quick-wrap" });
   patch(pad.listEl, [
     quick,
-    openOf() || (cur() !== GLOBAL && openOf(GLOBAL)) ? h("a", { class: "badge", href: "#/notes", title: ctx.tip("scratchpad") }, `✎ ${openOf()} open`, cur() !== GLOBAL && openOf(GLOBAL) ? h("small", { class: "muted" }, ` +${openOf(GLOBAL)} everywhere`) : null) : null,
+    pad.open ? h("a", { class: "badge", href: "#/notes", title: ctx.tip("scratchpad") }, `✎ ${pad.open} open`) : null,
     pad.queued ? h("span", { class: "tag", title: "waiting for ptyro to be reachable" }, `queued (${pad.queued})`) : null,
   ].filter((n): n is HTMLElement => !!n));
   if (pad.focusQuick) { pad.focusQuick = false; requestAnimationFrame(() => input.focus()); }
@@ -606,29 +527,10 @@ export function notesNoteButton(s: Session, inCard: boolean): HTMLElement {
 export function notesConnected(): void { void padFlush().then(() => padLoad()); }
 
 /// A `scratch_changed` event.
-export function notesEvent(e: { rev: string; open: number; pad?: unknown }): void {
-  const id = padId(e.pad);
-  pad.counts[id] = e.open;
-  // Another pad changed: its count is all this page shows of it.
-  if (id !== cur()) { ctx.render(); return; }
+export function notesEvent(e: { rev: string; open: number }): void {
+  pad.open = e.open;
   if (pad.doc?.rev !== e.rev) void (pad.dirty ? padSave() : Promise.resolve()).then(() => padLoad());
   else ctx.render();
-}
-
-/// The project whose session is on screen (none: not in one), which the Notes page opens on and
-/// the add box adds to, until you pick a pad yourself.
-export function notesHint(project: string | null): void {
-  if (project === pad.hint) return;
-  const was = cur();
-  // What was typed goes to the pad it was typed in, before the box is for another one.
-  if (pad.dirty) void padSave();
-  pad.hint = project;
-  pad.pick = null;
-  if (cur() !== was) {
-    pad.doc = null; pad.items = []; pad.history = null; pad.base = ""; pad.dirty = false;
-    if (pad.shell) setPadText(pad.shell.ta, "");
-    if (ctx.connected()) void padLoad();
-  }
 }
 
 /// The page changed to `#/notes`.

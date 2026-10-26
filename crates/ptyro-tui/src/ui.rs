@@ -2,7 +2,6 @@
 
 use ptyro_core::SessionId;
 use ptyro_core::config::key_label;
-use ptyro_core::scratchpad::PadSel;
 use ptyro_core::session::{SessionInfo, SessionKind};
 use ptyro_core::status::AgentStatus;
 use ratatui::Frame;
@@ -150,33 +149,18 @@ fn draw_pad_popup(app: &App, f: &mut Frame<'_>, area: Rect, id: SessionId) {
     let t = &app.theme;
     let r = crate::pad::popup_rect(area);
     f.render_widget(Clear, r);
-    let sel = app.session(id).and_then(|s| s.pad_project.clone()).map(PadSel::Project);
-    let label = app.pad_label(sel.as_ref().unwrap_or(&PadSel::Global));
-    let mut path = match &sel {
-        Some(PadSel::Project(pid)) => app.projects.iter().find(|p| p.id == *pid).map_or_else(
-            || "<project>/.ptyro/scratchpad.md".into(),
-            |p| ptyro_core::scratchpad::project_pad_path(&p.root).display().to_string(),
-        ),
-        _ => app.config.scratchpad_path(&app.paths.data).display().to_string(),
-    };
-    let close = app.pad_key().map(|k| format!(" · {k} closes")).unwrap_or_default();
-    let other = app
-        .keymap
-        .key_for("scratchpad.cycle")
-        .map(|k| format!(" · {k} other pad"))
-        .unwrap_or_default();
-    // Which pad and how to leave or switch come first; the path gets what is left, and the end
-    // of a long path is the part that says which file.
-    let fixed = format!(" ✎ Scratchpad — {label}{close}{other} · ").chars().count();
-    let room = (r.width as usize).saturating_sub(fixed + 2).max(12);
+    let mut path = app.config.scratchpad_path(&app.paths.data).display().to_string();
+    // The end of a long path is the part that says which file.
+    let room = (r.width as usize).saturating_sub(34).max(12);
     if path.chars().count() > room {
         let tail: String =
             path.chars().rev().take(room - 1).collect::<Vec<_>>().into_iter().rev().collect();
         path = format!("…{tail}");
     }
+    let close = app.pad_key().map(|k| format!(" · {k} closes")).unwrap_or_default();
     let block = Block::default().borders(Borders::ALL).border_style(fg(app, t.border_focus)).title(
         Span::styled(
-            format!(" ✎ Scratchpad — {label}{close}{other} · {path} "),
+            format!(" ✎ Scratchpad · {path}{close} "),
             fg(app, t.accent).add_modifier(Modifier::BOLD),
         ),
     );
@@ -289,7 +273,6 @@ const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
             ("worktree.open", "editor"),
             ("shell.here", "shell"),
             ("scratchpad.toggle", "scratchpad"),
-            ("scratchpad.cycle", "other pad"),
         ],
     ),
     (
@@ -1223,29 +1206,13 @@ fn draw_header(
             } else {
                 base.add_modifier(Modifier::BOLD)
             };
-            if s.pad {
-                // Which pad it is, always (NOTE1.7).
-                let sel = s.pad_project.clone().map_or(PadSel::Global, PadSel::Project);
-                left.push(Span::styled(format!("Scratchpad — {}", app.pad_label(&sel)), name));
-                // (Where there is room: which pad it is matters more than how to switch.)
-                if r.width >= 90
-                    && let Some(k) = app.keymap.key_for("scratchpad.cycle")
-                {
-                    right.push(Span::styled(
-                        format!(" {k} other pad "),
-                        base.fg(app.depth.fit(t.dim)),
-                    ));
-                }
-            } else {
-                left.push(Span::styled(s.name.clone(), name));
-                left.push(Span::styled(format!(" · {}", what(s)), base));
-            }
-            if let Some(b) = profile_badge(app, &s.profile).filter(|_| !s.pad) {
+            left.push(Span::styled(s.name.clone(), name));
+            left.push(Span::styled(format!(" · {}", what(s)), base));
+            if let Some(b) = profile_badge(app, &s.profile) {
                 left.push(Span::styled(" · ", base));
                 left.push(Span { style: base.patch(b.style), ..b });
             }
-            if let Some(w) = s.worktree.as_deref().filter(|_| !s.pad).and_then(|w| app.worktree(w))
-            {
+            if let Some(w) = s.worktree.as_deref().and_then(|w| app.worktree(w)) {
                 let branch = w.branch.clone().unwrap_or_else(|| "(detached)".into());
                 left.push(Span::styled(format!(" · {branch}"), base));
                 for d in diffstat(app, w) {
@@ -1432,22 +1399,11 @@ fn draw_status(app: &App, f: &mut Frame<'_>, r: Rect) {
             bar.fg(app.depth.fit(t.blocked)).add_modifier(Modifier::BOLD),
         ));
     }
-    // The open items: this project's pad, then the one for everywhere dimmed (`✎ 3 +7`).
-    let here = app.where_am_i().0.and_then(|p| app.pad_counts.get(&p).copied());
-    if here.unwrap_or(0) > 0 || app.pad_open > 0 {
-        let accent = bar.fg(app.depth.fit(t.accent)).add_modifier(Modifier::BOLD);
-        match here {
-            Some(n) => {
-                right.push(Span::styled(format!("✎ {n} "), accent));
-                if app.pad_open > 0 {
-                    right.push(Span::styled(
-                        format!("+{} ", app.pad_open),
-                        bar.fg(app.depth.fit(t.dim)),
-                    ));
-                }
-            }
-            None => right.push(Span::styled(format!("✎ {} ", app.pad_open), accent)),
-        }
+    if app.pad_open > 0 {
+        right.push(Span::styled(
+            format!("✎ {} ", app.pad_open),
+            bar.fg(app.depth.fit(t.accent)).add_modifier(Modifier::BOLD),
+        ));
     }
     let unread = app.unread();
     if unread > 0 {

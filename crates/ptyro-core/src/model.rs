@@ -409,9 +409,6 @@ pub struct WorktreeSpec {
     /// worktree, and ticked once it is merged or cleaned up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pad_item: Option<u32>,
-    /// Which pad that item is in (NOTE1.7).
-    #[serde(default, skip_serializing_if = "crate::scratchpad::PadSel::is_global")]
-    pub pad_sel: crate::scratchpad::PadSel,
     /// The client's SSH agent and display variables.
     #[serde(default)]
     pub env: BTreeMap<String, String>,

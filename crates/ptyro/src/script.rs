@@ -666,7 +666,6 @@ mod tests {
             window_title: None,
             quick: false,
             pad: false,
-            pad_project: None,
         };
         let mut r = StatusRecord::new(status, Confidence::High, SignalSource::Hook);
         r.since_ms = since;

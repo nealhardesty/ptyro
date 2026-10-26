@@ -36,7 +36,7 @@ Conventions:
 | **UX1** | Out of the box | From `cd repo && ptyro` to a shipped, cleaned-up worktree by keys alone; sidebar rows that say what's going on (done) |
 | **WEB1** | Web parity | The web client does what the CLI and TUI do, and the parity check covers it (done) |
 | **CFG1** | One configuration panel | Every option editable in the TUI, on the web and with `ptyro config set`, from one schema; new options must join it (done) |
-| **NOTE1** | The scratchpad | Persistent notepad files, one for everywhere and one per project: a key opens the one you are in, `PTYRO_SCRATCHPAD` / `PTYRO_PROJECT_SCRATCHPAD` find them, items become tasks, the web edits them (done) |
+| **NOTE1** | The scratchpad | One persistent notepad file for everywhere: a key opens it, `PTYRO_SCRATCHPAD` finds it, items become tasks, the web edits it (done) |
 | **UX2** | Found in use | Small things the owner's own scratchpad caught while using ptyro: an About screen, a sidebar that shows a pushed worktree as done (done) |
 | **H2** | Second hardening review | A review of the whole codebase by nine independent readers: ~150 findings verified and fixed; locks, the release pipeline and uninstall done; the rest listed here |
 | **Backlog** | Later / maybe | Editor, tasks, jj, libghostty, relay, … |
@@ -1962,26 +1962,20 @@ can find (owner 2026-10-24, R-UX-32). The CLI, the TUI and the web are all first
   `keep`, `tick_on_finish`) in the schema and the panel (CFG1), a README section, `docs/keys.md`,
   `docs/config.md`, `docs/scripting.md` (the variable and `add` for hooks and scripts), the
   parity rows, a `make` target if any fixture needs one, and SPEC §5.1 (the variable) and §16 updated.
-- [x] **NOTE1.7 A scratchpad per project** — M. *Promoted 2026-10-26 (R-UX-33; the owner asked for a pad per
-  project), built the same day.* A per-project pad beside the global one: `<repo>/.ptyro/scratchpad.md`
-  in the project's main checkout (every worktree shares it), git-excluded without touching
-  `.gitignore`, with `PTYRO_PROJECT_SCRATCHPAD` next to `PTYRO_SCRATCHPAD`. **Default: follow where
-  I am**: in a project (a session or worktree of it, or a CLI run whose directory is in one) every
-  command and key uses the project's pad; elsewhere, the global one. `--global` and `--project`
-  force one on every `ptyro scratchpad` subcommand; a cycle key (`C-q g`) and the Notes page's
-  tabs switch. Every command, title and list says which pad it is. Worktree-level pads are out of
-  scope.
-  *Done when:* from a worktree `ptyro scratchpad add` lands in the project's pad and says so,
-  `--global` in the other; the pad's title, the status bar and the web tabs name the pad; an item
-  started from the project's pad is tagged and ticked there; an old client that names no pad
-  gets the global one.
+- [-] **NOTE1.7 A scratchpad per project** — M. *Promoted 2026-10-26 (R-UX-33; the owner asked for a pad
+  per project), built the same day, and dropped the same day: [-] dropped 2026-10-26: the owner
+  found several pads too confusing; one global pad; the code was removed in v0.0.10.* It had a
+  pad per project at `<repo>/.ptyro/scratchpad.md`, git-excluded, found by `PTYRO_PROJECT_SCRATCHPAD`,
+  picked by where you were, with `--global` / `--project`, a switch key (`C-q g`) and web tabs.
+  Shipped in v0.0.8 and v0.0.9, gone in v0.0.10 (protocol 1.18 stays the number; see SPEC §6.4 for
+  how the wire stays compatible). Pad files that exist in repositories are left alone.
 
 **Done when:** you press one key anywhere in ptyro and are typing in your pad; from a shell
 inside a worktree `echo "login times out on safari" | ptyro scratchpad add -` lands as a stamped
 item; `⏎` on it starts an agent on it; the PR merging ticks it; and on your phone you share a
 link into it and see it in the desktop pane.
 
-**Done (2026-10-24): NOTE1.0–NOTE1.6; (2026-10-26) NOTE1.7.** SPEC §13.6 has the design; the
+**Done (2026-10-24): NOTE1.0–NOTE1.6.** SPEC §13.6 has the design; the
 CLI is `ptyro scratchpad` (`pad`), `make scratchpad-demo` walks through it, and `docs/parity.md`
 has its rows. How it differs from the plan above:
 - **Keys:** `C-q ;` toggles the pad, `C-q '` adds a line, `C-q "` lists the open items (`+` and `=`
@@ -2001,29 +1995,14 @@ has its rows. How it differs from the plan above:
 - **Also:** `ptyro doctor` checks the file and the editor; a lead's `ptyro mcp` has
   `scratchpad_read`, `scratchpad_todo` and `scratchpad_add`.
 
-**Done (2026-10-26): NOTE1.7, a scratchpad per project.** Protocol 1.18; SPEC §13.6 has the design,
-`docs/keys.md`, `docs/scripting.md` and the README the user side. How it differs from the plan:
-- **Exclude line:** `/.ptyro/scratchpad.*` in the repository's `.git/info/exclude`, not `.ptyro/`:
-  `.ptyro/` already holds committed things in some repositories (`recipes/`, `changesets/`), and
-  excluding the directory would hide new ones from `git status`. It is written once, when the pad
-  is first made (`ptyro_git::Git::exclude`, idempotent, never the tracked `.gitignore`, never
-  fails the pad). `ptyro doctor` warns when an existing project pad isn't ignored.
-- **Key:** `C-q g` cycles global ⇄ project (the prefix table's `g` was free; the sidebar's `g`
-  is "top" and unchanged); `Ctrl-G` does it inside the add box and the items list. The palette and
-  the session row menu have `scratchpad.cycle`. There are two pads to cycle between, not three:
-  worktree pads are out of scope.
-- **Behaviour change for scripts:** `ptyro scratchpad add` (and every other subcommand) run inside a
-  worktree now uses the project's pad, not the global one; it prints which. `--global` keeps the old
-  target and `$PTYRO_SCRATCHPAD` still names the global file.
-- **Who is "in a project":** a project the daemon has registered. A git repository ptyro has never
-  seen is "not in a project": it gets no `.ptyro/` directory from the scratchpad.
-- **Web:** the Notes page has a tab per pad (the global one, the project of the session last
-  looked at, and every project that has a pad); the add box has a `→ pad` button. The status bar
-  shows `✎ 3 +7` (project, then global, dimmed).
-- **Not done:** the web page and the TUI were type-checked and unit-tested but not looked at on a
-  real screen or phone; a project pad is not in `ptyro backup`, and `ptyro uninstall` leaves it in
-  the repository; an older TUI attached to a newer daemon counts a project pad's items as the global
-  pad's until it asks again.
+**Dropped (2026-10-26): NOTE1.7, a scratchpad per project.** Built, released in v0.0.8 and v0.0.9,
+then removed in v0.0.10 at the owner's word: "multiple scratchpads is too confusing, let's go back
+to the global scratchpad only". What it taught: a second place for notes made "where did I put
+that" harder than it solved, and a command whose target depends on the directory (`ptyro
+scratchpad add` from a worktree) surprises scripts. Left behind on purpose: a project pad's files
+(`<repo>/.ptyro/scratchpad.md` and `.ptyro/scratchpad.history/`) and the `/.ptyro/scratchpad.*`
+line in a repository's `.git/info/exclude`; nothing reads them. The README says how to move the
+lines into the one pad.
 
 ---
 

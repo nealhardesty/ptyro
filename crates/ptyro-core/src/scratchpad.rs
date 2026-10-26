@@ -1,6 +1,5 @@
-//! The scratchpad (NOTE1, SPEC §13.6): persistent notes files for ideas and bugs, plain
-//! Markdown: one for everywhere (`$PTYRO_SCRATCHPAD`) and one per project
-//! (`$PTYRO_PROJECT_SCRATCHPAD`, NOTE1.7). This is its file logic, with no daemon in it: the
+//! The scratchpad (NOTE1, SPEC §13.6): one persistent notes file for ideas and bugs, plain
+//! Markdown, found by `$PTYRO_SCRATCHPAD`. This is its file logic, with no daemon in it: the
 //! file and its history, the `- [ ]` items, and the three-way merge that lets the web, the CLI
 //! and an editor all write it without anyone's words being lost.
 
@@ -10,64 +9,15 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// What a new global pad starts with.
+/// What a new pad starts with.
 pub const HEADER: &str = "\
-# Scratchpad — everywhere
+# Scratchpad
 
 Ideas, bugs, things to try. Plain Markdown: `- [ ]` lines are items you can start as tasks
 (`ptyro scratchpad start`, or ⏎ on one in the picker). Add from anywhere:
-`ptyro scratchpad add \"…\"`; this file is `$PTYRO_SCRATCHPAD`. Each project has a pad of its
-own too (`ptyro scratchpad --project`); inside a project that one is the default.
+`ptyro scratchpad add \"…\"`; this file is `$PTYRO_SCRATCHPAD`.
 
 ";
-
-/// What a new project pad starts with.
-pub fn project_header(name: &str) -> String {
-    format!(
-        "\
-# Scratchpad — {name} (this project)
-
-Ideas, bugs, things to try for {name}. Plain Markdown: `- [ ]` lines are items you can start as
-tasks (`ptyro scratchpad start`, or ⏎ on one in the picker). Every worktree of the project shares
-this file (`$PTYRO_PROJECT_SCRATCHPAD`); git ignores it (`.git/info/exclude`), so it stays yours.
-`ptyro scratchpad add \"…\"` inside the project adds here; `--global` adds to the pad for everywhere.
-
-"
-    )
-}
-
-/// The project pad of the checkout at `root`: `<root>/.ptyro/scratchpad.md`.
-pub fn project_pad_path(root: &Path) -> PathBuf {
-    root.join(".ptyro").join("scratchpad.md")
-}
-
-/// Its saved copies, beside it.
-pub fn project_history_dir(root: &Path) -> PathBuf {
-    root.join(".ptyro").join("scratchpad.history")
-}
-
-/// The line for the repository's `.git/info/exclude`: the pad, its saved copies and the temp
-/// files of a write, and nothing else in `.ptyro/` (recipes and change sets there are committed).
-pub const EXCLUDE_LINE: &str = "/.ptyro/scratchpad.*";
-
-/// Which pad: the one for everywhere, or a project's. Requests default to `Global`, so a client
-/// that predates project pads works as it did.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PadSel {
-    #[default]
-    Global,
-    /// A project, by id, slug or a path inside it (replies and events carry its id).
-    Project(String),
-    /// The pad of the project this directory is in, else the global one (requests only).
-    Near(PathBuf),
-}
-
-impl PadSel {
-    pub fn is_global(&self) -> bool {
-        *self == Self::Global
-    }
-}
 
 /// A revision: the first 12 hex digits of the text's SHA-256.
 pub fn rev(text: &str) -> String {
@@ -179,8 +129,6 @@ pub struct Pad {
     pub path: PathBuf,
     history: PathBuf,
     keep_days: u64,
-    /// What a new file starts with.
-    header: String,
 }
 
 /// A change seen from outside (an editor that saves as you type) isn't saved again within this
@@ -194,14 +142,7 @@ const HOUR_MS: u64 = 3_600_000;
 
 impl Pad {
     pub fn new(path: PathBuf, history: PathBuf, keep_days: u64) -> Self {
-        Self { path, history, keep_days, header: HEADER.to_owned() }
-    }
-
-    /// The pad of the project `name` whose main checkout is `root`.
-    pub fn project(root: &Path, name: &str, keep_days: u64) -> Self {
-        let mut p = Self::new(project_pad_path(root), project_history_dir(root), keep_days);
-        p.header = project_header(name);
-        p
+        Self { path, history, keep_days }
     }
 
     /// The file itself, if it is a symlink into a synced folder: writes go through it.
@@ -215,7 +156,7 @@ impl Pad {
             std::fs::create_dir_all(dir)?;
         }
         match std::fs::OpenOptions::new().write(true).create_new(true).open(&self.path) {
-            Ok(mut f) => f.write_all(self.header.as_bytes()),
+            Ok(mut f) => f.write_all(HEADER.as_bytes()),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
             Err(e) => Err(e),
         }
@@ -718,8 +659,8 @@ pub fn items(text: &str) -> Vec<Item> {
     let mut out = Vec::new();
     for (i, l) in text.lines().enumerate() {
         if let Some((_, h)) = heading(l) {
-            // The pad's own title (`# Scratchpad — ptyro (this project)`) isn't a section.
-            if i > 0 || !h.starts_with("Scratchpad") {
+            // A title written by 0.0.8 (`# Scratchpad — everywhere`) isn't a section.
+            if i > 0 || !h.starts_with("Scratchpad —") {
                 section = Some(h.to_owned());
             }
             continue;
@@ -882,6 +823,17 @@ mod tests {
         let t = p.read().unwrap();
         assert!(t.starts_with("# Scratchpad"));
         assert_eq!(p.read().unwrap(), t, "reading doesn't change it");
+    }
+
+    #[test]
+    fn a_pad_titled_everywhere_by_0_0_8_still_reads_as_one_pad() {
+        // Files written by 0.0.8/0.0.9 start `# Scratchpad — everywhere`; that title is no section.
+        let old = "# Scratchpad — everywhere\n\nintro\n\n- [ ] first\n";
+        let it = items(old);
+        assert_eq!(it.len(), 1);
+        assert_eq!(it[0].section, None);
+        let plain = items("# Scratchpad\n\n- [ ] first\n");
+        assert_eq!(plain[0].section.as_deref(), Some("Scratchpad"), "as before 0.0.8");
     }
 
     #[test]
@@ -1175,59 +1127,5 @@ mod hardening {
         p.write("# a\n").unwrap();
         p.write("# b\n").unwrap();
         assert_eq!(p.list_files().len(), 2, "both copies kept: nothing pruned as 'too old'");
-    }
-}
-
-#[cfg(test)]
-mod project_pads {
-    use super::*;
-
-    #[test]
-    fn a_project_pad_lives_in_the_main_checkout_with_its_history_beside_it() {
-        let root = Path::new("/src/ptyro");
-        assert_eq!(project_pad_path(root), Path::new("/src/ptyro/.ptyro/scratchpad.md"));
-        assert_eq!(project_history_dir(root), Path::new("/src/ptyro/.ptyro/scratchpad.history"));
-        // What git is told to ignore is the pad, its copies and the temp files of a write,
-        // not the rest of `.ptyro/` (recipes and change sets are committed there).
-        assert_eq!(EXCLUDE_LINE, "/.ptyro/scratchpad.*");
-    }
-
-    #[test]
-    fn a_new_project_pad_says_which_pad_it_is_and_that_git_ignores_it() {
-        let d = tempfile::tempdir().unwrap();
-        let p = Pad::project(d.path(), "ptyro", 30);
-        let text = p.read().unwrap();
-        assert!(text.starts_with("# Scratchpad — ptyro (this project)"), "{text}");
-        assert!(text.contains("git ignores it") && text.contains("$PTYRO_PROJECT_SCRATCHPAD"));
-        assert!(d.path().join(".ptyro/scratchpad.md").exists(), "the directory is made");
-        // History is beside it, with the same keep rules.
-        p.write("# changed\n").unwrap();
-        assert_eq!(p.history().len(), 1);
-        assert!(d.path().join(".ptyro/scratchpad.history").is_dir());
-        // The global pad's header names it too, and is told apart.
-        assert!(HEADER.starts_with("# Scratchpad — everywhere"));
-        assert!(items(&text).is_empty(), "a header holds no items");
-    }
-
-    #[test]
-    fn an_existing_dot_ptyro_directory_is_left_alone() {
-        let d = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(d.path().join(".ptyro/recipes")).unwrap();
-        std::fs::write(d.path().join(".ptyro/recipes/r.toml"), "x").unwrap();
-        Pad::project(d.path(), "p", 30).ensure().unwrap();
-        assert_eq!(std::fs::read_to_string(d.path().join(".ptyro/recipes/r.toml")).unwrap(), "x");
-    }
-
-    #[test]
-    fn the_selector_is_global_unless_it_says_otherwise() {
-        assert_eq!(PadSel::default(), PadSel::Global);
-        for (sel, json) in [
-            (PadSel::Global, r#""global""#),
-            (PadSel::Project("p1".into()), r#"{"project":"p1"}"#),
-            (PadSel::Near("/a/b".into()), r#"{"near":"/a/b"}"#),
-        ] {
-            assert_eq!(serde_json::to_string(&sel).unwrap(), json);
-            assert_eq!(serde_json::from_str::<PadSel>(json).unwrap(), sel);
-        }
     }
 }
