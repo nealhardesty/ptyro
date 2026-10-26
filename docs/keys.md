@@ -58,7 +58,9 @@ action by name.
 | `Tab` | move focus between the sidebar and the pane |
 | `\` | show or hide the sidebar |
 | `u` | do what the last message offers: undo it, or fix what it reports |
-| `C-t` or `!` | the quick terminal: this worktree's shell in a drawer below the pane. Again focuses it, and once more hides it (the shell keeps running) |
+| `!` | the quick terminal, the way that fits: this worktree's shell in a drawer below a pane of its project when one is open, else in a panel of its own (it fills the pane you are in). Again focuses it, and once more hides it, or goes back to what the panel replaced (the shell keeps running). `[ui] shell_style` makes `!` always one or the other |
+| `C-t` | the quick terminal in a drawer below a pane of its project (VS Code's toggle). When none of the project is open it is a panel of its own, and a note says so |
+| `T` | the quick terminal in a panel of its own, replacing the pane you are in. Again goes back |
 | `;` | the scratchpad: your notes file in the editor, shown as `[scratchpad] mode` says (below): the project's pad when you are in a project, else the one for everywhere. Again focuses it, and once more hides it (the editor keeps running) |
 | `'` | add a line to the scratchpad without opening it (stamped with the time and where you are; the box says which pad, `Ctrl-G` switches) |
 | `"` | the scratchpad's open items: type to search, `⏎` starts one as a task, `Ctrl-X` ticks it, `Ctrl-A` shows ticked ones, `Ctrl-G` shows the other pad's, `Ctrl-E` opens the editor |
@@ -107,7 +109,7 @@ Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.
 | `u` / `P` | do what the last message offers / add a project |
 | `.` | everything you can do with this row (a session, worktree or project), with the keys |
 | `;` / `'` / `g` | the scratchpad / add a line to it / its other pad |
-| `F` / `!` | finish this worktree (commit, then a PR or integrate) / its quick terminal (`⏎` on its `›_ shell` line shows or hides it too) |
+| `F` / `!` / `T` | finish this worktree (commit, then a PR or integrate) / its quick terminal / its quick terminal in a panel of its own (`⏎` on its `›_ shell` line shows or hides it too) |
 | `H` / `M` / `I` | home / mend what the health badge found / about ptyro |
 | `A` | adopt the Claude started by hand in this shell: a managed session, same conversation |
 | `w` `o` `r` | workspace / editor / run script |

@@ -390,7 +390,7 @@ pub enum Pending {
     /// A workspace was made: switch to it once the daemon has agreed.
     WorkspaceMade(String),
     /// A quick terminal to show in the drawer (UX1.25).
-    Quick,
+    Quick(ptyro_core::config::ShellStyle),
     /// The scratchpad's editor to show (NOTE1.1).
     Pad,
     /// A line was added to the scratchpad.
@@ -1738,10 +1738,10 @@ impl App {
                 self.upsert(info);
                 self.show(id, split);
             }
-            (Pending::Quick, Ok(Reply::Session { info })) => {
+            (Pending::Quick(style), Ok(Reply::Session { info })) => {
                 let id = info.id;
                 self.upsert(info);
-                self.open_drawer(id);
+                self.show_quick(style, id);
             }
             (Pending::Spawned { split, spec }, Err(e))
                 if e.code == ErrorCode::NeedsConfirmation =>
@@ -2680,6 +2680,18 @@ impl App {
                 };
                 self.toggle_quick(want, None, None);
             }
+            "shell.drawer" | "shell.pane" => {
+                let want = match (self.focus, self.selected_row()) {
+                    (Focus::Sidebar, Some(Row::Quick(id))) => Some(id),
+                    _ => None,
+                };
+                let style = if cmd.action == "shell.pane" {
+                    ptyro_core::config::ShellStyle::Pane
+                } else {
+                    ptyro_core::config::ShellStyle::Drawer
+                };
+                self.toggle_quick_as(style, want, None, None);
+            }
             "scratchpad.toggle" => self.toggle_pad(),
             "scratchpad.cycle" => self.cycle_pad(),
             "scratchpad.add" => self.open_pad_add(String::new(), None),
@@ -3395,7 +3407,7 @@ impl App {
                 if self.focus == Focus::Pane {
                     return self.quick_key().map(|k| format!("{k} hide it"));
                 }
-                let open = self.drawer_session() == Some(id);
+                let open = self.drawer_session() == Some(id) || self.quick_panel(id).is_some();
                 Some(format!("⏎ {} it", if open { "hide" } else { "show" }))
             }
             Row::Set(_) | Row::Group(_) => None,
@@ -3692,7 +3704,8 @@ impl App {
             }
             Row::Worktree(w) => {
                 let root = self.worktree(w).is_some_and(|w| w.is_root);
-                let mut v = vec!["session.new", "shell.here", "inspector", "worktree.finish"];
+                let mut v =
+                    vec!["session.new", "shell.here", "shell.pane", "inspector", "worktree.finish"];
                 v.extend(["worktree.open", "script.run", "script.pick", "worktree.retitle"]);
                 if !root {
                     v.extend(["worktree.archive", "worktree.remove"]);
@@ -3703,6 +3716,7 @@ impl App {
                 "session.new",
                 "worktree.new",
                 "shell.here",
+                "shell.pane",
                 "project.trust",
                 "script.pick",
                 "worktree.open",
@@ -3710,7 +3724,7 @@ impl App {
             // A quick terminal (UX1.25): show or hide it, and what a shell offers.
             Row::Quick(id) => {
                 let Some(s) = self.session(*id) else { return Vec::new() };
-                let mut v = vec!["shell.here"];
+                let mut v = vec!["shell.here", "shell.pane"];
                 if s.status.as_ref().is_some_and(|r| r.status == AgentStatus::Blocked) {
                     v.push("peek");
                 }
@@ -7679,7 +7693,10 @@ mod tests {
     fn answered(app: &mut App, shell: &SessionInfo) {
         app.run(&Command { action: "shell.here", arg: None });
         assert!(app.drawer.is_none(), "nothing to show until the daemon answers");
-        app.on_reply(AppMsg::Reply(Pending::Quick, Ok(Reply::Session { info: shell.clone() })));
+        app.on_reply(AppMsg::Reply(
+            Pending::Quick(Default::default()),
+            Ok(Reply::Session { info: shell.clone() }),
+        ));
     }
 
     fn here(app: &mut App) {
@@ -7750,12 +7767,152 @@ mod tests {
         let cwd = std::env::current_dir().unwrap();
         let mut shell = quick("home.shell", None);
         shell.cwd = cwd.clone();
-        app.on_reply(AppMsg::Reply(Pending::Quick, Ok(Reply::Session { info: shell.clone() })));
-        assert_eq!(app.drawer_session(), Some(shell.id));
+        app.on_reply(AppMsg::Reply(
+            Pending::Quick(Default::default()),
+            Ok(Reply::Session { info: shell.clone() }),
+        ));
+        // Nothing of any project is open: a panel of its own, filling the empty pane.
+        assert_eq!(app.drawer_session(), None);
+        assert_eq!(app.focused_session(), Some(shell.id));
         assert_eq!(app.quick_of(None, &cwd), Some(shell.id));
         // It's in the sidebar, as a quiet line of its own.
         assert!(app.rows().contains(&Row::Quick(shell.id)));
         assert!(screen(&app).contains("›_ shell"), "{}", screen(&app));
+    }
+
+    /// Project p1 with one agent shown, and project p2's quick terminal (not yet on screen).
+    fn two_projects(app: &mut App) -> (SessionId, SessionInfo) {
+        let (agent, _) = with_agents(app);
+        app.projects.push(project("p2", "other"));
+        app.worktrees.push(root("p2"));
+        let shell = quick("other.shell", Some("p2-root"));
+        let mut shell = shell;
+        shell.project = Some("p2".into());
+        app.sessions.push(shell.clone());
+        (agent, shell)
+    }
+
+    fn act(app: &mut App, action: &'static str) {
+        app.run(&Command { action, arg: None });
+    }
+
+    #[test]
+    fn a_shell_of_a_project_nobody_has_open_is_a_panel_of_its_own() {
+        let mut app = app();
+        let (agent, shell) = two_projects(&mut app);
+        let pane = app.focused;
+        // Project p2 has no pane: `!` replaces the focused pane, no split, no drawer.
+        app.context_hint = Some("p2".into());
+        act(&mut app, "shell.here");
+        assert!(app.drawer.is_none());
+        assert_eq!(app.layout.panes().len(), 1);
+        assert_eq!((app.focused, app.focused_session()), (pane, Some(shell.id)));
+        assert!(screen(&app).contains("back"), "its header says how to go back: {}", screen(&app));
+        // Again: back to what it replaced.
+        act(&mut app, "shell.here");
+        assert_eq!(app.focused_session(), Some(agent));
+        // And once more it's a panel again, not a split.
+        act(&mut app, "shell.here");
+        assert_eq!(app.focused_session(), Some(shell.id));
+        assert_eq!(app.layout.panes().len(), 1);
+    }
+
+    #[test]
+    fn a_shell_of_an_open_project_is_a_drawer_and_an_empty_pane_is_filled() {
+        let mut app = app();
+        let (agent, _) = with_agents(&mut app);
+        let host = app.focused;
+        let shell = quick("myrepo.shell", Some("p1-root"));
+        app.sessions.push(shell.clone());
+        act(&mut app, "shell.here");
+        assert_eq!(app.drawer.map(|d| d.host), Some(host), "p1 is open: a drawer");
+        assert_eq!(app.panes[&host].session, Some(agent));
+        // Hide it, then empty the pane: nothing of p1 is open, so the shell fills the pane.
+        act(&mut app, "shell.here");
+        assert!(app.drawer.is_none());
+        app.panes.get_mut(&host).unwrap().session = None;
+        act(&mut app, "shell.here");
+        assert!(app.drawer.is_none());
+        assert_eq!(app.focused_session(), Some(shell.id));
+        act(&mut app, "shell.here");
+        assert_eq!(app.focused_session(), None, "back to the empty pane it filled");
+    }
+
+    #[test]
+    fn a_drawer_goes_under_a_pane_of_the_project_even_when_another_is_focused() {
+        let mut app = app();
+        let (_, shell) = two_projects(&mut app);
+        let (left, other_shell_host) =
+            (app.focused, app.layout.split(app.focused, Dir::Right).unwrap());
+        app.panes.insert(other_shell_host, PaneState::default());
+        let b = placed("gemini", Some("p2"), Some("p2-root"));
+        app.sessions.push(b.clone());
+        app.panes.get_mut(&other_shell_host).unwrap().session = Some(b.id);
+        app.focused = left; // an agent of p1 is focused; p2's is beside it
+        app.context_hint = Some("p2".into()); // and p2 is the one asked about
+        act(&mut app, "shell.drawer");
+        let d = app.drawer.expect("a drawer");
+        assert_eq!(d.host, other_shell_host, "under p2's pane, not the focused p1 one");
+        assert_eq!(app.panes[&d.pane].session, Some(shell.id));
+        // Again from inside: hides.
+        act(&mut app, "shell.drawer");
+        assert!(app.drawer.is_none());
+    }
+
+    #[test]
+    fn the_drawer_key_says_why_when_no_pane_of_the_project_is_open() {
+        let mut app = app();
+        let (_, shell) = two_projects(&mut app);
+        app.context_hint = Some("p2".into());
+        act(&mut app, "shell.drawer");
+        assert!(app.drawer.is_none());
+        assert_eq!(app.focused_session(), Some(shell.id));
+        assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("panel of its own")));
+    }
+
+    #[test]
+    fn the_pane_key_is_a_panel_even_where_a_drawer_would_do_and_moves_a_drawer() {
+        let mut app = app();
+        let (agent, _) = with_agents(&mut app);
+        let shell = quick("myrepo.shell", Some("p1-root"));
+        app.sessions.push(shell.clone());
+        act(&mut app, "shell.pane");
+        assert!(app.drawer.is_none());
+        assert_eq!(app.focused_session(), Some(shell.id));
+        act(&mut app, "shell.pane");
+        assert_eq!(app.focused_session(), Some(agent));
+        // A shown drawer becomes a panel.
+        act(&mut app, "shell.drawer");
+        assert!(app.drawer.is_some());
+        act(&mut app, "shell.pane");
+        assert!(app.drawer.is_none());
+        assert_eq!(app.focused_session(), Some(shell.id));
+    }
+
+    #[test]
+    fn shell_style_sets_what_bang_does_and_the_keys_are_bound() {
+        let mut app = app();
+        with_agents(&mut app);
+        let shell = quick("myrepo.shell", Some("p1-root"));
+        app.sessions.push(shell.clone());
+        app.config = Config::parse("[ui]\nshell_style = \"pane\"\n").unwrap();
+        act(&mut app, "shell.here");
+        assert!(app.drawer.is_none(), "pane: always a panel, though p1 is open");
+        assert_eq!(app.focused_session(), Some(shell.id));
+        act(&mut app, "shell.here");
+        app.config = Config::parse("[ui]\nshell_style = \"drawer\"\n").unwrap();
+        act(&mut app, "shell.here");
+        assert!(app.drawer.is_some());
+        for (key, action) in [("C-t", "shell.drawer"), ("T", "shell.pane"), ("!", "shell.here")] {
+            assert!(
+                app.keymap.key_for(action).is_some_and(|k| k.ends_with(key)),
+                "{action} is on {key}"
+            );
+        }
+        for a in ["shell.here", "shell.drawer", "shell.pane"] {
+            assert!(crate::keymap::ACTIONS.iter().any(|x| x.id == a), "{a} is registered");
+        }
+        assert!(app.row_actions(&Row::Quick(shell.id)).contains(&"shell.pane"));
     }
 
     #[test]
@@ -7917,7 +8074,10 @@ mod tests {
         let shell = quick("myrepo.shell", Some("p1-root"));
         app.sessions.push(shell.clone());
         app.run(&Command { action: "shell.here", arg: None });
-        app.on_reply(AppMsg::Reply(Pending::Quick, Ok(Reply::Session { info: shell.clone() })));
+        app.on_reply(AppMsg::Reply(
+            Pending::Quick(Default::default()),
+            Ok(Reply::Session { info: shell.clone() }),
+        ));
         assert_eq!(app.drawer_session(), Some(shell.id));
         let pad = pad_shown(&mut app, "drawer");
         assert_eq!(app.drawer_session(), Some(pad.id), "the pad replaced the shell");

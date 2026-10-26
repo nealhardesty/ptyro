@@ -2796,8 +2796,8 @@ learning anything up front.
 - **A companion shell** (UX1.13, `shell.here`: `!` after the prefix or in the sidebar): your
   shell in the selected worktree, under its profile. **[built UX1.25]** It is now the
   **quick terminal**, below.
-- **The quick terminal** (UX1.25, `shell.here`: `C-t` or `!` after the prefix, `!` in the
-  sidebar, `⏎` on its line; `crates/ptyro-tui/src/quick.rs`, `crates/ptyro-daemon/src/quick.rs`):
+- **The quick terminal** (UX1.25, `shell.here`: `!` after the prefix, `!` in the sidebar,
+  `shell.drawer`: `C-t`, `shell.pane`: `T`; `⏎` on its line; `crates/ptyro-tui/src/quick.rs`, `crates/ptyro-daemon/src/quick.rs`):
   - **One per worktree**, shared by its sessions; outside any worktree (an empty pane, a
     session in a plain directory), one per directory. `QuickShell {worktree?, cwd, create, env,
     size?, workspace?}` finds it (by address, else the worktree `cwd` is in, else `cwd`) and,
@@ -2805,6 +2805,19 @@ learning anything up front.
     `<worktree>.shell` (`<project>.shell` for the main checkout, `<dir>.shell` outside one),
     `SessionInfo.quick` and `Place.quick` set. Finding is `read` scope for paired devices,
     starting `full`.
+  - **Drawer or panel (UX2.3, 2026-10-26).** The same shell is shown one of two ways.
+    `shell.here` (`!`) picks by `[ui] shell_style`: `auto` (the default) puts it in a drawer
+    under a pane showing a session of the same project (the focused pane first, else the first
+    in layout order; matched by project, or by directory outside any), and when no pane does
+    (the focused pane is another project's, empty, or nothing is open) shows it as a **panel of
+    its own**: it fills the focused pane as `session.new` does (`PaneState.last` keeps what it
+    replaced; a drawer's focus first moves to its host). `drawer` and `pane` make `!` always
+    one. `shell.drawer` (`C-t`) forces the drawer, under a pane of the project even when another
+    is focused, and falls back to the panel with a toast when none is open; `shell.pane` (`T`)
+    forces the panel. Toggling: in its drawer the key hides it; in its panel it switches back
+    to the pane's previous session (or empties the pane); shown but not focused, it focuses;
+    `shell.pane` on a shown drawer moves the shell to a panel. The web has no split panes, so a
+    shell is always its own page there.
   - **A drawer** split off below the focused pane (`Drawer {host, pane}` in the saved view),
     30% of its height at first. It's one pane more than `MAX_PANES` allows for splits
     (`MAX_WITH_DRAWER`). `+`/`-` and dragging resize it, and hiding keeps its share
@@ -3389,6 +3402,7 @@ show_ports = true
 confirm_kill = true              # x asks before stopping a session
 on_stop = "next"                 # after you stop a pane's session: next (its neighbour) | stay
 sidebar_detail = "auto"          # lines under each session row: auto | compact | full
+shell_style = "auto"             # what `!` shows: auto (drawer if the project is open, else a panel) | drawer | pane
 which_key_delay = 400            # ms after the prefix before the which-key menu; 0: never
 
 [daemon]

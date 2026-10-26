@@ -1,10 +1,11 @@
-//! The quick terminal's drawer (UX1.25, SPEC §11.2h): the worktree's one shell, in a pane split
-//! off below the focused one. One key (`shell.here`: `C-q C-t`, `!`) shows it and focuses it,
-//! focuses it when it's shown, and hides it when it's focused. Hiding closes only the pane: the
+//! The quick terminal (UX1.25, UX2.3, SPEC §11.2h): the worktree's one shell, in a drawer (a pane
+//! split off below one of its project's panes) or, when nothing of its project is open, a panel
+//! of its own. `shell.here` (`!`) picks; `shell.drawer` (`C-t`) and `shell.pane` (`T`) force one.
+//! A key shows it and focuses it, focuses it when it's shown, and hides it when it's focused. Hiding closes only the pane: the
 //! daemon keeps the shell, so it comes back as it was.
 
 use ptyro_core::SessionId;
-use ptyro_core::config::key_label;
+use ptyro_core::config::{ShellStyle, key_label};
 use ptyro_core::input::{KeyCode, KeyEvent, Mods};
 use ptyro_protocol::Request;
 use serde::{Deserialize, Serialize};
@@ -34,12 +35,12 @@ impl App {
         self.drawer.and_then(|d| self.panes.get(&d.pane)).and_then(|p| p.session)
     }
 
-    /// The key to show for the quick terminal: `C-q C-t` while it's bound to it (`!` works too,
-    /// but Ctrl-T is the one to learn), else whatever is.
+    /// The key to show for hiding the quick terminal's drawer: `C-q C-t` while it's bound to it
+    /// (`!` works too, but Ctrl-T is the one to learn), else whatever is.
     pub fn quick_key(&self) -> Option<String> {
         let ctrl_t = KeyEvent::new(KeyCode::Char { c: 't' }, Mods(Mods::CTRL));
         match self.keymap.lookup(Table::Prefix, ctrl_t) {
-            Some(c) if c.action == "shell.here" => {
+            Some(c) if c.action == "shell.drawer" || c.action == "shell.here" => {
                 Some(format!("{} {}", key_label(&self.keymap.prefix), key_label(&ctrl_t)))
             }
             _ => self.keymap.key_for("shell.here"),
@@ -61,17 +62,30 @@ impl App {
             .map(|s| s.id)
     }
 
-    /// `shell.here`: hide the drawer when it's focused; else show (or focus) the quick terminal
-    /// `want`, else the one of `worktree` or `cwd`, else of where you are (the selected row's
-    /// worktree, the focused session's, else its directory). One is started when there's none.
+    /// `shell.here` with the configured `[ui] shell_style`.
     pub fn toggle_quick(
         &mut self,
         want: Option<SessionId>,
         worktree: Option<String>,
         cwd: Option<std::path::PathBuf>,
     ) {
+        self.toggle_quick_as(self.config.ui.shell_style, want, worktree, cwd);
+    }
+
+    /// The quick terminal of a worktree: hide it when it's the focused drawer, switch back
+    /// when it's the focused panel; focus it when it's shown elsewhere; else show it `style`'s
+    /// way (UX2.3). It is `want`, else the one of `worktree` or `cwd`, else of where you are
+    /// (the selected row's worktree, the focused session's, else its directory). One is
+    /// started when there's none.
+    pub fn toggle_quick_as(
+        &mut self,
+        style: ShellStyle,
+        want: Option<SessionId>,
+        worktree: Option<String>,
+        cwd: Option<std::path::PathBuf>,
+    ) {
         let shown = self.drawer_session();
-        if self.in_drawer() && (want.is_none() || want == shown) {
+        if self.in_drawer() && style != ShellStyle::Pane && (want.is_none() || want == shown) {
             self.hide_drawer();
             return;
         }
@@ -84,15 +98,7 @@ impl App {
         };
         let want = want.or_else(|| self.quick_of(worktree.as_deref(), &cwd));
         match want {
-            Some(id) if shown == Some(id) => {
-                if let Some(d) = self.drawer {
-                    self.focused = d.pane;
-                    self.focus = Focus::Pane;
-                    self.sidebar_zoom = false;
-                    self.view_changed();
-                }
-            }
-            Some(id) => self.open_drawer(id),
+            Some(id) => self.show_quick_existing(style, id),
             None => {
                 let cwd = if cwd.as_os_str().is_empty() && worktree.is_none() {
                     std::env::current_dir().unwrap_or_else(|_| "/".into())
@@ -107,9 +113,114 @@ impl App {
                     size: None,
                     workspace: Some(self.workspace.clone()),
                 };
-                self.request(Pending::Quick, req);
+                self.request(Pending::Quick(style), req);
             }
         }
+    }
+
+    /// The pane (not the drawer) showing the quick terminal `id` as a panel of its own.
+    pub(crate) fn quick_panel(&self, id: SessionId) -> Option<PaneId> {
+        let drawer = self.drawer.map(|d| d.pane);
+        self.layout
+            .panes()
+            .into_iter()
+            .filter(|p| Some(*p) != drawer)
+            .find(|p| self.panes.get(p).is_some_and(|s| s.session == Some(id)))
+    }
+
+    fn show_quick_existing(&mut self, style: ShellStyle, id: SessionId) {
+        if let Some(pane) = self.quick_panel(id) {
+            if self.focus == Focus::Pane && self.focused == pane {
+                // Pressed again in its own panel: back to what it replaced.
+                let back = self
+                    .panes
+                    .get(&pane)
+                    .and_then(|p| p.last)
+                    .filter(|l| self.session(*l).is_some());
+                match back {
+                    Some(last) => self.show(last, None),
+                    None => {
+                        if let Some(p) = self.panes.get_mut(&pane) {
+                            p.session = None;
+                        }
+                        self.view_changed();
+                    }
+                }
+            } else {
+                self.focused = pane;
+                self.focus = Focus::Pane;
+                self.sidebar_zoom = false;
+                self.view_changed();
+            }
+        } else if let Some(d) = self.drawer.filter(|_| self.drawer_session() == Some(id)) {
+            if style == ShellStyle::Pane {
+                self.hide_drawer();
+                self.open_panel(id);
+            } else {
+                self.focused = d.pane;
+                self.focus = Focus::Pane;
+                self.sidebar_zoom = false;
+                self.view_changed();
+            }
+        } else {
+            self.show_quick(style, id);
+        }
+    }
+
+    /// Show the quick terminal `id`, which is not on screen: in a drawer under a pane of its
+    /// own project when one is open, else as a panel of its own (UX2.3). `ShellStyle::Pane`
+    /// is always the panel; `Drawer` says why when it falls back to it.
+    pub fn show_quick(&mut self, style: ShellStyle, id: SessionId) {
+        let host = self.session(id).cloned().and_then(|me| self.quick_host(&me));
+        match (style, host) {
+            (ShellStyle::Pane, _) | (_, None) => {
+                if style == ShellStyle::Drawer {
+                    self.toast(
+                        "nothing of this project is open, so its shell has a panel of its own",
+                    );
+                }
+                self.open_panel(id);
+            }
+            (_, Some(host)) => {
+                self.focused = host;
+                self.focus = Focus::Pane;
+                self.open_drawer(id);
+            }
+        }
+    }
+
+    /// A pane (the focused one first, never the drawer) showing a session of the same project
+    /// as the quick terminal `me`, which a drawer can hang from.
+    fn quick_host(&self, me: &ptyro_core::session::SessionInfo) -> Option<PaneId> {
+        let drawer = self.drawer.map(|d| d.pane);
+        let mut panes = self.layout.panes();
+        panes.retain(|p| Some(*p) != drawer);
+        if let Some(i) = panes.iter().position(|p| *p == self.focused) {
+            panes.swap(0, i);
+        }
+        panes.into_iter().find(|p| {
+            self.panes
+                .get(p)
+                .and_then(|s| s.session)
+                .filter(|s| *s != me.id)
+                .and_then(|s| self.session(s))
+                .is_some_and(|s| match (&s.project, &me.project) {
+                    (Some(a), Some(b)) => a == b,
+                    (None, None) => s.cwd == me.cwd,
+                    _ => false,
+                })
+        })
+    }
+
+    /// Show `id` as a panel of its own: fill the focused pane (an empty one, or the one a
+    /// drawer hangs from instead of the drawer), as `session.new` does. Pressing again goes back.
+    fn open_panel(&mut self, id: SessionId) {
+        if let Some(d) = self.drawer.filter(|d| d.pane == self.focused)
+            && self.layout.contains(d.host)
+        {
+            self.focused = d.host;
+        }
+        self.show(id, None);
     }
 
     /// Show `id` in the drawer under the focused pane (the one the drawer hangs from, when the

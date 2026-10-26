@@ -3,7 +3,7 @@
 // scripts, ports, pair mode, locks, leases, the collision radar, checkpoints and the clean-up.
 import { conn } from "./conn.js";
 import { data, leftWords, liveWorktrees, repoLeft, shipped, wtTabs } from "./data.js";
-import { actions, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, pending, row, safeDecode, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
+import { actions, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, pending, row, safeDecode, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
 import { newTask, openQuickShell, allSessions } from "./sessions.js";
 const ACTIONS = {
     "projects": "Projects and their worktrees, with what each is doing",
@@ -192,7 +192,7 @@ function projectView(id) {
             { title: tip("radar"), label: "Collision radar", run: () => go(`#/radar/${enc(p.id)}`) },
             { title: tip("workspace.member"), label: "Workspaces…", run: () => projectWorkspaces(p) },
             { title: tip("project.remove"), label: "Forget this project", danger: true, run: () => removeProject(p) },
-        ]) }, "⋯")), h("main", { class: "stack", title: tip("project.show") }, facts([["Path", p.root], ["Default branch", p.default_branch], ["Remote", p.remote_url], ["Pinned to", p.pin], ["Workspaces", ws.filter((w) => w.projects.includes(p.id)).map((w) => w.name).join(", ")]]), bar(h("button", { class: "primary", title: tip("worktree.new"), onclick: () => newTask(`p:${p.id}`) }, "New task"), h("button", { onclick: () => void openQuickShell(wts.find((w) => w.is_root), p.root) }, "Shell")), section("Scripts", pending(projectScripts, id) ?? (scripts.text.trim() ? h("div", {}, h("div", { class: "bar" }, badge(scripts.trusted ? "trusted" : "not trusted", scripts.trusted ? "ok" : "warn"), h("span", { class: "sub" }, scripts.names.join(", "))), h("pre", { class: "block" }, scripts.text), scripts.trusted
+        ]) }, "⋯")), h("main", { class: "stack", title: tip("project.show") }, facts([["Path", p.root], ["Default branch", p.default_branch], ["Remote", p.remote_url], ["Pinned to", p.pin], ["Workspaces", ws.filter((w) => w.projects.includes(p.id)).map((w) => w.name).join(", ")]]), bar(h("button", { class: "primary", title: tip("worktree.new"), onclick: () => newTask(`p:${p.id}`) }, "New task"), h("button", { title: tipOf("shell.here"), onclick: () => void openQuickShell(wts.find((w) => w.is_root), p.root) }, "Shell")), section("Scripts", pending(projectScripts, id) ?? (scripts.text.trim() ? h("div", {}, h("div", { class: "bar" }, badge(scripts.trusted ? "trusted" : "not trusted", scripts.trusted ? "ok" : "warn"), h("span", { class: "sub" }, scripts.names.join(", "))), h("pre", { class: "block" }, scripts.text), scripts.trusted
         ? h("button", { title: tip("project.untrust"), onclick: async () => { if (await ask({ t: "project_untrust", addr: p.id }, "No longer trusted"))
                 projectScripts.reload(id); } }, "Stop trusting")
         : h("button", { class: "primary", title: tip("project.trust"), onclick: () => trustProject(p, scripts) }, "Review and trust…"))
@@ -361,7 +361,7 @@ function worktreeView(rest) {
     const sess = sessionsIn(w);
     const proj = data.projects.get(w.project);
     const st = w.status;
-    const overview = h("div", { class: "stack-in" }, bar(h("button", { class: "primary", title: tip("worktree.new"), onclick: () => newTask(`w:${w.id}`) }, "New session"), h("button", { title: tip("worktree.finish"), onclick: () => finish(w) }, "Finish"), h("button", { onclick: () => void openQuickShell(w) }, "Shell")), section("Sessions", sess.length ? h("div", { class: "rows" }, ...sess.map((s) => row(h("span", {}, h("span", { class: `glyph ${statusOf(s)}` }, STATUS_GLYPH[statusOf(s)] ?? "·"), " ", s.name, s.agent ? h("small", {}, ` ${s.agent}`) : null), s.activity ?? s.title ?? statusOf(s), ago(s.status?.since_ms ?? s.created_ms), { href: `#/s/${enc(s.id)}` }))) : h("p", { class: "sub" }, "Nothing is running here.")), section("Status", h("div", { title: tip("worktree.status") }, facts([
+    const overview = h("div", { class: "stack-in" }, bar(h("button", { class: "primary", title: tip("worktree.new"), onclick: () => newTask(`w:${w.id}`) }, "New session"), h("button", { title: tip("worktree.finish"), onclick: () => finish(w) }, "Finish"), h("button", { title: tipOf("shell.pane"), onclick: () => void openQuickShell(w) }, "Shell")), section("Sessions", sess.length ? h("div", { class: "rows" }, ...sess.map((s) => row(h("span", {}, h("span", { class: `glyph ${statusOf(s)}` }, STATUS_GLYPH[statusOf(s)] ?? "·"), " ", s.name, s.agent ? h("small", {}, ` ${s.agent}`) : null), s.activity ?? s.title ?? statusOf(s), ago(s.status?.since_ms ?? s.created_ms), { href: `#/s/${enc(s.id)}` }))) : h("p", { class: "sub" }, "Nothing is running here.")), section("Status", h("div", { title: tip("worktree.status") }, facts([
         ["Branch", w.branch], ["Base", w.base], ["Changes", st ? `${summary(w)}${st.subject ? ` — ${st.subject}` : ""}` : ""],
         ["Pull request", w.pr ? (webHref(w.pr.url) ? h("a", { href: webHref(w.pr.url), target: "_blank", rel: "noreferrer" }, `#${w.pr.number} ${w.pr.title}`) : h("span", {}, `#${w.pr.number} ${w.pr.title}`)) : null],
         ["Merged into main", w.integrated ? w.integrated.slice(0, 8) : null],

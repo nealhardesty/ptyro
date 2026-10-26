@@ -62,7 +62,15 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("worktree.gc", "Stale worktrees (merged, gone, unused): pick one to archive it"),
     a(
         "shell.here",
-        "The quick terminal: this worktree's shell in a drawer below; again focuses, then hides it",
+        "The quick terminal: this worktree's shell in a drawer under its project's pane, or in a panel of its own when none is open ([ui] shell_style); again focuses, then hides it",
+    ),
+    a(
+        "shell.drawer",
+        "The quick terminal in a drawer below a pane of its project (a panel of its own, with a note, when none is open); again focuses, then hides it",
+    ),
+    a(
+        "shell.pane",
+        "The quick terminal in a panel of its own, replacing the pane you are in; again goes back",
     ),
     a(
         "scratchpad.toggle",
@@ -362,7 +370,8 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Prefix, "'", "scratchpad.add"),
     (Table::Prefix, "\"", "scratchpad.items"),
     (Table::Prefix, "g", "scratchpad.cycle"),
-    (Table::Prefix, "C-t", "shell.here"),
+    (Table::Prefix, "C-t", "shell.drawer"),
+    (Table::Prefix, "T", "shell.pane"),
     (Table::Prefix, "H", "home"),
     (Table::Prefix, "M", "health"),
     (Table::Prefix, "I", "app.about"),
@@ -426,6 +435,7 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Nav, "u", "toast.act"),
     (Table::Nav, ".", "row.menu"),
     (Table::Nav, "!", "shell.here"),
+    (Table::Nav, "T", "shell.pane"),
     (Table::Nav, ";", "scratchpad.toggle"),
     (Table::Nav, "'", "scratchpad.add"),
     (Table::Nav, "H", "home"),

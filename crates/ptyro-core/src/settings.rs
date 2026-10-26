@@ -501,6 +501,14 @@ const DETAIL: &[Choice] = &[
     c("compact", "one line per row"),
     c("full", "every row, always"),
 ];
+const SHELL_STYLE: &[Choice] = &[
+    c(
+        "auto",
+        "a drawer under a pane of the same project when one is open, else a panel of its own",
+    ),
+    c("drawer", "always a drawer under the focused pane"),
+    c("pane", "always a panel of its own"),
+];
 const LOG_LEVEL: &[Choice] = &[
     c("error", "problems only"),
     c("warn", "problems and warnings"),
@@ -603,6 +611,7 @@ pub const SETTINGS: &[Setting] = &[
     s("ui.tint_borders", "interface", Kind::Bool, "Tint pane borders with the session's profile colour."),
     s("ui.on_stop", "interface", pick(ON_STOP), "What a pane shows after you stop its session."),
     s("ui.which_key_delay", "interface", int(0, 5000), "How long after the prefix key the menu of next keys waits before it pops up. 0 never shows it.").unit("ms").also("hints popup help menu"),
+    s("ui.shell_style", "interface", pick(SHELL_STYLE), "How the shell key (`!`) shows a worktree's terminal: as a drawer under its project's pane, or as a panel of its own.").also("terminal split drawer pane panel window shell"),
     s("clipboard.allow_write", "interface", Kind::Bool, "Let programs in sessions copy to your clipboard (OSC 52). Reads are always refused.").also("copy paste"),
     // ── Attention ──
     s("attention.scope", "attention", pick(SCOPE), "Where the next-attention key may go."),

@@ -1441,7 +1441,8 @@ UX1 tests wait for what's on screen, not a clock.
   uncommitted and untracked work through archive and restore (SPEC §10.8).
 - [x] **UX1.13 Companion shell** (R-UX-03) — S. One key opens a shell in the selected
   worktree, with the same profile environment, split beside the agent. *Done (2026-10-22):*
-  `shell.here`, `!` after the prefix or in the sidebar, and in the row menu.
+  `shell.here`, `!` after the prefix or in the sidebar, and in the row menu. (2026-10-26: UX2.3
+  shows it as a drawer or a panel of its own.)
 - [x] **UX1.25 Quick terminal** (R-UX-30; owner, 2026-10-23) — M. This changes UX1.13's
   companion shell. Today `!` starts a **new** shell, split to the right, every time it's
   pressed, so a few presses leave several shells. Instead:
@@ -2072,6 +2073,17 @@ rules as everywhere: CLI, TUI and web, with the parity row.
   finish paths already refreshed. *Deviations:* there is no separate TUI "home screen" worktree
   row (home lists PRs and repositories), so the web's Projects tab is the only other list; the
   per-base `N ahead` count was dropped from the one-line status in favour of `↑N`/`not pushed`.
+- [x] **UX2.3 A shell opens as a panel when its project is not open** — S. *From the owner,
+  2026-10-26.* Since UX1.25 `!` always put the quick terminal in a drawer under the focused pane,
+  so a shell for project B showed up under a pane of project A. The drawer suits a project that
+  is open; with nothing open for it the shell should be a panel of its own.
+  *Done when:* `!` gives a drawer under a pane of the same project and otherwise fills or
+  replaces the focused pane; two keys force either; `[ui] shell_style` sets what `!` does.
+  *Done (2026-10-26):* `shell.here` (`!`) is smart (`auto`); `shell.drawer` (`C-t`) and
+  `shell.pane` (`T`, also in the sidebar and the row menus) force one; `[ui] shell_style =
+  "auto" | "drawer" | "pane"` is in the settings panel (TUI and web). Again hides a drawer or
+  switches a panel back. The web has no split panes, so its shell is always its own page
+  (`shell.here`, `shell.pane` tips). Not looked at on a real screen.
 
 ## H2 — Second hardening review (2026-10-24)
 

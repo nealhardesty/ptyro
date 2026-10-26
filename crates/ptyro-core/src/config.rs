@@ -37,6 +37,8 @@ pub struct Ui {
     pub on_stop: OnStop,
     /// How much a sidebar row says under its first line (UX1.2).
     pub sidebar_detail: SidebarDetail,
+    /// What the shell key (`!`) shows: a drawer when the project is open, else a panel (UX2.3).
+    pub shell_style: ShellStyle,
     /// Milliseconds after the prefix before the menu of next keys appears (UX1.14); 0: never.
     pub which_key_delay: u64,
 }
@@ -53,6 +55,19 @@ pub enum SidebarDetail {
     Compact,
     /// Every row, always.
     Full,
+}
+
+/// `[ui] shell_style`: how the shell key (`shell.here`) shows a worktree's quick terminal.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShellStyle {
+    /// A drawer under a pane of the same project when one is open, else a panel of its own.
+    #[default]
+    Auto,
+    /// Always a drawer under the focused pane.
+    Drawer,
+    /// Always a panel of its own.
+    Pane,
 }
 
 /// What a pane does once you stop the session it shows (`[ui] on_stop`).
@@ -81,6 +96,7 @@ impl Default for Ui {
             tint_borders: false,
             on_stop: OnStop::Next,
             sidebar_detail: SidebarDetail::Auto,
+            shell_style: ShellStyle::Auto,
             which_key_delay: 400,
         }
     }

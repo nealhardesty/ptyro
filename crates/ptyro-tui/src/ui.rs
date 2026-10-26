@@ -287,7 +287,7 @@ const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
             ("sets", "change sets"),
             ("script.run", "run script"),
             ("worktree.open", "editor"),
-            ("shell.here", "shell here"),
+            ("shell.here", "shell"),
             ("scratchpad.toggle", "scratchpad"),
             ("scratchpad.cycle", "other pad"),
         ],
@@ -1195,7 +1195,7 @@ fn draw_header(
             let drawer = app.drawer.is_some_and(|d| d.pane == pane);
             let g = if s.pad {
                 "✎"
-            } else if drawer {
+            } else if drawer || s.quick {
                 "›_"
             } else {
                 g
@@ -1208,9 +1208,13 @@ fn draw_header(
                     format!(" {k} {} ", if focused { "hide" } else { "focus" }),
                     base.fg(app.depth.fit(t.dim)),
                 ));
-            } else if drawer && let Some(k) = app.quick_key() {
+            } else if (drawer || s.quick)
+                && let Some(k) = app.quick_key()
+            {
+                // A shell in a panel of its own goes back to what it replaced (UX2.3).
+                let hide = if drawer { "hide" } else { "back" };
                 right.push(Span::styled(
-                    format!(" {k} {} ", if focused { "hide" } else { "focus" }),
+                    format!(" {k} {} ", if focused { hide } else { "focus" }),
                     base.fg(app.depth.fit(t.dim)),
                 ));
             }
