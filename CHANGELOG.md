@@ -4,10 +4,24 @@ Generated from git history by `make changelog` (scripts/changelog.sh); edit comm
 
 ## Unreleased
 
+### Fixes
+
+- fix: Homebrew packaging verified (make brew-check), release gate unblocked (zstd 0.14.3, crypto-bigint 0.7.10) (v0.0.9) (49a2189)
+
+### Performance
+
+- perf: make install builds in seconds: an incremental `local` profile instead of a from-scratch cargo install (v0.0.9) (50dadbc)
+
+## v0.0.8 (2026-10-26)
+
 ### Features
 
 - feat: UX2.3 a shell opens where it belongs: a drawer when the project is open, its own panel when not (f36c794)
 - feat: a config panel that makes sense, per-project scratchpad, About, pushed state, safer pairing (v0.0.8) (31b7252)
+
+### Other
+
+- release: v0.0.8 (3befb8c)
 
 ## v0.0.7 (2026-10-25)
 
