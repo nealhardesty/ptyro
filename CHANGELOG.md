@@ -4,6 +4,12 @@ Generated from git history by `make changelog` (scripts/changelog.sh); edit comm
 
 ## Unreleased
 
+### Other
+
+- refactor: one scratchpad again: the per-project pads are removed (v0.0.10) (f7e06d0)
+
+## v0.0.9 (2026-10-26)
+
 ### Fixes
 
 - fix: Homebrew packaging verified (make brew-check), release gate unblocked (zstd 0.14.3, crypto-bigint 0.7.10) (v0.0.9) (49a2189)
@@ -11,6 +17,10 @@ Generated from git history by `make changelog` (scripts/changelog.sh); edit comm
 ### Performance
 
 - perf: make install builds in seconds: an incremental `local` profile instead of a from-scratch cargo install (v0.0.9) (50dadbc)
+
+### Other
+
+- release: v0.0.9 (da1b8eb)
 
 ## v0.0.8 (2026-10-26)
 
