@@ -5,7 +5,7 @@
 // read-only device being refused.
 //   node web/test/pad.mjs ws://127.0.0.1:PORT/ws CONTROL_TOKEN READ_TOKEN
 import assert from "node:assert/strict";
-import { Queue, noteFor, padId, padSel, parseMarkdown, safeHref, shareLine } from "../dist/pad.js";
+import { Queue, noteFor, parseMarkdown, safeHref, shareLine } from "../dist/pad.js";
 
 // ── Markdown ───────────────────────────────────────────────────────────────────────────────
 {
@@ -70,27 +70,6 @@ import { Queue, noteFor, padId, padSel, parseMarkdown, safeHref, shareLine } fro
   await broken.load();
   await broken.push({ k: "add", text: "still works" });
   assert.equal(broken.length, 1);
-}
-
-// ── which pad (NOTE1.7) ────────────────────────────────────────────────────────────────────
-{
-  // The wire shapes: "global", or { project: id }; a reply without one is the global pad.
-  assert.equal(padSel("global"), "global");
-  assert.deepEqual(padSel("p1"), { project: "p1" });
-  assert.equal(padId(undefined), "global");
-  assert.equal(padId("global"), "global");
-  assert.equal(padId({ project: "p1" }), "p1");
-  assert.equal(padId({ near: "/x" }), "global");
-  // Edits coalesce per pad; an op queued before pads existed (no pad) is the global pad's.
-  const q = new Queue({ load: async () => null, save: async () => {} });
-  await q.push({ k: "put", base: "a", text: "g1" });
-  await q.push({ k: "put", base: "b", text: "p1", pad: "proj" });
-  await q.push({ k: "put", base: "a", text: "g2", pad: "global" });
-  await q.push({ k: "put", base: "c", text: "p2", pad: "proj" });
-  assert.deepEqual(q.ops, [
-    { k: "put", base: "a", text: "g2", pad: "global" },
-    { k: "put", base: "b", text: "p2", pad: "proj" },
-  ]);
 }
 
 // ── a real daemon ──────────────────────────────────────────────────────────────────────────

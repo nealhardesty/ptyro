@@ -537,31 +537,12 @@ enum Cmd {
         #[arg(long, requires = "read", num_args = 0..=1, default_missing_value = "4294967295")]
         scrollback: Option<u32>,
     },
-    /// The scratchpad: notes for ideas and bugs. Opens in your editor, here; `--pane` opens it as
-    /// a session (`C-q ;` in the TUI)
-    ///
-    /// There are two pads: a project's (`<repo>/.ptyro/scratchpad.md`, shared by all its worktrees,
-    /// kept out of git; `$PTYRO_PROJECT_SCRATCHPAD`) and one for everywhere (`$PTYRO_SCRATCHPAD`).
-    /// Inside a project's directory or worktree every command uses the project's pad; anywhere
-    /// else, the global one. `--global` and `--project` force one. The commands say which pad
-    /// they used.
+    /// The scratchpad: one notes file for ideas and bugs (`$PTYRO_SCRATCHPAD`), the same in every
+    /// session. Opens in your editor, here; `--pane` opens it as a session (`C-q ;` in the TUI)
     #[command(visible_alias = "pad")]
     Scratchpad {
         #[command(subcommand)]
         cmd: Option<pad::PadCmd>,
-        /// Use the pad for everywhere, even inside a project
-        #[arg(long = "global", global = true, conflicts_with = "project")]
-        everywhere: bool,
-        /// Use the project's pad: the one you are in, or `--project=NAME` for another
-        #[arg(
-            long,
-            global = true,
-            num_args = 0..=1,
-            require_equals = true,
-            default_missing_value = "",
-            value_name = "NAME"
-        )]
-        project: Option<String>,
         /// Open it as a session of its own (the editor, kept running) and attach
         #[arg(long)]
         pane: bool,

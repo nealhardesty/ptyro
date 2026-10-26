@@ -86,10 +86,6 @@ pub const ACTIONS: &[ActionSpec] = &[
     ),
     a("scratchpad.history", "The scratchpad's saved copies: put one back"),
     a(
-        "scratchpad.cycle",
-        "Switch the scratchpad between this project's pad and the one for everywhere",
-    ),
-    a(
         "scratchpad.note",
         "Note this to the scratchpad: the selected session's task, or what you type",
     ),
@@ -369,7 +365,6 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Prefix, ";", "scratchpad.toggle"),
     (Table::Prefix, "'", "scratchpad.add"),
     (Table::Prefix, "\"", "scratchpad.items"),
-    (Table::Prefix, "g", "scratchpad.cycle"),
     (Table::Prefix, "C-t", "shell.drawer"),
     (Table::Prefix, "T", "shell.pane"),
     (Table::Prefix, "H", "home"),

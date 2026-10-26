@@ -276,18 +276,14 @@ Pinned by `crates/ptyro/tests/m11.rs`.
 
 ## Scratchpad (NOTE1)
 
-- `ptyro scratchpad cat --json`, `scratchpad add --json` → `{pad?, name, path, rev, text, open,
-  done}`: `rev` is the first 12 hex digits of the text's SHA-256, `open` and `done` count `- [ ]`
-  and `- [x]` items. `name` is `everywhere` or the project's slug; `pad` is `{"project": "<id>"}`
-  for a project's pad and absent for the global one (which pad a command uses: `ptyro scratchpad
-  --help`).
+- `ptyro scratchpad cat --json`, `scratchpad add --json` → `{path, rev, text, open, done}`: `rev` is
+  the first 12 hex digits of the text's SHA-256, `open` and `done` count `- [ ]` and `- [x]` items.
 - `ptyro scratchpad todo --json` → `{rev, items: [Item]}`; `Item`: `{line, done, text, section?, at?,
   whence?, by?, worktree?, pr?}`. `line` is 1-based; `at` is `2026-10-24 14:02` from the stamp;
   `whence` the worktree or directory it was added in; `by` the agent that added it; `worktree`
   the `[wt:…]` tag; `pr` the `(#N)` that finished it.
 - `ptyro scratchpad log --json` → `[{rev, at_ms, bytes, lines}]`, newest first.
-- `ptyro scratchpad --pane --json` → a `Session` (the editor; `pad: true`, and `pad_project` with the
-  project's id when it edits a project's pad).
+- `ptyro scratchpad --pane --json` → a `Session` (the editor; `pad: true`).
 
 ## Setup, config and the daemon
 

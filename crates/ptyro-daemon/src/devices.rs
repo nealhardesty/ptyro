@@ -148,10 +148,9 @@ pub fn needed(req: &Request) -> Scope {
         | PushUnsubscribe { .. }
         | PushTest
         | ChatGet { .. }
-        | ScratchGet { .. }
-        | ScratchPads
+        | ScratchGet
         | ScratchTodo { .. }
-        | ScratchHistory { .. }
+        | ScratchHistory
         | ScratchPane { create: false, .. } => Scope::Read,
         Answer { decision, .. } if is_always(decision) => Scope::Control,
         Answer { .. }

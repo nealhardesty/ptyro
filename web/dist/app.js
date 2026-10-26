@@ -12,7 +12,7 @@ import "./review.js";
 import "./runs.js";
 import "./settings.js";
 import "./panel.js";
-import { initNotes, notesConnected, notesEvent, notesHint, notesLink, notesNeedsLoad, notesLoad, notesNoteButton, notesQuickAdd, notesShown, notesStart, notesView } from "./notes.js";
+import { initNotes, notesConnected, notesEvent, notesLink, notesNeedsLoad, notesLoad, notesNoteButton, notesQuickAdd, notesShown, notesStart, notesView } from "./notes.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
 import { coach } from "./settings.js";
 import { apply as showMachine } from "./machine.js";
@@ -35,7 +35,6 @@ const ACTIONS = {
     "scratchpad.tick": "Tick or untick an item in the scratchpad",
     "scratchpad.history": "Saved copies of the scratchpad; put one back",
     "scratchpad.note": "Note this session in the scratchpad",
-    "scratchpad.pad": "Switch between this project's scratchpad and the one for everywhere",
     "pair": "Pair this device with the link or QR code from `ptyro pair`",
     "unpair": "Forget this device's pairing",
 };
@@ -295,8 +294,6 @@ function sessionView(id) {
         return h("div", {}, header("…", true), h("main", {}, h("p", { class: "empty" }, conn.state === "open" ? "No such session." : "Connecting…")));
     const st = statusOf(s);
     const sh = sessionShell(id);
-    // The scratchpad follows the project you are looking at (NOTE1.7).
-    notesHint(s.project ?? null);
     sh.reply.placeholder = s.kind === "agent" ? `Reply to ${s.name}…` : "Type a line…";
     const blocked = s.status?.status === "blocked" && s.state.t === "running";
     const chat = s.structured && !app.termView.has(id);

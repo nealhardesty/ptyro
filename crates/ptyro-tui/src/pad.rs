@@ -1,13 +1,11 @@
-//! The scratchpad in the TUI (NOTE1.1–NOTE1.3, NOTE1.7, SPEC §13.6): the notes files, in your
-//! editor in a drawer, a popup or a pane; a line added without opening it; the open items, to
-//! search, tick and start as tasks; and the saved copies. There are two pads, the one for
-//! everywhere and the project's; `Ctrl-Q g` switches, and which one you get follows where you are.
-//! The files and their logic are the daemon's (`ptyro_core::scratchpad`); this is only how it
-//! looks and which keys reach it.
+//! The scratchpad in the TUI (NOTE1.1–NOTE1.3, SPEC §13.6): the one notes file, in your editor
+//! in a drawer, a popup or a pane; a line added without opening it; its open items, to search,
+//! tick and start as tasks; and its saved copies. The file and its logic are the daemon's
+//! (`ptyro_core::scratchpad`); this is only how it looks and which keys reach it.
 
 use ptyro_core::SessionId;
 use ptyro_core::input::{KeyCode, KeyEvent, Mods};
-use ptyro_core::scratchpad::{self as pad, PadSel};
+use ptyro_core::scratchpad as pad;
 use ptyro_protocol::{PadDoc, PadMark, Reply, Request};
 use ratatui::layout::Rect;
 
@@ -36,55 +34,14 @@ impl App {
         self.session(id).is_some_and(|s| s.pad)
     }
 
-    /// A scratchpad's live editor session (any of them).
+    /// The scratchpad's live editor session.
     pub fn pad_session(&self) -> Option<SessionId> {
         self.sessions.iter().find(|s| s.pad && s.state.is_live()).map(|s| s.id)
     }
 
-    /// The live editor session of the pad `sel` (`Global` or `Project(id)`).
-    fn pad_session_of(&self, sel: &PadSel) -> Option<SessionId> {
-        let project = match sel {
-            PadSel::Project(id) => Some(id),
-            _ => None,
-        };
-        self.sessions
-            .iter()
-            .find(|s| s.pad && s.state.is_live() && s.pad_project.as_ref() == project)
-            .map(|s| s.id)
-    }
-
-    /// What a pad is called: `everywhere`, or `ptyro (this project)`.
-    pub fn pad_label(&self, sel: &PadSel) -> String {
-        match sel {
-            PadSel::Project(id) => {
-                let name = self
-                    .projects
-                    .iter()
-                    .find(|p| p.id == *id)
-                    .map_or(id.as_str(), |p| p.slug.as_str());
-                format!("{name} (this project)")
-            }
-            _ => "everywhere".into(),
-        }
-    }
-
-    /// The pad a key acts on: the project you are in, unless `Ctrl-Q g` chose the one for
-    /// everywhere, else the one for everywhere. The project is remembered while the pad has the
-    /// focus, since the pad itself says nothing about where you were.
-    pub fn pad_want(&mut self) -> PadSel {
-        let here = self.where_am_i().0;
-        let on_pad = self.focused_session().is_some_and(|s| self.is_pad(s));
-        if here.is_some() || !on_pad {
-            self.pad_ctx = here;
-        }
-        match (&self.pad_ctx, self.pad_global) {
-            (Some(p), false) => PadSel::Project(p.clone()),
-            _ => PadSel::Global,
-        }
-    }
-
-    /// The pane an editor has in `pane` mode (not the drawer's).
-    fn pad_pane(&self, id: SessionId) -> Option<PaneId> {
+    /// The pane the editor has in `pane` mode (not the drawer's).
+    fn pad_pane(&self) -> Option<PaneId> {
+        let id = self.pad_session()?;
         self.layout.panes().into_iter().find(|p| {
             self.drawer.is_none_or(|d| d.pane != *p)
                 && self.panes.get(p).and_then(|s| s.session) == Some(id)
@@ -108,17 +65,14 @@ impl App {
     }
 
     /// `scratchpad.toggle`: hidden → show it and focus it; shown but elsewhere → focus it; focused
-    /// → hide it. The editor keeps running. Where it shows is `[scratchpad] mode`; which pad is
-    /// the project's you are in, else the one for everywhere (`scratchpad.cycle` switches).
+    /// → hide it. The editor keeps running. Where it shows is `[scratchpad] mode`.
     pub fn toggle_pad(&mut self) {
         if self.pad_popup.take().is_some() {
             self.sync();
             return;
         }
-        let want = self.pad_want();
-        let Some(id) = self.pad_session_of(&want) else {
+        let Some(id) = self.pad_session() else {
             let req = Request::ScratchPane {
-                pad: want,
                 create: true,
                 env: Self::client_env(),
                 size: None,
@@ -136,7 +90,7 @@ impl App {
                 self.sidebar_zoom = false;
                 self.view_changed();
             }
-        } else if let Some(p) = self.pad_pane(id) {
+        } else if let Some(p) = self.pad_pane() {
             if self.focused == p && self.focus == Focus::Pane {
                 self.close_pane(p);
             } else {
@@ -148,21 +102,6 @@ impl App {
         } else {
             self.show_pad(id);
         }
-    }
-
-    /// `scratchpad.cycle`: the other pad, this project's ⇄ the one for everywhere. What was
-    /// showing is swapped for it; with nothing showing, the other pad opens.
-    pub fn cycle_pad(&mut self) {
-        if matches!(self.pad_want(), PadSel::Global) && self.pad_ctx.is_none() {
-            self.toast("not in a project: the scratchpad is the one for everywhere");
-            return;
-        }
-        self.pad_global = !self.pad_global;
-        let ids: Vec<SessionId> = self.sessions.iter().filter(|s| s.pad).map(|s| s.id).collect();
-        for id in ids {
-            self.pad_gone(id);
-        }
-        self.toggle_pad();
     }
 
     /// Show the editor the way `[scratchpad] mode` says.
@@ -211,18 +150,10 @@ impl App {
     /// `scratchpad.add`: a one-line box, stamped with where you are, without opening the pad.
     pub fn open_pad_add(&mut self, text: String, about: Option<SessionId>) {
         self.overlay = Some(Overlay::Prompt {
-            title: self.pad_add_title(),
+            title: "Add to the scratchpad (⏎ adds)".into(),
             text,
             kind: PromptKind::PadAdd(about.or_else(|| self.focused_session())),
         });
-    }
-
-    /// The box's title says which pad it adds to, and how to switch.
-    pub(crate) fn pad_add_title(&mut self) -> String {
-        let want = self.pad_want();
-        let label = self.pad_label(&want);
-        let switch = if self.pad_ctx.is_some() { ", ^g switches" } else { "" };
-        format!("Add to the scratchpad — {label} (⏎ adds{switch})")
     }
 
     /// `scratchpad.note`: the same box, started from the selected session's task or last words.
@@ -244,7 +175,6 @@ impl App {
 
     pub(crate) fn pad_add(&mut self, text: String, note: bool, about: Option<SessionId>) {
         let req = Request::ScratchAdd {
-            pad: self.pad_want(),
             text,
             section: None,
             note,
@@ -265,13 +195,12 @@ impl App {
 
     /// `scratchpad.items`: read the pad, then list its open items.
     pub fn open_pad_items(&mut self) {
-        let pad = self.pad_want();
-        self.request(Pending::PadItems { refresh: false }, Request::ScratchGet { pad });
+        self.request(Pending::PadItems { refresh: false }, Request::ScratchGet);
     }
 
     /// The items list from a fresh read of the pad; `keep` is what was typed and where.
     pub(crate) fn show_pad_items(&mut self, doc: PadDoc, keep: Option<(String, usize)>) {
-        self.set_pad_count(&doc.pad, doc.open);
+        self.pad_open = doc.open;
         let items: Vec<Item> = pad::items(&doc.text)
             .into_iter()
             .filter(|i| self.pad_show_done || !i.done)
@@ -297,10 +226,8 @@ impl App {
             })
             .collect();
         let path = doc.path.display().to_string();
-        let which = self.pad_label(&doc.pad);
-        let switch = if self.pad_ctx.is_some() { " · ^g other pad" } else { "" };
         let title = format!(
-            "Scratchpad — {which} · {} open · {path}   ⏎ start as a task · ^x tick · ^a ticked · ^e editor{switch}",
+            "Scratchpad · {} open · {path}   ⏎ start as a task · ^x tick · ^a ticked · ^e editor",
             doc.open
         );
         let mut palette = Palette::new(title, items);
@@ -330,25 +257,16 @@ impl App {
                         .and_then(|d| pad::items(&d.text).into_iter().find(|i| i.line == line))
                         .is_some_and(|i| i.done);
                     let mark = if done { PadMark::Open } else { PadMark::Done { pr: None } };
-                    let pad = self.pad_doc.as_ref().map(|d| d.pad.clone()).unwrap_or_default();
                     self.request(
                         Pending::Done(String::new()),
-                        Request::ScratchMark { pad, sel: line.to_string(), mark },
+                        Request::ScratchMark { sel: line.to_string(), mark },
                     );
                 }
                 Some(true)
             }
             KeyCode::Char { c: 'a' } => {
                 self.pad_show_done = !self.pad_show_done;
-                let pad = self.pad_doc.as_ref().map(|d| d.pad.clone()).unwrap_or_default();
-                self.request(Pending::PadItems { refresh: true }, Request::ScratchGet { pad });
-                Some(true)
-            }
-            // The other pad's list, in place (the list is rebuilt when the reply comes).
-            KeyCode::Char { c: 'g' } if self.pad_ctx.is_some() => {
-                self.pad_global = !self.pad_global;
-                let pad = self.pad_want();
-                self.request(Pending::PadItems { refresh: true }, Request::ScratchGet { pad });
+                self.request(Pending::PadItems { refresh: true }, Request::ScratchGet);
                 Some(true)
             }
             KeyCode::Char { c: 'e' } => {
@@ -371,17 +289,8 @@ impl App {
             self.toast_err("already ticked (^x unticks it)");
             return;
         }
-        // The task goes in the project whose pad the item is in.
-        let (mut project, mut worktree) = self.context();
-        let of_project = matches!(doc.pad, PadSel::Project(_));
-        if let PadSel::Project(id) = &doc.pad
-            && project.as_ref() != Some(id)
-        {
-            worktree = self.root_of(id);
-            project = Some(id.clone());
-        }
-        let wizard =
-            Wizard { project, worktree, pad_item: Some((line, of_project)), ..Wizard::default() };
+        let (project, worktree) = self.context();
+        let wizard = Wizard { project, worktree, pad_item: Some(line), ..Wizard::default() };
         self.resolve_for(&wizard);
         self.start_task(pad::body(&doc.text, &item), None, wizard);
     }
@@ -389,8 +298,7 @@ impl App {
     // ── saved copies ────────────────────────────────────────────────────
 
     pub fn open_pad_history(&mut self) {
-        self.pad_for = self.pad_want();
-        self.request(Pending::PadHistory, Request::ScratchHistory { pad: self.pad_for.clone() });
+        self.request(Pending::PadHistory, Request::ScratchHistory);
     }
 
     pub(crate) fn show_pad_history(&mut self, snapshots: Vec<pad::Snapshot>) {
@@ -411,10 +319,7 @@ impl App {
             .collect();
         self.overlay = Some(Overlay::Picker {
             palette: Palette::new(
-                format!(
-                    "Scratchpad — {}: put a saved copy back (what's there is saved first)",
-                    self.pad_label(&self.pad_for)
-                ),
+                "Scratchpad: put a saved copy back (what's there is saved first)",
                 items,
             ),
             purpose: Purpose::PadHistory,
@@ -424,35 +329,18 @@ impl App {
     pub(crate) fn restore_pad(&mut self, rev: String) {
         self.overlay = Some(Overlay::Confirm {
             text: format!("Put saved copy {rev} back as the scratchpad? [y/N]"),
-            action: Confirmed::Send(
-                Box::new(Request::ScratchRestore { pad: self.pad_for.clone(), rev }),
-                "restored".into(),
-            ),
+            action: Confirmed::Send(Box::new(Request::ScratchRestore { rev }), "restored".into()),
         });
     }
 
     // ── what the daemon says ────────────────────────────────────────────
 
-    /// Remember a pad's open count (for the status bar).
-    pub(crate) fn set_pad_count(&mut self, pad: &PadSel, open: u32) {
-        match pad {
-            PadSel::Project(id) => {
-                self.pad_counts.insert(id.clone(), open);
-            }
-            _ => self.pad_open = open,
-        }
-    }
-
-    /// The pad changed somewhere: the count, and an open list of it.
-    pub(crate) fn pad_changed(&mut self, pad: &PadSel, open: u32) {
-        self.set_pad_count(pad, open);
-        if let Some(Overlay::Picker { purpose: Purpose::PadItems, .. }) = &self.overlay
-            && self.pad_doc.as_ref().is_none_or(|d| d.pad == *pad)
-        {
-            self.request(
-                Pending::PadItems { refresh: true },
-                Request::ScratchGet { pad: pad.clone() },
-            );
+    /// The pad changed somewhere: the count, and an open list.
+    pub(crate) fn pad_changed(&mut self, open: u32) {
+        self.pad_open = open;
+        if let Some(Overlay::Picker { palette, purpose: Purpose::PadItems }) = &self.overlay {
+            let _ = palette;
+            self.request(Pending::PadItems { refresh: true }, Request::ScratchGet);
         }
     }
 
@@ -464,9 +352,8 @@ impl App {
                 self.show_pad(id);
             }
             (Pending::PadAdded, Ok(Reply::Scratch { doc })) => {
-                self.set_pad_count(&doc.pad, doc.open);
-                let which = self.pad_label(&doc.pad);
-                self.toast(format!("added to the scratchpad — {which} ({} open)", doc.open));
+                self.pad_open = doc.open;
+                self.toast(format!("added to the scratchpad ({} open)", doc.open));
             }
             (Pending::PadItems { refresh }, Ok(Reply::Scratch { doc })) => {
                 if refresh {
@@ -477,7 +364,7 @@ impl App {
                         let keep = (palette.query.clone(), palette.selected);
                         self.show_pad_items(doc, Some(keep));
                     } else {
-                        self.set_pad_count(&doc.pad, doc.open);
+                        self.pad_open = doc.open;
                     }
                 } else {
                     self.show_pad_items(doc, None);

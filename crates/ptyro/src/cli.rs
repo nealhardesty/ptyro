@@ -193,7 +193,6 @@ async fn dispatch(
                 structured,
                 welcome: false,
                 pad_item: None,
-                pad_sel: Default::default(),
             };
             let new_wt = new_wt.or_else(|| {
                 (a.pr.is_some() || a.issue.is_some() || a.take_changes).then(String::new)
@@ -473,9 +472,7 @@ async fn dispatch(
                 r => Err(unexpected(r)),
             }
         }
-        Some(Cmd::Scratchpad { cmd, everywhere, project, pane, json }) => {
-            crate::pad::run(&ctx, cmd, crate::pad::Which { everywhere, project }, pane, json).await
-        }
+        Some(Cmd::Scratchpad { cmd, pane, json }) => crate::pad::run(&ctx, cmd, pane, json).await,
         Some(Cmd::Shell { worktree, json, read, scrollback }) => {
             quick_shell(&ctx, worktree, json, read, scrollback).await
         }
@@ -702,7 +699,6 @@ pub async fn start_pad_task(
     prompt: &str,
     agent: Option<String>,
     line: u32,
-    pad_sel: ptyro_core::scratchpad::PadSel,
 ) -> Result<i32, Error> {
     let cwd = current_dir()?;
     let config = ptyro_core::config::Config::load(&ptyro_core::config::Config::path(&ctx.paths))
@@ -712,7 +708,6 @@ pub async fn start_pad_task(
         prompt: Some(prompt.to_owned()),
         cwd: Some(cwd.clone()),
         pad_item: Some(line),
-        pad_sel,
         ..NewArgs::default()
     };
     if in_git_repo(&cwd) {
@@ -776,8 +771,6 @@ pub struct NewArgs {
     pub structured: bool,
     /// Started from the scratchpad item on this line (NOTE1.3).
     pub pad_item: Option<u32>,
-    /// Which pad that item is in (NOTE1.7).
-    pub pad_sel: ptyro_core::scratchpad::PadSel,
 }
 
 /// The variables a session should see from this client (SSH agent, display).

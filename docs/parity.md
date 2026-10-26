@@ -52,25 +52,18 @@ its row: its TUI action and its web one, or `waived:` and why.
 
 ## Scratchpad
 
-There are two pads: one for everywhere (`$PTYRO_SCRATCHPAD`) and one per project
-(`$PTYRO_PROJECT_SCRATCHPAD`, ROADMAP NOTE1.7). Every subcommand below takes `--global` and
-`--project[=NAME]`; without them it uses the project's pad inside a project, else the global one.
-The TUI follows the same rule from where you are (the selected row, the session you are looking
-at), and the web app from the session you last looked at. The flags' TUI and web equivalent is
-the switch: `scratchpad.cycle` (`C-q g`, also the palette and the row menu; `Ctrl-G` in the add
-box and the items list) and `scratchpad.pad` (the Notes page's tabs and the add box's `→ pad`
-button).
+The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every session (ROADMAP NOTE1).
 
 | Command | In the TUI | On the web |
 |---|---|---|
-| `scratchpad edit` | `scratchpad.toggle` (`C-q ;`): the pad in your editor, in a drawer under the pane (or a popup, or a pane: `[scratchpad] mode`); again focuses it, then hides it (the editor keeps running). `--pane` is the same session. `scratchpad.cycle` (`C-q g`): the other pad (`--global` / `--project`) | `scratchpad`: the Notes view, edited in the page; it saves as you type and merges with other writers. `scratchpad.pad`: a tab for the pad for everywhere and one per project (`--global` / `--project`) |
-| `scratchpad path` | shown: its path heads the open-items list (`scratchpad.items`), the history list and the popup, and the pad's title says which pad it is | shown: its path heads the Notes view, whose title and tabs say which pad it is |
+| `scratchpad edit` | `scratchpad.toggle` (`C-q ;`): the pad in your editor, in a drawer under the pane (or a popup, or a pane: `[scratchpad] mode`); again focuses it, then hides it (the editor keeps running). `--pane` is the same session | `scratchpad`: the Notes view, edited in the page; it saves as you type and merges with other writers |
+| `scratchpad path` | shown: its path heads the open-items list (`scratchpad.items`) and the history list | shown: its path heads the Notes view |
 | `scratchpad cat` | `scratchpad.toggle`: you read it in the editor; `scratchpad.items` lists the open items | `scratchpad`: the Notes view, or its Preview |
-| `scratchpad add` | `scratchpad.add` (`C-q '`): one line, stamped with where you are, without opening the editor, to the pad its title names (`Ctrl-G` switches); `scratchpad.note` (the row menu, `a` in copy mode, `n` in the inbox) adds the selected row's task, a selection or an inbox entry | `scratchpad.add`: the quick-add box on the session list and in the Notes view (its `→ pad` button, `scratchpad.pad`, says which pad and switches); the share sheet adds to it; `scratchpad.note` on a session card |
-| `scratchpad todo` | `scratchpad.items` (`C-q "`): the open items, searchable (`Ctrl-G`: the other pad's) | `scratchpad.items`: the open items beside the text |
+| `scratchpad add` | `scratchpad.add` (`C-q '`): one line, stamped with where you are, without opening the editor; `scratchpad.note` (the row menu, `a` in copy mode, `n` in the inbox) adds the selected row's task, a selection or an inbox entry | `scratchpad.add`: the quick-add box on the session list and in the Notes view; the share sheet adds to it; `scratchpad.note` on a session card |
+| `scratchpad todo` | `scratchpad.items` (`C-q "`): the open items, searchable | `scratchpad.items`: the open items beside the text |
 | `scratchpad done` | `scratchpad.items` (`Ctrl-X` ticks, or unticks) | `scratchpad.tick`: tap a checkbox in the Preview |
-| `scratchpad start` | `scratchpad.items` (`⏎` starts the item as a task in a new worktree; the item is tagged in the pad it came from) | `scratchpad.start`: Start on an open item opens the new-task box with its text |
-| `scratchpad log` | `scratchpad.history` (the saved copies of the pad you would get) | `scratchpad.history`: saved copies of the pad on the page |
+| `scratchpad start` | `scratchpad.items` (`⏎` starts the item as a task in a new worktree) | `scratchpad.start`: Start on an open item opens the new-task box with its text |
+| `scratchpad log` | `scratchpad.history` | `scratchpad.history`: saved copies |
 | `scratchpad restore` | `scratchpad.history` (`⏎` puts one back) | `scratchpad.history` |
 
 ## Attention and notifications

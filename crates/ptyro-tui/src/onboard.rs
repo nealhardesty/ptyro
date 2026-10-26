@@ -204,16 +204,9 @@ impl App {
 
     pub(crate) fn show_home(&mut self, discovered: Vec<PathBuf>) {
         let mut items: Vec<Item> = Vec::new();
-        let (pad, open) = match self.where_am_i().0 {
-            Some(p) if !self.pad_global => {
-                let n = self.pad_counts.get(&p).copied().unwrap_or(0);
-                (ptyro_core::scratchpad::PadSel::Project(p), n)
-            }
-            _ => (ptyro_core::scratchpad::PadSel::Global, self.pad_open),
-        };
-        if open > 0 {
+        if self.pad_open > 0 {
             items.push(Item {
-                label: format!("✎ scratchpad — {} · {open} open", self.pad_label(&pad)),
+                label: format!("✎ scratchpad · {} open", self.pad_open),
                 detail: "search the items, tick one, start one as a task".into(),
                 key: self.keymap.key_for("scratchpad.items"),
                 target: Target::Action(Command { action: "scratchpad.items", arg: None }),

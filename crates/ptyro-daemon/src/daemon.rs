@@ -383,7 +383,6 @@ impl Daemon {
                     script: r.script.clone(),
                     quick: false,
                     pad: false,
-                    pad_project: None,
                 },
                 adapter,
                 conversation: r.conversation.clone(),
@@ -709,7 +708,6 @@ impl Daemon {
             script: None,
             quick: spec.quick && agent.is_none(),
             pad: spec.pad && agent.is_none(),
-            pad_project: spec.pad_project.clone().filter(|_| spec.pad && agent.is_none()),
         };
         // `@review` names a prompt snippet from the project's `[prompts]` (SPEC §13.3).
         let prompt = match spec.prompt.as_deref().and_then(|p| p.strip_prefix('@')) {
@@ -1237,17 +1235,17 @@ impl Daemon {
             Request::QuickShell { worktree, cwd, create, env, size, workspace } => {
                 self.quick_shell(worktree, cwd, create, env, size, workspace).await
             }
-            Request::ScratchGet { pad } => self.scratch_get(&pad),
-            Request::ScratchPut { pad, base, text } => self.scratch_put(&pad, &base, &text, None),
-            Request::ScratchAdd { pad, text, section, note, stamp, session, cwd } => self
-                .scratch_add(&pad, &text, section, note, stamp, session.as_deref(), cwd.as_deref()),
-            Request::ScratchTodo { pad, all } => self.scratch_todo(&pad, all),
-            Request::ScratchMark { pad, sel, mark } => self.scratch_mark(&pad, &sel, &mark),
-            Request::ScratchHistory { pad } => self.scratch_history(&pad),
-            Request::ScratchRestore { pad, rev } => self.scratch_restore(&pad, &rev),
-            Request::ScratchPads => Ok(self.scratch_pads()),
-            Request::ScratchPane { pad, create, env, size, workspace } => {
-                self.scratch_pane(&pad, create, env, size, workspace).await
+            Request::ScratchGet => self.scratch_get(),
+            Request::ScratchPut { base, text } => self.scratch_put(&base, &text, None),
+            Request::ScratchAdd { text, section, note, stamp, session, cwd } => {
+                self.scratch_add(&text, section, note, stamp, session.as_deref(), cwd.as_deref())
+            }
+            Request::ScratchTodo { all } => self.scratch_todo(all),
+            Request::ScratchMark { sel, mark } => self.scratch_mark(&sel, &mark),
+            Request::ScratchHistory => self.scratch_history(),
+            Request::ScratchRestore { rev } => self.scratch_restore(&rev),
+            Request::ScratchPane { create, env, size, workspace } => {
+                self.scratch_pane(create, env, size, workspace).await
             }
             Request::Retitle { addr, title, worktree } => self.retitle(&addr, title, worktree),
             Request::Summarize { addr } => self.summarize_now(&addr).await,

@@ -499,8 +499,7 @@ image is used to re-exec the *old* binary (kept at `state/daemon.prev`).
   | `TERM_PROGRAM` / `TERM_PROGRAM_VERSION` | `ptyro` / crate version |
   | `PTYRO` | `1` |
   | `PTYRO_SESSION_ID` | session ULID |
-  | `PTYRO_SCRATCHPAD` | path of the global scratchpad file (§13.6), in every session |
-  | `PTYRO_PROJECT_SCRATCHPAD` | path of the project's scratchpad, `<main checkout>/.ptyro/scratchpad.md` (§13.6), in every session that belongs to a project (next to `PTYRO_PROJECT`) |
+  | `PTYRO_SCRATCHPAD` | path of the scratchpad file (§13.6), in every session |
   | `PTYRO_PROFILE` | the session's profile name (§10.10) |
   | `PTYRO_SOCKET` | daemon socket path (for `ptyro hook` and nested `ptyro` CLI use) |
   | `PTYRO_PROJECT`, `PTYRO_WORKTREE_PATH`, `PTYRO_WORKTREE_NAME`, `PTYRO_BRANCH`, `PTYRO_PORT` | when in a worktree (§10.6) |
@@ -959,18 +958,30 @@ url, listen, ca_fingerprint, since_ms, restarts, last_exit, by_hand, log}`.
 `Subscribe` with `control` and a `size`, and `Resize`; its `Input` takes control of the session
 (§5.8). Devices below `control` still watch at the session's size and their input is refused.
 
-**[built NOTE1.7] Protocol 1.18** (additive), a scratchpad per project (§13.6): every `Scratch*`
-request (`ScratchGet`, `ScratchPut`, `ScratchAdd`, `ScratchTodo`, `ScratchMark`, `ScratchHistory`,
-`ScratchRestore`, `ScratchPane`) takes an optional `pad`: `"global"` (the default, so a client
-that predates 1.18 acts on the global pad as before), `{"project": "<id, slug or a path inside
-it>"}` or, in requests only, `{"near": "<dir>"}` (the pad of the project that directory is in,
-else the global one). `ScratchPads` → `ScratchPads{pads:[{pad, name, path, open}]}` lists the pads
-that exist. `PadDoc` gains `pad` (resolved: `global`, which is left out, or `{"project": id}`) and
-`name` (`everywhere`, or the project's slug); `ScratchChanged` gains `pad` (left out for the global
-pad, so an older client reads a project's change as one more event about its only pad: a count
-that is briefly wrong until it asks again). `SessionInfo`/`SpawnSpec` gain `pad_project` (the
-project whose pad an editor session edits) and `WorktreeSpec` gains `pad_sel` (the pad of the item
-it was started from). A project that is not registered is `not_found`.
+**Protocol 1.18** (tried in v0.0.8/0.0.9, removed in v0.0.10; the number stays, it is never reused
+or lowered). It added an optional `pad` selector to every `Scratch*` request, a `ScratchPads`
+request and reply, `pad`/`name` on `PadDoc`, `pad` on `ScratchChanged`, `pad_project` on
+`SessionInfo`/`SpawnSpec` and `pad_sel` on `WorktreeSpec` (NOTE1.7, a pad per project). The owner
+dropped the feature (§13.6), so v0.0.10 has none of them, and **there is one scratchpad again**.
+How the wire stays compatible both ways, with nothing kept for the dead fields:
+
+- None of the wire types uses `deny_unknown_fields`, so a field a peer does not know is ignored.
+  A 0.0.8/0.0.9 client's `pad` on a request is dropped and the request acts on the one pad (a client
+  that asked for a project's pad gets the global one, which is the whole point of the change); a
+  `pad`/`name`/`pad_project`/`pad_sel` in a document, event, session or spec from such a daemon is
+  ignored (this includes a handoff image, whose sessions are `serde(default)` for the new fields).
+- A v0.0.10 peer sends none of them; a 0.0.8/0.0.9 one reads the missing ones as their defaults
+  (every one was `#[serde(default)]`: the global pad, no project).
+- The one removed message, `ScratchPads`, is, to a v0.0.10 daemon, a request it cannot read: it answers with an
+  `invalid` error ("the daemon couldn't read this request") and the connection survives
+  (`conn.rs`); a 0.0.9 TUI
+  or `ptyro doctor` ignores that error (its pad count then comes from `ScratchChanged`).
+- Not versioned further: removing fields is not additive, but it is invisible to a peer that
+  ignores unknowns, and `PROTO` stays 1.18 so nobody sees a downgrade. The test
+  `a_leftover_pad_selector_is_ignored_and_means_the_global_pad` pins it.
+- One edge: a project pad's editor session still running in a 0.0.9 daemon that hands off to
+  v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
+  (`:q`) and the next `C-q ;` starts the global one.
 
 ### 6.5 Screen frames
 
@@ -3586,46 +3597,17 @@ prompts) are **collections**: their fields are the entries whose key reads `agen
   offers the restart; scrollback, recording, ports, agents and profiles apply to what starts
   next.
 
-### 13.6 The scratchpad **[built NOTE1, NOTE1.7]**
+### 13.6 The scratchpad **[built NOTE1; NOTE1.7 tried and dropped]**
 
-Persistent notes files for ideas and bugs: plain Markdown, one for everywhere and one per project,
-found by `$PTYRO_SCRATCHPAD` and `$PTYRO_PROJECT_SCRATCHPAD`. ptyro never owns the only copy: they
-are files you can `cat`, `grep`, sync and back up.
+One persistent notes file for ideas and bugs: plain Markdown, the same in every session and
+workspace, found by `$PTYRO_SCRATCHPAD`. ptyro never owns the only copy: it is a file you can
+`cat`, `grep`, sync and back up.
 
-- **Two pads (NOTE1.7).** The **global** pad is for everywhere; a **project's** pad is
-  `<main checkout>/.ptyro/scratchpad.md` of a project the daemon knows, and every worktree of the
-  project shares it (a worktree resolves to its project's `root`, never to its own directory).
-  Worktree-level pads are not built: one more level would make "where did I note that" harder, and
-  the item's `[wt:…]` tag already ties a note to a worktree. Its history is
-  `<root>/.ptyro/scratchpad.history/`, kept by the same rules as the global one.
-- **Which pad (follow where I am).** A request names its pad (`PadSel`): `Global`, `Project(id |
-  slug | path)` or `Near(dir)`. The CLI sends `Near(cwd)` by default: the project's pad when the
-  directory is in a registered project (or one of its worktrees), else the global pad;
-  `--global` sends `Global`, `--project` sends `Project(cwd)` and `--project=NAME` `Project(NAME)`
-  (an error, with the fix, when it is not a project). The TUI uses the project of the selected
-  sidebar row or the focused session (a pad's editor counts as in the project whose pad it edits,
-  `SessionInfo.pad_project`); `scratchpad.cycle` (`C-q g`, `Ctrl-G` in the add box and the items
-  list) flips a client-side choice `pad_global`; the web app uses the project of the session last
-  looked at (`#/s/…`), with tabs on the Notes page (`pick`). A client that sends no `pad` gets the
-  global pad: that is protocol 1.17 behaviour. **A change of behaviour for scripts:** `ptyro
-  scratchpad add` run inside a worktree wrote to the global pad before NOTE1.7 and now writes to the
-  project's; the command says which pad it used on standard error (`added to the myrepo project pad
-  (<path>, N open)`), `--global` restores the old target, and `$PTYRO_SCRATCHPAD` is unchanged.
-- **Making a project pad.** The daemon makes the file, with a header that says what it is and
-  that git ignores it, the first time anything asks for that pad (`Daemon::scope`). At that
-  moment it appends `/.ptyro/scratchpad.*` to the repository's `.git/info/exclude` (the common git
-  dir, so it holds for every worktree; `ptyro_git::Git::exclude`: once, idempotent, never the
-  tracked `.gitignore`). A failure to do so is logged and never fails the pad. The line covers the
-  pad, its history directory and the temp files of a write, and nothing else in `.ptyro/`, which
-  may hold committed things (`recipes/`, `changesets/`); `.ptyro.toml` is a different file and is
-  not touched. `ptyro doctor` warns when an existing project pad is not ignored.
-- **Where (the global pad):** `<data>/scratchpad.md`, or `[scratchpad] path` (`~` expands; a symlink
-  is written through, so the real file in a synced folder is replaced in place; the setting never
-  moves a project's pad). The daemon makes it, with a short header, when it starts.
-  `PTYRO_SCRATCHPAD` is set in the environment of every session (`launch.rs`, after the profile and
-  worktree variables, and listed in `ptyro_pty`'s strip list so an enclosing ptyro's value never
-  leaks into a nested one); `PTYRO_PROJECT_SCRATCHPAD` is set with `PTYRO_PROJECT` for a session in
-  a worktree, and stripped the same way.
+- **Where:** `<data>/scratchpad.md`, or `[scratchpad] path` (`~` expands; a symlink is written
+  through, so the real file in a synced folder is replaced in place). The daemon makes it, with a
+  short header, when it starts. `PTYRO_SCRATCHPAD` is set in the environment of every session
+  (`launch.rs`, after the profile and worktree variables, and listed in `ptyro_pty`'s strip list so
+  an enclosing ptyro's value never leaks into a nested one).
 - **Items.** A line `- [ ]` / `- [x]` (or `* [ ]`) is an item. `ptyro scratchpad add` writes
   `- [ ] 2026-10-24 14:02 · `ptyro/bugs` · by `claude-rook` · the words`: the local time, the
   worktree (else the directory) it was run in, and for an agent the session's name; further lines
@@ -3647,14 +3629,11 @@ are files you can `cat`, `grep`, sync and back up.
   file's first); the same lines changed two ways are both kept between `<<<<<<< on disk`,
   `=======` and `>>>>>>> your edit`. With no copy of `base` the whole of both is kept that way. The
   reply says whether the text came back different (`merged`) and how many regions clashed.
-- **Watching.** The daemon looks at the mtime and size of the global pad and of every project pad
-  that exists every 700 ms; a revision it hasn't announced becomes `ScratchChanged{pad, rev, open,
-  by}` to every client watching events (`by` is `file` for a change made outside the daemon). The
-  revision last announced is kept per pad file. Polling, not inotify: it is the same on Linux and
+- **Watching.** The daemon looks at the file's mtime and size every 700 ms; a revision it hasn't
+  announced becomes `ScratchChanged{rev, open, by}` to every client watching events (`by` is
+  `file` for a change made outside the daemon). Polling, not inotify: it is the same on Linux and
   macOS, works on network and synced folders, and a pad is a few KB.
-- **The pane.** `ScratchPane{pad, create}` runs the editor as one session per pad
-  (`SessionInfo.pad`, and `pad_project` for a project's; kept and reused, so cycling between pads
-  keeps each cursor and undo): `[scratchpad]
+- **The pane.** `ScratchPane{create}` runs the editor as one session (`SessionInfo.pad`): `[scratchpad]
   editor`, else the `[editors]` default when it runs inside a terminal, else `$VISUAL`/`$EDITOR`,
   else the first of nvim, vim, nano, vi on `PATH`. vim and nvim start with `autoread` and a
   `checktime` autocommand so an append from elsewhere shows without a prompt. The session is quiet
@@ -3664,22 +3643,25 @@ are files you can `cat`, `grep`, sync and back up.
 - **Items become work.** `ptyro scratchpad start` (TUI: ⏎ in the items picker) starts a task like
   `ptyro "…"` with the item's text (and its indented lines) as the prompt, in a new worktree; the
   new worktree's spec carries `pad_item` (the line), and the daemon tags the item `[wt:…]` when it
-  is created, in the pad the item is in (`pad_sel`: started from the project's pad, tagged there;
-  from the global pad, tagged there). When that worktree's PR is seen merged (the GitHub poller) or
-  the worktree is removed, the daemon ticks the item with the PR number in the global pad and in
-  the worktree's project's (`[scratchpad] tick_on_finish`, default on).
+  is created. When that worktree's PR is seen merged (the GitHub poller) or the worktree is
+  removed, the daemon ticks the item with the PR number (`[scratchpad] tick_on_finish`, default on).
 - **Agents.** A lead's `ptyro mcp` has `scratchpad_read`, `scratchpad_todo` and `scratchpad_add`
-  (the add is stamped with the lead's name); they use the pad of the project the lead works in,
-  else the global one, and take an optional `pad` (`project` or `global`). Agents are not told about
-  the pad by default; one that finds the variables can read the files, and should add with
-  `ptyro scratchpad add` (which follows the same rule from its directory).
-- **Not covered.** A project pad lives in the repository, not in `<data>`: `ptyro backup` and
-  `ptyro uninstall` leave it alone. Deleting a project from ptyro leaves its pad in the repository.
-- **Scopes.** Reading (`ScratchGet`, `ScratchTodo`, `ScratchHistory`, `ScratchPads`) needs `read`; writing
+  (the add is stamped with the lead's name). Agents are not told about the pad by default; one
+  that finds the variable can read it and should add with `ptyro scratchpad add`.
+- **Scopes.** Reading (`ScratchGet`, `ScratchTodo`, `ScratchHistory`) needs `read`; writing
   (`ScratchPut`, `ScratchAdd`, `ScratchMark`, `ScratchRestore`) needs `control`; starting the
   editor session is `full`.
 
 ---
+- **One pad (NOTE1.7, dropped 2026-10-26).** v0.0.8 and v0.0.9 also had a pad per project
+  (`<repo>/.ptyro/scratchpad.md`, `$PTYRO_PROJECT_SCRATCHPAD`, a `pad` selector on the requests, a
+  switch key). The owner found several pads too confusing, and v0.0.10 removed it: there is exactly
+  one pad, the global one. Nothing in ptyro reads or writes a `.ptyro/scratchpad.*` file any more,
+  and the files that exist are left alone (and the `/.ptyro/scratchpad.*` lines already in a
+  repository's `.git/info/exclude` stay: they are harmless). The title of a new pad is `# Scratchpad`
+  again; a file that 0.0.8 titled `# Scratchpad — everywhere` still reads as one pad (that title is
+  not a section for the items). **Wire:** see §6.4, protocol 1.18.
+
 
 ## 14. Storage: files, directories, database
 
@@ -3689,7 +3671,7 @@ are files you can `cat`, `grep`, sync and back up.
 | Kind | Path | Contents |
 |---|---|---|
 | config | `~/.config/ptyro/` | `config.toml`, `themes/`, `recipes/` |
-| data | `~/.local/share/ptyro/` | `ptyro.db`, `worktrees/`, `sessions/<id>/pty.log`, `scratchpad.md` + `scratchpad.history/` (the global pad, §13.6; a project's is `<repo>/.ptyro/scratchpad.md`), `integrations/`, `profiles/<name>/<agent>/` (managed profile dirs, `0700`) |
+| data | `~/.local/share/ptyro/` | `ptyro.db`, `worktrees/`, `sessions/<id>/pty.log`, `scratchpad.md` + `scratchpad.history/` (§13.6), `integrations/`, `profiles/<name>/<agent>/` (managed profile dirs, `0700`) |
 | state | `~/.local/state/ptyro/` | `daemon.lock`, `daemon.log*`, `daemon.prev` |
 | runtime | Linux `$XDG_RUNTIME_DIR/ptyro/`; macOS `$TMPDIR/ptyro-<uid>/`; `PTYRO_HOME/run/` | `ptyro.sock` |
 

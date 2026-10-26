@@ -1,14 +1,14 @@
-//! `ptyro scratchpad` (NOTE1.0, NOTE1.7): the notes files, from the command line. It edits in
-//! your editor, here; prints and adds to a pad; lists its `- [ ]` items and ticks or starts them;
-//! and brings back old copies. A pad is plain Markdown and `$PTYRO_SCRATCHPAD` (everywhere) and
-//! `$PTYRO_PROJECT_SCRATCHPAD` (the project's) point at them, so none of this is needed to read
-//! one. Which pad: `--global`, `--project`, else the project you are in, else the global one.
+//! `ptyro scratchpad` (NOTE1.0): the one notes file, from the command line. It edits in your
+//! editor, here; prints and adds to it; lists its `- [ ]` items and ticks or starts them; and
+//! brings back old copies. The file is plain Markdown and `$PTYRO_SCRATCHPAD` points at it, so
+//! none of this is needed to read it.
 
 use std::io::{IsTerminal, Read};
 
 use clap::Subcommand;
 use ptyro_core::Error;
-use ptyro_core::scratchpad::{self as pad, PadSel};
+use ptyro_core::config::Config;
+use ptyro_core::scratchpad as pad;
 use ptyro_protocol::{PadMark, Reply, Request};
 
 use crate::cli::{Ctx, age, current_dir, unexpected};
@@ -79,106 +79,57 @@ pub enum PadCmd {
     Restore { rev: String },
 }
 
-/// Which pad the flags ask for.
-pub struct Which {
-    /// `--global`
-    pub everywhere: bool,
-    /// `--project` (empty: the one you are in) or `--project=NAME`
-    pub project: Option<String>,
-}
-
-impl Which {
-    fn sel(&self) -> Result<PadSel, Error> {
-        Ok(match (&self.project, self.everywhere) {
-            (_, true) => PadSel::Global,
-            (Some(name), _) if !name.is_empty() => PadSel::Project(name.clone()),
-            (Some(_), _) => PadSel::Project(current_dir()?.to_string_lossy().into_owned()),
-            // Follow where you are: the project's pad inside one, else the global one.
-            _ => PadSel::Near(current_dir()?),
-        })
-    }
-}
-
-/// "the global pad", "the ptyro project pad": what a command says it used.
-pub fn label(doc: &ptyro_protocol::PadDoc) -> String {
-    match doc.pad {
-        PadSel::Project(_) => format!("the {} project pad", doc.name),
-        _ => "the global pad (everywhere)".into(),
-    }
-}
-
-/// An explicit `--project` outside any project says what to do instead.
-fn pad_err(sel: &PadSel, e: Error) -> Error {
-    match sel {
-        PadSel::Project(_) if e.code == ptyro_core::ErrorCode::NotFound => Error::invalid(format!(
-            "{e}: not inside a project ptyro knows. Run it from the project's directory or one of \
-             its worktrees, name one with `--project=NAME`, or use `--global`"
-        )),
-        _ => e,
-    }
-}
-
-pub async fn run(
-    ctx: &Ctx,
-    cmd: Option<PadCmd>,
-    which: Which,
-    pane: bool,
-    json: bool,
-) -> Result<i32, Error> {
-    let sel = which.sel()?;
+pub async fn run(ctx: &Ctx, cmd: Option<PadCmd>, pane: bool, json: bool) -> Result<i32, Error> {
     if pane {
         if cmd.is_some() {
             return Err(Error::invalid(
                 "--pane opens the editor as a session; it takes no subcommand",
             ));
         }
-        return open_pane(ctx, &sel, json).await;
+        return open_pane(ctx, json).await;
     }
-    let r = match cmd.unwrap_or(PadCmd::Edit) {
-        PadCmd::Edit => edit(ctx, &sel).await,
-        PadCmd::Path => path(ctx, &sel).await,
-        PadCmd::Cat { tail, json } => cat(ctx, &sel, tail, json).await,
-        PadCmd::Add { text, section, note, no_stamp, json } => {
-            add(ctx, &sel, text, section, note, no_stamp, json).await
+    match cmd.unwrap_or(PadCmd::Edit) {
+        PadCmd::Edit => edit(ctx),
+        PadCmd::Path => {
+            println!("{}", config(ctx).scratchpad_path(&ctx.paths.data).display());
+            Ok(0)
         }
-        PadCmd::Todo { all, json } => todo(ctx, &sel, all, json).await,
-        PadCmd::Done { item, undo } => done(ctx, &sel, &item, undo).await,
-        PadCmd::Start { item, agent, dry_run } => start(ctx, &sel, &item, agent, dry_run).await,
-        PadCmd::Log { json } => log(ctx, &sel, json).await,
-        PadCmd::Restore { rev } => restore(ctx, &sel, &rev).await,
-    };
-    r.map_err(|e| pad_err(&sel, e))
-}
-
-fn config(ctx: &Ctx) -> ptyro_core::config::Config {
-    ptyro_core::config::Config::load(&ptyro_core::config::Config::path(&ctx.paths))
-        .unwrap_or_default()
-}
-
-/// Print which pad a command used, for people (not in the output a script reads).
-fn say(doc: &ptyro_protocol::PadDoc) {
-    if std::io::stdout().is_terminal() {
-        eprintln!("({}: {})", label(doc), doc.path.display());
+        PadCmd::Cat { tail, json } => cat(ctx, tail, json).await,
+        PadCmd::Add { text, section, note, no_stamp, json } => {
+            add(ctx, text, section, note, no_stamp, json).await
+        }
+        PadCmd::Todo { all, json } => todo(ctx, all, json).await,
+        PadCmd::Done { item, undo } => done(ctx, &item, undo).await,
+        PadCmd::Start { item, agent, dry_run } => start(ctx, &item, agent, dry_run).await,
+        PadCmd::Log { json } => log(ctx, json).await,
+        PadCmd::Restore { rev } => restore(ctx, &rev).await,
     }
 }
 
-async fn path(ctx: &Ctx, sel: &PadSel) -> Result<i32, Error> {
-    let d = doc(ctx, sel).await?;
-    println!("{}", d.path.display());
-    say(&d);
-    Ok(0)
+fn config(ctx: &Ctx) -> Config {
+    Config::load(&Config::path(&ctx.paths)).unwrap_or_default()
+}
+
+/// The pad's file and its history, without the daemon.
+fn local_pad(ctx: &Ctx, config: &Config) -> pad::Pad {
+    pad::Pad::new(
+        config.scratchpad_path(&ctx.paths.data),
+        ctx.paths.data.join("scratchpad.history"),
+        config.scratchpad.keep,
+    )
 }
 
 /// Open the file in the editor, in this terminal, and wait for it.
-async fn edit(ctx: &Ctx, sel: &PadSel) -> Result<i32, Error> {
-    let d = doc(ctx, sel).await?;
-    let command = config(ctx).scratchpad_editor(false).ok_or_else(|| {
+fn edit(ctx: &Ctx) -> Result<i32, Error> {
+    let config = config(ctx);
+    let file = local_pad(ctx, &config);
+    file.ensure().map_err(|e| Error::internal(format!("{}: {e}", file.path.display())))?;
+    let command = config.scratchpad_editor(false).ok_or_else(|| {
         Error::invalid(
             "no editor found: set $EDITOR, or [scratchpad] editor in `ptyro config edit`",
         )
     })?;
-    eprintln!("editing {}: {}", label(&d), d.path.display());
-    let argv = pad::editor_argv(&command, &d.path);
+    let argv = pad::editor_argv(&command, &file.path);
     let status = std::process::Command::new(&argv[0])
         .args(&argv[1..])
         .status()
@@ -186,13 +137,12 @@ async fn edit(ctx: &Ctx, sel: &PadSel) -> Result<i32, Error> {
     Ok(status.code().unwrap_or(1))
 }
 
-async fn open_pane(ctx: &Ctx, sel: &PadSel, json: bool) -> Result<i32, Error> {
+async fn open_pane(ctx: &Ctx, json: bool) -> Result<i32, Error> {
     if !json {
         crate::cli::check_attachable()?;
     }
     let client = ctx.connect(true).await?;
     let req = Request::ScratchPane {
-        pad: sel.clone(),
         create: true,
         env: crate::cli::client_env(),
         size: None,
@@ -206,36 +156,38 @@ async fn open_pane(ctx: &Ctx, sel: &PadSel, json: bool) -> Result<i32, Error> {
     crate::cli::attach_with(ctx, client, Some(info), ptyro_tui::Options::default()).await
 }
 
-async fn doc(ctx: &Ctx, sel: &PadSel) -> Result<ptyro_protocol::PadDoc, Error> {
+async fn doc(ctx: &Ctx) -> Result<ptyro_protocol::PadDoc, Error> {
     let c = ctx.connect(true).await?;
-    match c.request(Request::ScratchGet { pad: sel.clone() }).await? {
+    match c.request(Request::ScratchGet).await? {
         Reply::Scratch { doc } => Ok(doc),
         r => Err(unexpected(r)),
     }
 }
 
-async fn cat(ctx: &Ctx, sel: &PadSel, tail: Option<usize>, json: bool) -> Result<i32, Error> {
-    let d = doc(ctx, sel).await?;
+async fn cat(ctx: &Ctx, tail: Option<usize>, json: bool) -> Result<i32, Error> {
+    // Plain text needs no daemon; JSON carries the revision, which is the daemon's.
     if json {
+        let d = doc(ctx).await?;
         println!("{}", serde_json::to_string_pretty(&d).unwrap_or_default());
         return Ok(0);
     }
-    say(&d);
+    let config = config(ctx);
+    let text =
+        local_pad(ctx, &config).read().map_err(|e| Error::internal(format!("scratchpad: {e}")))?;
     match tail {
         Some(n) => {
-            let lines: Vec<&str> = d.text.lines().collect();
+            let lines: Vec<&str> = text.lines().collect();
             for l in &lines[lines.len().saturating_sub(n)..] {
                 println!("{l}");
             }
         }
-        None => print!("{}", d.text),
+        None => print!("{text}"),
     }
     Ok(0)
 }
 
 async fn add(
     ctx: &Ctx,
-    sel: &PadSel,
     words: Vec<String>,
     section: Option<String>,
     note: bool,
@@ -260,7 +212,6 @@ async fn add(
     }
     let c = ctx.connect(true).await?;
     let req = Request::ScratchAdd {
-        pad: sel.clone(),
         text,
         section,
         note,
@@ -274,17 +225,9 @@ async fn add(
     if json {
         println!("{}", serde_json::to_string_pretty(&doc).unwrap_or_default());
     } else {
-        eprintln!("added to {} ({}, {} open)", label(&doc), doc.path.display(), doc.open);
+        eprintln!("added to {} ({} open)", doc.path.display(), doc.open);
     }
     Ok(0)
-}
-
-/// A pad as named before the daemon has resolved it.
-fn sel_label(sel: &PadSel) -> &'static str {
-    match sel {
-        PadSel::Global => "the global pad",
-        _ => "this project's pad",
-    }
 }
 
 fn show(i: &pad::Item) -> String {
@@ -311,11 +254,9 @@ fn show(i: &pad::Item) -> String {
     out
 }
 
-async fn todo(ctx: &Ctx, sel: &PadSel, all: bool, json: bool) -> Result<i32, Error> {
+async fn todo(ctx: &Ctx, all: bool, json: bool) -> Result<i32, Error> {
     let c = ctx.connect(true).await?;
-    let Reply::ScratchItems { rev, items } =
-        c.request(Request::ScratchTodo { pad: sel.clone(), all }).await?
-    else {
+    let Reply::ScratchItems { rev, items } = c.request(Request::ScratchTodo { all }).await? else {
         return Err(Error::internal("unexpected reply"));
     };
     if json {
@@ -323,7 +264,7 @@ async fn todo(ctx: &Ctx, sel: &PadSel, all: bool, json: bool) -> Result<i32, Err
         return Ok(0);
     }
     if items.is_empty() {
-        eprintln!("nothing open in {} (`ptyro scratchpad add \"…\"`)", sel_label(sel));
+        eprintln!("nothing open (`ptyro scratchpad add \"…\"`)");
     }
     for i in &items {
         println!("{}", show(i));
@@ -331,11 +272,11 @@ async fn todo(ctx: &Ctx, sel: &PadSel, all: bool, json: bool) -> Result<i32, Err
     Ok(0)
 }
 
-async fn done(ctx: &Ctx, sel: &PadSel, item: &str, undo: bool) -> Result<i32, Error> {
+async fn done(ctx: &Ctx, item: &str, undo: bool) -> Result<i32, Error> {
     let c = ctx.connect(true).await?;
     let mark = if undo { PadMark::Open } else { PadMark::Done { pr: None } };
     let Reply::ScratchItems { items, .. } =
-        c.request(Request::ScratchMark { pad: sel.clone(), sel: item.to_owned(), mark }).await?
+        c.request(Request::ScratchMark { sel: item.to_owned(), mark }).await?
     else {
         return Err(Error::internal("unexpected reply"));
     };
@@ -345,15 +286,9 @@ async fn done(ctx: &Ctx, sel: &PadSel, item: &str, undo: bool) -> Result<i32, Er
     Ok(0)
 }
 
-async fn start(
-    ctx: &Ctx,
-    sel: &PadSel,
-    item: &str,
-    agent: Option<String>,
-    dry_run: bool,
-) -> Result<i32, Error> {
+async fn start(ctx: &Ctx, item: &str, agent: Option<String>, dry_run: bool) -> Result<i32, Error> {
     let c = ctx.connect(true).await?;
-    let Reply::Scratch { doc } = c.request(Request::ScratchGet { pad: sel.clone() }).await? else {
+    let Reply::Scratch { doc } = c.request(Request::ScratchGet).await? else {
         return Err(Error::internal("unexpected reply"));
     };
     let it = pad::select(&doc.text, item).map_err(Error::invalid)?;
@@ -369,14 +304,12 @@ async fn start(
         return Ok(0);
     }
     drop(c);
-    crate::cli::start_pad_task(ctx, &prompt, agent, it.line, doc.pad).await
+    crate::cli::start_pad_task(ctx, &prompt, agent, it.line).await
 }
 
-async fn log(ctx: &Ctx, sel: &PadSel, json: bool) -> Result<i32, Error> {
+async fn log(ctx: &Ctx, json: bool) -> Result<i32, Error> {
     let c = ctx.connect(true).await?;
-    let Reply::ScratchLog { snapshots } =
-        c.request(Request::ScratchHistory { pad: sel.clone() }).await?
-    else {
+    let Reply::ScratchLog { snapshots } = c.request(Request::ScratchHistory).await? else {
         return Err(Error::internal("unexpected reply"));
     };
     if json {
@@ -387,18 +320,17 @@ async fn log(ctx: &Ctx, sel: &PadSel, json: bool) -> Result<i32, Error> {
         println!("{}  {:>5} ago  {} lines", s.rev, age(s.at_ms), s.lines);
     }
     if snapshots.is_empty() {
-        eprintln!("no saved copies of {} yet", sel_label(sel));
+        eprintln!("no saved copies yet");
     }
     Ok(0)
 }
 
-async fn restore(ctx: &Ctx, sel: &PadSel, rev: &str) -> Result<i32, Error> {
+async fn restore(ctx: &Ctx, rev: &str) -> Result<i32, Error> {
     let c = ctx.connect(true).await?;
-    let Reply::Scratch { doc } =
-        c.request(Request::ScratchRestore { pad: sel.clone(), rev: rev.to_owned() }).await?
+    let Reply::Scratch { doc } = c.request(Request::ScratchRestore { rev: rev.to_owned() }).await?
     else {
         return Err(Error::internal("unexpected reply"));
     };
-    eprintln!("restored {} of {} ({} open)", doc.rev, label(&doc), doc.open);
+    eprintln!("restored {} ({} open)", doc.rev, doc.open);
     Ok(0)
 }

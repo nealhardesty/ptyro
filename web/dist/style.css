@@ -283,12 +283,6 @@ kbd { font: 12px ui-monospace, Menlo, monospace; padding: 1px 6px; border: 1px s
 .pad-bar button { padding: 6px 10px; }
 .pad-bar button.on { border-color: var(--accent); }
 .pad-bar .pad-find { flex: 1 1 120px; min-width: 90px; }
-.pad-tabs { display: flex; gap: 6px; padding: 8px 8px 0; overflow-x: auto; }
-.pad-tabs button { padding: 6px 12px; border-radius: 8px 8px 0 0; white-space: nowrap; }
-.pad-tabs button.on { border-color: var(--accent); font-weight: 600; }
-.pad-tabs b.open { margin-left: 6px; padding: 0 6px; border-radius: 9px; background: var(--accent); color: #fff; font-size: 11px; }
-.pad-target { padding: 6px 8px; border-radius: 8px; white-space: nowrap; max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
-.pad-target[hidden] { display: none; }
 .pad-text { flex: 1; min-height: 50vh; margin: 0 8px; padding: 10px; resize: none; border-radius: 8px;
   border: 1px solid var(--line); background: var(--panel); color: var(--text);
   font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 2; }

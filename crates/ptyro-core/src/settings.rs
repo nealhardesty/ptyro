@@ -673,8 +673,8 @@ pub const SETTINGS: &[Setting] = &[
     // ── Scratchpad and editors ──
     s("scratchpad.mode", "scratchpad", pick(PAD_MODE), "How the scratchpad key shows it."),
     s("scratchpad.editor", "scratchpad", Kind::Text, "The editor for the notes file, as a command line like `nvim` or `code -w`. (Worktrees open in the editor under Editors, below.)").or("your default editor, $VISUAL, $EDITOR, then nvim, vim, nano or vi").eg("nvim"),
-    s("scratchpad.path", "scratchpad", Kind::Path, "Where the notes file for everywhere lives. Point it into a synced folder to share it between machines. (A project's own pad is `.ptyro/scratchpad.md` in its repository; this doesn't move it.)").or("scratchpad.md in ptyro's data directory").eg("~/Sync/pad.md"),
-    s("scratchpad.keep", "scratchpad", int(1, 3650), "How long saved copies of the notes are kept, for every pad (the newest 20 always stay).").unit("days"),
+    s("scratchpad.path", "scratchpad", Kind::Path, "Where the notes file lives. Point it into a synced folder to share it between machines.").or("scratchpad.md in ptyro's data directory").eg("~/Sync/pad.md"),
+    s("scratchpad.keep", "scratchpad", int(1, 3650), "How long saved copies of the notes are kept (the newest 20 always stay).").unit("days"),
     s("scratchpad.tick_on_finish", "scratchpad", Kind::Bool, "Tick an item once the worktree started from it is merged or cleaned up."),
     s("editors.default", "scratchpad", dynamic(Source::Editors), "The editor that opens a worktree (the notes file has its own, above).").or("the first of nvim, vim, hx, code, zed, cursor that is installed"),
     s("editors.*.command", "scratchpad", Kind::Argv, "The program and arguments; {path} is the worktree."),

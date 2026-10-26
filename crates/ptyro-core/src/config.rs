@@ -448,14 +448,12 @@ pub struct Config {
     pub scratchpad: Scratchpad,
 }
 
-/// The scratchpad (NOTE1, SPEC §13.6): a notes file for everywhere and one per project (NOTE1.7),
-/// opened in your editor in a pane.
+/// The scratchpad (NOTE1, SPEC §13.6): one notes file, opened in your editor in a pane.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Scratchpad {
-    /// Where the file for everywhere lives (default: `scratchpad.md` in ptyro's data directory).
-    /// Point it into a synced folder or a repository to share it between machines. A project's
-    /// pad is `.ptyro/scratchpad.md` in its repository and does not move.
+    /// Where the file lives (default: `scratchpad.md` in ptyro's data directory). Point it into a
+    /// synced folder or a repository to share it between machines.
     pub path: Option<String>,
     /// How its key shows it: `drawer` (below the pane, like the quick terminal), `popup` (a
     /// window over everything) or `pane` (a pane of its own beside the others).
@@ -463,7 +461,7 @@ pub struct Scratchpad {
     /// The editor, as a command line (`"nvim"`, `"hx"`, `"code -w"`); default: `[editors]`
     /// default, else `$VISUAL`, `$EDITOR`, then nvim, vim, nano or vi, whichever is installed.
     pub editor: Option<String>,
-    /// How many days of saved copies to keep, for every pad (the newest 20 always stay).
+    /// How many days of saved copies to keep (the newest 20 always stay).
     pub keep: u64,
     /// Tick an item once the worktree started from it is merged or cleaned up.
     pub tick_on_finish: bool,

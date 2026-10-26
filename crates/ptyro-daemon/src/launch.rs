@@ -280,11 +280,6 @@ impl Daemon {
             ("PTYRO_ROOT_PATH".to_owned(), p.root.to_string_lossy().into_owned()),
             ("PTYRO_WORKTREE_PATH".to_owned(), wt.path.to_string_lossy().into_owned()),
             ("PTYRO_WORKTREE_NAME".to_owned(), wt.name.clone()),
-            // The project's own scratchpad (NOTE1.7), beside `PTYRO_SCRATCHPAD`'s.
-            (
-                "PTYRO_PROJECT_SCRATCHPAD".to_owned(),
-                ptyro_core::scratchpad::project_pad_path(&p.root).to_string_lossy().into_owned(),
-            ),
         ];
         if let Some(b) = &wt.branch {
             v.push(("PTYRO_BRANCH".into(), b.clone()));
