@@ -22,7 +22,7 @@ STRICT ?= 1
 WEB_STRICT ?= 1
 
 .DEFAULT_GOAL := help
-.PHONY: help rust-install build release install test fmt fmt-check lint deny doc check ci clean tools \
+.PHONY: help rust-install build release install install-release test fmt fmt-check lint deny doc check ci clean tools \
         run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update lock-check msrv sbom installer-check dist-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean scratchpad-demo orchestrate-demo changeset-demo verify-claude verify-structured tui-parity parity reset
 
 help: ## List targets
@@ -38,7 +38,16 @@ build: ## Debug build of the whole workspace
 release: ## Optimized build (target/release/ptyro)
 	$(CARGO) build --workspace --release
 
-install: ## Install the ptyro binary into ~/.cargo/bin
+# `cargo install` builds in a throwaway directory, so every run recompiled every dependency
+# (minutes). This builds in target/ (kept between runs, incremental) and copies the binary over
+# the old one by rename, so a running daemon keeps its old copy until it restarts.
+install: ## Install the ptyro binary into ~/.cargo/bin (a fast build: seconds after the first)
+	$(CARGO) build --locked --profile local -p ptyro
+	mkdir -p $(HOME)/.cargo/bin
+	install -m 755 target/local/ptyro $(HOME)/.cargo/bin/ptyro.new
+	mv -f $(HOME)/.cargo/bin/ptyro.new $(HOME)/.cargo/bin/ptyro
+
+install-release: ## Install the fully optimized build (what a release ships: slow, thin LTO)
 	$(CARGO) install --locked --path crates/ptyro
 
 ## ── quality ────────────────────────────────────────────────────────────────

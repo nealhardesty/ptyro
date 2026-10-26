@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "3"
 
 [workspace.package]
-version = "0.0.8"
+version = "0.0.9"
 edition = "2024"
 rust-version = "1.99"
 license = "MIT"
@@ -104,6 +104,14 @@ print_stderr = "allow"
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# `make install`: your own machine's copy. Release speed without the release build's cost: no LTO,
+# many codegen units and incremental, so a rebuild after an edit takes seconds, not minutes.
+[profile.local]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true
 
 # `make fuzz-smoke`: release speed, but overflow and debug assertions stay on so they're found.
 [profile.fuzz]

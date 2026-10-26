@@ -545,7 +545,7 @@ never raw `cargo`, so local runs and CI behave the same.
 |---|---|
 | `make help` | list the targets (the default) |
 | `make rust-install` | install rustup (checksum-verified, no `curl \| sh`) and the toolchain pinned in `rust-toolchain.toml` |
-| `make build` / `release` / `install` | debug build / optimized `target/release/ptyro` / install into `~/.cargo/bin` |
+| `make build` / `release` / `install` / `install-release` | debug build / optimized `target/release/ptyro` / install into `~/.cargo/bin` (a fast incremental build: seconds after the first) / the same with the full release optimizations (slow) |
 | `make run ARGS="ls"` / `make try CMD=claude` | run the dev build with arguments / start `CMD` in a new session and attach |
 | `make test` / `make smoke` | all tests / quick end-to-end checks of the PTY and emulator |
 | `make fmt` / `fmt-check` / `lint` | format / fail if unformatted / clippy with warnings as errors |
