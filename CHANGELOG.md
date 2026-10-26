@@ -6,6 +6,13 @@ Generated from git history by `make changelog` (scripts/changelog.sh); edit comm
 
 ### Features
 
+- feat: UX2.3 a shell opens where it belongs: a drawer when the project is open, its own panel when not (f36c794)
+- feat: a config panel that makes sense, per-project scratchpad, About, pushed state, safer pairing (v0.0.8) (31b7252)
+
+## v0.0.7 (2026-10-25)
+
+### Features
+
 - feat: H2.1-H2.3 locks that survive panics, a release pipeline with gates, provenance and an SBOM, an installer, ptyro uninstall and backup; docs tested against the code (f5e1ef7)
 - feat: CFG1 one configuration panel: the settings schema, the TUI panel, ptyro config set|get|list…, and the web's Settings, from one table (fc42415)
 - feat: CFG1.1/1.2 the settings panel in the TUI and ptyro config list|get|set|unset|add|rm|rename|schema (c118ff4)
@@ -22,6 +29,7 @@ Generated from git history by `make changelog` (scripts/changelog.sh); edit comm
 
 ### Other
 
+- release: v0.0.7 (a166398)
 - test: two Linux-runner flakes: a reset under a refusal's reply, and the shell's own directory standing in for the OSC 7 one (cdd6db2)
 - test: wait a moment before the first tap on New task (2b80d01)
 - test: the browser test taps New task again on a fresh page if the first tap came before the projects loaded (7ed4a18)
