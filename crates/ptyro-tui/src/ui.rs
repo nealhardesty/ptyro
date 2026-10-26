@@ -1078,11 +1078,15 @@ fn draw_panes(app: &App, f: &mut Frame<'_>) {
             if c.is_some() {
                 cursor = c;
             }
+            let found = crate::about::urls_in(f.buffer_mut(), inner);
+            app.links.borrow_mut().extend(found);
             continue;
         }
         let Some(cache) = app.caches.get(&id) else { continue };
         let exited = app.exit_state(id);
         paint::screen(cache, f.buffer_mut(), inner, app.depth, exited.is_some());
+        let found = crate::about::urls_in(f.buffer_mut(), inner);
+        app.links.borrow_mut().extend(found);
         if let Some(state) = &exited {
             let action = if *state == ptyro_core::session::ProcessState::Dormant {
                 "resume"
