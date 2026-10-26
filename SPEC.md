@@ -5104,7 +5104,22 @@ are built on tags later. CI only ever calls make targets.
   `scripts/changelog.sh --notes` and the formula from `make homebrew-formula`; signs build
   provenance for the tarballs, the SBOM and `SHA256SUMS` (`actions/attest-build-provenance`,
   verified with `gh attestation verify`); creates the release; and pushes to the tap when
-  `HOMEBREW_TAP_TOKEN` is set. macOS binaries are not notarized (no Apple developer account in
+  `HOMEBREW_TAP_TOKEN` is set. The tap is the public repo `nealhardesty/homebrew-ptyro`: a README and
+  `Formula/ptyro.rb`, which each release overwrites with the formula rendered from the four
+  tarball checksums (users: `brew install nealhardesty/ptyro/ptyro`). Set-up (owner, once): create
+  that repo, create a fine-grained token with contents:write on that repo only, and store it as the
+  secret `HOMEBREW_TAP_TOKEN` on the `release` environment, restricted to `v*` tags. The formula
+  (`packaging/homebrew/ptyro.rb.in`) installs the prebuilt binary, generates the bash/zsh/fish
+  completions from it, `uses_from_macos "git"`, has a GitHub `livecheck`, and its caveats say to
+  `ptyro daemon upgrade` after `brew upgrade` and that `gh` is optional. `make brew-check`
+  (`scripts/brew-check.sh`; the macOS build jobs and CI's macOS installer job run it with
+  `PTYRO_REQUIRE_BREW=1`) renders it for the host platform (`scripts/homebrew.sh` with `BASE_URL`
+  and `ONLY`) against the tarball in `dist/`, installs it from a throwaway local tap, and checks
+  `brew test`, `brew audit --strict`, the version, the three completions and the caveats; a wrong
+  checksum must be refused. It refuses to run if a Homebrew `ptyro` is already installed, and
+  undoes everything on exit. Not covered: `brew audit --online` and installing from the real tap,
+  which need a published release. A Homebrew install is recognised by its path: `ptyro
+  uninstall` names `brew uninstall ptyro`. macOS binaries are not notarized (no Apple developer account in
   the pipeline): a browser download is quarantined and needs `xattr -d com.apple.quarantine`;
   `scripts/install.sh` downloads with curl, which leaves no mark. `make bump V=patch|minor|major|X.Y.Z`
   (`scripts/bump.sh`) sets the version, the first `version =` in the root `Cargo.toml`, and the

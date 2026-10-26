@@ -828,8 +828,12 @@ Goal: trust it with a week of uninterrupted work.
       (`CHANGELOG.md` from tags and commit prefixes, milestone bullets kept), `make
       homebrew-formula`, and `release.yml` on `v*` tags (four platforms, `SHA256SUMS`, notes,
       `gh release`, a tap push with `HOMEBREW_TAP_TOKEN`). `cargo install --git` is in the
-      README. **Needs you:** create `nealhardesty/homebrew-ptyro` and the token, then push the
-      first tag.
+      README. `make brew-check` installs the formula from a throwaway tap against the built
+      tarball (test, strict audit, completions, caveats, bad checksum refused) and runs in the
+      release's macOS jobs and CI; the README documents `brew install/upgrade/uninstall`.
+      **Needs you:** create the public repo `nealhardesty/homebrew-ptyro` (a README and a
+      `Formula/` dir) and the `HOMEBREW_TAP_TOKEN` secret (SPEC §release), then push the first
+      tag; check `brew audit --online` once there is a release.
 
 **Done when:** a daemon upgrade during active agent work is invisible to the agents, and a 7-day
 soak test (fake agents generating output + real daily use) shows no leaks, no stuck sessions, and
@@ -2126,7 +2130,7 @@ into another repository, deep links to Settings load, dialogs keep their size, O
   action. `scripts/install.sh` is the way to install a release (checksum, provenance when `gh`
   is there, no macOS quarantine). *Not done:* macOS notarization (needs an Apple developer
   account), `x86_64-apple-darwin` is built and install-checked at release time but not in the CI
-  matrix, nothing verifies the Homebrew formula's install.
+  matrix; the Homebrew formula install is verified by `make brew-check` (macOS jobs) but not on Linux.
 - [x] **H2.3 The binary install's lifecycle (uninstall and backup).** *Done 2026-10-25.* `ptyro
   uninstall` (plan, confirm, stop, remove; keeps repositories, branches and snapshots refs;
   `--backup`, `--purge-refs`, `--dry-run`, `--json`), `ptyro backup`, `scripts/install.sh`, and

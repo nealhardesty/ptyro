@@ -23,7 +23,7 @@ WEB_STRICT ?= 1
 
 .DEFAULT_GOAL := help
 .PHONY: help rust-install build release install install-release test fmt fmt-check lint deny doc check ci clean tools \
-        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update lock-check msrv sbom installer-check dist-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean scratchpad-demo orchestrate-demo changeset-demo verify-claude verify-structured tui-parity parity reset
+        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean scratchpad-demo orchestrate-demo changeset-demo verify-claude verify-structured tui-parity parity reset
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -221,6 +221,9 @@ sbom: ## Software bill of materials (CycloneDX) from Cargo.lock: dist/ptyro-<ver
 
 dist-check: ## Install the tarball in dist/ with scripts/install.sh into a temp prefix and run it (after `make dist`)
 	TARGET=$(TRIPLE) scripts/installer-check.sh
+
+brew-check: ## Install the tarball in dist/ through the Homebrew formula from a throwaway tap, test and audit it (after `make dist`; PTYRO_REQUIRE_BREW=1 fails without brew)
+	TARGET=$(TRIPLE) scripts/brew-check.sh
 
 installer-check: dist dist-check ## Build this platform's tarball and prove the installer script installs it
 

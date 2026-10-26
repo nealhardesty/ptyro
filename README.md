@@ -73,8 +73,17 @@ signed build provenance when you have `gh`), and installs `~/.local/bin/ptyro` (
 cargo install --locked --git https://github.com/nealhardesty/ptyro ptyro
 ```
 
-Make sure `~/.local/bin` (or `~/.cargo/bin`) is on your `PATH`. A Homebrew tap
-(`brew install nealhardesty/ptyro/ptyro`) is planned but not published yet.
+Make sure `~/.local/bin` (or `~/.cargo/bin`) is on your `PATH`.
+
+With Homebrew (macOS and Linux):
+
+```bash
+brew install nealhardesty/ptyro/ptyro
+brew upgrade ptyro      # then `ptyro daemon upgrade` to move running sessions onto it
+brew uninstall ptyro    # `ptyro uninstall` removes your data first and names this command
+```
+
+Each release updates the tap automatically.
 
 **Downloading a tarball by hand** from the [releases page](https://github.com/nealhardesty/ptyro/releases/latest)?
 Check it: `shasum -a 256 -c SHA256SUMS --ignore-missing`, and who built it:
@@ -576,6 +585,7 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make dist` (`TRIPLE=…`) / `changelog` / `homebrew-formula` | release tarball + `.sha256` in `dist/` / regenerate `CHANGELOG.md` / render `dist/ptyro.rb` from the checksums |
 | `make sbom` | the software bill of materials (CycloneDX) from `Cargo.lock`: `dist/ptyro-<version>.cdx.json` |
 | `make dist-check` (`TRIPLE=…`) / `make installer-check` | install the tarball in `dist/` with `scripts/install.sh` into a temp prefix and run it (a tampered tarball must be refused) / `make dist` and then that |
+| `make brew-check` (`TRIPLE=…`) | install the tarball in `dist/` through the Homebrew formula from a throwaway local tap, then `brew test` and `brew audit --strict` it (a wrong checksum must be refused); skips without Homebrew unless `PTYRO_REQUIRE_BREW=1`; refuses if a Homebrew `ptyro` is already installed; run after `make dist` |
 | `make bump` (`V=patch\|minor\|major\|X.Y.Z`) | set the version in `Cargo.toml` and `Cargo.lock` (default: next patch); it prints the commit and tag to run |
 | `make check-macos` | type-check the workspace for macOS from Linux |
 
