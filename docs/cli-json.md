@@ -1,3 +1,6 @@
+<img src="logos/ptyro-icon.png" alt="ptyro" width="72" align="right">
+
+
 # `--json` output
 
 Every listing and query command takes `--json`. Its output is an interface: field names and types

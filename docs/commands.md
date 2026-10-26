@@ -1,3 +1,6 @@
+<img src="logos/ptyro-icon.png" alt="ptyro" width="72" align="right">
+
+
 # Commands
 
 Every TUI action has a command. `ptyro --help` and `ptyro <command> --help` are always the final

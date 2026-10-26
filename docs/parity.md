@@ -1,3 +1,6 @@
+<img src="logos/ptyro-icon.png" alt="ptyro" width="72" align="right">
+
+
 # Every command, in the TUI and on the web
 
 The CLI, the TUI and the web app are all first class (SPEC §1.3): what the CLI does, you can do

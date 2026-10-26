@@ -1,3 +1,6 @@
+<img src="logos/ptyro-icon.png" alt="ptyro" width="72" align="right">
+
+
 # Change sets
 
 One coordinated change across several repositories: an API field added in `api`, used in

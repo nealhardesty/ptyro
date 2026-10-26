@@ -1,3 +1,6 @@
+<img src="docs/logos/ptyro-icon.png" alt="ptyro" width="72" align="right">
+
+
 # ptyro — Research
 
 > A running record of **products in the same space as ptyro** and the **ideas they suggest**. Its

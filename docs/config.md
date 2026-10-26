@@ -1,3 +1,6 @@
+<img src="logos/ptyro-icon.png" alt="ptyro" width="72" align="right">
+
+
 # Configuration
 
 ptyro reads two kinds of file. Both are optional.

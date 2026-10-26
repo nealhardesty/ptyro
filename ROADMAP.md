@@ -1,3 +1,6 @@
+<img src="docs/logos/ptyro-icon.png" alt="ptyro" width="72" align="right">
+
+
 # ptyro — Roadmap
 
 This file is the source of truth for **what does not exist yet**. The design behind every item is in
