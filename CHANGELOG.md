@@ -6,6 +6,42 @@ Generated from git history by `make changelog` (scripts/changelog.sh); edit comm
 
 ### Features
 
+- feat: H2.1-H2.3 locks that survive panics, a release pipeline with gates, provenance and an SBOM, an installer, ptyro uninstall and backup; docs tested against the code (f5e1ef7)
+- feat: CFG1 one configuration panel: the settings schema, the TUI panel, ptyro config set|get|list…, and the web's Settings, from one table (fc42415)
+- feat: CFG1.1/1.2 the settings panel in the TUI and ptyro config list|get|set|unset|add|rm|rename|schema (c118ff4)
+- feat: CFG1.0 the settings schema: one description per config key, comment-keeping edits, and a view of every value with where it comes from (608d158)
+- feat: WEB1.8 a real terminal in the web: type into the session key by key, a phone key row, mouse, scrollback, selection and copy, find, links, resize-to-screen (77af177)
+
+### Fixes
+
+- fix: two tests that were racy on Linux (a freed inode number reused for the next socket file; landing a set while its agents were still reading the restore) (d8e7b52)
+- fix: the tour's agent can commit on a machine with no git identity (its own HOME with a .gitconfig); make test runs every test binary (1afa192)
+- fix: p256 0.14 (RUSTSEC-2026-0387 in crypto-bigint 0.5), and a test that assumed a stopped daemon leaves no socket file (81bc5b6)
+- fix: a review of the whole codebase: ~150 verified findings fixed (security, robustness, correctness) and the rest recorded as H2 in the ROADMAP (ac73e5b)
+- fix: a managed `ptyro serve` leaves when its daemon does, so a crashed daemon's server can't hold the port from the next one (46af6c3)
+
+### Other
+
+- test: two Linux-runner flakes: a reset under a refusal's reply, and the shell's own directory standing in for the OSC 7 one (cdd6db2)
+- test: wait a moment before the first tap on New task (2b80d01)
+- test: the browser test taps New task again on a fresh page if the first tap came before the projects loaded (7ed4a18)
+- test: the PR baseline comment exists before the first poll (a slow runner saw none); the browser test prints the page when a scenario fails (5168b6b)
+- test: H2.4 the tests that didn't exist: scope table, store migration and downgrade, handoff fixture, upgrade race, sinks, landing, gates, web e2e in headless Chrome, five fuzz targets (98bd7a9)
+- chore: bump the version to 0.0.4 for CFG1 (4711bff)
+
+## v0.0.3 (2026-10-24)
+
+### Features
+
+- feat: WEB1.9 the web app's server is a setting you can find: ptyro web on|off|status, daemon start --serve, an init question, TUI actions, More → Web app (cca739c)
+- feat: NOTE1.1-NOTE1.6 the scratchpad in the TUI and the web, MCP tools, doctor, docs (85537c6)
+- feat: web polish: session search, keys, offline banner, waiting count in the title; request-shape tests; fixes found by driving every page (08edc2f)
+- feat: WEB1.6 settings and health on the web, and WEB1 is done (c67a0ae)
+- feat: NOTE1.0, NOTE1.4 the scratchpad file, PTYRO_SCRATCHPAD, ptyro scratchpad, merging writes and ScratchChanged (3f24daf)
+- feat: WEB1.5 runs and change sets on the web: runs, gates, fan-out compare and pick, recipes, change sets with their contract, checks, checkpoints and merge train (35cf24e)
+- feat: WEB1.4 review and ship on the web: the diff with line comments for the agent, commits, commit, integrate, the PR and its checks, the review queue (e3d9f12)
+- feat: WEB1.3 projects and worktrees on the web: the Projects tab, a worktree's page, workspaces, clean-up, archives, leases, radar, checkpoints (078aec9)
+- feat: WEB1.2 sessions on the web: new task, the session menu, scrollback, events, replay, export, broadcast (2aa673a)
 - feat: WEB1.7 ptyro serve speaks HTTPS by default, with a certificate it makes (77213ae)
 - feat: WEB1.0, WEB1.1 the parity check covers the web, and every command is audited for it (8b4e407)
 - feat: UX1.22 the tour, done for real: a task to clean-up with a pretend agent (fecac74)
@@ -30,6 +66,9 @@ Generated from git history by `make changelog` (scripts/changelog.sh); edit comm
 
 ### Documentation
 
+- docs: roadmap NOTE1 (the scratchpad), R-UX-32 (80e7b60)
+- docs: roadmap CFG1 (config panel), WEB1.8 (web terminal), WEB1.9 (serve with the daemon) (0fb90ab)
+- docs: regenerate CHANGELOG.md (cf57911)
 - docs: several lines in one prompt, in every client; roadmap UX1.26 and TLS by default (WEB1.7) (79b7e08)
 - docs: the CLI, the TUI and the web are all first class; roadmap WEB1, web parity (83d635a)
 - docs: regenerate CHANGELOG.md (43dfeef)
@@ -45,6 +84,7 @@ Generated from git history by `make changelog` (scripts/changelog.sh); edit comm
 
 ### Other
 
+- release: v0.0.3 (20e64d1)
 - test: UX1's "Done when" end to end, and the fixes closing UX1 out (2cd1ec8)
 - UX1.25: a quick terminal per worktree, in a drawer one key toggles (25ede4d)
 - UX1.21: every CLI command has a TUI path, and the check is strict (785c15c)
