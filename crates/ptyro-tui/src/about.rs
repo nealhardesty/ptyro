@@ -290,6 +290,47 @@ pub fn lines(
     (out, links)
 }
 
+/// The `http(s)://` addresses in the cells of `area`, one row at a time: what a program printed
+/// in a pane becomes a link the terminal can follow. A sentence's own full stop, comma or
+/// closing bracket is not the address's.
+pub fn urls_in(buf: &ratatui::buffer::Buffer, area: ratatui::layout::Rect) -> Vec<Link> {
+    let mut out = Vec::new();
+    for y in area.top()..area.bottom() {
+        // The text of the row, and the column each of its characters starts in.
+        let mut text = String::new();
+        let mut at: Vec<u16> = Vec::new();
+        for x in area.left()..area.right() {
+            let Some(c) = buf.cell((x, y)) else { continue };
+            for ch in c.symbol().chars() {
+                text.push(ch);
+                at.push(x);
+            }
+        }
+        let chars: Vec<char> = text.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            let rest: String = chars[i..].iter().take(8).collect();
+            if !(rest.starts_with("http://") || rest.starts_with("https://")) {
+                i += 1;
+                continue;
+            }
+            let mut end = i;
+            while end < chars.len() && !chars[end].is_whitespace() && !"<>\"'`".contains(chars[end]) {
+                end += 1;
+            }
+            while end > i && ".,;:!?)]}".contains(chars[end - 1]) {
+                end -= 1;
+            }
+            let url: String = chars[i..end].iter().collect();
+            if url.len() > "https://".len() {
+                out.push(Link { x: at[i], y, width: at[end - 1] - at[i] + 1, url });
+            }
+            i = end.max(i + 1);
+        }
+    }
+    out
+}
+
 /// The cells of the links on screen, each with the hyperlink escape in its symbol: the first
 /// opens the link, the last closes it. Written over what is already drawn (the same text), so the
 /// screen looks the same and the terminal knows it is a link (OSC 8).
@@ -418,6 +459,18 @@ mod tests {
         let app = app();
         assert_eq!(app.keymap.key_for("app.about").as_deref(), Some("C-q I"));
         assert!(crate::keymap::ACTIONS.iter().any(|a| a.id == "app.about"));
+    }
+
+    #[test]
+    fn addresses_printed_in_a_pane_are_found_without_the_sentence_around_them() {
+        let area = ratatui::layout::Rect::new(0, 0, 40, 2);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        buf.set_string(2, 0, "see https://example.com/a?b=1, ok", Style::new());
+        buf.set_string(0, 1, "no link here", Style::new());
+        let found = urls_in(&buf, area);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].url, "https://example.com/a?b=1");
+        assert_eq!((found[0].x, found[0].y, found[0].width), (6, 0, 25));
     }
 
     #[test]
