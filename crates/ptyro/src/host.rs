@@ -312,6 +312,26 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
         }
 
         // ── the tour ──
+        // ── other machines (MM1.B): claiming a code is an HTTPS request from this machine ──
+        "machine.add" => {
+            let mut args = vec!["machine", "add", str_of(a, "target")?, "--json"];
+            let name = opt(a, "name");
+            if let Some(n) = name.as_deref() {
+                args.extend(["--name", n]);
+            }
+            let r = cli(&args).await?;
+            if r["ok"] != true {
+                return Err(Error::invalid(notes(&r).join(" ")));
+            }
+            Ok(serde_json::from_str(r["out"].as_str().unwrap_or("{}")).unwrap_or(r))
+        }
+        "machine.pair" => {
+            let r = cli(&["machine", "pair", "--json"]).await?;
+            if r["ok"] != true {
+                return Err(Error::invalid(notes(&r).join(" ")));
+            }
+            Ok(serde_json::from_str(r["out"].as_str().unwrap_or("{}")).unwrap_or(r))
+        }
         "tour.start" => crate::tour::web_start(ctx).await,
         "tour.end" => crate::tour::web_end().await,
 

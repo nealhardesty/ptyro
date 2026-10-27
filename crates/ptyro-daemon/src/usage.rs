@@ -38,6 +38,7 @@ pub fn claude_usage(profile: &str, v: &Value) -> Usage {
     let limited_until_ms =
         windows.iter().filter(|w| w.used_percent >= 100).filter_map(|w| w.resets_at_ms).max();
     Usage {
+        machine: None,
         profile: profile.into(),
         agent: "claude".into(),
         windows,
@@ -116,6 +117,7 @@ impl Daemon {
         let mut u =
             self.usage.locked().get(&(profile.clone(), adapter.clone())).cloned().unwrap_or(
                 Usage {
+                    machine: None,
                     profile,
                     agent: adapter,
                     windows: Vec::new(),
@@ -233,7 +235,7 @@ impl Daemon {
                     };
                     let windows = codex_windows(&snap);
                     let limited = snap["rateLimitReachedType"].as_str().is_some().then(|| windows.iter().filter_map(|w| w.resets_at_ms).max()).flatten();
-                    self.put_usage(Usage { profile: profile.into(), agent: "codex".into(), windows, cost_millis: None, context_percent: None, limited_until_ms: limited, at_ms: now_ms() });
+                    self.put_usage(Usage { machine: None, profile: profile.into(), agent: "codex".into(), windows, cost_millis: None, context_percent: None, limited_until_ms: limited, at_ms: now_ms() });
                 }
                 () = tokio::time::sleep(Duration::from_secs(30)) => {}
             }

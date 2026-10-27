@@ -59,6 +59,10 @@ fn drawer_share() -> f32 {
 /// Where the TUI remembers which workspace it showed last.
 pub const LAST_WORKSPACE: &str = "_tui";
 
+/// The one layout for every workspace (MM1.B: they are all on screen at once). Before, each
+/// workspace had its own, under its name: the last one's is taken over once.
+pub const ALL_VIEW: &str = "_all";
+
 /// The widest the sidebar gets (the settings schema's range ends here too).
 const SIDEBAR_MAX: u16 = 120;
 
@@ -202,6 +206,12 @@ pub enum Purpose {
     Palette,
     /// Show the pick in the focused pane.
     Show,
+    /// Where a new workspace goes: this machine or another (MM1.B).
+    NewWorkspaceOn,
+    /// A machine's hidden workspace to show again (`machine:workspace`).
+    MachineUnhide,
+    /// A machine to act on (MM1.B): retry, hide its workspace, remove it.
+    MachinePick(&'static str),
     /// Wizard step one: what to run.
     Agent(Wizard),
     /// Wizard step two: where.
@@ -271,8 +281,9 @@ pub enum PromptKind {
     WorktreeName(Wizard),
     /// A line for the scratchpad, about this session (NOTE1.2).
     PadAdd(Option<SessionId>),
-    /// A name for a new workspace; ⏎ on nothing takes the suggestion.
-    NewWorkspace(Option<String>),
+    /// A name for a new workspace; ⏎ on nothing takes the suggestion. On another machine
+    /// (MM1.B) when the second is its name.
+    NewWorkspace(Option<String>, Option<String>),
     /// A session's title (UX1.24): free text; empty clears it.
     Retitle(SessionId),
     /// A worktree's title (by id).
@@ -285,6 +296,8 @@ pub enum PromptKind {
     RenameBranch(String),
     /// A PR to go to (UX1.21).
     OpenPr,
+    /// Another machine to mirror (MM1.B): `ssh://host`, or the code `machine pair` printed.
+    MachineAdd,
     /// A workspace's new name.
     RenameWorkspace(String),
     /// Typed in the runs view (M7).
@@ -316,7 +329,7 @@ impl PromptKind {
             self,
             Self::Rename(_)
                 | Self::WorktreeName(_)
-                | Self::NewWorkspace(_)
+                | Self::NewWorkspace(..)
                 | Self::RenameWorkspace(_)
         )
     }
@@ -325,7 +338,7 @@ impl PromptKind {
     pub fn suggestion(&self) -> Option<&str> {
         match self {
             Self::WorktreeName(w) => w.suggested.as_deref(),
-            Self::NewWorkspace(s) => s.as_deref(),
+            Self::NewWorkspace(s, _) => s.as_deref(),
             _ => None,
         }
     }
@@ -586,6 +599,8 @@ pub struct App {
     pub worktrees: Vec<WorktreeInfo>,
     pub workspaces: Vec<WorkspaceInfo>,
     pub profiles: Vec<ProfileInfo>,
+    /// Other machines whose workspaces this daemon mirrors (MM1.B), and how their links stand.
+    pub machines: Vec<ptyro_core::model::MachineInfo>,
     /// The workspace on screen (SPEC §2.1).
     pub workspace: String,
     /// Collapsed project and worktree ids in the sidebar.
@@ -719,6 +734,7 @@ impl App {
             worktrees: Vec::new(),
             workspaces: Vec::new(),
             profiles: Vec::new(),
+            machines: Vec::new(),
             workspace,
             collapsed: HashSet::new(),
             marked: Vec::new(),
@@ -842,6 +858,9 @@ impl App {
         if let Ok(Reply::Profiles { profiles }) = client.request(Request::ProfileList).await {
             self.profiles = profiles;
         }
+        if let Ok(Reply::Machines { machines }) = client.request(Request::MachineList).await {
+            self.machines = machines;
+        }
         if let Ok(Reply::Inbox { entries }) = client
             .request(Request::Inbox { workspace: None, unread_only: false, limit: Some(500) })
             .await
@@ -914,20 +933,10 @@ impl App {
         self.refresh_again();
     }
 
-    /// The workspace a session shows up in: its project's (if in this list), else its home.
+    /// The workspace a session shows up under in the sidebar (MM1.B: the first that has its
+    /// project, else its home, else its machine's `main`).
     pub fn home_of(&self, s: &SessionInfo) -> String {
-        if let Some(p) = &s.project
-            && let Some(w) =
-                self.workspaces.iter().find(|w| w.name == self.workspace && w.projects.contains(p))
-        {
-            return w.name.clone();
-        }
-        if let Some(p) = &s.project
-            && let Some(w) = self.workspaces.iter().find(|w| w.projects.contains(p))
-        {
-            return w.name.clone();
-        }
-        s.workspace.clone().unwrap_or_else(|| MAIN_WORKSPACE.into())
+        self.tree().home(s)
     }
 
     /// Load the current workspace's saved view.
@@ -943,12 +952,25 @@ impl App {
         self.zoom = false;
         self.drawer = None;
         self.kept = None;
-        if !self.opts.raw
-            && let Some(client) = &self.client
-            && let Ok(Reply::View { view: Some(v) }) =
-                client.request(Request::LoadView { name: self.workspace.clone() }).await
-            && let Ok(saved) = serde_json::from_value::<SavedView>(v)
-        {
+        let saved = match &self.client {
+            Some(client) if !self.opts.raw => {
+                let load = |name: String| async move {
+                    match client.request(Request::LoadView { name }).await {
+                        Ok(Reply::View { view: Some(v) }) => {
+                            serde_json::from_value::<SavedView>(v).ok()
+                        }
+                        _ => None,
+                    }
+                };
+                match load(ALL_VIEW.into()).await {
+                    Some(v) => Some(v),
+                    // From before one layout for all: the last workspace's, once.
+                    None => load(self.workspace.clone()).await,
+                }
+            }
+            _ => None,
+        };
+        if let Some(saved) = saved {
             let mut ordered_all = self.ordered();
             ordered_all.extend(self.sessions.iter().filter(|s| s.quick || s.pad).map(|s| s.id));
             self.layout = saved.layout.sanitize();
@@ -1128,6 +1150,7 @@ impl App {
         if self.focus == Focus::Sidebar && self.sidebar_area().is_none() {
             self.focus = Focus::Pane;
         }
+        self.follow_focused_workspace();
         let rects = self.pane_rects();
         let mut visible: HashMap<SessionId, TermSize> = HashMap::new();
         for (pane, rect) in &rects {
@@ -1286,7 +1309,7 @@ impl App {
         let view = serde_json::to_value(saved).ok()?;
         let last = serde_json::json!({ "workspace": self.workspace });
         Some([
-            Request::SaveView { name: self.workspace.clone(), view },
+            Request::SaveView { name: ALL_VIEW.into(), view },
             Request::SaveView { name: LAST_WORKSPACE.into(), view: last },
         ])
     }
@@ -1628,6 +1651,10 @@ impl App {
             DomainEvent::WorkspaceUpdated { info } => {
                 upsert_by(&mut self.workspaces, info, |w| w.id.clone())
             }
+            DomainEvent::MachineUpdated { info } => {
+                self.machine_news(info);
+            }
+            DomainEvent::MachineRemoved { name } => self.machines.retain(|m| m.name != name),
             DomainEvent::WorkspaceRemoved { id } => {
                 let name = self.workspaces.iter().find(|w| w.id == id).map(|w| w.name.clone());
                 self.workspaces.retain(|w| w.id != id);
@@ -2299,6 +2326,32 @@ impl App {
     pub(crate) fn set_sel(&mut self, rows: &[Row], i: usize) {
         self.sidebar_sel = i;
         self.sidebar_row = rows.get(i).cloned();
+        if self.focus == Focus::Sidebar
+            && let Some(w) = tree::Inputs::workspace_of(rows, i)
+        {
+            self.enter_workspace(w);
+        }
+    }
+
+    /// The workspace you're in (MM1.B: all are on screen at once) is the selected row's in the
+    /// sidebar, else the focused session's: what `n`, quick new, the status bar and new
+    /// workspace-wide things go by.
+    pub(crate) fn enter_workspace(&mut self, w: String) {
+        if w != self.workspace {
+            self.workspace = w;
+            self.view_dirty_since.get_or_insert_with(Instant::now);
+            self.refresh_again();
+        }
+    }
+
+    /// After the focus moved to a pane: its session's workspace.
+    fn follow_focused_workspace(&mut self) {
+        if self.focus == Focus::Pane
+            && let Some(s) = self.focused_session().and_then(|id| self.session(id))
+        {
+            let w = self.tree().home(s);
+            self.enter_workspace(w);
+        }
     }
 
     // ── terminal input ──────────────────────────────────────────────────────
@@ -2705,6 +2758,7 @@ impl App {
             }
             "worktree.gc" => self.request(Pending::Gc, Request::Gc),
             "shell.new" => self.new_shell(),
+            a if a.starts_with("machine.") => self.machine_action(a),
             "shell.here" | "shell.drawer" | "shell.pane" => {
                 // A quick terminal row is that one; anything else is where you are.
                 let want = match (self.focus, self.selected_row()) {
@@ -3437,6 +3491,13 @@ impl App {
                 let open = self.drawer_session() == Some(id) || self.quick_panel(id).is_some();
                 Some(format!("⏎ {} it", if open { "hide" } else { "show" }))
             }
+            // A workspace on another machine that isn't reachable says why, and what to do.
+            Row::Workspace(w) => match self.machine_of_name(&w) {
+                Some(m) if m.state != ptyro_core::model::MachineState::Online => Some(
+                    m.fix.clone().unwrap_or_else(|| format!("{} is {}", m.name, m.state.label())),
+                ),
+                _ => with("session.new", "start a task here"),
+            },
             Row::Set(_) | Row::Group(_) => None,
         }
     }
@@ -3771,6 +3832,21 @@ impl App {
                 v
             }
             Row::Set(_) => vec!["sets"],
+            // A workspace (MM1.B): start something in it, set it up; another machine's adds what
+            // its link can do.
+            Row::Workspace(w) => {
+                let mut v = vec!["session.new", "session.again", "worktree.new", "project.add"];
+                if let Some(m) = self.machine_of_name(w) {
+                    if m.state != ptyro_core::model::MachineState::Online {
+                        v.insert(0, "machine.retry");
+                    }
+                    v.extend(["machine.hide", "machine.remove"]);
+                } else {
+                    v.extend(["workspace.rename", "workspace.profile", "workspace.notify"]);
+                }
+                v.extend(["machine.add", "machine.list"]);
+                v
+            }
             Row::Group(_) => Vec::new(),
         }
     }
@@ -3797,6 +3873,7 @@ impl App {
             Row::Worktree(w) => self.worktree(w).map(|w| format!("Worktree {}", w.qualified())),
             Row::Project(p) => self.project(p).map(|p| format!("Project {}", p.slug)),
             Row::Set(_) => Some("Change set".into()),
+            Row::Workspace(w) => Some(format!("Workspace {}", crate::ui::workspace_label(w))),
             Row::Group(_) => None,
         };
         let items: Vec<Item> = self
@@ -4079,16 +4156,22 @@ impl App {
     // ── workspaces, editors, scripts, projects ─────────────────────────────
 
     fn open_workspaces(&mut self) {
-        let mut items: Vec<Item> = self
-            .workspaces
+        // In the sidebar's order: this machine's, then each other machine's (MM1.B).
+        let order: Vec<WorkspaceInfo> = self.tree().order().into_iter().cloned().collect();
+        let mut items: Vec<Item> = order
             .iter()
             .map(|w| {
                 let n = self.sessions.iter().filter(|s| self.home_of(s) == w.name).count();
                 let current = if w.name == self.workspace { " · current" } else { "" };
+                let state = self
+                    .machine_of_name(&w.name)
+                    .filter(|m| m.state != ptyro_core::model::MachineState::Online)
+                    .map(|m| format!(" · {}", m.state.label()))
+                    .unwrap_or_default();
                 Item {
-                    label: w.name.clone(),
+                    label: crate::ui::workspace_label(&w.name),
                     detail: format!(
-                        "[{}] {} project(s), {n} session(s){current}",
+                        "[{}] {} project(s), {n} session(s){current}{state}",
                         self.profile_label(&w.profile),
                         w.projects.len()
                     ),
@@ -4106,6 +4189,44 @@ impl App {
         self.overlay = Some(Overlay::Picker {
             palette: Palette::new("Workspaces", items),
             purpose: Purpose::Workspace,
+        });
+    }
+
+    /// `+ new workspace` with other machines (MM1.B): this machine, or one of them.
+    fn open_new_workspace_where(&mut self) {
+        let here = self.machine.clone().unwrap_or_else(|| "this machine".into());
+        let mut items = vec![Item {
+            label: format!("{here} (this machine)"),
+            detail: String::new(),
+            key: None,
+            target: Target::Machine(String::new()),
+        }];
+        for m in &self.machines {
+            let online = m.state == ptyro_core::model::MachineState::Online;
+            items.push(Item {
+                label: m.name.clone(),
+                detail: if online {
+                    String::new()
+                } else {
+                    format!("{}: can't make one there now", m.state.label())
+                },
+                key: None,
+                target: Target::Machine(m.name.clone()),
+            });
+        }
+        self.overlay = Some(Overlay::Picker {
+            palette: Palette::new("New workspace — on which machine?", items),
+            purpose: Purpose::NewWorkspaceOn,
+        });
+    }
+
+    fn prompt_new_workspace(&mut self, machine: Option<String>) {
+        let on = machine.as_ref().map(|m| format!(" on {m}")).unwrap_or_default();
+        let suggested = machine.is_none().then(|| self.free_workspace_name());
+        self.overlay = Some(Overlay::Prompt {
+            title: format!("New workspace{on} — name"),
+            text: String::new(),
+            kind: PromptKind::NewWorkspace(suggested, machine),
         });
     }
 
@@ -4865,12 +4986,24 @@ impl App {
                 self.wizard_done(w, Target::NewWorktree(project));
             }
             (Target::Workspace(name), _) => self.switch_workspace(name),
-            (Target::NewWorkspace, _) => {
-                self.overlay = Some(Overlay::Prompt {
-                    title: "New workspace — name".into(),
-                    text: String::new(),
-                    kind: PromptKind::NewWorkspace(Some(self.free_workspace_name())),
-                });
+            // With other machines (MM1.B): which one, first.
+            (Target::NewWorkspace, _) if !self.machines.is_empty() => {
+                self.open_new_workspace_where()
+            }
+            (Target::NewWorkspace, _) => self.prompt_new_workspace(None),
+            (Target::Machine(m), Purpose::MachineUnhide) => {
+                if let Some((name, ws)) = m.split_once(':') {
+                    let req = Request::MachineHide {
+                        name: name.into(),
+                        workspace: ws.into(),
+                        hidden: false,
+                    };
+                    self.request(Pending::Done(format!("{m} is shown again")), req);
+                }
+            }
+            (Target::Machine(m), Purpose::MachinePick(action)) => self.machine_on(action, m),
+            (Target::Machine(m), Purpose::NewWorkspaceOn) => {
+                self.prompt_new_workspace((!m.is_empty()).then_some(m))
             }
             (Target::Editor(name), Purpose::Editor(wt)) => self.open_editor(&wt, &name),
             (Target::Script(name), Purpose::Script(wt)) => self.run_script(wt, Some(name)),
@@ -5019,10 +5152,11 @@ impl App {
                     return Err(format!("{}/{t} exists", x.project_slug));
                 }
             }
-            PromptKind::NewWorkspace(_) if !t.is_empty() => {
+            PromptKind::NewWorkspace(_, machine) if !t.is_empty() => {
                 name(t)?;
-                if self.workspaces.iter().any(|w| w.name == t) {
-                    return Err(format!("workspace {t} exists"));
+                let full = machine.as_ref().map_or_else(|| t.to_owned(), |m| format!("{m}:{t}"));
+                if self.workspaces.iter().any(|w| w.name == full) {
+                    return Err(format!("workspace {} exists", crate::ui::workspace_label(&full)));
                 }
             }
             PromptKind::RenameWorkspace(old) => {
@@ -5165,6 +5299,12 @@ impl App {
                 }
             }
             PromptKind::OpenPr => self.open_pr(&text),
+            PromptKind::MachineAdd => {
+                let t = text.trim();
+                if !t.is_empty() {
+                    self.run_cli(&["machine".into(), "add".into(), t.to_owned()]);
+                }
+            }
             PromptKind::WorkSource(w) => match work_source(&text) {
                 Some((pr, issue)) => {
                     let project = w.project.clone().unwrap_or_default();
@@ -5180,9 +5320,14 @@ impl App {
                     Request::Retitle { addr: id, title, worktree: true },
                 );
             }
-            PromptKind::NewWorkspace(suggested) => {
+            PromptKind::NewWorkspace(suggested, machine) => {
                 let typed = text.trim().to_owned();
                 let name = if typed.is_empty() { suggested.unwrap_or_default() } else { typed };
+                // On another machine: made there (its name carries the machine, MM1.B).
+                let name = match machine {
+                    Some(m) if !name.is_empty() => format!("{m}:{name}"),
+                    _ => name,
+                };
                 if !name.is_empty() {
                     let req =
                         Request::WorkspaceNew { name: name.clone(), profile: None, notify: None };
@@ -5574,7 +5719,6 @@ impl App {
 
     pub fn tree(&self) -> tree::Inputs<'_> {
         tree::Inputs {
-            workspace: &self.workspace,
             workspaces: &self.workspaces,
             projects: &self.projects,
             worktrees: &self.worktrees,
@@ -5656,6 +5800,12 @@ impl App {
                         return (s.project.clone(), s.worktree.clone());
                     }
                 }
+                // A workspace's header: its first project's main checkout.
+                Row::Workspace(w) => {
+                    let first = self.tree().project_ids_of(w).into_iter().next();
+                    let root = first.as_deref().and_then(|p| self.root_of(p));
+                    return (first, root);
+                }
                 Row::Group(_) | Row::Set(_) => return (None, None),
             }
         }
@@ -5664,7 +5814,12 @@ impl App {
         {
             return (s.project.clone(), s.worktree.clone());
         }
-        let first = self.tree().project_ids().into_iter().next();
+        let first = self
+            .tree()
+            .project_ids_of(&self.workspace)
+            .into_iter()
+            .next()
+            .or_else(|| self.tree().project_ids().into_iter().next());
         let root = first
             .as_ref()
             .and_then(|p| self.worktrees.iter().find(|w| w.project == *p && w.is_root))
@@ -5672,22 +5827,22 @@ impl App {
         (first, root)
     }
 
+    /// `w` (MM1.B: every workspace is on screen): go to a workspace's header, unfolded, in the
+    /// sidebar. The panes stay as they are.
     pub fn switch_workspace(&mut self, name: String) {
-        if name == self.workspace {
-            return;
+        self.collapsed.remove(&tree::fold_key(&name));
+        self.focus = Focus::Sidebar;
+        self.sidebar_zoom = false;
+        if !self.sidebar {
+            self.sidebar = true;
+            self.view_changed();
         }
-        self.save_view();
-        self.workspace = name;
-        self.sidebar_row = None;
-        self.sidebar_sel = 0;
-        let Some(client) = self.client.clone() else { return };
-        let name = self.workspace.clone();
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let res = client.request(Request::LoadView { name: name.clone() }).await;
-            let _ = tx.send(AppMsg::View(name, res));
-        });
-        self.toast(format!("workspace {}", self.workspace));
+        let rows = self.rows();
+        match rows.iter().position(|r| *r == Row::Workspace(name.clone())) {
+            Some(i) => self.set_sel(&rows, i),
+            None => self.enter_workspace(name.clone()),
+        }
+        self.toast(format!("workspace {}", crate::ui::workspace_label(&name)));
     }
 
     /// Apply a loaded workspace view (or a fresh layout).
@@ -6191,16 +6346,17 @@ mod tests {
     }
 
     #[test]
-    fn the_machine_is_in_the_sidebar_title_when_it_fits_and_dropped_when_not() {
+    fn the_machine_comes_first_in_the_sidebar_title() {
         let mut app = app();
         app.machine = Some("studio".into());
         let wide = screen_at(&app, 100);
         let first = wide.lines().next().unwrap();
-        assert!(first.contains("WORKSPACE") && first.contains("studio"), "{first}");
-        // Narrow: the name goes first, nothing wraps or breaks.
+        // Which machine this is, always (MM1.B: others' workspaces are listed too), then where
+        // you are.
+        assert!(first.contains("● studio · main"), "{first}");
+        // Narrow: the machine stays, nothing wraps or breaks.
         let narrow = screen_at(&app, 22);
-        assert!(!narrow.contains("studio"), "{narrow}");
-        assert!(narrow.contains("WORKSPACE"), "{narrow}");
+        assert!(narrow.lines().next().unwrap().contains("studio"), "{narrow}");
         assert_eq!(narrow.lines().count(), 30);
         // Unknown (an older daemon): nothing extra.
         app.machine = None;
@@ -7655,7 +7811,7 @@ mod tests {
     #[test]
     fn workspace_and_fanout_prompts_are_checked_too() {
         let app = app();
-        let ws = PromptKind::NewWorkspace(None);
+        let ws = PromptKind::NewWorkspace(None, None);
         assert!(app.prompt_check(&ws, "").is_ok(), "empty cancels");
         assert!(app.prompt_check(&ws, "Side Job").unwrap_err().contains("'S' (uppercase)"));
         assert!(app.prompt_check(&ws, "side-job").is_ok());
@@ -8512,5 +8668,139 @@ mod tests {
         for a in ["shell.new", "session.again"] {
             assert!(app.keymap.key_for(a).is_some(), "{a} has a key");
         }
+    }
+
+    // ── many machines (MM1.B) ─────────────────────────────────────────────
+
+    fn machine(
+        name: &str,
+        state: ptyro_core::model::MachineState,
+    ) -> ptyro_core::model::MachineInfo {
+        ptyro_core::model::MachineInfo {
+            name: name.into(),
+            transport: ptyro_core::model::MachineTransport::Ssh { target: name.into() },
+            state,
+            since_ms: Some(0),
+            version: Some("0.0.13".into()),
+            calls_itself: Some(name.into()),
+            workspaces: vec!["work".into()],
+            hidden: vec![],
+            error: Some(format!("{name} went away")),
+            fix: Some("it reconnects by itself when it is back".into()),
+            added_ms: 0,
+        }
+    }
+
+    /// Our project p1 in `main`, and laptop2's workspace `work` with one session.
+    fn with_laptop2(app: &mut App, state: ptyro_core::model::MachineState) -> SessionInfo {
+        with_project(app);
+        let mut w: WorkspaceInfo = serde_json::from_value(serde_json::json!({
+            "id": "rw", "name": "laptop2:work", "profile": "laptop2:default", "notify": "all",
+            "projects": [], "created_ms": 0,
+        }))
+        .unwrap();
+        w.machine = Some("laptop2".into());
+        app.workspaces.push(w);
+        app.machines.push(machine("laptop2", state));
+        let mut s = session("laptop2:fix-flaky-test");
+        s.machine = Some("laptop2".into());
+        s.workspace = Some("laptop2:work".into());
+        app.sessions.push(s.clone());
+        s
+    }
+
+    #[test]
+    fn every_workspace_is_in_the_sidebar_and_the_selected_one_is_where_you_are() {
+        let mut app = app();
+        let remote = with_laptop2(&mut app, ptyro_core::model::MachineState::Online);
+        let rows = app.rows();
+        assert!(rows.contains(&Row::Workspace("main".into())));
+        let at = rows.iter().position(|r| *r == Row::Workspace("laptop2:work".into())).unwrap();
+        assert_eq!(rows[at + 1], Row::Session(remote.id), "its session under its header");
+        let shown = screen(&app);
+        assert!(shown.contains("laptop2 / work"), "{shown}");
+        assert!(!shown.contains("laptop2:fix-flaky-test"), "no machine twice in its rows: {shown}");
+        // Selecting there makes it the workspace you're in: quick new and `n` go there.
+        app.focus = Focus::Sidebar;
+        app.set_sel(&rows, at + 1);
+        assert_eq!(app.workspace, "laptop2:work");
+        assert!(screen(&app).lines().next().unwrap().contains("laptop2 / work"));
+        // Showing a session of ours brings you back.
+        let ours = placed("mine", Some("p1"), Some("p1-root"));
+        app.sessions.push(ours.clone());
+        app.focus = Focus::Pane;
+        app.show(ours.id, None);
+        assert_eq!(app.workspace, "main");
+        // `w`, then a workspace: its header, unfolded and selected; the panes stay.
+        app.collapsed.insert(crate::tree::fold_key("laptop2:work"));
+        app.picked(Target::Workspace("laptop2:work".into()), Purpose::Workspace);
+        assert_eq!(app.focus, Focus::Sidebar);
+        assert_eq!(app.selected_row(), Some(Row::Workspace("laptop2:work".into())));
+        assert!(app.rows().contains(&Row::Session(remote.id)));
+        assert_eq!(app.focused_session(), Some(ours.id));
+    }
+
+    #[test]
+    fn an_offline_machine_says_so_where_its_things_are_and_offers_the_fix() {
+        let mut app = app();
+        let remote = with_laptop2(&mut app, ptyro_core::model::MachineState::Offline);
+        let shown = screen(&app);
+        assert!(shown.contains("laptop2 / work offline"), "{shown}");
+        assert!(
+            !shown.contains("[laptop2:"),
+            "a machine's own default profile has no badge: {shown}"
+        );
+        let rows = app.rows();
+        let at = rows.iter().position(|r| *r == Row::Workspace("laptop2:work".into())).unwrap();
+        app.focus = Focus::Sidebar;
+        app.set_sel(&rows, at);
+        assert_eq!(app.context_hint().as_deref(), Some("it reconnects by itself when it is back"));
+        let menu = app.row_actions(&Row::Workspace("laptop2:work".into()));
+        for a in ["machine.retry", "machine.hide", "machine.remove", "session.new"] {
+            assert!(menu.contains(&a), "{a}: {menu:?}");
+            assert!(crate::keymap::spec(a).is_some(), "{a} is an action");
+        }
+        // Its session's pane says it too.
+        app.focus = Focus::Pane;
+        app.show(remote.id, None);
+        let shown = screen(&app);
+        assert!(shown.contains("laptop2 offline since"), "{shown}");
+        // News of it coming back is said once.
+        app.machine_news(machine("laptop2", ptyro_core::model::MachineState::Online));
+        assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("laptop2 is back")));
+    }
+
+    #[test]
+    fn a_new_workspace_asks_which_machine_and_is_made_there() {
+        let mut app = app();
+        with_laptop2(&mut app, ptyro_core::model::MachineState::Online);
+        app.picked(Target::NewWorkspace, Purpose::Workspace);
+        let Some(Overlay::Picker { palette, purpose: Purpose::NewWorkspaceOn }) = &app.overlay
+        else {
+            panic!("asks where")
+        };
+        assert_eq!(palette.item(1).label, "laptop2");
+        app.picked(Target::Machine("laptop2".into()), Purpose::NewWorkspaceOn);
+        let Some(Overlay::Prompt { title, kind, .. }) = &app.overlay else { panic!() };
+        assert!(title.contains("on laptop2"), "{title}");
+        assert!(matches!(kind, PromptKind::NewWorkspace(None, Some(m)) if m == "laptop2"));
+        // Taken there already: said as it is typed.
+        let kind = PromptKind::NewWorkspace(None, Some("laptop2".into()));
+        assert!(app.prompt_check(&kind, "work").is_err());
+        assert!(app.prompt_check(&kind, "spikes").is_ok());
+        while app.rx.try_recv().is_ok() {}
+        app.overlay = None;
+        app.prompt_done("spikes".into(), kind);
+        let mut asked = None;
+        while let Ok(m) = app.rx.try_recv() {
+            if let AppMsg::Reply(Pending::WorkspaceMade(n), _) = m {
+                asked = Some(n);
+            }
+        }
+        assert_eq!(
+            asked.as_deref(),
+            Some("laptop2:spikes"),
+            "the name carries the machine: made there"
+        );
     }
 }

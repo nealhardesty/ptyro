@@ -2,7 +2,8 @@
 // a worktree's page, and everything the TUI does to them: new, finish, archive, restore, remove,
 // scripts, ports, pair mode, locks, leases, the collision radar, checkpoints and the clean-up.
 import { conn } from "./conn.js";
-import { data, leftWords, liveWorktrees, repoLeft, shipped, wtTabs } from "./data.js";
+import { data, leftWords, liveWorktrees, machineOf, repoLeft, shipped, wsLabel, wtTabs } from "./data.js";
+import { machineChip } from "./machines.js";
 import { actions, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, pending, row, safeDecode, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
 import { againWords, newShell, newTask, openQuickShell, allSessions, startAgain } from "./sessions.js";
 const ACTIONS = {
@@ -94,10 +95,10 @@ function projectsView() {
     const wss = [...data.workspaces.values()];
     const inWs = (p) => !wsFilter || data.workspaces.get([...data.workspaces.keys()].find((k) => data.workspaces.get(k).name === wsFilter))?.projects.includes(p.id);
     const projects = [...data.projects.values()].filter(inWs).sort((a, b) => (b.last_used_ms ?? 0) - (a.last_used_ms ?? 0));
-    const chips = wss.length > 1 ? h("div", { class: "chips", title: tip("workspace.switch") }, h("button", { class: wsFilter ? "" : "on", onclick: () => { wsFilter = ""; ui.render(); } }, "All"), ...wss.map((w) => h("button", { class: wsFilter === w.name ? "on" : "", onclick: () => { wsFilter = w.name; ui.render(); } }, w.name))) : null;
+    const chips = wss.length > 1 ? h("div", { class: "chips", title: tip("workspace.switch") }, h("button", { class: wsFilter ? "" : "on", onclick: () => { wsFilter = ""; ui.render(); } }, "All"), ...wss.map((w) => h("button", { class: wsFilter === w.name ? "on" : "", title: machineOf(w.name)?.fix ?? undefined, onclick: () => { wsFilter = w.name; ui.render(); } }, wsLabel(w.name), machineOf(w.name) && machineOf(w.name).state !== "online" ? " ⚠" : ""))) : null;
     const body = projects.length ? projects.map((p) => {
         const wts = liveWorktrees().filter((w) => w.project === p.id).sort((a, b) => Number(b.is_root) - Number(a.is_root) || (b.last_used_ms ?? 0) - (a.last_used_ms ?? 0));
-        return h("section", { class: "proj" }, h("div", { class: "proj-head" }, h("a", { class: "proj-name", href: `#/proj/${enc(p.id)}`, title: tip("project.show") }, p.slug), p.pin ? badge(p.pin, "info") : null, h("span", { class: "spacer" }), h("button", { class: "small", title: tip("worktree.new"), onclick: () => newTask(`p:${p.id}`) }, "＋ Task")), h("div", { class: "rows" }, ...wts.map(worktreeRow)));
+        return h("section", { class: "proj" }, h("div", { class: "proj-head" }, h("a", { class: "proj-name", href: `#/proj/${enc(p.id)}`, title: tip("project.show") }, wsLabel(p.slug)), machineChip(p.slug), p.pin ? badge(p.pin, "info") : null, h("span", { class: "spacer" }), h("button", { class: "small", title: tip("worktree.new"), onclick: () => newTask(`p:${p.id}`) }, "＋ Task")), h("div", { class: "rows" }, ...wts.map(worktreeRow)));
     }) : [h("div", { class: "empty" }, h("p", {}, wsFilter ? `No projects in ${wsFilter}.` : "No projects yet."), h("button", { class: "primary", onclick: addProject }, "Add a project"))];
     return h("div", {}, ui.header("Projects", false, h("button", { class: "icon", title: tip("worktree.gc"), "aria-label": "Clean up", onclick: () => go("#/gc") }, "🧹"), h("button", { class: "icon plus", title: tip("project.add"), "aria-label": "Add a project", onclick: addProject }, "＋")), chips, h("main", { class: "list", title: tip("projects") }, ...body, h("div", { class: "foot-links" }, h("a", { href: "#/archives", title: tip("worktree.restore") }, "Archived"), h("a", { href: "#/ws", title: tip("workspace.set") }, "Workspaces"), h("a", { href: "#/leases", title: tip("leases") }, "Leases"), h("a", { href: "#/radar", title: tip("radar") }, "Radar"))));
 }
@@ -206,8 +207,11 @@ function projectWorkspaces(p) {
 }
 // ── workspaces ──────────────────────────────────────────────────────────────────────────────
 function workspaceForm(w) {
-    form(w ? `Workspace ${w.name}` : "New workspace", [
+    const machines = [...data.machines.values()];
+    form(w ? `Workspace ${wsLabel(w.name)}` : "New workspace", [
         ...(w ? [] : [{ key: "name", label: "Name", required: true }]),
+        // With other machines (MM1.B): which one it's made on.
+        ...(w || !machines.length ? [] : [{ key: "machine", label: "On which machine", type: "select", options: [["", "This machine"], ...machines.map((m) => [m.name, m.state === "online" ? m.name : `${m.name} (${m.state})`])], value: "" }]),
         { key: "profile", label: "Profile", value: w?.profile ?? "", placeholder: "default", hint: "The account its sessions use unless a worktree or project says otherwise" },
         { key: "notify", label: "Notifications", type: "select", options: [["all", "Everything"], ["badge", "A badge only"], ["mute", "Muted"]], value: w?.notify ?? "all" },
     ], w ? "Save" : "Create", async (v) => {
@@ -215,7 +219,8 @@ function workspaceForm(w) {
             await conn.request({ t: "workspace_set", name: w.name, profile: v.profile || null, notify: v.notify });
         else {
             // Known at once, not when its event arrives (UX3.3).
-            const r = await conn.request({ t: "workspace_new", name: v.name, profile: v.profile || null, notify: v.notify });
+            const name = v.machine ? `${v.machine}:${v.name}` : v.name;
+            const r = await conn.request({ t: "workspace_new", name, profile: v.profile || null, notify: v.notify });
             if (r?.info) {
                 data.workspaces.set(r.info.id, r.info);
                 ui.render();

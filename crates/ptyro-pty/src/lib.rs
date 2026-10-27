@@ -16,7 +16,8 @@ mod ports;
 mod probe;
 pub use ports::listening_ports;
 pub use probe::{
-    cwd_of, exec_env_var, local_datetime, local_time_hm, parent_pid, process_name, session_leader,
+    cwd_of, exec_env_var, local_datetime, local_time_hm, local_time_hm_at, parent_pid,
+    process_name, session_leader,
 };
 
 /// Variables that would make the child talk to the *outer* terminal or multiplexer, or that mark

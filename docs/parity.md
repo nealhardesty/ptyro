@@ -244,6 +244,13 @@ The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every sessio
 | `devices ls` | `devices.list` | `devices.list`: More → Devices |
 | `devices revoke` | `devices.revoke` | `devices.revoke`: a device's menu |
 | `devices push-test` | `devices.push_test` | `notifications`: turning them on sends this device a test |
+| `machine ls` | `machine.list` (full sized); the sidebar shows every machine's workspaces, each header with its machine and how its link stands | `machine.list`: More → Machines |
+| `machine add` | `machine.add`: `ssh://HOST` or the code, then `machine add` full sized (it claims the code from this machine) | `machine.add`: More → Machines → ＋ (the claim runs on this machine, `full` scope) |
+| `machine rm` | `machine.remove`: the row menu of one of its workspaces, or the palette (asks first) | `machine.remove`: a machine's menu → Stop showing it here |
+| `machine hide` | `machine.hide`: the row menu of one of its workspaces | `machine.hide`: a machine's menu → Hide WORKSPACE here |
+| `machine unhide` | `machine.unhide`: a picker of the hidden workspaces | `machine.unhide`: a machine's menu → Show WORKSPACE again |
+| `machine retry` | `machine.retry`: first in the row menu of its workspace while it's down | `machine.retry`: a machine's menu → Try its link now |
+| `machine pair` | `machine.pair` (the code, full sized) | `machine.pair`: More → Machines → Make a code |
 | `proxy` | waived: the bridge `--remote` runs over ssh on the other machine | waived: the bridge `--remote` runs over ssh between two computers |
 | `replay` | `session.replay` (plays full sized) | `session.replay`: ⋯ → Replay: its recording as a player with a scrubber and speeds; `session.history` lists earlier sessions |
 | `export` | `session.export`: the format and the file | `session.export`: ⋯ → Save its recording (text or asciicast, as a download) |

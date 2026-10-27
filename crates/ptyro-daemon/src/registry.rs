@@ -227,6 +227,7 @@ impl Daemon {
         let exists = self.registry.locked().workspaces.iter().any(|w| w.name == MAIN_WORKSPACE);
         if !exists {
             self.put_workspace(WorkspaceInfo {
+                machine: None,
                 id: new_id(),
                 name: MAIN_WORKSPACE.into(),
                 profile: DEFAULT_PROFILE.into(),
@@ -380,6 +381,7 @@ impl Daemon {
                     }
                 };
                 let p = ProjectInfo {
+                    machine: None,
                     id: new_id(),
                     slug,
                     root: root.clone(),
@@ -391,6 +393,7 @@ impl Daemon {
                 };
                 self.put_project(p.clone());
                 self.put_worktree(WorktreeInfo {
+                    machine: None,
                     id: new_id(),
                     project: p.id.clone(),
                     project_slug: p.slug.clone(),
@@ -604,6 +607,7 @@ impl Daemon {
             return Err(Error::conflict(format!("workspace {name} exists")));
         }
         let w = WorkspaceInfo {
+            machine: None,
             id: new_id(),
             name: name.into(),
             profile: self.check_profile(profile)?.unwrap_or_else(|| DEFAULT_PROFILE.into()),

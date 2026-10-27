@@ -378,3 +378,6 @@ a.button { display: inline-block; padding: 7px 12px; border-radius: 8px; border:
 /* About (UX2.1) */
 .more-version { text-align: center; margin-top: 1.25rem; }
 .about-v { word-break: break-all; }
+/* Another machine's things (MM1.B): its name in its colour. */
+.machine-chip { white-space: nowrap; font-size: 12px; color: var(--muted); font-weight: normal; }
+.machine-dot { font-size: 11px; }

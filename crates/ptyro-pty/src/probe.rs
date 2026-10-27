@@ -169,10 +169,15 @@ pub fn exec_env_var(_pid: u32, _name: &str) -> Option<String> {
 }
 
 /// Local wall-clock hour and minute (for the TUI's clock), honouring `TZ`.
-#[allow(unsafe_code)] // localtime_r has no std equivalent; it writes only into `tm`.
 pub fn local_time_hm() -> Option<(u8, u8)> {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
-    let t = libc::time_t::try_from(now).ok()?;
+    local_time_hm_at(i64::try_from(now).ok()?)
+}
+
+/// The local hour and minute of a moment (seconds since the epoch), honouring `TZ`.
+#[allow(unsafe_code)] // localtime_r has no std equivalent; it writes only into `tm`.
+pub fn local_time_hm_at(secs: i64) -> Option<(u8, u8)> {
+    let t = libc::time_t::try_from(secs).ok()?;
     // SAFETY: `tm` is a zeroed out-parameter owned by this frame; localtime_r is reentrant.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     let ok = unsafe { !libc::localtime_r(&t, &mut tm).is_null() };

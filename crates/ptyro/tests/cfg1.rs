@@ -57,7 +57,7 @@ async fn the_panel_changes_a_switch_a_choice_a_number_and_a_list_and_the_daemon_
         s = s.env(&k, &v);
     }
     let r = ptyro_testkit::headless::run(
-        s.send_when("WORKSPACE", "\x11C")
+        s.send_when("▾ main", "\x11C")
             // The panel; ⏎ moves to the settings. Down to `clock` and ⏎ turns it off.
             .send_when("Settings — your config", "\rjjjjj\r")
             // `on_stop` is five below it: pick `stay` from its list.

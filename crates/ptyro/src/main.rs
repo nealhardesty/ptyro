@@ -15,6 +15,7 @@ mod cs;
 mod doctor;
 mod host;
 mod init;
+mod machines;
 mod mcp;
 mod orch;
 mod pad;
@@ -619,6 +620,19 @@ enum Cmd {
         #[command(subcommand)]
         cmd: Option<DevicesCmd>,
     },
+    /// Other machines whose workspaces show here beside yours (`laptop2:work`)
+    Machine {
+        #[command(subcommand)]
+        cmd: Option<MachineCmd>,
+    },
+    /// Carry the protocol to another machine's `ptyro serve` (what a machine's link runs)
+    #[command(hide = true)]
+    MachineBridge {
+        #[arg(long)]
+        url: String,
+        #[arg(long)]
+        fingerprint: Option<String>,
+    },
     /// Play a session's recording back with its timing (also for sessions that ended)
     Replay {
         #[arg(add = ArgValueCandidates::new(complete::sessions))]
@@ -994,6 +1008,58 @@ enum ConfigCmd {
     Schema {
         #[arg(short, long, num_args = 0..=1, require_equals = true, default_missing_value = "")]
         project: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum MachineCmd {
+    /// List them, their state and their workspaces (default)
+    Ls {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Mirror another machine: `ssh://[user@]host[:port]`, or the code `ptyro machine pair`
+    /// printed on it. It must answer, and run this version (unless --force)
+    Add {
+        target: String,
+        /// What its names carry here (default: what it calls itself)
+        #[arg(long)]
+        name: Option<String>,
+        /// Keep it even if it doesn't answer now
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Stop mirroring it (nothing changes on it)
+    Rm {
+        #[arg(add = ArgValueCandidates::new(complete::machines))]
+        name: String,
+    },
+    /// Don't show one of its workspaces here (nothing changes on it)
+    Hide {
+        #[arg(add = ArgValueCandidates::new(complete::machines))]
+        name: String,
+        workspace: String,
+    },
+    /// Show a hidden workspace of it again
+    Unhide {
+        #[arg(add = ArgValueCandidates::new(complete::machines))]
+        name: String,
+        workspace: String,
+    },
+    /// Try its link again now
+    Retry {
+        #[arg(add = ArgValueCandidates::new(complete::machines))]
+        name: String,
+    },
+    /// Print a code for another machine to mirror this one (`ptyro machine add CODE` there)
+    Pair {
+        /// The address it reaches this machine at (default: this web app server's)
+        #[arg(long)]
+        url: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
 }
 

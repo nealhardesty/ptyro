@@ -357,6 +357,7 @@ impl Daemon {
         // the worktree is registered: a failure here leaves nothing half-made.
         let plan = self.profile_plan(&res.profile).await?;
         let mut wt = WorktreeInfo {
+            machine: None,
             id: new_id(),
             project: p.id.clone(),
             project_slug: p.slug.clone(),
@@ -938,6 +939,7 @@ impl Daemon {
                 }
                 tracing::info!(worktree = %format!("{}/{name}", p.slug), "re-adopted");
                 self.put_worktree(WorktreeInfo {
+                    machine: None,
                     id: id.into(),
                     project: p.id.clone(),
                     project_slug: p.slug.clone(),
@@ -1257,6 +1259,7 @@ mod tests {
     #[test]
     fn layouts() {
         let p = ProjectInfo {
+            machine: None,
             id: "x".into(),
             slug: "app".into(),
             root: "/src/app".into(),

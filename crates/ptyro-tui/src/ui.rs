@@ -379,13 +379,17 @@ pub fn profile_color(app: &App, profile: &str) -> Option<Color> {
 /// `[work]` in the profile's colour; nothing for an implicit `default`.
 fn profile_badge(app: &App, profile: &str) -> Option<Span<'static>> {
     let info = app.profile(profile);
-    if profile == ptyro_core::model::DEFAULT_PROFILE
+    // A machine with no profiles of its own beyond the implicit `default` shows none; another
+    // machine's (MM1.B, `laptop2:default`) counts on that machine alone.
+    let (machine, bare) = crate::tree::machine_and_name(profile);
+    let on_that_machine = app.profiles.iter().filter(|p| p.machine.as_deref() == machine).count();
+    if bare == ptyro_core::model::DEFAULT_PROFILE
         && !info.is_some_and(|p| p.defined)
-        && app.profiles.len() <= 1
+        && on_that_machine <= 1
     {
         return None;
     }
-    let label = info.map_or_else(|| profile.to_owned(), |p| p.label.clone());
+    let label = info.map_or_else(|| bare.to_owned(), |p| p.label.clone());
     let style = match profile_color(app, profile) {
         Some(c) if !app.theme.monochrome => {
             Style::new().fg(app.depth.fit(c)).add_modifier(Modifier::BOLD)
@@ -432,20 +436,25 @@ pub(crate) fn diffstat(app: &App, w: &ptyro_core::model::WorktreeInfo) -> Vec<Sp
     v
 }
 
-/// Columns the machine marker takes: ` ● name`.
-fn machine_width(name: &str) -> usize {
-    3 + Span::raw(name).width()
+/// A dot in a machine's colour, the same for the same name everywhere (the web page uses the
+/// same hash): a second cue beside the name, never the only one.
+fn machine_dot(name: &str) -> Span<'static> {
+    let (r, g, b) = hsl_rgb(f32::from(ptyro_core::machine::hue(name)), 0.55, 0.6);
+    Span::styled("\u{25cf} ", Style::default().fg(Color::Rgb(r, g, b)))
 }
 
-/// ` ● studio`: the name always, with a dot in a colour that is the same for the same name
-/// everywhere (the web page uses the same hash), as a second cue and never the only one.
-fn machine_spans(app: &App, name: &str) -> Vec<Span<'static>> {
-    let (r, g, b) = hsl_rgb(f32::from(ptyro_core::machine::hue(name)), 0.55, 0.6);
-    vec![
-        Span::raw(" "),
-        Span::styled("\u{25cf}", Style::default().fg(Color::Rgb(r, g, b))),
-        Span::styled(format!(" {name}"), fg(app, app.theme.dim)),
-    ]
+/// `laptop2:work` → `laptop2 / work`; this machine's `work` stays `work`.
+pub fn workspace_label(name: &str) -> String {
+    match crate::tree::machine_and_name(name) {
+        (Some(m), w) => format!("{m} / {w}"),
+        (None, w) => w.to_owned(),
+    }
+}
+
+/// `14:02`, local time, of a moment in ms.
+pub fn clock(ms: u64) -> String {
+    ptyro_pty::local_time_hm_at(i64::try_from(ms / 1000).unwrap_or(0))
+        .map_or_else(String::new, |(h, m)| format!("{h:02}:{m:02}"))
 }
 
 /// HSL (hue in degrees) to 8-bit RGB.
@@ -467,10 +476,18 @@ fn hsl_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
 
 fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
     let t = &app.theme;
-    let mut title = vec![
-        Span::styled(" WORKSPACE ", fg(app, t.dim)),
-        Span::styled(app.workspace.clone(), fg(app, t.accent).add_modifier(Modifier::BOLD)),
-    ];
+    // Which machine this is, first (MM1.B: other machines' workspaces are below too), then the
+    // workspace you're in.
+    let mut title = vec![Span::raw(" ")];
+    if let Some(m) = &app.machine {
+        title.push(machine_dot(m));
+        title.push(Span::styled(m.clone(), fg(app, t.text).add_modifier(Modifier::BOLD)));
+        title.push(Span::styled(" · ", fg(app, t.dim)));
+    }
+    title.push(Span::styled(
+        workspace_label(&app.workspace),
+        fg(app, t.accent).add_modifier(Modifier::BOLD),
+    ));
     if let Some(b) = profile_badge(app, &app.workspace_profile()) {
         title.push(Span::raw(" "));
         title.push(b);
@@ -487,13 +504,6 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
             format!(" {} {}%", w.name, w.used_percent),
             fg(app, if hot { t.blocked } else { t.dim }),
         ));
-    }
-    // The machine the daemon runs on, last and only when it fits: a narrow sidebar drops it.
-    if let Some(m) = &app.machine {
-        let used: usize = title.iter().map(Span::width).sum();
-        if used + machine_width(m) <= usize::from(area.width) {
-            title.extend(machine_spans(app, m));
-        }
     }
     let body = sidebar_body(app, area);
     let mut lines = vec![Line::from(title)];
@@ -639,6 +649,11 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
             }
             Row::Session(id) => {
                 let Some(s) = sessions.get(id).copied() else { continue };
+                let bare = s
+                    .machine
+                    .as_deref()
+                    .and_then(|m| s.name.strip_prefix(&format!("{m}:")))
+                    .unwrap_or(&s.name);
                 let (g, gc) = glyph(app, s);
                 let num = match numbered.get(id) {
                     Some(n) if *n < 9 => format!("{} ", n + 1),
@@ -668,19 +683,20 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
                     },
                     Span::styled(format!("{g} "), fg(app, gc)),
                     // Under its worktree, `brisk-rook.setup` is just `setup`, and the agent
-                    // named after the worktree (`fix-flaky-test`) is just its program.
+                    // named after the worktree (`fix-flaky-test`) is just its program. Under
+                    // another machine's workspace, its name goes without the machine (MM1.B).
                     Span::styled(
                         s.worktree
                             .as_deref()
                             .and_then(|w| app.worktree(w))
                             .and_then(|w| {
                                 let wt = w.name.trim_start_matches('@');
-                                if s.name == wt {
+                                if bare == wt {
                                     return Some(what(s));
                                 }
-                                s.name.strip_prefix(&format!("{wt}.")).map(str::to_owned)
+                                bare.strip_prefix(&format!("{wt}.")).map(str::to_owned)
                             })
-                            .unwrap_or_else(|| s.name.clone()),
+                            .unwrap_or_else(|| bare.to_owned()),
                         name_style,
                     ),
                 ];
@@ -688,11 +704,8 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
                     .worktree
                     .as_deref()
                     .and_then(|w| app.worktree(w))
-                    .is_some_and(|w| w.name == s.name);
-                if s.script.is_none()
-                    && !same_as_worktree
-                    && s.agent.as_deref() != Some(s.name.as_str())
-                {
+                    .is_some_and(|w| w.name == bare);
+                if s.script.is_none() && !same_as_worktree && s.agent.as_deref() != Some(bare) {
                     spans.push(Span::styled(format!(" {}", what(s)), fg(app, t.dim)));
                 }
                 if let Some(r) = &s.status
@@ -801,6 +814,50 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
             }
             Row::Group(label) => {
                 Line::styled(format!(" {label}"), fg(app, t.dim).add_modifier(Modifier::ITALIC))
+            }
+            // A workspace (MM1.B): its machine in that machine's colour when it is another's, and
+            // how its link stands when that isn't well.
+            Row::Workspace(name) => {
+                let folded = app.collapsed.contains(&crate::tree::fold_key(name));
+                let arrow = if folded { "▸" } else { "▾" };
+                let (machine, short) = crate::tree::machine_and_name(name);
+                let current = *name == app.workspace;
+                let mut spans = vec![Span::styled(format!("{arrow} "), fg(app, t.dim))];
+                if let Some(m) = machine {
+                    spans.push(machine_dot(m));
+                    spans.push(Span::styled(format!("{m} / "), fg(app, t.dim)));
+                }
+                let style =
+                    fg(app, if current { t.accent } else { t.text }).add_modifier(Modifier::BOLD);
+                spans.push(Span::styled(short.to_owned(), style));
+                // How its machine's link stands first (it's what matters), then its profile.
+                let badge = app
+                    .workspaces
+                    .iter()
+                    .find(|w| w.name == *name)
+                    .and_then(|w| profile_badge(app, &w.profile));
+                if let Some(m) = app.machine_of_name(name) {
+                    use ptyro_core::model::MachineState as S;
+                    let since = m.since_ms.map(clock).unwrap_or_default();
+                    match m.state {
+                        S::Online => {}
+                        S::Offline => {
+                            spans.push(Span::styled(format!(" offline {since}"), fg(app, t.error)))
+                        }
+                        S::Mismatch => {
+                            spans.push(Span::styled(" other version", fg(app, t.error)));
+                            if let Some(f) = &m.fix {
+                                detail.push(Line::styled(format!("     → {f}"), fg(app, t.dim)));
+                            }
+                        }
+                        S::Connecting => spans.push(Span::styled(" connecting…", fg(app, t.dim))),
+                    }
+                }
+                if let Some(b) = badge {
+                    spans.push(Span::raw(" "));
+                    spans.push(b);
+                }
+                Line::from(spans)
             }
             // A change set (M11.11): its state and readiness; amber when it wants you.
             Row::Set(run) => {
@@ -1217,6 +1274,24 @@ fn draw_header(
             } else {
                 base.add_modifier(Modifier::BOLD)
             };
+            // Another machine's session (MM1.B): its machine's dot, and its state when it's down.
+            if let Some(m) = &s.machine {
+                left.push(Span { style: base.patch(machine_dot(m).style), ..machine_dot(m) });
+                if let Some(mi) = app.machines.iter().find(|x| x.name == *m)
+                    && mi.state != ptyro_core::model::MachineState::Online
+                {
+                    let state = match (mi.state, mi.since_ms) {
+                        (ptyro_core::model::MachineState::Offline, Some(t)) => {
+                            format!("offline since {}", clock(t))
+                        }
+                        (s, _) => s.label().to_owned(),
+                    };
+                    right.push(Span::styled(
+                        format!(" {m} {state} "),
+                        base.fg(app.depth.fit(t.error)),
+                    ));
+                }
+            }
             left.push(Span::styled(s.name.clone(), name));
             left.push(Span::styled(format!(" · {}", what(s)), base));
             if let Some(b) = profile_badge(app, &s.profile) {

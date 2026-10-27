@@ -36,6 +36,45 @@ daemon's socket (starting it if needed). Frames are compressed (zstd) on this pa
   `replay`/`export` (recordings), `config`, `init`, and paths you pass to `project add`. Use them
   on the remote machine (`ssh workbox ptyro replay …`).
 
+## Several machines: `ptyro machine`
+
+Another machine's workspaces can sit beside yours, everywhere: the TUI's sidebar, every CLI
+command and the web app (so a phone paired with this machine sees them too).
+
+```bash
+ptyro machine add ssh://me@laptop2   # over ssh, as --remote (keys or an agent)
+ptyro machine pair                   # on laptop2: a code, for when there's no ssh …
+ptyro machine add 'https://laptop2…/#machine=ptp_…&ca=…&name=laptop2'   # … added here
+ptyro machine ls                     # how each link stands, its workspaces
+ptyro ls                             # yours, and laptop2:fix-flaky-test
+ptyro send laptop2:fix-flaky-test "run the tests"
+ptyro machine hide laptop2 old       # not shown here (nothing changes there); unhide shows it
+ptyro machine rm laptop2
+```
+
+- **Names.** Everything of laptop2's carries its name: workspaces `laptop2:work` (shown
+  `laptop2 / work`), sessions `laptop2:fix-flaky-test`, worktrees `laptop2:myrepo/feat`, profiles
+  `laptop2:work`. A name only laptop2 has works bare too; one both have needs the machine.
+- **It lives there.** A mirrored workspace's projects, worktrees, profiles and logins are
+  laptop2's: things started in it run there. `+ new workspace` asks which machine.
+- **Both ways, no hub.** Add each machine on the other and pair your phone with each: whichever
+  is awake shows everything it can reach. A machine only ever offers its own workspaces, so
+  two machines adding each other don't echo.
+- **Offline.** An unreachable machine's workspaces stay listed as they were, marked "offline since
+  14:02"; anything that would change them says so. The link retries by itself (up to every
+  minute); `ptyro machine retry` (or the row menu) tries now.
+- **Same version.** Linked machines must run the same ptyro. A link to another version stays down
+  and says which machine to update and what to run there.
+- **Alerts** of laptop2's agents reach you through the machine you're connected to (its
+  desktop notifications, sinks and your paired devices), under its notification settings. A phone
+  paired with both shows one notification for one alert.
+- **Trust.** A machine added with a code holds a token with `full` scope on the other: it can do
+  everything there. It is listed under `ptyro devices` as "machine"; revoke it there. A code
+  works once, for 10 minutes, and pins the other machine's certificate (its own HTTPS); ssh needs
+  nothing new.
+- **What stays per machine:** runs, recipes, change sets, messages and leases, the scratchpad,
+  and the agents and editors offered in the new-task wizard.
+
 ## From your phone: `ptyro serve`
 
 ### 1. Serve, over HTTPS

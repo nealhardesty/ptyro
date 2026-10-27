@@ -66,6 +66,13 @@ pub struct Daemon {
     pub(crate) viewing: Mutex<HashMap<ClientId, (SessionId, bool)>>,
     /// Muted notification targets → until (ms; `None` = until unmuted).
     pub(crate) mutes: Mutex<crate::notifier::Mutes>,
+    /// Other machines this daemon mirrors (MM1.B, `machines.rs`).
+    pub(crate) links: Mutex<std::collections::BTreeMap<String, crate::machines::Link>>,
+    /// Their events, with their names qualified: for this daemon's clients only, never its own
+    /// machinery (which acts on what is here).
+    pub mirrored: broadcast::Sender<DomainEvent>,
+    /// (machine, its client id) → our client whose upstream that is (`conn.rs`).
+    pub(crate) upstream_ids: crate::machines::UpstreamIds,
     /// What each workspace last started (UX3.2, `again.rs`).
     pub(crate) last_launch: Mutex<HashMap<String, ptyro_core::session::LastLaunch>>,
     pub(crate) last_notified: Mutex<HashMap<SessionId, u64>>,
@@ -198,6 +205,9 @@ impl Daemon {
             viewing: Mutex::new(HashMap::new()),
             mutes: Mutex::new(HashMap::new()),
             last_launch: Mutex::new(HashMap::new()),
+            links: Mutex::new(std::collections::BTreeMap::new()),
+            mirrored: broadcast::channel(1024).0,
+            upstream_ids: Mutex::new(HashMap::new()),
             last_notified: Mutex::new(HashMap::new()),
             inbox_mem: Mutex::new(Vec::new()),
             used_links: Mutex::new(HashMap::new()),
@@ -910,6 +920,34 @@ impl Daemon {
         req: Request,
         caller: crate::mail::Caller,
     ) -> Result<Reply, Error> {
+        // Another machine's things (MM1.B): its requests go there, and lists here gain its part.
+        // A link is answered with this machine's own, and never routed on (no echoes).
+        let federate = !caller.is_link() && !self.links.locked().is_empty();
+        if federate && let Some(m) = self.machine_for(&req)? {
+            self.guard_caller(&req, caller)?;
+            self.guard_device(&req, caller)?;
+            return self.forward(&m, req).await;
+        }
+        let asked = federate.then(|| req.clone());
+        let out = self.handle_here(req, caller).await;
+        match (asked, out) {
+            (Some(req), Ok(reply)) => Ok(self.merge_mirrors(&req, reply)),
+            // Not here, but on exactly one of them: `fix-flaky-test` for laptop2's.
+            (Some(req), Err(e)) if e.code == ErrorCode::NotFound => {
+                match self.machine_guess(&req)? {
+                    Some(m) => self.forward(&m, req).await,
+                    None => Err(e),
+                }
+            }
+            (_, out) => out,
+        }
+    }
+
+    async fn handle_here(
+        self: &Arc<Self>,
+        req: Request,
+        caller: crate::mail::Caller,
+    ) -> Result<Reply, Error> {
         self.guard_caller(&req, caller)?;
         self.guard_device(&req, caller)?;
         // A gate a paired device answers is attributed to that device, whatever it says.
@@ -974,6 +1012,11 @@ impl Daemon {
                 }
                 Ok(Reply::Session { info })
             }
+            req @ (Request::MachineList
+            | Request::MachineAdd { .. }
+            | Request::MachineRemove { .. }
+            | Request::MachineHide { .. }
+            | Request::MachineRetry { .. }) => self.handle_machines(req).await,
             Request::LastLaunch { workspace } => {
                 Ok(Reply::LastLaunch { launch: self.last_launch(&workspace) })
             }

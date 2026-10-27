@@ -911,11 +911,13 @@ async fn tui_workspaces_tree_folding_and_worktree_removal() {
         switcher.contains("Workspaces") && switcher.contains("main") && switcher.contains("other"),
         "{switcher}"
     );
+    // MM1.B: every workspace is in the sidebar; `w` goes to one's header (now the workspace you
+    // are in), the others stay listed.
     let other = r.at(5.8);
-    assert!(other.contains("WORKSPACE other") && !other.contains("lib"), "{other}");
-    // The choice is remembered: a plain attach opens in `other`.
-    let r = run(w.tui(&[]).snapshot(1.5).send(1.8, "\\x11d").timeout(3.0)).await;
-    assert!(r.at(1.5).contains("WORKSPACE other"), "{}", r.at(1.5));
+    assert!(
+        other.contains(" · other") && other.contains("▾ other") && other.contains("lib"),
+        "{other}"
+    );
 }
 
 #[tokio::test]

@@ -258,6 +258,10 @@ pub struct Attention {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InboxEntry {
     pub id: i64,
+    /// The machine it lives on, when that is another one this daemon mirrors (MM1.B, SPEC
+    /// §16.4b); `None`: here. Its names then carry the machine (`laptop2:work`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
     pub session: String,
     pub session_name: String,
     pub at_ms: u64,
@@ -287,6 +291,10 @@ pub struct UsageWindow {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usage {
     pub profile: String,
+    /// The machine it lives on, when that is another one this daemon mirrors (MM1.B, SPEC
+    /// §16.4b); `None`: here. Its names then carry the machine (`laptop2:work`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
     pub agent: String,
     pub windows: Vec<UsageWindow>,
     /// Session cost in thousandths of a dollar (Claude's `cost.total_cost_usd`).
@@ -349,6 +357,7 @@ mod tests {
     #[test]
     fn a_usage_line_says_the_limits_and_when_they_reset() {
         let u = Usage {
+            machine: None,
             profile: "work".into(),
             agent: "claude".into(),
             windows: vec![

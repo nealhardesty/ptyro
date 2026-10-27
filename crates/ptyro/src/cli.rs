@@ -489,6 +489,10 @@ async fn dispatch(
             crate::remote::pair(&ctx, name, scope.as_deref(), url, json).await
         }
         Some(Cmd::Devices { cmd }) => crate::remote::devices(&ctx, cmd).await,
+        Some(Cmd::Machine { cmd }) => machine(&ctx, cmd).await,
+        Some(Cmd::MachineBridge { url, fingerprint }) => {
+            crate::machines::bridge(url, fingerprint).await
+        }
         Some(Cmd::Replay { session, speed, max_idle, from }) => {
             crate::record::replay(&ctx, session, speed, max_idle, from).await
         }
@@ -1477,5 +1481,31 @@ async fn daemon(ctx: &Ctx, cmd: DaemonCmd) -> Result<i32, Error> {
             }
             Ok(0)
         }
+    }
+}
+
+async fn machine(ctx: &Ctx, cmd: Option<crate::MachineCmd>) -> Result<i32, Error> {
+    use crate::MachineCmd as M;
+    match cmd.unwrap_or(M::Ls { json: false }) {
+        M::Ls { json } => crate::machines::ls(ctx, json).await,
+        M::Add { target, name, force, json } => {
+            crate::machines::add(ctx, target, name, force, json).await
+        }
+        M::Rm { name } => {
+            let said = format!("{name} is no longer mirrored here (revoke its token there too)");
+            crate::machines::simple(ctx, Request::MachineRemove { name }, said).await
+        }
+        M::Hide { name, workspace } => {
+            let req = Request::MachineHide { name, workspace, hidden: true };
+            crate::machines::simple(ctx, req, String::new()).await
+        }
+        M::Unhide { name, workspace } => {
+            let req = Request::MachineHide { name, workspace, hidden: false };
+            crate::machines::simple(ctx, req, String::new()).await
+        }
+        M::Retry { name } => {
+            crate::machines::simple(ctx, Request::MachineRetry { name }, String::new()).await
+        }
+        M::Pair { url, json } => crate::machines::pair(ctx, url, json).await,
     }
 }

@@ -43,7 +43,7 @@ Conventions:
 | **UX2** | Found in use | Small things the owner's own scratchpad caught while using ptyro: an About screen, a sidebar that shows a pushed worktree as done (done) |
 | **UX3** | Daily flow | Full-sized panels and splits only on request (a split is a clone), quick new (`C-n`), created means shown, `!` a new shell and the quick terminal a worktree's, usage limits in About (done) |
 | **H2** | Second hardening review | A review of the whole codebase by nine independent readers: ~150 findings verified and fixed; locks, the release pipeline and uninstall done; the rest listed here |
-| **MM1** | Many machines | Every laptop's agents from one place (one phone app, one sidebar): two designs on the table, the owner leans to daemon federation (open) |
+| **MM1** | Many machines | Every laptop's agents from one place: other machines' workspaces beside yours in one sidebar, one CLI and one phone app (done) |
 | **Backlog** | Later / maybe | Editor, tasks, jj, libghostty, relay, … |
 
 Critical path: **M0 → M1 → M2 → M3 → M4** gives a daily-driver. M5 can interleave with M3/M4.
@@ -2223,7 +2223,7 @@ tells the pages apart, nothing joins them). RESEARCH R-REM-01 (the multi-daemon 
 R-REM-12 and R-REM-13 hold the two designs. **Decide between them first (MM1.0)**; the owner
 chose B (MM1.0); MM1.A stays recorded as the alternative.
 
-- [ ] **MM1.0 Pick the design** — the owner's answers to the questions in R-REM-13, written into
+- [x] **MM1.0 Pick the design** — the owner's answers to the questions in R-REM-13, written into
   SPEC §16 as **[decided]**. *Decided so far (owner, 2026-10-27):* design B; **symmetric** (each
   machine registers the others, the phone is paired with each, whichever is awake shows all it
   can reach); **mirror** (a remote workspace lives on its machine, its projects, worktrees and
@@ -2253,7 +2253,7 @@ chose B (MM1.0); MM1.A stays recorded as the alternative.
   `connect-src`, the WebSocket's origin check), tokens per machine in IndexedDB, push per
   machine. No hub: either laptop asleep leaves the other reachable. Web only; the TUI stays one
   daemon (plus `--remote`).
-- [ ] **MM1.B Workspaces on other machines** (R-REM-13, chosen) — L. Proposed parts, one
+- [x] **MM1.B Workspaces on other machines** (R-REM-13, chosen) — L. Proposed parts, one
   change for the owner but built in this order: (1) the stacked sidebar and one global layout,
   with "current workspace" taken from the selection; (2) machines: `machine add|ls|rm` (ssh:// or
   a paired token, checked before saving), the link per machine (mirror, reconnect, offline
@@ -2268,6 +2268,17 @@ chose B (MM1.0); MM1.A stays recorded as the alternative.
   *Done when:* from one TUI and one phone app, both laptops' workspaces are listed, each says its
   machine at a glance, a task started in one runs on its machine, and with that machine asleep
   its workspaces read offline while the rest work.
+  *Done (2026-10-27):* SPEC §16.4b [built MM1.B] and §11.2j. The daemon links (ssh, or `ptyro
+  machine-bridge` to the other's `ptyro serve` with its certificate authority pinned), mirrors
+  with every name qualified, routes by `laptop2:` or id (a bare name only one mirror has works
+  too), merges lists, relays screens and keys over each client's own upstream, and relays alerts
+  through its own channels; protocol 1.20. CLI `ptyro machine add|ls|rm|hide|unhide|retry|pair`;
+  TUI: every workspace stacked, one layout, the machine everywhere, `machine.*` actions; web:
+  More → Machines, machine chips, the new-workspace machine. Tested with two daemons linked both
+  ways (`tests/mm1.rs`: mirroring, routing, typing over the upstream, hide, offline, back, remove,
+  no echoes). *Deviations:* an offline machine's screens are only what a client had; marking a
+  mirrored inbox entry read isn't routed; the wizard offers this machine's agents in a remote
+  workspace. Not looked at on two real laptops or a phone by the agent that built it.
 
 ## Backlog (unscheduled; ideas welcome)
 

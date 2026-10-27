@@ -416,6 +416,7 @@ pub fn info(config: &Config, name: &str, managed_root: &Path) -> ProfileInfo {
         vars = p.set.into_iter().map(|(k, _)| k).collect();
     });
     ProfileInfo {
+        machine: None,
         name: name.to_owned(),
         label: d.label.clone().unwrap_or_else(|| name.to_owned()),
         color: d.color.clone(),

@@ -58,6 +58,7 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"inbox","workspace":null,"unread_only":false,"limit":5}), READ, true),
         s(json!({"t":"events","session":null,"limit":5}), READ, true),
         s(json!({"t":"usage"}), READ, true),
+        s(json!({"t":"machine_list"}), READ, true),
         s(json!({"t":"history","limit":5}), READ, true),
         s(json!({"t":"project_list"}), READ, true),
         s(json!({"t":"project_get","addr":a}), READ, true),
@@ -212,6 +213,15 @@ fn table() -> Vec<Sample> {
         // A code is claimed by `ptyro serve` for a device that isn't one yet: no device may.
         s(json!({"t":"device_claim","code":"ptp_x","via":null}), NOBODY, false),
         s(json!({"t":"device_list"}), FULL, false),
+        // Other machines (MM1.B): listing them reads; anything else reaches another machine.
+        s(
+            json!({"t":"machine_add","name":"nosuch","transport":{"t":"ssh","target":"nosuch.invalid"},"token":null,"force":false}),
+            FULL,
+            false,
+        ),
+        s(json!({"t":"machine_remove","name":a}), FULL, true),
+        s(json!({"t":"machine_hide","name":a,"workspace":"main","hidden":true}), FULL, true),
+        s(json!({"t":"machine_retry","name":a}), FULL, true),
         s(json!({"t":"device_revoke","id":a}), FULL, false),
         s(json!({"t":"save_view","name":"x","view":{}}), FULL, false),
         s(json!({"t":"reload_config"}), FULL, false),

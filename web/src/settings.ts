@@ -75,6 +75,7 @@ function moreView(): HTMLElement {
     ["Health", "What's wrong, with its fixes", "#/health"],
     ["Usage", "Your accounts' limits", "#/usage"],
     ["Devices", "Phones and browsers paired with ptyro", "#/devices"],
+    ["Machines", "Other machines whose workspaces show here", "#/machines"],
     ["Profiles", "Accounts agents run under", "#/profiles"],
     ["Settings", "Every option, searchable, with what it does", "#/settings"],
     ["Integrations", "Agents that need installing once", "#/integrations"],

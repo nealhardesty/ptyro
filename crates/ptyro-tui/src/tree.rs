@@ -1,14 +1,20 @@
-//! The sidebar tree (SPEC §11.1, M3.12): workspace → project → worktree → sessions, then the
-//! workspace's other sessions. Pure: built from what the daemon reported, so it is unit-tested.
+//! The sidebar tree (SPEC §11.1, M3.12; stacked in MM1.B, §16.4b): every workspace, this
+//! machine's first and then each other machine's, as a header with its projects → worktrees →
+//! sessions under it and then its other sessions. Pure: built from what the daemon reported, so it
+//! is unit-tested.
 
 use std::collections::HashSet;
 
 use ptyro_core::SessionId;
-use ptyro_core::model::{MAIN_WORKSPACE, ProjectInfo, WorkspaceInfo, WorktreeInfo, WorktreeState};
+use ptyro_core::model::{
+    MAIN_WORKSPACE, ProjectInfo, WorkspaceInfo, WorktreeInfo, WorktreeState, split_machine,
+};
 use ptyro_core::session::SessionInfo;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Row {
+    /// A workspace's header (by name: `work`, `laptop2:work`); folds what is under it.
+    Workspace(String),
     Project(String),
     Worktree(String),
     Session(SessionId),
@@ -35,26 +41,79 @@ impl Row {
     }
 }
 
+/// The key a folded workspace has in `collapsed` (never a project's or a worktree's id).
+pub fn fold_key(workspace: &str) -> String {
+    format!("ws:{workspace}")
+}
+
 pub struct Inputs<'a> {
-    pub workspace: &'a str,
     pub workspaces: &'a [WorkspaceInfo],
     pub projects: &'a [ProjectInfo],
     pub worktrees: &'a [WorktreeInfo],
     pub sessions: &'a [SessionInfo],
-    /// Collapsed project and worktree ids.
+    /// Collapsed project and worktree ids, and folded workspaces (`fold_key`).
     pub collapsed: &'a HashSet<String>,
     /// Change sets still going (M11): shown first, each with its lead.
     pub sets: &'a [crate::sets::SetNode],
 }
 
 impl Inputs<'_> {
-    fn ws(&self) -> Option<&WorkspaceInfo> {
-        self.workspaces.iter().find(|w| w.name == self.workspace)
+    /// The workspaces in the order they are shown: this machine's as the daemon lists them,
+    /// then each other machine's, machine by machine.
+    pub fn order(&self) -> Vec<&WorkspaceInfo> {
+        let mut v: Vec<&WorkspaceInfo> = self.workspaces.iter().collect();
+        v.sort_by_key(|w| w.machine.clone());
+        v
     }
 
-    /// Project ids of the workspace, in order.
+    /// The workspace a session is listed under: its project's (the first that lists it), else
+    /// its home, else its machine's `main` (or this one's).
+    pub fn home(&self, s: &SessionInfo) -> String {
+        if let Some(p) = &s.project
+            && let Some(w) = self.order().into_iter().find(|w| w.projects.contains(p))
+        {
+            return w.name.clone();
+        }
+        let names: Vec<&str> = self.workspaces.iter().map(|w| w.name.as_str()).collect();
+        if let Some(h) = s.workspace.as_deref().filter(|h| names.contains(h)) {
+            return h.to_owned();
+        }
+        let main = match &s.machine {
+            Some(m) => format!("{m}:{MAIN_WORKSPACE}"),
+            None => MAIN_WORKSPACE.to_owned(),
+        };
+        if names.contains(&main.as_str()) {
+            return main;
+        }
+        // A machine without a `main` here (hidden): its first shown workspace, else ours.
+        s.machine
+            .as_ref()
+            .and_then(|m| {
+                self.order()
+                    .into_iter()
+                    .find(|w| w.name.split_once(':').is_some_and(|(x, _)| x == m))
+                    .map(|w| w.name.clone())
+            })
+            .unwrap_or_else(|| MAIN_WORKSPACE.to_owned())
+    }
+
+    /// Every project shown, in tree order (each once).
     pub fn project_ids(&self) -> Vec<String> {
-        self.ws()
+        let mut seen = HashSet::new();
+        self.order()
+            .into_iter()
+            .flat_map(|w| w.projects.iter())
+            .filter(|id| self.projects.iter().any(|p| p.id == **id))
+            .filter(|id| seen.insert((*id).clone()))
+            .cloned()
+            .collect()
+    }
+
+    /// One workspace's projects, in its order.
+    pub fn project_ids_of(&self, workspace: &str) -> Vec<String> {
+        self.workspaces
+            .iter()
+            .find(|w| w.name == workspace)
             .map(|w| {
                 w.projects
                     .iter()
@@ -75,34 +134,8 @@ impl Inputs<'_> {
         v
     }
 
-    /// Sessions that belong in this workspace's "other sessions": their home is this workspace
-    /// (or none, for `main`) and they aren't shown under one of its projects.
-    fn others(&self, shown_projects: &[String]) -> Vec<&SessionInfo> {
-        self.sessions
-            .iter()
-            .filter(|s| {
-                // The scratchpad's editor is in no list (NOTE1.1).
-                if s.pad {
-                    return false;
-                }
-                let under_project = s.project.as_ref().is_some_and(|p| shown_projects.contains(p))
-                    // (A worktree that is gone shows no rows, so its sessions go to "other sessions"
-                    // instead of vanishing from the list.)
-                    && s.worktree.as_ref().is_some_and(|w| {
-                        self.worktrees.iter().any(|x| {
-                            x.id == *w
-                                && x.state != WorktreeState::Removed
-                                && shown_projects.contains(&x.project)
-                        })
-                    });
-                let home = s.workspace.as_deref().unwrap_or(MAIN_WORKSPACE);
-                let under_set =
-                    self.sets.iter().any(|n| n.lead.as_deref() == Some(s.id.full().as_str()));
-                !under_project
-                    && !under_set
-                    && (home == self.workspace || self.ws().is_none() && home == MAIN_WORKSPACE)
-            })
-            .collect()
+    fn led(&self, s: &SessionInfo) -> bool {
+        self.sets.iter().any(|n| n.lead.as_deref() == Some(s.id.full().as_str()))
     }
 
     /// The rows, honouring collapsed nodes.
@@ -110,7 +143,7 @@ impl Inputs<'_> {
         self.build(true)
     }
 
-    /// Every session of the workspace in tree order, collapsed or not (cycling, numbering).
+    /// Every session in tree order, collapsed or not (cycling, numbering).
     pub fn sessions(&self) -> Vec<SessionId> {
         self.build(false)
             .into_iter()
@@ -119,6 +152,14 @@ impl Inputs<'_> {
                 _ => None,
             })
             .collect()
+    }
+
+    /// The workspace a row is in: the header above it.
+    pub fn workspace_of(rows: &[Row], i: usize) -> Option<String> {
+        rows.get(..=i.min(rows.len().saturating_sub(1)))?.iter().rev().find_map(|r| match r {
+            Row::Workspace(w) => Some(w.clone()),
+            _ => None,
+        })
     }
 
     fn build(&self, honour_collapse: bool) -> Vec<Row> {
@@ -132,13 +173,48 @@ impl Inputs<'_> {
                 rows.push(Row::Session(s.id));
             }
         }
-        let projects = self.project_ids();
-        for pid in &projects {
-            rows.push(Row::Project(pid.clone()));
-            if honour_collapse && self.collapsed.contains(pid) {
+        // Nothing known yet (before the first answer): the sessions, without headers.
+        if self.workspaces.is_empty() {
+            rows.extend(
+                self.sessions
+                    .iter()
+                    .filter(|s| !s.pad && !self.led(s))
+                    .map(|s| if s.quick { Row::Quick(s.id) } else { Row::Session(s.id) }),
+            );
+            return rows;
+        }
+        // A project shows once, under the first workspace that has it.
+        let mut placed: HashSet<&str> = HashSet::new();
+        for ws in self.order() {
+            rows.push(Row::Workspace(ws.name.clone()));
+            let folded = honour_collapse && self.collapsed.contains(&fold_key(&ws.name));
+            let body = self.body(ws, &mut placed, honour_collapse);
+            if !folded {
+                rows.extend(body);
+            }
+        }
+        rows
+    }
+
+    fn body<'b>(
+        &'b self,
+        ws: &'b WorkspaceInfo,
+        placed: &mut HashSet<&'b str>,
+        honour_collapse: bool,
+    ) -> Vec<Row> {
+        let mut rows = Vec::new();
+        let projects: Vec<&ProjectInfo> = ws
+            .projects
+            .iter()
+            .filter_map(|id| self.projects.iter().find(|p| p.id == *id))
+            .filter(|p| placed.insert(p.id.as_str()))
+            .collect();
+        for p in &projects {
+            rows.push(Row::Project(p.id.clone()));
+            if honour_collapse && self.collapsed.contains(&p.id) {
                 continue;
             }
-            for w in self.worktrees_of(pid) {
+            for w in self.worktrees_of(&p.id) {
                 rows.push(Row::Worktree(w.id.clone()));
                 if honour_collapse && self.collapsed.contains(&w.id) {
                     continue;
@@ -148,15 +224,41 @@ impl Inputs<'_> {
                     .iter()
                     .filter(|s| s.worktree.as_deref() == Some(w.id.as_str()) && !s.pad)
                     // A change set's lead has its row under the set, not twice.
-                    .filter(|s| {
-                        !self.sets.iter().any(|n| n.lead.as_deref() == Some(s.id.full().as_str()))
-                    })
+                    .filter(|s| !self.led(s))
                     .partition(|s| s.quick);
                 rows.extend(sessions.into_iter().map(|s| Row::Session(s.id)));
                 rows.extend(quick.into_iter().map(|s| Row::Quick(s.id)));
             }
         }
-        let others = self.others(&projects);
+        // The rest whose workspace this is: no project here, or a worktree that is gone (it has
+        // no row to hang under, so it is listed rather than vanishing).
+        let shown: Vec<&str> = projects.iter().map(|p| p.id.as_str()).collect();
+        let others: Vec<&SessionInfo> = self
+            .sessions
+            .iter()
+            .filter(|s| !s.pad && !self.led(s))
+            .filter(|s| {
+                let under_project = s.project.as_ref().is_some_and(|p| shown.contains(&p.as_str()))
+                    && s.worktree.as_ref().is_some_and(|w| {
+                        self.worktrees.iter().any(|x| {
+                            x.id == *w
+                                && x.state != WorktreeState::Removed
+                                && shown.contains(&x.project.as_str())
+                        })
+                    });
+                // Under another workspace's project: there, not here.
+                let elsewhere = s.project.as_ref().is_some_and(|p| {
+                    !shown.contains(&p.as_str())
+                        && self.worktrees.iter().any(|x| {
+                            Some(x.id.as_str()) == s.worktree.as_deref()
+                                && x.state != WorktreeState::Removed
+                                && x.project == *p
+                        })
+                        && self.workspaces.iter().any(|w| w.projects.contains(p))
+                });
+                !under_project && !elsewhere && self.home(s) == ws.name
+            })
+            .collect();
         if !others.is_empty() {
             if !projects.is_empty() {
                 rows.push(Row::Group("other sessions".into()));
@@ -167,6 +269,14 @@ impl Inputs<'_> {
             rows.extend(quick.into_iter().map(|s| Row::Quick(s.id)));
         }
         rows
+    }
+}
+
+/// `laptop2:work` → (`laptop2`, `work`); `work` → (`None`, `work`).
+pub fn machine_and_name(workspace: &str) -> (Option<&str>, &str) {
+    match split_machine(workspace) {
+        Some((m, w)) => (Some(m), w),
+        None => (None, workspace),
     }
 }
 
@@ -183,6 +293,7 @@ mod tests {
         ws: Option<&str>,
     ) -> SessionInfo {
         SessionInfo {
+            machine: None,
             id: SessionId::new(),
             handle: String::new(),
             name: name.into(),
@@ -236,6 +347,7 @@ mod tests {
 
     fn wt(id: &str, project: &str, root: bool, created: u64) -> WorktreeInfo {
         WorktreeInfo {
+            machine: None,
             id: id.into(),
             project: project.into(),
             project_slug: project.into(),
@@ -261,6 +373,7 @@ mod tests {
     #[test]
     fn a_removed_worktrees_sessions_and_a_set_lead_show_once() {
         let ws = vec![WorkspaceInfo {
+            machine: None,
             id: "w".into(),
             name: "main".into(),
             profile: "default".into(),
@@ -269,6 +382,7 @@ mod tests {
             created_ms: 0,
         }];
         let projects = vec![ProjectInfo {
+            machine: None,
             id: "p".into(),
             slug: "app".into(),
             root: "/app".into(),
@@ -287,7 +401,6 @@ mod tests {
         let nodes = [crate::sets::SetNode { run: "r-1".into(), lead: Some(lead.id.full()) }];
         let collapsed = HashSet::new();
         let rows = Inputs {
-            workspace: "main",
             workspaces: &ws,
             projects: &projects,
             worktrees: &worktrees,
@@ -303,36 +416,36 @@ mod tests {
         assert_eq!(rows[0], Row::Set("r-1".into()));
     }
 
-    #[test]
-    fn tree_order_collapse_and_other_sessions() {
-        let ws = vec![
-            WorkspaceInfo {
-                id: "w".into(),
-                name: "main".into(),
-                profile: "default".into(),
-                notify: "all".into(),
-                projects: vec!["p".into()],
-                created_ms: 0,
-            },
-            WorkspaceInfo {
-                id: "x".into(),
-                name: "side".into(),
-                profile: "default".into(),
-                notify: "all".into(),
-                projects: vec![],
-                created_ms: 0,
-            },
-        ];
-        let projects = vec![ProjectInfo {
-            id: "p".into(),
-            slug: "app".into(),
+    fn ws(id: &str, name: &str, projects: &[&str]) -> WorkspaceInfo {
+        WorkspaceInfo {
+            machine: ptyro_core::model::split_machine(name).map(|(m, _)| m.to_owned()),
+            id: id.into(),
+            name: name.into(),
+            profile: "default".into(),
+            notify: "all".into(),
+            projects: projects.iter().map(|p| (*p).to_owned()).collect(),
+            created_ms: 0,
+        }
+    }
+
+    fn project(id: &str) -> ProjectInfo {
+        ProjectInfo {
+            machine: None,
+            id: id.into(),
+            slug: id.into(),
             root: "/app".into(),
             default_branch: None,
             remote_url: None,
             pin: None,
             created_ms: 0,
             last_used_ms: None,
-        }];
+        }
+    }
+
+    #[test]
+    fn every_workspace_stacked_with_its_tree_and_other_sessions() {
+        let wss = vec![ws("w", "main", &["p"]), ws("x", "side", &[])];
+        let projects = vec![project("p")];
         let worktrees = vec![wt("t2", "p", false, 5), wt("root", "p", true, 1)];
         let sessions = vec![
             session("in-t2", Some("t2"), Some("p"), Some("main")),
@@ -340,20 +453,20 @@ mod tests {
             session("elsewhere", None, None, Some("side")),
             session("in-root", Some("root"), Some("p"), Some("main")),
         ];
-        let mut collapsed = HashSet::new();
-        let rows = Inputs {
-            workspace: "main",
-            workspaces: &ws,
+        let collapsed = HashSet::new();
+        let i = Inputs {
+            workspaces: &wss,
             projects: &projects,
             worktrees: &worktrees,
             sessions: &sessions,
             collapsed: &collapsed,
             sets: &[],
-        }
-        .rows();
+        };
+        let rows = i.rows();
         assert_eq!(
             rows,
             vec![
+                Row::Workspace("main".into()),
                 Row::Project("p".into()),
                 Row::Worktree("root".into()),
                 Row::Session(sessions[3].id),
@@ -361,37 +474,88 @@ mod tests {
                 Row::Session(sessions[0].id),
                 Row::Group("other sessions".into()),
                 Row::Session(sessions[1].id),
+                Row::Workspace("side".into()),
+                Row::Session(sessions[2].id),
             ],
-            "root first, then by creation; other workspaces' sessions hidden"
+            "root first, then by creation; every workspace with its own"
         );
-        collapsed.insert("root".to_owned());
+        assert_eq!(Inputs::workspace_of(&rows, 3).as_deref(), Some("main"));
+        assert_eq!(Inputs::workspace_of(&rows, 9).as_deref(), Some("side"));
+        let mut folded = collapsed.clone();
+        folded.insert("root".to_owned());
+        folded.insert(fold_key("side"));
+        let i = Inputs { collapsed: &folded, ..i };
+        let rows = i.rows();
+        assert!(!rows.contains(&Row::Session(sessions[3].id)));
+        assert!(
+            rows.contains(&Row::Workspace("side".into()))
+                && !rows.contains(&Row::Session(sessions[2].id))
+        );
+        assert_eq!(
+            i.sessions(),
+            vec![sessions[3].id, sessions[0].id, sessions[1].id, sessions[2].id],
+            "cycling goes through every workspace and ignores folding"
+        );
+        // A change set comes first, with its lead under it instead of under "other sessions".
+        let lead = sessions[2].id;
+        let nodes = [crate::sets::SetNode { run: "r-1".into(), lead: Some(lead.full()) }];
+        let with = Inputs { sets: &nodes, collapsed: &HashSet::new(), ..i };
+        let rows = with.rows();
+        assert_eq!(rows[..2], [Row::Set("r-1".into()), Row::Session(lead)]);
+        assert_eq!(rows.iter().filter(|r| **r == Row::Session(lead)).count(), 1);
+    }
+
+    #[test]
+    fn another_machines_workspaces_come_after_ours_and_a_project_shows_once() {
+        let wss =
+            vec![ws("r", "laptop2:main", &["q"]), ws("w", "main", &["p"]), ws("x", "side", &["p"])];
+        let projects = vec![project("p"), project("q")];
+        let worktrees = vec![wt("pr", "p", true, 1), wt("qr", "q", true, 1)];
+        let mut remote = session("laptop2:fix", Some("qr"), Some("q"), Some("laptop2:main"));
+        remote.machine = Some("laptop2".into());
+        let mut loose = session("laptop2:loose", None, None, Some("laptop2:gone"));
+        loose.machine = Some("laptop2".into());
+        let sessions = vec![
+            session("here", Some("pr"), Some("p"), Some("side")),
+            remote.clone(),
+            loose.clone(),
+        ];
+        let collapsed = HashSet::new();
         let i = Inputs {
-            workspace: "main",
-            workspaces: &ws,
+            workspaces: &wss,
             projects: &projects,
             worktrees: &worktrees,
             sessions: &sessions,
             collapsed: &collapsed,
             sets: &[],
         };
-        assert!(!i.rows().contains(&Row::Session(sessions[3].id)));
+        let rows = i.rows();
         assert_eq!(
-            i.sessions(),
-            vec![sessions[3].id, sessions[0].id, sessions[1].id],
-            "cycling ignores collapse"
+            rows,
+            vec![
+                Row::Workspace("main".into()),
+                Row::Project("p".into()),
+                Row::Worktree("pr".into()),
+                Row::Session(sessions[0].id),
+                Row::Workspace("side".into()),
+                Row::Workspace("laptop2:main".into()),
+                Row::Project("q".into()),
+                Row::Worktree("qr".into()),
+                Row::Session(remote.id),
+                Row::Group("other sessions".into()),
+                Row::Session(loose.id),
+            ],
+            "ours first; `p` once, under the first workspace with it; a remote session whose \
+             workspace isn't shown sits under its machine's main"
         );
-        let side = Inputs { workspace: "side", ..i };
-        assert_eq!(side.rows(), vec![Row::Session(sessions[2].id)]);
-        // A change set comes first, with its lead under it instead of under "other sessions".
-        let lead = sessions[2].id;
-        let nodes = [crate::sets::SetNode { run: "r-1".into(), lead: Some(lead.full()) }];
-        let with = Inputs { workspace: "side", sets: &nodes, ..i };
-        assert_eq!(with.rows(), vec![Row::Set("r-1".into()), Row::Session(lead)]);
+        assert_eq!(i.home(&loose), "laptop2:main");
+        assert_eq!(machine_and_name("laptop2:main"), (Some("laptop2"), "main"));
     }
 
     #[test]
     fn a_quick_terminal_is_its_worktree_s_last_line_and_not_cycled_through() {
         let ws = [WorkspaceInfo {
+            machine: None,
             id: "w".into(),
             name: "main".into(),
             profile: "default".into(),
@@ -400,6 +564,7 @@ mod tests {
             created_ms: 0,
         }];
         let projects = [ProjectInfo {
+            machine: None,
             id: "p".into(),
             slug: "app".into(),
             root: "/app".into(),
@@ -418,7 +583,6 @@ mod tests {
         ];
         let collapsed = HashSet::new();
         let i = Inputs {
-            workspace: "main",
             workspaces: &ws,
             projects: &projects,
             worktrees: &worktrees,
@@ -429,6 +593,7 @@ mod tests {
         assert_eq!(
             i.rows(),
             vec![
+                Row::Workspace("main".into()),
                 Row::Project("p".into()),
                 Row::Worktree("root".into()),
                 Row::Session(sessions[1].id),

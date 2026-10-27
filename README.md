@@ -381,6 +381,15 @@ health with its fixes, devices (pair another with a link and a QR code), profile
 config editor, the daemon and its logs, first-run setup and a tour. Push notifications carry
 Allow / Deny where the platform shows actions.
 
+**Several machines, one place.** `ptyro machine add ssh://laptop2` (or, without ssh, `ptyro
+machine pair` on laptop2 and `ptyro machine add CODE` here) and laptop2's workspaces show here
+beside yours, in the TUI's sidebar, the CLI and the web app: `laptop2 / work`, its sessions as
+`laptop2:fix-flaky-test`. Start, type, answer and review there from here; its alerts reach you
+through this machine. Pair your phone with each laptop and whichever is awake shows everything it
+can reach. An asleep machine's workspaces stay listed, marked offline, and come back by
+themselves; both must run the same ptyro (it says which to update). See
+[`docs/remote.md`](docs/remote.md#several-machines-ptyro-machine).
+
 Each page names its machine, to tell several apart: the tab title is `studio · ptyro`, with a colour
 dot on the icon and a thin bar in the header, and the TUI's sidebar and terminal title say it too.
 It is the computer's short name; `[daemon] machine_name` (Settings) changes it.
