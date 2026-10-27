@@ -4995,6 +4995,68 @@ manifest is static and served before sign-in, so it keeps the name `ptyro` (the 
 to unauthenticated requests). The name is read at connect: a changed `machine_name` shows after
 the next reconnect.
 
+### 16.4b Many machines: workspaces on other machines **[decided 2026-10-27 (owner, ROADMAP MM1.0); being built in MM1.B]**
+
+One sidebar, one phone app, every laptop's agents. A daemon **links** to the daemons of other
+machines and **mirrors** their workspaces next to its own; every client of it (TUI, CLI, `serve`
+and so the web app) sees one daemon. RESEARCH R-REM-13; the alternative (R-REM-12, the PWA
+holding several machines) was not chosen.
+
+**Decided by the owner:**
+- **Symmetric.** Each machine links the others; the phone is paired with each. Whichever is awake
+  shows everything it can reach. No hub.
+- **Mirror.** A remote workspace lives on its machine with its projects, worktrees, profiles and
+  logins; that machine is the authority. The local daemon shows it and forwards what is done in it.
+- **A machine is added, not a workspace.** All its workspaces are followed (new ones appear,
+  removed ones go); any can be hidden here (`machine hide laptop2 work`), which changes nothing
+  there. A daemon offers its links only its **own** workspaces, never ones it mirrors, so two
+  machines linking each other never echo.
+- **Transport: both.** A paired token over Tailscale (`wss://`, the phone's pairing, a `machine`
+  device with `full` scope) or `ssh://` (`ptyro proxy`, §16.2). Adding a machine asks which and
+  checks the link before saving it.
+- **Full scope** between linked machines; revoking the token (or removing the machine) cuts it.
+- **Same version.** A link to a daemon of another version stays down and says what to do and
+  where: `laptop2 runs ptyro 0.0.11, this is 0.0.12: run \`ptyro daemon upgrade\` on laptop2 (after
+  updating ptyro there)` (the older side is named); the TUI and web offer it as the fix, a toast
+  when the link is tried and a line on the machine's header.
+- **Offline:** the workspaces of an unreachable machine stay listed, greyed, read-only, with the
+  last sessions and screens known and "offline since 14:02"; anything that would change them is
+  refused with that message; the link retries (backoff to 60 s) and comes back by itself.
+- **Addresses:** `laptop2:fix-flaky-test` (sessions), `laptop2:myrepo/feat` (worktrees),
+  `laptop2:work` (workspaces), in the CLI, the palette and completions. A local name needs no
+  prefix; a bare name that only a remote has resolves to it, an ambiguous one is refused with
+  both qualified names.
+- **Alerts come through the daemon you are connected to:** a mirror's attention events are the
+  local daemon's notifications (desktop, sinks, web push). A phone paired with both machines may
+  hear the same alert twice; both use the same notification `tag` (`<session id>:<since_ms>`), so
+  the phone shows one.
+- **New workspace asks which machine** (local first). It is created there.
+- **The sidebar shows every workspace stacked** (local first, then each machine's), each a
+  header with its machine chip in the machine's colour (§16.4a): `laptop2 / work [profile]`, then
+  project → worktree → session. **One pane layout for everything**: panes mix workspaces and
+  machines; each pane header names workspace, machine and profile. "The current workspace" (for
+  `n`, `C-n`, `N`, the status bar's profile, attention scope) is the selected row's, else the
+  focused pane's. `w` jumps to a workspace's header (grouped by machine, offline greyed), unfolding
+  it.
+
+**Design (proposed, to be built):**
+- **Machines** are kept in the store (`machine`: name, transport, added_ms; a token is a secret
+  kept 0600 in `data/machines/<name>.token`, never in the database or a reply) plus the hidden
+  workspaces. CLI `ptyro machine add NAME (--ssh ssh://host | --url wss://host --code CODE) |
+  ls | rm | hide | unhide | pair` (`pair` on the other machine prints a `machine` pairing code).
+- **The link** is a client of the other daemon (`ClientKind::Machine`): Hello with `machine` set
+  (the other daemon answers with only its own workspaces, projects, worktrees and sessions), the
+  version checked against `Welcome.version` before anything else, then `WatchEvents` and the lists.
+  Its copy (`Mirror`) is replaced on reconnect and kept, marked offline, when the link drops.
+- **Merged views:** `WorkspaceInfo`, `ProjectInfo`, `WorktreeInfo` and `SessionInfo` gain
+  `machine: Option<String>` (`None`: here). Lists and events a local client gets are the local
+  ones plus every mirror's, tagged; a link's own requests get only the local ones.
+- **Routing:** a request whose address resolves into a mirror is sent over its link and its reply
+  passed back; `Subscribe` subscribes there and relays frames (the session id is the same: ULIDs
+  are unique across machines); a spawn or worktree in a remote workspace is that machine's
+  request. Offline: `ErrorCode::DaemonUnavailable` with "laptop2 is offline (since 14:02)".
+- **The view** becomes one for everything (`view:_all`), with each workspace's fold state.
+
 ### 16.5 E2E relay (much later)
 
 For access without exposing ports: an outbound-only connection from the daemon to a relay that sees
