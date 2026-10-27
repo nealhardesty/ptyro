@@ -166,9 +166,21 @@ pub struct AlacrittyEmulator {
     title: Option<String>,
     fg: Rgb,
     bg: Rgb,
-    /// History lines kept (the config's `scrolling_history`).
+    /// History lines asked for (the daemon's `scrollback_lines`).
     scrollback: usize,
+    /// History lines alacritty keeps at this width: `scrollback`, within [`MAX_HISTORY_CELLS`].
+    history: usize,
     marks: MarkLimit,
+}
+
+/// The most history cells one session keeps (H2.7): `scrollback_lines` × width could otherwise
+/// reach a billion (1,000,000 lines of 1000 columns). Four million is the default 5,000 lines up
+/// to 800 columns, or 20,000 lines at 200; wider sessions keep fewer lines.
+pub const MAX_HISTORY_CELLS: usize = 4_000_000;
+
+/// History lines kept for `asked` lines at `cols` columns.
+pub fn history_lines(asked: usize, cols: u16) -> usize {
+    asked.min(MAX_HISTORY_CELLS / usize::from(cols.max(1)))
 }
 
 /// Bounds what alacritty stores per cell: it keeps every zero-width character it is sent, so a
@@ -362,8 +374,8 @@ impl AlacrittyEmulator {
         // it is given.
         let size = size.clamped();
         let events = Listener::default();
-        let config =
-            Config { kitty_keyboard: true, scrolling_history: scrollback, ..Config::default() };
+        let history = history_lines(scrollback, size.cols);
+        let config = Self::config(history);
         Self {
             term: Term::new(config, &Dims(size), events.clone()),
             parser: Processor::new(),
@@ -377,8 +389,13 @@ impl AlacrittyEmulator {
             fg: DEFAULT_FG,
             bg: DEFAULT_BG,
             scrollback,
+            history,
             marks: MarkLimit::default(),
         }
+    }
+
+    fn config(history: usize) -> Config {
+        Config { kitty_keyboard: true, scrolling_history: history, ..Config::default() }
     }
 
     fn observe(&mut self, seq: &Seq, out: &mut FeedOutput) {
@@ -566,6 +583,12 @@ impl Emulator for AlacrittyEmulator {
         let size = size.clamped();
         self.size = size;
         self.term.resize(Dims(size));
+        // Wider rows: fewer of them kept, so a session's history stays within its cells (H2.7).
+        let history = history_lines(self.scrollback, size.cols);
+        if history != self.history {
+            self.history = history;
+            self.term.set_options(Self::config(history));
+        }
     }
 
     fn size(&self) -> TermSize {
@@ -861,6 +884,28 @@ pub fn xterm_palette(idx: usize) -> Rgb {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn history_is_capped_in_cells_and_follows_the_width() {
+        use super::*;
+        assert_eq!(history_lines(5_000, 200), 5_000);
+        assert_eq!(history_lines(1_000_000, 1000), 4_000);
+        assert_eq!(history_lines(1_000_000, 200), 20_000);
+        let mut emu = AlacrittyEmulator::new(TermSize::new(1000, 5), 1_000_000);
+        let mut out = FeedOutput::default();
+        let line = format!("{}\r\n", "x".repeat(10));
+        for _ in 0..5_000 {
+            emu.feed(line.as_bytes(), &mut out);
+        }
+        assert_eq!(emu.scrollback_len(), 4_000, "1000 columns keep 4,000 lines");
+        emu.resize(TermSize::new(200, 5));
+        for _ in 0..30_000 {
+            emu.feed(line.as_bytes(), &mut out);
+        }
+        assert_eq!(emu.scrollback_len(), 20_000, "narrower: more lines");
+        emu.resize(TermSize::new(1000, 5));
+        assert!(emu.scrollback_len() <= 4_000, "wider again: trimmed");
+    }
+
     use super::*;
 
     fn feed(emu: &mut AlacrittyEmulator, bytes: &[u8]) -> FeedOutput {
