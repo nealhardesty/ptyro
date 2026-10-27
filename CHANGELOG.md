@@ -2,6 +2,39 @@
 
 Generated from git history by `make changelog` (scripts/changelog.sh); edit commit messages, not this file.
 
+## v0.0.14 (2026-10-27)
+
+### Features
+
+- feat: a new worktree's branch is named like the worktree, without the ptyro/ prefix (UX3.6) (9e81548)
+
+### Fixes
+
+- fix(H2.7): remote.public_url, notifications.callback.public_url and callback.listen are checked when the config loads; serve says which half of a certificate pair is missing instead of quietly using its own (44bca25)
+- fix(H2.7): the Windows 'unsupported' message lives in ptyro-core, which every crate builds on, so it comes first (ddf94a5)
+- fix(H2.7): PTYRO_TEST_* knobs and the fake-gh command exist only in debug builds; send --raw's escapes move to ptyro-core, so a release links only the fake agent the tour and agent check use (f4551a5)
+- fix(H2.7): keys typed while the TUI asks the terminal for its colours are replayed, not lost (bcd71ea)
+- fix(H2.7): raw bytes (send --raw) wait for a prompt being typed instead of landing between its text and its Enter (708b9fa)
+- fix(H2.7): an editor the daemon starts on the computer is reaped when it exits, not left a zombie (7a7836d)
+- fix(H2.7): serve.log moves aside to serve.log.1 at 5 MiB, so a long-lived web server can't fill the disk (a741e76)
+- fix(H2.7): cs rm calls off a push or land waiting at a gate (its gate closes, cancelled) instead of refusing as busy for up to a day (d1d1173)
+- fix(H2.7): a renamed workspace keeps its saved view, the TUI's last-workspace note and quick new's memory; a removed one's projects go to main instead of nowhere (2b97373)
+- fix(H2.7): a live upgrade carries PTY masters, pipes and daemon.lock over a socket, so the lock is never let go and a child spawned meanwhile inherits none of them (the listener, which macOS can't carry, is made inheritable only at the exec) (b7068c7)
+- fix(H2.7): a session's leader stays a zombie until its group is empty, so a late signal to the group can't reach a process given the recycled id (81d74ce)
+- fix(H2.7): a session's scrollback is capped at 4 million cells, so a wide one keeps fewer lines (was lines × width, up to a billion cells) (c471dec)
+- fix(H2.7): a browser's WebSocket messages are capped at 4.25 MiB, before login too (was 16 MiB); the web app says so instead of sending one over (f871187)
+
+### Documentation
+
+- docs(H2.7): ROADMAP marks it done; SPEC notes the carried descriptors, the zombie leader, the client message limit, serve.log rotation, the scrollback cap and raw sends waiting (e15fa40)
+- docs: AGENTS.md project rules: no co-authored lines, CLI/TUI/web parity is required, bump on every feature (71db59e)
+- docs: MM1.0 many machines decided: workspaces on other machines, symmetric, mirrored, same version (SPEC §16.4b) (1fd95bb)
+
+### Other
+
+- chore: version 0.0.14 (3ce179e)
+- MM1: other machines' workspaces beside yours, in one sidebar, one CLI and one phone app (v0.0.13) (6c3067e)
+
 ## v0.0.12 (2026-10-27)
 
 ### Features
@@ -11,6 +44,10 @@ Generated from git history by `make changelog` (scripts/changelog.sh); edit comm
 ### Fixes
 
 - fix: wait up to 5 s for a worker's reply before the lead's summary (flaky on loaded CI runners) (aab80eb)
+
+### Other
+
+- release: v0.0.12 (5f97f91)
 
 ## v0.0.11 (2026-10-26)
 
