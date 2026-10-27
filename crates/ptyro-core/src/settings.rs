@@ -680,7 +680,7 @@ pub const SETTINGS: &[Setting] = &[
     s("editors.*.command", "scratchpad", Kind::Argv, "The program and arguments; {path} is the worktree."),
     s("editors.*.inside", "scratchpad", Kind::Bool, "Open it as a ptyro session, for terminal editors."),
     // ── Daemon and recording ──
-    s("daemon.scrollback_lines", "daemon", int(0, 1_000_000), "How many lines of history each session keeps to scroll back through.").new_only().unit("lines"),
+    s("daemon.scrollback_lines", "daemon", int(0, 1_000_000), "How many lines of history each session keeps to scroll back through. A very wide session keeps fewer, so one never holds more than 4 million cells (20,000 lines at 200 columns).").new_only().unit("lines"),
     s("daemon.frame_interval_ms", "daemon", int(1, 1000), "The shortest wait between screen updates sent to a client. Lower is smoother and busier.").adv().new_only().unit("ms"),
     s("daemon.log_level", "daemon", pick(LOG_LEVEL), "How much the daemon writes to its log. (PTYRO_LOG, when set, wins.)"),
     s("daemon.restore_on_start", "daemon", pick(RESTORE), "What agent sessions of an earlier daemon become when it starts.").restart(),

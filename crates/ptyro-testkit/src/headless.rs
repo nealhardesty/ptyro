@@ -5,7 +5,7 @@ use std::io::Write as _;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use ptyro_core::TermSize;
 use ptyro_core::cache::ScreenCache;
 use ptyro_term::{AlacrittyEmulator, Emulator, FeedOutput, FrameTracker, StyleTable, TermEvent};
@@ -119,27 +119,7 @@ impl Report {
 
 /// `\r \n \t \e \\ \xHH` escapes, so scripted keystrokes fit on a command line.
 pub fn unescape(s: &str) -> Result<Vec<u8>> {
-    let mut out = Vec::new();
-    let mut it = s.bytes();
-    while let Some(b) = it.next() {
-        if b != b'\\' {
-            out.push(b);
-            continue;
-        }
-        match it.next() {
-            Some(b'r') => out.push(b'\r'),
-            Some(b'n') => out.push(b'\n'),
-            Some(b't') => out.push(b'\t'),
-            Some(b'e') => out.push(0x1b),
-            Some(b'\\') => out.push(b'\\'),
-            Some(b'x') => {
-                let h: Vec<u8> = it.by_ref().take(2).collect();
-                out.push(u8::from_str_radix(std::str::from_utf8(&h)?, 16)?);
-            }
-            other => bail!("unknown escape \\{}", other.map_or(' ', char::from)),
-        }
-    }
-    Ok(out)
+    ptyro_core::input::unescape(s).map_err(anyhow::Error::msg)
 }
 
 fn render(emu: &AlacrittyEmulator, tracker: &mut FrameTracker, ansi: bool) -> String {

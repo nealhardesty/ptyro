@@ -48,8 +48,7 @@ const NO_CHECKS_GRACE_MS: u64 = 120_000;
 
 /// The grace period for a PR with no checks; tests shorten it with `PTYRO_TEST_LAND_GRACE_MS`.
 fn no_checks_grace_ms() -> u64 {
-    std::env::var("PTYRO_TEST_LAND_GRACE_MS")
-        .ok()
+    ptyro_core::test_knob("PTYRO_TEST_LAND_GRACE_MS")
         .and_then(|v| v.parse().ok())
         .unwrap_or(NO_CHECKS_GRACE_MS)
 }
@@ -62,6 +61,10 @@ use crate::worktrees::blocking;
 pub(crate) struct CsLive {
     /// A push or land running, and what it is.
     pub job: Option<String>,
+    /// The gate step that job waits at, while it does (H2.7: `cs rm` may call it off).
+    waiting_at: Option<String>,
+    /// `cs rm` called the waiting job off: its gate gives up at once.
+    call_off: bool,
     /// The lead's turn in progress: when it began, and each member's fingerprint then.
     lead_turn: Option<(u64, BTreeMap<String, String>)>,
     /// member → when its own agent was last seen working.
@@ -1599,14 +1602,52 @@ impl Daemon {
         gate
     }
 
-    /// Wait for a gate's answer (`None`: the run ended).
+    /// Wait for a gate's answer (`None`: the run ended, or `cs rm` called it off).
     async fn wait_gate(self: &Arc<Self>, run: &str, step: &str) -> Option<String> {
-        // A gate nobody answers must not hold the set's one job slot (and with it `cs push`,
-        // `cs land` and `cs rm`) for ever: a day, then it is as if the run had ended.
+        let set = self.set_state(run).ok().map(|s| s.name);
+        self.waiting_at(set.as_deref(), Some(step));
+        let r = self.wait_gate_inner(run, step, set.as_deref()).await;
+        self.waiting_at(set.as_deref(), None);
+        r
+    }
+
+    /// Note (or clear) the gate step the set's job waits at.
+    fn waiting_at(&self, set: Option<&str>, step: Option<&str>) {
+        if let Some(n) = set
+            && let Some(l) = self.cs.locked().get_mut(n)
+        {
+            l.waiting_at = step.map(str::to_owned);
+        }
+    }
+
+    async fn wait_gate_inner(
+        self: &Arc<Self>,
+        run: &str,
+        step: &str,
+        set: Option<&str>,
+    ) -> Option<String> {
+        // A gate nobody answers must not hold the set's one job slot (and with it `cs push` and
+        // `cs land`) for ever: a day, then it is as if the run had ended. `cs rm` calls it off
+        // at once (H2.7).
         let give_up = now_ms().saturating_add(24 * 60 * 60 * 1000);
         loop {
             let info = self.run_info(run)?;
             if info.state.status.is_over() || now_ms() > give_up {
+                return None;
+            }
+            let called_off =
+                set.is_some_and(|n| self.cs.locked().get(n).is_some_and(|l| l.call_off));
+            if called_off {
+                self.emit(
+                    run,
+                    vec![RunEvent::StepEnded {
+                        step: step.into(),
+                        status: StepStatus::Cancelled,
+                        reason: Some("the set is being removed".into()),
+                        decided_by: Some("cs rm".into()),
+                        at: now_ms(),
+                    }],
+                );
                 return None;
             }
             if let Some(c) = info
@@ -2554,6 +2595,33 @@ impl Daemon {
     fn release_job(&self, set: &str) {
         if let Some(l) = self.cs.locked().get_mut(set) {
             l.job = None;
+            l.call_off = false;
+        }
+    }
+
+    /// `cs rm` needs the set's job slot: a push or land only waiting at a gate is called off (its
+    /// gate closes, cancelled) and the slot taken once it lets go; one actually running still
+    /// refuses (it would merge into worktrees being removed).
+    async fn claim_for_rm(&self, set: &str) -> Result<(), Error> {
+        let waiting = {
+            let mut cs = self.cs.locked();
+            let l = cs.entry(set.to_owned()).or_default();
+            let waiting = l.job.is_some() && l.waiting_at.is_some();
+            if waiting {
+                l.call_off = true;
+            }
+            waiting
+        };
+        if !waiting {
+            return self.claim_job(set, "rm");
+        }
+        let deadline = now_ms() + 5_000;
+        loop {
+            match self.claim_job(set, "rm") {
+                Ok(()) => return Ok(()),
+                Err(e) if now_ms() > deadline => return Err(e),
+                Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+            }
         }
     }
 
@@ -2956,7 +3024,7 @@ impl Daemon {
                 return Err(format!("PR #{n}'s checks were still pending after an hour"));
             }
             let wait =
-                if std::env::var_os("PTYRO_TEST_FAST_POLL").is_some() { 300 } else { 15_000 };
+                if ptyro_core::test_knob("PTYRO_TEST_FAST_POLL").is_some() { 300 } else { 15_000 };
             tokio::time::sleep(Duration::from_millis(wait)).await;
         }
         let method = format!("--{}", self.config().github.merge_method);
@@ -3087,8 +3155,9 @@ impl Daemon {
         force: bool,
     ) -> Result<Value, Error> {
         let set = self.set_state(run)?;
-        // Not under a running push or land (it would merge into removed worktrees).
-        self.claim_job(&set.name, "rm")?;
+        // Not under a running push or land (it would merge into removed worktrees); one waiting at
+        // a gate is called off.
+        self.claim_for_rm(&set.name).await?;
         let r = self.cs_rm_inner(run, &set, keep, force).await;
         self.release_job(&set.name);
         r

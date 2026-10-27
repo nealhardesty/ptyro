@@ -57,6 +57,23 @@ fn alive(pid: u32) -> bool {
 }
 
 /// The last thing the server said, for "why did it stop".
+/// `serve.log` is kept under this; past it, it moves to `serve.log.1` (one older copy).
+const SERVE_LOG_MAX: u64 = 5 << 20;
+
+/// Keep a log the server appends to within `max` (H2.7): past it, copy it to `<log>.1` (replacing
+/// the older copy) and empty it. The server writes with `O_APPEND`, so it carries on at the new
+/// end; a rename would leave it writing to the moved file.
+fn rotate_log(log: &std::path::Path, max: u64) {
+    if std::fs::metadata(log).is_ok_and(|m| m.len() > max) {
+        let older = log.with_extension("log.1");
+        if std::fs::copy(log, &older).is_ok()
+            && let Ok(f) = std::fs::OpenOptions::new().write(true).open(log)
+        {
+            let _ = f.set_len(0);
+        }
+    }
+}
+
 fn last_words(log: &std::path::Path) -> String {
     let text = std::fs::read_to_string(log).unwrap_or_default();
     let line = text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
@@ -106,6 +123,7 @@ impl Daemon {
                         None => None,
                     }
                 };
+                rotate_log(&me.paths.state.join("serve.log"), SERVE_LOG_MAX);
                 let mut pause = Duration::from_secs(3);
                 match (want, state) {
                     (true, None) => {
@@ -252,5 +270,28 @@ impl Daemon {
             }
         }
         Ok(Reply::Web { web, notes })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_full_log_moves_aside_and_the_writer_carries_on() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("serve.log");
+        // The server's handle: append mode, kept open across the rotation.
+        let mut w = std::fs::OpenOptions::new().create(true).append(true).open(&log).unwrap();
+        w.write_all(&[b'a'; 100]).unwrap();
+        rotate_log(&log, 1000);
+        assert_eq!(std::fs::metadata(&log).unwrap().len(), 100, "under the limit: left alone");
+        w.write_all(&[b'b'; 1000]).unwrap();
+        rotate_log(&log, 1000);
+        assert_eq!(std::fs::metadata(dir.path().join("serve.log.1")).unwrap().len(), 1100);
+        assert_eq!(std::fs::metadata(&log).unwrap().len(), 0, "emptied");
+        w.write_all(b"after\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "after\n", "written at the new start");
     }
 }

@@ -30,6 +30,8 @@ export class Conn {
   onState: () => void = () => {};
   /// A message that was meant for the daemon and couldn't be sent (the socket is down).
   onDropped: (msg: any) => void = () => {};
+  /// A message over the server's limit wasn't sent (H2.7): what it was, to say so.
+  onTooBig: (msg: any) => void = () => {};
   /// When anything last arrived: a long silence is checked with a question.
   lastRx = Date.now();
 
@@ -109,9 +111,15 @@ export class Conn {
     });
   }
 
-  /// Send a message; false (and `onDropped`) when the socket isn't open.
+  /// Send a message; false (and `onDropped`) when the socket isn't open, false (and
+  /// `onTooBig`) when it is larger than the server takes, which would cost the connection.
   send(msg: object): boolean {
-    if (this.ws?.readyState === WebSocket.OPEN) { this.ws.send(JSON.stringify(msg)); return true; }
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      const text = JSON.stringify(msg);
+      if (tooBig(text)) { this.onTooBig(msg); return false; }
+      this.ws.send(text);
+      return true;
+    }
     this.onDropped(msg);
     return false;
   }
@@ -121,6 +129,9 @@ export class Conn {
   request(req: object, timeoutMs = 120_000): Promise<any> {
     return new Promise((ok, err) => {
       if (this.state !== "open") return err(new Error("not connected"));
+      if (tooBig(JSON.stringify({ t: "request", id: 0, req }))) {
+        return err(Object.assign(new Error(`too large to send from here (over ${MAX_SEND >> 20} MiB)`), { code: "invalid" }));
+      }
       const id = this.nextId++;
       const waits = "wait_ready_ms" in req || "timeout_ms" in req;
       const timer = waits ? 0 : window.setTimeout(() => {
@@ -131,6 +142,11 @@ export class Conn {
     });
   }
 }
+
+/// The server's limit on what a browser sends (`MAX_CLIENT_MESSAGE` in ptyro-protocol).
+export const MAX_SEND = 4 * 1024 * 1024 + 256 * 1024;
+const encoder = new TextEncoder();
+const tooBig = (text: string): boolean => text.length > MAX_SEND / 4 && encoder.encode(text).length > MAX_SEND;
 
 export const conn = new Conn();
 

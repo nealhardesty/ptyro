@@ -542,7 +542,9 @@ async fn dispatch(
             Ok(0)
         }
         Some(Cmd::Daemon { cmd }) => daemon(&ctx, cmd).await,
-        Some(Cmd::FakeAgent { .. } | Cmd::FakeGh { .. }) => unreachable!("handled in main"),
+        Some(Cmd::FakeAgent { .. }) => unreachable!("handled in main"),
+        #[cfg(debug_assertions)]
+        Some(Cmd::FakeGh { .. }) => unreachable!("handled in main"),
     }
 }
 

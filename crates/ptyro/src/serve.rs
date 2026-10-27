@@ -131,8 +131,7 @@ const BODY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// [`BODY_TIMEOUT`], or `PTYRO_TEST_BODY_TIMEOUT_MS` (a test that waits for it).
 fn body_timeout() -> Duration {
-    std::env::var("PTYRO_TEST_BODY_TIMEOUT_MS")
-        .ok()
+    ptyro_core::test_knob("PTYRO_TEST_BODY_TIMEOUT_MS")
         .and_then(|v| v.parse().ok())
         .map_or(BODY_TIMEOUT, Duration::from_millis)
 }
@@ -304,7 +303,18 @@ pub async fn run(
         cert_names.push(addr.ip().to_string());
     }
     let tls_dir = crate::tls::dir(&ctx.paths.data);
-    // Your own certificate (flags, else config), or the one ptyro makes.
+    // Your own certificate (flags, else config), or the one ptyro makes. Half of a pair is a
+    // mistake, said here rather than in the file's check: the panel sets them one at a time.
+    if own.is_none() && config.remote.tls_cert.is_some() != config.remote.tls_key.is_some() {
+        let (set, missing) = if config.remote.tls_cert.is_some() {
+            ("tls_cert", "tls_key")
+        } else {
+            ("tls_key", "tls_cert")
+        };
+        return Err(Error::invalid(format!(
+            "[remote] {set} is set but {missing} isn't: set {missing} too (`ptyro config set              remote.{missing} PATH`), or remove {set} to use the certificate ptyro makes"
+        )));
+    }
     let own = own.or_else(|| {
         let (c, k) = (config.remote.tls_cert.as_ref()?, config.remote.tls_key.as_ref()?);
         let path = ptyro_core::config::expand_home;
@@ -733,9 +743,10 @@ fn upgrade(
         let _slot = slot;
         match hyper::upgrade::on(req).await {
             Ok(up) => {
+                // What a browser sends is small; what it is sent (replies) isn't limited here.
                 let cfg = WebSocketConfig::default()
-                    .max_message_size(Some(ptyro_protocol::MAX_FRAME))
-                    .max_frame_size(Some(ptyro_protocol::MAX_FRAME));
+                    .max_message_size(Some(ptyro_protocol::MAX_CLIENT_MESSAGE))
+                    .max_frame_size(Some(ptyro_protocol::MAX_CLIENT_MESSAGE));
                 let ws =
                     WebSocketStream::from_raw_socket(TokioIo::new(up), Role::Server, Some(cfg))
                         .await;
@@ -1217,6 +1228,24 @@ mod tests {
             all.push(st.begin(ip).unwrap());
         }
         assert!(st.begin("9.9.9.9".parse().unwrap()).is_none());
+    }
+
+    #[test]
+    fn a_browser_message_fits_a_whole_scratchpad_and_the_web_app_knows_the_limit() {
+        use ptyro_protocol::MAX_CLIENT_MESSAGE;
+        const {
+            assert!(MAX_CLIENT_MESSAGE > ptyro_core::scratchpad::MAX_PAD_BYTES + 64 * 1024);
+            assert!(
+                MAX_CLIENT_MESSAGE < ptyro_protocol::MAX_FRAME / 2,
+                "far below the frame limit"
+            );
+        }
+        let conn = include_str!("../../../web/src/conn.ts");
+        assert_eq!(MAX_CLIENT_MESSAGE, 4 * 1024 * 1024 + 256 * 1024);
+        assert!(
+            conn.contains("MAX_SEND = 4 * 1024 * 1024 + 256 * 1024;"),
+            "web/src/conn.ts's MAX_SEND"
+        );
     }
 
     #[test]

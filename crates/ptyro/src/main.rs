@@ -1,10 +1,5 @@
 //! The single `ptyro` binary (SPEC §3.3, ADR 12): CLI, TUI, daemon and dev helpers.
 
-#[cfg(not(unix))]
-compile_error!(
-    "ptyro runs on Linux and macOS (Windows through WSL2); see the Requirements section of README.md"
-);
-
 mod about;
 mod agents;
 mod backup;
@@ -880,7 +875,8 @@ enum Cmd {
     /// Internal: Claude's statusLine command (usage meters)
     #[command(hide = true)]
     StatuslineRelay,
-    /// Built-in fake GitHub CLI for tests (M6)
+    /// Built-in fake GitHub CLI for tests (M6); debug builds only
+    #[cfg(debug_assertions)]
     #[command(hide = true)]
     FakeGh {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -1164,6 +1160,7 @@ fn main() {
             cli::daemon_start(foreground, spawned, serve)
         }
         Some(Cmd::FakeAgent { args }) => ptyro_testkit::fake_agent::main(&args),
+        #[cfg(debug_assertions)]
         Some(Cmd::FakeGh { args }) => ptyro_testkit::fake_gh::main(&args),
         // These run inside agents on every hook: no runtime, no config, never a failure.
         Some(Cmd::Hook { adapter, event, args }) => relay::hook(&adapter, &event, &args),

@@ -1100,7 +1100,7 @@ impl Daemon {
                 if bytes.len() > 1 << 20 {
                     return Err(Error::invalid("at most 1 MiB at a time"));
                 }
-                s.write_raw(&bytes);
+                s.send_bytes(&bytes).await;
                 Ok(Reply::Done)
             }
             Request::SendText { addr, text, enter, wait_ready_ms } => {
@@ -1156,7 +1156,8 @@ impl Daemon {
                         .map_err(|e| Error::internal(e.to_string()))?,
                     None => self.views.locked().get(&name).cloned(),
                 };
-                Ok(Reply::View { view })
+                // A view moved away (a renamed workspace's) is left null: none.
+                Ok(Reply::View { view: view.filter(|v| !v.is_null()) })
             }
             Request::History { limit } => {
                 let Some(store) = &self.store else {

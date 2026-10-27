@@ -26,6 +26,12 @@ use std::collections::BTreeMap;
 
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
 
+/// The largest message a browser may send `ptyro serve` (H2.7): the biggest thing it sends is a
+/// whole scratchpad (`MAX_PAD_BYTES`, 4 MiB), with room for the rest of the request. The limit
+/// applies before login too (the WebSocket library can't change it afterwards), so it is what an
+/// unauthenticated peer can make the server hold per pending login. Replies are not limited by it.
+pub const MAX_CLIENT_MESSAGE: usize = (4 << 20) + (256 << 10);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Version {
     pub major: u16,

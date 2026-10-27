@@ -923,7 +923,7 @@ async fn tui_workspaces_tree_folding_and_worktree_removal() {
 #[tokio::test]
 async fn editors_open_inside_or_outside() {
     let w = World::new(
-        "[worktrees]\nfetch = false\n[editors]\ndefault = \"fake\"\nfake = { command = [\"sh\", \"-c\", \"echo editing $0; sleep 30\", \"{path}\"], inside = true }\n",
+        "[worktrees]\nfetch = false\n[editors]\ndefault = \"fake\"\nfake = { command = [\"sh\", \"-c\", \"echo editing $0; sleep 30\", \"{path}\"], inside = true }\nout = { command = [\"sh\", \"-c\", \"echo $$ > \\\"$0/editor.pid\\\"\", \"{path}\"] }\n",
     );
     let root = w.repo("ed", &[]);
     w.ok(&["project", "add", root.to_str().unwrap()]);
@@ -943,6 +943,33 @@ async fn editors_open_inside_or_outside() {
     );
     let out = w.cli(&["wt", "open", "ed/e1", "--editor", "nope"]);
     assert_eq!(out.status.code(), Some(3));
+    // One the daemon starts on the computer (asked from the web) is reaped when it exits, not left
+    // a zombie of the daemon. The CLI starts its own.
+    c.request(Request::WorktreeOpen { addr: "ed/e1".into(), editor: Some("out".into()) })
+        .await
+        .unwrap();
+    let pid_file = wt.path.join("editor.pid");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let gone = loop {
+        let pid = std::fs::read_to_string(&pid_file).unwrap_or_default();
+        if !pid.trim().is_empty() {
+            let ps = std::process::Command::new("ps")
+                .args(["-o", "stat=", "-p", pid.trim()])
+                .output()
+                .unwrap();
+            let stat = String::from_utf8_lossy(&ps.stdout).trim().to_owned();
+            if stat.is_empty() {
+                break true;
+            }
+            if std::time::Instant::now() > deadline {
+                panic!("editor {} is still there: {stat}", pid.trim());
+            }
+        } else if std::time::Instant::now() > deadline {
+            break false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    };
+    assert!(gone, "the editor never ran");
 }
 
 #[tokio::test]

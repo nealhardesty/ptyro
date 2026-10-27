@@ -2194,18 +2194,36 @@ into another repository, deep links to Settings load, dialogs keep their size, O
 - [ ] **H2.6 The local CA is trusted for every site.** It has no name constraints, because adding
   them would break phones that already trust it. Documented, with a rotation recipe
   (docs/remote.md); a constrained CA with an explicit migration is the fix.
-- [ ] **H2.7 Smaller, confirmed, not done:** the first WebSocket message may be 16 MiB before
-  login (the library can't change the limit after the handshake); scrollback memory grows with
-  terminal width × history (cap total cells); a pid can be recycled between a group's death and
-  a late `SIGKILL`; `daemon.lock` is released across the live-upgrade `exec`; the fd-inheritance
-  window of a live upgrade should exclude other spawns; saved views are keyed by workspace name
-  (a rename orphans one); removing a workspace leaves its projects in none; a gate-held change-set
-  job blocks `cs rm` for up to a day; `serve.log` isn't rotated; editors started by the daemon
-  are never `wait`ed; raw `SendBytes` bypasses the typing lock; keystrokes typed during the
-  terminal-colour query at startup are lost; `ptyro-testkit` and its `PTYRO_TEST_*` knobs ship
-  in release builds; the Windows "unsupported" message only shows after dependencies fail (it
-  belongs in `ptyro-core`); a few config values still have no format check (`remote.public_url`,
-  `callback.listen`, a certificate without its key).
+- [x] **H2.7 Smaller, confirmed fixes** (done 2026-10-27, v0.0.14). Each one has a test that
+  fails without its fix, except where noted.
+  - A browser's WebSocket message is at most 4.25 MiB (`MAX_CLIENT_MESSAGE`), from the first
+    one; it was 16 MiB before login. The web app checks before it sends.
+  - Scrollback is capped at 4M cells, so a wide session keeps fewer lines. It follows resizes.
+  - A session's leader stays a zombie until its group is empty, so a late `SIGKILL` to the
+    group can't reach a recycled pid.
+  - Live upgrade: `daemon.lock`, the image, the PTY masters and the pipes are carried in a
+    socket by `SCM_RIGHTS`, never left inheritable. The lock is held across the `exec`, and a
+    child spawned meanwhile inherits none of them. Exception: the listening socket. macOS
+    breaks a listener carried that way, so it is made inheritable only just before the
+    `exec` (SPEC §4.5).
+  - A workspace rename takes its saved view, the TUI's last-workspace note and quick new's
+    memory with it. Views are still keyed by name, and the rename now moves the entry. A
+    removed workspace's projects go to main.
+  - `cs rm` calls off a push or land waiting at a gate (the step ends Cancelled) instead of
+    refusing for up to a day.
+  - `serve.log` moves to `serve.log.1` at 5 MiB.
+  - An editor the daemon starts on the computer is reaped when it exits.
+  - `send --raw` waits for a prompt being typed.
+  - Keys typed during the TUI's startup colour query are replayed. Covered by a decoder unit
+    test only: the 300 ms window can't be hit reliably end to end.
+  - `PTYRO_TEST_*` knobs and `fake-gh` exist only in debug builds. The fake agent still ships,
+    because the tour and `agent check` use it.
+  - The Windows message lives in `ptyro-core`. Checked with a Windows target: it is the first
+    error. On this Mac the C dependencies (ring, sqlite, zstd) failed first only because there
+    is no Windows C compiler.
+  - `remote.public_url`, `notifications.callback.public_url` and `callback.listen` are checked
+    when the config loads. A certificate without its key is reported by `serve`, not by the
+    file check: the settings panel sets the two one at a time.
 - [ ] **H2.8 Accessibility.** The web terminal is a canvas with no text view for a screen reader
   (a "text view" mode, like the chat view, would do); the TUI has `NO_COLOR` and a
   high-contrast theme and nothing else. SPEC doesn't say whether this is a goal.

@@ -620,6 +620,7 @@ conn.onDropped = (m) => {
   droppedAt = Date.now();
   toast("Not sent: offline. It reconnects by itself.");
 };
+conn.onTooBig = (m) => toast(m.t === "input" ? "Not sent: that paste is too large (over 4 MiB)" : "Not sent: too large (over 4 MiB)");
 ui.render = render;
 ui.toast = toast;
 ui.header = header;
