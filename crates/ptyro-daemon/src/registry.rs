@@ -628,6 +628,27 @@ impl Daemon {
         }
     }
 
+    /// What is kept under a workspace's name follows it when it is renamed (H2.7): its saved view
+    /// (from before one view for all), the TUI's note of the last workspace, and what quick new
+    /// starts there.
+    async fn follow_rename(&self, old: &str, new: &str) {
+        self.rename_launch(old, new).await;
+        let Some(store) = &self.store else { return };
+        let (from, to) = (format!("view:{old}"), format!("view:{new}"));
+        if let Ok(Some(v)) = store.kv_get(from.clone()).await {
+            if matches!(store.kv_get(to.clone()).await, Ok(None)) {
+                let _ = store.kv_set(to, v).await;
+            }
+            let _ = store.kv_set(from, serde_json::Value::Null).await;
+        }
+        if let Ok(Some(mut last)) = store.kv_get("view:_tui".into()).await
+            && last["workspace"] == old
+        {
+            last["workspace"] = new.into();
+            let _ = store.kv_set("view:_tui".into(), last).await;
+        }
+    }
+
     pub(crate) async fn handle_registry(self: &Arc<Self>, req: Request) -> Result<Reply, Error> {
         match req {
             Request::ProjectAdd { path, workspace } => {
@@ -715,6 +736,7 @@ impl Daemon {
                             self.events.send(DomainEvent::SessionUpdated { info: self.info(&s) });
                     }
                 }
+                self.follow_rename(&name, &new_name).await;
                 Ok(Reply::Workspace { info: w })
             }
             Request::WorkspaceRemove { name } => {
@@ -725,6 +747,22 @@ impl Daemon {
                 self.registry.locked().workspaces.retain(|o| o.id != w.id);
                 if let Some(store) = &self.store {
                     store.delete_workspace(w.id.clone());
+                }
+                // Its projects that no other workspace has go to main too (H2.7): a project in no
+                // workspace shows nowhere.
+                let homeless: Vec<String> = {
+                    let reg = self.registry.locked();
+                    w.projects
+                        .iter()
+                        .filter(|p| !reg.workspaces.iter().any(|o| o.projects.contains(p)))
+                        .cloned()
+                        .collect()
+                };
+                if !homeless.is_empty()
+                    && let Ok(mut main) = self.find_workspace(MAIN_WORKSPACE)
+                {
+                    main.projects.extend(homeless);
+                    self.put_workspace(main);
                 }
                 // Its sessions keep running; they now live in main.
                 for s in self.sessions() {

@@ -52,6 +52,19 @@ impl Daemon {
         }
     }
 
+    /// A renamed workspace keeps what it last started (H2.7).
+    pub(crate) async fn rename_launch(&self, old: &str, new: &str) {
+        let snapshot = {
+            let mut all = self.last_launch.locked();
+            let Some(l) = all.remove(old) else { return };
+            all.insert(new.to_owned(), l);
+            serde_json::to_value(&*all).unwrap_or_default()
+        };
+        if let Some(st) = &self.store {
+            let _ = st.kv_set(KEY.into(), snapshot).await;
+        }
+    }
+
     /// `again`: fill in the agent (or shell, or command) its workspace last started, else the
     /// default agent. What `spec` names itself wins.
     pub(crate) async fn resolve_again(

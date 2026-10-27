@@ -1156,7 +1156,8 @@ impl Daemon {
                         .map_err(|e| Error::internal(e.to_string()))?,
                     None => self.views.locked().get(&name).cloned(),
                 };
-                Ok(Reply::View { view })
+                // A view moved away (a renamed workspace's) is left null: none.
+                Ok(Reply::View { view: view.filter(|v| !v.is_null()) })
             }
             Request::History { limit } => {
                 let Some(store) = &self.store else {
