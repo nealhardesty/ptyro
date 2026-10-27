@@ -368,22 +368,19 @@ mod tests {
 
     #[tokio::test]
     async fn an_exit_is_seen_without_reaping_until_the_group_is_empty() {
-        // The leader exits at once; its background child stays in the group a moment longer.
-        let argv: Vec<String> = ["sh", "-c", "sleep 1 & exit 3"].map(String::from).into();
-        let env = child_env(std::env::vars_os(), []);
-        let mut c = spawn(SpawnRequest {
-            argv: &argv,
-            cwd: Path::new("/"),
-            env,
-            size: TermSize::new(20, 5),
-        })
-        .unwrap();
-        let pid = c.pid;
+        // A group of its own, no terminal (whose teardown at the leader's exit would take its
+        // members with it): the leader exits at once, its background child lives on.
+        let mut child = tokio::process::Command::new("sh")
+            .args(["-c", "sleep 30 & exit 3"])
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let pid = child.id().unwrap();
         let ended = tokio::time::timeout(Duration::from_secs(5), exited_unreaped(pid)).await;
         assert_eq!(ended.unwrap().unwrap(), (Some(3), None), "how it ended");
-        let raw = rustix::process::Pid::from_raw(pid as i32).unwrap();
         // Not reaped: it is still there to wait on, so its pid (the group's id) is held. (macOS
         // won't signal a group of zombies, so `kill(-pgid, 0)` is no test of that.)
+        let raw = rustix::process::Pid::from_raw(pid as i32).unwrap();
         let held = rustix::process::waitid(
             rustix::process::WaitId::Pid(raw),
             rustix::process::WaitIdOptions::EXITED
@@ -391,10 +388,13 @@ mod tests {
                 | rustix::process::WaitIdOptions::NOHANG,
         );
         assert!(matches!(held, Ok(Some(_))), "the leader is a zombie still: {held:?}");
-        assert!(others_in_group(pid) >= 1, "the background sleep is still in the group");
-        tokio::time::timeout(Duration::from_secs(5), until_group_empty(pid)).await.unwrap();
+        assert!(others_in_group(pid) >= 1, "the background sleep is in the group");
+        let early = tokio::time::timeout(Duration::from_millis(300), until_group_empty(pid)).await;
+        assert!(early.is_err(), "not empty while the sleep runs");
+        let _ = signal_group(pid, Signal::KILL);
+        tokio::time::timeout(Duration::from_secs(10), until_group_empty(pid)).await.unwrap();
         assert_eq!(others_in_group(pid), 0);
-        let status = c.child.wait().await.unwrap();
+        let status = child.wait().await.unwrap();
         assert_eq!(status.code(), Some(3), "reaped afterwards, the same status");
     }
 

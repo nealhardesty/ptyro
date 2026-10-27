@@ -1233,7 +1233,8 @@ impl Session {
             None => None,
         };
         let master_fd = match (&self.master, self.is_live()) {
-            (Some(m), true) => Some(ptyro_pty::handoff::inheritable(m)?),
+            // By number: the upgrade carries it over a socket (H2.7), it isn't made inheritable.
+            (Some(m), true) => Some(std::os::fd::AsRawFd::as_raw_fd(m)),
             _ => None,
         };
         Ok(SessionImage {

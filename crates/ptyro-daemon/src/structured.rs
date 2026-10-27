@@ -11,7 +11,7 @@
 
 use ptyro_core::sync::MutexExt;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -273,14 +273,11 @@ impl Structured {
     pub fn image(&self, live: bool) -> std::io::Result<StructuredImage> {
         let (driver, buffer) = self.parked.locked().clone().unwrap_or_default();
         let fds = if live {
-            match self.fds.locked().as_ref() {
-                Some(f) => Some([
-                    ptyro_pty::handoff::inheritable(&f[0])?,
-                    ptyro_pty::handoff::inheritable(&f[1])?,
-                    ptyro_pty::handoff::inheritable(&f[2])?,
-                ]),
-                None => None,
-            }
+            // By number: the upgrade carries them over a socket (H2.7).
+            self.fds
+                .locked()
+                .as_ref()
+                .map(|f| [f[0].as_raw_fd(), f[1].as_raw_fd(), f[2].as_raw_fd()])
         } else {
             None
         };

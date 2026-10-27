@@ -90,7 +90,14 @@ pub fn run(opts: Options) -> Result<()> {
     prepare_dirs(&paths)?;
     let _log_guard = init_logging(&paths, opts.foreground)?;
     watchdog::install_panic_hook(&paths.state);
+    // A live upgrade's descriptors (the lock among them) come over a socket (H2.7): first.
+    match ptyro_pty::handoff::receive_carried() {
+        Ok(0) => {}
+        Ok(n) => tracing::info!("{n} descriptor(s) carried over from the previous image"),
+        Err(e) => tracing::error!("carried descriptors: {e}"),
+    }
     let lock = acquire_lock(&paths)?;
+    LOCK_FD.store(std::os::fd::AsRawFd::as_raw_fd(&lock), std::sync::atomic::Ordering::SeqCst);
     // A live upgrade hands us the previous image (or re-execs the old binary if we can't read it).
     let inherited = handoff::take_image(&paths.state);
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
@@ -172,10 +179,27 @@ fn init_logging(
     Ok(guard)
 }
 
+/// `daemon.lock`'s descriptor, for a live upgrade to carry over.
+pub(crate) static LOCK_FD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+
+/// The lock the previous image held, carried over by a live upgrade (H2.7): never let go across the
+/// exec. Only when it really is `daemon.lock` (the same file).
+fn carried_lock(path: &Path) -> Option<File> {
+    use std::os::unix::fs::MetadataExt;
+    let raw: i32 = std::env::var(handoff::ENV_LOCK).ok()?.parse().ok()?;
+    let f = File::from(ptyro_pty::handoff::adopt(raw).ok()?);
+    let (a, b) = (f.metadata().ok()?, std::fs::metadata(path).ok()?);
+    (a.dev() == b.dev() && a.ino() == b.ino()).then_some(f)
+}
+
 /// One daemon per user: an exclusive lock on `state/daemon.lock`, which also records our pid.
 fn acquire_lock(paths: &Paths) -> Result<File> {
     let path = paths.lock_file();
-    let mut f = File::options().create(true).truncate(false).read(true).write(true).open(&path)?;
+    let mut f = match carried_lock(&path) {
+        Some(f) => f,
+        None => File::options().create(true).truncate(false).read(true).write(true).open(&path)?,
+    };
+    // A carried lock is already ours: locking it again (the same open file) just succeeds.
     match f.try_lock() {
         Ok(()) => {}
         Err(TryLockError::WouldBlock) => {

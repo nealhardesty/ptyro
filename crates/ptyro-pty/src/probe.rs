@@ -204,38 +204,6 @@ pub fn local_datetime() -> Option<String> {
     })
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn versions_are_recognised() {
-        for v in ["2.1.309", "v1.4", "0.143.0"] {
-            assert!(super::looks_like_version(v), "{v}");
-        }
-        for n in ["claude", "node", "zsh", "python3.12", "2fa", "123", "v", ""] {
-            assert!(!super::looks_like_version(n), "{n}");
-        }
-        assert_eq!(super::basename(b"/usr/bin/claude"), "claude");
-        assert_eq!(super::basename(b"-zsh"), "zsh", "a login shell's dash");
-    }
-
-    #[test]
-    fn a_version_name_gives_way_to_argv0() {
-        let shown = |k: &str, a: Option<&str>| super::shown_name(k.into(), a.map(Into::into));
-        assert_eq!(shown("2.1.309", Some("claude")), "claude");
-        assert_eq!(shown("2.1.309", Some("")), "2.1.309");
-        assert_eq!(shown("2.1.309", Some("2.1.309")), "2.1.309");
-        assert_eq!(shown("2.1.309", None), "2.1.309");
-    }
-
-    /// argv[0] parsing (`/proc/<pid>/cmdline`, macOS `KERN_PROCARGS2`) on this very process.
-    #[test]
-    fn argv0_reads_our_own() {
-        let me = std::env::args().next().unwrap();
-        let want = me.rsplit('/').next().unwrap().to_owned();
-        assert_eq!(super::argv0(std::process::id()), Some(want));
-    }
-}
-
 /// How many processes are in process group `pgid`, its leader (`pid == pgid`) aside. Zombies
 /// count until reaped. On an error listing them, one (as if the group were still busy).
 #[cfg(target_os = "linux")]
@@ -274,4 +242,36 @@ pub fn others_in_group(pgid: u32) -> usize {
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn others_in_group(_pgid: u32) -> usize {
     0
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn versions_are_recognised() {
+        for v in ["2.1.309", "v1.4", "0.143.0"] {
+            assert!(super::looks_like_version(v), "{v}");
+        }
+        for n in ["claude", "node", "zsh", "python3.12", "2fa", "123", "v", ""] {
+            assert!(!super::looks_like_version(n), "{n}");
+        }
+        assert_eq!(super::basename(b"/usr/bin/claude"), "claude");
+        assert_eq!(super::basename(b"-zsh"), "zsh", "a login shell's dash");
+    }
+
+    #[test]
+    fn a_version_name_gives_way_to_argv0() {
+        let shown = |k: &str, a: Option<&str>| super::shown_name(k.into(), a.map(Into::into));
+        assert_eq!(shown("2.1.309", Some("claude")), "claude");
+        assert_eq!(shown("2.1.309", Some("")), "2.1.309");
+        assert_eq!(shown("2.1.309", Some("2.1.309")), "2.1.309");
+        assert_eq!(shown("2.1.309", None), "2.1.309");
+    }
+
+    /// argv[0] parsing (`/proc/<pid>/cmdline`, macOS `KERN_PROCARGS2`) on this very process.
+    #[test]
+    fn argv0_reads_our_own() {
+        let me = std::env::args().next().unwrap();
+        let want = me.rsplit('/').next().unwrap().to_owned();
+        assert_eq!(super::argv0(std::process::id()), Some(want));
+    }
 }

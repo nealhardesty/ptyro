@@ -35,6 +35,9 @@ use crate::session::SessionImage;
 pub const IMAGE_VERSION: u32 = 1;
 pub const ENV_FD: &str = "PTYRO_HANDOFF_FD";
 pub const ENV_ROLLBACK: &str = "PTYRO_HANDOFF_ROLLBACK";
+/// The number `daemon.lock` had in the previous image, carried over so the lock is never let go
+/// across the exec (H2.7).
+pub const ENV_LOCK: &str = "PTYRO_HANDOFF_LOCK";
 /// Tests: make the new image refuse the handoff once (rollback is then exercised).
 pub const ENV_TEST_REFUSE: &str = "PTYRO_TEST_REFUSE_HANDOFF";
 
@@ -320,9 +323,21 @@ impl Daemon {
         };
         let bytes = rmp_serde::to_vec_named(&image).map_err(std::io::Error::other)?;
         let fd = ptyro_pty::handoff::image_file(&self.paths.state, &bytes)?;
-        let raw = ptyro_pty::handoff::inheritable(&fd)?;
-        let listener = image.listener_fd;
-        ptyro_pty::handoff::inheritable_raw(listener)?;
+        let raw = std::os::fd::AsRawFd::as_raw_fd(&fd);
+        // What the next image keeps goes over one socket (H2.7), so a child spawned meanwhile
+        // can't take a PTY master or the lock with it, and the lock is held throughout. Not the
+        // listening socket: macOS breaks one that crossed an exec in flight (every connection it
+        // then accepts reads EOF after its first message), so it is inherited by number, made so
+        // last, just before the exec.
+        let lock = crate::LOCK_FD.load(Ordering::SeqCst);
+        let mut carried = vec![raw, lock];
+        for s in &image.sessions {
+            carried.extend(s.master_fd);
+            if let Some(f) = s.structured.as_ref().and_then(|st| st.fds) {
+                carried.extend(f);
+            }
+        }
+        let sock = ptyro_pty::handoff::carry(&carried)?;
         tracing::info!(
             sessions = image.sessions.len(),
             bytes = bytes.len(),
@@ -333,10 +348,14 @@ impl Daemon {
         let mut cmd = std::process::Command::new(target);
         cmd.args(["daemon", "start", if image.foreground { "--foreground" } else { "--spawned" }])
             .env(ENV_FD, raw.to_string())
+            .env(ptyro_pty::handoff::ENV_SOCK, std::os::fd::AsRawFd::as_raw_fd(&sock).to_string())
+            .env(ENV_LOCK, lock.to_string())
             .env_remove(ENV_ROLLBACK);
         use std::os::unix::process::CommandExt;
+        ptyro_pty::handoff::inheritable_raw(image.listener_fd)?;
         let err = cmd.exec();
-        // Still here: the exec failed. Carry on as before.
+        // Still here: the exec failed. Carry on as before (the copies in the socket close with it).
+        drop(sock);
         drop(fd);
         Err(err)
     }
@@ -384,6 +403,11 @@ pub fn take_image(state_dir: &Path) -> Option<Inherited> {
                 && let Some(dup) = dup
             {
                 tracing::error!("handoff refused ({why}); rolling back to {}", prev.display());
+                // The older binary inherits by number: what came over the socket goes back to the
+                // numbers it had (the lock stays ours until the exec, then is its to take).
+                if let Err(e) = ptyro_pty::handoff::restore_carried() {
+                    tracing::error!("rollback: carried descriptors: {e}");
+                }
                 if let Ok(n) = ptyro_pty::handoff::inheritable(&dup) {
                     use std::os::unix::process::CommandExt;
                     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -391,6 +415,8 @@ pub fn take_image(state_dir: &Path) -> Option<Inherited> {
                         .args(&args)
                         .env(ENV_FD, n.to_string())
                         .env(ENV_ROLLBACK, "1")
+                        .env_remove(ptyro_pty::handoff::ENV_SOCK)
+                        .env_remove(ENV_LOCK)
                         .exec();
                     tracing::error!("rollback failed: {err}");
                 }
