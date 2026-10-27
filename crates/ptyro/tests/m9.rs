@@ -914,6 +914,12 @@ fn the_daemon_runs_serve_and_keeps_it_through_upgrades() {
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("--local") && err.contains("in clear"), "{err}");
+    // Half of your own certificate pair says which half is missing, not a silent fallback.
+    let half = World::new("[remote]\ntls_cert = \"/nowhere/cert.pem\"\n", &[]);
+    let out = half.cli(&["serve", "--listen", "127.0.0.1:0"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("tls_key isn't") && err.contains("remote.tls_key PATH"), "{err}");
 }
 
 /// WEB1.9: the web app's server is a setting. `ptyro web on` has the daemon run it (the config

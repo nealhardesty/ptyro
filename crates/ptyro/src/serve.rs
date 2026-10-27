@@ -303,7 +303,18 @@ pub async fn run(
         cert_names.push(addr.ip().to_string());
     }
     let tls_dir = crate::tls::dir(&ctx.paths.data);
-    // Your own certificate (flags, else config), or the one ptyro makes.
+    // Your own certificate (flags, else config), or the one ptyro makes. Half of a pair is a
+    // mistake, said here rather than in the file's check: the panel sets them one at a time.
+    if own.is_none() && config.remote.tls_cert.is_some() != config.remote.tls_key.is_some() {
+        let (set, missing) = if config.remote.tls_cert.is_some() {
+            ("tls_cert", "tls_key")
+        } else {
+            ("tls_key", "tls_cert")
+        };
+        return Err(Error::invalid(format!(
+            "[remote] {set} is set but {missing} isn't: set {missing} too (`ptyro config set              remote.{missing} PATH`), or remove {set} to use the certificate ptyro makes"
+        )));
+    }
     let own = own.or_else(|| {
         let (c, k) = (config.remote.tls_cert.as_ref()?, config.remote.tls_key.as_ref()?);
         let path = ptyro_core::config::expand_home;

@@ -369,6 +369,22 @@ impl Default for Notifications {
     }
 }
 
+/// An address links and QR codes point at: `http://` or `https://`, a host, nothing else odd.
+fn check_url(u: &str) -> Result<(), String> {
+    let rest = u
+        .strip_prefix("https://")
+        .or_else(|| u.strip_prefix("http://"))
+        .ok_or_else(|| format!("{u:?} needs http:// or https:// in front (like https://{u})"))?;
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if host.is_empty() || host.starts_with(':') {
+        return Err(format!("{u:?} has no host (like https://ptyro.example.com)"));
+    }
+    if u.chars().any(char::is_whitespace) {
+        return Err(format!("{u:?} has a space in it"));
+    }
+    Ok(())
+}
+
 /// `"22:00-07:00"` → minutes since midnight (start, end); the window may wrap midnight.
 pub fn parse_quiet_hours(s: &str) -> Result<(u16, u16), String> {
     let (a, b) = s.split_once('-').ok_or("expected HH:MM-HH:MM")?;
@@ -1251,6 +1267,19 @@ impl Config {
             .listen
             .parse::<std::net::SocketAddr>()
             .map_err(|e| format!("remote.listen: {e} (an address like 127.0.0.1:7091)"))?;
+        if let Some(l) = &self.notifications.callback.listen {
+            l.parse::<std::net::SocketAddr>().map_err(|e| {
+                format!("notifications.callback.listen: {e} (an address like 127.0.0.1:7591)")
+            })?;
+        }
+        for (k, u) in [
+            ("remote.public_url", &self.remote.public_url),
+            ("notifications.callback.public_url", &self.notifications.callback.public_url),
+        ] {
+            if let Some(u) = u {
+                check_url(u).map_err(|e| format!("{k}: {e}"))?;
+            }
+        }
         // Each ring half starts with a keyframe (≈ 60 KB at 200×60), so it must hold one.
         if self.recorder.max_bytes().map_err(|e| format!("recorder.max_bytes: {e}"))? < 256 << 10 {
             return Err("recorder.max_bytes: at least 256KiB".into());
@@ -1869,6 +1898,25 @@ scope = "global"
         assert!(Config::parse("[notifications]\nquiet_hours = \"25:00-07:00\"\n").is_err());
         let q = parse_quiet_hours("22:00-07:00").unwrap();
         assert!(in_quiet_hours(q, 23 * 60) && in_quiet_hours(q, 60) && !in_quiet_hours(q, 12 * 60));
+    }
+
+    #[test]
+    fn addresses_and_urls_are_checked() {
+        let bad = |t: &str| Config::parse(t).unwrap_err();
+        let ok = |t: &str| Config::parse(t).unwrap();
+        assert!(
+            bad("[remote]\npublic_url = \"ptyro.example.com\"\n")
+                .contains("https://ptyro.example.com")
+        );
+        assert!(bad("[remote]\npublic_url = \"https://\"\n").contains("no host"));
+        assert!(bad("[remote]\npublic_url = \"https://a b\"\n").contains("space"));
+        ok("[remote]\npublic_url = \"https://ptyro.example.com:8443/\"\n");
+        let cb = |v: &str| format!("[notifications.callback]\n{v}\n");
+        assert!(bad(&cb("listen = \"7591\"")).starts_with("notifications.callback.listen:"));
+        assert!(
+            bad(&cb("public_url = \"ftp://x\"")).starts_with("notifications.callback.public_url:")
+        );
+        ok(&cb("listen = \"127.0.0.1:7591\"\npublic_url = \"http://100.64.0.1:7591\""));
     }
 
     #[test]
