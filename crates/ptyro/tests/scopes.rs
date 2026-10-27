@@ -100,6 +100,7 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"push_test"}), READ, false),
         s(json!({"t":"chat_get","addr":a}), READ, true),
         s(json!({"t":"scratch_get"}), READ, true),
+        s(json!({"t":"last_launch","workspace":"main"}), READ, true),
         s(json!({"t":"scratch_todo","all":false}), READ, true),
         s(json!({"t":"scratch_history"}), READ, true),
         // Finding the shell or the pad's pane reads; starting one is a shell.

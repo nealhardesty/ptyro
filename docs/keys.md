@@ -35,6 +35,7 @@ action by name.
 | `d` or `q` | detach (sessions keep running) |
 | `C-d` | quit ptyro: stop every session and the daemon, after a yes (agents hibernate and resume next time) |
 | `n` | new task: say what to do, ⏎ starts the default agent on it in a new worktree named after it (Tab edits the name, `C-o` picks the agent and where, an empty ⏎ is a random name) |
+| `C-n` | quick new: another of what this workspace last started (`claude`, `claude@work`, a shell…; the default agent at first) in this worktree, no questions. The which-key menu says what it starts: `+ claude` |
 | `N` | new worktree of this project (+ an agent), after its setup script |
 | `w` | switch workspace |
 | `o` | open the worktree in an editor (`[editors]`; nvim opens inside ptyro) |
@@ -51,8 +52,8 @@ action by name.
 | `j` / `k` (or `Down` / `Up`) | show the next / previous session of the workspace here, in sidebar order, across projects (quick terminals are skipped) |
 | `1` … `9` | show the session numbered N in the sidebar here |
 | `/` | find a session (fuzzy) |
-| `` ` `` | the previously shown session |
-| `v` / `s` | split: a session beside / below this pane |
+| `` ` `` | back: the split layout a full-sized panel replaced (whole, as it was), else the previously shown session |
+| `v` / `s` | split: a clone of this pane's session beside / below it (the same agent and profile in the same worktree, a fresh conversation; a shell gets a shell in its directory). Only a split puts anything in a split |
 | `h` / `l` | previous / next pane |
 | `Shift`+arrows | the pane in that direction |
 | `z` | zoom this pane (toggle) |
@@ -61,9 +62,9 @@ action by name.
 | `Tab` | move focus between the sidebar and the pane |
 | `\` | show or hide the sidebar |
 | `u` | do what the last message offers: undo it, or fix what it reports |
-| `!` | the quick terminal, the way that fits: this worktree's shell in a drawer below a pane of its project when one is open, else in a panel of its own (it fills the pane you are in). Again focuses it, and once more hides it, or goes back to what the panel replaced (the shell keeps running). `[ui] shell_style` makes `!` always one or the other |
-| `C-t` | the quick terminal in a drawer below a pane of its project (VS Code's toggle). When none of the project is open it is a panel of its own, and a note says so |
-| `T` | the quick terminal in a panel of its own, replacing the pane you are in. Again goes back |
+| `!` | a new shell of its own in this worktree, full sized (every press starts another; the quick terminal is `C-t` / `T`) |
+| `C-t` | this worktree's quick terminal (one per worktree) in a drawer below a pane of its project (VS Code's toggle). Again focuses it, and once more hides it (the shell keeps running). When none of the project is open it is a panel of its own, and a note says so. With no worktree here it asks for a project first |
+| `T` | this worktree's quick terminal full sized. Again goes back |
 | `;` | the scratchpad: your notes file in the editor, shown as `[scratchpad] mode` says (below). Again focuses it, and once more hides it (the editor keeps running) |
 | `'` | add a line to the scratchpad without opening it (stamped with the time and where you are) |
 | `"` | the scratchpad's open items: type to search, `⏎` starts one as a task, `Ctrl-X` ticks it, `Ctrl-A` shows ticked ones, `Ctrl-E` opens the editor |
@@ -89,6 +90,14 @@ says so.
 In a pane whose session has exited, `⏎` runs it again; in a dormant one, `⏎` resumes it.
 `Ctrl-Q D`, `O` and `S` close their view again when it is already open.
 
+**Full-sized panels, splits only on request.** Only `v` / `s` put something in a split, and what
+they put there is a clone of the session they split. Everything else opens full sized: a new
+session (`n`, `C-n`, `!`, the wizard), the quick terminal's panel, a tool (an editor, a command's
+output, `config edit`), and a session you pick that isn't on screen. A split layout it replaces is
+kept whole: `` Ctrl-Q ` `` brings it back as it was, and so does picking one of its sessions in the
+sidebar. An editor you opened from ptyro gives its screen back on its own when you quit it. A
+session you pick that is already on screen is focused where it is.
+
 ## In the sidebar
 
 Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.
@@ -100,7 +109,7 @@ Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.
 | `h` / `l` (or `Left` / `Right`) | fold / unfold |
 | `Space` | mark a session for broadcast; on a project or worktree, fold or unfold |
 | `b` | broadcast one prompt into the marked sessions |
-| `n` / `N` | new task here / new worktree |
+| `n` / `C-n` / `N` | new task here / quick new (another of what was last started, here) / new worktree |
 | `a` `p` `i` `e` | next attention / peek / inbox / why this status |
 | `x` / `X` | stop a session (`x` again removes it) or remove a worktree (refuses to lose work, and offers archiving instead; a merged one is archived) / kill. Its pane shows the next session |
 | `R` | restart an exited session |
@@ -111,7 +120,8 @@ Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.
 | `u` / `P` | do what the last message offers / add a project |
 | `.` | everything you can do with this row (a session, worktree or project), with the keys |
 | `;` / `'` | the scratchpad / add a line to it |
-| `F` / `!` / `T` | finish this worktree (commit, then a PR or integrate) / its quick terminal / its quick terminal in a panel of its own (`⏎` on its `›_ shell` line shows or hides it too) |
+| `F` / `!` | finish this worktree (commit, then a PR or integrate) / a new shell in it, full sized |
+| `C-t` / `T` | its quick terminal in a drawer / full sized (`⏎` on its `›_ shell` line shows or hides it too) |
 | `H` / `M` / `I` | home / mend what the health badge found / about ptyro |
 | `A` | adopt the Claude started by hand in this shell: a managed session, same conversation |
 | `w` `o` `r` | workspace / editor / run script |

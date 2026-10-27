@@ -41,7 +41,9 @@ Conventions:
 | **CFG1** | One configuration panel | Every option editable in the TUI, on the web and with `ptyro config set`, from one schema; new options must join it (done) |
 | **NOTE1** | The scratchpad | One persistent notepad file for everywhere: a key opens it, `PTYRO_SCRATCHPAD` finds it, items become tasks, the web edits it (done) |
 | **UX2** | Found in use | Small things the owner's own scratchpad caught while using ptyro: an About screen, a sidebar that shows a pushed worktree as done (done) |
+| **UX3** | Daily flow | Full-sized panels and splits only on request (a split is a clone), quick new (`C-n`), created means shown, `!` a new shell and the quick terminal a worktree's, usage limits in About (done) |
 | **H2** | Second hardening review | A review of the whole codebase by nine independent readers: ~150 findings verified and fixed; locks, the release pipeline and uninstall done; the rest listed here |
+| **MM1** | Many machines | Every laptop's agents from one place (one phone app, one sidebar): two designs on the table, the owner leans to daemon federation (open) |
 | **Backlog** | Later / maybe | Editor, tasks, jj, libghostty, relay, … |
 
 Critical path: **M0 → M1 → M2 → M3 → M4** gives a daily-driver. M5 can interleave with M3/M4.
@@ -2071,6 +2073,46 @@ rules as everywhere: CLI, TUI and web, with the parity row.
   switches a panel back. The web has no split panes, so its shell is always its own page
   (`shell.here`, `shell.pane` tips). Not looked at on a real screen.
 
+## UX3 — Daily flow (2026-10-27)
+
+The owner asked for the smoothest, most obvious daily loop (RESEARCH R-UX-34…37). CLI, TUI and
+web, with the parity rows.
+
+- [x] **UX3.1 Full-sized panels; splits only on request** — M. *R-UX-34.* Nothing ptyro opens
+  lands in a split. A new session (`n`, `C-n`, `!`, the wizard), the quick terminal's panel, a
+  tool (`$EDITOR`, `config edit`, a `ptyro …` command's output, a health fix) and a session picked
+  that isn't on screen open full sized; a split layout they replace is kept whole, and `` ` ``
+  (or picking one of its sessions) brings it back. `v`/`s` split with a clone of the session they
+  split (same agent, profile and worktree, a fresh conversation; else a shell in its directory),
+  with no picker. A split's pane whose session goes closes instead of showing another.
+  *Done when:* with a split up, `n ⏎` shows the new agent alone and `` C-q ` `` restores the split
+  as it was; `v` on an agent starts another of it beside it.
+  *Done (2026-10-27):* `crates/ptyro-tui/src/screens.rs` (`place`, `kept`, `go_back`,
+  `split_clone`, `spawn_tool`); the kept layout is saved with the view (`SavedView.kept`); an
+  editor gives its screen back when it exits, a command's output stays until `` ` ``.
+  `[ui] shell_style` now defaults to `pane`. The scratchpad's own `mode = "pane"` still splits:
+  it is a mode you choose. The web has no splits. Not looked at on a real screen.
+- [x] **UX3.2 Quick new** — S. *R-UX-35.* `session.again` (`C-q C-n`, `C-n` in the sidebar, row
+  menus): another of what the workspace last started (agent@profile, a shell, a command; the
+  default agent before anything) in the context's worktree, no questions. The daemon remembers it
+  per workspace in `kv` (`SpawnSpec.again`, `.tool`; `LastLaunch`, protocol 1.19); tools, quick
+  terminals and the scratchpad's editor don't count. `ptyro new --again`; the web's `+ claude`
+  button on project and worktree pages and a session's ⋯. The which-key menu says what it starts.
+- [x] **UX3.3 Created means shown** — S. *R-UX-36.* A new session, shell or worktree unfolds its
+  project and worktree and is selected (`reveal`); one the tree can't place yet (its project's
+  news still on the way) is placed when the news arrives (5 s). A new workspace is known from its
+  reply, not its event (TUI and web).
+- [x] **UX3.4 `!` is a new shell; the quick terminal is a worktree's** — S. *R-UX-37, amends
+  UX1.25.* `shell.new` (`!`) starts another plain shell in the context's worktree every press,
+  full sized (it counts for quick new). The quick terminal is `C-t` (drawer) / `T` (full sized),
+  one per worktree and only in one: with none here the TUI asks for a project first, and the
+  daemon refuses to start one outside a worktree. Web: New shell and Quick shell buttons.
+- [x] **UX3.5 About shows the usage limits** — S. *From the owner, 2026-10-27.* The About screen
+  lists every agent's known limits per profile: the 5 h / 7 d windows with when they reset, a
+  rate limit in force, context and session cost (`Usage::summary`), or says how meters start
+  reporting. `ptyro about [--json]` (`usage`), the TUI's `I` overlay (from that document), and
+  the web's More → About (live from `Usage`, linking to the meters page).
+
 ## H2 — Second hardening review (2026-10-24)
 
 Nine reviewers each read a slice of the code (daemon runtime, daemon features, TUI, the rest of
@@ -2167,6 +2209,60 @@ into another repository, deep links to Settings load, dialogs keep their size, O
   Claude/Codex/Gemini turn per adapter (see "Left for the owner" above).
 
 ---
+
+## MM1 — Many machines (proposed 2026-10-27; open)
+
+*Why:* the owner runs agents on two laptops and wants both from the phone, easily. Today each
+laptop serves its own web app at its own address, paired and installed separately (SPEC §16.4a
+tells the pages apart, nothing joins them). RESEARCH R-REM-01 (the multi-daemon sidebar),
+R-REM-12 and R-REM-13 hold the two designs. **Decide between them first (MM1.0)**; the owner
+chose B (MM1.0); MM1.A stays recorded as the alternative.
+
+- [ ] **MM1.0 Pick the design** — the owner's answers to the questions in R-REM-13, written into
+  SPEC §16 as **[decided]**. *Decided so far (owner, 2026-10-27):* design B; **symmetric** (each
+  machine registers the others, the phone is paired with each, whichever is awake shows all it
+  can reach); **mirror** (a remote workspace lives on its machine, its projects, worktrees and
+  profiles there, and that machine is the authority); **both transports** (a paired token over
+  Tailscale, or `ssh://`), asked when adding a machine and checked before saving; **full** scope
+  between paired machines (revoking the token cuts it off); a machine is added, not a workspace:
+  **all its workspaces are followed** (new ones appear, removed ones go) and any can be hidden
+  here; `+ new workspace` **asks which machine**; the sidebar shows **all workspaces stacked**
+  (local and remote); an offline machine's workspaces show **last known, read-only**, "offline
+  since …", and reconnect by themselves. A daemon offers only its own workspaces, never ones it
+  mirrors (no echoes). **Delivered together** (no local-only stacked sidebar first); **one pane
+  layout for everything** (panes mix workspaces and machines; each pane header says its
+  workspace, machine and profile; the "current workspace" is the focused pane's or the selected
+  row's); the tree's top level is the **workspace header with a machine chip** (`laptop2 / work`
+  in the machine's colour, local ones first), then project → worktree → session; **`w` jumps** to
+  a workspace's node (grouped by machine, offline greyed), unfolding it.
+  Remote things are addressed **`laptop2:fix-flaky-test`** (CLI, palette, completions). A remote
+  machine's alerts reach you **through the daemon you are connected to** (it relays what its
+  links hear; a machine never also pushes to a device for a mirror's sake, so nothing arrives
+  twice). Linked daemons must be **the same version**: a link to a different one stays down and
+  says plainly what to do on which machine (`laptop2 runs ptyro 0.0.11, this is 0.0.12: run
+  ptyro daemon upgrade there`), and the TUI and web offer it as the fix.
+- [ ] **MM1.A Many machines in one web app** (R-REM-12) — M. The PWA keeps a list of machines
+  (each its address and device token) and connects to all of them: a machine switcher, one
+  merged "who needs you" list and session list with a machine chip on every row, "add machine"
+  pairing inside the app. Needs each `ptyro serve` to accept the other origins (CSP
+  `connect-src`, the WebSocket's origin check), tokens per machine in IndexedDB, push per
+  machine. No hub: either laptop asleep leaves the other reachable. Web only; the TUI stays one
+  daemon (plus `--remote`).
+- [ ] **MM1.B Workspaces on other machines** (R-REM-13, chosen) — L. Proposed parts, one
+  change for the owner but built in this order: (1) the stacked sidebar and one global layout,
+  with "current workspace" taken from the selection; (2) machines: `machine add|ls|rm` (ssh:// or
+  a paired token, checked before saving), the link per machine (mirror, reconnect, offline
+  cache, version check, no echoes); (3) routing every request and subscription for a remote
+  workspace to its machine, machine-qualified names; (4) the machine on every surface and the
+  `+ new workspace` machine prompt; (5) `serve` and push through the local daemon; (6) parity
+  rows, SPEC §16, tests with two test daemons. A daemon registers workspaces that
+  live on another machine's daemon; they sit in the sidebar beside local ones, marked with their
+  machine, and everything done in them goes to that machine. An offline machine's workspaces
+  show offline. `ptyro serve` reaches them through the local daemon, so one paired address shows
+  everything; the TUI and the CLI get the same, which MM1.A can't give them.
+  *Done when:* from one TUI and one phone app, both laptops' workspaces are listed, each says its
+  machine at a glance, a task started in one runs on its machine, and with that machine asleep
+  its workspaces read offline while the rest work.
 
 ## Backlog (unscheduled; ideas welcome)
 

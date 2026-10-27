@@ -3,7 +3,7 @@
 // export, and talking to several at once.
 import { conn } from "./conn.js";
 import { css, F } from "./color.js";
-import { can, data, liveWorktrees } from "./data.js";
+import { againLabel, can, data, liveWorktrees, refreshLaunch, workspaceOf } from "./data.js";
 import { createWorktree, startSession } from "./flow.js";
 import { Screen } from "./screen.js";
 import { actions, ago, ask, badge, Cache, confirm, download, enc, errText, form, go, h, menu, pending, row, sheet, textSheet, ui, views } from "./kit.js";
@@ -20,8 +20,10 @@ const ACTIONS = {
     "session.convert": "Switch an agent between its terminal and the chat view",
     "session.adopt": "Make an agent started by hand in this shell a session of its own",
     "session.shell": "A shell in this session's worktree",
-    "shell.here": "This worktree's shell, on a page of its own (the web has no split panes, so there is no drawer)",
-    "shell.pane": "This worktree's shell, on a page of its own; the same one the terminal's T and ! show",
+    "shell.here": "This worktree's quick terminal (its one shell), on a page of its own (the web has no split panes, so there is no drawer)",
+    "shell.pane": "This worktree's quick terminal, on a page of its own; the same one the terminal's T and C-t show",
+    "shell.new": "A new shell of its own in this worktree, besides its quick terminal (the terminal's !)",
+    "session.again": "Quick new: another of what this workspace last started (an agent, a shell…), in this worktree, no questions",
     "session.summarize": "Summarize what the session is doing",
     "session.explain": "Why the session has the status it has",
     "session.mute": "Silence the session's notifications for a while",
@@ -250,6 +252,23 @@ async function convert(s, force = false) {
             ui.toast(errText(e));
     }
 }
+/// Quick new (UX3.2): another of what `w`'s workspace last started, in `w`. An agent is asked
+/// for by name (a `control` device may start one), anything else with `again`.
+export async function startAgain(w) {
+    const ws = workspaceOf(w);
+    await refreshLaunch(ws);
+    const l = data.lastLaunch.get(ws);
+    const spec = !l ? { agent: data.defaultAgent } : l.agent ? { agent: l.agent, profile: l.profile ?? null, argv: l.argv ?? [] } : { again: true };
+    if (await startSession({ ...spec, worktree: w.id }))
+        void refreshLaunch(ws);
+}
+/// `!` (UX3.4): a new shell of its own in `w`, not its quick terminal.
+export async function newShell(w) {
+    if (await startSession({ worktree: w.id }))
+        void refreshLaunch(workspaceOf(w));
+}
+/// The quick-new button's words: `+ claude`.
+export const againWords = (w) => `+ ${againLabel(workspaceOf(w))}`;
 export async function openQuickShell(w, cwd = "") {
     const r = await ask({ t: "quick_shell", worktree: w?.id ?? null, cwd, create: true, env: {}, size: null, workspace: null });
     if (r?.info)
@@ -281,7 +300,9 @@ export function sessionMenu(s) {
         agentLive && { title: tip("session.mute"), label: "Mute notifications…", run: () => muteSession(s) },
         agentLive && can("full") && { title: tip("session.verify"), label: "Verify when done…", hint: s.verify ? `Checking: ${s.verify.check}` : "Hold its turns until a check passes", run: () => verifySession(s) },
         w && { label: "Open its worktree", hint: `${w.project_slug}/${w.name}`, run: () => go(`#/wt/${enc(w.id)}`) },
-        s.worktree && { title: tip("session.shell"), label: "A shell in its worktree", hint: "On a page of its own", run: () => void openQuickShell(w) },
+        w && { title: tip("session.again"), label: `Another ${againLabel(workspaceOf(w))}`, hint: "What this workspace last started, in its worktree", run: () => void startAgain(w) },
+        w && { title: tip("shell.new"), label: "A new shell in its worktree", hint: "Besides its quick terminal", run: () => void newShell(w) },
+        s.worktree && { title: tip("session.shell"), label: "Its worktree's quick terminal", hint: "On a page of its own", run: () => void openQuickShell(w) },
         { title: tip("session.scrollback"), label: "Scrollback", hint: "Everything it printed, searchable", run: () => go(`#/scroll/${enc(s.id)}`) },
         { title: tip("session.events"), label: "Events", run: () => go(`#/events/${enc(s.id)}`) },
         { title: tip("session.replay"), label: "Replay", hint: "Its recording, played back", run: () => go(`#/replay/${enc(s.id)}`) },

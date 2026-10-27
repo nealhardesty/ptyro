@@ -62,11 +62,12 @@ pub enum SidebarDetail {
 #[serde(rename_all = "kebab-case")]
 pub enum ShellStyle {
     /// A drawer under a pane of the same project when one is open, else a panel of its own.
-    #[default]
     Auto,
     /// Always a drawer under the focused pane.
     Drawer,
-    /// Always a panel of its own.
+    /// Always a panel of its own, full sized (the default since UX3.1: only `C-t` asks for the
+    /// drawer).
+    #[default]
     Pane,
 }
 
@@ -96,7 +97,7 @@ impl Default for Ui {
             tint_borders: false,
             on_stop: OnStop::Next,
             sidebar_detail: SidebarDetail::Auto,
-            shell_style: ShellStyle::Auto,
+            shell_style: ShellStyle::Pane,
             which_key_delay: 400,
         }
     }

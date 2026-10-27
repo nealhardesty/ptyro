@@ -186,12 +186,16 @@ a row's menu (`.`), makes one at any time.
 - `Ctrl-Q p` peeks without switching: `y` allows a permission prompt, `n` denies, or type a
   reply.
 - `Ctrl-Q i` opens the inbox. From the shell: `ptyro status`.
-- `Ctrl-Q !` opens the worktree's **quick terminal**: one shell per worktree, in a drawer below
-  a pane of the same project, or, when none of its project is open, as a panel of its own.
-  `Ctrl-Q Ctrl-T` always asks for the drawer and `Ctrl-Q T` for a panel (`[ui] shell_style`
-  makes `!` always one of them). Press it again to focus it, and once more to hide it (a panel
-  goes back to what it replaced); the shell keeps running, and its `›_ shell` line sits under
-  the worktree in the sidebar.
+- `Ctrl-Q Ctrl-N` is **quick new**: another of what you last started in this workspace
+  (`claude`, a shell…) in this worktree, no questions (`ptyro new --again` from a shell).
+- `Ctrl-Q !` starts a new shell in this worktree, full sized, every press.
+- `Ctrl-Q Ctrl-T` opens the worktree's **quick terminal**: its one shell, in a drawer below a pane
+  of the same project (`Ctrl-Q T` shows it full sized). Press it again to focus it, and once more
+  to hide it; the shell keeps running, and its `›_ shell` line sits under the worktree in the
+  sidebar.
+- New things open **full sized**, never in a split: a split layout they replace is kept, and
+  `` Ctrl-Q ` `` brings it back. Only `Ctrl-Q v` / `s` split, and they split with a clone of the
+  pane's session (the same agent in the same worktree, a fresh conversation).
   `ptyro shell` opens it from outside, and `ptyro shell --read` prints its screen, so you can
   tell an agent to "look at the error in my terminal".
 

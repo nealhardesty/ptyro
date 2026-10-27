@@ -80,6 +80,15 @@ pub struct Tool {
     pub text: String,
 }
 
+/// One account's limits for one agent, as the daemon last heard them (M4.17 meters).
+#[derive(Debug, Clone, Serialize)]
+pub struct UsageAbout {
+    /// `claude@work`.
+    pub label: String,
+    pub text: String,
+    pub limited: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct About {
     pub version: String,
@@ -95,6 +104,8 @@ pub struct About {
     pub daemon: DaemonAbout,
     pub web: Option<WebAbout>,
     pub tools: Vec<Tool>,
+    /// Every agent's known usage limits, per profile (empty: none reported yet, or no daemon).
+    pub usage: Vec<UsageAbout>,
     /// All of the above as plain text: what to paste into a bug report.
     pub report: String,
 }
@@ -118,9 +129,22 @@ pub async fn collect(ctx: &Ctx) -> About {
         fix: None,
     };
     let mut web = None;
+    let mut usage = Vec::new();
     if let Ok(c) = ctx.connect(false).await
         && let Ok(Reply::Status { status }) = c.request(Request::Status).await
     {
+        if let Ok(Reply::Usage { usage: mut all }) = c.request(Request::Usage).await {
+            all.sort_by(|a, b| (&a.agent, &a.profile).cmp(&(&b.agent, &b.profile)));
+            let now = ptyro_core::now_ms();
+            usage = all
+                .iter()
+                .map(|u| UsageAbout {
+                    label: format!("{}@{}", u.agent, u.profile),
+                    text: u.summary(now),
+                    limited: u.limited_until_ms.is_some_and(|t| t > now),
+                })
+                .collect();
+        }
         let same = status.version == VERSION && status.proto == PROTO;
         daemon = DaemonAbout {
             running: true,
@@ -188,6 +212,7 @@ pub async fn collect(ctx: &Ctx) -> About {
         daemon,
         web,
         tools,
+        usage,
         report: String::new(),
     };
     about.report = about.text();
@@ -246,6 +271,9 @@ impl About {
         }
         for t in &self.tools {
             line(&t.name, t.text.clone());
+        }
+        for u in &self.usage {
+            line(&u.label, u.text.clone());
         }
         o
     }

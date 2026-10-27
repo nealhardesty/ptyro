@@ -149,6 +149,7 @@ pub fn needed(req: &Request) -> Scope {
         | PushTest
         | ChatGet { .. }
         | ScratchGet
+        | LastLaunch { .. }
         | ScratchTodo { .. }
         | ScratchHistory
         | ScratchPane { create: false, .. } => Scope::Read,

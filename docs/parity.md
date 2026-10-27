@@ -29,7 +29,7 @@ its row: its TUI action and its web one, or `waived:` and why.
 
 | Command | In the TUI | On the web |
 |---|---|---|
-| `new` | `session.new` (`n`): say what to do, ⏎ (or `C-o` to pick the agent, a shell or a command, and where); `worktree.new` (`N`) for a new worktree | `session.new` (＋ in the session list): the task, the agent, and where: a new worktree (from the main branch, a PR, an issue, a branch or your changes), an existing one, or a shell or command |
+| `new` | `session.new` (`n`): say what to do, ⏎ (or `C-o` to pick the agent, a shell or a command, and where); `worktree.new` (`N`) for a new worktree; `--again` is `session.again` (`C-n`): another of what the workspace last started, here, full sized | `session.new` (＋ in the session list): the task, the agent, and where: a new worktree (from the main branch, a PR, an issue, a branch or your changes), an existing one, or a shell or command; `--again` is `session.again`: the `+ claude` button on a project's and a worktree's page, and a session's ⋯ → Another … |
 | `attach` | `session.find` (`/`), the sidebar (`Tab`, `⏎`), `1`–`9`, `j`/`k` | `session.open`: tap it in the list; its live screen, or its chat. The screen is a terminal: `term.type` (tap it and type: every key goes to the session as it is pressed, with `term.keys` for Esc, Ctrl, Alt, arrows and F-keys), `term.mouse`, `term.resize` |
 | `list` | `focus.toggle`: the sidebar lists every session with its status; `session.find` (`/`) searches them | `sessions`: every session with its status, who needs you first; `session.find` (`/`) filters them |
 | `stop` | `session.stop` (`x`) | `session.stop`: the session's ⋯ menu |
@@ -42,7 +42,7 @@ its row: its TUI action and its web one, or `waived:` and why.
 | `hibernate` | `session.hibernate` | `session.hibernate`: the session's ⋯ menu |
 | `convert` | `session.convert` (the row menu, the palette) | `session.convert`: ⋯ → Show as a chat / the terminal UI |
 | `adopt` | `session.adopt` (`A` on a shell row running Claude) | `session.adopt`: ⋯ on a shell running Claude |
-| `shell` | `shell.here` (`!`; `⏎` on its `›_ shell` line): the worktree's quick terminal in a drawer under a pane of its project, else in a panel of its own (`[ui] shell_style`); `shell.drawer` (`C-t`) forces the drawer, `shell.pane` (`T`) the panel; again focuses it, then hides it (a panel goes back). `--read` is `copy.enter` (`[`) in the drawer | `session.shell`: ⋯ → A shell in its worktree (a terminal page, with keys and a reply box); `shell.here` and `shell.pane`: the Shell buttons on a project's and a worktree's page (the web has no split panes, so a shell is always its own page) |
+| `shell` | `shell.drawer` (`C-t`): the worktree's quick terminal (one per worktree, only in a worktree) in a drawer under a pane of its project; `shell.pane` (`T`) full sized; `shell.here` (`⏎` on its `›_ shell` line) as `[ui] shell_style` says; again focuses it, then hides it (a panel goes back). `shell.new` (`!`) is another shell of its own, not the quick terminal. `--read` is `copy.enter` (`[`) in the drawer | `session.shell`: ⋯ → Its worktree's quick terminal (a terminal page, with keys and a reply box); `shell.here` and `shell.pane`: the Quick shell buttons on a project's and a worktree's page (the web has no split panes, so a shell is always its own page); `shell.new`: their New shell button |
 | `summarize` | `session.summarize` (the row menu, the palette); with `[summaries] enabled` the sidebar shows one (`≈`) after every turn | `session.summarize`: the session's ⋯ menu |
 | `status` | `session.explain` (`e` in the sidebar) says why; the sidebar and pane headers show the status | `sessions`: each card and the session's page say its status and why it waits |
 | `answer` | `peek` (`p`): `y` allow, `a` always, `n` deny | `answer`: Allow, Always or Deny on its card and its page (exact decisions for a held Claude prompt) |
@@ -77,7 +77,7 @@ The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every sessio
 | `mute` | `session.mute`; a whole project or workspace: `project.mute`, `workspace.mute` | `session.mute`: ⋯ → Mute notifications |
 | `notify test` | `notify.test` | `notify.test`: More → Notifications → Send a test |
 | `usage` | shown: the status bar and the sidebar title show the rate limits of the focused session's profile | `usage`: More → Usage: each account's limits as meters |
-| `integrations ls` | `integrations` (in a split); the health badge says what's missing | `integrations`: More → Integrations |
+| `integrations ls` | `integrations` (full sized); the health badge says what's missing | `integrations`: More → Integrations |
 | `integrations install` | `integrations.install` | `integrations`: More → Integrations: tap one → Install |
 | `integrations uninstall` | `integrations.uninstall` | `integrations`: More → Integrations: tap one → Uninstall |
 
@@ -89,11 +89,11 @@ The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every sessio
 | `project discover` | `project.add` (it discovers) | `project.add`: it lists the repositories it found |
 | `project suggest` | `project.suggest`; a project's first worktree offers it on its own | `project.suggest`: a project's ⋯ menu |
 | `project ls` | shown: the sidebar lists the workspace's projects | `projects`: the Projects tab lists every project with its worktrees; its workspace chips filter them (`workspace.switch`) |
-| `project show` | `project.show` (in a split) | `project.show`: tap a project's name |
+| `project show` | `project.show` (full sized) | `project.show`: tap a project's name |
 | `project rm` | `project.remove` (asks first) | `project.remove`: a project's ⋯ menu (asks first) |
 | `project trust` | `project.trust` | `project.trust`: a project's page: review the scripts, then trust |
 | `project untrust` | `project.untrust` | `project.untrust`: a project's page |
-| `project config` | `project.config` (with where each value comes from, in a split) | `project.config`: a project's ⋯ menu, with where each value comes from |
+| `project config` | `project.config` (with where each value comes from, full sized) | `project.config`: a project's ⋯ menu, with where each value comes from |
 | `project pin` | `project.pin`: pick the profile | `project.pin`: a project's ⋯ menu: pick the profile |
 | `project unpin` | `project.unpin` | `project.pin`: a project's ⋯ menu → Unpin |
 | `wt new` | `worktree.new` (`N`), or `session.new` (`n`) → "+ new worktree" | `worktree.new`: ＋ Task on a project, or `session.new` with "in a new worktree" |
@@ -129,13 +129,13 @@ The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every sessio
 
 | Command | In the TUI | On the web |
 |---|---|---|
-| `profile ls` | `profile.list` (in a split) | `profile.list`: More → Profiles |
+| `profile ls` | `profile.list` (full sized) | `profile.list`: More → Profiles |
 | `profile show` | `profile.show`: pick it | `profile.show`: tap a profile |
 | `profile new` | `profile.new` | `profile.new`: ＋ on Profiles, adopting directories you have |
 | `profile rm` | `profile.remove`: pick it | `profile.remove`: a profile's page (asks; offers to force when it's in use) |
 | `profile rename` | `profile.rename` | `profile.rename`: a profile's page |
 | `profile env` | waived: prints `export` lines for your shell to `eval`; sessions get the environment already | waived: prints `export` lines for a shell on the computer to `eval` |
-| `profile login` | `profile.login`: pick the profile and the agent; it logs in, in a split (a health finding offers it too) | `profile.login`: a profile's page, or a health finding's fix: the tool's own login, in a session |
+| `profile login` | `profile.login`: pick the profile and the agent; it logs in, full sized (a health finding offers it too) | `profile.login`: a profile's page, or a health finding's fix: the tool's own login, in a session |
 | `profile sync` | `profile.sync` | `profile.sync`: a profile's page |
 | `profile detect` | `first.run` finds them, as accounts to tick | `profile.detect`: 🔍 on Profiles: the accounts found, to tick |
 | `profile doctor` | `health`: the badge's findings include each profile's logins | `profile.doctor`: Check on a profile's page |
@@ -177,7 +177,7 @@ The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every sessio
 | `run retry` | `runs` (`O`): `r` on a step | `run.retry`: a step's menu → Run it again |
 | `run fork` | `run.fork` | `run.fork`: a step's menu → Fork the run from here |
 | `run lead` | `session.lead` | `run.lead`: ＋ on the Runs tab → A lead |
-| `recipe ls` | `recipe.list` (in a split) | `recipe.list`: 📜 on the Runs tab |
+| `recipe ls` | `recipe.list` (full sized) | `recipe.list`: 📜 on the Runs tab |
 | `recipe show` | `recipe.show` | `recipe.show`: a recipe's menu |
 | `recipe run` | `recipe.run`: its name and variables; then the runs view (`O`) | `recipe.run`: a recipe's menu: its variables, then the run |
 | `recipe validate` | waived: for recipe authors, in their editor or CI | waived: for recipe authors, in their editor or CI |
@@ -190,11 +190,11 @@ The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every sessio
 | `msg ack` | waived: an agent acknowledging its own mail | waived: an agent acknowledging its own mail |
 | `lease claim` | waived: agents claim the files they edit | waived: agents claim the files they edit |
 | `lease release` | waived: agents release their own claims | waived: agents release their own claims |
-| `lease ls` | `leases` (in a split) | `leases`: Leases on the Projects tab |
+| `lease ls` | `leases` (full sized) | `leases`: Leases on the Projects tab |
 | `radar` | `radar` | `radar`: Radar on the Projects tab, or a project's ⋯ menu |
 | `checkpoint ls` | `checkpoint.list` | `checkpoint.list`: a worktree's Checkpoints tab |
 | `checkpoint diff` | `checkpoint.diff` | `checkpoint.diff`: a checkpoint's menu |
-| `checkpoint restore` | `checkpoint.restore` (it asks first, in a split) | `checkpoint.restore`: a checkpoint's menu (asks first; the state now is checkpointed) |
+| `checkpoint restore` | `checkpoint.restore` (it asks first, full sized) | `checkpoint.restore`: a checkpoint's menu (asks first; the state now is checkpointed) |
 | `verify` | `session.verify` | `session.verify`: ⋯ → Verify when done |
 | `mcp` | waived: the MCP server a lead agent talks to; ptyro starts it for the agent | waived: the MCP server a lead agent talks to; ptyro starts it for the agent |
 
@@ -214,7 +214,7 @@ The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every sessio
 | `cs restore` | `set.restore` | `set.restore`: a checkpoint's menu (asks first) |
 | `cs diff` | `sets` (`S`): `⏎` on a member, then `inspector` (`D`) on its worktree | `set.diff`: a member's menu → What it changed |
 | `cs contract show` | `set.contract` → show | `set.contract`: a set's Contract page |
-| `cs contract edit` | `set.contract` → edit (your editor, in a split) | `set.contract_edit`: the Contract page: Edit saves a revision |
+| `cs contract edit` | `set.contract` → edit (your editor, full sized) | `set.contract_edit`: the Contract page: Edit saves a revision |
 | `cs contract diff` | `set.contract` → diff | `set.contract`: the Contract page: Diff |
 | `cs contract history` | `set.contract` → history | `set.contract`: the Contract page: History, tap a revision |
 | `cs contract approve` | `sets` (`S`): `1`–`9` answer the contract gate | `set.contract_approve`: Approve on the Contract page, or on the gate's card |
@@ -238,14 +238,14 @@ The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every sessio
 
 | Command | In the TUI | On the web |
 |---|---|---|
-| `serve` | `remote.serve` (in a split) | waived: it serves the web app; the web app can't start the thing it runs on |
-| `web` | `remote.web` (is it up, where, what next), `remote.web_on`, `remote.web_off` (in a split); the health badge has its findings | `web.status`: More → Web app: up or not, the address (copy it), who runs it, the log (`web.logs`); `web.on` (asks how phones reach it) and `web.off` |
-| `pair` | `remote.pair`: the QR code, in a split, to scan (full scope by default, the warning shows above the code) | `pair`: this device's half (the link or QR code); `pair.device` makes a link and a QR code for another device (More → Devices → ＋; `full` preselected, the warning in the form and the sheet; a name that exists is replaced) |
+| `serve` | `remote.serve` (full sized) | waived: it serves the web app; the web app can't start the thing it runs on |
+| `web` | `remote.web` (is it up, where, what next), `remote.web_on`, `remote.web_off` (full sized); the health badge has its findings | `web.status`: More → Web app: up or not, the address (copy it), who runs it, the log (`web.logs`); `web.on` (asks how phones reach it) and `web.off` |
+| `pair` | `remote.pair`: the QR code, full sized, to scan (full scope by default, the warning shows above the code) | `pair`: this device's half (the link or QR code); `pair.device` makes a link and a QR code for another device (More → Devices → ＋; `full` preselected, the warning in the form and the sheet; a name that exists is replaced) |
 | `devices ls` | `devices.list` | `devices.list`: More → Devices |
 | `devices revoke` | `devices.revoke` | `devices.revoke`: a device's menu |
 | `devices push-test` | `devices.push_test` | `notifications`: turning them on sends this device a test |
 | `proxy` | waived: the bridge `--remote` runs over ssh on the other machine | waived: the bridge `--remote` runs over ssh between two computers |
-| `replay` | `session.replay` (plays in a split) | `session.replay`: ⋯ → Replay: its recording as a player with a scrubber and speeds; `session.history` lists earlier sessions |
+| `replay` | `session.replay` (plays full sized) | `session.replay`: ⋯ → Replay: its recording as a player with a scrubber and speeds; `session.history` lists earlier sessions |
 | `export` | `session.export`: the format and the file | `session.export`: ⋯ → Save its recording (text or asciicast, as a download) |
 
 ## Setup, config and the daemon
@@ -254,11 +254,11 @@ The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every sessio
 |---|---|---|
 | `init` | `first.run`: the first run as a screen (it opens on its own the first time); terminal checks and shell extras are `doctor`'s (UX1.20) | `first.run`: More → Set up ptyro (the Sessions tab offers it with no project): your agents, accounts and repositories (the web app for a phone is `web.on`, More → Web app) |
 | `about` | `app.about` (`I`, the palette, the sidebar's `I`): version, the repository and issues as links (`⏎` opens, `y` copies), where config, data, logs and the socket live, the daemon and web app (and `U` to switch a daemon of another version), the tools found; `c` copies all of it for a bug report | `app.about`: More → About (and the version at the foot of More): the same facts, the addresses as links with Copy, "Copy all, for a bug report", and Upgrade the daemon when it is another version |
-| `doctor` | `health` (`M`): the badge's findings, each with its fix; `doctor` runs the full one in a split | `health`: More → Health: every check with its fix (log in, edit the config, restart…) |
+| `doctor` | `health` (`M`): the badge's findings, each with its fix; `doctor` runs the full one full sized | `health`: More → Health: every check with its fix (log in, edit the config, restart…) |
 | `tour` | `help.tour` (the TUI steps aside for the tour, then comes back) | `help.tour`: More → Take the tour: a ptyro of its own on a free local port, opened in a new tab with a coach |
 | `config edit` | `config.edit` (validated when you save; changes apply live); `config.panel` has `e` for the file and `o` to open it at a setting | `config.edit`: More → Settings → Edit config.toml directly: an editor, checked as you save, applied at once; `settings.file` opens it at a setting |
 | `config check` | `config.edit`: saving checks it, and a bad config shows as an error | `config.check`: Check on the editor, without saving |
-| `config show` | `config.show` (in a split) | `config.show`: Show effective on the editor |
+| `config show` | `config.show` (full sized) | `config.show`: Show effective on the editor |
 | `config path` | `config.edit` (opens it) | `config.path`: the editor says where the file is |
 | `config list` | `config.panel` (`C`): every setting by section, with its value, default and where it comes from (Key bindings lists every key, defaults too, grouped by when it works); `m` shows only what you changed; the palette lists each as `setting <key>` | `settings`: More → Settings: sections, with a count of what you changed; `settings.search` finds one by name, what it does or its value; Key bindings lists every key, defaults too, with its standing (default, yours, changed, unbound) |
 | `config get` | `config.panel`: the row's detail says its default, where it comes from and when a change applies | `settings`: each setting says its default, its file and line, and when a change applies |
@@ -272,11 +272,11 @@ The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every sessio
 | `shell-init` | `health` (`M`): when it's missing, a finding whose fix adds the line to your rc file | waived: a line in the computer's shell rc file, for its shells |
 | `daemon start` | waived: the TUI starts the daemon when it isn't running | waived: `serve` runs with the daemon; with no daemon there is no web app to ask |
 | `daemon stop` | `app.quit` (`C-d` after the prefix): asks, then stops every session and the daemon and exits | `daemon.stop`: More → Daemon → Stop (asks first; the app goes offline with it) |
-| `daemon restart` | `daemon.restart` (in a split; this TUI reconnects) | `daemon.restart`: More → Daemon → Restart (asks first; the app reconnects) |
+| `daemon restart` | `daemon.restart` (full sized; this TUI reconnects) | `daemon.restart`: More → Daemon → Restart (asks first; the app reconnects) |
 | `daemon status` | `daemon.status` (its `machine` line shows the computer's name; the sidebar title and the terminal title carry it too); `remote.web` is the web app's line; the health badge has its warnings | `daemon.status`: More → Daemon (the machine is in the page title, the header and More); More → Web app (`web.status`) is the web app's line |
-| `daemon logs` | `daemon.logs` (followed, in a split) | `daemon.logs`: More → Daemon → Logs |
+| `daemon logs` | `daemon.logs` (followed, full sized) | `daemon.logs`: More → Daemon → Logs |
 | `daemon upgrade` | `daemon.upgrade`; a daemon running another binary is a health finding whose fix this is | `daemon.upgrade`: More → Daemon → Upgrade, or a health finding's fix |
 | `daemon install-service` | `daemon.service` | `daemon.service`: More → Daemon → Install the service |
 | `daemon uninstall-service` | `daemon.unservice` | `daemon.unservice`: More → Daemon → Remove it |
-| `backup` | `app.backup` (in a split; the file is private, in your home directory unless you give one) | `backup.create`: More → Daemon → Back up ptyro's state: written on the computer, with what is in it and what is left out |
-| `uninstall` | `app.uninstall` (in a split: the plan, then the question; it ends this TUI and the daemon) | `uninstall.plan`: More → Daemon → Uninstall…: the plan, and the command to type on the computer (it ends the server this page comes from) |
+| `backup` | `app.backup` (full sized; the file is private, in your home directory unless you give one) | `backup.create`: More → Daemon → Back up ptyro's state: written on the computer, with what is in it and what is left out |
+| `uninstall` | `app.uninstall` (full sized: the plan, then the question; it ends this TUI and the daemon) | `uninstall.plan`: More → Daemon → Uninstall…: the plan, and the command to type on the computer (it ends the server this page comes from) |

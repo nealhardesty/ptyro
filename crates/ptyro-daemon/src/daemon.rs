@@ -66,6 +66,8 @@ pub struct Daemon {
     pub(crate) viewing: Mutex<HashMap<ClientId, (SessionId, bool)>>,
     /// Muted notification targets → until (ms; `None` = until unmuted).
     pub(crate) mutes: Mutex<crate::notifier::Mutes>,
+    /// What each workspace last started (UX3.2, `again.rs`).
+    pub(crate) last_launch: Mutex<HashMap<String, ptyro_core::session::LastLaunch>>,
     pub(crate) last_notified: Mutex<HashMap<SessionId, u64>>,
     /// The inbox when the store is unavailable.
     pub(crate) inbox_mem: Mutex<Vec<ptyro_core::status::InboxEntry>>,
@@ -195,6 +197,7 @@ impl Daemon {
             feed_rx: Mutex::new(Some(feed_rx)),
             viewing: Mutex::new(HashMap::new()),
             mutes: Mutex::new(HashMap::new()),
+            last_launch: Mutex::new(HashMap::new()),
             last_notified: Mutex::new(HashMap::new()),
             inbox_mem: Mutex::new(Vec::new()),
             used_links: Mutex::new(HashMap::new()),
@@ -955,6 +958,7 @@ impl Daemon {
             | Request::CheckpointDiff { .. }
             | Request::CheckpointRestore { .. }) => self.checkpoint_request(req).await,
             Request::Spawn { spec } => {
+                let spec = if spec.again { self.resolve_again(spec).await? } else { spec };
                 // `review.max_unreviewed`: a new agent waits while too much waits for review.
                 if spec.agent.is_some()
                     && !spec.unqueued
@@ -963,8 +967,15 @@ impl Daemon {
                     let position = self.queue_spawn(spec);
                     return Ok(Reply::Queued { position, unreviewed });
                 }
-                let s = self.spawn(spec).await?;
-                Ok(Reply::Session { info: self.info(&s) })
+                let s = self.spawn(spec.clone()).await?;
+                let info = self.info(&s);
+                if let Some(ws) = &info.workspace {
+                    self.remember_launch(ws, &spec).await;
+                }
+                Ok(Reply::Session { info })
+            }
+            Request::LastLaunch { workspace } => {
+                Ok(Reply::LastLaunch { launch: self.last_launch(&workspace) })
             }
             req @ (Request::WorktreeDiff { .. }
             | Request::WorktreeLog { .. }

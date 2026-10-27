@@ -846,7 +846,7 @@ async fn listed(c: &Client) -> Vec<SessionInfo> {
     }
 }
 
-/// UX1.25: one quick terminal per worktree (or directory), reused; quiet but for a blocked
+/// UX1.25: one quick terminal per worktree (only a worktree, UX3.4), reused; quiet but for a blocked
 /// agent in it; at its prompt it goes with its worktree, running something it holds it up; and
 /// `exit` forgets it.
 #[tokio::test]
@@ -888,13 +888,15 @@ async fn a_quick_terminal_is_one_per_worktree_quiet_and_goes_with_it() {
     let out = w.d.cmd().args(["shell", "--read"]).current_dir(w.home()).output().unwrap();
     assert!(!out.status.success(), "--read never starts one");
     assert!(String::from_utf8_lossy(&out.stderr).contains("no quick terminal"));
-    // Outside any worktree: the directory's own.
+    // Outside any worktree there is none (UX3.4): it belongs to a worktree.
     let notes = w.home().join("notes");
     std::fs::create_dir_all(&notes).unwrap();
-    let loose = quick(&c, None, &notes, true).await.unwrap();
+    let refused = quick(&c, None, &notes, true).await.unwrap_err();
+    assert!(refused.message.contains("belongs to a worktree"), "{}", refused.message);
+    // The main checkout's is its own, named after the project.
+    let loose = quick(&c, Some("myrepo/@root"), Path::new(""), true).await.unwrap();
     assert_ne!(loose.id, shell.id);
-    assert_eq!((loose.name.as_str(), loose.worktree.as_deref()), ("notes.shell", None));
-    assert_eq!(quick(&c, None, &notes, false).await.unwrap().id, loose.id);
+    assert_eq!(loose.name, "myrepo.shell");
 
     // Quiet: an error says nothing; an agent in it that waits for you does.
     let report = |state: &str| Request::Report {
@@ -955,9 +957,9 @@ async fn a_quick_terminal_is_one_per_worktree_quiet_and_goes_with_it() {
         assert!(Instant::now() < deadline, "exit forgets it");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    let fresh = quick(&c, None, &notes, true).await.unwrap();
+    let fresh = quick(&c, Some("myrepo/@root"), Path::new(""), true).await.unwrap();
     assert_ne!(fresh.id, loose.id);
-    assert_eq!(fresh.name, "notes.shell", "its name is free again");
+    assert_eq!(fresh.name, "myrepo.shell", "its name is free again");
 }
 
 /// `C-q C-d` asks, and `y` stops every session and the daemon, then ends the TUI.
@@ -1148,4 +1150,50 @@ async fn ux1_done_when_from_a_fresh_machine_to_a_merged_and_cleaned_up_pr() {
     };
     assert_eq!(entries.len(), 1, "cleaned up: archived, its branch kept");
     assert_eq!(entries[0].name, "fix-typo-greeting");
+}
+
+async fn last_launch(c: &Client, ws: &str) -> Option<ptyro_core::session::LastLaunch> {
+    match c.request(Request::LastLaunch { workspace: ws.into() }).await.unwrap() {
+        Reply::LastLaunch { launch } => launch,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// UX3.2 quick-new: `again` starts what the workspace last started (the default agent before
+/// anything), a tool or a quick terminal doesn't count, and `ptyro new --again` does the same.
+#[tokio::test]
+async fn again_starts_what_the_workspace_last_started() {
+    let w = World::new("exec /bin/sh -i");
+    let dir = repo(&w, "myrepo");
+    let c = w.d.client().await.unwrap();
+    let again = || SpawnSpec { again: true, cwd: dir.clone(), ..SpawnSpec::default() };
+    assert_eq!(last_launch(&c, "main").await, None);
+    // Nothing yet: the default agent.
+    let first = spawn(&c, again()).await;
+    assert_eq!(first.agent.as_deref(), Some("claude"));
+    assert_eq!(last_launch(&c, "main").await.map(|l| l.label()).as_deref(), Some("claude"));
+    // A shell, then again: a shell.
+    spawn(&c, SpawnSpec { cwd: dir.clone(), ..SpawnSpec::default() }).await;
+    assert_eq!(last_launch(&c, "main").await.map(|l| l.label()).as_deref(), Some("shell"));
+    let second = spawn(&c, again()).await;
+    assert_eq!(second.kind, ptyro_core::session::SessionKind::Shell);
+    // A tool and a quick terminal leave it as it was.
+    spawn(
+        &c,
+        SpawnSpec {
+            argv: vec!["true".into()],
+            tool: true,
+            cwd: dir.clone(),
+            ..SpawnSpec::default()
+        },
+    )
+    .await;
+    quick(&c, Some("myrepo/@root"), Path::new(""), true).await.unwrap();
+    assert_eq!(last_launch(&c, "main").await.map(|l| l.label()).as_deref(), Some("shell"));
+    // The CLI.
+    let out =
+        w.d.cmd().args(["new", "--again", "-d", "--json"]).current_dir(&dir).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let info: SessionInfo = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(info.kind, ptyro_core::session::SessionKind::Shell);
 }

@@ -8,7 +8,28 @@ export const data = {
     workspaces: new Map(),
     agents: [],
     defaultAgent: "claude",
+    /// What each workspace last started (UX3.2: quick new); none: the default agent.
+    lastLaunch: new Map(),
 };
+/// The workspace a worktree's sessions belong to: its project's first, else `main`.
+export const workspaceOf = (w) => [...data.workspaces.values()].find((x) => x.projects.includes(w.project))?.name ?? "main";
+/// What quick new starts in `ws`, for people: `claude`, `claude@work`, `shell`, `htop`.
+export function againLabel(ws) {
+    const l = data.lastLaunch.get(ws);
+    if (!l)
+        return data.defaultAgent;
+    if (l.agent)
+        return l.profile && !l.agent.includes("@") ? `${l.agent}@${l.profile}` : l.agent;
+    const p = l.argv?.[0];
+    return p ? p.split("/").pop() ?? p : "shell";
+}
+/// Ask the daemon what `ws` last started.
+export async function refreshLaunch(ws) {
+    try {
+        data.lastLaunch.set(ws, (await conn.request({ t: "last_launch", workspace: ws })).launch ?? null);
+    }
+    catch { /* the default agent */ }
+}
 const byId = (list) => new Map(list.map((x) => [x.id, x]));
 /// Everything, again (a fresh connection, or after something the events don't cover).
 export async function loadAll() {
@@ -28,6 +49,7 @@ export async function loadAll() {
         data.agents = ag.value.agents;
         data.defaultAgent = ag.value.default;
     }
+    await Promise.allSettled([...data.workspaces.values()].map((w) => refreshLaunch(w.name)));
     ui.render();
 }
 /// Keep up with a domain event; true when it was one of ours.

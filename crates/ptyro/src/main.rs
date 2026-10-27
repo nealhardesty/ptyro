@@ -88,6 +88,10 @@ enum Cmd {
         /// Run under this profile (default: the worktree's, the project's pin, the workspace's)
         #[arg(long, add = ArgValueCandidates::new(complete::profiles))]
         profile: Option<String>,
+        /// Start another of what this workspace last started (an agent, a shell, a command);
+        /// the default agent when nothing has started there yet
+        #[arg(long, conflicts_with_all = ["agent", "argv", "new_wt", "pr", "issue", "take_changes"])]
+        again: bool,
         /// Run in this worktree (`brisk-rook`, `myrepo/@root`)
         #[arg(long, conflicts_with = "new_wt", add = ArgValueCandidates::new(complete::worktrees))]
         wt: Option<String>,

@@ -1104,7 +1104,20 @@ impl Daemon {
             Request::WorktreeGet { addr } => {
                 Ok(Reply::Worktree { info: self.find_worktree(&addr)? })
             }
-            Request::WorktreeNew { spec } => self.create_worktree(spec).await,
+            Request::WorktreeNew { spec } => {
+                let (agent, profile, asked) =
+                    (spec.agent.clone(), spec.profile.clone(), spec.workspace.clone());
+                let reply = self.create_worktree(spec).await?;
+                // Its agent counts for quick-new (UX3.2), as `Spawn` does.
+                if let (Some(agent), Reply::WorktreeCreated { info, .. }) = (agent, &reply)
+                    && let Ok(p) = self.find_project(&info.project)
+                    && let Ok(ws) = self.home_workspace(asked.as_deref(), Some(&p))
+                {
+                    let spec = SpawnSpec { agent: Some(agent), profile, ..SpawnSpec::default() };
+                    self.remember_launch(&ws, &spec).await;
+                }
+                Ok(reply)
+            }
             Request::WorktreeRemove { addr, opts } => self.remove_worktree(&addr, opts).await,
             Request::WorktreeArchive { addr, stop_sessions } => {
                 self.archive_worktree(&addr, stop_sessions).await
