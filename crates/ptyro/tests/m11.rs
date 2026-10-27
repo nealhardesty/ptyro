@@ -875,3 +875,32 @@ async fn the_tui_shows_a_set_as_swimlanes_with_its_ledger() {
         assert!(view.contains(needle), "the set view lacks {needle:?}:\n{view}");
     }
 }
+
+/// H2.7: a push waiting at its gate held the set's one job slot, so `cs rm` was refused ("busy")
+/// for up to a day. Removing the set now calls the waiting push off: its gate closes, cancelled.
+#[test]
+fn removing_a_set_calls_off_a_push_waiting_at_its_gate() {
+    let w = World::new("");
+    w.project("api", &[], true);
+    let i = w.json(&[
+        "cs",
+        "new",
+        "held",
+        "--projects",
+        "api",
+        "--layout",
+        "manual",
+        "--gates",
+        "push",
+        "--json",
+    ]);
+    let root = PathBuf::from(s(&i["set"]["root"]));
+    std::fs::write(root.join("api").join("x.txt"), "x\n").unwrap();
+    w.ok(&["cs", "commit", "held", "-m", "x"]);
+    // Not a terminal: the push waits at its gate, answered elsewhere.
+    let out = w.ok(&["cs", "push", "held"]);
+    assert!(out.contains("gate") || out.contains("waiting"), "{out}");
+    w.until("the push gate", || w.show("held")["gates"].as_array().is_some_and(|g| !g.is_empty()));
+    w.ok(&["cs", "rm", "held", "--force"]);
+    assert!(!root.exists(), "removed, not refused as busy");
+}
