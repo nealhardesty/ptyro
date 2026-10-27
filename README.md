@@ -204,7 +204,7 @@ a row's menu (`.`), makes one at any time.
 ### Projects and worktrees
 
 A **project** is a git repository you registered. Each task gets a **worktree**: a separate
-checkout on its own branch (`ptyro/<name>`), so agents can't trample each other and your main
+checkout on its own branch (named like the worktree), so agents can't trample each other and your main
 checkout stays untouched. A new worktree gets the ignored files you list in `.worktreeinclude`
 (such as `.env`), a block of ports in `$PTYRO_PORT`, and the project's setup script, which runs
 only after you've reviewed and trusted it.
@@ -380,6 +380,15 @@ agent, commits and checks, the review queue, runs, fan-outs and change sets, and
 health with its fixes, devices (pair another with a link and a QR code), profiles and logins, the
 config editor, the daemon and its logs, first-run setup and a tour. Push notifications carry
 Allow / Deny where the platform shows actions.
+
+**Several machines, one place.** `ptyro machine add ssh://laptop2` (or, without ssh, `ptyro
+machine pair` on laptop2 and `ptyro machine add CODE` here) and laptop2's workspaces show here
+beside yours, in the TUI's sidebar, the CLI and the web app: `laptop2 / work`, its sessions as
+`laptop2:fix-flaky-test`. Start, type, answer and review there from here; its alerts reach you
+through this machine. Pair your phone with each laptop and whichever is awake shows everything it
+can reach. An asleep machine's workspaces stay listed, marked offline, and come back by
+themselves; both must run the same ptyro (it says which to update). See
+[`docs/remote.md`](docs/remote.md#several-machines-ptyro-machine).
 
 Each page names its machine, to tell several apart: the tab title is `studio · ptyro`, with a colour
 dot on the icon and a thin bar in the header, and the TUI's sidebar and terminal title say it too.

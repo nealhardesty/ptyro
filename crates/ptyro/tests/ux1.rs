@@ -504,7 +504,7 @@ async fn the_task_box_starts_an_agent_on_what_you_typed() {
     let r = ptyro_testkit::headless::run(
         script
             .timeout(30.0)
-            .send_when("WORKSPACE", "\\x11n")
+            .send_when("▾ main", "\\x11n")
             .send_when("What should it do?", "work 0.3")
             .send_when("→ work-0-3 · claude · new worktree in proj", "\\r")
             .until("> work 0.3"),
@@ -555,7 +555,7 @@ async fn the_task_box_takes_several_lines_as_one_prompt() {
     }
     let r = ptyro_testkit::headless::run(
         script
-            .send_when("WORKSPACE", "\\x11n")
+            .send_when("▾ main", "\\x11n")
             .send_when("What should it do?", "fix the login")
             .send_when("fix the login", "\\x0a")
             .send_when("new line", "and the logout")
@@ -612,7 +612,7 @@ async fn archive_keeps_uncommitted_work_and_restore_brings_it_back() {
     else {
         panic!()
     };
-    assert_eq!(info.branch.as_deref(), Some("ptyro/feat"));
+    assert_eq!(info.branch.as_deref(), Some("feat"));
     assert_eq!(std::fs::read_to_string(info.path.join("README")).unwrap(), "changed\n");
     assert_eq!(std::fs::read_to_string(info.path.join("notes.txt")).unwrap(), "untracked\n");
     let status = std::process::Command::new("git")
@@ -691,7 +691,7 @@ async fn work_moves_into_a_worktree_or_starts_from_a_branch() {
         .await
         .unwrap_err();
     assert!(e.message.contains("nothing to take"), "{}", e.message);
-    // Branches a worktree could check out: `spike` (main and `ptyro/moved` have worktrees).
+    // Branches a worktree could check out: `spike` (main and `moved` have worktrees).
     let Reply::Branches { names } =
         c.request(Request::Branches { project: "myrepo".into() }).await.unwrap()
     else {
@@ -762,7 +762,7 @@ async fn a_fresh_ptyro_opens_the_first_run_once() {
     let r = ptyro_testkit::headless::run(
         script(&d)
             .send_when("Welcome to ptyro", "\x1b")
-            .send_when("WORKSPACE", "\\x11d")
+            .send_when("▾ main", "\\x11d")
             .until("[detached]"),
     )
     .await
@@ -770,8 +770,8 @@ async fn a_fresh_ptyro_opens_the_first_run_once() {
     assert!(r.screen.contains("[detached]"), "{}", r.screen);
     assert!(d.paths.config.join("config.toml").exists(), "a config now, so it won't come back");
     // The second start: the TUI as soon as it's drawn, with no first run over it.
-    let r = ptyro_testkit::headless::run(script(&d).until("WORKSPACE")).await.unwrap();
-    assert!(r.screen.contains("WORKSPACE"), "{}", r.screen);
+    let r = ptyro_testkit::headless::run(script(&d).until("▾ main")).await.unwrap();
+    assert!(r.screen.contains("▾ main"), "{}", r.screen);
     assert!(!r.screen.contains("Welcome to ptyro"), "{}", r.screen);
 }
 
@@ -978,7 +978,7 @@ async fn quitting_from_the_tui_stops_the_daemon() {
     }
     // `y` only once the dialog says what stops: the shell this TUI opened ends for good.
     let r = ptyro_testkit::headless::run(
-        s.send_when("WORKSPACE", "\\x11\\x04").send_when("1 session(s) end for good", "y"),
+        s.send_when("▾ main", "\\x11\\x04").send_when("1 session(s) end for good", "y"),
     )
     .await
     .unwrap();
@@ -1117,7 +1117,7 @@ async fn ux1_done_when_from_a_fresh_machine_to_a_merged_and_cleaned_up_pr() {
         script
             // 1. The first run (no config): ⏎ keeps what it found, myrepo included.
             .send_when("Welcome to ptyro", "\\r")
-            .send_when("WORKSPACE", "\\x11n")
+            .send_when("▾ main", "\\x11n")
             // 2. A task, ⏎.
             .send_when("What should it do?", "fix the typo in greeting.txt")
             .send_when("fix-typo-greeting", "\\r")

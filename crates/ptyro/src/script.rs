@@ -618,6 +618,7 @@ mod tests {
 
     fn info(status: AgentStatus, since: u64, last_prompt: Option<u64>) -> SessionInfo {
         let mut s = SessionInfo {
+            machine: None,
             id: SessionId::new(),
             handle: String::new(),
             name: "x".into(),

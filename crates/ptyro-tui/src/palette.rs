@@ -24,6 +24,8 @@ pub enum Target {
     Here,
     Workspace(String),
     NewWorkspace,
+    /// A machine, by name (MM1.B); empty: this one.
+    Machine(String),
     Editor(String),
     Script(String),
     Path(std::path::PathBuf),

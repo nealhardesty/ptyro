@@ -51,6 +51,20 @@ struct Conn {
     /// The session the caller runs in, worked out at its first keystroke (a process can't
     /// gain an ancestor later).
     placed: Option<Option<SessionId>>,
+    /// Another machine's daemon mirroring this one (MM1.B): it gets this machine's own things.
+    link: bool,
+    /// Our own connection to each other machine whose sessions this client watches or types
+    /// into (MM1.B): frames, acks, keys and sizes go through it as they are.
+    upstreams: HashMap<String, Upstream>,
+    /// Mirrored sessions this client is subscribed to, and their machine.
+    remote: HashMap<SessionId, String>,
+}
+
+struct Upstream {
+    client: Arc<ptyro_client::Client>,
+    task: JoinHandle<()>,
+    /// Our client id there.
+    theirs: u64,
 }
 
 pub async fn serve(daemon: Arc<Daemon>, stream: UnixStream, pid: Option<u32>) {
@@ -165,9 +179,15 @@ pub async fn serve(daemon: Arc<Daemon>, stream: UnixStream, pid: Option<u32>) {
             }
         }
     });
+    let link = client.kind == ClientKind::Machine || grant.is_some_and(|g| g.machine);
     let interest = Arc::new(Mutex::new(Interest::default()));
-    let events =
-        tokio::spawn(forward_events(Arc::clone(&daemon), id, Arc::clone(&interest), out.clone()));
+    let events = tokio::spawn(forward_events(
+        Arc::clone(&daemon),
+        id,
+        Arc::clone(&interest),
+        out.clone(),
+        link,
+    ));
     let mut conn = Conn {
         id,
         daemon: Arc::clone(&daemon),
@@ -178,6 +198,9 @@ pub async fn serve(daemon: Arc<Daemon>, stream: UnixStream, pid: Option<u32>) {
         outer: client.outer,
         caller: crate::mail::Caller { pid, kind: Some(client.kind), grant },
         placed: None,
+        link,
+        upstreams: HashMap::new(),
+        remote: HashMap::new(),
     };
     let mut shutdown = daemon.shutdown.subscribe();
     let mut goodbye = daemon.goodbye.subscribe();
@@ -240,6 +263,11 @@ pub async fn serve(daemon: Arc<Daemon>, stream: UnixStream, pid: Option<u32>) {
 
 impl Conn {
     async fn handle(&mut self, msg: ClientMsg) {
+        // Another machine's session (MM1.B): what is said about it goes to its machine.
+        let msg = match self.route_to_machine(msg).await {
+            Some(m) => m,
+            None => return,
+        };
         match msg {
             ClientMsg::Hello { .. } => {}
             ClientMsg::Request { id, req } => {
@@ -377,6 +405,97 @@ impl Conn {
         }
     }
 
+    /// A message about a mirrored session goes over this client's own connection to its machine
+    /// (made on first use): subscriptions, acks, keys, sizes, focus. Anything else comes back to
+    /// be handled here. Keys from a device need `control` here first, as for our own sessions.
+    async fn route_to_machine(&mut self, msg: ClientMsg) -> Option<ClientMsg> {
+        if self.link {
+            return Some(msg);
+        }
+        let session = match &msg {
+            ClientMsg::Subscribe { session, .. }
+            | ClientMsg::Unsubscribe { session }
+            | ClientMsg::Ack { session, .. }
+            | ClientMsg::Input { session, .. }
+            | ClientMsg::Resize { session, .. }
+            | ClientMsg::Focus { session, .. } => *session,
+            _ => return Some(msg),
+        };
+        if self.daemon.session(session).is_some() {
+            return Some(msg);
+        }
+        let Some((machine, transport, online)) = self.daemon.machine_of_session(session) else {
+            return Some(msg);
+        };
+        let scope = self.caller.grant.map(|g| g.scope);
+        let msg = match msg {
+            // A device below `control` watches at the session's own size and never types.
+            ClientMsg::Input { .. } | ClientMsg::Resize { .. }
+                if scope.is_some_and(|s| s < ptyro_protocol::Scope::Control) =>
+            {
+                return None;
+            }
+            ClientMsg::Subscribe { session, .. }
+                if scope.is_some_and(|s| s < ptyro_protocol::Scope::Control) =>
+            {
+                ClientMsg::Subscribe { session, size: None, control: false }
+            }
+            // A paired device doesn't move focus (M9.2).
+            ClientMsg::Focus { .. } if scope.is_some() => return None,
+            m => m,
+        };
+        match &msg {
+            ClientMsg::Subscribe { .. } => {
+                self.remote.insert(session, machine.clone());
+            }
+            ClientMsg::Unsubscribe { .. } => {
+                self.remote.remove(&session);
+            }
+            _ => {}
+        }
+        // Offline: nothing to say it to (its pane shows it as it was, with why).
+        if !online {
+            return None;
+        }
+        for _ in 0..2 {
+            if !self.upstreams.contains_key(&machine) {
+                match self.daemon.dial(&machine, &transport).await {
+                    Ok(mut c) => {
+                        let pushes = c.pushes();
+                        let theirs = c.id.0;
+                        self.daemon
+                            .upstream_ids
+                            .locked()
+                            .insert((machine.clone(), theirs), self.id);
+                        let task = tokio::spawn(relay_upstream(pushes, self.out.clone()));
+                        self.upstreams.insert(
+                            machine.clone(),
+                            Upstream { client: Arc::new(c), task, theirs },
+                        );
+                    }
+                    Err(e) => {
+                        tracing::debug!(client = %self.id, machine, "upstream: {}", e.message);
+                        return None;
+                    }
+                }
+            }
+            let sent = self.upstreams.get(&machine).map(|u| u.client.send(msg.clone()));
+            match sent {
+                Some(Ok(())) => return None,
+                // It went away: one fresh connection, then give up.
+                _ => self.drop_upstream(&machine),
+            }
+        }
+        None
+    }
+
+    fn drop_upstream(&mut self, machine: &str) {
+        if let Some(u) = self.upstreams.remove(machine) {
+            u.task.abort();
+            self.daemon.upstream_ids.locked().remove(&(machine.to_owned(), u.theirs));
+        }
+    }
+
     fn placed_session(&mut self) -> Option<Arc<Session>> {
         let daemon = &self.daemon;
         let pid = self.caller.pid;
@@ -409,6 +528,9 @@ impl Conn {
     }
 
     fn close(&mut self) {
+        for m in self.upstreams.keys().cloned().collect::<Vec<_>>() {
+            self.drop_upstream(&m);
+        }
         self.daemon.forget_client(self.id);
         for id in self.subs.keys().copied().collect::<Vec<_>>() {
             self.unsubscribe(id);
@@ -511,15 +633,47 @@ async fn stream_chat(session: Arc<Session>, out: mpsc::Sender<ServerMsg>) {
     }
 }
 
+/// What another machine sends this client over its upstream: the frames and transcripts it
+/// subscribed to, and clipboard writes for the session it controls there. Everything else about
+/// that machine comes through the daemon's link (`machines.rs`).
+async fn relay_upstream(
+    mut pushes: mpsc::UnboundedReceiver<ServerMsg>,
+    out: mpsc::Sender<ServerMsg>,
+) {
+    while let Some(msg) = pushes.recv().await {
+        let pass = match &msg {
+            ServerMsg::Screen { .. } | ServerMsg::Chat { .. } => true,
+            ServerMsg::Event { event: DomainEvent::Clipboard { .. } } => true,
+            ServerMsg::Goodbye { .. } => return,
+            _ => false,
+        };
+        if pass && out.send(msg).await.is_err() {
+            return;
+        }
+    }
+}
+
 async fn forward_events(
     daemon: Arc<Daemon>,
     me: ClientId,
     interest: Arc<Mutex<Interest>>,
     out: mpsc::Sender<ServerMsg>,
+    link: bool,
 ) {
     let mut rx = daemon.events.subscribe();
+    // Other machines' news, for every client but another machine's link (no echoes).
+    let mut mirrored = (!link).then(|| daemon.mirrored.subscribe());
     loop {
-        let event = match rx.recv().await {
+        let got = tokio::select! {
+            r = rx.recv() => r,
+            r = async {
+                match mirrored.as_mut() {
+                    Some(m) => m.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => r,
+        };
+        let event = match got {
             Ok(e) => e,
             Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                 tracing::warn!(client = %me, "dropped {n} events");
@@ -552,6 +706,8 @@ async fn forward_events(
             | DomainEvent::InboxAdded { .. }
             | DomainEvent::UsageUpdated { .. }
             | DomainEvent::ScratchChanged { .. }
+            | DomainEvent::MachineUpdated { .. }
+            | DomainEvent::MachineRemoved { .. }
             | DomainEvent::RunUpdated { .. } => {
                 let watching = interest.locked().watch_all;
                 if watching && out.send(ServerMsg::Event { event }).await.is_err() {

@@ -73,6 +73,10 @@ pub struct ProgramStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub id: SessionId,
+    /// The machine it lives on, when that is another one this daemon mirrors (MM1.B, SPEC
+    /// §16.4b); `None`: here. Its names then carry the machine (`laptop2:work`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
     /// Shortest unambiguous handle at the time of the reply.
     pub handle: String,
     pub name: String,

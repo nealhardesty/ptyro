@@ -502,6 +502,7 @@ impl Session {
             (e.record.clone(), e.activity.clone())
         };
         SessionInfo {
+            machine: None,
             id: self.id,
             handle,
             name: meta.name.clone(),

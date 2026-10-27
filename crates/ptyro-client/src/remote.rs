@@ -81,6 +81,48 @@ pub fn ssh(target: &str) -> Result<Child, ClientError> {
     cmd.spawn().map_err(|e| ClientError::Unavailable(format!("cannot run {exe}: {e}")))
 }
 
+/// Start `argv` with its stdin and stdout as the protocol stream (MM1.B's bridge).
+pub fn spawn(argv: &[String]) -> Result<Child, ClientError> {
+    let Some((exe, args)) = argv.split_first() else {
+        return Err(ClientError::Unavailable("no command to reach the daemon with".into()));
+    };
+    Command::new(exe)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| ClientError::Unavailable(format!("cannot run {exe}: {e}")))
+}
+
+/// A failed handshake through a command, with the last lines it wrote to stderr (its reason).
+pub async fn explain_command(
+    e: ClientError,
+    via: &str,
+    child: &mut Child,
+    stderr: Option<JoinHandle<String>>,
+) -> ClientError {
+    if matches!(e, ClientError::Rejected(_)) {
+        return e;
+    }
+    let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+    let _ = child.start_kill();
+    let said = match stderr {
+        Some(h) => tokio::time::timeout(Duration::from_secs(1), h)
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default(),
+        None => String::new(),
+    };
+    let said: Vec<&str> = said.lines().filter(|l| !l.trim().is_empty()).collect();
+    match said.last() {
+        Some(last) => ClientError::Unavailable(format!("{via}: {last}")),
+        None => ClientError::Unavailable(format!("{via}: {e}")),
+    }
+}
+
 /// ssh's stderr, kept for the error message (capped).
 pub fn collect(mut err: ChildStderr) -> JoinHandle<String> {
     tokio::spawn(async move {

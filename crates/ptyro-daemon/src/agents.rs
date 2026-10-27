@@ -824,7 +824,7 @@ impl Daemon {
         else {
             return;
         };
-        if wt.is_root || wt.branch.as_deref() != Some(&format!("ptyro/{}", wt.name)) {
+        if wt.is_root || !wt.default_branch() {
             return;
         }
         let words: String =

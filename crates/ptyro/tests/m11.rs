@@ -277,7 +277,7 @@ fn done_when_a_set_drafts_approves_builds_restores_and_lands() {
     assert_eq!(i["report"]["state"], "drafting");
     for m in ["api", "sdk", "web"] {
         assert!(root.join(m).join("README.md").exists(), "{m}'s worktree is in the root");
-        assert_eq!(w.git(&root.join(m), &["branch", "--show-current"]).trim(), "ptyro/tier");
+        assert_eq!(w.git(&root.join(m), &["branch", "--show-current"]).trim(), "tier");
     }
     let brief = std::fs::read_to_string(root.join("CHANGESET.md")).unwrap();
     assert!(brief.contains("api → sdk → web") && brief.contains("users get a tier"), "{brief}");
@@ -664,8 +664,8 @@ fn every_failure_mode_has_a_state_and_an_action() {
             .any(|x| x["state"] == "member_conflict")
     );
     // ── creation that fails halfway leaves nothing behind.
-    w.git(&w.home().join("sdk"), &["branch", "ptyro/half"]);
-    w.git(&w.home().join("sdk"), &["checkout", "-q", "ptyro/half"]);
+    w.git(&w.home().join("sdk"), &["branch", "half"]);
+    w.git(&w.home().join("sdk"), &["checkout", "-q", "half"]);
     let out = w.fails(&["cs", "new", "half", "--projects", "api,sdk", "--layout", "manual"]);
     assert!(out.contains("nothing was created"), "{out}");
     assert!(!w.d.paths.data.join("changesets/half").exists());

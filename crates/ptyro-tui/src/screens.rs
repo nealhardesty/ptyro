@@ -323,3 +323,160 @@ impl App {
         self.spawn_spec(SpawnSpec { again: true, worktree, cwd, ..SpawnSpec::default() }, None);
     }
 }
+
+// ── other machines (MM1.B) ──────────────────────────────────────────────────
+
+impl App {
+    /// A machine's link changed: say so when it went down, came back, or runs another version
+    /// (with what to do), and keep the list current.
+    pub(crate) fn machine_news(&mut self, info: ptyro_core::model::MachineInfo) {
+        use ptyro_core::model::MachineState as S;
+        let before = self.machines.iter().find(|m| m.name == info.name).map(|m| m.state);
+        if before != Some(info.state) {
+            match info.state {
+                S::Online if before.is_some_and(|b| b != S::Connecting) || before.is_none() => {
+                    self.toast(format!("{} is back", info.name));
+                }
+                S::Offline if before == Some(S::Online) => {
+                    self.toast_err(format!(
+                        "{} went offline: its workspaces show as they were",
+                        info.name
+                    ));
+                }
+                S::Mismatch => {
+                    let fix = info.fix.clone().unwrap_or_default();
+                    self.toast_err(format!("{}: {}", info.error.clone().unwrap_or_default(), fix));
+                }
+                _ => {}
+            }
+        }
+        match self.machines.iter_mut().find(|m| m.name == info.name) {
+            Some(m) => *m = info,
+            None => self.machines.push(info),
+        }
+    }
+
+    /// The machine a workspace (or anything named after one) is on: `laptop2` for
+    /// `laptop2:work`; `None` here.
+    pub fn machine_of_name<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> Option<&'a ptyro_core::model::MachineInfo> {
+        let (m, _) = ptyro_core::model::split_machine(name)?;
+        self.machines.iter().find(|x| x.name == m)
+    }
+}
+
+// ── machine actions (MM1.B): the TUI's side of `ptyro machine …` ────────────
+
+impl App {
+    /// The machine of the workspace you're in, if it is another one.
+    pub(crate) fn machine_here(&self) -> Option<String> {
+        ptyro_core::model::split_machine(&self.workspace).map(|(m, _)| m.to_owned())
+    }
+
+    pub(crate) fn machine_action(&mut self, action: &'static str) {
+        use crate::app::{Overlay, PromptKind, Purpose};
+        use crate::palette::{Item, Palette, Target};
+        match action {
+            "machine.list" => self.run_cli(&["machine".into(), "ls".into()]),
+            "machine.pair" => self.run_cli(&["machine".into(), "pair".into()]),
+            "machine.add" => {
+                self.overlay = Some(Overlay::Prompt {
+                    title: "Add a machine: ssh://HOST, or the code `machine pair` printed on it"
+                        .into(),
+                    text: String::new(),
+                    kind: PromptKind::MachineAdd,
+                });
+            }
+            "machine.unhide" => {
+                let items: Vec<Item> = self
+                    .machines
+                    .iter()
+                    .flat_map(|m| m.hidden.iter().map(move |w| (m.name.clone(), w.clone())))
+                    .map(|(m, w)| Item {
+                        label: format!("{m} / {w}"),
+                        detail: "hidden here".into(),
+                        key: None,
+                        target: Target::Machine(format!("{m}:{w}")),
+                    })
+                    .collect();
+                if items.is_empty() {
+                    self.toast("no hidden workspaces");
+                    return;
+                }
+                self.overlay = Some(Overlay::Picker {
+                    palette: Palette::new("Show again", items),
+                    purpose: Purpose::MachineUnhide,
+                });
+            }
+            "machine.retry" | "machine.hide" | "machine.remove" => match self.machine_here() {
+                Some(m) => self.machine_on(action, m),
+                None if self.machines.is_empty() => self.toast_offer(
+                    "no other machines yet",
+                    false,
+                    crate::app::Offer {
+                        label: "add one".into(),
+                        then: crate::app::Then::Run(crate::keymap::Command {
+                            action: "machine.add",
+                            arg: None,
+                        }),
+                    },
+                ),
+                None => {
+                    let items = self
+                        .machines
+                        .iter()
+                        .map(|m| Item {
+                            label: m.name.clone(),
+                            detail: m.state.label().into(),
+                            key: None,
+                            target: Target::Machine(m.name.clone()),
+                        })
+                        .collect();
+                    self.overlay = Some(Overlay::Picker {
+                        palette: Palette::new("Which machine?", items),
+                        purpose: Purpose::MachinePick(action),
+                    });
+                }
+            },
+            other => self.toast(format!("{other}: not available")),
+        }
+    }
+
+    /// Act on one machine: try its link now, hide the workspace you're in (when it's that
+    /// machine's), or stop mirroring it (asked first).
+    pub(crate) fn machine_on(&mut self, action: &str, m: String) {
+        use crate::app::{Confirmed, Overlay};
+        match action {
+            "machine.retry" => self.request(
+                Pending::Done(format!("trying {m} again")),
+                Request::MachineRetry { name: m },
+            ),
+            "machine.hide" => {
+                let Some((_, ws)) = ptyro_core::model::split_machine(&self.workspace)
+                    .filter(|(x, _)| *x == m)
+                    .map(|(x, w)| (x.to_owned(), w.to_owned()))
+                else {
+                    self.toast(format!("select one of {m}'s workspaces to hide it"));
+                    return;
+                };
+                let said = format!("{m} / {ws} is hidden here (machine.unhide shows it)");
+                let req = Request::MachineHide { name: m, workspace: ws, hidden: true };
+                self.request(Pending::Done(said), req);
+            }
+            "machine.remove" => {
+                self.overlay = Some(Overlay::Confirm {
+                    text: format!(
+                        "Stop mirroring {m}? Its workspaces leave this list; nothing changes on it. [y/N]"
+                    ),
+                    action: Confirmed::Send(
+                        Box::new(Request::MachineRemove { name: m.clone() }),
+                        format!("{m} is no longer mirrored here"),
+                    ),
+                });
+            }
+            _ => {}
+        }
+    }
+}

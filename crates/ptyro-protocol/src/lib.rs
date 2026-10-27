@@ -33,7 +33,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 19 };
+pub const PROTO: Version = Version { major: 1, minor: 20 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -45,6 +45,9 @@ pub enum ClientKind {
     Mobile,
     Proxy,
     Test,
+    /// Another machine's daemon mirroring this one (MM1.B): it is answered with this machine's
+    /// own workspaces, never ones this daemon mirrors, and its requests are never routed on.
+    Machine,
 }
 
 /// What the client knows about the terminal it runs in.
@@ -136,6 +139,9 @@ pub struct DeviceInfo {
     /// Its pairing code hasn't been claimed yet (it has no token).
     #[serde(default)]
     pub pending: bool,
+    /// Another machine's daemon (MM1.B), not a person's device.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub machine: bool,
 }
 
 /// A browser's Web Push subscription (`PushSubscription.toJSON()`, flattened).
@@ -219,6 +225,9 @@ pub enum Request {
         name: String,
         #[serde(default)]
         scope: Scope,
+        /// A machine, not a person's device (MM1.B): its connections are links (`Machine`).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        machine: bool,
     },
     /// Exchange a pairing code for the device's token (`Paired`), once. `ptyro serve` sends it
     /// for the web app's `POST /api/pair`; `via` is where the device came from.
@@ -285,6 +294,34 @@ pub enum Request {
         /// Its home workspace, for one outside any project (default `main`).
         #[serde(default)]
         workspace: Option<String>,
+    },
+    /// The other machines this daemon mirrors (MM1.B). Replies `Machines`.
+    MachineList,
+    /// Mirror another machine: checked first (it must answer, and run this version, unless
+    /// `force`), then kept. `name` defaults to what it calls itself. `token`: from claiming its
+    /// `machine pair` code (`Token` transport). Replies `Machine`.
+    MachineAdd {
+        #[serde(default)]
+        name: Option<String>,
+        transport: ptyro_core::model::MachineTransport,
+        #[serde(default)]
+        token: Option<String>,
+        #[serde(default)]
+        force: bool,
+    },
+    /// Stop mirroring it (its token is deleted here; revoke it there too). Replies `Done`.
+    MachineRemove {
+        name: String,
+    },
+    /// Show or hide one of its workspaces here (nothing changes there). Replies `Machine`.
+    MachineHide {
+        name: String,
+        workspace: String,
+        hidden: bool,
+    },
+    /// Try its link again now. Replies `Machine`.
+    MachineRetry {
+        name: String,
     },
     /// What `workspace` last started (UX3.2: quick-new's `SpawnSpec.again`). Replies
     /// `LastLaunch`.
@@ -1176,6 +1213,12 @@ pub enum Reply {
     Session {
         info: SessionInfo,
     },
+    Machines {
+        machines: Vec<ptyro_core::model::MachineInfo>,
+    },
+    Machine {
+        info: ptyro_core::model::MachineInfo,
+    },
     /// `None`: nothing started there yet (`again` starts the default agent).
     LastLaunch {
         #[serde(default)]
@@ -1611,6 +1654,13 @@ pub enum DomainEvent {
     WorkspaceRemoved {
         id: String,
     },
+    /// A mirrored machine was added or its link changed state (MM1.B).
+    MachineUpdated {
+        info: ptyro_core::model::MachineInfo,
+    },
+    MachineRemoved {
+        name: String,
+    },
     /// Created, changed state, or new repository status.
     WorktreeUpdated {
         info: WorktreeInfo,
@@ -1912,7 +1962,11 @@ mod tests {
         });
         round_trip(ClientMsg::Request {
             id: 9,
-            req: Request::DevicePair { name: "phone".into(), scope: Scope::Approve },
+            req: Request::DevicePair {
+                name: "phone".into(),
+                scope: Scope::Approve,
+                machine: false,
+            },
         });
         round_trip(ClientMsg::Request {
             id: 10,

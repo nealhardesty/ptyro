@@ -986,6 +986,14 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built MM1.B] Protocol 1.20** (additive): many machines (§16.4b). `ClientKind::Machine`;
+`machine` on `SessionInfo`, `WorkspaceInfo`, `ProjectInfo`, `WorktreeInfo`, `ProfileInfo`,
+`InboxEntry` and `Usage` (absent here); `DevicePair.machine` and `DeviceInfo.machine`;
+`MachineList` → `Machines{machines}`, `MachineAdd` / `MachineHide` / `MachineRetry` → `Machine{info}`,
+`MachineRemove` → `Done`; events `MachineUpdated{info}`, `MachineRemoved{name}`. `MachineList` is
+`read` scope, the rest `full`. A daemon of 1.19 ignores the new fields and doesn't know the
+requests (answered as unreadable); a link needs the same version anyway.
+
 **[built UX3.2] Protocol 1.19** (additive): quick new. `SpawnSpec` gains `again` (fill in the
 agent, `argv` and `profile` from what its home workspace last started; the default agent when
 nothing has) and `tool` (a client's tool, not remembered). `LastLaunch{workspace}` →
@@ -1885,7 +1893,7 @@ existing target path is refused.
 struct WorktreeSpec {
     project: ProjectAddr,
     name: Option<String>,         // default: friendly random name
-    branch: Option<String>,       // default: template, e.g. "ptyro/{name}"
+    branch: Option<String>,       // default: template, `{name}` (was "ptyro/{name}" before v0.0.13)
     base: Option<String>,         // default: project base (origin/<default>), fetched first
     from: Option<WorktreeSource>, // ExistingBranch(b) | PullRequest(n) | Issue(url) | Commit(sha)
     setup: SetupMode,             // run | skip | inherit (from project config)
@@ -1924,7 +1932,7 @@ Branch-name templates: `{name}`, `{user}`, `{date}`, `{issue}`, `{slug}`; option
   profile's environment, so a fetch uses its SSH key.
 - **Fetch:** failures are non-fatal ("fetch failed, using the local origin/main"), for offline
   work. `worktrees.fetch = false` or `--no-fetch` skips it.
-- **New branches** are created with `--no-track`, so `ptyro/x` doesn't claim `origin/main` as its
+- **New branches** are created with `--no-track`, so `x` doesn't claim `origin/main` as its
   upstream. `--existing --branch B` checks out a local branch, or a remote one tracked. `--pr N`
   fetches `pull/N/head` into `pr/N`.
 - **Marker:** `ptyro.json` (`{id, project, name, created_at}`) goes in the worktree's own git dir.
@@ -2087,7 +2095,7 @@ others.
    (or `--force --yes` in scripts).
 3. Run `archive` script (if trusted). 4. `git worktree unlock`, `git worktree remove`.
 5. Branch: deleted only if fully merged into base or pushed and identical to its remote; otherwise
-   kept and reported ("kept branch ptyro/brisk-rook: 3 unpushed commits").
+   kept and reported ("kept branch brisk-rook: 3 unpushed commits").
 6. Release ports; mark worktree `removed` in DB (history kept).
 
 `ptyro gc` lists (never deletes without confirmation) stale worktrees: removed-on-disk, merged
@@ -2499,14 +2507,15 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
   worktrees by creation, each with its sessions. Below them, under "other sessions", are the
   sessions whose home is this workspace but that aren't under one of its projects.
   - Rows show the pin's profile label (in its colour), the branch when it isn't the default
-    `ptyro/<name>`, what is left to do (`↑N` unpushed, `not pushed ↑N`, `● N` uncommitted, a
+    `<name>` (or `ptyro/<name>`, the default before v0.0.13), what is left to do (`↑N` unpushed, `not pushed ↑N`, `● N` uncommitted, a
     quiet `✓ pushed`; the `+N −M` lines only while something is left, §10.9), the worktree state
     when not ready, and listening ports.
   - Folding: `⏎`/`Space`, `h`/`l`, or a click. `1`–`9` number the visible session rows. In the sidebar
     `j`/`k` move the selection; after the prefix they cycle every session of the workspace in
     tree order, skipping quick terminals (§11.2h).
-- **Workspaces:** `w` opens the switcher (each workspace's profile, project and session counts, "+
-  new workspace"). Views are saved per workspace (`view:<name>`), and the last workspace is
+- **Workspaces:** **[changed MM1.B]** every workspace is in the sidebar at once and there is one
+  layout (§11.2j); `w` jumps to one. Before: `w` opened the switcher (each workspace's profile,
+  project and session counts, "+ new workspace"). Views are saved per workspace (`view:<name>`), and the last workspace is
   stored under `_tui`. Opening on a session from another workspace switches to that workspace. A
   plain `ptyro` reopens the last one.
 - **The wizard** (`n`):
@@ -2937,6 +2946,29 @@ The daily loop (ROADMAP UX3, RESEARCH R-UX-34…37). `crates/ptyro-tui/src/scree
   `[ui] shell_style`, now `pane` by default. It belongs to a worktree: with no context worktree
   the TUI opens the project picker and carries on there (`AfterAdd::Run`); `QuickShell` refuses
   to start one outside a worktree (one per directory from before is still found).
+
+### 11.2j What MM1.B added **[built MM1.B]**
+
+- **Every workspace at once** (`tree.rs`): a header per workspace (`Row::Workspace`), this
+  machine's first in the daemon's order, then each other machine's (`● laptop2 / work`, the dot in
+  the machine's colour, then `offline 14:02`, `other version` with its fix, or `connecting…`, then
+  its profile badge), each folding (`ws:<name>` in `collapsed`), with its projects → worktrees →
+  sessions and its other sessions under it. A project in several workspaces shows once, under the
+  first. A session whose workspace isn't shown sits under its machine's `main`. Rows of another
+  machine's sessions show their names without the machine (the header says it).
+- **The workspace you're in** is the selected row's in the sidebar, else the focused pane's
+  session's (`enter_workspace`): `n`, `C-n`, `N`, the status bar, quick new's label and new
+  workspace-wide things go by it. The sidebar title says this machine first: `● laptop1 · work`.
+- **One layout for every workspace**, saved as `view:_all` (`ALL_VIEW`); the last workspace's own,
+  from before, is taken over once. `w` jumps to a workspace's header, unfolded, and leaves the panes
+  alone; its picker groups by machine and says which are down. `+ new workspace` asks which
+  machine when there are others.
+- **Machines:** `machine.add` (asks for `ssh://HOST` or the code, runs `machine add`),
+  `machine.pair`, `machine.list` (full sized), `machine.retry`, `machine.hide`, `machine.unhide`,
+  `machine.remove` (asks); a workspace header's row menu has them, `machine.retry` first while it's
+  down, and its hint is the fix. A link going down, coming back or running another version is said
+  once. A remote session's pane header has its machine's dot, and its state on the right when down.
+- Profile badges count per machine: another machine's implicit `default` shows none.
 
 ### 11.3 Default key map (after prefix) **[built M2; differs from the proposal where noted]**
 
@@ -3492,7 +3524,7 @@ quiet_hours = "22:00-07:00"
 
 [worktrees]
 location = "data"                         # data | sibling | in-repo
-branch_template = "ptyro/{name}"
+branch_template = "{name}"
 archive_on_merge = false                  # archive a worktree once its PR merges (UX1.12)
 
 [ports]
@@ -3966,9 +3998,9 @@ safe checkpoints and an explicit ship order, and is honest about partial states.
 ```text
 change set "add-user-tier"   (workspace: work · profile: work)
 ├─ lead       claude   · cwd = change-set root · sees every member, read-only by policy
-├─ api        codex    · worktree api/   branch ptyro/add-user-tier   depends_on: —
-├─ sdk        claude   · worktree sdk/   branch ptyro/add-user-tier   depends_on: api
-└─ web        claude   · worktree web/   branch ptyro/add-user-tier   depends_on: api, sdk
+├─ api        codex    · worktree api/   branch add-user-tier   depends_on: —
+├─ sdk        claude   · worktree sdk/   branch add-user-tier   depends_on: api
+└─ web        claude   · worktree web/   branch add-user-tier   depends_on: api, sdk
 root: data/changesets/add-user-tier/
       ├─ CHANGESET.md      generated brief: goal, members, roles, order, conventions
       ├─ CONTRACT.md       the cross-repo contract (owned by the lead, versioned by ptyro)
@@ -4994,6 +5026,107 @@ exit); `ptyro daemon status` (`machine`), `ptyro pair` ("Pairing 'phone' with st
 manifest is static and served before sign-in, so it keeps the name `ptyro` (the name is not given
 to unauthenticated requests). The name is read at connect: a changed `machine_name` shows after
 the next reconnect.
+
+### 16.4b Many machines: workspaces on other machines **[decided 2026-10-27 (owner, ROADMAP MM1.0); built MM1.B]**
+
+One sidebar, one phone app, every laptop's agents. A daemon **links** to the daemons of other
+machines and **mirrors** their workspaces next to its own; every client of it (TUI, CLI, `serve`
+and so the web app) sees one daemon. RESEARCH R-REM-13; the alternative (R-REM-12, the PWA
+holding several machines) was not chosen.
+
+**Decided by the owner:**
+- **Symmetric.** Each machine links the others; the phone is paired with each. Whichever is awake
+  shows everything it can reach. No hub.
+- **Mirror.** A remote workspace lives on its machine with its projects, worktrees, profiles and
+  logins; that machine is the authority. The local daemon shows it and forwards what is done in it.
+- **A machine is added, not a workspace.** All its workspaces are followed (new ones appear,
+  removed ones go); any can be hidden here (`machine hide laptop2 work`), which changes nothing
+  there. A daemon offers its links only its **own** workspaces, never ones it mirrors, so two
+  machines linking each other never echo.
+- **Transport: both.** A paired token over Tailscale (`wss://`, the phone's pairing, a `machine`
+  device with `full` scope) or `ssh://` (`ptyro proxy`, §16.2). Adding a machine asks which and
+  checks the link before saving it.
+- **Full scope** between linked machines; revoking the token (or removing the machine) cuts it.
+- **Same version.** A link to a daemon of another version stays down and says what to do and
+  where: `laptop2 runs ptyro 0.0.11, this is 0.0.12: run \`ptyro daemon upgrade\` on laptop2 (after
+  updating ptyro there)` (the older side is named); the TUI and web offer it as the fix, a toast
+  when the link is tried and a line on the machine's header.
+- **Offline:** the workspaces of an unreachable machine stay listed, greyed, read-only, with the
+  last sessions and screens known and "offline since 14:02"; anything that would change them is
+  refused with that message; the link retries (backoff to 60 s) and comes back by itself.
+- **Addresses:** `laptop2:fix-flaky-test` (sessions), `laptop2:myrepo/feat` (worktrees),
+  `laptop2:work` (workspaces), in the CLI, the palette and completions. A local name needs no
+  prefix; a bare name that only a remote has resolves to it, an ambiguous one is refused with
+  both qualified names.
+- **Alerts come through the daemon you are connected to:** a mirror's attention events are the
+  local daemon's notifications (desktop, sinks, web push). A phone paired with both machines may
+  hear the same alert twice; both use the same notification `tag` (`<session id>:<since_ms>`), so
+  the phone shows one.
+- **New workspace asks which machine** (local first). It is created there.
+- **The sidebar shows every workspace stacked** (local first, then each machine's), each a
+  header with its machine chip in the machine's colour (§16.4a): `laptop2 / work [profile]`, then
+  project → worktree → session. **One pane layout for everything**: panes mix workspaces and
+  machines; each pane header names workspace, machine and profile. "The current workspace" (for
+  `n`, `C-n`, `N`, the status bar's profile, attention scope) is the selected row's, else the
+  focused pane's. `w` jumps to a workspace's header (grouped by machine, offline greyed), unfolding
+  it.
+
+**[built MM1.B]** What was built (`crates/ptyro-daemon/src/machines.rs`, `conn.rs`,
+`crates/ptyro/src/machines.rs`, `crates/ptyro-tui/src/tree.rs`, `web/src/machines.ts`):
+- **Machines** are kept in `kv` (`machines`: name, transport, added_ms, hidden); a token is a file
+  of its own, `data/machines/<name>.token` (0600, in a 0700 directory), never in the database or a
+  reply. `ptyro machine add|ls|rm|hide|unhide|retry|pair`; `MachineList`, `MachineAdd{name?,
+  transport, token?, force}` (it dials first: unreachable is refused unless `force`; a version that
+  differs is kept and shown as such), `MachineRemove`, `MachineHide{name, workspace, hidden}`,
+  `MachineRetry`; `MachineUpdated`/`MachineRemoved` events. Its name defaults to what it calls
+  itself; this machine's own name is refused.
+- **The link** is always a child process whose stdin and stdout carry the protocol, so the daemon
+  needs no WebSocket or TLS of its own: `ssh host ptyro proxy` (§16.2, `PTYRO_SSH`) or `ptyro
+  machine-bridge --url … [--fingerprint …]` (hidden), which speaks to the other machine's `ptyro
+  serve` (`/ws`, one message per frame) over its HTTPS, accepting a server only if its chain holds
+  the certificate authority with the paired fingerprint and that authority signed it for the name
+  connected to (`ws://` is plain, for Tailscale only). Hello kind `Machine`; over a token, the
+  device's `machine` flag (`DevicePair{machine: true}`, `ptyro machine pair`) marks it. The code
+  `machine pair` prints is a link: `https://HOST:PORT/#machine=ptp_…&ca=FP&name=laptop2`;
+  `machine add CODE` claims it once (`POST /api/pair`, the same pin) for the token.
+- **Same version** is checked against `Welcome.daemon_version`; a mismatch leaves the link down
+  (retried every 5 minutes, or on `retry`) with `error` and `fix` naming the older side.
+- **The mirror** holds what the link heard, qualified on arrival: a JSON walk over replies and
+  events gives sessions, workspaces, projects, worktrees, profiles, inbox entries and usage the
+  `machine` field and their names the prefix (sessions: `name`, `workspace`, `profile`; workspaces:
+  `name`, `profile`; projects: `slug`, `pin`; worktrees: `project_slug`, `profile`; profiles:
+  `name`; inbox: `session_name`, `workspace`, `profile`; usage: `profile`). Ids stay as they are
+  (unique everywhere). A client id there (a controller) becomes ours when it is our client's
+  upstream, else one with the top bit set that matches no client here. The mirror is refreshed
+  whole on (re)connect and on `EventsLost`; what went is announced as removed. Its events go out on
+  a channel of their own (`Daemon.mirrored`), heard by clients only, never by this daemon's own
+  machinery. A link pings with `Status` every 20 s and counts 15 s of silence as gone (a laptop
+  that sleeps never closes its end).
+- **Routing** (`handle_as`): unless the caller is a link, a request whose addresses (`addr`,
+  `name`, `workspace`, `project`, `worktree`, `session`, `target`, and those in its `spec`) carry
+  `laptop2:` or the id of something of laptop2's is checked against this daemon's scopes, sent over
+  the link with the prefix taken off its addresses only (never off text), and its reply qualified.
+  A list (`List`, `WorkspaceList`, `ProjectList`, `WorktreeList` of all, `ProfileList`, `Usage`,
+  `Inbox`) gains every mirror's shown part. A request this machine answers `not found` is retried
+  on the one mirror that has that bare name; two that have it: refused, naming both. Requests
+  about this machine itself are never routed (devices, push, the scratchpad, views, hooks and
+  status lines, runs, recipes, fan-outs, gates, compare, mail and leases, change sets, profiles'
+  own operations, doctor, the web server, `Agents`, `Editors`, machines).
+- **Screens and keys** (`conn.rs`): a client's `Subscribe`, `Unsubscribe`, `Ack`, `Input`,
+  `Resize` and `Focus` for a mirrored session go over an upstream connection of that client's own
+  to the machine (made on first use), so frames, acks, control and sizes work as they do here; it
+  passes back only `Screen`, `Chat` and its own `Clipboard`. A device below `control` watches
+  without typing or sizing, as here. Offline, these are dropped.
+- **Alerts:** an inbox entry from a mirror is delivered by this daemon's channels (`deliver`:
+  terminal, desktop, sinks, web push) under this machine's `notifications.on` and quiet hours; push
+  tags are `ptyro-<session id>` on every machine, so a phone paired with both shows one.
+- **The TUI** stacks every workspace (§11.2j); the web app labels workspaces and projects with
+  their machine (`laptop2 / work`), gives other machines' sessions a chip in the machine's colour,
+  asks which machine in the new-workspace form, and has More → Machines.
+- **Deviations from the decision:** an offline machine's *sessions* stay listed as they were,
+  but its screens are only what a client already had (none is kept by the daemon); marking a
+  mirrored inbox entry read isn't routed (it is read-only here); the wizard offers this machine's
+  agents and editors in a remote workspace too.
 
 ### 16.5 E2E relay (much later)
 

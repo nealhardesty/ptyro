@@ -208,7 +208,7 @@ fn pem_der(pem: &str) -> Result<Vec<u8>, Error> {
         .map_err(|e| Error::internal(format!("ca.pem: {e}")))
 }
 
-fn fingerprint(der: &[u8]) -> String {
+pub(crate) fn fingerprint(der: &[u8]) -> String {
     use sha2::Digest;
     sha2::Sha256::digest(der).iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(":")
 }

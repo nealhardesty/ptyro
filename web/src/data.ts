@@ -12,7 +12,13 @@ export interface Worktree {
   is_root: boolean; profile?: string | null; state: string; ports?: any; created_ms: number; last_used_ms?: number | null;
   status?: RepoStatus | null; locked: boolean; pr?: PrInfo | null; title?: string | null; integrated?: string | null;
 }
-export interface Workspace { id: string; name: string; profile: string; notify: string; projects: string[]; created_ms: number }
+export interface Workspace { id: string; name: string; profile: string; notify: string; projects: string[]; created_ms: number; machine?: string | null }
+/// Another machine this daemon mirrors (MM1.B): its workspaces show here as `laptop2:work`.
+export interface Machine {
+  name: string; transport: { t: "ssh"; target: string } | { t: "token"; url: string; fingerprint?: string | null };
+  state: "connecting" | "online" | "offline" | "mismatch"; since_ms?: number | null; version?: string | null;
+  workspaces: string[]; hidden: string[]; error?: string | null; fix?: string | null; added_ms: number;
+}
 export interface Agent { name: string; program: string; installed: boolean }
 
 export const data = {
@@ -21,11 +27,23 @@ export const data = {
   workspaces: new Map<string, Workspace>(),
   agents: [] as Agent[],
   defaultAgent: "claude",
+  machines: new Map<string, Machine>(),
   /// What each workspace last started (UX3.2: quick new); none: the default agent.
   lastLaunch: new Map<string, LastLaunch | null>(),
 };
 
 export interface LastLaunch { agent?: string | null; profile?: string | null; argv?: string[] }
+
+/// `laptop2:work` → ["laptop2", "work"]; this machine's `work` → [null, "work"].
+export function splitMachine(name: string): [string | null, string] {
+  const i = name.indexOf(":");
+  if (i > 0 && data.machines.has(name.slice(0, i))) return [name.slice(0, i), name.slice(i + 1)];
+  return [null, name];
+}
+/// `laptop2 / work`, or `work` for this machine's.
+export const wsLabel = (name: string): string => { const [m, w] = splitMachine(name); return m ? `${m} / ${w}` : w; };
+/// The machine a name belongs to, when it is another one (and how its link stands).
+export const machineOf = (name: string | null | undefined): Machine | undefined => name ? data.machines.get(splitMachine(name)[0] ?? "") : undefined;
 
 /// The workspace a worktree's sessions belong to: its project's first, else `main`.
 export const workspaceOf = (w: Worktree): string => [...data.workspaces.values()].find((x) => x.projects.includes(w.project))?.name ?? "main";
@@ -48,12 +66,14 @@ const byId = <T extends { id: string }>(list: T[]): Map<string, T> => new Map(li
 
 /// Everything, again (a fresh connection, or after something the events don't cover).
 export async function loadAll(): Promise<void> {
-  const [p, w, ws, ag] = await Promise.allSettled([
+  const [p, w, ws, ag, mm] = await Promise.allSettled([
     conn.request({ t: "project_list" }),
     conn.request({ t: "worktree_list" }),
     conn.request({ t: "workspace_list" }),
     conn.request({ t: "agents" }),
+    conn.request({ t: "machine_list" }),
   ]);
+  if (mm.status === "fulfilled") data.machines = new Map((mm.value.machines as Machine[]).map((m) => [m.name, m]));
   if (p.status === "fulfilled") data.projects = byId<Project>(p.value.projects);
   if (w.status === "fulfilled") data.worktrees = byId<Worktree>(w.value.worktrees);
   if (ws.status === "fulfilled") data.workspaces = byId<Workspace>(ws.value.workspaces);
@@ -71,6 +91,8 @@ export function onEvent(e: any): boolean {
     case "workspace_removed": data.workspaces.delete(e.id); break;
     case "worktree_updated": data.worktrees.set(e.info.id, e.info); break;
     case "worktree_removed": data.worktrees.delete(e.id); break;
+    case "machine_updated": data.machines.set(e.info.name, e.info); break;
+    case "machine_removed": data.machines.delete(e.name); break;
     default: return false;
   }
   return true;

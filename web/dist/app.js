@@ -6,12 +6,13 @@ import { Screen } from "./screen.js";
 import { conn, store, token } from "./conn.js";
 import { Term } from "./term.js";
 import { actions, ago, h, patch, sheet, tipOf, ui, views } from "./kit.js";
-import { data, loadAll, onEvent } from "./data.js";
+import { data, loadAll, machineOf, onEvent, splitMachine } from "./data.js";
 import "./projects.js";
 import "./review.js";
 import "./runs.js";
 import "./settings.js";
 import "./panel.js";
+import { machineChip } from "./machines.js";
 import { initNotes, notesConnected, notesEvent, notesLink, notesNeedsLoad, notesLoad, notesNoteButton, notesQuickAdd, notesShown, notesStart, notesView } from "./notes.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
 import { coach } from "./settings.js";
@@ -197,7 +198,9 @@ function sessionCard(s) {
     const detail = s.status?.status === "blocked" ? s.status.detail ?? s.attention?.text : s.activity ?? s.status?.detail ?? s.title;
     const card = h("a", { class: `card ${st}${selecting && marked.has(s.id) ? " picked" : ""}`, href: selecting ? "#/" : `#/s/${encodeURIComponent(s.id)}`, title: tip("session.open"),
         onclick: selecting ? (e) => { e.preventDefault(); if (!marked.delete(s.id))
-            marked.add(s.id); render(); } : undefined }, h("span", { class: "glyph" }, selecting ? (marked.has(s.id) ? "☑" : "☐") : GLYPH[st] ?? "·"), h("div", { class: "main" }, h("div", { class: "name" }, s.name, s.agent ? h("small", {}, ` ${s.agent}`) : null), h("div", { class: "sub" }, [st, s.project, s.worktree].filter(Boolean).join(" · ")), detail ? h("div", { class: "detail" }, detail) : null), h("time", {}, s.status ? ago(s.status.since_ms) : ago(s.created_ms)), notesNoteButton(s, true));
+            marked.add(s.id); render(); } : undefined }, h("span", { class: "glyph" }, selecting ? (marked.has(s.id) ? "☑" : "☐") : GLYPH[st] ?? "·"), h("div", { class: "main" }, 
+    // Another machine's (MM1.B): its name without the machine, and the machine's chip.
+    h("div", { class: "name" }, s.machine ? splitMachine(s.name)[1] : s.name, s.agent ? h("small", {}, ` ${s.agent}`) : null, s.machine ? " " : null, machineChip(s.name)), h("div", { class: "sub" }, [st, s.project, s.worktree].filter(Boolean).join(" · ")), detail ? h("div", { class: "detail" }, detail) : null), h("time", {}, s.status ? ago(s.status.since_ms) : ago(s.created_ms)), notesNoteButton(s, true));
     if (s.status?.status === "blocked" && s.state.t === "running") {
         return h("div", { class: "blocked-wrap" }, card, h("div", { class: "actions", title: tip("answer") }, h("button", { class: "allow", onclick: () => void answer(s.id, "allow") }, "Allow"), h("button", { class: "deny", onclick: () => void answer(s.id, "deny") }, "Deny")));
     }
@@ -301,7 +304,9 @@ function sessionView(id) {
         updateChat(id, sh);
     patch(sh.el, [
         header(s.name, true, h("button", { class: "icon", title: tipOf("session.menu"), "aria-label": "More", onclick: () => sessionMenu(s) }, "⋯")),
-        h("div", { class: `pill ${st}` }, GLYPH[st] ?? "·", " ", st, s.status?.detail && !blocked ? ` · ${s.status.detail}` : "", s.status ? ` · ${ago(s.status.since_ms)}` : "", !chat && app.screens.get(id)?.title ? ` · ${app.screens.get(id).title}` : ""),
+        h("div", { class: `pill ${st}` }, GLYPH[st] ?? "·", " ", st, s.status?.detail && !blocked ? ` · ${s.status.detail}` : "", s.status ? ` · ${ago(s.status.since_ms)}` : "", !chat && app.screens.get(id)?.title ? ` · ${app.screens.get(id).title}` : "", s.machine ? " · " : "", machineChip(s.name)),
+        // Its machine is down (MM1.B): this is how it was, and what to do.
+        ...(machineOf(s.name) && machineOf(s.name).state !== "online" ? [h("p", { class: "banner warn" }, `${machineOf(s.name).name} isn't reachable: this is how it was. `, machineOf(s.name).fix ?? "")] : []),
         ...(blocked ? [h("section", { class: "prompt" }, h("div", {}, h("b", {}, s.status?.kind === "permission" ? "Wants permission" : "Waiting for you"), s.held ? h("span", { class: "tag", title: "answers go to the agent as a decision" }, "exact") : null), h("pre", {}, s.status?.detail ?? s.attention?.text ?? ""), h("div", { class: "actions", title: tip("answer") }, h("button", { class: "allow", onclick: () => void answer(id, "allow") }, "Allow"), h("button", { class: "always", onclick: () => void answer(id, "always") }, "Always"), h("button", { class: "deny", onclick: () => void answer(id, "deny") }, "Deny")))] : []),
         ...(s.state.t === "dormant" ? [h("section", { class: "revive" }, h("span", {}, "Hibernated: its conversation is kept."), h("button", { class: "primary", title: tipOf("session.resume"), onclick: () => void conn.request({ t: "resume", addr: id }).then(() => toast("Resumed"), (e) => toast(e.message)) }, "Resume"))]
             : s.state.t !== "running" ? [h("section", { class: "revive" }, h("span", {}, s.state.t === "failed" ? "It failed to run." : s.state.code != null ? `Exited with ${s.state.code}.` : "Exited."), h("button", { class: "primary", title: tipOf("session.restart"), onclick: () => void conn.request({ t: "restart", addr: id }).then(() => toast("Restarted"), (e) => toast(e.message)) }, "Restart"))] : []),

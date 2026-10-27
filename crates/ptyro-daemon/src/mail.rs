@@ -66,6 +66,13 @@ pub struct Caller {
     pub grant: Option<crate::devices::Grant>,
 }
 
+impl Caller {
+    /// Another machine's daemon mirroring this one (MM1.B), over ssh or with its token.
+    pub fn is_link(&self) -> bool {
+        self.kind == Some(ClientKind::Machine) || self.grant.is_some_and(|g| g.machine)
+    }
+}
+
 fn state_of(m: &MessageRow) -> &'static str {
     if m.acked_ms.is_some() {
         "acked"

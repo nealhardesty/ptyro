@@ -17,6 +17,7 @@ toml_edit.workspace = true
 anyhow.workspace = true
 futures.workspace = true
 ptyro-agents.workspace = true
+ptyro-client.workspace = true
 ptyro-drive.workspace = true
 ptyro-core.workspace = true
 ptyro-git.workspace = true

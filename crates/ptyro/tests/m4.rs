@@ -624,7 +624,7 @@ async fn after_turn_runs_trusted_scripts_and_branches_follow_prompts() {
         else {
             panic!()
         };
-        if wt.branch.as_deref() == Some("ptyro/work-0-3-fix-the-login") {
+        if wt.branch.as_deref() == Some("work-0-3-fix-the-login") {
             break;
         }
         assert!(Instant::now() < deadline, "branch not renamed: {:?}", wt.branch);

@@ -37,7 +37,7 @@ action by name.
 | `n` | new task: say what to do, ⏎ starts the default agent on it in a new worktree named after it (Tab edits the name, `C-o` picks the agent and where, an empty ⏎ is a random name) |
 | `C-n` | quick new: another of what this workspace last started (`claude`, `claude@work`, a shell…; the default agent at first) in this worktree, no questions. The which-key menu says what it starts: `+ claude` |
 | `N` | new worktree of this project (+ an agent), after its setup script |
-| `w` | switch workspace |
+| `w` | go to a workspace: every workspace (yours, then other machines') is in the sidebar, and this jumps to its header, unfolded; `+ new workspace` asks which machine when there are others |
 | `o` | open the worktree in an editor (`[editors]`; nvim opens inside ptyro) |
 | `r` / `R` | run the project's default run script / pick a lifecycle script |
 | `a` | jump to the session that needs you most (blocked first) |

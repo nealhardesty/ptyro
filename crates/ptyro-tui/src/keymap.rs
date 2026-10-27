@@ -66,6 +66,16 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("worktree.gc", "Stale worktrees (merged, gone, unused): pick one to archive it"),
     a("shell.new", "New shell: another one of its own in this worktree, full sized"),
     a(
+        "machine.add",
+        "Mirror another machine's workspaces here: ssh://host, or the code its machine.pair printed",
+    ),
+    a("machine.pair", "A code for another machine to mirror this one (machine.add there)"),
+    a("machine.list", "Other machines mirrored here: their state and workspaces"),
+    a("machine.retry", "Try this workspace's machine's link again now"),
+    a("machine.hide", "Hide this workspace of another machine here (nothing changes there)"),
+    a("machine.unhide", "Show a hidden workspace of another machine again"),
+    a("machine.remove", "Stop mirroring this workspace's machine (nothing changes there)"),
+    a(
         "shell.here",
         "The quick terminal: this worktree's one shell, as [ui] shell_style says (a full-sized panel, or a drawer while its project is open); again focuses, then hides it",
     ),

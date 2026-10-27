@@ -231,7 +231,7 @@ async fn the_worktree_lifecycle() {
     .unwrap();
     let Reply::WorktreeCreated { info, setup, untrusted, notes, .. } = r else { panic!() };
     assert!(setup.is_none() && untrusted.is_some(), "{notes:?}");
-    assert_eq!(info.branch.as_deref(), Some("ptyro/first"));
+    assert_eq!(info.branch.as_deref(), Some("first"));
     assert!(info.path.join(".env").exists(), ".worktreeinclude: matched and ignored");
     assert!(!info.path.join("README").is_symlink());
     assert!(info.path.join("config/local.yml").exists(), "worktree.copy");
@@ -287,7 +287,7 @@ async fn the_worktree_lifecycle() {
     .await
     .unwrap();
     assert_eq!(s.worktree.as_deref(), Some(second.id.as_str()));
-    screen_with(&w.d, &c, &s.name, "wt=second branch=ptyro/second project=app").await;
+    screen_with(&w.d, &c, &s.name, "wt=second branch=second project=app").await;
     wait_worktree(&c, "app/second", |w| w.locked).await;
     assert!(
         w.git(&root, &["worktree", "list", "--porcelain"])
@@ -349,20 +349,20 @@ async fn the_worktree_lifecycle() {
         panic!()
     };
     let notes = notes.join("\n");
-    assert!(notes.contains("kept branch ptyro/second"), "{notes}");
+    assert!(notes.contains("kept branch second"), "{notes}");
     assert!(notes.contains("archive script exited 0"), "{notes}");
     assert!(root.join("archived.txt").exists(), "archive ran before removal");
     assert!(!second.path.exists());
-    assert!(w.git(&root, &["branch"]).contains("ptyro/second"));
+    assert!(w.git(&root, &["branch"]).contains("second"));
 
     // A clean worktree whose branch is merged: removed together with its branch.
     w.git(&info.path, &["commit", "-q", "--allow-empty", "-m", "feature"]);
-    w.git(&root, &["merge", "-q", "--ff-only", "ptyro/first"]);
+    w.git(&root, &["merge", "-q", "--ff-only", "first"]);
     w.git(&root, &["push", "-q", "origin", "main"]);
     let out = w.ok(&["wt", "rm", "app/first"]);
-    assert!(out.contains("deleted branch ptyro/first"), "{out}");
+    assert!(out.contains("deleted branch first"), "{out}");
     assert!(out.contains("released ports 41000-41004"), "{out}");
-    assert!(!w.git(&root, &["branch"]).contains("ptyro/first"));
+    assert!(!w.git(&root, &["branch"]).contains("first"));
     // The port block is free again.
     let r = new_wt(
         &c,
@@ -455,8 +455,8 @@ async fn scripts_status_and_run_modes() {
     w.git(&wt.path, &["add", "-A"]);
     w.git(&wt.path, &["commit", "-q", "-m", "Add the new parser"]);
     let out = w.ok(&["wt", "rename-branch", "svc/a"]);
-    assert!(out.contains("ptyro/add-the-new-parser"), "{out}");
-    w.git(&wt.path, &["push", "-q", "-u", "origin", "ptyro/add-the-new-parser"]);
+    assert!(out.contains("add-the-new-parser"), "{out}");
+    w.git(&wt.path, &["push", "-q", "-u", "origin", "add-the-new-parser"]);
     let out = w.cli(&["wt", "rename-branch", "svc/a", "other"]);
     assert!(!out.status.success() && String::from_utf8_lossy(&out.stderr).contains("pushed"));
 }
@@ -827,8 +827,15 @@ async fn tui_wizard_fast_path_trusts_sets_up_and_follows_the_agent() {
         "the pane follows the agent once setup is done: {done}"
     );
     assert!(done.contains("profile=work"), "{done}");
+    // The branch is named like the worktree (no `ptyro/` since v0.0.13).
+    let wt = done
+        .split("fake-claude wt=")
+        .nth(1)
+        .and_then(|r| r.split_whitespace().next())
+        .unwrap_or_default()
+        .to_owned();
     assert!(
-        done.contains("[wrk]") && done.contains("· ptyro/"),
+        !wt.is_empty() && done.contains("[wrk]") && done.contains(&format!("· {wt}")),
         "identity and branch in the header: {done}"
     );
     // On the daemon side: setup ran (exited 0) before the agent started.
@@ -891,7 +898,7 @@ async fn tui_workspaces_tree_folding_and_worktree_removal() {
     assert!(r.at(1.4).contains("▾ dirty") && r.at(1.4).contains("worker"), "{}", r.at(1.4));
     let folded = r.at(2.2);
     assert!(folded.contains("▸ dirty") && !folded.contains("1 • worker"), "{folded}");
-    assert!(r.at(2.9).contains("Remove worktree lib/dirty (ptyro/dirty)?"), "{}", r.at(2.9));
+    assert!(r.at(2.9).contains("Remove worktree lib/dirty (dirty)?"), "{}", r.at(2.9));
     let refused = r.at(3.8);
     assert!(refused.contains("1 untracked file") && refused.contains("scratch.txt"), "{refused}");
     assert!(
@@ -904,11 +911,13 @@ async fn tui_workspaces_tree_folding_and_worktree_removal() {
         switcher.contains("Workspaces") && switcher.contains("main") && switcher.contains("other"),
         "{switcher}"
     );
+    // MM1.B: every workspace is in the sidebar; `w` goes to one's header (now the workspace you
+    // are in), the others stay listed.
     let other = r.at(5.8);
-    assert!(other.contains("WORKSPACE other") && !other.contains("lib"), "{other}");
-    // The choice is remembered: a plain attach opens in `other`.
-    let r = run(w.tui(&[]).snapshot(1.5).send(1.8, "\\x11d").timeout(3.0)).await;
-    assert!(r.at(1.5).contains("WORKSPACE other"), "{}", r.at(1.5));
+    assert!(
+        other.contains(" · other") && other.contains("▾ other") && other.contains("lib"),
+        "{other}"
+    );
 }
 
 #[tokio::test]
@@ -960,5 +969,5 @@ async fn tui_new_worktree_wizard() {
     assert!(done.contains("fake-claude wt=spike"), "{done}");
     assert!(done.contains("▾ spike"), "{done}");
     let c = w.d.client().await.unwrap();
-    assert_eq!(worktree(&c, "tool/spike").await.branch.as_deref(), Some("ptyro/spike"));
+    assert_eq!(worktree(&c, "tool/spike").await.branch.as_deref(), Some("spike"));
 }

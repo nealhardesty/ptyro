@@ -567,7 +567,7 @@ impl Store {
             let mut out = Vec::new();
             while let Some(r) = rows.next()? {
                 let kind: String = r.get(4)?;
-                out.push(InboxEntry {
+                out.push(InboxEntry { machine: None,
                     id: r.get(0)?,
                     session: r.get(1)?,
                     session_name: r.get(2)?,
@@ -687,7 +687,7 @@ impl Store {
             let mut st = c.prepare("SELECT id, name, profile, notify, created_at FROM workspace ORDER BY created_at")?;
             let mut rows = st.query([])?;
             while let Some(r) = rows.next()? {
-                reg.workspaces.push(WorkspaceInfo {
+                reg.workspaces.push(WorkspaceInfo { machine: None,
                     id: r.get(0)?,
                     name: r.get(1)?,
                     profile: r.get(2)?,
@@ -710,7 +710,7 @@ impl Store {
             )?;
             let mut rows = st.query([])?;
             while let Some(r) = rows.next()? {
-                reg.projects.push(ProjectInfo {
+                reg.projects.push(ProjectInfo { machine: None,
                     id: r.get(0)?,
                     slug: r.get(1)?,
                     root: r.get::<_, String>(2)?.into(),
@@ -732,7 +732,7 @@ impl Store {
                 let state: String = r.get(9)?;
                 let port_base: Option<i64> = r.get(10)?;
                 let port_count: Option<i64> = r.get(11)?;
-                reg.worktrees.push(WorktreeInfo {
+                reg.worktrees.push(WorktreeInfo { machine: None,
                     id: r.get(0)?,
                     project: r.get(1)?,
                     project_slug: r.get(2)?,
@@ -1219,6 +1219,7 @@ mod tests {
             ProcessState::Failed { .. }
         ));
         let e = InboxEntry {
+            machine: None,
             id: 0,
             session: "agent".into(),
             session_name: "claude".into(),
@@ -1246,6 +1247,7 @@ mod tests {
     async fn registry_round_trips() {
         let s = Store::open_in_memory().unwrap();
         let p = ProjectInfo {
+            machine: None,
             id: "p1".into(),
             slug: "repo".into(),
             root: "/r".into(),
@@ -1257,6 +1259,7 @@ mod tests {
         };
         s.save_project(p.clone());
         let ws = WorkspaceInfo {
+            machine: None,
             id: "w1".into(),
             name: "main".into(),
             profile: "default".into(),
@@ -1266,6 +1269,7 @@ mod tests {
         };
         s.save_workspace(ws.clone());
         let mut wt = WorktreeInfo {
+            machine: None,
             id: "t1".into(),
             project: "p1".into(),
             project_slug: "repo".into(),

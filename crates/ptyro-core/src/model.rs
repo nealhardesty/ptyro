@@ -75,6 +75,10 @@ pub fn render_branch(t: &str, vars: &BTreeMap<&str, String>) -> String {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectInfo {
     pub id: String,
+    /// The machine it lives on, when that is another one this daemon mirrors (MM1.B, SPEC
+    /// §16.4b); `None`: here. Its names then carry the machine (`laptop2:work`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
     pub slug: String,
     /// The main checkout.
     pub root: PathBuf,
@@ -232,6 +236,10 @@ impl Left {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorktreeInfo {
     pub id: String,
+    /// The machine it lives on, when that is another one this daemon mirrors (MM1.B, SPEC
+    /// §16.4b); `None`: here. Its names then carry the machine (`laptop2:work`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
     /// Project id.
     pub project: String,
     pub project_slug: String,
@@ -273,6 +281,14 @@ pub struct WorktreeInfo {
 }
 
 impl WorktreeInfo {
+    /// Its branch is still the one it was made with by default: its name (since v0.0.13), or
+    /// `ptyro/<name>` (before). Such a branch says nothing the name doesn't.
+    pub fn default_branch(&self) -> bool {
+        self.branch
+            .as_deref()
+            .is_some_and(|b| b == self.name || b == format!("ptyro/{}", self.name))
+    }
+
     /// `myrepo/brisk-rook`, `myrepo/@root`.
     pub fn qualified(&self) -> String {
         format!("{}/{}", self.project_slug, self.name)
@@ -302,6 +318,10 @@ pub const ROOT_WORKTREE: &str = "@root";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceInfo {
     pub id: String,
+    /// The machine it lives on, when that is another one this daemon mirrors (MM1.B, SPEC
+    /// §16.4b); `None`: here. Its names then carry the machine (`laptop2:work`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
     pub name: String,
     pub profile: String,
     /// `all | badge | mute` (SPEC §9.6, used from M4).
@@ -314,10 +334,104 @@ pub struct WorkspaceInfo {
 pub const MAIN_WORKSPACE: &str = "main";
 pub const DEFAULT_PROFILE: &str = "default";
 
+// ── many machines (MM1.B, SPEC §16.4b) ─────────────────────────────────────
+
+/// How this daemon reaches another machine's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "t", rename_all = "snake_case")]
+pub enum MachineTransport {
+    /// `ssh host ptyro proxy` (SPEC §16.2): keys or an agent, no ports, nothing to pair.
+    Ssh { target: String },
+    /// The other machine's `ptyro serve`, with a token it paired to this one (`machine pair`).
+    /// `fingerprint`: the SHA-256 of its certificate authority, pinned (its own HTTPS).
+    Token {
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fingerprint: Option<String>,
+    },
+}
+
+impl MachineTransport {
+    /// For people: `ssh://me@laptop2`, `https://laptop2.tail.ts.net:7091`.
+    pub fn label(&self) -> String {
+        match self {
+            Self::Ssh { target } if target.starts_with("ssh://") => target.clone(),
+            Self::Ssh { target } => format!("ssh://{target}"),
+            Self::Token { url, .. } => url.clone(),
+        }
+    }
+}
+
+/// Where a link to another machine stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MachineState {
+    /// Trying (at start, after a drop, after the backoff).
+    #[default]
+    Connecting,
+    Online,
+    /// Not reachable; its workspaces show as they were last seen.
+    Offline,
+    /// Reachable, but it runs another version of ptyro: the link stays down until they match.
+    Mismatch,
+}
+
+impl MachineState {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Connecting => "connecting",
+            Self::Online => "online",
+            Self::Offline => "offline",
+            Self::Mismatch => "other version",
+        }
+    }
+}
+
+/// Another machine this daemon mirrors (MM1.B).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MachineInfo {
+    /// What its names carry here: `laptop2` in `laptop2:work`.
+    pub name: String,
+    pub transport: MachineTransport,
+    pub state: MachineState,
+    /// Since when it is in `state`.
+    #[serde(default)]
+    pub since_ms: Option<u64>,
+    /// Its ptyro version, once heard.
+    #[serde(default)]
+    pub version: Option<String>,
+    /// What it calls itself (`DaemonStatus.machine`).
+    #[serde(default)]
+    pub calls_itself: Option<String>,
+    /// Its workspaces, by their own names, shown or not.
+    #[serde(default)]
+    pub workspaces: Vec<String>,
+    /// Those not shown here.
+    #[serde(default)]
+    pub hidden: Vec<String>,
+    /// Why it isn't online, in words.
+    #[serde(default)]
+    pub error: Option<String>,
+    /// What to do about it, and where (`run ptyro daemon upgrade on laptop2`).
+    #[serde(default)]
+    pub fix: Option<String>,
+    pub added_ms: u64,
+}
+
+/// `laptop2:work` → (`laptop2`, `work`); a name without a machine is `None`.
+pub fn split_machine(name: &str) -> Option<(&str, &str)> {
+    let (m, rest) = name.split_once(':')?;
+    (!m.is_empty() && !rest.is_empty() && crate::names::validate(m).is_ok()).then_some((m, rest))
+}
+
 /// A profile as clients see it: never any secret values.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProfileInfo {
     pub name: String,
+    /// The machine it lives on, when that is another one this daemon mirrors (MM1.B, SPEC
+    /// §16.4b); `None`: here. Its names then carry the machine (`laptop2:work`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
     pub label: String,
     #[serde(default)]
     pub color: Option<String>,
@@ -365,7 +479,7 @@ pub struct WorktreeSpec {
     /// Default: a friendly random name.
     #[serde(default)]
     pub name: Option<String>,
-    /// Default: the branch template (`ptyro/{name}`).
+    /// Default: the branch template (`{name}`).
     #[serde(default)]
     pub branch: Option<String>,
     /// Check out the existing branch `branch` instead of creating one.

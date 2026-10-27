@@ -896,7 +896,7 @@ impl Default for Worktrees {
     fn default() -> Self {
         Self {
             location: WorktreeLocation::Data,
-            branch_template: "ptyro/{name}".into(),
+            branch_template: "{name}".into(),
             start_agents: StartAgents::AfterSetup,
             fetch: true,
             watch: true,

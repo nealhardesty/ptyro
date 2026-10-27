@@ -130,6 +130,11 @@ pub fn problem(name: &str) -> Option<String> {
     None
 }
 
+/// `raw` as a name: itself when valid, else tidied (`Laptop 2` → `laptop-2`).
+pub fn as_name(raw: &str) -> Option<String> {
+    if problem(raw).is_none() { Some(raw.to_owned()) } else { tidy(raw) }
+}
+
 /// `raw` turned into a valid name (lowercased, anything else folded into `-`), when that
 /// changes it and works: `My Feature/2` → `my-feature-2`.
 pub fn tidy(raw: &str) -> Option<String> {

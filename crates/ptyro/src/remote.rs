@@ -277,6 +277,27 @@ pub fn qr(text: &str) -> Option<String> {
     )
 }
 
+/// Where this machine's web app is reached from elsewhere (its base URL), notes about it, its
+/// certificate authority's fingerprint, and whether `ptyro serve` runs at all.
+pub fn served_base(ctx: &Ctx, url: Option<String>) -> (String, Vec<String>, Option<String>, bool) {
+    let mut config = Config::load(&Config::path(&ctx.paths)).unwrap_or_default();
+    // The running `ptyro serve`'s own address (it knows its flags); else what config implies.
+    let served = served(&ctx.paths);
+    let https = !(config.remote.insecure || config.remote.trusted_proxy);
+    // `ptyro serve --listen` can differ from the config: what it listens on is what counts.
+    if let Some(l) = served.as_ref().and_then(|s| s.listen.clone()) {
+        config.remote.listen = l;
+    }
+    let (base, notes) = match (&url, &served) {
+        (None, Some(s)) if config.remote.public_url.is_none() => {
+            (with_port(&s.url, default_port(&s.url)), Vec::new())
+        }
+        _ => resolve_base(&config, url, https, tailscale_url(&config.remote.listen)),
+    };
+    let ca = served.as_ref().and_then(|s| s.ca_fingerprint.clone());
+    (base, notes, ca, served.is_some())
+}
+
 pub async fn pair(
     ctx: &Ctx,
     name: String,
@@ -295,27 +316,13 @@ pub async fn pair(
         _ => None,
     };
     let (device, code, expires_ms, replaces) =
-        match c.request(Request::DevicePair { name, scope }).await? {
+        match c.request(Request::DevicePair { name, scope, machine: false }).await? {
             Reply::Pairing { device, code, expires_ms, replaces } => {
                 (device, code, expires_ms, replaces)
             }
             r => return Err(unexpected(r)),
         };
-    let mut config = Config::load(&Config::path(&ctx.paths)).unwrap_or_default();
-    // The running `ptyro serve`'s own address (it knows its flags); else what config implies.
-    let served = served(&ctx.paths);
-    let https = !(config.remote.insecure || config.remote.trusted_proxy);
-    // `ptyro serve --listen` can differ from the config: what it listens on is what counts.
-    if let Some(l) = served.as_ref().and_then(|s| s.listen.clone()) {
-        config.remote.listen = l;
-    }
-    let (base, notes) = match (&url, &served) {
-        (None, Some(s)) if config.remote.public_url.is_none() => {
-            (with_port(&s.url, default_port(&s.url)), Vec::new())
-        }
-        _ => resolve_base(&config, url, https, tailscale_url(&config.remote.listen)),
-    };
-    let ca = served.as_ref().and_then(|s| s.ca_fingerprint.clone());
+    let (base, notes, ca, _) = served_base(ctx, url);
     // What we print stays in scrollback and recordings, so it is a code the web app trades
     // (once, within minutes) for the token, never the token. It travels in the fragment:
     // browsers never send that to a server or put it in logs.

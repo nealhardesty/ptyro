@@ -596,7 +596,7 @@ fn finish_then_archive_on_merge() {
         w.json(&["wt", "archives", "--json"]).as_array().is_some_and(|a| !a.is_empty())
     });
     assert!(!path.exists(), "the checkout is gone");
-    assert!(w.git(&root, &["branch", "--list", "ptyro/feat"]).contains("ptyro/feat"), "kept");
+    assert!(w.git(&root, &["branch", "--list", "feat"]).contains("feat"), "kept");
     let archived = w.json(&["wt", "archives", "--json"]);
     assert_eq!(archived[0]["title"], "Add five");
     // Back, as it was.

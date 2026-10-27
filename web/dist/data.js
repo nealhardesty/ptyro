@@ -8,9 +8,21 @@ export const data = {
     workspaces: new Map(),
     agents: [],
     defaultAgent: "claude",
+    machines: new Map(),
     /// What each workspace last started (UX3.2: quick new); none: the default agent.
     lastLaunch: new Map(),
 };
+/// `laptop2:work` → ["laptop2", "work"]; this machine's `work` → [null, "work"].
+export function splitMachine(name) {
+    const i = name.indexOf(":");
+    if (i > 0 && data.machines.has(name.slice(0, i)))
+        return [name.slice(0, i), name.slice(i + 1)];
+    return [null, name];
+}
+/// `laptop2 / work`, or `work` for this machine's.
+export const wsLabel = (name) => { const [m, w] = splitMachine(name); return m ? `${m} / ${w}` : w; };
+/// The machine a name belongs to, when it is another one (and how its link stands).
+export const machineOf = (name) => name ? data.machines.get(splitMachine(name)[0] ?? "") : undefined;
 /// The workspace a worktree's sessions belong to: its project's first, else `main`.
 export const workspaceOf = (w) => [...data.workspaces.values()].find((x) => x.projects.includes(w.project))?.name ?? "main";
 /// What quick new starts in `ws`, for people: `claude`, `claude@work`, `shell`, `htop`.
@@ -33,12 +45,15 @@ export async function refreshLaunch(ws) {
 const byId = (list) => new Map(list.map((x) => [x.id, x]));
 /// Everything, again (a fresh connection, or after something the events don't cover).
 export async function loadAll() {
-    const [p, w, ws, ag] = await Promise.allSettled([
+    const [p, w, ws, ag, mm] = await Promise.allSettled([
         conn.request({ t: "project_list" }),
         conn.request({ t: "worktree_list" }),
         conn.request({ t: "workspace_list" }),
         conn.request({ t: "agents" }),
+        conn.request({ t: "machine_list" }),
     ]);
+    if (mm.status === "fulfilled")
+        data.machines = new Map(mm.value.machines.map((m) => [m.name, m]));
     if (p.status === "fulfilled")
         data.projects = byId(p.value.projects);
     if (w.status === "fulfilled")
@@ -73,6 +88,12 @@ export function onEvent(e) {
             break;
         case "worktree_removed":
             data.worktrees.delete(e.id);
+            break;
+        case "machine_updated":
+            data.machines.set(e.info.name, e.info);
+            break;
+        case "machine_removed":
+            data.machines.delete(e.name);
             break;
         default: return false;
     }

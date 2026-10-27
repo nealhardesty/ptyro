@@ -26,6 +26,8 @@ export interface Session {
   id: string;
   handle: string;
   name: string;
+  /// Another machine's (MM1.B): its name then carries it (`laptop2:fix-flaky-test`).
+  machine?: string | null;
   kind: string;
   state: { t: string; code?: number };
   size: Size;

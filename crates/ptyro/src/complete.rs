@@ -87,6 +87,11 @@ pub fn workspaces() -> Vec<CompletionCandidate> {
     workspaces.into_iter().map(|w| candidate(w.name, Some(w.profile))).collect()
 }
 
+pub fn machines() -> Vec<CompletionCandidate> {
+    let Some(Reply::Machines { machines }) = ask(Request::MachineList) else { return Vec::new() };
+    machines.into_iter().map(|m| candidate(m.name, Some(m.state.label().to_owned()))).collect()
+}
+
 fn config() -> Config {
     Paths::from_env().ok().and_then(|p| Config::load(&Config::path(&p)).ok()).unwrap_or_default()
 }

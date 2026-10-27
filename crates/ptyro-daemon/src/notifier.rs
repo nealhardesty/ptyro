@@ -64,6 +64,7 @@ impl Daemon {
             title.push_str(&format!(" ({p})"));
         }
         let mut entry = InboxEntry {
+            machine: None,
             id: 0,
             session: info.id.full(),
             session_name: info.name.clone(),

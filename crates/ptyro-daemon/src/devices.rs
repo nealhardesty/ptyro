@@ -32,6 +32,9 @@ pub struct DeviceRecord {
     /// Not claimed yet: the code's hash and when it stops working. Such a record has no token.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pairing: Option<PairingCode>,
+    /// Another machine's daemon (MM1.B): its connections are links.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub machine: bool,
 }
 
 /// What `ptyro pair` prints instead of the token (security review M2): the printed text lands
@@ -56,6 +59,7 @@ impl DeviceRecord {
             last_via: self.last_via.clone(),
             push: self.push.len() as u32,
             pending: self.pairing.is_some(),
+            machine: self.machine,
         }
     }
 }
@@ -65,6 +69,8 @@ impl DeviceRecord {
 pub struct Grant {
     pub device: u64,
     pub scope: Scope,
+    /// A machine's link (MM1.B).
+    pub machine: bool,
 }
 
 fn hash(token: &str) -> String {
@@ -150,6 +156,7 @@ pub fn needed(req: &Request) -> Scope {
         | ChatGet { .. }
         | ScratchGet
         | LastLaunch { .. }
+        | MachineList
         | ScratchTodo { .. }
         | ScratchHistory
         | ScratchPane { create: false, .. } => Scope::Read,
@@ -203,6 +210,7 @@ pub fn needed(req: &Request) -> Scope {
         // new pad pane, switching the web app's server on or off.
         Spawn { .. } | QuickShell { .. } | ScratchPane { .. } | Web { .. } => Scope::Full,
         // Everything else changes the machine, the config, the daemon or who may talk to it.
+        MachineAdd { .. } | MachineRemove { .. } | MachineHide { .. } | MachineRetry { .. } => Scope::Full,
         Shutdown { .. } | Upgrade { .. } | DevicePair { .. } | DeviceClaim { .. } | DeviceList | DeviceRevoke { .. } | SaveView { .. } | ReloadConfig | ProjectAdd { .. } | ProjectRemove { .. } | ProjectPin { .. } | ProjectScripts { .. } | ProjectTrust { .. } | ProjectUntrust { .. } | Discover { .. } | WorkspaceNew { .. } | WorkspaceSet { .. } | WorkspaceRename { .. } | WorkspaceRemove { .. } | WorkspaceMember { .. } | WorktreeNew { .. } | WorktreeRemove { .. } | WorktreeRefresh { .. } | WorktreeRun { .. } | WorktreeLock { .. } | WorktreeRenameBranch { .. } | Gc | ProjectSuggest { .. } | WorktreeArchive { .. } | WorktreeRestore { .. } | WorktreeFinish { .. } | ProfileEnv { .. } | ProfileRename { .. } | ProfileResolve { .. } | Hook { .. } | StatusLine { .. } | Report { .. } | NotifyTest | Doctor | SelfTest { .. } | WorktreeCommit { .. } | WorktreeIntegrate { .. } | WorktreePair { .. } | PrCreate { .. } | PrFix { .. } | PrAutomerge { .. } | PrWatch { .. } | PrReply { .. } | ReviewRemove { .. } | ReviewDone { .. } | RunFork { .. } | RecipeRun { .. } | Fanout { .. } | Pick { .. } | Discard { .. } | MsgCheck { .. } | MsgAck { .. } | LeaseClaim { .. } | LeaseRelease { .. } | CheckpointRestore { .. } | SetVerify { .. } | LeadStart { .. } | Lead { .. } | Cs { .. } => Scope::Full,
     }
 }
@@ -254,7 +262,7 @@ impl Daemon {
         let d = &mut devices[found?];
         d.last_seen_ms = Some(now_ms());
         d.last_via = via.map(str::to_owned);
-        Some(Grant { device: id_num(&d.id), scope: d.scope })
+        Some(Grant { device: id_num(&d.id), scope: d.scope, machine: d.machine })
     }
 
     /// Forget pairings whose code expired unclaimed.
@@ -342,7 +350,7 @@ impl Daemon {
         caller: Caller,
     ) -> Result<Reply, Error> {
         match req {
-            Request::DevicePair { name, scope } => {
+            Request::DevicePair { name, scope, machine } => {
                 let name = name.trim();
                 if name.is_empty() || name.len() > 64 {
                     return Err(Error::invalid("a device name is 1–64 characters"));
@@ -369,6 +377,7 @@ impl Daemon {
                     last_via: None,
                     push: Vec::new(),
                     pairing: Some(PairingCode { code_sha256: hash(&code), expires_ms }),
+                    machine,
                 };
                 let device = rec.info();
                 self.prune_pairings();

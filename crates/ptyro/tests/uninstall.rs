@@ -123,7 +123,7 @@ async fn the_plan_flags_lost_work_and_a_dry_run_removes_nothing() {
     assert_eq!(plan["worktrees"].as_array().unwrap().len(), 1, "{plan}");
     assert_eq!(plan["worktrees"][0]["uncommitted"], 2);
     assert_eq!(plan["uncommitted_total"], 1);
-    assert_eq!(plan["worktrees"][0]["branch"], "ptyro/fix");
+    assert_eq!(plan["worktrees"][0]["branch"], "fix");
     // A sandbox keeps the machine's things and the binary.
     assert_eq!(plan["binary"]["action"], "keep");
     assert!(plan["service"].is_null() && plan["integrations"].as_array().unwrap().is_empty());
@@ -171,8 +171,8 @@ async fn lost_work_needs_delete_and_then_only_ptyros_own_things_go() {
     assert!(w.d.client().await.is_err(), "the daemon is stopped");
     // The repository is as it was, with its branch and the snapshot ref.
     assert!(root.join("README").exists() && root.join(".git").exists());
-    let branches = git(&w.home(), &root, &["branch", "--list", "ptyro/fix"]);
-    assert!(branches.contains("ptyro/fix"), "the branch stays: {branches:?}");
+    let branches = git(&w.home(), &root, &["branch", "--list", "fix"]);
+    assert!(branches.contains("fix"), "the branch stays: {branches:?}");
     assert!(
         git(&w.home(), &root, &["worktree", "list"]).lines().count() == 1,
         "git forgot the worktree"

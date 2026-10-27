@@ -660,6 +660,7 @@ impl Daemon {
             .and_then(|p| self.project_by_id(p))
             .and_then(|p| self.home_workspace(None, Some(&p)).ok());
         let mut entry = InboxEntry {
+            machine: None,
             id: 0,
             session: session.clone(),
             session_name: format!("run {id}"),

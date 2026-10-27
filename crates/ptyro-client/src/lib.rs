@@ -73,6 +73,9 @@ pub struct ConnectOptions {
     pub remote: Option<String>,
     /// A paired device's token (web clients; tests).
     pub token: Option<String>,
+    /// Reach the daemon through this command's stdin and stdout instead (MM1.B: `ptyro
+    /// machine-bridge …` to another machine's `ptyro serve`). `via` names it in the Hello.
+    pub command: Option<(Vec<String>, String)>,
 }
 
 impl ConnectOptions {
@@ -87,6 +90,7 @@ impl ConnectOptions {
             compress: std::env::var("PTYRO_COMPRESS").is_ok_and(|v| v == "1"),
             remote: std::env::var("PTYRO_REMOTE").ok().filter(|r| !r.is_empty()),
             token: None,
+            command: None,
         }
     }
 }
@@ -98,6 +102,8 @@ type Pending = Arc<Mutex<Option<HashMap<u32, oneshot::Sender<Outcome>>>>>;
 pub struct Client {
     pub id: ClientId,
     pub daemon_version: String,
+    /// What the daemon's machine calls itself (`Welcome.machine`).
+    pub machine: Option<String>,
     tx: mpsc::UnboundedSender<ClientMsg>,
     pending: Pending,
     next_id: AtomicU32,
@@ -118,6 +124,21 @@ impl Drop for Client {
 
 impl Client {
     pub async fn connect(opts: &ConnectOptions) -> Result<Self, ClientError> {
+        if let Some((argv, via)) = &opts.command {
+            let mut child = remote::spawn(argv)?;
+            let stream = tokio::io::join(
+                child.stdout.take().expect("piped stdout"),
+                child.stdin.take().expect("piped stdin"),
+            );
+            let stderr = child.stderr.take().map(remote::collect);
+            return match Self::handshake(stream, opts, Some(via.clone())).await {
+                Ok(mut c) => {
+                    c._ssh = Some(child);
+                    Ok(c)
+                }
+                Err(e) => Err(remote::explain_command(e, via, &mut child, stderr).await),
+            };
+        }
         if let Some(target) = &opts.remote {
             let mut ssh = remote::ssh(target)?;
             let stream = tokio::io::join(
@@ -177,8 +198,10 @@ impl Client {
             .ok_or_else(|| ClientError::Unavailable("daemon closed the connection".into()))??;
         let (msg, _) =
             decode::<ServerMsg>(&reply).map_err(|e| ClientError::Protocol(e.to_string()))?;
-        let (id, daemon_version) = match msg {
-            ServerMsg::Welcome { client_id, daemon_version, .. } => (client_id, daemon_version),
+        let (id, daemon_version, machine) = match msg {
+            ServerMsg::Welcome { client_id, daemon_version, machine, .. } => {
+                (client_id, daemon_version, machine)
+            }
             ServerMsg::Reject { reason, daemon_version } => {
                 return Err(ClientError::Rejected(format!(
                     "daemon {daemon_version} rejected this client: {reason}. Restart it with `ptyro daemon stop` (sessions will end)."
@@ -257,6 +280,7 @@ impl Client {
         Ok(Self {
             id,
             daemon_version,
+            machine,
             tx,
             pending,
             next_id: AtomicU32::new(1),

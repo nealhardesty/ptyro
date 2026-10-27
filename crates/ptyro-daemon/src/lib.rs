@@ -17,6 +17,7 @@ mod finish;
 mod github;
 mod handoff;
 mod launch;
+mod machines;
 mod mail;
 mod notifier;
 mod push;
@@ -382,6 +383,7 @@ async fn serve(
     daemon.load_devices().await;
     daemon.load_used_links().await;
     daemon.load_last_launch().await;
+    daemon.start_machines().await;
     daemon.load_declined().await;
     daemon.load_integrated().await;
     daemon.start_serve_supervisor();
