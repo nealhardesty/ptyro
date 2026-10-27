@@ -612,7 +612,7 @@ async fn archive_keeps_uncommitted_work_and_restore_brings_it_back() {
     else {
         panic!()
     };
-    assert_eq!(info.branch.as_deref(), Some("ptyro/feat"));
+    assert_eq!(info.branch.as_deref(), Some("feat"));
     assert_eq!(std::fs::read_to_string(info.path.join("README")).unwrap(), "changed\n");
     assert_eq!(std::fs::read_to_string(info.path.join("notes.txt")).unwrap(), "untracked\n");
     let status = std::process::Command::new("git")
@@ -691,7 +691,7 @@ async fn work_moves_into_a_worktree_or_starts_from_a_branch() {
         .await
         .unwrap_err();
     assert!(e.message.contains("nothing to take"), "{}", e.message);
-    // Branches a worktree could check out: `spike` (main and `ptyro/moved` have worktrees).
+    // Branches a worktree could check out: `spike` (main and `moved` have worktrees).
     let Reply::Branches { names } =
         c.request(Request::Branches { project: "myrepo".into() }).await.unwrap()
     else {

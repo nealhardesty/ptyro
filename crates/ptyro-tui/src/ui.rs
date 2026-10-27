@@ -593,7 +593,7 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
                 ];
                 match (&w.branch, w.is_root) {
                     (Some(b), true) => spans.push(Span::styled(format!(" ({b})"), fg(app, t.dim))),
-                    (Some(b), false) if *b != format!("ptyro/{}", w.name) => {
+                    (Some(b), false) if !w.default_branch() => {
                         spans.push(Span::styled(format!(" {b}"), fg(app, t.dim)))
                     }
                     _ => {}

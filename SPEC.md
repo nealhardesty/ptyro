@@ -1885,7 +1885,7 @@ existing target path is refused.
 struct WorktreeSpec {
     project: ProjectAddr,
     name: Option<String>,         // default: friendly random name
-    branch: Option<String>,       // default: template, e.g. "ptyro/{name}"
+    branch: Option<String>,       // default: template, `{name}` (was "ptyro/{name}" before v0.0.13)
     base: Option<String>,         // default: project base (origin/<default>), fetched first
     from: Option<WorktreeSource>, // ExistingBranch(b) | PullRequest(n) | Issue(url) | Commit(sha)
     setup: SetupMode,             // run | skip | inherit (from project config)
@@ -1924,7 +1924,7 @@ Branch-name templates: `{name}`, `{user}`, `{date}`, `{issue}`, `{slug}`; option
   profile's environment, so a fetch uses its SSH key.
 - **Fetch:** failures are non-fatal ("fetch failed, using the local origin/main"), for offline
   work. `worktrees.fetch = false` or `--no-fetch` skips it.
-- **New branches** are created with `--no-track`, so `ptyro/x` doesn't claim `origin/main` as its
+- **New branches** are created with `--no-track`, so `x` doesn't claim `origin/main` as its
   upstream. `--existing --branch B` checks out a local branch, or a remote one tracked. `--pr N`
   fetches `pull/N/head` into `pr/N`.
 - **Marker:** `ptyro.json` (`{id, project, name, created_at}`) goes in the worktree's own git dir.
@@ -2087,7 +2087,7 @@ others.
    (or `--force --yes` in scripts).
 3. Run `archive` script (if trusted). 4. `git worktree unlock`, `git worktree remove`.
 5. Branch: deleted only if fully merged into base or pushed and identical to its remote; otherwise
-   kept and reported ("kept branch ptyro/brisk-rook: 3 unpushed commits").
+   kept and reported ("kept branch brisk-rook: 3 unpushed commits").
 6. Release ports; mark worktree `removed` in DB (history kept).
 
 `ptyro gc` lists (never deletes without confirmation) stale worktrees: removed-on-disk, merged
@@ -2499,7 +2499,7 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
   worktrees by creation, each with its sessions. Below them, under "other sessions", are the
   sessions whose home is this workspace but that aren't under one of its projects.
   - Rows show the pin's profile label (in its colour), the branch when it isn't the default
-    `ptyro/<name>`, what is left to do (`↑N` unpushed, `not pushed ↑N`, `● N` uncommitted, a
+    `<name>` (or `ptyro/<name>`, the default before v0.0.13), what is left to do (`↑N` unpushed, `not pushed ↑N`, `● N` uncommitted, a
     quiet `✓ pushed`; the `+N −M` lines only while something is left, §10.9), the worktree state
     when not ready, and listening ports.
   - Folding: `⏎`/`Space`, `h`/`l`, or a click. `1`–`9` number the visible session rows. In the sidebar
@@ -3492,7 +3492,7 @@ quiet_hours = "22:00-07:00"
 
 [worktrees]
 location = "data"                         # data | sibling | in-repo
-branch_template = "ptyro/{name}"
+branch_template = "{name}"
 archive_on_merge = false                  # archive a worktree once its PR merges (UX1.12)
 
 [ports]
@@ -3966,9 +3966,9 @@ safe checkpoints and an explicit ship order, and is honest about partial states.
 ```text
 change set "add-user-tier"   (workspace: work · profile: work)
 ├─ lead       claude   · cwd = change-set root · sees every member, read-only by policy
-├─ api        codex    · worktree api/   branch ptyro/add-user-tier   depends_on: —
-├─ sdk        claude   · worktree sdk/   branch ptyro/add-user-tier   depends_on: api
-└─ web        claude   · worktree web/   branch ptyro/add-user-tier   depends_on: api, sdk
+├─ api        codex    · worktree api/   branch add-user-tier   depends_on: —
+├─ sdk        claude   · worktree sdk/   branch add-user-tier   depends_on: api
+└─ web        claude   · worktree web/   branch add-user-tier   depends_on: api, sdk
 root: data/changesets/add-user-tier/
       ├─ CHANGESET.md      generated brief: goal, members, roles, order, conventions
       ├─ CONTRACT.md       the cross-repo contract (owned by the lead, versioned by ptyro)

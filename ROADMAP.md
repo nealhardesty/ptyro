@@ -2107,6 +2107,11 @@ web, with the parity rows.
   full sized (it counts for quick new). The quick terminal is `C-t` (drawer) / `T` (full sized),
   one per worktree and only in one: with none here the TUI asks for a project first, and the
   daemon refuses to start one outside a worktree. Web: New shell and Quick shell buttons.
+- [x] **UX3.6 Branches are named like their worktree** — S. *From the owner, 2026-10-27.* A
+  new worktree's branch is `<name>`, not `ptyro/<name>` (`[worktrees] branch_template` defaults
+  to `{name}`; a template you set is kept). Branches made before still count as the default
+  (`WorktreeInfo::default_branch`: the sidebar doesn't repeat them, `auto_rename_branch` still
+  renames them). ptyro's own refs stay under `refs/ptyro/`.
 - [x] **UX3.5 About shows the usage limits** — S. *From the owner, 2026-10-27.* The About screen
   lists every agent's known limits per profile: the 5 h / 7 d windows with when they reset, a
   rate limit in force, context and session cost (`Usage::summary`), or says how meters start

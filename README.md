@@ -204,7 +204,7 @@ a row's menu (`.`), makes one at any time.
 ### Projects and worktrees
 
 A **project** is a git repository you registered. Each task gets a **worktree**: a separate
-checkout on its own branch (`ptyro/<name>`), so agents can't trample each other and your main
+checkout on its own branch (named like the worktree), so agents can't trample each other and your main
 checkout stays untouched. A new worktree gets the ignored files you list in `.worktreeinclude`
 (such as `.env`), a block of ports in `$PTYRO_PORT`, and the project's setup script, which runs
 only after you've reviewed and trusted it.

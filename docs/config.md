@@ -48,7 +48,7 @@ tint_borders = true       # colour pane dividers with the session's profile
 
 [worktrees]
 location = "sibling"      # data (default: ptyro's data dir) | sibling (<repo>.worktrees/) | in-repo
-branch_template = "{user}/{name}"   # {name} {user} {date} {issue} {slug}; default ptyro/{name}
+branch_template = "{user}/{name}"   # {name} {user} {date} {issue} {slug}; default {name}
 archive_on_merge = true   # archive a worktree once its PR merges (default false); `wt restore` brings it back
 
 [ports]

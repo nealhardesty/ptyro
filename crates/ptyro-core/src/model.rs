@@ -273,6 +273,14 @@ pub struct WorktreeInfo {
 }
 
 impl WorktreeInfo {
+    /// Its branch is still the one it was made with by default: its name (since v0.0.13), or
+    /// `ptyro/<name>` (before). Such a branch says nothing the name doesn't.
+    pub fn default_branch(&self) -> bool {
+        self.branch
+            .as_deref()
+            .is_some_and(|b| b == self.name || b == format!("ptyro/{}", self.name))
+    }
+
     /// `myrepo/brisk-rook`, `myrepo/@root`.
     pub fn qualified(&self) -> String {
         format!("{}/{}", self.project_slug, self.name)
@@ -365,7 +373,7 @@ pub struct WorktreeSpec {
     /// Default: a friendly random name.
     #[serde(default)]
     pub name: Option<String>,
-    /// Default: the branch template (`ptyro/{name}`).
+    /// Default: the branch template (`{name}`).
     #[serde(default)]
     pub branch: Option<String>,
     /// Check out the existing branch `branch` instead of creating one.
