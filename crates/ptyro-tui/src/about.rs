@@ -315,7 +315,8 @@ pub fn urls_in(buf: &ratatui::buffer::Buffer, area: ratatui::layout::Rect) -> Ve
                 continue;
             }
             let mut end = i;
-            while end < chars.len() && !chars[end].is_whitespace() && !"<>\"'`".contains(chars[end]) {
+            while end < chars.len() && !chars[end].is_whitespace() && !"<>\"'`".contains(chars[end])
+            {
                 end += 1;
             }
             while end > i && ".,;:!?)]}".contains(chars[end - 1]) {
