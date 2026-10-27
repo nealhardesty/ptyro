@@ -153,7 +153,7 @@ fn claim(port: u16, code: &str) -> (u16, String) {
 
 fn wait_http(port: u16) {
     let deadline = Instant::now() + WAIT;
-    while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+    while !ptyro_testkit::listening(port) {
         assert!(Instant::now() < deadline, "ptyro serve never listened on {port}");
         std::thread::sleep(Duration::from_millis(50));
     }
