@@ -733,9 +733,10 @@ fn upgrade(
         let _slot = slot;
         match hyper::upgrade::on(req).await {
             Ok(up) => {
+                // What a browser sends is small; what it is sent (replies) isn't limited here.
                 let cfg = WebSocketConfig::default()
-                    .max_message_size(Some(ptyro_protocol::MAX_FRAME))
-                    .max_frame_size(Some(ptyro_protocol::MAX_FRAME));
+                    .max_message_size(Some(ptyro_protocol::MAX_CLIENT_MESSAGE))
+                    .max_frame_size(Some(ptyro_protocol::MAX_CLIENT_MESSAGE));
                 let ws =
                     WebSocketStream::from_raw_socket(TokioIo::new(up), Role::Server, Some(cfg))
                         .await;
@@ -1217,6 +1218,19 @@ mod tests {
             all.push(st.begin(ip).unwrap());
         }
         assert!(st.begin("9.9.9.9".parse().unwrap()).is_none());
+    }
+
+    #[test]
+    fn a_browser_message_fits_a_whole_scratchpad_and_the_web_app_knows_the_limit() {
+        use ptyro_protocol::MAX_CLIENT_MESSAGE;
+        assert!(MAX_CLIENT_MESSAGE > ptyro_core::scratchpad::MAX_PAD_BYTES + 64 * 1024);
+        assert!(MAX_CLIENT_MESSAGE < ptyro_protocol::MAX_FRAME / 2, "far below the frame limit");
+        let conn = include_str!("../../../web/src/conn.ts");
+        assert_eq!(MAX_CLIENT_MESSAGE, 4 * 1024 * 1024 + 256 * 1024);
+        assert!(
+            conn.contains("MAX_SEND = 4 * 1024 * 1024 + 256 * 1024;"),
+            "web/src/conn.ts's MAX_SEND"
+        );
     }
 
     #[test]
