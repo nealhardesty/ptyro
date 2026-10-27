@@ -436,9 +436,22 @@ image is used to re-exec the *old* binary (kept at `state/daemon.prev`).
       three sessions went from 210 MB of named maps to 194 KB.
     - Sessions are encoded and decoded in parallel threads: 10 sessions × 12k lines take 0.25 s
       to write and 0.25 s to restore (release build).
-- **exec.** `FD_CLOEXEC` is cleared on the masters, the listener and the image; then `execve`
-  `P daemon start --foreground|--spawned` with `PTYRO_HANDOFF_FD`. The new image marks
-  everything close-on-exec again.
+- **exec.** **[changed H2.7]** The image fd, `daemon.lock`, the PTY masters and the structured
+  sessions' pipes are not left inheritable. They travel in a datagram socketpair by
+  `SCM_RIGHTS`, in batches of 32, each batch carrying its old numbers
+  (`ptyro_pty::handoff::carry`). Only the socketpair's receiving end is inheritable, named by
+  `PTYRO_HANDOFF_SOCK`.
+  - A child another task spawns while the handoff runs therefore inherits none of them.
+  - `daemon.lock` is held throughout. Its old number is in `PTYRO_HANDOFF_LOCK`, and the new
+    image takes the carried descriptor over (same device and inode) instead of locking again,
+    so no second daemon can start in the gap.
+  - The image records raw descriptor numbers. `adopt` looks them up among the carried ones
+    first. A rollback puts them back at the old numbers (`restore_carried`).
+  - **The listening socket is the exception.** On macOS a listener carried through a socket
+    across `exec` breaks: every connection it accepts gets EOF after the first message. So it
+    alone has `FD_CLOEXEC` cleared, at the last moment before `execve`.
+  - Then `execve` `P daemon start --foreground|--spawned` with `PTYRO_HANDOFF_FD`. The new
+    image marks everything close-on-exec again.
 - **Adoption.**
   - Masters come back through `Pty::from_fd`.
   - A reaper collects children this runtime didn't spawn: `waitpid(pid, WNOHANG)` on SIGCHLD
@@ -475,7 +488,10 @@ image is used to re-exec the *old* binary (kept at `state/daemon.prev`).
 - Open with `pty-process` (`Pty::new()`, `pts()`, `Command::spawn(pts)`): child becomes session
   leader with the PTY as controlling terminal (`setsid` + `TIOCSCTTY`).
 - Each child gets its **own process group**; signals go to the group (`killpg`) so tool subprocesses
-  (dev servers, test runners) die with the session. Stop sequence: `SIGHUP` → 3 s → `SIGTERM` → 2 s →
+  (dev servers, test runners) die with the session. **[built H2.7]** The leader is left a zombie
+  (seen with `waitid(WNOWAIT)`) until no other process is in its group, then reaped. Its pid, and
+  so the group id, can't be given to a new process while a late `SIGKILL` to the group might
+  still be sent. Stop sequence: `SIGHUP` → 3 s → `SIGTERM` → 2 s →
   `SIGKILL` (configurable per agent; Claude prefers `SIGINT` to end a turn cleanly).
 - **Resize** via `TIOCSWINSZ` on the master; the kernel delivers SIGWINCH to the foreground group.
 - **Ctrl-Z** **[built]**: the child leads its own session, so its process group is orphaned and the
@@ -3504,7 +3520,7 @@ shell_style = "pane"             # what ⏎ on the quick terminal's line shows: 
 which_key_delay = 400            # ms after the prefix before the which-key menu; 0: never
 
 [daemon]
-scrollback_lines = 5000          # in memory; older lines come from the recording (§7.6)
+scrollback_lines = 5000          # in memory, capped at 4M cells (fewer lines when wide); older lines come from the recording (§7.6)
 restore_on_start = "dormant"     # dormant | resume | none
 frame_interval_ms = 8
 
@@ -4448,7 +4464,8 @@ After every agent turn that changed its worktree, the turn is checkpointed:
   over, with the last message: the agent's own reply when its adapter reports one, else the
   screen's last line), blocked and exited on their own.
 - **Typing** into a session is serialized: a prompt (text, pause, Enter) never interleaves with
-  another typist.
+  another typist. **[H2.7]** `send --raw` (`SendBytes`) waits its turn too. Stop keys and
+  approval answers don't wait, and neither do keys typed live.
 
 **Leases** are `path|glob`, exclusive or shared, with a holder, ttl (`lease_ttl`) and reason.
 - **Claims:** a claim that overlaps another holder's exclusive lease, or any lease when the
@@ -4759,7 +4776,9 @@ revocable (`ptyro devices ls|revoke`).
 
 **[built M9]** `ptyro serve` is its own process (hyper + tokio-tungstenite), so the daemon stays a
 local socket. With `[remote] serve = true` the daemon supervises it (backoff, `state/serve.log`,
-killed before a live upgrade, restarted by the next image).
+killed before a live upgrade, restarted by the next image). **[built H2.7]** At 5 MiB,
+`serve.log` is copied to `serve.log.1` and emptied in place; the server writes with `O_APPEND`, so
+it carries on at the new start.
 
 **[built WEB1.9] The server is a setting you can find and turn on.** Decision (owner, 2026-10-24):
 it stays a supervised child process, not code inside the daemon. The daemon owns every PTY and
@@ -4804,7 +4823,10 @@ is "the web is up when the daemon is".
   `X-Forwarded-For` and `Tailscale-User-Login` from a loopback peer when a proxy is trusted:
   `[remote] trusted_proxy`, `--tailscale`, or `tailscale serve` already fronting the port),
   `pid: 0`, and drops a requested zstd. A `Reject` counts as a failed login: 10 from one address in 10 min answer 429.
-  Pings every 25 s; messages up to `MAX_FRAME`.
+  Pings every 25 s. **[changed H2.7]** A browser's message is at most `MAX_CLIENT_MESSAGE`
+  (4.25 MiB: a whole scratchpad and room to spare), set at the handshake because the library
+  can't change it after login. The web app checks the same limit before it sends and says so in
+  a toast. Messages to the browser stay up to `MAX_FRAME`.
 - **Host check (DNS rebinding):** a request whose `Host` isn't an IP address, `localhost`
   (`*.localhost`), `public_url`'s host or this machine's MagicDNS name (full and short, from
   `tailscale status --json`) gets 421. No `Host` passes (not a browser).
