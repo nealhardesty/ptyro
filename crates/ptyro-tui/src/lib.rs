@@ -111,7 +111,7 @@ pub fn pane_size(paths: &Paths) -> Option<TermSize> {
 pub async fn run(mut connect: ConnectOptions, paths: &Paths, opts: Options) -> Result<AttachEnd> {
     let config = Config::load(&Config::path(paths)).unwrap_or_default();
     let mut tui = ratatui::init();
-    let outer = outer::query();
+    let (outer, typed) = outer::query();
     let kitty = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
     connect.outer = Some(ptyro_protocol::OuterTerm { kitty_keyboard: kitty, ..outer });
     let mut out = std::io::stdout();
@@ -154,7 +154,7 @@ pub async fn run(mut connect: ConnectOptions, paths: &Paths, opts: Options) -> R
         kitty,
         Rect::new(0, 0, size.width, size.height),
     );
-    let result = event_loop(&mut app, &mut tui).await;
+    let result = event_loop(&mut app, &mut tui, typed).await;
     if app.client.is_some() {
         app.save_view();
         // Give the save a moment to leave before the connection drops.
@@ -183,7 +183,11 @@ async fn recv<T>(rx: &mut Option<tokio::sync::mpsc::UnboundedReceiver<T>>) -> Op
     }
 }
 
-async fn event_loop(app: &mut App, tui: &mut ratatui::DefaultTerminal) -> Result<AttachEnd> {
+async fn event_loop(
+    app: &mut App,
+    tui: &mut ratatui::DefaultTerminal,
+    typed: Vec<crossterm::event::KeyEvent>,
+) -> Result<AttachEnd> {
     match tokio::time::timeout(RECONNECT_STEP * 3, app.connect()).await {
         Ok(Ok(())) => {}
         Ok(Err(e)) => return Ok(AttachEnd::Lost(e)),
@@ -191,6 +195,10 @@ async fn event_loop(app: &mut App, tui: &mut ratatui::DefaultTerminal) -> Result
     }
     app.restore_view().await;
     app.welcome();
+    // Typed while we asked the terminal for its colours, before anything read keys.
+    for k in &typed {
+        app.on_key(k);
+    }
     let mut events = EventStream::new();
     let mut last_draw = Instant::now() - FRAME;
     let mut cursor_shape = None;
