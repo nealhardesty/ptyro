@@ -458,6 +458,13 @@ impl Session {
         self.write_input(bytes.to_vec(), bytes == b"\x1a");
     }
 
+    /// Raw bytes from `send --raw`: after any prompt being typed, never inside it (M7.7). Stop
+    /// keys and answers use `write_raw`, which doesn't wait.
+    pub async fn send_bytes(&self, bytes: &[u8]) {
+        let _typist = self.typing.lock().await;
+        self.write_raw(bytes);
+    }
+
     /// Write input to the program; for Ctrl-Z, watch whether it suspends itself.
     fn write_input(&self, bytes: Vec<u8>, ctrl_z: bool) {
         let suspending = ctrl_z.then(|| self.watch_suspend()).flatten();

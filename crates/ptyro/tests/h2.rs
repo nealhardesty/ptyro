@@ -114,3 +114,37 @@ async fn a_removed_workspace_s_projects_go_to_main() {
     assert!(main.contains(&only_id), "its own project went to main: {main:?}");
     assert_eq!(main.iter().filter(|p| **p == shared_id).count(), 1, "a shared one stays once");
 }
+
+/// Raw bytes sent while a prompt is being typed wait for its Enter: they never land between its
+/// text and the Enter that submits it.
+#[tokio::test]
+async fn raw_bytes_wait_for_a_prompt_being_typed() {
+    let d = TempDaemon::start(BIN).unwrap();
+    let c = d.client().await.unwrap();
+    let spec = SpawnSpec {
+        argv: vec!["cat".into()],
+        cwd: std::env::temp_dir(),
+        name: Some("cat".into()),
+        size: Some(TermSize::new(80, 12)),
+        ..SpawnSpec::default()
+    };
+    c.request(Request::Spawn { spec }).await.unwrap();
+    let text = c.request(Request::SendText {
+        addr: "cat".into(),
+        text: "first".into(),
+        enter: true,
+        wait_ready_ms: None,
+    });
+    let raw = async {
+        // Inside the pause between the text and its Enter.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        c.request(Request::SendBytes { addr: "cat".into(), bytes: b"second\r".to_vec() }).await
+    };
+    let (a, b) = tokio::join!(text, raw);
+    a.unwrap();
+    b.unwrap();
+    let screen = d.wait_for_text(&c, "cat", "second\nsecond", Duration::from_secs(10)).await;
+    let screen = screen.unwrap_or_else(|e| panic!("{e}"));
+    assert!(screen.contains("first\nfirst\n"), "{screen}");
+    assert!(!screen.contains("firstsecond"), "{screen}");
+}

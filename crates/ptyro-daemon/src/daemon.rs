@@ -1100,7 +1100,7 @@ impl Daemon {
                 if bytes.len() > 1 << 20 {
                     return Err(Error::invalid("at most 1 MiB at a time"));
                 }
-                s.write_raw(&bytes);
+                s.send_bytes(&bytes).await;
                 Ok(Reply::Done)
             }
             Request::SendText { addr, text, enter, wait_ready_ms } => {
