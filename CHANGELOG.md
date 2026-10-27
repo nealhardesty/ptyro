@@ -2,10 +2,37 @@
 
 Generated from git history by `make changelog` (scripts/changelog.sh); edit commit messages, not this file.
 
-## Unreleased
+## v0.0.12 (2026-10-27)
+
+### Features
+
+- feat: UX3 daily flow: full-sized panels, splits only on request, quick new, created means shown (v0.0.12) (55b300d)
+
+### Fixes
+
+- fix: wait up to 5 s for a worker's reply before the lead's summary (flaky on loaded CI runners) (aab80eb)
+
+## v0.0.11 (2026-10-26)
+
+### Features
+
+- feat: addresses printed in a TUI pane are clickable links (OSC 8), as in the web terminal (878b49b)
+- feat: the burst-of-agents logo is the project's primary logo: README, docs, favicon, PWA (incl. maskable) and apple-touch icons (3668ce1)
+
+### Documentation
+
+- style: cargo fmt (fmt-check failed on master) (329c35c)
 
 ### Other
 
+- chore: bump to v0.0.11 (6ea836c)
+- chore: bump to v0.0.11 (979de5b)
+
+## v0.0.10 (2026-10-26)
+
+### Other
+
+- release: v0.0.10 (4c44af1)
 - refactor: one scratchpad again: the per-project pads are removed (v0.0.10) (f7e06d0)
 
 ## v0.0.9 (2026-10-26)
