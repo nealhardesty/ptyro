@@ -1,10 +1,5 @@
 //! The single `ptyro` binary (SPEC §3.3, ADR 12): CLI, TUI, daemon and dev helpers.
 
-#[cfg(not(unix))]
-compile_error!(
-    "ptyro runs on Linux and macOS (Windows through WSL2); see the Requirements section of README.md"
-);
-
 mod about;
 mod agents;
 mod backup;

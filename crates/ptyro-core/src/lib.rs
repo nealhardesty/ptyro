@@ -4,6 +4,13 @@
 //! Everything here is plain data. `ptyro-term` and `ptyro-protocol` both build on these types, so
 //! neither has to depend on the other (SPEC §3.3 boundary rules).
 
+// Here, not in the binary: every ptyro crate builds on this one, so this is said first, before a
+// Unix-only dependency fails in a way that hides it.
+#[cfg(not(unix))]
+compile_error!(
+    "ptyro runs on Linux and macOS (Windows through WSL2); see the Requirements section of README.md"
+);
+
 pub mod cache;
 pub mod chat;
 pub mod config;
