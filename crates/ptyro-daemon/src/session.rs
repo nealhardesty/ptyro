@@ -973,15 +973,29 @@ impl Session {
     }
 
     async fn waiter_task(self: Arc<Self>, mut child: tokio::process::Child) {
-        let status = child.wait().await;
-        let state = match status {
-            Ok(s) => {
-                use std::os::unix::process::ExitStatusExt;
-                ProcessState::Exited { code: s.code(), signal: s.signal() }
-            }
-            Err(e) => ProcessState::Failed { error: e.to_string() },
+        // The exit is seen without reaping (H2.7): the leader stays a zombie, holding its pid and
+        // so its group's id, until no one else is left in the group. A stop sequence that still
+        // signals the group then can't reach a stranger that was given the id.
+        let pid = child.id();
+        let seen = match pid {
+            Some(pid) => ptyro_pty::exited_unreaped(pid).await.ok(),
+            None => None,
+        };
+        let state = match seen {
+            Some((code, signal)) => ProcessState::Exited { code, signal },
+            None => match child.wait().await {
+                Ok(s) => {
+                    use std::os::unix::process::ExitStatusExt;
+                    ProcessState::Exited { code: s.code(), signal: s.signal() }
+                }
+                Err(e) => ProcessState::Failed { error: e.to_string() },
+            },
         };
         self.finish(state);
+        if let (Some(pid), Some(_)) = (pid, seen) {
+            ptyro_pty::until_group_empty(pid).await;
+            let _ = child.wait().await;
+        }
     }
 
     /// A child inherited from the previous daemon image: the reaper tells us how it ended.

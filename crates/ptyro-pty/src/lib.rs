@@ -16,8 +16,8 @@ mod ports;
 mod probe;
 pub use ports::listening_ports;
 pub use probe::{
-    cwd_of, exec_env_var, local_datetime, local_time_hm, local_time_hm_at, parent_pid,
-    process_name, session_leader,
+    cwd_of, exec_env_var, local_datetime, local_time_hm, local_time_hm_at, others_in_group,
+    parent_pid, process_name, session_leader,
 };
 
 /// Variables that would make the child talk to the *outer* terminal or multiplexer, or that mark
@@ -212,19 +212,47 @@ pub async fn terminate_with(
     }
 }
 
-/// Poll until the group has no members left, for up to `wait`. (Exited members count until
-/// they are reaped, which init does for orphans.)
+/// Poll until the group has no members left besides its leader, for up to `wait`. The leader is
+/// out of it: ptyro keeps it a zombie until the rest are gone (`exited_unreaped`), so the group's
+/// id can't go to another process while a late signal may still be sent to it (H2.7). (Exited
+/// members count until they are reaped, which init does for orphans.)
 async fn group_gone_within(pid: u32, wait: Duration) -> bool {
-    let Some(pid) = rustix::process::Pid::from_raw(pid as i32) else { return true };
     let deadline = tokio::time::Instant::now() + wait;
     loop {
-        if rustix::process::test_kill_process_group(pid).is_err() {
+        if others_in_group(pid) == 0 {
             return true;
         }
         if tokio::time::Instant::now() >= deadline {
             return false;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// Wait for our child `pid` to exit, leaving it a zombie: its pid, and so its process group's
+/// id, can't be given to another process until it is reaped (H2.7: a stop sequence may signal
+/// the group after the leader is gone; a recycled id would make that someone else's group).
+/// Returns how it ended: (exit code, terminating signal). Reap it with the `Child` afterwards.
+pub async fn exited_unreaped(pid: u32) -> io::Result<(Option<i32>, Option<i32>)> {
+    use rustix::process::{WaitId, WaitIdOptions, waitid};
+    let p = rustix::process::Pid::from_raw(pid as i32)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "pid 0"))?;
+    let mut child = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::child())?;
+    loop {
+        let opts = WaitIdOptions::EXITED | WaitIdOptions::NOWAIT | WaitIdOptions::NOHANG;
+        if let Some(st) = waitid(WaitId::Pid(p), opts)? {
+            return Ok((st.exit_status(), st.terminating_signal()));
+        }
+        // Signals coalesce, and one may have come before we listened: look again now and then.
+        let _ = tokio::time::timeout(Duration::from_secs(1), child.recv()).await;
+    }
+}
+
+/// Wait until process group `pgid` has no member but its (zombie) leader, then return: the
+/// leader may be reaped.
+pub async fn until_group_empty(pgid: u32) {
+    while others_in_group(pgid) > 0 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
 
@@ -336,6 +364,38 @@ mod tests {
             signal_group(pid, Signal::KILL).is_err()
         });
         assert!(gone, "group should be gone");
+    }
+
+    #[tokio::test]
+    async fn an_exit_is_seen_without_reaping_until_the_group_is_empty() {
+        // The leader exits at once; its background child stays in the group a moment longer.
+        let argv: Vec<String> = ["sh", "-c", "sleep 1 & exit 3"].map(String::from).into();
+        let env = child_env(std::env::vars_os(), []);
+        let mut c = spawn(SpawnRequest {
+            argv: &argv,
+            cwd: Path::new("/"),
+            env,
+            size: TermSize::new(20, 5),
+        })
+        .unwrap();
+        let pid = c.pid;
+        let ended = tokio::time::timeout(Duration::from_secs(5), exited_unreaped(pid)).await;
+        assert_eq!(ended.unwrap().unwrap(), (Some(3), None), "how it ended");
+        let raw = rustix::process::Pid::from_raw(pid as i32).unwrap();
+        // Not reaped: it is still there to wait on, so its pid (the group's id) is held. (macOS
+        // won't signal a group of zombies, so `kill(-pgid, 0)` is no test of that.)
+        let held = rustix::process::waitid(
+            rustix::process::WaitId::Pid(raw),
+            rustix::process::WaitIdOptions::EXITED
+                | rustix::process::WaitIdOptions::NOWAIT
+                | rustix::process::WaitIdOptions::NOHANG,
+        );
+        assert!(matches!(held, Ok(Some(_))), "the leader is a zombie still: {held:?}");
+        assert!(others_in_group(pid) >= 1, "the background sleep is still in the group");
+        tokio::time::timeout(Duration::from_secs(5), until_group_empty(pid)).await.unwrap();
+        assert_eq!(others_in_group(pid), 0);
+        let status = c.child.wait().await.unwrap();
+        assert_eq!(status.code(), Some(3), "reaped afterwards, the same status");
     }
 
     #[tokio::test]

@@ -235,3 +235,43 @@ mod tests {
         assert_eq!(super::argv0(std::process::id()), Some(want));
     }
 }
+
+/// How many processes are in process group `pgid`, its leader (`pid == pgid`) aside. Zombies
+/// count until reaped. On an error listing them, one (as if the group were still busy).
+#[cfg(target_os = "linux")]
+pub fn others_in_group(pgid: u32) -> usize {
+    let Ok(dir) = std::fs::read_dir("/proc") else { return 1 };
+    dir.filter_map(Result::ok)
+        .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|p| *p != pgid)
+        .filter(|p| {
+            // `pid (comm) state ppid pgrp …`: the name may hold spaces and parentheses.
+            std::fs::read_to_string(format!("/proc/{p}/stat")).ok().and_then(|st| {
+                let rest = &st[st.rfind(')')? + 1..];
+                rest.split_whitespace().nth(2)?.parse::<u32>().ok()
+            }) == Some(pgid)
+        })
+        .count()
+}
+
+/// How many processes are in process group `pgid`, its leader (`pid == pgid`) aside. Zombies
+/// count until reaped. On an error listing them, one (as if the group were still busy).
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)] // proc_listpids writes at most `size` bytes into the buffer it is given
+pub fn others_in_group(pgid: u32) -> usize {
+    const PROC_PGRP_ONLY: u32 = 2;
+    let mut pids = vec![0i32; 4096];
+    let size = (pids.len() * std::mem::size_of::<i32>()) as libc::c_int;
+    // SAFETY: the buffer is `size` bytes long and lives across the call.
+    let n = unsafe { libc::proc_listpids(PROC_PGRP_ONLY, pgid, pids.as_mut_ptr().cast(), size) };
+    if n < 0 {
+        return 1;
+    }
+    let got = usize::try_from(n).unwrap_or(0) / std::mem::size_of::<i32>();
+    pids[..got.min(pids.len())].iter().filter(|p| **p > 0 && **p as u32 != pgid).count()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn others_in_group(_pgid: u32) -> usize {
+    0
+}
