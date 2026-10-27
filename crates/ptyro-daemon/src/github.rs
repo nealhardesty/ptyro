@@ -636,7 +636,7 @@ impl Daemon {
             let mut have_gh = false;
             loop {
                 // Tests set PTYRO_TEST_FAST_POLL to watch PRs without waiting a minute.
-                let fast = std::env::var_os("PTYRO_TEST_FAST_POLL").is_some();
+                let fast = ptyro_core::test_knob("PTYRO_TEST_FAST_POLL").is_some();
                 tokio::time::sleep(Duration::from_millis(if fast { 300 } else { 10_000 })).await;
                 let now = now_ms();
                 if now.saturating_sub(gh_checked_ms) > 60_000 || gh_checked_ms == 0 {
@@ -657,7 +657,7 @@ impl Daemon {
             .unwrap_or(60_000)
             .max(30_000);
         // Never more than twice a minute against GitHub; tests shorten it.
-        let poll = if std::env::var_os("PTYRO_TEST_FAST_POLL").is_some() { 500 } else { poll };
+        let poll = if ptyro_core::test_knob("PTYRO_TEST_FAST_POLL").is_some() { 500 } else { poll };
         let now = now_ms();
         let due: Vec<WorktreeInfo> = {
             let reg = self.registry.locked();

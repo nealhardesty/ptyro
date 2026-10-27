@@ -140,3 +140,41 @@ pub enum InputEvent {
         bytes: Vec<u8>,
     },
 }
+
+/// `\r \n \t \e \\ \xHH` escapes, so keystrokes fit on a command line (`send --raw`).
+pub fn unescape(s: &str) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    let mut it = s.bytes();
+    while let Some(b) = it.next() {
+        if b != b'\\' {
+            out.push(b);
+            continue;
+        }
+        match it.next() {
+            Some(b'r') => out.push(b'\r'),
+            Some(b'n') => out.push(b'\n'),
+            Some(b't') => out.push(b'\t'),
+            Some(b'e') => out.push(0x1b),
+            Some(b'\\') => out.push(b'\\'),
+            Some(b'x') => {
+                let h: Vec<u8> = it.by_ref().take(2).collect();
+                let hex = std::str::from_utf8(&h).map_err(|e| e.to_string())?;
+                out.push(u8::from_str_radix(hex, 16).map_err(|_| format!("bad escape \\x{hex}"))?);
+            }
+            other => return Err(format!("unknown escape \\{}", other.map_or(' ', char::from))),
+        }
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn escapes_become_bytes() {
+        assert_eq!(unescape(r"a\r\n\t\e\\\x7f").unwrap(), b"a\r\n\t\x1b\\\x7f");
+        assert!(unescape(r"\q").unwrap_err().contains("unknown escape"));
+        assert!(unescape(r"\xzz").is_err());
+    }
+}

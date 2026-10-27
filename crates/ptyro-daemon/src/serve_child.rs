@@ -284,10 +284,10 @@ mod tests {
         let log = dir.path().join("serve.log");
         // The server's handle: append mode, kept open across the rotation.
         let mut w = std::fs::OpenOptions::new().create(true).append(true).open(&log).unwrap();
-        w.write_all(&vec![b'a'; 100]).unwrap();
+        w.write_all(&[b'a'; 100]).unwrap();
         rotate_log(&log, 1000);
         assert_eq!(std::fs::metadata(&log).unwrap().len(), 100, "under the limit: left alone");
-        w.write_all(&vec![b'b'; 1000]).unwrap();
+        w.write_all(&[b'b'; 1000]).unwrap();
         rotate_log(&log, 1000);
         assert_eq!(std::fs::metadata(dir.path().join("serve.log.1")).unwrap().len(), 1100);
         assert_eq!(std::fs::metadata(&log).unwrap().len(), 0, "emptied");

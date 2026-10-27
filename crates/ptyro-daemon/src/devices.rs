@@ -362,8 +362,7 @@ impl Daemon {
                     .map(|b| format!("{b:02x}"))
                     .collect::<String>();
                 // Tests shorten it (never lengthen it) with PTYRO_TEST_PAIRING_TTL_MS.
-                let ttl = std::env::var("PTYRO_TEST_PAIRING_TTL_MS")
-                    .ok()
+                let ttl = ptyro_core::test_knob("PTYRO_TEST_PAIRING_TTL_MS")
                     .and_then(|v| v.parse().ok())
                     .map_or(PAIRING_TTL_MS, |t: u64| t.min(PAIRING_TTL_MS));
                 let expires_ms = now_ms() + ttl;
@@ -554,7 +553,7 @@ impl Daemon {
 /// Push services are HTTPS; anything else is refused before it reaches curl.
 fn url_ok(endpoint: &str, extra: &[String]) -> Result<(), Error> {
     // Tests deliver to a plain-HTTP listener on loopback.
-    let test = std::env::var_os("PTYRO_TEST_PUSH_HTTP").is_some()
+    let test = ptyro_core::test_knob("PTYRO_TEST_PUSH_HTTP").is_some()
         && endpoint.starts_with("http://127.0.0.1:");
     // Only the browsers' push services: a device can't make the daemon post to any host.
     let host = push_host(endpoint).unwrap_or_default();

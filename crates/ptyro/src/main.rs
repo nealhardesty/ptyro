@@ -880,7 +880,8 @@ enum Cmd {
     /// Internal: Claude's statusLine command (usage meters)
     #[command(hide = true)]
     StatuslineRelay,
-    /// Built-in fake GitHub CLI for tests (M6)
+    /// Built-in fake GitHub CLI for tests (M6); debug builds only
+    #[cfg(debug_assertions)]
     #[command(hide = true)]
     FakeGh {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -1164,6 +1165,7 @@ fn main() {
             cli::daemon_start(foreground, spawned, serve)
         }
         Some(Cmd::FakeAgent { args }) => ptyro_testkit::fake_agent::main(&args),
+        #[cfg(debug_assertions)]
         Some(Cmd::FakeGh { args }) => ptyro_testkit::fake_gh::main(&args),
         // These run inside agents on every hook: no runtime, no config, never a failure.
         Some(Cmd::Hook { adapter, event, args }) => relay::hook(&adapter, &event, &args),

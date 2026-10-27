@@ -388,7 +388,7 @@ pub fn take_image(state_dir: &Path) -> Option<Inherited> {
         .map_err(|e| e.to_string())
         .and_then(|b| decode(&b))
         .and_then(|img| {
-            if std::env::var_os(ENV_TEST_REFUSE).is_some() && !rolled_back {
+            if ptyro_core::test_knob(ENV_TEST_REFUSE).is_some() && !rolled_back {
                 Err("refused for a test (PTYRO_TEST_REFUSE_HANDOFF)".into())
             } else {
                 Ok(img)

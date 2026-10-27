@@ -312,7 +312,7 @@ fn split(mut args: Vec<String>) -> (Vec<String>, String) {
 
 /// `--raw` text → the bytes it stands for.
 fn raw_bytes(text: &str) -> Result<Vec<u8>, Error> {
-    ptyro_testkit::headless::unescape(text).map_err(|e| Error::invalid(e.to_string()))
+    ptyro_core::input::unescape(text).map_err(Error::invalid)
 }
 
 #[allow(clippy::too_many_arguments)]

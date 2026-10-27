@@ -28,6 +28,12 @@ pub use error::{Error, ErrorCode};
 pub use ids::{ClientId, SessionId};
 pub use screen::TermSize;
 
+/// A `PTYRO_TEST_*` knob that shortens a wait or opens a door for a test. Only debug builds (what
+/// the tests run) read them: a release ignores them, whatever the environment says.
+pub fn test_knob(name: &str) -> Option<String> {
+    if cfg!(debug_assertions) { std::env::var(name).ok() } else { None }
+}
+
 /// Milliseconds since the Unix epoch; the timestamp type on the wire.
 pub fn now_ms() -> u64 {
     std::time::SystemTime::now()

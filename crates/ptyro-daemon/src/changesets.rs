@@ -48,8 +48,7 @@ const NO_CHECKS_GRACE_MS: u64 = 120_000;
 
 /// The grace period for a PR with no checks; tests shorten it with `PTYRO_TEST_LAND_GRACE_MS`.
 fn no_checks_grace_ms() -> u64 {
-    std::env::var("PTYRO_TEST_LAND_GRACE_MS")
-        .ok()
+    ptyro_core::test_knob("PTYRO_TEST_LAND_GRACE_MS")
         .and_then(|v| v.parse().ok())
         .unwrap_or(NO_CHECKS_GRACE_MS)
 }
@@ -3025,7 +3024,7 @@ impl Daemon {
                 return Err(format!("PR #{n}'s checks were still pending after an hour"));
             }
             let wait =
-                if std::env::var_os("PTYRO_TEST_FAST_POLL").is_some() { 300 } else { 15_000 };
+                if ptyro_core::test_knob("PTYRO_TEST_FAST_POLL").is_some() { 300 } else { 15_000 };
             tokio::time::sleep(Duration::from_millis(wait)).await;
         }
         let method = format!("--{}", self.config().github.merge_method);

@@ -131,8 +131,7 @@ const BODY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// [`BODY_TIMEOUT`], or `PTYRO_TEST_BODY_TIMEOUT_MS` (a test that waits for it).
 fn body_timeout() -> Duration {
-    std::env::var("PTYRO_TEST_BODY_TIMEOUT_MS")
-        .ok()
+    ptyro_core::test_knob("PTYRO_TEST_BODY_TIMEOUT_MS")
         .and_then(|v| v.parse().ok())
         .map_or(BODY_TIMEOUT, Duration::from_millis)
 }
@@ -1223,8 +1222,13 @@ mod tests {
     #[test]
     fn a_browser_message_fits_a_whole_scratchpad_and_the_web_app_knows_the_limit() {
         use ptyro_protocol::MAX_CLIENT_MESSAGE;
-        assert!(MAX_CLIENT_MESSAGE > ptyro_core::scratchpad::MAX_PAD_BYTES + 64 * 1024);
-        assert!(MAX_CLIENT_MESSAGE < ptyro_protocol::MAX_FRAME / 2, "far below the frame limit");
+        const {
+            assert!(MAX_CLIENT_MESSAGE > ptyro_core::scratchpad::MAX_PAD_BYTES + 64 * 1024);
+            assert!(
+                MAX_CLIENT_MESSAGE < ptyro_protocol::MAX_FRAME / 2,
+                "far below the frame limit"
+            );
+        }
         let conn = include_str!("../../../web/src/conn.ts");
         assert_eq!(MAX_CLIENT_MESSAGE, 4 * 1024 * 1024 + 256 * 1024);
         assert!(
