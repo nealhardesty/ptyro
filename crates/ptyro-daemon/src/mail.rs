@@ -777,9 +777,10 @@ impl Daemon {
         };
         let me2 = Arc::clone(self);
         let s = Arc::clone(s);
-        // Claude's 7501 `done` can beat the `Stop` hook that carries the reply: give it 1 s.
+        // Claude's 7501 `done` can beat the `Stop` hook that carries the reply: give it 5 s (a
+        // loaded CI runner took longer than 1 s). The wait ends as soon as the reply arrives.
         let tries = if s.adapter().is_some_and(|a| ptyro_agents::adapter(&a).caps().hooks) {
-            10
+            50
         } else {
             0
         };
