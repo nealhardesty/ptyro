@@ -184,7 +184,7 @@ impl Daemon {
         }
         let (prog, args) =
             argv.split_first().ok_or_else(|| Error::invalid("empty editor command"))?;
-        std::process::Command::new(prog)
+        let mut child = std::process::Command::new(prog)
             .args(args)
             .current_dir(&info.path)
             .stdin(std::process::Stdio::null())
@@ -192,6 +192,8 @@ impl Daemon {
             .stderr(std::process::Stdio::null())
             .spawn()
             .map_err(|e| Error::new(ErrorCode::NotFound, format!("{prog}: {e}")))?;
+        // Reaped when it exits, not left a zombie per editor opened.
+        std::thread::spawn(move || child.wait());
         Ok(Reply::Notes {
             notes: vec![format!("opened {} in {name}, on the computer", info.qualified())],
         })
