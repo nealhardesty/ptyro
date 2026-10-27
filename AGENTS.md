@@ -119,6 +119,9 @@ Strong success criteria lets you loop independently. Weak criteria ("make it wor
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
 
-
 ---
-When you implement a feature, please use `make bump` to bump the version number.
+
+## Project Specific Rules
+* Never add a co-authored by statement to a generated comment.  Ever.
+* Any feature implemented must have parity between the CLI, the TUI and the Web interfaces.  This is not optional.
+* When you implement a feature, please use `make bump` to bump the version number.
