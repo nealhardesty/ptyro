@@ -340,30 +340,45 @@ async fn run(s: Script) -> Report {
     ptyro_testkit::headless::run(s).await.expect("headless run")
 }
 
+/// The session `c` has that isn't one of `known`: what a split started.
+async fn newcomer(c: &ptyro_client::Client, known: &[&str]) -> String {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        if let Reply::Sessions { sessions } = c.request(Request::List).await.expect("list")
+            && let Some(s) = sessions.iter().find(|s| !known.contains(&s.name.as_str()))
+        {
+            return s.name.clone();
+        }
+        assert!(Instant::now() < deadline, "the split started nothing");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// UX3.1: a split starts a clone of the pane's session beside it (a command's clone is a shell
+/// in its directory), with no picker; the layout comes back on reattach.
 #[tokio::test]
 async fn tui_splits_and_restores_the_layout_on_reattach() {
     let d = TempDaemon::start(BIN).unwrap();
     let c = d.client().await.unwrap();
     spawn(&c, "agent", &[BIN, "fake-agent"]).await;
-    spawn(&c, "logs", &["sh", "-c", "for i in $(seq 1 40); do echo log-$i; done; exec cat"]).await;
     let r = run(tui(&d, &["attach", "agent"])
         .send(1.5, "\\x11v")
-        .send(1.9, "logs")
-        .send(2.3, "\\r")
         .snapshot(3.2)
         .send(3.6, "\\x11d")
         .timeout(5.0))
     .await;
+    let clone = newcomer(&c, &["agent"]).await;
+    let header = format!("{clone} · ");
     let split = r.at(3.2);
     assert!(
-        split.contains("osc7501=yes") && split.contains("log-40"),
+        split.contains("osc7501=yes") && split.contains(&header),
         "both panes visible:\n{split}"
     );
     // Ctrl-Space (NUL), the second default prefix, works like Ctrl-Q.
     let r2 = run(tui(&d, &[]).snapshot(1.8).send(2.2, "\\x00d").timeout(4.0)).await;
     let restored = r2.at(1.8);
     assert!(
-        restored.contains("osc7501=yes") && restored.contains("log-40"),
+        restored.contains("osc7501=yes") && restored.contains(&header),
         "layout restored:\n{restored}"
     );
     assert_eq!(r2.exit, Some(0), "Ctrl-Space d detaches:\n{}", r2.screen);
@@ -400,25 +415,25 @@ async fn tui_closes_the_pane_of_a_removed_session() {
     let d = TempDaemon::start(BIN).unwrap();
     let c = d.client().await.unwrap();
     spawn(&c, "alpha", &["sh", "-c", "echo I-am-alpha; exec cat"]).await;
-    spawn(&c, "brief", &["sh", "-c", "echo I-am-brief; exec sleep 3"]).await;
     let ui = tokio::spawn(run(tui(&d, &["attach", "alpha"])
         .send(1.4, "\\x11v")
-        .send(1.8, "brief")
-        .send(2.2, "\\r")
         .snapshot(2.8)
         .snapshot(5.5)
         .send(6.0, "\\x11d")
         .timeout(7.0)));
-    wait_state(&c, "brief", |s| !s.is_live()).await;
-    c.request(Request::Remove { addr: "brief".into() }).await.expect("remove");
+    // The split's clone goes: its pane closes, and never shows another session (UX3.1).
+    let clone = newcomer(&c, &["alpha"]).await;
+    tokio::time::sleep(Duration::from_millis(1800)).await;
+    c.request(Request::Kill { addr: clone.clone(), signal: Some(9) }).await.expect("kill");
+    wait_state(&c, &clone, |s| !s.is_live()).await;
+    c.request(Request::Remove { addr: clone.clone() }).await.expect("remove");
     let r = ui.await.unwrap();
+    let header = format!("{clone} · ");
     let split = r.at(2.8);
-    assert!(split.contains("I-am-alpha") && split.contains("I-am-brief"), "split:\n{split}");
+    assert!(split.contains("I-am-alpha") && split.contains(&header), "split:\n{split}");
     let after = r.at(5.5);
     assert!(
-        after.contains("I-am-alpha")
-            && !after.contains("I-am-brief")
-            && !after.contains("(empty pane)"),
+        after.contains("I-am-alpha") && !after.contains(&header) && !after.contains("(empty pane)"),
         "the removed session's pane closed:\n{after}"
     );
 }
@@ -471,8 +486,6 @@ async fn tui_palette_finder_sidebar_and_restart() {
         .send(5.2, "\\x11:")
         .send(5.5, "pane.split_down")
         .send(5.8, "\\r")
-        .send(6.1, "beta")
-        .send(6.3, "\\r")
         .snapshot(6.9)
         .send(7.1, "\\x11d")
         .timeout(8.5))
@@ -490,8 +503,8 @@ async fn tui_palette_finder_sidebar_and_restart() {
     assert!(r.at(4.9).contains("I-am-alpha"), "sidebar Enter showed alpha:\n{}", r.at(4.9));
     let split = r.at(6.9);
     assert!(
-        split.contains("──") && split.contains("I-am-alpha") && split.contains("I-am-beta"),
-        "palette ran a split (stacked):\n{split}"
+        split.contains("──") && split.contains("I-am-alpha") && split.matches(" · ").count() >= 2,
+        "palette ran a split (stacked, a clone below):\n{split}"
     );
 }
 

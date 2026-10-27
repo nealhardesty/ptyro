@@ -300,6 +300,39 @@ pub struct Usage {
     pub at_ms: u64,
 }
 
+impl Usage {
+    /// One line for people: `5h 42% (resets in 2h10m) · 7d 18% · context 31% · session $1.20`,
+    /// with `RATE-LIMITED for 1h02m` first while it is.
+    pub fn summary(&self, now: u64) -> String {
+        let until = |t: u64| {
+            let m = t.saturating_sub(now) / 60_000;
+            if m >= 60 { format!("{}h{:02}m", m / 60, m % 60) } else { format!("{m}m") }
+        };
+        let mut v = Vec::new();
+        if let Some(t) = self.limited_until_ms.filter(|t| *t > now) {
+            v.push(format!("RATE-LIMITED for {}", until(t)));
+        }
+        for w in &self.windows {
+            let reset = w
+                .resets_at_ms
+                .filter(|t| *t > now)
+                .map(|t| format!(" (resets in {})", until(t)))
+                .unwrap_or_default();
+            v.push(format!("{} {}%{reset}", w.name, w.used_percent));
+        }
+        if let Some(c) = self.context_percent {
+            v.push(format!("context {c}%"));
+        }
+        if let Some(c) = self.cost_millis {
+            v.push(format!("session ${:.2}", c as f64 / 1000.0));
+        }
+        if v.is_empty() {
+            v.push("no figures reported yet".into());
+        }
+        v.join(" · ")
+    }
+}
+
 /// A subagent or teammate of a session (Claude agent teams, M4.18).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Child {
@@ -312,6 +345,31 @@ pub struct Child {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_usage_line_says_the_limits_and_when_they_reset() {
+        let u = Usage {
+            profile: "work".into(),
+            agent: "claude".into(),
+            windows: vec![
+                UsageWindow {
+                    name: "5h".into(),
+                    used_percent: 42,
+                    resets_at_ms: Some(130 * 60_000),
+                },
+                UsageWindow { name: "7d".into(), used_percent: 18, resets_at_ms: None },
+            ],
+            cost_millis: Some(1200),
+            context_percent: None,
+            limited_until_ms: Some(62 * 60_000),
+            at_ms: 0,
+        };
+        assert_eq!(
+            u.summary(0),
+            "RATE-LIMITED for 1h02m · 5h 42% (resets in 2h10m) · 7d 18% · session $1.20"
+        );
+        assert_eq!(Usage::default().summary(0), "no figures reported yet");
+    }
 
     #[test]
     fn vocabularies_map() {

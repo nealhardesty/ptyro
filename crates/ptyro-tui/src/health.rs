@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 
 use crate::app::{App, AppMsg, Confirmed, Overlay, Purpose};
-use crate::layout::Dir;
 use crate::palette::{Item, Palette, Target};
 
 /// How often the doctor runs again.
@@ -313,8 +312,9 @@ impl App {
         }
     }
 
-    /// `ptyro <args>` in a split below: its output stays readable once it's done. The CLI's
-    /// long tail reaches the TUI this way (UX1.20, UX1.21), interactive ones included.
+    /// `ptyro <args>`, full sized: its output stays readable once it's done, and `` ` `` goes
+    /// back. The CLI's long tail reaches the TUI this way (UX1.20, UX1.21), interactive ones
+    /// included.
     pub fn run_cli(&mut self, args: &[String]) {
         self.last_cli = Some(args.to_vec());
         let exe = std::env::current_exe()
@@ -326,7 +326,7 @@ impl App {
             .chain((2..).map(|k| format!("{base}-{k}")))
             .find(|n| self.sessions.iter().all(|s| s.name != *n))
             .expect("infinite");
-        self.spawn(argv, Some(Dir::Down), Some(name));
+        self.spawn_tool(argv, Some(name), false);
     }
 }
 

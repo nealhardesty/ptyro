@@ -7,7 +7,7 @@ import { data, leftWords, liveWorktrees, repoLeft, shipped, wtTabs } from "./dat
 import type { Project, Worktree, Workspace } from "./data.js";
 import { actions, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, pending, row, safeDecode, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
 import type { Item } from "./kit.js";
-import { newTask, openQuickShell, allSessions } from "./sessions.js";
+import { againWords, newShell, newTask, openQuickShell, allSessions, startAgain } from "./sessions.js";
 import type { Session } from "./screen.js";
 
 const ACTIONS = {
@@ -213,7 +213,9 @@ function projectView(id: string): HTMLElement {
   ]) }, "⋯")),
   h("main", { class: "stack", title: tip("project.show") },
     facts([["Path", p.root], ["Default branch", p.default_branch], ["Remote", p.remote_url], ["Pinned to", p.pin], ["Workspaces", ws.filter((w) => w.projects.includes(p.id)).map((w) => w.name).join(", ")]]),
-    bar(h("button", { class: "primary", title: tip("worktree.new"), onclick: () => newTask(`p:${p.id}`) }, "New task"), h("button", { title: tipOf("shell.here"), onclick: () => void openQuickShell(wts.find((w) => w.is_root), p.root) }, "Shell")),
+    bar(h("button", { class: "primary", title: tip("worktree.new"), onclick: () => newTask(`p:${p.id}`) }, "New task"),
+      ...((r) => r ? [h("button", { title: tipOf("session.again"), onclick: () => void startAgain(r) }, againWords(r)), h("button", { title: tipOf("shell.new"), onclick: () => void newShell(r) }, "New shell")] : [])(wts.find((w) => w.is_root)),
+      h("button", { title: tipOf("shell.here"), onclick: () => void openQuickShell(wts.find((w) => w.is_root), p.root) }, "Quick shell")),
     section("Scripts", pending(projectScripts, id) ?? (scripts.text.trim() ? h("div", {},
       h("div", { class: "bar" }, badge(scripts.trusted ? "trusted" : "not trusted", scripts.trusted ? "ok" : "warn"), h("span", { class: "sub" }, scripts.names.join(", "))),
       h("pre", { class: "block" }, scripts.text),
@@ -240,7 +242,11 @@ function workspaceForm(w?: Workspace): void {
     { key: "notify", label: "Notifications", type: "select", options: [["all", "Everything"], ["badge", "A badge only"], ["mute", "Muted"]], value: w?.notify ?? "all" },
   ], w ? "Save" : "Create", async (v) => {
     if (w) await conn.request({ t: "workspace_set", name: w.name, profile: (v.profile as string) || null, notify: v.notify });
-    else await conn.request({ t: "workspace_new", name: v.name, profile: (v.profile as string) || null, notify: v.notify });
+    else {
+      // Known at once, not when its event arrives (UX3.3).
+      const r = await conn.request({ t: "workspace_new", name: v.name, profile: (v.profile as string) || null, notify: v.notify });
+      if (r?.info) { data.workspaces.set(r.info.id, r.info); ui.render(); }
+    }
   });
 }
 
@@ -372,8 +378,10 @@ function worktreeView(rest: string): HTMLElement {
   const overview = h("div", { class: "stack-in" },
     bar(
       h("button", { class: "primary", title: tip("worktree.new"), onclick: () => newTask(`w:${w.id}`) }, "New session"),
+      h("button", { title: tipOf("session.again"), onclick: () => void startAgain(w) }, againWords(w)),
       h("button", { title: tip("worktree.finish"), onclick: () => finish(w) }, "Finish"),
-      h("button", { title: tipOf("shell.pane"), onclick: () => void openQuickShell(w) }, "Shell")),
+      h("button", { title: tipOf("shell.new"), onclick: () => void newShell(w) }, "New shell"),
+      h("button", { title: tipOf("shell.pane"), onclick: () => void openQuickShell(w) }, "Quick shell")),
     section("Sessions", sess.length ? h("div", { class: "rows" }, ...sess.map((s) => row(
       h("span", {}, h("span", { class: `glyph ${statusOf(s)}` }, STATUS_GLYPH[statusOf(s)] ?? "·"), " ", s.name, s.agent ? h("small", {}, ` ${s.agent}`) : null),
       s.activity ?? s.title ?? statusOf(s), ago(s.status?.since_ms ?? s.created_ms), { href: `#/s/${enc(s.id)}` }))) : h("p", { class: "sub" }, "Nothing is running here.")),

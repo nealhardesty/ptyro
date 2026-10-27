@@ -191,6 +191,19 @@ pub fn rows(doc: &Value) -> Vec<Row> {
     for t in doc["tools"].as_array().into_iter().flatten() {
         v.push(row(text(t, "name"), text(t, "text").into(), None));
     }
+    // Every agent's known limits, per profile.
+    v.push(Row { heading: true, ..row("usage limits", String::new(), None) });
+    let usage = doc["usage"].as_array().map(Vec::as_slice).unwrap_or_default();
+    for u in usage {
+        v.push(row(text(u, "label"), text(u, "text").into(), None));
+    }
+    if usage.is_empty() {
+        v.push(row(
+            "",
+            "none reported yet: Claude reports its limits with a session's first reply; Codex with [agents.codex] usage = true".into(),
+            None,
+        ));
+    }
     v
 }
 
@@ -389,6 +402,7 @@ mod tests {
             "web": { "wanted": true, "up": true, "url": "http://h:1", "text": ["up at http://h:1"] },
             "places": [{ "name": "config", "path": "/c/config.toml", "exists": false }],
             "tools": [{ "name": "git", "kind": "git", "found": true, "text": "2.54.0" }],
+            "usage": [{ "label": "claude@work", "text": "5h 42% (resets in 2h10m) · 7d 18%", "limited": false }],
         })
     }
 
@@ -399,6 +413,7 @@ mod tests {
         let all = all.join("\n");
         assert!(all.contains("ptyro 9.9.9 (protocol 1.2)"), "{all}");
         assert!(all.contains("commit abc of 2026-10-26 x"), "{all}");
+        assert!(all.contains("claude@work 5h 42% (resets in 2h10m) · 7d 18%"), "{all}");
         assert!(all.contains("NOT this version"), "{all}");
         assert!(all.contains("config /c/config.toml (not made yet)"), "{all}");
         assert!(all.contains("git 2.54.0"), "{all}");

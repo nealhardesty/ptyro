@@ -21,7 +21,28 @@ export const data = {
   workspaces: new Map<string, Workspace>(),
   agents: [] as Agent[],
   defaultAgent: "claude",
+  /// What each workspace last started (UX3.2: quick new); none: the default agent.
+  lastLaunch: new Map<string, LastLaunch | null>(),
 };
+
+export interface LastLaunch { agent?: string | null; profile?: string | null; argv?: string[] }
+
+/// The workspace a worktree's sessions belong to: its project's first, else `main`.
+export const workspaceOf = (w: Worktree): string => [...data.workspaces.values()].find((x) => x.projects.includes(w.project))?.name ?? "main";
+
+/// What quick new starts in `ws`, for people: `claude`, `claude@work`, `shell`, `htop`.
+export function againLabel(ws: string): string {
+  const l = data.lastLaunch.get(ws);
+  if (!l) return data.defaultAgent;
+  if (l.agent) return l.profile && !l.agent.includes("@") ? `${l.agent}@${l.profile}` : l.agent;
+  const p = l.argv?.[0];
+  return p ? p.split("/").pop() ?? p : "shell";
+}
+
+/// Ask the daemon what `ws` last started.
+export async function refreshLaunch(ws: string): Promise<void> {
+  try { data.lastLaunch.set(ws, (await conn.request({ t: "last_launch", workspace: ws })).launch ?? null); } catch { /* the default agent */ }
+}
 
 const byId = <T extends { id: string }>(list: T[]): Map<string, T> => new Map(list.map((x) => [x.id, x]));
 
@@ -37,6 +58,7 @@ export async function loadAll(): Promise<void> {
   if (w.status === "fulfilled") data.worktrees = byId<Worktree>(w.value.worktrees);
   if (ws.status === "fulfilled") data.workspaces = byId<Workspace>(ws.value.workspaces);
   if (ag.status === "fulfilled") { data.agents = ag.value.agents; data.defaultAgent = ag.value.default; }
+  await Promise.allSettled([...data.workspaces.values()].map((w) => refreshLaunch(w.name)));
   ui.render();
 }
 

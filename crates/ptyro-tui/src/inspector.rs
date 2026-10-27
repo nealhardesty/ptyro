@@ -425,7 +425,7 @@ impl App {
                 };
                 self.close_inspector_after = true;
                 self.request(
-                    Pending::Spawned { split: None, spec: Box::new(spec.clone()) },
+                    Pending::Spawned { split: None, spec: Box::new(spec.clone()), back: false },
                     Request::Spawn { spec },
                 );
             }

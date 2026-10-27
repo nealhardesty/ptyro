@@ -14,7 +14,7 @@ use ptyro_core::model::{
 };
 use ptyro_core::scratchpad::{Item, Snapshot};
 use ptyro_core::screen::{ScreenDelta, ScrollbackDoc};
-use ptyro_core::session::{HistoryEntry, SessionInfo, SpawnSpec};
+use ptyro_core::session::{HistoryEntry, LastLaunch, SessionInfo, SpawnSpec};
 use ptyro_core::status::{AttentionKind, InboxEntry, Usage};
 use ptyro_core::{ClientId, Error, SessionId, TermSize};
 use ptyro_run::wire::{
@@ -33,7 +33,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 18 };
+pub const PROTO: Version = Version { major: 1, minor: 19 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -285,6 +285,11 @@ pub enum Request {
         /// Its home workspace, for one outside any project (default `main`).
         #[serde(default)]
         workspace: Option<String>,
+    },
+    /// What `workspace` last started (UX3.2: quick-new's `SpawnSpec.again`). Replies
+    /// `LastLaunch`.
+    LastLaunch {
+        workspace: String,
     },
     /// The scratchpad (NOTE1): its text and revision. Replies `Scratch`.
     ScratchGet,
@@ -1170,6 +1175,11 @@ pub struct Metrics {
 pub enum Reply {
     Session {
         info: SessionInfo,
+    },
+    /// `None`: nothing started there yet (`again` starts the default agent).
+    LastLaunch {
+        #[serde(default)]
+        launch: Option<LastLaunch>,
     },
     Sessions {
         sessions: Vec<SessionInfo>,

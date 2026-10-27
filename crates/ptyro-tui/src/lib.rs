@@ -20,6 +20,7 @@ pub mod paint;
 pub mod palette;
 mod quick;
 mod runs;
+mod screens;
 mod sets;
 pub mod settings;
 pub mod theme;

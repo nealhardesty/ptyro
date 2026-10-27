@@ -134,6 +134,7 @@ async fn dispatch(
             json,
             agent,
             profile,
+            again,
             wt,
             new_wt,
             project,
@@ -179,6 +180,7 @@ async fn dispatch(
                 argv,
                 agent,
                 profile,
+                again,
                 wt,
                 override_pin,
                 yes,
@@ -750,6 +752,8 @@ pub struct NewArgs {
     pub argv: Vec<String>,
     pub agent: Option<String>,
     pub profile: Option<String>,
+    /// Another of what the workspace last started (UX3.2).
+    pub again: bool,
     pub wt: Option<String>,
     pub override_pin: bool,
     pub yes: bool,
@@ -860,6 +864,7 @@ pub async fn new(ctx: &Ctx, a: NewArgs) -> Result<i32, Error> {
         verify: a.verify,
         lead: a.lead,
         structured: a.structured,
+        again: a.again,
         ..SpawnSpec::default()
     };
     let reply = with_confirmation(&client, Request::Spawn { spec }, false, |r| {

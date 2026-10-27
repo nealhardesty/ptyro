@@ -1,6 +1,7 @@
-//! The quick terminal (UX1.25, UX2.3, SPEC §11.2h): the worktree's one shell, in a drawer (a pane
-//! split off below one of its project's panes) or, when nothing of its project is open, a panel
-//! of its own. `shell.here` (`!`) picks; `shell.drawer` (`C-t`) and `shell.pane` (`T`) force one.
+//! The quick terminal (UX1.25, UX2.3, UX3.4, SPEC §11.2h): a worktree's one shell, in a drawer (a
+//! pane split off below one of its project's panes) or a full-sized panel of its own:
+//! `shell.drawer` (`C-t`) and `shell.pane` (`T`); `shell.here` (⏎ on its line) as
+//! `[ui] shell_style` says. `!` is not it: that starts another shell (`shell.new`).
 //! A key shows it and focuses it, focuses it when it's shown, and hides it when it's focused. Hiding closes only the pane: the
 //! daemon keeps the shell, so it comes back as it was.
 
@@ -131,20 +132,13 @@ impl App {
     fn show_quick_existing(&mut self, style: ShellStyle, id: SessionId) {
         if let Some(pane) = self.quick_panel(id) {
             if self.focus == Focus::Pane && self.focused == pane {
-                // Pressed again in its own panel: back to what it replaced.
-                let back = self
-                    .panes
-                    .get(&pane)
-                    .and_then(|p| p.last)
-                    .filter(|l| self.session(*l).is_some());
-                match back {
-                    Some(last) => self.show(last, None),
-                    None => {
-                        if let Some(p) = self.panes.get_mut(&pane) {
-                            p.session = None;
-                        }
-                        self.view_changed();
+                // Pressed again in its own panel: back to what it replaced (UX3.1: the kept
+                // layout, else the pane's previous session).
+                if !self.go_back() {
+                    if let Some(p) = self.panes.get_mut(&pane) {
+                        p.session = None;
                     }
+                    self.view_changed();
                 }
             } else {
                 self.focused = pane;

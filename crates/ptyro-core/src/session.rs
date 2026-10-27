@@ -408,4 +408,38 @@ pub struct SpawnSpec {
     /// Make it the scratchpad's editor (NOTE1.1; `ScratchPane` reuses it).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pad: bool,
+    /// Quick-new (UX3.2): start what was last started in its workspace (`agent`, `argv` and
+    /// `profile` come from that), else the default agent.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub again: bool,
+    /// A client's tool (an editor, a `ptyro …` command's output): not remembered for `again`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tool: bool,
+}
+
+/// What a workspace last started (UX3.2), so `again` can start another of it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LastLaunch {
+    /// An agent (`claude`, `claude@work`); `None` with empty `argv`: a shell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// A command's argv (no `agent`), or an agent's extra arguments.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub argv: Vec<String>,
+}
+
+impl LastLaunch {
+    /// For people: `claude`, `claude@work`, `shell`, `htop`.
+    pub fn label(&self) -> String {
+        match (&self.agent, self.argv.first()) {
+            (Some(a), _) => match &self.profile {
+                Some(p) if !a.contains('@') => format!("{a}@{p}"),
+                _ => a.clone(),
+            },
+            (None, None) => "shell".into(),
+            (None, Some(p)) => p.rsplit('/').next().unwrap_or(p).to_owned(),
+        }
+    }
 }

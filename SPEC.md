@@ -986,6 +986,14 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built UX3.2] Protocol 1.19** (additive): quick new. `SpawnSpec` gains `again` (fill in the
+agent, `argv` and `profile` from what its home workspace last started; the default agent when
+nothing has) and `tool` (a client's tool, not remembered). `LastLaunch{workspace}` →
+`LastLaunch{launch?: {agent?, profile?, argv?}}` (`read` scope). The daemon remembers the last
+`Spawn` per workspace, and a `WorktreeNew`'s agent, in `kv` (`last_launch`), never a tool, a quick
+terminal or the scratchpad's editor. `again` with no agent named is `full` scope (it may start a
+command line); the web asks `LastLaunch` and names the agent instead, which is `control`.
+
 ### 6.5 Screen frames
 
 ```rust
@@ -1117,6 +1125,8 @@ struct SpawnSpec {
     attach: bool,                     // TUI convenience
 }
 ```
+
+**[built UX3.2]** The real struct also has `again` and `tool` (§6.4, protocol 1.19).
 
 **[built]** Where it starts: a worktree given by address (`Worktree`) starts at its root. A
 directory (`Cwd`) starts exactly there, even inside a registered worktree; the innermost
@@ -2446,8 +2456,9 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
   kind), up to **four panes** in a split tree with 1-cell dividers, a one-row header per pane, and
   the status bar. The status bar shows the mode badge (PREFIX / COPY / SIDEBAR / VIEW ONLY /
   RECONNECTING), toasts, counts (live · working · blocked), hints and a clock.
-- **Splits:** `v` side by side, `s` stacked (vim's sense), each through a picker that offers
-  existing sessions or "+ new shell". Panes are focused with `h`/`l` (cyclic) or Shift-arrows
+- **Splits:** `v` side by side, `s` stacked (vim's sense). **[changed UX3.1]** A split starts a
+  clone of the session it splits (§11.2i); before, a picker offered existing sessions or "+ new
+  shell". Panes are focused with `h`/`l` (cyclic) or Shift-arrows
   (geometric), resized with `< > + -` or by dragging a divider, zoomed with `z`, closed with `c`.
   Every visible session is subscribed and **sized to its own pane**; hidden ones are unsubscribed.
 - **The view persists in the daemon** (`SaveView`/`LoadView "main"`, stored in `kv`, debounced
@@ -2764,7 +2775,9 @@ learning anything up front.
   devices, replay and export, `config show`.
 - **About** (UX2.1, `crates/ptyro/src/about.rs`, `crates/ptyro-tui/src/about.rs`,
   `aboutView` in `web/src/settings.ts`). `ptyro about [--json]` is one document: the version and
-  protocol (`ptyro --version` prints the same version), the repository (`Cargo.toml`'s
+  protocol (`ptyro --version` prints the same version; **[UX3.5]** and every agent's known usage
+  limits per profile, `usage: [{label, text, limited}]` from the daemon's `Usage` meters, one
+  line each by `Usage::summary`), the repository (`Cargo.toml`'s
   `repository`) and its `/issues` as where to report a problem, the licence, the build (commit and
   its date from `build.rs`, the target triple, the binary, the OS), where the config file, data,
   logs and socket are (and whether they exist yet), the daemon (running, its version and
@@ -2810,8 +2823,9 @@ learning anything up front.
 - **A companion shell** (UX1.13, `shell.here`: `!` after the prefix or in the sidebar): your
   shell in the selected worktree, under its profile. **[built UX1.25]** It is now the
   **quick terminal**, below.
-- **The quick terminal** (UX1.25, `shell.here`: `!` after the prefix, `!` in the sidebar,
-  `shell.drawer`: `C-t`, `shell.pane`: `T`; `⏎` on its line; `crates/ptyro-tui/src/quick.rs`, `crates/ptyro-daemon/src/quick.rs`):
+- **The quick terminal** (UX1.25; **[changed UX3.4]** `!` is now `shell.new`, a new shell, and
+  the quick terminal is a worktree's only, §11.2i; `shell.drawer`: `C-t`, `shell.pane`: `T`,
+  `shell.here`: `⏎` on its line; `crates/ptyro-tui/src/quick.rs`, `crates/ptyro-daemon/src/quick.rs`):
   - **One per worktree**, shared by its sessions; outside any worktree (an empty pane, a
     session in a plain directory), one per directory. `QuickShell {worktree?, cwd, create, env,
     size?, workspace?}` finds it (by address, else the worktree `cwd` is in, else `cwd`) and,
@@ -2820,7 +2834,7 @@ learning anything up front.
     `SessionInfo.quick` and `Place.quick` set. Finding is `read` scope for paired devices,
     starting `full`.
   - **Drawer or panel (UX2.3, 2026-10-26).** The same shell is shown one of two ways.
-    `shell.here` (`!`) picks by `[ui] shell_style`: `auto` (the default) puts it in a drawer
+    `shell.here` picks by `[ui] shell_style` (`pane` by default since UX3.1): `auto` puts it in a drawer
     under a pane showing a session of the same project (the focused pane first, else the first
     in layout order; matched by project, or by directory outside any), and when no pane does
     (the focused pane is another project's, empty, or nothing is open) shows it as a **panel of
@@ -2885,6 +2899,44 @@ learning anything up front.
 - **Everything at once** (`Z`, `z` in the sidebar; `sidebar.zoom`): the sidebar fills the
   screen with every row open and wrapped. It is drawn over the panes, which keep their size, so
   no session is resized for a look. `⏎` opens a session and goes back; `Z`, `z` or `Esc` go back.
+
+### 11.2i What UX3 added **[built UX3]**
+
+The daily loop (ROADMAP UX3, RESEARCH R-UX-34…37). `crates/ptyro-tui/src/screens.rs`.
+
+- **Full-sized panels; only a split command fills a split** (UX3.1). `show(id, None)` places a
+  session without a split (`place`): where it already shows (focused there); else in the kept
+  layout that shows it (swapped back); else, in a single pane (a drawer aside), in that pane
+  (`PaneState.last` remembers what it replaced); else full sized in a fresh one-pane layout, the
+  split layout kept whole in `App.kept` (a `Screen`: layout, panes, focus, zoom, drawer; saved as
+  `SavedView.kept`). `` ` `` (`session.last`) swaps the kept layout and the screen, else shows the
+  pane's previous session. Everything goes through it: new sessions and worktrees, the quick
+  terminal's panel, ⏎ in the sidebar, `j`/`k`, `1`–`9`, the finder, attention.
+  - Tools open full sized (`spawn_tool`, `SpawnSpec.tool`): `$EDITOR` on a file and
+    `config edit` give the screen back when they exit (`App.tool_back`); `run_cli` (the CLI's long
+    tail, health fixes) keeps its output until `` ` ``.
+  - `v` / `s` (`split_clone`): the focused pane's session (the selected row's, in the sidebar)
+    cloned beside or below it: an agent as the same agent and profile in the same worktree with a
+    fresh conversation (`override_pin`/`confirmed`: its source already runs there); anything else
+    as a shell in its directory; an empty pane a shell here. The pane count is checked first.
+  - A split's pane whose session is removed closes; it never takes another session (UX1.23 still
+    applies to a single pane). A restored view closes a split's empty panes and fills only a
+    single one. Sessions that go are dropped from the kept layout, which goes when it is empty.
+  - Unchanged: the drawer (`C-t`) and the scratchpad's `mode = "pane"`, both asked for by name.
+- **Quick new** (UX3.2, `session.again`: `C-n` after the prefix and in the sidebar, the row
+  menus, which-key's `+ claude`): `SpawnSpec { again: true }` in the context's worktree (else
+  here), full sized. The label comes from `LastLaunch` (asked on attach, a workspace switch and
+  after each spawn).
+- **Created means shown** (UX3.3, `reveal`): `show` unfolds the session's project and worktree and
+  selects its row; a row the tree can't place yet is retried on each event for 5 s
+  (`App.revealing`). A new worktree with no session shown is selected (`reveal_worktree`). A new
+  workspace is upserted from `WorkspaceNew`'s reply.
+- **`!` is a new shell** (UX3.4, `shell.new`): another plain shell in the context's worktree,
+  every press, full sized; it counts for quick new. The quick terminal is `C-t`
+  (`shell.drawer`) / `T` (`shell.pane`), and `shell.here` (⏎ on its line) follows
+  `[ui] shell_style`, now `pane` by default. It belongs to a worktree: with no context worktree
+  the TUI opens the project picker and carries on there (`AfterAdd::Run`); `QuickShell` refuses
+  to start one outside a worktree (one per directory from before is still found).
 
 ### 11.3 Default key map (after prefix) **[built M2; differs from the proposal where noted]**
 
@@ -3416,7 +3468,7 @@ show_ports = true
 confirm_kill = true              # x asks before stopping a session
 on_stop = "next"                 # after you stop a pane's session: next (its neighbour) | stay
 sidebar_detail = "auto"          # lines under each session row: auto | compact | full
-shell_style = "auto"             # what `!` shows: auto (drawer if the project is open, else a panel) | drawer | pane
+shell_style = "pane"             # what ⏎ on the quick terminal's line shows: pane (full sized) | auto (drawer if the project is open) | drawer
 which_key_delay = 400            # ms after the prefix before the which-key menu; 0: never
 
 [daemon]

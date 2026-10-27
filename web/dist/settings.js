@@ -391,8 +391,27 @@ function aboutValue(v, link = false) {
     const href = link ? webHref(v) : null;
     return h("span", { class: "about-v" }, href ? h("a", { href, target: "_blank", rel: "noreferrer" }, v) : h("code", {}, v), " ", h("button", { class: "small", title: "Copy", onclick: () => copyText(v) }, "Copy"));
 }
+/// Every agent's known limits, per profile, one line each (the meters are on the Usage page).
+function usageFacts() {
+    const wait = pending(usage, "", "Looking…");
+    if (wait)
+        return wait;
+    const list = usage.get("");
+    const now = Date.now();
+    const until = (t) => { const m = Math.floor(Math.max(0, t - now) / 60000); return m >= 60 ? `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m` : `${m}m`; };
+    const line = (u) => [
+        u.limited_until_ms > now ? `RATE-LIMITED for ${until(u.limited_until_ms)}` : "",
+        ...u.windows.map((w) => `${w.name} ${w.used_percent}%${w.resets_at_ms > now ? ` (resets in ${until(w.resets_at_ms)})` : ""}`),
+        u.context_percent != null ? `context ${u.context_percent}%` : "",
+        u.cost_millis != null ? `session $${(u.cost_millis / 1000).toFixed(2)}` : "",
+    ].filter(Boolean).join(" · ") || "no figures reported yet";
+    return list.length
+        ? h("div", { title: tip("usage") }, facts(list.map((u) => [`${u.agent}@${u.profile}`, line(u)])), h("a", { href: "#/usage" }, "The meters →"))
+        : h("p", { class: "sub" }, "None reported yet: Claude reports its limits with a session's first reply; Codex with [agents.codex] usage = true.");
+}
 function aboutView() {
     poll("about", () => about.refresh(""), 10_000);
+    poll("usage", () => usage.refresh(""), 15000);
     const doc = about.get("");
     const body = pending(about, "", "Looking…") ?? (() => {
         const b = doc.build ?? {}, d = doc.daemon ?? {}, w = doc.web;
@@ -403,7 +422,7 @@ function aboutView() {
         ])), section("Running", facts([
             ["Daemon", d.running ? `running · ${d.version} (protocol ${d.protocol}) · pid ${d.pid} · up ${ago(d.started_ms)}` : "not running (it starts on demand)"],
             ["Web app", w ? (w.text ?? []).join(" · ") : null]
-        ])), section("Where things live", facts((doc.places ?? []).map((p) => [p.name[0].toUpperCase() + p.name.slice(1), aboutValue(p.path)]))), (doc.tools ?? []).length ? section("Tools", facts(doc.tools.map((t) => [t.name, t.text]))) : null, doc.limited ? h("p", { class: "sub" }, "This device can't ask the computer for more (build, the config and data folders, git and the agents). Pair it with ", h("code", {}, "ptyro pair --scope full"), " to see them.") : null);
+        ])), section("Where things live", facts((doc.places ?? []).map((p) => [p.name[0].toUpperCase() + p.name.slice(1), aboutValue(p.path)]))), (doc.tools ?? []).length ? section("Tools", facts(doc.tools.map((t) => [t.name, t.text]))) : null, section("Usage limits", usageFacts()), doc.limited ? h("p", { class: "sub" }, "This device can't ask the computer for more (build, the config and data folders, git and the agents). Pair it with ", h("code", {}, "ptyro pair --scope full"), " to see them.") : null);
     })();
     return h("div", {}, ui.header("About", "#/more", h("button", { class: "icon", title: "Check again", "aria-label": "Check again", onclick: () => about.reload("") }, "↻")), h("main", { class: "stack" }, body));
 }

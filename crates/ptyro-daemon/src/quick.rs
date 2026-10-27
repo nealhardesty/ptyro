@@ -1,5 +1,6 @@
 //! The quick terminal (UX1.25, SPEC §11.2h): one shell per worktree, or per directory outside
-//! one, that `QuickShell` starts on first use and hands back after. It runs under the
+//! one, that `QuickShell` starts on first use and hands back after (only in a worktree since
+//! UX3.4; one per directory outside any is still found, never started). It runs under the
 //! worktree's profile like any session there, but it's quiet (`raise` lets only a blocked agent
 //! started in it through), it never holds up removing its worktree while at its prompt
 //! (`Session::busy`), and `exit` in it forgets it, so the next one starts fresh.
@@ -50,10 +51,16 @@ impl Daemon {
                 format!("no quick terminal in {here} yet; `ptyro shell` starts one"),
             ));
         }
+        // It belongs to a worktree (UX3.4): elsewhere, a shell is a plain session.
         let base = match &place {
             Some((w, p)) if w.is_root => p.slug.clone(),
             Some((w, _)) => w.name.clone(),
-            None => dir_name(&cwd),
+            None => {
+                return Err(Error::invalid(format!(
+                    "the quick terminal belongs to a worktree, and {} is in none: start it in a project's checkout (`ptyro project add` registers one), or a plain shell with `ptyro new`",
+                    cwd.display()
+                )));
+            }
         };
         let spec = SpawnSpec {
             worktree: wt,
@@ -81,11 +88,4 @@ impl Daemon {
                 }
         })
     }
-}
-
-/// A name from a directory's last component (`~/notes` → `notes`), `home` when there's none.
-fn dir_name(dir: &Path) -> String {
-    dir.file_name()
-        .and_then(|n| ptyro_core::names::from_text(&n.to_string_lossy()))
-        .unwrap_or_else(|| "home".into())
 }
