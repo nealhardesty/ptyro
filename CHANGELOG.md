@@ -2,6 +2,16 @@
 
 Generated from git history by `make changelog` (scripts/changelog.sh); edit commit messages, not this file.
 
+## v0.0.15 (2026-10-28)
+
+### Fixes
+
+- fix: a client transport without its pipes is an error, not a panic (the unwrap ratchet failed CI since MM1) (6dbd15a)
+
+### Other
+
+- chore: version 0.0.15 (4e89590)
+
 ## v0.0.14 (2026-10-27)
 
 ### Features
@@ -32,6 +42,7 @@ Generated from git history by `make changelog` (scripts/changelog.sh); edit comm
 
 ### Other
 
+- release: v0.0.14 (45d7078)
 - chore: version 0.0.14 (3ce179e)
 - MM1: other machines' workspaces beside yours, in one sidebar, one CLI and one phone app (v0.0.13) (6c3067e)
 
