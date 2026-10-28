@@ -121,7 +121,8 @@ pub fn load_or_make(dir: &Path, names: &[String], now: OffsetDateTime) -> Result
             p.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
             p.use_authority_key_identifier_extension = true;
             let not_after = p.not_after.unix_timestamp();
-            let cert = p.signed_by(&key, &ca, &ca_key).map_err(tls_err)?;
+            let issuer = rcgen::Issuer::new(ca_params(&meta)?, &ca_key);
+            let cert = p.signed_by(&key, &issuer).map_err(tls_err)?;
             let (c, k) = (cert.pem(), key.serialize_pem());
             std::fs::write(dir.join("server.pem"), &c).map_err(|e| io("server.pem", e))?;
             write_private(&dir.join("server-key.pem"), &k)?;
