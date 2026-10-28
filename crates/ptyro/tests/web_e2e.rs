@@ -41,7 +41,7 @@ fn serve(d: &TempDaemon, home: &Path, port: u16) -> Child {
         .spawn()
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(30);
-    while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+    while !ptyro_testkit::listening(port) {
         assert!(Instant::now() < deadline, "ptyro serve never listened");
         std::thread::sleep(Duration::from_millis(50));
     }

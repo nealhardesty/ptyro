@@ -447,7 +447,7 @@ fn a_device_is_denied_exactly_what_its_scope_is_too_low_for() {
         .unwrap();
     let serve = Serve { child, port };
     let deadline = Instant::now() + WAIT;
-    while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+    while !ptyro_testkit::listening(port) {
         assert!(Instant::now() < deadline, "ptyro serve never listened on {port}");
         std::thread::sleep(Duration::from_millis(50));
     }

@@ -203,3 +203,11 @@ fn isolate(cmd: &mut Command, home: &Path, bin: &Path) {
     }
     cmd.env("PTYRO_HOME", home).env("PTYRO_BIN", bin);
 }
+
+/// Whether something is listening on `127.0.0.1:port`. Connecting to a free ephemeral port can
+/// "succeed" by connecting the socket to itself (TCP simultaneous open, when the OS picks `port`
+/// as the source port too), so a connection whose two ends are the same address doesn't count.
+pub fn listening(port: u16) -> bool {
+    std::net::TcpStream::connect(("127.0.0.1", port))
+        .is_ok_and(|s| s.local_addr().ok() != s.peer_addr().ok())
+}

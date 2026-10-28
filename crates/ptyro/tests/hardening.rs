@@ -34,7 +34,7 @@ fn serve(d: &TempDaemon, env: &[(&str, &str)]) -> Serve {
     }
     let s = Serve { child: cmd.spawn().unwrap(), port };
     let deadline = Instant::now() + Duration::from_secs(30);
-    while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+    while !ptyro_testkit::listening(port) {
         assert!(Instant::now() < deadline, "ptyro serve never listened");
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -134,7 +134,7 @@ fn nobody_on_the_network_can_start_the_daemon() {
         .stderr(Stdio::null());
     let s = Serve { child: cmd.spawn().unwrap(), port };
     let deadline = Instant::now() + Duration::from_secs(30);
-    while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+    while !ptyro_testkit::listening(port) {
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(50));
     }
