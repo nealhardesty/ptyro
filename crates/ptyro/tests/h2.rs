@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use ptyro_core::TermSize;
 use ptyro_core::session::SpawnSpec;
-use ptyro_protocol::{Reply, Request};
+use ptyro_protocol::{Reply, Request, ScreenFormat};
 use ptyro_testkit::TempDaemon;
 
 const BIN: &str = env!("CARGO_BIN_EXE_ptyro");
@@ -143,8 +143,27 @@ async fn raw_bytes_wait_for_a_prompt_being_typed() {
     let (a, b) = tokio::join!(text, raw);
     a.unwrap();
     b.unwrap();
-    let screen = d.wait_for_text(&c, "cat", "second\nsecond", Duration::from_secs(10)).await;
-    let screen = screen.unwrap_or_else(|e| panic!("{e}"));
-    assert!(screen.contains("first\nfirst\n"), "{screen}");
-    assert!(!screen.contains("firstsecond"), "{screen}");
+    // The tty's echo and cat's copy of each line, in whatever order they interleave: four whole
+    // lines, the first before the second each time, never run together.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let lines = loop {
+        let Reply::Screen { text } = c
+            .request(Request::ReadScreen { addr: "cat".into(), format: ScreenFormat::Plain })
+            .await
+            .unwrap()
+        else {
+            panic!()
+        };
+        let lines: Vec<String> =
+            text.lines().map(str::trim_end).filter(|l| !l.is_empty()).map(str::to_owned).collect();
+        if lines.len() >= 4 || std::time::Instant::now() > deadline {
+            break lines;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    };
+    assert!(lines.iter().all(|l| l == "first" || l == "second"), "{lines:?}");
+    let firsts: Vec<usize> = (0..lines.len()).filter(|&i| lines[i] == "first").collect();
+    let seconds: Vec<usize> = (0..lines.len()).filter(|&i| lines[i] == "second").collect();
+    assert_eq!((firsts.len(), seconds.len()), (2, 2), "{lines:?}");
+    assert!(firsts[0] < seconds[0] && firsts[1] < seconds[1], "{lines:?}");
 }

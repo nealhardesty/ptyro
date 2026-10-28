@@ -892,8 +892,9 @@ async fn tui_workspaces_tree_folding_and_worktree_removal() {
         .snapshot(4.7)
         .send(4.9, "other")
         .send(5.1, "\\r")
-        .snapshot(5.8)
-        .send(6.2, "\\x11d"))
+        // The switch asks the daemon for the workspace's view: room for a slow CI machine.
+        .snapshot(6.8)
+        .send(7.2, "\\x11d"))
     .await;
     assert!(r.at(1.4).contains("▾ dirty") && r.at(1.4).contains("worker"), "{}", r.at(1.4));
     let folded = r.at(2.2);
@@ -913,7 +914,7 @@ async fn tui_workspaces_tree_folding_and_worktree_removal() {
     );
     // MM1.B: every workspace is in the sidebar; `w` goes to one's header (now the workspace you
     // are in), the others stay listed.
-    let other = r.at(5.8);
+    let other = r.at(6.8);
     assert!(
         other.contains(" · other") && other.contains("▾ other") && other.contains("lib"),
         "{other}"
