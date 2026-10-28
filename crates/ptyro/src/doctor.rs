@@ -224,16 +224,23 @@ fn web_app(w: &ptyro_protocol::WebServe, r: &mut Report) {
 
 /// `ptyro serve` (WEB1.7): plain HTTP where tokens would cross a network, and its certificate.
 fn remote(ctx: &Ctx, config: &Config, r: &mut Report) {
-    let listen = config.remote.listen.parse::<std::net::SocketAddr>().ok();
-    let off_loopback = config.remote.local || listen.is_some_and(|a| !a.ip().is_loopback());
-    if config.remote.insecure && off_loopback {
-        r.add(
-            "remote",
-            "plain HTTP",
-            Level::Warn,
-            "`ptyro serve` speaks plain HTTP off this machine (`[remote] insecure`): device tokens \
-             cross the network in clear. Without it ptyro speaks HTTPS (`ptyro config edit`)",
-        );
+    use ptyro_core::config::Access;
+    if config.remote.serve {
+        match config.remote.access {
+            Access::Open => r.add(
+                "remote",
+                "web app reach",
+                Level::Note,
+                "`[remote] access = \"open\"`: every network interface answers (HTTPS; a device still needs a pairing token). `tailscale` keeps it to your tailnet, `localhost` to this computer",
+            ),
+            Access::Tailscale if crate::remote::tailscale_ips().is_empty() => r.add(
+                "remote",
+                "web app reach",
+                Level::Warn,
+                "`[remote] access = \"tailscale\"` but Tailscale isn't up on this computer, so only this computer reaches the web app until it is (it starts listening on the tailnet by itself). Start Tailscale, or pick `open` for the Wi-Fi",
+            ),
+            _ => {}
+        }
     }
     let Some(ends) = crate::tls::expires(&crate::tls::dir(&ctx.paths.data)) else { return };
     let days = (ends - time::OffsetDateTime::now_utc()).whole_days();

@@ -705,9 +705,9 @@ pub enum Request {
     },
     /// The web app's server, when the daemon runs it (`[remote] serve`, 1.16): `None` asks how
     /// it is; `Some(true)` or `Some(false)` turns the setting on or off (edits the config file)
-    /// and starts or stops it. `via` says how phones reach it when turning it on: `tailscale`,
-    /// `lan` (this network) or `here` (this computer only); left out, a choice is made if none
-    /// is set. Replies `Web`. Turning it on or off is `full` scope.
+    /// and starts or stops it. `via` says who can reach it when turning it on
+    /// (`[remote] access`): `localhost`, `tailscale` or `open` (`here` and `lan` are the old words
+    /// for the first and last); left out, the config's choice stands, else one is made. Replies `Web`. Turning it on or off is `full` scope.
     Web {
         #[serde(default)]
         on: Option<bool>,
@@ -1146,8 +1146,14 @@ pub struct WebServe {
     pub pid: Option<u32>,
     /// What phones open (the address `ptyro pair` puts in its link).
     pub url: Option<String>,
-    /// Where it listens, as configured.
+    /// Where it listens, as configured (the address `access` and `port` make).
     pub listen: String,
+    /// Who can reach it: `localhost`, `tailscale` or `open` (`[remote] access`).
+    #[serde(default)]
+    pub access: String,
+    /// The port it listens on (`[remote] port`).
+    #[serde(default)]
+    pub port: u16,
     /// SHA-256 of the certificate authority ptyro made, to check it against when trusting it.
     pub ca_fingerprint: Option<String>,
     pub since_ms: Option<u64>,

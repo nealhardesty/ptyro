@@ -79,13 +79,26 @@ ptyro machine rm laptop2
 
 ### 1. Serve, over HTTPS
 
-Phones need HTTPS to install the app and to show notifications, and `ptyro serve` speaks it by
-default, with a certificate it makes. Pick how the phone reaches it:
+Phones need HTTPS to install the app and to show notifications, so `ptyro serve` is **always
+HTTPS**, with a certificate it makes (or one of your own, below). There is no plain-HTTP mode.
+
+You choose two things, and each is one setting (Settings → remote in the TUI and the web app,
+`ptyro config set` on the command line):
+
+| `remote.access` | who can reach the web app |
+|---|---|
+| `localhost` (the default) | this computer only (`127.0.0.1`) |
+| `tailscale` | this computer and your Tailscale network: it listens on loopback and this computer's Tailscale addresses, nothing else, so the Wi-Fi never sees it. If Tailscale comes up after the server, it starts listening there by itself |
+| `open` | every network interface (`0.0.0.0`): the Wi-Fi or LAN too, and anything else that reaches this computer. Devices still need a pairing token |
+
+`remote.port` is the port, `7091` unless you change it. The address phones open is
+`https://<this computer>:<port>`: its Tailscale name for `tailscale`, its LAN address for `open`.
 
 ```bash
-ptyro serve --local       # your LAN (and tailnet): every interface, local addresses only, HTTPS
-ptyro serve --tailscale   # your tailnet: Tailscale's own HTTPS name and certificate in front
-ptyro serve               # this machine only (127.0.0.1:7091), HTTPS
+ptyro web on --access tailscale    # or localhost, open; nothing given: Tailscale if it is up, else open
+ptyro config set remote.access open
+ptyro config set remote.port 8443
+ptyro serve --access open --port 8443   # by hand, for one run (the daemon's own is `ptyro web on`)
 ```
 
 **ptyro's certificate.** The first time, `ptyro serve` makes a small certificate authority (CA)
@@ -111,22 +124,13 @@ only yours: whoever can read its key (`~/.local/share/ptyro/serve/tls/ca-key.pem
 valid ten years) could make a certificate for any site that such a device would accept. So keep
 that directory out of backups and synced folders. To start over, stop `ptyro serve`, delete
 `~/.local/share/ptyro/serve/tls/`, start it again, and trust the new `ca.crt` on each device
-(then remove the old one). Prefer `--tailscale` or your own certificate when you can: neither
-needs a CA on your phone.
+(then remove the old one). Prefer your own certificate when you can: it needs no CA on your
+phone.
 
 **Your own certificate.** `ptyro serve --cert fullchain.pem --key privkey.pem` (or
 `tls_cert` and `tls_key` under `[remote]`) uses a certificate you have, from Let's Encrypt or
 your company's CA, say: phones that trust its issuer need nothing installed, and there's no
 `/ca.crt`. The files are read again every 12 hours, so a renewed certificate is picked up.
-
-**`--local`** listens on every interface and lets in only this machine, private networks
-(10/8, 172.16/12, 192.168/16, IPv6 unique local), link-local addresses and tailnets
-(100.64.0.0/10); anyone else's connection is dropped before TLS. Set `local = true` under
-`[remote]` to keep it.
-
-**Tailscale.** `ptyro serve --tailscale` runs `tailscale serve` in front of `127.0.0.1:7091`: the
-phone gets Tailscale's HTTPS name and a certificate it already trusts, nothing to install. ptyro
-then speaks plain HTTP on loopback, where only `tailscale serve` reaches it.
 
 **Have the daemon run it.** `ptyro web on` (or the question in `ptyro init`, or `ptyro daemon start
 --serve`, or More → Web app in the web app, or `remote.web_on` in the TUI) sets `[remote] serve = true`
@@ -134,62 +138,45 @@ in `~/.config/ptyro/config.toml`. The daemon then starts `ptyro serve` itself, r
 dies, and keeps it through live upgrades and restarts. Its log is `~/.local/state/ptyro/serve.log`.
 
 ```bash
-ptyro web on                    # on: Tailscale HTTPS if it is running here, else HTTPS on this network
-ptyro web on --via lan          # or choose: tailscale, lan (this Wi-Fi), here (this computer only)
+ptyro web on                    # on: your Tailscale network if it is running here, else every network
+ptyro web on --access localhost # or choose: tailscale, open (the Wi-Fi too), localhost (this computer only)
 ptyro web                       # how it is: up at <address>, since when, who runs it, what's wrong
 ptyro pair                      # then a QR code for the phone (or `ptyro web on --pair`)
 ptyro web off                   # stop it; paired devices stay paired
 ```
 
-What turning it on changes: the daemon runs a web server that listens on `[remote] listen` (or
-every private-network interface with `lan`), and it comes back whenever the daemon does. Install
+What turning it on changes: the daemon runs a web server that listens where `[remote] access` says, on
+`[remote] port`, and it comes back whenever the daemon does. Install
 the login service (`ptyro daemon install-service`) and it is up after a reboot too; the phone is
 paired once and stays paired. Nothing opens to anyone until a device is paired, and each can be
 revoked. Turning it off from the web app ends the page you are looking at, so it asks first.
 
 If it won't start, `ptyro web` and `ptyro doctor` say why: most often the port is taken (a
 `ptyro serve` you started by hand, which `ptyro web` names with its pid; or another program).
-Stop it, or set another `listen`; the daemon tries again on its own.
+Stop it, or set another `remote.port`; the daemon tries again on its own.
 
 ```toml
 [remote]
 serve = true
-listen = "127.0.0.1:7091"   # loopback or a Tailscale address; `local = true` for your LAN
-# local = true              # every interface, local addresses only, over HTTPS
+access = "tailscale"        # localhost (this computer), tailscale (and your tailnet) or open (every network)
+port = 7091
 # tls_cert = "~/certs/fullchain.pem"   # your own certificate instead of ptyro's (with tls_key)
 # tls_key = "~/certs/privkey.pem"
-# public_url = "https://workbox.tailnet.ts.net"   # what QR codes point at (found automatically with Tailscale)
+# public_url = "https://workbox.example.com:7091"   # what QR codes point at, if it isn't found automatically
 approval_wait = "10m"       # how long a held Claude permission prompt waits for your phone
 push = true                 # Web Push for the kinds in notifications.on
 # push_hosts = ["ntfy.example.com"]   # a self-hosted push service, besides the browsers' own
-# tailscale = true         # run `tailscale serve` in front: the phone gets Tailscale's HTTPS name
-# trusted_proxy = true     # a reverse proxy on this machine fronts serve (plain HTTP on loopback)
-# insecure = true          # plain HTTP, on any address: tokens cross the network in clear
 ```
 
-**Your own reverse proxy.** Put a TLS proxy in front of `127.0.0.1:7091`. Caddy:
-
-```caddyfile
-ptyro.example.com {
-    reverse_proxy 127.0.0.1:7091
-}
-```
-
-Set `public_url = "https://ptyro.example.com"` and `trusted_proxy = true`: ptyro then speaks
-plain HTTP on loopback, where only the proxy reaches it (it refuses another address in that
-mode). The proxy must pass WebSocket upgrades on `/ws` (Caddy and nginx with
-`proxy_http_version 1.1` + `Upgrade` headers do).
-
-**Plain HTTP.** `--insecure` (or `insecure = true`) makes `ptyro serve` speak plain HTTP, on any
-address. Tokens then cross the network in clear, phones won't install the app or show
-notifications, and `ptyro doctor` (and the TUI's health badge) says so when it isn't loopback.
-
-**Client addresses behind a proxy.** The login lockout and the audit trail go by the client's
-address. With `trusted_proxy = true`, a request from loopback takes it from the *last*
-`X-Forwarded-For` entry (the one your proxy added; earlier ones are whatever the client sent),
-and `Tailscale-User-Login` names the person. Without it those headers are ignored, because any
-local process could send them. `tailscale serve` fronting the port (`--tailscale`, or set up by
-hand before `ptyro serve` starts) turns this on by itself.
+**Older config files.** `listen`, `tailscale`, `local`, `insecure` and `trusted_proxy` under
+`[remote]` are gone: five settings that had to agree became `access` and `port`. A file that
+still has them is read as what they meant (`tailscale` or a tailnet `listen` is `tailscale`,
+`local` or a `0.0.0.0` listen is `open`, the port of `listen` is `port`), `ptyro web on` rewrites
+the file, and `ptyro config check` says what changed. Two things went with them: ptyro no longer
+runs `tailscale serve` for you (the phone opens `https://<name>.<tailnet>.ts.net:7091` and
+trusts ptyro's certificate once; `tailscale serve reset` removes an old mapping), and plain HTTP
+and reverse-proxy modes are not offered. To put your own TLS proxy in front, point it at the
+HTTPS port, set `public_url` to the proxy's address, and use your own certificate for it.
 
 **Host names.** `ptyro serve` answers only requests addressed to an IP address, `localhost`, the
 `public_url` host, or this machine's Tailscale name (`box.tailnet.ts.net`, `box`); anything else

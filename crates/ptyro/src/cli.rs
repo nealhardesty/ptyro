@@ -478,12 +478,14 @@ async fn dispatch(
         Some(Cmd::Shell { worktree, json, read, scrollback }) => {
             quick_shell(&ctx, worktree, json, read, scrollback).await
         }
-        Some(Cmd::Serve { listen, insecure, local, cert, key, tailscale, managed }) => {
+        Some(Cmd::Serve { access, port, cert, key, loopback_http, managed }) => {
             let own = cert.zip(key);
-            crate::serve::run(&ctx, listen, insecure, local, own, tailscale, managed).await
+            // (`PTYRO_LOOPBACK_HTTP` is how the daemon's own server is made plain, for the tests.)
+            let plain = loopback_http || std::env::var_os("PTYRO_LOOPBACK_HTTP").is_some();
+            crate::serve::run(&ctx, access, port, own, plain, managed).await
         }
-        Some(Cmd::Web { action, via, pair, json }) => {
-            crate::webapp::run(&ctx, &action, via, json, pair).await
+        Some(Cmd::Web { action, access, pair, json }) => {
+            crate::webapp::run(&ctx, &action, access, json, pair).await
         }
         Some(Cmd::Pair { name, scope, url, json }) => {
             crate::remote::pair(&ctx, name, scope.as_deref(), url, json).await

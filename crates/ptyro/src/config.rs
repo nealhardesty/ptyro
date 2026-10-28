@@ -473,12 +473,29 @@ fn get(layer: &Layer, key: &str, explain: bool, json: bool) -> Result<i32, Error
 
 /// Validate the file, including key bindings and action names; returns notes.
 fn check(path: &std::path::Path) -> Result<Vec<String>, String> {
-    check_config(Config::load(path).map_err(|e| e.to_string())?, path)
+    let mut notes = check_config(Config::load(path).map_err(|e| e.to_string())?, path)?;
+    if let Ok(text) = std::fs::read_to_string(path) {
+        notes.extend(old_remote_keys(&text));
+    }
+    Ok(notes)
+}
+
+/// What `[remote]`'s old keys (`listen`, `tailscale`, `local`, `insecure`, `trusted_proxy`) were
+/// read as, so a file written for an older ptyro says it is out of date.
+fn old_remote_keys(text: &str) -> Vec<String> {
+    let Some((_, notes)) = ptyro_core::config::migrate_remote(text) else { return Vec::new() };
+    let mut out = vec![
+        "[remote] still has keys from an older ptyro; they are read as follows, and `ptyro web on` rewrites the file (or delete those lines):".to_owned(),
+    ];
+    out.extend(notes.into_iter().map(|n| format!("  {n}")));
+    out
 }
 
 /// `check` for text that isn't saved yet (the web app's editor).
 pub(crate) fn check_text(text: &str, path: &std::path::Path) -> Result<Vec<String>, String> {
-    check_config(Config::parse(text).map_err(|e| e.to_string())?, path)
+    let mut notes = check_config(Config::parse(text).map_err(|e| e.to_string())?, path)?;
+    notes.extend(old_remote_keys(text));
+    Ok(notes)
 }
 
 fn check_config(config: Config, path: &std::path::Path) -> Result<Vec<String>, String> {

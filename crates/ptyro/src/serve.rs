@@ -10,14 +10,13 @@
 //!   actions, scripts).
 //! - `POST /api/pair`: `{"code"}` from `ptyro pair`'s link, traded once for the device's token.
 //!
-//! Listens on loopback or Tailscale addresses unless `--insecure`: elsewhere plain HTTP would
-//! carry tokens in clear. For HTTPS (needed by phones for notifications and installing the app),
-//! `--tailscale` puts `tailscale serve` in front.
+//! Always HTTPS (phones need it for notifications and installing the app), with a certificate
+//! ptyro makes or one of your own. `[remote] access` says on which interfaces it listens
+//! (`localhost`, `tailscale`, `open`), `[remote] port` on which port.
 //!
 //! Every request must name a host it expects (an IP address, localhost, `[remote] public_url`'s
 //! host, this machine's tailnet name), so a DNS-rebinding page can't reach it under a name of its
-//! own. `X-Forwarded-For` counts only behind a proxy we trust (`[remote] trusted_proxy`, or
-//! `tailscale serve` fronting our port).
+//! own.
 
 use ptyro_core::sync::MutexExt;
 use std::collections::HashMap;
@@ -35,7 +34,7 @@ use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use ptyro_core::Error;
-use ptyro_core::config::{Config, safe_address};
+use ptyro_core::config::{Access, Config};
 use ptyro_protocol::{ClientKind, ClientMsg, Encoding, ServerMsg, decode, encode, framing};
 use tokio::net::TcpListener;
 use tokio_tungstenite::WebSocketStream;
@@ -144,8 +143,6 @@ struct State {
     pending: Mutex<HashMap<IpAddr, u32>>,
     /// Open connections per peer address.
     open: Mutex<HashMap<IpAddr, u32>>,
-    /// A local proxy fronts us, so its `X-Forwarded-For` names the real client.
-    trust_proxy: bool,
     /// Host names (lowercase, no port) requests may carry besides IP addresses and localhost.
     hosts: Vec<String>,
     /// The CA phones trust once (`/ca.crt`), when serving HTTPS.
@@ -250,13 +247,29 @@ impl State {
     }
 }
 
+/// Where each `access` listens: the loopback address; plus this machine's Tailscale addresses
+/// for `tailscale`; every IPv4 interface for `open`.
+fn addresses(access: Access, port: u16) -> Vec<SocketAddr> {
+    let mut out = vec![SocketAddr::new(
+        if access == Access::Open {
+            IpAddr::from([0, 0, 0, 0])
+        } else {
+            IpAddr::from([127, 0, 0, 1])
+        },
+        port,
+    )];
+    if access == Access::Tailscale {
+        out.extend(crate::remote::tailscale_ips().into_iter().map(|ip| SocketAddr::new(ip, port)));
+    }
+    out
+}
+
 pub async fn run(
     ctx: &Ctx,
-    listen: Option<String>,
-    insecure: bool,
-    local: bool,
+    access: Option<Access>,
+    port: Option<u16>,
     own: Option<(std::path::PathBuf, std::path::PathBuf)>,
-    tailscale: bool,
+    plain: bool,
     managed: bool,
 ) -> Result<i32, Error> {
     let _ = tracing_subscriber::fmt()
@@ -267,41 +280,22 @@ pub async fn run(
         .with_writer(std::io::stderr)
         .try_init();
     let config = Config::load(&Config::path(&ctx.paths)).unwrap_or_default();
-    let tailscale = tailscale || config.remote.tailscale;
-    let insecure = insecure || config.remote.insecure;
-    let local = local || config.remote.local;
-    let listen = listen.unwrap_or_else(|| match local {
-        // Every interface, on the configured port.
-        true => format!("0.0.0.0:{}", config.remote.listen.rsplit(':').next().unwrap_or("7091")),
-        false => config.remote.listen.clone(),
-    });
-    let addr: SocketAddr = listen
-        .parse()
-        .map_err(|e| Error::invalid(format!("--listen {listen}: {e} (like 127.0.0.1:7091)")))?;
-    // TLS ends before us (`tailscale serve`, a reverse proxy on this machine): plain HTTP, on
-    // loopback, where only that proxy reaches us. Else HTTPS, unless asked for plain HTTP.
-    let fronted = tailscale
-        || config.remote.trusted_proxy
-        || crate::remote::tailscale_url(&addr.to_string()).is_some();
-    let plain = insecure || fronted;
-    if plain && !insecure && !addr.ip().is_loopback() {
-        return Err(Error::invalid(format!(
-            "{addr}: behind Tailscale HTTPS or a reverse proxy, listen on 127.0.0.1 (the proxy \
-             reaches us there), or drop `trusted_proxy` to speak HTTPS on {addr} yourself"
-        )));
+    let access = access.unwrap_or(config.remote.access);
+    let port = port.unwrap_or(config.remote.port);
+    // Plain HTTP exists for the tour and the tests, which open a page on this computer only
+    // (a browser counts loopback as secure); it is not a setting, and nothing else gets it.
+    if plain && access != Access::Localhost {
+        return Err(Error::invalid(
+            "plain HTTP is only for this computer (`--access localhost`); the web app is HTTPS otherwise",
+        ));
     }
-    if !safe_address(addr.ip()) && !local && !insecure {
-        return Err(Error::invalid(format!(
-            "{addr} isn't loopback or a Tailscale address: `--local` lets in this machine, private \
-             networks and tailnets only (over HTTPS), and `--insecure` everyone, in clear"
-        )));
-    }
+    let addrs = addresses(access, port);
     let tailnet = tailnet_names();
     let mut cert_names: Vec<String> = tailnet.clone();
     cert_names.extend(config.remote.public_url.iter().filter_map(|u| url_host(u)));
-    if !addr.ip().is_unspecified() {
-        cert_names.push(addr.ip().to_string());
-    }
+    cert_names
+        .extend(addrs.iter().filter(|a| !a.ip().is_unspecified()).map(|a| a.ip().to_string()));
+    cert_names.extend(crate::remote::tailscale_ips().iter().map(ToString::to_string));
     let tls_dir = crate::tls::dir(&ctx.paths.data);
     // Your own certificate (flags, else config), or the one ptyro makes. Half of a pair is a
     // mistake, said here rather than in the file's check: the panel sets them one at a time.
@@ -334,23 +328,24 @@ pub async fn run(
         }
     };
     let own_cert = own.is_some() && !plain;
-    // Listening means ready: the certificate exists before anyone can connect.
-    let listener = TcpListener::bind(addr)
-        .await
-        .map_err(|e| Error::internal(format!("listen on {addr}: {e}")))?;
-    if tailscale {
-        tailscale_front(addr)?;
+    // Listening means ready: the certificate exists before anyone can connect. The first address
+    // is the one that must work; a Tailscale address that isn't up yet is picked up below.
+    let mut listeners = Vec::new();
+    for (i, addr) in addrs.iter().enumerate() {
+        match TcpListener::bind(addr).await {
+            Ok(l) => listeners.push(l),
+            Err(e) if i == 0 => {
+                return Err(Error::internal(format!(
+                    "listen on {addr}: {e} (is another program using port {port}? `ptyro config set remote.port` picks another)"
+                )));
+            }
+            Err(e) => tracing::warn!("listen on {addr}: {e}"),
+        }
     }
-    // What phones open: an address they can reach (this machine's LAN address under --local).
-    let shown_addr = if addr.ip().is_unspecified() {
-        let lan = crate::tls::local_addresses().into_iter().find(|ip| !ip.is_loopback());
-        SocketAddr::new(lan.unwrap_or(IpAddr::from([127, 0, 0, 1])), addr.port())
-    } else {
-        addr
-    };
     let mut shown = config.clone();
-    shown.remote.listen = shown_addr.to_string();
-    let base = crate::remote::base_url(&shown, None, tls.is_some());
+    shown.remote.access = access;
+    shown.remote.port = port;
+    let base = crate::remote::base_url(&shown, tls.is_some());
     // Names answered to now: a name the certificate held once (`tls.json` keeps them so it need
     // not be remade) doesn't stay allowed after it is no longer configured.
     let mut hosts: Vec<String> =
@@ -358,21 +353,29 @@ pub async fn run(
     hosts.extend(tailnet);
     hosts.extend(crate::tls::names_for(&cert_names));
     let ca = tls.as_ref().filter(|_| !own_cert).map(|t| t.ca_fingerprint.as_str());
-    crate::remote::record_serve(&ctx.paths, &base, ca, addr);
+    crate::remote::record_serve(&ctx.paths, &base, ca, addrs[0]);
+    let scheme = if tls.is_some() { "https" } else { "http" };
+    let on = listeners
+        .iter()
+        .filter_map(|l| l.local_addr().ok())
+        .map(|a| format!("{scheme}://{a}"))
+        .collect::<Vec<_>>()
+        .join(", ");
     match &tls {
         Some(_) if own_cert => eprintln!(
-            "ptyro serve: listening on https://{addr}, with your certificate; phones open {base} \
-             (pair one with `ptyro pair`)"
+            "ptyro serve: listening on {on} ({access}: {}), with your certificate; phones open {base} \
+             (pair one with `ptyro pair`)",
+            access.blurb()
         ),
         Some(t) => eprintln!(
-            "ptyro serve: listening on https://{addr}{}; phones open {base} (pair one with \
+            "ptyro serve: listening on {on} ({access}: {}); phones open {base} (pair one with \
              `ptyro pair`; the first time, trust ptyro's certificate from {base}/ca.crt, \
              SHA-256 {})",
-            if local { ", for this machine, private networks and tailnets" } else { "" },
+            access.blurb(),
             t.ca_fingerprint
         ),
         None => eprintln!(
-            "ptyro serve: listening on http://{addr}; phones open {base} (pair one with `ptyro pair`)"
+            "ptyro serve: listening on {on} (plain HTTP, this computer only); open {base}"
         ),
     }
     let acceptor = tls.as_ref().map(|t| Arc::new(Mutex::new(Arc::clone(&t.config))));
@@ -403,7 +406,6 @@ pub async fn run(
         failures: Mutex::new(HashMap::new()),
         pending: Mutex::new(HashMap::new()),
         open: Mutex::new(HashMap::new()),
-        trust_proxy: fronted,
         hosts,
         ca_pem: tls.as_ref().filter(|_| !own_cert).map(|t| t.ca_pem.clone()),
         remote: ctx.remote.is_some(),
@@ -412,6 +414,47 @@ pub async fn run(
     if managed {
         tokio::spawn(exit_with_daemon(ctx.paths.socket.clone()));
     }
+    let mut bound: Vec<SocketAddr> = listeners.iter().filter_map(|l| l.local_addr().ok()).collect();
+    for listener in listeners {
+        tokio::spawn(accept_loop(
+            listener,
+            Arc::clone(&state),
+            Arc::clone(&slots),
+            acceptor.clone(),
+        ));
+    }
+    // Tailscale may come up (or change address) after this starts: bind what appears, so the
+    // phone doesn't need a restart of anything.
+    loop {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        if access != Access::Tailscale {
+            continue;
+        }
+        for addr in addresses(access, port) {
+            if bound.contains(&addr) {
+                continue;
+            }
+            if let Ok(l) = TcpListener::bind(addr).await {
+                eprintln!("ptyro serve: also listening on {scheme}://{addr} (Tailscale is up)");
+                bound.push(addr);
+                tokio::spawn(accept_loop(
+                    l,
+                    Arc::clone(&state),
+                    Arc::clone(&slots),
+                    acceptor.clone(),
+                ));
+            }
+        }
+    }
+}
+
+/// Accept connections on one listener, for ever.
+async fn accept_loop(
+    listener: TcpListener,
+    state: Arc<State>,
+    slots: Arc<tokio::sync::Semaphore>,
+    acceptor: Option<Arc<Mutex<Arc<rustls::ServerConfig>>>>,
+) {
     loop {
         let (stream, peer) = match listener.accept().await {
             Ok(x) => x,
@@ -421,11 +464,6 @@ pub async fn run(
                 continue;
             }
         };
-        // `--local`: only this machine, private networks and tailnets get in.
-        if local && !crate::tls::local_peer(peer.ip()) {
-            tracing::debug!(%peer, "not a local address");
-            continue;
-        }
         // Over the limit: drop it (a WebSocket keeps its slot until it closes).
         let Ok(slot) = Arc::clone(&slots).try_acquire_owned() else {
             tracing::debug!(%peer, "too many connections");
@@ -484,37 +522,6 @@ async fn exit_with_daemon(socket: std::path::PathBuf) {
             }
         }
     }
-}
-
-/// `tailscale serve --bg` HTTPS → our port. It changes Tailscale's config, which `--tailscale`
-/// asks for; `tailscale serve reset` undoes it. Something else already served on :443 is not
-/// replaced: it would stop working with no word.
-fn tailscale_front(addr: SocketAddr) -> Result<(), Error> {
-    let target = format!("http://127.0.0.1:{}", addr.port());
-    if let Ok(status) =
-        std::process::Command::new("tailscale").args(["serve", "status", "--json"]).output()
-        && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&status.stdout)
-        && let Some(other) = crate::remote::serves_443_elsewhere(&v, addr.port())
-    {
-        return Err(Error::invalid(format!(
-            "tailscale already serves {other} on :443, and `--tailscale` would replace it. Stop \
-             that first (`tailscale serve --https=443 off`), or serve ptyro some other way"
-        )));
-    }
-    let out = std::process::Command::new("tailscale")
-        .args(["serve", "--bg", "--https=443", &target])
-        .output()
-        .map_err(|e| Error::invalid(format!("tailscale: {e} (is Tailscale installed?)")))?;
-    if !out.status.success() {
-        return Err(Error::invalid(format!(
-            "tailscale serve: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        )));
-    }
-    if !addr.ip().is_loopback() {
-        eprintln!("note: tailscale serve proxies to 127.0.0.1:{}; listen there too", addr.port());
-    }
-    Ok(())
 }
 
 fn respond(status: StatusCode, ctype: &str, body: impl Into<Bytes>) -> Response<Body> {
@@ -587,31 +594,9 @@ fn host_ok(host: Option<&str>, names: &[String]) -> bool {
         || names.contains(&h)
 }
 
-/// Who connected, for the audit trail: the peer, or what a trusted local proxy in front
-/// (Tailscale serve, a TLS reverse proxy) says about the real client. That's the last
-/// X-Forwarded-For entry, the one the proxy added: earlier ones come from the client and prove
-/// nothing. Without a trusted proxy the header is ignored: any local process could send it.
-fn via(req: &Request<Incoming>, peer: SocketAddr, trust_proxy: bool) -> (String, IpAddr) {
-    let hdr = |n: &str| req.headers().get(n).and_then(|v| v.to_str().ok()).map(str::to_owned);
-    let xff = forwarded_for(req.headers());
-    if trust_proxy && peer.ip().is_loopback() && xff.is_none() {
-        // Every client then looks like loopback: one lockout, one limit, for all of them.
-        static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            tracing::warn!(
-                "a trusted proxy sent no X-Forwarded-For: its clients share one failed-login lockout; configure the proxy to add it"
-            );
-        }
-    }
-    if trust_proxy
-        && peer.ip().is_loopback()
-        && let Some(xff) = xff
-    {
-        let real = last_hop(&xff).to_owned();
-        let ip = real.parse().unwrap_or(peer.ip());
-        let who = hdr("tailscale-user-login").map(|u| format!(" {u}")).unwrap_or_default();
-        return (format!("ws:{real}{who}"), ip);
-    }
+/// Who connected, for the audit trail: the peer (a proxy's `X-Forwarded-For` is never believed:
+/// ptyro is always the one that speaks HTTPS to the client).
+fn via(peer: SocketAddr) -> (String, IpAddr) {
     (format!("ws:{peer}"), peer.ip())
 }
 
@@ -628,19 +613,6 @@ fn origin_ok(origin: Option<&str>, host: Option<&str>, names: &[String]) -> bool
     }
     // Behind a proxy the Host may be rewritten: the names this server is configured for count.
     names.contains(&strip_port(&authority).to_owned())
-}
-
-/// Every `X-Forwarded-For` header line as one list. A proxy may add its entry as a line of its
-/// own instead of extending the client's: all lines count, and the last entry of the last line
-/// is the proxy's.
-fn forwarded_for(headers: &hyper::HeaderMap) -> Option<String> {
-    let lines: Vec<&str> =
-        headers.get_all("x-forwarded-for").iter().filter_map(|v| v.to_str().ok()).collect();
-    (!lines.is_empty()).then(|| lines.join(","))
-}
-
-fn last_hop(xff: &str) -> &str {
-    xff.rsplit(',').next().unwrap_or("").trim()
 }
 
 async fn handle(
@@ -666,7 +638,7 @@ async fn handle(
         tracing::debug!(%peer, "cross-site request refused");
         return Ok(respond(StatusCode::FORBIDDEN, "text/plain", "cross-site request refused"));
     }
-    let (via, ip) = via(&req, peer, st.trust_proxy);
+    let (via, ip) = via(peer);
     let busy =
         || respond(StatusCode::TOO_MANY_REQUESTS, "text/plain", "too many logins; try later");
     Ok(match (req.method(), path.as_str()) {
@@ -1072,22 +1044,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_forwarded_line_of_its_own_cannot_hide_behind_the_clients() {
-        let mut h = hyper::HeaderMap::new();
-        h.append("x-forwarded-for", HeaderValue::from_static("9.9.9.9"));
-        // The proxy appended its own line: the client's line before it proves nothing.
-        h.append("x-forwarded-for", HeaderValue::from_static("1.2.3.4"));
-        assert_eq!(last_hop(&forwarded_for(&h).unwrap()), "1.2.3.4");
-        assert_eq!(forwarded_for(&hyper::HeaderMap::new()), None);
-    }
-
-    #[test]
-    fn the_proxy_added_address_counts() {
-        assert_eq!(last_hop("6.6.6.6, 1.2.3.4"), "1.2.3.4");
-        assert_eq!(last_hop("1.2.3.4"), "1.2.3.4");
-    }
-
-    #[test]
     fn only_expected_hosts_are_served() {
         let names = vec![
             "box.tail1234.ts.net".to_owned(),
@@ -1138,7 +1094,6 @@ mod tests {
             failures: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
             open: Mutex::new(HashMap::new()),
-            trust_proxy: false,
             hosts: Vec::new(),
             ca_pem: None,
             remote: false,
@@ -1209,7 +1164,6 @@ mod tests {
             failures: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
             open: Mutex::new(HashMap::new()),
-            trust_proxy: false,
             hosts: Vec::new(),
             ca_pem: None,
             remote: false,

@@ -119,15 +119,12 @@ max_bytes = "16MiB"                       # per session, as a ring
 
 [remote]
 serve = true                              # the daemon runs `ptyro serve` (docs/remote.md)
-listen = "127.0.0.1:7091"
-# local = true                            # every interface, local addresses only (your LAN, tailnet)
+access = "localhost"                      # who can reach it: localhost, tailscale (and your tailnet) or open (every network)
+port = 7091                               # always HTTPS, on this port
 # tls_cert = "~/certs/fullchain.pem"      # your own certificate instead of the one ptyro makes
 # tls_key = "~/certs/privkey.pem"         #   and its key
 approval_wait = "10m"                     # held Claude permission prompts wait this long for a phone
 # push_hosts = ["ntfy.example.com"]       # self-hosted push services (UnifiedPush, ntfy)
-# tailscale = true                        # run `tailscale serve` in front: the phone gets Tailscale's HTTPS name
-# trusted_proxy = true                   # a reverse proxy on this machine fronts serve (plain HTTP on loopback)
-# insecure = true                        # plain HTTP instead of HTTPS, any address (tokens in clear)
 
 [clipboard]
 # allow_write = false                     # programs' OSC 52 copies don't reach your clipboard
@@ -201,7 +198,6 @@ on = ["blocked"]
 
 [notifications.callback]             # optional: approve/deny buttons in your notifications
 listen = "127.0.0.1:7591"            # or your tailnet address
-# insecure = true                    # needed for any other address: the links are plain HTTP
 ```
 
 - Approve/deny links are signed, single-use, and expire after 15 minutes. Opening one only shows

@@ -9,8 +9,8 @@ use ptyro_protocol::{Reply, Request, WebServe};
 use crate::cli::{Ctx, age};
 
 /// What turning it on changes, in a sentence a person decides by.
-pub const WHAT_IT_CHANGES: &str = "Turning it on makes the daemon run a web server: it listens on a port (`[remote] listen`) \
-     and comes back whenever the daemon does. Nothing opens to anyone until you pair a phone \
+pub const WHAT_IT_CHANGES: &str = "Turning it on makes the daemon run a web server: it is HTTPS only, and `[remote] access` says who can reach it \
+     (this computer, your Tailscale network, or every network) on `[remote] port`. It comes back whenever the daemon does. Nothing opens to anyone until you pair a phone \
      (`ptyro pair`), and each device can be revoked.";
 
 /// How the server is, as lines to print. `short` is the one-line form for a status listing.
@@ -24,6 +24,13 @@ pub fn lines(w: &WebServe) -> Vec<String> {
         }
         (true, _, _) => out.push("on, but not up yet".into()),
         (false, _, _) => out.push("off".into()),
+    }
+    if let Ok(a) = w.access.parse::<ptyro_core::config::Access>() {
+        out.push(format!(
+            "who can reach it: {a} ({}), on port {}; change it with `ptyro config set remote.access localhost|tailscale|open` or in Settings → remote",
+            a.blurb(),
+            w.port
+        ));
     }
     if let Some(pid) = w.by_hand {
         let at = w.url.as_deref().map(|u| format!(" at {u}")).unwrap_or_default();
@@ -50,8 +57,8 @@ pub fn next(w: &WebServe) -> String {
     match (w.wanted, w.up) {
         (true, true) => "pair a phone: `ptyro pair` shows a QR code".into(),
         (true, false) if w.last_exit.as_deref().is_some_and(|e| e.contains("in use")) => format!(
-            "another program holds {}: stop it, or pick another port (`[remote] listen` in `ptyro config edit`)",
-            w.listen
+            "another program holds port {}: stop it, or pick another port (`ptyro config set remote.port 7092`, or Settings → remote)",
+            w.port
         ),
         (true, false) => format!("see why: `tail {}`; or `ptyro doctor`", w.log.display()),
         (false, _) => "turn it on: `ptyro web on`".into(),
@@ -73,10 +80,11 @@ pub async fn ask(
 pub async fn run(
     ctx: &Ctx,
     action: &str,
-    via: Option<String>,
+    access: Option<ptyro_core::config::Access>,
     json: bool,
     pair: bool,
 ) -> Result<i32, Error> {
+    let via = access.map(|a| a.to_string());
     let on = match action {
         "on" => Some(true),
         "off" => Some(false),
@@ -84,7 +92,9 @@ pub async fn run(
         other => return Err(Error::invalid(format!("{other:?}: on, off or status"))),
     };
     if on.is_none() && via.is_some() {
-        return Err(Error::invalid("--via goes with `on`"));
+        return Err(Error::invalid(
+            "--access goes with `on`; `ptyro config set remote.access …` changes it any time",
+        ));
     }
     let (web, notes) = match ask(ctx, on, via).await {
         Err(e) if on.is_none() && e.code == ErrorCode::DaemonUnavailable => {

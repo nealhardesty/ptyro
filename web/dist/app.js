@@ -476,7 +476,7 @@ async function enablePush() {
         return;
     }
     if (!isSecureContext) {
-        toast("Notifications need HTTPS: open the https:// address `ptyro pair` shows (ptyro serve speaks HTTPS unless it was started with --insecure).");
+        toast("Notifications need HTTPS: open the https:// address `ptyro pair` shows.");
         return;
     }
     const perm = await Notification.requestPermission();

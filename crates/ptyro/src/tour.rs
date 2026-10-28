@@ -140,7 +140,7 @@ pub async fn web_start(ctx: &Ctx) -> Result<serde_json::Value, Error> {
     let log = std::fs::File::create(dir.join("serve.log"))
         .map_err(|e| Error::internal(format!("the tour's log: {e}")))?;
     env(&mut Command::new(&exe), &home)
-        .args(["serve", "--insecure", "--listen", &format!("127.0.0.1:{port}")])
+        .args(["serve", "--loopback-http", "--port", &port.to_string()])
         .stdin(std::process::Stdio::null())
         .stdout(log.try_clone().map_err(|e| Error::internal(e.to_string()))?)
         .stderr(log)

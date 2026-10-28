@@ -122,6 +122,7 @@ Strong success criteria lets you loop independently. Weak criteria ("make it wor
 ---
 
 ## Project Specific Rules
+* **Principal of Obviousness**: The interface MUST be intuitive. Configuration options should make sense to a reasonable user.  The defaults should always be what the user can use immediately.
 * Never add a co-authored by statement to a generated comment.  Ever.
 * Any feature implemented must have parity between the CLI, the TUI and the Web interfaces.  This is not optional.
 * When you implement a feature, please use `make bump` to bump the version number.

@@ -2,7 +2,7 @@
 //! ssh), `ptyro pair` (a QR code that opens the web app signed in) and `ptyro devices`.
 
 use ptyro_core::Error;
-use ptyro_core::config::Config;
+use ptyro_core::config::{Access, Config};
 use ptyro_protocol::{Reply, Request, Scope};
 
 use crate::DevicesCmd;
@@ -32,119 +32,63 @@ pub fn full_warning() -> &'static str {
      prompts only) or --scope control (also type into sessions) for less."
 }
 
-/// The port a URL names, if it names one (`https://[::1]:8443/x` is 8443; `https://box` none).
-pub fn url_port(url: &str) -> Option<u16> {
-    let (_, rest) = url.split_once("://")?;
-    let auth = rest.split(['/', '?', '#']).next()?;
-    let auth = auth.rsplit_once('@').map_or(auth, |x| x.1);
-    let port =
-        if auth.starts_with('[') { auth.split_once("]:")?.1 } else { auth.rsplit_once(':')?.1 };
-    port.parse().ok()
-}
-
-/// `url` with `port` written out when it names none: `https://box.ts.net` becomes
-/// `https://box.ts.net:443`, `http://[::1]` becomes `http://[::1]:7091`.
-pub fn with_port(url: &str, port: u16) -> String {
-    if url_port(url).is_some() {
-        return url.to_owned();
-    }
-    let Some((scheme, rest)) = url.split_once("://") else { return url.to_owned() };
-    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    format!("{scheme}://{}:{port}{}", &rest[..end], &rest[end..])
-}
-
-/// `url` with its port replaced by (or given) `port`.
-pub fn set_port(url: &str, port: u16) -> String {
-    let Some(old) = url_port(url) else { return with_port(url, port) };
-    let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
-    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    let auth = rest[..end].strip_suffix(&format!(":{old}")).unwrap_or(&rest[..end]);
-    format!("{scheme}://{auth}:{port}{}", &rest[end..])
-}
-
-fn default_port(url: &str) -> u16 {
-    if url.starts_with("https://") { 443 } else { 80 }
-}
-
-/// A listen address phones can open: a wildcard (`0.0.0.0`, `::`) is every interface, not a
-/// place, so it becomes this machine's LAN address (else loopback). The port stays.
-pub fn reachable(listen: &str) -> String {
-    let Ok(addr) = listen.parse::<std::net::SocketAddr>() else { return listen.to_owned() };
-    if !addr.ip().is_unspecified() {
-        return addr.to_string();
-    }
-    let ip = crate::tls::local_addresses()
+/// This machine's Tailscale addresses (`tailscale status --json`'s `Self.TailscaleIPs`), empty
+/// when Tailscale isn't installed or is down.
+pub fn tailscale_ips() -> Vec<std::net::IpAddr> {
+    let Some(v) = tailscale_status() else { return Vec::new() };
+    v["Self"]["TailscaleIPs"]
+        .as_array()
         .into_iter()
-        .find(|ip| !ip.is_loopback() && ip.is_ipv4() == addr.is_ipv4())
-        .or_else(|| crate::tls::local_addresses().into_iter().find(|ip| !ip.is_loopback()))
-        .unwrap_or_else(|| std::net::Ipv4Addr::LOCALHOST.into());
-    std::net::SocketAddr::new(ip, addr.port()).to_string()
+        .flatten()
+        .filter_map(|ip| ip.as_str()?.parse::<std::net::IpAddr>().ok())
+        .filter(|ip| ptyro_core::config::safe_address(*ip) && !ip.is_loopback())
+        .collect()
 }
 
-/// Where the web app is reached from a phone: `--url`, `[remote] public_url`, Tailscale HTTPS
-/// in front of the listen port, or the listen address itself.
-pub fn base_url(config: &Config, explicit: Option<String>, https: bool) -> String {
-    resolve_base(config, explicit, https, tailscale_url(&config.remote.listen)).0
+/// This machine's MagicDNS name (`box.tailnet.ts.net`), if Tailscale is up.
+pub fn tailscale_name() -> Option<String> {
+    let v = tailscale_status()?;
+    let name = v["Self"]["DNSName"].as_str()?.trim_end_matches('.');
+    (!name.is_empty()).then(|| name.to_lowercase())
 }
 
-/// The link base and what to tell the user about it. The rule (SPEC §16): the port is always
-/// written out. An address ptyro builds (listen address, Tailscale's name on 443) carries its
-/// port. An address the user gave without a port is a reverse proxy or Tailscale on the scheme's
-/// default port when ptyro sits behind one (`trusted_proxy`, or the Tailscale name), so that
-/// port is written out; otherwise ptyro itself serves it, on its listen port, which is added
-/// (a bare host would reach nothing). A given port that isn't the one ptyro listens on, with
-/// no proxy in front, is kept and warned about.
-pub fn resolve_base(
-    config: &Config,
-    explicit: Option<String>,
-    https: bool,
-    tailscale: Option<String>,
-) -> (String, Vec<String>) {
-    let scheme = if https { "https" } else { "http" };
-    let listen = reachable(&config.remote.listen);
-    let listen_port = listen.rsplit(':').next().and_then(|p| p.parse::<u16>().ok());
-    let given = explicit.or_else(|| config.remote.public_url.clone());
-    let mut notes = Vec::new();
-    let url = match (given, tailscale) {
-        (Some(u), _) => {
-            let u = u.trim_end_matches('/').to_owned();
-            if u.split_once("://").is_none() {
-                notes.push(format!(
-                    "{u} has no http:// or https:// in front; use e.g. --url {scheme}://{u}"
-                ));
-                u
-            } else if url_port(&u).is_some() {
-                if let (Some(p), Some(l)) = (url_port(&u), listen_port)
-                    && p != l
-                    && !config.remote.trusted_proxy
-                {
-                    notes.push(format!(
-                        "{u} names port {p}, but ptyro listens on {l}: phones reach nothing \
-                         unless a proxy forwards {p} to it. Use --url {}, or set `[remote] \
-                         trusted_proxy = true` if a proxy does",
-                        set_port(&u, l)
-                    ));
-                }
-                u
-            } else if config.remote.trusted_proxy {
-                with_port(&u, default_port(&u))
-            } else if let Some(l) = listen_port {
-                if l != default_port(&u) {
-                    notes.push(format!(
-                        "added :{l} to {u}, the port ptyro listens on. If a reverse proxy serves \
-                         it on :{} instead, set `[remote] trusted_proxy = true`",
-                        default_port(&u)
-                    ));
-                }
-                with_port(&u, l)
-            } else {
-                with_port(&u, default_port(&u))
-            }
-        }
-        (None, Some(ts)) => with_port(ts.trim_end_matches('/'), 443),
-        (None, None) => format!("{scheme}://{listen}"),
+fn tailscale_status() -> Option<serde_json::Value> {
+    let out = std::process::Command::new("tailscale").args(["status", "--json"]).output().ok()?;
+    serde_json::from_slice(&out.stdout).ok()
+}
+
+/// `host` as the authority of a URL: an IPv6 address gets its brackets.
+fn authority(host: &str, port: u16) -> String {
+    if host.parse::<std::net::Ipv6Addr>().is_ok() {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
+/// Where the web app is reached from a phone: `[remote] public_url` as written, else the address
+/// `[remote] access` makes reachable (this computer's loopback; its Tailscale name; its LAN
+/// address) with `[remote] port`.
+pub fn base_url(config: &Config, https: bool) -> String {
+    if let Some(u) = &config.remote.public_url {
+        return u.trim_end_matches('/').to_owned();
+    }
+    let r = &config.remote;
+    let lan = || {
+        crate::tls::local_addresses()
+            .into_iter()
+            .find(|ip| !ip.is_loopback())
+            .map(|ip| ip.to_string())
     };
-    (url, notes)
+    let host = match r.access {
+        Access::Localhost => None,
+        Access::Tailscale => {
+            tailscale_name().or_else(|| tailscale_ips().first().map(ToString::to_string))
+        }
+        Access::Open => lan().or_else(tailscale_name),
+    }
+    .unwrap_or_else(|| "127.0.0.1".into());
+    format!("{}://{}", if https { "https" } else { "http" }, authority(&host, r.port))
 }
 
 /// What a running `ptyro serve` serves (`state/serve.json`), so `ptyro pair` points phones at
@@ -223,48 +167,6 @@ fn proxy_targets(status: &serde_json::Value) -> Vec<String> {
     out
 }
 
-/// What `tailscale serve` already has on :443 when it is not a proxy to `port` (so replacing it
-/// would break it), as a short description.
-pub fn serves_443_elsewhere(status: &serde_json::Value, port: u16) -> Option<String> {
-    let web = status["Web"].as_object()?;
-    let on_443: Vec<&serde_json::Value> =
-        web.iter().filter(|(k, _)| k.ends_with(":443")).map(|(_, v)| v).collect();
-    if on_443.is_empty() {
-        return None;
-    }
-    let mut theirs = Vec::new();
-    for site in on_443 {
-        for h in site["Handlers"].as_object().into_iter().flat_map(|m| m.values()) {
-            let what = h["Proxy"]
-                .as_str()
-                .or_else(|| h["Path"].as_str())
-                .or_else(|| h["Text"].as_str().map(|_| "some text"))
-                .unwrap_or("something");
-            theirs.push(what.to_owned());
-        }
-    }
-    let ours = proxies_to(status, &port.to_string());
-    (!ours && !theirs.is_empty()).then(|| theirs.join(", "))
-}
-
-/// `https://<machine>.<tailnet>.ts.net` when `tailscale serve` proxies to our port.
-pub fn tailscale_url(listen: &str) -> Option<String> {
-    let port = listen.rsplit(':').next()?;
-    let serve = std::process::Command::new("tailscale")
-        .args(["serve", "status", "--json"])
-        .output()
-        .ok()?;
-    let status: serde_json::Value = serde_json::from_slice(&serve.stdout).ok()?;
-    if !proxies_to(&status, port) {
-        return None;
-    }
-    let status =
-        std::process::Command::new("tailscale").args(["status", "--json"]).output().ok()?;
-    let v: serde_json::Value = serde_json::from_slice(&status.stdout).ok()?;
-    let name = v["Self"]["DNSName"].as_str()?.trim_end_matches('.');
-    (!name.is_empty()).then(|| format!("https://{name}"))
-}
-
 /// A QR code as text, two rows per line (fits in a terminal).
 pub fn qr(text: &str) -> Option<String> {
     let code = qrcode::QrCode::new(text.as_bytes()).ok()?;
@@ -280,20 +182,24 @@ pub fn qr(text: &str) -> Option<String> {
 /// Where this machine's web app is reached from elsewhere (its base URL), notes about it, its
 /// certificate authority's fingerprint, and whether `ptyro serve` runs at all.
 pub fn served_base(ctx: &Ctx, url: Option<String>) -> (String, Vec<String>, Option<String>, bool) {
-    let mut config = Config::load(&Config::path(&ctx.paths)).unwrap_or_default();
+    let config = Config::load(&Config::path(&ctx.paths)).unwrap_or_default();
     // The running `ptyro serve`'s own address (it knows its flags); else what config implies.
     let served = served(&ctx.paths);
-    let https = !(config.remote.insecure || config.remote.trusted_proxy);
-    // `ptyro serve --listen` can differ from the config: what it listens on is what counts.
-    if let Some(l) = served.as_ref().and_then(|s| s.listen.clone()) {
-        config.remote.listen = l;
-    }
-    let (base, notes) = match (&url, &served) {
-        (None, Some(s)) if config.remote.public_url.is_none() => {
-            (with_port(&s.url, default_port(&s.url)), Vec::new())
-        }
-        _ => resolve_base(&config, url, https, tailscale_url(&config.remote.listen)),
+    let mut notes = Vec::new();
+    let base = match (&url, &served) {
+        (Some(u), _) => u.trim_end_matches('/').to_owned(),
+        (None, Some(s)) if config.remote.public_url.is_none() => s.url.clone(),
+        _ => base_url(&config, true),
     };
+    if url.is_none()
+        && config.remote.public_url.is_none()
+        && config.remote.access == Access::Localhost
+    {
+        notes.push(
+            "that address only works on this computer. For a phone: `ptyro config set remote.access tailscale` (your Tailscale network) or `open` (the Wi-Fi too)"
+                .into(),
+        );
+    }
     let ca = served.as_ref().and_then(|s| s.ca_fingerprint.clone());
     (base, notes, ca, served.is_some())
 }
@@ -399,9 +305,8 @@ pub async fn pair(
     {
         eprintln!(
             "note: {base} isn't HTTPS, so phones won't install the app or show notifications, \
-             and the pairing code in the link crosses the network in clear. Drop `insecure` \
-             (ptyro speaks HTTPS by default), or put Tailscale HTTPS in front with \
-             `ptyro serve --tailscale` (docs/remote.md)."
+             and the pairing code in the link crosses the network in clear. Open the https:// \
+             address `ptyro web status` shows, or leave `--url` out (docs/remote.md)."
         );
     }
     // Who claimed it tells the user it was their phone (a code read off a recording would
@@ -497,104 +402,32 @@ mod tests {
         })
     }
 
-    fn cfg(listen: &str, public: Option<&str>, proxy: bool) -> Config {
+    fn cfg(access: Access, port: u16, public: Option<&str>) -> Config {
         let mut c = Config::default();
-        c.remote.listen = listen.into();
+        c.remote.access = access;
+        c.remote.port = port;
         c.remote.public_url = public.map(str::to_owned);
-        c.remote.trusted_proxy = proxy;
         c
     }
 
-    fn base(c: &Config, url: Option<&str>, ts: Option<&str>) -> (String, Vec<String>) {
-        resolve_base(c, url.map(str::to_owned), true, ts.map(str::to_owned))
+    #[test]
+    fn the_address_phones_open_follows_access_and_port() {
+        // This computer only: loopback, on the port.
+        let c = cfg(Access::Localhost, 7091, None);
+        assert_eq!(base_url(&c, true), "https://127.0.0.1:7091");
+        assert_eq!(base_url(&cfg(Access::Localhost, 8443, None), true), "https://127.0.0.1:8443");
+        // The tour and the tests speak plain HTTP, on this computer.
+        assert_eq!(base_url(&c, false), "http://127.0.0.1:7091");
+        // `public_url` is what the owner wrote, minus a trailing slash.
+        let c = cfg(Access::Open, 7091, Some("https://ptyro.example.com:8443/"));
+        assert_eq!(base_url(&c, true), "https://ptyro.example.com:8443");
     }
 
     #[test]
-    fn ports_are_found_and_written_out() {
-        assert_eq!(url_port("https://[::1]:8443/x"), Some(8443));
-        assert_eq!(url_port("https://[::1]/x"), None);
-        assert_eq!(url_port("http://box"), None);
-        assert_eq!(url_port("http://u:p@box:81"), Some(81));
-        assert_eq!(with_port("http://[::1]", 7091), "http://[::1]:7091");
-        assert_eq!(with_port("https://box.ts.net/a?b#c", 443), "https://box.ts.net:443/a?b#c");
-        assert_eq!(with_port("http://10.0.0.5:80", 7091), "http://10.0.0.5:80");
-        assert_eq!(set_port("https://box:8443/x", 7091), "https://box:7091/x");
-        assert_eq!(set_port("https://[::1]:8443", 7091), "https://[::1]:7091");
-    }
-
-    #[test]
-    fn built_links_carry_the_port_for_v4_v6_and_hostnames() {
-        assert_eq!(
-            base(&cfg("127.0.0.1:7091", None, false), None, None).0,
-            "https://127.0.0.1:7091"
-        );
-        assert_eq!(base(&cfg("[::1]:7091", None, false), None, None).0, "https://[::1]:7091");
-        assert_eq!(
-            base(&cfg("192.168.1.9:8443", None, false), None, None).0,
-            "https://192.168.1.9:8443"
-        );
-        assert_eq!(
-            base(&cfg("localhost:7091", None, false), None, None).0,
-            "https://localhost:7091"
-        );
-    }
-
-    #[test]
-    fn a_wildcard_listen_address_is_never_the_link() {
-        for l in ["0.0.0.0:7091", "[::]:7091"] {
-            let (u, _) = base(&cfg(l, None, false), None, None);
-            assert!(u.ends_with(":7091"), "{u}");
-            assert!(!u.contains("0.0.0.0") && !u.contains("[::]"), "{u}");
-        }
-    }
-
-    #[test]
-    fn tailscale_names_get_their_port() {
-        let c = cfg("127.0.0.1:7091", None, false);
-        assert_eq!(
-            base(&c, None, Some("https://box.tail1.ts.net")).0,
-            "https://box.tail1.ts.net:443"
-        );
-    }
-
-    #[test]
-    fn a_given_url_without_a_port_gets_the_one_that_serves_it() {
-        // ptyro serves it itself: its own port.
-        let c = cfg("192.168.1.9:7091", None, false);
-        let (u, notes) = base(&c, Some("https://phone-host/"), None);
-        assert_eq!(u, "https://phone-host:7091");
-        assert!(notes.iter().any(|n| n.contains("trusted_proxy")), "{notes:?}");
-        // Behind a proxy on the scheme's port: that port, written out.
-        let c = cfg("127.0.0.1:7091", None, true);
-        assert_eq!(
-            base(&c, Some("https://ptyro.example.com"), None).0,
-            "https://ptyro.example.com:443"
-        );
-        assert_eq!(
-            resolve_base(&c, Some("http://ptyro.example.com".into()), false, None).0,
-            "http://ptyro.example.com:80"
-        );
-        // `[remote] public_url` counts as given.
-        let c = cfg("127.0.0.1:7091", Some("https://p.example.com"), true);
-        assert_eq!(base(&c, None, None).0, "https://p.example.com:443");
-    }
-
-    #[test]
-    fn a_given_port_is_kept_and_a_mismatch_is_warned_about_with_the_fix() {
-        let c = cfg("127.0.0.1:7091", None, false);
-        let (u, notes) = base(&c, Some("https://box:9000"), None);
-        assert_eq!(u, "https://box:9000");
-        assert!(
-            notes.iter().any(|n| n.contains("9000") && n.contains("--url https://box:7091")),
-            "{notes:?}"
-        );
-        // The right port: nothing to say. Behind a proxy: nothing to say either.
-        assert!(base(&c, Some("https://box:7091"), None).1.is_empty());
-        assert!(
-            base(&cfg("127.0.0.1:7091", None, true), Some("https://box:9000"), None).1.is_empty()
-        );
-        // [::1] with a port is kept as is.
-        assert_eq!(base(&c, Some("http://[::1]:7091"), None).0, "http://[::1]:7091");
+    fn an_ipv6_host_gets_its_brackets() {
+        assert_eq!(authority("fd7a:115c::1", 7091), "[fd7a:115c::1]:7091");
+        assert_eq!(authority("100.64.0.9", 7091), "100.64.0.9:7091");
+        assert_eq!(authority("box.tail1234.ts.net", 7091), "box.tail1234.ts.net:7091");
     }
 
     #[test]
@@ -619,17 +452,5 @@ mod tests {
         assert!(proxies_to(&status("127.0.0.1:7091/x"), "7091"));
         assert!(!proxies_to(&status("http://example.com:7091"), "7091"));
         assert!(!proxies_to(&serde_json::json!({}), "7091"));
-    }
-
-    #[test]
-    fn something_else_on_443_is_not_ours_to_replace() {
-        // Ours already, or nothing there: fine to (re)point it.
-        assert_eq!(serves_443_elsewhere(&status("http://127.0.0.1:7091"), 7091), None);
-        assert_eq!(serves_443_elsewhere(&serde_json::json!({}), 7091), None);
-        // Another service: say what.
-        assert_eq!(
-            serves_443_elsewhere(&status("http://127.0.0.1:3000"), 7091).as_deref(),
-            Some("http://127.0.0.1:3000")
-        );
     }
 }

@@ -26,7 +26,7 @@ fn serve(d: &TempDaemon, env: &[(&str, &str)]) -> Serve {
     // Held until the instant before `serve` wants it.
     let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let mut cmd = d.cmd();
-    cmd.args(["serve", "--insecure", "--listen", &format!("127.0.0.1:{port}")])
+    cmd.args(["serve", "--loopback-http", "--port", &port.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     for (k, v) in env {
@@ -129,7 +129,7 @@ fn nobody_on_the_network_can_start_the_daemon() {
     let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let mut cmd = d.cmd();
     cmd.env_remove("PTYRO_NO_AUTOSPAWN")
-        .args(["serve", "--insecure", "--listen", &format!("127.0.0.1:{port}")])
+        .args(["serve", "--loopback-http", "--port", &port.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     let s = Serve { child: cmd.spawn().unwrap(), port };

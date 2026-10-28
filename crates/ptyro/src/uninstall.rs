@@ -444,12 +444,11 @@ fn integrations_found(config: &Config, env: &Env) -> Vec<Integration> {
     out
 }
 
-/// A `tailscale serve` mapping to our port that `[remote] tailscale` made.
+/// A `tailscale serve` mapping to our port: an older ptyro made it (`[remote] tailscale`); this
+/// one no longer does.
 fn tailscale_mapping(config: &Config) -> Option<String> {
-    if !config.remote.tailscale {
-        return None;
-    }
-    let port = config.remote.listen.rsplit(':').next()?;
+    let port = config.remote.port.to_string();
+    let port = port.as_str();
     let out = std::process::Command::new("tailscale")
         .args(["serve", "status", "--json"])
         .stdin(std::process::Stdio::null())

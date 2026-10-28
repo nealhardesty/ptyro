@@ -574,6 +574,14 @@ const SHARE_MODE: &[Choice] = &[
     c("symlink", "a symlink"),
     c("copy", "clone where possible, else a full copy"),
 ];
+const ACCESS: &[Choice] = &[
+    c("localhost", "this computer only: nothing else can reach the web app"),
+    c(
+        "tailscale",
+        "this computer and your Tailscale network (phones and laptops signed in to it), not the Wi-Fi",
+    ),
+    c("open", "every network interface: the Wi-Fi or LAN too. Devices still need a pairing token"),
+];
 const RUN_MODE: &[Choice] = &[
     c("concurrent", "run scripts of every worktree can run together"),
     c("exclusive", "starting one stops the other worktrees' run scripts"),
@@ -689,14 +697,11 @@ pub const SETTINGS: &[Setting] = &[
     s("recorder.max_bytes", "daemon", Kind::Bytes, "The most one session's recording takes, like 16MiB (at least 256KiB).").new_only(),
     // ── Web app and remote ──
     s("remote.serve", "remote", Kind::Bool, "Run the web app (for your phone or another computer) from the daemon, and keep it running."),
-    s("remote.tailscale", "remote", Kind::Bool, "Put Tailscale's HTTPS in front: your phone opens https://<machine>.<tailnet>.ts.net with a certificate it already trusts."),
-    s("remote.local", "remote", Kind::Bool, "Listen on every interface, letting in only this machine, private networks and tailnets."),
-    s("remote.listen", "remote", Kind::Address, "Where the web app listens. Loopback and Tailscale addresses only, unless insecure.").adv(),
+    s("remote.access", "remote", pick(ACCESS), "Who can reach the web app. It is always HTTPS (ptyro makes the certificate; trust it once from /ca.crt on a phone).").also("tailscale tailnet lan wifi network phone listen bind interface localhost open"),
+    s("remote.port", "remote", int(1024, 65535), "The port the web app listens on, whoever may reach it. Pairing links and QR codes use it too.").also("listen bind address https"),
     s("remote.public_url", "remote", Kind::Text, "The address QR codes and links point at.").adv().or("worked out from how it is reached").eg("https://ptyro.example.com"),
-    s("remote.insecure", "remote", Kind::Bool, "Plain HTTP on any address. Tokens would cross the network in clear.").adv(),
     s("remote.tls_cert", "remote", Kind::Path, "Your own certificate (a PEM chain, leaf first), instead of the one ptyro makes.").adv().or("one ptyro makes").eg("~/certs/fullchain.pem"),
     s("remote.tls_key", "remote", Kind::Path, "The key for that certificate.").adv().or("one ptyro makes").eg("~/certs/privkey.pem"),
-    s("remote.trusted_proxy", "remote", Kind::Bool, "A reverse proxy on this machine fronts the web app: believe its X-Forwarded-For.").adv(),
     s("remote.push", "remote", Kind::Bool, "Web Push to paired devices that asked for it."),
     s("remote.push_hosts", "remote", Kind::List, "More push services a device may use besides the browsers' own, like a self-hosted ntfy.").adv().or("none"),
     s("remote.approval_wait", "remote", Kind::Duration, "How long a Claude permission prompt waits for a phone's answer."),

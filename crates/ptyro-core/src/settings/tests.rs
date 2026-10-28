@@ -534,7 +534,7 @@ fn the_view_opens_even_when_the_config_does_not_load() {
     );
     assert!(v.options.iter().any(|(s, _)| *s == "themes"));
     let j = v.to_json();
-    assert!(j["entries"].as_array().unwrap().len() > 80 && j["problem"].is_string());
+    assert!(j["entries"].as_array().unwrap().len() > 70 && j["problem"].is_string());
     assert!(schema_json(Scope::User)["settings"].as_array().unwrap().len() > 100);
 }
 

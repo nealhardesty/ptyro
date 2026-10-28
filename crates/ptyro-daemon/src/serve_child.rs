@@ -213,7 +213,17 @@ impl Daemon {
             } else {
                 None
             },
-            listen: config.remote.listen.clone(),
+            listen: format!(
+                "{}:{}",
+                if config.remote.access == ptyro_core::config::Access::Open {
+                    "0.0.0.0"
+                } else {
+                    "127.0.0.1"
+                },
+                config.remote.port
+            ),
+            access: config.remote.access.to_string(),
+            port: config.remote.port,
             ca_fingerprint: record["ca_fingerprint"]
                 .as_str()
                 .filter(|_| up || by_hand.is_some())
@@ -227,7 +237,7 @@ impl Daemon {
     }
 
     /// Turn `[remote] serve` on or off in the config file, and bring the server up or down.
-    /// `via` is how phones will reach it (`tailscale`, `lan`, `here`); left out, a way is chosen
+    /// `via` is who can reach it (`localhost`, `tailscale`, `open`); left out, one is chosen
     /// when none is set yet. Waits a few seconds for it to say where it listens.
     pub(crate) async fn web_set(
         self: &Arc<Self>,

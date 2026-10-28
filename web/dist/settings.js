@@ -486,11 +486,10 @@ async function showLogs() {
         pre.scrollTop = pre.scrollHeight; });
 }
 // ── the web app's own server (WEB1.9) ───────────────────────────────────────────────────────
-const VIA = [
-    ["", "Keep what the config says", "Or pick for me: Tailscale if it is up here, else this network"],
-    ["tailscale", "Over Tailscale", "HTTPS on your tailnet, a certificate phones already trust"],
-    ["lan", "On this network", "Phones on the same Wi-Fi or LAN, over HTTPS; trust ptyro's certificate once"],
-    ["here", "This computer only", "Nothing else can reach it"],
+const ACCESS = [
+    ["tailscale", "My Tailscale network", "This computer and your tailnet (your phone, signed in to Tailscale), not the Wi-Fi"],
+    ["open", "Every network", "The Wi-Fi or LAN too, and anything else that reaches this computer. Devices still need a pairing token"],
+    ["localhost", "This computer only", "Nothing else can reach it"],
 ];
 async function setWeb(on, via) {
     try {
@@ -510,8 +509,13 @@ async function setWeb(on, via) {
         hostFail(e);
     }
 }
+/// Who can reach it (`remote.access`): the current one is marked, and picking another applies at once.
+function pickAccess(current, title) {
+    const items = ACCESS.map(([v, label, hint]) => ({ label: v === current ? `${label} (now)` : label, hint, run: () => void setWeb(true, v) }));
+    menu(title, current ? items : [{ label: "Pick for me", hint: "Tailscale if it is up here, else every network", run: () => void setWeb(true) }, ...items]);
+}
 function turnWebOn() {
-    menu("Run the web app with the daemon", VIA.map(([v, label, hint]) => ({ label, hint, run: () => void setWeb(true, v) })));
+    pickAccess(null, "Run the web app with the daemon: who can reach it?");
 }
 function turnWebOff() {
     const here = location.origin;
@@ -540,7 +544,8 @@ function webView() {
             lines.push(`This page comes from a \`ptyro serve\` you started by hand (pid ${w.by_hand}): it ends with that terminal, and it won't be back after a restart. Have the daemon run it instead.`);
         return h("div", { class: "stack-in", title: tip("web.status") }, h("p", { class: "pr-head" }, state, " ", w.up ? "The web app is running" : w.wanted ? "The daemon is starting the web app" : "The daemon isn't serving the web app"), facts([
             ["Address", w.url ? h("span", {}, h("code", {}, w.url), " ", h("button", { class: "small", onclick: () => void navigator.clipboard?.writeText(w.url).then(() => ui.toast("Copied"), () => ui.toast("Couldn't copy")) }, "Copy")) : null],
-            ["Listens on", w.listen],
+            ["Who can reach it", w.access ? h("span", {}, ACCESS.find((a) => a[0] === w.access)?.[1] ?? w.access, " ", h("button", { class: "small", title: "remote.access", onclick: () => pickAccess(w.access, "Who can reach the web app?") }, "Change")) : null],
+            ["Port", w.port ? String(w.port) : w.listen],
             ["Run by", w.pid ? `the daemon (pid ${w.pid})` : byHand ? "you, by hand" : null],
             ["Up for", w.since_ms ? ago(w.since_ms) : null],
             ["Restarted", w.restarts ? `${w.restarts} time${w.restarts === 1 ? "" : "s"} since the daemon started` : null],
