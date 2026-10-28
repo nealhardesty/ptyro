@@ -2,6 +2,13 @@
 
 Generated from git history by `make changelog` (scripts/changelog.sh); edit commit messages, not this file.
 
+## v0.0.16 (2026-10-28)
+
+### Other
+
+- chore: version 0.0.16 (dc154c1)
+- test: three tests that failed on CI's runners. send --raw's checks the order, not how the tty echo interleaves; the TUI switch gets room to land; the carried-listener test runs on Linux only (macOS 14 breaks it, which is why the daemon never carries its listener) (89c27f3)
+
 ## v0.0.15 (2026-10-28)
 
 ### Fixes
@@ -10,6 +17,7 @@ Generated from git history by `make changelog` (scripts/changelog.sh); edit comm
 
 ### Other
 
+- release: v0.0.15 (25cc5e4)
 - chore: version 0.0.15 (4e89590)
 
 ## v0.0.14 (2026-10-27)
