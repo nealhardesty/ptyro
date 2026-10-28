@@ -2815,7 +2815,9 @@ learning anything up front.
   (`open` / `xdg-open`; copied instead if nothing opens it), `y` copies it, `c` copies the report,
   `U` runs `daemon.upgrade` when the daemon differs. The addresses are OSC 8 hyperlinks: after
   each frame `link_cells` rewrites those cells with the hyperlink escape in the symbol, over the
-  identical text, so the screen looks the same. The web app's More → About asks the `about` host
+  identical text, so the screen looks the same. Writing them moves the terminal's cursor, so
+  `paint_links` brackets the write with DECSC/DECRC; without that the cursor was left on the last
+  link, away from the focused program's prompt. The web app's More → About asks the `about` host
   operation (`full` devices), and falls back to the daemon's status plus the repository, issues and
   licence constants in `web/src/data.ts` (checked against `Cargo.toml` by `web/test/kit.mjs`) for
   a lower scope. The help overlay's footer and the web's More page show the version.

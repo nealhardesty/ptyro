@@ -225,7 +225,7 @@ async fn event_loop(
             let done = tui.draw(|f| ui::draw(app, f))?;
             let linked = about::link_cells(&app.links.borrow(), done.buffer);
             if !linked.is_empty() {
-                about::paint_links(tui, &linked);
+                about::paint_links(tui.backend_mut(), &linked);
             }
             app.dirty = false;
             last_draw = Instant::now();

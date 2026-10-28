@@ -376,14 +376,17 @@ pub fn link_cells(
     cells
 }
 
-pub fn paint_links(
-    tui: &mut ratatui::DefaultTerminal,
+/// Writes the link cells over the frame just drawn. That moves the terminal's cursor to each
+/// link, after ratatui put it where the focused program's cursor is, so the cursor is saved
+/// before and restored after (DECSC / DECRC).
+pub fn paint_links<B: ratatui::backend::Backend + std::io::Write>(
+    b: &mut B,
     cells: &[(u16, u16, ratatui::buffer::Cell)],
 ) {
-    use ratatui::backend::Backend;
-    let b = tui.backend_mut();
+    let _ = b.write_all(b"\x1b7");
     let _ = b.draw(cells.iter().map(|(x, y, c)| (*x, *y, c)));
-    let _ = Backend::flush(b);
+    let _ = b.write_all(b"\x1b8");
+    let _ = std::io::Write::flush(b);
 }
 
 #[cfg(test)]
@@ -532,6 +535,30 @@ mod tests {
         let mut bad = links.clone();
         bad[0].url = "https://x/\x1b]52;c;AAAA".into();
         assert_eq!(link_cells(&bad, &buf).len(), cells.len() - links[0].width as usize);
+    }
+
+    #[test]
+    fn painting_links_leaves_the_cursor_where_it_was() {
+        let mut cell = ratatui::buffer::Cell::default();
+        cell.set_symbol("h");
+        #[derive(Clone, Default)]
+        struct Sink(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.borrow_mut().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let sink = Sink::default();
+        let mut b = ratatui::backend::CrosstermBackend::new(sink.clone());
+        paint_links(&mut b, &[(2, 0, cell)]);
+        let out = String::from_utf8(sink.0.borrow().clone()).unwrap();
+        assert!(out.starts_with("\x1b7"), "{out:?}");
+        assert!(out.ends_with("\x1b8"), "{out:?}");
+        assert!(out.contains('h'), "{out:?}");
     }
 
     #[test]
