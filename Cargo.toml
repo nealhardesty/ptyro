@@ -71,7 +71,7 @@ hkdf = "0.12.4"
 # `ptyro serve` speaks HTTPS with a certificate it makes (WEB1.7); ring, no C toolchain beyond cc.
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12", "logging"] }
-rcgen = { version = "0.13.2", default-features = false, features = ["ring", "pem"] }
+rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem"] }
 time = { version = "0.3.55", default-features = false, features = ["std"] }
 aes-gcm = { version = "0.10.3", default-features = false, features = ["aes", "alloc"] }
 # ptyro serve (M9.2): HTTP and WebSocket.
