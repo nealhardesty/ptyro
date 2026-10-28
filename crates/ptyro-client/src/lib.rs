@@ -122,14 +122,22 @@ impl Drop for Client {
     }
 }
 
+/// A spawned transport's stdout and stdin as one stream (`remote::spawn` and `remote::ssh` pipe
+/// both).
+fn pipes(
+    child: &mut tokio::process::Child,
+) -> Result<tokio::io::Join<tokio::process::ChildStdout, tokio::process::ChildStdin>, ClientError> {
+    match (child.stdout.take(), child.stdin.take()) {
+        (Some(out), Some(inp)) => Ok(tokio::io::join(out, inp)),
+        _ => Err(ClientError::Unavailable("the transport's pipes weren't set up".into())),
+    }
+}
+
 impl Client {
     pub async fn connect(opts: &ConnectOptions) -> Result<Self, ClientError> {
         if let Some((argv, via)) = &opts.command {
             let mut child = remote::spawn(argv)?;
-            let stream = tokio::io::join(
-                child.stdout.take().expect("piped stdout"),
-                child.stdin.take().expect("piped stdin"),
-            );
+            let stream = pipes(&mut child)?;
             let stderr = child.stderr.take().map(remote::collect);
             return match Self::handshake(stream, opts, Some(via.clone())).await {
                 Ok(mut c) => {
@@ -141,10 +149,7 @@ impl Client {
         }
         if let Some(target) = &opts.remote {
             let mut ssh = remote::ssh(target)?;
-            let stream = tokio::io::join(
-                ssh.stdout.take().expect("piped stdout"),
-                ssh.stdin.take().expect("piped stdin"),
-            );
+            let stream = pipes(&mut ssh)?;
             let stderr = ssh.stderr.take().map(remote::collect);
             let via = format!("ssh://{}", remote::host_of(target));
             return match Self::handshake(stream, opts, Some(via)).await {

@@ -1,6 +1,6 @@
 ptyro 3
 ptyro-agents 2
-ptyro-client 3
+ptyro-client 1
 ptyro-core 2
 ptyro-daemon 6
 ptyro-git 1
