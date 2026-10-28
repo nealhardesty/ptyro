@@ -319,6 +319,10 @@ mod tests {
         assert_eq!(s, "across");
     }
 
+    /// Linux only. On macOS 14, a connection accepted from a listener carried this way reads EOF
+    /// once its queue is empty, even without an exec. That is why the daemon never carries its
+    /// listener (SPEC §4.5).
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_carried_listening_socket_still_talks() {
         use std::io::{Read, Write};
