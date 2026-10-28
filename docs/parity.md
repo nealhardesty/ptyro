@@ -239,7 +239,7 @@ The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every sessio
 | Command | In the TUI | On the web |
 |---|---|---|
 | `serve` | `remote.serve` (full sized) | waived: it serves the web app; the web app can't start the thing it runs on |
-| `web` | `remote.web` (is it up, where, what next), `remote.web_on`, `remote.web_off` (full sized); the health badge has its findings | `web.status`: More → Web app: up or not, the address (copy it), who runs it, the log (`web.logs`); `web.on` (asks how phones reach it) and `web.off` |
+| `web` | `remote.web` (is it up, where, who can reach it, what next), `remote.web_on`, `remote.web_off` (full sized); `remote.access` and `remote.port` in Settings → remote (a dropdown and a number; search "tailscale" or "wifi"); the health badge has its findings | `web.status`: More → Web app: up or not, the address (copy it), who can reach it with a Change button, the port, who runs it, the log (`web.logs`); `web.on` (asks who can reach it: my Tailscale network, every network, this computer only) and `web.off`; the same two settings are in Settings → remote |
 | `pair` | `remote.pair`: the QR code, full sized, to scan (full scope by default, the warning shows above the code) | `pair`: this device's half (the link or QR code); `pair.device` makes a link and a QR code for another device (More → Devices → ＋; `full` preselected, the warning in the form and the sheet; a name that exists is replaced) |
 | `devices ls` | `devices.list` | `devices.list`: More → Devices |
 | `devices revoke` | `devices.revoke` | `devices.revoke`: a device's menu |

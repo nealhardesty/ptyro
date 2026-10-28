@@ -162,11 +162,11 @@ See [`remote.md`](remote.md).
 
 | Command | Does |
 |---|---|
-| `ptyro serve [--listen ADDR] [--local] [--cert PEM --key PEM] [--tailscale] [--insecure]` | the web app and the protocol over WebSocket for paired devices, over HTTPS with a certificate ptyro makes (phones trust its CA once, from `/ca.crt`); `--local` lets in your LAN and tailnet; `--cert`/`--key` use your own certificate; `--insecure` is plain HTTP |
+| `ptyro serve [--access localhost\|tailscale\|open] [--port N] [--cert PEM --key PEM]` | the web app and the protocol over WebSocket for paired devices, always HTTPS with a certificate ptyro makes (phones trust its CA once, from `/ca.crt`); `--access` and `--port` default to `[remote] access` and `port`; `--cert`/`--key` use your own certificate |
 | `ptyro pair [NAME] [--scope read\|approve\|control\|full] [--url URL] [--json]` | pair a phone or browser: a QR code with a one-time code (10 minutes; scope `full` by default, with a warning; a name that exists is replaced), then waits for the device |
 | `ptyro devices [ls \| revoke ID \| push-test]` | paired devices |
 | `ptyro machine [ls \| add (ssh://HOST \| CODE) [--name N] \| rm M \| hide M WS \| unhide M WS \| retry M \| pair]` | other machines whose workspaces show here beside yours (`laptop2:work`, `laptop2:fix-flaky-test`): add one over ssh or with the code `machine pair` printed on it; they must run the same version |
-| `ptyro web [on\|off\|status] [--via tailscale\|lan\|here] [--pair] [--json]` | have the daemon run the web app's server (`ptyro daemon start --serve` too): on, off, or where it is and what to do next |
+| `ptyro web [on\|off\|status] [--access localhost\|tailscale\|open] [--pair] [--json]` | have the daemon run the web app's server (`ptyro daemon start --serve` too): on, off, or where it is and what to do next |
 | `ptyro --remote HOST …` / `ptyro proxy` | any command against another machine's daemon / the bridge it runs there |
 
 ## Recordings

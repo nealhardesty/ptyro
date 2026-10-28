@@ -34,7 +34,7 @@ fn chrome() -> Option<PathBuf> {
 fn serve(d: &TempDaemon, home: &Path, port: u16) -> Child {
     let child = d
         .cmd()
-        .args(["serve", "--insecure", "--listen", &format!("127.0.0.1:{port}")])
+        .args(["serve", "--loopback-http", "--port", &port.to_string()])
         .env("HOME", home)
         .stdout(Stdio::null())
         .stderr(Stdio::null())

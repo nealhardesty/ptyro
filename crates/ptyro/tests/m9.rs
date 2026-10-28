@@ -87,7 +87,7 @@ impl World {
             .d
             .cmd()
             // Plain HTTP: these tests speak the protocol; `serve_speaks_https_by_default` the TLS.
-            .args(["serve", "--insecure", "--listen", &format!("127.0.0.1:{port}")])
+            .args(["serve", "--loopback-http", "--port", &port.to_string()])
             .env("HOME", self.home())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -492,35 +492,28 @@ async fn pairing_codes_are_single_use_and_expire() {
     assert!(!text.contains("ptd_"), "{text}");
 }
 
-/// Every link carries its port, whatever the address: the listen address, a `--url` without one
-/// (ptyro serves it on its listen port) and one with a wrong one (kept, with the fix named).
+/// A link opens where `[remote] access` and `port` say, over HTTPS; a `--url` is used as written.
 #[test]
-fn pair_links_always_carry_the_port() {
+fn pair_links_follow_access_and_port() {
     let w = World::new("", &[("PTYRO_TEST_PAIRING_TTL_MS", "1500")]);
-    let link = |args: &[&str]| -> (String, Value) {
+    let link = |w: &World, args: &[&str]| -> (String, Value) {
         let mut a = vec!["pair", "p", "--scope", "read", "--json"];
         a.extend_from_slice(args);
         let v = w.json(&a);
         (v["url"].as_str().unwrap().to_owned(), v)
     };
-    let (u, _) = link(&[]);
-    // The listen address, or (on a machine where Tailscale proxies to it) its HTTPS name on :443.
-    let authority = u.strip_prefix("https://").and_then(|r| r.split("/#pair=").next()).unwrap();
-    assert!(
-        authority == "127.0.0.1:7091" || authority.ends_with(".ts.net:443"),
-        "the port is in the link: {u}"
-    );
-    let (u, v) = link(&["--url", "https://phone-host.example"]);
-    assert!(u.starts_with("https://phone-host.example:7091/#pair="), "{u}");
-    assert!(v["notes"].to_string().contains("trusted_proxy"), "{v}");
-    let (u, v) = link(&["--url", "http://[::1]:7091/"]);
-    assert!(u.starts_with("http://[::1]:7091/#pair="), "{u}");
-    assert_eq!(v["notes"].as_array().unwrap().len(), 0, "{v}");
-    let (u, v) = link(&["--url", "https://box:9000"]);
-    assert!(u.starts_with("https://box:9000/#pair="), "{u}");
-    assert!(v["notes"].to_string().contains("--url https://box:7091"), "{v}");
-    // The text form prints the same link (QR and all) and the notes.
-    let out = w.cli(&["pair", "q", "--scope", "read", "--url", "https://box.example"]);
+    // Out of the box: this computer, the default port, HTTPS; and it says what to do for a phone.
+    let (u, v) = link(&w, &[]);
+    assert!(u.starts_with("https://127.0.0.1:7091/#pair="), "{u}");
+    assert!(v["notes"].to_string().contains("remote.access"), "{v}");
+    let (u, _) = link(&w, &["--url", "https://phone-host.example:8443/"]);
+    assert!(u.starts_with("https://phone-host.example:8443/#pair="), "{u}");
+    // A port of your own is in the link.
+    let p = World::new("[remote]\nport = 8123\n", &[("PTYRO_TEST_PAIRING_TTL_MS", "1500")]);
+    let (u, _) = link(&p, &[]);
+    assert!(u.starts_with("https://127.0.0.1:8123/#pair="), "{u}");
+    // The text form prints the same link (QR and all).
+    let out = w.cli(&["pair", "q", "--scope", "read", "--url", "https://box.example:7091"]);
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("https://box.example:7091/#pair=ptp_"), "{text}");
 }
@@ -887,8 +880,8 @@ async fn web_push_end_to_end() {
 fn the_daemon_runs_serve_and_keeps_it_through_upgrades() {
     let port = free_port();
     let w = World::new(
-        &format!("[remote]\nserve = true\ninsecure = true\nlisten = \"127.0.0.1:{port}\"\n"),
-        &[],
+        &format!("[remote]\nserve = true\naccess = \"localhost\"\nport = {port}\n"),
+        &[("PTYRO_LOOPBACK_HTTP", "1")],
     );
     wait_http(port);
     assert_eq!(
@@ -907,16 +900,15 @@ fn the_daemon_runs_serve_and_keeps_it_through_upgrades() {
         assert!(Instant::now() < deadline, "serve didn't come back after the upgrade");
         std::thread::sleep(Duration::from_millis(100));
     }
-    // An address that isn't loopback or Tailscale needs --local (LAN peers, HTTPS) or
-    // --insecure (anyone, in clear); this world's config says `insecure`, so a fresh one.
+    // Plain HTTP is for this computer only: never with a wider `access`.
     let fresh = World::new("", &[]);
-    let out = fresh.cli(&["serve", "--listen", "0.0.0.0:0"]);
+    let out = fresh.cli(&["serve", "--loopback-http", "--access", "open"]);
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("--local") && err.contains("in clear"), "{err}");
+    assert!(err.contains("plain HTTP is only for this computer"), "{err}");
     // Half of your own certificate pair says which half is missing, not a silent fallback.
     let half = World::new("[remote]\ntls_cert = \"/nowhere/cert.pem\"\n", &[]);
-    let out = half.cli(&["serve", "--listen", "127.0.0.1:0"]);
+    let out = half.cli(&["serve", "--port", "0"]);
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("tls_key isn't") && err.contains("remote.tls_key PATH"), "{err}");
@@ -931,8 +923,10 @@ fn the_web_app_is_a_setting_the_daemon_keeps() {
     // one is not bound until `web on`, minutes into a busy run.
     let hold = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = hold.local_addr().unwrap().port();
-    let mut w =
-        World::new(&format!("[remote]\ninsecure = true\nlisten = \"127.0.0.1:{port}\"\n"), &[]);
+    let mut w = World::new(
+        &format!("[remote]\naccess = \"localhost\"\nport = {port}\n"),
+        &[("PTYRO_LOOPBACK_HTTP", "1")],
+    );
     let config_path = std::path::PathBuf::from(w.ok(&["config", "path"]).trim());
     let status = |w: &World| -> serde_json::Value {
         let out = w.ok(&["daemon", "status", "--json"]);
@@ -954,7 +948,7 @@ fn the_web_app_is_a_setting_the_daemon_keeps() {
     assert!(said.contains("off") && said.contains("ptyro web on"), "{said}");
 
     // A way to be reached that isn't one of ours is refused, and changes nothing.
-    let bad = w.cli(&["web", "on", "--via", "carrier-pigeon"]);
+    let bad = w.cli(&["web", "on", "--access", "carrier-pigeon"]);
     assert!(!bad.status.success());
 
     // On: up, with its address, before the command returns.
@@ -974,7 +968,10 @@ fn the_web_app_is_a_setting_the_daemon_keeps() {
 
     // The file keeps the rest of itself.
     let config = std::fs::read_to_string(&config_path).unwrap();
-    assert!(config.contains("serve = true") && config.contains("insecure = true"), "{config}");
+    assert!(
+        config.contains("serve = true") && config.contains(&format!("port = {port}")),
+        "{config}"
+    );
 
     // A `[remote]` setting changed from the settings commands starts the server again with it.
     let before = status(&w)["pid"].as_u64().unwrap();
@@ -1050,7 +1047,7 @@ fn the_web_app_is_a_setting_the_daemon_keeps() {
     // A `ptyro serve` started by hand is noticed, and the daemon doesn't fight it for the port.
     let by_hand =
         w.d.cmd()
-            .args(["serve", "--insecure", "--listen", &format!("127.0.0.1:{port}")])
+            .args(["serve", "--loopback-http", "--port", &port.to_string()])
             .env("HOME", w.home())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -1141,7 +1138,7 @@ async fn serve_speaks_https_by_default() {
     let port = free_port();
     let mut child =
         w.d.cmd()
-            .args(["serve", "--listen", &format!("127.0.0.1:{port}")])
+            .args(["serve", "--access", "localhost", "--port", &port.to_string()])
             .env("HOME", w.home())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -1240,7 +1237,7 @@ async fn serve_uses_your_own_certificate() {
     let port = free_port();
     let mut child =
         w.d.cmd()
-            .args(["serve", "--listen", &format!("127.0.0.1:{port}"), "--cert"])
+            .args(["serve", "--access", "localhost", "--port", &port.to_string(), "--cert"])
             .arg(&cert_path)
             .arg("--key")
             .arg(&key_path)

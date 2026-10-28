@@ -536,7 +536,7 @@ fn search_finds_by_key_help_or_value_and_jumps_there() {
                 _ => None,
             })
             .collect();
-    assert!(found.contains(&"remote.tailscale".to_owned()), "{found:?}");
+    assert!(found.contains(&"remote.access".to_owned()), "{found:?}");
     t.press("<Esc>");
     assert!(t.p.search.is_none());
     let mut u = T::new("");

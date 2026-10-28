@@ -1805,6 +1805,25 @@ up), and `make parity` fails CI on a CLI command with neither a web path nor a w
   `serving_the_web_app_is_one_setting…`. *Since:* `remote.serve` and `remote.tailscale` are in the CFG1 panel. *Not done:* a QR code on
   the TUI's `remote.web_on` (it prints `ptyro pair` as the next step).
 
+- [x] **ACC1 Who can reach the web app is one obvious setting** — S. (owner 2026-10-28; done 2026-10-28)
+  `[remote]` had five settings that decided where the server listens and how (`listen`,
+  `tailscale`, `local`, `insecure`, `trusted_proxy`), and two of them contradicting each other
+  (`tailscale` and `local`) made the server exit with an error only its log showed, while
+  `curl http://host:7091` said "no port open". The owner's rule: HTTPS always, port 7091 unless
+  changed, and a dropdown of `localhost` | `tailscale` | `open`. Now AGENTS.md's Principle of
+  Obviousness.
+  *Done:* `[remote] access` (a dropdown in the TUI and web panels, a word on the CLI: `ptyro
+  config set remote.access`, `ptyro web on --access`, `ptyro serve --access`) and `[remote] port`
+  (also in the panels) replace the five. `tailscale` binds loopback and this machine's Tailscale
+  addresses only, and picks up Tailscale starting later; `open` binds every interface. Always
+  HTTPS (no `--insecure`, no `trusted_proxy`, no `tailscale serve` front: the phone trusts ptyro's
+  certificate once). Old files are read as what they meant and rewritten by `ptyro web on`. The
+  web app's More → Web app shows who can reach it with a Change button; `ptyro web status`, the
+  doctor and the pairing note say it and how to change it. SPEC §16.3 has the details.
+  *Not done / by design:* `ptyro serve --loopback-http` (hidden; `PTYRO_LOOPBACK_HTTP=1`) is plain
+  HTTP on 127.0.0.1 for the tour and the tests only; a TUI action that asks the three questions
+  when turning the server on (the panel's dropdown is the way there).
+
 Suggested order: WEB1.0 → WEB1.1 → WEB1.7 (phones need it) → WEB1.2 → WEB1.3 → WEB1.4 → the
 rest (WEB1.8's spike can run any time; WEB1.9 is small and can go first). From WEB1.0 on, every
 new feature in any milestone ships with its web part.

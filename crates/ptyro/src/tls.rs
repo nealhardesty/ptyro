@@ -265,32 +265,6 @@ pub fn names_for(extra: &[String]) -> Vec<String> {
     names
 }
 
-/// Whether a peer may connect under `--local`: this machine, a private network (RFC 1918,
-/// IPv6 unique local), link-local, or a tailnet (100.64.0.0/10).
-///
-/// 100.64.0.0/10 is the carrier-grade NAT range, which Tailscale uses for tailnets; on a mobile
-/// carrier or a provider that NATs it is shared with other customers, not private to you. Under
-/// `--local` on such a network, the tailnet's own ACLs are not what keeps strangers out: the
-/// device token is (and the lockout).
-pub fn local_peer(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v) => {
-            let o = v.octets();
-            v.is_loopback()
-                || v.is_private()
-                || v.is_link_local()
-                || (o[0] == 100 && (64..128).contains(&o[1]))
-        }
-        IpAddr::V6(v) => {
-            if let Some(v4) = v.to_ipv4_mapped() {
-                return local_peer(IpAddr::V4(v4));
-            }
-            let s = v.segments()[0];
-            v.is_loopback() || (s & 0xfe00) == 0xfc00 || (s & 0xffc0) == 0xfe80
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,27 +304,6 @@ mod tests {
         std::fs::remove_file(d.path().join("ca-key.pem")).unwrap();
         let other = load_or_make(d.path(), &more, late).unwrap();
         assert_ne!(other.ca_fingerprint, first.ca_fingerprint);
-    }
-
-    #[test]
-    fn local_peers_are_this_machine_private_networks_and_tailnets() {
-        for ip in [
-            "127.0.0.1",
-            "10.1.2.3",
-            "172.16.0.9",
-            "192.168.1.20",
-            "169.254.1.1",
-            "100.101.1.2",
-            "::1",
-            "fd00::1",
-            "fe80::1",
-            "::ffff:192.168.1.2",
-        ] {
-            assert!(local_peer(ip.parse().unwrap()), "{ip}");
-        }
-        for ip in ["8.8.8.8", "100.128.0.1", "2001:4860::8888", "::ffff:1.1.1.1"] {
-            assert!(!local_peer(ip.parse().unwrap()), "{ip}");
-        }
     }
 
     #[test]

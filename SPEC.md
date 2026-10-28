@@ -968,10 +968,11 @@ claimed by `ptyro serve`).
 `Web{on?, via?}` → `Web{web, notes}`. With `on` left out it asks how the server is; `Some(true)` or
 `Some(false)` turns `[remote] serve` on or off (`full` scope): the daemon edits the config file
 (`ptyro_core::config::set_serve`, comments and the rest kept), reloads it, starts or stops the
-server at once and waits up to 12 s for it to say where it listens. `via` (`tailscale`, `lan`,
-`here`) says how phones reach it, else the config's own choice stands, else Tailscale when it is
-running on this machine, else `lan`. `DaemonStatus.web` carries the same `WebServe{wanted, up, pid,
-url, listen, ca_fingerprint, since_ms, restarts, last_exit, by_hand, log}`.
+server at once and waits up to 12 s for it to say where it listens. `via` (`localhost`,
+`tailscale`, `open`; `here` and `lan` are the old words) says who can reach it, else the config's
+own choice stands, else Tailscale when it is running on this machine, else `open`.
+`DaemonStatus.web` carries the same `WebServe{wanted, up, pid, url, listen, access, port,
+ca_fingerprint, since_ms, restarts, last_exit, by_hand, log}` (`access` and `port` are ACC1's).
 
 **[built WEB1.8] Protocol 1.17** (behaviour; no new message): a device with `control` scope may
 `Subscribe` with `control` and a `size`, and `Resize`; its `Input` takes control of the session
@@ -3468,11 +3469,11 @@ change (debounced) and emits `ConfigReloaded`.
   **[built M8]** `[recorder]` is typed now (`enabled = true`, `max_bytes = "16MiB"`, at least
   256 KiB), and agents take `record = false`. Only `[remote]` is still reserved. The default
   `[daemon] scrollback_lines` is 5000 (§7.6).
-  **[built M9]** `[remote]` is typed: `listen = "127.0.0.1:7091"`, `public_url`, `serve = false`,
-  `tailscale = false` (run `tailscale serve` in front, as `--tailscale` does),
-  `insecure = false`, `approval_wait = "10m"`, `push = true`, `push_hosts = []` (push services a
-  device may subscribe with besides the browsers': FCM, Mozilla, Apple, Windows). `trusted_proxy
-  = false` (believe a loopback peer's `X-Forwarded-For`; on by itself under `tailscale serve`). No section is
+  **[built M9]** `[remote]` is typed: `access = "localhost"` (`tailscale`, `open`; ACC1, §16.3),
+  `port = 7091`, `public_url`, `serve = false`, `approval_wait = "10m"`, `push = true`,
+  `push_hosts = []` (push services a device may subscribe with besides the browsers': FCM,
+  Mozilla, Apple, Windows), `tls_cert`/`tls_key`. (`listen`, `tailscale`, `local`, `insecure`
+  and `trusted_proxy` were replaced by `access` and `port`.) No section is
   reserved any more.
   `[clipboard] allow_write = true` (OSC 52 writes from programs reach the TUI's terminal;
   read by the TUI, so it follows that machine's config).
@@ -4769,8 +4770,14 @@ machine's (docs/remote.md).
 
 ### 16.3 WebSocket server
 
-`ptyro serve --listen 127.0.0.1:7091` (or a Tailscale address, or `--local`) exposes the protocol
-over WebSocket, over HTTPS by default (**[built WEB1.7]**, below). Auth: long random
+`ptyro serve` exposes the protocol over WebSocket, always over HTTPS (**[built WEB1.7]**, below).
+**[changed ACC1, 2026-10-28] Two settings say where, and nothing else does.** `[remote] access`
+(`localhost` | `tailscale` | `open`, default `localhost`) says who can reach it; `[remote] port`
+(default 7091, 1024–65535) says on which port. They replace `listen`, `tailscale`, `local`,
+`insecure` and `trusted_proxy`: five settings that had to agree, where a contradictory pair
+(`tailscale` and `local`) made the server exit with an error only the log showed (the owner's
+bug report: "this is too dang confusing"). Principle of Obviousness (AGENTS.md): a person picks
+from a dropdown of three words, each with a sentence; the combination that fails cannot be made. Auth: long random
 device tokens (`ptyro pair` prints a one-time code the device trades for one), stored hashed;
 revocable (`ptyro devices ls|revoke`).
 
@@ -4802,11 +4809,30 @@ is "the web is up when the daemon is".
   note when off or starting, a warning for a by-hand server, a problem with the fix when it fails,
   e.g. "another program holds 127.0.0.1:7091: pick another port"), and More → Web app, which
   also turns it on or off and pairs a device.
-- **Reaching it.** On with nothing chosen, `set_serve` picks Tailscale when `tailscale status`
-  says Running (`[remote] tailscale = true`: `ptyro serve --tailscale` runs `tailscale serve`),
-  else this network (`local = true`: HTTPS from ptyro's certificate, private addresses only).
-  Any way the config already has (`tailscale`, `local`, `insecure`, `trusted_proxy`,
-  `public_url`, `tls_cert`) is kept. Nothing opens to anyone until a device is paired.
+- **Reaching it.** On with nothing chosen, `set_serve` keeps the file's `[remote] access`, else
+  picks `tailscale` when `tailscale status` says Running, else `open` (a phone is the point, so
+  the default is one that works at once; the note and `ptyro doctor` say what `open` means).
+  `ptyro web on --access localhost|tailscale|open` (or the words `here` and `lan`, the old
+  `--via`, which still work) sets it; so do `ptyro config set remote.access …`, the settings
+  panel's dropdown (`remote.access`, with `remote.port` beside it), and the web app's More → Web
+  app ("Who can reach it", with a Change button; the page asks the same three questions when it
+  turns the server on). `WebServe` carries `access` and `port`; `ptyro web status`, `daemon
+  status` and the doctor say "who can reach it: …" and how to change it. Searching the panel for
+  `tailscale`, `wifi`, `lan`, `listen` or `bind` finds `remote.access`. Nothing opens to anyone
+  until a device is paired.
+- **Older files.** A `[remote]` with the old keys is read as what they meant
+  (`config::migrate_remote`: `local` or a wildcard `listen` is `open`; `tailscale` or a
+  non-loopback `listen` is `tailscale`; else `localhost`; `listen`'s port is `port`;
+  `access`/`port` already in the file win), and `set_serve` rewrites the file without them. Two
+  things went with them by design (owner, 2026-10-28: "https is always on, I don't want http
+  ever (fine with the self signed cert issues)"): ptyro no longer runs `tailscale serve` for
+  you (the name is `https://<name>.<tailnet>.ts.net:<port>` with ptyro's certificate, trusted
+  once; `ptyro uninstall` still switches off a `tailscale serve` mapping to our port that an
+  older ptyro made), and there is no plain-HTTP or trusted-proxy mode (so no `X-Forwarded-For`
+  handling). The one exception is not a setting: `ptyro serve --loopback-http` (or
+  `PTYRO_LOOPBACK_HTTP=1`, which the daemon's child inherits) speaks plain HTTP on 127.0.0.1
+  for the tour and the tests (a browser counts loopback as secure); it refuses any `access`
+  but `localhost`.
 - **No orphans.** A managed `ptyro serve` leaves within a second of its parent daemon going
   (`getppid` changes), however it went: a crash leaves the socket file behind, so the file alone
   can't say, and the next daemon's server would never get the port (`m9`: the daemon is killed
@@ -4819,9 +4845,7 @@ is "the web is up when the daemon is".
 - **Headers:** a strict CSP (`default-src 'none'`, `script-src 'self'`…), `X-Frame-Options:
   DENY`, `nosniff`, `no-referrer`.
 - **The WebSocket:** one WebSocket message per protocol frame (JSON text or MessagePack binary).
-  The first message must be a Hello. `serve` rewrites it to `kind: web`, `via: ws:<peer>` (or
-  `X-Forwarded-For` and `Tailscale-User-Login` from a loopback peer when a proxy is trusted:
-  `[remote] trusted_proxy`, `--tailscale`, or `tailscale serve` already fronting the port),
+  The first message must be a Hello. `serve` rewrites it to `kind: web`, `via: ws:<peer>`,
   `pid: 0`, and drops a requested zstd. A `Reject` counts as a failed login: 10 from one address in 10 min answer 429.
   Pings every 25 s. **[changed H2.7]** A browser's message is at most `MAX_CLIENT_MESSAGE`
   (4.25 MiB: a whole scratchpad and room to spare), set at the handshake because the library
@@ -4830,14 +4854,13 @@ is "the web is up when the daemon is".
 - **Host check (DNS rebinding):** a request whose `Host` isn't an IP address, `localhost`
   (`*.localhost`), `public_url`'s host or this machine's MagicDNS name (full and short, from
   `tailscale status --json`) gets 421. No `Host` passes (not a browser).
-- **Addresses:** loopback and Tailscale (100.64.0.0/10, fd7a:115c:a1e0::/48), unless `--local`
-  (or `[remote] local`) or `--insecure` (or `[remote] insecure`). `--local` listens on every
-  interface (`0.0.0.0:<port>`) and drops a connection from anything but loopback, RFC 1918,
-  IPv6 unique local, link-local and 100.64.0.0/10, before TLS. `--tailscale` runs
-  `tailscale serve --bg --https=443 http://127.0.0.1:<port>`.
-- **HTTPS** **[built WEB1.7]** (`crates/ptyro/src/tls.rs`): unless TLS ends earlier (`--tailscale`,
-  `tailscale serve` already fronting the port, `[remote] trusted_proxy`), where `serve` speaks
-  plain HTTP and only on loopback, or `--insecure`, which is plain HTTP anywhere. The certificates
+- **Addresses:** `localhost` binds 127.0.0.1; `tailscale` binds 127.0.0.1 and each of this
+  machine's Tailscale addresses (`tailscale status --json` `Self.TailscaleIPs`: 100.64.0.0/10,
+  fd7a:115c:a1e0::/48), and looks again every 5 s, so Tailscale starting after the server (or
+  its address changing) needs no restart; `open` binds 0.0.0.0. A port taken is the one error
+  that matters, and says which setting changes it. Each listener runs the same accept loop.
+- **HTTPS** **[built WEB1.7]** (`crates/ptyro/src/tls.rs`): always (see ACC1 for the loopback
+  exception). The certificates
   live in `<data>/serve/tls/`:
   - a CA (ECDSA P-256, ten years, `ptyro local CA (<host>)`), made once; `ca.pem` never changes,
     since it's what phones installed (rcgen can't read a certificate back, so `tls.json` keeps
@@ -4845,7 +4868,8 @@ is "the web is up when the daemon is".
   - a server certificate it signs (397 days, under Apple's 825-day limit for user-installed
     roots; `serverAuth`), for `localhost`, the loopback addresses, the host name and
     `<host>.local`, the addresses traffic to a LAN and a tailnet leaves from (a connected UDP
-    socket, nothing sent), the listen address, Tailscale names and `public_url`'s host. Re-issued
+    socket, nothing sent), the bound addresses, this machine's Tailscale addresses and names and
+    `public_url`'s host. Re-issued
     with fewer than 30 days left or a name missing (names seen before stay), at start and every
     12 h while it runs, swapped in for new connections.
 
@@ -4855,7 +4879,8 @@ is "the web is up when the daemon is".
   (`application/x-x509-ca-cert`). `serve` records its URL and the CA's SHA-256 in
   `state/serve.json`; `ptyro pair` uses them while that `serve` runs, so the QR code is its
   `https://` address, and says where to get the CA and how to trust it. `ptyro doctor` (so the
-  health badge) warns on plain HTTP off loopback and on a certificate that wasn't renewed.
+  health badge) notes `open`, warns when `tailscale` is chosen and Tailscale is down, and warns
+  on a certificate that wasn't renewed.
 - **Devices:** kept in the store's `kv` (`devices`): id, name, scope, SHA-256 of the token,
   created/last seen/via, push subscriptions, and, until claimed, the pairing code's SHA-256 and
   expiry. Tokens are `ptd_` + 32 bytes from `/dev/urandom` (no fallback), checked in constant
@@ -4898,8 +4923,7 @@ embedded with `include_bytes!`, with no dependencies or third-party requests.
   offline shell, push display, and Allow/Deny notification actions answered through
   `/api/request` with the token from IndexedDB.
 - **Pairing:** `ptyro pair` prints a QR code (`qrcode`, Dense1x2) for `<base>/#pair=<code>`. The
-  base is `--url`, `[remote] public_url`, the Tailscale HTTPS name when `tailscale serve` proxies
-  to our port, or `<scheme>://<listen>`.
+  base is `--url`, `[remote] public_url`, or the address `access` makes reachable (below).
   - **Default scope is `full`, with a warning.** With no `--scope`, `ptyro pair` (and the TUI's
     `remote.pair`, which runs it, and the web's Devices ＋ form, which preselects `full`) pairs
     with `full`, because the whole web app needs it, and says so in plain words: "This device gets
@@ -4910,18 +4934,14 @@ embedded with `include_bytes!`, with no dependencies or third-party requests.
     device may …". The protocol's `Scope` default is `full` too (a `device_pair` without a scope).
     Existing devices keep their scopes. No config option: a default that can be configured away
     is a default nobody reads.
-  - **The port is always in the link.** An address ptyro builds from address+port carries the port,
-    explicitly, even when it is the scheme's own: `https://127.0.0.1:7091`, `http://[::1]:7091`,
-    `https://box.tail1234.ts.net:443`. A wildcard listen address (`0.0.0.0`, `::`) is never the
-    link: it becomes this machine's LAN address (else loopback), same port. `ptyro pair` uses the
-    address of the running `ptyro serve` (`state/serve.json`: its real `--listen`), else the config.
-    A `--url`/`public_url` that names a port is kept; if it differs from the listen port and no
-    proxy is declared (`[remote] trusted_proxy`), a note says so and prints the fixed `--url`. One
-    without a port is a proxy on the scheme's default port when `trusted_proxy` is set (so `:443` /
-    `:80` is written out); otherwise ptyro serves it itself and its listen port is added (a bare
-    host would reach nothing), with a note naming `trusted_proxy` for the proxy case. `--json`
-    carries the same URL, and `notes`. `remote::resolve_base` is the one function; it has unit
-    tests for v4, v6, hostnames, Tailscale, wildcards and `--url` with and without a port.
+  - **The port is always in the link, and the address follows `access`.** `localhost` is
+    `https://127.0.0.1:<port>`; `tailscale` is `https://<MagicDNS name>:<port>` (the first
+    Tailscale address if there is no name); `open` is `https://<LAN address>:<port>`. IPv6 gets
+    its brackets. `--url` and `public_url` are used as written (a trailing `/` trimmed): they are
+    the owner's word, for a forwarded port or a name of their own. `ptyro pair` uses the address
+    of the running `ptyro serve` (`state/serve.json`), else the config. With `localhost` and no
+    `--url`, it adds a note: "that address only works on this computer", and the setting that
+    changes it. `--json` carries the same URL and `notes`. `remote::base_url` is the one function.
   - **A name is one device.** Pairing a name that exists (case-insensitive) replaces that device:
     the new link carries the newly asked scope (up or down), and when it is opened the old
     token stops working and the old device's live connections are closed (as a revoke). Until
@@ -5203,7 +5223,7 @@ command): ptyro doesn't confine that.
 | Secrets in recordings/logs | files `0600`; recorder opt-out; logs never include PTY content above `trace` |
 | Secrets in the config file (literal tokens, webhooks) | everything ptyro writes there (`config edit`, `init`, profile and pin commands) is 0600 in directories it creates 0700, replaced atomically; `ptyro doctor` warns when group or others can read or write it |
 | Data loss in worktrees | §10.8 rules; locks while running; marker files |
-| Remote access | **[built M9]** off by default; the daemon's clients use a local socket only (its one TCP port is the opt-in approve/deny link listener, loopback/Tailscale unless `insecure`). `ptyro serve` listens on loopback/Tailscale unless `--insecure`. Devices: 256-bit tokens stored hashed, compared in constant time, scopes enforced per request and keystroke, a browser's Hello rewritten to `web`, a lockout after 10 failures, revocation closes live connections, pairing only locally and through a one-time code (single use, 10 minutes, so the printed link is worthless afterwards; the token itself is never printed), `full` by default with a warning (`--scope` for less), remote actions in the event log. The app ships a strict CSP and no third-party code. Web Push is end-to-end encrypted. Over ssh: the ssh login. E2E relay later (docs/remote.md has the threat model). |
+| Remote access | **[built M9]** off by default; the daemon's clients use a local socket only (its one TCP port is the opt-in approve/deny link listener, loopback/Tailscale unless `insecure`). `ptyro serve` is always HTTPS and listens where `[remote] access` says (this computer, plus your Tailscale network, or every interface). Devices: 256-bit tokens stored hashed, compared in constant time, scopes enforced per request and keystroke, a browser's Hello rewritten to `web`, a lockout after 10 failures, revocation closes live connections, pairing only locally and through a one-time code (single use, 10 minutes, so the printed link is worthless afterwards; the token itself is never printed), `full` by default with a warning (`--scope` for less), remote actions in the event log. The app ships a strict CSP and no third-party code. Web Push is end-to-end encrypted. Over ssh: the ssh login. E2E relay later (docs/remote.md has the threat model). |
 | Credentials | ptyro stores none for agents; uses the agents' own auth; remote tokens hashed; profile `secrets` resolved per spawn, memory-only, redacted everywhere |
 | An agent answering for a person, or widening what it may do (security review M1) | refused to any agent, with or without a policy, whichever client it uses: `answer` and `gate resolve`; typing (`send`, `send --raw`, a client's keystrokes) into a session that is blocked on a person (Claude's dialog preselects "Yes", so one Enter approves); pairing or revoking devices and push subscriptions; trusting scripts, recipes or templates (`project trust`, the `trust` fingerprint on new worktrees, `recipe run`, `cs new`); upgrading the daemon to another binary. Typing into an *idle* agent, mail, reading and spawning configured agents stay allowed: a lead or a script orchestrating other agents needs them (§15) |
 | Telling an agent's request from yours | the connecting process (its pid from the kernel, never from the Hello) is placed in a session by: (1) its ancestry, the nearest ancestor that is a session's process; (2) its POSIX session (`getsid`): every session's child leads its own, so a double-forked, `nohup`ed or `disown`ed process is still placed; (3) on Linux, the `PTYRO_SESSION_ID` it was exec'd with (`/proc/<pid>/environ`), which `setsid` keeps. A client's keystrokes are placed once per connection. The daemon carries no session id (the client that starts it strips it), so neither do the checks it runs. Paired devices are people and held to their scope instead. **It fails open:** a process that leaves all three (`setsid env -u PTYRO_SESSION_ID`, `systemd-run`, `ssh localhost`; on macOS, any `setsid`) looks exactly like you at a plain shell, and is treated like you. Failing closed would refuse the CLI from every terminal that isn't a ptyro session; given the boundary above, ptyro accepts the gap |

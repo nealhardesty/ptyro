@@ -532,7 +532,7 @@ async function enablePush(): Promise<void> {
     toast(/iPhone|iPad/.test(navigator.userAgent) ? "Add ptyro to your Home Screen first (Share → Add to Home Screen), then open it from there." : "This browser can't receive push notifications.");
     return;
   }
-  if (!isSecureContext) { toast("Notifications need HTTPS: open the https:// address `ptyro pair` shows (ptyro serve speaks HTTPS unless it was started with --insecure)."); return; }
+  if (!isSecureContext) { toast("Notifications need HTTPS: open the https:// address `ptyro pair` shows."); return; }
   const perm = await Notification.requestPermission();
   if (perm !== "granted") { toast("Notifications are blocked for this site."); return; }
   try {

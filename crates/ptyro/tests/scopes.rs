@@ -439,7 +439,7 @@ fn a_device_is_denied_exactly_what_its_scope_is_too_low_for() {
     let port = free_port();
     let child = d
         .cmd()
-        .args(["serve", "--insecure", "--listen", &format!("127.0.0.1:{port}")])
+        .args(["serve", "--loopback-http", "--port", &port.to_string()])
         .env("HOME", &hs)
         .stdout(Stdio::null())
         .stderr(Stdio::null())

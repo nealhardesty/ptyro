@@ -552,17 +552,13 @@ enum Cmd {
     },
     /// Serve the web app and the protocol over WebSocket for paired devices (phones)
     Serve {
-        /// Listen here (default `[remote] listen`, 127.0.0.1:7091)
+        /// Who can reach it: localhost (this computer only), tailscale (also your tailnet) or
+        /// open (every network interface). Default `[remote] access`. Always HTTPS
+        #[arg(long, value_parser = parse_access)]
+        access: Option<ptyro_core::config::Access>,
+        /// The port (default `[remote] port`, 7091)
         #[arg(long)]
-        listen: Option<String>,
-        /// Plain HTTP instead of HTTPS, on any address (tokens in clear). Without it ptyro speaks
-        /// HTTPS with a certificate it makes; phones trust it once, from /ca.crt
-        #[arg(long)]
-        insecure: bool,
-        /// Listen on every interface, letting in only this machine, private networks and
-        /// tailnets (over HTTPS)
-        #[arg(long)]
-        local: bool,
+        port: Option<u16>,
         /// Your own certificate (a PEM chain, leaf first) instead of the one ptyro makes; with
         /// --key
         #[arg(long, requires = "key")]
@@ -570,23 +566,23 @@ enum Cmd {
         /// The key for --cert (PEM)
         #[arg(long, requires = "cert")]
         key: Option<PathBuf>,
-        /// Put Tailscale HTTPS in front (`tailscale serve`), then print the URL to open
-        #[arg(long)]
-        tailscale: bool,
+        /// Internal: plain HTTP on this computer only (the tour and the tests)
+        #[arg(long, hide = true)]
+        loopback_http: bool,
         /// Internal: started by the daemon (`[remote] serve = true`)
         #[arg(long, hide = true)]
         managed: bool,
     },
     /// The web app for your phone: have the daemon run its server (`on`), stop it (`off`), or say
-    /// how it is (`status`, the default)
+    /// how it is (`status`, the default). Who can reach it is `--access` (`remote.access`)
     Web {
         #[arg(default_value = "status", value_parser = ["on", "off", "status"])]
         action: String,
-        /// How phones reach it when turning it on: tailscale (HTTPS over your tailnet), lan (this
-        /// network, HTTPS from a certificate ptyro makes) or here (this computer only). Default:
-        /// what the config says, else Tailscale if it is up, else lan
-        #[arg(long, value_parser = ["tailscale", "lan", "here"])]
-        via: Option<String>,
+        /// Who can reach it when turning it on: localhost (this computer only), tailscale (also
+        /// your tailnet) or open (every network interface). Default: what the config says, else
+        /// tailscale if it is up, else open. (`--via` is the old name; here = localhost, lan = open)
+        #[arg(long, visible_alias = "via", value_parser = parse_access)]
+        access: Option<ptyro_core::config::Access>,
         /// With `on`: then show the pairing QR code for a phone
         #[arg(long)]
         pair: bool,
@@ -1143,6 +1139,10 @@ enum DaemonCmd {
 }
 
 /// `123`, `#123` or a GitHub URL ending in the number.
+fn parse_access(s: &str) -> Result<ptyro_core::config::Access, String> {
+    s.parse()
+}
+
 fn parse_number(s: &str) -> Result<u32, String> {
     let t = s.trim().trim_end_matches('/');
     t.rsplit(['/', '#'])

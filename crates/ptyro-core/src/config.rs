@@ -492,10 +492,11 @@ impl Default for Scratchpad {
 
 /// Turn `[remote] serve` on or off in the config file (`ptyro web`, `ptyro daemon start --serve`,
 /// and the daemon's own `Request::Web`; WEB1.9), keeping the rest of the file as it is. When
-/// turning it on, say how phones reach it with `via` (`tailscale`, `lan` or `here`), else keep
-/// what the config already has, else pick: Tailscale when it is up on this machine, else this
-/// network. Returns what that chose, for the person to read.
-pub fn set_serve(path: &Path, on: bool, via: Option<&str>) -> Result<Vec<String>, crate::Error> {
+/// turning it on, `access` (`localhost`, `tailscale` or `open`) says who can reach it; left out,
+/// the file's own `[remote] access` stands, else Tailscale when it is up on this machine, else
+/// open. A file still written with the old keys (`listen`, `tailscale`, `local`) is moved to
+/// `access` and `port` on the way. Returns what that chose, for the person to read.
+pub fn set_serve(path: &Path, on: bool, access: Option<&str>) -> Result<Vec<String>, crate::Error> {
     // Only a file that isn't there is empty: one that can't be read (permissions, not UTF-8) must
     // not be replaced by a near-empty config.
     let text = match std::fs::read_to_string(path) {
@@ -508,49 +509,41 @@ pub fn set_serve(path: &Path, on: bool, via: Option<&str>) -> Result<Vec<String>
             )));
         }
     };
+    let (migrated, mut notes) = match migrate_remote(&text) {
+        Some((t, notes)) => (t, notes),
+        None => (text.clone(), Vec::new()),
+    };
     let mut doc: toml_edit::DocumentMut =
-        text.parse().map_err(|e| crate::Error::invalid(format!("{}: {e}", path.display())))?;
-    let before = Config::parse(&text).unwrap_or_default();
+        migrated.parse().map_err(|e| crate::Error::invalid(format!("{}: {e}", path.display())))?;
     let remote = doc.entry("remote").or_insert(toml_edit::table());
     // (`remote = { … }` is a table too.)
     let Some(remote) = remote.as_table_like_mut() else {
         return Err(crate::Error::invalid(format!("{}: [remote] is not a table", path.display())));
     };
+    // Said before anything is written: a word that isn't one leaves the file as it is.
+    let asked = access
+        .map(str::parse::<Access>)
+        .transpose()
+        .map_err(|e| crate::Error::invalid(format!("who can reach it? {e}")))?;
     remote.insert("serve", toml_edit::value(on));
-    let mut notes = Vec::new();
     if on {
-        let r = &before.remote;
-        let has = r.tailscale
-            || r.local
-            || r.insecure
-            || r.trusted_proxy
-            || r.public_url.is_some()
-            || r.tls_cert.is_some();
-        let pick = match via {
-            Some(v @ ("tailscale" | "lan" | "here")) => Some(v),
-            Some(other) => {
-                return Err(crate::Error::invalid(format!(
-                    "{other:?}: how should phones reach it? tailscale, lan or here"
-                )));
-            }
-            None if has => None,
-            None if tailscale_running() => Some("tailscale"),
-            None => Some("lan"),
+        let pick = match (asked, remote.contains_key("access")) {
+            (Some(a), _) => Some(a),
+            (None, true) => None,
+            (None, false) if tailscale_running() => Some(Access::Tailscale),
+            (None, false) => Some(Access::Open),
         };
         if let Some(pick) = pick {
-            for (key, value) in [("tailscale", pick == "tailscale"), ("local", pick == "lan")] {
-                if value || remote.contains_key(key) {
-                    remote.insert(key, toml_edit::value(value));
+            remote.insert("access", toml_edit::value(pick.as_str()));
+            notes.push(format!(
+                "reachable from {} (`[remote] access = \"{pick}\"`), over HTTPS{}",
+                pick.blurb(),
+                if pick == Access::Localhost {
+                    "; for a phone, `ptyro web on --access tailscale` or `--access open`"
+                } else {
+                    "; the first time, trust ptyro's certificate from /ca.crt"
                 }
-            }
-            notes.push(
-                match pick {
-                    "tailscale" => "phones reach it over Tailscale HTTPS (`[remote] tailscale`): on your tailnet, with a certificate they already trust",
-                    "lan" => "phones reach it from this network (`[remote] local`): over HTTPS with a certificate ptyro makes, for private addresses only; trust it once from /ca.crt",
-                    _ => "it is reachable from this computer only (`[remote] listen` is loopback); for a phone, `ptyro web on --via tailscale` or `--via lan`",
-                }
-                .to_owned(),
-            );
+            ));
         }
     }
     let new = doc.to_string();
@@ -759,23 +752,16 @@ impl Recorder {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Remote {
-    /// Where `ptyro serve` listens. Loopback and Tailscale addresses only, unless `insecure`.
-    pub listen: String,
-    /// The address QR codes and links point at (default: this machine's Tailscale HTTPS name
-    /// when `tailscale serve` fronts ptyro, else `http://<listen>`).
+    /// Who can reach the web app: `localhost` (this computer only), `tailscale` (this computer and
+    /// your tailnet) or `open` (every network interface). Always HTTPS, on `port`.
+    pub access: Access,
+    /// The port the web app listens on, whichever `access` says.
+    pub port: u16,
+    /// The address QR codes and links point at (default: this machine's name or address for
+    /// `access`, with `port`).
     pub public_url: Option<String>,
     /// The daemon runs `ptyro serve` itself (and restarts it).
     pub serve: bool,
-    /// Put Tailscale HTTPS in front of the server (`ptyro serve --tailscale`): your phone opens
-    /// `https://<machine>.<tailnet>.ts.net`, with a certificate it already trusts.
-    pub tailscale: bool,
-    /// Speak plain HTTP instead of HTTPS, on any address (tokens would cross the network in
-    /// clear). Without it, `ptyro serve` speaks HTTPS with a certificate it makes, except behind
-    /// `tailscale serve` or a `trusted_proxy`, which end TLS before it (SPEC §16.3).
-    pub insecure: bool,
-    /// Listen on every interface, and let in only this machine, private networks, link-local
-    /// addresses and tailnets (`ptyro serve --local`).
-    pub local: bool,
     /// Your own certificate (a PEM chain, leaf first) and its key, instead of the one ptyro
     /// makes: phones that trust its issuer need nothing installed (`--cert`, `--key`).
     pub tls_cert: Option<String>,
@@ -789,28 +775,135 @@ pub struct Remote {
     /// More push services a device may subscribe with, besides the browsers' own (a
     /// self-hosted UnifiedPush or ntfy server: `push_hosts = ["ntfy.example.com"]`).
     pub push_hosts: Vec<String>,
-    /// Believe `X-Forwarded-For` (and `Tailscale-User-Login`) from a loopback peer: set it when a
-    /// reverse proxy on this machine fronts `ptyro serve`. Automatic when `tailscale serve` does.
-    pub trusted_proxy: bool,
 }
 
 impl Default for Remote {
     fn default() -> Self {
         Self {
-            listen: "127.0.0.1:7091".into(),
+            access: Access::Localhost,
+            port: DEFAULT_PORT,
             public_url: None,
             serve: false,
-            tailscale: false,
-            insecure: false,
-            local: false,
             tls_cert: None,
             tls_key: None,
             approval_wait: "10m".into(),
             push: true,
             push_hosts: Vec::new(),
-            trusted_proxy: false,
         }
     }
+}
+
+/// The web app's port unless `[remote] port` says otherwise.
+pub const DEFAULT_PORT: u16 = 7091;
+
+/// Who can reach the web app (`[remote] access`). It is always HTTPS; this only says on which
+/// network interfaces it listens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Access {
+    /// This computer only (127.0.0.1).
+    #[default]
+    Localhost,
+    /// This computer and your tailnet: loopback and this machine's Tailscale addresses, nothing
+    /// else, so the Wi-Fi never sees it.
+    Tailscale,
+    /// Every network interface (0.0.0.0): the LAN, and anything else that can reach this
+    /// computer. Devices still need a pairing token.
+    Open,
+}
+
+impl Access {
+    pub const ALL: [Access; 3] = [Access::Localhost, Access::Tailscale, Access::Open];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Access::Localhost => "localhost",
+            Access::Tailscale => "tailscale",
+            Access::Open => "open",
+        }
+    }
+
+    /// One line a person decides by.
+    pub fn blurb(self) -> &'static str {
+        match self {
+            Access::Localhost => "this computer only",
+            Access::Tailscale => "this computer and your Tailscale network",
+            Access::Open => {
+                "every network interface: the Wi-Fi or LAN, and anything else that reaches this computer"
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for Access {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for Access {
+    type Err = String;
+    /// `localhost`, `tailscale`, `open`; the words of the old `--via` (`here`, `lan`) still work.
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "localhost" | "here" => Ok(Access::Localhost),
+            "tailscale" => Ok(Access::Tailscale),
+            "open" | "lan" => Ok(Access::Open),
+            other => Err(format!("{other:?}: localhost, tailscale or open")),
+        }
+    }
+}
+
+/// The keys `[remote]` had before `access` and `port` (they were `listen`, `tailscale`, `local`,
+/// `insecure` and `trusted_proxy`: five settings that had to agree). A file that still has them
+/// is read as what they meant, and `ptyro config check` says so.
+const LEGACY_REMOTE_KEYS: [&str; 5] = ["listen", "tailscale", "local", "insecure", "trusted_proxy"];
+
+/// A config's text with the old `[remote]` keys turned into `access` and `port` (unless the file
+/// already has them), and a note for each key that was dropped. `None` when it has none.
+pub fn migrate_remote(text: &str) -> Option<(String, Vec<String>)> {
+    let mut doc: toml_edit::DocumentMut = text.parse().ok()?;
+    let remote = doc.get_mut("remote")?.as_table_like_mut()?;
+    if !LEGACY_REMOTE_KEYS.iter().any(|k| remote.contains_key(k)) {
+        return None;
+    }
+    let flag = |r: &dyn toml_edit::TableLike, k: &str| {
+        r.get(k).and_then(toml_edit::Item::as_bool).unwrap_or(false)
+    };
+    let listen = remote.get("listen").and_then(|v| v.as_str()).map(str::to_owned);
+    let mut notes = Vec::new();
+    if !remote.contains_key("access") {
+        let addr = listen.as_deref().and_then(|l| l.parse::<std::net::SocketAddr>().ok());
+        let access = if flag(remote, "local") || addr.is_some_and(|a| a.ip().is_unspecified()) {
+            Access::Open
+        } else if flag(remote, "tailscale") || addr.is_some_and(|a| !a.ip().is_loopback()) {
+            Access::Tailscale
+        } else {
+            Access::Localhost
+        };
+        remote.insert("access", toml_edit::value(access.as_str()));
+        notes.push(format!("remote.access = \"{access}\" (from the old keys)"));
+    }
+    if !remote.contains_key("port")
+        && let Some(port) =
+            listen.as_deref().and_then(|l| l.rsplit(':').next()).and_then(|p| p.parse::<u16>().ok())
+        && port != DEFAULT_PORT
+    {
+        remote.insert("port", toml_edit::value(i64::from(port)));
+        notes.push(format!("remote.port = {port} (from `listen`)"));
+    }
+    for k in LEGACY_REMOTE_KEYS {
+        if remote.remove(k).is_some() {
+            notes.push(format!(
+                "remote.{k} is gone: {}",
+                match k {
+                    "insecure" | "trusted_proxy" => "the web app is always HTTPS now",
+                    _ => "`access` and `port` say it now",
+                }
+            ));
+        }
+    }
+    Some((doc.to_string(), notes))
 }
 
 /// Where a plain-HTTP listener (`ptyro serve`, the approve/deny links) may listen without an
@@ -1150,6 +1243,8 @@ impl Config {
     }
 
     pub fn parse(text: &str) -> Result<Self, String> {
+        let migrated = migrate_remote(text);
+        let text = migrated.as_ref().map_or(text, |(t, _)| t.as_str());
         let config: Self = toml::from_str(text).map_err(|e| e.to_string().trim_end().to_owned())?;
         config.validate()?;
         Ok(config)
@@ -1263,10 +1358,9 @@ impl Config {
         }
         parse_duration(&self.remote.approval_wait)
             .map_err(|e| format!("remote.approval_wait: {e}"))?;
-        self.remote
-            .listen
-            .parse::<std::net::SocketAddr>()
-            .map_err(|e| format!("remote.listen: {e} (an address like 127.0.0.1:7091)"))?;
+        if self.remote.port < 1024 {
+            return Err("remote.port: 1024 to 65535 (a lower port needs root)".into());
+        }
         if let Some(l) = &self.notifications.callback.listen {
             l.parse::<std::net::SocketAddr>().map_err(|e| {
                 format!("notifications.callback.listen: {e} (an address like 127.0.0.1:7591)")
@@ -1732,15 +1826,15 @@ mod tests {
         let read = || std::fs::read_to_string(&path).unwrap();
 
         // No file yet: one is made, private, with the setting and a way to be reached.
-        let notes = set_serve(&path, true, Some("lan")).unwrap();
-        assert!(notes[0].contains("this network"), "{notes:?}");
+        let notes = set_serve(&path, true, Some("open")).unwrap();
+        assert!(notes[0].contains("every network interface"), "{notes:?}");
         let c = Config::load(&path).unwrap();
-        assert!(c.remote.serve && c.remote.local && !c.remote.tailscale);
+        assert!(c.remote.serve && c.remote.access == Access::Open);
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
 
         // Comments and other sections stay; a way already chosen is kept, not replaced.
-        write("# mine\n[ui]\nprefix = \"C-a\" # why not\n[remote]\ntailscale = true\n");
+        write("# mine\n[ui]\nprefix = \"C-a\" # why not\n[remote]\naccess = \"tailscale\"\n");
         let notes = set_serve(&path, true, None).unwrap();
         assert!(notes.is_empty(), "{notes:?}");
         let t = read();
@@ -1748,15 +1842,17 @@ mod tests {
             t.contains("# mine") && t.contains("# why not") && t.contains("serve = true"),
             "{t}"
         );
-        assert!(Config::load(&path).unwrap().remote.tailscale);
+        assert_eq!(Config::load(&path).unwrap().remote.access, Access::Tailscale);
 
-        // Off changes nothing else; `here` switches the others off.
+        // Off changes nothing else; asking for one says it, and the old words still work.
         set_serve(&path, false, None).unwrap();
         assert!(!Config::load(&path).unwrap().remote.serve);
-        assert!(Config::load(&path).unwrap().remote.tailscale);
+        assert_eq!(Config::load(&path).unwrap().remote.access, Access::Tailscale);
         set_serve(&path, true, Some("here")).unwrap();
         let c = Config::load(&path).unwrap();
-        assert!(c.remote.serve && !c.remote.tailscale && !c.remote.local);
+        assert!(c.remote.serve && c.remote.access == Access::Localhost);
+        set_serve(&path, true, Some("lan")).unwrap();
+        assert_eq!(Config::load(&path).unwrap().remote.access, Access::Open);
 
         // A way we don't know is refused before anything is written.
         let before = read();
@@ -1842,7 +1938,7 @@ mod tests {
         let c = Config::parse("[recorder]\nenabled = true\n[remote]\nserve = true\n").unwrap();
         assert!(c.reserved_in_use().is_empty());
         assert!(c.remote.serve);
-        assert_eq!(c.remote.listen, "127.0.0.1:7091");
+        assert_eq!((c.remote.access, c.remote.port), (Access::Localhost, 7091));
         assert!(c.recorder.enabled);
         assert_eq!(c.recorder.max_bytes().unwrap(), 16 << 20);
     }
@@ -2087,16 +2183,56 @@ mod hardening {
     }
 
     #[test]
+    fn the_old_remote_keys_are_read_as_access_and_port() {
+        let r = |t: &str| Config::parse(t).unwrap().remote;
+        // Nothing set: this computer only, on the default port.
+        assert_eq!((r("").access, r("").port), (Access::Localhost, 7091));
+        // `tailscale serve` in front, or a tailnet address: the tailnet.
+        assert_eq!(r("[remote]\ntailscale = true\n").access, Access::Tailscale);
+        assert_eq!(r("[remote]\nlisten = \"100.64.0.7:7091\"\n").access, Access::Tailscale);
+        // Every interface: open, and `listen`'s port stays.
+        let o = r("[remote]\nlocal = true\nlisten = \"127.0.0.1:8123\"\n");
+        assert_eq!((o.access, o.port), (Access::Open, 8123));
+        assert_eq!(r("[remote]\nlisten = \"0.0.0.0:7091\"\n").access, Access::Open);
+        // `access` written out wins over the old keys; plain HTTP is not an option any more.
+        let w = r("[remote]\naccess = \"localhost\"\nlocal = true\ninsecure = true\n");
+        assert_eq!(w.access, Access::Localhost);
+        // The file is moved to the new keys when ptyro rewrites it.
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[remote]\ntailscale = true\nlocal = true\nlisten = \"127.0.0.1:7091\"\n",
+        )
+        .unwrap();
+        let notes = set_serve(&path, true, None).unwrap();
+        let t = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            t.contains("access = \"open\"") && !t.contains("tailscale") && !t.contains("listen"),
+            "{t}"
+        );
+        assert!(notes.iter().any(|n| n.contains("remote.local is gone")), "{notes:?}");
+    }
+
+    #[test]
+    fn the_port_and_access_are_checked() {
+        assert!(Config::parse("[remote]\nport = 80\n").unwrap_err().contains("remote.port"));
+        assert!(Config::parse("[remote]\naccess = \"everyone\"\n").is_err());
+        assert_eq!("LAN".parse::<Access>(), Ok(Access::Open));
+        assert!("everyone".parse::<Access>().unwrap_err().contains("localhost, tailscale or open"));
+    }
+
+    #[test]
     fn web_on_edits_an_inline_table_and_leaves_an_unreadable_file_alone() {
         let d = tempfile::tempdir().unwrap();
         let path = d.path().join("config.toml");
-        std::fs::write(&path, "# mine\nremote = { insecure = true }\n").unwrap();
+        std::fs::write(&path, "# mine\nremote = { port = 8443 }\n").unwrap();
         set_serve(&path, true, Some("here")).unwrap();
         let after = std::fs::read_to_string(&path).unwrap();
         assert!(
             after.contains("# mine")
                 && after.contains("serve = true")
-                && after.contains("insecure = true"),
+                && after.contains("port = 8443"),
             "{after}"
         );
         // Not UTF-8: it is not "empty", so nothing replaces it.

@@ -1,6 +1,5 @@
 ---
 source: crates/ptyro/tests/m5.rs
-assertion_line: 306
 expression: "Value::Object(all)"
 ---
 {
@@ -46,12 +45,14 @@ expression: "Value::Object(all)"
     "upgraded_ms": null,
     "version": "string",
     "web": {
+      "access": "string",
       "by_hand": null,
       "ca_fingerprint": null,
       "last_exit": null,
       "listen": "string",
       "log": "string",
       "pid": null,
+      "port": "number",
       "restarts": "number",
       "since_ms": null,
       "up": "bool",
