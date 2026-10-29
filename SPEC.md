@@ -2885,10 +2885,15 @@ learning anything up front.
     back. When the shell is gone (a daemon restart: shells aren't restored), the restored drawer
     closes instead of showing another session. Its header shows `›_` and the key (`C-q C-t
     hide`, or `focus` while another pane has focus).
-  - **In the sidebar** it's a line of its own, last under its worktree (`Row::Quick`): `›_ shell`
+  - **In the sidebar** it's a line of its own, first under its worktree (`Row::Quick`): `›_ quick shell`
     and what runs in it (the command, else the foreground program, else the last command with
     `✓`/`✗`). It has no number, `j`/`k` skip it, and it never fills an empty pane. Its row menu
     shows or hides it, adopts, renames, explains and stops it.
+  - **Quick means brief:** the drawer (and the scratchpad's popup) go away when focus lands on
+    another pane or another session or workspace shows (`App::tuck_away`, after every command and
+    mouse event); the shell and the editor keep running. Focus in the sidebar doesn't count, so
+    you can pick the next thing. While its drawer is open the shell's sidebar line is tinted
+    (`bar_bg`).
   - **Quiet:** `raise` drops its attention and notifications, except `blocked` (an agent started
     in it that waits for you). `exit` forgets it (no exited row; the name is free again), and the
     TUI closes its drawer.
@@ -3517,6 +3522,7 @@ theme = "ptyro-dark"
 sidebar_width = 30
 show_ports = true
 confirm_kill = true              # x asks before stopping a session
+shell_exit = "close"             # a shell that exits: close (disappears; agents stay) | keep
 on_stop = "next"                 # after you stop a pane's session: next (its neighbour) | stay
 sidebar_detail = "auto"          # lines under each session row: auto | compact | full
 shell_style = "pane"             # what ⏎ on the quick terminal's line shows: pane (full sized) | auto (drawer if the project is open) | drawer

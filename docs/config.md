@@ -34,6 +34,7 @@ most; `ptyro config show` lists every key with the value in effect.
 prefix = "C-]"            # one key or a list; default ["C-q", "C-Space"]
 theme = "ptyro-light"     # ptyro-dark (default), ptyro-light, high-contrast, or your own (Settings → Themes picks it; a new one starts as a copy of one you choose)
 tint_borders = true       # colour pane dividers with the session's profile
+# shell_exit = "keep"     # an exited shell stays in the sidebar as exited (default: it disappears)
 # on_stop = "stay"        # after you stop a pane's session, keep showing it (default: the next one)
 # sidebar_detail = "full" # lines under each row (task, now, last…): auto (default) | compact | full
 # shell_style = "pane"    # what ⏎ on the quick terminal's line shows: full sized (pane, default) | a drawer when the project is open (auto) | drawer

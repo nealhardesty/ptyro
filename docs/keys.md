@@ -77,7 +77,7 @@ action by name.
 | `Z` | everything at once: the sidebar fills the screen with every row open (`⏎` opens one, `Z` or `Esc` goes back) |
 | `[` / `PageUp` | copy mode / copy mode, one page up |
 | `]` | paste what you last copied |
-| `x` / `X` | stop the session (asks first unless `[ui] confirm_kill = false`; an exited one is removed) / kill it now. The pane moves on to the nearest other session (`[ui] on_stop`); `` ` `` brings the stopped one back |
+| `x` / `X` | stop the session (asks first unless `[ui] confirm_kill = false`; an exited one is removed; a shell that exits is removed by itself, `[ui] shell_exit = "keep"` leaves it) / kill it now. The pane moves on to the nearest other session (`[ui] on_stop`); `` ` `` brings the stopped one back |
 | `C-r` | run an exited session's command again |
 | `,` | rename the session (its address); `C-t` in the dialog edits its title instead |
 | `=` | take control: size the session to your pane (when another client resized it) |
@@ -121,7 +121,7 @@ Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.
 | `.` | everything you can do with this row (a session, worktree or project), with the keys |
 | `;` / `'` | the scratchpad / add a line to it |
 | `F` / `!` | finish this worktree (commit, then a PR or integrate) / a new shell in it, full sized |
-| `C-t` / `T` | its quick terminal in a drawer / full sized (`⏎` on its `›_ shell` line shows or hides it too) |
+| `C-t` / `T` | its quick terminal in a drawer / full sized (`⏎` on its `›_ quick shell` line shows or hides it too) |
 | `H` / `M` / `I` | home / mend what the health badge found / about ptyro |
 | `A` | adopt the Claude started by hand in this shell: a managed session, same conversation |
 | `w` `o` `r` | workspace / editor / run script |

@@ -2590,6 +2590,12 @@ impl App {
     // ── actions ─────────────────────────────────────────────────────────────
 
     pub fn run(&mut self, cmd: &Command) {
+        let before = self.quick_stance();
+        self.run_command(cmd);
+        self.tuck_away(before);
+    }
+
+    fn run_command(&mut self, cmd: &Command) {
         self.dirty = true;
         let focused = self.focused_session();
         match cmd.action {
@@ -5469,6 +5475,12 @@ impl App {
     }
 
     pub fn on_mouse(&mut self, m: &crossterm::event::MouseEvent) {
+        let before = self.quick_stance();
+        self.mouse_event(m);
+        self.tuck_away(before);
+    }
+
+    fn mouse_event(&mut self, m: &crossterm::event::MouseEvent) {
         use crossterm::event::MouseEventKind as K;
         self.dirty = true;
         let (x, y) = (m.column, m.row);
@@ -8093,8 +8105,8 @@ mod tests {
         app.sessions.push(shell.clone());
         let rows = app.rows();
         let i = rows.iter().position(|r| *r == Row::Quick(shell.id)).expect("its line");
-        assert!(matches!(rows[i - 1], Row::Session(_)), "last under its worktree");
-        assert!(screen(&app).contains("›_ shell cargo test"), "{}", screen(&app));
+        assert!(matches!(rows[i - 1], Row::Worktree(_)), "first under its worktree");
+        assert!(screen(&app).contains("›_ quick shell cargo te"), "{}", screen(&app));
         app.focus = Focus::Sidebar;
         app.set_sel(&rows, i);
         assert_eq!(app.context_hint().as_deref(), Some("⏎ show it"));
@@ -8108,7 +8120,58 @@ mod tests {
         let s = app.sessions.iter_mut().find(|s| s.id == shell.id).unwrap();
         s.command.as_mut().unwrap().ended_ms = Some(1);
         s.command.as_mut().unwrap().exit = Some(1);
-        assert!(screen(&app).contains("›_ shell ✗ cargo test"));
+        assert!(screen(&app).contains("›_ quick shell ✗ cargo"));
+    }
+
+    #[test]
+    fn showing_another_session_tucks_the_drawer_and_the_popup_away_and_the_open_line_is_tinted() {
+        let mut app = app();
+        auto_shell(&mut app);
+        let (agent, other) = with_agents(&mut app);
+        let shell = quick("myrepo.shell", Some("p1-root"));
+        app.sessions.push(shell.clone());
+        app.run(&Command { action: "shell.here", arg: None });
+        app.on_reply(AppMsg::Reply(
+            Pending::Quick(app.config.ui.shell_style),
+            Ok(Reply::Session { info: shell.clone() }),
+        ));
+        assert_eq!(app.drawer_session(), Some(shell.id));
+        // Open: its sidebar line is tinted; closed, it isn't.
+        let tint = |app: &App| {
+            let mut t =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+            t.draw(|f| crate::ui::draw(app, f)).unwrap();
+            let buf = t.backend().buffer().clone();
+            let row = (0..buf.area.height)
+                .find(|y| {
+                    (0..buf.area.width)
+                        .map(|x| buf[(x, *y)].symbol())
+                        .collect::<String>()
+                        .contains("quick shell")
+                })
+                .expect("its line");
+            buf[(2, row)].bg
+        };
+        assert_eq!(tint(&app), app.depth.fit(app.theme.bar_bg));
+        // Another session picked in the sidebar: the drawer goes, the shell keeps running.
+        app.focus = Focus::Sidebar;
+        let rows = app.rows();
+        let i = rows.iter().position(|r| *r == Row::Session(other)).expect("the other agent");
+        app.set_sel(&rows, i);
+        app.run(&Command { action: "nav.open", arg: None });
+        assert!(app.drawer.is_none(), "the drawer tucked away");
+        assert_eq!(app.focused_session(), Some(other));
+        assert_ne!(tint(&app), app.depth.fit(app.theme.bar_bg));
+        assert!(app.sessions.iter().any(|s| s.id == shell.id));
+        // The scratchpad's popup too.
+        pad_shown(&mut app, "popup");
+        assert!(app.pad_popup.is_some());
+        app.focus = Focus::Sidebar;
+        let rows = app.rows();
+        let i = rows.iter().position(|r| *r == Row::Session(agent)).unwrap();
+        app.set_sel(&rows, i);
+        app.run(&Command { action: "nav.open", arg: None });
+        assert!(app.pad_popup.is_none(), "the popup tucked away");
     }
 
     #[test]
