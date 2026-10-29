@@ -1668,3 +1668,166 @@ fn the_web_apps_qr_codes_are_well_formed() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// TS1: over Tailscale, `ptyro serve` gets Tailscale's certificate (`tailscale cert`) for this
+/// machine's `*.ts.net` name and answers that name with it, and every other name with its own, so
+/// a phone on the tailnet name needs no CA installed. A stand-in `tailscale` plays the tailnet; a
+/// throwaway CA plays Let's Encrypt.
+const TAILNET: &str = "box.tail1234.ts.net";
+
+/// A directory with a stand-in `tailscale` that reports a tailnet with HTTPS certificates on and
+/// answers `cert` with a certificate for `TAILNET` signed by the returned CA (PEM), or fails
+/// with `fail` on stderr when that is given.
+fn fake_tailscale(fail: Option<&str>) -> (tempfile::TempDir, String) {
+    use rcgen::{CertificateParams, DistinguishedName, IsCa, Issuer, KeyPair, KeyUsagePurpose};
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::Builder::new().prefix("ptyro-ts-").tempdir().unwrap();
+    let ca_key = KeyPair::generate().unwrap();
+    let mut ca = CertificateParams::new(Vec::<String>::new()).unwrap();
+    ca.distinguished_name = DistinguishedName::new();
+    ca.distinguished_name.push(rcgen::DnType::CommonName, "Fake Encrypt Root");
+    ca.is_ca = IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    ca.key_usages = vec![KeyUsagePurpose::KeyCertSign];
+    let ca_cert = ca.self_signed(&ca_key).unwrap();
+    let leaf_key = KeyPair::generate().unwrap();
+    let leaf = CertificateParams::new(vec![TAILNET.to_owned()])
+        .unwrap()
+        .signed_by(&leaf_key, &Issuer::new(ca, ca_key))
+        .unwrap();
+    std::fs::write(dir.path().join("leaf.crt"), leaf.pem()).unwrap();
+    std::fs::write(dir.path().join("leaf.key"), leaf_key.serialize_pem()).unwrap();
+    let status = json!({
+        "BackendState": "Running",
+        "Self": { "DNSName": format!("{TAILNET}."), "TailscaleIPs": [] },
+        "CertDomains": [TAILNET],
+    });
+    std::fs::write(dir.path().join("status.json"), status.to_string()).unwrap();
+    let d = dir.path().display();
+    let cert = match fail {
+        Some(why) => format!("echo '{why}' >&2; exit 1"),
+        None => format!(
+            "while [ $# -gt 0 ]; do case \"$1\" in --cert-file) c=\"$2\"; shift;; --key-file) k=\"$2\"; shift;; esac; shift; done\n\
+             cp {d}/leaf.crt \"$c\"; cp {d}/leaf.key \"$k\""
+        ),
+    };
+    let script = format!(
+        "#!/bin/sh\ncase \"$1\" in\n  status) cat {d}/status.json;;\n  cert) shift\n{cert};;\nesac\n"
+    );
+    let bin = dir.path().join("tailscale");
+    std::fs::write(&bin, script).unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    (dir, ca_cert.pem())
+}
+
+/// A TLS client that trusts only `ca_pem`; `Ok(status line)` of `GET /healthz` as `name`.
+async fn healthz_as(port: u16, ca_pem: &str, name: &str) -> Result<String, String> {
+    use rustls::pki_types::{CertificateDer, ServerName, pem::PemObject};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut roots = rustls::RootCertStore::empty();
+    for c in CertificateDer::pem_slice_iter(ca_pem.as_bytes()) {
+        roots.add(c.unwrap()).unwrap();
+    }
+    let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+    let client = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let tcp = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    let mut s = tokio_rustls::TlsConnector::from(std::sync::Arc::new(client))
+        .connect(ServerName::try_from(name.to_owned()).unwrap(), tcp)
+        .await
+        .map_err(|e| e.to_string())?;
+    let req = format!("GET /healthz HTTP/1.1\r\nHost: {name}\r\nConnection: close\r\n\r\n");
+    s.write_all(req.as_bytes()).await.unwrap();
+    let mut out = Vec::new();
+    let _ = s.read_to_end(&mut out).await;
+    Ok(String::from_utf8_lossy(&out).lines().next().unwrap_or("").to_owned())
+}
+
+fn serve_over_tailscale(w: &World, fake: &std::path::Path, extra: &[&str]) -> (Child, u16) {
+    let port = free_port();
+    let path = format!("{}:{}", fake.display(), std::env::var("PATH").unwrap_or_default());
+    let child =
+        w.d.cmd()
+            .args(["serve", "--access", "tailscale", "--port", &port.to_string()])
+            .args(extra)
+            .env("HOME", w.home())
+            .env("PATH", path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+    wait_http(port);
+    (child, port)
+}
+
+fn served_cert(w: &World) -> Value {
+    let text = std::fs::read_to_string(w.d.paths.state.join("serve.json")).unwrap_or_default();
+    serde_json::from_str(&text).unwrap_or_default()
+}
+
+#[tokio::test]
+async fn serve_uses_tailscales_certificate_for_the_tailnet_name() {
+    let w = World::new("", &[]);
+    let (fake, lets_encrypt) = fake_tailscale(None);
+    let (mut child, port) = serve_over_tailscale(&w, fake.path(), &[]);
+    // It starts at once with its own certificate and swaps in Tailscale's when it has it.
+    let deadline = Instant::now() + WAIT;
+    loop {
+        match healthz_as(port, &lets_encrypt, TAILNET).await {
+            Ok(line) => {
+                assert!(line.starts_with("HTTP/1.1 200"), "{line}");
+                break;
+            }
+            Err(e) => {
+                assert!(Instant::now() < deadline, "never got Tailscale's certificate: {e}");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    }
+    // Any other name still gets ptyro's own certificate, trusted through its CA and not through
+    // Let's Encrypt.
+    let ptyro_ca = std::fs::read_to_string(w.d.paths.data.join("serve/tls/ca.pem")).unwrap();
+    let line = healthz_as(port, &ptyro_ca, "localhost").await.unwrap();
+    assert!(line.starts_with("HTTP/1.1 200"), "{line}");
+    assert!(healthz_as(port, &lets_encrypt, "localhost").await.is_err());
+    assert!(healthz_as(port, &ptyro_ca, TAILNET).await.is_err(), "the tailnet name is Tailscale's");
+    // The record says so, and the key stays private.
+    let rec = served_cert(&w);
+    assert_eq!(rec["cert"], "tailscale", "{rec}");
+    assert_eq!(rec["tailscale_name"], TAILNET);
+    assert!(rec["cert_note"].is_null(), "{rec}");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let d = w.d.paths.data.join("serve/tls/tailscale");
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&d), 0o700);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[tokio::test]
+async fn serve_keeps_its_own_certificate_when_tailscale_cannot_give_one() {
+    let w = World::new("", &[]);
+    let (fake, _) = fake_tailscale(Some("HTTPS is not enabled for your tailnet"));
+    let (mut child, port) = serve_over_tailscale(&w, fake.path(), &[]);
+    let deadline = Instant::now() + WAIT;
+    let rec = loop {
+        let rec = served_cert(&w);
+        if !rec["cert_note"].is_null() {
+            break rec;
+        }
+        assert!(Instant::now() < deadline, "never said why: {rec}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!(rec["cert"], "ptyro", "{rec}");
+    let note = rec["cert_note"].as_str().unwrap();
+    assert!(note.contains("HTTPS Certificates") && note.contains("admin/dns"), "{note}");
+    let ptyro_ca = std::fs::read_to_string(w.d.paths.data.join("serve/tls/ca.pem")).unwrap();
+    let line = healthz_as(port, &ptyro_ca, TAILNET).await.unwrap();
+    assert!(line.starts_with("HTTP/1.1 200"), "{line}");
+    let _ = child.kill();
+    let _ = child.wait();
+}

@@ -228,6 +228,15 @@ impl Daemon {
                 .as_str()
                 .filter(|_| up || by_hand.is_some())
                 .map(str::to_owned),
+            cert: record["cert"]
+                .as_str()
+                .filter(|_| up || by_hand.is_some())
+                .unwrap_or_default()
+                .to_owned(),
+            cert_note: record["cert_note"]
+                .as_str()
+                .filter(|_| up || by_hand.is_some())
+                .map(str::to_owned),
             since_ms: r.since_ms.filter(|_| up),
             restarts: r.restarts,
             last_exit: r.last_exit.clone(),

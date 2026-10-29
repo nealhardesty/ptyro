@@ -2137,6 +2137,31 @@ web, with the parity rows.
   reporting. `ptyro about [--json]` (`usage`), the TUI's `I` overlay (from that document), and
   the web's More → About (live from `Usage`, linking to the meters page).
 
+## TS1 — Tailscale's certificate (2026-10-28)
+
+Android won't install the web app, or allow notifications, on a certificate it doesn't trust, and
+trusting ptyro's own CA is a manual trip through Settings on every phone. Over Tailscale there is
+a better way: the tailnet can issue a real Let's Encrypt certificate for the machine's name.
+
+- [x] **TS1.1 Use Tailscale's certificate over Tailscale** — M. *From the owner, 2026-10-28.*
+  `tailscale cert` for the machine's `*.ts.net` name, picked by SNI so every other address keeps
+  ptyro's own; fetched in the background and renewed; falls back, with the fix named, when the
+  tailnet has no HTTPS certificates or Tailscale won't hand one over. Automatic
+  whenever `access = tailscale`: no setting and no question (owner, 2026-10-29; the name goes into
+  public certificate logs, noted in docs/remote.md). `ptyro pair` hands
+  out no CA for it; `ptyro web`, `ptyro doctor` and the web app's Web app page say which certificate
+  is in use; `machine add` accepts it for `*.ts.net` machines (Protocol 1.21, SPEC §16.3).
+  *Done:* three end-to-end tests with a stand-in `tailscale` and a throwaway CA (Tailscale's served
+  for the tailnet name and ptyro's for the rest, the fallback with its fix), and unit tests for the SNI choice,
+  the certificate's dates and name, the status parsing, and the pin
+  rule. **Not done:** a real phone; run `ptyro web on` on a tailnet with HTTPS certificates and open
+  the address on an Android phone.
+- [ ] **TS1.2 More ways to a certificate nobody installs** — L. Ideas from the same brainstorm:
+  ACME with DNS-01 for people with their own domain (Cloudflare first), a name-constrained CA so
+  installing ours is safe to ask for, and a guided `/setup` page that detects when trust worked.
+  A ptyro-run name service (`<ip>.<id>.ptyro.link` with a real certificate) is the only way to a
+  LAN certificate with no Tailscale and no domain, and means running a service: the owner decides.
+
 ## H2 — Second hardening review (2026-10-24)
 
 Nine reviewers each read a slice of the code (daemon runtime, daemon features, TUI, the rest of

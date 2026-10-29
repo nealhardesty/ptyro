@@ -367,7 +367,9 @@ ptyro web on                   # the daemon runs the web app's server (HTTPS, po
                                # Tailscale network if it is running, else every network; `ptyro web` says how it is
 ptyro config set remote.access tailscale   # who can reach it: localhost, tailscale or open (Settings → remote)
 ptyro pair phone               # a one-time QR code (10 min; full control, it warns you): scan it and the phone is signed in;
-                               # the first time, it says how to trust ptyro's certificate
+                               # over Tailscale it uses Tailscale's certificate when your tailnet has HTTPS
+                               # certificates on (nothing to install, Android included); else it says how to
+                               # trust ptyro's certificate once
 ptyro devices revoke ID        # cut a device off at once
 ptyro --remote me@workbox      # the TUI (or any command) on another machine, over ssh
 ```

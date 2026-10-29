@@ -24,6 +24,9 @@ allow = [
     # nucleo-matcher (fuzzy pickers, SPEC §3.5): file-level copyleft. Fine as an unmodified
     # dependency of an MIT project; changes to *its* files would have to stay MPL.
     "MPL-2.0",
+    # webpki-roots (Mozilla's root certificates, as data): a `*.ts.net` machine's Tailscale
+    # certificate is checked against them (`machine add`).
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.9
 

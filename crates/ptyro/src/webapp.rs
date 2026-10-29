@@ -32,6 +32,21 @@ pub fn lines(w: &WebServe) -> Vec<String> {
             w.port
         ));
     }
+    match (w.cert.as_str(), &w.cert_note) {
+        ("tailscale", None) => out.push(
+            "certificate: Tailscale's, for this computer's tailnet name: nothing to install on a phone that opens it (ptyro's own for any other address)"
+                .into(),
+        ),
+        ("tailscale", Some(note)) => out.push(format!(
+            "certificate: Tailscale's, but renewing it failed: {note}"
+        )),
+        (_, Some(note)) => out.push(format!(
+            "certificate: ptyro's own (trust it once on each phone); Tailscale's isn't in use: {note}"
+        )),
+        ("ptyro", None) => out.push("certificate: ptyro's own (trust it once on each phone, from /ca.crt)".into()),
+        ("own", _) => out.push("certificate: yours (`tls_cert`)".into()),
+        _ => {}
+    }
     if let Some(pid) = w.by_hand {
         let at = w.url.as_deref().map(|u| format!(" at {u}")).unwrap_or_default();
         out.push(if w.wanted {

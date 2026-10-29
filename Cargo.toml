@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "3"
 
 [workspace.package]
-version = "0.0.23"
+version = "0.0.24"
 edition = "2024"
 rust-version = "1.99"
 license = "MIT"
@@ -72,6 +72,9 @@ hkdf = "0.12.4"
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12", "logging"] }
 rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem"] }
+# Tailscale's certificate (TS1): read its end date; check a `*.ts.net` machine against the public roots.
+x509-parser = { version = "0.18.1", default-features = false }
+webpki-roots = "1.0"
 time = { version = "0.3.55", default-features = false, features = ["std"] }
 aes-gcm = { version = "0.10.3", default-features = false, features = ["aes", "alloc"] }
 # ptyro serve (M9.2): HTTP and WebSocket.

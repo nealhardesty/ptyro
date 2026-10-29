@@ -48,6 +48,8 @@ expression: "Value::Object(all)"
       "access": "string",
       "by_hand": null,
       "ca_fingerprint": null,
+      "cert": "string",
+      "cert_note": null,
       "last_exit": null,
       "listen": "string",
       "log": "string",

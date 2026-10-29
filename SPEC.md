@@ -1003,6 +1003,10 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built TS1] Protocol 1.21** (additive): Tailscale's certificate (§16.3). `WebServe` gains `cert`
+(`tailscale`, `ptyro`, `own` or empty) and `cert_note` (why Tailscale's isn't in use, with the fix).
+There is no setting and no question: it is automatic over Tailscale (owner, 2026-10-29).
+
 **[built MM1.B] Protocol 1.20** (additive): many machines (§16.4b). `ClientKind::Machine`;
 `machine` on `SessionInfo`, `WorkspaceInfo`, `ProjectInfo`, `WorktreeInfo`, `ProfileInfo`,
 `InboxEntry` and `Usage` (absent here); `DevicePair.machine` and `DeviceInfo.machine`;
@@ -4881,6 +4885,29 @@ is "the web is up when the daemon is".
     with fewer than 30 days left or a name missing (names seen before stay), at start and every
     12 h while it runs, swapped in for new connections.
 
+  **[built TS1] Tailscale's certificate.** With `access = tailscale`, no certificate of your own and
+  automatically (no setting: owner, 2026-10-29), `serve` runs `tailscale cert --min-validity 15d` for the
+  machine's own `*.ts.net` name when `tailscale status --json` is `Running` and lists it in
+  `CertDomains` (the tailnet's "HTTPS Certificates" are on). It is a Let's Encrypt certificate
+  (DNS-01 done by Tailscale's coordination server; the key is made on this machine), so every
+  phone trusts it and Android needs no CA install. Files: `<data>/serve/tls/tailscale/<name>.crt|.key`
+  (directory `0700`, key `0600`); a certificate on disk is used at once on the next start if it
+  names the machine and has more than a day left (`load_tailnet`, which reads the end date). The
+  fetch runs in the background so the port is ready first: `serve` starts with its own
+  certificate and swaps a rebuilt `ServerConfig` in when Tailscale's arrives, then asks again every 12 h
+  (a no-op until 14 days from its end), after a failure every 5 to 10 min. The TLS config picks the
+  certificate by SNI (`ByName`): the tailnet name gets Tailscale's, every other name, address or no
+  name gets ptyro's own (a Let's Encrypt certificate can't hold an IP address, and a CA-pinned
+  `machine add` by IP still works). Failure never stops serving: ptyro's own stays, `serve.json`
+  carries `cert` (`own`, `tailscale`, `ptyro`), `tailscale_name` and `cert_note` (the fix:
+  turn on HTTPS Certificates at login.tailscale.com/admin/dns; or `tailscale set --operator=$USER`),
+  and `ptyro web`, `ptyro doctor` and the web app's Web app page show them. `ptyro pair` hands out no
+  CA when its address is the tailnet name with Tailscale's certificate. `machine add` accepts a
+  `*.ts.net` host's certificate checked against the public roots (`webpki-roots`) when the pinned
+  CA is not in its chain; no other host may skip the pin. It is automatic
+  whenever `access = tailscale`, with no setting and no question (owner, 2026-10-29); the name goes
+  into public certificate logs (Certificate Transparency), which is the price of a certificate
+  nothing needs installing for. A person who minds picks another `access` or sets `tls_cert`.
   `--cert`/`--key` (or `[remote] tls_cert`/`tls_key`) use your own certificate instead: no CA,
   no `/ca.crt`, the files read again every 12 h. It is made (or read) before `serve` binds, so a
   listening port means ready. `GET /ca.crt` serves the CA

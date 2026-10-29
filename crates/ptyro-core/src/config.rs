@@ -569,6 +569,38 @@ pub fn set_serve(path: &Path, on: bool, access: Option<&str>) -> Result<Vec<Stri
     Ok(notes)
 }
 
+/// This machine's name on the tailnet if Tailscale can issue a certificate for it, else why not,
+/// worded so the person can fix it.
+pub fn tailnet_cert_domain() -> Result<String, String> {
+    let out = std::process::Command::new("tailscale")
+        .args(["status", "--json"])
+        .output()
+        .map_err(|_| "Tailscale isn't installed".to_owned())?;
+    let status: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .map_err(|_| "Tailscale isn't running on this computer".to_owned())?;
+    tailnet_cert_domain_from(&status)
+}
+
+/// [`tailnet_cert_domain`] from `tailscale status --json`.
+pub fn tailnet_cert_domain_from(status: &serde_json::Value) -> Result<String, String> {
+    if status["BackendState"] != "Running" {
+        return Err("Tailscale isn't connected on this computer".into());
+    }
+    let own = status["Self"]["DNSName"].as_str().unwrap_or("").trim_end_matches('.').to_lowercase();
+    status["CertDomains"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|d| d.as_str())
+        .map(str::to_lowercase)
+        .find(|d| !own.is_empty() && *d == own)
+        .ok_or_else(|| {
+            "your tailnet has no HTTPS certificates yet: turn on \"HTTPS Certificates\" at \
+             https://login.tailscale.com/admin/dns"
+                .to_owned()
+        })
+}
+
 /// Tailscale is installed and connected on this machine.
 fn tailscale_running() -> bool {
     std::process::Command::new("tailscale")
@@ -2284,5 +2316,32 @@ mod hardening {
         assert!(Config::parse(&text).is_ok(), "{text:?}");
         let left: Vec<_> = std::fs::read_dir(real.parent().unwrap()).unwrap().collect();
         assert_eq!(left.len(), 1, "no temp files left: {left:?}");
+    }
+}
+
+#[cfg(test)]
+mod tailnet_cert {
+    use super::*;
+
+    fn status(backend: &str, domains: &[&str]) -> serde_json::Value {
+        serde_json::json!({
+            "BackendState": backend,
+            "Self": { "DNSName": "box.tail1.ts.net." },
+            "CertDomains": domains,
+        })
+    }
+
+    #[test]
+    fn a_certificate_is_offered_only_for_this_machines_own_name() {
+        assert_eq!(
+            tailnet_cert_domain_from(&status("Running", &["Box.tail1.ts.net"])).as_deref(),
+            Ok("box.tail1.ts.net")
+        );
+        let off = tailnet_cert_domain_from(&status("Running", &[])).unwrap_err();
+        assert!(off.contains("HTTPS Certificates") && off.contains("admin/dns"), "{off}");
+        let other = tailnet_cert_domain_from(&status("Running", &["else.tail1.ts.net"]));
+        assert!(other.is_err());
+        let down = tailnet_cert_domain_from(&status("Stopped", &["box.tail1.ts.net"]));
+        assert!(down.unwrap_err().contains("isn't connected"));
     }
 }

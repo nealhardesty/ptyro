@@ -101,6 +101,15 @@ pub struct Served {
     /// Where it listens, to tell it from a process that only has its pid now.
     #[serde(default)]
     pub listen: Option<String>,
+    /// Whose certificate it shows: `own` (`tls_cert`), `tailscale` (Tailscale's for
+    /// `tailscale_name`, ptyro's CA for the rest), `ptyro`, or empty (plain HTTP).
+    #[serde(default)]
+    pub cert: String,
+    #[serde(default)]
+    pub tailscale_name: Option<String>,
+    /// Why Tailscale's certificate isn't in use, with the fix.
+    #[serde(default)]
+    pub cert_note: Option<String>,
 }
 
 pub fn record_serve(
@@ -108,18 +117,54 @@ pub fn record_serve(
     url: &str,
     ca: Option<&str>,
     listen: std::net::SocketAddr,
+    cert: &str,
+    tailscale_name: Option<&str>,
 ) {
     let s = Served {
         pid: std::process::id(),
         url: url.into(),
         ca_fingerprint: ca.map(str::to_owned),
         listen: Some(listen.to_string()),
+        cert: cert.into(),
+        tailscale_name: tailscale_name.map(str::to_owned),
+        cert_note: None,
     };
     let _ = std::fs::create_dir_all(&paths.state);
     let _ = std::fs::write(
         paths.state.join("serve.json"),
         serde_json::to_string(&s).unwrap_or_default(),
     );
+}
+
+/// Say in the record which certificate is in use now, and why Tailscale's isn't if it should be.
+pub fn record_cert(
+    paths: &ptyro_core::paths::Paths,
+    cert: &str,
+    tailscale_name: Option<&str>,
+    note: Option<&str>,
+) {
+    let path = paths.state.join("serve.json");
+    let Some(mut s) = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Served>(&t).ok())
+        .filter(|s| s.pid == std::process::id())
+    else {
+        return;
+    };
+    s.cert = cert.into();
+    s.tailscale_name = tailscale_name.map(str::to_owned);
+    s.cert_note = note.map(str::to_owned);
+    let _ = std::fs::write(&path, serde_json::to_string(&s).unwrap_or_default());
+}
+
+/// Whether `base` is an address the running server answers with Tailscale's certificate, which
+/// phones already trust.
+pub fn public_cert_for(served: Option<&Served>, base: &str) -> bool {
+    let host = base.split_once("://").map_or(base, |x| x.1);
+    let host = host.split(['/', ':']).next().unwrap_or("").to_ascii_lowercase();
+    served.is_some_and(|s| {
+        s.cert == "tailscale" && s.tailscale_name.as_deref().is_some_and(|n| n == host)
+    })
 }
 
 /// The running `ptyro serve`'s record, if it's still running.
@@ -229,6 +274,9 @@ pub async fn pair(
             r => return Err(unexpected(r)),
         };
     let (base, notes, ca, _) = served_base(ctx, url);
+    // Tailscale's certificate on this address: phones trust it already, no CA to hand out.
+    let public = public_cert_for(served(&ctx.paths).as_ref(), &base);
+    let ca = ca.filter(|_| !public);
     // What we print stays in scrollback and recordings, so it is a code the web app trades
     // (once, within minutes) for the token, never the token. It travels in the fragment:
     // browsers never send that to a server or put it in logs.
@@ -292,7 +340,9 @@ pub async fn pair(
              link is used or expires, so is the link. A plain terminal keeps it to you."
         );
     }
-    if let Some(f) = &ca {
+    if public {
+        println!("This address uses Tailscale's certificate: nothing to install on the phone.\n");
+    } else if let Some(f) = &ca {
         println!(
             "First time on this phone? Open {base}/ca.crt and trust it (iPhone: Settings → \
              General → VPN & Device Management, then About → Certificate Trust Settings; Android: \

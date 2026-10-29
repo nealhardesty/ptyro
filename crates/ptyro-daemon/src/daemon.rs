@@ -1260,7 +1260,7 @@ impl Daemon {
             Request::Web { on: None, .. } => {
                 Ok(Reply::Web { web: self.web_status(), notes: Vec::new() })
             }
-            Request::Web { on: Some(on), via } => self.web_set(on, via.as_deref()).await,
+            Request::Web { on: Some(on), via, .. } => self.web_set(on, via.as_deref()).await,
             Request::Shutdown { force } => {
                 let live = self.sessions().iter().filter(|s| s.is_live()).count();
                 if live > 0 && !force {

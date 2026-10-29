@@ -39,7 +39,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 20 };
+pub const PROTO: Version = Version { major: 1, minor: 21 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1156,6 +1156,13 @@ pub struct WebServe {
     pub port: u16,
     /// SHA-256 of the certificate authority ptyro made, to check it against when trusting it.
     pub ca_fingerprint: Option<String>,
+    /// Whose certificate the web app shows (1.21): `tailscale` (Tailscale's for its `*.ts.net`
+    /// name, ptyro's CA for any other), `ptyro`, `own` (`tls_cert`), or empty.
+    #[serde(default)]
+    pub cert: String,
+    /// Why Tailscale's certificate isn't in use when it should be, with the fix.
+    #[serde(default)]
+    pub cert_note: Option<String>,
     pub since_ms: Option<u64>,
     /// Times the daemon started it again after it died.
     pub restarts: u32,

@@ -101,6 +101,29 @@ ptyro config set remote.port 8443
 ptyro serve --access open --port 8443   # by hand, for one run (the daemon's own is `ptyro web on`)
 ```
 
+**Tailscale's certificate (nothing to install).** With `access = tailscale`, and "HTTPS
+Certificates" turned on for your tailnet (admin console → DNS → HTTPS Certificates), ptyro asks
+Tailscale for a real certificate for this computer's name (`box.<tailnet>.ts.net`) with
+`tailscale cert`, and uses it for that name. It is a Let's Encrypt certificate, so every phone and
+browser already trusts it: **Android, which won't install the app or allow notifications on a
+certificate it doesn't trust, needs no CA step at all.** `ptyro pair` and `ptyro web` say when
+it is in use.
+
+- **Nothing to turn on.** It is automatic whenever the web app is shared over Tailscale. The
+  computer's name goes into public certificate logs (every Let's Encrypt certificate does); to
+  avoid that, share another way (`remote.access`) or use your own certificate.
+- **It starts at once.** The server comes up with its own certificate and switches the tailnet
+  name over when Tailscale's has arrived (a few seconds the first time); it asks again every 12
+  hours, and Tailscale renews it when it is close to its end.
+- **Other addresses are unchanged.** A Let's Encrypt certificate can't name an IP address, so
+  `https://192.168.1.5:7091`, `<name>.local` and `localhost` still show ptyro's own certificate
+  (below). The server picks by the name the client asked for.
+- **If it can't.** ptyro keeps its own certificate and `ptyro web` / `ptyro doctor` say why and
+  how to fix it: HTTPS Certificates aren't on for the tailnet, Tailscale isn't connected, or on
+  Linux `sudo tailscale set --operator=$USER` lets your user ask for one.
+- **Machines.** `ptyro machine add` accepts a `*.ts.net` machine's Tailscale certificate (checked
+  against the public roots) as well as the CA pinned in its code.
+
 **ptyro's certificate.** The first time, `ptyro serve` makes a small certificate authority (CA)
 and a certificate it signs for this machine: `localhost`, its name (and `<name>.local`), its LAN
 and Tailscale addresses. They're kept in `~/.local/share/ptyro/serve/tls/` (the keys `0600`); the
@@ -127,7 +150,7 @@ that directory out of backups and synced folders. To start over, stop `ptyro ser
 (then remove the old one). Prefer your own certificate when you can: it needs no CA on your
 phone.
 
-**Your own certificate.** `ptyro serve --cert fullchain.pem --key privkey.pem` (or
+**Your own certificate.** (It takes the place of Tailscale's too.) `ptyro serve --cert fullchain.pem --key privkey.pem` (or
 `tls_cert` and `tls_key` under `[remote]`) uses a certificate you have, from Let's Encrypt or
 your company's CA, say: phones that trust its issuer need nothing installed, and there's no
 `/ca.crt`. The files are read again every 12 hours, so a renewed certificate is picked up.
@@ -173,8 +196,8 @@ push = true                 # Web Push for the kinds in notifications.on
 still has them is read as what they meant (`tailscale` or a tailnet `listen` is `tailscale`,
 `local` or a `0.0.0.0` listen is `open`, the port of `listen` is `port`), `ptyro web on` rewrites
 the file, and `ptyro config check` says what changed. Two things went with them: ptyro no longer
-runs `tailscale serve` for you (the phone opens `https://<name>.<tailnet>.ts.net:7091` and
-trusts ptyro's certificate once; `tailscale serve reset` removes an old mapping), and plain HTTP
+runs `tailscale serve` for you (the phone opens `https://<name>.<tailnet>.ts.net:7091`, which
+shows Tailscale's own certificate, or else ptyro's, trusted once; `tailscale serve reset` removes an old mapping), and plain HTTP
 and reverse-proxy modes are not offered. To put your own TLS proxy in front, point it at the
 HTTPS port, set `public_url` to the proxy's address, and use your own certificate for it.
 
