@@ -23,7 +23,7 @@ WEB_STRICT ?= 1
 
 .DEFAULT_GOAL := help
 .PHONY: help rust-install build release install install-release test fmt fmt-check lint deny doc check ci clean tools \
-        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean scratchpad-demo orchestrate-demo changeset-demo verify-claude verify-structured tui-parity parity reset
+        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean scratchpad-demo orchestrate-demo changeset-demo verify-claude verify-structured spike-chat spike-chat-fts tui-parity parity reset
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -129,6 +129,12 @@ verify-claude: build ## Check the Claude adapter against the real Claude Code he
 
 verify-structured: build ## Check structured mode against the real agents here (one tiny Claude turn; Codex/Gemini handshakes)
 	scripts/verify-structured.sh
+
+spike-chat-fts: ## CHAT0: FTS5 and the porter tokenizer in the bundled SQLite, and an index over NODES (default 100000) chat nodes
+	NODES=$${NODES:-100000} $(CARGO) run --profile local -p ptyro-store --example chat_fts_spike
+
+spike-chat: ## CHAT0: try the chat engine's claims against the real Claude, Codex, Gemini and OpenCode here (ARGS="claude codex" for some; a few cents of tokens)
+	python3 scripts/spike-chat.py $(ARGS)
 
 headless: build ## Run CMD in ptyro's emulator headless; prints screen + status report
 	$(HEADLESS) $(ARGS) -- $(CMD)

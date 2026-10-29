@@ -5961,6 +5961,164 @@ Checked against each tool's documentation on 2026-10-20. Marks: [V] official doc
   - Image fields: `build {dockerfile, context}`, `snapshot`, `image`.
   - `ports[] {port, name?}` is declarative; no environment map.
 
+### 20.8 Chat engines: the CHAT0 spike **[verified 2026-10-29]**
+
+Run again with `make spike-chat` (the agents) and `make spike-chat-fts` (SQLite); every line below
+that says "verified" is a check in `scripts/spike-chat.py` or `crates/ptyro-store/examples/
+chat_fts_spike.rs`. Versions: Claude Code 2.1.312, Codex 0.155.1, Gemini CLI 0.66.0, OpenCode
+1.19.5, SQLite 3.53.2 (rusqlite 0.40.2 `bundled`), on macOS. Account: Claude and Codex on this machine's own
+logins (Claude's is not an API key: `--bare` said "Not logged in"). **Not verified:** any account type but those two (`WebSearch` "on every
+account type" stays open), Linux, a Gemini turn (no login here), an OpenCode model turn (its free
+tier was at its limit, and no provider was logged in).
+
+**Claude Code (stream-json, `claude -p … --permission-prompt-tool stdio`)**
+
+- **The chat launch line, verified:** `--tools "WebSearch,WebFetch" --allowedTools WebSearch
+  WebFetch --strict-mcp-config --safe-mode`. `init.tools` is then exactly `["WebFetch",
+  "WebSearch"]`; `WebSearch` runs in `-p` stream-json with no card (its input has a `mode`,
+  `standard` or `extended`; a search turn cost $0.015–0.04 on haiku). `--tools ""` plus the same two
+  flags leaves no tool at all.
+- **`--tools` limits built-in tools only.** With `--tools ""` alone, the user's MCP servers (here:
+  claude.ai connectors, a plugin's AWS server, two database servers) are still loaded and offered.
+  `--strict-mcp-config` removes every MCP server, claude.ai connectors included.
+- **`--safe-mode` (new, found by this spike).** It turns off CLAUDE.md, skills, plugins, hooks, MCP,
+  custom commands and agents, and keeps login, model choice and permissions. A hook given with
+  `--settings` ran without it and did not run with it. Skills went from 56 to 17 and plugins from 13
+  to 6 (the built-in ones). A chat should always get it: a user's hooks and instructions would
+  otherwise run inside every chat, and the skill list costs tokens each turn. `--restricted` is also
+  new (no shell or code tools, ignores settings files); `--safe-mode` is the one that fits.
+- **`--bare` cannot be used:** on a subscription login it answers "Not logged in" (it takes
+  `ANTHROPIC_API_KEY` or an `apiKeyHelper` only). RESEARCH IV.3 listed it as an option; it isn't one.
+- **A bare `--allowedTools Read` is not a folder limit.** With `--tools Read,Glob,Grep --add-dir D
+  --allowedTools Read Glob Grep` a file **outside** `D` was read with no card. Without
+  `--allowedTools` for them, files under `D` (and the cwd) are read freely and any other path raises
+  a `can_use_tool` request. A path-scoped rule `Read(D/**)` behaves the same. §22.5's `read`
+  column therefore lists `--add-dir` and no `--allowedTools` for the read tools.
+- **Permission path:** a tool in `--tools` and not allowed raises `control_request` `can_use_tool`
+  (denials are listed in the `result`'s `permission_denials`); the driver's existing answer works.
+  `--permission-prompts none` denies without asking (not needed).
+- **Fork and resume:** `--resume ID --fork-session` gives a new `session_id`, carries the whole
+  context, and leaves the original unchanged; `--resume ID` alone keeps the id. The session file
+  lives under `~/.claude/projects/<cwd with / → ->/`, so **each chat's scratch directory makes its own
+  project folder** in Claude's own history. No flag in `--help` forks at a message (2.1.312), so a fork from the middle is seeded, as §22.6 says.
+- **No persistence:** `--no-session-persistence` writes no session file, and `--resume` of its id
+  fails with "No conversation found with session ID …" on stderr.
+- **No title.** The stream has no title event and the session file has no title record in print
+  mode, so Claude's chats always use the one-shot title (§22.8).
+- **System prompt:** `--system-prompt "…"` replaces Claude Code's (the model then answers as a
+  general assistant) and a one-line turn cost $0.00017 against $0.00046 with the default, so the
+  `chat` preset passes one. `--append-system-prompt` left the answer's identity as Claude Code.
+
+**Codex (`codex app-server`, JSON-RPC)**
+
+- **`thread/start` takes** `config` (a map of config keys: it worked for `web_search`, `features.*`
+  and `mcp_servers.<name>.enabled`), `ephemeral`, `baseInstructions`, `developerInstructions`,
+  `sandbox` (`read-only`, `workspace-write`, `danger-full-access`: these are the *mode* strings;
+  `readOnly` is the *policy* object of `turn/start`) and `approvalPolicy`.
+- **Web search:** `config {"web_search": "live"}` with `sandbox: "read-only"` produced a `webSearch`
+  item and an answer; no approval was asked.
+- **`readOnly` still reads.** In a `read-only` thread the model ran `cat` on a file **outside** the
+  cwd and printed it; a write (`echo > file`) raised `item/commandExecution/requestApproval` and
+  was refused when declined. So §22.5's "`chat` can't touch a file" is false for Codex as written.
+- **No shell:** `config {"features": {"shell_tool": false, "unified_exec": false}}` leaves the thread
+  without a shell (no `commandExecution` item) and web search still works. The model still lists
+  `apply_patch` (a write, which the read-only sandbox refuses), image viewing, goals and
+  sub-agents.
+- **A turn can end without `turn/completed`.** When the model asked for the disabled shell, the
+  thread went `active` → `idle` in about 3 s and **no `turn/completed` was sent**; the answer arrived
+  as `agentMessage` items. The driver (§8.4) must treat `thread/status/changed → idle` after
+  `turn/started` as the end of the turn. A normal turn sends both.
+- **Your hooks and MCP servers run inside a chat thread.** `hook/started` fired on every turn, and
+  `mcpServer/startupStatus/updated` showed the user's servers starting. `features.hooks = false`
+  stopped the hooks, and `mcp_servers.<name>.enabled = false` for each server that `codex mcp list`
+  shows stopped all of them (the table can't be emptied, only each entry switched off).
+- **A folder-limited `read`:** `config {"default_permissions": "p", "permissions": {"p": {"extends":
+  ":read-only", "filesystem": {"<HOME>": "deny", "<dir>": "read", …}}}}` and **no `sandbox`
+  parameter** (it wins over the profile and nothing is confined) let a thread read `<dir>`, refused a
+  sibling folder under `$HOME` ("Operation not permitted"), and still read `/etc/hosts`. The profile
+  also has to re-allow what Codex needs to start: the directory of the `codex` binary, `~/.local/bin`
+  (the launcher), `~/.codex`, and the thread's cwd, or the thread fails to start with "failed to load
+  AGENTS.md … Operation not permitted". The built-in profile ids are `:read-only`, `:workspace`,
+  `:danger-full-access`. An allow-list alone (`:minimal` plus folders) did not confine reads.
+- **Fork:** `thread/fork {threadId, lastTurnId}` returns a thread with exactly the turns up to
+  `lastTurnId` (1 of 3 in the check) and a model that knows only those; the original is unchanged.
+- **Resume:** `thread/resume {threadId, cwd, …}` in a **new** app-server process continued the
+  conversation (3 turns restored).
+- **Ephemeral:** `thread/start {ephemeral: true}` has no `path`, leaves no rollout and is not in
+  `thread/list`: Codex's own incognito.
+- **Titles:** no `thread/name/updated` arrived over three turns (or for a fork), and `name` stayed
+  null, so the one-shot title is needed. `thread/name/set` works, and `thread/list {searchTerm}` finds
+  the thread by that name. `thread/delete` removes a thread's rollout.
+- **Approvals** reached the client as server requests (`item/commandExecution/requestApproval`),
+  as §8.4 says.
+
+**Gemini CLI (`gemini --acp`, 0.66.0)**
+
+- `initialize` answers `protocolVersion 1`, `authMethods` (`oauth-personal`, `gemini-api-key`,
+  `vertex-ai`, `gateway`) and `agentCapabilities {loadSession: true, promptCapabilities {image,
+  audio, embeddedContext}, mcpCapabilities {http, sse}}`. **There is no `sessionCapabilities`:
+  `session/list`, `session/resume` and `session/fork` are not offered.** A Gemini chat continues with
+  `session/load` or a seed. `session/new` without a login answers error -32000 ("Gemini API key is
+  missing or not configured"); `GEMINI_CLI_HOME` keeps a spike out of your own home.
+- **Tool restriction is the policy engine.** `--policy FILE` (also `--admin-policy`) loads TOML:
+  `[[rule]] toolName = "*" | "name" | ["a", "b"]`, `decision = "allow" | "deny" | "ask_user"`,
+  `priority` (higher wins; user-tier rules are above the built-in ones), optional `commandPrefix`,
+  `argsPattern`, `mcpName`, `modes`, `denyMessage`. The shipped `plan.toml` uses a `toolName = "*"`
+  `deny` catch-all. So the `none` preset is a catch-all deny, and `chat` is that plus an `allow` for
+  `google_web_search`, both in a file ptyro writes and passes with `--policy`. `--allowed-tools` is
+  deprecated for it (the help says so). **Not tried:** that a rule stops a call, because a turn needs
+  a login, and there is none here. Also present: `--approval-mode plan` (read-only),
+  `--allowed-mcp-server-names`, `--extensions`, `--session-id`, `--list-sessions`,
+  `--delete-session`, `--resume`.
+- Consumer-account availability after 2026-06-18 is still RESEARCH IV.2's open item.
+
+**OpenCode (`opencode serve`, 1.19.5; `/doc` is its OpenAPI)**
+
+- **Per-session permissions are native.** `POST /session {permission: [{permission, pattern,
+  action: allow|deny|ask}], title?, agent?, model?, parentID?}` stores the ruleset and returns it
+  (`{"permission": "*", "pattern": "*", "action": "deny"}` then `websearch` allowed was accepted).
+  `POST /session/:id/message` also takes `tools: {name: bool}`, `system`, `model`, `agent`, `noReply`.
+  The registered tool ids are `bash, read, glob, grep, edit, write, task, webfetch, todowrite,
+  websearch, skill, apply_patch, question`. **Not tried:** that a rule stops a call (no model turn).
+- **Fork:** `POST /session/:id/fork {messageID?}` copies the messages **before** `messageID` (a
+  session of user + assistant forked at the assistant message had 1), or all of them with no body,
+  and titles it "… (fork #1)". **The fork has no `permission` ruleset**: set it again with
+  `PATCH /session/:id {permission}` straight after every fork.
+- **Titles:** `PATCH /session/:id {title}` sets one; OpenCode also writes its own (the sessions in
+  the spike got generated titles), announced in `session.updated` events.
+- **Free usage runs out.** The `opencode` provider's free models (`big-pickle`, …) work with no
+  login until a limit; then `/session/status` reports `{type: "retry", message: "Free usage exceeded,
+  subscribe to Go", action: {reason: "free_tier_limit", link}}` and a synchronous `POST …/message`
+  does not return. The driver needs a `retry` status with an `action` shown as a notice, and must not
+  use the synchronous call. (An unsecured server is a warning: `OPENCODE_SERVER_PASSWORD`.)
+- It runs with `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME` and `XDG_CACHE_HOME` set, which
+  keeps its state out of the user's.
+
+**ACP in general:** `session/load` (Gemini), and for others `session/list` and `session/resume` only
+where `agentCapabilities.sessionCapabilities` says so; read it at `initialize` and don't assume.
+
+**SQLite (`chat.db`)**
+
+- **FTS5 is in the bundled build** (`ENABLE_FTS5`, SQLite 3.53.2; `dbstat` too) and the §22.4 schema
+  creates with `tokenize='porter unicode61 remove_diacritics 2'`, the triggers included.
+- **The tokenizer, verified:** `run` finds `running`; `cafe`, `CAFÉ` and `Café` match each other;
+  `"retry policy"` phrases, `migrat*` prefixes, `borrow NOT migration` and AND work; `snippet()` marks
+  the hit and `bm25()` ranks (lower is better); a tombstone, an edit, a delete and a chat's cascade
+  each leave the index right, and `integrity-check` passes after them.
+- **Limit: CJK.** `unicode61` makes a run of CJK characters one token, so `日本語` is found by
+  itself and `日本` is not. Chinese, Japanese and Korean chats search by whole run only. The
+  `trigram` tokenizer does substrings (at about three times the index) and could be a second index,
+  added when someone asks (ROADMAP CHAT3).
+- **Size and speed, 100,000 nodes (made-up prose, 589 characters a node on average, half short
+  "user" nodes and half long "assistant" ones, in 2,500 chats; 59 MB of text, and the `body` JSON
+  about doubles it):** `chat.db`
+  200 MB, of which the FTS index 30 MB; loaded through the triggers in 6 s (16,000 nodes/s);
+  top-20 by bm25: a rare word 4 ms, a middling word 7 ms, a phrase 2 ms, a very common word 46 ms
+  (with `snippet()` 42 ms, with a profile and workspace join 81 ms), a two-letter prefix 104 ms
+  (worst 200 ms); `optimize` 0.3 s, `rebuild` 1.2 s, `integrity_check` 0.4 s; a streaming node's 2 s
+  flush (an `UPDATE` through the triggers) 0.9 ms. So a search box needs no index beyond FTS5 at this
+  size, and a prefix of fewer than three characters should wait for the third keystroke.
+
 ## 21. Open questions
 
 1. ~~**License**~~ — **decided 2026-10-20: MIT** ("for now"; `LICENSE` at repo root, `license =
@@ -6002,8 +6160,8 @@ Checked against each tool's documentation on 2026-10-20. Marks: [V] official doc
     brainstorm of its own. §22.15 lists what the schema already guarantees and what is open.
 11. **Chat meaning search (embeddings)** — only if keyword search and the ask tools disappoint
     (§22.10 tier 3, CHAT5): model2vec or fastembed, and whether it is worth a download.
-12. **Chat tool restriction per agent** — §22.5 is from docs; CHAT0 verifies each agent and
-    records what Gemini and OpenCode can enforce natively.
+12. **Chat tool restriction per agent** — answered by CHAT0 for Claude and Codex (§20.8, §22.5);
+    open for Gemini and OpenCode, whose native rules are read but were not run (§22.17).
 
 
 ---
@@ -6133,20 +6291,40 @@ CREATE TABLE conv (                   -- an agent conversation that served a cha
   any other tool shows as a normal permission card in the chat, the row says `⚠`, and the inbox gets
   the entry. An answer never widens itself (§7.1). Answers from `read`-scope devices are refused
   as for sessions.
-- **What the presets mean per agent** (flags from each agent's docs on 2026-10-29, **[docs]**; none
-  has been tried through ptyro's driver, which is CHAT0's job):
+- **What the presets mean per agent** (CHAT0, 2026-10-29: every cell marked **[V]** was tried through
+  the real agent, §20.8; **[S]** was read from the agent's own files or schema and **not** run, because
+  a turn needs a login or a model that wasn't available):
 
   | | `chat` (default) | `read` | `none` |
   |---|---|---|---|
-  | **Claude** (stream-json) | `--tools "WebSearch,WebFetch"` + allow those two; `--strict-mcp-config` with ptyro's chat tools only | add `Read,Glob,Grep` and `--add-dir` for each attached folder | `--tools ""` |
-  | **Codex** (app-server) | thread sandbox `readOnly`, `web_search = "live"`, no approval needed for search | readable roots = the attached folders | sandbox `readOnly`, `web_search = "disabled"` |
-  | **Gemini** (ACP) | native `google_web_search` kept; other tools denied by ptyro's answers (best effort: tools the agent never asks about can't be stopped) | allow reads under the attached folders | deny everything asked |
-  | **OpenCode** (serve) | **[U]** per-tool permissions through its config, unverified; falls back to ptyro's answers | as Gemini | as Gemini |
+  | **Claude** (stream-json) **[V]** | `--tools "WebSearch,WebFetch" --allowedTools WebSearch WebFetch --strict-mcp-config --safe-mode --system-prompt <chat prompt>` | `--tools "Read,Glob,Grep"` and `--add-dir` for each attached folder, **no** `--allowedTools` for them (a bare allow reads anywhere), plus the same flags | `--tools ""` plus `--strict-mcp-config --safe-mode` |
+  | **Codex** (app-server) **[V]** | `thread/start {sandbox: "read-only", config: {web_search: "live", features: {shell_tool: false, unified_exec: false, hooks: false, …}, mcp_servers: {<each>: {enabled: false}}}}`. `read-only` alone is not enough: it still reads any file | a profile `extends ":read-only"` that denies `$HOME` and re-allows the attached folders and what Codex needs to start; **no** `sandbox` parameter; shell on. Files outside `$HOME` stay readable, so the header says `tools: best effort` | the `chat` config with `web_search: "disabled"` |
+  | **Gemini** (ACP) **[S]** | a `--policy` file ptyro writes: `toolName = "*"` `deny` at a high priority, and `google_web_search` `allow` above it; `--extensions` with no name and `--allowed-mcp-server-names` with none (flags in `--help`, not run). 0.66.0 has no `--safe-mode`, so whether the user's hooks and skills load in a chat is **[U]** | the same file with `read_file`, `glob`, `grep_search`, `list_directory` allowed (`argsPattern` or a deny on other paths is unverified) | the catch-all `deny` only |
+  | **OpenCode** (serve) **[S]** | `POST /session {permission: [{"*","*",deny}, {websearch,*,allow}, {webfetch,*,allow}]}`, set again after every fork; per-message `tools` as a second fence | `read`, `glob`, `grep` allowed for the attached folders' patterns | the catch-all `deny` only |
 
-  A chat whose agent can't enforce its preset natively shows `tools: best effort` in its header,
-  not silence. Web content is untrusted text: with no shell and no file tools in the default
-  preset, a page can say what it likes and the chat can't act on it. That is why `chat` is the
-  default, and why `read` and `work` are opt-in per chat.
+  Every Claude engine also gets `--safe-mode`: without it the user's hooks, CLAUDE.md, skills and
+  plugins run inside the chat (§20.8). A Codex thread's hooks and MCP servers are switched off by
+  name for the same reason. A chat whose agent can't enforce its preset natively, or can only
+  partly (the `read` preset on Codex, anything on Gemini and OpenCode until a login lets CHAT1.3
+  test it), shows `tools: best effort` in its header, not silence, and ptyro's own answer to each
+  permission request still stands behind it: any tool the preset doesn't name is denied. Web content
+  is untrusted text: with no shell and no file tools in the default preset, a page can say what it
+  likes and the chat can't act on it. That is why `chat` is the default, and why `read` and `work`
+  are opt-in per chat.
+- **Rules the engine takes from CHAT0** (CHAT1.3 builds them in; each is verified in §20.8):
+  - Claude's chat launch line is the table's, always with `--safe-mode` and `--strict-mcp-config`, and
+    never `--bare`. A chat's scratch directory is a project folder in the profile's Claude history
+    (`<config dir>/projects/<cwd slug>/`): deleting a chat removes that folder with its scratch
+    directory, so Claude's own `--resume` list doesn't fill with dead chats.
+  - Codex: the end of a turn is `thread/status/changed → idle` after `turn/started`, not only
+    `turn/completed`. The launch lists the user's MCP servers (`codex mcp list --json`) and switches
+    each one off in the thread's `config`. A `read` chat sends a permission profile and **no**
+    `sandbox`; every other preset sends `sandbox: "read-only"` and no profile. Incognito is
+    `ephemeral: true`.
+  - ACP: the driver reads `agentCapabilities.sessionCapabilities` at `initialize` and offers list,
+    resume and fork only where it says so (§22.6). OpenCode: its permission ruleset is set at session
+    creation and **again after every fork**; a `retry` status with an `action` (a usage limit) is shown
+    as a notice with its link, and no call waits for the model synchronously.
 - **Web search out of the box.** All four agents ship one (Claude `WebSearch` and `WebFetch`;
   Codex `web_search`; Gemini `google_web_search`; OpenCode `websearch` where Exa's hosted search is
   on **[S]**), so the `chat` preset only has to leave it on. No search MCP is installed. A keyless MCP
@@ -6169,6 +6347,15 @@ from the stored record (never from the agent's own files):
 3. **Otherwise seed**: a new conv (`how = seed`), the first prompt carrying the branch as a
    transcript. This covers an agent switch, a fork from the middle for Claude, an agent that can't
    resume, a lost conversation, and a different profile.
+
+CHAT0 (§20.8) settled which agents can do what: **Claude** resumes (`--resume`, same id) and forks
+at its end (`--fork-session`, new id, original untouched) but has no fork at a message; **Codex**
+resumes in a new process (`thread/resume`) and forks at any turn (`thread/fork` with `lastTurnId`,
+verified); **Gemini 0.66.0** offers `session/load` only (no `session/list`, `resume` or `fork`: read
+`agentCapabilities.sessionCapabilities` at `initialize` and use what it lists); **OpenCode** forks at
+a message (`POST /session/:id/fork`, which copies the messages *before* it and drops the session's
+permission rules, so set them again) and resumes by id. Rule 2 therefore holds for Codex at any
+turn, for Claude at the end, and for OpenCode at a message; every other fork is seeded.
 
 Seed format (the block ahead of the user's message, in the one prompt, so it costs no extra turn):
 
@@ -6213,8 +6400,10 @@ agent's own history is a cache**: losing it, or an agent's updated format, loses
 ### 22.8 Titles
 
 The first exchange gets a title, once: (1) the agent's own when it sends one (ACP
-`session_info_update`, a Codex `thread/name/updated`, Claude's session title when its driver
-exposes one **[U]**); else (2) `[chat] title_command`, a no-tools, no-MCP one-shot as for summaries
+`session_info_update` **[U]**: Gemini was not run; OpenCode writes its own title into the session, read
+from `session.updated` or `GET /session/:id` [V]; Codex sends no `thread/name/updated` and sets no
+name in an app-server thread, and Claude's stream and session file carry no title: both **[V]**, so
+for Claude and Codex this step never happens and (2) always runs); else (2) `[chat] title_command`, a no-tools, no-MCP one-shot as for summaries
 (default `claude -p --model haiku --output-format json --strict-mcp-config --tools ""`, run in
 `<data>/summaries` under the chat's profile, 60 s, counted against `daily_cap`), fed the first user
 and assistant messages (redacted as summaries are); else (3) the first line of the first message.
@@ -6227,8 +6416,10 @@ makes a new one. `[chat] title = "off"` uses (3) only.
 nothing to `chat.db`**, are not indexed and not listed under "all chats", and end with the engine
 (the sidebar shows them with `◌` while open). The transcript lives in the engine's memory, which
 crosses a live upgrade but not a daemon restart. Claude's engine gets `--no-session-persistence`
-**[docs]**, so it has no resume; the others' own histories may still keep it, which `chat.new
---incognito` says plainly ("ptyro keeps nothing; codex may keep its own copy"). `chat ask` (below)
+**[V]**, so it has no resume and leaves no file; Codex's gets `ephemeral: true` **[V]**, which leaves
+no rollout and no list entry; Gemini and OpenCode have no such switch **[U]**, so their own histories
+may still keep it, which `chat.new
+--incognito` says plainly ("ptyro keeps nothing; gemini may keep its own copy", naming the agent). `chat ask` (below)
 is incognito unless `--keep`.
 
 ### 22.10 History and search
@@ -6463,11 +6654,24 @@ agent installed:
 - **Not here:** a chat client for raw provider APIs (ptyro drives registered agents and their
   accounts), voice, images and files as attachments (a folder in the `read` preset covers files),
   artifacts, shared chats between people, cloud storage of chats.
-- **Unverified (CHAT0 settles each before dependent work):** the Claude flags through the
-  stream-json driver (`--tools`, `--allowedTools`, `--fork-session`, `--no-session-persistence`);
-  that `WebSearch` works in `-p` stream-json on every account type; Codex's `thread/fork` and
-  `readOnly` with `web_search = "live"` through `-c`; Gemini's way to remove tools now that
-  `--allowed-tools` is deprecated; OpenCode's tool permissions and fork; ACP's `session/list`,
-  `session/resume` and `session/fork` (the last unstable) on the agents ptyro speaks to; that FTS5
-  is in the bundled SQLite build with the `porter` tokenizer. Facts found so far, dated and tagged, are
-  in RESEARCH §IV.3.
+- **Settled by CHAT0 (2026-10-29, §20.8):** the Claude flags through the stream-json driver
+  (`--tools`, `--allowedTools`, `--strict-mcp-config`, `--safe-mode`, `--fork-session`,
+  `--no-session-persistence`, `--system-prompt`); `WebSearch` in `-p` stream-json on a Claude
+  subscription login; Codex's `thread/fork` with `lastTurnId`, `ephemeral`, `web_search = "live"` and
+  `features.*` through the thread's `config`, `thread/name/set`; FTS5 and the `porter unicode61`
+  tokenizer in the bundled SQLite, and the cost of a 100,000-node index. **Three claims of the first
+  draft of §22.5 were wrong and are corrected there:** a bare `--allowedTools Read` is not a folder
+  limit; Codex's `readOnly` sandbox still reads any file; and `--bare` is not a way to a clean Claude
+  (it can't log in).
+- **Still unverified, each a known gap and a task before the work that depends on it:**
+  - that `WebSearch` works in `-p` on an API-key, Bedrock, Vertex or Team account (only a
+    subscription login was tried);
+  - that Gemini's `--policy` rules stop a call, and whether its hooks and skills load in a chat
+    (a turn needs a login); that `session_info_update` carries a title;
+  - that OpenCode's ruleset stops a call, and that its `retry`/`action` status is what a driver sees
+    at a limit (a free tier at its limit, no provider logged in);
+  - `session/resume` and `session/fork` of ACP on an agent that offers them (Gemini 0.66.0 doesn't);
+  - Linux: every result above is from macOS (Codex's sandbox and permission profiles differ there);
+  - the `read` preset on Codex outside `$HOME` (it stays readable).
+  The first three fit `make verify-chat` (§22.16), which CHAT1.3 writes with a login for each.
+  Facts found so far, dated and tagged, are in RESEARCH §IV.3.

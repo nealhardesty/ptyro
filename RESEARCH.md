@@ -2903,6 +2903,8 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 
 ### IV.3 Facts waiting to graduate into SPEC §20
 
+**2026-10-29: the chat facts below (the lines marked "for chats") graduated into SPEC §20.8 after CHAT0, with corrections:** a bare `--allowedTools Read` is not a folder limit; `--bare` can't log in with a subscription; Codex's `readOnly` still reads every file; `thread/name/updated` was not seen; Gemini 0.66.0 has no `sessionCapabilities`; an OpenCode fork drops its permission rules. Left here only until the next sweep removes them.
+
 These are verified or locally checked. Each moves to SPEC §20 once a spike or implementation confirms it.
 
 - **§20.1 Claude Code:**

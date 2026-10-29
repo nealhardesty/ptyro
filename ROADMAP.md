@@ -2360,17 +2360,28 @@ workspaces; sync and merge is CHAT6 and gets its own brainstorm.
 Every task below is done only when it works in the CLI, the TUI and the web, has its `docs/parity.md`
 rows, its `[chat]` settings schema entries and its `make` targets, and the milestone's version bump.
 
-- [ ] **CHAT0 Spikes** (spike; results into SPEC §20 and §22.17 before CHAT1.3 starts) **M**
-  - Claude through the stream-json driver: `--tools "WebSearch,WebFetch"` with those two allowed,
-    `--tools ""`, `--add-dir`, `--fork-session`, `--no-session-persistence`; does `WebSearch` run in
-    `-p` on this account?
-  - Codex app-server: a `readOnly` thread with `web_search = "live"`, `thread/fork` with `lastTurnId`,
-    `thread/name/updated`.
-  - Gemini ACP and OpenCode: what restricts tools natively (else ptyro's answers only), `session/list`,
-    `session/resume`, `session_info_update`.
-  - SQLite: FTS5 and the `porter unicode61` tokenizer in the bundled build; the size and speed of an
-    index over 100k nodes.
-  *Done when:* each claim in §22.5's table and §22.17 is tagged verified or wrong, with the date.
+- [x] **CHAT0 Spikes** (done 2026-10-29; results in SPEC §20.8, the corrections in §22.5, §22.6, §22.8,
+      §22.9 and §22.17) **M**
+  - `make spike-chat` (`scripts/spike-chat.py`: 40 checks against the real Claude 2.1.312 and Codex
+    0.155.1, and the protocol and session API of Gemini 0.66.0 and OpenCode 1.19.5) and
+    `make spike-chat-fts` (`crates/ptyro-store/examples/chat_fts_spike.rs`: FTS5 in the bundled SQLite,
+    the tokenizer, 100k nodes). Re-run them when an agent releases; a FAIL means §22.5 is stale.
+  - **Verified:** Claude's `--tools`/`--allowedTools`/`--strict-mcp-config`/`--fork-session`/
+    `--no-session-persistence`, and `WebSearch` in `-p` stream-json (subscription login); Codex's
+    `web_search = "live"`, `thread/fork` with `lastTurnId`, `thread/resume` in a new process,
+    `ephemeral`, `features.*` and per-server MCP switches in the thread's `config`; FTS5 with
+    `porter unicode61` and a 100k-node index (200 MB, 30 MB of it index, searches 2–100 ms).
+  - **Wrong in the first draft, now fixed in §22.5:** a bare `--allowedTools Read` reads outside
+    `--add-dir`; Codex's `readOnly` sandbox still reads every file (`chat` needs `shell_tool = false`;
+    a folder-limited `read` needs a permission profile and no `sandbox`); `--bare` can't log in.
+  - **Found, and now in the engine's rules (§22.5):** Claude `--safe-mode` (keeps your hooks, CLAUDE.md
+    and plugins out of a chat) and `--system-prompt`; a Codex turn can end with no `turn/completed`;
+    Codex and Claude send no title (the one-shot title always runs for them); Gemini 0.66.0 offers
+    `session/load` only; an OpenCode fork drops its permission ruleset; its free tier ends in a
+    `retry` status; CJK text is searched by whole run only.
+  - **Left (not a gate for CHAT1.1–CHAT1.2; each is part of the task that needs it):** a Gemini and an
+    OpenCode *turn* (login / a provider) to prove their rules stop a call, `WebSearch` on an API-key
+    or team account, Linux, and the `make verify-chat` target CHAT1.3 writes (§22.16).
 - [ ] **CHAT1 Chats that last** (R-CHAT-01, 06, 13) — the core. **L**
   - [ ] **CHAT1.1** `chat.db`: the schema of §22.4, its writer thread, migrations, `doctor` checks,
         backup (`--no-chats`), the uninstall plan, "can't open" handling. **M**
@@ -2378,7 +2389,10 @@ rows, its `[chat]` settings schema entries and its `make` targets, and the miles
         panel section in the TUI and the web, `enabled` hiding everything. **M**
   - [ ] **CHAT1.3** The engine: a hidden structured session with `chat = <id>`, the scratch directory,
         the workspace's profile, the preset launch arguments per agent, hibernate and resume, the node
-        writer (2 s flushes, `interrupted` after a crash), permission cards and the inbox. **L**
+        writer (2 s flushes, `interrupted` after a crash), permission cards and the inbox. Takes the
+        launch rules of §22.5 and the per-agent facts of §20.8 (`--safe-mode`, Codex's idle-as-end and
+        MCP switches, OpenCode's permissions after a fork, deleting a chat removes Claude's project
+        folder). **L**
   - [ ] **CHAT1.4** Continuing: native continue, and the seed block (§22.6), the budget, the notice.
         **M**
   - [ ] **CHAT1.5** Titles (agent's, else the one-shot, else the first line), pin, archive, delete,
