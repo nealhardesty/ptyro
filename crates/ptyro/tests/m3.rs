@@ -448,7 +448,7 @@ async fn scripts_status_and_run_modes() {
         w.status.as_ref().is_some_and(|s| s.untracked == 1 && s.modified == 1)
     })
     .await;
-    assert_eq!(wt.status.unwrap().insertions, 3);
+    assert_eq!(wt.status.unwrap().insertions, 4, "README's 3 lines + new.txt's 1");
     let out = w.ok(&["wt", "status", "svc/a"]);
     assert!(out.contains("1 modified, 1 untracked"), "{out}");
     // Rename the branch (not pushed, so allowed), from the first commit's subject.

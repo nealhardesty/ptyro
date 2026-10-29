@@ -91,12 +91,55 @@ fn worktree_lifecycle_and_list() {
     std::fs::write(wt.join("new.txt"), "x").unwrap();
     let s = f.git.status(&wt, Some("origin/main")).unwrap();
     assert_eq!((s.base_ahead, s.modified, s.untracked), (1, 1, 1));
-    assert_eq!(s.insertions, 3, "2 committed + 1 changed line since the merge base");
+    assert_eq!(s.insertions, 4, "2 committed + 1 changed + 1 untracked line since the merge base");
     assert_eq!(s.subject.as_deref(), Some("one two"), "the first paragraph, joined");
 
     f.git.worktree_remove(&f.root, &wt, true).unwrap();
     assert!(!wt.exists());
     assert_eq!(f.git.worktree_list(&f.root).unwrap().len(), 1);
+}
+
+#[test]
+fn untracked_files_count_their_lines() {
+    let f = fixture();
+    let st = |f: &Fixture| f.git.status(&f.root, Some("origin/main")).unwrap();
+    assert_eq!(st(&f).insertions, 0);
+
+    std::fs::write(f.root.join("new.rs"), "fn main() {}\n\nlast line, no newline").unwrap();
+    // A new directory: git status shows it as one entry, its files still count.
+    std::fs::create_dir_all(f.root.join("src/deep")).unwrap();
+    std::fs::write(f.root.join("src/deep/a.txt"), "a\nb\n").unwrap();
+    std::fs::write(f.root.join("empty.txt"), "").unwrap();
+    // Ignored, binary and oversized files add nothing.
+    std::fs::write(f.root.join("debug.log"), "x\n".repeat(50)).unwrap();
+    std::fs::write(f.root.join("logo.png"), b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\n").unwrap();
+    let big = "y\n".repeat(UNTRACKED_MAX_BYTES as usize / 2 + 1);
+    std::fs::write(f.root.join("dump.sql"), big).unwrap();
+
+    let s = st(&f);
+    assert_eq!(s.untracked, 5, "new.rs, src/, empty.txt, logo.png, dump.sql; debug.log is ignored");
+    assert_eq!(s.insertions, 3 + 2, "new.rs's 3 lines + src/deep/a.txt's 2");
+    assert_eq!(s.deletions, 0);
+}
+
+#[test]
+fn untracked_lines_stop_at_the_budget() {
+    let f = fixture();
+    // Each file is under the per-file cap; together they pass the budget.
+    let per = UNTRACKED_MAX_BYTES as usize - 2;
+    let n = (UNTRACKED_BUDGET_BYTES / UNTRACKED_MAX_BYTES) as usize + 3;
+    for i in 0..n {
+        std::fs::write(f.root.join(format!("f{i:02}.txt")), "z\n".repeat(per / 2)).unwrap();
+    }
+    let s = f.git.status(&f.root, Some("origin/main")).unwrap();
+    let lines = (per / 2) as u32;
+    assert!(s.insertions > 0, "some counted");
+    assert!(
+        u64::from(s.insertions) * 2 <= UNTRACKED_BUDGET_BYTES,
+        "never reads past the budget: {} lines of {} each",
+        s.insertions,
+        lines
+    );
 }
 
 #[test]
