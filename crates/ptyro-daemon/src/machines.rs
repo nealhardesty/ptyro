@@ -819,7 +819,23 @@ impl Daemon {
         }
         let v = serde_json::to_value(req).unwrap_or_default();
         let mut found: Option<String> = None;
-        for a in addresses(&v) {
+        let addrs = addresses(&v);
+        // A worktree or project of this machine's, next to a workspace of another's: neither
+        // machine can serve it. Say so, instead of the other machine's "no worktree matches".
+        if let Some(m) = addrs.iter().find_map(|a| split_machine(a).map(|(m, _)| m.to_owned()))
+            && links.contains_key(&m)
+        {
+            let reg = self.registry.locked();
+            if let Some(a) = addrs.iter().find(|a| {
+                reg.worktrees.iter().any(|w| w.id == **a)
+                    || reg.projects.iter().any(|p| p.id == **a)
+            }) {
+                return Err(Error::invalid(format!(
+                    "{a} is on this machine, but the workspace is on {m}: use a workspace here"
+                )));
+            }
+        }
+        for a in addrs {
             let by_prefix =
                 split_machine(&a).map(|(m, _)| m.to_owned()).filter(|m| links.contains_key(m));
             let by_id = || {

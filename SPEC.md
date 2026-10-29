@@ -5203,7 +5203,12 @@ holding several machines) was not chosen.
   the link with the prefix taken off its addresses only (never off text), and its reply qualified.
   A list (`List`, `WorkspaceList`, `ProjectList`, `WorktreeList` of all, `ProfileList`, `Usage`,
   `Inbox`) gains every mirror's shown part. A request this machine answers `not found` is retried
-  on the one mirror that has that bare name; two that have it: refused, naming both. Requests
+  on the one mirror that has that bare name; two that have it: refused, naming both.
+  A request naming a workspace of one machine and a worktree or project (by id) of another is
+  refused (`…is on this machine, but the workspace is on laptop2: use a workspace here`), never
+  sent to the wrong one. The TUI avoids it: a spawn, a profile check or a new worktree goes to
+  the workspace that lists the worktree's project, whichever machine that is, not to the
+  selected row's. Requests
   about this machine itself are never routed (devices, push, the scratchpad, views, hooks and
   status lines, runs, recipes, fan-outs, gates, compare, mail and leases, change sets, profiles'
   own operations, doctor, the web server, `Agents`, `Editors`, machines).

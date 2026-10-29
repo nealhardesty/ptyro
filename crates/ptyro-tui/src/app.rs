@@ -3321,12 +3321,39 @@ impl App {
         spec.size = spec
             .size
             .or_else(|| self.focused_session().and_then(|id| self.sizes.get(&id).copied()));
-        spec.workspace = spec.workspace.or_else(|| Some(self.workspace.clone()));
+        spec.workspace = self.workspace_for(spec.worktree.as_deref(), None, spec.workspace);
         if spec.cwd.as_os_str().is_empty() {
             spec.cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
         }
         let req = Request::Spawn { spec: spec.clone() };
         self.request(Pending::Spawned { split, spec: Box::new(spec), back }, req);
+    }
+
+    /// The workspace a spawn or a new worktree is made in. A worktree (or project) shown in a
+    /// workspace goes there, whichever machine that is: the selected row may be in another
+    /// workspace, and a request naming a workspace on one machine and a worktree of another
+    /// can't be served by either. Else `given`, else the current workspace.
+    fn workspace_for(
+        &self,
+        worktree: Option<&str>,
+        project: Option<&str>,
+        given: Option<String>,
+    ) -> Option<String> {
+        let project = project.map(str::to_owned).or_else(|| {
+            let id = worktree?;
+            self.worktrees.iter().find(|w| w.id == id).map(|w| w.project.clone())
+        });
+        let owner = project.and_then(|p| {
+            let tree = self.tree();
+            let order = tree.order();
+            // The current workspace first, when it lists the project too.
+            order
+                .iter()
+                .find(|w| w.name == self.workspace && w.projects.contains(&p))
+                .or_else(|| order.iter().find(|w| w.projects.contains(&p)))
+                .map(|w| w.name.clone())
+        });
+        owner.or(given).or_else(|| Some(self.workspace.clone()))
     }
 
     fn create_worktree(&mut self, spec: WorktreeSpec, split: Option<Dir>) {
@@ -3335,7 +3362,7 @@ impl App {
         spec.size = spec
             .size
             .or_else(|| self.focused_session().and_then(|id| self.sizes.get(&id).copied()));
-        spec.workspace = spec.workspace.or_else(|| Some(self.workspace.clone()));
+        spec.workspace = self.workspace_for(None, Some(&spec.project), spec.workspace);
         let req = Request::WorktreeNew { spec: spec.clone() };
         self.request(Pending::WorktreeCreated { split, spec: Box::new(spec) }, req);
     }
@@ -3354,8 +3381,8 @@ impl App {
         let spec = SpawnSpec {
             agent: w.agent.clone().filter(|a| !a.is_empty()),
             cwd: std::env::current_dir().unwrap_or_else(|_| "/".into()),
+            workspace: self.workspace_for(target.as_deref(), None, None),
             worktree: target,
-            workspace: Some(self.workspace.clone()),
             ..SpawnSpec::default()
         };
         self.request(Pending::Resolved, Request::ProfileResolve { spec });

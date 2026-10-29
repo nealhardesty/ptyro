@@ -335,3 +335,44 @@ async fn two_machines_mirroring_each_other_never_echo() {
     assert!(theirs.contains(&"laptop1:one".to_owned()), "{theirs:?}");
     assert!(!theirs.iter().any(|n| n.contains("laptop2:")), "{theirs:?}");
 }
+
+/// A worktree of this machine, asked for in a workspace of another's: refused with the way out
+/// (it used to be sent to the other machine, which said `no worktree matches "<id>"`).
+#[tokio::test]
+async fn a_worktree_here_in_a_workspace_there_is_refused_with_the_fix() {
+    let t = Two::new();
+    let here = t.here.client().await.unwrap();
+    let repo = t.work.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    for args in [
+        &["init", "-q"][..],
+        &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"],
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    here.request(Request::ProjectAdd { path: repo, workspace: None }).await.unwrap();
+    let root = match here.request(Request::WorktreeList { project: None }).await.unwrap() {
+        Reply::Worktrees { worktrees } => worktrees.into_iter().find(|w| w.is_root).unwrap(),
+        other => panic!("{other:?}"),
+    };
+    here.request(Request::MachineAdd {
+        name: None,
+        transport: MachineTransport::Ssh { target: "laptop2".into() },
+        token: None,
+        force: false,
+    })
+    .await
+    .unwrap();
+    until_state(&here, "laptop2", MachineState::Online).await;
+    let mut spec = shell("x", &t.work, Some("laptop2:main"));
+    spec.worktree = Some(root.id);
+    let err = here.request(Request::Spawn { spec }).await.unwrap_err();
+    assert!(err.message.contains("is on this machine"), "{}", err.message);
+}
