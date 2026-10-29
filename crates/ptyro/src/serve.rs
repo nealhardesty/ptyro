@@ -315,10 +315,9 @@ pub async fn run(
         Some((path(c), path(k)))
     });
     // Over Tailscale, with no certificate of your own, the tailnet name may get Tailscale's.
-    let tailnet_name =
-        (!plain && own.is_none() && access == Access::Tailscale && config.remote.tailscale_cert)
-            .then(|| ptyro_core::config::tailnet_cert_domain().ok())
-            .flatten();
+    let tailnet_name = (!plain && own.is_none() && access == Access::Tailscale)
+        .then(|| ptyro_core::config::tailnet_cert_domain().ok())
+        .flatten();
     // A Tailscale certificate from an earlier run answers at once; the task below renews it.
     let disk_tailnet = tailnet_name
         .as_deref()
@@ -413,7 +412,7 @@ pub async fn run(
     let acceptor = tls.as_ref().map(|t| Arc::new(Mutex::new(Arc::clone(&t.config))));
     let live = Arc::new(Mutex::new(disk_tailnet));
     if let Some(current) = &acceptor {
-        if own.is_none() && access == Access::Tailscale && config.remote.tailscale_cert {
+        if own.is_none() && access == Access::Tailscale {
             tokio::spawn(tailnet_cert_task(
                 ctx.paths.clone(),
                 tls_dir.clone(),

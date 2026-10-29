@@ -707,7 +707,6 @@ pub const SETTINGS: &[Setting] = &[
     s("remote.public_url", "remote", Kind::Text, "The address QR codes and links point at.").adv().or("worked out from how it is reached").eg("https://ptyro.example.com"),
     s("remote.tls_cert", "remote", Kind::Path, "Your own certificate (a PEM chain, leaf first), instead of the one ptyro makes.").adv().or("one ptyro makes").eg("~/certs/fullchain.pem"),
     s("remote.tls_key", "remote", Kind::Path, "The key for that certificate.").adv().or("one ptyro makes").eg("~/certs/privkey.pem"),
-    s("remote.tailscale_cert", "remote", Kind::Bool, "Over Tailscale, use Tailscale's own certificate for this computer's name (when your tailnet has HTTPS certificates on). Phones already trust it, so nothing is installed on them. The name goes into public certificate logs.").also("tailscale https certificate ca android phone install trust ts.net"),
     s("remote.push", "remote", Kind::Bool, "Web Push to paired devices that asked for it."),
     s("remote.push_hosts", "remote", Kind::List, "More push services a device may use besides the browsers' own, like a self-hosted ntfy.").adv().or("none"),
     s("remote.approval_wait", "remote", Kind::Duration, "How long a Claude permission prompt waits for a phone's answer."),

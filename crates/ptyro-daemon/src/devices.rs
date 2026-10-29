@@ -142,7 +142,7 @@ pub fn needed(req: &Request) -> Scope {
         | ProjectConfig { .. }
         | Replay { .. }
         | Export { .. }
-        | Web { on: None, tailnet_cert: None, .. }
+        | Web { on: None, .. }
         | ReviewList { .. }
         | ReviewQueue
         | PrGet { .. }
@@ -692,15 +692,8 @@ mod tests {
         assert_eq!(needed(&Request::Agents), Scope::Read);
         assert_eq!(needed(&Request::Replay { addr: "x".into() }), Scope::Read);
         assert_eq!(needed(&Request::Editors), Scope::Read);
-        assert_eq!(needed(&Request::Web { on: None, via: None, tailnet_cert: None }), Scope::Read);
-        assert_eq!(
-            needed(&Request::Web { on: Some(true), via: None, tailnet_cert: None }),
-            Scope::Full
-        );
-        assert_eq!(
-            needed(&Request::Web { on: None, via: None, tailnet_cert: Some(true) }),
-            Scope::Full
-        );
+        assert_eq!(needed(&Request::Web { on: None, via: None }), Scope::Read);
+        assert_eq!(needed(&Request::Web { on: Some(true), via: None }), Scope::Full);
         assert_eq!(
             needed(&Request::WorktreeOpen { addr: "x".into(), editor: None }),
             Scope::Control

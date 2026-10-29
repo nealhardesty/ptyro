@@ -49,7 +49,6 @@ expression: "Value::Object(all)"
       "by_hand": null,
       "ca_fingerprint": null,
       "cert": "string",
-      "cert_ask": "bool",
       "cert_note": null,
       "last_exit": null,
       "listen": "string",

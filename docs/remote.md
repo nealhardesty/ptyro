@@ -109,10 +109,9 @@ browser already trusts it: **Android, which won't install the app or allow notif
 certificate it doesn't trust, needs no CA step at all.** `ptyro pair` and `ptyro web` say when
 it is in use.
 
-- **The first question.** `ptyro init`, and the first `ptyro web on` (the TUI's *Run the web app*
-  and the web app's *Run it with the daemon* ask too), ask "Use Tailscale's certificate?" when your
-  tailnet can give one, because the computer's name goes into public certificate logs. The answer
-  is `remote.tailscale_cert` (Settings → remote), which is on unless you say no.
+- **Nothing to turn on.** It is automatic whenever the web app is shared over Tailscale. The
+  computer's name goes into public certificate logs (every Let's Encrypt certificate does); to
+  avoid that, share another way (`remote.access`) or use your own certificate.
 - **It starts at once.** The server comes up with its own certificate and switches the tailnet
   name over when Tailscale's has arrived (a few seconds the first time); it asks again every 12
   hours, and Tailscale renews it when it is close to its end.

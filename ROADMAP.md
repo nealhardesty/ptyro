@@ -2146,14 +2146,14 @@ a better way: the tailnet can issue a real Let's Encrypt certificate for the mac
 - [x] **TS1.1 Use Tailscale's certificate over Tailscale** — M. *From the owner, 2026-10-28.*
   `tailscale cert` for the machine's `*.ts.net` name, picked by SNI so every other address keeps
   ptyro's own; fetched in the background and renewed; falls back, with the fix named, when the
-  tailnet has no HTTPS certificates or Tailscale won't hand one over. `[remote] tailscale_cert`
-  (default on; Settings → remote). Asked once on first setup, since the name goes into public
-  certificate logs: `ptyro init`, `ptyro web on` (so the TUI), and the web app. `ptyro pair` hands
+  tailnet has no HTTPS certificates or Tailscale won't hand one over. Automatic
+  whenever `access = tailscale`: no setting and no question (owner, 2026-10-29; the name goes into
+  public certificate logs, noted in docs/remote.md). `ptyro pair` hands
   out no CA for it; `ptyro web`, `ptyro doctor` and the web app's Web app page say which certificate
   is in use; `machine add` accepts it for `*.ts.net` machines (Protocol 1.21, SPEC §16.3).
   *Done:* three end-to-end tests with a stand-in `tailscale` and a throwaway CA (Tailscale's served
-  for the tailnet name and ptyro's for the rest, the fallback with its fix, the setting off), and unit tests for the SNI choice,
-  the certificate's dates and name, the status parsing, the answer in the config file, and the pin
+  for the tailnet name and ptyro's for the rest, the fallback with its fix), and unit tests for the SNI choice,
+  the certificate's dates and name, the status parsing, and the pin
   rule. **Not done:** a real phone; run `ptyro web on` on a tailnet with HTTPS certificates and open
   the address on an Android phone.
 - [ ] **TS1.2 More ways to a certificate nobody installs** — L. Ideas from the same brainstorm:

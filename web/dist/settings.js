@@ -496,8 +496,6 @@ async function setWeb(on, via) {
         const r = await conn.request({ t: "web", on, via: via || null });
         status.reload("");
         const notes = r.notes ?? [];
-        if (on && r.web.cert_ask)
-            askTailnetCert();
         if (on && r.web.up)
             ui.toast(`Up at ${r.web.url}`);
         else if (!on)
@@ -510,27 +508,6 @@ async function setWeb(on, via) {
     catch (e) {
         hostFail(e);
     }
-}
-/// The first-run question: over Tailscale, use Tailscale's certificate for this computer's name?
-/// Asked once, when the tailnet can give one; the answer is `remote.tailscale_cert` (Settings → remote).
-function askTailnetCert() {
-    const answer = async (use) => {
-        try {
-            await conn.request({ t: "web", on: null, via: null, tailnet_cert: use });
-            status.reload("");
-            ui.toast(use ? "Using Tailscale's certificate" : "Using ptyro's own certificate");
-        }
-        catch (e) {
-            hostFail(e);
-        }
-    };
-    const s = sheet("Use Tailscale's certificate?", [
-        h("p", { class: "confirm" }, "Your tailnet can give this computer a certificate every phone already trusts, so there is nothing to install on a phone that opens its Tailscale address. The computer's name goes into public certificate logs."),
-        h("p", { class: "sub" }, "Without it, each phone trusts ptyro's own certificate once (Android needs that before it will install the app). Settings → remote changes this any time."),
-    ], [
-        h("button", { onclick: () => { s.close(); void answer(false); } }, "No, use ptyro's own"),
-        h("button", { class: "primary", onclick: () => { s.close(); void answer(true); } }, "Yes, use Tailscale's"),
-    ]);
 }
 /// Who can reach it (`remote.access`): the current one is marked, and picking another applies at once.
 function pickAccess(current, title) {

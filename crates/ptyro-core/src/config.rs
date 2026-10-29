@@ -601,39 +601,6 @@ pub fn tailnet_cert_domain_from(status: &serde_json::Value) -> Result<String, St
         })
 }
 
-/// Whether the file has said yes or no to `[remote] tailscale_cert` (so the first-run question
-/// has been answered, and isn't asked again).
-pub fn tailnet_cert_answered(path: &Path) -> bool {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|t| t.parse::<toml_edit::DocumentMut>().ok())
-        .is_some_and(|d| {
-            d["remote"].as_table_like().is_some_and(|r| r.contains_key("tailscale_cert"))
-        })
-}
-
-/// Write `[remote] tailscale_cert`, keeping the rest of the file (comments too).
-pub fn set_tailnet_cert(path: &Path, on: bool) -> Result<(), crate::Error> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => {
-            return Err(crate::Error::internal(format!(
-                "{}: {e} (it is left as it is)",
-                path.display()
-            )));
-        }
-    };
-    let mut doc: toml_edit::DocumentMut =
-        text.parse().map_err(|e| crate::Error::invalid(format!("{}: {e}", path.display())))?;
-    let remote = doc.entry("remote").or_insert(toml_edit::table());
-    let Some(remote) = remote.as_table_like_mut() else {
-        return Err(crate::Error::invalid(format!("{}: [remote] is not a table", path.display())));
-    };
-    remote.insert("tailscale_cert", toml_edit::value(on));
-    write_private(path, &doc.to_string())
-}
-
 /// Tailscale is installed and connected on this machine.
 fn tailscale_running() -> bool {
     std::process::Command::new("tailscale")
@@ -845,9 +812,6 @@ pub struct Remote {
     /// makes: phones that trust its issuer need nothing installed (`--cert`, `--key`).
     pub tls_cert: Option<String>,
     pub tls_key: Option<String>,
-    /// Over Tailscale, use Tailscale's own certificate for this machine's `*.ts.net` name (when the
-    /// tailnet has HTTPS certificates on): phones trust it already, so nothing is installed on them.
-    pub tailscale_cert: bool,
     /// How long Claude's permission prompt waits for a phone's answer (its own dialog stays
     /// open the whole time; the first answer wins).
     pub approval_wait: String,
@@ -868,7 +832,6 @@ impl Default for Remote {
             serve: false,
             tls_cert: None,
             tls_key: None,
-            tailscale_cert: true,
             approval_wait: "10m".into(),
             push: true,
             push_hosts: Vec::new(),
@@ -2380,27 +2343,5 @@ mod tailnet_cert {
         assert!(other.is_err());
         let down = tailnet_cert_domain_from(&status("Stopped", &["box.tail1.ts.net"]));
         assert!(down.unwrap_err().contains("isn't connected"));
-    }
-
-    #[test]
-    fn the_answer_is_written_once_and_the_rest_of_the_file_stays() {
-        let d = tempfile::tempdir().unwrap();
-        let path = d.path().join("config.toml");
-        std::fs::write(&path, "# mine\n[remote]\nport = 7000 # keep\n").unwrap();
-        assert!(!tailnet_cert_answered(&path));
-        set_tailnet_cert(&path, false).unwrap();
-        assert!(tailnet_cert_answered(&path));
-        let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.contains("# mine") && text.contains("port = 7000 # keep"), "{text}");
-        assert!(!Config::parse(&text).unwrap().remote.tailscale_cert);
-        set_tailnet_cert(&path, true).unwrap();
-        assert!(
-            Config::parse(&std::fs::read_to_string(&path).unwrap()).unwrap().remote.tailscale_cert
-        );
-        // A file that isn't there is made.
-        let fresh = d.path().join("new.toml");
-        set_tailnet_cert(&fresh, true).unwrap();
-        assert!(tailnet_cert_answered(&fresh));
-        assert!(Config::default().remote.tailscale_cert, "on unless said no");
     }
 }

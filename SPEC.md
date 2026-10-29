@@ -1003,12 +1003,9 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
-**[built TS1] Protocol 1.21** (additive): Tailscale's certificate (§16.3). `Web` gains
-`tailnet_cert: Option<bool>`: with `on` left out it writes `[remote] tailscale_cert` (the answer to
-the first-run question), reloads and wakes the server, and replies `Web`; that form is `full`
-scope, plain `Web{on: None}` stays `read`. `WebServe` gains `cert` (`tailscale`, `ptyro`, `own` or
-empty), `cert_note` (why Tailscale's isn't in use, with the fix) and `cert_ask` (only in the reply
-to turning it on: Tailscale could give a certificate and the file has no `tailscale_cert` yet).
+**[built TS1] Protocol 1.21** (additive): Tailscale's certificate (§16.3). `WebServe` gains `cert`
+(`tailscale`, `ptyro`, `own` or empty) and `cert_note` (why Tailscale's isn't in use, with the fix).
+There is no setting and no question: it is automatic over Tailscale (owner, 2026-10-29).
 
 **[built MM1.B] Protocol 1.20** (additive): many machines (§16.4b). `ClientKind::Machine`;
 `machine` on `SessionInfo`, `WorkspaceInfo`, `ProjectInfo`, `WorktreeInfo`, `ProfileInfo`,
@@ -3484,7 +3481,7 @@ change (debounced) and emits `ConfigReloaded`.
   256 KiB), and agents take `record = false`. Only `[remote]` is still reserved. The default
   `[daemon] scrollback_lines` is 5000 (§7.6).
   **[built M9]** `[remote]` is typed: `access = "localhost"` (`tailscale`, `open`; ACC1, §16.3),
-  `port = 7091`, `public_url`, `serve = false`, `tailscale_cert = true`, `approval_wait = "10m"`, `push = true`,
+  `port = 7091`, `public_url`, `serve = false`, `approval_wait = "10m"`, `push = true`,
   `push_hosts = []` (push services a device may subscribe with besides the browsers': FCM,
   Mozilla, Apple, Windows), `tls_cert`/`tls_key`. (`listen`, `tailscale`, `local`, `insecure`
   and `trusted_proxy` were replaced by `access` and `port`.) No section is
@@ -4889,7 +4886,7 @@ is "the web is up when the daemon is".
     12 h while it runs, swapped in for new connections.
 
   **[built TS1] Tailscale's certificate.** With `access = tailscale`, no certificate of your own and
-  `[remote] tailscale_cert` (default true), `serve` runs `tailscale cert --min-validity 15d` for the
+  automatically (no setting: owner, 2026-10-29), `serve` runs `tailscale cert --min-validity 15d` for the
   machine's own `*.ts.net` name when `tailscale status --json` is `Running` and lists it in
   `CertDomains` (the tailnet's "HTTPS Certificates" are on). It is a Let's Encrypt certificate
   (DNS-01 done by Tailscale's coordination server; the key is made on this machine), so every
@@ -4907,11 +4904,10 @@ is "the web is up when the daemon is".
   and `ptyro web`, `ptyro doctor` and the web app's Web app page show them. `ptyro pair` hands out no
   CA when its address is the tailnet name with Tailscale's certificate. `machine add` accepts a
   `*.ts.net` host's certificate checked against the public roots (`webpki-roots`) when the pinned
-  CA is not in its chain; no other host may skip the pin. The first-run question ("Use Tailscale's
-  certificate?") is asked once, because the name goes into public certificate logs: `ptyro init`,
-  `ptyro web on` on a terminal (so the TUI's `remote.web_on`), and the web app after turning it on
-  over Tailscale; its answer is the config key, so the question is asked while the key is absent
-  and never under `--yes`.
+  CA is not in its chain; no other host may skip the pin. It is automatic
+  whenever `access = tailscale`, with no setting and no question (owner, 2026-10-29); the name goes
+  into public certificate logs (Certificate Transparency), which is the price of a certificate
+  nothing needs installing for. A person who minds picks another `access` or sets `tls_cert`.
   `--cert`/`--key` (or `[remote] tls_cert`/`tls_key`) use your own certificate instead: no CA,
   no `/ca.crt`, the files read again every 12 h. It is made (or read) before `serve` binds, so a
   listening port means ready. `GET /ca.crt` serves the CA

@@ -235,7 +235,7 @@ fn web_app(w: &ptyro_protocol::WebServe, r: &mut Report) {
             S,
             "tailscale certificate",
             Level::Warn,
-            format!("not in use ({note}); phones trust ptyro's own certificate instead (`[remote] tailscale_cert = false` stops asking)"),
+            format!("not in use ({note}); phones trust ptyro's own certificate instead"),
         ),
         _ => {}
     }
@@ -393,9 +393,7 @@ async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
             ),
         );
     }
-    if let Ok(Reply::Web { web, .. }) =
-        c.request(Request::Web { on: None, via: None, tailnet_cert: None }).await
-    {
+    if let Ok(Reply::Web { web, .. }) = c.request(Request::Web { on: None, via: None }).await {
         web_app(&web, r);
     }
     let Ok(Reply::Doctor { report }) = c.request(Request::Doctor).await else { return };

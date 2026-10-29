@@ -86,35 +86,10 @@ pub async fn ask(
     via: Option<String>,
 ) -> Result<(WebServe, Vec<String>), Error> {
     let c = ctx.connect(on == Some(true)).await?;
-    match c.request(Request::Web { on, via, tailnet_cert: None }).await? {
+    match c.request(Request::Web { on, via }).await? {
         Reply::Web { web, notes } => Ok((web, notes)),
         _ => Err(Error::internal("unexpected reply")),
     }
-}
-
-/// Whether to use Tailscale's certificate, asked once when the web app first comes up over
-/// Tailscale and the tailnet can give one (the answer is `[remote] tailscale_cert`).
-async fn ask_tailnet_cert(ctx: &Ctx) -> Result<(), Error> {
-    use std::io::{BufRead, Write};
-    eprint!(
-        "Use Tailscale's certificate for this computer's name? Phones on your tailnet then need \
-         nothing installed. The name goes into public certificate logs. [Y/n] "
-    );
-    let _ = std::io::stderr().flush();
-    let mut a = String::new();
-    let _ = std::io::stdin().lock().read_line(&mut a);
-    let yes = !matches!(a.trim().to_lowercase().as_str(), "n" | "no");
-    let c = ctx.connect(true).await?;
-    c.request(Request::Web { on: None, via: None, tailnet_cert: Some(yes) }).await?;
-    println!(
-        "  {}",
-        if yes {
-            "using Tailscale's certificate (`ptyro config set remote.tailscale_cert false` undoes it)"
-        } else {
-            "not using it: phones trust ptyro's own certificate once, from /ca.crt"
-        }
-    );
-    Ok(())
 }
 
 pub async fn run(
@@ -159,9 +134,6 @@ pub async fn run(
                 println!(
                     "  it stops when the daemon does: `ptyro daemon install-service` starts both at login"
                 );
-            }
-            if web.cert_ask && std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-                ask_tailnet_cert(ctx).await?;
             }
             if pair {
                 return crate::remote::pair(ctx, "phone".into(), None, None, false).await;

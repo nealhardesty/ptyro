@@ -230,7 +230,7 @@ struct Pinned {
 }
 
 /// A machine on a tailnet has a `*.ts.net` name, and Tailscale can give it a certificate every
-/// browser trusts (`[remote] tailscale_cert`): that, checked against the public roots, is as
+/// browser trusts (over Tailscale): that, checked against the public roots, is as
 /// good as the pinned authority for such a name.
 fn is_tailnet_name(host: &str) -> bool {
     host.trim_end_matches('.').to_ascii_lowercase().ends_with(".ts.net")

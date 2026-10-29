@@ -1831,16 +1831,3 @@ async fn serve_keeps_its_own_certificate_when_tailscale_cannot_give_one() {
     let _ = child.kill();
     let _ = child.wait();
 }
-
-#[tokio::test]
-async fn serve_leaves_tailscales_certificate_alone_when_told_to() {
-    let w = World::new("[remote]\ntailscale_cert = false\n", &[]);
-    let (fake, lets_encrypt) = fake_tailscale(None);
-    let (mut child, port) = serve_over_tailscale(&w, fake.path(), &[]);
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    assert!(healthz_as(port, &lets_encrypt, TAILNET).await.is_err());
-    assert!(!w.d.paths.data.join("serve/tls/tailscale").exists(), "asked Tailscale for nothing");
-    assert_eq!(served_cert(&w)["cert"], "ptyro");
-    let _ = child.kill();
-    let _ = child.wait();
-}
