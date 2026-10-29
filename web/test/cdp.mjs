@@ -84,6 +84,23 @@ export class Tab {
     for (const type of ["mousePressed", "mouseReleased"]) await this.send("Input.dispatchMouseEvent", { type, ...box, button: "left", clickCount: 1 });
   }
 
+  /// Look like a phone: its width, a touch screen (pointers of type "touch").
+  async phone(width = 390, height = 844) {
+    await this.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 3, mobile: true });
+    await this.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
+  }
+
+  /// Fingers on the screen: each step is a list of points ([x, y]), one per finger, the first
+  /// step where they land and the last where they lift. Real touch events, so the page sees
+  /// pointer events of type "touch" (and the browser does its own zooming, if the page lets it).
+  async fingers(steps, ms = 16) {
+    const pts = (s) => s.map(([x, y], id) => ({ x, y, id, radiusX: 4, radiusY: 4, force: 1 }));
+    await this.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: pts(steps[0]) });
+    for (const s of steps.slice(1)) { await sleep(ms); await this.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: pts(s) }); }
+    await sleep(ms);
+    await this.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  }
+
   async screenshot(file) {
     const r = await this.send("Page.captureScreenshot", { format: "png" });
     writeFileSync(file, Buffer.from(r.data, "base64"));

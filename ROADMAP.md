@@ -1806,6 +1806,19 @@ up), and `make parity` fails CI on a CLI command with neither a web path nor a w
   `serving_the_web_app_is_one_setting…`. *Since:* `remote.serve` and `remote.tailscale` are in the CFG1 panel. *Not done:* a QR code on
   the TUI's `remote.web_on` (it prints `ptyro pair` as the next step).
 
+- [x] **WEB1.10 Zoom the web terminal on a phone** — S. (owner 2026-10-29; done 2026-10-29; R-REM-14)
+  A wide session fitted to a phone's width is 5 px text, and the only way to change it was Aa →
+  Bigger text, a pixel per tap. *Done:* pinch to zoom (continuous, anchored under the fingers,
+  pinching in past fitted is fitted), a two-finger tap for fitted ⇄ full size, Ctrl+wheel and a
+  trackpad pinch scaled the same way, Safari's gesture events, a size badge, Aa → Size it
+  automatically; a new default, *automatic* (fitted while 9 px or more, else 1:1), and a one-time
+  hint on touch screens. The box pans itself both ways (`touch-action: none`), so a pinch never
+  zooms the page; a tall 1:1 screen scrolls before the history. Client only: nothing on the
+  server changes. Tests: `web/test/term.mjs` (fit, automatic, pinch, the drag split) and
+  web_e2e's `zoom` (a phone-sized headless Chrome: real two-finger touches zoom in, pan both
+  ways, zoom out to fit, two-finger taps, kept after a reload, the page's own scale stays 1).
+  *Not checked:* a real iPhone and Android phone by hand.
+
 - [x] **ACC1 Who can reach the web app is one obvious setting** — S. (owner 2026-10-28; done 2026-10-28)
   `[remote]` had five settings that decided where the server listens and how (`listen`,
   `tailscale`, `local`, `insecure`, `trusted_proxy`), and two of them contradicting each other

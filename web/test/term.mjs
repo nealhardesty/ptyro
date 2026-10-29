@@ -9,7 +9,7 @@
 // with `plan`, and a selection's text with `ptyro read --scrollback`.
 import assert from "node:assert/strict";
 import { MOD, Sticky, inputKeys, keyInput, keyOf, pasteInput } from "../dist/keys.js";
-import { docOf, selText, wordAt, lastUsed, ordered, span, urlAt, findIn } from "../dist/grid.js";
+import { docOf, selText, wordAt, lastUsed, ordered, span, urlAt, findIn, fitPx, fitted, pinchZoom, splitPan, clampPx, MIN_PX, MAX_PX, READABLE_PX, FIT_MAX_PX } from "../dist/grid.js";
 
 const dom = (key, o = {}) => ({ key, ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, getModifierState: (k) => k === "AltGraph" && !!o.altGraph, ...o });
 const hex = (...b) => b.map((x) => x.toString(16).padStart(2, "0"));
@@ -104,6 +104,29 @@ if (mode === "units") {
   assert.deepEqual(findIn(doc, "fish", { row: 2, col: 4 }, 1).a, { row: 0, col: 4 }, "wraps round");
   assert.deepEqual(findIn(doc, "fish", { row: 1, col: 4 }, -1).a, { row: 0, col: 4 });
   assert.equal(findIn(doc, "cat", { row: 0, col: 0 }, 1), null);
+  // Zoom. A 200-column session on a 390 px phone fits at about 3 px: below the floor of 5, and
+  // not readable, so automatic shows it 1:1; an 80-column one fits at about 8; 60 columns, 10.
+  const phone = 382, r = 0.6;
+  assert.equal(fitPx(phone, 200, r), 5);
+  assert.equal(fitPx(phone, 30, r), FIT_MAX_PX, "a narrow session isn't blown up");
+  assert.ok(!fitted("auto", fitPx(phone, 80, r)) && fitted("auto", fitPx(phone, 60, r)));
+  assert.ok(fitted("fit", 5) && !fitted("size", 16), "a choice is kept whatever the size");
+  assert.equal(fitted("auto", READABLE_PX), true);
+  assert.deepEqual([clampPx(1), clampPx(99), clampPx(12.5)], [MIN_PX, MAX_PX, 12.5]);
+  // A pinch scales from the size it started at; in past the fitted size is fitted.
+  assert.deepEqual(pinchZoom(10, 100, 200, 7), { zoom: "size", px: 20 });
+  assert.deepEqual(pinchZoom(10, 100, 60, 7), { zoom: "fit", px: 7 });
+  assert.deepEqual(pinchZoom(7, 100, 1000, 7), { zoom: "size", px: MAX_PX }, "no bigger than the most");
+  assert.deepEqual(pinchZoom(20, 100, 50, FIT_MAX_PX), { zoom: "size", px: 10 }, "a narrow session can still go smaller");
+  assert.deepEqual(pinchZoom(32, 300, 30, 5.3), { zoom: "fit", px: 5.3 }, "a wide session fits below the smallest size");
+  assert.deepEqual(pinchZoom(12, 0, 0, 7), { zoom: "size", px: 12 }, "fingers on one spot: nothing happens");
+  // A drag on a screen taller than its box: the box first, then the history.
+  assert.deepEqual(splitPan(30, 100, 400, false), { top: 70, rest: 0 });
+  assert.deepEqual(splitPan(30, 10, 400, false), { top: 0, rest: 20 }, "past the top: into the history");
+  assert.deepEqual(splitPan(-30, 380, 400, false), { top: 400, rest: -10 }, "past the bottom: the rest goes on");
+  assert.deepEqual(splitPan(-30, 0, 0, false), { top: 0, rest: -30 }, "a screen that fits scrolls the history");
+  assert.deepEqual(splitPan(-30, 50, 400, true), { top: 50, rest: -30 }, "coming back from the history: it first");
+  assert.deepEqual(splitPan(20, 0, 0, false), { top: 0, rest: 20 });
   console.log("ok");
 } else if (mode === "plan") {
   console.log(JSON.stringify({ count: expected.length, hex: hex(...expected).join(" ") }));
