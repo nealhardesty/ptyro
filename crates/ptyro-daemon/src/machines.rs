@@ -1123,8 +1123,14 @@ impl Daemon {
             MachineRecord { name: name.clone(), transport, added_ms: now_ms(), hidden: Vec::new() };
         self.open_link(record);
         if let Some(l) = self.links.locked().get_mut(&name) {
-            l.info.version = version;
+            l.info.version = version.clone();
             l.info.calls_itself = calls_itself;
+        }
+        // The check above already met it: say now that it can't link, with the fix, instead of
+        // a "connecting" that the link then turns into this a moment later.
+        if let Some(theirs) = version.filter(|v| v != env!("CARGO_PKG_VERSION")) {
+            let (error, fix) = version_fix(&name, &theirs, env!("CARGO_PKG_VERSION"));
+            self.set_link_state(&name, MachineState::Mismatch, Some(error), Some(fix));
         }
         self.save_machines().await;
         let info = self

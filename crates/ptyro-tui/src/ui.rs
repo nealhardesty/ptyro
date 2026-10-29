@@ -494,10 +494,7 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
         title.push(Span::styled(name, fg(app, t.text).add_modifier(Modifier::BOLD)));
         title.push(Span::styled(" · ", fg(app, t.dim)));
     }
-    title.push(Span::styled(
-        workspace,
-        fg(app, t.accent).add_modifier(Modifier::BOLD),
-    ));
+    title.push(Span::styled(workspace, fg(app, t.accent).add_modifier(Modifier::BOLD)));
     if let Some(b) = profile_badge(app, &app.workspace_profile()) {
         title.push(Span::raw(" "));
         title.push(b);
