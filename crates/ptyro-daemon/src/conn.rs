@@ -58,6 +58,17 @@ struct Conn {
     upstreams: HashMap<String, Upstream>,
     /// Mirrored sessions this client is subscribed to, and their machine.
     remote: HashMap<SessionId, String>,
+    /// Chats this client follows (SPEC §22.14): the task streaming each.
+    chats: HashMap<String, Aborting>,
+}
+
+/// A task that ends when this is dropped (a client that goes away stops its streams).
+struct Aborting(JoinHandle<()>);
+
+impl Drop for Aborting {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 struct Upstream {
@@ -201,6 +212,7 @@ pub async fn serve(daemon: Arc<Daemon>, stream: UnixStream, pid: Option<u32>) {
         link,
         upstreams: HashMap::new(),
         remote: HashMap::new(),
+        chats: HashMap::new(),
     };
     let mut shutdown = daemon.shutdown.subscribe();
     let mut goodbye = daemon.goodbye.subscribe();
@@ -303,6 +315,17 @@ impl Conn {
                 self.subscribe(session, size, control).await
             }
             ClientMsg::Unsubscribe { session } => self.unsubscribe(session),
+            ClientMsg::ChatSubscribe { chat } => {
+                let task = tokio::spawn(stream_chat_live(
+                    Arc::clone(&self.daemon),
+                    chat.clone(),
+                    self.out.clone(),
+                ));
+                self.chats.insert(chat, Aborting(task));
+            }
+            ClientMsg::ChatUnsubscribe { chat } => {
+                self.chats.remove(&chat);
+            }
             ClientMsg::Ack { session, seq } => {
                 if let Some(sub) = self.subs.get(&session) {
                     sub.acks.send_modify(|a| *a = (*a).max(seq));
@@ -633,6 +656,61 @@ async fn stream_chat(session: Arc<Session>, out: mpsc::Sender<ServerMsg>) {
     }
 }
 
+/// A followed chat (SPEC §22.14): its shown branch, then what changed; the whole branch again
+/// when it is reloaded. A chat that can't be followed says why, as a notice.
+async fn stream_chat_live(daemon: Arc<Daemon>, chat: String, out: mpsc::Sender<ServerMsg>) {
+    let live = match daemon.chat_follow(&chat).await {
+        Ok(l) => l,
+        Err(e) => {
+            let item = ptyro_core::chat::ChatItem::new(
+                "error",
+                ptyro_core::chat::ChatBody::Notice {
+                    level: ptyro_core::chat::NoticeLevel::Error,
+                    text: e.message,
+                },
+            );
+            let _ = out
+                .send(ServerMsg::ChatLive { chat, rev: 0, reset: true, items: vec![item] })
+                .await;
+            return;
+        }
+    };
+    // Stops following when this task ends, however it ends.
+    struct Following(Arc<Daemon>, Arc<crate::chats::Live>);
+    impl Drop for Following {
+        fn drop(&mut self) {
+            self.0.chat_unfollow(&self.1);
+        }
+    }
+    let _f = Following(Arc::clone(&daemon), Arc::clone(&live));
+    let (mut revs, mut epochs) = (live.rev.subscribe(), live.epoch.subscribe());
+    let mut seen = 0u64;
+    let mut epoch = u64::MAX;
+    loop {
+        let now = *epochs.borrow_and_update();
+        revs.borrow_and_update();
+        let reset = now != epoch;
+        let (rev, items) = {
+            let t = live.items.locked();
+            (t.rev, if reset { t.items.clone() } else { t.since(seen) })
+        };
+        if reset || !items.is_empty() {
+            let msg = ServerMsg::ChatLive { chat: live.id.clone(), rev, reset, items };
+            if out.send(msg).await.is_err() {
+                return;
+            }
+        }
+        epoch = now;
+        seen = rev;
+        tokio::select! {
+            r = revs.changed() => if r.is_err() { return },
+            r = epochs.changed() => if r.is_err() { return },
+        }
+        // Streamed text arrives in many small pieces: send them a few at a time.
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+}
+
 /// What another machine sends this client over its upstream: the frames and transcripts it
 /// subscribed to, and clipboard writes for the session it controls there. Everything else about
 /// that machine comes through the daemon's link (`machines.rs`).
@@ -708,6 +786,8 @@ async fn forward_events(
             | DomainEvent::ScratchChanged { .. }
             | DomainEvent::MachineUpdated { .. }
             | DomainEvent::MachineRemoved { .. }
+            | DomainEvent::ChatUpdated { .. }
+            | DomainEvent::ChatRemoved { .. }
             | DomainEvent::RunUpdated { .. } => {
                 let watching = interest.locked().watch_all;
                 if watching && out.send(ServerMsg::Event { event }).await.is_err() {

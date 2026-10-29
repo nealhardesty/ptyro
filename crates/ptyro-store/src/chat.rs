@@ -621,9 +621,13 @@ impl ChatDb {
         let path = self.path.clone();
         self.call(move |db| {
             let chats: i64 =
-                db.query_row("SELECT count(*) FROM chat WHERE deleted_at IS NULL", [], |r| r.get(0))?;
+                db.query_row("SELECT count(*) FROM chat WHERE deleted_at IS NULL", [], |r| {
+                    r.get(0)
+                })?;
             let nodes: i64 =
-                db.query_row("SELECT count(*) FROM node WHERE deleted_at IS NULL", [], |r| r.get(0))?;
+                db.query_row("SELECT count(*) FROM node WHERE deleted_at IS NULL", [], |r| {
+                    r.get(0)
+                })?;
             let fts5 = db
                 .query_row("SELECT sqlite_compileoption_used('ENABLE_FTS5')", [], |r| {
                     r.get::<_, i64>(0)

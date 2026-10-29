@@ -660,6 +660,7 @@ impl Daemon {
                 script: Some(role),
                 quick: false,
                 pad: false,
+                chat: None,
             },
             replace: false,
             agent: None,

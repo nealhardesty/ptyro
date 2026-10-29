@@ -26,6 +26,9 @@ const ABORT: u32 = 4;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct OpenCode {
     session: Option<String>,
+    /// Over `POST /session`'s body (a chat's permission rules).
+    #[serde(default)]
+    params: Option<Value>,
     queued: Vec<String>,
     /// Open permission: (permission id, item id, title).
     /// The open permission request: (id, chat item, title).
@@ -55,7 +58,7 @@ impl OpenCode {
     }
 
     pub fn new(opts: Opts) -> Self {
-        Self { session: opts.resume, ..Self::default() }
+        Self { session: opts.resume, params: opts.params, ..Self::default() }
     }
 
     pub fn restore(v: Value) -> Option<Self> {
@@ -186,7 +189,7 @@ impl Driver for OpenCode {
             None => vec![Effect::Http {
                 method: "POST",
                 path: "/session".into(),
-                body: Some(json!({})),
+                body: Some(crate::merged(json!({}), self.params.as_ref())),
                 tag: CREATE,
             }],
         }

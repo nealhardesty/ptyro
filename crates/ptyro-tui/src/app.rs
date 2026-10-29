@@ -1630,6 +1630,7 @@ impl App {
                 self.usage.insert((usage.profile.clone(), usage.agent.clone()), usage);
             }
             DomainEvent::RunUpdated { run } => self.run_updated(run),
+            DomainEvent::ChatUpdated { .. } | DomainEvent::ChatRemoved { .. } => {}
             DomainEvent::ProjectUpdated { info } => {
                 upsert_by(&mut self.projects, info, |p| p.id.clone())
             }

@@ -7,6 +7,7 @@
 
 use std::path::PathBuf;
 
+use ptyro_core::chats::{ChatInfo, ChatNode};
 use ptyro_core::input::InputEvent;
 use ptyro_core::model::{
     CommitInfo, DiffAgainst, DiffDoc, GcEntry, PrInfo, ProfileInfo, ProfileReason, ProjectInfo,
@@ -39,7 +40,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 21 };
+pub const PROTO: Version = Version { major: 1, minor: 22 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1064,6 +1065,79 @@ pub enum Request {
     Cs {
         op: ptyro_run::wire::CsOp,
     },
+    // ── Chats (1.22, SPEC §22.14). A `chat` is an address: `7f3k`, `c:7f3k`, a title that
+    // matches one chat, `@last`, or `laptop2:c:7f3k` for another machine's. ──
+    /// A new chat (in the workspace given, else `main`); with `prompt`, its first message.
+    ChatNew {
+        #[serde(default)]
+        workspace: Option<String>,
+        /// `agent` or `agent@profile`; default `[chat] agent`.
+        #[serde(default)]
+        agent: Option<String>,
+        /// A tool preset; default `[chat] preset`.
+        #[serde(default)]
+        preset: Option<String>,
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        prompt: Option<String>,
+    },
+    /// Chats, pinned first then the newest: one workspace's, or every one's with `all`.
+    ChatList {
+        #[serde(default)]
+        workspace: Option<String>,
+        #[serde(default)]
+        all: bool,
+        #[serde(default)]
+        pinned: bool,
+        #[serde(default)]
+        archived: bool,
+        #[serde(default)]
+        limit: Option<u32>,
+    },
+    /// A chat and its shown branch (every node of every branch with `all`).
+    ChatRead {
+        chat: String,
+        #[serde(default)]
+        all: bool,
+    },
+    /// A message to a chat; its agent starts (or carries on) to answer it.
+    ChatSend {
+        chat: String,
+        text: String,
+    },
+    /// Answer the chat's open permission request: `allow`, `always` or `deny`.
+    ChatAnswer {
+        chat: String,
+        decision: String,
+    },
+    /// Stop the answer being written.
+    ChatStop {
+        chat: String,
+    },
+    /// Change a chat: its title (empty: a new automatic one), pin, archive, agent, preset.
+    ChatUpdate {
+        chat: String,
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        pinned: Option<bool>,
+        #[serde(default)]
+        archived: Option<bool>,
+        #[serde(default)]
+        agent: Option<String>,
+        #[serde(default)]
+        preset: Option<String>,
+    },
+    ChatDelete {
+        chat: String,
+    },
+    /// The shown branch as Markdown (`md`) or JSON (`json`).
+    ChatExport {
+        chat: String,
+        #[serde(default)]
+        format: String,
+    },
 }
 
 /// One persisted session event (`session_event`, SPEC §14.3).
@@ -1092,6 +1166,9 @@ pub struct DaemonDoctor {
     /// The daemon's config failed to load and it runs on defaults.
     #[serde(default)]
     pub config_error: Option<String>,
+    /// `chat.db`: what it holds, or why it can't be opened (SPEC §22.4).
+    #[serde(default)]
+    pub chats: Option<String>,
 }
 
 /// The result of a hook self-test.
@@ -1495,6 +1572,17 @@ pub enum Reply {
     Transcript {
         items: Vec<ptyro_core::chat::ChatItem>,
     },
+    Chat {
+        info: ChatInfo,
+    },
+    Chats {
+        chats: Vec<ChatInfo>,
+    },
+    /// A chat and nodes of it, oldest first.
+    ChatTranscript {
+        info: ChatInfo,
+        nodes: Vec<ChatNode>,
+    },
     Devices {
         devices: Vec<DeviceInfo>,
     },
@@ -1595,6 +1683,14 @@ pub enum ClientMsg {
         terminal_focused: bool,
     },
     Ping,
+    /// Follow a chat (1.22): its shown branch, then each change (`ServerMsg::ChatLive`). Being
+    /// shown clears its unread count.
+    ChatSubscribe {
+        chat: String,
+    },
+    ChatUnsubscribe {
+        chat: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1724,6 +1820,15 @@ pub enum DomainEvent {
     EventsLost {
         count: u64,
     },
+    /// A chat was made or changed: title, pin, status, unread (1.22).
+    ChatUpdated {
+        info: ChatInfo,
+    },
+    ChatRemoved {
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        machine: Option<String>,
+    },
 }
 
 /// What to do to a scratchpad item (`ScratchMark`).
@@ -1829,6 +1934,16 @@ pub enum ServerMsg {
         items: Vec<ptyro_core::chat::ChatItem>,
         #[serde(default)]
         draft: String,
+    },
+    /// A followed chat (1.22): its shown branch on subscribe and when the branch changes
+    /// (`reset`), then the items that changed. Item ids are node ids.
+    ChatLive {
+        /// The chat's full id.
+        chat: String,
+        rev: u64,
+        #[serde(default)]
+        reset: bool,
+        items: Vec<ptyro_core::chat::ChatItem>,
     },
 }
 

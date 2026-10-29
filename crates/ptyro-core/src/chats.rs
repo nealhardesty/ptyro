@@ -280,7 +280,9 @@ mod tests {
         assert!(all.contains("[tool WebSearch \"rust lifetimes\"] → ") && all.contains('…'));
         // A small budget keeps the newest and says what was left out.
         let (some, k) = seed_block(&branch, 160).unwrap();
-        assert!(k < 4 && some.contains("[user] second") && some.contains("earlier messages left out"));
+        assert!(
+            k < 4 && some.contains("[user] second") && some.contains("earlier messages left out")
+        );
         assert!(seed_block(&branch[2..3], 100).is_none());
     }
 

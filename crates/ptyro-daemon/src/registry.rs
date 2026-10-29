@@ -764,6 +764,8 @@ impl Daemon {
                     main.projects.extend(homeless);
                     self.put_workspace(main);
                 }
+                // Its chats move to main (SPEC §22.2).
+                self.chats_follow_workspace(&w.id).await;
                 // Its sessions keep running; they now live in main.
                 for s in self.sessions() {
                     let moved = {

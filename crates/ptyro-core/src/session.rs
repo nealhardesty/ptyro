@@ -148,6 +148,10 @@ pub struct SessionInfo {
     /// The agent's own conversation id (resume).
     #[serde(default)]
     pub conversation: Option<String>,
+    /// The chat it serves, when it is a chat's engine (SPEC §22.2): hidden from the session
+    /// tree and from `ptyro ls` (`ls --chats` shows it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat: Option<String>,
     /// Running subagents or teammates.
     #[serde(default)]
     pub children: Vec<crate::status::Child>,

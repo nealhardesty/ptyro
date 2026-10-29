@@ -7,6 +7,7 @@ mod approvals;
 mod autoreg;
 mod background;
 mod changesets;
+mod chats;
 mod conn;
 mod daemon;
 mod devices;
@@ -412,6 +413,7 @@ async fn serve(
     daemon.load_integrated().await;
     daemon.start_serve_supervisor();
     daemon.start_pad_watcher();
+    daemon.start_chats();
     // Retention (SPEC §14.2) is applied once a day while the daemon runs, not only at its start.
     {
         let d = Arc::clone(&daemon);

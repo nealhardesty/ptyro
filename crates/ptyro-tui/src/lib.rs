@@ -82,6 +82,8 @@ pub struct Options {
     pub tour: bool,
     /// `ptyro` started the first session itself: the first run (no config yet) or home (UX1.19).
     pub welcome: bool,
+    /// Open this chat's view (`ptyro chat open`).
+    pub chat: Option<String>,
 }
 
 const FRAME: Duration = Duration::from_millis(8);

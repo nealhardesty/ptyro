@@ -44,6 +44,20 @@ pub struct Opts {
     pub resume: Option<String>,
     /// A fresh conversation's id, when the protocol lets us choose it (Claude).
     pub session_id: Option<String>,
+    /// More fields for the call that starts or resumes the conversation, over the driver's own
+    /// (a chat's tool limits, SPEC §22.5): Codex's `thread/start` and `thread/resume`, OpenCode's
+    /// `POST /session`.
+    pub params: Option<Value>,
+}
+
+/// `extra`'s fields over `base`'s (objects only).
+pub(crate) fn merged(mut base: Value, extra: Option<&Value>) -> Value {
+    if let (Some(b), Some(Value::Object(e))) = (base.as_object_mut(), extra) {
+        for (k, v) in e {
+            b.insert(k.clone(), v.clone());
+        }
+    }
+    base
 }
 
 pub trait Driver: Send {
