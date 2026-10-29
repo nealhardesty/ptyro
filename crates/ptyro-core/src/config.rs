@@ -569,6 +569,71 @@ pub fn set_serve(path: &Path, on: bool, access: Option<&str>) -> Result<Vec<Stri
     Ok(notes)
 }
 
+/// This machine's name on the tailnet if Tailscale can issue a certificate for it, else why not,
+/// worded so the person can fix it.
+pub fn tailnet_cert_domain() -> Result<String, String> {
+    let out = std::process::Command::new("tailscale")
+        .args(["status", "--json"])
+        .output()
+        .map_err(|_| "Tailscale isn't installed".to_owned())?;
+    let status: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .map_err(|_| "Tailscale isn't running on this computer".to_owned())?;
+    tailnet_cert_domain_from(&status)
+}
+
+/// [`tailnet_cert_domain`] from `tailscale status --json`.
+pub fn tailnet_cert_domain_from(status: &serde_json::Value) -> Result<String, String> {
+    if status["BackendState"] != "Running" {
+        return Err("Tailscale isn't connected on this computer".into());
+    }
+    let own = status["Self"]["DNSName"].as_str().unwrap_or("").trim_end_matches('.').to_lowercase();
+    status["CertDomains"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|d| d.as_str())
+        .map(str::to_lowercase)
+        .find(|d| !own.is_empty() && *d == own)
+        .ok_or_else(|| {
+            "your tailnet has no HTTPS certificates yet: turn on \"HTTPS Certificates\" at \
+             https://login.tailscale.com/admin/dns"
+                .to_owned()
+        })
+}
+
+/// Whether the file has said yes or no to `[remote] tailscale_cert` (so the first-run question
+/// has been answered, and isn't asked again).
+pub fn tailnet_cert_answered(path: &Path) -> bool {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| t.parse::<toml_edit::DocumentMut>().ok())
+        .is_some_and(|d| {
+            d["remote"].as_table_like().is_some_and(|r| r.contains_key("tailscale_cert"))
+        })
+}
+
+/// Write `[remote] tailscale_cert`, keeping the rest of the file (comments too).
+pub fn set_tailnet_cert(path: &Path, on: bool) -> Result<(), crate::Error> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => {
+            return Err(crate::Error::internal(format!(
+                "{}: {e} (it is left as it is)",
+                path.display()
+            )));
+        }
+    };
+    let mut doc: toml_edit::DocumentMut =
+        text.parse().map_err(|e| crate::Error::invalid(format!("{}: {e}", path.display())))?;
+    let remote = doc.entry("remote").or_insert(toml_edit::table());
+    let Some(remote) = remote.as_table_like_mut() else {
+        return Err(crate::Error::invalid(format!("{}: [remote] is not a table", path.display())));
+    };
+    remote.insert("tailscale_cert", toml_edit::value(on));
+    write_private(path, &doc.to_string())
+}
+
 /// Tailscale is installed and connected on this machine.
 fn tailscale_running() -> bool {
     std::process::Command::new("tailscale")
@@ -780,6 +845,9 @@ pub struct Remote {
     /// makes: phones that trust its issuer need nothing installed (`--cert`, `--key`).
     pub tls_cert: Option<String>,
     pub tls_key: Option<String>,
+    /// Over Tailscale, use Tailscale's own certificate for this machine's `*.ts.net` name (when the
+    /// tailnet has HTTPS certificates on): phones trust it already, so nothing is installed on them.
+    pub tailscale_cert: bool,
     /// How long Claude's permission prompt waits for a phone's answer (its own dialog stays
     /// open the whole time; the first answer wins).
     pub approval_wait: String,
@@ -800,6 +868,7 @@ impl Default for Remote {
             serve: false,
             tls_cert: None,
             tls_key: None,
+            tailscale_cert: true,
             approval_wait: "10m".into(),
             push: true,
             push_hosts: Vec::new(),
@@ -2284,5 +2353,54 @@ mod hardening {
         assert!(Config::parse(&text).is_ok(), "{text:?}");
         let left: Vec<_> = std::fs::read_dir(real.parent().unwrap()).unwrap().collect();
         assert_eq!(left.len(), 1, "no temp files left: {left:?}");
+    }
+}
+
+#[cfg(test)]
+mod tailnet_cert {
+    use super::*;
+
+    fn status(backend: &str, domains: &[&str]) -> serde_json::Value {
+        serde_json::json!({
+            "BackendState": backend,
+            "Self": { "DNSName": "box.tail1.ts.net." },
+            "CertDomains": domains,
+        })
+    }
+
+    #[test]
+    fn a_certificate_is_offered_only_for_this_machines_own_name() {
+        assert_eq!(
+            tailnet_cert_domain_from(&status("Running", &["Box.tail1.ts.net"])).as_deref(),
+            Ok("box.tail1.ts.net")
+        );
+        let off = tailnet_cert_domain_from(&status("Running", &[])).unwrap_err();
+        assert!(off.contains("HTTPS Certificates") && off.contains("admin/dns"), "{off}");
+        let other = tailnet_cert_domain_from(&status("Running", &["else.tail1.ts.net"]));
+        assert!(other.is_err());
+        let down = tailnet_cert_domain_from(&status("Stopped", &["box.tail1.ts.net"]));
+        assert!(down.unwrap_err().contains("isn't connected"));
+    }
+
+    #[test]
+    fn the_answer_is_written_once_and_the_rest_of_the_file_stays() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("config.toml");
+        std::fs::write(&path, "# mine\n[remote]\nport = 7000 # keep\n").unwrap();
+        assert!(!tailnet_cert_answered(&path));
+        set_tailnet_cert(&path, false).unwrap();
+        assert!(tailnet_cert_answered(&path));
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("# mine") && text.contains("port = 7000 # keep"), "{text}");
+        assert!(!Config::parse(&text).unwrap().remote.tailscale_cert);
+        set_tailnet_cert(&path, true).unwrap();
+        assert!(
+            Config::parse(&std::fs::read_to_string(&path).unwrap()).unwrap().remote.tailscale_cert
+        );
+        // A file that isn't there is made.
+        let fresh = d.path().join("new.toml");
+        set_tailnet_cert(&fresh, true).unwrap();
+        assert!(tailnet_cert_answered(&fresh));
+        assert!(Config::default().remote.tailscale_cert, "on unless said no");
     }
 }

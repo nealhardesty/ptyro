@@ -314,6 +314,15 @@ pub async fn run(
         let path = ptyro_core::config::expand_home;
         Some((path(c), path(k)))
     });
+    // Over Tailscale, with no certificate of your own, the tailnet name may get Tailscale's.
+    let tailnet_name =
+        (!plain && own.is_none() && access == Access::Tailscale && config.remote.tailscale_cert)
+            .then(|| ptyro_core::config::tailnet_cert_domain().ok())
+            .flatten();
+    // A Tailscale certificate from an earlier run answers at once; the task below renews it.
+    let disk_tailnet = tailnet_name
+        .as_deref()
+        .and_then(|n| crate::tls::load_tailnet(&tls_dir, n, time::OffsetDateTime::now_utc()));
     let tls = match (&own, plain) {
         (_, true) => None,
         (Some((cert, key)), false) => Some(crate::tls::Tls {
@@ -324,7 +333,12 @@ pub async fn run(
         }),
         (None, false) => {
             let names = crate::tls::names_for(&cert_names);
-            Some(crate::tls::load_or_make(&tls_dir, &names, time::OffsetDateTime::now_utc())?)
+            Some(crate::tls::load_or_make(
+                &tls_dir,
+                &names,
+                time::OffsetDateTime::now_utc(),
+                disk_tailnet.as_ref(),
+            )?)
         }
     };
     let own_cert = own.is_some() && !plain;
@@ -353,7 +367,20 @@ pub async fn run(
     hosts.extend(tailnet);
     hosts.extend(crate::tls::names_for(&cert_names));
     let ca = tls.as_ref().filter(|_| !own_cert).map(|t| t.ca_fingerprint.as_str());
-    crate::remote::record_serve(&ctx.paths, &base, ca, addrs[0]);
+    let cert_kind = match (&tls, own_cert, &disk_tailnet) {
+        (None, ..) => "",
+        (_, true, _) => "own",
+        (_, _, Some(_)) => "tailscale",
+        _ => "ptyro",
+    };
+    crate::remote::record_serve(
+        &ctx.paths,
+        &base,
+        ca,
+        addrs[0],
+        cert_kind,
+        disk_tailnet.as_ref().map(|t| t.name.as_str()),
+    );
     let scheme = if tls.is_some() { "https" } else { "http" };
     let on = listeners
         .iter()
@@ -365,6 +392,11 @@ pub async fn run(
         Some(_) if own_cert => eprintln!(
             "ptyro serve: listening on {on} ({access}: {}), with your certificate; phones open {base} \
              (pair one with `ptyro pair`)",
+            access.blurb()
+        ),
+        Some(_) if cert_kind == "tailscale" => eprintln!(
+            "ptyro serve: listening on {on} ({access}: {}), with Tailscale's certificate for its tailnet name; \
+             phones open {base} (pair one with `ptyro pair`)",
             access.blurb()
         ),
         Some(t) => eprintln!(
@@ -379,10 +411,21 @@ pub async fn run(
         ),
     }
     let acceptor = tls.as_ref().map(|t| Arc::new(Mutex::new(Arc::clone(&t.config))));
+    let live = Arc::new(Mutex::new(disk_tailnet));
     if let Some(current) = &acceptor {
+        if own.is_none() && access == Access::Tailscale && config.remote.tailscale_cert {
+            tokio::spawn(tailnet_cert_task(
+                ctx.paths.clone(),
+                tls_dir.clone(),
+                cert_names.clone(),
+                Arc::clone(current),
+                Arc::clone(&live),
+            ));
+        }
         // Renewed while it runs: a fresh certificate before this one ends.
         let (current, dir, names) = (Arc::clone(current), tls_dir.clone(), cert_names.clone());
         let own = own.clone();
+        let live = Arc::clone(&live);
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(12 * 3600)).await;
@@ -390,8 +433,14 @@ pub async fn run(
                     Some((cert, key)) => crate::tls::from_files(cert, key),
                     None => {
                         let names = crate::tls::names_for(&names);
-                        crate::tls::load_or_make(&dir, &names, time::OffsetDateTime::now_utc())
-                            .map(|t| t.config)
+                        let tailnet = live.locked().clone();
+                        crate::tls::load_or_make(
+                            &dir,
+                            &names,
+                            time::OffsetDateTime::now_utc(),
+                            tailnet.as_ref(),
+                        )
+                        .map(|t| t.config)
                     }
                 };
                 match fresh {
@@ -547,6 +596,67 @@ fn secure(h: &mut hyper::HeaderMap) {
         "permissions-policy",
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
     );
+}
+
+/// Gets Tailscale's certificate for this machine's name, now and every 12 hours (`tailscale cert`
+/// renews it when it is near its end), and starts answering the tailnet name with it as soon as
+/// it is there. Anything that goes wrong leaves ptyro's own certificate answering and says why in
+/// `ptyro web` and `ptyro doctor`.
+async fn tailnet_cert_task(
+    paths: ptyro_core::paths::Paths,
+    dir: std::path::PathBuf,
+    names: Vec<String>,
+    current: Arc<Mutex<Arc<rustls::ServerConfig>>>,
+    live: Arc<Mutex<Option<crate::tls::TailnetCert>>>,
+) {
+    loop {
+        let (d, p) = (dir.clone(), live.locked().clone());
+        let outcome = tokio::task::spawn_blocking(move || {
+            let name = ptyro_core::config::tailnet_cert_domain()?;
+            crate::tls::fetch_tailnet(&d, &name)?;
+            crate::tls::load_tailnet(&d, &name, time::OffsetDateTime::now_utc())
+                .ok_or_else(|| format!("tailscale cert wrote no usable certificate for {name}"))
+        })
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()));
+        let wait = match outcome {
+            Ok(cert) => {
+                let names = crate::tls::names_for(&names);
+                let now = time::OffsetDateTime::now_utc();
+                match crate::tls::load_or_make(&dir, &names, now, Some(&cert)) {
+                    Ok(t) => {
+                        *current.locked() = t.config;
+                        if p.is_none_or(|old| old.not_after != cert.not_after) {
+                            eprintln!(
+                                "ptyro serve: using Tailscale's certificate for {}; phones on that address need nothing installed",
+                                cert.name
+                            );
+                        }
+                        crate::remote::record_cert(&paths, "tailscale", Some(&cert.name), None);
+                        *live.locked() = Some(cert);
+                        Duration::from_secs(12 * 3600)
+                    }
+                    Err(e) => {
+                        crate::remote::record_cert(&paths, "ptyro", None, Some(&e.message));
+                        Duration::from_secs(600)
+                    }
+                }
+            }
+            Err(why) => {
+                // Kept while it is good; a certificate that ended is not served.
+                let usable = live
+                    .locked()
+                    .as_ref()
+                    .is_some_and(|c| c.not_after > time::OffsetDateTime::now_utc());
+                eprintln!("ptyro serve: no Tailscale certificate: {why}");
+                let kind = if usable { "tailscale" } else { "ptyro" };
+                let name = live.locked().as_ref().map(|c| c.name.clone());
+                crate::remote::record_cert(&paths, kind, name.as_deref(), Some(&why));
+                Duration::from_secs(300)
+            }
+        };
+        tokio::time::sleep(wait).await;
+    }
 }
 
 /// This machine's MagicDNS names (`box.tailnet.ts.net` and `box`), if Tailscale is up.

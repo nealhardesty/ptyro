@@ -496,6 +496,8 @@ async function setWeb(on, via) {
         const r = await conn.request({ t: "web", on, via: via || null });
         status.reload("");
         const notes = r.notes ?? [];
+        if (on && r.web.cert_ask)
+            askTailnetCert();
         if (on && r.web.up)
             ui.toast(`Up at ${r.web.url}`);
         else if (!on)
@@ -508,6 +510,27 @@ async function setWeb(on, via) {
     catch (e) {
         hostFail(e);
     }
+}
+/// The first-run question: over Tailscale, use Tailscale's certificate for this computer's name?
+/// Asked once, when the tailnet can give one; the answer is `remote.tailscale_cert` (Settings → remote).
+function askTailnetCert() {
+    const answer = async (use) => {
+        try {
+            await conn.request({ t: "web", on: null, via: null, tailnet_cert: use });
+            status.reload("");
+            ui.toast(use ? "Using Tailscale's certificate" : "Using ptyro's own certificate");
+        }
+        catch (e) {
+            hostFail(e);
+        }
+    };
+    const s = sheet("Use Tailscale's certificate?", [
+        h("p", { class: "confirm" }, "Your tailnet can give this computer a certificate every phone already trusts, so there is nothing to install on a phone that opens its Tailscale address. The computer's name goes into public certificate logs."),
+        h("p", { class: "sub" }, "Without it, each phone trusts ptyro's own certificate once (Android needs that before it will install the app). Settings → remote changes this any time."),
+    ], [
+        h("button", { onclick: () => { s.close(); void answer(false); } }, "No, use ptyro's own"),
+        h("button", { class: "primary", onclick: () => { s.close(); void answer(true); } }, "Yes, use Tailscale's"),
+    ]);
 }
 /// Who can reach it (`remote.access`): the current one is marked, and picking another applies at once.
 function pickAccess(current, title) {
@@ -550,7 +573,8 @@ function webView() {
             ["Up for", w.since_ms ? ago(w.since_ms) : null],
             ["Restarted", w.restarts ? `${w.restarts} time${w.restarts === 1 ? "" : "s"} since the daemon started` : null],
             ["Last stop", w.wanted && !w.up ? w.last_exit : null],
-            ["Certificate", w.ca_fingerprint ? h("span", { class: "sub" }, `ptyro's own; SHA-256 ${w.ca_fingerprint}`) : null],
+            ["Certificate", w.cert === "tailscale" && !w.cert_note ? h("span", { class: "sub" }, "Tailscale's, for this computer's tailnet name: nothing to install on a phone that opens it") : w.cert === "own" ? h("span", { class: "sub" }, "yours (tls_cert)") : w.ca_fingerprint ? h("span", { class: "sub" }, `ptyro's own; SHA-256 ${w.ca_fingerprint}`) : null],
+            ["Tailscale certificate", w.cert_note ? h("span", { class: "sub" }, w.cert_note) : null],
         ]), ...lines.map((l) => h("p", { class: "form-err" }, l)), !w.wanted ? h("p", { class: "intro" }, "Turning it on makes the daemon run a web server: it listens on a port and comes back whenever the daemon does. Nothing opens to anyone until you pair a device, and each can be revoked.") : null, w.wanted && !w.up && w.last_exit ? h("p", { class: "intro" }, "It keeps trying again, a little slower each time. The log says why; ", h("a", { href: "#/health" }, "Health"), " has the fix.") : null, full ? bar(w.wanted ? h("button", { class: "deny", title: tip("web.off"), onclick: turnWebOff }, "Stop serving") : h("button", { class: "primary", title: tip("web.on"), onclick: turnWebOn }, "Run it with the daemon"), h("button", { title: tip("pair.device"), onclick: pairAnother }, "Pair a device…"), h("button", { title: tip("web.logs"), onclick: () => void showWebLogs() }, "Log")) : h("p", { class: "intro" }, "Turning it on or off needs a device paired with ", h("code", {}, "ptyro pair --scope full"), "."));
     })());
     return h("div", {}, ui.header("Web app", "#/more"), h("main", { class: "stack" }, body));

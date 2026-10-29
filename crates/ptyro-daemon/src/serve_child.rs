@@ -228,6 +228,16 @@ impl Daemon {
                 .as_str()
                 .filter(|_| up || by_hand.is_some())
                 .map(str::to_owned),
+            cert: record["cert"]
+                .as_str()
+                .filter(|_| up || by_hand.is_some())
+                .unwrap_or_default()
+                .to_owned(),
+            cert_note: record["cert_note"]
+                .as_str()
+                .filter(|_| up || by_hand.is_some())
+                .map(str::to_owned),
+            cert_ask: false,
             since_ms: r.since_ms.filter(|_| up),
             restarts: r.restarts,
             last_exit: r.last_exit.clone(),
@@ -261,7 +271,14 @@ impl Daemon {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
         }
-        let web = self.web_status();
+        let mut web = self.web_status();
+        // The first-run question (1.19): Tailscale could give a certificate, and nobody has said
+        // yes or no yet.
+        web.cert_ask = on
+            && web.up
+            && web.access == "tailscale"
+            && !ptyro_core::config::tailnet_cert_answered(&Config::path(&self.paths))
+            && ptyro_core::config::tailnet_cert_domain().is_ok();
         match (on, web.up) {
             (true, true) => {}
             (true, false) => notes.push(match (&web.by_hand, &web.last_exit) {

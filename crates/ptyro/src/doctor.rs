@@ -211,7 +211,11 @@ fn web_app(w: &ptyro_protocol::WebServe, r: &mut Report) {
     };
     let rest = lines
         .into_iter()
-        .filter(|l| !l.starts_with("its log") && !(w.up && l.starts_with("restarted")))
+        .filter(|l| {
+            !l.starts_with("its log")
+                && !(w.up && l.starts_with("restarted"))
+                && !l.starts_with("certificate:")
+        })
         .collect::<Vec<_>>();
     let text = std::iter::once(head).chain(rest).collect::<Vec<_>>().join("; ");
     let fix = if level == Level::Problem {
@@ -220,6 +224,21 @@ fn web_app(w: &ptyro_protocol::WebServe, r: &mut Report) {
         String::new()
     };
     r.add(S, "web app", level, format!("{text}{fix}"));
+    match (w.up, w.cert.as_str(), &w.cert_note) {
+        (true, "tailscale", None) => r.add(
+            S,
+            "tailscale certificate",
+            Level::Ok,
+            "phones open this computer's tailnet name with Tailscale's certificate: nothing to install",
+        ),
+        (true, _, Some(note)) => r.add(
+            S,
+            "tailscale certificate",
+            Level::Warn,
+            format!("not in use ({note}); phones trust ptyro's own certificate instead (`[remote] tailscale_cert = false` stops asking)"),
+        ),
+        _ => {}
+    }
 }
 
 /// `ptyro serve` (WEB1.7): plain HTTP where tokens would cross a network, and its certificate.
@@ -374,7 +393,9 @@ async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
             ),
         );
     }
-    if let Ok(Reply::Web { web, .. }) = c.request(Request::Web { on: None, via: None }).await {
+    if let Ok(Reply::Web { web, .. }) =
+        c.request(Request::Web { on: None, via: None, tailnet_cert: None }).await
+    {
         web_app(&web, r);
     }
     let Ok(Reply::Doctor { report }) = c.request(Request::Doctor).await else { return };

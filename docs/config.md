@@ -124,6 +124,7 @@ access = "localhost"                      # who can reach it: localhost, tailsca
 port = 7091                               # always HTTPS, on this port
 # tls_cert = "~/certs/fullchain.pem"      # your own certificate instead of the one ptyro makes
 # tls_key = "~/certs/privkey.pem"         #   and its key
+tailscale_cert = true                     # over Tailscale, use Tailscale's certificate for this computer's name (nothing to install on phones)
 approval_wait = "10m"                     # held Claude permission prompts wait this long for a phone
 # push_hosts = ["ntfy.example.com"]       # self-hosted push services (UnifiedPush, ntfy)
 

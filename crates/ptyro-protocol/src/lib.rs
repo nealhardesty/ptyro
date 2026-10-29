@@ -39,7 +39,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 20 };
+pub const PROTO: Version = Version { major: 1, minor: 21 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -713,6 +713,10 @@ pub enum Request {
         on: Option<bool>,
         #[serde(default)]
         via: Option<String>,
+        /// Answers the first-run question (1.21): use Tailscale's certificate (`[remote]
+        /// tailscale_cert`). Written to the config; with `on` left out nothing else changes.
+        #[serde(default)]
+        tailnet_cert: Option<bool>,
     },
     /// Send a test notification through every configured channel and sink.
     NotifyTest,
@@ -1156,6 +1160,17 @@ pub struct WebServe {
     pub port: u16,
     /// SHA-256 of the certificate authority ptyro made, to check it against when trusting it.
     pub ca_fingerprint: Option<String>,
+    /// Whose certificate the web app shows (1.21): `tailscale` (Tailscale's for its `*.ts.net`
+    /// name, ptyro's CA for any other), `ptyro`, `own` (`tls_cert`), or empty.
+    #[serde(default)]
+    pub cert: String,
+    /// Why Tailscale's certificate isn't in use when it should be, with the fix.
+    #[serde(default)]
+    pub cert_note: Option<String>,
+    /// Tailscale could give it a certificate and nobody has said yes or no yet: the first-run
+    /// question to ask. Only `Reply::Web` to turning it on says so.
+    #[serde(default)]
+    pub cert_ask: bool,
     pub since_ms: Option<u64>,
     /// Times the daemon started it again after it died.
     pub restarts: u32,

@@ -513,11 +513,31 @@ async function setWeb(on: boolean, via?: string): Promise<void> {
     const r = await conn.request({ t: "web", on, via: via || null });
     status.reload("");
     const notes: string[] = r.notes ?? [];
+    if (on && r.web.cert_ask) askTailnetCert();
     if (on && r.web.up) ui.toast(`Up at ${r.web.url}`);
     else if (!on) ui.toast("Stopped. Paired devices stay paired.");
     if (notes.length > (on && r.web.up ? 0 : 1)) showNotes(on ? "The web app" : "Stopped", notes);
     else if (notes.length && !(on && r.web.up)) ui.toast(notes[0]);
   } catch (e) { hostFail(e); }
+}
+
+/// The first-run question: over Tailscale, use Tailscale's certificate for this computer's name?
+/// Asked once, when the tailnet can give one; the answer is `remote.tailscale_cert` (Settings → remote).
+function askTailnetCert(): void {
+  const answer = async (use: boolean): Promise<void> => {
+    try {
+      await conn.request({ t: "web", on: null, via: null, tailnet_cert: use });
+      status.reload("");
+      ui.toast(use ? "Using Tailscale's certificate" : "Using ptyro's own certificate");
+    } catch (e) { hostFail(e); }
+  };
+  const s = sheet("Use Tailscale's certificate?", [
+    h("p", { class: "confirm" }, "Your tailnet can give this computer a certificate every phone already trusts, so there is nothing to install on a phone that opens its Tailscale address. The computer's name goes into public certificate logs."),
+    h("p", { class: "sub" }, "Without it, each phone trusts ptyro's own certificate once (Android needs that before it will install the app). Settings → remote changes this any time."),
+  ], [
+    h("button", { onclick: () => { s.close(); void answer(false); } }, "No, use ptyro's own"),
+    h("button", { class: "primary", onclick: () => { s.close(); void answer(true); } }, "Yes, use Tailscale's"),
+  ]);
 }
 
 /// Who can reach it (`remote.access`): the current one is marked, and picking another applies at once.
@@ -563,7 +583,8 @@ function webView(): HTMLElement {
         ["Up for", w.since_ms ? ago(w.since_ms) : null],
         ["Restarted", w.restarts ? `${w.restarts} time${w.restarts === 1 ? "" : "s"} since the daemon started` : null],
         ["Last stop", w.wanted && !w.up ? w.last_exit : null],
-        ["Certificate", w.ca_fingerprint ? h("span", { class: "sub" }, `ptyro's own; SHA-256 ${w.ca_fingerprint}`) : null],
+        ["Certificate", w.cert === "tailscale" && !w.cert_note ? h("span", { class: "sub" }, "Tailscale's, for this computer's tailnet name: nothing to install on a phone that opens it") : w.cert === "own" ? h("span", { class: "sub" }, "yours (tls_cert)") : w.ca_fingerprint ? h("span", { class: "sub" }, `ptyro's own; SHA-256 ${w.ca_fingerprint}`) : null],
+        ["Tailscale certificate", w.cert_note ? h("span", { class: "sub" }, w.cert_note) : null],
       ]),
       ...lines.map((l) => h("p", { class: "form-err" }, l)),
       !w.wanted ? h("p", { class: "intro" }, "Turning it on makes the daemon run a web server: it listens on a port and comes back whenever the daemon does. Nothing opens to anyone until you pair a device, and each can be revoked.") : null,

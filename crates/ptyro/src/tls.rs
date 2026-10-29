@@ -8,6 +8,10 @@
 //!   days (Apple's limit for certificates from a root a user installed is 825), and is re-issued
 //!   when it has fewer than 30 days left or when a name or address it should hold is missing.
 //!
+//! - On a tailnet with HTTPS certificates on, `tailscale cert` gets a real (Let's Encrypt) one for
+//!   this machine's `*.ts.net` name (ROADMAP TS1). The server answers that name with it and every
+//!   other name or address with its own, so a phone on the tailnet name needs nothing installed.
+//!
 //! rcgen can't read a certificate back, so `tls.json` keeps what remaking the CA's certificate
 //! needs (its name, dates and serial): with the same key, it is the same CA to whoever trusts it.
 
@@ -58,7 +62,12 @@ pub fn dir(data: &Path) -> PathBuf {
 
 /// The CA and a server certificate for `names` (DNS names and IP addresses), made or renewed as
 /// needed (see the module docs).
-pub fn load_or_make(dir: &Path, names: &[String], now: OffsetDateTime) -> Result<Tls, Error> {
+pub fn load_or_make(
+    dir: &Path,
+    names: &[String],
+    now: OffsetDateTime,
+    tailnet: Option<&TailnetCert>,
+) -> Result<Tls, Error> {
     let io = |what: &str, e: std::io::Error| Error::internal(format!("{what}: {e}"));
     let tls_err = |e: rcgen::Error| Error::internal(format!("making a certificate: {e}"));
     std::fs::create_dir_all(dir).map_err(|e| io("the certificate directory", e))?;
@@ -132,7 +141,7 @@ pub fn load_or_make(dir: &Path, names: &[String], now: OffsetDateTime) -> Result
             (c, k, m)
         }
     };
-    let config = server_config(&server_pem, &key_pem, Some(&ca_der))?;
+    let config = server_config(&server_pem, &key_pem, Some(&ca_der), tailnet)?;
     Ok(Tls { config, ca_fingerprint: fingerprint(&ca_der), ca_pem, names: meta.names })
 }
 
@@ -168,37 +177,193 @@ pub fn from_files(cert: &Path, key: &Path) -> Result<Arc<rustls::ServerConfig>, 
     let read = |p: &Path| {
         std::fs::read_to_string(p).map_err(|e| Error::invalid(format!("{}: {e}", p.display())))
     };
-    server_config(&read(cert)?, &read(key)?, None)
+    server_config(&read(cert)?, &read(key)?, None, None)
 }
 
 fn server_config(
     cert_pem: &str,
     key_pem: &str,
     ca_der: Option<&[u8]>,
+    tailnet: Option<&TailnetCert>,
 ) -> Result<Arc<rustls::ServerConfig>, Error> {
-    use rustls::pki_types::pem::PemObject;
-    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
     let bad = |e: String| Error::internal(format!("the server certificate: {e}"));
-    let mut chain: Vec<CertificateDer<'static>> =
-        CertificateDer::pem_slice_iter(cert_pem.as_bytes())
-            .collect::<Result<_, _>>()
-            .map_err(|e| bad(e.to_string()))?;
-    if chain.is_empty() {
-        return Err(bad("no certificate in it".into()));
-    }
-    if let Some(ca) = ca_der {
-        chain.push(CertificateDer::from(ca.to_vec()));
-    }
-    let key = PrivateKeyDer::from_pem_slice(key_pem.as_bytes()).map_err(|e| bad(e.to_string()))?;
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let mut config = rustls::ServerConfig::builder_with_provider(provider)
+    let mut chain = parse_chain(cert_pem).map_err(bad)?;
+    if let Some(ca) = ca_der {
+        chain.push(rustls::pki_types::CertificateDer::from(ca.to_vec()));
+    }
+    let builder = rustls::ServerConfig::builder_with_provider(Arc::clone(&provider))
         .with_safe_default_protocol_versions()
         .map_err(|e| bad(e.to_string()))?
-        .with_no_client_auth()
-        .with_single_cert(chain, key)
-        .map_err(|e| bad(e.to_string()))?;
+        .with_no_client_auth();
+    let mut config = match tailnet {
+        None => {
+            let key = parse_key(key_pem).map_err(bad)?;
+            builder.with_single_cert(chain, key).map_err(|e| bad(e.to_string()))?
+        }
+        Some(t) => {
+            let certified = |chain, key: &str| {
+                let key = parse_key(key).map_err(bad)?;
+                rustls::sign::CertifiedKey::from_der(chain, key, &provider)
+                    .map(Arc::new)
+                    .map_err(|e| bad(e.to_string()))
+            };
+            builder.with_cert_resolver(Arc::new(ByName {
+                tailnet_name: t.name.clone(),
+                tailnet: certified(parse_chain(&t.cert_pem).map_err(bad)?, &t.key_pem)?,
+                own: certified(chain, key_pem)?,
+            }))
+        }
+    };
     config.alpn_protocols = vec![b"http/1.1".to_vec()];
     Ok(Arc::new(config))
+}
+
+fn parse_chain(pem: &str) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>, String> {
+    use rustls::pki_types::{CertificateDer, pem::PemObject};
+    let chain: Vec<_> = CertificateDer::pem_slice_iter(pem.as_bytes())
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())?;
+    if chain.is_empty() { Err("no certificate in it".into()) } else { Ok(chain) }
+}
+
+fn parse_key(pem: &str) -> Result<rustls::pki_types::PrivateKeyDer<'static>, String> {
+    use rustls::pki_types::{PrivateKeyDer, pem::PemObject};
+    PrivateKeyDer::from_pem_slice(pem.as_bytes()).map_err(|e| e.to_string())
+}
+
+/// Which certificate answers: the tailnet name gets Tailscale's, anything else (an address,
+/// `localhost`, `<name>.local`, no name at all) gets ptyro's own.
+#[derive(Debug)]
+struct ByName {
+    tailnet_name: String,
+    tailnet: Arc<rustls::sign::CertifiedKey>,
+    own: Arc<rustls::sign::CertifiedKey>,
+}
+
+impl rustls::server::ResolvesServerCert for ByName {
+    fn resolve(
+        &self,
+        hello: rustls::server::ClientHello<'_>,
+    ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+        let asked = hello.server_name().map(str::to_ascii_lowercase);
+        Some(Arc::clone(if asked.as_deref() == Some(self.tailnet_name.as_str()) {
+            &self.tailnet
+        } else {
+            &self.own
+        }))
+    }
+}
+
+/// Tailscale's certificate for this machine's `*.ts.net` name (a PEM chain, leaf first, and its
+/// key), as `tailscale cert` wrote it.
+#[derive(Debug, Clone)]
+pub struct TailnetCert {
+    pub name: String,
+    pub cert_pem: String,
+    pub key_pem: String,
+    pub not_after: OffsetDateTime,
+}
+
+/// `tailscale cert` renews one with fewer days than this left, and does nothing before: asking
+/// every 12 hours is cheap. (Let's Encrypt certificates last 90 days.)
+const TAILNET_RENEW_DAYS: i64 = 14;
+/// `tailscale cert` waits on Let's Encrypt the first time.
+const TAILNET_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+fn tailnet_dir(dir: &Path) -> PathBuf {
+    dir.join("tailscale")
+}
+
+/// The certificate `tailscale cert` wrote for `name` under `dir`, if it is there, names `name`
+/// and has not ended (a day of slack for clocks).
+pub fn load_tailnet(dir: &Path, name: &str, now: OffsetDateTime) -> Option<TailnetCert> {
+    let d = tailnet_dir(dir);
+    let cert_pem = std::fs::read_to_string(d.join(format!("{name}.crt"))).ok()?;
+    let key_pem = std::fs::read_to_string(d.join(format!("{name}.key"))).ok()?;
+    let leaf = parse_chain(&cert_pem).ok()?.into_iter().next()?;
+    let (_, x509) = x509_parser::parse_x509_certificate(&leaf).ok()?;
+    let not_after =
+        OffsetDateTime::from_unix_timestamp(x509.validity().not_after.timestamp()).ok()?;
+    let names_it = x509.subject_alternative_name().ok().flatten().is_some_and(|san| {
+        san.value.general_names.iter().any(|g| {
+            matches!(g, x509_parser::extensions::GeneralName::DNSName(n) if n.eq_ignore_ascii_case(name))
+        })
+    });
+    (names_it && not_after > now + Duration::days(1)).then_some(TailnetCert {
+        name: name.to_owned(),
+        cert_pem,
+        key_pem,
+        not_after,
+    })
+}
+
+/// Ask Tailscale for the certificate for `name` (it renews one with fewer than the renewal
+/// window left, and does nothing otherwise), writing it under `dir`. Blocks: run it off the
+/// async threads.
+pub fn fetch_tailnet(dir: &Path, name: &str) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tailnet_dir(dir);
+    std::fs::create_dir_all(&d).map_err(|e| format!("{}: {e}", d.display()))?;
+    let _ = std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700));
+    let mut child = std::process::Command::new("tailscale")
+        .arg("cert")
+        .arg("--cert-file")
+        .arg(d.join(format!("{name}.crt")))
+        .arg("--key-file")
+        .arg(d.join(format!("{name}.key")))
+        .arg("--min-validity")
+        .arg(format!("{}h", TAILNET_RENEW_DAYS * 24 + 24))
+        .arg(name)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("tailscale cert: {e}"))?;
+    let started = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) if started.elapsed() < TAILNET_TIMEOUT => {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "tailscale cert didn't finish in {}s",
+                    TAILNET_TIMEOUT.as_secs()
+                ));
+            }
+            Err(e) => return Err(format!("tailscale cert: {e}")),
+        }
+    };
+    if status.success() {
+        return Ok(());
+    }
+    let mut err = String::new();
+    if let Some(mut e) = child.stderr.take() {
+        let _ = std::io::Read::read_to_string(&mut e, &mut err);
+    }
+    Err(tailnet_error(err.trim()))
+}
+
+/// What `tailscale cert` said, with the fix when we know it.
+fn tailnet_error(said: &str) -> String {
+    let lower = said.to_lowercase();
+    if lower.contains("permission") || lower.contains("access denied") || lower.contains("operator")
+    {
+        format!(
+            "Tailscale won't let this user ask for a certificate: run `sudo tailscale set --operator=$USER` once ({said})"
+        )
+    } else if lower.contains("https") && (lower.contains("not enabled") || lower.contains("enable"))
+    {
+        format!(
+            "your tailnet has no HTTPS certificates yet: turn on \"HTTPS Certificates\" at https://login.tailscale.com/admin/dns ({said})"
+        )
+    } else {
+        format!("tailscale cert: {said}")
+    }
 }
 
 fn pem_der(pem: &str) -> Result<Vec<u8>, Error> {
@@ -279,7 +444,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let d = tempfile::tempdir().unwrap();
         let names = vec!["localhost".to_owned(), "127.0.0.1".to_owned()];
-        let first = load_or_make(d.path(), &names, now()).unwrap();
+        let first = load_or_make(d.path(), &names, now(), None).unwrap();
         for k in ["ca-key.pem", "server-key.pem"] {
             let mode = std::fs::metadata(d.path().join(k)).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "{k}");
@@ -287,23 +452,23 @@ mod tests {
         assert_eq!(expires(d.path()), Some(now() + Duration::days(SERVER_DAYS)));
         let server = std::fs::read_to_string(d.path().join("server.pem")).unwrap();
         // Again: nothing new.
-        let again = load_or_make(d.path(), &names, now() + Duration::days(10)).unwrap();
+        let again = load_or_make(d.path(), &names, now() + Duration::days(10), None).unwrap();
         assert_eq!(again.ca_fingerprint, first.ca_fingerprint);
         assert_eq!(std::fs::read_to_string(d.path().join("server.pem")).unwrap(), server);
         // A new address: a new server certificate, the same CA (phones keep trusting it).
         let more = [names.clone(), vec!["192.168.1.20".into()]].concat();
-        let moved = load_or_make(d.path(), &more, now() + Duration::days(11)).unwrap();
+        let moved = load_or_make(d.path(), &more, now() + Duration::days(11), None).unwrap();
         assert_eq!(moved.ca_fingerprint, first.ca_fingerprint);
         assert!(moved.names.contains(&"192.168.1.20".to_owned()));
         assert_ne!(std::fs::read_to_string(d.path().join("server.pem")).unwrap(), server);
         // Ending soon (it was issued on day 11, so 25 days left): renewed, still the same CA.
         let late = now() + Duration::days(11 + SERVER_DAYS - RENEW_DAYS + 5);
-        let renewed = load_or_make(d.path(), &more, late).unwrap();
+        let renewed = load_or_make(d.path(), &more, late, None).unwrap();
         assert_eq!(renewed.ca_fingerprint, first.ca_fingerprint);
         assert_eq!(expires(d.path()), Some(late + Duration::days(SERVER_DAYS)));
         // The CA gone: a new one.
         std::fs::remove_file(d.path().join("ca-key.pem")).unwrap();
-        let other = load_or_make(d.path(), &more, late).unwrap();
+        let other = load_or_make(d.path(), &more, late, None).unwrap();
         assert_ne!(other.ca_fingerprint, first.ca_fingerprint);
     }
 
@@ -313,5 +478,63 @@ mod tests {
         assert!(n.contains(&"localhost".to_owned()) && n.contains(&"::1".to_owned()));
         assert!(n.contains(&"workbox.tail1234.ts.net".to_owned()));
         assert!(!n.contains(&"0.0.0.0".to_owned()));
+    }
+
+    /// A certificate for `names` valid from `from` to `to`, as `tailscale cert` would write it.
+    fn tailnet_files(dir: &Path, name: &str, names: &[&str], from: i64, to: i64) {
+        let key = KeyPair::generate().unwrap();
+        let mut p =
+            CertificateParams::new(names.iter().map(|n| (*n).to_owned()).collect::<Vec<_>>())
+                .unwrap();
+        p.not_before = OffsetDateTime::from_unix_timestamp(from).unwrap();
+        p.not_after = OffsetDateTime::from_unix_timestamp(to).unwrap();
+        let cert = p.self_signed(&key).unwrap();
+        let d = tailnet_dir(dir);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join(format!("{name}.crt")), cert.pem()).unwrap();
+        std::fs::write(d.join(format!("{name}.key")), key.serialize_pem()).unwrap();
+    }
+
+    #[test]
+    fn tailscales_certificate_is_used_only_while_it_names_the_machine_and_has_not_ended() {
+        let d = tempfile::tempdir().unwrap();
+        let n = now().unix_timestamp();
+        let day = 86_400;
+        let name = "box.tail1.ts.net";
+        assert!(load_tailnet(d.path(), name, now()).is_none(), "nothing there yet");
+        tailnet_files(d.path(), name, &[name], n - day, n + 60 * day);
+        let t = load_tailnet(d.path(), name, now()).expect("good for 60 more days");
+        assert_eq!(t.name, name);
+        assert_eq!(t.not_after.unix_timestamp(), n + 60 * day);
+        // The same file for a name it doesn't hold, and when it has ended.
+        assert!(load_tailnet(d.path(), "other.tail1.ts.net", now()).is_none());
+        assert!(load_tailnet(d.path(), name, now() + Duration::days(60)).is_none());
+        tailnet_files(d.path(), "wrong.tail1.ts.net", &["elsewhere.ts.net"], n - day, n + 60 * day);
+        assert!(load_tailnet(d.path(), "wrong.tail1.ts.net", now()).is_none(), "SAN must match");
+    }
+
+    #[test]
+    fn the_tailnet_name_gets_tailscales_certificate_and_nothing_else_does() {
+        let d = tempfile::tempdir().unwrap();
+        let n = now().unix_timestamp();
+        let name = "box.tail1.ts.net";
+        tailnet_files(d.path(), name, &[name], n - 86_400, n + 60 * 86_400);
+        let t = load_tailnet(d.path(), name, now()).unwrap();
+        let names = vec!["localhost".to_owned(), "127.0.0.1".to_owned()];
+        let own = tempfile::tempdir().unwrap();
+        // Builds with and without it; a mismatched key is refused, not served.
+        assert!(load_or_make(own.path(), &names, now(), None).is_ok());
+        assert!(load_or_make(own.path(), &names, now(), Some(&t)).is_ok());
+        let bad = TailnetCert { key_pem: KeyPair::generate().unwrap().serialize_pem(), ..t };
+        assert!(load_or_make(own.path(), &names, now(), Some(&bad)).is_err());
+    }
+
+    #[test]
+    fn tailscale_errors_come_with_the_fix() {
+        let e = tailnet_error("Access denied: cert access denied");
+        assert!(e.contains("set --operator"), "{e}");
+        let e = tailnet_error("HTTPS is not enabled on your tailnet");
+        assert!(e.contains("HTTPS Certificates") && e.contains("admin/dns"), "{e}");
+        assert_eq!(tailnet_error("boom"), "tailscale cert: boom");
     }
 }

@@ -222,8 +222,15 @@ pub async fn pair(ctx: &Ctx, url: Option<String>, json: bool) -> Result<i32, Err
 /// whose certificate that authority signed for the name connected to.
 #[derive(Debug)]
 struct Pinned {
-    fingerprint: String,
+    fingerprint: Option<String>,
     provider: Arc<rustls::crypto::CryptoProvider>,
+}
+
+/// A machine on a tailnet has a `*.ts.net` name, and Tailscale can give it a certificate every
+/// browser trusts (`[remote] tailscale_cert`): that, checked against the public roots, is as
+/// good as the pinned authority for such a name.
+fn is_tailnet_name(host: &str) -> bool {
+    host.trim_end_matches('.').to_ascii_lowercase().ends_with(".ts.net")
 }
 
 fn same_fingerprint(a: &str, b: &str) -> bool {
@@ -242,14 +249,32 @@ impl rustls::client::danger::ServerCertVerifier for Pinned {
         ocsp: &[u8],
         now: rustls::pki_types::UnixTime,
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        let ca = intermediates
-            .iter()
-            .find(|c| same_fingerprint(&crate::tls::fingerprint(c), &self.fingerprint))
-            .ok_or_else(|| {
-                rustls::Error::General(
-                    "its certificate isn't the one paired (another server, or its certificates were remade: pair again)".into(),
+        let pinned = self.fingerprint.as_deref().and_then(|f| {
+            intermediates.iter().find(|c| same_fingerprint(&crate::tls::fingerprint(c), f))
+        });
+        let Some(ca) = pinned else {
+            if matches!(server_name, rustls::pki_types::ServerName::DnsName(n) if is_tailnet_name(n.as_ref()))
+            {
+                let roots =
+                    rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
+                return rustls::client::WebPkiServerVerifier::builder_with_provider(
+                    Arc::new(roots),
+                    Arc::clone(&self.provider),
                 )
-            })?;
+                .build()
+                .map_err(|e| rustls::Error::General(e.to_string()))?
+                .verify_server_cert(
+                    end_entity,
+                    intermediates,
+                    server_name,
+                    ocsp,
+                    now,
+                );
+            }
+            return Err(rustls::Error::General(
+                "its certificate isn't the one paired (another server, or its certificates were remade: pair again)".into(),
+            ));
+        };
         let mut roots = rustls::RootCertStore::empty();
         roots.add(ca.clone().into_owned())?;
         let verifier = rustls::client::WebPkiServerVerifier::builder_with_provider(
@@ -336,17 +361,20 @@ async fn open(url: &str, fingerprint: Option<&str>) -> Result<(Box<dyn Io>, Stri
     if !tls {
         return Ok((Box::new(tcp), authority, false));
     }
-    let Some(fp) = fingerprint else {
+    if fingerprint.is_none() && !is_tailnet_name(&host) {
         return Err(Error::invalid(format!(
             "{url} is HTTPS with a certificate this machine can't check (the code carried none): pair again with `ptyro machine pair` there while `ptyro serve` uses its own HTTPS, or add it over ssh"
         )));
-    };
+    }
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let config = rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
         .with_safe_default_protocol_versions()
         .map_err(|e| Error::internal(e.to_string()))?
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(Pinned { fingerprint: fp.to_owned(), provider }))
+        .with_custom_certificate_verifier(Arc::new(Pinned {
+            fingerprint: fingerprint.map(str::to_owned),
+            provider,
+        }))
         .with_no_client_auth();
     let name = rustls::pki_types::ServerName::try_from(host.clone())
         .map_err(|e| Error::invalid(format!("{host}: {e}")))?;
@@ -451,6 +479,23 @@ pub async fn bridge(url: String, fingerprint: Option<String>) -> Result<i32, Err
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_tailnet_names_may_skip_the_pin() {
+        assert!(is_tailnet_name("box.tail1234.ts.net"));
+        assert!(is_tailnet_name("BOX.tail1234.ts.net."));
+        for no in ["example.com", "ts.net.evil.com", "192.168.1.5", "notts.net"] {
+            assert!(!is_tailnet_name(no), "{no}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_code_without_a_pin_is_refused_for_any_name_but_a_tailnets() {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("https://127.0.0.1:{}", l.local_addr().unwrap().port());
+        let Err(e) = open(&url, None).await else { panic!("no pin, no tailnet name") };
+        assert!(e.message.contains("can't check"), "{}", e.message);
+    }
 
     #[test]
     fn codes_read_back_what_they_say() {

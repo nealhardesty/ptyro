@@ -1257,10 +1257,23 @@ impl Daemon {
                 }
                 Some(e) => Err(Error::invalid(e)),
             },
+            Request::Web { on: None, tailnet_cert: Some(yes), .. } => {
+                ptyro_core::config::set_tailnet_cert(&Config::path(&self.paths), yes)?;
+                if let Some(e) = self.reload_config() {
+                    return Err(Error::invalid(e));
+                }
+                self.serve_child.wake();
+                let notes = vec![if yes {
+                    "using Tailscale's certificate for this computer's name".to_owned()
+                } else {
+                    "not using Tailscale's certificate: phones trust ptyro's own instead".to_owned()
+                }];
+                Ok(Reply::Web { web: self.web_status(), notes })
+            }
             Request::Web { on: None, .. } => {
                 Ok(Reply::Web { web: self.web_status(), notes: Vec::new() })
             }
-            Request::Web { on: Some(on), via } => self.web_set(on, via.as_deref()).await,
+            Request::Web { on: Some(on), via, .. } => self.web_set(on, via.as_deref()).await,
             Request::Shutdown { force } => {
                 let live = self.sessions().iter().filter(|s| s.is_live()).count();
                 if live > 0 && !force {

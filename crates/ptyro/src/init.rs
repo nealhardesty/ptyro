@@ -174,6 +174,31 @@ pub async fn run(ctx: &Ctx, yes: bool, dry_run: bool) -> Result<i32, Error> {
             "  run the web app for your phone? (the daemon serves it on a port and keeps it up; \
              you pair a phone next)",
         );
+    // Over Tailscale, a real certificate for this computer's name means nothing to install on
+    // the phone. Asked here because it puts the name in public certificate logs.
+    let tailnet_cert = if phone && !ptyro_core::config::tailnet_cert_answered(&path) {
+        match ptyro_core::config::tailnet_cert_domain() {
+            Ok(name) => (!ask.yes).then(|| {
+                ask.yes_no(
+                    &format!(
+                        "  use Tailscale's certificate for {name}? (phones on your tailnet then \
+                         need nothing installed; the name goes into public certificate logs)"
+                    ),
+                    true,
+                )
+            }),
+            Err(why) if why.contains("HTTPS") => {
+                eprintln!(
+                    "  note: {why}. Until then phones trust ptyro's own certificate; the web \
+                     app asks again when you turn on `ptyro web on`."
+                );
+                None
+            }
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
 
     // ── the config ──
     let mut changes: Vec<String> = Vec::new();
@@ -263,6 +288,17 @@ pub async fn run(ctx: &Ctx, yes: bool, dry_run: bool) -> Result<i32, Error> {
             eprintln!("  {n}");
         }
         eprintln!("  [remote] serve = true: the daemon runs it from now on");
+        if let Some(yes) = tailnet_cert {
+            ptyro_core::config::set_tailnet_cert(&path, yes)?;
+            eprintln!(
+                "  [remote] tailscale_cert = {yes}: {}",
+                if yes {
+                    "Tailscale's certificate, nothing to install on phones"
+                } else {
+                    "ptyro's own certificate, trusted once on each phone"
+                }
+            );
+        }
     }
 
     // ── projects ──
