@@ -290,6 +290,12 @@ program wants it (hold Shift to select instead).
   F1–F12 and Paste. **Aa** has text size, fit or 1:1, the on-screen keyboard on or off (off keeps a
   hardware keyboard's keys without covering the screen), find, and *Resize the session to this
   screen* (everyone attached sees the new size; whoever types last decides).
+- **Zoom.** Pinch the screen to make the text bigger or smaller (pinch all the way in to fit the
+  whole width); drag sideways or up and down to move around; tap with two fingers to switch
+  between fitted and full size. On a computer, Ctrl and the wheel, or a trackpad pinch. A wide
+  session opens at a size you can read on a phone and whole on a laptop; once you zoom, this
+  device keeps your choice (**Aa → Size it automatically** goes back). Zoom is only on this device:
+  the session and everyone else's view stay as they are.
 - **History.** Scroll with the wheel or a drag; **↓ Live** returns (any key does too).
 - **Selecting.** Drag with a mouse, double-click a word, triple-click a line; on a touch screen
   hold, then drag. The bar copies, selects everything, opens a link, or steps through find

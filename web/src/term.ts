@@ -6,8 +6,8 @@
 // that follows this screen when the person asks. No dependencies (SPEC §16.4, §20).
 
 import { css, F } from "./color.js";
-import { cellAt, docOf, findIn, fitCells, lastUsed, maxOffset, selText, span, urlAt, windowOf, wordAt } from "./grid.js";
-import type { Doc, Pos, Sel } from "./grid.js";
+import { READABLE_PX, cellAt, clampPx, docOf, findIn, fitCells, fitPx, fitted, lastUsed, maxOffset, pinchZoom, selText, span, splitPan, urlAt, windowOf, wordAt } from "./grid.js";
+import type { Doc, Pos, Sel, Zoom } from "./grid.js";
 import { ordered } from "./grid.js";
 import { MOD, MOUSE, Sticky, inputKeys, keyInput, keyOf, mouseInput, pasteInput } from "./keys.js";
 import type { KeyCode, KeyEvent } from "./keys.js";
@@ -25,6 +25,7 @@ const ACTIONS = {
   "term.mouse": "Send clicks, drags and the wheel to the program, when it asks for the mouse (hold Shift to select instead)",
   "term.resize": "Make the session this screen's size (for everyone attached; the last to type decides)",
   "term.options": "Terminal options: text size, fit, follow the cursor, the keyboard",
+  "term.zoom": "Zoom the text: pinch (or Ctrl and the wheel); tap with two fingers to switch between fitting the width and full size",
   "term.find": "Find text in the session's history and screen; ↑ and ↓ go to the previous and next",
   "term.link": "Open the link under the pointer (Ctrl or Cmd and click, or select it and tap Open)",
 } as const;
@@ -63,8 +64,9 @@ export class Term {
   readonly sticky = new Sticky();
   private stickyBtns = new Map<number, HTMLElement>();
 
-  fit = store.get("fit", "1") === "1";
-  size = +store.get("px", "13");
+  /// Automatic, fitted to the width, or a size of its own: this device's choice (SPEC §16.4).
+  zoom: Zoom = zoomOf(store.get("zoom", ""), store.get("fit", ""));
+  size = clampPx(+store.get("px", "13") || 13);
   follow = store.get("follow", "1") === "1";
   mouseApp = store.get("mouse", "1") === "1";
   match = false;
@@ -165,10 +167,9 @@ export class Term {
     const bg = cs.getPropertyValue("--term-bg").trim() || "#0d1117";
     const dpr = window.devicePixelRatio || 1;
     // Fit the session's width to the screen; otherwise a size you can read, and a sideways scroll.
-    ctx.font = `100px ${FAMILY}`;
-    const ratio = ctx.measureText("M").width / 100;
-    const avail = Math.max(this.wrap.clientWidth - 8, 40);
-    const px = this.fit ? Math.max(5, Math.min(16, avail / (s.size.cols * ratio))) : this.size;
+    const ratio = charRatio();
+    const fp = this.fitPx();
+    const px = fitted(this.zoom, fp) ? fp : this.size;
     const cw = px * ratio, ch = Math.round(px * 1.25);
     const g = this.geo;
     const rows = s.size.rows;
@@ -183,6 +184,7 @@ export class Term {
       this.drawn = [];
       this.drawnSel = [];
       this.full = false;
+      this.hint(fp);
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.textBaseline = "top";
@@ -251,7 +253,7 @@ export class Term {
 
   /// In 1:1 the screen can be wider or taller than the box: keep the cursor in sight.
   private followCursor(v: View, cw: number, ch: number): void {
-    if (!this.follow || this.fit || !v.cursor || this.sel || this.doc) return;
+    if (!this.follow || this.fit || !v.cursor || this.sel || this.doc || this.looking || this.pinch) return;
     const x = v.cursor.x * cw, y = v.cursor.y * ch;
     const w = this.wrap;
     if (x < w.scrollLeft + 10) w.scrollLeft = Math.max(0, x - 40);
@@ -263,10 +265,11 @@ export class Term {
   private updateChrome(): void {
     this.live.hidden = !this.doc;
     this.live.textContent = this.stale ? "↓ Live · new output" : "↓ Live";
-    this.badge.hidden = !(this.doc && this.offset > 0) && !this.match;
     const parts: string[] = [];
+    if (this.zoomNote) parts.push(this.zoomNote);
     if (this.doc && this.offset > 0) parts.push(`${this.offset} rows back`);
     if (this.match) parts.push("resizing the session");
+    this.badge.hidden = !parts.length;
     this.badge.textContent = parts.join(" · ");
     const sel = this.sel && !this.dragging;
     if (sel && this.bar.hidden) this.selectionBar();
@@ -303,7 +306,8 @@ export class Term {
       }
       return;
     }
-    // Up is negative: the window moves back through history.
+    // Up is negative: the window moves back through history. There is nothing below the live screen.
+    if (rows > 0 && !this.doc) return;
     const d = await this.freeze();
     if (!d) return;
     this.offset = Math.min(Math.max(this.offset - rows, 0), maxOffset(d.rows.length, s.size.rows));
@@ -431,6 +435,7 @@ export class Term {
   key(k: KeyEvent, fromRow = true): void {
     if (!this.host.canType()) return;
     if (this.doc) this.goLive();
+    this.looking = false;
     const mods = k.mods | this.sticky.mods;
     this.sendInput(keyInput({ code: k.code, mods }));
     if (this.sticky.one) { this.sticky.spent(); this.paintSticky(); }
@@ -504,12 +509,27 @@ export class Term {
     ro.observe(this.wrap);
     this.offs.push(() => { window.visualViewport?.removeEventListener("resize", onVv); window.removeEventListener("resize", onWin); ro.disconnect(); });
 
-    // pointer: select, scroll, click
-    const c = this.canvas;
-    c.addEventListener("pointerdown", (e) => this.onDown(e));
-    c.addEventListener("pointermove", (e) => this.onMove(e));
-    c.addEventListener("pointerup", (e) => this.onUp(e));
-    c.addEventListener("pointercancel", (e) => this.onUp(e, true));
+    // pointer: select, scroll, pan, pinch, click. On the box, not only the canvas, so that a finger
+    // on the space around a small screen pans and zooms it too (and never zooms the whole page).
+    const c = this.canvas, w = this.wrap;
+    w.addEventListener("pointerdown", (e) => this.onDown(e));
+    w.addEventListener("pointermove", (e) => this.onMove(e));
+    w.addEventListener("pointerup", (e) => this.onUp(e));
+    w.addEventListener("pointercancel", (e) => this.onUp(e, true));
+    // Safari: a trackpad pinch on a Mac comes as gesture events (and on an iPhone they would zoom
+    // the page; the pointers above are the pinch there).
+    type Gesture = Event & { scale: number; clientX: number; clientY: number };
+    let g0 = 0, gAt = { x: 0, y: 0 };
+    w.addEventListener("gesturestart", (e) => { e.preventDefault(); if (this.fingers.size) return; g0 = this.geo.px || this.size; this.looking = true; });
+    w.addEventListener("gesturechange", (e) => {
+      e.preventDefault();
+      if (this.fingers.size || !g0) return;
+      const g = e as Gesture;
+      gAt = { x: g.clientX, y: g.clientY };
+      const z = pinchZoom(g0, 1, g.scale, this.fitPx());
+      this.zoomTo(z.zoom, z.px, gAt);
+    });
+    w.addEventListener("gestureend", (e) => { e.preventDefault(); if (this.fingers.size || !g0) return; g0 = 0; this.saveZoom(); });
     c.addEventListener("contextmenu", (e) => {
       if (this.appMouse(e)) { e.preventDefault(); return; }
       e.preventDefault();
@@ -528,8 +548,17 @@ export class Term {
       const s = this.host.screen();
       if (!s) return;
       e.preventDefault();
-      // Ctrl and the wheel is zoom, as it is everywhere else.
-      if (e.ctrlKey) { this.size = Math.min(24, Math.max(8, this.size + (e.deltaY < 0 ? 1 : -1))); store.set("px", String(this.size)); this.fit = false; store.set("fit", "0"); this.schedule(true); this.resizeSession(); return; }
+      // Ctrl and the wheel is zoom, as it is everywhere else; so is a trackpad's pinch in Chrome,
+      // which comes as Ctrl and a wheel whose delta is -100·ln(scale). A mouse's notch is a step.
+      if (e.ctrlKey) {
+        const dy = e.deltaMode === 0 ? e.deltaY : Math.sign(e.deltaY) * 10;
+        const z = pinchZoom(this.geo.px || this.size, 1, Math.exp(-Math.max(-10, Math.min(10, dy)) / 100), this.fitPx());
+        this.looking = true;
+        this.zoomTo(z.zoom, z.px, { x: e.clientX, y: e.clientY });
+        clearTimeout(this.wheelSave);
+        this.wheelSave = window.setTimeout(() => this.saveZoom(), 300);
+        return;
+      }
       const rows = Math.round((e.deltaMode === 1 ? e.deltaY : e.deltaY / this.geo.ch) || Math.sign(e.deltaY));
       if (this.appMouse(e) || (s.modes.mouse && this.mouseApp && this.host.canType() && !e.shiftKey)) {
         const p = this.pos(e).cell;
@@ -566,8 +595,8 @@ export class Term {
   // ── the pointer ──────────────────────────────────────────────────────────────────────────
 
   private touch: {
-    id: number; x: number; y: number; t: number; mode: "pending" | "scroll" | "select" | "app" | "ignore";
-    timer: number; carry: number; vy: number; lastY: number; lastT: number; type: string; cell: { col: number; row: number }; btn: "left" | "middle" | "right";
+    id: number; x: number; y: number; t: number; mode: "pending" | "scroll" | "pan" | "pinch" | "select" | "app";
+    timer: number; carry: number; vx: number; vy: number; lastX: number; lastY: number; lastT: number; type: string; cell: { col: number; row: number }; btn: "left" | "middle" | "right";
   } | null = null;
 
   /// The program has the mouse: not while selecting (Shift), not when this device can't type.
@@ -577,6 +606,19 @@ export class Term {
   }
 
   private onDown(e: PointerEvent): void {
+    // A mouse on the box around the canvas is on its scrollbars.
+    if (e.pointerType === "mouse" && e.target !== this.canvas) return;
+    if (e.pointerType === "touch") {
+      // The first finger of a new touch: whatever an earlier one left behind is over.
+      if (e.isPrimary) { this.fingers.clear(); if (this.touch?.type === "touch") this.touch = null; }
+      this.fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (this.fingers.size === 2 && this.touch?.type === "touch" && !this.pinch) {
+        try { this.wrap.setPointerCapture(e.pointerId); } catch { /* gone */ }
+        this.startPinch();
+        return;
+      }
+      if (this.fingers.size > 1) return;
+    }
     if (this.touch) return;
     if (e.pointerType === "mouse" && e.button === 0 && (e.ctrlKey || e.metaKey)) {
       const l = this.link(e);
@@ -587,8 +629,8 @@ export class Term {
     if (!s) return;
     const p = this.pos(e);
     const btn = e.button === 2 ? "right" : e.button === 1 ? "middle" : "left";
-    this.touch = { id: e.pointerId, x: e.clientX, y: e.clientY, t: Date.now(), mode: "pending", timer: 0, carry: 0, vy: 0, lastY: e.clientY, lastT: Date.now(), type: e.pointerType, cell: p.cell, btn };
-    this.canvas.setPointerCapture(e.pointerId);
+    this.touch = { id: e.pointerId, x: e.clientX, y: e.clientY, t: Date.now(), mode: "pending", timer: 0, carry: 0, vx: 0, vy: 0, lastX: e.clientX, lastY: e.clientY, lastT: Date.now(), type: e.pointerType, cell: p.cell, btn };
+    this.wrap.setPointerCapture(e.pointerId);
     const t = this.touch;
     if (e.pointerType === "mouse") {
       if (this.appMouse(e)) {
@@ -609,7 +651,8 @@ export class Term {
       }
       return;
     }
-    // A finger: hold to select, drag to scroll, tap to type (or click, for a program that asks).
+    // A finger: hold to select, drag to scroll or pan, two to zoom, tap to type (or click, for a
+    // program that asks).
     t.timer = window.setTimeout(() => {
       if (this.touch !== t || t.mode !== "pending") return;
       t.mode = "select";
@@ -627,8 +670,10 @@ export class Term {
   }
 
   private onMove(e: PointerEvent): void {
+    if (this.fingers.has(e.pointerId)) this.fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (this.pinch) { this.movePinch(); return; }
     const t = this.touch;
-    if (!t || t.id !== e.pointerId) return;
+    if (!t || t.id !== e.pointerId || t.mode === "pinch") return;
     const dx = e.clientX - t.x, dy = e.clientY - t.y;
     if (t.mode === "app") {
       const p = this.pos(e).cell;
@@ -644,42 +689,72 @@ export class Term {
       return;
     }
     if (t.mode === "pending") {
+      // The first way the finger moves decides: up and down scrolls, sideways pans.
       if (Math.abs(dy) > 8 && Math.abs(dy) > Math.abs(dx)) { clearTimeout(t.timer); t.mode = "scroll"; t.lastY = e.clientY; t.lastT = Date.now(); }
-      else if (Math.abs(dx) > 10) { clearTimeout(t.timer); t.mode = "ignore"; }
+      else if (Math.abs(dx) > 10) { clearTimeout(t.timer); t.mode = "pan"; t.lastX = e.clientX; t.lastT = Date.now(); }
       return;
     }
+    const now = Date.now();
     if (t.mode === "scroll") {
-      const now = Date.now();
       const step = e.clientY - t.lastY;
       t.vy = step / Math.max(1, now - t.lastT);
       t.lastY = e.clientY;
       t.lastT = now;
-      t.carry += step / this.geo.ch;
-      const rows = Math.trunc(t.carry);
-      if (rows) { t.carry -= rows; void this.scrollBy(-rows); }
+      this.panY(step, t);
+    } else if (t.mode === "pan") {
+      const step = e.clientX - t.lastX;
+      t.vx = step / Math.max(1, now - t.lastT);
+      t.lastX = e.clientX;
+      t.lastT = now;
+      this.panX(step);
     }
   }
 
+  /// A finger moved `dx` pixels sideways: the box scrolls under it.
+  private panX(dx: number): void {
+    if (!dx) return;
+    this.wrap.scrollLeft -= dx;
+    this.looking = true;
+  }
+
+  /// A finger moved `dy` pixels up or down: the box scrolls first when the screen is taller than
+  /// it, then the history (or a full-screen program's own scrolling).
+  private panY(dy: number, t: { carry: number }): void {
+    const w = this.wrap;
+    const { top, rest } = splitPan(dy, w.scrollTop, w.scrollHeight - w.clientHeight, !!this.doc && this.offset > 0);
+    if (top !== w.scrollTop) { w.scrollTop = top; this.looking = true; }
+    t.carry += rest / (this.geo.ch || 16);
+    const rows = Math.trunc(t.carry);
+    if (rows) { t.carry -= rows; void this.scrollBy(-rows); }
+  }
+
   private onUp(e: PointerEvent, cancelled = false): void {
+    this.fingers.delete(e.pointerId);
+    if (this.pinch && this.fingers.size < 2) this.endPinch(cancelled);
     const t = this.touch;
+    if (t?.mode === "pinch") {
+      // The pinch is over; the fingers still down do nothing until they lift.
+      try { this.wrap.releasePointerCapture(e.pointerId); } catch { /* gone */ }
+      if (!this.fingers.size) this.touch = null;
+      return;
+    }
     if (!t || t.id !== e.pointerId) return;
     clearTimeout(t.timer);
     this.touch = null;
-    try { this.canvas.releasePointerCapture(e.pointerId); } catch { /* gone */ }
+    try { this.wrap.releasePointerCapture(e.pointerId); } catch { /* gone */ }
     if (t.mode === "app") { const p = this.pos(e).cell; this.sendInput(mouseInput(MOUSE.up(t.btn), p.col, p.row, modsOf(e))); return; }
     if (t.mode === "select") { this.dragging = false; if (this.sel) { this.schedule(); this.updateChrome(); this.placeBar(); } return; }
     if (cancelled) return;
-    if (t.mode === "scroll") {
-      // A flick keeps scrolling for a moment.
-      let v = t.vy * 16 / this.geo.ch;
-      if (Math.abs(v) > 0.15) {
-        let carry = 0;
+    if (t.mode === "scroll" || t.mode === "pan") {
+      // A flick keeps scrolling (or panning) for a moment: pixels a frame, slowing down.
+      let vx = t.mode === "pan" ? t.vx * 16 : 0, vy = t.mode === "scroll" ? t.vy * 16 : 0;
+      if (Math.abs(vx) + Math.abs(vy) > 2) {
         const step = () => {
-          carry += v;
-          const rows = Math.trunc(carry);
-          if (rows) { carry -= rows; void this.scrollBy(-rows); }
-          v *= 0.94;
-          this.fling = Math.abs(v) > 0.03 ? requestAnimationFrame(step) : 0;
+          if (vy) this.panY(vy, t);
+          if (vx) this.panX(vx);
+          vx *= 0.94;
+          vy *= 0.94;
+          this.fling = Math.abs(vx) + Math.abs(vy) > 0.5 ? requestAnimationFrame(step) : 0;
         };
         this.fling = requestAnimationFrame(step);
       }
@@ -688,6 +763,7 @@ export class Term {
     if (t.mode === "pending" && Date.now() - t.t < 400) {
       // A tap. A program that asked for the mouse gets a click; otherwise the keyboard comes up.
       if (this.sel) { this.clearSelect(); return; }
+      this.looking = false;
       if (t.type !== "mouse" && this.appMouse(e)) {
         this.sendInput(mouseInput(MOUSE.down("left"), t.cell.col, t.cell.row));
         this.sendInput(mouseInput(MOUSE.up("left"), t.cell.col, t.cell.row));
@@ -706,6 +782,127 @@ export class Term {
   private placeBar(): void {
     // The selection's own bar sits at the top of the terminal, out of the way of the fingers.
     this.bar.hidden = !this.sel;
+  }
+
+  // ── zoom ─────────────────────────────────────────────────────────────────────────────────
+
+  /// The person moved the view themselves (a pan, a pinch): the cursor isn't followed again
+  /// until they type or tap the terminal.
+  private looking = false;
+  /// Touch points down on the box, for the pinch.
+  private fingers = new Map<number, { x: number; y: number }>();
+  /// A pinch in progress: where it started, the size then, and the cell (fractional) under the
+  /// fingers, which stays under them.
+  private pinch: { d0: number; px0: number; col: number; row: number; t0: number; at: { x: number; y: number }; moved: boolean } | null = null;
+  private zoomNote = "";
+  private zoomNoteTimer = 0;
+  private wheelSave = 0;
+
+  /// Drawn fitted to the width (by choice, or automatically because that is readable).
+  get fit(): boolean { return fitted(this.zoom, this.fitPx()); }
+
+  /// The text size that fits the session's width in this box.
+  private fitPx(): number {
+    return fitPx(this.wrap.clientWidth - 8, this.host.screen()?.size.cols ?? 80, charRatio());
+  }
+
+  /// Show the text at `zoom` (`px` for a size of its own), keeping what is under `at` (a point on
+  /// the page; the middle of the box if none) under it. Not kept for next time: `saveZoom`.
+  private zoomTo(zoom: Zoom, px: number, at: { x: number; y: number } | null, anchor?: { col: number; row: number }): void {
+    const g = this.geo;
+    const box = this.wrap.getBoundingClientRect();
+    const pt = at ?? { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+    const r = this.canvas.getBoundingClientRect();
+    const a = anchor ?? { col: (pt.x - r.left) / (g.cw || 1), row: (pt.y - r.top) / (g.ch || 1) };
+    this.zoom = zoom;
+    if (zoom === "size") this.size = clampPx(px);
+    // Drawn now, so the scroll below is measured against the new size.
+    this.full = true;
+    this.paint();
+    const r2 = this.canvas.getBoundingClientRect();
+    this.wrap.scrollLeft += r2.left + a.col * this.geo.cw - pt.x;
+    this.wrap.scrollTop += r2.top + a.row * this.geo.ch - pt.y;
+    this.noteZoom();
+  }
+
+  /// Keep this device's zoom for next time, and resize the session when it follows this screen.
+  private saveZoom(): void {
+    store.set("zoom", this.zoom);
+    store.set("px", String(+this.size.toFixed(2)));
+    this.resizeSession();
+    this.host.changed();
+  }
+
+  setZoom(zoom: Zoom, px = this.size, at: { x: number; y: number } | null = null): void {
+    this.zoomTo(zoom, px, at);
+    this.saveZoom();
+  }
+
+  /// A pixel bigger or smaller than what is shown; smaller than fitting the width is fitted.
+  private stepZoom(by: 1 | -1): void {
+    const z = pinchZoom(Math.round(this.geo.px || this.size) + by, 1, 1, this.fitPx());
+    this.setZoom(z.zoom, z.px);
+  }
+
+  /// The size, in the corner for a moment after it changes.
+  private noteZoom(): void {
+    const px = Math.round(this.geo.px);
+    this.zoomNote = `${this.zoom === "auto" ? "Auto · " : ""}${this.fit ? `Fit · ${px}px` : `${px}px`}`;
+    clearTimeout(this.zoomNoteTimer);
+    this.zoomNoteTimer = window.setTimeout(() => { this.zoomNote = ""; this.updateChrome(); }, 1200);
+    this.updateChrome();
+  }
+
+  private startPinch(): void {
+    const [a, b] = [...this.fingers.values()];
+    const t = this.touch;
+    if (t) { clearTimeout(t.timer); t.mode = "pinch"; }
+    // A selection being dragged stays as it is; a flick stops.
+    this.dragging = false;
+    this.fling && cancelAnimationFrame(this.fling);
+    this.fling = 0;
+    this.looking = true;
+    const r = this.canvas.getBoundingClientRect();
+    const m = mid(a, b);
+    this.pinch = { d0: dist(a, b), px0: this.geo.px || this.size, col: (m.x - r.left) / (this.geo.cw || 1), row: (m.y - r.top) / (this.geo.ch || 1), t0: Date.now(), at: m, moved: false };
+    this.updateChrome();
+  }
+
+  private movePinch(): void {
+    const p = this.pinch;
+    const [a, b] = [...this.fingers.values()];
+    if (!p || !b) return;
+    const d = dist(a, b), m = mid(a, b);
+    // Still, until the fingers have clearly spread, closed or moved together: a tap stays a tap.
+    if (!p.moved && Math.abs(d / p.d0 - 1) < 0.05 && Math.hypot(m.x - p.at.x, m.y - p.at.y) < 10) return;
+    p.moved = true;
+    p.at = m;
+    const z = pinchZoom(p.px0, p.d0, d, this.fitPx());
+    // Both fingers moving together pan: the cell that was under them follows them.
+    this.zoomTo(z.zoom, z.px, m, p);
+  }
+
+  private endPinch(cancelled: boolean): void {
+    const p = this.pinch;
+    this.pinch = null;
+    if (!p) return;
+    if (p.moved) this.saveZoom();
+    // Two fingers tapped together: fitted ⇄ full size.
+    else if (!cancelled && Date.now() - p.t0 < 350) this.setZoom(this.fit ? "size" : "fit", this.size, p.at);
+    this.schedule();
+  }
+
+  /// Once on a phone, the first time the text size isn't obvious: how to change it.
+  private hint(fp: number): void {
+    // Not while zooming: the person has found it.
+    if (this.looking || this.pinch || store.get("zoomHint", "") || !matchMedia("(pointer: coarse)").matches) return;
+    const s = this.host.screen();
+    if (!s) return;
+    const wide = !this.fit && this.size * charRatio() * s.size.cols > this.wrap.clientWidth;
+    const small = this.fit && fp < READABLE_PX;
+    if (!wide && !small) return;
+    store.set("zoomHint", "1");
+    this.host.toast(wide ? "Shown at a size you can read: drag sideways for the rest, pinch in to see it all" : "Small text? Pinch out to zoom in");
   }
 
   // ── a size that follows this screen ──────────────────────────────────────────────────────
@@ -744,8 +941,8 @@ export class Term {
       this.origSize = { ...s.size };
       this.match = true;
       // Taking control with this screen's size; later changes are `resize` messages.
-      this.fit = false;
-      store.set("fit", "0");
+      this.zoom = "size";
+      store.set("zoom", "size");
       this.host.send({ t: "subscribe", session: this.host.id(), size: this.cells(), control: true });
     } else if (!on && this.match) {
       this.match = false;
@@ -877,12 +1074,14 @@ export class Term {
 
   options(): void {
     const on = (b: boolean) => (b ? "on" : "off");
+    const shown = Math.round(this.geo.px || this.size);
     const can = this.host.canType();
     menu("The terminal", [
-      { label: this.fit ? "Show at full size" : "Fit to the width", hint: this.fit ? "Readable text, scroll sideways" : "Shrink the whole screen into view", title: tip("term.options"),
-        run: () => { this.fit = !this.fit; store.set("fit", this.fit ? "1" : "0"); this.schedule(true); this.host.changed(); } },
-      { label: "Bigger text", hint: `${this.size}px`, run: () => { this.size = Math.min(24, this.size + 1); store.set("px", String(this.size)); this.fit = false; store.set("fit", "0"); this.schedule(true); this.resizeSession(); this.host.changed(); } },
-      { label: "Smaller text", hint: `${this.size}px`, run: () => { this.size = Math.max(8, this.size - 1); store.set("px", String(this.size)); this.fit = false; store.set("fit", "0"); this.schedule(true); this.resizeSession(); this.host.changed(); } },
+      { label: this.fit ? "Show at full size" : "Fit to the width", hint: this.fit ? "Readable text, scroll sideways" : "Shrink the whole screen into view", title: tip("term.zoom"),
+        run: () => this.setZoom(this.fit ? "size" : "fit") },
+      this.zoom !== "auto" && { label: "Size it automatically", hint: `Fit to the width while the text is ${READABLE_PX}px or more, else full size`, title: tip("term.zoom"), run: () => this.setZoom("auto") },
+      { label: "Bigger text", hint: `${shown}px · or pinch out`, title: tip("term.zoom"), run: () => this.stepZoom(1) },
+      { label: "Smaller text", hint: `${shown}px · or pinch in`, title: tip("term.zoom"), run: () => this.stepZoom(-1) },
       { label: `Follow the cursor: ${on(this.follow)}`, hint: "When the screen is wider than the box", run: () => { this.follow = !this.follow; store.set("follow", this.follow ? "1" : "0"); } },
       can && { label: `On-screen keyboard: ${on(this.keyboard)}`, hint: "Off keeps a hardware keyboard's keys without covering the screen", run: () => { this.keyboard = !this.keyboard; store.set("keyboard", this.keyboard ? "1" : "0"); this.setKeyboard(); if (this.typing) { this.input.blur(); this.focus(); } } },
       can && { label: `Mouse to the program: ${on(this.mouseApp)}`, hint: "Clicks and the wheel, when it asks for them", title: tip("term.mouse"), run: () => { this.mouseApp = !this.mouseApp; store.set("mouse", this.mouseApp ? "1" : "0"); } },
@@ -896,9 +1095,28 @@ export class Term {
 
 const modsOf = (e: { shiftKey: boolean; altKey: boolean; ctrlKey: boolean }): number => (e.shiftKey ? MOD.SHIFT : 0) | (e.altKey ? MOD.ALT : 0) | (e.ctrlKey ? MOD.CTRL : 0);
 
+type Point = { x: number; y: number };
+const dist = (a: Point, b: Point): number => Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+const mid = (a: Point, b: Point): Point => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+
+/// The zoom kept on this device; before there was one, a fit flag (which was the default).
+function zoomOf(zoom: string, fit: string): Zoom {
+  if (zoom === "auto" || zoom === "fit" || zoom === "size") return zoom;
+  return fit === "1" ? "fit" : fit === "0" ? "size" : "auto";
+}
+
+/// A cell's width over the font size, for the font the terminal draws with.
+let ratio = 0;
+function charRatio(): number {
+  if (!ratio) {
+    const ctx = document.createElement("canvas").getContext("2d")!;
+    ctx.font = `100px ${FAMILY}`;
+    ratio = ctx.measureText("M").width / 100 || 0.6;
+  }
+  return ratio;
+}
+
 /// The size of a cell at this font size.
 function measure(px: number): { cw: number; ch: number } {
-  const ctx = document.createElement("canvas").getContext("2d")!;
-  ctx.font = `100px ${FAMILY}`;
-  return { cw: (ctx.measureText("M").width / 100) * px, ch: Math.round(px * 1.25) };
+  return { cw: charRatio() * px, ch: Math.round(px * 1.25) };
 }

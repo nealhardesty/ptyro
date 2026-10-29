@@ -5098,10 +5098,25 @@ emulator, no WASM.
   (`DomainEvent::Clipboard`, sent to the controller) is written the same way, or offered behind a
   Copy button when the browser wants a tap. Find (`Aa`, or the context menu) searches the whole
   document; Ctrl/Cmd-click opens a link; the bell flashes the frame and buzzes.
-- **Size.** Fit (the whole screen shrunk to the width) or 1:1 at a text size (8–24 px, Ctrl+wheel
-  zooms) with a sideways scroll that follows the cursor; and, when asked, "Resize the session to
-  this screen": the page computes columns and rows from its box above the soft keyboard
-  (`visualViewport`) and sends them (§5.8), restoring the old size afterwards.
+- **Size.** Fit (the whole screen shrunk to the width, 5–16 px) or 1:1 at a text size (6–32 px)
+  with a scroll both ways that follows the cursor. The default is automatic: Fit while that is
+  readable (9 px or more, `READABLE_PX`), else 1:1, so a 200-column session on a phone opens
+  readable and the same session on a laptop opens whole; rotating or resizing re-decides. Zoom is
+  on this device only (`localStorage` `ptyro.term.zoom` = `auto|fit|size`, `ptyro.term.px`; an
+  older `ptyro.term.fit` is read as fit or size) and never changes the session, unless "Resize the
+  session to this screen" is on. Ways to zoom: a pinch (two pointers on the box; continuous, the
+  cell under the fingers stays under them, moving both pans, pinching in past the fitted size is
+  Fit, except for a session so narrow it fits at 16 px, which can still shrink), a two-finger tap
+  (Fit ⇄ 1:1), Ctrl+wheel (also a trackpad pinch in Chrome; `scale = exp(-deltaY/100)`, steps
+  capped at 10 %), Safari's gesture events (a Mac trackpad), and Aa → Bigger/Smaller text, Fit or
+  full size, Size it automatically. A size badge shows for a moment after each change. The box
+  takes `touch-action: none` and does its own panning (sideways; up and down moves the box first,
+  then the history — coming back from the history, it first), with momentum, so a pinch never
+  zooms the page. After a pan or a zoom the cursor isn't followed until a key or a tap. Once per
+  device, on a touch screen, a toast says how (the first time the screen is wider than the box,
+  or fitted below 9 px). "Resize the session to this screen": the page computes columns and rows
+  from its box above the soft keyboard (`visualViewport`) and sends them (§5.8), restoring the old
+  size afterwards.
 - **Drawing.** Only the rows whose cells changed are painted (a row's cell array is replaced by
   the frame that changes it, so identity says), in a `requestAnimationFrame`; the frame is acked
   after it is drawn, so a slow phone gets fewer, bigger deltas, and a hidden tab acks at once.
