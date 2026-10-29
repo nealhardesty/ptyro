@@ -2180,7 +2180,11 @@ profile (§10.10).
   are refreshed every 10 s, all of them every 60 s.
 - **Status** is `git status --porcelain=v2 --branch` plus `rev-list --left-right` against the
   base and `diff --numstat <merge-base>`. That's the worktree's own change: committed and
-  uncommitted, never the base's progress.
+  uncommitted, never the base's progress. A diff leaves untracked files out, so their lines are
+  added to the insertions (`ls-files --others --exclude-standard`, only when status saw any):
+  a new file is new work. Kept cheap for the refresh: files over 1 MiB, binaries (a NUL in the
+  first 8000 bytes) and anything but a regular file count nothing, and at most 8 MiB is read per
+  refresh.
 - **What is left to do (UX2.2).** `RepoStatus` (crates/ptyro-core/src/model.rs) also carries
   `unpushed` (optional: commits on no remote and not in the base, counted only for a branch with
   no upstream, and only when the repository has a remote) and `pushed` (it has commits beyond the

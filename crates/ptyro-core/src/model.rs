@@ -146,7 +146,8 @@ pub struct RepoStatus {
     pub modified: u32,
     pub untracked: u32,
     pub conflicts: u32,
-    /// Lines added and removed since the merge base with the project base, working tree included.
+    /// Lines added and removed since the merge base with the project base, working tree included;
+    /// untracked text files' lines count as added.
     pub insertions: u32,
     pub deletions: u32,
     #[serde(default)]

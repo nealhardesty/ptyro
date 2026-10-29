@@ -164,6 +164,41 @@ fn same_path(a: &Path, b: &Path) -> bool {
         }
 }
 
+/// An untracked file bigger than this is data, not work: its lines aren't counted.
+const UNTRACKED_MAX_BYTES: u64 = 1 << 20;
+/// Untracked files read per status refresh, at most; the rest go uncounted.
+const UNTRACKED_BUDGET_BYTES: u64 = 8 << 20;
+
+/// Lines in the untracked, not-ignored files under `dir`, as `git diff` would count them once
+/// added. Status refreshes often, so it stays cheap: a file over [`UNTRACKED_MAX_BYTES`], a
+/// binary one (a NUL in its first 8000 bytes, git's own test) or anything but a regular file is
+/// skipped, and reading stops after [`UNTRACKED_BUDGET_BYTES`].
+fn untracked_lines(git: &Git, dir: &Path) -> u32 {
+    let Ok(out) = git.run(dir, &["ls-files", "-z", "--others", "--exclude-standard"]) else {
+        return 0;
+    };
+    let (mut lines, mut budget) = (0u32, UNTRACKED_BUDGET_BYTES);
+    for name in out.split('\0').filter(|n| !n.is_empty()) {
+        let path = dir.join(name);
+        let Ok(meta) = std::fs::symlink_metadata(&path) else { continue };
+        if !meta.is_file() || meta.len() == 0 || meta.len() > UNTRACKED_MAX_BYTES {
+            continue;
+        }
+        if meta.len() > budget {
+            break;
+        }
+        budget -= meta.len();
+        let Ok(bytes) = std::fs::read(&path) else { continue };
+        if bytes[..bytes.len().min(8000)].contains(&0) {
+            continue;
+        }
+        let n =
+            bytes.iter().filter(|&&b| b == b'\n').count() + usize::from(!bytes.ends_with(b"\n"));
+        lines = lines.saturating_add(u32::try_from(n).unwrap_or(u32::MAX));
+    }
+    lines
+}
+
 fn lines(s: &str) -> impl Iterator<Item = &str> {
     s.lines().map(str::trim_end).filter(|l| !l.is_empty())
 }
@@ -585,6 +620,11 @@ impl Git {
                 s.insertions += it.next().and_then(|n| n.parse::<u32>().ok()).unwrap_or(0);
                 s.deletions += it.next().and_then(|n| n.parse::<u32>().ok()).unwrap_or(0);
             }
+        }
+        // A diff leaves untracked files out; they are new work all the same. Only looked for
+        // when git status saw some.
+        if s.untracked > 0 {
+            s.insertions = s.insertions.saturating_add(untracked_lines(self, path));
         }
         // Commits on no remote: what a branch with no upstream still has to push (UX2.2).
         if s.head.is_some() && s.upstream.is_none() && self.has_remote(path) {
