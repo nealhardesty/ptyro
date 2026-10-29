@@ -2885,7 +2885,7 @@ learning anything up front.
     back. When the shell is gone (a daemon restart: shells aren't restored), the restored drawer
     closes instead of showing another session. Its header shows `›_` and the key (`C-q C-t
     hide`, or `focus` while another pane has focus).
-  - **In the sidebar** it's a line of its own, last under its worktree (`Row::Quick`): `›_ shell`
+  - **In the sidebar** it's a line of its own, first under its worktree (`Row::Quick`): `›_ quick shell`
     and what runs in it (the command, else the foreground program, else the last command with
     `✓`/`✗`). It has no number, `j`/`k` skip it, and it never fills an empty pane. Its row menu
     shows or hides it, adopts, renames, explains and stops it.

@@ -121,7 +121,7 @@ Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.
 | `.` | everything you can do with this row (a session, worktree or project), with the keys |
 | `;` / `'` | the scratchpad / add a line to it |
 | `F` / `!` | finish this worktree (commit, then a PR or integrate) / a new shell in it, full sized |
-| `C-t` / `T` | its quick terminal in a drawer / full sized (`⏎` on its `›_ shell` line shows or hides it too) |
+| `C-t` / `T` | its quick terminal in a drawer / full sized (`⏎` on its `›_ quick shell` line shows or hides it too) |
 | `H` / `M` / `I` | home / mend what the health badge found / about ptyro |
 | `A` | adopt the Claude started by hand in this shell: a managed session, same conversation |
 | `w` `o` `r` | workspace / editor / run script |

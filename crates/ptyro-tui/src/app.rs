@@ -8093,8 +8093,8 @@ mod tests {
         app.sessions.push(shell.clone());
         let rows = app.rows();
         let i = rows.iter().position(|r| *r == Row::Quick(shell.id)).expect("its line");
-        assert!(matches!(rows[i - 1], Row::Session(_)), "last under its worktree");
-        assert!(screen(&app).contains("›_ shell cargo test"), "{}", screen(&app));
+        assert!(matches!(rows[i - 1], Row::Worktree(_)), "first under its worktree");
+        assert!(screen(&app).contains("›_ quick shell cargo te"), "{}", screen(&app));
         app.focus = Focus::Sidebar;
         app.set_sel(&rows, i);
         assert_eq!(app.context_hint().as_deref(), Some("⏎ show it"));
@@ -8108,7 +8108,7 @@ mod tests {
         let s = app.sessions.iter_mut().find(|s| s.id == shell.id).unwrap();
         s.command.as_mut().unwrap().ended_ms = Some(1);
         s.command.as_mut().unwrap().exit = Some(1);
-        assert!(screen(&app).contains("›_ shell ✗ cargo test"));
+        assert!(screen(&app).contains("›_ quick shell ✗ cargo"));
     }
 
     #[test]

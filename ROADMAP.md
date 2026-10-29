@@ -1467,7 +1467,7 @@ UX1 tests wait for what's on screen, not a clock.
   - **Keys:** `C-q C-t` and `!` (prefix and sidebar). Ctrl-T alone stays with the program in
     the pane: all four agents bind it (SPEC §20.5), and so do readline and fzf. Anyone who
     wants a global key can bind one in `[keys]` (`"global:…" = "shell.here"`).
-  - **In the sidebar** it is a child line of its worktree (`›_ shell`, with the last command
+  - **In the sidebar** it is a child line of its worktree (`›_ quick shell`, first under it, with the last command
     from UX1.2's OSC 133 line). It has no number, never raises attention and never lands in
     the inbox (R-DD-15's quiet flag, scoped to it). Clicking or ⏎ on that line toggles it the
     same way.

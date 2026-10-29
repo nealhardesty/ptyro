@@ -779,7 +779,7 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
                 detail = session_details(app, s, lead, width, near || app.sidebar_zoom);
                 Line::from(spans)
             }
-            // A quick terminal (UX1.25): one quiet line, last under its worktree, saying what
+            // A quick terminal (UX1.25): one quiet line, first under its worktree, saying what
             // runs in it; bright while its drawer is open.
             Row::Quick(id) => {
                 let Some(s) = sessions.get(id).copied() else { continue };
@@ -797,7 +797,7 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
                 let mut spans = vec![
                     Span::styled(format!("{indent}  "), Style::new()),
                     Span::styled("›_ ", fg(app, if open { t.accent } else { t.dim })),
-                    Span::styled("shell", name_style),
+                    Span::styled("quick shell", name_style),
                 ];
                 if let Some(r) = &s.status
                     && r.status == AgentStatus::Blocked

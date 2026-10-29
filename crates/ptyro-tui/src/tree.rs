@@ -18,7 +18,7 @@ pub enum Row {
     Project(String),
     Worktree(String),
     Session(SessionId),
-    /// A quick terminal (UX1.25): last under its worktree, with no number, and not one of the
+    /// A quick terminal (UX1.25): first under its worktree, with no number, and not one of the
     /// sessions `j`/`k` cycle through.
     Quick(SessionId),
     /// A non-selectable label (`other sessions`).
@@ -226,8 +226,10 @@ impl Inputs<'_> {
                     // A change set's lead has its row under the set, not twice.
                     .filter(|s| !self.led(s))
                     .partition(|s| s.quick);
-                rows.extend(sessions.into_iter().map(|s| Row::Session(s.id)));
+                // The quick terminal first: it is the worktree's own, so it sits right under it
+                // and never gets lost among the sessions.
                 rows.extend(quick.into_iter().map(|s| Row::Quick(s.id)));
+                rows.extend(sessions.into_iter().map(|s| Row::Session(s.id)));
             }
         }
         // The rest whose workspace this is: no project here, or a worktree that is gone (it has
@@ -265,8 +267,8 @@ impl Inputs<'_> {
             }
             let (quick, others): (Vec<&SessionInfo>, Vec<&SessionInfo>) =
                 others.into_iter().partition(|s| s.quick);
-            rows.extend(others.into_iter().map(|s| Row::Session(s.id)));
             rows.extend(quick.into_iter().map(|s| Row::Quick(s.id)));
+            rows.extend(others.into_iter().map(|s| Row::Session(s.id)));
         }
         rows
     }
@@ -596,8 +598,8 @@ mod tests {
                 Row::Workspace("main".into()),
                 Row::Project("p".into()),
                 Row::Worktree("root".into()),
-                Row::Session(sessions[1].id),
                 Row::Quick(sessions[0].id),
+                Row::Session(sessions[1].id),
                 Row::Group("other sessions".into()),
                 Row::Quick(sessions[2].id),
             ]
