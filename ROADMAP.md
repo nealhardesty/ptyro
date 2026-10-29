@@ -44,6 +44,7 @@ Conventions:
 | **UX3** | Daily flow | Full-sized panels and splits only on request (a split is a clone), quick new (`C-n`), created means shown, `!` a new shell and the quick terminal a worktree's, usage limits in About (done) |
 | **H2** | Second hardening review | A review of the whole codebase by nine independent readers: ~150 findings verified and fixed; locks, the release pipeline and uninstall done; the rest listed here |
 | **MM1** | Many machines | Every laptop's agents from one place: other machines' workspaces beside yours in one sidebar, one CLI and one phone app (done) |
+| **CHAT** | Chat | A quick, general chat on your registered agents: many chats, forks and threads, recent chats in the sidebar and a full searchable history (keyword, then smart), web search out of the box, in every workspace including linked machines' (proposed; sync across machines is CHAT6) |
 | **Backlog** | Later / maybe | Editor, tasks, jj, libghostty, relay, … |
 
 Critical path: **M0 → M1 → M2 → M3 → M4** gives a daily-driver. M5 can interleave with M3/M4.
@@ -2341,6 +2342,95 @@ chose B (MM1.0); MM1.A stays recorded as the alternative.
   no echoes). *Deviations:* an offline machine's screens are only what a client had; marking a
   mirrored inbox entry read isn't routed; the wizard offers this machine's agents in a remote
   workspace. Not looked at on two real laptops or a phone by the agent that built it.
+
+## CHAT — Chat (proposed 2026-10-29; open)
+
+*Why:* the owner wants the quick, general chat that the Claude and ChatGPT desktop apps have, built
+on the agents ptyro already runs and their accounts: several chats, forks and threads, history in the
+sidebar (the last 5, configurable) with the full list, search (keyword, then smart), web search and
+a few safe tools out of the box, switchable off, **on by default**, in the CLI, the TUI and the web,
+**in the workspaces of connected machines too**, and, later, merged across machines. The design is
+SPEC §22; the ideas and what other products do are RESEARCH R-CHAT-01…17. Builds on M10 (structured
+sessions and their chat view), MM1 (machines), UX1.3 (the no-tools one-shot), CFG1 (settings schema).
+
+Owner decisions (2026-10-29): on by default; a separate `chat.db` (the metadata-only rule gets this one
+exception, in `AGENTS.md`); seed-replay is the accepted fallback; chats show in linked machines'
+workspaces; sync and merge is CHAT6 and gets its own brainstorm.
+
+Every task below is done only when it works in the CLI, the TUI and the web, has its `docs/parity.md`
+rows, its `[chat]` settings schema entries and its `make` targets, and the milestone's version bump.
+
+- [ ] **CHAT0 Spikes** (spike; results into SPEC §20 and §22.17 before CHAT1.3 starts) **M**
+  - Claude through the stream-json driver: `--tools "WebSearch,WebFetch"` with those two allowed,
+    `--tools ""`, `--add-dir`, `--fork-session`, `--no-session-persistence`; does `WebSearch` run in
+    `-p` on this account?
+  - Codex app-server: a `readOnly` thread with `web_search = "live"`, `thread/fork` with `lastTurnId`,
+    `thread/name/updated`.
+  - Gemini ACP and OpenCode: what restricts tools natively (else ptyro's answers only), `session/list`,
+    `session/resume`, `session_info_update`.
+  - SQLite: FTS5 and the `porter unicode61` tokenizer in the bundled build; the size and speed of an
+    index over 100k nodes.
+  *Done when:* each claim in §22.5's table and §22.17 is tagged verified or wrong, with the date.
+- [ ] **CHAT1 Chats that last** (R-CHAT-01, 06, 13) — the core. **L**
+  - [ ] **CHAT1.1** `chat.db`: the schema of §22.4, its writer thread, migrations, `doctor` checks,
+        backup (`--no-chats`), the uninstall plan, "can't open" handling. **M**
+  - [ ] **CHAT1.2** The `[chat]` settings and the schema entries (with the presets as a collection), the
+        panel section in the TUI and the web, `enabled` hiding everything. **M**
+  - [ ] **CHAT1.3** The engine: a hidden structured session with `chat = <id>`, the scratch directory,
+        the workspace's profile, the preset launch arguments per agent, hibernate and resume, the node
+        writer (2 s flushes, `interrupted` after a crash), permission cards and the inbox. **L**
+  - [ ] **CHAT1.4** Continuing: native continue, and the seed block (§22.6), the budget, the notice.
+        **M**
+  - [ ] **CHAT1.5** Titles (agent's, else the one-shot, else the first line), pin, archive, delete,
+        unread. **M**
+  - [ ] **CHAT1.6** Protocol minor (§22.14), the CLI `chat new|ask|ls|show|open|send|retitle|pin|archive|rm`
+        and `export`, with `--json`. **M**
+  - [ ] **CHAT1.7** The TUI: the CHATS sidebar section per workspace (`recent`, `all chats…`, glyphs),
+        the chat list, the chat view's header and composer, keys (`m`, `g`, the sidebar keys), palette
+        actions. **L**
+  - [ ] **CHAT1.8** The web: the Chats page, the chat view, the sidebar section, `ACTIONS` for every
+        control. **L**
+  - [ ] **CHAT1.9** **Machines** (§22.11): `ChatInfo` in the mirror, routing by `chat`, merged lists,
+        `ChatSubscribe` over the upstream, a chat created in a remote workspace, offline listing, hidden
+        workspaces, scopes, alerts. Tested with two daemons. **L**
+  *Done when:* on a fresh install with a Claude login, `Ctrl-Q m`, a question and ⏎ gets an answer
+  with no setup; the chat is in the sidebar; after `ptyro daemon stop` and start it is still there and
+  carries on; the same chat shows, opens and answers from the phone; and with `laptop2` linked, its
+  workspace's CHATS section lists its chats and a message sent to one runs on `laptop2`.
+- [ ] **CHAT2 Branches, forks and agents** (R-CHAT-02, 03, 04, 05, 17) **L**
+  - Edit and retry as siblings, the `‹ 2/3 ›` navigator, `chat branch`.
+  - `chat fork` (copy; native where CHAT0 verified it, else seeded), `fork --at`, fork-of titles.
+  - Side chats (`--side`, `/side`), incognito (`--incognito`, `C-i`), switch agent (`/agent`).
+  - Export (Markdown, JSON), the slash commands, find-in-chat.
+  *Done when:* a chat is forked at an old message, continued on codex from a claude chat, a side chat
+  is asked about the answer and closed, and a retry's two answers are flipped between, in all three
+  clients.
+- [ ] **CHAT3 Search** (R-CHAT-07, 08) **L**
+  - FTS5 search with filters and snippets, `chat search`, the chat list's `/`, `C-g` everywhere, search
+    across machines (§22.10: fanned out, interleaved by rank).
+  - The ask tools in `ptyro mcp` (`chat_search`, `chat_read`, `chat_list`), `history_tool`,
+    `history_scope` (profile by default), `chat find`, the cap.
+  *Done when:* "what did we decide about X" in any chat finds the answer from a chat of last week,
+  with a citation that opens it; a work-profile chat is never found from a personal one; and a search
+  on one laptop finds a chat that lives on the other.
+- [ ] **CHAT4 Tools and tasks** (R-CHAT-09, 15) **M**
+  - The presets (`chat`, `read`, `none`, yours), `[chat.tools.*]`, folders, an MCP list per preset,
+    the `tools: best effort` badge, `/tools`.
+  - Make it a task: a chat to a worktree session with the branch as its first prompt.
+  *Done when:* a `read` chat answers about a folder it was given and nothing else; the default chat
+  searches the web and can't touch a file; a chat becomes a task with its context.
+- [ ] **CHAT5 More ways to find and ask** (R-CHAT-10, 11, 12) **L**
+  - Ask several agents one question and compare (fan-out and compare, §15.2), keep the winner.
+  - Import the agents' own histories (Claude's `~/.claude/projects` JSONL, Codex rollouts, Gemini's
+    chats, ACP `session/list`) as read-only chats.
+  - Optional meaning search (model2vec or fastembed, hybrid with FTS), only if the earlier tiers
+    disappoint (§21 question 11).
+- [ ] **CHAT6 Sync and merge across machines** (R-CHAT-14; **needs its own brainstorm first**) **L+**
+  - Merge chats across every linked machine (§22.15 lists what CHAT1's schema already guarantees and
+    what is open). Do not start before that brainstorm's decisions are in SPEC §22.
+
+**Done when (milestone):** the CHAT1…CHAT4 demos run in the TUI, on Linux and macOS, and a chat on one
+machine is used from the other; CHAT5 and CHAT6 are separate.
 
 ## Backlog (unscheduled; ideas welcome)
 
