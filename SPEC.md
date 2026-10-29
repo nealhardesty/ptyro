@@ -1006,6 +1006,12 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built CHAT1] Protocol 1.22** (additive): chats (§22.14 as built). Requests `ChatNew`, `ChatList`,
+`ChatRead` (the draft's `ChatGet`: that name was a structured session's transcript already),
+`ChatSend`, `ChatAnswer`, `ChatStop`, `ChatUpdate`, `ChatDelete`, `ChatExport`; replies `Chat`,
+`Chats`, `ChatTranscript`; `ClientMsg::ChatSubscribe` / `ChatUnsubscribe` and `ServerMsg::ChatLive`;
+events `ChatUpdated`, `ChatRemoved`; `SessionInfo.chat`; `DaemonDoctor.chats`.
+
 **[built TS1] Protocol 1.21** (additive): Tailscale's certificate (§16.3). `WebServe` gains `cert`
 (`tailscale`, `ptyro`, `own` or empty) and `cert_note` (why Tailscale's isn't in use, with the fix).
 There is no setting and no question: it is automatic over Tailscale (owner, 2026-10-29).
@@ -6217,7 +6223,38 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
 
 ---
 
-## 22. Chat: general-purpose conversations **[decided 2026-10-29 (owner, ROADMAP CHAT); details proposed, nothing built]**
+## 22. Chat: general-purpose conversations **[decided 2026-10-29 (owner, ROADMAP CHAT); CHAT1.1–CHAT1.8 built 2026-10-29, CHAT1.9 and later proposed]**
+
+**As built (CHAT1, 2026-10-29), and where it differs from the design below:**
+- **Store** (`ptyro-store/src/chat.rs`): the §22.4 schema exactly, its own thread, 0600, a newer
+  schema refused untouched; tombstones compacted a day later (and `archive_purge_days`), a
+  streaming node closed `interrupted` at start. `ptyro doctor` reports it, `ptyro backup` copies it
+  (`--no-chats` leaves it out), `ptyro uninstall`'s plan names it. A removed workspace's chats go
+  to `main`.
+- **Engine** (`ptyro-daemon/src/chats.rs`): a structured session with `Place::chat`, in
+  `<data>/chat/<id>/`, under the chat's profile, launched with the §22.5 line per agent (Claude
+  `--tools`/`--allowedTools`/`--strict-mcp-config`/`--safe-mode`/`--system-prompt`; Codex
+  `thread/start` fields through the driver's new `Opts.params`, every `codex mcp list` server off;
+  a Gemini `--policy` file; OpenCode's permission ruleset). Engines are hidden by the clients
+  (`SessionInfo.chat`), never restored as dormant, never summarized, never hibernated by
+  `[agents]`: `[chat] hibernate_after` stops them. Native continue by conv; a conv whose resume
+  produced no answer is ended and the message is re-sent seeded. Codex's driver ends a turn on
+  `thread/status/changed → idle` (CHAT0). Attention follows `[chat] notify`.
+- **Not built in CHAT1** (each is its later task): incognito, `history_tool`/`history_scope`
+  (CHAT3), the presets' `shell` and `mcp` (CHAT4), agent-sent titles (Claude and Codex send none;
+  OpenCode's and ACP's are not read yet: the titler is used), a `parent` on `ChatSend` and every
+  branch key (CHAT2), `C-g`, `make verify-chat`, and machines (CHAT1.9: chats of linked machines'
+  workspaces are not mirrored yet).
+- **Configuration renamed:** `[chat] tools = "chat"` became **`[chat] preset`**: TOML can't hold
+  both that string and the `[chat.tools.<name>]` tables. Built keys: `enabled`, `recent`, `agent`,
+  `preset`, `hibernate_after`, `seed_tokens`, `title`, `title_command`, `daily_cap`, `index_tools`,
+  `notify`, `archive_purge_days`, and `chat.tools.*.{web, read, dirs, allow}`.
+- **Seeds:** the "N earlier messages left out" line is used (no summary paragraph yet). The seed
+  notice sits on the branch between the message and its answer.
+- **Surfaces:** CLI `chat [new]|ask|ls|show|open|send|answer|stop|retitle|pin|unpin|archive|
+  unarchive|set|rm|export` (`set` is the draft's `update --agent/--tools`); TUI: the CHATS section
+  per workspace, `C-q m`, `C-q g`, the chat panel over the panes, sidebar keys reusing `,` `x` `X`
+  and `*`; web: a Chats tab, `#/chats`, `#/c/<id>`, `#/c/new`.
 
 A **chat** is a plain conversation with a registered agent: no repository, no worktree, no task.
 It is what the Claude and ChatGPT desktop apps give you, built on the agents ptyro already runs,

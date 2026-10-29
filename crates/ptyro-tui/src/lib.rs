@@ -5,6 +5,7 @@
 mod about;
 mod app;
 pub mod chat;
+mod chats;
 mod cli_actions;
 pub mod copy;
 mod health;

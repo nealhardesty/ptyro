@@ -49,6 +49,8 @@ action by name.
 | `O` | runs: fan-outs and recipes, their steps and gates, the comparison |
 | `S` | change sets: members as swimlanes, gates, issues, the ledger |
 | `t` | structured session: chat view ⇄ terminal view |
+| `m` | a new chat with your agent, in this workspace, over the panes: type, `⏎` sends, `C-o` picks the agent and its tools (SPEC §22) |
+| `g` | the chat list: this workspace's chats by day (`Tab`: every workspace's), `/` searches, `⏎` opens, `*` pin, `x` archive, `X` delete, `,` title, `e` export, `A` archived ones |
 | `j` / `k` (or `Down` / `Up`) | show the next / previous session of the workspace here, in sidebar order, across projects (quick terminals are skipped) |
 | `1` … `9` | show the session numbered N in the sidebar here |
 | `/` | find a session (fuzzy) |
@@ -115,6 +117,7 @@ Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.
 | `R` | restart an exited session |
 | `,` | rename |
 | `D` `O` `S` | inspector / runs / change sets |
+| `m` / `*` | a new chat / pin the chat row. On a chat row `⏎` opens it, `,` titles it, `x` archives it, `X` deletes it (asks), `.` its menu; `⏎` on the CHATS heading lists them, `h`/`l` fold it |
 | `z` | everything at once: the sidebar full-screen, every row open |
 | `<` / `>` | the sidebar a column narrower / wider (or drag its edge) |
 | `u` / `P` | do what the last message offers / add a project |
@@ -166,6 +169,14 @@ Tabs `1`–`5` (or `Tab` / `Shift-Tab`): Diff, Commits, Checks, Ports, Events.
 | `I` | integrate: rebase onto main and fast-forward it |
 | `f` / `m` / `w` | Checks tab: send failing logs to the agent / auto-merge / watch |
 | `r` / `q` | refresh / close |
+
+## Chats (`Ctrl-Q m`, `Ctrl-Q g`)
+
+The chat view takes the place of the panes; the sidebar stays. Type and `⏎` to send
+(`Shift-⏎` or `Ctrl-J` for a new line), `PageUp`/`PageDown` to scroll, `Ctrl-C` stops the
+answer (or clears the draft), `Esc` goes back. On a permission card, with nothing typed, `a`
+allows, `A` always, `d` denies. `Ctrl-Q .` is the chat's menu: title, pin, archive, switch agent,
+tools, export, delete.
 
 ## Runs (`Ctrl-Q O`) and change sets (`Ctrl-Q S`)
 

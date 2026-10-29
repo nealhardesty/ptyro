@@ -138,6 +138,9 @@ pub struct Plan {
     pub dirs: Vec<Dir>,
     /// Agent logins in ptyro-managed profile directories go with the data directory.
     pub logins: bool,
+    /// The size of `chat.db`, your chats' text, which goes with the data directory (SPEC §22.4).
+    #[serde(default)]
+    pub chats: Option<u64>,
     pub worktrees: Vec<Worktree>,
     pub uncommitted_total: usize,
     pub service: Option<PathBuf>,
@@ -471,6 +474,7 @@ pub async fn plan(ctx: &Ctx, env: &Env, opts: &Opts) -> Result<Plan, Error> {
     let k = known(ctx).await;
     let dirs: Vec<Dir> = dirs_of(paths, opts).into_iter().filter(|d| d.path.exists()).collect();
     let logins = paths.data.join("profiles").is_dir();
+    let chats = std::fs::metadata(paths.data.join("chat.db")).ok().map(|m| m.len());
 
     // Worktrees and snapshot refs: asked of git, off the async threads.
     let wts_in: Vec<_> = if opts.keep_data { Vec::new() } else { k.worktrees.clone() };
@@ -535,6 +539,7 @@ pub async fn plan(ctx: &Ctx, env: &Env, opts: &Opts) -> Result<Plan, Error> {
         sessions_live: k.sessions_live,
         dirs,
         logins,
+        chats,
         worktrees,
         uncommitted_total,
         service,
@@ -578,6 +583,11 @@ pub fn render(plan: &Plan, env: &Env) -> String {
     }
     for d in plan.dirs.iter().filter(|d| !d.keep) {
         let _ = writeln!(s, "  {:<13} {} ({})", d.name, tilde(&d.path, home), human(d.bytes));
+    }
+    if let Some(bytes) =
+        plan.chats.filter(|_| !plan.dirs.iter().any(|d| d.name == "data" && d.keep))
+    {
+        let _ = writeln!(s, "  chats         every chat you kept, chat.db ({})", human(bytes));
     }
     if plan.logins && !plan.dirs.iter().any(|d| d.name == "data" && d.keep) {
         s.push_str(

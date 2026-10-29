@@ -47,6 +47,8 @@ export interface Session {
   structured?: string | null;
   inner_agent?: string | null;
   quick?: boolean;
+  /// The chat it is the engine of (SPEC §22.2): hidden from the session list.
+  chat?: string | null;
   profile?: string;
   run?: string | null;
   summary?: { text: string; turn: number; at_ms: number } | null;

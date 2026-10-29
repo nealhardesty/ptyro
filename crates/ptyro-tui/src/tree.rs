@@ -25,11 +25,27 @@ pub enum Row {
     Group(String),
     /// A change set (its run id), above its lead (M11.11).
     Set(String),
+    /// A workspace's CHATS heading (SPEC §22.12); ⏎ lists its chats.
+    Chats(String),
+    /// A chat (its id).
+    Chat(String),
+    /// `＋ new chat` in a workspace with none yet.
+    ChatNew(String),
+    /// `all chats… (N)`: the workspace's chat list.
+    ChatAll(String),
 }
 
 impl Row {
     pub fn selectable(&self) -> bool {
         !matches!(self, Self::Group(_))
+    }
+
+    /// The chat a chat row stands for.
+    pub fn chat(&self) -> Option<&str> {
+        match self {
+            Self::Chat(id) => Some(id),
+            _ => None,
+        }
     }
 
     /// The session a session or quick-terminal row stands for.
@@ -46,6 +62,11 @@ pub fn fold_key(workspace: &str) -> String {
     format!("ws:{workspace}")
 }
 
+/// The key a workspace's folded CHATS section has in `collapsed`.
+pub fn chats_key(workspace: &str) -> String {
+    format!("chats:{workspace}")
+}
+
 pub struct Inputs<'a> {
     pub workspaces: &'a [WorkspaceInfo],
     pub projects: &'a [ProjectInfo],
@@ -55,6 +76,10 @@ pub struct Inputs<'a> {
     pub collapsed: &'a HashSet<String>,
     /// Change sets still going (M11): shown first, each with its lead.
     pub sets: &'a [crate::sets::SetNode],
+    /// Chats not archived, pinned first then the newest (SPEC §22.12).
+    pub chats: &'a [ptyro_core::chats::ChatInfo],
+    /// How many unpinned chats each CHATS section shows; `None`: chats are off.
+    pub recent: Option<usize>,
 }
 
 impl Inputs<'_> {
@@ -191,6 +216,7 @@ impl Inputs<'_> {
             let body = self.body(ws, &mut placed, honour_collapse);
             if !folded {
                 rows.extend(body);
+                rows.extend(self.chat_rows(&ws.name, honour_collapse));
             }
         }
         rows
@@ -274,6 +300,40 @@ impl Inputs<'_> {
     }
 }
 
+impl Inputs<'_> {
+    /// A workspace's CHATS section: its pinned chats, then the newest `recent`, then `all chats…`
+    /// when there are more; `＋ new chat` when it has none. Only this machine's workspaces have
+    /// one until chats are mirrored.
+    fn chat_rows(&self, ws: &str, honour_collapse: bool) -> Vec<Row> {
+        let Some(recent) = self.recent else { return Vec::new() };
+        let mine: Vec<&ptyro_core::chats::ChatInfo> =
+            self.chats.iter().filter(|c| c.workspace == ws).collect();
+        if split_machine(ws).is_some() && mine.is_empty() {
+            return Vec::new();
+        }
+        let mut rows = vec![Row::Chats(ws.to_owned())];
+        if honour_collapse && self.collapsed.contains(&chats_key(ws)) {
+            return rows;
+        }
+        if mine.is_empty() {
+            rows.push(Row::ChatNew(ws.to_owned()));
+            return rows;
+        }
+        let pinned = mine.iter().filter(|c| c.pinned);
+        let newest = mine.iter().filter(|c| !c.pinned).take(recent);
+        rows.extend(pinned.chain(newest).map(|c| Row::Chat(c.id.clone())));
+        if rows.len() - 1 < mine.len() {
+            rows.push(Row::ChatAll(ws.to_owned()));
+        }
+        rows
+    }
+
+    /// How many chats a workspace has (`all chats… (N)`).
+    pub fn chat_count(&self, ws: &str) -> usize {
+        self.chats.iter().filter(|c| c.workspace == ws).count()
+    }
+}
+
 /// `laptop2:work` → (`laptop2`, `work`); `work` → (`None`, `work`).
 pub fn machine_and_name(workspace: &str) -> (Option<&str>, &str) {
     match split_machine(workspace) {
@@ -344,6 +404,7 @@ mod tests {
             window_title: None,
             quick: false,
             pad: false,
+            chat: None,
         }
     }
 
@@ -409,6 +470,8 @@ mod tests {
             sessions: &sessions,
             collapsed: &collapsed,
             sets: &nodes,
+            chats: &[],
+            recent: None,
         }
         .rows();
         // The session of a removed worktree has no worktree row to hang under: it is listed with
@@ -444,6 +507,75 @@ mod tests {
         }
     }
 
+    fn chat(id: &str, ws: &str, pinned: bool) -> ptyro_core::chats::ChatInfo {
+        ptyro_core::chats::ChatInfo {
+            id: id.into(),
+            handle: id.into(),
+            workspace: ws.into(),
+            machine: None,
+            title: Some(id.into()),
+            title_src: "auto".into(),
+            agent: "claude".into(),
+            profile: "default".into(),
+            tools: "chat".into(),
+            pinned,
+            archived: false,
+            incognito: false,
+            forked: false,
+            leaf: None,
+            nodes: 2,
+            unread: 0,
+            created_ms: 0,
+            last_ms: 0,
+            cost_micro_usd: 0,
+            status: None,
+            attention: None,
+            engine: None,
+        }
+    }
+
+    #[test]
+    fn chats_under_each_workspace_pinned_then_recent_then_all() {
+        let wss = vec![ws("w", "main", &[]), ws("x", "side", &[])];
+        let chats =
+            vec![chat("pin", "main", true), chat("a", "main", false), chat("b", "main", false)];
+        let collapsed = HashSet::new();
+        let i = Inputs {
+            workspaces: &wss,
+            projects: &[],
+            worktrees: &[],
+            sessions: &[],
+            collapsed: &collapsed,
+            sets: &[],
+            chats: &chats,
+            recent: Some(1),
+        };
+        assert_eq!(
+            i.rows(),
+            vec![
+                Row::Workspace("main".into()),
+                Row::Chats("main".into()),
+                Row::Chat("pin".into()),
+                Row::Chat("a".into()),
+                Row::ChatAll("main".into()),
+                Row::Workspace("side".into()),
+                Row::Chats("side".into()),
+                Row::ChatNew("side".into()),
+            ],
+            "pinned, then the newest `recent`, then `all chats…`; `＋ new chat` where there are none"
+        );
+        assert_eq!(i.chat_count("main"), 3);
+        let mut folded = HashSet::new();
+        folded.insert(chats_key("main"));
+        let rows = Inputs { collapsed: &folded, ..i }.rows();
+        assert!(
+            rows.contains(&Row::Chats("main".into())) && !rows.contains(&Row::Chat("a".into()))
+        );
+        // Off: no section at all.
+        let off = Inputs { recent: None, ..i }.rows();
+        assert!(!off.iter().any(|r| matches!(r, Row::Chats(_) | Row::ChatNew(_))));
+    }
+
     #[test]
     fn every_workspace_stacked_with_its_tree_and_other_sessions() {
         let wss = vec![ws("w", "main", &["p"]), ws("x", "side", &[])];
@@ -463,6 +595,8 @@ mod tests {
             sessions: &sessions,
             collapsed: &collapsed,
             sets: &[],
+            chats: &[],
+            recent: None,
         };
         let rows = i.rows();
         assert_eq!(
@@ -530,6 +664,8 @@ mod tests {
             sessions: &sessions,
             collapsed: &collapsed,
             sets: &[],
+            chats: &[],
+            recent: None,
         };
         let rows = i.rows();
         assert_eq!(
@@ -591,6 +727,8 @@ mod tests {
             sessions: &sessions,
             collapsed: &collapsed,
             sets: &[],
+            chats: &[],
+            recent: None,
         };
         assert_eq!(
             i.rows(),

@@ -223,6 +223,10 @@ pub enum Purpose {
     AddProject(Option<AfterAdd>),
     /// A row's actions (UX1.15): run with that row selected in the sidebar.
     RowMenu(Row),
+    /// A chat's agent (`None`: the new chat being written's).
+    ChatAgent(Option<String>),
+    /// A chat's tool preset.
+    ChatPreset(Option<String>),
     /// Home (UX1.19): what to do next.
     Home,
     /// What the doctor found, to fix (UX1.20).
@@ -304,6 +308,8 @@ pub enum PromptKind {
     Orch(crate::runs::OrchInput),
     /// Typed in the change-set view (M11).
     Sets(crate::sets::SetsInput),
+    /// A chat's title (by id); empty asks for a new automatic one.
+    ChatRetitle(String),
 }
 
 /// A key that starts a new line in a text box instead of sending it (UX1.26): Shift+Enter
@@ -426,6 +432,14 @@ pub enum Pending {
     List,
     Registry,
     Saved,
+    /// Every chat not archived (SPEC §22.12).
+    Chats,
+    /// The archived ones, for the chat list.
+    ArchivedChats,
+    /// A new chat made by its first message: follow it.
+    ChatMade,
+    /// A chat's Markdown, to write here.
+    ChatExport(std::path::PathBuf),
     /// What quick-new would start in this workspace (UX3.2), for its label.
     Again(String),
     /// Wizard title: the profile a spawn would get and why.
@@ -622,6 +636,10 @@ pub struct App {
     pub orch: Option<crate::runs::Orch>,
     /// The change-set view (`S`, M11.11).
     pub sets_view: Option<crate::sets::Sets>,
+    /// Chats not archived (SPEC §22.12): the CHATS sections and the chat list.
+    pub chat_list: Vec<ptyro_core::chats::ChatInfo>,
+    /// The chat list or a chat, over the panes.
+    pub chat_panel: Option<crate::chats::ChatPanel>,
     /// Change sets in the sidebar.
     pub set_nodes: Vec<crate::sets::SetNode>,
     /// Close the inspector when the session it asked for appears (`E`: commit in the editor).
@@ -750,6 +768,8 @@ impl App {
             inspector: None,
             orch: None,
             sets_view: None,
+            chat_list: Vec::new(),
+            chat_panel: None,
             set_nodes: Vec::new(),
             close_inspector_after: false,
             follow,
@@ -837,6 +857,8 @@ impl App {
             Reply::Sessions { sessions } => sessions,
             _ => Vec::new(),
         };
+        let sessions: Vec<SessionInfo> =
+            sessions.into_iter().filter(|s| s.chat.is_none()).collect();
         self.last_listed = sessions.iter().map(|s| s.id).collect();
         self.sessions = sessions;
         self.load_registry(&client).await;
@@ -883,6 +905,19 @@ impl App {
         }
         if let Ok(Reply::Status { status }) = client.request(Request::Status).await {
             self.machine = status.machine;
+        }
+        if self.config.chat.enabled
+            && let Ok(Reply::Chats { chats }) = client
+                .request(Request::ChatList {
+                    workspace: None,
+                    all: true,
+                    pinned: false,
+                    archived: false,
+                    limit: None,
+                })
+                .await
+        {
+            self.chat_list = chats;
         }
         if let Ok(Reply::Usage { usage }) = client.request(Request::Usage).await {
             self.usage =
@@ -940,6 +975,10 @@ impl App {
         }
         self.load_view().await;
         self.refresh_again();
+        // `ptyro chat open`: that chat, over the panes.
+        if let Some(id) = self.opts.chat.take() {
+            self.open_chat(&id);
+        }
     }
 
     /// The workspace a session shows up under in the sidebar (MM1.B: the first that has its
@@ -1038,7 +1077,7 @@ impl App {
         self.client.as_ref()
     }
 
-    fn send(&self, msg: ClientMsg) {
+    pub(crate) fn send(&self, msg: ClientMsg) {
         if let Some(c) = self.client() {
             let _ = c.send(msg);
         }
@@ -1435,6 +1474,9 @@ impl App {
             ServerMsg::Chat { session, rev, reset, items, draft } => {
                 self.chats.entry(session).or_default().apply(rev, reset, items, draft);
             }
+            ServerMsg::ChatLive { chat, rev, reset, items } => {
+                self.chat_live(chat, rev, reset, items);
+            }
             ServerMsg::Goodbye { reason } => self.lost(&reason),
             _ => {}
         }
@@ -1444,7 +1486,8 @@ impl App {
     /// exists, so a session it no longer names (whose removal event never came) is gone from
     /// panes and every per-session map. One made by an event after the reply was asked for
     /// isn't in it yet and stays.
-    fn got_list(&mut self, listed: Vec<SessionInfo>) {
+    fn got_list(&mut self, mut listed: Vec<SessionInfo>) {
+        listed.retain(|s| s.chat.is_none());
         let named: HashSet<SessionId> = listed.iter().map(|s| s.id).collect();
         let gone: Vec<SessionId> = self
             .sessions
@@ -1496,6 +1539,10 @@ impl App {
     }
 
     pub(crate) fn upsert(&mut self, info: SessionInfo) {
+        // A chat's engine is the chat's, never a row of its own (SPEC §22.2).
+        if info.chat.is_some() {
+            return;
+        }
         match self.sessions.iter_mut().find(|s| s.id == info.id) {
             Some(s) => *s = info,
             None => self.sessions.push(info),
@@ -1505,7 +1552,10 @@ impl App {
     fn on_event(&mut self, event: DomainEvent) {
         match event {
             // We fell behind: what we know may be stale.
-            DomainEvent::EventsLost { .. } => self.request(Pending::List, Request::List),
+            DomainEvent::EventsLost { .. } => {
+                self.request(Pending::List, Request::List);
+                self.refresh_chats();
+            }
             DomainEvent::SessionCreated { info } => {
                 // The agent a new worktree was waiting for (after its setup script).
                 let follow = self.follow.as_ref().is_some_and(|(w, _)| {
@@ -1630,7 +1680,8 @@ impl App {
                 self.usage.insert((usage.profile.clone(), usage.agent.clone()), usage);
             }
             DomainEvent::RunUpdated { run } => self.run_updated(run),
-            DomainEvent::ChatUpdated { .. } | DomainEvent::ChatRemoved { .. } => {}
+            DomainEvent::ChatUpdated { info } => self.chat_updated(info),
+            DomainEvent::ChatRemoved { id, .. } => self.chat_removed(&id),
             DomainEvent::ProjectUpdated { info } => {
                 upsert_by(&mut self.projects, info, |p| p.id.clone())
             }
@@ -1784,6 +1835,15 @@ impl App {
                 r,
             ) => self.pad_reply(p, r),
             (Pending::List, Ok(Reply::Sessions { sessions })) => self.got_list(sessions),
+            (Pending::Chats, Ok(Reply::Chats { chats })) => self.got_chats(chats),
+            (Pending::ArchivedChats, Ok(Reply::Chats { chats })) => self.got_archived(chats),
+            (Pending::ChatMade, Ok(Reply::Chat { info })) => self.chat_made(info),
+            (Pending::ChatExport(path), Ok(Reply::Text { text })) => {
+                match std::fs::write(&path, text) {
+                    Ok(()) => self.toast(format!("written to {}", path.display())),
+                    Err(e) => self.toast(format!("{}: {e}", path.display())),
+                }
+            }
             (Pending::Registry, Ok(Reply::Profiles { profiles })) => self.profiles = profiles,
             (Pending::Spawned { split, back, .. }, Ok(Reply::Session { info })) => {
                 if std::mem::take(&mut self.close_inspector_after) {
@@ -2248,6 +2308,10 @@ impl App {
     /// Show `id`: in a new split when one is asked for, else without a split (UX3.1, `place`):
     /// where it shows already, in the kept layout that has it, or full sized.
     pub fn show(&mut self, id: SessionId, split: Option<Dir>) {
+        // A session shown takes the place of the chat panel.
+        if self.chat_panel.is_some() {
+            self.close_chat();
+        }
         let pane = match split {
             // The drawer hangs from its host: splitting it would nest a pane inside it.
             Some(_) if self.drawer.is_some_and(|d| d.pane == self.focused) => {
@@ -2413,6 +2477,15 @@ impl App {
             }
             return;
         }
+        // The chat panel has the keyboard while the panes have focus (the sidebar keeps its own).
+        if self.chat_panel.is_some() && !self.prefix && self.focus == Focus::Pane {
+            if self.keymap.is_prefix(key) {
+                self.start_prefix();
+            } else {
+                self.chat_key(key);
+            }
+            return;
+        }
         if self.sets_view.is_some() && !self.prefix {
             if self.keymap.is_prefix(key) {
                 self.start_prefix();
@@ -2544,6 +2617,10 @@ impl App {
             }
             Some(_) => {}
             None if full => {}
+            None if self.chat_panel.is_some() && self.focus == Focus::Pane => {
+                self.chat_paste(&lines);
+                return;
+            }
             None if self.pad_popup.is_some() => {
                 self.forward_popup(InputEvent::Paste { text });
                 return;
@@ -2844,6 +2921,19 @@ impl App {
             | "session.rename"
             | "session.retitle"
             | "session.take_control" => {
+                // On a chat row, the same keys mean the chat's own: `,` its title, `x` archive,
+                // `X` delete (SPEC §22.12).
+                if self.focus == Focus::Sidebar
+                    && let Some(Row::Chat(_)) = self.selected_row()
+                {
+                    let a = match cmd.action {
+                        "session.rename" | "session.retitle" => "chat.retitle",
+                        "session.stop" => "chat.archive",
+                        "session.kill" => "chat.delete",
+                        _ => return,
+                    };
+                    return self.chat_action(a);
+                }
                 let target = if self.focus == Focus::Sidebar {
                     match self.selected_row() {
                         Some(Row::Session(id) | Row::Quick(id)) => Some(id),
@@ -2905,6 +2995,9 @@ impl App {
                     }
                     Focus::Sidebar => Focus::Pane,
                 };
+            }
+            "row.menu" if self.chat_panel.is_some() && self.focus == Focus::Pane => {
+                self.chat_menu()
             }
             "row.menu" => self.open_row_menu(),
             "home" => self.open_home(),
@@ -3160,7 +3253,31 @@ impl App {
                     self.open_sets(run);
                 }
             }
+            a if a.starts_with("chat.") => self.chat_action(a),
             "nav.open" | "nav.collapse" | "nav.expand" => match self.selected_row() {
+                Some(r @ (Row::Chat(_) | Row::ChatNew(_) | Row::ChatAll(_)))
+                    if cmd.action == "nav.open" =>
+                {
+                    self.sidebar_zoom = false;
+                    self.chat_row_open(&r);
+                }
+                Some(Row::Chats(ws)) => {
+                    let key = crate::tree::chats_key(&ws);
+                    let collapse = match cmd.action {
+                        "nav.collapse" => true,
+                        "nav.expand" => false,
+                        _ => {
+                            // ⏎ on the heading opens the list; h/l fold it.
+                            self.chat_row_open(&Row::Chats(ws));
+                            return;
+                        }
+                    };
+                    if collapse {
+                        self.collapsed.insert(key);
+                    } else {
+                        self.collapsed.remove(&key);
+                    }
+                }
                 Some(Row::Session(id)) if cmd.action == "nav.open" => {
                     self.sidebar_zoom = false;
                     self.show(id, None)
@@ -3544,6 +3661,20 @@ impl App {
                 ),
                 _ => with("session.new", "start a task here"),
             },
+            Row::Chat(id) => {
+                let c = self.chat(&id)?;
+                if c.attention.is_some() {
+                    return Some("⏎ open it: it needs you".into());
+                }
+                Some(format!(
+                    "⏎ open · {}",
+                    with("chat.pin", if c.pinned { "unpin" } else { "pin" }).unwrap_or_default()
+                ))
+            }
+            Row::Chats(_) | Row::ChatAll(_) => {
+                with("chat.list", "every chat here").map(|l| format!("⏎ {l}"))
+            }
+            Row::ChatNew(_) => Some("⏎ start a chat".into()),
             Row::Set(_) | Row::Group(_) => None,
         }
     }
@@ -3893,6 +4024,8 @@ impl App {
                 v.extend(["machine.add", "machine.list"]);
                 v
             }
+            Row::Chat(_) => crate::chats::CHAT_ACTIONS.to_vec(),
+            Row::Chats(_) | Row::ChatNew(_) | Row::ChatAll(_) => vec!["chat.new", "chat.list"],
             Row::Group(_) => Vec::new(),
         }
     }
@@ -3920,6 +4053,8 @@ impl App {
             Row::Project(p) => self.project(p).map(|p| format!("Project {}", p.slug)),
             Row::Set(_) => Some("Change set".into()),
             Row::Workspace(w) => Some(format!("Workspace {}", crate::ui::workspace_label(w))),
+            Row::Chat(id) => self.chat(id).map(|c| format!("Chat {}", c.label())),
+            Row::Chats(_) | Row::ChatNew(_) | Row::ChatAll(_) => Some("Chats".into()),
             Row::Group(_) => None,
         };
         let items: Vec<Item> = self
@@ -4610,6 +4745,14 @@ impl App {
                 target: Target::Worktree(w.id.clone()),
             });
         }
+        for c in self.chat_list.iter().filter(|c| c.workspace == self.workspace) {
+            items.push(Item {
+                label: format!("chat {}", c.label()),
+                detail: format!("{} · {}", c.agent, crate::ui::ago(c.last_ms)),
+                key: None,
+                target: Target::Chat(c.id.clone()),
+            });
+        }
         for p in self.projects.iter().filter(|p| here.contains(&p.id)) {
             items.push(Item {
                 label: format!("project {}", p.slug),
@@ -5125,6 +5268,9 @@ impl App {
             (Target::PadRev(rev), Purpose::PadHistory) => self.restore_pad(rev),
             (target, Purpose::Home) => self.home_picked(target),
             (Target::Fix(i), Purpose::Health) => self.fix(i),
+            (Target::Chat(id), _) => self.open_chat(&id),
+            (Target::Agent(a), Purpose::ChatAgent(id)) => self.chat_picked(a, true, id),
+            (Target::Agent(p), Purpose::ChatPreset(id)) => self.chat_picked(p, false, id),
             // A row's action: with that row selected, so it's what the action works on.
             (Target::Action(cmd), Purpose::RowMenu(row)) => {
                 let rows = self.rows();
@@ -5314,6 +5460,19 @@ impl App {
             }
             PromptKind::Orch(input) => self.orch_input(input, text),
             PromptKind::Sets(input) => self.sets_input(input, text),
+            PromptKind::ChatRetitle(id) => {
+                self.request(
+                    Pending::Done("retitled".into()),
+                    Request::ChatUpdate {
+                        chat: id,
+                        title: Some(text.trim().to_owned()),
+                        pinned: None,
+                        archived: None,
+                        agent: None,
+                        preset: None,
+                    },
+                );
+            }
             PromptKind::Retitle(id) => {
                 let title = Some(text.trim().to_owned()).filter(|t| !t.is_empty());
                 let done = if title.is_some() { "retitled" } else { "title cleared" };
@@ -5780,6 +5939,8 @@ impl App {
             sessions: &self.sessions,
             collapsed: &self.collapsed,
             sets: &self.set_nodes,
+            chats: &self.chat_list,
+            recent: self.config.chat.enabled.then_some(self.config.chat.recent as usize),
         }
     }
 
@@ -5861,7 +6022,12 @@ impl App {
                     let root = first.as_deref().and_then(|p| self.root_of(p));
                     return (first, root);
                 }
-                Row::Group(_) | Row::Set(_) => return (None, None),
+                Row::Group(_)
+                | Row::Set(_)
+                | Row::Chats(_)
+                | Row::Chat(_)
+                | Row::ChatNew(_)
+                | Row::ChatAll(_) => return (None, None),
             }
         }
         if let Some(s) = self.focused_session().and_then(|id| self.session(id))

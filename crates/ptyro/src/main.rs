@@ -777,6 +777,9 @@ enum Cmd {
         /// Include the web app's certificate authority, with its private key
         #[arg(long)]
         with_ca: bool,
+        /// Leave your chats (chat.db) out
+        #[arg(long)]
+        no_chats: bool,
         #[arg(long)]
         json: bool,
     },

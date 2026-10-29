@@ -344,8 +344,8 @@ async fn dispatch(
             };
             crate::uninstall::run(&ctx, opts, json).await
         }
-        Some(Cmd::Backup { output, with_recordings, with_ca, json }) => {
-            let opts = crate::backup::Opts { output, with_recordings, with_ca };
+        Some(Cmd::Backup { output, with_recordings, with_ca, no_chats, json }) => {
+            let opts = crate::backup::Opts { output, with_recordings, with_ca, no_chats };
             crate::backup::run(&ctx, opts, json).await
         }
         Some(Cmd::Project { cmd }) => crate::projects::project(&ctx, cmd).await,
