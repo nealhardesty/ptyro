@@ -4974,7 +4974,10 @@ embedded with `include_bytes!`, with no dependencies or third-party requests.
   held), and a chat view for structured sessions.
 - **PWA:** a manifest, icons (rendered from `docs/logos/ptyro-icon.svg` by `make icons`, including a separate maskable one), and a service worker with an
   offline shell, push display, and Allow/Deny notification actions answered through
-  `/api/request` with the token from IndexedDB.
+  `/api/request` with the token from IndexedDB. `serve` ends `/sw.js` with
+  `// certificate <stamp>` (16 hex digits of a SHA-256 over the leaf certificates it serves,
+  `tls::Served`), so a new or renewed certificate makes the browser install a new worker
+  (§20.9).
 - **Pairing:** `ptyro pair` prints a QR code (`qrcode`, Dense1x2) for `<base>/#pair=<code>`. The
   base is `--url`, `[remote] public_url`, or the address `access` makes reachable (below).
   - **Default scope is `full`, with a warning.** With no `--scope`, `ptyro pair` (and the TUI's
@@ -6123,6 +6126,34 @@ where `agentCapabilities.sessionCapabilities` says so; read it at `initialize` a
   (worst 200 ms); `optimize` 0.3 s, `rebuild` 1.2 s, `integrity_check` 0.4 s; a streaming node's 2 s
   flush (an `UPDATE` through the triggers) 0.9 ms. So a search box needs no index beyond FTS5 at this
   size, and a prefix of fewer than three characters should wait for the third keystroke.
+
+### 20.9 Chrome shows a service worker's certificate, not the connection's
+
+**Seen 2026-10-29** on Android Chrome, after `serve` moved from ptyro's own certificate to
+Tailscale's (TS1) for `bear.<tailnet>.ts.net:7091`: a normal tab's certificate viewer showed
+ptyro's own (`ptyro serve (bear)`, issued by `ptyro local CA (bear)`, trusted because that phone
+had the CA installed), while an Incognito tab on the same address showed Let's Encrypt. A packet
+capture on this side showed that tab's fresh handshakes (no resumption) carrying SNI
+`bear.<tailnet>.ts.net`, which `serve` answers with Tailscale's certificate (checked with
+`openssl s_client`, also with Chrome's ALPN and post-quantum key share).
+
+**Inferred, not verified in Chromium's source:** for a page its service worker controls,
+Chrome's page info shows the certificate recorded when that worker's script was installed. A
+worker is replaced only when its script's bytes change, so a new server certificate alone never
+replaces the record. Hence `serve`'s certificate stamp at the end of `/sw.js` (§16.4, PWA).
+Clearing the site's data in Chrome also clears it (and the pairing with it). **Not verified yet:**
+that the stamp makes a phone that already has the old worker show the new certificate.
+
+**Seen the same day, after the site's data was cleared and the phone paired again:** the
+certificate details showed Let's Encrypt, but the page still said "Connection is not secure" and
+Install said "This app cannot be installed" (Chrome installs only pages it rates secure). A fresh
+headless Chrome on the Mac, over the same tailnet, rated the page `secure` with no installability
+errors (DevTools protocol `Security.visibleSecurityStateChanged`, `Page.getInstallabilityErrors`),
+and every asset is same-origin over HTTPS. **Force-stopping Chrome on the phone fixed both at
+once** (Install offered straight away, the certificate right). So Chrome keeps some per-site
+security state for as long as it runs, which deleting cookies and site data doesn't clear. Which
+state it was is not known (a guess: content from an earlier certificate counted against the
+host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
 
 ## 21. Open questions
 

@@ -123,6 +123,14 @@ it is in use.
   Linux `sudo tailscale set --operator=$USER` lets your user ask for one.
 - **Machines.** `ptyro machine add` accepts a `*.ts.net` machine's Tailscale certificate (checked
   against the public roots) as well as the CA pinned in its code.
+- **A phone that used ptyro's certificate before (Android Chrome).** After the switch, Chrome can
+  keep showing "Connection is not secure", or ptyro's old certificate in the certificate details,
+  and say "This app cannot be installed", although `serve` now sends Tailscale's certificate (an
+  Incognito tab shows it). Chrome remembers how the site was secured until Chrome itself stops,
+  and deleting cookies doesn't clear it. **Force-stop Chrome** (Settings → Apps → Chrome → Force
+  stop), open the address again, and Install is offered. Once nothing uses ptyro's CA on that
+  phone, you can remove it (Settings → Security → Encryption & credentials → Trusted credentials
+  → User).
 
 **ptyro's certificate.** The first time, `ptyro serve` makes a small certificate authority (CA)
 and a certificate it signs for this machine: `localhost`, its name (and `<name>.local`), its LAN

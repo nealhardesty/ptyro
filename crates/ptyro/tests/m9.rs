@@ -1190,6 +1190,10 @@ async fn serve_speaks_https_by_default() {
     // The CA, for a phone to trust once.
     let r = get(ServerName::try_from("localhost").unwrap(), "/ca.crt").await;
     assert!(r.contains("application/x-x509-ca-cert") && r.contains(ca_pem.trim()), "{r}");
+    // The service worker carries the certificate's stamp: a new certificate, a new worker.
+    let r = get(ServerName::try_from("localhost").unwrap(), "/sw.js").await;
+    let stamp = r.trim_end().rsplit_once("// certificate ").map(|(_, s)| s).unwrap_or("");
+    assert!(stamp.len() == 16 && stamp.bytes().all(|b| b.is_ascii_hexdigit()), "{r}");
     // Not a name it holds: refused by the client, as a phone's browser would.
     assert!(tls(ServerName::try_from("example.com").unwrap()).await.is_err());
     // Plain HTTP to it: no answer a browser would show.
