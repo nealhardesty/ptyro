@@ -27,7 +27,7 @@ Nothing here is a commitment. An idea becomes work only when it is promoted into
 - [Executive summary](#executive-summary-2026-10-20) · [Landscape map](#landscape-map)
 - **Part I — Product catalogue:** A. TUI/tmux managers · B. GUI workspaces · C. Terminals & multiplexers
   (+ protocol landscape) · D. Cloud/async agents · E. Remote & mobile · F. Orchestration products ·
-  G. Agent CLIs & adjacent tooling
+  G. Agent CLIs & adjacent tooling · H. Chat clients and conversation history
 - **Deep dives — herdr and tuios:** DD1 herdr · DD2 tuios (identity, architecture, status model, OSC 7501 interop, head-to-head, ideas)
 - **Part II — Orchestration deep dive:** practitioners · research evidence · workflow engines ·
   coordination protocols · synthesis (recipe primitives, `ptyro mcp`, mailbox, delivery, M10)
@@ -1040,6 +1040,59 @@ Agentastic Companion (iPhone + Mac host, E2E, TestFlight) · Nimbalyst Mobile (E
 | **CCS** | github.com/kaitranntt/ccs (MIT, ≈2.9k★) | Multi-account + multi-provider manager for Claude Code/Droid/Codex; CLIProxy routing to GLM, OpenRouter, Ollama, llama.cpp | Overlaps ptyro profiles; `profile adopt` could import CCS; **"provider via proxy" profiles** (`ANTHROPIC_BASE_URL`) as a first-class profile field (R-PRF-04). |
 
 **Watch-outs:** Codex hook trust is hash-pinned · Copilot reads `.claude/settings.json` hooks · each `CLAUDE_CONFIG_DIR` runs its own supervisor · Codex app-server is experimental.
+
+---
+
+### H. Chat clients and conversation history *(added 2026-10-29, for ROADMAP CHAT / SPEC §22)*
+
+> **Headline (2026-10-29):** every chat app models history as either a **tree** (parent links and a
+> current leaf: Open WebUI, `llm`) or **copies** (a fork is a new conversation: Codex `thread/fork`,
+> gptme, LibreChat, ChatGPT's branch). Search is FTS (`llm`) or a title match (Codex
+> `thread/list searchTerm`); nobody in the list does meaning search by default. None lets a chat
+> **change agent** or lives **across machines** — ptyro's two openings. Only one pass of research,
+> mostly secondary sources: re-check the [S] items before relying on them.
+
+#### H1. Claude desktop / claude.ai
+- **URL:** support.claude.com/articles/11817273 · **Class:** first-party chat · proprietary
+- **Maturity [V 2026-10-29]:** memory on web, desktop and mobile
+- **What it is:** chats and projects. Memory is scoped per project and its summary refreshes about every 24 h; Claude can search past chats, but not those inside projects (switchable off). **Incognito** chats (ghost icon) are not saved, not remembered and not searchable. Claude Code's desktop app adds a **side chat** (Cmd+;) that reads the main thread and never writes back; the terminal's `/btw` is a tool-less overlay [S].
+- **Gaps (positive):** incognito, side chats and per-project memory are the vocabulary users expect.
+- **Weaknesses vs ptyro:** one vendor, one account per app; no multi-machine.
+- **Ideas:** → R-CHAT-04, R-CHAT-05, R-CHAT-16. "Retry as a new branch" in Claude desktop: [U], not confirmed.
+
+#### H2. ChatGPT and the Codex desktop app
+- **URL:** learn.chatgpt.com/docs/app-server · **Class:** first-party · proprietary
+- **Maturity [S 2026-10-29]:** ChatGPT "branch in new chat" announced 2025-09-05 (web first); Codex side chats July 2026
+- **What it is:** a branch copies the history up to a chosen message into a new chat and leaves the original. Codex's app-server has `thread/fork` (copies stored history to a new id; `lastTurnId` truncates; `ephemeral:true` keeps it in memory) **[V]**, `thread/list` (cursor paging; filters `archived`, `isPinned`, `cwd`, `searchTerm` = a case-sensitive title match, not full text) **[V]**, `thread/name/set`, `thread/archive`, `thread/delete` **[V]**. Codex side chats start from selected transcript text [S].
+- **Gaps (positive):** fork at any turn; archive and pin as first-class thread state.
+- **Weaknesses vs ptyro:** title-only search; forks are copies with no tree.
+- **Ideas:** → R-CHAT-02, R-CHAT-04, R-CHAT-06.
+
+#### H3. Zed (agent panel threads)
+- **URL:** zed.dev/docs/ai/agent-panel · **Class:** editor
+- **Maturity [S 2026-10-29]:** threads in a SQLite file (`threads.db`, zstd-compressed blobs); in-thread search (Cmd+F) in 1.9.0 (June 2026)
+- **What it is:** threads with a history view.
+- **Ideas:** a single SQLite file for the whole history works at editor scale → R-CHAT-01 (ptyro uses its own `chat.db`).
+
+#### H4. `llm` (Simon Willison)
+- **URL:** llm.datasette.io/en/stable/logging.html · **Class:** CLI · Apache-2.0
+- **Maturity [V 2026-10-29]**
+- **What it is:** every prompt and response logged to SQLite: legacy `conversations` / `responses`, now content-addressed, hash-linked `threads`, `turns`, `messages`, `parts`. `llm logs -q` uses **FTS5** (`responses_fts`, `turn_search_fts`), indexes only typed prompts and responses (not tool output or reasoning), and weights prompt matches above response matches.
+- **Ideas:** → R-CHAT-07 (what to index, how to weight), R-CHAT-01 (parent chains).
+
+#### H5. Open WebUI, LibreChat, gptme, Goose
+- **Open WebUI [V]:** a message **tree**: `parentId`, `childrenIds`, `history.currentId` marks the active branch (docs.openwebui.com/reference/api-flow). → R-CHAT-02.
+- **LibreChat [V]:** **fork** makes a new conversation from a message, three modes: direct path only, related branches, everything to and from here (default) (librechat.ai/docs/features/fork). → R-CHAT-02.
+- **gptme [S]:** a folder per conversation (`conversation.jsonl`, `config.toml`, `branches/`); fork copies the folder.
+- **Goose [S]:** sessions in SQLite (`sessions`, `messages`), migrated from JSONL; sessions can be forked.
+- **Not verified [U]:** aichat, mods, oterm, Elia, Msty, Cursor chat history, Aider, the Gemini app, the ChatGPT desktop app.
+
+#### H6. The agents' own history (what ptyro could import, CHAT5)
+- **Claude Code [S]:** `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`, append-only; lines carry `type`, `uuid`, `parentUuid`, `sessionId`, `cwd`, `timestamp`. No verified title field [U].
+- **Codex [V for archive, U for path]:** JSONL rollouts, moved when archived; `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` is from memory [U].
+- **Gemini CLI [S]:** `~/.gemini/tmp/<project>/chats/`, one JSON per session; `--list-sessions`, `--resume latest|index|id` [V].
+- **ACP [V]:** `session/list` (capability `sessionCapabilities.list`; `cwd`, `cursor`), `session_info_update` (`title`, `updatedAt`), `session/load` (replays), `session/resume` (reconnects without replay; RFD completed 2026-04-22 [S/V]); `session/fork` is unstable and not in the spec yet [S].
+- **Ideas:** → R-CHAT-12. The point of ADR 19 is that ptyro does not depend on any of these.
 
 ---
 
@@ -2778,6 +2831,28 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 | R-DD-18 | **Interop targets**: a ptyro backend for ccgram; attachable from Moshi, collie and herdr-web-ui (mobile layout at ≤64 columns); Agentchute-style Markdown inboxes as a mailbox transport. | herdr ecosystem | M9 / Backlog | M | ★ | new |
 | R-DD-19 | **Contribution policy for agent-generated PRs** (herdr auto-closes unsolicited PRs and runs an issue agent): decide early, and document it in AGENTS.md and a CONTRIBUTING.md. | herdr | now (docs) | S | ★ | new |
 
+#### Chat (R-CHAT) *(added 2026-10-29; owner's request, ROADMAP CHAT, SPEC §22)*
+
+| ID | Idea | Seen in | Fit | Size | Pri | Status |
+|---|---|---|---|---|---|---|
+| R-CHAT-01 | **A chat is ptyro's own durable record** (a tree of nodes in a separate `chat.db`); the agent's conversation is a replaceable engine, rebuilt by seed-replay when it can't resume or fork | Zed, Goose, `llm` (own stores); ADR 19–21 | CHAT1 | L | ★★★ | → CHAT1.1, CHAT1.3, CHAT1.4 |
+| R-CHAT-02 | **Branches and forks**: an in-chat tree (edit and retry as siblings, `‹ 2/3 ›`) plus copy-forks into new chats; native `thread/fork` or `--fork-session` where they exist | Open WebUI, LibreChat, ChatGPT, Codex, gptme | CHAT2 | M | ★★★ | → CHAT2 |
+| R-CHAT-03 | **Switch agent mid-chat** (continue a claude chat on codex) by seeding from the record | none found [U] | CHAT2 | S | ★★ | → CHAT2 |
+| R-CHAT-04 | **Side chat**: a fork that reads the context and never writes back | Claude Desktop, Codex, Claude Code `/btw` | CHAT2 | S | ★★ | → CHAT2 |
+| R-CHAT-05 | **Incognito**: nothing stored or indexed; ends with the engine | Claude, ChatGPT temporary chat | CHAT2 | S | ★★ | → CHAT2 |
+| R-CHAT-06 | **Recent N in the sidebar** (default 5, configurable) with pinned first, plus an "all chats" list grouped by date; archive and pin as state | Codex `thread/list`, Claude and ChatGPT sidebars | CHAT1 | M | ★★★ | → CHAT1.7, CHAT1.8 |
+| R-CHAT-07 | **Keyword search**: FTS5 over typed text and tool titles, user text weighted above answers, snippets, filters | `llm logs -q`, Zed in-thread search | CHAT3 | M | ★★★ | → CHAT3 |
+| R-CHAT-08 | **Smart search through the agent**: `chat_search`, `chat_read` and `chat_list` as `ptyro mcp` tools, so any chat can look up its own past; scoped to the chat's **profile** so an account's history never reaches another's model | owner (2026-10-29); Claude chat search | CHAT3 | M | ★★★ | → CHAT3 |
+| R-CHAT-09 | **Tool presets** (`chat` = web search and fetch only in an empty directory, `read`, `none`, yours); web search is each agent's own tool, no MCP needed; tools the agent can't restrict show `best effort` | owner; all four agents ship search [V/S 2026-10-29] | CHAT4 | M | ★★★ | → CHAT4 |
+| R-CHAT-10 | **Ask several agents one question**, compare, keep the winner as the branch | fan-out and compare (M7) | CHAT5 | M | ★★ | → CHAT5 |
+| R-CHAT-11 | **Meaning search**, opt-in: model2vec (~30 MB, no ONNX) or fastembed bge-small (~130 MB, ONNX), merged with FTS by reciprocal-rank fusion | cel-memory-sqlite [S] | CHAT5 | M | ★ | parked until tiers 1–2 disappoint (SPEC §21 q11) |
+| R-CHAT-12 | **Import the agents' own histories** (Claude JSONL, Codex rollouts, Gemini chats, ACP `session/list`) as read-only chats | H6 | CHAT5 | M | ★ | → CHAT5 |
+| R-CHAT-13 | **Chats in every workspace, including linked machines'**: the mirror lists them, a chat is made and run on its owner, offline chats stay listed | owner (2026-10-29); MM1 (R-REM-13) | CHAT1 | L | ★★★ | → CHAT1.9 |
+| R-CHAT-14 | **Merge chats across all connected machines** (CHAT6): schema ready now (ULIDs, immutable nodes, tombstones, LWW fields, `origin`); needs its own brainstorm | owner (2026-10-29) | CHAT6 | L+ | ★★ | → CHAT6, brainstorm first |
+| R-CHAT-15 | **Make it a task**: a chat becomes a worktree session whose first prompt carries the branch | Claude desktop "task chips" (B) | CHAT4 | S | ★★ | → CHAT4 |
+| R-CHAT-16 | **Per-workspace memory**: facts kept across chats and offered to new ones (Claude's memory refreshes about daily) | Claude memory [V] | Backlog | M | ★ | new |
+| R-CHAT-17 | **Export** a chat as Markdown or JSON | every app | CHAT2 | S | ★★ | → CHAT2 |
+
 ### III.3 Explicitly *not* recommended (with reasons)
 
 - **A vector-DB memory layer** (Ruflo): its own figures are self-reported; a lightweight notes file covers the need.
@@ -2787,6 +2862,7 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 - **Mode systems** ("architect/code/debug" modes): commoditised into generic subagents. Roo Code shut down.
 - **A2A as a primary protocol:** no coding CLI speaks it. At most a facade later.
 - **Depending on MCP Tasks:** no client supports it yet.
+- **A chat client for raw provider APIs and keys** (2026-10-29): ptyro drives the agents you registered and their accounts (profiles); keys, model lists and billing would be a second product.
 
 ---
 
@@ -2853,6 +2929,11 @@ These are verified or locally checked. Each moves to SPEC §20 once a spike or i
   - `/tui/append-prompt|submit-prompt|show-toast`, `GET /tui/control/next`.
   - `POST /session/:id/permissions/:permissionID`; `/global/event`.
   - Kilo is a fork.
+- **§20.1 Claude Code, for chats (2026-10-29, from docs, [V] until CHAT0 tries them):** `--tools ""` removes all built-in tools; `--tools "WebSearch,WebFetch"` restricts to those; `--allowedTools` only auto-approves; `--disallowedTools "*"`; `--fork-session` with `--resume`; `--session-id`, `-n`; `--no-session-persistence` (print mode); `--bare` skips CLAUDE.md, hooks and MCP but keeps Bash and file tools. WebFetch converts to Markdown and runs the prompt through a second model call; it refuses localhost.
+- **§20.2 Codex, for chats (2026-10-29, [V] docs):** `thread/fork` (`lastTurnId`, `ephemeral`), `thread/list` (`searchTerm` is a title match), `thread/name/set`, `thread/archive`, `thread/delete`; sandbox types `readOnly`, `workspaceWrite`, `dangerFullAccess`; `web_search = "cached" (default) | "live" | "indexed" | "disabled"`, `--search` = live.
+- **§20.3 Gemini, for chats:** `--list-sessions`, `--delete-session`, `--resume`; `google_web_search`; `--allowed-tools` is deprecated for a policy engine **[S]**: how to remove tools natively is open.
+- **§20.4 OpenCode, for chats [S/U]:** `websearch` is Exa-backed (on for OpenCode Zen, or `OPENCODE_ENABLE_EXA=1`); fork and per-tool permissions unverified.
+- **ACP, for chats:** `session/list`, `session_info_update`, `session/load` [V]; `session/resume` completed 2026-04-22 [S/V]; `session/fork` unstable [S].
 - **§20.5 Terminal:**
   - OSC 7501 spec URL and revision; OSC 21337 (iTerm2) format.
   - OSC 3008 (systemd context) must be swallowed.
@@ -2888,6 +2969,7 @@ follow you over SSH, and tmux plugins can't enforce policy. ptyro does all three
 
 ## Changelog
 
+- **2026-10-29:** Chat. Segment **H** (chat clients and history), the **R-CHAT-01…17** funnel rows (ROADMAP CHAT, SPEC §22), the facts for IV.3, and one rejection (a raw-API chat client). One research pass, mostly secondary sources; aichat, mods, oterm, Elia, Msty, Cursor and Aider are not verified.
 - **2026-10-20:** First full sweep. Segments A–G (over 100 products), the orchestration deep
   dive (practitioners, research evidence, workflow engines, coordination protocols), and the idea
   funnel (122 ids). Purpose added to `AGENTS.md`, `SPEC.md` and `README.md`.
