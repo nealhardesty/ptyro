@@ -477,6 +477,126 @@ pub struct Config {
     pub clipboard: Clipboard,
     pub summaries: Summaries,
     pub scratchpad: Scratchpad,
+    pub chat: Chat,
+}
+
+/// Chats (SPEC §22.13): plain conversations with your agents, kept in `chat.db`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Chat {
+    /// Off hides the CHATS section, the keys, the CLI group and the web page; chats stay on disk.
+    pub enabled: bool,
+    /// Chats shown under CHATS in the sidebar, after the pinned ones.
+    pub recent: u32,
+    /// The agent for new chats (`claude`, `codex@work`…); "" = the workspace's default agent,
+    /// else the first installed of claude, codex, gemini and opencode.
+    pub agent: String,
+    /// The tool preset of new chats: `chat`, `read`, `none`, or one of `[chat.tools]`.
+    pub preset: String,
+    /// An idle chat's agent stops after this long; the next message carries on.
+    pub hibernate_after: String,
+    /// The most a replayed conversation carries when an agent has to be told it again.
+    pub seed_tokens: u32,
+    /// `auto`: a short title from a small model after the first answer; `off`: the first line.
+    pub title: String,
+    /// The titler (reads the prompt on stdin); empty = `[summaries] command`.
+    pub title_command: Vec<String>,
+    /// The most titles made for each profile in a day.
+    pub daily_cap: u32,
+    /// Also make tool output searchable (2 KB of it a message).
+    pub index_tools: bool,
+    /// `blocked`: tell you when a chat needs you; `all`: also when an answer arrives while no
+    /// screen shows it; `off`.
+    pub notify: String,
+    /// Delete archived chats after this many days (0 = keep them).
+    pub archive_purge_days: u32,
+    /// Your own tool presets (`chat`, `read` and `none` are built in; a table with their name
+    /// changes them).
+    pub tools: BTreeMap<String, ChatTools>,
+}
+
+impl Default for Chat {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            recent: 5,
+            agent: String::new(),
+            preset: "chat".into(),
+            hibernate_after: "2m".into(),
+            seed_tokens: 30_000,
+            title: "auto".into(),
+            title_command: Vec::new(),
+            daily_cap: 200,
+            index_tools: false,
+            notify: "blocked".into(),
+            archive_purge_days: 0,
+            tools: BTreeMap::new(),
+        }
+    }
+}
+
+/// What a chat may use (SPEC §22.5): a tool preset.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ChatTools {
+    /// The agent's own web search and fetch.
+    pub web: bool,
+    /// Read files in `dirs`.
+    pub read: bool,
+    /// Folders a chat of this preset may read.
+    pub dirs: Vec<String>,
+    /// More tool names to approve without asking.
+    pub allow: Vec<String>,
+}
+
+impl Chat {
+    /// The built-in presets: `chat` (web search), `read` (also reads `dirs`), `none`.
+    pub const BUILTIN: [&'static str; 3] = ["chat", "read", "none"];
+
+    /// A preset by name: yours, else a built-in one.
+    pub fn preset(&self, name: &str) -> Option<ChatTools> {
+        if let Some(t) = self.tools.get(name) {
+            return Some(t.clone());
+        }
+        match name {
+            "chat" => Some(ChatTools { web: true, ..ChatTools::default() }),
+            "read" => Some(ChatTools { web: true, read: true, ..ChatTools::default() }),
+            "none" => Some(ChatTools::default()),
+            _ => None,
+        }
+    }
+
+    /// Every preset name: the built-in ones, then yours.
+    pub fn presets(&self) -> Vec<String> {
+        let mut v: Vec<String> = Self::BUILTIN.iter().map(|s| (*s).to_owned()).collect();
+        let mine: Vec<String> = self.tools.keys().filter(|k| !v.contains(k)).cloned().collect();
+        v.extend(mine);
+        v
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.preset(&self.preset).is_none() {
+            return Err(format!(
+                "chat.preset: {:?} isn't a preset ({})",
+                self.preset,
+                self.presets().join(", ")
+            ));
+        }
+        parse_duration(&self.hibernate_after).map_err(|e| format!("chat.hibernate_after: {e}"))?;
+        if !matches!(self.title.as_str(), "auto" | "off") {
+            return Err(format!("chat.title: {:?} (auto or off)", self.title));
+        }
+        if !matches!(self.notify.as_str(), "blocked" | "all" | "off") {
+            return Err(format!("chat.notify: {:?} (blocked, all or off)", self.notify));
+        }
+        if !(1..=100).contains(&self.recent) {
+            return Err("chat.recent: 1 to 100".into());
+        }
+        for name in self.tools.keys() {
+            crate::names::validate(name).map_err(|e| format!("chat.tools.{name}: {e}"))?;
+        }
+        Ok(())
+    }
 }
 
 /// The scratchpad (NOTE1, SPEC §13.6): one notes file, opened in your editor in a pane.
@@ -1298,6 +1418,7 @@ impl Config {
 
     fn validate(&self) -> Result<(), String> {
         self.scratchpad.validate()?;
+        self.chat.validate()?;
         if self.ui.prefix.keys().is_empty() {
             return Err("ui.prefix: needs at least one key".into());
         }
