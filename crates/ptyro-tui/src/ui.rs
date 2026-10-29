@@ -479,13 +479,23 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
     // Which machine this is, first (MM1.B: other machines' workspaces are below too), then the
     // workspace you're in.
     let mut title = vec![Span::raw(" ")];
+    let workspace = workspace_label(&app.workspace);
     if let Some(m) = &app.machine {
+        // A long host name gives way to the workspace: " ● " + name + " · " + workspace.
+        let room = (area.width.saturating_sub(2) as usize)
+            .saturating_sub(UnicodeWidthStr::width(workspace.as_str()) + 6)
+            .max(6);
+        let mut name = m.clone();
+        if UnicodeWidthStr::width(name.as_str()) > room {
+            truncate_width(&mut name, room - 1);
+            name.push('\u{2026}');
+        }
         title.push(machine_dot(m));
-        title.push(Span::styled(m.clone(), fg(app, t.text).add_modifier(Modifier::BOLD)));
+        title.push(Span::styled(name, fg(app, t.text).add_modifier(Modifier::BOLD)));
         title.push(Span::styled(" · ", fg(app, t.dim)));
     }
     title.push(Span::styled(
-        workspace_label(&app.workspace),
+        workspace,
         fg(app, t.accent).add_modifier(Modifier::BOLD),
     ));
     if let Some(b) = profile_badge(app, &app.workspace_profile()) {
