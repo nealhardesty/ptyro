@@ -974,22 +974,28 @@ fn the_web_app_is_a_setting_the_daemon_keeps() {
     );
 
     // A `[remote]` setting changed from the settings commands starts the server again with it.
+    let restarted = |before: u64| {
+        let deadline = Instant::now() + WAIT;
+        loop {
+            let web = status(&w);
+            if web["up"] == true && web["pid"].as_u64().is_some_and(|p| p != before) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "the web app wasn't started again: {web}");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        wait_http(port);
+    };
     let before = status(&w)["pid"].as_u64().unwrap();
     w.ok(&["config", "set", "remote.approval_wait", "5m"]);
-    let deadline = Instant::now() + WAIT;
-    loop {
-        let web = status(&w);
-        if web["up"] == true && web["pid"].as_u64().is_some_and(|p| p != before) {
-            break;
-        }
-        assert!(Instant::now() < deadline, "the web app wasn't started again: {web}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    wait_http(port);
+    restarted(before);
     // The daemon's log level is a setting it follows while it runs.
     w.ok(&["config", "set", "daemon.log_level", "debug"]);
     assert!(!w.cli(&["config", "set", "daemon.log_level", "loud"]).status.success());
+    // Unsetting the `[remote]` one starts the server again too: wait for it before looking.
+    let before = status(&w)["pid"].as_u64().unwrap();
     w.ok(&["config", "unset", "daemon.log_level", "remote.approval_wait"]);
+    restarted(before);
 
     // The doctor and `daemon status` show it.
     let doctor: serde_json::Value =
