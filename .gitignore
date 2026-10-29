@@ -26,3 +26,6 @@ rustc-ice-*.txt
 
 # Local git identity/config
 /.gitconfig
+
+# macOS Finder metadata
+.DS_Store
