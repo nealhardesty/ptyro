@@ -562,6 +562,16 @@ mod tests {
     }
 
     #[test]
+    fn a_long_host_name_leaves_the_workspace_in_the_sidebar_header() {
+        let mut app = app();
+        app.machine = Some("sjc22-be112-34f81a93-61e-a-very-long-host".into());
+        app.workspace = "other".into();
+        let (shown, _) = draw(&app);
+        let header = shown.lines().next().unwrap();
+        assert!(header.contains("\u{2026} \u{b7} other"), "{header}");
+    }
+
+    #[test]
     fn keys_pick_copy_and_close() {
         let mut app = app();
         app.overlay = Some(Overlay::About { doc: Some(doc()), sel: 0, scroll: 0 });
