@@ -266,6 +266,9 @@ notifications there). Tap 🔔 to turn notifications on; a test notification arr
   tool calls with output and diffs, permission cards. "Terminal" switches to the screen view.
 - **Notifications** for a blocked agent have Allow / Deny buttons on platforms that show actions
   (Android, desktop Chrome). Tapping one answers without opening the app.
+- **"Offline: reconnecting…"** means the page (kept on the phone) can't reach `serve`. Opened
+  at a `*.ts.net` name or a Tailscale address, it adds a hint, because the usual cause is
+  Tailscale being off on the phone: turn it on and the page reconnects by itself.
 
 ### A terminal in the browser
 

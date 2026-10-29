@@ -19,7 +19,7 @@ import { machineChip } from "./machines.js";
 import { initNotes, notesConnected, notesEvent, notesLink, notesNeedsLoad, notesLoad, notesNoteButton, notesQuickAdd, notesShown, notesStart, notesView } from "./notes.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
 import { coach } from "./settings.js";
-import { apply as showMachine } from "./machine.js";
+import { apply as showMachine, offlineText } from "./machine.js";
 
 interface ChatItem { id: string; t: string; [k: string]: any }
 
@@ -458,7 +458,7 @@ function render(): void {
   if (r.view !== "session" || r.id !== app.viewing) subscribe(r.view === "session" ? r.id! : null);
   if (notesNeedsLoad()) void notesLoad();
   const view = withTabs(r.view, location.hash === "#/notes" ? notesView() : r.view === "session" ? sessionView(r.id!) : r.view === "inbox" ? inboxView() : views.has(r.view) ? views.get(r.view)!(r.id ?? "") : listView());
-  if (conn.state !== "open") view.prepend(h("div", { class: "offline", role: "status" }, conn.state === "connecting" ? "Connecting…" : "Offline: reconnecting…"));
+  if (conn.state !== "open") view.prepend(h("div", { class: "offline", role: "status" }, offlineText(conn.state, location.hostname)));
   if (root.firstChild !== view || root.childNodes.length !== 1) root.replaceChildren(view);
   // The number of agents waiting on you, in the tab's title and on an installed app's icon.
   const waiting = [...app.sessions.values()].filter((x) => x.status?.status === "blocked" && x.state.t === "running").length;

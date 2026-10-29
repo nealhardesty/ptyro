@@ -46,3 +46,22 @@ export function apply(machine, waiting) {
     }
     document.querySelector('meta[name="apple-mobile-web-app-title"]')?.setAttribute("content", machine ? `${machine} · ptyro` : "ptyro");
 }
+/// Whether the page was opened over Tailscale: a MagicDNS `*.ts.net` name or a tailnet address
+/// (100.64.0.0/10, fd7a:115c:a1e0::/48). An offline page can't ask the server, so the address
+/// it was opened at is what says so.
+export function viaTailscale(host) {
+    const h = host.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+    if (h.endsWith(".ts.net"))
+        return true;
+    const v4 = /^100\.(\d+)\.\d+\.\d+$/.exec(h);
+    if (v4)
+        return Number(v4[1]) >= 64 && Number(v4[1]) <= 127;
+    return h.startsWith("fd7a:115c:a1e0:");
+}
+/// The banner while the connection is down. Over Tailscale the usual cause is Tailscale being
+/// off on this device, so it says where to look.
+export function offlineText(state, host) {
+    if (state === "connecting")
+        return "Connecting…";
+    return viaTailscale(host) ? "Offline: reconnecting… Can't reach this computer over Tailscale: check that Tailscale is on on this device." : "Offline: reconnecting…";
+}

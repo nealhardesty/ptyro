@@ -16,7 +16,7 @@ import { machineChip } from "./machines.js";
 import { initNotes, notesConnected, notesEvent, notesLink, notesNeedsLoad, notesLoad, notesNoteButton, notesQuickAdd, notesShown, notesStart, notesView } from "./notes.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
 import { coach } from "./settings.js";
-import { apply as showMachine } from "./machine.js";
+import { apply as showMachine, offlineText } from "./machine.js";
 // What this app does, by name: the Web column of docs/parity.md names these, and `make parity`
 // checks every name it uses is here (SPEC §1.3, ROADMAP WEB1). Each is its control's tooltip.
 const ACTIONS = {
@@ -407,7 +407,7 @@ function render() {
         void notesLoad();
     const view = withTabs(r.view, location.hash === "#/notes" ? notesView() : r.view === "session" ? sessionView(r.id) : r.view === "inbox" ? inboxView() : views.has(r.view) ? views.get(r.view)(r.id ?? "") : listView());
     if (conn.state !== "open")
-        view.prepend(h("div", { class: "offline", role: "status" }, conn.state === "connecting" ? "Connecting…" : "Offline: reconnecting…"));
+        view.prepend(h("div", { class: "offline", role: "status" }, offlineText(conn.state, location.hostname)));
     if (root.firstChild !== view || root.childNodes.length !== 1)
         root.replaceChildren(view);
     // The number of agents waiting on you, in the tab's title and on an installed app's icon.
