@@ -236,8 +236,24 @@ export function textSheet(title: string, text: string): Sheet {
 
 // ── forms ───────────────────────────────────────────────────────────────────────────────────
 
+/// What a name can't hold becomes `_` as it is typed (the same rule as `names::typed` and
+/// `names::branch_typed` in ptyro-core): "name" for an address, "branch" for a git branch.
+export function slugify(kind: "name" | "branch", raw: string): string {
+  let out = "";
+  for (const c of raw) {
+    if (kind === "branch") {
+      out += /[\s\x00-\x1f\x7f~^:?*[\\]/.test(c) || (out === "" && c === "-") ? "_" : c;
+    } else {
+      const l = c.toLowerCase();
+      const bad = !/^[a-z0-9._-]$/.test(l) || (out === "" && (l === "." || l === "-")) || (l === "." && out.endsWith("."));
+      out += bad ? "_" : l;
+    }
+  }
+  return out;
+}
+
 export type Field =
-  | { key: string; label: string; type?: "text" | "password" | "number"; value?: string | number | null; placeholder?: string; hint?: string; required?: boolean }
+  | { key: string; label: string; type?: "text" | "password" | "number"; value?: string | number | null; placeholder?: string; hint?: string; required?: boolean; slug?: "name" | "branch" }
   | { key: string; label: string; type: "textarea"; value?: string | null; placeholder?: string; hint?: string; rows?: number; required?: boolean }
   | { key: string; label: string; type: "select"; options: ([string, string] | string)[]; value?: string | null; hint?: string }
   | { key: string; label: string; type: "check"; value?: boolean; hint?: string };
@@ -262,6 +278,16 @@ export function form(title: string, fields: Field[], label: string, go: (v: Valu
     } else {
       input = h("input", { type: f.type ?? "text", placeholder: f.placeholder, autocapitalize: "off", autocomplete: "off", spellcheck: "false", inputmode: f.type === "number" ? "numeric" : undefined });
       input.value = f.value == null ? "" : String(f.value);
+      const slug = f.slug;
+      const box = input as HTMLInputElement;
+      if (slug) {
+        // The cursor stays where it was: one character in, one out.
+        box.addEventListener("input", () => {
+          const at = box.selectionStart;
+          const fixed = slugify(slug, box.value);
+          if (fixed !== box.value) { box.value = fixed; box.setSelectionRange(at, at); }
+        });
+      }
     }
     inputs.set(f.key, input);
     return f.type === "check"

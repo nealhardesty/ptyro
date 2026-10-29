@@ -148,6 +148,18 @@ enum Then {
     },
 }
 
+/// The box takes the name of a table member (an agent, a theme…): what a name can't hold is
+/// swapped for `_` as it is typed. Map keys (snippets, key bindings) are free text.
+fn names_a_table(then: &Then) -> bool {
+    let tables =
+        |path| settings::collection(path).is_some_and(|c| matches!(c.layout, Layout::Tables));
+    match then {
+        Then::Rename { path, .. } => tables(path),
+        Then::Make(m) => m.asking.is_none() && tables(m.path),
+        _ => false,
+    }
+}
+
 /// A member being made, a question at a time.
 #[derive(Debug, Clone)]
 struct Make {
@@ -1730,6 +1742,9 @@ impl Panel {
                     _ => {}
                 }
                 let edited = edit.key(key);
+                if edited && names_a_table(&then) {
+                    edit.text = ptyro_core::names::typed(&edit.text);
+                }
                 self.modal = Some(Modal::Input { title, hint, edit, secret, then, check });
                 if edited {
                     self.recheck();
@@ -2031,9 +2046,12 @@ impl Panel {
     pub fn paste(&mut self, text: &str) {
         let flat = text.replace(['\r', '\n'], " ");
         match (&mut self.modal, &mut self.search) {
-            (Some(Modal::Input { edit, .. }), _) => {
+            (Some(Modal::Input { edit, then, .. }), _) => {
                 for c in flat.chars() {
                     edit.key(KeyEvent::char(c));
+                }
+                if names_a_table(then) {
+                    edit.text = ptyro_core::names::typed(&edit.text);
                 }
                 self.recheck();
             }

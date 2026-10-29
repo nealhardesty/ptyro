@@ -2504,10 +2504,20 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
   themes), the session finder, a text prompt (new session: run through `$SHELL -c` so pipes and
   quotes work; rename), and a confirmation for stop. A prompt is **checked as it's typed**,
   mirroring the daemon's rules from what the TUI knows: name prompts (rename, new worktree, new
-  workspace) mark characters outside `[a-z0-9._-]` and say which one is wrong, and say when the
-  name is taken; the fan-out agent list flags unknown agents. While there's a problem ⏎ is
-  refused and the text stays; in name prompts Tab applies the suggested fix (`My Feat/2` →
-  `my-feat-2`). Renaming a session to its own name does nothing.
+  workspace) say when the name is taken; the fan-out agent list flags unknown agents. While
+  there's a problem ⏎ is refused and the text stays. Renaming a session to its own name does
+  nothing.
+- **Name fields swap, they don't refuse** (`names::typed`, `names::branch_typed`): as a name is
+  typed or pasted, uppercase is lowercased and any other character outside `[a-z0-9._-]` (a
+  space, `/`, an accent) becomes `_`, as does a leading `.` or `-` and the second `.` of `..`
+  (`My Feat/2` → `my_feat_2`). The dialog says so. What no one character fixes (all digits,
+  ending in `.` or `.lock`, over 64) is still flagged with its reason, and Tab applies the
+  suggested fix. A branch name keeps case and `/` and swaps whitespace, `~ ^ : ? * [ \` and a
+  leading `-`. It applies to every interactive name field in the TUI and the web (`slug` on a
+  form field): session rename, the task box's name, new worktree, workspace new and rename,
+  profile new and rename, config-panel members, machine names, and the branch rename. The CLI
+  and the daemon stay strict: a bad name given as an argument is an error, so a script never
+  gets a name it didn't write.
 - **Copy mode** (`prefix [` or `PageUp`, the mouse wheel, or a drag): §11.3 below.
 - **Exited sessions** stay on screen, greyed, with a banner "<name> exited N — ⏎ restart · C-q x
   remove" ("⏎ resume" on a dormant one).
