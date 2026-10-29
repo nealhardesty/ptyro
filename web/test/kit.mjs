@@ -11,7 +11,7 @@ globalThis.localStorage = { getItem: () => { throw new Error("blocked"); }, setI
 globalThis.location = { origin: "http://x", hash: "" };
 globalThis.WebSocket = class { static OPEN = 1; readyState = 1; send() {} close() {} };
 
-const { safeDecode, webHref, once, Cache } = await import("../dist/kit.js");
+const { safeDecode, webHref, once, Cache, slugify } = await import("../dist/kit.js");
 const { conn, store, token } = await import("../dist/conn.js");
 
 // A malformed escape in a route is kept as typed instead of throwing.
@@ -21,6 +21,12 @@ assert.equal(safeDecode("%E0%A4%A"), "%E0%A4%A");
 assert.equal(webHref("https://example.com/a?b=1"), "https://example.com/a?b=1");
 assert.equal(webHref("http://example.com/"), "http://example.com/");
 for (const bad of ["javascript:alert(1)", "data:text/html,x", "ptyro://x", "/relative", "", null, undefined, 5]) assert.equal(webHref(bad), null, String(bad));
+// A name field swaps what a name can't hold for _ as it is typed (the same rule as ptyro-core's).
+assert.equal(slugify("name", "My Feat/2"), "my_feat_2");
+assert.equal(slugify("name", "-x"), "_x");
+assert.equal(slugify("name", "x..y"), "x._y");
+assert.equal(slugify("name", "brisk-rook.v1"), "brisk-rook.v1");
+assert.equal(slugify("branch", "fix this/Now: ok"), "fix_this/Now__ok");
 // localStorage that throws is not a crash.
 assert.equal(token(), null);
 store.set("k", "v");

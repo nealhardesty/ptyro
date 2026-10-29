@@ -130,6 +130,36 @@ pub fn problem(name: &str) -> Option<String> {
     None
 }
 
+/// `raw` as it is typed into a name field: uppercase is lowercased, and any other character a
+/// name can't hold (a space, `/`, an accent) becomes `_`, as does a leading `.` or `-` and the
+/// second `.` of `..`. One character in, one out, so a cursor stays where it was. What no single
+/// character fixes (all digits, `.lock` at the end, too long) is left for [`problem`] to explain.
+pub fn typed(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for c in raw.chars().map(|c| c.to_ascii_lowercase()) {
+        let bad = !allowed(c)
+            || (out.is_empty() && matches!(c, '.' | '-'))
+            || (c == '.' && out.ends_with('.'));
+        out.push(if bad { '_' } else { c });
+    }
+    out
+}
+
+/// The same for a git branch name: it keeps case and `/`, and swaps what git refuses in a ref
+/// (whitespace, control characters, `~ ^ : ? * [ \`) and a leading `-` for `_`.
+pub fn branch_typed(raw: &str) -> String {
+    raw.chars()
+        .enumerate()
+        .map(|(i, c)| {
+            let bad = c.is_whitespace()
+                || c.is_control()
+                || "~^:?*[\\".contains(c)
+                || (i == 0 && c == '-');
+            if bad { '_' } else { c }
+        })
+        .collect()
+}
+
 /// `raw` as a name: itself when valid, else tidied (`Laptop 2` → `laptop-2`).
 pub fn as_name(raw: &str) -> Option<String> {
     if problem(raw).is_none() { Some(raw.to_owned()) } else { tidy(raw) }
@@ -185,6 +215,19 @@ mod tests {
         let second = friendly(7, |n| n == first);
         assert_ne!(first, second);
         assert!(validate(&first).is_ok());
+    }
+
+    #[test]
+    fn typing_swaps_what_a_name_cant_hold_for_an_underscore() {
+        assert_eq!(typed("My Feature/2"), "my_feature_2");
+        assert_eq!(typed("-x"), "_x");
+        assert_eq!(typed(".hidden"), "_hidden");
+        assert_eq!(typed("x..y"), "x._y");
+        assert_eq!(typed("héllo"), "h_llo");
+        assert_eq!(typed("brisk-rook.v1"), "brisk-rook.v1", "a valid name is left alone");
+        assert_eq!(typed("12"), "12", "all digits is still the name's problem to explain");
+        assert_eq!(branch_typed("fix this/Now: ok"), "fix_this/Now__ok");
+        assert_eq!(branch_typed("-x"), "_x");
     }
 
     #[test]

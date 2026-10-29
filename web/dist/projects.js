@@ -209,7 +209,7 @@ function projectWorkspaces(p) {
 function workspaceForm(w) {
     const machines = [...data.machines.values()];
     form(w ? `Workspace ${wsLabel(w.name)}` : "New workspace", [
-        ...(w ? [] : [{ key: "name", label: "Name", required: true }]),
+        ...(w ? [] : [{ key: "name", label: "Name", required: true, slug: "name", hint: "A space or other odd character becomes _ (a-z 0-9 . _ -)" }]),
         // With other machines (MM1.B): which one it's made on.
         ...(w || !machines.length ? [] : [{ key: "machine", label: "On which machine", type: "select", options: [["", "This machine"], ...machines.map((m) => [m.name, m.state === "online" ? m.name : `${m.name} (${m.state})`])], value: "" }]),
         { key: "profile", label: "Profile", value: w?.profile ?? "", placeholder: "default", hint: "The account its sessions use unless a worktree or project says otherwise" },
@@ -232,7 +232,7 @@ function workspacesView() {
     const wss = [...data.workspaces.values()];
     return h("div", {}, ui.header("Workspaces", "#/p", h("button", { class: "icon plus", title: tip("workspace.new"), onclick: () => workspaceForm() }, "＋")), h("main", { class: "stack", title: tip("workspace.set") }, h("div", { class: "rows" }, ...wss.map((w) => row(w.name, `${w.projects.length} project${w.projects.length === 1 ? "" : "s"} · ${w.profile} · notifies ${w.notify}`, null, { onclick: () => menu(w.name, [
             { title: tip("workspace.set"), label: "Profile and notifications…", run: () => workspaceForm(w) },
-            { title: tip("workspace.rename"), label: "Rename…", run: () => form("Rename workspace", [{ key: "name", label: "New name", value: w.name, required: true }], "Rename", (v) => conn.request({ t: "workspace_rename", name: w.name, new_name: v.name })) },
+            { title: tip("workspace.rename"), label: "Rename…", run: () => form("Rename workspace", [{ key: "name", label: "New name", value: w.name, required: true, slug: "name", hint: "A space or other odd character becomes _ (a-z 0-9 . _ -)" }], "Rename", (v) => conn.request({ t: "workspace_rename", name: w.name, new_name: v.name })) },
             { title: tip("workspace.remove"), label: "Remove", danger: true, run: () => confirm(`Remove ${w.name}?`, "Its projects stay; they just leave this workspace.", "Remove", () => ask({ t: "workspace_remove", name: w.name }, "Removed")) },
         ]) })))));
 }
@@ -335,7 +335,7 @@ async function openIn(w) {
         } })));
 }
 function renameBranch(w) {
-    form("Rename the branch", [{ key: "branch", label: "New name", value: w.branch ?? "", placeholder: "from the first commit", hint: "Refused once it's pushed. Empty derives a name from the first commit." }], "Rename", async (v) => {
+    form("Rename the branch", [{ key: "branch", label: "New name", value: w.branch ?? "", placeholder: "from the first commit", slug: "branch", hint: "Refused once it's pushed. Empty derives a name from the first commit. A space or other character git refuses becomes _." }], "Rename", async (v) => {
         await conn.request({ t: "worktree_rename_branch", addr: w.id, branch: v.branch || null });
         ui.toast("Branch renamed");
     });

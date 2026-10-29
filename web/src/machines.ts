@@ -82,7 +82,7 @@ function machineMenu(m: Machine): void {
 function addMachine(): void {
   form("Add a machine", [
     { key: "target", label: "ssh://HOST, or the code `ptyro machine pair` printed on it", required: true, hint: "Over ssh it needs a key or an agent, no password prompt. A code is claimed once, within 10 minutes." },
-    { key: "name", label: "Name here (optional)", hint: "Default: what it calls itself" },
+    { key: "name", label: "Name here (optional)", slug: "name", hint: "Default: what it calls itself. A space or other odd character becomes _" },
   ], "Add", async (v) => {
     try {
       const r = await host("machine.add", { target: (v.target as string).trim(), name: (v.name as string)?.trim() || null });

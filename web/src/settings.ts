@@ -225,7 +225,7 @@ async function profileLogin(name: string, target: string): Promise<void> {
 
 function profileForm(): void {
   form("New profile", [
-    { key: "name", label: "Name", required: true, placeholder: "work" },
+    { key: "name", label: "Name", required: true, slug: "name", placeholder: "work", hint: "A space or other odd character becomes _ (a-z 0-9 . _ -)" },
     { key: "label", label: "Label", placeholder: "shown in the sidebar" },
     { key: "color", label: "Colour", placeholder: "e.g. orange or #ff8800" },
     ...AGENT_DIRS.map((a) => ({ key: `dir_${a}`, label: `${a} directory`, placeholder: `adopt one you have, e.g. ~/.${a}-work`, hint: undefined }) as const),
@@ -280,7 +280,7 @@ function profileView(rest: string): HTMLElement {
     bar(
       h("button", { title: tip("profile.doctor"), onclick: async () => { const r = await doHost("profile.doctor", { name }); if (r) textSheet(`${name}: checks`, (r.checks as any[]).map((c) => `${(LEVEL[c.level] ?? ["·"])[0]} ${c.name}: ${c.text}`).join("\n") || "Nothing to check."); } }, "Check"),
       h("button", { title: tip("profile.sync"), onclick: async () => { const r = await doHost("profile.sync", { name }); if (r) textSheet(`${name}: shared files`, (r.notes as string[]).join("\n")); } }, "Sync shared files"),
-      name !== "default" ? h("button", { title: tip("profile.rename"), onclick: () => form("Rename the profile", [{ key: "new", label: "New name", value: name, required: true }], "Rename", async (v) => { const r = await host("profile.rename", { old: name, new: v.new }); profiles.reload(""); go(`#/profile/${enc(String(v.new))}`); showNotes("Renamed", r.notes ?? []); }) }, "Rename") : null,
+      name !== "default" ? h("button", { title: tip("profile.rename"), onclick: () => form("Rename the profile", [{ key: "new", label: "New name", value: name, required: true, slug: "name", hint: "A space or other odd character becomes _ (a-z 0-9 . _ -)" }], "Rename", async (v) => { const r = await host("profile.rename", { old: name, new: v.new }); profiles.reload(""); go(`#/profile/${enc(String(v.new))}`); showNotes("Renamed", r.notes ?? []); }) }, "Rename") : null,
       name !== "default" ? h("button", { class: "deny", title: tip("profile.remove"), onclick: () => removeProfile(name) }, "Remove") : null)));
   return h("div", {}, ui.header(p?.label || name, "#/profiles"), h("main", { class: "stack" }, body));
 }

@@ -334,6 +334,15 @@ impl PromptKind {
         )
     }
 
+    /// `text` as this prompt keeps it: a name or branch swaps what it can't hold for `_`.
+    pub fn fit(&self, text: &str) -> String {
+        match self {
+            _ if self.is_name() => ptyro_core::names::typed(text),
+            Self::RenameBranch(_) => ptyro_core::names::branch_typed(text),
+            _ => text.to_owned(),
+        }
+    }
+
     /// The name ⏎ takes when nothing was typed (shown dimmed in the field, UX1.24).
     pub fn suggestion(&self) -> Option<&str> {
         match self {
@@ -2514,10 +2523,13 @@ impl App {
         match &mut self.overlay {
             Some(Overlay::Prompt { text: t, kind, .. }) => {
                 t.push_str(&if kind.multiline() { lines.clone() } else { flat() });
+                *t = kind.fit(t);
             }
             Some(Overlay::Task { text: t, name, naming, .. }) => {
                 if *naming {
-                    name.get_or_insert_with(String::new).push_str(&flat());
+                    let n = name.get_or_insert_with(String::new);
+                    n.push_str(&flat());
+                    *n = ptyro_core::names::typed(n);
                 } else {
                     t.push_str(&lines);
                 }
@@ -3973,7 +3985,9 @@ impl App {
             }
             KeyCode::Char { c } if !ctrl => {
                 if naming {
-                    name.get_or_insert_with(String::new).push(c);
+                    let n = name.get_or_insert_with(String::new);
+                    n.push(c);
+                    *n = ptyro_core::names::typed(n);
                 } else {
                     text.push(c);
                 }
@@ -4767,6 +4781,7 @@ impl App {
                 },
                 KeyCode::Char { c } if !key.mods.has(Mods::CTRL) => {
                     text.push(c);
+                    let text = kind.fit(&text);
                     self.overlay = Some(Overlay::Prompt { title, text, kind });
                 }
                 _ => self.overlay = Some(Overlay::Prompt { title, text, kind }),
@@ -6772,7 +6787,7 @@ mod tests {
         key(&mut app, KeyCode::Tab, Mods::NONE);
         key(&mut app, KeyCode::Char { c: 'j' }, Mods(Mods::CTRL));
         app.on_paste("x\ny".into());
-        assert_eq!(task(&app).1.as_deref().map(|n| n.ends_with("x y")), Some(true));
+        assert_eq!(task(&app).1.as_deref().map(|n| n.ends_with("x_y")), Some(true));
 
         // Peek's reply, and a broadcast prompt: several lines. A rename: one.
         let id = SessionId::new();
@@ -6792,7 +6807,35 @@ mod tests {
             );
         }
         app.on_paste("b\nc".into());
-        assert!(matches!(&app.overlay, Some(Overlay::Prompt { text, .. }) if text == "ab c"));
+        // A name can't hold a space: it becomes _ (the rename prompt is a name).
+        assert!(matches!(&app.overlay, Some(Overlay::Prompt { text, .. }) if text == "ab_c"));
+    }
+
+    #[test]
+    fn a_name_prompt_swaps_what_it_cant_hold_for_an_underscore() {
+        let mut app = app();
+        let id = SessionId::new();
+        app.overlay = Some(Overlay::Prompt {
+            title: String::new(),
+            text: String::new(),
+            kind: PromptKind::Rename(id),
+        });
+        for c in "My Feat/2".chars() {
+            key(&mut app, KeyCode::Char { c }, Mods::NONE);
+        }
+        assert!(matches!(&app.overlay, Some(Overlay::Prompt { text, .. }) if text == "my_feat_2"));
+        app.on_paste(" a b".into());
+        assert!(
+            matches!(&app.overlay, Some(Overlay::Prompt { text, .. }) if text == "my_feat_2_a_b")
+        );
+        // Free text isn't touched.
+        app.overlay = Some(Overlay::Prompt {
+            title: String::new(),
+            text: String::new(),
+            kind: PromptKind::Retitle(id),
+        });
+        key(&mut app, KeyCode::Char { c: ' ' }, Mods::NONE);
+        assert!(matches!(&app.overlay, Some(Overlay::Prompt { text, .. }) if text == " "));
     }
 
     #[test]
@@ -7187,9 +7230,11 @@ mod tests {
         key(&mut app, KeyCode::Tab, Mods::NONE);
         typed(&mut app, " now");
         assert!(screen(&app).contains("→ fix-flaky-test-x ·"), "the edited name stays");
-        // A bad name says why, and ⏎ keeps the box.
+        // A space in the name becomes _; what no character fixes says why, and ⏎ keeps the box.
         key(&mut app, KeyCode::Tab, Mods::NONE);
-        typed(&mut app, "/");
+        typed(&mut app, " y");
+        assert!(screen(&app).contains("→ fix-flaky-test-x_y ·"), "{}", screen(&app));
+        typed(&mut app, ".");
         assert!(screen(&app).contains("✗ name:"), "{}", screen(&app));
         key(&mut app, KeyCode::Enter, Mods::NONE);
         assert!(matches!(app.overlay, Some(Overlay::Task { .. })));
@@ -7800,17 +7845,23 @@ mod tests {
         rename(&mut app, &s);
         assert!(screen(&app).contains("⏎ ok (unchanged)"));
 
+        // What it can't hold becomes _, and the dialog says so.
         typed(&mut app, "/X");
+        assert_eq!(prompt_text(&app), Some("brisk-rook_x"));
+        assert!(screen(&app).contains("becomes _ (a-z 0-9 . _ -)"), "{}", screen(&app));
+        // What no one character fixes is flagged, and ⏎ doesn't throw the typing away.
+        typed(&mut app, ".");
         let shown = screen(&app);
-        assert!(shown.contains("✗ '/' isn't allowed: use a-z 0-9 . _ -"), "{shown}");
-        assert!(shown.contains("Tab → brisk-rook-x"), "{shown}");
-        // ⏎ doesn't throw the typing away: the prompt stays, text and all.
+        assert!(shown.contains("✗ must not end with . or .lock"), "{shown}");
         typed(&mut app, "\n");
-        assert_eq!(prompt_text(&app), Some("brisk-rook/X"));
-        // Tab takes the suggestion, and then ⏎ goes through.
-        typed(&mut app, "\t");
-        assert_eq!(prompt_text(&app), Some("brisk-rook-x"));
-        assert!(app.prompt_check(&PromptKind::Rename(s.id), "brisk-rook-x").is_ok());
+        assert_eq!(prompt_text(&app), Some("brisk-rook_x."));
+        typed(&mut app, "\x08");
+        assert_eq!(prompt_text(&app), Some("brisk-rook_x"));
+        assert!(app.prompt_check(&PromptKind::Rename(s.id), "brisk-rook_x").is_ok());
+        assert!(
+            app.prompt_check(&PromptKind::Rename(s.id), "brisk/rook").is_err(),
+            "the daemon's rule"
+        );
 
         // Another session's name is taken; its own isn't.
         assert_eq!(
