@@ -425,8 +425,12 @@ async fn tui_closes_the_pane_of_a_removed_session() {
     let clone = newcomer(&c, &["alpha"]).await;
     tokio::time::sleep(Duration::from_millis(1800)).await;
     c.request(Request::Kill { addr: clone.clone(), signal: Some(9) }).await.expect("kill");
-    wait_state(&c, &clone, |s| !s.is_live()).await;
-    c.request(Request::Remove { addr: clone.clone() }).await.expect("remove");
+    // A shell that dies is removed by the daemon itself (`[ui] shell_exit = "close"`).
+    let deadline = Instant::now() + WAIT;
+    while resolve(&c, "@all").await.contains(&clone) {
+        assert!(Instant::now() < deadline, "{clone} was not removed");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
     let r = ui.await.unwrap();
     let header = format!("{clone} · ");
     let split = r.at(2.8);
@@ -534,4 +538,41 @@ async fn tui_view_only_and_custom_prefix() {
         other => panic!("{other:?}"),
     };
     assert!(!screen.contains("you said"));
+}
+
+/// `[ui] shell_exit`: a shell that exits disappears by default; `keep` leaves it as exited.
+/// Agents are never removed (their exit is news).
+#[tokio::test]
+async fn a_shell_that_exits_is_removed_unless_shell_exit_is_keep() {
+    let d = TempDaemon::start_with_env(BIN, &[("SHELL", "/bin/sh")]).unwrap();
+    let c = d.client().await.unwrap();
+    let shell = || SpawnSpec { cwd: std::env::temp_dir(), ..SpawnSpec::default() };
+    let mut started = Vec::new();
+    for _ in 0..2 {
+        match c.request(Request::Spawn { spec: shell() }).await.expect("spawn") {
+            Reply::Session { info } => {
+                assert_eq!(info.kind, ptyro_core::session::SessionKind::Shell);
+                started.push(info.name);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    let kill = |name: String| {
+        let c = &c;
+        async move {
+            c.request(Request::Kill { addr: name, signal: Some(9) }).await.expect("kill");
+        }
+    };
+    kill(started[0].clone()).await;
+    let deadline = Instant::now() + WAIT;
+    while resolve(&c, "@all").await.contains(&started[0]) {
+        assert!(Instant::now() < deadline, "{} was not removed", started[0]);
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    d.write_config("[ui]\nshell_exit = \"keep\"\n").unwrap();
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    kill(started[1].clone()).await;
+    wait_state(&c, &started[1], |s| !s.is_live()).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(resolve(&c, "@exited").await.contains(&started[1]), "kept as exited");
 }

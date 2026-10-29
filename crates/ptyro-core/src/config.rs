@@ -37,6 +37,8 @@ pub struct Ui {
     pub on_stop: OnStop,
     /// How much a sidebar row says under its first line (UX1.2).
     pub sidebar_detail: SidebarDetail,
+    /// What happens to a shell that exits: removed, or kept as an exited row. Agents stay.
+    pub shell_exit: ShellExit,
     /// What the shell key (`!`) shows: a drawer when the project is open, else a panel (UX2.3).
     pub shell_style: ShellStyle,
     /// Milliseconds after the prefix before the menu of next keys appears (UX1.14); 0: never.
@@ -71,6 +73,17 @@ pub enum ShellStyle {
     Pane,
 }
 
+/// What becomes of a shell when it exits, you having typed `exit` (`[ui] shell_exit`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShellExit {
+    /// It disappears from the sidebar and its pane, as if stopped with `x` (agents are kept).
+    #[default]
+    Close,
+    /// It stays in the sidebar as exited, with its last screen, until you remove it.
+    Keep,
+}
+
 /// What a pane does once you stop the session it shows (`[ui] on_stop`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -98,6 +111,7 @@ impl Default for Ui {
             on_stop: OnStop::Next,
             sidebar_detail: SidebarDetail::Auto,
             shell_style: ShellStyle::Pane,
+            shell_exit: ShellExit::Close,
             which_key_delay: 400,
         }
     }

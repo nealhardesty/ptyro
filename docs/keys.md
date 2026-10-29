@@ -77,7 +77,7 @@ action by name.
 | `Z` | everything at once: the sidebar fills the screen with every row open (`⏎` opens one, `Z` or `Esc` goes back) |
 | `[` / `PageUp` | copy mode / copy mode, one page up |
 | `]` | paste what you last copied |
-| `x` / `X` | stop the session (asks first unless `[ui] confirm_kill = false`; an exited one is removed) / kill it now. The pane moves on to the nearest other session (`[ui] on_stop`); `` ` `` brings the stopped one back |
+| `x` / `X` | stop the session (asks first unless `[ui] confirm_kill = false`; an exited one is removed; a shell that exits is removed by itself, `[ui] shell_exit = "keep"` leaves it) / kill it now. The pane moves on to the nearest other session (`[ui] on_stop`); `` ` `` brings the stopped one back |
 | `C-r` | run an exited session's command again |
 | `,` | rename the session (its address); `C-t` in the dialog edits its title instead |
 | `=` | take control: size the session to your pane (when another client resized it) |

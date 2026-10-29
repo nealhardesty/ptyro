@@ -270,6 +270,28 @@ impl App {
         }
     }
 
+    /// Where focus is, for `tuck_away`: the workspace, the pane, and what it shows.
+    pub(crate) fn quick_stance(&self) -> (String, PaneId, Option<SessionId>) {
+        (self.workspace.clone(), self.focused, self.focused_session())
+    }
+
+    /// The drawer and the scratchpad's popup are for quick actions: when focus lands on another
+    /// pane, or another session or workspace shows, they go away (the shells and the editor keep
+    /// running). Focus in the sidebar doesn't count: that is how you pick the next thing.
+    pub(crate) fn tuck_away(&mut self, before: (String, PaneId, Option<SessionId>)) {
+        let moved = self.quick_stance() != before;
+        if let Some(d) = self.drawer
+            && self.focus == Focus::Pane
+            && self.focused != d.pane
+        {
+            self.hide_drawer();
+        }
+        if moved && self.pad_popup.is_some() {
+            self.pad_popup = None;
+            self.sync();
+        }
+    }
+
     /// Forget a drawer whose panes are gone or that no longer hangs below its host (a view
     /// restored from elsewhere, a pane closed under it).
     pub(crate) fn check_drawer(&mut self) {

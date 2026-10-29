@@ -192,7 +192,8 @@ a row's menu (`.`), makes one at any time.
 - `Ctrl-Q Ctrl-T` opens the worktree's **quick terminal**: its one shell, in a drawer below a pane
   of the same project (`Ctrl-Q T` shows it full sized). Press it again to focus it, and once more
   to hide it; the shell keeps running, and its `›_ quick shell` line sits first under the worktree in the
-  sidebar.
+  sidebar, tinted while its drawer is open. The drawer is for quick actions: it (and the
+  scratchpad's drawer or popup) closes when you move to another pane or session.
 - New things open **full sized**, never in a split: a split layout they replace is kept, and
   `` Ctrl-Q ` `` brings it back. Only `Ctrl-Q v` / `s` split, and they split with a clone of the
   pane's session (the same agent in the same worktree, a fresh conversation).

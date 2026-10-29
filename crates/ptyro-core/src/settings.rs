@@ -496,6 +496,10 @@ const ON_STOP: &[Choice] = &[
     c("next", "show the nearest other session"),
     c("stay", "keep the stopped session's last screen"),
 ];
+const SHELL_EXIT: &[Choice] = &[
+    c("close", "the shell disappears from the sidebar and its pane"),
+    c("keep", "the shell stays as an exited row, with its last screen"),
+];
 const DETAIL: &[Choice] = &[
     c("auto", "every row while they fit, else the ones that matter"),
     c("compact", "one line per row"),
@@ -619,6 +623,7 @@ pub const SETTINGS: &[Setting] = &[
     s("ui.tint_borders", "interface", Kind::Bool, "Tint pane borders with the session's profile colour."),
     s("ui.on_stop", "interface", pick(ON_STOP), "What a pane shows after you stop its session."),
     s("ui.which_key_delay", "interface", int(0, 5000), "How long after the prefix key the menu of next keys waits before it pops up. 0 never shows it.").unit("ms").also("hints popup help menu"),
+    s("ui.shell_exit", "interface", pick(SHELL_EXIT), "What happens to a shell when you exit it: it disappears (the default, and easy to reopen), or stays in the sidebar as an exited row. Agents always stay.").also("close remove exit terminal"),
     s("ui.shell_style", "interface", pick(SHELL_STYLE), "How the shell key (`!`) shows a worktree's terminal: as a full-sized panel of its own (the default), or as a drawer under its project's pane. `C-t` always asks for the drawer.").also("terminal split drawer pane panel window shell"),
     s("clipboard.allow_write", "interface", Kind::Bool, "Let programs in sessions copy to your clipboard (OSC 52). Reads are always refused.").also("copy paste"),
     // ── Attention ──

@@ -810,7 +810,13 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
                 if let Some(doing) = quick_doing(s) {
                     spans.push(Span::styled(format!(" {doing}"), fg(app, t.dim)));
                 }
-                Line::from(spans)
+                // Open: the whole line tinted, so what is showing in the drawer is plain.
+                let line = Line::from(spans);
+                if open && !t.monochrome {
+                    line.style(Style::new().bg(app.depth.fit(t.bar_bg)))
+                } else {
+                    line
+                }
             }
             Row::Group(label) => {
                 Line::styled(format!(" {label}"), fg(app, t.dim).add_modifier(Modifier::ITALIC))

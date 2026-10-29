@@ -177,7 +177,15 @@ impl Daemon {
                 self.run_member_changed(&s).await;
                 let _ = self.events.send(DomainEvent::SessionExited { info: self.info(&s) });
                 // `exit` in a quick terminal closes it; the next one starts fresh (UX1.25).
-                if s.is_quick() {
+                // A plain shell too, unless `[ui] shell_exit = "keep"` (a restart's dormant ones
+                // stay: they come back).
+                let closes = s.is_quick()
+                    || (kind == SessionKind::Shell
+                        && state != ProcessState::Dormant
+                        && !s.hibernating.load(Ordering::Relaxed)
+                        && self.config.reading().ui.shell_exit
+                            == ptyro_core::config::ShellExit::Close);
+                if closes {
                     s.save(None);
                     self.forget_session(s.id);
                 }
