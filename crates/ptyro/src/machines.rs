@@ -116,6 +116,9 @@ pub async fn add(
         return Ok(0);
     }
     println!("added {}", state_line(&info));
+    if info.state == MachineState::Mismatch {
+        println!("It is added, but its workspaces won't show until the versions match.");
+    }
     if let Some(e) = &info.error {
         eprintln!("{e}");
     }
