@@ -199,7 +199,8 @@ fn retry_edit_branches_and_forks() {
 fn a_side_chat_nobody_follows_goes_and_goes_with_its_chat() {
     let w = World::new("hibernate_after = \"2s\"");
     w.ok(&["chat", "new", "hello"]);
-    let parent = w.addr_of("Titled");
+    // (By its handle: its title is written behind the answer.)
+    let parent = format!("c:{}", w.chats()[0]["handle"].as_str().unwrap());
     let side_of = |out: &Output| {
         let err = String::from_utf8_lossy(&out.stderr).into_owned();
         err.split_whitespace().next().unwrap_or_default().to_owned()
@@ -215,7 +216,8 @@ fn a_side_chat_nobody_follows_goes_and_goes_with_its_chat() {
     // Deleting its chat takes it along at once (here nothing else would, for a minute).
     let w = World::new("hibernate_after = \"60s\"");
     w.ok(&["chat", "new", "hello"]);
-    let parent = w.addr_of("Titled");
+    // (By its handle: its title is written behind the answer.)
+    let parent = format!("c:{}", w.chats()[0]["handle"].as_str().unwrap());
     let s2 = side_of(&w.cli(&["chat", "fork", &parent, "--side"]));
     assert!(!gone(&w, &s2));
     w.ok(&["chat", "rm", &parent]);
