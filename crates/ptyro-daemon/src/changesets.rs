@@ -717,6 +717,7 @@ impl Daemon {
             agents: vec![],
             worktrees: vec![],
             destructive: false,
+            chat: false,
         };
         let run = self.create_run(
             RunKind::Changeset,

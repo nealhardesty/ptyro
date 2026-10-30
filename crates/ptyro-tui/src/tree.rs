@@ -306,8 +306,16 @@ impl Inputs<'_> {
     /// (SPEC §22.11): their chats are mirrored, and a new one is made there.
     fn chat_rows(&self, ws: &str, honour_collapse: bool) -> Vec<Row> {
         let Some(recent) = self.recent else { return Vec::new() };
+        // Side chats sit under their chat (SPEC §22.12), not among the others.
         let mine: Vec<&ptyro_core::chats::ChatInfo> =
-            self.chats.iter().filter(|c| c.workspace == ws).collect();
+            self.chats.iter().filter(|c| c.workspace == ws && c.side_of.is_none()).collect();
+        let sides_of = |id: &str| -> Vec<Row> {
+            self.chats
+                .iter()
+                .filter(|c| c.side_of.as_deref() == Some(id))
+                .map(|c| Row::Chat(c.id.clone()))
+                .collect()
+        };
         let mut rows = vec![Row::Chats(ws.to_owned())];
         if honour_collapse && self.collapsed.contains(&chats_key(ws)) {
             return rows;
@@ -318,8 +326,13 @@ impl Inputs<'_> {
         }
         let pinned = mine.iter().filter(|c| c.pinned);
         let newest = mine.iter().filter(|c| !c.pinned).take(recent);
-        rows.extend(pinned.chain(newest).map(|c| Row::Chat(c.id.clone())));
-        if rows.len() - 1 < mine.len() {
+        let mut shown = 0;
+        for c in pinned.chain(newest) {
+            rows.push(Row::Chat(c.id.clone()));
+            rows.extend(sides_of(&c.id));
+            shown += 1;
+        }
+        if shown < mine.len() {
             rows.push(Row::ChatAll(ws.to_owned()));
         }
         rows
@@ -519,6 +532,7 @@ mod tests {
             archived: false,
             incognito: false,
             forked: false,
+            side_of: None,
             leaf: None,
             nodes: 2,
             unread: 0,

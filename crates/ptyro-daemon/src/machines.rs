@@ -854,7 +854,17 @@ impl Daemon {
         move |id| ups.get(&id).copied().unwrap_or_else(|| foreign(id))
     }
 
-    fn hidden_of(&self, name: &str) -> Vec<String> {
+    /// The linked machines that are up now.
+    pub(crate) fn online_machines(&self) -> Vec<String> {
+        self.links
+            .locked()
+            .iter()
+            .filter(|(_, l)| l.info.state == MachineState::Online)
+            .map(|(m, _)| m.clone())
+            .collect()
+    }
+
+    pub(crate) fn hidden_of(&self, name: &str) -> Vec<String> {
         self.links.locked().get(name).map(|l| l.record.hidden.clone()).unwrap_or_default()
     }
 

@@ -40,7 +40,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 22 };
+pub const PROTO: Version = Version { major: 1, minor: 23 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1081,6 +1081,9 @@ pub enum Request {
         title: Option<String>,
         #[serde(default)]
         prompt: Option<String>,
+        /// Nothing of it is written; it ends with its agent (1.23, SPEC §22.9).
+        #[serde(default)]
+        incognito: bool,
     },
     /// Chats, pinned first then the newest: one workspace's, or every one's with `all`.
     ChatList {
@@ -1106,6 +1109,64 @@ pub enum Request {
         chat: String,
         text: String,
     },
+    /// Ask again: a new answer to the message `node` answers (a node of that answer, or the
+    /// message; default the last), beside the old one (1.23, SPEC §22.7).
+    ChatRetry {
+        chat: String,
+        #[serde(default)]
+        node: Option<String>,
+    },
+    /// Say it differently: `text` beside the person's message `node`, answered afresh; the old
+    /// one and its answers stay as a branch.
+    ChatEdit {
+        chat: String,
+        node: String,
+        text: String,
+    },
+    /// Show another branch: the one through `to` (its newest tip).
+    ChatBranch {
+        chat: String,
+        to: String,
+    },
+    /// A new chat from this one's branch up to `node` (default: all of it). `side`: a side chat
+    /// that reads this one and never writes back, gone when closed unless kept.
+    ChatFork {
+        chat: String,
+        #[serde(default)]
+        node: Option<String>,
+        #[serde(default)]
+        agent: Option<String>,
+        #[serde(default)]
+        side: bool,
+    },
+    /// Search every chat's messages and titles (SPEC §22.10). `query` takes words, `"phrases"`,
+    /// `-word`, `prefix*`, `agent:`, `since:`, `workspace:`. `machines`: linked machines too.
+    ChatSearch {
+        query: String,
+        #[serde(default)]
+        chat: Option<String>,
+        #[serde(default)]
+        workspace: Option<String>,
+        #[serde(default)]
+        agent: Option<String>,
+        #[serde(default)]
+        pinned: bool,
+        #[serde(default)]
+        archived: bool,
+        #[serde(default)]
+        limit: Option<u32>,
+        #[serde(default)]
+        machines: bool,
+    },
+    /// Ask your chats a question: an incognito chat whose agent has only the chat history tools
+    /// answers it, citing `c:7f3k/node` (SPEC §22.10).
+    ChatFind {
+        question: String,
+        #[serde(default)]
+        agent: Option<String>,
+        #[serde(default)]
+        workspace: Option<String>,
+    },
     /// Answer the chat's open permission request: `allow`, `always` or `deny`.
     ChatAnswer {
         chat: String,
@@ -1128,6 +1189,9 @@ pub enum Request {
         agent: Option<String>,
         #[serde(default)]
         preset: Option<String>,
+        /// Keep a side chat: it becomes an ordinary fork (1.23).
+        #[serde(default)]
+        keep: Option<bool>,
     },
     ChatDelete {
         chat: String,
@@ -1578,10 +1642,16 @@ pub enum Reply {
     Chats {
         chats: Vec<ChatInfo>,
     },
-    /// A chat and nodes of it, oldest first.
+    /// A chat and nodes of it, oldest first, with where the shown branch has others (1.23).
     ChatTranscript {
         info: ChatInfo,
         nodes: Vec<ChatNode>,
+        #[serde(default)]
+        siblings: Vec<ptyro_core::chats::ChatSiblings>,
+    },
+    /// Search hits, best first (1.23).
+    ChatHits {
+        hits: Vec<ptyro_core::chats::ChatHit>,
     },
     Devices {
         devices: Vec<DeviceInfo>,
@@ -1944,6 +2014,9 @@ pub enum ServerMsg {
         #[serde(default)]
         reset: bool,
         items: Vec<ptyro_core::chat::ChatItem>,
+        /// Where the shown branch has others (with `reset`; 1.23).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        siblings: Vec<ptyro_core::chats::ChatSiblings>,
     },
 }
 

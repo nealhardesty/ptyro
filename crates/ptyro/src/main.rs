@@ -484,8 +484,13 @@ enum Cmd {
         #[arg(long)]
         max_bounces: Option<u32>,
     },
-    /// MCP server for lead agents (started for you by `ptyro new --agent … --lead`)
-    Mcp,
+    /// MCP server for lead agents (started for you by `ptyro new --agent … --lead`), and the
+    /// chat history tools inside a chat's agent (`--chat`, started for you)
+    Mcp {
+        /// The chat history tools only (`chat_search`, `chat_read`, `chat_list`)
+        #[arg(long)]
+        chat: bool,
+    },
     /// Bridge stdin/stdout to this machine's daemon (what `--remote` runs over ssh)
     Proxy,
     /// Switch an agent between structured mode (chat view) and its own terminal UI, in the

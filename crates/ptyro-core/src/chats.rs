@@ -40,6 +40,10 @@ pub struct ChatInfo {
     /// Made by forking another chat.
     #[serde(default)]
     pub forked: bool,
+    /// A side chat of this chat (SPEC §22.7): it reads the chat, never writes back, isn't
+    /// listed with the others, and goes when closed unless kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub side_of: Option<String>,
     /// The tip of the shown branch.
     #[serde(default)]
     pub leaf: Option<String>,
@@ -90,6 +94,7 @@ impl ChatInfo {
             Some(AgentStatus::Errored) => "✗",
             _ if self.incognito => "◌",
             _ if self.pinned => "★",
+            _ if self.side_of.is_some() => "↳",
             _ => " ",
         }
     }
@@ -113,6 +118,113 @@ impl ChatNode {
     pub fn item(&self) -> ChatItem {
         ChatItem { id: self.id.clone(), at_ms: self.at_ms, rev: 0, body: self.body.clone() }
     }
+}
+
+/// Where the shown branch has a choice (SPEC §22.7): `node` is the `at`-th (from 1) of `of`
+/// siblings, `ids` all of them in order. Only nodes with siblings are listed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatSiblings {
+    pub node: String,
+    pub at: u32,
+    pub of: u32,
+    pub ids: Vec<String>,
+}
+
+/// One search hit (SPEC §22.10): a message (or, with no `node`, a title) of a chat.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatHit {
+    pub chat: ChatInfo,
+    /// The node it is in; `None`: the chat's title matched.
+    #[serde(default)]
+    pub node: Option<String>,
+    /// `user`, `assistant`, `tool` or `title`.
+    pub kind: String,
+    /// The text around the match, each match between [`MARK_ON`] and [`MARK_OFF`].
+    pub snippet: String,
+    pub at_ms: u64,
+    /// bm25 × 1000, lower is better (comparable within one machine only).
+    pub rank: i64,
+}
+
+/// Around a match in a snippet (control characters, so no text can fake one).
+pub const MARK_ON: char = '\u{2}';
+pub const MARK_OFF: char = '\u{3}';
+
+/// What a search asks (SPEC §22.10): the FTS5 expression, and the filters typed into it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Query {
+    /// For `MATCH`; empty when only filters were typed.
+    pub fts: String,
+    /// The plain words (for a title match).
+    pub words: Vec<String>,
+    pub agent: Option<String>,
+    pub since_ms: Option<u64>,
+    pub workspace: Option<String>,
+}
+
+/// Parse a search: plain words (all must match), `"a phrase"`, `-word`, `prefix*`, and the
+/// filters `agent:codex`, `since:7d`, `workspace:work`. Every term is quoted for FTS5, so no
+/// typed character is an operator by accident.
+pub fn parse_query(q: &str, now_ms: u64) -> Result<Query, String> {
+    let mut out = Query::default();
+    let (mut yes, mut no): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+    let mut rest = q.trim();
+    while !rest.is_empty() {
+        let (neg, r) = match rest.strip_prefix('-') {
+            Some(r) if !r.starts_with(' ') && !r.is_empty() => (true, r),
+            _ => (false, rest),
+        };
+        let (term, phrase, after) = if let Some(r) = r.strip_prefix('"') {
+            let end = r.find('"').unwrap_or(r.len());
+            (r[..end].to_owned(), true, r.get(end + 1..).unwrap_or(""))
+        } else {
+            let end = r.find(char::is_whitespace).unwrap_or(r.len());
+            (r[..end].to_owned(), false, &r[end..])
+        };
+        rest = after.trim_start();
+        if term.trim().is_empty() {
+            continue;
+        }
+        if !phrase
+            && !neg
+            && let Some((k, v)) = term.split_once(':')
+        {
+            match k {
+                "agent" => {
+                    out.agent = Some(v.to_owned());
+                    continue;
+                }
+                "workspace" | "ws" => {
+                    out.workspace = Some(v.to_owned());
+                    continue;
+                }
+                "since" => {
+                    let d =
+                        crate::config::parse_duration(v).map_err(|e| format!("since:{v}: {e}"))?;
+                    out.since_ms = Some(now_ms.saturating_sub(d.as_millis() as u64));
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        let prefix = !phrase && term.ends_with('*') && term.len() > 1;
+        let bare = if prefix { &term[..term.len() - 1] } else { &term };
+        let quoted = format!("\"{}\"{}", bare.replace('"', ""), if prefix { "*" } else { "" });
+        if neg {
+            no.push(quoted);
+        } else {
+            out.words.push(bare.to_owned());
+            yes.push(quoted);
+        }
+    }
+    if yes.is_empty() && !no.is_empty() {
+        return Err("say what to look for, not only what to leave out".into());
+    }
+    out.fts = yes.join(" ");
+    for n in no {
+        out.fts = format!("{} NOT {n}", out.fts);
+    }
+    Ok(out)
 }
 
 /// The `kind` column of a node (§22.4).
@@ -295,6 +407,22 @@ mod tests {
         let long = vec![n("9", ChatBody::Assistant { text: "y".repeat(10_000), streaming: false })];
         let (block, k) = seed_block(&long, 100).unwrap();
         assert!(k == 1 && block.len() < 1000 && block.contains('…'));
+    }
+
+    #[test]
+    fn queries() {
+        let q =
+            parse_query(r#"retry "back off" -redis migrat* agent:codex since:7d"#, 10 * 86_400_000)
+                .unwrap();
+        assert_eq!(q.fts, r#""retry" "back off" "migrat"* NOT "redis""#);
+        assert_eq!(q.words, ["retry", "back off", "migrat"]);
+        assert_eq!(q.agent.as_deref(), Some("codex"));
+        assert_eq!(q.since_ms, Some(3 * 86_400_000));
+        // Nothing typed is an operator by accident.
+        assert_eq!(parse_query("a AND (b", 0).unwrap().fts, r#""a" "AND" "(b""#);
+        assert!(parse_query("-only", 0).is_err());
+        assert_eq!(parse_query("agent:claude", 0).unwrap().fts, "");
+        assert!(parse_query("since:soon x", 0).is_err());
     }
 
     #[test]

@@ -98,6 +98,8 @@ impl Daemon {
                     mcp: false,
                     structured: false,
                     params: None,
+                    fork: false,
+                    chat_tools: false,
                 }),
             })
             .await?;

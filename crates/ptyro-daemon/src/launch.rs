@@ -36,6 +36,10 @@ pub struct AgentStart {
     pub structured: bool,
     /// More fields for the structured driver's start call (a chat's tool limits).
     pub params: Option<serde_json::Value>,
+    /// With `resume`: fork that conversation instead of continuing it (a chat's fork).
+    pub fork: bool,
+    /// A lead whose run policy says `chat = true`: its `ptyro mcp` has the chat history tools.
+    pub chat_tools: bool,
 }
 
 /// A structured launch (M10): the protocol, the driver's options, OpenCode's port and password.
@@ -419,12 +423,19 @@ impl Daemon {
             let integrations = self.paths.data.join("integrations");
             // A lead (new, or one resumed or restarted) gets ptyro's MCP server (SPEC §15.4).
             let lead = a.mcp || self.run_of_session(&session).is_some_and(|(_, _, lead)| lead);
+            // (A restarted lead's run knows its policy; a new one's comes with it.)
+            let chat_tools = a.chat_tools
+                || self.run_of_session(&session).and_then(|(_, p, _)| p).is_some_and(|p| p.chat);
             let mcp = lead.then(|| {
+                let mut env = serde_json::json!({ "PTYRO_SESSION_ID": session, "PTYRO_SOCKET": self.paths.socket.to_string_lossy() });
+                if chat_tools {
+                    env["PTYRO_CHAT_TOOLS"] = "1".into();
+                }
                 serde_json::json!({ "mcpServers": { "ptyro": {
                     "type": "stdio",
                     "command": ptyro,
                     "args": ["mcp"],
-                    "env": { "PTYRO_SESSION_ID": session, "PTYRO_SOCKET": self.paths.socket.to_string_lossy() },
+                    "env": env,
                 } } })
                 .to_string()
             });
@@ -450,6 +461,7 @@ impl Daemon {
                     resume: a.resume.clone(),
                     session_id: session_id.clone(),
                     params: a.params.clone(),
+                    fork: a.fork,
                 };
                 let http = (protocol == "opencode")
                     .then(free_port)
@@ -524,6 +536,7 @@ impl Daemon {
         let stale_after_ms = parse_duration(&config.attention.stale_after)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(300_000);
+        let record = self.record_spec(l.id, &l.place);
         let spawned = Spawned {
             argv,
             kind: l.kind,
@@ -539,7 +552,7 @@ impl Daemon {
             conversation,
             dangerous,
             stale_after_ms,
-            record: self.record_spec(l.id, l.agent.as_ref().map(|a| a.name.as_str())),
+            record,
         };
         // A relaunch in place keeps the session's part in a run.
         let carried = self.session(l.id).map(|old| {

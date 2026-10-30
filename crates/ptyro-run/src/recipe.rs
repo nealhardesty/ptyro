@@ -73,6 +73,10 @@ pub struct Policy {
     /// Commit, push, integrate, remove worktrees, open PRs. Off by default.
     #[serde(default)]
     pub destructive: bool,
+    /// The chat history tools (`chat_search`, `chat_read`, `chat_list`; SPEC §22.10). Off by
+    /// default.
+    #[serde(default)]
+    pub chat: bool,
 }
 
 fn four() -> u32 {
@@ -91,6 +95,7 @@ impl Default for Policy {
             agents: Vec::new(),
             worktrees: default_targets(),
             destructive: false,
+            chat: false,
         }
     }
 }

@@ -262,6 +262,15 @@ impl Daemon {
                         changed = true;
                     }
                 }
+                // A chat's engine: its messages are chat text, which lives in `chat.db` only
+                // (SPEC §22.4), never in this session's row.
+                Signal::Prompt { .. }
+                    if s.meta
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .place
+                        .chat
+                        .is_some() => {}
                 Signal::Prompt { text } => {
                     self.verify_on_prompt(s, &text);
                     self.mail_seen(s, &text);
@@ -1053,6 +1062,8 @@ impl Daemon {
                     mcp: false,
                     structured: mode.unwrap_or(m.structured.is_some()),
                     params: None,
+                    fork: false,
+                    chat_tools: false,
                 }),
             })
             .await?;

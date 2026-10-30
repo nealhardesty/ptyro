@@ -441,11 +441,13 @@ impl Store {
         });
     }
 
+    /// A session's event; none for a session that isn't kept here (a chat's engine).
     pub fn event(&self, session: String, kind: &'static str, detail: serde_json::Value) {
         let at = ptyro_core::now_ms() as i64;
         self.spawn(move |c| {
             c.execute(
-                "INSERT INTO session_event (session_id, at, kind, detail) VALUES (?1, ?2, ?3, ?4)",
+                "INSERT INTO session_event (session_id, at, kind, detail) \
+                 SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM session WHERE id = ?1)",
                 params![session, at, kind, detail.to_string()],
             )?;
             Ok(())
@@ -479,6 +481,22 @@ impl Store {
             Ok(rows)
         })
         .await
+    }
+
+    /// Forget every session that ran in `dir` or below (with its events): chat engines' rows,
+    /// from before they were kept out of this database.
+    pub fn forget_sessions_in(&self, dir: String) {
+        self.spawn(move |c| {
+            let like = dir.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+            let like = format!("{like}/%");
+            c.execute(
+                "DELETE FROM session_event WHERE session_id IN \
+                 (SELECT id FROM session WHERE cwd LIKE ?1 ESCAPE '\\')",
+                params![like],
+            )?;
+            c.execute("DELETE FROM session WHERE cwd LIKE ?1 ESCAPE '\\'", params![like])?;
+            Ok(())
+        });
     }
 
     pub fn forget_session(&self, id: String) {

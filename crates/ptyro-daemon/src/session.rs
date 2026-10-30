@@ -569,6 +569,10 @@ impl Session {
     pub fn save(&self, launch: Option<serde_json::Value>) {
         let Some(store) = &self.store else { return };
         let m = self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        // A chat's engine is the chat's, and its words are chat text: never in `ptyro.db`.
+        if m.place.chat.is_some() {
+            return;
+        }
         store.save_session(SessionRecord {
             id: self.id.full(),
             name: m.name,

@@ -348,13 +348,22 @@ git diff | ptyro chat ask "review this"     # one answer on stdout, nothing kept
 ptyro chat ls                               # pinned first, then the newest
 ptyro chat send @last "and in async code?"  # carry on
 ptyro chat set @last --agent codex          # switch agents: the conversation carries over
+ptyro chat retry @last                      # another answer; `chat show --branches` lists both
+ptyro chat fork @last --at 3f9k01ab --agent codex   # a new chat from an old message, on codex
+ptyro chat fork @last --side "what does that flag do?"   # a side chat: reads, never writes back
+ptyro chat search 'retry policy since:7d -draft'    # every chat, on every linked machine
+ptyro chat find "what did we decide about the retry policy?"   # an agent answers from your history, with citations
 ```
 
 In the TUI every workspace has a **CHATS** section in the sidebar; `C-q m` starts a chat and
 `C-q g` lists them. The web app has a **Chats** tab. A chat can search the web and touch no
 file (`[chat] preset`); its agent stops when idle and picks up again from the saved conversation,
 after a restart too. A linked machine's chats show under its workspaces and are used from here
-(they run there, on its agents). Chats live in their own file, `chat.db` (`ptyro doctor` checks it). Settings:
+(they run there, on its agents). In a chat, `Alt-←`/`Alt-→` flips between answers, `C-f` finds in
+it, `/` in the composer lists commands (`/retry`, `/edit`, `/fork`, `/side`, `/agent`…) and `C-q C-g`
+searches every chat; `Tab` (or `C-i`) makes a new chat incognito (nothing kept). A chat can look up your earlier
+chats itself (`[chat] history_tool`), only those of its own profile unless `history_scope` says
+otherwise. Chats live in their own file, `chat.db` (`ptyro doctor` checks it). Settings:
 `[chat]` in the config (the Chat section of the settings panel).
 
 ### The scratchpad

@@ -2430,7 +2430,7 @@ rows, its `[chat]` settings schema entries and its `make` targets, and the miles
   with no setup; the chat is in the sidebar; after `ptyro daemon stop` and start it is still there and
   carries on; the same chat shows, opens and answers from the phone; and with `laptop2` linked, its
   workspace's CHATS section lists its chats and a message sent to one runs on `laptop2`.
-- [ ] **CHAT2 Branches, forks and agents** (R-CHAT-02, 03, 04, 05, 17) **L**
+- [x] **CHAT2 Branches, forks and agents** (R-CHAT-02, 03, 04, 05, 17) **L** (built 2026-10-29; SPEC §22's "As built")
   - Edit and retry as siblings, the `‹ 2/3 ›` navigator, `chat branch`.
   - `chat fork` (copy; native where CHAT0 verified it, else seeded), `fork --at`, fork-of titles.
   - Side chats (`--side`, `/side`), incognito (`--incognito`, `C-i`), switch agent (`/agent`).
@@ -2438,7 +2438,7 @@ rows, its `[chat]` settings schema entries and its `make` targets, and the miles
   *Done when:* a chat is forked at an old message, continued on codex from a claude chat, a side chat
   is asked about the answer and closed, and a retry's two answers are flipped between, in all three
   clients.
-- [ ] **CHAT3 Search** (R-CHAT-07, 08) **L**
+- [x] **CHAT3 Search** (R-CHAT-07, 08) **L** (built 2026-10-29; SPEC §22's "As built")
   - FTS5 search with filters and snippets, `chat search`, the chat list's `/`, `C-g` everywhere, search
     across machines (§22.10: fanned out, interleaved by rank).
   - The ask tools in `ptyro mcp` (`chat_search`, `chat_read`, `chat_list`), `history_tool`,
@@ -2446,6 +2446,11 @@ rows, its `[chat]` settings schema entries and its `make` targets, and the miles
   *Done when:* "what did we decide about X" in any chat finds the answer from a chat of last week,
   with a citation that opens it; a work-profile chat is never found from a personal one; and a search
   on one laptop finds a chat that lives on the other.
+  - **Built:** CHAT2's native fork is Claude-only and from the conv's end; Gemini and OpenCode
+    engines get no history tools; `chat find` returns the chat it opens rather than a bare answer.
+    **Left:** `--machine` on search, a trigram index for CJK, history tools for ACP and OpenCode.
+    Tested: `tests/chat_more.rs` (retry, edit, branch, fork at, side chats kept and dropped,
+    incognito, search filters and scopes, `chat find`, the MCP tools' scope), the store's tests.
 - [ ] **CHAT4 Tools and tasks** (R-CHAT-09, 15) **M**
   - The presets (`chat`, `read`, `none`, yours), `[chat.tools.*]`, folders, an MCP list per preset,
     the `tools: best effort` badge, `/tools`.

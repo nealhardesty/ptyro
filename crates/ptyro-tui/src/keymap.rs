@@ -238,6 +238,32 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("chat.preset", "What this chat may use: web search, read folders, or no tools"),
     a("chat.export", "Write this chat out as Markdown"),
     a("chat.stop", "Stop the answer being written"),
+    a(
+        "chat.retry",
+        "Ask again: a new answer beside the old one, which stays as a branch (Alt-←/→ flips between them)",
+    ),
+    a("chat.edit", "Say a message differently: answered afresh, the old one stays as a branch"),
+    a("chat.branch", "Show another branch of this chat (where a retry or an edit made one)"),
+    a(
+        "chat.fork",
+        "Fork this chat into a new one, from the end or from any message (it carries the conversation)",
+    ),
+    a(
+        "chat.side",
+        "A side chat: ask about this chat without changing it; closed, it goes (unless kept)",
+    ),
+    a("chat.keep", "Keep this side chat as a chat of its own"),
+    a(
+        "chat.incognito",
+        "New incognito chat: nothing of it is kept or searchable, it ends with its agent",
+    ),
+    a(
+        "chat.search",
+        "Search every chat's messages, on every machine (words, \"phrases\", prefix*, -word, agent:, since:)",
+    ),
+    a("chat.find", "Ask your chats a question: an agent searches them and answers, citing where"),
+    a("chat.find_in", "Find in this chat (C-f; again for the next)"),
+    a("chat.cite", "Open a citation (c:7f3k/…) of this chat's answers"),
     a("sets", "Change sets: members as swimlanes, gates, issues, the ledger as a timeline"),
     // ── UX1.21: everything else the CLI does, in the TUI ──
     a(
@@ -391,6 +417,7 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Prefix, "S", "sets"),
     (Table::Prefix, "m", "chat.new"),
     (Table::Prefix, "g", "chat.list"),
+    (Table::Prefix, "C-g", "chat.search"),
     (Table::Prefix, "`", "session.last"),
     (Table::Prefix, "x", "session.stop"),
     (Table::Prefix, "X", "session.kill"),

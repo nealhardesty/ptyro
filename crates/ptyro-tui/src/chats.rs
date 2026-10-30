@@ -5,7 +5,7 @@
 //! `Ctrl-C` stops an answer, Esc goes back.
 
 use ptyro_core::chat::{ChatBody, ChatItem};
-use ptyro_core::chats::ChatInfo;
+use ptyro_core::chats::{ChatHit, ChatInfo, ChatSiblings};
 use ptyro_core::input::{KeyCode, KeyEvent, KeyKind, Mods};
 use ptyro_core::status::AgentStatus;
 use ptyro_protocol::{ClientMsg, Request};
@@ -34,6 +34,10 @@ pub struct ChatList {
     pub typing: bool,
     /// Archived chats instead (fetched when asked for).
     pub archived: Option<Vec<ChatInfo>>,
+    /// Messages that match the query (SPEC §22.10), from every machine, best first.
+    pub hits: Vec<ChatHit>,
+    /// The query those hits answer (a reply to an older one is dropped).
+    pub hits_for: String,
 }
 
 pub struct ChatViewState {
@@ -49,6 +53,15 @@ pub struct ChatViewState {
     pub from_list: Option<ChatList>,
     /// A message is on its way (a new chat being made, or one sent): another waits for it.
     pub sending: bool,
+    /// A new chat that keeps nothing (`C-i` flips it before the first message).
+    pub incognito: bool,
+    /// Where the shown branch has others.
+    pub siblings: Vec<ChatSiblings>,
+    /// Find in the chat: the matching messages, and which is shown.
+    pub found: Vec<String>,
+    pub found_at: usize,
+    /// Show this message once the branch arrives (a search hit, a citation).
+    pub focus: Option<String>,
 }
 
 /// The day group of a chat in the list.
@@ -164,14 +177,50 @@ impl App {
         }
     }
 
-    /// A followed chat's items.
-    pub(crate) fn chat_live(&mut self, chat: String, rev: u64, reset: bool, items: Vec<ChatItem>) {
+    /// A followed chat's items (with a reset: where its branch has others).
+    pub(crate) fn chat_live(
+        &mut self,
+        chat: String,
+        rev: u64,
+        reset: bool,
+        items: Vec<ChatItem>,
+        siblings: Vec<ChatSiblings>,
+    ) {
         if let Some(ChatPanel::View(v)) = &mut self.chat_panel
             && v.id.as_deref() == Some(chat.as_str())
         {
             let draft = v.draft.clone();
             v.view.apply(rev, reset, items, draft);
+            if reset {
+                v.view.set_marks(siblings.iter().map(|s| (s.node.clone(), (s.at, s.of))));
+                v.siblings = siblings;
+                // Another branch: find-in-chat's matches are this one's.
+                if let Some(q) = v.view.highlight.clone() {
+                    v.found = v.view.find(&q);
+                    v.found_at = 0;
+                }
+            }
+            if let Some(n) = v.focus.clone()
+                && v.view.items.iter().any(|i| i.id == n)
+            {
+                v.view.focus_on(&n);
+                v.focus = None;
+            }
             self.dirty = true;
+        }
+    }
+
+    /// Open a chat at a message (a search hit, a citation): its branch is shown first.
+    pub(crate) fn open_chat_at(&mut self, chat: &str, node: Option<&str>) {
+        if let Some(n) = node {
+            self.request(
+                Pending::Done(String::new()),
+                Request::ChatBranch { chat: chat.to_owned(), to: n.to_owned() },
+            );
+        }
+        self.open_chat(chat);
+        if let Some(ChatPanel::View(v)) = &mut self.chat_panel {
+            v.focus = node.map(str::to_owned);
         }
     }
 
@@ -193,6 +242,11 @@ impl App {
             preset: None,
             from_list: None,
             sending: false,
+            incognito: self.config.chat.incognito,
+            siblings: Vec::new(),
+            found: Vec::new(),
+            found_at: 0,
+            focus: None,
         })));
         self.dirty = true;
     }
@@ -205,8 +259,15 @@ impl App {
         let from_list = match self.chat_panel.take() {
             Some(ChatPanel::List(l)) => Some(l),
             other => {
+                // The chat already shown (a hit or citation in it): followed again, not left.
+                let same =
+                    matches!(&other, Some(ChatPanel::View(v)) if v.id.as_deref() == Some(id));
                 self.chat_panel = other;
-                self.leave_chat();
+                if same {
+                    self.send(ClientMsg::ChatUnsubscribe { chat: id.to_owned() });
+                } else {
+                    self.leave_chat();
+                }
                 None
             }
         };
@@ -222,6 +283,11 @@ impl App {
             preset: None,
             from_list,
             sending: false,
+            incognito: false,
+            siblings: Vec::new(),
+            found: Vec::new(),
+            found_at: 0,
+            focus: None,
         })));
         self.dirty = true;
     }
@@ -238,16 +304,29 @@ impl App {
             query: String::new(),
             typing: false,
             archived: None,
+            hits: Vec::new(),
+            hits_for: String::new(),
         }));
         self.dirty = true;
     }
 
-    /// Stop following the chat shown, if one is.
+    /// Stop following the chat shown, if one is (a side chat not kept goes with it).
     fn leave_chat(&mut self) {
         if let Some(ChatPanel::View(v)) = &self.chat_panel
-            && let Some(id) = &v.id
+            && let Some(id) = v.id.clone()
         {
-            self.send(ClientMsg::ChatUnsubscribe { chat: id.clone() });
+            self.left_chat(&id);
+        }
+    }
+
+    /// A chat's view was left: stop following it; a side chat goes, unless kept (SPEC §22.7).
+    fn left_chat(&mut self, id: &str) {
+        self.send(ClientMsg::ChatUnsubscribe { chat: id.to_owned() });
+        if self.chat(id).is_some_and(|c| c.side_of.is_some()) {
+            self.request(
+                Pending::Done("side chat closed".into()),
+                Request::ChatDelete { chat: id.to_owned() },
+            );
         }
     }
 
@@ -269,7 +348,14 @@ impl App {
             Some(ChatPanel::View(v)) => return v.id.clone(),
             Some(ChatPanel::List(l)) => {
                 let rows = self.list_rows(l);
-                return rows.get(l.sel.min(rows.len().saturating_sub(1))).map(|c| c.id.clone());
+                // Past the chats come the message hits: theirs is the hit's chat.
+                return match rows.get(l.sel) {
+                    Some(c) => Some(c.id.clone()),
+                    None => match l.hits.get(l.sel - rows.len()) {
+                        Some(h) => Some(h.chat.id.clone()),
+                        None => rows.last().map(|c| c.id.clone()),
+                    },
+                };
             }
             None => {}
         }
@@ -285,6 +371,29 @@ impl App {
     pub(crate) fn chat_action(&mut self, action: &str) {
         match action {
             "chat.new" => return self.new_chat(),
+            "chat.incognito" => {
+                self.new_chat();
+                if let Some(ChatPanel::View(v)) = &mut self.chat_panel {
+                    v.incognito = true;
+                }
+                return;
+            }
+            "chat.search" => {
+                // Every chat, every workspace, every machine: the list, typing its search.
+                self.open_chat_list(None);
+                if let Some(ChatPanel::List(l)) = &mut self.chat_panel {
+                    l.typing = true;
+                }
+                return;
+            }
+            "chat.find" => {
+                self.overlay = Some(Overlay::Prompt {
+                    title: "Ask your chats (an agent searches them and cites what it finds)".into(),
+                    text: String::new(),
+                    kind: PromptKind::ChatFind,
+                });
+                return;
+            }
             "chat.list" => {
                 if matches!(self.chat_panel, Some(ChatPanel::List(_))) {
                     return self.close_chat();
@@ -306,6 +415,7 @@ impl App {
             archived,
             agent: None,
             preset: None,
+            keep: None,
         };
         match action {
             "chat.open" => self.open_chat(&id),
@@ -358,7 +468,314 @@ impl App {
             "chat.stop" => {
                 self.request(Pending::Done("stopped".into()), Request::ChatStop { chat: id })
             }
+            "chat.retry" => self.request(
+                Pending::Done("asked again: the old answer stays as a branch".into()),
+                Request::ChatRetry { chat: id, node: None },
+            ),
+            "chat.edit" => self.pick_message(Purpose::ChatEditPick, "Edit which message?"),
+            "chat.fork" => self.pick_message(Purpose::ChatForkAt, "Fork from where?"),
+            "chat.side" => self.request(
+                Pending::ChatOpen,
+                Request::ChatFork { chat: id, node: None, agent: None, side: true },
+            ),
+            "chat.keep" => {
+                if info.as_ref().is_some_and(|c| c.side_of.is_some()) {
+                    // Kept at once here, so leaving before the daemon's word doesn't drop it.
+                    if let Some(c) = self.chat_list.iter_mut().find(|c| c.id == id) {
+                        c.side_of = None;
+                    }
+                    self.request(
+                        Pending::Done("kept: it is a chat of its own now".into()),
+                        Request::ChatUpdate {
+                            chat: id,
+                            title: None,
+                            pinned: None,
+                            archived: None,
+                            agent: None,
+                            preset: None,
+                            keep: Some(true),
+                        },
+                    );
+                } else {
+                    self.toast("not a side chat: nothing to keep");
+                }
+            }
+            "chat.branch" => self.pick_branch(),
+            "chat.find_in" => {
+                self.overlay = Some(Overlay::Prompt {
+                    title: "Find in this chat".into(),
+                    text: String::new(),
+                    kind: PromptKind::ChatFindIn,
+                });
+            }
+            "chat.cite" => self.pick_citation(),
             _ => {}
+        }
+    }
+
+    /// The person's messages of the shown branch, newest first, to pick one (`purpose`).
+    /// (The view's own chat: its messages are the ones offered.)
+    fn pick_message(&mut self, purpose: fn(String) -> Purpose, title: &str) {
+        let Some(ChatPanel::View(v)) = &self.chat_panel else {
+            return self.toast("open the chat first (⏎ on it)");
+        };
+        let Some(chat) = v.id.clone() else { return self.toast("no message yet") };
+        let mut items: Vec<Item> = Vec::new();
+        if matches!(purpose(String::new()), Purpose::ChatForkAt(_)) {
+            items.push(Item {
+                label: "from the end".into(),
+                detail: "the whole conversation".into(),
+                key: None,
+                target: Target::Chat(String::new()),
+            });
+        }
+        for it in v.view.items.iter().rev() {
+            if let ChatBody::User { text } = &it.body {
+                items.push(Item {
+                    label: ptyro_core::chats::first_line_title(text),
+                    detail: crate::ui::ago(it.at_ms),
+                    key: None,
+                    target: Target::Chat(it.id.clone()),
+                });
+            }
+        }
+        if items.is_empty() {
+            return self.toast("no message yet");
+        }
+        self.overlay =
+            Some(Overlay::Picker { palette: Palette::new(title, items), purpose: purpose(chat) });
+    }
+
+    /// The branch points of the shown chat, each choice of each, to show another.
+    fn pick_branch(&mut self) {
+        let Some(ChatPanel::View(v)) = &self.chat_panel else {
+            return self.toast("open the chat first (⏎ on it)");
+        };
+        let Some(chat) = v.id.clone() else { return self.toast("no message yet") };
+        let mut items = Vec::new();
+        for s in &v.siblings {
+            for (i, id) in s.ids.iter().enumerate() {
+                let here = i + 1 == s.at as usize;
+                items.push(Item {
+                    label: format!("{}/{} at message {}", i + 1, s.of, short(&s.node)),
+                    detail: if here { "shown".into() } else { "show this branch".into() },
+                    key: None,
+                    target: Target::Chat(id.clone()),
+                });
+            }
+        }
+        if items.is_empty() {
+            return self.toast("one branch only: retry an answer (/retry) or edit a message (/edit) to make another");
+        }
+        self.overlay = Some(Overlay::Picker {
+            palette: Palette::new("Which branch?", items),
+            purpose: Purpose::ChatBranchPick(chat),
+        });
+    }
+
+    /// Citations (`c:7f3k/01jb…`) in the shown chat's answers, to open one.
+    fn pick_citation(&mut self) {
+        let Some(ChatPanel::View(v)) = &self.chat_panel else { return };
+        let mut seen = Vec::new();
+        for it in &v.view.items {
+            if let ChatBody::Assistant { text, .. } = &it.body {
+                for c in citations(text) {
+                    if !seen.contains(&c) {
+                        seen.push(c);
+                    }
+                }
+            }
+        }
+        if seen.is_empty() {
+            return self.toast("no citations (c:7f3k/…) in this chat");
+        }
+        let items = seen
+            .into_iter()
+            .map(|c| Item {
+                label: c.clone(),
+                detail: "open it there".into(),
+                key: None,
+                target: Target::Chat(c),
+            })
+            .collect();
+        self.overlay = Some(Overlay::Picker {
+            palette: Palette::new("Open a citation", items),
+            purpose: Purpose::ChatCite,
+        });
+    }
+
+    /// Find `text` in the chat shown: highlight it and show the first message with it.
+    pub(crate) fn find_in_chat(&mut self, text: &str) {
+        let Some(ChatPanel::View(v)) = &mut self.chat_panel else { return };
+        v.found = v.view.find(text);
+        v.found_at = 0;
+        v.view.highlight = Some(text.to_owned()).filter(|t| !t.is_empty());
+        v.view.apply(v.view.rev, false, Vec::new(), v.draft.clone());
+        let msg = match v.found.first().cloned() {
+            Some(n) => {
+                v.view.focus_on(&n);
+                format!("1/{} · C-f next · Esc clears", v.found.len())
+            }
+            None => format!("{text:?}: not in this chat (C-q C-g searches every chat)"),
+        };
+        self.toast(msg);
+    }
+
+    /// What a picker of ours picked.
+    pub(crate) fn chat_pick(&mut self, purpose: Purpose, value: String) {
+        match purpose {
+            Purpose::ChatForkAt(chat) => self.request(
+                Pending::ChatOpen,
+                Request::ChatFork {
+                    chat,
+                    node: Some(value).filter(|v| !v.is_empty()),
+                    agent: None,
+                    side: false,
+                },
+            ),
+            Purpose::ChatEditPick(chat) => {
+                let text = match &self.chat_panel {
+                    Some(ChatPanel::View(v)) => v.view.items.iter().find_map(|i| match &i.body {
+                        ChatBody::User { text } if i.id == value => Some(text.clone()),
+                        _ => None,
+                    }),
+                    _ => None,
+                };
+                self.overlay = Some(Overlay::Prompt {
+                    title: "Say it differently (the old message and its answer stay as a branch)"
+                        .into(),
+                    text: text.unwrap_or_default(),
+                    kind: PromptKind::ChatEdit(chat, value),
+                });
+            }
+            Purpose::ChatBranchPick(chat) => {
+                self.request(Pending::Done(String::new()), Request::ChatBranch { chat, to: value })
+            }
+            Purpose::ChatCite => {
+                // `c:7f3k/01jb…`, maybe with a machine: the chat, then the node.
+                let (chat, node) = value.rsplit_once('/').unwrap_or((value.as_str(), ""));
+                let node = Some(node.to_owned()).filter(|n| !n.is_empty());
+                // The view follows a chat by its id: an address is looked up first.
+                match self.chat_list.iter().find(|c| c.addr() == chat || c.id == chat) {
+                    Some(c) => {
+                        let id = c.id.clone();
+                        self.open_chat_at(&id, node.as_deref());
+                    }
+                    None => self.request(
+                        Pending::ChatOpenAt(node),
+                        Request::ChatRead { chat: chat.to_owned(), all: false },
+                    ),
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A slash command typed into the composer (SPEC §22.12); `false`: not one.
+    fn chat_slash(&mut self, chat: Option<String>, text: &str) -> bool {
+        let Some(cmd) = text.trim().strip_prefix('/') else { return false };
+        let (name, arg) = cmd.split_once(' ').map_or((cmd, ""), |(a, b)| (a, b.trim()));
+        let need = |me: &mut Self| {
+            me.toast("send a first message, then /commands work on the chat");
+        };
+        match (name, chat) {
+            ("help" | "?", _) => self.toast(
+                "/retry /edit [text] /fork /side [question] /keep /agent NAME /tools NAME /title TEXT /search WORDS /find QUESTION /export /incognito /branch /cite",
+            ),
+            ("incognito", _) => self.chat_action("chat.incognito"),
+            ("search", _) => {
+                self.chat_action("chat.search");
+                if let Some(ChatPanel::List(l)) = &mut self.chat_panel {
+                    l.query = arg.to_owned();
+                }
+                self.search_chats();
+            }
+            ("find", _) if !arg.is_empty() => {
+                self.request(
+                    Pending::ChatOpen,
+                    Request::ChatFind { question: arg.to_owned(), agent: None, workspace: None },
+                );
+            }
+            ("find", _) => self.chat_action("chat.find"),
+            (_, None) => need(self),
+            ("retry", Some(_)) => self.chat_action("chat.retry"),
+            ("edit", Some(c)) if !arg.is_empty() => {
+                let last = match &self.chat_panel {
+                    Some(ChatPanel::View(v)) => v.view.items.iter().rev().find_map(|i| {
+                        matches!(i.body, ChatBody::User { .. }).then(|| i.id.clone())
+                    }),
+                    _ => None,
+                };
+                match last {
+                    Some(n) => self.request(
+                        Pending::Done(String::new()),
+                        Request::ChatEdit { chat: c, node: n, text: arg.to_owned() },
+                    ),
+                    None => self.toast("no message to edit"),
+                }
+            }
+            ("edit", Some(_)) => self.chat_action("chat.edit"),
+            ("fork", Some(_)) => self.chat_action("chat.fork"),
+            ("side", Some(c)) if !arg.is_empty() => self.request(
+                Pending::ChatSideAsk(arg.to_owned()),
+                Request::ChatFork { chat: c, node: None, agent: None, side: true },
+            ),
+            ("side", Some(_)) => self.chat_action("chat.side"),
+            ("keep", Some(_)) => self.chat_action("chat.keep"),
+            ("branch", Some(_)) => self.chat_action("chat.branch"),
+            ("cite", Some(_)) => self.chat_action("chat.cite"),
+            ("export", Some(_)) => self.chat_action("chat.export"),
+            ("agent", Some(_)) if arg.is_empty() => self.chat_action("chat.agent"),
+            ("agent", Some(c)) => self.chat_picked(arg.to_owned(), true, Some(c)),
+            ("tools", Some(_)) if arg.is_empty() => self.chat_action("chat.preset"),
+            ("tools", Some(c)) => self.chat_picked(arg.to_owned(), false, Some(c)),
+            ("title", Some(_)) if arg.is_empty() => self.chat_action("chat.retitle"),
+            ("title", Some(c)) => self.request(
+                Pending::Done("retitled".into()),
+                Request::ChatUpdate {
+                    chat: c,
+                    title: Some(arg.to_owned()),
+                    pinned: None,
+                    archived: None,
+                    agent: None,
+                    preset: None,
+                    keep: None,
+                },
+            ),
+            (other, _) => self.toast(format!("/{other}: not a command (/help lists them)")),
+        }
+        true
+    }
+
+    /// Ask the daemon for the list's query's message hits (from 3 letters on, every machine).
+    pub(crate) fn search_chats(&mut self) {
+        let Some(ChatPanel::List(l)) = &mut self.chat_panel else { return };
+        let q = l.query.trim().to_owned();
+        if q.chars().count() < 3 {
+            l.hits.clear();
+            l.hits_for.clear();
+            return;
+        }
+        let req = Request::ChatSearch {
+            query: q.clone(),
+            chat: None,
+            workspace: l.workspace.clone(),
+            agent: None,
+            pinned: false,
+            archived: l.archived.is_some(),
+            limit: Some(30),
+            machines: true,
+        };
+        self.request(Pending::ChatHits(q), req);
+    }
+
+    pub(crate) fn got_hits(&mut self, query: String, hits: Vec<ChatHit>) {
+        if let Some(ChatPanel::List(l)) = &mut self.chat_panel
+            && l.query.trim() == query
+        {
+            l.hits = hits;
+            l.hits_for = query;
+            self.dirty = true;
         }
     }
 
@@ -434,6 +851,7 @@ impl App {
                         archived: None,
                         agent: a,
                         preset: p,
+                        keep: None,
                     },
                 );
             }
@@ -517,6 +935,53 @@ impl App {
 
     fn chat_view_key(&mut self, mut v: ChatViewState, key: KeyEvent) {
         let ctrl = key.mods.has(Mods::CTRL);
+        let alt = key.mods.has(Mods::ALT);
+        v.view.settle_focus();
+        // Alt-←/→: the newest branch point's other answers (or messages), in turn.
+        if alt
+            && matches!(key.code, KeyCode::Left | KeyCode::Right)
+            && let (Some(id), Some(s)) = (v.id.clone(), v.siblings.last().cloned())
+        {
+            let at = s.at as usize - 1;
+            let to = if key.code == KeyCode::Left {
+                (at + s.ids.len() - 1) % s.ids.len()
+            } else {
+                (at + 1) % s.ids.len()
+            };
+            self.request(
+                Pending::Done(String::new()),
+                Request::ChatBranch { chat: id, to: s.ids[to].clone() },
+            );
+            self.chat_panel = Some(ChatPanel::View(Box::new(v)));
+            return;
+        }
+        // C-f: find in the chat; again: the next match.
+        if ctrl && key.code == (KeyCode::Char { c: 'f' }) {
+            if v.found.is_empty() {
+                self.chat_panel = Some(ChatPanel::View(Box::new(v)));
+                return self.chat_action("chat.find_in");
+            }
+            v.found_at = (v.found_at + 1) % v.found.len();
+            let n = v.found[v.found_at].clone();
+            v.view.focus_on(&n);
+            self.toast(format!("{}/{}", v.found_at + 1, v.found.len()));
+            self.chat_panel = Some(ChatPanel::View(Box::new(v)));
+            return;
+        }
+        // C-i (or Tab: what most terminals send for it): a new chat that keeps nothing (before
+        // its first message).
+        if (key.code == KeyCode::Tab || ctrl && key.code == (KeyCode::Char { c: 'i' }))
+            && v.id.is_none()
+        {
+            v.incognito = !v.incognito;
+            self.toast(if v.incognito {
+                "incognito: nothing of this chat is kept, and it ends with its agent"
+            } else {
+                "kept: this chat is saved and searchable"
+            });
+            self.chat_panel = Some(ChatPanel::View(Box::new(v)));
+            return;
+        }
         let pending = v.view.pending_permission();
         if pending && v.draft.is_empty() && !ctrl {
             let d = match key.code {
@@ -538,9 +1003,12 @@ impl App {
             KeyCode::Esc => {
                 if !v.draft.is_empty() {
                     v.draft.clear();
+                } else if v.view.highlight.is_some() {
+                    v.view.highlight = None;
+                    v.found.clear();
                 } else {
                     if let Some(id) = &v.id {
-                        self.send(ClientMsg::ChatUnsubscribe { chat: id.clone() });
+                        self.left_chat(id);
                     }
                     self.chat_panel = v.from_list.map(ChatPanel::List);
                     return;
@@ -562,6 +1030,14 @@ impl App {
             }
             _ if crate::app::is_newline_key(&key) => v.draft.push('\n'),
             KeyCode::Enter if v.sending => self.toast("one moment: the last message is on its way"),
+            KeyCode::Enter if v.draft.trim_start().starts_with('/') => {
+                let text = std::mem::take(&mut v.draft);
+                let chat = v.id.clone();
+                v.view.apply(v.view.rev, false, Vec::new(), String::new());
+                self.chat_panel = Some(ChatPanel::View(Box::new(v)));
+                self.chat_slash(chat, &text);
+                return;
+            }
             KeyCode::Enter => {
                 let text = std::mem::take(&mut v.draft);
                 if !text.trim().is_empty() {
@@ -587,6 +1063,7 @@ impl App {
                                     preset: v.preset.clone(),
                                     title: None,
                                     prompt: Some(text),
+                                    incognito: v.incognito,
                                 },
                             );
                         }
@@ -615,6 +1092,8 @@ impl App {
         let q = l.query.to_lowercase();
         source
             .iter()
+            // Side chats sit under their chat, incognito ones are never "all chats" (§22.12).
+            .filter(|c| c.side_of.is_none() && !c.incognito)
             .filter(|c| l.workspace.as_ref().is_none_or(|w| c.workspace == *w))
             .filter(|c| {
                 q.is_empty()
@@ -626,29 +1105,48 @@ impl App {
     }
 
     fn chat_list_key(&mut self, mut l: ChatList, key: KeyEvent) {
-        let n = self.list_rows(&l).len();
+        // Chats whose title matches, then the messages that do (from every machine).
+        let chats = self.list_rows(&l).len();
+        let n = chats + l.hits.len();
         // Rows go (deleted, archived, filtered): the selection stays on one.
         l.sel = l.sel.min(n.saturating_sub(1));
         let ctrl = key.mods.has(Mods::CTRL);
         if l.typing {
+            let mut changed = false;
             match key.code {
                 KeyCode::Esc => {
                     l.typing = false;
                     l.query.clear();
+                    changed = true;
                 }
                 KeyCode::Enter | KeyCode::Down => l.typing = false,
                 KeyCode::Backspace => {
                     l.query.pop();
+                    changed = true;
                 }
                 KeyCode::Char { c } if !ctrl => {
                     l.query.push(c);
                     l.sel = 0;
+                    changed = true;
                 }
                 _ => {}
             }
             self.chat_panel = Some(ChatPanel::List(l));
+            if changed {
+                self.search_chats();
+            }
             return;
         }
+        // ⏎ on a message hit: that chat, at that message (its branch shown).
+        if key.code == KeyCode::Enter
+            && l.sel >= chats
+            && let Some(h) = l.hits.get(l.sel - chats).cloned()
+        {
+            self.chat_panel = Some(ChatPanel::List(l));
+            return self.open_chat_at(&h.chat.id, h.node.as_deref());
+        }
+        // Tab and `A` change what is searched: the hits are asked again.
+        let rescope = matches!(key.code, KeyCode::Tab | KeyCode::Char { c: 'A' });
         let action = match key.code {
             KeyCode::Esc | KeyCode::Char { c: 'q' } => {
                 self.chat_panel = None;
@@ -705,6 +1203,9 @@ impl App {
             _ => None,
         };
         self.chat_panel = Some(ChatPanel::List(l));
+        if rescope {
+            self.search_chats();
+        }
         if let Some(a) = action {
             self.chat_action(a);
         }
@@ -776,6 +1277,7 @@ fn glyph(app: &App, c: &ChatInfo) -> (&'static str, ratatui::style::Color) {
     match c.status {
         Some(AgentStatus::Working | AgentStatus::Starting) => ("●", t.working),
         Some(AgentStatus::Errored) => ("✗", t.error),
+        _ if c.incognito => ("◌", t.dim),
         _ if c.pinned => ("★", t.accent),
         _ => (" ", t.dim),
     }
@@ -820,8 +1322,9 @@ pub(crate) fn sidebar_line(
             if selected_chat == Some(id.as_str()) {
                 name = name.add_modifier(Modifier::BOLD).fg(app.depth.fit(t.accent));
             }
+            let indent = if c.side_of.is_some() { "     ↳" } else { "   " };
             let mut spans = vec![
-                Span::raw("   "),
+                Span::raw(indent),
                 Span::styled(format!("{g} "), fg(app, gc)),
                 Span::styled(c.label().to_owned(), name),
                 Span::styled(format!(" {}", c.agent), fg(app, t.dim)),
@@ -883,7 +1386,24 @@ fn draw_view(app: &App, f: &mut Frame<'_>, area: Rect, v: &ChatViewState) {
             head.push(Span::styled(format!(" {g}"), fg(app, gc)));
         }
     }
-    let hint = if v.id.is_none() { " C-o agent · Esc back" } else { " Esc back · C-q . menu" };
+    let side = info.and_then(|c| c.side_of.as_deref()).and_then(|p| app.chat(p));
+    if v.incognito || info.is_some_and(|c| c.incognito) {
+        head.push(Span::styled(" ◌ incognito", fg(app, t.accent)));
+    }
+    if let Some(p) = side {
+        head.push(Span::styled(
+            format!(" ↳ side chat of {} (/keep keeps it)", p.label()),
+            fg(app, t.accent),
+        ));
+    }
+    if let Some(s) = v.siblings.last() {
+        head.push(Span::styled(format!(" ⎇ {}/{}", s.at, s.of), fg(app, t.dim)));
+    }
+    let hint = if v.id.is_none() {
+        " C-o agent · Tab incognito · Esc back"
+    } else {
+        " /help · C-f find · Esc back"
+    };
     head.push(Span::styled(hint, fg(app, t.dim)));
     f.render_widget(Paragraph::new(Line::from(head)), Rect { height: 1, ..area });
     let body = Rect { y: area.y + 1, height: area.height.saturating_sub(1), ..area };
@@ -967,12 +1487,84 @@ fn draw_list(app: &App, f: &mut Frame<'_>, area: Rect, l: &ChatList) {
         }
         lines.push(Line::from(spans));
     }
+    // The messages that match (SPEC §22.10), each with its snippet; ⏎ opens it there.
+    if !l.hits.is_empty() {
+        let n = rows.len();
+        lines.push(Line::styled(
+            format!(" Messages ({})", l.hits.len()),
+            fg(app, t.dim).add_modifier(Modifier::BOLD),
+        ));
+        for (i, h) in l.hits.iter().enumerate() {
+            let mut spans = vec![Span::raw("  ")];
+            let name = format!(" {} ", h.chat.label());
+            let style = if n + i == sel {
+                fg(app, t.text).add_modifier(Modifier::REVERSED)
+            } else {
+                fg(app, t.text)
+            };
+            spans.push(Span::styled(name, style));
+            if let Some(m) = &h.chat.machine {
+                spans.push(Span::styled(format!("{m} "), fg(app, t.accent)));
+            }
+            spans.extend(snippet_spans(app, &h.snippet));
+            lines.push(Line::from(spans));
+        }
+    } else if l.query.chars().count() >= 3 && l.hits_for == l.query.trim() {
+        lines.push(Line::styled(" no message matches", fg(app, t.dim)));
+    }
     f.render_widget(Paragraph::new(lines), area);
+}
+
+/// A snippet's text, its matches bold (the marks are control characters, never shown).
+fn snippet_spans(app: &App, snippet: &str) -> Vec<Span<'static>> {
+    let t = &app.theme;
+    let mut out = Vec::new();
+    let mut on = false;
+    for part in
+        snippet.replace('\n', " ").split([ptyro_core::chats::MARK_ON, ptyro_core::chats::MARK_OFF])
+    {
+        if !part.is_empty() {
+            let st =
+                if on { fg(app, t.search).add_modifier(Modifier::BOLD) } else { fg(app, t.dim) };
+            out.push(Span::styled(part.to_owned(), st));
+        }
+        on = !on;
+    }
+    out
+}
+
+/// `c:7f3k/01jb…` (or `laptop2:c:7f3k/01jb…`) citations in a text.
+fn citations(text: &str) -> Vec<String> {
+    text.split(|c: char| {
+        c.is_whitespace() || matches!(c, '(' | ')' | '[' | ']' | ',' | ';' | '`' | '*')
+    })
+    .map(|w| w.trim_end_matches(['.', ':']))
+    .filter(|w| {
+        let body = w.rsplit_once("c:").map(|(_, b)| b).unwrap_or("");
+        w.contains("c:")
+            && body.split_once('/').is_some_and(|(h, n)| {
+                h.len() >= 4 && n.len() >= 6 && n.chars().all(|c| c.is_ascii_alphanumeric())
+            })
+    })
+    .map(str::to_owned)
+    .collect()
+}
+
+/// A node id's end, as people see it.
+fn short(id: &str) -> String {
+    id[id.len().saturating_sub(6)..].to_owned()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn citations_are_found() {
+        let t =
+            "As we said (c:7f3k/01jbabcdef) and laptop2:c:a1b2/zz99887766. Not c:x/y or c:7f3k.";
+        assert_eq!(citations(t), ["c:7f3k/01jbabcdef", "laptop2:c:a1b2/zz99887766"]);
+    }
 
     #[test]
     fn day_groups() {
