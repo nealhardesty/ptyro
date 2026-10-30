@@ -291,7 +291,10 @@ fn a_compare_keeps_to_the_chats_profile() {
     assert!(!other.status.success());
     let err = String::from_utf8_lossy(&other.stderr);
     assert!(
-        err.contains("codex@work") && err.contains("another profile") && err.contains("--yes"),
+        err.contains("codex@work")
+            && err.contains("another profile")
+            && err.contains("--yes")
+            && !err.contains("override-pin"),
         "{err}"
     );
     assert_eq!(w.read(&addr)["chat"]["comparing"], Value::Null, "nothing was asked");
@@ -315,9 +318,17 @@ fn a_compare_keeps_to_the_chats_profile() {
 #[test]
 fn a_compare_of_one_agent_twice_is_refused_before_a_chat_is_made() {
     let w = World::new(&[]);
-    for agents in ["claude,claude", "claude,claude@default"] {
-        let out = w.cli(&["chat", "new", "--agent", "claude", "--compare", agents, "hi"]);
-        assert!(!out.status.success(), "{agents}");
+    let asked: [&[&str]; 3] = [
+        &["--agent", "claude", "--compare", "claude,claude"],
+        &["--agent", "claude", "--compare", "claude,claude@default"],
+        &["--compare", "claude,claude"],
+    ];
+    for agents in asked {
+        // Refused at once: never a wait for an answer nobody was asked for.
+        let t = Instant::now();
+        let out = w.cli(&[&["chat", "new"], agents, &["hi"]].concat());
+        assert!(t.elapsed() < Duration::from_secs(20), "{agents:?}: {:?}", t.elapsed());
+        assert!(!out.status.success(), "{agents:?}");
         assert!(String::from_utf8_lossy(&out.stderr).contains("two different agents"), "{out:?}");
     }
     assert!(w.json(&["chat", "ls", "--json"]).as_array().unwrap().is_empty(), "no chat made");

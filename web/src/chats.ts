@@ -40,7 +40,8 @@ const ACTIONS = {
   "chat.cite": "Open the message this citation points to",
   "chat.compare": "Ask several agents: each answers as a branch beside the others, labelled with its agent (‹ 2/3 codex ›)",
   "chat.pick": "Keep this answer: the chat switches to the agent that wrote it, which takes the next message",
-  "chat.import": "Import your agents' own histories (Claude Code, Codex, Gemini) as read-only, searchable chats",
+  "chat.import": "Import your agents' own histories (Claude Code, Codex, Gemini) as read-only, searchable chats: every agent's and profile's, or one, only recent sessions, or just count them first",
+  "chat.imported": "Show only the chats imported from your agents' own histories (⇣), or every chat again",
 } as const;
 const tip = actions(ACTIONS);
 
@@ -105,6 +106,8 @@ const state = {
   hitsFor: "",
   /// `by:meaning` while meaning search is off: why, with the switch to turn it on.
   meaningOff: "",
+  /// Only chats imported from the agents' own histories (`chat ls --imported`).
+  imported: false,
 };
 
 const label = (c: Chat | undefined): string => c?.title?.trim() || "new chat";
@@ -152,7 +155,7 @@ export async function loadChats(): Promise<void> {
     state.off = "";
     // Every preset with what it means (yours too); the built-in three until the daemon says.
     const p = await conn.request({ t: "chat_presets" }).catch(() => null);
-    if (p) presets = p.presets as Preset[];
+    if (p) { presets = p.presets as Preset[]; presetsKnown = true; }
   } catch (e) {
     state.off = errText(e);
   }
@@ -221,16 +224,30 @@ async function meaningOn(): Promise<void> {
   } catch (e) { ui.toast(errText(e)); }
 }
 
+/// The search box as a title filter: the search's operators (`by:meaning`, `since:7d`,
+/// `workspace:w`, `-word`) are the message search's, not title text; `agent:x` narrows by agent.
+function titleQuery(q: string): { text: string; agent: string } {
+  let agent = "";
+  const words: string[] = [];
+  for (const w of q.split(/\s+/).filter(Boolean)) {
+    const [k, v] = w.includes(":") ? [w.slice(0, w.indexOf(":")), w.slice(w.indexOf(":") + 1)] : ["", ""];
+    if (k === "agent") agent = v;
+    else if (["by", "since", "workspace", "ws"].includes(k) || (w.startsWith("-") && w.length > 1)) continue;
+    else words.push(w.replace(/^"|"$/g, "").replace(/\*$/, ""));
+  }
+  return { text: words.join(" "), agent };
+}
+
 function rows(): Node[] {
   const source = state.archived ?? sorted(state.list.values());
-  const q = state.query;
+  const { text: q, agent } = titleQuery(state.query);
   // Side chats sit with their chat; incognito ones are never "every chat" (SPEC §22.12).
-  const shown = source.filter((c) => !c.side_of && !c.incognito && (!state.workspace || c.workspace === state.workspace) && (!q || label(c).toLowerCase().includes(q) || c.agent.includes(q) || importedFrom(c).toLowerCase().includes(q)));
-  if (!shown.length && q) return [h("p", { class: "sub" }, `No chat titled “${q}”.`), ...hitRows()];
+  const shown = source.filter((c) => !c.side_of && !c.incognito && (!state.workspace || c.workspace === state.workspace) && (!state.imported || !!c.source) && (!agent || c.agent.includes(agent)) && (!q || label(c).toLowerCase().includes(q) || c.agent.includes(q) || importedFrom(c).toLowerCase().includes(q)));
+  if (!shown.length && state.query) return [h("p", { class: "sub" }, q ? `No chat titled “${q}”.` : "No chat matches."), ...hitRows()];
   if (!shown.length) {
     return [h("div", { class: "empty" },
-      h("p", {}, q ? `Nothing matches “${q}”.` : state.archived ? "No archived chats." : "No chats yet. Ask anything: it can search the web, and it is kept here."),
-      q || state.archived || !canWrite() ? null : h("button", { class: "primary", title: tip("chat.new"), onclick: () => newChat() }, "Start a chat"))];
+      h("p", {}, q ? `Nothing matches “${q}”.` : state.archived ? "No archived chats." : state.imported ? "No imported chats: ⇣ imports your agents' own histories." : "No chats yet. Ask anything: it can search the web, and it is kept here."),
+      q || state.archived || state.imported || !canWrite() ? null : h("button", { class: "primary", title: tip("chat.new"), onclick: () => newChat() }, "Start a chat"))];
   }
   const out: Node[] = [];
   let group = "";
@@ -264,25 +281,40 @@ function listView(): HTMLElement {
     ...[...data.workspaces.values()].map((w) => h("option", { value: w.name }, wsLabel(w.name))));
   wsSelect.value = state.workspace;
   const archived = h("button", { class: `small${state.archived ? " on" : ""}`, title: tip("chat.archived"), onclick: () => void toggleArchived() }, state.archived ? "Back to chats" : "Archived");
+  // Shown once there are imported chats (or while it filters).
+  const anyImported = state.imported || [...state.list.values()].some((c) => !!c.source);
+  const imported = anyImported ? h("button", { class: `small${state.imported ? " on" : ""}`, title: tip("chat.imported"), "aria-pressed": String(state.imported), onclick: () => { state.imported = !state.imported; ui.render(); } }, "Imported") : null;
   return h("div", {},
     ui.header("Chats", false,
       canWrite() ? h("button", { class: "icon", title: tip("chat.find"), "aria-label": "Ask your chats", onclick: () => findChats() }, "？") : null,
       conn.scope === "full" ? h("button", { class: "icon", title: tip("chat.import"), "aria-label": "Import agent histories", onclick: () => importHistories() }, "⇣") : null,
       canWrite() ? h("button", { class: "icon plus", title: tip("chat.new"), "aria-label": "New chat", onclick: () => newChat() }, "＋") : null),
-    h("div", { class: "searchbar" }, findBox, wsSelect, archived),
+    h("div", { class: "searchbar" }, findBox, wsSelect, archived, imported),
     h("main", { class: "list chats", title: tip("chats") }, h("div", { class: "rows" }, ...rows())));
 }
 
-/// `chat import`: the agents' own histories as read-only chats (asked first: it copies them).
+/// `chat import`: the agents' own histories as read-only chats (asked first: it copies them),
+/// narrowed as the CLI's flags do.
 function importHistories(): void {
-  confirm("Import agent histories", "Your Claude Code, Codex and Gemini sessions (every profile's) become read-only chats here: their text is copied into chat.db, where search finds it. Sessions already imported only gain what is new. (Settings → Chat → import keeps doing it.)", "Import", async () => {
-    ui.toast("Importing your agents' histories…");
-    const r = await ask<{ report: { dry_run: boolean; sources: { new: number; grown: number; messages: number }[]; notes?: string[] } }>({ t: "chat_import" });
-    if (!r) return;
-    const n = r.report.sources.reduce((a, s) => [a[0] + s.new, a[1] + s.grown, a[2] + s.messages], [0, 0, 0]);
-    ui.toast(n[0] + n[1] ? `Imported ${n[0]} new chat${n[0] === 1 ? "" : "s"}, ${n[1]} grew (${n[2]} messages)` : "Nothing new: every session is imported");
+  const profiles = [...new Set([...data.workspaces.values()].map((w) => w.profile).concat([...state.list.values()].map((c) => c.profile)).filter(Boolean))].sort();
+  form("Import agent histories", [
+    { key: "agent", label: "Whose", type: "select", options: [["all", "Every agent's"], ["claude", "Claude Code"], ["codex", "Codex"], ["gemini", "Gemini"]] },
+    { key: "profile", label: "Profile", type: "select", options: [["", "Every profile's"], ...profiles.map((p): [string, string] => [p, p])] },
+    { key: "since", label: "Only sessions touched in (optional)", placeholder: "30d, 12h" },
+    { key: "dry", label: "Only count them (import nothing)", type: "check" },
+  ], "Import", async (v) => {
+    const dry = !!v.dry;
+    ui.toast(dry ? "Counting what your agents' histories would bring…" : "Importing your agents' histories…");
+    try {
+      // A first import can take minutes: no two-minute timeout for this one.
+      const r = await conn.request({ t: "chat_import", agent: v.agent || "all", profile: v.profile || null, since: (v.since as string | undefined)?.trim() || null, dry_run: dry }, 60 * 60_000) as { report: { dry_run: boolean; sources: { new: number; grown: number; messages: number }[]; notes?: string[] } };
+      const n = r.report.sources.reduce((a, s) => [a[0] + s.new, a[1] + s.grown, a[2] + s.messages], [0, 0, 0]);
+      const what = dry ? ["Would import", "would grow"] : ["Imported", "grew"];
+      ui.toast(n[0] + n[1] ? `${what[0]} ${n[0]} new chat${n[0] === 1 ? "" : "s"}, ${n[1]} ${what[1]} (${n[2]} messages)` : dry ? "Nothing new to import" : "Nothing new: every session is imported");
+    } catch (e) { ui.toast(errText(e)); }
+    // Whatever happened, what did come is listed.
     await loadChats();
-  }, false);
+  }, { intro: "Your Claude Code, Codex and Gemini sessions become read-only chats here: their text is copied into chat.db, where search finds it. Sessions already imported only gain what is new. (Settings → Chat → import keeps doing it.)" });
 }
 
 /// Send `req`; when the daemon asks first (the chat's conversation would go to another
@@ -325,6 +357,16 @@ function compareAgents(c: Chat, question = ""): void {
     const agents = String(v.agents ?? "").split(/[\s,]+/).filter(Boolean);
     await askAgreed({ t: "chat_compare", chat: c.id, agents, text: String(v.q ?? "").trim() || null }, "Asked: each answer is a branch (‹ › flips between them; Keep this answer switches to its agent)");
   }, { intro: "Every agent answers the same message; the chat's own carries on in its conversation, the others are told it so far." });
+}
+
+/// `chat pick`: keep the answer shown (or the branch through `node`); says who takes the next message.
+async function pickAnswer(chat: string, node?: string): Promise<void> {
+  const r = await ask<{ info: Chat }>({ t: "chat_pick", chat, node: node ?? null });
+  if (!r) return;
+  state.list.set(r.info.id, r.info);
+  const who = r.info.profile && r.info.profile !== "default" ? `${r.info.agent}@${r.info.profile}` : r.info.agent;
+  ui.toast(`Kept: ${who} takes the next message`);
+  ui.render();
 }
 
 /// `chat find`: ask the chats; the answer is an incognito chat of its own, opened.
@@ -380,7 +422,7 @@ function chatMenu(c: Chat): void {
     { title: tip("chat.folder"), label: "Folders", hint: c.folders?.length ? c.folders.join(", ") : "none", run: () => editFolders(c) },
     !c.incognito && !c.source && { title: tip("chat.task"), label: "Make it a task", hint: "an agent carries it out in a new worktree", run: () => makeTask(c) },
     !c.incognito && !c.source && { title: tip("chat.compare"), label: "Ask several agents", hint: "each answers as a branch", run: () => compareAgents(c) },
-    state.following === c.id && state.siblings.some((s) => sibLabel(s)) && { title: tip("chat.pick"), label: "Keep this answer", hint: "its agent takes the next message", run: () => void ask({ t: "chat_pick", chat: c.id }) },
+    state.following === c.id && state.siblings.some((s) => sibLabel(s)) && { title: tip("chat.pick"), label: "Keep this answer", hint: "its agent takes the next message", run: () => void pickAnswer(c.id) },
     md,
     { title: tip("chat.archive"), label: archived ? "Bring back from the archive" : "Archive", run: async () => {
       await update(c, { archived: !archived }, archived ? "Back from the archive" : "Archived");
@@ -451,6 +493,8 @@ function pickAgent(c: Chat): void {
   menu("Which agent? The conversation carries over", agentNames().map((a) => ({ title: tip("chat.agent"), label: a, hint: [a === c.agent ? "now" : "", where(a)].filter(Boolean).join(" · "), run: () => update(c, { agent: a }, `The next message goes to ${a}`) })));
 }
 
+/// Whether `presets` is the daemon's list (yours too), not the built-in three it starts as.
+let presetsKnown = false;
 let presets: Preset[] = [
   { name: "chat", about: "web search", builtin: true, read: false, shell: false },
   { name: "read", about: "web search · reads the chat's folders", builtin: true, read: true, shell: false },
@@ -474,19 +518,50 @@ function editFolders(c: Chat): void {
   }, { intro: "On the computer the chat runs on. It reads them with the read preset (or one of yours that reads), and nothing else." });
 }
 
-/// `chat.task`: which project, when the chat's workspace doesn't say (SPEC §22.7).
-function makeTask(c: Chat, project?: string): void {
+/// `chat.task` (SPEC §22.7): the project (the chat's workspace's, when it has one), the agent
+/// that works on it (the chat's own by default) and the worktree's name (from the title).
+/// `/task [PROJECT] [--agent A] [--name N]` goes at once.
+function makeTask(c: Chat, args = ""): void {
   const here = [...data.projects.values()].filter((p) => !(p as any).machine);
+  if (!here.length) { ui.toast("A task needs a project: add one first"); return; }
   const ws = [...data.workspaces.values()].find((w) => w.name === c.workspace);
   const mine = here.filter((p) => ws?.projects.includes(p.id));
-  const pick = project ?? (mine.length === 1 ? mine[0].slug : !mine.length && here.length === 1 ? here[0].slug : undefined);
-  const go = async (slug: string): Promise<void> => {
-    const r = await askAgreed<{ agent?: { id: string } | null }>({ t: "chat_task", chat: c.id, project: slug }, "A task now: the chat says where it went");
+  const guess = mine.length === 1 ? mine[0].slug : !mine.length && here.length === 1 ? here[0].slug : "";
+  const go = async (slug: string, agent: string | null, name: string | null): Promise<void> => {
+    const r = await askAgreed<{ agent?: { id: string } | null }>({ t: "chat_task", chat: c.id, project: slug, agent, name }, "A task now: the chat says where it went");
     if (r?.agent) location.hash = `#/s/${encodeURIComponent(r.agent.id)}`;
   };
-  if (pick) { void go(pick); return; }
-  if (!here.length) { ui.toast("A task needs a project: add one first"); return; }
-  menu("Which project should it work in?", here.map((p) => ({ title: tip("chat.task"), label: p.slug, hint: p.root, run: () => go(p.slug) })));
+  if (args) {
+    const t = taskArgs(args);
+    if (typeof t === "string") { ui.toast(t); return; }
+    const slug = t.project ?? guess;
+    if (slug) { void go(slug, t.agent, t.name); return; }
+  }
+  form("Make it a task", [
+    { key: "project", label: "The project it works in", type: "select", options: here.map((p): [string, string] => [p.slug, p.slug]), value: guess || here[0].slug },
+    { key: "agent", label: "Who works on it", type: "select", options: [["", `${c.agent}@${c.profile} (the chat's)`], ...agentNames().filter((a) => a !== c.agent).map((a): [string, string] => [a, a])] },
+    { key: "name", label: "The worktree's name (optional)", placeholder: "from the chat's title", slug: "name" },
+  ], "Make it", (v) => go(String(v.project), (v.agent as string) || null, (v.name as string)?.trim() || null),
+  { intro: "An agent in a new worktree of the project carries out the chat's last answer, starting from its conversation." });
+}
+
+/// `/task`'s words, as `chat task`'s flags: `[PROJECT] [--agent A] [--name N]`; a string: what's wrong.
+function taskArgs(text: string): { project: string | null; agent: string | null; name: string | null } | string {
+  const out = { project: null as string | null, agent: null as string | null, name: null as string | null };
+  const words = text.split(/\s+/).filter(Boolean);
+  const usage = "/task [PROJECT] [--agent A] [--name N]";
+  while (words.length) {
+    const w = words.shift()!;
+    const m = /^--(agent|name|project)(?:=(.*))?$/.exec(w) ?? /^(agent|name):(.*)$/.exec(w);
+    if (m) {
+      const key = m[1] as "agent" | "name" | "project";
+      const value = m[2] ?? words.shift() ?? "";
+      if (!value) return `--${key} needs a value: ${usage}`;
+      out[key] = value;
+    } else if (w.startsWith("--") || out.project) return `${w}: ${usage}`;
+    else out.project = w;
+  }
+  return out;
 }
 
 async function exportChat(c: Chat): Promise<void> {
@@ -598,7 +673,15 @@ function slash(id: string, text: string): void {
     case "agent": if (c) { if (arg) void update(c, { agent: arg }, `The next message goes to ${arg}`); else pickAgent(c); } return;
     case "tools":
       if (c) { if (arg) void update(c, { preset: arg }, `Tools: ${arg}`); else pickPreset(c); }
-      else if (page) { if (arg) page.preset.value = arg; ui.toast(arg ? `Tools: ${arg}` : presets.map((p) => `${p.name}: ${p.about}`).join(" · ")); }
+      else if (page) {
+        if (!arg) { ui.toast(presets.map((p) => `${p.name}: ${p.about}`).join(" · ")); return; }
+        const known = presets.some((p) => p.name === arg) || [...page.preset.options].some((o) => o.value === arg);
+        // The daemon's list is in and doesn't have it: say so, rather than send the default.
+        if (!known && presetsKnown) { ui.toast(`No preset named “${arg}”: ${presets.map((p) => p.name).join(", ")} (Settings → Chat adds yours)`); return; }
+        if (!known) page.preset.append(h("option", { value: arg }, arg));
+        page.preset.value = arg;
+        ui.toast(`Tools: ${arg}`);
+      }
       return;
     case "folder": case "folders": {
       const none = arg === "none" || arg === "-";
@@ -608,26 +691,31 @@ function slash(id: string, text: string): void {
       void update(c, { folders: next }, none ? "No folders" : `It may read ${arg} from the next message on`);
       return;
     }
-    case "task": if (c) makeTask(c, arg || undefined); return;
+    case "task": if (c) makeTask(c, arg); return;
     case "compare": {
       // The words that name agents (`codex`, `codex@work`), then the question.
-      const known = agentNames();
       const words = arg.split(/\s+/).filter(Boolean);
       const agents: string[] = [];
-      while (words.length && known.includes(words[0].split("@")[0].replace(/,$/, ""))) agents.push(...words.shift()!.split(",").filter(Boolean));
+      for (let named = agentWords(words[0] ?? ""); words.length && named; named = agentWords(words[0] ?? "")) { agents.push(...named); words.shift(); }
       const question = words.join(" ");
       if (!c) {
         if (!page) return;
-        for (const box of page.compare.querySelectorAll<HTMLInputElement>("input")) box.checked = agents.includes(box.value);
-        if (question) page.reply.value = question;
-        ui.toast(agents.length > 1 ? `The first message goes to ${agents.join(", ")}` : "/compare AGENT AGENT…: the first message goes to each");
+        const unique = [...new Set(agents)];
+        if (unique.length < 2) { ui.toast("/compare AGENT AGENT…: the first message goes to each of two or more (e.g. /compare claude codex@work)"); return; }
+        // `codex@work` too: a box of its own, checked, beside the bare names.
+        for (const a of unique) {
+          if (![...page.compare.querySelectorAll<HTMLInputElement>("input")].some((b) => b.value === a)) page.compare.append(h("label", { class: "check" }, h("input", { type: "checkbox", value: a }), ` ${a}`));
+        }
+        for (const box of page.compare.querySelectorAll<HTMLInputElement>("input")) box.checked = unique.includes(box.value);
+        if (question) { page.reply.value = question; drafts.set(page.id, question); }
+        ui.toast(`The first message goes to ${unique.join(", ")} (each answer a branch)`);
         return;
       }
       if (!agents.length && !question) { compareAgents(c); return; }
       void askAgreed({ t: "chat_compare", chat: c.id, agents, text: question || null }, `Asked ${agents.length ? agents.join(", ") : "every installed agent"}: each answer is a branch`);
       return;
     }
-    case "pick": if (c) void ask({ t: "chat_pick", chat: c.id }); return;
+    case "pick": if (c) void pickAnswer(c.id); return;
     case "title": if (c) { if (arg) void update(c, { title: arg }, "Renamed"); else retitle(c); } return;
     case "export": if (c) void exportChat(c); return;
     case "search": location.hash = "#/chats"; findBox.value = arg; findBox.dispatchEvent(new Event("input")); return;
@@ -645,8 +733,16 @@ function slash(id: string, text: string): void {
       requestAnimationFrame(tick);
       return;
     }
-    default: ui.toast("/retry /edit [text] /compare [AGENTS…] [question] /pick /fork /side [question] /keep /agent NAME /tools NAME /folder DIR|none /task [PROJECT] /title TEXT /search WORDS /find QUESTION /export /incognito /branch /cite");
+    default: ui.toast("/retry /edit [text] /compare [AGENTS…] [question] /pick /fork /side [question] /keep /agent NAME /tools NAME /folder DIR|none /task [PROJECT] [--agent A] [--name N] /title TEXT /search WORDS /find QUESTION /export /incognito /branch /cite");
   }
+}
+
+/// The agents a word of `/compare` names (`codex`, `codex@work`, `claude,codex@work,`), or null
+/// when any part of it isn't one: then it is the question's.
+function agentWords(word: string): string[] | null {
+  const known = agentNames();
+  const parts = word.split(",").filter(Boolean);
+  return parts.length && parts.every((a) => known.includes(a.split("@")[0])) ? parts : null;
 }
 
 /// `/branch`: every choice at every point where the shown chat has others.
@@ -691,7 +787,7 @@ function siblingBar(id: string, s: Siblings): HTMLElement {
     h("button", { class: "small", "aria-label": "Previous", onclick: go(-1) }, "‹"),
     h("span", {}, ` ${s.at}/${s.of}${who ? ` ${who}` : ""} `),
     h("button", { class: "small", "aria-label": "Next", onclick: go(1) }, "›"),
-    who && canWrite() ? h("button", { class: "link", title: tip("chat.pick"), onclick: () => void ask({ t: "chat_pick", chat: id, node: s.node }, `Kept ${who}'s answer: it takes the next message`) }, "Keep this answer") : null);
+    who && canWrite() ? h("button", { class: "link", title: tip("chat.pick"), onclick: () => void pickAnswer(id, s.node) }, "Keep this answer") : null);
 }
 
 function chatItem(id: string, it: Item): HTMLElement | null {

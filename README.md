@@ -386,9 +386,11 @@ its own conversation and the others told the conversation so far. They answer un
 own profile; naming another (`codex@work`) asks first, as the conversation would go to that
 account. `chat pick` (`/pick`, Keep this
 answer) keeps one: its agent takes the next message. **Your agents' own histories** come in with
-`chat import` (`chat.import` in the TUI, ⇣ on the web's Chats page): every profile's Claude Code,
+`chat import` (`chat.import` in the TUI, ⇣ on the web's Chats page, each narrowed as the CLI's
+`--agent`, `--profile`, `--since` and `--dry-run` do): every profile's Claude Code,
 Codex and Gemini sessions become read-only chats (`⇣`, "imported from claude · ~/repo"), searchable
-by keyword and meaning; a message to one continues it as a fork; importing again adds only what is
+by keyword and meaning (`chat ls --imported`, `i` in the TUI's chat list, Imported on the web,
+lists only them); a message to one continues it as a fork; importing again adds only what is
 new. `[chat] import = true` keeps doing it every 10 minutes (off by default: it copies your coding
 sessions' text into `chat.db`). OpenCode's history isn't imported yet.
 

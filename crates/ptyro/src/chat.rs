@@ -668,6 +668,31 @@ fn agree(r: &mut Request) {
     }
 }
 
+/// `with_confirmation`, saying only the flag chat commands take.
+async fn confirmed(c: &ptyro_client::Client, req: Request, yes: bool) -> Result<Reply, Error> {
+    crate::cli::with_confirmation_as(c, req, yes, agree, "pass --yes").await
+}
+
+/// Why a new chat's compare didn't start: the notice it left, with the chat it made.
+async fn compare_refusal(c: &ptyro_client::Client, info: &ChatInfo) -> String {
+    let why = match c.request(Request::ChatRead { chat: info.id.clone(), all: true }).await {
+        Ok(Reply::ChatTranscript { nodes, .. }) => {
+            nodes.into_iter().rev().find_map(|n| match n.body {
+                ChatBody::Notice { text, .. } => Some(text),
+                _ => None,
+            })
+        }
+        _ => None,
+    };
+    format!(
+        "{}: the agents weren't asked ({}); `ptyro chat compare {} --agents A,B \"…\"` asks again, `ptyro chat rm {}` removes it",
+        info.addr(),
+        why.as_deref().unwrap_or("the compare didn't start"),
+        info.addr(),
+        info.addr()
+    )
+}
+
 /// `chat task`: the worktree and the session that carries the chat out.
 async fn task(
     ctx: &Ctx,
@@ -680,7 +705,7 @@ async fn task(
 ) -> Result<i32, Error> {
     let c = ctx.connect(true).await?;
     let req = Request::ChatTask { chat, project, agent, name, confirmed: false };
-    let r = crate::cli::with_confirmation(&c, req, yes, agree).await?;
+    let r = confirmed(&c, req, yes).await?;
     let Reply::WorktreeCreated { info, agent, agent_pending, notes, .. } = r else {
         return Err(unexpected(r));
     };
@@ -739,8 +764,12 @@ async fn new(
         compare: compare.clone(),
         confirmed: false,
     };
-    let info = chat_of(crate::cli::with_confirmation(&c, req, yes, agree).await?)?;
-    if !compare.is_empty() && info.comparing.is_some() {
+    let info = chat_of(confirmed(&c, req, yes).await?)?;
+    if !compare.is_empty() {
+        if info.comparing.is_none() {
+            // It didn't start: no first message was written, so there is no answer to wait for.
+            return Err(Error::invalid(compare_refusal(&c, &info).await));
+        }
         eprintln!("{} · {}", info.addr(), info.tools_badge());
         return compare_wait(c, info, no_wait, Duration::from_secs(600), json).await;
     }
@@ -1171,7 +1200,7 @@ async fn compare(
 ) -> Result<i32, Error> {
     let c = ctx.connect(true).await?;
     let req = Request::ChatCompare { chat, agents, text, confirmed: false };
-    let info = chat_of(crate::cli::with_confirmation(&c, req, yes, agree).await?)?;
+    let info = chat_of(confirmed(&c, req, yes).await?)?;
     compare_wait(c, info, no_wait, timeout, json).await
 }
 
@@ -1274,6 +1303,10 @@ async fn compare_wait(
         answers
             .push(serde_json::json!({ "agent": agent, "node": kid.id, "text": text.join("\n\n") }));
     }
+    // Every agent asked this time failed (or was stopped): an older answer is no success.
+    let failed = !last.agents.is_empty()
+        && last.agents.iter().all(|a| matches!(a.state.as_str(), "failed" | "stopped"));
+    let code = if answers.is_empty() || failed { 1 } else { 0 };
     if json {
         let out = serde_json::json!({
             "chat": now,
@@ -1282,7 +1315,7 @@ async fn compare_wait(
             "agents": last.agents,
         });
         println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
-        return Ok(0);
+        return Ok(code);
     }
     for a in &answers {
         println!("── {} ──", a["agent"].as_str().unwrap_or_default());
@@ -1294,7 +1327,7 @@ async fn compare_wait(
         now.addr(),
         now.addr()
     );
-    Ok(if answers.is_empty() { 1 } else { 0 })
+    Ok(code)
 }
 
 /// `chat import`: what was imported (or, dry, would be), per agent and profile.
@@ -1448,8 +1481,15 @@ impl SearchArgs {
                 "--here" => self.here = true,
                 "--pinned" => self.pinned = true,
                 "--archived" => self.archived = true,
-                "--meaning" => self.by = Some("meaning"),
-                "--words" => self.by = Some("words"),
+                "--meaning" | "--words" => {
+                    let by = if name == "--meaning" { "meaning" } else { "words" };
+                    if self.by.is_some_and(|b| b != by) {
+                        return Err(Error::invalid(
+                            "--meaning and --words can't go together: one or the other",
+                        ));
+                    }
+                    self.by = Some(by);
+                }
                 "--chat" => self.chat = Some(value(&mut it)?),
                 "-w" | "--workspace" => self.workspace = Some(value(&mut it)?),
                 "--agent" => self.agent = Some(value(&mut it)?),
@@ -1648,6 +1688,11 @@ mod tests {
         let mut m = args();
         assert_eq!(m.take_flags(&["cats".into(), "--meaning".into()]).unwrap(), ["cats"]);
         assert_eq!(m.by, Some("meaning"));
+        let mut both = args();
+        assert!(both.take_flags(&["cats".into(), "--meaning".into(), "--words".into()]).is_err());
+        let mut clap_said = args();
+        clap_said.by = Some("words");
+        assert!(clap_said.take_flags(&["cats".into(), "--meaning".into()]).is_err());
         assert!(args().take_flags(&["x".into(), "--chat".into()]).is_err());
         assert!(args().take_flags(&["x".into(), "-n".into(), "lots".into()]).is_err());
     }

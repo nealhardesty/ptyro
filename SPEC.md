@@ -6512,7 +6512,11 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   person's). A re-import moves the shown branch on only from where the last import left it
   (`chat.db` v6 `import.leaf`): a person who went to another branch stays there. They are searched (the FTS triggers, the meaning backfill on `ChatUpdated`),
   obey `history_scope` (their profile), and are listed like any chat, marked `⇣` with "imported
-  from claude · ~/repo" in the header; `chat ls --imported` lists only them. `[chat] import =
+  from claude · ~/repo" in the header; `chat ls --imported` lists only them (`i` in the TUI's chat
+  list, Imported on the web's Chats page). The TUI's `chat.import` asks first in a prompt that takes
+  the CLI's flags (`codex --since 30d --profile work --dry-run`; ⏎ alone: everything), the web's in
+  a form (whose, profile, since, Only count them), with no request timeout. The TUI refuses retry
+  and edit of one up front, as the web hides them. `[chat] import =
   true` (default off: it copies coding history) imports at once and then every 10 minutes. On
   this Mac, 2026-10-30 (debug build): 104 sessions, 11,326 messages, 785 MB of Claude history
   imported in 7.5 s, again in 0.01 s. **OpenCode is not imported**: it isn't installed here to read
@@ -6964,7 +6968,8 @@ hides when `enabled`):
   card `a/A/d`, composer, PageUp/Down) plus: a header (title, `agent@profile`, tools preset, `⎇ branch
   2/3`, cost, machine chip); the branch navigator; a composer that takes **slash commands**
   (`/fork`, `/side`, `/agent`, `/tools`, `/title`, `/retry`, `/search`, `/export`, `/incognito`,
-  `/task`, `/compare [AGENTS…] [question]`, `/pick`), each also a palette action; an `@` completion for attached folders; and find-in-chat.
+  `/task [PROJECT] [--agent A] [--name N]`, `/compare [AGENTS…] [question]` (agents space- or
+  comma-separated, `codex@work` kept as typed), `/pick`), each also a palette action; an `@` completion for attached folders; and find-in-chat.
 - **Keys** (prefix, then; proposed, `m` and `g` are free in `docs/keys.md` on 2026-10-29; CHAT1.7
   checks and the user can rebind): `m` **new chat** in the current workspace (the composer opens at
   once, ⏎ sends; `C-o` picks agent, tools and folder; `Tab`/`C-i` incognito), `g` the **chat list**

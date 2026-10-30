@@ -400,6 +400,7 @@ a.button { display: inline-block; padding: 7px 12px; border-radius: 8px; border:
 .chat-page .chat { min-height: 50vh; }
 .chat-pick { padding: 4px 8px; gap: 6px; }
 .chat-pick select { flex: 1; min-width: 0; }
+.chat-pick input[type="text"] { flex: 1; min-width: 12em; }
 .chat-row.offline { opacity: .55; }
 .msg-wrap { display: grid; gap: 2px; }
 .msg-wrap.user { justify-items: end; }
