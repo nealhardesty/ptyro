@@ -7206,7 +7206,9 @@ nodes, unread, created_ms, last_ms, cost_micro_usd, status, attention, engine` (
 `false` a kept chat even when that is on, and `ChatPresets.incognito` says the default, which a new
 chat's toggle starts from; `ChatUpdate.confirmed` and `ChatFork.confirmed`: a bare agent name is the
 chat's own profile's, and another profile's asks first with `NeedsConfirmation`, as compare and task
-do). `SessionInfo` gains `chat` (the chat id of an engine). Scopes as in §22.11, listed in
+do; `ChatAnswer.node`: the card answered, refused when another (or none) is waiting, so a double
+tap or a card answered elsewhere never decides the next request; the TUI and the web send it,
+`chat answer --node` too). `SessionInfo` gains `chat` (the chat id of an engine). Scopes as in §22.11, listed in
 `devices::needed`.
 
 **Not built** (in the first draft; nothing needs them yet): `ChatNew.profile` (it is

@@ -912,7 +912,8 @@ function chatItem(id: string, it: Item): HTMLElement | null {
         h("b", {}, `Wants permission: ${it.tool}`),
         h("pre", {}, it.title),
         canWrite() ? h("div", { class: "actions", title: tip("chat.answer") },
-          ...(["allow", "always", "deny"] as const).map((d) => h("button", { class: d, onclick: () => void ask({ t: "chat_answer", chat: id, decision: d }, d === "deny" ? "Denied" : "Allowed") }, d[0].toUpperCase() + d.slice(1)))) : null);
+          // This card, once: a second tap (or a card answered elsewhere) never decides the next one.
+          ...(["allow", "always", "deny"] as const).map((d) => h("button", { class: d, onclick: (e: Event) => { for (const b of (e.currentTarget as HTMLElement).parentElement!.querySelectorAll("button")) b.disabled = true; void ask({ t: "chat_answer", chat: id, decision: d, node: it.id }, d === "deny" ? "Denied" : d === "always" ? "Always allowed" : "Allowed"); } }, d[0].toUpperCase() + d.slice(1)))) : null);
     case "notice": return h("div", { class: `msg thinking ${it.level}` }, "! ", it.text);
     case "turn_end": {
       const parts = [it.stop];

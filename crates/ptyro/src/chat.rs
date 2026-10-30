@@ -278,6 +278,9 @@ pub enum ChatCmd {
         #[arg(add = ArgValueCandidates::new(complete::chats))]
         chat: String,
         decision: String,
+        /// Only that request (its node, `show --ids`): refused if it was answered already
+        #[arg(long)]
+        node: Option<String>,
     },
     /// Stop the answer being written
     Stop {
@@ -632,8 +635,8 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, plain: NewArgs) -> Result<i32,
                 answer(ctx, c, &info, &known, wait, false, no_wait, json).await
             }
         }
-        ChatCmd::Answer { chat, decision } => {
-            done(ctx, Request::ChatAnswer { chat, decision }).await
+        ChatCmd::Answer { chat, decision, node } => {
+            done(ctx, Request::ChatAnswer { chat, decision, node }).await
         }
         ChatCmd::Stop { chat } => done(ctx, Request::ChatStop { chat }).await,
         ChatCmd::Retitle { chat, title, json } => {

@@ -1045,7 +1045,10 @@ function chatItem(id, it) {
         case "permission":
             if (it.decided)
                 return h("div", { class: "turn-end" }, `${it.title.split("\n")[0] || it.tool} → ${it.decided}`);
-            return h("section", { class: "prompt" }, h("b", {}, `Wants permission: ${it.tool}`), h("pre", {}, it.title), canWrite() ? h("div", { class: "actions", title: tip("chat.answer") }, ...["allow", "always", "deny"].map((d) => h("button", { class: d, onclick: () => void ask({ t: "chat_answer", chat: id, decision: d }, d === "deny" ? "Denied" : "Allowed") }, d[0].toUpperCase() + d.slice(1)))) : null);
+            return h("section", { class: "prompt" }, h("b", {}, `Wants permission: ${it.tool}`), h("pre", {}, it.title), canWrite() ? h("div", { class: "actions", title: tip("chat.answer") }, 
+            // This card, once: a second tap (or a card answered elsewhere) never decides the next one.
+            ...["allow", "always", "deny"].map((d) => h("button", { class: d, onclick: (e) => { for (const b of e.currentTarget.parentElement.querySelectorAll("button"))
+                    b.disabled = true; void ask({ t: "chat_answer", chat: id, decision: d, node: it.id }, d === "deny" ? "Denied" : d === "always" ? "Always allowed" : "Allowed"); } }, d[0].toUpperCase() + d.slice(1)))) : null);
         case "notice": return h("div", { class: `msg thinking ${it.level}` }, "! ", it.text);
         case "turn_end": {
             const parts = [it.stop];

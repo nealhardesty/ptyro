@@ -1120,9 +1120,14 @@ impl App {
                     return self.toast("nothing to answer: no permission card is waiting");
                 };
                 let d = action.trim_start_matches("chat.").to_owned();
+                // The card shown: if it was answered elsewhere meanwhile, this answers nothing.
+                let node = v.view.items.iter().rev().find_map(|i| match &i.body {
+                    ChatBody::Permission { decided: None, .. } => Some(i.id.clone()),
+                    _ => None,
+                });
                 self.request(
                     Pending::Done(String::new()),
-                    Request::ChatAnswer { chat: id, decision: d },
+                    Request::ChatAnswer { chat: id, decision: d, node },
                 );
             }
             _ => {

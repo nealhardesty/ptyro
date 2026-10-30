@@ -1194,10 +1194,14 @@ pub enum Request {
         #[serde(default)]
         workspace: Option<String>,
     },
-    /// Answer the chat's open permission request: `allow`, `always` or `deny`.
+    /// Answer the chat's open permission request: `allow`, `always` or `deny`. `node` (1.25):
+    /// the card answered; another one waiting (or none) refuses it, so a double tap or a card
+    /// answered elsewhere never decides the next request.
     ChatAnswer {
         chat: String,
         decision: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        node: Option<String>,
     },
     /// Stop the answer being written.
     ChatStop {

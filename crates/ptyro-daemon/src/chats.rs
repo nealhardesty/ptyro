@@ -914,12 +914,29 @@ impl Daemon {
                 self.chat_send(&info.id, text).await?;
                 Ok(Reply::Chat { info: self.chat_info_now(&info.id).await? })
             }
-            Request::ChatAnswer { chat, decision } => {
+            Request::ChatAnswer { chat, decision, node } => {
                 let info = self.find_chat(&chat).await?;
                 let d = Decision::parse(&decision).ok_or_else(|| {
                     Error::invalid(format!("{decision:?}: allow, always or deny"))
                 })?;
-                let e = self.chats.get_live(&info.id).and_then(|l| l.engine());
+                let live = self.chats.get_live(&info.id);
+                if let Some(n) = &node {
+                    let waiting = live.as_ref().and_then(|l| {
+                        l.items.locked().items.iter().rev().find_map(|i| match &i.body {
+                            ChatBody::Permission { decided: None, .. } => Some(i.id.clone()),
+                            _ => None,
+                        })
+                    });
+                    if waiting.as_ref() != Some(n) {
+                        return Err(Error::conflict(match waiting {
+                            Some(_) => {
+                                "that request was answered; another one is waiting: look at it first"
+                            }
+                            None => "that request was answered already",
+                        }));
+                    }
+                }
+                let e = live.and_then(|l| l.engine());
                 let st = e.as_ref().and_then(|e| e.session.structured.clone());
                 if !st.is_some_and(|st| st.answer(d)) {
                     return Err(Error::conflict(format!("{} isn't asking anything", info.addr())));

@@ -305,8 +305,22 @@ fn a_permission_card_is_answered_and_chats_can_be_switched_off() {
     let bodies: Vec<&str> =
         inbox.as_array().unwrap().iter().filter_map(|e| e["body"].as_str()).collect();
     assert_eq!(bodies, ["the chat asks for permission"], "{inbox}");
-    w.ok(&["chat", "answer", &addr, "deny"]);
+    // An answer to another card (a double tap, one answered elsewhere) decides nothing.
+    let out = w.cli(&["chat", "answer", &addr, "allow", "--node", "01notthecard"]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("another one is waiting"), "{out:?}");
+    let card = w.chat(&addr)["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|n| n["t"] == "permission")
+        .map(|n| n["id"].as_str().unwrap().to_owned())
+        .expect("its card");
+    w.ok(&["chat", "answer", &addr, "deny", "--node", &card]);
     w.until("the answer", || texts(&w.chat(&addr), "assistant").iter().any(|t| t == "answer: no"));
+    let again = w.cli(&["chat", "answer", &addr, "allow", "--node", &card]);
+    assert!(!again.status.success(), "answered once only");
     assert!(w.chats()[0]["attention"].is_null());
     // An incognito chat's card is no inbox entry at all.
     w.ok(&["chat", "new", "--incognito", "--no-wait", "ask rm -rf /tmp/secretplan"]);
