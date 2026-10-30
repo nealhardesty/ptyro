@@ -2293,7 +2293,13 @@ pub(crate) fn help_lines<'a>(app: &'a App, filter: &str) -> Vec<Line<'a>> {
     if needle.is_empty() {
         let prefixes: Vec<String> = app.keymap.prefixes.iter().map(key_label).collect();
         lines.push(Line::styled(
-            format!("── prefix: {} (twice sends it to the program) ──", prefixes.join(" or ")),
+            format!(
+                "── prefix: {} (twice: the sidebar; {}: send it to the program) ──",
+                prefixes.join(" or "),
+                app.keymap
+                    .key_in(Table::Prefix, "prefix.send")
+                    .unwrap_or_else(|| "prefix.send".into())
+            ),
             fg(app, t.dim),
         ));
         lines.push(Line::styled(

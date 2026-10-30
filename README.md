@@ -579,7 +579,8 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
 - **Two prefixes, `Ctrl-Q` and `Ctrl-Space`,** work out of the box, so if one is taken the other
   still gets through. `Ctrl-Q` is the one Ctrl+letter that none of Claude Code, Codex, Gemini CLI
   and OpenCode uses; macOS takes `Ctrl-Space` for switching input sources, and VS Code's terminal
-  on Linux and Windows and Zellij take `Ctrl-Q`. Press a prefix twice to send it to the program.
+  on Linux and Windows and Zellij take `Ctrl-Q`. Press a prefix twice (`Ctrl-Q Ctrl-Q`) to jump
+  to the sidebar; the prefix then `q` (`Ctrl-Q q`) sends the prefix itself to the program.
   Set your own with `[ui] prefix`, one key (`"C-]"`) or a list.
 - **A new line in a prompt:** `Shift+Enter` when your terminal speaks the kitty keyboard protocol
   (Ghostty, kitty, WezTerm, foot, recent iTerm2 and Alacritty; `Ctrl-Q ?` shows whether it's

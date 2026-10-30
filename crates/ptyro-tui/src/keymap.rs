@@ -31,6 +31,10 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("help", "Show key bindings"),
     a("palette", "Command palette: run any action, jump to any session"),
     a("app.detach", "Detach (sessions keep running)"),
+    a(
+        "prefix.send",
+        "Send the prefix key itself to the program (a ptyro inside ptyro gets its prefix)",
+    ),
     a("app.quit", "Quit ptyro: stop every session and the daemon (agents hibernate, resumable)"),
     a(
         "session.new",
@@ -417,7 +421,7 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Prefix, ":", "palette"),
     (Table::Prefix, "C-p", "palette"),
     (Table::Prefix, "d", "app.detach"),
-    (Table::Prefix, "q", "app.detach"),
+    (Table::Prefix, "q", "prefix.send"),
     (Table::Prefix, "C-d", "app.quit"),
     (Table::Prefix, "n", "session.new"),
     (Table::Prefix, "N", "worktree.new"),
@@ -449,6 +453,9 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Prefix, ",", "session.rename"),
     (Table::Prefix, "=", "session.take_control"),
     (Table::Prefix, "Tab", "focus.toggle"),
+    // A prefix pressed twice: the quickest way to the sidebar (a prefix you set gets it too).
+    (Table::Prefix, "C-q", "focus.toggle"),
+    (Table::Prefix, "C-Space", "focus.toggle"),
     (Table::Prefix, "\\", "sidebar.toggle"),
     (Table::Prefix, "Z", "sidebar.zoom"),
     (Table::Prefix, "f", "sidebar.filter"),
@@ -594,6 +601,11 @@ impl Keymap {
             let k = key(k);
             map.bindings.insert(slot(*table, &k), (k, Command { action, arg: None }));
         }
+        for k in map.prefixes.clone() {
+            map.bindings
+                .entry(slot(Table::Prefix, &k))
+                .or_insert((k, Command { action: "focus.toggle", arg: None }));
+        }
         for d in 1..=9u8 {
             let k = normalize(KeyEvent::char(char::from(b'0' + d)));
             map.bindings.insert(
@@ -686,17 +698,18 @@ impl Keymap {
     }
 
     /// The keys bound to `action` in `table`, the ones to show first first: a single character
-    /// (`j`) over a named key (`Down`) or a chord (`C-p`), then by name.
+    /// (`j`) over a named key (`Down`) or a chord (`C-p`), then by name; a prefix key last, since
+    /// `C-q C-q` reads worse in a hint than `C-q Tab`.
     fn keys_of(&self, table: Table, action: &str) -> Vec<String> {
+        let prefixes: Vec<String> = self.prefixes.iter().map(key_label).collect();
         let mut keys: Vec<String> = self
             .bindings
             .iter()
             .filter(|((t, _), (_, c))| *t == table && c.action == action && c.arg.is_none())
             .map(|((_, label), _)| label.clone())
             .collect();
-        keys.sort_by(|a, b| {
-            (a.chars().count() > 1, a.len(), a).cmp(&(b.chars().count() > 1, b.len(), b))
-        });
+        let rank = |k: &String| (prefixes.contains(k), k.chars().count() > 1, k.len());
+        keys.sort_by(|a, b| (rank(a), a).cmp(&(rank(b), b)));
         keys
     }
 
@@ -753,6 +766,26 @@ mod tests {
         assert_eq!(m.lookup(Table::Prefix, ev('?', Mods::SHIFT)).unwrap().action, "help");
         assert_eq!(m.lookup(Table::Prefix, ev('3', 0)).unwrap().number(), Some(3));
         assert_eq!(m.key_for("app.detach").as_deref(), Some("C-q d"));
+    }
+
+    #[test]
+    fn a_prefix_twice_is_the_sidebar_and_q_sends_the_prefix() {
+        let (m, _) = Keymap::new(&Config::default());
+        for k in [ev('q', Mods::CTRL), ev(' ', Mods::CTRL), KeyEvent::new(KeyCode::Tab, Mods(0))] {
+            assert_eq!(m.lookup(Table::Prefix, k).unwrap().action, "focus.toggle", "{k:?}");
+        }
+        assert_eq!(m.lookup(Table::Prefix, ev('q', 0)).unwrap().action, "prefix.send");
+        assert_eq!(m.key_for("app.detach").as_deref(), Some("C-q d"), "d alone detaches");
+        // Hints show `C-q Tab`, not `C-q C-q`.
+        assert_eq!(m.key_for("focus.toggle").as_deref(), Some("C-q Tab"));
+        // A prefix you set does it too, and `[keys]` can give it back to the program.
+        let c = Config::parse("[ui]\nprefix = \"C-]\"\n").unwrap();
+        let (m, _) = Keymap::new(&c);
+        assert_eq!(m.lookup(Table::Prefix, ev(']', Mods::CTRL)).unwrap().action, "focus.toggle");
+        let c = Config::parse("[keys]\n\"C-q\" = \"prefix.send\"\n").unwrap();
+        let (m, errors) = Keymap::new(&c);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(m.lookup(Table::Prefix, ev('q', Mods::CTRL)).unwrap().action, "prefix.send");
     }
 
     #[test]
