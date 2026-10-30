@@ -70,6 +70,15 @@ const MIGRATIONS: &[M<'static>] = &[
     ),
     // v2 (CHAT2): a side chat names the chat it reads (SPEC §22.7).
     M::up("ALTER TABLE chat ADD COLUMN side_of TEXT;"),
+    // v3 (CHAT5): meaning search, a vector per message when it is switched on (SPEC §22.10).
+    M::up(
+        "CREATE TABLE node_vec (
+      node TEXT PRIMARY KEY REFERENCES node(id) ON DELETE CASCADE,
+      chat TEXT NOT NULL,
+      model TEXT NOT NULL,
+      vec BLOB NOT NULL);
+    CREATE INDEX node_vec_by_chat ON node_vec(chat);",
+    ),
 ];
 
 /// A tombstoned chat's rows go at the first compaction this long after its delete (§22.4).
