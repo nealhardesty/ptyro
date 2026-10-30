@@ -107,6 +107,11 @@ fn plan(text: &str, n: u64) -> Vec<Step> {
             ]
         }
         "fail" => vec![Step::Text("failing".into()), Step::Fail("fake failure".into())],
+        // A line on stderr (what a killed agent's tail shows), then the answer.
+        "noisy" => {
+            eprintln!("noisy: {rest}");
+            vec![Step::Text(format!("you said: {text}"))]
+        }
         _ => vec![Step::Text(format!("you said: {text}"))],
     }
 }

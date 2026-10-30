@@ -298,3 +298,23 @@ fn pinned_and_unread_address_a_chat() {
     let unread = w.cli(&["chat", "show", "@unread"]);
     assert!(String::from_utf8_lossy(&unread.stderr).contains("haven't read"), "{unread:?}");
 }
+
+#[test]
+fn a_stopped_engines_last_words_stay_off_the_new_branch() {
+    // A retry stops the engine; what it wrote to stderr is shown as it dies (200 ms on), and
+    // went under the new message, the shown branch, as a red notice.
+    let w = World::new("");
+    w.ok(&["chat", "new", "noisy hello"]);
+    let addr = format!("c:{}", w.chats()[0]["handle"].as_str().unwrap());
+    w.ok(&["chat", "retry", &addr]);
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let shown = w.json(&["chat", "show", &addr, "--format", "json"]);
+    let notices: Vec<&str> = shown["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|n| n["t"] == "notice")
+        .filter_map(|n| n["text"].as_str())
+        .collect();
+    assert!(!notices.iter().any(|t| t.contains("noisy:")), "{notices:?}");
+}
