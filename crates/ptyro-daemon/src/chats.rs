@@ -262,6 +262,8 @@ impl Daemon {
                 }
             }
         });
+        // Side chats left by the image before (or a crash): gone, unless followed again soon.
+        self.drop_unfollowed_sides(None);
         self.start_meaning(db.clone());
         self.start_chat_import();
         let me = Arc::clone(self);
@@ -410,6 +412,56 @@ impl Daemon {
                     self.events.send(DomainEvent::ChatRemoved { id: id.to_owned(), machine: None });
             }
         }
+    }
+
+    async fn delete_chat(self: &Arc<Self>, info: &ChatInfo) -> Result<(), Error> {
+        // A compare under way stops with it (its answers have nowhere to go).
+        self.stop_compare(&info.id);
+        self.stop_chat_engine(&info.id).await;
+        if info.incognito {
+            self.end_incognito(&info.id).await;
+            return Ok(());
+        }
+        self.chat_db()?.delete(info.id.clone()).await.map_err(store_err)?;
+        self.remove_chat_files(info).await;
+        self.chats.live.locked().remove(&info.id);
+        let _ = self.events.send(DomainEvent::ChatRemoved { id: info.id.clone(), machine: None });
+        Ok(())
+    }
+
+    /// Side chats not kept (archived ones too).
+    async fn side_chats(&self) -> Vec<ChatInfo> {
+        let Ok(db) = self.chat_db() else { return Vec::new() };
+        let mut all = Vec::new();
+        for archived in [false, true] {
+            let f = ListFilter { archived, sides: true, ..ListFilter::default() };
+            all.extend(db.list(f).await.unwrap_or_default());
+        }
+        all.retain(|c| c.side_of.is_some());
+        all
+    }
+
+    /// Side chats nobody has followed for `[chat] hibernate_after` (as long as its agent would
+    /// stay) go (`only`: that one; SPEC §22.7). A client deletes the one it leaves; these are the
+    /// ones none could: a quit, a crash, a reload, a device that left it while another had it.
+    pub(crate) fn drop_unfollowed_sides(self: &Arc<Self>, only: Option<String>) {
+        let me = Arc::clone(self);
+        let grace =
+            parse_duration(&self.config().chat.hibernate_after).unwrap_or(Duration::from_secs(120));
+        tokio::spawn(async move {
+            tokio::time::sleep(grace).await;
+            for c in me.side_chats().await {
+                let followed =
+                    me.chats.get_live(&c.id).is_some_and(|l| l.viewers.load(Ordering::SeqCst) > 0);
+                if followed || only.as_ref().is_some_and(|o| *o != c.id) {
+                    continue;
+                }
+                tracing::debug!(chat = %c.id, "a side chat nobody follows goes");
+                if let Err(e) = me.delete_chat(&c).await {
+                    tracing::warn!(chat = %c.id, "side chat: {}", e.message);
+                }
+            }
+        });
     }
 
     // ── addressing ────────────────────────────────────────────────────────────────────────
@@ -747,6 +799,10 @@ impl Daemon {
                 let info = self.find_chat(&chat).await?;
                 let agent = agent.map(|a| self.switch_agent(&info, &a, confirmed)).transpose()?;
                 let made = self.chat_fork(&info, node.as_deref(), agent, side).await?;
+                if side {
+                    // Gone unless someone opens it (or keeps it) soon.
+                    self.drop_unfollowed_sides(Some(made.id.clone()));
+                }
                 Ok(Reply::Chat { info: made })
             }
             Request::ChatSend { chat, text } => {
@@ -880,17 +936,16 @@ impl Daemon {
             }
             Request::ChatDelete { chat } => {
                 let info = self.find_chat(&chat).await?;
-                // A compare under way stops with it (its answers have nowhere to go).
-                self.stop_compare(&info.id);
-                self.stop_chat_engine(&info.id).await;
-                if info.incognito {
-                    self.end_incognito(&info.id).await;
-                    return Ok(Reply::Done);
+                // Its side chats go with it: they were questions about it.
+                for side in self
+                    .side_chats()
+                    .await
+                    .into_iter()
+                    .filter(|c| c.side_of == Some(info.id.clone()))
+                {
+                    self.delete_chat(&side).await?;
                 }
-                self.chat_db()?.delete(info.id.clone()).await.map_err(store_err)?;
-                self.remove_chat_files(&info).await;
-                self.chats.live.locked().remove(&info.id);
-                let _ = self.events.send(DomainEvent::ChatRemoved { id: info.id, machine: None });
+                self.delete_chat(&info).await?;
                 Ok(Reply::Done)
             }
             Request::ChatTask { chat, project, agent, name, confirmed } => {
@@ -2401,8 +2456,11 @@ impl Daemon {
         Ok(live)
     }
 
-    pub(crate) fn chat_unfollow(&self, live: &Arc<Live>) {
-        live.viewers.fetch_sub(1, Ordering::SeqCst);
+    pub(crate) fn chat_unfollow(self: &Arc<Self>, live: &Arc<Live>) {
+        if live.viewers.fetch_sub(1, Ordering::SeqCst) == 1 {
+            // The last one left: a side chat goes, unless someone comes back to it.
+            self.drop_unfollowed_sides(Some(live.id.clone()));
+        }
         self.chats.settle(&live.id);
     }
 

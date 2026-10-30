@@ -1440,8 +1440,7 @@ async fn fork(
     if prompt.trim().is_empty() {
         if side && !keep {
             eprintln!(
-                "(a side chat with nothing to ask: `ptyro chat rm {}` when done)",
-                info.addr()
+                "(a side chat: it goes once nobody has had it open for a while; --keep keeps it)"
             );
         }
         return Ok(0);

@@ -6819,11 +6819,14 @@ agent's own history is a cache**: losing it, or an agent's updated format, loses
   the in-chat tree is Open WebUI's and llm's (RESEARCH R-CHAT-02).
 - **Side chat** (`fork --side`): a fork that reads the chat's context and **never writes back**:
   its engine gets the branch as a seed, it is not listed under CHATS (it shows under its parent while
-  open), and it is dropped on close unless **kept** (then it is a normal fork). Claude Desktop, Codex
-  and Claude Code's `/btw` have one (R-CHAT-04).
+  open), and it is dropped on close unless **kept** (then it is a normal fork). The client that
+  closes it deletes it; the daemon deletes any nobody has followed for `hibernate_after` (one left
+  by a quit, a crash or a reload; checked again at start), and a chat's side chats go with it.
+  Claude Desktop, Codex and Claude Code's `/btw` have one (R-CHAT-04).
 - **Switch agent** (`/agent codex`, `chat.agent`, `chat update --agent`): the next message starts a
-  seeded conv on the other agent (and its profile, if the workspace's differs: it asks). The chat
-  is unchanged; no other chat app can do this.
+  seeded conv on the other agent. A bare name is the chat's own profile's; another profile's
+  (`codex@work`) asks first, as the conversation goes to that account. The chat is unchanged; no
+  other chat app can do this.
 - **Make it a task** (CHAT4): start a normal session in a worktree whose first prompt carries the
   branch as a seed block and the chat's last answer, linked back by `forked_from_chat`.
 

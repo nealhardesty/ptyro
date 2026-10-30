@@ -196,6 +196,33 @@ fn retry_edit_branches_and_forks() {
 }
 
 #[test]
+fn a_side_chat_nobody_follows_goes_and_goes_with_its_chat() {
+    let w = World::new("hibernate_after = \"2s\"");
+    w.ok(&["chat", "new", "hello"]);
+    let parent = w.addr_of("Titled");
+    let side_of = |out: &Output| {
+        let err = String::from_utf8_lossy(&out.stderr).into_owned();
+        err.split_whitespace().next().unwrap_or_default().to_owned()
+    };
+    let gone = |w: &World, addr: &str| !w.cli(&["chat", "show", addr]).status.success();
+    // Left by a client that couldn't delete it (here: never opened): it goes after a while.
+    // (Made well after the daemon started, so not by the look it takes at start.)
+    std::thread::sleep(Duration::from_secs(3));
+    let s1 = side_of(&w.cli(&["chat", "fork", &parent, "--side"]));
+    assert!(s1.starts_with("c:") && !gone(&w, &s1), "{s1}");
+    w.until("the side chat nobody follows is gone", || gone(&w, &s1));
+    assert!(!gone(&w, &parent), "its chat stays");
+    // Deleting its chat takes it along at once (here nothing else would, for a minute).
+    let w = World::new("hibernate_after = \"60s\"");
+    w.ok(&["chat", "new", "hello"]);
+    let parent = w.addr_of("Titled");
+    let s2 = side_of(&w.cli(&["chat", "fork", &parent, "--side"]));
+    assert!(!gone(&w, &s2));
+    w.ok(&["chat", "rm", &parent]);
+    assert!(gone(&w, &s2), "it went with its chat");
+}
+
+#[test]
 fn incognito_keeps_nothing() {
     let w = World::new("hibernate_after = \"4s\"");
     let out = w.ok(&["chat", "new", "--incognito", "my secret plan"]);

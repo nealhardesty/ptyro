@@ -395,17 +395,11 @@ impl App {
         }
     }
 
-    /// Put the chat (or the list) shown aside, as it is (its draft too), for `session.last`.
+    /// Put the chat (or the list) shown aside, as it is (its draft too), for `session.last`. It
+    /// stays followed, so the daemon doesn't take a side chat put aside for one nobody has.
     pub(crate) fn set_chat_aside(&mut self) {
         self.drop_chat_aside();
-        if let Some(p) = self.chat_panel.take() {
-            if let ChatPanel::View(v) = &p
-                && let Some(id) = &v.id
-            {
-                self.send(ClientMsg::ChatUnsubscribe { chat: id.clone() });
-            }
-            self.chat_aside = Some(p);
-        }
+        self.chat_aside = self.chat_panel.take();
         self.dirty = true;
     }
 
@@ -418,12 +412,14 @@ impl App {
         }
     }
 
-    /// The chat put aside, shown again as it was and followed again; false when there is none.
+    /// The chat put aside, shown again as it was; false when there is none. Followed afresh:
+    /// what it said meanwhile went by unseen.
     pub(crate) fn bring_chat_back(&mut self) -> bool {
         let Some(p) = self.chat_aside.take() else { return false };
         if let ChatPanel::View(v) = &p
             && let Some(id) = &v.id
         {
+            self.send(ClientMsg::ChatUnsubscribe { chat: id.clone() });
             self.send(ClientMsg::ChatSubscribe { chat: id.clone() });
         }
         self.chat_takes_keys();
