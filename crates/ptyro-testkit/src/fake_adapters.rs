@@ -542,7 +542,12 @@ pub fn main(args: &[String]) -> i32 {
     let f = Fake::new(args);
     let mut out = std::io::stdout();
     let _ = writeln!(out, "fake {} session={} resumed={}", f.adapter, f.session, f.resumed);
-    f.hook("SessionStart", json!({ "source": if f.resumed { "resume" } else { "startup" } }));
+    // Claude's SessionStart and every Codex hook name the model the agent runs.
+    let model = if f.adapter == "claude" { "claude-opus-5-5" } else { "gpt-5.6-sol" };
+    f.hook(
+        "SessionStart",
+        json!({ "source": if f.resumed { "resume" } else { "startup" }, "model": model }),
+    );
     f.oc(json!({ "type": "session.created", "properties": { "info": { "id": f.session } } }));
     f.report(&mut out, "state=idle");
     // `PTYRO_FAKE_PASTE=1`: bracketed paste, as real agents ask for, so a pasted prompt over

@@ -253,6 +253,14 @@ impl Daemon {
                     // It would be handed to the agent's CLI on resume: never an option.
                     tracing::warn!(session = %s.id, "ignoring a conversation id that isn't one");
                 }
+                Signal::Model { id } => {
+                    let id = ptyro_core::session::brief(&id, 80);
+                    let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if !id.is_empty() && m.model.as_deref() != Some(id.as_str()) {
+                        m.model = Some(id);
+                        changed = true;
+                    }
+                }
                 Signal::Conversation { id } => {
                     let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     if m.conversation.as_deref() != Some(id.as_str()) {

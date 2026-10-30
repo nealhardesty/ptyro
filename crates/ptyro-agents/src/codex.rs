@@ -211,6 +211,7 @@ impl Adapter for Codex {
         if let Some(id) = str_of(p, "session_id").or_else(|| str_of(p, "thread-id")) {
             out.push(Signal::Conversation { id: id.to_owned() });
         }
+        out.extend(crate::adapter::model_in(p));
         let tool = || {
             tool_summary(
                 str_of(p, "tool_name").unwrap_or("tool"),
@@ -426,6 +427,11 @@ mod tests {
         assert!(
             stop.contains(&Signal::Reply { text: "ok".into() }) && stop.contains(&Signal::TurnEnd)
         );
+        // Every hook names the model (0.143 and 0.164 fixtures).
+        assert!(stop.contains(&Signal::Model { id: "gpt-5.6-sol".into() }));
+        assert!(s.contains(&Signal::Model { id: "gpt-5.5".into() }));
+        // `notify` carries none.
+        assert!(!n.iter().any(|x| matches!(x, Signal::Model { .. })));
         assert_eq!(Codex.on_title("⠋ codex"), Some(Signal::status(AgentStatus::Working)));
         assert_eq!(Codex.on_title("codex"), None);
         assert!(

@@ -209,6 +209,33 @@ pub fn str_of<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
     v.get(k).and_then(Value::as_str).filter(|s| !s.is_empty())
 }
 
+/// The model a hook payload names: its own `model` (Claude's `SessionStart`, every Codex hook).
+pub fn model_in(p: &Value) -> Option<Signal> {
+    str_of(p, "model").map(|id| Signal::Model { id: id.to_owned() })
+}
+
+/// The model of the last assistant turn in a Claude transcript (`transcript_path`): what ran the
+/// latest turn, so a `/model` switch shows. Reads only the file's tail; `None` when it can't.
+pub fn transcript_model(path: &str) -> Option<Signal> {
+    use std::io::{Read, Seek, SeekFrom};
+    const TAIL: u64 = 256 * 1024;
+    let path = std::path::Path::new(path);
+    if !path.is_absolute() || path.extension()? != "jsonl" {
+        return None;
+    }
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    f.seek(SeekFrom::Start(len.saturating_sub(TAIL))).ok()?;
+    let mut tail = Vec::new();
+    f.take(TAIL).read_to_end(&mut tail).ok()?;
+    String::from_utf8_lossy(&tail).lines().rev().find_map(|line| {
+        let v: Value = serde_json::from_str(line).ok()?;
+        let id = v.pointer("/message/model")?.as_str()?;
+        // Claude's own placeholder turns (an API error, a local command) name no real model.
+        (v["type"] == "assistant" && !id.starts_with('<')).then(|| Signal::Model { id: id.into() })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

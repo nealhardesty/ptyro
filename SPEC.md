@@ -1620,6 +1620,28 @@ terminationReason, error}` with camelCase fields, configured in `~/.gemini/confi
   `fullyIdle`, errored on `error`.
 - There is no permission hook, so *blocked* comes only from OSC 7501, if agy emits it.
 
+### 8.6c Which model an agent runs **[built UX4.1]**
+
+`SessionInfo.model` is the model's id as the agent names it (`claude-opus-5-5`, `gpt-5.6-sol`).
+It is live state: kept in `Meta`, never in `ptyro.db`, so a dormant session shows none until its
+agent speaks again (a resumed Claude sends `SessionStart` with it). The `Signal::Model` an
+adapter returns sets it; the daemon keeps at most 80 characters and announces a change like any
+other. Sources, by agent:
+
+| Agent | Source | Status |
+|---|---|---|
+| Claude (terminal) | `SessionStart` hook payload `model`; on `Stop` the last assistant turn of `transcript_path` (`message.model`, the file's last 256 KiB; `<synthetic>` turns skipped), so a `/model` switch shows once the turn that used it ends | **[verified 2.1.304 fixture; a real transcript]** |
+| Claude (structured) | `system/init` `model` in stream-json | **[verified 2.1.305 fixture]** |
+| Codex | `model` in the payload of every hook (`SessionStart`, `UserPromptSubmit`, `Stop`); `notify` carries none | **[verified 0.143.0 and 0.164.0 fixtures; a real rollout's `turn_context`]** |
+| Gemini | its hooks carry none (0.64.0 fixture); the chat file's shape is unconfirmed | **[spike UX4.2]** |
+| OpenCode | `providerID`/`modelID` on a message from `GET /session/:id/message`, by docs and clients | **[spike UX4.2; not installed]** |
+
+Display: `ptyro_core::session::model_label` (and `modelLabel` in web/src/screen.ts, same table of
+tests) shortens `claude-opus-5-5` to `opus 5.5`, `claude-3-5-sonnet-20241022` to `sonnet 3.5` and
+drops a provider prefix; a non-Claude id is shown whole. The TUI pane header of an agent session
+says `name · claude opus 5.5`; `ptyro ls` gets a MODEL column once any session has one (`--json`
+has the raw `model`); the web shows it in a session's card, its header pill and the search.
+
 ### 8.7 Shell and generic adapters
 
 - `shell`: `$SHELL -l`; OSC 133/OSC 7 support if the user's shell emits them (ptyro ships optional

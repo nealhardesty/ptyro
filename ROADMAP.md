@@ -2191,6 +2191,37 @@ a better way: the tailnet can issue a real Let's Encrypt certificate for the mac
   A ptyro-run name service (`<ip>.<id>.ptyro.link` with a real certificate) is the only way to a
   LAN certificate with no Tailscale and no domain, and means running a service: the owner decides.
 
+## UX4 — Which model (2026-10-30)
+
+*From the owner:* "can the status bar/title on the top of an agent pane deduce the model in use
+(sonnet, opus for claude)?" Yes, from the agents' own events; SPEC §8.6c.
+
+- [x] **UX4.1 The model in the pane header, `ls` and the web — Claude and Codex** — M.
+  `SessionInfo.model`, set by `Signal::Model` from Claude's `SessionStart` and its transcript's
+  last turn (a `/model` switch shows after the turn), Claude's stream-json `system/init`, and
+  Codex's hook payloads. Shown as `opus 5.5` (`model_label`/`modelLabel`) in the TUI pane header,
+  `ptyro ls` (MODEL column; `--json` has the raw id), and the web's cards, session pill and
+  search. No new command, so no parity row. Not stored: a dormant session shows none.
+- [ ] **UX4.2 Spike: Gemini's and OpenCode's model** — S. *Needs a real Gemini session and an
+  OpenCode install; none is on the owner's machine today.* Find out, from a real run, and write
+  the answers into SPEC §8.5, §8.6 and §8.6c:
+  1. Gemini: does a `session-*.jsonl` chat file (or any hook, or `/stats`' title) record the
+     model, per message or per session? Does a `/model` switch change it? Else the fallbacks:
+     `-m`/`--model`, `model.name` in `settings.json` (under the profile's `GEMINI_CLI_HOME`).
+  2. OpenCode: is the model in `GET /session/:id/message` (`info.providerID`/`modelID`) and in
+     the `message.updated` events ptyro already follows on `GET /event`? Does it change with
+     the TUI's model picker? Does `opencode.db` hold it too (older `storage/` JSON layout)?
+  3. Antigravity (`agy`): the same questions, if it is installed by then.
+  Wrap it as `make spike-model` (a script under `scripts/`, like `spike-chat`); keep the fixtures
+  under `crates/ptyro-agents/tests/fixtures/`. *Done when:* each agent has a verified source or
+  a recorded "none", and `Signal::Model` comes from it with a fixture test (then UX4.3).
+- [ ] **UX4.3 Gemini's and OpenCode's model in the header** — S. After UX4.2: their adapters
+  return `Signal::Model` from the verified source (OpenCode's from the SSE it already follows).
+  The display code is done.
+- [ ] **UX4.4 Remember the model across a daemon restart** — S. Dormant sessions show none
+  today. Store it (metadata, a `session` column) once someone misses it; `SessionRecord` and a
+  migration, `DormantSpec.model`.
+
 ## H2 — Second hardening review (2026-10-24)
 
 Nine reviewers each read a slice of the code (daemon runtime, daemon features, TUI, the rest of

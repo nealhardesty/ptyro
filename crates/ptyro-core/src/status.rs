@@ -159,6 +159,8 @@ pub enum Signal {
     Activity { text: String },
     /// The agent's own conversation id (for resume).
     Conversation { id: String },
+    /// The model the agent runs, as it names it (`claude-opus-5-5`, `gpt-5.6-sol`).
+    Model { id: String },
     /// The first prompt the user typed (branch names, inbox context).
     Prompt { text: String },
     /// A turn ended normally (Stop, `agent-turn-complete`, 7501 `done`).

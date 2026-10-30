@@ -7625,6 +7625,26 @@ mod tests {
     }
 
     #[test]
+    fn an_agent_pane_header_names_the_model_once_the_agent_said() {
+        let mut app = app();
+        let mut agent = session("fixer");
+        agent.kind = SessionKind::Agent;
+        agent.agent = Some("claude".into());
+        app.panes.get_mut(&1).unwrap().session = Some(agent.id);
+        app.sessions = vec![agent.clone()];
+        let shown = screen(&app);
+        assert!(!shown.contains("opus"), "no model yet, none shown: {shown}");
+        agent.model = Some("claude-opus-5-5".into());
+        app.sessions = vec![agent.clone()];
+        let shown = screen(&app);
+        assert!(shown.contains("fixer · claude opus 5.5"), "{shown}");
+        // A shell has no model to show, whatever it carries.
+        agent.kind = SessionKind::Shell;
+        app.sessions = vec![agent];
+        assert!(!screen(&app).contains("opus 5.5"));
+    }
+
+    #[test]
     fn the_task_box_names_the_work_after_what_you_type() {
         let mut app = app();
         with_project(&mut app);

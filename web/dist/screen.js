@@ -1,6 +1,28 @@
 // The daemon's screen model on the client (SPEC §6.5; crates/ptyro-core/src/cache.rs in
 // TypeScript): apply keyframes and deltas, read the text back. Shared by the web app and its
 // tests (web/test), which feed it live frames from a real daemon.
+/// A model's id shortened for a title or a card: `claude-opus-5-5` → `opus 5.5`,
+/// `claude-3-5-sonnet-20241022` → `sonnet 3.5`, `claude-opus-5-5[1m]` → `opus 5.5 1m`,
+/// `anthropic/claude-sonnet-4-5` → `sonnet 4.5`; another vendor's id stays as it is.
+/// The same rules as `ptyro_core::session::model_label`.
+export function modelLabel(id) {
+    const base = id.trim().split("/").pop() ?? "";
+    const [name, rest = ""] = base.split("[");
+    const tag = rest.replace(/\]+$/, "");
+    let label = name;
+    const parts = name.startsWith("claude-") ? name.slice(7).split("-") : [];
+    const at = parts.findIndex((p) => p === "opus" || p === "sonnet" || p === "haiku");
+    if (at >= 0) {
+        const nums = (ps) => { const out = []; for (const p of ps) {
+            if (p.length > 2 || !/^\d+$/.test(p))
+                break;
+            out.push(p);
+        } return out; };
+        const v = (at === 0 ? nums(parts.slice(1)) : nums(parts.slice(0, at))).join(".");
+        label = v ? `${parts[at]} ${v}` : parts[at];
+    }
+    return tag ? `${label} ${tag}` : label;
+}
 export function runCells(run) {
     const chars = Array.from(run.text);
     if (!run.clusters)

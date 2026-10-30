@@ -1229,13 +1229,16 @@ async fn list(ctx: &Ctx, json: bool, filter: Filter) -> Result<i32, Error> {
         return Ok(0);
     }
     let profiles = all.iter().any(|s| s.profile != ptyro_core::model::DEFAULT_PROFILE);
+    // A MODEL column once any agent has said which model it runs.
+    let models = all.iter().any(|s| s.model.is_some());
     let home = std::env::var("HOME").unwrap_or_default();
     println!(
-        "{:<8} {:<18} {:<11} {:<20} {:<24} {}{:>3}  {:<5} STATUS",
+        "{:<8} {:<18} {:<11} {:<20} {}{:<24} {}{:>3}  {:<5} STATUS",
         "HANDLE",
         "NAME",
         "STATE",
         "COMMAND",
+        if models { format!("{:<12} ", "MODEL") } else { String::new() },
         "WHERE",
         if profiles { format!("{:<10} ", "PROFILE") } else { String::new() },
         "V",
@@ -1268,11 +1271,17 @@ async fn list(ctx: &Ctx, json: bool, filter: Filter) -> Result<i32, Error> {
             format!(" :{}", s.ports.iter().map(u16::to_string).collect::<Vec<_>>().join(" :"))
         };
         println!(
-            "{:<8} {:<18} {:<11} {:<20} {:<24} {}{:>3}  {:<5} {}{ports}",
+            "{:<8} {:<18} {:<11} {:<20} {}{:<24} {}{:>3}  {:<5} {}{ports}",
             s.handle,
             truncate(&s.name, 18),
             s.state.label(),
             truncate(&cmd, 20),
+            if models {
+                let m = s.model.as_deref().map(ptyro_core::session::model_label);
+                format!("{:<12} ", truncate(m.as_deref().unwrap_or("-"), 12))
+            } else {
+                String::new()
+            },
             truncate(&place, 24),
             if profiles { format!("{:<10} ", truncate(&s.profile, 10)) } else { String::new() },
             s.viewers,
