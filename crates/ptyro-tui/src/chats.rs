@@ -50,6 +50,8 @@ pub struct ChatViewState {
     pub workspace: String,
     pub view: crate::chat::ChatView,
     pub draft: String,
+    /// The composer's cursor, in characters (past the end: at the end).
+    pub at: usize,
     /// A new chat's agent and preset, picked with `C-o`.
     pub agent: Option<String>,
     pub preset: Option<String>,
@@ -70,6 +72,26 @@ pub struct ChatViewState {
     pub focus: Option<String>,
     /// A new chat's first message goes to these agents, each answer a branch (`/compare A B`).
     pub compare: Vec<String>,
+}
+
+impl ChatViewState {
+    /// Edit the draft at its cursor, which the view then draws there.
+    fn edit<R>(&mut self, f: impl FnOnce(&mut crate::settings::LineEdit) -> R) -> R {
+        let mut e =
+            crate::settings::LineEdit { text: std::mem::take(&mut self.draft), at: self.at };
+        e.at = e.at.min(e.text.chars().count());
+        let r = f(&mut e);
+        (self.draft, self.at) = (e.text, e.at);
+        self.view.cursor = Some(self.at);
+        r
+    }
+
+    /// The draft replaced as a whole: the cursor goes to its end.
+    fn set_draft(&mut self, text: String) {
+        self.draft = text;
+        self.at = usize::MAX;
+        self.view.cursor = None;
+    }
 }
 
 /// Why an imported chat isn't retried or edited (the daemon refuses it too).
@@ -255,11 +277,13 @@ impl App {
         }
         let workspace = self.chat_workspace();
         self.leave_chat();
+        self.chat_takes_keys();
         self.chat_panel = Some(ChatPanel::View(Box::new(ChatViewState {
             id: None,
             workspace,
             view: crate::chat::ChatView::default(),
             draft: String::new(),
+            at: 0,
             agent: None,
             preset: None,
             folders: Vec::new(),
@@ -298,11 +322,13 @@ impl App {
         let workspace =
             self.chat(id).map_or_else(|| self.workspace.clone(), |c| c.workspace.clone());
         self.send(ClientMsg::ChatSubscribe { chat: id.to_owned() });
+        self.chat_takes_keys();
         self.chat_panel = Some(ChatPanel::View(Box::new(ChatViewState {
             id: Some(id.to_owned()),
             workspace,
             view: crate::chat::ChatView::default(),
             draft: String::new(),
+            at: 0,
             agent: None,
             preset: None,
             folders: Vec::new(),
@@ -324,6 +350,7 @@ impl App {
             return self.chats_off_toast();
         }
         self.leave_chat();
+        self.chat_takes_keys();
         self.chat_panel = Some(ChatPanel::List(ChatList {
             workspace,
             sel: 0,
@@ -336,6 +363,13 @@ impl App {
             meaning_asked: false,
         }));
         self.dirty = true;
+    }
+
+    /// A chat (or the list) just opened has the keyboard, wherever the keys were: typing goes
+    /// into it, not to the sidebar it was opened from (as a session shown from there does).
+    fn chat_takes_keys(&mut self) {
+        self.focus = Focus::Pane;
+        self.sidebar_zoom = false;
     }
 
     /// Stop following the chat shown, if one is (a side chat not kept goes with it).
@@ -871,7 +905,7 @@ impl App {
             }
             v.compare = agents.clone();
             if !text.is_empty() {
-                v.draft = text;
+                v.set_draft(text);
                 let d = v.draft.clone();
                 v.view.apply(v.view.rev, false, Vec::new(), d);
             }
@@ -1194,7 +1228,7 @@ impl App {
         {
             v.sending = false;
             if err.is_some() && v.draft.is_empty() {
-                v.draft = text;
+                v.set_draft(text);
             }
             let fresh = err.is_some() && chat.is_none();
             let d = v.draft.clone();
@@ -1237,8 +1271,7 @@ impl App {
     pub(crate) fn chat_paste(&mut self, text: &str) {
         match &mut self.chat_panel {
             Some(ChatPanel::View(v)) => {
-                v.draft.push_str(text);
-                v.view.draft = v.draft.clone();
+                v.edit(|e| e.insert(text));
                 v.view.apply(v.view.rev, false, Vec::new(), v.draft.clone());
             }
             Some(ChatPanel::List(l)) => {
@@ -1346,7 +1379,7 @@ impl App {
                 self.chat_panel = Some(ChatPanel::View(Box::new(v)));
                 return self.pick_chat_agent(id);
             }
-            _ if crate::app::is_newline_key(&key) => v.draft.push('\n'),
+            _ if crate::app::is_newline_key(&key) => v.edit(|e| e.insert("\n")),
             KeyCode::Enter if v.sending => self.toast("one moment: the last message is on its way"),
             KeyCode::Enter if v.draft.trim_start().starts_with('/') => {
                 let text = std::mem::take(&mut v.draft);
@@ -1390,16 +1423,14 @@ impl App {
                     }
                 }
             }
-            KeyCode::Backspace => {
-                v.draft.pop();
-            }
             KeyCode::PageUp => v.view.scroll = (v.view.scroll + 10).min(v.view.max_scroll.get()),
             KeyCode::PageDown => v.view.scroll = v.view.scroll.saturating_sub(10),
-            KeyCode::Char { c } if !ctrl && !key.mods.has(Mods::ALT) => {
-                v.draft.push(c);
-                v.view.scroll = 0;
+            // The rest edit the draft at its cursor (←/→, C-a/C-e, C-u/C-k, C-w, Delete…).
+            _ => {
+                if v.edit(|e| e.key(key)) {
+                    v.view.scroll = 0;
+                }
             }
-            _ => {}
         }
         let draft = v.draft.clone();
         v.view.apply(v.view.rev, false, Vec::new(), draft);
@@ -1571,7 +1602,7 @@ impl App {
         match row {
             Row::Chat(id) => self.open_chat(id),
             Row::ChatNew(_) => self.new_chat(),
-            Row::Chats(ws) | Row::ChatAll(ws) => self.open_chat_list(Some(ws.clone())),
+            Row::ChatAll(ws) => self.open_chat_list(Some(ws.clone())),
             _ => return false,
         }
         true

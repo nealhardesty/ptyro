@@ -20,6 +20,8 @@ pub struct ChatView {
     pub items: Vec<ChatItem>,
     pub rev: u64,
     pub draft: String,
+    /// Where the draft's cursor is, in characters (`None`: at its end).
+    pub cursor: Option<usize>,
     /// Lines scrolled up from the bottom (0 follows new output).
     pub scroll: usize,
     /// How far up it could scroll when last drawn (Page Up stops there).
@@ -307,7 +309,7 @@ fn build(view: &ChatView, t: &Theme, depth: Depth) -> Doc {
     d
 }
 
-/// Draw the chat view into `area`; returns where the cursor goes (end of the draft) when focused.
+/// Draw the chat view into `area`; returns where the cursor goes (in the draft) when focused.
 pub fn draw(
     view: &ChatView,
     buf: &mut Buffer,
@@ -349,16 +351,26 @@ pub fn draw(
         String::new()
     };
     let mut composer: Vec<Vec<(char, Style)>> = Vec::new();
+    // The cursor: its composer row and column (the text before it, wrapped the same way).
+    let len = view.draft.chars().count();
+    let mut left = view.cursor.map_or(len, |c| c.min(len));
+    let mut cursor = (0, 0);
     for (i, l) in view.draft.split('\n').enumerate() {
-        let segs = vec![
-            seg(if i == 0 { "› " } else { "  " }, accent),
-            seg(l, Style::new().fg(depth.fit(t.text))),
-        ];
+        let lead = if i == 0 { "› " } else { "  " };
+        let n = l.chars().count();
+        if left <= n {
+            let before: String = l.chars().take(left).collect();
+            let rows = wrap(&[seg(lead, accent), seg(&before, Style::new())], width);
+            let col =
+                rows.last().map_or(0, |r| r.iter().map(|(c, _)| c.width().unwrap_or(0)).sum());
+            cursor = (composer.len() + rows.len() - 1, col);
+            left = usize::MAX;
+        } else if left != usize::MAX {
+            left -= n + 1;
+        }
+        let segs = vec![seg(lead, accent), seg(l, Style::new().fg(depth.fit(t.text)))];
         composer.extend(wrap(&segs, width));
     }
-    // The cursor goes after the draft's last wrapped row (before any hint).
-    let draft_end: usize =
-        composer.last().map_or(0, |r| r.iter().map(|(c, _)| c.width().unwrap_or(0)).sum());
     if !hint.is_empty() {
         let last = composer.last_mut().expect("composer");
         if last.len() + hint.len() + 1 < width {
@@ -431,13 +443,14 @@ pub fn draw(
         }
     }
     let comp_y = area.y + body_h as u16;
-    let shown = &composer[composer.len() - comp_h..];
+    // The last `comp_h` rows, or from the cursor's row when it is above them.
+    let first = (composer.len() - comp_h).min(cursor.0);
+    let shown = &composer[first..first + comp_h];
     for (i, row) in shown.iter().enumerate() {
         put(buf, comp_y + i as u16, row);
     }
-    // Cursor at the end of the draft: the last composer row is shown last.
     focused.then(|| {
-        Position::new(area.x + draft_end.min(width - 1) as u16, comp_y + comp_h as u16 - 1)
+        Position::new(area.x + cursor.1.min(width - 1) as u16, comp_y + (cursor.0 - first) as u16)
     })
 }
 
@@ -522,5 +535,18 @@ mod tests {
         // Three composer rows at the bottom; the cursor after "  ab".
         assert_eq!(cur, Some(Position::new(4, 9)));
         assert_eq!(buf[(2, 9)].symbol(), "a");
+        // Moved back: on the wrapped first line's second row, after its 10th `x`.
+        v.cursor = Some(28);
+        let cur = draw(&v, &mut buf, area, &Theme::dark(), Depth::True, true);
+        assert_eq!(cur, Some(Position::new(10, 8)));
+        v.cursor = Some(31);
+        let cur = draw(&v, &mut buf, area, &Theme::dark(), Depth::True, true);
+        assert_eq!(cur, Some(Position::new(2, 9)), "the second line's start");
+        // A draft taller than the composer shows the cursor's rows, not only the last ones.
+        v.apply(1, true, vec![], (1..=8).map(|i| i.to_string()).collect::<Vec<_>>().join("\n"));
+        v.cursor = Some(0);
+        let cur = draw(&v, &mut buf, area, &Theme::dark(), Depth::True, true);
+        assert_eq!(cur, Some(Position::new(2, 5)), "on the top composer row");
+        assert_eq!(buf[(2, 5)].symbol(), "1", "the first line is shown");
     }
 }

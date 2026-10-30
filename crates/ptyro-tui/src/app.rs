@@ -3387,14 +3387,12 @@ impl App {
                 }
                 Some(Row::Chats(ws)) => {
                     let key = crate::tree::chats_key(&ws);
+                    // Like a project's heading: ⏎ (and Space) fold it, h/l close and open it;
+                    // `all chats…` under it (or the chat list's key) lists them.
                     let collapse = match cmd.action {
                         "nav.collapse" => true,
                         "nav.expand" => false,
-                        _ => {
-                            // ⏎ on the heading opens the list; h/l fold it.
-                            self.chat_row_open(&Row::Chats(ws));
-                            return;
-                        }
+                        _ => !self.collapsed.contains(&key),
                     };
                     if collapse {
                         self.collapsed.insert(key);
@@ -3805,9 +3803,11 @@ impl App {
                     with("chat.pin", if c.pinned { "unpin" } else { "pin" }).unwrap_or_default()
                 ))
             }
-            Row::Chats(_) | Row::ChatAll(_) => {
-                with("chat.list", "every chat here").map(|l| format!("⏎ {l}"))
-            }
+            Row::Chats(_) => Some(match with("chat.list", "every chat here") {
+                Some(l) => format!("⏎ fold · {l}"),
+                None => "⏎ fold".into(),
+            }),
+            Row::ChatAll(_) => with("chat.list", "every chat here").map(|l| format!("⏎ {l}")),
             Row::ChatNew(_) => Some("⏎ start a chat".into()),
             Row::Set(_) | Row::Group(_) => None,
         }
@@ -7833,8 +7833,15 @@ mod tests {
         app.prefix_at = Some(Instant::now() - Duration::from_secs(1));
         let shown = screen(&app);
         assert!(shown.contains("C-q then…"), "{shown}");
-        for want in ["n a task", "a who needs you", "D diff & ship", ". its actions", "? all keys"]
-        {
+        for want in [
+            "n a task",
+            "m chat",
+            "a who needs you",
+            "g chats",
+            "D diff & ship",
+            ". its actions",
+            "? all keys",
+        ] {
             assert!(shown.contains(want), "{want}: {shown}");
         }
         // Rebinding shows: `y` now zooms.
@@ -9544,6 +9551,95 @@ mod tests {
         assert_eq!(v.draft, "ask codex@work", "the message is back to edit");
         assert!(v.view.items.is_empty(), "nothing shows as sent");
         assert!(v.id.is_none() && !v.sending);
+    }
+
+    /// A key typed at the terminal, through everything that routes it.
+    fn press(app: &mut App, c: char, mods: crossterm::event::KeyModifiers) {
+        app.on_key(&crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Char(c), mods));
+    }
+
+    fn draft(app: &App) -> (String, usize) {
+        let Some(crate::chats::ChatPanel::View(v)) = &app.chat_panel else { panic!("no chat") };
+        (v.draft.clone(), v.at.min(v.draft.chars().count()))
+    }
+
+    #[test]
+    fn the_chats_heading_folds_like_a_project_and_a_chat_opened_from_the_sidebar_takes_the_keys() {
+        use crossterm::event::KeyModifiers as M;
+        let mut app = app();
+        with_project(&mut app);
+        app.focus = Focus::Sidebar;
+        let rows = app.rows();
+        let at = rows.iter().position(|r| *r == Row::Chats("main".into())).expect("CHATS");
+        app.set_sel(&rows, at);
+        let key = crate::tree::chats_key("main");
+        app.run(&Command { action: "nav.open", arg: None });
+        assert!(app.collapsed.contains(&key), "⏎ folds it");
+        assert!(app.chat_panel.is_none() && app.focus == Focus::Sidebar, "and opens nothing");
+        app.run(&Command { action: "nav.select", arg: None });
+        assert!(!app.collapsed.contains(&key), "Space unfolds it");
+        // `m` in the sidebar: the new chat has the keyboard, not the sidebar it came from.
+        press(&mut app, 'm', M::NONE);
+        assert!(matches!(app.chat_panel, Some(crate::chats::ChatPanel::View(_))));
+        assert_eq!(app.focus, Focus::Pane);
+        press(&mut app, 'j', M::NONE);
+        assert_eq!(draft(&app).0, "j", "typed into the chat, not a sidebar move");
+        // The list opened from there too.
+        app.focus = Focus::Sidebar;
+        app.run(&Command { action: "chat.list", arg: None });
+        assert_eq!(app.focus, Focus::Pane);
+    }
+
+    #[test]
+    fn the_chat_composer_edits_like_a_shell_line() {
+        use crossterm::event::KeyModifiers as M;
+        let mut app = app();
+        app.new_chat();
+        for c in "world".chars() {
+            press(&mut app, c, M::NONE);
+        }
+        press(&mut app, 'a', M::CONTROL);
+        assert_eq!(draft(&app), ("world".into(), 0), "C-a: the start");
+        for c in "hello ".chars() {
+            press(&mut app, c, M::NONE);
+        }
+        assert_eq!(draft(&app), ("hello world".into(), 6), "typed at the cursor");
+        press(&mut app, 'k', M::CONTROL);
+        assert_eq!(draft(&app), ("hello ".into(), 6), "C-k: to the end");
+        press(&mut app, 'w', M::CONTROL);
+        assert_eq!(draft(&app), ("".into(), 0), "C-w: the word before");
+        for c in "one two".chars() {
+            press(&mut app, c, M::NONE);
+        }
+        app.chat_key(KeyEvent::new(KeyCode::Left, Mods::NONE));
+        app.chat_key(KeyEvent::new(KeyCode::Left, Mods::NONE));
+        app.chat_key(KeyEvent::new(KeyCode::Backspace, Mods::NONE));
+        assert_eq!(draft(&app), ("one wo".into(), 4), "←, then ⌫ before the cursor");
+        press(&mut app, 'e', M::CONTROL);
+        // A second line: the keys keep to the cursor's line.
+        app.chat_key(KeyEvent::new(KeyCode::Char { c: 'j' }, Mods(Mods::CTRL)));
+        for c in "three".chars() {
+            press(&mut app, c, M::NONE);
+        }
+        press(&mut app, 'a', M::CONTROL);
+        assert_eq!(draft(&app), ("one wo\nthree".into(), 7), "C-a: this line's start");
+        app.chat_key(KeyEvent::new(KeyCode::End, Mods::NONE));
+        press(&mut app, 'u', M::CONTROL);
+        assert_eq!(draft(&app), ("one wo\n".into(), 7), "C-u: this line only");
+        // The cursor is drawn where it is: on the first line, after `one`.
+        app.chat_key(KeyEvent::new(KeyCode::Backspace, Mods::NONE));
+        press(&mut app, 'a', M::CONTROL);
+        for _ in 0..3 {
+            app.chat_key(KeyEvent::new(KeyCode::Right, Mods::NONE));
+        }
+        let Some(crate::chats::ChatPanel::View(v)) = &app.chat_panel else { panic!() };
+        let area = ratatui::layout::Rect::new(0, 0, 40, 10);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        let cur = crate::chat::draw(&v.view, &mut buf, area, &app.theme, app.depth, true);
+        assert_eq!(cur, Some(ratatui::layout::Position::new(5, 9)), "`› one` then the cursor");
+        // A paste goes in at the cursor.
+        app.chat_paste("!");
+        assert_eq!(draft(&app), ("one! wo".into(), 4));
     }
 
     #[test]
