@@ -44,10 +44,9 @@ pub struct FirstRun {
     pub sel: usize,
 }
 
-/// `prog` on `PATH`.
+/// `prog` on `PATH`, or where npm, nvm or `npx` put it (the daemon runs it from there too).
 fn on_path(prog: &str) -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(prog).is_file()))
+    ptyro_agents::locate::find(prog, &std::env::var("PATH").unwrap_or_default()).is_some()
 }
 
 /// Skip the first-run screen (scripted setups): `PTYRO_FIRST_RUN=0`.

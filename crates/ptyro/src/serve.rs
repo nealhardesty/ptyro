@@ -71,6 +71,7 @@ const ASSETS: &[(&str, &str, &[u8])] = &[
     js!("kit"),
     js!("machine"),
     js!("machines"),
+    js!("chats"),
     js!("projects"),
     js!("qr"),
     js!("review"),
@@ -147,6 +148,8 @@ struct State {
     hosts: Vec<String>,
     /// The CA phones trust once (`/ca.crt`), when serving HTTPS.
     ca_pem: Option<String>,
+    /// The certificates being served, when serving HTTPS: their stamp goes into `/sw.js`.
+    served: Option<Arc<Mutex<crate::tls::Served>>>,
     /// The daemon is on another machine (`--remote`): host operations would act on this one.
     remote: bool,
 }
@@ -409,7 +412,7 @@ pub async fn run(
             "ptyro serve: listening on {on} (plain HTTP, this computer only); open {base}"
         ),
     }
-    let acceptor = tls.as_ref().map(|t| Arc::new(Mutex::new(Arc::clone(&t.config))));
+    let acceptor = tls.as_ref().map(|t| Arc::new(Mutex::new(t.config.clone())));
     let live = Arc::new(Mutex::new(disk_tailnet));
     if let Some(current) = &acceptor {
         if own.is_none() && access == Access::Tailscale {
@@ -456,6 +459,7 @@ pub async fn run(
         open: Mutex::new(HashMap::new()),
         hosts,
         ca_pem: tls.as_ref().filter(|_| !own_cert).map(|t| t.ca_pem.clone()),
+        served: acceptor.clone(),
         remote: ctx.remote.is_some(),
     });
     let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
@@ -501,7 +505,7 @@ async fn accept_loop(
     listener: TcpListener,
     state: Arc<State>,
     slots: Arc<tokio::sync::Semaphore>,
-    acceptor: Option<Arc<Mutex<Arc<rustls::ServerConfig>>>>,
+    acceptor: Option<Arc<Mutex<crate::tls::Served>>>,
 ) {
     loop {
         let (stream, peer) = match listener.accept().await {
@@ -523,8 +527,9 @@ async fn accept_loop(
             tracing::debug!(%peer, "too many connections from one address");
             continue;
         };
-        let tls =
-            acceptor.as_ref().map(|c| tokio_rustls::TlsAcceptor::from(Arc::clone(&c.locked())));
+        let tls = acceptor
+            .as_ref()
+            .map(|c| tokio_rustls::TlsAcceptor::from(Arc::clone(&c.locked().config)));
         tokio::spawn(async move {
             let _open = open;
             let svc = service_fn(move |req| handle(req, Arc::clone(&st), peer, Arc::clone(&slot)));
@@ -605,7 +610,7 @@ async fn tailnet_cert_task(
     paths: ptyro_core::paths::Paths,
     dir: std::path::PathBuf,
     names: Vec<String>,
-    current: Arc<Mutex<Arc<rustls::ServerConfig>>>,
+    current: Arc<Mutex<crate::tls::Served>>,
     live: Arc<Mutex<Option<crate::tls::TailnetCert>>>,
 ) {
     loop {
@@ -784,7 +789,15 @@ async fn handle(
         },
         (&Method::GET | &Method::HEAD, p) => match ASSETS.iter().find(|(a, _, _)| *a == p) {
             Some((_, ctype, data)) => {
-                let mut r = respond(StatusCode::OK, ctype, Bytes::from_static(data));
+                let body = match &st.served {
+                    // A new certificate makes a new service worker (see `tls::Served`).
+                    Some(s) if p == "/sw.js" => {
+                        let stamp = format!("\n// certificate {}\n", s.locked().stamp);
+                        Bytes::from([data, stamp.as_bytes()].concat())
+                    }
+                    _ => Bytes::from_static(data),
+                };
+                let mut r = respond(StatusCode::OK, ctype, body);
                 // The shell and the service worker must update; icons may be cached.
                 let cache = if p.ends_with(".png") || p.ends_with(".svg") {
                     "public, max-age=86400"
@@ -1205,6 +1218,7 @@ mod tests {
             open: Mutex::new(HashMap::new()),
             hosts: Vec::new(),
             ca_pem: None,
+            served: None,
             remote: false,
         });
         let ip: IpAddr = "1.2.3.4".parse().unwrap();
@@ -1275,6 +1289,7 @@ mod tests {
             open: Mutex::new(HashMap::new()),
             hosts: Vec::new(),
             ca_pem: None,
+            served: None,
             remote: false,
         });
         let ip: IpAddr = "1.2.3.4".parse().unwrap();

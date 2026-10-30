@@ -48,6 +48,7 @@ pub fn sessions() -> Vec<CompletionCandidate> {
     let Some(Reply::Sessions { sessions }) = ask(Request::List) else { return Vec::new() };
     let mut out: Vec<CompletionCandidate> = sessions
         .into_iter()
+        .filter(|s| s.chat.is_none())
         .map(|s| {
             let what =
                 s.status.as_ref().map_or_else(|| s.state.label(), |r| r.status.label().to_owned());
@@ -66,6 +67,29 @@ pub fn sessions() -> Vec<CompletionCandidate> {
         out.push(candidate(sel.into(), None));
     }
     out
+}
+
+pub fn chats() -> Vec<CompletionCandidate> {
+    let req = Request::ChatList {
+        workspace: None,
+        all: true,
+        pinned: false,
+        archived: false,
+        limit: Some(50),
+    };
+    let Some(Reply::Chats { chats }) = ask(req) else { return Vec::new() };
+    let mut out: Vec<CompletionCandidate> = chats
+        .into_iter()
+        .map(|c| candidate(format!("c:{}", c.handle), Some(c.label().to_owned())))
+        .collect();
+    out.push(candidate("@last".into(), Some("the chat used last".into())));
+    out
+}
+
+/// The tool presets, each with what it lets a chat use.
+pub fn chat_presets() -> Vec<CompletionCandidate> {
+    let Some(Reply::ChatPresets { presets }) = ask(Request::ChatPresets) else { return Vec::new() };
+    presets.into_iter().map(|p| candidate(p.name, Some(p.about))).collect()
 }
 
 pub fn worktrees() -> Vec<CompletionCandidate> {

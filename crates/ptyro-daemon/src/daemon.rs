@@ -148,6 +148,8 @@ pub struct Daemon {
     pub(crate) project_adding: tokio::sync::Mutex<()>,
     /// Lead spawns, one at a time (their limits are check-then-act).
     pub(crate) lead_spawning: tokio::sync::Mutex<()>,
+    /// Chats (SPEC §22): `chat.db` and the chats being followed or answered.
+    pub(crate) chats: crate::chats::Chats,
 }
 
 impl Daemon {
@@ -172,6 +174,7 @@ impl Daemon {
         let (feed_tx, feed_rx) = mpsc::unbounded_channel();
         let (io_pause, pause_rx) = watch::channel(false);
         let (run_id, started_ms) = identity.unwrap_or_else(|| (SessionId::new().full(), now_ms()));
+        let chats = crate::chats::Chats::open(&paths.data.join("chat.db"));
         Arc::new(Self {
             paths,
             started_ms,
@@ -255,6 +258,7 @@ impl Daemon {
             kv_writer: Arc::new(tokio::sync::Mutex::new(())),
             project_adding: tokio::sync::Mutex::new(()),
             lead_spawning: tokio::sync::Mutex::new(()),
+            chats,
         })
     }
 
@@ -268,10 +272,17 @@ impl Daemon {
         }
     }
 
-    /// Where a session records, if it does (`[recorder]`, an agent's `record = false`).
-    pub(crate) fn record_spec(&self, id: SessionId, agent: Option<&str>) -> Option<(PathBuf, u64)> {
+    /// Where a session records, if it does (`[recorder]`, an agent's `record = false`). A chat's
+    /// engine never does: its transcript is chat text, kept in `chat.db` alone (or, incognito,
+    /// nowhere; SPEC §22.4, §22.9).
+    pub(crate) fn record_spec(
+        &self,
+        id: SessionId,
+        place: &crate::session::Place,
+    ) -> Option<(PathBuf, u64)> {
         let config = self.config();
-        if !config.recorder.enabled {
+        let agent = place.agent.as_deref();
+        if !config.recorder.enabled || place.chat.is_some() {
             return None;
         }
         if agent.is_some_and(|a| ptyro_agents::def(&config, a).record == Some(false)) {
@@ -317,8 +328,7 @@ impl Daemon {
         });
         for (img, emu) in imgs.into_iter().zip(emus) {
             let id = img.id.clone();
-            let record =
-                id.parse().ok().and_then(|i| self.record_spec(i, img.meta.place.agent.as_deref()));
+            let record = id.parse().ok().and_then(|i| self.record_spec(i, &img.meta.place));
             let adopted =
                 emu.and_then(|emu| Session::adopt(img, emu, self.hub(), &self.reaper, record));
             match adopted {
@@ -372,8 +382,13 @@ impl Daemon {
         };
         let scrollback = self.config().daemon.scrollback_lines;
         let mut restored = Vec::new();
+        let engines = self.paths.data.join("chat");
         for r in records {
             let Ok(id) = r.id.parse::<SessionId>() else { continue };
+            // A chat's engine is started again by its next message, never restored (§22.5).
+            if std::path::Path::new(&r.cwd).starts_with(&engines) {
+                continue;
+            }
             if self.session(id).is_some() {
                 continue;
             }
@@ -396,6 +411,7 @@ impl Daemon {
                     script: r.script.clone(),
                     quick: false,
                     pad: false,
+                    chat: None,
                 },
                 adapter,
                 conversation: r.conversation.clone(),
@@ -721,6 +737,7 @@ impl Daemon {
             script: None,
             quick: spec.quick && agent.is_none(),
             pad: spec.pad && agent.is_none(),
+            chat: None,
         };
         // `@review` names a prompt snippet from the project's `[prompts]` (SPEC §13.3).
         let prompt = match spec.prompt.as_deref().and_then(|p| p.strip_prefix('@')) {
@@ -753,6 +770,9 @@ impl Daemon {
             command: None,
             mcp: spec.lead.is_some() || spec.mcp,
             structured: spec.structured,
+            params: None,
+            fork: false,
+            chat_tools: policy.as_ref().is_some_and(|p| p.chat),
         });
         let s = self
             .launch(Launch {
@@ -826,6 +846,9 @@ impl Daemon {
             command: None,
             mcp: false,
             structured: meta.structured.is_some(),
+            params: None,
+            fork: false,
+            chat_tools: false,
         });
         let new = self
             .launch(Launch {
@@ -922,7 +945,21 @@ impl Daemon {
     ) -> Result<Reply, Error> {
         // Another machine's things (MM1.B): its requests go there, and lists here gain its part.
         // A link is answered with this machine's own, and never routed on (no echoes).
-        let federate = !caller.is_link() && !self.links.locked().is_empty();
+        // A chat's own agent (its history tools) only searches, reads and lists this machine's
+        // chats, within its scope (`handle_chat`): never routed, merged with others' or guessed.
+        let engine = self.engine_chat_of(caller).is_some();
+        if engine
+            && !matches!(
+                req,
+                Request::ChatSearch { .. } | Request::ChatRead { .. } | Request::ChatList { .. }
+            )
+        {
+            return Err(Error::new(
+                ErrorCode::PermissionDenied,
+                "a chat's agent may search and read chats, not change them",
+            ));
+        }
+        let federate = !engine && !caller.is_link() && !self.links.locked().is_empty();
         if federate && let Some(m) = self.machine_for(&req)? {
             self.guard_caller(&req, caller)?;
             self.guard_device(&req, caller)?;
@@ -931,7 +968,10 @@ impl Daemon {
         let asked = federate.then(|| req.clone());
         let out = self.handle_here(req, caller).await;
         match (asked, out) {
-            (Some(req), Ok(reply)) => Ok(self.merge_mirrors(&req, reply)),
+            (Some(req), Ok(reply)) => {
+                let reply = self.archived_chats_too(&req, reply).await;
+                Ok(self.merge_mirrors(&req, reply))
+            }
             // Not here, but on exactly one of them: `fix-flaky-test` for laptop2's.
             (Some(req), Err(e)) if e.code == ErrorCode::NotFound => {
                 match self.machine_guess(&req)? {
@@ -992,6 +1032,26 @@ impl Daemon {
             | Request::Lead { .. }
             | Request::SetVerify { .. }) => self.handle_mail(req, caller).await,
             Request::Cs { op } => self.handle_cs(op, caller).await,
+            req @ (Request::ChatNew { .. }
+            | Request::ChatList { .. }
+            | Request::ChatRead { .. }
+            | Request::ChatSend { .. }
+            | Request::ChatAnswer { .. }
+            | Request::ChatStop { .. }
+            | Request::ChatUpdate { .. }
+            | Request::ChatDelete { .. }
+            | Request::ChatExport { .. }
+            | Request::ChatRetry { .. }
+            | Request::ChatEdit { .. }
+            | Request::ChatBranch { .. }
+            | Request::ChatFork { .. }
+            | Request::ChatSearch { .. }
+            | Request::ChatTask { .. }
+            | Request::ChatPresets
+            | Request::ChatCompare { .. }
+            | Request::ChatPick { .. }
+            | Request::ChatImport { .. }
+            | Request::ChatFind { .. }) => self.handle_chat(req, caller).await,
             req @ (Request::CheckpointList { .. }
             | Request::CheckpointDiff { .. }
             | Request::CheckpointRestore { .. }) => self.checkpoint_request(req).await,
@@ -1214,7 +1274,12 @@ impl Daemon {
                     .collect();
                 Ok(Reply::Events { events })
             }
-            Request::Doctor => Ok(Reply::Doctor { report: self.doctor() }),
+            Request::Doctor => {
+                let mut report = self.doctor();
+                report.chats = self.chat_doctor().await;
+                report.meaning = self.meaning_doctor().await;
+                Ok(Reply::Doctor { report })
+            }
             Request::Agents => {
                 let (agents, default) = self.agent_choices();
                 Ok(Reply::Agents { agents, default })

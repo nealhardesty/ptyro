@@ -55,6 +55,9 @@ pub struct Place {
     /// The scratchpad's editor (NOTE1.1).
     #[serde(default)]
     pub pad: bool,
+    /// The chat it is the engine of (SPEC §22.2): hidden from the session tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat: Option<String>,
 }
 
 pub struct Term {
@@ -558,6 +561,7 @@ impl Session {
             summary: meta.summary.clone(),
             quick: meta.place.quick,
             pad: meta.place.pad,
+            chat: meta.place.chat.clone(),
         }
     }
 
@@ -565,6 +569,10 @@ impl Session {
     pub fn save(&self, launch: Option<serde_json::Value>) {
         let Some(store) = &self.store else { return };
         let m = self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        // A chat's engine is the chat's, and its words are chat text: never in `ptyro.db`.
+        if m.place.chat.is_some() {
+            return;
+        }
         store.save_session(SessionRecord {
             id: self.id.full(),
             name: m.name,

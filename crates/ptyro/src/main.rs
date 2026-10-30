@@ -3,6 +3,7 @@
 mod about;
 mod agents;
 mod backup;
+mod chat;
 mod cli;
 mod complete;
 mod config;
@@ -179,6 +180,9 @@ enum Cmd {
         /// Only sessions whose home is this workspace
         #[arg(short, long, add = ArgValueCandidates::new(complete::workspaces))]
         workspace: Option<String>,
+        /// Also the agents answering chats (hidden otherwise)
+        #[arg(long)]
+        chats: bool,
     },
     /// Stop sessions (SIGHUP, then TERM, then KILL) and remove them.
     /// SESSION may be a selector: `@all`, `@live`, `@exited`, `@blocked`, `build-*`, `a,b`…
@@ -480,8 +484,13 @@ enum Cmd {
         #[arg(long)]
         max_bounces: Option<u32>,
     },
-    /// MCP server for lead agents (started for you by `ptyro new --agent … --lead`)
-    Mcp,
+    /// MCP server for lead agents (started for you by `ptyro new --agent … --lead`), and the
+    /// chat history tools inside a chat's agent (`--chat`, started for you)
+    Mcp {
+        /// The chat history tools only (`chat_search`, `chat_read`, `chat_list`)
+        #[arg(long)]
+        chat: bool,
+    },
     /// Bridge stdin/stdout to this machine's daemon (what `--remote` runs over ssh)
     Proxy,
     /// Switch an agent between structured mode (chat view) and its own terminal UI, in the
@@ -536,6 +545,15 @@ enum Cmd {
         /// With --read: up to N lines of scrollback above the screen (all of it without N)
         #[arg(long, requires = "read", num_args = 0..=1, default_missing_value = "4294967295")]
         scrollback: Option<u32>,
+    },
+    /// Chats with your agents: `ptyro chat "a question"` asks and keeps it (the CHATS section of
+    /// the TUI and the web show it too); `ptyro chat ask` answers once and keeps nothing
+    #[command(args_conflicts_with_subcommands = true)]
+    Chat {
+        #[command(subcommand)]
+        cmd: Option<chat::ChatCmd>,
+        /// A first message (the same as `ptyro chat new …`)
+        words: Vec<String>,
     },
     /// The scratchpad: one notes file for ideas and bugs (`$PTYRO_SCRATCHPAD`), the same in every
     /// session. Opens in your editor, here; `--pane` opens it as a session (`C-q ;` in the TUI)
@@ -764,6 +782,9 @@ enum Cmd {
         /// Include the web app's certificate authority, with its private key
         #[arg(long)]
         with_ca: bool,
+        /// Leave your chats (chat.db) out
+        #[arg(long)]
+        no_chats: bool,
         #[arg(long)]
         json: bool,
     },

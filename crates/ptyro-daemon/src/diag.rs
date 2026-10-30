@@ -43,7 +43,14 @@ impl Daemon {
         let warnings = self.warnings.locked().clone();
         let config_error =
             warnings.iter().find(|w| w.starts_with("the config didn't load")).cloned();
-        DaemonDoctor { leaked_vars, path: var("PATH").unwrap_or_default(), warnings, config_error }
+        DaemonDoctor {
+            leaked_vars,
+            path: var("PATH").unwrap_or_default(),
+            warnings,
+            config_error,
+            chats: None,
+            meaning: None,
+        }
     }
 
     /// Start `ptyro fake-agent --as <adapter>` through the adapter, give it one short turn, and
@@ -91,6 +98,9 @@ impl Daemon {
                     ]),
                     mcp: false,
                     structured: false,
+                    params: None,
+                    fork: false,
+                    chat_tools: false,
                 }),
             })
             .await?;

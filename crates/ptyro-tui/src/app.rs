@@ -226,6 +226,20 @@ pub enum Purpose {
     AddProject(Option<AfterAdd>),
     /// A row's actions (UX1.15): run with that row selected in the sidebar.
     RowMenu(Row),
+    /// A chat's agent (`None`: the new chat being written's).
+    ChatAgent(Option<String>),
+    /// A chat's tool preset.
+    ChatPreset(Option<String>),
+    /// The project this chat's task works in (SPEC §22.7).
+    ChatTaskProject(String, crate::chats::TaskArgs),
+    /// Where to fork this chat (SPEC §22.7).
+    ChatForkAt(String),
+    /// Which message of this chat to say differently.
+    ChatEditPick(String),
+    /// Which of this chat's branches to show.
+    ChatBranchPick(String),
+    /// A citation to open.
+    ChatCite,
     /// Home (UX1.19): what to do next.
     Home,
     /// What the doctor found, to fix (UX1.20).
@@ -307,6 +321,20 @@ pub enum PromptKind {
     Orch(crate::runs::OrchInput),
     /// Typed in the change-set view (M11).
     Sets(crate::sets::SetsInput),
+    /// A chat's title (by id); empty asks for a new automatic one.
+    ChatRetitle(String),
+    /// One more folder this chat may read (`none`: none).
+    ChatFolder(String),
+    /// A message said differently: (chat, the message's node).
+    ChatEdit(String, String),
+    /// Find in the chat shown.
+    ChatFindIn,
+    /// A question for `chat find`.
+    ChatFind,
+    /// Which agents a chat's last message is asked of (`chat.compare`).
+    ChatCompare(String),
+    /// What `chat.import` imports: `chat import`'s flags (empty: everything).
+    ChatImport,
 }
 
 /// A key that starts a new line in a text box instead of sending it (UX1.26): Shift+Enter
@@ -378,6 +406,10 @@ pub enum Confirmed {
     Send(Box<Request>, String),
     /// Quit ptyro: stop every session and the daemon (`daemon stop --force`).
     Quit,
+    /// Switch meaning search on (SPEC §22.10): `chat.meaning = true` in the config.
+    MeaningOn,
+    /// Send this request again, agreed to (`confirmed`), its reply going to this.
+    Again(Box<Request>, Box<Pending>),
 }
 
 #[derive(Debug, Clone)]
@@ -429,6 +461,34 @@ pub enum Pending {
     List,
     Registry,
     Saved,
+    /// Every chat not archived (SPEC §22.12).
+    Chats,
+    /// The archived ones, for the chat list.
+    ArchivedChats,
+    /// A new chat made by its first message (this one): follow it.
+    ChatMade(String),
+    /// A request the daemon may ask the person to agree to first (`NeedsConfirmation`: a chat's
+    /// conversation going to another profile, SPEC §22.7); its reply is the inner one's.
+    Confirm(Box<Request>, Box<Pending>),
+    /// A message (`text`) sent to `chat`: put back if it was refused.
+    ChatSent {
+        chat: String,
+        text: String,
+    },
+    /// A chat made (a fork, a side chat, a find): open it.
+    ChatOpen,
+    /// A cited chat looked up by its address: open it at this node.
+    ChatOpenAt(Option<String>),
+    /// A side chat made by `/side QUESTION`: open it and ask that.
+    ChatSideAsk(String),
+    /// The chat list's message hits, for this query.
+    ChatHits(String),
+    /// A chat's Markdown, to write here.
+    ChatExport(std::path::PathBuf),
+    /// `chat.import`: its report becomes a toast.
+    ChatImport,
+    /// `chat.pick`: which agent takes the next message, as a toast.
+    ChatPicked,
     /// What quick-new would start in this workspace (UX3.2), for its label.
     Again(String),
     /// Wizard title: the profile a spawn would get and why.
@@ -625,6 +685,10 @@ pub struct App {
     pub orch: Option<crate::runs::Orch>,
     /// The change-set view (`S`, M11.11).
     pub sets_view: Option<crate::sets::Sets>,
+    /// Chats not archived (SPEC §22.12): the CHATS sections and the chat list.
+    pub chat_list: Vec<ptyro_core::chats::ChatInfo>,
+    /// The chat list or a chat, over the panes.
+    pub chat_panel: Option<crate::chats::ChatPanel>,
     /// Change sets in the sidebar.
     pub set_nodes: Vec<crate::sets::SetNode>,
     /// Close the inspector when the session it asked for appears (`E`: commit in the editor).
@@ -755,6 +819,8 @@ impl App {
             inspector: None,
             orch: None,
             sets_view: None,
+            chat_list: Vec::new(),
+            chat_panel: None,
             set_nodes: Vec::new(),
             close_inspector_after: false,
             follow,
@@ -843,6 +909,8 @@ impl App {
             Reply::Sessions { sessions } => sessions,
             _ => Vec::new(),
         };
+        let sessions: Vec<SessionInfo> =
+            sessions.into_iter().filter(|s| s.chat.is_none()).collect();
         self.last_listed = sessions.iter().map(|s| s.id).collect();
         self.sessions = sessions;
         self.load_registry(&client).await;
@@ -889,6 +957,19 @@ impl App {
         }
         if let Ok(Reply::Status { status }) = client.request(Request::Status).await {
             self.machine = status.machine;
+        }
+        if self.config.chat.enabled
+            && let Ok(Reply::Chats { chats }) = client
+                .request(Request::ChatList {
+                    workspace: None,
+                    all: true,
+                    pinned: false,
+                    archived: false,
+                    limit: None,
+                })
+                .await
+        {
+            self.chat_list = chats;
         }
         if let Ok(Reply::Usage { usage }) = client.request(Request::Usage).await {
             self.usage =
@@ -946,6 +1027,10 @@ impl App {
         }
         self.load_view().await;
         self.refresh_again();
+        // `ptyro chat open`: that chat, over the panes.
+        if let Some(id) = self.opts.chat.take() {
+            self.open_chat(&id);
+        }
     }
 
     /// The workspace a session shows up under in the sidebar (MM1.B: the first that has its
@@ -1045,7 +1130,7 @@ impl App {
         self.client.as_ref()
     }
 
-    fn send(&self, msg: ClientMsg) {
+    pub(crate) fn send(&self, msg: ClientMsg) {
         if let Some(c) = self.client() {
             let _ = c.send(msg);
         }
@@ -1443,6 +1528,9 @@ impl App {
             ServerMsg::Chat { session, rev, reset, items, draft } => {
                 self.chats.entry(session).or_default().apply(rev, reset, items, draft);
             }
+            ServerMsg::ChatLive { chat, rev, reset, items, siblings } => {
+                self.chat_live(chat, rev, reset, items, siblings);
+            }
             ServerMsg::Goodbye { reason } => self.lost(&reason),
             _ => {}
         }
@@ -1452,7 +1540,8 @@ impl App {
     /// exists, so a session it no longer names (whose removal event never came) is gone from
     /// panes and every per-session map. One made by an event after the reply was asked for
     /// isn't in it yet and stays.
-    fn got_list(&mut self, listed: Vec<SessionInfo>) {
+    fn got_list(&mut self, mut listed: Vec<SessionInfo>) {
+        listed.retain(|s| s.chat.is_none());
         let named: HashSet<SessionId> = listed.iter().map(|s| s.id).collect();
         let gone: Vec<SessionId> = self
             .sessions
@@ -1504,6 +1593,10 @@ impl App {
     }
 
     pub(crate) fn upsert(&mut self, info: SessionInfo) {
+        // A chat's engine is the chat's, never a row of its own (SPEC §22.2).
+        if info.chat.is_some() {
+            return;
+        }
         match self.sessions.iter_mut().find(|s| s.id == info.id) {
             Some(s) => *s = info,
             None => self.sessions.push(info),
@@ -1513,7 +1606,10 @@ impl App {
     fn on_event(&mut self, event: DomainEvent) {
         match event {
             // We fell behind: what we know may be stale.
-            DomainEvent::EventsLost { .. } => self.request(Pending::List, Request::List),
+            DomainEvent::EventsLost { .. } => {
+                self.request(Pending::List, Request::List);
+                self.refresh_chats();
+            }
             DomainEvent::SessionCreated { info } => {
                 // The agent a new worktree was waiting for (after its setup script).
                 let follow = self.follow.as_ref().is_some_and(|(w, _)| {
@@ -1638,6 +1734,8 @@ impl App {
                 self.usage.insert((usage.profile.clone(), usage.agent.clone()), usage);
             }
             DomainEvent::RunUpdated { run } => self.run_updated(run),
+            DomainEvent::ChatUpdated { info } => self.chat_updated(info),
+            DomainEvent::ChatRemoved { id, .. } => self.chat_removed(&id),
             DomainEvent::ProjectUpdated { info } => {
                 upsert_by(&mut self.projects, info, |p| p.id.clone())
             }
@@ -1669,6 +1767,7 @@ impl App {
                 upsert_by(&mut self.workspaces, info, |w| w.id.clone())
             }
             DomainEvent::MachineUpdated { info } => {
+                self.chat_machine_news(&info);
                 self.machine_news(info);
             }
             DomainEvent::MachineRemoved { name } => self.machines.retain(|m| m.name != name),
@@ -1704,7 +1803,7 @@ impl App {
 
     /// Read the config again; `say` toasts that it was (the settings panel makes the change
     /// itself and says its own).
-    fn reload_config_with(&mut self, say: bool) {
+    pub(crate) fn reload_config_with(&mut self, say: bool) {
         let path = Config::path(&self.paths);
         match Config::load(&path) {
             Ok(config) => {
@@ -1783,6 +1882,18 @@ impl App {
 
     fn handle_reply(&mut self, pending: Pending, res: Result<Reply, ptyro_core::Error>) {
         match (pending, res) {
+            (Pending::Confirm(req, then), Err(e)) if e.code == ErrorCode::NeedsConfirmation => {
+                if let Pending::ChatMade(_) = *then
+                    && let Some(crate::chats::ChatPanel::View(v)) = &mut self.chat_panel
+                {
+                    v.sending = false;
+                }
+                self.overlay = Some(Overlay::Confirm {
+                    text: format!("{} [y/N]", e.message),
+                    action: Confirmed::Again(req, then),
+                });
+            }
+            (Pending::Confirm(_, then), r) => self.handle_reply(*then, r),
             (
                 p @ (Pending::Pad
                 | Pending::PadAdded
@@ -1791,6 +1902,58 @@ impl App {
                 r,
             ) => self.pad_reply(p, r),
             (Pending::List, Ok(Reply::Sessions { sessions })) => self.got_list(sessions),
+            (Pending::Chats, Ok(Reply::Chats { chats })) => self.got_chats(chats),
+            (Pending::ArchivedChats, Ok(Reply::Chats { chats })) => self.got_archived(chats),
+            (Pending::ChatMade(_), Ok(Reply::Chat { info })) => self.chat_made(info),
+            (Pending::ChatMade(text), Err(e)) => self.chat_sent(None, text, Some(e.message)),
+            (Pending::ChatSent { chat, text }, Err(e)) => {
+                self.chat_sent(Some(&chat), text, Some(e.message))
+            }
+            // An imported chat carries on as a fork: the view goes there.
+            (Pending::ChatSent { chat, text }, Ok(Reply::Chat { info })) => {
+                self.chat_sent(Some(&chat), text, None);
+                self.chat_forked(&chat, info);
+            }
+            (Pending::ChatSent { chat, text }, Ok(_)) => self.chat_sent(Some(&chat), text, None),
+            (Pending::ChatImport, Ok(Reply::ChatImported { report })) => {
+                self.toast(report.summary());
+                self.refresh_chats();
+            }
+            (Pending::ChatImport, Err(e)) => self.toast_err(format!("import: {}", e.message)),
+            (Pending::ChatPicked, Ok(Reply::Chat { info })) => {
+                let who = ptyro_core::chats::agent_label(&info.agent, &info.profile);
+                self.toast(format!("kept: {who} takes the next message"));
+                self.chat_updated(info);
+            }
+            (Pending::ChatOpen, Ok(Reply::Chat { info })) => {
+                let id = info.id.clone();
+                self.chat_updated(info);
+                self.open_chat(&id);
+            }
+            (Pending::ChatOpenAt(node), Ok(Reply::ChatTranscript { info, .. })) => {
+                let id = info.id.clone();
+                self.chat_updated(info);
+                self.open_chat_at(&id, node.as_deref());
+            }
+            (Pending::ChatSideAsk(text), Ok(Reply::Chat { info })) => {
+                let id = info.id.clone();
+                self.chat_updated(info);
+                self.open_chat(&id);
+                let sent = Pending::ChatSent { chat: id.clone(), text: text.clone() };
+                self.request(sent, Request::ChatSend { chat: id, text });
+            }
+            (Pending::ChatHits(q), Ok(Reply::ChatHits { hits })) => self.got_hits(q, hits),
+            (Pending::ChatHits(_), Err(e)) if e.code == ErrorCode::NeedsConfirmation => {
+                self.offer_meaning(e.message);
+            }
+            // A query still being typed: its error is no news (a short prefix, a lone `-`).
+            (Pending::ChatHits(_), Err(_)) => {}
+            (Pending::ChatExport(path), Ok(Reply::Text { text })) => {
+                match std::fs::write(&path, text) {
+                    Ok(()) => self.toast(format!("written to {}", path.display())),
+                    Err(e) => self.toast(format!("{}: {e}", path.display())),
+                }
+            }
             (Pending::Registry, Ok(Reply::Profiles { profiles })) => self.profiles = profiles,
             (Pending::Spawned { split, back, .. }, Ok(Reply::Session { info })) => {
                 if std::mem::take(&mut self.close_inspector_after) {
@@ -2255,6 +2418,10 @@ impl App {
     /// Show `id`: in a new split when one is asked for, else without a split (UX3.1, `place`):
     /// where it shows already, in the kept layout that has it, or full sized.
     pub fn show(&mut self, id: SessionId, split: Option<Dir>) {
+        // A session shown takes the place of the chat panel.
+        if self.chat_panel.is_some() {
+            self.close_chat();
+        }
         let pane = match split {
             // The drawer hangs from its host: splitting it would nest a pane inside it.
             Some(_) if self.drawer.is_some_and(|d| d.pane == self.focused) => {
@@ -2420,6 +2587,19 @@ impl App {
             }
             return;
         }
+        // The chat panel has the keyboard while the panes have focus (the sidebar keeps its own).
+        if self.chat_panel.is_some()
+            && !self.prefix
+            && self.focus == Focus::Pane
+            && !self.full_view()
+        {
+            if self.keymap.is_prefix(key) {
+                self.start_prefix();
+            } else {
+                self.chat_key(key);
+            }
+            return;
+        }
         if self.sets_view.is_some() && !self.prefix {
             if self.keymap.is_prefix(key) {
                 self.start_prefix();
@@ -2551,6 +2731,10 @@ impl App {
             }
             Some(_) => {}
             None if full => {}
+            None if self.chat_panel.is_some() && self.focus == Focus::Pane => {
+                self.chat_paste(&lines);
+                return;
+            }
             None if self.pad_popup.is_some() => {
                 self.forward_popup(InputEvent::Paste { text });
                 return;
@@ -2851,6 +3035,22 @@ impl App {
             | "session.rename"
             | "session.retitle"
             | "session.take_control" => {
+                // On a chat row, the same keys mean the chat's own: `,` its title, `x` archive,
+                // `X` delete (SPEC §22.12).
+                let on_chat_row = self.focus == Focus::Sidebar
+                    && matches!(self.selected_row(), Some(Row::Chat(_)));
+                // With a chat open over the panes, they mean the chat, never the hidden session.
+                let chat_shown = self.focus == Focus::Pane
+                    && matches!(&self.chat_panel, Some(crate::chats::ChatPanel::View(v)) if v.id.is_some());
+                if on_chat_row || chat_shown {
+                    let a = match cmd.action {
+                        "session.rename" | "session.retitle" => "chat.retitle",
+                        "session.stop" => "chat.archive",
+                        "session.kill" => "chat.delete",
+                        _ => return,
+                    };
+                    return self.chat_action(a);
+                }
                 let target = if self.focus == Focus::Sidebar {
                     match self.selected_row() {
                         Some(Row::Session(id) | Row::Quick(id)) => Some(id),
@@ -2912,6 +3112,9 @@ impl App {
                     }
                     Focus::Sidebar => Focus::Pane,
                 };
+            }
+            "row.menu" if self.chat_panel.is_some() && self.focus == Focus::Pane => {
+                self.chat_menu()
             }
             "row.menu" => self.open_row_menu(),
             "home" => self.open_home(),
@@ -3171,7 +3374,31 @@ impl App {
                     self.open_sets(run);
                 }
             }
+            a if a.starts_with("chat.") => self.chat_action(a),
             "nav.open" | "nav.collapse" | "nav.expand" => match self.selected_row() {
+                Some(r @ (Row::Chat(_) | Row::ChatNew(_) | Row::ChatAll(_)))
+                    if cmd.action == "nav.open" =>
+                {
+                    self.sidebar_zoom = false;
+                    self.chat_row_open(&r);
+                }
+                Some(Row::Chats(ws)) => {
+                    let key = crate::tree::chats_key(&ws);
+                    let collapse = match cmd.action {
+                        "nav.collapse" => true,
+                        "nav.expand" => false,
+                        _ => {
+                            // ⏎ on the heading opens the list; h/l fold it.
+                            self.chat_row_open(&Row::Chats(ws));
+                            return;
+                        }
+                    };
+                    if collapse {
+                        self.collapsed.insert(key);
+                    } else {
+                        self.collapsed.remove(&key);
+                    }
+                }
                 Some(Row::Session(id)) if cmd.action == "nav.open" => {
                     self.sidebar_zoom = false;
                     self.show(id, None)
@@ -3565,6 +3792,20 @@ impl App {
                 ),
                 _ => with("session.new", "start a task here"),
             },
+            Row::Chat(id) => {
+                let c = self.chat(&id)?;
+                if c.attention.is_some() {
+                    return Some("⏎ open it: it needs you".into());
+                }
+                Some(format!(
+                    "⏎ open · {}",
+                    with("chat.pin", if c.pinned { "unpin" } else { "pin" }).unwrap_or_default()
+                ))
+            }
+            Row::Chats(_) | Row::ChatAll(_) => {
+                with("chat.list", "every chat here").map(|l| format!("⏎ {l}"))
+            }
+            Row::ChatNew(_) => Some("⏎ start a chat".into()),
             Row::Set(_) | Row::Group(_) => None,
         }
     }
@@ -3914,6 +4155,10 @@ impl App {
                 v.extend(["machine.add", "machine.list"]);
                 v
             }
+            Row::Chat(_) => crate::chats::CHAT_ACTIONS.to_vec(),
+            Row::Chats(_) | Row::ChatNew(_) | Row::ChatAll(_) => {
+                vec!["chat.new", "chat.list", "chat.import"]
+            }
             Row::Group(_) => Vec::new(),
         }
     }
@@ -3941,6 +4186,8 @@ impl App {
             Row::Project(p) => self.project(p).map(|p| format!("Project {}", p.slug)),
             Row::Set(_) => Some("Change set".into()),
             Row::Workspace(w) => Some(format!("Workspace {}", crate::ui::workspace_label(w))),
+            Row::Chat(id) => self.chat(id).map(|c| format!("Chat {}", c.label())),
+            Row::Chats(_) | Row::ChatNew(_) | Row::ChatAll(_) => Some("Chats".into()),
             Row::Group(_) => None,
         };
         let items: Vec<Item> = self
@@ -4631,6 +4878,14 @@ impl App {
                 target: Target::Worktree(w.id.clone()),
             });
         }
+        for c in self.chat_list.iter().filter(|c| c.workspace == self.workspace) {
+            items.push(Item {
+                label: format!("chat {}", c.label()),
+                detail: format!("{} · {}", c.agent, crate::ui::ago(c.last_ms)),
+                key: None,
+                target: Target::Chat(c.id.clone()),
+            });
+        }
         for p in self.projects.iter().filter(|p| here.contains(&p.id)) {
             items.push(Item {
                 label: format!("project {}", p.slug),
@@ -4853,6 +5108,16 @@ impl App {
                     );
                 }
                 (KeyCode::Char { c: 'y' | 'Y' }, _) => self.confirmed(action),
+                // A new chat's first message not agreed to: no chat, the message back to edit.
+                (
+                    KeyCode::Char { c: 'n' | 'N' } | KeyCode::Esc | KeyCode::Enter,
+                    Confirmed::Again(_, then),
+                ) => {
+                    if let Pending::ChatMade(text) = then.as_ref() {
+                        let why = "not sent: no chat was made (the message is back to edit)";
+                        self.chat_sent(None, text.clone(), Some(why.into()));
+                    }
+                }
                 (KeyCode::Char { c: 'n' | 'N' } | KeyCode::Esc | KeyCode::Enter, _) => {}
                 _ => self.overlay = Some(Overlay::Confirm { action, text }),
             },
@@ -4962,6 +5227,16 @@ impl App {
     fn confirmed(&mut self, action: Confirmed) {
         match action {
             Confirmed::Send(req, toast) => self.request(Pending::Done(toast), *req),
+            Confirmed::Again(mut req, then) => {
+                if let Request::ChatTask { confirmed, .. }
+                | Request::ChatCompare { confirmed, .. }
+                | Request::ChatNew { confirmed, .. } = req.as_mut()
+                {
+                    *confirmed = true;
+                }
+                self.request(*then, *req);
+            }
+            Confirmed::MeaningOn => self.meaning_on(),
             Confirmed::Quit => {
                 self.quitting = true;
                 self.toast("stopping ptyro…");
@@ -5146,6 +5421,19 @@ impl App {
             (Target::PadRev(rev), Purpose::PadHistory) => self.restore_pad(rev),
             (target, Purpose::Home) => self.home_picked(target),
             (Target::Fix(i), Purpose::Health) => self.fix(i),
+            (Target::Agent(a), Purpose::ChatAgent(id)) => self.chat_picked(a, true, id),
+            (
+                Target::Chat(v),
+                p @ (Purpose::ChatForkAt(_)
+                | Purpose::ChatEditPick(_)
+                | Purpose::ChatBranchPick(_)
+                | Purpose::ChatCite),
+            ) => self.chat_pick(p, v),
+            (Target::Chat(id), _) => self.open_chat(&id),
+            (Target::Agent(p), Purpose::ChatPreset(id)) => self.chat_picked(p, false, id),
+            (Target::Agent(p), Purpose::ChatTaskProject(chat, t)) => {
+                self.chat_task(chat, crate::chats::TaskArgs { project: Some(p), ..t })
+            }
             // A row's action: with that row selected, so it's what the action works on.
             (Target::Action(cmd), Purpose::RowMenu(row)) => {
                 let rows = self.rows();
@@ -5335,6 +5623,49 @@ impl App {
             }
             PromptKind::Orch(input) => self.orch_input(input, text),
             PromptKind::Sets(input) => self.sets_input(input, text),
+            PromptKind::ChatEdit(chat, node) => {
+                if !text.trim().is_empty() {
+                    self.request(
+                        Pending::Done("said differently: the old one stays as a branch".into()),
+                        Request::ChatEdit { chat, node, text },
+                    );
+                }
+            }
+            PromptKind::ChatFindIn => self.find_in_chat(text.trim()),
+            PromptKind::ChatCompare(chat) => self.chat_compare(chat, text.trim()),
+            PromptKind::ChatImport => self.chat_import(&text),
+            PromptKind::ChatFind => {
+                if !text.trim().is_empty() {
+                    self.request(
+                        Pending::ChatOpen,
+                        Request::ChatFind {
+                            question: text.trim().to_owned(),
+                            agent: None,
+                            workspace: None,
+                        },
+                    );
+                }
+            }
+            PromptKind::ChatFolder(id) => {
+                if !text.trim().is_empty() {
+                    self.chat_folder(Some(id), text.trim());
+                }
+            }
+            PromptKind::ChatRetitle(id) => {
+                self.request(
+                    Pending::Done("retitled".into()),
+                    Request::ChatUpdate {
+                        chat: id,
+                        title: Some(text.trim().to_owned()),
+                        pinned: None,
+                        archived: None,
+                        agent: None,
+                        preset: None,
+                        keep: None,
+                        folders: None,
+                    },
+                );
+            }
             PromptKind::Retitle(id) => {
                 let title = Some(text.trim().to_owned()).filter(|t| !t.is_empty());
                 let done = if title.is_some() { "retitled" } else { "title cleared" };
@@ -5674,6 +6005,17 @@ impl App {
                             self.set_sel(&rows, row);
                             self.open_sets(Some(run));
                         }
+                        Some(r @ (Row::Chat(_) | Row::ChatNew(_) | Row::ChatAll(_))) => {
+                            self.set_sel(&rows, row);
+                            self.chat_row_open(&r);
+                        }
+                        Some(Row::Chats(ws)) => {
+                            self.set_sel(&rows, row);
+                            let key = crate::tree::chats_key(&ws);
+                            if !self.collapsed.remove(&key) {
+                                self.collapsed.insert(key);
+                            }
+                        }
                         Some(Row::Project(id) | Row::Worktree(id)) => {
                             self.set_sel(&rows, row);
                             if !self.collapsed.remove(&id) {
@@ -5693,6 +6035,18 @@ impl App {
                     self.nav_move(cur.saturating_sub(1));
                 }
                 _ => {}
+            }
+            return;
+        }
+        // The chat panel covers the panes: the wheel scrolls it, nothing reaches what's behind.
+        if self.chat_panel.is_some() && self.main_area().contains((x, y).into()) {
+            self.focus = Focus::Pane;
+            if let Some(crate::chats::ChatPanel::View(v)) = &mut self.chat_panel {
+                match m.kind {
+                    K::ScrollUp => v.view.scroll = (v.view.scroll + 3).min(v.view.max_scroll.get()),
+                    K::ScrollDown => v.view.scroll = v.view.scroll.saturating_sub(3),
+                    _ => {}
+                }
             }
             return;
         }
@@ -5813,6 +6167,8 @@ impl App {
             collapsed: &self.collapsed,
             sets: &self.set_nodes,
             show: self.show,
+            chats: &self.chat_list,
+            recent: self.config.chat.enabled.then_some(self.config.chat.recent as usize),
         }
     }
 
@@ -5894,7 +6250,12 @@ impl App {
                     let root = first.as_deref().and_then(|p| self.root_of(p));
                     return (first, root);
                 }
-                Row::Group(_) | Row::Set(_) => return (None, None),
+                Row::Group(_)
+                | Row::Set(_)
+                | Row::Chats(_)
+                | Row::Chat(_)
+                | Row::ChatNew(_)
+                | Row::ChatAll(_) => return (None, None),
             }
         }
         if let Some(s) = self.focused_session().and_then(|id| self.session(id))
@@ -9050,5 +9411,112 @@ mod tests {
             Some("laptop2:spikes"),
             "the name carries the machine: made there"
         );
+    }
+
+    fn chat_info(id: &str, imported: bool) -> ptyro_core::chats::ChatInfo {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "handle": id, "workspace": "main", "title": format!("chat {id}"),
+            "title_src": "user", "agent": "claude", "profile": "default", "tools": "chat",
+            "pinned": false, "archived": false, "incognito": false, "forked": false,
+            "nodes": 2, "unread": 0, "created_ms": 0, "last_ms": 0, "cost_micro_usd": 0,
+            "source": if imported { Some(format!("claude:{id}")) } else { None },
+        }))
+        .unwrap()
+    }
+
+    fn shown_chat(app: &App) -> Option<String> {
+        match &app.chat_panel {
+            Some(crate::chats::ChatPanel::View(v)) => v.id.clone(),
+            _ => None,
+        }
+    }
+
+    fn toast_text(app: &App) -> String {
+        app.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default()
+    }
+
+    #[test]
+    fn a_reply_to_a_message_sent_in_one_chat_never_reopens_it_from_another() {
+        let mut app = app();
+        app.chat_list = vec![chat_info("aaaa", false), chat_info("bbbb", false)];
+        app.open_chat("aaaa");
+        // Sent in A, then B opened before the reply came: B stays, and nothing says "fork".
+        app.open_chat("bbbb");
+        let sent = Pending::ChatSent { chat: "aaaa".into(), text: "hi".into() };
+        app.handle_reply(sent, Ok(Reply::Chat { info: chat_info("aaaa", false) }));
+        assert_eq!(shown_chat(&app).as_deref(), Some("bbbb"));
+        assert!(!toast_text(&app).contains("fork"), "{}", toast_text(&app));
+        // A message to an imported chat went to a fork of it: shown, as it is still open.
+        app.chat_list.push(chat_info("cccc", true));
+        app.open_chat("cccc");
+        let sent = Pending::ChatSent { chat: "cccc".into(), text: "go on".into() };
+        app.handle_reply(sent, Ok(Reply::Chat { info: chat_info("dddd", false) }));
+        assert_eq!(shown_chat(&app).as_deref(), Some("dddd"));
+        assert!(toast_text(&app).contains("continued as a fork"), "{}", toast_text(&app));
+    }
+
+    #[test]
+    fn an_imported_chat_is_never_offered_retry_or_edit() {
+        let mut app = app();
+        app.chat_list = vec![chat_info("cccc", true)];
+        app.open_chat("cccc");
+        for a in ["chat.retry", "chat.edit"] {
+            app.toast = None;
+            app.chat_action(a);
+            assert!(toast_text(&app).contains("stays as its agent wrote it"), "{a}");
+            assert!(app.overlay.is_none(), "{a}: no message picker");
+        }
+    }
+
+    #[test]
+    fn a_first_message_not_agreed_to_goes_back_to_the_composer() {
+        let mut app = app();
+        app.new_chat();
+        let Some(crate::chats::ChatPanel::View(v)) = &mut app.chat_panel else { panic!() };
+        v.draft = "ask codex@work".into();
+        app.chat_key(KeyEvent::new(KeyCode::Enter, Mods::NONE));
+        // The daemon asks first (another profile): the person says no.
+        let req = Request::ChatNew {
+            workspace: None,
+            agent: None,
+            preset: None,
+            title: None,
+            prompt: Some("ask codex@work".into()),
+            incognito: false,
+            folders: Vec::new(),
+            compare: vec!["claude".into(), "codex@work".into()],
+            confirmed: false,
+        };
+        let then = Pending::ChatMade("ask codex@work".into());
+        let e = ptyro_core::Error::new(ErrorCode::NeedsConfirmation, "another profile?");
+        app.handle_reply(Pending::Confirm(Box::new(req), Box::new(then)), Err(e));
+        assert!(matches!(app.overlay, Some(Overlay::Confirm { .. })));
+        app.overlay_key(KeyEvent::new(KeyCode::Char { c: 'n' }, Mods::NONE));
+        let Some(crate::chats::ChatPanel::View(v)) = &app.chat_panel else { panic!() };
+        assert_eq!(v.draft, "ask codex@work", "the message is back to edit");
+        assert!(v.view.items.is_empty(), "nothing shows as sent");
+        assert!(v.id.is_none() && !v.sending);
+    }
+
+    #[test]
+    fn the_chat_list_shows_imported_ones_only_on_i() {
+        let mut app = app();
+        app.chat_list = vec![chat_info("aaaa", false), chat_info("cccc", true)];
+        app.open_chat_list(None);
+        let count = |app: &App| match &app.chat_panel {
+            Some(crate::chats::ChatPanel::List(l)) => app.list_rows(l).len(),
+            _ => 0,
+        };
+        assert_eq!(count(&app), 2);
+        app.chat_key(KeyEvent::new(KeyCode::Char { c: 'i' }, Mods::NONE));
+        assert_eq!(count(&app), 1);
+        assert!(screen(&app).contains("imported only"));
+        app.chat_key(KeyEvent::new(KeyCode::Char { c: 'i' }, Mods::NONE));
+        assert_eq!(count(&app), 2);
+        // The search's operators aren't title text.
+        if let Some(crate::chats::ChatPanel::List(l)) = &mut app.chat_panel {
+            l.query = "by:meaning chat aaaa".into();
+        }
+        assert_eq!(count(&app), 1);
     }
 }

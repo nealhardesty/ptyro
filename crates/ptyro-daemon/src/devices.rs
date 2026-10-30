@@ -107,6 +107,25 @@ fn ships_code(step: &str) -> bool {
 pub fn needed(req: &Request) -> Scope {
     use Request::*;
     match req {
+        ChatList { .. }
+        | ChatRead { .. }
+        | ChatExport { .. }
+        | ChatSearch { .. }
+        | ChatPresets => Scope::Read,
+        ChatNew { .. }
+        | ChatTask { .. }
+        | ChatCompare { .. }
+        | ChatPick { .. }
+        | ChatRetry { .. }
+        | ChatEdit { .. }
+        | ChatBranch { .. }
+        | ChatFork { .. }
+        | ChatFind { .. }
+        | ChatSend { .. }
+        | ChatAnswer { .. }
+        | ChatStop { .. }
+        | ChatUpdate { .. }
+        | ChatDelete { .. } => Scope::Control,
         List
         | Get { .. }
         | ReadScreen { .. }
@@ -211,6 +230,8 @@ pub fn needed(req: &Request) -> Scope {
         Spawn { .. } | QuickShell { .. } | ScratchPane { .. } | Web { .. } => Scope::Full,
         // Everything else changes the machine, the config, the daemon or who may talk to it.
         MachineAdd { .. } | MachineRemove { .. } | MachineHide { .. } | MachineRetry { .. } => Scope::Full,
+        // It copies coding history into chat.db, as `[chat] import` (a setting: full) does.
+        ChatImport { .. } => Scope::Full,
         Shutdown { .. } | Upgrade { .. } | DevicePair { .. } | DeviceClaim { .. } | DeviceList | DeviceRevoke { .. } | SaveView { .. } | ReloadConfig | ProjectAdd { .. } | ProjectRemove { .. } | ProjectPin { .. } | ProjectScripts { .. } | ProjectTrust { .. } | ProjectUntrust { .. } | Discover { .. } | WorkspaceNew { .. } | WorkspaceSet { .. } | WorkspaceRename { .. } | WorkspaceRemove { .. } | WorkspaceMember { .. } | WorktreeNew { .. } | WorktreeRemove { .. } | WorktreeRefresh { .. } | WorktreeRun { .. } | WorktreeLock { .. } | WorktreeRenameBranch { .. } | Gc | ProjectSuggest { .. } | WorktreeArchive { .. } | WorktreeRestore { .. } | WorktreeFinish { .. } | ProfileEnv { .. } | ProfileRename { .. } | ProfileResolve { .. } | Hook { .. } | StatusLine { .. } | Report { .. } | NotifyTest | Doctor | SelfTest { .. } | WorktreeCommit { .. } | WorktreeIntegrate { .. } | WorktreePair { .. } | PrCreate { .. } | PrFix { .. } | PrAutomerge { .. } | PrWatch { .. } | PrReply { .. } | ReviewRemove { .. } | ReviewDone { .. } | RunFork { .. } | RecipeRun { .. } | Fanout { .. } | Pick { .. } | Discard { .. } | MsgCheck { .. } | MsgAck { .. } | LeaseClaim { .. } | LeaseRelease { .. } | CheckpointRestore { .. } | SetVerify { .. } | LeadStart { .. } | Lead { .. } | Cs { .. } => Scope::Full,
     }
 }

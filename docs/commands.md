@@ -56,6 +56,28 @@ Conventions:
 | `ptyro scratchpad done [--undo] ITEM` | tick (or untick) an item: its line number, or words from exactly one open item |
 | `ptyro scratchpad start [--agent A] [--dry-run] ITEM` | start the item as a task in a new worktree (like `ptyro "…"`); the item is tagged with the worktree and ticked once its PR merges or the worktree is removed |
 | `ptyro scratchpad log [--json]` / `restore REV` | saved copies of the file, newest first / put one back (the current text is saved first) |
+| `ptyro chat [new] [PROMPT…] [--agent A[@P]] [--preset P] [--folder DIR]… [-w WS] [--title T] [--no-wait] [--json]` | a new chat with your agent (SPEC §22): the answer streams here and the chat is kept (the TUI's and web's CHATS show it). No prompt, at a terminal: the chat view. `-` or a pipe reads the prompt from standard input. `--folder` gives it a folder to read (with no `--preset`, the `read` preset) |
+| `ptyro chat ask [--keep] [--agent A] [--preset P] [--timeout S] QUESTION…` | one question, the answer on standard output; standard input is context (`git diff \| ptyro chat ask "review this"`); nothing is kept unless `--keep` |
+| `ptyro chat ls [-w WS] [--machine M] [--pinned] [--archived] [-n N] [--json]` | chats, pinned first then the newest; every linked machine's too (`laptop2:c:7f3k`), greyed while it is offline; `--machine here` for this one's |
+| `ptyro chat show CHAT [--all] [--format text\|md\|json]` / `open CHAT` | print a chat's shown branch (`--all`: every branch) / open it in the TUI's chat view. CHAT: `c:7f3k`, `7f3k`, a title's words, `@last` |
+| `ptyro chat send CHAT TEXT… [--no-wait] [--timeout S]` | a message; the answer streams here |
+| `ptyro chat answer CHAT allow\|always\|deny` / `stop CHAT` | answer its permission request / stop the answer being written |
+| `ptyro chat retitle CHAT [TITLE…]` / `pin` / `unpin` / `archive` / `unarchive` / `rm CHATS…` | title it (none: a new automatic one) / keep at the top / put away / delete |
+| `ptyro chat set CHAT [--agent A] [--preset P] [--folder DIR]… [--no-folders]` | switch its agent, its tools or the folders it reads; the next message carries the conversation over |
+| `ptyro chat presets [--json]` | the tool presets, each with what it lets a chat use (⚠ for a shell) |
+| `ptyro chat task CHAT [--project P] [--agent A] [--name N] [--yes]` | make it a task: an agent session in a new worktree whose first prompt is the chat's conversation and last answer (not an incognito chat; asks first when the task's profile isn't the chat's, `--yes` agrees) |
+| `ptyro chat export CHAT [--format md\|json] [-o FILE]` | write it out |
+| `ptyro chat retry CHAT [NODE] [--no-wait]` / `edit CHAT NODE TEXT…` | ask again, beside the old answer / say a message differently, beside it; the old ones stay as branches (`show --ids` gives the NODEs) |
+| `ptyro chat branch CHAT --to NODE` | show the branch through NODE (`show --branches` lists where there are others) |
+| `ptyro chat fork CHAT [--at NODE] [--agent A] [--side [--keep]] [--json] [PROMPT…]` | a new chat from the end or a message, on its agent or another (natively for Claude from the end, else seeded); `--side`: a side chat that reads it and never changes it, gone after its answer unless `--keep` |
+| `ptyro chat keep CHAT` | keep a side chat as a chat of its own |
+| `ptyro chat search QUERY… [--chat C] [-w WS] [--agent A] [--pinned] [--archived] [--here] [--meaning\|--words] [-n N] [--json]` | search every chat's messages and titles, on every linked machine (`--here`: this one): words, `"a phrase"`, `prefix*` (3 letters), `-word`, `agent:codex`, `since:7d`, `by:meaning`/`by:words`; each hit's citation (`c:7f3k/node`) and snippet. With `[chat] meaning` on, messages near in meaning are merged in (`≈`); `--meaning` only those (off: offers to switch it on), `--words` none of them |
+| `ptyro chat find [--agent A] QUESTION…` | ask your chats: an agent with only the history tools searches them and answers, citing; nothing of it is kept |
+| `ptyro chat compare CHAT [--agents A,B…] [--yes] [--no-wait] [--json] [TEXT…]` | ask several agents one question (TEXT, or the last message again of those that haven't answered it; default every installed one; a bare name is under the chat's profile, another profile's `agent@p` asks first, `--yes` agrees): each answer is a branch of the chat labelled with its agent (`‹ 2/3 codex ›`), printed under its agent once all are in; `chat new --compare A,B QUESTION` asks a new chat's first message so |
+| `ptyro chat pick CHAT [NODE]` | keep an answer: show its branch and switch the chat to the agent that wrote it (the next message goes there) |
+| `ptyro chat import [--agent claude\|codex\|gemini\|all] [--profile P] [--since 30d] [--dry-run] [--json]` | import your agents' own histories (every profile's Claude Code, Codex and Gemini sessions) as read-only chats (`⇣`), searchable; again: only what is new. A message to one continues it as a fork. `[chat] import = true` keeps doing it every 10 minutes |
+| `ptyro chat ls --imported` | only the imported chats |
+| `ptyro chat new --incognito …` / `chat ask` | keep nothing: not saved, not searchable, gone with its agent (`ask` is always incognito unless `--keep`) |
 
 ## Scripting
 

@@ -477,6 +477,196 @@ pub struct Config {
     pub clipboard: Clipboard,
     pub summaries: Summaries,
     pub scratchpad: Scratchpad,
+    pub chat: Chat,
+}
+
+/// Chats (SPEC §22.13): plain conversations with your agents, kept in `chat.db`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Chat {
+    /// Off hides the CHATS section, the keys, the CLI group and the web page; chats stay on disk.
+    pub enabled: bool,
+    /// Chats shown under CHATS in the sidebar, after the pinned ones.
+    pub recent: u32,
+    /// The agent for new chats (`claude`, `codex@work`…); "" = the workspace's default agent,
+    /// else the first installed of claude, codex, gemini and opencode.
+    pub agent: String,
+    /// The tool preset of new chats: `chat`, `read`, `none`, or one of `[chat.tools]`.
+    pub preset: String,
+    /// New chats start incognito: nothing of them is written, and they end with their agent.
+    pub incognito: bool,
+    /// Chats can look up your other chats (`chat_search`, `chat_read`, `chat_list`).
+    pub history_tool: bool,
+    /// Which chats those tools see: `profile` (the chat's account's), `workspace`, or `all`.
+    pub history_scope: String,
+    /// An idle chat's agent stops after this long; the next message carries on.
+    pub hibernate_after: String,
+    /// The most a replayed conversation carries when an agent has to be told it again.
+    pub seed_tokens: u32,
+    /// `auto`: a short title from a small model after the first answer; `off`: the first line.
+    pub title: String,
+    /// The titler (reads the prompt on stdin); empty = `[summaries] command`.
+    pub title_command: Vec<String>,
+    /// The most titles made for each profile in a day.
+    pub daily_cap: u32,
+    /// Also make tool output searchable (2 KB of it a message).
+    pub index_tools: bool,
+    /// Meaning search (SPEC §22.10): find messages by what they are about, not only by their
+    /// words. Switching it on downloads a 31 MB model once.
+    pub meaning: bool,
+    /// Keep importing the agents' own histories (Claude Code, Codex and Gemini sessions) as
+    /// read-only chats, every 10 minutes (SPEC §22.10). Off: it copies coding history into
+    /// `chat.db`, so it is yours to ask for; `ptyro chat import` does it once.
+    pub import: bool,
+    /// `blocked`: tell you when a chat needs you; `all`: also when an answer arrives while no
+    /// screen shows it; `off`.
+    pub notify: String,
+    /// Delete archived chats after this many days (0 = keep them).
+    pub archive_purge_days: u32,
+    /// Your own tool presets (`chat`, `read` and `none` are built in; a table with their name
+    /// changes them).
+    pub tools: BTreeMap<String, ChatTools>,
+}
+
+impl Default for Chat {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            recent: 5,
+            agent: String::new(),
+            preset: "chat".into(),
+            incognito: false,
+            history_tool: true,
+            history_scope: "profile".into(),
+            hibernate_after: "2m".into(),
+            seed_tokens: 30_000,
+            title: "auto".into(),
+            title_command: Vec::new(),
+            daily_cap: 200,
+            index_tools: false,
+            meaning: false,
+            import: false,
+            notify: "blocked".into(),
+            archive_purge_days: 0,
+            tools: BTreeMap::new(),
+        }
+    }
+}
+
+/// What a chat may use (SPEC §22.5): a tool preset.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ChatTools {
+    /// The agent's own web search and fetch.
+    pub web: bool,
+    /// Read files in `dirs`.
+    pub read: bool,
+    /// Folders a chat of this preset may read.
+    pub dirs: Vec<String>,
+    /// The agent's shell: it runs commands as you (never in a built-in preset; shown with ⚠).
+    pub shell: bool,
+    /// MCP servers by name, from the agent's own configuration, kept on in the chat.
+    pub mcp: Vec<String>,
+    /// More tool names to approve without asking.
+    pub allow: Vec<String>,
+}
+
+impl ChatTools {
+    /// One line for people: what a chat with this preset may use.
+    pub fn describe(&self) -> String {
+        let mut what: Vec<String> = Vec::new();
+        if self.shell {
+            what.push("⚠ runs shell commands".into());
+        }
+        if self.web {
+            what.push("web search".into());
+        }
+        if self.read {
+            what.push(if self.dirs.is_empty() {
+                "reads the chat's folders".into()
+            } else {
+                format!("reads {} and the chat's folders", self.dirs.join(", "))
+            });
+        }
+        if !self.mcp.is_empty() {
+            what.push(format!("MCP: {}", self.mcp.join(", ")));
+        }
+        if !self.allow.is_empty() {
+            what.push(format!("also {}", self.allow.join(", ")));
+        }
+        if what.is_empty() { "no tools".into() } else { what.join(" · ") }
+    }
+}
+
+impl Chat {
+    /// The built-in presets: `chat` (web search), `read` (also reads `dirs`), `none`.
+    pub const BUILTIN: [&'static str; 3] = ["chat", "read", "none"];
+
+    /// A preset by name: yours, else a built-in one.
+    pub fn preset(&self, name: &str) -> Option<ChatTools> {
+        if let Some(t) = self.tools.get(name) {
+            return Some(t.clone());
+        }
+        match name {
+            "chat" => Some(ChatTools { web: true, ..ChatTools::default() }),
+            "read" => Some(ChatTools { web: true, read: true, ..ChatTools::default() }),
+            "none" => Some(ChatTools::default()),
+            _ => None,
+        }
+    }
+
+    /// Every preset name: the built-in ones, then yours.
+    pub fn presets(&self) -> Vec<String> {
+        let mut v: Vec<String> = Self::BUILTIN.iter().map(|s| (*s).to_owned()).collect();
+        let mine: Vec<String> = self.tools.keys().filter(|k| !v.contains(k)).cloned().collect();
+        v.extend(mine);
+        v
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.preset(&self.preset).is_none() {
+            return Err(format!(
+                "chat.preset: {:?} isn't a preset ({})",
+                self.preset,
+                self.presets().join(", ")
+            ));
+        }
+        parse_duration(&self.hibernate_after).map_err(|e| format!("chat.hibernate_after: {e}"))?;
+        if !matches!(self.title.as_str(), "auto" | "off") {
+            return Err(format!("chat.title: {:?} (auto or off)", self.title));
+        }
+        if !matches!(self.history_scope.as_str(), "profile" | "workspace" | "all") {
+            return Err(format!(
+                "chat.history_scope: {:?} (profile, workspace or all)",
+                self.history_scope
+            ));
+        }
+        if !matches!(self.notify.as_str(), "blocked" | "all" | "off") {
+            return Err(format!("chat.notify: {:?} (blocked, all or off)", self.notify));
+        }
+        if !(1..=100).contains(&self.recent) {
+            return Err("chat.recent: 1 to 100".into());
+        }
+        for (name, t) in &self.tools {
+            crate::names::validate(name).map_err(|e| format!("chat.tools.{name}: {e}"))?;
+            if t.shell && Self::BUILTIN.contains(&name.as_str()) {
+                return Err(format!(
+                    "chat.tools.{name}.shell: the built-in presets never run commands; make a preset of your own for that ([chat.tools.shell] shell = true)"
+                ));
+            }
+            // Gemini names a server's tools `mcp_<server>_<tool>`: a `_` would be ambiguous.
+            if let Some(m) = t
+                .mcp
+                .iter()
+                .find(|m| m.is_empty() || !m.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+            {
+                return Err(format!(
+                    "chat.tools.{name}.mcp: {m:?} isn't an MCP server name (letters, digits and -)"
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// The scratchpad (NOTE1, SPEC §13.6): one notes file, opened in your editor in a pane.
@@ -1298,6 +1488,7 @@ impl Config {
 
     fn validate(&self) -> Result<(), String> {
         self.scratchpad.validate()?;
+        self.chat.validate()?;
         if self.ui.prefix.keys().is_empty() {
             return Err("ui.prefix: needs at least one key".into());
         }

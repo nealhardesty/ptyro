@@ -26,6 +26,16 @@ pub struct ChatView {
     pub max_scroll: Cell<usize>,
     /// The transcript wrapped for the last width, theme and colour depth; `apply` drops it.
     wrapped: RefCell<Option<Wrapped>>,
+    /// A chat's branch points (SPEC §22.7): item id → (which, of how many), drawn `‹ 2/3 ›`.
+    pub marks: std::collections::HashMap<String, (u32, u32, String)>,
+    /// Find in the chat: this text is shown highlighted.
+    pub highlight: Option<String>,
+    /// How many rows the body showed when last drawn (scrolling to a message uses it).
+    pub body_rows: Cell<usize>,
+    /// A message to bring into view at the next draw (wrapping needs the width).
+    focus: RefCell<Option<String>>,
+    /// The scroll that draw worked out for `focus`, kept until a key settles it.
+    forced: Cell<Option<usize>>,
 }
 
 #[derive(Debug)]
@@ -34,6 +44,8 @@ struct Wrapped {
     theme: Theme,
     depth: Depth,
     rows: Vec<Vec<(char, Style)>>,
+    /// Each item's first row.
+    starts: Vec<(String, usize)>,
 }
 
 impl ChatView {
@@ -52,6 +64,54 @@ impl ChatView {
         self.wrapped.take();
     }
 
+    /// Branch points to draw (`ChatSiblings`, by node).
+    pub fn set_marks(&mut self, marks: impl IntoIterator<Item = (String, (u32, u32, String))>) {
+        self.marks = marks.into_iter().collect();
+        self.wrapped.take();
+    }
+
+    /// Bring `item` into view at the next draw.
+    pub fn focus_on(&self, item: &str) {
+        *self.focus.borrow_mut() = Some(item.to_owned());
+    }
+
+    /// A scroll worked out for a focused message becomes the scroll (on the next key).
+    pub fn settle_focus(&mut self) {
+        if let Some(s) = self.forced.take() {
+            self.scroll = s;
+        }
+    }
+
+    /// Scroll so `item` is at the top of the view (as last drawn); false when it isn't shown.
+    pub fn scroll_to(&mut self, item: &str) -> bool {
+        let cache = self.wrapped.borrow();
+        let Some(w) = cache.as_ref() else { return false };
+        let Some((_, row)) = w.starts.iter().find(|(id, _)| id == item) else { return false };
+        let body = self.body_rows.get().max(1);
+        let scroll = w.rows.len().saturating_sub(row + body);
+        drop(cache);
+        self.scroll = scroll;
+        true
+    }
+
+    /// The items that contain `text` (case-insensitively), in order.
+    pub fn find(&self, text: &str) -> Vec<String> {
+        let t = text.to_lowercase();
+        self.items
+            .iter()
+            .filter(|i| {
+                let hay = match &i.body {
+                    ChatBody::User { text } | ChatBody::Assistant { text, .. } => text.as_str(),
+                    ChatBody::Tool { title, .. } => title.as_str(),
+                    ChatBody::Notice { text, .. } => text.as_str(),
+                    _ => "",
+                };
+                !t.is_empty() && hay.to_lowercase().contains(&t)
+            })
+            .map(|i| i.id.clone())
+            .collect()
+    }
+
     pub fn pending_permission(&self) -> bool {
         self.items.iter().any(|i| matches!(&i.body, ChatBody::Permission { decided: None, .. }))
     }
@@ -65,6 +125,8 @@ struct Seg {
 
 struct Doc {
     lines: Vec<Vec<Seg>>,
+    /// Each item's first line.
+    starts: Vec<(String, usize)>,
 }
 
 impl Doc {
@@ -112,8 +174,18 @@ fn tool_color(st: ToolStatus, t: &Theme) -> Color {
 
 fn build(view: &ChatView, t: &Theme, depth: Depth) -> Doc {
     let c = |c: Color| Style::new().fg(depth.fit(c));
-    let mut d = Doc { lines: Vec::new() };
+    let mut d = Doc { lines: Vec::new(), starts: Vec::new() };
     for it in &view.items {
+        // Where it has siblings: which one this is, and the keys that go to the others.
+        if let Some((at, of, who)) = view.marks.get(&it.id) {
+            if matches!(it.body, ChatBody::User { .. }) {
+                d.line(vec![]);
+            }
+            // A compare's answers are named by their agent (SPEC §22.7).
+            let who = if who.is_empty() { String::new() } else { format!(" {who}") };
+            d.line(vec![seg(&format!("‹ {at}/{of}{who} ›  Alt-← Alt-→"), c(t.dim))]);
+        }
+        d.starts.push((it.id.clone(), d.lines.len()));
         match &it.body {
             ChatBody::User { text } => {
                 d.line(vec![]);
@@ -250,8 +322,19 @@ pub fn draw(
     let width = area.width as usize;
     let mut cache = view.wrapped.borrow_mut();
     if !cache.as_ref().is_some_and(|c| c.width == width && c.theme == *t && c.depth == depth) {
-        let rows = build(view, t, depth).lines.iter().flat_map(|l| wrap(l, width)).collect();
-        *cache = Some(Wrapped { width, theme: *t, depth, rows });
+        let doc = build(view, t, depth);
+        let mut rows = Vec::new();
+        let mut first_row = Vec::with_capacity(doc.lines.len());
+        for l in &doc.lines {
+            first_row.push(rows.len());
+            rows.extend(wrap(l, width));
+        }
+        let starts = doc
+            .starts
+            .into_iter()
+            .map(|(id, line)| (id, first_row.get(line).copied().unwrap_or(rows.len())))
+            .collect();
+        *cache = Some(Wrapped { width, theme: *t, depth, rows, starts });
     }
     let rows = &cache.as_ref().expect("wrapped").rows;
     // The composer: the draft, or a hint.
@@ -287,14 +370,42 @@ pub fn draw(
     }
     let comp_h = composer.len().min(area.height as usize / 2).max(1);
     let body_h = area.height as usize - comp_h;
+    view.body_rows.set(body_h);
     let max_scroll = rows.len().saturating_sub(body_h);
     view.max_scroll.set(max_scroll);
-    let scroll = view.scroll.min(max_scroll);
+    // A message asked for (a search hit, a find): its first row at the top.
+    if let Some(f) = view.focus.borrow_mut().take() {
+        match cache.as_ref().and_then(|c| c.starts.iter().find(|(id, _)| *id == f)) {
+            Some((_, row)) => view.forced.set(Some(rows.len().saturating_sub(row + body_h))),
+            None => *view.focus.borrow_mut() = Some(f),
+        }
+    }
+    let scroll = view.forced.get().unwrap_or(view.scroll).min(max_scroll);
     let end = rows.len() - scroll;
     let start = end.saturating_sub(body_h);
+    // Find in the chat: the matches of a row reversed.
+    let needle: Vec<char> =
+        view.highlight.as_deref().unwrap_or("").to_lowercase().chars().collect();
+    let lit = |row: &[(char, Style)]| -> Vec<bool> {
+        let mut on = vec![false; row.len()];
+        if needle.is_empty() || row.len() < needle.len() {
+            return on;
+        }
+        let low: Vec<char> =
+            row.iter().map(|(c, _)| c.to_lowercase().next().unwrap_or(*c)).collect();
+        for i in 0..=low.len() - needle.len() {
+            if low[i..i + needle.len()] == needle[..] {
+                on[i..i + needle.len()].iter_mut().for_each(|b| *b = true);
+            }
+        }
+        on
+    };
     let put = |buf: &mut Buffer, y: u16, row: &[(char, Style)]| {
+        let on = lit(row);
         let mut x = area.x;
-        for (ch, st) in row {
+        for (i, (ch, st)) in row.iter().enumerate() {
+            let st = if on[i] { st.add_modifier(Modifier::REVERSED) } else { *st };
+            let st = &st;
             let w = ch.width().unwrap_or(0) as u16;
             if w == 0 || x + w > area.right() {
                 continue;

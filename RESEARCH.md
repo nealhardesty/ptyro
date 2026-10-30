@@ -1088,9 +1088,9 @@ Agentastic Companion (iPhone + Mac host, E2E, TestFlight) · Nimbalyst Mobile (E
 - **Not verified [U]:** aichat, mods, oterm, Elia, Msty, Cursor chat history, Aider, the Gemini app, the ChatGPT desktop app.
 
 #### H6. The agents' own history (what ptyro could import, CHAT5)
-- **Claude Code [S]:** `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`, append-only; lines carry `type`, `uuid`, `parentUuid`, `sessionId`, `cwd`, `timestamp`. No verified title field [U].
-- **Codex [V for archive, U for path]:** JSONL rollouts, moved when archived; `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` is from memory [U].
-- **Gemini CLI [S]:** `~/.gemini/tmp/<project>/chats/`, one JSON per session; `--list-sessions`, `--resume latest|index|id` [V].
+- **Claude Code [V 2026-10-30]:** `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`, append-only; lines carry `type`, `uuid`, `parentUuid`, `sessionId`, `cwd`, `timestamp`. Titles are lines of their own: `custom-title`, `ai-title`, older `summary` (SPEC §20.8).
+- **Codex [V 2026-10-30]:** JSONL rollouts at `~/.codex/sessions/YYYY/MM/DD/rollout-<time>-<id>.jsonl`, moved to `archived_sessions/` when archived; titles in `session_index.jsonl` (`thread_name`) (SPEC §20.8).
+- **Gemini CLI [S 2026-10-30, 0.66.0's source]:** `~/.gemini/tmp/<project>/chats/session-*.jsonl` (JSONL with `$rewindTo`/`$patch`/`$set` records since 0.66; a legacy `.json` before); `--list-sessions`, `--resume latest|index|id` [V].
 - **ACP [V]:** `session/list` (capability `sessionCapabilities.list`; `cwd`, `cursor`), `session_info_update` (`title`, `updatedAt`), `session/load` (replays), `session/resume` (reconnects without replay; RFD completed 2026-04-22 [S/V]); `session/fork` is unstable and not in the spec yet [S].
 - **Ideas:** → R-CHAT-12. The point of ADR 19 is that ptyro does not depend on any of these.
 
@@ -2753,6 +2753,7 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 | R-REM-11 | **TLS by default for `serve`**: a self-made local CA and server certificate (phones install the CA once, offered at pairing); plain HTTP only behind Tailscale/a trusted proxy or with `--insecure`; `--local` admits only LAN peers | owner (2026-10-23) | WEB1 | M | ★★★ | **WEB1.7 done** (2026-10-23) |
 | R-REM-12 | **Many machines in one web app**: the PWA holds several machines (address + device token each), connects to all, merges their inboxes and sessions with a machine chip; no hub | owner (2026-10-27); herdr `machine add`, tuios hosts [U 2026-10-27] | MM1.A | M | ★★ | → MM1.A (not chosen 2026-10-27: the owner prefers R-REM-13; kept as the alternative) |
 | R-REM-13 | **Workspaces on other machines (daemon federation)**: a daemon registers remote workspaces that sit in the sidebar beside local ones, tied to their machine, offline when it is; `serve`, the TUI and the CLI all reach them through the local daemon | owner (2026-10-27) | MM1.B | L | ★★★ | → MM1.B, **built 2026-10-27** [V tests/mm1.rs]: symmetric, mirror, ssh or paired token, full scope, follow all workspaces, all stacked in the sidebar |
+| R-REM-14 | **Pinch to zoom the web terminal**, anchored under the fingers, with an automatic default that never fits a wide session into unreadable text on a phone | owner (2026-10-29); mobile terminals (Termius, Blink) zoom the font with a pinch [U] | WEB1 | S | ★★ | → WEB1.10, **built 2026-10-29** [V web_e2e `zoom`] |
 | R-REM-09 | **Share links**: `ptyro share <session> [--readonly\|--steer] [--ttl 1h] [--allow github:alice]` (upterm-style forge-key auth); status-aware sharing | upterm, sshx, Warp Oz, Happy multiplayer | M9 | M | ★★ | new |
 | R-REM-10 | Reconnect-transparent remote TUI (sequence-numbered stream, resend frame diff); optional predictive echo; document mosh/ET as transport | mosh, ET, sshx | M9.1 | M | ★★ | new |
 
@@ -2844,9 +2845,9 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 | R-CHAT-07 | **Keyword search**: FTS5 over typed text and tool titles, user text weighted above answers, snippets, filters | `llm logs -q`, Zed in-thread search | CHAT3 | M | ★★★ | → CHAT3 |
 | R-CHAT-08 | **Smart search through the agent**: `chat_search`, `chat_read` and `chat_list` as `ptyro mcp` tools, so any chat can look up its own past; scoped to the chat's **profile** so an account's history never reaches another's model | owner (2026-10-29); Claude chat search | CHAT3 | M | ★★★ | → CHAT3 |
 | R-CHAT-09 | **Tool presets** (`chat` = web search and fetch only in an empty directory, `read`, `none`, yours); web search is each agent's own tool, no MCP needed; tools the agent can't restrict show `best effort` | owner; all four agents ship search [V/S 2026-10-29] | CHAT4 | M | ★★★ | → CHAT4 |
-| R-CHAT-10 | **Ask several agents one question**, compare, keep the winner as the branch | fan-out and compare (M7) | CHAT5 | M | ★★ | → CHAT5 |
-| R-CHAT-11 | **Meaning search**, opt-in: model2vec (~30 MB, no ONNX) or fastembed bge-small (~130 MB, ONNX), merged with FTS by reciprocal-rank fusion | cel-memory-sqlite [S] | CHAT5 | M | ★ | parked until tiers 1–2 disappoint (SPEC §21 q11) |
-| R-CHAT-12 | **Import the agents' own histories** (Claude JSONL, Codex rollouts, Gemini chats, ACP `session/list`) as read-only chats | H6 | CHAT5 | M | ★ | → CHAT5 |
+| R-CHAT-10 | **Ask several agents one question**, compare, keep the winner as the branch | fan-out and compare (M7) | CHAT5 | M | ★★ | built (CHAT5, 2026-10-30) |
+| R-CHAT-11 | **Meaning search**, opt-in: model2vec (~30 MB, no ONNX) or fastembed bge-small (~130 MB, ONNX), merged with FTS by reciprocal-rank fusion | cel-memory-sqlite [S] | CHAT5 | M | ★ | **built 2026-10-30**, opt-in: model2vec potion-base-8M in pure Rust, RRF k=60 (SPEC §22.10 tier 3) |
+| R-CHAT-12 | **Import the agents' own histories** (Claude JSONL, Codex rollouts, Gemini chats, ACP `session/list`) as read-only chats | H6 | CHAT5 | M | ★ | built for Claude, Codex, Gemini (CHAT5, 2026-10-30); OpenCode and ACP `session/list` not |
 | R-CHAT-13 | **Chats in every workspace, including linked machines'**: the mirror lists them, a chat is made and run on its owner, offline chats stay listed | owner (2026-10-29); MM1 (R-REM-13) | CHAT1 | L | ★★★ | → CHAT1.9 |
 | R-CHAT-14 | **Merge chats across all connected machines** (CHAT6): schema ready now (ULIDs, immutable nodes, tombstones, LWW fields, `origin`); needs its own brainstorm | owner (2026-10-29) | CHAT6 | L+ | ★★ | → CHAT6, brainstorm first |
 | R-CHAT-15 | **Make it a task**: a chat becomes a worktree session whose first prompt carries the branch | Claude desktop "task chips" (B) | CHAT4 | S | ★★ | → CHAT4 |

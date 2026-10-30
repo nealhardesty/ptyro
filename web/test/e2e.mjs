@@ -115,6 +115,63 @@ const scenarios = {
     await until("the line to arrive", () => ptyro("read", "cli-shell").split("\n").some((l) => l.trim() === "hello-e2e"));
   },
 
+  // On a phone: two fingers zoom the terminal (and never the page), two fingers tapped switch
+  // between fitted and full size, one finger sideways pans, and the choice is kept.
+  async zoom() {
+    const s = find("cli-shell");
+    await fresh(`#/s/${s.id}`);
+    await tab.eval(`(() => { for (const k of Object.keys(localStorage)) if (k.startsWith("ptyro.term.")) localStorage.removeItem(k); localStorage.setItem("ptyro.debug", "1"); })()`);
+    await tab.phone();
+    await tab.send("Page.reload");
+    await tab.waitFor("the terminal", `!!window.ptyroTerm && document.querySelector("canvas.term")?.width > 0`);
+    await sleep(300);
+    const state = () => tab.eval(`(() => { const t = ptyroTerm, w = t.wrap; return { zoom: t.zoom, fit: t.fit, px: t.geo.px, size: t.size, left: w.scrollLeft, scale: visualViewport.scale, kept: localStorage.getItem("ptyro.term.zoom") }; })()`);
+    const box = await tab.eval(`(() => { const r = ptyroTerm.wrap.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + Math.min(r.height / 2, 120) }; })()`);
+    const pinch = (from, to, n = 10) => tab.fingers(Array.from({ length: n + 1 }, (_, i) => {
+      const d = from + ((to - from) * i) / n;
+      return [[box.x - d / 2, box.y], [box.x + d / 2, box.y]];
+    }));
+    const first = await state();
+    if (first.zoom !== "auto") throw new Error(`a new device starts automatic: ${JSON.stringify(first)}`);
+    if (!first.fit && first.px < 9) throw new Error(`automatic chose unreadable text: ${JSON.stringify(first)}`);
+
+    await pinch(40, 300);
+    let st = await state();
+    if (st.zoom !== "size" || !(st.px > first.px) || st.kept !== "size") throw new Error(`pinching out didn't zoom in: ${JSON.stringify(first)} → ${JSON.stringify(st)}`);
+    if (st.scale !== 1) throw new Error(`the page zoomed, not the terminal (scale ${st.scale})`);
+    const big = st;
+
+    // One finger sideways pans the bigger screen.
+    await tab.fingers(Array.from({ length: 9 }, (_, i) => [[box.x + 60 - i * 15, box.y]]));
+    await sleep(600);
+    st = await state();
+    if (!(st.left > big.left)) throw new Error(`a sideways drag didn't pan: ${big.left} → ${st.left}`);
+    // Up and down on a screen taller than its box moves the box first (not the history).
+    const top0 = await tab.eval(`ptyroTerm.wrap.scrollTop`);
+    await tab.fingers(Array.from({ length: 9 }, (_, i) => [[box.x, box.y + 80 - i * 15]]));
+    await sleep(600);
+    const top1 = await tab.eval(`({ top: ptyroTerm.wrap.scrollTop, back: !!ptyroTerm.doc })`);
+    if (!(top1.top > top0) || top1.back) throw new Error(`an upward drag didn't scroll the tall screen: ${top0} → ${JSON.stringify(top1)}`);
+
+    await pinch(300, 30);
+    st = await state();
+    if (st.zoom !== "fit" || !st.fit || st.kept !== "fit") throw new Error(`pinching all the way in didn't fit the width: ${JSON.stringify(st)}`);
+
+    // Two fingers tapped: fitted ⇄ full size.
+    await tab.fingers([[[box.x - 30, box.y], [box.x + 30, box.y]]], 60);
+    st = await state();
+    if (st.zoom !== "size") throw new Error(`a two-finger tap didn't go to full size: ${JSON.stringify(st)}`);
+    await tab.fingers([[[box.x - 30, box.y], [box.x + 30, box.y]]], 60);
+    st = await state();
+    if (st.zoom !== "fit") throw new Error(`a second two-finger tap didn't fit again: ${JSON.stringify(st)}`);
+
+    // Kept for next time.
+    await tab.send("Page.reload");
+    await tab.waitFor("the terminal again", `!!window.ptyroTerm && ptyroTerm.zoom === "fit"`);
+    if ((await state()).scale !== 1) throw new Error("the page is zoomed after all that");
+    await tab.eval(`localStorage.removeItem("ptyro.debug")`);
+  },
+
   // The server goes away: the app says so, then comes back by itself and still works.
   async offline() {
     await fresh("#/");

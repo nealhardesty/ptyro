@@ -406,11 +406,12 @@ async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
         );
     }
     // A daemon started by a service manager can have a short PATH: agents then "don't exist".
+    // (The daemon also looks where npm, nvm and `npx` put agents: only nowhere is a problem.)
     for agent in ptyro_agents::names(config) {
         let Some(argv) = ptyro_agents::command(config, &agent) else { continue };
         if which(&argv[0]).is_some()
             && !argv[0].contains('/')
-            && which_in(&argv[0], &report.path).is_none()
+            && ptyro_agents::locate::find(&argv[0], &report.path).is_none()
         {
             r.add(
                 S,
@@ -422,6 +423,20 @@ async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
     }
     for w in &report.warnings {
         r.add(S, "noticed", Level::Warn, w.clone());
+    }
+    if let Some(c) = &report.chats {
+        let bad = !c.starts_with("chats: ") || c.contains("integrity") || c.contains("FTS5");
+        let level = if bad { Level::Problem } else { Level::Ok };
+        r.add(S, "chats", level, c.clone());
+    }
+    if let Some(m) = &report.meaning {
+        // Meaning search (SPEC §22.10): a download or a model that failed is worth a look.
+        let level = if m.contains("didn't") || m.contains("couldn't") || m.contains("damaged") {
+            Level::Warn
+        } else {
+            Level::Ok
+        };
+        r.add(S, "chat meaning", level, m.clone());
     }
     if quick {
         return;
@@ -531,21 +546,28 @@ pub(crate) async fn git(r: &mut Report) {
 
 pub(crate) async fn agents(config: &Config, r: &mut Report) {
     const S: &str = "agents";
+    let path_var = std::env::var("PATH").unwrap_or_default();
+    let mut any = false;
     for agent in ptyro_agents::names(config) {
         let Some(argv) = ptyro_agents::command(config, &agent) else { continue };
         let configured = config.agents.contains_key(&agent);
-        let Some(path) = which(&argv[0]) else {
+        let Some(found) = ptyro_agents::locate::find(&argv[0], &path_var) else {
             if configured {
-                r.add(S, &agent, Level::Problem, format!("{} not found", argv[0]));
+                let fix = ptyro_agents::locate::install_hint(&argv[0])
+                    .map(|h| format!(": `{h}` installs it"))
+                    .unwrap_or_default();
+                r.add(S, &agent, Level::Problem, format!("{} not found{fix}", argv[0]));
             }
             continue;
         };
+        any |= agent != "antigravity";
+        let path = PathBuf::from(found.describe());
         let adapter = ptyro_agents::adapter_name(config, &agent);
         // `fake-agent` and wrappers may not answer --version: only ask real CLIs.
         let version = if argv.len() == 1 {
-            run(&[argv[0].clone(), "--version".into()], &[], Duration::from_secs(5))
-                .await
-                .and_then(|(_, out)| first_version(&out))
+            let mut v = found.argv.clone();
+            v.push("--version".into());
+            run(&v, &[], Duration::from_secs(5)).await.and_then(|(_, out)| first_version(&out))
         } else {
             None
         };
@@ -561,6 +583,25 @@ pub(crate) async fn agents(config: &Config, r: &mut Report) {
             _ => Level::Ok,
         };
         r.add(S, &agent, level, text);
+        // `npx` keeps its copy in a cache npm may clear: say how to keep it for good.
+        if found.via.as_deref() == Some("npx cache")
+            && let Some(h) = ptyro_agents::locate::install_hint(&argv[0])
+        {
+            r.add(
+                S,
+                &agent,
+                Level::Note,
+                format!("runs from npx's cache, which npm may clear: `{h}` installs it for good"),
+            );
+        }
+    }
+    if !any {
+        r.add(
+            S,
+            "agents",
+            Level::Warn,
+            "no agent found: install one, e.g. `npm i -g @google/gemini-cli` (Gemini CLI), `npm i -g @openai/codex` (Codex) or `curl -fsSL https://claude.ai/install.sh | bash` (Claude Code)",
+        );
     }
     // Gemini CLI stopped serving unpaid / Google One accounts on 2026-06-18 (RESEARCH G3).
     let gemini_key = std::env::var_os("GEMINI_API_KEY").is_some()
@@ -569,7 +610,7 @@ pub(crate) async fn agents(config: &Config, r: &mut Report) {
             .profiles
             .values()
             .any(|p| p.gemini.as_ref().and_then(|g| g.def()).is_some_and(|d| d.api_key.is_some()));
-    if which("gemini").is_some() && !gemini_key {
+    if ptyro_agents::locate::find("gemini", &path_var).is_some() && !gemini_key {
         r.add(
             S,
             "gemini",

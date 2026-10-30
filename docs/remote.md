@@ -123,6 +123,14 @@ it is in use.
   Linux `sudo tailscale set --operator=$USER` lets your user ask for one.
 - **Machines.** `ptyro machine add` accepts a `*.ts.net` machine's Tailscale certificate (checked
   against the public roots) as well as the CA pinned in its code.
+- **A phone that used ptyro's certificate before (Android Chrome).** After the switch, Chrome can
+  keep showing "Connection is not secure", or ptyro's old certificate in the certificate details,
+  and say "This app cannot be installed", although `serve` now sends Tailscale's certificate (an
+  Incognito tab shows it). Chrome remembers how the site was secured until Chrome itself stops,
+  and deleting cookies doesn't clear it. **Force-stop Chrome** (Settings → Apps → Chrome → Force
+  stop), open the address again, and Install is offered. Once nothing uses ptyro's CA on that
+  phone, you can remove it (Settings → Security → Encryption & credentials → Trusted credentials
+  → User).
 
 **ptyro's certificate.** The first time, `ptyro serve` makes a small certificate authority (CA)
 and a certificate it signs for this machine: `localhost`, its name (and `<name>.local`), its LAN
@@ -266,6 +274,9 @@ notifications there). Tap 🔔 to turn notifications on; a test notification arr
   tool calls with output and diffs, permission cards. "Terminal" switches to the screen view.
 - **Notifications** for a blocked agent have Allow / Deny buttons on platforms that show actions
   (Android, desktop Chrome). Tapping one answers without opening the app.
+- **"Offline: reconnecting…"** means the page (kept on the phone) can't reach `serve`. Opened
+  at a `*.ts.net` name or a Tailscale address, it adds a hint, because the usual cause is
+  Tailscale being off on the phone: turn it on and the page reconnects by itself.
 
 ### A terminal in the browser
 
@@ -279,6 +290,12 @@ program wants it (hold Shift to select instead).
   F1–F12 and Paste. **Aa** has text size, fit or 1:1, the on-screen keyboard on or off (off keeps a
   hardware keyboard's keys without covering the screen), find, and *Resize the session to this
   screen* (everyone attached sees the new size; whoever types last decides).
+- **Zoom.** Pinch the screen to make the text bigger or smaller (pinch all the way in to fit the
+  whole width); drag sideways or up and down to move around; tap with two fingers to switch
+  between fitted and full size. On a computer, Ctrl and the wheel, or a trackpad pinch. A wide
+  session opens at a size you can read on a phone and whole on a laptop; once you zoom, this
+  device keeps your choice (**Aa → Size it automatically** goes back). Zoom is only on this device:
+  the session and everyone else's view stay as they are.
 - **History.** Scroll with the wheel or a drag; **↓ Live** returns (any key does too).
 - **Selecting.** Drag with a mouse, double-click a word, triple-click a line; on a touch screen
   hold, then drag. The bar copies, selects everything, opens a link, or steps through find

@@ -43,10 +43,19 @@ struct Meta {
     server_not_after: i64,
 }
 
+/// A rustls config and a short hash of the certificates it serves. `serve` puts the hash in
+/// `/sw.js`: Chrome shows a page its service worker answers with the certificate the worker was
+/// installed over, so a new certificate needs a new worker (SPEC §20.9).
+#[derive(Clone)]
+pub struct Served {
+    pub config: Arc<rustls::ServerConfig>,
+    pub stamp: String,
+}
+
 /// The certificates `serve` uses: its rustls config, the CA to hand out, and when the server
 /// certificate ends.
 pub struct Tls {
-    pub config: Arc<rustls::ServerConfig>,
+    pub config: Served,
     pub ca_pem: String,
     /// SHA-256 of the CA certificate (`AB:CD:…`), for checking it on a phone.
     pub ca_fingerprint: String,
@@ -173,7 +182,7 @@ fn ca_params(m: &Meta) -> Result<CertificateParams, Error> {
 
 /// Your own certificate (`--cert`/`--key`, `[remote] tls_cert`/`tls_key`): a PEM chain, leaf
 /// first, and its key. Read again every 12 h by `serve`, so a renewed one is picked up.
-pub fn from_files(cert: &Path, key: &Path) -> Result<Arc<rustls::ServerConfig>, Error> {
+pub fn from_files(cert: &Path, key: &Path) -> Result<Served, Error> {
     let read = |p: &Path| {
         std::fs::read_to_string(p).map_err(|e| Error::invalid(format!("{}: {e}", p.display())))
     };
@@ -185,10 +194,11 @@ fn server_config(
     key_pem: &str,
     ca_der: Option<&[u8]>,
     tailnet: Option<&TailnetCert>,
-) -> Result<Arc<rustls::ServerConfig>, Error> {
+) -> Result<Served, Error> {
     let bad = |e: String| Error::internal(format!("the server certificate: {e}"));
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let mut chain = parse_chain(cert_pem).map_err(bad)?;
+    let mut leaves = chain[0].to_vec();
     if let Some(ca) = ca_der {
         chain.push(rustls::pki_types::CertificateDer::from(ca.to_vec()));
     }
@@ -202,6 +212,8 @@ fn server_config(
             builder.with_single_cert(chain, key).map_err(|e| bad(e.to_string()))?
         }
         Some(t) => {
+            let tailnet_chain = parse_chain(&t.cert_pem).map_err(bad)?;
+            leaves.extend_from_slice(&tailnet_chain[0]);
             let certified = |chain, key: &str| {
                 let key = parse_key(key).map_err(bad)?;
                 rustls::sign::CertifiedKey::from_der(chain, key, &provider)
@@ -210,13 +222,14 @@ fn server_config(
             };
             builder.with_cert_resolver(Arc::new(ByName {
                 tailnet_name: t.name.clone(),
-                tailnet: certified(parse_chain(&t.cert_pem).map_err(bad)?, &t.key_pem)?,
+                tailnet: certified(tailnet_chain, &t.key_pem)?,
                 own: certified(chain, key_pem)?,
             }))
         }
     };
     config.alpn_protocols = vec![b"http/1.1".to_vec()];
-    Ok(Arc::new(config))
+    let stamp = fingerprint(&leaves).replace(':', "")[..16].to_ascii_lowercase();
+    Ok(Served { config: Arc::new(config), stamp })
 }
 
 fn parse_chain(pem: &str) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>, String> {
@@ -527,6 +540,27 @@ mod tests {
         assert!(load_or_make(own.path(), &names, now(), Some(&t)).is_ok());
         let bad = TailnetCert { key_pem: KeyPair::generate().unwrap().serialize_pem(), ..t };
         assert!(load_or_make(own.path(), &names, now(), Some(&bad)).is_err());
+    }
+
+    #[test]
+    fn the_stamp_changes_with_the_certificates_served() {
+        let d = tempfile::tempdir().unwrap();
+        let n = now().unix_timestamp();
+        let name = "box.tail1.ts.net";
+        tailnet_files(d.path(), name, &[name], n - 86_400, n + 60 * 86_400);
+        let t = load_tailnet(d.path(), name, now()).unwrap();
+        let names = vec!["localhost".to_owned()];
+        let own = tempfile::tempdir().unwrap();
+        let stamp =
+            |tailnet| load_or_make(own.path(), &names, now(), tailnet).unwrap().config.stamp;
+        let first = stamp(None);
+        assert_eq!(first.len(), 16);
+        assert_eq!(stamp(None), first, "the same certificates: the same service worker");
+        let with_tailnet = stamp(Some(&t));
+        assert_ne!(with_tailnet, first, "Tailscale's certificate arriving");
+        let more = [names.clone(), vec!["192.168.1.20".into()]].concat();
+        let renewed = load_or_make(own.path(), &more, now(), Some(&t)).unwrap().config.stamp;
+        assert_ne!(renewed, with_tailnet, "ptyro's own certificate re-issued");
     }
 
     #[test]

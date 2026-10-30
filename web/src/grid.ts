@@ -124,6 +124,54 @@ export function fitCells(w: number, h: number, cw: number, ch: number): Size {
   return { cols: Math.max(20, Math.floor(w / cw)), rows: Math.max(5, Math.floor(h / ch)) };
 }
 
+// ── zoom ─────────────────────────────────────────────────────────────────────────────────
+
+/// How the terminal sizes its text: fitted to the width, a size of its own (1:1, scrolling
+/// sideways), or automatic (fitted while that is readable, otherwise 1:1).
+export type Zoom = "auto" | "fit" | "size";
+/// The text sizes a pinch, the wheel or the menu can choose.
+export const MIN_PX = 6, MAX_PX = 32;
+/// Fitted text smaller than this is too small to read on a phone: automatic shows it 1:1.
+export const READABLE_PX = 9;
+
+/// Fitted text is no bigger than this: a narrow session fitted leaves room at the side.
+export const FIT_MAX_PX = 16;
+
+/// The fitted text size: the session's width across the box, at most 16 px, at least 5.
+export function fitPx(boxWidth: number, cols: number, ratio: number): number {
+  return Math.max(5, Math.min(FIT_MAX_PX, Math.max(boxWidth, 40) / (Math.max(cols, 1) * ratio)));
+}
+
+/// Whether the screen is drawn fitted to the width.
+export function fitted(zoom: Zoom, fit: number): boolean {
+  return zoom === "fit" || (zoom === "auto" && fit >= READABLE_PX);
+}
+
+export const clampPx = (px: number): number => Math.min(MAX_PX, Math.max(MIN_PX, px));
+
+/// What a pinch asks for: the size it started at, scaled by how far apart the fingers are now;
+/// at or below the fitted size, fitted (pinching in as far as it goes shows the whole screen).
+/// A session narrow enough to fit at the biggest fitted size can still be made smaller.
+export function pinchZoom(px0: number, d0: number, d: number, fit: number): { zoom: "fit" | "size"; px: number } {
+  // Compared before the floor: a wide session fits below the smallest size of its own.
+  const px = px0 * (d0 > 0 ? d / d0 : 1);
+  return px <= fit && fit < FIT_MAX_PX ? { zoom: "fit", px: fit } : { zoom: "size", px: clampPx(px) };
+}
+
+/// A vertical drag of `dy` pixels (down is positive) on a screen that can be taller than its
+/// box (`top` is how far the box is scrolled, `maxTop` how far it can be): the box scrolls first,
+/// and what is left over goes on to the history (pixels, the same sign). Coming back from the
+/// history (`back`), the history comes first, so the box stays where the person left it.
+export function splitPan(dy: number, top: number, maxTop: number, back: boolean): { top: number; rest: number } {
+  if (dy > 0) {
+    const next = Math.max(0, top - dy);
+    return { top: next, rest: dy - (top - next) };
+  }
+  if (back) return { top, rest: dy };
+  const next = Math.max(top, Math.min(Math.max(maxTop, 0), top - dy));
+  return { top: next, rest: dy + (next - top) };
+}
+
 /// A row as text, and where each character of it sits (a wide character's spacer has none).
 function flat(row: Cell[]): { text: string; at: number[] } {
   let text = "";

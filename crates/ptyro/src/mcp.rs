@@ -30,6 +30,149 @@ const VERSIONS: [&str; 5] = ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-
 
 const CS_INSTRUCTIONS: &str = "You lead a ptyro change set: one change across several repositories, one member agent per repository. You read every member but never edit member code. Own the contract (CONTRACT.md; cs_contract_get, cs_contract_submit for the first revision, cs_contract_revise later: the members a change affects hear at once). Coordinate with cs_status, cs_assign and cs_send; members reach you through check_messages (questions, ready_for_integration, blocked_on). Look at their work with cs_member_diff, run cs_integration_check, take cs_checkpoint before risky steps, and ask the human with cs_request_gate. There is no push or merge tool: shipping is the human's train.";
 
+const CHAT_INSTRUCTIONS: &str = "Your user's other chats with you are searchable here: chat_search finds messages (words, \"phrases\", prefix*, -word, agent:codex, since:7d), chat_read reads a chat around a message, chat_list lists the recent ones. Use them when the user refers to something said before (\"as we discussed\", \"last week\"), and cite what you use as c:HANDLE/NODE.";
+
+/// The chat history tools (SPEC §22.10): what a chat's agent (and a lead whose policy says
+/// `chat = true`) may use. The daemon decides what they see (`[chat] history_scope`).
+fn chat_tools() -> Vec<Value> {
+    let s = |d: &str| json!({ "type": "string", "description": d });
+    let n = |d: &str| json!({ "type": "integer", "description": d });
+    let b = |d: &str| json!({ "type": "boolean", "description": d });
+    vec![
+        tool(
+            "chat_search",
+            "Search the user's chats: words (all must match), \"a phrase\", prefix*, -word, agent:codex, since:7d. Returns the best messages with a snippet and a citation (c:HANDLE/NODE) each.",
+            json!({
+                "query": s("What to look for"),
+                "chat": s("Only this chat (c:HANDLE)"),
+                "limit": n("At most this many (default 10)"),
+                "machines": b("Every linked machine's chats too"),
+            }),
+            &["query"],
+            true,
+        ),
+        tool(
+            "chat_read",
+            "Read a chat: its messages around one (a citation c:HANDLE/NODE), or its latest ones.",
+            json!({
+                "chat": s("c:HANDLE, or a citation c:HANDLE/NODE to read around"),
+                "around": n("Messages before and after it (default 6)"),
+            }),
+            &["chat"],
+            true,
+        ),
+        tool(
+            "chat_list",
+            "The user's recent chats: handle, title, agent, when.",
+            json!({ "limit": n("At most this many (default 20)"), "pinned": b("Only pinned ones") }),
+            &[],
+            true,
+        ),
+    ]
+}
+
+/// A snippet's match marks as Markdown bold.
+fn marked(s: &str) -> String {
+    s.replace([ptyro_core::chats::MARK_ON, ptyro_core::chats::MARK_OFF], "**")
+}
+
+/// Run a chat tool.
+async fn chat_call(client: &Client, name: &str, a: &Value) -> Result<Value, Error> {
+    use ptyro_core::chat::ChatBody;
+    match name {
+        "chat_search" => {
+            let req = Request::ChatSearch {
+                query: need(a, "query")?,
+                chat: arg(a, "chat").map(str::to_owned),
+                workspace: None,
+                agent: None,
+                pinned: false,
+                archived: true,
+                limit: Some(a["limit"].as_u64().unwrap_or(10).min(50) as u32),
+                machines: a["machines"].as_bool().unwrap_or(false),
+            };
+            let Reply::ChatHits { hits } = client.request(req).await? else {
+                return Err(Error::internal("unexpected reply"));
+            };
+            Ok(json!({ "hits": hits.iter().map(|h| json!({
+                "cite": match &h.node {
+                    Some(n) => format!("{}/{}", h.chat.addr(), n),
+                    None => h.chat.addr(),
+                },
+                "chat": h.chat.label(),
+                "kind": h.kind,
+                "snippet": marked(&h.snippet),
+                "at_ms": h.at_ms,
+            })).collect::<Vec<_>>() }))
+        }
+        "chat_read" => {
+            let chat = need(a, "chat")?;
+            let (c, node) = match chat.split_once('/') {
+                Some((c, n)) => (c.to_owned(), Some(n.to_owned())),
+                None => (chat.clone(), None),
+            };
+            let around = a["around"].as_u64().unwrap_or(6).min(40) as usize;
+            let Reply::ChatTranscript { info, nodes, .. } =
+                client.request(Request::ChatRead { chat: c, all: node.is_some() }).await?
+            else {
+                return Err(Error::internal("unexpected reply"));
+            };
+            // The branch through the node asked about (or the shown one's end).
+            let path: Vec<&ptyro_core::chats::ChatNode> = match &node {
+                Some(n) => {
+                    let by_id: std::collections::HashMap<&str, &ptyro_core::chats::ChatNode> =
+                        nodes.iter().map(|x| (x.id.as_str(), x)).collect();
+                    let mut p = Vec::new();
+                    let mut at = nodes
+                        .iter()
+                        .find(|x| x.id == *n || (n.len() >= 6 && x.id.ends_with(n.as_str())));
+                    while let Some(x) = at {
+                        p.push(x);
+                        at = x.parent.as_deref().and_then(|q| by_id.get(q).copied());
+                    }
+                    p.reverse();
+                    p
+                }
+                None => nodes.iter().collect(),
+            };
+            let msgs: Vec<&&ptyro_core::chats::ChatNode> = path
+                .iter()
+                .filter(|x| matches!(x.body, ChatBody::User { .. } | ChatBody::Assistant { .. }))
+                .collect();
+            let end = msgs.len();
+            let start = end.saturating_sub(around * 2 + 1);
+            Ok(json!({
+                "chat": info.addr(),
+                "title": info.label(),
+                "messages": msgs[start..].iter().map(|x| {
+                    let (who, text) = match &x.body {
+                        ChatBody::User { text } => ("user", text.as_str()),
+                        ChatBody::Assistant { text, .. } => ("assistant", text.as_str()),
+                        _ => ("", ""),
+                    };
+                    json!({ "cite": format!("{}/{}", info.addr(), x.id), "from": who, "text": ptyro_core::chats::clip(text, 4000) })
+                }).collect::<Vec<_>>(),
+            }))
+        }
+        "chat_list" => {
+            let req = Request::ChatList {
+                workspace: None,
+                all: true,
+                pinned: a["pinned"].as_bool().unwrap_or(false),
+                archived: false,
+                limit: Some(a["limit"].as_u64().unwrap_or(20).min(100) as u32),
+            };
+            let Reply::Chats { chats } = client.request(req).await? else {
+                return Err(Error::internal("unexpected reply"));
+            };
+            Ok(json!({ "chats": chats.iter().filter(|c| !c.incognito).map(|c| json!({
+                "chat": c.addr(), "title": c.label(), "agent": c.agent, "last_ms": c.last_ms,
+            })).collect::<Vec<_>>() }))
+        }
+        other => Err(Error::invalid(format!("no tool named {other}"))),
+    }
+}
+
 const INSTRUCTIONS: &str = "ptyro runs your workers: each in its own git worktree, under a policy the daemon enforces (how many, which agents, where). Start workers with spawn_session, give them follow-ups with send, wait_for them to finish their turn, read their screens or worktree_diff their changes, and check_messages for what they report (they reach you with `ptyro msg send @lead`). Ask the human with request_gate; you can't approve anything yourself. Leases (claim) stop two workers editing the same files.";
 
 fn tool(name: &str, description: &str, props: Value, required: &[&str], always: bool) -> Value {
@@ -338,6 +481,15 @@ struct Server {
     lead: String,
     /// The change set this session leads, if it does (M11).
     set: Option<String>,
+    /// The chat history tools: only them (a chat's agent), or beside a lead's (its policy).
+    chat: ChatTools,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ChatTools {
+    None,
+    Also,
+    Only,
 }
 
 impl Server {
@@ -357,6 +509,12 @@ impl Server {
 
     async fn call(&self, name: &str, a: &Value) -> Result<Value, Error> {
         use ptyro_run::wire::{ContractAction, CsOp};
+        if name.starts_with("chat_") && self.chat != ChatTools::None {
+            return chat_call(&self.client, name, a).await;
+        }
+        if self.chat == ChatTools::Only {
+            return Err(Error::invalid(format!("no tool named {name}")));
+        }
         if let Some(rest) = name.strip_prefix("cs_") {
             let set = self
                 .set
@@ -593,19 +751,29 @@ fn error(id: &Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
-pub async fn serve(ctx: &Ctx) -> Result<i32, Error> {
+pub async fn serve(ctx: &Ctx, chat_only: bool) -> Result<i32, Error> {
     let lead = std::env::var("PTYRO_SESSION_ID").map_err(|_| {
-        Error::invalid("`ptyro mcp` runs inside a ptyro lead session (ptyro new --agent claude --lead), which starts it for you")
+        Error::invalid("`ptyro mcp` runs inside a ptyro lead session (ptyro new --agent claude --lead), or a chat's agent, which start it for you")
     })?;
     let client = ctx.connect(false).await?;
-    // A change set's lead gets the set's tools instead of the worker ones (SPEC §15.5.9).
-    let set = match client.request(Request::Cs { op: ptyro_run::wire::CsOp::Whoami }).await {
-        Ok(Reply::Cs { value }) if value["role"] == "lead" => {
-            value["set"].as_str().map(str::to_owned)
-        }
-        _ => None,
+    let chat = if chat_only {
+        ChatTools::Only
+    } else if std::env::var("PTYRO_CHAT_TOOLS").as_deref() == Ok("1") {
+        ChatTools::Also
+    } else {
+        ChatTools::None
     };
-    let server = Arc::new(Server { client, lead, set });
+    // A change set's lead gets the set's tools instead of the worker ones (SPEC §15.5.9).
+    let set = match chat {
+        ChatTools::Only => None,
+        _ => match client.request(Request::Cs { op: ptyro_run::wire::CsOp::Whoami }).await {
+            Ok(Reply::Cs { value }) if value["role"] == "lead" => {
+                value["set"].as_str().map(str::to_owned)
+            }
+            _ => None,
+        },
+    };
+    let server = Arc::new(Server { client, lead, set, chat });
     let (tx, mut rx) = mpsc::unbounded_channel::<Value>();
     let writer = tokio::spawn(async move {
         let mut out = tokio::io::stdout();
@@ -655,7 +823,11 @@ pub async fn serve(ctx: &Ctx) -> Result<i32, Error> {
                         "protocolVersion": version,
                         "capabilities": { "tools": { "listChanged": false } },
                         "serverInfo": { "name": "ptyro", "version": env!("CARGO_PKG_VERSION") },
-                        "instructions": if server.set.is_some() { CS_INSTRUCTIONS } else { INSTRUCTIONS },
+                        "instructions": match (server.chat, server.set.is_some()) {
+                            (ChatTools::Only, _) => CHAT_INSTRUCTIONS,
+                            (_, true) => CS_INSTRUCTIONS,
+                            _ => INSTRUCTIONS,
+                        },
                     }),
                 ));
             }
@@ -663,7 +835,14 @@ pub async fn serve(ctx: &Ctx) -> Result<i32, Error> {
                 let _ = tx.send(reply(&id, json!({})));
             }
             "tools/list" => {
-                let list = if server.set.is_some() { cs_tools() } else { tools() };
+                let mut list = match (server.chat, server.set.is_some()) {
+                    (ChatTools::Only, _) => Vec::new(),
+                    (_, true) => cs_tools(),
+                    _ => tools(),
+                };
+                if server.chat != ChatTools::None {
+                    list.extend(chat_tools());
+                }
                 let _ = tx.send(reply(&id, json!({ "tools": list })));
             }
             "tools/call" => {
@@ -727,9 +906,13 @@ mod tests {
 
     #[test]
     fn tool_definitions_are_well_formed() {
-        for t in [tools(), cs_tools()] {
+        for t in [tools(), cs_tools(), chat_tools()] {
             well_formed(&t);
         }
+        let mut all = tools();
+        all.extend(chat_tools());
+        well_formed(&all);
+        assert_eq!(marked("a \u{2}hit\u{3} b"), "a **hit** b");
         let names: Vec<String> =
             cs_tools().iter().map(|x| x["name"].as_str().unwrap().to_owned()).collect();
         // No shipping tools for a set's lead, by design.

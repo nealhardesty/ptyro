@@ -15,11 +15,12 @@ import "./review.js";
 import "./runs.js";
 import "./settings.js";
 import "./panel.js";
+import { chatsShown } from "./chats.js";
 import { machineChip } from "./machines.js";
 import { initNotes, notesConnected, notesEvent, notesLink, notesNeedsLoad, notesLoad, notesNoteButton, notesQuickAdd, notesShown, notesStart, notesView } from "./notes.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
 import { coach } from "./settings.js";
-import { apply as showMachine } from "./machine.js";
+import { apply as showMachine, offlineText } from "./machine.js";
 
 interface ChatItem { id: string; t: string; [k: string]: any }
 
@@ -156,18 +157,21 @@ function route(): { view: string; id?: string } {
 }
 
 /// The tabs along the bottom of a top-level page; the active one is the page's.
-const TABS: [string, string, string][] = [["list", "#/", "Sessions"], ["p", "#/p", "Projects"], ["runs", "#/runs", "Runs"], ["sets", "#/sets", "Sets"], ["more", "#/more", "More"]];
+const TABS: [string, string, string][] = [["list", "#/", "Sessions"], ["chats", "#/chats", "Chats"], ["p", "#/p", "Projects"], ["runs", "#/runs", "Runs"], ["sets", "#/sets", "Sets"], ["more", "#/more", "More"]];
 function withTabs(view: string, page: HTMLElement): HTMLElement {
-  if (!TABS.some(([v]) => v === view)) return page;
+  // Chats switched off (`[chat] enabled = false`) have no tab.
+  const tabs = TABS.filter(([v]) => v !== "chats" || chatsShown());
+  if (!tabs.some(([v]) => v === view)) return page;
   page.classList.add("tabbed");
-  page.append(h("nav", { class: "tabs" }, ...TABS.map(([v, href, label]) => h("a", { href, class: v === view ? "on" : "" }, label))));
+  page.append(h("nav", { class: "tabs" }, ...tabs.map(([v, href, label]) => h("a", { href, class: v === view ? "on" : "" }, label))));
   return page;
 }
 
 async function refresh(): Promise<void> {
   try {
     const r = await conn.request({ t: "list" });
-    app.sessions = new Map((r.sessions as Session[]).map((s) => [s.id, s]));
+    // A chat's engine belongs to its chat, not to the session list (SPEC §22.2).
+    app.sessions = new Map((r.sessions as Session[]).filter((s) => !s.chat).map((s) => [s.id, s]));
     const ib = await conn.request({ t: "inbox", unread_only: false, limit: 50 });
     app.inbox = ib.entries;
   } catch { /* reconnecting */ }
@@ -479,7 +483,7 @@ function render(): void {
   if (r.view !== "session" || r.id !== app.viewing) subscribe(r.view === "session" ? r.id! : null);
   if (notesNeedsLoad()) void notesLoad();
   const view = withTabs(r.view, location.hash === "#/notes" ? notesView() : r.view === "session" ? sessionView(r.id!) : r.view === "inbox" ? inboxView() : views.has(r.view) ? views.get(r.view)!(r.id ?? "") : listView());
-  if (conn.state !== "open") view.prepend(h("div", { class: "offline", role: "status" }, conn.state === "connecting" ? "Connecting…" : "Offline: reconnecting…"));
+  if (conn.state !== "open") view.prepend(h("div", { class: "offline", role: "status" }, offlineText(conn.state, location.hostname)));
   if (root.firstChild !== view || root.childNodes.length !== 1) root.replaceChildren(view);
   // The number of agents waiting on you, in the tab's title and on an installed app's icon.
   const waiting = [...app.sessions.values()].filter((x) => x.status?.status === "blocked" && x.state.t === "running").length;
@@ -610,6 +614,7 @@ conn.listeners.add((msg) => {
   if (msg.t === "event") {
     const e = msg.event;
     if (onEvent(e)) { render(); return; }
+    if (e.info?.chat) return;
     if (e.info && (e.t === "session_created" || e.t === "session_updated" || e.t === "session_exited" || e.t === "session_restarted")) {
       app.sessions.set(e.info.id, e.info);
       if (e.t === "session_restarted" && e.info.id === app.viewing) { app.viewing = null; }
@@ -653,13 +658,13 @@ let goKey = 0;
 document.addEventListener("keydown", (e) => {
   const t = e.target as HTMLElement;
   if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable || document.querySelector(".scrim") || !token()) return;
-  const tabs: Record<string, string> = { s: "#/", p: "#/p", r: "#/runs", e: "#/sets", m: "#/more", i: "#/inbox" };
+  const tabs: Record<string, string> = { s: "#/", c: "#/chats", p: "#/p", r: "#/runs", e: "#/sets", m: "#/more", i: "#/inbox" };
   if (goKey && Date.now() - goKey < 1500 && tabs[e.key]) { goKey = 0; location.hash = tabs[e.key]; e.preventDefault(); return; }
   goKey = 0;
   if (e.key === "g") goKey = Date.now();
   else if (e.key === "n") { e.preventDefault(); newTask(); }
   else if (e.key === "/") { e.preventDefault(); if (route().view !== "list") location.hash = "#/"; setTimeout(() => (searchBox.isConnected ? searchBox : document.querySelector<HTMLInputElement>("input.search"))?.focus(), 50); }
-  else if (e.key === "?") sheet("Keys", [h("dl", { class: "facts" }, ...([["n", "New task"], ["/", "Find a session"], ["g s", "Sessions"], ["g p", "Projects"], ["g r", "Runs"], ["g e", "Change sets"], ["g i", "Inbox"], ["g m", "More"], ["Esc", "Close a dialog"]] as [string, string][]).flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
+  else if (e.key === "?") sheet("Keys", [h("dl", { class: "facts" }, ...([["n", "New task"], ["/", "Find a session"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g r", "Runs"], ["g e", "Change sets"], ["g i", "Inbox"], ["g m", "More"], ["Esc", "Close a dialog"]] as [string, string][]).flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
 });
 
 window.addEventListener("hashchange", () => { takePairCode(); notesShown(); render(); });

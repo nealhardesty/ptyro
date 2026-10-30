@@ -231,17 +231,27 @@ fn a_machine_install_loses_its_files_its_shell_lines_and_its_binary() {
     std::fs::write(repo.join(".ptyro.toml"), "[project]\nname = \"x\"\n").unwrap();
 
     let run_it = |args: &[&str]| -> Output {
-        Command::new(&exe)
-            .args(args)
-            .env_clear()
-            .env("HOME", &h)
-            .env("PATH", std::env::var("PATH").unwrap_or_default())
-            .env("XDG_CONFIG_HOME", &config)
-            .env("XDG_DATA_HOME", &data)
-            .env("XDG_STATE_HOME", &state)
-            .env("XDG_RUNTIME_DIR", &run)
-            .output()
-            .unwrap()
+        // Linux: a child another test forks while the copy is open for writing holds that
+        // descriptor until it execs, and running the copy meanwhile is "Text file busy".
+        for _ in 0..50 {
+            let out = Command::new(&exe)
+                .args(args)
+                .env_clear()
+                .env("HOME", &h)
+                .env("PATH", std::env::var("PATH").unwrap_or_default())
+                .env("XDG_CONFIG_HOME", &config)
+                .env("XDG_DATA_HOME", &data)
+                .env("XDG_STATE_HOME", &state)
+                .env("XDG_RUNTIME_DIR", &run)
+                .output();
+            match out {
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                out => return out.unwrap(),
+            }
+        }
+        panic!("{} stayed busy", exe.display());
     };
     let dry = run_it(&["uninstall", "--dry-run", "--json"]);
     assert!(dry.status.success(), "{}", text(&dry));

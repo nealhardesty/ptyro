@@ -58,6 +58,19 @@ struct Conn {
     upstreams: HashMap<String, Upstream>,
     /// Mirrored sessions this client is subscribed to, and their machine.
     remote: HashMap<SessionId, String>,
+    /// Chats this client follows (SPEC §22.14): the task streaming each.
+    chats: HashMap<String, Aborting>,
+    /// Another machine's chats it follows, and their machine (CHAT1.9): over its upstream.
+    remote_chats: HashMap<String, String>,
+}
+
+/// A task that ends when this is dropped (a client that goes away stops its streams).
+struct Aborting(JoinHandle<()>);
+
+impl Drop for Aborting {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 struct Upstream {
@@ -201,6 +214,8 @@ pub async fn serve(daemon: Arc<Daemon>, stream: UnixStream, pid: Option<u32>) {
         link,
         upstreams: HashMap::new(),
         remote: HashMap::new(),
+        chats: HashMap::new(),
+        remote_chats: HashMap::new(),
     };
     let mut shutdown = daemon.shutdown.subscribe();
     let mut goodbye = daemon.goodbye.subscribe();
@@ -303,6 +318,63 @@ impl Conn {
                 self.subscribe(session, size, control).await
             }
             ClientMsg::Unsubscribe { session } => self.unsubscribe(session),
+            // Another machine's chat (SPEC §22.11): followed over this client's own upstream to
+            // it, as screens are; its engine runs there.
+            ClientMsg::ChatSubscribe { chat }
+                if !self.link && self.daemon.machine_of_chat(&chat).is_some() =>
+            {
+                let Some((machine, there, transport, online)) = self.daemon.machine_of_chat(&chat)
+                else {
+                    return;
+                };
+                // Kept even while it is down: an unsubscribe goes to it, and the client follows
+                // again when it is back (the machine's update says so).
+                self.remote_chats.insert(chat.clone(), machine.clone());
+                if !online {
+                    let since = self.daemon.offline_since(&machine);
+                    let text = format!(
+                        "{machine} is offline{since}; this chat opens when it is back (it reconnects by itself)"
+                    );
+                    let item = ptyro_core::chat::ChatItem::new(
+                        "offline",
+                        ptyro_core::chat::ChatBody::Notice {
+                            level: ptyro_core::chat::NoticeLevel::Warn,
+                            text,
+                        },
+                    );
+                    let msg = ServerMsg::ChatLive {
+                        chat,
+                        rev: 0,
+                        reset: true,
+                        items: vec![item],
+                        siblings: Vec::new(),
+                    };
+                    let _ = self.out.send(msg).await;
+                    return;
+                }
+                self.send_upstream(&machine, &transport, ClientMsg::ChatSubscribe { chat: there })
+                    .await;
+            }
+            ClientMsg::ChatUnsubscribe { chat } if self.remote_chats.contains_key(&chat) => {
+                let machine = self.remote_chats.remove(&chat).unwrap_or_default();
+                let there = chat
+                    .strip_prefix(&format!("{machine}:"))
+                    .map_or_else(|| chat.clone(), str::to_owned);
+                if let Some(u) = self.upstreams.get(&machine) {
+                    let _ = u.client.send(ClientMsg::ChatUnsubscribe { chat: there });
+                }
+            }
+            ClientMsg::ChatSubscribe { chat } => {
+                let task = tokio::spawn(stream_chat_live(
+                    Arc::clone(&self.daemon),
+                    chat.clone(),
+                    self.out.clone(),
+                ));
+                self.chats.insert(chat, Aborting(task));
+            }
+            ClientMsg::ChatUnsubscribe { chat } => {
+                self.chats.remove(&chat);
+            }
             ClientMsg::Ack { session, seq } => {
                 if let Some(sub) = self.subs.get(&session) {
                     sub.acks.send_modify(|a| *a = (*a).max(seq));
@@ -457,9 +529,22 @@ impl Conn {
         if !online {
             return None;
         }
+        self.send_upstream(&machine, &transport, msg).await;
+        None
+    }
+
+    /// Say `msg` to `machine` over this client's own connection to it (made the first time; one
+    /// fresh one if it went away). Frames and transcripts come back through `relay_upstream`.
+    async fn send_upstream(
+        &mut self,
+        machine: &str,
+        transport: &ptyro_core::model::MachineTransport,
+        msg: ClientMsg,
+    ) {
+        let machine = machine.to_owned();
         for _ in 0..2 {
             if !self.upstreams.contains_key(&machine) {
-                match self.daemon.dial(&machine, &transport).await {
+                match self.daemon.dial(&machine, transport).await {
                     Ok(mut c) => {
                         let pushes = c.pushes();
                         let theirs = c.id.0;
@@ -475,18 +560,17 @@ impl Conn {
                     }
                     Err(e) => {
                         tracing::debug!(client = %self.id, machine, "upstream: {}", e.message);
-                        return None;
+                        return;
                     }
                 }
             }
             let sent = self.upstreams.get(&machine).map(|u| u.client.send(msg.clone()));
             match sent {
-                Some(Ok(())) => return None,
+                Some(Ok(())) => return,
                 // It went away: one fresh connection, then give up.
                 _ => self.drop_upstream(&machine),
             }
         }
-        None
     }
 
     fn drop_upstream(&mut self, machine: &str) {
@@ -633,6 +717,69 @@ async fn stream_chat(session: Arc<Session>, out: mpsc::Sender<ServerMsg>) {
     }
 }
 
+/// A followed chat (SPEC §22.14): its shown branch, then what changed; the whole branch again
+/// when it is reloaded. A chat that can't be followed says why, as a notice.
+async fn stream_chat_live(daemon: Arc<Daemon>, chat: String, out: mpsc::Sender<ServerMsg>) {
+    let live = match daemon.chat_follow(&chat).await {
+        Ok(l) => l,
+        Err(e) => {
+            let item = ptyro_core::chat::ChatItem::new(
+                "error",
+                ptyro_core::chat::ChatBody::Notice {
+                    level: ptyro_core::chat::NoticeLevel::Error,
+                    text: e.message,
+                },
+            );
+            let _ = out
+                .send(ServerMsg::ChatLive {
+                    chat,
+                    rev: 0,
+                    reset: true,
+                    items: vec![item],
+                    siblings: Vec::new(),
+                })
+                .await;
+            return;
+        }
+    };
+    // Stops following when this task ends, however it ends.
+    struct Following(Arc<Daemon>, Arc<crate::chats::Live>);
+    impl Drop for Following {
+        fn drop(&mut self) {
+            self.0.chat_unfollow(&self.1);
+        }
+    }
+    let _f = Following(Arc::clone(&daemon), Arc::clone(&live));
+    let (mut revs, mut epochs) = (live.rev.subscribe(), live.epoch.subscribe());
+    let mut seen = 0u64;
+    let mut epoch = u64::MAX;
+    loop {
+        let now = *epochs.borrow_and_update();
+        revs.borrow_and_update();
+        let reset = now != epoch;
+        let (rev, items) = {
+            let t = live.items.locked();
+            (t.rev, if reset { t.items.clone() } else { t.since(seen) })
+        };
+        if reset || !items.is_empty() {
+            // With a reset, where the branch has others (the client's ‹ 2/3 ›).
+            let siblings = if reset { live.siblings.locked().clone() } else { Vec::new() };
+            let msg = ServerMsg::ChatLive { chat: live.id.clone(), rev, reset, items, siblings };
+            if out.send(msg).await.is_err() {
+                return;
+            }
+        }
+        epoch = now;
+        seen = rev;
+        tokio::select! {
+            r = revs.changed() => if r.is_err() { return },
+            r = epochs.changed() => if r.is_err() { return },
+        }
+        // Streamed text arrives in many small pieces: send them a few at a time.
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+}
+
 /// What another machine sends this client over its upstream: the frames and transcripts it
 /// subscribed to, and clipboard writes for the session it controls there. Everything else about
 /// that machine comes through the daemon's link (`machines.rs`).
@@ -642,7 +789,7 @@ async fn relay_upstream(
 ) {
     while let Some(msg) = pushes.recv().await {
         let pass = match &msg {
-            ServerMsg::Screen { .. } | ServerMsg::Chat { .. } => true,
+            ServerMsg::Screen { .. } | ServerMsg::Chat { .. } | ServerMsg::ChatLive { .. } => true,
             ServerMsg::Event { event: DomainEvent::Clipboard { .. } } => true,
             ServerMsg::Goodbye { .. } => return,
             _ => false,
@@ -708,6 +855,8 @@ async fn forward_events(
             | DomainEvent::ScratchChanged { .. }
             | DomainEvent::MachineUpdated { .. }
             | DomainEvent::MachineRemoved { .. }
+            | DomainEvent::ChatUpdated { .. }
+            | DomainEvent::ChatRemoved { .. }
             | DomainEvent::RunUpdated { .. } => {
                 let watching = interest.locked().watch_all;
                 if watching && out.send(ServerMsg::Event { event }).await.is_err() {

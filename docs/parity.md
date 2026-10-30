@@ -30,7 +30,7 @@ its row: its TUI action and its web one, or `waived:` and why.
 | Command | In the TUI | On the web |
 |---|---|---|
 | `new` | `session.new` (`n`): say what to do, ⏎ (or `C-o` to pick the agent, a shell or a command, and where); `worktree.new` (`N`) for a new worktree; `--again` is `session.again` (`C-n`): another of what the workspace last started, here, full sized | `session.new` (＋ in the session list): the task, the agent, and where: a new worktree (from the main branch, a PR, an issue, a branch or your changes), an existing one, or a shell or command; `--again` is `session.again`: the `+ claude` button on a project's and a worktree's page, and a session's ⋯ → Another … |
-| `attach` | `session.find` (`/`), the sidebar (`Tab`, `⏎`), `1`–`9`, `j`/`k` | `session.open`: tap it in the list; its live screen, or its chat. The screen is a terminal: `term.type` (tap it and type: every key goes to the session as it is pressed, with `term.keys` for Esc, Ctrl, Alt, arrows and F-keys), `term.mouse`, `term.resize` |
+| `attach` | `session.find` (`/`), the sidebar (`Tab`, `⏎`), `1`–`9`, `j`/`k` | `session.open`: tap it in the list; its live screen, or its chat. The screen is a terminal: `term.type` (tap it and type: every key goes to the session as it is pressed, with `term.keys` for Esc, Ctrl, Alt, arrows and F-keys), `term.mouse`, `term.resize`, `term.zoom` (pinch, a two-finger tap, Ctrl+wheel, Aa; this device's view only, so the TUI's is the terminal emulator's own font size) |
 | `list` | `focus.toggle`: the sidebar lists every session with its status; `session.find` (`/`) searches them; `--status running` / `active` is `sidebar.filter` (`f`, or click `running` / `active` under the sidebar title): only the live sessions, or only the busy ones, each machine, project and worktree with none hidden | `sessions`: every session with its status, who needs you first; `session.find` (`/`) filters them; `sidebar.filter`: the `all` / `running` / `active` chips |
 | `stop` | `session.stop` (`x`) | `session.stop`: the session's ⋯ menu |
 | `kill` | `session.kill` (`X`) | `session.kill`: the session's ⋯ menu |
@@ -68,6 +68,42 @@ The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every sessio
 | `scratchpad start` | `scratchpad.items` (`⏎` starts the item as a task in a new worktree) | `scratchpad.start`: Start on an open item opens the new-task box with its text |
 | `scratchpad log` | `scratchpad.history` | `scratchpad.history`: saved copies |
 | `scratchpad restore` | `scratchpad.history` (`⏎` puts one back) | `scratchpad.history` |
+
+## Chats
+
+Plain conversations with your agents, kept in `chat.db` (SPEC §22, ROADMAP CHAT1). Every
+workspace has a CHATS section in the sidebar; a chat is opened over the panes.
+
+| Command | In the TUI | On the web |
+|---|---|---|
+| `chat new` | `chat.new` (`m`): a new chat in the selected workspace; type, ⏎ sends (`C-o` picks the agent and its tools); `＋ new chat` in an empty CHATS section | `chat.new`: ＋ on the Chats page (`g c`); the agent and tools under the box |
+| `chat ask` | `chat.new` (`m`): the answer streams into the view; archive or delete it after (`x`, `X`) | `chat.new`: the answer streams in; ⋯ → Delete after |
+| `chat ls` | `chat.list` (`g`): the workspace's chats (Tab: every one), by day, `/` searches, `A` archived, `i` only the imported ones (`--imported`); the CHATS section shows the pinned and the newest | `chats`: the Chats page, by day, with `chat.search` and the workspace picker; `chat.archived` for archived ones; `chat.imported` (Imported, once there are any) for `--imported` |
+| `chat show` | `chat.open` (`⏎` on a chat row, or in the list): the chat view | `chat.open`: tap a chat |
+| `chat open` | `chat.open` (`⏎` on a chat row) | `chat.open`: tap a chat |
+| `chat send` | `chat.open`: type in the view's composer, ⏎ | `chat.send`: the box under the chat, Send |
+| `chat answer` | `chat.open`: `a` allow, `A` always, `d` deny on the permission card | `chat.answer`: Allow, Always, Deny on the card |
+| `chat stop` | `chat.stop`: `Ctrl-C` in the view | `chat.stop`: Stop beside the box while it answers |
+| `chat retitle` | `chat.retitle` (`,` on a chat row or in the list) | `chat.retitle`: ⋯ → Rename |
+| `chat pin` | `chat.pin` (`*` on a chat row or in the list) | `chat.pin`: ⋯ → Pin |
+| `chat unpin` | `chat.pin` (`*` again) | `chat.pin`: ⋯ → Unpin |
+| `chat archive` | `chat.archive` (`x` on a chat row or in the list) | `chat.archive`: ⋯ → Archive |
+| `chat unarchive` | `chat.archive` (`x` on it in the list's archived view, `A`) | `chat.archive`: ⋯ → Bring back, under Archived |
+| `chat set` | `chat.agent`, `chat.preset` and `chat.folder` (the chat's menu, `.`; `/agent`, `/tools`, `/folder DIR`, `/folder none`) | `chat.agent`, `chat.preset` and `chat.folder`: ⋯ → Switch agent, Tools, Folders (`/folder`) |
+| `chat presets` | `chat.preset` (`/tools`): the picker lists every preset with what it lets a chat use | `chat.preset`: ⋯ → Tools lists every preset with its meaning; the new chat's tools menu too |
+| `chat task` | `chat.task` (`/task [PROJECT] [--agent A] [--name N]`, the chat's menu): asks which project when its workspace has several; `--yes` is the `y` it asks | `chat.task`: ⋯ → Make it a task: the project, who works on it (`--agent`) and the worktree's name (`--name`); `/task [PROJECT] [--agent A] [--name N]` goes at once; `--yes` is the Go ahead it asks |
+| `chat rm` | `chat.delete` (`X` on a chat row or in the list; asks) | `chat.delete`: ⋯ → Delete |
+| `chat export` | `chat.export` (`e` in the list, or the menu): written to a Markdown file | `chat.export`: ⋯ → Download as Markdown |
+| `chat retry` | `chat.retry` (`/retry`): a new answer beside the old one; `Alt-←/→` flips between them | `chat.retry`: Retry under an answer; ‹ › flips between them |
+| `chat edit` | `chat.edit` (`/edit`): pick a message, say it differently | `chat.edit`: Edit under a message of yours |
+| `chat branch` | `chat.branch` (`/branch`, `Alt-←/→`): every branch point's choices | `chat.branch`: the ‹ › before a message that has others |
+| `chat fork` | `chat.fork` (`/fork`): from the end or a message; `chat.side` (`/side`) for `--side` | `chat.fork`: ⋯ → Fork, or Fork from here under a message; `chat.side`: ⋯ → Side chat |
+| `chat keep` | `chat.keep` (`/keep`) in a side chat | `chat.keep`: Keep it, on a side chat's page |
+| `chat search` | `chat.search` (`C-g`): the chat list searching every chat, messages with their snippets; `⏎` opens one at its message; `--meaning`/`--words` are `by:meaning`/`by:words` in the box, `≈` marks a hit by meaning, and `by:meaning` while it is off asks to switch it on | `chat.search`: the Chats page's search box: titles, then every message on every machine; tap one to open it there; `by:meaning`/`by:words` as in the TUI, `≈`, and `chat.meaning` switches it on where it is off |
+| `chat find` | `chat.find` (`/find`): ask your chats; the answer, with its citations (`chat.cite` opens one) | `chat.find`: ？ on the Chats page; citations in the answer are links (`chat.cite`) |
+| `chat compare` | `chat.compare` (`/compare [AGENTS…] [question]`, the chat's menu; in a new chat `/compare A B` sends its first message to each): every answer a branch, `‹ 2/3 codex ›`, the progress in the header | `chat.compare`: ⋯ → Ask several agents, `/compare`; Ask several: on a new chat's page; the progress in a banner, ‹ 2/3 codex › on each answer |
+| `chat pick` | `chat.pick` (`/pick`, the chat's menu): keep the answer shown; its agent takes the next message | `chat.pick`: Keep this answer beside ‹ 2/3 codex ›, or ⋯ → Keep this answer |
+| `chat import` | `chat.import` (the palette, the CHATS heading's menu, `I` in the chat list): asks first, with `--agent`, `--profile`, `--since` and `--dry-run` typed as the CLI's (`codex --since 30d --dry-run`; ⏎ alone: everything); a toast with what came; imported chats show `⇣` | `chat.import`: ⇣ on the Chats page: a form with whose (`--agent`), the profile, since when and Only count them (`--dry-run`); imported chats show `⇣` and a banner |
 
 ## Attention and notifications
 

@@ -338,6 +338,69 @@ ptyro cs pr add-user-tier && ptyro cs land add-user-tier
 `Ctrl-Q S` shows the set as swimlanes. `make changeset-demo` runs one with fake agents. The
 guide: [`docs/changesets.md`](docs/changesets.md).
 
+### Chats
+
+A quick, general chat with the agents you already run, on their accounts, kept and searchable,
+like the Claude and ChatGPT desktop apps. On by default; nothing to set up:
+
+```bash
+ptyro chat "what's the borrow checker complaining about here?"   # asks, streams the answer, keeps it
+git diff | ptyro chat ask "review this"     # one answer on stdout, nothing kept
+ptyro chat ls                               # pinned first, then the newest
+ptyro chat send @last "and in async code?"  # carry on
+ptyro chat set @last --agent codex          # switch agents: the conversation carries over
+ptyro chat retry @last                      # another answer; `chat show --branches` lists both
+ptyro chat fork @last --at 3f9k01ab --agent codex   # a new chat from an old message, on codex
+ptyro chat fork @last --side "what does that flag do?"   # a side chat: reads, never writes back
+ptyro chat search 'retry policy since:7d -draft'    # every chat, on every linked machine
+ptyro chat find "what did we decide about the retry policy?"   # an agent answers from your history, with citations
+ptyro chat --folder ~/notes "what's left on the launch list?"    # it reads that folder, and nothing else
+ptyro chat presets                          # what each tool preset lets a chat use
+ptyro chat task @last --project myrepo      # an agent carries the chat out in a new worktree
+ptyro chat search --meaning "pets"          # by what messages are about, not their words (opt-in, below)
+ptyro chat compare @last --agents claude,codex,gemini "which is faster?"   # each answers, as a branch
+ptyro chat pick @last 4k2m9x01              # keep codex's answer: codex takes the next message
+ptyro chat import                           # your Claude Code, Codex and Gemini sessions, as chats
+```
+
+In the TUI every workspace has a **CHATS** section in the sidebar; `C-q m` starts a chat and
+`C-q g` lists them. The web app has a **Chats** tab. A chat can search the web and touch no
+file (`[chat] preset`); give it a folder (`--folder`, `/folder`) and it reads that folder and
+nothing else, and a preset of your own can add a shell (shown with `⚠`) or your MCP servers
+(`[chat.tools.NAME] shell`, `mcp`). Where an agent can't enforce a preset by itself the chat says
+`best effort`. `chat task` (`/task`) hands a chat's plan to an agent in a new worktree (not an
+incognito chat's, which keeps nothing; ptyro asks first when the project runs under another profile
+than the chat). Gemini CLI
+works even when it is only an `npx` alias: ptyro finds it in npm's cache, nvm or the npm prefix
+(`ptyro doctor` shows where, and offers `npm i -g @google/gemini-cli`). Its agent stops when idle and picks up again from the saved conversation,
+after a restart too. A linked machine's chats show under its workspaces and are used from here
+(they run there, on its agents). In a chat, `Alt-←`/`Alt-→` flips between answers, `C-f` finds in
+it, `/` in the composer lists commands (`/retry`, `/edit`, `/fork`, `/side`, `/agent`…) and `C-q C-g`
+searches every chat; `Tab` (or `C-i`) makes a new chat incognito (nothing kept). A chat can look up your earlier
+chats itself (`[chat] history_tool`), only those of its own profile unless `history_scope` says
+otherwise. Chats live in their own file, `chat.db` (`ptyro doctor` checks it). Settings:
+`[chat]` in the config (the Chat section of the settings panel).
+
+**Ask several agents** (`chat compare`, `/compare codex gemini` in a chat, Ask several on a new
+chat's page): each answers the same message as a branch, `‹ 2/3 codex ›`, the chat's own agent in
+its own conversation and the others told the conversation so far. They answer under the chat's
+own profile; naming another (`codex@work`) asks first, as the conversation would go to that
+account. `chat pick` (`/pick`, Keep this
+answer) keeps one: its agent takes the next message. **Your agents' own histories** come in with
+`chat import` (`chat.import` in the TUI, ⇣ on the web's Chats page, each narrowed as the CLI's
+`--agent`, `--profile`, `--since` and `--dry-run` do): every profile's Claude Code,
+Codex and Gemini sessions become read-only chats (`⇣`, "imported from claude · ~/repo"), searchable
+by keyword and meaning (`chat ls --imported`, `i` in the TUI's chat list, Imported on the web,
+lists only them); a message to one continues it as a fork; importing again adds only what is
+new. `[chat] import = true` keeps doing it every 10 minutes (off by default: it copies your coding
+sessions' text into `chat.db`). OpenCode's history isn't imported yet.
+
+**Meaning search** is opt-in: `[chat] meaning = true` (the settings panel's Chat section, or say
+yes when `chat search --meaning`, `by:meaning` in the TUI's or web's search box, offers it) downloads
+a small model once (model2vec `potion-base-8M`, 31 MB, MIT) and reads every chat in the background,
+on this machine only. Searches then also find messages *about* what you typed, marked `≈`, merged
+with the keyword hits; `--words` (`by:words`) leaves them out. `ptyro doctor` shows how far it is.
+
 ### The scratchpad
 
 One notes file for ideas and the bugs you're chasing, the same in every session and restart:
@@ -375,7 +438,7 @@ ptyro devices revoke ID        # cut a device off at once
 ptyro --remote me@workbox      # the TUI (or any command) on another machine, over ssh
 ```
 
-The web app does everything the CLI does, laid out for a phone, and its session screen is a real terminal: tap it and type (every key goes to the session as you press it, soft keyboards and a hardware keyboard alike), a key row gives a phone Esc, Tab, Ctrl and Alt (tap once for the next key, twice to hold), arrows and F-keys, scroll back through the history, select and copy text (long-press, or drag), paste, click and scroll in `vim`, `htop` and Claude when they ask for the mouse, find in the scrollback, open links, and size the session to your screen. It needs `--scope control` or `full`; a read-only device watches.
+The web app does everything the CLI does, laid out for a phone, and its session screen is a real terminal: tap it and type (every key goes to the session as you press it, soft keyboards and a hardware keyboard alike), a key row gives a phone Esc, Tab, Ctrl and Alt (tap once for the next key, twice to hold), arrows and F-keys, pinch to zoom the text (a wide session opens readable on a phone), scroll back through the history, select and copy text (long-press, or drag), paste, click and scroll in `vim`, `htop` and Claude when they ask for the mouse, find in the scrollback, open links, and size the session to your screen. It needs `--scope control` or `full`; a read-only device watches.
 
 The rest of the app: a tab for sessions (blocked ones
 on top, with Allow / Deny, a live view, a reply box, a menu for stop, restart, rename, summarize,
@@ -466,6 +529,7 @@ All after the prefix, `Ctrl-Q` or `Ctrl-Space`. The full list is in [`docs/keys.
 | `O` / `S` | runs / change sets |
 | `w` / `o` / `r` | switch workspace / open in editor / run the default run script |
 | `;` / `'` / `"` | the scratchpad / add a line to it / its open items |
+| `m` / `g` | a new chat / the chat list |
 
 ## Configuration
 
@@ -591,6 +655,7 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make verify-claude` | check the Claude adapter against the real Claude Code on your machine (one tiny turn) |
 | `make verify-structured` | check structured mode against the real agents here |
 | `make spike-chat` (`ARGS="claude codex"`) / `make spike-chat-fts` (`NODES=…`) | try the chat engine's claims against the real agents here (a few cents of tokens; Gemini and OpenCode if installed) / FTS5 and a 100k-node chat index in SQLite |
+| `make spike-chat-meaning` (`NODES=…`) | meaning search's cost over 100k chat messages with a synthetic model the real one's size: embedding, the backfill, a search's scan, the vectors' size (nothing downloaded) |
 | `make headless CMD=… ARGS=…` | run a program in ptyro's emulator without a terminal; prints screen and status |
 | `make fixture NAME=… SIZE=… CMD=…` / `make snapshots` | record a golden-test fixture (sanitise it!) / accept golden snapshots (screens, `--json` shapes, rc-file detection) |
 | `make fuzz-smoke` (`FUZZ_SECONDS=5`) / `make fuzz` (`TARGET=… SECONDS=…`) | mutation fuzzing on stable (CI) of eleven targets: the emulator, protocol, input, recipes, recordings, the settings editor, other tools' config files, the host API's JSON, the live-upgrade image and every config parser / coverage-guided `cargo fuzz` (nightly) |

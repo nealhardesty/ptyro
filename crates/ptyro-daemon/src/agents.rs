@@ -262,6 +262,15 @@ impl Daemon {
                         changed = true;
                     }
                 }
+                // A chat's engine: its messages are chat text, which lives in `chat.db` only
+                // (SPEC §22.4), never in this session's row.
+                Signal::Prompt { .. }
+                    if s.meta
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .place
+                        .chat
+                        .is_some() => {}
                 Signal::Prompt { text } => {
                     self.verify_on_prompt(s, &text);
                     self.mail_seen(s, &text);
@@ -479,7 +488,7 @@ impl Daemon {
         kind: AttentionKind,
         text: String,
     ) {
-        if self.watched(s.id) {
+        if self.watched(s.id) || !self.chat_wants(s, kind) {
             return;
         }
         // A quick terminal is quiet (UX1.25), but an agent started in it that waits for you
@@ -1052,6 +1061,9 @@ impl Daemon {
                     command: None,
                     mcp: false,
                     structured: mode.unwrap_or(m.structured.is_some()),
+                    params: None,
+                    fork: false,
+                    chat_tools: false,
                 }),
             })
             .await?;
@@ -1340,6 +1352,11 @@ impl Daemon {
             if s.kind() != SessionKind::Agent || !s.is_live() {
                 continue;
             }
+            // A chat's engine hibernates by `[chat] hibernate_after` (`chats.rs`).
+            if s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).place.chat.is_some()
+            {
+                continue;
+            }
             let (agent, viewers, conv) = {
                 let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 (m.place.agent.clone(), m.viewers, m.conversation.is_some())
@@ -1400,12 +1417,12 @@ impl Daemon {
         for (profile, sessions) in by_profile {
             let Ok(plan) = self.profile_plan(&profile).await else { continue };
             let env = plan.apply(self.base_env.iter().cloned());
-            let argv = ptyro_agents::command(&self.config(), "claude")
-                .unwrap_or_else(|| vec!["claude".into()]);
+            let argv = self.agent_program("claude").unwrap_or_else(|| vec!["claude".into()]);
             // Bounded: a hung `claude agents` must not stall every session's ticks.
             let out = tokio::task::spawn_blocking(move || {
                 let mut c = std::process::Command::new(&argv[0]);
-                c.args(["agents", "--json"])
+                c.args(&argv[1..])
+                    .args(["agents", "--json"])
                     .env_clear()
                     .envs(env)
                     .stdin(std::process::Stdio::null())

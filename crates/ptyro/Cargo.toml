@@ -60,6 +60,7 @@ p256.workspace = true
 sha2.workspace = true
 insta = { workspace = true, features = ["json"] }
 ptyro-client.workspace = true
+ptyro-meaning.workspace = true
 futures.workspace = true
 tempfile.workspace = true
 tokio-tungstenite.workspace = true

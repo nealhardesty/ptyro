@@ -109,6 +109,9 @@ pub fn draw(app: &App, f: &mut Frame<'_>) {
             f.render_widget(Clear, Rect { width: side.width + 1, ..side });
             draw_sidebar(app, f, side);
         }
+        if app.chat_panel.is_some() && app.inspector.is_none() {
+            crate::chats::draw(app, f, app.main_area());
+        }
         if app.inspector.is_some() {
             let h =
                 if app.config.ui.status_bar { area.height.saturating_sub(1) } else { area.height };
@@ -900,6 +903,14 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
             }
             Row::Group(label) => {
                 Line::styled(format!(" {label}"), fg(app, t.dim).add_modifier(Modifier::ITALIC))
+            }
+            Row::Chats(_) | Row::Chat(_) | Row::ChatNew(_) | Row::ChatAll(_) => {
+                let shown = match &app.chat_panel {
+                    Some(crate::chats::ChatPanel::View(v)) => v.id.as_deref(),
+                    _ => None,
+                };
+                let Some(l) = crate::chats::sidebar_line(app, row, shown) else { continue };
+                l
             }
             // A workspace (MM1.B): its machine in that machine's colour when it is another's, and
             // how its link stands when that isn't well.

@@ -44,6 +44,23 @@ pub struct Opts {
     pub resume: Option<String>,
     /// A fresh conversation's id, when the protocol lets us choose it (Claude).
     pub session_id: Option<String>,
+    /// More fields for the call that starts or resumes the conversation, over the driver's own
+    /// (a chat's tool limits, SPEC §22.5): Codex's `thread/start` and `thread/resume`, OpenCode's
+    /// `POST /session`, ACP's `session/new` and `session/load` (its `mcpServers`).
+    pub params: Option<Value>,
+    /// With `resume`: a new conversation from that one's end, leaving it as it was (Claude's
+    /// `--fork-session`, CHAT0).
+    pub fork: bool,
+}
+
+/// `extra`'s fields over `base`'s (objects only).
+pub(crate) fn merged(mut base: Value, extra: Option<&Value>) -> Value {
+    if let (Some(b), Some(Value::Object(e))) = (base.as_object_mut(), extra) {
+        for (k, v) in e {
+            b.insert(k.clone(), v.clone());
+        }
+    }
+    base
 }
 
 pub trait Driver: Send {
@@ -110,7 +127,12 @@ pub fn launch_args(
                 ],
             );
             match (&opts.resume, &opts.session_id) {
-                (Some(r), _) => add(&mut v, &["--resume", r]),
+                (Some(r), _) => {
+                    add(&mut v, &["--resume", r]);
+                    if opts.fork {
+                        add(&mut v, &["--fork-session"]);
+                    }
+                }
                 (None, Some(id)) => add(&mut v, &["--session-id", id]),
                 (None, None) => {}
             }
@@ -176,6 +198,14 @@ mod tests {
         assert!(
             r.ends_with(&["--resume".into(), "c9".into()]) && !r.contains(&"--session-id".into())
         );
+        let f = launch_args(
+            "stream-json",
+            "claude",
+            &base,
+            &Opts { resume: Some("c9".into()), fork: true, ..Opts::default() },
+            None,
+        );
+        assert!(f.ends_with(&["--resume".into(), "c9".into(), "--fork-session".into()]));
         assert_eq!(
             launch_args("app-server", "codex", &["codex".into()], &Opts::default(), None),
             ["codex", "app-server"]

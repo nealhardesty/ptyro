@@ -11,7 +11,7 @@ const sw = self as unknown as ServiceWorkerGlobalScope;
 const SHELL = "ptyro-shell-";
 const FILES = [
   "/", "/style.css", "/manifest.webmanifest", "/icon.svg", "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png", "/apple-touch-icon.png",
-  ...["app", "color", "conn", "data", "flow", "kit", "projects", "qr", "review", "runs", "screen", "sessions", "settings", "pad", "notes", "grid", "keys", "term", "panel", "cfgkit", "machine", "machines"].map((m) => `/${m}.js`),
+  ...["app", "color", "conn", "data", "flow", "kit", "projects", "qr", "review", "runs", "screen", "sessions", "settings", "pad", "notes", "grid", "keys", "term", "panel", "cfgkit", "machine", "machines", "chats"].map((m) => `/${m}.js`),
 ];
 
 const hex = (b: ArrayBuffer): string => [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("");

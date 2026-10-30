@@ -1,7 +1,7 @@
 // The machine name on the page: the tab title, the stable colour, the favicon dot. No browser.
 //   node web/test/machine.mjs
 import assert from "node:assert/strict";
-import { accent, faviconUrl, hue, titleFor } from "../dist/machine.js";
+import { accent, faviconUrl, hue, offlineText, titleFor, viaTailscale } from "../dist/machine.js";
 
 assert.equal(titleFor("studio", 0), "studio · ptyro");
 assert.equal(titleFor("studio", 3), "(3) studio · ptyro", "the waiting count stays, in front");
@@ -19,4 +19,10 @@ assert.notEqual(accent("studio", true), accent("studio", false));
 assert.match(accent("studio", true), /^hsl\(\d+ 55% 62%\)$/);
 const icon = decodeURIComponent(faviconUrl("studio", true));
 assert.ok(icon.startsWith("data:image/svg+xml,<svg") && icon.includes(accent("studio", true)));
+// Offline over Tailscale says to check Tailscale on this device; anywhere else it doesn't.
+for (const host of ["bear.tail410fa.ts.net", "BEAR.tail410fa.ts.net.", "100.127.205.20", "100.64.0.1", "[fd7a:115c:a1e0::f43a:cd14]"]) assert.ok(viaTailscale(host), host);
+for (const host of ["localhost", "127.0.0.1", "192.168.1.205", "100.128.0.1", "100.63.0.1", "example.net", "[::1]", "fd7a:115c:a1e1::1"]) assert.ok(!viaTailscale(host), host);
+assert.match(offlineText("closed", "bear.tail410fa.ts.net"), /Tailscale is on/);
+assert.equal(offlineText("closed", "192.168.1.205"), "Offline: reconnecting…");
+assert.equal(offlineText("connecting", "bear.tail410fa.ts.net"), "Connecting…", "only once it's offline");
 console.log("machine: ok");

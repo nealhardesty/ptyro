@@ -222,6 +222,72 @@ pub const ACTIONS: &[ActionSpec] = &[
     ),
     a("review.queue", "Worktrees ready for review, best first"),
     a("runs", "Runs: recipes and fan-outs, their steps and gates; compare and pick candidates"),
+    a(
+        "chat.new",
+        "New chat with your agent, in this workspace: type, ⏎ sends (C-o picks the agent and its tools)",
+    ),
+    a(
+        "chat.list",
+        "Chats: this workspace's (Tab: every one), searchable; open, pin, archive, delete",
+    ),
+    a("chat.open", "Open this chat"),
+    a("chat.retitle", "Change this chat's title (empty: a new automatic one)"),
+    a("chat.pin", "Pin this chat to the top of CHATS, or unpin it"),
+    a(
+        "chat.archive",
+        "Archive this chat (the chat list's A shows archived ones; again brings it back)",
+    ),
+    a("chat.delete", "Delete this chat (asks first)"),
+    a(
+        "chat.agent",
+        "Switch this chat to another agent: the next message carries the conversation over",
+    ),
+    a(
+        "chat.preset",
+        "What this chat may use: web search, read folders, a shell, MCP servers, or no tools",
+    ),
+    a("chat.folder", "A folder this chat may read (with the read preset), or none"),
+    a("chat.task", "Make it a task: an agent in a new worktree carries out the chat's last answer"),
+    a("chat.export", "Write this chat out as Markdown"),
+    a("chat.stop", "Stop the answer being written"),
+    a(
+        "chat.retry",
+        "Ask again: a new answer beside the old one, which stays as a branch (Alt-←/→ flips between them)",
+    ),
+    a("chat.edit", "Say a message differently: answered afresh, the old one stays as a branch"),
+    a("chat.branch", "Show another branch of this chat (where a retry or an edit made one)"),
+    a(
+        "chat.fork",
+        "Fork this chat into a new one, from the end or from any message (it carries the conversation)",
+    ),
+    a(
+        "chat.side",
+        "A side chat: ask about this chat without changing it; closed, it goes (unless kept)",
+    ),
+    a("chat.keep", "Keep this side chat as a chat of its own"),
+    a(
+        "chat.compare",
+        "Ask several agents: each answers the last message as a branch labelled with its agent (/compare codex gemini [question])",
+    ),
+    a(
+        "chat.pick",
+        "Keep the answer shown: the chat switches to the agent that wrote it, which takes the next message",
+    ),
+    a(
+        "chat.import",
+        "Import your agents' own histories (Claude Code, Codex, Gemini) as read-only, searchable chats",
+    ),
+    a(
+        "chat.incognito",
+        "New incognito chat: nothing of it is kept or searchable, it ends with its agent",
+    ),
+    a(
+        "chat.search",
+        "Search every chat's messages, on every machine (words, \"phrases\", prefix*, -word, agent:, since:)",
+    ),
+    a("chat.find", "Ask your chats a question: an agent searches them and answers, citing where"),
+    a("chat.find_in", "Find in this chat (C-f; again for the next)"),
+    a("chat.cite", "Open a citation (c:7f3k/…) of this chat's answers"),
     a("sets", "Change sets: members as swimlanes, gates, issues, the ledger as a timeline"),
     // ── UX1.21: everything else the CLI does, in the TUI ──
     a(
@@ -373,6 +439,9 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Prefix, "Q", "review.queue"),
     (Table::Prefix, "O", "runs"),
     (Table::Prefix, "S", "sets"),
+    (Table::Prefix, "m", "chat.new"),
+    (Table::Prefix, "g", "chat.list"),
+    (Table::Prefix, "C-g", "chat.search"),
     (Table::Prefix, "`", "session.last"),
     (Table::Prefix, "x", "session.stop"),
     (Table::Prefix, "X", "session.kill"),
@@ -427,6 +496,8 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Nav, "D", "inspector"),
     (Table::Nav, "O", "runs"),
     (Table::Nav, "S", "sets"),
+    (Table::Nav, "m", "chat.new"),
+    (Table::Nav, "*", "chat.pin"),
     (Table::Nav, "h", "nav.collapse"),
     (Table::Nav, "Left", "nav.collapse"),
     (Table::Nav, "l", "nav.expand"),
