@@ -13,6 +13,7 @@ use rusqlite_migration::{M, Migrations};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
+pub mod chat;
 mod runs;
 pub use runs::{LeaseRow, MessageRow, RunRow};
 

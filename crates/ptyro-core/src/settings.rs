@@ -76,6 +76,8 @@ pub enum Source {
     Actions,
     /// The project's run scripts.
     RunScripts,
+    /// Chat tool presets: the built-in ones and yours.
+    ChatPresets,
 }
 
 /// What a setting holds, and so how it's typed and shown.
@@ -314,6 +316,12 @@ pub const SECTIONS: &[Section] = &[
         scope: Scope::User,
     },
     Section {
+        id: "chat",
+        title: "Chat",
+        blurb: "Quick conversations with your agents, kept and searchable.",
+        scope: Scope::User,
+    },
+    Section {
         id: "scratchpad",
         title: "Scratchpad and editors",
         blurb: "The notes file, and the editor that opens things.",
@@ -445,6 +453,16 @@ pub const COLLECTIONS: &[Collection] = &[
         starter: &[],
         title: "Your editors",
         empty: "None added. nvim, vim, hx, code, zed and cursor are built in (whichever is installed); add one to use another.",
+    },
+    Collection {
+        path: "chat.tools",
+        section: "chat",
+        noun: "tool preset",
+        layout: Layout::Tables,
+        reserved: &[],
+        starter: &[("web", "true")],
+        title: "Tool presets",
+        empty: "None of your own. chat (web search), read (web search and the folders you list) and none (no tools) are built in; add one to give chats other folders or tools, or name one chat, read or none to change it.",
     },
     Collection {
         path: "scripts.run",
@@ -591,6 +609,16 @@ const RUN_MODE: &[Choice] = &[
     c("exclusive", "starting one stops the other worktrees' run scripts"),
 ];
 
+const CHAT_TITLE: &[Choice] = &[
+    c("auto", "a short title from a small model after the first answer"),
+    c("off", "the first line of the first message"),
+];
+const CHAT_NOTIFY: &[Choice] = &[
+    c("blocked", "when a chat needs you (a permission, an error)"),
+    c("all", "also when an answer arrives while no screen shows the chat"),
+    c("off", "never"),
+];
+
 const fn dynamic(source: Source) -> Kind {
     Kind::Dynamic { source }
 }
@@ -683,6 +711,23 @@ pub const SETTINGS: &[Setting] = &[
     s("summaries.enabled", "summaries", Kind::Bool, "A one-line `≈` summary after each agent turn, written by a small model on the session's own account. It sends a trimmed, redacted view of the session to the model's provider."),
     s("summaries.daily_cap", "summaries", int(0, 100_000), "The most summaries made for each profile in a day, to cap the cost (about $0.0007 each with Haiku). 0 makes none.").unit("a day"),
     s("summaries.command", "summaries", Kind::Argv, "The summarizer: reads the prompt on stdin, prints the summary.").adv(),
+    // ── Chat ──
+    s("chat.enabled", "chat", Kind::Bool, "Chats with your agents: a CHATS section under each workspace, `ptyro chat`, and the web's Chats page. Off hides them all; your chats stay saved.").also("ai assistant conversation history"),
+    s("chat.recent", "chat", int(1, 100), "How many chats show under CHATS in the sidebar, after the pinned ones.").unit("chats"),
+    s("chat.agent", "chat", dynamic(Source::Agents), "The agent new chats talk to; `agent@profile` picks its account too.").or("the workspace's default agent, else the first installed of claude, codex, gemini and opencode").new_only(),
+    s("chat.preset", "chat", dynamic(Source::ChatPresets), "What new chats may use: `chat` searches the web, `read` also reads the folders its preset lists, `none` has no tools.").new_only().also("tools web search"),
+    s("chat.hibernate_after", "chat", Kind::Duration, "An idle chat's agent stops after this long, so it costs nothing; the next message carries on.").new_only(),
+    s("chat.seed_tokens", "chat", int(1000, 1_000_000), "When an agent has to be told the conversation again (it was lost, or you switched agents), at most this much of it is sent.").unit("tokens").adv(),
+    s("chat.title", "chat", pick(CHAT_TITLE), "How a new chat gets its title."),
+    s("chat.title_command", "chat", Kind::Argv, "The titler: reads the prompt on stdin, prints the title.").or("the summaries' command").adv(),
+    s("chat.daily_cap", "chat", int(0, 100_000), "The most titles made for each profile in a day. 0 makes none (the first line is used).").unit("a day").adv(),
+    s("chat.index_tools", "chat", Kind::Bool, "Also make what tools returned searchable (2 KB of it a message), not just their titles.").adv(),
+    s("chat.notify", "chat", pick(CHAT_NOTIFY), "When a chat tells you something."),
+    s("chat.archive_purge_days", "chat", int(0, 36_500), "Delete archived chats after this many days. 0 keeps them.").unit("days"),
+    s("chat.tools.*.web", "chat", Kind::Bool, "The agent's own web search and page fetch."),
+    s("chat.tools.*.read", "chat", Kind::Bool, "Read files in the folders below (and nothing else)."),
+    s("chat.tools.*.dirs", "chat", Kind::List, "Folders a chat with this preset may read.").eg("~/notes"),
+    s("chat.tools.*.allow", "chat", Kind::List, "More tools approved without asking, by the agent's own name for them.").adv(),
     // ── Scratchpad and editors ──
     s("scratchpad.mode", "scratchpad", pick(PAD_MODE), "How the scratchpad key shows it."),
     s("scratchpad.editor", "scratchpad", Kind::Text, "The editor for the notes file, as a command line like `nvim` or `code -w`. (Worktrees open in the editor under Editors, below.)").or("your default editor, $VISUAL, $EDITOR, then nvim, vim, nano or vi").eg("nvim"),
@@ -896,6 +941,15 @@ pub fn options(
             named(names.into_iter().collect(), "editor")
         }
         Source::Actions => lk.actions.clone(),
+        Source::ChatPresets => config
+            .chat
+            .presets()
+            .into_iter()
+            .map(|p| {
+                let what = if config.chat.tools.contains_key(&p) { "yours" } else { "built in" };
+                (p, what.to_owned())
+            })
+            .collect(),
         Source::RunScripts => named(
             project.map(|p| p.scripts.run.keys().cloned().collect()).unwrap_or_default(),
             "run script",
@@ -1739,6 +1793,7 @@ fn member_default(path: &str) -> Value {
         "themes" => serde_json::to_value(ThemeDef::default()),
         "editors" => Ok(serde_json::json!({ "command": null, "inside": false })),
         "scripts.run" => Ok(serde_json::json!({ "command": null, "default": false })),
+        "chat.tools" => serde_json::to_value(crate::config::ChatTools::default()),
         _ => Ok(Value::Null),
     }
     .unwrap_or_default()

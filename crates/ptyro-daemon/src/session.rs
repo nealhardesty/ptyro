@@ -55,6 +55,9 @@ pub struct Place {
     /// The scratchpad's editor (NOTE1.1).
     #[serde(default)]
     pub pad: bool,
+    /// The chat it is the engine of (SPEC §22.2): hidden from the session tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat: Option<String>,
 }
 
 pub struct Term {
@@ -558,6 +561,7 @@ impl Session {
             summary: meta.summary.clone(),
             quick: meta.place.quick,
             pad: meta.place.pad,
+            chat: meta.place.chat.clone(),
         }
     }
 

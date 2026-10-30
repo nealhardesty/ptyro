@@ -35,6 +35,7 @@ fn fields() -> BTreeSet<String> {
     walk("themes.*", &j(ThemeDef::default()), &mut out);
     walk("editors.*", &j(EditorDef { command: Vec::new(), inside: false }), &mut out);
     walk("scripts.run.*", &serde_json::json!({ "command": null, "default": false }), &mut out);
+    walk("chat.tools.*", &j(crate::config::ChatTools::default()), &mut out);
     let secret = || crate::config::Secret::Literal(String::new());
     for sink in [
         SinkDef::Ntfy { url: String::new(), token: Some(secret()), on: Vec::new() },

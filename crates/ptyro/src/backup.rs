@@ -19,6 +19,8 @@ pub struct Opts {
     pub output: Option<PathBuf>,
     pub with_recordings: bool,
     pub with_ca: bool,
+    /// Leave `chat.db` out (SPEC §22.4).
+    pub no_chats: bool,
 }
 
 /// What a backup made.
@@ -69,6 +71,7 @@ fn readme(version: &str, items: &[String], left_out: &[String]) -> String {
          \x20                                 directory; the data directory is beside it, usually\n\
          \x20                                 ~/.local/share/ptyro), replacing ptyro.db there\n\
          \x20 data/scratchpad.md and data/scratchpad.history/   likewise\n\
+         \x20 data/chat.db                likewise (your chats)\n\
          Worktrees are not in it: they are in your repositories (their branches), and `ptyro wt restore`\n\
          brings archived ones back from the snapshots in your repositories.\n\
          The file is private to you (mode 600): it names your projects and paired devices.\n",
@@ -158,6 +161,21 @@ pub async fn create(ctx: &Ctx, o: &Opts) -> Result<Made, Error> {
         items.push(
             "data/ptyro.db: sessions' history, projects, worktree records, devices (token hashes), saved views, trust".to_owned(),
         );
+    }
+
+    // The chats: their text is sensitive, so `--no-chats` leaves it out.
+    let chats = paths.data.join("chat.db");
+    if chats.exists() && o.no_chats {
+        left_out.push("your chats (data/chat.db): --no-chats".to_owned());
+    } else if chats.exists() {
+        // Read-only: nothing is migrated or written, whichever ptyro made the file.
+        ptyro_store::chat::ChatDb::snapshot(&chats, &root.join("data/chat.db")).map_err(|e| {
+            Error::internal(format!(
+                "couldn't copy your chats ({}: {e}); `--no-chats` backs up the rest",
+                chats.display()
+            ))
+        })?;
+        items.push("data/chat.db: your chats (--no-chats leaves them out)".to_owned());
     }
 
     // The scratchpad and its saved copies.

@@ -35,6 +35,9 @@ struct Pending {
 pub struct Codex {
     cwd: String,
     resume: Option<String>,
+    /// Over `thread/start`'s and `thread/resume`'s own fields (a chat's limits).
+    #[serde(default)]
+    params: Option<Value>,
     next: u64,
     thread: Option<String>,
     turn: Option<String>,
@@ -56,7 +59,7 @@ pub struct Codex {
 
 impl Codex {
     pub fn new(opts: Opts) -> Self {
-        Self { cwd: opts.cwd, resume: opts.resume, ..Self::default() }
+        Self { cwd: opts.cwd, resume: opts.resume, params: opts.params, ..Self::default() }
     }
 
     pub fn restore(v: Value) -> Option<Self> {
@@ -230,6 +233,14 @@ impl Codex {
                 self.turn = p["turn"]["id"].as_str().map(str::to_owned);
                 vec![status(AgentStatus::Working)]
             }
+            // A turn can end with no `turn/completed` (CHAT0, SPEC §20.8): the thread going
+            // idle while a turn is open ends it.
+            "thread/status/changed"
+                if self.turn.is_some() && p["status"]["type"].as_str() == Some("idle") =>
+            {
+                let turn = json!({ "status": "completed" });
+                self.notification("turn/completed", &json!({ "turn": turn }))
+            }
             "turn/plan/updated" => {
                 let steps = p["plan"]
                     .as_array()
@@ -362,11 +373,18 @@ impl Codex {
         match method.as_str() {
             "initialize" => {
                 let mut out = vec![Effect::Send(json!({ "method": "initialized" }).to_string())];
-                let params = json!({ "cwd": self.cwd, "approvalPolicy": "on-request", "sandbox": "workspace-write" });
-                out.push(match self.resume.clone() {
-                    Some(t) => self.request("thread/resume", json!({ "threadId": t, "cwd": self.cwd, "approvalPolicy": "on-request", "sandbox": "workspace-write" })),
-                    None => self.request("thread/start", params),
-                });
+                let mut params = json!({ "cwd": self.cwd, "approvalPolicy": "on-request", "sandbox": "workspace-write" });
+                if let Some(t) = self.resume.clone() {
+                    params["threadId"] = t.into();
+                }
+                let mut params = crate::merged(params, self.params.as_ref());
+                // A null in the extra fields takes the field away (a folder-limited chat sends a
+                // permission profile and no sandbox, SPEC §22.5).
+                if let Some(o) = params.as_object_mut() {
+                    o.retain(|_, v| !v.is_null());
+                }
+                let method = if self.resume.is_some() { "thread/resume" } else { "thread/start" };
+                out.push(self.request(method, params));
                 out
             }
             "thread/start" | "thread/resume" => {
@@ -549,6 +567,29 @@ mod tests {
         let q = sent(&c.on_line(r#"{"id":9,"method":"item/tool/requestUserInput","params":{}}"#));
         assert_eq!(q[0]["error"]["code"], -32601);
         assert!(Codex::restore(c.save()).unwrap().thread.as_deref() == Some("th-1"));
+    }
+
+    #[test]
+    fn a_chats_limits_and_a_turn_that_ends_by_going_idle() {
+        let params = json!({ "sandbox": null, "config": { "web_search": "live" } });
+        let mut c = Codex::new(Opts { params: Some(params), ..Opts::default() });
+        c.start();
+        let s = sent(&c.on_line(r#"{"id":1,"result":{}}"#));
+        assert_eq!(s[1]["params"]["config"]["web_search"], "live");
+        assert!(s[1]["params"].get("sandbox").is_none(), "a null takes the field away");
+        assert_eq!(s[1]["params"]["approvalPolicy"], "on-request");
+        c.on_line(r#"{"id":2,"result":{"thread":{"id":"th-1"}}}"#);
+        c.prompt("hi");
+        c.on_line(r#"{"method":"turn/started","params":{"turn":{"id":"tu-1"}}}"#);
+        let end = c.on_line(
+            r#"{"method":"thread/status/changed","params":{"threadId":"th-1","status":{"type":"idle"}}}"#,
+        );
+        assert!(end.contains(&Effect::Signal(Signal::TurnEnd)), "{end:?}");
+        // Idle with no turn open is nothing.
+        assert!(
+            c.on_line(r#"{"method":"thread/status/changed","params":{"status":{"type":"idle"}}}"#)
+                .is_empty()
+        );
     }
 
     #[test]

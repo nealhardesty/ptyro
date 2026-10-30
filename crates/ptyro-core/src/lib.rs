@@ -13,6 +13,7 @@ compile_error!(
 
 pub mod cache;
 pub mod chat;
+pub mod chats;
 pub mod config;
 pub mod error;
 pub mod ids;

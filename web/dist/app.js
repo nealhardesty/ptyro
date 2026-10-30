@@ -12,6 +12,7 @@ import "./review.js";
 import "./runs.js";
 import "./settings.js";
 import "./panel.js";
+import { chatsShown } from "./chats.js";
 import { machineChip } from "./machines.js";
 import { initNotes, notesConnected, notesEvent, notesLink, notesNeedsLoad, notesLoad, notesNoteButton, notesQuickAdd, notesShown, notesStart, notesView } from "./notes.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
@@ -144,18 +145,21 @@ function route() {
     return { view: "list" };
 }
 /// The tabs along the bottom of a top-level page; the active one is the page's.
-const TABS = [["list", "#/", "Sessions"], ["p", "#/p", "Projects"], ["runs", "#/runs", "Runs"], ["sets", "#/sets", "Sets"], ["more", "#/more", "More"]];
+const TABS = [["list", "#/", "Sessions"], ["chats", "#/chats", "Chats"], ["p", "#/p", "Projects"], ["runs", "#/runs", "Runs"], ["sets", "#/sets", "Sets"], ["more", "#/more", "More"]];
 function withTabs(view, page) {
-    if (!TABS.some(([v]) => v === view))
+    // Chats switched off (`[chat] enabled = false`) have no tab.
+    const tabs = TABS.filter(([v]) => v !== "chats" || chatsShown());
+    if (!tabs.some(([v]) => v === view))
         return page;
     page.classList.add("tabbed");
-    page.append(h("nav", { class: "tabs" }, ...TABS.map(([v, href, label]) => h("a", { href, class: v === view ? "on" : "" }, label))));
+    page.append(h("nav", { class: "tabs" }, ...tabs.map(([v, href, label]) => h("a", { href, class: v === view ? "on" : "" }, label))));
     return page;
 }
 async function refresh() {
     try {
         const r = await conn.request({ t: "list" });
-        app.sessions = new Map(r.sessions.map((s) => [s.id, s]));
+        // A chat's engine belongs to its chat, not to the session list (SPEC §22.2).
+        app.sessions = new Map(r.sessions.filter((s) => !s.chat).map((s) => [s.id, s]));
         const ib = await conn.request({ t: "inbox", unread_only: false, limit: 50 });
         app.inbox = ib.entries;
     }
@@ -555,6 +559,8 @@ conn.listeners.add((msg) => {
             render();
             return;
         }
+        if (e.info?.chat)
+            return;
         if (e.info && (e.t === "session_created" || e.t === "session_updated" || e.t === "session_exited" || e.t === "session_restarted")) {
             app.sessions.set(e.info.id, e.info);
             if (e.t === "session_restarted" && e.info.id === app.viewing) {
@@ -608,7 +614,7 @@ document.addEventListener("keydown", (e) => {
     const t = e.target;
     if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable || document.querySelector(".scrim") || !token())
         return;
-    const tabs = { s: "#/", p: "#/p", r: "#/runs", e: "#/sets", m: "#/more", i: "#/inbox" };
+    const tabs = { s: "#/", c: "#/chats", p: "#/p", r: "#/runs", e: "#/sets", m: "#/more", i: "#/inbox" };
     if (goKey && Date.now() - goKey < 1500 && tabs[e.key]) {
         goKey = 0;
         location.hash = tabs[e.key];
@@ -629,7 +635,7 @@ document.addEventListener("keydown", (e) => {
         setTimeout(() => (searchBox.isConnected ? searchBox : document.querySelector("input.search"))?.focus(), 50);
     }
     else if (e.key === "?")
-        sheet("Keys", [h("dl", { class: "facts" }, ...[["n", "New task"], ["/", "Find a session"], ["g s", "Sessions"], ["g p", "Projects"], ["g r", "Runs"], ["g e", "Change sets"], ["g i", "Inbox"], ["g m", "More"], ["Esc", "Close a dialog"]].flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
+        sheet("Keys", [h("dl", { class: "facts" }, ...[["n", "New task"], ["/", "Find a session"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g r", "Runs"], ["g e", "Change sets"], ["g i", "Inbox"], ["g m", "More"], ["Esc", "Close a dialog"]].flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
 });
 window.addEventListener("hashchange", () => { takePairCode(); notesShown(); render(); });
 takePairCode();

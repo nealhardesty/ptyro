@@ -215,6 +215,29 @@ pub const ACTIONS: &[ActionSpec] = &[
     ),
     a("review.queue", "Worktrees ready for review, best first"),
     a("runs", "Runs: recipes and fan-outs, their steps and gates; compare and pick candidates"),
+    a(
+        "chat.new",
+        "New chat with your agent, in this workspace: type, ⏎ sends (C-o picks the agent and its tools)",
+    ),
+    a(
+        "chat.list",
+        "Chats: this workspace's (Tab: every one), searchable; open, pin, archive, delete",
+    ),
+    a("chat.open", "Open this chat"),
+    a("chat.retitle", "Change this chat's title (empty: a new automatic one)"),
+    a("chat.pin", "Pin this chat to the top of CHATS, or unpin it"),
+    a(
+        "chat.archive",
+        "Archive this chat (the chat list's A shows archived ones; again brings it back)",
+    ),
+    a("chat.delete", "Delete this chat (asks first)"),
+    a(
+        "chat.agent",
+        "Switch this chat to another agent: the next message carries the conversation over",
+    ),
+    a("chat.preset", "What this chat may use: web search, read folders, or no tools"),
+    a("chat.export", "Write this chat out as Markdown"),
+    a("chat.stop", "Stop the answer being written"),
     a("sets", "Change sets: members as swimlanes, gates, issues, the ledger as a timeline"),
     // ── UX1.21: everything else the CLI does, in the TUI ──
     a(
@@ -366,6 +389,8 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Prefix, "Q", "review.queue"),
     (Table::Prefix, "O", "runs"),
     (Table::Prefix, "S", "sets"),
+    (Table::Prefix, "m", "chat.new"),
+    (Table::Prefix, "g", "chat.list"),
     (Table::Prefix, "`", "session.last"),
     (Table::Prefix, "x", "session.stop"),
     (Table::Prefix, "X", "session.kill"),
@@ -419,6 +444,8 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Nav, "D", "inspector"),
     (Table::Nav, "O", "runs"),
     (Table::Nav, "S", "sets"),
+    (Table::Nav, "m", "chat.new"),
+    (Table::Nav, "*", "chat.pin"),
     (Table::Nav, "h", "nav.collapse"),
     (Table::Nav, "Left", "nav.collapse"),
     (Table::Nav, "l", "nav.expand"),

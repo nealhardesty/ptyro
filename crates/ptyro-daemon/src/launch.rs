@@ -34,6 +34,8 @@ pub struct AgentStart {
     pub mcp: bool,
     /// Drive it over its structured protocol (M10).
     pub structured: bool,
+    /// More fields for the structured driver's start call (a chat's tool limits).
+    pub params: Option<serde_json::Value>,
 }
 
 /// A structured launch (M10): the protocol, the driver's options, OpenCode's port and password.
@@ -447,6 +449,7 @@ impl Daemon {
                     cwd: l.cwd.to_string_lossy().into_owned(),
                     resume: a.resume.clone(),
                     session_id: session_id.clone(),
+                    params: a.params.clone(),
                 };
                 let http = (protocol == "opencode")
                     .then(free_port)

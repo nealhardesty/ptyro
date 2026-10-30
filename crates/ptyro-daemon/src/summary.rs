@@ -30,7 +30,10 @@ const SCREEN_LINES: usize = 25;
 impl Daemon {
     /// After a turn ended or it stopped to ask: a summary, when they're on.
     pub(crate) fn summarize_after(self: &Arc<Self>, s: &Arc<Session>) {
-        if self.config().summaries.enabled {
+        // A chat's engine is a conversation, not work to summarize (SPEC §22.2).
+        let chat =
+            s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).place.chat.is_some();
+        if self.config().summaries.enabled && !chat {
             self.summarize_in_background(s);
         }
     }
@@ -192,7 +195,7 @@ impl Daemon {
 }
 
 /// The profile's secret values, with what to show instead (`<secret:NAME>`).
-fn secrets(plan: &ptyro_agents::profile::Plan) -> Vec<(String, String)> {
+pub(crate) fn secrets(plan: &ptyro_agents::profile::Plan) -> Vec<(String, String)> {
     plan.set
         .iter()
         .zip(&plan.shown)
@@ -269,7 +272,7 @@ fn redact_word(word: &str) -> Option<String> {
 }
 
 /// The summary from the command's output: Claude's JSON `result`, else its first line.
-fn parse(out: &str) -> Option<String> {
+pub(crate) fn parse(out: &str) -> Option<String> {
     let text = match serde_json::from_str::<serde_json::Value>(out.trim()) {
         Ok(v) if v.get("is_error").and_then(serde_json::Value::as_bool) == Some(true) => {
             return None;

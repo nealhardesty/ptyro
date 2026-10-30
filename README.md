@@ -337,6 +337,26 @@ ptyro cs pr add-user-tier && ptyro cs land add-user-tier
 `Ctrl-Q S` shows the set as swimlanes. `make changeset-demo` runs one with fake agents. The
 guide: [`docs/changesets.md`](docs/changesets.md).
 
+### Chats
+
+A quick, general chat with the agents you already run, on their accounts, kept and searchable,
+like the Claude and ChatGPT desktop apps. On by default; nothing to set up:
+
+```bash
+ptyro chat "what's the borrow checker complaining about here?"   # asks, streams the answer, keeps it
+git diff | ptyro chat ask "review this"     # one answer on stdout, nothing kept
+ptyro chat ls                               # pinned first, then the newest
+ptyro chat send @last "and in async code?"  # carry on
+ptyro chat set @last --agent codex          # switch agents: the conversation carries over
+```
+
+In the TUI every workspace has a **CHATS** section in the sidebar; `C-q m` starts a chat and
+`C-q g` lists them. The web app has a **Chats** tab. A chat can search the web and touch no
+file (`[chat] preset`); its agent stops when idle and picks up again from the saved conversation,
+after a restart too. A linked machine's chats show under its workspaces and are used from here
+(they run there, on its agents). Chats live in their own file, `chat.db` (`ptyro doctor` checks it). Settings:
+`[chat]` in the config (the Chat section of the settings panel).
+
 ### The scratchpad
 
 One notes file for ideas and the bugs you're chasing, the same in every session and restart:
@@ -464,6 +484,7 @@ All after the prefix, `Ctrl-Q` or `Ctrl-Space`. The full list is in [`docs/keys.
 | `O` / `S` | runs / change sets |
 | `w` / `o` / `r` | switch workspace / open in editor / run the default run script |
 | `;` / `'` / `"` | the scratchpad / add a line to it / its open items |
+| `m` / `g` | a new chat / the chat list |
 
 ## Configuration
 

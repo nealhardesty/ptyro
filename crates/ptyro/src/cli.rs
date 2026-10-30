@@ -219,11 +219,11 @@ async fn dispatch(
             let tui = ptyro_tui::Options { raw, view_only, workspace, ..Default::default() };
             attach_with(&ctx, client, info, tui).await
         }
-        Some(Cmd::List { json, all, status, project, workspace }) => {
+        Some(Cmd::List { json, all, status, project, workspace, chats }) => {
             if all {
                 history(&ctx, json).await
             } else {
-                list(&ctx, json, Filter { status, project, workspace }).await
+                list(&ctx, json, Filter { status, project, workspace, chats }).await
             }
         }
         Some(Cmd::Stop { sessions }) => crate::script::stop(&ctx, sessions).await,
@@ -344,8 +344,8 @@ async fn dispatch(
             };
             crate::uninstall::run(&ctx, opts, json).await
         }
-        Some(Cmd::Backup { output, with_recordings, with_ca, json }) => {
-            let opts = crate::backup::Opts { output, with_recordings, with_ca };
+        Some(Cmd::Backup { output, with_recordings, with_ca, no_chats, json }) => {
+            let opts = crate::backup::Opts { output, with_recordings, with_ca, no_chats };
             crate::backup::run(&ctx, opts, json).await
         }
         Some(Cmd::Project { cmd }) => crate::projects::project(&ctx, cmd).await,
@@ -475,6 +475,7 @@ async fn dispatch(
             }
         }
         Some(Cmd::Scratchpad { cmd, pane, json }) => crate::pad::run(&ctx, cmd, pane, json).await,
+        Some(Cmd::Chat { cmd, words }) => crate::chat::run(&ctx, cmd, words).await,
         Some(Cmd::Shell { worktree, json, read, scrollback }) => {
             quick_shell(&ctx, worktree, json, read, scrollback).await
         }
@@ -1153,6 +1154,8 @@ pub struct Filter {
     pub status: Option<String>,
     pub project: Option<String>,
     pub workspace: Option<String>,
+    /// Chats' engines too (SPEC §22.2).
+    pub chats: bool,
 }
 
 impl Filter {
@@ -1176,7 +1179,7 @@ impl Filter {
                 .is_some_and(|id| id == p || projects.iter().any(|x| x.id == id && x.slug == p))
         });
         let ws_ok = self.workspace.as_deref().is_none_or(|w| s.workspace.as_deref() == Some(w));
-        status_ok && project_ok && ws_ok
+        status_ok && project_ok && ws_ok && (self.chats || s.chat.is_none())
     }
 }
 

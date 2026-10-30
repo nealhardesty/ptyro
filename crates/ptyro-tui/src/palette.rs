@@ -43,6 +43,8 @@ pub enum Target {
     PadRev(String),
     /// Palette: this configuration option, in the settings panel (CFG1.1).
     Setting(String),
+    /// Palette: open this chat (SPEC §22.12).
+    Chat(String),
 }
 
 #[derive(Debug, Clone)]

@@ -69,6 +69,30 @@ The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every sessio
 | `scratchpad log` | `scratchpad.history` | `scratchpad.history`: saved copies |
 | `scratchpad restore` | `scratchpad.history` (`⏎` puts one back) | `scratchpad.history` |
 
+## Chats
+
+Plain conversations with your agents, kept in `chat.db` (SPEC §22, ROADMAP CHAT1). Every
+workspace has a CHATS section in the sidebar; a chat is opened over the panes.
+
+| Command | In the TUI | On the web |
+|---|---|---|
+| `chat new` | `chat.new` (`m`): a new chat in the selected workspace; type, ⏎ sends (`C-o` picks the agent and its tools); `＋ new chat` in an empty CHATS section | `chat.new`: ＋ on the Chats page (`g c`); the agent and tools under the box |
+| `chat ask` | `chat.new` (`m`): the answer streams into the view; archive or delete it after (`x`, `X`) | `chat.new`: the answer streams in; ⋯ → Delete after |
+| `chat ls` | `chat.list` (`g`): the workspace's chats (Tab: every one), by day, `/` searches, `A` archived; the CHATS section shows the pinned and the newest | `chats`: the Chats page, by day, with `chat.find` and the workspace picker; `chat.archived` for archived ones |
+| `chat show` | `chat.open` (`⏎` on a chat row, or in the list): the chat view | `chat.open`: tap a chat |
+| `chat open` | `chat.open` (`⏎` on a chat row) | `chat.open`: tap a chat |
+| `chat send` | `chat.open`: type in the view's composer, ⏎ | `chat.send`: the box under the chat, Send |
+| `chat answer` | `chat.open`: `a` allow, `A` always, `d` deny on the permission card | `chat.answer`: Allow, Always, Deny on the card |
+| `chat stop` | `chat.stop`: `Ctrl-C` in the view | `chat.stop`: Stop beside the box while it answers |
+| `chat retitle` | `chat.retitle` (`,` on a chat row or in the list) | `chat.retitle`: ⋯ → Rename |
+| `chat pin` | `chat.pin` (`*` on a chat row or in the list) | `chat.pin`: ⋯ → Pin |
+| `chat unpin` | `chat.pin` (`*` again) | `chat.pin`: ⋯ → Unpin |
+| `chat archive` | `chat.archive` (`x` on a chat row or in the list) | `chat.archive`: ⋯ → Archive |
+| `chat unarchive` | `chat.archive` (`x` on it in the list's archived view, `A`) | `chat.archive`: ⋯ → Bring back, under Archived |
+| `chat set` | `chat.agent` and `chat.preset` (the chat's menu, `.`) | `chat.agent` and `chat.preset`: ⋯ → Switch agent, Tools |
+| `chat rm` | `chat.delete` (`X` on a chat row or in the list; asks) | `chat.delete`: ⋯ → Delete |
+| `chat export` | `chat.export` (`e` in the list, or the menu): written to a Markdown file | `chat.export`: ⋯ → Download as Markdown |
+
 ## Attention and notifications
 
 | Command | In the TUI | On the web |

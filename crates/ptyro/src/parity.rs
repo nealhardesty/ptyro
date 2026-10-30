@@ -23,7 +23,7 @@ const COMMANDS_DOC: &str = include_str!("../../../docs/commands.md");
 const README: &str = include_str!("../../../README.md");
 const MAKEFILE: &str = include_str!("../../../Makefile");
 /// The web app's sources that register actions: the core and one module per kind of work.
-const WEB_SOURCES: [(&str, &str); 9] = [
+const WEB_SOURCES: [(&str, &str); 10] = [
     ("app.ts", include_str!("../../../web/src/app.ts")),
     ("sessions.ts", include_str!("../../../web/src/sessions.ts")),
     ("projects.ts", include_str!("../../../web/src/projects.ts")),
@@ -33,6 +33,7 @@ const WEB_SOURCES: [(&str, &str); 9] = [
     ("term.ts", include_str!("../../../web/src/term.ts")),
     ("panel.ts", include_str!("../../../web/src/panel.ts")),
     ("machines.ts", include_str!("../../../web/src/machines.ts")),
+    ("chats.ts", include_str!("../../../web/src/chats.ts")),
 ];
 
 /// Every runnable command, `wt new` style, without hidden ones (internal helpers).

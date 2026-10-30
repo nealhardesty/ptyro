@@ -136,6 +136,11 @@ impl Structured {
         let _ = self.tx.send(Msg::Interrupt);
     }
 
+    /// A prompt, as it is (a chat's message, with its seed block).
+    pub fn prompt(&self, text: String) {
+        let _ = self.tx.send(Msg::Prompt(text));
+    }
+
     pub fn send_text(&self, s: &Session, text: &str, enter: bool) {
         if enter {
             let mut d = self.draft.locked();

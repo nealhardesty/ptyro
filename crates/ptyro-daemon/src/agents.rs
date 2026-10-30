@@ -479,7 +479,7 @@ impl Daemon {
         kind: AttentionKind,
         text: String,
     ) {
-        if self.watched(s.id) {
+        if self.watched(s.id) || !self.chat_wants(s, kind) {
             return;
         }
         // A quick terminal is quiet (UX1.25), but an agent started in it that waits for you
@@ -1052,6 +1052,7 @@ impl Daemon {
                     command: None,
                     mcp: false,
                     structured: mode.unwrap_or(m.structured.is_some()),
+                    params: None,
                 }),
             })
             .await?;
@@ -1338,6 +1339,11 @@ impl Daemon {
         let now = now_ms();
         for s in self.sessions() {
             if s.kind() != SessionKind::Agent || !s.is_live() {
+                continue;
+            }
+            // A chat's engine hibernates by `[chat] hibernate_after` (`chats.rs`).
+            if s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).place.chat.is_some()
+            {
                 continue;
             }
             let (agent, viewers, conv) = {

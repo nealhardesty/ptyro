@@ -151,6 +151,7 @@ fn plan_with(worktrees: Vec<Worktree>) -> Plan {
             keep: false,
         }],
         logins: true,
+        chats: Some(4096),
         uncommitted_total: worktrees.iter().filter(|w| w.uncommitted > 0).count(),
         worktrees,
         service: None,

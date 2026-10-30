@@ -2395,31 +2395,37 @@ rows, its `[chat]` settings schema entries and its `make` targets, and the miles
   - **Left (not a gate for CHAT1.1–CHAT1.2; each is part of the task that needs it):** a Gemini and an
     OpenCode *turn* (login / a provider) to prove their rules stop a call, `WebSearch` on an API-key
     or team account, Linux, and the `make verify-chat` target CHAT1.3 writes (§22.16).
-- [ ] **CHAT1 Chats that last** (R-CHAT-01, 06, 13) — the core. **L**
-  - [ ] **CHAT1.1** `chat.db`: the schema of §22.4, its writer thread, migrations, `doctor` checks,
+- [x] **CHAT1 Chats that last** (R-CHAT-01, 06, 13) — the core. **L** (built 2026-10-29; SPEC §22's "As built" lists what differs)
+  - [x] **CHAT1.1** `chat.db`: the schema of §22.4, its writer thread, migrations, `doctor` checks,
         backup (`--no-chats`), the uninstall plan, "can't open" handling. **M**
-  - [ ] **CHAT1.2** The `[chat]` settings and the schema entries (with the presets as a collection), the
+  - [x] **CHAT1.2** The `[chat]` settings (`tools` is `preset`: TOML can't hold both) and the schema entries (with the presets as a collection), the
         panel section in the TUI and the web, `enabled` hiding everything. **M**
-  - [ ] **CHAT1.3** The engine: a hidden structured session with `chat = <id>`, the scratch directory,
+  - [x] **CHAT1.3** The engine: a hidden structured session with `chat = <id>`, the scratch directory,
         the workspace's profile, the preset launch arguments per agent, hibernate and resume, the node
         writer (2 s flushes, `interrupted` after a crash), permission cards and the inbox. Takes the
         launch rules of §22.5 and the per-agent facts of §20.8 (`--safe-mode`, Codex's idle-as-end and
         MCP switches, OpenCode's permissions after a fork, deleting a chat removes Claude's project
         folder). **L**
-  - [ ] **CHAT1.4** Continuing: native continue, and the seed block (§22.6), the budget, the notice.
+  - [x] **CHAT1.4** Continuing: native continue, and the seed block (§22.6), the budget, the notice.
         **M**
-  - [ ] **CHAT1.5** Titles (agent's, else the one-shot, else the first line), pin, archive, delete,
+  - [x] **CHAT1.5** Titles (agent's, else the one-shot, else the first line), pin, archive, delete,
         unread. **M**
-  - [ ] **CHAT1.6** Protocol minor (§22.14), the CLI `chat new|ask|ls|show|open|send|retitle|pin|archive|rm`
+  - [x] **CHAT1.6** Protocol minor (1.22) (§22.14), the CLI `chat new|ask|ls|show|open|send|retitle|pin|archive|rm`
         and `export`, with `--json`. **M**
-  - [ ] **CHAT1.7** The TUI: the CHATS sidebar section per workspace (`recent`, `all chats…`, glyphs),
+  - [x] **CHAT1.7** The TUI: the CHATS sidebar section per workspace (`recent`, `all chats…`, glyphs),
         the chat list, the chat view's header and composer, keys (`m`, `g`, the sidebar keys), palette
         actions. **L**
-  - [ ] **CHAT1.8** The web: the Chats page, the chat view, the sidebar section, `ACTIONS` for every
+  - [x] **CHAT1.8** The web: the Chats page, the chat view, the sidebar section, `ACTIONS` for every
         control. **L**
-  - [ ] **CHAT1.9** **Machines** (§22.11): `ChatInfo` in the mirror, routing by `chat`, merged lists,
+  - [x] **CHAT1.9** **Machines** (§22.11): `ChatInfo` in the mirror, routing by `chat`, merged lists,
         `ChatSubscribe` over the upstream, a chat created in a remote workspace, offline listing, hidden
         workspaces, scopes, alerts. Tested with two daemons. **L**
+  - **Left in CHAT1:** `make verify-chat` against a real Claude and Codex (the fakes
+    cover every path in `tests/chat.rs`), agent-sent titles for OpenCode and ACP, the seed's summary
+    paragraph. Tested: `tests/chat.rs` (create, stream, restart and native resume, seeded agent
+    switch, titles, pin, archive, export, delete, `ask`, a permission card, chats off), the store's
+    and the TUI tree's unit tests, and the web in Chrome against a sandbox (list, open, send, a new
+    chat, a permission card denied); `tests/chat_machines.rs` for 1.9 (two linked daemons: listed, sent to by id, by `laptop2:c:…` and by handle, followed live over the upstream, made in the remote workspace, a remote pin seen, hidden and shown, listed while offline with the refusal and the notice).
   *Done when:* on a fresh install with a Claude login, `Ctrl-Q m`, a question and ⏎ gets an answer
   with no setup; the chat is in the sidebar; after `ptyro daemon stop` and start it is still there and
   carries on; the same chat shows, opens and answers from the phone; and with `laptop2` linked, its

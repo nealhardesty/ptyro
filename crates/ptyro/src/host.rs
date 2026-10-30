@@ -298,6 +298,7 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
                 output: opt(a, "output").map(std::path::PathBuf::from),
                 with_recordings: a["with_recordings"].as_bool().unwrap_or(false),
                 with_ca: false,
+                no_chats: a["no_chats"].as_bool().unwrap_or(false),
             };
             let made = crate::backup::create(ctx, &opts).await?;
             Ok(json!(made))
