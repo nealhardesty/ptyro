@@ -2508,8 +2508,11 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
 
 - **Terminal mode** (default when a pane is focused): every key goes to the session, except the
   **prefix** keys (default `Ctrl-Q` and `Ctrl-Space`, configurable as one key or a list; §21.2).
-  Any of them starts a command, and hints show the first. A prefix pressed twice sends that key
-  to the program.
+  Any of them starts a command, and hints show the first. A prefix pressed twice focuses the
+  sidebar (`focus.toggle`, like `prefix Tab`; every configured prefix gets this, and `[keys]` can
+  rebind it). `prefix q` (`prefix.send`) sends the prefix key that started the command to the
+  program, so a ptyro inside ptyro still gets its prefix (owner, 2026-10-30: the quickest chord
+  goes to the sidebar, the screen-style `C-a a` way, rather than tmux's `C-b C-b` send-prefix).
 - **Navigation mode** (focus in sidebar or after prefix): single-key commands.
 - **Zoom**: pane fills the screen (sidebar hidden). **Raw attach** (`ptyro attach --raw`): no chrome
   at all; ideal over flaky SSH or on a phone terminal app; detach with `prefix d`.
@@ -3112,6 +3115,7 @@ The full sidebar table (no prefix) is in [`docs/keys.md`](docs/keys.md#in-the-si
 | `i` | inbox |
 | `/` | fuzzy find a session |
 | `Tab` | toggle focus sidebar ↔ pane |
+| prefix again (`C-q C-q`) | the same as `Tab` |
 | `s` / `v` | split horizontal / vertical with a picked session |
 | `h`/`l` (in split) | move focus between panes |
 | `z` | zoom pane |
@@ -3125,7 +3129,7 @@ The full sidebar table (no prefix) is in [`docs/keys.md`](docs/keys.md#in-the-si
 | `S` | change sets (§15.5.10): the list; in the sidebar on a set row, that set |
 | `d` | detach (TUI exits, everything keeps running) |
 | `C-d` | quit ptyro (`app.quit`): after a yes, stop the daemon and every session, then exit |
-| `q` | quit TUI (same as detach; never kills sessions) |
+| `q` | send the prefix key itself to the program (`prefix.send`) |
 
 Mouse: click to focus panes/sidebar items, wheel scrolls scrollback (unless the child grabbed the
 mouse), drag to select (copy mode), drag split borders.

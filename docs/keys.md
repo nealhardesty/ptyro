@@ -4,8 +4,11 @@
 # Keys
 
 Everything in the TUI starts with the **prefix**: `Ctrl-Q` or `Ctrl-Space`, whichever you like
-(`[ui] prefix`). Press the prefix, release it, then the key. Press a prefix twice to send it to
-the program. Hints on screen show the first one, `Ctrl-Q`.
+(`[ui] prefix`). Press the prefix, release it, then the key. Press a prefix twice (`Ctrl-Q
+Ctrl-Q`, holding Ctrl) to jump to the sidebar, the same as `Ctrl-Q Tab`. To send the prefix
+itself to the program (a ptyro inside ptyro, over ssh), press the prefix and then `q`:
+`Ctrl-Q q` sends `Ctrl-Q`, `Ctrl-Space q` sends `Ctrl-Space`. Hints on screen show the first
+one, `Ctrl-Q`.
 
 There are two so that one always gets through (SPEC §21.2):
 - **`Ctrl-Q`**: none of Claude Code, Codex, Gemini CLI or OpenCode binds it, and it sits in the
@@ -32,7 +35,8 @@ action by name.
 |---|---|
 | `?` | help: every key |
 | `:` or `C-p` | command palette |
-| `d` or `q` | detach (sessions keep running) |
+| `d` | detach (sessions keep running) |
+| `q` | send the prefix key itself to the program (`Ctrl-Q q` types `Ctrl-Q`): for a ptyro inside ptyro, emacs's `C-q`, or a program that quits on it |
 | `C-d` | quit ptyro: stop every session and the daemon, after a yes (agents hibernate and resume next time) |
 | `n` | new task: say what to do, ⏎ starts the default agent on it in a new worktree named after it (Tab edits the name, `C-o` picks the agent and where, an empty ⏎ is a random name) |
 | `C-n` | quick new: another of what this workspace last started (`claude`, `claude@work`, a shell…; the default agent at first) in this worktree, no questions. The which-key menu says what it starts: `+ claude` |
@@ -63,6 +67,7 @@ action by name.
 | `c` | close this pane (the session keeps running) |
 | `<` `>` `+` `-` | narrower / wider / taller / shorter |
 | `Tab` | move focus between the sidebar and the pane |
+| `C-q` or `C-Space` | the prefix again: the same as `Tab` (a prefix you set in `[ui] prefix` does it too) |
 | `\` | show or hide the sidebar |
 | `u` | do what the last message offers: undo it, or fix what it reports |
 | `!` | a new shell of its own in this worktree, full sized (every press starts another; the quick terminal is `C-t` / `T`) |
@@ -104,7 +109,7 @@ session you pick that is already on screen is focused where it is.
 
 ## In the sidebar
 
-Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.
+Focus the sidebar with `Ctrl-Q Tab`, or `Ctrl-Q Ctrl-Q`. These keys need no prefix there.
 
 | Key | Does |
 |---|---|

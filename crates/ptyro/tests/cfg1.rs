@@ -215,7 +215,7 @@ async fn config_get_set_unset_list_add_and_rm_on_the_command_line() {
         "{shown}"
     );
     let o = ptyro(&["config", "set", "keys.q", "palette"]);
-    assert!(text(&o).contains("q ran app.detach"), "names what the key ran: {}", text(&o));
+    assert!(text(&o).contains("q ran prefix.send"), "names what the key ran: {}", text(&o));
     assert!(ptyro(&["config", "unset", "keys.d", "keys.q"]).status.success());
     assert!(!file().contains("[keys]") || !file().contains("none"), "{}", file());
     assert!(ptyro_core::config::Config::parse(&file()).unwrap().keys.is_empty(), "{}", file());

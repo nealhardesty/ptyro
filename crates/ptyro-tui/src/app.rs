@@ -749,6 +749,8 @@ pub struct App {
     pub prefix: bool,
     /// When the prefix was pressed (the which-key menu follows, UX1.14).
     pub prefix_at: Option<Instant>,
+    /// The prefix key last pressed, for `prefix.send` (`C-Space q` sends `C-Space`).
+    prefix_key: Option<KeyEvent>,
     pub overlay: Option<Overlay>,
     pub toast: Option<Toast>,
     pub buffer: Option<String>,
@@ -871,6 +873,7 @@ impl App {
             sidebar_row: None,
             sidebar_sel: 0,
             prefix: false,
+            prefix_key: None,
             prefix_at: None,
             overlay: None,
             tour: opts_tour.then(crate::tour::Tour::default),
@@ -1459,8 +1462,9 @@ impl App {
         self.health_tick(self.started);
     }
 
-    fn start_prefix(&mut self) {
+    fn start_prefix(&mut self, key: KeyEvent) {
         self.prefix = true;
+        self.prefix_key = Some(key);
         self.prefix_at = Some(Instant::now());
     }
 
@@ -2565,7 +2569,7 @@ impl App {
             // The prefix always works: it closes whatever is open and starts a command.
             if self.keymap.is_prefix(key) && !matches!(self.overlay, Some(Overlay::Prompt { .. })) {
                 self.overlay = None;
-                self.start_prefix();
+                self.start_prefix(key);
                 return;
             }
             // A prefix still waiting when the overlay came up (a dialog an event opened) must
@@ -2581,7 +2585,7 @@ impl App {
         }
         if self.orch.is_some() && !self.prefix {
             if self.keymap.is_prefix(key) {
-                self.start_prefix();
+                self.start_prefix(key);
             } else {
                 self.orch_key(key);
             }
@@ -2594,7 +2598,7 @@ impl App {
             && !self.full_view()
         {
             if self.keymap.is_prefix(key) {
-                self.start_prefix();
+                self.start_prefix(key);
             } else {
                 self.chat_key(key);
             }
@@ -2602,7 +2606,7 @@ impl App {
         }
         if self.sets_view.is_some() && !self.prefix {
             if self.keymap.is_prefix(key) {
-                self.start_prefix();
+                self.start_prefix(key);
             } else {
                 self.sets_key(key);
             }
@@ -2610,7 +2614,7 @@ impl App {
         }
         if self.inspector.is_some() && !self.prefix {
             if self.keymap.is_prefix(key) {
-                self.start_prefix();
+                self.start_prefix(key);
             } else {
                 self.inspector_key(key);
             }
@@ -2618,11 +2622,6 @@ impl App {
         }
         if self.prefix {
             self.prefix = false;
-            if self.keymap.is_prefix(key) {
-                // Prefix twice: the program gets one.
-                self.forward(InputEvent::Key { key });
-                return;
-            }
             match self.keymap.lookup(Table::Prefix, key).cloned() {
                 Some(cmd) => self.run(&cmd),
                 None if key.code == KeyCode::Esc => {}
@@ -2639,7 +2638,7 @@ impl App {
             return;
         }
         if self.keymap.is_prefix(key) {
-            self.start_prefix();
+            self.start_prefix(key);
             return;
         }
         if let Some(cmd) = self.keymap.lookup(Table::Global, key).cloned() {
@@ -3080,6 +3079,10 @@ impl App {
                     return;
                 };
                 self.session_action(cmd.action, id);
+            }
+            "prefix.send" => {
+                let key = self.prefix_key.unwrap_or(self.keymap.prefix);
+                self.forward(InputEvent::Key { key });
             }
             "focus.toggle" if self.sidebar_zoom => {
                 self.sidebar_zoom = false;
@@ -7794,6 +7797,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `C-q C-q` is `C-q Tab`; `C-q q` sends the prefix that was pressed to the program.
+    #[test]
+    fn the_prefix_twice_goes_to_the_sidebar_and_q_sends_it() {
+        use crossterm::event::{KeyCode as CK, KeyEvent as CE, KeyModifiers as CM};
+        let mut app = app();
+        app.sessions = vec![session("a")];
+        let ctrl = |c| CE::new(CK::Char(c), CM::CONTROL);
+        app.on_key(&ctrl('q'));
+        app.on_key(&ctrl('q'));
+        assert_eq!(app.focus, Focus::Sidebar);
+        assert!(!app.prefix, "the second press ran a command, it didn't start another");
+        app.on_key(&ctrl('q'));
+        app.on_key(&ctrl('q'));
+        assert_eq!(app.focus, Focus::Pane, "again: back to the pane");
+        app.on_key(&ctrl(' '));
+        app.on_key(&CE::new(CK::Char('q'), CM::NONE));
+        assert!(!app.prefix);
+        assert_eq!(
+            app.prefix_key.map(keymap::normalize),
+            Some(keymap::normalize(KeyEvent::new(KeyCode::Char { c: ' ' }, Mods(Mods::CTRL))))
+        );
+        assert!(app.toast.is_none(), "q is bound: {:?}", app.toast.as_ref().map(|t| &t.text));
+        assert_eq!(app.focus, Focus::Pane);
     }
 
     #[test]
