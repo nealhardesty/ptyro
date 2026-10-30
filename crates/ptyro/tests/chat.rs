@@ -232,6 +232,40 @@ fn titles_pins_archive_export_and_delete() {
 }
 
 #[test]
+fn plain_chat_takes_new_chats_flags_and_ask_reads_any_bytes_piped_in() {
+    let w = World::new("");
+    // As the README has it: `ptyro chat --folder ~/notes "…"`, no `new`.
+    let notes = w.home().join("notes");
+    std::fs::create_dir_all(&notes).unwrap();
+    w.ok(&["chat", "--folder", notes.to_str().unwrap(), "--no-wait", "what is left?"]);
+    let c = &w.chats()[0];
+    assert_eq!(c["folders"][0].as_str(), notes.to_str(), "{c}");
+    // Piped context that isn't UTF-8 (a Latin-1 file in a diff) still goes, fenced past its
+    // own backticks.
+    let ask = |args: &[&str], input: &[u8]| {
+        use std::io::Write;
+        let mut child =
+            w.d.cmd()
+                .args(args)
+                .env("HOME", w.home())
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+        child.stdin.take().unwrap().write_all(input).unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let out = ask(&["chat", "ask", "review"], b"caf\xe9 au lait\n```sh\nls\n```\n");
+    assert!(out.contains("caf\u{fffd} au lait") && out.contains("````"), "{out}");
+    // Not read when asked not to (a loop's lines are its own).
+    let out = ask(&["chat", "ask", "--no-stdin", "just this"], b"the loop's next line\n");
+    assert_eq!(out.trim(), "you said: just this");
+}
+
+#[test]
 fn ask_answers_once_and_keeps_nothing() {
     let w = World::new("");
     let out = w.ok(&["chat", "ask", "what", "is", "2+2"]);

@@ -516,8 +516,10 @@ function folderList(text: string): string[] {
 function editFolders(c: Chat): void {
   const reads = presets.find((p) => p.name === c.tools)?.read;
   form("Folders this chat may read", [{ key: "f", label: "One a line (empty: none)", type: "textarea", rows: 3, placeholder: "~/notes", value: (c.folders ?? []).join("\n") }], "Save", async (v) => {
-    await conn.request({ t: "chat_update", chat: c.id, folders: folderList(v.f as string) });
-    ui.toast(reads || !folderList(v.f as string).length ? "Saved: the next message starts it with them" : "Saved; the preset reads no files: Tools → read lets it");
+    // Emptied, the box is left out of the values: no folders.
+    const f = folderList(String(v.f ?? ""));
+    await conn.request({ t: "chat_update", chat: c.id, folders: f });
+    ui.toast(reads || !f.length ? "Saved: the next message starts it with them" : "Saved; the preset reads no files: Tools → read lets it");
   }, { intro: "On the computer the chat runs on. It reads them with the read preset (or one of yours that reads), and nothing else." });
 }
 
@@ -617,6 +619,12 @@ function pageFor(id: string): Page {
   const compare = h("div", { class: "bar chat-pick compare", title: tip("chat.compare") }, h("span", { class: "sub" }, "Ask several:"),
     ...agentNames().map((a) => h("label", { class: "check" }, h("input", { type: "checkbox", value: a }), ` ${a}`)));
   page = { id, el: h("div", { class: "session chat-page" }), box: h("div", { class: "chat" }), reply, els: new Map(), agent, preset, incognito, folders, compare, sending: false };
+  // The keyboard goes to the composer once, as the page opens (not on every render, which
+  // would pull it out of the Folders box or a sheet); on a phone only for a new chat, where
+  // typing is the point, rather than popping the keyboard over a chat being read.
+  requestAnimationFrame(() => {
+    if (page?.reply === reply && reply.isConnected && (id.startsWith("new") || matchMedia("(pointer: fine)").matches)) reply.focus();
+  });
   // A new chat's page starts empty (not with what a failed try left).
   if (id.startsWith("new")) state.items = [];
   return page;
@@ -625,9 +633,11 @@ function pageFor(id: string): Page {
 async function send(): Promise<void> {
   const p = page;
   if (!p) return;
-  const text = p.reply.value;
+  let text = p.reply.value;
   if (!text.trim()) return;
-  if (text.trim().startsWith("/")) { p.reply.value = ""; drafts.delete(p.id); slash(p.id, text.trim()); return; }
+  const literal = slashMessage(text);
+  if (text.trim().startsWith("/") && literal === null) { p.reply.value = ""; drafts.delete(p.id); slash(p.id, text.trim()); return; }
+  text = literal ?? text;
   // One at a time: a second Send while the first is on its way would send it twice.
   if (p.sending) { ui.toast("One moment: the last message is on its way"); return; }
   p.sending = true;
@@ -660,6 +670,16 @@ async function send(): Promise<void> {
 }
 
 /// The composer's slash commands (SPEC §22.12), as in the TUI.
+/// A line that starts with `/` but is a message (as `chats::slash_message`): `//` sends the rest
+/// with one `/`, and a path (`/etc/hosts — what is it?`) is a message as it is. `null`: a command.
+export function slashMessage(text: string): string | null {
+  const t = text.trimStart();
+  if (!t.startsWith("/")) return null;
+  const rest = t.slice(1);
+  if (rest.startsWith("/")) return rest;
+  return (rest.split(/\s/)[0] ?? "").includes("/") ? text : null;
+}
+
 function slash(id: string, text: string): void {
   const [name, ...rest] = text.slice(1).split(" ");
   const arg = rest.join(" ").trim();
@@ -737,7 +757,14 @@ function slash(id: string, text: string): void {
       requestAnimationFrame(tick);
       return;
     }
-    default: ui.toast("/retry /edit [text] /compare [AGENTS…] [question] /pick /fork /side [question] /keep /agent NAME /tools NAME /folder DIR|none /task [PROJECT] [--agent A] [--name N] /title TEXT /search WORDS /find QUESTION /export /incognito /branch /cite");
+    default:
+      if (name !== "help" && name !== "?") {
+        // Not lost: back in the composer, to fix or to send as a message.
+        if (page?.id === id) { page.reply.value = text; drafts.set(id, text); }
+        ui.toast(`/${name}: not a command (start with // to send it as a message). /help lists them`);
+        return;
+      }
+      ui.toast("/retry /edit [text] /compare [AGENTS…] [question] /pick /fork /side [question] /keep /agent NAME /tools NAME /folder DIR|none /task [PROJECT] [--agent A] [--name N] /title TEXT /search WORDS /find QUESTION /export /incognito /branch /cite");
   }
 }
 
@@ -905,7 +932,6 @@ function chatView(rest: string): HTMLElement {
     ...(isNew ? [h("div", { class: "bar chat-pick" }, p.agent, p.preset, h("label", { class: "check", title: tip("chat.incognito") }, p.incognito, " incognito")), h("div", { class: "bar chat-pick" }, p.folders), p.compare] : []),
     canWrite() ? h("div", { class: "reply" }, p.reply, stop, h("button", { class: "send", title: tip("chat.send"), onclick: () => void send() }, "Send")) : h("p", { class: "sub" }, "This device may read chats, not write in them."),
   ].filter((x): x is HTMLElement => !!x));
-  if (isNew) requestAnimationFrame(() => { if (document.activeElement !== p.reply) p.reply.focus(); });
   return p.el;
 }
 

@@ -7029,7 +7029,9 @@ hides when `enabled`):
   2/3`, cost, machine chip); the branch navigator; a composer that takes **slash commands**
   (`/fork`, `/side`, `/agent`, `/tools`, `/title`, `/retry`, `/search`, `/export`, `/incognito`,
   `/task [PROJECT] [--agent A] [--name N]`, `/compare [AGENTS…] [question]` (agents space- or
-  comma-separated, `codex@work` kept as typed), `/pick`), each also a palette action; an `@` completion for attached folders; and find-in-chat.
+  comma-separated, `codex@work` kept as typed), `/pick`), each also a palette action (`//` sends a
+  message starting with `/`, a path like `/etc/hosts …` is a message as it is, and a name that
+  isn't a command stays in the composer, never lost); an `@` completion for attached folders; and find-in-chat.
 - **Keys** (prefix, then; proposed, `m` and `g` are free in `docs/keys.md` on 2026-10-29; CHAT1.7
   checks and the user can rebind): `m` **new chat** in the current workspace (the composer opens at
   once, ⏎ sends; `C-o` picks agent, tools and folder; `Tab`/`C-i` incognito), `g` the **chat list**
@@ -7045,7 +7047,7 @@ hides when `enabled`):
   ```
   ptyro chat [new] [PROMPT] [--agent A[@P]] [--tools PRESET] [--folder DIR]… [--incognito|--keep]
                    [--workspace W] [--title T]        # new chat; opens it in a terminal
-  ptyro chat ask QUESTION [--keep] [--agent A] [--tools PRESET]   # one-shot answer on stdout; stdin is context
+  ptyro chat ask QUESTION [--keep] [--agent A] [--tools PRESET] [--no-stdin]   # one-shot answer on stdout; stdin is context
   ptyro chat ls [--workspace W|--all] [--machine M] [--pinned] [--archived] [-n N]
   ptyro chat show CHAT [--from NODE] [--branches] [--format text|md|json]
   ptyro chat open CHAT                               # the chat view

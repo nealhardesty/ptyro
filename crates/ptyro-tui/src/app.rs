@@ -9641,6 +9641,35 @@ mod tests {
     }
 
     #[test]
+    fn a_slash_that_isnt_a_command_is_sent_or_kept_never_lost() {
+        let mut app = app();
+        let enter = |app: &mut App, text: &str| {
+            app.new_chat();
+            app.chat_paste(text);
+            app.chat_key(KeyEvent::new(KeyCode::Enter, Mods::NONE));
+        };
+        let sent = |app: &App| match &app.chat_panel {
+            Some(crate::chats::ChatPanel::View(v)) => {
+                v.view.items.iter().find_map(|i| match &i.body {
+                    ptyro_core::chat::ChatBody::User { text } => Some(text.clone()),
+                    _ => None,
+                })
+            }
+            _ => None,
+        };
+        // A path is a message; `//` sends one `/`.
+        enter(&mut app, "/etc/hosts: what is it?");
+        assert_eq!(sent(&app).as_deref(), Some("/etc/hosts: what is it?"));
+        enter(&mut app, "//retry is a word");
+        assert_eq!(sent(&app).as_deref(), Some("/retry is a word"));
+        // A mistyped command stays in the composer, with how to send it.
+        enter(&mut app, "/agnet codex");
+        assert_eq!(sent(&app), None);
+        assert_eq!(draft(&app).0, "/agnet codex");
+        assert!(toast_text(&app).contains("//"), "{}", toast_text(&app));
+    }
+
+    #[test]
     fn the_chat_composer_edits_like_a_shell_line() {
         use crossterm::event::KeyModifiers as M;
         let mut app = app();

@@ -475,7 +475,7 @@ async fn dispatch(
             }
         }
         Some(Cmd::Scratchpad { cmd, pane, json }) => crate::pad::run(&ctx, cmd, pane, json).await,
-        Some(Cmd::Chat { cmd, words }) => crate::chat::run(&ctx, cmd, words).await,
+        Some(Cmd::Chat { cmd, new }) => crate::chat::run(&ctx, cmd, new).await,
         Some(Cmd::Shell { worktree, json, read, scrollback }) => {
             quick_shell(&ctx, worktree, json, read, scrollback).await
         }

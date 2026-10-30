@@ -640,6 +640,22 @@ document.addEventListener("keydown", (e) => {
         e.preventDefault();
         newTask();
     }
+    else if (e.key === "/" && route().view === "chats") {
+        e.preventDefault();
+        document.querySelector("input.search")?.focus();
+    }
+    // In a chat, `/` starts a slash command in its composer.
+    else if (e.key === "/" && route().view === "c") {
+        const r = document.querySelector(".chat-page .reply textarea");
+        if (r) {
+            e.preventDefault();
+            if (!r.value) {
+                r.value = "/";
+                r.dispatchEvent(new Event("input"));
+            }
+            r.focus();
+        }
+    }
     else if (e.key === "/") {
         e.preventDefault();
         if (route().view !== "list")
@@ -647,7 +663,7 @@ document.addEventListener("keydown", (e) => {
         setTimeout(() => (searchBox.isConnected ? searchBox : document.querySelector("input.search"))?.focus(), 50);
     }
     else if (e.key === "?")
-        sheet("Keys", [h("dl", { class: "facts" }, ...[["n", "New task"], ["/", "Find a session"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g r", "Runs"], ["g e", "Change sets"], ["g i", "Inbox"], ["g m", "More"], ["Esc", "Close a dialog"]].flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
+        sheet("Keys", [h("dl", { class: "facts" }, ...[["n", "New task"], ["/", "Find a session (in the chats: a chat; in a chat: a command)"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g r", "Runs"], ["g e", "Change sets"], ["g i", "Inbox"], ["g m", "More"], ["Esc", "Close a dialog"]].flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
 });
 window.addEventListener("hashchange", () => { takePairCode(); notesShown(); render(); });
 takePairCode();

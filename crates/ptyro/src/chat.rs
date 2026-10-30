@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::io::{IsTerminal, Read, Write};
 use std::time::Duration;
 
-use clap::Subcommand;
+use clap::{Args, Subcommand};
 use clap_complete::ArgValueCandidates;
 use ptyro_core::chat::{ChatBody, ChatItem};
 use ptyro_core::chats::{ChatInfo, ChatNode, ChatSiblings};
@@ -16,45 +16,49 @@ use ptyro_protocol::{ClientMsg, Reply, Request, ServerMsg};
 use crate::cli::{Ctx, age, unexpected};
 use crate::complete;
 
+/// `chat new`'s, and plain `chat`'s: `ptyro chat --folder ~/notes "what's left?"`.
+#[derive(Args)]
+pub struct NewArgs {
+    /// The first message (`-`, or nothing on a pipe: read standard input)
+    prompt: Vec<String>,
+    /// `agent` or `agent@profile` (default `[chat] agent`, else the first installed)
+    #[arg(long, add = ArgValueCandidates::new(complete::agents))]
+    agent: Option<String>,
+    /// What it may use: chat (web search, the default), read, none, or your own (`chat presets`)
+    #[arg(long, add = ArgValueCandidates::new(complete::chat_presets))]
+    preset: Option<String>,
+    /// The workspace it belongs to (default main)
+    #[arg(short, long, add = ArgValueCandidates::new(complete::workspaces))]
+    workspace: Option<String>,
+    #[arg(long)]
+    title: Option<String>,
+    /// Keep nothing: not saved, not searchable, gone when its agent stops
+    #[arg(long)]
+    incognito: bool,
+    /// Keep it, though `[chat] incognito` is on
+    #[arg(long, conflicts_with = "incognito")]
+    keep: bool,
+    /// A folder it may read (repeatable); with no --preset the chat then reads (`read`)
+    #[arg(long = "folder", value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
+    folders: Vec<String>,
+    /// Ask several agents the first message, each answer a branch (`claude,codex`; as
+    /// `chat compare`)
+    #[arg(long, value_delimiter = ',', add = ArgValueCandidates::new(complete::agents))]
+    compare: Vec<String>,
+    /// Ask a --compare agent under another profile than the chat's without asking first
+    #[arg(short, long)]
+    yes: bool,
+    /// Don't wait for the answer
+    #[arg(long)]
+    no_wait: bool,
+    #[arg(long)]
+    json: bool,
+}
+
 #[derive(Subcommand)]
 pub enum ChatCmd {
     /// A new chat (the default): with words, its first message, answered here
-    New {
-        /// The first message (`-`, or nothing on a pipe: read standard input)
-        prompt: Vec<String>,
-        /// `agent` or `agent@profile` (default `[chat] agent`, else the first installed)
-        #[arg(long, add = ArgValueCandidates::new(complete::agents))]
-        agent: Option<String>,
-        /// What it may use: chat (web search, the default), read, none, or your own (`chat presets`)
-        #[arg(long, add = ArgValueCandidates::new(complete::chat_presets))]
-        preset: Option<String>,
-        /// The workspace it belongs to (default main)
-        #[arg(short, long, add = ArgValueCandidates::new(complete::workspaces))]
-        workspace: Option<String>,
-        #[arg(long)]
-        title: Option<String>,
-        /// Keep nothing: not saved, not searchable, gone when its agent stops
-        #[arg(long)]
-        incognito: bool,
-        /// Keep it, though `[chat] incognito` is on
-        #[arg(long, conflicts_with = "incognito")]
-        keep: bool,
-        /// A folder it may read (repeatable); with no --preset the chat then reads (`read`)
-        #[arg(long = "folder", value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
-        folders: Vec<String>,
-        /// Ask several agents the first message, each answer a branch (`claude,codex`; as
-        /// `chat compare`)
-        #[arg(long, value_delimiter = ',', add = ArgValueCandidates::new(complete::agents))]
-        compare: Vec<String>,
-        /// Ask a --compare agent under another profile than the chat's without asking first
-        #[arg(short, long)]
-        yes: bool,
-        /// Don't wait for the answer
-        #[arg(long)]
-        no_wait: bool,
-        #[arg(long)]
-        json: bool,
-    },
+    New(NewArgs),
     /// One question, one answer on standard output; nothing is kept unless --keep. Standard
     /// input is context: `git diff | ptyro chat ask "review this"`
     Ask {
@@ -70,6 +74,10 @@ pub enum ChatCmd {
         /// Seconds to wait for the answer
         #[arg(long, default_value_t = 600)]
         timeout: u64,
+        /// Don't read standard input as context (in a loop, or under a program that keeps it
+        /// open)
+        #[arg(long)]
+        no_stdin: bool,
     },
     /// Chats, pinned first, then the newest
     #[command(alias = "list")]
@@ -377,23 +385,9 @@ pub enum ChatCmd {
     },
 }
 
-pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, words: Vec<String>) -> Result<i32, Error> {
-    let cmd = cmd.unwrap_or(ChatCmd::New {
-        prompt: words,
-        agent: None,
-        preset: None,
-        workspace: None,
-        title: None,
-        incognito: false,
-        keep: false,
-        folders: Vec::new(),
-        compare: Vec::new(),
-        yes: false,
-        no_wait: false,
-        json: false,
-    });
-    match cmd {
-        ChatCmd::New {
+pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, plain: NewArgs) -> Result<i32, Error> {
+    match cmd.unwrap_or(ChatCmd::New(plain)) {
+        ChatCmd::New(NewArgs {
             prompt,
             agent,
             preset,
@@ -406,7 +400,7 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, words: Vec<String>) -> Result<
             yes,
             no_wait,
             json,
-        } => {
+        }) => {
             let text = words_or_stdin(prompt)?;
             // Neither: as `[chat] incognito` says.
             let incognito = (incognito || keep).then_some(incognito);
@@ -514,8 +508,13 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, words: Vec<String>) -> Result<
             }
             answered.map(|ok| if ok { 0 } else { 1 })
         }
-        ChatCmd::Ask { question, keep, agent, preset, timeout } => {
-            ask(ctx, question.join(" "), keep, agent, preset, timeout).await
+        ChatCmd::Ask { question, keep, agent, preset, timeout, no_stdin } => {
+            let context = if no_stdin || std::io::stdin().is_terminal() {
+                String::new()
+            } else {
+                read_stdin()?
+            };
+            ask(ctx, with_context(question.join(" "), &context), keep, agent, preset, timeout).await
         }
         ChatCmd::Ls { workspace, pinned, archived, machine, limit, imported, json } => {
             ls(ctx, workspace, pinned, archived, machine, limit, imported, json).await
@@ -652,13 +651,34 @@ fn chat_of(r: Reply) -> Result<ChatInfo, Error> {
 /// The words, or standard input when they are `-` (or none, on a pipe).
 fn words_or_stdin(words: Vec<String>) -> Result<String, Error> {
     if words.as_slice() == ["-"] || (words.is_empty() && !std::io::stdin().is_terminal()) {
-        let mut s = String::new();
-        std::io::stdin()
-            .read_to_string(&mut s)
-            .map_err(|e| Error::invalid(format!("standard input: {e}")))?;
-        return Ok(s);
+        return read_stdin();
     }
     Ok(words.join(" "))
+}
+
+/// Standard input, all of it; bytes that aren't UTF-8 (a Latin-1 file in a diff) become `�`
+/// rather than losing the whole of it.
+fn read_stdin() -> Result<String, Error> {
+    let mut b = Vec::new();
+    std::io::stdin()
+        .read_to_end(&mut b)
+        .map_err(|e| Error::invalid(format!("standard input: {e}")))?;
+    Ok(String::from_utf8_lossy(&b).into_owned())
+}
+
+/// A question with what was piped in after it, fenced by more backticks than it holds in a row
+/// (so a diff of Markdown keeps its shape).
+fn with_context(question: String, context: &str) -> String {
+    if context.trim().is_empty() {
+        return question;
+    }
+    let (mut run, mut most) = (0, 0);
+    for c in context.chars() {
+        run = if c == '`' { run + 1 } else { 0 };
+        most = most.max(run);
+    }
+    let fence = "`".repeat(most.max(2) + 1);
+    format!("{question}\n\n{fence}\n{}\n{fence}", context.trim_end())
 }
 
 /// A folder as typed, made full against this directory (`.`, `notes`); `~` and full paths are
@@ -816,14 +836,7 @@ async fn ask(
     preset: Option<String>,
     timeout: u64,
 ) -> Result<i32, Error> {
-    let mut text = question;
-    if !std::io::stdin().is_terminal() {
-        let mut ctxt = String::new();
-        let _ = std::io::stdin().read_to_string(&mut ctxt);
-        if !ctxt.trim().is_empty() {
-            text = format!("{text}\n\n```\n{}\n```", ctxt.trim_end());
-        }
-    }
+    let text = question;
     let mut c = ctx.connect(true).await?;
     // Incognito unless kept (SPEC §22.9): nothing of the question or its answer is written.
     let info = chat_of(
@@ -1686,6 +1699,14 @@ async fn each(
 #[cfg(test)]
 mod tests {
     use super::SearchArgs;
+
+    #[test]
+    fn piped_context_is_fenced_past_its_own_backticks() {
+        let q = super::with_context("review".into(), "a\n```rust\nx\n```\n");
+        assert_eq!(q, "review\n\n````\na\n```rust\nx\n```\n````");
+        assert_eq!(super::with_context("q".into(), "  \n"), "q");
+        assert_eq!(super::with_context("q".into(), "plain"), "q\n\n```\nplain\n```");
+    }
 
     fn args() -> SearchArgs {
         SearchArgs {

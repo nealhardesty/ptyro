@@ -859,7 +859,12 @@ impl App {
             }
             ("folder" | "folders", Some(_)) => self.chat_action("chat.folder"),
             ("compare", c) => self.chat_compare_slash(c, arg),
-            (_, None) => need(self),
+            // A command of a chat's own, before there is one; anything else falls to the end.
+            (
+                "pick" | "task" | "retry" | "edit" | "fork" | "side" | "keep" | "branch" | "cite"
+                | "export" | "agent" | "title",
+                None,
+            ) => need(self),
             ("pick", Some(_)) => self.chat_action("chat.pick"),
             ("task", Some(c)) => match TaskArgs::parse(arg) {
                 Ok(t) => self.chat_task(c, t),
@@ -914,7 +919,17 @@ impl App {
                     confirmed: false,
                 },
             ),
-            (other, _) => self.toast(format!("/{other}: not a command (/help lists them)")),
+            // Not lost: back in the composer, to fix or to send as a message.
+            (other, _) => {
+                if let Some(ChatPanel::View(v)) = &mut self.chat_panel {
+                    v.set_draft(text.to_owned());
+                    let d = v.draft.clone();
+                    v.view.apply(v.view.rev, false, Vec::new(), d);
+                }
+                self.toast(format!(
+                    "/{other}: not a command (/help lists them; start with // to send it as a message)"
+                ));
+            }
         }
         true
     }
@@ -1429,7 +1444,10 @@ impl App {
             }
             _ if crate::app::is_newline_key(&key) => v.edit(|e| e.insert("\n")),
             KeyCode::Enter if v.sending => self.toast("one moment: the last message is on its way"),
-            KeyCode::Enter if v.draft.trim_start().starts_with('/') => {
+            KeyCode::Enter
+                if v.draft.trim_start().starts_with('/')
+                    && ptyro_core::chats::slash_message(&v.draft).is_none() =>
+            {
                 let text = std::mem::take(&mut v.draft);
                 let chat = v.id.clone();
                 v.view.apply(v.view.rev, false, Vec::new(), String::new());
@@ -1439,6 +1457,7 @@ impl App {
             }
             KeyCode::Enter => {
                 let text = std::mem::take(&mut v.draft);
+                let text = ptyro_core::chats::slash_message(&text).unwrap_or(text);
                 if !text.trim().is_empty() {
                     v.sending = true;
                     match v.id.clone() {

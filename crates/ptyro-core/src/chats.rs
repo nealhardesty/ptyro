@@ -557,6 +557,19 @@ pub fn tilde(path: &str) -> String {
     }
 }
 
+/// A composer line that starts with `/` but is a message, not a command (§22.12): `//` sends
+/// the rest with one `/`, and a path (`/etc/hosts — what is this?`) is a message as it is.
+/// `None`: a command (or no slash at all).
+pub fn slash_message(text: &str) -> Option<String> {
+    let t = text.trim_start();
+    let rest = t.strip_prefix('/')?;
+    if rest.starts_with('/') {
+        return Some(rest.to_owned());
+    }
+    let word = rest.split_whitespace().next().unwrap_or("");
+    word.contains('/').then(|| text.to_owned())
+}
+
 /// The first line of a message, as a title of last resort (§22.8).
 pub fn first_line_title(text: &str) -> String {
     let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
@@ -576,6 +589,16 @@ pub fn clean_title(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_slash_that_is_a_message() {
+        use super::slash_message as m;
+        assert_eq!(m("/retry"), None);
+        assert_eq!(m("/agent codex"), None);
+        assert_eq!(m("//retry is a word"), Some("/retry is a word".into()));
+        assert_eq!(m("/etc/hosts: what is it?"), Some("/etc/hosts: what is it?".into()));
+        assert_eq!(m("plain"), None);
+    }
+
     use super::*;
 
     fn n(id: &str, body: ChatBody) -> ChatNode {
