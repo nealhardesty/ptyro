@@ -402,3 +402,36 @@ fn a_compare_of_one_agent_twice_is_refused_before_a_chat_is_made() {
     }
     assert!(w.json(&["chat", "ls", "--json"]).as_array().unwrap().is_empty(), "no chat made");
 }
+
+#[test]
+fn an_opencode_chat_answers_alone_and_in_a_compare() {
+    // Its server says only to who is listening: a prompt sent before ptyro was left the chat
+    // answering for good (a compare waited out the helper's 10 minutes).
+    let w = World::new(&[]);
+    let t = Instant::now();
+    let out =
+        w.json(&["chat", "new", "--agent", "opencode", "--json", "--timeout", "30", "on its own"]);
+    let texts = |v: &Value| -> Vec<String> {
+        v["answers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["text"].as_str().unwrap_or("").to_owned())
+            .collect()
+    };
+    assert!(texts(&out).iter().any(|t| t.contains("on its own")), "{out}");
+    let out = w.json(&[
+        "chat",
+        "new",
+        "--compare",
+        "claude,opencode",
+        "--json",
+        "--timeout",
+        "30",
+        "both of you",
+    ]);
+    let answered = texts(&out);
+    assert_eq!(answered.len(), 2, "{out}");
+    assert!(answered.iter().all(|t| t.contains("both of you")), "{out}");
+    assert!(t.elapsed() < Duration::from_secs(30), "took {:?}", t.elapsed());
+}

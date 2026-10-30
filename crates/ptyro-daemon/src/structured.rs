@@ -411,10 +411,12 @@ async fn driver_loop(session: Arc<Session>, st: Arc<Structured>, r: Resume) {
     let (http_tx, mut http_rx) = mpsc::unbounded_channel::<(u32, u16, String)>();
     let (sse_tx, mut sse_rx) = mpsc::unbounded_channel::<String>();
     let opencode = st.protocol == "opencode";
+    // OpenCode tells only who is listening: its requests wait until `/event` is.
+    let (sse_up, sse_ready) = tokio::sync::watch::channel(false);
     if opencode && let Some((port, pw)) = st.http.clone() {
-        tokio::spawn(follow_sse(Arc::clone(&session), port, pw, sse_tx));
+        tokio::spawn(follow_sse(Arc::clone(&session), port, pw, sse_tx, sse_up));
     }
-    let mut ctx = Ctx { session: &session, st: &st, http_tx };
+    let mut ctx = Ctx { session: &session, st: &st, http_tx, sse_ready };
     if r.fresh {
         let fx = driver.start();
         ctx.apply(fx, &mut stdin).await;
@@ -489,6 +491,8 @@ struct Ctx<'a> {
     session: &'a Arc<Session>,
     st: &'a Arc<Structured>,
     http_tx: mpsc::UnboundedSender<(u32, u16, String)>,
+    /// OpenCode's event stream is connected (its first event has come).
+    sse_ready: tokio::sync::watch::Receiver<bool>,
 }
 
 impl Ctx<'_> {
@@ -508,7 +512,14 @@ impl Ctx<'_> {
                 Effect::Http { method, path, body, tag } => {
                     let Some((port, pw)) = self.st.http.clone() else { continue };
                     let tx = self.http_tx.clone();
+                    let mut ready = self.sse_ready.clone();
                     tokio::spawn(async move {
+                        // Not before the event stream: what a turn says before it listens is
+                        // lost, its end too, and the chat would be answering for good. (Not
+                        // for ever either: a server that never streams still gets the request.)
+                        let _ =
+                            tokio::time::timeout(Duration::from_secs(5), ready.wait_for(|r| *r))
+                                .await;
                         let (code, text) = http(port, &pw, method, &path, body).await;
                         let _ = tx.send((tag, code, text));
                     });
@@ -562,8 +573,10 @@ async fn follow_sse(
     port: u16,
     password: String,
     tx: mpsc::UnboundedSender<String>,
+    up: tokio::sync::watch::Sender<bool>,
 ) {
     while session.is_live() {
+        up.send_replace(false);
         if let Ok(mut sock) = TcpStream::connect(("127.0.0.1", port)).await {
             let req = format!(
                 "GET /event HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Basic {}\r\nAccept: text/event-stream\r\n\r\n",
@@ -582,11 +595,12 @@ async fn follow_sse(
                     let l = line.trim_end_matches(['\r', '\n']);
                     if let Some(d) = l.strip_prefix("data:") {
                         data.push_str(d.trim_start());
-                    } else if l.is_empty()
-                        && !data.is_empty()
-                        && tx.send(std::mem::take(&mut data)).is_err()
-                    {
-                        return;
+                    } else if l.is_empty() && !data.is_empty() {
+                        // The first event (`server.connected`): it is listening now.
+                        up.send_replace(true);
+                        if tx.send(std::mem::take(&mut data)).is_err() {
+                            return;
+                        }
                     }
                 }
             }
