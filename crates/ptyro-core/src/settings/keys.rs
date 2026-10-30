@@ -40,7 +40,7 @@ impl Standing {
 pub struct Binding {
     /// What `[keys]` calls it: `d`, `nav:j`, `global:M-1`. The name every change uses.
     pub name: String,
-    /// `prefix`, `nav` or `global`.
+    /// `prefix`, `nav`, `chat`, `chatlist` or `global`.
     pub table: &'static str,
     /// When it works, in words.
     pub when: &'static str,
@@ -61,13 +61,10 @@ pub struct Binding {
 
 /// `(table, spec)` of a `[keys]` name.
 fn table_of(name: &str) -> (&'static str, &str) {
-    if let Some(s) = name.strip_prefix("global:") {
-        ("global", s)
-    } else if let Some(s) = name.strip_prefix("nav:") {
-        ("nav", s)
-    } else {
-        ("prefix", name)
-    }
+    ["global", "nav", "chat", "chatlist"]
+        .into_iter()
+        .find_map(|t| name.strip_prefix(t).and_then(|s| s.strip_prefix(':')).map(|s| (t, s)))
+        .unwrap_or(("prefix", name))
 }
 
 /// When a table's keys work.
@@ -75,6 +72,8 @@ pub fn when(table: &str) -> &'static str {
     match table {
         "nav" => "in the sidebar",
         "global" => "anywhere",
+        "chat" => "in a chat",
+        "chatlist" => "in the chat list",
         _ => "after the prefix",
     }
 }
@@ -90,8 +89,7 @@ pub fn slot(name: &str) -> (&'static str, String) {
 /// The `[keys]` name for `key` in `table`.
 pub fn name_in(table: &str, key: &str) -> String {
     match table {
-        "nav" => format!("nav:{key}"),
-        "global" => format!("global:{key}"),
+        "nav" | "global" | "chat" | "chatlist" => format!("{table}:{key}"),
         _ => key.to_owned(),
     }
 }
@@ -167,7 +165,7 @@ pub fn bindings(root: &Value, lk: &Lookups) -> Vec<Binding> {
         let a = if b.action == "none" { b.default.as_deref().unwrap_or("") } else { &b.action };
         lk.actions.iter().position(|(id, _)| id == word(a)).unwrap_or(usize::MAX)
     };
-    let tables = ["prefix", "nav", "global"];
+    let tables = ["prefix", "nav", "chat", "chatlist", "global"];
     out.sort_by_cached_key(|b| {
         (tables.iter().position(|t| *t == b.table), order(b), b.fixed, b.key.clone())
     });

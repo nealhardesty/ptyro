@@ -455,7 +455,8 @@ pub const RESERVED_SECTIONS: &[(&str, &str)] = &[];
 pub struct Config {
     pub ui: Ui,
     pub daemon: Daemon,
-    /// Key overrides: `"key" = "action [args]"`, `"global:key" = …`, `"nav:key" = …`; the value
+    /// Key overrides: `"key" = "action [args]"`, `"global:key" = …`, `"nav:key" = …` (also
+    /// `chat:` in a chat and `chatlist:` in the chat list); the value
     /// `"none"` unbinds a default.
     pub keys: BTreeMap<String, String>,
     pub themes: BTreeMap<String, ThemeDef>,
@@ -1627,8 +1628,10 @@ impl Config {
             return Err("daemon.scrollback_lines: at most 1000000".into());
         }
         for key in self.keys.keys() {
-            let spec =
-                key.strip_prefix("global:").or_else(|| key.strip_prefix("nav:")).unwrap_or(key);
+            let spec = ["global:", "nav:", "chat:", "chatlist:"]
+                .iter()
+                .find_map(|t| key.strip_prefix(t))
+                .unwrap_or(key);
             parse_key(spec).map_err(|e| format!("keys.{key:?}: {e}"))?;
         }
         for (name, p) in &self.profiles {
