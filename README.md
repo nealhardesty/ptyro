@@ -357,6 +357,9 @@ ptyro chat --folder ~/notes "what's left on the launch list?"    # it reads that
 ptyro chat presets                          # what each tool preset lets a chat use
 ptyro chat task @last --project myrepo      # an agent carries the chat out in a new worktree
 ptyro chat search --meaning "pets"          # by what messages are about, not their words (opt-in, below)
+ptyro chat compare @last --agents claude,codex,gemini "which is faster?"   # each answers, as a branch
+ptyro chat pick @last 4k2m9x01              # keep codex's answer: codex takes the next message
+ptyro chat import                           # your Claude Code, Codex and Gemini sessions, as chats
 ```
 
 In the TUI every workspace has a **CHATS** section in the sidebar; `C-q m` starts a chat and
@@ -374,6 +377,16 @@ searches every chat; `Tab` (or `C-i`) makes a new chat incognito (nothing kept).
 chats itself (`[chat] history_tool`), only those of its own profile unless `history_scope` says
 otherwise. Chats live in their own file, `chat.db` (`ptyro doctor` checks it). Settings:
 `[chat]` in the config (the Chat section of the settings panel).
+
+**Ask several agents** (`chat compare`, `/compare codex gemini` in a chat, Ask several on a new
+chat's page): each answers the same message as a branch, `‹ 2/3 codex ›`, the chat's own agent in
+its own conversation and the others told the conversation so far. `chat pick` (`/pick`, Keep this
+answer) keeps one: its agent takes the next message. **Your agents' own histories** come in with
+`chat import` (`chat.import` in the TUI, ⇣ on the web's Chats page): every profile's Claude Code,
+Codex and Gemini sessions become read-only chats (`⇣`, "imported from claude · ~/repo"), searchable
+by keyword and meaning; a message to one continues it as a fork; importing again adds only what is
+new. `[chat] import = true` keeps doing it every 10 minutes (off by default: it copies your coding
+sessions' text into `chat.db`). OpenCode's history isn't imported yet.
 
 **Meaning search** is opt-in: `[chat] meaning = true` (the settings panel's Chat section, or say
 yes when `chat search --meaning`, `by:meaning` in the TUI's or web's search box, offers it) downloads

@@ -73,6 +73,10 @@ Conventions:
 | `ptyro chat keep CHAT` | keep a side chat as a chat of its own |
 | `ptyro chat search QUERY… [--chat C] [-w WS] [--agent A] [--pinned] [--archived] [--here] [--meaning\|--words] [-n N] [--json]` | search every chat's messages and titles, on every linked machine (`--here`: this one): words, `"a phrase"`, `prefix*` (3 letters), `-word`, `agent:codex`, `since:7d`, `by:meaning`/`by:words`; each hit's citation (`c:7f3k/node`) and snippet. With `[chat] meaning` on, messages near in meaning are merged in (`≈`); `--meaning` only those (off: offers to switch it on), `--words` none of them |
 | `ptyro chat find [--agent A] QUESTION…` | ask your chats: an agent with only the history tools searches them and answers, citing; nothing of it is kept |
+| `ptyro chat compare CHAT [--agents A,B…] [--no-wait] [--json] [TEXT…]` | ask several agents one question (TEXT, or the last message again of those that haven't answered it; default every installed one): each answer is a branch of the chat labelled with its agent (`‹ 2/3 codex ›`), printed under its agent once all are in; `chat new --compare A,B QUESTION` asks a new chat's first message so |
+| `ptyro chat pick CHAT [NODE]` | keep an answer: show its branch and switch the chat to the agent that wrote it (the next message goes there) |
+| `ptyro chat import [--agent claude\|codex\|gemini\|all] [--profile P] [--since 30d] [--dry-run] [--json]` | import your agents' own histories (every profile's Claude Code, Codex and Gemini sessions) as read-only chats (`⇣`), searchable; again: only what is new. A message to one continues it as a fork. `[chat] import = true` keeps doing it every 10 minutes |
+| `ptyro chat ls --imported` | only the imported chats |
 | `ptyro chat new --incognito …` / `chat ask` | keep nothing: not saved, not searchable, gone with its agent (`ask` is always incognito unless `--keep`) |
 
 ## Scripting

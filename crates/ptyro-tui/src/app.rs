@@ -328,6 +328,8 @@ pub enum PromptKind {
     ChatFindIn,
     /// A question for `chat find`.
     ChatFind,
+    /// Which agents a chat's last message is asked of (`chat.compare`).
+    ChatCompare(String),
 }
 
 /// A key that starts a new line in a text box instead of sending it (UX1.26): Shift+Enter
@@ -401,6 +403,8 @@ pub enum Confirmed {
     Quit,
     /// Switch meaning search on (SPEC §22.10): `chat.meaning = true` in the config.
     MeaningOn,
+    /// Import the agents' own histories as chats (SPEC §22.10).
+    ChatImport,
 }
 
 #[derive(Debug, Clone)]
@@ -470,6 +474,8 @@ pub enum Pending {
     ChatHits(String),
     /// A chat's Markdown, to write here.
     ChatExport(std::path::PathBuf),
+    /// `chat.import`: its report becomes a toast.
+    ChatImport,
     /// What quick-new would start in this workspace (UX3.2), for its label.
     Again(String),
     /// Wizard title: the profile a spawn would get and why.
@@ -1872,7 +1878,17 @@ impl App {
             (Pending::ChatMade(text) | Pending::ChatSent(text), Err(e)) => {
                 self.chat_sent(text, Some(e.message))
             }
+            // An imported chat carries on as a fork: the view goes there.
+            (Pending::ChatSent(text), Ok(Reply::Chat { info })) => {
+                self.chat_forked(info);
+                self.chat_sent(text, None)
+            }
             (Pending::ChatSent(text), Ok(_)) => self.chat_sent(text, None),
+            (Pending::ChatImport, Ok(Reply::ChatImported { report })) => {
+                self.toast(report.summary());
+                self.refresh_chats();
+            }
+            (Pending::ChatImport, Err(e)) => self.toast_err(format!("import: {}", e.message)),
             (Pending::ChatOpen, Ok(Reply::Chat { info })) => {
                 let id = info.id.clone();
                 self.chat_updated(info);
@@ -4089,7 +4105,9 @@ impl App {
                 v
             }
             Row::Chat(_) => crate::chats::CHAT_ACTIONS.to_vec(),
-            Row::Chats(_) | Row::ChatNew(_) | Row::ChatAll(_) => vec!["chat.new", "chat.list"],
+            Row::Chats(_) | Row::ChatNew(_) | Row::ChatAll(_) => {
+                vec!["chat.new", "chat.list", "chat.import"]
+            }
             Row::Group(_) => Vec::new(),
         }
     }
@@ -5149,6 +5167,13 @@ impl App {
         match action {
             Confirmed::Send(req, toast) => self.request(Pending::Done(toast), *req),
             Confirmed::MeaningOn => self.meaning_on(),
+            Confirmed::ChatImport => {
+                self.toast("importing your agents' histories…");
+                self.request(
+                    Pending::ChatImport,
+                    Request::ChatImport { agent: None, profile: None, since: None, dry_run: false },
+                );
+            }
             Confirmed::Quit => {
                 self.quitting = true;
                 self.toast("stopping ptyro…");
@@ -5542,6 +5567,7 @@ impl App {
                 }
             }
             PromptKind::ChatFindIn => self.find_in_chat(text.trim()),
+            PromptKind::ChatCompare(chat) => self.chat_compare(chat, text.trim()),
             PromptKind::ChatFind => {
                 if !text.trim().is_empty() {
                     self.request(

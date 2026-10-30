@@ -51,7 +51,10 @@ enum Step {
 }
 
 fn plan(text: &str, n: u64) -> Vec<Step> {
-    let (cmd, rest) = text.split_once(' ').unwrap_or((text, ""));
+    // A seeded prompt's command is the person's message after the seed block (the answer still
+    // echoes all of it).
+    let msg = text.rsplit_once("</conversation>\n\n").map_or(text, |(_, m)| m);
+    let (cmd, rest) = msg.split_once(' ').unwrap_or((msg, ""));
     let id = format!("tool_{n}");
     match cmd {
         "work" => {

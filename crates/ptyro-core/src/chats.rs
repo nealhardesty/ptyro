@@ -77,6 +77,112 @@ pub struct ChatInfo {
     /// Its preset gives the agent a shell (shown with ⚠, like a `dangerous` session).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub shell: bool,
+    /// Several agents are answering one message (CHAT5, SPEC §22.7): how far each has got.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comparing: Option<ChatCompare>,
+    /// Imported from an agent's own history (CHAT5, SPEC §22.10): `claude:<session id>`. Such a
+    /// chat is read-only: a message sent to it continues it as a fork.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// The folder that session ran in, when it said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_dir: Option<String>,
+}
+
+/// What an import of the agents' own histories did (SPEC §22.10), per agent and profile.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportReport {
+    /// Counted only: nothing was written.
+    #[serde(default)]
+    pub dry_run: bool,
+    pub sources: Vec<ImportSource>,
+    /// What was left out and why (an agent whose format isn't known, a folder missing).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+/// One agent's history under one profile.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportSource {
+    pub agent: String,
+    pub profile: String,
+    /// Where its sessions are.
+    pub dir: String,
+    /// Sessions that became new chats, and chats that gained messages.
+    pub new: u32,
+    pub grown: u32,
+    /// Sessions already imported as they are, and ones left out (ptyro's own chats and
+    /// summaries, a chat you deleted, nothing to say, older than `since`).
+    pub unchanged: u32,
+    pub skipped: u32,
+    /// Messages (and tool calls) added.
+    pub messages: u64,
+}
+
+impl ImportReport {
+    /// `imported 3 new chats, 2 grew (41 messages)` (or `would import …`, dry).
+    pub fn summary(&self) -> String {
+        let (new, grown, msgs) = self
+            .sources
+            .iter()
+            .fold((0, 0, 0), |(n, g, m), s| (n + s.new, g + s.grown, m + s.messages));
+        if new == 0 && grown == 0 {
+            return if self.dry_run {
+                "nothing new to import".into()
+            } else {
+                "nothing new: every session is imported".into()
+            };
+        }
+        let verb = if self.dry_run { "would import" } else { "imported" };
+        let s = if new == 1 { "" } else { "s" };
+        let grew = if self.dry_run { "would grow" } else { "grew" };
+        format!("{verb} {new} new chat{s}, {grown} {grew} ({msgs} messages)")
+    }
+}
+
+/// A compare under way (SPEC §22.7): the message every agent answers, and each one's state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatCompare {
+    /// The person's message they answer.
+    pub node: String,
+    pub agents: Vec<CompareAgent>,
+}
+
+/// One agent of a compare.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompareAgent {
+    /// `agent` or `agent@profile`.
+    pub agent: String,
+    /// `asking`, `done`, `failed` or `stopped`.
+    pub state: String,
+    /// Why it failed, or what it was told (a tool it asked for was denied).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
+}
+
+impl ChatCompare {
+    /// `comparing: claude ✓ · codex … · gemini ✗ not logged in` (`compared:` once all are in).
+    pub fn line(&self) -> String {
+        let busy = self.agents.iter().any(|a| a.state == "asking");
+        let each: Vec<String> = self
+            .agents
+            .iter()
+            .map(|a| {
+                let mark = match a.state.as_str() {
+                    "done" => "✓",
+                    "failed" => "✗",
+                    "stopped" => "⊘",
+                    _ => "…",
+                };
+                if a.note.is_empty() {
+                    format!("{} {mark}", a.agent)
+                } else {
+                    format!("{} {mark} {}", a.agent, a.note)
+                }
+            })
+            .collect();
+        format!("{}: {}", if busy { "comparing" } else { "compared" }, each.join(" · "))
+    }
 }
 
 /// A tool preset as clients list it (`ChatPresets`, SPEC §22.13).
@@ -114,6 +220,16 @@ impl ChatInfo {
         s
     }
 
+    /// The header's note for an imported chat: `imported from claude · ~/repo`.
+    pub fn imported_from(&self) -> Option<String> {
+        let src = self.source.as_deref()?;
+        let agent = src.split(':').next().unwrap_or(src);
+        Some(match self.source_dir.as_deref() {
+            Some(d) => format!("imported from {agent} · {}", tilde(d)),
+            None => format!("imported from {agent}"),
+        })
+    }
+
     /// `c:7f3k`, or `laptop2:c:7f3k` for another machine's.
     pub fn addr(&self) -> String {
         match &self.machine {
@@ -134,6 +250,7 @@ impl ChatInfo {
             _ if self.incognito => "◌",
             _ if self.pinned => "★",
             _ if self.side_of.is_some() => "↳",
+            _ if self.source.is_some() => "⇣",
             _ => " ",
         }
     }
@@ -167,6 +284,22 @@ pub struct ChatSiblings {
     pub at: u32,
     pub of: u32,
     pub ids: Vec<String>,
+    /// The agent that wrote each sibling's branch, in `ids`' order (`agent`, or
+    /// `agent@profile` off the default profile; empty: not known). CHAT5's compare.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<String>,
+}
+
+impl ChatSiblings {
+    /// The shown sibling's agent, when the siblings are not all one agent's (a compare): the
+    /// navigator then reads `‹ 2/3 codex ›`.
+    pub fn label(&self) -> Option<&str> {
+        let first = self.agents.first()?;
+        if self.agents.iter().all(|a| a == first) {
+            return None;
+        }
+        self.agents.get(self.at as usize - 1).map(String::as_str).filter(|a| !a.is_empty())
+    }
 }
 
 /// One search hit (SPEC §22.10): a message (or, with no `node`, a title) of a chat.
@@ -400,6 +533,28 @@ pub fn seed_block(branch: &[ChatNode], budget_tokens: usize) -> Option<(String, 
     s.push_str(&lines.join("\n"));
     s.push_str("\n</conversation>\n\n");
     Some((s, carried))
+}
+
+/// How an agent is named beside an answer (a compare's siblings): `codex`, or `codex@work` off
+/// the default profile.
+pub fn agent_label(agent: &str, profile: &str) -> String {
+    if profile.is_empty() || profile == crate::model::DEFAULT_PROFILE {
+        agent.to_owned()
+    } else {
+        format!("{agent}@{profile}")
+    }
+}
+
+/// `path` with this user's home as `~`.
+pub fn tilde(path: &str) -> String {
+    match std::env::var("HOME") {
+        Ok(h) if !h.is_empty() && h != "/" => match path.strip_prefix(h.as_str()) {
+            Some("") => "~".into(),
+            Some(rest) if rest.starts_with('/') => format!("~{rest}"),
+            _ => path.to_owned(),
+        },
+        _ => path.to_owned(),
+    }
 }
 
 /// The first line of a message, as a title of last resort (§22.8).

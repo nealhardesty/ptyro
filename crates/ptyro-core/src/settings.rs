@@ -731,6 +731,7 @@ pub const SETTINGS: &[Setting] = &[
     s("chat.daily_cap", "chat", int(0, 100_000), "The most titles made for each profile in a day. 0 makes none (the first line is used).").unit("a day").adv(),
     s("chat.index_tools", "chat", Kind::Bool, "Also make what tools returned searchable (2 KB of it a message), not just their titles.").adv(),
     s("chat.meaning", "chat", Kind::Bool, "Meaning search: also find messages by what they are about, not only by their words (marked ≈). Switching it on downloads a small model once (potion-base-8M, 31 MB, from Hugging Face) into ptyro's data folder; your chats never leave this machine.").also("semantic embeddings ai similar search"),
+    s("chat.import", "chat", Kind::Bool, "Keep importing your agents' own histories (Claude Code, Codex and Gemini sessions, every profile's) as read-only chats, checking every 10 minutes for new and grown ones. Off by default: it copies your coding sessions' text into chat.db, where chat search and your chats' history tools find it. `ptyro chat import` does it once.").also("history claude codex gemini sessions sync"),
     s("chat.notify", "chat", pick(CHAT_NOTIFY), "When a chat tells you something."),
     s("chat.archive_purge_days", "chat", int(0, 36_500), "Delete archived chats after this many days. 0 keeps them.").unit("days"),
     s("chat.tools.*.web", "chat", Kind::Bool, "The agent's own web search and page fetch."),

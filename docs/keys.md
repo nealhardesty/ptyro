@@ -50,7 +50,7 @@ action by name.
 | `S` | change sets: members as swimlanes, gates, issues, the ledger |
 | `t` | structured session: chat view ⇄ terminal view |
 | `m` | a new chat with your agent, in this workspace, over the panes: type, `⏎` sends, `C-o` picks the agent and its tools (SPEC §22) |
-| `g` | the chat list: this workspace's chats by day (`Tab`: every workspace's), `/` searches (titles at once, every message from 3 letters on, on every machine), `⏎` opens (a message hit: at that message), `*` pin, `x` archive, `X` delete, `,` title, `e` export, `A` archived ones |
+| `g` | the chat list: this workspace's chats by day (`Tab`: every workspace's), `/` searches (titles at once, every message from 3 letters on, on every machine), `⏎` opens (a message hit: at that message), `*` pin, `x` archive, `X` delete, `,` title, `e` export, `A` archived ones, `I` imports your agents' own histories (asks first) |
 | `C-g` | search every chat: the chat list, every workspace and machine, typing its search |
 | `j` / `k` (or `Down` / `Up`) | show the next / previous session of the workspace here, in sidebar order, across projects (quick terminals are skipped) |
 | `1` … `9` | show the session numbered N in the sidebar here |
@@ -184,7 +184,7 @@ its folders.
 
 | Key | Does |
 |---|---|
-| `Alt-←` / `Alt-→` | where a retry or an edit made another branch (`‹ 2/3 ›`): the other answers (or messages), in turn |
+| `Alt-←` / `Alt-→` | where a retry, an edit or a compare made another branch (`‹ 2/3 ›`, `‹ 2/3 codex ›`): the other answers (or messages), in turn |
 | `Ctrl-F` | find in this chat; again: the next match; `Esc` clears it |
 | `Tab` or `Ctrl-I` | in a new chat, before its first message: incognito (nothing kept, it ends with its agent) |
 | `Ctrl-O` | in a new chat: pick the agent and its tools |
@@ -194,7 +194,9 @@ one), `/fork` (from the end or a message), `/side [question]`, `/keep`, `/branch
 `/tools NAME` (none: the presets, each with what it lets a chat use), `/folder DIR` (one more
 folder it may read; `/folder none` takes them away; in a new chat, before its first message, too),
 `/task [PROJECT]` (an agent carries the chat out in a new worktree; it asks which project when it
-can't tell), `/title TEXT`, `/search WORDS`, `/find QUESTION`, `/export`, `/incognito`, `/cite`
+can't tell), `/compare [AGENTS…] [question]` (several agents answer, each a branch named by its
+agent; with no question the last message again; in a new chat `/compare claude codex` sends its
+first message to each), `/pick` (keep the answer shown: its agent takes the next message), `/title TEXT`, `/search WORDS`, `/find QUESTION`, `/export`, `/incognito`, `/cite`
 (open a citation), `/help`. Each is also an action in the palette (`chat.*`).
 
 ## Runs (`Ctrl-Q O`) and change sets (`Ctrl-Q S`)

@@ -1088,9 +1088,9 @@ Agentastic Companion (iPhone + Mac host, E2E, TestFlight) · Nimbalyst Mobile (E
 - **Not verified [U]:** aichat, mods, oterm, Elia, Msty, Cursor chat history, Aider, the Gemini app, the ChatGPT desktop app.
 
 #### H6. The agents' own history (what ptyro could import, CHAT5)
-- **Claude Code [S]:** `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`, append-only; lines carry `type`, `uuid`, `parentUuid`, `sessionId`, `cwd`, `timestamp`. No verified title field [U].
-- **Codex [V for archive, U for path]:** JSONL rollouts, moved when archived; `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` is from memory [U].
-- **Gemini CLI [S]:** `~/.gemini/tmp/<project>/chats/`, one JSON per session; `--list-sessions`, `--resume latest|index|id` [V].
+- **Claude Code [V 2026-10-30]:** `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`, append-only; lines carry `type`, `uuid`, `parentUuid`, `sessionId`, `cwd`, `timestamp`. Titles are lines of their own: `custom-title`, `ai-title`, older `summary` (SPEC §20.8).
+- **Codex [V 2026-10-30]:** JSONL rollouts at `~/.codex/sessions/YYYY/MM/DD/rollout-<time>-<id>.jsonl`, moved to `archived_sessions/` when archived; titles in `session_index.jsonl` (`thread_name`) (SPEC §20.8).
+- **Gemini CLI [S 2026-10-30, 0.66.0's source]:** `~/.gemini/tmp/<project>/chats/session-*.jsonl` (JSONL with `$rewindTo`/`$patch`/`$set` records since 0.66; a legacy `.json` before); `--list-sessions`, `--resume latest|index|id` [V].
 - **ACP [V]:** `session/list` (capability `sessionCapabilities.list`; `cwd`, `cursor`), `session_info_update` (`title`, `updatedAt`), `session/load` (replays), `session/resume` (reconnects without replay; RFD completed 2026-04-22 [S/V]); `session/fork` is unstable and not in the spec yet [S].
 - **Ideas:** → R-CHAT-12. The point of ADR 19 is that ptyro does not depend on any of these.
 
@@ -2845,9 +2845,9 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 | R-CHAT-07 | **Keyword search**: FTS5 over typed text and tool titles, user text weighted above answers, snippets, filters | `llm logs -q`, Zed in-thread search | CHAT3 | M | ★★★ | → CHAT3 |
 | R-CHAT-08 | **Smart search through the agent**: `chat_search`, `chat_read` and `chat_list` as `ptyro mcp` tools, so any chat can look up its own past; scoped to the chat's **profile** so an account's history never reaches another's model | owner (2026-10-29); Claude chat search | CHAT3 | M | ★★★ | → CHAT3 |
 | R-CHAT-09 | **Tool presets** (`chat` = web search and fetch only in an empty directory, `read`, `none`, yours); web search is each agent's own tool, no MCP needed; tools the agent can't restrict show `best effort` | owner; all four agents ship search [V/S 2026-10-29] | CHAT4 | M | ★★★ | → CHAT4 |
-| R-CHAT-10 | **Ask several agents one question**, compare, keep the winner as the branch | fan-out and compare (M7) | CHAT5 | M | ★★ | → CHAT5 |
+| R-CHAT-10 | **Ask several agents one question**, compare, keep the winner as the branch | fan-out and compare (M7) | CHAT5 | M | ★★ | built (CHAT5, 2026-10-30) |
 | R-CHAT-11 | **Meaning search**, opt-in: model2vec (~30 MB, no ONNX) or fastembed bge-small (~130 MB, ONNX), merged with FTS by reciprocal-rank fusion | cel-memory-sqlite [S] | CHAT5 | M | ★ | **built 2026-10-30**, opt-in: model2vec potion-base-8M in pure Rust, RRF k=60 (SPEC §22.10 tier 3) |
-| R-CHAT-12 | **Import the agents' own histories** (Claude JSONL, Codex rollouts, Gemini chats, ACP `session/list`) as read-only chats | H6 | CHAT5 | M | ★ | → CHAT5 |
+| R-CHAT-12 | **Import the agents' own histories** (Claude JSONL, Codex rollouts, Gemini chats, ACP `session/list`) as read-only chats | H6 | CHAT5 | M | ★ | built for Claude, Codex, Gemini (CHAT5, 2026-10-30); OpenCode and ACP `session/list` not |
 | R-CHAT-13 | **Chats in every workspace, including linked machines'**: the mirror lists them, a chat is made and run on its owner, offline chats stay listed | owner (2026-10-29); MM1 (R-REM-13) | CHAT1 | L | ★★★ | → CHAT1.9 |
 | R-CHAT-14 | **Merge chats across all connected machines** (CHAT6): schema ready now (ULIDs, immutable nodes, tombstones, LWW fields, `origin`); needs its own brainstorm | owner (2026-10-29) | CHAT6 | L+ | ★★ | → CHAT6, brainstorm first |
 | R-CHAT-15 | **Make it a task**: a chat becomes a worktree session whose first prompt carries the branch | Claude desktop "task chips" (B) | CHAT4 | S | ★★ | → CHAT4 |

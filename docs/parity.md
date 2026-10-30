@@ -101,6 +101,9 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `chat keep` | `chat.keep` (`/keep`) in a side chat | `chat.keep`: Keep it, on a side chat's page |
 | `chat search` | `chat.search` (`C-g`): the chat list searching every chat, messages with their snippets; `⏎` opens one at its message; `--meaning`/`--words` are `by:meaning`/`by:words` in the box, `≈` marks a hit by meaning, and `by:meaning` while it is off asks to switch it on | `chat.search`: the Chats page's search box: titles, then every message on every machine; tap one to open it there; `by:meaning`/`by:words` as in the TUI, `≈`, and `chat.meaning` switches it on where it is off |
 | `chat find` | `chat.find` (`/find`): ask your chats; the answer, with its citations (`chat.cite` opens one) | `chat.find`: ？ on the Chats page; citations in the answer are links (`chat.cite`) |
+| `chat compare` | `chat.compare` (`/compare [AGENTS…] [question]`, the chat's menu; in a new chat `/compare A B` sends its first message to each): every answer a branch, `‹ 2/3 codex ›`, the progress in the header | `chat.compare`: ⋯ → Ask several agents, `/compare`; Ask several: on a new chat's page; the progress in a banner, ‹ 2/3 codex › on each answer |
+| `chat pick` | `chat.pick` (`/pick`, the chat's menu): keep the answer shown; its agent takes the next message | `chat.pick`: Keep this answer beside ‹ 2/3 codex ›, or ⋯ → Keep this answer |
+| `chat import` | `chat.import` (the palette, the CHATS heading's menu, `I` in the chat list; asks first): a toast with what came; imported chats show `⇣` | `chat.import`: ⇣ on the Chats page (asks first); imported chats show `⇣` and a banner |
 
 ## Attention and notifications
 

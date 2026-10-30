@@ -1087,6 +1087,10 @@ pub enum Request {
         /// Folders it may read (1.24, SPEC §22.5): with no `preset`, the chat then reads.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         folders: Vec<String>,
+        /// Ask these agents the first message, each answer a branch (1.24, CHAT5, as
+        /// `ChatCompare`): `agent` or `agent@profile`, two or more.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        compare: Vec<String>,
     },
     /// Chats, pinned first then the newest: one workspace's, or every one's with `all`.
     ChatList {
@@ -1224,6 +1228,39 @@ pub enum Request {
     },
     /// The tool presets, each with what it lets a chat use (1.24).
     ChatPresets,
+    /// Ask several agents one message (1.24, CHAT5, SPEC §22.7): each answer is a branch under
+    /// it, labelled with its agent; the chat's own agent answers in its own conversation, the
+    /// others each in a helper of their own. `text`: a new message; none: the last one again,
+    /// for the agents that haven't answered it. `agents`: `agent` or `agent@profile`; empty:
+    /// every installed agent that can chat. Answered at once; `ChatInfo.comparing` says how far.
+    ChatCompare {
+        chat: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        agents: Vec<String>,
+        #[serde(default)]
+        text: Option<String>,
+    },
+    /// Keep an answer (1.24, CHAT5): show the branch through `node` (default: the one shown)
+    /// and switch the chat to the agent that wrote it, so the next message goes there.
+    ChatPick {
+        chat: String,
+        #[serde(default)]
+        node: Option<String>,
+    },
+    /// Import the agents' own histories as chats (1.24, CHAT5, SPEC §22.10): sessions new or
+    /// grown since the last import. `agent`: one of them (default all); `profile`: one profile's
+    /// (default every profile); `since`: sessions touched in that long (`30d`); `dry_run`: count
+    /// only.
+    ChatImport {
+        #[serde(default)]
+        agent: Option<String>,
+        #[serde(default)]
+        profile: Option<String>,
+        #[serde(default)]
+        since: Option<String>,
+        #[serde(default)]
+        dry_run: bool,
+    },
 }
 
 /// One persisted session event (`session_event`, SPEC §14.3).
@@ -1683,6 +1720,10 @@ pub enum Reply {
         hits: Vec<ptyro_core::chats::ChatHit>,
     },
     /// The tool presets (1.24).
+    /// What `ChatImport` did (or, dry, would do).
+    ChatImported {
+        report: ptyro_core::chats::ImportReport,
+    },
     ChatPresets {
         presets: Vec<ptyro_core::chats::ChatPreset>,
     },

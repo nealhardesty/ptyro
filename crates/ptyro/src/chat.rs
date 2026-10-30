@@ -39,6 +39,10 @@ pub enum ChatCmd {
         /// A folder it may read (repeatable); with no --preset the chat then reads (`read`)
         #[arg(long = "folder", value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
         folders: Vec<String>,
+        /// Ask several agents the first message, each answer a branch (`claude,codex`; as
+        /// `chat compare`)
+        #[arg(long, value_delimiter = ',', add = ArgValueCandidates::new(complete::agents))]
+        compare: Vec<String>,
         /// Don't wait for the answer
         #[arg(long)]
         no_wait: bool,
@@ -79,6 +83,9 @@ pub enum ChatCmd {
         /// At most N
         #[arg(short = 'n', long)]
         limit: Option<u32>,
+        /// Only chats imported from the agents' own histories (`chat import`)
+        #[arg(long)]
+        imported: bool,
         #[arg(long)]
         json: bool,
     },
@@ -293,6 +300,52 @@ pub enum ChatCmd {
         #[arg(required = true, add = ArgValueCandidates::new(complete::chats))]
         chats: Vec<String>,
     },
+    /// Ask several agents the same question: each answer is a branch of the chat, labelled with
+    /// its agent (`‹ 2/3 codex ›`); with no TEXT the last message is asked again of the agents
+    /// that haven't answered it. Each answer is printed under its agent once all are in
+    Compare {
+        #[arg(add = ArgValueCandidates::new(complete::chats))]
+        chat: String,
+        /// The question (none: the chat's last message again)
+        text: Vec<String>,
+        /// Which agents, `agent` or `agent@profile`, comma-separated (default: every installed
+        /// one that can chat)
+        #[arg(long, value_delimiter = ',', add = ArgValueCandidates::new(complete::agents))]
+        agents: Vec<String>,
+        /// Don't wait for the answers
+        #[arg(long)]
+        no_wait: bool,
+        #[arg(long, default_value_t = 600)]
+        timeout: u64,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Keep an answer: show its branch and switch the chat to the agent that wrote it, so the
+    /// next message goes there. NODE: a node of that branch (default: the one shown)
+    Pick {
+        #[arg(add = ArgValueCandidates::new(complete::chats))]
+        chat: String,
+        node: Option<String>,
+    },
+    /// Import your agents' own histories (Claude Code, Codex and Gemini sessions) as read-only
+    /// chats: new sessions and what old ones gained since the last import. Searchable at once;
+    /// a message to one continues it as a fork. `[chat] import = true` keeps doing it
+    Import {
+        /// claude, codex, gemini, or all (the default)
+        #[arg(long, default_value = "all")]
+        agent: String,
+        /// One profile's histories (default: every profile's)
+        #[arg(long, add = ArgValueCandidates::new(complete::profiles))]
+        profile: Option<String>,
+        /// Only sessions touched in this long (`30d`, `12h`)
+        #[arg(long)]
+        since: Option<String>,
+        /// Count what would be imported; write nothing
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Write a chat out as Markdown or JSON
     Export {
         #[arg(add = ArgValueCandidates::new(complete::chats))]
@@ -315,6 +368,7 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, words: Vec<String>) -> Result<
         title: None,
         incognito: false,
         folders: Vec::new(),
+        compare: Vec::new(),
         no_wait: false,
         json: false,
     });
@@ -327,12 +381,17 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, words: Vec<String>) -> Result<
             title,
             incognito,
             folders,
+            compare,
             no_wait,
             json,
         } => {
             let text = words_or_stdin(prompt)?;
             let folders = folders.iter().map(|f| full_path(f)).collect();
-            new(ctx, text, agent, preset, workspace, title, incognito, folders, no_wait, json).await
+            new(
+                ctx, text, agent, preset, workspace, title, incognito, folders, compare, no_wait,
+                json,
+            )
+            .await
         }
         ChatCmd::Retry { chat, node, no_wait, timeout } => {
             let c = ctx.connect(true).await?;
@@ -434,8 +493,21 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, words: Vec<String>) -> Result<
         ChatCmd::Ask { question, keep, agent, preset, timeout } => {
             ask(ctx, question.join(" "), keep, agent, preset, timeout).await
         }
-        ChatCmd::Ls { workspace, pinned, archived, machine, limit, json } => {
-            ls(ctx, workspace, pinned, archived, machine, limit, json).await
+        ChatCmd::Ls { workspace, pinned, archived, machine, limit, imported, json } => {
+            ls(ctx, workspace, pinned, archived, machine, limit, imported, json).await
+        }
+        ChatCmd::Compare { chat, text, agents, no_wait, timeout, json } => {
+            let text = Some(text.join(" ")).filter(|t| !t.trim().is_empty());
+            compare(ctx, chat, agents, text, no_wait, Duration::from_secs(timeout), json).await
+        }
+        ChatCmd::Pick { chat, node } => {
+            let c = ctx.connect(true).await?;
+            let info = chat_of(c.request(Request::ChatPick { chat, node }).await?)?;
+            eprintln!("kept: {} goes on with {}@{}", info.addr(), info.agent, info.profile);
+            Ok(0)
+        }
+        ChatCmd::Import { agent, profile, since, dry_run, json } => {
+            import(ctx, agent, profile, since, dry_run, json).await
         }
         ChatCmd::Show { chat, all, ids, branches, format } => {
             show(ctx, chat, all, ids, branches, &format).await
@@ -444,18 +516,27 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, words: Vec<String>) -> Result<
         ChatCmd::Send { chat, text, no_wait, timeout } => {
             let c = ctx.connect(true).await?;
             // What was there before: the answer is what follows this message, not an earlier one.
-            let known: HashSet<String> = match c
-                .request(Request::ChatRead { chat: chat.clone(), all: true })
-                .await?
-            {
-                Reply::ChatTranscript { nodes, .. } => nodes.into_iter().map(|n| n.id).collect(),
-                r => return Err(unexpected(r)),
-            };
+            let (asked, known): (String, HashSet<String>) =
+                match c.request(Request::ChatRead { chat: chat.clone(), all: true }).await? {
+                    Reply::ChatTranscript { info, nodes, .. } => {
+                        (info.id, nodes.into_iter().map(|n| n.id).collect())
+                    }
+                    r => return Err(unexpected(r)),
+                };
             let info = chat_of(c.request(Request::ChatSend { chat, text: text.join(" ") }).await?)?;
+            // An imported chat carries on as a fork: the answer is the fork's last message's.
+            let forked = info.id != asked;
+            if forked {
+                eprintln!("continued as a fork: {} ({})", info.addr(), info.label());
+            }
             if no_wait {
                 return Ok(0);
             }
-            let ok = wait(c, &info, &known, Duration::from_secs(timeout), true).await?;
+            let ok = if forked {
+                wait_answer(c, &info, &HashSet::new(), Duration::from_secs(timeout), true).await?
+            } else {
+                wait(c, &info, &known, Duration::from_secs(timeout), true).await?
+            };
             Ok(if ok { 0 } else { 1 })
         }
         ChatCmd::Answer { chat, decision } => {
@@ -613,14 +694,31 @@ async fn new(
     title: Option<String>,
     incognito: bool,
     folders: Vec<String>,
+    compare: Vec<String>,
     no_wait: bool,
     json: bool,
 ) -> Result<i32, Error> {
     let c = ctx.connect(true).await?;
     let prompt = Some(text.clone()).filter(|t| !t.trim().is_empty());
     let has_prompt = prompt.is_some();
-    let req = Request::ChatNew { workspace, agent, preset, title, prompt, incognito, folders };
+    if !compare.is_empty() && !has_prompt {
+        return Err(Error::invalid("--compare asks a question of each agent: say it"));
+    }
+    let req = Request::ChatNew {
+        workspace,
+        agent,
+        preset,
+        title,
+        prompt,
+        incognito,
+        folders,
+        compare: compare.clone(),
+    };
     let info = chat_of(c.request(req).await?)?;
+    if !compare.is_empty() && info.comparing.is_some() {
+        eprintln!("{} · {}", info.addr(), info.tools_badge());
+        return compare_wait(c, info, no_wait, Duration::from_secs(600), json).await;
+    }
     if json {
         println!("{}", serde_json::to_string_pretty(&info).unwrap_or_default());
         return Ok(0);
@@ -668,6 +766,7 @@ async fn ask(
             prompt: None,
             incognito: !keep,
             folders: Vec::new(),
+            compare: Vec::new(),
         })
         .await?,
     )?;
@@ -872,6 +971,7 @@ async fn follow_sending(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn ls(
     ctx: &Ctx,
     workspace: Option<String>,
@@ -879,12 +979,13 @@ async fn ls(
     archived: bool,
     machine: Option<String>,
     limit: Option<u32>,
+    imported: bool,
     json: bool,
 ) -> Result<i32, Error> {
     let c = ctx.connect(true).await?;
     let all = workspace.is_none();
-    // (With a machine, the limit applies after it is picked.)
-    let asked = if machine.is_some() { None } else { limit };
+    // (With a machine, or imported ones only, the limit applies after they are picked.)
+    let asked = if machine.is_some() || imported { None } else { limit };
     let req = Request::ChatList { workspace, all, pinned, archived, limit: asked };
     let mut chats = match c.request(req).await? {
         Reply::Chats { chats } => chats,
@@ -895,12 +996,19 @@ async fn ls(
             Some(x) => x == m,
             None => m == "here",
         });
-        if let Some(n) = limit {
-            chats.truncate(n as usize);
-        }
+    }
+    if imported {
+        chats.retain(|c| c.source.is_some());
+    }
+    if let (Some(n), true) = (limit, machine.is_some() || imported) {
+        chats.truncate(n as usize);
     }
     if json {
         println!("{}", serde_json::to_string_pretty(&chats).unwrap_or_default());
+        return Ok(0);
+    }
+    if chats.is_empty() && imported {
+        eprintln!("no imported chats: `ptyro chat import` imports your agents' own histories");
         return Ok(0);
     }
     if chats.is_empty() {
@@ -990,11 +1098,20 @@ fn print_text(info: &ChatInfo, nodes: &[ChatNode], ids: bool, siblings: &[ChatSi
         info.profile,
         info.tools
     );
+    if let Some(from) = info.imported_from() {
+        println!("⇣ {from} (read-only: a message continues it as a fork)");
+    }
     for n in nodes {
         if let Some(s) = siblings.iter().find(|s| s.node == n.id) {
+            // Each with the agent that wrote it, where they differ (a compare).
+            let named = |i: usize| match (s.label(), s.agents.get(i)) {
+                (Some(_), Some(a)) if !a.is_empty() => format!("{} ({a})", short_id(&s.ids[i])),
+                _ => short_id(&s.ids[i]),
+            };
             let others: Vec<String> =
-                s.ids.iter().filter(|i| **i != n.id).map(|i| short_id(i)).collect();
-            println!("\n  ‹ {}/{} › others: {}", s.at, s.of, others.join(", "));
+                (0..s.ids.len()).filter(|i| s.ids[*i] != n.id).map(named).collect();
+            let who = s.label().map(|a| format!(" {a}")).unwrap_or_default();
+            println!("\n  ‹ {}/{}{who} › others: {}", s.at, s.of, others.join(", "));
         }
         let id = if ids { format!("[{}] ", short_id(&n.id)) } else { String::new() };
         match &n.body {
@@ -1011,6 +1128,187 @@ fn print_text(info: &ChatInfo, nodes: &[ChatNode], ids: bool, siblings: &[ChatSi
             _ => {}
         }
     }
+}
+
+/// `chat compare`: ask, wait for every agent (the progress on standard error), then each
+/// answer under its agent.
+async fn compare(
+    ctx: &Ctx,
+    chat: String,
+    agents: Vec<String>,
+    text: Option<String>,
+    no_wait: bool,
+    timeout: Duration,
+    json: bool,
+) -> Result<i32, Error> {
+    let c = ctx.connect(true).await?;
+    let info = chat_of(c.request(Request::ChatCompare { chat, agents, text }).await?)?;
+    compare_wait(c, info, no_wait, timeout, json).await
+}
+
+/// Wait for a compare under way in `info` (the progress on standard error), then print each
+/// answer under its agent.
+async fn compare_wait(
+    c: ptyro_client::Client,
+    info: ChatInfo,
+    no_wait: bool,
+    timeout: Duration,
+    json: bool,
+) -> Result<i32, Error> {
+    let Some(mut last) = info.comparing.clone() else {
+        return Err(Error::internal("the daemon started no compare"));
+    };
+    if no_wait {
+        eprintln!("{} (`ptyro chat show {} --branches` shows them)", last.line(), info.addr());
+        return Ok(0);
+    }
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut said = String::new();
+    loop {
+        let line = last.line();
+        if line != said && !json {
+            eprintln!("{line}");
+            said = line;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(Error::new(
+                ErrorCode::Timeout,
+                format!(
+                    "still comparing; `ptyro chat show {} --branches` shows it later",
+                    info.addr()
+                ),
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        match c.request(Request::ChatRead { chat: info.id.clone(), all: false }).await? {
+            Reply::ChatTranscript { info: now, .. } => match now.comparing {
+                Some(x) => last = x,
+                // Over: how each ended is in the notice it left (read below).
+                None => break,
+            },
+            r => return Err(unexpected(r)),
+        }
+    }
+    let (now, nodes, siblings) =
+        match c.request(Request::ChatRead { chat: info.id.clone(), all: true }).await? {
+            Reply::ChatTranscript { info, nodes, siblings } => (info, nodes, siblings),
+            r => return Err(unexpected(r)),
+        };
+    // The outcome, as the notice under the shown answer says it: `compared: claude ✓ · codex ✗
+    // why`, for the agents last seen still asking.
+    if let Some(ChatBody::Notice { text, .. }) = nodes
+        .iter()
+        .rev()
+        .map(|n| &n.body)
+        .find(|b| matches!(b, ChatBody::Notice { text, .. } if text.starts_with("compared:")))
+    {
+        said = text.clone();
+        let line = text.trim_start_matches("compared:").split(" — ").next().unwrap_or_default();
+        for part in line.split(" · ").map(str::trim) {
+            let Some((agent, rest)) = part.split_once(' ') else { continue };
+            let Some(a) = last.agents.iter_mut().find(|a| a.agent == agent) else { continue };
+            let (mark, note) = rest.split_once(' ').unwrap_or((rest, ""));
+            a.state = match mark {
+                "✓" => "done",
+                "✗" => "failed",
+                "⊘" => "stopped",
+                _ => continue,
+            }
+            .into();
+            a.note = note.to_owned();
+        }
+    }
+    // Each answer: a child of the message, followed down its newest children.
+    let kids: Vec<&ChatNode> =
+        nodes.iter().filter(|n| n.parent.as_deref() == Some(last.node.as_str())).collect();
+    let label_of = |id: &str| {
+        siblings.iter().find(|s| s.ids.iter().any(|i| i == id)).and_then(|s| {
+            let i = s.ids.iter().position(|x| x == id)?;
+            s.agents.get(i).cloned().filter(|a| !a.is_empty())
+        })
+    };
+    let done: Vec<&str> =
+        last.agents.iter().filter(|a| a.state == "done").map(|a| a.agent.as_str()).collect();
+    let mut answers = Vec::new();
+    for (k, kid) in kids.iter().enumerate() {
+        let mut text = Vec::new();
+        let mut at = Some(*kid);
+        while let Some(n) = at {
+            if let ChatBody::Assistant { text: t, .. } = &n.body {
+                text.push(t.trim().to_owned());
+            }
+            at = nodes.iter().rev().find(|x| x.parent.as_deref() == Some(n.id.as_str()));
+        }
+        let agent = label_of(&kid.id)
+            .or_else(|| (kids.len() == 1).then(|| done.first().map(|a| (*a).to_owned())).flatten())
+            .unwrap_or_else(|| format!("answer {}", k + 1));
+        answers
+            .push(serde_json::json!({ "agent": agent, "node": kid.id, "text": text.join("\n\n") }));
+    }
+    if json {
+        let out = serde_json::json!({
+            "chat": now,
+            "message": last.node,
+            "answers": answers,
+            "agents": last.agents,
+        });
+        println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+        return Ok(0);
+    }
+    for a in &answers {
+        println!("── {} ──", a["agent"].as_str().unwrap_or_default());
+        println!("{}\n", a["text"].as_str().unwrap_or_default());
+    }
+    eprintln!("{said}");
+    eprintln!(
+        "`ptyro chat pick {} NODE` keeps one (`chat show {} --branches --ids` lists them)",
+        now.addr(),
+        now.addr()
+    );
+    Ok(if answers.is_empty() { 1 } else { 0 })
+}
+
+/// `chat import`: what was imported (or, dry, would be), per agent and profile.
+async fn import(
+    ctx: &Ctx,
+    agent: String,
+    profile: Option<String>,
+    since: Option<String>,
+    dry_run: bool,
+    json: bool,
+) -> Result<i32, Error> {
+    let c = ctx.connect(true).await?;
+    if !json {
+        eprintln!("{} your agents' histories…", if dry_run { "Counting" } else { "Importing" });
+    }
+    let req = Request::ChatImport { agent: Some(agent), profile, since, dry_run };
+    let report = match c.request(req).await? {
+        Reply::ChatImported { report } => report,
+        r => return Err(unexpected(r)),
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+        return Ok(0);
+    }
+    for s in &report.sources {
+        println!(
+            "{:<7} {:<10} {:>4} new {:>4} grown {:>5} unchanged {:>4} skipped {:>7} messages  {}",
+            s.agent, s.profile, s.new, s.grown, s.unchanged, s.skipped, s.messages, s.dir
+        );
+    }
+    if report.sources.is_empty() {
+        println!(
+            "no agent history found (Claude Code, Codex and Gemini keep theirs in their config folders)"
+        );
+    }
+    for n in &report.notes {
+        eprintln!("· {n}");
+    }
+    eprintln!("{}", report.summary());
+    if !dry_run && report.sources.iter().any(|s| s.new + s.grown > 0) {
+        eprintln!("`ptyro chat ls --imported` lists them; `ptyro chat search` finds what they say");
+    }
+    Ok(0)
 }
 
 /// A node's id as people use it: its last 8 characters (`chat edit … NODE` takes them).

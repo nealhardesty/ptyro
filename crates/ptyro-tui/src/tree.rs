@@ -545,6 +545,9 @@ mod tests {
             folders: Vec::new(),
             best_effort: false,
             shell: false,
+            comparing: None,
+            source: None,
+            source_dir: None,
         }
     }
 

@@ -1048,6 +1048,9 @@ impl Daemon {
             | Request::ChatSearch { .. }
             | Request::ChatTask { .. }
             | Request::ChatPresets
+            | Request::ChatCompare { .. }
+            | Request::ChatPick { .. }
+            | Request::ChatImport { .. }
             | Request::ChatFind { .. }) => self.handle_chat(req, caller).await,
             req @ (Request::CheckpointList { .. }
             | Request::CheckpointDiff { .. }

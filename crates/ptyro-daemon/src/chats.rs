@@ -35,6 +35,9 @@ use crate::daemon::Daemon;
 use crate::launch::{AgentStart, Launch};
 use crate::session::{Place, Session};
 
+mod compare;
+pub(crate) mod import;
+
 /// A fork's conv until its first answer has its own conversation (then it is `native_fork`, by
 /// `update_conv`): Claude resumes the source's
 /// conversation with `--fork-session`, leaving it as it was.
@@ -59,6 +62,12 @@ pub struct Chats {
     incognito: Mutex<HashMap<String, ChatInfo>>,
     /// Meaning search (SPEC §22.10 tier 3).
     pub(crate) meaning: crate::meaning::Meaning,
+    /// Compares under way, by chat (SPEC §22.7).
+    comparing: Mutex<HashMap<String, Arc<compare::Compare>>>,
+    /// A compare's helpers (in-memory chats nobody lists, finds or follows): helper → its chat.
+    helpers: Mutex<HashMap<String, String>>,
+    /// One import of the agents' histories at a time (SPEC §22.10).
+    importing: tokio::sync::Mutex<()>,
 }
 
 /// A chat someone follows or an engine serves.
@@ -114,6 +123,9 @@ impl Chats {
             sending: Mutex::new(HashMap::new()),
             incognito: Mutex::new(HashMap::new()),
             meaning: crate::meaning::Meaning::default(),
+            comparing: Mutex::new(HashMap::new()),
+            helpers: Mutex::new(HashMap::new()),
+            importing: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -215,6 +227,7 @@ impl Daemon {
             Err(e) => tracing::warn!("chat.db: {e}"),
         }
         self.start_meaning(db.clone());
+        self.start_chat_import();
         let me = Arc::clone(self);
         tokio::spawn(async move {
             loop {
@@ -238,6 +251,18 @@ impl Daemon {
     }
 
     // ── the record: chat.db, or memory for an incognito chat ─────────────────────────────
+
+    /// The incognito chats people see (a compare's helpers are not among them).
+    fn visible_incognito(&self) -> Vec<ChatInfo> {
+        let helpers = self.chats.helpers.locked();
+        self.chats
+            .incognito
+            .locked()
+            .values()
+            .filter(|c| !helpers.contains_key(&c.id))
+            .cloned()
+            .collect()
+    }
 
     fn incognito_of(&self, id: &str) -> Option<ChatInfo> {
         self.chats.incognito.locked().get(id).cloned()
@@ -343,7 +368,11 @@ impl Daemon {
         if let Some(info) = gone {
             self.chats.live.locked().remove(id);
             self.remove_chat_dirs(id, Some((&info.agent, &info.profile))).await;
-            let _ = self.events.send(DomainEvent::ChatRemoved { id: id.to_owned(), machine: None });
+            // A compare's helper was never listed: nobody is told it went.
+            if self.chats.helpers.locked().remove(id).is_none() {
+                let _ =
+                    self.events.send(DomainEvent::ChatRemoved { id: id.to_owned(), machine: None });
+            }
         }
     }
 
@@ -363,7 +392,7 @@ impl Daemon {
             .map_err(store_err)?;
         let mut all = all;
         all.append(&mut archived);
-        all.extend(self.chats.incognito.locked().values().cloned());
+        all.extend(self.visible_incognito());
         // `7f3k/01jb…` names a message of it: the chat is the part before the slash.
         let addr = addr.split('/').next().unwrap_or(addr);
         let a = addr.trim();
@@ -413,6 +442,7 @@ impl Daemon {
         let preset = config.chat.preset(&c.tools).unwrap_or_default();
         c.shell = preset.shell;
         c.best_effort = best_effort(&ptyro_agents::adapter_name(&config, &c.agent), &preset);
+        c.comparing = self.chats.comparing.locked().get(&c.id).map(|x| x.state.locked().clone());
         if let Some(e) = self.chats.get_live(&c.id).and_then(|l| l.engine()) {
             let info = self.info(&e.session);
             c.status = info.status.map(|s| s.status);
@@ -440,6 +470,9 @@ impl Daemon {
     }
 
     async fn chat_changed(&self, id: &str) {
+        if self.chats.helpers.locked().contains_key(id) {
+            return;
+        }
         match self.chat_info_now(id).await {
             Ok(info) => {
                 let _ = self.events.send(DomainEvent::ChatUpdated { info });
@@ -537,10 +570,52 @@ impl Daemon {
                     .collect();
                 Ok(Reply::Chats { chats })
             }
-            Request::ChatNew { workspace, agent, preset, title, prompt, incognito, folders } => {
+            Request::ChatNew {
+                workspace,
+                agent,
+                preset,
+                title,
+                prompt,
+                incognito,
+                folders,
+                compare,
+            } => {
                 let incognito = incognito || self.config().chat.incognito;
+                let compare: Vec<String> = compare
+                    .iter()
+                    .flat_map(|a| a.split(','))
+                    .map(|a| a.trim().to_owned())
+                    .filter(|a| !a.is_empty())
+                    .collect();
+                if !compare.is_empty() {
+                    // Asked of several agents: every name is known before the chat is made.
+                    if incognito {
+                        return Err(Error::invalid(
+                            "an incognito chat keeps no branches, and each answer of a compare is one",
+                        ));
+                    }
+                    let ws = workspace.clone().unwrap_or_else(|| MAIN_WORKSPACE.to_owned());
+                    let ws = self.find_workspace(&ws)?.name;
+                    for a in &compare {
+                        self.chat_agent(Some(a), &ws)?;
+                    }
+                    if compare.len() < 2 {
+                        return Err(Error::invalid(
+                            "a compare needs two agents or more (claude,codex)",
+                        ));
+                    }
+                }
                 let info =
                     self.chat_new(workspace, agent, preset, title, incognito, folders).await?;
+                if !compare.is_empty()
+                    && let Some(p) = prompt.clone().filter(|p| !p.trim().is_empty())
+                {
+                    if let Err(e) = self.chat_compare(&info, compare, Some(p)).await {
+                        let live = self.chats.live(&info.id);
+                        self.chat_notice(&live, &info.id, NoticeLevel::Error, &e.message).await;
+                    }
+                    return Ok(Reply::Chat { info: self.chat_info_now(&info.id).await? });
+                }
                 // The chat is made whatever the agent does: an agent that won't start is said in
                 // it (a notice), and the reply still names it, so a client shows it, retries in
                 // it, or deletes it, rather than making another.
@@ -573,13 +648,10 @@ impl Daemon {
                 // Incognito chats are listed while they last (the sidebar shows them, `◌`).
                 if !archived {
                     let mine: Vec<ChatInfo> = self
-                        .chats
-                        .incognito
-                        .locked()
-                        .values()
+                        .visible_incognito()
+                        .into_iter()
                         .filter(|c| ws.as_ref().is_none_or(|w| c.workspace == *w))
                         .filter(|c| !pinned || c.pinned)
-                        .cloned()
                         .collect();
                     rows.extend(mine);
                 }
@@ -613,11 +685,17 @@ impl Daemon {
             }
             Request::ChatRetry { chat, node } => {
                 let info = self.find_chat(&chat).await?;
+                if info.source.is_some() {
+                    return Err(compare::imported_refusal(&info));
+                }
                 self.chat_retry(&info, node.as_deref()).await?;
                 Ok(Reply::Chat { info: self.chat_info_now(&info.id).await? })
             }
             Request::ChatEdit { chat, node, text } => {
                 let info = self.find_chat(&chat).await?;
+                if info.source.is_some() {
+                    return Err(compare::imported_refusal(&info));
+                }
                 if text.trim().is_empty() {
                     return Err(Error::invalid("nothing to send"));
                 }
@@ -639,6 +717,12 @@ impl Daemon {
                 if text.trim().is_empty() {
                     return Err(Error::invalid("nothing to send"));
                 }
+                // An imported chat stays as its agent wrote it: it carries on as a fork, and the
+                // reply names the fork (SPEC §22.10).
+                let info = match &info.source {
+                    Some(_) => self.continue_imported(&info).await?,
+                    None => info,
+                };
                 self.chat_send(&info.id, text).await?;
                 Ok(Reply::Chat { info: self.chat_info_now(&info.id).await? })
             }
@@ -656,6 +740,7 @@ impl Daemon {
             }
             Request::ChatStop { chat } => {
                 let info = self.find_chat(&chat).await?;
+                self.stop_compare(&info.id);
                 if let Some(st) = self
                     .chats
                     .get_live(&info.id)
@@ -755,6 +840,20 @@ impl Daemon {
             }
             Request::ChatTask { chat, project, agent, name } => {
                 self.chat_task(&chat, project, agent, name).await
+            }
+            Request::ChatCompare { chat, agents, text } => {
+                let info = self.find_chat(&chat).await?;
+                self.chat_compare(&info, agents, text).await?;
+                Ok(Reply::Chat { info: self.chat_info_now(&info.id).await? })
+            }
+            Request::ChatPick { chat, node } => {
+                let info = self.find_chat(&chat).await?;
+                self.chat_pick(&info, node.as_deref()).await?;
+                Ok(Reply::Chat { info: self.chat_info_now(&info.id).await? })
+            }
+            Request::ChatImport { agent, profile, since, dry_run } => {
+                let report = self.chat_import(agent, profile, since, dry_run).await?;
+                Ok(Reply::ChatImported { report })
             }
             Request::ChatPresets => {
                 let config = self.config();
@@ -920,6 +1019,9 @@ impl Daemon {
                 folders,
                 best_effort: false,
                 shell: false,
+                comparing: None,
+                source: None,
+                source_dir: None,
             };
             self.chats.incognito.locked().insert(id.clone(), row);
             let info = self.chat_info_now(&id).await?;
@@ -1180,6 +1282,15 @@ impl Daemon {
     /// One answer at a time: a message sent mid-answer would interleave with it (and be
     /// answered after it anyway). The client says so and keeps the text.
     fn busy_check(&self, live: &Live, info: &ChatInfo) -> Result<(), Error> {
+        if self.chats.comparing.locked().contains_key(&info.id) {
+            return Err(Error::new(
+                ErrorCode::Busy,
+                format!(
+                    "c:{} is comparing answers: wait for them, or stop it (`ptyro chat stop`, Ctrl-C in the chat)",
+                    chats::handle(&info.id, [info.id.as_str()])
+                ),
+            ));
+        }
         let Some(e) = live.engine() else { return Ok(()) };
         match e.session.status() {
             Some(AgentStatus::Working | AgentStatus::Starting) => Err(Error::new(
@@ -2161,6 +2272,10 @@ impl Daemon {
     /// Whether a chat engine's attention of `kind` reaches you (`[chat] notify`, §22.11).
     pub(crate) fn chat_wants(&self, s: &Session, kind: AttentionKind) -> bool {
         let Some(chat) = s.meta.locked().place.chat.clone() else { return true };
+        // A compare's helper: its chat tells how it went (SPEC §22.7).
+        if self.chats.helpers.locked().contains_key(&chat) {
+            return false;
+        }
         let live = self.chats.get_live(&chat);
         // A resume being retried: its error isn't news.
         if live.as_ref().is_some_and(|l| l.quiet.load(Ordering::SeqCst)) {
@@ -3031,6 +3146,9 @@ mod tests {
             folders: Vec::new(),
             best_effort: false,
             shell: false,
+            comparing: None,
+            source: None,
+            source_dir: None,
         };
         let md = markdown(&info, &b);
         assert!(

@@ -6187,6 +6187,46 @@ where `agentCapabilities.sessionCapabilities` says so; read it at `initialize` a
   flush (an `UPDATE` through the triggers) 0.9 ms. So a search box needs no index beyond FTS5 at this
   size, and a prefix of fewer than three characters should wait for the third keystroke.
 
+**The agents' own histories, as CHAT5's import reads them** (2026-10-30; Claude Code and Codex
+read from this Mac's files, read-only **[V]**; Gemini from 0.66.0's bundle **[S]**: it isn't used
+here):
+- **Claude Code** (2.1.x): `<config dir>/projects/<cwd with every non-alphanumeric as ->/<session
+  id>.jsonl`, one JSON object a line. `type` `user` / `assistant` lines carry `uuid`,
+  `parentUuid`, `sessionId`, `cwd`, `timestamp` (RFC 3339, ms), `isSidechain`, and `message.content`:
+  a string, or blocks `text`, `thinking`, `tool_use {id, name, input}`, `tool_result {tool_use_id,
+  content, is_error}` (results come in the next `user` line). `isMeta` lines are the caveats and
+  command output; a typed slash command is a string wrapped in `<command-name>`, its output in
+  `<local-command-stdout>`, a `!` command in `<bash-input>`/`<bash-stdout>`, and background tasks in
+  `<task-notification>`. `isCompactSummary` marks a compaction's summary. Titles are lines of their
+  own: `custom-title {customTitle}` (one you gave), `ai-title {aiTitle}` (newer versions) and
+  `summary {summary}` (older); other lines (`attachment`, `api-request*`, `mode`, `last-prompt`,
+  `file-history-*`, `cost-state`, `continued-in`…) carry no conversation. An API error is an
+  `assistant` line with `isApiErrorMessage`. Sub-agents' transcripts sit in folders of their own,
+  not beside the sessions. Each assistant line holds one block (several lines share a
+  `message.id`).
+- **Codex** (0.164 desktop, this Mac's 14 rollouts): `<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-<time>-<thread id>.jsonl`
+  (archived ones in `archived_sessions/`), lines `{timestamp, type, payload}`: `session_meta {id,
+  cwd, originator, cli_version…}`, `response_item`s (`message` with `role` `user` / `assistant` /
+  `developer` and `content` blocks `input_text` / `output_text`; `function_call` and
+  `custom_tool_call {name, arguments|input, call_id}` and their `*_output {call_id, output}`;
+  `reasoning`; `web_search_call`), and `event_msg`s that repeat them for the UI (`item_completed`,
+  `token_count`, `task_*`). The user's own words are the `user` messages whose
+  `internal_chat_message_metadata_passthrough.content_item_kinds` include `user.text`; Codex's
+  context (`<environment_context>`, the AGENTS.md it read, plugin suggestions) is a `user` message
+  too, of other kinds. Titles: `<CODEX_HOME>/session_index.jsonl` lines `{id, thread_name,
+  updated_at}`.
+- **Gemini CLI 0.66.0 [S]:** `<GEMINI_CLI_HOME or ~>/.gemini/tmp/<project slug>/chats/session-<time>-<id8>.jsonl`
+  (a legacy `.json` is one object with `messages`), the folder's `.project_root` naming the project
+  (§22.9). Lines: a metadata record (`sessionId`, `projectHash`, `startTime`, `lastUpdated`, `kind`,
+  `summary`); message records (`id`, `timestamp`, `type` `user` / `gemini` / `info` / `error` /
+  `warning`, `content` as a string or parts with `text`, and on `gemini` ones `toolCalls [{id, name,
+  displayName, args, status, result, resultDisplay}]`, `thoughts`, `tokens`, `model`), a later record
+  with the same id replacing the earlier; `{"$rewindTo": id}` drops that message and what follows;
+  `{"$patch": {id, content?, toolCalls?, updates?, removeIds?, orderIds?}}`; `{"$set": {…}}`
+  (metadata, or every message). Sub-agents' files are in `chats/<parent id>/`. ptyro applies all but
+  `orderIds`.
+- **OpenCode:** not installed here; its storage is not read (§22's "As built").
+
 ### 20.9 Chrome shows a service worker's certificate, not the connection's
 
 **Seen 2026-10-29** on Android Chrome, after `serve` moved from ptyro's own certificate to
@@ -6263,7 +6303,7 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
 
 ---
 
-## 22. Chat: general-purpose conversations **[decided 2026-10-29 (owner, ROADMAP CHAT); CHAT1–CHAT3 built 2026-10-29, CHAT4 built 2026-10-30, later ones proposed]**
+## 22. Chat: general-purpose conversations **[decided 2026-10-29 (owner, ROADMAP CHAT); CHAT1–CHAT3 built 2026-10-29, CHAT4 and CHAT5 built 2026-10-30, CHAT6 proposed]**
 
 **As built (CHAT1, 2026-10-29), and where it differs from the design below:**
 - **Store** (`ptyro-store/src/chat.rs`): the §22.4 schema exactly, its own thread, 0600, a newer
@@ -6383,6 +6423,69 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
 - **Meaning search (CHAT5, 2026-10-30):** opt-in `[chat] meaning`, model2vec `potion-base-8M` in
   pure Rust (`crates/ptyro-meaning`), int8 vectors in schema v3 `node_vec`, a background backfill,
   RRF with the keyword hits, `by:meaning`/`by:words`, `ChatHit.how` and `≈`. See §22.10 tier 3.
+- **Compare (CHAT5, 2026-10-30; `ptyro-daemon/src/chats/compare.rs`):** `ChatCompare{chat,
+  agents, text?}` (1.24; `ChatNew.compare` for a new chat's first message) asks each agent the
+  same message, and each answer is a **sibling branch under it**. With `text` it is a new message
+  on the shown branch; without, the last message of the person's again, for the agents that haven't
+  answered it (a new message needs two agents or more). Default agents: the chat's own, then every
+  installed one with a structured protocol. The chat's own agent (same agent and profile) answers
+  in its own conversation, natively where it can (§22.6), as a message would; every other agent
+  answers in a **helper**: an in-memory chat as an incognito one is (so `--no-session-persistence`
+  / `ephemeral`, no agent-side copy kept; Gemini's folders removed), registered in
+  `Chats.helpers`, which no list, `find_chat`, `ChatUpdated`/`ChatRemoved` or alert ever sees,
+  seeded with the branch above the message. Its answer (words, tool calls, cards, turn end; not
+  ptyro's own info notices) is copied under the message with new ids by `put_branch`, which
+  leaves `leaf` alone, and attributed by a `conv` row (`how = compare`, inserted ended: it says who
+  wrote it, it is not a conversation to continue). Then the helper's engine, scratch folder and
+  agent copy go, before its agent counts as in. **Labels:** `ChatSiblings.agents` (`agent`, or
+  `agent@profile` off the default profile), worked out per sibling as the first node at or below it
+  that a conv produced; `ChatSiblings::label` is the shown one's when they differ, so a retry's
+  siblings stay unlabelled and a compare's read `‹ 2/3 codex ›` in the TUI, the web and `chat show
+  --branches`. **Progress:** `ChatInfo.comparing` (`ChatCompare{node, agents: [{agent, state,
+  note}]}`, `line()` = `comparing: claude ✓ · codex … · gemini ✗ why`), a live item under the
+  message while it runs (not a node), and at the end a notice on the shown branch (`compared: …`
+  with the hint to `/pick`). With no answer of the chat's own agent, the first other answer in is
+  shown. **Rules:** one answer at a time holds for the whole compare (`busy_check` refuses a send,
+  retry, edit, branch or a second compare); `ChatStop` interrupts every helper too, and one that
+  hasn't stopped 10 s later is stopped; a helper that fails (not installed, not logged in, ends
+  without an answer) is `✗` with the reason and the others go on; a helper is never shown a
+  permission card: what its preset doesn't allow is **denied** (the preset is ptyro's answer
+  anyway; the progress says "a tool it asked for was denied"), while the chat's own agent asks as
+  ever. **Pick:** `ChatPick{chat, node?}` shows the branch through `node` (default: the shown one)
+  and sets the chat's agent to the one whose conv wrote its newest node (`branch_agent`); the next
+  message is seeded on it (§22.6 rule 3). Losers stay as branches (CHAT2 deletes none).
+- **Import (CHAT5, 2026-10-30; `ptyro-daemon/src/chats/import.rs`):** `ChatImport{agent?,
+  profile?, since?, dry_run}` → `ChatImported{report}` (1.24, scope `full`: it copies coding history
+  into `chat.db`, as the setting does) reads every profile's (or one's) Claude Code, Codex and
+  Gemini history (§20.8 has the formats, verified 2026-10-30) **read-only** and makes each session a
+  chat: `chat.db` v5 adds `chat.source` (`claude:<session id>`, unique), `chat.source_dir` (the
+  folder it ran in) and `import(source, chat, path, size, mtime, offset, tail, at)`. Its user and
+  assistant text become nodes, tool calls tool nodes (their output only with `index_tools`, 2 KB),
+  with the session's own timestamps; thinking, side chains, meta lines, compaction summaries and the
+  wrappers around slash commands and Codex's own context are left out. Node ids are made from the
+  source's ids (`node_id`: SHA-256 to 26 Crockford characters), so an import is idempotent; an
+  append-only file (Claude, Codex) is read on from `offset`, the end of the last line after which no
+  tool call waited for its result, parented on `tail`; Gemini's file is read whole (its patches
+  change earlier messages); a file unchanged in size and mtime isn't opened. Title: Claude's
+  `custom-title`, else `ai-title`/`summary`; Codex's `session_index.jsonl` `thread_name`;
+  Gemini's `summary`; else the first message's first line (`title_src = agent`, so a title you
+  give wins). Workspace: the one whose project or worktree contains the session's folder, else
+  `main`; profile: the profile whose folder it came from (two profiles sharing a folder: the first).
+  **Skipped:** sessions whose folder is under ptyro's data folder (its own chat engines and
+  summaries), sessions with nothing said, and a session whose chat you deleted (the `import` row
+  outlives the chat, so a delete is never undone). Lines over 4 MB are passed over unread; the
+  parse runs in a blocking task and each session is one transaction, so the request loop and
+  other chats' writes wait at most one session. Imported chats are **read-only**: `ChatSend`
+  forks one (the fork says "continued as a fork of the imported c:…", and the reply names the
+  fork, which each client then shows), `ChatRetry`, `ChatEdit` and `ChatCompare` are refused
+  with that advice. They are searched (the FTS triggers, the meaning backfill on `ChatUpdated`),
+  obey `history_scope` (their profile), and are listed like any chat, marked `⇣` with "imported
+  from claude · ~/repo" in the header; `chat ls --imported` lists only them. `[chat] import =
+  true` (default off: it copies coding history) imports at once and then every 10 minutes. On
+  this Mac, 2026-10-30 (debug build): 104 sessions, 11,326 messages, 785 MB of Claude history
+  imported in 7.5 s, again in 0.01 s. **OpenCode is not imported**: it isn't installed here to read
+  its storage, and ptyro doesn't guess a format; the report says so. ACP `session/list` isn't used
+  either (Gemini 0.66.0 doesn't offer it, §22.6).
 - **Configuration renamed:** `[chat] tools = "chat"` became **`[chat] preset`**: TOML can't hold
   both that string and the `[chat.tools.<name>]` tables. Built keys: `enabled`, `recent`, `agent`,
   `preset`, `hibernate_after`, `seed_tokens`, `title`, `title_command`, `daily_cap`, `index_tools`,
@@ -6824,7 +6927,7 @@ hides when `enabled`):
   card `a/A/d`, composer, PageUp/Down) plus: a header (title, `agent@profile`, tools preset, `⎇ branch
   2/3`, cost, machine chip); the branch navigator; a composer that takes **slash commands**
   (`/fork`, `/side`, `/agent`, `/tools`, `/title`, `/retry`, `/search`, `/export`, `/incognito`,
-  `/task`), each also a palette action; an `@` completion for attached folders; and find-in-chat.
+  `/task`, `/compare [AGENTS…] [question]`, `/pick`), each also a palette action; an `@` completion for attached folders; and find-in-chat.
 - **Keys** (prefix, then; proposed, `m` and `g` are free in `docs/keys.md` on 2026-10-29; CHAT1.7
   checks and the user can rebind): `m` **new chat** in the current workspace (the composer opens at
   once, ⏎ sends; `C-o` picks agent, tools and folder; `Tab`/`C-i` incognito), `g` the **chat list**
@@ -6849,6 +6952,8 @@ hides when `enabled`):
   ptyro chat export CHAT [--format md|json] [-o FILE]
   ptyro chat set CHAT [--agent A] [--preset P] [--folder DIR]… [--no-folders]   # (built, CHAT4)
   ptyro chat presets [--json]  ·  ptyro chat task CHAT [--project P] [--agent A] [--name N]
+  ptyro chat compare CHAT [--agents A,B…] [TEXT]  ·  ptyro chat pick CHAT [NODE]   # (built, CHAT5)
+  ptyro chat import [--agent A|all] [--profile P] [--since 30d] [--dry-run]  ·  chat ls --imported
   ```
 
   `git diff | ptyro chat ask "review this"` works from any shell, even outside a ptyro session.
@@ -6882,6 +6987,7 @@ history_tool = true       # the chat tools of §22.10 in every chat
 history_scope = "profile" # profile | workspace | all
 index_tools = false       # also index tool output (2 KB a node)
 meaning = false           # live: meaning search (§22.10 tier 3); on downloads a 31 MB model once
+import = false            # live: import the agents' own histories every 10 min (CHAT5; copies them)
 notify = "blocked"        # blocked | all | off (§22.11)
 archive_purge_days = 0    # 0 = keep archived chats forever
 
@@ -6912,7 +7018,9 @@ agents are. `ptyro init` asks nothing about chats: they work on first use.
 `ChatRemoved{id}`. `ChatInfo` carries `id, handle, workspace, machine, title, agent, profile, tools,
 pinned, archived, incognito, forked, nodes, unread, last_at, status, attention, cost_micro_usd`
 (1.24 adds `folders`, `best_effort`, `shell`; `ChatTask` and `ChatPresets` → `ChatPresets{presets}`;
-`AgentChoice.found`). `SessionInfo` gains `chat`
+`AgentChoice.found`; CHAT5, still 1.24: `ChatCompare{chat, agents, text?}`, `ChatPick{chat, node?}`,
+`ChatImport{agent?, profile?, since?, dry_run}` → `ChatImported{report}`, `ChatNew.compare`,
+`ChatInfo.comparing`/`source`/`source_dir`, `ChatSiblings.agents`). `SessionInfo` gains `chat`
 (the chat id of an engine). Scopes as in §22.11, listed in `devices::needed`.
 
 ### 22.15 Built for sync (CHAT6) now, so it needs no migration later

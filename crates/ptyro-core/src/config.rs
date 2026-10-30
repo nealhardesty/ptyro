@@ -514,6 +514,10 @@ pub struct Chat {
     /// Meaning search (SPEC §22.10): find messages by what they are about, not only by their
     /// words. Switching it on downloads a 31 MB model once.
     pub meaning: bool,
+    /// Keep importing the agents' own histories (Claude Code, Codex and Gemini sessions) as
+    /// read-only chats, every 10 minutes (SPEC §22.10). Off: it copies coding history into
+    /// `chat.db`, so it is yours to ask for; `ptyro chat import` does it once.
+    pub import: bool,
     /// `blocked`: tell you when a chat needs you; `all`: also when an answer arrives while no
     /// screen shows it; `off`.
     pub notify: String,
@@ -541,6 +545,7 @@ impl Default for Chat {
             daily_cap: 200,
             index_tools: false,
             meaning: false,
+            import: false,
             notify: "blocked".into(),
             archive_purge_days: 0,
             tools: BTreeMap::new(),

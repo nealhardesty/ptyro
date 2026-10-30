@@ -259,6 +259,18 @@ pub const ACTIONS: &[ActionSpec] = &[
     ),
     a("chat.keep", "Keep this side chat as a chat of its own"),
     a(
+        "chat.compare",
+        "Ask several agents: each answers the last message as a branch labelled with its agent (/compare codex gemini [question])",
+    ),
+    a(
+        "chat.pick",
+        "Keep the answer shown: the chat switches to the agent that wrote it, which takes the next message",
+    ),
+    a(
+        "chat.import",
+        "Import your agents' own histories (Claude Code, Codex, Gemini) as read-only, searchable chats",
+    ),
+    a(
         "chat.incognito",
         "New incognito chat: nothing of it is kept or searchable, it ends with its agent",
     ),
