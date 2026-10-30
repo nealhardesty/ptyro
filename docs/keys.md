@@ -78,6 +78,7 @@ action by name.
 | `"` | the scratchpad's open items: type to search, `⏎` starts one as a task, `Ctrl-X` ticks it, `Ctrl-A` shows ticked ones, `Ctrl-E` opens the editor |
 | `H` | home: who needs you, PRs, recent projects and repositories found; ⏎ starts a task there |
 | `M` | mend: what the health badge (`⚕` in the status bar) found, each with its fix |
+| `G` | clean up: stale worktrees (merged, gone or unused), biggest on disk first; `⏎` archives one (its work is kept), `Ctrl-L` keeps it (locks it, so clean-up and the health badge leave it alone). The health badge says when there are some. Archived ones: `worktree.restore` in the palette (`⏎` restores, `Ctrl-X` deletes for good) |
 | `I` | about ptyro: its version and protocol, the repository and where to report a problem (links: `⏎` opens, `y` copies), where config, data, logs and the socket live, whether the daemon and the web app run (`U` switches a daemon of another version to this one), the tools found, and `c` copies all of it for a bug report |
 | `C` | settings: every option, searchable, edited in place (`/` search · `m` only what you changed · `u` undo · `r` reset · `n` add · `d` remove · `R` rename · `s` save a repository's settings to the shared file · `!` restart the daemon when a setting needs it) |
 | `.` | what you can do with the focused session (its menu) |

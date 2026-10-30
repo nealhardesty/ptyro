@@ -255,8 +255,10 @@ pub enum Purpose {
     WorkspaceNotify,
     /// How to finish this worktree (UX1.12): a PR, or integrate.
     Finish(String),
-    /// An archived worktree to bring back.
+    /// An archived worktree to bring back (`^x` deletes the one selected).
     Restore,
+    /// An archived worktree to delete for good.
+    ArchiveDelete,
     /// A stale worktree to clean up (archive).
     Gc,
     /// The existing branch a new worktree checks out (UX1.10).
@@ -534,8 +536,10 @@ pub enum Pending {
     CsLog(String),
     /// The context worktree's scripts, for an open palette (UX1.18).
     PaletteScripts(String),
-    /// Archived worktrees, for the restore picker (UX1.12).
-    Archives,
+    /// Archived worktrees, for the restore picker (UX1.12), or the delete one.
+    Archives {
+        delete: bool,
+    },
     /// Stale worktrees, for the clean-up picker.
     Gc,
     /// The project's branches, for the wizard (UX1.10).
@@ -1783,10 +1787,17 @@ impl App {
                 }
             }
             DomainEvent::WorktreeUpdated { info } => {
+                // Locked now: kept, so no longer stale.
+                if info.locked && self.worktree(&info.id).is_some_and(|w| !w.locked) {
+                    self.stale_changed();
+                }
                 upsert_by(&mut self.worktrees, info, |w| w.id.clone());
                 self.try_after_add();
             }
-            DomainEvent::WorktreeRemoved { id } => self.worktrees.retain(|w| w.id != id),
+            DomainEvent::WorktreeRemoved { id } => {
+                self.worktrees.retain(|w| w.id != id);
+                self.stale_changed();
+            }
             DomainEvent::WorktreeProgress { worktree, step } => {
                 self.toast(format!("{worktree}: {step}"))
             }
@@ -2271,21 +2282,26 @@ impl App {
                         .iter()
                         .map(|e| Item {
                             label: e.worktree.qualified(),
-                            detail: e.reasons.join(" · "),
+                            detail: e
+                                .size_label()
+                                .into_iter()
+                                .chain(e.reasons.iter().cloned())
+                                .collect::<Vec<_>>()
+                                .join(" · "),
                             key: None,
                             target: Target::Worktree(e.worktree.id.clone()),
                         })
                         .collect();
                     self.overlay = Some(Overlay::Picker {
                         palette: Palette::new(
-                            "Stale worktrees: ⏎ archives one (its work is kept)",
+                            "Stale worktrees, biggest first   ⏎ archive (its work is kept) · ^l keep it (lock)",
                             items,
                         ),
                         purpose: Purpose::Gc,
                     });
                 }
             }
-            (Pending::Archives, Ok(Reply::Archives { entries })) => {
+            (Pending::Archives { delete }, Ok(Reply::Archives { entries })) => {
                 if entries.is_empty() {
                     self.toast("nothing archived yet");
                 } else {
@@ -2306,10 +2322,16 @@ impl App {
                             ))),
                         })
                         .collect();
-                    self.overlay = Some(Overlay::Picker {
-                        palette: Palette::new("Restore an archived worktree", items),
-                        purpose: Purpose::Restore,
-                    });
+                    let (title, purpose) = if delete {
+                        (
+                            "Delete an archived worktree   ⏎ delete (asks first)",
+                            Purpose::ArchiveDelete,
+                        )
+                    } else {
+                        ("Restore an archived worktree   ⏎ restore · ^x delete", Purpose::Restore)
+                    };
+                    self.overlay =
+                        Some(Overlay::Picker { palette: Palette::new(title, items), purpose });
                 }
             }
             (Pending::ProjectAdded(then), Ok(Reply::Project { info, notes })) => {
@@ -2962,9 +2984,10 @@ impl App {
                     None => self.pick_project(Some(AfterAdd::Run("worktree.finish"))),
                 }
             }
-            "worktree.restore" => {
-                self.request(Pending::Archives, Request::WorktreeArchives { project: None })
-            }
+            "worktree.restore" | "worktree.archive_delete" => self.request(
+                Pending::Archives { delete: cmd.action == "worktree.archive_delete" },
+                Request::WorktreeArchives { project: None },
+            ),
             "worktree.gc" => self.request(Pending::Gc, Request::Gc),
             "shell.new" => self.new_shell(),
             a if a.starts_with("machine.") => self.machine_action(a),
@@ -4792,6 +4815,19 @@ impl App {
         });
     }
 
+    /// Deleting an archive can't be undone: asked first.
+    fn confirm_archive_delete(&mut self, addr: &str) {
+        self.overlay = Some(Overlay::Confirm {
+            text: format!(
+                "Delete the archive of {addr} for good? Its saved files go, and its branch if merged or pushed. [y/N]"
+            ),
+            action: Confirmed::Send(
+                Box::new(Request::WorktreeArchiveDelete { addr: addr.to_owned() }),
+                "archive deleted".into(),
+            ),
+        });
+    }
+
     fn confirm_remove(&mut self, w: &WorktreeInfo) {
         let live = self
             .sessions
@@ -5052,6 +5088,41 @@ impl App {
                         Some(false) => return,
                         None => {}
                     }
+                }
+                // The clean-up list keeps the one selected with ^l: locked, gc leaves it be.
+                if matches!(purpose, Purpose::Gc)
+                    && key.mods.has(Mods::CTRL)
+                    && key.code == (KeyCode::Char { c: 'l' })
+                {
+                    if let Some(Target::Worktree(id)) = palette
+                        .filtered
+                        .get(palette.selected)
+                        .map(|_| palette.item(palette.selected).target.clone())
+                    {
+                        self.request(
+                            Pending::Done("kept: it's locked, so clean-up leaves it alone".into()),
+                            Request::WorktreeLock { addr: id, lock: true },
+                        );
+                    } else {
+                        self.overlay = Some(Overlay::Picker { palette, purpose });
+                    }
+                    return;
+                }
+                // The restore list deletes the one selected with ^x.
+                if matches!(purpose, Purpose::Restore)
+                    && key.mods.has(Mods::CTRL)
+                    && key.code == (KeyCode::Char { c: 'x' })
+                {
+                    if let Some(Target::Path(addr)) = palette
+                        .filtered
+                        .get(palette.selected)
+                        .map(|_| palette.item(palette.selected).target.clone())
+                    {
+                        self.confirm_archive_delete(&addr.to_string_lossy());
+                    } else {
+                        self.overlay = Some(Overlay::Picker { palette, purpose });
+                    }
+                    return;
                 }
                 match palette.key(key) {
                     Picked::Stay => self.overlay = Some(Overlay::Picker { palette, purpose }),
@@ -5390,6 +5461,9 @@ impl App {
             (Target::Path(arg), Purpose::Cli(mut args)) => {
                 args.push(arg.to_string_lossy().into_owned());
                 self.run_cli(&args);
+            }
+            (Target::Path(addr), Purpose::ArchiveDelete) => {
+                self.confirm_archive_delete(&addr.to_string_lossy())
             }
             (Target::Path(addr), Purpose::Restore) => {
                 self.request(
@@ -8728,6 +8802,38 @@ mod tests {
         assert!(app.pad_popup.is_some());
         app.run(&Command { action: "pane.up", arg: None });
         assert!(app.pad_popup.is_some(), "the popup stays");
+    }
+
+    /// The doctor's stale worktrees are the gc reminder: said once in so many words with the key
+    /// that cleans up, ⏎ in the health list opens the clean-up list, and a worktree going asks
+    /// the doctor again so the badge doesn't count what was just cleaned up.
+    #[test]
+    fn stale_worktrees_are_announced_once_and_rechecked_when_one_goes() {
+        let mut app = app();
+        let stale = || {
+            vec![crate::health::Check {
+                section: "worktrees".into(),
+                name: "stale".into(),
+                level: "warn".into(),
+                text: "2 stale worktrees, taking 4.0 GiB (2 merged): `ptyro gc` archives or removes them; lock one to keep it".into(),
+            }]
+        };
+        app.got_health(stale());
+        let toast = app.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default();
+        assert!(toast.starts_with("2 stale worktrees, taking 4.0 GiB (2 merged): "), "{toast}");
+        assert!(toast.ends_with("G cleans up"), "{toast}");
+        assert_eq!(app.health.findings[0].fix, Some(crate::health::Fix::Action("worktree.gc")));
+        app.toast = None;
+        app.got_health(stale());
+        assert!(app.toast.is_none(), "not again while it stays");
+        app.health.last = Some(std::time::Instant::now());
+        app.on_event(DomainEvent::WorktreeRemoved { id: "p1-gone".into() });
+        assert!(app.health.last.is_none(), "asked again soon");
+        // The which-key menu shows both, with their keys (UX1.14).
+        app.prefix = true;
+        app.prefix_at = Some(Instant::now() - Duration::from_secs(5));
+        let shown = screen(&app);
+        assert!(shown.contains("G clean up") && shown.contains("f sidebar filter"), "{shown}");
     }
 
     #[test]

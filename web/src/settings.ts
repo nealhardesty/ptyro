@@ -115,6 +115,8 @@ function fixesFor(c: any): Item[] {
   if (c.section === "remote" || /restart/.test(c.text)) out.push({ label: "Restart ptyro", run: () => restartDaemon() });
   if (c.section === "daemon" && /binary|upgrade|older|newer/i.test(c.text)) out.push({ label: "Upgrade the daemon", run: () => upgradeDaemon() });
   if (c.section === "integrations") out.push({ label: "Integrations", run: () => go("#/integrations") });
+  if (c.section === "worktrees" && c.name === "stale" && c.level !== "ok") out.push({ label: "Clean up", hint: "Archive, remove or keep each", run: () => go("#/gc") });
+  if (c.section === "worktrees" && c.name === "archived") out.push({ label: "Archived", run: () => go("#/archives") });
   return out;
 }
 

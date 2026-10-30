@@ -438,6 +438,7 @@ async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
         };
         r.add(S, "chat meaning", level, m.clone());
     }
+    worktrees(&c, config, r).await;
     if quick {
         return;
     }
@@ -454,6 +455,74 @@ async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
             Err(e) => r.add("integrations", adapter, Level::Problem, e.message),
         }
     }
+}
+
+/// Worktrees left behind once their work is done (and their build output with them): a warning,
+/// so the TUI's health badge and the web's Health page say so and offer the clean-up list.
+/// Archives are only a note: they take next to nothing.
+async fn worktrees(c: &ptyro_client::Client, config: &Config, r: &mut Report) {
+    const S: &str = "worktrees";
+    if let Ok(Reply::Gc { entries }) = c.request(Request::Gc).await {
+        r.add(S, "stale", stale_level(&entries), stale_text(&entries, config.worktrees.stale_days));
+    }
+    if let Ok(Reply::Archives { entries }) =
+        c.request(Request::WorktreeArchives { project: None }).await
+        && let Some(oldest) = entries.iter().map(|e| e.archived_ms).min()
+    {
+        let purge = match config.worktrees.archive_purge_days {
+            0 => "kept until you delete them (`ptyro wt archive-rm`, or set [worktrees] archive_purge_days)".to_owned(),
+            d => format!("deleted after {d} days"),
+        };
+        r.add(
+            S,
+            "archived",
+            Level::Note,
+            format!(
+                "{} archived, the oldest {} ago; {purge}",
+                entries.len(),
+                crate::cli::age(oldest)
+            ),
+        );
+    }
+}
+
+fn stale_level(entries: &[ptyro_core::model::GcEntry]) -> Level {
+    if entries.is_empty() { Level::Ok } else { Level::Warn }
+}
+
+/// "3 stale worktrees, taking 12.4 GiB (2 merged, 1 unused for 14+ days): `ptyro gc` …".
+fn stale_text(entries: &[ptyro_core::model::GcEntry], stale_days: u32) -> String {
+    if entries.is_empty() {
+        return "nothing stale".into();
+    }
+    let any = |e: &ptyro_core::model::GcEntry, words: &[&str]| {
+        e.reasons.iter().any(|r| words.iter().any(|w| r.contains(w)))
+    };
+    let merged = entries.iter().filter(|e| any(e, &["merged", "integrated"])).count();
+    let gone = entries.iter().filter(|e| any(e, &["gone"])).count();
+    let unused = entries.len() - merged - gone;
+    let why: Vec<String> = [
+        (merged, "merged".to_owned()),
+        (unused, format!("unused for {stale_days}+ days")),
+        (gone, "gone from disk".to_owned()),
+    ]
+    .into_iter()
+    .filter(|(n, _)| *n > 0)
+    .map(|(n, what)| format!("{n} {what}"))
+    .collect();
+    let bytes: u64 = entries.iter().filter_map(|e| e.bytes).sum();
+    let partial = entries.iter().any(|e| e.bytes_partial);
+    let size = match (bytes, partial) {
+        (0, _) => String::new(),
+        (b, false) => format!(", taking {}", ptyro_core::model::human_bytes(b)),
+        (b, true) => format!(", taking at least {}", ptyro_core::model::human_bytes(b)),
+    };
+    let n = entries.len();
+    format!(
+        "{n} stale worktree{}{size} ({}): `ptyro gc` archives or removes them; lock one to keep it",
+        if n == 1 { "" } else { "s" },
+        why.join(", ")
+    )
 }
 
 pub(crate) async fn terminal(r: &mut Report) {
@@ -766,6 +835,44 @@ async fn profiles(ctx: &Ctx, config: &Config, only: Option<String>, r: &mut Repo
 
 #[cfg(test)]
 mod tests {
+    fn stale(name: &str, reason: &str, bytes: Option<u64>) -> ptyro_core::model::GcEntry {
+        let worktree = serde_json::from_value(serde_json::json!({
+            "id": name, "project": "p", "project_slug": "p", "name": name, "path": "/x",
+            "is_root": false, "state": "ready", "created_ms": 0,
+        }))
+        .unwrap();
+        ptyro_core::model::GcEntry {
+            worktree,
+            reasons: vec![reason.into()],
+            bytes,
+            bytes_partial: false,
+        }
+    }
+
+    /// The nudge says how many, why and how much disk, and how to act on it or keep one.
+    #[test]
+    fn stale_worktrees_are_a_warning_saying_why_and_how_big() {
+        use super::{Level, stale_level, stale_text};
+        assert_eq!(stale_level(&[]), Level::Ok);
+        let entries = [
+            stale("a", "branch merged into origin/main", Some(3 << 30)),
+            stale("b", "its PR merged", Some(1 << 30)),
+            stale("c", "no sessions for 20 days", None),
+        ];
+        assert_eq!(stale_level(&entries), Level::Warn);
+        assert_eq!(
+            stale_text(&entries, 14),
+            "3 stale worktrees, taking 4.0 GiB (2 merged, 1 unused for 14+ days): `ptyro gc` archives or removes them; lock one to keep it"
+        );
+        let mut one = stale("d", "its directory is gone", None);
+        assert_eq!(
+            stale_text(std::slice::from_ref(&one), 14),
+            "1 stale worktree (1 gone from disk): `ptyro gc` archives or removes them; lock one to keep it"
+        );
+        (one.bytes, one.bytes_partial) = (Some(2048), true);
+        assert!(stale_text(&[one], 14).contains("taking at least 2.0 KiB"));
+    }
+
     #[test]
     fn versions() {
         assert_eq!(super::first_version("2.1.304 (Claude Code)").as_deref(), Some("2.1.304"));

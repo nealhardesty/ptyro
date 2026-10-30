@@ -228,7 +228,7 @@ fn textwrap_simple(text: &str, width: usize) -> Vec<String> {
 }
 
 /// The menu after the prefix (UX1.14): what each next key does, grouped, as bound now.
-const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
+pub(crate) const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
     (
         "start",
         &[
@@ -265,6 +265,7 @@ const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
             ("pane.zoom", "zoom"),
             ("pane.close", "close"),
             ("focus.toggle", "sidebar"),
+            ("sidebar.filter", "sidebar filter"),
             ("copy.enter", "scroll back"),
         ],
     ),
@@ -277,6 +278,7 @@ const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
             ("sets", "change sets"),
             ("script.run", "run script"),
             ("worktree.open", "editor"),
+            ("worktree.gc", "clean up"),
             ("shell.new", "new shell"),
             ("shell.drawer", "quick shell"),
             ("scratchpad.toggle", "scratchpad"),

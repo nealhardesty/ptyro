@@ -150,9 +150,10 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `wt retitle` | `worktree.retitle` | `worktree.retitle`: a worktree's ⋯ menu |
 | `wt finish` | `worktree.finish` (`F` in the sidebar): a PR or integrate | `worktree.finish`: Finish on a worktree's page: a PR, or merge into the main branch |
 | `wt archive` | `worktree.archive` (or `x` on a merged worktree) | `worktree.archive`: a worktree's ⋯ menu |
-| `wt restore` | `worktree.restore`: pick from the archived ones | `worktree.restore`: Archived (Projects tab): tap one |
+| `wt restore` | `worktree.restore`: pick from the archived ones (`^x` there deletes one) | `worktree.restore`: Archived (Projects tab): tap one |
 | `wt archives` | `worktree.restore` lists them | `worktree.restore`: Archived lists them |
-| `gc` | `worktree.gc`: stale worktrees, ⏎ archives one; a merged worktree's `x` archives it | `worktree.gc`: 🧹 on the Projects tab: stale worktrees, archive one |
+| `wt archive-rm` | `worktree.archive_delete`: pick an archived one (asks first), or `^x` in `worktree.restore`'s list | `worktree.archive_delete`: Archived (Projects tab): tap one → Delete |
+| `gc` | `worktree.gc` (`G`, or ⏎ on the health finding): stale worktrees with their size, ⏎ archives one, `^l` keeps it (locks); a merged worktree's `x` archives it | `worktree.gc`: 🧹 on the Projects tab (`🧹3` when some are stale): their size, archive or keep one |
 | `ws ls` | `workspace.switch` (`w`) | `workspace.switch`: chips on the Projects tab; Workspaces lists them |
 | `ws new` | `workspace.switch` (`w`) → "+ new workspace" | `workspace.new`: ＋ on Workspaces |
 | `ws set` | `workspace.profile` and `workspace.notify` | `workspace.set`: a workspace's menu: its profile and notifications |

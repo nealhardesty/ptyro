@@ -271,6 +271,7 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"gc"}), FULL, false),
         s(json!({"t":"worktree_archive","addr":a,"stop_sessions":false}), FULL, false),
         s(json!({"t":"worktree_restore","addr":a}), FULL, false),
+        s(json!({"t":"worktree_archive_delete","addr":a}), FULL, false),
         s(json!({"t":"worktree_finish","addr":a,"integrate":false}), FULL, false),
         s(json!({"t":"profile_env","name":a}), FULL, false),
         s(json!({"t":"profile_rename","old":a,"new":"x"}), FULL, false),

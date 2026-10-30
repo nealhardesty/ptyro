@@ -10,7 +10,7 @@ import { Term } from "./term.js";
 import { actions, ago, h, patch, sheet, tipOf, ui, views } from "./kit.js";
 import type { Child } from "./kit.js";
 import { data, loadAll, machineOf, onEvent, splitMachine } from "./data.js";
-import "./projects.js";
+import { staleMaybeChanged } from "./projects.js";
 import "./review.js";
 import "./runs.js";
 import "./settings.js";
@@ -613,6 +613,7 @@ conn.listeners.add((msg) => {
   }
   if (msg.t === "event") {
     const e = msg.event;
+    staleMaybeChanged(e);
     if (onEvent(e)) { render(); return; }
     if (e.info?.chat) return;
     if (e.info && (e.t === "session_created" || e.t === "session_updated" || e.t === "session_exited" || e.t === "session_restarted")) {

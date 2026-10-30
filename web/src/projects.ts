@@ -36,6 +36,7 @@ const ACTIONS = {
   "worktree.finish": "Finish: commit what's left, then open a PR or merge into the main branch",
   "worktree.archive": "Archive: keep its work and its branch, remove the worktree",
   "worktree.restore": "Bring an archived worktree back as it was",
+  "worktree.archive_delete": "Delete an archived worktree for good: its saved files, and its branch if merged or pushed",
   "worktree.gc": "Stale worktrees: merged, abandoned or missing; archive or remove them",
   "workspace.switch": "Show one workspace's projects, or all of them",
   "workspace.new": "A new workspace",
@@ -121,7 +122,7 @@ function projectsView(): HTMLElement {
       h("div", { class: "rows" }, ...wts.map(worktreeRow)));
   }) : [h("div", { class: "empty" }, h("p", {}, wsFilter ? `No projects in ${wsFilter}.` : "No projects yet."), h("button", { class: "primary", onclick: addProject }, "Add a project"))];
   return h("div", {}, ui.header("Projects", false,
-    h("button", { class: "icon", title: tip("worktree.gc"), "aria-label": "Clean up", onclick: () => go("#/gc") }, "🧹"),
+    cleanUpButton(),
     h("button", { class: "icon plus", title: tip("project.add"), "aria-label": "Add a project", onclick: addProject }, "＋")),
     chips, h("main", { class: "list", title: tip("projects") }, ...body,
       h("div", { class: "foot-links" },
@@ -408,27 +409,61 @@ function worktreeView(rest: string): HTMLElement {
 const gc = new Cache<any[]>(() => conn.request({ t: "gc" }).then((r) => r.entries));
 const archives = new Cache<any[]>(() => conn.request({ t: "worktree_archives", project: null }).then((r) => r.entries));
 
+/// `512 B`, `3.4 MiB`, `12.0 GiB`, as the CLI and the TUI say it.
+function bytes(b: number): string {
+  const u = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let i = 0;
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+  return i ? `${b.toFixed(1)} ${u[i]}` : `${b} B`;
+}
+const sizeOf = (e: any): string | null => (e.bytes == null ? null : `${e.bytes_partial ? "≥ " : ""}${bytes(e.bytes)}`);
+
+/// A worktree went, or was just locked (kept; called before the event is applied): the stale count is asked again, once it was known.
+export function staleMaybeChanged(e: any): void {
+  if (conn.scope === "full" && (e.t === "worktree_removed" || (e.t === "worktree_updated" && e.info?.locked && data.worktrees.get(e.info.id)?.locked === false))) gc.refresh("");
+}
+
+/// The Projects tab's 🧹, with how many worktrees are stale once it's known (the TUI's ⚕ says
+/// the same): the reminder to clean up, where you'd see it.
+function cleanUpButton(): HTMLElement {
+  const n = conn.scope === "full" ? gc.get("")?.length ?? 0 : 0;
+  return h("button", { class: "icon", title: n ? `${n} stale worktree${n === 1 ? "" : "s"}: ${tip("worktree.gc")}` : tip("worktree.gc"), "aria-label": n ? `Clean up ${n}` : "Clean up", onclick: () => go("#/gc") }, n ? `🧹${n}` : "🧹");
+}
+
 function gcView(): HTMLElement {
   const entries = gc.get("");
+  const total = (entries ?? []).reduce((t, e) => t + (e.bytes ?? 0), 0);
+  const done = (msg: string) => async (req: any) => { await ask(req, msg); gc.reload(""); };
   const body = pending(gc, "", "Looking for stale worktrees…") ?? (entries!.length
-    ? h("div", { class: "rows" }, ...entries!.map((e) => row(e.worktree.title || e.worktree.name, `${e.worktree.project_slug} · ${e.reasons.join(", ")}`, null, {
+    ? h("div", { class: "rows" }, ...entries!.map((e) => row(e.worktree.title || e.worktree.name, `${e.worktree.project_slug} · ${e.reasons.join(", ")}`, sizeOf(e), {
         onclick: () => menu(e.worktree.title || e.worktree.name, [
-          { label: "Archive", hint: "Keeps its work", run: async () => { await ask({ t: "worktree_archive", addr: e.worktree.id, stop_sessions: false }, "Archived"); gc.reload(""); } },
+          { title: tip("worktree.archive"), label: "Archive", hint: "Keeps its work", run: () => done("Archived")({ t: "worktree_archive", addr: e.worktree.id, stop_sessions: false }) },
+          { title: tip("worktree.lock"), label: "Keep it", hint: "Locks it: clean-up leaves it alone", run: () => done("Kept: it's locked")({ t: "worktree_lock", addr: e.worktree.id, lock: true }) },
           { label: "Open", run: () => go(`#/wt/${enc(e.worktree.id)}`) },
         ]) })))
     : h("p", { class: "empty" }, "Nothing is stale."));
   return h("div", {}, ui.header("Clean up", "#/p", h("button", { class: "icon", onclick: () => gc.reload(""), "aria-label": "Look again" }, "↻")),
-    h("main", { class: "stack", title: tip("worktree.gc") }, h("p", { class: "intro" }, "Worktrees that are merged, abandoned or gone. Nothing is removed unless you say so."), body));
+    h("main", { class: "stack", title: tip("worktree.gc") }, h("p", { class: "intro" }, `Worktrees that are merged, abandoned or gone, biggest first${total ? ` (${bytes(total)} in all, build output included)` : ""}. Nothing is removed unless you say so.`), body));
 }
 
 function archivesView(): HTMLElement {
   const entries = archives.get("");
   const body = pending(archives, "") ?? (entries!.length
-    ? h("div", { class: "rows" }, ...entries!.map((e) => row(e.title || e.name, `${e.project_slug} · ${e.branch}`, ago(e.archived_ms), {
-        onclick: () => confirm(`Restore ${e.title || e.name}?`, "The branch is checked out again and the saved files come back as uncommitted work.", "Restore", async () => {
-          const r = await ask({ t: "worktree_restore", addr: `${e.project_slug}/${e.name}` }, "Restored");
-          if (r?.info) go(`#/wt/${enc(r.info.id)}`);
-        }, false) })))
+    ? h("div", { class: "rows" }, ...entries!.map((e) => {
+        const name = e.title || e.name, addr = `${e.project_slug}/${e.name}`;
+        return row(name, `${e.project_slug} · ${e.branch}`, ago(e.archived_ms), {
+          onclick: () => menu(name, [
+            { title: tip("worktree.restore"), label: "Restore", hint: "Back as it was", run: () => confirm(`Restore ${name}?`, "The branch is checked out again and the saved files come back as uncommitted work.", "Restore", async () => {
+              const r = await ask({ t: "worktree_restore", addr }, "Restored");
+              if (r?.info) go(`#/wt/${enc(r.info.id)}`);
+            }, false) },
+            { title: tip("worktree.archive_delete"), label: "Delete", hint: "For good", danger: true, run: () => confirm(`Delete the archive of ${name}?`, "Its saved files are deleted, and its branch too if it is merged or pushed. This can't be undone.", "Delete", async () => {
+              const r = await ask({ t: "worktree_archive_delete", addr }, "Deleted");
+              if (r) showNotes("Archive deleted", r.notes ?? []);
+              archives.reload("");
+            }) },
+          ]) });
+      }))
     : h("p", { class: "empty" }, "No archived worktrees."));
   return h("div", {}, ui.header("Archived", "#/p"), h("main", { class: "stack", title: tip("worktree.restore") }, body));
 }

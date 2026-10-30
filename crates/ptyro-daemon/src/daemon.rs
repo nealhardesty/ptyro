@@ -50,6 +50,8 @@ pub struct Daemon {
     pub(crate) archiving: Mutex<std::collections::HashSet<String>>,
     /// The archive list is read, changed and written back whole: one editor at a time.
     pub(crate) archive_list: tokio::sync::Mutex<()>,
+    /// What each stale worktree takes on disk, measured by `gc`: (bytes, partial, when).
+    pub(crate) gc_sizes: Mutex<HashMap<String, (u64, bool, std::time::Instant)>>,
     /// Workspaces, projects, worktrees and trust (SPEC §14.2), mirrored to the store.
     pub registry: Mutex<Registry>,
     /// Resolved secrets kept for `secret_ttl` (memory only, SPEC §10.10).
@@ -198,6 +200,7 @@ impl Daemon {
             declined: Mutex::new(std::collections::HashSet::new()),
             archiving: Mutex::new(std::collections::HashSet::new()),
             archive_list: tokio::sync::Mutex::new(()),
+            gc_sizes: Mutex::new(HashMap::new()),
             registry: Mutex::new(registry),
             secrets: Mutex::new(HashMap::new()),
             status_tx,

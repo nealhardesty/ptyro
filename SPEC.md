@@ -941,7 +941,8 @@ Push messages have no id.
 - Titles (§2.1): `SpawnSpec.title` and `WorktreeSpec.title`, `WorktreeInfo.title`, and
   `Retitle{addr, title, worktree}`. `SessionInfo.title` now means the title people read (its own,
   else its first prompt, else the window title), and the window title is `window_title`.
-- `WorktreeArchive{addr, stop_sessions}`, `WorktreeRestore{addr}`, `WorktreeArchives{project}`
+- `WorktreeArchive{addr, stop_sessions}`, `WorktreeRestore{addr}`, `WorktreeArchives{project}`,
+  `WorktreeArchiveDelete{addr}` → `Notes`
   → `Archives{entries}`, and `WorktreeFinish{addr, integrate}` (§10.8).
 - `SessionInfo` gains `summary` (`Summary{text, turn, at_ms}`), and a new request,
   `Summarize{addr}` (control scope), makes one now and replies `Session` (§11.2h).
@@ -2164,6 +2165,24 @@ branches, no sessions for N days.
 - **A missing directory** is just forgotten (`git worktree prune`).
 - **gc** reports directories that are gone, branches merged into the base, and worktrees without
   sessions for `worktrees.stale_days` (default 14). It asks before each removal and never forces.
+- **[changed 2026-10-30] gc, measured and kept:**
+  - *Merged* means the branch moved from where its reflog says it was made and its tip is in
+    the base. The old test asked for commits outside the base that were also in it, so it never
+    fired. A squash- or rebase-merged PR, or an integrate (`WorktreeInfo::shipped`), counts too
+    ("its PR merged", "integrated into the main branch").
+  - A **locked** worktree is kept on purpose: gc leaves it out unless its directory is gone. Every
+    gc offers *keep* (CLI `k`, TUI `^l`, web "Keep it"), which locks it.
+  - `GcEntry::bytes` (`bytes_partial`: it stopped early, "≥") is what the directory takes on disk:
+    allocated blocks, links not followed, build output included, each walk stopping after 3 s,
+    side by side, cached for 30 min (`Daemon::gc_sizes`, only for worktrees still stale).
+    Entries come biggest first; the CLI prints a size column and the total.
+- **The nudge (doctor `worktrees`):** `stale` is a warning when anything is stale: "3 stale
+  worktrees, taking 4.0 GiB (2 merged, 1 unused for 14+ days): `ptyro gc` archives or removes
+  them; lock one to keep it". So it is the TUI's `⚕` (once per attach, its own toast: "…: `C-q G`
+  cleans up"; ⏎ in `M` opens `worktree.gc`, and a worktree removed or locked asks the doctor
+  again) and the web's Health page ("Clean up"), where the Projects tab's 🧹 also counts them
+  (`🧹3`). `archived` is only a note: how many, the oldest, and whether
+  `archive_purge_days` deletes them.
 
 **[built UX1.12] Archive, restore and finish** (`crates/ptyro-daemon/src/finish.rs`):
 - **Archive** (`WorktreeArchive`, `ptyro wt archive`): a snapshot commit of the files as they are
@@ -2192,6 +2211,13 @@ branches, no sessions for N days.
   a second one while it runs is refused (before, a PR poll and a refresh seeing the same merge
   could both snapshot it and both list it).
 - `ptyro gc` asks per stale worktree: `a` archive (keeps the work), `r` remove, ⏎ skip.
+- **Delete an archive** (`WorktreeArchiveDelete`, `ptyro wt archive-rm [project/]name…`, asks
+  unless `--yes`; 2026-10-30): the entry leaves the list first (an entry whose snapshot is gone
+  couldn't be restored), then the snapshot ref and its `archive-extras/` copies go, and its branch
+  by `wt rm`'s rule (deleted when merged into the base, kept in the archive as `ArchiveEntry::base`,
+  or identical to its upstream; kept and said why otherwise, and kept while another archive or a
+  worktree has it). **`[worktrees] archive_purge_days`** (default 0, never) does the same to
+  archives older than that, once a day and a minute after the daemon starts.
 
 ### 10.9 Repository status
 
@@ -2837,8 +2863,8 @@ learning anything up front.
   the empty sidebar names it.
 - **Which-key** (UX1.14): when no key follows the prefix within `[ui] which_key_delay` (400 ms;
   0: never), a menu of the next keys appears above the status bar, in five groups (start, go,
-  panes, work, this: including settings, broadcast, home, last session, shell here and the
-  scratchpad), as bound now; keys typed before it work as always. The event loop wakes at
+  panes, work, this: including settings, broadcast, home, last session, shell here, the
+  scratchpad, `G` clean up and `f` the sidebar filter), as bound now; keys typed before it work as always. The event loop wakes at
   the deadline, not on its 250 ms tick.
 - **Everything the CLI does** (UX1.21): `docs/parity.md`'s TUI column has no gaps, and
   `make tui-parity` (part of `make test`) fails on any. The frequent and visual ones are native:
@@ -2879,7 +2905,8 @@ learning anything up front.
   the status bar (red with a problem), announced once when there are more. `health` (`M`)
   lists them, ⏎ fixes one: a tmux option set now and offered for `~/.tmux.conf`; `chmod 600`;
   a line appended to a file (asked first); or the `` `ptyro …` `` command the finding names
-  (`<profile>` filled in from its section), run in a split. `run_cli` (a `ptyro` command in a
+  (`<profile>` filled in from its section), run in a split; stale worktrees open the clean-up
+  list (`Fix::Action`, §10.8). `run_cli` (a `ptyro` command in a
   split, its output kept) is also the TUI path of `doctor`, `daemon.status|logs|restart|
   upgrade|service|unservice` and `integrations[.install|.uninstall]`.
 - **The first run and home** (UX1.19, `crates/ptyro-tui/src/onboard.rs`). When `ptyro` had to
@@ -2899,7 +2926,9 @@ learning anything up front.
   asks "a pull request" or "integrate", then runs it while messages say how far it got. A merged
   worktree's hint is "clean up", and `x` on it archives instead of removing. A removal refused for
   work it would lose offers `a`: archive instead. `worktree.archive`, `worktree.restore` (a picker
-  of archived worktrees) and `worktree.gc` (stale ones; ⏎ archives) are in the palette.
+  of archived worktrees; `^x` deletes the selected one, asked first), `worktree.archive_delete`
+  (the same picker, ⏎ deletes) and `worktree.gc` (`G`; stale ones; ⏎ archives) are in the
+  palette. The web's Archived list offers Restore and Delete on each.
 - **A companion shell** (UX1.13, `shell.here`: `!` after the prefix or in the sidebar): your
   shell in the selected worktree, under its profile. **[built UX1.25]** It is now the
   **quick terminal**, below.
@@ -3627,6 +3656,7 @@ quiet_hours = "22:00-07:00"
 location = "data"                         # data | sibling | in-repo
 branch_template = "{name}"
 archive_on_merge = false                  # archive a worktree once its PR merges (UX1.12)
+archive_purge_days = 0                    # delete archives this old (and merged branches); 0 = keep
 
 [ports]
 range = "20000-29999"

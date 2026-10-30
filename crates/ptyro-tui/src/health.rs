@@ -16,6 +16,8 @@ use crate::palette::{Item, Palette, Target};
 const EVERY: Duration = Duration::from_secs(600);
 /// The first run, a while after attaching: it isn't urgent, and it starts a few processes.
 const FIRST: Duration = Duration::from_secs(20);
+/// The doctor's finding about worktrees left behind (`ptyro doctor`'s `worktrees` `stale`).
+pub const STALE: &str = "worktrees stale";
 
 /// A doctor check, as `ptyro doctor --json` prints it.
 #[derive(Debug, Clone, Deserialize)]
@@ -36,6 +38,8 @@ pub enum Fix {
     Private(PathBuf),
     /// `tmux set -g <name> <value>`, now and in `~/.tmux.conf`.
     Tmux { name: String, value: String },
+    /// A TUI action: stale worktrees open the clean-up list (`worktree.gc`).
+    Action(&'static str),
 }
 
 #[derive(Debug, Clone)]
@@ -94,7 +98,9 @@ pub fn finding(c: &Check) -> Option<Finding> {
         "warn" => false,
         _ => return None,
     };
-    let fix = if c.section == "tmux" {
+    let fix = if c.section == "worktrees" && c.name == "stale" {
+        Some(Fix::Action("worktree.gc"))
+    } else if c.section == "tmux" {
         Some(Fix::Tmux { name: c.name.clone(), value: "on".into() })
     } else if c.name == "config mode" {
         private_path(&c.text).map(|p| Fix::Private(PathBuf::from(p)))
@@ -188,13 +194,29 @@ impl App {
             });
         }
         let n = findings.len();
+        let had_stale = self.health.findings.iter().any(|f| f.what == STALE);
+        let stale = findings.iter().find(|f| f.what == STALE).map(|f| f.text.clone());
         self.health.findings = findings;
-        if n > self.health.announced {
+        // Worktrees left behind are said in so many words, once per attach (and again only
+        // once cleaned up and back): how many, how much disk, and the key that cleans up.
+        if let Some(text) = stale.filter(|_| !had_stale) {
+            let key = self.keymap.key_for("worktree.gc").unwrap_or_else(|| "worktree.gc".into());
+            let what = text.split(": `").next().unwrap_or(&text);
+            self.toast(format!("{what}: {key} cleans up"));
+        } else if n > self.health.announced {
             let key = self.keymap.key_for("health").unwrap_or_else(|| "health".into());
             self.toast(format!("{n} thing(s) to set up or fix: {key} shows them"));
         }
         self.health.announced = n;
         self.dirty = true;
+    }
+
+    /// A worktree went or was locked: if the doctor had stale ones, ask it again soon, so the
+    /// badge doesn't keep counting what was just cleaned up.
+    pub(crate) fn stale_changed(&mut self) {
+        if self.health.findings.iter().any(|f| f.what == STALE) {
+            self.health.last = None;
+        }
     }
 
     /// `M` (mend): the findings, each picked to fix.
@@ -217,6 +239,7 @@ impl App {
                     Some(Fix::Tmux { name, value }) => {
                         format!("{} · ⏎ sets {name} {value}", f.text)
                     }
+                    Some(Fix::Action(_)) => format!("{} · ⏎ opens the clean-up list", f.text),
                     None => f.text.clone(),
                 },
                 key: None,
@@ -245,6 +268,7 @@ impl App {
         let Some(f) = self.health.findings.get(i).cloned() else { return };
         match f.fix {
             Some(Fix::Cli(args)) => self.run_cli(&args),
+            Some(Fix::Action(action)) => self.run(&crate::keymap::Command { action, arg: None }),
             Some(Fix::Append { file, line }) => {
                 self.overlay = Some(Overlay::Confirm {
                     text: format!(

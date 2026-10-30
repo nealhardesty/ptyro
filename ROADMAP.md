@@ -1449,6 +1449,15 @@ UX1 tests wait for what's on screen, not a clock.
   `worktree.gc`. The setting is `[worktrees] archive_on_merge` (there's no `[gc]` section).
   `tests/m6.rs` goes from finish to a PR, merged, archived and restored; `tests/ux1.rs` keeps
   uncommitted and untracked work through archive and restore (SPEC §10.8).
+  *Added (2026-10-30):* deleting archives, which could only pile up before: `ptyro wt
+  archive-rm`, the TUI's `worktree.archive_delete` and `^x` in the restore list, Delete under
+  the web's Archived; `[worktrees] archive_purge_days` (default 0) deletes old ones daily. A
+  branch goes with its archive only when merged or pushed. `worktree.gc` got `G` and a place in
+  the which-key menu (with `sidebar.filter`). The doctor's `worktrees stale` warning is the
+  reminder: the TUI's `⚕` and a toast once per attach, the web's Health and `🧹N`. gc now
+  measures disk (biggest first), counts squash-merged PRs, keeps locked worktrees, offers
+  *keep*, and says "merged" again (its test could never pass). `tests/ux1.rs` deletes a merged
+  and an unmerged archive and measures and keeps a stale worktree.
 - [x] **UX1.13 Companion shell** (R-UX-03) — S. One key opens a shell in the selected
   worktree, with the same profile environment, split beside the agent. *Done (2026-10-22):*
   `shell.here`, `!` after the prefix or in the sidebar, and in the row menu. (2026-10-26: UX2.3

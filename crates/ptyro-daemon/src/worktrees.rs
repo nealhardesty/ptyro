@@ -971,8 +971,10 @@ impl Daemon {
         }
     }
 
-    /// Stale worktrees (SPEC §10.8): gone from disk, branch merged, or unused for a while.
-    async fn gc(self: &Arc<Self>) -> Result<Reply, Error> {
+    /// Stale worktrees (SPEC §10.8): gone from disk, branch merged (a squash-merged PR too), or
+    /// unused for a while; a locked one is being kept, so only its missing directory counts.
+    /// Each comes with what it takes on disk, the biggest first.
+    pub(crate) async fn gc(self: &Arc<Self>) -> Result<Reply, Error> {
         let stale_days = self.config().worktrees.stale_days;
         let worktrees: Vec<WorktreeInfo> = {
             let reg = self.registry.locked();
@@ -983,6 +985,8 @@ impl Daemon {
             let mut reasons = Vec::new();
             if !w.path.exists() {
                 reasons.push("its directory is gone".to_owned());
+            } else if w.locked {
+                continue;
             }
             if let (Some(b), Some(p)) = (&w.branch, self.project_by_id(&w.project))
                 && w.path.exists()
@@ -992,16 +996,32 @@ impl Daemon {
                     let git = Git::new();
                     let tip = git.rev(&root, &format!("refs/heads/{b}"))?;
                     let base = base.filter(|x| git.ref_exists(&root, x))?;
-                    let ahead =
-                        git.run(&root, &["rev-list", "--count", &format!("{base}..{tip}")]).ok()?;
-                    (ahead.trim() != "0"
-                        && git.run(&root, &["merge-base", "--is-ancestor", &tip, &base]).is_ok())
-                    .then_some(base)
+                    // Merged: it has commits of its own (it moved from where its reflog says it
+                    // was made), and they are in the base. (Before, this asked for commits that
+                    // weren't in the base *and* were: never both, so it never said merged.)
+                    let made = git
+                        .run(&root, &["reflog", "show", "--format=%H", &format!("refs/heads/{b}")])
+                        .ok()?
+                        .lines()
+                        .last()
+                        .map(str::to_owned)?;
+                    (made != tip && git.is_ancestor(&root, &tip, &base)).then_some(base)
                 })
                 .await?;
                 if let Some(base) = merged {
                     reasons.push(format!("branch merged into {base}"));
                 }
+            }
+            // A squash or rebase merge leaves the branch's commits out of the base: the PR says.
+            if w.path.exists() && reasons.is_empty() && w.shipped() {
+                reasons.push(
+                    if w.pr.as_ref().is_some_and(|p| p.state == "MERGED") {
+                        "its PR merged"
+                    } else {
+                        "integrated into the main branch"
+                    }
+                    .to_owned(),
+                );
             }
             let has_sessions = !self.sessions_in(&w.id).is_empty();
             let last = w.last_used_ms.unwrap_or(w.created_ms);
@@ -1010,10 +1030,43 @@ impl Daemon {
                 reasons.push(format!("no sessions for {days} days"));
             }
             if !reasons.is_empty() {
-                entries.push(GcEntry { worktree: w, reasons });
+                entries.push(GcEntry { worktree: w, reasons, bytes: None, bytes_partial: false });
             }
         }
+        self.measure(&mut entries).await;
+        entries.sort_by_key(|e| std::cmp::Reverse(e.bytes.unwrap_or(0)));
         Ok(Reply::Gc { entries })
+    }
+
+    /// What each entry's directory takes on disk: measured at most every half hour (the doctor
+    /// asks every ten minutes), side by side, each giving up after a few seconds.
+    async fn measure(&self, entries: &mut [GcEntry]) {
+        const FRESH: Duration = Duration::from_secs(1800);
+        const BUDGET: Duration = Duration::from_secs(3);
+        let todo: Vec<(String, PathBuf)> = {
+            let sizes = self.gc_sizes.locked();
+            entries
+                .iter()
+                .filter(|e| e.worktree.path.exists())
+                .filter(|e| sizes.get(&e.worktree.id).is_none_or(|(_, _, at)| at.elapsed() > FRESH))
+                .map(|e| (e.worktree.id.clone(), e.worktree.path.clone()))
+                .collect()
+        };
+        let measured = futures::future::join_all(todo.into_iter().map(|(id, path)| {
+            tokio::task::spawn_blocking(move || (id, disk_usage(&path, BUDGET)))
+        }))
+        .await;
+        let mut sizes = self.gc_sizes.locked();
+        let now = std::time::Instant::now();
+        for (id, (bytes, partial)) in measured.into_iter().flatten() {
+            sizes.insert(id, (bytes, partial, now));
+        }
+        sizes.retain(|id, _| entries.iter().any(|e| &e.worktree.id == id));
+        for e in entries.iter_mut() {
+            if let Some((bytes, partial, _)) = sizes.get(&e.worktree.id) {
+                (e.bytes, e.bytes_partial) = (Some(*bytes), *partial);
+            }
+        }
     }
 
     /// `wt rename-branch` (SPEC §10.3): never once pushed. Without a name, one is derived from the
@@ -1126,6 +1179,7 @@ impl Daemon {
                 self.archive_worktree(&addr, stop_sessions).await
             }
             Request::WorktreeRestore { addr } => self.restore_worktree(&addr).await,
+            Request::WorktreeArchiveDelete { addr } => self.delete_archive(&addr).await,
             Request::WorktreeArchives { project } => self.list_archives(project.as_deref()).await,
             Request::ProjectSuggest { addr, apply } => self.project_suggest(&addr, apply).await,
             Request::Branches { project } => {
@@ -1233,6 +1287,28 @@ fn today() -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     format!("{:04}-{m:02}-{d:02}", if m <= 2 { y + 1 } else { y })
+}
+
+/// The disk `path` takes (allocated blocks, so sparse files count what they use), without
+/// following links, and whether it stopped at `budget` with more left to count.
+pub(crate) fn disk_usage(path: &Path, budget: Duration) -> (u64, bool) {
+    use std::os::unix::fs::MetadataExt;
+    let deadline = std::time::Instant::now() + budget;
+    let (mut total, mut stack) = (0u64, vec![path.to_path_buf()]);
+    while let Some(dir) = stack.pop() {
+        if std::time::Instant::now() > deadline {
+            return (total, true);
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            let Ok(m) = e.metadata() else { continue };
+            total += m.blocks() * 512;
+            if m.is_dir() {
+                stack.push(e.path());
+            }
+        }
+    }
+    (total, false)
 }
 
 #[cfg(test)]

@@ -565,6 +565,11 @@ pub enum Request {
     WorktreeRestore {
         addr: String,
     },
+    /// Delete an archived worktree for good (`name`, or `project/name`): its snapshot, the
+    /// ignored files kept with it, and its branch when that is merged or pushed.
+    WorktreeArchiveDelete {
+        addr: String,
+    },
     /// Archived worktrees, newest first.
     WorktreeArchives {
         #[serde(default)]

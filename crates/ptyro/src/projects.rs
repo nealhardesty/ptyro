@@ -156,6 +156,15 @@ pub enum WtCmd {
     },
     /// Bring an archived worktree back as it was (`name` or `project/name`)
     Restore { worktree: String },
+    /// Delete archived worktrees for good (`name` or `project/name`): the saved files go, and
+    /// the branch too when it is merged or pushed. Asks first unless --yes
+    ArchiveRm {
+        #[arg(required = true)]
+        worktrees: Vec<String>,
+        /// Don't ask
+        #[arg(short, long)]
+        yes: bool,
+    },
     /// Archived worktrees, newest first
     Archives {
         #[arg(short, long)]
@@ -931,6 +940,27 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
             );
             Ok(0)
         }
+        WtCmd::ArchiveRm { worktrees, yes } => {
+            let what = worktrees.join(", ");
+            if !yes
+                && !confirm(&format!(
+                    "Delete the archive of {what} for good? Its saved files can't come back."
+                ))
+            {
+                return Err(Error::invalid(format!(
+                    "kept {what} (pass --yes to delete without asking)"
+                )));
+            }
+            for addr in worktrees {
+                let Reply::Notes { notes: n } =
+                    c.request(Request::WorktreeArchiveDelete { addr }).await?
+                else {
+                    return Err(Error::internal("unexpected reply"));
+                };
+                notes(&n);
+            }
+            Ok(0)
+        }
         WtCmd::Archives { project, json } => {
             let Reply::Archives { entries } =
                 c.request(Request::WorktreeArchives { project }).await?
@@ -1241,19 +1271,29 @@ async fn open(ctx: &Ctx, c: Client, addr: String, editor: Option<String>) -> Res
     Ok(0)
 }
 
-/// `a` archive (keeps everything), `r` remove, else skip; `None` without a terminal.
-fn ask_archive_or_remove(what: &str) -> Option<bool> {
+/// What `ptyro gc` does with one stale worktree.
+enum Clean {
+    Archive,
+    Remove,
+    /// Lock it: gc, and the doctor's nudge, leave it alone from now on.
+    Keep,
+}
+
+/// `a` archive (keeps everything), `r` remove, `k` keep (lock), else skip; `None` without a
+/// terminal.
+fn ask_clean(what: &str) -> Option<Clean> {
     use std::io::{BufRead, IsTerminal, Write};
     if !std::io::stdin().is_terminal() {
         return None;
     }
-    eprint!("{what}: a archive (keeps its work) · r remove · ⏎ skip ");
+    eprint!("{what}: a archive (keeps its work) · r remove · k keep (lock) · ⏎ skip ");
     let _ = std::io::stderr().flush();
     let mut line = String::new();
     let _ = std::io::stdin().lock().read_line(&mut line);
     match line.trim() {
-        "a" | "A" => Some(true),
-        "r" | "R" => Some(false),
+        "a" | "A" => Some(Clean::Archive),
+        "r" | "R" => Some(Clean::Remove),
+        "k" | "K" => Some(Clean::Keep),
         _ => None,
     }
 }
@@ -1274,11 +1314,16 @@ pub async fn gc(ctx: &Ctx, dry_run: bool, json: bool) -> Result<i32, Error> {
     for e in &entries {
         let w = &e.worktree;
         println!(
-            "{:<28} {:<8} {}",
+            "{:<28} {:<8} {:>11}  {}",
             truncate(&w.qualified(), 28),
             age(w.last_used_ms.unwrap_or(w.created_ms)),
+            e.size_label().unwrap_or_else(|| "-".into()),
             e.reasons.join("; ")
         );
+    }
+    let total: u64 = entries.iter().filter_map(|e| e.bytes).sum();
+    if total > 0 {
+        eprintln!("{} on disk in all", ptyro_core::model::human_bytes(total));
     }
     if dry_run {
         return Ok(0);
@@ -1286,10 +1331,19 @@ pub async fn gc(ctx: &Ctx, dry_run: bool, json: bool) -> Result<i32, Error> {
     for e in entries {
         let w = e.worktree;
         // Archiving keeps everything (UX1.12); removing refuses when work would be lost.
-        let req = match ask_archive_or_remove(&w.qualified()) {
-            Some(true) => Request::WorktreeArchive { addr: w.id.clone(), stop_sessions: false },
-            Some(false) => {
+        let req = match ask_clean(&w.qualified()) {
+            Some(Clean::Archive) => {
+                Request::WorktreeArchive { addr: w.id.clone(), stop_sessions: false }
+            }
+            Some(Clean::Remove) => {
                 Request::WorktreeRemove { addr: w.id.clone(), opts: RemoveOpts::default() }
+            }
+            Some(Clean::Keep) => {
+                match c.request(Request::WorktreeLock { addr: w.id.clone(), lock: true }).await {
+                    Ok(_) => eprintln!("  kept: locked (`ptyro wt unlock` lets gc see it again)"),
+                    Err(e) => eprintln!("  {}", e.message),
+                }
+                continue;
             }
             None => continue,
         };
