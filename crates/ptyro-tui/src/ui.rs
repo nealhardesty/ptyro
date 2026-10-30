@@ -2,7 +2,7 @@
 
 use ptyro_core::SessionId;
 use ptyro_core::config::key_label;
-use ptyro_core::session::{SessionInfo, SessionKind};
+use ptyro_core::session::{SessionInfo, SessionKind, Show};
 use ptyro_core::status::AgentStatus;
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
@@ -516,12 +516,24 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
         ));
     }
     let body = sidebar_body(app, area);
-    let mut lines = vec![Line::from(title)];
+    let mut lines = vec![Line::from(title), filter_line(app, area.width)];
     lines.extend(body.lines.into_iter().skip(body.skip).map(|(_, l)| l));
     if body.empty {
         let key = |a: &str| app.keymap.key_for(a).unwrap_or_else(|| a.to_owned());
-        lines.push(Line::styled(format!("  none yet: {}", key("session.new")), fg(app, t.dim)));
-        if app.tree().project_ids().is_empty() {
+        if app.show != Show::All {
+            // Filtered to nothing: say so, and how to get the rest back.
+            lines.push(Line::styled(
+                format!("  nothing {} right now", app.show.label()),
+                fg(app, t.dim),
+            ));
+            lines.push(Line::styled(
+                format!("  {} shows all", key("sidebar.filter")),
+                fg(app, t.dim),
+            ));
+        } else {
+            lines.push(Line::styled(format!("  none yet: {}", key("session.new")), fg(app, t.dim)));
+        }
+        if app.show == Show::All && app.tree().project_ids().is_empty() {
             lines.push(Line::styled(
                 format!("  add a repo: {}", key("project.add")),
                 fg(app, t.dim),
@@ -533,7 +545,12 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
     } else if app.focus == Focus::Sidebar {
         // The keys as they are bound now, not as they were by default.
         let nav = |a: &str| app.keymap.key_in(Table::Nav, a).unwrap_or_else(|| a.to_owned());
-        format!(" ⏎ open/fold · {} new · {} stop · Esc", nav("session.new"), nav("session.stop"))
+        format!(
+            " ⏎ open/fold · {} new · {} stop · {} filter · Esc",
+            nav("session.new"),
+            nav("session.stop"),
+            nav("sidebar.filter")
+        )
     } else {
         let any = |a: &str| app.keymap.key_for(a).unwrap_or_else(|| a.to_owned());
         format!(" {} sidebar · {} workspaces", any("focus.toggle"), any("workspace.switch"))
@@ -552,6 +569,62 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
             c.set_symbol("│").set_style(fg(app, col));
         }
     }
+}
+
+/// The chips of the filter strip under the sidebar's title: each with its label and the columns
+/// (from the sidebar's left edge) it covers. As many words as fit: `all 14  running 6  active 2`,
+/// else `all  run 6  act 2`. Counts are of real sessions (not quick terminals).
+pub(crate) fn filter_chips(app: &App, width: u16) -> Vec<(Show, String, u16, u16)> {
+    let count = |s: Show| app.sessions.iter().filter(|x| x.is_real() && s.keeps(x)).count();
+    let tiers: [[String; 3]; 2] = [
+        [
+            format!("all {}", count(Show::All)),
+            format!("running {}", count(Show::Running)),
+            format!("active {}", count(Show::Active)),
+        ],
+        [
+            "all".into(),
+            format!("run {}", count(Show::Running)),
+            format!("act {}", count(Show::Active)),
+        ],
+    ];
+    let w = |l: &[String; 3]| {
+        l.iter().map(|x| UnicodeWidthStr::width(x.as_str()) + 2).sum::<usize>() + 1
+    };
+    let labels = if w(&tiers[0]) <= width as usize { &tiers[0] } else { &tiers[1] };
+    let mut x = 1u16;
+    Show::EVERY
+        .iter()
+        .zip(labels)
+        .map(|(s, l)| {
+            // A space of padding each side, so the chosen one reads as a button.
+            let end = x + UnicodeWidthStr::width(l.as_str()) as u16 + 2;
+            let chip = (*s, format!(" {l} "), x, end);
+            x = end + 1;
+            chip
+        })
+        .collect()
+}
+
+fn filter_line(app: &App, width: u16) -> Line<'static> {
+    let t = &app.theme;
+    let mut spans = vec![Span::raw(" ")];
+    for (i, (s, label, ..)) in filter_chips(app, width).into_iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" "));
+        }
+        let style = if s == app.show {
+            fg(app, t.accent).add_modifier(Modifier::BOLD | Modifier::REVERSED)
+        } else if s == Show::Active
+            && app.sessions.iter().any(|x| x.is_real() && Show::Active.keeps(x))
+        {
+            fg(app, t.working)
+        } else {
+            fg(app, t.dim)
+        };
+        spans.push(Span::styled(label, style));
+    }
+    Line::from(spans)
 }
 
 /// The sidebar's tree as screen lines, each with the index of its row in `app.rows()` (a
@@ -575,8 +648,8 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
     let sessions: std::collections::HashMap<SessionId, &SessionInfo> =
         app.sessions.iter().map(|s| (s.id, s)).collect();
     let width = area.width as usize;
-    // Less the title and the hint line.
-    let room = area.height.saturating_sub(2) as usize;
+    // Less the title, the filter strip and the hint line.
+    let room = area.height.saturating_sub(3) as usize;
     let mut firsts: Vec<(usize, Line<'static>)> = Vec::new();
     // Each session row's detail lines, as wide (the row in focus) and as narrow.
     let mut details: Vec<Vec<Line<'static>>> = Vec::new();

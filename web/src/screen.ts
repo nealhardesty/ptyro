@@ -47,13 +47,14 @@ export interface Session {
   structured?: string | null;
   inner_agent?: string | null;
   quick?: boolean;
+  pad?: boolean;
   /// The chat it is the engine of (SPEC §22.2): hidden from the session list.
   chat?: string | null;
   profile?: string;
   run?: string | null;
   summary?: { text: string; turn: number; at_ms: number } | null;
   verify?: { check: string; [k: string]: any } | null;
-  command?: { text?: string | null; exit?: number | null } | null;
+  command?: { text?: string | null; exit?: number | null; ended_ms?: number | null } | null;
   ports?: number[];
   turns?: number;
 }

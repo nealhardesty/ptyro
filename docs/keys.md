@@ -78,6 +78,7 @@ action by name.
 | `.` | what you can do with the focused session (its menu) |
 | `P` | add a project (pick from the repositories ptyro found) |
 | `Z` | everything at once: the sidebar fills the screen with every row open (`⏎` opens one, `Z` or `Esc` goes back) |
+| `f` | the sidebar's filter: all → running → active → all (also a click on a chip under its title; `sidebar.show_all`, `sidebar.show_running`, `sidebar.show_active` in the palette) |
 | `[` / `PageUp` | copy mode / copy mode, one page up |
 | `]` | paste what you last copied |
 | `x` / `X` | stop the session (asks first unless `[ui] confirm_kill = false`; an exited one is removed; a shell that exits is removed by itself, `[ui] shell_exit = "keep"` leaves it) / kill it now. The pane moves on to the nearest other session (`[ui] on_stop`); `` ` `` brings the stopped one back |
@@ -120,6 +121,7 @@ Focus the sidebar with `Ctrl-Q Tab`. These keys need no prefix there.
 | `D` `O` `S` | inspector / runs / change sets |
 | `m` / `*` | a new chat / pin the chat row. On a chat row `⏎` opens it, `,` titles it, `x` archives it, `X` deletes it (asks), `.` its menu; `⏎` on the CHATS heading lists them, `h`/`l` fold it |
 | `z` | everything at once: the sidebar full-screen, every row open |
+| `f` | filter the list: all → running → active (a machine, project or worktree with nothing running under it is hidden) |
 | `<` / `>` | the sidebar a column narrower / wider (or drag its edge) |
 | `u` / `P` | do what the last message offers / add a project |
 | `.` | everything you can do with this row (a session, worktree or project), with the keys |

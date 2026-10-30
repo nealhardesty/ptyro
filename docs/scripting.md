@@ -67,6 +67,7 @@ docs    Make every public item in crates/core documented.
 EOF
 ptyro wait deps lint docs --for idle --timeout 8h --stall 30m || true
 ptyro ls --status blocked     # who's waiting for you
+ptyro ls --status active      # who is busy right now (working, blocked, running a command)
 ptyro inbox -u                # what each one wanted
 ```
 
