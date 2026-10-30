@@ -1912,6 +1912,10 @@ impl Daemon {
     pub(crate) async fn chat_follow(self: &Arc<Self>, addr: &str) -> Result<Arc<Live>, Error> {
         let info = self.find_chat(addr).await?;
         let db = self.chat_db()?;
+        // Not while a message is starting its engine: loading the branch then would replace
+        // what that engine has already said.
+        let lock = self.chats.lock_for(&info.id);
+        let _one = lock.lock().await;
         let live = self.chats.live(&info.id);
         if live.engine().is_none() && !info.incognito {
             db.branch(info.id.clone(), None).await.map_err(store_err)?;

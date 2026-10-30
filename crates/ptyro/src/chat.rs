@@ -598,9 +598,8 @@ async fn follow_sending(
     send: Option<String>,
 ) -> Result<bool, Error> {
     c.send(ClientMsg::ChatSubscribe { chat: info.id.clone() })?;
-    if let Some(text) = send {
-        c.request(Request::ChatSend { chat: info.id.clone(), text }).await?;
-    }
+    // Sent once the chat as it is has arrived, so the answer is only ever news.
+    let mut send = send;
     let deadline = tokio::time::Instant::now() + timeout;
     // Items before the last user message are history; what follows is the answer.
     let mut after: Option<String> = None;
@@ -623,6 +622,9 @@ async fn follow_sending(
         let ServerMsg::ChatLive { chat, reset, items: got, .. } = msg else { continue };
         if chat != info.id {
             continue;
+        }
+        if let Some(text) = send.take() {
+            c.request(Request::ChatSend { chat: info.id.clone(), text }).await?;
         }
         if reset {
             items.clear();
