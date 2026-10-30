@@ -1272,6 +1272,7 @@ impl Daemon {
             Request::Doctor => {
                 let mut report = self.doctor();
                 report.chats = self.chat_doctor().await;
+                report.meaning = self.meaning_doctor().await;
                 Ok(Reply::Doctor { report })
             }
             Request::Agents => {

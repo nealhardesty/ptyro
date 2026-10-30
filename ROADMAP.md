@@ -2461,8 +2461,12 @@ rows, its `[chat]` settings schema entries and its `make` targets, and the miles
   - Ask several agents one question and compare (fan-out and compare, §15.2), keep the winner.
   - Import the agents' own histories (Claude's `~/.claude/projects` JSONL, Codex rollouts, Gemini's
     chats, ACP `session/list`) as read-only chats.
-  - Optional meaning search (model2vec or fastembed, hybrid with FTS), only if the earlier tiers
-    disappoint (§21 question 11).
+  - [x] Optional meaning search (R-CHAT-11; **built 2026-10-30**, opt-in `[chat] meaning`): model2vec
+    `potion-base-8M` in pure Rust, int8 vectors in `chat.db` v3, a background backfill, merged with
+    FTS by reciprocal-rank fusion, `by:meaning`/`by:words` (`--meaning`/`--words`), `≈` in the CLI,
+    TUI and web, `make spike-chat-meaning` (SPEC §22.10 tier 3). Left: compare the embedding with
+    model2vec's Python on the real model, once the owner agrees to download it, and tune the 0.3
+    cosine floor on real chats.
 - [ ] **CHAT6 Sync and merge across machines** (R-CHAT-14; **needs its own brainstorm first**) **L+**
   - Merge chats across every linked machine (§22.15 lists what CHAT1's schema already guarantees and
     what is open). Do not start before that brainstorm's decisions are in SPEC §22.

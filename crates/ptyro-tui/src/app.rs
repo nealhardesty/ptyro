@@ -395,6 +395,8 @@ pub enum Confirmed {
     Send(Box<Request>, String),
     /// Quit ptyro: stop every session and the daemon (`daemon stop --force`).
     Quit,
+    /// Switch meaning search on (SPEC §22.10): `chat.meaning = true` in the config.
+    MeaningOn,
 }
 
 #[derive(Debug, Clone)]
@@ -1773,7 +1775,7 @@ impl App {
 
     /// Read the config again; `say` toasts that it was (the settings panel makes the change
     /// itself and says its own).
-    fn reload_config_with(&mut self, say: bool) {
+    pub(crate) fn reload_config_with(&mut self, say: bool) {
         let path = Config::path(&self.paths);
         match Config::load(&path) {
             Ok(config) => {
@@ -1884,6 +1886,9 @@ impl App {
                 self.request(Pending::ChatSent(text.clone()), Request::ChatSend { chat: id, text });
             }
             (Pending::ChatHits(q), Ok(Reply::ChatHits { hits })) => self.got_hits(q, hits),
+            (Pending::ChatHits(_), Err(e)) if e.code == ErrorCode::NeedsConfirmation => {
+                self.offer_meaning(e.message);
+            }
             // A query still being typed: its error is no news (a short prefix, a lone `-`).
             (Pending::ChatHits(_), Err(_)) => {}
             (Pending::ChatExport(path), Ok(Reply::Text { text })) => {
@@ -5139,6 +5144,7 @@ impl App {
     fn confirmed(&mut self, action: Confirmed) {
         match action {
             Confirmed::Send(req, toast) => self.request(Pending::Done(toast), *req),
+            Confirmed::MeaningOn => self.meaning_on(),
             Confirmed::Quit => {
                 self.quitting = true;
                 self.toast("stopping ptyro…");

@@ -423,6 +423,20 @@ async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
     for w in &report.warnings {
         r.add(S, "noticed", Level::Warn, w.clone());
     }
+    if let Some(c) = &report.chats {
+        let bad = !c.starts_with("chats: ") || c.contains("integrity") || c.contains("FTS5");
+        let level = if bad { Level::Problem } else { Level::Ok };
+        r.add(S, "chats", level, c.clone());
+    }
+    if let Some(m) = &report.meaning {
+        // Meaning search (SPEC §22.10): a download or a model that failed is worth a look.
+        let level = if m.contains("didn't") || m.contains("couldn't") || m.contains("damaged") {
+            Level::Warn
+        } else {
+            Level::Ok
+        };
+        r.add(S, "chat meaning", level, m.clone());
+    }
     if quick {
         return;
     }

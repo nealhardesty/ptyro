@@ -97,7 +97,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `chat branch` | `chat.branch` (`/branch`, `Alt-←/→`): every branch point's choices | `chat.branch`: the ‹ › before a message that has others |
 | `chat fork` | `chat.fork` (`/fork`): from the end or a message; `chat.side` (`/side`) for `--side` | `chat.fork`: ⋯ → Fork, or Fork from here under a message; `chat.side`: ⋯ → Side chat |
 | `chat keep` | `chat.keep` (`/keep`) in a side chat | `chat.keep`: Keep it, on a side chat's page |
-| `chat search` | `chat.search` (`C-g`): the chat list searching every chat, messages with their snippets; `⏎` opens one at its message | `chat.search`: the Chats page's search box: titles, then every message on every machine; tap one to open it there |
+| `chat search` | `chat.search` (`C-g`): the chat list searching every chat, messages with their snippets; `⏎` opens one at its message; `--meaning`/`--words` are `by:meaning`/`by:words` in the box, `≈` marks a hit by meaning, and `by:meaning` while it is off asks to switch it on | `chat.search`: the Chats page's search box: titles, then every message on every machine; tap one to open it there; `by:meaning`/`by:words` as in the TUI, `≈`, and `chat.meaning` switches it on where it is off |
 | `chat find` | `chat.find` (`/find`): ask your chats; the answer, with its citations (`chat.cite` opens one) | `chat.find`: ？ on the Chats page; citations in the answer are links (`chat.cite`) |
 
 ## Attention and notifications

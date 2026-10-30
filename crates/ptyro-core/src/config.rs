@@ -511,6 +511,9 @@ pub struct Chat {
     pub daily_cap: u32,
     /// Also make tool output searchable (2 KB of it a message).
     pub index_tools: bool,
+    /// Meaning search (SPEC §22.10): find messages by what they are about, not only by their
+    /// words. Switching it on downloads a 31 MB model once.
+    pub meaning: bool,
     /// `blocked`: tell you when a chat needs you; `all`: also when an answer arrives while no
     /// screen shows it; `off`.
     pub notify: String,
@@ -537,6 +540,7 @@ impl Default for Chat {
             title_command: Vec::new(),
             daily_cap: 200,
             index_tools: false,
+            meaning: false,
             notify: "blocked".into(),
             archive_purge_days: 0,
             tools: BTreeMap::new(),

@@ -1233,6 +1233,10 @@ pub struct DaemonDoctor {
     /// `chat.db`: what it holds, or why it can't be opened (SPEC §22.4).
     #[serde(default)]
     pub chats: Option<String>,
+    /// Meaning search: off, downloading, how many messages it has embedded, or why it can't
+    /// run (SPEC §22.10).
+    #[serde(default)]
+    pub meaning: Option<String>,
 }
 
 /// The result of a hook self-test.

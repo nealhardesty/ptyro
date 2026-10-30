@@ -2323,6 +2323,7 @@ dependencies = [
  "ptyro-client",
  "ptyro-core",
  "ptyro-daemon",
+ "ptyro-meaning",
  "ptyro-protocol",
  "ptyro-pty",
  "ptyro-run",
@@ -2413,6 +2414,7 @@ dependencies = [
  "ptyro-core",
  "ptyro-drive",
  "ptyro-git",
+ "ptyro-meaning",
  "ptyro-protocol",
  "ptyro-pty",
  "ptyro-run",
@@ -2451,6 +2453,14 @@ dependencies = [
  "ptyro-core",
  "tempfile",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "ptyro-meaning"
+version = "0.0.31"
+dependencies = [
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -2497,6 +2507,7 @@ name = "ptyro-store"
 version = "0.0.31"
 dependencies = [
  "ptyro-core",
+ "ptyro-meaning",
  "rusqlite",
  "rusqlite_migration",
  "serde",

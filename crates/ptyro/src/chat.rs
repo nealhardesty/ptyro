@@ -155,7 +155,7 @@ pub enum ChatCmd {
         chat: String,
     },
     /// Search every chat's messages and titles, on every linked machine too: words (all must
-    /// match), "a phrase", prefix*, -word, agent:codex, since:7d, workspace:work
+    /// match), "a phrase", prefix*, -word, agent:codex, since:7d, workspace:work, by:meaning
     Search {
         /// (A word may start with `-`: it is left out. After `--`, every word is a word.)
         #[arg(required = true, allow_hyphen_values = true)]
@@ -175,6 +175,12 @@ pub enum ChatCmd {
         /// This machine only
         #[arg(long)]
         here: bool,
+        /// Only messages about it, by meaning (≈), not by their words (`[chat] meaning`)
+        #[arg(long, conflicts_with = "words")]
+        meaning: bool,
+        /// Only messages with the words, even when meaning search is on
+        #[arg(long)]
+        words: bool,
         #[arg(short = 'n', long, default_value_t = 20)]
         limit: u32,
         #[arg(long)]
@@ -323,13 +329,38 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, words: Vec<String>) -> Result<
             })
             .await
         }
-        ChatCmd::Search { query, chat, workspace, agent, pinned, archived, here, limit, json } => {
+        ChatCmd::Search {
+            query,
+            chat,
+            workspace,
+            agent,
+            pinned,
+            archived,
+            here,
+            meaning,
+            words,
+            limit,
+            json,
+        } => {
             // (Words may start with `-`, so the flags typed after them arrive as words.)
-            let mut a = SearchArgs { chat, workspace, agent, pinned, archived, here, limit, json };
-            let words = a.take_flags(&query)?;
+            let mut a = SearchArgs {
+                chat,
+                workspace,
+                agent,
+                pinned,
+                archived,
+                here,
+                by: (meaning.then_some("meaning")).or(words.then_some("words")),
+                limit,
+                json,
+            };
+            let mut words = a.take_flags(&query)?.join(" ");
+            if let Some(by) = a.by {
+                words.push_str(&format!(" by:{by}"));
+            }
             search(
                 ctx,
-                words.join(" "),
+                words,
                 a.chat,
                 a.workspace,
                 a.agent,
@@ -943,6 +974,8 @@ struct SearchArgs {
     pinned: bool,
     archived: bool,
     here: bool,
+    /// `--meaning` or `--words` (SPEC §22.10), sent as `by:` in the query.
+    by: Option<&'static str>,
     limit: u32,
     json: bool,
 }
@@ -969,6 +1002,8 @@ impl SearchArgs {
                 "--here" => self.here = true,
                 "--pinned" => self.pinned = true,
                 "--archived" => self.archived = true,
+                "--meaning" => self.by = Some("meaning"),
+                "--words" => self.by = Some("words"),
                 "--chat" => self.chat = Some(value(&mut it)?),
                 "-w" | "--workspace" => self.workspace = Some(value(&mut it)?),
                 "--agent" => self.agent = Some(value(&mut it)?),
@@ -1009,9 +1044,12 @@ async fn search(
         limit: Some(limit),
         machines,
     };
-    let hits = match c.request(req).await? {
-        Reply::ChatHits { hits } => hits,
-        r => return Err(unexpected(r)),
+    let hits = match c.request(req).await {
+        Ok(Reply::ChatHits { hits }) => hits,
+        Ok(r) => return Err(unexpected(r)),
+        // Meaning search is off: offer to switch it on (SPEC §22.10).
+        Err(e) if e.code == ErrorCode::NeedsConfirmation => return meaning_on(ctx, e),
+        Err(e) => return Err(e),
     };
     if json {
         println!("{}", serde_json::to_string_pretty(&hits).unwrap_or_default());
@@ -1035,9 +1073,31 @@ async fn search(
             .replace('\n', " ")
             .replace(ptyro_core::chats::MARK_ON, on)
             .replace(ptyro_core::chats::MARK_OFF, off);
-        println!("    {snippet}");
+        // ≈: found by meaning, none of the words is in it.
+        let how = if h.how == "meaning" { "≈ " } else { "" };
+        println!("    {how}{snippet}");
     }
     Ok(0)
+}
+
+/// `search --meaning` with meaning search off: on a terminal, ask to switch it on (in your
+/// config, as the settings panel would); the daemon then downloads its model.
+fn meaning_on(ctx: &Ctx, e: Error) -> Result<i32, Error> {
+    if ctx.remote.is_some() || !crate::cli::confirm(&format!("{}. Switch it on?", e.message)) {
+        return Err(Error::new(
+            ErrorCode::Invalid,
+            format!("{} (`ptyro config set chat.meaning true`)", e.message),
+        ));
+    }
+    let layer = ptyro_core::settings::Layer::User(ptyro_core::config::Config::path(&ctx.paths));
+    let op = ptyro_core::settings::Op::Set { key: "chat.meaning".into(), value: "true".into() };
+    ptyro_core::settings::apply(&layer, &op, &crate::config::lookups(), &crate::config::semantic)
+        .map_err(|e| Error::new(ErrorCode::Invalid, e))?;
+    eprintln!(
+        "meaning search is on: its model is downloading, then your chats are embedded \
+         (`ptyro doctor` shows how far). Search by words meanwhile."
+    );
+    Ok(1)
 }
 
 /// The chat view: the TUI, opened on this chat.
@@ -1120,6 +1180,7 @@ mod tests {
             pinned: false,
             archived: false,
             here: false,
+            by: None,
             limit: 20,
             json: false,
         }
@@ -1137,6 +1198,9 @@ mod tests {
         assert_eq!(a.chat.as_deref(), Some("c:7f3k"));
         assert_eq!(a.agent.as_deref(), Some("codex"));
         assert_eq!((a.limit, a.json), (3, true));
+        let mut m = args();
+        assert_eq!(m.take_flags(&["cats".into(), "--meaning".into()]).unwrap(), ["cats"]);
+        assert_eq!(m.by, Some("meaning"));
         assert!(args().take_flags(&["x".into(), "--chat".into()]).is_err());
         assert!(args().take_flags(&["x".into(), "-n".into(), "lots".into()]).is_err());
     }

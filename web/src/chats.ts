@@ -3,7 +3,7 @@
 // is one chat (its messages, tool calls and permission cards as they stream, a composer), and
 // `#/c/new` starts one. Every control is an action below, as in the TUI and the CLI.
 
-import { conn } from "./conn.js";
+import { conn, host } from "./conn.js";
 import { data, machineOf, wsLabel } from "./data.js";
 import { machineChip } from "./machines.js";
 import { actions, ago, ask, confirm, download, errText, form, h, menu, patch, ui, views } from "./kit.js";
@@ -23,7 +23,8 @@ const ACTIONS = {
   "chat.agent": "Switch the chat to another agent: the next message carries the conversation over",
   "chat.preset": "What the chat may use: web search, read folders, or no tools",
   "chat.export": "Download the chat as Markdown",
-  "chat.search": "Search every chat: titles at once, and from 3 letters every message on every machine (\"phrases\", prefix*, -word, agent:codex, since:7d)",
+  "chat.search": "Search every chat: titles at once, and from 3 letters every message on every machine (\"phrases\", prefix*, -word, agent:codex, since:7d, by:meaning; ≈ marks a message found by meaning)",
+  "chat.meaning": "Switch meaning search on: also find messages by what they are about, not only their words (downloads a 31 MB model once)",
   "chat.archived": "Show archived chats instead",
   "chat.retry": "Ask again: a new answer beside this one, which stays (‹ › flips between them)",
   "chat.edit": "Say this message differently: answered afresh, the old one stays as a branch",
@@ -46,7 +47,7 @@ export interface Chat {
   side_of?: string | null;
 }
 interface Siblings { node: string; at: number; of: number; ids: string[] }
-interface Hit { chat: Chat; node?: string | null; kind: string; snippet: string; at_ms: number; rank: number }
+interface Hit { chat: Chat; node?: string | null; kind: string; snippet: string; at_ms: number; rank: number; how?: string }
 interface Item { id: string; t: string; [k: string]: any }
 
 const state = {
@@ -70,6 +71,8 @@ const state = {
   /// Message hits of the list's search, and the query they answer.
   hits: [] as Hit[],
   hitsFor: "",
+  /// `by:meaning` while meaning search is off: why, with the switch to turn it on.
+  meaningOff: "",
 };
 
 const label = (c: Chat | undefined): string => c?.title?.trim() || "new chat";
@@ -155,17 +158,32 @@ async function searchMessages(q: string): Promise<void> {
     if (findBox.value.trim() !== q) return;
     state.hits = r.hits as Hit[];
     state.hitsFor = q;
-  } catch { state.hits = []; state.hitsFor = q; }
+    state.meaningOff = "";
+  } catch (e) {
+    state.hits = []; state.hitsFor = q;
+    state.meaningOff = (e as { code?: string }).code === "needs_confirmation" ? errText(e) : "";
+  }
   ui.render();
 }
 
 function hitRows(): Node[] {
   if (!state.query || [...state.query].length < 3) return [];
+  if (state.meaningOff) return [h("p", { class: "sub" }, `${state.meaningOff}. `, h("button", { class: "small", title: tip("chat.meaning"), onclick: () => void meaningOn() }, "Switch it on"))];
   if (!state.hits.length) return state.hitsFor ? [h("p", { class: "sub" }, "No message matches.")] : [];
   return [h("h3", { class: "day" }, `Messages (${state.hits.length})`), ...state.hits.map((x) =>
     h("a", { class: "chat-row hit", href: `#/c/${encodeURIComponent(x.chat.id)}${x.node ? `/${encodeURIComponent(x.node)}` : ""}`, title: tip("chat.open") },
       h("span", { class: "main" }, h("span", { class: "title" }, label(x.chat)), x.chat.machine ? machineChip(x.chat.workspace) : null, h("small", {}, ` ${x.chat.agent} · ${ago(x.at_ms)}`)),
-      snippet(x.snippet)))];
+      x.how === "meaning" ? h("span", { class: "snippet", title: "Found by meaning: none of the words is in it" }, "≈ ", snippet(x.snippet)) : snippet(x.snippet)))];
+}
+
+/// Meaning search on, in your config (as the settings panel would): the daemon downloads its model.
+async function meaningOn(): Promise<void> {
+  try {
+    await host("settings.apply", { scope: "user", change: { t: "set", key: "chat.meaning", value: "true" } });
+    state.meaningOff = "";
+    ui.toast("Meaning search is on: its model is downloading, then your chats are read (ptyro doctor shows how far)");
+    ui.render();
+  } catch (e) { ui.toast(errText(e)); }
 }
 
 function rows(): Node[] {
