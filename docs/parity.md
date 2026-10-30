@@ -89,7 +89,9 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `chat unpin` | `chat.pin` (`*` again) | `chat.pin`: ⋯ → Unpin |
 | `chat archive` | `chat.archive` (`x` on a chat row or in the list) | `chat.archive`: ⋯ → Archive |
 | `chat unarchive` | `chat.archive` (`x` on it in the list's archived view, `A`) | `chat.archive`: ⋯ → Bring back, under Archived |
-| `chat set` | `chat.agent` and `chat.preset` (the chat's menu, `.`) | `chat.agent` and `chat.preset`: ⋯ → Switch agent, Tools |
+| `chat set` | `chat.agent`, `chat.preset` and `chat.folder` (the chat's menu, `.`; `/agent`, `/tools`, `/folder DIR`, `/folder none`) | `chat.agent`, `chat.preset` and `chat.folder`: ⋯ → Switch agent, Tools, Folders (`/folder`) |
+| `chat presets` | `chat.preset` (`/tools`): the picker lists every preset with what it lets a chat use | `chat.preset`: ⋯ → Tools lists every preset with its meaning; the new chat's tools menu too |
+| `chat task` | `chat.task` (`/task [PROJECT]`, the chat's menu): asks which project when its workspace has several | `chat.task`: ⋯ → Make it a task (a project picker when it can't tell); `/task` |
 | `chat rm` | `chat.delete` (`X` on a chat row or in the list; asks) | `chat.delete`: ⋯ → Delete |
 | `chat export` | `chat.export` (`e` in the list, or the menu): written to a Markdown file | `chat.export`: ⋯ → Download as Markdown |
 | `chat retry` | `chat.retry` (`/retry`): a new answer beside the old one; `Alt-←/→` flips between them | `chat.retry`: Retry under an answer; ‹ › flips between them |

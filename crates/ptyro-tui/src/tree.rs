@@ -542,6 +542,9 @@ mod tests {
             status: None,
             attention: None,
             engine: None,
+            folders: Vec::new(),
+            best_effort: false,
+            shell: false,
         }
     }
 

@@ -2451,12 +2451,26 @@ rows, its `[chat]` settings schema entries and its `make` targets, and the miles
     **Left:** `--machine` on search, a trigram index for CJK, history tools for ACP and OpenCode.
     Tested: `tests/chat_more.rs` (retry, edit, branch, fork at, side chats kept and dropped,
     incognito, search filters and scopes, `chat find`, the MCP tools' scope), the store's tests.
-- [ ] **CHAT4 Tools and tasks** (R-CHAT-09, 15) **M**
-  - The presets (`chat`, `read`, `none`, yours), `[chat.tools.*]`, folders, an MCP list per preset,
-    the `tools: best effort` badge, `/tools`.
-  - Make it a task: a chat to a worktree session with the branch as its first prompt.
+- [x] **CHAT4 Tools and tasks** (R-CHAT-09, 15) **M** (built 2026-10-30; SPEC §22's "As built")
+  - [x] The presets (`chat`, `read`, `none`, yours), `[chat.tools.*]` with `shell` and `mcp`,
+    folders (`--folder`, `chat set --folder/--no-folders`, `/folder`; `chat.db` v4), an MCP list per
+    preset, the `tools: … · best effort · ⚠ shell` badge, `/tools` and `chat presets` with each
+    preset's meaning.
+  - [x] Make it a task: `chat task` / `/task` / `chat.task`, a worktree session with the branch and
+    the last answer as its first prompt; the chat's notice names it.
+  - [x] Gemini (the owner's ask, 2026-10-30): found where npm, nvm or `npx` put it
+    (`ptyro_agents::locate`), an admin-tier policy, no extensions, ptyro's MCP server in
+    `session/new` (the history tools), its own copy removed with a deleted or incognito chat.
+  - **Left:** an `@` completion of the folders' files in the composer; MCP servers for OpenCode
+    chats (not installed here to try `POST /mcp`); agent-sent titles (none of the four sends one);
+    a Gemini and an OpenCode turn to prove their rules stop a call (a login each); the task's
+    session carries no `forked_from_chat` (the chat's notice and the worktree's title link them).
   *Done when:* a `read` chat answers about a folder it was given and nothing else; the default chat
   searches the web and can't touch a file; a chat becomes a task with its context.
+  Tested: `tests/chat_tools.rs` (a `read` chat's folder and nothing else, the default chat's web-only
+  launch, Gemini's policy, flags and MCP server through the fake, a shell preset and a missing MCP
+  name, a task's worktree and first prompt), the preset table per agent in `chats.rs`, the ACP
+  driver's `mcpServers`, the store's folders, `locate`'s search order.
 - [ ] **CHAT5 More ways to find and ask** (R-CHAT-10, 11, 12) **L**
   - Ask several agents one question and compare (fan-out and compare, §15.2), keep the winner.
   - Import the agents' own histories (Claude's `~/.claude/projects` JSONL, Codex rollouts, Gemini's

@@ -389,18 +389,16 @@ impl Daemon {
             let id = ptyro_agents::adapter_name(&config, &a.name);
             let adapter = ptyro_agents::adapter(&id);
             let mut base =
-                a.command.clone().or_else(|| ptyro_agents::command(&config, &a.name)).ok_or_else(
-                    || {
-                        Error::new(
-                            ErrorCode::NotFound,
-                            format!(
-                                "no agent named {:?} (known: {})",
-                                a.name,
-                                ptyro_agents::names(&config).join(", ")
-                            ),
-                        )
-                    },
-                )?;
+                a.command.clone().or_else(|| self.agent_argv(&a.name)).ok_or_else(|| {
+                    Error::new(
+                        ErrorCode::NotFound,
+                        format!(
+                            "no agent named {:?} (known: {})",
+                            a.name,
+                            ptyro_agents::names(&config).join(", ")
+                        ),
+                    )
+                })?;
             base.extend(l.argv.iter().cloned());
             dangerous = ptyro_core::config::dangerous_arg(&base).is_some();
             if dangerous && !def.dangerous {

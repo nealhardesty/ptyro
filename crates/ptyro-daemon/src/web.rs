@@ -15,37 +15,57 @@ use crate::daemon::Daemon;
 const REPLAY_STEPS: usize = 300;
 const REPLAY_BYTES: usize = 6 << 20;
 
-/// `prog` on the daemon's `PATH` (what sessions see).
-fn on_path(prog: &str, path: &str) -> bool {
-    std::env::split_paths(path).any(|d| d.join(prog).is_file())
-}
-
 impl Daemon {
     /// The agents a session can run: built-ins, then configured ones, each with whether its
     /// program is installed.
     pub(crate) fn agent_choices(&self) -> (Vec<AgentChoice>, String) {
         let config = self.config();
-        let path = self
-            .base_env
-            .iter()
-            .find(|(n, _)| n == "PATH")
-            .map(|(_, v)| v.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let path = self.daemon_path();
         let agents = ptyro_agents::names(&config)
             .into_iter()
             .map(|name| {
                 let program = ptyro_agents::command(&config, &name)
                     .and_then(|argv| argv.into_iter().next())
                     .unwrap_or_default();
-                let installed = if program.contains('/') {
-                    std::path::Path::new(&program).is_file()
-                } else {
-                    on_path(&program, &path)
-                };
-                AgentChoice { name, program, installed }
+                let found = ptyro_agents::locate::find(&program, &path);
+                AgentChoice {
+                    name,
+                    program,
+                    installed: found.is_some(),
+                    found: found.map(|f| f.describe()),
+                }
             })
             .collect();
         (agents, ptyro_agents::default_agent(&config))
+    }
+
+    /// The daemon's `PATH` (what sessions see).
+    pub(crate) fn daemon_path(&self) -> String {
+        self.base_env
+            .iter()
+            .find(|(n, _)| n == "PATH")
+            .map(|(_, v)| v.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+
+    /// How to start `agent` (`ptyro_agents::resolve`): its program found on the daemon's `PATH`,
+    /// else where npm, nvm or `npx` put it; else its command as configured.
+    pub(crate) fn agent_argv(&self, agent: &str) -> Option<Vec<String>> {
+        let config = self.config();
+        ptyro_agents::resolve(&config, agent, &self.daemon_path())
+            .map(|(argv, _)| argv)
+            .or_else(|| ptyro_agents::command(&config, agent))
+    }
+
+    /// Only the program of [`Self::agent_argv`], without the agent's configured arguments, as
+    /// full paths: `[path]`, or `[node, script]`.
+    pub(crate) fn agent_program(&self, agent: &str) -> Option<Vec<String>> {
+        let prog = ptyro_agents::command(&self.config(), agent)?.into_iter().next()?;
+        Some(match ptyro_agents::locate::find(&prog, &self.daemon_path()) {
+            Some(f) if f.via.is_none() => vec![f.path.to_string_lossy().into_owned()],
+            Some(f) => f.argv,
+            None => vec![prog],
+        })
     }
 
     /// A session's recording (it may have ended long ago, or be in an earlier daemon run).

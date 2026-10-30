@@ -394,6 +394,7 @@ a.button { display: inline-block; padding: 7px 12px; border-radius: 8px; border:
 .chat-row.blocked .glyph { color: var(--warn); }
 .chat-row.unread .title::after { content: ""; }
 .chat-row .unread-dot { color: var(--accent); font-size: 10px; }
+.chat-row .warn, .pill .warn { color: var(--warn); }
 .searchbar select { margin-left: 6px; }
 .searchbar .small.on { color: var(--accent); }
 .chat-page .chat { min-height: 50vh; }

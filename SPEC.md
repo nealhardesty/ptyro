@@ -6106,6 +6106,39 @@ tier was at its limit, and no provider was logged in).
   `--allowed-mcp-server-names`, `--extensions`, `--session-id`, `--list-sessions`,
   `--delete-session`, `--resume`.
 - Consumer-account availability after 2026-06-18 is still RESEARCH IV.2's open item.
+- **Read from its source, 0.66.0 (2026-10-30, [S] unless marked [V]; the bundle's
+  `packages/core/src/policy` and `packages/cli/src/acp`):**
+  - *Policy tiers:* default 1 < extension 2 < workspace 3 < user 4 < admin 5; a rule's effective
+    priority is `tier + priority/1000`. `--policy` paths **replace** the user's policy folder in the
+    user tier; `--admin-policy` paths load in the admin tier (with the system folder,
+    `/Library/Application Support/GeminiCli/policies` or `/etc/gemini-cli/policies`), **unless that
+    system folder already holds a `.toml`**, when Gemini ignores `--admin-policy` with a warning.
+    "Always allow" answers and settings' allow lists sit at tier 3–4.3, so an admin-tier deny wins
+    over all of them. Extensions may not contribute `allow` rules.
+  - *Rule schema:* `toolName` (string or array; required), `mcpName`, `argsPattern`,
+    `commandPrefix`, `commandRegex`, `decision` (`allow`/`deny`/`ask_user`), `priority` 0–999,
+    `modes`. `toolName = "*"` matches every tool, MCP ones included; `mcp_<server>_*` every tool of
+    one server (a server name can't hold `_`). Tool names: `read_file`, `read_many_files`, `glob`,
+    `grep_search`, `list_directory`, `run_shell_command`, `google_web_search`, `web_fetch`.
+  - *File tools read only the workspace:* `validatePathAccess` allows the session's `cwd`, the
+    `--include-directories` and Gemini's own temp folder for the project; anything else is "Path not
+    in workspace".
+  - *MCP:* `session/new` and `session/load` take `mcpServers` in ACP's stdio shape `{name, command,
+    args, env: [{name, value}]}` (every field needed: `env` is iterated) and merge them over the
+    settings' servers; `--allowed-mcp-server-names` then **replaces** the settings' allow list (and
+    drops their exclude list); a lone empty name (`--allowed-mcp-server-names ""`) allows none.
+  - *Extensions:* `--extensions none` (exactly that one word) turns every extension off.
+  - *Where an ACP session is kept:* `<GEMINI_CLI_HOME or $HOME>/.gemini/tmp/<slug>/chats/`, with
+    `history/<slug>/` beside it; `<slug>` comes from the folder's name (`projects.json` maps the
+    folder to it) and each such folder holds `.project_root`, the folder it is for. **[V]**
+    2026-10-30: a `gemini --acp` with ptyro's chat flags (`--admin-policy`, `--policy`, `--extensions
+    none`, `--allowed-mcp-server-names ptyro`) and a `session/new` with one stdio server got as far
+    as the login check (-32000) with no policy or argument error, and wrote `tmp/<slug>/.project_root`
+    holding the folder's path.
+  - *Titles:* the ACP schema has `session_info_update {title}`, but 0.66.0 never sends one, so the
+    one-shot titler names Gemini chats.
+  - *No incognito switch:* nothing keeps a session from being written; ptyro removes the folders
+    above when the chat ends.
 
 **OpenCode (`opencode serve`, 1.19.5; `/doc` is its OpenAPI)**
 
@@ -6229,7 +6262,7 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
 
 ---
 
-## 22. Chat: general-purpose conversations **[decided 2026-10-29 (owner, ROADMAP CHAT); CHAT1–CHAT3 built 2026-10-29, CHAT4 and later proposed]**
+## 22. Chat: general-purpose conversations **[decided 2026-10-29 (owner, ROADMAP CHAT); CHAT1–CHAT3 built 2026-10-29, CHAT4 built 2026-10-30, later ones proposed]**
 
 **As built (CHAT1, 2026-10-29), and where it differs from the design below:**
 - **Store** (`ptyro-store/src/chat.rs`): the §22.4 schema exactly, its own thread, 0600, a newer
@@ -6310,14 +6343,48 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   `PTYRO_CHAT_TOOLS=1`). The daemon knows a caller is an engine by its pid's session; an engine may
   only search, read and list, scoped by `history_scope`, never itself or an incognito chat. Claude
   engines get the line of §20.8 instead of `--safe-mode`; Codex gets `mcp_servers.ptyro` in the
-  thread's config; Gemini and OpenCode engines get no history tools yet. Not built: `--machine` on
+  thread's config; Gemini engines get them in `session/new` since CHAT4; OpenCode engines get none yet. Not built: `--machine` on
   search (the fan-out and `--here` are), the trigram index for CJK.
+- **Tools and tasks (CHAT4) and Gemini (2026-10-30):** `ChatTools` gains `shell` and `mcp`
+  (schema entries; a built-in preset with `shell` is refused, an MCP name with `_` too).
+  `ChatTools::describe` is each preset's one line, shown by `/tools`, every picker, the settings
+  panel and `ptyro chat presets` (`ChatPresets`, 1.24). **Folders** are the chat's own:
+  `ChatNew.folders`, `ChatUpdate.folders` (all of them; empty clears), `chat.db` v4 (`chat.folders`,
+  JSON), `ChatInfo.folders`; the daemon makes them full paths that exist, a fork copies them, and a
+  chat given folders with no preset asked for gets `read`. A preset that reads uses them with its
+  `dirs`. `ChatInfo.best_effort` and `.shell` are worked out per agent when a row is sent (§22.5's
+  table), and the clients show `tools: P · best effort · ⚠ shell` (a shell chat's row has `⚠`, as a
+  `dangerous` session's). **Task:** `ChatTask{chat, project?, agent?, name?}` → `WorktreeCreated`:
+  `create_worktree` with the chat's agent (the project's profile), the title, and a first prompt of
+  the shown branch's seed block, "The plan from that conversation (chat c:…, its last answer)", the
+  answer and "Carry this out in this repository."; the chat gets a notice naming the worktree and the
+  session. The project defaults to the only one of the chat's workspace (or the only one there is);
+  otherwise the error lists them with `--project`, and the TUI and web ask with a picker. The link
+  back is that notice and the worktree's title (the chat's): `SessionInfo` has no `forked_from_chat`
+  (27 places build it, and `ptyro.db` would need a column). **Gemini:** a chat runs with
+  `--admin-policy F --policy F --extensions none --allowed-mcp-server-names <ptyro and the preset's
+  servers, or "">` (and `--include-directories` per folder when it reads); the history tools reach any
+  ACP agent through `Opts.params.mcpServers`, which the driver merges into `session/new` and
+  `session/load` (no new `Opts` field: `params` already is "more fields for the call that starts or
+  resumes the conversation"). Another ACP agent gets no Gemini flags. Deleting a Gemini chat, or an
+  incognito one ending, removes Gemini's own folders for its scratch directory (`.project_root`).
+  **Finding agents:** `ptyro_agents::locate` finds a program that isn't on `PATH` in the npm prefix,
+  `~/.npm-global/bin`, `~/.local/bin`, `~/.volta/bin`, `~/.bun/bin`, `~/.claude/local`, Homebrew,
+  nvm's node versions (newest first) and, for the npm-shipped built-ins, `npx`'s cache
+  (`~/.npm/_npx/*/node_modules/<package>`, newest version), running a Node script with the `node`
+  beside it when none is on `PATH`; ptyro never downloads one. Sessions, chats, `doctor`
+  (where, and how: `(nvm)`, `(npx cache)` with a note to `npm i -g`), `AgentChoice.found` (web and
+  TUI agent pickers) and the first-run screen use it; "No agent found" and an asked-for agent that
+  isn't installed offer the install command. **Not built:** an `@` completion of the folders' files
+  in the composer; agent-sent titles (no agent of the four sends one: §20.8); MCP for OpenCode chats
+  (its server takes MCP servers per server instance, `POST /mcp`, and it isn't installed here to
+  try; its permission rules for `<server>_*` are written [S]).
 - **Configuration renamed:** `[chat] tools = "chat"` became **`[chat] preset`**: TOML can't hold
   both that string and the `[chat.tools.<name>]` tables. Built keys: `enabled`, `recent`, `agent`,
   `preset`, `hibernate_after`, `seed_tokens`, `title`, `title_command`, `daily_cap`, `index_tools`,
   `notify`, `archive_purge_days`, and `chat.tools.*.{web, read, dirs, allow}`.
   CHAT2 and CHAT3 add `incognito`, `history_tool` (default on) and `history_scope` (`profile`,
-  `workspace`, `all`).
+  `workspace`, `all`); CHAT4 adds `chat.tools.*.{shell, mcp}`.
 - **Seeds:** the "N earlier messages left out" line is used (no summary paragraph yet). The seed
   notice sits on the branch between the message and its answer.
 - **Surfaces:** CLI `chat [new]|ask|ls|show|open|send|answer|stop|retitle|pin|unpin|archive|
@@ -6456,8 +6523,17 @@ CREATE TABLE conv (                   -- an agent conversation that served a cha
   |---|---|---|---|
   | **Claude** (stream-json) **[V]** | `--tools "WebSearch,WebFetch" --allowedTools WebSearch WebFetch --strict-mcp-config --safe-mode --system-prompt <chat prompt>` | `--tools "Read,Glob,Grep"` and `--add-dir` for each attached folder, **no** `--allowedTools` for them (a bare allow reads anywhere), plus the same flags | `--tools ""` plus `--strict-mcp-config --safe-mode` |
   | **Codex** (app-server) **[V]** | `thread/start {sandbox: "read-only", config: {web_search: "live", features: {shell_tool: false, unified_exec: false, hooks: false, …}, mcp_servers: {<each>: {enabled: false}}}}`. `read-only` alone is not enough: it still reads any file | a profile `extends ":read-only"` that denies `$HOME` and re-allows the attached folders and what Codex needs to start; **no** `sandbox` parameter; shell on. Files outside `$HOME` stay readable, so the header says `tools: best effort` | the `chat` config with `web_search: "disabled"` |
-  | **Gemini** (ACP) **[S]** | a `--policy` file ptyro writes: `toolName = "*"` `deny` at a high priority, and `google_web_search` `allow` above it; `--extensions` with no name and `--allowed-mcp-server-names` with none (flags in `--help`, not run). 0.66.0 has no `--safe-mode`, so whether the user's hooks and skills load in a chat is **[U]** | the same file with `read_file`, `glob`, `grep_search`, `list_directory` allowed (`argsPattern` or a deny on other paths is unverified) | the catch-all `deny` only |
+  | **Gemini** (ACP) **[S]** (2026-10-30, read from 0.66.0's source; §20.8) | a policy file ptyro writes, passed as `--admin-policy` (the tier above the user's rules and "always allow" answers) and `--policy` (which replaces the user's own; for when a system policy makes Gemini ignore `--admin-policy`): `toolName = "*"` `deny` at 900, `google_web_search` and `web_fetch` `allow` at 950, `mcp_ptyro_*` with the history tools; `--extensions none`; `--allowed-mcp-server-names ptyro` (or `""`: none). The history server comes in `session/new`. 0.66.0 has no `--safe-mode`; the user's hooks and skills in a chat stay **[U]** | the same, with `read_file`, `read_many_files`, `glob`, `grep_search`, `list_directory` allowed and `--include-directories` for each folder: its file tools read only the workspace (the scratch folder and those) | the catch-all `deny` only |
   | **OpenCode** (serve) **[S]** | `POST /session {permission: [{"*","*",deny}, {websearch,*,allow}, {webfetch,*,allow}]}`, set again after every fork; per-message `tools` as a second fence | `read`, `glob`, `grep` allowed for the attached folders' patterns | the catch-all `deny` only |
+
+  **`shell` and `mcp` (CHAT4, a preset of your own only):** Claude `Bash` in `--tools` and
+  `--allowedTools`, each named server's definition from `<config dir>/.claude.json` `mcpServers` in
+  `--mcp-config` with `mcp__<server>` allowed (any MCP server means `--setting-sources ""
+  --disable-slash-commands` instead of `--safe-mode`); Codex `shell_tool` and `unified_exec` on, the
+  `workspace-write` sandbox (commands write only the scratch folder; with `read`, its profile), the
+  named servers left out of the switched-off list; Gemini `run_shell_command` and `mcp_<server>_*`
+  allowed, the names in `--allowed-mcp-server-names`; OpenCode `bash` and `<server>_*` allowed [S].
+  A name the agent's config lacks is left out, and the chat says so. A shell chat shows `⚠`.
 
   Every Claude engine also gets `--safe-mode`: without it the user's hooks, CLAUDE.md, skills and
   plugins run inside the chat (§20.8). A Codex thread's hooks and MCP servers are switched off by
@@ -6557,7 +6633,8 @@ agent's own history is a cache**: losing it, or an agent's updated format, loses
 ### 22.8 Titles
 
 The first exchange gets a title, once: (1) the agent's own when it sends one (ACP
-`session_info_update` **[U]**: Gemini was not run; OpenCode writes its own title into the session, read
+`session_info_update {title}`: Gemini 0.66.0 declares it and never sends it, read from its source
+**[S]** 2026-10-30; OpenCode writes its own title into the session, read
 from `session.updated` or `GET /session/:id` [V]; Codex sends no `thread/name/updated` and sets no
 name in an app-server thread, and Claude's stream and session file carry no title: both **[V]**, so
 for Claude and Codex this step never happens and (2) always runs); else (2) `[chat] title_command`, a no-tools, no-MCP one-shot as for summaries
@@ -6576,9 +6653,11 @@ with `◌` while open); one stopped for a retry, an edit or another agent carrie
 message. The transcript
 lives in the daemon's memory, so it ends with a live upgrade or a restart too (its folders go then). Claude's engine gets `--no-session-persistence`
 **[V]**, so it has no resume and leaves no file; Codex's gets `ephemeral: true` **[V]**, which leaves
-no rollout and no list entry; Gemini and OpenCode have no such switch **[U]**, so their own histories
-may still keep it, which `chat.new
---incognito` says plainly ("ptyro keeps nothing; gemini may keep its own copy", naming the agent). `chat ask` (below)
+no rollout and no list entry; Gemini has no such switch, but its copy is in folders marked with
+the chat's scratch directory (`<home>/.gemini/{tmp,history}/<slug>/.project_root`, §20.8 [S/V]),
+which ptyro removes when the chat ends, and the chat says so ("ptyro keeps nothing, and removes
+gemini's own copy when the chat ends"); OpenCode has no switch **[U]**, so its own history may keep
+it, which the chat says plainly ("ptyro keeps nothing; opencode may keep its own copy"). `chat ask` (below)
 is incognito unless `--keep`.
 
 ### 22.10 History and search
@@ -6705,6 +6784,8 @@ hides when `enabled`):
   ptyro chat retitle|pin|unpin|archive|unarchive|rm CHAT…
   ptyro chat search QUERY [filters]  ·  ptyro chat find QUESTION
   ptyro chat export CHAT [--format md|json] [-o FILE]
+  ptyro chat set CHAT [--agent A] [--preset P] [--folder DIR]… [--no-folders]   # (built, CHAT4)
+  ptyro chat presets [--json]  ·  ptyro chat task CHAT [--project P] [--agent A] [--name N]
   ```
 
   `git diff | ptyro chat ask "review this"` works from any shell, even outside a ptyro session.
@@ -6765,7 +6846,9 @@ agents are. `ptyro init` asks nothing about chats: they work on first use.
 `ChatSearch{query, filters, machines}` → `ChatHits{hits}`; `ChatFind{question, machines}` →
 `ChatAnswer{text, cites}`; `ChatExport{chat, format}` → `Text{…}`; events `ChatUpdated{info}`,
 `ChatRemoved{id}`. `ChatInfo` carries `id, handle, workspace, machine, title, agent, profile, tools,
-pinned, archived, incognito, forked, nodes, unread, last_at, status, attention, cost_micro_usd`. `SessionInfo` gains `chat`
+pinned, archived, incognito, forked, nodes, unread, last_at, status, attention, cost_micro_usd`
+(1.24 adds `folders`, `best_effort`, `shell`; `ChatTask` and `ChatPresets` → `ChatPresets{presets}`;
+`AgentChoice.found`). `SessionInfo` gains `chat`
 (the chat id of an engine). Scopes as in §22.11, listed in `devices::needed`.
 
 ### 22.15 Built for sync (CHAT6) now, so it needs no migration later
@@ -6825,8 +6908,8 @@ agent installed:
 - **Still unverified, each a known gap and a task before the work that depends on it:**
   - that `WebSearch` works in `-p` on an API-key, Bedrock, Vertex or Team account (only a
     subscription login was tried);
-  - that Gemini's `--policy` rules stop a call, and whether its hooks and skills load in a chat
-    (a turn needs a login); that `session_info_update` carries a title;
+  - that Gemini's policy rules stop a call (read from its source, §20.8; a turn needs a login),
+    and whether its hooks and skills load in a chat;
   - that OpenCode's ruleset stops a call, and that its `retry`/`action` status is what a driver sees
     at a limit (a free tier at its limit, no provider logged in);
   - `session/resume` and `session/fork` of ACP on an agent that offers them (Gemini 0.66.0 doesn't);

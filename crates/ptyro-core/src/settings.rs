@@ -462,7 +462,7 @@ pub const COLLECTIONS: &[Collection] = &[
         reserved: &[],
         starter: &[("web", "true")],
         title: "Tool presets",
-        empty: "None of your own. chat (web search), read (web search and the folders you list) and none (no tools) are built in; add one to give chats other folders or tools, or name one chat, read or none to change it.",
+        empty: "None of your own. chat (web search), read (web search and the chat's folders) and none (no tools) are built in; add one to give chats a shell, MCP servers or other folders, or name one chat, read or none to change it.",
     },
     Collection {
         path: "scripts.run",
@@ -734,7 +734,9 @@ pub const SETTINGS: &[Setting] = &[
     s("chat.archive_purge_days", "chat", int(0, 36_500), "Delete archived chats after this many days. 0 keeps them.").unit("days"),
     s("chat.tools.*.web", "chat", Kind::Bool, "The agent's own web search and page fetch."),
     s("chat.tools.*.read", "chat", Kind::Bool, "Read files in the folders below (and nothing else)."),
-    s("chat.tools.*.dirs", "chat", Kind::List, "Folders a chat with this preset may read.").eg("~/notes"),
+    s("chat.tools.*.dirs", "chat", Kind::List, "Folders a chat with this preset may read, besides the chat's own (`chat new --folder`).").eg("~/notes"),
+    s("chat.tools.*.shell", "chat", Kind::Bool, "The agent's shell: it runs commands as you, so a web page it reads could steer it. Shown with ⚠; never in a built-in preset.").also("bash commands dangerous"),
+    s("chat.tools.*.mcp", "chat", Kind::List, "MCP servers kept on, by the name the agent's own configuration gives them (`claude mcp list`, `codex mcp list`, Gemini's settings.json).").eg("github").also("tools servers"),
     s("chat.tools.*.allow", "chat", Kind::List, "More tools approved without asking, by the agent's own name for them.").adv(),
     // ── Scratchpad and editors ──
     s("scratchpad.mode", "scratchpad", pick(PAD_MODE), "How the scratchpad key shows it."),
@@ -954,8 +956,9 @@ pub fn options(
             .presets()
             .into_iter()
             .map(|p| {
-                let what = if config.chat.tools.contains_key(&p) { "yours" } else { "built in" };
-                (p, what.to_owned())
+                let what = config.chat.preset(&p).unwrap_or_default().describe();
+                let mine = if config.chat.tools.contains_key(&p) { " (yours)" } else { "" };
+                (p, format!("{what}{mine}"))
             })
             .collect(),
         Source::RunScripts => named(

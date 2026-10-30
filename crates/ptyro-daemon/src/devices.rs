@@ -107,8 +107,13 @@ fn ships_code(step: &str) -> bool {
 pub fn needed(req: &Request) -> Scope {
     use Request::*;
     match req {
-        ChatList { .. } | ChatRead { .. } | ChatExport { .. } | ChatSearch { .. } => Scope::Read,
+        ChatList { .. }
+        | ChatRead { .. }
+        | ChatExport { .. }
+        | ChatSearch { .. }
+        | ChatPresets => Scope::Read,
         ChatNew { .. }
+        | ChatTask { .. }
         | ChatRetry { .. }
         | ChatEdit { .. }
         | ChatBranch { .. }

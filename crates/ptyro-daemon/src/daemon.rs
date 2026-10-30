@@ -1046,6 +1046,8 @@ impl Daemon {
             | Request::ChatBranch { .. }
             | Request::ChatFork { .. }
             | Request::ChatSearch { .. }
+            | Request::ChatTask { .. }
+            | Request::ChatPresets
             | Request::ChatFind { .. }) => self.handle_chat(req, caller).await,
             req @ (Request::CheckpointList { .. }
             | Request::CheckpointDiff { .. }

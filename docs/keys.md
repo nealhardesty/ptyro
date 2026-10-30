@@ -177,7 +177,10 @@ The chat view takes the place of the panes; the sidebar stays. Type and `⏎` to
 (`Shift-⏎` or `Ctrl-J` for a new line), `PageUp`/`PageDown` to scroll, `Ctrl-C` stops the
 answer (or clears the draft), `Esc` goes back (a side chat closed this way goes, unless kept). On
 a permission card, with nothing typed, `a` allows, `A` always, `d` denies. `Ctrl-Q .` is the
-chat's menu: title, pin, archive, switch agent, tools, export, delete.
+chat's menu: title, pin, archive, switch agent, tools, folders, make it a task, export, delete.
+The header says what the chat may use: `tools: read`, plus `best effort` where its agent can't
+enforce that by itself, `⚠ shell` for a preset with a shell (its row in CHATS shows `⚠` too), and
+its folders.
 
 | Key | Does |
 |---|---|
@@ -188,7 +191,10 @@ chat's menu: title, pin, archive, switch agent, tools, export, delete.
 
 Slash commands, typed into the composer: `/retry`, `/edit [text]` (the last message, or pick
 one), `/fork` (from the end or a message), `/side [question]`, `/keep`, `/branch`, `/agent NAME`,
-`/tools NAME`, `/title TEXT`, `/search WORDS`, `/find QUESTION`, `/export`, `/incognito`, `/cite`
+`/tools NAME` (none: the presets, each with what it lets a chat use), `/folder DIR` (one more
+folder it may read; `/folder none` takes them away; in a new chat, before its first message, too),
+`/task [PROJECT]` (an agent carries the chat out in a new worktree; it asks which project when it
+can't tell), `/title TEXT`, `/search WORDS`, `/find QUESTION`, `/export`, `/incognito`, `/cite`
 (open a citation), `/help`. Each is also an action in the palette (`chat.*`).
 
 ## Runs (`Ctrl-Q O`) and change sets (`Ctrl-Q S`)

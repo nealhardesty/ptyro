@@ -18,7 +18,9 @@ const ACTIONS = {
     "chat.archive": "Archive the chat (Archived shows them; again brings it back)",
     "chat.delete": "Delete the chat",
     "chat.agent": "Switch the chat to another agent: the next message carries the conversation over",
-    "chat.preset": "What the chat may use: web search, read folders, or no tools",
+    "chat.preset": "What the chat may use: web search, read folders, a shell, MCP servers, or no tools",
+    "chat.folder": "Folders the chat may read (on the computer it runs on), with the read preset",
+    "chat.task": "Make it a task: an agent in a new worktree carries out the chat's last answer",
     "chat.export": "Download the chat as Markdown",
     "chat.search": "Search every chat: titles at once, and from 3 letters every message on every machine (\"phrases\", prefix*, -word, agent:codex, since:7d)",
     "chat.archived": "Show archived chats instead",
@@ -96,6 +98,10 @@ export async function loadChats() {
         const r = await conn.request({ t: "chat_list", all: true });
         state.list = new Map(r.chats.map((c) => [c.id, c]));
         state.off = "";
+        // Every preset with what it means (yours too); the built-in three until the daemon says.
+        const p = await conn.request({ t: "chat_presets" }).catch(() => null);
+        if (p)
+            presets = p.presets;
     }
     catch (e) {
         state.off = errText(e);
@@ -178,7 +184,9 @@ function rows() {
         }
         // Another machine's that is down: listed as it was, greyed (SPEC §22.11).
         const down = !!c.machine && machineOf(c.workspace)?.state !== "online";
-        out.push(h("div", { class: `chat-row${c.unread ? " unread" : ""}${c.attention ? " blocked" : ""}${down ? " offline" : ""}` }, h("a", { class: "main", href: `#/c/${encodeURIComponent(c.id)}`, title: tip("chat.open") }, h("span", { class: "glyph" }, glyph(c)), h("span", { class: "title" }, label(c)), h("small", {}, ` ${c.agent} · ${ago(c.last_ms)}${state.workspace ? "" : ` · ${wsLabel(c.workspace)}`}`), c.machine ? machineChip(c.workspace) : null, c.unread ? h("b", { class: "unread-dot", "aria-label": "unread" }, "●") : null), h("button", { class: "icon", "aria-label": "More", onclick: () => chatMenu(c) }, "⋯")));
+        out.push(h("div", { class: `chat-row${c.unread ? " unread" : ""}${c.attention ? " blocked" : ""}${down ? " offline" : ""}` }, h("a", { class: "main", href: `#/c/${encodeURIComponent(c.id)}`, title: tip("chat.open") }, h("span", { class: "glyph" }, glyph(c)), h("span", { class: "title" }, label(c)), h("small", {}, ` ${c.agent} · ${ago(c.last_ms)}${state.workspace ? "" : ` · ${wsLabel(c.workspace)}`}`), 
+        // A shell preset: marked as a `dangerous` session is.
+        c.shell ? h("b", { class: "warn", title: "This chat's agent has a shell: it runs commands as you" }, " ⚠") : null, c.machine ? machineChip(c.workspace) : null, c.unread ? h("b", { class: "unread-dot", "aria-label": "unread" }, "●") : null), h("button", { class: "icon", "aria-label": "More", onclick: () => chatMenu(c) }, "⋯")));
     }
     return [...out, ...hitRows()];
 }
@@ -247,6 +255,8 @@ function chatMenu(c) {
         { title: tip("chat.pin"), label: c.pinned ? "Unpin" : "Pin", run: () => update(c, { pinned: !c.pinned }, c.pinned ? "Unpinned" : "Pinned") },
         { title: tip("chat.agent"), label: "Switch agent", hint: `now ${c.agent}`, run: () => pickAgent(c) },
         { title: tip("chat.preset"), label: "Tools", hint: `now ${c.tools}`, run: () => pickPreset(c) },
+        { title: tip("chat.folder"), label: "Folders", hint: c.folders?.length ? c.folders.join(", ") : "none", run: () => editFolders(c) },
+        { title: tip("chat.task"), label: "Make it a task", hint: "an agent carries it out in a new worktree", run: () => makeTask(c) },
         md,
         { title: tip("chat.archive"), label: archived ? "Bring back from the archive" : "Archive", run: async () => {
                 await update(c, { archived: !archived }, archived ? "Back from the archive" : "Archived");
@@ -321,15 +331,49 @@ function agentNames() {
     return names.filter((n) => n !== "antigravity" && (data.agents.length === 0 || data.agents.some((a) => a.name === n && a.installed)));
 }
 function pickAgent(c) {
-    menu("Which agent? The conversation carries over", agentNames().map((a) => ({ title: tip("chat.agent"), label: a, hint: a === c.agent ? "now" : "", run: () => update(c, { agent: a }, `The next message goes to ${a}`) })));
+    // Each with where ptyro found it (an npx cache, nvm…), so a surprising copy is visible.
+    const where = (a) => data.agents.find((x) => x.name === a)?.found ?? "";
+    menu("Which agent? The conversation carries over", agentNames().map((a) => ({ title: tip("chat.agent"), label: a, hint: [a === c.agent ? "now" : "", where(a)].filter(Boolean).join(" · "), run: () => update(c, { agent: a }, `The next message goes to ${a}`) })));
 }
-const PRESETS = [["chat", "web search"], ["read", "web search, and reads its folders"], ["none", "no tools"]];
+let presets = [
+    { name: "chat", about: "web search", builtin: true, read: false, shell: false },
+    { name: "read", about: "web search · reads the chat's folders", builtin: true, read: true, shell: false },
+    { name: "none", about: "no tools", builtin: true, read: false, shell: false },
+];
 function pickPreset(c) {
-    menu("What may the chat use?", [
-        ...PRESETS.map(([p, what]) => ({ title: tip("chat.preset"), label: p, hint: p === c.tools ? `now · ${what}` : what, run: () => update(c, { preset: p }, `Tools: ${p}`) })),
-        // Your own `[chat.tools.NAME]` presets, by name.
-        { title: tip("chat.preset"), label: "One of your own…", hint: "a [chat.tools] preset", run: () => form("Tools: your preset", [{ key: "p", label: "Preset name", required: true, value: PRESETS.some(([p]) => p === c.tools) ? "" : c.tools }], "Use it", async (v) => { await conn.request({ t: "chat_update", chat: c.id, preset: v.p }); ui.toast(`Tools: ${v.p}`); }) },
-    ]);
+    menu("What may the chat use?", presets.map((p) => ({ title: tip("chat.preset"), label: p.name, hint: `${p.name === c.tools ? "now · " : ""}${p.about}${p.builtin ? "" : " (yours)"}`, run: () => update(c, { preset: p.name }, `Tools: ${p.name}`) })));
+}
+/// Folders, one a line, as full paths on the computer the chat runs on (`~` works).
+function folderList(text) {
+    return text.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
+}
+function editFolders(c) {
+    const reads = presets.find((p) => p.name === c.tools)?.read;
+    form("Folders this chat may read", [{ key: "f", label: "One a line (empty: none)", type: "textarea", rows: 3, placeholder: "~/notes", value: (c.folders ?? []).join("\n") }], "Save", async (v) => {
+        await conn.request({ t: "chat_update", chat: c.id, folders: folderList(v.f) });
+        ui.toast(reads || !folderList(v.f).length ? "Saved: the next message starts it with them" : "Saved; the preset reads no files: Tools → read lets it");
+    }, { intro: "On the computer the chat runs on. It reads them with the read preset (or one of yours that reads), and nothing else." });
+}
+/// `chat.task`: which project, when the chat's workspace doesn't say (SPEC §22.7).
+function makeTask(c, project) {
+    const here = [...data.projects.values()].filter((p) => !p.machine);
+    const ws = [...data.workspaces.values()].find((w) => w.name === c.workspace);
+    const mine = here.filter((p) => ws?.projects.includes(p.id));
+    const pick = project ?? (mine.length === 1 ? mine[0].slug : !mine.length && here.length === 1 ? here[0].slug : undefined);
+    const go = async (slug) => {
+        const r = await ask({ t: "chat_task", chat: c.id, project: slug }, "A task now: the chat says where it went");
+        if (r?.agent)
+            location.hash = `#/s/${encodeURIComponent(r.agent.id)}`;
+    };
+    if (pick) {
+        void go(pick);
+        return;
+    }
+    if (!here.length) {
+        ui.toast("A task needs a project: add one first");
+        return;
+    }
+    menu("Which project should it work in?", here.map((p) => ({ title: tip("chat.task"), label: p.slug, hint: p.root, run: () => go(p.slug) })));
 }
 async function exportChat(c) {
     const r = await ask({ t: "chat_export", chat: c.id, format: "md" });
@@ -375,9 +419,10 @@ function pageFor(id) {
     } });
     const agent = h("select", { "aria-label": "Agent", title: tip("chat.agent") }, h("option", { value: "" }, "default agent"), ...agentNames().map((a) => h("option", { value: a }, a)));
     // The default is `[chat] preset`'s, whatever it is (a preset of your own too).
-    const preset = h("select", { "aria-label": "Tools", title: tip("chat.preset") }, h("option", { value: "" }, "default tools"), ...PRESETS.map(([p, what]) => h("option", { value: p }, `${p}: ${what}`)));
+    const preset = h("select", { "aria-label": "Tools", title: tip("chat.preset") }, h("option", { value: "" }, "default tools"), ...presets.map((p) => h("option", { value: p.name }, `${p.name}: ${p.about}`)));
     const incognito = h("input", { type: "checkbox", title: tip("chat.incognito") });
-    page = { id, el: h("div", { class: "session chat-page" }), box: h("div", { class: "chat" }), reply, els: new Map(), agent, preset, incognito, sending: false };
+    const folders = h("input", { type: "text", placeholder: "Folders it may read (optional), e.g. ~/notes", "aria-label": "Folders", title: tip("chat.folder"), autocapitalize: "off", spellcheck: "false" });
+    page = { id, el: h("div", { class: "session chat-page" }), box: h("div", { class: "chat" }), reply, els: new Map(), agent, preset, incognito, folders, sending: false };
     // A new chat's page starts empty (not with what a failed try left).
     if (id.startsWith("new"))
         state.items = [];
@@ -407,7 +452,7 @@ async function send() {
             const ws = decodeURIComponent(p.id.split("/")[1] ?? "") || undefined;
             state.items = [{ id: "first", t: "user", text }];
             ui.render();
-            const r = await conn.request({ t: "chat_new", workspace: ws, agent: p.agent.value || null, preset: p.preset.value || null, prompt: text, incognito: p.incognito.checked });
+            const r = await conn.request({ t: "chat_new", workspace: ws, agent: p.agent.value || null, preset: p.preset.value || null, prompt: text, incognito: p.incognito.checked, folders: folderList(p.folders.value) });
             p.reply.value = "";
             drafts.delete(p.id);
             p.sending = false;
@@ -435,7 +480,7 @@ function slash(id, text) {
     const arg = rest.join(" ").trim();
     const c = state.list.get(id);
     const lastUser = [...state.items].reverse().find((x) => x.t === "user");
-    const needsChat = ["retry", "edit", "fork", "side", "keep", "agent", "tools", "title", "export", "branch", "cite"];
+    const needsChat = ["retry", "edit", "fork", "side", "keep", "agent", "title", "export", "branch", "cite", "task"];
     if (!c && needsChat.includes(name)) {
         ui.toast(`/${name} works in a chat: send a first message`);
         return;
@@ -484,6 +529,33 @@ function slash(id, text) {
                 else
                     pickPreset(c);
             }
+            else if (page) {
+                if (arg)
+                    page.preset.value = arg;
+                ui.toast(arg ? `Tools: ${arg}` : presets.map((p) => `${p.name}: ${p.about}`).join(" · "));
+            }
+            return;
+        case "folder":
+        case "folders": {
+            const none = arg === "none" || arg === "-";
+            if (!c) {
+                if (page) {
+                    page.folders.value = none ? "" : [page.folders.value, arg].filter(Boolean).join(", ");
+                    ui.toast(none ? "No folders" : `It may read ${arg}`);
+                }
+                return;
+            }
+            if (!arg) {
+                editFolders(c);
+                return;
+            }
+            const next = none ? [] : [...new Set([...(c.folders ?? []), arg])];
+            void update(c, { folders: next }, none ? "No folders" : `It may read ${arg} from the next message on`);
+            return;
+        }
+        case "task":
+            if (c)
+                makeTask(c, arg || undefined);
             return;
         case "title":
             if (c) {
@@ -530,7 +602,7 @@ function slash(id, text) {
             requestAnimationFrame(tick);
             return;
         }
-        default: ui.toast("/retry /edit [text] /fork /side [question] /keep /agent NAME /tools NAME /title TEXT /search WORDS /find QUESTION /export /incognito /branch /cite");
+        default: ui.toast("/retry /edit [text] /fork /side [question] /keep /agent NAME /tools NAME /folder DIR|none /task [PROJECT] /title TEXT /search WORDS /find QUESTION /export /incognito /branch /cite");
     }
 }
 /// `/branch`: every choice at every point where the shown chat has others.
@@ -661,7 +733,11 @@ function chatView(rest) {
     follow(isNew ? null : id);
     const c = isNew ? undefined : state.list.get(id) ?? state.archived?.find((x) => x.id === id);
     const pill = c
-        ? [`${c.agent}@${c.profile}`, ` · tools: ${c.tools}`, c.status ? ` · ${c.status}` : "", c.cost_micro_usd ? ` · $${(c.cost_micro_usd / 1e6).toFixed(3)}` : "", ` · ${addr(c)}`]
+        ? [`${c.agent}@${c.profile}`, ` · tools: ${c.tools}`,
+            c.best_effort ? h("span", { class: "warn", title: "This agent can't enforce the preset by itself: ptyro's answer to each permission request stands behind it" }, " · best effort") : "",
+            c.shell ? h("b", { class: "warn", title: "This chat's agent has a shell: it runs commands as you" }, " · ⚠ shell") : "",
+            c.folders?.length ? h("span", { title: c.folders.join("\n") }, ` · ${c.folders.length} folder${c.folders.length === 1 ? "" : "s"}`) : "",
+            c.status ? ` · ${c.status}` : "", c.cost_micro_usd ? ` · $${(c.cost_micro_usd / 1e6).toFixed(3)}` : "", ` · ${addr(c)}`]
         : ["A new chat: it can search the web, and it is kept."];
     const empty = isNew && !state.items.length
         ? h("div", { class: "empty" }, h("p", {}, h("b", {}, "Ask anything.")), h("p", { class: "sub" }, "Pick the agent and what it may use below, or keep the defaults."))
@@ -676,7 +752,7 @@ function chatView(rest) {
         ...(c?.incognito ? [h("p", { class: "banner" }, "◌ Incognito: nothing of this chat is kept, and it ends with its agent.")] : []),
         ...(c?.side_of ? [h("p", { class: "banner" }, `↳ A side chat of “${label(state.list.get(c.side_of))}”: it never changes it, and goes when you leave, unless kept. `, canWrite() ? h("button", { class: "small", title: tip("chat.keep"), onclick: () => keepSide(c) }, "Keep it") : null)] : []),
         empty ?? p.box,
-        ...(isNew ? [h("div", { class: "bar chat-pick" }, p.agent, p.preset, h("label", { class: "check", title: tip("chat.incognito") }, p.incognito, " incognito"))] : []),
+        ...(isNew ? [h("div", { class: "bar chat-pick" }, p.agent, p.preset, h("label", { class: "check", title: tip("chat.incognito") }, p.incognito, " incognito")), h("div", { class: "bar chat-pick" }, p.folders)] : []),
         canWrite() ? h("div", { class: "reply" }, p.reply, stop, h("button", { class: "send", title: tip("chat.send"), onclick: () => void send() }, "Send")) : h("p", { class: "sub" }, "This device may read chats, not write in them."),
     ].filter((x) => !!x));
     if (isNew)

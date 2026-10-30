@@ -554,8 +554,39 @@ pub struct ChatTools {
     pub read: bool,
     /// Folders a chat of this preset may read.
     pub dirs: Vec<String>,
+    /// The agent's shell: it runs commands as you (never in a built-in preset; shown with ⚠).
+    pub shell: bool,
+    /// MCP servers by name, from the agent's own configuration, kept on in the chat.
+    pub mcp: Vec<String>,
     /// More tool names to approve without asking.
     pub allow: Vec<String>,
+}
+
+impl ChatTools {
+    /// One line for people: what a chat with this preset may use.
+    pub fn describe(&self) -> String {
+        let mut what: Vec<String> = Vec::new();
+        if self.shell {
+            what.push("⚠ runs shell commands".into());
+        }
+        if self.web {
+            what.push("web search".into());
+        }
+        if self.read {
+            what.push(if self.dirs.is_empty() {
+                "reads the chat's folders".into()
+            } else {
+                format!("reads {} and the chat's folders", self.dirs.join(", "))
+            });
+        }
+        if !self.mcp.is_empty() {
+            what.push(format!("MCP: {}", self.mcp.join(", ")));
+        }
+        if !self.allow.is_empty() {
+            what.push(format!("also {}", self.allow.join(", ")));
+        }
+        if what.is_empty() { "no tools".into() } else { what.join(" · ") }
+    }
 }
 
 impl Chat {
@@ -607,8 +638,23 @@ impl Chat {
         if !(1..=100).contains(&self.recent) {
             return Err("chat.recent: 1 to 100".into());
         }
-        for name in self.tools.keys() {
+        for (name, t) in &self.tools {
             crate::names::validate(name).map_err(|e| format!("chat.tools.{name}: {e}"))?;
+            if t.shell && Self::BUILTIN.contains(&name.as_str()) {
+                return Err(format!(
+                    "chat.tools.{name}.shell: the built-in presets never run commands; make a preset of your own for that ([chat.tools.shell] shell = true)"
+                ));
+            }
+            // Gemini names a server's tools `mcp_<server>_<tool>`: a `_` would be ambiguous.
+            if let Some(m) = t
+                .mcp
+                .iter()
+                .find(|m| m.is_empty() || !m.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+            {
+                return Err(format!(
+                    "chat.tools.{name}.mcp: {m:?} isn't an MCP server name (letters, digits and -)"
+                ));
+            }
         }
         Ok(())
     }

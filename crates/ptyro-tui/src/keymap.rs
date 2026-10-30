@@ -235,7 +235,12 @@ pub const ACTIONS: &[ActionSpec] = &[
         "chat.agent",
         "Switch this chat to another agent: the next message carries the conversation over",
     ),
-    a("chat.preset", "What this chat may use: web search, read folders, or no tools"),
+    a(
+        "chat.preset",
+        "What this chat may use: web search, read folders, a shell, MCP servers, or no tools",
+    ),
+    a("chat.folder", "A folder this chat may read (with the read preset), or none"),
+    a("chat.task", "Make it a task: an agent in a new worktree carries out the chat's last answer"),
     a("chat.export", "Write this chat out as Markdown"),
     a("chat.stop", "Stop the answer being written"),
     a(

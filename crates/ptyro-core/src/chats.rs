@@ -67,12 +67,51 @@ pub struct ChatInfo {
     /// The engine's session, while one runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine: Option<String>,
+    /// Folders it may read, with a preset that reads (CHAT4, SPEC §22.5).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folders: Vec<String>,
+    /// Its agent can't enforce the preset by itself, or only partly: ptyro's answer to each
+    /// permission request stands behind it (`tools: … · best effort`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub best_effort: bool,
+    /// Its preset gives the agent a shell (shown with ⚠, like a `dangerous` session).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shell: bool,
+}
+
+/// A tool preset as clients list it (`ChatPresets`, SPEC §22.13).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatPreset {
+    pub name: String,
+    /// One line: what a chat with it may use.
+    pub about: String,
+    /// One of `chat`, `read`, `none` (and not changed in the config).
+    #[serde(default)]
+    pub builtin: bool,
+    /// It reads folders (so `--folder` means something).
+    #[serde(default)]
+    pub read: bool,
+    /// It gives the agent a shell (⚠).
+    #[serde(default)]
+    pub shell: bool,
 }
 
 impl ChatInfo {
     /// What a person calls it: its title, else "new chat".
     pub fn label(&self) -> &str {
         self.title.as_deref().filter(|t| !t.trim().is_empty()).unwrap_or("new chat")
+    }
+
+    /// The header's badge: `tools: read · best effort · ⚠ shell` (SPEC §22.12).
+    pub fn tools_badge(&self) -> String {
+        let mut s = format!("tools: {}", self.tools);
+        if self.best_effort {
+            s.push_str(" · best effort");
+        }
+        if self.shell {
+            s.push_str(" · ⚠ shell");
+        }
+        s
     }
 
     /// `c:7f3k`, or `laptop2:c:7f3k` for another machine's.

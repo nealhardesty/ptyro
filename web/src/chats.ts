@@ -21,7 +21,9 @@ const ACTIONS = {
   "chat.archive": "Archive the chat (Archived shows them; again brings it back)",
   "chat.delete": "Delete the chat",
   "chat.agent": "Switch the chat to another agent: the next message carries the conversation over",
-  "chat.preset": "What the chat may use: web search, read folders, or no tools",
+  "chat.preset": "What the chat may use: web search, read folders, a shell, MCP servers, or no tools",
+  "chat.folder": "Folders the chat may read (on the computer it runs on), with the read preset",
+  "chat.task": "Make it a task: an agent in a new worktree carries out the chat's last answer",
   "chat.export": "Download the chat as Markdown",
   "chat.search": "Search every chat: titles at once, and from 3 letters every message on every machine (\"phrases\", prefix*, -word, agent:codex, since:7d)",
   "chat.archived": "Show archived chats instead",
@@ -43,8 +45,10 @@ export interface Chat {
   agent: string; profile: string; tools: string; pinned: boolean; archived: boolean; incognito: boolean; forked: boolean;
   leaf?: string | null; nodes: number; unread: number; created_ms: number; last_ms: number; cost_micro_usd: number;
   status?: string | null; attention?: { kind: string; text: string; since_ms: number } | null; engine?: string | null;
-  side_of?: string | null;
+  side_of?: string | null; folders?: string[]; best_effort?: boolean; shell?: boolean;
 }
+/// A tool preset, with what it lets a chat use (`chat_presets`).
+interface Preset { name: string; about: string; builtin: boolean; read: boolean; shell: boolean }
 interface Siblings { node: string; at: number; of: number; ids: string[] }
 interface Hit { chat: Chat; node?: string | null; kind: string; snippet: string; at_ms: number; rank: number }
 interface Item { id: string; t: string; [k: string]: any }
@@ -115,6 +119,9 @@ export async function loadChats(): Promise<void> {
     const r = await conn.request({ t: "chat_list", all: true });
     state.list = new Map((r.chats as Chat[]).map((c) => [c.id, c]));
     state.off = "";
+    // Every preset with what it means (yours too); the built-in three until the daemon says.
+    const p = await conn.request({ t: "chat_presets" }).catch(() => null);
+    if (p) presets = p.presets as Preset[];
   } catch (e) {
     state.off = errText(e);
   }
@@ -191,6 +198,8 @@ function rows(): Node[] {
         h("span", { class: "glyph" }, glyph(c)),
         h("span", { class: "title" }, label(c)),
         h("small", {}, ` ${c.agent} · ${ago(c.last_ms)}${state.workspace ? "" : ` · ${wsLabel(c.workspace)}`}`),
+        // A shell preset: marked as a `dangerous` session is.
+        c.shell ? h("b", { class: "warn", title: "This chat's agent has a shell: it runs commands as you" }, " ⚠") : null,
         c.machine ? machineChip(c.workspace) : null,
         c.unread ? h("b", { class: "unread-dot", "aria-label": "unread" }, "●") : null),
       h("button", { class: "icon", "aria-label": "More", onclick: () => chatMenu(c) }, "⋯")));
@@ -267,6 +276,8 @@ function chatMenu(c: Chat): void {
     { title: tip("chat.pin"), label: c.pinned ? "Unpin" : "Pin", run: () => update(c, { pinned: !c.pinned }, c.pinned ? "Unpinned" : "Pinned") },
     { title: tip("chat.agent"), label: "Switch agent", hint: `now ${c.agent}`, run: () => pickAgent(c) },
     { title: tip("chat.preset"), label: "Tools", hint: `now ${c.tools}`, run: () => pickPreset(c) },
+    { title: tip("chat.folder"), label: "Folders", hint: c.folders?.length ? c.folders.join(", ") : "none", run: () => editFolders(c) },
+    { title: tip("chat.task"), label: "Make it a task", hint: "an agent carries it out in a new worktree", run: () => makeTask(c) },
     md,
     { title: tip("chat.archive"), label: archived ? "Bring back from the archive" : "Archive", run: async () => {
       await update(c, { archived: !archived }, archived ? "Back from the archive" : "Archived");
@@ -332,17 +343,47 @@ function agentNames(): string[] {
 }
 
 function pickAgent(c: Chat): void {
-  menu("Which agent? The conversation carries over", agentNames().map((a) => ({ title: tip("chat.agent"), label: a, hint: a === c.agent ? "now" : "", run: () => update(c, { agent: a }, `The next message goes to ${a}`) })));
+  // Each with where ptyro found it (an npx cache, nvm…), so a surprising copy is visible.
+  const where = (a: string) => data.agents.find((x) => x.name === a)?.found ?? "";
+  menu("Which agent? The conversation carries over", agentNames().map((a) => ({ title: tip("chat.agent"), label: a, hint: [a === c.agent ? "now" : "", where(a)].filter(Boolean).join(" · "), run: () => update(c, { agent: a }, `The next message goes to ${a}`) })));
 }
 
-const PRESETS: [string, string][] = [["chat", "web search"], ["read", "web search, and reads its folders"], ["none", "no tools"]];
+let presets: Preset[] = [
+  { name: "chat", about: "web search", builtin: true, read: false, shell: false },
+  { name: "read", about: "web search · reads the chat's folders", builtin: true, read: true, shell: false },
+  { name: "none", about: "no tools", builtin: true, read: false, shell: false },
+];
 
 function pickPreset(c: Chat): void {
-  menu("What may the chat use?", [
-    ...PRESETS.map(([p, what]) => ({ title: tip("chat.preset"), label: p, hint: p === c.tools ? `now · ${what}` : what, run: () => update(c, { preset: p }, `Tools: ${p}`) })),
-    // Your own `[chat.tools.NAME]` presets, by name.
-    { title: tip("chat.preset"), label: "One of your own…", hint: "a [chat.tools] preset", run: () => form("Tools: your preset", [{ key: "p", label: "Preset name", required: true, value: PRESETS.some(([p]) => p === c.tools) ? "" : c.tools }], "Use it", async (v) => { await conn.request({ t: "chat_update", chat: c.id, preset: v.p }); ui.toast(`Tools: ${v.p}`); }) },
-  ]);
+  menu("What may the chat use?", presets.map((p) => ({ title: tip("chat.preset"), label: p.name, hint: `${p.name === c.tools ? "now · " : ""}${p.about}${p.builtin ? "" : " (yours)"}`, run: () => update(c, { preset: p.name }, `Tools: ${p.name}`) })));
+}
+
+/// Folders, one a line, as full paths on the computer the chat runs on (`~` works).
+function folderList(text: string): string[] {
+  return text.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
+}
+
+function editFolders(c: Chat): void {
+  const reads = presets.find((p) => p.name === c.tools)?.read;
+  form("Folders this chat may read", [{ key: "f", label: "One a line (empty: none)", type: "textarea", rows: 3, placeholder: "~/notes", value: (c.folders ?? []).join("\n") }], "Save", async (v) => {
+    await conn.request({ t: "chat_update", chat: c.id, folders: folderList(v.f as string) });
+    ui.toast(reads || !folderList(v.f as string).length ? "Saved: the next message starts it with them" : "Saved; the preset reads no files: Tools → read lets it");
+  }, { intro: "On the computer the chat runs on. It reads them with the read preset (or one of yours that reads), and nothing else." });
+}
+
+/// `chat.task`: which project, when the chat's workspace doesn't say (SPEC §22.7).
+function makeTask(c: Chat, project?: string): void {
+  const here = [...data.projects.values()].filter((p) => !(p as any).machine);
+  const ws = [...data.workspaces.values()].find((w) => w.name === c.workspace);
+  const mine = here.filter((p) => ws?.projects.includes(p.id));
+  const pick = project ?? (mine.length === 1 ? mine[0].slug : !mine.length && here.length === 1 ? here[0].slug : undefined);
+  const go = async (slug: string): Promise<void> => {
+    const r = await ask<{ agent?: { id: string } | null }>({ t: "chat_task", chat: c.id, project: slug }, "A task now: the chat says where it went");
+    if (r?.agent) location.hash = `#/s/${encodeURIComponent(r.agent.id)}`;
+  };
+  if (pick) { void go(pick); return; }
+  if (!here.length) { ui.toast("A task needs a project: add one first"); return; }
+  menu("Which project should it work in?", here.map((p) => ({ title: tip("chat.task"), label: p.slug, hint: p.root, run: () => go(p.slug) })));
 }
 
 async function exportChat(c: Chat): Promise<void> {
@@ -354,7 +395,7 @@ async function exportChat(c: Chat): Promise<void> {
 
 /// The page's composer and transcript stay in the DOM across renders, so a draft, the caret
 /// and the scroll position survive the events that re-render everything around them.
-interface Page { id: string; el: HTMLElement; box: HTMLElement; reply: HTMLTextAreaElement; els: Map<string, { key: string; el: HTMLElement }>; agent: HTMLSelectElement; preset: HTMLSelectElement; incognito: HTMLInputElement; sending: boolean }
+interface Page { id: string; el: HTMLElement; box: HTMLElement; reply: HTMLTextAreaElement; els: Map<string, { key: string; el: HTMLElement }>; agent: HTMLSelectElement; preset: HTMLSelectElement; incognito: HTMLInputElement; folders: HTMLInputElement; sending: boolean }
 let page: Page | null = null;
 const drafts = new Map<string, string>();
 
@@ -387,9 +428,10 @@ function pageFor(id: string): Page {
   reply.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); void send(); } });
   const agent = h("select", { "aria-label": "Agent", title: tip("chat.agent") }, h("option", { value: "" }, "default agent"), ...agentNames().map((a) => h("option", { value: a }, a)));
   // The default is `[chat] preset`'s, whatever it is (a preset of your own too).
-  const preset = h("select", { "aria-label": "Tools", title: tip("chat.preset") }, h("option", { value: "" }, "default tools"), ...PRESETS.map(([p, what]) => h("option", { value: p }, `${p}: ${what}`)));
+  const preset = h("select", { "aria-label": "Tools", title: tip("chat.preset") }, h("option", { value: "" }, "default tools"), ...presets.map((p) => h("option", { value: p.name }, `${p.name}: ${p.about}`)));
   const incognito = h("input", { type: "checkbox", title: tip("chat.incognito") });
-  page = { id, el: h("div", { class: "session chat-page" }), box: h("div", { class: "chat" }), reply, els: new Map(), agent, preset, incognito, sending: false };
+  const folders = h("input", { type: "text", placeholder: "Folders it may read (optional), e.g. ~/notes", "aria-label": "Folders", title: tip("chat.folder"), autocapitalize: "off", spellcheck: "false" });
+  page = { id, el: h("div", { class: "session chat-page" }), box: h("div", { class: "chat" }), reply, els: new Map(), agent, preset, incognito, folders, sending: false };
   // A new chat's page starts empty (not with what a failed try left).
   if (id.startsWith("new")) state.items = [];
   return page;
@@ -409,7 +451,7 @@ async function send(): Promise<void> {
       const ws = decodeURIComponent(p.id.split("/")[1] ?? "") || undefined;
       state.items = [{ id: "first", t: "user", text }];
       ui.render();
-      const r = await conn.request({ t: "chat_new", workspace: ws, agent: p.agent.value || null, preset: p.preset.value || null, prompt: text, incognito: p.incognito.checked });
+      const r = await conn.request({ t: "chat_new", workspace: ws, agent: p.agent.value || null, preset: p.preset.value || null, prompt: text, incognito: p.incognito.checked, folders: folderList(p.folders.value) });
       p.reply.value = ""; drafts.delete(p.id);
       p.sending = false;
       const info = r.info as Chat;
@@ -430,7 +472,7 @@ function slash(id: string, text: string): void {
   const arg = rest.join(" ").trim();
   const c = state.list.get(id);
   const lastUser = [...state.items].reverse().find((x) => x.t === "user");
-  const needsChat = ["retry", "edit", "fork", "side", "keep", "agent", "tools", "title", "export", "branch", "cite"];
+  const needsChat = ["retry", "edit", "fork", "side", "keep", "agent", "title", "export", "branch", "cite", "task"];
   if (!c && needsChat.includes(name)) { ui.toast(`/${name} works in a chat: send a first message`); return; }
   if (name === "edit" && !lastUser) { ui.toast("No message to edit yet"); return; }
   switch (name) {
@@ -440,7 +482,19 @@ function slash(id: string, text: string): void {
     case "side": if (c) void sideChat(c, arg); return;
     case "keep": if (c) keepSide(c); return;
     case "agent": if (c) { if (arg) void update(c, { agent: arg }, `The next message goes to ${arg}`); else pickAgent(c); } return;
-    case "tools": if (c) { if (arg) void update(c, { preset: arg }, `Tools: ${arg}`); else pickPreset(c); } return;
+    case "tools":
+      if (c) { if (arg) void update(c, { preset: arg }, `Tools: ${arg}`); else pickPreset(c); }
+      else if (page) { if (arg) page.preset.value = arg; ui.toast(arg ? `Tools: ${arg}` : presets.map((p) => `${p.name}: ${p.about}`).join(" · ")); }
+      return;
+    case "folder": case "folders": {
+      const none = arg === "none" || arg === "-";
+      if (!c) { if (page) { page.folders.value = none ? "" : [page.folders.value, arg].filter(Boolean).join(", "); ui.toast(none ? "No folders" : `It may read ${arg}`); } return; }
+      if (!arg) { editFolders(c); return; }
+      const next = none ? [] : [...new Set([...(c.folders ?? []), arg])];
+      void update(c, { folders: next }, none ? "No folders" : `It may read ${arg} from the next message on`);
+      return;
+    }
+    case "task": if (c) makeTask(c, arg || undefined); return;
     case "title": if (c) { if (arg) void update(c, { title: arg }, "Renamed"); else retitle(c); } return;
     case "export": if (c) void exportChat(c); return;
     case "search": location.hash = "#/chats"; findBox.value = arg; findBox.dispatchEvent(new Event("input")); return;
@@ -458,7 +512,7 @@ function slash(id: string, text: string): void {
       requestAnimationFrame(tick);
       return;
     }
-    default: ui.toast("/retry /edit [text] /fork /side [question] /keep /agent NAME /tools NAME /title TEXT /search WORDS /find QUESTION /export /incognito /branch /cite");
+    default: ui.toast("/retry /edit [text] /fork /side [question] /keep /agent NAME /tools NAME /folder DIR|none /task [PROJECT] /title TEXT /search WORDS /find QUESTION /export /incognito /branch /cite");
   }
 }
 
@@ -590,7 +644,11 @@ function chatView(rest: string): HTMLElement {
   follow(isNew ? null : id);
   const c = isNew ? undefined : state.list.get(id) ?? state.archived?.find((x) => x.id === id);
   const pill: Child[] = c
-    ? [`${c.agent}@${c.profile}`, ` · tools: ${c.tools}`, c.status ? ` · ${c.status}` : "", c.cost_micro_usd ? ` · $${(c.cost_micro_usd / 1e6).toFixed(3)}` : "", ` · ${addr(c)}`]
+    ? [`${c.agent}@${c.profile}`, ` · tools: ${c.tools}`,
+      c.best_effort ? h("span", { class: "warn", title: "This agent can't enforce the preset by itself: ptyro's answer to each permission request stands behind it" }, " · best effort") : "",
+      c.shell ? h("b", { class: "warn", title: "This chat's agent has a shell: it runs commands as you" }, " · ⚠ shell") : "",
+      c.folders?.length ? h("span", { title: c.folders.join("\n") }, ` · ${c.folders.length} folder${c.folders.length === 1 ? "" : "s"}`) : "",
+      c.status ? ` · ${c.status}` : "", c.cost_micro_usd ? ` · $${(c.cost_micro_usd / 1e6).toFixed(3)}` : "", ` · ${addr(c)}`]
     : ["A new chat: it can search the web, and it is kept."];
   const empty = isNew && !state.items.length
     ? h("div", { class: "empty" }, h("p", {}, h("b", {}, "Ask anything.")), h("p", { class: "sub" }, "Pick the agent and what it may use below, or keep the defaults."))
@@ -604,7 +662,7 @@ function chatView(rest: string): HTMLElement {
     ...(c?.incognito ? [h("p", { class: "banner" }, "◌ Incognito: nothing of this chat is kept, and it ends with its agent.")] : []),
     ...(c?.side_of ? [h("p", { class: "banner" }, `↳ A side chat of “${label(state.list.get(c.side_of))}”: it never changes it, and goes when you leave, unless kept. `, canWrite() ? h("button", { class: "small", title: tip("chat.keep"), onclick: () => keepSide(c) }, "Keep it") : null)] : []),
     empty ?? p.box,
-    ...(isNew ? [h("div", { class: "bar chat-pick" }, p.agent, p.preset, h("label", { class: "check", title: tip("chat.incognito") }, p.incognito, " incognito"))] : []),
+    ...(isNew ? [h("div", { class: "bar chat-pick" }, p.agent, p.preset, h("label", { class: "check", title: tip("chat.incognito") }, p.incognito, " incognito")), h("div", { class: "bar chat-pick" }, p.folders)] : []),
     canWrite() ? h("div", { class: "reply" }, p.reply, stop, h("button", { class: "send", title: tip("chat.send"), onclick: () => void send() }, "Send")) : h("p", { class: "sub" }, "This device may read chats, not write in them."),
   ].filter((x): x is HTMLElement => !!x));
   if (isNew) requestAnimationFrame(() => { if (document.activeElement !== p.reply) p.reply.focus(); });

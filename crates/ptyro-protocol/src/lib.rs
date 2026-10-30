@@ -40,7 +40,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 23 };
+pub const PROTO: Version = Version { major: 1, minor: 24 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1084,6 +1084,9 @@ pub enum Request {
         /// Nothing of it is written; it ends with its agent (1.23, SPEC §22.9).
         #[serde(default)]
         incognito: bool,
+        /// Folders it may read (1.24, SPEC §22.5): with no `preset`, the chat then reads.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        folders: Vec<String>,
     },
     /// Chats, pinned first then the newest: one workspace's, or every one's with `all`.
     ChatList {
@@ -1192,6 +1195,9 @@ pub enum Request {
         /// Keep a side chat: it becomes an ordinary fork (1.23).
         #[serde(default)]
         keep: Option<bool>,
+        /// The folders it may read, all of them (empty: none; 1.24).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        folders: Option<Vec<String>>,
     },
     ChatDelete {
         chat: String,
@@ -1202,6 +1208,22 @@ pub enum Request {
         #[serde(default)]
         format: String,
     },
+    /// Make it a task (1.24, SPEC §22.7): an agent session in a new worktree of `project`, its
+    /// first prompt the chat's shown branch and last answer. Answered like `WorktreeNew`.
+    ChatTask {
+        chat: String,
+        /// Default: the only project of the chat's workspace.
+        #[serde(default)]
+        project: Option<String>,
+        /// `agent` or `agent@profile`; default: the chat's agent.
+        #[serde(default)]
+        agent: Option<String>,
+        /// The worktree's name; default: from the chat's title.
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// The tool presets, each with what it lets a chat use (1.24).
+    ChatPresets,
 }
 
 /// One persisted session event (`session_event`, SPEC §14.3).
@@ -1322,8 +1344,11 @@ pub struct AgentChoice {
     pub name: String,
     /// The program it runs.
     pub program: String,
-    /// The program is on `PATH`.
+    /// The program is on `PATH`, or where npm, nvm or `npx` put it.
     pub installed: bool,
+    /// Where it was found, for people (`~/.npm/_npx/…/gemini.js (npx cache)`; 1.24).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub found: Option<String>,
 }
 
 /// One step of a replay: the screen at `at_ms` into the recording, as a keyframe or the changes
@@ -1652,6 +1677,10 @@ pub enum Reply {
     /// Search hits, best first (1.23).
     ChatHits {
         hits: Vec<ptyro_core::chats::ChatHit>,
+    },
+    /// The tool presets (1.24).
+    ChatPresets {
+        presets: Vec<ptyro_core::chats::ChatPreset>,
     },
     Devices {
         devices: Vec<DeviceInfo>,

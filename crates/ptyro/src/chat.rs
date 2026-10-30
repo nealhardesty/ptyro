@@ -25,8 +25,8 @@ pub enum ChatCmd {
         /// `agent` or `agent@profile` (default `[chat] agent`, else the first installed)
         #[arg(long, add = ArgValueCandidates::new(complete::agents))]
         agent: Option<String>,
-        /// What it may use: chat (web search, the default), read, none, or your own
-        #[arg(long)]
+        /// What it may use: chat (web search, the default), read, none, or your own (`chat presets`)
+        #[arg(long, add = ArgValueCandidates::new(complete::chat_presets))]
         preset: Option<String>,
         /// The workspace it belongs to (default main)
         #[arg(short, long, add = ArgValueCandidates::new(complete::workspaces))]
@@ -36,6 +36,9 @@ pub enum ChatCmd {
         /// Keep nothing: not saved, not searchable, gone when its agent stops
         #[arg(long)]
         incognito: bool,
+        /// A folder it may read (repeatable); with no --preset the chat then reads (`read`)
+        #[arg(long = "folder", value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
+        folders: Vec<String>,
         /// Don't wait for the answer
         #[arg(long)]
         no_wait: bool,
@@ -240,14 +243,43 @@ pub enum ChatCmd {
         #[arg(required = true, add = ArgValueCandidates::new(complete::chats))]
         chats: Vec<String>,
     },
-    /// Change the agent or the tool preset; the next message carries the conversation over
+    /// Change the agent, the tool preset or the folders it reads; the next message carries the
+    /// conversation over
     Set {
         #[arg(add = ArgValueCandidates::new(complete::chats))]
         chat: String,
         #[arg(long, add = ArgValueCandidates::new(complete::agents))]
         agent: Option<String>,
-        #[arg(long)]
+        #[arg(long, add = ArgValueCandidates::new(complete::chat_presets))]
         preset: Option<String>,
+        /// The folders it may read, all of them (repeatable)
+        #[arg(long = "folder", value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
+        folders: Vec<String>,
+        /// It reads no folder
+        #[arg(long, conflicts_with = "folders")]
+        no_folders: bool,
+    },
+    /// The tool presets, each with what it lets a chat use
+    Presets {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Make it a task: an agent session in a new worktree of a project, starting from the chat's
+    /// conversation and its last answer
+    Task {
+        #[arg(add = ArgValueCandidates::new(complete::chats))]
+        chat: String,
+        /// The project to work in (default: the only one of the chat's workspace)
+        #[arg(short, long, add = ArgValueCandidates::new(complete::projects))]
+        project: Option<String>,
+        /// `agent` or `agent@profile` (default: the chat's agent)
+        #[arg(long, add = ArgValueCandidates::new(complete::agents))]
+        agent: Option<String>,
+        /// The worktree's name (default: from the chat's title)
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// Delete chats (gone at once from every list)
     #[command(alias = "delete")]
@@ -276,13 +308,25 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, words: Vec<String>) -> Result<
         workspace: None,
         title: None,
         incognito: false,
+        folders: Vec::new(),
         no_wait: false,
         json: false,
     });
     match cmd {
-        ChatCmd::New { prompt, agent, preset, workspace, title, incognito, no_wait, json } => {
+        ChatCmd::New {
+            prompt,
+            agent,
+            preset,
+            workspace,
+            title,
+            incognito,
+            folders,
+            no_wait,
+            json,
+        } => {
             let text = words_or_stdin(prompt)?;
-            new(ctx, text, agent, preset, workspace, title, incognito, no_wait, json).await
+            let folders = folders.iter().map(|f| full_path(f)).collect();
+            new(ctx, text, agent, preset, workspace, title, incognito, folders, no_wait, json).await
         }
         ChatCmd::Retry { chat, node, no_wait, timeout } => {
             let c = ctx.connect(true).await?;
@@ -401,17 +445,42 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, words: Vec<String>) -> Result<
         ChatCmd::Unarchive { chats } => {
             each(ctx, chats, "back from the archive", |r| set_archived(r, false)).await
         }
-        ChatCmd::Set { chat, agent, preset } => {
-            if agent.is_none() && preset.is_none() {
-                return Err(Error::invalid("what should change? --agent A, --preset P"));
+        ChatCmd::Set { chat, agent, preset, folders, no_folders } => {
+            if agent.is_none() && preset.is_none() && folders.is_empty() && !no_folders {
+                return Err(Error::invalid(
+                    "what should change? --agent A, --preset P, --folder DIR or --no-folders",
+                ));
             }
+            let folders = (no_folders || !folders.is_empty())
+                .then(|| folders.iter().map(|f| full_path(f)).collect());
             update(ctx, &chat, |r| {
-                if let Request::ChatUpdate { agent: a, preset: p, .. } = r {
+                if let Request::ChatUpdate { agent: a, preset: p, folders: f, .. } = r {
                     *a = agent;
                     *p = preset;
+                    *f = folders;
                 }
             })
             .await
+        }
+        ChatCmd::Presets { json } => {
+            let c = ctx.connect(true).await?;
+            let presets = match c.request(Request::ChatPresets).await? {
+                Reply::ChatPresets { presets } => presets,
+                r => return Err(unexpected(r)),
+            };
+            if json {
+                println!("{}", serde_json::to_string_pretty(&presets).unwrap_or_default());
+                return Ok(0);
+            }
+            let w = presets.iter().map(|p| p.name.len()).max().unwrap_or(4).max(4);
+            for p in &presets {
+                let mine = if p.builtin { "" } else { "  (yours)" };
+                println!("{:<w$}  {}{mine}", p.name, p.about);
+            }
+            Ok(0)
+        }
+        ChatCmd::Task { chat, project, agent, name, json } => {
+            task(ctx, chat, project, agent, name, json).await
         }
         ChatCmd::Rm { chats } => {
             let c = ctx.connect(true).await?;
@@ -456,6 +525,53 @@ fn words_or_stdin(words: Vec<String>) -> Result<String, Error> {
     Ok(words.join(" "))
 }
 
+/// A folder as typed, made full against this directory (`.`, `notes`); `~` and full paths are
+/// left for the chat's machine to read.
+fn full_path(f: &str) -> String {
+    if f.starts_with('/') || f.starts_with('~') {
+        return f.to_owned();
+    }
+    let p = std::env::current_dir().map(|d| d.join(f)).unwrap_or_else(|_| f.into());
+    p.canonicalize().unwrap_or(p).to_string_lossy().into_owned()
+}
+
+/// `chat task`: the worktree and the session that carries the chat out.
+async fn task(
+    ctx: &Ctx,
+    chat: String,
+    project: Option<String>,
+    agent: Option<String>,
+    name: Option<String>,
+    json: bool,
+) -> Result<i32, Error> {
+    let c = ctx.connect(true).await?;
+    let r = c.request(Request::ChatTask { chat, project, agent, name }).await?;
+    let Reply::WorktreeCreated { info, agent, agent_pending, notes, .. } = r else {
+        return Err(unexpected(r));
+    };
+    if json {
+        let v = serde_json::json!({ "worktree": info, "session": agent, "pending": agent_pending });
+        println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+        return Ok(0);
+    }
+    for n in &notes {
+        eprintln!("  {n}");
+    }
+    match agent {
+        Some(s) => println!(
+            "{}: {} works on it (`ptyro attach {}`)",
+            info.qualified(),
+            s.agent.as_deref().unwrap_or("the agent"),
+            s.name
+        ),
+        None if agent_pending => {
+            println!("{}: the agent starts once its setup has run", info.qualified())
+        }
+        None => println!("{}", info.qualified()),
+    }
+    Ok(0)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn new(
     ctx: &Ctx,
@@ -465,13 +581,14 @@ async fn new(
     workspace: Option<String>,
     title: Option<String>,
     incognito: bool,
+    folders: Vec<String>,
     no_wait: bool,
     json: bool,
 ) -> Result<i32, Error> {
     let c = ctx.connect(true).await?;
     let prompt = Some(text.clone()).filter(|t| !t.trim().is_empty());
     let has_prompt = prompt.is_some();
-    let req = Request::ChatNew { workspace, agent, preset, title, prompt, incognito };
+    let req = Request::ChatNew { workspace, agent, preset, title, prompt, incognito, folders };
     let info = chat_of(c.request(req).await?)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&info).unwrap_or_default());
@@ -485,7 +602,7 @@ async fn new(
         println!("{}", info.addr());
         return Ok(0);
     }
-    eprintln!("{} · {} · {}", info.addr(), info.agent, info.tools);
+    eprintln!("{} · {} · {}", info.addr(), info.agent, info.tools_badge());
     if no_wait {
         return Ok(0);
     }
@@ -519,6 +636,7 @@ async fn ask(
             title: None,
             prompt: None,
             incognito: !keep,
+            folders: Vec::new(),
         })
         .await?,
     )?;
@@ -897,6 +1015,7 @@ async fn fork(
             agent: None,
             preset: None,
             keep: Some(true),
+            folders: None,
         })
         .await?;
     }
@@ -1068,6 +1187,7 @@ fn blank(chat: &str) -> Request {
         agent: None,
         preset: None,
         keep: None,
+        folders: None,
     }
 }
 

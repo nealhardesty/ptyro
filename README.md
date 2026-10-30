@@ -353,11 +353,19 @@ ptyro chat fork @last --at 3f9k01ab --agent codex   # a new chat from an old mes
 ptyro chat fork @last --side "what does that flag do?"   # a side chat: reads, never writes back
 ptyro chat search 'retry policy since:7d -draft'    # every chat, on every linked machine
 ptyro chat find "what did we decide about the retry policy?"   # an agent answers from your history, with citations
+ptyro chat --folder ~/notes "what's left on the launch list?"    # it reads that folder, and nothing else
+ptyro chat presets                          # what each tool preset lets a chat use
+ptyro chat task @last --project myrepo      # an agent carries the chat out in a new worktree
 ```
 
 In the TUI every workspace has a **CHATS** section in the sidebar; `C-q m` starts a chat and
 `C-q g` lists them. The web app has a **Chats** tab. A chat can search the web and touch no
-file (`[chat] preset`); its agent stops when idle and picks up again from the saved conversation,
+file (`[chat] preset`); give it a folder (`--folder`, `/folder`) and it reads that folder and
+nothing else, and a preset of your own can add a shell (shown with `⚠`) or your MCP servers
+(`[chat.tools.NAME] shell`, `mcp`). Where an agent can't enforce a preset by itself the chat says
+`best effort`. `chat task` (`/task`) hands a chat's plan to an agent in a new worktree. Gemini CLI
+works even when it is only an `npx` alias: ptyro finds it in npm's cache, nvm or the npm prefix
+(`ptyro doctor` shows where, and offers `npm i -g @google/gemini-cli`). Its agent stops when idle and picks up again from the saved conversation,
 after a restart too. A linked machine's chats show under its workspaces and are used from here
 (they run there, on its agents). In a chat, `Alt-←`/`Alt-→` flips between answers, `C-f` finds in
 it, `/` in the composer lists commands (`/retry`, `/edit`, `/fork`, `/side`, `/agent`…) and `C-q C-g`

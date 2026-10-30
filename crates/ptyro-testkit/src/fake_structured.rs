@@ -381,6 +381,8 @@ fn acp() -> i32 {
     let rx = lines();
     let mut session = String::new();
     let mut n = 100u64;
+    // The MCP servers `session/new` or `session/load` brought: the prompt `mcp` names them.
+    let mut servers: Vec<String> = Vec::new();
     let rpc = |v: Value| {
         let mut v = v;
         v["jsonrpc"] = json!("2.0");
@@ -392,6 +394,35 @@ fn acp() -> i32 {
             Some("initialize") => rpc(
                 json!({ "id": id, "result": { "protocolVersion": 1, "agentCapabilities": { "loadSession": true }, "authMethods": [], "agentInfo": { "name": "fake-gemini", "version": "0.64.0" } } }),
             ),
+            Some(method @ ("session/new" | "session/load"))
+                if !m["params"]["mcpServers"].is_null() =>
+            {
+                servers = m["params"]["mcpServers"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|s| {
+                        // ACP's stdio shape: a name, a command, args and env as name/value pairs.
+                        let ok = s["command"].is_string()
+                            && s["args"].is_array()
+                            && s["env"]
+                                .as_array()
+                                .is_some_and(|e| e.iter().all(|v| v["name"].is_string()));
+                        format!(
+                            "{}{}",
+                            s["name"].as_str().unwrap_or("?"),
+                            if ok { "" } else { "(malformed)" }
+                        )
+                    })
+                    .collect();
+                if method == "session/new" {
+                    session = format!("{:08x}-fake", std::process::id());
+                    rpc(json!({ "id": id, "result": { "sessionId": session } }));
+                } else {
+                    session = m["params"]["sessionId"].as_str().unwrap_or("").to_owned();
+                    rpc(json!({ "id": id, "result": null }));
+                }
+            }
             Some("session/new") => {
                 session = format!("{:08x}-fake", std::process::id());
                 rpc(json!({ "id": id, "result": { "sessionId": session } }));
@@ -403,6 +434,17 @@ fn acp() -> i32 {
             Some("session/prompt") => {
                 let text = m["params"]["prompt"][0]["text"].as_str().unwrap_or("").to_owned();
                 let up = |u: Value| json!({ "method": "session/update", "params": { "sessionId": session, "update": u } });
+                if text.trim() == "mcp" {
+                    let t = format!(
+                        "mcp servers: {}",
+                        if servers.is_empty() { "none".into() } else { servers.join(", ") }
+                    );
+                    rpc(up(
+                        json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": t } }),
+                    ));
+                    rpc(json!({ "id": id, "result": { "stopReason": "end_turn" } }));
+                    continue;
+                }
                 let mut stop = "end_turn";
                 let mut steps = plan(&text, n).into_iter();
                 while let Some(step) = steps.next() {

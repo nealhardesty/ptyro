@@ -90,6 +90,8 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"chat_branch","chat":a,"to":a}), CONTROL, true),
         s(json!({"t":"chat_fork","chat":a}), CONTROL, true),
         s(json!({"t":"chat_find","question":"scopes?"}), CONTROL, false),
+        s(json!({"t":"chat_task","chat":a}), CONTROL, true),
+        s(json!({"t":"chat_presets"}), READ, false),
         s(json!({"t":"checkpoint_diff","addr":a,"n":1,"to":null}), READ, true),
         s(json!({"t":"worktree_archives","project":null}), READ, true),
         s(json!({"t":"branches","project":a}), READ, true),

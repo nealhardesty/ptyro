@@ -79,6 +79,8 @@ const MIGRATIONS: &[M<'static>] = &[
       vec BLOB NOT NULL);
     CREATE INDEX node_vec_by_chat ON node_vec(chat);",
     ),
+    // v4 (CHAT4): the folders a chat was given to read, as a JSON array (SPEC §22.5).
+    M::up("ALTER TABLE chat ADD COLUMN folders TEXT;"),
 ];
 
 /// A tombstoned chat's rows go at the first compaction this long after its delete (§22.4).
@@ -108,6 +110,8 @@ pub struct NewChat {
     pub forked_from: Option<(String, String)>,
     /// A side chat's chat.
     pub side_of: Option<String>,
+    /// Folders it may read (with a preset that reads).
+    pub folders: Vec<String>,
 }
 
 /// One agent conversation that served a chat (§22.4 `conv`).
@@ -149,7 +153,7 @@ pub struct ChatDoctor {
 }
 
 const CHAT_COLS: &str = "id, workspace, title, title_src, pinned, archived_at, agent, profile, \
-                         tools, leaf, forked_from_chat, created_at, last_at, nodes, unread, cost_micro_usd, side_of";
+                         tools, leaf, forked_from_chat, created_at, last_at, nodes, unread, cost_micro_usd, side_of, folders";
 
 fn chat_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ChatInfo> {
     Ok(ChatInfo {
@@ -176,6 +180,12 @@ fn chat_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ChatInfo> {
         attention: None,
         engine: None,
         side_of: r.get(16)?,
+        folders: r
+            .get::<_, Option<String>>(17)?
+            .and_then(|f| serde_json::from_str(&f).ok())
+            .unwrap_or_default(),
+        best_effort: false,
+        shell: false,
     })
 }
 
@@ -185,6 +195,11 @@ fn node_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ChatNode> {
         rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e))
     })?;
     Ok(ChatNode { id: r.get(0)?, parent: r.get(1)?, at_ms: r.get::<_, i64>(3)? as u64, body })
+}
+
+/// `None` for no folders, so a chat without any stores nothing.
+fn folders_json(f: &[String]) -> Option<String> {
+    (!f.is_empty()).then(|| serde_json::to_string(f).unwrap_or_default())
 }
 
 fn now() -> i64 {
@@ -292,8 +307,9 @@ impl ChatDb {
             let (fc, fnode) = c.forked_from.unzip();
             db.execute(
                 "INSERT INTO chat (id, workspace, title, title_src, agent, profile, tools,
-                   forked_from_chat, forked_from_node, created_at, updated_at, last_at, origin, side_of)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?10, ?11, ?12)",
+                   forked_from_chat, forked_from_node, created_at, updated_at, last_at, origin, side_of,
+                   folders)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?10, ?11, ?12, ?13)",
                 params![
                     c.id,
                     c.workspace,
@@ -306,7 +322,8 @@ impl ChatDb {
                     fnode,
                     t,
                     origin,
-                    c.side_of
+                    c.side_of,
+                    folders_json(&c.folders)
                 ],
             )?;
             Ok(())
@@ -403,6 +420,10 @@ impl ChatDb {
 
     pub async fn set_tools(&self, id: String, tools: String) -> Result<()> {
         self.update(id, "tools = ?2", tools).await
+    }
+
+    pub async fn set_folders(&self, id: String, folders: Vec<String>) -> Result<()> {
+        self.update(id, "folders = ?2", folders_json(&folders)).await
     }
 
     pub async fn set_unread(&self, id: String, unread: u32) -> Result<()> {
@@ -905,14 +926,16 @@ fn search(db: &Connection, q: &SearchFilter) -> Result<Vec<RawHit>> {
         let mut st = db.prepare(&sql)?;
         let mut all: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
         all.extend([&q.fts as &dyn rusqlite::ToSql, &since, &limit]);
+        // The hit's columns come after the chat's.
+        let k = CHAT_COLS.split(", ").count();
         let rows = st.query_map(all.as_slice(), |r| {
             Ok(RawHit {
                 chat: chat_row(r)?,
-                node: Some(r.get(17)?),
-                kind: r.get(18)?,
-                snippet: r.get(19)?,
-                at_ms: r.get::<_, i64>(20)? as u64,
-                rank: r.get(21)?,
+                node: Some(r.get(k)?),
+                kind: r.get(k + 1)?,
+                snippet: r.get(k + 2)?,
+                at_ms: r.get::<_, i64>(k + 3)? as u64,
+                rank: r.get(k + 4)?,
             })
         })?;
         hits = rows.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1106,10 +1129,21 @@ mod tests {
             tools: "chat".into(),
             forked_from: None,
             side_of: None,
+            folders: Vec::new(),
         })
         .await
         .unwrap();
         db
+    }
+
+    #[tokio::test]
+    async fn a_chats_folders_are_kept_and_changed() {
+        let db = db_with_chat().await;
+        assert!(db.get("c1".into()).await.unwrap().unwrap().folders.is_empty());
+        db.set_folders("c1".into(), vec!["/notes".into(), "/src".into()]).await.unwrap();
+        assert_eq!(db.get("c1".into()).await.unwrap().unwrap().folders, ["/notes", "/src"]);
+        db.set_folders("c1".into(), Vec::new()).await.unwrap();
+        assert!(db.get("c1".into()).await.unwrap().unwrap().folders.is_empty());
     }
 
     fn hits(db: &ChatDb, q: &'static str) -> i64 {
@@ -1191,6 +1225,7 @@ mod tests {
             tools: "chat".into(),
             forked_from: Some(("c1".into(), "a1".into())),
             side_of: None,
+            folders: Vec::new(),
         })
         .await
         .unwrap();

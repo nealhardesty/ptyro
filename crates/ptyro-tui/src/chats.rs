@@ -49,6 +49,8 @@ pub struct ChatViewState {
     /// A new chat's agent and preset, picked with `C-o`.
     pub agent: Option<String>,
     pub preset: Option<String>,
+    /// A new chat's folders (`/folder DIR` before the first message).
+    pub folders: Vec<String>,
     /// Where Esc goes back to.
     pub from_list: Option<ChatList>,
     /// A message is on its way (a new chat being made, or one sent): another waits for it.
@@ -240,6 +242,7 @@ impl App {
             draft: String::new(),
             agent: None,
             preset: None,
+            folders: Vec::new(),
             from_list: None,
             sending: false,
             incognito: self.config.chat.incognito,
@@ -281,6 +284,7 @@ impl App {
             draft: String::new(),
             agent: None,
             preset: None,
+            folders: Vec::new(),
             from_list,
             sending: false,
             incognito: false,
@@ -416,6 +420,7 @@ impl App {
             agent: None,
             preset: None,
             keep: None,
+            folders: None,
         };
         match action {
             "chat.open" => self.open_chat(&id),
@@ -455,6 +460,18 @@ impl App {
             }
             "chat.agent" => self.pick_chat_agent(Some(id)),
             "chat.preset" => self.pick_chat_preset(Some(id)),
+            "chat.folder" => {
+                let now = info.map(|c| c.folders.join(", ")).unwrap_or_default();
+                self.overlay = Some(Overlay::Prompt {
+                    title: format!(
+                        "A folder this chat may read (none: no folders){}",
+                        if now.is_empty() { String::new() } else { format!("; now {now}") }
+                    ),
+                    text: String::new(),
+                    kind: PromptKind::ChatFolder(id),
+                });
+            }
+            "chat.task" => self.chat_task(id, None),
             "chat.export" => {
                 let path = std::env::temp_dir().join(format!(
                     "ptyro-chat-{}.md",
@@ -494,6 +511,7 @@ impl App {
                             agent: None,
                             preset: None,
                             keep: Some(true),
+                            folders: None,
                         },
                     );
                 } else {
@@ -680,7 +698,7 @@ impl App {
         };
         match (name, chat) {
             ("help" | "?", _) => self.toast(
-                "/retry /edit [text] /fork /side [question] /keep /agent NAME /tools NAME /title TEXT /search WORDS /find QUESTION /export /incognito /branch /cite",
+                "/retry /edit [text] /fork /side [question] /keep /agent NAME /tools NAME /folder DIR|none /task [PROJECT] /title TEXT /search WORDS /find QUESTION /export /incognito /branch /cite",
             ),
             ("incognito", _) => self.chat_action("chat.incognito"),
             ("search", _) => {
@@ -697,7 +715,16 @@ impl App {
                 );
             }
             ("find", _) => self.chat_action("chat.find"),
+            ("tools", None) if arg.is_empty() => self.pick_chat_preset(None),
+            ("tools", None) => self.chat_picked(arg.to_owned(), false, None),
+            ("folder" | "folders", c) if !arg.is_empty() => self.chat_folder(c, arg),
+            ("folder" | "folders", None) => {
+                self.toast("/folder DIR: a folder the new chat may read (/folder none: none)")
+            }
+            ("folder" | "folders", Some(_)) => self.chat_action("chat.folder"),
             (_, None) => need(self),
+            ("task", Some(c)) if !arg.is_empty() => self.chat_task(c, Some(arg.to_owned())),
+            ("task", Some(_)) => self.chat_action("chat.task"),
             ("retry", Some(_)) => self.chat_action("chat.retry"),
             ("edit", Some(c)) if !arg.is_empty() => {
                 let last = match &self.chat_panel {
@@ -740,6 +767,7 @@ impl App {
                     agent: None,
                     preset: None,
                     keep: None,
+                    folders: None,
                 },
             ),
             (other, _) => self.toast(format!("/{other}: not a command (/help lists them)")),
@@ -783,6 +811,109 @@ impl App {
         matches!(&self.chat_panel, Some(ChatPanel::List(l)) if l.archived.is_some())
     }
 
+    /// `/folder DIR`: one more folder the chat (or the new chat being written) may read;
+    /// `none` takes them all away.
+    pub(crate) fn chat_folder(&mut self, chat: Option<String>, arg: &str) {
+        let clear = matches!(arg, "none" | "-");
+        let dir = if arg.starts_with('/') || arg.starts_with('~') || clear {
+            arg.to_owned()
+        } else {
+            let p = std::env::current_dir().map(|d| d.join(arg)).unwrap_or_else(|_| arg.into());
+            p.canonicalize().unwrap_or(p).to_string_lossy().into_owned()
+        };
+        let Some(chat) = chat else {
+            if let Some(ChatPanel::View(v)) = &mut self.chat_panel {
+                if clear {
+                    v.folders.clear();
+                } else if !v.folders.contains(&dir) {
+                    v.folders.push(dir.clone());
+                }
+            }
+            let msg = if clear { "no folders".to_owned() } else { format!("it may read {dir}") };
+            self.toast(msg);
+            self.dirty = true;
+            return;
+        };
+        let mut folders = if clear {
+            Vec::new()
+        } else {
+            self.chat(&chat).map(|c| c.folders.clone()).unwrap_or_default()
+        };
+        if !clear && !folders.contains(&dir) {
+            folders.push(dir.clone());
+        }
+        let reads = self
+            .chat(&chat)
+            .and_then(|c| self.config.chat.preset(&c.tools))
+            .is_some_and(|t| t.read);
+        let msg = match (clear, reads) {
+            (true, _) => "no folders: the next message starts it without any".to_owned(),
+            (false, true) => format!("it may read {dir} from the next message on"),
+            (false, false) => {
+                format!("{dir} attached; this preset reads no files: /tools read lets it")
+            }
+        };
+        self.request(
+            Pending::Done(msg),
+            Request::ChatUpdate {
+                chat,
+                title: None,
+                pinned: None,
+                archived: None,
+                agent: None,
+                preset: None,
+                keep: None,
+                folders: Some(folders),
+            },
+        );
+    }
+
+    /// `chat.task` (SPEC §22.7): the chat to a new worktree of a project; asks which project
+    /// when its workspace has several (or none and there are several).
+    pub(crate) fn chat_task(&mut self, chat: String, project: Option<String>) {
+        let project = project.or_else(|| {
+            let ws = self.chat(&chat).map(|c| c.workspace.clone()).unwrap_or_default();
+            let ids: Vec<String> = self
+                .workspaces
+                .iter()
+                .find(|w| w.name == ws)
+                .map(|w| w.projects.clone())
+                .unwrap_or_default();
+            let here: Vec<&ptyro_core::model::ProjectInfo> =
+                self.projects.iter().filter(|p| p.machine.is_none()).collect();
+            let mine: Vec<&ptyro_core::model::ProjectInfo> =
+                here.iter().copied().filter(|p| ids.contains(&p.id)).collect();
+            match (mine.as_slice(), here.as_slice()) {
+                ([p], _) | ([], [p]) => Some(p.slug.clone()),
+                _ => None,
+            }
+        });
+        if let Some(p) = project {
+            return self.request(
+                Pending::Done("made a task: the chat says where it went".into()),
+                Request::ChatTask { chat, project: Some(p), agent: None, name: None },
+            );
+        }
+        let items: Vec<Item> = self
+            .projects
+            .iter()
+            .filter(|p| p.machine.is_none())
+            .map(|p| Item {
+                label: p.slug.clone(),
+                detail: p.root.display().to_string(),
+                key: None,
+                target: Target::Agent(p.slug.clone()),
+            })
+            .collect();
+        if items.is_empty() {
+            return self.toast("a task needs a project: add one first (project.add)");
+        }
+        self.overlay = Some(Overlay::Picker {
+            palette: Palette::new("Which project should it work in?", items),
+            purpose: Purpose::ChatTaskProject(chat),
+        });
+    }
+
     /// Pick an agent: for the chat `id` (switching it), or for the new chat being written.
     pub(crate) fn pick_chat_agent(&mut self, id: Option<String>) {
         let mut names: Vec<String> =
@@ -790,13 +921,20 @@ impl App {
         let mine: Vec<String> =
             self.config.agents.keys().filter(|k| !names.contains(k)).cloned().collect();
         names.extend(mine);
+        // Each with where its program is (an npx cache, nvm…), or how to install it.
+        let path = std::env::var("PATH").unwrap_or_default();
         let items = names
             .into_iter()
-            .map(|n| Item {
-                detail: "agent".into(),
-                label: n.clone(),
-                key: None,
-                target: Target::Agent(n),
+            .map(|n| {
+                let prog = ptyro_agents::command(&self.config, &n)
+                    .and_then(|a| a.into_iter().next())
+                    .unwrap_or_else(|| n.clone());
+                let detail = match ptyro_agents::locate::find(&prog, &path) {
+                    Some(f) => f.describe(),
+                    None => ptyro_agents::locate::install_hint(&prog)
+                        .map_or_else(|| "not found".into(), |h| format!("not installed: {h}")),
+                };
+                Item { detail, label: n.clone(), key: None, target: Target::Agent(n) }
             })
             .collect();
         self.overlay = Some(Overlay::Picker {
@@ -813,22 +951,7 @@ impl App {
             .into_iter()
             .map(|p| {
                 let t = self.config.chat.preset(&p).unwrap_or_default();
-                let mut what = Vec::new();
-                if t.web {
-                    what.push("web search");
-                }
-                if t.read {
-                    what.push("reads its folders");
-                }
-                if what.is_empty() {
-                    what.push("no tools");
-                }
-                Item {
-                    label: p.clone(),
-                    detail: what.join(", "),
-                    key: None,
-                    target: Target::Agent(p),
-                }
+                Item { label: p.clone(), detail: t.describe(), key: None, target: Target::Agent(p) }
             })
             .collect();
         self.overlay = Some(Overlay::Picker {
@@ -852,6 +975,7 @@ impl App {
                         agent: a,
                         preset: p,
                         keep: None,
+                        folders: None,
                     },
                 );
             }
@@ -1064,6 +1188,7 @@ impl App {
                                     title: None,
                                     prompt: Some(text),
                                     incognito: v.incognito,
+                                    folders: v.folders.clone(),
                                 },
                             );
                         }
@@ -1258,6 +1383,8 @@ pub const CHAT_ACTIONS: &[&str] = &[
     "chat.archive",
     "chat.agent",
     "chat.preset",
+    "chat.folder",
+    "chat.task",
     "chat.export",
     "chat.delete",
 ];
@@ -1331,6 +1458,9 @@ pub(crate) fn sidebar_line(
             ];
             if c.attention.is_some() {
                 spans.push(Span::styled(" ⚠", fg(app, t.blocked)));
+            } else if c.shell {
+                // A shell preset: marked as a `dangerous` session is.
+                spans.push(Span::styled(" ⚠", fg(app, t.error)));
             }
             if c.unread > 0 {
                 spans.push(Span::styled(" ●", fg(app, t.search).add_modifier(Modifier::BOLD)));
@@ -1369,10 +1499,31 @@ fn draw_view(app: &App, f: &mut Frame<'_>, area: Rect, v: &ChatViewState) {
                     .filter(|a| !a.is_empty())
                     .unwrap_or_else(|| "default agent".into())
             }),
-            v.preset.clone().unwrap_or_else(|| app.config.chat.preset.clone()),
+            // As the daemon chooses: given folders and no preset, a chat reads.
+            v.preset.clone().unwrap_or_else(|| {
+                let default = app.config.chat.preset.clone();
+                let reads = app.config.chat.preset(&default).is_some_and(|t| t.read);
+                if v.folders.is_empty() || reads { default } else { "read".into() }
+            }),
         ),
     };
     head.push(Span::styled(format!("· {agent} · tools: {preset}"), fg(app, t.dim)));
+    let tools = app.config.chat.preset(&preset).unwrap_or_default();
+    let (best_effort, shell, folders) = match info {
+        Some(c) => (c.best_effort, c.shell, c.folders.len()),
+        None => (false, tools.shell, v.folders.len()),
+    };
+    if best_effort {
+        head.push(Span::styled(" · best effort", fg(app, t.blocked)));
+    }
+    if shell {
+        head.push(Span::styled(" · ⚠ shell", fg(app, t.error)));
+    }
+    if folders > 0 {
+        let s = if folders == 1 { "" } else { "s" };
+        let note = if tools.read { "" } else { " (not read: /tools read)" };
+        head.push(Span::styled(format!(" · {folders} folder{s}{note}"), fg(app, t.dim)));
+    }
     if let Some(c) = info {
         head.push(Span::styled(format!(" · {}", c.addr()), fg(app, t.dim)));
         if c.cost_micro_usd > 0 {

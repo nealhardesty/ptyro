@@ -227,6 +227,8 @@ pub enum Purpose {
     ChatAgent(Option<String>),
     /// A chat's tool preset.
     ChatPreset(Option<String>),
+    /// The project this chat's task works in (SPEC §22.7).
+    ChatTaskProject(String),
     /// Where to fork this chat (SPEC §22.7).
     ChatForkAt(String),
     /// Which message of this chat to say differently.
@@ -318,6 +320,8 @@ pub enum PromptKind {
     Sets(crate::sets::SetsInput),
     /// A chat's title (by id); empty asks for a new automatic one.
     ChatRetitle(String),
+    /// One more folder this chat may read (`none`: none).
+    ChatFolder(String),
     /// A message said differently: (chat, the message's node).
     ChatEdit(String, String),
     /// Find in the chat shown.
@@ -5333,6 +5337,7 @@ impl App {
             ) => self.chat_pick(p, v),
             (Target::Chat(id), _) => self.open_chat(&id),
             (Target::Agent(p), Purpose::ChatPreset(id)) => self.chat_picked(p, false, id),
+            (Target::Agent(p), Purpose::ChatTaskProject(chat)) => self.chat_task(chat, Some(p)),
             // A row's action: with that row selected, so it's what the action works on.
             (Target::Action(cmd), Purpose::RowMenu(row)) => {
                 let rows = self.rows();
@@ -5543,6 +5548,11 @@ impl App {
                     );
                 }
             }
+            PromptKind::ChatFolder(id) => {
+                if !text.trim().is_empty() {
+                    self.chat_folder(Some(id), text.trim());
+                }
+            }
             PromptKind::ChatRetitle(id) => {
                 self.request(
                     Pending::Done("retitled".into()),
@@ -5554,6 +5564,7 @@ impl App {
                         agent: None,
                         preset: None,
                         keep: None,
+                        folders: None,
                     },
                 );
             }
