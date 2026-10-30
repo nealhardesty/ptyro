@@ -124,7 +124,7 @@ Focus the sidebar with `Ctrl-Q Tab`, or `Ctrl-Q Ctrl-Q`. These keys need no pref
 | `R` | restart an exited session |
 | `,` | rename |
 | `D` `O` `S` | inspector / runs / change sets |
-| `m` / `*` | a new chat / pin the chat row. On a chat row `⏎` opens it, `,` titles it, `x` archives it, `X` deletes it (asks), `.` its menu; `⏎` on the CHATS heading lists them, `h`/`l` fold it |
+| `m` / `*` | a new chat / pin the chat row. On a chat row `⏎` opens it, `,` titles it, `x` archives it, `X` deletes it (asks), `.` its menu; `⏎` (or Space) on the CHATS heading folds it, as `h`/`l` do; `all chats…` (or `C-q g`) lists them |
 | `z` | everything at once: the sidebar full-screen, every row open |
 | `f` | filter the list: all → running → active (a machine, project or worktree with nothing running under it is hidden) |
 | `<` / `>` | the sidebar a column narrower / wider (or drag its edge) |
@@ -195,6 +195,9 @@ its folders.
 | `Ctrl-F` | find in this chat; again: the next match; `Esc` clears it |
 | `Tab` or `Ctrl-I` | in a new chat, before its first message: incognito (nothing kept, it ends with its agent) |
 | `Ctrl-O` | in a new chat: pick the agent and its tools |
+| `←` / `→`, `Home` / `End` or `Ctrl-A` / `Ctrl-E` | move in the draft (to the start or end of the cursor's line) |
+| `Ctrl-U` / `Ctrl-K` | delete to the start / the end of the cursor's line |
+| `Ctrl-W` / `⌫` / `Delete` | delete the word before the cursor / the character before / the one under it |
 
 Slash commands, typed into the composer: `/retry`, `/edit [text]` (the last message, or pick
 one), `/fork` (from the end or a message), `/side [question]`, `/keep`, `/branch`, `/agent NAME`,

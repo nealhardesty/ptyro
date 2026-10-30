@@ -51,7 +51,8 @@ pub struct Proj {
     pub root: PathBuf,
 }
 
-/// A one-line text box.
+/// A text box with a cursor, edited like a shell line (a settings box; the chat composer, whose
+/// lines `C-a`/`C-e`/`C-u`/`C-k` keep to the one the cursor is on).
 #[derive(Debug, Clone, Default)]
 pub struct LineEdit {
     pub text: String,
@@ -60,7 +61,7 @@ pub struct LineEdit {
 }
 
 impl LineEdit {
-    fn with(text: &str) -> Self {
+    pub(crate) fn with(text: &str) -> Self {
         Self { text: text.to_owned(), at: text.chars().count() }
     }
 
@@ -68,15 +69,37 @@ impl LineEdit {
         self.text.char_indices().nth(chars).map_or(self.text.len(), |(i, _)| i)
     }
 
+    /// Where the cursor's line starts and ends (in characters).
+    fn line(&self) -> (usize, usize) {
+        let chars: Vec<char> = self.text.chars().collect();
+        let at = self.at.min(chars.len());
+        let start = chars[..at].iter().rposition(|c| *c == '\n').map_or(0, |i| i + 1);
+        let end = chars[at..].iter().position(|c| *c == '\n').map_or(chars.len(), |i| at + i);
+        (start, end)
+    }
+
+    /// Put `text` in at the cursor, which goes after it.
+    pub(crate) fn insert(&mut self, text: &str) {
+        let b = self.byte(self.at);
+        self.text.insert_str(b, text);
+        self.at += text.chars().count();
+    }
+
     /// Returns whether the key edited the text.
-    fn key(&mut self, key: KeyEvent) -> bool {
+    pub(crate) fn key(&mut self, key: KeyEvent) -> bool {
         let ctrl = key.mods.has(Mods::CTRL);
         let len = self.text.chars().count();
+        self.at = self.at.min(len);
+        let (start, end) = self.line();
         match key.code {
             KeyCode::Char { c: 'u' } if ctrl => {
-                let b = self.byte(self.at);
-                self.text.replace_range(..b, "");
-                self.at = 0;
+                let (a, b) = (self.byte(start), self.byte(self.at));
+                self.text.replace_range(a..b, "");
+                self.at = start;
+            }
+            KeyCode::Char { c: 'k' } if ctrl => {
+                let (a, b) = (self.byte(self.at), self.byte(end));
+                self.text.replace_range(a..b, "");
             }
             KeyCode::Char { c: 'w' } if ctrl => {
                 let end = self.byte(self.at);
@@ -92,8 +115,14 @@ impl LineEdit {
                 self.text.replace_range(start..end, "");
                 self.at = i;
             }
-            KeyCode::Char { c: 'a' } if ctrl => self.at = 0,
-            KeyCode::Char { c: 'e' } if ctrl => self.at = len,
+            KeyCode::Char { c: 'a' } if ctrl => {
+                self.at = start;
+                return false;
+            }
+            KeyCode::Char { c: 'e' } if ctrl => {
+                self.at = end;
+                return false;
+            }
             KeyCode::Char { c } if !ctrl && !key.mods.has(Mods::ALT) => {
                 let b = self.byte(self.at);
                 self.text.insert(b, c);
@@ -117,11 +146,11 @@ impl LineEdit {
                 return false;
             }
             KeyCode::Home => {
-                self.at = 0;
+                self.at = start;
                 return false;
             }
             KeyCode::End => {
-                self.at = len;
+                self.at = end;
                 return false;
             }
             _ => return false,

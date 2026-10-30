@@ -25,7 +25,7 @@ pub enum Row {
     Group(String),
     /// A change set (its run id), above its lead (M11.11).
     Set(String),
-    /// A workspace's CHATS heading (SPEC §22.12); ⏎ lists its chats.
+    /// A workspace's CHATS heading (SPEC §22.12); ⏎ folds it, like a project's.
     Chats(String),
     /// A chat (its id).
     Chat(String),

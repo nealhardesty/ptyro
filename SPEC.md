@@ -7023,7 +7023,10 @@ hides when `enabled`):
   checks and the user can rebind): `m` **new chat** in the current workspace (the composer opens at
   once, ⏎ sends; `C-o` picks agent, tools and folder; `Tab`/`C-i` incognito), `g` the **chat list**
   (searchable), `C-g` find across all chats, `Alt-←/→` branches. In the sidebar on a chat row (no
-  prefix): `⏎` open, `,` retitle, `*` pin, `x` archive, `X` delete (asks), `f` fork, `.` its menu. The
+  prefix): `⏎` open, `,` retitle, `*` pin, `x` archive, `X` delete (asks), `f` fork, `.` its menu; on
+  the CHATS heading `⏎`/Space fold it as on a project (`h`/`l` close and open it). Opening a chat
+  or the list gives it the keyboard. The composer edits like a shell line: `←/→`, `C-a`/`C-e`
+  (Home/End) to the line's start and end, `C-u`/`C-k` delete to them, `C-w` the word before. The
   shared keys (`/` find, `.` menu, `j/k`, `Tab`, `z`, `t` where it applies) behave as for sessions.
   Every key is in `[keys]` and the settings panel, and each action in the palette (`chat.*`).
 - **CLI** (every verb takes `--json`; an address may be `laptop2:…`):
