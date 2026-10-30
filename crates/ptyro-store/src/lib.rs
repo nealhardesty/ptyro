@@ -210,6 +210,37 @@ pub enum StoreError {
 
 pub type Result<T, E = StoreError> = std::result::Result<T, E>;
 
+impl StoreError {
+    /// What to do about it, for the troubles a person can fix (`file`: the database, as they
+    /// should see it). `None`: nothing they can do but report it.
+    pub fn fix(&self, file: &str) -> Option<String> {
+        use rusqlite::ErrorCode as C;
+        let code = match self {
+            StoreError::TooNew { .. } => return Some(self.to_string()),
+            StoreError::Sql(e) => e.sqlite_error_code()?,
+            StoreError::Migration(rusqlite_migration::Error::RusqliteError { err, .. }) => {
+                err.sqlite_error_code()?
+            }
+            _ => return None,
+        };
+        Some(match code {
+            C::DatabaseBusy | C::DatabaseLocked => format!(
+                "{file} is in use by another program (another ptyro daemon, or a backup holding it): close that, then restart ptyro's daemon"
+            ),
+            C::DiskFull => format!(
+                "the disk {file} is on is full: free some space, then restart ptyro's daemon (nothing was lost)"
+            ),
+            C::ReadOnly | C::CannotOpen | C::PermissionDenied => format!(
+                "{file} can't be written: make it and its folder yours and writable, then restart ptyro's daemon"
+            ),
+            C::NotADatabase | C::DatabaseCorrupt => format!(
+                "{file} is damaged: move it aside (ptyro starts an empty one) and keep it, as `ptyro doctor` can check what is left"
+            ),
+            _ => return None,
+        })
+    }
+}
+
 type Job = Box<dyn FnOnce(&mut Connection) + Send>;
 
 #[derive(Clone)]
@@ -934,6 +965,22 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_troubles_a_person_can_fix_say_how() {
+        use rusqlite::ffi;
+        let e = |code| {
+            super::StoreError::Sql(rusqlite::Error::SqliteFailure(ffi::Error::new(code), None))
+        };
+        let fix = |code| e(code).fix("chat.db").unwrap_or_default();
+        assert!(fix(ffi::SQLITE_FULL).contains("free some space"));
+        assert!(fix(ffi::SQLITE_BUSY).contains("in use by another program"));
+        assert!(fix(ffi::SQLITE_READONLY).contains("writable"));
+        assert!(fix(ffi::SQLITE_NOTADB).contains("move it aside"));
+        assert!(e(ffi::SQLITE_MISMATCH).fix("chat.db").is_none());
+        let new = super::StoreError::TooNew { path: "chat.db".into(), found: 9, known: 5 };
+        assert!(new.fix("chat.db").unwrap().contains("newer ptyro"));
+    }
+
     use super::*;
     use ptyro_core::model::WorktreeState;
 
