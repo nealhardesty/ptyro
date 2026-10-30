@@ -43,6 +43,9 @@ pub enum ChatCmd {
         /// `chat compare`)
         #[arg(long, value_delimiter = ',', add = ArgValueCandidates::new(complete::agents))]
         compare: Vec<String>,
+        /// Ask a --compare agent under another profile than the chat's without asking first
+        #[arg(short, long)]
+        yes: bool,
         /// Don't wait for the answer
         #[arg(long)]
         no_wait: bool,
@@ -291,6 +294,9 @@ pub enum ChatCmd {
         /// The worktree's name (default: from the chat's title)
         #[arg(long)]
         name: Option<String>,
+        /// Go ahead when the task's profile isn't the chat's (or a profile guard asks)
+        #[arg(short, long)]
+        yes: bool,
         #[arg(long)]
         json: bool,
     },
@@ -312,6 +318,9 @@ pub enum ChatCmd {
         /// one that can chat)
         #[arg(long, value_delimiter = ',', add = ArgValueCandidates::new(complete::agents))]
         agents: Vec<String>,
+        /// Ask an agent under another profile than the chat's without asking first
+        #[arg(short, long)]
+        yes: bool,
         /// Don't wait for the answers
         #[arg(long)]
         no_wait: bool,
@@ -369,6 +378,7 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, words: Vec<String>) -> Result<
         incognito: false,
         folders: Vec::new(),
         compare: Vec::new(),
+        yes: false,
         no_wait: false,
         json: false,
     });
@@ -382,14 +392,15 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, words: Vec<String>) -> Result<
             incognito,
             folders,
             compare,
+            yes,
             no_wait,
             json,
         } => {
             let text = words_or_stdin(prompt)?;
             let folders = folders.iter().map(|f| full_path(f)).collect();
             new(
-                ctx, text, agent, preset, workspace, title, incognito, folders, compare, no_wait,
-                json,
+                ctx, text, agent, preset, workspace, title, incognito, folders, compare, yes,
+                no_wait, json,
             )
             .await
         }
@@ -496,9 +507,9 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, words: Vec<String>) -> Result<
         ChatCmd::Ls { workspace, pinned, archived, machine, limit, imported, json } => {
             ls(ctx, workspace, pinned, archived, machine, limit, imported, json).await
         }
-        ChatCmd::Compare { chat, text, agents, no_wait, timeout, json } => {
+        ChatCmd::Compare { chat, text, agents, yes, no_wait, timeout, json } => {
             let text = Some(text.join(" ")).filter(|t| !t.trim().is_empty());
-            compare(ctx, chat, agents, text, no_wait, Duration::from_secs(timeout), json).await
+            compare(ctx, chat, agents, text, yes, no_wait, Duration::from_secs(timeout), json).await
         }
         ChatCmd::Pick { chat, node } => {
             let c = ctx.connect(true).await?;
@@ -591,8 +602,8 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, words: Vec<String>) -> Result<
             }
             Ok(0)
         }
-        ChatCmd::Task { chat, project, agent, name, json } => {
-            task(ctx, chat, project, agent, name, json).await
+        ChatCmd::Task { chat, project, agent, name, yes, json } => {
+            task(ctx, chat, project, agent, name, yes, json).await
         }
         ChatCmd::Rm { chats } => {
             let c = ctx.connect(true).await?;
@@ -647,6 +658,16 @@ fn full_path(f: &str) -> String {
     p.canonicalize().unwrap_or(p).to_string_lossy().into_owned()
 }
 
+/// What `with_confirmation` sets when the person agrees (SPEC §22.7: another profile).
+fn agree(r: &mut Request) {
+    if let Request::ChatTask { confirmed, .. }
+    | Request::ChatCompare { confirmed, .. }
+    | Request::ChatNew { confirmed, .. } = r
+    {
+        *confirmed = true;
+    }
+}
+
 /// `chat task`: the worktree and the session that carries the chat out.
 async fn task(
     ctx: &Ctx,
@@ -654,10 +675,12 @@ async fn task(
     project: Option<String>,
     agent: Option<String>,
     name: Option<String>,
+    yes: bool,
     json: bool,
 ) -> Result<i32, Error> {
     let c = ctx.connect(true).await?;
-    let r = c.request(Request::ChatTask { chat, project, agent, name }).await?;
+    let req = Request::ChatTask { chat, project, agent, name, confirmed: false };
+    let r = crate::cli::with_confirmation(&c, req, yes, agree).await?;
     let Reply::WorktreeCreated { info, agent, agent_pending, notes, .. } = r else {
         return Err(unexpected(r));
     };
@@ -695,6 +718,7 @@ async fn new(
     incognito: bool,
     folders: Vec<String>,
     compare: Vec<String>,
+    yes: bool,
     no_wait: bool,
     json: bool,
 ) -> Result<i32, Error> {
@@ -713,8 +737,9 @@ async fn new(
         incognito,
         folders,
         compare: compare.clone(),
+        confirmed: false,
     };
-    let info = chat_of(c.request(req).await?)?;
+    let info = chat_of(crate::cli::with_confirmation(&c, req, yes, agree).await?)?;
     if !compare.is_empty() && info.comparing.is_some() {
         eprintln!("{} · {}", info.addr(), info.tools_badge());
         return compare_wait(c, info, no_wait, Duration::from_secs(600), json).await;
@@ -767,6 +792,7 @@ async fn ask(
             incognito: !keep,
             folders: Vec::new(),
             compare: Vec::new(),
+            confirmed: false,
         })
         .await?,
     )?;
@@ -1132,17 +1158,20 @@ fn print_text(info: &ChatInfo, nodes: &[ChatNode], ids: bool, siblings: &[ChatSi
 
 /// `chat compare`: ask, wait for every agent (the progress on standard error), then each
 /// answer under its agent.
+#[allow(clippy::too_many_arguments)]
 async fn compare(
     ctx: &Ctx,
     chat: String,
     agents: Vec<String>,
     text: Option<String>,
+    yes: bool,
     no_wait: bool,
     timeout: Duration,
     json: bool,
 ) -> Result<i32, Error> {
     let c = ctx.connect(true).await?;
-    let info = chat_of(c.request(Request::ChatCompare { chat, agents, text }).await?)?;
+    let req = Request::ChatCompare { chat, agents, text, confirmed: false };
+    let info = chat_of(crate::cli::with_confirmation(&c, req, yes, agree).await?)?;
     compare_wait(c, info, no_wait, timeout, json).await
 }
 

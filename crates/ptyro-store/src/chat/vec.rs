@@ -71,17 +71,23 @@ impl ChatDb {
         .await
     }
 
-    /// Store vectors (`(node, vec)`); one whose message has gone meanwhile is dropped.
-    pub async fn put_vecs(&self, model: String, rows: Vec<(String, Vec<u8>)>) -> Result<()> {
+    /// Store vectors (`(node, the text embedded, vec)`); one whose message has gone or changed
+    /// meanwhile is dropped (the changed text is embedded by a later pass).
+    pub async fn put_vecs(
+        &self,
+        model: String,
+        rows: Vec<(String, String, Vec<u8>)>,
+    ) -> Result<()> {
         self.call(move |db| {
             let tx = db.transaction()?;
             {
                 let mut st = tx.prepare(
                     "INSERT OR REPLACE INTO node_vec (node, chat, at_ms, model, vec)
-                     SELECT id, chat, at_ms, ?2, ?3 FROM node WHERE id = ?1 AND deleted_at IS NULL",
+                     SELECT id, chat, at_ms, ?2, ?3 FROM node
+                     WHERE id = ?1 AND deleted_at IS NULL AND text IS ?4",
                 )?;
-                for (node, vec) in rows {
-                    st.execute(params![node, model, vec])?;
+                for (node, text, vec) in rows {
+                    st.execute(params![node, model, vec, text])?;
                 }
             }
             tx.commit()?;
@@ -297,12 +303,18 @@ mod tests {
         assert_eq!(db.vec_top(2).await.unwrap(), 4);
 
         let q = |v: Vec<f32>| ptyro_meaning::quantize(&v);
+        // A vector of text the message no longer has (it changed while embedding) is dropped.
+        db.put_vecs(M.into(), vec![("u1".into(), "my old words".into(), q(unit(1.0, 0.0)))])
+            .await
+            .unwrap();
+        assert_eq!(db.vec_counts(M.into(), false).await.unwrap(), (0, 2), "a stale vector");
+        let text = |n: &str| todo.iter().find(|t| t.node == n).map(|t| t.text.clone()).unwrap();
         db.put_vecs(
             M.into(),
             vec![
-                ("u1".into(), q(unit(1.0, 0.1))),
-                ("u2".into(), q(unit(0.0, 1.0))),
-                ("gone".into(), q(unit(1.0, 0.0))),
+                ("u1".into(), text("u1"), q(unit(1.0, 0.1))),
+                ("u2".into(), text("u2"), q(unit(0.0, 1.0))),
+                ("gone".into(), "x".into(), q(unit(1.0, 0.0))),
             ],
         )
         .await

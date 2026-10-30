@@ -92,7 +92,10 @@ async fn main() {
         let e = Instant::now();
         let rows: Vec<_> = todo
             .into_iter()
-            .map(|t| (t.node, ptyro_meaning::quantize(&model.embed(&t.text))))
+            .map(|t| {
+                let v = ptyro_meaning::quantize(&model.embed(&t.text));
+                (t.node, t.text, v)
+            })
             .collect();
         embed_ms += ms(e);
         db.put_vecs("spike".into(), rows).await.expect("put");

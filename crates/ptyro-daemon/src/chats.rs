@@ -66,8 +66,9 @@ pub struct Chats {
     comparing: Mutex<HashMap<String, Arc<compare::Compare>>>,
     /// A compare's helpers (in-memory chats nobody lists, finds or follows): helper → its chat.
     helpers: Mutex<HashMap<String, String>>,
-    /// One import of the agents' histories at a time (SPEC §22.10).
-    importing: tokio::sync::Mutex<()>,
+    /// One import of the agents' histories at a time (SPEC §22.10), and the files it passed
+    /// over (path → size and mtime): not read again until they change.
+    importing: tokio::sync::Mutex<HashMap<String, (u64, u64)>>,
 }
 
 /// A chat someone follows or an engine serves.
@@ -125,7 +126,7 @@ impl Chats {
             meaning: crate::meaning::Meaning::default(),
             comparing: Mutex::new(HashMap::new()),
             helpers: Mutex::new(HashMap::new()),
-            importing: tokio::sync::Mutex::new(()),
+            importing: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -219,10 +220,27 @@ impl Daemon {
             store.forget_sessions_in(self.paths.data.join("chat").to_string_lossy().into_owned());
         }
         // An incognito chat lived in the old image's memory alone, so it ends here: its folders
-        // go with it (SPEC §22.9).
+        // go with it (SPEC §22.9). So do the folders of chats that are gone (a compare's helpers
+        // and incognito chats a crash cut off): which they are is taken now, before a new
+        // incognito chat can make one.
+        let engines: Vec<String> = std::fs::read_dir(self.paths.data.join("chat"))
+            .map(|rd| {
+                rd.flatten()
+                    .filter(|e| e.path().is_dir())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
         let me = Arc::clone(self);
         let old = db.clone();
         tokio::spawn(async move {
+            let crossing: Vec<String> =
+                crossed.iter().filter_map(|s| s.meta.locked().place.chat.clone()).collect();
+            for id in engines.iter().filter(|id| !crossing.contains(id)) {
+                if matches!(old.get(id.clone()).await, Ok(None)) {
+                    me.remove_chat_dirs(id, None).await;
+                }
+            }
             for s in crossed {
                 let place = s.meta.locked().place.clone();
                 let Some(chat) = place.chat.clone() else { continue };
@@ -588,6 +606,7 @@ impl Daemon {
                 incognito,
                 folders,
                 compare,
+                confirmed,
             } => {
                 let incognito = incognito || self.config().chat.incognito;
                 let compare: Vec<String> = compare
@@ -605,12 +624,11 @@ impl Daemon {
                     }
                     let ws = workspace.clone().unwrap_or_else(|| MAIN_WORKSPACE.to_owned());
                     let ws = self.find_workspace(&ws)?.name;
-                    for a in &compare {
-                        self.chat_agent(Some(a), &ws)?;
-                    }
-                    if compare.len() < 2 {
+                    let (a, p) = self.chat_agent(agent.as_deref(), &ws)?;
+                    // Counted once each (`claude,claude` is one agent).
+                    if self.compare_who((&a, &p), &ws, &compare, confirmed)?.len() < 2 {
                         return Err(Error::invalid(
-                            "a compare needs two agents or more (claude,codex)",
+                            "a compare needs two different agents or more (claude,codex)",
                         ));
                     }
                 }
@@ -619,7 +637,7 @@ impl Daemon {
                 if !compare.is_empty()
                     && let Some(p) = prompt.clone().filter(|p| !p.trim().is_empty())
                 {
-                    if let Err(e) = self.chat_compare(&info, compare, Some(p)).await {
+                    if let Err(e) = self.chat_compare(&info, compare, Some(p), confirmed).await {
                         let live = self.chats.live(&info.id);
                         self.chat_notice(&live, &info.id, NoticeLevel::Error, &e.message).await;
                     }
@@ -768,6 +786,13 @@ impl Daemon {
                         .update_incognito(&info, title, pinned, archived, agent, preset, folders)
                         .await;
                 }
+                // An imported chat keeps the agent that wrote it (its title, pin and archive
+                // are the person's to change).
+                if info.source.is_some()
+                    && (agent.is_some() || preset.is_some() || folders.is_some())
+                {
+                    return Err(compare::imported_refusal(&info));
+                }
                 let db = self.chat_db()?;
                 if keep == Some(true) && info.side_of.is_some() {
                     db.keep_side(info.id.clone()).await.map_err(store_err)?;
@@ -836,6 +861,8 @@ impl Daemon {
             }
             Request::ChatDelete { chat } => {
                 let info = self.find_chat(&chat).await?;
+                // A compare under way stops with it (its answers have nowhere to go).
+                self.stop_compare(&info.id);
                 self.stop_chat_engine(&info.id).await;
                 if info.incognito {
                     self.end_incognito(&info.id).await;
@@ -847,12 +874,12 @@ impl Daemon {
                 let _ = self.events.send(DomainEvent::ChatRemoved { id: info.id, machine: None });
                 Ok(Reply::Done)
             }
-            Request::ChatTask { chat, project, agent, name } => {
-                self.chat_task(&chat, project, agent, name).await
+            Request::ChatTask { chat, project, agent, name, confirmed } => {
+                self.chat_task(&chat, project, agent, name, confirmed).await
             }
-            Request::ChatCompare { chat, agents, text } => {
+            Request::ChatCompare { chat, agents, text, confirmed } => {
                 let info = self.find_chat(&chat).await?;
-                self.chat_compare(&info, agents, text).await?;
+                self.chat_compare(&info, agents, text, confirmed).await?;
                 Ok(Reply::Chat { info: self.chat_info_now(&info.id).await? })
             }
             Request::ChatPick { chat, node } => {
@@ -1409,6 +1436,16 @@ impl Daemon {
         let _one = lock.lock().await;
         let live = self.chats.live(&info.id);
         self.busy_check(&live, info)?;
+        self.show_branch(&live, info, to).await
+    }
+
+    /// `chat_branch` with the send lock held and the chat free.
+    async fn show_branch(
+        self: &Arc<Self>,
+        live: &Arc<Live>,
+        info: &ChatInfo,
+        to: &str,
+    ) -> Result<(), Error> {
         let node = self.find_node(&info.id, to).await?;
         let db = self.chat_db()?;
         let shown = db.branch(info.id.clone(), None).await.map_err(store_err)?;
@@ -1420,7 +1457,7 @@ impl Daemon {
         // Its engine knows the other branch: the next message seeds a new one.
         self.stop_chat_engine(&info.id).await;
         db.set_leaf(info.id.clone(), tip).await.map_err(store_err)?;
-        self.reload_branch(&live).await;
+        self.reload_branch(live).await;
         self.chat_changed(&info.id).await;
         Ok(())
     }
@@ -1513,8 +1550,24 @@ impl Daemon {
         project: Option<String>,
         agent: Option<String>,
         name: Option<String>,
+        confirmed: bool,
     ) -> Result<Reply, Error> {
         let info = self.find_chat(chat).await?;
+        // Incognito keeps nothing (SPEC §22.9), and a task would leave its words in a terminal
+        // session, a worktree's name and the coding agent's own history.
+        if info.incognito {
+            return Err(Error::invalid(
+                "an incognito chat keeps nothing, and a task would write it into a session and the agent's own history: `chat export` copies it out, or ask it again in a chat that isn't incognito",
+            ));
+        }
+        if info.source.is_some() {
+            return Err(compare::imported_refusal(&info));
+        }
+        // One thing at a time: not while it answers or compares (its last answer is the plan).
+        let lock = self.chats.lock_for(&info.id);
+        let _one = lock.lock().await;
+        let live = self.chats.live(&info.id);
+        self.busy_check(&live, &info)?;
         let branch = self.rec_branch(&info.id, None).await?;
         let last = branch.iter().rev().find_map(|n| match &n.body {
             ChatBody::Assistant { text, .. } if !text.trim().is_empty() => Some(text.trim()),
@@ -1538,6 +1591,35 @@ impl Daemon {
             // The chat's agent; the project's profile (its pin, its workspace), as any task.
             None => (info.agent.clone(), None),
         };
+        let ws = self.workspace_name(&info.workspace);
+        // The task's profile, as the worktree will resolve it: when it isn't the chat's, the
+        // conversation would reach another account, so the person is asked first.
+        if !confirmed {
+            let root = self
+                .root_worktree(&p.id)
+                .ok_or_else(|| Error::missing("worktree", format!("{}/@root", p.slug)))?;
+            let home = self.home_workspace(Some(&ws), Some(&p))?;
+            let res = self.resolve_profile(
+                profile.as_deref(),
+                Some(&(root, p.clone())),
+                &home,
+                false,
+                false,
+            )?;
+            if res.profile != info.profile {
+                return Err(Error::new(
+                    ErrorCode::NeedsConfirmation,
+                    format!(
+                        "{} is a chat of profile {}, and the task in {} would run under {} ({}): carry the conversation over to that account?",
+                        info.addr(),
+                        info.profile,
+                        p.slug,
+                        res.profile,
+                        res.reason.label()
+                    ),
+                ));
+            }
+        }
         let seed = chats::seed_block(&branch, self.config().chat.seed_tokens as usize)
             .map(|(b, _)| b)
             .unwrap_or_default();
@@ -1551,10 +1633,10 @@ impl Daemon {
             name: name.filter(|n| !n.trim().is_empty()),
             title: Some(info.label().to_owned()),
             profile,
-            confirmed: true,
+            confirmed,
             agent: Some(agent.clone()),
             prompt: Some(prompt),
-            workspace: Some(self.workspace_name(&info.workspace)),
+            workspace: Some(ws),
             ..ptyro_core::model::WorktreeSpec::default()
         };
         let reply = self.create_worktree(spec).await?;
@@ -1572,9 +1654,6 @@ impl Daemon {
                 ),
                 None => format!("made a task: the worktree {}", wt.qualified()),
             };
-            let lock = self.chats.lock_for(&info.id);
-            let _one = lock.lock().await;
-            let live = self.chats.live(&info.id);
             if live.items.locked().items.is_empty() {
                 self.reload_branch(&live).await;
             }
@@ -2697,6 +2776,21 @@ fn acp_server(name: &str, server: &serde_json::Value) -> serde_json::Value {
     })
 }
 
+/// Write `text` to `file`, readable by its owner alone (made so before anything is in it).
+fn write_private(file: &std::path::Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(file)?;
+    // A file from before keeps its old mode: made private either way.
+    f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    f.write_all(text.as_bytes())
+}
+
 fn preset_launch(
     protocol: &str,
     p: &ChatTools,
@@ -2760,13 +2854,17 @@ fn preset_launch(
             } else {
                 // `--safe-mode` drops even an explicit MCP server (verified, Claude 2.1.314):
                 // with MCP servers, the same customizations are kept out by naming no setting
-                // sources and no slash commands (CLAUDE.md, hooks, skills, plugins).
+                // sources and no slash commands (CLAUDE.md, hooks, skills, plugins). The servers
+                // go in a file only its owner reads: a server's definition can carry its
+                // tokens, and a command line is anyone's to see (`ps`, a session's argv).
+                let file = dir.join("mcp.json");
+                let _ = write_private(&file, &json!({ "mcpServers": servers }).to_string());
                 v.extend([
                     "--setting-sources".into(),
                     String::new(),
                     "--disable-slash-commands".into(),
                     "--mcp-config".into(),
-                    json!({ "mcpServers": servers }).to_string(),
+                    file.to_string_lossy().into_owned(),
                 ]);
             }
             if extra.incognito {
@@ -3048,8 +3146,17 @@ mod tests {
         assert_eq!(a[3], "WebSearch,WebFetch,Bash,mcp__github");
         assert!(a.windows(2).any(|w| w == ["--add-dir", "/notes"]));
         assert!(!a.contains(&"--safe-mode".into()));
+        // Its definition (a server's tokens, maybe) in a file only its owner reads, never on
+        // the command line.
         let cfg = &a[a.iter().position(|x| x == "--mcp-config").unwrap() + 1];
-        assert!(cfg.contains("gh-mcp"), "{cfg}");
+        assert_eq!(std::path::Path::new(cfg), dir.join("mcp.json"));
+        assert!(std::fs::read_to_string(cfg).unwrap().contains("gh-mcp"));
+        assert!(!a.iter().any(|x| x.contains("gh-mcp")));
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(cfg).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
         // Codex: the shell on, the named server kept, the others off.
         let (_, p) = preset_launch(
             "app-server",

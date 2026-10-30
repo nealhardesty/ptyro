@@ -267,3 +267,38 @@ fn a_chat_becomes_a_task_with_its_context() {
     // The chat says where it went.
     w.until("the chat's notice", || texts(&w, &addr).contains(&format!("session {session}")));
 }
+
+#[test]
+fn a_task_keeps_incognito_and_profiles_apart() {
+    let w = World::new("[profiles.work]\nlabel = \"work\"\n");
+    let a = repo(&w.home(), "alpha");
+    w.ok(&["project", "add", &a.to_string_lossy()]);
+    // Incognito keeps nothing: it can't become a task, and the error offers the way out.
+    let c = w.chat(&["--agent", "claude", "--incognito", "a secret plan"]);
+    let addr = format!("c:{}", c["handle"].as_str().unwrap());
+    w.until("its answer", || texts(&w, &addr).contains("you said: a secret plan"));
+    let out = w.cli(&["chat", "task", &addr, "--project", "alpha"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("incognito") && err.contains("chat export"), "{err}");
+    let wts = w.json(&["wt", "ls", "--json"]);
+    assert!(
+        wts.as_array().unwrap().iter().all(|t| t["name"] == "@root" || t["is_root"] == true),
+        "no worktree made: {wts}"
+    );
+    // A chat of the default profile, and a project pinned to work: asked first.
+    w.ok(&["project", "pin", "alpha", "work"]);
+    let c = w.chat(&["--agent", "claude", "plan the retry policy"]);
+    let addr = format!("c:{}", c["handle"].as_str().unwrap());
+    assert_eq!(c["profile"], "default");
+    w.until("its answer", || texts(&w, &addr).contains("you said: plan the retry policy"));
+    let out = w.cli(&["chat", "task", &addr, "--project", "alpha"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("profile default") && err.contains("under work"), "{err}");
+    assert!(!texts(&w, &addr).contains("made a task"), "nothing was made");
+    // Agreed to: the task runs under the project's profile.
+    let t = w.json(&["chat", "task", &addr, "--project", "alpha", "--yes", "--json"]);
+    assert_eq!(t["worktree"]["project_slug"], "alpha");
+    assert_eq!(t["worktree"]["profile"], "work", "{t}");
+}

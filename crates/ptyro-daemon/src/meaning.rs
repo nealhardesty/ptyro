@@ -234,7 +234,10 @@ impl Daemon {
             let m = Arc::clone(&model);
             let rows = tokio::task::spawn_blocking(move || {
                 todo.into_iter()
-                    .map(|t| (t.node, ptyro_meaning::quantize(&m.embed(&t.text))))
+                    .map(|t| {
+                        let v = ptyro_meaning::quantize(&m.embed(&t.text));
+                        (t.node, t.text, v)
+                    })
                     .collect::<Vec<_>>()
             })
             .await
@@ -338,6 +341,7 @@ impl Daemon {
         q: &Query,
     ) -> Result<Vec<(RawHit, Found)>, Error> {
         let by = q.by.as_deref();
+        let limit = filter.limit;
         let on = self.meaning_on();
         if by == Some("meaning") {
             self.meaning_ready(on)?;
@@ -390,6 +394,8 @@ impl Daemon {
             near.into_iter().map(|h| (key(&h), h)).collect();
         // Found both ways: the keyword hit, whose snippet shows the words.
         by_key.extend(words.into_iter().map(|h| (key(&h), h)));
+        // Each kind brought up to `limit`; the best `limit` of both are the answer.
+        let limit = if limit == 0 { usize::MAX } else { limit };
         Ok(order
             .into_iter()
             .filter_map(|(k, how, score)| {
@@ -397,6 +403,7 @@ impl Daemon {
                 h.rank = -score * 1000.0;
                 Some((h, how))
             })
+            .take(limit)
             .collect())
     }
 
@@ -478,6 +485,8 @@ async fn curl(
     let mut cmd = tokio::process::Command::new("curl");
     cmd.args(["-sS", "-fL", "--proto", proto, "--proto-redir", proto])
         .args(["--retry", "3", "--connect-timeout", "20", "-C", "-"])
+        // A stalled transfer (under 1 KB/s for a minute) fails, and is retried, resuming.
+        .args(["--speed-limit", "1024", "--speed-time", "60"])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())

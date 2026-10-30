@@ -97,6 +97,7 @@ async fn new_chat(c: &Client, workspace: Option<&str>, prompt: &str) -> ChatInfo
         incognito: false,
         folders: Vec::new(),
         compare: Vec::new(),
+        confirmed: false,
     };
     match c.request(req).await.unwrap() {
         Reply::Chat { info } => info,

@@ -109,6 +109,9 @@ const MIGRATIONS: &[M<'static>] = &[
       tail TEXT,
       at INTEGER NOT NULL);",
     ),
+    // v6 (CHAT5): the tip each import left the chat's shown branch at, so a re-import moves it
+    // on only when the person hasn't gone to another branch since.
+    M::up("ALTER TABLE import ADD COLUMN leaf TEXT;"),
 ];
 
 /// A tombstoned chat's rows go at the first compaction this long after its delete (§22.4).
@@ -970,6 +973,17 @@ impl ChatDb {
                     (b.chat.clone(), true)
                 }
             };
+            // The shown branch moves on with the session only from where the last import left
+            // it (the person may have gone to another branch since).
+            let old_tip: Option<Option<String>> = tx
+                .query_row("SELECT leaf FROM import WHERE source = ?1", [&b.source], |r| r.get(0))
+                .optional()?;
+            let shown: Option<String> =
+                tx.query_row("SELECT leaf FROM chat WHERE id = ?1", [&chat], |r| r.get(0))?;
+            let follow = match (&shown, old_tip) {
+                (None, _) | (_, None | Some(None)) => true,
+                (Some(s), Some(Some(t))) => *s == t,
+            };
             let mut added = 0;
             let mut last_msg: Option<i64> = None;
             for n in &b.nodes {
@@ -996,13 +1010,13 @@ impl ChatDb {
                    title_src = CASE WHEN ?4 IS NOT NULL AND title_src IS NOT 'user' THEN 'agent' ELSE title_src END,
                    updated_at = ?5
                  WHERE id = ?1",
-                params![chat, b.leaf, last_msg, b.title, t],
+                params![chat, if follow { b.leaf.clone() } else { None }, last_msg, b.title, t],
             )?;
             tx.execute(
-                "INSERT INTO import (source, chat, path, size, mtime, offset, tail, at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                "INSERT INTO import (source, chat, path, size, mtime, offset, tail, at, leaf)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                  ON CONFLICT(source) DO UPDATE SET chat = ?2, path = ?3, size = ?4, mtime = ?5,
-                   offset = ?6, tail = COALESCE(?7, tail), at = ?8",
+                   offset = ?6, tail = COALESCE(?7, tail), at = ?8, leaf = COALESCE(?9, leaf)",
                 params![
                     b.source,
                     chat,
@@ -1011,7 +1025,8 @@ impl ChatDb {
                     b.mtime as i64,
                     b.offset as i64,
                     b.tail,
-                    t
+                    t,
+                    b.leaf
                 ],
             )?;
             tx.commit()?;
@@ -1622,6 +1637,14 @@ mod tests {
             (3, Some("i3"), Some("Greeting"))
         );
         assert_eq!(c.source.as_deref(), Some("claude:s1"));
+        // A person who went to another branch stays there; back at the import's tip, it follows.
+        let leaf = || async { db.get(chat.clone()).await.unwrap().unwrap().leaf };
+        db.set_leaf(chat.clone(), "i2".into()).await.unwrap();
+        db.import_batch(batch(vec![user("i4", Some("i3"), "on")], None)).await.unwrap();
+        assert_eq!(leaf().await.as_deref(), Some("i2"), "not moved off the person's branch");
+        db.set_leaf(chat.clone(), "i4".into()).await.unwrap();
+        db.import_batch(batch(vec![user("i5", Some("i4"), "and on")], None)).await.unwrap();
+        assert_eq!(leaf().await.as_deref(), Some("i5"));
         // A person's title is never replaced by the agent's.
         db.set_title(chat.clone(), Some("Mine".into()), "user".into()).await.unwrap();
         db.import_batch(batch(vec![], Some("Theirs"))).await.unwrap();

@@ -6395,11 +6395,22 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   chat given folders with no preset asked for gets `read`. A preset that reads uses them with its
   `dirs`. `ChatInfo.best_effort` and `.shell` are worked out per agent when a row is sent (§22.5's
   table), and the clients show `tools: P · best effort · ⚠ shell` (a shell chat's row has `⚠`, as a
-  `dangerous` session's). **Task:** `ChatTask{chat, project?, agent?, name?}` → `WorktreeCreated`:
-  `create_worktree` with the chat's agent (the project's profile), the title, and a first prompt of
-  the shown branch's seed block, "The plan from that conversation (chat c:…, its last answer)", the
-  answer and "Carry this out in this repository."; the chat gets a notice naming the worktree and the
-  session. The project defaults to the only one of the chat's workspace (or the only one there is);
+  `dangerous` session's). **Task:** `ChatTask{chat, project?, agent?, name?, confirmed}` →
+  `WorktreeCreated`: `create_worktree` with the chat's agent (the project's profile), the title, and
+  a first prompt of the shown branch's seed block, "The plan from that conversation (chat c:…, its
+  last answer)", the answer and "Carry this out in this repository."; the chat gets a notice naming
+  the worktree and the session. **What moves where:** a task is the person's explicit act of
+  carrying the conversation into coding work, so its text goes where a session's does: typed into
+  a terminal session (its scrollback and recording), the chat's title into the worktree's (in
+  `ptyro.db`), and into the coding agent's own history (which `chat import` may later read back).
+  So: an **incognito chat can't become a task** (refused: "`chat export` copies it out, or ask it
+  again in a chat that isn't incognito"; the web hides the item), nor an imported one (the fork
+  advice); and when the profile the task would run under (as `create_worktree` resolves it: the
+  agent's `@profile`, the project's pin, the workspace's) isn't the chat's, the daemon asks first
+  (`NeedsConfirmation`, "c:… is a chat of profile personal, and the task in alpha would run under
+  work (pinned): carry the conversation over to that account?"); `confirmed` (CLI `--yes`, the
+  TUI's `y`, the web's sheet) goes ahead, and also answers a profile guard's question (it no longer
+  skips one). It waits its turn like a message: refused while the chat answers or compares. The project defaults to the only one of the chat's workspace (or the only one there is);
   otherwise the error lists them with `--project`, and the TUI and web ask with a picker. The link
   back is that notice and the worktree's title (the chat's): `SessionInfo` has no `forked_from_chat`
   (27 places build it, and `ptyro.db` would need a column). **Gemini:** a chat runs with
@@ -6412,7 +6423,8 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   **Finding agents:** `ptyro_agents::locate` finds a program that isn't on `PATH` in the npm prefix,
   `~/.npm-global/bin`, `~/.local/bin`, `~/.volta/bin`, `~/.bun/bin`, `~/.claude/local`, Homebrew,
   nvm's node versions (newest first) and, for the npm-shipped built-ins, `npx`'s cache
-  (`~/.npm/_npx/*/node_modules/<package>`, newest version), running a Node script with the `node`
+  (`~/.npm/_npx/*/node_modules/<package>`, newest version; only a `package.json` whose `name` is
+  that package, and a `bin` script inside it: relative, no `..`), running a Node script with the `node`
   beside it when none is on `PATH`; ptyro never downloads one. Sessions, chats, `doctor`
   (where, and how: `(nvm)`, `(npx cache)` with a note to `npm i -g`), `AgentChoice.found` (web and
   TUI agent pickers) and the first-run screen use it; "No agent found" and an asked-for agent that
@@ -6424,8 +6436,15 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   pure Rust (`crates/ptyro-meaning`), int8 vectors in schema v3 `node_vec`, a background backfill,
   RRF with the keyword hits, `by:meaning`/`by:words`, `ChatHit.how` and `≈`. See §22.10 tier 3.
 - **Compare (CHAT5, 2026-10-30; `ptyro-daemon/src/chats/compare.rs`):** `ChatCompare{chat,
-  agents, text?}` (1.24; `ChatNew.compare` for a new chat's first message) asks each agent the
-  same message, and each answer is a **sibling branch under it**. With `text` it is a new message
+  agents, text?, confirmed}` (1.24; `ChatNew.compare`/`confirmed` for a new chat's first message)
+  asks each agent the same message, and each answer is a **sibling branch under it**. **Profiles:**
+  a bare agent name is the **chat's own profile's** (`claude` in a `claude@personal` chat is
+  `claude@personal`, wherever the chat's workspace points), so the branch never reaches another
+  profile's account, nor do a helper's history tools search another profile's chats; a name with
+  another profile (`codex@work`) is asked about first (`NeedsConfirmation`; CLI `--yes`, the TUI's
+  `y`, the web's sheet). Agents are counted once each after resolving (`claude,claude` or
+  `claude,claude@default` is one), and a new chat's `--compare` of fewer than two is refused before
+  the chat is made. With `text` it is a new message
   on the shown branch; without, the last message of the person's again, for the agents that haven't
   answered it (a new message needs two agents or more). Default agents: the chat's own, then every
   installed one with a structured protocol. The chat's own agent (same agent and profile) answers
@@ -6447,13 +6466,17 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   with the hint to `/pick`). With no answer of the chat's own agent, the first other answer in is
   shown. **Rules:** one answer at a time holds for the whole compare (`busy_check` refuses a send,
   retry, edit, branch or a second compare); `ChatStop` interrupts every helper too, and one that
-  hasn't stopped 10 s later is stopped; a helper that fails (not installed, not logged in, ends
+  hasn't stopped 10 s later is stopped; a helper not done in 10 minutes is stopped as `✗ timed out`
+  (what it said so far left out); deleting the chat stops its compare, and nothing is copied into a
+  chat deleted meanwhile; at the daemon's start, scratch folders of chats that no longer exist (a
+  crash's helpers and incognito chats) are removed, with Gemini's copies; a helper that fails (not installed, not logged in, ends
   without an answer) is `✗` with the reason and the others go on; a helper is never shown a
   permission card: what its preset doesn't allow is **denied** (the preset is ptyro's answer
   anyway; the progress says "a tool it asked for was denied"), while the chat's own agent asks as
   ever. **Pick:** `ChatPick{chat, node?}` shows the branch through `node` (default: the shown one)
   and sets the chat's agent to the one whose conv wrote its newest node (`branch_agent`); the next
-  message is seeded on it (§22.6 rule 3). Losers stay as branches (CHAT2 deletes none).
+  message is seeded on it (§22.6 rule 3). Like a message, it waits its turn (refused mid-answer or
+  mid-compare). Losers stay as branches (CHAT2 deletes none).
 - **Import (CHAT5, 2026-10-30; `ptyro-daemon/src/chats/import.rs`):** `ChatImport{agent?,
   profile?, since?, dry_run}` → `ChatImported{report}` (1.24, scope `full`: it copies coding history
   into `chat.db`, as the setting does) reads every profile's (or one's) Claude Code, Codex and
@@ -6471,14 +6494,23 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   Gemini's `summary`; else the first message's first line (`title_src = agent`, so a title you
   give wins). Workspace: the one whose project or worktree contains the session's folder, else
   `main`; profile: the profile whose folder it came from (two profiles sharing a folder: the first).
-  **Skipped:** sessions whose folder is under ptyro's data folder (its own chat engines and
-  summaries), sessions with nothing said, and a session whose chat you deleted (the `import` row
-  outlives the chat, so a delete is never undone). Lines over 4 MB are passed over unread; the
-  parse runs in a blocking task and each session is one transaction, so the request loop and
-  other chats' writes wait at most one session. Imported chats are **read-only**: `ChatSend`
-  forks one (the fork says "continued as a fork of the imported c:…", and the reply names the
-  fork, which each client then shows), `ChatRetry`, `ChatEdit` and `ChatCompare` are refused
-  with that advice. They are searched (the FTS triggers, the meaning backfill on `ChatUpdated`),
+  **Skipped:** sessions that ran in ptyro's own chat engines' and summaries' folders
+  (`<data>/chat`, `<data>/summaries`; sessions in its worktrees, `<data>/worktrees`, are history and
+  imported), sessions with nothing said, and a session whose chat you deleted (the `import` row
+  outlives the chat, so a delete is never undone); a file passed over isn't read again until its
+  size or mtime changes (remembered in memory). Lines over 4 MB are passed over unread: a tool
+  result among them closes its call ("its output was too large to import", found by its id in the
+  line's first 64 KB), and a call still unanswered 1,000 lines on no longer holds `offset` back. A
+  Gemini file over 64 MB is skipped with a note. A file that can't be read, or a parser that
+  panics, is skipped with a note, never the whole import. A tool node's title (its command, path
+  or URL) is redacted as summaries are (`Bearer …`, `TOKEN=…`, `sk-…`). The parse runs in a
+  blocking task and each session is one transaction, so the request loop and other chats' writes
+  wait at most one session. Imported chats are **read-only**: `ChatSend` forks one (the fork says
+  "continued as a fork of the imported c:…", and the reply names the fork, which each client then
+  shows); `ChatRetry`, `ChatEdit`, `ChatCompare`, `ChatPick`, `ChatTask` and `ChatUpdate`'s
+  agent, preset and folders are refused with that advice (title, pin and archive are the
+  person's). A re-import moves the shown branch on only from where the last import left it
+  (`chat.db` v6 `import.leaf`): a person who went to another branch stays there. They are searched (the FTS triggers, the meaning backfill on `ChatUpdated`),
   obey `history_scope` (their profile), and are listed like any chat, marked `⇣` with "imported
   from claude · ~/repo" in the header; `chat ls --imported` lists only them. `[chat] import =
   true` (default off: it copies coding history) imports at once and then every 10 minutes. On
@@ -6635,7 +6667,9 @@ CREATE TABLE conv (                   -- an agent conversation that served a cha
 
   **`shell` and `mcp` (CHAT4, a preset of your own only):** Claude `Bash` in `--tools` and
   `--allowedTools`, each named server's definition from `<config dir>/.claude.json` `mcpServers` in
-  `--mcp-config` with `mcp__<server>` allowed (any MCP server means `--setting-sources ""
+  `--mcp-config <scratch>/mcp.json` (a `0600` file in the chat's `0700` scratch folder, never the
+  JSON on the command line: a definition can carry its tokens, and argv is in `ps` and in every
+  client's `SessionInfo`) with `mcp__<server>` allowed (any MCP server means `--setting-sources ""
   --disable-slash-commands` instead of `--safe-mode`); Codex `shell_tool` and `unified_exec` on, the
   `workspace-write` sandbox (commands write only the scratch folder; with `read`, its profile), the
   named servers left out of the switched-off list; Gemini `run_shell_command` and `mcp_<server>_*`
@@ -6802,6 +6836,8 @@ Three tiers; each one is useful without the next.
      resumes after an interruption. It is then checked and renamed into place: the matrix by its
      SHA-256, the small files by size and by loading them (a WordPiece vocabulary with a row for
      every token). Their hashes aren't published, and the commit pin plus HTTPS covers them. A
+     transfer under 1 KB/s for a minute fails and is retried (curl `--speed-limit`), so a stall
+     never hangs it. A safetensors header whose offsets or shape overflow is an error. A
      failed download says why in `ptyro doctor` and is tried again in 10 minutes, or at once when
      switched off and on. `PTYRO_MEANING_URL` replaces `https://huggingface.co` (for a mirror; the
      tests use a `file://` folder). Development and tests never download it: they use a synthetic
@@ -6819,7 +6855,8 @@ Three tiers; each one is useful without the next.
      f32 scale: 260 B a message, a quarter of f32's size. On unit vectors it gives f32's ranking
      except for near ties. `model` is `potion-base-8M@bf8b056/i8`, and vectors of any other model
      are dropped when meaning search is switched on. A message whose text changes, or that is
-     deleted, loses its vector (a trigger), and a deleted chat's vectors go with its rows. Covered
+     deleted, loses its vector (a trigger), and a vector is stored only if the message's text is
+     still the text embedded (one that changed while it was embedded is done by a later pass), and a deleted chat's vectors go with its rows. Covered
      are the messages keyword search covers except titles (user and assistant text, tool text with
      `index_tools`), once complete. Incognito chats are never in `chat.db`, so never embedded.
    - **Backfill:** a daemon task at low priority, in batches of 128 with a pause between. It goes
@@ -6830,7 +6867,7 @@ Three tiers; each one is useful without the next.
      5 idle minutes (30 MB of memory).
    - **Search:** `by:meaning` or `by:words` in a query (CLI `--meaning`/`--words`) asks for one
      kind. With meaning on, the default merges the keyword hits with the nearest `limit` messages by
-     RRF (k = 60). Nearest means a cosine of at least 0.3 ([U]: set on the synthetic model), found
+     RRF (k = 60), and the best `limit` of the merge are the answer. Nearest means a cosine of at least 0.3 ([U]: set on the synthetic model), found
      by a brute-force scan of `node_vec`. Every filter, `-word` and the engine's `history_scope`
      apply, so the history tools' `chat_search` gets meaning search too. `ChatHit.how` is `words`,
      `meaning` or `both`. A hit found only by meaning has the start of the message as its snippet

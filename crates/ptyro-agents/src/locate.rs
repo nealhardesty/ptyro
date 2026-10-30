@@ -4,7 +4,7 @@
 //! that cache. ptyro never downloads an agent: it runs one that is already on disk, and when none
 //! is, it says how to install it ([`install_hint`]).
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Where a program was found, and how to run it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,14 +146,27 @@ fn npx_cached(cache: &Path, pkg: &str, prog: &str) -> Option<PathBuf> {
         let dir = e.path().join("node_modules").join(pkg);
         let Ok(text) = std::fs::read_to_string(dir.join("package.json")) else { continue };
         let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
+        // The package itself, not another one installed under its name (an npm alias).
+        if v["name"].as_str() != Some(pkg) {
+            continue;
+        }
         let bin = match &v["bin"] {
             serde_json::Value::String(s) => Some(s.as_str()),
             b => b[prog].as_str(),
         };
-        let Some(bin) = bin else { continue };
+        // A script inside the package: relative, never climbing out of it.
+        let Some(bin) = bin.map(Path::new).filter(|b| {
+            b.components().all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
+        }) else {
+            continue;
+        };
         let script = dir.join(bin);
+        let inside = match (script.canonicalize(), dir.canonicalize()) {
+            (Ok(s), Ok(d)) => s.starts_with(d),
+            _ => false,
+        };
         let ver = version(v["version"].as_str().unwrap_or("0"));
-        if script.is_file() && best.as_ref().is_none_or(|(b, _)| ver > *b) {
+        if inside && script.is_file() && best.as_ref().is_none_or(|(b, _)| ver > *b) {
             best = Some((ver, script));
         }
     }
@@ -205,12 +218,22 @@ mod tests {
         // Only in npx's cache: its newest copy, run with node.
         std::fs::remove_dir_all(nvm.join("versions/node/v9.0.0")).unwrap();
         std::fs::remove_file(new.join("gemini")).unwrap();
-        for (h, v) in [("a1", "0.60.0"), ("b2", "0.66.0")] {
+        // Newer copies that aren't the package (an alias under its name) or whose script is
+        // outside it are passed over.
+        for (h, name, v, bin) in [
+            ("a1", "@google/gemini-cli", "0.60.0", "bundle/gemini.js"),
+            ("b2", "@google/gemini-cli", "0.66.0", "bundle/gemini.js"),
+            ("c3", "not-gemini", "9.0.0", "bundle/gemini.js"),
+            ("d4", "@google/gemini-cli", "9.0.0", "../../x.js"),
+        ] {
             let pkg = home.join(".npm/_npx").join(h).join("node_modules/@google/gemini-cli");
             exe(&pkg.join("bundle/gemini.js"), "#!/usr/bin/env node\n");
+            exe(&home.join(".npm/_npx").join(h).join("node_modules/x.js"), "#!/usr/bin/env node\n");
             std::fs::write(
                 pkg.join("package.json"),
-                format!("{{\"version\":\"{v}\",\"bin\":{{\"gemini\":\"bundle/gemini.js\"}}}}"),
+                format!(
+                    "{{\"name\":\"{name}\",\"version\":\"{v}\",\"bin\":{{\"gemini\":\"{bin}\"}}}}"
+                ),
             )
             .unwrap();
         }

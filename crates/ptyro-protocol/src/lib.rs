@@ -1091,6 +1091,10 @@ pub enum Request {
         /// `ChatCompare`): `agent` or `agent@profile`, two or more.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         compare: Vec<String>,
+        /// The person agreed to what the daemon asked (`NeedsConfirmation`): a compare agent
+        /// under another profile than the chat's (SPEC §22.7).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        confirmed: bool,
     },
     /// Chats, pinned first then the newest: one workspace's, or every one's with `all`.
     ChatList {
@@ -1225,6 +1229,10 @@ pub enum Request {
         /// The worktree's name; default: from the chat's title.
         #[serde(default)]
         name: Option<String>,
+        /// The person agreed to what the daemon asked (`NeedsConfirmation`): the task runs
+        /// under another profile than the chat's, or a profile guard (SPEC §22.7).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        confirmed: bool,
     },
     /// The tool presets, each with what it lets a chat use (1.24).
     ChatPresets,
@@ -1239,6 +1247,10 @@ pub enum Request {
         agents: Vec<String>,
         #[serde(default)]
         text: Option<String>,
+        /// The person agreed to ask an agent under another profile than the chat's: the branch
+        /// goes to that profile's account (`NeedsConfirmation`, SPEC §22.7).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        confirmed: bool,
     },
     /// Keep an answer (1.24, CHAT5): show the branch through `node` (default: the one shown)
     /// and switch the chat to the agent that wrote it, so the next message goes there.

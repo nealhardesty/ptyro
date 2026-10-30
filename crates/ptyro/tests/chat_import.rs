@@ -227,6 +227,18 @@ fn histories_become_searchable_read_only_chats() {
     let retry = w.cli(&["chat", "retry", &addr]);
     assert!(!retry.status.success());
     assert!(String::from_utf8_lossy(&retry.stderr).contains("continue it as a fork"));
+    // Nor is it switched to another agent, picked from, or made a task (each would write into
+    // it); pinning it is the person's.
+    for args in [
+        vec!["chat", "set", addr.as_str(), "--agent", "codex"],
+        vec!["chat", "pick", addr.as_str()],
+        vec!["chat", "task", addr.as_str()],
+    ] {
+        let out = w.cli(&args);
+        assert!(!out.status.success(), "{args:?}");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("as a fork"), "{args:?}");
+    }
+    w.ok(&["chat", "pin", &addr]);
     let out = w.cli(&["chat", "send", &addr, "and a list?"]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(String::from_utf8_lossy(&out.stderr).contains("continued as a fork"));
@@ -248,6 +260,18 @@ fn histories_become_searchable_read_only_chats() {
     let after = w.json(&["chat", "import", "--json"]);
     assert_eq!(counts(&after, "gemini"), (0, 0, 0, 1, 0), "{after}");
     assert!(w.imported().iter().all(|c| !c["source"].as_str().unwrap().starts_with("gemini:")));
+    // A session in one of ptyro's worktrees (under its data folder too) is history.
+    let wt = w.d.paths.data.join("worktrees/repo/feature");
+    write(
+        &w.home().join(".claude/projects/-wt").join("wt-1.jsonl"),
+        &format!(
+            r#"{{"type":"user","uuid":"w1","sessionId":"wt-1","cwd":"{}","timestamp":"2026-10-21T09:00:00Z","message":{{"role":"user","content":"fix the flaky test"}}}}
+"#,
+            wt.to_string_lossy()
+        ),
+    );
+    let r = w.json(&["chat", "import", "--agent", "claude", "--json"]);
+    assert_eq!(counts(&r, "claude").0, 1, "{r}");
 }
 
 #[test]

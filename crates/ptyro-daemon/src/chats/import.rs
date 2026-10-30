@@ -36,6 +36,13 @@ pub(crate) const AGENTS: [&str; 3] = ["claude", "codex", "gemini"];
 const MAX_LINE: usize = 4 << 20;
 /// Tool output kept with `index_tools` (as much as the index takes).
 const MAX_OUTPUT: usize = 2048;
+/// A file read whole (Gemini's) larger than this is skipped, with a note.
+const MAX_WHOLE: u64 = 64 << 20;
+/// How much of a line too long to read is searched for the tool call it answers.
+const HEAD: usize = 64 << 10;
+/// A tool call still unanswered this many lines on no longer holds back where the next import
+/// starts (its result, if it comes, is past it).
+const STALE_LINES: u64 = 1000;
 /// How often `[chat] import` looks for new and grown sessions.
 pub(crate) const EVERY: Duration = Duration::from_secs(600);
 
@@ -159,7 +166,8 @@ fn tool_title(name: &str, input: &Value) -> String {
         (None, v) => v.to_string(),
     };
     let line = raw.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
-    chats::clip(line, 120)
+    // A command line can carry a credential (`curl -H "Authorization: Bearer …"`).
+    chats::clip(&crate::summary::redact(line, &[]), 120)
 }
 
 /// A tool's output as text (a string, or blocks with `text`).
@@ -178,9 +186,17 @@ fn output_text(v: &Value) -> String {
     }
 }
 
-/// Lines of a reader from `start`, each with where it ends; a line too long, or the last one
-/// when it has no newline yet (still being written), is passed over.
-fn lines(r: impl Read, start: u64, mut each: impl FnMut(&str, u64)) {
+/// A line of a session file.
+enum Line<'a> {
+    Text(&'a str),
+    /// Too long to read: its first bytes.
+    Skipped(&'a [u8]),
+}
+
+/// Lines of a reader from `start`, each with where it ends; a line too long is passed over
+/// (only its start is shown), and the last one when it has no newline yet (still being
+/// written) is left for the next read.
+fn lines(r: impl Read, start: u64, mut each: impl FnMut(Line<'_>, u64)) {
     let mut r = BufReader::with_capacity(1 << 16, r);
     let mut at = start;
     let mut buf = Vec::new();
@@ -193,6 +209,7 @@ fn lines(r: impl Read, start: u64, mut each: impl FnMut(&str, u64)) {
         if buf.last() != Some(&b'\n') {
             if n > MAX_LINE {
                 // Too long: skip to its end.
+                let head = buf[..HEAD.min(buf.len())].to_vec();
                 let mut skipped = n as u64;
                 loop {
                     buf.clear();
@@ -207,13 +224,14 @@ fn lines(r: impl Read, start: u64, mut each: impl FnMut(&str, u64)) {
                     }
                 }
                 at += skipped;
+                each(Line::Skipped(&head), at);
                 continue;
             }
             return; // a line still being written
         }
         at += n as u64;
         if let Ok(s) = std::str::from_utf8(&buf) {
-            each(s.trim_end(), at);
+            each(Line::Text(s.trim_end()), at);
         }
     }
 }
@@ -222,8 +240,10 @@ fn lines(r: impl Read, start: u64, mut each: impl FnMut(&str, u64)) {
 #[derive(Default)]
 struct Acc {
     p: Parsed,
-    /// Tool call id → its message's index.
-    open: HashMap<String, usize>,
+    /// Tool call id → its message's index, and the line it was on.
+    open: HashMap<String, (usize, u64)>,
+    /// Lines read.
+    line: u64,
     title_rank: u8,
 }
 
@@ -233,7 +253,7 @@ impl Acc {
     }
 
     fn tool(&mut self, call: String, key: String, at_ms: u64, name: &str, title: String) {
-        self.open.insert(call, self.p.msgs.len());
+        self.open.insert(call, (self.p.msgs.len(), self.line));
         let body = ChatBody::Tool {
             name: name.to_owned(),
             title,
@@ -246,7 +266,7 @@ impl Acc {
     }
 
     fn result(&mut self, call: &str, failed: bool, output: String, o: Opts) {
-        let Some(i) = self.open.remove(call) else { return };
+        let Some((i, _)) = self.open.remove(call) else { return };
         if let Some(Msg { body: ChatBody::Tool { status, output: out, .. }, .. }) =
             self.p.msgs.get_mut(i)
         {
@@ -265,12 +285,38 @@ impl Acc {
         }
     }
 
-    /// A line ended at `at`: a safe place to read on from, when no tool waits.
+    /// A line ended at `at`: a safe place to read on from, when no tool waits (one unanswered
+    /// for `STALE_LINES` doesn't hold it back: an interrupted session never answers it).
     fn line_end(&mut self, at: u64) {
-        if self.open.is_empty() {
+        self.line += 1;
+        if self.open.values().all(|(_, l)| self.line - l > STALE_LINES) {
             self.p.offset = at;
             self.p.safe = self.p.msgs.len();
         }
+    }
+
+    /// A line too long to read ended at `at`: the tool calls it names (their results, too large
+    /// to keep) are done.
+    fn skipped(&mut self, head: &[u8], at: u64) {
+        let named: Vec<String> = self
+            .open
+            .keys()
+            .filter(|id| {
+                let needle = format!("\"{id}\"");
+                head.windows(needle.len()).any(|w| w == needle.as_bytes())
+            })
+            .cloned()
+            .collect();
+        for id in named {
+            if let Some((i, _)) = self.open.remove(&id)
+                && let Some(Msg { body: ChatBody::Tool { status, output, .. }, .. }) =
+                    self.p.msgs.get_mut(i)
+            {
+                *status = ToolStatus::Done;
+                *output = Some("(its output was too large to import)".into());
+            }
+        }
+        self.line_end(at);
     }
 }
 
@@ -285,6 +331,10 @@ pub(crate) fn parse_claude(r: impl Read, start: u64, o: Opts) -> Parsed {
     let mut a = Acc::default();
     a.p.offset = start;
     lines(r, start, |line, at| {
+        let line = match line {
+            Line::Text(t) => t,
+            Line::Skipped(head) => return a.skipped(head, at),
+        };
         let Ok(v) = serde_json::from_str::<Value>(line) else { return a.line_end(at) };
         if a.p.id.is_empty()
             && let Some(id) = v["sessionId"].as_str()
@@ -381,6 +431,10 @@ pub(crate) fn parse_codex(r: impl Read, start: u64, o: Opts) -> Parsed {
     let mut a = Acc::default();
     a.p.offset = start;
     lines(r, start, |line, at| {
+        let line = match line {
+            Line::Text(t) => t,
+            Line::Skipped(head) => return a.skipped(head, at),
+        };
         let Ok(v) = serde_json::from_str::<Value>(line) else { return a.line_end(at) };
         let ts = v["timestamp"].as_str().and_then(iso_ms).unwrap_or(0);
         let p = &v["payload"];
@@ -484,26 +538,30 @@ pub(crate) fn parse_gemini(text: &str, o: Opts) -> Parsed {
     let mut order: Vec<String> = Vec::new();
     let mut by_id: HashMap<String, Value> = HashMap::new();
     let mut meta = serde_json::Map::new();
-    let put = |order: &mut Vec<String>, by_id: &mut HashMap<String, Value>, m: &Value| {
-        if let Some(id) = m["id"].as_str() {
-            if !by_id.contains_key(id) {
-                order.push(id.to_owned());
+    let put = |order: &mut Vec<String>, by_id: &mut HashMap<String, Value>, m: Value| {
+        if let Some(id) = m["id"].as_str().map(str::to_owned) {
+            if !by_id.contains_key(&id) {
+                order.push(id.clone());
             }
-            by_id.insert(id.to_owned(), m.clone());
+            by_id.insert(id, m);
         }
+    };
+    let messages = |v: &mut Value| match v.get_mut("messages").map(Value::take) {
+        Some(Value::Array(a)) => a,
+        _ => Vec::new(),
     };
     let whole =
         serde_json::from_str::<Value>(text.trim()).ok().filter(|v| v["messages"].is_array());
-    if let Some(v) = whole {
-        for m in v["messages"].as_array().into_iter().flatten() {
+    if let Some(mut v) = whole {
+        for m in messages(&mut v) {
             put(&mut order, &mut by_id, m);
         }
-        if let Some(o) = v.as_object() {
-            meta = o.clone();
+        if let Value::Object(o) = v {
+            meta = o;
         }
     } else {
         for line in text.lines().filter(|l| !l.trim().is_empty() && l.len() <= MAX_LINE) {
-            let Ok(r) = serde_json::from_str::<Value>(line) else { continue };
+            let Ok(mut r) = serde_json::from_str::<Value>(line) else { continue };
             if let Some(to) = r["$rewindTo"].as_str() {
                 if let Some(i) = order.iter().position(|x| x == to) {
                     for gone in order.drain(i..) {
@@ -540,26 +598,25 @@ pub(crate) fn parse_gemini(text: &str, o: Opts) -> Parsed {
                     order.retain(|x| x != id);
                     by_id.remove(id);
                 }
-            } else if let Some(set) = r["$set"].as_object() {
-                if let Some(ms) = set.get("messages").and_then(Value::as_array) {
+            } else if let Some(set) = r.get_mut("$set").filter(|v| v.is_object()) {
+                if set["messages"].is_array() {
                     order.clear();
                     by_id.clear();
-                    for m in ms {
+                    for m in messages(set) {
                         put(&mut order, &mut by_id, m);
                     }
                 }
-                for (k, v) in set.iter().filter(|(k, _)| *k != "messages") {
-                    meta.insert(k.clone(), v.clone());
+                if let Value::Object(o) = set.take() {
+                    meta.extend(o.into_iter().filter(|(k, _)| k != "messages"));
                 }
             } else if r["id"].is_string() {
-                put(&mut order, &mut by_id, &r);
+                put(&mut order, &mut by_id, r);
             } else if r["sessionId"].is_string() {
-                for (k, v) in r.as_object().into_iter().flatten().filter(|(k, _)| *k != "messages")
-                {
-                    meta.insert(k.clone(), v.clone());
-                }
-                for m in r["messages"].as_array().into_iter().flatten() {
+                for m in messages(&mut r) {
                     put(&mut order, &mut by_id, m);
+                }
+                if let Value::Object(o) = r {
+                    meta.extend(o.into_iter().filter(|(k, _)| k != "messages"));
                 }
             }
         }
@@ -738,7 +795,7 @@ fn read_session(agent: &str, path: &Path, start: u64, o: Opts) -> Option<Parsed>
         }
         "gemini" => {
             let mut text = String::new();
-            f.read_to_string(&mut text).ok()?;
+            (&mut f).take(MAX_WHOLE).read_to_string(&mut text).ok()?;
             let mut p = parse_gemini(&text, o);
             p.offset = 0;
             p.safe = p.msgs.len();
@@ -749,8 +806,9 @@ fn read_session(agent: &str, path: &Path, start: u64, o: Opts) -> Option<Parsed>
     if p.id.is_empty() {
         // Claude's and Codex's file names carry the session id.
         let stem = path.file_stem()?.to_string_lossy().into_owned();
-        p.id = match agent {
-            "codex" if stem.len() >= 36 => stem[stem.len() - 36..].to_owned(),
+        let tail = stem.len().checked_sub(36).and_then(|i| stem.get(i..));
+        p.id = match (agent, tail) {
+            ("codex", Some(id)) => id.to_owned(),
             _ => stem,
         };
     }
@@ -857,7 +915,7 @@ impl Daemon {
             None => 0,
         };
         // One import at a time (the periodic one and yours).
-        let _one = self.chats.importing.lock().await;
+        let mut passed = self.chats.importing.lock().await;
         let mut report = ImportReport { dry_run, ..ImportReport::default() };
         if agents.iter().any(|a| a == "opencode") {
             report.notes.push(
@@ -867,8 +925,17 @@ impl Daemon {
         let states = db.import_states().await.map_err(store_err)?;
         let by_path: HashMap<&str, (&String, &ptyro_store::chat::ImportState)> =
             states.iter().map(|(k, v)| (v.path.as_str(), (k, v))).collect();
-        let data = self.paths.data.clone();
-        let data_real = data.canonicalize().unwrap_or_else(|_| data.clone());
+        // ptyro's own chat engines and title/summary one-shots run in these: not history (its
+        // worktrees, under the data folder too, are).
+        let own: Vec<PathBuf> = ["chat", "summaries"]
+            .iter()
+            .flat_map(|d| {
+                let p = self.paths.data.join(d);
+                let real = p.canonicalize().ok();
+                [Some(p), real]
+            })
+            .flatten()
+            .collect();
         let opts = Opts { outputs: config.chat.index_tools };
         let mut seen_dirs: Vec<PathBuf> = Vec::new();
         for agent in agents.iter().filter(|a| AGENTS.contains(&a.as_str())) {
@@ -886,7 +953,7 @@ impl Daemon {
                     ..ImportSource::default()
                 };
                 let (a, d) = (agent.clone(), dir.clone());
-                let (files, titles) = tokio::task::spawn_blocking(move || {
+                let listed = tokio::task::spawn_blocking(move || {
                     let titles = match a.as_str() {
                         "codex" => std::fs::read_to_string(d.join("session_index.jsonl"))
                             .map(|t| codex_titles(&t))
@@ -895,14 +962,37 @@ impl Daemon {
                     };
                     (sessions(&a, &d), titles)
                 })
-                .await
-                .map_err(|e| Error::internal(e.to_string()))?;
+                .await;
+                // One agent's folder that can't be read doesn't stop the others'.
+                let (files, titles) = match listed {
+                    Ok(l) => l,
+                    Err(e) => {
+                        report.notes.push(format!("{agent} ({profile}): not read: {e}"));
+                        report.sources.push(src);
+                        continue;
+                    }
+                };
                 for f in files {
                     if f.mtime < since_ms {
                         src.skipped += 1;
                         continue;
                     }
                     let path_s = f.path.to_string_lossy().into_owned();
+                    // Passed over before and unchanged since: not read again.
+                    if passed.get(&path_s) == Some(&(f.size, f.mtime)) {
+                        src.skipped += 1;
+                        continue;
+                    }
+                    if agent == "gemini" && f.size > MAX_WHOLE {
+                        report.notes.push(format!(
+                            "{}: skipped: {} MB is more than a session ptyro reads whole",
+                            f.path.display(),
+                            f.size >> 20
+                        ));
+                        passed.insert(path_s, (f.size, f.mtime));
+                        src.skipped += 1;
+                        continue;
+                    }
                     let prior = by_path.get(path_s.as_str()).map(|(_, s)| (*s).clone());
                     if let Some(s) = &prior {
                         if s.deleted {
@@ -920,20 +1010,31 @@ impl Daemon {
                         _ => 0,
                     };
                     let (a, p) = (agent.clone(), f.path.clone());
-                    let Some(parsed) =
+                    let read =
                         tokio::task::spawn_blocking(move || read_session(&a, &p, start, opts))
-                            .await
-                            .map_err(|e| Error::internal(e.to_string()))?
-                    else {
-                        src.skipped += 1;
-                        continue;
+                            .await;
+                    // A file that can't be read (or breaks the parser) is passed over, never
+                    // the whole import.
+                    let parsed = match read {
+                        Ok(Some(p)) => p,
+                        Ok(None) => {
+                            passed.insert(path_s, (f.size, f.mtime));
+                            src.skipped += 1;
+                            continue;
+                        }
+                        Err(e) => {
+                            report.notes.push(format!("{}: skipped: {e}", f.path.display()));
+                            passed.insert(path_s, (f.size, f.mtime));
+                            src.skipped += 1;
+                            continue;
+                        }
                     };
                     let cwd = parsed.cwd.clone().or(f.cwd.clone());
-                    // ptyro's own chats and summaries ran in its data folder: not history.
-                    if cwd.as_deref().is_some_and(|c| {
-                        let c = Path::new(c);
-                        c.starts_with(&data) || c.starts_with(&data_real)
-                    }) {
+                    if cwd
+                        .as_deref()
+                        .is_some_and(|c| own.iter().any(|o| Path::new(c).starts_with(o)))
+                    {
+                        passed.insert(path_s, (f.size, f.mtime));
                         src.skipped += 1;
                         continue;
                     }
@@ -967,7 +1068,9 @@ impl Daemon {
                         })
                         .collect();
                     if nodes.is_empty() && known.is_none() {
-                        // Nothing said in it (a session opened and left).
+                        // Nothing said in it (a session opened and left): read again once it
+                        // changes.
+                        passed.insert(path_s, (f.size, f.mtime));
                         src.skipped += 1;
                         continue;
                     }
@@ -1266,5 +1369,66 @@ mod tests {
         let p = parse_claude(text.as_bytes(), 0, Opts::default());
         assert_eq!(p.msgs.len(), 3);
         assert_eq!(p.offset, text.len() as u64);
+    }
+
+    #[test]
+    fn a_result_too_large_closes_its_call_and_the_offset_moves_on() {
+        let call = r#"{"type":"assistant","uuid":"a1","sessionId":"s","message":{"content":[{"type":"tool_use","id":"toolu_9","name":"Bash","input":{"command":"cat big.log"}}]}}"#;
+        let result = format!(
+            r#"{{"type":"user","uuid":"u2","message":{{"content":[{{"type":"tool_result","tool_use_id":"toolu_9","content":"{}"}}]}}}}"#,
+            "x".repeat(MAX_LINE + 10)
+        );
+        let after = r#"{"type":"user","uuid":"u3","message":{"content":"thanks"}}"#;
+        let text = format!("{call}\n{result}\n{after}\n");
+        let p = parse_claude(text.as_bytes(), 0, Opts::default());
+        let tool = p.msgs.iter().find_map(|m| match &m.body {
+            ChatBody::Tool { status, output, .. } => Some((*status, output.clone())),
+            _ => None,
+        });
+        let (status, output) = tool.unwrap();
+        assert_eq!(status, ToolStatus::Done, "not Running forever");
+        assert!(output.unwrap().contains("too large"));
+        assert_eq!(p.offset, text.len() as u64, "the next import starts after it");
+        // A call never answered holds the offset back only so long.
+        let mut text = format!("{call}\n");
+        for i in 0..=STALE_LINES {
+            text.push_str(&format!(
+                r#"{{"type":"user","uuid":"n{i}","message":{{"content":"more"}}}}"#
+            ));
+            text.push('\n');
+        }
+        let p = parse_claude(text.as_bytes(), 0, Opts::default());
+        assert_eq!(p.offset, text.len() as u64);
+    }
+
+    #[test]
+    fn titles_keep_no_credentials() {
+        let t = tool_title(
+            "Bash",
+            &serde_json::json!({ "command": "curl -H 'Authorization: Bearer abcdef0123456789' https://x" }),
+        );
+        assert!(!t.contains("abcdef0123456789"), "{t}");
+        let t = tool_title(
+            "Bash",
+            &serde_json::json!({ "command": "export GITHUB_TOKEN=s3cr3t-v4lue" }),
+        );
+        assert!(!t.contains("s3cr3t"), "{t}");
+        assert_eq!(
+            tool_title("Read", &serde_json::json!({ "file_path": "src/main.rs" })),
+            "src/main.rs"
+        );
+    }
+
+    #[test]
+    fn an_odd_file_name_is_no_panic() {
+        let t = tempfile::tempdir().unwrap();
+        // No session id inside, and a name whose last 36 bytes start mid-character.
+        let f = t.path().join(format!("rollout-{}z.jsonl", "é".repeat(20)));
+        std::fs::write(&f, "{\"type\":\"event_msg\"}\n").unwrap();
+        let p = read_session("codex", &f, 0, Opts::default()).unwrap();
+        assert!(p.id.starts_with("rollout-"), "{}", p.id);
+        let short = t.path().join("é.jsonl");
+        std::fs::write(&short, "\n").unwrap();
+        assert_eq!(read_session("codex", &short, 0, Opts::default()).unwrap().id, "é");
     }
 }

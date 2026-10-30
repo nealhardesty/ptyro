@@ -257,6 +257,40 @@ function importHistories() {
         await loadChats();
     }, false);
 }
+/// Send `req`; when the daemon asks first (the chat's conversation would go to another
+/// profile's account, SPEC §22.7), show its question and send it again, agreed to.
+async function agreed(req) {
+    try {
+        return await conn.request(req);
+    }
+    catch (e) {
+        if (e.code !== "needs_confirmation")
+            throw e;
+        const yes = await new Promise((ok) => {
+            let said = false;
+            const s = confirm("Another profile?", errText(e), "Go ahead", () => { said = true; ok(true); }, false);
+            s.onClose(() => setTimeout(() => { if (!said)
+                ok(false); }, 0));
+        });
+        if (!yes)
+            throw new Error("cancelled");
+        return await conn.request({ ...req, confirmed: true });
+    }
+}
+/// `ask`, through `agreed`.
+async function askAgreed(req, ok) {
+    try {
+        const r = await agreed(req);
+        if (ok)
+            ui.toast(ok);
+        return r;
+    }
+    catch (e) {
+        if (e.message !== "cancelled")
+            ui.toast(errText(e));
+        return undefined;
+    }
+}
 /// `chat compare`: which agents answer the chat's last message again (or a new question).
 function compareAgents(c, question = "") {
     if (c.source) {
@@ -269,8 +303,7 @@ function compareAgents(c, question = "") {
         { key: "q", label: "A new question (empty: the last message again)", type: "textarea", rows: 2, value: question },
     ], "Ask them", async (v) => {
         const agents = String(v.agents ?? "").split(/[\s,]+/).filter(Boolean);
-        await conn.request({ t: "chat_compare", chat: c.id, agents, text: String(v.q ?? "").trim() || null });
-        ui.toast("Asked: each answer is a branch (‹ › flips between them; Keep this answer switches to its agent)");
+        await askAgreed({ t: "chat_compare", chat: c.id, agents, text: String(v.q ?? "").trim() || null }, "Asked: each answer is a branch (‹ › flips between them; Keep this answer switches to its agent)");
     }, { intro: "Every agent answers the same message; the chat's own carries on in its conversation, the others are told it so far." });
 }
 /// `chat find`: ask the chats; the answer is an incognito chat of its own, opened.
@@ -326,7 +359,7 @@ function chatMenu(c) {
         { title: tip("chat.agent"), label: "Switch agent", hint: `now ${c.agent}`, run: () => pickAgent(c) },
         { title: tip("chat.preset"), label: "Tools", hint: `now ${c.tools}`, run: () => pickPreset(c) },
         { title: tip("chat.folder"), label: "Folders", hint: c.folders?.length ? c.folders.join(", ") : "none", run: () => editFolders(c) },
-        { title: tip("chat.task"), label: "Make it a task", hint: "an agent carries it out in a new worktree", run: () => makeTask(c) },
+        !c.incognito && !c.source && { title: tip("chat.task"), label: "Make it a task", hint: "an agent carries it out in a new worktree", run: () => makeTask(c) },
         !c.incognito && !c.source && { title: tip("chat.compare"), label: "Ask several agents", hint: "each answers as a branch", run: () => compareAgents(c) },
         state.following === c.id && state.siblings.some((s) => sibLabel(s)) && { title: tip("chat.pick"), label: "Keep this answer", hint: "its agent takes the next message", run: () => void ask({ t: "chat_pick", chat: c.id }) },
         md,
@@ -433,7 +466,7 @@ function makeTask(c, project) {
     const mine = here.filter((p) => ws?.projects.includes(p.id));
     const pick = project ?? (mine.length === 1 ? mine[0].slug : !mine.length && here.length === 1 ? here[0].slug : undefined);
     const go = async (slug) => {
-        const r = await ask({ t: "chat_task", chat: c.id, project: slug }, "A task now: the chat says where it went");
+        const r = await askAgreed({ t: "chat_task", chat: c.id, project: slug }, "A task now: the chat says where it went");
         if (r?.agent)
             location.hash = `#/s/${encodeURIComponent(r.agent.id)}`;
     };
@@ -527,7 +560,7 @@ async function send() {
             state.items = [{ id: "first", t: "user", text }];
             ui.render();
             const compare = [...p.compare.querySelectorAll("input:checked")].map((x) => x.value);
-            const r = await conn.request({ t: "chat_new", workspace: ws, agent: p.agent.value || null, preset: p.preset.value || null, prompt: text, incognito: p.incognito.checked, folders: folderList(p.folders.value), compare: compare.length > 1 ? compare : [] });
+            const r = await agreed({ t: "chat_new", workspace: ws, agent: p.agent.value || null, preset: p.preset.value || null, prompt: text, incognito: p.incognito.checked, folders: folderList(p.folders.value), compare: compare.length > 1 ? compare : [] });
             p.reply.value = "";
             drafts.delete(p.id);
             p.sending = false;
@@ -661,7 +694,7 @@ function slash(id, text) {
                 compareAgents(c);
                 return;
             }
-            void ask({ t: "chat_compare", chat: c.id, agents, text: question || null }, `Asked ${agents.length ? agents.join(", ") : "every installed agent"}: each answer is a branch`);
+            void askAgreed({ t: "chat_compare", chat: c.id, agents, text: question || null }, `Asked ${agents.length ? agents.join(", ") : "every installed agent"}: each answer is a branch`);
             return;
         }
         case "pick":

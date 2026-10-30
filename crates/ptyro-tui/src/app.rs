@@ -405,6 +405,8 @@ pub enum Confirmed {
     MeaningOn,
     /// Import the agents' own histories as chats (SPEC §22.10).
     ChatImport,
+    /// Send this request again, agreed to (`confirmed`), its reply going to this.
+    Again(Box<Request>, Box<Pending>),
 }
 
 #[derive(Debug, Clone)]
@@ -462,6 +464,9 @@ pub enum Pending {
     ArchivedChats,
     /// A new chat made by its first message (this one): follow it.
     ChatMade(String),
+    /// A request the daemon may ask the person to agree to first (`NeedsConfirmation`: a chat's
+    /// conversation going to another profile, SPEC §22.7); its reply is the inner one's.
+    Confirm(Box<Request>, Box<Pending>),
     /// A message sent to a chat: put back if it was refused.
     ChatSent(String),
     /// A chat made (a fork, a side chat, a find): open it.
@@ -1864,6 +1869,18 @@ impl App {
 
     fn handle_reply(&mut self, pending: Pending, res: Result<Reply, ptyro_core::Error>) {
         match (pending, res) {
+            (Pending::Confirm(req, then), Err(e)) if e.code == ErrorCode::NeedsConfirmation => {
+                if let Pending::ChatMade(_) = *then
+                    && let Some(crate::chats::ChatPanel::View(v)) = &mut self.chat_panel
+                {
+                    v.sending = false;
+                }
+                self.overlay = Some(Overlay::Confirm {
+                    text: format!("{} [y/N]", e.message),
+                    action: Confirmed::Again(req, then),
+                });
+            }
+            (Pending::Confirm(_, then), r) => self.handle_reply(*then, r),
             (
                 p @ (Pending::Pad
                 | Pending::PadAdded
@@ -5166,6 +5183,15 @@ impl App {
     fn confirmed(&mut self, action: Confirmed) {
         match action {
             Confirmed::Send(req, toast) => self.request(Pending::Done(toast), *req),
+            Confirmed::Again(mut req, then) => {
+                if let Request::ChatTask { confirmed, .. }
+                | Request::ChatCompare { confirmed, .. }
+                | Request::ChatNew { confirmed, .. } = req.as_mut()
+                {
+                    *confirmed = true;
+                }
+                self.request(*then, *req);
+            }
             Confirmed::MeaningOn => self.meaning_on(),
             Confirmed::ChatImport => {
                 self.toast("importing your agents' histories…");

@@ -28,6 +28,9 @@ use ptyro_store::chat::Conv;
 use super::{Live, load_branch, store_err};
 use crate::daemon::Daemon;
 
+/// How long a helper may take to answer: one that never ends would keep the chat busy.
+const HELPER_TIMEOUT: Duration = Duration::from_secs(600);
+
 /// The live item that shows a compare's progress while it runs (not a node: it is replaced by a
 /// notice with the outcome when every agent is in).
 fn progress_id(chat: &str) -> String {
@@ -59,6 +62,8 @@ enum Outcome {
     Done,
     Stopped,
     Failed(String),
+    /// Not done within `HELPER_TIMEOUT`: stopped, and what it said so far left out.
+    TimedOut,
 }
 
 impl Daemon {
@@ -79,12 +84,52 @@ impl Daemon {
         out
     }
 
+    /// Who answers a compare in a chat of `own` (its agent and profile), in workspace `ws`:
+    /// each name resolved as a chat's agent is, a bare name under the chat's own profile, each
+    /// agent and profile once (SPEC §22.7). A name under another profile is asked about first
+    /// (`confirmed`): the branch would go to that profile's account, and that agent's history
+    /// tools search that profile's chats.
+    pub(super) fn compare_who(
+        &self,
+        own: (&str, &str),
+        ws: &str,
+        asked: &[String],
+        confirmed: bool,
+    ) -> Result<Vec<(String, String)>, Error> {
+        let mut who: Vec<(String, String)> = Vec::new();
+        for a in asked.iter().flat_map(|a| a.split(',')).map(str::trim).filter(|a| !a.is_empty()) {
+            let name = match ptyro_agents::split_agent(a) {
+                (n, None) => format!("{n}@{}", own.1),
+                _ => a.to_owned(),
+            };
+            let (agent, profile) = self.chat_agent(Some(&name), ws)?;
+            if !who.iter().any(|w| *w == (agent.clone(), profile.clone())) {
+                who.push((agent, profile));
+            }
+        }
+        let others: Vec<String> =
+            who.iter().filter(|(_, p)| p != own.1).map(|(a, p)| chats::agent_label(a, p)).collect();
+        if !others.is_empty() && !confirmed {
+            return Err(Error::new(
+                ErrorCode::NeedsConfirmation,
+                format!(
+                    "{} {} under another profile than this chat's ({}): the conversation would go to that account, and its history tools search that profile's chats. Ask anyway?",
+                    others.join(", "),
+                    if others.len() == 1 { "runs" } else { "run" },
+                    own.1
+                ),
+            ));
+        }
+        Ok(who)
+    }
+
     /// Ask `agents` the message `text` (a new one), or the last one again (SPEC §22.7).
     pub(super) async fn chat_compare(
         self: &Arc<Self>,
         info: &ChatInfo,
         agents: Vec<String>,
         text: Option<String>,
+        confirmed: bool,
     ) -> Result<(), Error> {
         if info.incognito {
             return Err(Error::invalid(
@@ -101,15 +146,9 @@ impl Daemon {
         self.busy_check(&live, info)?;
         let db = self.chat_db()?;
         let ws = self.workspace_name(&info.workspace);
-        // Who: as asked (each resolved as a chat's agent is), else every installed one.
+        // Who: as asked, else every installed one; a bare name under the chat's profile.
         let asked = if agents.is_empty() { self.compare_defaults(info) } else { agents };
-        let mut who: Vec<(String, String)> = Vec::new();
-        for a in asked.iter().flat_map(|a| a.split(',')).map(str::trim).filter(|a| !a.is_empty()) {
-            let (agent, profile) = self.chat_agent(Some(a), &ws)?;
-            if !who.iter().any(|w| *w == (agent.clone(), profile.clone())) {
-                who.push((agent, profile));
-            }
-        }
+        let mut who = self.compare_who((&info.agent, &info.profile), &ws, &asked, confirmed)?;
         let branch = self.rec_branch(&info.id, None).await?;
         if live.items.locked().items.is_empty() && !branch.is_empty() {
             self.reload_branch(&live).await;
@@ -281,6 +320,7 @@ impl Daemon {
                         Outcome::Done => cmp.set(&label, "done", ""),
                         Outcome::Stopped => cmp.set(&label, "stopped", ""),
                         Outcome::Failed(why) => cmp.set(&label, "failed", &why),
+                        Outcome::TimedOut => cmp.set(&label, "failed", "timed out"),
                     }
                     me.compare_done(&live.id, &cmp).await;
                     return;
@@ -333,10 +373,20 @@ impl Daemon {
             // Stopped before it said anything: a tool call alone is no answer to keep.
             if matches!(outcome, Outcome::Stopped)
                 && !answer.iter().any(|n| matches!(n.body, ChatBody::Assistant { .. }))
+                || matches!(outcome, Outcome::TimedOut)
             {
                 answer.clear();
             }
+            // Deleted meanwhile: nothing is copied into it.
+            let exists = match me.chat_db() {
+                Ok(db) => matches!(db.get(info.id.clone()).await, Ok(Some(_))),
+                Err(_) => false,
+            };
+            if !exists {
+                answer.clear();
+            }
             let (state, note) = match outcome {
+                Outcome::TimedOut => ("failed", "timed out".to_owned()),
                 _ if answer.is_empty() && cmp.stopped.load(Ordering::SeqCst) => {
                     ("stopped", String::new())
                 }
@@ -408,6 +458,7 @@ impl Daemon {
     async fn helper_outcome(&self, live: &Arc<Live>, cmp: &Arc<Compare>, user: &str) -> Outcome {
         let mut rx = live.rev.subscribe();
         let mut asked_stop: Option<Instant> = None;
+        let started = Instant::now();
         loop {
             let (end, error, asks) = {
                 let t = live.items.locked();
@@ -442,6 +493,10 @@ impl Daemon {
             if let Some(st) = &e.session.structured {
                 if asks && st.has_pending() {
                     st.answer(Decision::Deny);
+                }
+                if started.elapsed() > HELPER_TIMEOUT {
+                    st.interrupt();
+                    return Outcome::TimedOut;
                 }
                 if cmp.stopped.load(Ordering::SeqCst) {
                     let since = *asked_stop.get_or_insert_with(|| {
@@ -479,6 +534,14 @@ impl Daemon {
             }
         };
         if !mine {
+            return;
+        }
+        // Deleted meanwhile: nothing to tell it, and no live state to make again.
+        let exists = match self.chat_db() {
+            Ok(db) => matches!(db.get(chat.to_owned()).await, Ok(Some(_))),
+            Err(_) => false,
+        };
+        if !exists {
             return;
         }
         let lock = self.chats.lock_for(chat);
@@ -537,11 +600,19 @@ impl Daemon {
         if info.incognito {
             return Err(Error::invalid("an incognito chat keeps no branches"));
         }
+        if info.source.is_some() {
+            return Err(imported_refusal(info));
+        }
+        // Not mid-answer or mid-compare: the notice would split an answer being written.
+        let lock = self.chats.lock_for(&info.id);
+        let _one = lock.lock().await;
+        let live = self.chats.live(&info.id);
+        self.busy_check(&live, info)?;
         let db = self.chat_db()?;
         let tip = match node {
             Some(n) => {
                 let n = self.find_node(&info.id, n).await?;
-                self.chat_branch(info, &n.id).await?;
+                self.show_branch(&live, info, &n.id).await?;
                 db.get(info.id.clone())
                     .await
                     .map_err(store_err)?
@@ -558,7 +629,6 @@ impl Daemon {
                 "no agent wrote that branch (it is yours, or imported): nothing to switch to",
             ));
         };
-        let live = self.chats.live(&info.id);
         let text = if agent == info.agent && profile == info.profile {
             format!("kept this answer: {} carries on from it", chats::agent_label(&agent, &profile))
         } else {
@@ -573,8 +643,6 @@ impl Daemon {
                 agent
             )
         };
-        let lock = self.chats.lock_for(&info.id);
-        let _one = lock.lock().await;
         if live.items.locked().items.is_empty() {
             self.reload_branch(&live).await;
         }

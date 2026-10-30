@@ -367,7 +367,9 @@ In the TUI every workspace has a **CHATS** section in the sidebar; `C-q m` start
 file (`[chat] preset`); give it a folder (`--folder`, `/folder`) and it reads that folder and
 nothing else, and a preset of your own can add a shell (shown with `⚠`) or your MCP servers
 (`[chat.tools.NAME] shell`, `mcp`). Where an agent can't enforce a preset by itself the chat says
-`best effort`. `chat task` (`/task`) hands a chat's plan to an agent in a new worktree. Gemini CLI
+`best effort`. `chat task` (`/task`) hands a chat's plan to an agent in a new worktree (not an
+incognito chat's, which keeps nothing; ptyro asks first when the project runs under another profile
+than the chat). Gemini CLI
 works even when it is only an `npx` alias: ptyro finds it in npm's cache, nvm or the npm prefix
 (`ptyro doctor` shows where, and offers `npm i -g @google/gemini-cli`). Its agent stops when idle and picks up again from the saved conversation,
 after a restart too. A linked machine's chats show under its workspaces and are used from here
@@ -380,7 +382,9 @@ otherwise. Chats live in their own file, `chat.db` (`ptyro doctor` checks it). S
 
 **Ask several agents** (`chat compare`, `/compare codex gemini` in a chat, Ask several on a new
 chat's page): each answers the same message as a branch, `‹ 2/3 codex ›`, the chat's own agent in
-its own conversation and the others told the conversation so far. `chat pick` (`/pick`, Keep this
+its own conversation and the others told the conversation so far. They answer under the chat's
+own profile; naming another (`codex@work`) asks first, as the conversation would go to that
+account. `chat pick` (`/pick`, Keep this
 answer) keeps one: its agent takes the next message. **Your agents' own histories** come in with
 `chat import` (`chat.import` in the TUI, ⇣ on the web's Chats page): every profile's Claude Code,
 Codex and Gemini sessions become read-only chats (`⇣`, "imported from claude · ~/repo"), searchable

@@ -51,19 +51,21 @@ pub fn read(bytes: &[u8], name: &str) -> Result<Matrix, String> {
         .filter_map(|v| v.as_u64().map(|v| v as usize))
         .collect();
     let [from, to] = offs[..] else { return Err("bad data_offsets".into()) };
-    let data_at = 8 + len;
-    let raw = bytes
-        .get(data_at + from..data_at + to)
-        .ok_or("the tensor's data is past the end of the file")?;
+    let past = "the tensor's data is past the end of the file";
+    let data_at = len.checked_add(8).ok_or(past)?;
+    let (start, end) =
+        (data_at.checked_add(from).ok_or(past)?, data_at.checked_add(to).ok_or(past)?);
+    let raw = bytes.get(start..end).ok_or(past)?;
     let n = rows.checked_mul(cols).ok_or("the tensor is too large")?;
+    let bytes_of = |w: usize| n.checked_mul(w);
     let data: Vec<f32> = match t["dtype"].as_str() {
-        Some("F32") if raw.len() == n * 4 => {
+        Some("F32") if bytes_of(4) == Some(raw.len()) => {
             raw.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect()
         }
-        Some("F16") if raw.len() == n * 2 => {
+        Some("F16") if bytes_of(2) == Some(raw.len()) => {
             raw.as_chunks::<2>().0.iter().map(|b| f16_to_f32(u16::from_le_bytes(*b))).collect()
         }
-        Some("BF16") if raw.len() == n * 2 => raw
+        Some("BF16") if bytes_of(2) == Some(raw.len()) => raw
             .as_chunks::<2>()
             .0
             .iter()
@@ -151,5 +153,15 @@ mod tests {
         assert!(read(&f16("I8", &[0, 0]), "e").unwrap_err().contains("dtype"));
         assert!(read(&b[..20], "embeddings").is_err());
         assert!(read(&b[..b.len() - 1], "embeddings").is_err());
+        // Offsets and shapes that overflow are errors, never a panic.
+        let huge = |shape: &str, offs: &str| {
+            let h = format!(r#"{{"e":{{"dtype":"F32","shape":{shape},"data_offsets":{offs}}}}}"#);
+            let mut b = (h.len() as u64).to_le_bytes().to_vec();
+            b.extend_from_slice(h.as_bytes());
+            b.extend_from_slice(&[0; 8]);
+            read(&b, "e")
+        };
+        assert!(huge("[1,2]", &format!("[{},{}]", u64::MAX - 1, u64::MAX)).is_err());
+        assert!(huge(&format!("[{},2]", u64::MAX / 4), "[0,8]").is_err());
     }
 }

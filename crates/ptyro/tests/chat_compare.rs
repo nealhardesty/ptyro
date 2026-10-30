@@ -26,7 +26,8 @@ impl World {
         let hs = h.to_string_lossy().into_owned();
         let env = [("HOME", hs.as_str()), ("GIT_CONFIG_NOSYSTEM", "1"), ("SHELL", "/bin/sh")];
         let mut config = String::from(
-            "[chat]\ntitle_command = [\"/bin/sh\", \"-c\", \"cat >/dev/null; echo '\\\"A fake title.\\\"'\"]\n",
+            "[chat]\ntitle_command = [\"/bin/sh\", \"-c\", \"cat >/dev/null; echo '\\\"A fake title.\\\"'\"]\n\
+             [profiles.work]\nlabel = \"work\"\n[profiles.personal]\nlabel = \"personal\"\n",
         );
         for a in ["claude", "codex", "gemini", "opencode"] {
             if broken.contains(&a) {
@@ -225,6 +226,12 @@ fn stop_stops_every_agent_and_a_compare_is_busy_until_then() {
     let busy = w.cli(&["chat", "send", &addr, "--no-wait", "meanwhile"]);
     assert!(!busy.status.success());
     assert!(String::from_utf8_lossy(&busy.stderr).contains("comparing"));
+    // Nor is an answer kept, or the chat made a task, mid-compare.
+    for args in [["chat", "pick", addr.as_str()], ["chat", "task", addr.as_str()]] {
+        let out = w.cli(&args);
+        assert!(!out.status.success(), "{args:?}");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("comparing"), "{args:?}: {out:?}");
+    }
     w.until("both helpers run", || w.engines().len() >= 2);
     w.ok(&["chat", "stop", &addr]);
     w.until("the compare is over", || !comparing());
@@ -257,4 +264,61 @@ fn a_new_question_goes_to_several_agents_and_the_first_answer_is_shown() {
     who.sort();
     assert_eq!(who, ["claude", "gemini"], "{out}");
     assert_eq!(w.json(&["chat", "ls", "--json"]).as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn a_compare_keeps_to_the_chats_profile() {
+    let w = World::new(&[]);
+    // A chat of profile `personal` in a workspace of profile `work`.
+    w.ok(&["ws", "new", "job", "--profile", "work"]);
+    w.ok(&["chat", "new", "-w", "job", "--agent", "claude@personal", "hello"]);
+    let list = w.json(&["chat", "ls", "--json"]);
+    let c = &list.as_array().unwrap()[0];
+    assert_eq!(c["profile"], "personal", "{c}");
+    let addr = format!("c:{}", c["handle"].as_str().unwrap());
+    // Bare names are the chat's profile's, never the workspace's: its history stays there.
+    let out = w.json(&["chat", "compare", &addr, "--agents", "claude,codex", "--json", "q one"]);
+    let mut who: Vec<&str> =
+        out["answers"].as_array().unwrap().iter().map(|a| a["agent"].as_str().unwrap()).collect();
+    who.sort();
+    assert_eq!(who, ["claude@personal", "codex@personal"], "{out}");
+    // `claude` is the chat's own agent: it carried on in its conversation, unseeded.
+    let claude =
+        out["answers"].as_array().unwrap().iter().find(|a| a["agent"] == "claude@personal");
+    assert!(!claude.unwrap()["text"].as_str().unwrap().contains("The conversation so far"));
+    // Another profile, named: asked first (no terminal here, so refused with the flag to pass).
+    let other = w.cli(&["chat", "compare", &addr, "--agents", "claude,codex@work", "q two"]);
+    assert!(!other.status.success());
+    let err = String::from_utf8_lossy(&other.stderr);
+    assert!(
+        err.contains("codex@work") && err.contains("another profile") && err.contains("--yes"),
+        "{err}"
+    );
+    assert_eq!(w.read(&addr)["chat"]["comparing"], Value::Null, "nothing was asked");
+    // Agreed to: it goes there.
+    let out = w.json(&[
+        "chat",
+        "compare",
+        &addr,
+        "--agents",
+        "claude,codex@work",
+        "--yes",
+        "--json",
+        "q two",
+    ]);
+    let mut who: Vec<&str> =
+        out["answers"].as_array().unwrap().iter().map(|a| a["agent"].as_str().unwrap()).collect();
+    who.sort();
+    assert_eq!(who, ["claude@personal", "codex@work"], "{out}");
+}
+
+#[test]
+fn a_compare_of_one_agent_twice_is_refused_before_a_chat_is_made() {
+    let w = World::new(&[]);
+    for agents in ["claude,claude", "claude,claude@default"] {
+        let out = w.cli(&["chat", "new", "--agent", "claude", "--compare", agents, "hi"]);
+        assert!(!out.status.success(), "{agents}");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("two different agents"), "{out:?}");
+    }
+    assert!(w.json(&["chat", "ls", "--json"]).as_array().unwrap().is_empty(), "no chat made");
 }

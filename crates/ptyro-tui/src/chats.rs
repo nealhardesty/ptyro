@@ -874,12 +874,11 @@ impl App {
     fn compare_request(&mut self, chat: String, agents: Vec<String>, text: Option<String>) {
         let who =
             if agents.is_empty() { "every installed agent".to_owned() } else { agents.join(", ") };
-        self.request(
-            Pending::Done(format!(
-                "asking {who}: each answer is a branch (Alt-←/→ flips, /pick keeps one)"
-            )),
-            Request::ChatCompare { chat, agents, text },
-        );
+        let done = Pending::Done(format!(
+            "asking {who}: each answer is a branch (Alt-←/→ flips, /pick keeps one)"
+        ));
+        let req = Request::ChatCompare { chat, agents, text, confirmed: false };
+        self.request(Pending::Confirm(Box::new(req.clone()), Box::new(done)), req);
     }
 
     /// A message to an imported chat went to a fork of it: show the fork.
@@ -1042,10 +1041,15 @@ impl App {
             }
         });
         if let Some(p) = project {
-            return self.request(
-                Pending::Done("made a task: the chat says where it went".into()),
-                Request::ChatTask { chat, project: Some(p), agent: None, name: None },
-            );
+            let done = Pending::Done("made a task: the chat says where it went".into());
+            let req = Request::ChatTask {
+                chat,
+                project: Some(p),
+                agent: None,
+                name: None,
+                confirmed: false,
+            };
+            return self.request(Pending::Confirm(Box::new(req.clone()), Box::new(done)), req);
         }
         let items: Vec<Item> = self
             .projects
@@ -1332,19 +1336,19 @@ impl App {
                                 vec![ChatItem::new("first", ChatBody::User { text: text.clone() })],
                                 String::new(),
                             );
-                            self.request(
-                                Pending::ChatMade(text.clone()),
-                                Request::ChatNew {
-                                    workspace: Some(v.workspace.clone()),
-                                    agent: v.agent.clone(),
-                                    preset: v.preset.clone(),
-                                    title: None,
-                                    prompt: Some(text),
-                                    incognito: v.incognito,
-                                    folders: v.folders.clone(),
-                                    compare: v.compare.clone(),
-                                },
-                            );
+                            let req = Request::ChatNew {
+                                workspace: Some(v.workspace.clone()),
+                                agent: v.agent.clone(),
+                                preset: v.preset.clone(),
+                                title: None,
+                                prompt: Some(text.clone()),
+                                incognito: v.incognito,
+                                folders: v.folders.clone(),
+                                compare: v.compare.clone(),
+                                confirmed: false,
+                            };
+                            let made = Box::new(Pending::ChatMade(text));
+                            self.request(Pending::Confirm(Box::new(req.clone()), made), req);
                         }
                     }
                 }
