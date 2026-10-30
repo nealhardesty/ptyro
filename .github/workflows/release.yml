@@ -46,7 +46,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -81,7 +81,7 @@ jobs:
         include:
           - { os: ubuntu-24.04, triple: x86_64-unknown-linux-gnu }
           - { os: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu }
-          - { os: macos-14, triple: aarch64-apple-darwin }
+          - { os: macos-15, triple: aarch64-apple-darwin }
           # macos-13 is retired; macos-15-intel is the supported x86_64 image.
           - { os: macos-15-intel, triple: x86_64-apple-darwin }
     runs-on: ${{ matrix.os }}

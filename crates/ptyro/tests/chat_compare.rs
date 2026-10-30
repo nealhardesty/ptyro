@@ -316,6 +316,36 @@ fn a_compare_keeps_to_the_chats_profile() {
 }
 
 #[test]
+fn another_agent_or_a_fork_keeps_to_the_chats_profile_and_asks_before_another() {
+    let w = World::new(&[]);
+    w.ok(&["ws", "new", "job", "--profile", "work"]);
+    w.ok(&["chat", "new", "-w", "job", "--agent", "claude@personal", "hello"]);
+    let c = w.json(&["chat", "ls", "--json"]).as_array().unwrap()[0].clone();
+    let addr = format!("c:{}", c["handle"].as_str().unwrap());
+    let who = |w: &World, addr: &str| {
+        let c = w.read(addr)["chat"].clone();
+        (c["agent"].as_str().unwrap().to_owned(), c["profile"].as_str().unwrap().to_owned())
+    };
+    // A bare name is the chat's profile's, not the workspace's (`work`).
+    w.ok(&["chat", "set", &addr, "--agent", "codex"]);
+    assert_eq!(who(&w, &addr), ("codex".into(), "personal".into()));
+    // Another profile, named: asked first, and refused changes nothing (no terminal here).
+    let out = w.cli(&["chat", "set", &addr, "--agent", "claude@work", "--preset", "none"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("another profile") && err.contains("--yes"), "{err}");
+    assert_eq!(who(&w, &addr), ("codex".into(), "personal".into()));
+    assert_eq!(w.read(&addr)["chat"]["tools"], "chat", "nothing of it was applied");
+    w.ok(&["chat", "set", &addr, "--agent", "claude@work", "--yes"]);
+    assert_eq!(who(&w, &addr), ("claude".into(), "work".into()));
+    // A fork: the same.
+    let out = w.cli(&["chat", "fork", &addr, "--agent", "codex@personal"]);
+    assert!(!out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = w.json(&["chat", "fork", &addr, "--agent", "codex", "--json"]);
+    assert_eq!((out["agent"].as_str(), out["profile"].as_str()), (Some("codex"), Some("work")));
+}
+
+#[test]
 fn a_compare_of_one_agent_twice_is_refused_before_a_chat_is_made() {
     let w = World::new(&[]);
     let asked: [&[&str]; 3] = [

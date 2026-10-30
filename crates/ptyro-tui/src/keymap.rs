@@ -139,7 +139,10 @@ pub const ACTIONS: &[ActionSpec] = &[
     ),
     a("session.mute", "Mute this session's notifications for an hour (the inbox still gets them)"),
     a("notify.test", "Send a test notification through every channel and sink"),
-    a("session.last", "Show the previously shown session here"),
+    a(
+        "session.last",
+        "Back and forth: a chat and the session under it, else the last session here",
+    ),
     a("session.stop", "Stop the session (HUP→TERM→KILL); removes it if it already exited"),
     a("session.kill", "Kill the session's process group now (SIGKILL)"),
     a("session.restart", "Run an exited session's command again"),

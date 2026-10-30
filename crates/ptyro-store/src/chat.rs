@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
-use ptyro_core::chat::ChatBody;
+use ptyro_core::chat::{ChatBody, NoticeLevel, ToolStatus};
 use ptyro_core::chats::{self, ChatInfo, ChatNode, ChatSiblings};
 use rusqlite::{Connection, OptionalExtension, params};
 use rusqlite_migration::{M, Migrations};
@@ -691,6 +691,95 @@ impl ChatDb {
                 put_node(db, &chat, &end, None, &origin, false)?;
                 touched.push(chat);
             }
+            // A turn cut off before any of its answer arrived (thinking, a tool, a permission
+            // card, the message alone): its tools and cards can't go on, and its end says why,
+            // so nobody waits for good and a card isn't answered into nothing.
+            let rows = |db: &Connection, sql: &str| -> Result<Vec<(String, ChatNode)>> {
+                let mut st = db.prepare(sql)?;
+                let v = st
+                    .query_map([], |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, Option<String>>(2)?,
+                            r.get::<_, String>(3)?,
+                            r.get::<_, i64>(4)?,
+                        ))
+                    })?
+                    .filter_map(|r| r.ok())
+                    .filter_map(|(chat, id, parent, body, at)| {
+                        let body = serde_json::from_str(&body).ok()?;
+                        Some((chat, ChatNode { id, parent, at_ms: at as u64, body }))
+                    })
+                    .collect();
+                Ok(v)
+            };
+            let stuck = rows(
+                db,
+                "SELECT chat, id, parent, body, at_ms FROM node WHERE deleted_at IS NULL
+                   AND ((kind = 'tool' AND json_extract(body, '$.status') IN ('pending', 'running'))
+                     OR (kind = 'permission' AND json_extract(body, '$.decided') IS NULL))",
+            )?;
+            for (chat, mut n) in stuck {
+                match &mut n.body {
+                    ChatBody::Tool { status, .. } => *status = ToolStatus::Failed,
+                    ChatBody::Permission { decided, .. } => *decided = Some("cancelled".into()),
+                    _ => continue,
+                }
+                put_node(db, &chat, &n, None, &origin, false)?;
+            }
+            let tips = rows(
+                db,
+                "SELECT c.id, n.id, n.parent, n.body, n.at_ms FROM chat c JOIN node n ON n.id = c.leaf
+                   WHERE c.deleted_at IS NULL AND n.kind != 'turn_end'",
+            )?;
+            for (chat, tip) in tips {
+                // Back to the person's message: an answer (or an end) on the way means the
+                // turn isn't open (an imported or compared answer has no end of its own).
+                let mut at = Some(tip.clone());
+                let open = loop {
+                    match at.as_ref().map(|n| &n.body) {
+                        Some(ChatBody::User { .. }) => break true,
+                        Some(ChatBody::Assistant { .. } | ChatBody::TurnEnd { .. }) | None => {
+                            break false;
+                        }
+                        // It said why already (an agent that wouldn't start).
+                        Some(ChatBody::Notice { level: NoticeLevel::Error, .. }) => break false,
+                        Some(_) => {}
+                    }
+                    at = match at.and_then(|n| n.parent) {
+                        Some(p) => node_by_id(db, &p)?,
+                        None => None,
+                    };
+                };
+                if !open {
+                    continue;
+                }
+                let why = ChatNode {
+                    id: chats::new_id(),
+                    parent: Some(tip.id.clone()),
+                    at_ms: ptyro_core::now_ms(),
+                    body: ChatBody::Notice {
+                        level: NoticeLevel::Warn,
+                        text: "ptyro stopped before this was answered: retry to ask again".into(),
+                    },
+                };
+                put_node(db, &chat, &why, None, &origin, false)?;
+                let end = ChatNode {
+                    id: chats::new_id(),
+                    parent: Some(why.id.clone()),
+                    at_ms: ptyro_core::now_ms(),
+                    body: ChatBody::TurnEnd {
+                        stop: "interrupted".into(),
+                        cost_micro_usd: None,
+                        duration_ms: None,
+                        input_tokens: None,
+                        output_tokens: None,
+                    },
+                };
+                put_node(db, &chat, &end, None, &origin, false)?;
+                touched.push(chat);
+            }
             Ok(touched)
         })
         .await
@@ -1357,6 +1446,16 @@ fn private(path: &Path) {
     let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
 }
 
+fn node_by_id(db: &Connection, id: &str) -> Result<Option<ChatNode>> {
+    Ok(db
+        .query_row(
+            "SELECT id, parent, body, at_ms FROM node WHERE id = ?1 AND deleted_at IS NULL",
+            [id],
+            node_row,
+        )
+        .optional()?)
+}
+
 fn put_node(
     db: &mut Connection,
     chat: &str,
@@ -1861,6 +1960,52 @@ mod tests {
         assert_eq!(b[1].body, ChatBody::Assistant { text: "Hel".into(), streaming: false });
         assert!(matches!(&b[2].body, ChatBody::TurnEnd { stop, .. } if stop == "interrupted"));
         assert!(db.close_interrupted().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_crash_before_any_answer_closes_the_turn_its_tools_and_its_card() {
+        let db = db_with_chat().await;
+        let node = |id: &str, parent: &str, body: ChatBody| ChatNode {
+            id: id.into(),
+            parent: Some(parent.into()),
+            at_ms: 1,
+            body,
+        };
+        db.put_node_now("c1".into(), user("u1", None, "rm it?"), None, false).await.unwrap();
+        let tool = ChatBody::Tool {
+            name: "Bash".into(),
+            title: "ls".into(),
+            status: ToolStatus::Running,
+            output: None,
+            diff: None,
+            files: vec![],
+        };
+        db.put_node_now("c1".into(), node("t1", "u1", tool), None, false).await.unwrap();
+        let card = ChatBody::Permission {
+            request: "r".into(),
+            tool: "Bash".into(),
+            title: "rm -rf x".into(),
+            options: ptyro_core::chat::PermOption::standard(),
+            decided: None,
+        };
+        db.put_node_now("c1".into(), node("p1", "t1", card), None, false).await.unwrap();
+        assert_eq!(db.close_interrupted().await.unwrap(), ["c1"]);
+        let b = db.branch("c1".into(), None).await.unwrap();
+        assert!(matches!(&b[1].body, ChatBody::Tool { status: ToolStatus::Failed, .. }), "{b:?}");
+        assert!(
+            matches!(&b[2].body, ChatBody::Permission { decided: Some(d), .. } if d == "cancelled")
+        );
+        assert!(matches!(&b[3].body, ChatBody::Notice { text, .. } if text.contains("retry")));
+        assert!(matches!(&b[4].body, ChatBody::TurnEnd { stop, .. } if stop == "interrupted"));
+        assert!(db.close_interrupted().await.unwrap().is_empty(), "once");
+        // An answer with no end of its own (imported, compared) is no open turn.
+        let db = db_with_chat().await;
+        db.put_node_now("c1".into(), user("u1", None, "hi"), None, false).await.unwrap();
+        db.put_node_now("c1".into(), answer("a1", "u1", "Hello", false), None, false)
+            .await
+            .unwrap();
+        assert!(db.close_interrupted().await.unwrap().is_empty());
+        assert_eq!(db.branch("c1".into(), None).await.unwrap().len(), 2);
     }
 
     #[tokio::test]

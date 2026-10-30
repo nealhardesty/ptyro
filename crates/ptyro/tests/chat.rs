@@ -167,6 +167,42 @@ fn a_chat_is_answered_kept_and_carried_on_after_a_restart() {
 }
 
 #[test]
+fn a_stop_before_a_resumed_chat_answers_is_a_stop_not_a_resend() {
+    let mut w = World::new("");
+    w.ok(&["chat", "new", "hello"]);
+    let addr = format!("c:{}", w.chats()[0]["handle"].as_str().unwrap());
+    // After a restart the next message resumes the agent's conversation; stopped before it
+    // says a word, that is the end of it (it was taken for a failed resume, and sent again).
+    w.d.restart().unwrap();
+    w.ok(&["chat", "send", "--no-wait", &addr, "pause 4"]);
+    w.until("answering", || w.chats()[0]["status"] == "working");
+    w.ok(&["chat", "stop", &addr]);
+    w.until("stopped", || w.chats()[0]["status"] != "working");
+    std::thread::sleep(Duration::from_secs(5));
+    let shown = w.chat(&addr);
+    assert_eq!(texts(&shown, "user"), ["hello", "pause 4"], "{shown}");
+    assert!(!texts(&shown, "assistant").iter().any(|t| t == "paused"), "sent again: {shown}");
+    assert!(!texts(&shown, "notice").iter().any(|t| t.contains("couldn't")), "{shown}");
+}
+
+#[test]
+fn an_agent_that_wont_stop_is_ended_and_the_chat_goes_on() {
+    let w = World::new("");
+    w.ok(&["chat", "new", "--agent", "codex", "--no-wait", "work 40 slowly"]);
+    let addr = format!("c:{}", w.chats()[0]["handle"].as_str().unwrap());
+    w.until("answering", || w.chats()[0]["status"] == "working");
+    // The fake doesn't hear an interrupt mid-step: ended after the grace, and said so.
+    w.ok(&["chat", "stop", &addr]);
+    w.until("ended", || {
+        texts(&w.chat(&addr), "notice").iter().any(|t| t.contains("didn't stop when asked"))
+    });
+    assert_ne!(w.chats()[0]["status"], "working");
+    // Not busy for good: the next message is answered.
+    let out = w.ok(&["chat", "send", &addr, "and now?"]);
+    assert!(out.contains("and now?"), "{out}");
+}
+
+#[test]
 fn titles_pins_archive_export_and_delete() {
     let w = World::new("");
     w.ok(&["chat", "new", "--title", "Dinner ideas", "--no-wait", "what should I cook"]);
@@ -196,6 +232,40 @@ fn titles_pins_archive_export_and_delete() {
 }
 
 #[test]
+fn plain_chat_takes_new_chats_flags_and_ask_reads_any_bytes_piped_in() {
+    let w = World::new("");
+    // As the README has it: `ptyro chat --folder ~/notes "…"`, no `new`.
+    let notes = w.home().join("notes");
+    std::fs::create_dir_all(&notes).unwrap();
+    w.ok(&["chat", "--folder", notes.to_str().unwrap(), "--no-wait", "what is left?"]);
+    let c = &w.chats()[0];
+    assert_eq!(c["folders"][0].as_str(), notes.to_str(), "{c}");
+    // Piped context that isn't UTF-8 (a Latin-1 file in a diff) still goes, fenced past its
+    // own backticks.
+    let ask = |args: &[&str], input: &[u8]| {
+        use std::io::Write;
+        let mut child =
+            w.d.cmd()
+                .args(args)
+                .env("HOME", w.home())
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+        child.stdin.take().unwrap().write_all(input).unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let out = ask(&["chat", "ask", "review"], b"caf\xe9 au lait\n```sh\nls\n```\n");
+    assert!(out.contains("caf\u{fffd} au lait") && out.contains("````"), "{out}");
+    // Not read when asked not to (a loop's lines are its own).
+    let out = ask(&["chat", "ask", "--no-stdin", "just this"], b"the loop's next line\n");
+    assert_eq!(out.trim(), "you said: just this");
+}
+
+#[test]
 fn ask_answers_once_and_keeps_nothing() {
     let w = World::new("");
     let out = w.ok(&["chat", "ask", "what", "is", "2+2"]);
@@ -207,6 +277,22 @@ fn ask_answers_once_and_keeps_nothing() {
 }
 
 #[test]
+fn incognito_by_default_still_keeps_a_chat_asked_to() {
+    let w = World::new("incognito = true");
+    w.ok(&["chat", "new", "--no-wait", "forget me"]);
+    w.ok(&["chat", "new", "--keep", "--no-wait", "keep me"]);
+    w.ok(&["chat", "ask", "--keep", "and keep this"]);
+    let mut kept: Vec<(bool, String)> = w
+        .chats()
+        .iter()
+        .map(|c| (c["incognito"] == true, c["title"].as_str().unwrap_or_default().to_owned()))
+        .collect();
+    kept.sort();
+    assert_eq!(kept.iter().filter(|(i, _)| *i).count(), 1, "only the first: {kept:?}");
+    assert_eq!(kept.iter().filter(|(i, _)| !*i).count(), 2, "--keep wins: {kept:?}");
+}
+
+#[test]
 fn a_permission_card_is_answered_and_chats_can_be_switched_off() {
     let w = World::new("");
     w.ok(&["chat", "new", "--no-wait", "ask rm -rf /tmp/nothing"]);
@@ -214,9 +300,28 @@ fn a_permission_card_is_answered_and_chats_can_be_switched_off() {
     w.until("a permission request", || {
         w.chats()[0]["attention"]["text"].as_str().is_some_and(|t| t.contains("wants permission"))
     });
+    // The inbox says what happened, never what it asked: a chat's words stay in chat.db.
+    let inbox = w.json(&["inbox", "--json"]);
+    let bodies: Vec<&str> =
+        inbox.as_array().unwrap().iter().filter_map(|e| e["body"].as_str()).collect();
+    assert_eq!(bodies, ["the chat asks for permission"], "{inbox}");
     w.ok(&["chat", "answer", &addr, "deny"]);
     w.until("the answer", || texts(&w.chat(&addr), "assistant").iter().any(|t| t == "answer: no"));
     assert!(w.chats()[0]["attention"].is_null());
+    // An incognito chat's card is no inbox entry at all.
+    w.ok(&["chat", "new", "--incognito", "--no-wait", "ask rm -rf /tmp/secretplan"]);
+    w.until("its permission request", || {
+        w.chats().iter().any(|c| {
+            c["incognito"] == true
+                && c["attention"]["text"].as_str().is_some_and(|t| t.contains("wants permission"))
+        })
+    });
+    assert_eq!(w.json(&["inbox", "--json"]).as_array().unwrap().len(), 1, "no new entry");
+    let data = w.d.home.path().join("data");
+    for f in [data.join("ptyro.db"), data.join("ptyro.db-wal")] {
+        let bytes = String::from_utf8_lossy(&std::fs::read(&f).unwrap_or_default()).into_owned();
+        assert!(!bytes.contains("rm -rf"), "{} holds a chat's words", f.display());
+    }
 }
 
 #[test]

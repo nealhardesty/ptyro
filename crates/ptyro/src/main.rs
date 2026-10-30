@@ -552,8 +552,9 @@ enum Cmd {
     Chat {
         #[command(subcommand)]
         cmd: Option<chat::ChatCmd>,
-        /// A first message (the same as `ptyro chat new …`)
-        words: Vec<String>,
+        /// A new chat's first message and options (the same as `ptyro chat new …`)
+        #[command(flatten)]
+        new: chat::NewArgs,
     },
     /// The scratchpad: one notes file for ideas and bugs (`$PTYRO_SCRATCHPAD`), the same in every
     /// session. Opens in your editor, here; `--pane` opens it as a session (`C-q ;` in the TUI)

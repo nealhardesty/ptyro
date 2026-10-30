@@ -693,6 +693,8 @@ pub struct App {
     pub chat_list: Vec<ptyro_core::chats::ChatInfo>,
     /// The chat list or a chat, over the panes.
     pub chat_panel: Option<crate::chats::ChatPanel>,
+    /// The chat (or list) a session took the place of, as it was: `session.last` brings it back.
+    pub chat_aside: Option<crate::chats::ChatPanel>,
     /// Change sets in the sidebar.
     pub set_nodes: Vec<crate::sets::SetNode>,
     /// Close the inspector when the session it asked for appears (`E`: commit in the editor).
@@ -827,6 +829,7 @@ impl App {
             sets_view: None,
             chat_list: Vec::new(),
             chat_panel: None,
+            chat_aside: None,
             set_nodes: Vec::new(),
             close_inspector_after: false,
             follow,
@@ -929,6 +932,12 @@ impl App {
         // A new daemon (or connection) knows nothing of our focus or control.
         self.reported_focus = None;
         self.controller.clear();
+        // Nor of the chat shown: it is followed again, or it would never show another word.
+        if let Some(crate::chats::ChatPanel::View(v)) = &self.chat_panel
+            && let Some(id) = &v.id
+        {
+            let _ = client.send(ClientMsg::ChatSubscribe { chat: id.clone() });
+        }
         Ok(())
     }
 
@@ -2444,9 +2453,12 @@ impl App {
     /// Show `id`: in a new split when one is asked for, else without a split (UX3.1, `place`):
     /// where it shows already, in the kept layout that has it, or full sized.
     pub fn show(&mut self, id: SessionId, split: Option<Dir>) {
-        // A session shown takes the place of the chat panel.
+        // A session shown takes the place of the chat panel, which `session.last` brings back;
+        // shown from the panes, it ends a way back to a chat.
         if self.chat_panel.is_some() {
-            self.close_chat();
+            self.set_chat_aside();
+        } else {
+            self.drop_chat_aside();
         }
         let pane = match split {
             // The drawer hangs from its host: splitting it would nest a pane inside it.
@@ -3046,9 +3058,14 @@ impl App {
                 }
             }
             "session.find" => self.open_finder("Show session", Purpose::Show, false),
+            // Back and forth: from a chat to the session under it, and back to the chat; else
+            // the previous session here.
             "session.last" => {
-                if !self.go_back() {
-                    self.toast("no previous session in this pane");
+                if self.chat_panel.is_some() && !self.full_view() {
+                    self.set_chat_aside();
+                    self.focus = Focus::Pane;
+                } else if !self.bring_chat_back() && !self.go_back() {
+                    self.toast("no previous session or chat in this pane");
                 }
             }
             "session.stop"
@@ -5304,7 +5321,9 @@ impl App {
             Confirmed::Again(mut req, then) => {
                 if let Request::ChatTask { confirmed, .. }
                 | Request::ChatCompare { confirmed, .. }
-                | Request::ChatNew { confirmed, .. } = req.as_mut()
+                | Request::ChatNew { confirmed, .. }
+                | Request::ChatUpdate { confirmed, .. }
+                | Request::ChatFork { confirmed, .. } = req.as_mut()
                 {
                     *confirmed = true;
                 }
@@ -5740,6 +5759,7 @@ impl App {
                         preset: None,
                         keep: None,
                         folders: None,
+                        confirmed: false,
                     },
                 );
             }
@@ -9643,7 +9663,7 @@ mod tests {
             preset: None,
             title: None,
             prompt: Some("ask codex@work".into()),
-            incognito: false,
+            incognito: Some(false),
             folders: Vec::new(),
             compare: vec!["claude".into(), "codex@work".into()],
             confirmed: false,
@@ -9694,6 +9714,65 @@ mod tests {
         app.focus = Focus::Sidebar;
         app.run(&Command { action: "chat.list", arg: None });
         assert_eq!(app.focus, Focus::Pane);
+    }
+
+    #[test]
+    fn backtick_goes_back_and_forth_between_a_chat_and_the_session_under_it() {
+        use crossterm::event::KeyModifiers as M;
+        let mut app = app();
+        let (a, b) = with_agents(&mut app);
+        app.show(a, None);
+        app.chat_list.push(chat_info("cccc", false));
+        app.open_chat("cccc");
+        press(&mut app, 'h', M::NONE);
+        press(&mut app, 'i', M::NONE);
+        act(&mut app, "session.last");
+        assert!(app.chat_panel.is_none(), "the session under it");
+        assert_eq!((app.focused_session(), app.focus), (Some(a), Focus::Pane));
+        act(&mut app, "session.last");
+        assert_eq!(draft(&app).0, "hi", "the chat back, as it was left");
+        assert_eq!(app.focus, Focus::Pane);
+        // A session shown from the chat (the sidebar, a finder): ` brings the chat back too.
+        app.show(b, None);
+        assert!(app.chat_panel.is_none() && app.chat_aside.is_some());
+        act(&mut app, "session.last");
+        assert_eq!(draft(&app).0, "hi");
+        // One shown from the panes ends the way back: ` is the previous session again.
+        act(&mut app, "session.last");
+        app.show(a, None);
+        assert!(app.chat_aside.is_none());
+        act(&mut app, "session.last");
+        assert!(app.chat_panel.is_none());
+        assert_eq!(app.focused_session(), Some(b));
+    }
+
+    #[test]
+    fn a_slash_that_isnt_a_command_is_sent_or_kept_never_lost() {
+        let mut app = app();
+        let enter = |app: &mut App, text: &str| {
+            app.new_chat();
+            app.chat_paste(text);
+            app.chat_key(KeyEvent::new(KeyCode::Enter, Mods::NONE));
+        };
+        let sent = |app: &App| match &app.chat_panel {
+            Some(crate::chats::ChatPanel::View(v)) => {
+                v.view.items.iter().find_map(|i| match &i.body {
+                    ptyro_core::chat::ChatBody::User { text } => Some(text.clone()),
+                    _ => None,
+                })
+            }
+            _ => None,
+        };
+        // A path is a message; `//` sends one `/`.
+        enter(&mut app, "/etc/hosts: what is it?");
+        assert_eq!(sent(&app).as_deref(), Some("/etc/hosts: what is it?"));
+        enter(&mut app, "//retry is a word");
+        assert_eq!(sent(&app).as_deref(), Some("/retry is a word"));
+        // A mistyped command stays in the composer, with how to send it.
+        enter(&mut app, "/agnet codex");
+        assert_eq!(sent(&app), None);
+        assert_eq!(draft(&app).0, "/agnet codex");
+        assert!(toast_text(&app).contains("//"), "{}", toast_text(&app));
     }
 
     #[test]

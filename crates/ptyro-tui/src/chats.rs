@@ -187,6 +187,9 @@ impl App {
             self.close_chat();
             self.toast("that chat was deleted");
         }
+        if matches!(&self.chat_aside, Some(ChatPanel::View(v)) if v.id.as_deref() == Some(id)) {
+            self.chat_aside = None;
+        }
         self.dirty = true;
     }
 
@@ -392,6 +395,39 @@ impl App {
         }
     }
 
+    /// Put the chat (or the list) shown aside, as it is (its draft too), for `session.last`. It
+    /// stays followed, so the daemon doesn't take a side chat put aside for one nobody has.
+    pub(crate) fn set_chat_aside(&mut self) {
+        self.drop_chat_aside();
+        self.chat_aside = self.chat_panel.take();
+        self.dirty = true;
+    }
+
+    /// No way back to the chat put aside: it is left (a side chat goes, unless kept).
+    pub(crate) fn drop_chat_aside(&mut self) {
+        if let Some(ChatPanel::View(v)) = self.chat_aside.take()
+            && let Some(id) = v.id
+        {
+            self.left_chat(&id);
+        }
+    }
+
+    /// The chat put aside, shown again as it was; false when there is none. Followed afresh:
+    /// what it said meanwhile went by unseen.
+    pub(crate) fn bring_chat_back(&mut self) -> bool {
+        let Some(p) = self.chat_aside.take() else { return false };
+        if let ChatPanel::View(v) = &p
+            && let Some(id) = &v.id
+        {
+            self.send(ClientMsg::ChatUnsubscribe { chat: id.clone() });
+            self.send(ClientMsg::ChatSubscribe { chat: id.clone() });
+        }
+        self.chat_takes_keys();
+        self.chat_panel = Some(p);
+        self.dirty = true;
+        true
+    }
+
     pub(crate) fn close_chat(&mut self) {
         self.leave_chat();
         self.chat_panel = None;
@@ -489,6 +525,7 @@ impl App {
             preset: None,
             keep: None,
             folders: None,
+            confirmed: false,
         };
         match action {
             "chat.open" => self.open_chat(&id),
@@ -564,7 +601,13 @@ impl App {
             "chat.fork" => self.pick_message(Purpose::ChatForkAt, "Fork from where?"),
             "chat.side" => self.request(
                 Pending::ChatOpen,
-                Request::ChatFork { chat: id, node: None, agent: None, side: true },
+                Request::ChatFork {
+                    chat: id,
+                    node: None,
+                    agent: None,
+                    side: true,
+                    confirmed: false,
+                },
             ),
             "chat.keep" => {
                 if info.as_ref().is_some_and(|c| c.side_of.is_some()) {
@@ -583,6 +626,7 @@ impl App {
                             preset: None,
                             keep: Some(true),
                             folders: None,
+                            confirmed: false,
                         },
                     );
                 } else {
@@ -740,6 +784,7 @@ impl App {
                     node: Some(value).filter(|v| !v.is_empty()),
                     agent: None,
                     side: false,
+                    confirmed: false,
                 },
             ),
             Purpose::ChatEditPick(chat) => {
@@ -814,7 +859,12 @@ impl App {
             }
             ("folder" | "folders", Some(_)) => self.chat_action("chat.folder"),
             ("compare", c) => self.chat_compare_slash(c, arg),
-            (_, None) => need(self),
+            // A command of a chat's own, before there is one; anything else falls to the end.
+            (
+                "pick" | "task" | "retry" | "edit" | "fork" | "side" | "keep" | "branch" | "cite"
+                | "export" | "agent" | "title",
+                None,
+            ) => need(self),
             ("pick", Some(_)) => self.chat_action("chat.pick"),
             ("task", Some(c)) => match TaskArgs::parse(arg) {
                 Ok(t) => self.chat_task(c, t),
@@ -843,7 +893,7 @@ impl App {
             ("fork", Some(_)) => self.chat_action("chat.fork"),
             ("side", Some(c)) if !arg.is_empty() => self.request(
                 Pending::ChatSideAsk(arg.to_owned()),
-                Request::ChatFork { chat: c, node: None, agent: None, side: true },
+                Request::ChatFork { chat: c, node: None, agent: None, side: true, confirmed: false },
             ),
             ("side", Some(_)) => self.chat_action("chat.side"),
             ("keep", Some(_)) => self.chat_action("chat.keep"),
@@ -866,9 +916,20 @@ impl App {
                     preset: None,
                     keep: None,
                     folders: None,
+                    confirmed: false,
                 },
             ),
-            (other, _) => self.toast(format!("/{other}: not a command (/help lists them)")),
+            // Not lost: back in the composer, to fix or to send as a message.
+            (other, _) => {
+                if let Some(ChatPanel::View(v)) = &mut self.chat_panel {
+                    v.set_draft(text.to_owned());
+                    let d = v.draft.clone();
+                    v.view.apply(v.view.rev, false, Vec::new(), d);
+                }
+                self.toast(format!(
+                    "/{other}: not a command (/help lists them; start with // to send it as a message)"
+                ));
+            }
         }
         true
     }
@@ -1087,6 +1148,7 @@ impl App {
                 preset: None,
                 keep: None,
                 folders: Some(folders),
+                confirmed: false,
             },
         );
     }
@@ -1188,19 +1250,20 @@ impl App {
         match id {
             Some(chat) => {
                 let (a, p) = if agent { (Some(value), None) } else { (None, Some(value)) };
-                self.request(
-                    Pending::Done("the next message carries the chat over".into()),
-                    Request::ChatUpdate {
-                        chat,
-                        title: None,
-                        pinned: None,
-                        archived: None,
-                        agent: a,
-                        preset: p,
-                        keep: None,
-                        folders: None,
-                    },
-                );
+                // Another profile's agent asks first (the conversation goes to that account).
+                let req = Request::ChatUpdate {
+                    chat,
+                    title: None,
+                    pinned: None,
+                    archived: None,
+                    agent: a,
+                    preset: p,
+                    keep: None,
+                    folders: None,
+                    confirmed: false,
+                };
+                let then = Box::new(Pending::Done("the next message carries the chat over".into()));
+                self.request(Pending::Confirm(Box::new(req.clone()), then), req);
             }
             None => {
                 if let Some(ChatPanel::View(v)) = &mut self.chat_panel {
@@ -1381,7 +1444,10 @@ impl App {
             }
             _ if crate::app::is_newline_key(&key) => v.edit(|e| e.insert("\n")),
             KeyCode::Enter if v.sending => self.toast("one moment: the last message is on its way"),
-            KeyCode::Enter if v.draft.trim_start().starts_with('/') => {
+            KeyCode::Enter
+                if v.draft.trim_start().starts_with('/')
+                    && ptyro_core::chats::slash_message(&v.draft).is_none() =>
+            {
                 let text = std::mem::take(&mut v.draft);
                 let chat = v.id.clone();
                 v.view.apply(v.view.rev, false, Vec::new(), String::new());
@@ -1391,6 +1457,7 @@ impl App {
             }
             KeyCode::Enter => {
                 let text = std::mem::take(&mut v.draft);
+                let text = ptyro_core::chats::slash_message(&text).unwrap_or(text);
                 if !text.trim().is_empty() {
                     v.sending = true;
                     match v.id.clone() {
@@ -1412,7 +1479,7 @@ impl App {
                                 preset: v.preset.clone(),
                                 title: None,
                                 prompt: Some(text.clone()),
-                                incognito: v.incognito,
+                                incognito: Some(v.incognito),
                                 folders: v.folders.clone(),
                                 compare: v.compare.clone(),
                                 confirmed: false,

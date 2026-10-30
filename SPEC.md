@@ -3026,8 +3026,11 @@ The daily loop (ROADMAP UX3, RESEARCH R-UX-34…37). `crates/ptyro-tui/src/scree
   layout that shows it (swapped back); else, in a single pane (a drawer aside), in that pane
   (`PaneState.last` remembers what it replaced); else full sized in a fresh one-pane layout, the
   split layout kept whole in `App.kept` (a `Screen`: layout, panes, focus, zoom, drawer; saved as
-  `SavedView.kept`). `` ` `` (`session.last`) swaps the kept layout and the screen, else shows the
-  pane's previous session. Everything goes through it: new sessions and worktrees, the quick
+  `SavedView.kept`). `` ` `` (`session.last`) goes back and forth: from a chat (or the chat list)
+  to the session under it, the chat put aside as it is (`App.chat_aside`: draft, scroll, a new
+  chat's choices) and brought back by `` ` `` again; a session shown from a chat puts the chat
+  aside the same way, one shown from the panes ends that. With no chat to go back to it swaps the
+  kept layout and the screen, else shows the pane's previous session. Everything goes through it: new sessions and worktrees, the quick
   terminal's panel, ⏎ in the sidebar, `j`/`k`, `1`–`9`, the finder, attention.
   - Tools open full sized (`spawn_tool`, `SpawnSpec.tool`): `$EDITOR` on a file and
     `config edit` give the screen back when they exit (`App.tool_back`); `run_cli` (the CLI's long
@@ -6387,7 +6390,10 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
 **As built (CHAT1, 2026-10-29), and where it differs from the design below:**
 - **Store** (`ptyro-store/src/chat.rs`): the §22.4 schema exactly, its own thread, 0600, a newer
   schema refused untouched; tombstones compacted a day later (and `archive_purge_days`), a
-  streaming node closed `interrupted` at start. `ptyro doctor` reports it, `ptyro backup` copies it
+  streaming node closed `interrupted` at start. So is a turn cut off before any of its answer
+  arrived (the shown branch ends after the person's message with no answer and no end): a notice
+  that says to retry, then the `interrupted` end; its running tools are closed failed and its
+  open permission cards `cancelled`, as nothing can answer them now. `ptyro doctor` reports it, `ptyro backup` copies it
   (`--no-chats` leaves it out), `ptyro uninstall`'s plan names it. A removed workspace's chats go
   to `main`.
 - **Engine** (`ptyro-daemon/src/chats.rs`): a structured session with `Place::chat`, in
@@ -6545,7 +6551,9 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   with the hint to `/pick`). With no answer of the chat's own agent, the first other answer in is
   shown. **Rules:** one answer at a time holds for the whole compare (`busy_check` refuses a send,
   retry, edit, branch or a second compare); `ChatStop` interrupts every helper too, and one that
-  hasn't stopped 10 s later is stopped; a helper not done in 10 minutes is stopped as `✗ timed out`
+  hasn't stopped 10 s later is stopped (so is the chat's own engine, compare or not, with a notice
+  that says so; an engine still starting after 2 minutes is ended the same way, and isn't retried);
+  a helper not done in 10 minutes is stopped as `✗ timed out`, and the chat's own answer too
   (what it said so far left out); deleting the chat stops its compare, and nothing is copied into a
   chat deleted meanwhile; at the daemon's start, scratch folders of chats that no longer exist (a
   crash's helpers and incognito chats) are removed, with Gemini's copies; a helper that fails (not installed, not logged in, ends
@@ -6846,11 +6854,14 @@ agent's own history is a cache**: losing it, or an agent's updated format, loses
   the in-chat tree is Open WebUI's and llm's (RESEARCH R-CHAT-02).
 - **Side chat** (`fork --side`): a fork that reads the chat's context and **never writes back**:
   its engine gets the branch as a seed, it is not listed under CHATS (it shows under its parent while
-  open), and it is dropped on close unless **kept** (then it is a normal fork). Claude Desktop, Codex
-  and Claude Code's `/btw` have one (R-CHAT-04).
+  open), and it is dropped on close unless **kept** (then it is a normal fork). The client that
+  closes it deletes it; the daemon deletes any nobody has followed for `hibernate_after` (one left
+  by a quit, a crash or a reload; checked again at start), and a chat's side chats go with it.
+  Claude Desktop, Codex and Claude Code's `/btw` have one (R-CHAT-04).
 - **Switch agent** (`/agent codex`, `chat.agent`, `chat update --agent`): the next message starts a
-  seeded conv on the other agent (and its profile, if the workspace's differs: it asks). The chat
-  is unchanged; no other chat app can do this.
+  seeded conv on the other agent. A bare name is the chat's own profile's; another profile's
+  (`codex@work`) asks first, as the conversation goes to that account. The chat is unchanged; no
+  other chat app can do this.
 - **Make it a task** (CHAT4): start a normal session in a worktree whose first prompt carries the
   branch as a seed block and the chat's last answer, linked back by `forked_from_chat`.
 
@@ -7048,7 +7059,9 @@ hides when `enabled`):
   2/3`, cost, machine chip); the branch navigator; a composer that takes **slash commands**
   (`/fork`, `/side`, `/agent`, `/tools`, `/title`, `/retry`, `/search`, `/export`, `/incognito`,
   `/task [PROJECT] [--agent A] [--name N]`, `/compare [AGENTS…] [question]` (agents space- or
-  comma-separated, `codex@work` kept as typed), `/pick`), each also a palette action; an `@` completion for attached folders; and find-in-chat.
+  comma-separated, `codex@work` kept as typed), `/pick`), each also a palette action (`//` sends a
+  message starting with `/`, a path like `/etc/hosts …` is a message as it is, and a name that
+  isn't a command stays in the composer, never lost); an `@` completion for attached folders; and find-in-chat.
 - **Keys** (prefix, then; proposed, `m` and `g` are free in `docs/keys.md` on 2026-10-29; CHAT1.7
   checks and the user can rebind): `m` **new chat** in the current workspace (the composer opens at
   once, ⏎ sends; `C-o` picks agent, tools and folder; `Tab`/`C-i` incognito), `g` the **chat list**
@@ -7062,19 +7075,19 @@ hides when `enabled`):
 - **CLI** (every verb takes `--json`; an address may be `laptop2:…`):
 
   ```
-  ptyro chat [new] [PROMPT] [--agent A[@P]] [--tools PRESET] [--folder DIR]… [--incognito]
+  ptyro chat [new] [PROMPT] [--agent A[@P]] [--tools PRESET] [--folder DIR]… [--incognito|--keep]
                    [--workspace W] [--title T]        # new chat; opens it in a terminal
-  ptyro chat ask QUESTION [--keep] [--agent A] [--tools PRESET]   # one-shot answer on stdout; stdin is context
+  ptyro chat ask QUESTION [--keep] [--agent A] [--tools PRESET] [--no-stdin]   # one-shot answer on stdout; stdin is context
   ptyro chat ls [--workspace W|--all] [--machine M] [--pinned] [--archived] [-n N]
   ptyro chat show CHAT [--from NODE] [--branches] [--format text|md|json]
   ptyro chat open CHAT                               # the chat view
   ptyro chat send CHAT TEXT… [--wait] [--agent A]
   ptyro chat retry CHAT [NODE] · edit CHAT NODE TEXT · branch CHAT --to NODE
-  ptyro chat fork CHAT [--at NODE] [--agent A] [--side] [--keep]
+  ptyro chat fork CHAT [--at NODE] [--agent A] [--side] [--keep] [--yes]
   ptyro chat retitle|pin|unpin|archive|unarchive|rm CHAT…
   ptyro chat search QUERY [filters]  ·  ptyro chat find QUESTION
   ptyro chat export CHAT [--format md|json] [-o FILE]
-  ptyro chat set CHAT [--agent A] [--preset P] [--folder DIR]… [--no-folders]   # (built, CHAT4)
+  ptyro chat set CHAT [--agent A] [--preset P] [--folder DIR]… [--no-folders] [--yes]   # (built, CHAT4)
   ptyro chat presets [--json]  ·  ptyro chat task CHAT [--project P] [--agent A] [--name N]
   ptyro chat compare CHAT [--agents A,B…] [TEXT]  ·  ptyro chat pick CHAT [NODE]   # (built, CHAT5)
   ptyro chat import [--agent A|all] [--profile P] [--since 30d] [--dry-run]  ·  chat ls --imported
@@ -7144,7 +7157,11 @@ pinned, archived, incognito, forked, nodes, unread, last_at, status, attention, 
 (1.24 adds `folders`, `best_effort`, `shell`; `ChatTask` and `ChatPresets` → `ChatPresets{presets}`;
 `AgentChoice.found`; CHAT5, still 1.24: `ChatCompare{chat, agents, text?}`, `ChatPick{chat, node?}`,
 `ChatImport{agent?, profile?, since?, dry_run}` → `ChatImported{report}`, `ChatNew.compare`,
-`ChatInfo.comparing`/`source`/`source_dir`, `ChatSiblings.agents`). `SessionInfo` gains `chat`
+`ChatInfo.comparing`/`source`/`source_dir`, `ChatSiblings.agents`; 1.25: `ChatNew.incognito` is
+optional, none meaning `[chat] incognito` and `false` a kept chat even when that is on, and
+`ChatPresets.incognito` says the default, which a new chat's toggle starts from;
+`ChatUpdate.confirmed` and `ChatFork.confirmed`: a bare agent name is the chat's own profile's,
+and another profile's asks first with `NeedsConfirmation`, as compare and task do). `SessionInfo` gains `chat`
 (the chat id of an engine). Scopes as in §22.11, listed in `devices::needed`.
 
 ### 22.15 Built for sync (CHAT6) now, so it needs no migration later

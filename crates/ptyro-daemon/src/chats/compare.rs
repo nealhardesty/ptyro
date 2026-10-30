@@ -280,6 +280,7 @@ impl Daemon {
         tokio::spawn(async move {
             let mut rx = live.rev.subscribe();
             let mut gone_since: Option<Instant> = None;
+            let began = Instant::now();
             loop {
                 let outcome = {
                     let t = live.items.locked();
@@ -302,6 +303,14 @@ impl Daemon {
                         }
                     }
                     end.or_else(|| {
+                        // As long as a helper may take, then it is given up on.
+                        if began.elapsed() > HELPER_TIMEOUT {
+                            return Some(Outcome::TimedOut);
+                        }
+                        // Stopped, and its engine gone (ended, as one that wouldn't stop is).
+                        if cmp.stopped.load(Ordering::SeqCst) && live.engine().is_none() {
+                            return Some(Outcome::Stopped);
+                        }
                         // A resume being retried leaves it without an engine for a moment.
                         if live.engine().is_some() {
                             gone_since = None;

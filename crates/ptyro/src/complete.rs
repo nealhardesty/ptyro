@@ -88,7 +88,9 @@ pub fn chats() -> Vec<CompletionCandidate> {
 
 /// The tool presets, each with what it lets a chat use.
 pub fn chat_presets() -> Vec<CompletionCandidate> {
-    let Some(Reply::ChatPresets { presets }) = ask(Request::ChatPresets) else { return Vec::new() };
+    let Some(Reply::ChatPresets { presets, .. }) = ask(Request::ChatPresets) else {
+        return Vec::new();
+    };
     presets.into_iter().map(|p| candidate(p.name, Some(p.about))).collect()
 }
 

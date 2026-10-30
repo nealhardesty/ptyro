@@ -278,6 +278,20 @@ pub async fn serve(daemon: Arc<Daemon>, stream: UnixStream, pid: Option<u32>) {
 
 impl Conn {
     async fn handle(&mut self, msg: ClientMsg) {
+        // A chat's own agent, and whatever it runs, may search, read and list, by requests that
+        // are scoped to its chat (SPEC §22.5): it never follows a chat, a screen or the events,
+        // nor types into a session, here or on another machine.
+        if !matches!(
+            msg,
+            ClientMsg::Hello { .. }
+                | ClientMsg::Request { .. }
+                | ClientMsg::Ping
+                | ClientMsg::Ack { .. }
+        ) && self.placed_session().is_some_and(|s| s.meta.locked().place.chat.is_some())
+        {
+            tracing::debug!(client = %self.id, "a chat engine's stream refused");
+            return;
+        }
         // Another machine's session (MM1.B): what is said about it goes to its machine.
         let msg = match self.route_to_machine(msg).await {
             Some(m) => m,

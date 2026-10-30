@@ -43,6 +43,11 @@ pub(crate) mod import;
 /// conversation with `--fork-session`, leaving it as it was.
 const FORK_PENDING: &str = "fork_pending";
 
+/// How long an agent asked to stop has to stop before it is ended.
+const STOP_GRACE: Duration = Duration::from_secs(10);
+/// How long an agent may take to start (an ACP agent that never answers `initialize`).
+const START_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// A streaming answer is written at least this often (§22.4: a crash keeps what had arrived).
 const FLUSH: Duration = Duration::from_secs(2);
 /// The system prompt of a Claude chat: a general assistant, not a coding agent (CHAT0).
@@ -87,6 +92,9 @@ pub(crate) struct Live {
     /// A resumed engine that hasn't answered yet: what it says (a failed resume's error) is
     /// neither written nor alerted; the message is seeded to a new one instead.
     quiet: std::sync::atomic::AtomicBool,
+    /// Stopped by the person (`ChatStop`): a resumed engine's turn end before it answered is
+    /// that stop, not a resume that failed (which would send the message again).
+    stopping: std::sync::atomic::AtomicBool,
     /// Where the shown branch has others, sent with every reset (SPEC §22.7).
     pub siblings: Mutex<Vec<ChatSiblings>>,
     /// The last node its engine was given (for a chat with no conv row: an incognito one).
@@ -145,6 +153,7 @@ impl Chats {
                 leaf: Mutex::new(None),
                 engine: Mutex::new(None),
                 quiet: std::sync::atomic::AtomicBool::new(false),
+                stopping: std::sync::atomic::AtomicBool::new(false),
                 siblings: Mutex::new(Vec::new()),
                 given: Mutex::new(None),
             })
@@ -258,6 +267,8 @@ impl Daemon {
                 }
             }
         });
+        // Side chats left by the image before (or a crash): gone, unless followed again soon.
+        self.drop_unfollowed_sides(None);
         self.start_meaning(db.clone());
         self.start_chat_import();
         let me = Arc::clone(self);
@@ -296,7 +307,7 @@ impl Daemon {
             .collect()
     }
 
-    fn incognito_of(&self, id: &str) -> Option<ChatInfo> {
+    pub(crate) fn incognito_of(&self, id: &str) -> Option<ChatInfo> {
         self.chats.incognito.locked().get(id).cloned()
     }
 
@@ -406,6 +417,56 @@ impl Daemon {
                     self.events.send(DomainEvent::ChatRemoved { id: id.to_owned(), machine: None });
             }
         }
+    }
+
+    async fn delete_chat(self: &Arc<Self>, info: &ChatInfo) -> Result<(), Error> {
+        // A compare under way stops with it (its answers have nowhere to go).
+        self.stop_compare(&info.id);
+        self.stop_chat_engine(&info.id).await;
+        if info.incognito {
+            self.end_incognito(&info.id).await;
+            return Ok(());
+        }
+        self.chat_db()?.delete(info.id.clone()).await.map_err(store_err)?;
+        self.remove_chat_files(info).await;
+        self.chats.live.locked().remove(&info.id);
+        let _ = self.events.send(DomainEvent::ChatRemoved { id: info.id.clone(), machine: None });
+        Ok(())
+    }
+
+    /// Side chats not kept (archived ones too).
+    async fn side_chats(&self) -> Vec<ChatInfo> {
+        let Ok(db) = self.chat_db() else { return Vec::new() };
+        let mut all = Vec::new();
+        for archived in [false, true] {
+            let f = ListFilter { archived, sides: true, ..ListFilter::default() };
+            all.extend(db.list(f).await.unwrap_or_default());
+        }
+        all.retain(|c| c.side_of.is_some());
+        all
+    }
+
+    /// Side chats nobody has followed for `[chat] hibernate_after` (as long as its agent would
+    /// stay) go (`only`: that one; SPEC §22.7). A client deletes the one it leaves; these are the
+    /// ones none could: a quit, a crash, a reload, a device that left it while another had it.
+    pub(crate) fn drop_unfollowed_sides(self: &Arc<Self>, only: Option<String>) {
+        let me = Arc::clone(self);
+        let grace =
+            parse_duration(&self.config().chat.hibernate_after).unwrap_or(Duration::from_secs(120));
+        tokio::spawn(async move {
+            tokio::time::sleep(grace).await;
+            for c in me.side_chats().await {
+                let followed =
+                    me.chats.get_live(&c.id).is_some_and(|l| l.viewers.load(Ordering::SeqCst) > 0);
+                if followed || only.as_ref().is_some_and(|o| *o != c.id) {
+                    continue;
+                }
+                tracing::debug!(chat = %c.id, "a side chat nobody follows goes");
+                if let Err(e) = me.delete_chat(&c).await {
+                    tracing::warn!(chat = %c.id, "side chat: {}", e.message);
+                }
+            }
+        });
     }
 
     // ── addressing ────────────────────────────────────────────────────────────────────────
@@ -613,7 +674,7 @@ impl Daemon {
                 compare,
                 confirmed,
             } => {
-                let incognito = incognito || self.config().chat.incognito;
+                let incognito = incognito.unwrap_or(self.config().chat.incognito);
                 let compare: Vec<String> = compare
                     .iter()
                     .flat_map(|a| a.split(','))
@@ -739,9 +800,14 @@ impl Daemon {
                 self.chat_branch(&info, &to).await?;
                 Ok(Reply::Chat { info: self.chat_info_now(&info.id).await? })
             }
-            Request::ChatFork { chat, node, agent, side } => {
+            Request::ChatFork { chat, node, agent, side, confirmed } => {
                 let info = self.find_chat(&chat).await?;
+                let agent = agent.map(|a| self.switch_agent(&info, &a, confirmed)).transpose()?;
                 let made = self.chat_fork(&info, node.as_deref(), agent, side).await?;
+                if side {
+                    // Gone unless someone opens it (or keeps it) soon.
+                    self.drop_unfollowed_sides(Some(made.id.clone()));
+                }
                 Ok(Reply::Chat { info: made })
             }
             Request::ChatSend { chat, text } => {
@@ -773,19 +839,39 @@ impl Daemon {
             Request::ChatStop { chat } => {
                 let info = self.find_chat(&chat).await?;
                 self.stop_compare(&info.id);
-                if let Some(st) = self
-                    .chats
-                    .get_live(&info.id)
-                    .and_then(|l| l.engine())
-                    .and_then(|e| e.session.structured.clone())
+                if let Some(live) = self.chats.get_live(&info.id)
+                    && let Some(e) = live.engine()
+                    && let Some(st) = e.session.structured.clone()
                 {
+                    live.stopping.store(true, Ordering::SeqCst);
                     st.interrupt();
+                    self.end_unless_stopped(&live, e.session.id);
                 }
                 Ok(Reply::Done)
             }
-            Request::ChatUpdate { chat, title, pinned, archived, agent, preset, keep, folders } => {
+            Request::ChatUpdate {
+                chat,
+                title,
+                pinned,
+                archived,
+                agent,
+                preset,
+                keep,
+                folders,
+                confirmed,
+            } => {
                 let info = self.find_chat(&chat).await?;
                 let folders = folders.map(|f| chat_folders(&f)).transpose()?;
+                // Checked before anything is written: a refusal changes nothing.
+                let agent = agent.map(|a| self.switch_agent(&info, &a, confirmed)).transpose()?;
+                if let Some(p) = &preset
+                    && self.config().chat.preset(p).is_none()
+                {
+                    return Err(Error::invalid(format!(
+                        "{p:?} isn't a preset ({})",
+                        self.config().chat.presets().join(", ")
+                    )));
+                }
                 if info.incognito {
                     return self
                         .update_incognito(&info, title, pinned, archived, agent, preset, folders)
@@ -838,21 +924,12 @@ impl Daemon {
                 if let Some(a) = archived {
                     db.set_archived(info.id.clone(), a).await.map_err(store_err)?;
                 }
-                if let Some(a) = agent {
-                    let ws =
-                        self.find_workspace(&info.workspace).map(|w| w.name).unwrap_or_default();
-                    let (agent, profile) = self.chat_agent(Some(&a), &ws)?;
+                if let Some((agent, profile)) = agent {
                     db.set_agent(info.id.clone(), agent, profile).await.map_err(store_err)?;
                     // The next message goes to the new agent, seeded with the conversation.
                     self.stop_chat_engine(&info.id).await;
                 }
                 if let Some(p) = preset {
-                    if self.config().chat.preset(&p).is_none() {
-                        return Err(Error::invalid(format!(
-                            "{p:?} isn't a preset ({})",
-                            self.config().chat.presets().join(", ")
-                        )));
-                    }
                     db.set_tools(info.id.clone(), p).await.map_err(store_err)?;
                     self.stop_chat_engine(&info.id).await;
                 }
@@ -866,17 +943,16 @@ impl Daemon {
             }
             Request::ChatDelete { chat } => {
                 let info = self.find_chat(&chat).await?;
-                // A compare under way stops with it (its answers have nowhere to go).
-                self.stop_compare(&info.id);
-                self.stop_chat_engine(&info.id).await;
-                if info.incognito {
-                    self.end_incognito(&info.id).await;
-                    return Ok(Reply::Done);
+                // Its side chats go with it: they were questions about it.
+                for side in self
+                    .side_chats()
+                    .await
+                    .into_iter()
+                    .filter(|c| c.side_of == Some(info.id.clone()))
+                {
+                    self.delete_chat(&side).await?;
                 }
-                self.chat_db()?.delete(info.id.clone()).await.map_err(store_err)?;
-                self.remove_chat_files(&info).await;
-                self.chats.live.locked().remove(&info.id);
-                let _ = self.events.send(DomainEvent::ChatRemoved { id: info.id, machine: None });
+                self.delete_chat(&info).await?;
                 Ok(Reply::Done)
             }
             Request::ChatTask { chat, project, agent, name, confirmed } => {
@@ -914,7 +990,7 @@ impl Daemon {
                         })
                     })
                     .collect();
-                Ok(Reply::ChatPresets { presets })
+                Ok(Reply::ChatPresets { presets, incognito: config.chat.incognito })
             }
             Request::ChatExport { chat, format } => {
                 let info = self.find_chat(&chat).await?;
@@ -935,6 +1011,34 @@ impl Daemon {
 
     /// The agent and profile for a chat: the one asked for (`agent@profile`), else `[chat]
     /// agent`, else the default agent, else the first installed one that has a structured mode.
+    /// The agent a chat switches to (`/agent`, a fork's `--agent`): a bare name under the
+    /// chat's own profile; another profile only when the person agreed (SPEC §22.7), since the
+    /// conversation goes to that account.
+    fn switch_agent(
+        &self,
+        info: &ChatInfo,
+        asked: &str,
+        confirmed: bool,
+    ) -> Result<(String, String), Error> {
+        let name = match ptyro_agents::split_agent(asked) {
+            (n, None) => format!("{n}@{}", info.profile),
+            _ => asked.to_owned(),
+        };
+        let (agent, profile) =
+            self.chat_agent(Some(&name), &self.workspace_name(&info.workspace))?;
+        if profile != info.profile && !confirmed {
+            return Err(Error::new(
+                ErrorCode::NeedsConfirmation,
+                format!(
+                    "{} runs under another profile than this chat's ({}): the conversation would go to that account, and its history tools search that profile's chats. Switch anyway?",
+                    chats::agent_label(&agent, &profile),
+                    info.profile
+                ),
+            ));
+        }
+        Ok((agent, profile))
+    }
+
     fn chat_agent(&self, asked: Option<&str>, workspace: &str) -> Result<(String, String), Error> {
         let config = self.config();
         let wanted = asked
@@ -1474,7 +1578,7 @@ impl Daemon {
         self: &Arc<Self>,
         info: &ChatInfo,
         node: Option<&str>,
-        agent: Option<String>,
+        agent: Option<(String, String)>,
         side: bool,
     ) -> Result<ChatInfo, Error> {
         if info.incognito {
@@ -1489,10 +1593,7 @@ impl Daemon {
         };
         let path = db.branch(info.id.clone(), at.clone()).await.map_err(store_err)?;
         let ws = self.workspace_name(&info.workspace);
-        let (agent, profile) = match agent {
-            Some(a) => self.chat_agent(Some(&a), &ws)?,
-            None => (info.agent.clone(), info.profile.clone()),
-        };
+        let (agent, profile) = agent.unwrap_or_else(|| (info.agent.clone(), info.profile.clone()));
         let id = chats::new_id();
         let title = format!("{} {}", if side { "side:" } else { "fork of" }, info.label());
         let src_ws = self.find_workspace(&ws).map(|w| w.id).unwrap_or_default();
@@ -1703,7 +1804,7 @@ impl Daemon {
         title: Option<String>,
         pinned: Option<bool>,
         archived: Option<bool>,
-        agent: Option<String>,
+        agent: Option<(String, String)>,
         preset: Option<String>,
         folders: Option<Vec<String>>,
     ) -> Result<Reply, Error> {
@@ -1711,10 +1812,7 @@ impl Daemon {
             return Err(Error::invalid("an incognito chat isn't kept, so it can't be archived"));
         }
         let switched = agent.is_some() || preset.is_some() || folders.is_some();
-        let resolved = match &agent {
-            Some(a) => Some(self.chat_agent(Some(a), &self.workspace_name(&info.workspace))?),
-            None => None,
-        };
+        let resolved = agent;
         if let Some(p) = &preset
             && self.config().chat.preset(p).is_none()
         {
@@ -1850,8 +1948,14 @@ impl Daemon {
         let (claude_mcp, missing) = match adapter.as_str() {
             "claude" => claude_mcp_defs(&plan, &preset.mcp),
             "codex" => {
+                // (One that is off in Codex is missing too: the chat can't use it.)
                 let known = mcp.clone().unwrap_or_default();
-                let missing = preset.mcp.iter().filter(|m| !known.contains(m)).cloned().collect();
+                let missing = preset
+                    .mcp
+                    .iter()
+                    .filter(|m| !known.iter().any(|(n, _)| n == *m))
+                    .cloned()
+                    .collect();
                 (serde_json::Map::new(), missing)
             }
             _ => (serde_json::Map::new(), Vec::new()),
@@ -1936,6 +2040,7 @@ impl Daemon {
         }
         *live.engine.locked() = Some(Engine { session: Arc::clone(&session) });
         live.quiet.store(resume.is_some(), Ordering::SeqCst);
+        live.stopping.store(false, Ordering::SeqCst);
         if best_effort {
             let what = "tools: best effort (codex mcp list didn't answer, so your MCP servers may be on in this chat)";
             self.chat_notice(live, &info.id, NoticeLevel::Warn, what).await;
@@ -1961,15 +2066,15 @@ impl Daemon {
         Ok(())
     }
 
-    /// The user's MCP servers, to switch each off in a Codex chat (CHAT0: its table can't be
-    /// emptied, only each entry switched off).
+    /// The user's MCP servers that are on, each with the entry that switches it off in a Codex
+    /// chat (CHAT0: its table can't be emptied, only each entry switched off).
     /// `None` when they couldn't be listed (the chat then says its tools are best effort).
     /// Listed under the chat's profile, so its `CODEX_HOME`'s servers.
     async fn codex_mcp_servers(
         &self,
         adapter: &str,
         plan: &ptyro_agents::profile::Plan,
-    ) -> Option<Vec<String>> {
+    ) -> Option<Vec<(String, serde_json::Value)>> {
         if adapter != "codex" {
             return Some(Vec::new());
         }
@@ -1984,14 +2089,7 @@ impl Daemon {
                 return None;
             };
             let v: serde_json::Value = serde_json::from_slice(&out).ok()?;
-            // Every name, whatever its case: they are only keys of the thread's config.
-            Some(
-                v.as_array()?
-                    .iter()
-                    .filter_map(|s| s["name"].as_str().map(str::to_owned))
-                    .filter(|n| !n.is_empty())
-                    .collect(),
-            )
+            Some(v.as_array()?.iter().filter_map(codex_mcp_off).collect())
         })
         .await
         .ok()
@@ -2026,6 +2124,9 @@ impl Daemon {
             let mut stopped = false;
             let mut said_error = false;
             let mut status = (None, None);
+            // Still starting since; given up on (never started), so not retried with a seed.
+            let mut starting_since: Option<Instant> = None;
+            let mut gave_up = false;
             let idle_for = |me: &Daemon| {
                 parse_duration(&me.config().chat.hibernate_after)
                     .unwrap_or(Duration::from_secs(120))
@@ -2050,6 +2151,14 @@ impl Daemon {
                         // not written into the chat.
                         if resumed && !replied {
                             match &it.body {
+                                // Stopped before it said anything: the stop is written as the
+                                // turn's end, and the message isn't sent again.
+                                ChatBody::TurnEnd { .. }
+                                    if live.stopping.load(Ordering::SeqCst) =>
+                                {
+                                    replied = true;
+                                    live.quiet.store(false, Ordering::SeqCst);
+                                }
                                 ChatBody::TurnEnd { .. } => {
                                     failed_resume = true;
                                     continue;
@@ -2139,6 +2248,21 @@ impl Daemon {
                 if !session.is_live() {
                     break;
                 }
+                // An agent that never gets going: ended, saying so, not a chat busy for good.
+                starting_since = (status.0 == Some(AgentStatus::Starting))
+                    .then(|| starting_since.unwrap_or_else(Instant::now));
+                if starting_since.is_some_and(|t| t.elapsed() >= START_TIMEOUT) {
+                    let agent = session.adapter().unwrap_or_else(|| "the agent".into());
+                    let text = format!(
+                        "{agent} didn't start within {} minutes, so it was ended (is it installed and logged in? `ptyro doctor` checks)",
+                        START_TIMEOUT.as_secs() / 60
+                    );
+                    me.chat_notice(&live, &chat, NoticeLevel::Error, &text).await;
+                    said_error = true;
+                    gave_up = true;
+                    me.stop_session(&session).await;
+                    break;
+                }
                 if failed_resume {
                     session.hibernating.store(true, Ordering::Relaxed);
                     me.stop_session(&session).await;
@@ -2200,7 +2324,7 @@ impl Daemon {
             live.quiet.store(false, Ordering::SeqCst);
             // A resume the agent couldn't do (its conversation is gone): start over with the
             // record as the seed.
-            if was_ours && resumed && !replied {
+            if was_ours && resumed && !replied && !gave_up {
                 tracing::info!(chat = %chat, "the agent couldn't resume its conversation; seeding");
                 db.end_conv(conv.clone());
                 // One sender at a time: a message sent meanwhile mustn't start a second engine.
@@ -2270,6 +2394,25 @@ impl Daemon {
     }
 
     /// Stop a chat's engine (deleted, agent switched); its conversation stays resumable.
+    /// An engine asked to stop that is still at it after `STOP_GRACE` (a turn not begun yet, a
+    /// hung agent) is ended, so the chat isn't busy for good; the next message starts another.
+    fn end_unless_stopped(self: &Arc<Self>, live: &Arc<Live>, session: SessionId) {
+        let (me, live) = (Arc::clone(self), Arc::clone(live));
+        tokio::spawn(async move {
+            tokio::time::sleep(STOP_GRACE).await;
+            let Some(e) = live.engine().filter(|e| e.session.id == session) else { return };
+            if !matches!(e.session.status(), Some(AgentStatus::Working | AgentStatus::Starting)) {
+                return;
+            }
+            let agent = e.session.adapter().unwrap_or_else(|| "the agent".into());
+            me.stop_chat_engine(&live.id).await;
+            let text = format!(
+                "{agent} didn't stop when asked, so it was ended: the next message starts it again"
+            );
+            me.chat_notice(&live, &live.id, NoticeLevel::Warn, &text).await;
+        });
+    }
+
     async fn stop_chat_engine(self: &Arc<Self>, id: &str) {
         let e = self.chats.get_live(id).and_then(|l| l.engine.locked().take());
         if let Some(e) = e {
@@ -2357,8 +2500,11 @@ impl Daemon {
         Ok(live)
     }
 
-    pub(crate) fn chat_unfollow(&self, live: &Arc<Live>) {
-        live.viewers.fetch_sub(1, Ordering::SeqCst);
+    pub(crate) fn chat_unfollow(self: &Arc<Self>, live: &Arc<Live>) {
+        if live.viewers.fetch_sub(1, Ordering::SeqCst) == 1 {
+            // The last one left: a side chat goes, unless someone comes back to it.
+            self.drop_unfollowed_sides(Some(live.id.clone()));
+        }
         self.chats.settle(&live.id);
     }
 
@@ -2796,11 +2942,32 @@ fn write_private(file: &std::path::Path, text: &str) -> std::io::Result<()> {
     f.write_all(text.as_bytes())
 }
 
+/// A server of `codex mcp list --json` that is on: its name, and the thread's config entry that
+/// switches it off. The entry keeps its transport: a server from a plugin or the desktop app is
+/// in no `config.toml`, and an entry of only `enabled = false` is then refused ("invalid
+/// transport"), which stops the chat starting.
+fn codex_mcp_off(s: &serde_json::Value) -> Option<(String, serde_json::Value)> {
+    let name = s["name"].as_str().filter(|n| !n.is_empty())?;
+    if s["enabled"] == false {
+        return None;
+    }
+    let mut off = serde_json::Map::new();
+    if let Some(t) = s["transport"].as_object() {
+        for k in ["command", "args", "cwd", "url"] {
+            if let Some(v) = t.get(k).filter(|v| !v.is_null()) {
+                off.insert(k.to_owned(), v.clone());
+            }
+        }
+    }
+    off.insert("enabled".into(), false.into());
+    Some((name.to_owned(), off.into()))
+}
+
 fn preset_launch(
     protocol: &str,
     p: &ChatTools,
     dir: &std::path::Path,
-    codex_mcp: Vec<String>,
+    codex_mcp: Vec<(String, serde_json::Value)>,
     codex_needs: &[PathBuf],
     extra: &ChatLaunch,
 ) -> (Vec<String>, Option<serde_json::Value>) {
@@ -2880,11 +3047,8 @@ fn preset_launch(
         }
         "app-server" => {
             // Every server of the user's is switched off by name, but the ones the preset keeps.
-            let mcp: serde_json::Map<String, serde_json::Value> = codex_mcp
-                .into_iter()
-                .filter(|n| !p.mcp.contains(n))
-                .map(|n| (n, json!({ "enabled": false })))
-                .collect();
+            let mcp: serde_json::Map<String, serde_json::Value> =
+                codex_mcp.into_iter().filter(|(n, _)| !p.mcp.contains(n)).collect();
             let mut config = json!({
                 "web_search": if p.web { "live" } else { "disabled" },
                 "features": { "shell_tool": p.read || p.shell, "unified_exec": p.shell, "hooks": false },
@@ -3088,7 +3252,7 @@ mod tests {
             "app-server",
             &chat,
             dir,
-            vec!["GitHub".into()],
+            vec![("GitHub".into(), serde_json::json!({ "enabled": false }))],
             &[],
             &ChatLaunch::default(),
         );
@@ -3123,6 +3287,33 @@ mod tests {
         let rules = p.unwrap()["permission"].as_array().unwrap().clone();
         assert_eq!(rules[0]["action"], "deny");
         assert!(rules.iter().any(|r| r["permission"] == "websearch" && r["action"] == "allow"));
+    }
+
+    #[test]
+    fn codex_servers_are_switched_off_with_their_transport() {
+        // As `codex mcp list --json` lists them: a bundled plugin's (off already) and the
+        // desktop app's (on), neither in config.toml, and an HTTP one.
+        let listed = serde_json::json!([
+            { "name": "codex_app", "enabled": false,
+              "transport": { "type": "stdio", "command": "/p/launch", "args": ["./server.mjs"] } },
+            { "name": "cua_repl", "enabled": true,
+              "transport": { "type": "stdio", "command": "/app/node", "args": ["repl.mjs"],
+                             "env": { "TOKEN": "secret" }, "cwd": null } },
+            { "name": "docs", "enabled": true,
+              "transport": { "type": "streamable_http", "url": "https://mcp.example/x" } },
+        ]);
+        let off: Vec<_> = listed.as_array().unwrap().iter().filter_map(codex_mcp_off).collect();
+        let names: Vec<&str> = off.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["cua_repl", "docs"], "one that is off already is left alone");
+        assert_eq!(
+            off[0].1,
+            serde_json::json!({ "command": "/app/node", "args": ["repl.mjs"], "enabled": false }),
+            "a valid entry (a transport), and no secrets it needs only to run"
+        );
+        assert_eq!(
+            off[1].1,
+            serde_json::json!({ "url": "https://mcp.example/x", "enabled": false })
+        );
     }
 
     #[test]
@@ -3167,7 +3358,7 @@ mod tests {
             "app-server",
             &shell,
             dir,
-            vec!["github".into(), "jira".into()],
+            ["github", "jira"].map(|n| (n.into(), serde_json::json!({ "enabled": false }))).into(),
             &[],
             &extra,
         );

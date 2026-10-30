@@ -59,7 +59,7 @@ action by name.
 | `j` / `k` (or `Down` / `Up`) | show the next / previous session of the workspace here, in sidebar order, across projects (quick terminals are skipped) |
 | `1` … `9` | show the session numbered N in the sidebar here |
 | `/` | find a session (fuzzy) |
-| `` ` `` | back: the split layout a full-sized panel replaced (whole, as it was), else the previously shown session |
+| `` ` `` | back and forth: from a chat to the session under it and back to the chat (as you left it, draft and all); else the split layout a full-sized panel replaced (whole, as it was), else the previously shown session |
 | `v` / `s` | split: a clone of this pane's session beside / below it (the same agent and profile in the same worktree, a fresh conversation; a shell gets a shell in its directory). Only a split puts anything in a split |
 | `h` / `l` | previous / next pane |
 | `Shift`+arrows | the pane in that direction |

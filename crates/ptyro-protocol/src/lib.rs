@@ -40,7 +40,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 24 };
+pub const PROTO: Version = Version { major: 1, minor: 25 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1086,9 +1086,10 @@ pub enum Request {
         title: Option<String>,
         #[serde(default)]
         prompt: Option<String>,
-        /// Nothing of it is written; it ends with its agent (1.23, SPEC §22.9).
-        #[serde(default)]
-        incognito: bool,
+        /// Nothing of it is written; it ends with its agent (1.23, SPEC §22.9). `None` (1.25):
+        /// as `[chat] incognito` says; `Some(false)` keeps it even when that is on.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        incognito: Option<bool>,
         /// Folders it may read (1.24, SPEC §22.5): with no `preset`, the chat then reads.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         folders: Vec<String>,
@@ -1154,6 +1155,10 @@ pub enum Request {
         agent: Option<String>,
         #[serde(default)]
         side: bool,
+        /// The person agreed to carry it on under another profile than the chat's (1.25): a
+        /// bare agent name is the chat's own profile's, and another one asks first.
+        #[serde(default)]
+        confirmed: bool,
     },
     /// Search every chat's messages and titles (SPEC §22.10). `query` takes words, `"phrases"`,
     /// `-word`, `prefix*`, `agent:`, `since:`, `workspace:`. `machines`: linked machines too.
@@ -1211,6 +1216,9 @@ pub enum Request {
         /// The folders it may read, all of them (empty: none; 1.24).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         folders: Option<Vec<String>>,
+        /// As `ChatFork.confirmed`, for `agent` (1.25).
+        #[serde(default)]
+        confirmed: bool,
     },
     ChatDelete {
         chat: String,
@@ -1743,6 +1751,9 @@ pub enum Reply {
     },
     ChatPresets {
         presets: Vec<ptyro_core::chats::ChatPreset>,
+        /// A new chat is incognito unless the person says otherwise (`[chat] incognito`, 1.25).
+        #[serde(default)]
+        incognito: bool,
     },
     Devices {
         devices: Vec<DeviceInfo>,

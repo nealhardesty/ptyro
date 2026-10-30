@@ -351,7 +351,7 @@ like the Claude and ChatGPT desktop apps. On by default; nothing to set up:
 
 ```bash
 ptyro chat "what's the borrow checker complaining about here?"   # asks, streams the answer, keeps it
-git diff | ptyro chat ask "review this"     # one answer on stdout, nothing kept
+git diff | ptyro chat ask "review this"     # one answer on stdout, nothing kept (--no-stdin in a loop)
 ptyro chat ls                               # pinned first, then the newest
 ptyro chat send @last "and in async code?"  # carry on
 ptyro chat set @last --agent codex          # switch agents: the conversation carries over
