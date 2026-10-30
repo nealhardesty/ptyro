@@ -1150,6 +1150,10 @@ pub enum Request {
         agent: Option<String>,
         #[serde(default)]
         side: bool,
+        /// The person agreed to carry it on under another profile than the chat's (1.25): a
+        /// bare agent name is the chat's own profile's, and another one asks first.
+        #[serde(default)]
+        confirmed: bool,
     },
     /// Search every chat's messages and titles (SPEC §22.10). `query` takes words, `"phrases"`,
     /// `-word`, `prefix*`, `agent:`, `since:`, `workspace:`. `machines`: linked machines too.
@@ -1207,6 +1211,9 @@ pub enum Request {
         /// The folders it may read, all of them (empty: none; 1.24).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         folders: Option<Vec<String>>,
+        /// As `ChatFork.confirmed`, for `agent` (1.25).
+        #[serde(default)]
+        confirmed: bool,
     },
     ChatDelete {
         chat: String,

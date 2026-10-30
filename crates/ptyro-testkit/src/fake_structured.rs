@@ -71,6 +71,8 @@ fn plan(text: &str, n: u64) -> Vec<Step> {
                 Step::Text(format!("worked: {what}")),
             ]
         }
+        // Silent for a while (Claude stops it on an interrupt), then a line.
+        "pause" => vec![Step::Sleep(rest.parse().unwrap_or(0.5)), Step::Text("paused".into())],
         "ask" => vec![
             Step::ToolStart { id: id.clone(), title: rest.to_owned() },
             Step::Ask { id, title: rest.to_owned() },
@@ -240,7 +242,22 @@ fn claude(args: &[String]) -> i32 {
                     last = t;
                     let _ = steps.by_ref().count();
                 }
-                Step::Sleep(secs) => std::thread::sleep(Duration::from_secs_f64(secs)),
+                Step::Sleep(secs) => {
+                    // An interrupt ends the turn there, as Claude's does.
+                    let until = std::time::Instant::now() + Duration::from_secs_f64(secs);
+                    while let Some(left) = until.checked_duration_since(std::time::Instant::now()) {
+                        let Ok(r) = rx.recv_timeout(left) else { continue };
+                        if r["type"] == "control_request" && r["request"]["subtype"] == "interrupt"
+                        {
+                            send(
+                                &json!({ "type": "control_response", "response": { "subtype": "success", "request_id": r["request_id"] } }),
+                            );
+                            failed = Some("interrupted".to_owned());
+                            let _ = steps.by_ref().count();
+                            break;
+                        }
+                    }
+                }
                 Step::Fail(why) => failed = Some(why),
             }
         }

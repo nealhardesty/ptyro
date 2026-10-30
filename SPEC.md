@@ -7043,11 +7043,11 @@ hides when `enabled`):
   ptyro chat open CHAT                               # the chat view
   ptyro chat send CHAT TEXT… [--wait] [--agent A]
   ptyro chat retry CHAT [NODE] · edit CHAT NODE TEXT · branch CHAT --to NODE
-  ptyro chat fork CHAT [--at NODE] [--agent A] [--side] [--keep]
+  ptyro chat fork CHAT [--at NODE] [--agent A] [--side] [--keep] [--yes]
   ptyro chat retitle|pin|unpin|archive|unarchive|rm CHAT…
   ptyro chat search QUERY [filters]  ·  ptyro chat find QUESTION
   ptyro chat export CHAT [--format md|json] [-o FILE]
-  ptyro chat set CHAT [--agent A] [--preset P] [--folder DIR]… [--no-folders]   # (built, CHAT4)
+  ptyro chat set CHAT [--agent A] [--preset P] [--folder DIR]… [--no-folders] [--yes]   # (built, CHAT4)
   ptyro chat presets [--json]  ·  ptyro chat task CHAT [--project P] [--agent A] [--name N]
   ptyro chat compare CHAT [--agents A,B…] [TEXT]  ·  ptyro chat pick CHAT [NODE]   # (built, CHAT5)
   ptyro chat import [--agent A|all] [--profile P] [--since 30d] [--dry-run]  ·  chat ls --imported
@@ -7119,7 +7119,9 @@ pinned, archived, incognito, forked, nodes, unread, last_at, status, attention, 
 `ChatImport{agent?, profile?, since?, dry_run}` → `ChatImported{report}`, `ChatNew.compare`,
 `ChatInfo.comparing`/`source`/`source_dir`, `ChatSiblings.agents`; 1.25: `ChatNew.incognito` is
 optional, none meaning `[chat] incognito` and `false` a kept chat even when that is on, and
-`ChatPresets.incognito` says the default, which a new chat's toggle starts from). `SessionInfo` gains `chat`
+`ChatPresets.incognito` says the default, which a new chat's toggle starts from;
+`ChatUpdate.confirmed` and `ChatFork.confirmed`: a bare agent name is the chat's own profile's,
+and another profile's asks first with `NeedsConfirmation`, as compare and task do). `SessionInfo` gains `chat`
 (the chat id of an engine). Scopes as in §22.11, listed in `devices::needed`.
 
 ### 22.15 Built for sync (CHAT6) now, so it needs no migration later

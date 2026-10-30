@@ -167,6 +167,25 @@ fn a_chat_is_answered_kept_and_carried_on_after_a_restart() {
 }
 
 #[test]
+fn a_stop_before_a_resumed_chat_answers_is_a_stop_not_a_resend() {
+    let mut w = World::new("");
+    w.ok(&["chat", "new", "hello"]);
+    let addr = format!("c:{}", w.chats()[0]["handle"].as_str().unwrap());
+    // After a restart the next message resumes the agent's conversation; stopped before it
+    // says a word, that is the end of it (it was taken for a failed resume, and sent again).
+    w.d.restart().unwrap();
+    w.ok(&["chat", "send", "--no-wait", &addr, "pause 4"]);
+    w.until("answering", || w.chats()[0]["status"] == "working");
+    w.ok(&["chat", "stop", &addr]);
+    w.until("stopped", || w.chats()[0]["status"] != "working");
+    std::thread::sleep(Duration::from_secs(5));
+    let shown = w.chat(&addr);
+    assert_eq!(texts(&shown, "user"), ["hello", "pause 4"], "{shown}");
+    assert!(!texts(&shown, "assistant").iter().any(|t| t == "paused"), "sent again: {shown}");
+    assert!(!texts(&shown, "notice").iter().any(|t| t.contains("couldn't")), "{shown}");
+}
+
+#[test]
 fn titles_pins_archive_export_and_delete() {
     let w = World::new("");
     w.ok(&["chat", "new", "--title", "Dinner ideas", "--no-wait", "what should I cook"]);

@@ -529,6 +529,7 @@ impl App {
             preset: None,
             keep: None,
             folders: None,
+            confirmed: false,
         };
         match action {
             "chat.open" => self.open_chat(&id),
@@ -604,7 +605,13 @@ impl App {
             "chat.fork" => self.pick_message(Purpose::ChatForkAt, "Fork from where?"),
             "chat.side" => self.request(
                 Pending::ChatOpen,
-                Request::ChatFork { chat: id, node: None, agent: None, side: true },
+                Request::ChatFork {
+                    chat: id,
+                    node: None,
+                    agent: None,
+                    side: true,
+                    confirmed: false,
+                },
             ),
             "chat.keep" => {
                 if info.as_ref().is_some_and(|c| c.side_of.is_some()) {
@@ -623,6 +630,7 @@ impl App {
                             preset: None,
                             keep: Some(true),
                             folders: None,
+                            confirmed: false,
                         },
                     );
                 } else {
@@ -780,6 +788,7 @@ impl App {
                     node: Some(value).filter(|v| !v.is_empty()),
                     agent: None,
                     side: false,
+                    confirmed: false,
                 },
             ),
             Purpose::ChatEditPick(chat) => {
@@ -883,7 +892,7 @@ impl App {
             ("fork", Some(_)) => self.chat_action("chat.fork"),
             ("side", Some(c)) if !arg.is_empty() => self.request(
                 Pending::ChatSideAsk(arg.to_owned()),
-                Request::ChatFork { chat: c, node: None, agent: None, side: true },
+                Request::ChatFork { chat: c, node: None, agent: None, side: true, confirmed: false },
             ),
             ("side", Some(_)) => self.chat_action("chat.side"),
             ("keep", Some(_)) => self.chat_action("chat.keep"),
@@ -906,6 +915,7 @@ impl App {
                     preset: None,
                     keep: None,
                     folders: None,
+                    confirmed: false,
                 },
             ),
             (other, _) => self.toast(format!("/{other}: not a command (/help lists them)")),
@@ -1127,6 +1137,7 @@ impl App {
                 preset: None,
                 keep: None,
                 folders: Some(folders),
+                confirmed: false,
             },
         );
     }
@@ -1228,19 +1239,20 @@ impl App {
         match id {
             Some(chat) => {
                 let (a, p) = if agent { (Some(value), None) } else { (None, Some(value)) };
-                self.request(
-                    Pending::Done("the next message carries the chat over".into()),
-                    Request::ChatUpdate {
-                        chat,
-                        title: None,
-                        pinned: None,
-                        archived: None,
-                        agent: a,
-                        preset: p,
-                        keep: None,
-                        folders: None,
-                    },
-                );
+                // Another profile's agent asks first (the conversation goes to that account).
+                let req = Request::ChatUpdate {
+                    chat,
+                    title: None,
+                    pinned: None,
+                    archived: None,
+                    agent: a,
+                    preset: p,
+                    keep: None,
+                    folders: None,
+                    confirmed: false,
+                };
+                let then = Box::new(Pending::Done("the next message carries the chat over".into()));
+                self.request(Pending::Confirm(Box::new(req.clone()), then), req);
             }
             None => {
                 if let Some(ChatPanel::View(v)) = &mut self.chat_panel {

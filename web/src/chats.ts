@@ -391,7 +391,8 @@ function newChat(): void {
 }
 
 function update(c: Chat, change: object, ok: string): Promise<unknown> {
-  return ask({ t: "chat_update", chat: c.id, ...change }, ok);
+  // Another profile's agent asks first (the conversation goes to that account).
+  return askAgreed({ t: "chat_update", chat: c.id, ...change }, ok);
 }
 
 /// Keep a side chat: at once here too, so leaving before the daemon's word doesn't drop it.
@@ -446,7 +447,7 @@ function forkAt(c: Chat, node: string | null): void {
 }
 
 async function fork(c: Chat, node: string | null, agent: string | null): Promise<void> {
-  const r = await ask<{ info: Chat }>({ t: "chat_fork", chat: c.id, node, agent, side: false }, "Forked");
+  const r = await askAgreed<{ info: Chat }>({ t: "chat_fork", chat: c.id, node, agent, side: false }, "Forked");
   if (r) { state.list.set(r.info.id, r.info); location.hash = `#/c/${encodeURIComponent(r.info.id)}`; }
 }
 

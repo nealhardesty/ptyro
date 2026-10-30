@@ -928,6 +928,12 @@ impl App {
         // A new daemon (or connection) knows nothing of our focus or control.
         self.reported_focus = None;
         self.controller.clear();
+        // Nor of the chat shown: it is followed again, or it would never show another word.
+        if let Some(crate::chats::ChatPanel::View(v)) = &self.chat_panel
+            && let Some(id) = &v.id
+        {
+            let _ = client.send(ClientMsg::ChatSubscribe { chat: id.clone() });
+        }
         Ok(())
     }
 
@@ -5244,7 +5250,9 @@ impl App {
             Confirmed::Again(mut req, then) => {
                 if let Request::ChatTask { confirmed, .. }
                 | Request::ChatCompare { confirmed, .. }
-                | Request::ChatNew { confirmed, .. } = req.as_mut()
+                | Request::ChatNew { confirmed, .. }
+                | Request::ChatUpdate { confirmed, .. }
+                | Request::ChatFork { confirmed, .. } = req.as_mut()
                 {
                     *confirmed = true;
                 }
@@ -5677,6 +5685,7 @@ impl App {
                         preset: None,
                         keep: None,
                         folders: None,
+                        confirmed: false,
                     },
                 );
             }

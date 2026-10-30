@@ -160,6 +160,9 @@ pub enum ChatCmd {
         /// Keep the side chat as a chat of its own
         #[arg(long, requires = "side")]
         keep: bool,
+        /// Carry it on under another profile than the chat's without asking first
+        #[arg(short, long)]
+        yes: bool,
         /// A first message
         prompt: Vec<String>,
         #[arg(long)]
@@ -277,6 +280,9 @@ pub enum ChatCmd {
         /// It reads no folder
         #[arg(long, conflicts_with = "folders")]
         no_folders: bool,
+        /// Switch to an agent under another profile than the chat's without asking first
+        #[arg(short, long)]
+        yes: bool,
     },
     /// The tool presets, each with what it lets a chat use
     Presets {
@@ -439,8 +445,8 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, words: Vec<String>) -> Result<
             eprintln!("{}: showing the branch through it", info.addr());
             Ok(0)
         }
-        ChatCmd::Fork { chat, at, agent, side, keep, prompt, json } => {
-            fork(ctx, chat, at, agent, side, keep, prompt.join(" "), json).await
+        ChatCmd::Fork { chat, at, agent, side, keep, yes, prompt, json } => {
+            fork(ctx, chat, at, agent, side, keep, yes, prompt.join(" "), json).await
         }
         ChatCmd::Keep { chat } => {
             update(ctx, &chat, |r| {
@@ -575,7 +581,7 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, words: Vec<String>) -> Result<
         ChatCmd::Unarchive { chats } => {
             each(ctx, chats, "back from the archive", |r| set_archived(r, false)).await
         }
-        ChatCmd::Set { chat, agent, preset, folders, no_folders } => {
+        ChatCmd::Set { chat, agent, preset, folders, no_folders, yes } => {
             if agent.is_none() && preset.is_none() && folders.is_empty() && !no_folders {
                 return Err(Error::invalid(
                     "what should change? --agent A, --preset P, --folder DIR or --no-folders",
@@ -583,7 +589,7 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, words: Vec<String>) -> Result<
             }
             let folders = (no_folders || !folders.is_empty())
                 .then(|| folders.iter().map(|f| full_path(f)).collect());
-            update(ctx, &chat, |r| {
+            update_as(ctx, &chat, yes, |r| {
                 if let Request::ChatUpdate { agent: a, preset: p, folders: f, .. } = r {
                     *a = agent;
                     *p = preset;
@@ -669,7 +675,9 @@ fn full_path(f: &str) -> String {
 fn agree(r: &mut Request) {
     if let Request::ChatTask { confirmed, .. }
     | Request::ChatCompare { confirmed, .. }
-    | Request::ChatNew { confirmed, .. } = r
+    | Request::ChatNew { confirmed, .. }
+    | Request::ChatUpdate { confirmed, .. }
+    | Request::ChatFork { confirmed, .. } = r
     {
         *confirmed = true;
     }
@@ -1393,6 +1401,7 @@ async fn fork(
     agent: Option<String>,
     side: bool,
     keep: bool,
+    yes: bool,
     prompt: String,
     json: bool,
 ) -> Result<i32, Error> {
@@ -1403,7 +1412,8 @@ async fn fork(
         ));
     }
     let c = ctx.connect(true).await?;
-    let info = chat_of(c.request(Request::ChatFork { chat, node: at, agent, side }).await?)?;
+    let req = Request::ChatFork { chat, node: at, agent, side, confirmed: false };
+    let info = chat_of(confirmed(&c, req, yes).await?)?;
     if keep {
         c.request(Request::ChatUpdate {
             chat: info.id.clone(),
@@ -1414,6 +1424,7 @@ async fn fork(
             preset: None,
             keep: Some(true),
             folders: None,
+            confirmed: false,
         })
         .await?;
     }
@@ -1622,6 +1633,7 @@ fn blank(chat: &str) -> Request {
         preset: None,
         keep: None,
         folders: None,
+        confirmed: false,
     }
 }
 
@@ -1638,10 +1650,20 @@ fn set_archived(r: &mut Request, v: bool) {
 }
 
 async fn update(ctx: &Ctx, chat: &str, f: impl FnOnce(&mut Request)) -> Result<i32, Error> {
+    update_as(ctx, chat, false, f).await
+}
+
+/// `update`, asking first where the daemon says to (`yes`: agreed already).
+async fn update_as(
+    ctx: &Ctx,
+    chat: &str,
+    yes: bool,
+    f: impl FnOnce(&mut Request),
+) -> Result<i32, Error> {
     let c = ctx.connect(true).await?;
     let mut req = blank(chat);
     f(&mut req);
-    let info = chat_of(c.request(req).await?)?;
+    let info = chat_of(confirmed(&c, req, yes).await?)?;
     eprintln!("{} · {}", info.addr(), info.label());
     Ok(0)
 }

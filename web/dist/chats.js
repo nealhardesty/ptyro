@@ -132,6 +132,7 @@ export async function loadChats() {
         if (p) {
             presets = p.presets;
             presetsKnown = true;
+            incognitoDefault = !!p.incognito;
         }
     }
     catch (e) {
@@ -377,7 +378,8 @@ function newChat() {
     location.hash = `#/c/new${state.workspace ? `/${encodeURIComponent(state.workspace)}` : ""}`;
 }
 function update(c, change, ok) {
-    return ask({ t: "chat_update", chat: c.id, ...change }, ok);
+    // Another profile's agent asks first (the conversation goes to that account).
+    return askAgreed({ t: "chat_update", chat: c.id, ...change }, ok);
 }
 /// Keep a side chat: at once here too, so leaving before the daemon's word doesn't drop it.
 function keepSide(c) {
@@ -435,7 +437,7 @@ function forkAt(c, node) {
     ]);
 }
 async function fork(c, node, agent) {
-    const r = await ask({ t: "chat_fork", chat: c.id, node, agent, side: false }, "Forked");
+    const r = await askAgreed({ t: "chat_fork", chat: c.id, node, agent, side: false }, "Forked");
     if (r) {
         state.list.set(r.info.id, r.info);
         location.hash = `#/c/${encodeURIComponent(r.info.id)}`;
@@ -490,6 +492,8 @@ function pickAgent(c) {
 }
 /// Whether `presets` is the daemon's list (yours too), not the built-in three it starts as.
 let presetsKnown = false;
+/// `[chat] incognito`: a new chat starts incognito (its box ticked; unticked, it is kept).
+let incognitoDefault = false;
 let presets = [
     { name: "chat", about: "web search", builtin: true, read: false, shell: false },
     { name: "read", about: "web search · reads the chat's folders", builtin: true, read: true, shell: false },
@@ -612,6 +616,7 @@ function pageFor(id) {
     // The default is `[chat] preset`'s, whatever it is (a preset of your own too).
     const preset = h("select", { "aria-label": "Tools", title: tip("chat.preset") }, h("option", { value: "" }, "default tools"), ...presets.map((p) => h("option", { value: p.name }, `${p.name}: ${p.about}`)));
     const incognito = h("input", { type: "checkbox", title: tip("chat.incognito") });
+    incognito.checked = incognitoDefault;
     const folders = h("input", { type: "text", placeholder: "Folders it may read (optional), e.g. ~/notes", "aria-label": "Folders", title: tip("chat.folder"), autocapitalize: "off", spellcheck: "false" });
     // Compare: the first message goes to each agent checked (two or more), each answer a branch.
     const compare = h("div", { class: "bar chat-pick compare", title: tip("chat.compare") }, h("span", { class: "sub" }, "Ask several:"), ...agentNames().map((a) => h("label", { class: "check" }, h("input", { type: "checkbox", value: a }), ` ${a}`)));
