@@ -178,39 +178,40 @@ impl Daemon {
 
     /// At the daemon's start: answers cut off by a stop are closed as interrupted (§22.4), and
     /// old tombstones and archives go once a day.
-    pub(crate) fn start_chats(self: &Arc<Self>) {
+    /// At start, before connections are accepted (so nothing a new request starts is touched):
+    /// stop the engines that crossed a live upgrade, close the answers they cut off, then purge
+    /// old tombstones daily in the background.
+    pub(crate) async fn start_chats(self: &Arc<Self>) {
         let Ok(db) = self.chats.db().cloned() else {
             if let Err(e) = self.chats.db() {
                 self.warn(e.message);
             }
             return;
         };
+        // Engines that crossed a live upgrade have no follower in this image (the next message
+        // resumes the conversation). An incognito chat lived in the old image's memory alone, so
+        // it ends here: its folders go with it (SPEC §22.9).
+        for s in self.sessions() {
+            let chat = s.meta.locked().place.chat.clone();
+            let Some(chat) = chat else { continue };
+            s.hibernating.store(true, Ordering::Relaxed);
+            self.stop_session(&s).await;
+            self.forget_session(s.id);
+            if matches!(db.get(chat.clone()).await, Ok(None)) {
+                self.remove_chat_dirs(&chat, None).await;
+            }
+        }
+        // Engines' session rows from before they were kept out of `ptyro.db`.
+        if let Some(store) = &self.store {
+            store.forget_sessions_in(self.paths.data.join("chat").to_string_lossy().into_owned());
+        }
+        match db.close_interrupted().await {
+            Ok(c) if !c.is_empty() => tracing::info!("{} chat answer(s) were cut off", c.len()),
+            Ok(_) => {}
+            Err(e) => tracing::warn!("chat.db: {e}"),
+        }
         let me = Arc::clone(self);
         tokio::spawn(async move {
-            // Engines that crossed a live upgrade have no follower in this image: stop them (a
-            // cut-off answer is closed below; the next message resumes the conversation).
-            // An incognito chat lived in the old image's memory alone, so it ends here: its
-            // folders go with it (SPEC §22.9).
-            for s in me.sessions() {
-                let chat = s.meta.locked().place.chat.clone();
-                if let Some(chat) = chat {
-                    s.hibernating.store(true, Ordering::Relaxed);
-                    me.stop_session(&s).await;
-                    me.forget_session(s.id);
-                    if matches!(db.get(chat.clone()).await, Ok(None)) {
-                        me.remove_chat_dirs(&chat, None).await;
-                    }
-                }
-            }
-            // Engines' session rows from before they were kept out of `ptyro.db`.
-            if let Some(store) = &me.store {
-                store.forget_sessions_in(me.paths.data.join("chat").to_string_lossy().into_owned());
-            }
-            match db.close_interrupted().await {
-                Ok(c) if !c.is_empty() => tracing::info!("{} chat answer(s) were cut off", c.len()),
-                Ok(_) => {}
-                Err(e) => tracing::warn!("chat.db: {e}"),
-            }
             loop {
                 let days = me.config().chat.archive_purge_days;
                 match db.compact(days).await {

@@ -413,7 +413,7 @@ async fn serve(
     daemon.load_integrated().await;
     daemon.start_serve_supervisor();
     daemon.start_pad_watcher();
-    daemon.start_chats();
+    daemon.start_chats().await;
     // Retention (SPEC §14.2) is applied once a day while the daemon runs, not only at its start.
     {
         let d = Arc::clone(&daemon);

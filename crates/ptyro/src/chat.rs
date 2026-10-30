@@ -509,7 +509,7 @@ async fn ask(
             text = format!("{text}\n\n```\n{}\n```", ctxt.trim_end());
         }
     }
-    let c = ctx.connect(true).await?;
+    let mut c = ctx.connect(true).await?;
     // Incognito unless kept (SPEC §22.9): nothing of the question or its answer is written.
     let info = chat_of(
         c.request(Request::ChatNew {
@@ -517,7 +517,7 @@ async fn ask(
             agent,
             preset,
             title: None,
-            prompt: Some(text),
+            prompt: None,
             incognito: !keep,
         })
         .await?,
@@ -525,8 +525,10 @@ async fn ask(
     let addr = info.addr();
     // However it ends (an answer, an error, a timeout, Ctrl-C), nothing is kept unless --keep.
     let none = HashSet::new();
+    let pushes = c.pushes();
+    let wait = Duration::from_secs(timeout);
     let answered = tokio::select! {
-        r = wait(c, &info, &none, Duration::from_secs(timeout), false) => r,
+        r = follow_sending(pushes, c, &info, &none, wait, false, false, Some(text)) => r,
         _ = tokio::signal::ctrl_c() => Err(Error::new(ErrorCode::Invalid, "interrupted")),
     };
     if keep {
@@ -579,8 +581,26 @@ async fn follow(
     stream: bool,
     retry: bool,
 ) -> Result<bool, Error> {
-    let mut pushes = c.pushes();
+    follow_sending(c.pushes(), c, info, known, timeout, stream, retry, None).await
+}
+
+/// `follow`, sending `send` once subscribed: whatever its agent does, even dying at once, is
+/// seen (an incognito chat goes with its agent).
+#[allow(clippy::too_many_arguments)]
+async fn follow_sending(
+    mut pushes: tokio::sync::mpsc::UnboundedReceiver<ServerMsg>,
+    c: ptyro_client::Client,
+    info: &ChatInfo,
+    known: &HashSet<String>,
+    timeout: Duration,
+    stream: bool,
+    retry: bool,
+    send: Option<String>,
+) -> Result<bool, Error> {
     c.send(ClientMsg::ChatSubscribe { chat: info.id.clone() })?;
+    if let Some(text) = send {
+        c.request(Request::ChatSend { chat: info.id.clone(), text }).await?;
+    }
     let deadline = tokio::time::Instant::now() + timeout;
     // Items before the last user message are history; what follows is the answer.
     let mut after: Option<String> = None;
@@ -607,6 +627,13 @@ async fn follow(
         if reset {
             items.clear();
             order.clear();
+        }
+        // It can't be followed (it is gone: an incognito chat whose agent ended): the reason.
+        if let [ChatItem { id, body: ChatBody::Notice { text, .. }, .. }] = got.as_slice()
+            && reset
+            && id == "error"
+        {
+            return Err(Error::new(ErrorCode::NotFound, text.clone()));
         }
         for it in got {
             if !items.contains_key(&it.id) {
