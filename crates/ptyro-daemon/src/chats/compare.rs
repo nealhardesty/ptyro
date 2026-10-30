@@ -737,3 +737,44 @@ pub(super) fn imported_refusal(info: &ChatInfo) -> Error {
         "an imported chat stays as {agent} wrote it: send it a message to continue it as a fork"
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_helpers_warnings_go_with_its_answer_and_ptyros_info_doesnt() {
+        let live = Live::for_test("h1");
+        let user = ChatNode {
+            id: "u".into(),
+            parent: None,
+            at_ms: 0,
+            body: ChatBody::User { text: "hi".into() },
+        };
+        let notice = |id: &str, level, text: &str| ChatNode {
+            id: id.into(),
+            parent: None,
+            at_ms: 0,
+            body: ChatBody::Notice { level, text: text.into() },
+        };
+        let answer = ChatNode {
+            id: "a".into(),
+            parent: None,
+            at_ms: 0,
+            body: ChatBody::Assistant { text: "hello".into(), streaming: true },
+        };
+        load_branch(
+            &live,
+            &[
+                user,
+                notice("w", NoticeLevel::Warn, "opencode may keep its own copy"),
+                notice("i", NoticeLevel::Info, "continued with opencode"),
+                answer,
+            ],
+        );
+        let got = helper_answer(&live, "u");
+        let ids: Vec<&str> = got.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, ["w", "a"]);
+        assert!(matches!(got[1].body, ChatBody::Assistant { streaming: false, .. }));
+    }
+}

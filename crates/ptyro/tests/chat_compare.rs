@@ -232,22 +232,20 @@ fn an_agent_that_isnt_installed_is_a_cross_and_the_others_answer() {
         "compare",
         &addr,
         "--agents",
-        "claude,codex,opencode",
+        "claude,codex,gemini",
         "--json",
         "name a fruit",
     ]);
     let mut who: Vec<&str> =
         out["answers"].as_array().unwrap().iter().map(|a| a["agent"].as_str().unwrap()).collect();
     who.sort();
-    assert_eq!(who, ["claude", "opencode"], "{out}");
+    assert_eq!(who, ["claude", "gemini"], "{out}");
     let codex =
         out["agents"].as_array().unwrap().iter().find(|a| a["agent"] == "codex").unwrap().clone();
     assert_eq!(codex["state"], "failed", "{out}");
     assert!(codex["note"].as_str().unwrap().contains("isn't installed"), "{out}");
-    let shown = w.ok(&["chat", "show", &addr, "--all"]);
+    let shown = w.ok(&["chat", "show", &addr]);
     assert!(shown.contains("codex ✗"), "{shown}");
-    // OpenCode keeps its own copy of what it was asked: its answer says so.
-    assert!(shown.contains("opencode may keep its own copy"), "{shown}");
     // A name no agent has is still refused.
     let bad = w.cli(&["chat", "compare", &addr, "--agents", "claude,nosuch", "x"]);
     assert!(!bad.status.success());

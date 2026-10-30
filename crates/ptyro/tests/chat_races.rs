@@ -276,3 +276,25 @@ fn a_deleted_chat_leaves_no_agent_behind() {
     assert!(!dir.exists(), "its folder went: {}", dir.display());
     assert!(w.chats().is_empty());
 }
+
+#[test]
+fn pinned_and_unread_address_a_chat() {
+    let w = World::new("");
+    w.ok(&["chat", "new", "--title", "First", "one"]);
+    w.ok(&["chat", "new", "--title", "Second", "two"]);
+    let addr = |title: &str| {
+        let c = w.chats().into_iter().find(|c| c["title"] == title).unwrap();
+        format!("c:{}", c["handle"].as_str().unwrap())
+    };
+    let none = w.cli(&["chat", "show", "@pinned"]);
+    assert!(String::from_utf8_lossy(&none.stderr).contains("no chat is pinned"), "{none:?}");
+    w.ok(&["chat", "pin", &addr("Second")]);
+    assert_eq!(w.show("@pinned")["chat"]["title"], "Second");
+    // Two pinned: which, it asks, naming both.
+    w.ok(&["chat", "pin", &addr("First")]);
+    let two = w.cli(&["chat", "show", "@pinned"]);
+    let err = String::from_utf8_lossy(&two.stderr);
+    assert!(err.contains("matches 2 chats") && err.contains("First"), "{err}");
+    let unread = w.cli(&["chat", "show", "@unread"]);
+    assert!(String::from_utf8_lossy(&unread.stderr).contains("haven't read"), "{unread:?}");
+}

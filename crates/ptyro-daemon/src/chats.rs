@@ -121,6 +121,24 @@ impl Live {
         self.engine.locked().clone().filter(|e| e.session.is_live())
     }
 
+    #[cfg(test)]
+    pub(crate) fn for_test(id: &str) -> Self {
+        Self {
+            id: id.to_owned(),
+            items: Mutex::new(Transcript::default()),
+            rev: watch::Sender::new(0),
+            epoch: watch::Sender::new(0),
+            viewers: AtomicU32::new(0),
+            leaf: Mutex::new(None),
+            engine: Mutex::new(None),
+            quiet: std::sync::atomic::AtomicBool::new(false),
+            stopping: std::sync::atomic::AtomicBool::new(false),
+            siblings: Mutex::new(Vec::new()),
+            given: Mutex::new(None),
+            prompted: Mutex::new(None),
+        }
+    }
+
     /// Given a message it hasn't ended a turn for yet (its status still says idle until its
     /// driver begins the turn).
     fn given_unbegun(&self, session: &Session) -> bool {
@@ -2434,15 +2452,13 @@ impl Daemon {
                 if let ChatBody::Assistant { streaming, .. } = &mut b {
                     *streaming = false;
                 }
-                if written.as_ref() != Some(&b) {
-                    if keep {
-                        db.put_node(
-                            chat.clone(),
-                            ChatNode { id, parent, at_ms: now_ms(), body: b },
-                            Some(conv.clone()),
-                            index_tools,
-                        );
-                    }
+                if keep && written.as_ref() != Some(&b) {
+                    db.put_node(
+                        chat.clone(),
+                        ChatNode { id, parent, at_ms: now_ms(), body: b },
+                        Some(conv.clone()),
+                        index_tools,
+                    );
                 }
             }
             session.save(None);
