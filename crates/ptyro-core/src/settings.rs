@@ -692,6 +692,7 @@ pub const SETTINGS: &[Setting] = &[
     s("worktrees.stale_days", "worktrees", int(1, 3650), "`ptyro gc` reports a worktree with no sessions after this long.").unit("days"),
     s("worktrees.auto_rename_branch", "worktrees", Kind::Bool, "Name the branch after the first prompt, until it is pushed."),
     s("worktrees.archive_on_merge", "worktrees", Kind::Bool, "Archive a worktree when its pull request merges and nothing runs in it."),
+    s("worktrees.archive_purge_days", "worktrees", int(0, 36_500), "Delete archived worktrees after this many days, and their branches when merged or pushed. 0 keeps them.").unit("days"),
     s("ports.range", "worktrees", Kind::Text, "The ports handed out to worktrees, LOW-HIGH (LOW at least 1024).").new_only(),
     s("ports.count", "worktrees", int(1, 1000), "Ports for each worktree.").new_only().unit("ports"),
     s("discover.roots", "worktrees", Kind::List, "Folders to look in for git repositories.").or("none"),

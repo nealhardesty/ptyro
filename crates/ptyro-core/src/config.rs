@@ -1235,6 +1235,8 @@ pub struct Worktrees {
     pub auto_rename_branch: bool,
     /// Archive a worktree when its PR merges and nothing runs in it (UX1.12).
     pub archive_on_merge: bool,
+    /// Delete archived worktrees after this many days (0: keep them).
+    pub archive_purge_days: u32,
 }
 
 impl Default for Worktrees {
@@ -1248,6 +1250,7 @@ impl Default for Worktrees {
             stale_days: 14,
             auto_rename_branch: false,
             archive_on_merge: false,
+            archive_purge_days: 0,
         }
     }
 }

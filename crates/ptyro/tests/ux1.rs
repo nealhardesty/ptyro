@@ -628,6 +628,124 @@ async fn archive_keeps_uncommitted_work_and_restore_brings_it_back() {
     );
 }
 
+/// Deleting an archive drops its snapshot and its entry, and its branch only when that is
+/// merged; a branch with work of its own is kept.
+#[tokio::test]
+async fn deleting_an_archive_forgets_it_and_keeps_an_unmerged_branch() {
+    let w = World::new("exec sleep 60");
+    let dir = repo(&w, "myrepo");
+    let c = w.d.client().await.unwrap();
+    for name in ["done", "wip"] {
+        let spec = ptyro_core::model::WorktreeSpec {
+            project: dir.to_string_lossy().into_owned(),
+            name: Some(name.into()),
+            fetch: Some(false),
+            ..Default::default()
+        };
+        let Reply::WorktreeCreated { info, .. } =
+            c.request(Request::WorktreeNew { spec }).await.unwrap()
+        else {
+            panic!()
+        };
+        if name == "wip" {
+            std::fs::write(info.path.join("more.txt"), "x\n").unwrap();
+            git_out(&w, &info.path, &["add", "more.txt"]);
+            git_out(
+                &w,
+                &info.path,
+                &["-c", "user.name=t", "-c", "user.email=t@e", "commit", "-qm", "more"],
+            );
+        }
+        c.request(Request::WorktreeArchive {
+            addr: format!("myrepo/{name}"),
+            stop_sessions: false,
+        })
+        .await
+        .unwrap();
+    }
+    let refs = |w: &World| git_out(w, &dir, &["for-each-ref", "--format=%(refname)"]);
+    assert!(refs(&w).contains("refs/ptyro/archive/done"), "{}", refs(&w));
+    for (name, branch_note) in [("done", "deleted branch done"), ("wip", "kept branch wip")] {
+        let Reply::Notes { notes } = c
+            .request(Request::WorktreeArchiveDelete { addr: format!("myrepo/{name}") })
+            .await
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert!(notes.iter().any(|n| n.starts_with(branch_note)), "{notes:?}");
+    }
+    let refs = refs(&w);
+    assert!(!refs.contains("refs/ptyro/archive/"), "snapshots gone: {refs}");
+    assert!(!refs.contains("refs/heads/done") && refs.contains("refs/heads/wip"), "{refs}");
+    let Reply::Archives { entries } =
+        c.request(Request::WorktreeArchives { project: None }).await.unwrap()
+    else {
+        panic!()
+    };
+    assert!(entries.is_empty(), "{entries:?}");
+    let missing =
+        c.request(Request::WorktreeArchiveDelete { addr: "done".into() }).await.unwrap_err();
+    assert_eq!(missing.code, ptyro_core::ErrorCode::NotFound);
+}
+
+async fn gc_entries(c: &Client) -> Vec<ptyro_core::model::GcEntry> {
+    match c.request(Request::Gc).await.unwrap() {
+        Reply::Gc { entries } => entries,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// `gc` says what a stale worktree takes on disk, build output included, and leaves a locked
+/// one alone: locking is how you keep it (and quiet the doctor's nudge).
+#[tokio::test]
+async fn gc_measures_stale_worktrees_and_skips_locked_ones() {
+    let w = World::new("exec sleep 60");
+    let dir = repo(&w, "myrepo");
+    // A remote, so the worktree's base (`origin/<branch>`) exists and merged can be seen.
+    let origin = w.home().join("origin.git");
+    git(&w.home(), &w.home(), &["init", "-q", "--bare", &origin.to_string_lossy()]);
+    git(&w.home(), &dir, &["remote", "add", "origin", &origin.to_string_lossy()]);
+    git(&w.home(), &dir, &["push", "-q", "origin", "HEAD:main"]);
+    let c = w.d.client().await.unwrap();
+    // A worktree with no commits of its own isn't "merged", however far the base moves.
+    let fresh = ptyro_core::model::WorktreeSpec {
+        project: dir.to_string_lossy().into_owned(),
+        name: Some("fresh".into()),
+        fetch: Some(false),
+        ..Default::default()
+    };
+    c.request(Request::WorktreeNew { spec: fresh }).await.unwrap();
+    let spec = ptyro_core::model::WorktreeSpec {
+        project: dir.to_string_lossy().into_owned(),
+        name: Some("shipped".into()),
+        fetch: Some(false),
+        ..Default::default()
+    };
+    let Reply::WorktreeCreated { info, .. } =
+        c.request(Request::WorktreeNew { spec }).await.unwrap()
+    else {
+        panic!()
+    };
+    std::fs::write(info.path.join("feature.txt"), "done\n").unwrap();
+    git(&w.home(), &info.path, &["add", "feature.txt"]);
+    git(&w.home(), &info.path, &["commit", "-qm", "the feature"]);
+    // Build output: ignored, regenerable, and the bulk of what a worktree takes.
+    std::fs::create_dir_all(info.path.join("target")).unwrap();
+    std::fs::write(info.path.join("target/big.bin"), vec![7u8; 4 << 20]).unwrap();
+    git(&w.home(), &dir, &["merge", "-q", "--ff-only", "shipped"]);
+    git(&w.home(), &dir, &["push", "-q", "origin", "HEAD:main"]);
+    let entries = gc_entries(&c).await;
+    let e = entries.iter().find(|e| e.worktree.name == "shipped").expect("stale: merged");
+    assert!(e.reasons.iter().any(|r| r.contains("merged")), "{:?}", e.reasons);
+    assert!(e.bytes.unwrap_or(0) >= 4 << 20, "its build output counts: {:?}", e.bytes);
+    assert!(e.size_label().unwrap().ends_with("MiB"), "{:?}", e.size_label());
+    assert!(entries.iter().all(|e| e.worktree.name != "fresh"), "{entries:?}");
+    c.request(Request::WorktreeLock { addr: info.id.clone(), lock: true }).await.unwrap();
+    let entries = gc_entries(&c).await;
+    assert!(entries.iter().all(|e| e.worktree.name != "shipped"), "kept: {entries:?}");
+}
+
 fn git_out(w: &World, dir: &std::path::Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
         .arg("-C")

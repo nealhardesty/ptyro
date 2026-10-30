@@ -229,7 +229,13 @@ for the message, and opens a PR (or integrates it). Once the PR merges, `x` clea
 **archiving**: its branch and a snapshot of every file are kept, the checkout goes, and `ptyro wt
 restore` brings it back as it was. `ptyro wt rm` refuses to remove a worktree with running
 sessions, uncommitted or unpushed work, or stashes, lists exactly what would be lost, and offers
-archiving instead. ptyro also reads
+archiving instead. Either way the checkout goes, build output (`target/`, `node_modules/`) with
+it, so disk comes back. `ptyro gc` (`Ctrl-Q G`) lists the stale ones, biggest on disk first, to
+archive, remove or keep (lock); the health badge (`⚕`, and Health on the web) reminds you when
+there are some, with how much disk they take. An archive is
+just a git ref: `ptyro wt archive-rm NAME` deletes one for good (`^x` in the TUI's restore list,
+Delete under Archived on the web), and `[worktrees] archive_purge_days` deletes them on its own
+once they're that old. ptyro also reads
 setup config written for Conductor, Superset, the Codex app, Claude Desktop, Cursor and Copilot.
 Details: [`docs/config.md`](docs/config.md).
 

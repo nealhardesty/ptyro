@@ -5,6 +5,8 @@
 //!   `refs/ptyro/archive/<name>`, its branch kept, the worktree removed. It loses nothing, so it
 //!   never refuses the way `wt rm` must;
 //! - **restore**: the branch checked out again and the snapshot put back as uncommitted work;
+//! - **delete an archive**: its snapshot and kept files go, and its branch when that is merged
+//!   or pushed; `[worktrees] archive_purge_days` does it on its own to archives that old;
 //! - **archive on merge** (`[worktrees] archive_on_merge`): when its PR merges and nothing runs
 //!   in it.
 
@@ -16,7 +18,7 @@ use ptyro_core::model::{ArchiveEntry, RemoveOpts, WorktreeInfo, WorktreeSpec};
 use ptyro_core::session::SessionKind;
 use ptyro_core::status::AgentStatus;
 use ptyro_core::{Error, now_ms};
-use ptyro_git::Git;
+use ptyro_git::{BranchFate, Git};
 use ptyro_protocol::{DomainEvent, Reply, Request};
 
 use crate::daemon::Daemon;
@@ -162,6 +164,7 @@ impl Daemon {
                 path: wt.path.clone(),
                 title: wt.title.clone(),
                 archived_ms: now_ms(),
+                base: wt.base.clone(),
             },
         );
         self.save_archives(&list).await.map_err(|e| {
@@ -187,30 +190,7 @@ impl Daemon {
     pub(crate) async fn restore_worktree(self: &Arc<Self>, addr: &str) -> Result<Reply, Error> {
         let _one = self.archive_list.lock().await;
         let mut list = self.archives().await?;
-        let (slug, name) = match addr.split_once('/') {
-            Some((p, n)) => (Some(p), n),
-            None => (None, addr),
-        };
-        let matches: Vec<usize> = list
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| e.name == name && slug.is_none_or(|s| s == e.project_slug))
-            .map(|(i, _)| i)
-            .collect();
-        let i = match matches.as_slice() {
-            [] => return Err(Error::missing("archived worktree", addr)),
-            [i] => *i,
-            // Newest first: the latest of several with that name.
-            [i, ..] if slug.is_some() => *i,
-            _ => {
-                return Err(Error::new(
-                    ptyro_core::ErrorCode::Ambiguous,
-                    format!(
-                        "several archived worktrees are named {name}: say which project (`myrepo/{name}`)"
-                    ),
-                ));
-            }
-        };
+        let i = archive_index(&list, addr)?;
         let e = list[i].clone();
         // The branch must still be where the snapshot was taken: restoring puts the files back
         // over its tip, and a branch that has moved on (an integrate, a commit from another
@@ -264,6 +244,97 @@ impl Daemon {
         list.remove(i);
         self.save_archives(&list).await?;
         Ok(Reply::Worktree { info: self.find_worktree(&info.id)? })
+    }
+
+    /// Delete an archived worktree for good: off the list, then its snapshot, its kept files
+    /// and its branch (only when merged or pushed, as `wt rm` decides).
+    pub(crate) async fn delete_archive(&self, addr: &str) -> Result<Reply, Error> {
+        let _one = self.archive_list.lock().await;
+        let mut list = self.archives().await?;
+        let e = list.remove(archive_index(&list, addr)?);
+        // The list first: an entry whose snapshot is gone could no longer be restored.
+        self.save_archives(&list).await?;
+        let notes = self.forget_archive(&e, &list).await;
+        Ok(Reply::Notes { notes })
+    }
+
+    /// Delete the archives older than `[worktrees] archive_purge_days` (0: never). How many went.
+    pub(crate) async fn purge_archives(&self) -> Result<usize, Error> {
+        let days = self.config().worktrees.archive_purge_days;
+        if days == 0 {
+            return Ok(0);
+        }
+        let _one = self.archive_list.lock().await;
+        let (old, keep) = expired(self.archives().await?, days, now_ms());
+        if old.is_empty() {
+            return Ok(0);
+        }
+        self.save_archives(&keep).await?;
+        for e in &old {
+            for n in self.forget_archive(e, &keep).await {
+                tracing::info!("archive purge: {n}");
+            }
+        }
+        Ok(old.len())
+    }
+
+    /// Once a day while the daemon runs, the first time soon after it starts.
+    pub(crate) fn start_archive_purge(self: &Arc<Self>) {
+        let me = Arc::clone(self);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                match me.purge_archives().await {
+                    Ok(n) if n > 0 => tracing::info!("{n} archived worktree(s) purged"),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("archive purge: {}", e.message),
+                }
+                tokio::time::sleep(Duration::from_secs(24 * 3600 - 60)).await;
+            }
+        });
+    }
+
+    /// What an archive leaves behind, gone: its snapshot ref, its kept ignored files, and its
+    /// branch when no other archive (`rest`) or worktree needs it and it is merged or pushed.
+    async fn forget_archive(&self, e: &ArchiveEntry, rest: &[ArchiveEntry]) -> Vec<String> {
+        let what = format!("{}/{}", e.project_slug, e.name);
+        let _ = std::fs::remove_dir_all(extras_dir(
+            &self.paths.data.join("archive-extras"),
+            &e.snapshot,
+        ));
+        let Some(p) = self.project_by_id(&e.project) else {
+            return vec![format!("deleted the archive of {what} (its project is gone)")];
+        };
+        let in_use =
+            rest.iter().any(|o| o.project == e.project && o.branch == e.branch)
+                || self.registry.locked().worktrees.iter().any(|w| {
+                    w.project == e.project && w.branch.as_deref() == Some(e.branch.as_str())
+                });
+        let (root, e) = (p.root.clone(), e.clone());
+        blocking(move || {
+            let git = Git::new();
+            let mut notes = vec![match git.delete_ref(&root, &e.snapshot) {
+                Ok(()) => format!("deleted the archive of {what} ({})", e.snapshot),
+                Err(err) => format!(
+                    "deleted the archive of {what}; its snapshot {} stays: {err}",
+                    e.snapshot
+                ),
+            }];
+            if in_use {
+                notes.push(format!("kept branch {}: still in use", e.branch));
+            } else {
+                notes.push(match git.branch_fate(&root, &e.branch, e.base.as_deref()) {
+                    BranchFate::Delete(why) => match git.delete_branch(&root, &e.branch) {
+                        Ok(()) => format!("deleted branch {} ({why})", e.branch),
+                        Err(err) => format!("kept branch {}: {err}", e.branch),
+                    },
+                    BranchFate::Keep(why) => format!("kept branch {}: {why}", e.branch),
+                });
+            }
+            notes
+        })
+        .await
+        .unwrap_or_default()
     }
 
     pub(crate) async fn list_archives(&self, project: Option<&str>) -> Result<Reply, Error> {
@@ -420,6 +491,39 @@ const REGENERABLE: &[&str] = &[
 const KEEP_FILE: u64 = 1 << 20;
 const KEEP_TOTAL: u64 = 16 << 20;
 
+/// The archives older than `days` (0: none), and the rest.
+fn expired(list: Vec<ArchiveEntry>, days: u32, now: u64) -> (Vec<ArchiveEntry>, Vec<ArchiveEntry>) {
+    let before = now.saturating_sub(u64::from(days) * 86_400_000);
+    list.into_iter().partition(|e| days > 0 && e.archived_ms < before)
+}
+
+/// The entry `addr` (`name`, or `project/name`) names: the newest of several with a project,
+/// ambiguous without one.
+fn archive_index(list: &[ArchiveEntry], addr: &str) -> Result<usize, Error> {
+    let (slug, name) = match addr.split_once('/') {
+        Some((p, n)) => (Some(p), n),
+        None => (None, addr),
+    };
+    let matches: Vec<usize> = list
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.name == name && slug.is_none_or(|s| s == e.project_slug))
+        .map(|(i, _)| i)
+        .collect();
+    match matches.as_slice() {
+        [] => Err(Error::missing("archived worktree", addr)),
+        [i] => Ok(*i),
+        // Newest first: the latest of several with that name.
+        [i, ..] if slug.is_some() => Ok(*i),
+        _ => Err(Error::new(
+            ptyro_core::ErrorCode::Ambiguous,
+            format!(
+                "several archived worktrees are named {name}: say which project (`myrepo/{name}`)"
+            ),
+        )),
+    }
+}
+
 /// Where the ignored files of the archive `snapshot` (`refs/ptyro/archive/x`) are kept.
 fn extras_dir(root: &std::path::Path, snapshot: &str) -> std::path::PathBuf {
     root.join(snapshot.trim_start_matches("refs/").replace('/', "_"))
@@ -502,6 +606,28 @@ fn restore_ignored(from: &std::path::Path, path: &std::path::Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn purging_takes_only_archives_older_than_the_setting() {
+        const DAY: u64 = 86_400_000;
+        let at = |name: &str, archived_ms| ArchiveEntry {
+            project: "p".into(),
+            project_slug: "p".into(),
+            name: name.into(),
+            branch: name.into(),
+            snapshot: format!("refs/ptyro/archive/{name}"),
+            path: "/x".into(),
+            title: None,
+            archived_ms,
+            base: None,
+        };
+        let now = 100 * DAY;
+        let list = vec![at("new", now - DAY), at("old", now - 31 * DAY)];
+        let (old, keep) = expired(list.clone(), 30, now);
+        assert_eq!(old.iter().map(|e| &e.name[..]).collect::<Vec<_>>(), ["old"]);
+        assert_eq!(keep.iter().map(|e| &e.name[..]).collect::<Vec<_>>(), ["new"]);
+        assert!(expired(list, 0, now).0.is_empty(), "0 keeps them all");
+    }
 
     fn repo(dir: &std::path::Path) -> Git {
         let g = Git::new();

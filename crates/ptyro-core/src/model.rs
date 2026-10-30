@@ -607,6 +607,31 @@ pub struct RemoveOpts {
 pub struct GcEntry {
     pub worktree: WorktreeInfo,
     pub reasons: Vec<String>,
+    /// What its directory takes on disk (build output included), when measured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
+    /// Measuring took too long and stopped: it takes at least `bytes`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bytes_partial: bool,
+}
+
+impl GcEntry {
+    /// `4.1 GiB`, `≥ 12.0 GiB` when measuring stopped early; `None` when not measured.
+    pub fn size_label(&self) -> Option<String> {
+        let b = self.bytes?;
+        Some(format!("{}{}", if self.bytes_partial { "≥ " } else { "" }, human_bytes(b)))
+    }
+}
+
+/// `512 B`, `3.4 MiB`, `12.0 GiB`.
+pub fn human_bytes(b: u64) -> String {
+    const U: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let (mut v, mut i) = (b as f64, 0);
+    while v >= 1024.0 && i < U.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 { format!("{b} B") } else { format!("{v:.1} {}", U[i]) }
 }
 
 /// An archived worktree (UX1.12): its branch kept, its files (committed or not) in a snapshot
@@ -623,6 +648,9 @@ pub struct ArchiveEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub archived_ms: u64,
+    /// The worktree's base, so deleting the archive knows whether its branch is merged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
 }
 
 /// What a diff is taken against (SPEC §11.5 inspector, M6.2).

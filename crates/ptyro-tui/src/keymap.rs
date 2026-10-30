@@ -66,7 +66,14 @@ pub const ACTIONS: &[ActionSpec] = &[
         "worktree.archive",
         "Archive this worktree: its branch and a snapshot of its files are kept, the checkout goes",
     ),
-    a("worktree.restore", "Bring an archived worktree back, as it was"),
+    a(
+        "worktree.restore",
+        "Bring an archived worktree back, as it was (^x in the list deletes one)",
+    ),
+    a(
+        "worktree.archive_delete",
+        "Delete an archived worktree for good: its saved files, and its branch if merged or pushed",
+    ),
     a("worktree.gc", "Stale worktrees (merged, gone, unused): pick one to archive it"),
     a("shell.new", "New shell: another one of its own in this worktree, full sized"),
     a(
@@ -468,6 +475,7 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Prefix, "C-t", "shell.drawer"),
     (Table::Prefix, "T", "shell.pane"),
     (Table::Prefix, "H", "home"),
+    (Table::Prefix, "G", "worktree.gc"),
     (Table::Prefix, "M", "health"),
     (Table::Prefix, "I", "app.about"),
     (Table::Prefix, "C", "config.panel"),
