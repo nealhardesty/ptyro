@@ -741,3 +741,25 @@ fn search_finds_a_setting_by_the_words_people_type() {
             .collect();
     assert!(keys.contains(&"notifications.channels".to_owned()), "{keys:?}");
 }
+
+#[test]
+fn a_draft_of_several_lines_is_edited_a_line_at_a_time() {
+    use ptyro_core::input::{KeyCode, KeyEvent, Mods};
+    let mut e = LineEdit::with("first line\nsecond one");
+    // C-w keeps to the cursor's line, as C-u and C-k do.
+    e.at = 11;
+    assert!(e.key(KeyEvent::new(KeyCode::Char { c: 'w' }, Mods(Mods::CTRL))));
+    assert_eq!(e.text, "first line\nsecond one", "nothing before it on its line");
+    e.at = e.text.chars().count();
+    e.key(KeyEvent::new(KeyCode::Char { c: 'w' }, Mods(Mods::CTRL)));
+    assert_eq!(e.text, "first line\nsecond ");
+    // Up and down keep the column as far as the line allows; none past the ends.
+    e.at = 13;
+    assert!(e.vertical(true));
+    assert_eq!(e.at, 2);
+    assert!(!e.vertical(true));
+    e.at = 9;
+    assert!(e.vertical(false));
+    assert_eq!(e.at, e.text.chars().count(), "the shorter line's end");
+    assert!(!e.vertical(false));
+}

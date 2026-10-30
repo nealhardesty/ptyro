@@ -10,7 +10,7 @@ use std::cell::{Cell, RefCell};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::theme::{Depth, Theme};
 
@@ -38,6 +38,32 @@ pub struct ChatView {
     focus: RefCell<Option<String>>,
     /// The scroll that draw worked out for `focus`, kept until a key settles it.
     forced: Cell<Option<usize>>,
+    /// The keys the composer's hints name, where they aren't the daemon's line editor's.
+    pub hints: Option<Hints>,
+}
+
+/// What the composer says about its keys (a chat's are its own, and rebindable).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hints {
+    /// A permission card is waiting and the draft is empty.
+    pub card: String,
+    /// A card is waiting behind a draft.
+    pub card_behind: String,
+    /// Nothing typed yet.
+    pub empty: String,
+    /// Beside a branch point: the keys that flip it.
+    pub branches: String,
+}
+
+impl Default for Hints {
+    fn default() -> Self {
+        Self {
+            card: "a allow · A always · d deny".into(),
+            card_behind: "(Esc clears the draft, then a/A/d)".into(),
+            empty: "type a message · Enter sends · Ctrl-C interrupts".into(),
+            branches: "Alt-← Alt-→".into(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -64,6 +90,22 @@ impl ChatView {
         self.rev = rev;
         self.draft = draft;
         self.wrapped.take();
+    }
+
+    /// Only the draft (and its cursor) changed: the wrapped transcript stays, as the composer
+    /// is laid out at every draw anyway.
+    pub fn set_draft(&mut self, draft: String, cursor: Option<usize>) {
+        self.draft = draft;
+        self.cursor = cursor;
+    }
+
+    /// The scroll the next key or wheel turn starts from (a focused message's, if one is shown).
+    pub fn scroll_by(&mut self, up: isize) {
+        self.settle_focus();
+        self.scroll = match up {
+            u if u >= 0 => (self.scroll + u as usize).min(self.max_scroll.get()),
+            d => self.scroll.saturating_sub(d.unsigned_abs()),
+        };
     }
 
     /// Branch points to draw (`ChatSiblings`, by node).
@@ -176,6 +218,7 @@ fn tool_color(st: ToolStatus, t: &Theme) -> Color {
 
 fn build(view: &ChatView, t: &Theme, depth: Depth) -> Doc {
     let c = |c: Color| Style::new().fg(depth.fit(c));
+    let hints = view.hints.clone().unwrap_or_default();
     let mut d = Doc { lines: Vec::new(), starts: Vec::new() };
     for it in &view.items {
         // Where it has siblings: which one this is, and the keys that go to the others.
@@ -185,7 +228,7 @@ fn build(view: &ChatView, t: &Theme, depth: Depth) -> Doc {
             }
             // A compare's answers are named by their agent (SPEC §22.7).
             let who = if who.is_empty() { String::new() } else { format!(" {who}") };
-            d.line(vec![seg(&format!("‹ {at}/{of}{who} ›  Alt-← Alt-→"), c(t.dim))]);
+            d.line(vec![seg(&format!("‹ {at}/{of}{who} ›  {}", hints.branches), c(t.dim))]);
         }
         d.starts.push((it.id.clone(), d.lines.len()));
         match &it.body {
@@ -341,15 +384,18 @@ pub fn draw(
     let rows = &cache.as_ref().expect("wrapped").rows;
     // The composer: the draft, or a hint.
     let accent = Style::new().fg(depth.fit(t.accent)).add_modifier(Modifier::BOLD);
+    let hints = view.hints.clone().unwrap_or_default();
     let hint = if view.pending_permission() && view.draft.is_empty() {
-        "a allow · A always · d deny".to_owned()
+        hints.card
     } else if view.pending_permission() {
-        "(Esc clears the draft, then a/A/d)".to_owned()
+        hints.card_behind
     } else if view.draft.is_empty() {
-        "type a message · Enter sends · Ctrl-C interrupts".to_owned()
+        hints.empty
     } else {
         String::new()
     };
+    let width_of =
+        |r: &[(char, Style)]| r.iter().map(|(c, _)| c.width().unwrap_or(0)).sum::<usize>();
     let mut composer: Vec<Vec<(char, Style)>> = Vec::new();
     // The cursor: its composer row and column (the text before it, wrapped the same way).
     let len = view.draft.chars().count();
@@ -358,22 +404,31 @@ pub fn draw(
     for (i, l) in view.draft.split('\n').enumerate() {
         let lead = if i == 0 { "› " } else { "  " };
         let n = l.chars().count();
+        // The text before the cursor fills its row: the cursor starts the next one, which a
+        // line ending there gets empty.
+        let mut full_end = false;
         if left <= n {
             let before: String = l.chars().take(left).collect();
             let rows = wrap(&[seg(lead, accent), seg(&before, Style::new())], width);
-            let col =
-                rows.last().map_or(0, |r| r.iter().map(|(c, _)| c.width().unwrap_or(0)).sum());
+            let col = rows.last().map_or(0, |r| width_of(r));
             cursor = (composer.len() + rows.len() - 1, col);
+            if col >= width {
+                cursor = (cursor.0 + 1, 0);
+                full_end = left == n;
+            }
             left = usize::MAX;
         } else if left != usize::MAX {
             left -= n + 1;
         }
         let segs = vec![seg(lead, accent), seg(l, Style::new().fg(depth.fit(t.text)))];
         composer.extend(wrap(&segs, width));
+        if full_end {
+            composer.push(Vec::new());
+        }
     }
     if !hint.is_empty() {
         let last = composer.last_mut().expect("composer");
-        if last.len() + hint.len() + 1 < width {
+        if width_of(last) + hint.width() + 1 < width {
             last.extend(
                 std::iter::once((' ', Style::new()))
                     .chain(hint.chars().map(|c| (c, Style::new().fg(depth.fit(t.dim))))),
@@ -548,5 +603,17 @@ mod tests {
         let cur = draw(&v, &mut buf, area, &Theme::dark(), Depth::True, true);
         assert_eq!(cur, Some(Position::new(2, 5)), "on the top composer row");
         assert_eq!(buf[(2, 5)].symbol(), "1", "the first line is shown");
+    }
+
+    #[test]
+    fn a_draft_that_fills_its_row_puts_the_cursor_on_the_next_one() {
+        let mut v = ChatView::default();
+        // `› ` and 18 letters fill a 20-column row exactly.
+        v.apply(1, true, vec![], "x".repeat(18));
+        let area = Rect::new(0, 0, 20, 10);
+        let mut buf = Buffer::empty(area);
+        let cur = draw(&v, &mut buf, area, &Theme::dark(), Depth::True, true);
+        assert_eq!(cur, Some(Position::new(0, 9)), "the next row's start");
+        assert_eq!(buf[(19, 8)].symbol(), "x", "the full row above it");
     }
 }

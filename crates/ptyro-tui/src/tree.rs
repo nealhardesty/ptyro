@@ -370,9 +370,13 @@ impl Inputs<'_> {
         rows
     }
 
-    /// How many chats a workspace has (`all chats… (N)`).
+    /// How many chats a workspace has (`all chats… (N)`): as the chat list counts them,
+    /// without side chats and incognito ones.
     pub fn chat_count(&self, ws: &str) -> usize {
-        self.chats.iter().filter(|c| c.workspace == ws).count()
+        self.chats
+            .iter()
+            .filter(|c| c.workspace == ws && c.side_of.is_none() && !c.incognito)
+            .count()
     }
 }
 
@@ -617,6 +621,14 @@ mod tests {
             "pinned, then the newest `recent`, then `all chats…`; `＋ new chat` where there are none"
         );
         assert_eq!(i.chat_count("main"), 3);
+        // Side chats and incognito ones aren't counted, as the chat list doesn't list them.
+        let mut more = chats.clone();
+        let mut side = chat("s", "main", false);
+        side.side_of = Some("a".into());
+        let mut gone = chat("g", "main", false);
+        gone.incognito = true;
+        more.extend([side, gone]);
+        assert_eq!(Inputs { chats: &more, ..i }.chat_count("main"), 3);
         let mut folded = HashSet::new();
         folded.insert(chats_key("main"));
         let rows = Inputs { collapsed: &folded, ..i }.rows();
