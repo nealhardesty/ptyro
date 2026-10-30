@@ -1318,6 +1318,13 @@ fn draw_header(
             }
             left.push(Span::styled(s.name.clone(), name));
             left.push(Span::styled(format!(" · {}", what(s)), base));
+            // The model its agent runs (`opus 5.5`), once the agent has said.
+            if let Some(m) = s.model.as_deref().filter(|_| s.kind == SessionKind::Agent) {
+                left.push(Span::styled(
+                    format!(" {}", ptyro_core::session::model_label(m)),
+                    base.fg(app.depth.fit(t.accent)),
+                ));
+            }
             if let Some(b) = profile_badge(app, &s.profile) {
                 left.push(Span::styled(" · ", base));
                 left.push(Span { style: base.patch(b.style), ..b });

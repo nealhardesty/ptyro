@@ -3,7 +3,7 @@
 // protocol (JSON encoding) over `ptyro serve`'s WebSocket, signed in with a device token from
 // `ptyro pair`. No dependencies, no third-party requests.
 
-import { Screen } from "./screen.js";
+import { Screen, modelLabel } from "./screen.js";
 import type { Frame, InboxEntry, Session } from "./screen.js";
 import { conn, store, token } from "./conn.js";
 import { Term } from "./term.js";
@@ -211,7 +211,7 @@ function sessionCard(s: Session): HTMLElement {
     h("span", { class: "glyph" }, selecting ? (marked.has(s.id) ? "☑" : "☐") : GLYPH[st] ?? "·"),
     h("div", { class: "main" },
       // Another machine's (MM1.B): its name without the machine, and the machine's chip.
-      h("div", { class: "name" }, s.machine ? splitMachine(s.name)[1] : s.name, s.agent ? h("small", {}, ` ${s.agent}`) : null, s.machine ? " " : null, machineChip(s.name)),
+      h("div", { class: "name" }, s.machine ? splitMachine(s.name)[1] : s.name, s.agent ? h("small", {}, ` ${s.agent}`, s.model ? ` · ${modelLabel(s.model)}` : "") : null, s.machine ? " " : null, machineChip(s.name)),
       h("div", { class: "sub" }, [st, s.project, s.worktree].filter(Boolean).join(" · ")),
       detail ? h("div", { class: "detail" }, detail) : null,
     ),
@@ -242,7 +242,7 @@ searchBox.addEventListener("input", () => {
   const list = document.querySelector<HTMLElement>("main.list .cards");
   if (list) patch(list, listCards());
 });
-const matches = (s: Session): boolean => !query || [s.name, s.title, s.agent, s.project, s.worktree, s.task, s.activity, statusOf(s)].some((x) => x?.toLowerCase().includes(query));
+const matches = (s: Session): boolean => !query || [s.name, s.title, s.agent, s.model && modelLabel(s.model), s.project, s.worktree, s.task, s.activity, statusOf(s)].some((x) => x?.toLowerCase().includes(query));
 
 function listView(): HTMLElement {
   const order = ["blocked", "errored", "working", "starting", "done", "idle", "unknown", "shell", "dormant", "exited"];
@@ -345,7 +345,7 @@ function sessionView(id: string): HTMLElement {
   if (chat) updateChat(id, sh);
   patch(sh.el, [
     header(s.name, true, h("button", { class: "icon", title: tipOf("session.menu"), "aria-label": "More", onclick: () => sessionMenu(s) }, "⋯")),
-    h("div", { class: `pill ${st}` }, GLYPH[st] ?? "·", " ", st, s.status?.detail && !blocked ? ` · ${s.status.detail}` : "", s.status ? ` · ${ago(s.status.since_ms)}` : "", !chat && app.screens.get(id)?.title ? ` · ${app.screens.get(id)!.title}` : "", s.machine ? " · " : "", machineChip(s.name)),
+    h("div", { class: `pill ${st}` }, GLYPH[st] ?? "·", " ", st, s.model && s.kind === "agent" ? ` · ${modelLabel(s.model)}` : "", s.status?.detail && !blocked ? ` · ${s.status.detail}` : "", s.status ? ` · ${ago(s.status.since_ms)}` : "", !chat && app.screens.get(id)?.title ? ` · ${app.screens.get(id)!.title}` : "", s.machine ? " · " : "", machineChip(s.name)),
     // Its machine is down (MM1.B): this is how it was, and what to do.
     ...(machineOf(s.name) && machineOf(s.name)!.state !== "online" ? [h("p", { class: "banner warn" }, `${machineOf(s.name)!.name} isn't reachable: this is how it was. `, machineOf(s.name)!.fix ?? "")] : []),
     ...(blocked ? [h("section", { class: "prompt" },

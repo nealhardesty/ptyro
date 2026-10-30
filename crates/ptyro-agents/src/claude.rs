@@ -12,8 +12,8 @@ use ptyro_core::status::{AgentStatus, Signal};
 use serde_json::{Value, json};
 
 use crate::adapter::{
-    Adapter, Caps, Decision, LaunchCtx, LaunchPlan, StopStep, integration_dir, str_of,
-    tool_summary, uuid_v4,
+    Adapter, Caps, Decision, LaunchCtx, LaunchPlan, StopStep, integration_dir, model_in, str_of,
+    tool_summary, transcript_model, uuid_v4,
 };
 
 /// The hook events ptyro listens to.
@@ -183,6 +183,12 @@ impl Adapter for Claude {
         let mut out = Vec::new();
         if let Some(id) = str_of(p, "session_id") {
             out.push(Signal::Conversation { id: id.to_owned() });
+        }
+        // Only `SessionStart` names the model; what ran each turn is in the transcript, so a
+        // `/model` switch shows once the turn that used it ends.
+        out.extend(model_in(p));
+        if event == "Stop" {
+            out.extend(str_of(p, "transcript_path").and_then(transcript_model));
         }
         let tool = || {
             tool_summary(
@@ -402,6 +408,39 @@ mod tests {
         assert_eq!(Claude.answer_screen(trust, Decision::Allow).unwrap(), b"\x1b[B\r");
         assert_eq!(Claude.answer_screen(trust, Decision::Deny).unwrap(), b"\x1b");
         assert_eq!(Claude.answer_screen("Do you want to proceed?", Decision::Allow).unwrap(), b"1");
+    }
+
+    #[test]
+    fn the_model_comes_from_session_start_and_then_from_the_transcript() {
+        let start = Claude.on_hook("SessionStart", &fixture("SessionStart"));
+        assert!(start.contains(&Signal::Model { id: "claude-opus-5-5".into() }), "{start:?}");
+        // Other events carry none, and a path that isn't a readable transcript adds none.
+        let pre = Claude.on_hook("PreToolUse", &fixture("PreToolUse"));
+        assert!(!pre.iter().any(|s| matches!(s, Signal::Model { .. })));
+        // A turn that ended after `/model sonnet`: the last real assistant turn says so.
+        let dir = std::env::temp_dir().join(format!("ptyro-model-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let t = dir.join("t.jsonl");
+        std::fs::write(
+            &t,
+            [
+                r#"{"type":"assistant","message":{"model":"claude-opus-5-5","content":[]}}"#,
+                r#"{"type":"user","message":{"role":"user","content":"hi"}}"#,
+                r#"{"type":"assistant","message":{"model":"claude-sonnet-5-5","content":[]}}"#,
+                r#"{"type":"assistant","message":{"model":"<synthetic>","content":[]}}"#,
+                "not json",
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let stop = Claude
+            .on_hook("Stop", &json!({"session_id": "s", "transcript_path": t.to_string_lossy()}));
+        assert!(stop.contains(&Signal::Model { id: "claude-sonnet-5-5".into() }), "{stop:?}");
+        let gone = Claude.on_hook("Stop", &json!({"transcript_path": "/nope/x.jsonl"}));
+        assert!(!gone.iter().any(|s| matches!(s, Signal::Model { .. })));
+        let odd = Claude.on_hook("Stop", &json!({"transcript_path": "relative.jsonl"}));
+        assert!(!odd.iter().any(|s| matches!(s, Signal::Model { .. })));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

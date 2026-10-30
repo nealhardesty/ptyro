@@ -305,6 +305,9 @@ impl Driver for Claude {
                     self.session = Some(s.to_owned());
                     out.push(Effect::Signal(Signal::Conversation { id: s.to_owned() }));
                 }
+                if let Some(id) = m["model"].as_str().filter(|m| !m.is_empty()) {
+                    out.push(Effect::Signal(Signal::Model { id: id.to_owned() }));
+                }
                 out
             }
             Some("stream_event") => self.stream(&m["event"]),
@@ -439,6 +442,7 @@ mod tests {
         assert!(all.contains(&Effect::Signal(Signal::Conversation {
             id: "3c80e6c8-4aef-4d44-bf4d-a41396596694".into()
         })));
+        assert!(all.contains(&Effect::Signal(Signal::Model { id: "claude-haiku-5-5".into() })));
         let bodies = items(&all);
         assert!(bodies.iter().any(|b| matches!(b, ChatBody::Tool { name, title, status: ToolStatus::Running, .. } if name == "Bash" && title == "touch probe.txt")));
         assert!(bodies.iter().any(|b| matches!(b, ChatBody::Tool { status: ToolStatus::Done, output: Some(o), .. } if o.contains("no output"))));

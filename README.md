@@ -256,7 +256,7 @@ changed. Gemini and Antigravity need a one-time `ptyro integrations install`.
 
 | Glyph | Means |
 |---|---|
-| `●` | working (the header says on what: `Bash: cargo test`) |
+| `●` | working (the header says on what: `Bash: cargo test`, and which model the agent runs: `claude opus 5.5`) |
 | `⚠` | blocked: a permission prompt or a question |
 | `○` / `✓` / `✗` | idle / done / errored |
 | `☾` | dormant: stopped, resumes into the same conversation |

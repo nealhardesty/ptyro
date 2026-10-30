@@ -188,6 +188,8 @@ async fn claude_adapter_status_attention_answer_and_usage() {
     .await;
     assert!(matches!(s.status.as_ref().unwrap().source, SignalSource::Hook | SignalSource::Osc));
     assert_eq!(s.activity.as_deref(), Some("Bash: sleep 1.5"));
+    // SessionStart named the model, so `ptyro ls` and the pane header can say which one runs.
+    assert_eq!(s.model.as_deref(), Some("claude-opus-5-5"));
     // SessionStart carried the pre-assigned id back.
     let screen = w.d.wait_for_text(&c, "cl", &format!("session={conv}"), WAIT).await.unwrap();
     assert!(screen.contains("resumed=false"));

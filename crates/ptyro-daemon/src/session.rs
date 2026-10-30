@@ -110,6 +110,9 @@ pub struct Meta {
     /// An agent started by hand in this shell, in the foreground now (UX1.4).
     #[serde(default)]
     pub inner_agent: Option<String>,
+    /// The model its agent runs, as the agent names it (hooks, protocol); not stored.
+    #[serde(default)]
+    pub model: Option<String>,
     /// Its latest summary (UX1.3), and whether one is being made.
     pub summary: Option<ptyro_core::session::Summary>,
     pub summarizing: bool,
@@ -315,6 +318,7 @@ fn new_meta(
         command_since_ms: None,
         command: None,
         inner_agent: None,
+        model: None,
         summary: None,
         summarizing: false,
         title: None,
@@ -544,6 +548,7 @@ impl Session {
             attention: meta.attention.clone(),
             activity,
             conversation: meta.conversation.clone(),
+            model: meta.model.clone(),
             children: meta.children.clone(),
             dangerous: meta.dangerous,
             prompt_pending: meta.prompt_pending,

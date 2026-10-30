@@ -22,6 +22,25 @@ export interface Delta {
 export interface Frame { session: string; seq: number; keyframe: boolean; delta: Delta }
 export interface StatusRecord { status: string; kind?: string; detail?: string; since_ms: number; source: string }
 export interface Attention { kind: string; since_ms: number; text: string }
+/// A model's id shortened for a title or a card: `claude-opus-5-5` → `opus 5.5`,
+/// `claude-3-5-sonnet-20241022` → `sonnet 3.5`, `claude-opus-5-5[1m]` → `opus 5.5 1m`,
+/// `anthropic/claude-sonnet-4-5` → `sonnet 4.5`; another vendor's id stays as it is.
+/// The same rules as `ptyro_core::session::model_label`.
+export function modelLabel(id: string): string {
+  const base = id.trim().split("/").pop() ?? "";
+  const [name, rest = ""] = base.split("[");
+  const tag = rest.replace(/\]+$/, "");
+  let label = name;
+  const parts = name.startsWith("claude-") ? name.slice(7).split("-") : [];
+  const at = parts.findIndex((p) => p === "opus" || p === "sonnet" || p === "haiku");
+  if (at >= 0) {
+    const nums = (ps: string[]): string[] => { const out: string[] = []; for (const p of ps) { if (p.length > 2 || !/^\d+$/.test(p)) break; out.push(p); } return out; };
+    const v = (at === 0 ? nums(parts.slice(1)) : nums(parts.slice(0, at))).join(".");
+    label = v ? `${parts[at]} ${v}` : parts[at];
+  }
+  return tag ? `${label} ${tag}` : label;
+}
+
 export interface Session {
   id: string;
   handle: string;
@@ -32,6 +51,8 @@ export interface Session {
   state: { t: string; code?: number };
   size: Size;
   agent?: string | null;
+  /// The model its agent runs, as the agent names it (`claude-opus-5-5`); see `modelLabel`.
+  model?: string | null;
   status?: StatusRecord | null;
   attention?: Attention | null;
   activity?: string | null;

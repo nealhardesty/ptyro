@@ -148,6 +148,10 @@ pub struct SessionInfo {
     /// The agent's own conversation id (resume).
     #[serde(default)]
     pub conversation: Option<String>,
+    /// The model the agent runs, as it names it (`claude-opus-5-5`); [`model_label`] shortens it
+    /// for display. Live only: a dormant session shows none until its agent speaks again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     /// The chat it serves, when it is a chat's engine (SPEC §22.2): hidden from the session
     /// tree and from `ptyro ls` (`ls --chats` shows it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -240,6 +244,34 @@ pub fn brief(text: &str, max: usize) -> String {
     let mut s: String = joined.chars().take(max.saturating_sub(1)).collect();
     s.push('…');
     s
+}
+
+/// A model's id shortened for a title or a column: `claude-opus-5-5` → `opus 5.5`,
+/// `claude-3-5-sonnet-20241022` → `sonnet 3.5`, `claude-opus-5-5[1m]` → `opus 5.5 1m`, and
+/// `anthropic/claude-sonnet-4-5` (OpenCode names a provider first) → `sonnet 4.5`. Any other
+/// vendor's id (`gpt-5.6-sol`, `gemini-2.5-pro`) is already short, so it stays as it is.
+/// The web client has the same function (`modelLabel`, web/src/screen.ts).
+pub fn model_label(id: &str) -> String {
+    let id = id.trim();
+    let id = id.rsplit('/').next().unwrap_or(id);
+    let (id, tag) = id.split_once('[').map_or((id, ""), |(a, b)| (a, b.trim_end_matches(']')));
+    let label = claude_label(id).unwrap_or_else(|| id.to_owned());
+    if tag.is_empty() { label } else { format!("{label} {tag}") }
+}
+
+fn claude_label(id: &str) -> Option<String> {
+    let parts: Vec<&str> = id.strip_prefix("claude-")?.split('-').collect();
+    let at = parts.iter().position(|p| matches!(*p, "opus" | "sonnet" | "haiku"))?;
+    // `opus-5-5` (family first) or `3-5-sonnet` (version first); a date (`20241022`) isn't one.
+    let version = |ps: &[&str]| {
+        ps.iter()
+            .take_while(|p| p.len() <= 2 && p.chars().all(|c| c.is_ascii_digit()))
+            .copied()
+            .collect::<Vec<_>>()
+            .join(".")
+    };
+    let v = if at == 0 { version(&parts[1..]) } else { version(&parts[..at]) };
+    Some(if v.is_empty() { parts[at].to_owned() } else { format!("{} {v}", parts[at]) })
 }
 
 /// A session's verified-done check (M7.9): a turn counts as done only once `check` passes.
@@ -448,6 +480,32 @@ impl LastLaunch {
             },
             (None, None) => "shell".into(),
             (None, Some(p)) => p.rsplit('/').next().unwrap_or(p).to_owned(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod model_label_tests {
+    use super::model_label;
+
+    #[test]
+    fn models_are_named_short() {
+        for (id, label) in [
+            ("claude-opus-5-5", "opus 5.5"),
+            ("claude-sonnet-4-5-20250929", "sonnet 4.5"),
+            ("claude-3-5-sonnet-20241022", "sonnet 3.5"),
+            ("claude-opus-4-1", "opus 4.1"),
+            ("claude-haiku-5-5", "haiku 5.5"),
+            ("claude-opus-5-5[1m]", "opus 5.5 1m"),
+            ("anthropic/claude-sonnet-5-5", "sonnet 5.5"),
+            ("opus", "opus"),
+            ("gpt-5.6-sol", "gpt-5.6-sol"),
+            ("openai/gpt-5.5", "gpt-5.5"),
+            ("gemini-2.5-pro", "gemini-2.5-pro"),
+            ("claude-fable-5-1", "claude-fable-5-1"),
+            ("  ", ""),
+        ] {
+            assert_eq!(model_label(id), label, "{id}");
         }
     }
 }
