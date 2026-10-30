@@ -23,8 +23,18 @@ const ACTIONS = {
   "chat.agent": "Switch the chat to another agent: the next message carries the conversation over",
   "chat.preset": "What the chat may use: web search, read folders, or no tools",
   "chat.export": "Download the chat as Markdown",
-  "chat.find": "Find a chat by its title or agent",
+  "chat.search": "Search every chat: titles at once, and from 3 letters every message on every machine (\"phrases\", prefix*, -word, agent:codex, since:7d)",
   "chat.archived": "Show archived chats instead",
+  "chat.retry": "Ask again: a new answer beside this one, which stays (‹ › flips between them)",
+  "chat.edit": "Say this message differently: answered afresh, the old one stays as a branch",
+  "chat.branch": "Show another answer (or message) where a retry or an edit made one",
+  "chat.fork": "A new chat from here (it carries the conversation; the agent can change)",
+  "chat.side": "A side chat: ask about this chat without changing it; it goes when you leave it, unless kept",
+  "chat.keep": "Keep this side chat as a chat of its own",
+  "chat.incognito": "Incognito: nothing of this chat is kept or searchable, and it ends with its agent",
+  "chat.find": "Ask your chats a question: an agent searches them and answers, citing where",
+  "chat.find_in": "Find in this chat",
+  "chat.cite": "Open the message this citation points to",
 } as const;
 const tip = actions(ACTIONS);
 
@@ -33,7 +43,10 @@ export interface Chat {
   agent: string; profile: string; tools: string; pinned: boolean; archived: boolean; incognito: boolean; forked: boolean;
   leaf?: string | null; nodes: number; unread: number; created_ms: number; last_ms: number; cost_micro_usd: number;
   status?: string | null; attention?: { kind: string; text: string; since_ms: number } | null; engine?: string | null;
+  side_of?: string | null;
 }
+interface Siblings { node: string; at: number; of: number; ids: string[] }
+interface Hit { chat: Chat; node?: string | null; kind: string; snippet: string; at_ms: number; rank: number }
 interface Item { id: string; t: string; [k: string]: any }
 
 const state = {
@@ -47,12 +60,50 @@ const state = {
   /// The chat followed now, and its items.
   following: null as string | null,
   items: [] as Item[],
+  /// Where its branch has others (SPEC §22.7).
+  siblings: [] as Siblings[],
+  /// Show this message once it arrives (a search hit, a citation).
+  focus: null as string | null,
+  /// Find in the chat, and which of its matches is shown.
+  findIn: "",
+  findAt: 0,
+  /// Message hits of the list's search, and the query they answer.
+  hits: [] as Hit[],
+  hitsFor: "",
 };
 
 const label = (c: Chat | undefined): string => c?.title?.trim() || "new chat";
 const addr = (c: Chat): string => `c:${c.handle}`;
 const working = (c: Chat): boolean => c.status === "working" || c.status === "starting";
-const glyph = (c: Chat): string => c.attention || c.status === "blocked" ? "⚠" : working(c) ? "●" : c.status === "errored" ? "✗" : c.pinned ? "★" : "·";
+const glyph = (c: Chat): string => c.attention || c.status === "blocked" ? "⚠" : working(c) ? "●" : c.status === "errored" ? "✗" : c.incognito ? "◌" : c.pinned ? "★" : c.side_of ? "↳" : "·";
+
+/// A snippet with its matches marked (control characters from the daemon) as <mark>.
+function snippet(text: string): HTMLElement {
+  const el = h("span", { class: "snippet" });
+  let on = false;
+  for (const part of text.replace(/\n/g, " ").split(/[\u0002\u0003]/)) {
+    if (part) el.append(on ? h("mark", {}, part) : document.createTextNode(part));
+    on = !on;
+  }
+  return el;
+}
+
+/// An answer's text, its citations (`c:7f3k/01jb…`) links to the message they name.
+function cited(text: string): (Node | string)[] {
+  const out: (Node | string)[] = [];
+  const re = /((?:[a-z0-9._-]+:)?c:[a-z0-9]{4,})\/([a-z0-9]{6,})/gi;
+  let at = 0;
+  for (const m of text.matchAll(re)) {
+    const i = m.index ?? 0;
+    out.push(text.slice(at, i));
+    const handle = m[1].replace(/^.*c:/, "");
+    const c = [...state.list.values()].find((x) => x.handle === handle || x.id.endsWith(handle));
+    out.push(c ? h("a", { href: `#/c/${encodeURIComponent(c.id)}/${encodeURIComponent(m[2])}`, title: tip("chat.cite") }, m[0]) : m[0]);
+    at = i + m[0].length;
+  }
+  out.push(text.slice(at));
+  return out;
+}
 
 /// Whether the Chats tab shows (chats are on, as far as the daemon has said).
 export function chatsShown(): boolean {
@@ -87,13 +138,42 @@ function dayOf(ms: number): string {
 
 // ── the list ────────────────────────────────────────────────────────────────────────────────
 
-const findBox = h("input", { class: "search", type: "search", placeholder: "Find a chat", "aria-label": "Find a chat", autocapitalize: "off", autocomplete: "off", title: tip("chat.find") });
-findBox.addEventListener("input", () => { state.query = findBox.value.trim().toLowerCase(); const l = document.querySelector<HTMLElement>("main.chats .rows"); if (l) patch(l, rows()); });
+const findBox = h("input", { class: "search", type: "search", placeholder: "Search chats", "aria-label": "Search chats", autocapitalize: "off", autocomplete: "off", title: tip("chat.search") });
+let searchTimer = 0;
+findBox.addEventListener("input", () => {
+  state.query = findBox.value.trim().toLowerCase();
+  const l = document.querySelector<HTMLElement>("main.chats .rows"); if (l) patch(l, rows());
+  // Every message, on every machine, from 3 letters on (a shorter prefix matches everything).
+  clearTimeout(searchTimer);
+  searchTimer = window.setTimeout(() => void searchMessages(findBox.value.trim()), 250);
+});
+
+async function searchMessages(q: string): Promise<void> {
+  if ([...q].length < 3) { state.hits = []; state.hitsFor = ""; ui.render(); return; }
+  try {
+    const r = await conn.request({ t: "chat_search", query: q, workspace: state.workspace || null, archived: !!state.archived, limit: 30, machines: true });
+    if (findBox.value.trim() !== q) return;
+    state.hits = r.hits as Hit[];
+    state.hitsFor = q;
+  } catch { state.hits = []; state.hitsFor = q; }
+  ui.render();
+}
+
+function hitRows(): Node[] {
+  if (!state.query || [...state.query].length < 3) return [];
+  if (!state.hits.length) return state.hitsFor ? [h("p", { class: "sub" }, "No message matches.")] : [];
+  return [h("h3", { class: "day" }, `Messages (${state.hits.length})`), ...state.hits.map((x) =>
+    h("a", { class: "chat-row hit", href: `#/c/${encodeURIComponent(x.chat.id)}${x.node ? `/${encodeURIComponent(x.node)}` : ""}`, title: tip("chat.open") },
+      h("span", { class: "main" }, h("span", { class: "title" }, label(x.chat)), x.chat.machine ? machineChip(x.chat.workspace) : null, h("small", {}, ` ${x.chat.agent} · ${ago(x.at_ms)}`)),
+      snippet(x.snippet)))];
+}
 
 function rows(): Node[] {
   const source = state.archived ?? sorted(state.list.values());
   const q = state.query;
-  const shown = source.filter((c) => (!state.workspace || c.workspace === state.workspace) && (!q || label(c).toLowerCase().includes(q) || c.agent.includes(q)));
+  // Side chats sit with their chat; incognito ones are never "every chat" (SPEC §22.12).
+  const shown = source.filter((c) => !c.side_of && !c.incognito && (!state.workspace || c.workspace === state.workspace) && (!q || label(c).toLowerCase().includes(q) || c.agent.includes(q)));
+  if (!shown.length && q) return [h("p", { class: "sub" }, `No chat titled “${q}”.`), ...hitRows()];
   if (!shown.length) {
     return [h("div", { class: "empty" },
       h("p", {}, q ? `Nothing matches “${q}”.` : state.archived ? "No archived chats." : "No chats yet. Ask anything: it can search the web, and it is kept here."),
@@ -115,7 +195,7 @@ function rows(): Node[] {
         c.unread ? h("b", { class: "unread-dot", "aria-label": "unread" }, "●") : null),
       h("button", { class: "icon", "aria-label": "More", onclick: () => chatMenu(c) }, "⋯")));
   }
-  return out;
+  return [...out, ...hitRows()];
 }
 
 function listView(): HTMLElement {
@@ -130,9 +210,21 @@ function listView(): HTMLElement {
   wsSelect.value = state.workspace;
   const archived = h("button", { class: `small${state.archived ? " on" : ""}`, title: tip("chat.archived"), onclick: () => void toggleArchived() }, state.archived ? "Back to chats" : "Archived");
   return h("div", {},
-    ui.header("Chats", false, canWrite() ? h("button", { class: "icon plus", title: tip("chat.new"), "aria-label": "New chat", onclick: () => newChat() }, "＋") : null),
+    ui.header("Chats", false,
+      canWrite() ? h("button", { class: "icon", title: tip("chat.find"), "aria-label": "Ask your chats", onclick: () => findChats() }, "？") : null,
+      canWrite() ? h("button", { class: "icon plus", title: tip("chat.new"), "aria-label": "New chat", onclick: () => newChat() }, "＋") : null),
     h("div", { class: "searchbar" }, findBox, wsSelect, archived),
     h("main", { class: "list chats", title: tip("chats") }, h("div", { class: "rows" }, ...rows())));
+}
+
+/// `chat find`: ask the chats; the answer is an incognito chat of its own, opened.
+function findChats(): void {
+  form("Ask your chats", [{ key: "q", label: "What do you want to know?", required: true, placeholder: "what did we decide about the retry policy?" }], "Ask", async (v) => {
+    const r = await conn.request({ t: "chat_find", question: v.q });
+    const info = r.info as Chat;
+    state.list.set(info.id, info);
+    location.hash = `#/c/${encodeURIComponent(info.id)}`;
+  }, { intro: "An agent searches your chats and answers, citing the messages (tap one to open it). Nothing of this is kept." });
 }
 
 async function toggleArchived(): Promise<void> {
@@ -150,14 +242,27 @@ function update(c: Chat, change: object, ok: string): Promise<unknown> {
   return ask({ t: "chat_update", chat: c.id, ...change }, ok);
 }
 
+/// Keep a side chat: at once here too, so leaving before the daemon's word doesn't drop it.
+function keepSide(c: Chat): void {
+  c.side_of = null;
+  ui.render();
+  void update(c, { keep: true }, "Kept");
+}
+
 function chatMenu(c: Chat): void {
   const archived = c.archived || !!state.archived?.some((x) => x.id === c.id);
   const open = { title: tip("chat.open"), label: "Open", run: () => { location.hash = `#/c/${encodeURIComponent(c.id)}`; } };
   const md = { title: tip("chat.export"), label: "Download as Markdown", run: () => void exportChat(c) };
   // A device that may only read gets what reads (SPEC §22.11).
-  if (!canWrite()) { menu(label(c), [open, md]); return; }
+  const find = { title: tip("chat.find_in"), label: "Find in this chat", run: () => findInChat(c) };
+  if (!canWrite()) { menu(label(c), [open, find, md]); return; }
+  const side = !!c.side_of;
   menu(label(c), [
     open,
+    side && { title: tip("chat.keep"), label: "Keep this side chat", hint: "it becomes a chat of its own", run: () => keepSide(c) },
+    !c.incognito && { title: tip("chat.fork"), label: "Fork", hint: "a new chat from the end", run: () => forkAt(c, null) },
+    !c.incognito && { title: tip("chat.side"), label: "Side chat", hint: "ask about it without changing it", run: () => void sideChat(c) },
+    find,
     { title: tip("chat.retitle"), label: "Rename", run: () => retitle(c) },
     { title: tip("chat.pin"), label: c.pinned ? "Unpin" : "Pin", run: () => update(c, { pinned: !c.pinned }, c.pinned ? "Unpinned" : "Pinned") },
     { title: tip("chat.agent"), label: "Switch agent", hint: `now ${c.agent}`, run: () => pickAgent(c) },
@@ -175,6 +280,41 @@ function chatMenu(c: Chat): void {
       if (state.following === c.id) location.hash = "#/chats";
     }) },
   ]);
+}
+
+function forkAt(c: Chat, node: string | null): void {
+  menu(node ? "Fork from this message" : "Fork this chat", [
+    { title: tip("chat.fork"), label: `On ${c.agent}`, hint: "the same agent", run: () => void fork(c, node, null) },
+    ...agentNames().filter((a) => a !== c.agent).map((a) => ({ title: tip("chat.fork"), label: `On ${a}`, hint: "the conversation carries over", run: () => void fork(c, node, a) })),
+  ]);
+}
+
+async function fork(c: Chat, node: string | null, agent: string | null): Promise<void> {
+  const r = await ask<{ info: Chat }>({ t: "chat_fork", chat: c.id, node, agent, side: false }, "Forked");
+  if (r) { state.list.set(r.info.id, r.info); location.hash = `#/c/${encodeURIComponent(r.info.id)}`; }
+}
+
+/// A side chat; with a question (`/side QUESTION`), asked in it at once.
+async function sideChat(c: Chat, question = ""): Promise<void> {
+  const r = await ask<{ info: Chat }>({ t: "chat_fork", chat: c.id, side: true });
+  if (!r) return;
+  state.list.set(r.info.id, r.info);
+  location.hash = `#/c/${encodeURIComponent(r.info.id)}`;
+  if (question) void ask({ t: "chat_send", chat: r.info.id, text: question });
+}
+
+function findInChat(c: Chat): void {
+  if (state.following !== c.id) location.hash = `#/c/${encodeURIComponent(c.id)}`;
+  // The same text again: its next match.
+  form("Find in this chat", [{ key: "q", label: "Text (the same again: the next match)", required: true, value: state.findIn }], "Find", (v) => {
+    const q = (v.q as string) ?? "";
+    const hits = state.items.filter((x) => typeof x.text === "string" && x.text.toLowerCase().includes(q.toLowerCase()));
+    state.findAt = q === state.findIn && hits.length ? (state.findAt + 1) % hits.length : 0;
+    state.findIn = q;
+    if (hits.length) { state.focus = hits[state.findAt].id; ui.toast(`${state.findAt + 1}/${hits.length}`); }
+    else ui.toast("Not in this chat (the Chats page searches them all)");
+    ui.render();
+  });
 }
 
 function retitle(c: Chat): void {
@@ -214,7 +354,7 @@ async function exportChat(c: Chat): Promise<void> {
 
 /// The page's composer and transcript stay in the DOM across renders, so a draft, the caret
 /// and the scroll position survive the events that re-render everything around them.
-interface Page { id: string; el: HTMLElement; box: HTMLElement; reply: HTMLTextAreaElement; els: Map<string, { key: string; el: HTMLElement }>; agent: HTMLSelectElement; preset: HTMLSelectElement; sending: boolean }
+interface Page { id: string; el: HTMLElement; box: HTMLElement; reply: HTMLTextAreaElement; els: Map<string, { key: string; el: HTMLElement }>; agent: HTMLSelectElement; preset: HTMLSelectElement; incognito: HTMLInputElement; sending: boolean }
 let page: Page | null = null;
 const drafts = new Map<string, string>();
 
@@ -227,9 +367,17 @@ function follow(id: string | null): void {
   if (state.following) conn.send({ t: "chat_unsubscribe", chat: state.following });
   state.following = id;
   state.items = [];
+  state.siblings = [];
   if (id) conn.send({ t: "chat_subscribe", chat: id });
 }
-window.addEventListener("hashchange", () => { if (!/^#\/c\//.test(location.hash)) follow(null); });
+window.addEventListener("hashchange", () => {
+  // Leaving a side chat that wasn't kept: it goes (SPEC §22.7).
+  const left = state.following ? state.list.get(state.following) : undefined;
+  if (left?.side_of && !location.hash.startsWith(`#/c/${encodeURIComponent(left.id)}`)) void conn.request({ t: "chat_delete", chat: left.id }).catch(() => {});
+  if (!/^#\/c\//.test(location.hash)) follow(null);
+  if (location.hash !== `#/c/${atRoute}`) atRoute = "";
+  state.findIn = "";
+});
 
 function pageFor(id: string): Page {
   if (page?.id === id) return page;
@@ -240,7 +388,8 @@ function pageFor(id: string): Page {
   const agent = h("select", { "aria-label": "Agent", title: tip("chat.agent") }, h("option", { value: "" }, "default agent"), ...agentNames().map((a) => h("option", { value: a }, a)));
   // The default is `[chat] preset`'s, whatever it is (a preset of your own too).
   const preset = h("select", { "aria-label": "Tools", title: tip("chat.preset") }, h("option", { value: "" }, "default tools"), ...PRESETS.map(([p, what]) => h("option", { value: p }, `${p}: ${what}`)));
-  page = { id, el: h("div", { class: "session chat-page" }), box: h("div", { class: "chat" }), reply, els: new Map(), agent, preset, sending: false };
+  const incognito = h("input", { type: "checkbox", title: tip("chat.incognito") });
+  page = { id, el: h("div", { class: "session chat-page" }), box: h("div", { class: "chat" }), reply, els: new Map(), agent, preset, incognito, sending: false };
   // A new chat's page starts empty (not with what a failed try left).
   if (id.startsWith("new")) state.items = [];
   return page;
@@ -251,6 +400,7 @@ async function send(): Promise<void> {
   if (!p) return;
   const text = p.reply.value;
   if (!text.trim()) return;
+  if (text.trim().startsWith("/")) { p.reply.value = ""; drafts.delete(p.id); slash(p.id, text.trim()); return; }
   // One at a time: a second Send while the first is on its way would send it twice.
   if (p.sending) { ui.toast("One moment: the last message is on its way"); return; }
   p.sending = true;
@@ -259,7 +409,7 @@ async function send(): Promise<void> {
       const ws = decodeURIComponent(p.id.split("/")[1] ?? "") || undefined;
       state.items = [{ id: "first", t: "user", text }];
       ui.render();
-      const r = await conn.request({ t: "chat_new", workspace: ws, agent: p.agent.value || null, preset: p.preset.value || null, prompt: text });
+      const r = await conn.request({ t: "chat_new", workspace: ws, agent: p.agent.value || null, preset: p.preset.value || null, prompt: text, incognito: p.incognito.checked });
       p.reply.value = ""; drafts.delete(p.id);
       p.sending = false;
       const info = r.info as Chat;
@@ -274,10 +424,100 @@ async function send(): Promise<void> {
   p.sending = false;
 }
 
+/// The composer's slash commands (SPEC §22.12), as in the TUI.
+function slash(id: string, text: string): void {
+  const [name, ...rest] = text.slice(1).split(" ");
+  const arg = rest.join(" ").trim();
+  const c = state.list.get(id);
+  const lastUser = [...state.items].reverse().find((x) => x.t === "user");
+  const needsChat = ["retry", "edit", "fork", "side", "keep", "agent", "tools", "title", "export", "branch", "cite"];
+  if (!c && needsChat.includes(name)) { ui.toast(`/${name} works in a chat: send a first message`); return; }
+  if (name === "edit" && !lastUser) { ui.toast("No message to edit yet"); return; }
+  switch (name) {
+    case "retry": if (c) void ask({ t: "chat_retry", chat: c.id }); return;
+    case "edit": if (c && lastUser) { if (arg) void ask({ t: "chat_edit", chat: c.id, node: lastUser.id, text: arg }); else editMessage(c, lastUser); } return;
+    case "fork": if (c) forkAt(c, null); return;
+    case "side": if (c) void sideChat(c, arg); return;
+    case "keep": if (c) keepSide(c); return;
+    case "agent": if (c) { if (arg) void update(c, { agent: arg }, `The next message goes to ${arg}`); else pickAgent(c); } return;
+    case "tools": if (c) { if (arg) void update(c, { preset: arg }, `Tools: ${arg}`); else pickPreset(c); } return;
+    case "title": if (c) { if (arg) void update(c, { title: arg }, "Renamed"); else retitle(c); } return;
+    case "export": if (c) void exportChat(c); return;
+    case "search": location.hash = "#/chats"; findBox.value = arg; findBox.dispatchEvent(new Event("input")); return;
+    case "find": if (arg) void ask<{ info: Chat }>({ t: "chat_find", question: arg }).then((r) => { if (r) location.hash = `#/c/${encodeURIComponent(r.info.id)}`; }); else findChats(); return;
+    case "branch": pickBranch(id); return;
+    case "cite": pickCitation(); return;
+    case "incognito": {
+      location.hash = "#/c/new";
+      // Once the new chat's page is the one shown.
+      let tries = 0;
+      const tick = (): void => {
+        if (page?.id.startsWith("new")) { page.incognito.checked = true; ui.render(); }
+        else if (++tries < 60) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+      return;
+    }
+    default: ui.toast("/retry /edit [text] /fork /side [question] /keep /agent NAME /tools NAME /title TEXT /search WORDS /find QUESTION /export /incognito /branch /cite");
+  }
+}
+
+/// `/branch`: every choice at every point where the shown chat has others.
+function pickBranch(id: string): void {
+  if (!state.siblings.length) { ui.toast("One branch only: retry an answer or edit a message to make another"); return; }
+  menu("Which branch?", state.siblings.flatMap((s) => s.ids.map((to, i) => ({
+    title: tip("chat.branch"),
+    label: `${i + 1}/${s.of} at message ${s.node.slice(-8)}`,
+    hint: i + 1 === s.at ? "shown" : "show this branch",
+    run: () => void ask({ t: "chat_branch", chat: id, to }),
+  }))));
+}
+
+/// `/cite`: the citations in the shown chat's answers, to open one.
+function pickCitation(): void {
+  const re = /((?:[a-z0-9._-]+:)?c:[a-z0-9]{4,})\/([a-z0-9]{6,})/gi;
+  const seen = new Map<string, string>();
+  for (const it of state.items) {
+    if (it.t !== "assistant" || typeof it.text !== "string") continue;
+    for (const m of it.text.matchAll(re)) {
+      const handle = m[1].replace(/^.*c:/, "");
+      const c = [...state.list.values()].find((x) => x.handle === handle || x.id.endsWith(handle));
+      if (c) seen.set(m[0], `#/c/${encodeURIComponent(c.id)}/${encodeURIComponent(m[2])}`);
+    }
+  }
+  if (!seen.size) { ui.toast("No citations (c:7f3k/…) in this chat"); return; }
+  menu("Open a citation", [...seen].map(([text, href]) => ({ title: tip("chat.cite"), label: text, run: () => { location.hash = href; } })));
+}
+
+function editMessage(c: Chat, it: Item): void {
+  form("Say it differently", [{ key: "text", label: "The message (the old one and its answer stay as a branch)", type: "textarea", value: it.text as string, required: true }], "Send", async (v) => {
+    await conn.request({ t: "chat_edit", chat: c.id, node: it.id, text: v.text });
+  });
+}
+
+/// `‹ 2/3 ›` before a message that has others beside it.
+function siblingBar(id: string, s: Siblings): HTMLElement {
+  const go = (d: number) => () => void ask({ t: "chat_branch", chat: id, to: s.ids[(s.at - 1 + d + s.of) % s.of] });
+  return h("div", { class: "siblings", title: tip("chat.branch") },
+    h("button", { class: "small", "aria-label": "Previous", onclick: go(-1) }, "‹"),
+    h("span", {}, ` ${s.at}/${s.of} `),
+    h("button", { class: "small", "aria-label": "Next", onclick: go(1) }, "›"));
+}
+
 function chatItem(id: string, it: Item): HTMLElement | null {
+  const c = state.list.get(id);
+  const may = canWrite() && !!c;
   switch (it.t) {
-    case "user": return h("div", { class: "msg user" }, it.text);
-    case "assistant": return h("div", { class: "msg assistant" }, it.text, it.streaming ? h("span", { class: "caret" }, "▍") : null);
+    case "user": return h("div", { class: "msg-wrap user" },
+      h("div", { class: "msg user" }, it.text),
+      may ? h("div", { class: "msg-tools" },
+        h("button", { class: "link", title: tip("chat.edit"), onclick: () => editMessage(c!, it) }, "Edit"),
+        !c!.incognito ? h("button", { class: "link", title: tip("chat.fork"), onclick: () => forkAt(c!, it.id) }, "Fork from here") : null) : null);
+    case "assistant": return h("div", { class: "msg-wrap" },
+      h("div", { class: "msg assistant" }, ...cited(it.text as string), it.streaming ? h("span", { class: "caret" }, "▍") : null),
+      may && !it.streaming ? h("div", { class: "msg-tools" },
+        h("button", { class: "link", title: tip("chat.retry"), onclick: () => void ask({ t: "chat_retry", chat: id, node: it.id }) }, "Retry"),
+        !c!.incognito ? h("button", { class: "link", title: tip("chat.fork"), onclick: () => forkAt(c!, it.id) }, "Fork from here") : null) : null);
     case "thinking": return h("div", { class: "msg thinking" }, "· ", (it.text as string).split("\n")[0]);
     case "tool": {
       const status = it.status === "done" ? "done" : it.status === "failed" ? "failed" : it.status === "declined" ? "declined" : "running";
@@ -310,24 +550,41 @@ function drawItems(p: Page): void {
   const els = new Map<string, { key: string; el: HTMLElement }>();
   const kids: HTMLElement[] = [];
   for (const it of state.items) {
-    const key = JSON.stringify(it);
+    const sib = state.siblings.find((s) => s.node === it.id);
+    const key = JSON.stringify([it, sib, state.findIn]);
     const old = p.els.get(it.id);
-    const el = old?.key === key ? old.el : chatItem(p.id, it);
+    let el = old?.key === key ? old.el : chatItem(p.id, it);
     if (!el) continue;
+    if (old?.key !== key && sib) el = h("div", {}, siblingBar(p.id, sib), el);
+    if (old?.key !== key && state.findIn && typeof it.text === "string" && it.text.toLowerCase().includes(state.findIn.toLowerCase())) el.classList.add("found");
     if (old && old.el !== el && old.el instanceof HTMLDetailsElement && el instanceof HTMLDetailsElement) el.open = old.el.open;
     els.set(it.id, { key, el });
     kids.push(el);
   }
   p.els = els;
   patch(box, kids);
-  if (atBottom) requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
+  // A message asked for (a search hit, a citation, a find): brought into view once.
+  const focus = state.focus ? els.get(state.focus)?.el : null;
+  if (focus) { state.focus = null; requestAnimationFrame(() => { focus.scrollIntoView({ block: "center" }); focus.classList.add("found"); }); }
+  else if (atBottom) requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
   else box.scrollTop = top;
 }
+
+/// The `#/c/<id>/<node>` address last acted on, so a render doesn't branch and scroll again.
+let atRoute = "";
 
 function chatView(rest: string): HTMLElement {
   if (!state.loaded) void loadChats();
   const isNew = rest === "new" || rest.startsWith("new/");
-  const id = isNew ? `new${rest.slice(3)}` : decodeURIComponent(rest);
+  // `#/c/<id>/<node>`: the chat, at that message (its branch shown first).
+  const [rawId, rawNode] = isNew ? [rest, ""] : rest.split("/");
+  const id = isNew ? `new${rest.slice(3)}` : decodeURIComponent(rawId);
+  // Once per visit of that address (the chat may be open already: it still moves there).
+  if (!isNew && rawNode && atRoute !== rest) {
+    atRoute = rest;
+    state.focus = decodeURIComponent(rawNode);
+    void conn.request({ t: "chat_branch", chat: id, to: state.focus }).catch(() => {});
+  }
   const p = pageFor(id);
   // A new chat follows nothing yet (and shows nothing of the one left).
   follow(isNew ? null : id);
@@ -344,8 +601,10 @@ function chatView(rest: string): HTMLElement {
     ui.header(c ? label(c) : "New chat", "#/chats", c ? h("button", { class: "icon", "aria-label": "More", onclick: () => chatMenu(c) }, "⋯") : null),
     h("div", { class: `pill ${c?.status ?? ""}` }, ...pill, c?.machine ? " · " : null, c?.machine ? machineChip(c.workspace) : null),
     ...(c?.attention ? [h("p", { class: "banner warn" }, c.attention.text)] : []),
+    ...(c?.incognito ? [h("p", { class: "banner" }, "◌ Incognito: nothing of this chat is kept, and it ends with its agent.")] : []),
+    ...(c?.side_of ? [h("p", { class: "banner" }, `↳ A side chat of “${label(state.list.get(c.side_of))}”: it never changes it, and goes when you leave, unless kept. `, canWrite() ? h("button", { class: "small", title: tip("chat.keep"), onclick: () => keepSide(c) }, "Keep it") : null)] : []),
     empty ?? p.box,
-    ...(isNew ? [h("div", { class: "bar chat-pick" }, p.agent, p.preset)] : []),
+    ...(isNew ? [h("div", { class: "bar chat-pick" }, p.agent, p.preset, h("label", { class: "check", title: tip("chat.incognito") }, p.incognito, " incognito"))] : []),
     canWrite() ? h("div", { class: "reply" }, p.reply, stop, h("button", { class: "send", title: tip("chat.send"), onclick: () => void send() }, "Send")) : h("p", { class: "sub" }, "This device may read chats, not write in them."),
   ].filter((x): x is HTMLElement => !!x));
   if (isNew) requestAnimationFrame(() => { if (document.activeElement !== p.reply) p.reply.focus(); });
@@ -363,7 +622,7 @@ conn.listeners.add((msg: any) => {
   }
   if (msg.t === "chat_live") {
     if (msg.chat !== state.following) return;
-    if (msg.reset) state.items = [];
+    if (msg.reset) { state.items = []; state.siblings = (msg.siblings ?? []) as Siblings[]; }
     for (const it of msg.items as Item[]) {
       const i = state.items.findIndex((x) => x.id === it.id);
       if (i >= 0) state.items[i] = it; else state.items.push(it);

@@ -342,7 +342,13 @@ impl Conn {
                             text,
                         },
                     );
-                    let msg = ServerMsg::ChatLive { chat, rev: 0, reset: true, items: vec![item] };
+                    let msg = ServerMsg::ChatLive {
+                        chat,
+                        rev: 0,
+                        reset: true,
+                        items: vec![item],
+                        siblings: Vec::new(),
+                    };
                     let _ = self.out.send(msg).await;
                     return;
                 }
@@ -725,7 +731,13 @@ async fn stream_chat_live(daemon: Arc<Daemon>, chat: String, out: mpsc::Sender<S
                 },
             );
             let _ = out
-                .send(ServerMsg::ChatLive { chat, rev: 0, reset: true, items: vec![item] })
+                .send(ServerMsg::ChatLive {
+                    chat,
+                    rev: 0,
+                    reset: true,
+                    items: vec![item],
+                    siblings: Vec::new(),
+                })
                 .await;
             return;
         }
@@ -750,7 +762,9 @@ async fn stream_chat_live(daemon: Arc<Daemon>, chat: String, out: mpsc::Sender<S
             (t.rev, if reset { t.items.clone() } else { t.since(seen) })
         };
         if reset || !items.is_empty() {
-            let msg = ServerMsg::ChatLive { chat: live.id.clone(), rev, reset, items };
+            // With a reset, where the branch has others (the client's ‹ 2/3 ›).
+            let siblings = if reset { live.siblings.locked().clone() } else { Vec::new() };
+            let msg = ServerMsg::ChatLive { chat: live.id.clone(), rev, reset, items, siblings };
             if out.send(msg).await.is_err() {
                 return;
             }

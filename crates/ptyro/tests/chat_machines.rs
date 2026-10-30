@@ -94,6 +94,7 @@ async fn new_chat(c: &Client, workspace: Option<&str>, prompt: &str) -> ChatInfo
         preset: None,
         title: None,
         prompt: Some(prompt.into()),
+        incognito: false,
     };
     match c.request(req).await.unwrap() {
         Reply::Chat { info } => info,
@@ -235,6 +236,7 @@ async fn another_machines_chats_are_listed_used_and_made_from_here() {
             archived: None,
             agent: None,
             preset: None,
+            keep: None,
         })
         .await
         .unwrap();
@@ -260,6 +262,7 @@ async fn another_machines_chats_are_listed_used_and_made_from_here() {
             archived: Some(true),
             agent: None,
             preset: None,
+            keep: None,
         })
         .await
         .unwrap();
@@ -283,6 +286,7 @@ async fn another_machines_chats_are_listed_used_and_made_from_here() {
         archived: Some(false),
         agent: None,
         preset: None,
+        keep: None,
     })
     .await
     .expect("a remote archived chat is routed there");

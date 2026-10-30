@@ -50,7 +50,8 @@ action by name.
 | `S` | change sets: members as swimlanes, gates, issues, the ledger |
 | `t` | structured session: chat view ⇄ terminal view |
 | `m` | a new chat with your agent, in this workspace, over the panes: type, `⏎` sends, `C-o` picks the agent and its tools (SPEC §22) |
-| `g` | the chat list: this workspace's chats by day (`Tab`: every workspace's), `/` searches, `⏎` opens, `*` pin, `x` archive, `X` delete, `,` title, `e` export, `A` archived ones |
+| `g` | the chat list: this workspace's chats by day (`Tab`: every workspace's), `/` searches (titles at once, every message from 3 letters on, on every machine), `⏎` opens (a message hit: at that message), `*` pin, `x` archive, `X` delete, `,` title, `e` export, `A` archived ones |
+| `C-g` | search every chat: the chat list, every workspace and machine, typing its search |
 | `j` / `k` (or `Down` / `Up`) | show the next / previous session of the workspace here, in sidebar order, across projects (quick terminals are skipped) |
 | `1` … `9` | show the session numbered N in the sidebar here |
 | `/` | find a session (fuzzy) |
@@ -174,9 +175,21 @@ Tabs `1`–`5` (or `Tab` / `Shift-Tab`): Diff, Commits, Checks, Ports, Events.
 
 The chat view takes the place of the panes; the sidebar stays. Type and `⏎` to send
 (`Shift-⏎` or `Ctrl-J` for a new line), `PageUp`/`PageDown` to scroll, `Ctrl-C` stops the
-answer (or clears the draft), `Esc` goes back. On a permission card, with nothing typed, `a`
-allows, `A` always, `d` denies. `Ctrl-Q .` is the chat's menu: title, pin, archive, switch agent,
-tools, export, delete.
+answer (or clears the draft), `Esc` goes back (a side chat closed this way goes, unless kept). On
+a permission card, with nothing typed, `a` allows, `A` always, `d` denies. `Ctrl-Q .` is the
+chat's menu: title, pin, archive, switch agent, tools, export, delete.
+
+| Key | Does |
+|---|---|
+| `Alt-←` / `Alt-→` | where a retry or an edit made another branch (`‹ 2/3 ›`): the other answers (or messages), in turn |
+| `Ctrl-F` | find in this chat; again: the next match; `Esc` clears it |
+| `Tab` or `Ctrl-I` | in a new chat, before its first message: incognito (nothing kept, it ends with its agent) |
+| `Ctrl-O` | in a new chat: pick the agent and its tools |
+
+Slash commands, typed into the composer: `/retry`, `/edit [text]` (the last message, or pick
+one), `/fork` (from the end or a message), `/side [question]`, `/keep`, `/branch`, `/agent NAME`,
+`/tools NAME`, `/title TEXT`, `/search WORDS`, `/find QUESTION`, `/export`, `/incognito`, `/cite`
+(open a citation), `/help`. Each is also an action in the palette (`chat.*`).
 
 ## Runs (`Ctrl-Q O`) and change sets (`Ctrl-Q S`)
 

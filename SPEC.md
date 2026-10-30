@@ -6016,6 +6016,12 @@ tier was at its limit, and no provider was logged in).
   to 6 (the built-in ones). A chat should always get it: a user's hooks and instructions would
   otherwise run inside every chat, and the skill list costs tokens each turn. `--restricted` is also
   new (no shell or code tools, ignores settings files); `--safe-mode` is the one that fits.
+- **`--safe-mode` drops even an explicit `--mcp-config`** (verified 2026-10-29, Claude 2.1.314, CHAT3,
+  about $0.002): the history tools never appeared with it. The line that keeps our server and still
+  keeps the user's setup out is `--setting-sources "" --disable-slash-commands --strict-mcp-config
+  --mcp-config <json>` with `--system-prompt`: the `ptyro` server connected, no skills or slash
+  commands, only the built-in plugins, and a CLAUDE.md planted in the scratch folder was ignored. A
+  chat engine with the history tools gets that line; one without keeps `--safe-mode`.
 - **`--bare` cannot be used:** on a subscription login it answers "Not logged in" (it takes
   `ANTHROPIC_API_KEY` or an `apiKeyHelper` only). RESEARCH IV.3 listed it as an option; it isn't one.
 - **A bare `--allowedTools Read` is not a folder limit.** With `--tools Read,Glob,Grep --add-dir D
@@ -6223,7 +6229,7 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
 
 ---
 
-## 22. Chat: general-purpose conversations **[decided 2026-10-29 (owner, ROADMAP CHAT); CHAT1 built 2026-10-29, CHAT2 and later proposed]**
+## 22. Chat: general-purpose conversations **[decided 2026-10-29 (owner, ROADMAP CHAT); CHAT1–CHAT3 built 2026-10-29, CHAT4 and later proposed]**
 
 **As built (CHAT1, 2026-10-29), and where it differs from the design below:**
 - **Store** (`ptyro-store/src/chat.rs`): the §22.4 schema exactly, its own thread, 0600, a newer
@@ -6270,10 +6276,48 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   and every request with the link's offline message. Hiding a workspace hides its chats; removing a
   machine removes them. Alerts already arrive as relayed inbox entries. Clients grey an offline
   machine's chats (`chat ls` says "(offline)"; `--machine M` filters).
+- **Branches and forks (CHAT2, 2026-10-29):** `put_node` moves `leaf` only when the new node
+  extends the shown branch, so a retry or edit sets it explicitly. **Retry** (`ChatRetry{chat,
+  node}`) re-asks the user message above `node` as a new answer sibling; **edit** is its own request
+  (`ChatEdit{chat, node, text}`, not `ChatSend.parent`) that adds a user sibling. Both stop the
+  engine and start it seeded with the branch above the message (a native conv can't rewind).
+  `ChatBranch{chat, to}` shows the branch through `to` (a node, its tip followed down);
+  `ChatTranscript` and `ChatLive` carry `siblings` (`{node, at, of, ids}`) for every message that has
+  them, drawn as `‹ 2/3 ›`. **Fork** (`ChatFork{chat, node?, agent?, side}`) copies the branch to
+  `node` with new ids; it is native (`--resume X --fork-session`, conv `fork_pending`) only for
+  Claude, the same agent and profile, when the source conv ends exactly at the fork point; every
+  other fork is seeded. **Side chats** carry `side_of` (schema v2, `ChatInfo.side_of`, `↳`), are
+  never listed (they show under their parent while open) and are deleted when closed unkept;
+  `ChatUpdate.keep` makes one a normal fork. **Incognito** (`ChatNew.incognito`, `[chat] incognito`,
+  `Tab`/`C-i` in a new chat) keeps its record in the daemon's memory only; retry and edit there truncate instead of
+  branching. No chat engine is recorded (`pty.log`) or saved as a session row in `ptyro.db`
+  (CHAT1 made its first message the row's title); rows left from then are removed at start.
+  A chat's agent is confined before any routing: it can't reach another machine's chats, and an
+  ambiguous or out-of-scope name is simply not found. A native fork stays `fork_pending` until its
+  first answer has its own conversation, so a restart before then forks the source again. Node ids are shown and taken by their last 8 characters (any unique suffix of 6+).
+  Slash commands in the TUI and web composer: `/retry /edit /fork /side /keep /agent /tools /title
+  /search /find /export /incognito /branch /cite /help`.
+- **Search (CHAT3, 2026-10-29):** `ChatSearch{query, chat?, workspace?, agent?, pinned, archived,
+  limit, machines}` → `ChatHits{hits}` (`ChatHit{chat, node, kind, snippet, at_ms, rank}`; `rank` is
+  bm25×1000, user messages weighted ×1.3, titles matched too; marks are `\u{2}`/`\u{3}`, which each
+  client turns into its own highlight). `core::chats::parse_query` quotes every word so FTS syntax
+  can't leak: `"a phrase"`, `-word`, `prefix*`, `agent:`, `since:7d`, `workspace:`/`ws:`; a query
+  of negatives only is refused. With no chat or workspace filter it fans out to every online machine
+  and interleaves round robin. **Ask:** `ChatFind{question, agent?, workspace?}` returns the
+  incognito chat it started (`Chat{info}`, not a `ChatAnswer`), whose engine has only the history
+  tools; it shares the title cap (`chat-cap:<profile>`). The history tools are `ptyro mcp --chat`
+  (`chat_search`, `chat_read`, `chat_list`, also in leads whose run policy has `chat = true`, through
+  `PTYRO_CHAT_TOOLS=1`). The daemon knows a caller is an engine by its pid's session; an engine may
+  only search, read and list, scoped by `history_scope`, never itself or an incognito chat. Claude
+  engines get the line of §20.8 instead of `--safe-mode`; Codex gets `mcp_servers.ptyro` in the
+  thread's config; Gemini and OpenCode engines get no history tools yet. Not built: `--machine` on
+  search (the fan-out and `--here` are), the trigram index for CJK.
 - **Configuration renamed:** `[chat] tools = "chat"` became **`[chat] preset`**: TOML can't hold
   both that string and the `[chat.tools.<name>]` tables. Built keys: `enabled`, `recent`, `agent`,
   `preset`, `hibernate_after`, `seed_tokens`, `title`, `title_command`, `daily_cap`, `index_tools`,
   `notify`, `archive_purge_days`, and `chat.tools.*.{web, read, dirs, allow}`.
+  CHAT2 and CHAT3 add `incognito`, `history_tool` (default on) and `history_scope` (`profile`,
+  `workspace`, `all`).
 - **Seeds:** the "N earlier messages left out" line is used (no summary paragraph yet). The seed
   notice sits on the branch between the message and its answer.
 - **Surfaces:** CLI `chat [new]|ask|ls|show|open|send|answer|stop|retitle|pin|unpin|archive|
@@ -6525,10 +6569,12 @@ makes a new one. `[chat] title = "off"` uses (3) only.
 
 ### 22.9 Incognito
 
-`[chat] incognito = true` (or `--incognito`, or `C-i` in the new-chat box) starts chats that **write
-nothing to `chat.db`**, are not indexed and not listed under "all chats", and end with the engine
-(the sidebar shows them with `◌` while open). The transcript lives in the engine's memory, which
-crosses a live upgrade but not a daemon restart. Claude's engine gets `--no-session-persistence`
+`[chat] incognito = true` (or `--incognito`, or `Tab`/`C-i` in the new-chat box: most terminals send Tab for `C-i`) starts chats that **write
+nothing to `chat.db`**, are not indexed and not listed under "all chats", and end when the engine
+ends of itself or goes idle (`hibernate_after`), or the chat is deleted (the sidebar shows them
+with `◌` while open); one stopped for a retry, an edit or another agent carries on with the next
+message. The transcript
+lives in the daemon's memory, so it ends with a live upgrade or a restart too (its folders go then). Claude's engine gets `--no-session-persistence`
 **[V]**, so it has no resume and leaves no file; Codex's gets `ephemeral: true` **[V]**, which leaves
 no rollout and no list entry; Gemini and OpenCode have no such switch **[U]**, so their own histories
 may still keep it, which `chat.new
@@ -6639,7 +6685,7 @@ hides when `enabled`):
   `/task`), each also a palette action; an `@` completion for attached folders; and find-in-chat.
 - **Keys** (prefix, then; proposed, `m` and `g` are free in `docs/keys.md` on 2026-10-29; CHAT1.7
   checks and the user can rebind): `m` **new chat** in the current workspace (the composer opens at
-  once, ⏎ sends; `C-o` picks agent, tools and folder; `C-i` incognito), `g` the **chat list**
+  once, ⏎ sends; `C-o` picks agent, tools and folder; `Tab`/`C-i` incognito), `g` the **chat list**
   (searchable), `C-g` find across all chats, `Alt-←/→` branches. In the sidebar on a chat row (no
   prefix): `⏎` open, `,` retitle, `*` pin, `x` archive, `X` delete (asks), `f` fork, `.` its menu. The
   shared keys (`/` find, `.` menu, `j/k`, `Tab`, `z`, `t` where it applies) behave as for sessions.

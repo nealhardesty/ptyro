@@ -78,7 +78,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 |---|---|---|
 | `chat new` | `chat.new` (`m`): a new chat in the selected workspace; type, ⏎ sends (`C-o` picks the agent and its tools); `＋ new chat` in an empty CHATS section | `chat.new`: ＋ on the Chats page (`g c`); the agent and tools under the box |
 | `chat ask` | `chat.new` (`m`): the answer streams into the view; archive or delete it after (`x`, `X`) | `chat.new`: the answer streams in; ⋯ → Delete after |
-| `chat ls` | `chat.list` (`g`): the workspace's chats (Tab: every one), by day, `/` searches, `A` archived; the CHATS section shows the pinned and the newest | `chats`: the Chats page, by day, with `chat.find` and the workspace picker; `chat.archived` for archived ones |
+| `chat ls` | `chat.list` (`g`): the workspace's chats (Tab: every one), by day, `/` searches, `A` archived; the CHATS section shows the pinned and the newest | `chats`: the Chats page, by day, with `chat.search` and the workspace picker; `chat.archived` for archived ones |
 | `chat show` | `chat.open` (`⏎` on a chat row, or in the list): the chat view | `chat.open`: tap a chat |
 | `chat open` | `chat.open` (`⏎` on a chat row) | `chat.open`: tap a chat |
 | `chat send` | `chat.open`: type in the view's composer, ⏎ | `chat.send`: the box under the chat, Send |
@@ -92,6 +92,13 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `chat set` | `chat.agent` and `chat.preset` (the chat's menu, `.`) | `chat.agent` and `chat.preset`: ⋯ → Switch agent, Tools |
 | `chat rm` | `chat.delete` (`X` on a chat row or in the list; asks) | `chat.delete`: ⋯ → Delete |
 | `chat export` | `chat.export` (`e` in the list, or the menu): written to a Markdown file | `chat.export`: ⋯ → Download as Markdown |
+| `chat retry` | `chat.retry` (`/retry`): a new answer beside the old one; `Alt-←/→` flips between them | `chat.retry`: Retry under an answer; ‹ › flips between them |
+| `chat edit` | `chat.edit` (`/edit`): pick a message, say it differently | `chat.edit`: Edit under a message of yours |
+| `chat branch` | `chat.branch` (`/branch`, `Alt-←/→`): every branch point's choices | `chat.branch`: the ‹ › before a message that has others |
+| `chat fork` | `chat.fork` (`/fork`): from the end or a message; `chat.side` (`/side`) for `--side` | `chat.fork`: ⋯ → Fork, or Fork from here under a message; `chat.side`: ⋯ → Side chat |
+| `chat keep` | `chat.keep` (`/keep`) in a side chat | `chat.keep`: Keep it, on a side chat's page |
+| `chat search` | `chat.search` (`C-g`): the chat list searching every chat, messages with their snippets; `⏎` opens one at its message | `chat.search`: the Chats page's search box: titles, then every message on every machine; tap one to open it there |
+| `chat find` | `chat.find` (`/find`): ask your chats; the answer, with its citations (`chat.cite` opens one) | `chat.find`: ？ on the Chats page; citations in the answer are links (`chat.cite`) |
 
 ## Attention and notifications
 

@@ -613,6 +613,11 @@ const CHAT_TITLE: &[Choice] = &[
     c("auto", "a short title from a small model after the first answer"),
     c("off", "the first line of the first message"),
 ];
+const CHAT_SCOPE: &[Choice] = &[
+    c("profile", "chats of the same profile (account) only: a work chat never sees a personal one"),
+    c("workspace", "chats of the same workspace only"),
+    c("all", "every chat on this machine"),
+];
 const CHAT_NOTIFY: &[Choice] = &[
     c("blocked", "when a chat needs you (a permission, an error)"),
     c("all", "also when an answer arrives while no screen shows the chat"),
@@ -716,6 +721,9 @@ pub const SETTINGS: &[Setting] = &[
     s("chat.recent", "chat", int(1, 100), "How many chats show under CHATS in the sidebar, after the pinned ones.").unit("chats"),
     s("chat.agent", "chat", dynamic(Source::Agents), "The agent new chats talk to; `agent@profile` picks its account too.").or("the workspace's default agent, else the first installed of claude, codex, gemini and opencode").new_only(),
     s("chat.preset", "chat", dynamic(Source::ChatPresets), "What new chats may use: `chat` searches the web, `read` also reads the folders its preset lists, `none` has no tools.").new_only().also("tools web search"),
+    s("chat.incognito", "chat", Kind::Bool, "New chats start incognito: nothing of them is kept or searchable, and they end when their agent stops (C-i in a new chat flips it).").new_only().also("private"),
+    s("chat.history_tool", "chat", Kind::Bool, "Chats can look up your other chats (\"as we said last week…\"): search, read and list them.").new_only().also("memory search"),
+    s("chat.history_scope", "chat", pick(CHAT_SCOPE), "Which chats a chat can look up (and `chat find` searches).").new_only().also("privacy"),
     s("chat.hibernate_after", "chat", Kind::Duration, "An idle chat's agent stops after this long, so it costs nothing; the next message carries on.").new_only(),
     s("chat.seed_tokens", "chat", int(1000, 1_000_000), "When an agent has to be told the conversation again (it was lost, or you switched agents), at most this much of it is sent.").unit("tokens").adv(),
     s("chat.title", "chat", pick(CHAT_TITLE), "How a new chat gets its title."),

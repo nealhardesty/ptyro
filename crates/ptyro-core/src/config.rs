@@ -493,6 +493,12 @@ pub struct Chat {
     pub agent: String,
     /// The tool preset of new chats: `chat`, `read`, `none`, or one of `[chat.tools]`.
     pub preset: String,
+    /// New chats start incognito: nothing of them is written, and they end with their agent.
+    pub incognito: bool,
+    /// Chats can look up your other chats (`chat_search`, `chat_read`, `chat_list`).
+    pub history_tool: bool,
+    /// Which chats those tools see: `profile` (the chat's account's), `workspace`, or `all`.
+    pub history_scope: String,
     /// An idle chat's agent stops after this long; the next message carries on.
     pub hibernate_after: String,
     /// The most a replayed conversation carries when an agent has to be told it again.
@@ -522,6 +528,9 @@ impl Default for Chat {
             recent: 5,
             agent: String::new(),
             preset: "chat".into(),
+            incognito: false,
+            history_tool: true,
+            history_scope: "profile".into(),
             hibernate_after: "2m".into(),
             seed_tokens: 30_000,
             title: "auto".into(),
@@ -585,6 +594,12 @@ impl Chat {
         parse_duration(&self.hibernate_after).map_err(|e| format!("chat.hibernate_after: {e}"))?;
         if !matches!(self.title.as_str(), "auto" | "off") {
             return Err(format!("chat.title: {:?} (auto or off)", self.title));
+        }
+        if !matches!(self.history_scope.as_str(), "profile" | "workspace" | "all") {
+            return Err(format!(
+                "chat.history_scope: {:?} (profile, workspace or all)",
+                self.history_scope
+            ));
         }
         if !matches!(self.notify.as_str(), "blocked" | "all" | "off") {
             return Err(format!("chat.notify: {:?} (blocked, all or off)", self.notify));

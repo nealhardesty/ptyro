@@ -227,6 +227,14 @@ pub enum Purpose {
     ChatAgent(Option<String>),
     /// A chat's tool preset.
     ChatPreset(Option<String>),
+    /// Where to fork this chat (SPEC §22.7).
+    ChatForkAt(String),
+    /// Which message of this chat to say differently.
+    ChatEditPick(String),
+    /// Which of this chat's branches to show.
+    ChatBranchPick(String),
+    /// A citation to open.
+    ChatCite,
     /// Home (UX1.19): what to do next.
     Home,
     /// What the doctor found, to fix (UX1.20).
@@ -310,6 +318,12 @@ pub enum PromptKind {
     Sets(crate::sets::SetsInput),
     /// A chat's title (by id); empty asks for a new automatic one.
     ChatRetitle(String),
+    /// A message said differently: (chat, the message's node).
+    ChatEdit(String, String),
+    /// Find in the chat shown.
+    ChatFindIn,
+    /// A question for `chat find`.
+    ChatFind,
 }
 
 /// A key that starts a new line in a text box instead of sending it (UX1.26): Shift+Enter
@@ -440,6 +454,14 @@ pub enum Pending {
     ChatMade(String),
     /// A message sent to a chat: put back if it was refused.
     ChatSent(String),
+    /// A chat made (a fork, a side chat, a find): open it.
+    ChatOpen,
+    /// A cited chat looked up by its address: open it at this node.
+    ChatOpenAt(Option<String>),
+    /// A side chat made by `/side QUESTION`: open it and ask that.
+    ChatSideAsk(String),
+    /// The chat list's message hits, for this query.
+    ChatHits(String),
     /// A chat's Markdown, to write here.
     ChatExport(std::path::PathBuf),
     /// What quick-new would start in this workspace (UX3.2), for its label.
@@ -1476,8 +1498,8 @@ impl App {
             ServerMsg::Chat { session, rev, reset, items, draft } => {
                 self.chats.entry(session).or_default().apply(rev, reset, items, draft);
             }
-            ServerMsg::ChatLive { chat, rev, reset, items } => {
-                self.chat_live(chat, rev, reset, items);
+            ServerMsg::ChatLive { chat, rev, reset, items, siblings } => {
+                self.chat_live(chat, rev, reset, items, siblings);
             }
             ServerMsg::Goodbye { reason } => self.lost(&reason),
             _ => {}
@@ -1845,6 +1867,25 @@ impl App {
                 self.chat_sent(text, Some(e.message))
             }
             (Pending::ChatSent(text), Ok(_)) => self.chat_sent(text, None),
+            (Pending::ChatOpen, Ok(Reply::Chat { info })) => {
+                let id = info.id.clone();
+                self.chat_updated(info);
+                self.open_chat(&id);
+            }
+            (Pending::ChatOpenAt(node), Ok(Reply::ChatTranscript { info, .. })) => {
+                let id = info.id.clone();
+                self.chat_updated(info);
+                self.open_chat_at(&id, node.as_deref());
+            }
+            (Pending::ChatSideAsk(text), Ok(Reply::Chat { info })) => {
+                let id = info.id.clone();
+                self.chat_updated(info);
+                self.open_chat(&id);
+                self.request(Pending::ChatSent(text.clone()), Request::ChatSend { chat: id, text });
+            }
+            (Pending::ChatHits(q), Ok(Reply::ChatHits { hits })) => self.got_hits(q, hits),
+            // A query still being typed: its error is no news (a short prefix, a lone `-`).
+            (Pending::ChatHits(_), Err(_)) => {}
             (Pending::ChatExport(path), Ok(Reply::Text { text })) => {
                 match std::fs::write(&path, text) {
                     Ok(()) => self.toast(format!("written to {}", path.display())),
@@ -5282,8 +5323,15 @@ impl App {
             (Target::PadRev(rev), Purpose::PadHistory) => self.restore_pad(rev),
             (target, Purpose::Home) => self.home_picked(target),
             (Target::Fix(i), Purpose::Health) => self.fix(i),
-            (Target::Chat(id), _) => self.open_chat(&id),
             (Target::Agent(a), Purpose::ChatAgent(id)) => self.chat_picked(a, true, id),
+            (
+                Target::Chat(v),
+                p @ (Purpose::ChatForkAt(_)
+                | Purpose::ChatEditPick(_)
+                | Purpose::ChatBranchPick(_)
+                | Purpose::ChatCite),
+            ) => self.chat_pick(p, v),
+            (Target::Chat(id), _) => self.open_chat(&id),
             (Target::Agent(p), Purpose::ChatPreset(id)) => self.chat_picked(p, false, id),
             // A row's action: with that row selected, so it's what the action works on.
             (Target::Action(cmd), Purpose::RowMenu(row)) => {
@@ -5474,6 +5522,27 @@ impl App {
             }
             PromptKind::Orch(input) => self.orch_input(input, text),
             PromptKind::Sets(input) => self.sets_input(input, text),
+            PromptKind::ChatEdit(chat, node) => {
+                if !text.trim().is_empty() {
+                    self.request(
+                        Pending::Done("said differently: the old one stays as a branch".into()),
+                        Request::ChatEdit { chat, node, text },
+                    );
+                }
+            }
+            PromptKind::ChatFindIn => self.find_in_chat(text.trim()),
+            PromptKind::ChatFind => {
+                if !text.trim().is_empty() {
+                    self.request(
+                        Pending::ChatOpen,
+                        Request::ChatFind {
+                            question: text.trim().to_owned(),
+                            agent: None,
+                            workspace: None,
+                        },
+                    );
+                }
+            }
             PromptKind::ChatRetitle(id) => {
                 self.request(
                     Pending::Done("retitled".into()),
@@ -5484,6 +5553,7 @@ impl App {
                         archived: None,
                         agent: None,
                         preset: None,
+                        keep: None,
                     },
                 );
             }

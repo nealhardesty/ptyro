@@ -406,7 +406,7 @@ async fn dispatch(
         Some(Cmd::Verify { session, check, off, max_bounces }) => {
             crate::orch::verify(&ctx, session, check, off, max_bounces).await
         }
-        Some(Cmd::Mcp) => crate::mcp::serve(&ctx).await,
+        Some(Cmd::Mcp { chat }) => crate::mcp::serve(&ctx, chat).await,
         Some(Cmd::Proxy) => crate::remote::proxy(&ctx).await,
         Some(Cmd::Convert { session, to, force }) => {
             let c = ctx.connect(false).await.map_err(no_daemon)?;

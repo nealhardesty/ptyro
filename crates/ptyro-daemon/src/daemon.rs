@@ -272,10 +272,17 @@ impl Daemon {
         }
     }
 
-    /// Where a session records, if it does (`[recorder]`, an agent's `record = false`).
-    pub(crate) fn record_spec(&self, id: SessionId, agent: Option<&str>) -> Option<(PathBuf, u64)> {
+    /// Where a session records, if it does (`[recorder]`, an agent's `record = false`). A chat's
+    /// engine never does: its transcript is chat text, kept in `chat.db` alone (or, incognito,
+    /// nowhere; SPEC §22.4, §22.9).
+    pub(crate) fn record_spec(
+        &self,
+        id: SessionId,
+        place: &crate::session::Place,
+    ) -> Option<(PathBuf, u64)> {
         let config = self.config();
-        if !config.recorder.enabled {
+        let agent = place.agent.as_deref();
+        if !config.recorder.enabled || place.chat.is_some() {
             return None;
         }
         if agent.is_some_and(|a| ptyro_agents::def(&config, a).record == Some(false)) {
@@ -321,8 +328,7 @@ impl Daemon {
         });
         for (img, emu) in imgs.into_iter().zip(emus) {
             let id = img.id.clone();
-            let record =
-                id.parse().ok().and_then(|i| self.record_spec(i, img.meta.place.agent.as_deref()));
+            let record = id.parse().ok().and_then(|i| self.record_spec(i, &img.meta.place));
             let adopted =
                 emu.and_then(|emu| Session::adopt(img, emu, self.hub(), &self.reaper, record));
             match adopted {
@@ -765,6 +771,8 @@ impl Daemon {
             mcp: spec.lead.is_some() || spec.mcp,
             structured: spec.structured,
             params: None,
+            fork: false,
+            chat_tools: policy.as_ref().is_some_and(|p| p.chat),
         });
         let s = self
             .launch(Launch {
@@ -839,6 +847,8 @@ impl Daemon {
             mcp: false,
             structured: meta.structured.is_some(),
             params: None,
+            fork: false,
+            chat_tools: false,
         });
         let new = self
             .launch(Launch {
@@ -935,7 +945,21 @@ impl Daemon {
     ) -> Result<Reply, Error> {
         // Another machine's things (MM1.B): its requests go there, and lists here gain its part.
         // A link is answered with this machine's own, and never routed on (no echoes).
-        let federate = !caller.is_link() && !self.links.locked().is_empty();
+        // A chat's own agent (its history tools) only searches, reads and lists this machine's
+        // chats, within its scope (`handle_chat`): never routed, merged with others' or guessed.
+        let engine = self.engine_chat_of(caller).is_some();
+        if engine
+            && !matches!(
+                req,
+                Request::ChatSearch { .. } | Request::ChatRead { .. } | Request::ChatList { .. }
+            )
+        {
+            return Err(Error::new(
+                ErrorCode::PermissionDenied,
+                "a chat's agent may search and read chats, not change them",
+            ));
+        }
+        let federate = !engine && !caller.is_link() && !self.links.locked().is_empty();
         if federate && let Some(m) = self.machine_for(&req)? {
             self.guard_caller(&req, caller)?;
             self.guard_device(&req, caller)?;
@@ -1016,7 +1040,13 @@ impl Daemon {
             | Request::ChatStop { .. }
             | Request::ChatUpdate { .. }
             | Request::ChatDelete { .. }
-            | Request::ChatExport { .. }) => self.handle_chat(req).await,
+            | Request::ChatExport { .. }
+            | Request::ChatRetry { .. }
+            | Request::ChatEdit { .. }
+            | Request::ChatBranch { .. }
+            | Request::ChatFork { .. }
+            | Request::ChatSearch { .. }
+            | Request::ChatFind { .. }) => self.handle_chat(req, caller).await,
             req @ (Request::CheckpointList { .. }
             | Request::CheckpointDiff { .. }
             | Request::CheckpointRestore { .. }) => self.checkpoint_request(req).await,

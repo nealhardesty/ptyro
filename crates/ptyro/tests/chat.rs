@@ -117,7 +117,15 @@ fn a_chat_is_answered_kept_and_carried_on_after_a_restart() {
     let e = &engines.as_array().unwrap()[0];
     assert_eq!(e["chat"], c["id"]);
     let argv: Vec<&str> = e["argv"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
-    for want in ["--safe-mode", "--strict-mcp-config", "--system-prompt"] {
+    // With the history tools (the default), our MCP server instead of `--safe-mode` (which drops
+    // it), the user's customizations kept out by naming no setting sources.
+    for want in [
+        "--setting-sources",
+        "--disable-slash-commands",
+        "--strict-mcp-config",
+        "--mcp-config",
+        "--system-prompt",
+    ] {
         assert!(argv.contains(&want), "{argv:?}");
     }
     assert!(argv.windows(2).any(|p| p == ["--tools", "WebSearch,WebFetch"]), "{argv:?}");

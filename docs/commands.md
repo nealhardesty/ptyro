@@ -65,6 +65,13 @@ Conventions:
 | `ptyro chat retitle CHAT [TITLE…]` / `pin` / `unpin` / `archive` / `unarchive` / `rm CHATS…` | title it (none: a new automatic one) / keep at the top / put away / delete |
 | `ptyro chat set CHAT [--agent A] [--preset P]` | switch its agent or its tools; the next message carries the conversation over |
 | `ptyro chat export CHAT [--format md\|json] [-o FILE]` | write it out |
+| `ptyro chat retry CHAT [NODE] [--no-wait]` / `edit CHAT NODE TEXT…` | ask again, beside the old answer / say a message differently, beside it; the old ones stay as branches (`show --ids` gives the NODEs) |
+| `ptyro chat branch CHAT --to NODE` | show the branch through NODE (`show --branches` lists where there are others) |
+| `ptyro chat fork CHAT [--at NODE] [--agent A] [--side [--keep]] [--json] [PROMPT…]` | a new chat from the end or a message, on its agent or another (natively for Claude from the end, else seeded); `--side`: a side chat that reads it and never changes it, gone after its answer unless `--keep` |
+| `ptyro chat keep CHAT` | keep a side chat as a chat of its own |
+| `ptyro chat search QUERY… [--chat C] [-w WS] [--agent A] [--pinned] [--archived] [--here] [-n N] [--json]` | search every chat's messages and titles, on every linked machine (`--here`: this one): words, `"a phrase"`, `prefix*` (3 letters), `-word`, `agent:codex`, `since:7d`; each hit's citation (`c:7f3k/node`) and snippet |
+| `ptyro chat find [--agent A] QUESTION…` | ask your chats: an agent with only the history tools searches them and answers, citing; nothing of it is kept |
+| `ptyro chat new --incognito …` / `chat ask` | keep nothing: not saved, not searchable, gone with its agent (`ask` is always incognito unless `--keep`) |
 
 ## Scripting
 
