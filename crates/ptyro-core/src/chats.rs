@@ -184,8 +184,8 @@ pub const SEED_HEAD: &str =
     "The conversation so far, saved by ptyro (continue it; do not reply to this block):";
 
 /// A branch as a transcript the next engine is given ahead of the person's message (§22.6):
-/// user and assistant text and tool calls (output cut to 500 characters), newest kept first
-/// within `budget_tokens` (4 characters a token). Returns the block and how many messages it
+/// user and assistant text and tool calls (output cut to 500 bytes), newest kept first within
+/// `budget_tokens` (4 bytes a token); the newest is always carried, cut to fit. Returns the block and how many messages it
 /// carries; `None` when there is nothing to carry.
 pub fn seed_block(branch: &[ChatNode], budget_tokens: usize) -> Option<(String, usize)> {
     let budget = budget_tokens.saturating_mul(4);
@@ -207,6 +207,13 @@ pub fn seed_block(branch: &[ChatNode], budget_tokens: usize) -> Option<(String, 
                 }
             }
             _ => continue,
+        };
+        // The newest message always goes (cut to the budget): a long last answer must not
+        // leave the next agent with nothing.
+        let line = if lines.is_empty() && line.len() > budget {
+            clip(&line, budget.saturating_sub(3))
+        } else {
+            line
         };
         if left_out > 0 || used + line.len() > budget {
             left_out += 1;
@@ -284,6 +291,10 @@ mod tests {
             k < 4 && some.contains("[user] second") && some.contains("earlier messages left out")
         );
         assert!(seed_block(&branch[2..3], 100).is_none());
+        // One message longer than the whole budget: still carried, cut.
+        let long = vec![n("9", ChatBody::Assistant { text: "y".repeat(10_000), streaming: false })];
+        let (block, k) = seed_block(&long, 100).unwrap();
+        assert!(k == 1 && block.len() < 1000 && block.contains('…'));
     }
 
     #[test]

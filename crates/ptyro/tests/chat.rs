@@ -22,6 +22,11 @@ struct World {
 impl World {
     /// `chat`: more `[chat]` lines.
     fn new(chat: &str) -> Self {
+        Self::with(chat, "")
+    }
+
+    /// `extra`: more config at the end (agents).
+    fn with(chat: &str, extra: &str) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-chat-").tempdir().unwrap();
         let h = home.path().canonicalize().unwrap();
         let hs = h.to_string_lossy().into_owned();
@@ -35,6 +40,7 @@ impl World {
             ));
         }
         config.insert_str(config.find("[agents").unwrap(), &format!("{chat}\n"));
+        config.push_str(extra);
         let d = TempDaemon::start_with(BIN, &env, Some(&config)).unwrap();
         Self { home, d }
     }
@@ -205,4 +211,33 @@ fn chats_switched_off_say_how_to_switch_them_on() {
     let out = w.cli(&["chat", "ls"]);
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("chat.enabled true"));
+}
+
+#[test]
+fn one_answer_at_a_time_and_an_agent_that_wont_start_says_so() {
+    let w = World::new("");
+    w.ok(&["chat", "new", "--no-wait", "work 2 slowly"]);
+    let addr = format!("c:{}", w.chats()[0]["handle"].as_str().unwrap());
+    w.until("it is answering", || w.chats()[0]["status"] == "working");
+    // A message mid-answer is refused (it would interleave with the answer), not lost.
+    let out = w.cli(&["chat", "send", &addr, "and another"]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("still answering"));
+    w.until("the answer", || texts(&w.chat(&addr), "assistant").len() == 1);
+    w.until("idle again", || w.chats()[0]["status"] == "idle");
+    // Then it goes, and `send` prints this message's answer, not the one before.
+    let out = w.ok(&["chat", "send", &addr, "next"]);
+    assert_eq!(out.trim(), "you said: next");
+}
+
+#[test]
+fn an_agent_that_stops_before_answering_is_said_and_ask_keeps_nothing() {
+    let w = World::with(
+        "",
+        "[agents.broken]\ncommand = [\"/bin/sh\", \"-c\", \"exit 3\"]\nprotocol = \"acp\"\n",
+    );
+    let out = w.cli(&["chat", "ask", "--agent", "broken", "hello?"]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("stopped before it answered"), "{out:?}");
+    assert!(w.chats().is_empty(), "ask keeps nothing, even when it fails");
 }

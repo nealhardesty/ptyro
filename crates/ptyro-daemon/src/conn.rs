@@ -327,10 +327,13 @@ impl Conn {
                 else {
                     return;
                 };
+                // Kept even while it is down: an unsubscribe goes to it, and the client follows
+                // again when it is back (the machine's update says so).
+                self.remote_chats.insert(chat.clone(), machine.clone());
                 if !online {
                     let since = self.daemon.offline_since(&machine);
                     let text = format!(
-                        "{machine} is offline{since}; its chats open when it is back (it reconnects by itself)"
+                        "{machine} is offline{since}; this chat opens when it is back (it reconnects by itself)"
                     );
                     let item = ptyro_core::chat::ChatItem::new(
                         "offline",
@@ -343,7 +346,6 @@ impl Conn {
                     let _ = self.out.send(msg).await;
                     return;
                 }
-                self.remote_chats.insert(chat, machine.clone());
                 self.send_upstream(&machine, &transport, ClientMsg::ChatSubscribe { chat: there })
                     .await;
             }

@@ -474,7 +474,9 @@ pub async fn plan(ctx: &Ctx, env: &Env, opts: &Opts) -> Result<Plan, Error> {
     let k = known(ctx).await;
     let dirs: Vec<Dir> = dirs_of(paths, opts).into_iter().filter(|d| d.path.exists()).collect();
     let logins = paths.data.join("profiles").is_dir();
-    let chats = std::fs::metadata(paths.data.join("chat.db")).ok().map(|m| m.len());
+    let chats = std::fs::metadata(paths.data.join("chat.db")).ok().map(|m| {
+        m.len() + std::fs::metadata(paths.data.join("chat.db-wal")).map_or(0, |w| w.len())
+    });
 
     // Worktrees and snapshot refs: asked of git, off the async threads.
     let wts_in: Vec<_> = if opts.keep_data { Vec::new() } else { k.worktrees.clone() };

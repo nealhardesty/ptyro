@@ -47,6 +47,8 @@ pub struct ChatViewState {
     pub preset: Option<String>,
     /// Where Esc goes back to.
     pub from_list: Option<ChatList>,
+    /// A message is on its way (a new chat being made, or one sent): another waits for it.
+    pub sending: bool,
 }
 
 /// The day group of a chat in the list.
@@ -119,6 +121,11 @@ impl App {
 
     pub(crate) fn chat_removed(&mut self, id: &str) {
         self.chat_list.retain(|c| c.id != id);
+        if let Some(ChatPanel::List(l)) = &mut self.chat_panel
+            && let Some(a) = &mut l.archived
+        {
+            a.retain(|c| c.id != id);
+        }
         if let Some(ChatPanel::View(v)) = &self.chat_panel
             && v.id.as_deref() == Some(id)
         {
@@ -126,6 +133,35 @@ impl App {
             self.toast("that chat was deleted");
         }
         self.dirty = true;
+    }
+
+    /// The open chat's machine came back (follow it again) or went away (say so).
+    pub(crate) fn chat_machine_news(&mut self, m: &ptyro_core::model::MachineInfo) {
+        use ptyro_core::model::MachineState;
+        let Some(ChatPanel::View(v)) = &mut self.chat_panel else { return };
+        let Some(id) = v.id.clone() else { return };
+        let mine =
+            self.chat_list.iter().any(|c| c.id == id && c.machine.as_deref() == Some(&m.name));
+        if !mine {
+            return;
+        }
+        match m.state {
+            MachineState::Online => {
+                self.send(ClientMsg::ChatUnsubscribe { chat: id.clone() });
+                self.send(ClientMsg::ChatSubscribe { chat: id });
+            }
+            MachineState::Offline => {
+                let text = format!("{} went offline; this chat carries on when it is back", m.name);
+                let item = ChatItem::new(
+                    format!("offline-{}", ptyro_core::now_ms()),
+                    ChatBody::Notice { level: ptyro_core::chat::NoticeLevel::Warn, text },
+                );
+                let d = v.draft.clone();
+                v.view.apply(v.view.rev, false, vec![item], d);
+                self.dirty = true;
+            }
+            _ => {}
+        }
     }
 
     /// A followed chat's items.
@@ -156,6 +192,7 @@ impl App {
             agent: None,
             preset: None,
             from_list: None,
+            sending: false,
         })));
         self.dirty = true;
     }
@@ -184,6 +221,7 @@ impl App {
             agent: None,
             preset: None,
             from_list,
+            sending: false,
         })));
         self.dirty = true;
     }
@@ -221,9 +259,18 @@ impl App {
 
     /// The chat being acted on: the one shown, else the selected sidebar row's, else the list's.
     pub(crate) fn chat_target(&self) -> Option<String> {
+        // The sidebar's selected chat row, when the sidebar has the keys (or a row menu ran).
+        if self.focus == Focus::Sidebar
+            && let Some(Row::Chat(id)) = self.selected_row()
+        {
+            return Some(id);
+        }
         match &self.chat_panel {
             Some(ChatPanel::View(v)) => return v.id.clone(),
-            Some(ChatPanel::List(l)) => return self.list_rows(l).get(l.sel).map(|c| c.id.clone()),
+            Some(ChatPanel::List(l)) => {
+                let rows = self.list_rows(l);
+                return rows.get(l.sel.min(rows.len().saturating_sub(1))).map(|c| c.id.clone());
+            }
             None => {}
         }
         match self.selected_row() {
@@ -407,6 +454,22 @@ impl App {
         self.dirty = true;
     }
 
+    /// A message went (or didn't): a refused one is put back to send again.
+    pub(crate) fn chat_sent(&mut self, text: String, err: Option<String>) {
+        if let Some(ChatPanel::View(v)) = &mut self.chat_panel {
+            v.sending = false;
+            if err.is_some() && v.draft.is_empty() {
+                v.draft = text;
+                let d = v.draft.clone();
+                v.view.apply(v.view.rev, false, Vec::new(), d);
+            }
+        }
+        if let Some(e) = err {
+            self.toast(e);
+        }
+        self.dirty = true;
+    }
+
     /// A new chat was made by its first message: follow it.
     pub(crate) fn chat_made(&mut self, info: ChatInfo) {
         let id = info.id.clone();
@@ -414,6 +477,7 @@ impl App {
         if let Some(ChatPanel::View(v)) = &mut self.chat_panel
             && v.id.is_none()
         {
+            v.sending = false;
             v.id = Some(id.clone());
             v.view = crate::chat::ChatView::default();
             self.send(ClientMsg::ChatSubscribe { chat: id });
@@ -497,12 +561,14 @@ impl App {
                 return self.pick_chat_agent(id);
             }
             _ if crate::app::is_newline_key(&key) => v.draft.push('\n'),
+            KeyCode::Enter if v.sending => self.toast("one moment: the last message is on its way"),
             KeyCode::Enter => {
                 let text = std::mem::take(&mut v.draft);
                 if !text.trim().is_empty() {
+                    v.sending = true;
                     match v.id.clone() {
                         Some(id) => self.request(
-                            Pending::Done(String::new()),
+                            Pending::ChatSent(text.clone()),
                             Request::ChatSend { chat: id, text },
                         ),
                         None => {
@@ -514,7 +580,7 @@ impl App {
                                 String::new(),
                             );
                             self.request(
-                                Pending::ChatMade,
+                                Pending::ChatMade(text.clone()),
                                 Request::ChatNew {
                                     workspace: Some(v.workspace.clone()),
                                     agent: v.agent.clone(),
@@ -561,6 +627,8 @@ impl App {
 
     fn chat_list_key(&mut self, mut l: ChatList, key: KeyEvent) {
         let n = self.list_rows(&l).len();
+        // Rows go (deleted, archived, filtered): the selection stays on one.
+        l.sel = l.sel.min(n.saturating_sub(1));
         let ctrl = key.mods.has(Mods::CTRL);
         if l.typing {
             match key.code {
@@ -841,6 +909,7 @@ fn draw_view(app: &App, f: &mut Frame<'_>, area: Rect, v: &ChatViewState) {
 fn draw_list(app: &App, f: &mut Frame<'_>, area: Rect, l: &ChatList) {
     let t = &app.theme;
     let rows = app.list_rows(l);
+    let sel = l.sel.min(rows.len().saturating_sub(1));
     let scope = match (&l.workspace, l.archived.is_some()) {
         (_, true) => "archived chats".to_owned(),
         (Some(w), _) => format!("chats in {}", crate::ui::workspace_label(w)),
@@ -871,7 +940,7 @@ fn draw_list(app: &App, f: &mut Frame<'_>, area: Rect, l: &ChatList) {
     let now = ptyro_core::now_ms();
     let mut last_group = "";
     let room = area.height.saturating_sub(3) as usize;
-    let skip = l.sel.saturating_sub(room.saturating_sub(4));
+    let skip = sel.saturating_sub(room.saturating_sub(4));
     for (i, c) in rows.iter().enumerate().skip(skip) {
         let g = if c.pinned { "Pinned" } else { group(c.last_ms, now) };
         if g != last_group {
@@ -879,9 +948,8 @@ fn draw_list(app: &App, f: &mut Frame<'_>, area: Rect, l: &ChatList) {
             last_group = g;
         }
         let (glyph, gc) = glyph(app, c);
-        let sel = i == l.sel;
         let mut name = fg(app, t.text);
-        if sel {
+        if i == sel {
             name = name.add_modifier(Modifier::REVERSED);
         }
         let mut spans = vec![

@@ -6240,6 +6240,20 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   `[agents]`: `[chat] hibernate_after` stops them. Native continue by conv; a conv whose resume
   produced no answer is ended and the message is re-sent seeded. Codex's driver ends a turn on
   `thread/status/changed → idle` (CHAT0). Attention follows `[chat] notify`.
+- **Rules the review added (2026-10-29):** one answer at a time: `ChatSend` while the engine
+  works or waits on a permission card is refused (`Busy`, the client keeps the text), so a message
+  never interleaves with an answer. `ChatNew` with a prompt always returns the chat, even when its
+  agent didn't start (the reason is an error notice in it); an engine that ends before it answers
+  says so. A failed native resume writes nothing and raises nothing (`quiet`) before it is
+  re-sent seeded; hibernation and the retry take the chat's send lock. Engines that crossed a live
+  upgrade are stopped at start (their cut-off answer is closed `interrupted`). A Codex `read` chat
+  always gets the folder-limited profile, re-allowing the profile's `CODEX_HOME` and the `codex`
+  binary's folder; every `codex mcp list` server is switched off whatever its case, and when the
+  list can't be read the chat says `tools: best effort`. `chat.db` and its copies are 0600 every
+  time; a write after a delete is dropped; `archive_purge_days` removes the purged chats' files;
+  `ptyro backup` reads `chat.db` read-only; doctor uses `quick_check`. `[chat] notify = "all"` adds
+  only the chat's own "answered". A machine can't be named `c`; another machine's archived chats
+  are routed there once listed.
 - **Not built in CHAT1** (each is its later task): incognito, `history_tool`/`history_scope`
   (CHAT3), the presets' `shell` and `mcp` (CHAT4), agent-sent titles (Claude and Codex send none;
   OpenCode's and ACP's are not read yet: the titler is used), a `parent` on `ChatSend` and every

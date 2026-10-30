@@ -97,7 +97,7 @@ function rows(): Node[] {
   if (!shown.length) {
     return [h("div", { class: "empty" },
       h("p", {}, q ? `Nothing matches “${q}”.` : state.archived ? "No archived chats." : "No chats yet. Ask anything: it can search the web, and it is kept here."),
-      q || state.archived ? null : h("button", { class: "primary", title: tip("chat.new"), onclick: () => newChat() }, "Start a chat"))];
+      q || state.archived || !canWrite() ? null : h("button", { class: "primary", title: tip("chat.new"), onclick: () => newChat() }, "Start a chat"))];
   }
   const out: Node[] = [];
   let group = "";
@@ -130,7 +130,7 @@ function listView(): HTMLElement {
   wsSelect.value = state.workspace;
   const archived = h("button", { class: `small${state.archived ? " on" : ""}`, title: tip("chat.archived"), onclick: () => void toggleArchived() }, state.archived ? "Back to chats" : "Archived");
   return h("div", {},
-    ui.header("Chats", false, h("button", { class: "icon plus", title: tip("chat.new"), "aria-label": "New chat", onclick: () => newChat() }, "＋")),
+    ui.header("Chats", false, canWrite() ? h("button", { class: "icon plus", title: tip("chat.new"), "aria-label": "New chat", onclick: () => newChat() }, "＋") : null),
     h("div", { class: "searchbar" }, findBox, wsSelect, archived),
     h("main", { class: "list chats", title: tip("chats") }, h("div", { class: "rows" }, ...rows())));
 }
@@ -152,13 +152,17 @@ function update(c: Chat, change: object, ok: string): Promise<unknown> {
 
 function chatMenu(c: Chat): void {
   const archived = c.archived || !!state.archived?.some((x) => x.id === c.id);
+  const open = { title: tip("chat.open"), label: "Open", run: () => { location.hash = `#/c/${encodeURIComponent(c.id)}`; } };
+  const md = { title: tip("chat.export"), label: "Download as Markdown", run: () => void exportChat(c) };
+  // A device that may only read gets what reads (SPEC §22.11).
+  if (!canWrite()) { menu(label(c), [open, md]); return; }
   menu(label(c), [
-    { title: tip("chat.open"), label: "Open", run: () => { location.hash = `#/c/${encodeURIComponent(c.id)}`; } },
+    open,
     { title: tip("chat.retitle"), label: "Rename", run: () => retitle(c) },
     { title: tip("chat.pin"), label: c.pinned ? "Unpin" : "Pin", run: () => update(c, { pinned: !c.pinned }, c.pinned ? "Unpinned" : "Pinned") },
     { title: tip("chat.agent"), label: "Switch agent", hint: `now ${c.agent}`, run: () => pickAgent(c) },
     { title: tip("chat.preset"), label: "Tools", hint: `now ${c.tools}`, run: () => pickPreset(c) },
-    { title: tip("chat.export"), label: "Download as Markdown", run: () => void exportChat(c) },
+    md,
     { title: tip("chat.archive"), label: archived ? "Bring back from the archive" : "Archive", run: async () => {
       await update(c, { archived: !archived }, archived ? "Back from the archive" : "Archived");
       if (state.archived) state.archived = state.archived.filter((x) => x.id !== c.id);
@@ -194,7 +198,11 @@ function pickAgent(c: Chat): void {
 const PRESETS: [string, string][] = [["chat", "web search"], ["read", "web search, and reads its folders"], ["none", "no tools"]];
 
 function pickPreset(c: Chat): void {
-  menu("What may the chat use?", PRESETS.map(([p, what]) => ({ title: tip("chat.preset"), label: p, hint: p === c.tools ? `now · ${what}` : what, run: () => update(c, { preset: p }, `Tools: ${p}`) })));
+  menu("What may the chat use?", [
+    ...PRESETS.map(([p, what]) => ({ title: tip("chat.preset"), label: p, hint: p === c.tools ? `now · ${what}` : what, run: () => update(c, { preset: p }, `Tools: ${p}`) })),
+    // Your own `[chat.tools.NAME]` presets, by name.
+    { title: tip("chat.preset"), label: "One of your own…", hint: "a [chat.tools] preset", run: () => form("Tools: your preset", [{ key: "p", label: "Preset name", required: true, value: PRESETS.some(([p]) => p === c.tools) ? "" : c.tools }], "Use it", async (v) => { await conn.request({ t: "chat_update", chat: c.id, preset: v.p }); ui.toast(`Tools: ${v.p}`); }) },
+  ]);
 }
 
 async function exportChat(c: Chat): Promise<void> {
@@ -206,7 +214,7 @@ async function exportChat(c: Chat): Promise<void> {
 
 /// The page's composer and transcript stay in the DOM across renders, so a draft, the caret
 /// and the scroll position survive the events that re-render everything around them.
-interface Page { id: string; el: HTMLElement; box: HTMLElement; reply: HTMLTextAreaElement; els: Map<string, { key: string; el: HTMLElement }>; agent: HTMLSelectElement; preset: HTMLSelectElement }
+interface Page { id: string; el: HTMLElement; box: HTMLElement; reply: HTMLTextAreaElement; els: Map<string, { key: string; el: HTMLElement }>; agent: HTMLSelectElement; preset: HTMLSelectElement; sending: boolean }
 let page: Page | null = null;
 const drafts = new Map<string, string>();
 
@@ -230,8 +238,11 @@ function pageFor(id: string): Page {
   reply.addEventListener("input", () => drafts.set(id, reply.value));
   reply.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); void send(); } });
   const agent = h("select", { "aria-label": "Agent", title: tip("chat.agent") }, h("option", { value: "" }, "default agent"), ...agentNames().map((a) => h("option", { value: a }, a)));
-  const preset = h("select", { "aria-label": "Tools", title: tip("chat.preset") }, ...PRESETS.map(([p, what]) => h("option", { value: p }, `${p}: ${what}`)));
-  page = { id, el: h("div", { class: "session chat-page" }), box: h("div", { class: "chat" }), reply, els: new Map(), agent, preset };
+  // The default is `[chat] preset`'s, whatever it is (a preset of your own too).
+  const preset = h("select", { "aria-label": "Tools", title: tip("chat.preset") }, h("option", { value: "" }, "default tools"), ...PRESETS.map(([p, what]) => h("option", { value: p }, `${p}: ${what}`)));
+  page = { id, el: h("div", { class: "session chat-page" }), box: h("div", { class: "chat" }), reply, els: new Map(), agent, preset, sending: false };
+  // A new chat's page starts empty (not with what a failed try left).
+  if (id.startsWith("new")) state.items = [];
   return page;
 }
 
@@ -240,6 +251,9 @@ async function send(): Promise<void> {
   if (!p) return;
   const text = p.reply.value;
   if (!text.trim()) return;
+  // One at a time: a second Send while the first is on its way would send it twice.
+  if (p.sending) { ui.toast("One moment: the last message is on its way"); return; }
+  p.sending = true;
   try {
     if (p.id.startsWith("new")) {
       const ws = decodeURIComponent(p.id.split("/")[1] ?? "") || undefined;
@@ -247,6 +261,7 @@ async function send(): Promise<void> {
       ui.render();
       const r = await conn.request({ t: "chat_new", workspace: ws, agent: p.agent.value || null, preset: p.preset.value || null, prompt: text });
       p.reply.value = ""; drafts.delete(p.id);
+      p.sending = false;
       const info = r.info as Chat;
       state.list.set(info.id, info);
       // The same page, now the chat's own.
@@ -256,6 +271,7 @@ async function send(): Promise<void> {
       if (p.reply.value === text) { p.reply.value = ""; drafts.delete(p.id); }
     }
   } catch (e) { ui.toast(errText(e)); }
+  p.sending = false;
 }
 
 function chatItem(id: string, it: Item): HTMLElement | null {
@@ -364,6 +380,13 @@ conn.listeners.add((msg: any) => {
     } else if (e.t === "chat_removed") {
       state.list.delete(e.id);
       ui.render();
+    } else if (e.t === "machine_updated" && state.following) {
+      // The open chat's machine came back: follow it again; went away: say so.
+      const c = state.list.get(state.following);
+      if (c?.machine === e.info.name) {
+        if (e.info.state === "online") { const f = state.following; state.following = null; follow(f); }
+        else if (e.info.state === "offline") { state.items.push({ id: `offline-${Date.now()}`, t: "notice", level: "warn", text: `${e.info.name} went offline; this chat carries on when it is back` }); ui.render(); }
+      }
     }
   }
 });

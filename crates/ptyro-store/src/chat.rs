@@ -179,12 +179,10 @@ impl ChatDb {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let fresh = !path.exists();
         let conn = Connection::open(path)?;
-        if fresh {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-        }
+        // Private every time (a restored copy may not be), and before the WAL is made: SQLite
+        // gives its -wal and -shm files the main file's mode.
+        private(path);
         Self::start(conn, path.to_path_buf())
     }
 
@@ -326,7 +324,7 @@ impl ChatDb {
             if f.workspace.is_some() {
                 sql.push_str(" AND workspace = ?1");
             }
-            sql.push_str(" ORDER BY pinned DESC, last_at DESC");
+            sql.push_str(" ORDER BY pinned DESC, last_at DESC, id DESC");
             if f.limit > 0 {
                 sql.push_str(&format!(" LIMIT {}", f.limit));
             }
@@ -437,17 +435,30 @@ impl ChatDb {
         .await
     }
 
-    /// Remove tombstones older than [`TOMBSTONE_MS`], and archived chats older than
-    /// `archive_purge_days` (0 = never). Returns how many chats went.
-    pub async fn compact(&self, archive_purge_days: u32) -> Result<usize> {
+    /// Remove tombstones older than [`TOMBSTONE_MS`], and tombstone archived chats older than
+    /// `archive_purge_days` (0 = never). Returns how many chats went, and the ids purged now
+    /// (their files and lists are the caller's to clear).
+    pub async fn compact(&self, archive_purge_days: u32) -> Result<(usize, Vec<String>)> {
         self.call(move |db| {
             let t = now();
+            let mut purged = Vec::new();
             if archive_purge_days > 0 {
                 let before = t - i64::from(archive_purge_days) * 86_400_000;
-                db.execute(
-                    "UPDATE chat SET deleted_at = ?1 WHERE archived_at IS NOT NULL AND archived_at < ?2 AND deleted_at IS NULL",
-                    params![t, before],
-                )?;
+                purged = {
+                    let mut st = db.prepare(
+                        "SELECT id FROM chat WHERE archived_at IS NOT NULL AND archived_at < ?1 AND deleted_at IS NULL",
+                    )?;
+                    st.query_map([before], |r| r.get::<_, String>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?
+                };
+                for id in &purged {
+                    db.execute("UPDATE chat SET deleted_at = ?2 WHERE id = ?1", params![id, t])?;
+                    // Out of the index at once, as a delete is.
+                    db.execute(
+                        "UPDATE node SET deleted_at = ?2 WHERE chat = ?1 AND deleted_at IS NULL",
+                        params![id, t],
+                    )?;
+                }
             }
             let before = t - TOMBSTONE_MS as i64;
             let tx = db.transaction()?;
@@ -461,7 +472,7 @@ impl ChatDb {
                 [before],
             )?;
             tx.commit()?;
-            Ok(n)
+            Ok((n, purged))
         })
         .await
     }
@@ -635,7 +646,7 @@ impl ChatDb {
                 .unwrap_or(0)
                 == 1;
             let integrity: String =
-                db.query_row("PRAGMA integrity_check", [], |r| r.get(0)).unwrap_or_default();
+                db.query_row("PRAGMA quick_check", [], |r| r.get(0)).unwrap_or_default();
             let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
                 + std::fs::metadata(path.with_extension("db-wal")).map(|m| m.len()).unwrap_or(0);
             Ok(ChatDoctor { bytes, chats: chats as u64, nodes: nodes as u64, fts5, integrity })
@@ -643,15 +654,36 @@ impl ChatDb {
         .await
     }
 
-    /// A consistent copy of the file (WAL included) at `to`, for `ptyro backup`.
+    /// A consistent copy of the file (WAL included) at `to`, private, for `ptyro backup`.
     pub async fn copy_to(&self, to: PathBuf) -> Result<()> {
         self.call(move |db| {
             let _ = std::fs::remove_file(&to);
             db.execute("VACUUM INTO ?1", [to.display().to_string()])?;
+            private(&to);
             Ok(())
         })
         .await
     }
+
+    /// The same of a `chat.db` that isn't open here (`ptyro backup` beside a running daemon):
+    /// read-only, so nothing is migrated or written, whichever ptyro made it.
+    pub fn snapshot(from: &Path, to: &Path) -> Result<()> {
+        let db = Connection::open_with_flags(
+            from,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        db.busy_timeout(std::time::Duration::from_secs(5))?;
+        let _ = std::fs::remove_file(to);
+        db.execute("VACUUM INTO ?1", [to.display().to_string()])?;
+        private(to);
+        Ok(())
+    }
+}
+
+/// Owner-only (0600): chat text is private.
+fn private(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
 }
 
 fn put_node(
@@ -674,6 +706,17 @@ fn put_node(
             .query_row("SELECT 1 FROM node WHERE id = ?1", [&n.id], |_| Ok(()))
             .optional()?
             .is_some();
+    // A chat deleted while its answer was still being written takes nothing more (a late write
+    // must not come back to life, nor into the index).
+    let gone = tx
+        .query_row("SELECT deleted_at IS NOT NULL FROM chat WHERE id = ?1", [chat], |r| {
+            r.get::<_, bool>(0)
+        })
+        .optional()?
+        .unwrap_or(true);
+    if !exists && gone {
+        return Ok(());
+    }
     if !exists {
         tx.execute(
             "INSERT INTO node (id, chat, parent, kind, body, text, at_ms, conv, origin)
@@ -832,7 +875,7 @@ mod tests {
         assert!(db.get("c1".into()).await.unwrap().is_none());
         assert_eq!(hits(&db, "secret"), 0, "a tombstone leaves the index at once");
         // A fresh tombstone stays until compaction a day later.
-        assert_eq!(db.compact(0).await.unwrap(), 0);
+        assert_eq!(db.compact(0).await.unwrap().0, 0);
         db.call(|c| {
             c.execute("UPDATE chat SET deleted_at = 1", [])?;
             c.execute("UPDATE node SET deleted_at = 1", [])?;
@@ -840,7 +883,7 @@ mod tests {
         })
         .await
         .unwrap();
-        assert_eq!(db.compact(0).await.unwrap(), 1);
+        assert_eq!(db.compact(0).await.unwrap().0, 1);
         let n: i64 = db
             .call(|c| Ok(c.query_row("SELECT count(*) FROM node", [], |r| r.get(0))?))
             .await
@@ -848,6 +891,37 @@ mod tests {
         assert_eq!(n, 0);
         let d = db.doctor().await.unwrap();
         assert!(d.fts5 && d.integrity == "ok", "{d:?}");
+    }
+
+    #[tokio::test]
+    async fn a_late_write_after_a_delete_is_dropped_and_copies_are_private() {
+        let db = db_with_chat().await;
+        db.put_node_now("c1".into(), user("u1", None, "hello"), None, false).await.unwrap();
+        db.delete("c1".into()).await.unwrap();
+        // The engine's last flush, after the delete: it must not come back, nor be found.
+        db.put_node_now("c1".into(), answer("a1", "u1", "secret answer", false), None, false)
+            .await
+            .unwrap();
+        assert_eq!(hits(&db, "secret"), 0);
+        let n: i64 = db
+            .call(|c| {
+                Ok(c.query_row("SELECT count(*) FROM node WHERE id = 'a1'", [], |r| r.get(0))?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(n, 0);
+        let dir = tempfile::tempdir().unwrap();
+        let copy = dir.path().join("copy.db");
+        db.copy_to(copy.clone()).await.unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&copy).unwrap().permissions().mode() & 0o777, 0o600);
+        // An archived chat past its days is purged, and named so its files can go.
+        let db = db_with_chat().await;
+        db.put_node_now("c1".into(), user("u1", None, "old plans"), None, false).await.unwrap();
+        db.set_archived("c1".into(), true).await.unwrap();
+        db.call(|c| Ok(c.execute("UPDATE chat SET archived_at = 1", [])?)).await.unwrap();
+        assert_eq!(db.compact(30).await.unwrap().1, ["c1"]);
+        assert_eq!(hits(&db, "plans"), 0, "out of the index at once");
     }
 
     #[tokio::test]

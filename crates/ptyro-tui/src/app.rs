@@ -436,8 +436,10 @@ pub enum Pending {
     Chats,
     /// The archived ones, for the chat list.
     ArchivedChats,
-    /// A new chat made by its first message: follow it.
-    ChatMade,
+    /// A new chat made by its first message (this one): follow it.
+    ChatMade(String),
+    /// A message sent to a chat: put back if it was refused.
+    ChatSent(String),
     /// A chat's Markdown, to write here.
     ChatExport(std::path::PathBuf),
     /// What quick-new would start in this workspace (UX3.2), for its label.
@@ -1713,6 +1715,7 @@ impl App {
                 upsert_by(&mut self.workspaces, info, |w| w.id.clone())
             }
             DomainEvent::MachineUpdated { info } => {
+                self.chat_machine_news(&info);
                 self.machine_news(info);
             }
             DomainEvent::MachineRemoved { name } => self.machines.retain(|m| m.name != name),
@@ -1837,7 +1840,11 @@ impl App {
             (Pending::List, Ok(Reply::Sessions { sessions })) => self.got_list(sessions),
             (Pending::Chats, Ok(Reply::Chats { chats })) => self.got_chats(chats),
             (Pending::ArchivedChats, Ok(Reply::Chats { chats })) => self.got_archived(chats),
-            (Pending::ChatMade, Ok(Reply::Chat { info })) => self.chat_made(info),
+            (Pending::ChatMade(_), Ok(Reply::Chat { info })) => self.chat_made(info),
+            (Pending::ChatMade(text) | Pending::ChatSent(text), Err(e)) => {
+                self.chat_sent(text, Some(e.message))
+            }
+            (Pending::ChatSent(text), Ok(_)) => self.chat_sent(text, None),
             (Pending::ChatExport(path), Ok(Reply::Text { text })) => {
                 match std::fs::write(&path, text) {
                     Ok(()) => self.toast(format!("written to {}", path.display())),
@@ -2478,7 +2485,11 @@ impl App {
             return;
         }
         // The chat panel has the keyboard while the panes have focus (the sidebar keeps its own).
-        if self.chat_panel.is_some() && !self.prefix && self.focus == Focus::Pane {
+        if self.chat_panel.is_some()
+            && !self.prefix
+            && self.focus == Focus::Pane
+            && !self.full_view()
+        {
             if self.keymap.is_prefix(key) {
                 self.start_prefix();
             } else {
@@ -2923,9 +2934,12 @@ impl App {
             | "session.take_control" => {
                 // On a chat row, the same keys mean the chat's own: `,` its title, `x` archive,
                 // `X` delete (SPEC §22.12).
-                if self.focus == Focus::Sidebar
-                    && let Some(Row::Chat(_)) = self.selected_row()
-                {
+                let on_chat_row = self.focus == Focus::Sidebar
+                    && matches!(self.selected_row(), Some(Row::Chat(_)));
+                // With a chat open over the panes, they mean the chat, never the hidden session.
+                let chat_shown = self.focus == Focus::Pane
+                    && matches!(&self.chat_panel, Some(crate::chats::ChatPanel::View(v)) if v.id.is_some());
+                if on_chat_row || chat_shown {
                     let a = match cmd.action {
                         "session.rename" | "session.retitle" => "chat.retitle",
                         "session.stop" => "chat.archive",
@@ -5801,6 +5815,17 @@ impl App {
                             self.set_sel(&rows, row);
                             self.open_sets(Some(run));
                         }
+                        Some(r @ (Row::Chat(_) | Row::ChatNew(_) | Row::ChatAll(_))) => {
+                            self.set_sel(&rows, row);
+                            self.chat_row_open(&r);
+                        }
+                        Some(Row::Chats(ws)) => {
+                            self.set_sel(&rows, row);
+                            let key = crate::tree::chats_key(&ws);
+                            if !self.collapsed.remove(&key) {
+                                self.collapsed.insert(key);
+                            }
+                        }
                         Some(Row::Project(id) | Row::Worktree(id)) => {
                             self.set_sel(&rows, row);
                             if !self.collapsed.remove(&id) {
@@ -5820,6 +5845,18 @@ impl App {
                     self.nav_move(cur.saturating_sub(1));
                 }
                 _ => {}
+            }
+            return;
+        }
+        // The chat panel covers the panes: the wheel scrolls it, nothing reaches what's behind.
+        if self.chat_panel.is_some() && self.main_area().contains((x, y).into()) {
+            self.focus = Focus::Pane;
+            if let Some(crate::chats::ChatPanel::View(v)) = &mut self.chat_panel {
+                match m.kind {
+                    K::ScrollUp => v.view.scroll = (v.view.scroll + 3).min(v.view.max_scroll.get()),
+                    K::ScrollDown => v.view.scroll = v.view.scroll.saturating_sub(3),
+                    _ => {}
+                }
             }
             return;
         }

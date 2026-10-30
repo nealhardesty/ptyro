@@ -251,6 +251,57 @@ async fn another_machines_chats_are_listed_used_and_made_from_here() {
     here.request(hide(false)).await.unwrap();
     assert!(chats(&here).await.iter().any(|c| c.id == theirs.id));
 
+    // Archived there: listed here with the archived ones, and brought back from here.
+    there
+        .request(Request::ChatUpdate {
+            chat: theirs.id.clone(),
+            title: None,
+            pinned: None,
+            archived: Some(true),
+            agent: None,
+            preset: None,
+        })
+        .await
+        .unwrap();
+    until("archived there, gone from here", || async {
+        !chats(&here).await.iter().any(|c| c.id == theirs.id)
+    })
+    .await;
+    let req = Request::ChatList {
+        workspace: None,
+        all: true,
+        pinned: false,
+        archived: true,
+        limit: Some(1),
+    };
+    let Reply::Chats { chats: archived } = here.request(req).await.unwrap() else { panic!() };
+    assert_eq!(archived.len(), 1, "the limit holds across machines");
+    here.request(Request::ChatUpdate {
+        chat: theirs.id.clone(),
+        title: None,
+        pinned: None,
+        archived: Some(false),
+        agent: None,
+        preset: None,
+    })
+    .await
+    .expect("a remote archived chat is routed there");
+    until("back from the archive", || async {
+        chats(&here).await.iter().any(|c| c.id == theirs.id)
+    })
+    .await;
+    // A machine can't be called `c`: `c:7f3k` is a chat's address.
+    let e = here
+        .request(Request::MachineAdd {
+            name: Some("c".into()),
+            transport: MachineTransport::Ssh { target: "laptop2".into() },
+            token: None,
+            force: true,
+        })
+        .await
+        .unwrap_err();
+    assert!(e.message.contains("can't name a machine"), "{}", e.message);
+
     // laptop2 goes down: its chats stay listed as they were; using one says why.
     t.there.stop();
     online(&here, MachineState::Offline).await;

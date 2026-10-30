@@ -71,6 +71,8 @@ pub(crate) struct Mirror {
     pub inbox: Vec<InboxEntry>,
     /// Its chats that aren't archived (SPEC §22.11): listed here while it is offline too.
     pub chats: Vec<ChatInfo>,
+    /// Ids of its archived chats seen so far (not mirrored, but still routed there).
+    pub archived: HashSet<String>,
 }
 
 pub(crate) struct Link {
@@ -765,7 +767,9 @@ impl Daemon {
                 DomainEvent::ChatUpdated { info } => {
                     if info.archived {
                         m.chats.retain(|c| c.id != info.id);
+                        m.archived.insert(info.id.clone());
                     } else {
+                        m.archived.remove(&info.id);
                         upsert(&mut m.chats, info.clone(), |c| c.id.clone());
                     }
                     let in_hidden = split_machine(&info.workspace)
@@ -896,6 +900,7 @@ impl Daemon {
                         .is_some_and(|id| mi.sessions.iter().any(|s| s.id == id));
                     let hit = session
                         || mi.chats.iter().any(|c| c.id == a)
+                        || mi.archived.contains(&a)
                         || mi.workspaces.iter().any(|w| w.id == a)
                         || mi.projects.iter().any(|p| p.id == a)
                         || mi.worktrees.iter().any(|w| w.id == a);
@@ -1071,11 +1076,9 @@ impl Daemon {
             .map(|(m, rest)| (m.to_owned(), rest.to_owned()))
             .or_else(|| {
                 links.iter().find_map(|(m, l)| {
-                    l.mirror
-                        .chats
-                        .iter()
-                        .any(|c| c.id == chat)
-                        .then(|| (m.clone(), chat.to_owned()))
+                    let mine = l.mirror.chats.iter().any(|c| c.id == chat)
+                        || l.mirror.archived.contains(chat);
+                    mine.then(|| (m.clone(), chat.to_owned()))
                 })
             })?;
         let l = links.get(&found.0)?;
@@ -1109,12 +1112,22 @@ impl Daemon {
         for m in online {
             if let Ok(Reply::Chats { chats: theirs }) = self.forward(&m, req.clone()).await {
                 let hidden = self.hidden_of(&m);
+                // Remembered, so acting on one (unarchive, open, delete) is routed there.
+                if let Some(l) = self.links.locked().get_mut(&m) {
+                    l.mirror.archived.extend(theirs.iter().map(|c| c.id.clone()));
+                }
                 chats.extend(theirs.into_iter().filter(|c| {
                     !split_machine(&c.workspace).is_some_and(|(_, w)| hidden.iter().any(|h| h == w))
                 }));
             }
         }
-        chats.sort_by_key(|c| std::cmp::Reverse(c.last_ms));
+        // One list, ordered and cut as a single machine's is.
+        chats.sort_by(|a, b| b.pinned.cmp(&a.pinned).then(b.last_ms.cmp(&a.last_ms)));
+        if let Request::ChatList { limit: Some(n), .. } = req
+            && *n > 0
+        {
+            chats.truncate(*n as usize);
+        }
         Reply::Chats { chats }
     }
 
@@ -1259,6 +1272,13 @@ impl Daemon {
         if let Err(e) = ptyro_core::names::validate(&name) {
             cleanup();
             return Err(Error::invalid(e));
+        }
+        // `c:7f3k` is a chat's address (SPEC §22.3): a machine called `c` would take every one.
+        if name == "c" {
+            cleanup();
+            return Err(Error::invalid(
+                "`c` can't name a machine: `c:…` is how chats are addressed. Pick another with --name",
+            ));
         }
         if ptyro_core::names::as_name(&self.machine()).as_deref() == Some(name.as_str()) {
             cleanup();

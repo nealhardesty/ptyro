@@ -2,7 +2,7 @@
 //! kept (in `chat.db`) and shows in the TUI's and the web's CHATS section too; `ptyro chat ask`
 //! is the one-shot that keeps nothing (`git diff | ptyro chat ask "review this"`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::io::{IsTerminal, Read, Write};
 use std::time::Duration;
 
@@ -191,11 +191,20 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, words: Vec<String>) -> Result<
         ChatCmd::Open { chat } => open(ctx, &chat).await,
         ChatCmd::Send { chat, text, no_wait, timeout } => {
             let c = ctx.connect(true).await?;
+            // What was there before: the answer is what follows this message, not an earlier one.
+            let known: HashSet<String> = match c
+                .request(Request::ChatRead { chat: chat.clone(), all: true })
+                .await?
+            {
+                Reply::ChatTranscript { nodes, .. } => nodes.into_iter().map(|n| n.id).collect(),
+                r => return Err(unexpected(r)),
+            };
             let info = chat_of(c.request(Request::ChatSend { chat, text: text.join(" ") }).await?)?;
             if no_wait {
                 return Ok(0);
             }
-            wait(c, &info, Duration::from_secs(timeout), true).await.map(|_| 0)
+            let ok = wait(c, &info, &known, Duration::from_secs(timeout), true).await?;
+            Ok(if ok { 0 } else { 1 })
         }
         ChatCmd::Answer { chat, decision } => {
             done(ctx, Request::ChatAnswer { chat, decision }).await
@@ -302,7 +311,8 @@ async fn new(
     if no_wait {
         return Ok(0);
     }
-    wait(c, &info, Duration::from_secs(600), true).await.map(|_| 0)
+    let ok = wait(c, &info, &HashSet::new(), Duration::from_secs(600), true).await?;
+    Ok(if ok { 0 } else { 1 })
 }
 
 async fn ask(
@@ -333,21 +343,28 @@ async fn ask(
         .await?,
     )?;
     let addr = info.addr();
-    let answered = wait(c, &info, Duration::from_secs(timeout), false).await;
-    let c = ctx.connect(false).await?;
+    // However it ends (an answer, an error, a timeout, Ctrl-C), nothing is kept unless --keep.
+    let none = HashSet::new();
+    let answered = tokio::select! {
+        r = wait(c, &info, &none, Duration::from_secs(timeout), false) => r,
+        _ = tokio::signal::ctrl_c() => Err(Error::new(ErrorCode::Invalid, "interrupted")),
+    };
     if keep {
         eprintln!("kept as {addr}");
-    } else {
+    } else if let Ok(c) = ctx.connect(false).await {
         let _ = c.request(Request::ChatDelete { chat: info.id.clone() }).await;
     }
     answered.map(|ok| if ok { 0 } else { 1 })
 }
 
-/// Follow a chat until the answer to its last message is complete, printing it (`stream`: as
-/// it arrives; else once, the final answer only). Returns whether the turn ended well.
+/// Follow a chat until the answer to the message just sent is complete, printing it (`stream`:
+/// as it arrives; else once, the final answer only). The message is the first one that isn't in
+/// `known` (what the chat had before). Returns whether the turn ended well; an agent that failed
+/// to start (an error notice) ends it too.
 async fn wait(
     mut c: ptyro_client::Client,
     info: &ChatInfo,
+    known: &HashSet<String>,
     timeout: Duration,
     stream: bool,
 ) -> Result<bool, Error> {
@@ -389,8 +406,7 @@ async fn wait(
         if after.is_none() {
             after = order
                 .iter()
-                .rev()
-                .find(|id| matches!(items[*id].body, ChatBody::User { .. }))
+                .find(|id| !known.contains(*id) && matches!(items[*id].body, ChatBody::User { .. }))
                 .cloned();
         }
         let Some(start) = &after else { continue };
@@ -418,9 +434,14 @@ async fn wait(
                         info.addr()
                     );
                 }
-                ChatBody::Notice { text, .. } if !printed.contains_key(id) => {
+                ChatBody::Notice { text, level } if !printed.contains_key(id) => {
                     eprintln!("! {text}");
                     printed.insert(id.clone(), 0);
+                    // The agent didn't start, or died: no answer is coming.
+                    if *level == ptyro_core::chat::NoticeLevel::Error {
+                        let _ = c.send(ClientMsg::ChatUnsubscribe { chat: info.id.clone() });
+                        return Ok(false);
+                    }
                 }
                 ChatBody::TurnEnd { stop, .. } => {
                     if !stream {

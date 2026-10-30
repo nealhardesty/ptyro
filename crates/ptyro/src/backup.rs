@@ -168,11 +168,13 @@ pub async fn create(ctx: &Ctx, o: &Opts) -> Result<Made, Error> {
     if chats.exists() && o.no_chats {
         left_out.push("your chats (data/chat.db): --no-chats".to_owned());
     } else if chats.exists() {
-        let db = ptyro_store::chat::ChatDb::open(&chats)
-            .map_err(|e| Error::internal(format!("chat.db: {e}")))?;
-        db.copy_to(root.join("data/chat.db"))
-            .await
-            .map_err(|e| Error::internal(format!("chat.db: {e}")))?;
+        // Read-only: nothing is migrated or written, whichever ptyro made the file.
+        ptyro_store::chat::ChatDb::snapshot(&chats, &root.join("data/chat.db")).map_err(|e| {
+            Error::internal(format!(
+                "couldn't copy your chats ({}: {e}); `--no-chats` backs up the rest",
+                chats.display()
+            ))
+        })?;
         items.push("data/chat.db: your chats (--no-chats leaves them out)".to_owned());
     }
 

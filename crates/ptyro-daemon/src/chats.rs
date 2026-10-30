@@ -65,6 +65,9 @@ pub(crate) struct Live {
     /// The tip of the shown branch (the next node's parent).
     leaf: Mutex<Option<String>>,
     engine: Mutex<Option<Engine>>,
+    /// A resumed engine that hasn't answered yet: what it says (a failed resume's error) is
+    /// neither written nor alerted; the message is seeded to a new one instead.
+    quiet: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Clone)]
@@ -109,6 +112,7 @@ impl Chats {
                 viewers: AtomicU32::new(0),
                 leaf: Mutex::new(None),
                 engine: Mutex::new(None),
+                quiet: std::sync::atomic::AtomicBool::new(false),
             })
         }))
     }
@@ -160,6 +164,17 @@ impl Daemon {
         };
         let me = Arc::clone(self);
         tokio::spawn(async move {
+            // Engines that crossed a live upgrade have no follower in this image: stop them (a
+            // cut-off answer is closed below; the next message resumes the conversation).
+            for s in me.sessions() {
+                let chat = s.meta.locked().place.chat.is_some();
+                if chat {
+                    s.hibernating.store(true, Ordering::Relaxed);
+                    me.stop_session(&s).await;
+                    s.save(None);
+                    me.forget_session(s.id);
+                }
+            }
             match db.close_interrupted().await {
                 Ok(c) if !c.is_empty() => tracing::info!("{} chat answer(s) were cut off", c.len()),
                 Ok(_) => {}
@@ -168,8 +183,16 @@ impl Daemon {
             loop {
                 let days = me.config().chat.archive_purge_days;
                 match db.compact(days).await {
-                    Ok(n) if n > 0 => tracing::info!("chat.db: {n} deleted chat(s) compacted"),
-                    Ok(_) => {}
+                    Ok((n, purged)) => {
+                        if n > 0 {
+                            tracing::info!("chat.db: {n} deleted chat(s) compacted");
+                        }
+                        // Archived past `archive_purge_days`: their files go as a delete's do.
+                        for id in purged {
+                            me.remove_chat_dirs(&id, None).await;
+                            let _ = me.events.send(DomainEvent::ChatRemoved { id, machine: None });
+                        }
+                    }
                     Err(e) => tracing::warn!("chat.db compaction: {e}"),
                 }
                 tokio::time::sleep(Duration::from_secs(24 * 3600)).await;
@@ -279,8 +302,13 @@ impl Daemon {
         match req {
             Request::ChatNew { workspace, agent, preset, title, prompt } => {
                 let info = self.chat_new(workspace, agent, preset, title).await?;
-                if let Some(p) = prompt.filter(|p| !p.trim().is_empty()) {
-                    self.chat_send(&info.id, p).await?;
+                // The chat is made whatever the agent does: an agent that won't start is said in
+                // it (a notice), and the reply still names it, so a client shows it, retries in
+                // it, or deletes it, rather than making another.
+                if let Some(p) = prompt.filter(|p| !p.trim().is_empty())
+                    && let Err(e) = self.chat_send(&info.id, p).await
+                {
+                    tracing::debug!(chat = %info.id, "first message: {}", e.message);
                 }
                 Ok(Reply::Chat { info: self.chat_info_now(&info.id).await? })
             }
@@ -534,6 +562,28 @@ impl Daemon {
             .map_err(store_err)?
             .ok_or_else(|| Error::missing("chat", id))?;
         let live = self.chats.live(id);
+        // One answer at a time: a message sent mid-answer would interleave with it (and be
+        // answered after it anyway). The client says so and keeps the text.
+        if let Some(e) = live.engine() {
+            match e.session.status() {
+                Some(AgentStatus::Working | AgentStatus::Starting) => {
+                    return Err(Error::new(
+                        ErrorCode::Busy,
+                        format!(
+                            "c:{} is still answering: wait for it, or stop it (`ptyro chat stop`, Ctrl-C in the chat)",
+                            chats::handle(&info.id, [info.id.as_str()])
+                        ),
+                    ));
+                }
+                Some(AgentStatus::Blocked) => {
+                    return Err(Error::new(
+                        ErrorCode::Busy,
+                        "it is waiting for your answer to its permission request first",
+                    ));
+                }
+                _ => {}
+            }
+        }
         // The record first: the message is kept whatever the engine does.
         let branch = db.branch(id.to_owned(), None).await.map_err(store_err)?;
         let parent = info.leaf.clone().or_else(|| branch.last().map(|n| n.id.clone()));
@@ -562,7 +612,7 @@ impl Daemon {
             self.chat_changed(id).await;
             return Ok(());
         }
-        let started = self.start_engine(&info, &branch, &text).await;
+        let started = self.start_engine(&live, &info, &branch, &user).await;
         if let Err(e) = &started {
             self.chat_notice(&live, id, NoticeLevel::Error, &e.message).await;
         }
@@ -590,10 +640,14 @@ impl Daemon {
     /// Start (or resume) the chat's engine and give it `text` (§22.6).
     async fn start_engine(
         self: &Arc<Self>,
+        live: &Arc<Live>,
         info: &ChatInfo,
         branch: &[ChatNode],
-        text: &str,
+        user: &ChatNode,
     ) -> Result<(), Error> {
+        let ChatBody::User { text } = &user.body else {
+            return Err(Error::internal("not a message"));
+        };
         let db = self.chat_db()?;
         let config = self.config();
         let conv = db.current_conv(info.id.clone()).await.map_err(store_err)?;
@@ -636,8 +690,12 @@ impl Daemon {
             .clone()
             .or_else(|| ptyro_drive::protocol_for(&adapter).map(str::to_owned))
             .unwrap_or_default();
+        let plan = self.profile_plan(&info.profile).await?;
+        let mcp = self.codex_mcp_servers(&adapter, &plan).await;
+        let readable = codex_needs(&config, &info.agent, &plan, &self.base_env);
+        let best_effort = adapter == "codex" && mcp.is_none();
         let (args, params) =
-            preset_launch(&protocol, &preset, &dir, self.codex_mcp_servers(&adapter).await);
+            preset_launch(&protocol, &preset, &dir, mcp.unwrap_or_default(), &readable);
         let handle =
             chats::handle(&info.id, db.ids().await.unwrap_or_default().iter().map(String::as_str));
         let ws = self.workspace_name(&info.workspace);
@@ -683,53 +741,66 @@ impl Daemon {
             .await
             .map_err(store_err)?;
         }
-        let live = self.chats.live(&info.id);
         *live.engine.locked() = Some(Engine { session: Arc::clone(&session) });
+        live.quiet.store(resume.is_some(), Ordering::SeqCst);
+        if best_effort {
+            let what = "tools: best effort (codex mcp list didn't answer, so your MCP servers may be on in this chat)";
+            self.chat_notice(live, &info.id, NoticeLevel::Warn, what).await;
+        }
         let seed = chats::seed_block(&seed_nodes, config.chat.seed_tokens as usize);
         if let (Some((_, n)), None) = (&seed, &resume) {
             let what =
                 format!("continued with {} from the saved conversation ({n} messages)", info.agent);
             // On the branch, between the message and its answer; never sent to an engine.
-            self.chat_notice(&live, &info.id, NoticeLevel::Info, &what).await;
+            self.chat_notice(live, &info.id, NoticeLevel::Info, &what).await;
         }
         let prompt = match &seed {
             Some((block, _)) => format!("{block}{text}"),
-            None => text.to_owned(),
+            None => text.clone(),
         };
         if let Some(st) = &session.structured {
             st.prompt(prompt);
         }
-        self.follow_engine(Arc::clone(&live), session, conv_id, resume.is_some(), text.to_owned());
+        self.follow_engine(Arc::clone(live), session, conv_id, resume.is_some(), user.id.clone());
         Ok(())
     }
 
     /// The user's MCP servers, to switch each off in a Codex chat (CHAT0: its table can't be
     /// emptied, only each entry switched off).
-    async fn codex_mcp_servers(&self, adapter: &str) -> Vec<String> {
+    /// `None` when they couldn't be listed (the chat then says its tools are best effort).
+    /// Listed under the chat's profile, so its `CODEX_HOME`'s servers.
+    async fn codex_mcp_servers(
+        &self,
+        adapter: &str,
+        plan: &ptyro_agents::profile::Plan,
+    ) -> Option<Vec<String>> {
         if adapter != "codex" {
-            return Vec::new();
+            return Some(Vec::new());
         }
         let config = self.config();
-        let Some(argv) = ptyro_agents::command(&config, "codex") else { return Vec::new() };
-        let env = self.base_env.clone();
+        let argv = ptyro_agents::command(&config, "codex")?;
+        let env = plan.apply(self.base_env.iter().cloned());
         tokio::task::spawn_blocking(move || {
             let mut c = std::process::Command::new(&argv[0]);
             c.args(&argv[1..]).args(["mcp", "list", "--json"]).env_clear().envs(env);
             c.stderr(std::process::Stdio::null());
             let Ok((true, out)) = crate::notifier::run_bounded(c, None, Duration::from_secs(5))
             else {
-                return Vec::new();
+                return None;
             };
-            let v: serde_json::Value = serde_json::from_slice(&out).unwrap_or_default();
-            v.as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|s| s["name"].as_str().map(str::to_owned))
-                .filter(|n| ptyro_core::names::validate(n).is_ok())
-                .collect()
+            let v: serde_json::Value = serde_json::from_slice(&out).ok()?;
+            // Every name, whatever its case: they are only keys of the thread's config.
+            Some(
+                v.as_array()?
+                    .iter()
+                    .filter_map(|s| s["name"].as_str().map(str::to_owned))
+                    .filter(|n| !n.is_empty())
+                    .collect(),
+            )
         })
         .await
-        .unwrap_or_default()
+        .ok()
+        .flatten()
     }
 
     /// Follow an engine: its items become nodes, until it ends or hibernates.
@@ -741,6 +812,7 @@ impl Daemon {
         resumed: bool,
         pending: String,
     ) {
+        // (`pending`: the message's node, sent again seeded when a resume fails.)
         let me = Arc::clone(self);
         tokio::spawn(async move {
             let Some(st) = session.structured.clone() else { return };
@@ -752,6 +824,10 @@ impl Daemon {
             let mut nodes: HashMap<String, (String, Option<String>, Instant, Option<ChatBody>)> =
                 HashMap::new();
             let mut replied = false;
+            let mut failed_resume = false;
+            // Stopped on purpose (hibernated), and whether it said why it ended.
+            let mut stopped = false;
+            let mut said_error = false;
             let mut status = (None, None);
             let idle_for = |me: &Daemon| {
                 parse_duration(&me.config().chat.hibernate_after)
@@ -772,13 +848,29 @@ impl Daemon {
                         if matches!(it.body, ChatBody::User { .. }) {
                             continue; // the chat wrote the person's message itself
                         }
-                        // The engine's transcript keeps a closing notice from stderr; a chat
-                        // whose resume failed is retried, not shown the agent's complaint.
-                        if it.id == "stderr" && resumed && !replied {
-                            continue;
-                        }
-                        if matches!(it.body, ChatBody::Assistant { .. }) {
+                        // A resumed engine that hasn't answered: its error and turn end are a
+                        // failed resume (the conversation is gone), retried below with a seed,
+                        // not written into the chat.
+                        if resumed && !replied {
+                            match &it.body {
+                                ChatBody::TurnEnd { .. } => {
+                                    failed_resume = true;
+                                    continue;
+                                }
+                                ChatBody::Notice { .. } => continue,
+                                _ => {
+                                    replied = true;
+                                    live.quiet.store(false, Ordering::SeqCst);
+                                }
+                            }
+                        } else if !matches!(
+                            it.body,
+                            ChatBody::Notice { .. } | ChatBody::TurnEnd { .. }
+                        ) {
                             replied = true;
+                        }
+                        if matches!(it.body, ChatBody::Notice { level: NoticeLevel::Error, .. }) {
+                            said_error = true;
                         }
                         let entry = nodes.entry(it.id.clone()).or_insert_with(|| {
                             let parent = live.leaf.locked().clone();
@@ -826,9 +918,22 @@ impl Daemon {
                 if !session.is_live() {
                     break;
                 }
-                if !working && idle_since.elapsed() >= idle_for(&me) && !st.has_pending() {
-                    tracing::debug!(chat = %chat, "chat engine hibernates");
+                if failed_resume {
+                    session.hibernating.store(true, Ordering::Relaxed);
                     me.stop_session(&session).await;
+                    break;
+                }
+                if !working && idle_since.elapsed() >= idle_for(&me) && !st.has_pending() {
+                    // Not while a message is being sent: it would go to a dying engine.
+                    let lock = me.chats.lock_for(&chat);
+                    let Ok(_one) = lock.try_lock() else { continue };
+                    if live.engine().is_some_and(|e| e.session.id == session.id) {
+                        tracing::debug!(chat = %chat, "chat engine hibernates");
+                        stopped = true;
+                        session.hibernating.store(true, Ordering::Relaxed);
+                        me.stop_session(&session).await;
+                        *live.engine.locked() = None;
+                    }
                     break;
                 }
             }
@@ -851,6 +956,15 @@ impl Daemon {
             }
             session.save(None);
             me.forget_session(session.id);
+            // It ended before it answered, and said nothing: say so, so nobody waits for good.
+            let deliberate = stopped || session.hibernating.load(Ordering::Relaxed);
+            if !replied && !resumed && !deliberate && !said_error {
+                let agent = session.adapter().unwrap_or_else(|| "the agent".into());
+                let text = format!(
+                    "{agent} stopped before it answered (is it installed and logged in? `ptyro doctor` checks)"
+                );
+                me.chat_notice(&live, &chat, NoticeLevel::Error, &text).await;
+            }
             let was_ours = {
                 let mut e = live.engine.locked();
                 if e.as_ref().is_some_and(|e| e.session.id == session.id) {
@@ -859,22 +973,27 @@ impl Daemon {
                 } else {
                     false
                 }
-            };
+            } || failed_resume;
+            live.quiet.store(false, Ordering::SeqCst);
             // A resume the agent couldn't do (its conversation is gone): start over with the
             // record as the seed.
             if was_ours && resumed && !replied {
                 tracing::info!(chat = %chat, "the agent couldn't resume its conversation; seeding");
                 db.end_conv(conv.clone());
-                if let Ok(Some(info)) = db.get(chat.clone()).await {
+                // One sender at a time: a message sent meanwhile mustn't start a second engine.
+                let lock = me.chats.lock_for(&chat);
+                let _one = lock.lock().await;
+                if live.engine().is_none()
+                    && let Ok(Some(info)) = db.get(chat.clone()).await
+                {
                     let mut branch = db.branch(chat.clone(), None).await.unwrap_or_default();
                     // The person's message is the prompt itself, not part of the seed.
-                    if branch.last().is_some_and(
-                        |n| matches!(&n.body, ChatBody::User { text } if *text == pending),
-                    ) {
-                        branch.pop();
-                    }
-                    if let Err(e) = me.start_engine(&info, &branch, &pending).await {
-                        me.chat_notice(&live, &chat, NoticeLevel::Error, &e.message).await;
+                    if let Some(i) = branch.iter().position(|n| n.id == pending) {
+                        let user = branch[i].clone();
+                        branch.truncate(i);
+                        if let Err(e) = me.start_engine(&live, &info, &branch, &user).await {
+                            me.chat_notice(&live, &chat, NoticeLevel::Error, &e.message).await;
+                        }
                     }
                 }
             }
@@ -906,6 +1025,8 @@ impl Daemon {
     async fn stop_chat_engine(self: &Arc<Self>, id: &str) {
         let e = self.chats.get_live(id).and_then(|l| l.engine.locked().take());
         if let Some(e) = e {
+            // Stopped on purpose: no "exited" alert.
+            e.session.hibernating.store(true, Ordering::Relaxed);
             self.stop_session(&e.session).await;
             e.session.save(None);
             self.forget_session(e.session.id);
@@ -915,10 +1036,20 @@ impl Daemon {
     /// A deleted chat's scratch directory, and the project folder it made in Claude's own
     /// history (so `claude --resume` doesn't list dead chats; CHAT0).
     async fn remove_chat_files(self: &Arc<Self>, info: &ChatInfo) {
-        let dir = scratch(self, &info.id);
+        self.remove_chat_dirs(&info.id, Some(info)).await;
+    }
+
+    /// The same by id (`info`: its agent and profile, when known; else only the scratch
+    /// directory and the default profile's Claude folder).
+    async fn remove_chat_dirs(self: &Arc<Self>, id: &str, info: Option<&ChatInfo>) {
+        let dir = scratch(self, id);
         let config = self.config();
-        if ptyro_agents::adapter_name(&config, &info.agent) == "claude"
-            && let Ok(plan) = self.profile_plan(&info.profile).await
+        let (agent, profile) = info.map_or_else(
+            || ("claude".to_owned(), ptyro_core::model::DEFAULT_PROFILE.to_owned()),
+            |i| (i.agent.clone(), i.profile.clone()),
+        );
+        if ptyro_agents::adapter_name(&config, &agent) == "claude"
+            && let Ok(plan) = self.profile_plan(&profile).await
         {
             let home = ptyro_agents::home_var("claude")
                 .and_then(|v| plan.set.iter().find(|(k, _)| k == v).map(|(_, p)| PathBuf::from(p)))
@@ -945,7 +1076,6 @@ impl Daemon {
         let info = self.find_chat(addr).await?;
         let db = self.chat_db()?;
         let live = self.chats.live(&info.id);
-        live.viewers.fetch_add(1, Ordering::SeqCst);
         if live.engine().is_none() {
             let branch = db.branch(info.id.clone(), None).await.map_err(store_err)?;
             load_branch(&live, &branch);
@@ -954,6 +1084,8 @@ impl Daemon {
             let _ = db.set_unread(info.id.clone(), 0).await;
             self.chat_changed(&info.id).await;
         }
+        // Last, with no await after it: the caller's guard takes it back however it ends.
+        live.viewers.fetch_add(1, Ordering::SeqCst);
         Ok(live)
     }
 
@@ -965,12 +1097,18 @@ impl Daemon {
     /// Whether a chat engine's attention of `kind` reaches you (`[chat] notify`, §22.11).
     pub(crate) fn chat_wants(&self, s: &Session, kind: AttentionKind) -> bool {
         let Some(chat) = s.meta.locked().place.chat.clone() else { return true };
-        let shown =
-            self.chats.get_live(&chat).is_some_and(|l| l.viewers.load(Ordering::SeqCst) > 0);
+        let live = self.chats.get_live(&chat);
+        // A resume being retried: its error isn't news.
+        if live.as_ref().is_some_and(|l| l.quiet.load(Ordering::SeqCst)) {
+            return false;
+        }
+        let shown = live.is_some_and(|l| l.viewers.load(Ordering::SeqCst) > 0);
+        let urgent = matches!(kind, AttentionKind::Blocked | AttentionKind::Errored);
         match self.config().chat.notify.as_str() {
             "off" => false,
-            "all" => !shown || matches!(kind, AttentionKind::Blocked | AttentionKind::Errored),
-            _ => matches!(kind, AttentionKind::Blocked | AttentionKind::Errored),
+            // The chat's own "answered" (Done), never the generic idle or exited ones.
+            "all" => urgent || (kind == AttentionKind::Done && !shown),
+            _ => urgent,
         }
     }
 
@@ -1163,12 +1301,45 @@ fn with_seed(unseen: &[ChatNode], text: &str, tokens: u32) -> String {
     }
 }
 
+/// The folders a folder-limited Codex chat must still read to start (§20.8): the profile's
+/// `CODEX_HOME` and the folder of the `codex` it runs.
+fn codex_needs(
+    config: &ptyro_core::config::Config,
+    agent: &str,
+    plan: &ptyro_agents::profile::Plan,
+    base_env: &[(std::ffi::OsString, std::ffi::OsString)],
+) -> Vec<PathBuf> {
+    let mut v = Vec::new();
+    if let Some(h) = plan.set.iter().find(|(k, _)| k == "CODEX_HOME") {
+        v.push(PathBuf::from(&h.1));
+    }
+    if let Some(prog) = ptyro_agents::command(config, agent).and_then(|a| a.into_iter().next()) {
+        let path =
+            base_env.iter().find(|(k, _)| k == "PATH").map(|(_, p)| p.clone()).unwrap_or_default();
+        let found = if prog.contains('/') {
+            Some(PathBuf::from(&prog))
+        } else {
+            std::env::split_paths(&path).map(|d| d.join(&prog)).find(|p| p.is_file())
+        };
+        if let Some(f) = found {
+            // Both where it is linked from and where it really is (nvm, bun, Homebrew).
+            for p in [Some(f.clone()), f.canonicalize().ok()].into_iter().flatten() {
+                if let Some(d) = p.parent() {
+                    v.push(d.to_owned());
+                }
+            }
+        }
+    }
+    v
+}
+
 /// A preset as launch arguments and driver fields, per protocol (§22.5, CHAT0 §20.8).
 fn preset_launch(
     protocol: &str,
     p: &ChatTools,
     dir: &std::path::Path,
     codex_mcp: Vec<String>,
+    codex_needs: &[PathBuf],
 ) -> (Vec<String>, Option<serde_json::Value>) {
     use serde_json::json;
     let dirs: Vec<String> = p
@@ -1218,7 +1389,9 @@ fn preset_launch(
                 "mcp_servers": mcp,
             });
             let mut params = json!({ "developerInstructions": SYSTEM_PROMPT });
-            if p.read && !dirs.is_empty() {
+            // A `read` chat always gets the folder-limited profile, folders or none: the
+            // read-only sandbox alone still reads every file (CHAT0).
+            if p.read {
                 // A folder-limited read: a profile that denies $HOME and re-allows the folders and
                 // what Codex needs to start; no sandbox parameter (it would win over it).
                 let mut fs = serde_json::Map::new();
@@ -1228,6 +1401,10 @@ fn preset_launch(
                     for d in [home.join(".codex"), home.join(".local/bin")] {
                         fs.insert(d.to_string_lossy().into_owned(), json!("read"));
                     }
+                }
+                // What Codex needs to start: its profile's `CODEX_HOME`, its binary's folder.
+                for d in codex_needs {
+                    fs.insert(d.to_string_lossy().into_owned(), json!("read"));
                 }
                 fs.insert(dir.to_string_lossy().into_owned(), json!("write"));
                 for d in &dirs {
@@ -1322,7 +1499,7 @@ mod tests {
     fn presets_per_agent() {
         let dir = std::path::Path::new("/d/chat/c1");
         let chat = ChatTools { web: true, ..ChatTools::default() };
-        let (a, p) = preset_launch("stream-json", &chat, dir, vec![]);
+        let (a, p) = preset_launch("stream-json", &chat, dir, vec![], &[]);
         assert_eq!(
             &a[..4],
             ["--tools", "WebSearch,WebFetch", "--allowedTools", "WebSearch,WebFetch"]
@@ -1333,7 +1510,7 @@ mod tests {
                 && p.is_none()
         );
         let none = ChatTools::default();
-        let (a, _) = preset_launch("stream-json", &none, dir, vec![]);
+        let (a, _) = preset_launch("stream-json", &none, dir, vec![], &[]);
         assert_eq!(&a[..2], ["--tools", ""]);
         assert!(!a.contains(&"--allowedTools".into()));
         let read = ChatTools {
@@ -1342,22 +1519,31 @@ mod tests {
             dirs: vec!["/notes".into()],
             ..ChatTools::default()
         };
-        let (a, _) = preset_launch("stream-json", &read, dir, vec![]);
+        let (a, _) = preset_launch("stream-json", &read, dir, vec![], &[]);
         assert!(a.windows(2).any(|w| w == ["--add-dir", "/notes"]));
         assert_eq!(a[3], "WebSearch,WebFetch", "the read tools are not allowed outright");
-        let (_, p) = preset_launch("app-server", &chat, dir, vec!["github".into()]);
+        let (_, p) = preset_launch("app-server", &chat, dir, vec!["GitHub".into()], &[]);
         let p = p.unwrap();
         assert_eq!(p["sandbox"], "read-only");
         assert_eq!(p["config"]["web_search"], "live");
         assert_eq!(p["config"]["features"]["shell_tool"], false);
-        assert_eq!(p["config"]["mcp_servers"]["github"]["enabled"], false);
-        let (_, p) = preset_launch("app-server", &read, dir, vec![]);
+        assert_eq!(p["config"]["mcp_servers"]["GitHub"]["enabled"], false);
+        let (_, p) = preset_launch("app-server", &read, dir, vec![], &["/opt/codex/bin".into()]);
         let p = p.unwrap();
         assert!(
             p["sandbox"].is_null()
                 && p["config"]["permissions"]["ptyro-chat"]["filesystem"]["/notes"] == "read"
         );
-        let (_, p) = preset_launch("opencode", &chat, dir, vec![]);
+        assert_eq!(
+            p["config"]["permissions"]["ptyro-chat"]["filesystem"]["/opt/codex/bin"],
+            "read"
+        );
+        // `read` with no folders: still the limited profile, never the read-only sandbox (which
+        // reads every file).
+        let bare = ChatTools { web: true, read: true, ..ChatTools::default() };
+        let (_, p) = preset_launch("app-server", &bare, dir, vec![], &[]);
+        assert!(p.unwrap()["sandbox"].is_null());
+        let (_, p) = preset_launch("opencode", &chat, dir, vec![], &[]);
         let rules = p.unwrap()["permission"].as_array().unwrap().clone();
         assert_eq!(rules[0]["action"], "deny");
         assert!(rules.iter().any(|r| r["permission"] == "websearch" && r["action"] == "allow"));
