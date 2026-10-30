@@ -201,6 +201,9 @@ main.replay { display: grid; gap: 8px; padding: 8px; }
 .chips { display: flex; gap: 6px; padding: 8px 10px 0; overflow-x: auto; }
 .chips button { padding: 5px 12px; border-radius: 16px; font-size: 13px; white-space: nowrap; }
 .chips button.on { background: var(--accent); color: #fff; border-color: transparent; }
+.chips.filter { padding-bottom: 2px; }
+.chips.filter .n { opacity: .75; font-variant-numeric: tabular-nums; }
+.chips.filter button.active:not(.on) .n { color: var(--accent); opacity: 1; font-weight: 600; }
 .tabs-in { border-bottom: 1px solid var(--line); padding-bottom: 8px; }
 .stack-in { display: grid; gap: 12px; }
 .proj { display: grid; gap: 6px; margin-bottom: 8px; }

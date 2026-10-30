@@ -39,7 +39,7 @@ Conventions:
 | `ptyro new … --verify CHECK` · `--structured` · `--unqueued` | verified-done · drive it over its protocol (chat view) · skip the review queue's hold |
 | `ptyro new … --lead [--max-workers N] [--lead-agent A]` | a lead agent with `ptyro mcp` (default 4 workers) |
 | `ptyro attach [SESSION] [-w WS] [--raw] [--view-only]` | open the TUI on a session; `--raw`: that session only, no chrome |
-| `ptyro list` (alias `ls`) `[-a] [--status S] [-p P] [-w WS] [--json]` | sessions: where they run, profile, ports; `-a` adds earlier daemon runs |
+| `ptyro list` (alias `ls`) `[-a] [--status S] [-p P] [-w WS] [--json]` | sessions: where they run, profile, ports; `-a` adds earlier daemon runs; `--status running` is what is alive, `--status active` what is busy now (working, blocked, or running a command) |
 | `ptyro stop SESSIONS…` | stop gracefully, keeping them listed (agents finish their turn first) |
 | `ptyro kill SESSIONS… [--keep] [-s N]` (a signal number, e.g. `-s 9`) | stop (HUP → TERM → KILL) and remove |
 | `ptyro restart SESSIONS…` / `rm SESSIONS…` / `rename SESSION NAME` | run exited sessions again / forget them / rename (the address) |

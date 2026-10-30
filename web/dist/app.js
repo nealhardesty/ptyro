@@ -112,6 +112,11 @@ function statusOf(s) {
         return "dormant";
     return s.status?.status ?? (s.kind === "agent" ? "unknown" : "shell");
 }
+const SHOWS = ["all", "running", "active"];
+const isRunning = (s) => !s.quick && !s.pad && (s.state.t === "running" || s.state.t === "starting");
+const isActive = (s) => isRunning(s) && (s.status ? ["working", "blocked", "starting"].includes(s.status.status) : !!s.command && s.command.ended_ms == null);
+const KEEPS = { all: (s) => !s.quick && !s.pad, running: isRunning, active: isActive };
+let show = (() => { const v = store.get("ptyro.show"); return SHOWS.find((x) => x === v) ?? "all"; })();
 // ── app state and views ─────────────────────────────────────────────────────────────────────
 const app = {
     sessions: new Map(),
@@ -225,18 +230,25 @@ searchBox.addEventListener("input", () => {
         patch(list, listCards());
 });
 const matches = (s) => !query || [s.name, s.title, s.agent, s.model && modelLabel(s.model), s.project, s.worktree, s.task, s.activity, statusOf(s)].some((x) => x?.toLowerCase().includes(query));
+function setShow(m) {
+    show = m;
+    store.set("ptyro.show", m);
+    render();
+}
 function listView() {
     const order = ["blocked", "errored", "working", "starting", "done", "idle", "unknown", "shell", "dormant", "exited"];
-    const everything = [...app.sessions.values()].filter((s) => !s.quick).sort((a, b) => order.indexOf(statusOf(a)) - order.indexOf(statusOf(b)) || a.name.localeCompare(b.name));
-    const all = everything;
+    const everything = [...app.sessions.values()].filter(KEEPS[show]).sort((a, b) => order.indexOf(statusOf(a)) - order.indexOf(statusOf(b)) || a.name.localeCompare(b.name));
+    const all = [...app.sessions.values()].filter(KEEPS.all);
     listCards = () => { const f = everything.filter(matches); return f.length ? f.map(sessionCard) : [h("p", { class: "empty" }, `Nothing matches “${query}”.`)]; };
-    const body = all.length ? listCards() : [h("div", { class: "empty" }, h("p", {}, "Nothing is running."), h("button", { class: "primary", title: tipOf("session.new"), onclick: () => newTask() }, "Start a task"), data.projects.size ? null : h("p", {}, h("a", { href: "#/setup", title: tipOf("first.run") }, "Set up ptyro first: your agents, accounts and repositories")))];
+    const body = everything.length ? listCards() : all.length ? [h("div", { class: "empty" }, h("p", {}, `Nothing is ${show} right now.`), h("button", { class: "small", title: tipOf("sidebar.filter"), onclick: () => setShow("all") }, "Show every session"))] : [h("div", { class: "empty" }, h("p", {}, "Nothing is running."), h("button", { class: "primary", title: tipOf("session.new"), onclick: () => newTask() }, "Start a task"), data.projects.size ? null : h("p", {}, h("a", { href: "#/setup", title: tipOf("first.run") }, "Set up ptyro first: your agents, accounts and repositories")))];
     const picked = [...marked].filter((id) => app.sessions.has(id));
     const tools = selecting
         ? h("div", { class: "select-bar" }, h("span", {}, `${picked.length} selected`), h("button", { class: "small primary", disabled: !picked.length, title: tipOf("session.broadcast"), onclick: () => { broadcast(picked); selecting = false; render(); } }, "Type to them"), h("button", { class: "small", onclick: () => { selecting = false; marked.clear(); render(); } }, "Cancel"))
         : null;
     const head = header("ptyro", false, all.length > 1 ? h("button", { class: "icon", title: tipOf("session.broadcast"), onclick: () => { selecting = true; render(); } }, "☑") : null, h("button", { class: "icon plus", title: tipOf("session.new"), "aria-label": "New task", onclick: () => newTask() }, "＋"));
-    return h("div", {}, head, tools, all.length > 6 || query ? searchBar : null, notesQuickAdd(), h("main", { class: "list", title: tip("sessions") }, h("div", { class: "cards" }, ...body), h("a", { class: "foot-link", href: "#/history", title: tipOf("session.history") }, "Earlier sessions")));
+    const counts = SHOWS.map((m) => all.filter(KEEPS[m]).length);
+    const filter = all.length ? h("div", { class: "chips filter", title: tipOf("sidebar.filter") }, ...SHOWS.map((m, i) => h("button", { class: `${m === show ? "on" : ""} ${m}`, "aria-pressed": String(m === show), onclick: () => setShow(m) }, `${m} `, h("span", { class: "n" }, String(counts[i]))))) : null;
+    return h("div", {}, head, tools, filter, all.length > 6 || query ? searchBar : null, notesQuickAdd(), h("main", { class: "list", title: tip("sessions") }, h("div", { class: "cards" }, ...body), h("a", { class: "foot-link", href: "#/history", title: tipOf("session.history") }, "Earlier sessions")));
 }
 function inboxView() {
     const items = app.inbox.map((e) => h("a", { class: `entry ${e.read_ms ? "read" : ""}`, href: `#/s/${encodeURIComponent(e.session)}` }, h("span", { class: `kind ${e.kind}` }, e.kind), h("div", { class: "main" }, h("div", { class: "name" }, e.title), h("div", { class: "detail" }, e.body)), h("time", {}, ago(e.at_ms))));

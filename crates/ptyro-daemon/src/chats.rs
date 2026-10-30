@@ -162,6 +162,11 @@ impl Chats {
         if self.incognito.locked().contains_key(id) {
             return;
         }
+        // Not while a message is sent or a client starts following: that holds this live, and
+        // an engine started for it would answer into one nobody sees (the next follower gets
+        // a fresh one).
+        let lock = self.lock_for(id);
+        let Ok(_one) = lock.try_lock() else { return };
         let mut live = self.live.locked();
         if let Some(l) = live.get(id)
             && l.viewers.load(Ordering::SeqCst) == 0
@@ -3270,5 +3275,21 @@ mod tests {
         assert!(
             md.starts_with("# Lifetimes") && md.contains("**You:** a") && md.contains("c:7f3k")
         );
+    }
+
+    // A send takes the chat's live, then starts its engine: an earlier engine's follower ending
+    // meanwhile mustn't drop that live, or the answer goes into one no client follows.
+    #[test]
+    fn a_live_being_sent_to_is_not_dropped() {
+        let t = tempfile::tempdir().unwrap();
+        let chats = Chats::open(&t.path().join("chat.db"));
+        let live = chats.live("c1");
+        let lock = chats.lock_for("c1");
+        let sending = lock.try_lock().unwrap();
+        chats.settle("c1");
+        assert!(chats.get_live("c1").is_some_and(|l| Arc::ptr_eq(&l, &live)));
+        drop(sending);
+        chats.settle("c1");
+        assert!(chats.get_live("c1").is_none());
     }
 }

@@ -2151,6 +2151,21 @@ web, with the parity rows.
   reporting. `ptyro about [--json]` (`usage`), the TUI's `I` overlay (from that document), and
   the web's More → About (live from `Usage`, linking to the meters page).
 
+## UX4 — Sidebar filter, quick shell stays (2026-10-30)
+
+The owner asked for a way to see just the running sessions and just the active ones, and for the
+quick shell and scratchpad to stay when focus moves back to the agent above them.
+
+- [x] **UX4.1 The sidebar filter** — S. A strip under the sidebar's title (`all` / `running` /
+  `active`, with counts) and `f` pick what the tree lists; a machine, project or worktree with
+  nothing under it is hidden. `ls --status active`; the web's session list has the chips.
+  *Done when:* with three sessions, one working, `f` twice leaves one row and its project; `f`
+  again shows all. *Done (2026-10-30):* `Show` in `ptyro-core/src/session.rs`, `tree.rs`
+  (`Inputs.show`), `ui.rs` (`filter_chips`), `SavedView.show`, web `setShow`. SPEC §11.2i.
+- [x] **UX4.2 The quick shell stays** — S. Moving focus between panes already on screen leaves
+  the drawer and the scratchpad's popup open; a new session or workspace still closes them.
+  `App::tuck_away`, SPEC §11.2h.
+
 ## TS1 — Tailscale's certificate (2026-10-28)
 
 Android won't install the web app, or allow notifications, on a certificate it doesn't trust, and

@@ -170,8 +170,8 @@ enum Cmd {
         /// Include sessions from earlier daemon runs (from the store)
         #[arg(short, long)]
         all: bool,
-        /// Only sessions in this state or status: running, exited, dormant, working, blocked,
-        /// idle, done, errored
+        /// Only sessions in this state or status: running, active (working, blocked or running
+        /// a command), exited, dormant, working, blocked, idle, done, errored
         #[arg(long)]
         status: Option<String>,
         /// Only sessions of this project

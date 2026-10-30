@@ -36,6 +36,7 @@ const ACTIONS = {
     "session.export": "Save the session's recording as text or asciicast",
     "session.history": "Sessions from earlier, with their recordings",
     "session.find": "Find a session by name, title, project, agent or status",
+    "sidebar.filter": "Show every session, only the running ones (a live process), or only the active ones (an agent working or waiting for you, a shell running a command)",
 };
 const tip = actions(ACTIONS);
 const live = (s) => s.state.t === "running";
