@@ -547,7 +547,9 @@ enum Cmd {
         scrollback: Option<u32>,
     },
     /// Chats with your agents: `ptyro chat "a question"` asks and keeps it (the CHATS section of
-    /// the TUI and the web show it too); `ptyro chat ask` answers once and keeps nothing
+    /// the TUI and the web show it too); `ptyro chat ask` answers once and keeps nothing. A
+    /// question whose first word is a subcommand (`show me how…`, `find`, `set`) needs quotes or
+    /// `ptyro chat new`
     #[command(args_conflicts_with_subcommands = true)]
     Chat {
         #[command(subcommand)]

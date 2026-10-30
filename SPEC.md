@@ -7072,20 +7072,29 @@ hides when `enabled`):
   (Home/End) to the line's start and end, `C-u`/`C-k` delete to them, `C-w` the word before. The
   shared keys (`/` find, `.` menu, `j/k`, `Tab`, `z`, `t` where it applies) behave as for sessions.
   Every key is in `[keys]` and the settings panel, and each action in the palette (`chat.*`).
-- **CLI** (every verb takes `--json`; an address may be `laptop2:…`):
+- **CLI** (an address may be `laptop2:…`). `--json` on a verb that asks (`new`, `ask`, `send`,
+  `retry`, `edit`, `fork`, `find`, `compare`) waits for the answer, unless `--no-wait`, and prints
+  `{"chat", "message", "answers": [{"agent", "node", "text"}]}` (`compare`'s also has `agents`);
+  on one that changes a chat (`set`, `retitle`, `keep`, `branch`, `pick`) it prints `{"chat"}`,
+  and on `pin`/`unpin`/`archive`/`unarchive` `{"chats": […]}`; `ls`, `search`, `presets`,
+  `task` and `import` print their lists and reports; `show` and `export` take `--format json`;
+  `answer`, `stop`, `rm` and `open` print nothing to parse. A question whose first word names a
+  verb (`ptyro chat show me how…`) needs `chat new` or quotes; `show`, `open` and `set` given
+  more words than a chat say so.
 
   ```
-  ptyro chat [new] [PROMPT] [--agent A[@P]] [--tools PRESET] [--folder DIR]… [--incognito|--keep]
-                   [--workspace W] [--title T]        # new chat; opens it in a terminal
-  ptyro chat ask QUESTION [--keep] [--agent A] [--tools PRESET] [--no-stdin]   # one-shot answer on stdout; stdin is context
-  ptyro chat ls [--workspace W|--all] [--machine M] [--pinned] [--archived] [-n N]
-  ptyro chat show CHAT [--from NODE] [--branches] [--format text|md|json]
+  ptyro chat [new] [PROMPT] [--agent A[@P]] [--preset|--tools PRESET] [--folder DIR]… [--incognito|--keep]
+                   [--workspace W] [--title T] [--compare A,B] [--no-wait] [--timeout S]   # new chat; with no PROMPT, opens it in a terminal
+  ptyro chat ask QUESTION [--keep] [--agent A] [--preset|--tools PRESET] [--no-stdin] [--timeout S]   # one-shot answer on stdout; stdin is context
+  ptyro chat ls [--workspace W] [--machine M] [--pinned] [--archived] [--imported] [-n N]   # every workspace's unless -w
+  ptyro chat show CHAT [--all] [--ids] [--branches] [--format text|md|json]
   ptyro chat open CHAT                               # the chat view
-  ptyro chat send CHAT TEXT… [--wait] [--agent A]
+  ptyro chat send CHAT TEXT… [--no-wait] [--timeout S]   # waits for the answer by default
   ptyro chat retry CHAT [NODE] · edit CHAT NODE TEXT · branch CHAT --to NODE
-  ptyro chat fork CHAT [--at NODE] [--agent A] [--side] [--keep] [--yes]
-  ptyro chat retitle|pin|unpin|archive|unarchive|rm CHAT…
-  ptyro chat search QUERY [filters]  ·  ptyro chat find QUESTION
+  ptyro chat fork CHAT [--at NODE] [--agent A] [--side] [--keep] [--yes] [PROMPT] [--no-wait] [--timeout S]
+  ptyro chat retitle CHAT [TITLE] · pin|unpin|archive|unarchive|rm CHAT… · keep CHAT
+  ptyro chat search QUERY [filters]  ·  ptyro chat find QUESTION   # no match is exit 0
+  ptyro chat answer CHAT allow|always|deny  ·  ptyro chat stop CHAT
   ptyro chat export CHAT [--format md|json] [-o FILE]
   ptyro chat set CHAT [--agent A] [--preset P] [--folder DIR]… [--no-folders] [--yes]   # (built, CHAT4)
   ptyro chat presets [--json]  ·  ptyro chat task CHAT [--project P] [--agent A] [--name N]
@@ -7097,8 +7106,10 @@ hides when `enabled`):
 - **Web.** A **Chats** page beside Sessions (recent, pinned, a live search box), the chat view
   (with the same header, branch navigator, composer and slash commands; touch targets for
   fork/retry/edit; the machine chip), `#/c/<id>` URLs, a preset and an agent picker, incognito
-  toggle, export, and the same sidebar section on wide screens. Each control is an entry in
-  `ACTIONS` (`web/src/app.ts`) with its tooltip.
+  toggle, export, and the same sidebar section on wide screens (beside the sessions: the pinned
+  chats and the newest `[chat] recent`, with `all chats…`). Side chats list under their chat; `m`
+  starts a chat, `Ctrl-G` searches them all, and `@` in the composer lists the chat's folders. Each
+  control is an entry in `ACTIONS` (`web/src/app.ts`, `web/src/chats.ts`) with its tooltip.
 - **Parity.** One row in `docs/parity.md` for every `chat` verb, with its TUI action and its web
   action; none is waivable (`chat ask` is `chat.new` with `C-i`, and its answer is the view).
 - **Settings panel.** Every `[chat]` key below has its schema entry (type, default, help, when it
@@ -7113,12 +7124,12 @@ hides when `enabled`):
 enabled = true            # live: off hides the section, keys, CLI group and web page
 recent = 5                # live: chats shown under CHATS in the sidebar
 agent = ""                # next: "" = the workspace's default agent, else the first installed one
-tools = "chat"            # next: preset for new chats: chat | read | none | your own
+preset = "chat"           # next: preset for new chats: chat | read | none | your own ([chat.tools.X])
 incognito = false         # next: new chats start incognito
 hibernate_after = "2m"    # next: an idle engine stops; the next message resumes or seeds
 seed_tokens = 30000       # next: the most a seed block carries (§22.6)
 title = "auto"            # auto | off
-title_command = ""        # "" = the summaries' default command (§22.8)
+title_command = []        # argv; [] = the summaries' default command (§22.8)
 daily_cap = 200           # per profile per UTC day: titles and chat find, counted together
 history_tool = true       # the chat tools of §22.10 in every chat
 history_scope = "profile" # profile | workspace | all
@@ -7128,7 +7139,7 @@ import = false            # live: import the agents' own histories every 10 min 
 notify = "blocked"        # blocked | all | off (§22.11)
 archive_purge_days = 0    # 0 = keep archived chats forever
 
-[chat.tools.chat]         # a preset: built-in `chat`, `read`, `none`; yours add to them
+[chat.tools.chat]         # `tools` is the preset map: built-in `chat`, `read`, `none`; yours add to them
 web = true                # the agent's own web search and fetch
 read = false              # read files in `dirs`
 dirs = []                 # folders every chat of this preset may read

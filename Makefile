@@ -189,6 +189,7 @@ web-test: ## The web app's logic tests that need no daemon (needs Node)
 	node web/test/kit.mjs
 	node web/test/machine.mjs
 	node web/test/model.mjs
+	node web/test/chats.mjs
 	node web/test/assets.mjs
 
 web-e2e: ## The web app in a real headless Chrome (needs Node and Chrome; PTYRO_REQUIRE_BROWSER=1 fails instead of skipping)

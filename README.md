@@ -367,6 +367,7 @@ ptyro chat search --meaning "pets"          # by what messages are about, not th
 ptyro chat compare @last --agents claude,codex,gemini "which is faster?"   # each answers, as a branch
 ptyro chat pick @last 4k2m9x01              # keep codex's answer: codex takes the next message
 ptyro chat import                           # your Claude Code, Codex and Gemini sessions, as chats
+ptyro chat new --json "a question"           # waits, then the chat and its answer as JSON (as `send`, `retry`, `fork`, `find --json`)
 ```
 
 In the TUI every workspace has a **CHATS** section in the sidebar; `C-q m` starts a chat and

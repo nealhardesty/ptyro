@@ -19,13 +19,14 @@ use crate::complete;
 /// `chat new`'s, and plain `chat`'s: `ptyro chat --folder ~/notes "what's left?"`.
 #[derive(Args)]
 pub struct NewArgs {
-    /// The first message (`-`, or nothing on a pipe: read standard input)
+    /// The first message (`-`, or nothing on a pipe: read standard input). One that starts with
+    /// a subcommand's name (`show me how…`, `find`, `set`, `open`…) needs `chat new` or quotes
     prompt: Vec<String>,
     /// `agent` or `agent@profile` (default `[chat] agent`, else the first installed)
     #[arg(long, add = ArgValueCandidates::new(complete::agents))]
     agent: Option<String>,
     /// What it may use: chat (web search, the default), read, none, or your own (`chat presets`)
-    #[arg(long, add = ArgValueCandidates::new(complete::chat_presets))]
+    #[arg(long, visible_alias = "tools", add = ArgValueCandidates::new(complete::chat_presets))]
     preset: Option<String>,
     /// The workspace it belongs to (default main)
     #[arg(short, long, add = ArgValueCandidates::new(complete::workspaces))]
@@ -51,6 +52,10 @@ pub struct NewArgs {
     /// Don't wait for the answer
     #[arg(long)]
     no_wait: bool,
+    /// Seconds to wait for the answer
+    #[arg(long, default_value_t = 600)]
+    timeout: u64,
+    /// The chat and its answer as JSON, once it is in (as `chat compare --json`)
     #[arg(long)]
     json: bool,
 }
@@ -69,11 +74,14 @@ pub enum ChatCmd {
         keep: bool,
         #[arg(long, add = ArgValueCandidates::new(complete::agents))]
         agent: Option<String>,
-        #[arg(long)]
+        #[arg(long, visible_alias = "tools", add = ArgValueCandidates::new(complete::chat_presets))]
         preset: Option<String>,
         /// Seconds to wait for the answer
         #[arg(long, default_value_t = 600)]
         timeout: u64,
+        /// The answer as JSON (as `chat new --json`)
+        #[arg(long)]
+        json: bool,
         /// Don't read standard input as context (in a loop, or under a program that keeps it
         /// open)
         #[arg(long)]
@@ -119,6 +127,9 @@ pub enum ChatCmd {
         /// text (default), md or json
         #[arg(long, default_value = "text")]
         format: String,
+        /// (Words after the chat: `ptyro chat show me how…` meant a new chat)
+        #[arg(hide = true, trailing_var_arg = true)]
+        rest: Vec<String>,
     },
     /// Ask again: a new answer beside the old one (which stays as a branch), printed as it
     /// arrives. NODE: the message (or a node of the answer) to retry; default the last
@@ -130,6 +141,8 @@ pub enum ChatCmd {
         no_wait: bool,
         #[arg(long, default_value_t = 600)]
         timeout: u64,
+        #[arg(long)]
+        json: bool,
     },
     /// Say a message differently (NODE: its id, see `show --ids`): answered afresh; the old one
     /// and its answer stay as a branch
@@ -143,6 +156,8 @@ pub enum ChatCmd {
         no_wait: bool,
         #[arg(long, default_value_t = 600)]
         timeout: u64,
+        #[arg(long)]
+        json: bool,
     },
     /// Show another branch of a chat: the one through NODE
     Branch {
@@ -150,6 +165,8 @@ pub enum ChatCmd {
         chat: String,
         #[arg(long)]
         to: String,
+        #[arg(long)]
+        json: bool,
     },
     /// A new chat from this one (from the end, or `--at` a message), with its own agent; with
     /// words, its first message. `--side`: a side chat that reads this one and never changes it,
@@ -173,6 +190,13 @@ pub enum ChatCmd {
         yes: bool,
         /// A first message
         prompt: Vec<String>,
+        /// Don't wait for the first message's answer
+        #[arg(long)]
+        no_wait: bool,
+        /// Seconds to wait for the answer
+        #[arg(long, default_value_t = 600)]
+        timeout: u64,
+        /// The new chat (and the first message's answer) as JSON, as `chat new --json`
         #[arg(long)]
         json: bool,
     },
@@ -180,6 +204,8 @@ pub enum ChatCmd {
     Keep {
         #[arg(add = ArgValueCandidates::new(complete::chats))]
         chat: String,
+        #[arg(long)]
+        json: bool,
     },
     /// Search every chat's messages and titles, on every linked machine too: words (all must
     /// match), "a phrase", prefix*, -word, agent:codex, since:7d, workspace:work, by:meaning
@@ -221,11 +247,17 @@ pub enum ChatCmd {
         agent: Option<String>,
         #[arg(long, default_value_t = 600)]
         timeout: u64,
+        /// The answer as JSON (as `chat new --json`)
+        #[arg(long)]
+        json: bool,
     },
     /// Open a chat in the TUI's chat view
     Open {
         #[arg(add = ArgValueCandidates::new(complete::chats))]
         chat: String,
+        /// (Words after the chat: `ptyro chat open a file…` meant a new chat)
+        #[arg(hide = true, trailing_var_arg = true)]
+        rest: Vec<String>,
     },
     /// Send a message; the answer is printed as it arrives (unless --no-wait)
     Send {
@@ -237,6 +269,9 @@ pub enum ChatCmd {
         no_wait: bool,
         #[arg(long, default_value_t = 600)]
         timeout: u64,
+        /// The answer as JSON (as `chat new --json`)
+        #[arg(long)]
+        json: bool,
     },
     /// Answer the chat's permission request: allow, always or deny
     Answer {
@@ -254,24 +289,34 @@ pub enum ChatCmd {
         #[arg(add = ArgValueCandidates::new(complete::chats))]
         chat: String,
         title: Vec<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// Keep chats at the top
     Pin {
         #[arg(required = true, add = ArgValueCandidates::new(complete::chats))]
         chats: Vec<String>,
+        #[arg(long)]
+        json: bool,
     },
     Unpin {
         #[arg(required = true, add = ArgValueCandidates::new(complete::chats))]
         chats: Vec<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// Put chats away (`chat ls --archived` lists them)
     Archive {
         #[arg(required = true, add = ArgValueCandidates::new(complete::chats))]
         chats: Vec<String>,
+        #[arg(long)]
+        json: bool,
     },
     Unarchive {
         #[arg(required = true, add = ArgValueCandidates::new(complete::chats))]
         chats: Vec<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// Change the agent, the tool preset or the folders it reads; the next message carries the
     /// conversation over
@@ -280,7 +325,7 @@ pub enum ChatCmd {
         chat: String,
         #[arg(long, add = ArgValueCandidates::new(complete::agents))]
         agent: Option<String>,
-        #[arg(long, add = ArgValueCandidates::new(complete::chat_presets))]
+        #[arg(long, visible_alias = "tools", add = ArgValueCandidates::new(complete::chat_presets))]
         preset: Option<String>,
         /// The folders it may read, all of them (repeatable)
         #[arg(long = "folder", value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
@@ -291,6 +336,11 @@ pub enum ChatCmd {
         /// Switch to an agent under another profile than the chat's without asking first
         #[arg(short, long)]
         yes: bool,
+        #[arg(long)]
+        json: bool,
+        /// (Words after the chat: `ptyro chat set up a…` meant a new chat)
+        #[arg(hide = true, trailing_var_arg = true)]
+        rest: Vec<String>,
     },
     /// The tool presets, each with what it lets a chat use
     Presets {
@@ -352,6 +402,8 @@ pub enum ChatCmd {
         #[arg(add = ArgValueCandidates::new(complete::chats))]
         chat: String,
         node: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// Import your agents' own histories (Claude Code, Codex and Gemini sessions) as read-only
     /// chats: new sessions and what old ones gained since the last import. Searchable at once;
@@ -399,51 +451,52 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, plain: NewArgs) -> Result<i32,
             compare,
             yes,
             no_wait,
+            timeout,
             json,
         }) => {
             let text = words_or_stdin(prompt)?;
             // Neither: as `[chat] incognito` says.
             let incognito = (incognito || keep).then_some(incognito);
             let folders = folders.iter().map(|f| full_path(f)).collect();
+            let wait = Duration::from_secs(timeout);
             new(
                 ctx, text, agent, preset, workspace, title, incognito, folders, compare, yes,
-                no_wait, json,
+                no_wait, wait, json,
             )
             .await
         }
-        ChatCmd::Retry { chat, node, no_wait, timeout } => {
+        ChatCmd::Retry { chat, node, no_wait, timeout, json } => {
             let c = ctx.connect(true).await?;
             let known = known_nodes(&c, &chat).await?;
             let info = chat_of(c.request(Request::ChatRetry { chat, node }).await?)?;
-            if no_wait {
-                return Ok(0);
-            }
             // The answer is a new one to a message already there: follow from its end.
-            let ok = wait_answer(c, &info, &known, Duration::from_secs(timeout), true).await?;
-            Ok(if ok { 0 } else { 1 })
+            let wait = Duration::from_secs(timeout);
+            answer(ctx, c, &info, &known, wait, true, no_wait, json).await
         }
-        ChatCmd::Edit { chat, node, text, no_wait, timeout } => {
+        ChatCmd::Edit { chat, node, text, no_wait, timeout, json } => {
             let c = ctx.connect(true).await?;
             let known = known_nodes(&c, &chat).await?;
             let info =
                 chat_of(c.request(Request::ChatEdit { chat, node, text: text.join(" ") }).await?)?;
-            if no_wait {
-                return Ok(0);
-            }
-            let ok = wait(c, &info, &known, Duration::from_secs(timeout), true).await?;
-            Ok(if ok { 0 } else { 1 })
+            answer(ctx, c, &info, &known, Duration::from_secs(timeout), false, no_wait, json).await
         }
-        ChatCmd::Branch { chat, to } => {
+        ChatCmd::Branch { chat, to, json } => {
             let c = ctx.connect(true).await?;
             let info = chat_of(c.request(Request::ChatBranch { chat, to }).await?)?;
-            eprintln!("{}: showing the branch through it", info.addr());
+            if json {
+                print_chat(&info);
+            } else {
+                eprintln!("{}: showing the branch through it", info.addr());
+            }
             Ok(0)
         }
-        ChatCmd::Fork { chat, at, agent, side, keep, yes, prompt, json } => {
-            fork(ctx, chat, at, agent, side, keep, yes, prompt.join(" "), json).await
+        ChatCmd::Fork { chat, at, agent, side, keep, yes, prompt, no_wait, timeout, json } => {
+            let f =
+                Fork { at, agent, side, keep, yes, no_wait, wait: Duration::from_secs(timeout) };
+            fork(ctx, chat, f, prompt.join(" "), json).await
         }
-        ChatCmd::Keep { chat } => {
-            update(ctx, &chat, |r| {
+        ChatCmd::Keep { chat, json } => {
+            update_as(ctx, &chat, false, json, |r| {
                 if let Request::ChatUpdate { keep, .. } = r {
                     *keep = Some(true);
                 }
@@ -493,28 +546,33 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, plain: NewArgs) -> Result<i32,
             )
             .await
         }
-        ChatCmd::Find { question, agent, timeout } => {
+        ChatCmd::Find { question, agent, timeout, json } => {
             let c = ctx.connect(true).await?;
             let req = Request::ChatFind { question: question.join(" "), agent, workspace: None };
             let info = chat_of(c.request(req).await?)?;
             let none = HashSet::new();
+            let out = if json { Out::Quiet } else { Out::Final };
             let answered = tokio::select! {
-                r = wait(c, &info, &none, Duration::from_secs(timeout), false) => r,
+                r = follow(c, &info, &none, Duration::from_secs(timeout), out, false) => r,
                 _ = tokio::signal::ctrl_c() => Err(Error::new(ErrorCode::Invalid, "interrupted")),
             };
+            if json && let Ok(a) = &answered {
+                print_answer(ctx, &info, a).await;
+            }
             // (It is incognito: it goes with its agent; this makes sure.)
             if let Ok(c) = ctx.connect(false).await {
                 let _ = c.request(Request::ChatDelete { chat: info.id.clone() }).await;
             }
-            answered.map(|ok| if ok { 0 } else { 1 })
+            answered.map(|a| if a.ok { 0 } else { 1 })
         }
-        ChatCmd::Ask { question, keep, agent, preset, timeout, no_stdin } => {
+        ChatCmd::Ask { question, keep, agent, preset, timeout, json, no_stdin } => {
             let context = if no_stdin || std::io::stdin().is_terminal() {
                 String::new()
             } else {
                 read_stdin()?
             };
-            ask(ctx, with_context(question.join(" "), &context), keep, agent, preset, timeout).await
+            let question = with_context(question.join(" "), &context);
+            ask(ctx, question, keep, agent, preset, timeout, json).await
         }
         ChatCmd::Ls { workspace, pinned, archived, machine, limit, imported, json } => {
             ls(ctx, workspace, pinned, archived, machine, limit, imported, json).await
@@ -523,20 +581,28 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, plain: NewArgs) -> Result<i32,
             let text = Some(text.join(" ")).filter(|t| !t.trim().is_empty());
             compare(ctx, chat, agents, text, yes, no_wait, Duration::from_secs(timeout), json).await
         }
-        ChatCmd::Pick { chat, node } => {
+        ChatCmd::Pick { chat, node, json } => {
             let c = ctx.connect(true).await?;
             let info = chat_of(c.request(Request::ChatPick { chat, node }).await?)?;
-            eprintln!("kept: {} goes on with {}@{}", info.addr(), info.agent, info.profile);
+            if json {
+                print_chat(&info);
+            } else {
+                eprintln!("kept: {} goes on with {}@{}", info.addr(), info.agent, info.profile);
+            }
             Ok(0)
         }
         ChatCmd::Import { agent, profile, since, dry_run, json } => {
             import(ctx, agent, profile, since, dry_run, json).await
         }
-        ChatCmd::Show { chat, all, ids, branches, format } => {
+        ChatCmd::Show { chat, all, ids, branches, format, rest } => {
+            meant_new("show", &chat, &rest)?;
             show(ctx, chat, all, ids, branches, &format).await
         }
-        ChatCmd::Open { chat } => open(ctx, &chat).await,
-        ChatCmd::Send { chat, text, no_wait, timeout } => {
+        ChatCmd::Open { chat, rest } => {
+            meant_new("open", &chat, &rest)?;
+            open(ctx, &chat).await
+        }
+        ChatCmd::Send { chat, text, no_wait, timeout, json } => {
             let c = ctx.connect(true).await?;
             // What was there before: the answer is what follows this message, not an earlier one.
             let (asked, known): (String, HashSet<String>) =
@@ -552,35 +618,39 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, plain: NewArgs) -> Result<i32,
             if forked {
                 eprintln!("continued as a fork: {} ({})", info.addr(), info.label());
             }
-            if no_wait {
-                return Ok(0);
-            }
-            let ok = if forked {
-                wait_answer(c, &info, &HashSet::new(), Duration::from_secs(timeout), true).await?
+            let wait = Duration::from_secs(timeout);
+            if forked {
+                answer(ctx, c, &info, &HashSet::new(), wait, true, no_wait, json).await
             } else {
-                wait(c, &info, &known, Duration::from_secs(timeout), true).await?
-            };
-            Ok(if ok { 0 } else { 1 })
+                answer(ctx, c, &info, &known, wait, false, no_wait, json).await
+            }
         }
         ChatCmd::Answer { chat, decision } => {
             done(ctx, Request::ChatAnswer { chat, decision }).await
         }
         ChatCmd::Stop { chat } => done(ctx, Request::ChatStop { chat }).await,
-        ChatCmd::Retitle { chat, title } => {
-            update(ctx, &chat, |r| {
+        ChatCmd::Retitle { chat, title, json } => {
+            update_as(ctx, &chat, false, json, |r| {
                 if let Request::ChatUpdate { title: t, .. } = r {
                     *t = Some(title.join(" "));
                 }
             })
             .await
         }
-        ChatCmd::Pin { chats } => each(ctx, chats, "pinned", |r| set_pinned(r, true)).await,
-        ChatCmd::Unpin { chats } => each(ctx, chats, "unpinned", |r| set_pinned(r, false)).await,
-        ChatCmd::Archive { chats } => each(ctx, chats, "archived", |r| set_archived(r, true)).await,
-        ChatCmd::Unarchive { chats } => {
-            each(ctx, chats, "back from the archive", |r| set_archived(r, false)).await
+        ChatCmd::Pin { chats, json } => {
+            each(ctx, chats, "pinned", json, |r| set_pinned(r, true)).await
         }
-        ChatCmd::Set { chat, agent, preset, folders, no_folders, yes } => {
+        ChatCmd::Unpin { chats, json } => {
+            each(ctx, chats, "unpinned", json, |r| set_pinned(r, false)).await
+        }
+        ChatCmd::Archive { chats, json } => {
+            each(ctx, chats, "archived", json, |r| set_archived(r, true)).await
+        }
+        ChatCmd::Unarchive { chats, json } => {
+            each(ctx, chats, "back from the archive", json, |r| set_archived(r, false)).await
+        }
+        ChatCmd::Set { chat, agent, preset, folders, no_folders, yes, json, rest } => {
+            meant_new("set", &chat, &rest)?;
             if agent.is_none() && preset.is_none() && folders.is_empty() && !no_folders {
                 return Err(Error::invalid(
                     "what should change? --agent A, --preset P, --folder DIR or --no-folders",
@@ -588,7 +658,7 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, plain: NewArgs) -> Result<i32,
             }
             let folders = (no_folders || !folders.is_empty())
                 .then(|| folders.iter().map(|f| full_path(f)).collect());
-            update_as(ctx, &chat, yes, |r| {
+            update_as(ctx, &chat, yes, json, |r| {
                 if let Request::ChatUpdate { agent: a, preset: p, folders: f, .. } = r {
                     *a = agent;
                     *p = preset;
@@ -780,6 +850,7 @@ async fn new(
     compare: Vec<String>,
     yes: bool,
     no_wait: bool,
+    wait: Duration,
     json: bool,
 ) -> Result<i32, Error> {
     let c = ctx.connect(true).await?;
@@ -806,10 +877,11 @@ async fn new(
             return Err(Error::invalid(compare_refusal(&c, &info).await));
         }
         eprintln!("{} · {}", info.addr(), info.tools_badge());
-        return compare_wait(c, info, no_wait, Duration::from_secs(600), json).await;
+        return compare_wait(c, info, no_wait, wait, json).await;
     }
-    if json {
-        println!("{}", serde_json::to_string_pretty(&info).unwrap_or_default());
+    // No question, or not waited for: the chat, with no answer yet.
+    if json && (!has_prompt || no_wait) {
+        print_answer(ctx, &info, &Answered::default()).await;
         return Ok(0);
     }
     if !has_prompt {
@@ -821,11 +893,22 @@ async fn new(
         return Ok(0);
     }
     eprintln!("{} · {} · {}", info.addr(), info.agent, info.tools_badge());
-    if no_wait {
-        return Ok(0);
+    answer(ctx, c, &info, &HashSet::new(), wait, false, no_wait, json).await
+}
+
+/// `show`, `open` and `set` take one chat: more words were a question (`ptyro chat show me how
+/// to…`), which `chat new` (or quotes) asks.
+fn meant_new(verb: &str, chat: &str, rest: &[String]) -> Result<(), Error> {
+    if rest.is_empty() {
+        return Ok(());
     }
-    let ok = wait(c, &info, &HashSet::new(), Duration::from_secs(600), true).await?;
-    Ok(if ok { 0 } else { 1 })
+    let words =
+        std::iter::once(verb).chain(std::iter::once(chat)).chain(rest.iter().map(String::as_str));
+    let q = words.collect::<Vec<_>>().join(" ");
+    Err(Error::invalid(format!(
+        "`chat {verb}` takes one chat, not {}; did you mean `ptyro chat new \"{q}\"`?",
+        rest.len() + 1
+    )))
 }
 
 async fn ask(
@@ -835,6 +918,7 @@ async fn ask(
     agent: Option<String>,
     preset: Option<String>,
     timeout: u64,
+    json: bool,
 ) -> Result<i32, Error> {
     let text = question;
     let mut c = ctx.connect(true).await?;
@@ -858,42 +942,117 @@ async fn ask(
     let none = HashSet::new();
     let pushes = c.pushes();
     let wait = Duration::from_secs(timeout);
+    let out = if json { Out::Quiet } else { Out::Final };
     let answered = tokio::select! {
-        r = follow_sending(pushes, c, &info, &none, wait, false, false, Some(text)) => r,
+        r = follow_sending(pushes, c, &info, &none, wait, out, false, Some(text)) => r,
         _ = tokio::signal::ctrl_c() => Err(Error::new(ErrorCode::Invalid, "interrupted")),
     };
+    if json && let Ok(a) = &answered {
+        print_answer(ctx, &info, a).await;
+    }
     if keep {
         eprintln!("kept as {addr}");
     } else if let Ok(c) = ctx.connect(false).await {
         let _ = c.request(Request::ChatDelete { chat: info.id.clone() }).await;
     }
-    answered.map(|ok| if ok { 0 } else { 1 })
+    answered.map(|a| if a.ok { 0 } else { 1 })
 }
 
-/// Follow a chat until the answer to the message just sent is complete, printing it (`stream`:
-/// as it arrives; else once, the final answer only). The message is the first one that isn't in
-/// `known` (what the chat had before). Returns whether the turn ended well; an agent that failed
-/// to start (an error notice) ends it too.
-async fn wait(
+/// How a followed answer is printed: as it arrives, once when it is done (the final answer only),
+/// or not at all (`--json` prints it after).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Out {
+    Stream,
+    Final,
+    Quiet,
+}
+
+impl Out {
+    fn of(json: bool) -> Self {
+        if json { Self::Quiet } else { Self::Stream }
+    }
+}
+
+/// An answer as it ended: whether well, the message it answers, its first node and its text.
+#[derive(Default)]
+struct Answered {
+    ok: bool,
+    message: Option<String>,
+    node: Option<String>,
+    text: String,
+    stop: String,
+}
+
+/// `--json` for a verb that asks: the chat (as it is now), the message asked and its answer, in
+/// `chat compare --json`'s shape (one answer, by the chat's agent; none when it wasn't waited for).
+async fn print_answer(ctx: &Ctx, info: &ChatInfo, a: &Answered) {
+    let now = match ctx.connect(false).await {
+        Ok(c) => match c.request(Request::ChatRead { chat: info.id.clone(), all: false }).await {
+            Ok(Reply::ChatTranscript { info, .. }) => info,
+            _ => info.clone(),
+        },
+        Err(_) => info.clone(),
+    };
+    let answers: Vec<serde_json::Value> = a
+        .node
+        .iter()
+        .map(|n| serde_json::json!({ "agent": now.agent, "node": n, "text": a.text }))
+        .collect();
+    let v = serde_json::json!({
+        "chat": now,
+        "message": a.message,
+        "answers": answers,
+        "stop": (!a.stop.is_empty()).then_some(&a.stop),
+    });
+    println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+}
+
+/// `--json` for a verb that changes a chat: `{"chat": …}`, the shape the asking verbs start with.
+fn print_chat(info: &ChatInfo) {
+    let v = serde_json::json!({ "chat": info });
+    println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+}
+
+/// Follow the answer to what was just asked (`retry`: to the message already there), printed as
+/// it arrives or, with `json`, as `print_answer` once it is in; `no_wait`: not followed (the
+/// JSON then has no answer). The exit code: 0 when it ended well.
+#[allow(clippy::too_many_arguments)]
+async fn answer(
+    ctx: &Ctx,
     c: ptyro_client::Client,
     info: &ChatInfo,
     known: &HashSet<String>,
     timeout: Duration,
-    stream: bool,
-) -> Result<bool, Error> {
-    follow(c, info, known, timeout, stream, false).await
+    retry: bool,
+    no_wait: bool,
+    json: bool,
+) -> Result<i32, Error> {
+    if no_wait {
+        if json {
+            print_answer(ctx, info, &Answered { ok: true, ..Answered::default() }).await;
+        }
+        return Ok(0);
+    }
+    let a = follow(c, info, known, timeout, Out::of(json), retry).await?;
+    if json {
+        print_answer(ctx, info, &a).await;
+    }
+    Ok(if a.ok { 0 } else { 1 })
 }
 
-/// The same for a retry: the message is already there (the last one shown); the answer is what
-/// follows it that wasn't there before.
-async fn wait_answer(
-    c: ptyro_client::Client,
+/// Follow a chat until the answer to the message just sent is complete, printing it as `out`
+/// says. The message is the first one that isn't in `known` (what the chat had before); `retry`:
+/// the last one shown, and the answer is what follows it that wasn't there before. Returns how it
+/// ended; an agent that failed to start (an error notice) ends it too.
+async fn follow(
+    mut c: ptyro_client::Client,
     info: &ChatInfo,
     known: &HashSet<String>,
     timeout: Duration,
-    stream: bool,
-) -> Result<bool, Error> {
-    follow(c, info, known, timeout, stream, true).await
+    out: Out,
+    retry: bool,
+) -> Result<Answered, Error> {
+    follow_sending(c.pushes(), c, info, known, timeout, out, retry, None).await
 }
 
 /// Every node a chat has now (so what comes next is told apart).
@@ -902,17 +1061,6 @@ async fn known_nodes(c: &ptyro_client::Client, chat: &str) -> Result<HashSet<Str
         Reply::ChatTranscript { nodes, .. } => Ok(nodes.into_iter().map(|n| n.id).collect()),
         r => Err(unexpected(r)),
     }
-}
-
-async fn follow(
-    mut c: ptyro_client::Client,
-    info: &ChatInfo,
-    known: &HashSet<String>,
-    timeout: Duration,
-    stream: bool,
-    retry: bool,
-) -> Result<bool, Error> {
-    follow_sending(c.pushes(), c, info, known, timeout, stream, retry, None).await
 }
 
 /// `follow`, sending `send` once subscribed: whatever its agent does, even dying at once, is
@@ -924,10 +1072,11 @@ async fn follow_sending(
     info: &ChatInfo,
     known: &HashSet<String>,
     timeout: Duration,
-    stream: bool,
+    out: Out,
     retry: bool,
     send: Option<String>,
-) -> Result<bool, Error> {
+) -> Result<Answered, Error> {
+    let stream = out == Out::Stream;
     c.send(ClientMsg::ChatSubscribe { chat: info.id.clone() })?;
     // Sent once the chat as it is has arrived, so the answer is only ever news.
     let mut send = send;
@@ -938,7 +1087,7 @@ async fn follow_sending(
     let mut order: Vec<String> = Vec::new();
     let mut printed: BTreeMap<String, usize> = BTreeMap::new();
     let mut asked: Vec<String> = Vec::new();
-    let out = std::io::stdout();
+    let stdout = std::io::stdout();
     loop {
         let msg = match tokio::time::timeout_at(deadline, pushes.recv()).await {
             Ok(Some(m)) => m,
@@ -994,7 +1143,7 @@ async fn follow_sending(
         // What came before is history (a retry's old answer was there already).
         let tail =
             order.iter().skip_while(|id| *id != start).skip(1).filter(|id| !known.contains(*id));
-        let mut lock = out.lock();
+        let mut lock = stdout.lock();
         for id in tail {
             let it = &items[id];
             match &it.body {
@@ -1023,29 +1172,44 @@ async fn follow_sending(
                     // The agent didn't start, or died: no answer is coming.
                     if *level == ptyro_core::chat::NoticeLevel::Error {
                         let _ = c.send(ClientMsg::ChatUnsubscribe { chat: info.id.clone() });
-                        return Ok(false);
+                        let message = Some(start.clone());
+                        return Ok(Answered {
+                            message,
+                            stop: "error".into(),
+                            ..Answered::default()
+                        });
                     }
                 }
                 ChatBody::TurnEnd { stop, .. } => {
-                    if !stream {
-                        let answer: Vec<&str> = order
-                            .iter()
-                            .skip_while(|i| *i != start)
-                            .filter_map(|i| match &items[i].body {
-                                ChatBody::Assistant { text, .. } => Some(text.as_str()),
-                                _ => None,
-                            })
-                            .collect();
-                        let _ = write!(lock, "{}", answer.join("\n\n"));
+                    let (nodes, answer): (Vec<&String>, Vec<&str>) = order
+                        .iter()
+                        .skip_while(|i| *i != start)
+                        .filter(|i| !known.contains(*i))
+                        .filter_map(|i| match &items[i].body {
+                            ChatBody::Assistant { text, .. } => Some((i, text.as_str())),
+                            _ => None,
+                        })
+                        .unzip();
+                    let text = answer.join("\n\n");
+                    if out != Out::Quiet {
+                        if !stream {
+                            let _ = write!(lock, "{text}");
+                        }
+                        let _ = writeln!(lock);
+                        let _ = lock.flush();
                     }
-                    let _ = writeln!(lock);
-                    let _ = lock.flush();
                     let ok = matches!(stop.as_str(), "end_turn" | "completed" | "success" | "");
                     if !ok {
                         eprintln!("({stop})");
                     }
                     let _ = c.send(ClientMsg::ChatUnsubscribe { chat: info.id.clone() });
-                    return Ok(ok);
+                    return Ok(Answered {
+                        ok,
+                        message: Some(start.clone()),
+                        node: nodes.first().map(|n| (*n).clone()),
+                        text,
+                        stop: stop.clone(),
+                    });
                 }
                 _ => {}
             }
@@ -1406,22 +1570,24 @@ fn short_id(id: &str) -> String {
     id[id.len().saturating_sub(8)..].to_owned()
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn fork(
-    ctx: &Ctx,
-    chat: String,
+/// `chat fork`'s flags.
+struct Fork {
     at: Option<String>,
     agent: Option<String>,
     side: bool,
     keep: bool,
     yes: bool,
-    prompt: String,
-    json: bool,
-) -> Result<i32, Error> {
-    if json && side && !keep {
+    no_wait: bool,
+    wait: Duration,
+}
+
+async fn fork(ctx: &Ctx, chat: String, f: Fork, prompt: String, json: bool) -> Result<i32, Error> {
+    let Fork { at, agent, side, keep, yes, no_wait, wait } = f;
+    let asks = !prompt.trim().is_empty();
+    if json && side && !keep && (!asks || no_wait) {
         return Err(Error::new(
             ErrorCode::Invalid,
-            "a side chat goes after its answer, so it has no JSON to give: add --keep",
+            "a side chat goes after its answer, so without one it has no JSON to give: add --keep",
         ));
     }
     let c = ctx.connect(true).await?;
@@ -1441,17 +1607,13 @@ async fn fork(
         })
         .await?;
     }
-    if json {
-        // The chat at once; its answer arrives there (`chat show`).
-        if !prompt.trim().is_empty() {
-            c.request(Request::ChatSend { chat: info.id.clone(), text: prompt }).await?;
-        }
-        println!("{}", serde_json::to_string_pretty(&info).unwrap_or_default());
-        return Ok(0);
+    if !json {
+        eprintln!("{} · {} · {}", info.addr(), info.label(), info.agent);
     }
-    eprintln!("{} · {} · {}", info.addr(), info.label(), info.agent);
-    if prompt.trim().is_empty() {
-        if side && !keep {
+    if !asks {
+        if json {
+            print_answer(ctx, &info, &Answered::default()).await;
+        } else if side && !keep {
             eprintln!(
                 "(a side chat: it goes once nobody has had it open for a while; --keep keeps it)"
             );
@@ -1460,18 +1622,20 @@ async fn fork(
     }
     let known = known_nodes(&c, &info.id).await?;
     c.request(Request::ChatSend { chat: info.id.clone(), text: prompt }).await?;
-    let ok = tokio::select! {
-        r = wait(c, &info, &known, Duration::from_secs(600), true) => r,
+    let code = tokio::select! {
+        r = answer(ctx, c, &info, &known, wait, false, no_wait, json) => r,
         _ = tokio::signal::ctrl_c() => Err(Error::new(ErrorCode::Invalid, "interrupted")),
     };
-    // A side chat goes after its answer, or a Ctrl-C (SPEC §22.7), unless kept.
+    // A side chat goes after its answer, or a Ctrl-C (SPEC §22.7), unless kept (or not waited
+    // for: it goes once nobody follows it).
     if side
         && !keep
+        && !no_wait
         && let Ok(c) = ctx.connect(false).await
     {
         let _ = c.request(Request::ChatDelete { chat: info.id.clone() }).await;
     }
-    ok.map(|ok| if ok { 0 } else { 1 })
+    code
 }
 
 /// `chat search`'s flags. Its words may start with `-` (a word left out), so clap hands every
@@ -1571,9 +1735,10 @@ async fn search(
         println!("{}", serde_json::to_string_pretty(&hits).unwrap_or_default());
         return Ok(0);
     }
+    // Nothing found is an answer, not a failure (as `ls` with nothing to list).
     if hits.is_empty() {
         eprintln!("nothing matches");
-        return Ok(1);
+        return Ok(0);
     }
     // Matches bold on a terminal; between * elsewhere.
     let (on, off) =
@@ -1661,37 +1826,48 @@ fn set_archived(r: &mut Request, v: bool) {
     }
 }
 
-async fn update(ctx: &Ctx, chat: &str, f: impl FnOnce(&mut Request)) -> Result<i32, Error> {
-    update_as(ctx, chat, false, f).await
-}
-
-/// `update`, asking first where the daemon says to (`yes`: agreed already).
+/// A change to a chat, asking first where the daemon says to (`yes`: agreed already).
 async fn update_as(
     ctx: &Ctx,
     chat: &str,
     yes: bool,
+    json: bool,
     f: impl FnOnce(&mut Request),
 ) -> Result<i32, Error> {
     let c = ctx.connect(true).await?;
     let mut req = blank(chat);
     f(&mut req);
     let info = chat_of(confirmed(&c, req, yes).await?)?;
-    eprintln!("{} · {}", info.addr(), info.label());
+    if json {
+        print_chat(&info);
+    } else {
+        eprintln!("{} · {}", info.addr(), info.label());
+    }
     Ok(0)
 }
 
+/// The same change to each chat; `json`: `{"chats": […]}`, each as it is now.
 async fn each(
     ctx: &Ctx,
     chats: Vec<String>,
     what: &str,
+    json: bool,
     f: impl Fn(&mut Request),
 ) -> Result<i32, Error> {
     let c = ctx.connect(true).await?;
+    let mut done = Vec::new();
     for chat in chats {
         let mut req = blank(&chat);
         f(&mut req);
         let info = chat_of(c.request(req).await?)?;
-        eprintln!("{what}: {} ({})", info.addr(), info.label());
+        if !json {
+            eprintln!("{what}: {} ({})", info.addr(), info.label());
+        }
+        done.push(info);
+    }
+    if json {
+        let v = serde_json::json!({ "chats": done });
+        println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
     }
     Ok(0)
 }

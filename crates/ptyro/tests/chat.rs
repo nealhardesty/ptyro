@@ -360,3 +360,41 @@ fn an_agent_that_stops_before_answering_is_said_and_ask_keeps_nothing() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("stopped before it answered"), "{out:?}");
     assert!(w.chats().is_empty(), "ask keeps nothing, even when it fails");
 }
+
+#[test]
+fn json_waits_for_the_answer_and_every_verb_can_say_it() {
+    let w = World::new("");
+    // `new --json` waits for the answer (as `compare --json` does), unless --no-wait.
+    let out =
+        w.json(&["chat", "new", "--tools", "read", "--timeout", "60", "--json", "hello json"]);
+    let addr = format!("c:{}", out["chat"]["handle"].as_str().unwrap());
+    assert_eq!(out["chat"]["tools"], "read", "--tools is --preset: {out}");
+    assert!(out["message"].is_string(), "{out}");
+    let a = &out["answers"].as_array().unwrap()[0];
+    assert_eq!(a["agent"], "claude");
+    assert!(a["text"].as_str().unwrap().contains("you said: hello json"), "{out}");
+    let quick = w.json(&["chat", "new", "--no-wait", "--json", "later"]);
+    assert!(quick["answers"].as_array().unwrap().is_empty() && quick["chat"]["id"].is_string());
+    // The asking verbs give the same shape; the changing ones the chat.
+    let sent = w.json(&["chat", "send", &addr, "--json", "again"]);
+    assert!(sent["answers"][0]["text"].as_str().unwrap().contains("you said: again"), "{sent}");
+    let retried = w.json(&["chat", "retry", &addr, "--json"]);
+    assert!(retried["answers"][0]["text"].as_str().unwrap().contains("again"), "{retried}");
+    let forked = w.json(&["chat", "fork", &addr, "--timeout", "60", "--json", "a fork"]);
+    assert!(forked["answers"][0]["text"].as_str().unwrap().contains("a fork"), "{forked}");
+    let renamed = w.json(&["chat", "retitle", &addr, "Named", "--json"]);
+    assert_eq!(renamed["chat"]["title"], "Named");
+    let set = w.json(&["chat", "set", &addr, "--preset", "none", "--json"]);
+    assert_eq!(set["chat"]["tools"], "none");
+    let pinned = w.json(&["chat", "pin", &addr, "--json"]);
+    assert_eq!(pinned["chats"][0]["pinned"], true);
+    // Nothing found is no failure, in text as in JSON.
+    let none = w.cli(&["chat", "search", "zzyzx"]);
+    assert!(none.status.success(), "{none:?}");
+    assert!(String::from_utf8_lossy(&none.stderr).contains("nothing matches"));
+    // A question that starts with a subcommand's name says how to ask it.
+    let out = w.cli(&["chat", "show", "me", "how", "to", "cook"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("did you mean `ptyro chat new \"show me how to cook\"`"), "{err}");
+}

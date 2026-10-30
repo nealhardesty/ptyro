@@ -114,8 +114,11 @@ fn meaning_search_finds_what_words_dont() {
     let both = w.hits(&["kitten"]);
     assert_eq!(both[0]["how"], "both", "{both:?}");
     assert!(w.ok(&["chat", "search", "cat"]).contains("≈ my kitten"));
-    // Words only: no cat in any message.
-    assert!(!w.cli(&["chat", "search", "cat", "--words"]).status.success());
+    // Words only: no cat in any message (nothing found is no failure).
+    let none = w.cli(&["chat", "search", "cat", "--words"]);
+    assert!(
+        none.status.success() && String::from_utf8_lossy(&none.stderr).contains("nothing matches")
+    );
     // Every filter still holds: a word left out, and a search scoped to another chat.
     assert!(w.hits(&["cat", "-sofa", "--meaning"]).is_empty());
     assert!(w.hits(&["slow", "--meaning"]).iter().all(|h| h["chat"]["title"] == "Builds"));
