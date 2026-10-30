@@ -25,6 +25,13 @@ pub struct Drawer {
     pub pane: PaneId,
 }
 
+/// Where `tuck_away` compares: the workspace and the session in each pane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Stance {
+    workspace: String,
+    shown: Vec<(PaneId, Option<SessionId>)>,
+}
+
 impl App {
     /// Whether the focused pane is the drawer.
     pub fn in_drawer(&self) -> bool {
@@ -270,23 +277,28 @@ impl App {
         }
     }
 
-    /// Where focus is, for `tuck_away`: the workspace, the pane, and what it shows.
-    pub(crate) fn quick_stance(&self) -> (String, PaneId, Option<SessionId>) {
-        (self.workspace.clone(), self.focused, self.focused_session())
+    /// What is on screen, for `tuck_away`: the workspace, and what every pane shows.
+    pub(crate) fn quick_stance(&self) -> Stance {
+        let mut shown: Vec<_> = self.panes.iter().map(|(id, p)| (*id, p.session)).collect();
+        shown.sort_by_key(|(id, _)| *id);
+        Stance { workspace: self.workspace.clone(), shown }
     }
 
-    /// The drawer and the scratchpad's popup are for quick actions: when focus lands on another
-    /// pane, or another session or workspace shows, they go away (the shells and the editor keep
-    /// running). Focus in the sidebar doesn't count: that is how you pick the next thing.
-    pub(crate) fn tuck_away(&mut self, before: (String, PaneId, Option<SessionId>)) {
-        let moved = self.quick_stance() != before;
-        if let Some(d) = self.drawer
-            && self.focus == Focus::Pane
-            && self.focused != d.pane
-        {
+    /// The drawer and the scratchpad's popup are for quick actions: when another session or
+    /// workspace shows, they go away (the shells and the editor keep running). Moving focus
+    /// between panes that were already showing doesn't: the top agent and the drawer are used
+    /// together. Focus in the sidebar doesn't count either: that is how you pick the next thing.
+    pub(crate) fn tuck_away(&mut self, before: Stance) {
+        let after = self.quick_stance();
+        let drawer = self.drawer.map(|d| d.pane);
+        let shows_new = after.workspace != before.workspace
+            || after.shown.iter().any(|(id, s)| {
+                Some(*id) != drawer && s.is_some() && !before.shown.contains(&(*id, *s))
+            });
+        if shows_new && self.drawer.is_some() {
             self.hide_drawer();
         }
-        if moved && self.pad_popup.is_some() {
+        if shows_new && self.pad_popup.is_some() {
             self.pad_popup = None;
             self.sync();
         }

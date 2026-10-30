@@ -1161,6 +1161,8 @@ impl Filter {
             let st = s.status.as_ref().map(|r| r.status.label());
             match want {
                 "running" | "live" => s.state.is_live(),
+                // Busy now: an agent working or waiting for you, a shell running a command.
+                "active" => s.is_active(),
                 "exited" => matches!(
                     s.state,
                     ptyro_core::session::ProcessState::Exited { .. }

@@ -193,7 +193,8 @@ a row's menu (`.`), makes one at any time.
   of the same project (`Ctrl-Q T` shows it full sized). Press it again to focus it, and once more
   to hide it; the shell keeps running, and its `›_ quick shell` line sits first under the worktree in the
   sidebar, tinted while its drawer is open. The drawer is for quick actions: it (and the
-  scratchpad's drawer or popup) closes when you move to another pane or session.
+  scratchpad's drawer or popup) stays while you move between the panes already on screen, and closes
+  when another session shows.
 - New things open **full sized**, never in a split: a split layout they replace is kept, and
   `` Ctrl-Q ` `` brings it back. Only `Ctrl-Q v` / `s` split, and they split with a clone of the
   pane's session (the same agent in the same worktree, a fresh conversation).
@@ -459,6 +460,7 @@ All after the prefix, `Ctrl-Q` or `Ctrl-Space`. The full list is in [`docs/keys.
 | `h` `l` / `z` / `c` | move between panes / zoom / close pane |
 | `Tab` | focus the sidebar (`⏎` open, `x` stop or remove, `e` why this status) |
 | `Z` | everything at once: every session and what it's doing, full-screen |
+| `f` | sidebar filter: all → only running sessions → only active ones (working, waiting for you, running a command); or click `all` / `running` / `active` under the sidebar title |
 | `[` | copy mode: scroll back, search (`/`), select (`v`), copy (`y`) |
 | `D` / `Q` | inspector / review queue |
 | `O` / `S` | runs / change sets |

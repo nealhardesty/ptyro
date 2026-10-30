@@ -15,7 +15,7 @@ use ptyro_core::model::{
 };
 use ptyro_core::paths::Paths;
 use ptyro_core::screen::ScrollbackDoc;
-use ptyro_core::session::{ProcessState, SessionInfo, SessionKind, SpawnSpec};
+use ptyro_core::session::{ProcessState, SessionInfo, SessionKind, Show, SpawnSpec};
 use ptyro_core::status::{AgentStatus, AttentionKind, InboxEntry, Usage};
 use ptyro_core::{Error, ErrorCode, SessionId, TermSize};
 use ptyro_protocol::{ClientMsg, DomainEvent, PadDoc, Reply, Request, ServerMsg};
@@ -42,6 +42,9 @@ pub struct SavedView {
     pub zoom: bool,
     pub sidebar: bool,
     pub sidebar_width: u16,
+    /// Which sessions the sidebar lists.
+    #[serde(default)]
+    pub show: Show,
     /// The quick terminal's drawer (UX1.25), and its share of its host's height.
     #[serde(default)]
     pub drawer: Option<Drawer>,
@@ -655,6 +658,8 @@ pub struct App {
     pub sidebar_width: u16,
     /// The sidebar fills the screen with every row open: everything at once (UX1.2).
     pub sidebar_zoom: bool,
+    /// Which sessions the sidebar lists: all, the running ones, or the active ones.
+    pub show: Show,
     /// The quick terminal's drawer, when open, and the share of its host it takes (UX1.25).
     pub drawer: Option<Drawer>,
     pub drawer_share: f32,
@@ -762,6 +767,7 @@ impl App {
             sidebar: config.ui.sidebar && !opts.raw,
             sidebar_width: config.ui.sidebar_width.clamp(12, SIDEBAR_MAX),
             sidebar_zoom: false,
+            show: Default::default(),
             drawer: None,
             drawer_share: crate::quick::DRAWER_SHARE,
             kept: None,
@@ -1003,6 +1009,7 @@ impl App {
             self.zoom = saved.zoom;
             self.sidebar = saved.sidebar;
             self.sidebar_width = saved.sidebar_width.clamp(12, SIDEBAR_MAX);
+            self.show = saved.show;
             self.restore_drawer(saved.drawer, saved.drawer_share);
             self.restore_kept(saved.kept, &ordered_all);
         }
@@ -1311,6 +1318,7 @@ impl App {
             zoom: self.zoom,
             sidebar: self.sidebar,
             sidebar_width: self.sidebar_width,
+            show: self.show,
             drawer: self.drawer,
             drawer_share: self.drawer_share,
             kept: self.kept.as_deref().cloned(),
@@ -2951,6 +2959,10 @@ impl App {
                     self.focus = Focus::Pane;
                 }
             }
+            "sidebar.filter" => self.set_show(self.show.next()),
+            "sidebar.show_all" => self.set_show(Show::All),
+            "sidebar.show_running" => self.set_show(Show::Running),
+            "sidebar.show_active" => self.set_show(Show::Active),
             "sidebar.toggle" => {
                 self.sidebar = !self.sidebar;
                 if !self.sidebar {
@@ -3190,6 +3202,16 @@ impl App {
 
     /// The sidebar's width, kept within 12–80 and leaving the panes at least 21 columns, saved
     /// with the workspace's view (UX1.7, UX1.8).
+    /// What the sidebar lists (the strip under its title), saved with the view. The sidebar is
+    /// shown, so the change is seen; its selection stays on its row when that still shows.
+    pub(crate) fn set_show(&mut self, show: Show) {
+        self.show = show;
+        self.sidebar = true;
+        let n = self.sessions.iter().filter(|s| show.keeps(s)).count();
+        self.toast(format!("sidebar: {} ({n})", show.label()));
+        self.view_changed();
+    }
+
     fn set_sidebar_width(&mut self, width: u16) {
         let max = SIDEBAR_MAX.min(self.area.width.saturating_sub(22)).max(12);
         let w = width.clamp(12, max);
@@ -5607,10 +5629,10 @@ impl App {
                 K::Down(crossterm::event::MouseButton::Right) => {
                     let rows = self.rows();
                     let body = crate::ui::sidebar_body(self, side);
-                    // (Not the hint line along the bottom: it has no row.)
+                    // (Not the title, the filter strip or the hint line: they have no row.)
                     let row = y
-                        .checked_sub(side.y + 1)
-                        .filter(|l| *l < side.height.saturating_sub(2))
+                        .checked_sub(side.y + 2)
+                        .filter(|l| *l < side.height.saturating_sub(3))
                         .and_then(|l| body.lines.get(l as usize + body.skip))
                         .map(|(i, _)| *i);
                     if let Some(i) = row.filter(|i| rows.get(*i).is_some_and(Row::selectable)) {
@@ -5622,10 +5644,21 @@ impl App {
                 K::Down(_) => {
                     let rows = self.rows();
                     let body = crate::ui::sidebar_body(self, side);
+                    // The filter strip under the title picks what the sidebar lists.
+                    if y == side.y + 1 {
+                        let col = x - side.x;
+                        if let Some((show, ..)) = crate::ui::filter_chips(self, side.width)
+                            .into_iter()
+                            .find(|(_, _, from, to)| (*from..*to).contains(&col))
+                        {
+                            self.set_show(show);
+                        }
+                        return;
+                    }
                     // The title line has no row; a row may span several lines (UX1.2).
                     let row = y
-                        .checked_sub(side.y + 1)
-                        .filter(|l| *l < side.height.saturating_sub(2))
+                        .checked_sub(side.y + 2)
+                        .filter(|l| *l < side.height.saturating_sub(3))
                         .and_then(|l| body.lines.get(l as usize + body.skip))
                         .map_or(usize::MAX, |(i, _)| *i);
                     match rows.get(row).cloned() {
@@ -5779,6 +5812,7 @@ impl App {
             sessions: &self.sessions,
             collapsed: &self.collapsed,
             sets: &self.set_nodes,
+            show: self.show,
         }
     }
 
@@ -5932,6 +5966,7 @@ impl App {
             self.zoom = saved.zoom;
             self.sidebar = saved.sidebar;
             self.sidebar_width = saved.sidebar_width.clamp(12, SIDEBAR_MAX);
+            self.show = saved.show;
             self.restore_drawer(saved.drawer, saved.drawer_share);
             let known: Vec<SessionId> = ordered.iter().chain(&quick).copied().collect();
             self.restore_kept(saved.kept, &known);
@@ -8253,6 +8288,77 @@ mod tests {
     }
 
     #[test]
+    fn moving_focus_between_shown_panes_keeps_the_drawer_and_the_popup() {
+        let mut app = app();
+        auto_shell(&mut app);
+        let (_agent, _other) = with_agents(&mut app);
+        let shell = quick("myrepo.shell", Some("p1-root"));
+        app.sessions.push(shell.clone());
+        app.run(&Command { action: "shell.here", arg: None });
+        app.on_reply(AppMsg::Reply(
+            Pending::Quick(app.config.ui.shell_style),
+            Ok(Reply::Session { info: shell.clone() }),
+        ));
+        let host = app.drawer.expect("open").host;
+        assert_ne!(app.focused, host);
+        // Back to the agent above: the drawer stays.
+        app.run(&Command { action: "pane.up", arg: None });
+        assert_eq!(app.focused, host);
+        assert!(app.drawer.is_some(), "the drawer stays while its host is used");
+        app.run(&Command { action: "pane.down", arg: None });
+        assert!(app.drawer.is_some());
+        // The scratchpad's popup too.
+        pad_shown(&mut app, "popup");
+        assert!(app.pad_popup.is_some());
+        app.run(&Command { action: "pane.up", arg: None });
+        assert!(app.pad_popup.is_some(), "the popup stays");
+    }
+
+    #[test]
+    fn the_sidebar_filter_cycles_by_key_and_click_and_is_saved_with_the_view() {
+        use ptyro_core::status::{Confidence, SignalSource, StatusRecord};
+        let mut app = app();
+        let (a, b) = with_agents(&mut app);
+        app.sessions.iter_mut().find(|s| s.id == a).unwrap().status =
+            Some(StatusRecord::new(AgentStatus::Working, Confidence::High, SignalSource::Hook));
+        let listed = |app: &App| app.rows().iter().filter_map(Row::session).collect::<Vec<_>>();
+        assert_eq!(app.show, Show::All);
+        assert_eq!(listed(&app), [a, b]);
+        let strip = screen(&app);
+        assert!(
+            strip.contains("all 2") && strip.contains("running 2") && strip.contains("active 1"),
+            "{strip}"
+        );
+        // The key: all → running → active → all.
+        app.run(&Command { action: "sidebar.filter", arg: None });
+        assert_eq!((app.show, listed(&app)), (Show::Running, vec![a, b]));
+        app.run(&Command { action: "sidebar.filter", arg: None });
+        assert_eq!((app.show, listed(&app)), (Show::Active, vec![a]));
+        // A click on a chip, on the line under the title.
+        let side = app.sidebar_area().unwrap();
+        let chips = crate::ui::filter_chips(&app, side.width);
+        let (_, _, from, _) = chips.iter().find(|c| c.0 == Show::Running).unwrap();
+        app.on_mouse(&mouse(
+            crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            side.x + from + 1,
+            side.y + 1,
+        ));
+        assert_eq!(app.show, Show::Running);
+        // Saved with the view and put back.
+        app.run(&Command { action: "sidebar.show_active", arg: None });
+        let [Request::SaveView { view, .. }, _] = app.view_requests().unwrap() else { panic!() };
+        app.show = Show::All;
+        app.apply_view(Some(view));
+        assert_eq!(app.show, Show::Active);
+        // Nothing active: it says so, and how to get the rest back.
+        app.sessions.iter_mut().for_each(|s| s.status = None);
+        let empty = screen(&app);
+        assert!(empty.contains("nothing active right now"), "{empty}");
+        app.run(&Command { action: "sidebar.show_all", arg: None });
+        assert_eq!(listed(&app), [a, b]);
+    }
+
+    #[test]
     fn exit_closes_the_drawer_and_the_next_press_asks_for_a_fresh_one() {
         let mut app = app();
         auto_shell(&mut app);
@@ -8670,6 +8776,7 @@ mod tests {
             zoom: false,
             sidebar: true,
             sidebar_width: 30,
+            show: Default::default(),
             drawer: None,
             drawer_share: crate::quick::DRAWER_SHARE,
             kept: app.kept.as_deref().cloned(),

@@ -447,3 +447,69 @@ impl LastLaunch {
         }
     }
 }
+
+/// How much of the session list to show (SPEC §11.2c, the sidebar's filter): everything, only
+/// what is running, or only what is busy right now.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Show {
+    #[default]
+    All,
+    Running,
+    Active,
+}
+
+impl Show {
+    pub const EVERY: [Show; 3] = [Self::All, Self::Running, Self::Active];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Running => "running",
+            Self::Active => "active",
+        }
+    }
+
+    /// `all` → `running` → `active` → `all`.
+    pub fn next(self) -> Self {
+        match self {
+            Self::All => Self::Running,
+            Self::Running => Self::Active,
+            Self::Active => Self::All,
+        }
+    }
+
+    pub fn keeps(self, s: &SessionInfo) -> bool {
+        match self {
+            Self::All => true,
+            Self::Running => s.is_running(),
+            Self::Active => s.is_active(),
+        }
+    }
+}
+
+impl SessionInfo {
+    /// A session of its own: not a worktree's quick terminal, not the scratchpad's editor.
+    pub fn is_real(&self) -> bool {
+        !self.quick && !self.pad
+    }
+
+    /// A real session whose process is alive (not exited, failed or hibernated).
+    pub fn is_running(&self) -> bool {
+        self.is_real() && self.state.is_live()
+    }
+
+    /// Running and busy now: an agent that is starting, working or waiting for you (blocked), or
+    /// a shell with a command running (OSC 133). An agent between turns, a shell at its prompt
+    /// and a command session with no status are running, not active.
+    pub fn is_active(&self) -> bool {
+        use crate::status::AgentStatus as A;
+        if !self.is_running() {
+            return false;
+        }
+        match &self.status {
+            Some(r) => matches!(r.status, A::Working | A::Blocked | A::Starting),
+            None => self.command.as_ref().is_some_and(|c| c.ended_ms.is_none()),
+        }
+    }
+}

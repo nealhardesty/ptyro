@@ -9,7 +9,7 @@ use ptyro_core::SessionId;
 use ptyro_core::model::{
     MAIN_WORKSPACE, ProjectInfo, WorkspaceInfo, WorktreeInfo, WorktreeState, split_machine,
 };
-use ptyro_core::session::SessionInfo;
+use ptyro_core::session::{SessionInfo, Show};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Row {
@@ -55,6 +55,9 @@ pub struct Inputs<'a> {
     pub collapsed: &'a HashSet<String>,
     /// Change sets still going (M11): shown first, each with its lead.
     pub sets: &'a [crate::sets::SetNode],
+    /// The sidebar's filter: everything, what is running, or what is busy now. A header with
+    /// nothing under it is dropped while it filters.
+    pub show: Show,
 }
 
 impl Inputs<'_> {
@@ -134,6 +137,10 @@ impl Inputs<'_> {
         v
     }
 
+    fn filtering(&self) -> bool {
+        self.show != Show::All
+    }
+
     fn led(&self, s: &SessionInfo) -> bool {
         self.sets.iter().any(|n| n.lead.as_deref() == Some(s.id.full().as_str()))
     }
@@ -165,10 +172,14 @@ impl Inputs<'_> {
     fn build(&self, honour_collapse: bool) -> Vec<Row> {
         let mut rows = Vec::new();
         for n in self.sets {
+            let lead =
+                n.lead.as_ref().and_then(|l| self.sessions.iter().find(|s| s.id.full() == *l));
+            if self.filtering() && !lead.is_some_and(|s| self.show.keeps(s)) {
+                continue;
+            }
             rows.push(Row::Set(n.run.clone()));
             if !(honour_collapse && self.collapsed.contains(&n.run))
-                && let Some(l) = &n.lead
-                && let Some(s) = self.sessions.iter().find(|s| s.id.full() == *l)
+                && let Some(s) = lead
             {
                 rows.push(Row::Session(s.id));
             }
@@ -178,7 +189,7 @@ impl Inputs<'_> {
             rows.extend(
                 self.sessions
                     .iter()
-                    .filter(|s| !s.pad && !self.led(s))
+                    .filter(|s| !s.pad && !self.led(s) && self.show.keeps(s))
                     .map(|s| if s.quick { Row::Quick(s.id) } else { Row::Session(s.id) }),
             );
             return rows;
@@ -186,9 +197,12 @@ impl Inputs<'_> {
         // A project shows once, under the first workspace that has it.
         let mut placed: HashSet<&str> = HashSet::new();
         for ws in self.order() {
-            rows.push(Row::Workspace(ws.name.clone()));
             let folded = honour_collapse && self.collapsed.contains(&fold_key(&ws.name));
             let body = self.body(ws, &mut placed, honour_collapse);
+            if self.filtering() && body.is_empty() {
+                continue;
+            }
+            rows.push(Row::Workspace(ws.name.clone()));
             if !folded {
                 rows.extend(body);
             }
@@ -210,26 +224,34 @@ impl Inputs<'_> {
             .filter(|p| placed.insert(p.id.as_str()))
             .collect();
         for p in &projects {
-            rows.push(Row::Project(p.id.clone()));
-            if honour_collapse && self.collapsed.contains(&p.id) {
-                continue;
-            }
+            let mut inner = Vec::new();
             for w in self.worktrees_of(&p.id) {
-                rows.push(Row::Worktree(w.id.clone()));
-                if honour_collapse && self.collapsed.contains(&w.id) {
-                    continue;
-                }
                 let (quick, sessions): (Vec<&SessionInfo>, Vec<&SessionInfo>) = self
                     .sessions
                     .iter()
                     .filter(|s| s.worktree.as_deref() == Some(w.id.as_str()) && !s.pad)
                     // A change set's lead has its row under the set, not twice.
                     .filter(|s| !self.led(s))
+                    .filter(|s| self.show.keeps(s))
                     .partition(|s| s.quick);
+                if self.filtering() && sessions.is_empty() {
+                    continue;
+                }
+                inner.push(Row::Worktree(w.id.clone()));
+                if honour_collapse && self.collapsed.contains(&w.id) {
+                    continue;
+                }
                 // The quick terminal first: it is the worktree's own, so it sits right under it
                 // and never gets lost among the sessions.
-                rows.extend(quick.into_iter().map(|s| Row::Quick(s.id)));
-                rows.extend(sessions.into_iter().map(|s| Row::Session(s.id)));
+                inner.extend(quick.into_iter().map(|s| Row::Quick(s.id)));
+                inner.extend(sessions.into_iter().map(|s| Row::Session(s.id)));
+            }
+            if self.filtering() && inner.is_empty() {
+                continue;
+            }
+            rows.push(Row::Project(p.id.clone()));
+            if !(honour_collapse && self.collapsed.contains(&p.id)) {
+                rows.extend(inner);
             }
         }
         // The rest whose workspace this is: no project here, or a worktree that is gone (it has
@@ -238,7 +260,7 @@ impl Inputs<'_> {
         let others: Vec<&SessionInfo> = self
             .sessions
             .iter()
-            .filter(|s| !s.pad && !self.led(s))
+            .filter(|s| !s.pad && !self.led(s) && self.show.keeps(s))
             .filter(|s| {
                 let under_project = s.project.as_ref().is_some_and(|p| shown.contains(&p.as_str()))
                     && s.worktree.as_ref().is_some_and(|w| {
@@ -409,6 +431,7 @@ mod tests {
             sessions: &sessions,
             collapsed: &collapsed,
             sets: &nodes,
+            show: Show::All,
         }
         .rows();
         // The session of a removed worktree has no worktree row to hang under: it is listed with
@@ -463,6 +486,7 @@ mod tests {
             sessions: &sessions,
             collapsed: &collapsed,
             sets: &[],
+            show: Show::All,
         };
         let rows = i.rows();
         assert_eq!(
@@ -530,6 +554,7 @@ mod tests {
             sessions: &sessions,
             collapsed: &collapsed,
             sets: &[],
+            show: Show::All,
         };
         let rows = i.rows();
         assert_eq!(
@@ -591,6 +616,7 @@ mod tests {
             sessions: &sessions,
             collapsed: &collapsed,
             sets: &[],
+            show: Show::All,
         };
         assert_eq!(
             i.rows(),
@@ -605,5 +631,85 @@ mod tests {
             ]
         );
         assert_eq!(i.sessions(), vec![sessions[1].id], "j/k and numbers skip quick terminals");
+    }
+
+    #[test]
+    fn the_filter_keeps_running_and_active_sessions_and_drops_the_headers_left_empty() {
+        use ptyro_core::status::{AgentStatus, Confidence, SignalSource, StatusRecord};
+        let status = |s: &mut SessionInfo, st| {
+            s.kind = ptyro_core::session::SessionKind::Agent;
+            s.status = Some(StatusRecord::new(st, Confidence::High, SignalSource::Hook));
+        };
+        let workspaces = vec![ws("w", "main", &["p", "q"]), ws("w2", "box:main", &["r"])];
+        let projects = vec![project("p"), project("q"), project("r")];
+        let worktrees = vec![
+            wt("p-root", "p", true, 1),
+            wt("q-root", "q", true, 1),
+            wt("r-root", "r", true, 1),
+        ];
+        let mut working = session("working", Some("p-root"), Some("p"), Some("main"));
+        status(&mut working, AgentStatus::Working);
+        let mut waiting = session("waiting", Some("p-root"), Some("p"), Some("main"));
+        status(&mut waiting, AgentStatus::Blocked);
+        let mut idle = session("idle", Some("q-root"), Some("q"), Some("main"));
+        status(&mut idle, AgentStatus::Idle);
+        // A shell at its prompt, and one running a command.
+        let prompt = session("prompt", Some("q-root"), Some("q"), Some("main"));
+        let mut building = session("building", Some("q-root"), Some("q"), Some("main"));
+        building.command = Some(ptyro_core::session::ShellCommand {
+            text: Some("make".into()),
+            started_ms: 1,
+            ended_ms: None,
+            exit: None,
+        });
+        let mut quick = session("quick", Some("p-root"), Some("p"), Some("main"));
+        quick.quick = true;
+        quick.command = building.command.clone();
+        let mut done = session("done", Some("r-root"), Some("r"), Some("box:main"));
+        status(&mut done, AgentStatus::Working);
+        done.state = ptyro_core::session::ProcessState::Exited { code: Some(0), signal: None };
+        let sessions = vec![
+            working.clone(),
+            waiting.clone(),
+            idle.clone(),
+            prompt.clone(),
+            building.clone(),
+            quick.clone(),
+            done,
+        ];
+        let collapsed = HashSet::new();
+        let inputs = |show| Inputs {
+            workspaces: &workspaces,
+            projects: &projects,
+            worktrees: &worktrees,
+            sessions: &sessions,
+            collapsed: &collapsed,
+            sets: &[],
+            show,
+        };
+        let ids = |show| -> Vec<SessionId> {
+            inputs(show).rows().iter().filter_map(Row::session).collect()
+        };
+        // Everything, as before.
+        assert_eq!(inputs(Show::All).rows().len(), 2 + 3 + 3 + 7, "{:?}", inputs(Show::All).rows());
+        // Running: alive and real. Not the quick terminal, not the exited one.
+        assert_eq!(ids(Show::Running), [working.id, waiting.id, idle.id, prompt.id, building.id]);
+        // Active: working, waiting for you, a command running. Not idle, not at a prompt.
+        assert_eq!(ids(Show::Active), [working.id, waiting.id, building.id]);
+        // The other machine's workspace and project had nothing: no header either.
+        let rows = inputs(Show::Active).rows();
+        assert!(!rows.contains(&Row::Workspace("box:main".into())), "{rows:?}");
+        assert!(!rows.contains(&Row::Project("r".into())), "{rows:?}");
+        assert!(
+            rows.contains(&Row::Project("p".into())) && rows.contains(&Row::Project("q".into()))
+        );
+        // Numbering and cycling follow the filter.
+        assert_eq!(inputs(Show::Active).sessions(), [working.id, waiting.id, building.id]);
+        // A folded project still shows its header, with nothing under it.
+        let folded: HashSet<String> = ["p".to_owned()].into();
+        let rows = Inputs { collapsed: &folded, ..inputs(Show::Active) }.rows();
+        assert!(
+            rows.contains(&Row::Project("p".into())) && !rows.contains(&Row::Session(working.id))
+        );
     }
 }

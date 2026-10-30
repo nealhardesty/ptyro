@@ -2910,11 +2910,14 @@ learning anything up front.
     and what runs in it (the command, else the foreground program, else the last command with
     `✓`/`✗`). It has no number, `j`/`k` skip it, and it never fills an empty pane. Its row menu
     shows or hides it, adopts, renames, explains and stops it.
-  - **Quick means brief:** the drawer (and the scratchpad's popup) go away when focus lands on
-    another pane or another session or workspace shows (`App::tuck_away`, after every command and
-    mouse event); the shell and the editor keep running. Focus in the sidebar doesn't count, so
-    you can pick the next thing. While its drawer is open the shell's sidebar line is tinted
-    (`bar_bg`).
+  - **Quick means brief:** the drawer (and the scratchpad's popup) go away when another session
+    or workspace shows: a pane that now shows a session it didn't (`App::tuck_away`, after every
+    command and mouse event, compares what every pane shows); the shell and the editor keep
+    running. **[changed 2026-10-30]** Moving focus between panes that were already showing
+    (back up to the agent the drawer hangs from, say) leaves them open: they are used together.
+    Before, focus landing on another pane closed the drawer. Focus in the sidebar doesn't count
+    either, so you can pick the next thing. While its drawer is open the shell's sidebar line is
+    tinted (`bar_bg`).
   - **Quiet:** `raise` drops its attention and notifications, except `blocked` (an agent started
     in it that waits for you). `exit` forgets it (no exited row; the name is free again), and the
     TUI closes its drawer.
@@ -2991,6 +2994,24 @@ The daily loop (ROADMAP UX3, RESEARCH R-UX-34…37). `crates/ptyro-tui/src/scree
   `[ui] shell_style`, now `pane` by default. It belongs to a worktree: with no context worktree
   the TUI opens the project picker and carries on there (`AfterAdd::Run`); `QuickShell` refuses
   to start one outside a worktree (one per directory from before is still found).
+
+- **The sidebar filter** (UX4.1, `sidebar.filter`: `f` after the prefix or in the sidebar; or click a
+  chip): a strip under the sidebar's title, `all 14  running 6  active 2`, picks what the tree lists.
+  `sidebar.show_all`, `sidebar.show_running` and `sidebar.show_active` set one (the palette); the
+  click and `f` do the same. `Show` (`ptyro-core`, `session.rs`) is the one definition for the TUI,
+  the CLI and the web:
+  - **running**: a real session (not a quick terminal, not the scratchpad's editor) whose process
+    is alive. Exited, failed and hibernated ones are out.
+  - **active**: running and busy now: an agent that is `working`, `blocked` (it waits for you: you
+    want to see it) or `starting`, or a shell with a command running (OSC 133). An agent between
+    turns, a shell at its prompt and a command session with no status are running, not active.
+  - A header (machine/workspace, project, worktree) is listed only while something under it is; a
+    change set shows only while its lead does. Folds, numbering (`1`–`9`) and `j`/`k` follow the
+    filter. The count in a chip is of every real session, not of what is listed.
+  - Saved with the view (`SavedView.show`), so a reattach has it as it was. Filtered to nothing,
+    the sidebar says `nothing active right now` and which key shows all.
+  - The web's session list has the same three chips (`sidebar.filter`), kept in the browser.
+  - CLI: `ptyro ls --status running|active`.
 
 ### 11.2j What MM1.B added **[built MM1.B]**
 
@@ -3129,7 +3150,7 @@ ptyro                                  # TUI
 ptyro attach [<session>] [--raw] [--view-only] [--workspace <ws>]
 ptyro new [--agent <a>[@<profile>]] [--profile <pr>] [--project <p>] [--wt <name>|--new-wt [<name>]|--here|--cwd <dir>]
           [--name <n>] [--prompt <text>|--prompt-file <f>] [--attach] [--override-pin] [-- <args…>]
-ptyro ls [--status <s>] [--project <p>] [--all] [--json]
+ptyro ls [--status running|active|exited|dormant|<agent status>] [--project <p>] [--all] [--json]
 ptyro status [<session>] [--explain] [--json]
 ptyro send <session…> <text> [--no-enter] [--raw] [--wait-ready]
 ptyro read <session> [--screen|--scrollback [N]] [--plain|--ansi] [--json]
