@@ -545,7 +545,7 @@ impl Daemon {
             return;
         }
         let lock = self.chats.lock_for(chat);
-        let _one = lock.lock().await;
+        let one = lock.lock().await;
         let live = self.chats.live(chat);
         {
             let id = progress_id(chat);
@@ -571,6 +571,8 @@ impl Daemon {
         let level = if ok == 0 { NoticeLevel::Warn } else { NoticeLevel::Info };
         self.chat_notice(&live, chat, level, &format!("{}{hint}", state.line())).await;
         self.chat_changed(chat).await;
+        // (Settling waits for no sender: it is skipped while one holds the lock.)
+        drop(one);
         self.chats.settle(chat);
     }
 
