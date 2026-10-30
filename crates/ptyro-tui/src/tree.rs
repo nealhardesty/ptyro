@@ -230,10 +230,7 @@ impl Inputs<'_> {
             rows.push(Row::Workspace(ws.name.clone()));
             if !folded {
                 rows.extend(body);
-                // Chats aren't sessions: not while the list is filtered to running or active ones.
-                if !self.filtering() {
-                    rows.extend(self.chat_rows(&ws.name, honour_collapse));
-                }
+                rows.extend(self.chat_rows(&ws.name, honour_collapse));
             }
         }
         rows
@@ -341,6 +338,16 @@ impl Inputs<'_> {
                 .map(|c| Row::Chat(c.id.clone()))
                 .collect()
         };
+        // Filtered to running or active sessions, chats aren't sessions: only the one last
+        // written to stays, to pick up where you were, and nothing when there is none.
+        if self.filtering() {
+            let Some(last) = mine.iter().max_by_key(|c| c.last_ms) else { return Vec::new() };
+            let mut rows = vec![Row::Chats(ws.to_owned())];
+            if !(honour_collapse && self.collapsed.contains(&chats_key(ws))) {
+                rows.push(Row::Chat(last.id.clone()));
+            }
+            return rows;
+        }
         let mut rows = vec![Row::Chats(ws.to_owned())];
         if honour_collapse && self.collapsed.contains(&chats_key(ws)) {
             return rows;
@@ -866,6 +873,23 @@ mod tests {
         );
         // Numbering and cycling follow the filter.
         assert_eq!(inputs(Show::Active).sessions(), [working.id, waiting.id, building.id]);
+        // Chats aren't sessions: filtered, only the chat last written to stays, under a
+        // workspace that is listed; the other machine's has none listed, so none.
+        let (mut old, mut new, mut far) =
+            (chat("old", "main", false), chat("new", "main", true), chat("far", "box:main", false));
+        (old.last_ms, new.last_ms, far.last_ms) = (5, 9, 99);
+        let chats = [old, new, far];
+        let with = |show| Inputs { chats: &chats, recent: Some(5), ..inputs(show) }.rows();
+        let rows = with(Show::Active);
+        assert!(
+            rows.contains(&Row::Chats("main".into())) && rows.contains(&Row::Chat("new".into()))
+        );
+        assert!(
+            !rows.contains(&Row::Chat("old".into()))
+                && !rows.contains(&Row::ChatAll("main".into()))
+        );
+        assert!(!rows.contains(&Row::Chat("far".into())), "{rows:?}");
+        assert!(with(Show::All).contains(&Row::Chat("old".into())));
         // A folded project still shows its header, with nothing under it.
         let folded: HashSet<String> = ["p".to_owned()].into();
         let rows = Inputs { collapsed: &folded, ..inputs(Show::Active) }.rows();

@@ -3014,6 +3014,8 @@ The daily loop (ROADMAP UX3, RESEARCH R-UX-34…37). `crates/ptyro-tui/src/scree
   - A header (machine/workspace, project, worktree) is listed only while something under it is; a
     change set shows only while its lead does. Folds, numbering (`1`–`9`) and `j`/`k` follow the
     filter. The count in a chip is of every real session, not of what is listed.
+  - Chats aren't sessions: while it filters, a workspace's CHATS section keeps only the chat last
+    written to (`last_ms`), and none under a workspace that isn't listed.
   - Saved with the view (`SavedView.show`), so a reattach has it as it was. Filtered to nothing,
     the sidebar says `nothing active right now` and which key shows all.
   - The web's session list has the same three chips (`sidebar.filter`), kept in the browser.
