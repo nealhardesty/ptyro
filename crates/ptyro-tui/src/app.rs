@@ -9863,6 +9863,39 @@ mod tests {
     }
 
     #[test]
+    fn an_at_in_the_composer_offers_the_chats_folders() {
+        use crossterm::event::KeyModifiers as M;
+        let mut app = app();
+        let mut c = chat_info("cccc", false);
+        c.folders = vec!["~/notes".into(), "/srv/docs".into()];
+        app.chat_list.push(c);
+        app.open_chat("cccc");
+        for ch in "look in @".chars() {
+            press(&mut app, ch, M::NONE);
+        }
+        let suggest = |app: &App| match &app.chat_panel {
+            Some(crate::chats::ChatPanel::View(v)) => v.view.suggest.clone().unwrap_or_default(),
+            _ => String::new(),
+        };
+        assert!(suggest(&app).contains("[~/notes]  /srv/docs"), "{}", suggest(&app));
+        app.chat_key(KeyEvent::new(KeyCode::Down, Mods::NONE));
+        assert!(suggest(&app).contains("[/srv/docs]"), "{}", suggest(&app));
+        app.chat_key(KeyEvent::new(KeyCode::Tab, Mods::NONE));
+        assert_eq!(draft(&app).0, "look in /srv/docs ");
+        assert_eq!(suggest(&app), "", "done: no more suggestion");
+        // Narrowed by what follows the `@`; none matching says so; ⏎ puts one in, not sends.
+        for ch in "and @no".chars() {
+            press(&mut app, ch, M::NONE);
+        }
+        assert!(suggest(&app).starts_with("[~/notes]"), "{}", suggest(&app));
+        app.chat_key(KeyEvent::new(KeyCode::Enter, Mods::NONE));
+        assert_eq!(draft(&app).0, "look in /srv/docs and ~/notes ");
+        press(&mut app, '@', M::NONE);
+        press(&mut app, 'z', M::NONE);
+        assert!(suggest(&app).contains("no folder"), "{}", suggest(&app));
+    }
+
+    #[test]
     fn the_chat_composer_edits_like_a_shell_line() {
         use crossterm::event::KeyModifiers as M;
         let mut app = app();

@@ -576,6 +576,21 @@ pub fn slash_message(text: &str) -> Option<String> {
     word.contains('/').then(|| text.to_owned())
 }
 
+/// The `@` being typed before the cursor (`look in @no`), in characters, with the chat's folders it
+/// may be (§22.12; the web's `atQuery`): `None` when the cursor isn't after one.
+pub fn at_query(text: &str, cursor: usize, folders: &[String]) -> Option<(usize, Vec<String>)> {
+    let before: String = text.chars().take(cursor).collect();
+    let word_at = before.rfind(char::is_whitespace).map_or(0, |i| i + 1);
+    let word = &before[word_at..];
+    let q = word.strip_prefix('@')?.to_lowercase();
+    if folders.is_empty() {
+        return None;
+    }
+    let start = before[..word_at].chars().count();
+    let matches = folders.iter().filter(|f| f.to_lowercase().contains(&q)).cloned().collect();
+    Some((start, matches))
+}
+
 /// The first line of a message, as a title of last resort (§22.8).
 pub fn first_line_title(text: &str) -> String {
     let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
@@ -595,6 +610,16 @@ pub fn clean_title(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_at_names_one_of_the_chats_folders() {
+        let f = vec!["~/notes".to_owned(), "/srv/docs".to_owned()];
+        assert_eq!(super::at_query("look in @no", 11, &f), Some((8, vec!["~/notes".to_owned()])));
+        assert_eq!(super::at_query("@", 1, &f), Some((0, f.clone())));
+        assert_eq!(super::at_query("mail me@x", 9, &f), None, "not at a word's start");
+        assert_eq!(super::at_query("look @no", 8, &[]), None, "no folders");
+        assert_eq!(super::at_query("@no later", 3, &f).map(|m| m.0), Some(0), "the cursor's word");
+    }
+
     #[test]
     fn a_slash_that_is_a_message() {
         use super::slash_message as m;

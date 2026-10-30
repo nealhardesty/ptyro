@@ -32,6 +32,8 @@ pub struct ChatView {
     pub marks: std::collections::HashMap<String, (u32, u32, String)>,
     /// Find in the chat: this text is shown highlighted.
     pub highlight: Option<String>,
+    /// What an `@` being typed may be (the chat's folders), shown in the composer.
+    pub suggest: Option<String>,
     /// How many rows the body showed when last drawn (scrolling to a message uses it).
     pub body_rows: Cell<usize>,
     /// A message to bring into view at the next draw (wrapping needs the width).
@@ -389,6 +391,8 @@ pub fn draw(
         hints.card
     } else if view.pending_permission() {
         hints.card_behind
+    } else if let Some(s) = &view.suggest {
+        s.clone()
     } else if view.draft.is_empty() {
         hints.empty
     } else {

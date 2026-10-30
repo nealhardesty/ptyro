@@ -7078,7 +7078,8 @@ hides when `enabled`):
   `/task [PROJECT] [--agent A] [--name N]`, `/compare [AGENTS…] [question]` (agents space- or
   comma-separated, `codex@work` kept as typed), `/pick`), each also a palette action (`//` sends a
   message starting with `/`, a path like `/etc/hosts …` is a message as it is, and a name that
-  isn't a command stays in the composer, never lost); an `@` completion for attached folders; and find-in-chat.
+  isn't a command stays in the composer, never lost); an `@` completion for attached folders (TUI and web: the matching folders shown, `↑`/`↓` to
+  choose, Tab or ⏎ to put one in; `chats::at_query`); and find-in-chat.
 - **Keys** (prefix, then; proposed, `m` and `g` are free in `docs/keys.md` on 2026-10-29; CHAT1.7
   checks and the user can rebind): `m` **new chat** in the current workspace (the composer opens at
   once, ⏎ sends; `C-o` picks agent, tools and folder; `Tab`/`C-i` incognito), `g` the **chat list**

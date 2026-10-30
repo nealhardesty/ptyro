@@ -138,6 +138,8 @@ pub struct ChatViewState {
     pub offline_said: bool,
     /// `C-o` in a new chat: the agent, then its tools, then a folder.
     pub choosing: bool,
+    /// Which of an `@`'s folders Tab or ⏎ puts in.
+    pub at_pick: usize,
 }
 
 impl ChatViewState {
@@ -154,6 +156,7 @@ impl ChatViewState {
             agent: None,
             preset: None,
             folders: Vec::new(),
+            at_pick: 0,
             title: None,
             back: None,
             sending: false,
@@ -2095,6 +2098,40 @@ impl App {
 
     fn chat_view_key(&mut self, mut v: ChatViewState, key: KeyEvent) {
         v.view.settle_focus();
+        // An `@` being typed: Up/Down choose among the chat's folders, Tab or ⏎ puts one in.
+        if let Some((start, matches)) = self.at_folders(&v)
+            && !matches.is_empty()
+        {
+            let n = matches.len();
+            match key.code {
+                KeyCode::Up | KeyCode::Down => {
+                    v.at_pick =
+                        if key.code == KeyCode::Up { v.at_pick + n - 1 } else { v.at_pick + 1 } % n;
+                    self.suggest_at(&mut v);
+                    self.chat_panel = Some(ChatPanel::View(Box::new(v)));
+                    return;
+                }
+                KeyCode::Tab | KeyCode::Enter if !crate::app::is_newline_key(&key) => {
+                    let folder = matches[v.at_pick % n].clone();
+                    v.edit(|e| {
+                        let end = e.at;
+                        let b = |e: &crate::settings::LineEdit, c: usize| {
+                            e.text.char_indices().nth(c).map_or(e.text.len(), |(i, _)| i)
+                        };
+                        let (sb, eb) = (b(e, start), b(e, end));
+                        let space = !e.text[eb..].starts_with(char::is_whitespace);
+                        let put = if space { format!("{folder} ") } else { folder.clone() };
+                        e.text.replace_range(sb..eb, &put);
+                        e.at = start + put.chars().count();
+                    });
+                    v.at_pick = 0;
+                    self.suggest_at(&mut v);
+                    self.chat_panel = Some(ChatPanel::View(Box::new(v)));
+                    return;
+                }
+                _ => {}
+            }
+        }
         // The chat's own keys (`[keys]` `chat:`), where they apply.
         if let Some(cmd) = self.keymap.lookup(Table::Chat, key).cloned()
             && Self::chat_key_applies(&v, cmd.action)
@@ -2171,10 +2208,38 @@ impl App {
             _ => {
                 if v.edit(|e| e.key(key)) {
                     v.view.scroll = 0;
+                    v.at_pick = 0;
                 }
             }
         }
+        self.suggest_at(&mut v);
         self.chat_panel = Some(ChatPanel::View(Box::new(v)));
+    }
+
+    /// The `@` before the cursor and the chat's folders it may be (a new chat's own, before its
+    /// first message).
+    fn at_folders(&self, v: &ChatViewState) -> Option<(usize, Vec<String>)> {
+        let folders = match &v.id {
+            None => v.folders.clone(),
+            Some(id) => v.info.as_ref().or_else(|| self.chat(id)).map(|c| c.folders.clone())?,
+        };
+        let at = v.at.min(v.draft.chars().count());
+        ptyro_core::chats::at_query(&v.draft, at, &folders)
+    }
+
+    /// The composer's hint for an `@`: its folders, the chosen one bracketed.
+    fn suggest_at(&self, v: &mut ChatViewState) {
+        v.view.suggest = self.at_folders(v).map(|(_, m)| match m.len() {
+            0 => "no folder of this chat matches".to_owned(),
+            n => {
+                let shown: Vec<String> = m
+                    .iter()
+                    .enumerate()
+                    .map(|(i, f)| if i == v.at_pick % n { format!("[{f}]") } else { f.clone() })
+                    .collect();
+                format!("{} · Tab puts it in", shown.join("  "))
+            }
+        });
     }
 
     /// The list's rows: its workspace's (or every) chat, or the archived ones, filtered.
