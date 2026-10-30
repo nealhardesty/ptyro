@@ -19,6 +19,7 @@ futures.workspace = true
 ptyro-agents.workspace = true
 ptyro-client.workspace = true
 ptyro-drive.workspace = true
+ptyro-meaning.workspace = true
 ptyro-core.workspace = true
 ptyro-git.workspace = true
 ptyro-run.workspace = true

@@ -14,6 +14,9 @@ use tokio::sync::oneshot;
 
 use crate::{Result, StoreError};
 
+mod vec;
+pub use vec::VecTodo;
+
 /// Schema history. Never edit a released migration; append a new one.
 const MIGRATIONS: &[M<'static>] = &[
     M::up(
@@ -70,14 +73,22 @@ const MIGRATIONS: &[M<'static>] = &[
     ),
     // v2 (CHAT2): a side chat names the chat it reads (SPEC §22.7).
     M::up("ALTER TABLE chat ADD COLUMN side_of TEXT;"),
-    // v3 (CHAT5): meaning search, a vector per message when it is switched on (SPEC §22.10).
+    // v3 (CHAT5): meaning search, a vector per message when it is switched on (SPEC §22.10):
+    // `vec` is `ptyro_meaning::quantize`'s, `model` its `MODEL_ID`. `chat` and `at_ms` are the
+    // node's, so a search scans this small table alone. A changed or deleted message loses its
+    // vector (a streaming answer's is made again once it is complete).
     M::up(
         "CREATE TABLE node_vec (
       node TEXT PRIMARY KEY REFERENCES node(id) ON DELETE CASCADE,
       chat TEXT NOT NULL,
+      at_ms INTEGER NOT NULL,
       model TEXT NOT NULL,
       vec BLOB NOT NULL);
-    CREATE INDEX node_vec_by_chat ON node_vec(chat);",
+    CREATE INDEX node_vec_by_chat ON node_vec(chat);
+    CREATE TRIGGER node_vec_au AFTER UPDATE OF text, deleted_at ON node
+      WHEN old.text IS NOT new.text OR new.deleted_at IS NOT NULL BEGIN
+      DELETE FROM node_vec WHERE node = new.id;
+    END;",
     ),
     // v4 (CHAT4): the folders a chat was given to read, as a JSON array (SPEC §22.5).
     M::up("ALTER TABLE chat ADD COLUMN folders TEXT;"),
@@ -881,8 +892,8 @@ pub struct RawHit {
     pub rank: f64,
 }
 
-fn search(db: &Connection, q: &SearchFilter) -> Result<Vec<RawHit>> {
-    let limit = if q.limit == 0 { 50 } else { q.limit.min(500) } as i64;
+/// `q`'s filters as SQL over `chat c`, and their arguments (`?1`…).
+fn filter_sql(q: &SearchFilter) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
     let mut wh = String::from("c.deleted_at IS NULL");
     let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
     let mut arg = |wh: &mut String, sql: &str, v: Box<dyn rusqlite::ToSql>| {
@@ -907,9 +918,19 @@ fn search(db: &Connection, q: &SearchFilter) -> Result<Vec<RawHit>> {
     if !q.archived {
         wh.push_str(" AND c.archived_at IS NULL");
     }
+    (wh, args)
+}
+
+/// The chat columns of `chat c`.
+fn chat_cols() -> String {
+    CHAT_COLS.split(", ").map(|c| format!("c.{}", c.trim())).collect::<Vec<_>>().join(", ")
+}
+
+fn search(db: &Connection, q: &SearchFilter) -> Result<Vec<RawHit>> {
+    let limit = if q.limit == 0 { 50 } else { q.limit.min(500) } as i64;
+    let (wh, args) = filter_sql(q);
     let since = q.since_ms.map_or(0, |s| s as i64);
-    let cols =
-        CHAT_COLS.split(", ").map(|c| format!("c.{}", c.trim())).collect::<Vec<_>>().join(", ");
+    let cols = chat_cols();
     let mut hits = Vec::new();
     if !q.fts.is_empty() {
         let n = args.len();

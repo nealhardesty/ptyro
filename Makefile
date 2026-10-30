@@ -133,6 +133,9 @@ verify-structured: build ## Check structured mode against the real agents here (
 spike-chat-fts: ## CHAT0: FTS5 and the porter tokenizer in the bundled SQLite, and an index over NODES (default 100000) chat nodes
 	NODES=$${NODES:-100000} $(CARGO) run --profile local -p ptyro-store --example chat_fts_spike
 
+spike-chat-meaning: ## CHAT5: meaning search's cost over NODES (default 100000) chat messages: embedding, the backfill, a search's scan, the vectors' size (synthetic model, no download)
+	NODES=$${NODES:-100000} $(CARGO) run --profile local -p ptyro-store --example chat_meaning_spike
+
 spike-chat: ## CHAT0: try the chat engine's claims against the real Claude, Codex, Gemini and OpenCode here (ARGS="claude codex" for some; a few cents of tokens)
 	python3 scripts/spike-chat.py $(ARGS)
 

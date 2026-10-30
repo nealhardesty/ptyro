@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 ptyro-core.workspace = true
+ptyro-meaning.workspace = true
 rusqlite.workspace = true
 rusqlite_migration.workspace = true
 serde.workspace = true

@@ -57,6 +57,8 @@ pub struct Chats {
     sending: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Incognito chats (SPEC §22.9): kept here only, never in `chat.db`; gone with their agent.
     incognito: Mutex<HashMap<String, ChatInfo>>,
+    /// Meaning search (SPEC §22.10 tier 3).
+    pub(crate) meaning: crate::meaning::Meaning,
 }
 
 /// A chat someone follows or an engine serves.
@@ -111,6 +113,7 @@ impl Chats {
             live: Mutex::new(HashMap::new()),
             sending: Mutex::new(HashMap::new()),
             incognito: Mutex::new(HashMap::new()),
+            meaning: crate::meaning::Meaning::default(),
         }
     }
 
@@ -211,6 +214,7 @@ impl Daemon {
             Ok(_) => {}
             Err(e) => tracing::warn!("chat.db: {e}"),
         }
+        self.start_meaning(db.clone());
         let me = Arc::clone(self);
         tokio::spawn(async move {
             loop {
@@ -1077,12 +1081,12 @@ impl Daemon {
             archived,
             limit: limit.unwrap_or(30) as usize,
         };
-        let raw = db.search(filter).await.map_err(store_err)?;
+        let raw = self.search_hits(&db, filter, &q).await?;
         let ids = self.rec_ids().await;
         Ok(raw
             .into_iter()
-            .filter(|h| scope.is_none_or(|s| s.itself.as_deref() != Some(h.chat.id.as_str())))
-            .map(|h| {
+            .filter(|(h, _)| scope.is_none_or(|s| s.itself.as_deref() != Some(h.chat.id.as_str())))
+            .map(|(h, how)| {
                 let mut c = self.chat_info(h.chat, &[]);
                 c.handle = chats::handle(&c.id, ids.iter().map(String::as_str));
                 ChatHit {
@@ -1092,6 +1096,7 @@ impl Daemon {
                     snippet: h.snippet,
                     at_ms: h.at_ms,
                     rank: (h.rank * 1000.0) as i64,
+                    how: how.as_str().into(),
                 }
             })
             .collect())

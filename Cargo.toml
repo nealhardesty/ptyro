@@ -26,6 +26,7 @@ ptyro-git = { path = "crates/ptyro-git" }
 ptyro-agents = { path = "crates/ptyro-agents" }
 ptyro-run = { path = "crates/ptyro-run" }
 ptyro-drive = { path = "crates/ptyro-drive" }
+ptyro-meaning = { path = "crates/ptyro-meaning" }
 # external
 alacritty_terminal = "=0.26.0"
 anyhow = "1.0.104"

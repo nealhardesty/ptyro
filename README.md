@@ -356,6 +356,7 @@ ptyro chat find "what did we decide about the retry policy?"   # an agent answer
 ptyro chat --folder ~/notes "what's left on the launch list?"    # it reads that folder, and nothing else
 ptyro chat presets                          # what each tool preset lets a chat use
 ptyro chat task @last --project myrepo      # an agent carries the chat out in a new worktree
+ptyro chat search --meaning "pets"          # by what messages are about, not their words (opt-in, below)
 ```
 
 In the TUI every workspace has a **CHATS** section in the sidebar; `C-q m` starts a chat and
@@ -373,6 +374,12 @@ searches every chat; `Tab` (or `C-i`) makes a new chat incognito (nothing kept).
 chats itself (`[chat] history_tool`), only those of its own profile unless `history_scope` says
 otherwise. Chats live in their own file, `chat.db` (`ptyro doctor` checks it). Settings:
 `[chat]` in the config (the Chat section of the settings panel).
+
+**Meaning search** is opt-in: `[chat] meaning = true` (the settings panel's Chat section, or say
+yes when `chat search --meaning`, `by:meaning` in the TUI's or web's search box, offers it) downloads
+a small model once (model2vec `potion-base-8M`, 31 MB, MIT) and reads every chat in the background,
+on this machine only. Searches then also find messages *about* what you typed, marked `≈`, merged
+with the keyword hits; `--words` (`by:words`) leaves them out. `ptyro doctor` shows how far it is.
 
 ### The scratchpad
 
@@ -627,6 +634,7 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make verify-claude` | check the Claude adapter against the real Claude Code on your machine (one tiny turn) |
 | `make verify-structured` | check structured mode against the real agents here |
 | `make spike-chat` (`ARGS="claude codex"`) / `make spike-chat-fts` (`NODES=…`) | try the chat engine's claims against the real agents here (a few cents of tokens; Gemini and OpenCode if installed) / FTS5 and a 100k-node chat index in SQLite |
+| `make spike-chat-meaning` (`NODES=…`) | meaning search's cost over 100k chat messages with a synthetic model the real one's size: embedding, the backfill, a search's scan, the vectors' size (nothing downloaded) |
 | `make headless CMD=… ARGS=…` | run a program in ptyro's emulator without a terminal; prints screen and status |
 | `make fixture NAME=… SIZE=… CMD=…` / `make snapshots` | record a golden-test fixture (sanitise it!) / accept golden snapshots (screens, `--json` shapes, rc-file detection) |
 | `make fuzz-smoke` (`FUZZ_SECONDS=5`) / `make fuzz` (`TARGET=… SECONDS=…`) | mutation fuzzing on stable (CI) of eleven targets: the emulator, protocol, input, recipes, recordings, the settings editor, other tools' config files, the host API's JSON, the live-upgrade image and every config parser / coverage-guided `cargo fuzz` (nightly) |

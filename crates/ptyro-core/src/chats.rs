@@ -183,6 +183,10 @@ pub struct ChatHit {
     pub at_ms: u64,
     /// bm25 × 1000, lower is better (comparable within one machine only).
     pub rank: i64,
+    /// How it was found (SPEC §22.10): `words`, `meaning` (shown `≈`: no word of the query is
+    /// in it) or `both`; empty from a daemon before meaning search (words).
+    #[serde(default)]
+    pub how: String,
 }
 
 /// Around a match in a snippet (control characters, so no text can fake one).
@@ -199,10 +203,15 @@ pub struct Query {
     pub agent: Option<String>,
     pub since_ms: Option<u64>,
     pub workspace: Option<String>,
+    /// `by:words` or `by:meaning` (SPEC §22.10): only that kind of search; `None`: both, when
+    /// meaning search is on.
+    pub by: Option<String>,
+    /// The words left out (`-word`), quoted for FTS5 and joined by `OR`; empty when none.
+    pub not: String,
 }
 
 /// Parse a search: plain words (all must match), `"a phrase"`, `-word`, `prefix*`, and the
-/// filters `agent:codex`, `since:7d`, `workspace:work`. Every term is quoted for FTS5, so no
+/// filters `agent:codex`, `since:7d`, `workspace:work`, `by:words|meaning`. Every term is quoted for FTS5, so no
 /// typed character is an operator by accident.
 pub fn parse_query(q: &str, now_ms: u64) -> Result<Query, String> {
     let mut out = Query::default();
@@ -237,6 +246,11 @@ pub fn parse_query(q: &str, now_ms: u64) -> Result<Query, String> {
                     out.workspace = Some(v.to_owned());
                     continue;
                 }
+                "by" if matches!(v, "words" | "meaning") => {
+                    out.by = Some(v.to_owned());
+                    continue;
+                }
+                "by" => return Err(format!("by:{v}: say by:words or by:meaning")),
                 "since" => {
                     let d =
                         crate::config::parse_duration(v).map_err(|e| format!("since:{v}: {e}"))?;
@@ -260,6 +274,7 @@ pub fn parse_query(q: &str, now_ms: u64) -> Result<Query, String> {
         return Err("say what to look for, not only what to leave out".into());
     }
     out.fts = yes.join(" ");
+    out.not = no.join(" OR ");
     for n in no {
         out.fts = format!("{} NOT {n}", out.fts);
     }
@@ -462,6 +477,12 @@ mod tests {
         assert!(parse_query("-only", 0).is_err());
         assert_eq!(parse_query("agent:claude", 0).unwrap().fts, "");
         assert!(parse_query("since:soon x", 0).is_err());
+        // Meaning search's: which kind, and the words left out on their own.
+        assert_eq!(q.not, r#""redis""#);
+        let m = parse_query("cats -dog -bird by:meaning", 0).unwrap();
+        assert_eq!((m.by.as_deref(), m.not.as_str()), (Some("meaning"), r#""dog" OR "bird""#));
+        assert_eq!(m.words, ["cats"]);
+        assert!(parse_query("x by:vibes", 0).is_err());
     }
 
     #[test]

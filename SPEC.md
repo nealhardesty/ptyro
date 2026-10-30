@@ -6254,8 +6254,9 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
    summaries don't need it (§11.2h, §20.1); revisit when cross-session questions are wanted.
 10. **Chat sync and merge across machines (CHAT6)** — the owner wants it, 2026-10-29; needs a
     brainstorm of its own. §22.15 lists what the schema already guarantees and what is open.
-11. **Chat meaning search (embeddings)** — only if keyword search and the ask tools disappoint
-    (§22.10 tier 3, CHAT5): model2vec or fastembed, and whether it is worth a download.
+11. ~~**Chat meaning search (embeddings)**~~ — **built opt-in 2026-10-30** (CHAT5, §22.10 tier 3):
+    model2vec `potion-base-8M` (31 MB, downloaded only when `[chat] meaning` is switched on). Still
+    open: its quality on real chats, and the 0.3 cosine floor ([U] until tried).
 12. **Chat tool restriction per agent** — answered by CHAT0 for Claude and Codex (§20.8, §22.5);
     open for Gemini and OpenCode, whose native rules are read but were not run (§22.17).
 
@@ -6379,6 +6380,9 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   in the composer; agent-sent titles (no agent of the four sends one: §20.8); MCP for OpenCode chats
   (its server takes MCP servers per server instance, `POST /mcp`, and it isn't installed here to
   try; its permission rules for `<server>_*` are written [S]).
+- **Meaning search (CHAT5, 2026-10-30):** opt-in `[chat] meaning`, model2vec `potion-base-8M` in
+  pure Rust (`crates/ptyro-meaning`), int8 vectors in schema v3 `node_vec`, a background backfill,
+  RRF with the keyword hits, `by:meaning`/`by:words`, `ChatHit.how` and `≈`. See §22.10 tier 3.
 - **Configuration renamed:** `[chat] tools = "chat"` became **`[chat] preset`**: TOML can't hold
   both that string and the `[chat.tools.<name>]` tables. Built keys: `enabled`, `recent`, `agent`,
   `preset`, `hibernate_after`, `seed_tokens`, `title`, `title_command`, `daily_cap`, `index_tools`,
@@ -6679,10 +6683,69 @@ Three tiers; each one is useful without the next.
    - **Scope:** `[chat] history_scope = "profile"` (default): a chat sees chats of **its own
      profile** only, so a work account's history never reaches a personal account's model. `"workspace"`
      narrows, `"all"` widens. Incognito chats are never visible.
-3. **Meaning (CHAT5, opt-in, not built unless 1 and 2 disappoint).** A local embedding of each node
-   (model2vec `potion-base-8M`, ~30 MB, no ONNX; or fastembed `bge-small-en-v1.5`, ~130 MB, via
-   ONNX Runtime), stored beside the text, merged with FTS by reciprocal-rank fusion. Downloaded only
-   when switched on, with its size shown first.
+3. **Meaning (CHAT5, opt-in; built 2026-10-30).** A local embedding of each message, merged with
+   the keyword hits by reciprocal-rank fusion. Off by default: `[chat] meaning = true` (the settings
+   panel's Chat section, `ptyro config set chat.meaning true`, or yes where a search offers it).
+   Nothing is downloaded or computed until then. model2vec was chosen over fastembed: 31 MB against
+   ~130 MB, and no ONNX Runtime. As built:
+   - **Model:** model2vec `minishlab/potion-base-8M` (MIT), pinned to commit
+     `bf8b056651a2c21b8d2565580b8569da283cab23`. Its files, from the Hugging Face API on 2026-10-30
+     [S]: `model.safetensors` 30,236,760 B (one F32 tensor `embeddings`, 29,528 × 256 by its size),
+     SHA-256 `f65d0f325faadc1e121c319e2faa41170d3fa07d8c89abd48ca5358d9a223de2`;
+     `tokenizer.json` 683,666 B; `vocab.txt` 219,690 B; `config.json` (`model_type: model2vec`,
+     `hidden_dim: 256`, `normalize: true`). 31 MB in all.
+   - **Download:** the daemon fetches the files with curl (the way notifications are sent; HTTPS
+     only) into `<data>/models/potion-base-8M/`. Each file goes to `<file>.part`, which `-C -`
+     resumes after an interruption. It is then checked and renamed into place: the matrix by its
+     SHA-256, the small files by size and by loading them (a WordPiece vocabulary with a row for
+     every token). Their hashes aren't published, and the commit pin plus HTTPS covers them. A
+     failed download says why in `ptyro doctor` and is tried again in 10 minutes, or at once when
+     switched off and on. `PTYRO_MEANING_URL` replaces `https://huggingface.co` (for a mirror; the
+     tests use a `file://` folder). Development and tests never download it: they use a synthetic
+     model in the same layout (`ptyro_meaning::synthetic`).
+   - **Inference** in pure Rust (`crates/ptyro-meaning`, no ONNX, no `tokenizers` crate), as
+     model2vec's `StaticModel.encode` does it. It is BERT-uncased WordPiece from `tokenizer.json`
+     (`vocab.txt` if that isn't WordPiece), with **no special tokens** (model2vec encodes with
+     `add_special_tokens=False`, so there is no `[CLS]`/`[SEP]`). `[UNK]` is dropped, the first 512
+     tokens are kept, and the result is the mean of their rows, L2-normalized. Two approximations:
+     accents are stripped for Latin (U+00C0–U+024F and the combining marks) rather than by full NFD,
+     and punctuation is ASCII's plus the Unicode punctuation blocks rather than every `P*`
+     character. model2vec's behaviour comes from its source as remembered, and it has not been run
+     against the Python reference: [U] until it is compared on the real model.
+   - **Storage:** schema v3, `node_vec(node, chat, at_ms, model, vec)`. A vector is int8 with an
+     f32 scale: 260 B a message, a quarter of f32's size. On unit vectors it gives f32's ranking
+     except for near ties. `model` is `potion-base-8M@bf8b056/i8`, and vectors of any other model
+     are dropped when meaning search is switched on. A message whose text changes, or that is
+     deleted, loses its vector (a trigger), and a deleted chat's vectors go with its rows. Covered
+     are the messages keyword search covers except titles (user and assistant text, tool text with
+     `index_tools`), once complete. Incognito chats are never in `chat.db`, so never embedded.
+   - **Backfill:** a daemon task at low priority, in batches of 128 with a pause between. It goes
+     newest first, walking down `node.seq`, so the table is read once and the recent past is
+     searchable soonest. After that each pass reads only what is new (it wakes on `ChatUpdated`),
+     with a full pass hourly. Switched off, it stops. What was downloaded and embedded stays, so
+     switching it on again is instant. The model is loaded only while it is used and dropped after
+     5 idle minutes (30 MB of memory).
+   - **Search:** `by:meaning` or `by:words` in a query (CLI `--meaning`/`--words`) asks for one
+     kind. With meaning on, the default merges the keyword hits with the nearest `limit` messages by
+     RRF (k = 60). Nearest means a cosine of at least 0.3 ([U]: set on the synthetic model), found
+     by a brute-force scan of `node_vec`. Every filter, `-word` and the engine's `history_scope`
+     apply, so the history tools' `chat_search` gets meaning search too. `ChatHit.how` is `words`,
+     `meaning` or `both`. A hit found only by meaning has the start of the message as its snippet
+     and shows `≈` (CLI, TUI, web). `by:meaning` while meaning search is off returns
+     `NeedsConfirmation`, and each client offers to switch it on: the CLI asks on a terminal, the
+     TUI asks once a list (`Confirmed::MeaningOn`), and the web shows a button (`chat.meaning`).
+     Each writes `chat.meaning = true` to the user config. While its model downloads, `by:meaning`
+     answers `Busy` with the progress, and plain searches use words. The machine fan-out is
+     unchanged: each machine searches its own `chat.db`, by its own config.
+   - **Cost** (`make spike-chat-meaning`: 100k messages of 10–200 words and a synthetic model the
+     real one's size, `--profile local`, this Mac, 2026-10-30): the model loads in 28 ms. Embedding takes 57 µs a message, and the whole backfill
+     7.3 s. A search's scan takes 45 ms median and 52 ms worst, and the vectors are 26 MB (260 B a
+     message). An earlier version took 62 s to backfill, because every batch re-read the table from
+     the top, and 160 ms to search, because the scan joined `node` rows; the `seq` walk and
+     `node_vec`'s own `chat`/`at_ms` fixed both.
+   - `ptyro doctor` gives its state: off, downloading (N of 31 MB), N of M messages embedded,
+     ready, or why not. It now prints the `chat.db` line too, which the daemon reported and the CLI
+     didn't show.
 
 **Every machine is searched** (§22.11): a search from the TUI, CLI or web goes to this daemon and
 to every linked machine that is up, each searching its own `chat.db`; bm25 scores differ per
@@ -6818,6 +6881,7 @@ daily_cap = 200           # per profile per UTC day: titles and chat find, count
 history_tool = true       # the chat tools of §22.10 in every chat
 history_scope = "profile" # profile | workspace | all
 index_tools = false       # also index tool output (2 KB a node)
+meaning = false           # live: meaning search (§22.10 tier 3); on downloads a 31 MB model once
 notify = "blocked"        # blocked | all | off (§22.11)
 archive_purge_days = 0    # 0 = keep archived chats forever
 

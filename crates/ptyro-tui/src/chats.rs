@@ -38,6 +38,8 @@ pub struct ChatList {
     pub hits: Vec<ChatHit>,
     /// The query those hits answer (a reply to an older one is dropped).
     pub hits_for: String,
+    /// Asked once whether to switch meaning search on (`by:meaning` while it is off).
+    pub meaning_asked: bool,
 }
 
 pub struct ChatViewState {
@@ -310,6 +312,7 @@ impl App {
             archived: None,
             hits: Vec::new(),
             hits_for: String::new(),
+            meaning_asked: false,
         }));
         self.dirty = true;
     }
@@ -795,6 +798,38 @@ impl App {
             machines: true,
         };
         self.request(Pending::ChatHits(q), req);
+    }
+
+    /// `by:meaning` with meaning search off: offer, once, to switch it on.
+    pub(crate) fn offer_meaning(&mut self, why: String) {
+        if let Some(ChatPanel::List(l)) = &mut self.chat_panel
+            && !l.meaning_asked
+        {
+            l.meaning_asked = true;
+            self.overlay = Some(Overlay::Confirm {
+                text: format!("{why}. Switch it on? [y/N]"),
+                action: Confirmed::MeaningOn,
+            });
+            self.dirty = true;
+        }
+    }
+
+    /// Switch meaning search on in the config file, as the settings panel would; the daemon
+    /// sees the change and downloads its model.
+    pub(crate) fn meaning_on(&mut self) {
+        let layer =
+            ptyro_core::settings::Layer::User(ptyro_core::config::Config::path(&self.paths));
+        let op = ptyro_core::settings::Op::Set { key: "chat.meaning".into(), value: "true".into() };
+        let lk = ptyro_core::settings::Lookups::default();
+        match ptyro_core::settings::apply(&layer, &op, &lk, &|_| Ok(())) {
+            Ok(_) => {
+                self.toast(
+                    "meaning search is on: its model is downloading (ptyro doctor shows how far)",
+                );
+                self.reload_config_with(false);
+            }
+            Err(e) => self.toast_err(format!("chat.meaning: {e}")),
+        }
     }
 
     pub(crate) fn got_hits(&mut self, query: String, hits: Vec<ChatHit>) {
@@ -1656,6 +1691,10 @@ fn draw_list(app: &App, f: &mut Frame<'_>, area: Rect, l: &ChatList) {
             spans.push(Span::styled(name, style));
             if let Some(m) = &h.chat.machine {
                 spans.push(Span::styled(format!("{m} "), fg(app, t.accent)));
+            }
+            // ≈: found by meaning (SPEC §22.10), none of the words is in it.
+            if h.how == "meaning" {
+                spans.push(Span::styled("≈ ", fg(app, t.search)));
             }
             spans.extend(snippet_spans(app, &h.snippet));
             lines.push(Line::from(spans));
