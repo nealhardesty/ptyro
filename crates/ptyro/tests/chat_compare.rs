@@ -21,6 +21,11 @@ struct World {
 impl World {
     /// Every agent is the fake, but those in `broken`, which exit at once.
     fn new(broken: &[&str]) -> Self {
+        Self::with(broken, &[])
+    }
+
+    /// The same, and those in `missing` aren't installed.
+    fn with(broken: &[&str], missing: &[&str]) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-compare-").tempdir().unwrap();
         let h = home.path().canonicalize().unwrap();
         let hs = h.to_string_lossy().into_owned();
@@ -30,7 +35,11 @@ impl World {
              [profiles.work]\nlabel = \"work\"\n[profiles.personal]\nlabel = \"personal\"\n",
         );
         for a in ["claude", "codex", "gemini", "opencode"] {
-            if broken.contains(&a) {
+            if missing.contains(&a) {
+                config.push_str(&format!(
+                    "\n[agents.{a}]\ncommand = [\"/nonexistent/ptyro-test/{a}\"]\n"
+                ));
+            } else if broken.contains(&a) {
                 config.push_str(&format!(
                     "\n[agents.{a}]\ncommand = [\"/bin/sh\", \"-c\", \"echo not logged in >&2; exit 3\"]\n"
                 ));
@@ -212,6 +221,35 @@ fn a_failing_agent_does_not_stop_the_others() {
     // The chat is free again.
     let reply = w.ok(&["chat", "send", &addr, "thanks"]);
     assert!(reply.contains("you said: thanks"), "{reply}");
+}
+
+#[test]
+fn an_agent_that_isnt_installed_is_a_cross_and_the_others_answer() {
+    let w = World::with(&[], &["codex"]);
+    let addr = w.chat();
+    let out = w.json(&[
+        "chat",
+        "compare",
+        &addr,
+        "--agents",
+        "claude,codex,gemini",
+        "--json",
+        "name a fruit",
+    ]);
+    let mut who: Vec<&str> =
+        out["answers"].as_array().unwrap().iter().map(|a| a["agent"].as_str().unwrap()).collect();
+    who.sort();
+    assert_eq!(who, ["claude", "gemini"], "{out}");
+    let codex =
+        out["agents"].as_array().unwrap().iter().find(|a| a["agent"] == "codex").unwrap().clone();
+    assert_eq!(codex["state"], "failed", "{out}");
+    assert!(codex["note"].as_str().unwrap().contains("isn't installed"), "{out}");
+    let shown = w.ok(&["chat", "show", &addr]);
+    assert!(shown.contains("codex ✗"), "{shown}");
+    // A name no agent has is still refused.
+    let bad = w.cli(&["chat", "compare", &addr, "--agents", "claude,nosuch", "x"]);
+    assert!(!bad.status.success());
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("no agent named"), "{bad:?}");
 }
 
 #[test]

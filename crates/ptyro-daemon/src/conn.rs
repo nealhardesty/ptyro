@@ -166,7 +166,22 @@ pub async fn serve(daemon: Arc<Daemon>, stream: UnixStream, pid: Option<u32>) {
             let bytes = match bytes {
                 Ok(b) if b.len() <= ptyro_protocol::MAX_FRAME => b,
                 other => {
+                    let transcript = matches!(
+                        &msg,
+                        ServerMsg::Response {
+                            outcome: ptyro_protocol::Outcome::Ok {
+                                reply: ptyro_protocol::Reply::ChatTranscript { .. }
+                            },
+                            ..
+                        }
+                    );
                     let why = match &other {
+                        // A chat read in parts (`from`, `limit`) always fits.
+                        Ok(b) if transcript => format!(
+                            "the chat is too large to read at once ({} bytes; the limit is {}): read it in parts (from, limit)",
+                            b.len(),
+                            ptyro_protocol::MAX_FRAME
+                        ),
                         Ok(b) => format!(
                             "the reply is too large ({} bytes; the limit is {}): ask for less",
                             b.len(),
@@ -332,63 +347,8 @@ impl Conn {
                 self.subscribe(session, size, control).await
             }
             ClientMsg::Unsubscribe { session } => self.unsubscribe(session),
-            // Another machine's chat (SPEC §22.11): followed over this client's own upstream to
-            // it, as screens are; its engine runs there.
-            ClientMsg::ChatSubscribe { chat }
-                if !self.link && self.daemon.machine_of_chat(&chat).is_some() =>
-            {
-                let Some((machine, there, transport, online)) = self.daemon.machine_of_chat(&chat)
-                else {
-                    return;
-                };
-                // Kept even while it is down: an unsubscribe goes to it, and the client follows
-                // again when it is back (the machine's update says so).
-                self.remote_chats.insert(chat.clone(), machine.clone());
-                if !online {
-                    let since = self.daemon.offline_since(&machine);
-                    let text = format!(
-                        "{machine} is offline{since}; this chat opens when it is back (it reconnects by itself)"
-                    );
-                    let item = ptyro_core::chat::ChatItem::new(
-                        "offline",
-                        ptyro_core::chat::ChatBody::Notice {
-                            level: ptyro_core::chat::NoticeLevel::Warn,
-                            text,
-                        },
-                    );
-                    let msg = ServerMsg::ChatLive {
-                        chat,
-                        rev: 0,
-                        reset: true,
-                        items: vec![item],
-                        siblings: Vec::new(),
-                    };
-                    let _ = self.out.send(msg).await;
-                    return;
-                }
-                self.send_upstream(&machine, &transport, ClientMsg::ChatSubscribe { chat: there })
-                    .await;
-            }
-            ClientMsg::ChatUnsubscribe { chat } if self.remote_chats.contains_key(&chat) => {
-                let machine = self.remote_chats.remove(&chat).unwrap_or_default();
-                let there = chat
-                    .strip_prefix(&format!("{machine}:"))
-                    .map_or_else(|| chat.clone(), str::to_owned);
-                if let Some(u) = self.upstreams.get(&machine) {
-                    let _ = u.client.send(ClientMsg::ChatUnsubscribe { chat: there });
-                }
-            }
-            ClientMsg::ChatSubscribe { chat } => {
-                let task = tokio::spawn(stream_chat_live(
-                    Arc::clone(&self.daemon),
-                    chat.clone(),
-                    self.out.clone(),
-                ));
-                self.chats.insert(chat, Aborting(task));
-            }
-            ClientMsg::ChatUnsubscribe { chat } => {
-                self.chats.remove(&chat);
-            }
+            ClientMsg::ChatSubscribe { chat } => self.chat_subscribe(chat).await,
+            ClientMsg::ChatUnsubscribe { chat } => self.chat_unsubscribe(chat).await,
             ClientMsg::Ack { session, seq } => {
                 if let Some(sub) = self.subs.get(&session) {
                     sub.acks.send_modify(|a| *a = (*a).max(seq));
@@ -549,6 +509,95 @@ impl Conn {
 
     /// Say `msg` to `machine` over this client's own connection to it (made the first time; one
     /// fresh one if it went away). Frames and transcripts come back through `relay_upstream`.
+    /// Another machine's chat this client may follow (SPEC §22.11): named with its machine, by
+    /// its id, or by a handle only that machine has. `None`: one of this machine's.
+    async fn remote_chat(
+        &self,
+        chat: &str,
+    ) -> Option<(String, String, ptyro_core::model::MachineTransport, bool)> {
+        if self.link {
+            return None;
+        }
+        if let Some(r) = self.daemon.machine_of_chat(chat, false) {
+            return Some(r);
+        }
+        // A handle: ours first.
+        match self.daemon.find_chat(chat).await {
+            Err(e) if e.code == ptyro_core::ErrorCode::NotFound => {
+                self.daemon.machine_of_chat(chat, true)
+            }
+            _ => None,
+        }
+    }
+
+    /// Follow a chat. Kept by its full id (`laptop2:<id>` for another machine's), so any of its
+    /// addresses stops it.
+    async fn chat_subscribe(&mut self, chat: String) {
+        // Another machine's chat (SPEC §22.11): followed over this client's own upstream to it,
+        // as screens are; its engine runs there.
+        if let Some((machine, there, transport, online)) = self.remote_chat(&chat).await {
+            // Kept even while it is down: an unsubscribe goes to it, and the client follows
+            // again when it is back (the machine's update says so).
+            self.remote_chats.insert(format!("{machine}:{there}"), machine.clone());
+            if !online {
+                let since = self.daemon.offline_since(&machine);
+                let text = format!(
+                    "{machine} is offline{since}; this chat opens when it is back (it reconnects by itself)"
+                );
+                let item = ptyro_core::chat::ChatItem::new(
+                    "offline",
+                    ptyro_core::chat::ChatBody::Notice {
+                        level: ptyro_core::chat::NoticeLevel::Warn,
+                        text,
+                    },
+                );
+                let msg = ServerMsg::ChatLive {
+                    chat,
+                    rev: 0,
+                    reset: true,
+                    items: vec![item],
+                    siblings: Vec::new(),
+                };
+                let _ = self.out.send(msg).await;
+                return;
+            }
+            self.send_upstream(&machine, &transport, ClientMsg::ChatSubscribe { chat: there })
+                .await;
+            return;
+        }
+        // (One that can't be found says why in the stream, kept by what was typed.)
+        let key = self.daemon.find_chat(&chat).await.map_or_else(|_| chat.clone(), |c| c.id);
+        let task =
+            tokio::spawn(stream_chat_live(Arc::clone(&self.daemon), key.clone(), self.out.clone()));
+        self.chats.insert(key, Aborting(task));
+    }
+
+    async fn chat_unsubscribe(&mut self, chat: String) {
+        if self.chats.remove(&chat).is_some() || self.remote_chats.contains_key(&chat) {
+            if let Some(machine) = self.remote_chats.remove(&chat) {
+                self.unsubscribe_remote_chat(&machine, &chat);
+            }
+            return;
+        }
+        if let Some((machine, there, _, _)) = self.remote_chat(&chat).await {
+            let key = format!("{machine}:{there}");
+            if self.remote_chats.remove(&key).is_some() {
+                self.unsubscribe_remote_chat(&machine, &key);
+            }
+            return;
+        }
+        if let Ok(c) = self.daemon.find_chat(&chat).await {
+            self.chats.remove(&c.id);
+        }
+    }
+
+    fn unsubscribe_remote_chat(&self, machine: &str, key: &str) {
+        let there = key.strip_prefix(&format!("{machine}:")).unwrap_or(key).to_owned();
+        if let Some(u) = self.upstreams.get(machine) {
+            let _ = u.client.send(ClientMsg::ChatUnsubscribe { chat: there });
+        }
+    }
+
     async fn send_upstream(
         &mut self,
         machine: &str,
@@ -778,9 +827,10 @@ async fn stream_chat_live(daemon: Arc<Daemon>, chat: String, out: mpsc::Sender<S
         if reset || !items.is_empty() {
             // With a reset, where the branch has others (the client's ‹ 2/3 ›).
             let siblings = if reset { live.siblings.locked().clone() } else { Vec::new() };
-            let msg = ServerMsg::ChatLive { chat: live.id.clone(), rev, reset, items, siblings };
-            if out.send(msg).await.is_err() {
-                return;
+            for msg in live_frames(&live.id, rev, reset, items, siblings) {
+                if out.send(msg).await.is_err() {
+                    return;
+                }
             }
         }
         epoch = now;
@@ -792,6 +842,49 @@ async fn stream_chat_live(daemon: Arc<Daemon>, chat: String, out: mpsc::Sender<S
         // Streamed text arrives in many small pieces: send them a few at a time.
         tokio::time::sleep(Duration::from_millis(30)).await;
     }
+}
+
+/// A chat's items as `ChatLive` frames that each fit in a frame (a long chat's branch is more
+/// than one holds, and a frame too big is dropped): the first carries `reset` and the siblings,
+/// the rest carry on from it. A tool's output too big for a frame by itself is cut.
+fn live_frames(
+    chat: &str,
+    rev: u64,
+    reset: bool,
+    items: Vec<ptyro_core::chat::ChatItem>,
+    siblings: Vec<ptyro_core::chats::ChatSiblings>,
+) -> Vec<ServerMsg> {
+    const BUDGET: usize = ptyro_protocol::MAX_FRAME / 2;
+    let size = |i: &ptyro_core::chat::ChatItem| serde_json::to_vec(i).map_or(0, |v| v.len());
+    let mut frames: Vec<Vec<ptyro_core::chat::ChatItem>> = vec![Vec::new()];
+    let mut used = 0;
+    for mut it in items {
+        let mut n = size(&it);
+        if n > BUDGET
+            && let ptyro_core::chat::ChatBody::Tool { output: Some(o), .. } = &mut it.body
+        {
+            *o = ptyro_core::chats::clip(o, BUDGET / 2);
+            n = size(&it);
+        }
+        if used + n > BUDGET && frames.last().is_some_and(|f| !f.is_empty()) {
+            frames.push(Vec::new());
+            used = 0;
+        }
+        used += n;
+        frames.last_mut().expect("one frame").push(it);
+    }
+    let mut siblings = Some(siblings);
+    frames
+        .into_iter()
+        .enumerate()
+        .map(|(i, items)| ServerMsg::ChatLive {
+            chat: chat.to_owned(),
+            rev,
+            reset: reset && i == 0,
+            items,
+            siblings: if i == 0 { siblings.take().unwrap_or_default() } else { Vec::new() },
+        })
+        .collect()
 }
 
 /// What another machine sends this client over its upstream: the frames and transcripts it
@@ -904,5 +997,58 @@ async fn forward_events(
         if wanted && allowed && out.send(ServerMsg::Event { event }).await.is_err() {
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_long_chat_is_sent_in_frames_that_fit() {
+        use ptyro_core::chat::{ChatBody, ChatItem, ToolStatus};
+        let big = "x".repeat(ptyro_protocol::MAX_FRAME / 5);
+        let mut items: Vec<ChatItem> = (0..6)
+            .map(|i| {
+                ChatItem::new(
+                    format!("a{i}"),
+                    ChatBody::Assistant { text: big.clone(), streaming: false },
+                )
+            })
+            .collect();
+        let tool = ChatBody::Tool {
+            name: "Bash".into(),
+            title: "cat huge".into(),
+            status: ToolStatus::Done,
+            output: Some("y".repeat(ptyro_protocol::MAX_FRAME)),
+            diff: None,
+            files: Vec::new(),
+        };
+        items.push(ChatItem::new("t", tool));
+        let frames = live_frames("c1", 7, true, items, Vec::new());
+        assert!(frames.len() >= 4, "{}", frames.len());
+        let mut ids = Vec::new();
+        for (i, f) in frames.iter().enumerate() {
+            let ServerMsg::ChatLive { reset, items, rev, .. } = f else { panic!() };
+            assert_eq!((*reset, *rev), (i == 0, 7));
+            let bytes = ptyro_protocol::encode(f, ptyro_protocol::Encoding::Json).unwrap();
+            assert!(bytes.len() <= ptyro_protocol::MAX_FRAME, "frame {i}: {}", bytes.len());
+            ids.extend(items.iter().map(|i| i.id.clone()));
+        }
+        assert_eq!(ids, ["a0", "a1", "a2", "a3", "a4", "a5", "t"], "every item, in order");
+        // A small one is one frame, as before.
+        let one = live_frames(
+            "c1",
+            1,
+            true,
+            vec![ChatItem::new("n", ChatBody::User { text: "hi".into() })],
+            Vec::new(),
+        );
+        assert_eq!(one.len(), 1);
+        assert_eq!(
+            live_frames("c1", 1, true, Vec::new(), Vec::new()).len(),
+            1,
+            "an empty reset still resets"
+        );
     }
 }

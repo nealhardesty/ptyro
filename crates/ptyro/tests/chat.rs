@@ -329,7 +329,8 @@ fn chats_switched_off_say_how_to_switch_them_on() {
     let w = World::new("enabled = false");
     let out = w.cli(&["chat", "ls"]);
     assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("chat.enabled true"));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("switch them on in the settings (chat → enabled)"), "{err}");
 }
 
 #[test]

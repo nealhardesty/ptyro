@@ -1366,7 +1366,12 @@ impl App {
                     }
                     None => self.request(
                         Pending::ChatOpenAt(node, self.chat_shown_key()),
-                        Request::ChatRead { chat: chat.to_owned(), all: false },
+                        Request::ChatRead {
+                            chat: chat.to_owned(),
+                            all: false,
+                            from: None,
+                            limit: None,
+                        },
                     ),
                 }
             }
@@ -1662,7 +1667,8 @@ impl App {
         if let Some(ChatPanel::List(l)) = &mut self.chat_panel {
             l.preview = Some((id.clone(), Vec::new()));
         }
-        self.request(Pending::ChatPreview(id.clone()), Request::ChatRead { chat: id, all: false });
+        let req = Request::ChatRead { chat: id.clone(), all: false, from: None, limit: None };
+        self.request(Pending::ChatPreview(id), req);
     }
 
     /// A chat's transcript for the list's preview: its last question and answer.

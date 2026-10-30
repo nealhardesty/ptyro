@@ -255,6 +255,13 @@ fn histories_become_searchable_read_only_chats() {
     let fork_addr = format!("c:{}", fork["handle"].as_str().unwrap());
     let shown = w.ok(&["chat", "show", &fork_addr]);
     assert!(shown.contains("lunchbox") && shown.contains("continued as a fork"), "{shown}");
+    // The next message to the import carries on in that fork, not in another.
+    w.ok(&["chat", "send", &addr, "and a second?"]);
+    let forks = w.json(&["chat", "ls", "--json"]);
+    let forks: Vec<&Value> =
+        forks.as_array().unwrap().iter().filter(|c| c["forked"] == true).collect();
+    assert_eq!(forks.len(), 1, "{forks:?}");
+    assert!(w.ok(&["chat", "show", &fork_addr]).contains("and a second?"));
     // A chat you delete stays deleted, whatever the next import finds.
     w.ok(&["chat", "rm", &format!("c:{}", w.by_source("gemini:")["handle"].as_str().unwrap())]);
     let after = w.json(&["chat", "import", "--json"]);

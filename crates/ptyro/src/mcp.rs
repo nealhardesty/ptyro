@@ -112,8 +112,14 @@ async fn chat_call(client: &Client, name: &str, a: &Value) -> Result<Value, Erro
                 None => (chat.clone(), None),
             };
             let around = a["around"].as_u64().unwrap_or(6).min(40) as usize;
-            let Reply::ChatTranscript { info, nodes, .. } =
-                client.request(Request::ChatRead { chat: c, all: node.is_some() }).await?
+            let Reply::ChatTranscript { info, nodes, .. } = client
+                .request(Request::ChatRead {
+                    chat: c,
+                    all: node.is_some(),
+                    from: None,
+                    limit: None,
+                })
+                .await?
             else {
                 return Err(Error::internal("unexpected reply"));
             };

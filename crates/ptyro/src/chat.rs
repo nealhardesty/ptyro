@@ -605,13 +605,20 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, plain: NewArgs) -> Result<i32,
         ChatCmd::Send { chat, text, no_wait, timeout, json } => {
             let c = ctx.connect(true).await?;
             // What was there before: the answer is what follows this message, not an earlier one.
-            let (asked, known): (String, HashSet<String>) =
-                match c.request(Request::ChatRead { chat: chat.clone(), all: true }).await? {
-                    Reply::ChatTranscript { info, nodes, .. } => {
-                        (info.id, nodes.into_iter().map(|n| n.id).collect())
-                    }
-                    r => return Err(unexpected(r)),
-                };
+            let (asked, known): (String, HashSet<String>) = match c
+                .request(Request::ChatRead {
+                    chat: chat.clone(),
+                    all: true,
+                    from: None,
+                    limit: None,
+                })
+                .await?
+            {
+                Reply::ChatTranscript { info, nodes, .. } => {
+                    (info.id, nodes.into_iter().map(|n| n.id).collect())
+                }
+                r => return Err(unexpected(r)),
+            };
             let info = chat_of(c.request(Request::ChatSend { chat, text: text.join(" ") }).await?)?;
             // An imported chat carries on as a fork: the answer is the fork's last message's.
             let forked = info.id != asked;
@@ -780,7 +787,10 @@ async fn confirmed(c: &ptyro_client::Client, req: Request, yes: bool) -> Result<
 
 /// Why a new chat's compare didn't start: the notice it left, with the chat it made.
 async fn compare_refusal(c: &ptyro_client::Client, info: &ChatInfo) -> String {
-    let why = match c.request(Request::ChatRead { chat: info.id.clone(), all: true }).await {
+    let why = match c
+        .request(Request::ChatRead { chat: info.id.clone(), all: true, from: None, limit: None })
+        .await
+    {
         Ok(Reply::ChatTranscript { nodes, .. }) => {
             nodes.into_iter().rev().find_map(|n| match n.body {
                 ChatBody::Notice { text, .. } => Some(text),
@@ -987,7 +997,15 @@ struct Answered {
 /// `chat compare --json`'s shape (one answer, by the chat's agent; none when it wasn't waited for).
 async fn print_answer(ctx: &Ctx, info: &ChatInfo, a: &Answered) {
     let now = match ctx.connect(false).await {
-        Ok(c) => match c.request(Request::ChatRead { chat: info.id.clone(), all: false }).await {
+        Ok(c) => match c
+            .request(Request::ChatRead {
+                chat: info.id.clone(),
+                all: false,
+                from: None,
+                limit: None,
+            })
+            .await
+        {
             Ok(Reply::ChatTranscript { info, .. }) => info,
             _ => info.clone(),
         },
@@ -1057,7 +1075,10 @@ async fn follow(
 
 /// Every node a chat has now (so what comes next is told apart).
 async fn known_nodes(c: &ptyro_client::Client, chat: &str) -> Result<HashSet<String>, Error> {
-    match c.request(Request::ChatRead { chat: chat.to_owned(), all: true }).await? {
+    match c
+        .request(Request::ChatRead { chat: chat.to_owned(), all: true, from: None, limit: None })
+        .await?
+    {
         Reply::ChatTranscript { nodes, .. } => Ok(nodes.into_iter().map(|n| n.id).collect()),
         r => Err(unexpected(r)),
     }
@@ -1308,10 +1329,11 @@ async fn show(
     format: &str,
 ) -> Result<i32, Error> {
     let c = ctx.connect(true).await?;
-    let (info, nodes, siblings) = match c.request(Request::ChatRead { chat, all }).await? {
-        Reply::ChatTranscript { info, nodes, siblings } => (info, nodes, siblings),
-        r => return Err(unexpected(r)),
-    };
+    let (info, nodes, siblings) =
+        match c.request(Request::ChatRead { chat, all, from: None, limit: None }).await? {
+            Reply::ChatTranscript { info, nodes, siblings } => (info, nodes, siblings),
+            r => return Err(unexpected(r)),
+        };
     match format {
         "json" => println!(
             "{}",
@@ -1430,7 +1452,15 @@ async fn compare_wait(
             ));
         }
         tokio::time::sleep(Duration::from_millis(400)).await;
-        match c.request(Request::ChatRead { chat: info.id.clone(), all: false }).await? {
+        match c
+            .request(Request::ChatRead {
+                chat: info.id.clone(),
+                all: false,
+                from: None,
+                limit: None,
+            })
+            .await?
+        {
             Reply::ChatTranscript { info: now, .. } => match now.comparing {
                 Some(x) => last = x,
                 // Over: how each ended is in the notice it left (read below).
@@ -1439,11 +1469,13 @@ async fn compare_wait(
             r => return Err(unexpected(r)),
         }
     }
-    let (now, nodes, siblings) =
-        match c.request(Request::ChatRead { chat: info.id.clone(), all: true }).await? {
-            Reply::ChatTranscript { info, nodes, siblings } => (info, nodes, siblings),
-            r => return Err(unexpected(r)),
-        };
+    let (now, nodes, siblings) = match c
+        .request(Request::ChatRead { chat: info.id.clone(), all: true, from: None, limit: None })
+        .await?
+    {
+        Reply::ChatTranscript { info, nodes, siblings } => (info, nodes, siblings),
+        r => return Err(unexpected(r)),
+    };
     // The outcome, as the notice under the shown answer says it: `compared: claude ✓ · codex ✗
     // why`, for the agents last seen still asking.
     if let Some(ChatBody::Notice { text, .. }) = nodes
@@ -1785,7 +1817,9 @@ fn meaning_on(ctx: &Ctx, e: Error) -> Result<i32, Error> {
 async fn open(ctx: &Ctx, chat: &str) -> Result<i32, Error> {
     crate::cli::check_attachable()?;
     let c = ctx.connect(true).await?;
-    let (info, _) = match c.request(Request::ChatRead { chat: chat.to_owned(), all: false }).await?
+    let (info, _) = match c
+        .request(Request::ChatRead { chat: chat.to_owned(), all: false, from: None, limit: None })
+        .await?
     {
         Reply::ChatTranscript { info, nodes, .. } => (info, nodes),
         r => return Err(unexpected(r)),
