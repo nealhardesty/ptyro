@@ -106,7 +106,10 @@ async fn new_chat(c: &Client, workspace: Option<&str>, prompt: &str) -> ChatInfo
 }
 
 async fn answers(c: &Client, chat: &str) -> Vec<String> {
-    match c.request(Request::ChatRead { chat: chat.into(), all: false }).await {
+    match c
+        .request(Request::ChatRead { chat: chat.into(), all: false, from: None, limit: None })
+        .await
+    {
         Ok(Reply::ChatTranscript { nodes, .. }) => nodes
             .into_iter()
             .filter_map(|n| match n.body {
@@ -192,7 +195,10 @@ async fn another_machines_chats_are_listed_used_and_made_from_here() {
     // By its address with the machine, and by its handle alone (only laptop2 has it).
     let addr = format!("laptop2:c:{}", theirs.handle);
     for a in [addr.as_str(), theirs.handle.as_str()] {
-        let r = here.request(Request::ChatRead { chat: a.into(), all: false }).await.unwrap();
+        let r = here
+            .request(Request::ChatRead { chat: a.into(), all: false, from: None, limit: None })
+            .await
+            .unwrap();
         assert!(matches!(r, Reply::ChatTranscript { info, .. } if info.id == theirs.id), "{a}");
     }
 

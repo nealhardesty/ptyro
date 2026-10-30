@@ -1172,6 +1172,22 @@ impl ChatDb {
         .await
     }
 
+    /// The newest fork of `chat` that is kept and not archived (not a side chat).
+    pub async fn newest_fork(&self, chat: String) -> Result<Option<String>> {
+        self.call(move |db| {
+            Ok(db
+                .query_row(
+                    "SELECT id FROM chat WHERE forked_from_chat = ?1 AND deleted_at IS NULL
+                       AND archived_at IS NULL AND side_of IS NULL
+                     ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                    [chat],
+                    |r| r.get(0),
+                )
+                .optional()?)
+        })
+        .await
+    }
+
     /// Keep a side chat: it becomes an ordinary fork, listed with the others.
     pub async fn keep_side(&self, id: String) -> Result<()> {
         self.update(id, "side_of = ?2", Option::<String>::None).await
@@ -1908,6 +1924,7 @@ mod tests {
         let path = db.branch("c1".into(), Some("a1".into())).await.unwrap();
         let map = db.copy_branch("c2".into(), path, false).await.unwrap();
         assert_eq!(map.len(), 2);
+        assert_eq!(db.newest_fork("c1".into()).await.unwrap().as_deref(), Some("c2"));
         let copied = db.branch("c2".into(), None).await.unwrap();
         assert_eq!(copied[1].parent.as_deref(), Some(copied[0].id.as_str()));
         assert!(copied.iter().all(|n| n.id != "u1" && n.id != "a1"));
@@ -2050,6 +2067,8 @@ mod tests {
         db.copy_branch("c2".into(), path, false).await.unwrap();
         let copy = db.branch("c2".into(), None).await.unwrap();
         assert_eq!(copy[1].body, ChatBody::Assistant { text: "Hel".into(), streaming: false });
+        // (Made without a source: not a fork of c1.)
+        assert_eq!(db.newest_fork("c1".into()).await.unwrap(), None);
     }
 
     #[tokio::test]

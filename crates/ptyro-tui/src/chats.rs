@@ -817,7 +817,12 @@ impl App {
                     }
                     None => self.request(
                         Pending::ChatOpenAt(node),
-                        Request::ChatRead { chat: chat.to_owned(), all: false },
+                        Request::ChatRead {
+                            chat: chat.to_owned(),
+                            all: false,
+                            from: None,
+                            limit: None,
+                        },
                     ),
                 }
             }

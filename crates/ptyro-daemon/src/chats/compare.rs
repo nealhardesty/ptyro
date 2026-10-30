@@ -88,21 +88,36 @@ impl Daemon {
     /// each name resolved as a chat's agent is, a bare name under the chat's own profile, each
     /// agent and profile once (SPEC §22.7). A name under another profile is asked about first
     /// (`confirmed`): the branch would go to that profile's account, and that agent's history
-    /// tools search that profile's chats.
+    /// tools search that profile's chats. A known agent that can't answer here (not installed,
+    /// no structured mode) is the second list's, with why: it is `✗` in the compare, and the
+    /// others go on; a name no agent has is refused.
+    #[allow(clippy::type_complexity)]
     pub(super) fn compare_who(
         &self,
         own: (&str, &str),
         ws: &str,
         asked: &[String],
         confirmed: bool,
-    ) -> Result<Vec<(String, String)>, Error> {
+    ) -> Result<(Vec<(String, String)>, Vec<(String, String)>), Error> {
         let mut who: Vec<(String, String)> = Vec::new();
+        let mut cant: Vec<(String, String)> = Vec::new();
         for a in asked.iter().flat_map(|a| a.split(',')).map(str::trim).filter(|a| !a.is_empty()) {
-            let name = match ptyro_agents::split_agent(a) {
-                (n, None) => format!("{n}@{}", own.1),
-                _ => a.to_owned(),
+            let (n, p) = ptyro_agents::split_agent(a);
+            let name = match p {
+                None => format!("{n}@{}", own.1),
+                Some(_) => a.to_owned(),
             };
-            let (agent, profile) = self.chat_agent(Some(&name), ws)?;
+            let (agent, profile) = match self.chat_agent(Some(&name), ws) {
+                Ok(found) => found,
+                Err(e) if ptyro_agents::command(&self.config(), n).is_some() => {
+                    let label = chats::agent_label(n, p.unwrap_or(own.1));
+                    if !cant.iter().any(|(l, _)| *l == label) {
+                        cant.push((label, chats::clip(&e.message, 80)));
+                    }
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
             if !who.iter().any(|w| *w == (agent.clone(), profile.clone())) {
                 who.push((agent, profile));
             }
@@ -120,7 +135,7 @@ impl Daemon {
                 ),
             ));
         }
-        Ok(who)
+        Ok((who, cant))
     }
 
     /// Ask `agents` the message `text` (a new one), or the last one again (SPEC §22.7).
@@ -148,7 +163,8 @@ impl Daemon {
         let ws = self.workspace_name(&info.workspace);
         // Who: as asked, else every installed one; a bare name under the chat's profile.
         let asked = if agents.is_empty() { self.compare_defaults(info) } else { agents };
-        let mut who = self.compare_who((&info.agent, &info.profile), &ws, &asked, confirmed)?;
+        let (mut who, cant) =
+            self.compare_who((&info.agent, &info.profile), &ws, &asked, confirmed)?;
         let branch = self.rec_branch(&info.id, None).await?;
         if live.items.locked().items.is_empty() && !branch.is_empty() {
             self.reload_branch(&live).await;
@@ -184,13 +200,13 @@ impl Daemon {
                 .collect();
             let all = who.len();
             who.retain(|(a, p)| !answered.contains(&chats::agent_label(a, p)));
-            if who.is_empty() {
+            if who.is_empty() && cant.is_empty() {
                 return Err(Error::invalid(format!(
                     "{} answered it already: name others (--agents), or /retry asks one again",
                     if all == 1 { "that agent" } else { "every one of them" }
                 )));
             }
-        } else if who.len() < 2 {
+        } else if who.len() + cant.len() < 2 {
             return Err(Error::invalid(
                 "a compare needs two agents or more: name them (--agents claude,codex), or install another",
             ));
@@ -206,6 +222,11 @@ impl Daemon {
                         state: "asking".into(),
                         note: String::new(),
                     })
+                    .chain(cant.iter().map(|(label, why)| CompareAgent {
+                        agent: label.clone(),
+                        state: "failed".into(),
+                        note: why.clone(),
+                    }))
                     .collect(),
             }),
             helpers: Mutex::new(Vec::new()),
@@ -230,18 +251,22 @@ impl Daemon {
         // The chat's own agent, in its own conversation (a new message continues it).
         if let Some(i) = own {
             let label = chats::agent_label(&who[i].0, &who[i].1);
-            let started = match (fresh, live.engine()) {
-                (true, Some(e)) => {
-                    let conv = db.current_conv(info.id.clone()).await.map_err(store_err)?;
-                    let seen = conv.and_then(|c| c.node).or_else(|| live.given.locked().clone());
-                    let unseen = super::unseen_since(&branch, seen.as_deref());
+            // Carrying on where its engine knows this branch; else a new one, seeded.
+            let unseen = match (fresh, live.engine()) {
+                (true, Some(_)) => self.unseen_by_engine(&live, info, &branch).await?,
+                _ => None,
+            };
+            let started = match (unseen, live.engine()) {
+                (Some(unseen), Some(e)) => {
                     let t = text.clone().unwrap_or_default();
-                    if let Some(st) = &e.session.structured {
-                        st.prompt(super::with_seed(&unseen, &t, self.config().chat.seed_tokens));
-                    }
+                    let seeded = super::with_seed(&unseen, &t, self.config().chat.seed_tokens);
+                    live.prompt(&e.session, seeded);
                     Ok(())
                 }
-                _ => self.start_engine(&live, info, &before, &user).await,
+                _ => {
+                    self.stop_chat_engine(&info.id).await;
+                    self.start_engine(&live, info, &before, &user).await
+                }
             };
             match started {
                 Ok(()) => self.watch_own(&live, &cmp, label, user.id.clone()),
@@ -673,7 +698,9 @@ fn helper_answer(live: &Live, user: &str) -> Vec<ChatNode> {
         .skip_while(|i| i.id != user)
         .skip(1)
         .filter(|i| match &i.body {
-            ChatBody::Notice { level, .. } => *level == NoticeLevel::Error,
+            // What it said went wrong, and what the person should know of it (OpenCode keeps
+            // its own copy); not ptyro's own info.
+            ChatBody::Notice { level, .. } => *level != NoticeLevel::Info,
             ChatBody::Assistant { text, .. } => !text.trim().is_empty(),
             _ => true,
         })

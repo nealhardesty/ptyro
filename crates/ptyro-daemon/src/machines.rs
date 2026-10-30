@@ -1076,20 +1076,45 @@ impl Daemon {
 
     /// The machine a chat lives on, when it is a mirrored one: by `laptop2:` on its address, or
     /// by its id → (machine, the chat's address there, its transport, online).
+    /// `handles`: a bare handle (`7f3k`, `c:7f3k`) counts too, when exactly one machine's
+    /// mirror has it (the caller has looked here first). The chat comes back as its full id
+    /// where the mirror knows it.
     pub(crate) fn machine_of_chat(
         &self,
         chat: &str,
+        handles: bool,
     ) -> Option<(String, String, MachineTransport, bool)> {
         let links = self.links.locked();
+        // A handle or id in one machine's mirror, as its full id.
+        let full = |l: &Link, a: &str| {
+            let h = a.strip_prefix("c:").unwrap_or(a);
+            l.mirror.chats.iter().find(|c| c.id == a || c.handle == h).map(|c| c.id.clone())
+        };
         let found = split_machine(chat)
             .filter(|(m, _)| links.contains_key(*m))
-            .map(|(m, rest)| (m.to_owned(), rest.to_owned()))
+            .map(|(m, rest)| {
+                let id = links.get(m).and_then(|l| full(l, rest));
+                (m.to_owned(), id.unwrap_or_else(|| rest.to_owned()))
+            })
             .or_else(|| {
                 links.iter().find_map(|(m, l)| {
                     let mine = l.mirror.chats.iter().any(|c| c.id == chat)
                         || l.mirror.archived.contains(chat);
                     mine.then(|| (m.clone(), chat.to_owned()))
                 })
+            })
+            .or_else(|| {
+                if !handles {
+                    return None;
+                }
+                let hits: Vec<(String, String)> = links
+                    .iter()
+                    .filter_map(|(m, l)| full(l, chat).map(|id| (m.clone(), id)))
+                    .collect();
+                match hits.as_slice() {
+                    [one] => Some(one.clone()),
+                    _ => None,
+                }
             })?;
         let l = links.get(&found.0)?;
         Some((found.0, found.1, l.record.transport.clone(), l.info.state == MachineState::Online))

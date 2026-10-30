@@ -43,6 +43,8 @@ pub(crate) mod import;
 /// conversation with `--fork-session`, leaving it as it was.
 const FORK_PENDING: &str = "fork_pending";
 
+/// How long an incognito chat whose agent has gone outlives its last reader (a reload).
+const INCOGNITO_GRACE: Duration = Duration::from_secs(10);
 /// How long an agent asked to stop has to stop before it is ended.
 const STOP_GRACE: Duration = Duration::from_secs(10);
 /// How long an agent may take to start (an ACP agent that never answers `initialize`).
@@ -99,6 +101,9 @@ pub(crate) struct Live {
     pub siblings: Mutex<Vec<ChatSiblings>>,
     /// The last node its engine was given (for a chat with no conv row: an incognito one).
     given: Mutex<Option<String>>,
+    /// The engine given a message, and how many turns it had ended then: busy until it ends
+    /// another (its status says idle until its driver begins the turn).
+    prompted: Mutex<Option<(SessionId, usize)>>,
 }
 
 #[derive(Clone)]
@@ -115,6 +120,29 @@ impl Live {
     fn engine(&self) -> Option<Engine> {
         self.engine.locked().clone().filter(|e| e.session.is_live())
     }
+
+    /// Given a message it hasn't ended a turn for yet (its status still says idle until its
+    /// driver begins the turn).
+    fn given_unbegun(&self, session: &Session) -> bool {
+        self.prompted
+            .locked()
+            .is_some_and(|(s, ends)| s == session.id && turns_ended(session) == ends)
+    }
+
+    /// Give the engine a message (with the send lock held).
+    fn prompt(&self, session: &Session, text: String) {
+        if let Some(st) = &session.structured {
+            *self.prompted.locked() = Some((session.id, turns_ended(session)));
+            st.prompt(text);
+        }
+    }
+}
+
+/// How many turns an engine has ended so far.
+fn turns_ended(s: &Session) -> usize {
+    s.structured.as_ref().map_or(0, |st| {
+        st.chat.locked().items.iter().filter(|i| matches!(i.body, ChatBody::TurnEnd { .. })).count()
+    })
 }
 
 impl Chats {
@@ -159,6 +187,7 @@ impl Chats {
                 stopping: std::sync::atomic::AtomicBool::new(false),
                 siblings: Mutex::new(Vec::new()),
                 given: Mutex::new(None),
+                prompted: Mutex::new(None),
             })
         }))
     }
@@ -425,7 +454,8 @@ impl Daemon {
         let gone = self.chats.incognito.locked().remove(id);
         if let Some(info) = gone {
             self.chats.live.locked().remove(id);
-            self.chats.drop_lock(id, 1);
+            // (A caller may hold it: it ends with the chat either way.)
+            self.chats.drop_lock(id, 2);
             self.remove_chat_dirs(id, Some((&info.agent, &info.profile))).await;
             // A compare's helper was never listed: nobody is told it went.
             if self.chats.helpers.locked().remove(id).is_none() {
@@ -438,15 +468,21 @@ impl Daemon {
     async fn delete_chat(self: &Arc<Self>, info: &ChatInfo) -> Result<(), Error> {
         // A compare under way stops with it (its answers have nowhere to go).
         self.stop_compare(&info.id);
+        // After a message being sent: the engine it starts is stopped here, and one waiting to
+        // be sent finds no chat.
+        let lock = self.chats.lock_for(&info.id);
+        let one = lock.lock().await;
         self.stop_chat_engine(&info.id).await;
         if info.incognito {
+            drop(one);
             self.end_incognito(&info.id).await;
             return Ok(());
         }
         self.chat_db()?.delete(info.id.clone()).await.map_err(store_err)?;
+        drop(one);
         self.remove_chat_files(info).await;
         self.chats.live.locked().remove(&info.id);
-        self.chats.drop_lock(&info.id, 1);
+        self.chats.drop_lock(&info.id, 2);
         let _ = self.events.send(DomainEvent::ChatRemoved { id: info.id.clone(), machine: None });
         Ok(())
     }
@@ -721,7 +757,8 @@ impl Daemon {
                     let ws = self.find_workspace(&ws)?.name;
                     let (a, p) = self.chat_agent(agent.as_deref(), &ws)?;
                     // Counted once each (`claude,claude` is one agent).
-                    if self.compare_who((&a, &p), &ws, &compare, confirmed)?.len() < 2 {
+                    let (who, cant) = self.compare_who((&a, &p), &ws, &compare, confirmed)?;
+                    if who.len() + cant.len() < 2 {
                         return Err(Error::invalid(
                             "a compare needs two different agents or more (claude,codex)",
                         ));
@@ -789,13 +826,19 @@ impl Daemon {
                     .collect();
                 Ok(Reply::Chats { chats })
             }
-            Request::ChatRead { chat, all } => {
+            Request::ChatRead { chat, all, from, limit } => {
                 let info = self.find_scoped(&chat, scope.as_ref()).await?;
                 let nodes = if all && !info.incognito {
                     self.chat_db()?.nodes(info.id.clone()).await.map_err(store_err)?
                 } else {
                     self.rec_branch(&info.id, None).await?
                 };
+                // A part of them (a chat too big for one reply).
+                let nodes: Vec<ChatNode> = nodes
+                    .into_iter()
+                    .skip(from.unwrap_or(0) as usize)
+                    .take(limit.map_or(usize::MAX, |l| l as usize))
+                    .collect();
                 let siblings = if info.incognito {
                     Vec::new()
                 } else {
@@ -900,6 +943,18 @@ impl Daemon {
                         "{p:?} isn't a preset ({})",
                         self.config().chat.presets().join(", ")
                     )));
+                }
+                // A new agent, preset or folders means a new engine: not mid-answer (as a retry
+                // isn't), and not while a message is starting one (it would keep the old agent).
+                let switching = agent.is_some() || preset.is_some() || folders.is_some();
+                let lock = self.chats.lock_for(&info.id);
+                let _one = match switching {
+                    true => Some(lock.lock().await),
+                    false => None,
+                };
+                // (No live chat: no engine, and no compare.)
+                if switching && let Some(live) = self.chats.get_live(&info.id) {
+                    self.busy_check(&live, &info)?;
                 }
                 if info.incognito {
                     return self
@@ -1252,19 +1307,15 @@ impl Daemon {
         live.bump();
         if let Some(e) = live.engine() {
             // Carrying on: whatever it hasn't seen (none, usually) is folded into the prompt.
-            let conv = match info.incognito {
-                true => None,
-                false => self.chat_db()?.current_conv(id.to_owned()).await.map_err(store_err)?,
-            };
-            let seen =
-                conv.as_ref().and_then(|c| c.node.clone()).or_else(|| live.given.locked().clone());
-            let unseen = unseen_since(&branch, seen.as_deref());
-            let prompt = with_seed(&unseen, &text, self.config().chat.seed_tokens);
-            if let Some(st) = &e.session.structured {
-                st.prompt(prompt);
+            if let Some(unseen) = self.unseen_by_engine(&live, &info, &branch).await? {
+                let prompt = with_seed(&unseen, &text, self.config().chat.seed_tokens);
+                live.prompt(&e.session, prompt);
+                self.chat_changed(id).await;
+                return Ok(());
             }
-            self.chat_changed(id).await;
-            return Ok(());
+            // It knows another branch (a compare showed another agent's answer): the message
+            // goes to a new engine, seeded with this one.
+            self.stop_chat_engine(id).await;
         }
         let started = self.start_engine(&live, &info, &branch, &user).await;
         if let Err(e) = &started {
@@ -1272,6 +1323,26 @@ impl Daemon {
         }
         self.chat_changed(id).await;
         started
+    }
+
+    /// What of `branch` a live engine hasn't seen: after the last node it was given. `None`:
+    /// that node isn't on `branch` (the engine knows another branch).
+    async fn unseen_by_engine(
+        &self,
+        live: &Live,
+        info: &ChatInfo,
+        branch: &[ChatNode],
+    ) -> Result<Option<Vec<ChatNode>>, Error> {
+        let conv = match info.incognito {
+            true => None,
+            false => self.chat_db()?.current_conv(info.id.clone()).await.map_err(store_err)?,
+        };
+        let seen =
+            conv.as_ref().and_then(|c| c.node.clone()).or_else(|| live.given.locked().clone());
+        if seen.as_ref().is_some_and(|s| !branch.iter().any(|n| n.id == *s)) {
+            return Ok(None);
+        }
+        Ok(Some(unseen_since(branch, seen.as_deref())))
     }
 
     /// `find_chat`, as a chat's history tools see it: a chat outside `scope` (or the asking chat
@@ -1473,17 +1544,25 @@ impl Daemon {
             return Err(Error::new(
                 ErrorCode::Busy,
                 format!(
-                    "c:{} is comparing answers: wait for them, or stop it first (your message is kept)",
+                    "c:{} is comparing answers: wait for them, or stop it first",
                     chats::handle(&info.id, [info.id.as_str()])
                 ),
             ));
         }
         let Some(e) = live.engine() else { return Ok(()) };
+        let given = live.given_unbegun(&e.session);
         match e.session.status() {
             Some(AgentStatus::Working | AgentStatus::Starting) => Err(Error::new(
                 ErrorCode::Busy,
                 format!(
-                    "c:{} is still answering: wait for its answer, or stop it first (your message is kept)",
+                    "c:{} is still answering: wait for its answer, or stop it first",
+                    chats::handle(&info.id, [info.id.as_str()])
+                ),
+            )),
+            _ if given => Err(Error::new(
+                ErrorCode::Busy,
+                format!(
+                    "c:{} is still answering: wait for its answer, or stop it first",
                     chats::handle(&info.id, [info.id.as_str()])
                 ),
             )),
@@ -2048,7 +2127,14 @@ impl Daemon {
                 }),
             })
             .await?;
-        if info.incognito && adapter != "claude" && adapter != "codex" {
+        let helper = self.chats.helpers.locked().contains_key(&info.id);
+        if helper && adapter != "claude" && adapter != "codex" && adapter != "gemini" {
+            // A compare's answer (copied into the chat): ptyro removes the rest of its helper,
+            // but not this agent's own copy.
+            let what =
+                format!("{} may keep its own copy of this question and its answer", info.agent);
+            self.chat_notice(live, &info.id, NoticeLevel::Warn, &what).await;
+        } else if info.incognito && !helper && adapter != "claude" && adapter != "codex" {
             // Gemini's copy is in a folder named for the scratch folder: ptyro removes it
             // when the chat ends (`remove_chat_dirs`). Others' it can't find.
             let what = if adapter == "gemini" {
@@ -2102,9 +2188,7 @@ impl Daemon {
             Some((block, _)) => format!("{block}{text}"),
             None => text.clone(),
         };
-        if let Some(st) = &session.structured {
-            st.prompt(prompt);
-        }
+        live.prompt(&session, prompt);
         *live.given.locked() = Some(user.id.clone());
         // (A native fork that can't resume the source's conversation is seeded too.)
         let resumed = resume.is_some();
@@ -2304,7 +2388,7 @@ impl Daemon {
                 let working = matches!(
                     status.0,
                     Some(AgentStatus::Working | AgentStatus::Starting | AgentStatus::Blocked)
-                );
+                ) || live.given_unbegun(&session);
                 if working || !changed {
                     idle_since = Instant::now();
                 }
@@ -2407,10 +2491,12 @@ impl Daemon {
             // An incognito chat ends with its engine: when that ends of itself or goes idle. One
             // taken from this follower (a retry, an edit, another agent) is followed by the next
             // message's; the send lock waits out a retry that is starting it.
+            // One someone is reading stays, its agent asleep, until the last of them leaves
+            // (`chat_unfollow`): the next message starts another, seeded.
             if !keep && (was_ours || stopped) {
                 let lock = me.chats.lock_for(&chat);
                 let _one = lock.lock().await;
-                if live.engine().is_none() {
+                if live.engine().is_none() && live.viewers.load(Ordering::SeqCst) == 0 {
                     me.end_incognito(&chat).await;
                     return;
                 }
@@ -2461,7 +2547,9 @@ impl Daemon {
         tokio::spawn(async move {
             tokio::time::sleep(STOP_GRACE).await;
             let Some(e) = live.engine().filter(|e| e.session.id == session) else { return };
-            if !matches!(e.session.status(), Some(AgentStatus::Working | AgentStatus::Starting)) {
+            if !matches!(e.session.status(), Some(AgentStatus::Working | AgentStatus::Starting))
+                && !live.given_unbegun(&e.session)
+            {
                 return;
             }
             let agent = e.session.adapter().unwrap_or_else(|| "the agent".into());
@@ -2615,6 +2703,21 @@ impl Daemon {
         if live.viewers.fetch_sub(1, Ordering::SeqCst) == 1 {
             // The last one left: a side chat goes, unless someone comes back to it.
             self.drop_unfollowed_sides(Some(live.id.clone()));
+            // An incognito chat whose agent has gone ends, unless someone is back soon (a
+            // reload, a reconnect). One whose agent runs ends with it.
+            if self.incognito_of(&live.id).is_some()
+                && !self.chats.helpers.locked().contains_key(&live.id)
+            {
+                let (me, live) = (Arc::clone(self), Arc::clone(live));
+                tokio::spawn(async move {
+                    tokio::time::sleep(INCOGNITO_GRACE).await;
+                    let lock = me.chats.lock_for(&live.id);
+                    let _one = lock.lock().await;
+                    if live.viewers.load(Ordering::SeqCst) == 0 && live.engine().is_none() {
+                        me.end_incognito(&live.id).await;
+                    }
+                });
+            }
         }
         self.chats.settle(&live.id);
     }
