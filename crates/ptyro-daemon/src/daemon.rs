@@ -944,7 +944,10 @@ impl Daemon {
         let asked = federate.then(|| req.clone());
         let out = self.handle_here(req, caller).await;
         match (asked, out) {
-            (Some(req), Ok(reply)) => Ok(self.merge_mirrors(&req, reply)),
+            (Some(req), Ok(reply)) => {
+                let reply = self.archived_chats_too(&req, reply).await;
+                Ok(self.merge_mirrors(&req, reply))
+            }
             // Not here, but on exactly one of them: `fix-flaky-test` for laptop2's.
             (Some(req), Err(e)) if e.code == ErrorCode::NotFound => {
                 match self.machine_guess(&req)? {

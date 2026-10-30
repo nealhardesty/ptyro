@@ -14,12 +14,16 @@
 //!   the client's own (`conn.rs`).
 //! - **No echoes:** a link is answered with this machine's own things only, and its requests are
 //!   never routed on.
+//! - **Chats** (CHAT1.9, SPEC §22.11): a machine's chats are mirrored as `ChatInfo` (never a
+//!   transcript), listed beside this machine's, routed by `chat` like any address, and followed
+//!   live over the client's own upstream (`conn.rs`); the engine runs on the owning machine.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
 use ptyro_client::{Client, ConnectOptions};
+use ptyro_core::chats::ChatInfo;
 use ptyro_core::model::{
     MachineInfo, MachineState, MachineTransport, ProfileInfo, ProjectInfo, WorkspaceInfo,
     WorktreeInfo, split_machine,
@@ -65,6 +69,8 @@ pub(crate) struct Mirror {
     pub usage: Vec<Usage>,
     /// Newest first.
     pub inbox: Vec<InboxEntry>,
+    /// Its chats that aren't archived (SPEC §22.11): listed here while it is offline too.
+    pub chats: Vec<ChatInfo>,
 }
 
 pub(crate) struct Link {
@@ -148,6 +154,10 @@ pub(crate) fn qualify_value(v: &mut Value, machine: &str, map: MapClient<'_>) {
                     put_on(o, "session_name", machine);
                 } else if has(o, &["windows", "agent", "profile"]) {
                     put_on(o, "profile", machine);
+                } else if has(o, &["title_src", "tools", "nodes", "handle"]) {
+                    // A chat (SPEC §22.11): its ids stay as they are (unique everywhere).
+                    put_on(o, "workspace", machine);
+                    put_on(o, "profile", machine);
                 } else {
                     tag = false;
                 }
@@ -181,7 +191,7 @@ fn qualified<T: Serialize + for<'de> Deserialize<'de>>(
 
 /// The fields of a request that address something (and of its `spec`).
 const ADDRESS_KEYS: &[&str] =
-    &["addr", "name", "workspace", "project", "worktree", "session", "target"];
+    &["addr", "name", "workspace", "project", "worktree", "session", "target", "chat"];
 
 /// Every address in a request, as (where, the text).
 fn addresses(v: &Value) -> Vec<String> {
@@ -588,6 +598,17 @@ impl Daemon {
         {
             m.inbox = entries;
         }
+        // Chats off there, or an older answer: none, not a broken link.
+        let chats = Request::ChatList {
+            workspace: None,
+            all: true,
+            pinned: false,
+            archived: false,
+            limit: None,
+        };
+        if let Ok(Reply::Chats { chats }) = client.request(chats).await.map(q) {
+            m.chats = chats;
+        }
         let old = {
             let mut links = self.links.locked();
             let Some(l) = links.get_mut(name) else { return Ok(()) };
@@ -619,6 +640,10 @@ impl Daemon {
         for id in gone(&w_ids(&old.workspaces), &w_ids(&m.workspaces)) {
             let _ = self.mirrored.send(DomainEvent::WorkspaceRemoved { id });
         }
+        let c_ids = |v: &[ChatInfo]| v.iter().map(|c| c.id.clone()).collect::<Vec<_>>();
+        for id in gone(&c_ids(&old.chats), &c_ids(&m.chats)) {
+            let _ = self.mirrored.send(DomainEvent::ChatRemoved { id, machine: Some(name.into()) });
+        }
         let hidden = self.hidden_of(name);
         let view = filter_hidden(m, &hidden);
         for info in view.workspaces {
@@ -632,6 +657,9 @@ impl Daemon {
         }
         for info in view.sessions {
             let _ = self.mirrored.send(DomainEvent::SessionUpdated { info });
+        }
+        for info in view.chats {
+            let _ = self.mirrored.send(DomainEvent::ChatUpdated { info });
         }
         Ok(())
     }
@@ -734,6 +762,20 @@ impl Daemon {
                     relay = Some(entry.clone());
                     true
                 }
+                DomainEvent::ChatUpdated { info } => {
+                    if info.archived {
+                        m.chats.retain(|c| c.id != info.id);
+                    } else {
+                        upsert(&mut m.chats, info.clone(), |c| c.id.clone());
+                    }
+                    let in_hidden = split_machine(&info.workspace)
+                        .is_some_and(|(_, w)| hidden.iter().any(|h| h == w));
+                    !in_hidden
+                }
+                DomainEvent::ChatRemoved { id, .. } => {
+                    m.chats.retain(|c| c.id != *id);
+                    true
+                }
                 DomainEvent::WorktreeProgress { .. }
                 | DomainEvent::ControllerChanged { .. }
                 | DomainEvent::Bell { .. }
@@ -746,6 +788,13 @@ impl Daemon {
         let event = match event {
             // Another machine's repository registering itself isn't news to undo here.
             DomainEvent::ProjectAutoAdded { info, .. } => DomainEvent::ProjectUpdated { info },
+            // An archived chat leaves the lists here, as there.
+            DomainEvent::ChatUpdated { info } if info.archived => {
+                DomainEvent::ChatRemoved { id: info.id, machine: Some(name.to_owned()) }
+            }
+            DomainEvent::ChatRemoved { id, .. } => {
+                DomainEvent::ChatRemoved { id, machine: Some(name.to_owned()) }
+            }
             e => e,
         };
         if pass {
@@ -846,6 +895,7 @@ impl Daemon {
                         .ok()
                         .is_some_and(|id| mi.sessions.iter().any(|s| s.id == id));
                     let hit = session
+                        || mi.chats.iter().any(|c| c.id == a)
                         || mi.workspaces.iter().any(|w| w.id == a)
                         || mi.projects.iter().any(|p| p.id == a)
                         || mi.worktrees.iter().any(|w| w.id == a);
@@ -883,7 +933,9 @@ impl Daemon {
             .filter(|(m, l)| {
                 let q = qualify(m, &a);
                 let mi = &l.mirror;
-                mi.sessions.iter().any(|s| s.name == q || s.handle == a)
+                let chat = a.strip_prefix("c:").unwrap_or(&a);
+                mi.chats.iter().any(|c| c.handle == chat || c.id == a)
+                    || mi.sessions.iter().any(|s| s.name == q || s.handle == a)
                     || mi.worktrees.iter().any(|w| w.qualified() == q)
                     || mi.workspaces.iter().any(|w| w.name == q)
                     || mi.projects.iter().any(|p| p.slug == q)
@@ -958,6 +1010,22 @@ impl Daemon {
                 profiles.extend(views.iter().flat_map(|m| m.profiles.clone()));
                 Reply::Profiles { profiles }
             }
+            // Chats (SPEC §22.11): every machine's, interleaved as one list is.
+            Reply::Chats { mut chats } => {
+                if let Request::ChatList {
+                    workspace: None, pinned, archived: false, limit, ..
+                } = req
+                {
+                    chats.extend(
+                        views.iter().flat_map(|m| m.chats.clone()).filter(|c| !pinned || c.pinned),
+                    );
+                    chats.sort_by(|a, b| b.pinned.cmp(&a.pinned).then(b.last_ms.cmp(&a.last_ms)));
+                    if let Some(n) = limit.filter(|n| *n > 0) {
+                        chats.truncate(n as usize);
+                    }
+                }
+                Reply::Chats { chats }
+            }
             Reply::Usage { mut usage } => {
                 usage.extend(views.iter().flat_map(|m| m.usage.clone()));
                 Reply::Usage { usage }
@@ -991,6 +1059,65 @@ impl Daemon {
         })
     }
 
+    /// The machine a chat lives on, when it is a mirrored one: by `laptop2:` on its address, or
+    /// by its id → (machine, the chat's address there, its transport, online).
+    pub(crate) fn machine_of_chat(
+        &self,
+        chat: &str,
+    ) -> Option<(String, String, MachineTransport, bool)> {
+        let links = self.links.locked();
+        let found = split_machine(chat)
+            .filter(|(m, _)| links.contains_key(*m))
+            .map(|(m, rest)| (m.to_owned(), rest.to_owned()))
+            .or_else(|| {
+                links.iter().find_map(|(m, l)| {
+                    l.mirror
+                        .chats
+                        .iter()
+                        .any(|c| c.id == chat)
+                        .then(|| (m.clone(), chat.to_owned()))
+                })
+            })?;
+        let l = links.get(&found.0)?;
+        Some((found.0, found.1, l.record.transport.clone(), l.info.state == MachineState::Online))
+    }
+
+    /// ` since 14:02`, when the machine's link went down (empty if it never did).
+    pub(crate) fn offline_since(&self, name: &str) -> String {
+        self.links
+            .locked()
+            .get(name)
+            .and_then(|l| l.info.since_ms)
+            .map(|t| format!(" since {}", clock(t)))
+            .unwrap_or_default()
+    }
+
+    /// `ChatList` of archived chats, with every online machine's (they are not mirrored).
+    pub(crate) async fn archived_chats_too(&self, req: &Request, reply: Reply) -> Reply {
+        let (Request::ChatList { workspace: None, archived: true, .. }, Reply::Chats { mut chats }) =
+            (req, reply.clone())
+        else {
+            return reply;
+        };
+        let online: Vec<String> = self
+            .links
+            .locked()
+            .iter()
+            .filter(|(_, l)| l.info.state == MachineState::Online)
+            .map(|(m, _)| m.clone())
+            .collect();
+        for m in online {
+            if let Ok(Reply::Chats { chats: theirs }) = self.forward(&m, req.clone()).await {
+                let hidden = self.hidden_of(&m);
+                chats.extend(theirs.into_iter().filter(|c| {
+                    !split_machine(&c.workspace).is_some_and(|(_, w)| hidden.iter().any(|h| h == w))
+                }));
+            }
+        }
+        chats.sort_by_key(|c| std::cmp::Reverse(c.last_ms));
+        Reply::Chats { chats }
+    }
+
     // ── requests ─────────────────────────────────────────────────────────────
 
     pub(crate) async fn handle_machines(self: &Arc<Self>, req: Request) -> Result<Reply, Error> {
@@ -1017,6 +1144,12 @@ impl Daemon {
                 for w in &link.mirror.workspaces {
                     let _ = self.mirrored.send(DomainEvent::WorkspaceRemoved { id: w.id.clone() });
                 }
+                for c in &link.mirror.chats {
+                    let _ = self.mirrored.send(DomainEvent::ChatRemoved {
+                        id: c.id.clone(),
+                        machine: Some(name.clone()),
+                    });
+                }
                 let _ = self.mirrored.send(DomainEvent::MachineRemoved { name });
                 Ok(Reply::Done)
             }
@@ -1038,6 +1171,14 @@ impl Daemon {
                     (l.info.clone(), l.mirror.clone())
                 };
                 self.save_machines().await;
+                // Its chats go and come back with it (SPEC §22.11).
+                for c in mirror.chats.iter().filter(|c| c.workspace == qualify(&name, &ws)) {
+                    let _ = self.mirrored.send(if hidden {
+                        DomainEvent::ChatRemoved { id: c.id.clone(), machine: Some(name.clone()) }
+                    } else {
+                        DomainEvent::ChatUpdated { info: c.clone() }
+                    });
+                }
                 if let Some(w) = mirror.workspaces.iter().find(|w| w.name == qualify(&name, &ws)) {
                     let _ = self.mirrored.send(if hidden {
                         DomainEvent::WorkspaceRemoved { id: w.id.clone() }
@@ -1183,6 +1324,7 @@ pub(crate) fn filter_hidden(mut m: Mirror, hidden: &[String]) -> Mirror {
             && !(s.project.is_none() && s.workspace.as_deref().is_some_and(is_hidden))
     });
     m.inbox.retain(|e| !e.workspace.as_deref().is_some_and(is_hidden));
+    m.chats.retain(|c| !is_hidden(&c.workspace));
     m.workspaces = kept;
     m
 }

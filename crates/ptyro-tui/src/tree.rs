@@ -302,15 +302,12 @@ impl Inputs<'_> {
 
 impl Inputs<'_> {
     /// A workspace's CHATS section: its pinned chats, then the newest `recent`, then `all chats…`
-    /// when there are more; `＋ new chat` when it has none. Only this machine's workspaces have
-    /// one until chats are mirrored.
+    /// when there are more; `＋ new chat` when it has none. Other machines' workspaces have one too
+    /// (SPEC §22.11): their chats are mirrored, and a new one is made there.
     fn chat_rows(&self, ws: &str, honour_collapse: bool) -> Vec<Row> {
         let Some(recent) = self.recent else { return Vec::new() };
         let mine: Vec<&ptyro_core::chats::ChatInfo> =
             self.chats.iter().filter(|c| c.workspace == ws).collect();
-        if split_machine(ws).is_some() && mine.is_empty() {
-            return Vec::new();
-        }
         let mut rows = vec![Row::Chats(ws.to_owned())];
         if honour_collapse && self.collapsed.contains(&chats_key(ws)) {
             return rows;

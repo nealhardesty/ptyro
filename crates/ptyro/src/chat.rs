@@ -67,6 +67,9 @@ pub enum ChatCmd {
         /// Archived ones instead
         #[arg(long)]
         archived: bool,
+        /// Only this machine's (`here` for this one's), when others are linked
+        #[arg(long, add = ArgValueCandidates::new(complete::machines))]
+        machine: Option<String>,
         /// At most N
         #[arg(short = 'n', long)]
         limit: Option<u32>,
@@ -181,8 +184,8 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, words: Vec<String>) -> Result<
         ChatCmd::Ask { question, keep, agent, preset, timeout } => {
             ask(ctx, question.join(" "), keep, agent, preset, timeout).await
         }
-        ChatCmd::Ls { workspace, pinned, archived, limit, json } => {
-            ls(ctx, workspace, pinned, archived, limit, json).await
+        ChatCmd::Ls { workspace, pinned, archived, machine, limit, json } => {
+            ls(ctx, workspace, pinned, archived, machine, limit, json).await
         }
         ChatCmd::Show { chat, all, format } => show(ctx, chat, all, &format).await,
         ChatCmd::Open { chat } => open(ctx, &chat).await,
@@ -452,16 +455,28 @@ async fn ls(
     workspace: Option<String>,
     pinned: bool,
     archived: bool,
+    machine: Option<String>,
     limit: Option<u32>,
     json: bool,
 ) -> Result<i32, Error> {
     let c = ctx.connect(true).await?;
     let all = workspace.is_none();
-    let chats =
-        match c.request(Request::ChatList { workspace, all, pinned, archived, limit }).await? {
-            Reply::Chats { chats } => chats,
-            r => return Err(unexpected(r)),
-        };
+    // (With a machine, the limit applies after it is picked.)
+    let asked = if machine.is_some() { None } else { limit };
+    let req = Request::ChatList { workspace, all, pinned, archived, limit: asked };
+    let mut chats = match c.request(req).await? {
+        Reply::Chats { chats } => chats,
+        r => return Err(unexpected(r)),
+    };
+    if let Some(m) = &machine {
+        chats.retain(|c| match c.machine.as_deref() {
+            Some(x) => x == m,
+            None => m == "here",
+        });
+        if let Some(n) = limit {
+            chats.truncate(n as usize);
+        }
+    }
     if json {
         println!("{}", serde_json::to_string_pretty(&chats).unwrap_or_default());
         return Ok(0);
@@ -470,8 +485,24 @@ async fn ls(
         eprintln!("no chats yet: `ptyro chat \"your question\"` starts one");
         return Ok(0);
     }
+    // Another machine's that is down: listed as it was (SPEC §22.11).
+    let down: Vec<String> = if chats.iter().any(|c| c.machine.is_some()) {
+        match c.request(Request::MachineList).await {
+            Ok(Reply::Machines { machines }) => machines
+                .into_iter()
+                .filter(|m| m.state != ptyro_core::model::MachineState::Online)
+                .map(|m| m.name)
+                .collect(),
+            _ => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
     for ch in &chats {
         let mut marks = String::new();
+        if ch.machine.as_ref().is_some_and(|m| down.contains(m)) {
+            marks.push_str(" (offline)");
+        }
         if ch.unread > 0 {
             marks.push_str(" ●");
         }

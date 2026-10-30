@@ -58,7 +58,7 @@ Conventions:
 | `ptyro scratchpad log [--json]` / `restore REV` | saved copies of the file, newest first / put one back (the current text is saved first) |
 | `ptyro chat [new] [PROMPT…] [--agent A[@P]] [--preset P] [-w WS] [--title T] [--no-wait] [--json]` | a new chat with your agent (SPEC §22): the answer streams here and the chat is kept (the TUI's and web's CHATS show it). No prompt, at a terminal: the chat view. `-` or a pipe reads the prompt from standard input |
 | `ptyro chat ask [--keep] [--agent A] [--preset P] [--timeout S] QUESTION…` | one question, the answer on standard output; standard input is context (`git diff \| ptyro chat ask "review this"`); nothing is kept unless `--keep` |
-| `ptyro chat ls [-w WS] [--pinned] [--archived] [-n N] [--json]` | chats, pinned first then the newest |
+| `ptyro chat ls [-w WS] [--machine M] [--pinned] [--archived] [-n N] [--json]` | chats, pinned first then the newest; every linked machine's too (`laptop2:c:7f3k`), greyed while it is offline; `--machine here` for this one's |
 | `ptyro chat show CHAT [--all] [--format text\|md\|json]` / `open CHAT` | print a chat's shown branch (`--all`: every branch) / open it in the TUI's chat view. CHAT: `c:7f3k`, `7f3k`, a title's words, `@last` |
 | `ptyro chat send CHAT TEXT… [--no-wait] [--timeout S]` | a message; the answer streams here |
 | `ptyro chat answer CHAT allow\|always\|deny` / `stop CHAT` | answer its permission request / stop the answer being written |

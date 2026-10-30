@@ -353,7 +353,8 @@ ptyro chat set @last --agent codex          # switch agents: the conversation ca
 In the TUI every workspace has a **CHATS** section in the sidebar; `C-q m` starts a chat and
 `C-q g` lists them. The web app has a **Chats** tab. A chat can search the web and touch no
 file (`[chat] preset`); its agent stops when idle and picks up again from the saved conversation,
-after a restart too. Chats live in their own file, `chat.db` (`ptyro doctor` checks it). Settings:
+after a restart too. A linked machine's chats show under its workspaces and are used from here
+(they run there, on its agents). Chats live in their own file, `chat.db` (`ptyro doctor` checks it). Settings:
 `[chat]` in the config (the Chat section of the settings panel).
 
 ### The scratchpad

@@ -744,7 +744,11 @@ pub(crate) fn sidebar_line(
         Row::Chat(id) => {
             let c = app.chat(id)?;
             let (g, gc) = glyph(app, c);
-            let mut name = fg(app, t.text);
+            // Another machine's while it is down: listed as it was, greyed (SPEC §22.11).
+            let offline = app
+                .machine_of_name(&c.workspace)
+                .is_some_and(|m| m.state != ptyro_core::model::MachineState::Online);
+            let mut name = fg(app, if offline { t.exited } else { t.text });
             if selected_chat == Some(id.as_str()) {
                 name = name.add_modifier(Modifier::BOLD).fg(app.depth.fit(t.accent));
             }
@@ -759,6 +763,9 @@ pub(crate) fn sidebar_line(
             }
             if c.unread > 0 {
                 spans.push(Span::styled(" ●", fg(app, t.search).add_modifier(Modifier::BOLD)));
+            }
+            if offline {
+                spans.push(Span::styled(" offline", fg(app, t.dim)));
             }
             Line::from(spans)
         }
@@ -884,7 +891,8 @@ fn draw_list(app: &App, f: &mut Frame<'_>, area: Rect, l: &ChatList) {
             Span::styled(format!(" {} · {}", c.agent, crate::ui::ago(c.last_ms)), fg(app, t.dim)),
         ];
         if l.workspace.is_none() {
-            spans.push(Span::styled(format!(" · {}", c.workspace), fg(app, t.dim)));
+            let ws = crate::ui::workspace_label(&c.workspace);
+            spans.push(Span::styled(format!(" · {ws}"), fg(app, t.dim)));
         }
         if c.unread > 0 {
             spans.push(Span::styled(" ●", fg(app, t.search)));

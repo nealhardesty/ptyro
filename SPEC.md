@@ -6223,7 +6223,7 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
 
 ---
 
-## 22. Chat: general-purpose conversations **[decided 2026-10-29 (owner, ROADMAP CHAT); CHAT1.1–CHAT1.8 built 2026-10-29, CHAT1.9 and later proposed]**
+## 22. Chat: general-purpose conversations **[decided 2026-10-29 (owner, ROADMAP CHAT); CHAT1 built 2026-10-29, CHAT2 and later proposed]**
 
 **As built (CHAT1, 2026-10-29), and where it differs from the design below:**
 - **Store** (`ptyro-store/src/chat.rs`): the §22.4 schema exactly, its own thread, 0600, a newer
@@ -6243,8 +6243,19 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
 - **Not built in CHAT1** (each is its later task): incognito, `history_tool`/`history_scope`
   (CHAT3), the presets' `shell` and `mcp` (CHAT4), agent-sent titles (Claude and Codex send none;
   OpenCode's and ACP's are not read yet: the titler is used), a `parent` on `ChatSend` and every
-  branch key (CHAT2), `C-g`, `make verify-chat`, and machines (CHAT1.9: chats of linked machines'
-  workspaces are not mirrored yet).
+  branch key (CHAT2), `C-g`, `make verify-chat`, and the search fan-out of §22.10 (CHAT3).
+- **Machines** (CHAT1.9, `machines.rs`, `conn.rs`): a link's mirror gains `chats` (non-archived
+  `ChatInfo`, read with `ChatList` on (re)connect and kept by `ChatUpdated`/`ChatRemoved`, which
+  reach clients with `machine` set); `ChatInfo`'s `workspace` and `profile` take the prefix, ids
+  stay. `chat` is an address key, so `ChatSend`, `ChatRead`, `ChatUpdate`… about a mirrored chat
+  (by `laptop2:c:7f3k`, its id, or a handle only it has) go over the link, and `ChatNew` in
+  `laptop2:work` is made there. `ChatList` gains every mirror's shown chats; archived ones are
+  asked of each online machine (they are not mirrored). `ChatSubscribe` to a mirrored chat goes
+  over the client's own upstream and `ChatLive` comes back through it; an offline machine answers
+  it with a `ChatLive` notice ("laptop2 is offline since 14:02; its chats open when it is back"),
+  and every request with the link's offline message. Hiding a workspace hides its chats; removing a
+  machine removes them. Alerts already arrive as relayed inbox entries. Clients grey an offline
+  machine's chats (`chat ls` says "(offline)"; `--machine M` filters).
 - **Configuration renamed:** `[chat] tools = "chat"` became **`[chat] preset`**: TOML can't hold
   both that string and the `[chat.tools.<name>]` tables. Built keys: `enabled`, `recent`, `agent`,
   `preset`, `hibernate_after`, `seed_tokens`, `title`, `title_command`, `daily_cap`, `index_tools`,

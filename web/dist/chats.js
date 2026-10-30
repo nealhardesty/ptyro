@@ -3,7 +3,8 @@
 // is one chat (its messages, tool calls and permission cards as they stream, a composer), and
 // `#/c/new` starts one. Every control is an action below, as in the TUI and the CLI.
 import { conn } from "./conn.js";
-import { data, wsLabel } from "./data.js";
+import { data, machineOf, wsLabel } from "./data.js";
+import { machineChip } from "./machines.js";
 import { actions, ago, ask, confirm, download, errText, form, h, menu, patch, ui, views } from "./kit.js";
 const ACTIONS = {
     "chats": "Your chats: pinned first, then the newest; search them, or start one",
@@ -90,7 +91,9 @@ function rows() {
             out.push(h("h3", { class: "day" }, g));
             group = g;
         }
-        out.push(h("div", { class: `chat-row${c.unread ? " unread" : ""}${c.attention ? " blocked" : ""}` }, h("a", { class: "main", href: `#/c/${encodeURIComponent(c.id)}`, title: tip("chat.open") }, h("span", { class: "glyph" }, glyph(c)), h("span", { class: "title" }, label(c)), h("small", {}, ` ${c.agent} · ${ago(c.last_ms)}${state.workspace ? "" : ` · ${wsLabel(c.workspace)}`}`), c.unread ? h("b", { class: "unread-dot", "aria-label": "unread" }, "●") : null), h("button", { class: "icon", "aria-label": "More", onclick: () => chatMenu(c) }, "⋯")));
+        // Another machine's that is down: listed as it was, greyed (SPEC §22.11).
+        const down = !!c.machine && machineOf(c.workspace)?.state !== "online";
+        out.push(h("div", { class: `chat-row${c.unread ? " unread" : ""}${c.attention ? " blocked" : ""}${down ? " offline" : ""}` }, h("a", { class: "main", href: `#/c/${encodeURIComponent(c.id)}`, title: tip("chat.open") }, h("span", { class: "glyph" }, glyph(c)), h("span", { class: "title" }, label(c)), h("small", {}, ` ${c.agent} · ${ago(c.last_ms)}${state.workspace ? "" : ` · ${wsLabel(c.workspace)}`}`), c.machine ? machineChip(c.workspace) : null, c.unread ? h("b", { class: "unread-dot", "aria-label": "unread" }, "●") : null), h("button", { class: "icon", "aria-label": "More", onclick: () => chatMenu(c) }, "⋯")));
     }
     return out;
 }
@@ -311,7 +314,7 @@ function chatView(rest) {
     const stop = c && working(c) && canWrite() ? h("button", { class: "small", title: tip("chat.stop"), onclick: () => void ask({ t: "chat_stop", chat: c.id }, "Stopped") }, "Stop") : null;
     patch(p.el, [
         ui.header(c ? label(c) : "New chat", "#/chats", c ? h("button", { class: "icon", "aria-label": "More", onclick: () => chatMenu(c) }, "⋯") : null),
-        h("div", { class: `pill ${c?.status ?? ""}` }, ...pill),
+        h("div", { class: `pill ${c?.status ?? ""}` }, ...pill, c?.machine ? " · " : null, c?.machine ? machineChip(c.workspace) : null),
         ...(c?.attention ? [h("p", { class: "banner warn" }, c.attention.text)] : []),
         empty ?? p.box,
         ...(isNew ? [h("div", { class: "bar chat-pick" }, p.agent, p.preset)] : []),

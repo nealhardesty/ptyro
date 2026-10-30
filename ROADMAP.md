@@ -2395,7 +2395,7 @@ rows, its `[chat]` settings schema entries and its `make` targets, and the miles
   - **Left (not a gate for CHAT1.1–CHAT1.2; each is part of the task that needs it):** a Gemini and an
     OpenCode *turn* (login / a provider) to prove their rules stop a call, `WebSearch` on an API-key
     or team account, Linux, and the `make verify-chat` target CHAT1.3 writes (§22.16).
-- [ ] **CHAT1 Chats that last** (R-CHAT-01, 06, 13) — the core. **L** (1.1–1.8 built 2026-10-29; SPEC §22's "As built" lists what differs)
+- [x] **CHAT1 Chats that last** (R-CHAT-01, 06, 13) — the core. **L** (built 2026-10-29; SPEC §22's "As built" lists what differs)
   - [x] **CHAT1.1** `chat.db`: the schema of §22.4, its writer thread, migrations, `doctor` checks,
         backup (`--no-chats`), the uninstall plan, "can't open" handling. **M**
   - [x] **CHAT1.2** The `[chat]` settings (`tools` is `preset`: TOML can't hold both) and the schema entries (with the presets as a collection), the
@@ -2417,15 +2417,15 @@ rows, its `[chat]` settings schema entries and its `make` targets, and the miles
         actions. **L**
   - [x] **CHAT1.8** The web: the Chats page, the chat view, the sidebar section, `ACTIONS` for every
         control. **L**
-  - [ ] **CHAT1.9** **Machines** (§22.11): `ChatInfo` in the mirror, routing by `chat`, merged lists,
+  - [x] **CHAT1.9** **Machines** (§22.11): `ChatInfo` in the mirror, routing by `chat`, merged lists,
         `ChatSubscribe` over the upstream, a chat created in a remote workspace, offline listing, hidden
         workspaces, scopes, alerts. Tested with two daemons. **L**
-  - **Left in CHAT1** (besides 1.9): `make verify-chat` against a real Claude and Codex (the fakes
+  - **Left in CHAT1:** `make verify-chat` against a real Claude and Codex (the fakes
     cover every path in `tests/chat.rs`), agent-sent titles for OpenCode and ACP, the seed's summary
     paragraph. Tested: `tests/chat.rs` (create, stream, restart and native resume, seeded agent
     switch, titles, pin, archive, export, delete, `ask`, a permission card, chats off), the store's
     and the TUI tree's unit tests, and the web in Chrome against a sandbox (list, open, send, a new
-    chat, a permission card denied).
+    chat, a permission card denied); `tests/chat_machines.rs` for 1.9 (two linked daemons: listed, sent to by id, by `laptop2:c:…` and by handle, followed live over the upstream, made in the remote workspace, a remote pin seen, hidden and shown, listed while offline with the refusal and the notice).
   *Done when:* on a fresh install with a Claude login, `Ctrl-Q m`, a question and ⏎ gets an answer
   with no setup; the chat is in the sidebar; after `ptyro daemon stop` and start it is still there and
   carries on; the same chat shows, opens and answers from the phone; and with `laptop2` linked, its
