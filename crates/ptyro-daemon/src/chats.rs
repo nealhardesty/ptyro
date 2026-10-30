@@ -168,6 +168,15 @@ impl Chats {
         let db = ChatDb::open(path).map_err(|e| {
             tracing::error!("chat.db: {e}");
             let file = path.display().to_string();
+            // In use: by whom, when that can be told (`lsof`).
+            let who = if e.busy() { holders(path) } else { Vec::new() };
+            if !who.is_empty() {
+                let who: Vec<String> = who.iter().map(|(pid, name)| format!("{name} (pid {pid})")).collect();
+                return format!(
+                    "chats are unavailable: {file} is in use by {}: close it, then restart ptyro's daemon",
+                    who.join(", ")
+                );
+            }
             match e.fix(&file) {
                 Some(fix) => format!("chats are unavailable: {fix}"),
                 None => format!(
@@ -2948,6 +2957,29 @@ fn human_bytes(n: u64) -> String {
     }
 }
 
+/// The programs that have `path` open, but this one, as `lsof` tells (none when it can't).
+fn holders(path: &std::path::Path) -> Vec<(u32, String)> {
+    let Ok(o) = std::process::Command::new("lsof").arg("-Fpc").arg("--").arg(path).output() else {
+        return Vec::new();
+    };
+    parse_lsof(&String::from_utf8_lossy(&o.stdout), std::process::id())
+}
+
+/// `lsof -Fpc` output (`p<pid>` then `c<command>` lines) as (pid, command), `me` left out.
+fn parse_lsof(out: &str, me: u32) -> Vec<(u32, String)> {
+    let mut found: Vec<(u32, String)> = Vec::new();
+    for l in out.lines() {
+        if let Some(p) = l.strip_prefix('p').and_then(|p| p.parse().ok()) {
+            found.push((p, String::new()));
+        } else if let (Some(c), Some(last)) = (l.strip_prefix('c'), found.last_mut()) {
+            last.1 = c.to_owned();
+        }
+    }
+    found.retain(|(p, _)| *p != me);
+    found.dedup();
+    found
+}
+
 fn store_err(e: ptyro_store::StoreError) -> Error {
     match e.fix("chat.db") {
         Some(fix) => Error::new(ErrorCode::Internal, fix),
@@ -3524,6 +3556,19 @@ mod tests {
 
     fn node(id: &str, body: ChatBody) -> ChatNode {
         ChatNode { id: id.into(), parent: None, at_ms: 0, body }
+    }
+
+    #[test]
+    fn who_holds_chat_db_is_told_and_never_ourselves() {
+        let out = "p4242\ncsqlite3\np99\ncptyro\n";
+        assert_eq!(parse_lsof(out, 99), vec![(4242, "sqlite3".to_owned())]);
+        assert!(parse_lsof("", 1).is_empty());
+        // Held for real: this test's own handle is the only one, so nobody else.
+        let t = tempfile::tempdir().unwrap();
+        let f = t.path().join("chat.db");
+        std::fs::write(&f, b"x").unwrap();
+        let _open = std::fs::File::open(&f).unwrap();
+        assert!(holders(&f).is_empty(), "this process is never named");
     }
 
     #[test]

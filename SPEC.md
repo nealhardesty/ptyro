@@ -6681,7 +6681,7 @@ by `user_version`, **its own writer thread** apart from the metadata store's (a 
 index update never delays a status write). It is opened when the daemon starts and `[chat]
 enabled`. **If it can't be opened** the daemon runs, chats say why in one line and offer the fix,
 and nothing else is affected. Built (`StoreError::fix`, also for a write that fails later): in use
-by another program (busy, locked; the pid isn't looked up), the disk full, the file not writable
+by another program (busy, locked; at start it names the program and its pid, as `lsof` tells), the disk full, the file not writable
 (read-only, can't open, permission), damaged (move it aside, keep it for `ptyro doctor`), and
 written by a newer ptyro; anything else gives SQLite's own words and "`ptyro doctor` says more".
 

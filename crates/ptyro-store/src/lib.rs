@@ -211,6 +211,19 @@ pub enum StoreError {
 pub type Result<T, E = StoreError> = std::result::Result<T, E>;
 
 impl StoreError {
+    /// Another program holds the database (`fix` says so; who it is, the caller can look up).
+    pub fn busy(&self) -> bool {
+        use rusqlite::ErrorCode as C;
+        let code = match self {
+            StoreError::Sql(e) => e.sqlite_error_code(),
+            StoreError::Migration(rusqlite_migration::Error::RusqliteError { err, .. }) => {
+                err.sqlite_error_code()
+            }
+            _ => None,
+        };
+        matches!(code, Some(C::DatabaseBusy | C::DatabaseLocked))
+    }
+
     /// What to do about it, for the troubles a person can fix (`file`: the database, as they
     /// should see it). `None`: nothing they can do but report it.
     pub fn fix(&self, file: &str) -> Option<String> {
