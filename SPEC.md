@@ -6360,7 +6360,10 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
 **As built (CHAT1, 2026-10-29), and where it differs from the design below:**
 - **Store** (`ptyro-store/src/chat.rs`): the §22.4 schema exactly, its own thread, 0600, a newer
   schema refused untouched; tombstones compacted a day later (and `archive_purge_days`), a
-  streaming node closed `interrupted` at start. `ptyro doctor` reports it, `ptyro backup` copies it
+  streaming node closed `interrupted` at start. So is a turn cut off before any of its answer
+  arrived (the shown branch ends after the person's message with no answer and no end): a notice
+  that says to retry, then the `interrupted` end; its running tools are closed failed and its
+  open permission cards `cancelled`, as nothing can answer them now. `ptyro doctor` reports it, `ptyro backup` copies it
   (`--no-chats` leaves it out), `ptyro uninstall`'s plan names it. A removed workspace's chats go
   to `main`.
 - **Engine** (`ptyro-daemon/src/chats.rs`): a structured session with `Place::chat`, in
@@ -6518,7 +6521,9 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   with the hint to `/pick`). With no answer of the chat's own agent, the first other answer in is
   shown. **Rules:** one answer at a time holds for the whole compare (`busy_check` refuses a send,
   retry, edit, branch or a second compare); `ChatStop` interrupts every helper too, and one that
-  hasn't stopped 10 s later is stopped; a helper not done in 10 minutes is stopped as `✗ timed out`
+  hasn't stopped 10 s later is stopped (so is the chat's own engine, compare or not, with a notice
+  that says so; an engine still starting after 2 minutes is ended the same way, and isn't retried);
+  a helper not done in 10 minutes is stopped as `✗ timed out`, and the chat's own answer too
   (what it said so far left out); deleting the chat stops its compare, and nothing is copied into a
   chat deleted meanwhile; at the daemon's start, scratch folders of chats that no longer exist (a
   crash's helpers and incognito chats) are removed, with Gemini's copies; a helper that fails (not installed, not logged in, ends

@@ -43,6 +43,11 @@ pub(crate) mod import;
 /// conversation with `--fork-session`, leaving it as it was.
 const FORK_PENDING: &str = "fork_pending";
 
+/// How long an agent asked to stop has to stop before it is ended.
+const STOP_GRACE: Duration = Duration::from_secs(10);
+/// How long an agent may take to start (an ACP agent that never answers `initialize`).
+const START_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// A streaming answer is written at least this often (§22.4: a crash keeps what had arrived).
 const FLUSH: Duration = Duration::from_secs(2);
 /// The system prompt of a Claude chat: a general assistant, not a coding agent (CHAT0).
@@ -835,10 +840,12 @@ impl Daemon {
                 let info = self.find_chat(&chat).await?;
                 self.stop_compare(&info.id);
                 if let Some(live) = self.chats.get_live(&info.id)
-                    && let Some(st) = live.engine().and_then(|e| e.session.structured.clone())
+                    && let Some(e) = live.engine()
+                    && let Some(st) = e.session.structured.clone()
                 {
                     live.stopping.store(true, Ordering::SeqCst);
                     st.interrupt();
+                    self.end_unless_stopped(&live, e.session.id);
                 }
                 Ok(Reply::Done)
             }
@@ -2117,6 +2124,9 @@ impl Daemon {
             let mut stopped = false;
             let mut said_error = false;
             let mut status = (None, None);
+            // Still starting since; given up on (never started), so not retried with a seed.
+            let mut starting_since: Option<Instant> = None;
+            let mut gave_up = false;
             let idle_for = |me: &Daemon| {
                 parse_duration(&me.config().chat.hibernate_after)
                     .unwrap_or(Duration::from_secs(120))
@@ -2238,6 +2248,21 @@ impl Daemon {
                 if !session.is_live() {
                     break;
                 }
+                // An agent that never gets going: ended, saying so, not a chat busy for good.
+                starting_since = (status.0 == Some(AgentStatus::Starting))
+                    .then(|| starting_since.unwrap_or_else(Instant::now));
+                if starting_since.is_some_and(|t| t.elapsed() >= START_TIMEOUT) {
+                    let agent = session.adapter().unwrap_or_else(|| "the agent".into());
+                    let text = format!(
+                        "{agent} didn't start within {} minutes, so it was ended (is it installed and logged in? `ptyro doctor` checks)",
+                        START_TIMEOUT.as_secs() / 60
+                    );
+                    me.chat_notice(&live, &chat, NoticeLevel::Error, &text).await;
+                    said_error = true;
+                    gave_up = true;
+                    me.stop_session(&session).await;
+                    break;
+                }
                 if failed_resume {
                     session.hibernating.store(true, Ordering::Relaxed);
                     me.stop_session(&session).await;
@@ -2299,7 +2324,7 @@ impl Daemon {
             live.quiet.store(false, Ordering::SeqCst);
             // A resume the agent couldn't do (its conversation is gone): start over with the
             // record as the seed.
-            if was_ours && resumed && !replied {
+            if was_ours && resumed && !replied && !gave_up {
                 tracing::info!(chat = %chat, "the agent couldn't resume its conversation; seeding");
                 db.end_conv(conv.clone());
                 // One sender at a time: a message sent meanwhile mustn't start a second engine.
@@ -2369,6 +2394,25 @@ impl Daemon {
     }
 
     /// Stop a chat's engine (deleted, agent switched); its conversation stays resumable.
+    /// An engine asked to stop that is still at it after `STOP_GRACE` (a turn not begun yet, a
+    /// hung agent) is ended, so the chat isn't busy for good; the next message starts another.
+    fn end_unless_stopped(self: &Arc<Self>, live: &Arc<Live>, session: SessionId) {
+        let (me, live) = (Arc::clone(self), Arc::clone(live));
+        tokio::spawn(async move {
+            tokio::time::sleep(STOP_GRACE).await;
+            let Some(e) = live.engine().filter(|e| e.session.id == session) else { return };
+            if !matches!(e.session.status(), Some(AgentStatus::Working | AgentStatus::Starting)) {
+                return;
+            }
+            let agent = e.session.adapter().unwrap_or_else(|| "the agent".into());
+            me.stop_chat_engine(&live.id).await;
+            let text = format!(
+                "{agent} didn't stop when asked, so it was ended: the next message starts it again"
+            );
+            me.chat_notice(&live, &live.id, NoticeLevel::Warn, &text).await;
+        });
+    }
+
     async fn stop_chat_engine(self: &Arc<Self>, id: &str) {
         let e = self.chats.get_live(id).and_then(|l| l.engine.locked().take());
         if let Some(e) = e {

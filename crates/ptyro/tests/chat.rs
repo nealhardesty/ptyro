@@ -186,6 +186,23 @@ fn a_stop_before_a_resumed_chat_answers_is_a_stop_not_a_resend() {
 }
 
 #[test]
+fn an_agent_that_wont_stop_is_ended_and_the_chat_goes_on() {
+    let w = World::new("");
+    w.ok(&["chat", "new", "--agent", "codex", "--no-wait", "work 40 slowly"]);
+    let addr = format!("c:{}", w.chats()[0]["handle"].as_str().unwrap());
+    w.until("answering", || w.chats()[0]["status"] == "working");
+    // The fake doesn't hear an interrupt mid-step: ended after the grace, and said so.
+    w.ok(&["chat", "stop", &addr]);
+    w.until("ended", || {
+        texts(&w.chat(&addr), "notice").iter().any(|t| t.contains("didn't stop when asked"))
+    });
+    assert_ne!(w.chats()[0]["status"], "working");
+    // Not busy for good: the next message is answered.
+    let out = w.ok(&["chat", "send", &addr, "and now?"]);
+    assert!(out.contains("and now?"), "{out}");
+}
+
+#[test]
 fn titles_pins_archive_export_and_delete() {
     let w = World::new("");
     w.ok(&["chat", "new", "--title", "Dinner ideas", "--no-wait", "what should I cook"]);
