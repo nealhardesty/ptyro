@@ -94,7 +94,7 @@ async fn new_chat(c: &Client, workspace: Option<&str>, prompt: &str) -> ChatInfo
         preset: None,
         title: None,
         prompt: Some(prompt.into()),
-        incognito: false,
+        incognito: None,
         folders: Vec::new(),
         compare: Vec::new(),
         confirmed: false,

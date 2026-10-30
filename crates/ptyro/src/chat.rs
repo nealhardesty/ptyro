@@ -36,6 +36,9 @@ pub enum ChatCmd {
         /// Keep nothing: not saved, not searchable, gone when its agent stops
         #[arg(long)]
         incognito: bool,
+        /// Keep it, though `[chat] incognito` is on
+        #[arg(long, conflicts_with = "incognito")]
+        keep: bool,
         /// A folder it may read (repeatable); with no --preset the chat then reads (`read`)
         #[arg(long = "folder", value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
         folders: Vec<String>,
@@ -376,6 +379,7 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, words: Vec<String>) -> Result<
         workspace: None,
         title: None,
         incognito: false,
+        keep: false,
         folders: Vec::new(),
         compare: Vec::new(),
         yes: false,
@@ -390,6 +394,7 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, words: Vec<String>) -> Result<
             workspace,
             title,
             incognito,
+            keep,
             folders,
             compare,
             yes,
@@ -397,6 +402,8 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, words: Vec<String>) -> Result<
             json,
         } => {
             let text = words_or_stdin(prompt)?;
+            // Neither: as `[chat] incognito` says.
+            let incognito = (incognito || keep).then_some(incognito);
             let folders = folders.iter().map(|f| full_path(f)).collect();
             new(
                 ctx, text, agent, preset, workspace, title, incognito, folders, compare, yes,
@@ -588,7 +595,7 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, words: Vec<String>) -> Result<
         ChatCmd::Presets { json } => {
             let c = ctx.connect(true).await?;
             let presets = match c.request(Request::ChatPresets).await? {
-                Reply::ChatPresets { presets } => presets,
+                Reply::ChatPresets { presets, .. } => presets,
                 r => return Err(unexpected(r)),
             };
             if json {
@@ -740,7 +747,7 @@ async fn new(
     preset: Option<String>,
     workspace: Option<String>,
     title: Option<String>,
-    incognito: bool,
+    incognito: Option<bool>,
     folders: Vec<String>,
     compare: Vec<String>,
     yes: bool,
@@ -818,7 +825,7 @@ async fn ask(
             preset,
             title: None,
             prompt: None,
-            incognito: !keep,
+            incognito: Some(!keep),
             folders: Vec::new(),
             compare: Vec::new(),
             confirmed: false,

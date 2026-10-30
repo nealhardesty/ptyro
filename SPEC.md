@@ -2997,8 +2997,11 @@ The daily loop (ROADMAP UX3, RESEARCH R-UX-34…37). `crates/ptyro-tui/src/scree
   layout that shows it (swapped back); else, in a single pane (a drawer aside), in that pane
   (`PaneState.last` remembers what it replaced); else full sized in a fresh one-pane layout, the
   split layout kept whole in `App.kept` (a `Screen`: layout, panes, focus, zoom, drawer; saved as
-  `SavedView.kept`). `` ` `` (`session.last`) swaps the kept layout and the screen, else shows the
-  pane's previous session. Everything goes through it: new sessions and worktrees, the quick
+  `SavedView.kept`). `` ` `` (`session.last`) goes back and forth: from a chat (or the chat list)
+  to the session under it, the chat put aside as it is (`App.chat_aside`: draft, scroll, a new
+  chat's choices) and brought back by `` ` `` again; a session shown from a chat puts the chat
+  aside the same way, one shown from the panes ends that. With no chat to go back to it swaps the
+  kept layout and the screen, else shows the pane's previous session. Everything goes through it: new sessions and worktrees, the quick
   terminal's panel, ⏎ in the sidebar, `j`/`k`, `1`–`9`, the finder, attention.
   - Tools open full sized (`spawn_tool`, `SpawnSpec.tool`): `$EDITOR` on a file and
     `config edit` give the screen back when they exit (`App.tool_back`); `run_cli` (the CLI's long
@@ -7032,7 +7035,7 @@ hides when `enabled`):
 - **CLI** (every verb takes `--json`; an address may be `laptop2:…`):
 
   ```
-  ptyro chat [new] [PROMPT] [--agent A[@P]] [--tools PRESET] [--folder DIR]… [--incognito]
+  ptyro chat [new] [PROMPT] [--agent A[@P]] [--tools PRESET] [--folder DIR]… [--incognito|--keep]
                    [--workspace W] [--title T]        # new chat; opens it in a terminal
   ptyro chat ask QUESTION [--keep] [--agent A] [--tools PRESET]   # one-shot answer on stdout; stdin is context
   ptyro chat ls [--workspace W|--all] [--machine M] [--pinned] [--archived] [-n N]
@@ -7114,7 +7117,9 @@ pinned, archived, incognito, forked, nodes, unread, last_at, status, attention, 
 (1.24 adds `folders`, `best_effort`, `shell`; `ChatTask` and `ChatPresets` → `ChatPresets{presets}`;
 `AgentChoice.found`; CHAT5, still 1.24: `ChatCompare{chat, agents, text?}`, `ChatPick{chat, node?}`,
 `ChatImport{agent?, profile?, since?, dry_run}` → `ChatImported{report}`, `ChatNew.compare`,
-`ChatInfo.comparing`/`source`/`source_dir`, `ChatSiblings.agents`). `SessionInfo` gains `chat`
+`ChatInfo.comparing`/`source`/`source_dir`, `ChatSiblings.agents`; 1.25: `ChatNew.incognito` is
+optional, none meaning `[chat] incognito` and `false` a kept chat even when that is on, and
+`ChatPresets.incognito` says the default, which a new chat's toggle starts from). `SessionInfo` gains `chat`
 (the chat id of an engine). Scopes as in §22.11, listed in `devices::needed`.
 
 ### 22.15 Built for sync (CHAT6) now, so it needs no migration later

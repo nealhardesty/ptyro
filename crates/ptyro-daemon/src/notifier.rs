@@ -43,6 +43,16 @@ pub struct Note {
     pub deny_url: Option<String>,
 }
 
+/// What a chat's alert says in the inbox: what happened, never its text.
+fn chat_happened(kind: AttentionKind) -> &'static str {
+    match kind {
+        AttentionKind::Blocked => "the chat asks for permission",
+        AttentionKind::Errored => "the chat hit an error",
+        AttentionKind::Done => "the chat answered",
+        _ => "the chat needs you",
+    }
+}
+
 impl Daemon {
     /// The inbox entry, then every channel that applies.
     pub(crate) async fn notify(
@@ -53,6 +63,16 @@ impl Daemon {
     ) {
         let info = self.info(s);
         let config = self.config();
+        // A chat's words stay in chat.db (SPEC §22.4): its inbox entry says what happened, not
+        // what was asked or said; an incognito chat's (§22.9) has no entry, and the channels
+        // hear no more than that either.
+        let chat = s.meta.locked().place.chat.clone();
+        let incognito = chat.as_deref().is_some_and(|c| self.incognito_of(c).is_some());
+        let (body, stored) = match &chat {
+            Some(_) if incognito => (chat_happened(kind).to_owned(), None),
+            Some(_) => (body, Some(chat_happened(kind).to_owned())),
+            None => (body.clone(), Some(body)),
+        };
         let project = info.project.as_deref().and_then(|p| self.project_by_id(p)).map(|p| p.slug);
         let label = self.profile_label_for(&info.profile);
         let mut title = String::new();
@@ -63,29 +83,31 @@ impl Daemon {
         if let Some(p) = &project {
             title.push_str(&format!(" ({p})"));
         }
-        let mut entry = InboxEntry {
-            machine: None,
-            id: 0,
-            session: info.id.full(),
-            session_name: info.name.clone(),
-            at_ms: now_ms(),
-            kind,
-            title: title.clone(),
-            body: body.clone(),
-            read_ms: None,
-            workspace: info.workspace.clone(),
-            profile: Some(info.profile.clone()),
-        };
-        entry.id = match &self.store {
-            Some(st) => st.inbox_add(entry.clone()).await.unwrap_or(0),
-            None => {
-                let mut mem = self.inbox_mem.locked();
-                let id = mem.len() as i64 + 1;
-                mem.push(InboxEntry { id, ..entry.clone() });
-                id
-            }
-        };
-        let _ = self.events.send(DomainEvent::InboxAdded { entry });
+        if let Some(stored) = stored {
+            let mut entry = InboxEntry {
+                machine: None,
+                id: 0,
+                session: info.id.full(),
+                session_name: info.name.clone(),
+                at_ms: now_ms(),
+                kind,
+                title: title.clone(),
+                body: stored,
+                read_ms: None,
+                workspace: info.workspace.clone(),
+                profile: Some(info.profile.clone()),
+            };
+            entry.id = match &self.store {
+                Some(st) => st.inbox_add(entry.clone()).await.unwrap_or(0),
+                None => {
+                    let mut mem = self.inbox_mem.locked();
+                    let id = mem.len() as i64 + 1;
+                    mem.push(InboxEntry { id, ..entry.clone() });
+                    id
+                }
+            };
+            let _ = self.events.send(DomainEvent::InboxAdded { entry });
+        }
         // Beyond the inbox: kind, mute, workspace mode, quiet hours, coalescing.
         let n = &config.notifications;
         let breakthrough = config.attention.breakthrough.iter().any(|k| k == kind.label());

@@ -296,7 +296,7 @@ impl Daemon {
             .collect()
     }
 
-    fn incognito_of(&self, id: &str) -> Option<ChatInfo> {
+    pub(crate) fn incognito_of(&self, id: &str) -> Option<ChatInfo> {
         self.chats.incognito.locked().get(id).cloned()
     }
 
@@ -613,7 +613,7 @@ impl Daemon {
                 compare,
                 confirmed,
             } => {
-                let incognito = incognito || self.config().chat.incognito;
+                let incognito = incognito.unwrap_or(self.config().chat.incognito);
                 let compare: Vec<String> = compare
                     .iter()
                     .flat_map(|a| a.split(','))
@@ -914,7 +914,7 @@ impl Daemon {
                         })
                     })
                     .collect();
-                Ok(Reply::ChatPresets { presets })
+                Ok(Reply::ChatPresets { presets, incognito: config.chat.incognito })
             }
             Request::ChatExport { chat, format } => {
                 let info = self.find_chat(&chat).await?;
@@ -1850,8 +1850,14 @@ impl Daemon {
         let (claude_mcp, missing) = match adapter.as_str() {
             "claude" => claude_mcp_defs(&plan, &preset.mcp),
             "codex" => {
+                // (One that is off in Codex is missing too: the chat can't use it.)
                 let known = mcp.clone().unwrap_or_default();
-                let missing = preset.mcp.iter().filter(|m| !known.contains(m)).cloned().collect();
+                let missing = preset
+                    .mcp
+                    .iter()
+                    .filter(|m| !known.iter().any(|(n, _)| n == *m))
+                    .cloned()
+                    .collect();
                 (serde_json::Map::new(), missing)
             }
             _ => (serde_json::Map::new(), Vec::new()),
@@ -1961,15 +1967,15 @@ impl Daemon {
         Ok(())
     }
 
-    /// The user's MCP servers, to switch each off in a Codex chat (CHAT0: its table can't be
-    /// emptied, only each entry switched off).
+    /// The user's MCP servers that are on, each with the entry that switches it off in a Codex
+    /// chat (CHAT0: its table can't be emptied, only each entry switched off).
     /// `None` when they couldn't be listed (the chat then says its tools are best effort).
     /// Listed under the chat's profile, so its `CODEX_HOME`'s servers.
     async fn codex_mcp_servers(
         &self,
         adapter: &str,
         plan: &ptyro_agents::profile::Plan,
-    ) -> Option<Vec<String>> {
+    ) -> Option<Vec<(String, serde_json::Value)>> {
         if adapter != "codex" {
             return Some(Vec::new());
         }
@@ -1984,14 +1990,7 @@ impl Daemon {
                 return None;
             };
             let v: serde_json::Value = serde_json::from_slice(&out).ok()?;
-            // Every name, whatever its case: they are only keys of the thread's config.
-            Some(
-                v.as_array()?
-                    .iter()
-                    .filter_map(|s| s["name"].as_str().map(str::to_owned))
-                    .filter(|n| !n.is_empty())
-                    .collect(),
-            )
+            Some(v.as_array()?.iter().filter_map(codex_mcp_off).collect())
         })
         .await
         .ok()
@@ -2796,11 +2795,32 @@ fn write_private(file: &std::path::Path, text: &str) -> std::io::Result<()> {
     f.write_all(text.as_bytes())
 }
 
+/// A server of `codex mcp list --json` that is on: its name, and the thread's config entry that
+/// switches it off. The entry keeps its transport: a server from a plugin or the desktop app is
+/// in no `config.toml`, and an entry of only `enabled = false` is then refused ("invalid
+/// transport"), which stops the chat starting.
+fn codex_mcp_off(s: &serde_json::Value) -> Option<(String, serde_json::Value)> {
+    let name = s["name"].as_str().filter(|n| !n.is_empty())?;
+    if s["enabled"] == false {
+        return None;
+    }
+    let mut off = serde_json::Map::new();
+    if let Some(t) = s["transport"].as_object() {
+        for k in ["command", "args", "cwd", "url"] {
+            if let Some(v) = t.get(k).filter(|v| !v.is_null()) {
+                off.insert(k.to_owned(), v.clone());
+            }
+        }
+    }
+    off.insert("enabled".into(), false.into());
+    Some((name.to_owned(), off.into()))
+}
+
 fn preset_launch(
     protocol: &str,
     p: &ChatTools,
     dir: &std::path::Path,
-    codex_mcp: Vec<String>,
+    codex_mcp: Vec<(String, serde_json::Value)>,
     codex_needs: &[PathBuf],
     extra: &ChatLaunch,
 ) -> (Vec<String>, Option<serde_json::Value>) {
@@ -2880,11 +2900,8 @@ fn preset_launch(
         }
         "app-server" => {
             // Every server of the user's is switched off by name, but the ones the preset keeps.
-            let mcp: serde_json::Map<String, serde_json::Value> = codex_mcp
-                .into_iter()
-                .filter(|n| !p.mcp.contains(n))
-                .map(|n| (n, json!({ "enabled": false })))
-                .collect();
+            let mcp: serde_json::Map<String, serde_json::Value> =
+                codex_mcp.into_iter().filter(|(n, _)| !p.mcp.contains(n)).collect();
             let mut config = json!({
                 "web_search": if p.web { "live" } else { "disabled" },
                 "features": { "shell_tool": p.read || p.shell, "unified_exec": p.shell, "hooks": false },
@@ -3088,7 +3105,7 @@ mod tests {
             "app-server",
             &chat,
             dir,
-            vec!["GitHub".into()],
+            vec![("GitHub".into(), serde_json::json!({ "enabled": false }))],
             &[],
             &ChatLaunch::default(),
         );
@@ -3123,6 +3140,33 @@ mod tests {
         let rules = p.unwrap()["permission"].as_array().unwrap().clone();
         assert_eq!(rules[0]["action"], "deny");
         assert!(rules.iter().any(|r| r["permission"] == "websearch" && r["action"] == "allow"));
+    }
+
+    #[test]
+    fn codex_servers_are_switched_off_with_their_transport() {
+        // As `codex mcp list --json` lists them: a bundled plugin's (off already) and the
+        // desktop app's (on), neither in config.toml, and an HTTP one.
+        let listed = serde_json::json!([
+            { "name": "codex_app", "enabled": false,
+              "transport": { "type": "stdio", "command": "/p/launch", "args": ["./server.mjs"] } },
+            { "name": "cua_repl", "enabled": true,
+              "transport": { "type": "stdio", "command": "/app/node", "args": ["repl.mjs"],
+                             "env": { "TOKEN": "secret" }, "cwd": null } },
+            { "name": "docs", "enabled": true,
+              "transport": { "type": "streamable_http", "url": "https://mcp.example/x" } },
+        ]);
+        let off: Vec<_> = listed.as_array().unwrap().iter().filter_map(codex_mcp_off).collect();
+        let names: Vec<&str> = off.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["cua_repl", "docs"], "one that is off already is left alone");
+        assert_eq!(
+            off[0].1,
+            serde_json::json!({ "command": "/app/node", "args": ["repl.mjs"], "enabled": false }),
+            "a valid entry (a transport), and no secrets it needs only to run"
+        );
+        assert_eq!(
+            off[1].1,
+            serde_json::json!({ "url": "https://mcp.example/x", "enabled": false })
+        );
     }
 
     #[test]
@@ -3167,7 +3211,7 @@ mod tests {
             "app-server",
             &shell,
             dir,
-            vec!["github".into(), "jira".into()],
+            ["github", "jira"].map(|n| (n.into(), serde_json::json!({ "enabled": false }))).into(),
             &[],
             &extra,
         );

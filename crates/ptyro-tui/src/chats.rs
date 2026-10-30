@@ -187,6 +187,9 @@ impl App {
             self.close_chat();
             self.toast("that chat was deleted");
         }
+        if matches!(&self.chat_aside, Some(ChatPanel::View(v)) if v.id.as_deref() == Some(id)) {
+            self.chat_aside = None;
+        }
         self.dirty = true;
     }
 
@@ -390,6 +393,43 @@ impl App {
                 Request::ChatDelete { chat: id.to_owned() },
             );
         }
+    }
+
+    /// Put the chat (or the list) shown aside, as it is (its draft too), for `session.last`.
+    pub(crate) fn set_chat_aside(&mut self) {
+        self.drop_chat_aside();
+        if let Some(p) = self.chat_panel.take() {
+            if let ChatPanel::View(v) = &p
+                && let Some(id) = &v.id
+            {
+                self.send(ClientMsg::ChatUnsubscribe { chat: id.clone() });
+            }
+            self.chat_aside = Some(p);
+        }
+        self.dirty = true;
+    }
+
+    /// No way back to the chat put aside: it is left (a side chat goes, unless kept).
+    pub(crate) fn drop_chat_aside(&mut self) {
+        if let Some(ChatPanel::View(v)) = self.chat_aside.take()
+            && let Some(id) = v.id
+        {
+            self.left_chat(&id);
+        }
+    }
+
+    /// The chat put aside, shown again as it was and followed again; false when there is none.
+    pub(crate) fn bring_chat_back(&mut self) -> bool {
+        let Some(p) = self.chat_aside.take() else { return false };
+        if let ChatPanel::View(v) = &p
+            && let Some(id) = &v.id
+        {
+            self.send(ClientMsg::ChatSubscribe { chat: id.clone() });
+        }
+        self.chat_takes_keys();
+        self.chat_panel = Some(p);
+        self.dirty = true;
+        true
     }
 
     pub(crate) fn close_chat(&mut self) {
@@ -1412,7 +1452,7 @@ impl App {
                                 preset: v.preset.clone(),
                                 title: None,
                                 prompt: Some(text.clone()),
-                                incognito: v.incognito,
+                                incognito: Some(v.incognito),
                                 folders: v.folders.clone(),
                                 compare: v.compare.clone(),
                                 confirmed: false,

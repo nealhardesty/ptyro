@@ -251,7 +251,7 @@ const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
             ("inbox", "inbox"),
             ("session.find", "find"),
             ("session.next", "next"),
-            ("session.last", "last session"),
+            ("session.last", "back & forth"),
             ("chat.list", "chats"),
             ("home", "home"),
             ("sidebar.zoom", "everything"),

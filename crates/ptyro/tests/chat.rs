@@ -207,6 +207,22 @@ fn ask_answers_once_and_keeps_nothing() {
 }
 
 #[test]
+fn incognito_by_default_still_keeps_a_chat_asked_to() {
+    let w = World::new("incognito = true");
+    w.ok(&["chat", "new", "--no-wait", "forget me"]);
+    w.ok(&["chat", "new", "--keep", "--no-wait", "keep me"]);
+    w.ok(&["chat", "ask", "--keep", "and keep this"]);
+    let mut kept: Vec<(bool, String)> = w
+        .chats()
+        .iter()
+        .map(|c| (c["incognito"] == true, c["title"].as_str().unwrap_or_default().to_owned()))
+        .collect();
+    kept.sort();
+    assert_eq!(kept.iter().filter(|(i, _)| *i).count(), 1, "only the first: {kept:?}");
+    assert_eq!(kept.iter().filter(|(i, _)| !*i).count(), 2, "--keep wins: {kept:?}");
+}
+
+#[test]
 fn a_permission_card_is_answered_and_chats_can_be_switched_off() {
     let w = World::new("");
     w.ok(&["chat", "new", "--no-wait", "ask rm -rf /tmp/nothing"]);
@@ -214,9 +230,28 @@ fn a_permission_card_is_answered_and_chats_can_be_switched_off() {
     w.until("a permission request", || {
         w.chats()[0]["attention"]["text"].as_str().is_some_and(|t| t.contains("wants permission"))
     });
+    // The inbox says what happened, never what it asked: a chat's words stay in chat.db.
+    let inbox = w.json(&["inbox", "--json"]);
+    let bodies: Vec<&str> =
+        inbox.as_array().unwrap().iter().filter_map(|e| e["body"].as_str()).collect();
+    assert_eq!(bodies, ["the chat asks for permission"], "{inbox}");
     w.ok(&["chat", "answer", &addr, "deny"]);
     w.until("the answer", || texts(&w.chat(&addr), "assistant").iter().any(|t| t == "answer: no"));
     assert!(w.chats()[0]["attention"].is_null());
+    // An incognito chat's card is no inbox entry at all.
+    w.ok(&["chat", "new", "--incognito", "--no-wait", "ask rm -rf /tmp/secretplan"]);
+    w.until("its permission request", || {
+        w.chats().iter().any(|c| {
+            c["incognito"] == true
+                && c["attention"]["text"].as_str().is_some_and(|t| t.contains("wants permission"))
+        })
+    });
+    assert_eq!(w.json(&["inbox", "--json"]).as_array().unwrap().len(), 1, "no new entry");
+    let data = w.d.home.path().join("data");
+    for f in [data.join("ptyro.db"), data.join("ptyro.db-wal")] {
+        let bytes = String::from_utf8_lossy(&std::fs::read(&f).unwrap_or_default()).into_owned();
+        assert!(!bytes.contains("rm -rf"), "{} holds a chat's words", f.display());
+    }
 }
 
 #[test]
