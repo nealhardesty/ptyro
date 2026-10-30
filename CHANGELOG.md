@@ -2,10 +2,177 @@
 
 Generated from git history by `make changelog` (scripts/changelog.sh); edit commit messages, not this file.
 
+## v0.0.34 (2026-10-30)
+
+### Features
+
+- feat: a filtered sidebar keeps only the chat last written to, instead of hiding the CHATS section (fa9f5a4)
+- feat: sidebar filter (all/running/active) in the TUI, web and ls; quick shell and scratchpad stay when focus moves between shown panes (dedbeab)
+
+### Fixes
+
+- fix(chat): an answer is never lost to a live chat dropped mid-send (fc1926c)
+
+### Other
+
+- release: v0.0.34 (861fc83)
+
+## v0.0.33 (2026-10-30)
+
+### Features
+
+- feat(chat): ask several agents one question, and import the agents' own histories (CHAT5) (4907b4d)
+- feat(chat): Gemini out of the box, and CHAT4 tools and tasks (b8c51d0)
+- feat(chat): meaning search, opt-in (CHAT5, SPEC §22.10 tier 3) (1ba2ef1)
+- feat(chat): branches, forks, side chats, incognito and search (CHAT2, CHAT3) (f6341fc)
+- feat(chat): chats in linked machines' workspaces (CHAT1.9) (fb21b64)
+- feat(chat): CHATS in the TUI sidebar and the chat view, the web's Chats page, backup and docs (CHAT1.7, CHAT1.8) (a8cecea)
+- feat(chat): the chat engine, protocol 1.22 and `ptyro chat` (CHAT1.3–CHAT1.6) (9019357)
+- feat(chat): chat.db store, the chat record types and the [chat] settings (CHAT1.1, CHAT1.2) (998a5e6)
+
+### Fixes
+
+- fix(chat): the clients keep to the chat a reply is for, and import, task and compare take every flag in the TUI and on the web (d2f8fb0)
+- fix(chat): keep profiles and incognito apart in tasks and compares; harden import, meaning and MCP (572cbc7)
+- fix(chat): stopping engines that crossed an upgrade no longer delays its clients (b261f50)
+- fix(chat): a new follower never replaces what a starting engine said (5d487a3)
+- fix(chat): no engine is stopped or cut off by the daemon's own start (15ac453)
+- fix(chat): what the code review found (6f32356)
+
+### Other
+
+- release: v0.0.33 (43bd1f6)
+- release: v0.0.32 (abbb6d3)
+- chore(chat): reserve chat.db schema v3 for meaning search (CHAT5) (644615e)
+- release: v0.0.31 (8b9f7b5)
+- release: v0.0.30 (931ed1a)
+
+## v0.0.29 (2026-10-29)
+
+### Features
+
+- feat(web): pinch to zoom the terminal; a wide session opens readable on a phone (6a687e7)
+
+### Other
+
+- release: v0.0.29 (9165684)
+- test: fix two flaky tests (9ec74fb)
+
+## v0.0.28 (2026-10-29)
+
+### Features
+
+- feat(serve): a new certificate makes a new service worker (c023171)
+
+### Other
+
+- release: v0.0.28 (a7fa7cc)
+
+## v0.0.27 (2026-10-29)
+
+### Features
+
+- feat(web): offline over Tailscale says to check Tailscale on this device (62543a7)
+
+### Other
+
+- release: v0.0.27 (b6d03ac)
+
+## v0.0.26 (2026-10-29)
+
+### Features
+
+- feat: name fields swap what a name can't hold for _ as you type, in the TUI and the web (v0.0.25) (abe1084)
+
+### Fixes
+
+- fix: a session started in another machine's worktree from the wizard goes to that worktree's workspace, not the selected row's; a request naming a workspace of one machine and a worktree of another is refused with the fix, not sent to the wrong machine (aa47d8a)
+
+### Other
+
+- chore: ignore .DS_Store (b887d08)
+- spike: CHAT0 results (make spike-chat, make spike-chat-fts; SPEC §20.8, corrections to §22.5-22.17, ROADMAP CHAT0 done) (503d1e2)
+
+## v0.0.25 (2026-10-29)
+
+### Features
+
+- feat: untracked files' lines count in a worktree's +N (09f19b7)
+
+### Documentation
+
+- docs: spec the chat feature (SPEC §22, ROADMAP CHAT, RESEARCH R-CHAT) (607410e)
+
+### Other
+
+- release: v0.0.25 (b0c8706)
+
+## v0.0.24 (2026-10-29)
+
+### Features
+
+- feat: Tailscale's certificate is automatic over Tailscale: no remote.tailscale_cert setting, no first-run question, no Web.tailnet_cert or cert_ask in the protocol (520396c)
+- feat(remote): serve Tailscale's certificate for the tailnet name (9e58eb4)
+
+### Other
+
+- release: v0.0.24 (fa7d8b9)
+
+## v0.0.23 (2026-10-29)
+
+### Fixes
+
+- fix: machine add says at once when the other machine runs another version, with the fix, instead of a bare "connecting" (0af23a1)
+
+### Other
+
+- release: v0.0.23 (1b4356b)
+
+## v0.0.22 (2026-10-29)
+
+### Features
+
+- feat: the quick shell's line is tinted while its drawer is open; the drawer and the scratchpad's popup tuck away when focus lands on another pane or another session or workspace shows; a shell that exits is removed (agents stay), [ui] shell_exit = keep restores the exited row (3451f54)
+- feat: the quick terminal's sidebar line is named `›_ quick shell` and sits first under its worktree, right below the worktree's name, so the one shell every worktree has is always the same place and called what it is. The web already says Quick shell. (495dbe6)
+
+### Fixes
+
+- fix(tui): shorten a long host name so the sidebar header keeps the workspace (6aef006)
+- fix(web): keep the reply box from covering the bottom of the session (0addd68)
+- fix(tls): sign the server certificate with an rcgen 0.14 Issuer (4f4b953)
+
+### Documentation
+
+- style: rustfmt the sidebar header (46c6692)
+
+### Other
+
+- release: v0.0.22 (4a9103e)
+- release: v0.0.21 (9960ffd)
+
+## v0.0.18 (2026-10-28)
+
+### Features
+
+- feat: who can reach the web app is one setting. [remote] access (localhost | tailscale | open) and port replace listen, tailscale, local, insecure and trusted_proxy; the web app is always HTTPS; tailscale binds loopback and the tailnet addresses only. Old config files are read as what they meant. Adds the Principle of Obviousness to AGENTS.md (9b61786)
+
+### Fixes
+
+- fix(tui): keep the cursor on the program's prompt after painting links (5ed227c)
+
+### Other
+
+- release: v0.0.18 (6b8342c)
+- chore(deps): bump rcgen from 0.13.2 to 0.14.10 (ba8a47b)
+- chore(deps): bump similar from 2.7.0 to 3.2.1 (25c5479)
+- chore(deps): bump notify from 8.2.0 to 8.2.1 in the cargo group (6fb3888)
+- test: a wait for 'serve is listening' ignores a socket connected to itself (flaky Connection refused) (963de00)
+
 ## v0.0.16 (2026-10-28)
 
 ### Other
 
+- release: v0.0.16 (e066048)
 - chore: version 0.0.16 (dc154c1)
 - test: three tests that failed on CI's runners. send --raw's checks the order, not how the tty echo interleaves; the TUI switch gets room to land; the carried-listener test runs on Linux only (macOS 14 breaks it, which is why the daemon never carries its listener) (89c27f3)
 
