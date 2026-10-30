@@ -8,6 +8,8 @@ import { data, machineOf, wsLabel } from "./data.js";
 import { machineChip } from "./machines.js";
 import { actions, ago, ask, confirm, download, errText, form, h, menu, patch, ui, views } from "./kit.js";
 import type { Child } from "./kit.js";
+import { atInsert, atQuery, chatsOff, folderList, importedFrom, itemKey, label, recentChats, shownChats, slashMessage, sorted } from "./chatkit.js";
+import { composing } from "./keys.js";
 
 const ACTIONS = {
   "chats": "Your chats: pinned first, then the newest; search them, or start one",
@@ -24,7 +26,7 @@ const ACTIONS = {
   "chat.preset": "What the chat may use: web search, read folders, a shell, MCP servers, or no tools",
   "chat.folder": "Folders the chat may read (on the computer it runs on), with the read preset",
   "chat.task": "Make it a task: an agent in a new worktree carries out the chat's last answer",
-  "chat.export": "Download the chat as Markdown",
+  "chat.export": "Download the chat as Markdown, or as JSON (every message, with its ids)",
   "chat.search": "Search every chat: titles at once, and from 3 letters every message on every machine (\"phrases\", prefix*, -word, agent:codex, since:7d, by:meaning; ≈ marks a message found by meaning)",
   "chat.meaning": "Switch meaning search on: also find messages by what they are about, not only their words (downloads a 31 MB model once)",
   "chat.archived": "Show archived chats instead",
@@ -42,6 +44,10 @@ const ACTIONS = {
   "chat.pick": "Keep this answer: the chat switches to the agent that wrote it, which takes the next message",
   "chat.import": "Import your agents' own histories (Claude Code, Codex, Gemini) as read-only, searchable chats: every agent's and profile's, or one, only recent sessions, or just count them first",
   "chat.imported": "Show only the chats imported from your agents' own histories (⇣), or every chat again",
+  "chat.pinned": "Show only the pinned chats, or every chat again",
+  "chat.on": "Switch chats on (`[chat] enabled`, in your config, as Settings → Chat would)",
+  "chat.recent": "Your pinned chats and the newest (Settings → Chat → recent says how many)",
+  "chat.folder_at": "@ in the box: the chat's folders, to name one (Tab or Enter puts it in)",
 } as const;
 const tip = actions(ACTIONS);
 
@@ -74,12 +80,6 @@ function compareLine(c: NonNullable<Chat["comparing"]>): string {
   return `${busy ? "comparing" : "compared"}: ${c.agents.map((a) => `${a.agent} ${mark(a.state)}${a.note ? ` ${a.note}` : ""}`).join(" · ")}`;
 }
 
-/// `imported from claude · ~/repo`.
-function importedFrom(c: Chat): string {
-  if (!c.source) return "";
-  const agent = c.source.split(":")[0];
-  return c.source_dir ? `imported from ${agent} · ${c.source_dir}` : `imported from ${agent}`;
-}
 interface Hit { chat: Chat; node?: string | null; kind: string; snippet: string; at_ms: number; rank: number; how?: string }
 interface Item { id: string; t: string; [k: string]: any }
 
@@ -89,6 +89,7 @@ const state = {
   loaded: false,
   /// `[chat] enabled = false`: the daemon says why, and the Chats tab goes.
   off: "",
+  /// The search box's text, as typed.
   query: "",
   workspace: "",
   /// The chat followed now, and its items.
@@ -108,11 +109,20 @@ const state = {
   meaningOff: "",
   /// Only chats imported from the agents' own histories (`chat ls --imported`).
   imported: false,
+  /// Only pinned chats (`chat ls --pinned`).
+  pinned: false,
+  /// Chats opened that the list doesn't hold (archived, from a link or a citation), by id.
+  seen: new Map<string, Chat>(),
+  /// The chat shown was deleted (elsewhere, or incognito and its agent ended).
+  gone: "",
+  /// `[chat] recent`: how many unpinned chats the compact CHATS section shows.
+  recent: 5,
 };
 
-const label = (c: Chat | undefined): string => c?.title?.trim() || "new chat";
 const addr = (c: Chat): string => `c:${c.handle}`;
 const working = (c: Chat): boolean => c.status === "working" || c.status === "starting";
+/// A chat by id: listed, archived, or opened from a link.
+const chatOf = (id: string | null | undefined): Chat | undefined => (id ? state.list.get(id) ?? state.seen.get(id) ?? state.archived?.find((x) => x.id === id) : undefined);
 const glyph = (c: Chat): string => c.attention || c.status === "blocked" ? "⚠" : working(c) ? "●" : c.status === "errored" ? "✗" : c.incognito ? "◌" : c.pinned ? "★" : c.side_of ? "↳" : c.source ? "⇣" : "·";
 
 /// A snippet with its matches marked (control characters from the daemon) as <mark>.
@@ -136,7 +146,8 @@ function cited(text: string): (Node | string)[] {
     out.push(text.slice(at, i));
     const handle = m[1].replace(/^.*c:/, "");
     const c = [...state.list.values()].find((x) => x.handle === handle || x.id.endsWith(handle));
-    out.push(c ? h("a", { href: `#/c/${encodeURIComponent(c.id)}/${encodeURIComponent(m[2])}`, title: tip("chat.cite") }, m[0]) : m[0]);
+    // One the list doesn't hold (archived, another machine's): by its address, read when opened.
+    out.push(h("a", { href: `#/c/${encodeURIComponent(c?.id ?? m[1])}/${encodeURIComponent(m[2])}`, title: tip("chat.cite") }, m[0]));
     at = i + m[0].length;
   }
   out.push(text.slice(at));
@@ -148,7 +159,9 @@ export function chatsShown(): boolean {
   return !state.off;
 }
 
+let retryTimer = 0;
 export async function loadChats(): Promise<void> {
+  clearTimeout(retryTimer);
   try {
     const r = await conn.request({ t: "chat_list", all: true });
     state.list = new Map((r.chats as Chat[]).map((c) => [c.id, c]));
@@ -156,15 +169,30 @@ export async function loadChats(): Promise<void> {
     // Every preset with what it means (yours too); the built-in three until the daemon says.
     const p = await conn.request({ t: "chat_presets" }).catch(() => null);
     if (p) { presets = p.presets as Preset[]; presetsKnown = true; incognitoDefault = !!p.incognito; }
+    // `[chat] recent`, where this device may read the config.
+    if (conn.scope === "full") {
+      const v = await host("settings.view", { scope: "user" }).catch(() => null);
+      const n = Number(v?.entries?.find((x: { key: string }) => x.key === "chat.recent")?.value);
+      if (Number.isFinite(n) && n >= 0) state.recent = n;
+    }
   } catch (e) {
-    state.off = errText(e);
+    // Only chats switched off hide the tab; anything else (a slow daemon, a dropped connection)
+    // is tried again.
+    if (chatsOff(e)) state.off = "Chats are switched off.";
+    else retryTimer = window.setTimeout(() => { if (conn.state === "open") void loadChats(); }, 3000);
   }
   state.loaded = true;
   ui.render();
 }
 
-function sorted(list: Iterable<Chat>): Chat[] {
-  return [...list].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.last_ms - a.last_ms);
+/// `[chat] enabled = true`, in your config (as the settings panel would); the daemon's reload
+/// brings the tab back.
+async function chatsOn(): Promise<void> {
+  try {
+    await host("settings.apply", { scope: "user", change: { t: "set", key: "chat.enabled", value: "true" } });
+    ui.toast("Chats are on");
+    await loadChats();
+  } catch (e) { ui.toast(errText(e)); }
 }
 
 function dayOf(ms: number): string {
@@ -182,7 +210,7 @@ function dayOf(ms: number): string {
 const findBox = h("input", { class: "search", type: "search", placeholder: "Search chats", "aria-label": "Search chats", autocapitalize: "off", autocomplete: "off", title: tip("chat.search") });
 let searchTimer = 0;
 findBox.addEventListener("input", () => {
-  state.query = findBox.value.trim().toLowerCase();
+  state.query = findBox.value.trim();
   const l = document.querySelector<HTMLElement>("main.chats .rows"); if (l) patch(l, rows());
   // Every message, on every machine, from 3 letters on (a shorter prefix matches everything).
   clearTimeout(searchTimer);
@@ -192,7 +220,7 @@ findBox.addEventListener("input", () => {
 async function searchMessages(q: string): Promise<void> {
   if ([...q].length < 3) { state.hits = []; state.hitsFor = ""; ui.render(); return; }
   try {
-    const r = await conn.request({ t: "chat_search", query: q, workspace: state.workspace || null, archived: !!state.archived, limit: 30, machines: true });
+    const r = await conn.request({ t: "chat_search", query: q, workspace: state.workspace || null, archived: !!state.archived, pinned: state.pinned, limit: 30, machines: true });
     if (findBox.value.trim() !== q) return;
     state.hits = r.hits as Hit[];
     state.hitsFor = q;
@@ -201,6 +229,12 @@ async function searchMessages(q: string): Promise<void> {
     state.hits = []; state.hitsFor = q;
     state.meaningOff = (e as { code?: string }).code === "needs_confirmation" ? errText(e) : "";
   }
+  ui.render();
+}
+
+/// The list's filters changed: the message search answers them too.
+function filtersChanged(): void {
+  if ([...state.query].length >= 3) void searchMessages(state.query);
   ui.render();
 }
 
@@ -224,39 +258,25 @@ async function meaningOn(): Promise<void> {
   } catch (e) { ui.toast(errText(e)); }
 }
 
-/// The search box as a title filter: the search's operators (`by:meaning`, `since:7d`,
-/// `workspace:w`, `-word`) are the message search's, not title text; `agent:x` narrows by agent.
-function titleQuery(q: string): { text: string; agent: string } {
-  let agent = "";
-  const words: string[] = [];
-  for (const w of q.split(/\s+/).filter(Boolean)) {
-    const [k, v] = w.includes(":") ? [w.slice(0, w.indexOf(":")), w.slice(w.indexOf(":") + 1)] : ["", ""];
-    if (k === "agent") agent = v;
-    else if (["by", "since", "workspace", "ws"].includes(k) || (w.startsWith("-") && w.length > 1)) continue;
-    else words.push(w.replace(/^"|"$/g, "").replace(/\*$/, ""));
-  }
-  return { text: words.join(" "), agent };
-}
-
 function rows(): Node[] {
   const source = state.archived ?? sorted(state.list.values());
-  const { text: q, agent } = titleQuery(state.query);
-  // Side chats sit with their chat; incognito ones are never "every chat" (SPEC §22.12).
-  const shown = source.filter((c) => !c.side_of && !c.incognito && (!state.workspace || c.workspace === state.workspace) && (!state.imported || !!c.source) && (!agent || c.agent.includes(agent)) && (!q || label(c).toLowerCase().includes(q) || c.agent.includes(q) || importedFrom(c).toLowerCase().includes(q)));
-  if (!shown.length && state.query) return [h("p", { class: "sub" }, q ? `No chat titled “${q}”.` : "No chat matches."), ...hitRows()];
+  const q = state.query;
+  // Side chats sit under their chat, as in the TUI's sidebar.
+  const shown = shownChats(source, { query: q, workspace: state.workspace, imported: state.imported, pinned: state.pinned });
+  if (!shown.length && q) return [h("p", { class: "sub" }, `No chat titled “${q}”.`), ...hitRows()];
   if (!shown.length) {
     return [h("div", { class: "empty" },
-      h("p", {}, q ? `Nothing matches “${q}”.` : state.archived ? "No archived chats." : state.imported ? "No imported chats: ⇣ imports your agents' own histories." : "No chats yet. Ask anything: it can search the web, and it is kept here."),
-      q || state.archived || state.imported || !canWrite() ? null : h("button", { class: "primary", title: tip("chat.new"), onclick: () => newChat() }, "Start a chat"))];
+      h("p", {}, state.archived ? "No archived chats." : state.imported ? "No imported chats: ⇣ imports your agents' own histories." : state.pinned ? "No pinned chats: ⋯ → Pin keeps one at the top." : "No chats yet. Ask anything: it can search the web, and it is kept here."),
+      state.archived || state.imported || state.pinned || !canWrite() ? null : h("button", { class: "primary", title: tip("chat.new"), onclick: () => newChat() }, "Start a chat"))];
   }
   const out: Node[] = [];
   let group = "";
-  for (const c of shown) {
+  for (const { chat: c, side } of shown) {
     const g = c.pinned && !state.archived ? "Pinned" : dayOf(c.last_ms);
-    if (g !== group) { out.push(h("h3", { class: "day" }, g)); group = g; }
+    if (!side && g !== group) { out.push(h("h3", { class: "day" }, g)); group = g; }
     // Another machine's that is down: listed as it was, greyed (SPEC §22.11).
     const down = !!c.machine && machineOf(c.workspace)?.state !== "online";
-    out.push(h("div", { class: `chat-row${c.unread ? " unread" : ""}${c.attention ? " blocked" : ""}${down ? " offline" : ""}` },
+    out.push(h("div", { class: `chat-row${side ? " side" : ""}${c.unread ? " unread" : ""}${c.attention ? " blocked" : ""}${down ? " offline" : ""}` },
       h("a", { class: "main", href: `#/c/${encodeURIComponent(c.id)}`, title: tip("chat.open") },
         h("span", { class: "glyph" }, glyph(c)),
         h("span", { class: "title" }, label(c)),
@@ -273,10 +293,11 @@ function rows(): Node[] {
 function listView(): HTMLElement {
   if (!state.loaded) void loadChats();
   if (state.off) {
-    return h("div", {}, ui.header("Chats", false), h("main", { class: "center" }, h("p", {}, state.off)));
+    return h("div", {}, ui.header("Chats", false), h("main", { class: "center" }, h("p", {}, state.off),
+      conn.scope === "full" ? h("button", { class: "primary", title: tip("chat.on"), onclick: () => void chatsOn() }, "Switch chats on") : h("p", { class: "sub" }, "A device paired with full access (or Settings → Chat on the computer) can switch them on.")));
   }
-  if (findBox.value !== state.query && document.activeElement !== findBox) findBox.value = state.query;
-  const wsSelect = h("select", { "aria-label": "Workspace", onchange: (e: Event) => { state.workspace = (e.target as HTMLSelectElement).value; ui.render(); } },
+  if (findBox.value.trim() !== state.query && document.activeElement !== findBox) findBox.value = state.query;
+  const wsSelect = h("select", { "aria-label": "Workspace", onchange: (e: Event) => { state.workspace = (e.target as HTMLSelectElement).value; filtersChanged(); } },
     h("option", { value: "" }, "Every workspace"),
     ...[...data.workspaces.values()].map((w) => h("option", { value: w.name }, wsLabel(w.name))));
   wsSelect.value = state.workspace;
@@ -284,12 +305,13 @@ function listView(): HTMLElement {
   // Shown once there are imported chats (or while it filters).
   const anyImported = state.imported || [...state.list.values()].some((c) => !!c.source);
   const imported = anyImported ? h("button", { class: `small${state.imported ? " on" : ""}`, title: tip("chat.imported"), "aria-pressed": String(state.imported), onclick: () => { state.imported = !state.imported; ui.render(); } }, "Imported") : null;
+  const pinned = h("button", { class: `small${state.pinned ? " on" : ""}`, title: tip("chat.pinned"), "aria-pressed": String(state.pinned), onclick: () => { state.pinned = !state.pinned; filtersChanged(); } }, "★ Pinned");
   return h("div", {},
     ui.header("Chats", false,
       canWrite() ? h("button", { class: "icon", title: tip("chat.find"), "aria-label": "Ask your chats", onclick: () => findChats() }, "？") : null,
       conn.scope === "full" ? h("button", { class: "icon", title: tip("chat.import"), "aria-label": "Import agent histories", onclick: () => importHistories() }, "⇣") : null,
       canWrite() ? h("button", { class: "icon plus", title: tip("chat.new"), "aria-label": "New chat", onclick: () => newChat() }, "＋") : null),
-    h("div", { class: "searchbar" }, findBox, wsSelect, archived, imported),
+    h("div", { class: "searchbar" }, findBox, wsSelect, pinned, archived, imported),
     h("main", { class: "list chats", title: tip("chats") }, h("div", { class: "rows" }, ...rows())));
 }
 
@@ -380,13 +402,20 @@ function findChats(): void {
 }
 
 async function toggleArchived(): Promise<void> {
-  if (state.archived) { state.archived = null; ui.render(); return; }
+  if (state.archived) { state.archived = null; filtersChanged(); return; }
   const r = await ask<{ chats: Chat[] }>({ t: "chat_list", all: true, archived: true });
   state.archived = r ? sorted(r.chats) : [];
-  ui.render();
+  filtersChanged();
 }
 
-function newChat(): void {
+/// `C-g`: the search box over every chat.
+export function findAllChats(): void {
+  if (location.hash !== "#/chats") location.hash = "#/chats";
+  setTimeout(() => findBox.focus(), 50);
+}
+
+/// `chat new` (`m`): a new chat, in the workspace the list shows.
+export function newChat(): void {
   location.hash = `#/c/new${state.workspace ? `/${encodeURIComponent(state.workspace)}` : ""}`;
 }
 
@@ -397,6 +426,7 @@ function update(c: Chat, change: object, ok: string): Promise<unknown> {
 
 /// Keep a side chat: at once here too, so leaving before the daemon's word doesn't drop it.
 function keepSide(c: Chat): void {
+  if (!c.side_of) { ui.toast("Not a side chat: it is kept already"); return; }
   c.side_of = null;
   ui.render();
   void update(c, { keep: true }, "Kept");
@@ -406,9 +436,10 @@ function chatMenu(c: Chat): void {
   const archived = c.archived || !!state.archived?.some((x) => x.id === c.id);
   const open = { title: tip("chat.open"), label: "Open", run: () => { location.hash = `#/c/${encodeURIComponent(c.id)}`; } };
   const md = { title: tip("chat.export"), label: "Download as Markdown", run: () => void exportChat(c) };
+  const js = { title: tip("chat.export"), label: "Download as JSON", hint: "every message, with its ids", run: () => void exportChat(c, "json") };
   // A device that may only read gets what reads (SPEC §22.11).
   const find = { title: tip("chat.find_in"), label: "Find in this chat", run: () => findInChat(c) };
-  if (!canWrite()) { menu(label(c), [open, find, md]); return; }
+  if (!canWrite()) { menu(label(c), [open, find, md, js]); return; }
   const side = !!c.side_of;
   menu(label(c), [
     open,
@@ -425,6 +456,7 @@ function chatMenu(c: Chat): void {
     !c.incognito && !c.source && { title: tip("chat.compare"), label: "Ask several agents", hint: "each answers as a branch", run: () => compareAgents(c) },
     state.following === c.id && state.siblings.some((s) => sibLabel(s)) && { title: tip("chat.pick"), label: "Keep this answer", hint: "its agent takes the next message", run: () => void pickAnswer(c.id) },
     md,
+    js,
     { title: tip("chat.archive"), label: archived ? "Bring back from the archive" : "Archive", run: async () => {
       await update(c, { archived: !archived }, archived ? "Back from the archive" : "Archived");
       if (state.archived) state.archived = state.archived.filter((x) => x.id !== c.id);
@@ -508,11 +540,6 @@ function pickPreset(c: Chat): void {
   menu("What may the chat use?", presets.map((p) => ({ title: tip("chat.preset"), label: p.name, hint: `${p.name === c.tools ? "now · " : ""}${p.about}${p.builtin ? "" : " (yours)"}`, run: () => update(c, { preset: p.name }, `Tools: ${p.name}`) })));
 }
 
-/// Folders, one a line, as full paths on the computer the chat runs on (`~` works).
-function folderList(text: string): string[] {
-  return text.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
-}
-
 function editFolders(c: Chat): void {
   const reads = presets.find((p) => p.name === c.tools)?.read;
   form("Folders this chat may read", [{ key: "f", label: "One a line (empty: none)", type: "textarea", rows: 3, placeholder: "~/notes", value: (c.folders ?? []).join("\n") }], "Save", async (v) => {
@@ -569,16 +596,16 @@ function taskArgs(text: string): { project: string | null; agent: string | null;
   return out;
 }
 
-async function exportChat(c: Chat): Promise<void> {
-  const r = await ask<{ text: string }>({ t: "chat_export", chat: c.id, format: "md" });
-  if (r) download(`${label(c).replace(/[^\w.-]+/g, "-").slice(0, 60) || c.handle}.md`, r.text, "text/markdown");
+async function exportChat(c: Chat, format: "md" | "json" = "md"): Promise<void> {
+  const r = await ask<{ text: string }>({ t: "chat_export", chat: c.id, format });
+  if (r) download(`${label(c).replace(/[^\w.-]+/g, "-").slice(0, 60) || c.handle}.${format}`, r.text, format === "json" ? "application/json" : "text/markdown");
 }
 
 // ── one chat ────────────────────────────────────────────────────────────────────────────────
 
 /// The page's composer and transcript stay in the DOM across renders, so a draft, the caret
 /// and the scroll position survive the events that re-render everything around them.
-interface Page { id: string; el: HTMLElement; box: HTMLElement; reply: HTMLTextAreaElement; els: Map<string, { key: string; el: HTMLElement }>; agent: HTMLSelectElement; preset: HTMLSelectElement; incognito: HTMLInputElement; folders: HTMLInputElement; compare: HTMLElement; sending: boolean }
+interface Page { id: string; el: HTMLElement; box: HTMLElement; reply: HTMLTextAreaElement; els: Map<string, { key: string; el: HTMLElement }>; agent: HTMLSelectElement; preset: HTMLSelectElement; incognito: HTMLInputElement; folders: HTMLInputElement; title: HTMLInputElement; workspace: HTMLSelectElement; compare: HTMLElement; at: HTMLElement; sending: boolean }
 let page: Page | null = null;
 const drafts = new Map<string, string>();
 
@@ -588,6 +615,7 @@ function canWrite(): boolean {
 
 function follow(id: string | null): void {
   if (state.following === id) return;
+  state.gone = "";
   if (state.following) conn.send({ t: "chat_unsubscribe", chat: state.following });
   state.following = id;
   state.items = [];
@@ -596,7 +624,7 @@ function follow(id: string | null): void {
 }
 window.addEventListener("hashchange", () => {
   // Leaving a side chat that wasn't kept: it goes (SPEC §22.7).
-  const left = state.following ? state.list.get(state.following) : undefined;
+  const left = chatOf(state.following);
   if (left?.side_of && !location.hash.startsWith(`#/c/${encodeURIComponent(left.id)}`)) void conn.request({ t: "chat_delete", chat: left.id }).catch(() => {});
   if (!/^#\/c\//.test(location.hash)) follow(null);
   if (location.hash !== `#/c/${atRoute}`) atRoute = "";
@@ -607,18 +635,48 @@ function pageFor(id: string): Page {
   if (page?.id === id) return page;
   const reply = h("textarea", { rows: 2, enterkeyhint: "send", placeholder: "Ask anything…", title: tip("chat.send") });
   reply.value = drafts.get(id) ?? "";
-  reply.addEventListener("input", () => drafts.set(id, reply.value));
-  reply.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); void send(); } });
+  // `@`: the chat's folders, to name one in the message.
+  const at = h("div", { class: "at-list", role: "listbox", title: tip("chat.folder_at") });
+  const folderNames = (): string[] => (id.startsWith("new") ? folderList(page?.folders.value ?? "") : chatOf(id)?.folders ?? []);
+  const atNow = () => atQuery(reply.value, reply.selectionStart ?? reply.value.length, folderNames());
+  const putAt = (f: string): void => {
+    const q = atNow();
+    if (!q) return;
+    const r = atInsert(reply.value, reply.selectionStart ?? reply.value.length, q.start, f);
+    reply.value = r.text; reply.setSelectionRange(r.caret, r.caret); drafts.set(id, reply.value);
+    showAt(); reply.focus();
+  };
+  const showAt = (): void => {
+    const q = atNow();
+    at.replaceChildren(...(q?.matches ?? []).map((f) => h("button", { class: "small", role: "option", title: tip("chat.folder_at"), onmousedown: (e: Event) => e.preventDefault(), onclick: () => putAt(f) }, f)));
+    at.hidden = !q?.matches.length;
+  };
+  at.hidden = true;
+  reply.addEventListener("input", () => { drafts.set(id, reply.value); showAt(); });
+  reply.addEventListener("blur", () => { at.hidden = true; });
+  reply.addEventListener("keydown", (e) => {
+    // Tab or Enter puts the first folder in; Esc closes the list.
+    const q = at.hidden ? null : atNow();
+    if (q?.matches.length && (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) && !composing(e)) { e.preventDefault(); putAt(q.matches[0]); return; }
+    if (q && e.key === "Escape") { at.hidden = true; e.preventDefault(); return; }
+    if (e.key === "Enter" && !e.shiftKey && !composing(e)) { e.preventDefault(); void send(); }
+  });
   const agent = h("select", { "aria-label": "Agent", title: tip("chat.agent") }, h("option", { value: "" }, "default agent"), ...agentNames().map((a) => h("option", { value: a }, a)));
   // The default is `[chat] preset`'s, whatever it is (a preset of your own too).
   const preset = h("select", { "aria-label": "Tools", title: tip("chat.preset") }, h("option", { value: "" }, "default tools"), ...presets.map((p) => h("option", { value: p.name }, `${p.name}: ${p.about}`)));
   const incognito = h("input", { type: "checkbox", title: tip("chat.incognito") });
   incognito.checked = incognitoDefault;
   const folders = h("input", { type: "text", placeholder: "Folders it may read (optional), e.g. ~/notes", "aria-label": "Folders", title: tip("chat.folder"), autocapitalize: "off", spellcheck: "false" });
+  // `chat new --title`, and the workspace it belongs to (`--workspace`; the list's, or the address's).
+  const title = h("input", { type: "text", placeholder: "Title (optional: one is made after the first answer)", "aria-label": "Title", title: tip("chat.retitle") });
+  const ws = decodeURIComponent(id.split("/")[1] ?? "") || state.workspace;
+  const workspace = h("select", { "aria-label": "Workspace", title: "The workspace the chat belongs to" }, h("option", { value: "" }, "main workspace"),
+    ...[...data.workspaces.values()].filter((w) => w.name !== "main").map((w) => h("option", { value: w.name }, wsLabel(w.name))));
+  workspace.value = ws === "main" ? "" : ws;
   // Compare: the first message goes to each agent checked (two or more), each answer a branch.
   const compare = h("div", { class: "bar chat-pick compare", title: tip("chat.compare") }, h("span", { class: "sub" }, "Ask several:"),
     ...agentNames().map((a) => h("label", { class: "check" }, h("input", { type: "checkbox", value: a }), ` ${a}`)));
-  page = { id, el: h("div", { class: "session chat-page" }), box: h("div", { class: "chat" }), reply, els: new Map(), agent, preset, incognito, folders, compare, sending: false };
+  page = { id, el: h("div", { class: "session chat-page" }), box: h("div", { class: "chat" }), reply, els: new Map(), agent, preset, incognito, folders, title, workspace, compare, at, sending: false };
   // The keyboard goes to the composer once, as the page opens (not on every render, which
   // would pull it out of the Folders box or a sheet); on a phone only for a new chat, where
   // typing is the point, rather than popping the keyboard over a chat being read.
@@ -643,11 +701,18 @@ async function send(): Promise<void> {
   p.sending = true;
   try {
     if (p.id.startsWith("new")) {
-      const ws = decodeURIComponent(p.id.split("/")[1] ?? "") || undefined;
       state.items = [{ id: "first", t: "user", text }];
       ui.render();
       const compare = [...p.compare.querySelectorAll<HTMLInputElement>("input:checked")].map((x) => x.value);
-      const r = await agreed({ t: "chat_new", workspace: ws, agent: p.agent.value || null, preset: p.preset.value || null, prompt: text, incognito: p.incognito.checked, folders: folderList(p.folders.value), compare: compare.length > 1 ? compare : [] });
+      let r;
+      try {
+        r = await agreed({ t: "chat_new", workspace: p.workspace.value || undefined, agent: p.agent.value || null, preset: p.preset.value || null, title: p.title.value.trim() || null, prompt: text, incognito: p.incognito.checked, folders: folderList(p.folders.value), compare: compare.length > 1 ? compare : [] });
+      } catch (e) {
+        // Not made: the message goes back to being a draft, not a sent one.
+        state.items = [];
+        ui.render();
+        throw e;
+      }
       p.reply.value = ""; drafts.delete(p.id);
       p.sending = false;
       const info = r.info as Chat;
@@ -670,20 +735,10 @@ async function send(): Promise<void> {
 }
 
 /// The composer's slash commands (SPEC §22.12), as in the TUI.
-/// A line that starts with `/` but is a message (as `chats::slash_message`): `//` sends the rest
-/// with one `/`, and a path (`/etc/hosts — what is it?`) is a message as it is. `null`: a command.
-export function slashMessage(text: string): string | null {
-  const t = text.trimStart();
-  if (!t.startsWith("/")) return null;
-  const rest = t.slice(1);
-  if (rest.startsWith("/")) return rest;
-  return (rest.split(/\s/)[0] ?? "").includes("/") ? text : null;
-}
-
 function slash(id: string, text: string): void {
   const [name, ...rest] = text.slice(1).split(" ");
   const arg = rest.join(" ").trim();
-  const c = state.list.get(id);
+  const c = chatOf(id);
   const lastUser = [...state.items].reverse().find((x) => x.t === "user");
   const needsChat = ["retry", "edit", "fork", "side", "keep", "agent", "title", "export", "branch", "cite", "task", "pick"];
   if (!c && needsChat.includes(name)) { ui.toast(`/${name} works in a chat: send a first message`); return; }
@@ -709,7 +764,14 @@ function slash(id: string, text: string): void {
       return;
     case "folder": case "folders": {
       const none = arg === "none" || arg === "-";
-      if (!c) { if (page) { page.folders.value = none ? "" : [page.folders.value, arg].filter(Boolean).join(", "); ui.toast(none ? "No folders" : `It may read ${arg}`); } return; }
+      if (!c) {
+        if (!page) return;
+        // No folder named: the box, to type them in.
+        if (!arg) { page.folders.focus(); ui.toast(page.folders.value ? `It may read ${page.folders.value}` : "/folder DIR lets it read a folder (/folder none: none)"); return; }
+        page.folders.value = none ? "" : [page.folders.value, arg].filter(Boolean).join(", ");
+        ui.toast(none ? "No folders" : `It may read ${arg}`);
+        return;
+      }
       if (!arg) { editFolders(c); return; }
       const next = none ? [] : [...new Set([...(c.folders ?? []), arg])];
       void update(c, { folders: next }, none ? "No folders" : `It may read ${arg} from the next message on`);
@@ -796,7 +858,7 @@ function pickCitation(): void {
     for (const m of it.text.matchAll(re)) {
       const handle = m[1].replace(/^.*c:/, "");
       const c = [...state.list.values()].find((x) => x.handle === handle || x.id.endsWith(handle));
-      if (c) seen.set(m[0], `#/c/${encodeURIComponent(c.id)}/${encodeURIComponent(m[2])}`);
+      seen.set(m[0], `#/c/${encodeURIComponent(c?.id ?? m[1])}/${encodeURIComponent(m[2])}`);
     }
   }
   if (!seen.size) { ui.toast("No citations (c:7f3k/…) in this chat"); return; }
@@ -822,7 +884,7 @@ function siblingBar(id: string, s: Siblings): HTMLElement {
 }
 
 function chatItem(id: string, it: Item): HTMLElement | null {
-  const c = state.list.get(id);
+  const c = chatOf(id);
   const may = canWrite() && !!c;
   // An imported chat stays as its agent wrote it: forks only (a message makes one).
   const mine = may && !c!.source;
@@ -868,9 +930,12 @@ function drawItems(p: Page): void {
   const top = box.scrollTop;
   const els = new Map<string, { key: string; el: HTMLElement }>();
   const kids: HTMLElement[] = [];
+  // What around a message changes its buttons and links: the chat's own state, citations resolvable.
+  const c = chatOf(p.id);
+  const extra = c ? `${canWrite()}${c.incognito}${!!c.source}${state.list.size}` : `${canWrite()}`;
   for (const it of state.items) {
     const sib = state.siblings.find((s) => s.node === it.id);
-    const key = JSON.stringify([it, sib, state.findIn]);
+    const key = itemKey(it, sib, state.findIn, extra);
     const old = p.els.get(it.id);
     let el = old?.key === key ? old.el : chatItem(p.id, it);
     if (!el) continue;
@@ -907,32 +972,75 @@ function chatView(rest: string): HTMLElement {
   const p = pageFor(id);
   // A new chat follows nothing yet (and shows nothing of the one left).
   follow(isNew ? null : id);
-  const c = isNew ? undefined : state.list.get(id) ?? state.archived?.find((x) => x.id === id);
+  const c = isNew ? undefined : chatOf(id);
+  // Not in the list (archived, or opened from a link before the list came): asked for itself.
+  if (!isNew && !c && !state.gone) void fetchChat(id);
+  // A preset added to the config since the page was made: the picker has it too.
+  if (isNew) for (const pr of presets) if (![...p.preset.options].some((o) => o.value === pr.name)) p.preset.append(h("option", { value: pr.name }, `${pr.name}: ${pr.about}`));
+  const gone = !isNew && state.gone === id;
+  const last = state.siblings[state.siblings.length - 1];
   const pill: Child[] = c
     ? [`${c.agent}@${c.profile}`, ` · tools: ${c.tools}`,
       c.best_effort ? h("span", { class: "warn", title: "This agent can't enforce the preset by itself: ptyro's answer to each permission request stands behind it" }, " · best effort") : "",
       c.shell ? h("b", { class: "warn", title: "This chat's agent has a shell: it runs commands as you" }, " · ⚠ shell") : "",
       c.folders?.length ? h("span", { title: c.folders.join("\n") }, ` · ${c.folders.length} folder${c.folders.length === 1 ? "" : "s"}`) : "",
+      // `⎇ 2/3`: where the shown branch last has others (`/branch` picks among them).
+      last ? h("button", { class: "link", title: tip("chat.branch"), onclick: () => pickBranch(id) }, ` · ⎇ branch ${last.at}/${last.of}${sibLabel(last) ? ` ${sibLabel(last)}` : ""}`) : "",
       c.status ? ` · ${c.status}` : "", c.cost_micro_usd ? ` · $${(c.cost_micro_usd / 1e6).toFixed(3)}` : "", ` · ${addr(c)}`]
-    : ["A new chat: it can search the web, and it is kept."];
+    : [isNew ? "A new chat: it can search the web, and it is kept." : gone ? "" : "Loading the chat…"];
   const empty = isNew && !state.items.length
     ? h("div", { class: "empty" }, h("p", {}, h("b", {}, "Ask anything.")), h("p", { class: "sub" }, "Pick the agent and what it may use below, or keep the defaults."))
     : null;
   if (!isNew || state.items.length) drawItems(p);
-  const stop = c && working(c) && canWrite() ? h("button", { class: "small", title: tip("chat.stop"), onclick: () => void ask({ t: "chat_stop", chat: c.id }, "Stopped") }, "Stop") : null;
+  const stop = c && !gone && working(c) && canWrite() ? h("button", { class: "small", title: tip("chat.stop"), onclick: () => void ask({ t: "chat_stop", chat: c.id }, "Stopped") }, "Stop") : null;
   patch(p.el, [
-    ui.header(c ? label(c) : "New chat", "#/chats", c ? h("button", { class: "icon", "aria-label": "More", onclick: () => chatMenu(c) }, "⋯") : null),
+    ui.header(c ? label(c) : isNew ? "New chat" : "Chat", "#/chats", c && !gone ? h("button", { class: "icon", "aria-label": "More", onclick: () => chatMenu(c) }, "⋯") : null),
     h("div", { class: `pill ${c?.status ?? ""}` }, ...pill, c?.machine ? " · " : null, c?.machine ? machineChip(c.workspace) : null),
     ...(c?.attention ? [h("p", { class: "banner warn" }, c.attention.text)] : []),
     ...(c?.incognito ? [h("p", { class: "banner" }, "◌ Incognito: nothing of this chat is kept, and it ends with its agent.")] : []),
     ...(c?.source ? [h("p", { class: "banner" }, `⇣ ${importedFrom(c)}. It stays as ${c.source.split(":")[0]} wrote it: a message continues it as a fork.`)] : []),
     ...(c?.comparing ? [h("p", { class: "banner" }, compareLine(c.comparing), canWrite() ? h("button", { class: "small", title: tip("chat.stop"), onclick: () => void ask({ t: "chat_stop", chat: c.id }, "Stopped") }, " Stop") : null)] : []),
-    ...(c?.side_of ? [h("p", { class: "banner" }, `↳ A side chat of “${label(state.list.get(c.side_of))}”: it never changes it, and goes when you leave, unless kept. `, canWrite() ? h("button", { class: "small", title: tip("chat.keep"), onclick: () => keepSide(c) }, "Keep it") : null)] : []),
+    ...(gone ? [h("p", { class: "banner warn" }, "This chat was deleted (elsewhere, or it was incognito and its agent ended). What was here stays until you leave. ", h("a", { class: "small", href: "#/chats", title: tip("chats") }, "Back to the chats"))] : []),
+    ...(c?.archived && !gone ? [h("p", { class: "banner" }, "Archived: it is kept, out of the list. ", canWrite() ? h("button", { class: "small", title: tip("chat.archive"), onclick: () => void update(c, { archived: false }, "Back from the archive") }, "Bring it back") : null)] : []),
+    ...(c?.side_of ? [h("p", { class: "banner" }, `↳ A side chat of “${label(chatOf(c.side_of))}”: it never changes it, and goes when you leave, unless kept. `, canWrite() ? h("button", { class: "small", title: tip("chat.keep"), onclick: () => keepSide(c) }, "Keep it") : null)] : []),
     empty ?? p.box,
-    ...(isNew ? [h("div", { class: "bar chat-pick" }, p.agent, p.preset, h("label", { class: "check", title: tip("chat.incognito") }, p.incognito, " incognito")), h("div", { class: "bar chat-pick" }, p.folders), p.compare] : []),
-    canWrite() ? h("div", { class: "reply" }, p.reply, stop, h("button", { class: "send", title: tip("chat.send"), onclick: () => void send() }, "Send")) : h("p", { class: "sub" }, "This device may read chats, not write in them."),
+    ...(isNew ? [h("div", { class: "bar chat-pick" }, p.agent, p.preset, h("label", { class: "check", title: tip("chat.incognito") }, p.incognito, " incognito")), h("div", { class: "bar chat-pick" }, p.title, p.workspace), h("div", { class: "bar chat-pick" }, p.folders), p.compare] : []),
+    gone ? null : canWrite() ? h("div", { class: "reply" }, p.at, p.reply, stop, h("button", { class: "send", title: tip("chat.send"), onclick: () => void send() }, "Send")) : h("p", { class: "sub" }, "This device may read chats, not write in them."),
   ].filter((x): x is HTMLElement => !!x));
   return p.el;
+}
+
+/// A chat the list doesn't hold, read for itself (once at a time); not there at all: gone.
+const fetching = new Set<string>();
+async function fetchChat(id: string): Promise<void> {
+  if (fetching.has(id) || conn.state !== "open") return;
+  fetching.add(id);
+  try {
+    const r = await conn.request({ t: "chat_read", chat: id, all: false });
+    const info = r.info as Chat;
+    state.seen.set(info.id, info);
+    // Opened by its address (`c:7f3k`, a citation): the page is the chat's own id's.
+    if (info.id !== id) location.replace(location.hash.replace(`#/c/${encodeURIComponent(id)}`, `#/c/${encodeURIComponent(info.id)}`));
+  } catch (e) {
+    if ((e as { code?: string }).code === "not_found") state.gone = id;
+    else { setTimeout(() => fetching.delete(id), 3000); ui.render(); return; }
+  }
+  fetching.delete(id);
+  ui.render();
+}
+
+/// The compact CHATS section beside the sessions on a wide screen: the pinned chats and the
+/// newest `[chat] recent`, as the TUI's sidebar shows them.
+export function chatsAside(): HTMLElement | null {
+  if (state.off || !state.loaded) { if (!state.loaded) void loadChats(); return null; }
+  const list = recentChats(state.list.values(), state.recent);
+  const all = [...state.list.values()].filter((c) => !c.side_of && !c.incognito).length;
+  return h("aside", { class: "chats-aside", title: tip("chat.recent") },
+    h("h3", { class: "day" }, "Chats", canWrite() ? h("button", { class: "icon plus", title: tip("chat.new"), "aria-label": "New chat", onclick: () => newChat() }, "＋") : null),
+    ...list.map((c) => h("a", { class: `chat-row${c.unread ? " unread" : ""}${c.attention ? " blocked" : ""}`, href: `#/c/${encodeURIComponent(c.id)}`, title: tip("chat.open") },
+      h("span", { class: "main" }, h("span", { class: "glyph" }, glyph(c)), h("span", { class: "title" }, label(c)), h("small", {}, ` ${c.agent}`)))),
+    list.length ? null : h("p", { class: "sub" }, "No chats yet."),
+    h("a", { class: "foot-link", href: "#/chats", title: tip("chats") }, all > list.length ? `All chats… (${all})` : "All chats…"));
 }
 
 // ── wiring ──────────────────────────────────────────────────────────────────────────────────
@@ -958,14 +1066,22 @@ conn.listeners.add((msg: any) => {
     const e = msg.event;
     if (e.t === "chat_updated") {
       const c = e.info as Chat;
-      if (c.archived) state.list.delete(c.id); else state.list.set(c.id, c);
+      // Archived: out of the list, still known to a page that shows it.
+      if (c.archived) { state.list.delete(c.id); state.seen.set(c.id, c); } else { state.list.set(c.id, c); state.seen.delete(c.id); }
+      if (state.archived?.some((x) => x.id === c.id)) state.archived = state.archived.map((x) => (x.id === c.id ? c : x));
       ui.render();
     } else if (e.t === "chat_removed") {
       state.list.delete(e.id);
+      state.seen.delete(e.id);
+      // The chat shown: say so, rather than a page that acts on nothing.
+      if (e.id === state.following) state.gone = e.id;
       ui.render();
+    } else if (e.t === "config_reloaded") {
+      // `[chat] enabled`, the presets, `recent`: as the config now says.
+      void loadChats();
     } else if (e.t === "machine_updated" && state.following) {
       // The open chat's machine came back: follow it again; went away: say so.
-      const c = state.list.get(state.following);
+      const c = chatOf(state.following);
       if (c?.machine === e.info.name) {
         if (e.info.state === "online") { const f = state.following; state.following = null; follow(f); }
         else if (e.info.state === "offline") { state.items.push({ id: `offline-${Date.now()}`, t: "notice", level: "warn", text: `${e.info.name} went offline; this chat carries on when it is back` }); ui.render(); }

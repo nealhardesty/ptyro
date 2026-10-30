@@ -11,10 +11,13 @@ const NAMED = {
     Insert: { t: "insert" }, Delete: { t: "delete" }, ContextMenu: { t: "menu" },
 };
 const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta", "AltGraph", "CapsLock", "NumLock", "ScrollLock", "Fn", "FnLock", "Hyper", "Super", "OS"]);
+/// A keydown that is part of composing text (an IME, a soft keyboard): Safari says so only with
+/// keyCode 229, not `isComposing`. Enter then picks the composition; it sends nothing.
+export const composing = (e) => !!e.isComposing || e.keyCode === 229;
 /// What a keydown means for the terminal: a key to send, or `null` (leave it to the browser: a
 /// modifier alone, Cmd shortcuts, a soft keyboard's composed text, which `inputKeys` handles).
 export function keyOf(e, sticky = 0) {
-    if (e.isComposing || e.keyCode === 229)
+    if (composing(e))
         return null;
     if (MODIFIER_KEYS.has(e.key))
         return null;

@@ -7076,8 +7076,10 @@ hides when `enabled`):
 - **Web.** A **Chats** page beside Sessions (recent, pinned, a live search box), the chat view
   (with the same header, branch navigator, composer and slash commands; touch targets for
   fork/retry/edit; the machine chip), `#/c/<id>` URLs, a preset and an agent picker, incognito
-  toggle, export, and the same sidebar section on wide screens. Each control is an entry in
-  `ACTIONS` (`web/src/app.ts`) with its tooltip.
+  toggle, export, and the same sidebar section on wide screens (beside the sessions: the pinned
+  chats and the newest `[chat] recent`, with `all chats…`). Side chats list under their chat; `m`
+  starts a chat, `Ctrl-G` searches them all, and `@` in the composer lists the chat's folders. Each
+  control is an entry in `ACTIONS` (`web/src/app.ts`, `web/src/chats.ts`) with its tooltip.
 - **Parity.** One row in `docs/parity.md` for every `chat` verb, with its TUI action and its web
   action; none is waivable (`chat ask` is `chat.new` with `C-i`, and its answer is the view).
 - **Settings panel.** Every `[chat]` key below has its schema entry (type, default, help, when it
