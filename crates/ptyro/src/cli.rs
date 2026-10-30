@@ -817,9 +817,23 @@ pub fn confirm(question: &str) -> bool {
 /// resend with `agree` applied; without a TTY, explain the flags.
 pub async fn with_confirmation<F>(
     client: &Client,
+    req: Request,
+    yes: bool,
+    agree: F,
+) -> Result<Reply, Error>
+where
+    F: Fn(&mut Request),
+{
+    with_confirmation_as(client, req, yes, agree, "pass --yes, or --override-pin").await
+}
+
+/// `with_confirmation`, where no terminal can ask: `flags` says what to pass instead.
+pub async fn with_confirmation_as<F>(
+    client: &Client,
     mut req: Request,
     yes: bool,
     agree: F,
+    flags: &str,
 ) -> Result<Reply, Error>
 where
     F: Fn(&mut Request),
@@ -835,10 +849,7 @@ where
             } else if std::io::stdin().is_terminal() {
                 Err(Error::new(ErrorCode::NeedsConfirmation, "cancelled"))
             } else {
-                Err(Error::new(
-                    e.code,
-                    format!("{} (no terminal to ask: pass --yes, or --override-pin)", e.message),
-                ))
+                Err(Error::new(e.code, format!("{} (no terminal to ask: {flags})", e.message)))
             }
         }
         other => other,

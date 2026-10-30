@@ -235,7 +235,12 @@ pub const ACTIONS: &[ActionSpec] = &[
         "chat.agent",
         "Switch this chat to another agent: the next message carries the conversation over",
     ),
-    a("chat.preset", "What this chat may use: web search, read folders, or no tools"),
+    a(
+        "chat.preset",
+        "What this chat may use: web search, read folders, a shell, MCP servers, or no tools",
+    ),
+    a("chat.folder", "A folder this chat may read (with the read preset), or none"),
+    a("chat.task", "Make it a task: an agent in a new worktree carries out the chat's last answer"),
     a("chat.export", "Write this chat out as Markdown"),
     a("chat.stop", "Stop the answer being written"),
     a(
@@ -253,6 +258,18 @@ pub const ACTIONS: &[ActionSpec] = &[
         "A side chat: ask about this chat without changing it; closed, it goes (unless kept)",
     ),
     a("chat.keep", "Keep this side chat as a chat of its own"),
+    a(
+        "chat.compare",
+        "Ask several agents: each answers the last message as a branch labelled with its agent (/compare codex gemini [question])",
+    ),
+    a(
+        "chat.pick",
+        "Keep the answer shown: the chat switches to the agent that wrote it, which takes the next message",
+    ),
+    a(
+        "chat.import",
+        "Import your agents' own histories (Claude Code, Codex, Gemini) as read-only, searchable chats",
+    ),
     a(
         "chat.incognito",
         "New incognito chat: nothing of it is kept or searchable, it ends with its agent",

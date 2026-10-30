@@ -171,8 +171,7 @@ impl Daemon {
     async fn codex_usage_loop(self: &Arc<Self>, profile: &str, agent: &str) -> Result<(), String> {
         let plan = self.profile_plan(profile).await.map_err(|e| e.message)?;
         let env = plan.apply(self.base_env.iter().cloned());
-        let argv =
-            ptyro_agents::command(&self.config(), agent).unwrap_or_else(|| vec!["codex".into()]);
+        let argv = self.agent_argv(agent).unwrap_or_else(|| vec!["codex".into()]);
         let mut child = tokio::process::Command::new(&argv[0])
             .args(&argv[1..])
             .arg("app-server")

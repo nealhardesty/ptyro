@@ -2,7 +2,7 @@
 // `#/chats` lists them (pinned first, then by day, searchable, one workspace's or all), `#/c/<id>`
 // is one chat (its messages, tool calls and permission cards as they stream, a composer), and
 // `#/c/new` starts one. Every control is an action below, as in the TUI and the CLI.
-import { conn } from "./conn.js";
+import { conn, host } from "./conn.js";
 import { data, machineOf, wsLabel } from "./data.js";
 import { machineChip } from "./machines.js";
 import { actions, ago, ask, confirm, download, errText, form, h, menu, patch, ui, views } from "./kit.js";
@@ -18,9 +18,12 @@ const ACTIONS = {
     "chat.archive": "Archive the chat (Archived shows them; again brings it back)",
     "chat.delete": "Delete the chat",
     "chat.agent": "Switch the chat to another agent: the next message carries the conversation over",
-    "chat.preset": "What the chat may use: web search, read folders, or no tools",
+    "chat.preset": "What the chat may use: web search, read folders, a shell, MCP servers, or no tools",
+    "chat.folder": "Folders the chat may read (on the computer it runs on), with the read preset",
+    "chat.task": "Make it a task: an agent in a new worktree carries out the chat's last answer",
     "chat.export": "Download the chat as Markdown",
-    "chat.search": "Search every chat: titles at once, and from 3 letters every message on every machine (\"phrases\", prefix*, -word, agent:codex, since:7d)",
+    "chat.search": "Search every chat: titles at once, and from 3 letters every message on every machine (\"phrases\", prefix*, -word, agent:codex, since:7d, by:meaning; ≈ marks a message found by meaning)",
+    "chat.meaning": "Switch meaning search on: also find messages by what they are about, not only their words (downloads a 31 MB model once)",
     "chat.archived": "Show archived chats instead",
     "chat.retry": "Ask again: a new answer beside this one, which stays (‹ › flips between them)",
     "chat.edit": "Say this message differently: answered afresh, the old one stays as a branch",
@@ -32,8 +35,32 @@ const ACTIONS = {
     "chat.find": "Ask your chats a question: an agent searches them and answers, citing where",
     "chat.find_in": "Find in this chat",
     "chat.cite": "Open the message this citation points to",
+    "chat.compare": "Ask several agents: each answers as a branch beside the others, labelled with its agent (‹ 2/3 codex ›)",
+    "chat.pick": "Keep this answer: the chat switches to the agent that wrote it, which takes the next message",
+    "chat.import": "Import your agents' own histories (Claude Code, Codex, Gemini) as read-only, searchable chats: every agent's and profile's, or one, only recent sessions, or just count them first",
+    "chat.imported": "Show only the chats imported from your agents' own histories (⇣), or every chat again",
 };
 const tip = actions(ACTIONS);
+/// The shown sibling's agent, when the siblings are not all one agent's (a compare).
+function sibLabel(s) {
+    const a = s.agents ?? [];
+    if (!a.length || a.every((x) => x === a[0]))
+        return "";
+    return a[s.at - 1] ?? "";
+}
+/// `comparing: claude ✓ · codex … · gemini ✗ why`, as the daemon's `ChatCompare::line`.
+function compareLine(c) {
+    const mark = (st) => st === "done" ? "✓" : st === "failed" ? "✗" : st === "stopped" ? "⊘" : "…";
+    const busy = c.agents.some((a) => a.state === "asking");
+    return `${busy ? "comparing" : "compared"}: ${c.agents.map((a) => `${a.agent} ${mark(a.state)}${a.note ? ` ${a.note}` : ""}`).join(" · ")}`;
+}
+/// `imported from claude · ~/repo`.
+function importedFrom(c) {
+    if (!c.source)
+        return "";
+    const agent = c.source.split(":")[0];
+    return c.source_dir ? `imported from ${agent} · ${c.source_dir}` : `imported from ${agent}`;
+}
 const state = {
     list: new Map(),
     archived: null,
@@ -55,11 +82,15 @@ const state = {
     /// Message hits of the list's search, and the query they answer.
     hits: [],
     hitsFor: "",
+    /// `by:meaning` while meaning search is off: why, with the switch to turn it on.
+    meaningOff: "",
+    /// Only chats imported from the agents' own histories (`chat ls --imported`).
+    imported: false,
 };
 const label = (c) => c?.title?.trim() || "new chat";
 const addr = (c) => `c:${c.handle}`;
 const working = (c) => c.status === "working" || c.status === "starting";
-const glyph = (c) => c.attention || c.status === "blocked" ? "⚠" : working(c) ? "●" : c.status === "errored" ? "✗" : c.incognito ? "◌" : c.pinned ? "★" : c.side_of ? "↳" : "·";
+const glyph = (c) => c.attention || c.status === "blocked" ? "⚠" : working(c) ? "●" : c.status === "errored" ? "✗" : c.incognito ? "◌" : c.pinned ? "★" : c.side_of ? "↳" : c.source ? "⇣" : "·";
 /// A snippet with its matches marked (control characters from the daemon) as <mark>.
 function snippet(text) {
     const el = h("span", { class: "snippet" });
@@ -96,6 +127,12 @@ export async function loadChats() {
         const r = await conn.request({ t: "chat_list", all: true });
         state.list = new Map(r.chats.map((c) => [c.id, c]));
         state.off = "";
+        // Every preset with what it means (yours too); the built-in three until the daemon says.
+        const p = await conn.request({ t: "chat_presets" }).catch(() => null);
+        if (p) {
+            presets = p.presets;
+            presetsKnown = true;
+        }
     }
     catch (e) {
         state.off = errText(e);
@@ -144,29 +181,61 @@ async function searchMessages(q) {
             return;
         state.hits = r.hits;
         state.hitsFor = q;
+        state.meaningOff = "";
     }
-    catch {
+    catch (e) {
         state.hits = [];
         state.hitsFor = q;
+        state.meaningOff = e.code === "needs_confirmation" ? errText(e) : "";
     }
     ui.render();
 }
 function hitRows() {
     if (!state.query || [...state.query].length < 3)
         return [];
+    if (state.meaningOff)
+        return [h("p", { class: "sub" }, `${state.meaningOff}. `, h("button", { class: "small", title: tip("chat.meaning"), onclick: () => void meaningOn() }, "Switch it on"))];
     if (!state.hits.length)
         return state.hitsFor ? [h("p", { class: "sub" }, "No message matches.")] : [];
-    return [h("h3", { class: "day" }, `Messages (${state.hits.length})`), ...state.hits.map((x) => h("a", { class: "chat-row hit", href: `#/c/${encodeURIComponent(x.chat.id)}${x.node ? `/${encodeURIComponent(x.node)}` : ""}`, title: tip("chat.open") }, h("span", { class: "main" }, h("span", { class: "title" }, label(x.chat)), x.chat.machine ? machineChip(x.chat.workspace) : null, h("small", {}, ` ${x.chat.agent} · ${ago(x.at_ms)}`)), snippet(x.snippet)))];
+    return [h("h3", { class: "day" }, `Messages (${state.hits.length})`), ...state.hits.map((x) => h("a", { class: "chat-row hit", href: `#/c/${encodeURIComponent(x.chat.id)}${x.node ? `/${encodeURIComponent(x.node)}` : ""}`, title: tip("chat.open") }, h("span", { class: "main" }, h("span", { class: "title" }, label(x.chat)), x.chat.machine ? machineChip(x.chat.workspace) : null, h("small", {}, ` ${x.chat.agent} · ${ago(x.at_ms)}`)), x.how === "meaning" ? h("span", { class: "snippet", title: "Found by meaning: none of the words is in it" }, "≈ ", snippet(x.snippet)) : snippet(x.snippet)))];
+}
+/// Meaning search on, in your config (as the settings panel would): the daemon downloads its model.
+async function meaningOn() {
+    try {
+        await host("settings.apply", { scope: "user", change: { t: "set", key: "chat.meaning", value: "true" } });
+        state.meaningOff = "";
+        ui.toast("Meaning search is on: its model is downloading, then your chats are read (ptyro doctor shows how far)");
+        ui.render();
+    }
+    catch (e) {
+        ui.toast(errText(e));
+    }
+}
+/// The search box as a title filter: the search's operators (`by:meaning`, `since:7d`,
+/// `workspace:w`, `-word`) are the message search's, not title text; `agent:x` narrows by agent.
+function titleQuery(q) {
+    let agent = "";
+    const words = [];
+    for (const w of q.split(/\s+/).filter(Boolean)) {
+        const [k, v] = w.includes(":") ? [w.slice(0, w.indexOf(":")), w.slice(w.indexOf(":") + 1)] : ["", ""];
+        if (k === "agent")
+            agent = v;
+        else if (["by", "since", "workspace", "ws"].includes(k) || (w.startsWith("-") && w.length > 1))
+            continue;
+        else
+            words.push(w.replace(/^"|"$/g, "").replace(/\*$/, ""));
+    }
+    return { text: words.join(" "), agent };
 }
 function rows() {
     const source = state.archived ?? sorted(state.list.values());
-    const q = state.query;
+    const { text: q, agent } = titleQuery(state.query);
     // Side chats sit with their chat; incognito ones are never "every chat" (SPEC §22.12).
-    const shown = source.filter((c) => !c.side_of && !c.incognito && (!state.workspace || c.workspace === state.workspace) && (!q || label(c).toLowerCase().includes(q) || c.agent.includes(q)));
-    if (!shown.length && q)
-        return [h("p", { class: "sub" }, `No chat titled “${q}”.`), ...hitRows()];
+    const shown = source.filter((c) => !c.side_of && !c.incognito && (!state.workspace || c.workspace === state.workspace) && (!state.imported || !!c.source) && (!agent || c.agent.includes(agent)) && (!q || label(c).toLowerCase().includes(q) || c.agent.includes(q) || importedFrom(c).toLowerCase().includes(q)));
+    if (!shown.length && state.query)
+        return [h("p", { class: "sub" }, q ? `No chat titled “${q}”.` : "No chat matches."), ...hitRows()];
     if (!shown.length) {
-        return [h("div", { class: "empty" }, h("p", {}, q ? `Nothing matches “${q}”.` : state.archived ? "No archived chats." : "No chats yet. Ask anything: it can search the web, and it is kept here."), q || state.archived || !canWrite() ? null : h("button", { class: "primary", title: tip("chat.new"), onclick: () => newChat() }, "Start a chat"))];
+        return [h("div", { class: "empty" }, h("p", {}, q ? `Nothing matches “${q}”.` : state.archived ? "No archived chats." : state.imported ? "No imported chats: ⇣ imports your agents' own histories." : "No chats yet. Ask anything: it can search the web, and it is kept here."), q || state.archived || state.imported || !canWrite() ? null : h("button", { class: "primary", title: tip("chat.new"), onclick: () => newChat() }, "Start a chat"))];
     }
     const out = [];
     let group = "";
@@ -178,7 +247,9 @@ function rows() {
         }
         // Another machine's that is down: listed as it was, greyed (SPEC §22.11).
         const down = !!c.machine && machineOf(c.workspace)?.state !== "online";
-        out.push(h("div", { class: `chat-row${c.unread ? " unread" : ""}${c.attention ? " blocked" : ""}${down ? " offline" : ""}` }, h("a", { class: "main", href: `#/c/${encodeURIComponent(c.id)}`, title: tip("chat.open") }, h("span", { class: "glyph" }, glyph(c)), h("span", { class: "title" }, label(c)), h("small", {}, ` ${c.agent} · ${ago(c.last_ms)}${state.workspace ? "" : ` · ${wsLabel(c.workspace)}`}`), c.machine ? machineChip(c.workspace) : null, c.unread ? h("b", { class: "unread-dot", "aria-label": "unread" }, "●") : null), h("button", { class: "icon", "aria-label": "More", onclick: () => chatMenu(c) }, "⋯")));
+        out.push(h("div", { class: `chat-row${c.unread ? " unread" : ""}${c.attention ? " blocked" : ""}${down ? " offline" : ""}` }, h("a", { class: "main", href: `#/c/${encodeURIComponent(c.id)}`, title: tip("chat.open") }, h("span", { class: "glyph" }, glyph(c)), h("span", { class: "title" }, label(c)), h("small", {}, ` ${c.agent} · ${ago(c.last_ms)}${state.workspace ? "" : ` · ${wsLabel(c.workspace)}`}`), 
+        // A shell preset: marked as a `dangerous` session is.
+        c.shell ? h("b", { class: "warn", title: "This chat's agent has a shell: it runs commands as you" }, " ⚠") : null, c.machine ? machineChip(c.workspace) : null, c.unread ? h("b", { class: "unread-dot", "aria-label": "unread" }, "●") : null), h("button", { class: "icon", "aria-label": "More", onclick: () => chatMenu(c) }, "⋯")));
     }
     return [...out, ...hitRows()];
 }
@@ -193,7 +264,95 @@ function listView() {
     const wsSelect = h("select", { "aria-label": "Workspace", onchange: (e) => { state.workspace = e.target.value; ui.render(); } }, h("option", { value: "" }, "Every workspace"), ...[...data.workspaces.values()].map((w) => h("option", { value: w.name }, wsLabel(w.name))));
     wsSelect.value = state.workspace;
     const archived = h("button", { class: `small${state.archived ? " on" : ""}`, title: tip("chat.archived"), onclick: () => void toggleArchived() }, state.archived ? "Back to chats" : "Archived");
-    return h("div", {}, ui.header("Chats", false, canWrite() ? h("button", { class: "icon", title: tip("chat.find"), "aria-label": "Ask your chats", onclick: () => findChats() }, "？") : null, canWrite() ? h("button", { class: "icon plus", title: tip("chat.new"), "aria-label": "New chat", onclick: () => newChat() }, "＋") : null), h("div", { class: "searchbar" }, findBox, wsSelect, archived), h("main", { class: "list chats", title: tip("chats") }, h("div", { class: "rows" }, ...rows())));
+    // Shown once there are imported chats (or while it filters).
+    const anyImported = state.imported || [...state.list.values()].some((c) => !!c.source);
+    const imported = anyImported ? h("button", { class: `small${state.imported ? " on" : ""}`, title: tip("chat.imported"), "aria-pressed": String(state.imported), onclick: () => { state.imported = !state.imported; ui.render(); } }, "Imported") : null;
+    return h("div", {}, ui.header("Chats", false, canWrite() ? h("button", { class: "icon", title: tip("chat.find"), "aria-label": "Ask your chats", onclick: () => findChats() }, "？") : null, conn.scope === "full" ? h("button", { class: "icon", title: tip("chat.import"), "aria-label": "Import agent histories", onclick: () => importHistories() }, "⇣") : null, canWrite() ? h("button", { class: "icon plus", title: tip("chat.new"), "aria-label": "New chat", onclick: () => newChat() }, "＋") : null), h("div", { class: "searchbar" }, findBox, wsSelect, archived, imported), h("main", { class: "list chats", title: tip("chats") }, h("div", { class: "rows" }, ...rows())));
+}
+/// `chat import`: the agents' own histories as read-only chats (asked first: it copies them),
+/// narrowed as the CLI's flags do.
+function importHistories() {
+    const profiles = [...new Set([...data.workspaces.values()].map((w) => w.profile).concat([...state.list.values()].map((c) => c.profile)).filter(Boolean))].sort();
+    form("Import agent histories", [
+        { key: "agent", label: "Whose", type: "select", options: [["all", "Every agent's"], ["claude", "Claude Code"], ["codex", "Codex"], ["gemini", "Gemini"]] },
+        { key: "profile", label: "Profile", type: "select", options: [["", "Every profile's"], ...profiles.map((p) => [p, p])] },
+        { key: "since", label: "Only sessions touched in (optional)", placeholder: "30d, 12h" },
+        { key: "dry", label: "Only count them (import nothing)", type: "check" },
+    ], "Import", async (v) => {
+        const dry = !!v.dry;
+        ui.toast(dry ? "Counting what your agents' histories would bring…" : "Importing your agents' histories…");
+        try {
+            // A first import can take minutes: no two-minute timeout for this one.
+            const r = await conn.request({ t: "chat_import", agent: v.agent || "all", profile: v.profile || null, since: v.since?.trim() || null, dry_run: dry }, 60 * 60_000);
+            const n = r.report.sources.reduce((a, s) => [a[0] + s.new, a[1] + s.grown, a[2] + s.messages], [0, 0, 0]);
+            const what = dry ? ["Would import", "would grow"] : ["Imported", "grew"];
+            ui.toast(n[0] + n[1] ? `${what[0]} ${n[0]} new chat${n[0] === 1 ? "" : "s"}, ${n[1]} ${what[1]} (${n[2]} messages)` : dry ? "Nothing new to import" : "Nothing new: every session is imported");
+        }
+        catch (e) {
+            ui.toast(errText(e));
+        }
+        // Whatever happened, what did come is listed.
+        await loadChats();
+    }, { intro: "Your Claude Code, Codex and Gemini sessions become read-only chats here: their text is copied into chat.db, where search finds it. Sessions already imported only gain what is new. (Settings → Chat → import keeps doing it.)" });
+}
+/// Send `req`; when the daemon asks first (the chat's conversation would go to another
+/// profile's account, SPEC §22.7), show its question and send it again, agreed to.
+async function agreed(req) {
+    try {
+        return await conn.request(req);
+    }
+    catch (e) {
+        if (e.code !== "needs_confirmation")
+            throw e;
+        const yes = await new Promise((ok) => {
+            let said = false;
+            const s = confirm("Another profile?", errText(e), "Go ahead", () => { said = true; ok(true); }, false);
+            s.onClose(() => setTimeout(() => { if (!said)
+                ok(false); }, 0));
+        });
+        if (!yes)
+            throw new Error("cancelled");
+        return await conn.request({ ...req, confirmed: true });
+    }
+}
+/// `ask`, through `agreed`.
+async function askAgreed(req, ok) {
+    try {
+        const r = await agreed(req);
+        if (ok)
+            ui.toast(ok);
+        return r;
+    }
+    catch (e) {
+        if (e.message !== "cancelled")
+            ui.toast(errText(e));
+        return undefined;
+    }
+}
+/// `chat compare`: which agents answer the chat's last message again (or a new question).
+function compareAgents(c, question = "") {
+    if (c.source) {
+        ui.toast("An imported chat stays as its agent wrote it: send it a message (it continues as a fork), then compare there");
+        return;
+    }
+    const names = agentNames();
+    form("Ask several agents", [
+        { key: "agents", label: "Agents (each answers as a branch beside the others)", value: names.join(" "), placeholder: "claude codex gemini" },
+        { key: "q", label: "A new question (empty: the last message again)", type: "textarea", rows: 2, value: question },
+    ], "Ask them", async (v) => {
+        const agents = String(v.agents ?? "").split(/[\s,]+/).filter(Boolean);
+        await askAgreed({ t: "chat_compare", chat: c.id, agents, text: String(v.q ?? "").trim() || null }, "Asked: each answer is a branch (‹ › flips between them; Keep this answer switches to its agent)");
+    }, { intro: "Every agent answers the same message; the chat's own carries on in its conversation, the others are told it so far." });
+}
+/// `chat pick`: keep the answer shown (or the branch through `node`); says who takes the next message.
+async function pickAnswer(chat, node) {
+    const r = await ask({ t: "chat_pick", chat, node: node ?? null });
+    if (!r)
+        return;
+    state.list.set(r.info.id, r.info);
+    const who = r.info.profile && r.info.profile !== "default" ? `${r.info.agent}@${r.info.profile}` : r.info.agent;
+    ui.toast(`Kept: ${who} takes the next message`);
+    ui.render();
 }
 /// `chat find`: ask the chats; the answer is an incognito chat of its own, opened.
 function findChats() {
@@ -247,6 +406,10 @@ function chatMenu(c) {
         { title: tip("chat.pin"), label: c.pinned ? "Unpin" : "Pin", run: () => update(c, { pinned: !c.pinned }, c.pinned ? "Unpinned" : "Pinned") },
         { title: tip("chat.agent"), label: "Switch agent", hint: `now ${c.agent}`, run: () => pickAgent(c) },
         { title: tip("chat.preset"), label: "Tools", hint: `now ${c.tools}`, run: () => pickPreset(c) },
+        { title: tip("chat.folder"), label: "Folders", hint: c.folders?.length ? c.folders.join(", ") : "none", run: () => editFolders(c) },
+        !c.incognito && !c.source && { title: tip("chat.task"), label: "Make it a task", hint: "an agent carries it out in a new worktree", run: () => makeTask(c) },
+        !c.incognito && !c.source && { title: tip("chat.compare"), label: "Ask several agents", hint: "each answers as a branch", run: () => compareAgents(c) },
+        state.following === c.id && state.siblings.some((s) => sibLabel(s)) && { title: tip("chat.pick"), label: "Keep this answer", hint: "its agent takes the next message", run: () => void pickAnswer(c.id) },
         md,
         { title: tip("chat.archive"), label: archived ? "Bring back from the archive" : "Archive", run: async () => {
                 await update(c, { archived: !archived }, archived ? "Back from the archive" : "Archived");
@@ -321,15 +484,87 @@ function agentNames() {
     return names.filter((n) => n !== "antigravity" && (data.agents.length === 0 || data.agents.some((a) => a.name === n && a.installed)));
 }
 function pickAgent(c) {
-    menu("Which agent? The conversation carries over", agentNames().map((a) => ({ title: tip("chat.agent"), label: a, hint: a === c.agent ? "now" : "", run: () => update(c, { agent: a }, `The next message goes to ${a}`) })));
+    // Each with where ptyro found it (an npx cache, nvm…), so a surprising copy is visible.
+    const where = (a) => data.agents.find((x) => x.name === a)?.found ?? "";
+    menu("Which agent? The conversation carries over", agentNames().map((a) => ({ title: tip("chat.agent"), label: a, hint: [a === c.agent ? "now" : "", where(a)].filter(Boolean).join(" · "), run: () => update(c, { agent: a }, `The next message goes to ${a}`) })));
 }
-const PRESETS = [["chat", "web search"], ["read", "web search, and reads its folders"], ["none", "no tools"]];
+/// Whether `presets` is the daemon's list (yours too), not the built-in three it starts as.
+let presetsKnown = false;
+let presets = [
+    { name: "chat", about: "web search", builtin: true, read: false, shell: false },
+    { name: "read", about: "web search · reads the chat's folders", builtin: true, read: true, shell: false },
+    { name: "none", about: "no tools", builtin: true, read: false, shell: false },
+];
 function pickPreset(c) {
-    menu("What may the chat use?", [
-        ...PRESETS.map(([p, what]) => ({ title: tip("chat.preset"), label: p, hint: p === c.tools ? `now · ${what}` : what, run: () => update(c, { preset: p }, `Tools: ${p}`) })),
-        // Your own `[chat.tools.NAME]` presets, by name.
-        { title: tip("chat.preset"), label: "One of your own…", hint: "a [chat.tools] preset", run: () => form("Tools: your preset", [{ key: "p", label: "Preset name", required: true, value: PRESETS.some(([p]) => p === c.tools) ? "" : c.tools }], "Use it", async (v) => { await conn.request({ t: "chat_update", chat: c.id, preset: v.p }); ui.toast(`Tools: ${v.p}`); }) },
-    ]);
+    menu("What may the chat use?", presets.map((p) => ({ title: tip("chat.preset"), label: p.name, hint: `${p.name === c.tools ? "now · " : ""}${p.about}${p.builtin ? "" : " (yours)"}`, run: () => update(c, { preset: p.name }, `Tools: ${p.name}`) })));
+}
+/// Folders, one a line, as full paths on the computer the chat runs on (`~` works).
+function folderList(text) {
+    return text.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
+}
+function editFolders(c) {
+    const reads = presets.find((p) => p.name === c.tools)?.read;
+    form("Folders this chat may read", [{ key: "f", label: "One a line (empty: none)", type: "textarea", rows: 3, placeholder: "~/notes", value: (c.folders ?? []).join("\n") }], "Save", async (v) => {
+        await conn.request({ t: "chat_update", chat: c.id, folders: folderList(v.f) });
+        ui.toast(reads || !folderList(v.f).length ? "Saved: the next message starts it with them" : "Saved; the preset reads no files: Tools → read lets it");
+    }, { intro: "On the computer the chat runs on. It reads them with the read preset (or one of yours that reads), and nothing else." });
+}
+/// `chat.task` (SPEC §22.7): the project (the chat's workspace's, when it has one), the agent
+/// that works on it (the chat's own by default) and the worktree's name (from the title).
+/// `/task [PROJECT] [--agent A] [--name N]` goes at once.
+function makeTask(c, args = "") {
+    const here = [...data.projects.values()].filter((p) => !p.machine);
+    if (!here.length) {
+        ui.toast("A task needs a project: add one first");
+        return;
+    }
+    const ws = [...data.workspaces.values()].find((w) => w.name === c.workspace);
+    const mine = here.filter((p) => ws?.projects.includes(p.id));
+    const guess = mine.length === 1 ? mine[0].slug : !mine.length && here.length === 1 ? here[0].slug : "";
+    const go = async (slug, agent, name) => {
+        const r = await askAgreed({ t: "chat_task", chat: c.id, project: slug, agent, name }, "A task now: the chat says where it went");
+        if (r?.agent)
+            location.hash = `#/s/${encodeURIComponent(r.agent.id)}`;
+    };
+    if (args) {
+        const t = taskArgs(args);
+        if (typeof t === "string") {
+            ui.toast(t);
+            return;
+        }
+        const slug = t.project ?? guess;
+        if (slug) {
+            void go(slug, t.agent, t.name);
+            return;
+        }
+    }
+    form("Make it a task", [
+        { key: "project", label: "The project it works in", type: "select", options: here.map((p) => [p.slug, p.slug]), value: guess || here[0].slug },
+        { key: "agent", label: "Who works on it", type: "select", options: [["", `${c.agent}@${c.profile} (the chat's)`], ...agentNames().filter((a) => a !== c.agent).map((a) => [a, a])] },
+        { key: "name", label: "The worktree's name (optional)", placeholder: "from the chat's title", slug: "name" },
+    ], "Make it", (v) => go(String(v.project), v.agent || null, v.name?.trim() || null), { intro: "An agent in a new worktree of the project carries out the chat's last answer, starting from its conversation." });
+}
+/// `/task`'s words, as `chat task`'s flags: `[PROJECT] [--agent A] [--name N]`; a string: what's wrong.
+function taskArgs(text) {
+    const out = { project: null, agent: null, name: null };
+    const words = text.split(/\s+/).filter(Boolean);
+    const usage = "/task [PROJECT] [--agent A] [--name N]";
+    while (words.length) {
+        const w = words.shift();
+        const m = /^--(agent|name|project)(?:=(.*))?$/.exec(w) ?? /^(agent|name):(.*)$/.exec(w);
+        if (m) {
+            const key = m[1];
+            const value = m[2] ?? words.shift() ?? "";
+            if (!value)
+                return `--${key} needs a value: ${usage}`;
+            out[key] = value;
+        }
+        else if (w.startsWith("--") || out.project)
+            return `${w}: ${usage}`;
+        else
+            out.project = w;
+    }
+    return out;
 }
 async function exportChat(c) {
     const r = await ask({ t: "chat_export", chat: c.id, format: "md" });
@@ -375,9 +610,12 @@ function pageFor(id) {
     } });
     const agent = h("select", { "aria-label": "Agent", title: tip("chat.agent") }, h("option", { value: "" }, "default agent"), ...agentNames().map((a) => h("option", { value: a }, a)));
     // The default is `[chat] preset`'s, whatever it is (a preset of your own too).
-    const preset = h("select", { "aria-label": "Tools", title: tip("chat.preset") }, h("option", { value: "" }, "default tools"), ...PRESETS.map(([p, what]) => h("option", { value: p }, `${p}: ${what}`)));
+    const preset = h("select", { "aria-label": "Tools", title: tip("chat.preset") }, h("option", { value: "" }, "default tools"), ...presets.map((p) => h("option", { value: p.name }, `${p.name}: ${p.about}`)));
     const incognito = h("input", { type: "checkbox", title: tip("chat.incognito") });
-    page = { id, el: h("div", { class: "session chat-page" }), box: h("div", { class: "chat" }), reply, els: new Map(), agent, preset, incognito, sending: false };
+    const folders = h("input", { type: "text", placeholder: "Folders it may read (optional), e.g. ~/notes", "aria-label": "Folders", title: tip("chat.folder"), autocapitalize: "off", spellcheck: "false" });
+    // Compare: the first message goes to each agent checked (two or more), each answer a branch.
+    const compare = h("div", { class: "bar chat-pick compare", title: tip("chat.compare") }, h("span", { class: "sub" }, "Ask several:"), ...agentNames().map((a) => h("label", { class: "check" }, h("input", { type: "checkbox", value: a }), ` ${a}`)));
+    page = { id, el: h("div", { class: "session chat-page" }), box: h("div", { class: "chat" }), reply, els: new Map(), agent, preset, incognito, folders, compare, sending: false };
     // A new chat's page starts empty (not with what a failed try left).
     if (id.startsWith("new"))
         state.items = [];
@@ -407,7 +645,8 @@ async function send() {
             const ws = decodeURIComponent(p.id.split("/")[1] ?? "") || undefined;
             state.items = [{ id: "first", t: "user", text }];
             ui.render();
-            const r = await conn.request({ t: "chat_new", workspace: ws, agent: p.agent.value || null, preset: p.preset.value || null, prompt: text, incognito: p.incognito.checked });
+            const compare = [...p.compare.querySelectorAll("input:checked")].map((x) => x.value);
+            const r = await agreed({ t: "chat_new", workspace: ws, agent: p.agent.value || null, preset: p.preset.value || null, prompt: text, incognito: p.incognito.checked, folders: folderList(p.folders.value), compare: compare.length > 1 ? compare : [] });
             p.reply.value = "";
             drafts.delete(p.id);
             p.sending = false;
@@ -417,10 +656,17 @@ async function send() {
             location.replace(`#/c/${encodeURIComponent(info.id)}`);
         }
         else {
-            await conn.request({ t: "chat_send", chat: p.id, text });
+            const r = await conn.request({ t: "chat_send", chat: p.id, text });
             if (p.reply.value === text) {
                 p.reply.value = "";
                 drafts.delete(p.id);
+            }
+            // An imported chat carries on as a fork of it: go there.
+            const info = r?.info;
+            if (info && info.id !== p.id) {
+                state.list.set(info.id, info);
+                ui.toast("Continued as a fork: the imported chat stays as it was");
+                location.hash = `#/c/${encodeURIComponent(info.id)}`;
             }
         }
     }
@@ -435,7 +681,7 @@ function slash(id, text) {
     const arg = rest.join(" ").trim();
     const c = state.list.get(id);
     const lastUser = [...state.items].reverse().find((x) => x.t === "user");
-    const needsChat = ["retry", "edit", "fork", "side", "keep", "agent", "tools", "title", "export", "branch", "cite"];
+    const needsChat = ["retry", "edit", "fork", "side", "keep", "agent", "title", "export", "branch", "cite", "task", "pick"];
     if (!c && needsChat.includes(name)) {
         ui.toast(`/${name} works in a chat: send a first message`);
         return;
@@ -484,6 +730,86 @@ function slash(id, text) {
                 else
                     pickPreset(c);
             }
+            else if (page) {
+                if (!arg) {
+                    ui.toast(presets.map((p) => `${p.name}: ${p.about}`).join(" · "));
+                    return;
+                }
+                const known = presets.some((p) => p.name === arg) || [...page.preset.options].some((o) => o.value === arg);
+                // The daemon's list is in and doesn't have it: say so, rather than send the default.
+                if (!known && presetsKnown) {
+                    ui.toast(`No preset named “${arg}”: ${presets.map((p) => p.name).join(", ")} (Settings → Chat adds yours)`);
+                    return;
+                }
+                if (!known)
+                    page.preset.append(h("option", { value: arg }, arg));
+                page.preset.value = arg;
+                ui.toast(`Tools: ${arg}`);
+            }
+            return;
+        case "folder":
+        case "folders": {
+            const none = arg === "none" || arg === "-";
+            if (!c) {
+                if (page) {
+                    page.folders.value = none ? "" : [page.folders.value, arg].filter(Boolean).join(", ");
+                    ui.toast(none ? "No folders" : `It may read ${arg}`);
+                }
+                return;
+            }
+            if (!arg) {
+                editFolders(c);
+                return;
+            }
+            const next = none ? [] : [...new Set([...(c.folders ?? []), arg])];
+            void update(c, { folders: next }, none ? "No folders" : `It may read ${arg} from the next message on`);
+            return;
+        }
+        case "task":
+            if (c)
+                makeTask(c, arg);
+            return;
+        case "compare": {
+            // The words that name agents (`codex`, `codex@work`), then the question.
+            const words = arg.split(/\s+/).filter(Boolean);
+            const agents = [];
+            for (let named = agentWords(words[0] ?? ""); words.length && named; named = agentWords(words[0] ?? "")) {
+                agents.push(...named);
+                words.shift();
+            }
+            const question = words.join(" ");
+            if (!c) {
+                if (!page)
+                    return;
+                const unique = [...new Set(agents)];
+                if (unique.length < 2) {
+                    ui.toast("/compare AGENT AGENT…: the first message goes to each of two or more (e.g. /compare claude codex@work)");
+                    return;
+                }
+                // `codex@work` too: a box of its own, checked, beside the bare names.
+                for (const a of unique) {
+                    if (![...page.compare.querySelectorAll("input")].some((b) => b.value === a))
+                        page.compare.append(h("label", { class: "check" }, h("input", { type: "checkbox", value: a }), ` ${a}`));
+                }
+                for (const box of page.compare.querySelectorAll("input"))
+                    box.checked = unique.includes(box.value);
+                if (question) {
+                    page.reply.value = question;
+                    drafts.set(page.id, question);
+                }
+                ui.toast(`The first message goes to ${unique.join(", ")} (each answer a branch)`);
+                return;
+            }
+            if (!agents.length && !question) {
+                compareAgents(c);
+                return;
+            }
+            void askAgreed({ t: "chat_compare", chat: c.id, agents, text: question || null }, `Asked ${agents.length ? agents.join(", ") : "every installed agent"}: each answer is a branch`);
+            return;
+        }
+        case "pick":
+            if (c)
+                void pickAnswer(c.id);
             return;
         case "title":
             if (c) {
@@ -530,8 +856,15 @@ function slash(id, text) {
             requestAnimationFrame(tick);
             return;
         }
-        default: ui.toast("/retry /edit [text] /fork /side [question] /keep /agent NAME /tools NAME /title TEXT /search WORDS /find QUESTION /export /incognito /branch /cite");
+        default: ui.toast("/retry /edit [text] /compare [AGENTS…] [question] /pick /fork /side [question] /keep /agent NAME /tools NAME /folder DIR|none /task [PROJECT] [--agent A] [--name N] /title TEXT /search WORDS /find QUESTION /export /incognito /branch /cite");
     }
+}
+/// The agents a word of `/compare` names (`codex`, `codex@work`, `claude,codex@work,`), or null
+/// when any part of it isn't one: then it is the question's.
+function agentWords(word) {
+    const known = agentNames();
+    const parts = word.split(",").filter(Boolean);
+    return parts.length && parts.every((a) => known.includes(a.split("@")[0])) ? parts : null;
 }
 /// `/branch`: every choice at every point where the shown chat has others.
 function pickBranch(id) {
@@ -541,7 +874,7 @@ function pickBranch(id) {
     }
     menu("Which branch?", state.siblings.flatMap((s) => s.ids.map((to, i) => ({
         title: tip("chat.branch"),
-        label: `${i + 1}/${s.of} at message ${s.node.slice(-8)}`,
+        label: `${i + 1}/${s.of}${sibLabel(s) && s.agents?.[i] ? ` (${s.agents[i]})` : ""} at message ${s.node.slice(-8)}`,
         hint: i + 1 === s.at ? "shown" : "show this branch",
         run: () => void ask({ t: "chat_branch", chat: id, to }),
     }))));
@@ -574,14 +907,18 @@ function editMessage(c, it) {
 /// `‹ 2/3 ›` before a message that has others beside it.
 function siblingBar(id, s) {
     const go = (d) => () => void ask({ t: "chat_branch", chat: id, to: s.ids[(s.at - 1 + d + s.of) % s.of] });
-    return h("div", { class: "siblings", title: tip("chat.branch") }, h("button", { class: "small", "aria-label": "Previous", onclick: go(-1) }, "‹"), h("span", {}, ` ${s.at}/${s.of} `), h("button", { class: "small", "aria-label": "Next", onclick: go(1) }, "›"));
+    // A compare's answers are named by their agent; keeping one switches the chat to it.
+    const who = sibLabel(s);
+    return h("div", { class: "siblings", title: tip("chat.branch") }, h("button", { class: "small", "aria-label": "Previous", onclick: go(-1) }, "‹"), h("span", {}, ` ${s.at}/${s.of}${who ? ` ${who}` : ""} `), h("button", { class: "small", "aria-label": "Next", onclick: go(1) }, "›"), who && canWrite() ? h("button", { class: "link", title: tip("chat.pick"), onclick: () => void pickAnswer(id, s.node) }, "Keep this answer") : null);
 }
 function chatItem(id, it) {
     const c = state.list.get(id);
     const may = canWrite() && !!c;
+    // An imported chat stays as its agent wrote it: forks only (a message makes one).
+    const mine = may && !c.source;
     switch (it.t) {
-        case "user": return h("div", { class: "msg-wrap user" }, h("div", { class: "msg user" }, it.text), may ? h("div", { class: "msg-tools" }, h("button", { class: "link", title: tip("chat.edit"), onclick: () => editMessage(c, it) }, "Edit"), !c.incognito ? h("button", { class: "link", title: tip("chat.fork"), onclick: () => forkAt(c, it.id) }, "Fork from here") : null) : null);
-        case "assistant": return h("div", { class: "msg-wrap" }, h("div", { class: "msg assistant" }, ...cited(it.text), it.streaming ? h("span", { class: "caret" }, "▍") : null), may && !it.streaming ? h("div", { class: "msg-tools" }, h("button", { class: "link", title: tip("chat.retry"), onclick: () => void ask({ t: "chat_retry", chat: id, node: it.id }) }, "Retry"), !c.incognito ? h("button", { class: "link", title: tip("chat.fork"), onclick: () => forkAt(c, it.id) }, "Fork from here") : null) : null);
+        case "user": return h("div", { class: "msg-wrap user" }, h("div", { class: "msg user" }, it.text), may ? h("div", { class: "msg-tools" }, mine ? h("button", { class: "link", title: tip("chat.edit"), onclick: () => editMessage(c, it) }, "Edit") : null, !c.incognito ? h("button", { class: "link", title: tip("chat.fork"), onclick: () => forkAt(c, it.id) }, "Fork from here") : null) : null);
+        case "assistant": return h("div", { class: "msg-wrap" }, h("div", { class: "msg assistant" }, ...cited(it.text), it.streaming ? h("span", { class: "caret" }, "▍") : null), may && !it.streaming ? h("div", { class: "msg-tools" }, mine ? h("button", { class: "link", title: tip("chat.retry"), onclick: () => void ask({ t: "chat_retry", chat: id, node: it.id }) }, "Retry") : null, !c.incognito ? h("button", { class: "link", title: tip("chat.fork"), onclick: () => forkAt(c, it.id) }, "Fork from here") : null) : null);
         case "thinking": return h("div", { class: "msg thinking" }, "· ", it.text.split("\n")[0]);
         case "tool": {
             const status = it.status === "done" ? "done" : it.status === "failed" ? "failed" : it.status === "declined" ? "declined" : "running";
@@ -661,7 +998,11 @@ function chatView(rest) {
     follow(isNew ? null : id);
     const c = isNew ? undefined : state.list.get(id) ?? state.archived?.find((x) => x.id === id);
     const pill = c
-        ? [`${c.agent}@${c.profile}`, ` · tools: ${c.tools}`, c.status ? ` · ${c.status}` : "", c.cost_micro_usd ? ` · $${(c.cost_micro_usd / 1e6).toFixed(3)}` : "", ` · ${addr(c)}`]
+        ? [`${c.agent}@${c.profile}`, ` · tools: ${c.tools}`,
+            c.best_effort ? h("span", { class: "warn", title: "This agent can't enforce the preset by itself: ptyro's answer to each permission request stands behind it" }, " · best effort") : "",
+            c.shell ? h("b", { class: "warn", title: "This chat's agent has a shell: it runs commands as you" }, " · ⚠ shell") : "",
+            c.folders?.length ? h("span", { title: c.folders.join("\n") }, ` · ${c.folders.length} folder${c.folders.length === 1 ? "" : "s"}`) : "",
+            c.status ? ` · ${c.status}` : "", c.cost_micro_usd ? ` · $${(c.cost_micro_usd / 1e6).toFixed(3)}` : "", ` · ${addr(c)}`]
         : ["A new chat: it can search the web, and it is kept."];
     const empty = isNew && !state.items.length
         ? h("div", { class: "empty" }, h("p", {}, h("b", {}, "Ask anything.")), h("p", { class: "sub" }, "Pick the agent and what it may use below, or keep the defaults."))
@@ -674,9 +1015,11 @@ function chatView(rest) {
         h("div", { class: `pill ${c?.status ?? ""}` }, ...pill, c?.machine ? " · " : null, c?.machine ? machineChip(c.workspace) : null),
         ...(c?.attention ? [h("p", { class: "banner warn" }, c.attention.text)] : []),
         ...(c?.incognito ? [h("p", { class: "banner" }, "◌ Incognito: nothing of this chat is kept, and it ends with its agent.")] : []),
+        ...(c?.source ? [h("p", { class: "banner" }, `⇣ ${importedFrom(c)}. It stays as ${c.source.split(":")[0]} wrote it: a message continues it as a fork.`)] : []),
+        ...(c?.comparing ? [h("p", { class: "banner" }, compareLine(c.comparing), canWrite() ? h("button", { class: "small", title: tip("chat.stop"), onclick: () => void ask({ t: "chat_stop", chat: c.id }, "Stopped") }, " Stop") : null)] : []),
         ...(c?.side_of ? [h("p", { class: "banner" }, `↳ A side chat of “${label(state.list.get(c.side_of))}”: it never changes it, and goes when you leave, unless kept. `, canWrite() ? h("button", { class: "small", title: tip("chat.keep"), onclick: () => keepSide(c) }, "Keep it") : null)] : []),
         empty ?? p.box,
-        ...(isNew ? [h("div", { class: "bar chat-pick" }, p.agent, p.preset, h("label", { class: "check", title: tip("chat.incognito") }, p.incognito, " incognito"))] : []),
+        ...(isNew ? [h("div", { class: "bar chat-pick" }, p.agent, p.preset, h("label", { class: "check", title: tip("chat.incognito") }, p.incognito, " incognito")), h("div", { class: "bar chat-pick" }, p.folders), p.compare] : []),
         canWrite() ? h("div", { class: "reply" }, p.reply, stop, h("button", { class: "send", title: tip("chat.send"), onclick: () => void send() }, "Send")) : h("p", { class: "sub" }, "This device may read chats, not write in them."),
     ].filter((x) => !!x));
     if (isNew)

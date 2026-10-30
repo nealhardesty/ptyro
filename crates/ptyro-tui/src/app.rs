@@ -227,6 +227,8 @@ pub enum Purpose {
     ChatAgent(Option<String>),
     /// A chat's tool preset.
     ChatPreset(Option<String>),
+    /// The project this chat's task works in (SPEC §22.7).
+    ChatTaskProject(String, crate::chats::TaskArgs),
     /// Where to fork this chat (SPEC §22.7).
     ChatForkAt(String),
     /// Which message of this chat to say differently.
@@ -318,12 +320,18 @@ pub enum PromptKind {
     Sets(crate::sets::SetsInput),
     /// A chat's title (by id); empty asks for a new automatic one.
     ChatRetitle(String),
+    /// One more folder this chat may read (`none`: none).
+    ChatFolder(String),
     /// A message said differently: (chat, the message's node).
     ChatEdit(String, String),
     /// Find in the chat shown.
     ChatFindIn,
     /// A question for `chat find`.
     ChatFind,
+    /// Which agents a chat's last message is asked of (`chat.compare`).
+    ChatCompare(String),
+    /// What `chat.import` imports: `chat import`'s flags (empty: everything).
+    ChatImport,
 }
 
 /// A key that starts a new line in a text box instead of sending it (UX1.26): Shift+Enter
@@ -395,6 +403,10 @@ pub enum Confirmed {
     Send(Box<Request>, String),
     /// Quit ptyro: stop every session and the daemon (`daemon stop --force`).
     Quit,
+    /// Switch meaning search on (SPEC §22.10): `chat.meaning = true` in the config.
+    MeaningOn,
+    /// Send this request again, agreed to (`confirmed`), its reply going to this.
+    Again(Box<Request>, Box<Pending>),
 }
 
 #[derive(Debug, Clone)]
@@ -452,8 +464,14 @@ pub enum Pending {
     ArchivedChats,
     /// A new chat made by its first message (this one): follow it.
     ChatMade(String),
-    /// A message sent to a chat: put back if it was refused.
-    ChatSent(String),
+    /// A request the daemon may ask the person to agree to first (`NeedsConfirmation`: a chat's
+    /// conversation going to another profile, SPEC §22.7); its reply is the inner one's.
+    Confirm(Box<Request>, Box<Pending>),
+    /// A message (`text`) sent to `chat`: put back if it was refused.
+    ChatSent {
+        chat: String,
+        text: String,
+    },
     /// A chat made (a fork, a side chat, a find): open it.
     ChatOpen,
     /// A cited chat looked up by its address: open it at this node.
@@ -464,6 +482,10 @@ pub enum Pending {
     ChatHits(String),
     /// A chat's Markdown, to write here.
     ChatExport(std::path::PathBuf),
+    /// `chat.import`: its report becomes a toast.
+    ChatImport,
+    /// `chat.pick`: which agent takes the next message, as a toast.
+    ChatPicked,
     /// What quick-new would start in this workspace (UX3.2), for its label.
     Again(String),
     /// Wizard title: the profile a spawn would get and why.
@@ -1773,7 +1795,7 @@ impl App {
 
     /// Read the config again; `say` toasts that it was (the settings panel makes the change
     /// itself and says its own).
-    fn reload_config_with(&mut self, say: bool) {
+    pub(crate) fn reload_config_with(&mut self, say: bool) {
         let path = Config::path(&self.paths);
         match Config::load(&path) {
             Ok(config) => {
@@ -1852,6 +1874,18 @@ impl App {
 
     fn handle_reply(&mut self, pending: Pending, res: Result<Reply, ptyro_core::Error>) {
         match (pending, res) {
+            (Pending::Confirm(req, then), Err(e)) if e.code == ErrorCode::NeedsConfirmation => {
+                if let Pending::ChatMade(_) = *then
+                    && let Some(crate::chats::ChatPanel::View(v)) = &mut self.chat_panel
+                {
+                    v.sending = false;
+                }
+                self.overlay = Some(Overlay::Confirm {
+                    text: format!("{} [y/N]", e.message),
+                    action: Confirmed::Again(req, then),
+                });
+            }
+            (Pending::Confirm(_, then), r) => self.handle_reply(*then, r),
             (
                 p @ (Pending::Pad
                 | Pending::PadAdded
@@ -1863,10 +1897,26 @@ impl App {
             (Pending::Chats, Ok(Reply::Chats { chats })) => self.got_chats(chats),
             (Pending::ArchivedChats, Ok(Reply::Chats { chats })) => self.got_archived(chats),
             (Pending::ChatMade(_), Ok(Reply::Chat { info })) => self.chat_made(info),
-            (Pending::ChatMade(text) | Pending::ChatSent(text), Err(e)) => {
-                self.chat_sent(text, Some(e.message))
+            (Pending::ChatMade(text), Err(e)) => self.chat_sent(None, text, Some(e.message)),
+            (Pending::ChatSent { chat, text }, Err(e)) => {
+                self.chat_sent(Some(&chat), text, Some(e.message))
             }
-            (Pending::ChatSent(text), Ok(_)) => self.chat_sent(text, None),
+            // An imported chat carries on as a fork: the view goes there.
+            (Pending::ChatSent { chat, text }, Ok(Reply::Chat { info })) => {
+                self.chat_sent(Some(&chat), text, None);
+                self.chat_forked(&chat, info);
+            }
+            (Pending::ChatSent { chat, text }, Ok(_)) => self.chat_sent(Some(&chat), text, None),
+            (Pending::ChatImport, Ok(Reply::ChatImported { report })) => {
+                self.toast(report.summary());
+                self.refresh_chats();
+            }
+            (Pending::ChatImport, Err(e)) => self.toast_err(format!("import: {}", e.message)),
+            (Pending::ChatPicked, Ok(Reply::Chat { info })) => {
+                let who = ptyro_core::chats::agent_label(&info.agent, &info.profile);
+                self.toast(format!("kept: {who} takes the next message"));
+                self.chat_updated(info);
+            }
             (Pending::ChatOpen, Ok(Reply::Chat { info })) => {
                 let id = info.id.clone();
                 self.chat_updated(info);
@@ -1881,9 +1931,13 @@ impl App {
                 let id = info.id.clone();
                 self.chat_updated(info);
                 self.open_chat(&id);
-                self.request(Pending::ChatSent(text.clone()), Request::ChatSend { chat: id, text });
+                let sent = Pending::ChatSent { chat: id.clone(), text: text.clone() };
+                self.request(sent, Request::ChatSend { chat: id, text });
             }
             (Pending::ChatHits(q), Ok(Reply::ChatHits { hits })) => self.got_hits(q, hits),
+            (Pending::ChatHits(_), Err(e)) if e.code == ErrorCode::NeedsConfirmation => {
+                self.offer_meaning(e.message);
+            }
             // A query still being typed: its error is no news (a short prefix, a lone `-`).
             (Pending::ChatHits(_), Err(_)) => {}
             (Pending::ChatExport(path), Ok(Reply::Text { text })) => {
@@ -4080,7 +4134,9 @@ impl App {
                 v
             }
             Row::Chat(_) => crate::chats::CHAT_ACTIONS.to_vec(),
-            Row::Chats(_) | Row::ChatNew(_) | Row::ChatAll(_) => vec!["chat.new", "chat.list"],
+            Row::Chats(_) | Row::ChatNew(_) | Row::ChatAll(_) => {
+                vec!["chat.new", "chat.list", "chat.import"]
+            }
             Row::Group(_) => Vec::new(),
         }
     }
@@ -5030,6 +5086,16 @@ impl App {
                     );
                 }
                 (KeyCode::Char { c: 'y' | 'Y' }, _) => self.confirmed(action),
+                // A new chat's first message not agreed to: no chat, the message back to edit.
+                (
+                    KeyCode::Char { c: 'n' | 'N' } | KeyCode::Esc | KeyCode::Enter,
+                    Confirmed::Again(_, then),
+                ) => {
+                    if let Pending::ChatMade(text) = then.as_ref() {
+                        let why = "not sent: no chat was made (the message is back to edit)";
+                        self.chat_sent(None, text.clone(), Some(why.into()));
+                    }
+                }
                 (KeyCode::Char { c: 'n' | 'N' } | KeyCode::Esc | KeyCode::Enter, _) => {}
                 _ => self.overlay = Some(Overlay::Confirm { action, text }),
             },
@@ -5139,6 +5205,16 @@ impl App {
     fn confirmed(&mut self, action: Confirmed) {
         match action {
             Confirmed::Send(req, toast) => self.request(Pending::Done(toast), *req),
+            Confirmed::Again(mut req, then) => {
+                if let Request::ChatTask { confirmed, .. }
+                | Request::ChatCompare { confirmed, .. }
+                | Request::ChatNew { confirmed, .. } = req.as_mut()
+                {
+                    *confirmed = true;
+                }
+                self.request(*then, *req);
+            }
+            Confirmed::MeaningOn => self.meaning_on(),
             Confirmed::Quit => {
                 self.quitting = true;
                 self.toast("stopping ptyro…");
@@ -5333,6 +5409,9 @@ impl App {
             ) => self.chat_pick(p, v),
             (Target::Chat(id), _) => self.open_chat(&id),
             (Target::Agent(p), Purpose::ChatPreset(id)) => self.chat_picked(p, false, id),
+            (Target::Agent(p), Purpose::ChatTaskProject(chat, t)) => {
+                self.chat_task(chat, crate::chats::TaskArgs { project: Some(p), ..t })
+            }
             // A row's action: with that row selected, so it's what the action works on.
             (Target::Action(cmd), Purpose::RowMenu(row)) => {
                 let rows = self.rows();
@@ -5531,6 +5610,8 @@ impl App {
                 }
             }
             PromptKind::ChatFindIn => self.find_in_chat(text.trim()),
+            PromptKind::ChatCompare(chat) => self.chat_compare(chat, text.trim()),
+            PromptKind::ChatImport => self.chat_import(&text),
             PromptKind::ChatFind => {
                 if !text.trim().is_empty() {
                     self.request(
@@ -5541,6 +5622,11 @@ impl App {
                             workspace: None,
                         },
                     );
+                }
+            }
+            PromptKind::ChatFolder(id) => {
+                if !text.trim().is_empty() {
+                    self.chat_folder(Some(id), text.trim());
                 }
             }
             PromptKind::ChatRetitle(id) => {
@@ -5554,6 +5640,7 @@ impl App {
                         agent: None,
                         preset: None,
                         keep: None,
+                        folders: None,
                     },
                 );
             }
@@ -9217,5 +9304,112 @@ mod tests {
             Some("laptop2:spikes"),
             "the name carries the machine: made there"
         );
+    }
+
+    fn chat_info(id: &str, imported: bool) -> ptyro_core::chats::ChatInfo {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "handle": id, "workspace": "main", "title": format!("chat {id}"),
+            "title_src": "user", "agent": "claude", "profile": "default", "tools": "chat",
+            "pinned": false, "archived": false, "incognito": false, "forked": false,
+            "nodes": 2, "unread": 0, "created_ms": 0, "last_ms": 0, "cost_micro_usd": 0,
+            "source": if imported { Some(format!("claude:{id}")) } else { None },
+        }))
+        .unwrap()
+    }
+
+    fn shown_chat(app: &App) -> Option<String> {
+        match &app.chat_panel {
+            Some(crate::chats::ChatPanel::View(v)) => v.id.clone(),
+            _ => None,
+        }
+    }
+
+    fn toast_text(app: &App) -> String {
+        app.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default()
+    }
+
+    #[test]
+    fn a_reply_to_a_message_sent_in_one_chat_never_reopens_it_from_another() {
+        let mut app = app();
+        app.chat_list = vec![chat_info("aaaa", false), chat_info("bbbb", false)];
+        app.open_chat("aaaa");
+        // Sent in A, then B opened before the reply came: B stays, and nothing says "fork".
+        app.open_chat("bbbb");
+        let sent = Pending::ChatSent { chat: "aaaa".into(), text: "hi".into() };
+        app.handle_reply(sent, Ok(Reply::Chat { info: chat_info("aaaa", false) }));
+        assert_eq!(shown_chat(&app).as_deref(), Some("bbbb"));
+        assert!(!toast_text(&app).contains("fork"), "{}", toast_text(&app));
+        // A message to an imported chat went to a fork of it: shown, as it is still open.
+        app.chat_list.push(chat_info("cccc", true));
+        app.open_chat("cccc");
+        let sent = Pending::ChatSent { chat: "cccc".into(), text: "go on".into() };
+        app.handle_reply(sent, Ok(Reply::Chat { info: chat_info("dddd", false) }));
+        assert_eq!(shown_chat(&app).as_deref(), Some("dddd"));
+        assert!(toast_text(&app).contains("continued as a fork"), "{}", toast_text(&app));
+    }
+
+    #[test]
+    fn an_imported_chat_is_never_offered_retry_or_edit() {
+        let mut app = app();
+        app.chat_list = vec![chat_info("cccc", true)];
+        app.open_chat("cccc");
+        for a in ["chat.retry", "chat.edit"] {
+            app.toast = None;
+            app.chat_action(a);
+            assert!(toast_text(&app).contains("stays as its agent wrote it"), "{a}");
+            assert!(app.overlay.is_none(), "{a}: no message picker");
+        }
+    }
+
+    #[test]
+    fn a_first_message_not_agreed_to_goes_back_to_the_composer() {
+        let mut app = app();
+        app.new_chat();
+        let Some(crate::chats::ChatPanel::View(v)) = &mut app.chat_panel else { panic!() };
+        v.draft = "ask codex@work".into();
+        app.chat_key(KeyEvent::new(KeyCode::Enter, Mods::NONE));
+        // The daemon asks first (another profile): the person says no.
+        let req = Request::ChatNew {
+            workspace: None,
+            agent: None,
+            preset: None,
+            title: None,
+            prompt: Some("ask codex@work".into()),
+            incognito: false,
+            folders: Vec::new(),
+            compare: vec!["claude".into(), "codex@work".into()],
+            confirmed: false,
+        };
+        let then = Pending::ChatMade("ask codex@work".into());
+        let e = ptyro_core::Error::new(ErrorCode::NeedsConfirmation, "another profile?");
+        app.handle_reply(Pending::Confirm(Box::new(req), Box::new(then)), Err(e));
+        assert!(matches!(app.overlay, Some(Overlay::Confirm { .. })));
+        app.overlay_key(KeyEvent::new(KeyCode::Char { c: 'n' }, Mods::NONE));
+        let Some(crate::chats::ChatPanel::View(v)) = &app.chat_panel else { panic!() };
+        assert_eq!(v.draft, "ask codex@work", "the message is back to edit");
+        assert!(v.view.items.is_empty(), "nothing shows as sent");
+        assert!(v.id.is_none() && !v.sending);
+    }
+
+    #[test]
+    fn the_chat_list_shows_imported_ones_only_on_i() {
+        let mut app = app();
+        app.chat_list = vec![chat_info("aaaa", false), chat_info("cccc", true)];
+        app.open_chat_list(None);
+        let count = |app: &App| match &app.chat_panel {
+            Some(crate::chats::ChatPanel::List(l)) => app.list_rows(l).len(),
+            _ => 0,
+        };
+        assert_eq!(count(&app), 2);
+        app.chat_key(KeyEvent::new(KeyCode::Char { c: 'i' }, Mods::NONE));
+        assert_eq!(count(&app), 1);
+        assert!(screen(&app).contains("imported only"));
+        app.chat_key(KeyEvent::new(KeyCode::Char { c: 'i' }, Mods::NONE));
+        assert_eq!(count(&app), 2);
+        // The search's operators aren't title text.
+        if let Some(crate::chats::ChatPanel::List(l)) = &mut app.chat_panel {
+            l.query = "by:meaning chat aaaa".into();
+        }
+        assert_eq!(count(&app), 1);
     }
 }

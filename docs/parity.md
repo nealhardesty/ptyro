@@ -78,7 +78,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 |---|---|---|
 | `chat new` | `chat.new` (`m`): a new chat in the selected workspace; type, ⏎ sends (`C-o` picks the agent and its tools); `＋ new chat` in an empty CHATS section | `chat.new`: ＋ on the Chats page (`g c`); the agent and tools under the box |
 | `chat ask` | `chat.new` (`m`): the answer streams into the view; archive or delete it after (`x`, `X`) | `chat.new`: the answer streams in; ⋯ → Delete after |
-| `chat ls` | `chat.list` (`g`): the workspace's chats (Tab: every one), by day, `/` searches, `A` archived; the CHATS section shows the pinned and the newest | `chats`: the Chats page, by day, with `chat.search` and the workspace picker; `chat.archived` for archived ones |
+| `chat ls` | `chat.list` (`g`): the workspace's chats (Tab: every one), by day, `/` searches, `A` archived, `i` only the imported ones (`--imported`); the CHATS section shows the pinned and the newest | `chats`: the Chats page, by day, with `chat.search` and the workspace picker; `chat.archived` for archived ones; `chat.imported` (Imported, once there are any) for `--imported` |
 | `chat show` | `chat.open` (`⏎` on a chat row, or in the list): the chat view | `chat.open`: tap a chat |
 | `chat open` | `chat.open` (`⏎` on a chat row) | `chat.open`: tap a chat |
 | `chat send` | `chat.open`: type in the view's composer, ⏎ | `chat.send`: the box under the chat, Send |
@@ -89,7 +89,9 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `chat unpin` | `chat.pin` (`*` again) | `chat.pin`: ⋯ → Unpin |
 | `chat archive` | `chat.archive` (`x` on a chat row or in the list) | `chat.archive`: ⋯ → Archive |
 | `chat unarchive` | `chat.archive` (`x` on it in the list's archived view, `A`) | `chat.archive`: ⋯ → Bring back, under Archived |
-| `chat set` | `chat.agent` and `chat.preset` (the chat's menu, `.`) | `chat.agent` and `chat.preset`: ⋯ → Switch agent, Tools |
+| `chat set` | `chat.agent`, `chat.preset` and `chat.folder` (the chat's menu, `.`; `/agent`, `/tools`, `/folder DIR`, `/folder none`) | `chat.agent`, `chat.preset` and `chat.folder`: ⋯ → Switch agent, Tools, Folders (`/folder`) |
+| `chat presets` | `chat.preset` (`/tools`): the picker lists every preset with what it lets a chat use | `chat.preset`: ⋯ → Tools lists every preset with its meaning; the new chat's tools menu too |
+| `chat task` | `chat.task` (`/task [PROJECT] [--agent A] [--name N]`, the chat's menu): asks which project when its workspace has several; `--yes` is the `y` it asks | `chat.task`: ⋯ → Make it a task: the project, who works on it (`--agent`) and the worktree's name (`--name`); `/task [PROJECT] [--agent A] [--name N]` goes at once; `--yes` is the Go ahead it asks |
 | `chat rm` | `chat.delete` (`X` on a chat row or in the list; asks) | `chat.delete`: ⋯ → Delete |
 | `chat export` | `chat.export` (`e` in the list, or the menu): written to a Markdown file | `chat.export`: ⋯ → Download as Markdown |
 | `chat retry` | `chat.retry` (`/retry`): a new answer beside the old one; `Alt-←/→` flips between them | `chat.retry`: Retry under an answer; ‹ › flips between them |
@@ -97,8 +99,11 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `chat branch` | `chat.branch` (`/branch`, `Alt-←/→`): every branch point's choices | `chat.branch`: the ‹ › before a message that has others |
 | `chat fork` | `chat.fork` (`/fork`): from the end or a message; `chat.side` (`/side`) for `--side` | `chat.fork`: ⋯ → Fork, or Fork from here under a message; `chat.side`: ⋯ → Side chat |
 | `chat keep` | `chat.keep` (`/keep`) in a side chat | `chat.keep`: Keep it, on a side chat's page |
-| `chat search` | `chat.search` (`C-g`): the chat list searching every chat, messages with their snippets; `⏎` opens one at its message | `chat.search`: the Chats page's search box: titles, then every message on every machine; tap one to open it there |
+| `chat search` | `chat.search` (`C-g`): the chat list searching every chat, messages with their snippets; `⏎` opens one at its message; `--meaning`/`--words` are `by:meaning`/`by:words` in the box, `≈` marks a hit by meaning, and `by:meaning` while it is off asks to switch it on | `chat.search`: the Chats page's search box: titles, then every message on every machine; tap one to open it there; `by:meaning`/`by:words` as in the TUI, `≈`, and `chat.meaning` switches it on where it is off |
 | `chat find` | `chat.find` (`/find`): ask your chats; the answer, with its citations (`chat.cite` opens one) | `chat.find`: ？ on the Chats page; citations in the answer are links (`chat.cite`) |
+| `chat compare` | `chat.compare` (`/compare [AGENTS…] [question]`, the chat's menu; in a new chat `/compare A B` sends its first message to each): every answer a branch, `‹ 2/3 codex ›`, the progress in the header | `chat.compare`: ⋯ → Ask several agents, `/compare`; Ask several: on a new chat's page; the progress in a banner, ‹ 2/3 codex › on each answer |
+| `chat pick` | `chat.pick` (`/pick`, the chat's menu): keep the answer shown; its agent takes the next message | `chat.pick`: Keep this answer beside ‹ 2/3 codex ›, or ⋯ → Keep this answer |
+| `chat import` | `chat.import` (the palette, the CHATS heading's menu, `I` in the chat list): asks first, with `--agent`, `--profile`, `--since` and `--dry-run` typed as the CLI's (`codex --since 30d --dry-run`; ⏎ alone: everything); a toast with what came; imported chats show `⇣` | `chat.import`: ⇣ on the Chats page: a form with whose (`--agent`), the profile, since when and Only count them (`--dry-run`); imported chats show `⇣` and a banner |
 
 ## Attention and notifications
 

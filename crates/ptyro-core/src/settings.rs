@@ -462,7 +462,7 @@ pub const COLLECTIONS: &[Collection] = &[
         reserved: &[],
         starter: &[("web", "true")],
         title: "Tool presets",
-        empty: "None of your own. chat (web search), read (web search and the folders you list) and none (no tools) are built in; add one to give chats other folders or tools, or name one chat, read or none to change it.",
+        empty: "None of your own. chat (web search), read (web search and the chat's folders) and none (no tools) are built in; add one to give chats a shell, MCP servers or other folders, or name one chat, read or none to change it.",
     },
     Collection {
         path: "scripts.run",
@@ -730,11 +730,15 @@ pub const SETTINGS: &[Setting] = &[
     s("chat.title_command", "chat", Kind::Argv, "The titler: reads the prompt on stdin, prints the title.").or("the summaries' command").adv(),
     s("chat.daily_cap", "chat", int(0, 100_000), "The most titles made for each profile in a day. 0 makes none (the first line is used).").unit("a day").adv(),
     s("chat.index_tools", "chat", Kind::Bool, "Also make what tools returned searchable (2 KB of it a message), not just their titles.").adv(),
+    s("chat.meaning", "chat", Kind::Bool, "Meaning search: also find messages by what they are about, not only by their words (marked ≈). Switching it on downloads a small model once (potion-base-8M, 31 MB, from Hugging Face) into ptyro's data folder; your chats never leave this machine.").also("semantic embeddings ai similar search"),
+    s("chat.import", "chat", Kind::Bool, "Keep importing your agents' own histories (Claude Code, Codex and Gemini sessions, every profile's) as read-only chats, checking every 10 minutes for new and grown ones. Off by default: it copies your coding sessions' text into chat.db, where chat search and your chats' history tools find it. `ptyro chat import` does it once.").also("history claude codex gemini sessions sync"),
     s("chat.notify", "chat", pick(CHAT_NOTIFY), "When a chat tells you something."),
     s("chat.archive_purge_days", "chat", int(0, 36_500), "Delete archived chats after this many days. 0 keeps them.").unit("days"),
     s("chat.tools.*.web", "chat", Kind::Bool, "The agent's own web search and page fetch."),
     s("chat.tools.*.read", "chat", Kind::Bool, "Read files in the folders below (and nothing else)."),
-    s("chat.tools.*.dirs", "chat", Kind::List, "Folders a chat with this preset may read.").eg("~/notes"),
+    s("chat.tools.*.dirs", "chat", Kind::List, "Folders a chat with this preset may read, besides the chat's own (`chat new --folder`).").eg("~/notes"),
+    s("chat.tools.*.shell", "chat", Kind::Bool, "The agent's shell: it runs commands as you, so a web page it reads could steer it. Shown with ⚠; never in a built-in preset.").also("bash commands dangerous"),
+    s("chat.tools.*.mcp", "chat", Kind::List, "MCP servers kept on, by the name the agent's own configuration gives them (`claude mcp list`, `codex mcp list`, Gemini's settings.json).").eg("github").also("tools servers"),
     s("chat.tools.*.allow", "chat", Kind::List, "More tools approved without asking, by the agent's own name for them.").adv(),
     // ── Scratchpad and editors ──
     s("scratchpad.mode", "scratchpad", pick(PAD_MODE), "How the scratchpad key shows it."),
@@ -954,8 +958,9 @@ pub fn options(
             .presets()
             .into_iter()
             .map(|p| {
-                let what = if config.chat.tools.contains_key(&p) { "yours" } else { "built in" };
-                (p, what.to_owned())
+                let what = config.chat.preset(&p).unwrap_or_default().describe();
+                let mine = if config.chat.tools.contains_key(&p) { " (yours)" } else { "" };
+                (p, format!("{what}{mine}"))
             })
             .collect(),
         Source::RunScripts => named(

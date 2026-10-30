@@ -20,6 +20,7 @@ mod handoff;
 mod launch;
 mod machines;
 mod mail;
+mod meaning;
 mod notifier;
 mod push;
 mod quick;

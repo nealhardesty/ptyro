@@ -19,7 +19,7 @@ export interface Machine {
   state: "connecting" | "online" | "offline" | "mismatch"; since_ms?: number | null; version?: string | null;
   workspaces: string[]; hidden: string[]; error?: string | null; fix?: string | null; added_ms: number;
 }
-export interface Agent { name: string; program: string; installed: boolean }
+export interface Agent { name: string; program: string; installed: boolean; found?: string }
 
 export const data = {
   projects: new Map<string, Project>(),

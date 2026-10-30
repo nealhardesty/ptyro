@@ -86,6 +86,12 @@ pub fn chats() -> Vec<CompletionCandidate> {
     out
 }
 
+/// The tool presets, each with what it lets a chat use.
+pub fn chat_presets() -> Vec<CompletionCandidate> {
+    let Some(Reply::ChatPresets { presets }) = ask(Request::ChatPresets) else { return Vec::new() };
+    presets.into_iter().map(|p| candidate(p.name, Some(p.about))).collect()
+}
+
 pub fn worktrees() -> Vec<CompletionCandidate> {
     let Some(Reply::Worktrees { worktrees }) = ask(Request::WorktreeList { project: None }) else {
         return Vec::new();

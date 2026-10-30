@@ -27,7 +27,7 @@ pub struct ChatView {
     /// The transcript wrapped for the last width, theme and colour depth; `apply` drops it.
     wrapped: RefCell<Option<Wrapped>>,
     /// A chat's branch points (SPEC §22.7): item id → (which, of how many), drawn `‹ 2/3 ›`.
-    pub marks: std::collections::HashMap<String, (u32, u32)>,
+    pub marks: std::collections::HashMap<String, (u32, u32, String)>,
     /// Find in the chat: this text is shown highlighted.
     pub highlight: Option<String>,
     /// How many rows the body showed when last drawn (scrolling to a message uses it).
@@ -65,7 +65,7 @@ impl ChatView {
     }
 
     /// Branch points to draw (`ChatSiblings`, by node).
-    pub fn set_marks(&mut self, marks: impl IntoIterator<Item = (String, (u32, u32))>) {
+    pub fn set_marks(&mut self, marks: impl IntoIterator<Item = (String, (u32, u32, String))>) {
         self.marks = marks.into_iter().collect();
         self.wrapped.take();
     }
@@ -177,11 +177,13 @@ fn build(view: &ChatView, t: &Theme, depth: Depth) -> Doc {
     let mut d = Doc { lines: Vec::new(), starts: Vec::new() };
     for it in &view.items {
         // Where it has siblings: which one this is, and the keys that go to the others.
-        if let Some((at, of)) = view.marks.get(&it.id) {
+        if let Some((at, of, who)) = view.marks.get(&it.id) {
             if matches!(it.body, ChatBody::User { .. }) {
                 d.line(vec![]);
             }
-            d.line(vec![seg(&format!("‹ {at}/{of} ›  Alt-← Alt-→"), c(t.dim))]);
+            // A compare's answers are named by their agent (SPEC §22.7).
+            let who = if who.is_empty() { String::new() } else { format!(" {who}") };
+            d.line(vec![seg(&format!("‹ {at}/{of}{who} ›  Alt-← Alt-→"), c(t.dim))]);
         }
         d.starts.push((it.id.clone(), d.lines.len()));
         match &it.body {

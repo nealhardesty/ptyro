@@ -2451,18 +2451,52 @@ rows, its `[chat]` settings schema entries and its `make` targets, and the miles
     **Left:** `--machine` on search, a trigram index for CJK, history tools for ACP and OpenCode.
     Tested: `tests/chat_more.rs` (retry, edit, branch, fork at, side chats kept and dropped,
     incognito, search filters and scopes, `chat find`, the MCP tools' scope), the store's tests.
-- [ ] **CHAT4 Tools and tasks** (R-CHAT-09, 15) **M**
-  - The presets (`chat`, `read`, `none`, yours), `[chat.tools.*]`, folders, an MCP list per preset,
-    the `tools: best effort` badge, `/tools`.
-  - Make it a task: a chat to a worktree session with the branch as its first prompt.
+- [x] **CHAT4 Tools and tasks** (R-CHAT-09, 15) **M** (built 2026-10-30; SPEC §22's "As built")
+  - [x] The presets (`chat`, `read`, `none`, yours), `[chat.tools.*]` with `shell` and `mcp`,
+    folders (`--folder`, `chat set --folder/--no-folders`, `/folder`; `chat.db` v4), an MCP list per
+    preset, the `tools: … · best effort · ⚠ shell` badge, `/tools` and `chat presets` with each
+    preset's meaning.
+  - [x] Make it a task: `chat task` / `/task` / `chat.task`, a worktree session with the branch and
+    the last answer as its first prompt; the chat's notice names it.
+  - [x] Gemini (the owner's ask, 2026-10-30): found where npm, nvm or `npx` put it
+    (`ptyro_agents::locate`), an admin-tier policy, no extensions, ptyro's MCP server in
+    `session/new` (the history tools), its own copy removed with a deleted or incognito chat.
+  - **Left:** an `@` completion of the folders' files in the composer; MCP servers for OpenCode
+    chats (not installed here to try `POST /mcp`); agent-sent titles (none of the four sends one);
+    a Gemini and an OpenCode turn to prove their rules stop a call (a login each); the task's
+    session carries no `forked_from_chat` (the chat's notice and the worktree's title link them).
   *Done when:* a `read` chat answers about a folder it was given and nothing else; the default chat
   searches the web and can't touch a file; a chat becomes a task with its context.
-- [ ] **CHAT5 More ways to find and ask** (R-CHAT-10, 11, 12) **L**
-  - Ask several agents one question and compare (fan-out and compare, §15.2), keep the winner.
-  - Import the agents' own histories (Claude's `~/.claude/projects` JSONL, Codex rollouts, Gemini's
-    chats, ACP `session/list`) as read-only chats.
-  - Optional meaning search (model2vec or fastembed, hybrid with FTS), only if the earlier tiers
-    disappoint (§21 question 11).
+  Tested: `tests/chat_tools.rs` (a `read` chat's folder and nothing else, the default chat's web-only
+  launch, Gemini's policy, flags and MCP server through the fake, a shell preset and a missing MCP
+  name, a task's worktree and first prompt), the preset table per agent in `chats.rs`, the ACP
+  driver's `mcpServers`, the store's folders, `locate`'s search order.
+- [x] **CHAT5 More ways to find and ask** (R-CHAT-10, 11, 12) **L** (built 2026-10-30; SPEC §22's "As built")
+  - [x] Ask several agents one question and compare (fan-out and compare, §15.2), keep the winner
+    (R-CHAT-10): `chat compare` / `/compare` / `chat.compare` (and a new chat's first message:
+    `chat new --compare`, Ask several on the web's new-chat page), each answer a branch labelled
+    `‹ 2/3 codex ›`, the progress live, `chat pick` / `/pick` / Keep this answer switches the
+    chat to that agent.
+  - [x] Import the agents' own histories (R-CHAT-12): `chat import` / `chat.import` / ⇣ on the web,
+    Claude Code, Codex and Gemini sessions of every profile as read-only chats (`chat.db` v5),
+    idempotent and incremental, `[chat] import` to keep doing it; a message forks one.
+  - [x] Optional meaning search (R-CHAT-11; **built 2026-10-30**, opt-in `[chat] meaning`): model2vec
+    `potion-base-8M` in pure Rust, int8 vectors in `chat.db` v3, a background backfill, merged with
+    FTS by reciprocal-rank fusion, `by:meaning`/`by:words` (`--meaning`/`--words`), `≈` in the CLI,
+    TUI and web, `make spike-chat-meaning` (SPEC §22.10 tier 3). Left: compare the embedding with
+    model2vec's Python on the real model, once the owner agrees to download it, and tune the 0.3
+    cosine floor on real chats.
+  - **Left (compare and import):** a helper's permission card is denied rather than shown (the
+    chat's own agent's cards show as ever); OpenCode's history and ACP `session/list` are not
+    imported (OpenCode isn't installed here to read its storage); Gemini's import is read from its
+    source only (no Gemini history on this machine); a rewound Gemini part stays in ptyro's copy
+    as a branch. Tested: `tests/chat_compare.rs` (three labelled siblings, pick, a failing agent,
+    stop, a new question), `tests/chat_import.rs` (each format, search, idempotent, grown, fork,
+    own engines, dry run, a deleted chat, `[chat] import`, `--since`), each parser's unit tests.
+  *Done when:* one question to claude, codex and gemini gives three labelled answers side by side
+  in the TUI and the web and `chat pick` carries the conversation on with the winner; and a week
+  of Claude Code and Codex sessions is found by `chat search` after one `chat import`, the next
+  import adding only what changed.
 - [ ] **CHAT6 Sync and merge across machines** (R-CHAT-14; **needs its own brainstorm first**) **L+**
   - Merge chats across every linked machine (§22.15 lists what CHAT1's schema already guarantees and
     what is open). Do not start before that brainstorm's decisions are in SPEC §22.

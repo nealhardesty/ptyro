@@ -67,12 +67,167 @@ pub struct ChatInfo {
     /// The engine's session, while one runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine: Option<String>,
+    /// Folders it may read, with a preset that reads (CHAT4, SPEC §22.5).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folders: Vec<String>,
+    /// Its agent can't enforce the preset by itself, or only partly: ptyro's answer to each
+    /// permission request stands behind it (`tools: … · best effort`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub best_effort: bool,
+    /// Its preset gives the agent a shell (shown with ⚠, like a `dangerous` session).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shell: bool,
+    /// Several agents are answering one message (CHAT5, SPEC §22.7): how far each has got.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comparing: Option<ChatCompare>,
+    /// Imported from an agent's own history (CHAT5, SPEC §22.10): `claude:<session id>`. Such a
+    /// chat is read-only: a message sent to it continues it as a fork.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// The folder that session ran in, when it said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_dir: Option<String>,
+}
+
+/// What an import of the agents' own histories did (SPEC §22.10), per agent and profile.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportReport {
+    /// Counted only: nothing was written.
+    #[serde(default)]
+    pub dry_run: bool,
+    pub sources: Vec<ImportSource>,
+    /// What was left out and why (an agent whose format isn't known, a folder missing).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+/// One agent's history under one profile.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportSource {
+    pub agent: String,
+    pub profile: String,
+    /// Where its sessions are.
+    pub dir: String,
+    /// Sessions that became new chats, and chats that gained messages.
+    pub new: u32,
+    pub grown: u32,
+    /// Sessions already imported as they are, and ones left out (ptyro's own chats and
+    /// summaries, a chat you deleted, nothing to say, older than `since`).
+    pub unchanged: u32,
+    pub skipped: u32,
+    /// Messages (and tool calls) added.
+    pub messages: u64,
+}
+
+impl ImportReport {
+    /// `imported 3 new chats, 2 grew (41 messages)` (or `would import …`, dry).
+    pub fn summary(&self) -> String {
+        let (new, grown, msgs) = self
+            .sources
+            .iter()
+            .fold((0, 0, 0), |(n, g, m), s| (n + s.new, g + s.grown, m + s.messages));
+        if new == 0 && grown == 0 {
+            return if self.dry_run {
+                "nothing new to import".into()
+            } else {
+                "nothing new: every session is imported".into()
+            };
+        }
+        let verb = if self.dry_run { "would import" } else { "imported" };
+        let s = if new == 1 { "" } else { "s" };
+        let grew = if self.dry_run { "would grow" } else { "grew" };
+        format!("{verb} {new} new chat{s}, {grown} {grew} ({msgs} messages)")
+    }
+}
+
+/// A compare under way (SPEC §22.7): the message every agent answers, and each one's state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatCompare {
+    /// The person's message they answer.
+    pub node: String,
+    pub agents: Vec<CompareAgent>,
+}
+
+/// One agent of a compare.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompareAgent {
+    /// `agent` or `agent@profile`.
+    pub agent: String,
+    /// `asking`, `done`, `failed` or `stopped`.
+    pub state: String,
+    /// Why it failed, or what it was told (a tool it asked for was denied).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
+}
+
+impl ChatCompare {
+    /// `comparing: claude ✓ · codex … · gemini ✗ not logged in` (`compared:` once all are in).
+    pub fn line(&self) -> String {
+        let busy = self.agents.iter().any(|a| a.state == "asking");
+        let each: Vec<String> = self
+            .agents
+            .iter()
+            .map(|a| {
+                let mark = match a.state.as_str() {
+                    "done" => "✓",
+                    "failed" => "✗",
+                    "stopped" => "⊘",
+                    _ => "…",
+                };
+                if a.note.is_empty() {
+                    format!("{} {mark}", a.agent)
+                } else {
+                    format!("{} {mark} {}", a.agent, a.note)
+                }
+            })
+            .collect();
+        format!("{}: {}", if busy { "comparing" } else { "compared" }, each.join(" · "))
+    }
+}
+
+/// A tool preset as clients list it (`ChatPresets`, SPEC §22.13).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatPreset {
+    pub name: String,
+    /// One line: what a chat with it may use.
+    pub about: String,
+    /// One of `chat`, `read`, `none` (and not changed in the config).
+    #[serde(default)]
+    pub builtin: bool,
+    /// It reads folders (so `--folder` means something).
+    #[serde(default)]
+    pub read: bool,
+    /// It gives the agent a shell (⚠).
+    #[serde(default)]
+    pub shell: bool,
 }
 
 impl ChatInfo {
     /// What a person calls it: its title, else "new chat".
     pub fn label(&self) -> &str {
         self.title.as_deref().filter(|t| !t.trim().is_empty()).unwrap_or("new chat")
+    }
+
+    /// The header's badge: `tools: read · best effort · ⚠ shell` (SPEC §22.12).
+    pub fn tools_badge(&self) -> String {
+        let mut s = format!("tools: {}", self.tools);
+        if self.best_effort {
+            s.push_str(" · best effort");
+        }
+        if self.shell {
+            s.push_str(" · ⚠ shell");
+        }
+        s
+    }
+
+    /// The header's note for an imported chat: `imported from claude · ~/repo`.
+    pub fn imported_from(&self) -> Option<String> {
+        let src = self.source.as_deref()?;
+        let agent = src.split(':').next().unwrap_or(src);
+        Some(match self.source_dir.as_deref() {
+            Some(d) => format!("imported from {agent} · {}", tilde(d)),
+            None => format!("imported from {agent}"),
+        })
     }
 
     /// `c:7f3k`, or `laptop2:c:7f3k` for another machine's.
@@ -95,6 +250,7 @@ impl ChatInfo {
             _ if self.incognito => "◌",
             _ if self.pinned => "★",
             _ if self.side_of.is_some() => "↳",
+            _ if self.source.is_some() => "⇣",
             _ => " ",
         }
     }
@@ -128,6 +284,22 @@ pub struct ChatSiblings {
     pub at: u32,
     pub of: u32,
     pub ids: Vec<String>,
+    /// The agent that wrote each sibling's branch, in `ids`' order (`agent`, or
+    /// `agent@profile` off the default profile; empty: not known). CHAT5's compare.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<String>,
+}
+
+impl ChatSiblings {
+    /// The shown sibling's agent, when the siblings are not all one agent's (a compare): the
+    /// navigator then reads `‹ 2/3 codex ›`.
+    pub fn label(&self) -> Option<&str> {
+        let first = self.agents.first()?;
+        if self.agents.iter().all(|a| a == first) {
+            return None;
+        }
+        self.agents.get(self.at as usize - 1).map(String::as_str).filter(|a| !a.is_empty())
+    }
 }
 
 /// One search hit (SPEC §22.10): a message (or, with no `node`, a title) of a chat.
@@ -144,6 +316,10 @@ pub struct ChatHit {
     pub at_ms: u64,
     /// bm25 × 1000, lower is better (comparable within one machine only).
     pub rank: i64,
+    /// How it was found (SPEC §22.10): `words`, `meaning` (shown `≈`: no word of the query is
+    /// in it) or `both`; empty from a daemon before meaning search (words).
+    #[serde(default)]
+    pub how: String,
 }
 
 /// Around a match in a snippet (control characters, so no text can fake one).
@@ -160,10 +336,15 @@ pub struct Query {
     pub agent: Option<String>,
     pub since_ms: Option<u64>,
     pub workspace: Option<String>,
+    /// `by:words` or `by:meaning` (SPEC §22.10): only that kind of search; `None`: both, when
+    /// meaning search is on.
+    pub by: Option<String>,
+    /// The words left out (`-word`), quoted for FTS5 and joined by `OR`; empty when none.
+    pub not: String,
 }
 
 /// Parse a search: plain words (all must match), `"a phrase"`, `-word`, `prefix*`, and the
-/// filters `agent:codex`, `since:7d`, `workspace:work`. Every term is quoted for FTS5, so no
+/// filters `agent:codex`, `since:7d`, `workspace:work`, `by:words|meaning`. Every term is quoted for FTS5, so no
 /// typed character is an operator by accident.
 pub fn parse_query(q: &str, now_ms: u64) -> Result<Query, String> {
     let mut out = Query::default();
@@ -198,6 +379,11 @@ pub fn parse_query(q: &str, now_ms: u64) -> Result<Query, String> {
                     out.workspace = Some(v.to_owned());
                     continue;
                 }
+                "by" if matches!(v, "words" | "meaning") => {
+                    out.by = Some(v.to_owned());
+                    continue;
+                }
+                "by" => return Err(format!("by:{v}: say by:words or by:meaning")),
                 "since" => {
                     let d =
                         crate::config::parse_duration(v).map_err(|e| format!("since:{v}: {e}"))?;
@@ -221,6 +407,7 @@ pub fn parse_query(q: &str, now_ms: u64) -> Result<Query, String> {
         return Err("say what to look for, not only what to leave out".into());
     }
     out.fts = yes.join(" ");
+    out.not = no.join(" OR ");
     for n in no {
         out.fts = format!("{} NOT {n}", out.fts);
     }
@@ -348,6 +535,28 @@ pub fn seed_block(branch: &[ChatNode], budget_tokens: usize) -> Option<(String, 
     Some((s, carried))
 }
 
+/// How an agent is named beside an answer (a compare's siblings): `codex`, or `codex@work` off
+/// the default profile.
+pub fn agent_label(agent: &str, profile: &str) -> String {
+    if profile.is_empty() || profile == crate::model::DEFAULT_PROFILE {
+        agent.to_owned()
+    } else {
+        format!("{agent}@{profile}")
+    }
+}
+
+/// `path` with this user's home as `~`.
+pub fn tilde(path: &str) -> String {
+    match std::env::var("HOME") {
+        Ok(h) if !h.is_empty() && h != "/" => match path.strip_prefix(h.as_str()) {
+            Some("") => "~".into(),
+            Some(rest) if rest.starts_with('/') => format!("~{rest}"),
+            _ => path.to_owned(),
+        },
+        _ => path.to_owned(),
+    }
+}
+
 /// The first line of a message, as a title of last resort (§22.8).
 pub fn first_line_title(text: &str) -> String {
     let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
@@ -423,6 +632,12 @@ mod tests {
         assert!(parse_query("-only", 0).is_err());
         assert_eq!(parse_query("agent:claude", 0).unwrap().fts, "");
         assert!(parse_query("since:soon x", 0).is_err());
+        // Meaning search's: which kind, and the words left out on their own.
+        assert_eq!(q.not, r#""redis""#);
+        let m = parse_query("cats -dog -bird by:meaning", 0).unwrap();
+        assert_eq!((m.by.as_deref(), m.not.as_str()), (Some("meaning"), r#""dog" OR "bird""#));
+        assert_eq!(m.words, ["cats"]);
+        assert!(parse_query("x by:vibes", 0).is_err());
     }
 
     #[test]

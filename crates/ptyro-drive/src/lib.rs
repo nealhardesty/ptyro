@@ -46,7 +46,7 @@ pub struct Opts {
     pub session_id: Option<String>,
     /// More fields for the call that starts or resumes the conversation, over the driver's own
     /// (a chat's tool limits, SPEC §22.5): Codex's `thread/start` and `thread/resume`, OpenCode's
-    /// `POST /session`.
+    /// `POST /session`, ACP's `session/new` and `session/load` (its `mcpServers`).
     pub params: Option<Value>,
     /// With `resume`: a new conversation from that one's end, leaving it as it was (Claude's
     /// `--fork-session`, CHAT0).

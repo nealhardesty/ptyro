@@ -10,6 +10,7 @@ pub mod claude;
 pub mod codex;
 pub mod detect;
 pub mod glob;
+pub mod locate;
 pub mod others;
 pub mod profile;
 
@@ -54,6 +55,16 @@ pub fn command(config: &Config, agent: &str) -> Option<Vec<String>> {
     };
     argv.extend(d.map(|d| d.args.clone()).unwrap_or_default());
     (!argv.is_empty()).then_some(argv)
+}
+
+/// [`command`], its program found where it really is (`locate`): on `path`, else where npm,
+/// nvm or `npx` put it. `None` when the agent is unknown or its program is nowhere.
+pub fn resolve(config: &Config, agent: &str, path: &str) -> Option<(Vec<String>, locate::Found)> {
+    let argv = command(config, agent)?;
+    let found = locate::find(&argv[0], path)?;
+    let mut v = found.argv.clone();
+    v.extend(argv.into_iter().skip(1));
+    Some((v, found))
 }
 
 /// Which adapter drives `agent`: configured, else its name if that's an adapter, else generic.

@@ -1417,12 +1417,12 @@ impl Daemon {
         for (profile, sessions) in by_profile {
             let Ok(plan) = self.profile_plan(&profile).await else { continue };
             let env = plan.apply(self.base_env.iter().cloned());
-            let argv = ptyro_agents::command(&self.config(), "claude")
-                .unwrap_or_else(|| vec!["claude".into()]);
+            let argv = self.agent_program("claude").unwrap_or_else(|| vec!["claude".into()]);
             // Bounded: a hung `claude agents` must not stall every session's ticks.
             let out = tokio::task::spawn_blocking(move || {
                 let mut c = std::process::Command::new(&argv[0]);
-                c.args(["agents", "--json"])
+                c.args(&argv[1..])
+                    .args(["agents", "--json"])
                     .env_clear()
                     .envs(env)
                     .stdin(std::process::Stdio::null())

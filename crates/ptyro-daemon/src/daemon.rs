@@ -1046,6 +1046,11 @@ impl Daemon {
             | Request::ChatBranch { .. }
             | Request::ChatFork { .. }
             | Request::ChatSearch { .. }
+            | Request::ChatTask { .. }
+            | Request::ChatPresets
+            | Request::ChatCompare { .. }
+            | Request::ChatPick { .. }
+            | Request::ChatImport { .. }
             | Request::ChatFind { .. }) => self.handle_chat(req, caller).await,
             req @ (Request::CheckpointList { .. }
             | Request::CheckpointDiff { .. }
@@ -1272,6 +1277,7 @@ impl Daemon {
             Request::Doctor => {
                 let mut report = self.doctor();
                 report.chats = self.chat_doctor().await;
+                report.meaning = self.meaning_doctor().await;
                 Ok(Reply::Doctor { report })
             }
             Request::Agents => {

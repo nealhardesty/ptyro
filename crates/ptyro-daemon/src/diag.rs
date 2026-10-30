@@ -49,6 +49,7 @@ impl Daemon {
             warnings,
             config_error,
             chats: None,
+            meaning: None,
         }
     }
 

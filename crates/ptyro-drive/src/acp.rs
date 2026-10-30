@@ -51,11 +51,14 @@ pub struct Acp {
     /// The prompt request in flight (its answer ends the turn).
     prompting: Option<u64>,
     n: u64,
+    /// Over `session/new`'s and `session/load`'s params: a chat's `mcpServers` (CHAT4).
+    #[serde(default)]
+    params: Option<Value>,
 }
 
 impl Acp {
     pub fn new(opts: Opts) -> Self {
-        Self { cwd: opts.cwd, resume: opts.resume, ..Self::default() }
+        Self { cwd: opts.cwd, resume: opts.resume, params: opts.params, ..Self::default() }
     }
 
     pub fn restore(v: Value) -> Option<Self> {
@@ -319,16 +322,15 @@ impl Driver for Acp {
                     "initialize" => {
                         self.load_session =
                             r["agentCapabilities"]["loadSession"].as_bool().unwrap_or(false);
-                        let mcp: Vec<Value> = Vec::new();
+                        // No MCP server unless the launch names some (a chat's history tools).
+                        let base = json!({ "cwd": self.cwd, "mcpServers": [] });
+                        let mut p = crate::merged(base, self.params.as_ref());
                         let (_, e) = match (self.resume.clone(), self.load_session) {
-                            (Some(s), true) => self.request(
-                                "session/load",
-                                json!({ "sessionId": s, "cwd": self.cwd, "mcpServers": mcp }),
-                            ),
-                            _ => self.request(
-                                "session/new",
-                                json!({ "cwd": self.cwd, "mcpServers": mcp }),
-                            ),
+                            (Some(s), true) => {
+                                p["sessionId"] = json!(s);
+                                self.request("session/load", p)
+                            }
+                            _ => self.request("session/new", p),
                         };
                         vec![e]
                     }
@@ -476,6 +478,38 @@ mod tests {
                 |e| if let Effect::Send(s) = e { serde_json::from_str(s).ok() } else { None },
             )
             .collect()
+    }
+
+    #[test]
+    fn a_chats_mcp_servers_go_in_new_and_load() {
+        let servers = json!({ "mcpServers": [{ "name": "ptyro", "command": "/p", "args": ["mcp"], "env": [] }] });
+        let init = r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true}}}"#;
+        let mut a =
+            Acp::new(Opts { cwd: "/w".into(), params: Some(servers.clone()), ..Opts::default() });
+        a.start();
+        let new = sent(&a.on_line(init));
+        assert_eq!(
+            (&new[0]["method"], &new[0]["params"]["cwd"]),
+            (&json!("session/new"), &json!("/w"))
+        );
+        assert_eq!(new[0]["params"]["mcpServers"][0]["name"], "ptyro");
+        let mut a = Acp::new(Opts {
+            cwd: "/w".into(),
+            resume: Some("s1".into()),
+            params: Some(servers),
+            ..Opts::default()
+        });
+        a.start();
+        let load = sent(&a.on_line(init));
+        assert_eq!(
+            (&load[0]["method"], &load[0]["params"]["sessionId"]),
+            (&json!("session/load"), &json!("s1"))
+        );
+        assert_eq!(load[0]["params"]["mcpServers"][0]["command"], "/p");
+        // Without: none (the user's own servers stay Gemini's business, not a chat's).
+        let mut a = Acp::new(Opts { cwd: "/w".into(), ..Opts::default() });
+        a.start();
+        assert_eq!(sent(&a.on_line(init))[0]["params"]["mcpServers"], json!([]));
     }
 
     #[test]

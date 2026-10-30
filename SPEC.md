@@ -6106,6 +6106,39 @@ tier was at its limit, and no provider was logged in).
   `--allowed-mcp-server-names`, `--extensions`, `--session-id`, `--list-sessions`,
   `--delete-session`, `--resume`.
 - Consumer-account availability after 2026-06-18 is still RESEARCH IV.2's open item.
+- **Read from its source, 0.66.0 (2026-10-30, [S] unless marked [V]; the bundle's
+  `packages/core/src/policy` and `packages/cli/src/acp`):**
+  - *Policy tiers:* default 1 < extension 2 < workspace 3 < user 4 < admin 5; a rule's effective
+    priority is `tier + priority/1000`. `--policy` paths **replace** the user's policy folder in the
+    user tier; `--admin-policy` paths load in the admin tier (with the system folder,
+    `/Library/Application Support/GeminiCli/policies` or `/etc/gemini-cli/policies`), **unless that
+    system folder already holds a `.toml`**, when Gemini ignores `--admin-policy` with a warning.
+    "Always allow" answers and settings' allow lists sit at tier 3–4.3, so an admin-tier deny wins
+    over all of them. Extensions may not contribute `allow` rules.
+  - *Rule schema:* `toolName` (string or array; required), `mcpName`, `argsPattern`,
+    `commandPrefix`, `commandRegex`, `decision` (`allow`/`deny`/`ask_user`), `priority` 0–999,
+    `modes`. `toolName = "*"` matches every tool, MCP ones included; `mcp_<server>_*` every tool of
+    one server (a server name can't hold `_`). Tool names: `read_file`, `read_many_files`, `glob`,
+    `grep_search`, `list_directory`, `run_shell_command`, `google_web_search`, `web_fetch`.
+  - *File tools read only the workspace:* `validatePathAccess` allows the session's `cwd`, the
+    `--include-directories` and Gemini's own temp folder for the project; anything else is "Path not
+    in workspace".
+  - *MCP:* `session/new` and `session/load` take `mcpServers` in ACP's stdio shape `{name, command,
+    args, env: [{name, value}]}` (every field needed: `env` is iterated) and merge them over the
+    settings' servers; `--allowed-mcp-server-names` then **replaces** the settings' allow list (and
+    drops their exclude list); a lone empty name (`--allowed-mcp-server-names ""`) allows none.
+  - *Extensions:* `--extensions none` (exactly that one word) turns every extension off.
+  - *Where an ACP session is kept:* `<GEMINI_CLI_HOME or $HOME>/.gemini/tmp/<slug>/chats/`, with
+    `history/<slug>/` beside it; `<slug>` comes from the folder's name (`projects.json` maps the
+    folder to it) and each such folder holds `.project_root`, the folder it is for. **[V]**
+    2026-10-30: a `gemini --acp` with ptyro's chat flags (`--admin-policy`, `--policy`, `--extensions
+    none`, `--allowed-mcp-server-names ptyro`) and a `session/new` with one stdio server got as far
+    as the login check (-32000) with no policy or argument error, and wrote `tmp/<slug>/.project_root`
+    holding the folder's path.
+  - *Titles:* the ACP schema has `session_info_update {title}`, but 0.66.0 never sends one, so the
+    one-shot titler names Gemini chats.
+  - *No incognito switch:* nothing keeps a session from being written; ptyro removes the folders
+    above when the chat ends.
 
 **OpenCode (`opencode serve`, 1.19.5; `/doc` is its OpenAPI)**
 
@@ -6153,6 +6186,46 @@ where `agentCapabilities.sessionCapabilities` says so; read it at `initialize` a
   (worst 200 ms); `optimize` 0.3 s, `rebuild` 1.2 s, `integrity_check` 0.4 s; a streaming node's 2 s
   flush (an `UPDATE` through the triggers) 0.9 ms. So a search box needs no index beyond FTS5 at this
   size, and a prefix of fewer than three characters should wait for the third keystroke.
+
+**The agents' own histories, as CHAT5's import reads them** (2026-10-30; Claude Code and Codex
+read from this Mac's files, read-only **[V]**; Gemini from 0.66.0's bundle **[S]**: it isn't used
+here):
+- **Claude Code** (2.1.x): `<config dir>/projects/<cwd with every non-alphanumeric as ->/<session
+  id>.jsonl`, one JSON object a line. `type` `user` / `assistant` lines carry `uuid`,
+  `parentUuid`, `sessionId`, `cwd`, `timestamp` (RFC 3339, ms), `isSidechain`, and `message.content`:
+  a string, or blocks `text`, `thinking`, `tool_use {id, name, input}`, `tool_result {tool_use_id,
+  content, is_error}` (results come in the next `user` line). `isMeta` lines are the caveats and
+  command output; a typed slash command is a string wrapped in `<command-name>`, its output in
+  `<local-command-stdout>`, a `!` command in `<bash-input>`/`<bash-stdout>`, and background tasks in
+  `<task-notification>`. `isCompactSummary` marks a compaction's summary. Titles are lines of their
+  own: `custom-title {customTitle}` (one you gave), `ai-title {aiTitle}` (newer versions) and
+  `summary {summary}` (older); other lines (`attachment`, `api-request*`, `mode`, `last-prompt`,
+  `file-history-*`, `cost-state`, `continued-in`…) carry no conversation. An API error is an
+  `assistant` line with `isApiErrorMessage`. Sub-agents' transcripts sit in folders of their own,
+  not beside the sessions. Each assistant line holds one block (several lines share a
+  `message.id`).
+- **Codex** (0.164 desktop, this Mac's 14 rollouts): `<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-<time>-<thread id>.jsonl`
+  (archived ones in `archived_sessions/`), lines `{timestamp, type, payload}`: `session_meta {id,
+  cwd, originator, cli_version…}`, `response_item`s (`message` with `role` `user` / `assistant` /
+  `developer` and `content` blocks `input_text` / `output_text`; `function_call` and
+  `custom_tool_call {name, arguments|input, call_id}` and their `*_output {call_id, output}`;
+  `reasoning`; `web_search_call`), and `event_msg`s that repeat them for the UI (`item_completed`,
+  `token_count`, `task_*`). The user's own words are the `user` messages whose
+  `internal_chat_message_metadata_passthrough.content_item_kinds` include `user.text`; Codex's
+  context (`<environment_context>`, the AGENTS.md it read, plugin suggestions) is a `user` message
+  too, of other kinds. Titles: `<CODEX_HOME>/session_index.jsonl` lines `{id, thread_name,
+  updated_at}`.
+- **Gemini CLI 0.66.0 [S]:** `<GEMINI_CLI_HOME or ~>/.gemini/tmp/<project slug>/chats/session-<time>-<id8>.jsonl`
+  (a legacy `.json` is one object with `messages`), the folder's `.project_root` naming the project
+  (§22.9). Lines: a metadata record (`sessionId`, `projectHash`, `startTime`, `lastUpdated`, `kind`,
+  `summary`); message records (`id`, `timestamp`, `type` `user` / `gemini` / `info` / `error` /
+  `warning`, `content` as a string or parts with `text`, and on `gemini` ones `toolCalls [{id, name,
+  displayName, args, status, result, resultDisplay}]`, `thoughts`, `tokens`, `model`), a later record
+  with the same id replacing the earlier; `{"$rewindTo": id}` drops that message and what follows;
+  `{"$patch": {id, content?, toolCalls?, updates?, removeIds?, orderIds?}}`; `{"$set": {…}}`
+  (metadata, or every message). Sub-agents' files are in `chats/<parent id>/`. ptyro applies all but
+  `orderIds`.
+- **OpenCode:** not installed here; its storage is not read (§22's "As built").
 
 ### 20.9 Chrome shows a service worker's certificate, not the connection's
 
@@ -6221,15 +6294,16 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
    summaries don't need it (§11.2h, §20.1); revisit when cross-session questions are wanted.
 10. **Chat sync and merge across machines (CHAT6)** — the owner wants it, 2026-10-29; needs a
     brainstorm of its own. §22.15 lists what the schema already guarantees and what is open.
-11. **Chat meaning search (embeddings)** — only if keyword search and the ask tools disappoint
-    (§22.10 tier 3, CHAT5): model2vec or fastembed, and whether it is worth a download.
+11. ~~**Chat meaning search (embeddings)**~~ — **built opt-in 2026-10-30** (CHAT5, §22.10 tier 3):
+    model2vec `potion-base-8M` (31 MB, downloaded only when `[chat] meaning` is switched on). Still
+    open: its quality on real chats, and the 0.3 cosine floor ([U] until tried).
 12. **Chat tool restriction per agent** — answered by CHAT0 for Claude and Codex (§20.8, §22.5);
     open for Gemini and OpenCode, whose native rules are read but were not run (§22.17).
 
 
 ---
 
-## 22. Chat: general-purpose conversations **[decided 2026-10-29 (owner, ROADMAP CHAT); CHAT1–CHAT3 built 2026-10-29, CHAT4 and later proposed]**
+## 22. Chat: general-purpose conversations **[decided 2026-10-29 (owner, ROADMAP CHAT); CHAT1–CHAT3 built 2026-10-29, CHAT4 and CHAT5 built 2026-10-30, CHAT6 proposed]**
 
 **As built (CHAT1, 2026-10-29), and where it differs from the design below:**
 - **Store** (`ptyro-store/src/chat.rs`): the §22.4 schema exactly, its own thread, 0600, a newer
@@ -6310,14 +6384,150 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   `PTYRO_CHAT_TOOLS=1`). The daemon knows a caller is an engine by its pid's session; an engine may
   only search, read and list, scoped by `history_scope`, never itself or an incognito chat. Claude
   engines get the line of §20.8 instead of `--safe-mode`; Codex gets `mcp_servers.ptyro` in the
-  thread's config; Gemini and OpenCode engines get no history tools yet. Not built: `--machine` on
+  thread's config; Gemini engines get them in `session/new` since CHAT4; OpenCode engines get none yet. Not built: `--machine` on
   search (the fan-out and `--here` are), the trigram index for CJK.
+- **Tools and tasks (CHAT4) and Gemini (2026-10-30):** `ChatTools` gains `shell` and `mcp`
+  (schema entries; a built-in preset with `shell` is refused, an MCP name with `_` too).
+  `ChatTools::describe` is each preset's one line, shown by `/tools`, every picker, the settings
+  panel and `ptyro chat presets` (`ChatPresets`, 1.24). **Folders** are the chat's own:
+  `ChatNew.folders`, `ChatUpdate.folders` (all of them; empty clears), `chat.db` v4 (`chat.folders`,
+  JSON), `ChatInfo.folders`; the daemon makes them full paths that exist, a fork copies them, and a
+  chat given folders with no preset asked for gets `read`. A preset that reads uses them with its
+  `dirs`. `ChatInfo.best_effort` and `.shell` are worked out per agent when a row is sent (§22.5's
+  table), and the clients show `tools: P · best effort · ⚠ shell` (a shell chat's row has `⚠`, as a
+  `dangerous` session's). **Task:** `ChatTask{chat, project?, agent?, name?, confirmed}` →
+  `WorktreeCreated`: `create_worktree` with the chat's agent (the project's profile), the title, and
+  a first prompt of the shown branch's seed block, "The plan from that conversation (chat c:…, its
+  last answer)", the answer and "Carry this out in this repository."; the chat gets a notice naming
+  the worktree and the session. **What moves where:** a task is the person's explicit act of
+  carrying the conversation into coding work, so its text goes where a session's does: typed into
+  a terminal session (its scrollback and recording), the chat's title into the worktree's (in
+  `ptyro.db`), and into the coding agent's own history (which `chat import` may later read back).
+  So: an **incognito chat can't become a task** (refused: "`chat export` copies it out, or ask it
+  again in a chat that isn't incognito"; the web hides the item), nor an imported one (the fork
+  advice); and when the profile the task would run under (as `create_worktree` resolves it: the
+  agent's `@profile`, the project's pin, the workspace's) isn't the chat's, the daemon asks first
+  (`NeedsConfirmation`, "c:… is a chat of profile personal, and the task in alpha would run under
+  work (pinned): carry the conversation over to that account?"); `confirmed` (CLI `--yes`, the
+  TUI's `y`, the web's sheet) goes ahead, and also answers a profile guard's question (it no longer
+  skips one). It waits its turn like a message: refused while the chat answers or compares. The project defaults to the only one of the chat's workspace (or the only one there is);
+  otherwise the error lists them with `--project`, and the TUI and web ask with a picker. The link
+  back is that notice and the worktree's title (the chat's): `SessionInfo` has no `forked_from_chat`
+  (27 places build it, and `ptyro.db` would need a column). **Gemini:** a chat runs with
+  `--admin-policy F --policy F --extensions none --allowed-mcp-server-names <ptyro and the preset's
+  servers, or "">` (and `--include-directories` per folder when it reads); the history tools reach any
+  ACP agent through `Opts.params.mcpServers`, which the driver merges into `session/new` and
+  `session/load` (no new `Opts` field: `params` already is "more fields for the call that starts or
+  resumes the conversation"). Another ACP agent gets no Gemini flags. Deleting a Gemini chat, or an
+  incognito one ending, removes Gemini's own folders for its scratch directory (`.project_root`).
+  **Finding agents:** `ptyro_agents::locate` finds a program that isn't on `PATH` in the npm prefix,
+  `~/.npm-global/bin`, `~/.local/bin`, `~/.volta/bin`, `~/.bun/bin`, `~/.claude/local`, Homebrew,
+  nvm's node versions (newest first) and, for the npm-shipped built-ins, `npx`'s cache
+  (`~/.npm/_npx/*/node_modules/<package>`, newest version; only a `package.json` whose `name` is
+  that package, and a `bin` script inside it: relative, no `..`), running a Node script with the `node`
+  beside it when none is on `PATH`; ptyro never downloads one. Sessions, chats, `doctor`
+  (where, and how: `(nvm)`, `(npx cache)` with a note to `npm i -g`), `AgentChoice.found` (web and
+  TUI agent pickers) and the first-run screen use it; "No agent found" and an asked-for agent that
+  isn't installed offer the install command. **Not built:** an `@` completion of the folders' files
+  in the composer; agent-sent titles (no agent of the four sends one: §20.8); MCP for OpenCode chats
+  (its server takes MCP servers per server instance, `POST /mcp`, and it isn't installed here to
+  try; its permission rules for `<server>_*` are written [S]).
+- **Meaning search (CHAT5, 2026-10-30):** opt-in `[chat] meaning`, model2vec `potion-base-8M` in
+  pure Rust (`crates/ptyro-meaning`), int8 vectors in schema v3 `node_vec`, a background backfill,
+  RRF with the keyword hits, `by:meaning`/`by:words`, `ChatHit.how` and `≈`. See §22.10 tier 3.
+- **Compare (CHAT5, 2026-10-30; `ptyro-daemon/src/chats/compare.rs`):** `ChatCompare{chat,
+  agents, text?, confirmed}` (1.24; `ChatNew.compare`/`confirmed` for a new chat's first message)
+  asks each agent the same message, and each answer is a **sibling branch under it**. **Profiles:**
+  a bare agent name is the **chat's own profile's** (`claude` in a `claude@personal` chat is
+  `claude@personal`, wherever the chat's workspace points), so the branch never reaches another
+  profile's account, nor do a helper's history tools search another profile's chats; a name with
+  another profile (`codex@work`) is asked about first (`NeedsConfirmation`; CLI `--yes`, the TUI's
+  `y`, the web's sheet). Agents are counted once each after resolving (`claude,claude` or
+  `claude,claude@default` is one), and a new chat's `--compare` of fewer than two is refused before
+  the chat is made. With `text` it is a new message
+  on the shown branch; without, the last message of the person's again, for the agents that haven't
+  answered it (a new message needs two agents or more). Default agents: the chat's own, then every
+  installed one with a structured protocol. The chat's own agent (same agent and profile) answers
+  in its own conversation, natively where it can (§22.6), as a message would; every other agent
+  answers in a **helper**: an in-memory chat as an incognito one is (so `--no-session-persistence`
+  / `ephemeral`, no agent-side copy kept; Gemini's folders removed), registered in
+  `Chats.helpers`, which no list, `find_chat`, `ChatUpdated`/`ChatRemoved` or alert ever sees,
+  seeded with the branch above the message. Its answer (words, tool calls, cards, turn end; not
+  ptyro's own info notices) is copied under the message with new ids by `put_branch`, which
+  leaves `leaf` alone, and attributed by a `conv` row (`how = compare`, inserted ended: it says who
+  wrote it, it is not a conversation to continue). Then the helper's engine, scratch folder and
+  agent copy go, before its agent counts as in. **Labels:** `ChatSiblings.agents` (`agent`, or
+  `agent@profile` off the default profile), worked out per sibling as the first node at or below it
+  that a conv produced; `ChatSiblings::label` is the shown one's when they differ, so a retry's
+  siblings stay unlabelled and a compare's read `‹ 2/3 codex ›` in the TUI, the web and `chat show
+  --branches`. **Progress:** `ChatInfo.comparing` (`ChatCompare{node, agents: [{agent, state,
+  note}]}`, `line()` = `comparing: claude ✓ · codex … · gemini ✗ why`), a live item under the
+  message while it runs (not a node), and at the end a notice on the shown branch (`compared: …`
+  with the hint to `/pick`). With no answer of the chat's own agent, the first other answer in is
+  shown. **Rules:** one answer at a time holds for the whole compare (`busy_check` refuses a send,
+  retry, edit, branch or a second compare); `ChatStop` interrupts every helper too, and one that
+  hasn't stopped 10 s later is stopped; a helper not done in 10 minutes is stopped as `✗ timed out`
+  (what it said so far left out); deleting the chat stops its compare, and nothing is copied into a
+  chat deleted meanwhile; at the daemon's start, scratch folders of chats that no longer exist (a
+  crash's helpers and incognito chats) are removed, with Gemini's copies; a helper that fails (not installed, not logged in, ends
+  without an answer) is `✗` with the reason and the others go on; a helper is never shown a
+  permission card: what its preset doesn't allow is **denied** (the preset is ptyro's answer
+  anyway; the progress says "a tool it asked for was denied"), while the chat's own agent asks as
+  ever. **Pick:** `ChatPick{chat, node?}` shows the branch through `node` (default: the shown one)
+  and sets the chat's agent to the one whose conv wrote its newest node (`branch_agent`); the next
+  message is seeded on it (§22.6 rule 3). Like a message, it waits its turn (refused mid-answer or
+  mid-compare). Losers stay as branches (CHAT2 deletes none).
+- **Import (CHAT5, 2026-10-30; `ptyro-daemon/src/chats/import.rs`):** `ChatImport{agent?,
+  profile?, since?, dry_run}` → `ChatImported{report}` (1.24, scope `full`: it copies coding history
+  into `chat.db`, as the setting does) reads every profile's (or one's) Claude Code, Codex and
+  Gemini history (§20.8 has the formats, verified 2026-10-30) **read-only** and makes each session a
+  chat: `chat.db` v5 adds `chat.source` (`claude:<session id>`, unique), `chat.source_dir` (the
+  folder it ran in) and `import(source, chat, path, size, mtime, offset, tail, at)`. Its user and
+  assistant text become nodes, tool calls tool nodes (their output only with `index_tools`, 2 KB),
+  with the session's own timestamps; thinking, side chains, meta lines, compaction summaries and the
+  wrappers around slash commands and Codex's own context are left out. Node ids are made from the
+  source's ids (`node_id`: SHA-256 to 26 Crockford characters), so an import is idempotent; an
+  append-only file (Claude, Codex) is read on from `offset`, the end of the last line after which no
+  tool call waited for its result, parented on `tail`; Gemini's file is read whole (its patches
+  change earlier messages); a file unchanged in size and mtime isn't opened. Title: Claude's
+  `custom-title`, else `ai-title`/`summary`; Codex's `session_index.jsonl` `thread_name`;
+  Gemini's `summary`; else the first message's first line (`title_src = agent`, so a title you
+  give wins). Workspace: the one whose project or worktree contains the session's folder, else
+  `main`; profile: the profile whose folder it came from (two profiles sharing a folder: the first).
+  **Skipped:** sessions that ran in ptyro's own chat engines' and summaries' folders
+  (`<data>/chat`, `<data>/summaries`; sessions in its worktrees, `<data>/worktrees`, are history and
+  imported), sessions with nothing said, and a session whose chat you deleted (the `import` row
+  outlives the chat, so a delete is never undone); a file passed over isn't read again until its
+  size or mtime changes (remembered in memory). Lines over 4 MB are passed over unread: a tool
+  result among them closes its call ("its output was too large to import", found by its id in the
+  line's first 64 KB), and a call still unanswered 1,000 lines on no longer holds `offset` back. A
+  Gemini file over 64 MB is skipped with a note. A file that can't be read, or a parser that
+  panics, is skipped with a note, never the whole import. A tool node's title (its command, path
+  or URL) is redacted as summaries are (`Bearer …`, `TOKEN=…`, `sk-…`). The parse runs in a
+  blocking task and each session is one transaction, so the request loop and other chats' writes
+  wait at most one session. Imported chats are **read-only**: `ChatSend` forks one (the fork says
+  "continued as a fork of the imported c:…", and the reply names the fork, which each client then
+  shows); `ChatRetry`, `ChatEdit`, `ChatCompare`, `ChatPick`, `ChatTask` and `ChatUpdate`'s
+  agent, preset and folders are refused with that advice (title, pin and archive are the
+  person's). A re-import moves the shown branch on only from where the last import left it
+  (`chat.db` v6 `import.leaf`): a person who went to another branch stays there. They are searched (the FTS triggers, the meaning backfill on `ChatUpdated`),
+  obey `history_scope` (their profile), and are listed like any chat, marked `⇣` with "imported
+  from claude · ~/repo" in the header; `chat ls --imported` lists only them (`i` in the TUI's chat
+  list, Imported on the web's Chats page). The TUI's `chat.import` asks first in a prompt that takes
+  the CLI's flags (`codex --since 30d --profile work --dry-run`; ⏎ alone: everything), the web's in
+  a form (whose, profile, since, Only count them), with no request timeout. The TUI refuses retry
+  and edit of one up front, as the web hides them. `[chat] import =
+  true` (default off: it copies coding history) imports at once and then every 10 minutes. On
+  this Mac, 2026-10-30 (debug build): 104 sessions, 11,326 messages, 785 MB of Claude history
+  imported in 7.5 s, again in 0.01 s. **OpenCode is not imported**: it isn't installed here to read
+  its storage, and ptyro doesn't guess a format; the report says so. ACP `session/list` isn't used
+  either (Gemini 0.66.0 doesn't offer it, §22.6).
 - **Configuration renamed:** `[chat] tools = "chat"` became **`[chat] preset`**: TOML can't hold
   both that string and the `[chat.tools.<name>]` tables. Built keys: `enabled`, `recent`, `agent`,
   `preset`, `hibernate_after`, `seed_tokens`, `title`, `title_command`, `daily_cap`, `index_tools`,
   `notify`, `archive_purge_days`, and `chat.tools.*.{web, read, dirs, allow}`.
   CHAT2 and CHAT3 add `incognito`, `history_tool` (default on) and `history_scope` (`profile`,
-  `workspace`, `all`).
+  `workspace`, `all`); CHAT4 adds `chat.tools.*.{shell, mcp}`.
 - **Seeds:** the "N earlier messages left out" line is used (no summary paragraph yet). The seed
   notice sits on the branch between the message and its answer.
 - **Surfaces:** CLI `chat [new]|ask|ls|show|open|send|answer|stop|retitle|pin|unpin|archive|
@@ -6456,8 +6666,19 @@ CREATE TABLE conv (                   -- an agent conversation that served a cha
   |---|---|---|---|
   | **Claude** (stream-json) **[V]** | `--tools "WebSearch,WebFetch" --allowedTools WebSearch WebFetch --strict-mcp-config --safe-mode --system-prompt <chat prompt>` | `--tools "Read,Glob,Grep"` and `--add-dir` for each attached folder, **no** `--allowedTools` for them (a bare allow reads anywhere), plus the same flags | `--tools ""` plus `--strict-mcp-config --safe-mode` |
   | **Codex** (app-server) **[V]** | `thread/start {sandbox: "read-only", config: {web_search: "live", features: {shell_tool: false, unified_exec: false, hooks: false, …}, mcp_servers: {<each>: {enabled: false}}}}`. `read-only` alone is not enough: it still reads any file | a profile `extends ":read-only"` that denies `$HOME` and re-allows the attached folders and what Codex needs to start; **no** `sandbox` parameter; shell on. Files outside `$HOME` stay readable, so the header says `tools: best effort` | the `chat` config with `web_search: "disabled"` |
-  | **Gemini** (ACP) **[S]** | a `--policy` file ptyro writes: `toolName = "*"` `deny` at a high priority, and `google_web_search` `allow` above it; `--extensions` with no name and `--allowed-mcp-server-names` with none (flags in `--help`, not run). 0.66.0 has no `--safe-mode`, so whether the user's hooks and skills load in a chat is **[U]** | the same file with `read_file`, `glob`, `grep_search`, `list_directory` allowed (`argsPattern` or a deny on other paths is unverified) | the catch-all `deny` only |
+  | **Gemini** (ACP) **[S]** (2026-10-30, read from 0.66.0's source; §20.8) | a policy file ptyro writes, passed as `--admin-policy` (the tier above the user's rules and "always allow" answers) and `--policy` (which replaces the user's own; for when a system policy makes Gemini ignore `--admin-policy`): `toolName = "*"` `deny` at 900, `google_web_search` and `web_fetch` `allow` at 950, `mcp_ptyro_*` with the history tools; `--extensions none`; `--allowed-mcp-server-names ptyro` (or `""`: none). The history server comes in `session/new`. 0.66.0 has no `--safe-mode`; the user's hooks and skills in a chat stay **[U]** | the same, with `read_file`, `read_many_files`, `glob`, `grep_search`, `list_directory` allowed and `--include-directories` for each folder: its file tools read only the workspace (the scratch folder and those) | the catch-all `deny` only |
   | **OpenCode** (serve) **[S]** | `POST /session {permission: [{"*","*",deny}, {websearch,*,allow}, {webfetch,*,allow}]}`, set again after every fork; per-message `tools` as a second fence | `read`, `glob`, `grep` allowed for the attached folders' patterns | the catch-all `deny` only |
+
+  **`shell` and `mcp` (CHAT4, a preset of your own only):** Claude `Bash` in `--tools` and
+  `--allowedTools`, each named server's definition from `<config dir>/.claude.json` `mcpServers` in
+  `--mcp-config <scratch>/mcp.json` (a `0600` file in the chat's `0700` scratch folder, never the
+  JSON on the command line: a definition can carry its tokens, and argv is in `ps` and in every
+  client's `SessionInfo`) with `mcp__<server>` allowed (any MCP server means `--setting-sources ""
+  --disable-slash-commands` instead of `--safe-mode`); Codex `shell_tool` and `unified_exec` on, the
+  `workspace-write` sandbox (commands write only the scratch folder; with `read`, its profile), the
+  named servers left out of the switched-off list; Gemini `run_shell_command` and `mcp_<server>_*`
+  allowed, the names in `--allowed-mcp-server-names`; OpenCode `bash` and `<server>_*` allowed [S].
+  A name the agent's config lacks is left out, and the chat says so. A shell chat shows `⚠`.
 
   Every Claude engine also gets `--safe-mode`: without it the user's hooks, CLAUDE.md, skills and
   plugins run inside the chat (§20.8). A Codex thread's hooks and MCP servers are switched off by
@@ -6557,7 +6778,8 @@ agent's own history is a cache**: losing it, or an agent's updated format, loses
 ### 22.8 Titles
 
 The first exchange gets a title, once: (1) the agent's own when it sends one (ACP
-`session_info_update` **[U]**: Gemini was not run; OpenCode writes its own title into the session, read
+`session_info_update {title}`: Gemini 0.66.0 declares it and never sends it, read from its source
+**[S]** 2026-10-30; OpenCode writes its own title into the session, read
 from `session.updated` or `GET /session/:id` [V]; Codex sends no `thread/name/updated` and sets no
 name in an app-server thread, and Claude's stream and session file carry no title: both **[V]**, so
 for Claude and Codex this step never happens and (2) always runs); else (2) `[chat] title_command`, a no-tools, no-MCP one-shot as for summaries
@@ -6576,9 +6798,11 @@ with `◌` while open); one stopped for a retry, an edit or another agent carrie
 message. The transcript
 lives in the daemon's memory, so it ends with a live upgrade or a restart too (its folders go then). Claude's engine gets `--no-session-persistence`
 **[V]**, so it has no resume and leaves no file; Codex's gets `ephemeral: true` **[V]**, which leaves
-no rollout and no list entry; Gemini and OpenCode have no such switch **[U]**, so their own histories
-may still keep it, which `chat.new
---incognito` says plainly ("ptyro keeps nothing; gemini may keep its own copy", naming the agent). `chat ask` (below)
+no rollout and no list entry; Gemini has no such switch, but its copy is in folders marked with
+the chat's scratch directory (`<home>/.gemini/{tmp,history}/<slug>/.project_root`, §20.8 [S/V]),
+which ptyro removes when the chat ends, and the chat says so ("ptyro keeps nothing, and removes
+gemini's own copy when the chat ends"); OpenCode has no switch **[U]**, so its own history may keep
+it, which the chat says plainly ("ptyro keeps nothing; opencode may keep its own copy"). `chat ask` (below)
 is incognito unless `--keep`.
 
 ### 22.10 History and search
@@ -6600,10 +6824,72 @@ Three tiers; each one is useful without the next.
    - **Scope:** `[chat] history_scope = "profile"` (default): a chat sees chats of **its own
      profile** only, so a work account's history never reaches a personal account's model. `"workspace"`
      narrows, `"all"` widens. Incognito chats are never visible.
-3. **Meaning (CHAT5, opt-in, not built unless 1 and 2 disappoint).** A local embedding of each node
-   (model2vec `potion-base-8M`, ~30 MB, no ONNX; or fastembed `bge-small-en-v1.5`, ~130 MB, via
-   ONNX Runtime), stored beside the text, merged with FTS by reciprocal-rank fusion. Downloaded only
-   when switched on, with its size shown first.
+3. **Meaning (CHAT5, opt-in; built 2026-10-30).** A local embedding of each message, merged with
+   the keyword hits by reciprocal-rank fusion. Off by default: `[chat] meaning = true` (the settings
+   panel's Chat section, `ptyro config set chat.meaning true`, or yes where a search offers it).
+   Nothing is downloaded or computed until then. model2vec was chosen over fastembed: 31 MB against
+   ~130 MB, and no ONNX Runtime. As built:
+   - **Model:** model2vec `minishlab/potion-base-8M` (MIT), pinned to commit
+     `bf8b056651a2c21b8d2565580b8569da283cab23`. Its files, from the Hugging Face API on 2026-10-30
+     [S]: `model.safetensors` 30,236,760 B (one F32 tensor `embeddings`, 29,528 × 256 by its size),
+     SHA-256 `f65d0f325faadc1e121c319e2faa41170d3fa07d8c89abd48ca5358d9a223de2`;
+     `tokenizer.json` 683,666 B; `vocab.txt` 219,690 B; `config.json` (`model_type: model2vec`,
+     `hidden_dim: 256`, `normalize: true`). 31 MB in all.
+   - **Download:** the daemon fetches the files with curl (the way notifications are sent; HTTPS
+     only) into `<data>/models/potion-base-8M/`. Each file goes to `<file>.part`, which `-C -`
+     resumes after an interruption. It is then checked and renamed into place: the matrix by its
+     SHA-256, the small files by size and by loading them (a WordPiece vocabulary with a row for
+     every token). Their hashes aren't published, and the commit pin plus HTTPS covers them. A
+     transfer under 1 KB/s for a minute fails and is retried (curl `--speed-limit`), so a stall
+     never hangs it. A safetensors header whose offsets or shape overflow is an error. A
+     failed download says why in `ptyro doctor` and is tried again in 10 minutes, or at once when
+     switched off and on. `PTYRO_MEANING_URL` replaces `https://huggingface.co` (for a mirror; the
+     tests use a `file://` folder). Development and tests never download it: they use a synthetic
+     model in the same layout (`ptyro_meaning::synthetic`).
+   - **Inference** in pure Rust (`crates/ptyro-meaning`, no ONNX, no `tokenizers` crate), as
+     model2vec's `StaticModel.encode` does it. It is BERT-uncased WordPiece from `tokenizer.json`
+     (`vocab.txt` if that isn't WordPiece), with **no special tokens** (model2vec encodes with
+     `add_special_tokens=False`, so there is no `[CLS]`/`[SEP]`). `[UNK]` is dropped, the first 512
+     tokens are kept, and the result is the mean of their rows, L2-normalized. Two approximations:
+     accents are stripped for Latin (U+00C0–U+024F and the combining marks) rather than by full NFD,
+     and punctuation is ASCII's plus the Unicode punctuation blocks rather than every `P*`
+     character. model2vec's behaviour comes from its source as remembered, and it has not been run
+     against the Python reference: [U] until it is compared on the real model.
+   - **Storage:** schema v3, `node_vec(node, chat, at_ms, model, vec)`. A vector is int8 with an
+     f32 scale: 260 B a message, a quarter of f32's size. On unit vectors it gives f32's ranking
+     except for near ties. `model` is `potion-base-8M@bf8b056/i8`, and vectors of any other model
+     are dropped when meaning search is switched on. A message whose text changes, or that is
+     deleted, loses its vector (a trigger), and a vector is stored only if the message's text is
+     still the text embedded (one that changed while it was embedded is done by a later pass), and a deleted chat's vectors go with its rows. Covered
+     are the messages keyword search covers except titles (user and assistant text, tool text with
+     `index_tools`), once complete. Incognito chats are never in `chat.db`, so never embedded.
+   - **Backfill:** a daemon task at low priority, in batches of 128 with a pause between. It goes
+     newest first, walking down `node.seq`, so the table is read once and the recent past is
+     searchable soonest. After that each pass reads only what is new (it wakes on `ChatUpdated`),
+     with a full pass hourly. Switched off, it stops. What was downloaded and embedded stays, so
+     switching it on again is instant. The model is loaded only while it is used and dropped after
+     5 idle minutes (30 MB of memory).
+   - **Search:** `by:meaning` or `by:words` in a query (CLI `--meaning`/`--words`) asks for one
+     kind. With meaning on, the default merges the keyword hits with the nearest `limit` messages by
+     RRF (k = 60), and the best `limit` of the merge are the answer. Nearest means a cosine of at least 0.3 ([U]: set on the synthetic model), found
+     by a brute-force scan of `node_vec`. Every filter, `-word` and the engine's `history_scope`
+     apply, so the history tools' `chat_search` gets meaning search too. `ChatHit.how` is `words`,
+     `meaning` or `both`. A hit found only by meaning has the start of the message as its snippet
+     and shows `≈` (CLI, TUI, web). `by:meaning` while meaning search is off returns
+     `NeedsConfirmation`, and each client offers to switch it on: the CLI asks on a terminal, the
+     TUI asks once a list (`Confirmed::MeaningOn`), and the web shows a button (`chat.meaning`).
+     Each writes `chat.meaning = true` to the user config. While its model downloads, `by:meaning`
+     answers `Busy` with the progress, and plain searches use words. The machine fan-out is
+     unchanged: each machine searches its own `chat.db`, by its own config.
+   - **Cost** (`make spike-chat-meaning`: 100k messages of 10–200 words and a synthetic model the
+     real one's size, `--profile local`, this Mac, 2026-10-30): the model loads in 28 ms. Embedding takes 57 µs a message, and the whole backfill
+     7.3 s. A search's scan takes 45 ms median and 52 ms worst, and the vectors are 26 MB (260 B a
+     message). An earlier version took 62 s to backfill, because every batch re-read the table from
+     the top, and 160 ms to search, because the scan joined `node` rows; the `seq` walk and
+     `node_vec`'s own `chat`/`at_ms` fixed both.
+   - `ptyro doctor` gives its state: off, downloading (N of 31 MB), N of M messages embedded,
+     ready, or why not. It now prints the `chat.db` line too, which the daemon reported and the CLI
+     didn't show.
 
 **Every machine is searched** (§22.11): a search from the TUI, CLI or web goes to this daemon and
 to every linked machine that is up, each searching its own `chat.db`; bm25 scores differ per
@@ -6682,7 +6968,8 @@ hides when `enabled`):
   card `a/A/d`, composer, PageUp/Down) plus: a header (title, `agent@profile`, tools preset, `⎇ branch
   2/3`, cost, machine chip); the branch navigator; a composer that takes **slash commands**
   (`/fork`, `/side`, `/agent`, `/tools`, `/title`, `/retry`, `/search`, `/export`, `/incognito`,
-  `/task`), each also a palette action; an `@` completion for attached folders; and find-in-chat.
+  `/task [PROJECT] [--agent A] [--name N]`, `/compare [AGENTS…] [question]` (agents space- or
+  comma-separated, `codex@work` kept as typed), `/pick`), each also a palette action; an `@` completion for attached folders; and find-in-chat.
 - **Keys** (prefix, then; proposed, `m` and `g` are free in `docs/keys.md` on 2026-10-29; CHAT1.7
   checks and the user can rebind): `m` **new chat** in the current workspace (the composer opens at
   once, ⏎ sends; `C-o` picks agent, tools and folder; `Tab`/`C-i` incognito), `g` the **chat list**
@@ -6705,6 +6992,10 @@ hides when `enabled`):
   ptyro chat retitle|pin|unpin|archive|unarchive|rm CHAT…
   ptyro chat search QUERY [filters]  ·  ptyro chat find QUESTION
   ptyro chat export CHAT [--format md|json] [-o FILE]
+  ptyro chat set CHAT [--agent A] [--preset P] [--folder DIR]… [--no-folders]   # (built, CHAT4)
+  ptyro chat presets [--json]  ·  ptyro chat task CHAT [--project P] [--agent A] [--name N]
+  ptyro chat compare CHAT [--agents A,B…] [TEXT]  ·  ptyro chat pick CHAT [NODE]   # (built, CHAT5)
+  ptyro chat import [--agent A|all] [--profile P] [--since 30d] [--dry-run]  ·  chat ls --imported
   ```
 
   `git diff | ptyro chat ask "review this"` works from any shell, even outside a ptyro session.
@@ -6737,6 +7028,8 @@ daily_cap = 200           # per profile per UTC day: titles and chat find, count
 history_tool = true       # the chat tools of §22.10 in every chat
 history_scope = "profile" # profile | workspace | all
 index_tools = false       # also index tool output (2 KB a node)
+meaning = false           # live: meaning search (§22.10 tier 3); on downloads a 31 MB model once
+import = false            # live: import the agents' own histories every 10 min (CHAT5; copies them)
 notify = "blocked"        # blocked | all | off (§22.11)
 archive_purge_days = 0    # 0 = keep archived chats forever
 
@@ -6765,7 +7058,11 @@ agents are. `ptyro init` asks nothing about chats: they work on first use.
 `ChatSearch{query, filters, machines}` → `ChatHits{hits}`; `ChatFind{question, machines}` →
 `ChatAnswer{text, cites}`; `ChatExport{chat, format}` → `Text{…}`; events `ChatUpdated{info}`,
 `ChatRemoved{id}`. `ChatInfo` carries `id, handle, workspace, machine, title, agent, profile, tools,
-pinned, archived, incognito, forked, nodes, unread, last_at, status, attention, cost_micro_usd`. `SessionInfo` gains `chat`
+pinned, archived, incognito, forked, nodes, unread, last_at, status, attention, cost_micro_usd`
+(1.24 adds `folders`, `best_effort`, `shell`; `ChatTask` and `ChatPresets` → `ChatPresets{presets}`;
+`AgentChoice.found`; CHAT5, still 1.24: `ChatCompare{chat, agents, text?}`, `ChatPick{chat, node?}`,
+`ChatImport{agent?, profile?, since?, dry_run}` → `ChatImported{report}`, `ChatNew.compare`,
+`ChatInfo.comparing`/`source`/`source_dir`, `ChatSiblings.agents`). `SessionInfo` gains `chat`
 (the chat id of an engine). Scopes as in §22.11, listed in `devices::needed`.
 
 ### 22.15 Built for sync (CHAT6) now, so it needs no migration later
@@ -6825,8 +7122,8 @@ agent installed:
 - **Still unverified, each a known gap and a task before the work that depends on it:**
   - that `WebSearch` works in `-p` on an API-key, Bedrock, Vertex or Team account (only a
     subscription login was tried);
-  - that Gemini's `--policy` rules stop a call, and whether its hooks and skills load in a chat
-    (a turn needs a login); that `session_info_update` carries a title;
+  - that Gemini's policy rules stop a call (read from its source, §20.8; a turn needs a login),
+    and whether its hooks and skills load in a chat;
   - that OpenCode's ruleset stops a call, and that its `retry`/`action` status is what a driver sees
     at a limit (a free tier at its limit, no provider logged in);
   - `session/resume` and `session/fork` of ACP on an agent that offers them (Gemini 0.66.0 doesn't);

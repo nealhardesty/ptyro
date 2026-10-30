@@ -40,7 +40,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 23 };
+pub const PROTO: Version = Version { major: 1, minor: 24 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1084,6 +1084,17 @@ pub enum Request {
         /// Nothing of it is written; it ends with its agent (1.23, SPEC §22.9).
         #[serde(default)]
         incognito: bool,
+        /// Folders it may read (1.24, SPEC §22.5): with no `preset`, the chat then reads.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        folders: Vec<String>,
+        /// Ask these agents the first message, each answer a branch (1.24, CHAT5, as
+        /// `ChatCompare`): `agent` or `agent@profile`, two or more.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        compare: Vec<String>,
+        /// The person agreed to what the daemon asked (`NeedsConfirmation`): a compare agent
+        /// under another profile than the chat's (SPEC §22.7).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        confirmed: bool,
     },
     /// Chats, pinned first then the newest: one workspace's, or every one's with `all`.
     ChatList {
@@ -1192,6 +1203,9 @@ pub enum Request {
         /// Keep a side chat: it becomes an ordinary fork (1.23).
         #[serde(default)]
         keep: Option<bool>,
+        /// The folders it may read, all of them (empty: none; 1.24).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        folders: Option<Vec<String>>,
     },
     ChatDelete {
         chat: String,
@@ -1201,6 +1215,63 @@ pub enum Request {
         chat: String,
         #[serde(default)]
         format: String,
+    },
+    /// Make it a task (1.24, SPEC §22.7): an agent session in a new worktree of `project`, its
+    /// first prompt the chat's shown branch and last answer. Answered like `WorktreeNew`.
+    ChatTask {
+        chat: String,
+        /// Default: the only project of the chat's workspace.
+        #[serde(default)]
+        project: Option<String>,
+        /// `agent` or `agent@profile`; default: the chat's agent.
+        #[serde(default)]
+        agent: Option<String>,
+        /// The worktree's name; default: from the chat's title.
+        #[serde(default)]
+        name: Option<String>,
+        /// The person agreed to what the daemon asked (`NeedsConfirmation`): the task runs
+        /// under another profile than the chat's, or a profile guard (SPEC §22.7).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        confirmed: bool,
+    },
+    /// The tool presets, each with what it lets a chat use (1.24).
+    ChatPresets,
+    /// Ask several agents one message (1.24, CHAT5, SPEC §22.7): each answer is a branch under
+    /// it, labelled with its agent; the chat's own agent answers in its own conversation, the
+    /// others each in a helper of their own. `text`: a new message; none: the last one again,
+    /// for the agents that haven't answered it. `agents`: `agent` or `agent@profile`; empty:
+    /// every installed agent that can chat. Answered at once; `ChatInfo.comparing` says how far.
+    ChatCompare {
+        chat: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        agents: Vec<String>,
+        #[serde(default)]
+        text: Option<String>,
+        /// The person agreed to ask an agent under another profile than the chat's: the branch
+        /// goes to that profile's account (`NeedsConfirmation`, SPEC §22.7).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        confirmed: bool,
+    },
+    /// Keep an answer (1.24, CHAT5): show the branch through `node` (default: the one shown)
+    /// and switch the chat to the agent that wrote it, so the next message goes there.
+    ChatPick {
+        chat: String,
+        #[serde(default)]
+        node: Option<String>,
+    },
+    /// Import the agents' own histories as chats (1.24, CHAT5, SPEC §22.10): sessions new or
+    /// grown since the last import. `agent`: one of them (default all); `profile`: one profile's
+    /// (default every profile); `since`: sessions touched in that long (`30d`); `dry_run`: count
+    /// only.
+    ChatImport {
+        #[serde(default)]
+        agent: Option<String>,
+        #[serde(default)]
+        profile: Option<String>,
+        #[serde(default)]
+        since: Option<String>,
+        #[serde(default)]
+        dry_run: bool,
     },
 }
 
@@ -1233,6 +1304,10 @@ pub struct DaemonDoctor {
     /// `chat.db`: what it holds, or why it can't be opened (SPEC §22.4).
     #[serde(default)]
     pub chats: Option<String>,
+    /// Meaning search: off, downloading, how many messages it has embedded, or why it can't
+    /// run (SPEC §22.10).
+    #[serde(default)]
+    pub meaning: Option<String>,
 }
 
 /// The result of a hook self-test.
@@ -1322,8 +1397,11 @@ pub struct AgentChoice {
     pub name: String,
     /// The program it runs.
     pub program: String,
-    /// The program is on `PATH`.
+    /// The program is on `PATH`, or where npm, nvm or `npx` put it.
     pub installed: bool,
+    /// Where it was found, for people (`~/.npm/_npx/…/gemini.js (npx cache)`; 1.24).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub found: Option<String>,
 }
 
 /// One step of a replay: the screen at `at_ms` into the recording, as a keyframe or the changes
@@ -1652,6 +1730,14 @@ pub enum Reply {
     /// Search hits, best first (1.23).
     ChatHits {
         hits: Vec<ptyro_core::chats::ChatHit>,
+    },
+    /// The tool presets (1.24).
+    /// What `ChatImport` did (or, dry, would do).
+    ChatImported {
+        report: ptyro_core::chats::ImportReport,
+    },
+    ChatPresets {
+        presets: Vec<ptyro_core::chats::ChatPreset>,
     },
     Devices {
         devices: Vec<DeviceInfo>,
