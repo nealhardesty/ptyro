@@ -1661,6 +1661,7 @@ impl App {
             archived: l.archived.is_some(),
             limit: Some(30),
             machines: true,
+            profile: None,
         };
         self.request(Pending::ChatHits(q), req);
     }

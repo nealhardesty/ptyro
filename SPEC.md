@@ -6998,10 +6998,11 @@ Three tiers; each one is useful without the next.
 **Every machine is searched** (§22.11): a search from the TUI, CLI or web goes to this daemon and
 to every linked machine that is up, each searching its own `chat.db`; bm25 scores differ per
 machine, so results are interleaved by each machine's rank (round robin), then date, each with its
-machine chip. The ask tools search **this machine** only: `machines = true` for them (which a
-`read`-scope link would allow because it only reads) is **not built** (ROADMAP CHAT7: their
-`history_scope` names a profile and a workspace of this machine, which another machine's search
-would have to be given). A machine that is down or doesn't answer is left out of a search; the
+machine chip. The ask tools search every machine too when asked (`chat_search`'s `machines`,
+CHAT7): each linked machine is given the asking chat's profile by name (`ChatSearch.profile`), so
+it answers with its own chats of that profile; a chat whose `history_scope` is its workspace (one
+of this machine's) searches here only. `chat_read` of a hit there is read there, when the scope
+sees that chat (its profile, as that machine names it; never an incognito one). A machine that is down or doesn't answer is left out of a search; the
 reply has no field to say so, so the daemon logs it.
 
 ### 22.11 Many machines
@@ -7209,7 +7210,8 @@ chat's toggle starts from; `ChatUpdate.confirmed` and `ChatFork.confirmed`: a ba
 chat's own profile's, and another profile's asks first with `NeedsConfirmation`, as compare and task
 do; `ChatAnswer.node`: the card answered, refused when another (or none) is waiting, so a double
 tap or a card answered elsewhere never decides the next request; the TUI and the web send it,
-`chat answer --node` too). `SessionInfo` gains `chat` (the chat id of an engine). Scopes as in §22.11, listed in
+`chat answer --node` too; `ChatSearch.profile`: only that profile's chats, what a chat's history
+tools give another machine's search). `SessionInfo` gains `chat` (the chat id of an engine). Scopes as in §22.11, listed in
 `devices::needed`.
 
 **Not built** (in the first draft; nothing needs them yet): `ChatNew.profile` (it is

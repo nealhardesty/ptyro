@@ -90,6 +90,7 @@ async fn chat_call(client: &Client, name: &str, a: &Value) -> Result<Value, Erro
                 archived: true,
                 limit: Some(a["limit"].as_u64().unwrap_or(10).min(50) as u32),
                 machines: a["machines"].as_bool().unwrap_or(false),
+                profile: None,
             };
             let Reply::ChatHits { hits } = client.request(req).await? else {
                 return Err(Error::internal("unexpected reply"));

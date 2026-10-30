@@ -1758,6 +1758,7 @@ async fn search(
         archived,
         limit: Some(limit),
         machines,
+        profile: None,
     };
     let hits = match c.request(req).await {
         Ok(Reply::ChatHits { hits }) => hits,
