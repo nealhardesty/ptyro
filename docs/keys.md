@@ -125,7 +125,7 @@ Focus the sidebar with `Ctrl-Q Tab`, or `Ctrl-Q Ctrl-Q`. These keys need no pref
 | `R` | restart an exited session |
 | `,` | rename |
 | `D` `O` `S` | inspector / runs / change sets |
-| `m` / `*` | a new chat / pin the chat row. On a chat row `⏎` opens it, `,` titles it, `x` archives it, `X` deletes it (asks), `.` its menu; `⏎` (or Space) on the CHATS heading folds it, as `h`/`l` do; `all chats…` (or `C-q g`) lists them |
+| `m` / `*` | a new chat / pin the chat row. On a chat row `⏎` opens it, `,` titles it, `x` archives it (an archived one comes back), `X` deletes it (asks), `f` forks it, `.` its menu; `⏎` (or Space) on the CHATS heading folds it, as `h`/`l` do, and a click on its `＋` starts a chat in that workspace; `all chats…` (or `C-q g`) lists them |
 | `z` | everything at once: the sidebar full-screen, every row open |
 | `f` | filter the list: all → running → active (a machine, project or worktree with nothing running under it is hidden) |
 | `<` / `>` | the sidebar a column narrower / wider (or drag its edge) |
@@ -182,10 +182,13 @@ Tabs `1`–`5` (or `Tab` / `Shift-Tab`): Diff, Commits, Checks, Ports, Events.
 ## Chats (`Ctrl-Q m`, `Ctrl-Q g`)
 
 The chat view takes the place of the panes; the sidebar stays. Type and `⏎` to send
-(`Shift-⏎` or `Ctrl-J` for a new line), `PageUp`/`PageDown` to scroll, `Ctrl-C` stops the
-answer (or clears the draft), `Esc` goes back (a side chat closed this way goes, unless kept). On
-a permission card, with nothing typed, `a` allows, `A` always, `d` denies. `Ctrl-Q .` is the
-chat's menu: title, pin, archive, switch agent, tools, folders, make it a task, export, delete.
+(`Shift-⏎` or `Ctrl-J` for a new line), `PageUp`/`PageDown` (or the wheel) to scroll, `Ctrl-C`
+stops an answer being written (with none, it clears the draft), `Esc` goes back: to the chat list
+it was opened from, a side chat to its chat (closed this way it goes, unless kept). Each chat
+keeps its draft while you are elsewhere. On a permission card, with nothing typed, `a` allows,
+`A` always, `d` denies; any other letter is typed. `Ctrl-Q .` is the chat's menu: everything below
+that applies to it (a new chat's: its agent, tools, folder, incognito). While the chat (or the
+list) is shown, `Ctrl-Q ,` `x` `X` mean its title, archive and delete, never the session under it.
 The header says what the chat may use: `tools: read`, plus `best effort` where its agent can't
 enforce that by itself, `⚠ shell` for a preset with a shell (its row in CHATS shows `⚠` too), and
 its folders.
@@ -195,7 +198,8 @@ its folders.
 | `Alt-←` / `Alt-→` | where a retry, an edit or a compare made another branch (`‹ 2/3 ›`, `‹ 2/3 codex ›`): the other answers (or messages), in turn |
 | `Ctrl-F` | find in this chat; again: the next match; `Esc` clears it |
 | `Tab` or `Ctrl-I` | in a new chat, before its first message: incognito (nothing kept, it ends with its agent) |
-| `Ctrl-O` | in a new chat: pick the agent and its tools |
+| `Ctrl-O` | in a new chat: pick the agent, its tools, then a folder it may read; in a chat: switch its agent |
+| `↑` / `↓` | in a draft of several lines: the line above / below |
 | `←` / `→`, `Home` / `End` or `Ctrl-A` / `Ctrl-E` | move in the draft (to the start or end of the cursor's line) |
 | `Ctrl-U` / `Ctrl-K` | delete to the start / the end of the cursor's line |
 | `Ctrl-W` / `⌫` / `Delete` | delete the word before the cursor / the character before / the one under it |
@@ -208,7 +212,20 @@ folder it may read; `/folder none` takes them away; in a new chat, before its fi
 can't tell; `--agent` another agent than the chat's, `--name` the worktree's name), `/compare [AGENTS…] [question]` (several agents answer, each a branch named by its
 agent; with no question the last message again; in a new chat `/compare claude codex` (or `claude,codex@work`) sends its
 first message to each), `/pick` (keep the answer shown: its agent takes the next message), `/title TEXT`, `/search WORDS`, `/find QUESTION`, `/export`, `/incognito`, `/cite`
-(open a citation), `/help`. Each is also an action in the palette (`chat.*`).
+(open a citation), `/help` (the list: ⏎ puts one in the composer). `/agent NAME` and `/title TEXT`
+work in a new chat too, before its first message. Each is also an action in the palette (`chat.*`).
+
+The chat list (`Ctrl-Q g`): `j`/`k` move, `⏎` (or a click) opens (a message hit: at that
+message), `/` searches (`⏎` opens what is selected), `m` new, `*` pin, `x` archive, `X` delete,
+`,` title, `f` fork, `e` export, `s` only the chats that need you, then working, unread, pinned,
+then all, `A` archived ones, `i` imported ones, `I` imports, `Tab` every workspace (again: back to
+the one it was opened for), `.` the menu, `Esc` closes. The selected chat shows its last question
+and answer under it.
+
+Every key in this section, the view's and the list's, is in the key map: the `chat` and
+`chatlist` tables, rebound in `[keys]` as `"chat:C-f" = "chat.find_in"` or `"chatlist:p" =
+"chat.pin"` (`"none"` unbinds), and in the settings panel's Keys section. The hints on screen
+show the keys as they are bound.
 
 ## Runs (`Ctrl-Q O`) and change sets (`Ctrl-Q S`)
 

@@ -7067,11 +7067,19 @@ hides when `enabled`):
   once, ⏎ sends; `C-o` picks agent, tools and folder; `Tab`/`C-i` incognito), `g` the **chat list**
   (searchable), `C-g` find across all chats, `Alt-←/→` branches. In the sidebar on a chat row (no
   prefix): `⏎` open, `,` retitle, `*` pin, `x` archive, `X` delete (asks), `f` fork, `.` its menu; on
-  the CHATS heading `⏎`/Space fold it as on a project (`h`/`l` close and open it). Opening a chat
-  or the list gives it the keyboard. The composer edits like a shell line: `←/→`, `C-a`/`C-e`
+  the CHATS heading `⏎`/Space fold it as on a project (`h`/`l` close and open it), and a click on
+  its `＋` starts a chat in that workspace. Opening a chat or the list gives it the keyboard; a
+  slow reply (a fork, a side chat, `/find`) opens its chat only if what asked for it is still
+  shown, else it is offered (`C-q u`). Each chat keeps its draft while it isn't shown; Esc goes
+  back to the list a chat was opened from, a side chat to its chat. While the chat panel is shown
+  the session keys `,` `x` `X` mean its chat, never the session under it. The composer edits like a shell line: `←/→`, `C-a`/`C-e`
   (Home/End) to the line's start and end, `C-u`/`C-k` delete to them, `C-w` the word before. The
   shared keys (`/` find, `.` menu, `j/k`, `Tab`, `z`, `t` where it applies) behave as for sessions.
-  Every key is in `[keys]` and the settings panel, and each action in the palette (`chat.*`).
+  The view's own keys (`C-f`, `C-o`, `Tab`/`C-i`, `a`/`A`/`d` on a card, `C-c`, `Alt-←/→`,
+  `PageUp/Down`) are the key map's `chat` table and the list's (`/ m * x X , f e s A i I Tab .`)
+  its `chatlist` table: `[keys]` names them `chat:KEY` and `chatlist:KEY`. A `chat` key whose
+  action doesn't apply now (a card letter with no card) is typed instead. Every key is in
+  `[keys]` and the settings panel, and each action in the palette (`chat.*`).
 - **CLI** (an address may be `laptop2:…`). `--json` on a verb that asks (`new`, `ask`, `send`,
   `retry`, `edit`, `fork`, `find`, `compare`) waits for the answer, unless `--no-wait`, and prints
   `{"chat", "message", "answers": [{"agent", "node", "text"}]}` (`compare`'s also has `agents`);

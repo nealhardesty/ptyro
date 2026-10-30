@@ -2,7 +2,8 @@
 //! overrides, and the help/palette metadata generated from it.
 //!
 //! Tables: **prefix** (after the prefix key), **global** (always; use sparingly, they steal keys
-//! from programs), **nav** (while the sidebar has focus).
+//! from programs), **nav** (while the sidebar has focus), **chat** (in a chat, before its
+//! composer takes the key) and **chatlist** (in the chat list).
 
 use std::collections::BTreeMap;
 
@@ -254,7 +255,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("chat.delete", "Delete this chat (asks first)"),
     a(
         "chat.agent",
-        "Switch this chat to another agent: the next message carries the conversation over",
+        "Switch this chat to another agent: the next message carries the conversation over (a new chat: pick its agent, tools and folder)",
     ),
     a(
         "chat.preset",
@@ -300,8 +301,23 @@ pub const ACTIONS: &[ActionSpec] = &[
         "Search every chat's messages, on every machine (words, \"phrases\", prefix*, -word, agent:, since:)",
     ),
     a("chat.find", "Ask your chats a question: an agent searches them and answers, citing where"),
-    a("chat.find_in", "Find in this chat (C-f; again for the next)"),
+    a("chat.find_in", "Find in this chat (again: the next match)"),
     a("chat.cite", "Open a citation (c:7f3k/…) of this chat's answers"),
+    a("chat.allow", "Answer the chat's permission card: allow it once"),
+    a("chat.always", "Answer the chat's permission card: always allow it"),
+    a("chat.deny", "Answer the chat's permission card: deny it"),
+    a("chat.branch_prev", "Show the newest branch point's previous answer (or message)"),
+    a("chat.branch_next", "Show the newest branch point's next answer (or message)"),
+    a("chat.page_up", "Scroll the chat a page up"),
+    a("chat.page_down", "Scroll the chat a page down"),
+    a("chat.list_search", "The chat list: type into its search box"),
+    a("chat.list_all", "The chat list: this workspace's chats, or every workspace's"),
+    a("chat.list_archived", "The chat list: the archived chats instead (again: the others)"),
+    a("chat.list_imported", "The chat list: only the imported chats (again: every chat)"),
+    a(
+        "chat.list_state",
+        "The chat list: only the chats that need you, then the working, unread, pinned ones, then all",
+    ),
     a("sets", "Change sets: members as swimlanes, gates, issues, the ledger as a timeline"),
     // ── UX1.21: everything else the CLI does, in the TUI ──
     a(
@@ -396,6 +412,8 @@ pub enum Table {
     Prefix,
     Global,
     Nav,
+    Chat,
+    ChatList,
 }
 
 impl Table {
@@ -404,6 +422,19 @@ impl Table {
             Self::Prefix => "after the prefix",
             Self::Global => "anywhere",
             Self::Nav => "in the sidebar",
+            Self::Chat => "in a chat",
+            Self::ChatList => "in the chat list",
+        }
+    }
+
+    /// What `[keys]` names put before a key of this table (`nav:j`); none after the prefix.
+    pub fn tag(self) -> &'static str {
+        match self {
+            Self::Prefix => "",
+            Self::Global => "global:",
+            Self::Nav => "nav:",
+            Self::Chat => "chat:",
+            Self::ChatList => "chatlist:",
         }
     }
 }
@@ -560,16 +591,41 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Nav, "<", "sidebar.narrower"),
     (Table::Nav, "v", "pane.split_right"),
     (Table::Nav, "s", "pane.split_down"),
+    // In a chat, before its composer takes the key; a key whose action doesn't apply (a
+    // permission letter with no card) is typed instead.
+    (Table::Chat, "C-f", "chat.find_in"),
+    (Table::Chat, "C-o", "chat.agent"),
+    (Table::Chat, "Tab", "chat.incognito"),
+    (Table::Chat, "C-i", "chat.incognito"),
+    (Table::Chat, "a", "chat.allow"),
+    (Table::Chat, "A", "chat.always"),
+    (Table::Chat, "d", "chat.deny"),
+    (Table::Chat, "C-c", "chat.stop"),
+    (Table::Chat, "M-Left", "chat.branch_prev"),
+    (Table::Chat, "M-Right", "chat.branch_next"),
+    (Table::Chat, "PageUp", "chat.page_up"),
+    (Table::Chat, "PageDown", "chat.page_down"),
+    (Table::ChatList, "/", "chat.list_search"),
+    (Table::ChatList, "m", "chat.new"),
+    (Table::ChatList, "n", "chat.new"),
+    (Table::ChatList, "*", "chat.pin"),
+    (Table::ChatList, "x", "chat.archive"),
+    (Table::ChatList, "X", "chat.delete"),
+    (Table::ChatList, ",", "chat.retitle"),
+    (Table::ChatList, "f", "chat.fork"),
+    (Table::ChatList, "e", "chat.export"),
+    (Table::ChatList, "A", "chat.list_archived"),
+    (Table::ChatList, "i", "chat.list_imported"),
+    (Table::ChatList, "I", "chat.import"),
+    (Table::ChatList, "s", "chat.list_state"),
+    (Table::ChatList, "Tab", "chat.list_all"),
+    (Table::ChatList, ".", "row.menu"),
 ];
 
 /// The default bindings named as `[keys]` names them (`d`, `nav:j`), for the settings panel and
 /// `ptyro config list`: what a key does before any override.
 pub fn default_keys() -> Vec<(String, String)> {
-    let named = |table: Table, k: &str| match table {
-        Table::Prefix => k.to_owned(),
-        Table::Nav => format!("nav:{k}"),
-        Table::Global => format!("global:{k}"),
-    };
+    let named = |table: Table, k: &str| format!("{}{k}", table.tag());
     let mut out: Vec<(String, String)> =
         DEFAULTS.iter().map(|(t, k, a)| (named(*t, k), (*a).to_owned())).collect();
     for d in 1..=9 {
@@ -629,13 +685,10 @@ impl Keymap {
             );
         }
         for (spec_key, value) in &config.keys {
-            let (table, key_spec) = if let Some(s) = spec_key.strip_prefix("global:") {
-                (Table::Global, s)
-            } else if let Some(s) = spec_key.strip_prefix("nav:") {
-                (Table::Nav, s)
-            } else {
-                (Table::Prefix, spec_key.as_str())
-            };
+            let (table, key_spec) = [Table::Global, Table::Nav, Table::Chat, Table::ChatList]
+                .into_iter()
+                .find_map(|t| spec_key.strip_prefix(t.tag()).map(|s| (t, s)))
+                .unwrap_or((Table::Prefix, spec_key.as_str()));
             let k = match parse_key(key_spec) {
                 Ok(k) => normalize(k),
                 Err(e) => {
@@ -831,6 +884,8 @@ mod tests {
             let table = match b.table {
                 "nav" => Table::Nav,
                 "global" => Table::Global,
+                "chat" => Table::Chat,
+                "chatlist" => Table::ChatList,
                 _ => Table::Prefix,
             };
             let k = parse_key(&b.key).unwrap();
@@ -839,6 +894,22 @@ mod tests {
             assert!(!b.help.is_empty() && !b.help.contains("not an action"), "{}", b.name);
         }
         assert!(rows.iter().any(|b| b.fixed && b.table == "prefix" && b.key == "1…9"));
+    }
+
+    #[test]
+    fn a_chat_and_the_chat_list_have_tables_of_their_own() {
+        let (m, _) = Keymap::new(&Config::default());
+        assert_eq!(m.lookup(Table::Chat, ev('f', Mods::CTRL)).unwrap().action, "chat.find_in");
+        assert_eq!(m.lookup(Table::ChatList, ev('x', 0)).unwrap().action, "chat.archive");
+        assert!(m.lookup(Table::Prefix, ev('f', Mods::CTRL)).is_none(), "nothing leaks out");
+        // Parsed: the file's check reads past the table's name.
+        let c = Config::parse("[keys]\n\"chat:C-f\" = \"none\"\n\"chatlist:z\" = \"chat.pin\"\n")
+            .unwrap();
+        let (m, errors) = Keymap::new(&c);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(m.lookup(Table::Chat, ev('f', Mods::CTRL)).is_none());
+        assert_eq!(m.lookup(Table::ChatList, ev('z', 0)).unwrap().action, "chat.pin");
+        assert!(default_keys().iter().any(|(k, a)| k == "chatlist:x" && a == "chat.archive"));
     }
 
     #[test]
