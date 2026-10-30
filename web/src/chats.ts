@@ -8,7 +8,7 @@ import { data, machineOf, wsLabel } from "./data.js";
 import { machineChip } from "./machines.js";
 import { actions, ago, ask, confirm, download, errText, form, h, menu, patch, ui, views } from "./kit.js";
 import type { Child } from "./kit.js";
-import { atInsert, atQuery, chatsOff, folderList, importedFrom, itemKey, label, recentChats, shownChats, slashMessage, sorted } from "./chatkit.js";
+import { atInsert, atQuery, chatsOff, folderList, importedFrom, itemKey, label, recentChats, shownChats, slashMessage, sorted, onMachine } from "./chatkit.js";
 import { composing } from "./keys.js";
 
 const ACTIONS = {
@@ -27,6 +27,7 @@ const ACTIONS = {
   "chat.folder": "Folders the chat may read (on the computer it runs on), with the read preset",
   "chat.task": "Make it a task: an agent in a new worktree carries out the chat's last answer",
   "chat.export": "Download the chat as Markdown, or as JSON (every message, with its ids)",
+  "chat.machine": "Only one machine's chats (`chat ls --machine`)",
   "chat.search": "Search every chat: titles at once, and from 3 letters every message on every machine (\"phrases\", prefix*, -word, agent:codex, since:7d, by:meaning; ≈ marks a message found by meaning)",
   "chat.meaning": "Switch meaning search on: also find messages by what they are about, not only their words (downloads a 31 MB model once)",
   "chat.archived": "Show archived chats instead",
@@ -111,6 +112,8 @@ const state = {
   imported: false,
   /// Only pinned chats (`chat ls --pinned`).
   pinned: false,
+  /// Only one machine's (`chat ls --machine`): "" every one, "." this one.
+  machine: "",
   /// Chats opened that the list doesn't hold (archived, from a link or a citation), by id.
   seen: new Map<string, Chat>(),
   /// The chat shown was deleted (elsewhere, or incognito and its agent ended).
@@ -242,7 +245,9 @@ function hitRows(): Node[] {
   if (!state.query || [...state.query].length < 3) return [];
   if (state.meaningOff) return [h("p", { class: "sub" }, `${state.meaningOff}. `, h("button", { class: "small", title: tip("chat.meaning"), onclick: () => void meaningOn() }, "Switch it on"))];
   if (!state.hits.length) return state.hitsFor ? [h("p", { class: "sub" }, "No message matches.")] : [];
-  return [h("h3", { class: "day" }, `Messages (${state.hits.length})`), ...state.hits.map((x) =>
+  const hits = state.hits.filter((x) => onMachine(x.chat, state.machine));
+  if (!hits.length) return [h("p", { class: "sub" }, "No message matches.")];
+  return [h("h3", { class: "day" }, `Messages (${hits.length})`), ...hits.map((x) =>
     h("a", { class: "chat-row hit", href: `#/c/${encodeURIComponent(x.chat.id)}${x.node ? `/${encodeURIComponent(x.node)}` : ""}`, title: tip("chat.open") },
       h("span", { class: "main" }, h("span", { class: "title" }, label(x.chat)), x.chat.machine ? machineChip(x.chat.workspace) : null, h("small", {}, ` ${x.chat.agent} · ${ago(x.at_ms)}`)),
       x.how === "meaning" ? h("span", { class: "snippet", title: "Found by meaning: none of the words is in it" }, "≈ ", snippet(x.snippet)) : snippet(x.snippet)))];
@@ -262,7 +267,7 @@ function rows(): Node[] {
   const source = state.archived ?? sorted(state.list.values());
   const q = state.query;
   // Side chats sit under their chat, as in the TUI's sidebar.
-  const shown = shownChats(source, { query: q, workspace: state.workspace, imported: state.imported, pinned: state.pinned });
+  const shown = shownChats(source, { query: q, workspace: state.workspace, imported: state.imported, pinned: state.pinned, machine: state.machine });
   if (!shown.length && q) return [h("p", { class: "sub" }, `No chat titled “${q}”.`), ...hitRows()];
   if (!shown.length) {
     return [h("div", { class: "empty" },
@@ -301,6 +306,12 @@ function listView(): HTMLElement {
     h("option", { value: "" }, "Every workspace"),
     ...[...data.workspaces.values()].map((w) => h("option", { value: w.name }, wsLabel(w.name))));
   wsSelect.value = state.workspace;
+  // Which machine's, once chats of more than one are listed (`chat ls --machine`).
+  const machines = [...new Set([...state.list.values()].map((c) => c.machine).filter((m): m is string => !!m))].sort();
+  const machineSelect = machines.length || state.machine ? h("select", { "aria-label": "Machine", title: tip("chat.machine"), onchange: (e: Event) => { state.machine = (e.target as HTMLSelectElement).value; filtersChanged(); } },
+    h("option", { value: "" }, "Every machine"), h("option", { value: "." }, "This machine"),
+    ...machines.map((m) => h("option", { value: m }, m))) : null;
+  if (machineSelect) (machineSelect as HTMLSelectElement).value = state.machine;
   const archived = h("button", { class: `small${state.archived ? " on" : ""}`, title: tip("chat.archived"), onclick: () => void toggleArchived() }, state.archived ? "Back to chats" : "Archived");
   // Shown once there are imported chats (or while it filters).
   const anyImported = state.imported || [...state.list.values()].some((c) => !!c.source);
@@ -311,7 +322,7 @@ function listView(): HTMLElement {
       canWrite() ? h("button", { class: "icon", title: tip("chat.find"), "aria-label": "Ask your chats", onclick: () => findChats() }, "？") : null,
       conn.scope === "full" ? h("button", { class: "icon", title: tip("chat.import"), "aria-label": "Import agent histories", onclick: () => importHistories() }, "⇣") : null,
       canWrite() ? h("button", { class: "icon plus", title: tip("chat.new"), "aria-label": "New chat", onclick: () => newChat() }, "＋") : null),
-    h("div", { class: "searchbar" }, findBox, wsSelect, pinned, archived, imported),
+    h("div", { class: "searchbar" }, findBox, wsSelect, machineSelect, pinned, archived, imported),
     h("main", { class: "list chats", title: tip("chats") }, h("div", { class: "rows" }, ...rows())));
 }
 

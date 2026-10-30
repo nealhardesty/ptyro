@@ -37,6 +37,10 @@ assert.deepEqual(folderList(""), [], "emptied: no folders");
   assert.deepEqual(ids(shownChats(list, { ...none, workspace: "work" })), ["b"]);
   assert.deepEqual(ids(shownChats(list, { ...none, pinned: true })), ["p"]);
   assert.deepEqual(ids(shownChats(list, { ...none, imported: true })), ["m"]);
+  const far = sorted([...list, chat("r", { title: "Remote", machine: "laptop2", last_ms: 4 })]);
+  assert.deepEqual(ids(shownChats(far, { ...none, machine: "laptop2" })), ["r"], "one machine's");
+  assert.ok(!ids(shownChats(far, { ...none, machine: "." })).includes("r"), "this machine's");
+  assert.ok(ids(shownChats(far, none)).includes("r"), "every machine's");
   assert.deepEqual(ids(shownChats(list, { ...none, query: "~/repo" })), ["m"], "an imported chat by where it ran");
   assert.deepEqual(titleQuery("Agent:Codex \"Retry\" redi*"), { text: "retry redi", agent: "codex" });
 }

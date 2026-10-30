@@ -5,7 +5,12 @@
 export interface ChatLike {
   id: string; title?: string | null; agent: string; workspace: string; pinned: boolean; last_ms: number;
   incognito: boolean; side_of?: string | null; source?: string | null; source_dir?: string | null;
+  machine?: string | null;
 }
+
+/// The machine a list keeps (`chat ls --machine`): every one (""), this one ("."), or that one.
+export const onMachine = (c: { machine?: string | null }, machine = ""): boolean =>
+  !machine || (machine === "." ? !c.machine : c.machine === machine);
 
 export const label = (c: ChatLike | undefined): string => c?.title?.trim() || "new chat";
 
@@ -35,7 +40,7 @@ export function titleQuery(q: string): { text: string; agent: string } {
   return { text: words.join(" "), agent };
 }
 
-export interface ListFilter { query: string; workspace: string; imported: boolean; pinned: boolean }
+export interface ListFilter { query: string; workspace: string; imported: boolean; pinned: boolean; machine?: string }
 
 /// The list's rows: the chats `source` holds that the filter keeps, each followed by its side
 /// chats (newest first, as the TUI's sidebar has them under it). A side chat goes with its chat;
@@ -43,7 +48,7 @@ export interface ListFilter { query: string; workspace: string; imported: boolea
 export function shownChats<T extends ChatLike>(source: T[], f: ListFilter): { chat: T; side: boolean }[] {
   const { text: q, agent } = titleQuery(f.query);
   const keeps = (c: T): boolean => !c.incognito && (!f.workspace || c.workspace === f.workspace) && (!f.imported || !!c.source) && (!f.pinned || c.pinned)
-    && (!agent || c.agent.toLowerCase().includes(agent))
+    && onMachine(c, f.machine) && (!agent || c.agent.toLowerCase().includes(agent))
     && (!q || label(c).toLowerCase().includes(q) || c.agent.toLowerCase().includes(q) || importedFrom(c).toLowerCase().includes(q));
   const sides = new Map<string, T[]>();
   for (const c of source) if (c.side_of && !c.incognito) sides.set(c.side_of, [...(sides.get(c.side_of) ?? []), c]);
