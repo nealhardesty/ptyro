@@ -204,28 +204,37 @@ impl Daemon {
             return;
         };
         // Engines that crossed a live upgrade have no follower in this image (the next message
-        // resumes the conversation). An incognito chat lived in the old image's memory alone, so
-        // it ends here: its folders go with it (SPEC §22.9).
-        for s in self.sessions() {
-            let place = s.meta.locked().place.clone();
-            let Some(chat) = place.chat.clone() else { continue };
-            s.hibernating.store(true, Ordering::Relaxed);
-            self.stop_session(&s).await;
-            self.forget_session(s.id);
-            if matches!(db.get(chat.clone()).await, Ok(None)) {
-                let who = place.agent.as_deref().map(|a| (a, place.profile.as_str()));
-                self.remove_chat_dirs(&chat, who).await;
-            }
-        }
-        // Engines' session rows from before they were kept out of `ptyro.db`.
-        if let Some(store) = &self.store {
-            store.forget_sessions_in(self.paths.data.join("chat").to_string_lossy().into_owned());
-        }
+        // resumes the conversation). Which they are is taken now, and their cut-off answers are
+        // closed now (one write), before connections are accepted; stopping them waits on each
+        // process, so it happens behind, and an upgrade's clients are back at once.
+        let crossed: Vec<Arc<Session>> =
+            self.sessions().into_iter().filter(|s| s.meta.locked().place.chat.is_some()).collect();
         match db.close_interrupted().await {
             Ok(c) if !c.is_empty() => tracing::info!("{} chat answer(s) were cut off", c.len()),
             Ok(_) => {}
             Err(e) => tracing::warn!("chat.db: {e}"),
         }
+        // Engines' session rows from before they were kept out of `ptyro.db`.
+        if let Some(store) = &self.store {
+            store.forget_sessions_in(self.paths.data.join("chat").to_string_lossy().into_owned());
+        }
+        // An incognito chat lived in the old image's memory alone, so it ends here: its folders
+        // go with it (SPEC §22.9).
+        let me = Arc::clone(self);
+        let old = db.clone();
+        tokio::spawn(async move {
+            for s in crossed {
+                let place = s.meta.locked().place.clone();
+                let Some(chat) = place.chat.clone() else { continue };
+                s.hibernating.store(true, Ordering::Relaxed);
+                me.stop_session(&s).await;
+                me.forget_session(s.id);
+                if matches!(old.get(chat.clone()).await, Ok(None)) {
+                    let who = place.agent.as_deref().map(|a| (a, place.profile.as_str()));
+                    me.remove_chat_dirs(&chat, who).await;
+                }
+            }
+        });
         self.start_meaning(db.clone());
         self.start_chat_import();
         let me = Arc::clone(self);
