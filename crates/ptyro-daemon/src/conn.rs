@@ -856,7 +856,8 @@ fn live_frames(
 ) -> Vec<ServerMsg> {
     const BUDGET: usize = ptyro_protocol::MAX_FRAME / 2;
     let size = |i: &ptyro_core::chat::ChatItem| serde_json::to_vec(i).map_or(0, |v| v.len());
-    let mut frames: Vec<Vec<ptyro_core::chat::ChatItem>> = vec![Vec::new()];
+    let mut frames: Vec<Vec<ptyro_core::chat::ChatItem>> = Vec::new();
+    let mut cur = Vec::new();
     let mut used = 0;
     for mut it in items {
         let mut n = size(&it);
@@ -866,13 +867,15 @@ fn live_frames(
             *o = ptyro_core::chats::clip(o, BUDGET / 2);
             n = size(&it);
         }
-        if used + n > BUDGET && frames.last().is_some_and(|f| !f.is_empty()) {
-            frames.push(Vec::new());
+        if used + n > BUDGET && !cur.is_empty() {
+            frames.push(std::mem::take(&mut cur));
             used = 0;
         }
         used += n;
-        frames.last_mut().expect("one frame").push(it);
+        cur.push(it);
     }
+    // The last (or only, maybe empty: a reset to nothing) frame.
+    frames.push(cur);
     let mut siblings = Some(siblings);
     frames
         .into_iter()
