@@ -1120,6 +1120,12 @@ pub enum Request {
         chat: String,
         #[serde(default)]
         all: bool,
+        /// Only part of them, oldest first (1.25): from the `from`-th node (0: the first), at
+        /// most `limit` (a chat too big for one reply is read so; fewer than `limit` is the end).
+        #[serde(default)]
+        from: Option<u32>,
+        #[serde(default)]
+        limit: Option<u32>,
     },
     /// A message to a chat; its agent starts (or carries on) to answer it.
     ChatSend {
@@ -1188,10 +1194,14 @@ pub enum Request {
         #[serde(default)]
         workspace: Option<String>,
     },
-    /// Answer the chat's open permission request: `allow`, `always` or `deny`.
+    /// Answer the chat's open permission request: `allow`, `always` or `deny`. `node` (1.25):
+    /// the card answered; another one waiting (or none) refuses it, so a double tap or a card
+    /// answered elsewhere never decides the next request.
     ChatAnswer {
         chat: String,
         decision: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        node: Option<String>,
     },
     /// Stop the answer being written.
     ChatStop {

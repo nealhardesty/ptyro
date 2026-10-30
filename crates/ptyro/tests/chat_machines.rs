@@ -106,7 +106,10 @@ async fn new_chat(c: &Client, workspace: Option<&str>, prompt: &str) -> ChatInfo
 }
 
 async fn answers(c: &Client, chat: &str) -> Vec<String> {
-    match c.request(Request::ChatRead { chat: chat.into(), all: false }).await {
+    match c
+        .request(Request::ChatRead { chat: chat.into(), all: false, from: None, limit: None })
+        .await
+    {
         Ok(Reply::ChatTranscript { nodes, .. }) => nodes
             .into_iter()
             .filter_map(|n| match n.body {
@@ -192,7 +195,10 @@ async fn another_machines_chats_are_listed_used_and_made_from_here() {
     // By its address with the machine, and by its handle alone (only laptop2 has it).
     let addr = format!("laptop2:c:{}", theirs.handle);
     for a in [addr.as_str(), theirs.handle.as_str()] {
-        let r = here.request(Request::ChatRead { chat: a.into(), all: false }).await.unwrap();
+        let r = here
+            .request(Request::ChatRead { chat: a.into(), all: false, from: None, limit: None })
+            .await
+            .unwrap();
         assert!(matches!(r, Reply::ChatTranscript { info, .. } if info.id == theirs.id), "{a}");
     }
 
@@ -213,6 +219,21 @@ async fn another_machines_chats_are_listed_used_and_made_from_here() {
             });
         }
     }
+    here.send(ClientMsg::ChatUnsubscribe { chat: theirs.id.clone() }).unwrap();
+    // By its handle alone (only laptop2 has it): followed there too.
+    here.send(ClientMsg::ChatSubscribe { chat: theirs.handle.clone() }).unwrap();
+    let deadline = Instant::now() + WAIT;
+    loop {
+        assert!(Instant::now() < deadline, "the chat followed by its handle never came");
+        if let Ok(Some(ServerMsg::ChatLive { chat, reset: true, items, .. })) =
+            tokio::time::timeout(Duration::from_millis(500), pushes.recv()).await
+            && chat == theirs.id
+            && items.iter().any(|i| matches!(&i.body, ChatBody::User { .. }))
+        {
+            break;
+        }
+    }
+    // And stopped by its id.
     here.send(ClientMsg::ChatUnsubscribe { chat: theirs.id.clone() }).unwrap();
 
     // Made in its workspace from here: it lives there, and its news reaches us.

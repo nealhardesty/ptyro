@@ -203,7 +203,7 @@ fn a_shell_preset_is_marked_and_mcp_servers_are_named() {
     // `github` isn't in this Claude's config: left out, and the chat says so.
     let addr = format!("c:{}", c["handle"].as_str().unwrap());
     w.until("the notice", || {
-        texts(&w, &addr).contains("MCP github not in claude's own configuration")
+        texts(&w, &addr).contains("MCP github isn't in claude's own configuration")
     });
     // Built-in presets never run commands.
     let out = w.cli(&["config", "set", "chat.tools.chat.shell", "true"]);
@@ -242,15 +242,15 @@ fn a_chat_becomes_a_task_with_its_context() {
     w.until("its answer", || texts(&w, &addr).contains("you said: plan the retry policy"));
     // No project yet: the error says how to have one.
     let out = w.cli(&["chat", "task", &addr]);
-    assert!(String::from_utf8_lossy(&out.stderr).contains("ptyro project add"), "{out:?}");
-    // Two projects: it asks which, offering --project.
+    assert!(String::from_utf8_lossy(&out.stderr).contains("add the repository"), "{out:?}");
+    // Two projects: it asks which, naming them.
     let a = repo(&w.home(), "alpha");
     let b = repo(&w.home(), "beta");
     w.ok(&["project", "add", &a.to_string_lossy()]);
     w.ok(&["project", "add", &b.to_string_lossy()]);
     let out = w.cli(&["chat", "task", &addr]);
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("--project") && err.contains("alpha") && err.contains("beta"), "{err}");
+    assert!(err.contains("Name one of") && err.contains("alpha") && err.contains("beta"), "{err}");
     let t = w.json(&["chat", "task", &addr, "--project", "alpha", "--json"]);
     assert_eq!(t["worktree"]["project_slug"], "alpha");
     let session = t["session"]["name"].as_str().expect("its agent started").to_owned();

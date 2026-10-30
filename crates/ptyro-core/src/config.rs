@@ -455,7 +455,8 @@ pub const RESERVED_SECTIONS: &[(&str, &str)] = &[];
 pub struct Config {
     pub ui: Ui,
     pub daemon: Daemon,
-    /// Key overrides: `"key" = "action [args]"`, `"global:key" = …`, `"nav:key" = …`; the value
+    /// Key overrides: `"key" = "action [args]"`, `"global:key" = …`, `"nav:key" = …` (also
+    /// `chat:` in a chat and `chatlist:` in the chat list); the value
     /// `"none"` unbinds a default.
     pub keys: BTreeMap<String, String>,
     pub themes: BTreeMap<String, ThemeDef>,
@@ -601,6 +602,8 @@ impl ChatTools {
 impl Chat {
     /// The built-in presets: `chat` (web search), `read` (also reads `dirs`), `none`.
     pub const BUILTIN: [&'static str; 3] = ["chat", "read", "none"];
+    /// `chat find`'s own (its history tools and nothing else): never a preset of yours.
+    pub const FIND: &'static str = "find";
 
     /// A preset by name: yours, else a built-in one.
     pub fn preset(&self, name: &str) -> Option<ChatTools> {
@@ -649,6 +652,11 @@ impl Chat {
         }
         for (name, t) in &self.tools {
             crate::names::validate(name).map_err(|e| format!("chat.tools.{name}: {e}"))?;
+            if name == Self::FIND {
+                return Err(format!(
+                    "chat.tools.{name}: `{name}` is the name of `chat find`'s own tools (it reads your past chats, nothing else): give this preset another name"
+                ));
+            }
             if t.shell && Self::BUILTIN.contains(&name.as_str()) {
                 return Err(format!(
                     "chat.tools.{name}.shell: the built-in presets never run commands; make a preset of your own for that ([chat.tools.shell] shell = true)"
@@ -1630,8 +1638,10 @@ impl Config {
             return Err("daemon.scrollback_lines: at most 1000000".into());
         }
         for key in self.keys.keys() {
-            let spec =
-                key.strip_prefix("global:").or_else(|| key.strip_prefix("nav:")).unwrap_or(key);
+            let spec = ["global:", "nav:", "chat:", "chatlist:"]
+                .iter()
+                .find_map(|t| key.strip_prefix(t))
+                .unwrap_or(key);
             parse_key(spec).map_err(|e| format!("keys.{key:?}: {e}"))?;
         }
         for (name, p) in &self.profiles {
@@ -2057,6 +2067,15 @@ pub fn normalize_key(k: KeyEvent) -> KeyEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn find_is_chat_finds_own_preset() {
+        let mut c = Chat::default();
+        assert!(c.validate().is_ok());
+        c.tools.insert("find".into(), ChatTools { shell: true, ..ChatTools::default() });
+        let e = c.validate().unwrap_err();
+        assert!(e.contains("chat.tools.find") && e.contains("another name"), "{e}");
+    }
 
     #[test]
     fn serving_the_web_app_is_one_setting_that_keeps_the_rest_of_the_file() {

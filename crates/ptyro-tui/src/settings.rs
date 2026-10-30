@@ -85,6 +85,30 @@ impl LineEdit {
         self.at += text.chars().count();
     }
 
+    /// The cursor to the line above (or below), as near its column as that line allows;
+    /// false when there is none.
+    pub(crate) fn vertical(&mut self, up: bool) -> bool {
+        let chars: Vec<char> = self.text.chars().collect();
+        self.at = self.at.min(chars.len());
+        let (start, end) = self.line();
+        let col = self.at - start;
+        let (from, to) = if up {
+            if start == 0 {
+                return false;
+            }
+            let to = start - 1;
+            (chars[..to].iter().rposition(|c| *c == '\n').map_or(0, |i| i + 1), to)
+        } else {
+            if end == chars.len() {
+                return false;
+            }
+            let from = end + 1;
+            (from, chars[from..].iter().position(|c| *c == '\n').map_or(chars.len(), |i| from + i))
+        };
+        self.at = (from + col).min(to);
+        true
+    }
+
     /// Returns whether the key edited the text.
     pub(crate) fn key(&mut self, key: KeyEvent) -> bool {
         let ctrl = key.mods.has(Mods::CTRL);
@@ -104,11 +128,12 @@ impl LineEdit {
             KeyCode::Char { c: 'w' } if ctrl => {
                 let end = self.byte(self.at);
                 let head: Vec<char> = self.text[..end].chars().collect();
+                // Within the line, as C-u and C-k keep to it.
                 let mut i = head.len();
-                while i > 0 && head[i - 1].is_whitespace() {
+                while i > start && head[i - 1].is_whitespace() {
                     i -= 1;
                 }
-                while i > 0 && !head[i - 1].is_whitespace() {
+                while i > start && !head[i - 1].is_whitespace() {
                     i -= 1;
                 }
                 let start = self.byte(i);
@@ -156,6 +181,17 @@ impl LineEdit {
             _ => return false,
         }
         true
+    }
+}
+
+/// A key table's name, as the bindings carry it.
+fn static_table(table: &str) -> &'static str {
+    match table {
+        "nav" => "nav",
+        "global" => "global",
+        "chat" => "chat",
+        "chatlist" => "chatlist",
+        _ => "prefix",
     }
 }
 
@@ -620,6 +656,8 @@ impl Panel {
         for (table, title) in [
             ("prefix", format!("After the prefix key ({prefix}, then the key)")),
             ("nav", "In the sidebar (while it has focus)".to_owned()),
+            ("chat", "In a chat (a key no action takes there is typed)".to_owned()),
+            ("chatlist", "In the chat list".to_owned()),
             (
                 "global",
                 "Anywhere, without the prefix (a global key takes the key from programs)"
@@ -636,11 +674,7 @@ impl Panel {
                     })
                     .map(|b| Row::Key(b.clone())),
             );
-            rows.push(Row::AddKey(match table {
-                "nav" => "nav",
-                "global" => "global",
-                _ => "prefix",
-            }));
+            rows.push(Row::AddKey(static_table(table)));
         }
         rows.remove(0);
         rows
@@ -2013,11 +2047,7 @@ impl Panel {
             }
             CaptureThen::MoveKey(from) => {
                 let key = keys.first().cloned().unwrap_or_default();
-                let table = match settings::slot(&from).0 {
-                    "nav" => "nav",
-                    "global" => "global",
-                    _ => "prefix",
-                };
+                let table = static_table(settings::slot(&from).0);
                 self.key_pressed(table, &key, Some(from))
             }
         }

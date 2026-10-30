@@ -2264,7 +2264,7 @@ pub(crate) fn help_lines<'a>(app: &'a App, filter: &str) -> Vec<Line<'a>> {
         let arg = cmd.arg.as_deref().map(|a| format!(" {a}")).unwrap_or_default();
         let keys = match table {
             Table::Prefix => format!("{prefix} {key}"),
-            Table::Global | Table::Nav => key.clone(),
+            Table::Global | Table::Nav | Table::Chat | Table::ChatList => key.clone(),
         };
         let text = format!("{keys:<14} {}{arg}  {desc}", cmd.action);
         if !needle.is_empty() && !text.to_lowercase().contains(&needle) {

@@ -1158,11 +1158,20 @@ impl Daemon {
     }
 
     /// A message to an imported chat: it carries on as a fork, which says so (the import stays
-    /// as the agent wrote it, so a re-import can still add to it).
+    /// as the agent wrote it, so a re-import can still add to it). The next message carries on
+    /// in the same fork (its newest one), not in another.
     pub(super) async fn continue_imported(
         self: &Arc<Self>,
         info: &chats::ChatInfo,
     ) -> Result<chats::ChatInfo, Error> {
+        // One at a time: two messages at once make one fork.
+        let lock = self.chats.lock_for(&info.id);
+        let _import = lock.lock().await;
+        if let Some(id) =
+            self.chat_db()?.newest_fork(info.id.clone()).await.map_err(super::store_err)?
+        {
+            return self.chat_info_now(&id).await;
+        }
         let fork = self.chat_fork(info, None, None, false).await?;
         let agent = info.source.as_deref().and_then(|s| s.split(':').next()).unwrap_or("its agent");
         let text = format!(

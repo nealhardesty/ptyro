@@ -6505,6 +6505,11 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   `session/load` (no new `Opts` field: `params` already is "more fields for the call that starts or
   resumes the conversation"). Another ACP agent gets no Gemini flags. Deleting a Gemini chat, or an
   incognito one ending, removes Gemini's own folders for its scratch directory (`.project_root`).
+  Deleting any chat (or `archive_purge_days` purging it: `compact` returns each with its agent and
+  profile) removes the copy of every agent that served it (each conv's agent and profile): Claude's
+  project folder, Gemini's folders, and Codex's rollouts (`sessions/YYYY/MM/DD/rollout-*-<thread
+  id>.jsonl` and `archived_sessions/`, by each conv's `conversation_id`, only when the file's first
+  line names the chat's id, so no other conversation is touched).
   **Finding agents:** `ptyro_agents::locate` finds a program that isn't on `PATH` in the npm prefix,
   `~/.npm-global/bin`, `~/.local/bin`, `~/.volta/bin`, `~/.bun/bin`, `~/.claude/local`, Homebrew,
   nvm's node versions (newest first) and, for the npm-shipped built-ins, `npx`'s cache
@@ -6594,7 +6599,8 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   blocking task and each session is one transaction, so the request loop and other chats' writes
   wait at most one session. Imported chats are **read-only**: `ChatSend` forks one (the fork says
   "continued as a fork of the imported c:…", and the reply names the fork, which each client then
-  shows); `ChatRetry`, `ChatEdit`, `ChatCompare`, `ChatPick`, `ChatTask` and `ChatUpdate`'s
+  shows); the next message to the import carries on in its newest fork (kept, not archived)
+  rather than making another; `ChatRetry`, `ChatEdit`, `ChatCompare`, `ChatPick`, `ChatTask` and `ChatUpdate`'s
   agent, preset and folders are refused with that advice (title, pin and archive are the
   person's). A re-import moves the shown branch on only from where the last import left it
   (`chat.db` v6 `import.leaf`): a person who went to another branch stays there. They are searched (the FTS triggers, the meaning backfill on `ChatUpdated`),
@@ -6662,7 +6668,10 @@ shown in every workspace, including those of linked machines (§16.4b).
 - A chat and a node have a **ULID** (§2.3); the human handle of a chat is `c:7f3k`.
 - A chat has a **title** (free text) and no name. It is addressed by handle (`7f3k`, `c:7f3k`),
   by a title substring that matches one chat, or by `@last` (the chat most recently used), `@pinned`
-  and `@unread` (multi). A chat of another machine is `laptop2:c:7f3k`, as sessions are (§16.4b).
+  and `@unread` (the one pinned chat, or the one with answers not read; when several are, the
+  error lists them, newest first). A chat of another machine is `laptop2:c:7f3k`, as sessions are
+  (§16.4b); a handle only one linked machine has is that machine's (requests and `ChatSubscribe`
+  alike).
 - A node is addressed `7f3k/01JB…` (chat, node id suffix ≥ 6), for `fork --at` and search hits.
 
 ### 22.4 Storage: `chat.db`
@@ -6670,8 +6679,11 @@ shown in every workspace, including those of linked machines (§16.4b).
 `<data>/chat.db` (0600), SQLite (bundled), WAL, `foreign_keys=ON`, migrations embedded and counted
 by `user_version`, **its own writer thread** apart from the metadata store's (a long message or an
 index update never delays a status write). It is opened when the daemon starts and `[chat]
-enabled`. **If it can't be opened** the daemon runs, chats say why in one line and offer the fix
-(`ptyro doctor`, "chat.db is locked by pid …", "disk full"), and nothing else is affected.
+enabled`. **If it can't be opened** the daemon runs, chats say why in one line and offer the fix,
+and nothing else is affected. Built (`StoreError::fix`, also for a write that fails later): in use
+by another program (busy, locked; the pid isn't looked up), the disk full, the file not writable
+(read-only, can't open, permission), damaged (move it aside, keep it for `ptyro doctor`), and
+written by a newer ptyro; anything else gives SQLite's own words and "`ptyro doctor` says more".
 
 ```sql
 CREATE TABLE meta (key TEXT PRIMARY KEY, value);        -- machine_id (a ULID made once), schema notes
@@ -6885,7 +6897,9 @@ makes a new one. `[chat] title = "off"` uses (3) only.
 nothing to `chat.db`**, are not indexed and not listed under "all chats", and end when the engine
 ends of itself or goes idle (`hibernate_after`), or the chat is deleted (the sidebar shows them
 with `◌` while open); one stopped for a retry, an edit or another agent carries on with the next
-message. The transcript
+message. One that someone is reading (a client follows it) outlives its engine: the next message
+seeds a new one from memory, and the chat ends 10 s after its last reader leaves with no engine
+running (a reload or a reconnect comes back in time); `chat find`'s are the same. The transcript
 lives in the daemon's memory, so it ends with a live upgrade or a restart too (its folders go then). Claude's engine gets `--no-session-persistence`
 **[V]**, so it has no resume and leaves no file; Codex's gets `ephemeral: true` **[V]**, which leaves
 no rollout and no list entry; Gemini has no such switch, but its copy is in folders marked with
@@ -6984,8 +6998,11 @@ Three tiers; each one is useful without the next.
 **Every machine is searched** (§22.11): a search from the TUI, CLI or web goes to this daemon and
 to every linked machine that is up, each searching its own `chat.db`; bm25 scores differ per
 machine, so results are interleaved by each machine's rank (round robin), then date, each with its
-machine chip. The ask tools search **this machine** unless `machines = true`, which a
-`read`-scope link allows because it only reads.
+machine chip. The ask tools search **this machine** only: `machines = true` for them (which a
+`read`-scope link would allow because it only reads) is **not built** (ROADMAP CHAT7: their
+`history_scope` names a profile and a workspace of this machine, which another machine's search
+would have to be given). A machine that is down or doesn't answer is left out of a search; the
+reply has no field to say so, so the daemon logs it.
 
 ### 22.11 Many machines
 
@@ -7067,25 +7084,42 @@ hides when `enabled`):
   once, ⏎ sends; `C-o` picks agent, tools and folder; `Tab`/`C-i` incognito), `g` the **chat list**
   (searchable), `C-g` find across all chats, `Alt-←/→` branches. In the sidebar on a chat row (no
   prefix): `⏎` open, `,` retitle, `*` pin, `x` archive, `X` delete (asks), `f` fork, `.` its menu; on
-  the CHATS heading `⏎`/Space fold it as on a project (`h`/`l` close and open it). Opening a chat
-  or the list gives it the keyboard. The composer edits like a shell line: `←/→`, `C-a`/`C-e`
+  the CHATS heading `⏎`/Space fold it as on a project (`h`/`l` close and open it), and a click on
+  its `＋` starts a chat in that workspace. Opening a chat or the list gives it the keyboard; a
+  slow reply (a fork, a side chat, `/find`) opens its chat only if what asked for it is still
+  shown, else it is offered (`C-q u`). Each chat keeps its draft while it isn't shown; Esc goes
+  back to the list a chat was opened from, a side chat to its chat. While the chat panel is shown
+  the session keys `,` `x` `X` mean its chat, never the session under it. The composer edits like a shell line: `←/→`, `C-a`/`C-e`
   (Home/End) to the line's start and end, `C-u`/`C-k` delete to them, `C-w` the word before. The
   shared keys (`/` find, `.` menu, `j/k`, `Tab`, `z`, `t` where it applies) behave as for sessions.
-  Every key is in `[keys]` and the settings panel, and each action in the palette (`chat.*`).
-- **CLI** (every verb takes `--json`; an address may be `laptop2:…`):
+  The view's own keys (`C-f`, `C-o`, `Tab`/`C-i`, `a`/`A`/`d` on a card, `C-c`, `Alt-←/→`,
+  `PageUp/Down`) are the key map's `chat` table and the list's (`/ m * x X , f e s A i I Tab .`)
+  its `chatlist` table: `[keys]` names them `chat:KEY` and `chatlist:KEY`. A `chat` key whose
+  action doesn't apply now (a card letter with no card) is typed instead. Every key is in
+  `[keys]` and the settings panel, and each action in the palette (`chat.*`).
+- **CLI** (an address may be `laptop2:…`). `--json` on a verb that asks (`new`, `ask`, `send`,
+  `retry`, `edit`, `fork`, `find`, `compare`) waits for the answer, unless `--no-wait`, and prints
+  `{"chat", "message", "answers": [{"agent", "node", "text"}]}` (`compare`'s also has `agents`);
+  on one that changes a chat (`set`, `retitle`, `keep`, `branch`, `pick`) it prints `{"chat"}`,
+  and on `pin`/`unpin`/`archive`/`unarchive` `{"chats": […]}`; `ls`, `search`, `presets`,
+  `task` and `import` print their lists and reports; `show` and `export` take `--format json`;
+  `answer`, `stop`, `rm` and `open` print nothing to parse. A question whose first word names a
+  verb (`ptyro chat show me how…`) needs `chat new` or quotes; `show`, `open` and `set` given
+  more words than a chat say so.
 
   ```
-  ptyro chat [new] [PROMPT] [--agent A[@P]] [--tools PRESET] [--folder DIR]… [--incognito|--keep]
-                   [--workspace W] [--title T]        # new chat; opens it in a terminal
-  ptyro chat ask QUESTION [--keep] [--agent A] [--tools PRESET] [--no-stdin]   # one-shot answer on stdout; stdin is context
-  ptyro chat ls [--workspace W|--all] [--machine M] [--pinned] [--archived] [-n N]
-  ptyro chat show CHAT [--from NODE] [--branches] [--format text|md|json]
+  ptyro chat [new] [PROMPT] [--agent A[@P]] [--preset|--tools PRESET] [--folder DIR]… [--incognito|--keep]
+                   [--workspace W] [--title T] [--compare A,B] [--no-wait] [--timeout S]   # new chat; with no PROMPT, opens it in a terminal
+  ptyro chat ask QUESTION [--keep] [--agent A] [--preset|--tools PRESET] [--no-stdin] [--timeout S]   # one-shot answer on stdout; stdin is context
+  ptyro chat ls [--workspace W] [--machine M] [--pinned] [--archived] [--imported] [-n N]   # every workspace's unless -w
+  ptyro chat show CHAT [--all] [--ids] [--branches] [--format text|md|json]
   ptyro chat open CHAT                               # the chat view
-  ptyro chat send CHAT TEXT… [--wait] [--agent A]
+  ptyro chat send CHAT TEXT… [--no-wait] [--timeout S]   # waits for the answer by default
   ptyro chat retry CHAT [NODE] · edit CHAT NODE TEXT · branch CHAT --to NODE
-  ptyro chat fork CHAT [--at NODE] [--agent A] [--side] [--keep] [--yes]
-  ptyro chat retitle|pin|unpin|archive|unarchive|rm CHAT…
-  ptyro chat search QUERY [filters]  ·  ptyro chat find QUESTION
+  ptyro chat fork CHAT [--at NODE] [--agent A] [--side] [--keep] [--yes] [PROMPT] [--no-wait] [--timeout S]
+  ptyro chat retitle CHAT [TITLE] · pin|unpin|archive|unarchive|rm CHAT… · keep CHAT
+  ptyro chat search QUERY [filters]  ·  ptyro chat find QUESTION   # no match is exit 0
+  ptyro chat answer CHAT allow|always|deny  ·  ptyro chat stop CHAT
   ptyro chat export CHAT [--format md|json] [-o FILE]
   ptyro chat set CHAT [--agent A] [--preset P] [--folder DIR]… [--no-folders] [--yes]   # (built, CHAT4)
   ptyro chat presets [--json]  ·  ptyro chat task CHAT [--project P] [--agent A] [--name N]
@@ -7097,8 +7131,10 @@ hides when `enabled`):
 - **Web.** A **Chats** page beside Sessions (recent, pinned, a live search box), the chat view
   (with the same header, branch navigator, composer and slash commands; touch targets for
   fork/retry/edit; the machine chip), `#/c/<id>` URLs, a preset and an agent picker, incognito
-  toggle, export, and the same sidebar section on wide screens. Each control is an entry in
-  `ACTIONS` (`web/src/app.ts`) with its tooltip.
+  toggle, export, and the same sidebar section on wide screens (beside the sessions: the pinned
+  chats and the newest `[chat] recent`, with `all chats…`). Side chats list under their chat; `m`
+  starts a chat, `Ctrl-G` searches them all, and `@` in the composer lists the chat's folders. Each
+  control is an entry in `ACTIONS` (`web/src/app.ts`, `web/src/chats.ts`) with its tooltip.
 - **Parity.** One row in `docs/parity.md` for every `chat` verb, with its TUI action and its web
   action; none is waivable (`chat ask` is `chat.new` with `C-i`, and its answer is the view).
 - **Settings panel.** Every `[chat]` key below has its schema entry (type, default, help, when it
@@ -7113,12 +7149,12 @@ hides when `enabled`):
 enabled = true            # live: off hides the section, keys, CLI group and web page
 recent = 5                # live: chats shown under CHATS in the sidebar
 agent = ""                # next: "" = the workspace's default agent, else the first installed one
-tools = "chat"            # next: preset for new chats: chat | read | none | your own
+preset = "chat"           # next: preset for new chats: chat | read | none | your own ([chat.tools.X])
 incognito = false         # next: new chats start incognito
 hibernate_after = "2m"    # next: an idle engine stops; the next message resumes or seeds
 seed_tokens = 30000       # next: the most a seed block carries (§22.6)
 title = "auto"            # auto | off
-title_command = ""        # "" = the summaries' default command (§22.8)
+title_command = []        # argv; [] = the summaries' default command (§22.8)
 daily_cap = 200           # per profile per UTC day: titles and chat find, counted together
 history_tool = true       # the chat tools of §22.10 in every chat
 history_scope = "profile" # profile | workspace | all
@@ -7128,7 +7164,8 @@ import = false            # live: import the agents' own histories every 10 min 
 notify = "blocked"        # blocked | all | off (§22.11)
 archive_purge_days = 0    # 0 = keep archived chats forever
 
-[chat.tools.chat]         # a preset: built-in `chat`, `read`, `none`; yours add to them
+[chat.tools.chat]         # `tools` is the preset map: built-in `chat`, `read`, `none`; yours add to them
+                          # (`find` is `chat find`'s own, history tools only: a preset of that name is refused)
 web = true                # the agent's own web search and fetch
 read = false              # read files in `dirs`
 dirs = []                 # folders every chat of this preset may read
@@ -7143,26 +7180,45 @@ agents are. `ptyro init` asks nothing about chats: they work on first use.
 
 ### 22.14 Protocol (additive, the next minor after 1.20)
 
-`ChatNew{workspace?, agent?, profile?, tools?, folders?, incognito, title?, prompt?}` → `Chat{info}`;
-`ChatList{workspace?, all?, machine?, pinned?, archived?, limit, cursor}` → `Chats{chats, next}`;
-`ChatGet{chat, from?, branches?}` → `ChatTranscript{info, nodes, leaf}`;
-`ChatSubscribe{chat}` / `ChatUnsubscribe` (the live `ServerMsg::Chat`, whose items carry node ids);
-`ChatSend{chat, text, parent?, agent?}` (a `parent` that isn't the leaf is a branch);
-`ChatBranch{chat, leaf}`; `ChatFork{chat, node?, agent?, side, keep}`;
-`ChatUpdate{chat, title?, pinned?, archived?, agent?, tools?}`; `ChatDelete{chat}`;
-`ChatSearch{query, filters, machines}` → `ChatHits{hits}`; `ChatFind{question, machines}` →
-`ChatAnswer{text, cites}`; `ChatExport{chat, format}` → `Text{…}`; events `ChatUpdated{info}`,
-`ChatRemoved{id}`. `ChatInfo` carries `id, handle, workspace, machine, title, agent, profile, tools,
-pinned, archived, incognito, forked, nodes, unread, last_at, status, attention, cost_micro_usd`
-(1.24 adds `folders`, `best_effort`, `shell`; `ChatTask` and `ChatPresets` → `ChatPresets{presets}`;
-`AgentChoice.found`; CHAT5, still 1.24: `ChatCompare{chat, agents, text?}`, `ChatPick{chat, node?}`,
-`ChatImport{agent?, profile?, since?, dry_run}` → `ChatImported{report}`, `ChatNew.compare`,
-`ChatInfo.comparing`/`source`/`source_dir`, `ChatSiblings.agents`; 1.25: `ChatNew.incognito` is
-optional, none meaning `[chat] incognito` and `false` a kept chat even when that is on, and
-`ChatPresets.incognito` says the default, which a new chat's toggle starts from;
-`ChatUpdate.confirmed` and `ChatFork.confirmed`: a bare agent name is the chat's own profile's,
-and another profile's asks first with `NeedsConfirmation`, as compare and task do). `SessionInfo` gains `chat`
-(the chat id of an engine). Scopes as in §22.11, listed in `devices::needed`.
+**As built** (1.22–1.25; `ptyro-protocol`'s doc comments are the reference). Requests:
+`ChatNew{workspace?, agent?, preset?, title?, prompt?, incognito?, folders, compare, confirmed}` →
+`Chat{info}`; `ChatList{workspace?, all, pinned, archived, limit?}` → `Chats{chats}` (other machines'
+chats merged in from their mirrors, archived ones asked of each); `ChatRead{chat, all, from?,
+limit?}` → `ChatTranscript{info, nodes, siblings}` (`from`/`limit`, 1.25: a part, oldest first, for a
+chat too big for one reply, whose error says so); `ChatSubscribe{chat}` / `ChatUnsubscribe{chat}`
+(the live `ServerMsg::ChatLive{chat, rev, reset, items, siblings}`, whose items carry node ids; a
+reset too big for one frame comes as several, the first with `reset`; a subscription is kept by the
+chat's full id, so any of its addresses ends it); `ChatSend{chat, text}`; `ChatRetry{chat, node?}`;
+`ChatEdit{chat, node, text}`; `ChatBranch{chat, to}`; `ChatFork{chat, node?, agent?, side,
+confirmed}`; `ChatUpdate{chat, title?, pinned?, archived?, agent?, preset?, keep?, folders?,
+confirmed}` (a new agent, preset or folders is refused mid-answer, as a retry is); `ChatDelete{chat}`;
+`ChatAnswer{chat, decision}`; `ChatStop{chat}`; `ChatSearch{query, chat?, workspace?, agent?,
+pinned, archived, limit?, machines}` → `ChatHits{hits}`; `ChatFind{question, agent?, workspace?}` →
+`Chat{info}` (an incognito chat that answers; the client follows it); `ChatExport{chat, format}` →
+`Text{text}`; `ChatTask{chat, project?, agent?, name?, confirmed}` (answered as `WorktreeNew`);
+`ChatPresets` → `ChatPresets{presets, incognito}`; `ChatCompare{chat, agents, text?, confirmed}`;
+`ChatPick{chat, node?}`; `ChatImport{agent?, profile?, since?, dry_run}` → `ChatImported{report}`.
+Events `ChatUpdated{info}`, `ChatRemoved{id, machine?}`. `ChatInfo` carries `id, handle, workspace,
+machine, title, title_src, agent, profile, tools, pinned, archived, incognito, forked, side_of, leaf,
+nodes, unread, created_ms, last_ms, cost_micro_usd, status, attention, engine` (1.24 adds `folders`,
+`best_effort`, `shell`, `comparing`, `source`, `source_dir`; `ChatSiblings.agents`;
+`AgentChoice.found`; 1.25: `ChatNew.incognito` is optional, none meaning `[chat] incognito` and
+`false` a kept chat even when that is on, and `ChatPresets.incognito` says the default, which a new
+chat's toggle starts from; `ChatUpdate.confirmed` and `ChatFork.confirmed`: a bare agent name is the
+chat's own profile's, and another profile's asks first with `NeedsConfirmation`, as compare and task
+do; `ChatAnswer.node`: the card answered, refused when another (or none) is waiting, so a double
+tap or a card answered elsewhere never decides the next request; the TUI and the web send it,
+`chat answer --node` too). `SessionInfo` gains `chat` (the chat id of an engine). Scopes as in §22.11, listed in
+`devices::needed`.
+
+**Not built** (in the first draft; nothing needs them yet): `ChatNew.profile` (it is
+`agent@profile`); `ChatList.machine`, `cursor` and `next` (no paging: a list is metadata, and
+`limit` caps it); `ChatGet{from, branches}` (it is `ChatRead`, whose `all` is every branch);
+`ChatSend.parent` and `.agent` (a branch is `ChatEdit` or `ChatRetry`, an agent `ChatUpdate.agent`);
+`ChatBranch.leaf` (it is `to`, any node, shown to its newest tip); `ChatFork.keep` (a side chat is
+kept by `ChatUpdate.keep`); `ChatFind.machines` and a `ChatAnswer{text, cites}` reply (`ChatFind`
+answers with the chat that answers, whose answer cites `c:HANDLE/NODE`; `ChatAnswer` is the
+permission answer).
 
 ### 22.15 Built for sync (CHAT6) now, so it needs no migration later
 

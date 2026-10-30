@@ -12,7 +12,7 @@ import "./review.js";
 import "./runs.js";
 import "./settings.js";
 import "./panel.js";
-import { chatsShown } from "./chats.js";
+import { chatsAside, chatsShown, findAllChats, newChat } from "./chats.js";
 import { machineChip } from "./machines.js";
 import { initNotes, notesConnected, notesEvent, notesLink, notesNeedsLoad, notesLoad, notesNoteButton, notesQuickAdd, notesShown, notesStart, notesView } from "./notes.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
@@ -248,7 +248,9 @@ function listView() {
     const head = header("ptyro", false, all.length > 1 ? h("button", { class: "icon", title: tipOf("session.broadcast"), onclick: () => { selecting = true; render(); } }, "☑") : null, h("button", { class: "icon plus", title: tipOf("session.new"), "aria-label": "New task", onclick: () => newTask() }, "＋"));
     const counts = SHOWS.map((m) => all.filter(KEEPS[m]).length);
     const filter = all.length ? h("div", { class: "chips filter", title: tipOf("sidebar.filter") }, ...SHOWS.map((m, i) => h("button", { class: `${m === show ? "on" : ""} ${m}`, "aria-pressed": String(m === show), onclick: () => setShow(m) }, `${m} `, h("span", { class: "n" }, String(counts[i]))))) : null;
-    return h("div", {}, head, tools, filter, all.length > 6 || query ? searchBar : null, notesQuickAdd(), h("main", { class: "list", title: tip("sessions") }, h("div", { class: "cards" }, ...body), h("a", { class: "foot-link", href: "#/history", title: tipOf("session.history") }, "Earlier sessions")));
+    // On a wide screen, the CHATS section beside them (the TUI's sidebar has it under each workspace).
+    const aside = chatsShown() ? chatsAside() : null;
+    return h("div", {}, head, tools, filter, all.length > 6 || query ? searchBar : null, notesQuickAdd(), h("main", { class: `list${aside ? " with-chats" : ""}`, title: tip("sessions") }, h("div", { class: "cards" }, ...body), h("a", { class: "foot-link", href: "#/history", title: tipOf("session.history") }, "Earlier sessions"), aside));
 }
 function inboxView() {
     const items = app.inbox.map((e) => h("a", { class: `entry ${e.read_ms ? "read" : ""}`, href: `#/s/${encodeURIComponent(e.session)}` }, h("span", { class: `kind ${e.kind}` }, e.kind), h("div", { class: "main" }, h("div", { class: "name" }, e.title), h("div", { class: "detail" }, e.body)), h("time", {}, ago(e.at_ms))));
@@ -621,10 +623,16 @@ ui.toast = toast;
 ui.header = header;
 ui.push = () => void enablePush();
 ui.forget = () => { void forget(); };
-// Keys, for a desktop: n new task, / find, g then s p r e m go to a tab, ? this list.
+// Keys, for a desktop: n new task, m new chat, / find, C-g find in every chat, g then s c p r e i m go to a tab, ? this list.
 let goKey = 0;
 document.addEventListener("keydown", (e) => {
     const t = e.target;
+    // C-g: find across every chat (not in a terminal, whose program has the key).
+    if (e.ctrlKey && !e.metaKey && !e.altKey && e.key === "g" && token() && chatsShown() && route().view !== "session" && !document.querySelector(".scrim")) {
+        e.preventDefault();
+        findAllChats();
+        return;
+    }
     if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable || document.querySelector(".scrim") || !token())
         return;
     const tabs = { s: "#/", c: "#/chats", p: "#/p", r: "#/runs", e: "#/sets", m: "#/more", i: "#/inbox" };
@@ -640,6 +648,10 @@ document.addEventListener("keydown", (e) => {
     else if (e.key === "n") {
         e.preventDefault();
         newTask();
+    }
+    else if (e.key === "m" && chatsShown()) {
+        e.preventDefault();
+        newChat();
     }
     else if (e.key === "/" && route().view === "chats") {
         e.preventDefault();
@@ -664,7 +676,7 @@ document.addEventListener("keydown", (e) => {
         setTimeout(() => (searchBox.isConnected ? searchBox : document.querySelector("input.search"))?.focus(), 50);
     }
     else if (e.key === "?")
-        sheet("Keys", [h("dl", { class: "facts" }, ...[["n", "New task"], ["/", "Find a session (in the chats: a chat; in a chat: a command)"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g r", "Runs"], ["g e", "Change sets"], ["g i", "Inbox"], ["g m", "More"], ["Esc", "Close a dialog"]].flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
+        sheet("Keys", [h("dl", { class: "facts" }, ...[["n", "New task"], ["m", "New chat"], ["/", "Find a session (in the chats: a chat; in a chat: a command)"], ["Ctrl-G", "Search every chat"], ["Enter", "In a chat: send (Shift+Enter: a new line)"], ["@", "In a chat's box: its folders"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g r", "Runs"], ["g e", "Change sets"], ["g i", "Inbox"], ["g m", "More"], ["Esc", "Close a dialog"]].flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
 });
 window.addEventListener("hashchange", () => { takePairCode(); notesShown(); render(); });
 takePairCode();

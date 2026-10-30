@@ -284,6 +284,19 @@ fn node_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ChatNode> {
 }
 
 /// `None` for no folders, so a chat without any stores nothing.
+fn conv_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Conv> {
+    Ok(Conv {
+        id: r.get(0)?,
+        chat: r.get(1)?,
+        agent: r.get(2)?,
+        profile: r.get(3)?,
+        conversation_id: r.get(4)?,
+        node: r.get(5)?,
+        how: r.get(6)?,
+        ended_ms: r.get::<_, Option<i64>>(7)?.map(|v| v as u64),
+    })
+}
+
 fn folders_json(f: &[String]) -> Option<String> {
     (!f.is_empty()).then(|| serde_json::to_string(f).unwrap_or_default())
 }
@@ -565,9 +578,14 @@ impl ChatDb {
     }
 
     /// Remove tombstones older than [`TOMBSTONE_MS`], and tombstone archived chats older than
-    /// `archive_purge_days` (0 = never). Returns how many chats went, and the ids purged now
-    /// (their files and lists are the caller's to clear).
-    pub async fn compact(&self, archive_purge_days: u32) -> Result<(usize, Vec<String>)> {
+    /// `archive_purge_days` (0 = never). Returns how many chats went, and the chats purged now,
+    /// each with its agent and profile (their files, and the agent's own copy, are the caller's
+    /// to clear).
+    #[allow(clippy::type_complexity)]
+    pub async fn compact(
+        &self,
+        archive_purge_days: u32,
+    ) -> Result<(usize, Vec<(String, String, String)>)> {
         self.call(move |db| {
             let t = now();
             let mut purged = Vec::new();
@@ -575,12 +593,12 @@ impl ChatDb {
                 let before = t - i64::from(archive_purge_days) * 86_400_000;
                 purged = {
                     let mut st = db.prepare(
-                        "SELECT id FROM chat WHERE archived_at IS NOT NULL AND archived_at < ?1 AND deleted_at IS NULL",
+                        "SELECT id, agent, profile FROM chat WHERE archived_at IS NOT NULL AND archived_at < ?1 AND deleted_at IS NULL",
                     )?;
-                    st.query_map([before], |r| r.get::<_, String>(0))?
+                    st.query_map([before], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
                         .collect::<rusqlite::Result<Vec<_>>>()?
                 };
-                for id in &purged {
+                for (id, _, _) in &purged {
                     db.execute("UPDATE chat SET deleted_at = ?2 WHERE id = ?1", params![id, t])?;
                     // Out of the index at once, as a delete is.
                     db.execute(
@@ -648,9 +666,9 @@ impl ChatDb {
     pub async fn close_interrupted(&self) -> Result<Vec<String>> {
         let origin = self.machine_id.clone();
         self.call(move |db| {
-            let open: Vec<(String, ChatNode)> = {
+            let open: Vec<(String, ChatNode, Option<String>)> = {
                 let mut st = db.prepare(
-                    "SELECT chat, id, parent, body, at_ms FROM node
+                    "SELECT chat, id, parent, body, at_ms, conv FROM node
                      WHERE kind = 'assistant' AND deleted_at IS NULL AND json_extract(body, '$.streaming') = 1",
                 )?;
                 st.query_map([], |r| {
@@ -661,17 +679,33 @@ impl ChatDb {
                         r.get::<_, Option<String>>(2)?,
                         body,
                         r.get::<_, i64>(4)?,
+                        r.get::<_, Option<String>>(5)?,
                     ))
                 })?
                 .filter_map(|r| r.ok())
-                .filter_map(|(chat, id, parent, body, at)| {
+                .filter_map(|(chat, id, parent, body, at, conv)| {
                     let body = serde_json::from_str(&body).ok()?;
-                    Some((chat, ChatNode { id, parent, at_ms: at as u64, body }))
+                    Some((chat, ChatNode { id, parent, at_ms: at as u64, body }, conv))
                 })
                 .collect()
             };
+            // The conversation saw the message it was answering: it has seen up to the end
+            // written for it, so a native continue doesn't seed that message again.
+            let seen = |db: &Connection, conv: Option<&str>, chat: &str, end: &str| {
+                match conv {
+                    Some(c) => db.execute(
+                        "UPDATE conv SET node = ?2 WHERE id = ?1 AND ended_at IS NULL",
+                        params![c, end],
+                    ),
+                    None => db.execute(
+                        "UPDATE conv SET node = ?2 WHERE id = (SELECT id FROM conv
+                           WHERE chat = ?1 AND ended_at IS NULL ORDER BY started_at DESC, rowid DESC LIMIT 1)",
+                        params![chat, end],
+                    ),
+                }
+            };
             let mut touched = Vec::new();
-            for (chat, mut n) in open {
+            for (chat, mut n, conv) in open {
                 if let ChatBody::Assistant { streaming, .. } = &mut n.body {
                     *streaming = false;
                 }
@@ -689,6 +723,7 @@ impl ChatDb {
                     },
                 };
                 put_node(db, &chat, &end, None, &origin, false)?;
+                seen(db, conv.as_deref(), &chat, &end.id)?;
                 touched.push(chat);
             }
             // A turn cut off before any of its answer arrived (thinking, a tool, a permission
@@ -778,6 +813,7 @@ impl ChatDb {
                     },
                 };
                 put_node(db, &chat, &end, None, &origin, false)?;
+                seen(db, None, &chat, &end.id)?;
                 touched.push(chat);
             }
             Ok(touched)
@@ -885,6 +921,16 @@ impl ChatDb {
         let origin = self.machine_id.clone();
         self.call(move |db| {
             let tx = db.transaction()?;
+            // Deleted meanwhile (a compare's answer coming in late): it takes nothing more.
+            let gone = tx
+                .query_row("SELECT deleted_at IS NOT NULL FROM chat WHERE id = ?1", [&chat], |r| {
+                    r.get::<_, bool>(0)
+                })
+                .optional()?
+                .unwrap_or(true);
+            if gone {
+                return Ok(());
+            }
             let t = now();
             tx.execute(
                 "INSERT INTO conv (id, chat, agent, profile, conversation_id, node, how, started_at, ended_at)
@@ -950,12 +996,14 @@ impl ChatDb {
             let mut parent: Option<String> = None;
             for n in nodes {
                 let id = chats::new_id();
-                let copy = ChatNode {
-                    id: id.clone(),
-                    parent: parent.clone(),
-                    at_ms: n.at_ms,
-                    body: n.body,
-                };
+                // An answer still being written is copied as it stands, closed: the copy's
+                // engine never writes it.
+                let mut body = n.body;
+                if let ChatBody::Assistant { streaming, .. } = &mut body {
+                    *streaming = false;
+                }
+                let copy =
+                    ChatNode { id: id.clone(), parent: parent.clone(), at_ms: n.at_ms, body };
                 put_node(db, &to, &copy, None, &origin, index_tools)?;
                 map.push((n.id, id.clone()));
                 parent = Some(id);
@@ -1124,6 +1172,22 @@ impl ChatDb {
         .await
     }
 
+    /// The newest fork of `chat` that is kept and not archived (not a side chat).
+    pub async fn newest_fork(&self, chat: String) -> Result<Option<String>> {
+        self.call(move |db| {
+            Ok(db
+                .query_row(
+                    "SELECT id FROM chat WHERE forked_from_chat = ?1 AND deleted_at IS NULL
+                       AND archived_at IS NULL AND side_of IS NULL
+                     ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                    [chat],
+                    |r| r.get(0),
+                )
+                .optional()?)
+        })
+        .await
+    }
+
     /// Keep a side chat: it becomes an ordinary fork, listed with the others.
     pub async fn keep_side(&self, id: String) -> Result<()> {
         self.update(id, "side_of = ?2", Option::<String>::None).await
@@ -1182,20 +1246,22 @@ impl ChatDb {
                     "SELECT id, chat, agent, profile, conversation_id, node, how, ended_at FROM conv
                      WHERE chat = ?1 AND ended_at IS NULL ORDER BY started_at DESC, rowid DESC LIMIT 1",
                     [chat],
-                    |r| {
-                        Ok(Conv {
-                            id: r.get(0)?,
-                            chat: r.get(1)?,
-                            agent: r.get(2)?,
-                            profile: r.get(3)?,
-                            conversation_id: r.get(4)?,
-                            node: r.get(5)?,
-                            how: r.get(6)?,
-                            ended_ms: r.get::<_, Option<i64>>(7)?.map(|v| v as u64),
-                        })
-                    },
+                    conv_row,
                 )
                 .optional()?)
+        })
+        .await
+    }
+
+    /// Every conv a chat has had, ended ones too, oldest first (the agents' own copies to
+    /// remove when it goes).
+    pub async fn convs(&self, chat: String) -> Result<Vec<Conv>> {
+        self.call(move |db| {
+            let mut st = db.prepare(
+                "SELECT id, chat, agent, profile, conversation_id, node, how, ended_at FROM conv
+                 WHERE chat = ?1 ORDER BY started_at, rowid",
+            )?;
+            Ok(st.query_map([chat], conv_row)?.collect::<rusqlite::Result<Vec<_>>>()?)
         })
         .await
     }
@@ -1261,6 +1327,8 @@ pub struct SearchFilter {
     pub fts: String,
     /// Plain words, for titles.
     pub words: Vec<String>,
+    /// Plain words left out (`-word`): a title with one isn't a hit.
+    pub not_words: Vec<String>,
     pub chat: Option<String>,
     /// A workspace id.
     pub workspace: Option<String>,
@@ -1362,7 +1430,9 @@ fn search(db: &Connection, q: &SearchFilter) -> Result<Vec<RawHit>> {
         for c in rows {
             let title = c.title.clone().unwrap_or_default();
             let low = title.to_lowercase();
-            if c.last_ms >= since as u64 && q.words.iter().all(|w| low.contains(&w.to_lowercase()))
+            if c.last_ms >= since as u64
+                && q.words.iter().all(|w| low.contains(&w.to_lowercase()))
+                && !q.not_words.iter().any(|w| low.contains(&w.to_lowercase()))
             {
                 hits.push(RawHit {
                     snippet: mark_words(&title, &q.words),
@@ -1854,6 +1924,7 @@ mod tests {
         let path = db.branch("c1".into(), Some("a1".into())).await.unwrap();
         let map = db.copy_branch("c2".into(), path, false).await.unwrap();
         assert_eq!(map.len(), 2);
+        assert_eq!(db.newest_fork("c1".into()).await.unwrap().as_deref(), Some("c2"));
         let copied = db.branch("c2".into(), None).await.unwrap();
         assert_eq!(copied[1].parent.as_deref(), Some(copied[0].id.as_str()));
         assert!(copied.iter().all(|n| n.id != "u1" && n.id != "a1"));
@@ -1863,6 +1934,7 @@ mod tests {
             SearchFilter {
                 fts: p.fts,
                 words: p.words,
+                not_words: p.not_words,
                 profile: profile.map(Into::into),
                 ..SearchFilter::default()
             }
@@ -1874,6 +1946,8 @@ mod tests {
         assert!(work.iter().all(|h| h.chat.profile == "work"), "a profile sees its own only");
         let titled = db.search(q("fork", None)).await.unwrap();
         assert!(titled.iter().any(|h| h.kind == "title" && h.chat.id == "c2"));
+        let not = db.search(q("fork -it", None)).await.unwrap();
+        assert!(!not.iter().any(|h| h.kind == "title"), "a word left out leaves the title out");
         db.delete("c2".into()).await.unwrap();
         assert!(
             db.search(q("jitter", Some("work"))).await.unwrap().is_empty(),
@@ -1945,20 +2019,84 @@ mod tests {
         db.put_node_now("c1".into(), user("u1", None, "old plans"), None, false).await.unwrap();
         db.set_archived("c1".into(), true).await.unwrap();
         db.call(|c| Ok(c.execute("UPDATE chat SET archived_at = 1", [])?)).await.unwrap();
-        assert_eq!(db.compact(30).await.unwrap().1, ["c1"]);
+        assert_eq!(
+            db.compact(30).await.unwrap().1,
+            [("c1".to_owned(), "claude".to_owned(), "default".to_owned())]
+        );
         assert_eq!(hits(&db, "plans"), 0, "out of the index at once");
+        // A compare's answer coming in after the delete: nothing of it is written.
+        let conv = Conv {
+            id: "k9".into(),
+            chat: "c1".into(),
+            agent: "codex".into(),
+            profile: "default".into(),
+            conversation_id: None,
+            node: None,
+            how: "compare".into(),
+            ended_ms: None,
+        };
+        db.put_branch("c1".into(), vec![answer("a9", "u1", "late", false)], conv, false)
+            .await
+            .unwrap();
+        let n: i64 = db
+            .call(|c| {
+                Ok(c.query_row("SELECT count(*) FROM node WHERE id = 'a9'", [], |r| r.get(0))?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(n, 0);
+        // A fork mid-answer: its copy of the answer is closed.
+        let db = db_with_chat().await;
+        db.put_node_now("c1".into(), user("u1", None, "hi"), None, false).await.unwrap();
+        db.put_node_now("c1".into(), answer("a1", "u1", "Hel", true), None, false).await.unwrap();
+        let path = db.branch("c1".into(), None).await.unwrap();
+        db.create(NewChat {
+            id: "c2".into(),
+            workspace: "w1".into(),
+            title: None,
+            title_src: "auto".into(),
+            agent: "claude".into(),
+            profile: "default".into(),
+            tools: "chat".into(),
+            forked_from: None,
+            side_of: None,
+            folders: Vec::new(),
+        })
+        .await
+        .unwrap();
+        db.copy_branch("c2".into(), path, false).await.unwrap();
+        let copy = db.branch("c2".into(), None).await.unwrap();
+        assert_eq!(copy[1].body, ChatBody::Assistant { text: "Hel".into(), streaming: false });
+        // (Made without a source: not a fork of c1.)
+        assert_eq!(db.newest_fork("c1".into()).await.unwrap(), None);
     }
 
     #[tokio::test]
     async fn a_crash_mid_answer_is_closed_as_interrupted() {
         let db = db_with_chat().await;
+        let conv = Conv {
+            id: "k1".into(),
+            chat: "c1".into(),
+            agent: "claude".into(),
+            profile: "default".into(),
+            conversation_id: Some("sess".into()),
+            node: None,
+            how: "new".into(),
+            ended_ms: None,
+        };
+        db.add_conv(conv).await.unwrap();
         db.put_node_now("c1".into(), user("u1", None, "hi"), None, false).await.unwrap();
-        db.put_node_now("c1".into(), answer("a1", "u1", "Hel", true), None, false).await.unwrap();
+        db.put_node_now("c1".into(), answer("a1", "u1", "Hel", true), Some("k1".into()), false)
+            .await
+            .unwrap();
         assert_eq!(db.close_interrupted().await.unwrap(), ["c1"]);
         let b = db.branch("c1".into(), None).await.unwrap();
         assert_eq!(b.len(), 3);
         assert_eq!(b[1].body, ChatBody::Assistant { text: "Hel".into(), streaming: false });
         assert!(matches!(&b[2].body, ChatBody::TurnEnd { stop, .. } if stop == "interrupted"));
+        // Its conversation saw the message: a native continue doesn't seed it again.
+        let c = db.current_conv("c1".into()).await.unwrap().unwrap();
+        assert_eq!(c.node.as_deref(), Some(b[2].id.as_str()));
         assert!(db.close_interrupted().await.unwrap().is_empty());
     }
 
@@ -2031,6 +2169,9 @@ mod tests {
         );
         db.end_conv("k2".into());
         assert_eq!(db.current_conv("c1".into()).await.unwrap().unwrap().id, "k1");
+        let all: Vec<String> =
+            db.convs("c1".into()).await.unwrap().into_iter().map(|c| c.id).collect();
+        assert_eq!(all, ["k1", "k2"]);
     }
 
     #[test]

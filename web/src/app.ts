@@ -15,7 +15,7 @@ import "./review.js";
 import "./runs.js";
 import "./settings.js";
 import "./panel.js";
-import { chatsShown } from "./chats.js";
+import { chatsAside, chatsShown, findAllChats, newChat } from "./chats.js";
 import { machineChip } from "./machines.js";
 import { initNotes, notesConnected, notesEvent, notesLink, notesNeedsLoad, notesLoad, notesNoteButton, notesQuickAdd, notesShown, notesStart, notesView } from "./notes.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
@@ -284,8 +284,10 @@ function listView(): HTMLElement {
   const counts = SHOWS.map((m) => all.filter(KEEPS[m]).length);
   const filter = all.length ? h("div", { class: "chips filter", title: tipOf("sidebar.filter") },
     ...SHOWS.map((m, i) => h("button", { class: `${m === show ? "on" : ""} ${m}`, "aria-pressed": String(m === show), onclick: () => setShow(m) }, `${m} `, h("span", { class: "n" }, String(counts[i]))))) : null;
-  return h("div", {}, head, tools, filter, all.length > 6 || query ? searchBar : null, notesQuickAdd(), h("main", { class: "list", title: tip("sessions") }, h("div", { class: "cards" }, ...body),
-    h("a", { class: "foot-link", href: "#/history", title: tipOf("session.history") }, "Earlier sessions")));
+  // On a wide screen, the CHATS section beside them (the TUI's sidebar has it under each workspace).
+  const aside = chatsShown() ? chatsAside() : null;
+  return h("div", {}, head, tools, filter, all.length > 6 || query ? searchBar : null, notesQuickAdd(), h("main", { class: `list${aside ? " with-chats" : ""}`, title: tip("sessions") }, h("div", { class: "cards" }, ...body),
+    h("a", { class: "foot-link", href: "#/history", title: tipOf("session.history") }, "Earlier sessions"), aside));
 }
 
 function inboxView(): HTMLElement {
@@ -654,16 +656,19 @@ ui.header = header;
 ui.push = () => void enablePush();
 ui.forget = () => { void forget(); };
 
-// Keys, for a desktop: n new task, / find, g then s p r e m go to a tab, ? this list.
+// Keys, for a desktop: n new task, m new chat, / find, C-g find in every chat, g then s c p r e i m go to a tab, ? this list.
 let goKey = 0;
 document.addEventListener("keydown", (e) => {
   const t = e.target as HTMLElement;
+  // C-g: find across every chat (not in a terminal, whose program has the key).
+  if (e.ctrlKey && !e.metaKey && !e.altKey && e.key === "g" && token() && chatsShown() && route().view !== "session" && !document.querySelector(".scrim")) { e.preventDefault(); findAllChats(); return; }
   if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable || document.querySelector(".scrim") || !token()) return;
   const tabs: Record<string, string> = { s: "#/", c: "#/chats", p: "#/p", r: "#/runs", e: "#/sets", m: "#/more", i: "#/inbox" };
   if (goKey && Date.now() - goKey < 1500 && tabs[e.key]) { goKey = 0; location.hash = tabs[e.key]; e.preventDefault(); return; }
   goKey = 0;
   if (e.key === "g") goKey = Date.now();
   else if (e.key === "n") { e.preventDefault(); newTask(); }
+  else if (e.key === "m" && chatsShown()) { e.preventDefault(); newChat(); }
   else if (e.key === "/" && route().view === "chats") { e.preventDefault(); document.querySelector<HTMLInputElement>("input.search")?.focus(); }
   // In a chat, `/` starts a slash command in its composer.
   else if (e.key === "/" && route().view === "c") {
@@ -671,7 +676,7 @@ document.addEventListener("keydown", (e) => {
     if (r) { e.preventDefault(); if (!r.value) { r.value = "/"; r.dispatchEvent(new Event("input")); } r.focus(); }
   }
   else if (e.key === "/") { e.preventDefault(); if (route().view !== "list") location.hash = "#/"; setTimeout(() => (searchBox.isConnected ? searchBox : document.querySelector<HTMLInputElement>("input.search"))?.focus(), 50); }
-  else if (e.key === "?") sheet("Keys", [h("dl", { class: "facts" }, ...([["n", "New task"], ["/", "Find a session (in the chats: a chat; in a chat: a command)"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g r", "Runs"], ["g e", "Change sets"], ["g i", "Inbox"], ["g m", "More"], ["Esc", "Close a dialog"]] as [string, string][]).flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
+  else if (e.key === "?") sheet("Keys", [h("dl", { class: "facts" }, ...([["n", "New task"], ["m", "New chat"], ["/", "Find a session (in the chats: a chat; in a chat: a command)"], ["Ctrl-G", "Search every chat"], ["Enter", "In a chat: send (Shift+Enter: a new line)"], ["@", "In a chat's box: its folders"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g r", "Runs"], ["g e", "Change sets"], ["g i", "Inbox"], ["g m", "More"], ["Esc", "Close a dialog"]] as [string, string][]).flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
 });
 
 window.addEventListener("hashchange", () => { takePairCode(); notesShown(); render(); });
