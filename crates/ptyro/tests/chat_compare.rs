@@ -342,6 +342,7 @@ fn another_agent_or_a_fork_keeps_to_the_chats_profile_and_asks_before_another() 
     let out = w.cli(&["chat", "fork", &addr, "--agent", "codex@personal"]);
     assert!(!out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let out = w.json(&["chat", "fork", &addr, "--agent", "codex", "--json"]);
+    let out = &out["chat"];
     assert_eq!((out["agent"].as_str(), out["profile"].as_str()), (Some("codex"), Some("work")));
 }
 
