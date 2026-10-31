@@ -2552,13 +2552,17 @@ rows, its `[chat]` settings schema entries and its `make` targets, and the miles
   in the TUI and the web and `chat pick` carries the conversation on with the winner; and a week
   of Claude Code and Codex sessions is found by `chat search` after one `chat import`, the next
   import adding only what changed.
-- [ ] **CHAT7 The ask tools search linked machines too** (found in the 2026-10-30 review) **S**
+- [x] **CHAT7 The ask tools search linked machines too** (found in the 2026-10-30 review) **S**
   - SPEC §22.10's `machines = true` for a chat's history tools (`ptyro mcp --chat`): the asking
     chat's `history_scope` names a profile and a workspace of this machine, so each machine's search
     must be given them (by profile name, the workspace as mirrored), and a hit's chat be read from
     its machine. Today they search this machine only; a search from a person does every machine.
   *Done when:* a chat's `chat_search` with `machines` finds a linked machine's chat its scope allows,
   and none it doesn't.
+  **Built 2026-10-30:** `ChatSearch.profile` (protocol 1.25) gives each machine the asking chat's
+  profile by name; a workspace scope stays on this machine; `chat_read` of a hit there checks the
+  scope against the mirror (`chat_machines.rs`
+  `a_chats_history_tools_search_and_read_linked_machines_within_its_scope`).
 - [ ] **CHAT6 Sync and merge across machines** (R-CHAT-14; **needs its own brainstorm first**) **L+**
   - Merge chats across every linked machine (§22.15 lists what CHAT1's schema already guarantees and
     what is open). Do not start before that brainstorm's decisions are in SPEC §22.

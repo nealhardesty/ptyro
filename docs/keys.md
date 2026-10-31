@@ -203,6 +203,7 @@ its folders.
 | `←` / `→`, `Home` / `End` or `Ctrl-A` / `Ctrl-E` | move in the draft (to the start or end of the cursor's line) |
 | `Ctrl-U` / `Ctrl-K` | delete to the start / the end of the cursor's line |
 | `Ctrl-W` / `⌫` / `Delete` | delete the word before the cursor / the character before / the one under it |
+| `@` then `↑`/`↓`, `Tab` or `⏎` | the chat's folders that match what follows the `@` (shown in the composer): choose one, put it in |
 
 Slash commands, typed into the composer: `/retry`, `/edit [text]` (the last message, or pick
 one), `/fork` (from the end or a message), `/side [question]`, `/keep`, `/branch`, `/agent NAME`,

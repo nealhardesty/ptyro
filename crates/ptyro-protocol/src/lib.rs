@@ -1184,6 +1184,10 @@ pub enum Request {
         limit: Option<u32>,
         #[serde(default)]
         machines: bool,
+        /// Only that profile's chats (1.25): a chat's history tools asking another machine
+        /// (SPEC §22.10), whose `[chat] history_scope` is its profile, named as both have it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<String>,
     },
     /// Ask your chats a question: an incognito chat whose agent has only the chat history tools
     /// answers it, citing `c:7f3k/node` (SPEC §22.10).

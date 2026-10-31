@@ -38,7 +38,7 @@ fn write_env(path: &Path, d: &TempDaemon) {
 
 fn config(machine: &str) -> String {
     let mut c = format!(
-        "[daemon]\nmachine_name = \"{machine}\"\n[chat]\ntitle_command = [\"/bin/sh\", \"-c\", \"cat >/dev/null; echo {machine} chat\"]\n"
+        "[daemon]\nmachine_name = \"{machine}\"\n[profiles.work]\nlabel = \"work\"\n[chat]\ntitle_command = [\"/bin/sh\", \"-c\", \"cat >/dev/null; echo {machine} chat\"]\n"
     );
     for a in ["claude", "codex"] {
         c.push_str(&format!(
@@ -361,4 +361,78 @@ async fn another_machines_chats_are_listed_used_and_made_from_here() {
     }
     // Ours are untouched.
     assert_eq!(answers(&here, &ours.id).await, ["you said: hello from laptop1"]);
+}
+
+/// The tool outputs of a chat's shown branch (what its agent's `sh` printed).
+async fn tool_output(c: &Client, chat: &str) -> String {
+    match c
+        .request(Request::ChatRead { chat: chat.into(), all: false, from: None, limit: None })
+        .await
+    {
+        Ok(Reply::ChatTranscript { nodes, .. }) => nodes
+            .into_iter()
+            .filter_map(|n| match n.body {
+                ChatBody::Tool { output, .. } => output,
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+#[tokio::test]
+async fn a_chats_history_tools_search_and_read_linked_machines_within_its_scope() {
+    // CHAT7: a chat's agent searching with `machines` finds a linked machine's chat its scope
+    // (its profile, by name) allows, and reads it there; one of another profile, neither.
+    let t = Two::new();
+    let there = t.there.client().await.unwrap();
+    let mine = new_chat(&there, None, "zebra crossing").await;
+    let req = Request::ChatNew {
+        workspace: None,
+        agent: Some("claude@work".into()),
+        preset: None,
+        title: None,
+        prompt: Some("zebra stripes".into()),
+        incognito: None,
+        folders: Vec::new(),
+        compare: Vec::new(),
+        confirmed: true,
+    };
+    let Reply::Chat { info: work } = there.request(req).await.unwrap() else { panic!() };
+    assert_eq!(work.profile, "work");
+    for c in [&mine, &work] {
+        until("laptop2 answers", || async { !answers(&there, &c.id).await.is_empty() }).await;
+    }
+    let here = t.here.client().await.unwrap();
+    here.request(Request::MachineAdd {
+        name: None,
+        transport: MachineTransport::Ssh { target: "laptop2".into() },
+        token: None,
+        force: false,
+    })
+    .await
+    .unwrap();
+    online(&here, MachineState::Online).await;
+    let asker = new_chat(&here, None, "hello").await;
+    until("it answers", || async { !answers(&here, &asker.id).await.is_empty() }).await;
+    // From inside its agent (the fake runs `sh` as a tool): the search, then a read of each.
+    let say = |text: String| {
+        let (here, id) = (&here, asker.id.clone());
+        async move {
+            let n = answers(here, &id).await.len();
+            here.request(Request::ChatSend { chat: id.clone(), text }).await.unwrap();
+            until("the tool ran", || async { answers(here, &id).await.len() > n }).await;
+        }
+    };
+    say(format!("sh {BIN} chat search zebra --json")).await;
+    let out = tool_output(&here, &asker.id).await;
+    assert!(out.contains("crossing"), "its profile's chat there is found: {out}");
+    assert!(!out.contains("stripes"), "another profile's never: {out}");
+    say(format!("sh {BIN} chat show laptop2:c:{} --format json", mine.handle)).await;
+    say(format!("sh {BIN} chat show laptop2:c:{} --format json", work.handle)).await;
+    let out = tool_output(&here, &asker.id).await;
+    assert!(out.contains("zebra crossing"), "read there: {out}");
+    assert!(!out.contains("zebra stripes"), "not read: {out}");
+    assert!(out.contains("no chat"), "not there for it: {out}");
 }

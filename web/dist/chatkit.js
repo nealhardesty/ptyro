@@ -1,5 +1,7 @@
 // The Chats page's logic with no DOM in it (web/test/chats.mjs runs it): what the list shows and
 // in what order, the composer's `/` lines and `@` folders, and what makes a message redrawn.
+/// The machine a list keeps (`chat ls --machine`): every one (""), this one ("."), or that one.
+export const onMachine = (c, machine = "") => !machine || (machine === "." ? !c.machine : c.machine === machine);
 export const label = (c) => c?.title?.trim() || "new chat";
 /// `imported from claude · ~/repo`.
 export function importedFrom(c) {
@@ -34,7 +36,7 @@ export function titleQuery(q) {
 export function shownChats(source, f) {
     const { text: q, agent } = titleQuery(f.query);
     const keeps = (c) => !c.incognito && (!f.workspace || c.workspace === f.workspace) && (!f.imported || !!c.source) && (!f.pinned || c.pinned)
-        && (!agent || c.agent.toLowerCase().includes(agent))
+        && onMachine(c, f.machine) && (!agent || c.agent.toLowerCase().includes(agent))
         && (!q || label(c).toLowerCase().includes(q) || c.agent.toLowerCase().includes(q) || importedFrom(c).toLowerCase().includes(q));
     const sides = new Map();
     for (const c of source)

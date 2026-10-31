@@ -107,6 +107,11 @@ fn plan(text: &str, n: u64) -> Vec<Step> {
             ]
         }
         "fail" => vec![Step::Text("failing".into()), Step::Fail("fake failure".into())],
+        // A line on stderr (what a killed agent's tail shows), then the answer.
+        "noisy" => {
+            eprintln!("noisy: {rest}");
+            vec![Step::Text(format!("you said: {text}"))]
+        }
         _ => vec![Step::Text(format!("you said: {text}"))],
     }
 }
@@ -611,7 +616,17 @@ fn handle(conn: TcpStream, st: &Arc<Mutex<Oc>>, password: &str) {
                 "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n\r\n"
             );
             let _ = c.flush();
+            // As OpenCode does, once it is listening: `server.connected` first.
+            let hello = c.try_clone();
             st.locked().clients.push(c);
+            if let Ok(mut h) = hello {
+                let _ = write!(
+                    h,
+                    "data: {}\n\n",
+                    json!({ "type": "server.connected", "properties": {} })
+                );
+                let _ = h.flush();
+            }
         }
         ("POST", p) if p.ends_with("/prompt_async") => {
             let text = body["parts"][0]["text"].as_str().unwrap_or("").to_owned();

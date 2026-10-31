@@ -1079,6 +1079,16 @@ impl Daemon {
     /// `handles`: a bare handle (`7f3k`, `c:7f3k`) counts too, when exactly one machine's
     /// mirror has it (the caller has looked here first). The chat comes back as its full id
     /// where the mirror knows it.
+    /// One of `machine`'s chats as its mirror has it.
+    pub(crate) fn mirrored_chat(
+        &self,
+        machine: &str,
+        id: &str,
+    ) -> Option<ptyro_core::chats::ChatInfo> {
+        let links = self.links.locked();
+        links.get(machine)?.mirror.chats.iter().find(|c| c.id == id).cloned()
+    }
+
     pub(crate) fn machine_of_chat(
         &self,
         chat: &str,

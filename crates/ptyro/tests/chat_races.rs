@@ -298,3 +298,51 @@ fn pinned_and_unread_address_a_chat() {
     let unread = w.cli(&["chat", "show", "@unread"]);
     assert!(String::from_utf8_lossy(&unread.stderr).contains("haven't read"), "{unread:?}");
 }
+
+#[test]
+fn a_stopped_engines_last_words_stay_off_the_new_branch() {
+    // A retry stops the engine; what it wrote to stderr is shown as it dies (200 ms on), and
+    // went under the new message, the shown branch, as a red notice.
+    let w = World::new("");
+    w.ok(&["chat", "new", "noisy hello"]);
+    let addr = format!("c:{}", w.chats()[0]["handle"].as_str().unwrap());
+    w.ok(&["chat", "retry", &addr]);
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let shown = w.json(&["chat", "show", &addr, "--format", "json"]);
+    let notices: Vec<&str> = shown["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|n| n["t"] == "notice")
+        .filter_map(|n| n["text"].as_str())
+        .collect();
+    assert!(!notices.iter().any(|t| t.contains("noisy:")), "{notices:?}");
+}
+
+#[test]
+fn two_messages_at_once_are_one_answer_and_one_refusal() {
+    // The second came between the first's prompt and its engine saying it works, and was
+    // given to the agent too, interleaving two turns. (That window is too narrow to hit from
+    // here every time: this holds the rule, one goes and one waits, rather than the race.)
+    let w = World::new("");
+    w.ok(&["chat", "new", "hello"]);
+    let addr = format!("c:{}", w.chats()[0]["handle"].as_str().unwrap());
+    for round in 0..4 {
+        let go = |text: String| {
+            let mut c = w.d.cmd();
+            c.args(["chat", "send", "--no-wait", &addr, &text]).env("HOME", w.home());
+            std::thread::spawn(move || c.output().unwrap())
+        };
+        let (a, b) = (go(format!("work 1 a{round}")), go(format!("work 1 b{round}")));
+        let outs = [a.join().unwrap(), b.join().unwrap()];
+        let sent = outs.iter().filter(|o| o.status.success()).count();
+        let refused: Vec<String> = outs
+            .iter()
+            .filter(|o| !o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
+            .collect();
+        assert_eq!(sent, 1, "round {round}: one goes, one waits: {refused:?}");
+        assert!(refused[0].contains("answer"), "round {round}: {refused:?}");
+        w.until("the answer", || w.chats()[0]["status"] == "idle");
+    }
+}

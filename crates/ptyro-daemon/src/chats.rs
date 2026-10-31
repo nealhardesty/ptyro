@@ -168,6 +168,15 @@ impl Chats {
         let db = ChatDb::open(path).map_err(|e| {
             tracing::error!("chat.db: {e}");
             let file = path.display().to_string();
+            // In use: by whom, when that can be told (`lsof`).
+            let who = if e.busy() { holders(path) } else { Vec::new() };
+            if !who.is_empty() {
+                let who: Vec<String> = who.iter().map(|(pid, name)| format!("{name} (pid {pid})")).collect();
+                return format!(
+                    "chats are unavailable: {file} is in use by {}: close it, then restart ptyro's daemon",
+                    who.join(", ")
+                );
+            }
             match e.fix(&file) {
                 Some(fix) => format!("chats are unavailable: {fix}"),
                 None => format!(
@@ -694,7 +703,14 @@ impl Daemon {
                 archived,
                 limit,
                 machines,
+                profile,
             } => {
+                // Another machine's history tools asking here: their chat's profile, by name.
+                let asked = profile.clone().map(|p| HistoryScope {
+                    profile: Some(p),
+                    workspace: None,
+                    itself: None,
+                });
                 let hits = self
                     .chat_search(
                         &query,
@@ -704,14 +720,19 @@ impl Daemon {
                         pinned,
                         archived,
                         limit,
-                        scope.as_ref(),
+                        scope.as_ref().or(asked.as_ref()),
                     )
                     .await?;
                 // Every machine that is up searches its own (SPEC §22.10), interleaved by each
                 // one's rank, as bm25 scores don't compare across machines. A search narrowed to
-                // a chat or a workspace here is about this machine only.
-                let hits = if machines && scope.is_none() && chat.is_none() && workspace.is_none() {
-                    self.search_machines(hits, &query, agent, pinned, archived, limit).await
+                // a chat or a workspace here is about this machine only, and so is a chat's
+                // whose scope is its workspace (one of this machine's); a chat's whose scope is
+                // its profile is given that profile's there.
+                let local_scope = scope.as_ref().is_some_and(|s| s.workspace.is_some());
+                let hits = if machines && !local_scope && chat.is_none() && workspace.is_none() {
+                    let profile = scope.as_ref().and_then(|s| s.profile.clone());
+                    self.search_machines(hits, &query, agent, pinned, archived, limit, profile)
+                        .await
                 } else {
                     hits
                 };
@@ -845,6 +866,15 @@ impl Daemon {
                 Ok(Reply::Chats { chats })
             }
             Request::ChatRead { chat, all, from, limit } => {
+                // A history tool reading another machine's chat (a hit of a search of every
+                // machine): there, if the scope lets it see that chat.
+                if let Some(s) = &scope
+                    && let Err(e) = self.find_scoped(&chat, Some(s)).await
+                {
+                    let Some((m, id)) = self.scoped_remote_chat(&chat, s) else { return Err(e) };
+                    let req = Request::ChatRead { chat: format!("{m}:{id}"), all, from, limit };
+                    return self.forward(&m, req).await;
+                }
                 let info = self.find_scoped(&chat, scope.as_ref()).await?;
                 let nodes = if all && !info.incognito {
                     self.chat_db()?.nodes(info.id.clone()).await.map_err(store_err)?
@@ -1397,6 +1427,19 @@ impl Daemon {
         Ok(info)
     }
 
+    /// Another machine's chat a history tool may read: its machine and id, when `scope` sees it
+    /// (its profile, by name; a workspace scope is one of this machine's, so never).
+    fn scoped_remote_chat(&self, addr: &str, scope: &HistoryScope) -> Option<(String, String)> {
+        if scope.workspace.is_some() {
+            return None;
+        }
+        let (m, id, _, _) = self.machine_of_chat(addr, true)?;
+        let c = self.mirrored_chat(&m, &id)?;
+        // Its profile as that machine names it (the mirror says `laptop2:work`).
+        let profile = c.profile.strip_prefix(&format!("{m}:")).unwrap_or(&c.profile);
+        (!c.incognito && scope.profile.as_deref().is_none_or(|p| p == profile)).then_some((m, id))
+    }
+
     /// The chat whose engine `caller` runs in, if it is one.
     pub(crate) fn engine_chat_of(&self, caller: crate::mail::Caller) -> Option<String> {
         if caller.is_link() {
@@ -1495,6 +1538,7 @@ impl Daemon {
         pinned: bool,
         archived: bool,
         limit: Option<u32>,
+        profile: Option<String>,
     ) -> Vec<ChatHit> {
         let mut lists = vec![ours];
         for m in self.online_machines() {
@@ -1507,6 +1551,7 @@ impl Daemon {
                 archived,
                 limit,
                 machines: false,
+                profile: profile.clone(),
             };
             // (A machine that doesn't answer is left out: the reply has no place to say so.)
             let hits = match self.forward(&m, req).await {
@@ -2948,6 +2993,29 @@ fn human_bytes(n: u64) -> String {
     }
 }
 
+/// The programs that have `path` open, but this one, as `lsof` tells (none when it can't).
+fn holders(path: &std::path::Path) -> Vec<(u32, String)> {
+    let Ok(o) = std::process::Command::new("lsof").arg("-Fpc").arg("--").arg(path).output() else {
+        return Vec::new();
+    };
+    parse_lsof(&String::from_utf8_lossy(&o.stdout), std::process::id())
+}
+
+/// `lsof -Fpc` output (`p<pid>` then `c<command>` lines) as (pid, command), `me` left out.
+fn parse_lsof(out: &str, me: u32) -> Vec<(u32, String)> {
+    let mut found: Vec<(u32, String)> = Vec::new();
+    for l in out.lines() {
+        if let Some(p) = l.strip_prefix('p').and_then(|p| p.parse().ok()) {
+            found.push((p, String::new()));
+        } else if let (Some(c), Some(last)) = (l.strip_prefix('c'), found.last_mut()) {
+            last.1 = c.to_owned();
+        }
+    }
+    found.retain(|(p, _)| *p != me);
+    found.dedup();
+    found
+}
+
 fn store_err(e: ptyro_store::StoreError) -> Error {
     match e.fix("chat.db") {
         Some(fix) => Error::new(ErrorCode::Internal, fix),
@@ -3524,6 +3592,19 @@ mod tests {
 
     fn node(id: &str, body: ChatBody) -> ChatNode {
         ChatNode { id: id.into(), parent: None, at_ms: 0, body }
+    }
+
+    #[test]
+    fn who_holds_chat_db_is_told_and_never_ourselves() {
+        let out = "p4242\ncsqlite3\np99\ncptyro\n";
+        assert_eq!(parse_lsof(out, 99), vec![(4242, "sqlite3".to_owned())]);
+        assert!(parse_lsof("", 1).is_empty());
+        // Held for real: this test's own handle is the only one, so nobody else.
+        let t = tempfile::tempdir().unwrap();
+        let f = t.path().join("chat.db");
+        std::fs::write(&f, b"x").unwrap();
+        let _open = std::fs::File::open(&f).unwrap();
+        assert!(holders(&f).is_empty(), "this process is never named");
     }
 
     #[test]
