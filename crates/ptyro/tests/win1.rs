@@ -115,21 +115,23 @@ async fn integrated(
     std::fs::create_dir(&sub).unwrap();
     let info = spawn(c, name, argv, &start).await;
     assert_eq!(info.kind, SessionKind::Shell, "{name}: a bare shell is a shell session");
-    // The first prompt reports the directory: the integration is in.
+    // It says where it is (its prompt's report, or on Linux the process's directory).
     wait_for(c, name, "reporting its directory", |s| {
         s.live_cwd.as_deref() == Some(start.as_path())
     })
     .await;
-    // PowerShell's line editor (PSReadLine) drops keys typed while it starts, after the prompt is
-    // drawn (it asks the terminal where the cursor is, and what arrives first is lost: about half
-    // a second, longer on a slow machine). The line's text survives, the Enter may not: press it
-    // again if nothing ran. At a prompt that did run it, a second Enter is an empty line.
+    // PowerShell's line editor (PSReadLine) drops the Enter of a line typed while it starts
+    // (SPEC §8.7): about half a second after the prompt, and a cold start on a CI runner takes
+    // seconds (the directory can come from /proc before any prompt). The line's text survives:
+    // press Enter again until it runs. At a prompt that already ran it, Enter is an empty line.
     send(c, name, show).await;
-    if d.wait_for_text(c, name, marker, Duration::from_secs(3)).await.is_err() {
-        send(c, name, "").await;
-        d.wait_for_text(c, name, marker, WAIT)
-            .await
-            .unwrap_or_else(|e| panic!("{name}: its own startup file: {e}"));
+    let deadline = Instant::now() + WAIT;
+    loop {
+        match d.wait_for_text(c, name, marker, Duration::from_secs(2)).await {
+            Ok(_) => break,
+            Err(e) if Instant::now() >= deadline => panic!("{name}: its own startup file: {e}"),
+            Err(_) => send(c, name, "").await,
+        }
     }
     send(c, name, "sh -c 'exit 3'").await;
     let s = wait_for(c, name, "a failed command", |s| s.last_command_exit == Some(3)).await;
@@ -144,7 +146,13 @@ async fn integrated(
 async fn shells_get_their_integration_with_no_setup() {
     let home = home_with_rc_files();
     let h = home.path().to_str().unwrap();
-    let d = TempDaemon::start_with_env(BIN, &[("HOME", h), ("SHELL", "/bin/bash")]).unwrap();
+    // fish and pwsh read $XDG_CONFIG_HOME/… when it is set (GitHub's runners set it).
+    let xdg = format!("{h}/.config");
+    let d = TempDaemon::start_with_env(
+        BIN,
+        &[("HOME", h), ("SHELL", "/bin/bash"), ("XDG_CONFIG_HOME", &xdg)],
+    )
+    .unwrap();
     let c = d.client().await.unwrap();
 
     // bash as a login shell reads ~/.bash_profile (not ~/.bashrc), as it would by itself.
