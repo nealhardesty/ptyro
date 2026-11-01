@@ -280,11 +280,20 @@ fn done_when_a_lead_coordinates_workers_within_its_policy() {
     w.ok(&["send", "lead", r#"mcp check_messages {"wait_s":10}"#]);
     w.wait_screen("lead", "worker_done");
     // Summed up by the worker's reply ("one"), not its screen's last line ("worked: one").
-    w.until("w1's turn summed up by its reply", || {
-        w.screen("lead")
-            .lines()
-            .any(|l| l.starts_with("w1 finished turn") && l.trim_end().ends_with(": one"))
-    });
+    // The report is either typed into the idle lead (its own line) or, when check_messages got
+    // to it first, only in that JSON reply (`"body": "w1 finished turn 1: one",`).
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let t = w.screen("lead");
+        if t.lines()
+            .map(|l| l.trim().trim_start_matches("\"body\": \"").trim_end_matches("\","))
+            .any(|l| l.starts_with("w1 finished turn") && l.ends_with(": one"))
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline, "never: w1's turn summed up by its reply:\n{t}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
     w.ok(&["send", "lead", r#"mcp post_message {"to":"@user","body":"both workers are done"}"#]);
     w.until("the report reached the inbox", || {
         w.json(&["inbox", "--json"])
