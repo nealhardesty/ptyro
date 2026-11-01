@@ -1676,6 +1676,13 @@ runs), so a restart integrates afresh:
     wrapping PSReadLine's `PSConsoleHostReadLine`. The directory is OSC 7 on macOS and Linux and
     OSC 9;9 on Windows, only for a FileSystem location. It also runs on Windows PowerShell 5.1:
     no `` `e ``, no `$IsWindows`.
+    **[V] 2026-11-01, pwsh 7.6.9 / PSReadLine 2.4.5 on macOS:** PSReadLine drops the Enter of a
+    line typed while it starts, after the prompt is drawn (about 0.5 s here, and longer on a
+    loaded CI runner). The line's text survives on the prompt; only the Enter is lost. The same
+    happens with ptyro's integration off, so it is PowerShell's, not ptyro's. Binding Ctrl+J to
+    AcceptLine doesn't help, because the Enter isn't arriving as a line feed. Something that types
+    into a new pwsh session must check that the line ran and press Enter again if it didn't
+    (`tests/win1.rs` does).
   - **bash before 4.4** (macOS's 3.2) has no `PS0`. A DEBUG trap sends 133;C for the first
     command after a prompt, but only when no other DEBUG trap is set. Before WIN1, bash on a Mac
     never said `working`.

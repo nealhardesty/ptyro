@@ -2609,7 +2609,7 @@ done.
 - Branch `powershell`, PR #47 (draft), released as v0.0.43 on the branch. The v0.0.43 tag isn't
   pushed: tag master after merging, as for every release.
 - **Done:** WIN0.5 (the owner's decisions) and WIN1 (shell integration with no setup, pwsh
-  included). It is tested on macOS only, with bash 3.2, zsh and pwsh 7.6.9. Nothing has run on
+  included). It is tested on macOS with bash 3.2 and 5.3, zsh, fish 4.9 and pwsh 7.6.9, and in Linux CI with what the runners have (bash 5, and pwsh where installed; no zsh or fish). Nothing has run on
   Windows or in WSL yet, and CI has no Windows job.
 - **Where to read:**
   - RESEARCH DD3 (the deep dive) and R-WIN-01…20;
@@ -2707,9 +2707,11 @@ done.
   - Windows PowerShell 5.1 keeps its profile in `WindowsPowerShell\`, not `PowerShell\`.
 - **`-Login` is dropped on Windows** (pwsh supports it only on Linux and macOS). The pwsh argv
   path for Windows is unit-tested only.
-- **PSReadLine typeahead:** Enter sent before PSReadLine starts reading arrives as a line feed
-  and doesn't run. `tests/win1.rs` waits 700 ms. On slower Windows starts, especially Windows
-  PowerShell 5.1, this may need a real readiness signal (the first 133;B) rather than a sleep.
+- **PSReadLine typeahead** (SPEC §8.7, [V] 2026-11-01): PSReadLine drops the Enter of a line
+  typed during its first ~0.5 s, ptyro or not. `tests/win1.rs` presses Enter again when nothing
+  ran, after a fixed 700 ms wait failed on the macOS runner. Check how long the window is on
+  Windows, especially in Windows PowerShell 5.1. If `ptyro send` to a new pwsh session should
+  just work, the daemon needs to know when PSReadLine is reading (there is no signal today).
 - **The integration files** live under `<data>/integrations/shell/` with Unix modes (0700). WIN7
   gives them an ACL check.
 - **cmd.exe:** ConEmu's `9;12` is read as a prompt mark, so cmd with clink gets prompt jumps.
@@ -2799,14 +2801,14 @@ done.
   argv it was asked for. `[shell] command` and `[shell] integration` sit in a new Shells section of
   the settings panel (TUI and web). A bare shell (`ptyro new -- pwsh`) is a shell session. `ptyro
   doctor` has a "shell" section. `uninstall` takes the line out of `$PROFILE` too. Tested with
-  real bash 3.2, zsh and pwsh 7.6 (`tests/win1.rs`; fish when installed).
+  real bash 3.2 and 5.3, zsh, fish 4.9 and pwsh 7.6 (`tests/win1.rs`; each shell skipped with a message when it isn't installed).
   *Beyond the plan:*
   - OSC `9;9` used to raise a desktop notification at every prompt; ConEmu's numbered OSC 9 commands are now never notifications, and `9;12` is a prompt mark (cmd.exe with clink).
   - bash before 4.4 (macOS's own 3.2) never said `working`; a DEBUG trap now sends the command line when no other trap is set.
   - pwsh hands `$?` and `$LASTEXITCODE` to the wrapped prompt (oh-my-posh still turns red), and tells a failed cmdlet (1) from a native program's exit code.
   - macOS's `/etc/zshrc` would have moved `HISTFILE` into ptyro's directory; it is put back.
 
-  *Not done:* fish wasn't installed here, so only its argv is unit-tested. `-Login` is dropped
+  *Not done:* `-Login` is dropped
   on Windows (Track D).
 
 ### Track B — WSL for real

@@ -120,13 +120,17 @@ async fn integrated(
         s.live_cwd.as_deref() == Some(start.as_path())
     })
     .await;
-    // The prompt is drawn a moment before the line editor reads keys (PowerShell's PSReadLine);
-    // typed before that, Enter arrives as a line feed, which it doesn't run.
-    tokio::time::sleep(Duration::from_millis(700)).await;
+    // PowerShell's line editor (PSReadLine) drops keys typed while it starts, after the prompt is
+    // drawn (it asks the terminal where the cursor is, and what arrives first is lost: about half
+    // a second, longer on a slow machine). The line's text survives, the Enter may not: press it
+    // again if nothing ran. At a prompt that did run it, a second Enter is an empty line.
     send(c, name, show).await;
-    d.wait_for_text(c, name, marker, WAIT)
-        .await
-        .unwrap_or_else(|e| panic!("{name}: its own startup file: {e}"));
+    if d.wait_for_text(c, name, marker, Duration::from_secs(3)).await.is_err() {
+        send(c, name, "").await;
+        d.wait_for_text(c, name, marker, WAIT)
+            .await
+            .unwrap_or_else(|e| panic!("{name}: its own startup file: {e}"));
+    }
     send(c, name, "sh -c 'exit 3'").await;
     let s = wait_for(c, name, "a failed command", |s| s.last_command_exit == Some(3)).await;
     let text = s.command.and_then(|c| c.text).unwrap_or_default();
@@ -150,10 +154,14 @@ async fn shells_get_their_integration_with_no_setup() {
 
     // zsh reads the user's files from their ZDOTDIR, and hands it back: ZDOTDIR unset as it was,
     // and the history where it belongs (macOS's /etc/zshrc sets HISTFILE from ZDOTDIR).
-    integrated(&d, &c, "zsh", &["zsh", "-l"], "echo zsh=$RC_ZSHENV$RC_ZSH", "zsh=11").await;
-    send(&c, "zsh", "echo zdotdir=${ZDOTDIR-unset} hist=${HISTFILE_SEEN:-none}").await;
-    let screen = d.wait_for_text(&c, "zsh", "zdotdir=unset", WAIT).await.unwrap();
-    assert!(!screen.contains("integrations/shell/zsh/.zsh_history"), "{screen}");
+    if which("zsh").is_some() {
+        integrated(&d, &c, "zsh", &["zsh", "-l"], "echo zsh=$RC_ZSHENV$RC_ZSH", "zsh=11").await;
+        send(&c, "zsh", "echo zdotdir=${ZDOTDIR-unset} hist=${HISTFILE_SEEN:-none}").await;
+        let screen = d.wait_for_text(&c, "zsh", "zdotdir=unset", WAIT).await.unwrap();
+        assert!(!screen.contains("integrations/shell/zsh/.zsh_history"), "{screen}");
+    } else {
+        eprintln!("win1: zsh not installed, its integration not checked");
+    }
 
     if which("fish").is_some() {
         integrated(&d, &c, "fish", &["fish", "-l"], "echo fish=$RC_FISH", "fish=1").await;
@@ -177,20 +185,24 @@ async fn shells_get_their_integration_with_no_setup() {
 async fn shell_command_and_switching_the_integration_off() {
     let home = home_with_rc_files();
     let h = home.path().to_str().unwrap();
-    // `[shell] command` picks what a new shell session runs.
-    let config = "[shell]\ncommand = [\"zsh\", \"-l\"]\n";
+    // `[shell] command` picks what a new shell session runs (zsh where there is one, so it isn't
+    // $SHELL; Linux runners have no zsh).
+    let sh = if which("zsh").is_some() { "zsh" } else { "sh" };
+    let config = format!("[shell]\ncommand = [\"{sh}\", \"-l\"]\n");
     let d =
-        TempDaemon::start_with(BIN, &[("HOME", h), ("SHELL", "/bin/bash")], Some(config)).unwrap();
+        TempDaemon::start_with(BIN, &[("HOME", h), ("SHELL", "/bin/bash")], Some(&config)).unwrap();
     let c = d.client().await.unwrap();
     let dir = std::env::temp_dir().canonicalize().unwrap();
     let info = spawn(&c, "default", &[], &dir).await;
     assert_eq!(info.kind, SessionKind::Shell);
-    send(&c, "default", "echo shell=$ZSH_NAME").await;
-    d.wait_for_text(&c, "default", "shell=zsh", WAIT).await.unwrap();
-    wait_for(&c, "default", "integrated", |s| s.last_command_exit == Some(0)).await;
+    send(&c, "default", "echo shell=$0").await;
+    d.wait_for_text(&c, "default", &format!("shell={sh}"), WAIT).await.unwrap();
+    if sh == "zsh" {
+        wait_for(&c, "default", "integrated", |s| s.last_command_exit == Some(0)).await;
+    }
     // The session keeps what it was asked to run, not how ptyro started it.
     let launch = get(&c, "default").await;
-    assert_eq!(launch.argv, vec!["zsh".to_owned(), "-l".to_owned()]);
+    assert_eq!(launch.argv, vec![sh.to_owned(), "-l".to_owned()]);
 
     // Off: the shell runs as it is, and nothing reports its commands.
     d.write_config("[shell]\nintegration = false\n").unwrap();
