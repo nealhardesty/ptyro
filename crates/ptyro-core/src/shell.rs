@@ -36,7 +36,7 @@ impl ShellKind {
         }
     }
 
-    /// Which shell a program is: `/bin/zsh`, `-zsh` (a login shell's argv[0]), `pwsh.exe`,
+    /// Which shell a program is: `/bin/zsh`, `-zsh` (a login shell's `argv[0]`), `pwsh.exe`,
     /// `pwsh-preview`, `powershell`.
     pub fn of_program(program: &str) -> Option<Self> {
         let base = program.rsplit(['/', '\\']).next().unwrap_or(program);
