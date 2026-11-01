@@ -2001,6 +2001,11 @@ Creation steps (async; progress streamed as events; each step retryable):
    session — the user can watch it in a pane; agents may be started immediately or after setup
    (`start_agents = "after_setup" | "immediately"`).
 
+Step 2's add, and every `worktree remove` and `prune`, take turns per repository (keyed by its
+common dir; 2026-10-31). git writes a new worktree's `worktrees/<name>/commondir` in two steps
+while a concurrent add reads every registered worktree, so a fan-out's parallel adds failed now
+and then with "failed to read .git/worktrees/<name>/commondir" (seen in CI on Linux).
+
 Branch-name templates: `{name}`, `{user}`, `{date}`, `{issue}`, `{slug}`; optional **auto-rename**
 (optional): after the first agent turn, offer a branch name derived from the first prompt
 (`ptyro wt rename-branch`; never automatic once pushed).

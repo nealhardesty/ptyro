@@ -776,7 +776,7 @@ impl Daemon {
             if path.exists() {
                 git.worktree_remove(&root, &path, force).map_err(git_err)?;
             } else {
-                let _ = git.run(&root, &["worktree", "prune"]);
+                let _ = git.worktree_prune(&root);
             }
             if let Some(b) = branch {
                 match (keep, git.branch_fate(&root, &b, base.as_deref())) {
