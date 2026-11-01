@@ -81,7 +81,7 @@ Status markers used below:
   model's CLI (Claude's Haiku by default) on the session's own profile account, and they are off
   by default.
 - Built-in editor, task tracker (**back-burnered**; see ROADMAP Backlog).
-- Windows native. WSL2 is expected to work like Linux. **[decided]**
+- ~~Windows native.~~ Reversed 2026-10-31 (owner): native Windows 11 and WSL2 are both Tier 1 targets (§3.4, ROADMAP WIN). Until WIN ships, WSL2 is expected to work like Linux.
 
 ### 1.3 Principles
 
@@ -278,8 +278,8 @@ Boundary rules **[decided]**:
 |---|---|
 | Linux x86_64 / aarch64 | Tier 1 |
 | macOS aarch64 / x86_64 | Tier 1 |
-| WSL2 | Tier 2 (Linux build; tested occasionally) |
-| Windows native | Not supported (ConPTY is a different world; revisit much later) |
+| WSL2 | **Tier 1 [decided 2026-10-31, owner]** (Linux build). Today still untested: ROADMAP WIN0.1, WIN2 |
+| Windows 11 native (x64, ARM64) | **Tier 1 [decided 2026-10-31, owner], not built yet** (ConPTY, named pipes; ROADMAP WIN, RESEARCH DD3). Windows 10 is not supported |
 
 MSRV: latest stable at project start, pinned in `rust-toolchain.toml`; edition 2024. **[decided]**
 
