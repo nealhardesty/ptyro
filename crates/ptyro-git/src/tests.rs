@@ -541,3 +541,28 @@ fn a_worktree_path_with_a_newline_is_one_path() {
     let l = parse_worktree_list(plain);
     assert_eq!((l.len(), l[1].locked.as_deref()), (2, Some("why")));
 }
+
+/// A fan-out adds several worktrees to one repo at once. git reads every registered worktree
+/// while it adds one, so an add racing another's half-written `.git/worktrees/<name>` fails.
+#[test]
+fn worktrees_added_at_once_all_arrive() {
+    let f = fixture();
+    for round in 0..5 {
+        std::thread::scope(|s| {
+            let adds: Vec<_> = (0..8)
+                .map(|i| {
+                    let (f, name) = (&f, format!("r{round}-w{i}"));
+                    s.spawn(move || {
+                        let src =
+                            Source::NewBranch { branch: name.clone(), base: "origin/main".into() };
+                        f.git.worktree_add(&f.root, &f.base.join("wts").join(&name), &src)
+                    })
+                })
+                .collect();
+            for a in adds {
+                a.join().unwrap().unwrap();
+            }
+        });
+    }
+    assert_eq!(f.git.worktree_list(&f.root).unwrap().len(), 41);
+}
