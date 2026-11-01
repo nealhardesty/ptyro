@@ -255,6 +255,7 @@ pub(crate) const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
             ("chat.list", "chats"),
             ("home", "home"),
             ("sidebar.zoom", "everything"),
+            ("sidebar.fold_all", "fold all"),
         ],
     ),
     (

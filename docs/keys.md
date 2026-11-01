@@ -84,6 +84,7 @@ action by name.
 | `.` | what you can do with the focused session (its menu) |
 | `P` | add a project (pick from the repositories ptyro found) |
 | `Z` | everything at once: the sidebar fills the screen with every row open (`⏎` opens one, `Z` or `Esc` goes back) |
+| `C-z` | fold the whole sidebar (as `Z` does in the sidebar); again: unfold it as it was |
 | `f` | the sidebar's filter: all → running → active → all (also a click on a chip under its title; `sidebar.show_all`, `sidebar.show_running`, `sidebar.show_active` in the palette) |
 | `[` / `PageUp` | copy mode / copy mode, one page up |
 | `]` | paste what you last copied |
@@ -127,6 +128,7 @@ Focus the sidebar with `Ctrl-Q Tab`, or `Ctrl-Q Ctrl-Q`. These keys need no pref
 | `D` `O` `S` | inspector / runs / change sets |
 | `m` / `*` | a new chat / pin the chat row. On a chat row `⏎` opens it, `,` titles it, `x` archives it (an archived one comes back), `X` deletes it (asks), `f` forks it, `.` its menu; `⏎` (or Space) on the CHATS heading folds it, as `h`/`l` do, and a click on its `＋` starts a chat in that workspace; `all chats…` (or `C-q g`) lists them |
 | `z` | everything at once: the sidebar full-screen, every row open |
+| `Z` | fold everything: every workspace, change set, project, worktree and CHATS section, so the sidebar is one line a workspace (the selection moves to the row it folded into); `Z` again unfolds it as it was before |
 | `f` | filter the list: all → running → active (a machine, project or worktree with nothing running under it is hidden) |
 | `<` / `>` | the sidebar a column narrower / wider (or drag its edge) |
 | `u` / `P` | do what the last message offers / add a project |

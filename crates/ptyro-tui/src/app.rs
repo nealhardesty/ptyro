@@ -691,6 +691,8 @@ pub struct App {
     pub workspace: String,
     /// Collapsed project and worktree ids in the sidebar.
     pub collapsed: HashSet<String>,
+    /// What was folded before `sidebar.fold_all` folded everything: the next one puts it back.
+    pub folded_before: Option<HashSet<String>>,
     /// Sessions marked with Space in the sidebar, for `b` (broadcast).
     pub marked: Vec<SessionId>,
     /// The inspector (`D`), drawn over the panes (M6).
@@ -835,6 +837,7 @@ impl App {
             machines: Vec::new(),
             workspace,
             collapsed: HashSet::new(),
+            folded_before: None,
             marked: Vec::new(),
             inspector: None,
             orch: None,
@@ -3241,6 +3244,7 @@ impl App {
                     self.focus = Focus::Pane;
                 }
             }
+            "sidebar.fold_all" => self.fold_all(),
             // On a chat row, `f` forks it (SPEC §22.12).
             "sidebar.filter"
                 if self.focus == Focus::Sidebar
@@ -3536,6 +3540,49 @@ impl App {
         let n = self.sessions.iter().filter(|s| show.keeps(s)).count();
         self.toast(format!("sidebar: {} ({n})", show.label()));
         self.view_changed();
+    }
+
+    /// `Z` in the sidebar (`sidebar.fold_all`): fold every row that folds, so the sidebar is one
+    /// line a workspace. Once everything is folded, it puts back what was open before (or opens
+    /// everything, when nothing was saved). The selection moves to the row it was folded into.
+    fn fold_all(&mut self) {
+        let keys = self.tree().fold_keys();
+        if keys.is_empty() {
+            self.toast("nothing in the sidebar to fold");
+            return;
+        }
+        let before = self.rows();
+        let at = self.sel_index(&before);
+        if keys.is_subset(&self.collapsed) {
+            match self.folded_before.take() {
+                Some(was) => {
+                    self.collapsed = was;
+                    self.toast("sidebar unfolded as it was");
+                }
+                None => {
+                    self.collapsed.clear();
+                    self.toast("sidebar unfolded");
+                }
+            }
+        } else {
+            self.folded_before = Some(self.collapsed.clone());
+            self.collapsed.extend(keys);
+            let again = self.keymap.key_in(Table::Nav, "sidebar.fold_all");
+            self.toast(match again {
+                Some(k) => format!("sidebar folded ({k} again unfolds it)"),
+                None => "sidebar folded".to_owned(),
+            });
+        }
+        // The row it was on, else the nearest one above it still shown: what it folded into.
+        let rows = self.rows();
+        let i = before
+            .get(..=at.min(before.len().saturating_sub(1)))
+            .unwrap_or_default()
+            .iter()
+            .rev()
+            .find_map(|r| rows.iter().position(|x| x == r))
+            .unwrap_or(0);
+        self.set_sel(&rows, i);
     }
 
     fn set_sidebar_width(&mut self, width: u16) {
@@ -9801,6 +9848,77 @@ mod tests {
         app.focus = Focus::Sidebar;
         app.run(&Command { action: "chat.list", arg: None });
         assert_eq!(app.focus, Focus::Pane);
+    }
+
+    #[test]
+    fn z_folds_the_whole_sidebar_and_again_puts_back_what_was_open() {
+        use crossterm::event::KeyModifiers as M;
+        let mut app = app();
+        with_project(&mut app);
+        app.projects.push(project("p2", "other"));
+        app.worktrees.push(root("p2"));
+        app.workspaces.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "w2", "name": "side", "profile": "default", "projects": ["p2"],
+                "notify": "all", "created_ms": 0,
+            }))
+            .unwrap(),
+        );
+        let a = placed("claude", Some("p1"), Some("p1-root"));
+        let b = placed("codex", Some("p2"), Some("p2-root"));
+        app.sessions = vec![a.clone(), b.clone()];
+        // One thing folded by hand first: it is what comes back.
+        app.collapsed.insert("p2-root".into());
+        app.focus = Focus::Sidebar;
+        let rows = app.rows();
+        let at = rows.iter().position(|r| *r == Row::Session(a.id)).unwrap();
+        app.set_sel(&rows, at);
+
+        press(&mut app, 'Z', M::SHIFT);
+        assert_eq!(
+            app.rows(),
+            [Row::Workspace("main".into()), Row::Workspace("side".into())],
+            "one line a workspace"
+        );
+        assert_eq!(app.selected_row(), Some(Row::Workspace("main".into())), "where it folded");
+        // Every level is folded, so a workspace opened by hand shows its projects folded.
+        app.collapsed.remove(&crate::tree::fold_key("main"));
+        assert_eq!(
+            app.rows(),
+            [
+                Row::Workspace("main".into()),
+                Row::Project("p1".into()),
+                Row::Chats("main".into()),
+                Row::Workspace("side".into()),
+            ]
+        );
+        app.collapsed.insert(crate::tree::fold_key("main"));
+
+        press(&mut app, 'Z', M::SHIFT);
+        let rows = app.rows();
+        assert!(rows.contains(&Row::Session(a.id)), "open again: {rows:?}");
+        assert!(rows.contains(&Row::Worktree("p2-root".into())));
+        assert!(!rows.contains(&Row::Session(b.id)), "folded by hand before, still folded");
+        assert_eq!(app.collapsed, HashSet::from(["p2-root".to_owned()]));
+        assert_eq!(app.selected_row(), Some(Row::Workspace("main".into())));
+
+        // After the prefix too, from a pane, and both help screens list it.
+        app.focus = Focus::Pane;
+        app.run(&Command { action: "sidebar.fold_all", arg: None });
+        assert_eq!(app.rows().len(), 2);
+        assert_eq!(app.keymap.key_in(Table::Prefix, "sidebar.fold_all").as_deref(), Some("C-z"));
+        app.prefix = true;
+        app.prefix_at = Some(Instant::now() - Duration::from_secs(5));
+        let shown = screen(&app);
+        assert!(shown.contains("C-z fold all"), "the which-key menu: {shown}");
+        app.prefix = false;
+        app.prefix_at = None;
+        let help: String = crate::ui::help_lines(&app, "fold_all")
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>() + "\n")
+            .collect();
+        assert!(help.contains("Z ") && help.contains("sidebar.fold_all"), "{help}");
+        assert!(help.contains("C-z"), "{help}");
     }
 
     #[test]

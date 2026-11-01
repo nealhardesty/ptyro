@@ -3177,6 +3177,13 @@ action's key. Differences from the proposal below:
 - `N`, `w`, `o`, `r` and `R` work as listed.
 - In the sidebar, `⏎`/`Space` fold or open, `h`/`l` fold and unfold, and `x` on a worktree row
   removes it (with confirmation and the safety checks).
+- **Fold everything** (`Z` in the sidebar, `C-z` after the prefix; `sidebar.fold_all`): every key
+  the sidebar can fold (`Inputs::fold_keys`: change sets, `ws:<name>`, `chats:<name>`, projects,
+  worktrees) goes into `collapsed`, so the sidebar is one line a workspace, and opening one by hand
+  shows its levels folded too. The set folded before is kept (`folded_before`); pressed again once
+  everything is folded, it comes back (none kept: everything opens). The selection moves to the
+  nearest row above it that still shows. TUI only: the CLI has no tree to fold, and the web's
+  session list is flat (sorted by who needs you), so there is nothing there to fold.
 
 **[built M6]** `D` opens the inspector (§11.2f), in the sidebar too; `Q` is the review queue.
 
