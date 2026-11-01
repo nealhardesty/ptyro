@@ -5,9 +5,11 @@
 //! and every porcelain used here is stable. Hooks run only for what the user asked for (see
 //! `command_as`). Callers in async code use `spawn_blocking`.
 
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
 
 use ptyro_core::model::RepoStatus;
 
@@ -197,6 +199,16 @@ fn untracked_lines(git: &Git, dir: &Path) -> u32 {
         lines = lines.saturating_add(u32::try_from(n).unwrap_or(u32::MAX));
     }
     lines
+}
+
+/// One `git worktree add` or `remove` at a time per repository (keyed by its common dir). git
+/// writes a new worktree's `.git/worktrees/<name>/commondir` in two steps, and an add running
+/// alongside reads every registered worktree: one that lands in between fails with "failed to
+/// read .../commondir". A fan-out adds several worktrees to one repository at once.
+static TURNS: LazyLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = LazyLock::new(Mutex::default);
+
+fn wait_turn(turn: &Mutex<()>) -> MutexGuard<'_, ()> {
+    turn.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 fn lines(s: &str) -> impl Iterator<Item = &str> {
@@ -466,13 +478,22 @@ impl Git {
         self.run(root, &["fetch", "--quiet", "--", remote, what]).map(drop)
     }
 
+    /// The repository's place in [`TURNS`].
+    fn turn(&self, root: &Path) -> Arc<Mutex<()>> {
+        let key = self.common_dir(root).unwrap_or_else(|_| root.to_owned());
+        let mut turns = TURNS.lock().unwrap_or_else(PoisonError::into_inner);
+        Arc::clone(turns.entry(key).or_default())
+    }
+
     /// `git worktree add` (SPEC §10.3 step 2).
     pub fn worktree_add(&self, root: &Path, path: &Path, source: &Source) -> Result<()> {
         let p = path.to_string_lossy();
+        let turn = self.turn(root);
         match source {
             Source::NewBranch { branch, base } => {
                 self.check_branch_name(branch)?;
                 self.check_rev_arg("base", base)?;
+                let _turn = wait_turn(&turn);
                 if self.branch_exists(root, branch) {
                     return Err(GitError::Invalid(format!(
                         "branch {branch} already exists (use it with --branch {branch} --existing)"
@@ -483,6 +504,7 @@ impl Git {
             }
             Source::Existing { branch } => {
                 self.check_branch_name(branch)?;
+                let _turn = wait_turn(&turn);
                 if self.branch_exists(root, branch) {
                     self.run_hooked(root, &["worktree", "add", &p, branch])?;
                 } else if let Some(r) = self.main_remote(root)
@@ -503,10 +525,19 @@ impl Git {
                 self.check_branch_name(branch)?;
                 // Into `refs/heads/<branch>` explicitly, never by a name git has to guess at.
                 self.fetch(root, remote, &format!("pull/{number}/head:refs/heads/{branch}"))?;
+                let _turn = wait_turn(&turn);
                 self.run_hooked(root, &["worktree", "add", &p, branch])?;
             }
         }
         Ok(())
+    }
+
+    /// `git worktree prune`, in the repository's turn: a prune beside an add could drop the
+    /// half-registered worktree.
+    pub fn worktree_prune(&self, root: &Path) -> Result<()> {
+        let turn = self.turn(root);
+        let _turn = wait_turn(&turn);
+        self.run(root, &["worktree", "prune"]).map(drop)
     }
 
     pub fn worktree_list(&self, root: &Path) -> Result<Vec<WorktreeEntry>> {
@@ -552,6 +583,8 @@ impl Git {
             args.extend(["--force", "--force"]);
         }
         args.push(&p);
+        let turn = self.turn(root);
+        let _turn = wait_turn(&turn);
         self.run(root, &args).map(drop)?;
         let _ = self.run(root, &["worktree", "prune"]);
         Ok(())
