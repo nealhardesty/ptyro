@@ -2664,13 +2664,29 @@ done.
      shell. Run `ptyro shell-init pwsh | Out-String | Invoke-Expression` in it first.
    - Windows Terminal's own "duplicate tab in the same directory" uses the same OSC `9;9`, so
      both should agree.
-3. **WIN0.1, the WSL survival spike.**
-   - Write `scripts/spike-wsl.sh` with a `make spike-wsl` target and a README Development row.
-     It needs a `start` phase (record the time, `wsl --version` through `cmd.exe /c`, the
-     daemon's pid and uptime, start it bare and as a systemd user service) and a `check` phase
-     (alive or not, `/proc/uptime` to see whether the VM restarted, `journalctl --user -u ptyro`).
-   - Run the matrix described in WIN0.1 by hand: close every terminal, wait an hour, then `check`.
-   - Results go into SPEC §20 with [V], and the keep-alive that works into WIN2's "Survival".
+3. **WIN0.1, the WSL survival spike.** `make spike-wsl` (`scripts/spike-wsl.sh`, written
+   2026-11-01; only its mechanics were tried, on macOS with `SPIKE_WSL_ANY=1`, never in WSL).
+   - `make spike-wsl ARGS="start <label>"` starts three heartbeats, each writing
+     `<epoch> <boot id>` every 10 s. Each daemon has its own `PTYRO_HOME`, so your real ptyro is
+     never touched.
+     - **control:** a plain `setsid nohup` loop;
+     - **bare:** a session in the daemon that `ptyro new` starts on demand;
+     - **service:** a session in a daemon run by a systemd user unit (`ptyro-spike-wsl.service`), only when systemd is PID 1.
+   - Close every WSL terminal and wait at least an hour. Then, in a new terminal, run
+     `make spike-wsl ARGS=check`.
+     - The last beat says when each heartbeat stopped.
+     - A changed boot id means the VM restarted; a changed PID 1 start time means only the distro did.
+     - It writes a Markdown report under `~/.local/state/ptyro-spike-wsl/`, with the settings at
+       start and now: `wsl.exe --version`, `/etc/wsl.conf`, `.wslconfig` and linger.
+   - Repeat for each setting, changing one at a time. The list is at the top of the script:
+     - nothing set;
+     - `[boot] systemd=true`;
+     - `loginctl enable-linger`;
+     - `vmIdleTimeout=-1`, plus `instanceIdleTimeout=-1` where the release has it.
+   - `ARGS=clean` stops everything and keeps the reports. Results go into SPEC §20 with [V], and
+     the keep-alive that works into WIN2's "Survival".
+   - **If the script misbehaves in WSL, fix it first.** It is untested there: interop (`cmd.exe`,
+     `wsl.exe` output in UTF-16), the systemd user instance and `loginctl` are the likely spots.
 4. **WIN2.** It needs WIN0.1's answer.
    - Also settle the [U] fact that hosted `windows-latest` runners have only WSL1, in RESEARCH
      IV.3 and WIN0.5 (f). Run `wsl --status` in a throwaway workflow on a branch.
@@ -2717,7 +2733,7 @@ done.
     `instanceIdleTimeout=-1` and `[boot] systemd=true`. Reports since WSL 2.5.7 say the distro
     stops 15–20 s after the last terminal closes, even with a service running (microsoft/WSL
     #13291, #13416) [S]. Write the result and the keep-alive that works into SPEC §20. If none
-    works, say so in the README's requirements. `make spike-wsl` (a script run inside WSL).
+    works, say so in the README's requirements. `make spike-wsl` (`scripts/spike-wsl.sh`, written; see the handoff above for how to run it).
   - [ ] **WIN0.2 ConPTY fidelity.** (R-WIN-09) `make spike-conpty`: a small Windows program that
     plays `ptyro-term`'s fixture streams through ConPTY and compares what comes out. Run it with
     and without `PSEUDOCONSOLE_PASSTHROUGH_MODE`, and with the conhost built into Windows against
