@@ -3184,9 +3184,9 @@ action's key. Differences from the proposal below:
   and opening one by hand shows its levels folded too. The set folded before is kept
   (`folded_before`) until `Z` puts it back or you fold or open a row by hand (`fold_by_hand`; a
   workspace's header folds like a project's, by key or click): folding again after going to a
-  session (which opens its workspace) keeps the first fold's. Pressed again while every foldable row *on screen* is folded
-  (`Row::fold_key`), that set comes back; with none kept (folded by hand), only the rows on screen
-  open and the folds under them stay. What arrived under a folded row meanwhile (a worktree, chats
+  session (which opens its workspace) keeps the first fold's. Pressed again while every foldable
+  row *on screen* is folded (`Row::fold_key`), that set comes back; with none kept (folded by
+  hand), only the rows on screen open and the folds under them stay. What arrived under a folded row meanwhile (a worktree, chats
   turned on) isn't on screen, so it doesn't count, and it opens with the rest. Going to a session
   unfolds its workspace to show it (`reveal`). The selection moves to the nearest row above it
   that still shows. TUI only: the CLI has no tree to fold, and the web's session list is flat
