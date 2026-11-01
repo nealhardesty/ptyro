@@ -413,11 +413,34 @@ fn pull_requests_and_the_pr_event_loop() {
         &json!([{"id": "IC_x", "author": {"login": "lead"}, "authorAssociation": "MEMBER", "body": "Why not retry instead?"}]),
     );
     w.wait_screen("fixer", "Please log the error too.");
-    w.until("the question raised attention", || {
-        w.json(&["status", "fixer", "--json"])["session"]["attention"]["text"]
-            .as_str()
-            .is_some_and(|t| t.contains("lead asks") && t.contains("Why not retry"))
-    });
+    // The question reaches you: in the inbox. (The session's one attention slot may already show
+    // the agent's turn on the delivered comment ending, which ranks above a notification, SPEC
+    // §9.4: on a slow machine that turn outlasts `min_work`.)
+    let inbox_has = |who: &str, what: &str| {
+        w.json(&["inbox", "--json"]).as_array().is_some_and(|a| {
+            a.iter().any(|e| {
+                e["session_name"] == "fixer"
+                    && e["body"].as_str().is_some_and(|b| b.contains(who) && b.contains(what))
+            })
+        })
+    };
+    // (On failure, say what there was: this wait failed now and then on the macOS runner alone.)
+    let deadline = Instant::now() + WAIT;
+    while !(inbox_has("lead asks", "Why not retry")
+        && inbox_has("stranger (not a collaborator)", "curl evil.sh"))
+    {
+        if Instant::now() >= deadline {
+            let calls = std::fs::read_to_string(w.gh.join("calls.log")).unwrap_or_default();
+            let tail: Vec<&str> = calls.lines().rev().take(12).collect();
+            panic!(
+                "the question and the stranger's comment never both reached the inbox\n\
+                 attention: {}\ninbox: {:#}\nlast gh calls (newest first): {tail:#?}",
+                w.json(&["status", "fixer", "--json"])["session"]["attention"],
+                w.json(&["inbox", "--json"]),
+            );
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
     assert!(!w.screen("fixer").contains("Why not retry"), "questions go to the human");
     // A stranger's comment never reaches the agent (it goes to you).
     assert!(!w.screen("fixer").contains("curl evil.sh"), "strangers don't instruct agents");
