@@ -3182,12 +3182,14 @@ action's key. Differences from the proposal below:
   the sidebar can fold (`Inputs::fold_keys`: change sets, `ws:<name>`, `chats:<name>`, projects,
   worktrees) goes into `collapsed`, so the sidebar is the change sets, then one line a workspace,
   and opening one by hand shows its levels folded too. The set folded before is kept
-  (`folded_before`, the last fold's only). Pressed again while every foldable row *on screen* is
-  folded (`Row::fold_key`), that set comes back (none kept: everything opens); what arrived under a
-  folded row meanwhile (a worktree, chats turned on) isn't on screen, so it doesn't count, and it
-  opens with the rest. A new session's workspace unfolds to show it (`reveal`). The selection moves
-  to the nearest row above it that still shows. TUI only: the CLI has no tree to fold, and the
-  web's session list is flat (sorted by who needs you), so there is nothing there to fold.
+  (`folded_before`) until it comes back: folding again first (going to a session opened its
+  workspace) keeps the first fold's. Pressed again while every foldable row *on screen* is folded
+  (`Row::fold_key`), that set comes back; with none kept (folded by hand), only the rows on screen
+  open and the folds under them stay. What arrived under a folded row meanwhile (a worktree, chats
+  turned on) isn't on screen, so it doesn't count, and it opens with the rest. Going to a session
+  unfolds its workspace to show it (`reveal`). The selection moves to the nearest row above it
+  that still shows. TUI only: the CLI has no tree to fold, and the web's session list is flat
+  (sorted by who needs you), so there is nothing there to fold.
 
 **[built M6]** `D` opens the inspector (§11.2f), in the sidebar too; `Q` is the review queue.
 

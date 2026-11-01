@@ -3543,9 +3543,10 @@ impl App {
     }
 
     /// `Z` in the sidebar (`sidebar.fold_all`): fold every row that folds, so the sidebar is one
-    /// line a workspace. Once every row on screen is folded, it puts back what was open before
-    /// (or opens everything, when nothing was saved); what arrived meanwhile under a folded row
-    /// doesn't count, and opens with the rest. The selection moves to the row it folded into.
+    /// line a workspace. Once every row on screen is folded, it puts back what was open before the
+    /// first fold (with nothing saved, it opens the rows on screen); what arrived meanwhile under a
+    /// folded row doesn't count, and opens with the rest. The selection moves to the row it folded
+    /// into.
     fn fold_all(&mut self) {
         let before = self.rows();
         let shown: Vec<String> = before.iter().filter_map(Row::fold_key).collect();
@@ -3560,13 +3561,20 @@ impl App {
                     self.collapsed = was;
                     self.toast("sidebar unfolded as it was");
                 }
+                // Folded by hand: open what shows, and keep the folds under it.
                 None => {
-                    self.collapsed.clear();
+                    for k in &shown {
+                        self.collapsed.remove(k);
+                    }
                     self.toast("sidebar unfolded");
                 }
             }
         } else {
-            self.folded_before = Some(self.collapsed.clone());
+            // Folding again before it was unfolded (going to a session opened its workspace):
+            // what was open before the first fold is still what comes back.
+            if self.folded_before.is_none() {
+                self.folded_before = Some(self.collapsed.clone());
+            }
             self.collapsed.extend(self.tree().fold_keys());
             let again = self.keymap.key_in(Table::Nav, "sidebar.fold_all");
             self.toast(match again {
@@ -9959,14 +9967,48 @@ mod tests {
         spawned(&mut app, &fresh, false);
         assert!(app.rows().contains(&Row::Session(fresh.id)), "{:?}", app.rows());
         assert_eq!(app.selected_row(), Some(Row::Session(fresh.id)));
-        // Folded by hand, with nothing saved: `Z` opens everything.
+        // Folded by hand, with nothing saved: `Z` opens what shows, and the folds under it stay.
         app.folded_before = None;
-        app.collapsed = app.tree().fold_keys();
+        app.collapsed = HashSet::from([crate::tree::fold_key("main"), "p1-two".to_owned()]);
         app.focus = Focus::Sidebar;
         press(&mut app, 'Z', M::SHIFT);
-        assert!(app.collapsed.is_empty());
+        assert_eq!(app.collapsed, HashSet::from(["p1-two".to_owned()]));
         let toast = app.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default();
         assert_eq!(toast, "sidebar unfolded");
+    }
+
+    #[test]
+    fn going_to_a_session_while_folded_still_lets_z_put_back_what_was_open() {
+        use crossterm::event::KeyModifiers as M;
+        let mut app = app();
+        with_project(&mut app);
+        app.projects.push(project("p2", "other"));
+        app.worktrees.push(root("p2"));
+        app.workspaces.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "w2", "name": "side", "profile": "default", "projects": ["p2"],
+                "notify": "all", "created_ms": 0,
+            }))
+            .unwrap(),
+        );
+        let a = placed("claude", Some("p1"), Some("p1-root"));
+        let b = placed("codex", Some("p2"), Some("p2-root"));
+        app.sessions = vec![a.clone(), b.clone()];
+        app.focus = Focus::Sidebar;
+        press(&mut app, 'Z', M::SHIFT);
+        // Going to a session (`C-q n`, the palette, `a`) opens its workspace to show it.
+        app.show(a.id, None);
+        assert!(app.rows().contains(&Row::Session(a.id)));
+        app.focus = Focus::Sidebar;
+        press(&mut app, 'Z', M::SHIFT);
+        assert_eq!(app.rows().len(), 2, "folded again: {:?}", app.rows());
+        press(&mut app, 'Z', M::SHIFT);
+        let rows = app.rows();
+        assert!(
+            rows.contains(&Row::Session(a.id)) && rows.contains(&Row::Session(b.id)),
+            "{rows:?}"
+        );
+        assert!(app.collapsed.is_empty() && app.folded_before.is_none());
     }
 
     #[test]
