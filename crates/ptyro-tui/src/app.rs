@@ -3487,21 +3487,6 @@ impl App {
                     self.sidebar_zoom = false;
                     self.chat_row_open(&r);
                 }
-                Some(Row::Chats(ws)) => {
-                    let key = crate::tree::chats_key(&ws);
-                    // Like a project's heading: ⏎ (and Space) fold it, h/l close and open it;
-                    // `all chats…` under it (or the chat list's key) lists them.
-                    let collapse = match cmd.action {
-                        "nav.collapse" => true,
-                        "nav.expand" => false,
-                        _ => !self.collapsed.contains(&key),
-                    };
-                    if collapse {
-                        self.collapsed.insert(key);
-                    } else {
-                        self.collapsed.remove(&key);
-                    }
-                }
                 Some(Row::Session(id)) if cmd.action == "nav.open" => {
                     self.sidebar_zoom = false;
                     self.show(id, None)
@@ -3511,17 +3496,17 @@ impl App {
                     self.toggle_quick(Some(id), None, None);
                 }
                 Some(Row::Set(run)) if cmd.action == "nav.open" => self.open_sets(Some(run)),
-                Some(Row::Project(id) | Row::Worktree(id) | Row::Set(id)) => {
+                // A workspace, project, worktree, change set or CHATS heading: ⏎ (and Space)
+                // fold it, h/l close and open it; `all chats…` (or the chat list's key) lists
+                // a workspace's chats.
+                Some(r) if r.fold_key().is_some() => {
+                    let key = r.fold_key().unwrap_or_default();
                     let collapse = match cmd.action {
                         "nav.collapse" => true,
                         "nav.expand" => false,
-                        _ => !self.collapsed.contains(&id),
+                        _ => !self.collapsed.contains(&key),
                     };
-                    if collapse {
-                        self.collapsed.insert(id);
-                    } else {
-                        self.collapsed.remove(&id);
-                    }
+                    self.fold_by_hand(key, collapse);
                 }
                 _ => {}
             },
@@ -3540,6 +3525,18 @@ impl App {
         let n = self.sessions.iter().filter(|s| show.keeps(s)).count();
         self.toast(format!("sidebar: {} ({n})", show.label()));
         self.view_changed();
+    }
+
+    /// Fold or open one row the user picked. A change of their own makes the layout `Z` saved
+    /// stale, so the next `Z` saves this one instead (opening a workspace to show a session
+    /// doesn't: that is ptyro's, not theirs).
+    fn fold_by_hand(&mut self, key: String, collapse: bool) {
+        self.folded_before = None;
+        if collapse {
+            self.collapsed.insert(key);
+        } else {
+            self.collapsed.remove(&key);
+        }
     }
 
     /// `Z` in the sidebar (`sidebar.fold_all`): fold every row that folds, so the sidebar is one
@@ -6231,18 +6228,16 @@ impl App {
                             self.focus = Focus::Sidebar;
                             self.new_chat();
                         }
-                        Some(Row::Chats(ws)) => {
+                        Some(
+                            r @ (Row::Chats(_)
+                            | Row::Workspace(_)
+                            | Row::Project(_)
+                            | Row::Worktree(_)),
+                        ) => {
                             self.set_sel(&rows, row);
-                            let key = crate::tree::chats_key(&ws);
-                            if !self.collapsed.remove(&key) {
-                                self.collapsed.insert(key);
-                            }
-                        }
-                        Some(Row::Project(id) | Row::Worktree(id)) => {
-                            self.set_sel(&rows, row);
-                            if !self.collapsed.remove(&id) {
-                                self.collapsed.insert(id);
-                            }
+                            let key = r.fold_key().unwrap_or_default();
+                            let collapse = !self.collapsed.contains(&key);
+                            self.fold_by_hand(key, collapse);
                         }
                         _ => {}
                     }
@@ -9975,6 +9970,50 @@ mod tests {
         assert_eq!(app.collapsed, HashSet::from(["p1-two".to_owned()]));
         let toast = app.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default();
         assert_eq!(toast, "sidebar unfolded");
+    }
+
+    #[test]
+    fn after_z_a_workspace_opens_by_hand_and_a_fold_of_your_own_is_what_z_keeps() {
+        use crossterm::event::KeyModifiers as M;
+        let mut app = app();
+        with_project(&mut app);
+        let a = placed("claude", Some("p1"), Some("p1-root"));
+        app.sessions = vec![a.clone()];
+        app.focus = Focus::Sidebar;
+        press(&mut app, 'Z', M::SHIFT);
+        assert_eq!(app.selected_row(), Some(Row::Workspace("main".into())));
+        // ⏎ on its header opens it, its levels still folded; h folds it again, l opens it.
+        app.run(&Command { action: "nav.open", arg: None });
+        let open =
+            [Row::Workspace("main".into()), Row::Project("p1".into()), Row::Chats("main".into())];
+        assert_eq!(app.rows(), open);
+        app.run(&Command { action: "nav.collapse", arg: None });
+        assert_eq!(app.rows(), [Row::Workspace("main".into())]);
+        app.run(&Command { action: "nav.expand", arg: None });
+        assert_eq!(app.rows(), open);
+        assert!(app.folded_before.is_none(), "a change of your own: nothing stale kept");
+        // Going to the session, then a fold of your own: `Z`, `Z` gives back that fold, not
+        // the layout from before the first `Z`.
+        app.collapsed.clear();
+        press(&mut app, 'Z', M::SHIFT);
+        app.show(a.id, None);
+        app.focus = Focus::Sidebar;
+        let rows = app.rows();
+        let wt = rows.iter().position(|r| *r == Row::Worktree("p1-root".into())).unwrap();
+        app.set_sel(&rows, wt);
+        app.run(&Command { action: "nav.collapse", arg: None });
+        press(&mut app, 'Z', M::SHIFT);
+        assert_eq!(app.rows(), [Row::Workspace("main".into())]);
+        press(&mut app, 'Z', M::SHIFT);
+        let rows = app.rows();
+        assert!(rows.contains(&Row::Worktree("p1-root".into())), "{rows:?}");
+        assert!(!rows.contains(&Row::Session(a.id)), "the hand fold stays: {rows:?}");
+        // A click on a folded workspace's header opens it, as it does a project's.
+        use crossterm::event::{MouseButton, MouseEventKind as K};
+        press(&mut app, 'Z', M::SHIFT);
+        let side = app.sidebar_area().unwrap();
+        app.on_mouse(&mouse(K::Down(MouseButton::Left), side.x + 2, side.y + 2));
+        assert!(app.rows().contains(&Row::Project("p1".into())), "{:?}", app.rows());
     }
 
     #[test]

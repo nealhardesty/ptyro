@@ -116,9 +116,9 @@ Focus the sidebar with `Ctrl-Q Tab`, or `Ctrl-Q Ctrl-Q`. These keys need no pref
 | Key | Does |
 |---|---|
 | `j` / `k`, `g` / `G` | next / previous, first / last |
-| `⏎` | open the session or change set, or fold and unfold a project or worktree |
+| `⏎` | open the session or change set, or fold and unfold a workspace, project or worktree |
 | `h` / `l` (or `Left` / `Right`) | fold / unfold |
-| `Space` | mark a session for broadcast; on a project or worktree, fold or unfold |
+| `Space` | mark a session for broadcast; on a workspace, project or worktree, fold or unfold |
 | `b` | broadcast one prompt into the marked sessions |
 | `n` / `C-n` / `N` | new task here / quick new (another of what was last started, here) / new worktree |
 | `a` `p` `i` `e` | next attention / peek / inbox / why this status |
@@ -301,7 +301,7 @@ session's task. The palette also has `scratchpad.history`: saved copies, `⏎` p
 - Wheel up to scroll back.
 - Drag to select (copied on release). Hold `Shift` for the terminal's own selection, or set
   `[ui] mouse = false`.
-- Click to focus. Clicking a project or worktree row folds it. Right-click a row for its menu.
+- Click to focus. Clicking a workspace, project or worktree row folds it. Right-click a row for its menu.
 - Drag a divider to resize panes, or the sidebar's edge to resize the sidebar. Either is saved
   with the workspace's layout.
 

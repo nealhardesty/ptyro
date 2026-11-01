@@ -3182,8 +3182,9 @@ action's key. Differences from the proposal below:
   the sidebar can fold (`Inputs::fold_keys`: change sets, `ws:<name>`, `chats:<name>`, projects,
   worktrees) goes into `collapsed`, so the sidebar is the change sets, then one line a workspace,
   and opening one by hand shows its levels folded too. The set folded before is kept
-  (`folded_before`) until it comes back: folding again first (going to a session opened its
-  workspace) keeps the first fold's. Pressed again while every foldable row *on screen* is folded
+  (`folded_before`) until `Z` puts it back or you fold or open a row by hand (`fold_by_hand`; a
+  workspace's header folds like a project's, by key or click): folding again after going to a
+  session (which opens its workspace) keeps the first fold's. Pressed again while every foldable row *on screen* is folded
   (`Row::fold_key`), that set comes back; with none kept (folded by hand), only the rows on screen
   open and the folds under them stay. What arrived under a folded row meanwhile (a worktree, chats
   turned on) isn't on screen, so it doesn't count, and it opens with the rest. Going to a session
