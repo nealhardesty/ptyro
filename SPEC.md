@@ -3071,7 +3071,8 @@ learning anything up front.
   instead of reconnecting, which would start a new daemon.
 - **Everything at once** (`Z`, `z` in the sidebar; `sidebar.zoom`): the sidebar fills the
   screen with every row open and wrapped. It is drawn over the panes, which keep their size, so
-  no session is resized for a look. `⏎` opens a session and goes back; `Z`, `z` or `Esc` go back.
+  no session is resized for a look. `⏎` opens a session and goes back; `C-q Z`, `z` or `Esc` go
+  back (a bare `Z` there folds the sidebar, as anywhere in it).
 
 ### 11.2i What UX3 added **[built UX3]**
 
@@ -3103,8 +3104,8 @@ The daily loop (ROADMAP UX3, RESEARCH R-UX-34…37). `crates/ptyro-tui/src/scree
   menus, which-key's `+ claude`): `SpawnSpec { again: true }` in the context's worktree (else
   here), full sized. The label comes from `LastLaunch` (asked on attach, a workspace switch and
   after each spawn).
-- **Created means shown** (UX3.3, `reveal`): `show` unfolds the session's project and worktree and
-  selects its row; a row the tree can't place yet is retried on each event for 5 s
+- **Created means shown** (UX3.3, `reveal`): `show` unfolds the session's workspace, project and
+  worktree and selects its row; a row the tree can't place yet is retried on each event for 5 s
   (`App.revealing`). A new worktree with no session shown is selected (`reveal_worktree`). A new
   workspace is upserted from `WorkspaceNew`'s reply.
 - **`!` is a new shell** (UX3.4, `shell.new`): another plain shell in the context's worktree,
@@ -3177,6 +3178,19 @@ action's key. Differences from the proposal below:
 - `N`, `w`, `o`, `r` and `R` work as listed.
 - In the sidebar, `⏎`/`Space` fold or open, `h`/`l` fold and unfold, and `x` on a worktree row
   removes it (with confirmation and the safety checks).
+- **Fold everything** (`Z` in the sidebar, `C-z` after the prefix; `sidebar.fold_all`): every key
+  the sidebar can fold (`Inputs::fold_keys`: change sets, `ws:<name>`, `chats:<name>`, projects,
+  worktrees) goes into `collapsed`, so the sidebar is the change sets, then one line a workspace,
+  and opening one by hand shows its levels folded too. The set folded before is kept
+  (`folded_before`) until `Z` puts it back or you fold or open a row by hand (`fold_by_hand`; a
+  workspace's header folds like a project's, by key or click): folding again after going to a
+  session (which opens its workspace) keeps the first fold's. Pressed again while every foldable
+  row *on screen* is folded (`Row::fold_key`), that set comes back; with none kept (folded by
+  hand), only the rows on screen open and the folds under them stay. What arrived under a folded row meanwhile (a worktree, chats
+  turned on) isn't on screen, so it doesn't count, and it opens with the rest. Going to a session
+  unfolds its workspace to show it (`reveal`). The selection moves to the nearest row above it
+  that still shows. TUI only: the CLI has no tree to fold, and the web's session list is flat
+  (sorted by who needs you), so there is nothing there to fold.
 
 **[built M6]** `D` opens the inspector (§11.2f), in the sidebar too; `Q` is the review queue.
 

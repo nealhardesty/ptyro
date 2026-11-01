@@ -531,6 +531,7 @@ All after the prefix, `Ctrl-Q` or `Ctrl-Space`. The full list is in [`docs/keys.
 | `h` `l` / `z` / `c` | move between panes / zoom / close pane |
 | `Tab` | focus the sidebar (`⏎` open, `x` stop or remove, `e` why this status) |
 | `Z` | everything at once: every session and what it's doing, full-screen |
+| `C-z` | fold the whole sidebar to one line a workspace (`Z` in the sidebar); again: unfold it as it was |
 | `f` | sidebar filter: all → only running sessions → only active ones (working, waiting for you, running a command); or click `all` / `running` / `active` under the sidebar title |
 | `[` | copy mode: scroll back, search (`/`), select (`v`), copy (`y`) |
 | `D` / `Q` | inspector / review queue |

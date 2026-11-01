@@ -40,6 +40,16 @@ impl Row {
         !matches!(self, Self::Group(_))
     }
 
+    /// The key that folds this row in `collapsed`, for a row that folds.
+    pub fn fold_key(&self) -> Option<String> {
+        match self {
+            Self::Set(id) | Self::Project(id) | Self::Worktree(id) => Some(id.clone()),
+            Self::Workspace(ws) => Some(fold_key(ws)),
+            Self::Chats(ws) => Some(chats_key(ws)),
+            _ => None,
+        }
+    }
+
     /// The chat a chat row stands for.
     pub fn chat(&self) -> Option<&str> {
         match self {
@@ -168,6 +178,23 @@ impl Inputs<'_> {
 
     fn led(&self, s: &SessionInfo) -> bool {
         self.sets.iter().any(|n| n.lead.as_deref() == Some(s.id.full().as_str()))
+    }
+
+    /// Every key that folds a row the sidebar can show: change sets, workspaces, their CHATS
+    /// sections, projects and worktrees (`sidebar.fold_all`).
+    pub fn fold_keys(&self) -> HashSet<String> {
+        let mut keys: HashSet<String> = self.sets.iter().map(|n| n.run.clone()).collect();
+        for ws in self.workspaces {
+            keys.insert(fold_key(&ws.name));
+            if self.recent.is_some() {
+                keys.insert(chats_key(&ws.name));
+            }
+        }
+        for p in self.project_ids() {
+            keys.extend(self.worktrees_of(&p).into_iter().map(|w| w.id.clone()));
+            keys.insert(p);
+        }
+        keys
     }
 
     /// The rows, honouring collapsed nodes.

@@ -192,6 +192,10 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("sidebar.wider", "Make the sidebar a column wider (also: drag its edge)"),
     a("sidebar.narrower", "Make the sidebar a column narrower (also: drag its edge)"),
     a("sidebar.zoom", "Everything at once: the sidebar fills the screen, every row open (toggle)"),
+    a(
+        "sidebar.fold_all",
+        "Sidebar: fold everything (workspaces, projects, worktrees, chats); again: unfold it as it was",
+    ),
     a("pane.split_right", "Split: open a session beside this pane"),
     a("pane.split_down", "Split: open a session below this pane"),
     a("pane.close", "Close this pane (the session keeps running)"),
@@ -221,10 +225,13 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("nav.up", "Sidebar: select the previous session"),
     a("nav.top", "Sidebar: select the first session"),
     a("nav.bottom", "Sidebar: select the last session"),
-    a("nav.open", "Sidebar: show the selected session, or fold/unfold a project or worktree"),
+    a(
+        "nav.open",
+        "Sidebar: show the selected session, or fold/unfold a workspace, project or worktree",
+    ),
     a(
         "nav.select",
-        "Sidebar: mark the selected session for broadcast, or fold/unfold a project or worktree",
+        "Sidebar: mark the selected session for broadcast, or fold/unfold the selected row",
     ),
     a("broadcast", "Type one prompt into every marked session (each once it's ready)"),
     a(
@@ -399,8 +406,8 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("devices.revoke", "Cut a paired device off now"),
     a("devices.push_test", "Send a test push to your devices"),
     a("config.show", "The effective config, defaults filled in"),
-    a("nav.collapse", "Sidebar: fold the selected project or worktree"),
-    a("nav.expand", "Sidebar: unfold the selected project or worktree"),
+    a("nav.collapse", "Sidebar: fold the selected workspace, project or worktree"),
+    a("nav.expand", "Sidebar: unfold the selected workspace, project or worktree"),
 ];
 
 pub fn spec(id: &str) -> Option<&'static ActionSpec> {
@@ -499,6 +506,7 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Prefix, "C-Space", "focus.toggle"),
     (Table::Prefix, "\\", "sidebar.toggle"),
     (Table::Prefix, "Z", "sidebar.zoom"),
+    (Table::Prefix, "C-z", "sidebar.fold_all"),
     (Table::Prefix, "f", "sidebar.filter"),
     (Table::Prefix, "u", "toast.act"),
     (Table::Prefix, ".", "row.menu"),
@@ -572,6 +580,7 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Nav, ":", "palette"),
     (Table::Nav, "\\", "sidebar.toggle"),
     (Table::Nav, "z", "sidebar.zoom"),
+    (Table::Nav, "Z", "sidebar.fold_all"),
     (Table::Nav, "f", "sidebar.filter"),
     (Table::Nav, "u", "toast.act"),
     (Table::Nav, ".", "row.menu"),

@@ -206,11 +206,12 @@ impl App {
         }
     }
 
-    /// Make `id`'s row visible and select it (UX3.3): its project and worktree unfold. A row
-    /// the tree can't place yet (its project's news still on the way) is placed when it can.
+    /// Make `id`'s row visible and select it (UX3.3): its workspace, project and worktree unfold.
+    /// A row the tree can't place yet (its project's news still on the way) is placed when it can.
     pub(crate) fn reveal(&mut self, id: SessionId) {
         let Some(s) = self.session(id) else { return };
-        for node in [s.project.clone(), s.worktree.clone()].into_iter().flatten() {
+        let ws = crate::tree::fold_key(&self.tree().home(s));
+        for node in [s.project.clone(), s.worktree.clone(), Some(ws)].into_iter().flatten() {
             self.collapsed.remove(&node);
         }
         let rows = self.rows();
@@ -223,8 +224,14 @@ impl App {
         }
     }
 
-    /// A worktree's row, unfolded and selected (a new worktree with nothing in it yet).
+    /// A worktree's row, unfolded and selected (a new worktree with nothing in it yet), its
+    /// workspace too.
     pub(crate) fn reveal_worktree(&mut self, id: &str, project: &str) {
+        let tree = self.tree();
+        let ws = tree.order().into_iter().find(|w| w.projects.iter().any(|p| p == project));
+        if let Some(ws) = ws.map(|w| crate::tree::fold_key(&w.name)) {
+            self.collapsed.remove(&ws);
+        }
         self.collapsed.remove(project);
         self.collapsed.remove(id);
         let rows = self.rows();

@@ -83,7 +83,8 @@ action by name.
 | `C` | settings: every option, searchable, edited in place (`/` search · `m` only what you changed · `u` undo · `r` reset · `n` add · `d` remove · `R` rename · `s` save a repository's settings to the shared file · `!` restart the daemon when a setting needs it) |
 | `.` | what you can do with the focused session (its menu) |
 | `P` | add a project (pick from the repositories ptyro found) |
-| `Z` | everything at once: the sidebar fills the screen with every row open (`⏎` opens one, `Z` or `Esc` goes back) |
+| `Z` | everything at once: the sidebar fills the screen with every row open (`⏎` opens one; `C-q Z`, `z` or `Esc` goes back) |
+| `C-z` | fold the whole sidebar (as `Z` does in the sidebar); again: unfold it as it was |
 | `f` | the sidebar's filter: all → running → active → all (also a click on a chip under its title; `sidebar.show_all`, `sidebar.show_running`, `sidebar.show_active` in the palette) |
 | `[` / `PageUp` | copy mode / copy mode, one page up |
 | `]` | paste what you last copied |
@@ -115,9 +116,9 @@ Focus the sidebar with `Ctrl-Q Tab`, or `Ctrl-Q Ctrl-Q`. These keys need no pref
 | Key | Does |
 |---|---|
 | `j` / `k`, `g` / `G` | next / previous, first / last |
-| `⏎` | open the session or change set, or fold and unfold a project or worktree |
+| `⏎` | open the session or change set, or fold and unfold a workspace, project or worktree |
 | `h` / `l` (or `Left` / `Right`) | fold / unfold |
-| `Space` | mark a session for broadcast; on a project or worktree, fold or unfold |
+| `Space` | mark a session for broadcast; on a workspace, project or worktree, fold or unfold |
 | `b` | broadcast one prompt into the marked sessions |
 | `n` / `C-n` / `N` | new task here / quick new (another of what was last started, here) / new worktree |
 | `a` `p` `i` `e` | next attention / peek / inbox / why this status |
@@ -127,6 +128,7 @@ Focus the sidebar with `Ctrl-Q Tab`, or `Ctrl-Q Ctrl-Q`. These keys need no pref
 | `D` `O` `S` | inspector / runs / change sets |
 | `m` / `*` | a new chat / pin the chat row. On a chat row `⏎` opens it, `,` titles it, `x` archives it (an archived one comes back), `X` deletes it (asks), `f` forks it, `.` its menu; `⏎` (or Space) on the CHATS heading folds it, as `h`/`l` do, and a click on its `＋` starts a chat in that workspace; `all chats…` (or `C-q g`) lists them |
 | `z` | everything at once: the sidebar full-screen, every row open |
+| `Z` | fold everything: every workspace, change set, project, worktree and CHATS section, so the sidebar is one line a workspace (change sets stay at the top, folded; the selection moves to the row it folded into); `Z` again unfolds it as it was before, and whatever arrived meanwhile opens too |
 | `f` | filter the list: all → running → active (a machine, project or worktree with nothing running under it is hidden) |
 | `<` / `>` | the sidebar a column narrower / wider (or drag its edge) |
 | `u` / `P` | do what the last message offers / add a project |
@@ -299,7 +301,7 @@ session's task. The palette also has `scratchpad.history`: saved copies, `⏎` p
 - Wheel up to scroll back.
 - Drag to select (copied on release). Hold `Shift` for the terminal's own selection, or set
   `[ui] mouse = false`.
-- Click to focus. Clicking a project or worktree row folds it. Right-click a row for its menu.
+- Click to focus. Clicking a workspace, project or worktree row folds it. Right-click a row for its menu.
 - Drag a divider to resize panes, or the sidebar's edge to resize the sidebar. Either is saved
   with the workspace's layout.
 
