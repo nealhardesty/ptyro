@@ -143,7 +143,12 @@ fn a_worktree_follows_its_work_to_pushed() {
     // Committed, no upstream yet: not pushed.
     w.git(&path, &["add", "a.txt"]);
     w.git(&path, &["commit", "-q", "-m", "one"]);
-    let s = w.until("feat", "not pushed", |s| s["unpushed"] == 1)["status"].clone();
+    // (A refresh that ran during `git commit` can see the commit and the staged file at once; the
+    // commit's last write brings another, so wait for both halves.)
+    let s = w.until("feat", "not pushed", |s| {
+        s["unpushed"] == 1 && s["staged"] == 0 && s["untracked"] == 0
+    })["status"]
+        .clone();
     assert!(s["upstream"].is_null() && s["pushed"].is_null(), "{s}");
     let line = w.plain("lib/feat");
     assert!(line.contains("not pushed ↑1") && line.contains("+2 -0"), "{line}");

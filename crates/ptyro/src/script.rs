@@ -120,8 +120,35 @@ pub async fn wait_for(
     ids: &[SessionId],
     o: &WaitOpts,
 ) -> Result<Vec<Outcome>, Error> {
-    let started = Instant::now();
     let mut pushes = c.pushes();
+    match wait_on(c, &mut pushes, ids, o).await {
+        // An upgrade that lands while a request is in flight fails the request (the connection
+        // is lost, or the write fails) before the loop sees the goodbye, which the reader queued
+        // just before the connection closed.
+        Err(_) if upgrading(&mut pushes) => {
+            Err(Error::new(ErrorCode::DaemonUnavailable, UPGRADING))
+        }
+        other => other,
+    }
+}
+
+/// Whether the daemon said goodbye because it is upgrading, among the messages already queued.
+fn upgrading(pushes: &mut tokio::sync::mpsc::UnboundedReceiver<ServerMsg>) -> bool {
+    while let Ok(m) = pushes.try_recv() {
+        if matches!(&m, ServerMsg::Goodbye { reason } if reason.contains("upgrading")) {
+            return true;
+        }
+    }
+    false
+}
+
+async fn wait_on(
+    c: &Client,
+    pushes: &mut tokio::sync::mpsc::UnboundedReceiver<ServerMsg>,
+    ids: &[SessionId],
+    o: &WaitOpts,
+) -> Result<Vec<Outcome>, Error> {
+    let started = Instant::now();
     c.send(ClientMsg::WatchEvents)?;
     let mut done: HashMap<SessionId, Outcome> = HashMap::new();
     loop {

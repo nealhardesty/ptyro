@@ -99,6 +99,19 @@ pub fn attention_for(
     }
 }
 
+/// Attention about the agent's own state, which its next `Working` makes stale; the rest
+/// (notifications, gates, runs and messages) is news for you, whatever the agent does next.
+fn about_the_agent(kind: AttentionKind) -> bool {
+    matches!(
+        kind,
+        AttentionKind::Blocked
+            | AttentionKind::Errored
+            | AttentionKind::Done
+            | AttentionKind::Idle
+            | AttentionKind::Exited
+    )
+}
+
 pub fn human(ms: u64) -> String {
     let s = ms / 1000;
     match s {
@@ -462,14 +475,13 @@ impl Daemon {
             if s.kind() == SessionKind::Agent && t.from != Some(AgentStatus::Blocked) {
                 self.snapshot_turn(s);
             }
-            // Someone answered, or it got going again: what it wanted is no longer pending.
-            let had = s
-                .meta
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .attention
-                .take()
-                .is_some();
+            // Someone answered, or it got going again: what it wanted is no longer pending. What
+            // is for you (a reviewer's question, a gate, a message) stays until you look.
+            let had = {
+                let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let agents = m.attention.as_ref().is_some_and(|a| about_the_agent(a.kind));
+                agents && m.attention.take().is_some()
+            };
             if had {
                 let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(s) });
             }
@@ -504,16 +516,21 @@ impl Daemon {
         if s.is_quick() && kind != AttentionKind::Blocked {
             return;
         }
-        {
+        let replaced = {
             let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            // Keep the more urgent one if it's still pending.
-            if m.attention.as_ref().is_some_and(|a| a.kind < kind) && kind != AttentionKind::Exited
-            {
-                return;
+            // Keep the more urgent one on the session if it's still pending; the new one still
+            // reaches the inbox and the notifier below (a reviewer's question must not vanish
+            // because the agent's last turn is still unseen).
+            let keep = m.attention.as_ref().is_some_and(|a| a.kind < kind)
+                && kind != AttentionKind::Exited;
+            if !keep {
+                m.attention = Some(Attention { kind, since_ms: now_ms(), text: text.clone() });
             }
-            m.attention = Some(Attention { kind, since_ms: now_ms(), text: text.clone() });
+            !keep
+        };
+        if replaced {
+            let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(s) });
         }
-        let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(s) });
         self.notify(s, kind, text).await;
     }
 
@@ -1475,6 +1492,18 @@ impl Daemon {
 mod tests {
     use super::*;
     use ptyro_core::status::StatusRecord;
+
+    #[test]
+    fn working_clears_only_what_the_agent_wanted() {
+        use AttentionKind::*;
+        for k in [Blocked, Errored, Done, Idle, Exited] {
+            assert!(about_the_agent(k), "{k:?}");
+        }
+        // A reviewer's question, a gate, a message: for you, whatever the agent does next.
+        for k in [Notification, Gate, Run] {
+            assert!(!about_the_agent(k), "{k:?}");
+        }
+    }
 
     fn t(
         from: Option<AgentStatus>,

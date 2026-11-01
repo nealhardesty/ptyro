@@ -82,8 +82,16 @@ const scenarios = {
     const sw = `[data-key="ui.clock"] .switch input`;
     await tab.waitFor("the clock switch", `!!document.querySelector(${JSON.stringify(sw)})`);
     const was = await tab.eval(`document.querySelector(${JSON.stringify(sw)}).checked`);
-    await tab.click(`[data-key="ui.clock"] .switch`);
-    await until("the config to change", () => config() !== before);
+    // (The panel repaints once its data arrives, and a click during that repaint is lost: click
+    // again only while the switch still shows the old value, so it never flips twice.)
+    await until("the config to change", async () => {
+      if (config() !== before) return true;
+      if (await tab.eval(`document.querySelector(${JSON.stringify(sw)})?.checked`) === was) {
+        await tab.click(`[data-key="ui.clock"] .switch`);
+      }
+      await sleep(700);
+      return config() !== before;
+    }, 20_000, 0);
     const after = config();
     if (!after.includes(`clock = ${!was}`)) throw new Error(`clock = ${!was} not written:\n${after}`);
     if (!after.includes("# e2e: keep this comment")) throw new Error(`a comment was lost:\n${after}`);

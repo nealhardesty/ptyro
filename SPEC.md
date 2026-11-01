@@ -1876,7 +1876,12 @@ conformance`):
 - `Idle` raises attention only after a *reliable* `Working` (confidence above low) that lasted
   `min_work`, so a heuristic blip never pings.
 - Attention clears on focus (which also marks that session's inbox entries read), on `Working`,
-  and on `ptyro answer`.
+  and on `ptyro answer`. `Working` clears only what is about the agent's own state (blocked,
+  errored, done, idle, exited); a notification, gate or run (a reviewer's question, a message for
+  you) stays until you look [fixed 2026-11-01: typing a review comment into the agent used to wipe
+  the question raised in the same poll].
+- A new attention less urgent than one still pending leaves the session's attention as it is, but
+  still goes to the inbox and the notifier [fixed 2026-11-01: it used to be dropped].
 - Prompt delivery that gave up raises a `notification` attention.
 
 **Notifier** (`notifier.rs`):
