@@ -1095,69 +1095,28 @@ pub enum Shell {
     Bash,
     Zsh,
     Fish,
+    /// PowerShell (pwsh 7+ and Windows PowerShell 5.1)
+    #[value(alias = "powershell")]
+    Pwsh,
 }
 
-/// Shell integration (SPEC §5.7): OSC 133 prompt marks (copy-mode prompt jumps, last exit status)
-/// and OSC 7 cwd. Each snippet does nothing outside ptyro (`$PTYRO` unset).
+impl Shell {
+    pub fn kind(self) -> ptyro_core::shell::ShellKind {
+        use ptyro_core::shell::ShellKind;
+        match self {
+            Self::Bash => ShellKind::Bash,
+            Self::Zsh => ShellKind::Zsh,
+            Self::Fish => ShellKind::Fish,
+            Self::Pwsh => ShellKind::Pwsh,
+        }
+    }
+}
+
+/// Shell integration (SPEC §5.7, `ptyro_core::shell`): OSC 133 prompt marks (copy-mode prompt
+/// jumps, last exit status) and the directory. Each snippet does nothing outside ptyro (`$PTYRO`
+/// unset).
 pub fn shell_init(shell: Shell) -> &'static str {
-    match shell {
-        Shell::Bash => {
-            r#"# ptyro shell integration for bash. Add to ~/.bashrc:  eval "$(ptyro shell-init bash)"
-if [ -n "$PTYRO" ] && [ -z "$__ptyro_integrated" ]; then
-  __ptyro_integrated=1
-  __ptyro_prompt() {
-    local s=$?
-    printf '\e]133;D;%s\a\e]7;file://%s%s\a\e]133;A\a' "$s" "$HOSTNAME" "$PWD"
-    return $s
-  }
-  PROMPT_COMMAND="__ptyro_prompt${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
-  PS1="$PS1\[\e]133;B\a\]"
-  # bash 4.4+: PS0 runs as a command starts; it sends the command line along.
-  if [ "${BASH_VERSINFO[0]}" -gt 4 ] || { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]}" -ge 4 ]; }; then
-    __ptyro_preexec() {
-      local c
-      c=$(HISTTIMEFORMAT= builtin history 1)
-      c="${c#*[0-9] }"; c="${c# }"; c="${c//[[:cntrl:]]/ }"
-      printf '\e]133;C;cmdline=%s\a' "${c:0:200}"
-    }
-    PS0='$(__ptyro_preexec)'"$PS0"
-  fi
-fi
-"#
-        }
-        Shell::Zsh => {
-            r#"# ptyro shell integration for zsh. Add to ~/.zshrc:  eval "$(ptyro shell-init zsh)"
-if [[ -n $PTYRO && -z $__ptyro_integrated ]]; then
-  __ptyro_integrated=1
-  autoload -Uz add-zsh-hook
-  __ptyro_precmd() {
-    local s=$?
-    printf '\e]133;D;%s\a\e]7;file://%s%s\a\e]133;A\a' "$s" "$HOST" "$PWD"
-  }
-  __ptyro_preexec() {
-    local c=${1//[[:cntrl:]]/ }
-    printf '\e]133;C;cmdline=%s\a' "${c[1,200]}"
-  }
-  add-zsh-hook precmd __ptyro_precmd
-  add-zsh-hook preexec __ptyro_preexec
-  PS1="$PS1%{"$'\e]133;B\a'"%}"
-fi
-"#
-        }
-        Shell::Fish => {
-            r#"# ptyro shell integration for fish. Add to ~/.config/fish/config.fish:  ptyro shell-init fish | source
-if set -q PTYRO; and not set -q __ptyro_integrated
-  set -g __ptyro_integrated 1
-  function __ptyro_prompt --on-event fish_prompt
-    printf '\e]133;D;%s\a\e]7;file://%s%s\a\e]133;A\a' $status (hostname) $PWD
-  end
-  function __ptyro_preexec --on-event fish_preexec
-    printf '\e]133;C;cmdline=%s\a' (string replace -ra '[[:cntrl:]]' ' ' -- "$argv[1]" | string sub -l 200)
-  end
-end
-"#
-        }
-    }
+    shell.kind().snippet()
 }
 
 /// `ls --status/--project/--workspace`.

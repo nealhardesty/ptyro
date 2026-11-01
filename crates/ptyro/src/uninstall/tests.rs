@@ -94,6 +94,11 @@ fn only_the_lines_ptyro_wrote_leave_an_rc_file() {
     }
     // A line at the very top, and the last line without its newline.
     assert_eq!(strip_rc("eval \"$(ptyro shell-init bash)\"").0, "");
+    // PowerShell's profile (WIN1).
+    let profile = "$env:EDITOR = 'nvim'\nptyro shell-init pwsh | Out-String | Invoke-Expression\nptyro completions powershell | Out-String | Invoke-Expression\n";
+    let (kept, gone) = strip_rc(profile);
+    assert_eq!(kept, "$env:EDITOR = 'nvim'\n");
+    assert_eq!(gone.len(), 2);
     assert_eq!(strip_rc("a\nsource <(ptyro completions bash)").0, "a");
 }
 

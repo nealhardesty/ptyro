@@ -2643,7 +2643,7 @@ and D must also work on Windows 11, and each task in track B under WSL2.
 
 ### Track A — PowerShell everywhere
 
-- [ ] **WIN1 PowerShell sessions, first class** (R-WIN-01, R-WIN-02, R-WIN-03) **M**
+- [x] **WIN1 PowerShell sessions, first class** (R-WIN-01, R-WIN-02, R-WIN-03) **M**
   - `ptyro shell-init pwsh` (and `powershell` as an alias):
     - `prompt` emits 133;D with the exit status (`$LASTEXITCODE` after a native command, else from `$?`), then OSC 7, then 133;A, and 133;B after the prompt text;
     - a PSReadLine Enter wrapper emits 133;C with `cmdline=` (control characters removed, 200 characters at most, as the other shells);
@@ -2665,6 +2665,22 @@ and D must also work on Windows 11, and each task in track B under WSL2.
   while a command runs and idle at the prompt with the last exit code, `[`/`]` jump between prompts
   in copy mode, and the session's directory follows `cd`, in the TUI and the web. The same holds in
   bash, zsh and fish sessions with nothing in their rc files.
+  *Built (2026-10-31):* SPEC §5.7 (the OSC 9 row) and §8.7. `ptyro_core::shell` holds the four
+  snippets and how to start each shell (bash `--init-file` with login emulation, zsh through a
+  `ZDOTDIR` that hands the user's back, fish `--init-command`, pwsh `-NoExit -Command`); the daemon
+  writes them under `<data>/integrations/shell/` and runs `Spawned.exec`, so the session keeps the
+  argv it was asked for. `[shell] command` and `[shell] integration` sit in a new Shells section of
+  the settings panel (TUI and web). A bare shell (`ptyro new -- pwsh`) is a shell session. `ptyro
+  doctor` has a "shell" section. `uninstall` takes the line out of `$PROFILE` too. Tested with
+  real bash 3.2, zsh and pwsh 7.6 (`tests/win1.rs`; fish when installed).
+  *Beyond the plan:*
+  - OSC `9;9` used to raise a desktop notification at every prompt; ConEmu's numbered OSC 9 commands are now never notifications, and `9;12` is a prompt mark (cmd.exe with clink).
+  - bash before 4.4 (macOS's own 3.2) never said `working`; a DEBUG trap now sends the command line when no other trap is set.
+  - pwsh hands `$?` and `$LASTEXITCODE` to the wrapped prompt (oh-my-posh still turns red), and tells a failed cmdlet (1) from a native program's exit code.
+  - macOS's `/etc/zshrc` would have moved `HISTFILE` into ptyro's directory; it is put back.
+
+  *Not done:* fish wasn't installed here, so only its argv is unit-tested. `-Login` is dropped
+  on Windows (Track D).
 
 ### Track B — WSL for real
 

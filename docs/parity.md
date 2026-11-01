@@ -313,7 +313,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `config rename` | `config.panel`: `R` on a member | `settings.rename`: Rename on a member's page |
 | `config schema` | waived: for programs that build forms of their own (the web app is one); people use the panel | waived: for programs that build forms of their own (the web app is one) |
 | `completions` | waived: shell setup, for typing commands in a shell | waived: shell setup on the computer, for typing commands there |
-| `shell-init` | `health` (`M`): when it's missing, a finding whose fix adds the line to your rc file | waived: a line in the computer's shell rc file, for its shells |
+| `shell-init` | `health` (`M`): with `shell.integration` off (Settings → Shells), a finding whose fix adds the line to your rc file; on (the default), every shell session ptyro starts has it already | waived: a line in the computer's shell rc file, for its shells; the setting is in More → Settings → Shells |
 | `daemon start` | waived: the TUI starts the daemon when it isn't running | waived: `serve` runs with the daemon; with no daemon there is no web app to ask |
 | `daemon stop` | `app.quit` (`C-d` after the prefix): asks, then stops every session and the daemon and exits | `daemon.stop`: More → Daemon → Stop (asks first; the app goes offline with it) |
 | `daemon restart` | `daemon.restart` (full sized; this TUI reconnects) | `daemon.restart`: More → Daemon → Restart (asks first; the app reconnects) |

@@ -356,6 +356,41 @@ impl Daemon {
         ptyro_pty::child_env(plan.strip(self.base_env.iter().cloned()), extra)
     }
 
+    /// A shell session started with ptyro's integration (SPEC §8.7): writes the files it reads
+    /// (under `integrations/shell`), adds its variables to `env`, and returns what to run. `None`
+    /// (it runs as it is) for a shell ptyro can't integrate with, or when the files can't be
+    /// written; the shell still works, without prompt marks.
+    fn shell_integration(
+        &self,
+        argv: &[String],
+        env: &mut Vec<(OsString, OsString)>,
+    ) -> Option<Vec<String>> {
+        let dir = self.paths.data.join("integrations").join("shell");
+        let zdotdir = env.iter().find(|(k, _)| k == "ZDOTDIR").map(|(_, v)| v.to_string_lossy());
+        let i = ptyro_core::shell::integrate(argv, &dir, zdotdir.as_deref())?;
+        for (path, content) in &i.files {
+            if std::fs::read_to_string(path).ok().as_deref() == Some(content.as_str()) {
+                continue;
+            }
+            let written = path
+                .parent()
+                .map_or(Ok(()), |d| {
+                    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(d)
+                })
+                .and_then(|()| std::fs::write(path, content));
+            if let Err(e) = written {
+                tracing::warn!("shell integration: {}: {e}", path.display());
+                return None;
+            }
+        }
+        env.retain(|(k, _)| !ptyro_core::shell::VARS.iter().any(|v| k == v));
+        for (k, v) in i.env {
+            env.retain(|(ek, _)| *ek != *k);
+            env.push((k.into(), v.into()));
+        }
+        Some(i.argv)
+    }
+
     /// The one way sessions start.
     pub(crate) async fn launch(self: &Arc<Self>, l: Launch) -> Result<Arc<Session>, Error> {
         // The conversation to resume goes to the agent's CLI as an argument: a client (a
@@ -521,7 +556,12 @@ impl Daemon {
                 adapter_id = Some(id);
             }
         }
-        let env = self.session_env(l.id, &plan, &l.client_env, &wt_env, &agent_env);
+        let mut env = self.session_env(l.id, &plan, &l.client_env, &wt_env, &agent_env);
+        let exec = if l.kind == SessionKind::Shell && config.shell.integration {
+            self.shell_integration(&argv, &mut env)
+        } else {
+            None
+        };
         let mut shown = plan.shown_map();
         shown.extend(wt_env.iter().cloned());
         // Agent variables can be secrets (OpenCode's server password): names only.
@@ -537,6 +577,7 @@ impl Daemon {
         let record = self.record_spec(l.id, &l.place);
         let spawned = Spawned {
             argv,
+            exec,
             kind: l.kind,
             name: l.name,
             cwd: l.cwd,

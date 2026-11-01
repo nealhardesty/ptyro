@@ -594,13 +594,21 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
   on). `Ctrl+J` works in every terminal, and `Alt+Enter` does too where Option/Alt sends Meta.
   On the web, `Shift+Enter`; with `ptyro send`, a real new line in the text (`$'one\ntwo'`). [More](docs/keys.md#several-lines-in-one-prompt).
 - **Native mouse selection:** hold Shift while dragging, or set `[ui] mouse = false`.
-- **Prompt jumps, live cwd and each shell's last command in the sidebar** need one line in
-  your shell's rc file:
-  `eval "$(ptyro shell-init zsh)"` (or `bash`; fish: `ptyro shell-init fish | source`).
+- **Shell sessions know what they're doing, with no setup.** In bash, zsh, fish and PowerShell,
+  ptyro adds its shell integration after your own startup files: prompt jumps in copy mode
+  (`[` / `]`), working and idle, each command and its exit code in the sidebar, and the live
+  directory. Nothing goes in your rc file or `$PROFILE`; `[shell] integration = false` turns it
+  off. For a shell ptyro didn't start: `eval "$(ptyro shell-init zsh)"` (or `bash`; fish:
+  `ptyro shell-init fish | source`; PowerShell: `ptyro shell-init pwsh | Out-String | Invoke-Expression`).
+- **PowerShell:** `ptyro new -- pwsh` starts a PowerShell session (any bare bash, zsh, fish or
+  pwsh is a shell session), or make it the default with
+  `ptyro config set shell.command "pwsh -Login"`. Your prompt (oh-my-posh, starship, your own)
+  keeps drawing; ptyro only adds its marks around it. `ptyro … --json | ConvertFrom-Json` gives
+  you objects.
 - **Completions:** `source <(ptyro completions zsh)` (or bash, fish…). **Start at login:**
   `ptyro daemon install-service` (systemd or launchd).
 - **Something odd?** A `⚕` in the status bar means the doctor found something: `Ctrl-Q M` lists
-  it, each with its fix (the shell-init line, tmux options, a login, a daemon upgrade). Or run
+  it, each with its fix (tmux options, a login, a daemon upgrade). Or run
   `ptyro doctor`. `ptyro daemon logs` shows the daemon's log, and
   `PTYRO_LOG=debug` makes it chatty. `Ctrl-Q C-l` redraws the screen.
 - **Which version is this, and where do I report it?** `ptyro about` (`Ctrl-Q I` in the TUI,

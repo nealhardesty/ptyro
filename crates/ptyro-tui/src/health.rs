@@ -111,19 +111,15 @@ pub fn finding(c: &Check) -> Option<Finding> {
 }
 
 /// The shell's rc file and the line that sets up ptyro's integration in it, when it's missing:
-/// prompt marks (copy-mode jumps), the live directory and each command in the sidebar.
-pub fn shell_init_missing() -> Option<(PathBuf, String)> {
-    let shell = std::env::var("SHELL").ok()?;
-    let home = PathBuf::from(std::env::var_os("HOME")?);
-    let (rc, line) = if shell.ends_with("zsh") {
-        (home.join(".zshrc"), "eval \"$(ptyro shell-init zsh)\"")
-    } else if shell.ends_with("bash") {
-        (home.join(".bashrc"), "eval \"$(ptyro shell-init bash)\"")
-    } else if shell.ends_with("fish") {
-        (home.join(".config/fish/config.fish"), "ptyro shell-init fish | source")
-    } else {
+/// prompt marks (copy-mode jumps), the live directory and each command in the sidebar. Only when
+/// `shell.integration` is off: on (the default), ptyro adds it to the shells it starts.
+pub fn shell_init_missing(config: &ptyro_core::config::Config) -> Option<(PathBuf, String)> {
+    if config.shell.integration {
         return None;
-    };
+    }
+    let shell = config.shell.command.first().cloned().or_else(|| std::env::var("SHELL").ok())?;
+    let home = PathBuf::from(std::env::var_os("HOME")?);
+    let (rc, line) = ptyro_core::shell::ShellKind::of_program(&shell)?.rc_line(&home);
     let text = std::fs::read_to_string(&rc).unwrap_or_default();
     (!text.contains("ptyro shell-init")).then(|| (rc, line.to_owned()))
 }
@@ -182,7 +178,7 @@ impl App {
             return;
         }
         let mut findings: Vec<Finding> = checks.iter().filter_map(finding).collect();
-        if let Some((rc, line)) = shell_init_missing() {
+        if let Some((rc, line)) = shell_init_missing(&self.config) {
             findings.push(Finding {
                 problem: false,
                 what: "shell integration".into(),

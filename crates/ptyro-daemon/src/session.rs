@@ -209,6 +209,9 @@ pub struct Session {
 
 pub struct Spawned {
     pub argv: Vec<String>,
+    /// What actually runs, when it isn't `argv`: a shell started with ptyro's integration
+    /// (SPEC §8.7). The session keeps `argv`, so a restart integrates afresh.
+    pub exec: Option<Vec<String>>,
     pub kind: SessionKind,
     pub name: String,
     pub cwd: PathBuf,
@@ -340,7 +343,7 @@ fn new_meta(
 impl Session {
     pub fn spawn(id: SessionId, s: Spawned, hub: Hub) -> std::io::Result<Arc<Self>> {
         let child = ptyro_pty::spawn(ptyro_pty::SpawnRequest {
-            argv: &s.argv,
+            argv: s.exec.as_deref().unwrap_or(&s.argv),
             cwd: &s.cwd,
             env: s.env,
             size: s.size,

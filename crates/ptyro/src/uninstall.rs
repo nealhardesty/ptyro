@@ -265,12 +265,13 @@ pub fn rc_files(env: &Env) -> Vec<PathBuf> {
         home.join(".bash_profile"),
         home.join(".profile"),
         conf.join("fish/config.fish"),
+        conf.join("powershell/Microsoft.PowerShell_profile.ps1"),
     ]
 }
 
 fn rc_line_re() -> regex::Regex {
     regex::Regex::new(
-        r#"^\s*(eval "\$\(ptyro shell-init (zsh|bash)\)"|ptyro shell-init fish \| source|source <\(ptyro completions (zsh|bash)\)|ptyro completions fish \| source)\s*$"#,
+        r#"^\s*(eval "\$\(ptyro shell-init (zsh|bash)\)"|ptyro shell-init fish \| source|ptyro (shell-init pwsh|completions powershell) \| Out-String \| Invoke-Expression|source <\(ptyro completions (zsh|bash)\)|ptyro completions fish \| source)\s*$"#,
     )
     .expect("a fixed pattern")
 }

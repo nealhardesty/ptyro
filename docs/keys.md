@@ -270,7 +270,7 @@ through ptyro too).
 | `gg` / `G` | top / bottom (`gg` at the top loads older history from the recording) |
 | `C-u` / `C-d`, `C-b` / `C-f` (`PageUp` / `PageDown`), `C-y` / `C-e` | half page / page / line |
 | `/` / `?`, then `n` / `N` | search forward / backward, next / previous match |
-| `[` / `]` (or `{` / `}`) | previous / next shell prompt (needs `ptyro shell-init`) |
+| `[` / `]` (or `{` / `}`) | previous / next shell prompt (bash, zsh, fish and PowerShell sessions) |
 | `v` / `V` / `C-v` | select characters / lines / a block (`o` jumps to the other end) |
 | `y` or `⏎` / `Y` | copy the selection / the line to your terminal's clipboard (works over SSH and in tmux) |
 | `a` | add the selection to the scratchpad, quoted, as a note |

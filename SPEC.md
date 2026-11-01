@@ -661,7 +661,8 @@ XTVERSION (`DCS > | ptyro <ver> ST`), `CSI 16 t`, XTGETTCAP.
 | BEL | attention hint (configurable) |
 | OSC 0/2 title | pane title; Gemini's dynamic title encodes Ready/Action Required/Working (§8.6) |
 | OSC 7 cwd | session cwd without polling |
-| OSC 133 A/B/C/D (shell integration) | prompt marks → jump-to-prompt in scrollback, command exit status for shell sessions. **[built M2]** Marks are stored *inside the grid*: at 133;A the daemon splits the batch and injects an invisible OSC 8 hyperlink (`ptyro:prompt`) that it closes at B/C/D or at the next newline. alacritty keeps hyperlinks per cell through scrolling and reflow, so the mark travels with its line into history, where line numbers can't follow. Rows carry `prompt: true` in frames and scrollback documents. Caveat: a program's own hyperlink that is open at that moment ends there. `ptyro shell-init bash\|zsh\|fish` prints the snippets; they do nothing outside ptyro. |
+| OSC 133 A/B/C/D (shell integration) | prompt marks → jump-to-prompt in scrollback, command exit status for shell sessions. **[built M2]** Marks are stored *inside the grid*: at 133;A the daemon splits the batch and injects an invisible OSC 8 hyperlink (`ptyro:prompt`) that it closes at B/C/D or at the next newline. alacritty keeps hyperlinks per cell through scrolling and reflow, so the mark travels with its line into history, where line numbers can't follow. Rows carry `prompt: true` in frames and scrollback documents. Caveat: a program's own hyperlink that is open at that moment ends there. **[built WIN1]** Shell sessions get the snippets with no setup (§8.7); `ptyro shell-init bash\|zsh\|fish\|pwsh` prints them for other shells; they do nothing outside ptyro. |
+| OSC 9;*n* (ConEmu's numbered commands) | **[built WIN1]** OSC 9 is two things: `9;<text>` is a notification (iTerm2), and `9;<digits>[;…]` is one of ConEmu's commands. `9;4` is progress; `9;9;<path>` is the directory (Windows Terminal uses it too, so a prompt set up for Windows Terminal reports it in ptyro unchanged): a POSIX path as it is, and in WSL a Windows path mapped (`C:\src` → `/mnt/c/src` under `[automount] root` from `/etc/wsl.conf`, `\\wsl.localhost\<distro>\p` → `/p`); elsewhere a Windows path is ignored. `9;12` is a prompt start (clink, cmd.exe), like 133;A. Every other number (sleep, message box, run a program…) is dropped, never shown as a notification. Before WIN1, `9;9` raised a notification at every prompt. |
 | OSC 52 clipboard | forwarded to the controlling client if `clipboard.allow_write` (default on); writes over 1 MiB dropped by the emulator; reads always denied. The TUI writes it to its own terminal's clipboard only, never to its paste buffer (`]` pastes only your own yanks) |
 | OSC 8 hyperlinks | preserved per cell; clients render as links |
 | OSC 9;4 progress (ConEmu) | progress bar in pane border (Claude `terminalProgressBarEnabled`) |
@@ -1645,9 +1646,46 @@ has the raw `model`); the web shows it in a session's card, its header pill and 
 
 ### 8.7 Shell and generic adapters
 
-- `shell`: `$SHELL -l`; OSC 133/OSC 7 support if the user's shell emits them (ptyro ships optional
-  shell-integration snippets for bash/zsh/fish, `ptyro shell-init <shell>`). Status: `idle` at
-  prompt, `working` while a command runs (from OSC 133), else unknown.
+- `shell`: `[shell] command`, else `$SHELL -l`. A bare bash, zsh, fish or PowerShell (`ptyro new
+  -- pwsh`, with at most login, interactive, no-banner or `-NoProfile` switches) is a shell
+  session too, not a command (`ptyro_core::shell::interactive`). Status: `idle` at prompt,
+  `working` while a command runs (from OSC 133), else unknown.
+
+**[built WIN1] Shell integration with no setup** (`ptyro_core::shell`, `[shell] integration`,
+default on). When a shell session starts, the daemon writes the snippets under
+`<data>/integrations/shell/` and starts the shell so that it reads the user's own startup files
+first and ptyro's snippet last. The session keeps the argv it was asked for (`Spawned.exec` is what
+runs), so a restart integrates afresh:
+  - **bash:** `bash --init-file <dir>/bash-init -i`. For a login shell (`-l`, with
+    `PTYRO_BASH_LOGIN=1`) the init file reads `/etc/profile` and the first of `~/.bash_profile`,
+    `~/.bash_login`, `~/.profile`, as bash would; otherwise `~/.bashrc`. `$0` is `bash`, not
+    `-bash`.
+  - **zsh:** `ZDOTDIR=<dir>/zsh` (the user's own in `PTYRO_ZDOTDIR`, or `PTYRO_ZDOTDIR_UNSET`).
+    ptyro's `.zshenv`, `.zprofile` and `.zshrc` each source the user's file with `ZDOTDIR` set
+    back to theirs (their `.zshenv` may move it), then point it at ptyro's again. `.zshrc`, the
+    last one read from there, loads the snippet and leaves `ZDOTDIR` as the user had it (unset, if
+    it was), so `.zlogin` and every child see theirs. macOS's `/etc/zshrc` sets `HISTFILE` from
+    `ZDOTDIR` while it points at ptyro's; `.zshrc` puts it back.
+  - **fish:** `--init-command 'source <dir>/ptyro.fish'`, which runs after fish's config.
+  - **PowerShell:** `pwsh [-Login] [the user's switches] -NoLogo -NoExit -Command ". '<dir>/ptyro.ps1'"`,
+    which runs after `$PROFILE`. The snippet wraps the prompt rather than replacing it
+    (oh-my-posh, starship and the user's own keep drawing, and are handed `$?` and
+    `$LASTEXITCODE` as the command left them). The exit status is 0 on success, else a native
+    program's `$LASTEXITCODE`, else 1: a cmdlet failed, which shows as a new `$Error` entry with
+    `$LASTEXITCODE` unchanged since the command started. 133;C with the command line comes from
+    wrapping PSReadLine's `PSConsoleHostReadLine`. The directory is OSC 7 on macOS and Linux and
+    OSC 9;9 on Windows, only for a FileSystem location. It also runs on Windows PowerShell 5.1:
+    no `` `e ``, no `$IsWindows`.
+  - **bash before 4.4** (macOS's 3.2) has no `PS0`. A DEBUG trap sends 133;C for the first
+    command after a prompt, but only when no other DEBUG trap is set. Before WIN1, bash on a Mac
+    never said `working`.
+
+  Every snippet guards on `PTYRO` and `__ptyro_integrated`, so a `shell-init` line in an rc file
+  and the automatic one never stack. When the files can't be written the shell starts as it is
+  (logged). Off (`[shell] integration = false`), the TUI's health check offers the rc line again,
+  and `ptyro doctor`'s "shell" section reports it as a note. That section also says which shell
+  new sessions run, whether integration reaches it, and that PowerShell is installed when it
+  isn't the default.
 - `generic`: any user-defined agent command. Status from OSC 7501 (if the program speaks it),
   OSC 9 notifications, BEL, and the activity heuristic (§9.3).
 
@@ -2756,8 +2794,8 @@ learning anything up front.
   - an agent: `task`, its first prompt, and once its turn ends, `last`, its reply;
   - a shell: `now` its running command and for how long, or `last` the one that finished, with
     its exit (`✓`, `✗101`), duration and age. `ptyro shell-init` now sends the command line
-    with OSC 133 `C` (`cmdline=`; kitty's `cmdline_url=` is read too): zsh and fish always,
-    bash from 4.4 (`PS0`), which before had no `C` mark at all;
+    with OSC 133 `C` (`cmdline=`; kitty's `cmdline_url=` is read too): zsh, fish and PowerShell
+    always, bash from 4.4 (`PS0`) and, since WIN1, older bash through a DEBUG trap;
   - exited: its exit and age, `⏎ restart`; dormant: `⏎ resumes it`.
 
   `[ui] sidebar_detail`: `auto` (the default) opens every row while they all fit, else only
@@ -2901,7 +2939,8 @@ learning anything up front.
   a lower scope. The help overlay's footer and the web's More page show the version.
 - **The health badge** (UX1.20, `crates/ptyro-tui/src/health.rs`): `ptyro doctor --quick --json`
   runs in the background 20 s after attaching and every 10 min; its warnings and problems, plus a
-  missing `ptyro shell-init` line in your shell's rc file (the TUI's own check), show as `⚕ N` in
+  missing `ptyro shell-init` line in your shell's rc file (the TUI's own check, only with
+  `[shell] integration = false` since WIN1), show as `⚕ N` in
   the status bar (red with a problem), announced once when there are more. `health` (`M`)
   lists them, ⏎ fixes one: a tmux option set now and offered for `~/.tmux.conf`; `chmod 600`;
   a line appended to a file (asked first); or the `` `ptyro …` `` command the finding names
@@ -3248,7 +3287,7 @@ ptyro daemon start [--foreground]|stop [--force|--hibernate]|restart|status|logs
              |upgrade|install-service|uninstall-service
 ptyro gc [--dry-run]
 ptyro completions bash|zsh|fish        # dynamic: completes live session/worktree names
-ptyro shell-init bash|zsh|fish         # optional OSC 7/133 snippets
+ptyro shell-init bash|zsh|fish|pwsh    # OSC 7/133 snippets for shells ptyro didn't start (§8.7)
 ptyro hook <adapter> <event>           # internal; used by agent integrations
 ptyro proxy                            # internal; stdio⇄socket bridge for ssh remote (§16.2)
 ptyro mcp                              # MCP server exposing ptyro to agents (§15.4)
