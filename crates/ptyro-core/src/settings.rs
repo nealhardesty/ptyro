@@ -328,6 +328,12 @@ pub const SECTIONS: &[Section] = &[
         scope: Scope::User,
     },
     Section {
+        id: "shells",
+        title: "Shells",
+        blurb: "The shell ptyro starts, and what it adds to it.",
+        scope: Scope::User,
+    },
+    Section {
         id: "daemon",
         title: "Daemon and recording",
         blurb: "The background service, scrollback and recordings.",
@@ -751,6 +757,9 @@ pub const SETTINGS: &[Setting] = &[
     s("editors.*.command", "scratchpad", Kind::Argv, "The program and arguments; {path} is the worktree."),
     s("editors.*.inside", "scratchpad", Kind::Bool, "Open it as a ptyro session, for terminal editors."),
     // ── Daemon and recording ──
+    // ── Shells ──
+    s("shell.command", "shells", Kind::Argv, "The shell new shell sessions run, like `pwsh -Login` for PowerShell. A bare bash, zsh, fish or PowerShell started any other way is a shell session too.").also("powershell pwsh zsh bash fish login terminal").or("your login shell").eg("pwsh -Login").new_only(),
+    s("shell.integration", "shells", Kind::Bool, "Add ptyro's shell integration to the bash, zsh, fish and PowerShell sessions it starts, after your own startup files: prompt jumps in copy mode, working and idle, each command and its exit code, and the directory. Nothing to add to your rc file or $PROFILE.").also("osc 133 prompt marks shell-init profile rc").new_only(),
     s("daemon.scrollback_lines", "daemon", int(0, 1_000_000), "How many lines of history each session keeps to scroll back through. A very wide session keeps fewer, so one never holds more than 4 million cells (20,000 lines at 200 columns).").new_only().unit("lines"),
     s("daemon.frame_interval_ms", "daemon", int(1, 1000), "The shortest wait between screen updates sent to a client. Lower is smoother and busier.").adv().new_only().unit("ms"),
     s("daemon.log_level", "daemon", pick(LOG_LEVEL), "How much the daemon writes to its log. (PTYRO_LOG, when set, wins.)"),

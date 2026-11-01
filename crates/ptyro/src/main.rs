@@ -791,7 +791,7 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Print shell integration (prompt marks and cwd reporting) for your shell's rc file
+    /// Print shell integration (prompt marks, status, directory) for a shell ptyro did not start (ptyro adds it to its own)
     ShellInit {
         #[arg(value_enum)]
         shell: cli::Shell,

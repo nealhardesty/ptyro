@@ -129,6 +129,7 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Repor
     daemon(ctx, &config, quick, &mut r).await;
     remote(ctx, &config, &mut r);
     scratchpad(ctx, &config, &mut r);
+    shell(&config, &mut r);
     if terminal_too {
         terminal(&mut r).await;
     }
@@ -136,6 +137,89 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Repor
     agents(&config, &mut r).await;
     profiles(ctx, &config, None, &mut r).await;
     r
+}
+
+/// Shell sessions (WIN1, SPEC §8.7): the shell they run exists, and whether ptyro's integration
+/// reaches it. A PowerShell that's installed but not the default is mentioned, with how to use it.
+fn shell(config: &Config, r: &mut Report) {
+    use ptyro_core::shell::ShellKind;
+    const S: &str = "shell";
+    let argv = if config.shell.command.is_empty() {
+        vec![
+            std::env::var("SHELL")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "/bin/sh".into()),
+            "-l".into(),
+        ]
+    } else {
+        config.shell.command.clone()
+    };
+    let prog = &argv[0];
+    let found = if prog.contains('/') { Path::new(prog).is_file() } else { which(prog).is_some() };
+    if !found {
+        r.add(
+            S,
+            "command",
+            Level::Problem,
+            format!("{prog} not found: new shell sessions can't start (install it, or set [shell] command)"),
+        );
+        return;
+    }
+    r.add(S, "command", Level::Ok, format!("new shell sessions run `{}`", argv.join(" ")));
+    let kind = ptyro_core::shell::interactive(&argv);
+    match (config.shell.integration, kind) {
+        (true, Some(k)) => r.add(
+            S,
+            "integration",
+            Level::Ok,
+            format!("added to the {} sessions ptyro starts: prompt jumps, working/idle, each command and the directory", k.name()),
+        ),
+        (true, None) => r.add(
+            S,
+            "integration",
+            Level::Note,
+            if ShellKind::of_program(prog).is_some() {
+                format!(
+                    "not added to `{}`: only to a bare bash, zsh, fish or PowerShell, with at most login switches",
+                    argv.join(" ")
+                )
+            } else {
+                format!(
+                    "ptyro has none for `{}` (it has bash, zsh, fish and PowerShell): prompt jumps, status and the directory need a shell that sends OSC 133 and OSC 7 itself",
+                    argv.join(" ")
+                )
+            },
+        ),
+        (false, k) => {
+            let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+            let rc = k.map(|k| k.rc_line(&home));
+            let has = rc.as_ref().is_some_and(|(f, _)| {
+                std::fs::read_to_string(f).is_ok_and(|t| t.contains("ptyro shell-init"))
+            });
+            let text = match (&rc, has) {
+                (Some((f, _)), true) => format!("off; {} sets it up instead", f.display()),
+                (Some((f, line)), false) => format!(
+                    "off, and not in {}: shell sessions have no prompt marks (turn [shell] integration back on, or add `{line}` there)",
+                    f.display()
+                ),
+                (None, _) => "off".to_owned(),
+            };
+            // A choice, not a fault: a note (the TUI's own finding offers to add the line).
+            r.add(S, "integration", Level::Note, text);
+        }
+    }
+    if kind != Some(ShellKind::Pwsh)
+        && let Some(p) =
+            ["pwsh", "pwsh-preview", "powershell"].into_iter().find(|p| which(p).is_some())
+    {
+        r.add(
+            S,
+            "powershell",
+            Level::Note,
+            format!("{p} is installed: `ptyro new -- {p}` starts a PowerShell session, or make it the default with `ptyro config set shell.command \"{p} -Login\"`"),
+        );
+    }
 }
 
 /// The scratchpad (NOTE1): the file can be written, and there is a terminal editor for its pane.

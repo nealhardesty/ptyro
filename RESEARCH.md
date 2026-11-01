@@ -29,6 +29,7 @@ Nothing here is a commitment. An idea becomes work only when it is promoted into
   (+ protocol landscape) · D. Cloud/async agents · E. Remote & mobile · F. Orchestration products ·
   G. Agent CLIs & adjacent tooling · H. Chat clients and conversation history
 - **Deep dives — herdr and tuios:** DD1 herdr · DD2 tuios (identity, architecture, status model, OSC 7501 interop, head-to-head, ideas)
+- **Deep dive — Windows and PowerShell:** DD3 (how others ship on Windows, platform facts, ptyro's Unix surface, design options, stages)
 - **Part II — Orchestration deep dive:** practitioners · research evidence · workflow engines ·
   coordination protocols · synthesis (recipe primitives, `ptyro mcp`, mailbox, delivery, M10)
 - **Part III — Idea funnel:** Top 15 · full catalogue (R-ids) · not recommended
@@ -581,6 +582,10 @@ Parallel Code (MIT, Electron/SolidJS), FleetCode, ChatML — confirm commoditisa
 - **URL:** https://github.com/microsoft/terminal · MIT · 1.24 stable / 1.25 preview (2026-03) [V]
 - **Special:** mode 2026 synchronized output (1.24); **kitty keyboard protocol** in 1.25 preview (Shift+Enter for agents); taskbar OSC 9;4 [U].
 - **Idea:** forward aggregate progress via OSC 9;4 when `WT_SESSION` is set (WSL users).
+- **Shell integration [V 2026-10-31]:** OSC 133 A/B/C/D (marks stable since 1.21, D colours the
+  mark by exit code) and **OSC 9;9 for the directory** (a Windows path; Duplicate Tab and Split
+  Pane use it). Microsoft documents a PowerShell `prompt` wrapper and a cmd.exe `PROMPT` string.
+- **More ideas (2026-10-31):** accept OSC 9;9 (R-WIN-03); open a session in a new WT tab (R-WIN-07); see DD3.
 
 #### C13. Rio and Tabby (minor)
 - **Rio** (MIT, Rust+wgpu, WASM build `librio-wasm`, ≈7.6k★): no agent/persistence features; its WASM path could inform an M9 canvas renderer.
@@ -2024,6 +2029,192 @@ New or sharper ideas:
 - [newreleases.io v0.8.0](https://newreleases.io/project/github/Gaurav-Gosain/tuios/release/v0.8.0)
 ---
 
+## Deep dive — Windows and PowerShell (DD3)
+
+*Added 2026-10-31 after the owner asked: "what would it take to support PowerShell on Windows as a
+first-class thing?" Sources: the products' own docs, posts and issue trackers (web, 2026-10-31), the
+herdr and tuios deep dives above, and a scan of ptyro's code at commit `83e6092` (v0.0.41). Nothing
+was built or run on Windows. Tags as everywhere: **[V]** primary source, **[S]** secondary, **[U]**
+uncertain, inferred or from memory.* Ideas: **R-WIN-01…20** (Part III). Roadmap: **WIN**.
+
+**What this changes in the picture:**
+
+1. **"WSL2 should work" was never tested, and one report goes against ptyro's core promise
+   there.** Since WSL 2.5.7 (2025), several users report that the distro or its VM stops 15–20 s
+   after the last terminal window closes, *even with a systemd service running* (microsoft/WSL
+   #13291, #13416) [S]. If that holds on current WSL, closing Windows Terminal kills the daemon
+   and every agent in it: the opposite of "sessions survive closed terminals". This is the first
+   thing to check (WIN0.1), before any Windows-native work.
+2. **Windows is now expected from ptyro's closest competitors.**
+   - herdr went GA on Windows in 0.8.2 (2026-08-19): ConPTY through a patched portable-pty, named pipes [V, DD1].
+   - Zellij 0.44 runs natively [V].
+   - tuios runs on native ConPTY, with PowerShell bugs still open [V, DD2].
+
+   The agents got there before the multiplexers:
+   - Claude Code no longer needs Git Bash. Without it, it uses a PowerShell tool (changelog 2.1.120, quoted in anthropics/claude-code #53068) [S].
+   - Codex runs natively in PowerShell with its own Windows sandbox, still labelled experimental in 2026-03 [S].
+3. **"PowerShell first class" is two projects, and the cheap one helps every platform.** `pwsh`
+   runs on macOS and Linux too. Prompt marks, working/idle, the last exit status and directory
+   tracking for PowerShell sessions (R-WIN-01…03) need no Windows machine and can ship this week.
+4. **The cost sits in two places, the PTY and the live upgrade, not in the size of the code.**
+   The scan finds about 640 Unix-specific references in about 150k lines. Three quarters of them
+   are in three crates: `ptyro` (CLI and its tests), `ptyro-daemon` and `ptyro-pty`. `ptyro-drive`
+   and `ptyro-meaning` have none, and `ptyro-run` and `ptyro-protocol` have 2–3. The TUI is built
+   on crossterm, which is portable, and has 17. The web client is served by the daemon and doesn't
+   care.
+5. **A native Windows client is nearly free.** `--remote` already carries the protocol over a
+   child process's stdio (`ssh host ptyro proxy`, `crates/ptyro-client/src/remote.rs`). `wsl.exe
+   -d Ubuntu -- ptyro proxy` has the same shape, which gives a native Windows Terminal TUI on a
+   daemon in WSL with no ConPTY at all (R-WIN-06).
+
+### DD3.1 How the others did it
+
+| Product | How it runs on Windows | What to take | Tag |
+|---|---|---|---|
+| **herdr** | ConPTY through a vendored, patched `portable-pty` 0.9.0. A named pipe instead of the Unix socket. On macOS and Windows, state is saved at shutdown. Installs with `install.ps1` and `install.cmd`. | One codebase can do it: the PTY layer and the transport are the only parts that fork. A PowerShell installer is expected. | [V 2026-10-20, DD1] |
+| **Zellij 0.44** | Native Windows, contributed by the community. The release post gives no internals. An earlier unofficial port (`arndawg.zellij-windows`, 0.43.1) used "a ConPTY helper process for reliable Ctrl+C" and "per-user ACL-secured named pipes". | Ctrl+C through ConPTY needs care. The pipe needs a user-only DACL. | [V] post, [S] port |
+| **tuios** | Native ConPTY. The PowerShell working-directory bug (#491) is one of its most discussed issues. | Directory tracking in pwsh is a known trap, so take the directory from the shell's own OSC, not from the process. | [V, DD2] |
+| **Warp** (post of 2025-01-22) | About five engineers from 2024-04. It forked and bundled ConPTY, and wrote a new PowerShell integration from scratch. Starting subprocesses in Git Bash was slow, so its bash hooks spawn fewer. | ConPTY **drops unknown DCS** sequences, **passes unknown OSC** sequences, can **emit sequences out of order** (an OSC can land in the middle of text), and **caches its own grid**. Warp moved all its shell signals from DCS to OSC. ptyro's status signals are all OSC (7501, 133, 9, 777, 7, 52), but anything ptyro gets through DCS must be checked, and prompt marks depend on ordering (§5.7 injects at 133;A). | [V] |
+| **WezTerm** | Ships its own `conpty.dll` and `OpenConsole.exe` beside its executable. | Bundling a newer ConPTY than the one in Windows is an established pattern. | [U] |
+| **running-process** (Rust crate) | `PSEUDOCONSOLE_PASSTHROUGH_MODE` (0x8) is honoured only on Windows 11 (build 22000+) and Server 2022+, and silently ignored on Windows 10. A `conpty.dll` from Microsoft's NuGet package gives a newer ConPTY on older hosts. | Require Windows 11 and test passthrough mode in the spike. | [S] |
+| **Windows Terminal** | Shell integration: OSC 133 A/B/C/D (marks stable since 1.21), and **OSC 9;9 for the directory** (a Windows path; Duplicate Tab and Split Pane use it). Microsoft documents a PowerShell `prompt` wrapper and a `PROMPT` string for cmd.exe. Kitty keyboard protocol in the 1.25 preview (C12). | ptyro should accept OSC 9;9, so prompts already set up for Windows Terminal work in ptyro unchanged. Microsoft's wrapper gives the shape of the pwsh snippet. | [V] |
+| **Claude Code** | Native Windows. Uses Git Bash when found (or `CLAUDE_CODE_GIT_BASH_PATH`), otherwise a PowerShell tool (2.1.120). Hooks can declare `"shell": "bash"` or `"powershell"`. In 2.1.224 a bash hook failed when Git Bash wasn't found (fixed). Sources disagree on whether PowerShell became the default in 2.1.139. | The hooks ptyro installs must run under either shell. Quote paths, which often contain spaces (`C:\Users\First Last\…`). | [S] |
+| **Codex** | Native in PowerShell with a Windows sandbox (restricted tokens, filesystem ACLs, dedicated sandbox users; elevated and unelevated modes), or in WSL2. Windows 11 recommended. WSL1 dropped in 0.115 (bubblewrap). Experimental as of 2026-03. | Adapters need Windows paths and an idea of which sandbox mode is in use. WSL1 is not worth supporting. | [S] |
+| **oh-my-posh / starship** | Prompt engines that emit OSC 133 for pwsh when enabled. | Many pwsh users get prompt marks without ptyro's snippet, so the snippet must not double them. | [U] |
+
+### DD3.2 Platform facts that shape the design
+
+**ConPTY and consoles**
+- ConPTY needs Windows 10 1809 or later. The calls are `CreatePseudoConsole`, `ResizePseudoConsole` (there is no SIGWINCH) and `ClosePseudoConsole`. conhost sits between the child and ptyro and **re-renders** the output, so the bytes ptyro reads are not exactly the bytes the child wrote [S].
+- Windows 10 support ended on 2025-10-14 [V]. Supporting Windows 11 only is defensible, and passthrough mode requires it anyway [S].
+- An HPCON is an opaque pointer to handles on conhost's side, not one kernel handle. Unlike a file descriptor, there is no documented way to pass it to a new process [U]. So the live upgrade (§4.5: `execve` plus inherited descriptors) has no direct port (WIN0.3).
+- **Ctrl+C** is the byte 0x03 written to ConPTY's input, which conhost turns into `CTRL_C_EVENT` for attached processes [U]. The unofficial Zellij port needed a helper to make it reliable [S].
+- There is no SIGHUP. Closing the pseudoconsole sends `CTRL_CLOSE_EVENT` [U].
+
+**Processes**
+- Job Objects (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) replace process groups for killing a session's whole tree [S].
+- There is no `tcgetpgrp`. To find the foreground process, walk the tree from the shell's pid (Toolhelp32), or call `GetConsoleProcessList` from a helper attached to that console [U]. UX1.4 (an agent started by hand in a shell) depends on this.
+- Another process's working directory can only be read from its PEB, which is fragile. Prefer the shell's own OSC 7 or OSC 9;9.
+- **Restart Manager** (`RmStartSession`, `RmRegisterResources`, `RmGetList`) names the processes holding a file. It is the Windows answer to the `lsof` call in v0.0.41's "chat.db in use by …" [V].
+- `GetExtendedTcpTable` with `TCP_TABLE_OWNER_PID_LISTENER` lists listening ports and their owners. It is the Windows backend for `ptyro-pty/src/ports.rs` [V].
+- `.cmd`/`.bat`: Rust's std has escaped arguments for batch files since 1.77.2 (CVE-2024-24576, "BatBadBut") [V]. A ConPTY spawn goes through raw `CreateProcessW`, so ptyro must resolve PATHEXT itself and wrap `.cmd` in `cmd.exe /d /c` with the same care. npm installs agent CLIs as `.cmd` and `.ps1` shims [S].
+
+**Files and paths**
+- `std::fs::File::lock` (Rust 1.89) is cross-platform and replaces `flock`/`fcntl` locks [S].
+- Files under the user profile inherit a user-only ACL, so "mode 0600" becomes "check the ACL, warn if it is wider" [U].
+- Symlinks need Developer Mode or admin rights (`SeCreateSymbolicLinkPrivilege`). Junctions don't, but they work for directories only [S].
+- The path limit is 260 characters unless `LongPathsEnabled` is set and the executable's manifest opts in. Git needs `core.longpaths=true`. Deep worktree paths hit the limit [S].
+- **Dev Drive** (ReFS with Defender's performance mode) makes git-heavy work faster on Windows 11. Defender's real-time scanning is the usual cause of slow `git worktree add` [S].
+- Case-insensitive names (`C:\Repo` and `c:\repo` are the same project), drive letters, UNC paths (`\\wsl$\…`), and `NUL` instead of `/dev/null` (`ptyro-git` passes `core.hooksPath=/dev/null`).
+
+**Transport, start-up, alerts**
+- Named pipes: `tokio::net::windows::named_pipe` [V]. Identify the client with `GetNamedPipeClientProcessId`, use a DACL with the user's SID only, and set `PIPE_REJECT_REMOTE_CLIENTS`. AF_UNIX has existed on Windows since 10 1803, but tokio doesn't support it and it can't pass handles [S].
+- A running `.exe` can't be overwritten but can be renamed. Renaming it aside is the standard way to self-update [S].
+- A **Windows Service** runs in session 0 under a service account, without the user's profile, credentials or desktop, so it is wrong for agents. A per-user logon Scheduled Task (or an HKCU `Run` entry) is the equivalent of launchd and `systemd --user` [S].
+- Toast notifications need an AppUserModelID, normally provided by a Start-menu shortcut that the installer creates [S].
+
+**WSL**
+- Repos on `/mnt/c` go through 9P: slow, and file watching across it is unreliable [S].
+- Interop from Linux: `WSL_DISTRO_NAME`, `wslpath -w`, and Windows programs (`explorer.exe`, `powershell.exe`) can be run directly [V].
+- systemd needs `[boot] systemd=true` in `/etc/wsl.conf` [V].
+- For `ptyro serve` to reach a phone, use `networkingMode=mirrored` or a port proxy. Tailscale inside WSL works [S].
+- Idle shutdown (`vmIdleTimeout`, `instanceIdleTimeout`, and the regressions above) [S].
+
+**PowerShell**
+- Prompt marks 133 A/B/D and the directory are set in the `prompt` function.
+- PowerShell has no preexec hook. 133;C with the command line has to come from PSReadLine: wrap the Enter key handler or `PSConsoleHostReadLine` [U].
+- Exit status: native commands set `$LASTEXITCODE`, cmdlets set only `$?`. Report both sensibly [V].
+- `pwsh -NoExit -Command ". '<file>'"` runs a file after the user's `$PROFILE`, which is how ptyro can inject its integration without touching the profile [V]. `-Login` exists on Unix only [V].
+- On Windows, `powershell.exe` (5.1, built in) and `pwsh.exe` (7.x, installed separately) are different programs, with different profiles [V].
+
+### DD3.3 ptyro's Unix surface (commit `83e6092`, 2026-10-31)
+
+`ptyro-core/src/lib.rs` stops a non-Unix build on purpose with a `compile_error!` that points to WSL2.
+That check has to move from the core crate to the daemon side once the client should build
+(WIN3). Per-OS seams already exist: `ptyro-pty/src/ports.rs` and `probe.rs` (Linux/macOS),
+`ptyro-daemon/src/watchdog.rs`.
+
+Hits for Unix-only APIs and assumptions (`std::os::unix`, nix, rustix, libc, Unix sockets,
+`/proc`, `lsof`, signals, `pty_process`, `$SHELL`, `sh -c`, flock, launchd/systemd, `/dev/null`,
+`/tmp`, mode bits, symlinks), counted with grep:
+
+| Crate | Hits | Lines | Notes |
+|---|---:|---:|---|
+| `ptyro` | 265 | 37.7k | Most are tests, `service.rs` (launchd/systemd), `relay.rs`, `cs.rs`, `tour.rs` |
+| `ptyro-daemon` | 120 | 37.3k | Socket, signals, `sh -c` in verify, changesets and worktrees, notifier |
+| `ptyro-pty` | 114 | 1.4k | **The core of it:** `pty-process`, process groups, foreground process, handoff across `execve` |
+| `ptyro-core` | 46 | 13.4k | Paths, `$SHELL`, imports, scratchpad editor launch |
+| `ptyro-testkit` | 27 | 3.3k | The fake agent and harness |
+| `ptyro-tui` | 17 | 30.3k | Editor launch, keymap notes |
+| `ptyro-git` | 15 | 2.4k | `/dev/null`, `sh` |
+| `ptyro-client` | 12 | 0.8k | Unix socket, the ssh remote's `sh -c` |
+| `ptyro-term`, `-store`, `-agents`, `-protocol`, `-run` | 2–8 each | | Small |
+| `ptyro-drive`, `ptyro-meaning` | 0 | | Portable |
+
+By kind:
+
+| Kind | Size | Windows answer |
+|---|---|---|
+| `std::os::unix` / fd types | 105 refs in 52 files | `cfg` per platform, mostly mode bits and symlinks |
+| `sh -c` / `/bin/sh` / `"sh"` | 173 refs in 55 files (many in tests) | One command-shell function (R-WIN-11) |
+| `$SHELL` | 36 refs in 33 files | One default-shell function: `pwsh.exe` → `powershell.exe` → `%COMSPEC%` |
+| Mode bits (`PermissionsExt`) / symlinks | 28 / 18 | ACL check / junction or copy |
+| Unix sockets | 25 refs in 8 files | Named pipes (R-WIN-10) |
+| Signals, process groups, `setsid` | 18 refs in 12 files | Job Objects, ConPTY resize, console control events |
+| `/proc`, `lsof` | 24 refs in 6 files | Toolhelp32, Restart Manager, `GetExtendedTcpTable` (R-WIN-12) |
+| flock / fcntl | 24 refs in 4 files | `File::lock` |
+| Live upgrade (`handoff.rs`, memfd, `execve`) | 1 module | No port; restart-and-resume or holder processes (R-WIN-13) |
+| Start at login (`service.rs`) | 1 module | Per-user logon task (R-WIN-14) |
+
+### DD3.4 Design options for the hard parts
+
+1. **The PTY.**
+   - (a) `portable-pty`, as herdr does. ADR 7 (SPEC §19) rejected it for blocking reads and old dependencies.
+   - (b) Our own ConPTY backend inside `ptyro-pty`, using `windows-sys`. Reads run through overlapped pipes or one reader thread per session. `pty-process` stays on Unix.
+   - (c) As (b), plus a bundled newer `conpty.dll`/`OpenConsole.exe`.
+
+   **Suggested:** (b). Add (c) only if WIN0.2 shows the conhost built into Windows mangles what ptyro needs. `ptyro-pty`'s public functions (`spawn`, `terminate`, `signal_group`, `foreground`, `is_raw`) are already the seam.
+2. **Live upgrade and survival.**
+   - (a) None on Windows. `ptyro daemon upgrade` hibernates, restarts and resumes the agents' conversations (M4 resume), and shells start fresh.
+   - (b) **Holder processes:** `ptyro hold` is one small process per session that owns the pseudoconsole, the Job Object and the child, and serves the PTY over a private pipe. The daemon restarts and adopts the holders again. This also survives a **daemon crash**, which re-exec on Unix doesn't (zmx, shpool and dtach work this way, C14–C16). The cost is one process per session and a small second protocol.
+
+   **Suggested:** (a) first, (b) once Windows has users. Decide in WIN0.5.
+3. **What runs setup, verify, worktree and `run` commands.**
+   - (a) pwsh always: breaks every bash setup script, including the competitors' configs ptyro reads (M5.10).
+   - (b) Git Bash required: one more install, and it starts slowly (Warp).
+   - (c) A per-project `shell = auto | pwsh | bash | cmd | sh` with `auto`: `.ps1` → pwsh; `.sh` → bash (Git Bash, or the WSL distro's bash on request); an inline command → the platform's default; a missing bash offered as a fix (`winget install Git.Git`).
+
+   **Suggested:** (c), with `auto` as the default.
+4. **The default interactive shell on Windows:** `pwsh.exe` if installed, else `powershell.exe`, else `%COMSPEC%`. The user can change it in the settings panel.
+5. **The daemon's address:** a named pipe `\\.\pipe\ptyro-<hash of user SID>[-<instance>]`, user-only DACL, remote clients rejected. Paths for state and config under `%LOCALAPPDATA%\ptyro` and `%APPDATA%\ptyro`, unless the XDG variables are set.
+6. **Which Windows:** Windows 11, x64 and ARM64. Not Windows 10 (out of support, no passthrough mode), not WSL1, not Cygwin or MSYS PTYs (III.3).
+
+### DD3.5 What the owner would see, by stage
+
+| Stage | What works | Roadmap | Rough size |
+|---|---|---|---|
+| A. PowerShell everywhere | pwsh sessions with marks, status, exit codes and directory on macOS, Linux and WSL; no profile edits | WIN1 | S–M |
+| B. WSL for real | The daemon survives closed terminals (or doctor says why not and fixes it); Windows toasts; links open on Windows; `/mnt/c` warning with a fix | WIN2 | M |
+| C. Native client | `ptyro.exe` in Windows Terminal drives the WSL daemon; Windows build checked from the Mac on every change | WIN3 | L |
+| D. Native daemon | Everything on NTFS with ConPTY, pwsh as the default shell, named pipes, start at login, toasts, winget | WIN4–WIN14 | weeks to a couple of months |
+
+### DD3.6 Ideas
+
+→ **R-WIN-01…20** in Part III, "Windows and PowerShell (R-WIN)". Rejections in III.3.
+
+**DD3 sources** (read 2026-10-31):
+- Windows Terminal shell integration: https://learn.microsoft.com/en-us/windows/terminal/tutorials/shell-integration · https://devblogs.microsoft.com/commandline/shell-integration-in-the-windows-terminal
+- Warp on Windows: https://www.warp.dev/blog/building-warp-on-windows
+- ConPTY passthrough: https://github.com/microsoft/terminal/issues/1985 · https://github.com/microsoft/terminal/issues/1173 · https://docs.rs/crate/running-process/latest/source/src/pty/conpty_passthrough/mod.rs
+- Zellij 0.44: https://zellij.dev/news/remote-sessions-windows-cli/ · unofficial port: https://wingetgui.com/apps/arndawg-zellij-windows
+- Claude Code on Windows: https://github.com/anthropics/claude-code/issues/53068 · https://claudeissues.com/issue/84822-windows-hooks-with-shell-bash-fail-with-git-bash-was-not-found-when-git-is-insta
+- Codex on Windows: https://developers.openai.com/codex/app/windows · https://codex.danielvaughan.com/2026/04/01/codex-cli-windows-native-sandbox-wsl/
+- WSL idle shutdown: https://github.com/microsoft/WSL/discussions/8659 · https://github.com/microsoft/WSL/issues/13291 · https://github.com/microsoft/wsl/issues/13416
+- `File::lock`: https://github.com/rust-lang/rust/pull/148322
+- herdr and tuios: DD1, DD2 above.
+
+---
+
 ## Part II — Orchestration deep dive
 
 The owner expects multi-agent orchestration to become a compelling **daily** feature, so this part
@@ -2855,6 +3046,31 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 | R-CHAT-16 | **Per-workspace memory**: facts kept across chats and offered to new ones (Claude's memory refreshes about daily) | Claude memory [V] | Backlog | M | ★ | new |
 | R-CHAT-17 | **Export** a chat as Markdown or JSON | every app | CHAT2 | S | ★★ | → CHAT2 |
 
+#### Windows and PowerShell (R-WIN) *(added 2026-10-31; owner's question, DD3, ROADMAP WIN)*
+
+| ID | Idea | Seen in | Fit | Size | Pri | Status |
+|---|---|---|---|---|---|---|
+| R-WIN-01 | **`ptyro shell-init pwsh`**: OSC 133 A/B/D from `prompt`, 133 C with `cmdline=` through PSReadLine, OSC 7 for the directory, `$LASTEXITCODE` or `$?` for the exit status; does nothing outside ptyro, and doesn't double the marks of oh-my-posh or starship | Windows Terminal docs, Warp, tuios #491 | WIN1 | S | ★★★ | **built WIN1** (2026-10-31) |
+| R-WIN-02 | **Shell integration with no setup**: when ptyro starts a shell it loads its own snippet (pwsh `-NoExit -Command`, bash `--rcfile`, zsh `ZDOTDIR`, fish `--init-command`), after the user's own startup files; switchable off | VS Code, kitty, WezTerm auto-injection [S] | WIN1 | M | ★★★ | **built WIN1** (2026-10-31), all four shells, on by default |
+| R-WIN-03 | **Read OSC 9;9** (Windows Terminal, ConEmu, Cmder) as a directory source next to OSC 7, so prompts set up for Windows Terminal work in ptyro unchanged | Windows Terminal, Cmder | WIN1 | S | ★★ | **built WIN1** (2026-10-31), mapped into WSL; ConEmu's other numbered OSC 9 commands no longer show as notifications |
+| R-WIN-04 | **WSL bridges**: alerts become Windows toasts, links and files open on Windows (`wslpath -w`, `explorer.exe`), the browser for pairing is Windows' | Warp, VS Code Remote-WSL | WIN2 | M | ★★ | → WIN2 |
+| R-WIN-05 | **WSL doctor**, each finding with its fix: the daemon would die with the last terminal (idle shutdown), systemd is off, the repo is on `/mnt/c` (offer to clone it into the distro), scripts have CRLF line endings, `serve` unreachable without mirrored networking, WSL version known to regress | microsoft/WSL #13291, #13416 | WIN2 | M | ★★★ | → WIN2 |
+| R-WIN-06 | **A native Windows client on the WSL daemon**: `ptyro.exe` (CLI and TUI) reaches a daemon in WSL through `wsl.exe -d <distro> -- ptyro proxy` (`--remote wsl://Ubuntu`); on first run it finds the distro with ptyro and offers to use it | ptyro's own `--remote` (M9.1) | WIN3 | M | ★★★ | → WIN3 |
+| R-WIN-07 | **Windows Terminal integration**: open a session in a new tab or pane (`wt.exe -w 0 nt …`), the aggregate state on the taskbar through OSC 9;4 (R-STA-07), kitty keyboard where WT has it | Windows Terminal (C12) | WIN3 | S | ★★ | → WIN3 |
+| R-WIN-08 | **`make check-windows`**: build the Windows targets from macOS or Linux (cargo-xwin with the MSVC sysroot, x64 and ARM64) so the Windows build can't rot unseen | — | WIN3 | S | ★★★ | → WIN3 |
+| R-WIN-09 | **ConPTY backend in `ptyro-pty`**: spawn with PATHEXT resolution and safe `.cmd` wrapping, resize, a Job Object per session, Ctrl+C, exit codes, optionally a bundled `conpty.dll` | herdr, Warp, WezTerm | WIN5 | L | ★★★ | → WIN5 |
+| R-WIN-10 | **Named-pipe transport** for the daemon: user-only DACL, remote clients rejected, the client's pid recorded like the Unix peer check | herdr, unofficial Zellij port | WIN5 | M | ★★★ | → WIN5 |
+| R-WIN-11 | **One command-shell policy** for setup, verify, worktree and `run` commands: per-project `shell = auto\|pwsh\|bash\|cmd\|sh`, `auto` by extension; Git Bash found, or offered as a fix | Claude Code hooks' `shell` field | WIN6 | M | ★★★ | → WIN6 |
+| R-WIN-12 | **Windows process facts**: foreground process (process tree or console process list), listening ports (`GetExtendedTcpTable`), "in use by" (Restart Manager), locks (`File::lock`) | — | WIN7 | M | ★★ | → WIN7 |
+| R-WIN-13 | **Session holder processes** (`ptyro hold`): one small process owns each PTY, so the daemon can restart or upgrade without losing a session. The only route to live upgrade on Windows; on Unix it would also survive a daemon crash | zmx, shpool, dtach (C14–C16) | Backlog | L | ★ | parked (owner, 2026-10-31: restart and resume on Windows, WIN9) |
+| R-WIN-14 | **Start at login and alerts the Windows way**: a per-user logon task (never a Service: session 0 has no user profile), toasts with an AppUserModelID and click-to-focus | — | WIN10 | M | ★★ | → WIN10 |
+| R-WIN-15 | **Packaging**: winget, scoop, `install.ps1`, a signed zip, ARM64; uninstall removes the logon task and the shortcut | herdr (`install.ps1`, `install.cmd`) | WIN12 | M | ★★ | → WIN12 |
+| R-WIN-16 | **Windows machines in MM1**: link over `machine-bridge` (no remote shell involved); `--remote` to a Windows ssh host with a command that pwsh and cmd both run | MM1 | WIN11 | M | ★ | → WIN11 |
+| R-WIN-17 | **Fast, safe worktrees on Windows**: doctor suggests Dev Drive and a Defender exclusion, ptyro sets `core.longpaths`, warns before a path gets too deep | Dev Drive docs [S] | WIN8 | S | ★★ | → WIN8 |
+| R-WIN-18 | **Agents on Windows**: find `claude.exe` and npm's `.cmd` shims, hooks quoted to run under Git Bash and PowerShell alike, Claude's shell per profile (`CLAUDE_CODE_GIT_BASH_PATH`), Codex's sandbox mode noticed | Claude Code, Codex | WIN8 | M | ★★★ | → WIN8 |
+| R-WIN-19 | **PowerShell objects**: document `ptyro … --json \| ConvertFrom-Json`; a `Ptyro` module of cmdlets only if users ask | — | Backlog | S | ★ | parked (`--json` already does the job) |
+| R-WIN-20 | **ptyro in a pwsh prompt** (oh-my-posh, starship segment) | Backlog "status-line" | Backlog | S | ★ | merged into Backlog `ptyro status-line` |
+
 ### III.3 Explicitly *not* recommended (with reasons)
 
 - **A vector-DB memory layer** (Ruflo): its own figures are self-reported; a lightweight notes file covers the need.
@@ -2865,6 +3081,11 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 - **A2A as a primary protocol:** no coding CLI speaks it. At most a facade later.
 - **Depending on MCP Tasks:** no client supports it yet.
 - **A chat client for raw provider APIs and keys** (2026-10-29): ptyro drives the agents you registered and their accounts (profiles); keys, model lists and billing would be a second product.
+- **Windows 10** (2026-10-31, DD3): out of support since 2025-10-14, and ConPTY's passthrough mode is honoured only on Windows 11 [S]. Windows 11 only.
+- **WSL1:** no real Linux kernel; Codex dropped it in 0.115 [S].
+- **Cygwin and MSYS PTYs:** native Windows programs (the agents, pwsh) don't see them as consoles. ConPTY only.
+- **The daemon as a Windows Service:** a service runs in session 0 without the user's profile, credentials or desktop, all of which agents need. A per-user logon task instead (R-WIN-14).
+- **cmd.exe integration beyond the documented `PROMPT` string:** cmd has no hook before a command runs, so there is nothing to hang `working` on. cmd sessions get prompt marks and idle only.
 
 ---
 
@@ -2883,6 +3104,8 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 | **Codex app-server / `--remote`** | Enables the hybrid session (R-ORC-35) |
 | **ACP v2** | M10 design target |
 | **OSC 7501 spec** | Conformance (R-STA-01) |
+| **WSL releases** (microsoft/WSL #13291, #13416) | Idle shutdown of the distro with a daemon running would break ptyro's survival promise on Windows (DD3, WIN0.1) |
+| **ConPTY / Windows Terminal** | Passthrough mode, OSC and DCS handling, the conpty.dll NuGet package (DD3, WIN0.2) |
 
 ### IV.2 Claims to re-verify before relying on them
 
@@ -2896,6 +3119,13 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 - Whether Codex app-server approvals reach every client, and whether turns injected over `--remote` render in the TUI. **Spike** (R-ORC-35).
 - Claude `asyncRewake` hook as a mail waiter. **Spike**.
 - Antigravity CLI: is there a blocked/permission signal or OSC 7501? **Spike** (R-AGT-01).
+- Windows and PowerShell (DD3, 2026-10-31), all for **WIN0**:
+  - Does a WSL daemon survive closing the last terminal on current WSL, with and without systemd and `.wslconfig` timeouts?
+  - Does ConPTY on Windows 11 pass OSC 7501, 133, 9, 777, 7, 9;9, 52 and 8 through intact and in order? Is passthrough mode (0x8) real and worth using?
+  - Can a second process take over a pseudoconsole (needed for live upgrade without holders)?
+  - Which Claude Code version made PowerShell the default shell tool on Windows (2.1.120 vs 2.1.139)?
+  - Whether oh-my-posh and starship emit OSC 133 for pwsh, and with which settings.
+  - How herdr does upgrades and survival on Windows.
 - Docker `sbx` on Linux.
 - Kiro "waves" of parallel tasks; Spec Kit 1.0 date; Composio AO repo identity.
 - METR 2026 follow-up percentages; Sonnet 4.5 parallel-compute score.
@@ -2943,6 +3173,9 @@ These are verified or locally checked. Each moves to SPEC §20 once a spike or i
   - OSC 3008 (systemd context) must be swallowed.
   - tmux 3.8 OSC 133 hook events.
   - Copilot CLI reads `.claude/settings.json` hooks, which is another reason to keep integrations out of repo config.
+  - Windows Terminal's OSC 9;9 directory sequence and its OSC 133 conventions [V 2026-10-31].
+  - ConPTY drops unknown DCS and passes unknown OSC, possibly out of order with text (Warp, 2025-01) [V of the post, S of today's ConPTY]; passthrough mode only on Windows 11 [S] (WIN0.2 decides).
+- **New §20 section, Windows (when WIN0 runs):** WSL idle shutdown; Restart Manager for "in use by"; `GetExtendedTcpTable` for ports; Job Objects; Rust std's `.cmd` escaping (1.77.2); `File::lock` (1.89); symlinks need Developer Mode; the logon task instead of a Service.
 
 ### IV.4 Sweep cadence and method
 
@@ -2973,6 +3206,13 @@ follow you over SSH, and tmux plugins can't enforce policy. ptyro does all three
 
 ## Changelog
 
+- **2026-10-31:** Windows and PowerShell, on the owner's question. Deep dive **DD3** (herdr,
+  Zellij, tuios, Warp, WezTerm, Windows Terminal, Claude Code and Codex on Windows; platform facts;
+  a scan of ptyro's Unix surface at `83e6092`; design options and stages), **R-WIN-01…20**
+  (17 promoted to the new ROADMAP milestone **WIN**, two parked, one merged). Owner decisions the same day: repos live in Windows, native Windows 11 and WSL2 both Tier 1, a per-project `shell` for setup, restart and resume instead of holder processes (R-WIN-13 parked), five rejections in
+  III.3, watchlist and re-check items. The most important finding is unverified: WSL may stop
+  the distro, daemon included, when the last terminal closes (WIN0.1). One research pass, web
+  only; nothing run on Windows.
 - **2026-10-29:** Chat. Segment **H** (chat clients and history), the **R-CHAT-01…17** funnel rows (ROADMAP CHAT, SPEC §22), the facts for IV.3, and one rejection (a raw-API chat client). One research pass, mostly secondary sources; aichat, mods, oterm, Elia, Msty, Cursor and Aider are not verified.
 - **2026-10-20:** First full sweep. Segments A–G (over 100 products), the orchestration deep
   dive (practitioners, research evidence, workflow engines, coordination protocols), and the idea

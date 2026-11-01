@@ -54,7 +54,7 @@ It stops the daemon and every session, then removes:
   ptyro installed (`integrations install gemini|antigravity`);
 - **the lines ptyro added to your shell's rc files**: only the exact lines `ptyro init` and the
   mend list write (`source <(ptyro completions zsh)`, `eval "$(ptyro shell-init zsh)"`, their
-  bash and fish forms) with the comment ptyro put above one. Anything else that mentions ptyro
+  bash, fish and PowerShell forms, the last in `$PROFILE`) with the comment ptyro put above one. Anything else that mentions ptyro
   stays and is listed;
 - **a Tailscale mapping** (`tailscale serve` on :443 to ptyro's port) when `[remote] tailscale`
   made one;

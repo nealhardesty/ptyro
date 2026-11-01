@@ -8386,7 +8386,7 @@ mod tests {
                 "not logged in (`ptyro profile login <profile> claude`)",
             ),
         ]);
-        let shell = usize::from(crate::health::shell_init_missing().is_some());
+        let shell = usize::from(crate::health::shell_init_missing(&app.config).is_some());
         let n = 2 + shell;
         assert_eq!(app.health.findings.len(), n);
         assert!(screen(&app).contains(&format!("⚕ {n}")), "the badge");

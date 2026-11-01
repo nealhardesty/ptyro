@@ -476,6 +476,7 @@ pub struct Config {
     pub recorder: Recorder,
     pub remote: Remote,
     pub clipboard: Clipboard,
+    pub shell: Shell,
     pub summaries: Summaries,
     pub scratchpad: Scratchpad,
     pub chat: Chat,
@@ -920,6 +921,25 @@ pub struct Clipboard {
 impl Default for Clipboard {
     fn default() -> Self {
         Self { allow_write: true }
+    }
+}
+
+/// Shell sessions (SPEC §8.7, ROADMAP WIN1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Shell {
+    /// The shell new shell sessions run, like `["pwsh", "-Login"]`; empty = your login shell
+    /// (`$SHELL -l`).
+    pub command: Vec<String>,
+    /// Add ptyro's shell integration to the bash, zsh, fish and PowerShell sessions it starts:
+    /// prompt marks, working/idle, the last command and its exit code, the directory. Off, only a
+    /// `ptyro shell-init` line in an rc file gives them.
+    pub integration: bool,
+}
+
+impl Default for Shell {
+    fn default() -> Self {
+        Self { command: Vec::new(), integration: true }
     }
 }
 

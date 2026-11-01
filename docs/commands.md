@@ -92,7 +92,7 @@ Conventions:
 | `ptyro answer SESSION allow\|always\|deny` | answer a permission prompt without opening the session |
 | `ptyro report --state S [--kind K] [--msg M] [--progress N] [--session S]` | report your own program's state from inside a session |
 | `ptyro completions bash\|zsh\|fish\|elvish\|powershell` | the completion script (with live names) |
-| `ptyro shell-init bash\|zsh\|fish` | shell integration: prompt marks and live cwd |
+| `ptyro shell-init bash\|zsh\|fish\|pwsh` | shell integration for a shell ptyro didn't start (its own get it automatically): prompt marks, status, live cwd |
 
 ## Attention and notifications
 

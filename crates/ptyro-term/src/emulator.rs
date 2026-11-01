@@ -715,12 +715,23 @@ fn side_channel_osc(body: &[u8]) -> Option<TermEvent> {
     let text = std::str::from_utf8(body).ok()?;
     let (num, rest) = text.split_once(';').unwrap_or((text, ""));
     match num {
-        // ConEmu progress shares OSC 9 with notifications: `9;4;<state>[;<percent>]`.
-        "9" if rest.starts_with("4;") || rest == "4" => {
-            let mut parts = rest.split(';').skip(1);
-            let state = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-            let percent = parts.next().and_then(|p| p.parse::<u8>().ok()).map(|p| p.min(100));
-            Some(TermEvent::Progress { state, percent })
+        // ConEmu's numbered commands share OSC 9 with notifications (`9;<text>`): `9;4` progress,
+        // `9;9` the directory (Windows Terminal's too), `9;12` a prompt starts (clink, cmd.exe).
+        // The others (sleep, message box, run a program…) are dropped, never shown as text.
+        "9" if conemu_command(rest) => {
+            let (cmd, args) = rest.split_once(';').unwrap_or((rest, ""));
+            match cmd {
+                "4" => {
+                    let mut parts = args.split(';');
+                    let state = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+                    let percent =
+                        parts.next().and_then(|p| p.parse::<u8>().ok()).map(|p| p.min(100));
+                    Some(TermEvent::Progress { state, percent })
+                }
+                "9" => osc9_cwd(args, wsl_mount_root()).map(TermEvent::Cwd),
+                "12" => Some(TermEvent::PromptMark { mark: 'A', exit: None, cmdline: None }),
+                _ => None,
+            }
         }
         // Shown on the desktop and in lists: no control characters, bounded length.
         "9" | "777" | "99" => Some(TermEvent::Notification(
@@ -779,6 +790,89 @@ fn side_channel_osc(body: &[u8]) -> Option<TermEvent> {
         }
         _ => None,
     }
+}
+
+/// `9;<digits>` or `9;<digits>;…`: one of ConEmu's commands, not a notification's text.
+fn conemu_command(rest: &str) -> bool {
+    let cmd = rest.split(';').next().unwrap_or("");
+    !cmd.is_empty() && cmd.len() <= 3 && cmd.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// The directory of `OSC 9;9;<path>`: a Windows path (quoted or not), as this computer sees it.
+/// In WSL (`wsl_root` is where Windows drives are mounted, `/mnt/`), `C:\src` is `/mnt/c/src`
+/// and `\\wsl.localhost\Ubuntu\home\me` is `/home/me`. A POSIX path is taken as it is. Elsewhere
+/// a Windows path means nothing here and is ignored.
+fn osc9_cwd(arg: &str, wsl_root: Option<&str>) -> Option<std::path::PathBuf> {
+    let p = arg.trim();
+    let p = p.strip_prefix('"').and_then(|p| p.strip_suffix('"')).unwrap_or(p);
+    if p.is_empty() || p.chars().any(char::is_control) {
+        return None;
+    }
+    if cfg!(windows) {
+        return Some(p.into());
+    }
+    if p.starts_with('/') {
+        return Some(p.into());
+    }
+    let root = wsl_root?;
+    let unix = |rest: &str| rest.replace('\\', "/");
+    for unc in [r"\\wsl.localhost\", r"\\wsl$\"] {
+        if let Some(rest) =
+            p.get(..unc.len()).filter(|h| h.eq_ignore_ascii_case(unc)).map(|_| &p[unc.len()..])
+        {
+            // `<distro>\path`: the distro is this one (another's files aren't reachable as paths).
+            let path = rest.split_once('\\').map_or("", |(_, path)| path);
+            return Some(format!("/{}", unix(path)).into());
+        }
+    }
+    let b = p.as_bytes();
+    if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+        let drive = (b[0] as char).to_ascii_lowercase();
+        let rest = unix(p[2..].trim_start_matches(['\\', '/']));
+        let root = root.trim_end_matches('/');
+        return Some(
+            if rest.is_empty() {
+                format!("{root}/{drive}")
+            } else {
+                format!("{root}/{drive}/{rest}")
+            }
+            .into(),
+        );
+    }
+    None
+}
+
+/// Where WSL mounts Windows drives (`/mnt/` unless `/etc/wsl.conf` says otherwise); `None` when
+/// this isn't WSL. Asked once.
+fn wsl_mount_root() -> Option<&'static str> {
+    static ROOT: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let release = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+        let wsl = std::env::var_os("WSL_DISTRO_NAME").is_some()
+            || release.to_ascii_lowercase().contains("microsoft");
+        wsl.then(|| wsl_conf_root(&std::fs::read_to_string("/etc/wsl.conf").unwrap_or_default()))
+    })
+    .as_deref()
+}
+
+/// `[automount] root = …` from a `wsl.conf`, else `/mnt/`.
+fn wsl_conf_root(conf: &str) -> String {
+    let mut section = "";
+    for line in conf.lines() {
+        let line = line.split('#').next().unwrap_or("").trim();
+        if let Some(s) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            section = s.trim();
+        } else if section.eq_ignore_ascii_case("automount")
+            && let Some((k, v)) = line.split_once('=')
+            && k.trim() == "root"
+        {
+            let v = v.trim().trim_matches('"');
+            if v.starts_with('/') {
+                return v.to_owned();
+            }
+        }
+    }
+    "/mnt/".to_owned()
 }
 
 fn percent_decode(s: &str) -> String {
@@ -1042,6 +1136,65 @@ mod tests {
         assert!(row[0].style.flags.has(StyleFlags::BOLD));
         assert!(row[1].wide && row[2].spacer);
         assert_eq!(emu.cursor().x, 3);
+    }
+
+    #[test]
+    fn conemus_numbered_osc_9_commands_are_never_notifications() {
+        let mut emu = AlacrittyEmulator::new(TermSize::new(20, 3), 10);
+        // A Windows Terminal style prompt reports its directory with every prompt: that used to
+        // pop up a desktop notification each time.
+        let out = feed(&mut emu, b"\x1b]9;9;\"C:\\Users\\me\"\x07\x1b]9;1;500\x07\x1b]9;12\x07");
+        assert!(
+            !out.events.iter().any(|e| matches!(e, TermEvent::Notification(_))),
+            "{:?}",
+            out.events
+        );
+        assert!(
+            out.events.iter().any(|e| matches!(e, TermEvent::PromptMark { mark: 'A', .. })),
+            "9;12 is a prompt start (clink, cmd.exe)"
+        );
+        // Text is still a notification, numbers and all.
+        let out = feed(&mut emu, b"\x1b]9;3 tests failed\x07\x1b]9;4;1;50\x07");
+        assert!(
+            out.events.contains(&TermEvent::Notification("9;3 tests failed".into())),
+            "{:?}",
+            out.events
+        );
+        assert!(out.events.contains(&TermEvent::Progress { state: 1, percent: Some(50) }));
+        // A POSIX path (Cygwin, or a prompt that sends one) is a directory anywhere.
+        let out = feed(&mut emu, b"\x1b]9;9;/home/me/src\x07");
+        assert!(out.events.contains(&TermEvent::Cwd("/home/me/src".into())), "{:?}", out.events);
+    }
+
+    #[test]
+    fn osc_9_9_windows_paths_are_mapped_into_wsl() {
+        let wsl = Some("/mnt/");
+        let cwd = |a: &str, r| osc9_cwd(a, r).map(|p| p.display().to_string());
+        assert_eq!(cwd("\"C:\\Users\\me\\src\"", wsl).as_deref(), Some("/mnt/c/Users/me/src"));
+        assert_eq!(cwd("D:\\", wsl).as_deref(), Some("/mnt/d"));
+        assert_eq!(cwd("c:/work", Some("/win")).as_deref(), Some("/win/c/work"));
+        assert_eq!(cwd("\\\\wsl.localhost\\Ubuntu\\home\\me", wsl).as_deref(), Some("/home/me"));
+        assert_eq!(cwd("\\\\WSL$\\Debian\\srv\\app", wsl).as_deref(), Some("/srv/app"));
+        assert_eq!(cwd("/tmp/x", None).as_deref(), Some("/tmp/x"));
+        if !cfg!(windows) {
+            assert_eq!(cwd("C:\\Users", None), None, "outside WSL a drive letter is nowhere");
+            assert_eq!(cwd("\\\\wsl$\\Ubuntu\\home", None), None);
+        }
+        assert_eq!(cwd("\"\"", wsl), None);
+        assert_eq!(cwd("C:\\a\u{7}b", wsl), None);
+    }
+
+    #[test]
+    fn wsl_conf_moves_the_drive_mounts() {
+        assert_eq!(wsl_conf_root(""), "/mnt/");
+        assert_eq!(
+            wsl_conf_root("[automount]\nenabled = true\nroot = /windir/ # drives\n"),
+            "/windir/"
+        );
+        assert_eq!(
+            wsl_conf_root("[boot]\nroot = /nope\n[automount]\noptions = \"metadata\"\n"),
+            "/mnt/"
+        );
     }
 
     #[test]

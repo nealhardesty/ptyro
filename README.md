@@ -46,7 +46,8 @@ Google, or any other tool named here; their names and trademarks belong to their
 
 ## Requirements
 
-- **Linux or macOS.** WSL2 should work; native Windows is not supported.
+- **Linux or macOS.** WSL2 should work and is being verified. Native Windows 11 is planned, not
+  built yet (ROADMAP WIN).
 - **Rust 1.99 or later** to build. A checkout pins 1.99.1 in `rust-toolchain.toml`, and
   [rustup](https://rustup.rs) fetches it for you. No Rust yet? In a checkout, `make rust-install`
   installs rustup and the pinned toolchain (Linux and macOS; it needs a C compiler, which it
@@ -594,13 +595,21 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
   on). `Ctrl+J` works in every terminal, and `Alt+Enter` does too where Option/Alt sends Meta.
   On the web, `Shift+Enter`; with `ptyro send`, a real new line in the text (`$'one\ntwo'`). [More](docs/keys.md#several-lines-in-one-prompt).
 - **Native mouse selection:** hold Shift while dragging, or set `[ui] mouse = false`.
-- **Prompt jumps, live cwd and each shell's last command in the sidebar** need one line in
-  your shell's rc file:
-  `eval "$(ptyro shell-init zsh)"` (or `bash`; fish: `ptyro shell-init fish | source`).
+- **Shell sessions know what they're doing, with no setup.** In bash, zsh, fish and PowerShell,
+  ptyro adds its shell integration after your own startup files: prompt jumps in copy mode
+  (`[` / `]`), working and idle, each command and its exit code in the sidebar, and the live
+  directory. Nothing goes in your rc file or `$PROFILE`; `[shell] integration = false` turns it
+  off. For a shell ptyro didn't start: `eval "$(ptyro shell-init zsh)"` (or `bash`; fish:
+  `ptyro shell-init fish | source`; PowerShell: `ptyro shell-init pwsh | Out-String | Invoke-Expression`).
+- **PowerShell:** `ptyro new -- pwsh` starts a PowerShell session (any bare bash, zsh, fish or
+  pwsh is a shell session), or make it the default with
+  `ptyro config set shell.command "pwsh -Login"`. Your prompt (oh-my-posh, starship, your own)
+  keeps drawing; ptyro only adds its marks around it. `ptyro … --json | ConvertFrom-Json` gives
+  you objects.
 - **Completions:** `source <(ptyro completions zsh)` (or bash, fish…). **Start at login:**
   `ptyro daemon install-service` (systemd or launchd).
 - **Something odd?** A `⚕` in the status bar means the doctor found something: `Ctrl-Q M` lists
-  it, each with its fix (the shell-init line, tmux options, a login, a daemon upgrade). Or run
+  it, each with its fix (tmux options, a login, a daemon upgrade). Or run
   `ptyro doctor`. `ptyro daemon logs` shows the daemon's log, and
   `PTYRO_LOG=debug` makes it chatty. `Ctrl-Q C-l` redraws the screen.
 - **Which version is this, and where do I report it?** `ptyro about` (`Ctrl-Q I` in the TUI,
@@ -662,6 +671,7 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make scratchpad-demo` (`ARGS=tui\|clean`) | the scratchpad in a throwaway ptyro: items added, listed, ticked, restored; `tui` opens it |
 | `make verify-claude` | check the Claude adapter against the real Claude Code on your machine (one tiny turn) |
 | `make verify-structured` | check structured mode against the real agents here |
+| `make spike-wsl` (`ARGS="start [label]"`, `check`, `clean`) | ROADMAP WIN0.1, run inside WSL2: three heartbeats (a plain process, a ptyro daemon started on demand, one run by a systemd user unit), then close every WSL terminal; an hour later `check` says how long each lived and writes a report with the WSL version and settings |
 | `make spike-chat` (`ARGS="claude codex"`) / `make spike-chat-fts` (`NODES=…`) | try the chat engine's claims against the real agents here (a few cents of tokens; Gemini and OpenCode if installed) / FTS5 and a 100k-node chat index in SQLite |
 | `make spike-chat-meaning` (`NODES=…`) | meaning search's cost over 100k chat messages with a synthetic model the real one's size: embedding, the backfill, a search's scan, the vectors' size (nothing downloaded) |
 | `make headless CMD=… ARGS=…` | run a program in ptyro's emulator without a terminal; prints screen and status |

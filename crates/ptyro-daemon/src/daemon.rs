@@ -707,7 +707,12 @@ impl Daemon {
                 // Extra arguments; the adapter builds the rest at launch.
                 (spec.argv.clone(), SessionKind::Agent)
             }
-            (None, true) => (vec![user_shell(), "-l".into()], SessionKind::Shell),
+            (None, true) => (shell_command(&config), SessionKind::Shell),
+            // A bare shell (`ptyro new -- pwsh`) is a shell session: status from its prompt
+            // marks, and its integration added (SPEC §8.7).
+            (None, false) if ptyro_core::shell::interactive(&spec.argv).is_some() => {
+                (spec.argv.clone(), SessionKind::Shell)
+            }
             (None, false) => (spec.argv.clone(), SessionKind::Command),
         };
         let id = SessionId::new();
@@ -1503,6 +1508,15 @@ impl Daemon {
             return Ok(w.name.clone());
         }
         Ok(MAIN_WORKSPACE.into())
+    }
+}
+
+/// What a new shell session runs: `[shell] command`, else the login shell (`$SHELL -l`).
+pub(crate) fn shell_command(config: &ptyro_core::config::Config) -> Vec<String> {
+    if config.shell.command.is_empty() {
+        vec![user_shell(), "-l".into()]
+    } else {
+        config.shell.command.clone()
     }
 }
 

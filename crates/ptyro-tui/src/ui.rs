@@ -2285,7 +2285,7 @@ pub(crate) fn help_lines<'a>(app: &'a App, filter: &str) -> Vec<Line<'a>> {
         for l in [
             "h j k l / arrows   move        w b e   words       0 ^ $   line start/end",
             "gg G H M L         jump        C-u C-d half page   C-b C-f page",
-            "[ ]                previous / next shell prompt (needs `ptyro shell-init`)",
+            "[ ]                previous / next shell prompt (in bash, zsh, fish and PowerShell)",
             "/ ?  n N           search forward / backward, next / previous match",
             "v V C-v            select chars / lines / block    o  other end",
             "y or Enter         copy (OSC 52 to your terminal)   Y  copy line   q Esc  leave",

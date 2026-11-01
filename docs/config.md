@@ -130,6 +130,10 @@ approval_wait = "10m"                     # held Claude permission prompts wait 
 [clipboard]
 # allow_write = false                     # programs' OSC 52 copies don't reach your clipboard
 
+[shell]
+# command = ["pwsh", "-Login"]            # what new shell sessions run (default: $SHELL -l)
+# integration = false                     # don't add ptyro's prompt marks to the shells it starts
+
 [keys]
 "y" = "pane.zoom"         # after the prefix; "global:M-1" = "session.focus 1" needs no prefix
 ```
