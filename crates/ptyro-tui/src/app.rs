@@ -3543,17 +3543,18 @@ impl App {
     }
 
     /// `Z` in the sidebar (`sidebar.fold_all`): fold every row that folds, so the sidebar is one
-    /// line a workspace. Once everything is folded, it puts back what was open before (or opens
-    /// everything, when nothing was saved). The selection moves to the row it was folded into.
+    /// line a workspace. Once every row on screen is folded, it puts back what was open before
+    /// (or opens everything, when nothing was saved); what arrived meanwhile under a folded row
+    /// doesn't count, and opens with the rest. The selection moves to the row it folded into.
     fn fold_all(&mut self) {
-        let keys = self.tree().fold_keys();
-        if keys.is_empty() {
+        let before = self.rows();
+        let shown: Vec<String> = before.iter().filter_map(Row::fold_key).collect();
+        if shown.is_empty() {
             self.toast("nothing in the sidebar to fold");
             return;
         }
-        let before = self.rows();
         let at = self.sel_index(&before);
-        if keys.is_subset(&self.collapsed) {
+        if shown.iter().all(|k| self.collapsed.contains(k)) {
             match self.folded_before.take() {
                 Some(was) => {
                     self.collapsed = was;
@@ -3566,7 +3567,7 @@ impl App {
             }
         } else {
             self.folded_before = Some(self.collapsed.clone());
-            self.collapsed.extend(keys);
+            self.collapsed.extend(self.tree().fold_keys());
             let again = self.keymap.key_in(Table::Nav, "sidebar.fold_all");
             self.toast(match again {
                 Some(k) => format!("sidebar folded ({k} again unfolds it)"),
@@ -9917,8 +9918,55 @@ mod tests {
             .iter()
             .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>() + "\n")
             .collect();
-        assert!(help.contains("Z ") && help.contains("sidebar.fold_all"), "{help}");
-        assert!(help.contains("C-z"), "{help}");
+        // Each line starts with its key, in 14 columns.
+        let keys: Vec<String> = help
+            .lines()
+            .filter(|l| l.contains("sidebar.fold_all"))
+            .map(|l| l.chars().take(14).collect::<String>().trim().to_owned())
+            .collect();
+        assert!(keys.iter().any(|k| k == "Z"), "{help}");
+        assert!(keys.iter().any(|k| k.ends_with(" C-z")), "{help}");
+    }
+
+    #[test]
+    fn what_arrives_while_the_sidebar_is_folded_opens_with_the_rest() {
+        use crossterm::event::KeyModifiers as M;
+        let mut app = app();
+        app.focus = Focus::Sidebar;
+        press(&mut app, 'Z', M::SHIFT);
+        let toast = app.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default();
+        assert_eq!(toast, "nothing in the sidebar to fold");
+        with_project(&mut app);
+        let a = placed("claude", Some("p1"), Some("p1-root"));
+        app.sessions = vec![a.clone()];
+        press(&mut app, 'Z', M::SHIFT);
+        assert_eq!(app.rows(), [Row::Workspace("main".into())]);
+        // A worktree and chats turned on, under the folded workspace: still all folded, so `Z`
+        // opens it all, those too.
+        let mut wt = root("p1");
+        wt.id = "p1-two".into();
+        wt.is_root = false;
+        app.worktrees.push(wt);
+        app.config.chat.enabled = !app.config.chat.enabled;
+        press(&mut app, 'Z', M::SHIFT);
+        let rows = app.rows();
+        assert!(rows.contains(&Row::Session(a.id)), "{rows:?}");
+        assert!(rows.contains(&Row::Worktree("p1-two".into())), "{rows:?}");
+        assert!(app.collapsed.is_empty(), "{:?}", app.collapsed);
+        // A new session while it is folded: its workspace opens to show it, selected.
+        press(&mut app, 'Z', M::SHIFT);
+        let fresh = placed("codex", Some("p1"), Some("p1-root"));
+        spawned(&mut app, &fresh, false);
+        assert!(app.rows().contains(&Row::Session(fresh.id)), "{:?}", app.rows());
+        assert_eq!(app.selected_row(), Some(Row::Session(fresh.id)));
+        // Folded by hand, with nothing saved: `Z` opens everything.
+        app.folded_before = None;
+        app.collapsed = app.tree().fold_keys();
+        app.focus = Focus::Sidebar;
+        press(&mut app, 'Z', M::SHIFT);
+        assert!(app.collapsed.is_empty());
+        let toast = app.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default();
+        assert_eq!(toast, "sidebar unfolded");
     }
 
     #[test]

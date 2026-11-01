@@ -40,6 +40,16 @@ impl Row {
         !matches!(self, Self::Group(_))
     }
 
+    /// The key that folds this row in `collapsed`, for a row that folds.
+    pub fn fold_key(&self) -> Option<String> {
+        match self {
+            Self::Set(id) | Self::Project(id) | Self::Worktree(id) => Some(id.clone()),
+            Self::Workspace(ws) => Some(fold_key(ws)),
+            Self::Chats(ws) => Some(chats_key(ws)),
+            _ => None,
+        }
+    }
+
     /// The chat a chat row stands for.
     pub fn chat(&self) -> Option<&str> {
         match self {
