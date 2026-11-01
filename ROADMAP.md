@@ -2599,6 +2599,117 @@ Every task below is done only when it works in the CLI, the TUI and the web, has
 with `make bump`. On top of the usual rule ("works on Linux *and* macOS"), each task in tracks C
 and D must also work on Windows 11, and each task in track B under WSL2.
 
+### Handoff to the Windows machine (2026-11-01)
+
+The owner continues WIN on a Windows 11 machine. This is everything that machine (and whoever
+or whatever works on it) needs. It doesn't repeat the tasks below, and it goes away once WIN2 is
+done.
+
+**Where things stand**
+- Branch `powershell`, PR #47 (draft), released as v0.0.43 on the branch. The v0.0.43 tag isn't
+  pushed: tag master after merging, as for every release.
+- **Done:** WIN0.5 (the owner's decisions) and WIN1 (shell integration with no setup, pwsh
+  included). It is tested on macOS only, with bash 3.2, zsh and pwsh 7.6.9. Nothing has run on
+  Windows or in WSL yet, and CI has no Windows job.
+- **Where to read:**
+  - RESEARCH DD3 (the deep dive) and R-WIN-01…20;
+  - SPEC §3.4 (tiers), §5.7 (the OSC 9 row) and §8.7 ("Shell integration with no setup");
+  - the code:
+    - `crates/ptyro-core/src/shell.rs`: snippets, how each shell is started, `interactive()`;
+    - `crates/ptyro-daemon/src/launch.rs`: `shell_integration`;
+    - `crates/ptyro-term/src/emulator.rs`: `conemu_command`, `osc9_cwd`, `wsl_mount_root`;
+    - `crates/ptyro/tests/win1.rs`.
+- **The deliberate wall:** `crates/ptyro-core/src/lib.rs` has a `compile_error!` for non-Unix
+  targets. A native `cargo build` on Windows fails there on purpose. Moving it to the daemon side
+  is the first step of WIN3, after WIN0.4.
+
+**Setting up the machine**
+1. **WSL2** (tracks A and B). Before anything else, write down `wsl --version` and `wsl -l -v`.
+   WIN0.1 needs that WSL release, because the idle-shutdown behaviour changes between releases.
+   - Install: `wsl --install -d Ubuntu`.
+   - Inside it: `sudo apt install build-essential git make pkg-config` and `gh`, then
+     `make rust-install` (the pinned 1.99.1).
+   - Clone **inside the distro** (`~/dev/ptyro`), never under `/mnt/c`. A repo there is slow, and
+     WIN2 turns that into a `doctor` warning. Then `git switch powershell`.
+   - Optional:
+     - Node, for `make web-test`/`web-check`;
+     - Chrome or Chromium, for `make web-e2e`;
+     - PowerShell for Linux (Microsoft's apt repo), so `tests/win1.rs` checks pwsh inside WSL as
+       well.
+2. **Native Windows** (WIN0.2–0.4, WIN3 and later):
+   - `winget install Microsoft.PowerShell Git.Git Microsoft.WindowsTerminal`;
+   - Visual Studio Build Tools with "Desktop development with C++" (the MSVC linker and Windows
+     SDK that ring, the bundled SQLite and zstd need);
+   - `rustup-init.exe` (the `x86_64-pc-windows-msvc` host, or `aarch64` on ARM).
+   
+   `make` on native Windows comes from MSYS2 or Chocolatey (WIN13). Until WIN13, run native
+   spikes from Git Bash.
+
+**Suggested order** (each step says where its result is written)
+1. **Baseline in WSL:** `make check`, then `make test`. This is the first evidence for "WSL2 is
+   Tier 1", which SPEC §3.4 still calls untested.
+   - Rerun failures alone first: the m9 web tests flake under load.
+   - Each real failure becomes a WIN2 bullet, or a fix in this PR if it's small. "Tested on WSL
+     <version>" goes into SPEC §3.4.
+2. **WIN1 by hand in WSL** (each check covers a path the macOS tests can't reach):
+   - In Windows Terminal, run the ptyro TUI inside WSL. Prompt jumps (`[`/`]` in copy mode),
+     working/idle and the directory should work in a bash session.
+   - **`pwsh.exe` started from a ptyro session in WSL** (Windows interop). Its prompt sends OSC
+     `9;9` with a `C:\…` path, and the session's directory should read `/mnt/c/…`.
+     - With `[automount] root = /win/` in `/etc/wsl.conf`, it should read `/win/c/…`.
+     - A `\\wsl.localhost\<distro>\home\…` path should read `/home/…`.
+
+     These conversions are only unit-tested so far (`osc9_cwd`). Note the integration snippet
+     isn't loaded into `pwsh.exe` this way, because ptyro only starts it for the session's own
+     shell. Run `ptyro shell-init pwsh | Out-String | Invoke-Expression` in it first.
+   - Windows Terminal's own "duplicate tab in the same directory" uses the same OSC `9;9`, so
+     both should agree.
+3. **WIN0.1, the WSL survival spike.**
+   - Write `scripts/spike-wsl.sh` with a `make spike-wsl` target and a README Development row.
+     It needs a `start` phase (record the time, `wsl --version` through `cmd.exe /c`, the
+     daemon's pid and uptime, start it bare and as a systemd user service) and a `check` phase
+     (alive or not, `/proc/uptime` to see whether the VM restarted, `journalctl --user -u ptyro`).
+   - Run the matrix described in WIN0.1 by hand: close every terminal, wait an hour, then `check`.
+   - Results go into SPEC §20 with [V], and the keep-alive that works into WIN2's "Survival".
+4. **WIN2.** It needs WIN0.1's answer.
+   - Also settle the [U] fact that hosted `windows-latest` runners have only WSL1, in RESEARCH
+     IV.3 and WIN0.5 (f). Run `wsl --status` in a throwaway workflow on a branch.
+   - If they do have only WSL1, registering this machine as a self-hosted runner is the cheap way
+     to get WSL2 into CI. The runner's labels and setup go in the README.
+5. **WIN0.4, then WIN3** (the native client against the WSL daemon). Do WIN0.4 natively first.
+   That gives the real list of crates that fail, before trying `cargo xwin` from macOS.
+6. **WIN0.2 and WIN0.3** (the ConPTY spikes). They decide track D, which doesn't start until
+   their answers are in SPEC.
+
+**Open questions found while building WIN1** (for track D unless noted)
+- **The pwsh profile path assumes `~\Documents`.** `ShellKind::rc_line` and `uninstall`'s
+  `rc_files` use `%USERPROFILE%\Documents\PowerShell\…`. With OneDrive's folder backup on, the
+  real profile is under `OneDrive\Documents`. Ask pwsh (`$PROFILE.CurrentUserCurrentHost`) or use
+  the Documents known folder instead.
+  - It only matters for the health hint and for `uninstall` finding a line someone added by
+    hand, since auto-integration never writes to `$PROFILE`.
+  - Windows PowerShell 5.1 keeps its profile in `WindowsPowerShell\`, not `PowerShell\`.
+- **`-Login` is dropped on Windows** (pwsh supports it only on Linux and macOS). The pwsh argv
+  path for Windows is unit-tested only.
+- **PSReadLine typeahead:** Enter sent before PSReadLine starts reading arrives as a line feed
+  and doesn't run. `tests/win1.rs` waits 700 ms. On slower Windows starts, especially Windows
+  PowerShell 5.1, this may need a real readiness signal (the first 133;B) rather than a sleep.
+- **The integration files** live under `<data>/integrations/shell/` with Unix modes (0700). WIN7
+  gives them an ACL check.
+- **cmd.exe:** ConEmu's `9;12` is read as a prompt mark, so cmd with clink gets prompt jumps.
+  There is no cmd snippet. Deeper cmd support was rejected (RESEARCH III.3).
+
+**Rules worth repeating** (all in AGENTS.md, and they bit during WIN1)
+- When testing inside a ptyro session, unset `PTYRO_SOCKET`, `PTYRO_SESSION_ID` and
+  `PTYRO_CONFIG`. A test daemon once deleted the real socket.
+- Stage only your own files, never `git add -A`. Leave co-authored-by lines out of commits.
+- Every feature needs its `docs/parity.md` row (the TUI cell starts with an action, `shown:`,
+  `waived:` or `gap:`), its settings schema entry, and its `make` target.
+- `make bump` when a task is done. If the tag it wants already exists, merge master first
+  (master released 0.0.42 while WIN1 was being built).
+- `gh pr edit` currently fails on a Projects-classic deprecation. Update a PR's body with
+  `gh api -X PATCH repos/nealhardesty/ptyro/pulls/47 -F body=@file`.
+
 - [ ] **WIN0 Spikes and decisions** **M**
   - [ ] **WIN0.1 Does WSL keep the daemon alive?** (R-WIN-05) On the current WSL release, start
     the daemon from a terminal, and separately as a systemd user service, then close every

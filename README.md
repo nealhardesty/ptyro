@@ -46,7 +46,8 @@ Google, or any other tool named here; their names and trademarks belong to their
 
 ## Requirements
 
-- **Linux or macOS.** WSL2 should work; native Windows is not supported.
+- **Linux or macOS.** WSL2 should work and is being verified. Native Windows 11 is planned, not
+  built yet (ROADMAP WIN).
 - **Rust 1.99 or later** to build. A checkout pins 1.99.1 in `rust-toolchain.toml`, and
   [rustup](https://rustup.rs) fetches it for you. No Rust yet? In a checkout, `make rust-install`
   installs rustup and the pinned toolchain (Linux and macOS; it needs a C compiler, which it
