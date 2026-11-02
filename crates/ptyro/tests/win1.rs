@@ -237,11 +237,17 @@ fn the_doctor_names_the_startup_file_under_xdg_config_home() {
     let profile = xdg.path().join("powershell/Microsoft.PowerShell_profile.ps1");
     std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
     std::fs::write(&profile, "ptyro shell-init pwsh | Out-String | Invoke-Expression\n").unwrap();
+    // Stand-ins, so the doctor finds the shell whether or not this machine has it.
+    let bin = tempfile::Builder::new().prefix("ptyro-win1-bin-").tempdir().unwrap();
     for (shell, want) in [
         ("fish", format!("off, and not in {x}/fish/config.fish:")),
         ("pwsh", format!("off; {} sets it up instead", profile.display())),
     ] {
-        let config = format!("[shell]\nintegration = false\ncommand = [\"{shell}\"]\n");
+        let exe = bin.path().join(shell);
+        std::fs::write(&exe, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&exe, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let config = format!("[shell]\nintegration = false\ncommand = [\"{}\"]\n", exe.display());
         let d = TempDaemon::start_with(BIN, &[("HOME", h)], Some(&config)).unwrap();
         let out = d
             .cmd()
