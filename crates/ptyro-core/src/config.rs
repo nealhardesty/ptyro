@@ -1765,7 +1765,8 @@ impl Config {
                 ("default", EditorEntry::Name(n))
                     if !self.editors.contains_key(n)
                         && !BUILTIN_EDITORS.contains(&n.as_str())
-                        && !FILE_MANAGERS.contains(&n.as_str()) =>
+                        && !FILE_MANAGERS.contains(&n.as_str())
+                        && !TERMINAL_APPS.contains(&n.as_str()) =>
                 {
                     return Err(format!("editors.default: no editor named {n:?}"));
                 }
@@ -1879,6 +1880,67 @@ pub const FILE_MANAGER: &str = if cfg!(target_os = "macos") {
 };
 const FILE_MANAGERS: [&str; 3] = ["finder", "explorer", "files"];
 
+/// Terminal apps that open a window of their own in the worktree, offered after the editors and
+/// the file manager, each only where it is installed (macOS and Linux for now).
+pub const TERMINAL_APPS: &[&str] = &[
+    "terminal",
+    "iterm",
+    "ghostty",
+    "wezterm",
+    "kitty",
+    "alacritty",
+    "gnome-terminal",
+    "kgx",
+    "konsole",
+    "xfce4-terminal",
+    "foot",
+];
+
+/// A terminal app's command line opening a window in `{path}`, if it is installed here.
+fn terminal_app(name: &str, here: &Installed) -> Option<Vec<String>> {
+    let argv = |a: &[&str]| Some(a.iter().map(|&w| w.to_owned()).collect());
+    let mac = cfg!(target_os = "macos");
+    match name {
+        // These open a folder they're given (their Info.plist takes folders, SPEC §20).
+        "terminal" | "iterm" | "ghostty" if mac => {
+            let app = match name {
+                "terminal" => "Terminal",
+                "iterm" => "iTerm",
+                _ => "Ghostty",
+            };
+            argv(&["open", "-a", &here.app(app)?.to_string_lossy(), "{path}"])
+        }
+        "wezterm" | "kitty" | "alacritty" => {
+            let flags: &[&str] = match name {
+                "wezterm" => &["start", "--cwd", "{path}"],
+                "kitty" => &["--directory", "{path}"],
+                _ => &["--working-directory", "{path}"],
+            };
+            let prog = if here.program(name) {
+                name.to_owned()
+            } else {
+                // The program inside the app, on macOS.
+                let app = match name {
+                    "wezterm" => "WezTerm",
+                    "kitty" => "kitty",
+                    _ => "Alacritty",
+                };
+                let p = here.app(app)?.join("Contents/MacOS").join(name);
+                crate::scratchpad::is_exec(&p).then(|| p.to_string_lossy().into_owned())?
+            };
+            let mut v = vec![prog];
+            v.extend(flags.iter().map(|&f| f.to_owned()));
+            Some(v)
+        }
+        _ if mac || !here.program(name) => None,
+        "ghostty" | "gnome-terminal" | "kgx" | "xfce4-terminal" | "foot" => {
+            argv(&[name, "--working-directory={path}"])
+        }
+        "konsole" => argv(&["konsole", "--workdir", "{path}"]),
+        _ => None,
+    }
+}
+
 /// The app a built-in editor also comes as on macOS, where its command is often not on `PATH`
 /// (VS Code's `code` is a step of its own to install).
 fn mac_app(name: &str) -> Option<&'static str> {
@@ -1901,6 +1963,7 @@ impl Installed {
         let mut apps = Vec::new();
         if cfg!(target_os = "macos") {
             apps.push(PathBuf::from("/Applications"));
+            apps.push(PathBuf::from("/System/Applications/Utilities"));
             if let Some(home) = std::env::var_os("HOME") {
                 apps.push(PathBuf::from(home).join("Applications"));
             }
@@ -1940,6 +2003,9 @@ impl Config {
             "code" | "zed" | "cursor" => {
                 let app = here.app(mac_app(name)?)?;
                 def(&["open", "-a", &app.to_string_lossy(), "{path}"], false)
+            }
+            n if TERMINAL_APPS.contains(&n) => {
+                Some(EditorDef { command: terminal_app(n, here)?, inside: false })
             }
             n if FILE_MANAGERS.contains(&n) => {
                 if cfg!(target_os = "macos") {
@@ -2004,14 +2070,14 @@ impl Config {
             .unwrap_or_else(|| "nvim".into())
     }
 
-    /// The editors installed here: configured ones, then built-ins.
+    /// The editors installed here: configured ones, then built-ins, then terminal apps.
     pub fn editor_names(&self) -> Vec<String> {
         self.editor_names_in(&Installed::here())
     }
 
     fn editor_names_in(&self, here: &Installed) -> Vec<String> {
         let mut v: Vec<String> = self.editors.keys().filter(|k| *k != "default").cloned().collect();
-        for b in BUILTIN_EDITORS {
+        for b in BUILTIN_EDITORS.iter().chain(TERMINAL_APPS) {
             if !v.iter().any(|n| n == b) {
                 v.push((*b).into());
             }
@@ -2025,7 +2091,8 @@ impl Config {
         let have = self.editor_names().join(", ");
         let known = self.editors.contains_key(name)
             || BUILTIN_EDITORS.contains(&name)
-            || FILE_MANAGERS.contains(&name);
+            || FILE_MANAGERS.contains(&name)
+            || TERMINAL_APPS.contains(&name);
         if !known {
             return format!("no editor {name:?} (installed: {have})");
         }
@@ -2609,6 +2676,49 @@ code = { command = ["code", "{path}"] }
             bare.default_editor_in(&none),
             bare.editor_names_in(&none).first().map_or("nvim", |n| n.as_str())
         );
+    }
+
+    #[test]
+    fn terminal_apps_open_a_window_in_the_worktree() {
+        let c = Config::parse("[editors]\ndefault = \"iterm\"\n").unwrap();
+        let (t, here) = installed(&["kitty", "wezterm", "xdg-open"], &["iTerm", "Alacritty"]);
+        let cmd = |n: &str| c.editor_in(n, &here).map(|d| d.command);
+        assert_eq!(cmd("kitty").unwrap(), ["kitty", "--directory", "{path}"]);
+        assert_eq!(cmd("wezterm").unwrap(), ["wezterm", "start", "--cwd", "{path}"]);
+        assert!(c.editor_in("kitty", &here).is_some_and(|d| !d.inside), "a window of its own");
+        // Not on PATH: the program inside the app (macOS), once it is there.
+        assert_eq!(cmd("alacritty"), None);
+        let bin = t.path().join("Alacritty.app/Contents/MacOS");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("alacritty"), "").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let perm = std::fs::Permissions::from_mode(0o755);
+        std::fs::set_permissions(bin.join("alacritty"), perm).unwrap();
+        let a = cmd("alacritty").unwrap();
+        assert!(a[0].ends_with("Alacritty.app/Contents/MacOS/alacritty"), "{a:?}");
+        assert_eq!(a[1..], ["--working-directory", "{path}"]);
+        // After the editors and the file manager.
+        let names = c.editor_names_in(&here);
+        let at = |n: &str| names.iter().position(|x| x == n);
+        assert!(at(FILE_MANAGER) < at("kitty"), "{names:?}");
+        if cfg!(target_os = "macos") {
+            let i = cmd("iterm").unwrap();
+            assert_eq!(i[..2], ["open", "-a"]);
+            assert!(i[2].ends_with("iTerm.app") && i[3] == "{path}", "{i:?}");
+            assert_eq!(cmd("ghostty"), None, "no Ghostty.app here");
+            assert_eq!(c.default_editor_in(&here), "iterm");
+        } else {
+            assert_eq!(cmd("iterm"), None, "macOS only");
+            let (_l, linux) = installed(&["gnome-terminal", "konsole", "ghostty"], &[]);
+            let cmd = |n: &str| c.editor_in(n, &linux).map(|d| d.command);
+            assert_eq!(
+                cmd("gnome-terminal").unwrap(),
+                ["gnome-terminal", "--working-directory={path}"]
+            );
+            assert_eq!(cmd("ghostty").unwrap(), ["ghostty", "--working-directory={path}"]);
+            assert_eq!(cmd("konsole").unwrap(), ["konsole", "--workdir", "{path}"]);
+            assert_eq!(cmd("foot"), None);
+        }
     }
 
     #[test]

@@ -4725,6 +4725,8 @@ impl App {
                     "opens here, as a session"
                 } else if n == ptyro_core::config::FILE_MANAGER {
                     "shows the folder in the file manager"
+                } else if ptyro_core::config::TERMINAL_APPS.contains(&n.as_str()) {
+                    "opens a terminal window there"
                 } else {
                     "opens its own window"
                 };

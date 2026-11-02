@@ -3818,7 +3818,10 @@ macOS `code`, `zed` and `cursor` also as `Visual Studio Code.app`, `Zed.app`, `C
 manager is named for the platform (`finder`: `open`; `files`: `xdg-open`, else `gio open`;
 `explorer`) and answers to all three names, so a shared config keeps working. The default is
 `editors.default` if installed, else `$VISUAL`/`$EDITOR` if it names an installed one, else the
-first installed. `shell` is not an editor: `wt open -e shell` (the picker's `!`, the web menu's
+first installed. Terminal apps come after the file manager, each where it is installed (macOS:
+`terminal`, `iterm`, `ghostty` by `open -a`, `wezterm`, `kitty`, `alacritty`; Linux: those last four
+and `ghostty`, `gnome-terminal`, `kgx`, `konsole`, `xfce4-terminal`, `foot`, by their directory
+flags; §20.5). `shell` is not an editor: `wt open -e shell` (the picker's `!`, the web menu's
 last entry) starts a shell session in the worktree through `Spawn`, so it needs the Full device
 scope, as `!` does, while `WorktreeOpen` stays Control.
 
@@ -6084,6 +6087,16 @@ learn something the hard way.
     `workbench.action.quickOpenView`. Its terminal swallows the key unless
     `-workbench.action.quickOpenView` is added to `terminal.integrated.commandsToSkipShell`. Zellij's
     default preset quits Zellij on Ctrl+q. Ctrl-Q is XON, but raw mode clears `IXON`, so it arrives.
+- **Opening a terminal app in a folder** ("open in", §13.2):
+  - **[V 2026-11-02]** On macOS, Terminal 2.15 (`public.directory`), iTerm 3.7.3 (`public.folder`) and
+    Ghostty 1.3.1 (`public.directory`) list folders under `CFBundleDocumentTypes` in their
+    `Info.plist`, so `open -a <app> <folder>` opens a window there. Terminal.app lives in
+    `/System/Applications/Utilities`, not `/Applications`.
+  - **[S]** The documented flags, used on Linux (and for WezTerm, kitty and Alacritty on macOS, by
+    their command or the program inside the app): `ghostty`, `gnome-terminal`, `kgx`,
+    `xfce4-terminal`, `foot` `--working-directory=DIR`; `konsole --workdir DIR`;
+    `wezterm start --cwd DIR`; `kitty --directory DIR`; `alacritty --working-directory DIR`. The
+    `ghostty` command can't start a window on macOS, so there it is the app.
 
 ### 20.6b GitHub CLI (`gh`), as ptyro uses it **[docs; tested against `fake-gh`, not the real `gh`]**
 

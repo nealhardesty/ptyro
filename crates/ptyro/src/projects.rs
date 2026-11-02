@@ -335,12 +335,13 @@ pub enum WtCmd {
         attach: bool,
     },
     /// Open the worktree in an editor (\[editors\]; terminal editors open as a ptyro session),
-    /// the file manager, or a new shell
+    /// the file manager, a terminal app, or a new shell
     Open {
         #[arg(add = ArgValueCandidates::new(crate::complete::worktrees))]
         worktree: Option<String>,
         /// An installed editor (default: `editors.default`), `finder` (`files` on Linux) for the
-        /// file manager, or `shell` for a new shell in it
+        /// file manager, a terminal app (`terminal`, `iterm`, `ghostty`, `gnome-terminal`…), or
+        /// `shell` for a new shell in it
         #[arg(short, long, add = ArgValueCandidates::new(crate::complete::editors))]
         editor: Option<String>,
     },

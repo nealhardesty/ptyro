@@ -50,7 +50,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("workspace.switch", "Switch workspace (each has its own projects, profile and layout)"),
     a(
         "worktree.open",
-        "Open this worktree in an installed editor, the file manager, or a new shell (!)",
+        "Open this worktree in an installed editor, the file manager, a terminal app, or a new shell (!)",
     ),
     a("script.run", "Run the project's default run script in this worktree"),
     a("script.pick", "Pick a lifecycle script to run in this worktree"),

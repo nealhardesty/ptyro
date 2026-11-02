@@ -299,7 +299,7 @@ with zero risk of losing work.
       *Done:* `n` (agent, then target; `n ⏎ ⏎` = default agent in a new worktree), `N` (name, then agent). The profile is shown with its reason; the pane follows the agent once setup ends.
 - [x] **M3.14** `wt open` editors (§13.2), `nvim` "inside" mode opens as a ptyro session. **S**
       *Done:* `[editors]` plus built-ins (nvim/vim/hx inside, code/zed/cursor outside); `wt open`, `C-q o`.
-      Later (2026-11-02): only installed editors are offered (macOS apps count), plus the file manager (`finder`/`files`/`explorer`) and `shell` (`!` in the picker).
+      Later (2026-11-02): only installed editors are offered (macOS apps count), plus the file manager (`finder`/`files`/`explorer`), the installed terminal apps (macOS and Linux; a window there), and `shell` (`!` in the picker).
 - [x] **M3.15** `ptyro gc` (stale worktrees report, interactive cleanup). **S**
       *Done:* `gc [--dry-run]`: gone, merged, unused for `stale_days`; asks for each, never forces.
 - [x] **M3.16** Branch name templates + optional auto-rename-from-first-prompt (`wt rename-branch`). **S**

@@ -194,9 +194,10 @@ a row's menu (`.`), makes one at any time.
 - `Ctrl-Q !` starts a new shell in this worktree, full sized, every press.
 - `Ctrl-Q o` **opens the worktree in…** any editor installed here (nvim, vim, hx, VS Code,
   Zed, Cursor, or one of yours under `[editors]`; on macOS an app in Applications counts even
-  without its command on `PATH`), the file manager (`finder`, or `files` on Linux), or, with `!`,
-  a new shell in it. From a shell: `ptyro wt open NAME -e code|finder|shell`; on the web, a
-  worktree's ⋯ → Open in….
+  without its command on `PATH`), the file manager (`finder`, or `files` on Linux), a terminal app
+  window there (Terminal, iTerm, Ghostty, WezTerm, kitty, Alacritty, GNOME Terminal, Konsole…),
+  or, with `!`, a new shell in it. From a shell: `ptyro wt open NAME -e code|finder|iterm|shell`;
+  on the web, a worktree's ⋯ → Open in….
 - `Ctrl-Q Ctrl-T` opens the worktree's **quick terminal**: its one shell, in a drawer below a pane
   of the same project (`Ctrl-Q T` shows it full sized). Press it again to focus it, and once more
   to hide it; the shell keeps running, and its `›_ quick shell` line sits first under the worktree in the
@@ -543,7 +544,7 @@ All after the prefix, `Ctrl-Q` or `Ctrl-Space`. The full list is in [`docs/keys.
 | `[` | copy mode: scroll back, search (`/`), select (`v`), copy (`y`) |
 | `D` / `Q` | inspector / review queue |
 | `O` / `S` | runs / change sets |
-| `w` / `o` / `r` | switch workspace / open in an editor, the file manager or a shell / run the default run script |
+| `w` / `o` / `r` | switch workspace / open in an editor, the file manager, a terminal app or a shell / run the default run script |
 | `;` / `'` / `"` | the scratchpad / add a line to it / its open items |
 | `m` / `g` | a new chat / the chat list |
 
