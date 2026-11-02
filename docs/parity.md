@@ -143,7 +143,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `wt pair` | `worktree.pair` | `worktree.pair`: a worktree's ⋯ menu |
 | `wt unpair` | `worktree.unpair` | `worktree.unpair`: a worktree's ⋯ menu |
 | `wt run` | `script.run` (`r`), `script.pick` (`R`) | `worktree.run`: a worktree's ⋯ menu: pick a script; it opens its session |
-| `wt open` | `worktree.open` (`o`) | `worktree.open`: a worktree's ⋯ menu: pick the editor (a terminal editor opens as a session) |
+| `wt open` | `worktree.open` (`o`): the installed editors, the file manager, and `shell` (`!`), a new shell in it | `worktree.open`: a worktree's ⋯ → Open in…: the editors installed on the computer (a terminal editor opens as a session), its file manager, and `shell` (`shell.new`) |
 | `wt lock` | `worktree.lock` | `worktree.lock`: a worktree's ⋯ menu |
 | `wt unlock` | `worktree.unlock` | `worktree.unlock`: a worktree's ⋯ menu |
 | `wt rename-branch` | `worktree.rename_branch` | `worktree.rename_branch`: a worktree's ⋯ menu |

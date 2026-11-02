@@ -151,6 +151,14 @@ pub fn profiles() -> Vec<CompletionCandidate> {
     ptyro_agents::profile::names(&config()).into_iter().map(|p| candidate(p, None)).collect()
 }
 
+/// What `wt open` opens: the editors installed here, then a new shell.
+pub fn editors() -> Vec<CompletionCandidate> {
+    let mut out: Vec<CompletionCandidate> =
+        config().editor_names().into_iter().map(|e| candidate(e, None)).collect();
+    out.push(candidate("shell".into(), Some("a new shell in it".into())));
+    out
+}
+
 /// Agents, and `agent@profile` for each profile.
 pub fn agents() -> Vec<CompletionCandidate> {
     let c = config();

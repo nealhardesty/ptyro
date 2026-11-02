@@ -23,7 +23,7 @@ const ACTIONS = {
     "worktree.pair": "Pair mode: show the worktree's state in the project's main checkout",
     "worktree.unpair": "Put the main checkout back, carrying edits made there into the worktree",
     "worktree.run": "Run one of the project's scripts in this worktree",
-    "worktree.open": "Open the worktree in an editor",
+    "worktree.open": "Open the worktree in an editor installed on the computer, its file manager, or a new shell",
     "worktree.lock": "Keep the worktree from being removed or cleaned up",
     "worktree.unlock": "Let the worktree be removed again",
     "worktree.rename_branch": "Rename the worktree's branch (until it's pushed)",
@@ -323,17 +323,24 @@ async function runScript(w) {
         return start(names[0]);
     menu("Run a script", names.map((n, i) => ({ label: n, hint: i === 0 ? "default" : undefined, run: () => start(n) })));
 }
+/// The file manager, by any of its names (the daemon's computer calls it one of them).
+const FILE_MANAGERS = ["finder", "files", "explorer"];
+/// Open in: the editors installed on the computer, its file manager, then a new shell here.
 async function openIn(w) {
     const r = await ask({ t: "editors" });
     if (!r)
         return;
-    menu(`Open ${w.name} in…`, r.names.map((n) => ({ label: n, hint: n === r.default ? "default" : undefined, run: async () => {
-            const o = await ask({ t: "worktree_open", addr: w.id, editor: n });
-            if (o?.t === "session")
-                go(`#/s/${enc(o.info.id)}`);
-            else if (o?.notes)
-                showNotes("Opened", o.notes);
-        } })));
+    const hint = (n) => [n === r.default && "default", FILE_MANAGERS.includes(n) && "Shows the folder, on the computer"].filter(Boolean).join(" · ") || undefined;
+    menu(`Open ${w.name} in…`, [
+        ...r.names.map((n) => ({ label: n, hint: hint(n), run: async () => {
+                const o = await ask({ t: "worktree_open", addr: w.id, editor: n });
+                if (o?.t === "session")
+                    go(`#/s/${enc(o.info.id)}`);
+                else if (o?.notes)
+                    showNotes("Opened", o.notes);
+            } })),
+        { title: tipOf("shell.new"), label: "shell", hint: "A new shell in it", run: () => void newShell(w) },
+    ]);
 }
 function renameBranch(w) {
     form("Rename the branch", [{ key: "branch", label: "New name", value: w.branch ?? "", placeholder: "from the first commit", slug: "branch", hint: "Refused once it's pushed. Empty derives a name from the first commit. A space or other character git refuses becomes _." }], "Rename", async (v) => {
@@ -351,7 +358,7 @@ async function pairMode(w, off) {
 }
 function worktreeMenu(w) {
     menu(w.title || w.name, [
-        { title: tip("worktree.open"), label: "Open in an editor…", run: () => openIn(w) },
+        { title: tip("worktree.open"), label: "Open in…", hint: "An editor, the file manager or a shell", run: () => openIn(w) },
         { title: tip("worktree.run"), label: "Run a script…", run: () => runScript(w) },
         { title: tip("worktree.pair"), label: "Pair mode: show it in the main checkout", hint: "Run it from the project's own directory", run: () => pairMode(w, false) },
         { title: tip("worktree.unpair"), label: "End pair mode", hint: "Puts the main checkout back, carrying edits over", run: () => pairMode(w, true) },

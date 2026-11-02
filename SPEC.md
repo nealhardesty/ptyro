@@ -3810,6 +3810,18 @@ zed = { command = ["zed", "{path}"] }
 serve = false                              # the daemon runs `ptyro serve` itself
 ```
 
+**Open in** (`wt open`, `worktree.open`). Only what is installed is offered, checked where it
+runs (the TUI's and CLI's computer, or the daemon's for the web): a configured editor when its
+`command[0]` is on `PATH` (or is an executable path); a built-in when its command is, and on
+macOS `code`, `zed` and `cursor` also as `Visual Studio Code.app`, `Zed.app`, `Cursor.app` in
+`/Applications` or `~/Applications`, opened with `open -a <app> {path}`. The built-in file
+manager is named for the platform (`finder`: `open`; `files`: `xdg-open`, else `gio open`;
+`explorer`) and answers to all three names, so a shared config keeps working. The default is
+`editors.default` if installed, else `$VISUAL`/`$EDITOR` if it names an installed one, else the
+first installed. `shell` is not an editor: `wt open -e shell` (the picker's `!`, the web menu's
+last entry) starts a shell session in the worktree through `Spawn`, so it needs the Full device
+scope, as `!` does, while `WorktreeOpen` stays Control.
+
 ### 13.3 Project config `.ptyro.toml` (example)
 
 ```toml

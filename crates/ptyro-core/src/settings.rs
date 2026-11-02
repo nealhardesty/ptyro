@@ -753,7 +753,7 @@ pub const SETTINGS: &[Setting] = &[
     s("scratchpad.path", "scratchpad", Kind::Path, "Where the notes file lives. Point it into a synced folder to share it between machines.").or("scratchpad.md in ptyro's data directory").eg("~/Sync/pad.md"),
     s("scratchpad.keep", "scratchpad", int(1, 3650), "How long saved copies of the notes are kept (the newest 20 always stay).").unit("days"),
     s("scratchpad.tick_on_finish", "scratchpad", Kind::Bool, "Tick an item once the worktree started from it is merged or cleaned up."),
-    s("editors.default", "scratchpad", dynamic(Source::Editors), "The editor that opens a worktree (the notes file has its own, above).").or("the first of nvim, vim, hx, code, zed, cursor that is installed"),
+    s("editors.default", "scratchpad", dynamic(Source::Editors), "The editor that opens a worktree (the notes file has its own, above). Only installed ones are offered; `finder` (`files` on Linux) shows the folder in the file manager.").or("the first of nvim, vim, hx, code, zed, cursor that is installed"),
     s("editors.*.command", "scratchpad", Kind::Argv, "The program and arguments; {path} is the worktree."),
     s("editors.*.inside", "scratchpad", Kind::Bool, "Open it as a ptyro session, for terminal editors."),
     // ── Daemon and recording ──
@@ -958,8 +958,8 @@ pub fn options(
             named(names.into_iter().collect(), "agent")
         }
         Source::Editors => {
-            let mut names: BTreeSet<String> =
-                crate::config::BUILTIN_EDITORS.iter().map(|s| (*s).to_owned()).collect();
+            // What's installed here, and anything configured (installed or not, it's yours).
+            let mut names: BTreeSet<String> = config.editor_names().into_iter().collect();
             names.extend(config.editors.keys().filter(|k| *k != "default").cloned());
             named(names.into_iter().collect(), "editor")
         }

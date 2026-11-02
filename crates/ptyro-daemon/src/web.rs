@@ -179,12 +179,9 @@ impl Daemon {
         let info = self.find_worktree(addr)?;
         let config = self.config();
         let name = editor.unwrap_or_else(|| config.default_editor());
-        let def = config.editor(&name).ok_or_else(|| {
-            Error::new(
-                ErrorCode::NotFound,
-                format!("no editor {name:?} (known: {})", config.editor_names().join(", ")),
-            )
-        })?;
+        let def = config
+            .editor(&name)
+            .ok_or_else(|| Error::new(ErrorCode::NotFound, config.no_editor(&name)))?;
         let path = info.path.to_string_lossy().into_owned();
         let mut argv: Vec<String> =
             def.command.iter().map(|a| a.replace("{path}", &path)).collect();
