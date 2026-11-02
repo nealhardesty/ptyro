@@ -122,7 +122,8 @@ Strong success criteria lets you loop independently. Weak criteria ("make it wor
 ---
 
 ## Project Specific Rules
-* **Principal of Obviousness**: The interface MUST be intuitive. Configuration options should make sense to a reasonable user.  The defaults should always be what the user can use immediately.
+* **Principal of Obviousness**: The interface MUST be intuitive. Configuration options should make sense to a reasonable user.  The defaults should always be what the user can use immediately.  Quick help usually needs to make anything possible obvious.
+* Ask questions if anything is unclear in a request.  
 * Never add a co-authored by statement to a generated comment.  Ever.
 * Any feature implemented must have parity between the CLI, the TUI and the Web interfaces.  This is not optional.
 * When you implement a feature, please use `make bump` to bump the version number.
@@ -132,4 +133,4 @@ Strong success criteria lets you loop independently. Weak criteria ("make it wor
   look for it. A setting you can only change by editing the file isn't finished.
 * **The database holds metadata, never contents, with one exception** (owner, 2026-10-29): chat
   conversation text lives in its own file, `chat.db` (SPEC §22.4). Terminal contents still never go into any
-  database, and chat text never goes into `ptyro.db`.
+  database, and chat text never goes into `ptyro.db`.  This may change in the future.
