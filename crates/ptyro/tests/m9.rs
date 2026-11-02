@@ -1508,7 +1508,8 @@ async fn the_web_app_asks_the_daemon_and_the_machine() {
     let claude = a["agents"].as_array().unwrap().iter().find(|x| x["name"] == "claude").unwrap();
     assert_eq!(claude["installed"], true, "{a}");
     let e = tab.ok(json!({ "t": "editors" })).await;
-    assert!(e["names"].as_array().unwrap().iter().any(|n| n == "nvim"), "{e}");
+    // Only what's installed on this computer: at least the file manager, the default among them.
+    assert!(e["names"].as_array().unwrap().iter().any(|n| *n == e["default"]), "{e}");
 
     // A session's recording: exported as text and asciicast, replayed as screen frames. A
     // control device stops what it started.
