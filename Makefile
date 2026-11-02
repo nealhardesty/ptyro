@@ -1,8 +1,13 @@
 # ptyro — every workflow has a make target (see AGENTS.md). `make` alone lists them.
 
 # rustup installs to ~/.cargo/bin; make it work even when that isn't on the caller's PATH yet.
+# On Windows that is under %USERPROFILE%, which MSYS2 (unlike Git Bash) doesn't make $HOME.
+CARGO_BIN := $(or $(if $(filter Windows_NT,$(OS)),$(shell cygpath -u '$(USERPROFILE)' 2>/dev/null)),$(HOME))/.cargo/bin
 CALLER_PATH := $(PATH)
-export PATH := $(HOME)/.cargo/bin:$(PATH)
+# A native Windows make (Chocolatey's) sees Windows' own PATH, where rustup-init puts cargo itself.
+ifeq ($(findstring ;,$(PATH)),)
+export PATH := $(CARGO_BIN):$(PATH)
+endif
 # Resolved with the PATH above: make execs simple recipes with its startup PATH, not the exported one.
 CARGO ?= $(or $(shell PATH="$(PATH)" command -v cargo),cargo)
 PTYRO := target/debug/ptyro
@@ -29,8 +34,8 @@ help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 ## ── build ──────────────────────────────────────────────────────────────────
-rust-install: ## Install rustup and the pinned Rust toolchain (Linux, macOS)
-	PTYRO_CALLER_PATH='$(CALLER_PATH)' scripts/rust-install.sh
+rust-install: ## Install rustup and the pinned Rust toolchain (Linux, macOS, Windows)
+	PTYRO_CALLER_PATH='$(CALLER_PATH)' sh scripts/rust-install.sh
 
 build: ## Debug build of the whole workspace
 	$(CARGO) build --workspace
