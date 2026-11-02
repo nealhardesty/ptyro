@@ -29,3 +29,6 @@ rustc-ice-*.txt
 
 # macOS Finder metadata
 .DS_Store
+
+# Claude
+.claude/
