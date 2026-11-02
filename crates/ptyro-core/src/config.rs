@@ -188,6 +188,78 @@ impl CommandSpec {
     }
 }
 
+/// The agents ptyro knows without a `[agents.<name>]` table.
+pub const BUILTIN_AGENTS: &[&str] = &["claude", "codex", "gemini", "opencode", "antigravity"];
+
+/// `[agents]` (SPEC §13.2): `default = "<agent>"`, the agent new sessions use when nothing else
+/// says (`claude` when unset), plus one `[agents.<name>]` table each. It reads as the map of those
+/// tables; `default` is the one key that isn't one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Agents {
+    pub default: Option<String>,
+    defs: BTreeMap<String, AgentDef>,
+}
+
+impl std::ops::Deref for Agents {
+    type Target = BTreeMap<String, AgentDef>;
+    fn deref(&self) -> &Self::Target {
+        &self.defs
+    }
+}
+
+impl std::ops::DerefMut for Agents {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.defs
+    }
+}
+
+impl<'a> IntoIterator for &'a Agents {
+    type Item = (&'a String, &'a AgentDef);
+    type IntoIter = std::collections::btree_map::Iter<'a, String, AgentDef>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.defs.iter()
+    }
+}
+
+impl Serialize for Agents {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut m = s.serialize_map(None)?;
+        if let Some(d) = &self.default {
+            m.serialize_entry("default", d)?;
+        }
+        for (k, v) in &self.defs {
+            m.serialize_entry(k, v)?;
+        }
+        m.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Agents {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = Agents;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("`default = \"<agent>\"` and `[agents.<name>]` tables")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut m: A) -> Result<Agents, A::Error> {
+                let mut out = Agents::default();
+                while let Some(k) = m.next_key::<String>()? {
+                    if k == "default" {
+                        out.default = Some(m.next_value()?);
+                    } else {
+                        let v = m.next_value()?;
+                        out.defs.insert(k, v);
+                    }
+                }
+                Ok(out)
+            }
+        }
+        d.deserialize_map(V)
+    }
+}
+
 /// An agent (SPEC §13.2 `[agents.<name>]`). User config only (ADR 15).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -198,7 +270,7 @@ pub struct AgentDef {
     pub command: Option<CommandSpec>,
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
-    /// The agent `n` offers first.
+    /// The older way to name the default agent; `[agents] default` wins over it.
     pub default: bool,
     /// Hibernate after this long idle and unseen (`"2h"`; default off).
     pub hibernate_after: Option<String>,
@@ -467,7 +539,8 @@ pub struct Config {
     /// `default = "nvim"` plus `<name> = { command = [...], inside = bool }`.
     pub editors: BTreeMap<String, EditorEntry>,
     pub compat: Compat,
-    pub agents: BTreeMap<String, AgentDef>,
+    /// `default = "claude"` plus `[agents.<name>]` tables.
+    pub agents: Agents,
     pub notifications: Notifications,
     pub attention: AttentionConfig,
     pub github: Github,
@@ -1526,6 +1599,17 @@ impl Config {
         for k in self.ui.prefix.keys() {
             parse_key(k).map_err(|e| format!("ui.prefix: {e}"))?;
         }
+        if let Some(name) = self.agents.default.as_deref().filter(|d| !d.is_empty())
+            && !self.agents.contains_key(name)
+            && !BUILTIN_AGENTS.contains(&name)
+        {
+            let mut known: Vec<&str> = BUILTIN_AGENTS.to_vec();
+            known.extend(self.agents.keys().map(String::as_str));
+            return Err(format!(
+                "agents.default: no agent named {name:?} (known: {})",
+                known.join(", ")
+            ));
+        }
         for (name, a) in &self.agents {
             crate::names::validate(name).map_err(|e| format!("agents.{name}: {e}"))?;
             if let Some(h) = &a.hibernate_after {
@@ -2284,6 +2368,27 @@ scope = "global"
         assert!(Config::parse("[notifications]\nquiet_hours = \"25:00-07:00\"\n").is_err());
         let q = parse_quiet_hours("22:00-07:00").unwrap();
         assert!(in_quiet_hours(q, 23 * 60) && in_quiet_hours(q, 60) && !in_quiet_hours(q, 12 * 60));
+    }
+
+    #[test]
+    fn agents_default_names_an_agent() {
+        let c =
+            Config::parse("[agents]\ndefault = \"codex\"\n[agents.aider]\ncommand = \"aider\"\n")
+                .unwrap();
+        assert_eq!(c.agents.default.as_deref(), Some("codex"));
+        assert_eq!(c.agents.len(), 1, "default isn't an agent table");
+        assert!(
+            Config::parse("[agents]\ndefault = \"aider\"\n[agents.aider]\ncommand = \"aider\"\n")
+                .is_ok()
+        );
+        let e = Config::parse("[agents]\ndefault = \"nope\"\n").unwrap_err();
+        assert!(e.contains("agents.default") && e.contains("claude"), "{e}");
+        // Typos inside an agent's table are still named.
+        let e = Config::parse("[agents.aider]\ncomand = \"aider\"\n").unwrap_err();
+        assert!(e.contains("comand"), "{e}");
+        // It round-trips.
+        let back: Agents = toml::from_str(&toml::to_string(&c.agents).unwrap()).unwrap();
+        assert_eq!(back, c.agents);
     }
 
     #[test]

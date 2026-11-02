@@ -64,6 +64,10 @@ roots = ["~/dev", "~/src"]   # where `project.add` (`Ctrl-Q P`) looks for reposi
 default = "nvim"
 code = { command = ["code", "{path}"] }
 
+[agents]
+default = "codex"                         # the default agent: `n`'s first choice, and what `C-n`
+                                          # starts where no agent has run (default: claude)
+
 [agents.claude]
 command = ["claude", "--model", "opus"]   # how to start an agent
 hibernate_after = "2h"                    # stop when idle and unwatched this long; resumes on focus

@@ -43,7 +43,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     ),
     a(
         "session.again",
-        "Quick new: another of what this workspace last started (claude, a shell…), here, no questions",
+        "Quick new: another of the agent this worktree last started (claude the first time), here, no questions",
     ),
     a("session.command", "New session running a command line (empty: your shell)"),
     a("worktree.new", "New worktree of this project (+ an agent), after its setup script"),

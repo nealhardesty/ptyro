@@ -800,6 +800,7 @@ impl Daemon {
             self.forget_session(s.id);
         }
         self.drop_worktree(wt.clone());
+        self.forget_launch(&wt.id).await;
         self.pad_finished(&wt.qualified(), wt.pr.as_ref().map(|p| u64::from(p.number)));
         notes.insert(0, format!("removed {}", wt.qualified()));
         Ok(Reply::Removed { notes })
@@ -1161,16 +1162,12 @@ impl Daemon {
                 Ok(Reply::Worktree { info: self.find_worktree(&addr)? })
             }
             Request::WorktreeNew { spec } => {
-                let (agent, profile, asked) =
-                    (spec.agent.clone(), spec.profile.clone(), spec.workspace.clone());
+                let (agent, profile) = (spec.agent.clone(), spec.profile.clone());
                 let reply = self.create_worktree(spec).await?;
-                // Its agent counts for quick-new (UX3.2), as `Spawn` does.
-                if let (Some(agent), Reply::WorktreeCreated { info, .. }) = (agent, &reply)
-                    && let Ok(p) = self.find_project(&info.project)
-                    && let Ok(ws) = self.home_workspace(asked.as_deref(), Some(&p))
-                {
+                // Its agent counts for quick new (UX3.7), as `Spawn`'s does.
+                if let (Some(agent), Reply::WorktreeCreated { info, .. }) = (agent, &reply) {
                     let spec = SpawnSpec { agent: Some(agent), profile, ..SpawnSpec::default() };
-                    self.remember_launch(&ws, &spec).await;
+                    self.remember_launch(Some(&info.id), &spec).await;
                 }
                 Ok(reply)
             }

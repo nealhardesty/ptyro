@@ -112,8 +112,12 @@ pub fn names(config: &Config) -> Vec<String> {
     v
 }
 
-/// The configured default agent: `[agents.<name>] default = true`, else `claude`.
+/// The configured default agent: `[agents] default`, else (the older form)
+/// `[agents.<name>] default = true`, else `claude`.
 pub fn default_agent(config: &Config) -> String {
+    if let Some(d) = config.agents.default.as_ref().filter(|d| !d.is_empty()) {
+        return d.clone();
+    }
     config
         .agents
         .iter()
@@ -199,6 +203,10 @@ mod tests {
         assert!(command(&c, "nope").is_none());
         assert_eq!(default_agent(&c), "aider");
         assert_eq!(default_agent(&Config::default()), "claude");
+        // `[agents] default` wins over the older `default = true`.
+        let mut c = c;
+        c.agents.default = Some("codex".into());
+        assert_eq!(default_agent(&c), "codex");
         assert_eq!(split_agent("claude@work"), ("claude", Some("work")));
         assert_eq!(split_agent("claude"), ("claude", None));
         assert!(names(&c).contains(&"aider".to_owned()));

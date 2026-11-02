@@ -34,6 +34,7 @@ Conventions:
 | `ptyro "TASK…"` | the default agent on that task, in a new worktree named after it (here, outside a repository); then attach |
 | `ptyro new [-d] [-n NAME] [-C DIR] [--size COLSxROWS] [--json] [-- CMD…]` | start a session; attaches unless `-d`. No `--agent` means your shell, or `CMD` |
 | `ptyro new … --agent A[@PROFILE] [--profile P] [--override-pin] [-y]` | start an agent: `claude`, `codex`, `gemini`, `opencode`, or one from `[agents]` |
+| `ptyro new --again [--wt W] [-d]` | quick new: another of the agent this worktree last started (with its profile and arguments); the project's `default_agent`, else `[agents] default` (claude), when none has |
 | `ptyro new … --wt W \| --new-wt [NAME] [--project P] \| --pr N\|URL \| --issue N\|URL \| --take-changes` | where: an existing worktree, a new one, one on a PR's branch, one for an issue, or one that takes the main checkout's uncommitted changes |
 | `ptyro new … --prompt TEXT\|@SNIPPET \| --prompt-file F` · `--title T` | the first prompt, typed once the agent's input box is really there · its title (default: the prompt; the name comes from it too) |
 | `ptyro new … --verify CHECK` · `--structured` · `--unqueued` | verified-done · drive it over its protocol (chat view) · skip the review queue's hold |

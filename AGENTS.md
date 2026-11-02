@@ -126,6 +126,10 @@ Strong success criteria lets you loop independently. Weak criteria ("make it wor
 * Never add a co-authored by statement to a generated comment.  Ever.
 * Any feature implemented must have parity between the CLI, the TUI and the Web interfaces.  This is not optional.
 * When you implement a feature, please use `make bump` to bump the version number.
+* **Every configuration option shows up in the configuration screens**, in both the TUI and
+  the web. A change that adds an option also adds it to those screens: its schema entry in
+  `crates/ptyro-core/src/settings.rs` (section, kind, default, help), placed where a user would
+  look for it. A setting you can only change by editing the file isn't finished.
 * **The database holds metadata, never contents, with one exception** (owner, 2026-10-29): chat
   conversation text lives in its own file, `chat.db` (SPEC §22.4). Terminal contents still never go into any
   database, and chat text never goes into `ptyro.db`.

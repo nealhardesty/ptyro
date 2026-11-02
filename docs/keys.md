@@ -39,7 +39,7 @@ action by name.
 | `q` | send the prefix key itself to the program (`Ctrl-Q q` types `Ctrl-Q`): for a ptyro inside ptyro, emacs's `C-q`, or a program that quits on it |
 | `C-d` | quit ptyro: stop every session and the daemon, after a yes (agents hibernate and resume next time) |
 | `n` | new task: say what to do, ⏎ starts the default agent on it in a new worktree named after it (Tab edits the name, `C-o` picks the agent and where, an empty ⏎ is a random name) |
-| `C-n` | quick new: another of what this workspace last started (`claude`, `claude@work`, a shell…; the default agent at first) in this worktree, no questions. The which-key menu says what it starts: `+ claude` |
+| `C-n` | quick new: another of the agent this worktree last started (`claude`, `codex@work`…, with its arguments) in this worktree, no questions; where none has run, the project's default agent, else the Default agent setting (claude). Always an agent: `!` is the shell. The which-key menu says what it starts: `+ claude` |
 | `N` | new worktree of this project (+ an agent), after its setup script |
 | `w` | go to a workspace: every workspace (yours, then other machines') is in the sidebar, and this jumps to its header, unfolded; `+ new workspace` asks which machine when there are others |
 | `o` | open the worktree in an editor (`[editors]`; nvim opens inside ptyro) |
@@ -120,7 +120,7 @@ Focus the sidebar with `Ctrl-Q Tab`, or `Ctrl-Q Ctrl-Q`. These keys need no pref
 | `h` / `l` (or `Left` / `Right`) | fold / unfold |
 | `Space` | mark a session for broadcast; on a workspace, project or worktree, fold or unfold |
 | `b` | broadcast one prompt into the marked sessions |
-| `n` / `C-n` / `N` | new task here / quick new (another of what was last started, here) / new worktree |
+| `n` / `C-n` / `N` | new task here / quick new (another of this worktree's agent, here) / new worktree |
 | `a` `p` `i` `e` | next attention / peek / inbox / why this status |
 | `x` / `X` | stop a session (`x` again removes it) or remove a worktree (refuses to lose work, and offers archiving instead; a merged one is archived) / kill. Its pane shows the next session |
 | `R` | restart an exited session |

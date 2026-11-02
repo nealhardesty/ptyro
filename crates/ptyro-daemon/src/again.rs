@@ -1,18 +1,23 @@
-//! Quick-new (UX3.2): what each workspace last started, so `SpawnSpec.again` can start another
-//! of it in one key (`C-q C-n`, `ptyro new --again`, the web's "+ again"). Remembered for
-//! sessions people start (an agent, a shell, a command line), not for a client's tools, the
-//! quick terminal or the scratchpad's editor, and kept in `kv` across restarts.
+//! Quick new (UX3.2, UX3.7): the agent each worktree last started, so `SpawnSpec.again` can start
+//! another of it in one key (`C-q C-n`, `ptyro new --again`, the web's "+ claude"). It is always
+//! an agent (`!` is the key for a shell): the worktree's last one (with its profile and
+//! arguments), else its project's `default_agent`, else `[agents] default` (claude). Remembered
+//! for agents people start, never a client's tool, the quick terminal or the scratchpad's editor,
+//! and kept in `kv` across restarts.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use ptyro_core::Error;
+use ptyro_core::model::{ProjectInfo, WorktreeInfo};
 use ptyro_core::session::{LastLaunch, SpawnSpec};
 use ptyro_core::sync::MutexExt;
 
 use crate::daemon::Daemon;
 
-const KEY: &str = "last_launch";
+/// Worktree id → the agent it last started. (`last_launch`, before UX3.7, was per workspace and
+/// held shells too; it is no longer read.)
+const KEY: &str = "last_agent";
 
 impl Daemon {
     pub(crate) async fn load_last_launch(&self) {
@@ -24,27 +29,49 @@ impl Daemon {
         }
     }
 
-    pub(crate) fn last_launch(&self, workspace: &str) -> Option<LastLaunch> {
-        self.last_launch.locked().get(workspace).cloned()
+    /// What quick new starts in `target`: its worktree's last agent, else its project's default
+    /// agent, else the default agent.
+    pub(crate) fn next_launch(&self, target: Option<&(WorktreeInfo, ProjectInfo)>) -> LastLaunch {
+        if let Some(l) = target.and_then(|(w, _)| self.last_launch.locked().get(&w.id).cloned()) {
+            return l;
+        }
+        let project = target.and_then(|(w, p)| {
+            ptyro_core::project::ProjectConfig::load(&p.root, &w.path).ok()?.project.default_agent
+        });
+        let agent = project
+            .filter(|a| !a.is_empty())
+            .unwrap_or_else(|| ptyro_agents::default_agent(&self.config()));
+        LastLaunch { agent: Some(agent), ..LastLaunch::default() }
     }
 
-    /// Remember what `spec` started in `workspace`, unless it's a tool, a quick terminal or the
-    /// scratchpad's editor.
-    pub(crate) async fn remember_launch(&self, workspace: &str, spec: &SpawnSpec) {
+    /// `LastLaunch`: what quick new would start in `worktree` (an address), or anywhere outside
+    /// one.
+    pub(crate) fn launch_for(&self, worktree: Option<&str>) -> Result<LastLaunch, Error> {
+        let target = match worktree {
+            Some(w) => self.target(Some(w), std::path::Path::new(""))?,
+            None => None,
+        };
+        Ok(self.next_launch(target.as_ref()))
+    }
+
+    /// Remember the agent `spec` started in the worktree `worktree` (an id). Shells, command
+    /// lines, tools, quick terminals and the scratchpad's editor don't count.
+    pub(crate) async fn remember_launch(&self, worktree: Option<&str>, spec: &SpawnSpec) {
+        let (Some(worktree), Some(agent)) = (worktree, &spec.agent) else { return };
         if spec.tool || spec.quick || spec.pad {
             return;
         }
         let launch = LastLaunch {
-            agent: spec.agent.clone(),
+            agent: Some(agent.clone()),
             profile: spec.profile.clone(),
             argv: spec.argv.clone(),
         };
         let snapshot = {
             let mut all = self.last_launch.locked();
-            if all.get(workspace) == Some(&launch) {
+            if all.get(worktree) == Some(&launch) {
                 return;
             }
-            all.insert(workspace.to_owned(), launch);
+            all.insert(worktree.to_owned(), launch);
             serde_json::to_value(&*all).unwrap_or_default()
         };
         if let Some(st) = &self.store {
@@ -52,12 +79,13 @@ impl Daemon {
         }
     }
 
-    /// A renamed workspace keeps what it last started (H2.7).
-    pub(crate) async fn rename_launch(&self, old: &str, new: &str) {
+    /// A removed worktree's memory goes with it.
+    pub(crate) async fn forget_launch(&self, worktree: &str) {
         let snapshot = {
             let mut all = self.last_launch.locked();
-            let Some(l) = all.remove(old) else { return };
-            all.insert(new.to_owned(), l);
+            if all.remove(worktree).is_none() {
+                return;
+            }
             serde_json::to_value(&*all).unwrap_or_default()
         };
         if let Some(st) = &self.store {
@@ -65,8 +93,8 @@ impl Daemon {
         }
     }
 
-    /// `again`: fill in the agent (or shell, or command) its workspace last started, else the
-    /// default agent. What `spec` names itself wins.
+    /// `again`: fill in the agent (with its profile and arguments) quick new starts where `spec`
+    /// runs. What `spec` names itself wins.
     pub(crate) async fn resolve_again(
         self: &Arc<Self>,
         mut spec: SpawnSpec,
@@ -79,15 +107,10 @@ impl Daemon {
             self.auto_register(&spec.cwd, spec.workspace.as_deref()).await;
         }
         let target = self.target(spec.worktree.as_deref(), &spec.cwd)?;
-        let workspace =
-            self.home_workspace(spec.workspace.as_deref(), target.as_ref().map(|(_, p)| p))?;
-        let last = self.last_launch(&workspace).unwrap_or_else(|| LastLaunch {
-            agent: Some(ptyro_agents::default_agent(&self.config())),
-            ..LastLaunch::default()
-        });
-        spec.agent = last.agent;
-        spec.argv = last.argv;
-        spec.profile = spec.profile.or(last.profile);
+        let next = self.next_launch(target.as_ref());
+        spec.agent = next.agent;
+        spec.argv = next.argv;
+        spec.profile = spec.profile.or(next.profile);
         Ok(spec)
     }
 }

@@ -500,7 +500,7 @@ pub enum Pending {
     /// `chat.pick`: which agent takes the next message, as a toast.
     ChatPicked,
     /// What quick-new would start in this workspace (UX3.2), for its label.
-    Again(String),
+    Again(Option<String>),
     /// Wizard title: the profile a spawn would get and why.
     Resolved,
     /// Show the trust dialog for these scripts, then do `then`.
@@ -753,8 +753,11 @@ pub struct App {
     pub(crate) revealing: Option<(SessionId, Instant)>,
     /// Tools (an editor) whose screen goes back to what it replaced when they exit (UX3.1).
     pub(crate) tool_back: HashSet<SessionId>,
-    /// What quick-new (`session.again`) starts in this workspace; `None`: the default agent.
-    pub again: Option<ptyro_core::session::LastLaunch>,
+    /// What quick new (`session.again`) starts, and in which worktree (UX3.7); `None`: not
+    /// known yet (the default agent).
+    pub again: Option<(Option<String>, ptyro_core::session::LastLaunch)>,
+    /// The worktree quick new's label was last asked about.
+    pub(crate) again_for: Option<Option<String>>,
     /// The scratchpad's open items, kept current by `ScratchChanged` (NOTE1.2).
     pub pad_open: u32,
     /// The scratchpad's editor, when it is shown as a popup (NOTE1.1).
@@ -865,6 +868,7 @@ impl App {
             revealing: None,
             tool_back: HashSet::new(),
             again: None,
+            again_for: None,
             pad_open: 0,
             pad_popup: None,
             pad_doc: None,
@@ -1487,6 +1491,10 @@ impl App {
         }
         if self.config.ui.clock {
             self.dirty = true;
+        }
+        // Quick new's label follows the context to another worktree.
+        if self.client.is_some() && self.again_for.as_ref() != Some(&self.context().1) {
+            self.refresh_again();
         }
         self.health_tick(self.started);
     }
@@ -2465,11 +2473,14 @@ impl App {
                 }
             }
             (Pending::Saved, Ok(_)) => {}
-            (Pending::Again(ws), Ok(Reply::LastLaunch { launch })) => {
-                if ws == self.workspace {
-                    self.again = launch;
+            (Pending::Again(wt), Ok(Reply::LastLaunch { launch })) => {
+                if self.again_for.as_ref() == Some(&wt) {
+                    self.again = launch.map(|l| (wt, l));
+                    self.dirty = true;
                 }
             }
+            // Only a label: a worktree still being made says so elsewhere.
+            (Pending::Again(_), Err(_)) => {}
             (_, Err(e)) => match offer_for(&e.message) {
                 Some(offer) => self.toast_offer(e.message, true, offer),
                 None => self.toast_err(e.message),
@@ -9586,8 +9597,16 @@ mod tests {
         assert!(v[0].1.again && v[0].1.worktree.as_deref() == Some("p1-root"));
         // Its label says what it starts.
         assert_eq!(app.again_label(), "claude");
-        app.again = Some(ptyro_core::session::LastLaunch::default());
-        assert_eq!(app.again_label(), "shell");
+        let codex = ptyro_core::session::LastLaunch {
+            agent: Some("codex".into()),
+            profile: Some("work".into()),
+            ..Default::default()
+        };
+        app.again = Some((Some("p1-root".into()), codex.clone()));
+        assert_eq!(app.again_label(), "codex@work");
+        // Another worktree's answer isn't this one's.
+        app.again = Some((Some("p2-root".into()), codex));
+        assert_eq!(app.again_label(), "claude");
         for a in ["shell.new", "session.again"] {
             assert!(app.keymap.key_for(a).is_some(), "{a} has a key");
         }

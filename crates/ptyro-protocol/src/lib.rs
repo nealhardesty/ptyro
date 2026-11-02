@@ -40,7 +40,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 25 };
+pub const PROTO: Version = Version { major: 1, minor: 26 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -330,10 +330,14 @@ pub enum Request {
     MachineRetry {
         name: String,
     },
-    /// What `workspace` last started (UX3.2: quick-new's `SpawnSpec.again`). Replies
-    /// `LastLaunch`.
+    /// What quick new (`SpawnSpec.again`) starts in `worktree` (an address; none: outside one):
+    /// its last agent, else its project's default agent, else the default agent (1.26, UX3.7).
+    /// `workspace` is no longer read (1.19 asked by workspace). Replies `LastLaunch`.
     LastLaunch {
+        #[serde(default)]
         workspace: String,
+        #[serde(default)]
+        worktree: Option<String>,
     },
     /// The scratchpad (NOTE1): its text and revision. Replies `Scratch`.
     ScratchGet,
@@ -1484,7 +1488,8 @@ pub enum Reply {
     Machine {
         info: ptyro_core::model::MachineInfo,
     },
-    /// `None`: nothing started there yet (`again` starts the default agent).
+    /// What quick new starts there (always some, from 1.26; `None` from an older daemon: the
+    /// default agent).
     LastLaunch {
         #[serde(default)]
         launch: Option<LastLaunch>,

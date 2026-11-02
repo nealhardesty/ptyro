@@ -62,11 +62,13 @@ fn every_field_of_the_config_has_a_setting_and_every_setting_a_field() {
         missing.is_empty(),
         "these config fields have no entry in ptyro-core's settings.rs (a setting needs a section, a kind and a line of help, so the panel can show it): {missing:?}"
     );
-    // (`editors.default` is an entry in the editors table, which is empty by default.)
+    // (`editors.default` and `agents.default` are entries in their tables, empty by default.)
     let stale: Vec<&str> = SETTINGS
         .iter()
         .map(|s| s.key)
-        .filter(|k| *k != "editors.default" && !leaves.iter().any(|l| l == k))
+        .filter(|k| {
+            !["editors.default", "agents.default"].contains(k) && !leaves.iter().any(|l| l == k)
+        })
         .collect();
     assert!(stale.is_empty(), "settings with no field in the config: {stale:?}");
     let mut seen = BTreeSet::new();
@@ -697,6 +699,40 @@ fn the_theme_in_use_follows_its_theme_when_that_is_renamed_or_removed() {
     let text = user.read().unwrap();
     assert!(!text.contains("theme") && !text.contains("yours"), "{text}");
     assert!(d.notes.iter().any(|n| n.contains("default theme is back")), "{:?}", d.notes);
+}
+
+/// `[agents] default` (the Default agent setting): set from the panel, never listed as an agent,
+/// and it follows its agent when that is renamed or removed, as the theme does.
+#[test]
+fn the_default_agent_is_a_setting_and_follows_its_agent() {
+    let lk = Lookups::default();
+    let none = |_: &str| Ok(());
+    let dir = tempfile::tempdir().unwrap();
+    let user = Layer::User(dir.path().join("config.toml"));
+    let text = set(Scope::User, "", "agents.default", "codex", &lk, &none).unwrap();
+    assert_eq!(Config::parse(&text).unwrap().agents.default.as_deref(), Some("codex"));
+    assert!(members(&text, "agents").is_empty(), "default isn't an agent: {text}");
+    assert!(
+        add(Scope::User, &text, "agents", "default", &[], &lk, &none)
+            .unwrap_err()
+            .contains("taken")
+    );
+    let text =
+        add(Scope::User, &text, "agents", "aider", &[("command", "aider")], &lk, &none).unwrap();
+    let text = set(Scope::User, &text, "agents.default", "aider", &lk, &none).unwrap();
+    assert_eq!(members(&text, "agents"), ["aider"]);
+    user.write(&text).unwrap();
+    let check = |t: &str| Config::parse(t).map(|_| ());
+    let op = Op::Rename { path: "agents".into(), from: "aider".into(), to: "pair".into() };
+    let d = apply(&user, &op, &lk, &check).unwrap();
+    let c = Config::parse(&user.read().unwrap()).unwrap();
+    assert_eq!(c.agents.default.as_deref(), Some("pair"));
+    assert!(d.notes.iter().any(|n| n.contains("still the default agent")), "{:?}", d.notes);
+    let op = Op::Remove { path: "agents".into(), name: "pair".into() };
+    let d = apply(&user, &op, &lk, &check).unwrap();
+    let c = Config::parse(&user.read().unwrap()).unwrap();
+    assert_eq!(c.agents.default, None, "{}", user.read().unwrap());
+    assert!(d.notes.iter().any(|n| n.contains("claude is back")), "{:?}", d.notes);
 }
 
 fn key_lk() -> Lookups {

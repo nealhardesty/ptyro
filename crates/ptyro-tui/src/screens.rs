@@ -305,25 +305,29 @@ impl App {
         self.spawn_spec(SpawnSpec { worktree, cwd, ..SpawnSpec::default() }, None);
     }
 
-    // ── quick-new (UX3.2) ───────────────────────────────────────────────────
+    // ── quick new (UX3.2, UX3.7) ────────────────────────────────────────────
 
-    /// Ask what quick-new would start in this workspace (for its label).
+    /// Ask what quick new would start in the context's worktree (for its label). `tick` asks
+    /// again when the context moves to another worktree.
     pub(crate) fn refresh_again(&mut self) {
-        let ws = self.workspace.clone();
-        self.request(Pending::Again(ws.clone()), Request::LastLaunch { workspace: ws });
+        let (_, worktree) = self.context();
+        self.again_for = Some(worktree.clone());
+        let workspace = self.workspace.clone();
+        self.request(Pending::Again(worktree.clone()), Request::LastLaunch { workspace, worktree });
     }
 
-    /// What quick-new starts, for people: `claude`, `shell`.
+    /// What quick new starts here, for people: `claude`, `codex@work`.
     pub fn again_label(&self) -> String {
-        self.again.as_ref().map_or_else(
-            || ptyro_agents::default_agent(&self.config),
-            ptyro_core::session::LastLaunch::label,
-        )
+        match &self.again {
+            Some((w, l)) if *w == self.context().1 => l.label(),
+            _ => ptyro_agents::default_agent(&self.config),
+        }
     }
 
-    /// `session.again` (`C-q C-n`): another of what this workspace last started, in the
-    /// context's worktree (the selected row's, the focused session's), no questions asked. It
-    /// opens full sized, like any new session.
+    /// `session.again` (`C-q C-n`): another of the agent the context's worktree (the selected
+    /// row's, the focused session's) last started, else its project's default agent, else the
+    /// default agent; no questions asked. It opens full sized, like any new session. A shell is
+    /// `!`.
     pub(crate) fn quick_new(&mut self) {
         let (_, worktree) = self.context();
         let cwd = if worktree.is_some() { Default::default() } else { self.here() };

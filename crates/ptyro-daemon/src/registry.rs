@@ -629,10 +629,8 @@ impl Daemon {
     }
 
     /// What is kept under a workspace's name follows it when it is renamed (H2.7): its saved view
-    /// (from before one view for all), the TUI's note of the last workspace, and what quick new
-    /// starts there.
+    /// (from before one view for all) and the TUI's note of the last workspace.
     async fn follow_rename(&self, old: &str, new: &str) {
-        self.rename_launch(old, new).await;
         let Some(store) = &self.store else { return };
         let (from, to) = (format!("view:{old}"), format!("view:{new}"));
         if let Ok(Some(v)) = store.kv_get(from.clone()).await {

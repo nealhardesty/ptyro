@@ -137,11 +137,21 @@ if (mode === "units") {
   await assert.rejects(call("settings.apply", { scope: "user", change: { t: "add", path: "notifications.sinks", fields: { type: "slack" } } }), /needs its webhook/);
   r = await call("settings.apply", { scope: "user", change: { t: "add", path: "notifications.sinks", fields: { type: "ntfy", url: "https://ntfy.sh/me" } } });
   assert.equal(r.view.entries.find((e) => e.key === "notifications.sinks.0.url").value, "https://ntfy.sh/me");
+  // The default agent (UX3.7): a list of the agents, never an agent itself, and it follows its agent.
+  assert.deepEqual(schema.user.settings.find((s) => s.key === "agents.default").kind, { t: "dynamic", source: "agents" });
+  assert.equal(entry("agents.default").origin, "default");
+  assert.equal(entry("agents.default").shown, "(claude)");
+  r = await call("settings.apply", { scope: "user", change: { t: "set", key: "agents.default", value: "aider" } });
+  assert.equal(r.view.entries.find((e) => e.key === "agents.default").value, "aider");
+  assert.ok(!r.view.members.find((m) => m.path === "agents").names.includes("default"));
+  assert.ok(r.view.options.find((o) => o.source === "agents").options.some(([n]) => n === "aider"));
   r = await call("settings.apply", { scope: "user", change: { t: "rename", path: "agents", from: "aider", to: "pair" } });
   const names = r.view.members.find((m) => m.path === "agents").names;
   assert.ok(names.includes("pair") && !names.includes("aider"));
+  assert.equal(r.view.entries.find((e) => e.key === "agents.default").value, "pair", "it follows the rename");
   r = await call("settings.apply", { scope: "user", change: { t: "remove", path: "agents", name: "pair" } });
   assert.ok(!r.view.members.find((m) => m.path === "agents").names.includes("pair"));
+  assert.equal(r.view.entries.find((e) => e.key === "agents.default").origin, "default", "back to claude");
   await call("settings.apply", { scope: "user", change: { t: "remove", path: "notifications.sinks", name: "0" } });
   await call("settings.apply", { scope: "user", change: { t: "unset", key: "keys.x" } });
   // Every key is in the view, defaults too; one change binds, unbinds, moves and swaps.
