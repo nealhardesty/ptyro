@@ -2712,12 +2712,10 @@ done.
   ran, after a fixed 700 ms wait failed on the macOS runner. Check how long the window is on
   Windows, especially in Windows PowerShell 5.1. If `ptyro send` to a new pwsh session should
   just work, the daemon needs to know when PSReadLine is reading (there is no signal today).
-- **`XDG_CONFIG_HOME` is ignored when ptyro looks for fish's and pwsh's startup files** (found
-  2026-11-01; both shells honour it, [V] for pwsh 7.6). `ShellKind::rc_line` (the TUI health hint,
-  `doctor`), `uninstall`'s rc files, `init`'s completions line and agent detection all use
-  `~/.config/…`. Someone who sets the variable gets a hint for a file their shell never reads, and
-  `uninstall` misses a line they added. Fix it in one place (a `config_home()` in `ptyro_core`).
-  This predates WIN for fish.
+- ~~**`XDG_CONFIG_HOME` is ignored when ptyro looks for fish's and pwsh's startup files**~~
+  [fixed 2026-11-01] `ptyro_core::config::config_home` is the one rule (SPEC §8.7). The health
+  hint, `doctor`, `init`'s completions line, profile detection, `uninstall` and the systemd unit
+  all use it. On Windows pwsh ignores the variable, and its profile stays under `Documents\PowerShell`.
 - **The integration files** live under `<data>/integrations/shell/` with Unix modes (0700). WIN7
   gives them an ACL check.
 - **cmd.exe:** ConEmu's `9;12` is read as a prompt mark, so cmd with clink gets prompt jumps.

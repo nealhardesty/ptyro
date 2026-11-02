@@ -132,8 +132,10 @@ pub async fn run(ctx: &Ctx, yes: bool, dry_run: bool) -> Result<i32, Error> {
 
     section("accounts");
     let home = expand_home("~");
-    let suggestions: Vec<_> =
-        detect(&home).into_iter().filter(|s| !current.profiles.contains_key(&s.profile)).collect();
+    let suggestions: Vec<_> = detect(&home, &ptyro_core::config::config_home(&home))
+        .into_iter()
+        .filter(|s| !current.profiles.contains_key(&s.profile))
+        .collect();
     let mut profiles_toml = String::new();
     if suggestions.is_empty() {
         eprintln!(
@@ -312,20 +314,25 @@ pub async fn run(ctx: &Ctx, yes: bool, dry_run: bool) -> Result<i32, Error> {
     // ── extras ──
     section("extras");
     let shell = std::env::var("SHELL").unwrap_or_default();
-    let (rc, line) = if shell.ends_with("zsh") {
-        ("~/.zshrc", "source <(ptyro completions zsh)")
+    let home = expand_home("~");
+    let (path, line) = if shell.ends_with("zsh") {
+        (home.join(".zshrc"), "source <(ptyro completions zsh)")
     } else if shell.ends_with("fish") {
-        ("~/.config/fish/config.fish", "ptyro completions fish | source")
+        (
+            ptyro_core::config::config_home(&home).join("fish/config.fish"),
+            "ptyro completions fish | source",
+        )
     } else {
-        ("~/.bashrc", "source <(ptyro completions bash)")
+        (home.join(".bashrc"), "source <(ptyro completions bash)")
     };
-    if std::fs::read_to_string(expand_home(rc)).is_ok_and(|t| t.contains("ptyro completions")) {
+    let rc = ptyro_core::chats::tilde(&path.to_string_lossy());
+    if std::fs::read_to_string(&path).is_ok_and(|t| t.contains("ptyro completions")) {
         eprintln!("  ✓ completions already in {rc}");
     } else if ask.outside(&format!("  add completions to {rc} ({line})?")) {
         let mut f = std::fs::OpenOptions::new()
             .append(true)
             .create(true)
-            .open(expand_home(rc))
+            .open(&path)
             .map_err(|e| Error::internal(format!("{rc}: {e}")))?;
         writeln!(f, "\n# ptyro completions (live session and worktree names)\n{line}")
             .map_err(|e| Error::internal(e.to_string()))?;

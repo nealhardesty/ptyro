@@ -258,7 +258,7 @@ pub fn classify_binary(exe: &Path, env: &Env, keep: bool) -> BinaryAction {
 /// The shell rc files ptyro may have added lines to.
 pub fn rc_files(env: &Env) -> Vec<PathBuf> {
     let Some(home) = &env.home else { return Vec::new() };
-    let conf = env.xdg_config_home.clone().unwrap_or_else(|| home.join(".config"));
+    let conf = ptyro_core::config::config_home_in(home, env.xdg_config_home.as_deref());
     vec![
         home.join(".zshrc"),
         home.join(".bashrc"),

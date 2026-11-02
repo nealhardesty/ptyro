@@ -62,13 +62,17 @@ impl ShellKind {
         }
     }
 
-    /// The line that loads the snippet from the shell's rc file, and that file (under `home`).
+    /// The line that loads the snippet from the shell's rc file, and that file (under `home`, or
+    /// for fish and PowerShell under `$XDG_CONFIG_HOME` when it is set, as they do).
     /// For PowerShell, the profile of `pwsh` on this platform.
     pub fn rc_line(self, home: &Path) -> (PathBuf, &'static str) {
         match self {
             Self::Bash => (home.join(".bashrc"), "eval \"$(ptyro shell-init bash)\""),
             Self::Zsh => (home.join(".zshrc"), "eval \"$(ptyro shell-init zsh)\""),
-            Self::Fish => (home.join(".config/fish/config.fish"), "ptyro shell-init fish | source"),
+            Self::Fish => (
+                crate::config::config_home(home).join("fish/config.fish"),
+                "ptyro shell-init fish | source",
+            ),
             Self::Pwsh => {
                 (pwsh_profile(home), "ptyro shell-init pwsh | Out-String | Invoke-Expression")
             }
@@ -81,7 +85,7 @@ fn pwsh_profile(home: &Path) -> PathBuf {
     if cfg!(windows) {
         home.join("Documents").join("PowerShell").join("Microsoft.PowerShell_profile.ps1")
     } else {
-        home.join(".config/powershell/Microsoft.PowerShell_profile.ps1")
+        crate::config::config_home(home).join("powershell/Microsoft.PowerShell_profile.ps1")
     }
 }
 

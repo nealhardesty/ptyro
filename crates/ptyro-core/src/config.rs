@@ -1929,6 +1929,17 @@ pub fn expand_home(p: &str) -> PathBuf {
     }
 }
 
+/// Where fish, PowerShell (off Windows) and systemd read their config: `$XDG_CONFIG_HOME`, or
+/// `<home>/.config` when it is unset (or relative, which the XDG spec says to ignore).
+pub fn config_home(home: &Path) -> PathBuf {
+    config_home_in(home, std::env::var_os("XDG_CONFIG_HOME").as_deref().map(Path::new))
+}
+
+/// [`config_home`] with the variable's value given.
+pub fn config_home_in(home: &Path, xdg: Option<&Path>) -> PathBuf {
+    xdg.filter(|x| x.is_absolute()).map_or_else(|| home.join(".config"), Path::to_path_buf)
+}
+
 impl ThemeDef {
     pub fn tokens(&self) -> [(&'static str, &Option<String>); 16] {
         [
@@ -2440,6 +2451,15 @@ mod hardening {
         assert!(parse_color("#12345g").is_err());
         assert_eq!(parse_color("#ff0080").unwrap(), ConfigColor::Rgb(255, 0, 128));
         assert!(expand_home("~/x").is_absolute());
+    }
+
+    #[test]
+    fn config_home_follows_xdg_unless_it_is_relative() {
+        let home = Path::new("/home/me");
+        assert_eq!(config_home_in(home, None), Path::new("/home/me/.config"));
+        assert_eq!(config_home_in(home, Some(Path::new("/x/conf"))), Path::new("/x/conf"));
+        assert_eq!(config_home_in(home, Some(Path::new("conf"))), Path::new("/home/me/.config"));
+        assert_eq!(config_home_in(home, Some(Path::new(""))), Path::new("/home/me/.config"));
     }
 
     #[test]

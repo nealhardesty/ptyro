@@ -13,16 +13,8 @@ const VARS: &[(&str, &str)] = &[
     ("GH_CONFIG_DIR", "gh"),
 ];
 
-const RC_FILES: &[&str] = &[
-    ".zshrc",
-    ".zshenv",
-    ".zprofile",
-    ".bashrc",
-    ".bash_profile",
-    ".bash_aliases",
-    ".profile",
-    ".config/fish/config.fish",
-];
+const RC_FILES: &[&str] =
+    &[".zshrc", ".zshenv", ".zprofile", ".bashrc", ".bash_profile", ".bash_aliases", ".profile"];
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Suggestion {
@@ -188,15 +180,18 @@ fn display(home: &Path, p: &Path) -> String {
     p.strip_prefix(home).map_or_else(|_| p.display().to_string(), |r| format!("~/{}", r.display()))
 }
 
-/// Scan `home` (normally `$HOME`) for multi-account setups.
-pub fn detect(home: &Path) -> Vec<Suggestion> {
+/// Scan `home` (normally `$HOME`) for multi-account setups, and fish's config under `config`
+/// (normally [`ptyro_core::config::config_home`]).
+pub fn detect(home: &Path, config: &Path) -> Vec<Suggestion> {
     let mut by_profile: BTreeMap<String, Suggestion> = BTreeMap::new();
     let mut files: Vec<PathBuf> = RC_FILES.iter().map(|f| home.join(f)).collect();
+    files.push(config.join("fish/config.fish"));
+    let top = files.len();
     let mut seen_dirs: Vec<String> = Vec::new();
     let mut i = 0;
     while i < files.len() {
         let path = files[i].clone();
-        let top_level = i < RC_FILES.len();
+        let top_level = i < top;
         i += 1;
         let Ok(text) = std::fs::read_to_string(&path) else { continue };
         for (n, line) in logical_lines(&text) {
@@ -374,7 +369,7 @@ mod tests {
             std::fs::create_dir_all(target.parent().unwrap()).unwrap();
             std::fs::copy(&case, &target).unwrap();
             let mut got = String::new();
-            for s in detect(home.path()) {
+            for s in detect(home.path(), &home.path().join(".config")) {
                 got.push_str(&s.to_toml());
                 for src in &s.sources {
                     got.push_str(&format!("# {src}\n"));
@@ -421,7 +416,7 @@ mod tests {
             "[user]\n  email = me@acme.example\n  name = Work Me\n",
         )
         .unwrap();
-        let found = detect(home);
+        let found = detect(home, &home.join(".config"));
         let get = |p: &str| {
             found.iter().find(|s| s.profile == p).unwrap_or_else(|| panic!("{p}: {found:?}"))
         };
@@ -435,5 +430,19 @@ mod tests {
         assert_eq!(get("old").dirs["claude"], "~/.claude-old", "unreferenced dir");
         assert!(work.to_toml().contains("[profiles.work]\nclaude = \"~/.claude-work\""));
         assert_eq!(profile_from_alias("claude_Work"), "work");
+    }
+
+    #[test]
+    fn fish_config_is_read_where_xdg_config_home_puts_it() {
+        let home = tempfile::tempdir().unwrap();
+        let xdg = tempfile::tempdir().unwrap();
+        let fish = xdg.path().join("fish/config.fish");
+        std::fs::create_dir_all(fish.parent().unwrap()).unwrap();
+        std::fs::write(&fish, "alias claude-me 'CLAUDE_CONFIG_DIR=~/.claude-me claude'\n").unwrap();
+        let found = detect(home.path(), xdg.path());
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].dirs["claude"], "~/.claude-me");
+        assert_eq!(found[0].sources, [format!("{}:1 claude-me", fish.display())]);
+        assert!(detect(home.path(), &home.path().join(".config")).is_empty());
     }
 }

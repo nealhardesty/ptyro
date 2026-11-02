@@ -226,3 +226,34 @@ async fn shell_command_and_switching_the_integration_off() {
     let s = spawn(&c, "cmd", &["bash", "-c", "sleep 5"], &dir).await;
     assert_eq!(s.kind, SessionKind::Command);
 }
+
+/// With the integration off, the doctor names the startup file the shell really reads: fish
+/// and PowerShell follow `$XDG_CONFIG_HOME` when it is set.
+#[test]
+fn the_doctor_names_the_startup_file_under_xdg_config_home() {
+    let home = tempfile::Builder::new().prefix("ptyro-win1-home-").tempdir().unwrap();
+    let xdg = tempfile::Builder::new().prefix("ptyro-win1-xdg-").tempdir().unwrap();
+    let (h, x) = (home.path().to_str().unwrap(), xdg.path().to_str().unwrap());
+    let profile = xdg.path().join("powershell/Microsoft.PowerShell_profile.ps1");
+    std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
+    std::fs::write(&profile, "ptyro shell-init pwsh | Out-String | Invoke-Expression\n").unwrap();
+    for (shell, want) in [
+        ("fish", format!("off, and not in {x}/fish/config.fish:")),
+        ("pwsh", format!("off; {} sets it up instead", profile.display())),
+    ] {
+        let config = format!("[shell]\nintegration = false\ncommand = [\"{shell}\"]\n");
+        let d = TempDaemon::start_with(BIN, &[("HOME", h)], Some(&config)).unwrap();
+        let out = d
+            .cmd()
+            .env("HOME", h)
+            .env("XDG_CONFIG_HOME", x)
+            .args(["doctor", "--quick", "--json"])
+            .output()
+            .unwrap();
+        let doctor: serde_json::Value = serde_json::from_slice(&out.stdout)
+            .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stderr)));
+        let check = doctor.as_array().unwrap().iter().find(|c| c["name"] == "integration");
+        let text = check.and_then(|c| c["text"].as_str()).unwrap_or_default();
+        assert!(text.starts_with(&want), "{shell}: {text:?}\n{doctor:#}");
+    }
+}
