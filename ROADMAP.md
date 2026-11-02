@@ -2606,11 +2606,18 @@ or whatever works on it) needs. It doesn't repeat the tasks below, and it goes a
 done.
 
 **Where things stand**
-- Branch `powershell`, PR #47 (draft), released as v0.0.43 on the branch. The v0.0.43 tag isn't
-  pushed: tag master after merging, as for every release.
+- **Work from `master`** (updated 2026-11-01). WIN1 was PR #47, merged and released as v0.0.43.
+  The `powershell` branch is done; don't build on it. Master is at 0.0.44. Start each WIN task
+  on a branch off master, as a PR.
 - **Done:** WIN0.5 (the owner's decisions) and WIN1 (shell integration with no setup, pwsh
-  included). It is tested on macOS with bash 3.2 and 5.3, zsh, fish 4.9 and pwsh 7.6.9, and in Linux CI with what the runners have (bash 5, and pwsh where installed; no zsh or fish). Nothing has run on
-  Windows or in WSL yet, and CI has no Windows job.
+  included). It is tested on macOS with bash 3.2 and 5.3, zsh, fish 4.9 and pwsh 7.6.9, and in
+  Linux CI with what the runners have (bash 5, and pwsh where installed; no zsh or fish).
+  `tests/win1.rs` skips a shell that isn't installed and says so. Nothing has run on Windows or
+  in WSL yet, and CI has no Windows job.
+- **Fixed since the merge** (so a failure in WSL isn't one of these): CI races in m6, m7, m8, ux2
+  and web-e2e; win1 on runners that set `XDG_CONFIG_HOME` or lack zsh; PSReadLine's dropped
+  typeahead Enter (worked around in the test, SPEC §8.7); fish's and pwsh's startup files now
+  follow `XDG_CONFIG_HOME` (PR #49).
 - **Where to read:**
   - RESEARCH DD3 (the deep dive) and R-WIN-01…20;
   - SPEC §3.4 (tiers), §5.7 (the OSC 9 row) and §8.7 ("Shell integration with no setup");
@@ -2630,7 +2637,7 @@ done.
    - Inside it: `sudo apt install build-essential git make pkg-config` and `gh`, then
      `make rust-install` (the pinned 1.99.1).
    - Clone **inside the distro** (`~/dev/ptyro`), never under `/mnt/c`. A repo there is slow, and
-     WIN2 turns that into a `doctor` warning. Then `git switch powershell`.
+     WIN2 turns that into a `doctor` warning. Stay on `master`.
    - Optional:
      - Node, for `make web-test`/`web-check`;
      - Chrome or Chromium, for `make web-e2e`;
@@ -2727,10 +2734,14 @@ done.
 - Stage only your own files, never `git add -A`. Leave co-authored-by lines out of commits.
 - Every feature needs its `docs/parity.md` row (the TUI cell starts with an action, `shown:`,
   `waived:` or `gap:`), its settings schema entry, and its `make` target.
-- `make bump` when a task is done. If the tag it wants already exists, merge master first
-  (master released 0.0.42 while WIN1 was being built).
+- `make bump` when a task is done (not for bug fixes). If the tag it wants already exists, merge
+  master first: master moves on while a WIN branch is open (it released 0.0.42 during WIN1).
+- Releases: merge, check master's CI is green, then push a lightweight `v<version>` tag on
+  master. The tag runs `release.yml` (gated on the same checks) and CI again.
 - `gh pr edit` currently fails on a Projects-classic deprecation. Update a PR's body with
-  `gh api -X PATCH repos/nealhardesty/ptyro/pulls/47 -F body=@file`.
+  `gh api -X PATCH repos/nealhardesty/ptyro/pulls/<n> -F body=@file`.
+- Push with an explicit branch (`git push origin <branch>`). With `push.default = matching` (the
+  owner's Mac has it in `~/.gitconfig`), a bare `git push` also tries a stale local `master`.
 
 - [ ] **WIN0 Spikes and decisions** **M**
   - [ ] **WIN0.1 Does WSL keep the daemon alive?** (R-WIN-05) On the current WSL release, start
