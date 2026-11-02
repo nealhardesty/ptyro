@@ -1008,6 +1008,15 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built UX3.7] Protocol 1.26** (additive): quick new is per worktree and always an agent.
+`LastLaunch` gains `worktree?` (an address) and answers what `again` starts there, always
+`Some`: the agent that worktree last started (agent, profile, argv), else its project's
+`default_agent`, else `[agents] default` (claude). `workspace` is no longer read. The daemon
+remembers the last agent per worktree id in `kv` (`last_agent`), from `Spawn` and `WorktreeNew`,
+never a shell, a command line, a tool, a quick terminal or the scratchpad's editor, and forgets a
+removed worktree's. `again` therefore always names an agent. An older client asking by workspace
+gets the default agent.
+
 **[built CHAT1] Protocol 1.22** (additive): chats (§22.14 as built). Requests `ChatNew`, `ChatList`,
 `ChatRead` (the draft's `ChatGet`: that name was a structured session's transcript already),
 `ChatSend`, `ChatAnswer`, `ChatStop`, `ChatUpdate`, `ChatDelete`, `ChatExport`; replies `Chat`,
@@ -3105,10 +3114,12 @@ The daily loop (ROADMAP UX3, RESEARCH R-UX-34…37). `crates/ptyro-tui/src/scree
     applies to a single pane). A restored view closes a split's empty panes and fills only a
     single one. Sessions that go are dropped from the kept layout, which goes when it is empty.
   - Unchanged: the drawer (`C-t`) and the scratchpad's `mode = "pane"`, both asked for by name.
-- **Quick new** (UX3.2, `session.again`: `C-n` after the prefix and in the sidebar, the row
-  menus, which-key's `+ claude`): `SpawnSpec { again: true }` in the context's worktree (else
-  here), full sized. The label comes from `LastLaunch` (asked on attach, a workspace switch and
-  after each spawn).
+- **Quick new** (UX3.2, **[changed UX3.7]**; `session.again`: `C-n` after the prefix and in the
+  sidebar, the row menus, which-key's `+ claude`): `SpawnSpec { again: true }` in the context's
+  worktree (else here), full sized. It always starts an agent: the worktree's last one (with its
+  profile and arguments), else the project's `default_agent`, else `[agents] default`; `!` is the
+  shell key. The label comes from `LastLaunch { worktree }`, asked on attach, after each spawn,
+  and from `tick` whenever the context moves to another worktree (`App.again_for`).
 - **Created means shown** (UX3.3, `reveal`): `show` unfolds the session's workspace, project and
   worktree and selects its row; a row the tree can't place yet is retried on each event for 5 s
   (`App.revealing`). A new worktree with no session shown is selected (`reveal_worktree`). A new
@@ -3744,12 +3755,17 @@ count = 10
 roots = ["~/dev", "~/src"]
 auto_register = true             # the repository a session runs in becomes a project (§10.1)
 
+[agents]
+default = "claude"               # the default agent (UX3.7): `n`'s first choice, and what quick
+                                 # new starts in a worktree that hasn't run one; a project's
+                                 # default_agent wins in its worktrees. The older per-agent
+                                 # `default = true` still counts when this is unset.
+
 [agents.claude]
 adapter = "claude"
 command = "claude"
 args = []
 env = {}
-default = true
 hibernate_after = "off"
 # dangerous = true is required to allow args like --dangerously-skip-permissions;
 # sessions of such agents show a ⚠ badge.

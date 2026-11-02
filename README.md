@@ -187,8 +187,10 @@ a row's menu (`.`), makes one at any time.
 - `Ctrl-Q p` peeks without switching: `y` allows a permission prompt, `n` denies, or type a
   reply.
 - `Ctrl-Q i` opens the inbox. From the shell: `ptyro status`.
-- `Ctrl-Q Ctrl-N` is **quick new**: another of what you last started in this workspace
-  (`claude`, a shell…) in this worktree, no questions (`ptyro new --again` from a shell).
+- `Ctrl-Q Ctrl-N` (`Ctrl-N` in the sidebar) is **quick new**: another of the agent this
+  worktree last started (`claude`, `codex@work`…) right there, no questions (`ptyro new
+  --again` from a shell). In a worktree that hasn't run one it starts the default agent, Claude
+  unless you pick another under Configuration → Agents → Default agent (`[agents] default`).
 - `Ctrl-Q !` starts a new shell in this worktree, full sized, every press.
 - `Ctrl-Q Ctrl-T` opens the worktree's **quick terminal**: its one shell, in a drawer below a pane
   of the same project (`Ctrl-Q T` shows it full sized). Press it again to focus it, and once more

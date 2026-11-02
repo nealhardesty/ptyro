@@ -1291,8 +1291,13 @@ impl Panel {
         let row = rows.get(self.cursor).cloned();
         match key.code {
             KeyCode::Esc | KeyCode::Left | KeyCode::Char { c: 'h' } => {
-                if self.drill.take().is_some() {
-                    self.cursor = 0;
+                if let Some((path, name)) = self.drill.take() {
+                    // Back on the row of the one you were in.
+                    self.cursor = self
+                        .rows()
+                        .iter()
+                        .position(|r| matches!(r, Row::Member { path: p, name: n, .. } if *p == path && *n == name))
+                        .unwrap_or(0);
                     self.clamp();
                 } else {
                     self.focus = Pane::Sections;
@@ -1384,13 +1389,15 @@ impl Panel {
         } else {
             format!("the {} {name:?}", col.noun)
         };
-        let in_use = path == "themes"
-            && self.find_entry("ui.theme").is_some_and(|e| e.value.as_str() == Some(name));
+        let names =
+            |key: &str| self.find_entry(key).is_some_and(|e| e.value.as_str() == Some(name));
+        let note = match path {
+            "themes" if names("ui.theme") => " It is the theme in use: the default comes back.",
+            "agents" if names("agents.default") => " It is the default agent: claude comes back.",
+            _ => "",
+        };
         self.modal = Some(Modal::Confirm {
-            text: format!(
-                "Remove {what}, and everything set in it?{}",
-                if in_use { " It is the theme in use: the default comes back." } else { "" }
-            ),
+            text: format!("Remove {what}, and everything set in it?{note}"),
             then: Confirmed::Remove { path, name: name.to_owned() },
         });
         vec![]

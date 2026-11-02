@@ -33,8 +33,8 @@ async fn workspace_projects(c: &ptyro_client::Client, name: &str) -> Vec<String>
     workspaces.into_iter().find(|w| w.name == name).map(|w| w.projects).unwrap_or_default()
 }
 
-/// A workspace's name is where its saved view, the TUI's note of the last workspace and what quick
-/// new starts there are kept: they follow a rename.
+/// A workspace's name is where its saved view and the TUI's note of the last workspace are kept:
+/// they follow a rename. (Quick new is kept by worktree, which a rename doesn't touch: UX3.7.)
 #[tokio::test]
 async fn what_is_kept_under_a_workspace_s_name_follows_a_rename() {
     let d = TempDaemon::start(BIN).unwrap();
@@ -63,11 +63,6 @@ async fn what_is_kept_under_a_workspace_s_name_follows_a_rename() {
     assert_eq!(gone, None, "nothing is left under the old name");
     let Reply::View { view: Some(tui) } = c.request(load("_tui")).await.unwrap() else { panic!() };
     assert_eq!(tui["workspace"], "job", "the last workspace is the renamed one");
-    let launch = |ws: &str| Request::LastLaunch { workspace: ws.into() };
-    let Reply::LastLaunch { launch: kept } = c.request(launch("job")).await.unwrap() else {
-        panic!()
-    };
-    assert!(kept.is_some_and(|l| l.argv.first().is_some_and(|a| a == "sh")), "quick new kept it");
 }
 
 /// A removed workspace's sessions already went to main; its projects that no other workspace has

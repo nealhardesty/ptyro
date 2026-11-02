@@ -176,6 +176,27 @@ fn a_choice_opens_a_list_and_one_pick_is_saved() {
     assert!(t.file().contains("on_stop = \"stay\""));
 }
 
+/// The default agent (UX3.7) is a list of your agents, first in the Agents section.
+#[test]
+fn the_default_agent_is_picked_from_a_list() {
+    let mut t = T::new("");
+    t.go("agents.default");
+    t.press("<Enter>");
+    let Some(Modal::Pick(p)) = &t.p.modal else { panic!("a list") };
+    let items: Vec<&str> = p.items.iter().map(|(v, _)| v.as_str()).collect();
+    let codex = items.iter().position(|v| *v == "codex").expect("codex is offered");
+    assert!(items.contains(&"claude"), "{items:?}");
+    let at = p.sel;
+    let keys = if codex >= at { "<Down>".repeat(codex - at) } else { "<Up>".repeat(at - codex) };
+    t.press(&format!("{keys}<Enter>"));
+    assert_eq!(
+        Config::parse(&t.file()).unwrap().agents.default.as_deref(),
+        Some("codex"),
+        "{}",
+        t.file()
+    );
+}
+
 #[test]
 fn a_set_toggles_each_choice_and_saves_them_together() {
     let mut t = T::new("");
@@ -246,6 +267,9 @@ fn an_agent_is_added_edited_renamed_and_removed_without_touching_the_file() {
     t.press("<Down><Down><Down>");
     assert_eq!(t.p.section().id, "agents");
     t.press("<Enter>");
+    // The default agent comes first, then the list of agents.
+    assert_eq!(t.selected().as_deref(), Some("agents.default"));
+    t.press("<Down>");
     assert_eq!(t.selected().as_deref(), Some("+agents"));
     // (It asks which program it runs; ⏎ skips that.)
     t.press("<Enter>aider<Enter><Enter>");
@@ -261,6 +285,7 @@ fn an_agent_is_added_edited_renamed_and_removed_without_touching_the_file() {
     assert_eq!(c.agents["aider"].command.as_ref().unwrap().argv(), ["aider", "--model", "sonnet"]);
     t.press("<Esc>");
     assert!(t.p.drill.is_none());
+    assert_eq!(t.selected().as_deref(), Some("agents.aider"), "back on its row");
     t.press("R");
     t.press("<BS><BS><BS><BS><BS>pair<Enter>");
     assert!(Config::parse(&t.file()).unwrap().agents.contains_key("pair"));

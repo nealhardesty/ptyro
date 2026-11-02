@@ -761,7 +761,7 @@ function build(rest) {
                     if (!(await changeHeld(scope, { t: "rename", path, from: name, to: String(v.to) }, `${name} is now ${v.to}`, { at: (m) => { why = m; } })))
                         throw new Error(why);
                     go(`#/settings/${path}/${enc(String(v.to))}`);
-                }) }, "Rename") : null, h("button", { class: "deny", title: tip("settings.remove"), onclick: () => confirm(`Remove ${c.noun} ${name}?`, `Everything set in it goes too.${path === "themes" && view.entries.some((x) => x.key === "ui.theme" && x.value === name) ? " It is the theme in use: the default comes back." : ""}`, "Remove", async () => { if (await changeHeld(scope, { t: "remove", path, name }, `removed ${c.noun} ${name}`))
+                }) }, "Rename") : null, h("button", { class: "deny", title: tip("settings.remove"), onclick: () => confirm(`Remove ${c.noun} ${name}?`, `Everything set in it goes too.${path === "themes" && view.entries.some((x) => x.key === "ui.theme" && x.value === name) ? " It is the theme in use: the default comes back." : path === "agents" && view.entries.some((x) => x.key === "agents.default" && x.value === name) ? " It is the default agent: claude comes back." : ""}`, "Remove", async () => { if (await changeHeld(scope, { t: "remove", path, name }, `removed ${c.noun} ${name}`))
                     go(`#/settings/${c.section}`); }) }, "Remove"));
         return [actionsBar, ...cards(fields, view, scope)];
     }

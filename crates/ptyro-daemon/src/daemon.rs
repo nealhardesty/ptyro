@@ -75,7 +75,7 @@ pub struct Daemon {
     pub mirrored: broadcast::Sender<DomainEvent>,
     /// (machine, its client id) → our client whose upstream that is (`conn.rs`).
     pub(crate) upstream_ids: crate::machines::UpstreamIds,
-    /// What each workspace last started (UX3.2, `again.rs`).
+    /// The agent each worktree last started, by worktree id (UX3.7, `again.rs`).
     pub(crate) last_launch: Mutex<HashMap<String, ptyro_core::session::LastLaunch>>,
     pub(crate) last_notified: Mutex<HashMap<SessionId, u64>>,
     /// The inbox when the store is unavailable.
@@ -1075,9 +1075,7 @@ impl Daemon {
                 }
                 let s = self.spawn(spec.clone()).await?;
                 let info = self.info(&s);
-                if let Some(ws) = &info.workspace {
-                    self.remember_launch(ws, &spec).await;
-                }
+                self.remember_launch(info.worktree.as_deref(), &spec).await;
                 Ok(Reply::Session { info })
             }
             req @ (Request::MachineList
@@ -1085,8 +1083,8 @@ impl Daemon {
             | Request::MachineRemove { .. }
             | Request::MachineHide { .. }
             | Request::MachineRetry { .. }) => self.handle_machines(req).await,
-            Request::LastLaunch { workspace } => {
-                Ok(Reply::LastLaunch { launch: self.last_launch(&workspace) })
+            Request::LastLaunch { worktree, .. } => {
+                Ok(Reply::LastLaunch { launch: Some(self.launch_for(worktree.as_deref())?) })
             }
             req @ (Request::WorktreeDiff { .. }
             | Request::WorktreeLog { .. }

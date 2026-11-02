@@ -1270,31 +1270,39 @@ async fn ux1_done_when_from_a_fresh_machine_to_a_merged_and_cleaned_up_pr() {
     assert_eq!(entries[0].name, "fix-typo-greeting");
 }
 
-async fn last_launch(c: &Client, ws: &str) -> Option<ptyro_core::session::LastLaunch> {
-    match c.request(Request::LastLaunch { workspace: ws.into() }).await.unwrap() {
-        Reply::LastLaunch { launch } => launch,
+async fn next_agent(c: &Client, wt: &str) -> String {
+    let req = Request::LastLaunch { workspace: String::new(), worktree: Some(wt.into()) };
+    match c.request(req).await.unwrap() {
+        Reply::LastLaunch { launch: Some(l) } => l.label(),
         other => panic!("{other:?}"),
     }
 }
 
-/// UX3.2 quick-new: `again` starts what the workspace last started (the default agent before
-/// anything), a tool or a quick terminal doesn't count, and `ptyro new --again` does the same.
+/// UX3.7 quick new: `again` always starts an agent, the one its worktree last started (claude
+/// before any), never a shell; each worktree remembers its own; a project's `default_agent` is
+/// the first one there; a tool or a quick terminal doesn't count; `ptyro new --again` does the
+/// same.
 #[tokio::test]
-async fn again_starts_what_the_workspace_last_started() {
-    let w = World::new("exec /bin/sh -i");
+async fn again_starts_the_agent_the_worktree_last_started() {
+    let w = World::with_config(
+        "exec /bin/sh -i",
+        &format!("[agents.codex]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"codex\"]\n"),
+    );
     let dir = repo(&w, "myrepo");
     let c = w.d.client().await.unwrap();
     let again = || SpawnSpec { again: true, cwd: dir.clone(), ..SpawnSpec::default() };
-    assert_eq!(last_launch(&c, "main").await, None);
     // Nothing yet: the default agent.
     let first = spawn(&c, again()).await;
     assert_eq!(first.agent.as_deref(), Some("claude"));
-    assert_eq!(last_launch(&c, "main").await.map(|l| l.label()).as_deref(), Some("claude"));
-    // A shell, then again: a shell.
+    let root = first.worktree.clone().expect("in its main checkout");
+    // A shell doesn't count: still an agent.
     spawn(&c, SpawnSpec { cwd: dir.clone(), ..SpawnSpec::default() }).await;
-    assert_eq!(last_launch(&c, "main").await.map(|l| l.label()).as_deref(), Some("shell"));
-    let second = spawn(&c, again()).await;
-    assert_eq!(second.kind, ptyro_core::session::SessionKind::Shell);
+    assert_eq!(next_agent(&c, &root).await, "claude");
+    // Another agent started here is what comes next.
+    spawn(&c, SpawnSpec { agent: Some("codex".into()), cwd: dir.clone(), ..SpawnSpec::default() })
+        .await;
+    assert_eq!(next_agent(&c, &root).await, "codex");
+    assert_eq!(spawn(&c, again()).await.agent.as_deref(), Some("codex"));
     // A tool and a quick terminal leave it as it was.
     spawn(
         &c,
@@ -1307,11 +1315,41 @@ async fn again_starts_what_the_workspace_last_started() {
     )
     .await;
     quick(&c, Some("myrepo/@root"), Path::new(""), true).await.unwrap();
-    assert_eq!(last_launch(&c, "main").await.map(|l| l.label()).as_deref(), Some("shell"));
-    // The CLI.
+    assert_eq!(next_agent(&c, &root).await, "codex");
+    // Another worktree has its own: the default agent, until its project names one.
+    let spec = ptyro_core::model::WorktreeSpec {
+        project: dir.to_string_lossy().into_owned(),
+        name: Some("feat".into()),
+        fetch: Some(false),
+        ..Default::default()
+    };
+    let feat = match c.request(Request::WorktreeNew { spec }).await.unwrap() {
+        Reply::WorktreeCreated { info, .. } => info,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(next_agent(&c, &feat.id).await, "claude");
+    std::fs::write(feat.path.join(".ptyro.toml"), "[project]\ndefault_agent = \"codex\"\n")
+        .unwrap();
+    assert_eq!(next_agent(&c, &feat.id).await, "codex");
+    // The CLI, in the main checkout.
     let out =
         w.d.cmd().args(["new", "--again", "-d", "--json"]).current_dir(&dir).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let info: SessionInfo = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(info.kind, ptyro_core::session::SessionKind::Shell);
+    assert_eq!(info.agent.as_deref(), Some("codex"));
+}
+
+/// `[agents] default` (the Default agent setting) is what quick new starts where nothing has run.
+#[tokio::test]
+async fn again_starts_the_configured_default_agent_first() {
+    let w = World::with_config(
+        "exec /bin/sh -i",
+        &format!(
+            "[agents]\ndefault = \"codex\"\n[agents.codex]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"codex\"]\n"
+        ),
+    );
+    let dir = repo(&w, "myrepo");
+    let c = w.d.client().await.unwrap();
+    let s = spawn(&c, SpawnSpec { again: true, cwd: dir.clone(), ..SpawnSpec::default() }).await;
+    assert_eq!(s.agent.as_deref(), Some("codex"));
 }

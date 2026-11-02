@@ -9,7 +9,7 @@ export const data = {
     agents: [],
     defaultAgent: "claude",
     machines: new Map(),
-    /// What each workspace last started (UX3.2: quick new); none: the default agent.
+    /// What quick new starts in each worktree, by id (UX3.7: its last agent, else the default).
     lastLaunch: new Map(),
 };
 /// `laptop2:work` → ["laptop2", "work"]; this machine's `work` → [null, "work"].
@@ -25,20 +25,17 @@ export const wsLabel = (name) => { const [m, w] = splitMachine(name); return m ?
 export const machineOf = (name) => name ? data.machines.get(splitMachine(name)[0] ?? "") : undefined;
 /// The workspace a worktree's sessions belong to: its project's first, else `main`.
 export const workspaceOf = (w) => [...data.workspaces.values()].find((x) => x.projects.includes(w.project))?.name ?? "main";
-/// What quick new starts in `ws`, for people: `claude`, `claude@work`, `shell`, `htop`.
-export function againLabel(ws) {
-    const l = data.lastLaunch.get(ws);
-    if (!l)
+/// What quick new starts in the worktree `wt`, for people: `claude`, `codex@work`.
+export function againLabel(wt) {
+    const l = data.lastLaunch.get(wt);
+    if (!l?.agent)
         return data.defaultAgent;
-    if (l.agent)
-        return l.profile && !l.agent.includes("@") ? `${l.agent}@${l.profile}` : l.agent;
-    const p = l.argv?.[0];
-    return p ? p.split("/").pop() ?? p : "shell";
+    return l.profile && !l.agent.includes("@") ? `${l.agent}@${l.profile}` : l.agent;
 }
-/// Ask the daemon what `ws` last started.
-export async function refreshLaunch(ws) {
+/// Ask the daemon what quick new starts in the worktree `wt`.
+export async function refreshLaunch(wt) {
     try {
-        data.lastLaunch.set(ws, (await conn.request({ t: "last_launch", workspace: ws })).launch ?? null);
+        data.lastLaunch.set(wt, (await conn.request({ t: "last_launch", workspace: "", worktree: wt })).launch ?? null);
     }
     catch { /* the default agent */ }
 }
@@ -64,7 +61,7 @@ export async function loadAll() {
         data.agents = ag.value.agents;
         data.defaultAgent = ag.value.default;
     }
-    await Promise.allSettled([...data.workspaces.values()].map((w) => refreshLaunch(w.name)));
+    await Promise.allSettled(liveWorktrees().filter((w) => w.state === "ready").map((w) => refreshLaunch(w.id)));
     ui.render();
 }
 /// Keep up with a domain event; true when it was one of ours.
@@ -85,9 +82,13 @@ export function onEvent(e) {
             break;
         case "worktree_updated":
             data.worktrees.set(e.info.id, e.info);
+            // A worktree just ready: what quick new starts there (its label).
+            if (e.info.state === "ready" && !data.lastLaunch.has(e.info.id))
+                void refreshLaunch(e.info.id).then(() => ui.render());
             break;
         case "worktree_removed":
             data.worktrees.delete(e.id);
+            data.lastLaunch.delete(e.id);
             break;
         case "machine_updated":
             data.machines.set(e.info.name, e.info);

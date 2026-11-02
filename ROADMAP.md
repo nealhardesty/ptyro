@@ -41,7 +41,7 @@ Conventions:
 | **CFG1** | One configuration panel | Every option editable in the TUI, on the web and with `ptyro config set`, from one schema; new options must join it (done) |
 | **NOTE1** | The scratchpad | One persistent notepad file for everywhere: a key opens it, `PTYRO_SCRATCHPAD` finds it, items become tasks, the web edits it (done) |
 | **UX2** | Found in use | Small things the owner's own scratchpad caught while using ptyro: an About screen, a sidebar that shows a pushed worktree as done (done) |
-| **UX3** | Daily flow | Full-sized panels and splits only on request (a split is a clone), quick new (`C-n`), created means shown, `!` a new shell and the quick terminal a worktree's, usage limits in About (done) |
+| **UX3** | Daily flow | Full-sized panels and splits only on request (a split is a clone), quick new (`C-n`, the worktree's agent), created means shown, `!` a new shell and the quick terminal a worktree's, usage limits in About (done) |
 | **H2** | Second hardening review | A review of the whole codebase by nine independent readers: ~150 findings verified and fixed; locks, the release pipeline and uninstall done; the rest listed here |
 | **MM1** | Many machines | Every laptop's agents from one place: other machines' workspaces beside yours in one sidebar, one CLI and one phone app (done) |
 | **CHAT** | Chat | A quick, general chat on your registered agents: many chats, forks and threads, recent chats in the sidebar and a full searchable history (keyword, then smart), web search out of the box, in every workspace including linked machines' (proposed; sync across machines is CHAT6) |
@@ -2166,6 +2166,18 @@ web, with the parity rows.
 The owner asked for a way to see just the running sessions and just the active ones, and for the
 quick shell and scratchpad to stay when focus moves back to the agent above them.
 
+- [x] **UX3.7 Quick new is the worktree's agent; one Default agent setting** — S. *R-UX-39,
+  from the owner, 2026-11-02; amends UX3.2.* `C-n` (`session.again`, `ptyro new --again`, the
+  web's `+ claude`) always starts an agent: the one this worktree last started (agent@profile and
+  its arguments), else the project's `default_agent`, else the new `[agents] default` (claude). A
+  shell is `!`. The daemon remembers it per worktree id (`kv` `last_agent`, protocol 1.26) and
+  forgets a removed worktree's. `[agents] default` is a list of your agents at the top of
+  Configuration → Agents (TUI and web), and follows its agent when that is renamed or removed;
+  the older `[agents.<name>] default = true` still counts when it is unset (now an advanced
+  setting).
+  *Done (2026-11-02):* `crates/ptyro-daemon/src/again.rs`, `Agents` in
+  `crates/ptyro-core/src/config.rs`, `follow` in `crates/ptyro-core/src/settings/ops.rs`; tests
+  in `tests/ux1.rs` (`again_starts_*`), `settings/tests.rs` on both sides.
 - [x] **UX4.1 The sidebar filter** — S. A strip under the sidebar's title (`all` / `running` /
   `active`, with counts) and `f` pick what the tree lists; a machine, project or worktree with
   nothing under it is hidden. `ls --status active`; the web's session list has the chips.
