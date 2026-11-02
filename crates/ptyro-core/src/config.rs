@@ -1763,7 +1763,10 @@ impl Config {
         for (name, e) in &self.editors {
             match (name.as_str(), e) {
                 ("default", EditorEntry::Name(n))
-                    if !self.editors.contains_key(n) && !BUILTIN_EDITORS.contains(&n.as_str()) =>
+                    if !self.editors.contains_key(n)
+                        && !BUILTIN_EDITORS.contains(&n.as_str())
+                        && !FILE_MANAGERS.contains(&n.as_str())
+                        && !TERMINAL_APPS.contains(&n.as_str()) =>
                 {
                     return Err(format!("editors.default: no editor named {n:?}"));
                 }
@@ -1861,19 +1864,164 @@ pub fn dangerous_arg(argv: &[String]) -> Option<String> {
     None
 }
 
-/// Editors available without configuration: terminal ones open inside ptyro.
-pub const BUILTIN_EDITORS: &[&str] = &["nvim", "vim", "hx", "code", "zed", "cursor"];
+/// Editors available without configuration, in the order they're offered: terminal ones open
+/// inside ptyro, the rest in their own window; the last is the file manager. Each is offered only
+/// where it is installed ([`Config::editor_names`]).
+pub const BUILTIN_EDITORS: &[&str] = &["nvim", "vim", "hx", "code", "zed", "cursor", FILE_MANAGER];
+
+/// This computer's file manager, by its own name. Any of `finder`, `explorer` and `files` opens
+/// it, so a config shared between computers keeps working.
+pub const FILE_MANAGER: &str = if cfg!(target_os = "macos") {
+    "finder"
+} else if cfg!(windows) {
+    "explorer"
+} else {
+    "files"
+};
+const FILE_MANAGERS: [&str; 3] = ["finder", "explorer", "files"];
+
+/// Terminal apps that open a window of their own in the worktree, offered after the editors and
+/// the file manager, each only where it is installed (macOS and Linux for now).
+pub const TERMINAL_APPS: &[&str] = &[
+    "terminal",
+    "iterm",
+    "ghostty",
+    "wezterm",
+    "kitty",
+    "alacritty",
+    "gnome-terminal",
+    "kgx",
+    "konsole",
+    "xfce4-terminal",
+    "foot",
+];
+
+/// A terminal app's command line opening a window in `{path}`, if it is installed here.
+fn terminal_app(name: &str, here: &Installed) -> Option<Vec<String>> {
+    let argv = |a: &[&str]| Some(a.iter().map(|&w| w.to_owned()).collect());
+    let mac = cfg!(target_os = "macos");
+    match name {
+        // These open a folder they're given (their Info.plist takes folders, SPEC §20).
+        "terminal" | "iterm" | "ghostty" if mac => {
+            let app = match name {
+                "terminal" => "Terminal",
+                "iterm" => "iTerm",
+                _ => "Ghostty",
+            };
+            argv(&["open", "-a", &here.app(app)?.to_string_lossy(), "{path}"])
+        }
+        "wezterm" | "kitty" | "alacritty" => {
+            let flags: &[&str] = match name {
+                "wezterm" => &["start", "--cwd", "{path}"],
+                "kitty" => &["--directory", "{path}"],
+                _ => &["--working-directory", "{path}"],
+            };
+            let prog = if here.program(name) {
+                name.to_owned()
+            } else {
+                // The program inside the app, on macOS.
+                let app = match name {
+                    "wezterm" => "WezTerm",
+                    "kitty" => "kitty",
+                    _ => "Alacritty",
+                };
+                let p = here.app(app)?.join("Contents/MacOS").join(name);
+                crate::scratchpad::is_exec(&p).then(|| p.to_string_lossy().into_owned())?
+            };
+            let mut v = vec![prog];
+            v.extend(flags.iter().map(|&f| f.to_owned()));
+            Some(v)
+        }
+        _ if mac || !here.program(name) => None,
+        "ghostty" | "gnome-terminal" | "kgx" | "xfce4-terminal" | "foot" => {
+            argv(&[name, "--working-directory={path}"])
+        }
+        "konsole" => argv(&["konsole", "--workdir", "{path}"]),
+        _ => None,
+    }
+}
+
+/// The app a built-in editor also comes as on macOS, where its command is often not on `PATH`
+/// (VS Code's `code` is a step of its own to install).
+fn mac_app(name: &str) -> Option<&'static str> {
+    match name {
+        "code" => Some("Visual Studio Code"),
+        "zed" => Some("Zed"),
+        "cursor" => Some("Cursor"),
+        _ => None,
+    }
+}
+
+/// Where this computer's programs are: `PATH`, and on macOS the Applications folders.
+pub struct Installed {
+    path: std::ffi::OsString,
+    apps: Vec<PathBuf>,
+}
+
+impl Installed {
+    pub fn here() -> Self {
+        let mut apps = Vec::new();
+        if cfg!(target_os = "macos") {
+            apps.push(PathBuf::from("/Applications"));
+            apps.push(PathBuf::from("/System/Applications/Utilities"));
+            if let Some(home) = std::env::var_os("HOME") {
+                apps.push(PathBuf::from(home).join("Applications"));
+            }
+        }
+        Self { path: std::env::var_os("PATH").unwrap_or_default(), apps }
+    }
+
+    fn program(&self, prog: &str) -> bool {
+        if prog.contains('/') {
+            return crate::scratchpad::is_exec(Path::new(prog));
+        }
+        std::env::split_paths(&self.path).any(|d| crate::scratchpad::is_exec(&d.join(prog)))
+    }
+
+    fn app(&self, name: &str) -> Option<PathBuf> {
+        self.apps.iter().map(|d| d.join(format!("{name}.app"))).find(|p| p.is_dir())
+    }
+}
 
 impl Config {
-    /// An editor by name: configured, else built in.
+    /// An editor by name, as this computer runs it: configured, else built in. `None` when it
+    /// isn't installed: its program is on no `PATH` (nor, on macOS, an app in Applications).
     pub fn editor(&self, name: &str) -> Option<EditorDef> {
+        self.editor_in(name, &Installed::here())
+    }
+
+    fn editor_in(&self, name: &str, here: &Installed) -> Option<EditorDef> {
         if let Some(EditorEntry::Def(d)) = self.editors.get(name) {
-            return Some(d.clone());
+            return d.command.first().is_some_and(|p| here.program(p)).then(|| d.clone());
         }
-        let inside = matches!(name, "nvim" | "vim" | "hx");
-        BUILTIN_EDITORS
-            .contains(&name)
-            .then(|| EditorDef { command: vec![name.into(), "{path}".into()], inside })
+        let def = |command: &[&str], inside| {
+            Some(EditorDef { command: command.iter().map(|&a| a.to_owned()).collect(), inside })
+        };
+        match name {
+            "nvim" | "vim" | "hx" if here.program(name) => def(&[name, "{path}"], true),
+            "code" | "zed" | "cursor" if here.program(name) => def(&[name, "{path}"], false),
+            "code" | "zed" | "cursor" => {
+                let app = here.app(mac_app(name)?)?;
+                def(&["open", "-a", &app.to_string_lossy(), "{path}"], false)
+            }
+            n if TERMINAL_APPS.contains(&n) => {
+                Some(EditorDef { command: terminal_app(n, here)?, inside: false })
+            }
+            n if FILE_MANAGERS.contains(&n) => {
+                if cfg!(target_os = "macos") {
+                    def(&["open", "{path}"], false)
+                } else if cfg!(windows) {
+                    def(&["explorer", "{path}"], false)
+                } else if here.program("xdg-open") {
+                    def(&["xdg-open", "{path}"], false)
+                } else if here.program("gio") {
+                    def(&["gio", "open", "{path}"], false)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
     }
 
     /// The scratchpad's editor as argv (`{path}` may stand for the file): `[scratchpad] editor`,
@@ -1900,31 +2048,56 @@ impl Config {
         crate::scratchpad::fallback_editor().map(|e| vec![e])
     }
 
-    /// `editors.default`, else `$VISUAL`/`$EDITOR` if it names a known editor, else `nvim`.
+    /// `editors.default`, else `$VISUAL`/`$EDITOR` if it names an editor, else the first
+    /// installed one; only one that is installed (`nvim` when none is, for the error to name).
     pub fn default_editor(&self) -> String {
+        self.default_editor_in(&Installed::here())
+    }
+
+    fn default_editor_in(&self, here: &Installed) -> String {
+        let mut want = Vec::new();
         if let Some(EditorEntry::Name(n)) = self.editors.get("default") {
-            return n.clone();
+            want.push(n.clone());
         }
         for var in ["VISUAL", "EDITOR"] {
             if let Ok(v) = std::env::var(var) {
-                let base = v.rsplit('/').next().unwrap_or(&v).to_owned();
-                if self.editor(&base).is_some() {
-                    return base;
-                }
+                want.push(v.rsplit('/').next().unwrap_or(&v).to_owned());
             }
         }
-        "nvim".into()
+        want.into_iter()
+            .find(|n| self.editor_in(n, here).is_some())
+            .or_else(|| self.editor_names_in(here).into_iter().next())
+            .unwrap_or_else(|| "nvim".into())
     }
 
-    /// Every editor name: configured ones, then built-ins.
+    /// The editors installed here: configured ones, then built-ins, then terminal apps.
     pub fn editor_names(&self) -> Vec<String> {
+        self.editor_names_in(&Installed::here())
+    }
+
+    fn editor_names_in(&self, here: &Installed) -> Vec<String> {
         let mut v: Vec<String> = self.editors.keys().filter(|k| *k != "default").cloned().collect();
-        for b in BUILTIN_EDITORS {
+        for b in BUILTIN_EDITORS.iter().chain(TERMINAL_APPS) {
             if !v.iter().any(|n| n == b) {
                 v.push((*b).into());
             }
         }
+        v.retain(|n| self.editor_in(n, here).is_some());
         v
+    }
+
+    /// Why `name` can't open a worktree here, and what can.
+    pub fn no_editor(&self, name: &str) -> String {
+        let have = self.editor_names().join(", ");
+        let known = self.editors.contains_key(name)
+            || BUILTIN_EDITORS.contains(&name)
+            || FILE_MANAGERS.contains(&name)
+            || TERMINAL_APPS.contains(&name);
+        if !known {
+            return format!("no editor {name:?} (installed: {have})");
+        }
+        let apps = if cfg!(target_os = "macos") { " or in Applications" } else { "" };
+        format!("{name} isn't installed here: not on PATH{apps} (installed: {have})")
     }
 }
 
@@ -2457,9 +2630,115 @@ code = { command = ["code", "{path}"] }
         assert_eq!(c.profiles["personal"].guard, Guard::Confirm);
         assert_eq!(c.worktrees.location, WorktreeLocation::Sibling);
         assert_eq!(c.ports.bounds().unwrap(), (30000, 30099));
-        assert_eq!(c.default_editor(), "nvim");
-        assert!(c.editor("nvim").unwrap().inside);
-        assert!(!c.editor("code").unwrap().inside);
+        let (_t, here) = installed(&["nvim", "code"], &[]);
+        assert_eq!(c.default_editor_in(&here), "nvim");
+        assert!(c.editor_in("nvim", &here).unwrap().inside);
+        assert!(!c.editor_in("code", &here).unwrap().inside);
+    }
+
+    /// A `PATH` of these programs, and an Applications folder of these apps (gone with the
+    /// `TempDir`).
+    fn installed(programs: &[&str], apps: &[&str]) -> (tempfile::TempDir, Installed) {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        std::fs::create_dir(dir.join("bin")).unwrap();
+        for p in programs {
+            let f = dir.join("bin").join(p);
+            std::fs::write(&f, "").unwrap();
+            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        for a in apps {
+            std::fs::create_dir_all(dir.join(format!("{a}.app"))).unwrap();
+        }
+        (tmp, Installed { path: dir.join("bin").into(), apps: vec![dir] })
+    }
+
+    #[test]
+    fn only_installed_editors_are_offered() {
+        let c = Config::parse(
+            "[editors]\ndefault = \"nvim\"\nmine = { command = [\"/bin/sh\"] }\ngone = { command = [\"nope\"] }\n",
+        )
+        .unwrap();
+        let (_t, here) = installed(&["hx", "code", "xdg-open"], &["Zed"]);
+        assert_eq!(c.editor_names_in(&here), ["mine", "hx", "code", "zed", FILE_MANAGER]);
+        assert!(c.editor_in("gone", &here).is_none(), "its program is on no PATH");
+        assert!(c.editor_in("cursor", &here).is_none());
+        // Not on PATH, but an app (macOS): opened as the app.
+        let zed = c.editor_in("zed", &here).unwrap();
+        assert_eq!(zed.command[..2], ["open", "-a"]);
+        assert!(zed.command[2].ends_with("Zed.app") && zed.command[3] == "{path}", "{zed:?}");
+        // The default isn't installed: the first one that is.
+        assert_eq!(c.default_editor_in(&here), "mine");
+        let (_n, none) = installed(&[], &[]);
+        let bare = Config::default();
+        assert_eq!(
+            bare.default_editor_in(&none),
+            bare.editor_names_in(&none).first().map_or("nvim", |n| n.as_str())
+        );
+    }
+
+    #[test]
+    fn terminal_apps_open_a_window_in_the_worktree() {
+        let c = Config::parse("[editors]\ndefault = \"iterm\"\n").unwrap();
+        let (t, here) = installed(&["kitty", "wezterm", "xdg-open"], &["iTerm", "Alacritty"]);
+        let cmd = |n: &str| c.editor_in(n, &here).map(|d| d.command);
+        assert_eq!(cmd("kitty").unwrap(), ["kitty", "--directory", "{path}"]);
+        assert_eq!(cmd("wezterm").unwrap(), ["wezterm", "start", "--cwd", "{path}"]);
+        assert!(c.editor_in("kitty", &here).is_some_and(|d| !d.inside), "a window of its own");
+        // Not on PATH: the program inside the app (macOS), once it is there.
+        assert_eq!(cmd("alacritty"), None);
+        let bin = t.path().join("Alacritty.app/Contents/MacOS");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("alacritty"), "").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let perm = std::fs::Permissions::from_mode(0o755);
+        std::fs::set_permissions(bin.join("alacritty"), perm).unwrap();
+        let a = cmd("alacritty").unwrap();
+        assert!(a[0].ends_with("Alacritty.app/Contents/MacOS/alacritty"), "{a:?}");
+        assert_eq!(a[1..], ["--working-directory", "{path}"]);
+        // After the editors and the file manager.
+        let names = c.editor_names_in(&here);
+        let at = |n: &str| names.iter().position(|x| x == n);
+        assert!(at(FILE_MANAGER) < at("kitty"), "{names:?}");
+        if cfg!(target_os = "macos") {
+            let i = cmd("iterm").unwrap();
+            assert_eq!(i[..2], ["open", "-a"]);
+            assert!(i[2].ends_with("iTerm.app") && i[3] == "{path}", "{i:?}");
+            assert_eq!(cmd("ghostty"), None, "no Ghostty.app here");
+            assert_eq!(c.default_editor_in(&here), "iterm");
+        } else {
+            assert_eq!(cmd("iterm"), None, "macOS only");
+            let (_l, linux) = installed(&["gnome-terminal", "konsole", "ghostty"], &[]);
+            let cmd = |n: &str| c.editor_in(n, &linux).map(|d| d.command);
+            assert_eq!(
+                cmd("gnome-terminal").unwrap(),
+                ["gnome-terminal", "--working-directory={path}"]
+            );
+            assert_eq!(cmd("ghostty").unwrap(), ["ghostty", "--working-directory={path}"]);
+            assert_eq!(cmd("konsole").unwrap(), ["konsole", "--workdir", "{path}"]);
+            assert_eq!(cmd("foot"), None);
+        }
+    }
+
+    #[test]
+    fn the_file_manager_answers_to_every_name() {
+        let (_t, here) = installed(&["xdg-open"], &[]);
+        let c = Config::parse("[editors]\ndefault = \"finder\"\n").unwrap();
+        let fm = c.editor_in(FILE_MANAGER, &here).unwrap();
+        assert!(!fm.inside);
+        for n in ["finder", "explorer", "files"] {
+            assert_eq!(c.editor_in(n, &here), Some(fm.clone()), "{n}");
+        }
+        assert_eq!(c.default_editor_in(&here), "finder");
+        if cfg!(target_os = "linux") {
+            assert_eq!(fm.command, ["xdg-open", "{path}"]);
+            let (_g, gio) = installed(&["gio"], &[]);
+            assert_eq!(c.editor_in("files", &gio).unwrap().command, ["gio", "open", "{path}"]);
+            let (_n, none) = installed(&[], &[]);
+            assert!(c.editor_in("files", &none).is_none());
+        }
+        assert!(Config::parse("[editors]\ndefault = \"thing\"\n").is_err());
     }
 
     #[test]

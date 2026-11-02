@@ -278,7 +278,7 @@ pub(crate) const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
             ("runs", "runs"),
             ("sets", "change sets"),
             ("script.run", "run script"),
-            ("worktree.open", "editor"),
+            ("worktree.open", "open in…"),
             ("worktree.gc", "clean up"),
             ("shell.new", "new shell"),
             ("shell.drawer", "quick shell"),

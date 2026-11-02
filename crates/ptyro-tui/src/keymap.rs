@@ -48,7 +48,10 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("session.command", "New session running a command line (empty: your shell)"),
     a("worktree.new", "New worktree of this project (+ an agent), after its setup script"),
     a("workspace.switch", "Switch workspace (each has its own projects, profile and layout)"),
-    a("worktree.open", "Open this worktree in an editor ([editors]; nvim opens here)"),
+    a(
+        "worktree.open",
+        "Open this worktree in an installed editor, the file manager, a terminal app, or a new shell (!)",
+    ),
     a("script.run", "Run the project's default run script in this worktree"),
     a("script.pick", "Pick a lifecycle script to run in this worktree"),
     a("project.add", "Add a git repository to this workspace (discovered under discover.roots)"),

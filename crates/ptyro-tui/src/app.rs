@@ -4715,12 +4715,21 @@ impl App {
         let default = self.config.default_editor();
         let mut names = self.config.editor_names();
         names.sort_by_key(|n| *n != default);
-        let items = names
+        // Only what's installed here (editor_names), then a new shell: `!` picks it, as it
+        // starts one anywhere else.
+        let mut items: Vec<Item> = names
             .into_iter()
             .filter_map(|n| {
                 let def = self.config.editor(&n)?;
-                let how =
-                    if def.inside { "opens here, as a session" } else { "opens its own window" };
+                let how = if def.inside {
+                    "opens here, as a session"
+                } else if n == ptyro_core::config::FILE_MANAGER {
+                    "shows the folder in the file manager"
+                } else if ptyro_core::config::TERMINAL_APPS.contains(&n.as_str()) {
+                    "opens a terminal window there"
+                } else {
+                    "opens its own window"
+                };
                 Some(Item {
                     label: n.clone(),
                     detail: format!("{} — {how}", def.command.join(" ")),
@@ -4729,12 +4738,18 @@ impl App {
                 })
             })
             .collect();
+        items.push(Item {
+            label: "shell".into(),
+            detail: "a new shell in it, as a session".into(),
+            key: Some("!".into()),
+            target: Target::NewShell,
+        });
         let title = format!(
             "Open {} in",
             self.worktree(&wt).map_or_else(String::new, WorktreeInfo::qualified)
         );
         self.overlay = Some(Overlay::Picker {
-            palette: Palette::new(title, items),
+            palette: Palette::new(title, items).with_hotkeys(),
             purpose: Purpose::Editor(wt),
         });
     }
@@ -5570,6 +5585,9 @@ impl App {
                 self.prompt_new_workspace((!m.is_empty()).then_some(m))
             }
             (Target::Editor(name), Purpose::Editor(wt)) => self.open_editor(&wt, &name),
+            (Target::NewShell, Purpose::Editor(wt)) => {
+                self.spawn_spec(SpawnSpec { worktree: Some(wt), ..SpawnSpec::default() }, None)
+            }
             (Target::Script(name), Purpose::Script(wt)) => self.run_script(wt, Some(name)),
             (Target::Worktree(id), Purpose::Gc) => {
                 if let Some(w) = self.worktree(&id).cloned() {
@@ -7791,6 +7809,23 @@ mod tests {
             "name": "@root", "path": "/r", "is_root": true, "state": "ready", "created_ms": 0,
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn open_in_offers_the_installed_editors_then_a_shell_on_bang() {
+        let mut app = app();
+        app.worktrees.push(root("p1"));
+        app.open_editors("p1-root".into());
+        let shown = screen(&app);
+        assert!(shown.contains("a new shell in it") && shown.contains('!'), "{shown}");
+        for n in app.config.editor_names() {
+            assert!(shown.contains(&n), "{n} is installed: {shown}");
+        }
+        let Some(Overlay::Picker { palette, purpose: Purpose::Editor(_) }) = app.overlay.as_mut()
+        else {
+            panic!("no picker");
+        };
+        assert_eq!(palette.key(KeyEvent::char('!')), Picked::Pick(Target::NewShell));
     }
 
     #[test]

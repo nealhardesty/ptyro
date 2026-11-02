@@ -944,6 +944,16 @@ async fn editors_open_inside_or_outside() {
     );
     let out = w.cli(&["wt", "open", "ed/e1", "--editor", "nope"]);
     assert_eq!(out.status.code(), Some(3));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("installed: fake, out"), "names what there is instead: {err}");
+    // `shell`: a new shell in the worktree, the TUI's `!`.
+    let out = w.ok(&["wt", "open", "ed/e1", "--editor", "shell"]);
+    let shell = out.lines().next().unwrap().trim().to_owned();
+    let Reply::Session { info } = c.request(Request::Get { addr: shell }).await.unwrap() else {
+        panic!()
+    };
+    assert_eq!(info.kind, ptyro_core::session::SessionKind::Shell);
+    assert_eq!(info.worktree.as_deref(), Some(wt.id.as_str()), "a shell in the worktree");
     // One the daemon starts on the computer (asked from the web) is reaped when it exits, not left
     // a zombie of the daemon. The CLI starts its own.
     c.request(Request::WorktreeOpen { addr: "ed/e1".into(), editor: Some("out".into()) })

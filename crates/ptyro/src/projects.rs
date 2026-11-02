@@ -334,11 +334,15 @@ pub enum WtCmd {
         #[arg(long)]
         attach: bool,
     },
-    /// Open the worktree in an editor (\[editors\]; terminal editors open as a ptyro session)
+    /// Open the worktree in an editor (\[editors\]; terminal editors open as a ptyro session),
+    /// the file manager, a terminal app, or a new shell
     Open {
         #[arg(add = ArgValueCandidates::new(crate::complete::worktrees))]
         worktree: Option<String>,
-        #[arg(short, long)]
+        /// An installed editor (default: `editors.default`), `finder` (`files` on Linux) for the
+        /// file manager, a terminal app (`terminal`, `iterm`, `ghostty`, `gnome-terminal`…), or
+        /// `shell` for a new shell in it
+        #[arg(short, long, add = ArgValueCandidates::new(crate::complete::editors))]
         editor: Option<String>,
     },
     /// Lock the worktree against `git worktree prune/remove`
@@ -1228,18 +1232,22 @@ async fn open(ctx: &Ctx, c: Client, addr: String, editor: Option<String>) -> Res
     let config = ptyro_core::config::Config::load(&ptyro_core::config::Config::path(&ctx.paths))
         .unwrap_or_default();
     let name = editor.unwrap_or_else(|| config.default_editor());
-    let def = config.editor(&name).ok_or_else(|| {
-        Error::new(
-            ErrorCode::NotFound,
-            format!("no editor {name:?} (known: {})", config.editor_names().join(", ")),
-        )
-    })?;
-    let path = info.path.to_string_lossy().into_owned();
-    let mut argv: Vec<String> = def.command.iter().map(|a| a.replace("{path}", &path)).collect();
-    if !def.command.iter().any(|a| a.contains("{path}")) {
-        argv.push(path.clone());
-    }
-    if def.inside {
+    // `shell`: a new shell in it, the TUI's `!` (unless an editor of yours has that name).
+    let (argv, inside) = if name == "shell" && !config.editors.contains_key("shell") {
+        (Vec::new(), true)
+    } else {
+        let def = config
+            .editor(&name)
+            .ok_or_else(|| Error::new(ErrorCode::NotFound, config.no_editor(&name)))?;
+        let path = info.path.to_string_lossy().into_owned();
+        let mut argv: Vec<String> =
+            def.command.iter().map(|a| a.replace("{path}", &path)).collect();
+        if !def.command.iter().any(|a| a.contains("{path}")) {
+            argv.push(path);
+        }
+        (argv, def.inside)
+    };
+    if inside {
         let attaching = std::io::IsTerminal::is_terminal(&std::io::stdout());
         let spec = SpawnSpec {
             argv,
