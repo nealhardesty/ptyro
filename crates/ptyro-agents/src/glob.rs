@@ -8,43 +8,31 @@ pub fn matches(pattern: &str, text: &str) -> bool {
     }
     let p: Vec<char> = pattern.chars().collect();
     let t: Vec<char> = text.chars().collect();
-    // Each (pattern position, text position) is decided once, so a pattern with several `*` or
-    // `**` against a long path costs its product, not an exponential.
-    go(&p, 0, &t, 0, &mut std::collections::HashMap::new())
-}
-
-type Memo = std::collections::HashMap<(usize, usize), bool>;
-
-fn go(p: &[char], pi: usize, t: &[char], ti: usize, memo: &mut Memo) -> bool {
-    if let Some(&known) = memo.get(&(pi, ti)) {
-        return known;
+    let (n, m) = (p.len(), t.len());
+    // `ok[i * w + j]`: does `p[i..]` match `t[j..]`? Filled from the ends backwards, each cell from
+    // cells already decided, so a pattern with several `*` or `**` against a long path costs
+    // their product, not an exponential, and no wildcard rescans the text.
+    let w = m + 1;
+    let mut ok = vec![false; (n + 1) * w];
+    ok[n * w + m] = true;
+    for i in (0..n).rev() {
+        for j in (0..=m).rev() {
+            let next = |di: usize, dj: usize| ok[(i + di) * w + j + dj];
+            let more = j < m;
+            ok[i * w + j] = match (p[i], p.get(i + 1), p.get(i + 2)) {
+                // `**/` is zero or more whole directories: the rest starts at a segment boundary.
+                ('*', Some('*'), Some('/')) => {
+                    ((j == 0 || t[j - 1] == '/') && next(3, 0)) || (more && next(0, 1))
+                }
+                ('*', Some('*'), _) => next(2, 0) || (more && next(0, 1)),
+                // `*` stays within the segment.
+                ('*', ..) => next(1, 0) || (more && t[j] != '/' && next(0, 1)),
+                ('?', ..) => more && t[j] != '/' && next(1, 1),
+                (c, ..) => more && t[j] == c && next(1, 1),
+            };
+        }
     }
-    let rest_t = &t[ti.min(t.len())..];
-    let hit = match &p[pi.min(p.len())..] {
-        [] => rest_t.is_empty(),
-        ['*', '*', '/', ..] => {
-            // `**/` is zero or more whole directories: the rest starts at a segment boundary.
-            (ti..=t.len()).any(|i| (i == 0 || t[i - 1] == '/') && go(p, pi + 3, t, i, memo))
-        }
-        ['*', '*', ..] => (ti..=t.len()).any(|i| go(p, pi + 2, t, i, memo)),
-        ['*', ..] => {
-            let mut found = false;
-            for i in ti..=t.len() {
-                if go(p, pi + 1, t, i, memo) {
-                    found = true;
-                    break;
-                }
-                if t.get(i) == Some(&'/') {
-                    break;
-                }
-            }
-            found
-        }
-        ['?', ..] => rest_t.first().is_some_and(|c| *c != '/') && go(p, pi + 1, t, ti + 1, memo),
-        [c, ..] => rest_t.first() == Some(c) && go(p, pi + 1, t, ti + 1, memo),
-    };
-    memo.insert((pi, ti), hit);
-    hit
+    ok[0]
 }
 
 #[cfg(test)]

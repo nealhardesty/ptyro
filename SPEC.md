@@ -1693,6 +1693,11 @@ runs), so a restart integrates afresh:
   and `ptyro doctor`'s "shell" section reports it as a note. That section also says which shell
   new sessions run, whether integration reaches it, and that PowerShell is installed when it
   isn't the default.
+  The rc file is `~/.bashrc`, `~/.zshrc`, `<config>/fish/config.fish` or (off Windows)
+  `<config>/powershell/Microsoft.PowerShell_profile.ps1`. `<config>` is `$XDG_CONFIG_HOME` when it
+  is set to an absolute path, else `~/.config`, as fish and pwsh have it
+  (`ptyro_core::config::config_home`). `init`'s completions line, profile detection (§10.10),
+  `uninstall` and the systemd unit use the same rule [fixed 2026-11-01: they used `~/.config` regardless].
 - `generic`: any user-defined agent command. Status from OSC 7501 (if the program speaks it),
   OSC 9 notifications, BEL, and the activity heuristic (§9.3).
 
@@ -2475,7 +2480,7 @@ Off unless configured.
   - parse `alias NAME='VAR=dir … agent …'` and `NAME() { VAR=dir agent "$@"; }` forms for `VAR` in
     `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GEMINI_CLI_HOME`, `GH_CONFIG_DIR`, in `~/.zshrc`,
     `~/.zshenv`, `~/.zprofile`, `~/.bashrc`, `~/.bash_aliases`, `~/.profile`,
-    `~/.config/fish/config.fish`, and files they `source` (one level, no evaluation — text only);
+    `<config>/fish/config.fish` (`$XDG_CONFIG_HOME` or `~/.config`, §8.7), and files they `source` (one level, no evaluation — text only);
   - the profile name is suggested from the alias suffix (`claude-work` → `work`); aliases for
     different agents with the same suffix merge into one profile;
   - the agent's plain default dir becomes the `default` profile, or a named one if the user picks;
@@ -3422,7 +3427,7 @@ and then removes the session unless `--keep`. Still to come from this tree: `--v
 
   A `problem` exits 1.
 - **`install-service`:**
-  - **systemd:** writes `~/.config/systemd/user/ptyro.service` with
+  - **systemd:** writes `<config>/systemd/user/ptyro.service` (`$XDG_CONFIG_HOME` or `~/.config`) with
     - `ExecStart=<ptyro> daemon start --foreground`;
     - this shell's `PATH`, `PTYRO_HOME` and XDG variables;
     - `KillMode=mixed`, so stop is a SIGTERM to the daemon alone and agents hibernate;

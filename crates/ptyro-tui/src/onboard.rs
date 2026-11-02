@@ -74,23 +74,24 @@ impl App {
             .map(|(n, p)| ((*n).to_owned(), (*p).to_owned(), on_path(p)))
             .collect();
         let home = expand_home("~");
-        let mut choices: Vec<Choice> = ptyro_agents::detect::detect(&home)
-            .into_iter()
-            .filter(|s| !self.config.profiles.contains_key(&s.profile))
-            .map(|s| Choice {
-                section: "accounts",
-                label: format!("profile {}", s.profile),
-                detail: s
-                    .dirs
-                    .iter()
-                    .map(|(a, d)| format!("{a} {d}"))
-                    .chain(s.git_email.iter().map(|e| format!("git {e}")))
-                    .collect::<Vec<_>>()
-                    .join(" · "),
-                on: true,
-                kind: ChoiceKind::Profile(s.to_toml()),
-            })
-            .collect();
+        let mut choices: Vec<Choice> =
+            ptyro_agents::detect::detect(&home, &ptyro_core::config::config_home(&home))
+                .into_iter()
+                .filter(|s| !self.config.profiles.contains_key(&s.profile))
+                .map(|s| Choice {
+                    section: "accounts",
+                    label: format!("profile {}", s.profile),
+                    detail: s
+                        .dirs
+                        .iter()
+                        .map(|(a, d)| format!("{a} {d}"))
+                        .chain(s.git_email.iter().map(|e| format!("git {e}")))
+                        .collect::<Vec<_>>()
+                        .join(" · "),
+                    on: true,
+                    kind: ChoiceKind::Profile(s.to_toml()),
+                })
+                .collect();
         choices.push(Choice {
             section: "notifications",
             label: "desktop notifications".into(),

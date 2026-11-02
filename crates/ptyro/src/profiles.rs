@@ -287,7 +287,7 @@ pub async fn run(ctx: &Ctx, cmd: ProfileCmd) -> Result<i32, Error> {
         }
         ProfileCmd::Detect { apply } => {
             let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-            let found = detect(&home);
+            let found = detect(&home, &ptyro_core::config::config_home(&home));
             if found.is_empty() {
                 eprintln!(
                     "no multi-account setup found (aliases, exports, ~/.claude-* dirs, git includeIf)"
@@ -546,7 +546,7 @@ pub(crate) fn sync(ctx: &Ctx, name: &str) -> Result<Vec<String>, Error> {
 pub(crate) fn detect_list(ctx: &Ctx) -> Result<Vec<(Suggestion, bool)>, Error> {
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
     let config = load(ctx)?;
-    Ok(detect(&home)
+    Ok(detect(&home, &ptyro_core::config::config_home(&home))
         .into_iter()
         .map(|s| {
             let known = config.profiles.contains_key(&s.profile);

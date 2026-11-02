@@ -35,10 +35,9 @@ fn exe() -> Result<String, Error> {
 }
 
 fn systemd_path() -> PathBuf {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| ptyro_core::config::expand_home("~/.config"));
-    base.join("systemd/user").join(UNIT)
+    ptyro_core::config::config_home(&ptyro_core::config::expand_home("~"))
+        .join("systemd/user")
+        .join(UNIT)
 }
 
 fn launchd_path() -> PathBuf {
