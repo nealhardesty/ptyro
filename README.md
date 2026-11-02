@@ -50,8 +50,10 @@ Google, or any other tool named here; their names and trademarks belong to their
   built yet (ROADMAP WIN).
 - **Rust 1.99 or later** to build. A checkout pins 1.99.1 in `rust-toolchain.toml`, and
   [rustup](https://rustup.rs) fetches it for you. No Rust yet? In a checkout, `make rust-install`
-  installs rustup and the pinned toolchain (Linux and macOS; it needs a C compiler, which it
-  checks for but never installs).
+  installs rustup and the pinned toolchain on Linux, macOS and Windows. It needs a C compiler,
+  which it checks for but never installs. On Windows that means the Visual Studio Build Tools'
+  C++ workload, and the target runs from Git Bash, MSYS2 or Cygwin (without make, run
+  `sh scripts/rust-install.sh`).
 - **git 2.40 or later**, and **GNU make** for building from a checkout.
 - **At least one agent CLI:** [Claude Code](https://code.claude.com) (the best supported),
   [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli)
@@ -659,7 +661,7 @@ never raw `cargo`, so local runs and CI behave the same.
 | Target | Does |
 |---|---|
 | `make help` | list the targets (the default) |
-| `make rust-install` | install rustup (checksum-verified, no `curl \| sh`) and the toolchain pinned in `rust-toolchain.toml` |
+| `make rust-install` | install rustup (checksum-verified, no `curl \| sh`) and the toolchain pinned in `rust-toolchain.toml`: Linux, macOS, and Windows from Git Bash, MSYS2 or Cygwin (the MSVC host) |
 | `make build` / `release` / `install` / `install-release` | debug build / optimized `target/release/ptyro` / install into `~/.cargo/bin` (a fast incremental build: seconds after the first) / the same with the full release optimizations (slow) |
 | `make run ARGS="ls"` / `make try CMD=claude` | run the dev build with arguments / start `CMD` in a new session and attach |
 | `make test` / `make smoke` | all tests / quick end-to-end checks of the PTY and emulator |

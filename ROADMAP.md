@@ -2660,7 +2660,10 @@ done.
    - `winget install Microsoft.PowerShell Git.Git Microsoft.WindowsTerminal`;
    - Visual Studio Build Tools with "Desktop development with C++" (the MSVC linker and Windows
      SDK that ring, the bundled SQLite and zstd need);
-   - `rustup-init.exe` (the `x86_64-pc-windows-msvc` host, or `aarch64` on ARM).
+   - Rust: from Git Bash in the checkout, `sh scripts/rust-install.sh` (or `make rust-install`
+     where make exists). It checks for the Build Tools and fetches the checksum-verified
+     `rustup-init.exe` for the `x86_64-pc-windows-msvc` host (`aarch64` on ARM), then the pinned
+     toolchain. It has been tested only with shims on Linux: the first real run is on this machine.
    
    `make` on native Windows comes from MSYS2 or Chocolatey (WIN13). Until WIN13, run native
    spikes from Git Bash.
