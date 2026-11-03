@@ -172,24 +172,24 @@ impl Daemon {
                 let running = me.wsl_hold.run.locked().pid.is_some();
                 let mut pause = Duration::from_secs(10);
                 match (want, running) {
-                    (true, false) => match {
+                    (true, false) => {
                         // A holder whose proxy died (its starting session's interop went with
                         // it) leaves its loop, and so its Windows side, running: end that first,
                         // or every restart adds one more.
                         me.wsl_hold.kill();
-                        spawn(wsl, &me.wsl_hold.run)
-                    } {
-                        Ok(pid) => {
-                            tracing::info!(pid, "holding WSL open while the daemon runs");
-                            backoff = Duration::from_secs(2);
+                        match spawn(wsl, &me.wsl_hold.run) {
+                            Ok(pid) => {
+                                tracing::info!(pid, "holding WSL open while the daemon runs");
+                                backoff = Duration::from_secs(2);
+                            }
+                            Err(e) => {
+                                tracing::warn!("can't hold WSL open: {e}");
+                                me.wsl_hold.run.locked().last_exit = Some(e);
+                                pause = backoff;
+                                backoff = (backoff * 2).min(Duration::from_secs(300));
+                            }
                         }
-                        Err(e) => {
-                            tracing::warn!("can't hold WSL open: {e}");
-                            me.wsl_hold.run.locked().last_exit = Some(e);
-                            pause = backoff;
-                            backoff = (backoff * 2).min(Duration::from_secs(300));
-                        }
-                    },
+                    }
                     (false, true) => {
                         tracing::info!("no longer holding WSL open");
                         me.wsl_hold.kill();
