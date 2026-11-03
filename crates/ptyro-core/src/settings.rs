@@ -513,7 +513,7 @@ const CHANNELS: &[Choice] = &[
     c("inbox", "the inbox (always on)"),
     c("bell", "the terminal bell"),
     c("osc", "your terminal's own notification (OSC 9/777)"),
-    c("desktop", "a desktop notification"),
+    c("desktop", "a desktop notification (a Windows toast inside WSL)"),
     c("sinks", "the services below (ntfy, Slack…)"),
 ];
 const ON_STOP: &[Choice] = &[
@@ -676,7 +676,7 @@ pub const SETTINGS: &[Setting] = &[
     s("notifications.on", "notifications", some(KINDS), "Which things notify you.").also("notify alert"),
     s("notifications.quiet_hours", "notifications", Kind::Window, "Between these hours only the inbox is used, like 22:00-07:00 (kinds you set to always notify still do).").or("never quiet").eg("22:00-07:00"),
     s("notifications.coalesce", "notifications", Kind::Duration, "At most one notification per session in this time."),
-    s("notifications.desktop_command", "notifications", Kind::Argv, "Your own desktop notifier, as a command. {title} and {body} are replaced.").adv().or("the system's").eg("my-notifier --title {title} {body}"),
+    s("notifications.desktop_command", "notifications", Kind::Argv, "Your own desktop notifier, as a command. {title} and {body} are replaced.").adv().or("the system's: macOS notifications, notify-send, or a Windows toast inside WSL").eg("my-notifier --title {title} {body}"),
     s("notifications.callback.listen", "notifications", Kind::Address, "Where approve/deny links in notifications are answered, like 127.0.0.1:7591. Off unless set.").restart().or("off").eg("127.0.0.1:7591"),
     s("notifications.callback.insecure", "notifications", Kind::Bool, "Allow that address when it isn't loopback or Tailscale. The links are plain HTTP.").restart().adv(),
     s("notifications.callback.public_url", "notifications", Kind::Text, "The address the links point at, if not the one it listens on.").restart().adv().or("http://<listen>"),

@@ -182,12 +182,7 @@ impl Daemon {
         let def = config
             .editor(&name)
             .ok_or_else(|| Error::new(ErrorCode::NotFound, config.no_editor(&name)))?;
-        let path = info.path.to_string_lossy().into_owned();
-        let mut argv: Vec<String> =
-            def.command.iter().map(|a| a.replace("{path}", &path)).collect();
-        if !def.command.iter().any(|a| a.contains("{path}")) {
-            argv.push(path);
-        }
+        let argv = def.argv(&info.path);
         if def.inside {
             let spec = SpawnSpec {
                 argv,

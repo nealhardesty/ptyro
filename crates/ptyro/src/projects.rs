@@ -1239,13 +1239,7 @@ async fn open(ctx: &Ctx, c: Client, addr: String, editor: Option<String>) -> Res
         let def = config
             .editor(&name)
             .ok_or_else(|| Error::new(ErrorCode::NotFound, config.no_editor(&name)))?;
-        let path = info.path.to_string_lossy().into_owned();
-        let mut argv: Vec<String> =
-            def.command.iter().map(|a| a.replace("{path}", &path)).collect();
-        if !def.command.iter().any(|a| a.contains("{path}")) {
-            argv.push(path);
-        }
-        (argv, def.inside)
+        (def.argv(&info.path), def.inside)
     };
     if inside {
         let attaching = std::io::IsTerminal::is_terminal(&std::io::stdout());

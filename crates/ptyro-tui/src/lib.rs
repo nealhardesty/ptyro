@@ -174,6 +174,10 @@ pub async fn run(mut connect: ConnectOptions, paths: &Paths, opts: Options) -> R
         crossterm::cursor::SetCursorStyle::DefaultUserShape
     );
     ratatui::restore();
+    if std::env::var_os("WT_SESSION").is_some() {
+        // Windows Terminal: no progress left on the tab once ptyro is gone.
+        let _ = out.write_all(b"\x1b]9;4;0;0\x07");
+    }
     let _ = out.write_all(b"\x1b[23;0t");
     let _ = out.flush();
     result
@@ -206,6 +210,7 @@ async fn event_loop(
     let mut last_draw = Instant::now() - FRAME;
     let mut cursor_shape = None;
     let mut titled: Option<String> = None;
+    let mut progress: Option<u8> = None;
     let mut tick = tokio::time::interval(Duration::from_millis(250));
     // Whether the terminal is capturing the mouse: follows `[ui] mouse` as the file changes.
     let mut mouse_on = app.config.ui.mouse;
@@ -225,6 +230,7 @@ async fn event_loop(
         if app.dirty && last_draw.elapsed() >= FRAME {
             sync_cursor_shape(app, &mut cursor_shape);
             sync_title(app, &mut titled);
+            sync_progress(app, &mut progress);
             let done = tui.draw(|f| ui::draw(app, f))?;
             let linked = about::link_cells(&app.links.borrow(), done.buffer);
             if !linked.is_empty() {
@@ -287,6 +293,36 @@ fn sync_title(app: &App, last: &mut Option<String>) {
     let _ = write!(out, "\x1b]0;{title}\x07");
     let _ = out.flush();
     *last = Some(title);
+}
+
+/// In Windows Terminal (`WT_SESSION`), the tab and the taskbar button show how ptyro's sessions
+/// are doing through OSC 9;4 (WIN2, R-STA-07): yellow when one needs you, busy while one works.
+fn sync_progress(app: &App, last: &mut Option<u8>) {
+    if std::env::var_os("WT_SESSION").is_none() {
+        return;
+    }
+    let (_, working, blocked) = app.counts();
+    let state = progress_state(working, blocked);
+    if *last == Some(state) {
+        return;
+    }
+    let mut out = std::io::stdout();
+    let percent = if state == 4 { 100 } else { 0 };
+    let _ = write!(out, "\x1b]9;4;{state};{percent}\x07");
+    let _ = out.flush();
+    *last = Some(state);
+}
+
+/// OSC 9;4's state: 4 (paused, yellow) when a session needs you, 3 (busy) while one works, else 0
+/// (none).
+pub(crate) fn progress_state(working: usize, blocked: usize) -> u8 {
+    if blocked > 0 {
+        4
+    } else if working > 0 {
+        3
+    } else {
+        0
+    }
 }
 
 /// What the terminal title says: plain printable text (a machine name is cleaned already).
@@ -380,5 +416,13 @@ mod tests {
         assert_eq!(super::base64(b"f"), "Zg==");
         assert_eq!(super::base64(b"fo"), "Zm8=");
         assert_eq!(super::base64(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn windows_terminal_progress_says_needs_you_over_working() {
+        assert_eq!(super::progress_state(0, 0), 0);
+        assert_eq!(super::progress_state(2, 0), 3);
+        assert_eq!(super::progress_state(2, 1), 4);
+        assert_eq!(super::progress_state(0, 1), 4);
     }
 }

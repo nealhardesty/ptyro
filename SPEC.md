@@ -1916,7 +1916,7 @@ conformance`):
   - `osc`/`bell`: a `Notify` event; each TUI writes OSC 777 (and OSC 9) to its own terminal, in
     tmux DCS passthrough when inside tmux;
   - `desktop`: `notify-send` (with `--` before the agent-controlled title and body) /
-    `osascript`, or `desktop_command` with `{title}`/`{body}` (an argv run without a shell; the
+    `osascript` / inside WSL with interop, a Windows toast (§20.10), or `desktop_command` with `{title}`/`{body}` (an argv run without a shell; the
     values are agent-controlled, so a `sh -c` wrapper around them is unsafe);
   - `sinks`: ntfy, Pushover, Slack, Discord, Telegram (through `curl --config -`, so tokens and
     webhook URLs never appear in a process listing), or `command` (JSON on stdin). Secrets are
@@ -2961,7 +2961,8 @@ learning anything up front.
   `git` and agents checks, and `gh`), and `report`: all of it as text for a bug report. The TUI
   (`app.about`, `I` after the prefix and in the sidebar) runs `ptyro about --json` like the health
   badge runs the doctor and draws it as an overlay: `j`/`k` pick a link or path, `⏎` opens it
-  (`open` / `xdg-open`; copied instead if nothing opens it), `y` copies it, `c` copies the report,
+  (`open` / `xdg-open`, inside WSL `explorer.exe` with the folder's Windows path; copied instead if
+  nothing opens it), `y` copies it, `c` copies the report,
   `U` runs `daemon.upgrade` when the daemon differs. The addresses are OSC 8 hyperlinks: after
   each frame `link_cells` rewrites those cells with the hyperlink escape in the symbol, over the
   identical text, so the screen looks the same. Writing them moves the terminal's cursor, so
@@ -3818,7 +3819,11 @@ runs (the TUI's and CLI's computer, or the daemon's for the web): a configured e
 macOS `code`, `zed` and `cursor` also as `Visual Studio Code.app`, `Zed.app`, `Cursor.app` in
 `/Applications` or `~/Applications`, opened with `open -a <app> {path}`. The built-in file
 manager is named for the platform (`finder`: `open`; `files`: `xdg-open`, else `gio open`;
-`explorer`) and answers to all three names, so a shared config keeps working. The default is
+`explorer`) and answers to all three names, so a shared config keeps working. Inside WSL with
+interop it is Windows' `explorer.exe` on `{winpath}` (the path as Windows names it,
+`\\wsl.localhost\<distro>\…` or `C:\…`; any command may use it), and `code` and `cursor` are
+also found where their Windows installers put them (under `%USERPROFILE%\AppData\Local\Programs`,
+or `C:\Program Files`), run as `env WSL_DISTRO_NAME=<distro> <code> {path}` (§20.10). The default is
 `editors.default` if installed, else `$VISUAL`/`$EDITOR` if it names an installed one, else the
 first installed. Terminal apps come after the file manager, each where it is installed (macOS:
 `terminal`, `iterm`, `ghostty` by `open -a`, `wezterm`, `kitty`, `alacritty`; Linux: those last four
@@ -6426,6 +6431,35 @@ here):
   (metadata, or every message). Sub-agents' files are in `chats/<parent id>/`. ptyro applies all but
   `orderIds`.
 - **OpenCode:** not installed here; its storage is not read (§22's "As built").
+
+### 20.10 WSL2 **[verified 2026-11-02: WSL 2.6.2.0, kernel 6.6.87.2, Ubuntu 24.04.3, Windows 11 build 26200]**
+
+- **A systemd user unit gets no `WSL_DISTRO_NAME`** (nor `WSL_INTEROP`). `wslpath -w /` still prints
+  `\\wsl.localhost\<distro>\` there, so `ptyro_core::wsl` names the distro from it (§3.4). [V]
+- **VS Code's `bin/code` script needs `WSL_DISTRO_NAME` on WSL2.** It decides it is inside WSL from
+  that variable; its fallback reads a WSL1-style kernel release (`-<build>-Microsoft`) and fails on
+  WSL2's. Without it, `code` starts Windows VS Code with a Linux path (read in the script of VS Code
+  commit `2a59476`). So ptyro runs it as `env WSL_DISTRO_NAME=<distro> …`. [V]
+- **A shell rc that sets `PATH` outright drops the Windows directories WSL appends**: `cmd.exe`,
+  `explorer.exe`, `powershell.exe` and `code` stop being found by name. ptyro looks for Windows'
+  programs under `<mount root>c/Windows` (`System32`, the folder itself,
+  `System32/WindowsPowerShell/v1.0`) when `PATH` doesn't have them (`Wsl::windows_exe`).
+  `%USERPROFILE%` comes from `cmd.exe /d /c echo %USERPROFILE%`, run from `/mnt/c` (from a Linux folder
+  cmd.exe complains about UNC paths first). [V]
+- **Toasts:** Windows PowerShell 5.1's WinRT toast API (`ToastNotificationManager`, template
+  `ToastText02`, the AppUserModelID of Windows PowerShell) shows a toast from WSL with no module
+  installed. The title and body go as environment variables listed in `WSLENV` and become XML text
+  nodes, so agent text never becomes script. `powershell.exe` exits 0. The toast itself was not yet
+  confirmed by eye [S]. Clicking it does nothing yet (WIN10 gives ptyro its own AppUserModelID).
+- **Networking:** `wslinfo --networking-mode` prints `nat` by default. Under NAT, a web app bound to
+  every interface (`access = open`) reaches Windows' localhost but not the Wi-Fi, so a phone can't
+  reach it. `networkingMode=mirrored` under `[wsl2]` in `%USERPROFILE%\.wslconfig` (or Tailscale)
+  can. `doctor` warns. [V for the mode and the rule; mirrored not tried yet]
+- **`wsl.exe --cd "~" -- bash -lc "cd ~/dev/ptyro && …"`** runs in the distro with its login PATH
+  (rustup's included), which is how `make test-wsl` starts from Windows. [V, run from WSL's own interop]
+- **Windows Terminal** sets `WT_SESSION`, and shows OSC 9;4 progress on the tab and the taskbar
+  button. The TUI sends state 4 (yellow) while a session needs you, 3 (busy) while one works, else 0,
+  and 0 when it exits. [S: WT's documented OSC 9;4; not yet looked at on screen]
 
 ### 20.9 Chrome shows a service worker's certificate, not the connection's
 

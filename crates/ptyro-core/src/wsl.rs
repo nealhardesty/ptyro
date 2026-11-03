@@ -2,6 +2,8 @@
 //! which distro, can it run Windows programs, and where are the Windows drives". About, the doctor
 //! and the emulator's OSC 9;9 paths all ask here.
 
+use std::path::{Path, PathBuf};
+
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -23,6 +25,71 @@ impl Wsl {
             Some(d) => format!("WSL{} ({d})", self.version),
             None => format!("WSL{}", self.version),
         }
+    }
+
+    /// A path here as Windows programs name it: `/mnt/c/src` is `C:\src`, and a path inside the
+    /// distro is `\\wsl.localhost\<distro>\home\me` (`None` when the distro is unknown).
+    pub fn windows_path(&self, p: &Path) -> Option<String> {
+        let s = p.to_str()?;
+        if let Some(rest) = s.strip_prefix(&self.mount_root) {
+            let mut c = rest.chars();
+            if let Some(d) = c.next().filter(char::is_ascii_alphabetic) {
+                let tail = c.as_str();
+                if tail.is_empty() || tail.starts_with('/') {
+                    let tail = tail.trim_start_matches('/').replace('/', "\\");
+                    return Some(format!("{}:\\{tail}", d.to_ascii_uppercase()));
+                }
+            }
+        }
+        let distro = self.distro.as_deref()?;
+        Some(format!(r"\\wsl.localhost\{distro}{}", s.replace('/', "\\")))
+    }
+
+    /// A Windows path (`C:\Users\me`) as a path here (`/mnt/c/Users/me`); `None` if it isn't one.
+    pub fn linux_path(&self, w: &str) -> Option<PathBuf> {
+        let mut c = w.trim().chars();
+        let d = c.next().filter(char::is_ascii_alphabetic)?;
+        let rest = c.as_str().strip_prefix(':')?;
+        let rest = rest.trim_start_matches(['\\', '/']).replace('\\', "/");
+        Some(PathBuf::from(format!("{}{}/{rest}", self.mount_root, d.to_ascii_lowercase())))
+    }
+
+    /// A Windows program (`explorer.exe`, `powershell.exe`): from `PATH`, else where Windows keeps
+    /// it on C:. A shell rc that sets `PATH` outright drops the folders WSL appends, so `PATH`
+    /// alone isn't enough.
+    pub fn windows_exe(&self, name: &str) -> PathBuf {
+        let on_path = std::env::var_os("PATH")
+            .and_then(|p| std::env::split_paths(&p).map(|d| d.join(name)).find(|p| p.is_file()));
+        on_path.unwrap_or_else(|| {
+            let c = Path::new(&self.mount_root).join("c/Windows");
+            ["System32", "", "System32/WindowsPowerShell/v1.0"]
+                .iter()
+                .map(|d| c.join(d).join(name))
+                .find(|p| p.is_file())
+                .unwrap_or_else(|| PathBuf::from(name))
+        })
+    }
+
+    /// The Windows user's home (`%USERPROFILE%`) as a path here, asked once; `None` without
+    /// interop.
+    pub fn windows_home(&self) -> Option<&'static Path> {
+        static HOME: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+        HOME.get_or_init(|| {
+            if !self.interop {
+                return None;
+            }
+            let c = Path::new(&self.mount_root).join("c");
+            let out = std::process::Command::new(self.windows_exe("cmd.exe"))
+                .args(["/d", "/c", "echo %USERPROFILE%"])
+                // A Linux folder makes cmd.exe complain about UNC paths first.
+                .current_dir(if c.is_dir() { c } else { PathBuf::from("/") })
+                .stdin(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output()
+                .ok()?;
+            self.linux_path(&String::from_utf8_lossy(&out.stdout)).filter(|p| p.is_dir())
+        })
+        .as_deref()
     }
 }
 
@@ -163,6 +230,29 @@ mod tests {
                 .as_deref(),
             Some("Dev")
         );
+    }
+
+    #[test]
+    fn paths_cross_to_windows_and_back() {
+        let w = from_facts(WSL2, Some("Ubuntu"), true, "", "").unwrap();
+        let win = |p: &str| w.windows_path(Path::new(p));
+        assert_eq!(win("/mnt/c/Users/me/src").as_deref(), Some(r"C:\Users\me\src"));
+        assert_eq!(win("/mnt/d").as_deref(), Some(r"D:\"));
+        assert_eq!(win("/home/me/dev").as_deref(), Some(r"\\wsl.localhost\Ubuntu\home\me\dev"));
+        assert_eq!(
+            win("/mnt/cdrom").as_deref(),
+            Some(r"\\wsl.localhost\Ubuntu\mnt\cdrom"),
+            "not a drive"
+        );
+        let nameless = from_facts(WSL2, None, true, "", "").unwrap();
+        assert_eq!(nameless.windows_path(Path::new("/home/me")), None);
+        assert_eq!(nameless.windows_path(Path::new("/mnt/c/x")).as_deref(), Some(r"C:\x"));
+        let moved = from_facts(WSL2, Some("U"), true, "", "[automount]\nroot = /win/\n").unwrap();
+        assert_eq!(moved.windows_path(Path::new("/win/e/a/b")).as_deref(), Some(r"E:\a\b"));
+        assert_eq!(moved.linux_path("E:\\a\\b\r\n"), Some(PathBuf::from("/win/e/a/b")));
+        assert_eq!(w.linux_path(r"C:\Users\me"), Some(PathBuf::from("/mnt/c/Users/me")));
+        assert_eq!(w.linux_path("%USERPROFILE%"), None, "cmd.exe echoes an unset variable");
+        assert_eq!(w.linux_path(""), None);
     }
 
     #[test]

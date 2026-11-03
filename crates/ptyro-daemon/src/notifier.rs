@@ -757,7 +757,37 @@ fn json_post(url: &str, v: &serde_json::Value) -> Result<String, String> {
     ])
 }
 
+/// A Windows toast from inside WSL (WIN2), shown by Windows PowerShell's own toast API. The title
+/// and body are agent text: they arrive as environment variables (through `WSLENV`) and become
+/// text nodes, never part of the script.
+const WSL_TOAST: &str = "$ErrorActionPreference='Stop'; \
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null; \
+$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02); \
+$n = $t.GetElementsByTagName('text'); \
+$n.Item(0).AppendChild($t.CreateTextNode($env:PTYRO_TOAST_TITLE)) > $null; \
+$n.Item(1).AppendChild($t.CreateTextNode($env:PTYRO_TOAST_BODY)) > $null; \
+$app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe'; \
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show([Windows.UI.Notifications.ToastNotification]::new($t))";
+
 fn desktop(note: &Note, custom: Option<&[String]>) -> String {
+    let wsl = ptyro_core::wsl::detect().filter(|w| w.interop);
+    if let (None, Some(w)) = (custom, wsl) {
+        let ps = w.windows_exe("powershell.exe");
+        let wslenv = match std::env::var("WSLENV") {
+            Ok(v) if !v.is_empty() => format!("{v}:PTYRO_TOAST_TITLE:PTYRO_TOAST_BODY"),
+            _ => "PTYRO_TOAST_TITLE:PTYRO_TOAST_BODY".into(),
+        };
+        let c = std::path::Path::new(&w.mount_root).join("c");
+        let mut cmd = std::process::Command::new(&ps);
+        cmd.args(["-NoProfile", "-NonInteractive", "-Command", WSL_TOAST])
+            .env("PTYRO_TOAST_TITLE", &note.title)
+            .env("PTYRO_TOAST_BODY", &note.body)
+            .env("WSLENV", wslenv);
+        if c.is_dir() {
+            cmd.current_dir(c);
+        }
+        return spawn_reaped(cmd, "Windows toast (powershell.exe)");
+    }
     let argv: Vec<String> = match custom {
         Some(c) => c
             .iter()
@@ -782,8 +812,14 @@ fn desktop(note: &Note, custom: Option<&[String]>) -> String {
         ],
     };
     let Some((prog, args)) = argv.split_first() else { return "no command".into() };
-    match std::process::Command::new(prog)
-        .args(args)
+    let mut cmd = std::process::Command::new(prog);
+    cmd.args(args);
+    spawn_reaped(cmd, prog)
+}
+
+/// Start a notifier and don't wait for it; what happened, for `notify test`.
+fn spawn_reaped(mut cmd: std::process::Command, name: &str) -> String {
+    match cmd
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -792,9 +828,9 @@ fn desktop(note: &Note, custom: Option<&[String]>) -> String {
         Ok(mut child) => {
             // Reaped, not left a zombie per notification.
             std::thread::spawn(move || child.wait());
-            format!("{prog} started")
+            format!("{name} started")
         }
-        Err(e) => format!("{prog}: {e}"),
+        Err(e) => format!("{name}: {e}"),
     }
 }
 

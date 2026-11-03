@@ -215,13 +215,22 @@ pub fn picks(rows: &[Row]) -> Vec<usize> {
 /// Open an address (or a folder) with what the system uses for it. `false`: nothing to open it
 /// with, so the caller copies it instead.
 pub fn open(t: &Target) -> bool {
-    let program = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    // Inside WSL, Windows opens it: Explorer gives an address to the Windows browser and shows a
+    // folder by its Windows path (WIN2). WSL rarely has xdg-open.
+    let wsl = ptyro_core::wsl::detect().filter(|w| w.interop);
+    let program = match wsl {
+        Some(w) => w.windows_exe("explorer.exe"),
+        None if cfg!(target_os = "macos") => "open".into(),
+        None => "xdg-open".into(),
+    };
     let arg = match t {
         Target::Url(u) => u.clone(),
         // A file opens in its folder.
         Target::Path(p) => {
             let p = std::path::Path::new(p);
-            if p.is_dir() { p } else { p.parent().unwrap_or(p) }.to_string_lossy().into_owned()
+            let dir = if p.is_dir() { p } else { p.parent().unwrap_or(p) };
+            wsl.and_then(|w| w.windows_path(dir))
+                .unwrap_or_else(|| dir.to_string_lossy().into_owned())
         }
     };
     std::process::Command::new(program)
