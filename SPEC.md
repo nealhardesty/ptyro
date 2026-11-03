@@ -6509,6 +6509,13 @@ here):
     a live upgrade (same pid, a new holder) each leave exactly the holders they should, inside
     the distro and on Windows. `tests/win2.rs` checks it in WSL. Interop works from a systemd
     user unit, so a daemon started by `install-service` holds too. [V]
+  - **End to end, an hour** (2026-11-03, a throwaway Ubuntu-base distro with no systemd and no
+    terminal): ptyro's daemon, started from a `wsl.exe -e` that exited at once (worse than any
+    real start), with a session writing a heartbeat every 10 s. 350 beats over 3,700 s, the
+    longest gap 13 s; after `ptyro daemon stop --force` the distro stopped 16 s later. Once in
+    that run the first holder's proxy ended about 10 s after starting (the session that
+    started the daemon went, its interop channel with it) and the supervisor started another;
+    it now ends the first one's loop before it does. [V]
   - **Still open:** Windows sleep and hibernate (a held distro and the PC asleep: what happens
     to the agents?). [open]
 - **Hosted GitHub runners do have WSL2** (2026-11-03): `windows-latest` (Windows Server 2025, build
