@@ -6449,8 +6449,8 @@ here):
 - **Toasts:** Windows PowerShell 5.1's WinRT toast API (`ToastNotificationManager`, template
   `ToastText02`, the AppUserModelID of Windows PowerShell) shows a toast from WSL with no module
   installed. The title and body go as environment variables listed in `WSLENV` and become XML text
-  nodes, so agent text never becomes script. `powershell.exe` exits 0. The toast itself was not yet
-  confirmed by eye [S]. Clicking it does nothing yet (WIN10 gives ptyro its own AppUserModelID).
+  nodes, so agent text never becomes script. Both test toasts appear in Windows' notification
+  log (owner, 2026-11-02), the second with a 漢字 title [V]. Clicking it does nothing yet (WIN10 gives ptyro its own AppUserModelID).
 - **Networking:** `wslinfo --networking-mode` prints `nat` by default. Under NAT, a web app bound to
   every interface (`access = open`) reaches Windows' localhost but not the Wi-Fi, so a phone can't
   reach it. `networkingMode=mirrored` under `[wsl2]` in `%USERPROFILE%\.wslconfig` (or Tailscale)
