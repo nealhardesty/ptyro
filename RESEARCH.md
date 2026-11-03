@@ -3207,6 +3207,14 @@ follow you over SSH, and tmux plugins can't enforce policy. ptyro does all three
 
 ## Changelog
 
+- **2026-11-03:** WIN0.1 and WIN0.4, measured on the owner's Windows 11 machine. The unverified
+  finding of 2026-10-31 holds and goes further: WSL stops a distro ~15 s after its last
+  `wsl.exe`, systemd services and linger included (microsoft/WSL#13416 confirmed on 2.6.2 [V]);
+  a `wsl.exe` back into the distro holds it, which became the daemon's hold (SPEC §20.10).
+  Hosted `windows-latest` runners do have WSL2 (WSL 3.0.3.0, systemd on), so the "WSL1 only"
+  belief was wrong [V]. cargo-xwin cross-checks every client crate for both Windows targets,
+  with one compiler wrapper for ring on ARM64 (SPEC §20.11) [V]. No idea rows changed: R-WIN-05
+  and R-WIN-08 move with their tasks.
 - **2026-10-31:** Windows and PowerShell, on the owner's question. Deep dive **DD3** (herdr,
   Zellij, tuios, Warp, WezTerm, Windows Terminal, Claude Code and Codex on Windows; platform facts;
   a scan of ptyro's Unix surface at `83e6092`; design options and stages), **R-WIN-01…20**

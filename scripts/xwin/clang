@@ -1,0 +1,27 @@
+#!/bin/sh
+# `make check-windows` (ROADMAP WIN0.4): ring builds aarch64-pc-windows-msvc with the GNU-style
+# `clang` driver, but cargo-xwin's CFLAGS are clang-cl's (`/imsvc DIR`), which clang reads as a
+# file name. This directory goes first on PATH for that build only: `/imsvc` becomes `-isystem`
+# (both mean "a system header directory"), and the next `clang` on PATH does the rest.
+# cargo-xwin links its `clang-cl` to the first `clang` on PATH, which is this script: called by
+# that name, it hands everything over untouched, in clang-cl mode.
+# Its own directory, through any symlink (cargo-xwin's clang-cl is one), to skip on PATH.
+here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+real=
+IFS=:
+for d in $PATH; do
+  [ "$d" = "$here" ] && continue
+  if [ -x "$d/clang" ]; then real="$d/clang"; break; fi
+done
+unset IFS
+[ -n "$real" ] || { echo "scripts/xwin/clang: no clang on PATH (apt install clang lld)" >&2; exit 127; }
+case "$(basename "$0")" in
+  clang-cl*) exec "$real" --driver-mode=cl "$@" ;;
+esac
+n=$#
+while [ "$n" -gt 0 ]; do
+  a=$1; shift; n=$((n - 1))
+  [ "$a" = /imsvc ] && a=-isystem
+  set -- "$@" "$a"
+done
+exec "$real" "$@"

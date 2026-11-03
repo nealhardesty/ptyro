@@ -6548,6 +6548,45 @@ here):
   set to `off`, and state 0 when none applies and when it exits. [S: WT's documented OSC 9;4; not yet
   looked at on screen]
 
+### 20.11 Cross-building for Windows (WIN0.4) **[verified 2026-11-03: cargo-xwin 0.23.1, clang/lld 18.1.3 on Ubuntu 24.04 in WSL, Rust 1.99.1]**
+
+No Windows machine, Visual Studio or Windows Rust is needed: `cargo xwin check --target
+{x86_64,aarch64}-pc-windows-msvc` from Linux (or macOS, with Homebrew's LLVM) downloads Microsoft's
+CRT and SDK into `~/.cache/cargo-xwin` (about 1 GB, once, under Microsoft's licence:
+`XWIN_ACCEPT_LICENSE=1`). `make check-windows` wraps it. The native route (Build Tools on
+Windows) wasn't needed to get the list below: compile errors are the same either way. [V]
+
+- **The C libraries ptyro bundles all build, for both targets:** ring 0.17.14, libsqlite3-sys
+  0.38.2 (bundled SQLite) and zstd-sys 2.1.2. H2's worry (they fail with no Windows C compiler)
+  is answered by clang-cl and the xwin sysroot. [V]
+- **ring on ARM64** compiles with the GNU-style `clang` driver whatever `CC` says, but cargo-xwin's
+  `CFLAGS` are clang-cl's (`/imsvc DIR`), which clang reads as a file. cargo-xwin's
+  `--cross-compiler clang` fixes ring and breaks SQLite and zstd (its sysroot clashes with the
+  MSVC `intrin.h` in clang 18: `__prefetch`; with clang 19 its headers aren't case-insensitive:
+  `Windows.h` not found). What works is `scripts/xwin/clang` first on `PATH`: `/imsvc` becomes
+  `-isystem` for plain `clang` calls. cargo-xwin links its `clang-cl` to the first `clang` on
+  `PATH` on every run, so the wrapper, called by that name, passes everything through in cl mode,
+  and finds the real clang through its own symlinks (`readlink -f`). [V]
+- **What stops a build, in order** (a scratch tree with `ptyro-core`'s `compile_error!` lifted,
+  each layer stood in to reach the next; x64 and ARM64 alike):
+
+  | Crate | For Windows | What it needs |
+  |---|---|---|
+  | `ptyro-core` | 10 errors (lib), 31 (tests) | file modes (`OpenOptionsExt::mode`, `PermissionsExt`), `O_NOFOLLOW`/`O_NONBLOCK` (`imports.rs`), `getuid` (`paths.rs`); tests: `symlink` |
+  | `ptyro-protocol`, `ptyro-git`, `ptyro-meaning`, `ptyro-run`, `ptyro-drive` | build | nothing (ptyro-git's tests: 2) |
+  | `ptyro-term` | 6 | `record.rs`: mode 0600 and `read_exact_at` (Windows: `seek_read`) |
+  | `ptyro-store` | 2 | permissions in `chat.rs` |
+  | `ptyro-agents` | 1 | `from_mode` in `locate.rs`, a symlink in `profile.rs` |
+  | `ptyro-client` | 1 (and what follows) | `tokio::net::UnixStream`: the transport (WIN3's is `wsl.exe … ptyro proxy` over stdio) |
+  | `ptyro-tui` | 3, once off `ptyro-pty` | it uses `ptyro-pty` only for `CLIENT_ENV` and `local_time_hm` (both belong in `ptyro-core`); then `health.rs` (chmod 600), `onboard.rs` (a 0600 write) and `outer.rs` (polls stdin's fd for the OSC 10/11 replies; a Windows console needs another way) |
+  | `pty-process` → `ptyro-pty` → `ptyro-daemon`, `ptyro-testkit` | 65 | Unix PTYs: the daemon side (track D) |
+  | `ptyro` (the binary) | 41, in 15 files, once the daemon, `ptyro-pty` and `ptyro-testkit` are `cfg(unix)` dependencies | the daemon only in `daemon start` and `handoff-version` (3 uses); the rest are modes, uids, `setsid`, `process_group`, `ESRCH` |
+
+  So the client side (core, protocol, client, term, tui and the binary without the daemon) is
+  about 65 small changes, nearly all "a file only its owner reads" and "who am I", plus two real
+  designs: the client's transport, and reading the outer terminal's replies. The `ptyro-tui` row
+  was checked for both targets; the rest for x64 with ARM64 matching at every layer it reached. [V]
+
 ### 20.9 Chrome shows a service worker's certificate, not the connection's
 
 **Seen 2026-10-29** on Android Chrome, after `serve` moved from ptyro's own certificate to
