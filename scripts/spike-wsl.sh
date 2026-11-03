@@ -41,7 +41,15 @@ in_wsl() {
   [ -n "${WSL_DISTRO_NAME:-}" ] || grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null
 }
 boot_id() { cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo none; }
-pid1_start() { ps -o lstart= -p 1 2>/dev/null | sed 's/  */ /g; s/^ //; s/ $//' || echo unknown; }
+# When PID 1 started, in seconds after the VM booted: field 22 of /proc/1/stat (clock ticks), read
+# after the last ')' because the command name may hold spaces. `ps -o lstart` won't do: on WSL it
+# drifts by minutes within one boot (12:22:48, 12:26:40, 12:27:03 for the same PID 1, 2026-11-02).
+pid1_start() {
+  local ticks
+  ticks=$(sed 's/.*) //' /proc/1/stat 2>/dev/null | cut -d' ' -f20)
+  [ -n "$ticks" ] || { echo unknown; return; }
+  awk -v t="$ticks" -v hz="$(getconf CLK_TCK)" 'BEGIN { printf "%.2fs after boot\n", t / hz }'
+}
 systemd_on() { [ "$(ps -o comm= -p 1 2>/dev/null)" = systemd ]; }
 # Windows commands through WSL interop; empty when interop is off. A shell rc that sets PATH
 # outright drops WSL's appended Windows directories, so fall back to System32 under the
@@ -238,7 +246,7 @@ check() {
     say
     local vm_now distro_now
     vm_now=$([ "$(cat "$run/boot_id")" = "$(boot_id)" ] && echo "no" || echo "**yes** (boot id changed)")
-    distro_now=$([ "$(cat "$run/pid1_start")" = "$(pid1_start)" ] && echo "no" || echo "**yes** (PID 1 started $(pid1_start))")
+    distro_now=$([ "$(cat "$run/pid1_start")" = "$(pid1_start)" ] && echo "no" || echo "**yes** (PID 1 started $(pid1_start), was $(cat "$run/pid1_start"))")
     say "- the WSL VM restarted since start: $vm_now"
     say "- the distro restarted since start: $distro_now"
     if [ -f "$unit_file" ]; then
