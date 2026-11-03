@@ -106,7 +106,7 @@ pub fn proxy_argv(bin: &str) -> Vec<String> {
 
 /// `wsl.exe`: by name on Windows; inside WSL where Windows keeps it (its folder may not be on
 /// `PATH`); `PTYRO_WSL` replaces it (a test double).
-fn wsl_exe() -> String {
+pub fn wsl_exe() -> String {
     if let Ok(w) = std::env::var("PTYRO_WSL") {
         return w;
     }
@@ -194,6 +194,30 @@ pub async fn explain_wsl(
          installed in that distro (its README has the one-line install)",
         if tail.is_empty() { String::new() } else { format!(" (wsl: {tail})") },
     ))
+}
+
+/// `ptyro --version` in a WSL distro (`ptyro 0.0.48`), found where `proxy` looks; `None` when it
+/// isn't there or the distro doesn't answer within 20 s (the first start of a distro is slow).
+pub async fn version_in(distro: &str) -> Option<String> {
+    let bin = std::env::var("PTYRO_REMOTE_BIN").unwrap_or_else(|_| "ptyro".into());
+    let mut args = wsl_args(distro, &bin).ok()?;
+    // The same script as `proxy`, asking for the version instead.
+    let script = args.iter().position(|a| a == "-c").map(|i| i + 1)?;
+    args[script] = args[script].replace(" proxy", " --version");
+    let out = tokio::time::timeout(
+        Duration::from_secs(20),
+        Command::new(wsl_exe())
+            .args(&args)
+            .env("WSL_UTF8", "1")
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    let v = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    (out.status.success() && v.starts_with("ptyro ")).then_some(v)
 }
 
 /// The distros WSL has (`wsl.exe -l -q`); `None` when it can't say.

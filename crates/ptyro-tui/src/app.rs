@@ -2899,6 +2899,26 @@ impl App {
                     None => self.toast("nothing to peek at"),
                 }
             }
+            "session.tab" | "session.pane" => {
+                let target = if self.focus == Focus::Sidebar {
+                    self.selected_row().and_then(|r| r.session())
+                } else {
+                    focused
+                };
+                let Some(id) = target else {
+                    self.toast("no session here");
+                    return;
+                };
+                let place = if cmd.action == "session.pane" {
+                    crate::tab::Place::Pane
+                } else {
+                    crate::tab::Place::Tab
+                };
+                match crate::tab::open(place, &id.full(), self.connect.remote.as_deref()) {
+                    Ok(said) => self.toast(said),
+                    Err(e) => self.toast_err(e),
+                }
+            }
             "session.resume" | "session.hibernate" | "session.explain" | "session.mute"
             | "session.adopt" | "session.summarize" => {
                 let target = if self.focus == Focus::Sidebar {
@@ -4256,6 +4276,9 @@ impl App {
                     v.extend(["inspector", "worktree.open", "script.run", "script.pick"]);
                 }
                 v.push("pane.split_right");
+                if crate::tab::plan(crate::tab::Place::Tab, "", None, &crate::tab::here()).is_ok() {
+                    v.extend(["session.tab", "session.pane"]);
+                }
                 if s.state.is_live() {
                     v.extend(["session.stop", "session.kill"]);
                 } else {

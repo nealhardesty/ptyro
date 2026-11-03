@@ -15,6 +15,7 @@ pub mod keymap;
 mod keys;
 pub mod layout;
 mod onboard;
+pub mod tab;
 // The reply parsers are tested everywhere; only Unix asks the terminal yet (outer.rs).
 #[cfg_attr(not(unix), allow(dead_code))]
 mod outer;

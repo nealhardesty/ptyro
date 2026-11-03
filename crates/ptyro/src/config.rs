@@ -64,6 +64,19 @@ async fn layer(ctx: &Ctx, project: Option<&str>, shared: bool) -> Result<Layer, 
     Ok(if shared { Layer::Shared(info.root) } else { Layer::Local(info.root) })
 }
 
+/// Set one key in this computer's own config, as `ptyro config set` does (no project layer).
+pub(crate) fn set_user(paths: &Paths, key: &str, value: &str) -> Result<(), String> {
+    let layer = Layer::User(Config::path(paths));
+    let v = value_of(key, &[value.to_owned()]);
+    settings::apply(
+        &layer,
+        &Op::Set { key: key.to_owned(), value: v },
+        &lookups(),
+        &extra_for(&layer),
+    )
+    .map(|_| ())
+}
+
 fn invalid(e: String) -> Error {
     Error::new(ErrorCode::Invalid, e)
 }

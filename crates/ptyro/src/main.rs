@@ -30,6 +30,7 @@ mod tls;
 mod tour;
 mod uninstall;
 mod webapp;
+mod winclient;
 mod wsl_conf;
 
 use std::path::PathBuf;
@@ -162,6 +163,12 @@ enum Cmd {
         /// Watch without typing or resizing (another client keeps control)
         #[arg(long)]
         view_only: bool,
+        /// Open it in a new tab of this terminal instead (tmux, Windows Terminal)
+        #[arg(long, conflicts_with = "pane")]
+        tab: bool,
+        /// Open it in a new pane beside this one instead (tmux, Windows Terminal)
+        #[arg(long)]
+        pane: bool,
     },
     /// List sessions
     #[command(alias = "ls")]

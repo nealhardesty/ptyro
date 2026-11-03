@@ -135,6 +135,21 @@ async fn dispatch(
 ) -> Result<i32, Error> {
     let paths = Paths::from_env().map_err(|e| Error::internal(e.to_string()))?;
     let encoding = if json_wire { Encoding::Json } else { Encoding::MsgPack };
+    // Where the daemon is (WIN3). Commands that never talk to one don't go looking for it.
+    let discover = !matches!(
+        cmd,
+        Some(
+            Cmd::Config { .. }
+                | Cmd::Completions { .. }
+                | Cmd::ShellInit { .. }
+                | Cmd::Init { .. }
+                | Cmd::Uninstall { .. }
+                | Cmd::Backup { .. }
+                | Cmd::Daemon { .. }
+                | Cmd::Proxy
+        )
+    );
+    let remote = crate::winclient::resolve(remote, &paths, discover).await;
     let ctx = Ctx { paths, encoding, remote };
     match cmd {
         None if !task.is_empty() => start_task(&ctx, &task.join(" ")).await,
@@ -219,8 +234,25 @@ async fn dispatch(
                 None => new(&ctx, a).await,
             }
         }
-        Some(Cmd::Attach { session, workspace, raw, view_only }) => {
+        Some(Cmd::Attach { session, workspace, raw, view_only, tab, pane }) => {
             let client = ctx.connect(true).await?;
+            if tab || pane {
+                let info = match &session {
+                    Some(addr) => get(&client, addr).await?,
+                    None => most_recent(&client).await?.ok_or_else(|| {
+                        Error::new(
+                            ErrorCode::NotFound,
+                            "no sessions yet; start one with `ptyro new`",
+                        )
+                    })?,
+                };
+                let place =
+                    if pane { ptyro_tui::tab::Place::Pane } else { ptyro_tui::tab::Place::Tab };
+                let said = ptyro_tui::tab::open(place, &info.id.full(), ctx.remote.as_deref())
+                    .map_err(|e| Error::new(ErrorCode::Unsupported, e))?;
+                eprintln!("{} {said}", info.name);
+                return Ok(0);
+            }
             let info = match (session, &workspace) {
                 (Some(addr), _) => Some(get(&client, &addr).await?),
                 // The workspace's own view decides what to show.

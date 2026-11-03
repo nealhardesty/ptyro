@@ -593,6 +593,30 @@ pub struct Config {
     pub summaries: Summaries,
     pub scratchpad: Scratchpad,
     pub chat: Chat,
+    pub client: Client,
+}
+
+/// This ptyro as a client (WIN3): where its daemon is when none runs on this computer.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Client {
+    /// The daemon to use when `--remote` and `PTYRO_REMOTE` don't say: `wsl://` (the default WSL
+    /// distro), `wsl://<distro>`, or an ssh host (`[ssh://][user@]host[:port]`). Windows asks
+    /// once, when a WSL distro has ptyro, and keeps the answer here.
+    pub default_remote: Option<String>,
+}
+
+impl Client {
+    fn validate(&self) -> Result<(), String> {
+        match self.default_remote.as_deref().map(str::trim) {
+            Some(r) if r.is_empty() || r.contains(char::is_whitespace) || r.starts_with('-') => {
+                Err(format!(
+                    "client.default_remote: {r:?} (wsl://, wsl://<distro>, or an ssh host)"
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 /// Chats (SPEC §22.13): plain conversations with your agents, kept in `chat.db`.
@@ -1648,6 +1672,7 @@ impl Config {
 
     fn validate(&self) -> Result<(), String> {
         self.scratchpad.validate()?;
+        self.client.validate()?;
         self.chat.validate()?;
         if self.ui.prefix.keys().is_empty() {
             return Err("ui.prefix: needs at least one key".into());
