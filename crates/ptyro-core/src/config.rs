@@ -2774,12 +2774,15 @@ code = { command = ["code", "{path}"] }
         );
         assert!(!def.inside);
         assert_eq!(c.editor_in("cursor", &here), None, "not installed");
-        let files = c.editor_in("files", &here).unwrap();
-        assert!(files.command[0].ends_with("explorer.exe"), "{:?}", files.command);
-        assert_eq!(files.command[1], "{winpath}");
-        // Without interop, Windows programs can't start: no file manager unless Linux has one.
-        here.wsl = Some(crate::wsl::Wsl { interop: false, ..wsl });
-        assert_eq!(c.editor_in("files", &here), None);
+        // WSL is Linux: on macOS (where these facts are only pretend) `open` comes first.
+        if !cfg!(target_os = "macos") {
+            let files = c.editor_in("files", &here).unwrap();
+            assert!(files.command[0].ends_with("explorer.exe"), "{:?}", files.command);
+            assert_eq!(files.command[1], "{winpath}");
+            // Without interop, Windows programs can't start: no file manager unless Linux has one.
+            here.wsl = Some(crate::wsl::Wsl { interop: false, ..wsl });
+            assert_eq!(c.editor_in("files", &here), None);
+        }
     }
 
     #[test]

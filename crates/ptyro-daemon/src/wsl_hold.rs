@@ -301,6 +301,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")] // it reads /proc
     fn the_marker_finds_the_loop_and_only_ours() {
         let mark = marker(999_999, "42");
         let mut child = std::process::Command::new("/bin/sh")
