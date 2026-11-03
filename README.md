@@ -49,8 +49,9 @@ Google, or any other tool named here; their names and trademarks belong to their
 - **Linux, macOS or WSL2.** On WSL2 nothing needs setting up: WSL normally stops a distro
   about 15 seconds after its last terminal closes, so ptyro's daemon keeps WSL running while it
   runs, and your agents keep working with every terminal closed. `ptyro daemon stop` lets WSL
-  stop; `[daemon] hold_wsl = false` (Settings → daemon) turns that off. Native Windows 11 is
-  planned, not built yet (ROADMAP WIN).
+  stop; `[daemon] hold_wsl = false` (Settings → daemon) turns that off. **On Windows itself**,
+  `ptyro.exe` is a client of the daemon in WSL ([below](#windows)); a native Windows daemon is
+  planned (ROADMAP WIN, track D).
 - **Rust 1.99 or later** to build. A checkout pins 1.99.1 in `rust-toolchain.toml`, and
   [rustup](https://rustup.rs) fetches it for you. No Rust yet? In a checkout, `make rust-install`
   installs rustup and the pinned toolchain on Linux, macOS and Windows. It needs a C compiler,
@@ -118,6 +119,29 @@ ptyro doctor     # checks agents, logins, integrations, terminal and tmux
 with any uncommitted work flagged, its directories, the login service, integrations, shell-rc
 lines, the binary), asks, and removes it; `ptyro backup` saves its state first. Your repositories,
 their branches and `.ptyro.toml` stay. See [`docs/uninstall.md`](docs/uninstall.md).
+
+### Windows
+
+ptyro's daemon (where your agents run) lives in WSL2. From Windows itself, `ptyro.exe` is its
+client: the TUI in Windows Terminal, and every command from PowerShell.
+
+1. Install ptyro in your WSL distro, as above (`wsl` opens it).
+2. Build `ptyro.exe`: on Windows, `cargo build --release -p ptyro` (Rust and the Visual Studio
+   Build Tools' C++ workload: `make rust-install` checks for them), or from Linux or WSL,
+   `make check-windows`'s toolchain with `cargo xwin build --release --target
+   x86_64-pc-windows-msvc -p ptyro` (`aarch64-…` for ARM). Release builds of it are planned.
+3. Run `ptyro`. The first time, it finds the WSL distro that has ptyro and asks to use it (or
+   offers to install it there); the answer is kept in `client.default_remote`
+   (`ptyro --remote wsl://<distro>` picks one for a single command).
+
+What works from Windows: the TUI (the WSL daemon's sidebar, attaching, typing), every CLI command
+(`ptyro ls --json | ConvertFrom-Json` in PowerShell), and opening a session in a new Windows
+Terminal tab or pane (`ptyro attach S --tab`, `--pane`; the TUI's `session.tab`). The folder you
+run `ptyro new` in becomes the distro's (`C:\src` is `/mnt/c/src`). "Open in" an editor or the
+file manager opens it from WSL, on this computer (VS Code through Remote-WSL, the folder in
+Explorer). Not yet: the outer terminal's colours aren't read on Windows, so sessions get the
+default ones, and commands a daemon host runs (`daemon start`, `install-service`, `tour`) say to
+run them inside WSL.
 
 ## Quick start
 
@@ -687,7 +711,8 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make scratchpad-demo` (`ARGS=tui\|clean`) | the scratchpad in a throwaway ptyro: items added, listed, ticked, restored; `tui` opens it |
 | `make verify-claude` | check the Claude adapter against the real Claude Code on your machine (one tiny turn) |
 | `make verify-structured` | check structured mode against the real agents here |
-| `make check-windows` (`TARGETS=x86_64\|aarch64`, `XWIN_ACCEPT_LICENSE=1` once) | ROADMAP WIN0.4: cross-checks for Windows x64 and ARM64 from Linux or macOS with cargo-xwin (no Windows machine): the bundled C libraries (ring, SQLite, zstd) today, the ptyro crates as WIN3 makes them build. Needs clang, lld and cargo-xwin, and says how to install what's missing. The first run downloads Microsoft's CRT and SDK (about 1 GB) under Microsoft's licence, which you accept with `XWIN_ACCEPT_LICENSE=1` |
+| `make check-windows` (`TARGETS=x86_64\|aarch64`, `XWIN_ACCEPT_LICENSE=1` once) | cross-checks the Windows client for x64 and ARM64 from Linux or macOS with cargo-xwin (no Windows machine): every client crate with its tests, and `ptyro.exe`. Needs clang, lld and cargo-xwin, and says how to install what's missing. The first run downloads Microsoft's CRT and SDK (about 1 GB) under Microsoft's licence, which you accept with `XWIN_ACCEPT_LICENSE=1`. `make test` runs it too when the tools are there, and says so when they aren't |
+| `make test-windows` | on Windows itself (CI's `windows` job): the client crates' tests, the rest of the client compiled, and `ptyro.exe` built |
 | `make test-wsl` (`DISTRO=…`, `WSL_DIR=…`) | CI's main job (`make check`) inside WSL2, which CI also runs on a hosted Windows runner (the `wsl` job): inside the distro it checks this checkout; on Windows (Git Bash, MSYS2) it runs it in the distro through `wsl.exe` (default `~/dev/ptyro`) |
 | `make spike-wsl` (`ARGS="start [label]"`, `check`, `clean`) | ROADMAP WIN0.1, run inside WSL2: three heartbeats (a plain process, a ptyro daemon started on demand, one run by a systemd user unit), then close every WSL terminal; an hour later `check` says how long each lived and writes a report with the WSL version and settings |
 | `make spike-chat` (`ARGS="claude codex"`) / `make spike-chat-fts` (`NODES=…`) | try the chat engine's claims against the real agents here (a few cents of tokens; Gemini and OpenCode if installed) / FTS5 and a 100k-node chat index in SQLite |

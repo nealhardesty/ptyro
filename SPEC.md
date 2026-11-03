@@ -279,7 +279,7 @@ Boundary rules **[decided]**:
 | Linux x86_64 / aarch64 | Tier 1 |
 | macOS aarch64 / x86_64 | Tier 1 |
 | WSL2 | **Tier 1 [decided 2026-10-31, owner]** (Linux build). `make check` passes [V 2026-11-02]: WSL 2.6.2.0, kernel 6.6.87.2, Ubuntu 24.04.3, Windows 11 build 26200, systemd on, master at v0.0.46. All 73 test binaries pass, with bash 5.2 and zsh present but no fish or pwsh (`tests/win1.rs` skips those two), and no browser, so web-e2e didn't run. Survival after the last terminal (WIN0.1) is answered: WSL stops a distro about 15 s after the last Windows-side `wsl.exe` exits, systemd services and linger included, so the daemon holds WSL open itself while it runs (`[daemon] hold_wsl`, on by default; §20.10, WIN2). CI's `wsl` job runs `make test-wsl` on a hosted `windows-latest` runner, which has WSL2 (§20.10) |
-| Windows 11 native (x64, ARM64) | **Tier 1 [decided 2026-10-31, owner], not built yet** (ConPTY, named pipes; ROADMAP WIN, RESEARCH DD3). Windows 10 is not supported |
+| Windows 11 native (x64, ARM64) | **Tier 1 [decided 2026-10-31, owner]. The client is built (WIN3, 2026-11-03): `ptyro.exe` drives the daemon in WSL (`--remote wsl://`, §16.2), the TUI included; the native daemon is not built yet** (ConPTY, named pipes; track D, RESEARCH DD3). CI builds it and runs the client crates' tests on `windows-latest` (§20.11). Windows 10 is not supported |
 
 Inside WSL, `ptyro_core::wsl` is the one rule (WIN2) [V 2026-11-02, WSL 2.6.2]: it is WSL if the kernel release (`/proc/sys/kernel/osrelease`) says `microsoft`, `WSL_DISTRO_NAME` is set, or interop is registered (`/proc/sys/fs/binfmt_misc/WSLInterop`). WSL1's release ends in `-Microsoft` and WSL2's says `microsoft-standard`. The distro comes from `WSL_DISTRO_NAME`, or from `wslpath -w /` (`\\wsl.localhost\<distro>\`) when that's missing: a systemd user unit, which is how `ptyro service install` runs the daemon, doesn't get the variable. About's `system` reads `linux x86_64, WSL2 (Ubuntu)`, its JSON has a `wsl` object, and `doctor` has a `wsl` section (WSL1 is a warning).
 
@@ -3398,6 +3398,17 @@ and then removes the session unless `--keep`. Still to come from this tree: `--v
   - `events [--follow] [-s S] [-n N] [--json]`;
   - `stop S…` (graceful, kept listed; `kill` also removes).
 - **Listing:** `ls --status/--project/--workspace`; `attach --workspace`.
+- **`attach --tab|--pane`** (WIN3, `ptyro_tui::tab`): open the session in a new tab or pane of
+  the terminal instead, attached with this ptyro and its `--remote`. The innermost terminal that
+  can be asked wins: tmux (`new-window` / `split-window -- <ptyro> attach <id>`), else Windows
+  Terminal (`WT_SESSION`): `wt.exe -w 0 new-tab|split-pane -- <ptyro.exe> …` from Windows, or
+  from WSL `wt.exe … -- wsl.exe -d <distro> --cd ~ -- <ptyro> attach <id>` (`wt.exe` from `PATH`,
+  else the Windows user's `WindowsApps`). wt splits its command line at every `;`, even after
+  `--`, so each argument's `;` goes as `\;` [V 2026-11-03]. Anywhere else the error names the
+  command to run in a new tab. TUI: `session.tab`, `session.pane` (the palette, and a session's
+  row menu when there is a terminal to ask). Web: a session's ⋯ → Open on the computer (the
+  `session.tab` host op: inside WSL it asks Windows Terminal when `wt.exe` is there; the server
+  has no `WT_SESSION` of its own).
 - **Daemon:** `daemon stop --hibernate`, `daemon restart`, `daemon logs -f`,
   `daemon install-service|uninstall-service [--dry-run]`.
 - **Setup and help:** `completions`, `init [--yes] [--dry-run]`, `doctor [--quick] [--json]`,
@@ -4025,6 +4036,13 @@ workspace, found by `$PTYRO_SCRATCHPAD`. ptyro never owns the only copy: it is a
 | data | `~/.local/share/ptyro/` | `ptyro.db`, `worktrees/`, `sessions/<id>/pty.log`, `scratchpad.md` + `scratchpad.history/` (§13.6), `integrations/`, `profiles/<name>/<agent>/` (managed profile dirs, `0700`) |
 | state | `~/.local/state/ptyro/` | `daemon.lock`, `daemon.log*`, `daemon.prev` |
 | runtime | Linux `$XDG_RUNTIME_DIR/ptyro/`; macOS `$TMPDIR/ptyro-<uid>/`; `PTYRO_HOME/run/` | `ptyro.sock` |
+
+**[built WIN3]** On Windows (the client of a WSL daemon): config `%APPDATA%\ptyro\`, and data,
+state and runtime under `%LOCALAPPDATA%\ptyro\` (`data\`, `state\`, `run\`); there is no
+socket there. A file "only its owner reads" is mode 0600 on Unix; on Windows these folders'
+inherited access list already keeps them to the user (`ptyro_core::os`). That config holds this
+client's own settings (`client.default_remote`, the TUI's look and keys); the daemon's is in WSL,
+as for any `--remote` client.
 
 **[built M1]** If the socket path would exceed 100 bytes (macOS `sun_path` is 104; deep test
 dirs), it falls back to `/tmp/ptyro-<uid>-<fnv32 of the original path>/ptyro.sock`, which is
@@ -5015,6 +5033,27 @@ script). A target starting with `-` is refused (it would be an ssh option). Fram
 failed handshake reports ssh's last stderr lines. `ptyro proxy` connects to (or starts) the
 local daemon and copies bytes both ways. Commands that read local files still read this
 machine's (docs/remote.md).
+
+**[built WIN3]** `--remote wsl://<distro>` (`wsl://` is the default distro) runs `wsl.exe [-d
+<distro>] --exec sh -c 'PATH=… exec "$0" proxy' <bin>`, the same script as over ssh, with
+`WSL_UTF8=1`. Distro names are `[A-Za-z0-9._-]`, so nothing option-like reaches `wsl.exe`. It
+works from Windows and, through interop, from inside WSL (which is how it is tested). `wsl.exe`
+writes "there is no distribution" on stdout, where the protocol was expected, so a failed
+handshake asks `wsl.exe -l -q` (UTF-16, whatever `WSL_UTF8` says) and names the distros there
+are. `PTYRO_WSL` replaces `wsl.exe`. Variables cross both hops when listed in `WSLENV`.
+- **Where the daemon is:** `--remote`, else `PTYRO_REMOTE`, else `[client] default_remote`. On
+  Windows with none of them, the first command that needs a daemon (not `config`,
+  `completions`, `shell-init`, `init`, `uninstall`, `backup`, `daemon`, `proxy`) asks each
+  distro (WSL's order; `docker-desktop`, `rancher-desktop`, `podman-machine` left out) for
+  `ptyro --version`. The first that answers is offered (on a terminal "Ubuntu (WSL) runs ptyro
+  0.0.48. Use it? [Y/n]", kept in `client.default_remote`; without one it is used and a note says
+  how to keep it). None: an offer to run the README's install line in the default distro.
+- **Paths:** the working directory a Windows client sends is the distro's (`C:\src` is
+  `/mnt/c/src`, `\\wsl.localhost\Ubuntu\home\me` and `\\wsl$\…` are `/home/me`; `\\?\` is
+  ignored; a network share is refused with the fix). For any remote client, "open in" (an editor,
+  the file manager) lists the daemon's editors (`Request::Editors`) and has the daemon open them
+  (`WorktreeOpen`), in the TUI and `wt open`, as the web already did: from WSL, VS Code opens
+  through Remote-WSL and folders in Explorer (§20.10).
 
 ### 16.3 WebSocket server
 
@@ -6582,7 +6621,21 @@ Windows) wasn't needed to get the list below: compile errors are the same either
   | `pty-process` → `ptyro-pty` → `ptyro-daemon`, `ptyro-testkit` | 65 | Unix PTYs: the daemon side (track D) |
   | `ptyro` (the binary) | 41, in 15 files, once the daemon, `ptyro-pty` and `ptyro-testkit` are `cfg(unix)` dependencies | the daemon only in `daemon start` and `handoff-version` (3 uses); the rest are modes, uids, `setsid`, `process_group`, `ESRCH` |
 
-  So the client side (core, protocol, client, term, tui and the binary without the daemon) is
+  **Built (WIN3, 2026-11-03):** the `compile_error!` is the daemon's now; `ptyro_core::os` holds
+  what differs (private files and folders, `no_follow`, `detach`, executables by `PATHEXT`, the
+  uid, `CLIENT_ENV`); `ptyro-tui` takes `ptyro-pty` only on Unix (its clock uses the time
+  crate's local offset on Windows); the binary takes the daemon, `ptyro-pty` and the testkit
+  only on Unix, and what only a daemon host does says to run it in WSL. `/dev/urandom` gave way
+  to the getrandom crate (`ProcessPrng` on Windows). `ptyro.exe` links with an 8 MiB main stack
+  (`/STACK`): Windows' 1 MiB overflowed at once in a debug build. The outer terminal's colour
+  query is Unix-only for now (a console has no descriptor to poll; Windows Terminal answers as
+  console input records). Run on Windows 11 (test binaries started from WSL through interop):
+  ptyro-core 135, ptyro-tui 221, ptyro-term 41, ptyro-protocol 30, ptyro-store 23, ptyro-client 7
+  and the rest pass; tests of Unix behaviour (shells, the daemon's emulator and recorder, modes,
+  symlinks, `sh`) are `#[cfg(unix)]`. ptyro-agents and ptyro-git only compile there: they run in
+  the daemon, and their tests assume Unix paths and Unix git. [V]
+
+  What this table said, before it was built: the client side (core, protocol, client, term, tui and the binary without the daemon) is
   about 65 small changes, nearly all "a file only its owner reads" and "who am I", plus two real
   designs: the client's transport, and reading the outer terminal's replies. The `ptyro-tui` row
   was checked for both targets; the rest for x64 with ARM64 matching at every layer it reached. [V]

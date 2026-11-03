@@ -1,13 +1,13 @@
 //! Credentials (M9): bytes from the OS's random source, failing rather than guessing, and the
 //! URL-safe base64 that tokens, Web Push keys and JWTs use.
 
-use std::io::Read;
-
-/// `n` bytes from the operating system's CSPRNG. There is no fallback: a credential must never
-/// come from anything weaker.
+/// `n` bytes from the operating system's CSPRNG (`getrandom(2)` on Linux, `getentropy` on macOS,
+/// `ProcessPrng` on Windows, through the getrandom crate; `/dev/urandom` isn't there on
+/// Windows). There is no fallback: a credential must never come from anything weaker.
 pub fn random_bytes(n: usize) -> std::io::Result<Vec<u8>> {
     let mut b = vec![0u8; n];
-    std::fs::File::open("/dev/urandom")?.read_exact(&mut b)?;
+    getrandom::fill(&mut b)
+        .map_err(|e| std::io::Error::other(format!("the OS's random source: {e}")))?;
     Ok(b)
 }
 

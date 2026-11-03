@@ -2891,31 +2891,47 @@ done.
 ### Track C — A native client
 
 - [ ] **WIN3 `ptyro.exe`: the client on Windows** (R-WIN-06, R-WIN-07, R-WIN-08) **L**
-  - The `compile_error!` moves from `ptyro-core` to the daemon side. `ptyro-core`,
+  - ~~The `compile_error!` moves from `ptyro-core` to the daemon side. `ptyro-core`,
     `ptyro-protocol`, `ptyro-client`, `ptyro-term`, `ptyro-tui` and the `ptyro` binary build
-    for Windows, with daemon-only code behind `cfg(unix)` until track D.
-  - **`--remote wsl://<distro>`** (and `wsl://` for the default distro): `wsl.exe -d <distro> --
+    for Windows, with daemon-only code behind `cfg(unix)` until track D.~~ [built 2026-11-03]
+    `ptyro_core::os` holds what differs; ptyro-tui and the binary take the daemon side only on
+    Unix; daemon-host commands say to run them in WSL. `/dev/urandom` became getrandom (a real
+    Windows bug). `ptyro.exe` asks for an 8 MiB stack (SPEC §20.11).
+  - ~~**`--remote wsl://<distro>`** (and `wsl://` for the default distro): `wsl.exe -d <distro> --
     ptyro proxy` over stdio, the same shape as `ssh host ptyro proxy` (`remote.rs`). Version
-    mismatches get the existing message and fix.
-  - **First run on Windows:** with no native daemon, ptyro looks for a WSL distro that has ptyro:
-    - one found: "Ubuntu (WSL) runs ptyro 0.0.42. Use it? [Y/n]", remembered as `client.default_remote` (schema entry);
-    - none found: offers to install ptyro in the default distro.
-  - Paths that come from the daemon are its paths, never this computer's. "Open in editor" and
-    "reveal" go through the daemon to WIN2's bridges.
+    mismatches get the existing message and fix.~~ [built 2026-11-03] with a plain message when
+    the distro doesn't exist (SPEC §16.2).
+  - ~~**First run on Windows:** with no native daemon, ptyro looks for a WSL distro that has ptyro:~~ [built 2026-11-03]
+    - ~~one found: "Ubuntu (WSL) runs ptyro 0.0.42. Use it? [Y/n]", remembered as `client.default_remote` (schema entry);~~ without a terminal it is used and a note says how to keep it;
+    - ~~none found: offers to install ptyro in the default distro.~~ with the README's install line.
+  - ~~Paths that come from the daemon are its paths, never this computer's. "Open in editor" and
+    "reveal" go through the daemon to WIN2's bridges.~~ [built 2026-11-03] the TUI's "open in" and
+    `wt open` ask the daemon for its editors and have it open them, for any remote client; the
+    working directory a Windows client sends is the distro's (`C:\src` is `/mnt/c/src`).
   - **Windows Terminal:**
-    - `attach` / the TUI's "open in new tab" use `wt.exe -w 0 nt` (or `sp` for a pane) when `WT_SESSION` is set;
-    - the kitty keyboard protocol when WT reports it;
-    - Ctrl-Q conflicts listed in `doctor`, as for VS Code (SPEC §20.5).
-  - **`make check-windows`:** cargo-xwin builds both Windows targets from macOS or Linux. `make
+    - ~~`attach` / the TUI's "open in new tab" use `wt.exe -w 0 nt` (or `sp` for a pane) when `WT_SESSION` is set;~~ [built 2026-11-03] `attach --tab|--pane`, the TUI's `session.tab` / `session.pane`, and the web's "Open on the computer"; tmux first when ptyro runs inside it (SPEC §12);
+    - the kitty keyboard protocol when WT reports it; [open: crossterm doesn't ask a Windows console, and whether WT answers the query is unverified]
+    - ~~Ctrl-Q conflicts listed in `doctor`, as for VS Code (SPEC §20.5).~~ [built 2026-11-03] `terminal windows terminal`: a binding in your `settings.json` that takes ptyro's prefix (WT's own defaults take neither Ctrl+Q nor Ctrl+Space [S]); its fix opens `ui.prefix`.
+  - ~~**`make check-windows`:** cargo-xwin builds both Windows targets from macOS or Linux. `make
     test` runs it when xwin is installed and says so when it isn't. CI gets a `windows-latest`
-    job that builds and runs the client crates' tests. [started 2026-11-03, WIN0.4] The target
-    exists and checks the bundled C libraries for both targets; add each crate to its `CRATES`
-    as it builds (SPEC §20.11 has the list and what each needs), then wire it into `make test`.
-  - README: "Windows" section (install the client, point it at WSL).
+    job that builds and runs the client crates' tests.~~ [built 2026-11-03] every client crate
+    with its tests and `ptyro.exe`, x64 and ARM64; CI's `windows` job runs `make test-windows`.
+  - ~~README: "Windows" section (install the client, point it at WSL).~~ [built 2026-11-03]
+  - **Left for later (found while building it):**
+    - the outer terminal's colours (`outer.rs`): on Windows nothing asks yet, so sessions get the
+      default colours; Windows Terminal answers OSC 10/11 as console input records;
+    - release builds of `ptyro.exe` (the release workflow's targets, and the install line for
+      Windows), and signing (WIN12);
+    - a Windows user's `ptyro config` edits the client's own config; settings that are the
+      daemon's (agents, worktrees) belong in WSL's. The settings panel could say which is which.
 
   *Done when:* in Windows Terminal, `ptyro.exe` (no WSL shell open) shows the WSL daemon's
   sidebar, attaches to a Claude session with keys, mouse and clipboard working, opens a second
   session in a new WT tab, and `ptyro ls --json` works from PowerShell.
+  [2026-11-03: seen from PowerShell and a Windows console on Windows 11: the sidebar, attaching
+  and typing (a bash session; Claude not tried), `ls --json | ConvertFrom-Json`, `new`, and WT
+  tabs (`wt.exe` into the distro). Still to see by hand in Windows Terminal: mouse, clipboard,
+  and a Claude session.]
 
 ### Track D — A native daemon (only after WIN0.2, WIN0.3, WIN0.5)
 

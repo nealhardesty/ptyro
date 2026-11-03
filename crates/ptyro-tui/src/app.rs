@@ -447,6 +447,11 @@ pub enum Pending {
         then: CopyStart,
     },
     Done(String),
+    /// The daemon's editors, for "open in" from a client on another computer (WIN3): its
+    /// worktree paths are its own, so the daemon opens them (the worktree's id).
+    RemoteEditors(String),
+    /// A worktree opened by the daemon in this editor: a session to show, or what it said.
+    EditorOpened(String),
     /// A workspace was renamed: the TUI follows it once the daemon has agreed.
     WorkspaceRenamed(String),
     /// A workspace was made: switch to it once the daemon has agreed.
@@ -2017,6 +2022,20 @@ impl App {
                 }
             }
             (Pending::Registry, Ok(Reply::Profiles { profiles })) => self.profiles = profiles,
+            (Pending::RemoteEditors(wt), Ok(Reply::Editors { names, default })) => {
+                self.editor_picker(wt, names, &default, true);
+            }
+            (Pending::EditorOpened(_), Ok(Reply::Session { info })) => self.handle_reply(
+                Pending::Spawned { split: None, spec: Box::default(), back: false },
+                Ok(Reply::Session { info }),
+            ),
+            (Pending::EditorOpened(name), Ok(Reply::Notes { notes })) => {
+                self.toast(if notes.is_empty() {
+                    format!("opened in {name}")
+                } else {
+                    notes.join(" · ")
+                });
+            }
             (Pending::Spawned { split, back, .. }, Ok(Reply::Session { info })) => {
                 if std::mem::take(&mut self.close_inspector_after) {
                     self.inspector = None;
@@ -4735,14 +4754,38 @@ impl App {
     }
 
     fn open_editors(&mut self, wt: String) {
+        // On another computer the paths are the daemon's: it lists its editors, and opens them.
+        if self.connect.remote.is_some() {
+            self.request(Pending::RemoteEditors(wt), Request::Editors);
+            return;
+        }
         let default = self.config.default_editor();
-        let mut names = self.config.editor_names();
-        names.sort_by_key(|n| *n != default);
-        // Only what's installed here (editor_names), then a new shell: `!` picks it, as it
-        // starts one anywhere else.
+        let names = self.config.editor_names();
+        self.editor_picker(wt, names, &default, false);
+    }
+
+    /// The "open in" list: `names` (the default first), then a new shell. `remote`: the daemon's
+    /// editors, which open on its computer.
+    fn editor_picker(&mut self, wt: String, mut names: Vec<String>, default: &str, remote: bool) {
+        names.sort_by_key(|n| n != default);
+        // Only what's installed (editor_names), then a new shell: `!` picks it, as it starts one
+        // anywhere else.
         let mut items: Vec<Item> = names
             .into_iter()
             .filter_map(|n| {
+                if remote {
+                    let how = if n == ptyro_core::config::FILE_MANAGER {
+                        "shows the folder, on the computer running the daemon"
+                    } else {
+                        "opens on the computer running the daemon"
+                    };
+                    return Some(Item {
+                        label: n.clone(),
+                        detail: how.into(),
+                        key: None,
+                        target: Target::Editor(n),
+                    });
+                }
                 let def = self.config.editor(&n)?;
                 let how = if def.inside {
                     "opens here, as a session"
@@ -4778,6 +4821,13 @@ impl App {
     }
 
     fn open_editor(&mut self, wt: &str, name: &str) {
+        if self.connect.remote.is_some() {
+            self.request(
+                Pending::EditorOpened(name.to_owned()),
+                Request::WorktreeOpen { addr: wt.to_owned(), editor: Some(name.to_owned()) },
+            );
+            return;
+        }
         let (Some(def), Some(w)) = (self.config.editor(name), self.worktree(wt).cloned()) else {
             return;
         };
@@ -7844,6 +7894,34 @@ mod tests {
             panic!("no picker");
         };
         assert_eq!(palette.key(KeyEvent::char('!')), Picked::Pick(Target::NewShell));
+    }
+
+    #[test]
+    fn on_another_computer_open_in_lists_the_daemons_editors() {
+        // WIN3: the paths are the daemon's, so are the editors (and it opens them).
+        let mut app = app();
+        app.connect.remote = Some("wsl://Ubuntu".into());
+        app.worktrees.push(root("p1"));
+        app.handle_reply(
+            Pending::RemoteEditors("p1-root".into()),
+            Ok(Reply::Editors {
+                names: vec!["files".into(), "code".into()],
+                default: "code".into(),
+            }),
+        );
+        let shown = screen(&app);
+        assert!(shown.contains("on the computer running the daemon"), "{shown}");
+        let Some(Overlay::Picker { palette, purpose: Purpose::Editor(wt) }) = app.overlay.as_ref()
+        else {
+            panic!("no picker");
+        };
+        assert_eq!(wt, "p1-root");
+        let _ = palette;
+        let at = |w: &str| shown.find(&format!(" {w} ")).unwrap_or_else(|| panic!("{w}: {shown}"));
+        assert!(
+            at("code") < at("files") && at("files") < at("shell"),
+            "the default first: {shown}"
+        );
     }
 
     #[test]

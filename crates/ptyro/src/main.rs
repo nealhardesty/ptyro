@@ -50,8 +50,9 @@ struct Cli {
     /// Talk to the daemon in JSON instead of MessagePack (debugging).
     #[arg(long, global = true, hide = true)]
     json_wire: bool,
-    /// Use the daemon on another machine, over ssh: `[ssh://][user@]host[:port]` (or set
-    /// PTYRO_REMOTE). Needs ptyro there and key-based ssh login
+    /// Use the daemon on another machine, over ssh: `[ssh://][user@]host[:port]`, or in a WSL
+    /// distro: `wsl://[distro]` (or set PTYRO_REMOTE; `client.default_remote` keeps one). Needs
+    /// ptyro there, and for ssh a key-based login
     #[arg(long, global = true, value_name = "HOST")]
     remote: Option<String>,
     #[command(subcommand)]

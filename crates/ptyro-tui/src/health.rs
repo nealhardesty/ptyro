@@ -105,6 +105,8 @@ pub fn finding(c: &Check) -> Option<Finding> {
         Some(Fix::Action("worktree.gc"))
     } else if c.section == "wsl" && c.name == "network" {
         Some(Fix::Setting("remote.access"))
+    } else if c.section == "terminal" && c.name == "windows terminal" {
+        Some(Fix::Setting("ui.prefix"))
     } else if c.section == "wsl" && c.name == "survival" && c.text.contains("hold_wsl is off") {
         Some(Fix::Setting("daemon.hold_wsl"))
     } else if c.section == "tmux" {

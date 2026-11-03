@@ -634,6 +634,7 @@ pub fn strip_json_comments(text: &str) -> String {
 mod tests;
 
 #[cfg(test)]
+#[cfg(unix)] // runs sh
 mod quoting {
     use super::*;
 

@@ -120,6 +120,19 @@ fn fnv1a(bytes: &[u8]) -> u32 {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_keeps_the_config_roaming_and_the_rest_local() {
+        let p = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| PathBuf::from(r"C:\h"))).unwrap();
+        assert_eq!(p.config, PathBuf::from(r"C:\h\config"));
+        let p = Paths::resolve(|_| None).unwrap();
+        let roaming = p.config.to_string_lossy().to_ascii_lowercase();
+        assert!(roaming.ends_with(r"appdata\roaming\ptyro"), "{roaming}");
+        let local = p.data.to_string_lossy().to_ascii_lowercase();
+        assert!(local.ends_with(r"appdata\local\ptyro\data"), "{local}");
+    }
+
+    #[cfg(unix)] // Unix paths
     #[test]
     fn ptyro_home_puts_everything_under_one_dir() {
         let p = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| PathBuf::from("/h"))).unwrap();
@@ -146,6 +159,7 @@ mod tests {
         assert!(e.to_string().contains("PTYRO_SOCKET"), "{e}");
     }
 
+    #[cfg(unix)] // Unix paths
     #[test]
     fn socket_override_wins() {
         let p = Paths::resolve(|k| match k {

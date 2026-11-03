@@ -350,6 +350,7 @@ mod tests {
         assert!(remote_command("/opt/my ptyro").ends_with(" '/opt/my ptyro'"));
     }
 
+    #[cfg(unix)] // runs sh
     #[test]
     fn remote_bin_cannot_escape_the_script() {
         // The login shell then `sh -c` see exactly one argument, whatever the name holds.

@@ -1228,6 +1228,26 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
 
 /// `wt open` (SPEC §13.2): terminal editors open inside ptyro as a session in the worktree.
 async fn open(ctx: &Ctx, c: Client, addr: String, editor: Option<String>) -> Result<i32, Error> {
+    // On another computer (`--remote`, Windows' WSL daemon) the worktree's path is the daemon's:
+    // the daemon opens it, with its own editors (WIN3), except a shell, which is a session.
+    if ctx.remote.is_some() && editor.as_deref() != Some("shell") {
+        return match c.request(Request::WorktreeOpen { addr, editor: editor.clone() }).await? {
+            Reply::Session { info } => {
+                if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+                    return crate::cli::attach(ctx, c, Some(info), false, false).await;
+                }
+                println!("{}", info.handle);
+                Ok(0)
+            }
+            Reply::Notes { notes } => {
+                for n in notes {
+                    eprintln!("{n}");
+                }
+                Ok(0)
+            }
+            r => Err(unexpected(r)),
+        };
+    }
     let info = worktree_of(c.request(Request::WorktreeGet { addr }).await?)?;
     let config = ptyro_core::config::Config::load(&ptyro_core::config::Config::path(&ctx.paths))
         .unwrap_or_default();

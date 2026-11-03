@@ -429,6 +429,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(unix)] // Windows can't cut a file another handle has open (recordings are the daemon's)
     #[test]
     fn reopening_cuts_a_torn_tail_and_rewrites_a_torn_header() {
         let dir = tempfile_dir();

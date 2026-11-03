@@ -3077,6 +3077,7 @@ mod hardening {
         assert!(expand_home("~/x").is_absolute());
     }
 
+    #[cfg(unix)] // Unix paths (the agents' config home is the daemon's)
     #[test]
     fn config_home_follows_xdg_unless_it_is_relative() {
         let home = Path::new("/home/me");
