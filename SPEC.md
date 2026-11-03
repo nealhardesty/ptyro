@@ -3724,6 +3724,9 @@ on_stop = "next"                 # after you stop a pane's session: next (its ne
 sidebar_detail = "auto"          # lines under each session row: auto | compact | full
 shell_style = "pane"             # what ⏎ on the quick terminal's line shows: pane (full sized) | auto (drawer if the project is open) | drawer
 which_key_delay = 400            # ms after the prefix before the which-key menu; 0: never
+progress_blocked = "yellow"      # Windows Terminal's tab/taskbar ring (OSC 9;4) while a session needs you
+progress_errored = "red"         #   … while one has an error;  off | busy | green | yellow | red
+progress_working = "busy"        #   … while one works. The first that applies and isn't off shows
 
 [daemon]
 scrollback_lines = 5000          # in memory, capped at 4M cells (fewer lines when wide); older lines come from the recording (§7.6)
@@ -6458,8 +6461,11 @@ here):
 - **`wsl.exe --cd "~" -- bash -lc "cd ~/dev/ptyro && …"`** runs in the distro with its login PATH
   (rustup's included), which is how `make test-wsl` starts from Windows. [V, run from WSL's own interop]
 - **Windows Terminal** sets `WT_SESSION`, and shows OSC 9;4 progress on the tab and the taskbar
-  button. The TUI sends state 4 (yellow) while a session needs you, 3 (busy) while one works, else 0,
-  and 0 when it exits. [S: WT's documented OSC 9;4; not yet looked at on screen]
+  button: state 1 a green ring, 2 red, 3 a busy spinner, 4 yellow (1, 2 and 4 with a percent, sent
+  as 100). The TUI sends the look `[ui] progress_blocked` (yellow), `progress_errored` (red) or
+  `progress_working` (busy) names for the first of those states any live session is in, skipping one
+  set to `off`, and state 0 when none applies and when it exits. [S: WT's documented OSC 9;4; not yet
+  looked at on screen]
 
 ### 20.9 Chrome shows a service worker's certificate, not the connection's
 

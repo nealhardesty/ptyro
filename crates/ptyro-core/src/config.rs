@@ -43,6 +43,39 @@ pub struct Ui {
     pub shell_style: ShellStyle,
     /// Milliseconds after the prefix before the menu of next keys appears (UX1.14); 0: never.
     pub which_key_delay: u64,
+    /// Windows Terminal's progress ring on the tab and taskbar (OSC 9;4, WIN2): how it looks while
+    /// a session needs you, has an error, or works. The first of those three that applies and
+    /// isn't `off` shows.
+    pub progress_blocked: ProgressLook,
+    pub progress_errored: ProgressLook,
+    pub progress_working: ProgressLook,
+}
+
+/// `[ui] progress_*`: one of the looks OSC 9;4 offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProgressLook {
+    /// Nothing shown for this state.
+    Off,
+    /// Spinning: busy, no amount.
+    Busy,
+    Green,
+    Yellow,
+    Red,
+}
+
+impl ProgressLook {
+    /// OSC 9;4's state and percent: green is "progress" (1), red "error" (2), busy
+    /// "indeterminate" (3), yellow "paused" (4); a full ring for the coloured ones.
+    pub fn osc(self) -> (u8, u8) {
+        match self {
+            ProgressLook::Off => (0, 0),
+            ProgressLook::Green => (1, 100),
+            ProgressLook::Red => (2, 100),
+            ProgressLook::Busy => (3, 0),
+            ProgressLook::Yellow => (4, 100),
+        }
+    }
 }
 
 /// `[ui] sidebar_detail`: the lines under each session row (what it wants, what it's on, its
@@ -113,6 +146,9 @@ impl Default for Ui {
             shell_style: ShellStyle::Pane,
             shell_exit: ShellExit::Close,
             which_key_delay: 400,
+            progress_blocked: ProgressLook::Yellow,
+            progress_errored: ProgressLook::Red,
+            progress_working: ProgressLook::Busy,
         }
     }
 }

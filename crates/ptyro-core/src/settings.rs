@@ -537,6 +537,13 @@ const SHELL_STYLE: &[Choice] = &[
     c("drawer", "always a drawer under the focused pane"),
     c("pane", "always a full-sized panel of its own (the default; C-t asks for the drawer)"),
 ];
+const PROGRESS: &[Choice] = &[
+    c("off", "nothing"),
+    c("busy", "a spinning ring"),
+    c("green", "a green ring"),
+    c("yellow", "a yellow ring"),
+    c("red", "a red ring"),
+];
 const LOG_LEVEL: &[Choice] = &[
     c("error", "problems only"),
     c("warn", "problems and warnings"),
@@ -664,6 +671,9 @@ pub const SETTINGS: &[Setting] = &[
     s("ui.which_key_delay", "interface", int(0, 5000), "How long after the prefix key the menu of next keys waits before it pops up. 0 never shows it.").unit("ms").also("hints popup help menu"),
     s("ui.shell_exit", "interface", pick(SHELL_EXIT), "What happens to a shell when you exit it: it disappears (the default, and easy to reopen), or stays in the sidebar as an exited row. Agents always stay.").also("close remove exit terminal"),
     s("ui.shell_style", "interface", pick(SHELL_STYLE), "How the shell key (`!`) shows a worktree's terminal: as a full-sized panel of its own (the default), or as a drawer under its project's pane. `C-t` always asks for the drawer.").also("terminal split drawer pane panel window shell"),
+    s("ui.progress_blocked", "interface", pick(PROGRESS), "Windows Terminal's progress ring (on the tab and the taskbar button) while a session needs you.").also("windows terminal tab taskbar progress ring colour color wsl"),
+    s("ui.progress_errored", "interface", pick(PROGRESS), "Windows Terminal's progress ring while a session has stopped on an error (and none needs you).").also("windows terminal tab taskbar progress ring colour color wsl"),
+    s("ui.progress_working", "interface", pick(PROGRESS), "Windows Terminal's progress ring while a session works (and none needs you or has an error).").also("windows terminal tab taskbar progress ring colour color wsl busy spinner"),
     s("clipboard.allow_write", "interface", Kind::Bool, "Let programs in sessions copy to your clipboard (OSC 52). Reads are always refused.").also("copy paste"),
     // ── Attention ──
     s("attention.scope", "attention", pick(SCOPE), "Where the next-attention key may go."),

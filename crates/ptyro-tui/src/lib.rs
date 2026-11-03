@@ -41,9 +41,10 @@ use crossterm::event::{
 use crossterm::execute;
 use futures::StreamExt;
 use ptyro_client::ConnectOptions;
-use ptyro_core::config::Config;
+use ptyro_core::config::{Config, ProgressLook};
 use ptyro_core::paths::Paths;
 use ptyro_core::session::ProcessState;
+use ptyro_core::status::AgentStatus;
 use ptyro_core::{SessionId, TermSize};
 use ratatui::layout::Rect;
 
@@ -210,7 +211,7 @@ async fn event_loop(
     let mut last_draw = Instant::now() - FRAME;
     let mut cursor_shape = None;
     let mut titled: Option<String> = None;
-    let mut progress: Option<u8> = None;
+    let mut progress: Option<(u8, u8)> = None;
     let mut tick = tokio::time::interval(Duration::from_millis(250));
     // Whether the terminal is capturing the mouse: follows `[ui] mouse` as the file changes.
     let mut mouse_on = app.config.ui.mouse;
@@ -296,33 +297,45 @@ fn sync_title(app: &App, last: &mut Option<String>) {
 }
 
 /// In Windows Terminal (`WT_SESSION`), the tab and the taskbar button show how ptyro's sessions
-/// are doing through OSC 9;4 (WIN2, R-STA-07): yellow when one needs you, busy while one works.
-fn sync_progress(app: &App, last: &mut Option<u8>) {
+/// are doing through OSC 9;4 (WIN2, R-STA-07), in the looks `[ui] progress_*` choose.
+fn sync_progress(app: &App, last: &mut Option<(u8, u8)>) {
     if std::env::var_os("WT_SESSION").is_none() {
         return;
     }
-    let (_, working, blocked) = app.counts();
-    let state = progress_state(working, blocked);
-    if *last == Some(state) {
+    let count = |want: AgentStatus| {
+        app.sessions
+            .iter()
+            .filter(|s| s.state.is_live() && s.status.as_ref().is_some_and(|r| r.status == want))
+            .count()
+    };
+    let look = progress_look(
+        &app.config.ui,
+        count(AgentStatus::Blocked),
+        count(AgentStatus::Errored),
+        count(AgentStatus::Working),
+    );
+    let osc = look.osc();
+    if *last == Some(osc) {
         return;
     }
     let mut out = std::io::stdout();
-    let percent = if state == 4 { 100 } else { 0 };
-    let _ = write!(out, "\x1b]9;4;{state};{percent}\x07");
+    let _ = write!(out, "\x1b]9;4;{};{}\x07", osc.0, osc.1);
     let _ = out.flush();
-    *last = Some(state);
+    *last = Some(osc);
 }
 
-/// OSC 9;4's state: 4 (paused, yellow) when a session needs you, 3 (busy) while one works, else 0
-/// (none).
-pub(crate) fn progress_state(working: usize, blocked: usize) -> u8 {
-    if blocked > 0 {
-        4
-    } else if working > 0 {
-        3
-    } else {
-        0
-    }
+/// The look for these counts: the first of needs-you, errored and working that has sessions and
+/// a look that isn't `off`.
+pub(crate) fn progress_look(
+    ui: &ptyro_core::config::Ui,
+    blocked: usize,
+    errored: usize,
+    working: usize,
+) -> ProgressLook {
+    [(blocked, ui.progress_blocked), (errored, ui.progress_errored), (working, ui.progress_working)]
+        .into_iter()
+        .find(|&(n, look)| n > 0 && look != ProgressLook::Off)
+        .map_or(ProgressLook::Off, |(_, look)| look)
 }
 
 /// What the terminal title says: plain printable text (a machine name is cleaned already).
@@ -419,10 +432,20 @@ mod tests {
     }
 
     #[test]
-    fn windows_terminal_progress_says_needs_you_over_working() {
-        assert_eq!(super::progress_state(0, 0), 0);
-        assert_eq!(super::progress_state(2, 0), 3);
-        assert_eq!(super::progress_state(2, 1), 4);
-        assert_eq!(super::progress_state(0, 1), 4);
+    fn windows_terminal_progress_follows_the_chosen_looks() {
+        use ptyro_core::config::{ProgressLook as L, Ui};
+        let ui = Ui::default();
+        let look = |b, e, w| super::progress_look(&ui, b, e, w);
+        assert_eq!(look(0, 0, 0), L::Off);
+        assert_eq!(look(0, 0, 2), L::Busy, "working spins");
+        assert_eq!(look(0, 1, 2), L::Red, "an error outranks working");
+        assert_eq!(look(1, 1, 2), L::Yellow, "needing you outranks both");
+        // A state turned off lets the next one show.
+        let quiet = Ui { progress_blocked: L::Off, progress_working: L::Green, ..Ui::default() };
+        assert_eq!(super::progress_look(&quiet, 1, 0, 1), L::Green);
+        assert_eq!(super::progress_look(&quiet, 1, 0, 0), L::Off);
+        assert_eq!(L::Yellow.osc(), (4, 100));
+        assert_eq!(L::Busy.osc(), (3, 0));
+        assert_eq!(L::Off.osc(), (0, 0));
     }
 }

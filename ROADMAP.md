@@ -2858,7 +2858,7 @@ done.
     - setup scripts with CRLF line endings; [warning built 2026-11-02: any file a project's script names; converting it is for later, with the move]
     - ~~`serve` unreachable from the phone without `networkingMode=mirrored` or Tailscale;~~ [built 2026-11-02] with `access = open` under NAT (`wslinfo`). The TUI health badge and the web's Health page open the `remote.access` setting as the fix;
     - a WSL version with a known regression.
-  - ~~Windows Terminal: aggregate progress through OSC 9;4 when `WT_SESSION` is set (R-STA-07, C12).~~ [built 2026-11-02] yellow while a session needs you, busy while one works.
+  - ~~Windows Terminal: aggregate progress through OSC 9;4 when `WT_SESSION` is set (R-STA-07, C12).~~ [built 2026-11-02] yellow while a session needs you, red while one has an error, busy while one works; each look is chosen in the settings panel (`ui.progress_blocked`, `progress_errored`, `progress_working`; owner's ask, 2026-11-02).
   - ~~`make test-wsl`: the test suite run inside a WSL distro, documented for a Windows machine.~~ [built 2026-11-02] `make check` inside the distro, or from Git Bash through `wsl.exe`. In CI too, if a `windows-latest` runner with WSL is affordable (WIN0.5 b).
 
   *Done when:* on Windows 11 with WSL2, a daemon started from Windows Terminal is still running an
