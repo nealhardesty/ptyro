@@ -641,7 +641,8 @@ fn print(r: &Report, json: bool) {
 
 async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
     const S: &str = "daemon";
-    // The socket directory must be private (SPEC §17).
+    // The socket directory must be private (SPEC §17). Windows has no socket of its own.
+    #[cfg(unix)]
     if let Some(dir) = ctx.paths.socket.parent() {
         use std::os::unix::fs::MetadataExt;
         match std::fs::metadata(dir) {

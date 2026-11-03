@@ -24,6 +24,19 @@ pub fn parse_size(s: &str) -> Result<TermSize, String> {
     Ok(TermSize::new(cols, rows))
 }
 
+/// Windows runs no daemon of its own (WIN3): the one in WSL does.
+#[cfg(not(unix))]
+pub fn daemon_start(_foreground: bool, _spawned: bool, _serve: bool) -> i32 {
+    eprintln!("{WINDOWS_DAEMON}");
+    ErrorCode::Unsupported.exit_code()
+}
+
+/// What a daemon-side command says on Windows.
+#[cfg(not(unix))]
+pub const WINDOWS_DAEMON: &str = "ptyro: on Windows, ptyro is a client of the daemon in WSL. Run \
+    this inside WSL (`wsl -- ptyro …`), or use `ptyro --remote wsl://` from here";
+
+#[cfg(unix)]
 pub fn daemon_start(foreground: bool, spawned: bool, serve: bool) -> i32 {
     if serve {
         // Written before it starts, so the daemon reads it as its first config.
@@ -796,10 +809,22 @@ pub fn client_env() -> BTreeMap<String, String> {
         .collect()
 }
 
+/// The current directory, as the daemon sees it: here, canonical; on Windows, where the daemon
+/// is WSL's (WIN3), the same folder as the distro names it (`C:\src` is `/mnt/c/src`).
 pub fn current_dir() -> Result<std::path::PathBuf, Error> {
     let cwd =
         std::env::current_dir().map_err(|e| Error::invalid(format!("current directory: {e}")))?;
-    cwd.canonicalize().map_err(|e| Error::invalid(format!("{}: {e}", cwd.display())))
+    let cwd = cwd.canonicalize().map_err(|e| Error::invalid(format!("{}: {e}", cwd.display())))?;
+    if cfg!(windows) {
+        let shown = cwd.to_string_lossy();
+        return ptyro_core::wsl::path_in_distro(&shown, "/mnt/").map(Into::into).ok_or_else(|| {
+            Error::invalid(format!(
+                "{shown} isn't a folder WSL can reach: work from a drive (C:\\…) or the distro \
+                 (\\\\wsl.localhost\\…)"
+            ))
+        });
+    }
+    Ok(cwd)
 }
 
 /// Ask a yes/no question on the terminal; `false` without one.
@@ -1421,11 +1446,7 @@ async fn daemon(ctx: &Ctx, cmd: DaemonCmd) -> Result<i32, Error> {
         DaemonCmd::HandoffVersion => {
             println!(
                 "{}",
-                ptyro_daemon::HANDOFF_VERSIONS
-                    .iter()
-                    .map(u32::to_string)
-                    .collect::<Vec<_>>()
-                    .join(" ")
+                HANDOFF_VERSIONS.iter().map(u32::to_string).collect::<Vec<_>>().join(" ")
             );
             Ok(0)
         }
@@ -1502,3 +1523,9 @@ async fn machine(ctx: &Ctx, cmd: Option<crate::MachineCmd>) -> Result<i32, Error
         M::Pair { url, json } => crate::machines::pair(ctx, url, json).await,
     }
 }
+
+/// The handoff images this binary's daemon can take over from; none on Windows (no daemon).
+#[cfg(unix)]
+const HANDOFF_VERSIONS: &[u32] = ptyro_daemon::HANDOFF_VERSIONS;
+#[cfg(not(unix))]
+const HANDOFF_VERSIONS: &[u32] = &[];

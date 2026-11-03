@@ -30,6 +30,102 @@ pub fn private(opts: &mut OpenOptions) -> &mut OpenOptions {
     opts
 }
 
+/// Open options that create the file with Unix mode `mode` (an rc file keeps its own); on Windows
+/// the folder's access list applies.
+pub fn with_mode(opts: &mut OpenOptions, mode: u32) -> &mut OpenOptions {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(mode)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = mode;
+        opts
+    }
+}
+
+/// Create `path` and any missing parents, each new one only its owner can enter (0700 on Unix).
+/// An existing directory is left as it is.
+pub fn create_private_dirs(path: &Path) -> std::io::Result<()> {
+    let mut b = std::fs::DirBuilder::new();
+    b.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        b.mode(0o700);
+    }
+    b.create(path)
+}
+
+/// Create one new directory only its owner can enter; it must not exist yet.
+pub fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut b = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        b.mode(0o700);
+    }
+    b.create(path)
+}
+
+/// Open without following a link at the last step, so a link swapped in after a check is refused,
+/// not read: `O_NOFOLLOW` on Unix (and `O_NONBLOCK`, so a FIFO can't hold us),
+/// `FILE_FLAG_OPEN_REPARSE_POINT` on Windows (the link itself opens, and isn't a regular file).
+/// With `follow_links`, only the FIFO guard.
+pub fn no_follow(opts: &mut OpenOptions, follow_links: bool) -> &mut OpenOptions {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let nofollow = if follow_links { 0 } else { rustix::fs::OFlags::NOFOLLOW.bits() as i32 };
+        opts.custom_flags(nofollow | rustix::fs::OFlags::NONBLOCK.bits() as i32)
+    }
+    #[cfg(windows)]
+    {
+        if !follow_links {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            opts.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        }
+        opts
+    }
+}
+
+/// Start `cmd` on its own, so it outlives whatever started it and a terminal's signals don't
+/// reach it: its own process group on Unix; on Windows a new process group with no console.
+pub fn detach(cmd: &mut std::process::Command) -> &mut std::process::Command {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+    }
+}
+
+/// Whether process `pid` is running (and ours to signal). Windows: never asked there, since
+/// nothing ptyro starts runs natively yet; `false`.
+pub fn alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        i32::try_from(pid)
+            .ok()
+            .and_then(rustix::process::Pid::from_raw)
+            .is_some_and(|p| rustix::process::test_kill_process(p).is_ok())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
 /// Make an existing file readable by its owner only (`chmod 600`); nothing to do on Windows.
 pub fn make_private(path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]

@@ -516,12 +516,8 @@ fn check_config(config: Config, path: &std::path::Path) -> Result<Vec<String>, S
 /// Write the config (or any file that may hold secrets) atomically: the file 0600, directories
 /// created for it 0700. Replacing a file also tightens an older, looser one.
 pub(crate) fn write_private(path: &std::path::Path, text: &str) -> Result<(), Error> {
-    use std::os::unix::fs::DirBuilderExt;
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)
+        ptyro_core::os::create_private_dirs(dir)
             .map_err(|e| Error::internal(format!("{}: {e}", dir.display())))?;
     }
     write_atomic(path, text, 0o600)
@@ -532,7 +528,6 @@ pub(crate) fn write_private(path: &std::path::Path, text: &str) -> Result<(), Er
 /// the new one and never an empty one. A symlink is followed: the file it points at is what
 /// changes, so a config kept in a dotfiles repository stays a link.
 pub(crate) fn write_atomic(path: &std::path::Path, text: &str, mode: u32) -> Result<(), Error> {
-    use std::os::unix::fs::OpenOptionsExt;
     let err =
         |p: &std::path::Path, e: std::io::Error| Error::internal(format!("{}: {e}", p.display()));
     // Where the file really is (a dangling link is replaced where it points).
@@ -553,8 +548,11 @@ pub(crate) fn write_atomic(path: &std::path::Path, text: &str, mode: u32) -> Res
         N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     let written = (|| -> std::io::Result<()> {
-        let mut f =
-            std::fs::OpenOptions::new().write(true).create_new(true).mode(mode).open(&tmp)?;
+        let mut f = ptyro_core::os::with_mode(
+            std::fs::OpenOptions::new().write(true).create_new(true),
+            mode,
+        )
+        .open(&tmp)?;
         f.write_all(text.as_bytes())?;
         f.sync_all()?;
         drop(f);
@@ -595,8 +593,7 @@ pub(crate) fn with_lock<T>(path: &std::path::Path, f: impl FnOnce() -> T) -> T {
 
 /// The file's mode when group or others can read or write it.
 pub(crate) fn too_open(path: &std::path::Path) -> Option<u32> {
-    use std::os::unix::fs::PermissionsExt;
-    let mode = std::fs::metadata(path).ok()?.permissions().mode() & 0o777;
+    let mode = ptyro_core::os::mode(&std::fs::metadata(path).ok()?)? & 0o777;
     (mode & 0o066 != 0).then_some(mode)
 }
 

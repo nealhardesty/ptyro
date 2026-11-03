@@ -24,6 +24,13 @@ fn main() {
     println!("cargo:rustc-env=PTYRO_BUILD_COMMIT={commit}");
     println!("cargo:rustc-env=PTYRO_BUILD_DATE={date}");
     println!("cargo:rustc-env=PTYRO_BUILD_TARGET={}", std::env::var("TARGET").unwrap_or_default());
+    // Windows gives the main thread 1 MiB (Linux 8): the command tree and the async code are
+    // bigger than that in a debug build, so ptyro.exe asks for 8 MiB, as on Linux (WIN3).
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
+    {
+        println!("cargo:rustc-link-arg-bins=/STACK:8388608");
+    }
     println!("cargo:rerun-if-env-changed=PTYRO_BUILD_COMMIT");
     println!("cargo:rerun-if-env-changed=PTYRO_BUILD_DATE");
     // New commits (a branch moving, a checkout) rebuild this; linked worktrees keep refs in

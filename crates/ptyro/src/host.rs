@@ -35,14 +35,13 @@ async fn cli(args: &[&str]) -> Result<Value, Error> {
 
 /// Start `args` as a ptyro of its own, detached: it may outlive (or end) whatever asked.
 fn detached(args: &[&str]) -> Result<(), Error> {
-    use std::os::unix::process::CommandExt;
     let exe = std::env::current_exe().map_err(|e| Error::internal(format!("ptyro's path: {e}")))?;
-    std::process::Command::new(exe)
-        .args(args)
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .process_group(0)
+        .stderr(std::process::Stdio::null());
+    ptyro_core::os::detach(&mut cmd)
         .spawn()
         .map(|_| ())
         .map_err(|e| Error::internal(format!("ptyro {}: {e}", args.join(" "))))

@@ -143,6 +143,14 @@ fn daemon_running(ctx: &Ctx) -> bool {
     std::fs::File::open(&lock).is_ok_and(|f| f.try_lock_shared().is_err())
 }
 
+/// The login service is the WSL daemon's (systemd in the distro).
+fn windows_service() -> Error {
+    Error::new(
+        ErrorCode::Unsupported,
+        "the login service is the daemon's, in WSL: `wsl -- ptyro daemon install-service`",
+    )
+}
+
 /// Where the login service's file is (whether or not it is installed).
 pub fn file() -> std::path::PathBuf {
     if cfg!(target_os = "macos") { launchd_path() } else { systemd_path() }
@@ -154,13 +162,16 @@ pub fn installed() -> bool {
 }
 
 pub fn install(ctx: &Ctx, dry_run: bool) -> Result<i32, Error> {
+    if cfg!(windows) {
+        return Err(windows_service());
+    }
     let exe = exe()?;
     let env = carried();
     let running = daemon_running(ctx);
     if cfg!(target_os = "macos") {
         let log = ctx.paths.log_dir().join("launchd.log");
         write(&launchd_path(), &launchd_plist(&exe, &env, &log.to_string_lossy()), dry_run)?;
-        let uid = rustix::process::getuid().as_raw().to_string();
+        let uid = ptyro_core::os::uid().unwrap_or(0).to_string();
         if running {
             eprintln!("a daemon is already running: launchd takes over at your next login");
         } else {
@@ -224,13 +235,19 @@ fn link_wanted(dry_run: bool) -> Result<(), Error> {
         std::fs::create_dir_all(d).map_err(fail)?;
     }
     let _ = std::fs::remove_file(&link);
-    std::os::unix::fs::symlink(systemd_path(), &link).map_err(fail)
+    #[cfg(unix)]
+    return std::os::unix::fs::symlink(systemd_path(), &link).map_err(fail);
+    #[cfg(not(unix))]
+    Err(windows_service())
 }
 
 pub fn uninstall(ctx: &Ctx, dry_run: bool) -> Result<i32, Error> {
+    if cfg!(windows) {
+        return Err(windows_service());
+    }
     if cfg!(target_os = "macos") {
         let path = launchd_path();
-        let uid = rustix::process::getuid().as_raw().to_string();
+        let uid = ptyro_core::os::uid().unwrap_or(0).to_string();
         // bootout stops the job, and a daemon launchd started is that job: a running daemon (and
         // the sessions in it) is left alone, as on Linux. Without one it's fine if it isn't loaded.
         if daemon_running(ctx) {

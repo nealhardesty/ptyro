@@ -96,7 +96,7 @@ pub fn read_repo_file(
     }
     let mut opts = std::fs::OpenOptions::new();
     opts.read(true);
-    no_follow(&mut opts, follow_links);
+    crate::os::no_follow(&mut opts, follow_links);
     let file = opts.open(path).map_err(|e| format!("{shown}: {e}"))?;
     let meta = file.metadata().map_err(|e| format!("{shown}: {e}"))?;
     if !meta.is_file() {
@@ -113,25 +113,6 @@ pub fn read_repo_file(
         return Err(format!("{shown} is larger than {} KiB", MAX_FILE >> 10));
     }
     Ok(Some(text))
-}
-
-/// Open without following a link at the last step (unless `follow_links`), so a link swapped in
-/// after the check above is refused, not read: `O_NOFOLLOW` on Unix (and `O_NONBLOCK`, so a FIFO
-/// can't hold us; it is refused below anyway), `FILE_FLAG_OPEN_REPARSE_POINT` on Windows (the
-/// link itself opens, and isn't a regular file).
-fn no_follow(opts: &mut std::fs::OpenOptions, follow_links: bool) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        let nofollow = if follow_links { 0 } else { rustix::fs::OFlags::NOFOLLOW.bits() as i32 };
-        opts.custom_flags(nofollow | rustix::fs::OFlags::NONBLOCK.bits() as i32);
-    }
-    #[cfg(windows)]
-    if !follow_links {
-        use std::os::windows::fs::OpenOptionsExt;
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        opts.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    }
 }
 
 fn read(

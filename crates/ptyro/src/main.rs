@@ -1188,9 +1188,21 @@ fn main() {
         Some(Cmd::Daemon { cmd: DaemonCmd::Start { foreground, spawned, serve } }) => {
             cli::daemon_start(foreground, spawned, serve)
         }
+        #[cfg(unix)]
         Some(Cmd::FakeAgent { args }) => ptyro_testkit::fake_agent::main(&args),
-        #[cfg(debug_assertions)]
+        #[cfg(all(unix, debug_assertions))]
         Some(Cmd::FakeGh { args }) => ptyro_testkit::fake_gh::main(&args),
+        // The pretend agent and gh run in the daemon's sessions, which are WSL's.
+        #[cfg(not(unix))]
+        Some(Cmd::FakeAgent { .. }) => {
+            eprintln!("{}", cli::WINDOWS_DAEMON);
+            2
+        }
+        #[cfg(all(not(unix), debug_assertions))]
+        Some(Cmd::FakeGh { .. }) => {
+            eprintln!("{}", cli::WINDOWS_DAEMON);
+            2
+        }
         // These run inside agents on every hook: no runtime, no config, never a failure.
         Some(Cmd::Hook { adapter, event, args }) => relay::hook(&adapter, &event, &args),
         Some(Cmd::StatuslineRelay) => relay::statusline(),

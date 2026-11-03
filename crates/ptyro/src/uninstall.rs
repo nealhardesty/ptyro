@@ -762,8 +762,8 @@ fn purge_refs_of(repo: &Path) -> Result<usize, String> {
 }
 
 fn write_rc(file: &Path, text: &str) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
-    let mode = std::fs::metadata(file).map_or(0o644, |m| m.permissions().mode() & 0o777);
+    let mode = std::fs::metadata(file).ok().and_then(|m| ptyro_core::os::mode(&m)).unwrap_or(0o644)
+        & 0o777;
     crate::config::write_atomic(file, text, mode).map_err(|e| e.message)
 }
 

@@ -65,7 +65,7 @@ pub fn with_systemd(conf: &str) -> String {
 /// so it fails at once instead of waiting for a password nobody can type).
 fn sudo(argv: &[&str], input: Option<&str>, dry_run: bool) -> Result<(), Error> {
     use std::io::Write;
-    let root = rustix::process::geteuid().is_root();
+    let root = ptyro_core::os::uid() == Some(0);
     let mut full: Vec<&str> = Vec::new();
     if !root {
         full.push("sudo");
