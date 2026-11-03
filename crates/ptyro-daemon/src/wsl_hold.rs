@@ -13,6 +13,9 @@
 //! - The `wsl.exe` here is a Linux process (WSL's interop proxy) that outlives its Windows side
 //!   and holds the distro by itself, so the daemon kills it on the way out, and Linux kills it if
 //!   the daemon dies first (`PR_SET_PDEATHSIG`, from a thread that lives exactly as long as it).
+//! - The proxy dies by itself when the `wsl.exe` session that started the daemon ends (its
+//!   interop channel goes with it), leaving its loop and Windows side running; the supervisor
+//!   ends those (same marker) before it starts the next one.
 //! - `[daemon] hold_wsl = false` lets WSL stop on its own schedule; `PTYRO_WSL_HOLD=0` does the
 //!   same for one daemon (the test suite sets it, so test daemons don't each start one).
 
@@ -169,7 +172,13 @@ impl Daemon {
                 let running = me.wsl_hold.run.locked().pid.is_some();
                 let mut pause = Duration::from_secs(10);
                 match (want, running) {
-                    (true, false) => match spawn(wsl, &me.wsl_hold.run) {
+                    (true, false) => match {
+                        // A holder whose proxy died (its starting session's interop went with
+                        // it) leaves its loop, and so its Windows side, running: end that first,
+                        // or every restart adds one more.
+                        me.wsl_hold.kill();
+                        spawn(wsl, &me.wsl_hold.run)
+                    } {
                         Ok(pid) => {
                             tracing::info!(pid, "holding WSL open while the daemon runs");
                             backoff = Duration::from_secs(2);
