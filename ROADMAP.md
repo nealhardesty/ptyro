@@ -2845,21 +2845,21 @@ done.
 ### Track B — WSL for real
 
 - [ ] **WIN2 WSL: bridged and doctored** (R-WIN-04, R-WIN-05) **M**
-  - Detect WSL (`WSL_DISTRO_NAME`, or `/proc/sys/kernel/osrelease`), shown in About and `doctor`.
+  - ~~Detect WSL (`WSL_DISTRO_NAME`, or `/proc/sys/kernel/osrelease`), shown in About and `doctor`.~~ [built 2026-11-02] `ptyro_core::wsl` (SPEC §3.4), which falls back to `wslpath -w /` for the distro when the daemon runs as a systemd unit. The emulator's OSC 9;9 mapping uses it too.
   - **Survival:** whatever WIN0.1 found works becomes what ptyro does by default. For example, `ptyro service install` uses systemd when it is enabled, and if it isn't, offers to turn it on (it edits `/etc/wsl.conf` after asking, then says `wsl --shutdown` is needed).
   - **Bridges:**
-    - alerts become Windows toasts through `powershell.exe`, unless a sink is configured;
-    - links, the pairing page and files open on Windows (`wslpath -w`, `explorer.exe`);
-    - "open in editor" prefers VS Code's Remote-WSL when `code` is the editor.
+    - ~~alerts become Windows toasts through `powershell.exe`, unless a sink is configured;~~ [built 2026-11-02] the `desktop` channel is a Windows toast inside WSL. The owner chose (2026-11-02) to keep it off by default, as on other platforms: it shows once `desktop` is among the channels;
+    - ~~links, the pairing page and files open on Windows (`wslpath -w`, `explorer.exe`);~~ [built 2026-11-02] About's `⏎` and the file manager (`files`) open through `explorer.exe` with the Windows path (`{winpath}`). Nothing opens the pairing page by itself; its address opens from the TUI or Windows Terminal like any link;
+    - ~~"open in editor" prefers VS Code's Remote-WSL when `code` is the editor.~~ [built 2026-11-02] `code`/`cursor` are found under the Windows profile when off `PATH` and run with `WSL_DISTRO_NAME`, which VS Code's script needs to open through Remote-WSL (SPEC §20.10).
   - **doctor**, each finding with its fix offered, not a command to type:
     - the daemon won't survive the last terminal;
     - systemd is off;
-    - the repo is under `/mnt/<drive>` (offer to clone it into the distro and register the copy);
-    - setup scripts with CRLF line endings;
-    - `serve` unreachable from the phone without `networkingMode=mirrored` or Tailscale;
+    - the repo is under `/mnt/<drive>` (offer to clone it into the distro and register the copy); [warning built 2026-11-02; the owner chose (2026-11-02) to build the "move it" fix later]
+    - setup scripts with CRLF line endings; [warning built 2026-11-02: any file a project's script names; converting it is for later, with the move]
+    - ~~`serve` unreachable from the phone without `networkingMode=mirrored` or Tailscale;~~ [built 2026-11-02] with `access = open` under NAT (`wslinfo`). The TUI health badge and the web's Health page open the `remote.access` setting as the fix;
     - a WSL version with a known regression.
-  - Windows Terminal: aggregate progress through OSC 9;4 when `WT_SESSION` is set (R-STA-07, C12).
-  - `make test-wsl`: the test suite run inside a WSL distro, documented for a Windows machine. In CI too, if a `windows-latest` runner with WSL is affordable (WIN0.5 b).
+  - ~~Windows Terminal: aggregate progress through OSC 9;4 when `WT_SESSION` is set (R-STA-07, C12).~~ [built 2026-11-02] yellow while a session needs you, red while one has an error, busy while one works; each look is chosen in the settings panel (`ui.progress_blocked`, `progress_errored`, `progress_working`; owner's ask, 2026-11-02).
+  - ~~`make test-wsl`: the test suite run inside a WSL distro, documented for a Windows machine.~~ [built 2026-11-02] `make check` inside the distro, or from Git Bash through `wsl.exe`. In CI too, if a `windows-latest` runner with WSL is affordable (WIN0.5 b).
 
   *Done when:* on Windows 11 with WSL2, a daemon started from Windows Terminal is still running an
   hour after every terminal closed (or `doctor` says why not and fixes it). An agent's alert pops

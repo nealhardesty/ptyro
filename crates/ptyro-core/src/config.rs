@@ -43,6 +43,39 @@ pub struct Ui {
     pub shell_style: ShellStyle,
     /// Milliseconds after the prefix before the menu of next keys appears (UX1.14); 0: never.
     pub which_key_delay: u64,
+    /// Windows Terminal's progress ring on the tab and taskbar (OSC 9;4, WIN2): how it looks while
+    /// a session needs you, has an error, or works. The first of those three that applies and
+    /// isn't `off` shows.
+    pub progress_blocked: ProgressLook,
+    pub progress_errored: ProgressLook,
+    pub progress_working: ProgressLook,
+}
+
+/// `[ui] progress_*`: one of the looks OSC 9;4 offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProgressLook {
+    /// Nothing shown for this state.
+    Off,
+    /// Spinning: busy, no amount.
+    Busy,
+    Green,
+    Yellow,
+    Red,
+}
+
+impl ProgressLook {
+    /// OSC 9;4's state and percent: green is "progress" (1), red "error" (2), busy
+    /// "indeterminate" (3), yellow "paused" (4); a full ring for the coloured ones.
+    pub fn osc(self) -> (u8, u8) {
+        match self {
+            ProgressLook::Off => (0, 0),
+            ProgressLook::Green => (1, 100),
+            ProgressLook::Red => (2, 100),
+            ProgressLook::Busy => (3, 0),
+            ProgressLook::Yellow => (4, 100),
+        }
+    }
 }
 
 /// `[ui] sidebar_detail`: the lines under each session row (what it wants, what it's on, its
@@ -113,6 +146,9 @@ impl Default for Ui {
             shell_style: ShellStyle::Pane,
             shell_exit: ShellExit::Close,
             which_key_delay: 400,
+            progress_blocked: ProgressLook::Yellow,
+            progress_errored: ProgressLook::Red,
+            progress_working: ProgressLook::Busy,
         }
     }
 }
@@ -1424,11 +1460,31 @@ pub enum EditorEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EditorDef {
-    /// argv; `{path}` is replaced by the worktree path.
+    /// argv; `{path}` is replaced by the worktree path, `{winpath}` by the same path as Windows
+    /// programs name it inside WSL (`\\wsl.localhost\Ubuntu\home\me\src`).
     pub command: Vec<String>,
     /// Open as a ptyro session instead of a separate window (terminal editors).
     #[serde(default)]
     pub inside: bool,
+}
+
+impl EditorDef {
+    /// The command line opening `path`: `{path}` and `{winpath}` filled in, or the path added at
+    /// the end when the command names neither.
+    pub fn argv(&self, path: &Path) -> Vec<String> {
+        let p = path.to_string_lossy();
+        let win = crate::wsl::detect().and_then(|w| w.windows_path(path));
+        let win = win.as_deref().unwrap_or(&p);
+        let mut argv: Vec<String> = self
+            .command
+            .iter()
+            .map(|a| a.replace("{path}", &p).replace("{winpath}", win))
+            .collect();
+        if !self.command.iter().any(|a| a.contains("{path}") || a.contains("{winpath}")) {
+            argv.push(p.into_owned());
+        }
+        argv
+    }
 }
 
 /// What a profile does when a spawn targets a repository another profile claims (SPEC §10.10).
@@ -1952,10 +2008,14 @@ fn mac_app(name: &str) -> Option<&'static str> {
     }
 }
 
-/// Where this computer's programs are: `PATH`, and on macOS the Applications folders.
+/// Where this computer's programs are: `PATH`, on macOS the Applications folders, and inside WSL
+/// Windows' own programs.
 pub struct Installed {
     path: std::ffi::OsString,
     apps: Vec<PathBuf>,
+    wsl: Option<crate::wsl::Wsl>,
+    /// Inside WSL, the Windows user's home (`/mnt/c/Users/me`), where VS Code installs itself.
+    windows_home: Option<PathBuf>,
 }
 
 impl Installed {
@@ -1968,7 +2028,13 @@ impl Installed {
                 apps.push(PathBuf::from(home).join("Applications"));
             }
         }
-        Self { path: std::env::var_os("PATH").unwrap_or_default(), apps }
+        let wsl = crate::wsl::detect();
+        Self {
+            path: std::env::var_os("PATH").unwrap_or_default(),
+            apps,
+            windows_home: wsl.and_then(|w| w.windows_home()).map(Path::to_path_buf),
+            wsl: wsl.cloned(),
+        }
     }
 
     fn program(&self, prog: &str) -> bool {
@@ -1980,6 +2046,35 @@ impl Installed {
 
     fn app(&self, name: &str) -> Option<PathBuf> {
         self.apps.iter().map(|d| d.join(format!("{name}.app"))).find(|p| p.is_dir())
+    }
+
+    /// Inside WSL, a Windows editor's command for WSL (`…/Microsoft VS Code/bin/code`), from
+    /// `PATH` or where its installer puts it.
+    fn windows_editor(&self, name: &str) -> Option<String> {
+        if self.program(name) {
+            return Some(name.to_owned());
+        }
+        let home = self.windows_home.as_deref();
+        let wsl = self.wsl.as_ref()?;
+        let mut places = Vec::new();
+        match name {
+            "code" => {
+                places.extend(
+                    home.map(|h| h.join("AppData/Local/Programs/Microsoft VS Code/bin/code")),
+                );
+                places.push(
+                    Path::new(&wsl.mount_root).join("c/Program Files/Microsoft VS Code/bin/code"),
+                );
+            }
+            "cursor" => places.extend(
+                home.map(|h| h.join("AppData/Local/Programs/cursor/resources/app/bin/cursor")),
+            ),
+            _ => {}
+        }
+        places
+            .into_iter()
+            .find(|p| crate::scratchpad::is_exec(p))
+            .map(|p| p.to_string_lossy().into_owned())
     }
 }
 
@@ -1999,6 +2094,17 @@ impl Config {
         };
         match name {
             "nvim" | "vim" | "hx" if here.program(name) => def(&[name, "{path}"], true),
+            // VS Code's and Cursor's WSL script opens the folder through their WSL extension only
+            // when WSL_DISTRO_NAME is set, and a daemon run by systemd doesn't have it.
+            "code" | "cursor" if here.wsl.is_some() => {
+                let prog = here.windows_editor(name)?;
+                match here.wsl.as_ref().and_then(|w| w.distro.as_deref()) {
+                    Some(d) => {
+                        def(&["env", &format!("WSL_DISTRO_NAME={d}"), &prog, "{path}"], false)
+                    }
+                    None => def(&[&prog, "{path}"], false),
+                }
+            }
             "code" | "zed" | "cursor" if here.program(name) => def(&[name, "{path}"], false),
             "code" | "zed" | "cursor" => {
                 let app = here.app(mac_app(name)?)?;
@@ -2010,6 +2116,9 @@ impl Config {
             n if FILE_MANAGERS.contains(&n) => {
                 if cfg!(target_os = "macos") {
                     def(&["open", "{path}"], false)
+                } else if let Some(w) = here.wsl.as_ref().filter(|w| w.interop) {
+                    // Windows' own file manager, not a Linux one WSL rarely has.
+                    def(&[&w.windows_exe("explorer.exe").to_string_lossy(), "{winpath}"], false)
                 } else if cfg!(windows) {
                     def(&["explorer", "{path}"], false)
                 } else if here.program("xdg-open") {
@@ -2636,6 +2745,57 @@ code = { command = ["code", "{path}"] }
         assert!(!c.editor_in("code", &here).unwrap().inside);
     }
 
+    /// Inside WSL (WIN2): the file manager is Windows' Explorer on the Windows form of the path,
+    /// and VS Code is found where its installer puts it, told which distro it is in.
+    #[test]
+    fn inside_wsl_the_editors_are_windows_ones() {
+        use std::os::unix::fs::PermissionsExt;
+        let (t, mut here) = installed(&[], &[]);
+        let wsl =
+            crate::wsl::from_facts("6.6-microsoft-standard-WSL2", Some("Ubuntu"), true, "", "")
+                .unwrap();
+        here.wsl = Some(wsl.clone());
+        let home = t.path().join("Users/me");
+        let code = home.join("AppData/Local/Programs/Microsoft VS Code/bin/code");
+        std::fs::create_dir_all(code.parent().unwrap()).unwrap();
+        std::fs::write(&code, "").unwrap();
+        std::fs::set_permissions(&code, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let c = Config::default();
+        assert_eq!(c.editor_in("code", &here), None, "no Windows home known: not found");
+        here.windows_home = Some(home);
+        let def = c.editor_in("code", &here).unwrap();
+        assert_eq!(
+            def.command,
+            ["env", "WSL_DISTRO_NAME=Ubuntu", &code.to_string_lossy(), "{path}"]
+        );
+        assert!(!def.inside);
+        assert_eq!(c.editor_in("cursor", &here), None, "not installed");
+        let files = c.editor_in("files", &here).unwrap();
+        assert!(files.command[0].ends_with("explorer.exe"), "{:?}", files.command);
+        assert_eq!(files.command[1], "{winpath}");
+        // Without interop, Windows programs can't start: no file manager unless Linux has one.
+        here.wsl = Some(crate::wsl::Wsl { interop: false, ..wsl });
+        assert_eq!(c.editor_in("files", &here), None);
+    }
+
+    #[test]
+    fn an_editor_command_gets_the_path_once() {
+        let def = |c: &[&str]| EditorDef {
+            command: c.iter().map(|&a| a.into()).collect(),
+            inside: false,
+        };
+        let p = Path::new("/home/me/src");
+        assert_eq!(def(&["hx", "{path}"]).argv(p), ["hx", "/home/me/src"]);
+        assert_eq!(def(&["zed"]).argv(p), ["zed", "/home/me/src"]);
+        let win = def(&["explorer.exe", "{winpath}"]).argv(p);
+        assert_eq!(win.len(), 2, "{win:?}");
+        // Inside WSL the Windows form; elsewhere (or with no distro known) the path itself.
+        let want = crate::wsl::detect()
+            .and_then(|w| w.windows_path(p))
+            .unwrap_or_else(|| "/home/me/src".into());
+        assert_eq!(win[1], want);
+    }
+
     /// A `PATH` of these programs, and an Applications folder of these apps (gone with the
     /// `TempDir`).
     fn installed(programs: &[&str], apps: &[&str]) -> (tempfile::TempDir, Installed) {
@@ -2651,7 +2811,15 @@ code = { command = ["code", "{path}"] }
         for a in apps {
             std::fs::create_dir_all(dir.join(format!("{a}.app"))).unwrap();
         }
-        (tmp, Installed { path: dir.join("bin").into(), apps: vec![dir] })
+        (
+            tmp,
+            Installed {
+                path: dir.join("bin").into(),
+                apps: vec![dir],
+                wsl: None,
+                windows_home: None,
+            },
+        )
     }
 
     #[test]

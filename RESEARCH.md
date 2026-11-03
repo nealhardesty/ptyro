@@ -2800,7 +2800,7 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 | R-STA-04 | A **done-but-unseen** state, cleared only by focus | herdr, Claude agent view | M4 | S | ★★ | new |
 | R-STA-05 | Sub-states: `errored`, **auth-blocked** (feeds profile health: "work needs `gh auth login`"), **rate-limited until T** (Claude `quota_auto_resume_*`, `StopFailure`), `interrupted` | tuios, Claude, Codex `/agents` | M4 | S | ★★ | partly built M4: `errored` with kind, **rate-limited until T**, auth-blocked from screen dialogs (2026-10-20) |
 | R-STA-06 | User hooks on state transitions: `on_blocked = "…"` and `ptyro on <event> --when '<expr>' -- cmd` | ccmanager, tmux 3.8 monitor hooks | M5 | S | ★ | new |
-| R-STA-07 | **Re-emit status outward**: OSC 7501 / 9;4 / 99 / 21337 for the focused or aggregate session, so Ghostty, kitty, iTerm2 and Rex light up their native UI | Ghostty, iTerm2, Rex | M4 | S | ★★ | new |
+| R-STA-07 | **Re-emit status outward**: OSC 7501 / 9;4 / 99 / 21337 for the focused or aggregate session, so Ghostty, kitty, iTerm2 and Rex light up their native UI | Ghostty, iTerm2, Rex | M4 | S | ★★ | partly → WIN2: OSC 9;4 to Windows Terminal (2026-11-02) |
 
 #### Agent adapters and integration (R-AGT)
 

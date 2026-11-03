@@ -40,6 +40,8 @@ pub enum Fix {
     Tmux { name: String, value: String },
     /// A TUI action: stale worktrees open the clean-up list (`worktree.gc`).
     Action(&'static str),
+    /// Open the settings panel at this option: WSL hiding an open web app opens `remote.access`.
+    Setting(&'static str),
 }
 
 #[derive(Debug, Clone)]
@@ -100,6 +102,8 @@ pub fn finding(c: &Check) -> Option<Finding> {
     };
     let fix = if c.section == "worktrees" && c.name == "stale" {
         Some(Fix::Action("worktree.gc"))
+    } else if c.section == "wsl" && c.name == "network" {
+        Some(Fix::Setting("remote.access"))
     } else if c.section == "tmux" {
         Some(Fix::Tmux { name: c.name.clone(), value: "on".into() })
     } else if c.name == "config mode" {
@@ -236,6 +240,7 @@ impl App {
                         format!("{} · ⏎ sets {name} {value}", f.text)
                     }
                     Some(Fix::Action(_)) => format!("{} · ⏎ opens the clean-up list", f.text),
+                    Some(Fix::Setting(key)) => format!("{} · ⏎ opens the setting {key}", f.text),
                     None => f.text.clone(),
                 },
                 key: None,
@@ -265,6 +270,7 @@ impl App {
         match f.fix {
             Some(Fix::Cli(args)) => self.run_cli(&args),
             Some(Fix::Action(action)) => self.run(&crate::keymap::Command { action, arg: None }),
+            Some(Fix::Setting(key)) => self.open_settings(Some(key)),
             Some(Fix::Append { file, line }) => {
                 self.overlay = Some(Overlay::Confirm {
                     text: format!(
@@ -369,6 +375,9 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(f.fix, Some(Fix::Cli(vec!["daemon".into(), "upgrade".into()])));
+        let wsl =
+            finding(&check("wsl", "network", "warn", "WSL's NAT networking hides it")).unwrap();
+        assert_eq!(wsl.fix, Some(Fix::Setting("remote.access")));
         let login = finding(&check(
             "profile work",
             "claude",

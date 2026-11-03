@@ -41,9 +41,10 @@ use crossterm::event::{
 use crossterm::execute;
 use futures::StreamExt;
 use ptyro_client::ConnectOptions;
-use ptyro_core::config::Config;
+use ptyro_core::config::{Config, ProgressLook};
 use ptyro_core::paths::Paths;
 use ptyro_core::session::ProcessState;
+use ptyro_core::status::AgentStatus;
 use ptyro_core::{SessionId, TermSize};
 use ratatui::layout::Rect;
 
@@ -174,6 +175,10 @@ pub async fn run(mut connect: ConnectOptions, paths: &Paths, opts: Options) -> R
         crossterm::cursor::SetCursorStyle::DefaultUserShape
     );
     ratatui::restore();
+    if std::env::var_os("WT_SESSION").is_some() {
+        // Windows Terminal: no progress left on the tab once ptyro is gone.
+        let _ = out.write_all(b"\x1b]9;4;0;0\x07");
+    }
     let _ = out.write_all(b"\x1b[23;0t");
     let _ = out.flush();
     result
@@ -206,6 +211,7 @@ async fn event_loop(
     let mut last_draw = Instant::now() - FRAME;
     let mut cursor_shape = None;
     let mut titled: Option<String> = None;
+    let mut progress: Option<(u8, u8)> = None;
     let mut tick = tokio::time::interval(Duration::from_millis(250));
     // Whether the terminal is capturing the mouse: follows `[ui] mouse` as the file changes.
     let mut mouse_on = app.config.ui.mouse;
@@ -225,6 +231,7 @@ async fn event_loop(
         if app.dirty && last_draw.elapsed() >= FRAME {
             sync_cursor_shape(app, &mut cursor_shape);
             sync_title(app, &mut titled);
+            sync_progress(app, &mut progress);
             let done = tui.draw(|f| ui::draw(app, f))?;
             let linked = about::link_cells(&app.links.borrow(), done.buffer);
             if !linked.is_empty() {
@@ -287,6 +294,48 @@ fn sync_title(app: &App, last: &mut Option<String>) {
     let _ = write!(out, "\x1b]0;{title}\x07");
     let _ = out.flush();
     *last = Some(title);
+}
+
+/// In Windows Terminal (`WT_SESSION`), the tab and the taskbar button show how ptyro's sessions
+/// are doing through OSC 9;4 (WIN2, R-STA-07), in the looks `[ui] progress_*` choose.
+fn sync_progress(app: &App, last: &mut Option<(u8, u8)>) {
+    if std::env::var_os("WT_SESSION").is_none() {
+        return;
+    }
+    let count = |want: AgentStatus| {
+        app.sessions
+            .iter()
+            .filter(|s| s.state.is_live() && s.status.as_ref().is_some_and(|r| r.status == want))
+            .count()
+    };
+    let look = progress_look(
+        &app.config.ui,
+        count(AgentStatus::Blocked),
+        count(AgentStatus::Errored),
+        count(AgentStatus::Working),
+    );
+    let osc = look.osc();
+    if *last == Some(osc) {
+        return;
+    }
+    let mut out = std::io::stdout();
+    let _ = write!(out, "\x1b]9;4;{};{}\x07", osc.0, osc.1);
+    let _ = out.flush();
+    *last = Some(osc);
+}
+
+/// The look for these counts: the first of needs-you, errored and working that has sessions and
+/// a look that isn't `off`.
+pub(crate) fn progress_look(
+    ui: &ptyro_core::config::Ui,
+    blocked: usize,
+    errored: usize,
+    working: usize,
+) -> ProgressLook {
+    [(blocked, ui.progress_blocked), (errored, ui.progress_errored), (working, ui.progress_working)]
+        .into_iter()
+        .find(|&(n, look)| n > 0 && look != ProgressLook::Off)
+        .map_or(ProgressLook::Off, |(_, look)| look)
 }
 
 /// What the terminal title says: plain printable text (a machine name is cleaned already).
@@ -380,5 +429,23 @@ mod tests {
         assert_eq!(super::base64(b"f"), "Zg==");
         assert_eq!(super::base64(b"fo"), "Zm8=");
         assert_eq!(super::base64(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn windows_terminal_progress_follows_the_chosen_looks() {
+        use ptyro_core::config::{ProgressLook as L, Ui};
+        let ui = Ui::default();
+        let look = |b, e, w| super::progress_look(&ui, b, e, w);
+        assert_eq!(look(0, 0, 0), L::Off);
+        assert_eq!(look(0, 0, 2), L::Busy, "working spins");
+        assert_eq!(look(0, 1, 2), L::Red, "an error outranks working");
+        assert_eq!(look(1, 1, 2), L::Yellow, "needing you outranks both");
+        // A state turned off lets the next one show.
+        let quiet = Ui { progress_blocked: L::Off, progress_working: L::Green, ..Ui::default() };
+        assert_eq!(super::progress_look(&quiet, 1, 0, 1), L::Green);
+        assert_eq!(super::progress_look(&quiet, 1, 0, 0), L::Off);
+        assert_eq!(L::Yellow.osc(), (4, 100));
+        assert_eq!(L::Busy.osc(), (3, 0));
+        assert_eq!(L::Off.osc(), (0, 0));
     }
 }

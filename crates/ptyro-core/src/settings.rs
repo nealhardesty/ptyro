@@ -513,7 +513,7 @@ const CHANNELS: &[Choice] = &[
     c("inbox", "the inbox (always on)"),
     c("bell", "the terminal bell"),
     c("osc", "your terminal's own notification (OSC 9/777)"),
-    c("desktop", "a desktop notification"),
+    c("desktop", "a desktop notification (a Windows toast inside WSL)"),
     c("sinks", "the services below (ntfy, Slack…)"),
 ];
 const ON_STOP: &[Choice] = &[
@@ -536,6 +536,13 @@ const SHELL_STYLE: &[Choice] = &[
     ),
     c("drawer", "always a drawer under the focused pane"),
     c("pane", "always a full-sized panel of its own (the default; C-t asks for the drawer)"),
+];
+const PROGRESS: &[Choice] = &[
+    c("off", "nothing"),
+    c("busy", "a spinning ring"),
+    c("green", "a green ring"),
+    c("yellow", "a yellow ring"),
+    c("red", "a red ring"),
 ];
 const LOG_LEVEL: &[Choice] = &[
     c("error", "problems only"),
@@ -664,6 +671,9 @@ pub const SETTINGS: &[Setting] = &[
     s("ui.which_key_delay", "interface", int(0, 5000), "How long after the prefix key the menu of next keys waits before it pops up. 0 never shows it.").unit("ms").also("hints popup help menu"),
     s("ui.shell_exit", "interface", pick(SHELL_EXIT), "What happens to a shell when you exit it: it disappears (the default, and easy to reopen), or stays in the sidebar as an exited row. Agents always stay.").also("close remove exit terminal"),
     s("ui.shell_style", "interface", pick(SHELL_STYLE), "How the shell key (`!`) shows a worktree's terminal: as a full-sized panel of its own (the default), or as a drawer under its project's pane. `C-t` always asks for the drawer.").also("terminal split drawer pane panel window shell"),
+    s("ui.progress_blocked", "interface", pick(PROGRESS), "Windows Terminal's progress ring (on the tab and the taskbar button) while a session needs you.").also("windows terminal tab taskbar progress ring colour color wsl"),
+    s("ui.progress_errored", "interface", pick(PROGRESS), "Windows Terminal's progress ring while a session has stopped on an error (and none needs you).").also("windows terminal tab taskbar progress ring colour color wsl"),
+    s("ui.progress_working", "interface", pick(PROGRESS), "Windows Terminal's progress ring while a session works (and none needs you or has an error).").also("windows terminal tab taskbar progress ring colour color wsl busy spinner"),
     s("clipboard.allow_write", "interface", Kind::Bool, "Let programs in sessions copy to your clipboard (OSC 52). Reads are always refused.").also("copy paste"),
     // ── Attention ──
     s("attention.scope", "attention", pick(SCOPE), "Where the next-attention key may go."),
@@ -676,7 +686,7 @@ pub const SETTINGS: &[Setting] = &[
     s("notifications.on", "notifications", some(KINDS), "Which things notify you.").also("notify alert"),
     s("notifications.quiet_hours", "notifications", Kind::Window, "Between these hours only the inbox is used, like 22:00-07:00 (kinds you set to always notify still do).").or("never quiet").eg("22:00-07:00"),
     s("notifications.coalesce", "notifications", Kind::Duration, "At most one notification per session in this time."),
-    s("notifications.desktop_command", "notifications", Kind::Argv, "Your own desktop notifier, as a command. {title} and {body} are replaced.").adv().or("the system's").eg("my-notifier --title {title} {body}"),
+    s("notifications.desktop_command", "notifications", Kind::Argv, "Your own desktop notifier, as a command. {title} and {body} are replaced.").adv().or("the system's: macOS notifications, notify-send, or a Windows toast inside WSL").eg("my-notifier --title {title} {body}"),
     s("notifications.callback.listen", "notifications", Kind::Address, "Where approve/deny links in notifications are answered, like 127.0.0.1:7591. Off unless set.").restart().or("off").eg("127.0.0.1:7591"),
     s("notifications.callback.insecure", "notifications", Kind::Bool, "Allow that address when it isn't loopback or Tailscale. The links are plain HTTP.").restart().adv(),
     s("notifications.callback.public_url", "notifications", Kind::Text, "The address the links point at, if not the one it listens on.").restart().adv().or("http://<listen>"),

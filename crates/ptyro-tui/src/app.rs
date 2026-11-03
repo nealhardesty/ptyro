@@ -4758,12 +4758,7 @@ impl App {
         let (Some(def), Some(w)) = (self.config.editor(name), self.worktree(wt).cloned()) else {
             return;
         };
-        let path = w.path.to_string_lossy().into_owned();
-        let mut argv: Vec<String> =
-            def.command.iter().map(|a| a.replace("{path}", &path)).collect();
-        if !def.command.iter().any(|a| a.contains("{path}")) {
-            argv.push(path);
-        }
+        let argv = def.argv(&w.path);
         if def.inside {
             self.spawn_spec(
                 SpawnSpec {

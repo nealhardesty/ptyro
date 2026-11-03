@@ -728,7 +728,8 @@ fn side_channel_osc(body: &[u8]) -> Option<TermEvent> {
                         parts.next().and_then(|p| p.parse::<u8>().ok()).map(|p| p.min(100));
                     Some(TermEvent::Progress { state, percent })
                 }
-                "9" => osc9_cwd(args, wsl_mount_root()).map(TermEvent::Cwd),
+                "9" => osc9_cwd(args, ptyro_core::wsl::detect().map(|w| w.mount_root.as_str()))
+                    .map(TermEvent::Cwd),
                 "12" => Some(TermEvent::PromptMark { mark: 'A', exit: None, cmdline: None }),
                 _ => None,
             }
@@ -840,39 +841,6 @@ fn osc9_cwd(arg: &str, wsl_root: Option<&str>) -> Option<std::path::PathBuf> {
         );
     }
     None
-}
-
-/// Where WSL mounts Windows drives (`/mnt/` unless `/etc/wsl.conf` says otherwise); `None` when
-/// this isn't WSL. Asked once.
-fn wsl_mount_root() -> Option<&'static str> {
-    static ROOT: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    ROOT.get_or_init(|| {
-        let release = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
-        let wsl = std::env::var_os("WSL_DISTRO_NAME").is_some()
-            || release.to_ascii_lowercase().contains("microsoft");
-        wsl.then(|| wsl_conf_root(&std::fs::read_to_string("/etc/wsl.conf").unwrap_or_default()))
-    })
-    .as_deref()
-}
-
-/// `[automount] root = …` from a `wsl.conf`, else `/mnt/`.
-fn wsl_conf_root(conf: &str) -> String {
-    let mut section = "";
-    for line in conf.lines() {
-        let line = line.split('#').next().unwrap_or("").trim();
-        if let Some(s) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-            section = s.trim();
-        } else if section.eq_ignore_ascii_case("automount")
-            && let Some((k, v)) = line.split_once('=')
-            && k.trim() == "root"
-        {
-            let v = v.trim().trim_matches('"');
-            if v.starts_with('/') {
-                return v.to_owned();
-            }
-        }
-    }
-    "/mnt/".to_owned()
 }
 
 fn percent_decode(s: &str) -> String {
@@ -1182,19 +1150,6 @@ mod tests {
         }
         assert_eq!(cwd("\"\"", wsl), None);
         assert_eq!(cwd("C:\\a\u{7}b", wsl), None);
-    }
-
-    #[test]
-    fn wsl_conf_moves_the_drive_mounts() {
-        assert_eq!(wsl_conf_root(""), "/mnt/");
-        assert_eq!(
-            wsl_conf_root("[automount]\nenabled = true\nroot = /windir/ # drives\n"),
-            "/windir/"
-        );
-        assert_eq!(
-            wsl_conf_root("[boot]\nroot = /nope\n[automount]\noptions = \"metadata\"\n"),
-            "/mnt/"
-        );
     }
 
     #[test]

@@ -28,7 +28,7 @@ WEB_STRICT ?= 1
 
 .DEFAULT_GOAL := help
 .PHONY: help rust-install build release install install-release test fmt fmt-check lint deny doc check ci clean tools \
-        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean scratchpad-demo orchestrate-demo changeset-demo verify-claude verify-structured spike-chat spike-chat-fts spike-wsl tui-parity parity reset
+        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean scratchpad-demo orchestrate-demo changeset-demo verify-claude verify-structured spike-chat spike-chat-fts spike-wsl test-wsl tui-parity parity reset
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -146,6 +146,9 @@ spike-chat: ## CHAT0: try the chat engine's claims against the real Claude, Code
 
 spike-wsl: build ## WIN0.1: does WSL keep the daemon alive after the last terminal closes? Run inside WSL2: ARGS="start [label]", then (an hour later) check, clean; none = status
 	scripts/spike-wsl.sh $(ARGS)
+
+test-wsl: ## CI's main job (make check) inside WSL2: run inside the distro, or on Windows (Git Bash) with DISTRO=… WSL_DIR=… (default ~/dev/ptyro)
+	DISTRO='$(DISTRO)' WSL_DIR='$(WSL_DIR)' sh scripts/test-wsl.sh
 
 headless: build ## Run CMD in ptyro's emulator headless; prints screen + status report
 	$(HEADLESS) $(ARGS) -- $(CMD)

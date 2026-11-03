@@ -118,6 +118,8 @@ function fixesFor(c) {
         out.push({ label: "Restart ptyro", run: () => restartDaemon() });
     if (c.section === "daemon" && /binary|upgrade|older|newer/i.test(c.text))
         out.push({ label: "Upgrade the daemon", run: () => upgradeDaemon() });
+    if (c.section === "wsl" && c.name === "network")
+        out.push({ label: "Change who can reach it", hint: "Tailscale reaches a phone through WSL", run: () => go("#/settings/remote") });
     if (c.section === "integrations")
         out.push({ label: "Integrations", run: () => go("#/integrations") });
     if (c.section === "worktrees" && c.name === "stale" && c.level !== "ok")

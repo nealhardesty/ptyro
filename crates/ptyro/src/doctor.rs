@@ -126,6 +126,9 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Repor
             std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default()
         ),
     );
+    if let Some(w) = ptyro_core::wsl::detect() {
+        wsl(ctx, &config, w, &mut r).await;
+    }
     daemon(ctx, &config, quick, &mut r).await;
     remote(ctx, &config, &mut r);
     scratchpad(ctx, &config, &mut r);
@@ -137,6 +140,121 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Repor
     agents(&config, &mut r).await;
     profiles(ctx, &config, None, &mut r).await;
     r
+}
+
+/// Inside WSL (WIN2, SPEC §3.4): which one, whether Windows programs can be started from it,
+/// whether a phone can reach the web app, and projects that WSL makes slow or breaks.
+async fn wsl(ctx: &Ctx, config: &Config, w: &ptyro_core::wsl::Wsl, r: &mut Report) {
+    const S: &str = "wsl";
+    if w.version == 1 {
+        r.add(
+            S,
+            "version",
+            Level::Warn,
+            format!(
+                "{}: ptyro supports WSL2 (in PowerShell on Windows: wsl --set-version {} 2)",
+                w.describe(),
+                w.distro.as_deref().unwrap_or("<distro>")
+            ),
+        );
+    } else {
+        r.add(
+            S,
+            "version",
+            Level::Ok,
+            format!("{}, Windows drives under {}", w.describe(), w.mount_root),
+        );
+    }
+    if w.interop {
+        r.add(S, "interop", Level::Ok, "Windows programs can be started from here");
+    } else {
+        r.add(
+            S,
+            "interop",
+            Level::Note,
+            "Windows programs can't be started from here: interop is off ([interop] enabled in /etc/wsl.conf)",
+        );
+    }
+    // WSL's default NAT network hides the distro from the Wi-Fi: `access = open` reaches only
+    // this computer. Mirrored networking or Tailscale reach a phone.
+    if config.remote.access == ptyro_core::config::Access::Open {
+        let mode =
+            run(&["wslinfo".into(), "--networking-mode".into()], &[], Duration::from_secs(3))
+                .await
+                .filter(|(ok, _)| *ok)
+                .map(|(_, m)| m)
+                .unwrap_or_else(|| "nat".into());
+        if mode.trim() == "nat" {
+            r.add(
+                S,
+                "network",
+                Level::Warn,
+                "the web app is open to the network, but WSL's NAT networking hides it from your \
+                 Wi-Fi: a phone can't reach it. Set networkingMode=mirrored under [wsl2] in \
+                 %USERPROFILE%\\.wslconfig (then `wsl --shutdown` in Windows), or use Tailscale \
+                 (Settings → remote → access)",
+            );
+        }
+    }
+    let Ok(c) = ctx.connect(false).await else { return };
+    let Ok(Reply::Projects { projects }) = c.request(Request::ProjectList).await else { return };
+    for p in projects.iter().filter(|p| p.machine.is_none()) {
+        if on_windows_drive(w, &p.root) {
+            r.add(
+                S,
+                &p.slug,
+                Level::Warn,
+                format!(
+                    "{} is on a Windows drive: git, builds and agents run many times slower there \
+                     than inside the distro. Clone it into the distro (~/dev/{}) and add that copy",
+                    p.root.display(),
+                    p.slug
+                ),
+            );
+        }
+        let Ok(pc) = ptyro_core::project::ProjectConfig::load(&p.root, &p.root) else { continue };
+        let crlf = crlf_scripts(&p.root, &pc.scripts);
+        if !crlf.is_empty() {
+            r.add(
+                S,
+                &p.slug,
+                Level::Warn,
+                format!(
+                    "{} {} Windows (CRLF) line endings: Linux runs it as `bash\\r` and fails. \
+                     Save it with LF endings (and `git config core.autocrlf input` stops it coming back)",
+                    crlf.join(", "),
+                    if crlf.len() == 1 { "has" } else { "have" }
+                ),
+            );
+        }
+    }
+}
+
+/// `/mnt/c/…`: the project lives on a Windows drive, not in the distro.
+fn on_windows_drive(w: &ptyro_core::wsl::Wsl, root: &Path) -> bool {
+    w.windows_path(root).is_some_and(|p| p.as_bytes().get(1) == Some(&b':'))
+}
+
+/// The files a project's scripts run (any word of a command naming a file in the repo) that have
+/// CRLF line endings.
+fn crlf_scripts(root: &Path, scripts: &ptyro_core::project::Scripts) -> Vec<String> {
+    let commands = [&scripts.setup, &scripts.archive, &scripts.after_turn]
+        .into_iter()
+        .flatten()
+        .chain(scripts.run.values().map(|r| &r.command));
+    let mut out: Vec<String> = Vec::new();
+    for word in commands.flat_map(|c| c.split_whitespace()) {
+        let word = word.trim_matches(['"', '\'']);
+        let word = word.strip_prefix("./").unwrap_or(word);
+        if word.starts_with('-') || word.starts_with('/') || out.iter().any(|o| o == word) {
+            continue;
+        }
+        let f = root.join(word);
+        if f.is_file() && std::fs::read(&f).is_ok_and(|b| b.windows(2).any(|p| p == b"\r\n")) {
+            out.push(word.to_owned());
+        }
+    }
+    out
 }
 
 /// Shell sessions (WIN1, SPEC §8.7): the shell they run exists, and whether ptyro's integration
@@ -919,6 +1037,28 @@ async fn profiles(ctx: &Ctx, config: &Config, only: Option<String>, r: &mut Repo
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn wsl_finds_projects_on_windows_drives_and_crlf_scripts() {
+        use std::path::Path;
+        let w = ptyro_core::wsl::from_facts("6.6-microsoft-standard-WSL2", Some("U"), true, "", "")
+            .unwrap();
+        assert!(super::on_windows_drive(&w, Path::new("/mnt/c/Users/me/src/app")));
+        assert!(!super::on_windows_drive(&w, Path::new("/home/me/dev/app")));
+        assert!(!super::on_windows_drive(&w, Path::new("/mnt/wsl/shared")));
+
+        let t = tempfile::tempdir().unwrap();
+        std::fs::create_dir(t.path().join("scripts")).unwrap();
+        std::fs::write(t.path().join("scripts/setup.sh"), "#!/bin/bash\r\necho hi\r\n").unwrap();
+        std::fs::write(t.path().join("run.sh"), "#!/bin/sh\necho ok\n").unwrap();
+        let scripts: ptyro_core::project::Scripts = toml::from_str(
+            "setup = \"bash scripts/setup.sh --quiet\"\narchive = \"./scripts/setup.sh\"\n\
+             [run.web]\ncommand = \"./run.sh\"\n[run.db]\ncommand = \"'scripts/setup.sh'\"\n",
+        )
+        .unwrap();
+        assert_eq!(super::crlf_scripts(t.path(), &scripts), ["scripts/setup.sh"]);
+        assert!(super::crlf_scripts(t.path(), &Default::default()).is_empty());
+    }
+
     fn stale(name: &str, reason: &str, bytes: Option<u64>) -> ptyro_core::model::GcEntry {
         let worktree = serde_json::from_value(serde_json::json!({
             "id": name, "project": "p", "project_slug": "p", "name": name, "path": "/x",

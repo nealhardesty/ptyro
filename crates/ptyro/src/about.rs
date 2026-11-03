@@ -98,8 +98,10 @@ pub struct About {
     pub license: String,
     pub build: Build,
     pub exe: Option<PathBuf>,
-    /// `macos aarch64`.
+    /// `macos aarch64`; `linux x86_64, WSL2 (Ubuntu)` inside WSL.
     pub system: String,
+    /// Inside WSL: its version, distro, interop and drive mounts (WIN2).
+    pub wsl: Option<ptyro_core::wsl::Wsl>,
     pub places: Vec<Place>,
     pub daemon: DaemonAbout,
     pub web: Option<WebAbout>,
@@ -207,7 +209,8 @@ pub async fn collect(ctx: &Ctx) -> About {
         license: LICENSE.into(),
         build: build(),
         exe: std::env::current_exe().ok(),
-        system: format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+        system: system(),
+        wsl: ptyro_core::wsl::detect().cloned(),
         places,
         daemon,
         web,
@@ -217,6 +220,15 @@ pub async fn collect(ctx: &Ctx) -> About {
     };
     about.report = about.text();
     about
+}
+
+/// `macos aarch64`, or `linux x86_64, WSL2 (Ubuntu)`.
+fn system() -> String {
+    let os = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
+    match ptyro_core::wsl::detect() {
+        Some(w) => format!("{os}, {}", w.describe()),
+        None => os,
+    }
 }
 
 impl About {

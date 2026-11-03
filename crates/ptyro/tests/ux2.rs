@@ -191,6 +191,18 @@ fn about_is_one_document_and_agrees_with_version() {
     assert_eq!(doc["daemon"]["same"], true);
     assert!(doc["daemon"]["fix"].is_null());
     assert!(doc["tools"].as_array().unwrap().iter().any(|t| t["name"] == "git"), "{doc}");
+    // Inside WSL (WIN2) the system says which, and `wsl` has the facts; elsewhere `wsl` is null.
+    let system = doc["system"].as_str().unwrap();
+    match ptyro_core::wsl::detect() {
+        Some(wsl) => {
+            assert!(system.ends_with(&format!(", {}", wsl.describe())), "{system}");
+            assert_eq!(doc["wsl"]["version"], wsl.version, "{doc}");
+        }
+        None => {
+            assert!(!system.contains("WSL"), "{system}");
+            assert!(doc["wsl"].is_null(), "{doc}");
+        }
+    }
     // The text is what is printed, and it is what to paste (the daemon's uptime moves on, and an
     // agent's `--version` can time out in one run and not the next: only the fixed facts).
     let text = w.ok(&["about"]);
