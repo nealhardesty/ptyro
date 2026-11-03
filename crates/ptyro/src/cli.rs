@@ -790,7 +790,7 @@ pub struct NewArgs {
 
 /// The variables a session should see from this client (SSH agent, display).
 pub fn client_env() -> BTreeMap<String, String> {
-    ptyro_pty::CLIENT_ENV
+    ptyro_core::os::CLIENT_ENV
         .iter()
         .filter_map(|k| std::env::var(k).ok().map(|v| ((*k).to_owned(), v)))
         .collect()

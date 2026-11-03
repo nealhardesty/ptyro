@@ -3700,7 +3700,7 @@ impl App {
     }
 
     pub(crate) fn client_env() -> BTreeMap<String, String> {
-        ptyro_pty::CLIENT_ENV
+        ptyro_core::os::CLIENT_ENV
             .iter()
             .filter_map(|k| std::env::var(k).ok().map(|v| ((*k).to_owned(), v)))
             .collect()

@@ -7,6 +7,7 @@ mod app;
 pub mod chat;
 mod chats;
 mod cli_actions;
+mod clock;
 pub mod copy;
 mod health;
 mod inspector;
@@ -14,6 +15,8 @@ pub mod keymap;
 mod keys;
 pub mod layout;
 mod onboard;
+// The reply parsers are tested everywhere; only Unix asks the terminal yet (outer.rs).
+#[cfg_attr(not(unix), allow(dead_code))]
 mod outer;
 mod pad;
 #[doc(hidden)] // public for the benches

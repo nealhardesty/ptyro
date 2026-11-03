@@ -1,6 +1,13 @@
 //! The ptyro daemon (SPEC §4): owns every PTY and terminal state, serves clients over a Unix
 //! socket, and keeps sessions alive while no client is attached.
 
+// The daemon is Unix's (Linux, macOS, WSL2). On Windows, ptyro is a client of a WSL daemon (ROADMAP
+// WIN3); a native daemon is track D. Said here, before a Unix-only dependency fails and hides it.
+#[cfg(not(unix))]
+compile_error!(
+    "the ptyro daemon runs on Linux, macOS and WSL2; on Windows, ptyro is a client of the daemon in WSL (README, Windows)"
+);
+
 mod again;
 mod agents;
 mod approvals;

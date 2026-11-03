@@ -74,7 +74,6 @@ pub fn read_repo_file(
     follow_links: bool,
 ) -> Result<Option<String>, String> {
     use std::io::Read;
-    use std::os::unix::fs::OpenOptionsExt;
     let shown = path.strip_prefix(checkout).unwrap_or(path).display().to_string();
     let meta = match std::fs::symlink_metadata(path) {
         Ok(m) => m,
@@ -97,8 +96,7 @@ pub fn read_repo_file(
     }
     let mut opts = std::fs::OpenOptions::new();
     opts.read(true);
-    // NONBLOCK so a FIFO can't hold us; it is refused below anyway.
-    opts.custom_flags(opts_flags(follow_links) | rustix::fs::OFlags::NONBLOCK.bits() as i32);
+    no_follow(&mut opts, follow_links);
     let file = opts.open(path).map_err(|e| format!("{shown}: {e}"))?;
     let meta = file.metadata().map_err(|e| format!("{shown}: {e}"))?;
     if !meta.is_file() {
@@ -117,8 +115,23 @@ pub fn read_repo_file(
     Ok(Some(text))
 }
 
-fn opts_flags(follow_links: bool) -> i32 {
-    if follow_links { 0 } else { rustix::fs::OFlags::NOFOLLOW.bits() as i32 }
+/// Open without following a link at the last step (unless `follow_links`), so a link swapped in
+/// after the check above is refused, not read: `O_NOFOLLOW` on Unix (and `O_NONBLOCK`, so a FIFO
+/// can't hold us; it is refused below anyway), `FILE_FLAG_OPEN_REPARSE_POINT` on Windows (the
+/// link itself opens, and isn't a regular file).
+fn no_follow(opts: &mut std::fs::OpenOptions, follow_links: bool) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let nofollow = if follow_links { 0 } else { rustix::fs::OFlags::NOFOLLOW.bits() as i32 };
+        opts.custom_flags(nofollow | rustix::fs::OFlags::NONBLOCK.bits() as i32);
+    }
+    #[cfg(windows)]
+    if !follow_links {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        opts.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
 }
 
 fn read(
@@ -664,6 +677,7 @@ mod quoting {
 #[cfg(test)]
 mod hostile_files {
     use super::*;
+    #[cfg(unix)]
     use crate::project::ProjectConfig;
 
     #[test]
@@ -698,6 +712,7 @@ mod hostile_files {
         assert!(discover(d.path()).iter().any(|i| i.notes.iter().any(|n| n.contains("deeply"))));
     }
 
+    #[cfg(unix)] // symlinks
     #[test]
     fn repository_files_are_never_read_through_links_or_without_bounds() {
         let d = tempfile::tempdir().unwrap();

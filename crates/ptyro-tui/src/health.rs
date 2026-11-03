@@ -284,13 +284,12 @@ impl App {
                 });
             }
             Some(Fix::Private(path)) => {
-                use std::os::unix::fs::PermissionsExt;
                 // Only a file: 600 on a directory would shut its owner out of it.
                 if !path.is_file() {
                     self.toast_err(format!("{} isn't a file I can make private", path.display()));
                     return;
                 }
-                match std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)) {
+                match ptyro_core::os::make_private(&path) {
                     Ok(()) => {
                         self.health.findings.remove(i);
                         self.toast(format!("{} is private now (600)", path.display()));

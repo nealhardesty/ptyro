@@ -315,11 +315,7 @@ fn write_first_config(path: &Path, profiles: &[String], desktop: bool) -> Result
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
+    let mut f = ptyro_core::os::private(std::fs::OpenOptions::new().write(true).create_new(true))
         .open(path)
         .map_err(|e| e.to_string())?;
     std::io::Write::write_all(&mut f, text.as_bytes()).map_err(|e| e.to_string())
@@ -406,6 +402,7 @@ pub fn draw(app: &App, f: &mut Frame<'_>, area: Rect) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)] // file modes
     #[test]
     fn the_first_config_is_valid_private_and_never_overwrites() {
         let d = tempfile::tempdir().unwrap();

@@ -2,8 +2,11 @@
 //! the daemon can answer programs that pick a theme from them (SPEC §5.6). Codex and Gemini do.
 //! Keys typed while we wait for the answer arrive in the same reads: they are kept and replayed.
 
+#[cfg(unix)]
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::fd::AsFd;
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -12,6 +15,17 @@ use ptyro_protocol::OuterTerm;
 /// Must run in raw mode and before crossterm's event reader starts. The reply to the DA1 query
 /// we append marks the end, so terminals that ignore OSC 10/11 cost one round trip, not a timeout.
 /// Also returns the keys typed meanwhile, for the caller to replay.
+///
+/// Windows: a console has no descriptor to poll, and Windows Terminal hands the replies over as
+/// console input records (crossterm's key events), so nothing is asked yet: sessions get the
+/// default colours (ROADMAP WIN3).
+#[cfg(not(unix))]
+pub fn query() -> (OuterTerm, Vec<KeyEvent>) {
+    (OuterTerm::default(), Vec::new())
+}
+
+/// See above.
+#[cfg(unix)]
 pub fn query() -> (OuterTerm, Vec<KeyEvent>) {
     let mut out = std::io::stdout();
     if out.write_all(b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b[c").and_then(|()| out.flush()).is_err() {
