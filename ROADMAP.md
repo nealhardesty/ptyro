@@ -2845,7 +2845,7 @@ done.
 ### Track B — WSL for real
 
 - [ ] **WIN2 WSL: bridged and doctored** (R-WIN-04, R-WIN-05) **M**
-  - Detect WSL (`WSL_DISTRO_NAME`, or `/proc/sys/kernel/osrelease`), shown in About and `doctor`.
+  - ~~Detect WSL (`WSL_DISTRO_NAME`, or `/proc/sys/kernel/osrelease`), shown in About and `doctor`.~~ [built 2026-11-02] `ptyro_core::wsl` (SPEC §3.4), which falls back to `wslpath -w /` for the distro when the daemon runs as a systemd unit. The emulator's OSC 9;9 mapping uses it too.
   - **Survival:** whatever WIN0.1 found works becomes what ptyro does by default. For example, `ptyro service install` uses systemd when it is enabled, and if it isn't, offers to turn it on (it edits `/etc/wsl.conf` after asking, then says `wsl --shutdown` is needed).
   - **Bridges:**
     - alerts become Windows toasts through `powershell.exe`, unless a sink is configured;

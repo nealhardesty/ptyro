@@ -32,6 +32,7 @@ pub mod settings;
 pub mod shell;
 pub mod status;
 pub mod sync;
+pub mod wsl;
 
 pub use error::{Error, ErrorCode};
 pub use ids::{ClientId, SessionId};

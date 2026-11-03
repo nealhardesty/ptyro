@@ -126,6 +126,9 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Repor
             std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default()
         ),
     );
+    if let Some(w) = ptyro_core::wsl::detect() {
+        wsl(w, &mut r);
+    }
     daemon(ctx, &config, quick, &mut r).await;
     remote(ctx, &config, &mut r);
     scratchpad(ctx, &config, &mut r);
@@ -137,6 +140,40 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Repor
     agents(&config, &mut r).await;
     profiles(ctx, &config, None, &mut r).await;
     r
+}
+
+/// Inside WSL (WIN2, SPEC §3.4): which one, and whether Windows programs can be started from it.
+fn wsl(w: &ptyro_core::wsl::Wsl, r: &mut Report) {
+    const S: &str = "wsl";
+    if w.version == 1 {
+        r.add(
+            S,
+            "version",
+            Level::Warn,
+            format!(
+                "{}: ptyro supports WSL2 (in PowerShell on Windows: wsl --set-version {} 2)",
+                w.describe(),
+                w.distro.as_deref().unwrap_or("<distro>")
+            ),
+        );
+    } else {
+        r.add(
+            S,
+            "version",
+            Level::Ok,
+            format!("{}, Windows drives under {}", w.describe(), w.mount_root),
+        );
+    }
+    if w.interop {
+        r.add(S, "interop", Level::Ok, "Windows programs can be started from here");
+    } else {
+        r.add(
+            S,
+            "interop",
+            Level::Note,
+            "Windows programs can't be started from here: interop is off ([interop] enabled in /etc/wsl.conf)",
+        );
+    }
 }
 
 /// Shell sessions (WIN1, SPEC §8.7): the shell they run exists, and whether ptyro's integration
