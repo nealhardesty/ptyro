@@ -10,9 +10,9 @@
 //!   never triggers a restart loop.
 //! - Nothing is started or stopped behind your back: install starts the service only when no
 //!   daemon is running, uninstall leaves a running daemon alone.
-//! - Inside WSL (WIN2), install also turns on linger, which keeps the daemon running once the last
-//!   terminal closes; with systemd off it enables the unit by hand and offers to turn systemd on
-//!   (`crate::keepalive`).
+//! - Inside WSL (WIN2) with systemd off, install enables the unit by hand and offers to turn
+//!   systemd on (`crate::wsl_conf`). What keeps the daemon running after the last terminal
+//!   closes is its own hold on WSL (`[daemon] hold_wsl`), not the service.
 
 use std::path::PathBuf;
 
@@ -179,15 +179,14 @@ pub fn install(ctx: &Ctx, dry_run: bool) -> Result<i32, Error> {
     } else {
         let wsl = ptyro_core::wsl::detect().is_some();
         write(&systemd_path(), &systemd_unit(&exe, &env), dry_run)?;
-        if wsl && !crate::keepalive::systemd_on() {
+        if wsl && !crate::wsl_conf::systemd_on() {
             // No systemd to ask yet (WIN2): enable the unit by hand, with the link `systemctl
             // enable` makes, so it starts on the first boot with systemd, and offer to turn it on.
             link_wanted(dry_run)?;
-            let user = crate::keepalive::user().unwrap_or_default();
-            if !crate::keepalive::enable_systemd(&user, dry_run, false)? {
+            if !crate::wsl_conf::enable_systemd(dry_run)? {
                 eprintln!(
                     "the service is installed, and starts once systemd is on in this distro: \
-                     `ptyro daemon keep-alive` turns it on"
+                     run `ptyro daemon install-service` in a terminal to turn it on"
                 );
             }
             return Ok(0);
@@ -201,20 +200,9 @@ pub fn install(ctx: &Ctx, dry_run: bool) -> Result<i32, Error> {
         } else {
             sh(&["systemctl", "--user", "start", UNIT], dry_run)?;
         }
-        if wsl {
-            // Inside WSL, linger is what keeps it running once the last terminal closes
-            // (WIN0.1, SPEC §20.10): part of the job, not a choice to leave to you.
-            if !crate::keepalive::State::now().linger
-                && let Some(user) = crate::keepalive::user()
-                && let Err(e) = crate::keepalive::enable_linger(&user, dry_run)
-            {
-                eprintln!("{e}: `ptyro daemon keep-alive` tries again");
-            }
-        } else {
-            eprintln!(
-                "note: to keep it running after you log out, `ptyro daemon keep-alive` (your choice)"
-            );
-        }
+        eprintln!(
+            "note: to keep it running after you log out, `loginctl enable-linger $USER` (your choice)"
+        );
     }
     Ok(0)
 }
@@ -255,7 +243,7 @@ pub fn uninstall(ctx: &Ctx, dry_run: bool) -> Result<i32, Error> {
         remove(&path, dry_run)?;
     } else {
         let path = systemd_path();
-        let systemd = crate::keepalive::systemd_on();
+        let systemd = crate::wsl_conf::systemd_on();
         if systemd {
             let _ = sh(&["systemctl", "--user", "disable", UNIT], dry_run);
         } else if !dry_run {

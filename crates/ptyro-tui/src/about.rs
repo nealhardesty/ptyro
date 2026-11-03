@@ -176,6 +176,9 @@ pub fn rows(doc: &Value) -> Vec<Row> {
         daemon.note = d["fix"].as_str().map(str::to_owned);
     }
     v.push(daemon);
+    if let Some(h) = d["holds_wsl"].as_str() {
+        v.push(row("holds WSL", h.into(), None));
+    }
     if let Some(w) = doc["web"].as_object() {
         let line = w.get("text").and_then(|t| t.get(0)).and_then(Value::as_str).unwrap_or("");
         let url = w.get("url").and_then(Value::as_str).filter(|_| w["up"] == true);
@@ -212,34 +215,19 @@ pub fn picks(rows: &[Row]) -> Vec<usize> {
     rows.iter().enumerate().filter(|(_, r)| r.target.is_some()).map(|(i, _)| i).collect()
 }
 
-/// Open an address (or a folder) with what the system uses for it. `false`: nothing to open it
-/// with, so the caller copies it instead.
+/// Open an address (or a folder) with what the system uses for it (`ptyro_core::open`: inside
+/// WSL, Windows does it). `false`: nothing to open it with, so the caller copies it instead.
 pub fn open(t: &Target) -> bool {
-    // Inside WSL, Windows opens it: Explorer gives an address to the Windows browser and shows a
-    // folder by its Windows path (WIN2). WSL rarely has xdg-open.
-    let wsl = ptyro_core::wsl::detect().filter(|w| w.interop);
-    let program = match wsl {
-        Some(w) => w.windows_exe("explorer.exe"),
-        None if cfg!(target_os = "macos") => "open".into(),
-        None => "xdg-open".into(),
-    };
-    let arg = match t {
-        Target::Url(u) => u.clone(),
+    use ptyro_core::open::Opened;
+    match t {
+        Target::Url(u) => ptyro_core::open::open(&Opened::Url(u)),
         // A file opens in its folder.
         Target::Path(p) => {
             let p = std::path::Path::new(p);
             let dir = if p.is_dir() { p } else { p.parent().unwrap_or(p) };
-            wsl.and_then(|w| w.windows_path(dir))
-                .unwrap_or_else(|| dir.to_string_lossy().into_owned())
+            ptyro_core::open::open(&Opened::Folder(dir))
         }
-    };
-    std::process::Command::new(program)
-        .arg(arg)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .is_ok()
+    }
 }
 
 /// An address on screen: where it is drawn, for the terminal to make it a link.

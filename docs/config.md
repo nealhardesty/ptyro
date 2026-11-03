@@ -103,6 +103,7 @@ message_ttl = "24h"                       # undelivered messages expire
 scrollback_lines = 5000                   # kept in memory per session; older lines come from the recording
 # restore_on_start = "resume"             # relaunch every dormant agent when the daemon starts
 # machine_name = "studio"                 # what the web page's title and the TUI call this computer (default: its host name)
+# hold_wsl = false                        # inside WSL, let WSL stop ptyro ~15 s after the last terminal closes (default: keep it running)
 
 [summaries]
 enabled = true                            # a `≈` line after each agent turn, from a small model (default off)

@@ -11,7 +11,6 @@ mod cs;
 mod doctor;
 mod host;
 mod init;
-mod keepalive;
 mod machines;
 mod mcp;
 mod orch;
@@ -31,6 +30,7 @@ mod tls;
 mod tour;
 mod uninstall;
 mod webapp;
+mod wsl_conf;
 
 use std::path::PathBuf;
 
@@ -627,6 +627,10 @@ enum Cmd {
         /// Print the device and its link as JSON (no QR code)
         #[arg(long)]
         json: bool,
+        /// Open the link in this computer's own browser instead, pairing that browser (inside
+        /// WSL, the Windows one); the name defaults to "browser"
+        #[arg(long)]
+        open: bool,
     },
     /// Paired devices
     Devices {
@@ -1130,16 +1134,6 @@ enum DaemonCmd {
         /// Print the unit and the commands instead
         #[arg(long)]
         dry_run: bool,
-    },
-    /// Keep the daemon and its agents running with no terminal open: inside WSL, systemd and
-    /// linger (it asks before editing /etc/wsl.conf); on Linux, linger (it outlives logging out)
-    KeepAlive {
-        /// Print what it would change instead
-        #[arg(long)]
-        dry_run: bool,
-        /// Don't ask before turning systemd on in /etc/wsl.conf
-        #[arg(long, short)]
-        yes: bool,
     },
     /// Remove the service installed by install-service
     UninstallService {

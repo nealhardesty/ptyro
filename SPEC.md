@@ -278,7 +278,7 @@ Boundary rules **[decided]**:
 |---|---|
 | Linux x86_64 / aarch64 | Tier 1 |
 | macOS aarch64 / x86_64 | Tier 1 |
-| WSL2 | **Tier 1 [decided 2026-10-31, owner]** (Linux build). `make check` passes [V 2026-11-02]: WSL 2.6.2.0, kernel 6.6.87.2, Ubuntu 24.04.3, Windows 11 build 26200, systemd on, master at v0.0.46. All 73 test binaries pass, with bash 5.2 and zsh present but no fish or pwsh (`tests/win1.rs` skips those two), and no browser, so web-e2e didn't run. Survival after the last terminal (WIN0.1) is partly answered: systemd plus linger kept the distro up overnight, 9 h 26 min with no terminal open (§20.10), so that is ptyro's recipe: `doctor` checks both and `ptyro daemon keep-alive` turns them on (§12, WIN2) |
+| WSL2 | **Tier 1 [decided 2026-10-31, owner]** (Linux build). `make check` passes [V 2026-11-02]: WSL 2.6.2.0, kernel 6.6.87.2, Ubuntu 24.04.3, Windows 11 build 26200, systemd on, master at v0.0.46. All 73 test binaries pass, with bash 5.2 and zsh present but no fish or pwsh (`tests/win1.rs` skips those two), and no browser, so web-e2e didn't run. Survival after the last terminal (WIN0.1) is answered: WSL stops a distro about 15 s after the last Windows-side `wsl.exe` exits, systemd services and linger included, so the daemon holds WSL open itself while it runs (`[daemon] hold_wsl`, on by default; §20.10, WIN2). CI's `wsl` job runs `make test-wsl` on a hosted `windows-latest` runner, which has WSL2 (§20.10) |
 | Windows 11 native (x64, ARM64) | **Tier 1 [decided 2026-10-31, owner], not built yet** (ConPTY, named pipes; ROADMAP WIN, RESEARCH DD3). Windows 10 is not supported |
 
 Inside WSL, `ptyro_core::wsl` is the one rule (WIN2) [V 2026-11-02, WSL 2.6.2]: it is WSL if the kernel release (`/proc/sys/kernel/osrelease`) says `microsoft`, `WSL_DISTRO_NAME` is set, or interop is registered (`/proc/sys/fs/binfmt_misc/WSLInterop`). WSL1's release ends in `-Microsoft` and WSL2's says `microsoft-standard`. The distro comes from `WSL_DISTRO_NAME`, or from `wslpath -w /` (`\\wsl.localhost\<distro>\`) when that's missing: a systemd user unit, which is how `ptyro service install` runs the daemon, doesn't get the variable. About's `system` reads `linux x86_64, WSL2 (Ubuntu)`, its JSON has a `wsl` object, and `doctor` has a `wsl` section (WSL1 is a warning).
@@ -3399,7 +3399,7 @@ and then removes the session unless `--keep`. Still to come from this tree: `--v
   - `stop S…` (graceful, kept listed; `kill` also removes).
 - **Listing:** `ls --status/--project/--workspace`; `attach --workspace`.
 - **Daemon:** `daemon stop --hibernate`, `daemon restart`, `daemon logs -f`,
-  `daemon install-service|uninstall-service [--dry-run]`, `daemon keep-alive [--dry-run] [--yes]`.
+  `daemon install-service|uninstall-service [--dry-run]`.
 - **Setup and help:** `completions`, `init [--yes] [--dry-run]`, `doctor [--quick] [--json]`,
   `profile doctor [P] [--json]`, `tour`.
 - **More `--json`:** `config show|check`, `gc`, `profile env`, `integrations ls`,
@@ -3431,9 +3431,11 @@ and then removes the session unless `--keep`. Still to come from this tree: `--v
   - the **hook self-test**: `fake-agent --as claude|codex|opencode` runs through the real
     per-launch integration. It passes only if the turn's `working` came from hooks or the
     sidecar; for OpenCode it waits for the event stream first.
-  - inside WSL: the version, interop, **survival** (systemd as PID 1, read from `/proc/1/comm`,
-    and linger, from `/var/lib/systemd/linger/<user>`; a warning with `ptyro daemon keep-alive`
-    as its fix), NAT hiding an open web app, projects on a Windows drive, CRLF scripts;
+  - inside WSL: the version; interop (off in `/etc/wsl.conf`, or its binfmt entry gone, each with
+    its fix); **survival**, from the daemon's `wsl_hold` (§20.10): ok while it holds, a warning
+    with the setting as its fix when `hold_wsl` is off, `ptyro daemon upgrade` for a daemon that
+    predates it, the reason when it can't; NAT hiding an open web app; projects on a Windows
+    drive; CRLF scripts;
   - terminal (TERM, truecolor, kitty keyboard via a query);
   - tmux `allow-passthrough`/`extended-keys`/`set-clipboard`;
   - git (warns below 2.40, the documented requirement) and gh;
@@ -3451,29 +3453,18 @@ and then removes the session unless `--keep`. Still to come from this tree: `--v
     - `Restart=on-failure` with `RestartPreventExitStatus=5` (5 = "already running").
 
     Then `daemon-reload` and `enable`, plus `start` only if no daemon runs.
-  - **Inside WSL** (WIN2) install also turns on linger, which is what keeps the daemon running
-    once the last terminal closes (§20.10); a failure there is a line, not a failed install.
-    With systemd off it writes the unit, makes the `default.target.wants/ptyro.service` link
-    `enable` would, and offers to turn systemd on (as `keep-alive` does). Outside WSL it says
-    `ptyro daemon keep-alive` keeps the daemon after you log out, your choice.
+  - **Inside WSL with systemd off** (WIN2) it writes the unit, makes the
+    `default.target.wants/ptyro.service` link `enable` would, and offers to turn systemd on
+    (`crate::wsl_conf`): it explains, asks, then through sudo (`sudo -n` without a terminal, so
+    it fails at once with the fix instead of waiting) copies `/etc/wsl.conf` to
+    `/etc/wsl.conf.ptyro-backup` and writes it with `[boot] systemd=true` (an existing
+    `systemd =` under `[boot]` is replaced, nothing else changes). Then it says how to restart
+    WSL: `ptyro daemon stop --hibernate`, then `wsl --shutdown`. The service is for starting at
+    login; what keeps the daemon running once the last terminal closes is its hold on WSL (§20.10).
   - **launchd:** `~/Library/LaunchAgents/dev.ptyro.daemon.plist` with `RunAtLoad` and
     `KeepAlive{SuccessfulExit=false}`, loaded by `launchctl bootstrap gui/<uid>`.
   - **Uninstall** never stops a running daemon. Without systemd running it removes the link by
     hand and skips `daemon-reload`.
-- **`keep-alive`** (`crate::keepalive`, WIN2): keep the daemon and its agents running with no
-  terminal open.
-  - **WSL, systemd off:** explains, asks (`--yes` doesn't), then through sudo (`sudo -n` without
-    a terminal, so it fails at once with the fix instead of waiting): copies `/etc/wsl.conf` to
-    `/etc/wsl.conf.ptyro-backup`, writes it with `[boot] systemd=true` (an existing `systemd =`
-    under `[boot]` is replaced, nothing else changes), and creates
-    `/var/lib/systemd/linger/<user>`, so linger holds from the first boot with systemd. Then it
-    says how to restart WSL: `ptyro daemon stop --hibernate`, then `wsl --shutdown`.
-  - **systemd on, linger off:** `loginctl enable-linger <user>` (polkit allows your own, no
-    password [V 2026-11-03, Ubuntu 24.04 in WSL]), else the same through sudo.
-  - **Both on:** says so and exits 0. macOS: nothing to do. Linux without systemd: nothing to turn on.
-  - The doctor's `wsl survival` check names it as the fix. The TUI's health badge runs it in a
-    split. The web's `daemon.keepalive` host op runs it on the computer when no password is
-    needed (linger), and otherwise opens it in a session (named `ptyro-keep-alive`, or `-2`…), so sudo can ask.
 - **Not built (later milestones):**
   - `replay`/`export` (recorder, M8, now built: §7.6);
   - `fanout`, `run`, `recipe`, `mcp` (M7, now built: see below);
@@ -5242,6 +5233,17 @@ embedded with `include_bytes!`, with no dependencies or third-party requests.
   - **Residual risk:** inside those 10 minutes the code is a credential; whoever claims it first
     gets the device. `ptyro pair` waits and prints who claimed it and from where (`devices`
     shows `unclaimed` until then), and in a ptyro pane it says the pane is recorded.
+  - **`--open`** (WIN2) pairs this computer's own browser instead: the link opens with what the
+    computer uses for addresses (`ptyro_core::open`: inside WSL `explorer.exe`, so the Windows
+    browser; `open` on macOS; `xdg-open`), the name defaults to `browser`, and no QR code is
+    printed. It refuses before making a code when no server runs (the fix: `ptyro web on`). Inside
+    WSL, with ptyro's own CA, it asks PowerShell whether `Cert:\CurrentUser\Root` holds it (by
+    the SHA-256 ptyro prints); if not, it offers to add it (`Import-Certificate`, no
+    administrator; Windows shows its own confirmation), else the page opens on a certificate
+    warning, which a note says. Firefox keeps its own store. TUI: `remote.pair.browser`; web:
+    More → Web app → Open on the computer (the `pair.open` host op, `--json`, which can't ask,
+    so it notes the warning). [V 2026-11-03: the trust check and reading the PEM on Windows
+    11; the import's dialog not clicked through yet]
 
 **[built M9] Web Push.** The daemon is the application server.
 - **Keys:** a VAPID P-256 key in `state/push-vapid.key` (0600); an ES256 JWT with `aud` = the
@@ -6477,21 +6479,52 @@ here):
   installed. The title and body go as environment variables listed in `WSLENV` and become XML text
   nodes, so agent text never becomes script. Both test toasts appear in Windows' notification
   log (owner, 2026-11-02), the second with a 漢字 title [V]. Clicking it does nothing yet (WIN10 gives ptyro its own AppUserModelID).
-- **Survival after the last terminal (WIN0.1), partial.** With `[boot] systemd=true` and
-  `loginctl enable-linger` (no `.wslconfig`), every terminal closed:
-  - **9 h 26 min, overnight** (2026-11-02 22:54 to 2026-11-03 08:20, WSL 2.6.2.0): all three
-    `make spike-wsl` heartbeats were still beating when checked, 3,255 beats each, the longest
-    gap 13 s, one boot id throughout, and PID 1 never restarted. The plain `setsid` loop
-    survived too, so the whole distro stayed up, not only systemd units. [V]
-  - An earlier 16 min run (2026-11-02, 22:29–22:45) ended only with the owner's
-    `wsl --shutdown`. After the next boot, linger started the systemd unit's daemon again by
-    itself, without its sessions. [V]
-  - Not shown yet: which of the two settings keeps it up (runs with nothing set and with
-    systemd alone); that no other `wsl.exe` client (VS Code's Remote-WSL, a hidden terminal) was
-    holding the VM; and Windows sleep or hibernate (the 13 s maximum gap means the PC stayed
-    awake). [open]
-  - Until those are known, ptyro asks for both: `doctor`'s `wsl survival` check and
-    `ptyro daemon keep-alive` (§12).
+- **Survival after the last terminal (WIN0.1).** WSL 2.6.2.0, Windows 11 build 26200
+  (2026-11-03), measured with throwaway distros (`wsl --import` of an Alpine and an Ubuntu base
+  rootfs) beside the owner's Ubuntu, so no terminal had to close. "Stops" is `wsl -l --running`
+  dropping the distro, or the last beat of a heartbeat inside it:
+
+  | What runs once the last `wsl.exe` that started it exits | The distro |
+  |---|---|
+  | nothing | stops at ~15 s |
+  | a `setsid nohup` process left by `wsl.exe -e …` (no console) | stops at ~15 s |
+  | systemd as PID 1, a system service and a user service with linger | **stops at 13–14 s** |
+  | a Windows program started from inside (interop) | stops (the program is left running on Windows) |
+  | a process left by a `wsl.exe` that had a console window | **held** until that process exits, then stops ~15 s later |
+  | `wsl.exe -d <itself> -e …` started from inside | **held** while it runs |
+  | …after its inner command exited, its Linux-side proxy left over | **held** until the proxy is killed (then 17 s) |
+
+  So systemd and linger don't keep a distro running (as microsoft/WSL#13416 reports for 2.6.1
+  and 2.7.3). The 9 h 26 min overnight `make spike-wsl` run (2026-11-02/03, systemd and linger
+  on) survived because its heartbeats were started from a terminal: that terminal's `wslhost.exe`
+  (started 22:46:22, its `wsl.exe` long gone) was still alive in the morning. A daemon started
+  by a systemd unit at boot would have had nothing holding it. [V]
+  - **What ptyro does** (`[daemon] hold_wsl`, on by default; `crates/ptyro-daemon/src/wsl_hold.rs`):
+    the daemon starts `wsl.exe -d <distro> -u <its user> --cd / --exec /bin/sh -c '<loop>'`
+    as its child, where the loop (marked `: ptyro-wsl-hold <pid> <start ticks>;` in `ps`)
+    sleeps while `/proc/<daemon pid>/stat` still shows the daemon's start time. Stopping the
+    hold (shutdown, the setting going off, a live upgrade) kills the proxy and the loop; a
+    killed daemon takes the proxy with it (`PR_SET_PDEATHSIG`, from a thread that waits on it)
+    and the loop sees the pid gone. Checked: a clean stop, SIGKILL, the setting off and on, and
+    a live upgrade (same pid, a new holder) each leave exactly the holders they should, inside
+    the distro and on Windows. `tests/win2.rs` checks it in WSL. Interop works from a systemd
+    user unit, so a daemon started by `install-service` holds too. [V]
+  - **Still open:** Windows sleep and hibernate (a held distro and the PC asleep: what happens
+    to the agents?). [open]
+- **Hosted GitHub runners do have WSL2** (2026-11-03): `windows-latest` (Windows Server 2025, build
+  26100) has WSL 3.0.3.0 with kernel 6.18.54.1, default version 2 and no distro. With
+  `Vampire/setup-wsl` (v7.2.0) an Ubuntu 24.04 boots as WSL2 with systemd as PID 1, 4 CPUs and
+  8 GB. `windows-11-arm` can't: `WslRegisterDistribution` fails with 0x80370102 (no
+  virtualization). So the [U] "hosted runners have only WSL1" (RESEARCH IV.3, WIN0.5 f) was
+  wrong. [V]
+- **Booting systemd in a second distro can remove interop for all of them.** WSL writes an
+  override for each distro's `systemd-binfmt.service` (`/run/systemd/generator/…/override.conf`,
+  turned off by `[boot] protectBinfmt=false`) that registers `WSLInterop` again. Still, booting
+  and stopping a freshly imported Ubuntu base with systemd removed `WSLInterop` from
+  `/proc/sys/fs/binfmt_misc` three times, and every distro in the VM then failed to start
+  Windows programs (`exec format error`). `echo ':WSLInterop:M::MZ::/init:PF' >
+  /proc/sys/fs/binfmt_misc/register` (as root) brings it back; so does `wsl --shutdown`.
+  `doctor`'s interop check tells this case from interop turned off in `/etc/wsl.conf`. [V]
 - **`ps -o lstart` drifts on WSL.** For one PID 1 in one boot (same boot id) it printed 12:22:48,
   12:26:40 and 12:27:03 over the evening, so comparing it says "the distro restarted" when it
   didn't. Field 22 of `/proc/1/stat` (clock ticks since boot) doesn't move; `spike-wsl` uses it. [V]

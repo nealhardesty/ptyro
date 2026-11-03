@@ -39,6 +39,7 @@ mod verify;
 mod watchdog;
 mod web;
 mod worktrees;
+mod wsl_hold;
 
 use std::fs::{DirBuilder, File, TryLockError};
 use std::io::{Read, Seek, Write};
@@ -414,6 +415,7 @@ async fn serve(
     daemon.load_declined().await;
     daemon.load_integrated().await;
     daemon.start_serve_supervisor();
+    daemon.start_wsl_hold();
     daemon.start_pad_watcher();
     daemon.start_chats().await;
     // Retention (SPEC §14.2) is applied once a day while the daemon runs, not only at its start.
@@ -478,6 +480,7 @@ async fn serve(
     }
     tracing::info!("shutting down");
     daemon.serve_child.kill();
+    daemon.wsl_hold.kill();
     drop(listener);
     remove_if_ours(&socket, socket_id);
     // SIGTERM means `stop --hibernate` (SPEC §4.4); until hibernation exists (M4), stop gracefully.

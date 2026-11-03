@@ -57,7 +57,7 @@ install-release: ## Install the fully optimized build (what a release ships: slo
 
 ## ── quality ────────────────────────────────────────────────────────────────
 test: ## Run all tests (every test binary runs, so one failure doesn't hide the rest)
-	$(CARGO) test --workspace --no-fail-fast
+	PTYRO_WSL_HOLD=0 $(CARGO) test --workspace --no-fail-fast
 
 fmt: ## Format all code
 	$(CARGO) fmt --all

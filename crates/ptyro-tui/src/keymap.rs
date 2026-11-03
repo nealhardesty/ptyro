@@ -187,10 +187,6 @@ pub const ACTIONS: &[ActionSpec] = &[
     ),
     a("daemon.service", "Start the daemon at login (a systemd user unit or launchd agent)"),
     a("daemon.unservice", "Stop starting the daemon at login"),
-    a(
-        "daemon.keepalive",
-        "Keep the daemon and its agents running with every terminal closed (WSL: systemd and linger)",
-    ),
     a("integrations", "The agent integrations: what's installed and what each launch gets"),
     a("integrations.install", "Install an agent's opt-in integration (Gemini, Antigravity)"),
     a("integrations.uninstall", "Remove an agent's opt-in integration"),
@@ -409,6 +405,10 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("remote.web_on", "Have the daemon run the web app's server, now and whenever it starts"),
     a("remote.web_off", "Stop the daemon running the web app's server (devices stay paired)"),
     a("remote.pair", "Pair a phone: a QR code to scan, in a split"),
+    a(
+        "remote.pair.browser",
+        "Open the web app in this computer's browser, paired (inside WSL: the Windows browser)",
+    ),
     a("devices.list", "Paired devices"),
     a("devices.revoke", "Cut a paired device off now"),
     a("devices.push_test", "Send a test push to your devices"),

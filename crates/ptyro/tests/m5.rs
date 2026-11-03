@@ -293,7 +293,13 @@ fn json_shapes() {
         ("integrations", vec!["integrations", "ls", "--json"]),
         ("config_check", vec!["config", "check", "--json"]),
     ] {
-        all.insert(name.into(), shape(&w.json(&args)));
+        let mut v = w.json(&args);
+        // Only inside WSL (SPEC §20.10), so not in a snapshot every platform shares; its shape
+        // is checked where it exists (tests/win2.rs) and written down in docs/cli-json.md.
+        if let Some(m) = v.as_object_mut() {
+            m.remove("wsl_hold");
+        }
+        all.insert(name.into(), shape(&v));
     }
     // A status event (kinds differ in their detail).
     let ev: Value = w
@@ -365,16 +371,9 @@ fn doctor_self_test_and_service() {
             format!("#!/bin/sh\necho \"$@\" >> {}\n", log.display()),
         )
         .unwrap();
-        // Inside WSL install also turns on linger: never for real from a test.
-        std::fs::write(
-            fake.join("loginctl"),
-            format!("#!/bin/sh\necho loginctl \"$@\" >> {}\n", log.display()),
-        )
-        .unwrap();
         use std::os::unix::fs::PermissionsExt;
-        for f in ["systemctl", "loginctl"] {
-            std::fs::set_permissions(fake.join(f), std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        std::fs::set_permissions(fake.join("systemctl"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
         let xdg = w.home().join("xdgconf");
         let path = format!("{}:{}", fake.display(), std::env::var("PATH").unwrap());
         let run = |args: &[&str]| {

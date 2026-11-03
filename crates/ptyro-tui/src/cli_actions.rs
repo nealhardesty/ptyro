@@ -101,6 +101,7 @@ pub const TEMPLATES: &[(&str, &[&str])] = &[
     ("remote.web_on", &["web", "on"]),
     ("remote.web_off", &["web", "off"]),
     ("remote.pair", &["pair"]),
+    ("remote.pair.browser", &["pair", "--open"]),
     ("devices.list", &["devices", "ls"]),
     ("devices.revoke", &["devices", "revoke", "{ask:Device id (devices.list shows them)}"]),
     ("devices.push_test", &["devices", "push-test"]),

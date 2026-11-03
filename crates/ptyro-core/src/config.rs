@@ -163,6 +163,9 @@ pub struct Daemon {
     pub restore_on_start: RestoreOnStart,
     /// What to call this machine in the web page's title and the TUI (default: its host name).
     pub machine_name: Option<String>,
+    /// Inside WSL, keep the distro running while the daemon runs, so closing the last terminal
+    /// doesn't stop the agents (SPEC §20.10). Does nothing elsewhere.
+    pub hold_wsl: bool,
 }
 
 impl Default for Daemon {
@@ -173,6 +176,7 @@ impl Default for Daemon {
             log_level: "info".into(),
             restore_on_start: RestoreOnStart::Dormant,
             machine_name: None,
+            hold_wsl: true,
         }
     }
 }

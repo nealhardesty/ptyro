@@ -488,8 +488,10 @@ async fn dispatch(
         Some(Cmd::Web { action, access, pair, json }) => {
             crate::webapp::run(&ctx, &action, access, json, pair).await
         }
-        Some(Cmd::Pair { name, scope, url, json }) => {
-            crate::remote::pair(&ctx, name, scope.as_deref(), url, json).await
+        Some(Cmd::Pair { name, scope, url, json, open }) => {
+            // "phone" is the default name; a browser on this computer is a "browser".
+            let name = if open && name == "phone" { "browser".to_owned() } else { name };
+            crate::remote::pair(&ctx, name, scope.as_deref(), url, json, open).await
         }
         Some(Cmd::Devices { cmd }) => crate::remote::devices(&ctx, cmd).await,
         Some(Cmd::Machine { cmd }) => machine(&ctx, cmd).await,
@@ -1337,7 +1339,6 @@ async fn daemon(ctx: &Ctx, cmd: DaemonCmd) -> Result<i32, Error> {
         }
         DaemonCmd::InstallService { dry_run } => crate::service::install(ctx, dry_run),
         DaemonCmd::UninstallService { dry_run } => crate::service::uninstall(ctx, dry_run),
-        DaemonCmd::KeepAlive { dry_run, yes } => crate::keepalive::run(dry_run, yes),
         DaemonCmd::Status { json } => {
             let client = ctx.connect(false).await.map_err(|e| {
                 if e.code == ErrorCode::DaemonUnavailable {
@@ -1365,6 +1366,9 @@ async fn daemon(ctx: &Ctx, cmd: DaemonCmd) -> Result<i32, Error> {
                 println!("  clients   {}", status.clients);
                 println!("  socket    {}", status.socket.display());
                 println!("  logs      {}", status.log_dir.display());
+                if let Some(h) = &status.wsl_hold {
+                    println!("  holds WSL {}", crate::about::hold_text(h));
+                }
                 if let Some(w) = &status.web {
                     let l = crate::webapp::lines(w);
                     println!("  web app   {}", l.join("\n            "));

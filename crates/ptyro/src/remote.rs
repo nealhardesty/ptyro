@@ -1,8 +1,8 @@
 //! Remote access from the command line (SPEC §16, M9): `ptyro proxy` (what `--remote` runs over
 //! ssh), `ptyro pair` (a QR code that opens the web app signed in) and `ptyro devices`.
 
-use ptyro_core::Error;
 use ptyro_core::config::{Access, Config};
+use ptyro_core::{Error, ErrorCode};
 use ptyro_protocol::{Reply, Request, Scope};
 
 use crate::DevicesCmd;
@@ -212,6 +212,62 @@ fn proxy_targets(status: &serde_json::Value) -> Vec<String> {
     out
 }
 
+/// PowerShell, to tell whether Windows' user store trusts the CA whose SHA-256 is `fingerprint`
+/// (`AB:CD:…`): prints `True` or `False`.
+fn trust_check_script(fingerprint: &str) -> String {
+    let hex: String = fingerprint.chars().filter(char::is_ascii_hexdigit).collect();
+    format!(
+        "$h = '{hex}'; [bool](Get-ChildItem Cert:\\CurrentUser\\Root | Where-Object {{ \
+         ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($_.RawData)) \
+         -replace '-', '') -eq $h }})"
+    )
+}
+
+/// Inside WSL: whether Windows trusts ptyro's CA for this user, so its browsers open the web app
+/// without a warning. `None`: PowerShell didn't say.
+fn windows_trusts(w: &ptyro_core::wsl::Wsl, fingerprint: &str) -> Option<bool> {
+    let out = std::process::Command::new(w.windows_exe("powershell.exe"))
+        .args(["-NoProfile", "-NonInteractive", "-Command", &trust_check_script(fingerprint)])
+        .current_dir(std::path::Path::new(&w.mount_root).join("c"))
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    match String::from_utf8_lossy(&out.stdout).trim() {
+        "True" => Some(true),
+        "False" => Some(false),
+        _ => None,
+    }
+}
+
+/// Put ptyro's CA in Windows' trusted roots for this user (no administrator needed). Windows
+/// shows its own "install this certificate?" dialog, so nothing is trusted without a click there.
+fn trust_on_windows(w: &ptyro_core::wsl::Wsl, ca_pem: &str) -> Result<(), Error> {
+    let home = w.windows_home().ok_or_else(|| Error::internal("no Windows home (interop?)"))?;
+    let file = home.join("AppData/Local/Temp/ptyro-ca.crt");
+    std::fs::write(&file, ca_pem)
+        .map_err(|e| Error::internal(format!("{}: {e}", file.display())))?;
+    let win = w.windows_path(&file).unwrap_or_default();
+    let script = format!(
+        "Import-Certificate -FilePath '{}' -CertStoreLocation Cert:\\CurrentUser\\Root | Out-Null",
+        win.replace('\'', "''")
+    );
+    let status = std::process::Command::new(w.windows_exe("powershell.exe"))
+        .args(["-NoProfile", "-Command", &script])
+        .current_dir(std::path::Path::new(&w.mount_root).join("c"))
+        .stdin(std::process::Stdio::null())
+        .status();
+    let _ = std::fs::remove_file(&file);
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        Ok(_) => Err(Error::invalid(
+            "Windows didn't add it (the dialog was declined?): the browser warns first, and \
+             continuing past the warning works too",
+        )),
+        Err(e) => Err(Error::internal(format!("powershell.exe: {e}"))),
+    }
+}
+
 /// A QR code as text, two rows per line (fits in a terminal).
 pub fn qr(text: &str) -> Option<String> {
     let code = qrcode::QrCode::new(text.as_bytes()).ok()?;
@@ -255,7 +311,17 @@ pub async fn pair(
     scope: Option<&str>,
     url: Option<String>,
     json: bool,
+    open: bool,
 ) -> Result<i32, Error> {
+    // This computer's browser opens the address it serves on, even a localhost one; nothing to
+    // open while no server runs (checked before a pairing code is made).
+    if open && !served_base(ctx, url.clone()).3 {
+        return Err(Error::new(
+            ErrorCode::Unsupported,
+            "the web app isn't running, so there is nothing to open: `ptyro web on` starts it \
+             (and keeps it on), then `ptyro pair --open` again",
+        ));
+    }
     // No scope named: the default, with its warning. A named one is the owner's choice.
     let defaulted = scope.is_none();
     let scope: Scope = scope.map_or(Ok(DEFAULT_SCOPE), str::parse).map_err(Error::invalid)?;
@@ -281,10 +347,37 @@ pub async fn pair(
     // (once, within minutes) for the token, never the token. It travels in the fragment:
     // browsers never send that to a server or put it in logs.
     let link = format!("{base}/#pair={code}");
+    // `--open` pairs the browser right here: the "only on this computer" note doesn't apply.
+    let mut notes = if open { Vec::new() } else { notes };
+    // Inside WSL, Windows' browsers check certificates against Windows' own store: without ptyro's
+    // CA there, the page opens on a warning. Offer to put it there (Windows asks too).
+    if open
+        && let (Some(f), Some(w)) = (&ca, ptyro_core::wsl::detect().filter(|w| w.interop))
+        && windows_trusts(w, f) == Some(false)
+    {
+        let pem = std::fs::read_to_string(crate::tls::dir(&ctx.paths.data).join("ca.pem"));
+        let asked = !json
+            && crate::cli::confirm(
+                "Windows doesn't trust ptyro's certificate yet, so the browser would show a \
+                 warning first. Trust it for your Windows user? (Windows asks you to confirm)",
+            );
+        match pem {
+            Ok(pem) if asked => match trust_on_windows(w, &pem) {
+                Ok(()) => eprintln!("Windows trusts ptyro's certificate now."),
+                Err(e) => eprintln!("note: {e}"),
+            },
+            _ => notes.push(
+                "the browser warns about ptyro's certificate first (Windows doesn't trust it yet): \
+                 run `ptyro pair --open` in a terminal to trust it, or continue past the warning"
+                    .into(),
+            ),
+        }
+    }
+    let opened = open && ptyro_core::open::open(&ptyro_core::open::Opened::Url(&link));
     if json {
         println!(
             "{}",
-            serde_json::json!({ "device": device, "url": link, "expires_ms": expires_ms, "ca": ca.as_ref().map(|f| serde_json::json!({ "url": format!("{base}/ca.crt"), "sha256": f })), "machine": machine, "warning": warning, "replaces": replaces, "notes": notes })
+            serde_json::json!({ "device": device, "url": link, "expires_ms": expires_ms, "ca": ca.as_ref().map(|f| serde_json::json!({ "url": format!("{base}/ca.crt"), "sha256": f })), "machine": machine, "warning": warning, "replaces": replaces, "notes": notes, "opened": opened })
         );
         return Ok(0);
     }
@@ -307,11 +400,21 @@ pub async fn pair(
             scope.label()
         );
     }
-    if let Some(q) = qr(&link) {
-        println!("{q}");
-    }
     let minutes = expires_ms.saturating_sub(ptyro_core::now_ms()).div_ceil(60_000);
-    println!("Scan with the phone's camera, or open:\n  {link}\n");
+    if opened {
+        println!(
+            "Opened in {} browser:\n  {link}\n",
+            if ptyro_core::wsl::detect().is_some() { "Windows'" } else { "this computer's" }
+        );
+    } else {
+        if open {
+            eprintln!("note: nothing here opens a browser; open the link below by hand");
+        }
+        if let Some(q) = qr(&link) {
+            println!("{q}");
+        }
+        println!("Scan with the phone's camera, or open:\n  {link}\n");
+    }
     println!(
         "The link works once, for {minutes} minutes, and needs `ptyro serve` running. Waiting \
          for {} to open it (Ctrl-C stops waiting; the link keeps working)…",
@@ -342,7 +445,7 @@ pub async fn pair(
     }
     if public {
         println!("This address uses Tailscale's certificate: nothing to install on the phone.\n");
-    } else if let Some(f) = &ca {
+    } else if let Some(f) = ca.as_ref().filter(|_| !opened) {
         println!(
             "First time on this phone? Open {base}/ca.crt and trust it (iPhone: Settings → \
              General → VPN & Device Management, then About → Certificate Trust Settings; Android: \
@@ -444,6 +547,13 @@ pub async fn devices(ctx: &Ctx, cmd: Option<DevicesCmd>) -> Result<i32, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_trust_is_checked_by_the_sha256_ptyro_prints() {
+        let s = trust_check_script("71:50:16:D0:2A");
+        assert!(s.starts_with("$h = '715016D02A';"), "{s}");
+        assert!(s.contains(r"Cert:\CurrentUser\Root") && s.contains("SHA256"), "{s}");
+    }
 
     fn status(proxy: &str) -> serde_json::Value {
         serde_json::json!({

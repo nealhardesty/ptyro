@@ -60,6 +60,22 @@ pub struct DaemonAbout {
     pub same: Option<bool>,
     /// What to do about a different version.
     pub fix: Option<String>,
+    /// Inside WSL: whether it keeps WSL running (SPEC §20.10), in words.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub holds_wsl: Option<String>,
+}
+
+/// The daemon's hold on WSL, in words, for About.
+pub fn hold_text(h: &ptyro_protocol::WslHold) -> String {
+    match (h.holding, &h.why_not, &h.last_exit) {
+        (true, ..) => format!(
+            "yes, agents keep working with every terminal closed (wsl.exe, pid {})",
+            h.pid.map_or_else(|| "?".into(), |p| p.to_string())
+        ),
+        (false, Some(w), _) => format!("no: {w}"),
+        (false, None, Some(e)) => format!("no: {e}; it retries"),
+        (false, None, None) => "starting".into(),
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -129,6 +145,7 @@ pub async fn collect(ctx: &Ctx) -> About {
         started_ms: None,
         same: None,
         fix: None,
+        holds_wsl: None,
     };
     let mut web = None;
     let mut usage = Vec::new();
@@ -160,6 +177,7 @@ pub async fn collect(ctx: &Ctx) -> About {
                  version until then"
                     .to_owned()
             }),
+            holds_wsl: status.wsl_hold.as_ref().map(hold_text),
         };
         web = status.web.map(|w| WebAbout {
             wanted: w.wanted,
@@ -271,6 +289,9 @@ impl About {
         );
         if let Some(fix) = &d.fix {
             line("", format!("-> {fix}"));
+        }
+        if let Some(h) = &d.holds_wsl {
+            line("holds WSL", h.clone());
         }
         if let Some(w) = &self.web {
             line("web app", w.text.first().cloned().unwrap_or_default());

@@ -22,6 +22,7 @@ pub mod input;
 pub mod machine;
 pub mod model;
 pub mod names;
+pub mod open;
 pub mod paths;
 pub mod project;
 pub mod scratchpad;
