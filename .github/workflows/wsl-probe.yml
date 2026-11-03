@@ -1,0 +1,26 @@
+# Throwaway (ROADMAP WIN0.5 f / WIN2): what WSL a hosted Windows runner has. Deleted after.
+name: wsl-probe
+on: push
+jobs:
+  probe:
+    strategy:
+      matrix:
+        os: [windows-latest, windows-2025, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    steps:
+      - shell: pwsh
+        run: |
+          [Environment]::OSVersion | Format-List
+          wsl --version; "exit $LASTEXITCODE"
+          wsl --status; "exit $LASTEXITCODE"
+          wsl -l -v; "exit $LASTEXITCODE"
+          Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform,Microsoft-Windows-Subsystem-Linux | Format-Table FeatureName,State
+          (Get-CimInstance Win32_Processor).VirtualizationFirmwareEnabled
+          (Get-CimInstance Win32_ComputerSystem).HypervisorPresent
+      - uses: Vampire/setup-wsl@v5
+        with:
+          distribution: Ubuntu-24.04
+          wsl-version: 2
+      - shell: wsl-bash {0}
+        run: uname -a; cat /proc/sys/kernel/osrelease; ps -o comm= -p 1
