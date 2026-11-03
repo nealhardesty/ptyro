@@ -2022,6 +2022,41 @@ pub struct Installed {
     windows_home: Option<PathBuf>,
 }
 
+/// Whether `prog` is an executable in one of `path`'s directories, remembered for a minute.
+/// The settings panel asks for every editor each time it redraws its choices, and inside WSL
+/// `PATH` ends with Windows' own directories, on a slow mount: there that was seconds a call.
+/// The answer is per `PATH`, so a caller with another one (a test) asks afresh.
+fn on_path(path: &std::ffi::OsStr, prog: &str) -> bool {
+    use crate::sync::MutexExt;
+    use std::collections::HashMap;
+    use std::time::{Duration, Instant};
+    type Seen = (std::ffi::OsString, Instant, HashMap<String, bool>);
+    static SEEN: std::sync::Mutex<Option<Seen>> = std::sync::Mutex::new(None);
+    const FOR: Duration = Duration::from_secs(60);
+    {
+        let seen = SEEN.locked();
+        if let Some((p, at, found)) = seen.as_ref()
+            && p == path
+            && at.elapsed() < FOR
+            && let Some(&f) = found.get(prog)
+        {
+            return f;
+        }
+    }
+    let found = std::env::split_paths(path).any(|d| crate::scratchpad::is_exec(&d.join(prog)));
+    let mut seen = SEEN.locked();
+    match seen.as_mut() {
+        Some((p, at, map)) if p == path && at.elapsed() < FOR => {
+            map.insert(prog.to_owned(), found);
+        }
+        _ => {
+            *seen =
+                Some((path.to_owned(), Instant::now(), HashMap::from([(prog.to_owned(), found)])))
+        }
+    }
+    found
+}
+
 impl Installed {
     pub fn here() -> Self {
         let mut apps = Vec::new();
@@ -2045,7 +2080,7 @@ impl Installed {
         if prog.contains('/') {
             return crate::scratchpad::is_exec(Path::new(prog));
         }
-        std::env::split_paths(&self.path).any(|d| crate::scratchpad::is_exec(&d.join(prog)))
+        on_path(&self.path, prog)
     }
 
     fn app(&self, name: &str) -> Option<PathBuf> {
