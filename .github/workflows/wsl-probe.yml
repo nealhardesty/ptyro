@@ -1,28 +1,22 @@
-# Throwaway (ROADMAP WIN0.5 f / WIN2): what WSL a hosted Windows runner has. Deleted after.
+# Throwaway (ROADMAP WIN0.5 f / WIN2): how long `make test-wsl` takes on a hosted runner. Deleted after.
 name: wsl-probe
 on: push
 jobs:
-  probe:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, windows-11-arm]
-    runs-on: ${{ matrix.os }}
+  wsl:
+    runs-on: windows-latest
+    timeout-minutes: 90
     steps:
-      - shell: pwsh
-        continue-on-error: true
-        run: |
-          wsl --version
-          (Get-CimInstance Win32_ComputerSystem).HypervisorPresent
-          (Get-CimInstance Win32_Processor).VirtualizationFirmwareEnabled
-      - uses: Vampire/setup-wsl@v5
-        continue-on-error: true
+      - uses: Vampire/setup-wsl@4c48163d9f981914dd8caa0fc335fe19cca5bff4 # v7.2.0
         with:
           distribution: Ubuntu-24.04
-          wsl-version: 2
-      - shell: pwsh
-        continue-on-error: true
+          additional-packages: build-essential pkg-config git make curl ca-certificates zsh
+      - shell: wsl-bash {0}
         run: |
-          wsl -l -v
-          wsl -d Ubuntu-24.04 -- sh -c 'uname -r; cat /proc/sys/kernel/osrelease; ps -o comm= -p 1; nproc; free -m | head -2'
-          "exit $LASTEXITCODE"
+          set -e
+          date
+          git clone -q https://github.com/${{ github.repository }} ~/ptyro
+          cd ~/ptyro && git checkout -q master && git log --oneline -1
+          make rust-install
+          date
+          make test-wsl
+          date
