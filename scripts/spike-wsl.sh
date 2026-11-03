@@ -43,8 +43,19 @@ in_wsl() {
 boot_id() { cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo none; }
 pid1_start() { ps -o lstart= -p 1 2>/dev/null | sed 's/  */ /g; s/^ //; s/ $//' || echo unknown; }
 systemd_on() { [ "$(ps -o comm= -p 1 2>/dev/null)" = systemd ]; }
-# Windows commands through WSL interop; empty when interop is off.
-win() { "$@" 2>/dev/null | tr -d '\0\r' || true; }
+# Windows commands through WSL interop; empty when interop is off. A shell rc that sets PATH
+# outright drops WSL's appended Windows directories, so fall back to System32 under the
+# automount root ([automount] root in /etc/wsl.conf, /mnt/ by default).
+win() {
+  local exe=$1 mnt
+  shift
+  if ! command -v "$exe" >/dev/null; then
+    mnt=$(sed -n 's/^[[:space:]]*root[[:space:]]*=[[:space:]]*//p' /etc/wsl.conf 2>/dev/null | head -n1)
+    mnt=${mnt:-/mnt/}
+    exe="${mnt%/}/c/Windows/System32/$exe"
+  fi
+  "$exe" "$@" 2>/dev/null | tr -d '\0\r' || true
+}
 win_home() {
   local p
   p=$(win cmd.exe /c 'echo %USERPROFILE%')

@@ -278,7 +278,7 @@ Boundary rules **[decided]**:
 |---|---|
 | Linux x86_64 / aarch64 | Tier 1 |
 | macOS aarch64 / x86_64 | Tier 1 |
-| WSL2 | **Tier 1 [decided 2026-10-31, owner]** (Linux build). Today still untested: ROADMAP WIN0.1, WIN2 |
+| WSL2 | **Tier 1 [decided 2026-10-31, owner]** (Linux build). `make check` passes [V 2026-11-02]: WSL 2.6.2.0, kernel 6.6.87.2, Ubuntu 24.04.3, Windows 11 build 26200, systemd on, master at v0.0.46. All 73 test binaries pass, with bash 5.2 and zsh present but no fish or pwsh (`tests/win1.rs` skips those two), and no browser, so web-e2e didn't run. Survival after the last terminal (WIN0.1) and the bridges (WIN2) are still open |
 | Windows 11 native (x64, ARM64) | **Tier 1 [decided 2026-10-31, owner], not built yet** (ConPTY, named pipes; ROADMAP WIN, RESEARCH DD3). Windows 10 is not supported |
 
 Inside WSL, `ptyro_core::wsl` is the one rule (WIN2) [V 2026-11-02, WSL 2.6.2]: it is WSL if the kernel release (`/proc/sys/kernel/osrelease`) says `microsoft`, `WSL_DISTRO_NAME` is set, or interop is registered (`/proc/sys/fs/binfmt_misc/WSLInterop`). WSL1's release ends in `-Microsoft` and WSL2's says `microsoft-standard`. The distro comes from `WSL_DISTRO_NAME`, or from `wslpath -w /` (`\\wsl.localhost\<distro>\`) when that's missing: a systemd user unit, which is how `ptyro service install` runs the daemon, doesn't get the variable. About's `system` reads `linux x86_64, WSL2 (Ubuntu)`, its JSON has a `wsl` object, and `doctor` has a `wsl` section (WSL1 is a warning).
