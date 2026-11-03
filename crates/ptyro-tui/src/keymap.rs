@@ -187,6 +187,10 @@ pub const ACTIONS: &[ActionSpec] = &[
     ),
     a("daemon.service", "Start the daemon at login (a systemd user unit or launchd agent)"),
     a("daemon.unservice", "Stop starting the daemon at login"),
+    a(
+        "daemon.keepalive",
+        "Keep the daemon and its agents running with every terminal closed (WSL: systemd and linger)",
+    ),
     a("integrations", "The agent integrations: what's installed and what each launch gets"),
     a("integrations.install", "Install an agent's opt-in integration (Gemini, Antigravity)"),
     a("integrations.uninstall", "Remove an agent's opt-in integration"),

@@ -11,6 +11,7 @@ mod cs;
 mod doctor;
 mod host;
 mod init;
+mod keepalive;
 mod machines;
 mod mcp;
 mod orch;
@@ -1129,6 +1130,16 @@ enum DaemonCmd {
         /// Print the unit and the commands instead
         #[arg(long)]
         dry_run: bool,
+    },
+    /// Keep the daemon and its agents running with no terminal open: inside WSL, systemd and
+    /// linger (it asks before editing /etc/wsl.conf); on Linux, linger (it outlives logging out)
+    KeepAlive {
+        /// Print what it would change instead
+        #[arg(long)]
+        dry_run: bool,
+        /// Don't ask before turning systemd on in /etc/wsl.conf
+        #[arg(long, short)]
+        yes: bool,
     },
     /// Remove the service installed by install-service
     UninstallService {

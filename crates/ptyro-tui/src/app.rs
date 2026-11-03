@@ -3216,6 +3216,7 @@ impl App {
             "daemon.upgrade" => self.run_cli(&["daemon".into(), "upgrade".into()]),
             "daemon.service" => self.run_cli(&["daemon".into(), "install-service".into()]),
             "daemon.unservice" => self.run_cli(&["daemon".into(), "uninstall-service".into()]),
+            "daemon.keepalive" => self.run_cli(&["daemon".into(), "keep-alive".into()]),
             "doctor" => self.run_cli(&["doctor".into()]),
             "integrations" => self.run_cli(&["integrations".into(), "ls".into()]),
             "integrations.install" | "integrations.uninstall" => {

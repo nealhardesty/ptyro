@@ -219,6 +219,7 @@ See [`remote.md`](remote.md).
 | `ptyro daemon stop\|restart [--hibernate] [--force]` | stop it; `--hibernate` brings resumable agents back dormant |
 | `ptyro daemon upgrade [--binary PATH] [--json]` | switch the running daemon to a new binary without stopping sessions; exits 1 if it rolled back |
 | `ptyro daemon install-service\|uninstall-service [--dry-run]` | start the daemon at login (systemd user unit / launchd agent) |
+| `ptyro daemon keep-alive [--dry-run] [--yes]` | keep the daemon and its agents running with every terminal closed: inside WSL it turns on systemd (asks, then edits `/etc/wsl.conf` with sudo; WSL restarts once) and linger; on Linux, linger (it outlives logging out); macOS needs nothing |
 | `ptyro backup [-o FILE] [--with-recordings] [--with-ca] [--json]` | a private `.tar.gz` of ptyro's own state (config, a consistent copy of the database, scratchpad); never replaces a file ([`docs/uninstall.md`](uninstall.md)) |
 | `ptyro uninstall [--dry-run] [--yes] [--delete-work] [--keep-config] [--keep-data] [--keep-binary] [--backup FILE] [--purge-refs] [--json]` | take ptyro off this computer: shows what goes and what stays, asks (typing `delete` when worktrees have uncommitted work), stops the daemon, removes worktrees, directories, the login service, integrations, shell lines and the binary installed by hand ([`docs/uninstall.md`](uninstall.md)) |
 

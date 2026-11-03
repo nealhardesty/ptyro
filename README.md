@@ -46,8 +46,10 @@ Google, or any other tool named here; their names and trademarks belong to their
 
 ## Requirements
 
-- **Linux or macOS.** WSL2 should work and is being verified. Native Windows 11 is planned, not
-  built yet (ROADMAP WIN).
+- **Linux, macOS or WSL2.** On WSL2, ptyro keeps working with every terminal closed once systemd
+  and linger are on: `ptyro doctor` (or the TUI's `⚕` badge, or the web's Health page) says
+  when they aren't, and its fix, `ptyro daemon keep-alive`, turns them on. Native Windows 11 is
+  planned, not built yet (ROADMAP WIN).
 - **Rust 1.99 or later** to build. A checkout pins 1.99.1 in `rust-toolchain.toml`, and
   [rustup](https://rustup.rs) fetches it for you. No Rust yet? In a checkout, `make rust-install`
   installs rustup and the pinned toolchain on Linux, macOS and Windows. It needs a C compiler,
@@ -618,7 +620,9 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
   keeps drawing; ptyro only adds its marks around it. `ptyro … --json | ConvertFrom-Json` gives
   you objects.
 - **Completions:** `source <(ptyro completions zsh)` (or bash, fish…). **Start at login:**
-  `ptyro daemon install-service` (systemd or launchd).
+  `ptyro daemon install-service` (systemd or launchd). **Keep it running with no terminal open:**
+  `ptyro daemon keep-alive` (inside WSL: systemd and linger; on Linux: linger, so it outlives
+  logging out). In the TUI it's in the palette, and on the web under More → Daemon.
 - **Something odd?** A `⚕` in the status bar means the doctor found something: `Ctrl-Q M` lists
   it, each with its fix (tmux options, a login, a daemon upgrade). Or run
   `ptyro doctor`. `ptyro daemon logs` shows the daemon's log, and

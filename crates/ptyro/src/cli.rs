@@ -1337,6 +1337,7 @@ async fn daemon(ctx: &Ctx, cmd: DaemonCmd) -> Result<i32, Error> {
         }
         DaemonCmd::InstallService { dry_run } => crate::service::install(ctx, dry_run),
         DaemonCmd::UninstallService { dry_run } => crate::service::uninstall(ctx, dry_run),
+        DaemonCmd::KeepAlive { dry_run, yes } => crate::keepalive::run(dry_run, yes),
         DaemonCmd::Status { json } => {
             let client = ctx.connect(false).await.map_err(|e| {
                 if e.code == ErrorCode::DaemonUnavailable {

@@ -2688,7 +2688,7 @@ done.
    - Windows Terminal's own "duplicate tab in the same directory" uses the same OSC `9;9`, so
      both should agree.
 3. **WIN0.1, the WSL survival spike.** `make spike-wsl` (`scripts/spike-wsl.sh`, written
-   2026-11-01; only its mechanics were tried, on macOS with `SPIKE_WSL_ANY=1`, never in WSL).
+   2026-11-01; first run in WSL 2026-11-02, see WIN0.1 below).
    - `make spike-wsl ARGS="start <label>"` starts three heartbeats, each writing
      `<epoch> <boot id>` every 10 s. Each daemon has its own `PTYRO_HOME`, so your real ptyro is
      never touched.
@@ -2767,6 +2767,11 @@ done.
     stops 15–20 s after the last terminal closes, even with a service running (microsoft/WSL
     #13291, #13416) [S]. Write the result and the keep-alive that works into SPEC §20. If none
     works, say so in the README's requirements. `make spike-wsl` (`scripts/spike-wsl.sh`, written; see the handoff above for how to run it).
+    Runs so far (WSL 2.6.2.0, SPEC §20.10): systemd+linger kept every heartbeat alive with no
+    terminal open, 16 min until a manual `wsl --shutdown` (2026-11-02), then 9 h 26 min
+    overnight with no gaps and no restart (2026-11-03) [V]. Still to do: nothing set, systemd
+    alone, and `vmIdleTimeout=-1`, to learn which setting does the work; and a run with no
+    VS Code or other `wsl.exe` client attached.
   - [ ] **WIN0.2 ConPTY fidelity.** (R-WIN-09) `make spike-conpty`: a small Windows program that
     plays `ptyro-term`'s fixture streams through ConPTY and compares what comes out. Run it with
     and without `PSEUDOCONSOLE_PASSTHROUGH_MODE`, and with the conhost built into Windows against
@@ -2846,14 +2851,13 @@ done.
 
 - [ ] **WIN2 WSL: bridged and doctored** (R-WIN-04, R-WIN-05) **M**
   - ~~Detect WSL (`WSL_DISTRO_NAME`, or `/proc/sys/kernel/osrelease`), shown in About and `doctor`.~~ [built 2026-11-02] `ptyro_core::wsl` (SPEC §3.4), which falls back to `wslpath -w /` for the distro when the daemon runs as a systemd unit. The emulator's OSC 9;9 mapping uses it too.
-  - **Survival:** whatever WIN0.1 found works becomes what ptyro does by default. For example, `ptyro service install` uses systemd when it is enabled, and if it isn't, offers to turn it on (it edits `/etc/wsl.conf` after asking, then says `wsl --shutdown` is needed).
+  - ~~**Survival:** whatever WIN0.1 found works becomes what ptyro does by default. For example, `ptyro service install` uses systemd when it is enabled, and if it isn't, offers to turn it on (it edits `/etc/wsl.conf` after asking, then says `wsl --shutdown` is needed).~~ [built 2026-11-03] systemd plus linger (WIN0.1's 9 h run). `ptyro daemon keep-alive` turns on what's missing: linger with `loginctl`, systemd by editing `/etc/wsl.conf` through sudo after asking. `install-service` inside WSL turns linger on too, and with systemd off enables the unit by hand and offers the same. The owner chose (2026-11-03) a fix to pick, not a daemon that changes settings by itself. TUI: the palette's `daemon.keepalive`; web: More → Daemon → Keep running (SPEC §12).
   - **Bridges:**
     - ~~alerts become Windows toasts through `powershell.exe`, unless a sink is configured;~~ [built 2026-11-02] the `desktop` channel is a Windows toast inside WSL. The owner chose (2026-11-02) to keep it off by default, as on other platforms: it shows once `desktop` is among the channels;
     - ~~links, the pairing page and files open on Windows (`wslpath -w`, `explorer.exe`);~~ [built 2026-11-02] About's `⏎` and the file manager (`files`) open through `explorer.exe` with the Windows path (`{winpath}`). Nothing opens the pairing page by itself; its address opens from the TUI or Windows Terminal like any link;
     - ~~"open in editor" prefers VS Code's Remote-WSL when `code` is the editor.~~ [built 2026-11-02] `code`/`cursor` are found under the Windows profile when off `PATH` and run with `WSL_DISTRO_NAME`, which VS Code's script needs to open through Remote-WSL (SPEC §20.10).
   - **doctor**, each finding with its fix offered, not a command to type:
-    - the daemon won't survive the last terminal;
-    - systemd is off;
+    - ~~the daemon won't survive the last terminal;~~ ~~systemd is off;~~ [built 2026-11-03] one check, `wsl survival`, which names whichever of systemd and linger is off. Its fix is `ptyro daemon keep-alive`: the TUI's badge runs it in a split, and the web's Health page runs it, or opens it in a session when sudo needs a password;
     - the repo is under `/mnt/<drive>` (offer to clone it into the distro and register the copy); [warning built 2026-11-02; the owner chose (2026-11-02) to build the "move it" fix later]
     - setup scripts with CRLF line endings; [warning built 2026-11-02: any file a project's script names; converting it is for later, with the move]
     - ~~`serve` unreachable from the phone without `networkingMode=mirrored` or Tailscale;~~ [built 2026-11-02] with `access = open` under NAT (`wslinfo`). The TUI health badge and the web's Health page open the `remote.access` setting as the fix;

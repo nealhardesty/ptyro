@@ -263,6 +263,38 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
             }
             Ok(json!({ "notes": notes(&r) }))
         }
+        // Keep ptyro running with every terminal closed (WIN2). Linger needs no password, so it
+        // is done here; turning systemd on in WSL asks sudo for one, so that runs in a session
+        // the page opens, where it can be typed.
+        "daemon.keepalive" => {
+            let s = crate::keepalive::State::now();
+            if s.systemd || !s.wsl {
+                let r = cli(&["daemon", "keep-alive"]).await?;
+                if r["ok"] == json!(false) {
+                    return Err(Error::invalid(r["err"].as_str().unwrap_or("failed").to_owned()));
+                }
+                return Ok(json!({ "notes": notes(&r) }));
+            }
+            let exe = std::env::current_exe()
+                .map_err(|e| Error::internal(format!("ptyro's path: {e}")))?;
+            let c = ctx.connect(true).await?;
+            let spec = ptyro_core::session::SpawnSpec {
+                argv: vec![
+                    exe.to_string_lossy().into_owned(),
+                    "daemon".into(),
+                    "keep-alive".into(),
+                ],
+                cwd: std::env::var_os("HOME").map_or_else(|| "/".into(), Into::into),
+                // A title, not a name: a second one becomes ptyro-keep-alive-2, not a conflict.
+                title: Some("ptyro keep-alive".into()),
+                env: crate::cli::client_env(),
+                confirmed: true,
+                ..Default::default()
+            };
+            let info =
+                crate::cli::session_of(c.request(ptyro_protocol::Request::Spawn { spec }).await?)?;
+            Ok(json!({ "session": info.id.full() }))
+        }
 
         // ── the daemon ──
         "daemon.logs" => {

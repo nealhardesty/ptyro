@@ -143,7 +143,8 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Repor
 }
 
 /// Inside WSL (WIN2, SPEC §3.4): which one, whether Windows programs can be started from it,
-/// whether a phone can reach the web app, and projects that WSL makes slow or breaks.
+/// whether ptyro keeps running with every terminal closed, whether a phone can reach the web
+/// app, and projects that WSL makes slow or breaks.
 async fn wsl(ctx: &Ctx, config: &Config, w: &ptyro_core::wsl::Wsl, r: &mut Report) {
     const S: &str = "wsl";
     if w.version == 1 {
@@ -175,6 +176,8 @@ async fn wsl(ctx: &Ctx, config: &Config, w: &ptyro_core::wsl::Wsl, r: &mut Repor
             "Windows programs can't be started from here: interop is off ([interop] enabled in /etc/wsl.conf)",
         );
     }
+    let (level, text) = crate::keepalive::verdict(crate::keepalive::State::now());
+    r.add(S, "survival", level, text);
     // WSL's default NAT network hides the distro from the Wi-Fi: `access = open` reaches only
     // this computer. Mirrored networking or Tailscale reach a phone.
     if config.remote.access == ptyro_core::config::Access::Open {

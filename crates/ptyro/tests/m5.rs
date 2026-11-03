@@ -365,9 +365,16 @@ fn doctor_self_test_and_service() {
             format!("#!/bin/sh\necho \"$@\" >> {}\n", log.display()),
         )
         .unwrap();
+        // Inside WSL install also turns on linger: never for real from a test.
+        std::fs::write(
+            fake.join("loginctl"),
+            format!("#!/bin/sh\necho loginctl \"$@\" >> {}\n", log.display()),
+        )
+        .unwrap();
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(fake.join("systemctl"), std::fs::Permissions::from_mode(0o755))
-            .unwrap();
+        for f in ["systemctl", "loginctl"] {
+            std::fs::set_permissions(fake.join(f), std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         let xdg = w.home().join("xdgconf");
         let path = format!("{}:{}", fake.display(), std::env::var("PATH").unwrap());
         let run = |args: &[&str]| {

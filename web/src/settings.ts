@@ -41,6 +41,7 @@ const ACTIONS = {
   "uninstall.plan": "What uninstalling ptyro would remove and what stays, and the command to run on the computer (it can't be done from here)",
   "daemon.service": "Start ptyro at login (a systemd or launchd service)",
   "daemon.unservice": "Remove the login service",
+  "daemon.keepalive": "Keep ptyro and its agents running with every terminal closed (inside WSL: systemd and linger)",
   "web.status": "The web app's server: whether it is up, its address, and who started it",
   "web.on": "Have the daemon run the web app's server, now and whenever it starts",
   "web.off": "Stop the daemon running the web app's server (paired devices stay paired)",
@@ -114,11 +115,22 @@ function fixesFor(c: any): Item[] {
   if (c.section === "ptyro" && c.name.startsWith("config")) out.push({ label: "Edit the config", run: () => go("#/config") });
   if (c.section === "remote" || /restart/.test(c.text)) out.push({ label: "Restart ptyro", run: () => restartDaemon() });
   if (c.section === "daemon" && /binary|upgrade|older|newer/i.test(c.text)) out.push({ label: "Upgrade the daemon", run: () => upgradeDaemon() });
+  if (c.section === "wsl" && c.name === "survival" && c.level !== "ok") out.push({ label: "Keep ptyro running", hint: /systemd is off/.test(c.text) ? "Opens a terminal: sudo asks for your password" : "Turns on linger; no password", run: keepAlive });
   if (c.section === "wsl" && c.name === "network") out.push({ label: "Change who can reach it", hint: "Tailscale reaches a phone through WSL", run: () => go("#/settings/remote") });
   if (c.section === "integrations") out.push({ label: "Integrations", run: () => go("#/integrations") });
   if (c.section === "worktrees" && c.name === "stale" && c.level !== "ok") out.push({ label: "Clean up", hint: "Archive, remove or keep each", run: () => go("#/gc") });
   if (c.section === "worktrees" && c.name === "archived") out.push({ label: "Archived", run: () => go("#/archives") });
   return out;
+}
+
+/// `ptyro daemon keep-alive`: done on the computer when it needs no password (linger), else in a
+/// session of its own, where sudo can ask for one (turning systemd on in WSL).
+async function keepAlive(): Promise<void> {
+  const r = await doHost("daemon.keepalive");
+  if (!r) return;
+  if (r.session) { ui.toast("Turning systemd on: type your password in the terminal"); go(`#/s/${enc(r.session)}`); return; }
+  showNotes("Keep running", r.notes ?? []);
+  health.reload("");
 }
 
 function healthView(): HTMLElement {
@@ -467,6 +479,8 @@ function daemonView(): HTMLElement {
       section("Start at login", h("p", { class: "sub" }, "A systemd or launchd service starts the daemon (and this server) when you log in."),
         bar(h("button", { title: tip("daemon.service"), onclick: async () => { const r = await doHost("service.install"); if (r) showNotes("Login service", r.notes ?? []); } }, "Install the service"),
           h("button", { title: tip("daemon.unservice"), onclick: async () => { const r = await doHost("service.uninstall"); if (r) showNotes("Login service", r.notes ?? []); } }, "Remove it"))),
+      section("Keep running", h("p", { class: "sub" }, "Agents keep working with every terminal closed. Inside WSL that takes systemd and linger; on Linux, linger keeps it after you log out. macOS needs nothing."),
+        bar(h("button", { title: tip("daemon.keepalive"), onclick: keepAlive }, "Keep ptyro running"))),
       section("Back up or leave", h("p", { class: "sub" }, "A backup holds your config, history, scratchpad and settings, in a private file on the computer. Uninstalling removes ptyro; your repositories stay."),
         bar(h("button", { title: tip("backup.create"), onclick: backupNow }, "Back up ptyro's state"),
           h("button", { class: "deny", title: tip("uninstall.plan"), onclick: showUninstall }, "Uninstall…")))) : h("p", { class: "intro" }, "Logs, upgrading and the service need a device paired with --scope full."));

@@ -10,6 +10,9 @@
 //!   never triggers a restart loop.
 //! - Nothing is started or stopped behind your back: install starts the service only when no
 //!   daemon is running, uninstall leaves a running daemon alone.
+//! - Inside WSL (WIN2), install also turns on linger, which keeps the daemon running once the last
+//!   terminal closes; with systemd off it enables the unit by hand and offers to turn systemd on
+//!   (`crate::keepalive`).
 
 use std::path::PathBuf;
 
@@ -174,7 +177,21 @@ pub fn install(ctx: &Ctx, dry_run: bool) -> Result<i32, Error> {
             )?;
         }
     } else {
+        let wsl = ptyro_core::wsl::detect().is_some();
         write(&systemd_path(), &systemd_unit(&exe, &env), dry_run)?;
+        if wsl && !crate::keepalive::systemd_on() {
+            // No systemd to ask yet (WIN2): enable the unit by hand, with the link `systemctl
+            // enable` makes, so it starts on the first boot with systemd, and offer to turn it on.
+            link_wanted(dry_run)?;
+            let user = crate::keepalive::user().unwrap_or_default();
+            if !crate::keepalive::enable_systemd(&user, dry_run, false)? {
+                eprintln!(
+                    "the service is installed, and starts once systemd is on in this distro: \
+                     `ptyro daemon keep-alive` turns it on"
+                );
+            }
+            return Ok(0);
+        }
         sh(&["systemctl", "--user", "daemon-reload"], dry_run)?;
         sh(&["systemctl", "--user", "enable", UNIT], dry_run)?;
         if running {
@@ -184,11 +201,42 @@ pub fn install(ctx: &Ctx, dry_run: bool) -> Result<i32, Error> {
         } else {
             sh(&["systemctl", "--user", "start", UNIT], dry_run)?;
         }
-        eprintln!(
-            "note: to keep it running after you log out, `loginctl enable-linger $USER` (your choice)"
-        );
+        if wsl {
+            // Inside WSL, linger is what keeps it running once the last terminal closes
+            // (WIN0.1, SPEC §20.10): part of the job, not a choice to leave to you.
+            if !crate::keepalive::State::now().linger
+                && let Some(user) = crate::keepalive::user()
+                && let Err(e) = crate::keepalive::enable_linger(&user, dry_run)
+            {
+                eprintln!("{e}: `ptyro daemon keep-alive` tries again");
+            }
+        } else {
+            eprintln!(
+                "note: to keep it running after you log out, `ptyro daemon keep-alive` (your choice)"
+            );
+        }
     }
     Ok(0)
+}
+
+/// `<config>/systemd/user/default.target.wants/ptyro.service`: what `systemctl --user enable`
+/// links, made by hand where systemd isn't running yet.
+fn wanted_link() -> PathBuf {
+    systemd_path().with_file_name("default.target.wants").join(UNIT)
+}
+
+fn link_wanted(dry_run: bool) -> Result<(), Error> {
+    let link = wanted_link();
+    eprintln!("$ ln -sf {} {}", systemd_path().display(), link.display());
+    if dry_run {
+        return Ok(());
+    }
+    let fail = |e: std::io::Error| Error::internal(format!("{}: {e}", link.display()));
+    if let Some(d) = link.parent() {
+        std::fs::create_dir_all(d).map_err(fail)?;
+    }
+    let _ = std::fs::remove_file(&link);
+    std::os::unix::fs::symlink(systemd_path(), &link).map_err(fail)
 }
 
 pub fn uninstall(ctx: &Ctx, dry_run: bool) -> Result<i32, Error> {
@@ -207,9 +255,17 @@ pub fn uninstall(ctx: &Ctx, dry_run: bool) -> Result<i32, Error> {
         remove(&path, dry_run)?;
     } else {
         let path = systemd_path();
-        let _ = sh(&["systemctl", "--user", "disable", UNIT], dry_run);
+        let systemd = crate::keepalive::systemd_on();
+        if systemd {
+            let _ = sh(&["systemctl", "--user", "disable", UNIT], dry_run);
+        } else if !dry_run {
+            // Enabled by hand before systemd ran (WSL): the link is all there is to undo.
+            let _ = std::fs::remove_file(wanted_link());
+        }
         remove(&path, dry_run)?;
-        sh(&["systemctl", "--user", "daemon-reload"], dry_run)?;
+        if systemd {
+            sh(&["systemctl", "--user", "daemon-reload"], dry_run)?;
+        }
         eprintln!("a running daemon keeps running; `ptyro daemon stop` stops it");
     }
     Ok(0)

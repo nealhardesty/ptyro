@@ -322,5 +322,6 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `daemon upgrade` | `daemon.upgrade`; a daemon running another binary is a health finding whose fix this is | `daemon.upgrade`: More → Daemon → Upgrade, or a health finding's fix |
 | `daemon install-service` | `daemon.service` | `daemon.service`: More → Daemon → Install the service |
 | `daemon uninstall-service` | `daemon.unservice` | `daemon.unservice`: More → Daemon → Remove it |
+| `daemon keep-alive` | `daemon.keepalive` (the palette), and the fix of the health badge's `wsl survival` finding (`M`), run in a split | `daemon.keepalive`: More → Daemon → Keep ptyro running; More → Health → wsl survival (a session of its own when sudo needs a password) |
 | `backup` | `app.backup` (full sized; the file is private, in your home directory unless you give one) | `backup.create`: More → Daemon → Back up ptyro's state: written on the computer, with what is in it and what is left out |
 | `uninstall` | `app.uninstall` (full sized: the plan, then the question; it ends this TUI and the daemon) | `uninstall.plan`: More → Daemon → Uninstall…: the plan, and the command to type on the computer (it ends the server this page comes from) |

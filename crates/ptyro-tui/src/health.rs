@@ -378,6 +378,10 @@ mod tests {
         let wsl =
             finding(&check("wsl", "network", "warn", "WSL's NAT networking hides it")).unwrap();
         assert_eq!(wsl.fix, Some(Fix::Setting("remote.access")));
+        // WSL stopping ptyro with the last terminal: the keep-alive, run in a split (sudo may ask).
+        let text = "linger is off, so WSL may stop ptyro. `ptyro daemon keep-alive` turns it on";
+        let survival = finding(&check("wsl", "survival", "warn", text)).unwrap();
+        assert_eq!(survival.fix, Some(Fix::Cli(vec!["daemon".into(), "keep-alive".into()])));
         let login = finding(&check(
             "profile work",
             "claude",
