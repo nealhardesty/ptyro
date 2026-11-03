@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
-# ROADMAP WIN2: CI's main job (`make check`) inside a WSL2 distro, until CI has a WSL2 runner
-# (WIN0.5 f). Run it before each release.
+# ROADMAP WIN2: CI's main job (`make check`) inside a WSL2 distro. CI's `wsl` job runs it on a
+# hosted Windows runner (WIN0.5 f); run it by hand on your own WSL before a release too.
 #
 #   inside WSL:              make test-wsl                (this checkout)
 #   on Windows (Git Bash):   make test-wsl                (the checkout inside the distro)
