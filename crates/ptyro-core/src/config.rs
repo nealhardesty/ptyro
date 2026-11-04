@@ -601,8 +601,9 @@ pub struct Config {
 #[serde(default, deny_unknown_fields)]
 pub struct Client {
     /// The daemon to use when `--remote` and `PTYRO_REMOTE` don't say: `wsl://` (the default WSL
-    /// distro), `wsl://<distro>`, or an ssh host (`[ssh://][user@]host[:port]`). Windows asks
-    /// once, when a WSL distro has ptyro, and keeps the answer here.
+    /// distro), `wsl://<distro>`, an ssh host (`[ssh://][user@]host[:port]`), or `local`: this
+    /// computer's own daemon (on Windows, the native one: WIN5). Windows asks once, when a WSL
+    /// distro has ptyro, and keeps the answer here.
     pub default_remote: Option<String>,
 }
 
@@ -611,7 +612,7 @@ impl Client {
         match self.default_remote.as_deref().map(str::trim) {
             Some(r) if r.is_empty() || r.contains(char::is_whitespace) || r.starts_with('-') => {
                 Err(format!(
-                    "client.default_remote: {r:?} (wsl://, wsl://<distro>, or an ssh host)"
+                    "client.default_remote: {r:?} (wsl://, wsl://<distro>, an ssh host, or local)"
                 ))
             }
             _ => Ok(()),

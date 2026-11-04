@@ -14,6 +14,7 @@ use ptyro_core::TermSize;
 
 #[cfg(any(windows, test))]
 mod cmdline;
+pub mod console;
 #[cfg(unix)]
 pub mod handoff;
 #[cfg(windows)]

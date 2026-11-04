@@ -24,19 +24,6 @@ pub fn parse_size(s: &str) -> Result<TermSize, String> {
     Ok(TermSize::new(cols, rows))
 }
 
-/// Windows runs no daemon of its own (WIN3): the one in WSL does.
-#[cfg(not(unix))]
-pub fn daemon_start(_foreground: bool, _spawned: bool, _serve: bool) -> i32 {
-    eprintln!("{WINDOWS_DAEMON}");
-    ErrorCode::Unsupported.exit_code()
-}
-
-/// What a daemon-side command says on Windows.
-#[cfg(not(unix))]
-pub const WINDOWS_DAEMON: &str = "ptyro: on Windows, ptyro is a client of the daemon in WSL. Run \
-    this inside WSL (`wsl -- ptyro …`), or use `ptyro --remote wsl://` from here";
-
-#[cfg(unix)]
 pub fn daemon_start(foreground: bool, spawned: bool, serve: bool) -> i32 {
     if serve {
         // Written before it starts, so the daemon reads it as its first config.
@@ -55,11 +42,15 @@ pub fn daemon_start(foreground: bool, spawned: bool, serve: bool) -> i32 {
             }
         }
     }
+    // Leave the client's session and process group so its terminal closing can't hang us up.
+    // Done before any runtime exists: we never fork an initialized tokio process. (On Windows the
+    // client starts it detached instead.)
+    #[cfg(unix)]
     if spawned {
-        // Leave the client's session and process group so its terminal closing can't hang us
-        // up. Done before any runtime exists: we never fork an initialized tokio process.
         let _ = rustix::process::setsid();
     }
+    #[cfg(not(unix))]
+    let _ = spawned;
     match ptyro_daemon::run(ptyro_daemon::Options { foreground }) {
         Ok(()) => 0,
         Err(e) => {
@@ -104,12 +95,15 @@ pub struct Ctx {
     encoding: Encoding,
     /// `--remote`: the daemon is on another machine (over ssh).
     pub remote: Option<String>,
+    /// This computer's own daemon was asked for (`--remote local`, `client.default_remote =
+    /// local`): on Windows, what lets ptyro start one (WIN5).
+    pub local: bool,
 }
 
 impl Ctx {
     /// For this machine's own daemon (what `ptyro serve` does host operations with).
     pub fn local(paths: Paths) -> Self {
-        Self { paths, encoding: Encoding::MsgPack, remote: None }
+        Self { paths, encoding: Encoding::MsgPack, remote: None, local: true }
     }
 
     fn options(&self, kind: ClientKind, autospawn: bool) -> ConnectOptions {
@@ -118,6 +112,8 @@ impl Ctx {
         o.encoding = self.encoding;
         if self.remote.is_some() {
             o.remote.clone_from(&self.remote);
+        } else if self.local {
+            o.remote = Some(ptyro_client::LOCAL.into());
         }
         o
     }
@@ -161,7 +157,11 @@ async fn dispatch(
     } else {
         crate::winclient::resolve(remote, &paths, discover).await
     };
-    let ctx = Ctx { paths, encoding, remote };
+    // `local` is this computer's own daemon, not a remote one.
+    let local = ptyro_client::is_local(remote.as_deref());
+    let remote = remote.filter(|_| !local);
+    DAEMON_ELSEWHERE.store(remote.is_some(), std::sync::atomic::Ordering::Relaxed);
+    let ctx = Ctx { paths, encoding, remote, local };
     match cmd {
         None if !task.is_empty() => start_task(&ctx, &task.join(" ")).await,
         None => default_action(&ctx).await,
@@ -852,12 +852,19 @@ pub fn client_env() -> BTreeMap<String, String> {
         .collect()
 }
 
+/// Whether the daemon is another computer's (a WSL distro counts): set once, by `dispatch`.
+static DAEMON_ELSEWHERE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// The current directory, as the daemon sees it: here, canonical; on Windows, where the daemon
-/// is WSL's (WIN3), the same folder as the distro names it (`C:\src` is `/mnt/c/src`).
+/// is WSL's (WIN3), the same folder as the distro names it (`C:\src` is `/mnt/c/src`). A native
+/// Windows daemon (WIN5) takes the Windows path as it is.
 pub fn current_dir() -> Result<std::path::PathBuf, Error> {
     let cwd =
         std::env::current_dir().map_err(|e| Error::invalid(format!("current directory: {e}")))?;
     let cwd = cwd.canonicalize().map_err(|e| Error::invalid(format!("{}: {e}", cwd.display())))?;
+    if cfg!(windows) && !DAEMON_ELSEWHERE.load(std::sync::atomic::Ordering::Relaxed) {
+        return Ok(plain_windows_path(&cwd));
+    }
     if cfg!(windows) {
         let shown = cwd.to_string_lossy();
         return ptyro_core::wsl::path_in_distro(&shown, "/mnt/").map(Into::into).ok_or_else(|| {
@@ -868,6 +875,16 @@ pub fn current_dir() -> Result<std::path::PathBuf, Error> {
         });
     }
     Ok(cwd)
+}
+
+/// `canonicalize`'s verbatim form as programs write it: `\\?\C:\src` is `C:\src`, and
+/// `\\?\UNC\server\share` is `\\server\share`.
+fn plain_windows_path(p: &std::path::Path) -> std::path::PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(unc) = s.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{unc}").into();
+    }
+    s.strip_prefix(r"\\?\").map_or_else(|| p.to_path_buf(), Into::into)
 }
 
 /// Ask a yes/no question on the terminal; `false` without one.
@@ -1567,8 +1584,21 @@ async fn machine(ctx: &Ctx, cmd: Option<crate::MachineCmd>) -> Result<i32, Error
     }
 }
 
-/// The handoff images this binary's daemon can take over from; none on Windows (no daemon).
-#[cfg(unix)]
+/// The handoff images this binary's daemon can take over from.
 const HANDOFF_VERSIONS: &[u32] = ptyro_daemon::HANDOFF_VERSIONS;
-#[cfg(not(unix))]
-const HANDOFF_VERSIONS: &[u32] = &[];
+
+#[cfg(test)]
+mod path_tests {
+    use super::plain_windows_path;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn a_verbatim_windows_path_is_written_the_usual_way() {
+        assert_eq!(plain_windows_path(Path::new(r"\\?\C:\src")), PathBuf::from(r"C:\src"));
+        assert_eq!(
+            plain_windows_path(Path::new(r"\\?\UNC\nas\share\x")),
+            PathBuf::from(r"\\nas\share\x")
+        );
+        assert_eq!(plain_windows_path(Path::new("/home/me")), PathBuf::from("/home/me"));
+    }
+}

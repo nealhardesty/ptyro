@@ -51,8 +51,8 @@ struct Cli {
     #[arg(long, global = true, hide = true)]
     json_wire: bool,
     /// Use the daemon on another machine, over ssh: `[ssh://][user@]host[:port]`, or in a WSL
-    /// distro: `wsl://[distro]` (or set PTYRO_REMOTE; `client.default_remote` keeps one). Needs
-    /// ptyro there, and for ssh a key-based login
+    /// distro: `wsl://[distro]`, or `local` for this computer's own (or set PTYRO_REMOTE;
+    /// `client.default_remote` keeps one). Needs ptyro there, and for ssh a key-based login
     #[arg(long, global = true, value_name = "HOST")]
     remote: Option<String>,
     #[command(subcommand)]
@@ -1196,21 +1196,9 @@ fn main() {
         Some(Cmd::Daemon { cmd: DaemonCmd::Start { foreground, spawned, serve } }) => {
             cli::daemon_start(foreground, spawned, serve)
         }
-        #[cfg(unix)]
         Some(Cmd::FakeAgent { args }) => ptyro_testkit::fake_agent::main(&args),
-        #[cfg(all(unix, debug_assertions))]
+        #[cfg(debug_assertions)]
         Some(Cmd::FakeGh { args }) => ptyro_testkit::fake_gh::main(&args),
-        // The pretend agent and gh run in the daemon's sessions, which are WSL's.
-        #[cfg(not(unix))]
-        Some(Cmd::FakeAgent { .. }) => {
-            eprintln!("{}", cli::WINDOWS_DAEMON);
-            2
-        }
-        #[cfg(all(not(unix), debug_assertions))]
-        Some(Cmd::FakeGh { .. }) => {
-            eprintln!("{}", cli::WINDOWS_DAEMON);
-            2
-        }
         // These run inside agents on every hook: no runtime, no config, never a failure.
         Some(Cmd::Hook { adapter, event, args }) => relay::hook(&adapter, &event, &args),
         Some(Cmd::StatuslineRelay) => relay::statusline(),

@@ -49,10 +49,8 @@ time.workspace = true
 toml_edit.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-
-# The daemon side is Unix's (Linux, macOS, WSL2). On Windows, ptyro is a client of the daemon in
-# WSL (ROADMAP WIN3); commands that need a daemon here say so.
-[target.'cfg(unix)'.dependencies]
+# The daemon, on Windows too (WIN5: ConPTY and a named pipe). ptyro.exe still uses the daemon in
+# WSL unless told otherwise (`client.default_remote = local`).
 ptyro-daemon.workspace = true
 ptyro-pty.workspace = true
 ptyro-testkit.workspace = true

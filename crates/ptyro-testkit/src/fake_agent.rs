@@ -16,7 +16,6 @@
 //! | anything else | echoes `you said: …` |
 
 use std::io::{BufRead, Read, Write};
-use std::os::fd::AsFd;
 use std::time::{Duration, Instant};
 
 pub fn main(args: &[String]) -> i32 {
@@ -106,8 +105,8 @@ pub fn main(args: &[String]) -> i32 {
                 let _ = writeln!(out, "{rest}={}", std::env::var(rest).unwrap_or_default());
             }
             "size" => {
-                let size = rustix::termios::tcgetwinsize(std::io::stdout().as_fd())
-                    .map(|w| format!("{}x{}", w.ws_col, w.ws_row))
+                let size = ptyro_pty::console::size()
+                    .map(|(c, r)| format!("{c}x{r}"))
                     .unwrap_or_else(|_| "unknown".into());
                 let _ = writeln!(out, "size {size}");
             }
@@ -142,12 +141,8 @@ pub fn main(args: &[String]) -> i32 {
 
 /// Probe OSC 7501 then DA1 in raw mode; supported iff the 7501 reply arrives before DA1's.
 fn probe_psp(stdin: &std::io::Stdin) -> bool {
-    use rustix::termios::{self, LocalModes, OptionalActions};
-    let fd = stdin.as_fd();
-    let Ok(saved) = termios::tcgetattr(fd) else { return false };
-    let mut raw = saved.clone();
-    raw.local_modes.remove(LocalModes::ICANON | LocalModes::ECHO);
-    if termios::tcsetattr(fd, OptionalActions::Now, &raw).is_err() {
+    let raw = ptyro_pty::console::RawInput::new();
+    if !raw.is_raw() {
         return false;
     }
     let mut out = std::io::stdout();
@@ -158,9 +153,7 @@ fn probe_psp(stdin: &std::io::Stdin) -> bool {
     let mut buf = [0u8; 256];
     let mut lock = stdin.lock();
     while start.elapsed() < Duration::from_secs(2) {
-        let mut fds = [rustix::event::PollFd::new(&fd, rustix::event::PollFlags::IN)];
-        let timeout = rustix::event::Timespec { tv_sec: 0, tv_nsec: 100_000_000 };
-        if rustix::event::poll(&mut fds, Some(&timeout)).unwrap_or(0) == 0 {
+        if !ptyro_pty::console::input_ready(Duration::from_millis(100)) {
             continue;
         }
         let Ok(n) = lock.read(&mut buf) else { break };
@@ -173,7 +166,7 @@ fn probe_psp(stdin: &std::io::Stdin) -> bool {
         }
     }
     drop(lock);
-    let _ = termios::tcsetattr(fd, OptionalActions::Now, &saved);
+    drop(raw);
     match (find(&reply, b"\x1b]7501;?"), find(&reply, b"\x1b[?")) {
         (Some(p), Some(d)) => p < d,
         (Some(_), None) => true,

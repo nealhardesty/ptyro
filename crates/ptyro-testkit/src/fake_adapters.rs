@@ -42,7 +42,6 @@
 use ptyro_core::sync::MutexExt;
 use std::collections::BTreeMap;
 use std::io::{BufRead, Read, Write};
-use std::os::fd::AsFd;
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -484,15 +483,8 @@ fn run_hooks(cmds: &[String], payload: &Value) -> Option<Value> {
 /// dialog while the hook runs; verified on 2.1.305). Polls stdin so no reader is left behind to
 /// eat the next prompt.
 fn key_or_decision(rx: &std::sync::mpsc::Receiver<Option<Value>>) -> Result<u8, bool> {
-    use rustix::termios::{self, LocalModes, OptionalActions};
     let stdin = std::io::stdin();
-    let fd = stdin.as_fd();
-    let saved = termios::tcgetattr(fd).ok();
-    if let Some(s) = &saved {
-        let mut raw = s.clone();
-        raw.local_modes.remove(LocalModes::ICANON | LocalModes::ECHO);
-        let _ = termios::tcsetattr(fd, OptionalActions::Now, &raw);
-    }
+    let raw = ptyro_pty::console::RawInput::new();
     let mut hook_done = false;
     let r = loop {
         if !hook_done {
@@ -506,35 +498,21 @@ fn key_or_decision(rx: &std::sync::mpsc::Receiver<Option<Value>>) -> Result<u8, 
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
-        let mut pfd = [rustix::event::PollFd::new(&fd, rustix::event::PollFlags::IN)];
-        let timeout = rustix::event::Timespec { tv_sec: 0, tv_nsec: 50_000_000 };
-        if rustix::event::poll(&mut pfd, Some(&timeout)).unwrap_or(0) > 0 {
+        if ptyro_pty::console::input_ready(std::time::Duration::from_millis(50)) {
             let mut b = [0u8; 1];
             let _ = stdin.lock().read(&mut b);
             break Ok(b[0]);
         }
     };
-    if let Some(s) = &saved {
-        let _ = termios::tcsetattr(fd, OptionalActions::Now, s);
-    }
+    drop(raw);
     r
 }
 
 fn read_key() -> u8 {
-    use rustix::termios::{self, LocalModes, OptionalActions};
     let stdin = std::io::stdin();
-    let fd = stdin.as_fd();
-    let saved = termios::tcgetattr(fd).ok();
-    if let Some(s) = &saved {
-        let mut raw = s.clone();
-        raw.local_modes.remove(LocalModes::ICANON | LocalModes::ECHO);
-        let _ = termios::tcsetattr(fd, OptionalActions::Now, &raw);
-    }
+    let _raw = ptyro_pty::console::RawInput::new();
     let mut b = [0u8; 1];
     let _ = stdin.lock().read(&mut b);
-    if let Some(s) = &saved {
-        let _ = termios::tcsetattr(fd, OptionalActions::Now, s);
-    }
     b[0]
 }
 

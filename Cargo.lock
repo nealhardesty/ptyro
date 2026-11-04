@@ -2373,6 +2373,7 @@ dependencies = [
  "futures",
  "ptyro-core",
  "ptyro-protocol",
+ "ptyro-pty",
  "serde",
  "tempfile",
  "thiserror 2.0.21",
