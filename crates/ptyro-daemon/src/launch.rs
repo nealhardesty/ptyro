@@ -103,7 +103,7 @@ impl Daemon {
                 .ok_or_else(|| Error::missing("project", &wt.project))?;
             return Ok(Some((wt, p)));
         }
-        let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+        let cwd = ptyro_core::os::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
         let reg = self.registry.locked();
         let ready = reg.worktrees.iter().filter(|w| w.state == WorktreeState::Ready);
         let best = crate::registry::innermost(ready, &cwd);
@@ -367,6 +367,16 @@ impl Daemon {
         let dir = self.paths.data.join("integrations").join("shell");
         let zdotdir = env.iter().find(|(k, _)| k == "ZDOTDIR").map(|(_, v)| v.to_string_lossy());
         let i = ptyro_core::shell::integrate(argv, &dir, zdotdir.as_deref())?;
+        // Every shell reads what's in it: a folder others can change is made the user's alone.
+        if let Some(who) = ptyro_pty::acl::writable_by_others(&dir) {
+            match ptyro_pty::acl::make_private(&dir) {
+                Ok(()) => tracing::info!(
+                    "{} could be changed by {who}: it is yours alone now",
+                    dir.display()
+                ),
+                Err(e) => tracing::warn!("{} can be changed by {who}: {e}", dir.display()),
+            }
+        }
         for (path, content) in &i.files {
             if std::fs::read_to_string(path).ok().as_deref() == Some(content.as_str()) {
                 continue;

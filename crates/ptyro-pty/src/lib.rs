@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use ptyro_core::TermSize;
 
+pub mod acl;
 #[cfg(any(windows, test))]
 mod cmdline;
 pub mod console;
@@ -23,17 +24,18 @@ mod ports;
 mod probe;
 #[cfg(unix)]
 mod unix;
+#[cfg(windows)]
+pub mod winproc;
 #[cfg(unix)]
 pub use unix::*;
 #[cfg(windows)]
 mod windows;
 pub use ports::listening_ports;
-#[cfg(not(windows))]
-pub use probe::others_in_group;
 pub use probe::{
-    cwd_of, exec_env_var, local_datetime, local_time_hm, local_time_hm_at, parent_pid,
-    process_name, session_leader,
+    cwd_of, exec_env_var, local_datetime, local_time_hm, local_time_hm_at, parent_pid, process_name,
 };
+#[cfg(not(windows))]
+pub use probe::{others_in_group, session_leader};
 #[cfg(windows)]
 pub use windows::*;
 

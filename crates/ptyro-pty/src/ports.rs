@@ -1,5 +1,6 @@
 //! Which TCP ports a session's processes listen on (SPEC §10.7): the session leader and all its
-//! descendants. Linux reads `/proc`; macOS asks `lsof`. One scan answers for every session.
+//! descendants. Linux reads `/proc`; macOS asks `lsof`; Windows its process snapshot and
+//! `GetExtendedTcpTable` (WIN7). One scan answers for every session.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -139,12 +140,24 @@ fn ports_by_pid(pids: &[u32]) -> HashMap<u32, Vec<u16>> {
     out
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+/// Windows (WIN7): the process snapshot's parents.
+#[cfg(windows)]
+fn process_tree() -> HashMap<u32, Vec<u32>> {
+    crate::winproc::children(&crate::winproc::snapshot())
+}
+
+/// Windows (WIN7): the listening-socket tables.
+#[cfg(windows)]
+fn ports_by_pid(pids: &[u32]) -> HashMap<u32, Vec<u16>> {
+    crate::winproc::listening(pids)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn process_tree() -> HashMap<u32, Vec<u32>> {
     HashMap::new()
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn ports_by_pid(_pids: &[u32]) -> HashMap<u32, Vec<u16>> {
     HashMap::new()
 }
@@ -160,7 +173,7 @@ mod tests {
         let me = std::process::id();
         // Our test process is its own "leader" here.
         let found = listening_ports(&[me]);
-        if cfg!(any(target_os = "linux", target_os = "macos")) {
+        if cfg!(any(target_os = "linux", target_os = "macos", windows)) {
             assert!(found[&me].contains(&port), "{found:?} lacks {port}");
         }
         assert!(listening_ports(&[]).is_empty());

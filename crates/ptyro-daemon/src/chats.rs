@@ -168,7 +168,7 @@ impl Chats {
         let db = ChatDb::open(path).map_err(|e| {
             tracing::error!("chat.db: {e}");
             let file = path.display().to_string();
-            // In use: by whom, when that can be told (`lsof`).
+            // In use: by whom, when that can be told (`lsof`; Restart Manager on Windows).
             let who = if e.busy() { holders(path) } else { Vec::new() };
             if !who.is_empty() {
                 let who: Vec<String> = who.iter().map(|(pid, name)| format!("{name} (pid {pid})")).collect();
@@ -2987,7 +2987,15 @@ fn human_bytes(n: u64) -> String {
     }
 }
 
+/// The programs that have `path` open, but this one, as Restart Manager tells (WIN7).
+#[cfg(windows)]
+fn holders(path: &std::path::Path) -> Vec<(u32, String)> {
+    let me = std::process::id();
+    ptyro_pty::winproc::holders(path).into_iter().filter(|(p, _)| *p != me).collect()
+}
+
 /// The programs that have `path` open, but this one, as `lsof` tells (none when it can't).
+#[cfg(not(windows))]
 fn holders(path: &std::path::Path) -> Vec<(u32, String)> {
     let Ok(o) = std::process::Command::new("lsof").arg("-Fpc").arg("--").arg(path).output() else {
         return Vec::new();
@@ -2996,6 +3004,7 @@ fn holders(path: &std::path::Path) -> Vec<(u32, String)> {
 }
 
 /// `lsof -Fpc` output (`p<pid>` then `c<command>` lines) as (pid, command), `me` left out.
+#[cfg_attr(windows, allow(dead_code))] // Windows asks Restart Manager; the parser's tests run there too
 fn parse_lsof(out: &str, me: u32) -> Vec<(u32, String)> {
     let mut found: Vec<(u32, String)> = Vec::new();
     for l in out.lines() {

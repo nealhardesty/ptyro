@@ -558,7 +558,15 @@ pub(crate) fn write_private(path: &std::path::Path, text: &str) -> Result<(), Er
         ptyro_core::os::create_private_dirs(dir)
             .map_err(|e| Error::internal(format!("{}: {e}", dir.display())))?;
     }
-    write_atomic(path, text, 0o600)
+    write_atomic(path, text, 0o600)?;
+    // On Windows the file takes its folder's access list: one wider than the user (a folder
+    // shared on purpose, or copied in) is narrowed to the user, SYSTEM and Administrators.
+    #[cfg(windows)]
+    if ptyro_pty::acl::readable_by_others(path).is_some() {
+        ptyro_pty::acl::make_private(path)
+            .map_err(|e| Error::internal(format!("{}: {e}", path.display())))?;
+    }
+    Ok(())
 }
 
 /// Replace `path` with `text` whole: written to a uniquely named file beside it (so two writers
@@ -629,10 +637,10 @@ pub(crate) fn with_lock<T>(path: &std::path::Path, f: impl FnOnce() -> T) -> T {
     out
 }
 
-/// The file's mode when group or others can read or write it.
-pub(crate) fn too_open(path: &std::path::Path) -> Option<u32> {
-    let mode = ptyro_core::os::mode(&std::fs::metadata(path).ok()?)? & 0o777;
-    (mode & 0o066 != 0).then_some(mode)
+/// Who besides its owner can read the file: its mode (`644`) on Unix when group or others can
+/// read or write it; on Windows the names its access list lets read (WIN7).
+pub(crate) fn too_open(path: &std::path::Path) -> Option<String> {
+    ptyro_pty::acl::readable_by_others(path)
 }
 
 /// The editor's own way to open a file at a line: `+N` for the vi family, nano and emacs.
@@ -813,7 +821,7 @@ mod tests {
         assert_eq!(too_open(&path), None);
         // An older, world-readable file (and a stale temp file) get tightened.
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert_eq!(too_open(&path), Some(0o644));
+        assert_eq!(too_open(&path).as_deref(), Some("644"));
         let tmp = path.with_extension("toml.tmp");
         std::fs::write(&tmp, "").unwrap();
         std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o666)).unwrap();

@@ -400,9 +400,14 @@ impl tokio::io::AsyncWrite for Writer {
     }
 }
 
-/// The pseudoconsole, for the probes (WIN7 reads its modes and process list through it).
+/// The pseudoconsole and its session's program, for the probes (the foreground program is
+/// found in the program's job).
 #[derive(Clone)]
-pub struct Master(#[allow(dead_code)] Arc<Pty>);
+pub struct Master {
+    /// Kept so the console outlives its readers and writer as long as the session holds this.
+    _pty: Arc<Pty>,
+    pid: u32,
+}
 
 impl std::fmt::Debug for Master {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -548,7 +553,7 @@ pub fn spawn(req: SpawnRequest<'_>) -> io::Result<PtyChild> {
         child: Child { pid, proc },
         reader: Reader(tokio::fs::File::from_std(output)),
         writer: Writer { file: tokio::fs::File::from_std(input), pty: pty.clone(), pending: None },
-        master: Master(pty),
+        master: Master { _pty: pty, pid },
     })
 }
 
@@ -719,9 +724,52 @@ pub fn others_in_group(pgid: u32) -> usize {
     active.saturating_sub(usize::from(proc.running()))
 }
 
-/// Unknown on Windows until WIN7 (the console's process list).
-pub fn foreground_pid(_: &Master) -> Option<u32> {
-    None
+/// The program in the session's foreground (UX1.4: an agent started by hand in a shell): the
+/// newest of the session program's children in its job, through a `cmd.exe` that only runs a
+/// batch shim (`claude.cmd`, npm's); the program itself when it has none.
+pub fn foreground_pid(master: &Master) -> Option<u32> {
+    let proc = proc_of(master.pid)?;
+    let in_job: std::collections::HashSet<u32> =
+        crate::winproc::job_pids(proc.job.0).into_iter().collect();
+    if !in_job.contains(&master.pid) {
+        return None;
+    }
+    let snap = crate::winproc::snapshot();
+    let newest_child = |of: u32| {
+        snap.iter()
+            .filter(|e| e.parent == of && in_job.contains(&e.pid))
+            .max_by_key(|e| crate::winproc::started(e.pid).unwrap_or(0))
+            .cloned()
+    };
+    let Some(child) = newest_child(master.pid) else { return Some(master.pid) };
+    if child.exe.eq_ignore_ascii_case("cmd.exe")
+        && let Some(grandchild) = newest_child(child.pid)
+    {
+        return Some(grandchild.pid);
+    }
+    Some(child.pid)
+}
+
+/// The session whose job holds `pid` (its program's pid): what a POSIX session says on Unix.
+/// A process can't leave a job ptyro made, so a detached or reparented descendant is placed
+/// too, and a reused pid never is (it is asked about the process, not the number's history).
+pub fn session_leader(pid: u32) -> Option<u32> {
+    use windows_sys::Win32::System::JobObjects::IsProcessInJob;
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    // SAFETY: opened for query only, closed below; IsProcessInJob writes `inside`.
+    let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if h.is_null() {
+        return None;
+    }
+    let h = Owned(h);
+    let all: Vec<(u32, Arc<Proc>)> =
+        procs().locked().iter().map(|(p, x)| (*p, x.clone())).collect();
+    all.into_iter().find_map(|(leader, proc)| {
+        let mut inside = 0;
+        // SAFETY: both handles are open.
+        let ok = unsafe { IsProcessInJob(h.0, proc.job.0, &mut inside) } != 0;
+        (ok && inside != 0).then_some(leader)
+    })
 }
 
 /// How a child that was waited for ended: (exit code, no signal on Windows).
@@ -876,6 +924,44 @@ mod tests {
         let out = read_until(&mut c.reader, "-after").await;
         let (b, o, a) = (out.find("before-"), out.find("\x1b]9;ptyro-osc"), out.find("-after"));
         assert!(b < o && o < a, "out of order: {out:?}");
+    }
+
+    #[tokio::test]
+    async fn the_foreground_program_its_session_and_its_ports_are_known() {
+        let mut c = start(&["cmd.exe", "/d", "/k", "prompt $G"]);
+        read_until(&mut c.reader, ">").await;
+        assert_eq!(foreground_pid(&c.master), Some(c.pid), "the shell, with nothing running");
+        // A program run from the shell is the foreground one, named by its image.
+        c.writer.write_all(b"ping -n 30 127.0.0.1\r").await.unwrap();
+        // Its own output (the shell echoes the line typed before ping even starts).
+        read_until(&mut c.reader, "Pinging").await;
+        let fg = foreground_pid(&c.master).unwrap();
+        assert_ne!(fg, c.pid);
+        assert_eq!(crate::process_name(fg).as_deref(), Some("ping"));
+        assert!(crate::cwd_of(fg).is_some_and(|d| d.is_dir()), "{:?}", crate::cwd_of(fg));
+        // Placed in its session by the job, not by its parent.
+        assert_eq!(session_leader(fg), Some(c.pid));
+        assert_eq!(session_leader(std::process::id()), None, "this test runs in no session");
+        signal_group(c.pid, Signal::KILL).unwrap();
+        // A listener inside a session is that session's port.
+        let mut p = start(&[
+            "powershell.exe",
+            "-NoProfile",
+            "-Command",
+            "$l = [System.Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0); $l.Start(); Write-Output ('port=' + $l.LocalEndpoint.Port + '='); Start-Sleep 30",
+        ]);
+        let out = read_until(&mut p.reader, "=\r").await;
+        let port: u16 = out
+            .split("port=")
+            .nth(1)
+            .and_then(|s| s.split('=').next())
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let ports = crate::listening_ports(&[p.pid]);
+        assert!(ports[&p.pid].contains(&port), "{ports:?} lacks {port}");
+        signal_group(p.pid, Signal::KILL).unwrap();
     }
 
     #[test]

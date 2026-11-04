@@ -28,9 +28,8 @@ rustix.workspace = true
 tokio.workspace = true
 unicode-width.workspace = true
 
-# Local time: libc's localtime_r (in ptyro-pty, the one crate allowed `unsafe`) on Unix; on Windows,
-# with no PTYs to have, the time crate's local offset, which is sound there (WIN3).
-[target.'cfg(unix)'.dependencies]
+# ptyro-pty, the one crate allowed `unsafe`: local time, and making a file private (an access
+# list on Windows, WIN7). On Windows the clock uses the time crate's local offset (WIN3).
 ptyro-pty.workspace = true
 
 [target.'cfg(windows)'.dependencies]

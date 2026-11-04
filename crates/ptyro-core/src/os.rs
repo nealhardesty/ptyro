@@ -11,7 +11,7 @@
 //!   uid is the one that counts).
 
 use std::fs::OpenOptions;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Variables a client may pass along with a spawn so sessions see the *client's* SSH agent and
 /// display, like tmux's `update-environment` (SPEC §5.1). Here, not in `ptyro-pty`, because a
@@ -151,23 +151,130 @@ pub fn private_dir(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// A symbolic link at `link` to `target`. On Windows a directory link or a file link, as
-/// `target` is; Windows makes one only with Developer Mode on or as an administrator, and
-/// otherwise says so (WIN7 falls back to a junction or a copy).
-pub fn symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+/// The null device, as a path a program is given (`core.hooksPath`: nothing is ever found
+/// under it): `/dev/null`, and `NUL` on Windows (WIN7).
+pub const DEV_NULL: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
+
+/// `path` as it is on disk: [`std::fs::canonicalize`], and on Windows without the `\\?\`
+/// prefix it puts in front (`\\?\C:\src` is `C:\src`, `\\?\UNC\nas\x` is `\\nas\x`):
+/// what people and other programs write, and what ptyro shows (WIN7). The standard library adds
+/// the prefix back itself where a path is too long for the plain form.
+pub fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
+    let c = std::fs::canonicalize(path)?;
+    Ok(if cfg!(windows) { plain(&c) } else { c })
+}
+
+/// A Windows path without its verbatim prefix (unchanged anywhere else, and when it has none).
+pub fn plain(p: &Path) -> PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(unc) = s.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{unc}"));
+    }
+    match s.strip_prefix(r"\\?\") {
+        // Only a drive path: `\\?\Volume{…}` has no plain form.
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+        _ => p.to_path_buf(),
+    }
+}
+
+/// Whether `path` is `base` or inside it, component by component; on Windows without regard
+/// to case (`C:\Src\app` is inside `c:\src`) or to which slash, as Windows reads paths.
+pub fn path_starts_with(path: &Path, base: &Path) -> bool {
+    if !cfg!(windows) {
+        return path.starts_with(base);
+    }
+    let words = |p: &Path| -> Vec<String> {
+        p.to_string_lossy()
+            .split(['\\', '/'])
+            .filter(|w| !w.is_empty())
+            .map(str::to_lowercase)
+            .collect()
+    };
+    let (p, b) = (words(&plain(path)), words(&plain(base)));
+    p.len() >= b.len() && p[..b.len()] == b[..]
+}
+
+/// Whether two paths name the same place, as [`path_starts_with`] compares.
+pub fn same_path(a: &Path, b: &Path) -> bool {
+    path_starts_with(a, b) && path_starts_with(b, a)
+}
+
+/// How [`symlink`] made `link`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Linked {
+    Symlink,
+    /// Windows, a folder, without the right to make symbolic links: a junction (`mklink /J`).
+    Junction,
+    /// Windows, a file, without that right: a hard link (the same file, on the same drive).
+    HardLink,
+    /// Windows, a file on another drive: a copy (changes to one don't reach the other).
+    Copy,
+}
+
+impl Linked {
+    /// For notes: "linked", "linked (a junction)", "copied".
+    pub fn words(self) -> &'static str {
+        match self {
+            Self::Symlink => "linked",
+            Self::Junction => "linked (a junction)",
+            Self::HardLink => "linked (a hard link)",
+            Self::Copy => "copied (this computer can't link it)",
+        }
+    }
+}
+
+/// A link at `link` to `target`. Unix: a symbolic link. Windows: a symbolic link when this user
+/// may make one (Developer Mode, or an administrator); otherwise a junction for a folder, and
+/// for a file a hard link, or a copy across drives (WIN7). It says which.
+pub fn symlink(target: &Path, link: &Path) -> std::io::Result<Linked> {
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(target, link)
+        std::os::unix::fs::symlink(target, link).map(|()| Linked::Symlink)
     }
     #[cfg(windows)]
     {
         // A relative target is relative to the link's own folder, as the link will read it.
         let seen = link.parent().map_or_else(|| target.to_path_buf(), |d| d.join(target));
-        if seen.is_dir() {
+        let made = if seen.is_dir() {
             std::os::windows::fs::symlink_dir(target, link)
         } else {
             std::os::windows::fs::symlink_file(target, link)
+        };
+        const ERROR_PRIVILEGE_NOT_HELD: i32 = 1314;
+        match made {
+            Ok(()) => Ok(Linked::Symlink),
+            Err(e) if e.raw_os_error() == Some(ERROR_PRIVILEGE_NOT_HELD) => {
+                if seen.is_dir() {
+                    junction(&seen, link).map(|()| Linked::Junction)
+                } else if std::fs::hard_link(&seen, link).is_ok() {
+                    Ok(Linked::HardLink)
+                } else {
+                    std::fs::copy(&seen, link).map(|_| Linked::Copy)
+                }
+            }
+            Err(e) => Err(e),
         }
+    }
+}
+
+/// A junction at `link` to the folder `target` (made absolute: a junction holds a full path),
+/// with cmd's `mklink /J`, which needs no privilege.
+#[cfg(windows)]
+fn junction(target: &Path, link: &Path) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    let target = std::path::absolute(target)?;
+    let line = format!("mklink /J \"{}\" \"{}\"", link.display(), target.display());
+    let out = std::process::Command::new("cmd.exe")
+        .raw_arg(format!("/d /s /c \"{line}\""))
+        .stdin(std::process::Stdio::null())
+        .output()?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "mklink /J: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )))
     }
 }
 
@@ -264,6 +371,43 @@ pub fn uid() -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn windows_paths_lose_their_verbatim_prefix_and_compare_without_case() {
+        assert_eq!(plain(Path::new(r"\\?\C:\src\app")), PathBuf::from(r"C:\src\app"));
+        assert_eq!(plain(Path::new(r"\\?\UNC\nas\share")), PathBuf::from(r"\\nas\share"));
+        assert_eq!(plain(Path::new(r"\\?\Volume{x}\a")), PathBuf::from(r"\\?\Volume{x}\a"));
+        assert_eq!(plain(Path::new("/home/me")), PathBuf::from("/home/me"));
+        if cfg!(windows) {
+            assert!(path_starts_with(Path::new(r"C:\Src\App\x"), Path::new(r"c:\src\app")));
+            assert!(path_starts_with(Path::new("C:/src/app"), Path::new(r"\\?\C:\SRC")));
+            assert!(!path_starts_with(Path::new(r"C:\src\application"), Path::new(r"C:\src\app")));
+            assert!(same_path(Path::new(r"C:\src\"), Path::new("c:/SRC")));
+        } else {
+            assert!(path_starts_with(Path::new("/src/app/x"), Path::new("/src/app")));
+            assert!(!path_starts_with(Path::new("/Src/app"), Path::new("/src")), "Unix keeps case");
+        }
+    }
+
+    /// Whatever this user may make (a symbolic link with Developer Mode; else a junction or a
+    /// hard link), what's linked is reachable through it, and it says which it made.
+    #[cfg(windows)]
+    #[test]
+    fn a_link_is_made_with_whatever_windows_allows() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("node_modules");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("x.js"), "x").unwrap();
+        let how = symlink(&dir, &d.path().join("shared")).unwrap();
+        assert!(matches!(how, Linked::Symlink | Linked::Junction), "{how:?}");
+        assert_eq!(std::fs::read_to_string(d.path().join("shared").join("x.js")).unwrap(), "x");
+        let file = d.path().join(".env");
+        std::fs::write(&file, "A=1").unwrap();
+        let how = symlink(&file, &d.path().join("env-link")).unwrap();
+        assert!(matches!(how, Linked::Symlink | Linked::HardLink), "{how:?}");
+        assert_eq!(std::fs::read_to_string(d.path().join("env-link")).unwrap(), "A=1");
+    }
+
     use super::*;
 
     #[test]

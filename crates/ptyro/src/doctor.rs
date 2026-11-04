@@ -96,16 +96,35 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Repor
     let config = match Config::load(&config_path) {
         Ok(c) => {
             r.add("ptyro", "config", Level::Ok, format!("{} is valid", config_path.display()));
-            if let Some(mode) = crate::config::too_open(&config_path) {
-                r.add(
-                    "ptyro",
-                    "config mode",
-                    Level::Warn,
+            if let Some(who) = crate::config::too_open(&config_path) {
+                let text = if cfg!(windows) {
                     format!(
-                        "{} is {mode:03o}: other users can read it, and it can hold secrets \
+                        "{} is readable by {who}: other users of this computer can read it, and it \
+                         can hold secrets",
+                        config_path.display()
+                    )
+                } else {
+                    format!(
+                        "{} is {who}: other users can read it, and it can hold secrets \
                          (`chmod 600 {}`)",
                         config_path.display(),
                         config_path.display()
+                    )
+                };
+                r.add("ptyro", "config mode", Level::Warn, text);
+            }
+            // Every shell ptyro starts reads its integration (SPEC §8.7): a folder others can
+            // write to is one they could slip a line into, until ptyro writes it again.
+            let shell = ctx.paths.data.join("integrations").join("shell");
+            if let Some(who) = ptyro_pty::acl::writable_by_others(&shell) {
+                r.add(
+                    "ptyro",
+                    "integrations",
+                    Level::Warn,
+                    format!(
+                        "{} can be changed by {who}: the shells ptyro starts read what's in it. \
+                         The daemon makes it yours alone the next time it starts a shell",
+                        shell.display()
                     ),
                 );
             }

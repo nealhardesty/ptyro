@@ -82,9 +82,12 @@ pub fn suggested_cli(c: &Check) -> Option<Vec<String>> {
     (!words.is_empty() && !words.iter().any(|w| w.starts_with('<'))).then_some(words)
 }
 
-/// The path in "`<path> is 644: …`" (the doctor's wording): everything before the mode, so a
-/// path with a space in it stays whole.
+/// The path in "`<path> is 644: …`" (the doctor's wording; on Windows "`<path> is readable by
+/// Everyone: …`"): everything before the mode, so a path with a space in it stays whole.
 fn private_path(text: &str) -> Option<&str> {
+    if let Some(i) = text.find(" is readable by ") {
+        return Some(&text[..i]);
+    }
     text.rmatch_indices(" is ").find_map(|(i, _)| {
         let mode = &text[i + 4..];
         (mode.len() >= 4
@@ -306,10 +309,11 @@ impl App {
                     self.toast_err(format!("{} isn't a file I can make private", path.display()));
                     return;
                 }
-                match ptyro_core::os::make_private(&path) {
+                match ptyro_pty::acl::make_private(&path) {
                     Ok(()) => {
                         self.health.findings.remove(i);
-                        self.toast(format!("{} is private now (600)", path.display()));
+                        let how = if cfg!(windows) { "only you can read it" } else { "600" };
+                        self.toast(format!("{} is private now ({how})", path.display()));
                     }
                     Err(e) => self.toast_err(format!("{}: {e}", path.display())),
                 }
@@ -425,6 +429,18 @@ mod tests {
             finding(&check("ptyro", "config mode", "warn", "/Users/John Smith/c.toml is 644: …"))
                 .unwrap();
         assert_eq!(spaced.fix, Some(Fix::Private("/Users/John Smith/c.toml".into())));
+        // Windows says who can read it (an access list, WIN7).
+        let win = finding(&check(
+            "ptyro",
+            "config mode",
+            "warn",
+            r"C:\Users\Jo Smith\AppData\Roaming\ptyro\config.toml is readable by Everyone, Users: …",
+        ))
+        .unwrap();
+        assert_eq!(
+            win.fix,
+            Some(Fix::Private(r"C:\Users\Jo Smith\AppData\Roaming\ptyro\config.toml".into()))
+        );
         // A placeholder it can't fill: no fix rather than a wrong one.
         assert!(suggested_cli(&check("x", "y", "warn", "run `ptyro thing <name>`")).is_none());
     }

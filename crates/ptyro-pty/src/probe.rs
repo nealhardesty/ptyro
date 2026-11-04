@@ -126,12 +126,21 @@ pub fn parent_pid(pid: u32) -> Option<u32> {
     (n == size).then_some(info.pbi_ppid)
 }
 
+/// Not asked on Windows: a parent's pid can belong to another process by the time it is read
+/// (Windows reuses them freely), and which session a process runs in is its Job Object's to say
+/// (`session_leader`).
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn parent_pid(_pid: u32) -> Option<u32> {
     None
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+/// Windows: the image's stem, or the script an interpreter runs (WIN7).
+#[cfg(windows)]
+fn kernel_name(pid: u32) -> Option<String> {
+    crate::winproc::name(pid)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn kernel_name(_pid: u32) -> Option<String> {
     None
 }
@@ -141,7 +150,13 @@ fn argv0(_pid: u32) -> Option<String> {
     None
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+/// Windows: from the process's PEB (WIN7).
+#[cfg(windows)]
+pub fn cwd_of(pid: u32) -> Option<PathBuf> {
+    crate::winproc::cwd(pid)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 pub fn cwd_of(_pid: u32) -> Option<PathBuf> {
     None
 }
@@ -155,7 +170,7 @@ pub fn session_leader(pid: u32) -> Option<u32> {
     rustix::process::getsid(Some(pid)).ok().map(|p| p.as_raw_nonzero().get() as u32)
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub fn session_leader(_pid: u32) -> Option<u32> {
     None
 }

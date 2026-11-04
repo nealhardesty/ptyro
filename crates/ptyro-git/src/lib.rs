@@ -160,8 +160,8 @@ const TOUCHES_CONTENT: &[&str] = &[
 /// The same directory, whatever the spelling (symlinks, `..`, a trailing slash).
 fn same_path(a: &Path, b: &Path) -> bool {
     a == b
-        || match (a.canonicalize(), b.canonicalize()) {
-            (Ok(a), Ok(b)) => a == b,
+        || match (ptyro_core::os::canonicalize(a), ptyro_core::os::canonicalize(b)) {
+            (Ok(a), Ok(b)) => ptyro_core::os::same_path(&a, &b),
             _ => false,
         }
 }
@@ -237,7 +237,8 @@ impl Git {
         let mut c = Command::new("git");
         c.arg("-C").arg(dir).args(["-c", "core.fsmonitor=false"]);
         if !hooks {
-            c.args(["-c", "core.hooksPath=/dev/null", "-c", "diff.external="]);
+            let hooks = format!("core.hooksPath={}", ptyro_core::os::DEV_NULL);
+            c.args(["-c", hooks.as_str(), "-c", "diff.external="]);
             // Filters, merge drivers and diff converters are commands the repository's config
             // names and its `.gitattributes` selects: both are files an agent can write.
             if args.first().is_some_and(|a| TOUCHES_CONTENT.contains(a)) {

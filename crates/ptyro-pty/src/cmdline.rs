@@ -154,6 +154,92 @@ fn quote_batch_arg(arg: &str, out: &mut String) -> io::Result<()> {
     Ok(())
 }
 
+/// A command line split into its arguments by the MSVC rules (`CommandLineToArgvW`'s, which
+/// [`quote_arg`] writes for): the program's name ends at the first space or tab unless quoted,
+/// then backslashes are literal except before a quote, `2n` of them and a quote are `n` and an
+/// opening or closing quote, `2n+1` and a quote are `n` and a literal `"`.
+pub fn split(line: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut chars = line.chars().peekable();
+    // The program: no backslash rules, a quote just toggles.
+    let mut prog = String::new();
+    let mut quoted = false;
+    while let Some(&c) = chars.peek() {
+        if !quoted && (c == ' ' || c == '\t') {
+            break;
+        }
+        chars.next();
+        if c == '"' {
+            quoted = !quoted;
+        } else {
+            prog.push(c);
+        }
+    }
+    args.push(prog);
+    loop {
+        while chars.peek().is_some_and(|c| *c == ' ' || *c == '\t') {
+            chars.next();
+        }
+        if chars.peek().is_none() {
+            return args;
+        }
+        let mut arg = String::new();
+        let mut quoted = false;
+        loop {
+            match chars.peek().copied() {
+                None => break,
+                Some(' ' | '\t') if !quoted => break,
+                Some('\\') => {
+                    let mut n = 0;
+                    while chars.peek() == Some(&'\\') {
+                        chars.next();
+                        n += 1;
+                    }
+                    if chars.peek() == Some(&'"') {
+                        arg.extend(std::iter::repeat_n('\\', n / 2));
+                        if n % 2 == 1 {
+                            chars.next();
+                            arg.push('"');
+                        }
+                    } else {
+                        arg.extend(std::iter::repeat_n('\\', n));
+                    }
+                }
+                Some('"') => {
+                    chars.next();
+                    // `""` inside quotes is a literal quote (the CRT's rule).
+                    if quoted && chars.peek() == Some(&'"') {
+                        chars.next();
+                        arg.push('"');
+                    } else {
+                        quoted = !quoted;
+                    }
+                }
+                Some(c) => {
+                    chars.next();
+                    arg.push(c);
+                }
+            }
+        }
+        args.push(arg);
+    }
+}
+
+/// The script an interpreter's command line runs, as a name: its file's stem, or for a
+/// package's generic `cli.js`/`index.js`, the folder it's in (`node …\codex\bin\codex.js` is
+/// `codex`; `node …\claude-code\cli.js` is `claude-code`).
+pub fn script_name(line: &str) -> Option<String> {
+    let args = split(line);
+    let script = args.iter().skip(1).find(|a| !a.starts_with('-'))?;
+    let mut parts = script.rsplit(['\\', '/']);
+    let file = parts.next()?;
+    let stem = file.rsplit_once('.').map_or(file, |(s, _)| s);
+    if ["cli", "index", "main", "bin", "run"].contains(&stem.to_ascii_lowercase().as_str()) {
+        return parts.next().filter(|d| !d.is_empty()).map(str::to_owned);
+    }
+    (!stem.is_empty()).then(|| stem.to_owned())
+}
+
 /// The environment block `CreateProcessW` takes: `K=V` pairs in UTF-16, each NUL-ended, sorted
 /// by name without regard to case (as Windows keeps it), and a final NUL.
 pub fn env_block(env: &[(std::ffi::OsString, std::ffi::OsString)]) -> Vec<u16> {
@@ -206,6 +292,39 @@ mod tests {
         assert_eq!(q(r"C:\my dir\"), r#""C:\my dir\\""#);
         assert_eq!(q(r#"a\"b"#), r#""a\\\"b""#);
         assert_eq!(q(r"a\\b c"), r#""a\\b c""#);
+    }
+
+    #[test]
+    fn a_command_line_splits_back_into_what_was_quoted() {
+        let argv =
+            ["plain", "", "a b", r#"say "hi""#, r"C:\my dir\", r#"a\"b"#, r"a\\b c", "tab\there"];
+        let mut line = String::from(r#""C:\Program Files\node.exe""#);
+        for a in argv {
+            line.push(' ');
+            quote_arg(a, &mut line);
+        }
+        let back = split(&line);
+        assert_eq!(back[0], r"C:\Program Files\node.exe");
+        assert_eq!(&back[1..], argv);
+        assert_eq!(split(r"node.exe  C:\x\cli.js --flag"), ["node.exe", r"C:\x\cli.js", "--flag"]);
+    }
+
+    #[test]
+    fn an_interpreters_program_is_the_script_it_runs() {
+        assert_eq!(
+            script_name(
+                r#""C:\nodejs\node.exe" C:\npm\node_modules\@openai\codex\bin\codex.js exec"#
+            )
+            .as_deref(),
+            Some("codex")
+        );
+        assert_eq!(
+            script_name(r"node --no-warnings C:\npm\node_modules\@anthropic-ai\claude-code\cli.js")
+                .as_deref(),
+            Some("claude-code")
+        );
+        assert_eq!(script_name("python -m http.server").as_deref(), Some("http"));
+        assert_eq!(script_name("node").as_deref(), None);
     }
 
     #[test]

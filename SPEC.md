@@ -500,6 +500,14 @@ image is used to re-exec the *old* binary (kept at `state/daemon.prev`).
   beside `ptyro.exe`, else Windows' own) and a Job Object per session; signals mapped (INT is a
   typed Ctrl+C, HUP/TERM close the console, KILL ends the job), the console closed when the job
   is empty (which ends the output, as a PTY's last holder does). §20.13 has the facts.
+  **[built WIN7]** The probes there (`winproc.rs`): the foreground program is the newest child
+  of the session's program in its job (through a `cmd.exe` running a batch shim), its name the
+  image's stem, lowercase, or for an interpreter (node, bun, deno, python…) the script it runs
+  (a package's generic `cli.js` gives the package's folder); its directory is read from its
+  PEB; ports come from `GetExtendedTcpTable` with the Toolhelp32 tree; which session a process
+  is in is the job that holds it (`IsProcessInJob`: a process can't leave a job, and pids,
+  which Windows reuses, aren't followed up parents). `is_raw` is unknown: only Unix job control
+  reads it.
 - Each child gets its **own process group**; signals go to the group (`killpg`) so tool subprocesses
   (dev servers, test runners) die with the session. **[built H2.7]** The leader is left a zombie
   (seen with `waitid(WNOWAIT)`) until no other process is in its group, then reaped. Its pid, and
@@ -5632,6 +5640,7 @@ command): ptyro doesn't confine that.
 
 | Asset / threat | Mitigation |
 |---|---|
+| Files only you should read (the config, shell integration) | mode `0600`/`0700`; **[built WIN7]** on Windows the access list (`ptyro_pty::acl`): one wider than the user, SYSTEM and Administrators is a `doctor` finding with its fix, a config save narrows it, and the daemon narrows a shell-integration folder others could change |
 | Socket hijack by other local users | dir `0700`, socket `0600`, peer-uid check on accept. **[built WIN5]** Windows: a named pipe whose every instance admits only the user's SID (`D:P(A;;GA;;;<sid>)`) and rejects remote clients; pipe names are one namespace per computer, so the client refuses a pipe whose server process runs as anyone else (`ptyro_pty::pipe`) |
 | Cloned repo runs arbitrary code | scripts/recipes require fingerprinted trust; agent executables only from user config |
 | Code ptyro runs for a repository: scripts, `after_turn`, verify checks, git (security review M3) | trust pins a script's *text*, not the files it calls, and agents edit those files: trusting `cargo test` trusts the tests. Scripts, `after_turn` and checks run as the user, with the daemon's environment and network, outside any agent sandbox; this is documented, not sandboxed (§10.5, §15.6.5, docs/config.md). Background git runs no repository code: `core.fsmonitor=false` always, `core.hooksPath=/dev/null` except for the operations the user asked for (commit, push, merge, rebase, cherry-pick, a new worktree), diffs with `--no-ext-diff --no-textconv` (§10.9) |
@@ -6854,6 +6863,15 @@ judges the output with ptyro's own sniffer and emulator; the full tables are in
     given) writes to its console even when the daemon's stdout is a pipe.
   - Smart App Control refused the unsigned debug `ptyro.exe` that carries the daemon, and ran
     the release build (§20.12).
+- **Built (WIN7, 2026-11-04)** [V on Windows 11 25H2 with a release `ptyro.exe`]:
+  - A shell session running `ping` reports `ping` as its foreground program, with its
+    directory (read from the PEB at `ProcessParameters` 0x20, `CurrentDirectory` 0x38, the
+    64-bit layout); a session's PowerShell listening on a port has it in `ls --json`.
+  - Windows refuses symbolic links without Developer Mode (`ERROR_PRIVILEGE_NOT_HELD`, 1314):
+    a folder is then linked as a junction (`mklink /J`, no privilege needed) and a file as a hard
+    link, or copied across drives; the notes say which.
+  - `canonicalize` gives `\\?\C:\…`; ptyro drops the prefix (the standard library adds it back
+    for long paths) and compares Windows paths without case.
 - **What it decides** (DD3.4; decided by the owner 2026-11-04, ROADMAP WIN0.5 d and g) **[decided]**:
   - **The PTY: (c).** Bundle the packaged conpty.dll and OpenConsole.exe: about 1.2 MB per
     architecture, MIT, signed by Microsoft. Use the inbox ConPTY only when they are missing. The
