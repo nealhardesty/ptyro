@@ -12,6 +12,8 @@ use std::time::Duration;
 
 use ptyro_core::TermSize;
 
+#[cfg(any(windows, test))]
+mod cmdline;
 #[cfg(unix)]
 pub mod handoff;
 mod ports;
@@ -23,9 +25,11 @@ pub use unix::*;
 #[cfg(windows)]
 mod windows;
 pub use ports::listening_ports;
+#[cfg(not(windows))]
+pub use probe::others_in_group;
 pub use probe::{
-    cwd_of, exec_env_var, local_datetime, local_time_hm, local_time_hm_at, others_in_group,
-    parent_pid, process_name, session_leader,
+    cwd_of, exec_env_var, local_datetime, local_time_hm, local_time_hm_at, parent_pid,
+    process_name, session_leader,
 };
 #[cfg(windows)]
 pub use windows::*;
@@ -125,7 +129,7 @@ pub struct SpawnRequest<'a> {
 
 pub struct PtyChild {
     pub pid: u32,
-    pub child: tokio::process::Child,
+    pub child: Child,
     pub reader: Reader,
     pub writer: Writer,
     /// A duplicate of the master, kept for the foreground and raw-mode probes after the PTY is

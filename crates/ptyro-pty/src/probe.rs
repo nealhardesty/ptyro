@@ -269,7 +269,7 @@ pub fn others_in_group(pgid: u32) -> usize {
     pids[..got.min(pids.len())].iter().filter(|p| **p > 0 && **p as u32 != pgid).count()
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 pub fn others_in_group(_pgid: u32) -> usize {
     0
 }

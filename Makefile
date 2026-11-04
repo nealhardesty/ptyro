@@ -28,7 +28,7 @@ WEB_STRICT ?= 1
 
 .DEFAULT_GOAL := help
 .PHONY: help rust-install build release install install-release test fmt fmt-check lint deny doc check ci clean tools \
-        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean scratchpad-demo orchestrate-demo changeset-demo verify-claude verify-structured spike-chat spike-chat-fts spike-wsl spike-conpty test-wsl check-windows test-windows tui-parity parity reset
+        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean scratchpad-demo orchestrate-demo changeset-demo verify-claude verify-structured spike-chat spike-chat-fts spike-wsl spike-conpty test-wsl check-windows conpty test-windows tui-parity parity reset
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -63,6 +63,9 @@ test: ## Run all tests (every test binary runs, so one failure doesn't hide the 
 # The Windows client's crates whose tests run on Windows itself, and ptyro-pty's Windows seam
 # (WIN4); the rest only compile there (agents and git run in the daemon, in WSL). SPEC §20.11.
 WINDOWS_TESTED := -p ptyro-core -p ptyro-protocol -p ptyro-term -p ptyro-store -p ptyro-meaning -p ptyro-run -p ptyro-drive -p ptyro-client -p ptyro-tui -p ptyro-pty
+
+conpty: ## Fetch Microsoft's packaged ConPTY (pinned, SHA-256 checked) that ptyro.exe ships with into target/conpty/ (INTO=<dir> ARCH=x86_64|aarch64 copies one beside a ptyro.exe)
+	INTO='$(INTO)' ARCH='$(ARCH)' sh scripts/conpty.sh
 
 test-windows: ## On Windows itself (CI's windows job): the client crates' tests, and the rest of the client (ptyro.exe included) compiled
 	$(CARGO) test --no-fail-fast $(WINDOWS_TESTED)

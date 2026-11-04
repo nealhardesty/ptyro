@@ -15,6 +15,8 @@ pub type Reader = pty_process::OwnedReadPty;
 pub type Writer = pty_process::OwnedWritePty;
 /// A duplicate of the PTY's master fd, for the probes.
 pub type Master = OwnedFd;
+/// The PTY's program.
+pub type Child = tokio::process::Child;
 
 fn pty_size(s: TermSize) -> pty_process::Size {
     pty_process::Size::new(s.rows, s.cols)
