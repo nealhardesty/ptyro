@@ -126,10 +126,21 @@ ptyro's daemon (where your agents run) lives in WSL2. From Windows itself, `ptyr
 client: the TUI in Windows Terminal, and every command from PowerShell.
 
 1. Install ptyro in your WSL distro, as above (`wsl` opens it).
-2. Build `ptyro.exe`: on Windows, `cargo build --release -p ptyro` (Rust and the Visual Studio
-   Build Tools' C++ workload: `make rust-install` checks for them), or from Linux or WSL,
-   `make check-windows`'s toolchain with `cargo xwin build --release --target
-   x86_64-pc-windows-msvc -p ptyro` (`aarch64-…` for ARM). Release builds of it are planned.
+2. Install `ptyro.exe`, from PowerShell (x64 and ARM64):
+
+   ```powershell
+   irm https://raw.githubusercontent.com/nealhardesty/ptyro/master/scripts/install.ps1 | iex
+   ```
+
+   It downloads the release's zip for your machine, checks it against `SHA256SUMS` (and its
+   signed build provenance when you have `gh`), installs `%LOCALAPPDATA%\Programs\ptyro\bin\ptyro.exe`
+   and puts that folder on your `PATH` (`$env:PTYRO_VERSION`, `PTYRO_PREFIX`,
+   `PTYRO_NO_MODIFY_PATH=1` change that). `ptyro uninstall` removes it again, `PATH` entry
+   included. `ptyro.exe` isn't code-signed yet, so Windows' Smart App Control, when it's on, may
+   refuse to run it; the installer says so if it does. Or build it yourself: on Windows,
+   `cargo build --release -p ptyro` (Rust and the Visual Studio Build Tools' C++ workload: `make
+   rust-install` checks for them), or from Linux or WSL with `make check-windows`'s toolchain,
+   `cargo xwin build --release --target x86_64-pc-windows-msvc -p ptyro` (`aarch64-…` for ARM).
 3. Run `ptyro`. The first time, it finds the WSL distro that has ptyro and asks to use it (or
    offers to install it there); the answer is kept in `client.default_remote`
    (`ptyro --remote wsl://<distro>` picks one for a single command).
@@ -139,9 +150,11 @@ What works from Windows: the TUI (the WSL daemon's sidebar, attaching, typing), 
 Terminal tab or pane (`ptyro attach S --tab`, `--pane`; the TUI's `session.tab`). The folder you
 run `ptyro new` in becomes the distro's (`C:\src` is `/mnt/c/src`). "Open in" an editor or the
 file manager opens it from WSL, on this computer (VS Code through Remote-WSL, the folder in
-Explorer). Not yet: the outer terminal's colours aren't read on Windows, so sessions get the
-default ones, and commands a daemon host runs (`daemon start`, `install-service`, `tour`) say to
-run them inside WSL.
+Explorer). Sessions get Windows Terminal's own colours, and Shift+Enter works without any setup.
+Settings: the screen's own (the look, keys, themes, the clipboard) are `ptyro.exe`'s; everything
+else is read by the daemon in WSL, so the settings panel marks those "daemon's" and opens the
+daemon's file to change them (`ptyro config set` of one says where it lives). Commands a daemon
+host runs (`daemon start`, `install-service`, `tour`) say to run them inside WSL.
 
 ## Quick start
 
@@ -726,24 +739,26 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make latency` (`ARGS=…`) | key → echo → frame round trip through a real daemon, p50/p99 |
 | `make soak` (`DURATION=10m`) | fake agents and shells with live upgrades; fails on leaks, stuck turns or lag |
 | `make web` / `make web-check` | build the web app (needs Node) / check the committed `web/dist` matches (CI) |
-| `make dist` (`TRIPLE=…`) / `changelog` / `homebrew-formula` | release tarball + `.sha256` in `dist/` / regenerate `CHANGELOG.md` / render `dist/ptyro.rb` from the checksums |
+| `make dist` (`TRIPLE=…`) / `changelog` / `homebrew-formula` | release tarball (on Windows, a zip) + `.sha256` in `dist/` / regenerate `CHANGELOG.md` / render `dist/ptyro.rb` from the checksums |
 | `make sbom` | the software bill of materials (CycloneDX) from `Cargo.lock`: `dist/ptyro-<version>.cdx.json` |
-| `make dist-check` (`TRIPLE=…`) / `make installer-check` | install the tarball in `dist/` with `scripts/install.sh` into a temp prefix and run it (a tampered tarball must be refused) / `make dist` and then that |
+| `make dist-check` (`TRIPLE=…`) / `make installer-check` | install the tarball in `dist/` with `scripts/install.sh` into a temp prefix and run it (a tampered tarball must be refused); on Windows (Git Bash), the zip through `scripts/install.ps1` / `make dist` and then that |
 | `make brew-check` (`TRIPLE=…`) | install the tarball in `dist/` through the Homebrew formula from a throwaway local tap, then `brew test` and `brew audit --strict` it (a wrong checksum must be refused); skips without Homebrew unless `PTYRO_REQUIRE_BREW=1`; refuses if a Homebrew `ptyro` is already installed; run after `make dist` |
 | `make bump` (`V=patch\|minor\|major\|X.Y.Z`) | set the version in `Cargo.toml` and `Cargo.lock` (default: next patch); it prints the commit and tag to run |
 | `make check-macos` | type-check the workspace for macOS from Linux |
 
 To release, run `make bump V=…`, commit, merge to `master`, then push the `vX.Y.Z` tag. The release
 workflow first checks that the tag is on `master` and is the crate's version; runs `make check` on
-Linux (x86_64 and arm64) and macOS and, for the tagged commit, `deny`, `web-check`, `msrv` and
-`fuzz-smoke`; builds the four tarballs (each must install through `scripts/install.sh`); and only
-then publishes: the release gets the tarballs, `SHA256SUMS`, the software bill of materials, the
+Linux (x86_64 and arm64) and macOS, `make test-windows` on Windows and, for the tagged commit,
+`deny`, `web-check`, `msrv` and `fuzz-smoke`; builds the four tarballs and the two Windows zips
+(each must install through `scripts/install.sh`, or `scripts/install.ps1` for the zips); and only
+then publishes: the release gets the tarballs, the zips, `SHA256SUMS`, the software bill of materials, the
 changelog notes and signed build provenance (`gh attestation verify`). Only the final `publish` job
 gets a write token. It runs in the `release` environment, which holds the `HOMEBREW_TAP_TOKEN`
 secret (a fine-grained token that can write only to `nealhardesty/homebrew-ptyro`); restrict
 that environment to `v*` tags. Actions are pinned by commit SHA, and Dependabot keeps them and the
 crates current. CI runs the same targets on every push, with Node required so the web app's
-tests can't be skipped.
+tests can't be skipped. To rehearse a release on a branch, building and checking everything and
+publishing nothing: `gh workflow run release.yml --ref <branch> -f tag=<branch> -f dry_run=true`.
 
 Found a security problem? See [`SECURITY.md`](SECURITY.md).
 

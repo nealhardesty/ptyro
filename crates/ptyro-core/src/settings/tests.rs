@@ -874,3 +874,31 @@ fn a_key_already_in_use_is_named() {
     let all = bindings_of("[keys]\n\"d\" = \"none\"\n");
     assert!(owner(&all, "d").is_none(), "an unbound key is free");
 }
+
+#[test]
+fn whose_setting_it_is() {
+    for k in [
+        "ui.theme",
+        "ui.mouse",
+        "keys.prefix",
+        "themes.mine.bg",
+        "clipboard.allow_write",
+        "client.default_remote",
+    ] {
+        assert!(read_by_client(k), "{k}");
+    }
+    for k in [
+        "ui.shell_exit",
+        "worktrees.root",
+        "daemon.hold_wsl",
+        "agents.claude.command",
+        "editors.code",
+        "remote.access",
+        "uix.theme",
+    ] {
+        assert!(!read_by_client(k), "{k}");
+    }
+    // Every setting's key is one or the other, and most are the daemon's.
+    let client = settings(Scope::User).filter(|s| read_by_client(s.key)).count();
+    assert!(client > 10 && client < settings(Scope::User).count() / 2, "{client}");
+}

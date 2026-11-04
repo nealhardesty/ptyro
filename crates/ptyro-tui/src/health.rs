@@ -347,9 +347,8 @@ impl App {
     /// included.
     pub fn run_cli(&mut self, args: &[String]) {
         self.last_cli = Some(args.to_vec());
-        let exe = std::env::current_exe()
-            .map_or_else(|_| "ptyro".to_owned(), |p| p.to_string_lossy().into_owned());
-        let argv: Vec<String> = std::iter::once(exe).chain(args.iter().cloned()).collect();
+        let argv: Vec<String> =
+            std::iter::once(self.daemon_ptyro()).chain(args.iter().cloned()).collect();
         let base = format!("ptyro-{}", args.first().map_or("cli", String::as_str));
         let base = ptyro_core::names::tidy(&base).unwrap_or(base);
         let name = std::iter::once(base.clone())

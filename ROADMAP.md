@@ -2890,7 +2890,7 @@ done.
 
 ### Track C — A native client
 
-- [ ] **WIN3 `ptyro.exe`: the client on Windows** (R-WIN-06, R-WIN-07, R-WIN-08) **L**
+- [ ] **WIN3 `ptyro.exe`: the client on Windows** (R-WIN-06, R-WIN-07, R-WIN-08) **L** [everything built 2026-11-03; done once the hand checks at the end pass (the owner, later)]
   - ~~The `compile_error!` moves from `ptyro-core` to the daemon side. `ptyro-core`,
     `ptyro-protocol`, `ptyro-client`, `ptyro-term`, `ptyro-tui` and the `ptyro` binary build
     for Windows, with daemon-only code behind `cfg(unix)` until track D.~~ [built 2026-11-03]
@@ -2910,20 +2910,35 @@ done.
     working directory a Windows client sends is the distro's (`C:\src` is `/mnt/c/src`).
   - **Windows Terminal:**
     - ~~`attach` / the TUI's "open in new tab" use `wt.exe -w 0 nt` (or `sp` for a pane) when `WT_SESSION` is set;~~ [built 2026-11-03] `attach --tab|--pane`, the TUI's `session.tab` / `session.pane`, and the web's "Open on the computer"; tmux first when ptyro runs inside it (SPEC §12);
-    - the kitty keyboard protocol when WT reports it; [open: crossterm doesn't ask a Windows console, and whether WT answers the query is unverified]
+    - ~~the kitty keyboard protocol when WT reports it;~~ [not needed, 2026-11-03] a console hands keys over as records with the virtual key and every modifier, so Shift+Enter, Ctrl-I and Tab already arrive apart through crossterm; the TUI treats the terminal as one that tells them apart and pushes nothing (SPEC §20.12);
     - ~~Ctrl-Q conflicts listed in `doctor`, as for VS Code (SPEC §20.5).~~ [built 2026-11-03] `terminal windows terminal`: a binding in your `settings.json` that takes ptyro's prefix (WT's own defaults take neither Ctrl+Q nor Ctrl+Space [S]); its fix opens `ui.prefix`.
   - ~~**`make check-windows`:** cargo-xwin builds both Windows targets from macOS or Linux. `make
     test` runs it when xwin is installed and says so when it isn't. CI gets a `windows-latest`
     job that builds and runs the client crates' tests.~~ [built 2026-11-03] every client crate
     with its tests and `ptyro.exe`, x64 and ARM64; CI's `windows` job runs `make test-windows`.
   - ~~README: "Windows" section (install the client, point it at WSL).~~ [built 2026-11-03]
-  - **Left for later (found while building it):**
-    - the outer terminal's colours (`outer.rs`): on Windows nothing asks yet, so sessions get the
-      default colours; Windows Terminal answers OSC 10/11 as console input records;
-    - release builds of `ptyro.exe` (the release workflow's targets, and the install line for
-      Windows), and signing (WIN12);
-    - a Windows user's `ptyro config` edits the client's own config; settings that are the
-      daemon's (agents, worktrees) belong in WSL's. The settings panel could say which is which.
+  - **Found while building it, then built (2026-11-03):**
+    - ~~the outer terminal's colours (`outer.rs`)~~: Windows Terminal's OSC 10/11 answers come in
+      as key presses with the ESCs dropped; `outer::console_replies` picks them out, so sessions get
+      WT's own colours (seen end to end: a WSL session answered with the tab's scheme; SPEC §20.12);
+    - ~~release builds of `ptyro.exe`~~: the release workflow builds, checks and attests
+      `ptyro-<v>-{x86_64,aarch64}-pc-windows-msvc.zip` natively (`windows-latest`,
+      `windows-11-arm`), with `make test-windows` in its checks; `scripts/install.ps1` (`irm … |
+      iex`) installs one, checksum and provenance checked, onto the user's `PATH`; `make
+      dist-check` proves it on Windows, a tampered zip refused. A `dry_run` input rehearses the
+      whole release on a branch. Signing stays WIN12;
+    - ~~a Windows user's `ptyro config` edits the client's own config~~: `settings::read_by_client`
+      says whose a setting is. With a remote daemon the settings panel tags the daemon's
+      "daemon's" and opens the daemon's own file to change one (owner's choice, 2026-11-03:
+      label and offer the fix; editing both files from one panel was the bigger option), and
+      `config set`/`unset` say where it lives. Full editing of a remote daemon's settings from one
+      panel is left for later (also for ssh remotes);
+    - `ptyro uninstall` on Windows: removes the running `ptyro.exe` (moved, then deleted once it
+      exits), its folder and the installer's `PATH` entry, and keeps WSL's ptyro; and on every
+      platform it no longer follows a saved remote (it would have stopped that daemon and its
+      sessions);
+    - tool sessions started from a remote client's TUI (`config.edit`, the CLI's long tail) ran
+      this client's binary path on the daemon's computer; they run that computer's `ptyro`.
 
   *Done when:* in Windows Terminal, `ptyro.exe` (no WSL shell open) shows the WSL daemon's
   sidebar, attaches to a Claude session with keys, mouse and clipboard working, opens a second
@@ -2976,8 +2991,11 @@ done.
   - `--remote` to a Windows ssh host builds a command that pwsh and cmd both run (no `sh -c`, `remote.rs`).
   - `ptyro serve` on Windows: TLS, pairing, Tailscale certificate (TS1).
 - [ ] **WIN12 Packaging and release** (R-WIN-15) **M**
-  - `make release` builds and signs `x86_64` and `aarch64` Windows zips.
-  - `install.ps1` (one line in the README), a winget manifest and a scoop bucket.
+  - ~~`make release` builds~~ [built WIN3: the release workflow's Windows zips] and signs `x86_64`
+    and `aarch64` Windows zips. Signing matters beyond trust: Smart App Control refuses some
+    unsigned programs outright, with no per-file exception (SPEC §20.12). Options to weigh:
+    Azure Trusted Signing, or an OV/EV certificate (owner's decision: an account and a cost).
+  - ~~`install.ps1` (one line in the README)~~ [built WIN3], a winget manifest and a scoop bucket.
   - `ptyro uninstall` removes the logon task, the shortcut and, after asking, the data.
 - [ ] **WIN13 Tests and CI** **L**
   - A `windows-latest` job runs `make test` (`make` from MSYS2 or Chocolatey; the Makefile stays the only entry point).

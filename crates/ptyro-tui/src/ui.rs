@@ -2342,11 +2342,13 @@ pub(crate) fn help_lines<'a>(app: &'a App, filter: &str) -> Vec<Line<'a>> {
         ));
         lines.push(Line::styled(
             format!(
-                "── this terminal: kitty keyboard {} · colours {:?} · theme {} ──",
-                if app.kitty {
-                    "on (Shift+Enter works)"
+                "── this terminal: {} · colours {:?} · theme {} ──",
+                if cfg!(windows) {
+                    "Windows console keys (Shift+Enter works)"
+                } else if app.kitty {
+                    "kitty keyboard on (Shift+Enter works)"
                 } else {
-                    "off (Shift+Enter falls back to Enter)"
+                    "kitty keyboard off (Shift+Enter falls back to Enter)"
                 },
                 app.depth,
                 app.theme_name

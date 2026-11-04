@@ -3430,13 +3430,11 @@ impl App {
             }
             "config.panel" => self.open_settings(cmd.arg.as_deref()),
             "config.edit" => {
-                let argv = vec![
-                    std::env::current_exe()
-                        .map_or_else(|_| "ptyro".into(), |p| p.to_string_lossy().into_owned()),
-                    "config".into(),
-                    "edit".into(),
-                ];
+                let argv = vec![self.daemon_ptyro(), "config".into(), "edit".into()];
                 self.spawn_tool(argv, None, true);
+                if self.connect.remote.is_some() {
+                    self.toast(self.daemon_file_note());
+                }
             }
             "nav.down" | "nav.up" | "nav.top" | "nav.bottom" => {
                 let rows = self.rows();
@@ -5463,6 +5461,7 @@ impl App {
             .and_then(|id| self.projects.iter().find(|p| p.id == id || p.slug == id))
             .map(|p| crate::settings::Proj { name: p.slug.clone(), root: p.root.clone() });
         let mut panel = crate::settings::Panel::new(Config::path(&self.paths), proj);
+        panel.remote = self.connect.remote.clone();
         if let Some(k) = key {
             panel.jump(k);
         }
@@ -5490,12 +5489,47 @@ impl App {
                     self.overlay = None;
                     self.run(&Command { action: id, arg: None });
                 }
+                // Tools run where the daemon runs: a remote one's file is the one to edit there.
+                A::EditFile(..) | A::Daemon(None) if self.connect.remote.is_some() => {
+                    self.overlay = None;
+                    self.spawn_tool(
+                        vec![self.daemon_ptyro(), "config".into(), "edit".into()],
+                        None,
+                        true,
+                    );
+                    self.toast(self.daemon_file_note());
+                }
+                A::Daemon(at) => {
+                    self.overlay = None;
+                    let mut argv = vec![self.daemon_ptyro(), "config".into(), "edit".into()];
+                    argv.extend(at);
+                    self.spawn_tool(argv, None, true);
+                    self.toast(self.daemon_file_note());
+                }
                 A::EditFile(path, line) => {
                     self.overlay = None;
                     self.edit_file(path, line);
                 }
             }
         }
+    }
+
+    /// ptyro as the daemon's computer runs it, for a tool session (those run there): this binary
+    /// when the daemon is this computer's, else that computer's own (`PTYRO_REMOTE_BIN`, as the
+    /// proxy finds it), never this one's path.
+    pub(crate) fn daemon_ptyro(&self) -> String {
+        if self.connect.remote.is_some() {
+            return std::env::var("PTYRO_REMOTE_BIN").unwrap_or_else(|_| "ptyro".into());
+        }
+        std::env::current_exe()
+            .map_or_else(|_| "ptyro".into(), |p| p.to_string_lossy().into_owned())
+    }
+
+    fn daemon_file_note(&self) -> String {
+        format!(
+            "the config file of the daemon on {}: what it reads (the screen's own settings stay in this computer's)",
+            self.connect.remote.as_deref().unwrap_or("this computer")
+        )
     }
 
     /// Open a file in `$VISUAL` / `$EDITOR`, full sized, at a line when the editor knows how.
@@ -7894,6 +7928,18 @@ mod tests {
             panic!("no picker");
         };
         assert_eq!(palette.key(KeyEvent::char('!')), Picked::Pick(Target::NewShell));
+    }
+
+    #[test]
+    fn tools_run_the_daemons_own_ptyro() {
+        // A tool session runs on the daemon's computer: this binary's path means nothing there.
+        let mut app = app();
+        let here = std::env::current_exe().unwrap().to_string_lossy().into_owned();
+        assert_eq!(app.daemon_ptyro(), here);
+        app.connect.remote = Some("wsl://Ubuntu".into());
+        let there = std::env::var("PTYRO_REMOTE_BIN").unwrap_or_else(|_| "ptyro".into());
+        assert_eq!(app.daemon_ptyro(), there);
+        assert!(app.daemon_file_note().contains("wsl://Ubuntu"));
     }
 
     #[test]

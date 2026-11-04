@@ -623,7 +623,10 @@ against the **child's current modes** (only the daemon knows them):
 
 The TUI asks the *outer* terminal for kitty keyboard enhancement
 (`PushKeyboardEnhancementFlags`) when supported, so it can distinguish `Ctrl-I`/`Tab`,
-`Shift-Enter`, etc., and therefore re-encode them faithfully for Claude Code.
+`Shift-Enter`, etc., and therefore re-encode them faithfully for Claude Code. **[built WIN3]** On
+Windows nothing is pushed: the console hands keys over as records with the virtual key and every
+modifier, so those keys already arrive apart, and the TUI treats the terminal as one that
+distinguishes them (§20.12).
 
 ### 5.6 Query responder **[decided]**
 
@@ -4042,7 +4045,14 @@ state and runtime under `%LOCALAPPDATA%\ptyro\` (`data\`, `state\`, `run\`); the
 socket there. A file "only its owner reads" is mode 0600 on Unix; on Windows these folders'
 inherited access list already keeps them to the user (`ptyro_core::os`). That config holds this
 client's own settings (`client.default_remote`, the TUI's look and keys); the daemon's is in WSL,
-as for any `--remote` client.
+as for any `--remote` client. Which is whose is `settings::read_by_client` (the client reads `ui.*`
+but `ui.shell_exit`, `keys`, `themes`, `clipboard` and `client`; the daemon everything else). With a
+remote daemon the TUI's settings panel tags the daemon's settings "daemon's", and a key that would
+change one opens the daemon's own file there instead (`ptyro config edit <key>` in a tool session,
+which runs on the daemon's computer); `ptyro config set`/`unset` of one says the daemon reads its own
+file and names the command that changes it there. Tool sessions (`config.edit`, the CLI's long tail
+from the TUI) run the daemon's computer's `ptyro` (`PTYRO_REMOTE_BIN`, else on its `PATH`), never
+this client's path.
 
 **[built M1]** If the socket path would exceed 100 bytes (macOS `sun_path` is 104; deep test
 dirs), it falls back to `/tmp/ptyro-<uid>-<fnv32 of the original path>/ptyro.sock`, which is
@@ -4174,7 +4184,13 @@ exact lines), a `tailscale serve` mapping it made, and the binary. Typing `delet
 when a worktree has uncommitted work (`--yes` never skips it; `--delete-work` does); without a
 terminal it refuses without `--yes`; inside a ptyro session it refuses (`PTYRO_HOME` set means
 a sandbox). Order: backup, integrations, login service, stop the daemon and wait for its lock,
-worktrees (through `git worktree remove`), directories, rc lines, the binary last. Kept: the
+worktrees (through `git worktree remove`), directories, rc lines, the binary last. **[built WIN3]**
+Uninstall is about this computer: it never follows `client.default_remote` or `PTYRO_REMOTE` (it
+would stop that daemon and its sessions), and refuses `--remote`, naming where to run it. On
+Windows there is no daemon to stop (the plan keeps "ptyro in WSL", with `wsl -- ptyro uninstall`);
+a running `ptyro.exe` can't be deleted, so it is moved to the temp folder and a detached `cmd`
+deletes it once the process ends; its folder goes when empty (and `…\ptyro\bin`'s parent), and
+leaves the user's `PATH` where install.ps1 put it. Kept: the
 user's repositories, branches, `.ptyro.toml`, `.ptyro.local.toml`, `.git/info/exclude` lines and
 `refs/ptyro/*` snapshots (`--purge-refs` deletes the last). The binary is removed only from a
 place the user put it (`~/.local/bin`, `/usr/local/bin`); `~/.cargo/bin` goes through `cargo
@@ -5650,11 +5666,21 @@ are built on tags later. CI only ever calls make targets.
   `docs/compat.md`.
 - **Releases (H2.2).** `.github/workflows/release.yml` runs on `v*` tags and publishes nothing
   unless, for the tagged commit: the tag is an ancestor of `origin/master` and equals the crate
-  version (`gate`); `make check` passes on x86_64 Linux, aarch64 Linux and aarch64 macOS
-  (`check`); `make tools deny web-check msrv fuzz-smoke` pass (`supply`); and each of the four
-  tarballs (`make changelog dist`, x86_64/aarch64 Linux, aarch64/x86_64 macOS) installs through
-  `scripts/install.sh` into a temporary prefix, runs, and is refused when tampered with (`make
-  dist-check`, `scripts/installer-check.sh`). Only then `publish` (the one job with a write token,
+  version (`gate`); `make check` passes on x86_64 Linux, aarch64 Linux and aarch64 macOS, and
+  `make test-windows` on Windows (`check`); `make tools deny web-check msrv fuzz-smoke` pass
+  (`supply`); and each of the four tarballs (`make changelog dist`, x86_64/aarch64 Linux,
+  aarch64/x86_64 macOS) installs through `scripts/install.sh` into a temporary prefix, runs, and
+  is refused when tampered with (`make dist-check`, `scripts/installer-check.sh`). **[built WIN3]**
+  So do the two Windows zips (`ptyro-<v>-{x86_64,aarch64}-pc-windows-msvc.zip`: `ptyro.exe`,
+  PowerShell completions, README, LICENSE, CHANGELOG), built natively on `windows-latest` and
+  `windows-11-arm` (rustup installed there by `scripts/rust-install.sh` when the image lacks it),
+  through `scripts/install.ps1` (`irm …/install.ps1 | iex`; Windows PowerShell 5.1 and 7: the zip
+  for the machine's own architecture, checked against `SHA256SUMS` and, with `gh`, its provenance,
+  into `%LOCALAPPDATA%\Programs\ptyro\bin`, which goes on the user's `PATH`; the same
+  `PTYRO_VERSION`, `PTYRO_PREFIX`, `PTYRO_RELEASE_URL`, `PTYRO_VERIFY` and
+  `PTYRO_REQUIRE_ATTESTATION` as install.sh, plus `PTYRO_NO_MODIFY_PATH`). `ptyro.exe` isn't signed
+  (WIN12; Smart App Control, §20.12). Run by hand with `dry_run`, the workflow rehearses all of it on
+  any branch and publishes nothing (`gate`'s tag checks and `publish` are skipped). Only then `publish` (the one job with a write token,
   in the `release` environment) writes `SHA256SUMS`, the bill of materials (`make sbom`,
   `scripts/sbom.py`: CycloneDX 1.5 from `Cargo.lock`, deterministic), release notes from
   `scripts/changelog.sh --notes` and the formula from `make homebrew-formula`; signs build
@@ -6628,8 +6654,7 @@ Windows) wasn't needed to get the list below: compile errors are the same either
   only on Unix, and what only a daemon host does says to run it in WSL. `/dev/urandom` gave way
   to the getrandom crate (`ProcessPrng` on Windows). `ptyro.exe` links with an 8 MiB main stack
   (`/STACK`): Windows' 1 MiB overflowed at once in a debug build. The outer terminal's colour
-  query is Unix-only for now (a console has no descriptor to poll; Windows Terminal answers as
-  console input records). Run on Windows 11 (test binaries started from WSL through interop):
+  query reads Windows Terminal's answers from crossterm's key events on Windows (§20.12). Run on Windows 11 (test binaries started from WSL through interop):
   ptyro-core 135, ptyro-tui 221, ptyro-term 41, ptyro-protocol 30, ptyro-store 23, ptyro-client 7
   and the rest pass; tests of Unix behaviour (shells, the daemon's emulator and recorder, modes,
   symlinks, `sh`) are `#[cfg(unix)]`. ptyro-agents and ptyro-git only compile there: they run in
@@ -6639,6 +6664,34 @@ Windows) wasn't needed to get the list below: compile errors are the same either
   about 65 small changes, nearly all "a file only its owner reads" and "who am I", plus two real
   designs: the client's transport, and reading the outer terminal's replies. The `ptyro-tui` row
   was checked for both targets; the rest for x64 with ARM64 matching at every layer it reached. [V]
+
+### 20.12 The Windows client in Windows Terminal (WIN3) **[verified 2026-11-03: Windows 11 build 26200, Windows Terminal from the Store, crossterm 0.29.0]**
+
+- **Windows Terminal answers OSC 10/11 and DA1, as key presses.** A program in raw mode that
+  writes `OSC 10;? ST OSC 11;? ST CSI c` gets the answers through `ReadConsoleInputW` (crossterm's
+  `event::read`) as one key event per character, kind Press, no modifiers, with every ESC dropped
+  (an injected ESC has no virtual key, which crossterm skips): `]10;rgb:cccc/cccc/cccc\`
+  `]11;rgb:0c0c/0c0c/0c0c\` `[?61;4;6;7;14;21;22;23;24;28;32;42;52c`, all within 12 ms (Campbell).
+  `outer::console_replies` picks them out of the keys typed meanwhile. End to end, a WSL session
+  under `ptyro.exe` in a tab using the Campbell PowerShell scheme was answered
+  `rgb:0101/2424/5656`, that scheme's background. [V]
+- **Keys from a console are already disambiguated.** crossterm's Windows reader builds each key
+  from the record's virtual key code and its modifier flags: `VK_RETURN` with Shift is Shift+Enter,
+  `VK_TAB` is Tab while Ctrl+I is `Char('i')` with Ctrl, and releases arrive as Release events
+  (dropped unless the program asked for them, `ptyro-term` `input.rs`). Windows Terminal hands
+  conpty full records (win32-input-mode). crossterm's `supports_keyboard_enhancement` is always
+  false on Windows, and the kitty protocol isn't needed there. [V for crossterm's code, from its
+  source; S for Windows Terminal's records, from its documentation]
+- **Smart App Control blocks some unsigned programs and not others.** With it on, a freshly built
+  unsigned `probe.exe` (debug and release) was refused ("An Application Control policy has blocked
+  this file", CodeIntegrity event 3077) while every unsigned `ptyro.exe` build that day ran. It
+  decides per file, from Microsoft's cloud reputation; there's no per-file exception, and turning
+  it off can't be undone without reinstalling Windows. Signing (WIN12) is the real answer;
+  install.ps1 says what happened if `ptyro.exe` is refused. [V]
+- **PowerShell's execution policy** (Restricted by default) refuses `install.ps1` run as a file,
+  but not `irm … | iex`, which evaluates a string. [V]
+- **`wt.exe` splits its command line at every `;`**, also inside a `powershell -Command` string
+  after `--`: a script file avoids it (as `tab.rs` escapes `\;`). [V]
 
 ### 20.9 Chrome shows a service worker's certificate, not the connection's
 

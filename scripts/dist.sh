@@ -1,7 +1,8 @@
 #!/bin/sh
 # Release tarball for one platform (ROADMAP M8.8): dist/ptyro-<version>-<target>.tar.gz with the
-# binary, shell completions, README, LICENSE and CHANGELOG, plus its .sha256. Run via
-# `make dist` (TRIPLE=<rust target triple> to cross-build; default: this machine).
+# binary, shell completions, README, LICENSE and CHANGELOG, plus its .sha256. Windows gets a .zip
+# instead, with ptyro.exe and PowerShell's completions (WIN3; built on Windows, in Git Bash). Run
+# via `make dist` (TRIPLE=<rust target triple> to cross-build; default: this machine).
 # `make dist` on a tag checks that the tag matches the crate version.
 set -eu
 cd "$(dirname "$0")/.."
@@ -14,7 +15,8 @@ if tag=$(git describe --exact-match --tags 2>/dev/null) && [ "$tag" != "v$VERSIO
 fi
 rustup target add "$TARGET" >/dev/null 2>&1 || true
 $CARGO build --release --locked -p ptyro --target "$TARGET"
-BIN=target/$TARGET/release/ptyro
+case "$TARGET" in *-windows-*) EXE=.exe ARCHIVE=zip ;; *) EXE= ARCHIVE=tar.gz ;; esac
+BIN=target/$TARGET/release/ptyro$EXE
 NAME=ptyro-$VERSION-$TARGET
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
@@ -23,12 +25,24 @@ cp "$BIN" README.md LICENSE "$STAGE/$NAME/"
 [ -f CHANGELOG.md ] && cp CHANGELOG.md "$STAGE/$NAME/"
 # Completions from the binary itself, when it runs here (not when cross-built).
 if "$BIN" --version >/dev/null 2>&1; then
-  "$BIN" completions bash > "$STAGE/$NAME/completions/ptyro.bash"
-  "$BIN" completions zsh > "$STAGE/$NAME/completions/_ptyro"
-  "$BIN" completions fish > "$STAGE/$NAME/completions/ptyro.fish"
+  if [ "$ARCHIVE" = zip ]; then
+    "$BIN" completions powershell > "$STAGE/$NAME/completions/ptyro.ps1"
+  else
+    "$BIN" completions bash > "$STAGE/$NAME/completions/ptyro.bash"
+    "$BIN" completions zsh > "$STAGE/$NAME/completions/_ptyro"
+    "$BIN" completions fish > "$STAGE/$NAME/completions/ptyro.fish"
+  fi
 fi
-tar -C "$STAGE" -czf "dist/$NAME.tar.gz" "$NAME"
+rm -f "dist/$NAME.$ARCHIVE"
+if [ "$ARCHIVE" = tar.gz ]; then
+  tar -C "$STAGE" -czf "dist/$NAME.tar.gz" "$NAME"
+elif command -v zip >/dev/null; then
+  (cd "$STAGE" && zip -qr - "$NAME") > "dist/$NAME.zip"
+else
+  # Git Bash has no zip; Windows' own PowerShell does, given Windows paths.
+  powershell.exe -NoProfile -Command "Compress-Archive -Path '$(cygpath -w "$STAGE/$NAME")' -DestinationPath '$(cygpath -w "$PWD/dist/$NAME.zip")'"
+fi
 sum() { if command -v sha256sum >/dev/null; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
-(cd dist && sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256")
-echo "dist/$NAME.tar.gz"
-cat "dist/$NAME.tar.gz.sha256"
+(cd dist && sum "$NAME.$ARCHIVE" > "$NAME.$ARCHIVE.sha256")
+echo "dist/$NAME.$ARCHIVE"
+cat "dist/$NAME.$ARCHIVE.sha256"
