@@ -126,9 +126,10 @@ pub fn own_group(cmd: &mut tokio::process::Command) -> &mut tokio::process::Comm
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    use crate::exec_env_var;
     use crate::{
-        child_env, exec_env_var, foreground, others_in_group, session_leader, terminate,
-        until_group_empty,
+        child_env, foreground, others_in_group, session_leader, terminate, until_group_empty,
     };
     use std::ffi::OsStr;
     use std::path::Path;
