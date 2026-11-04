@@ -2604,7 +2604,8 @@ after any of them:
 | **D. Native daemon** | WIN4–WIN14 | ptyro on NTFS with ConPTY, no WSL | Yes |
 
 A and B can start now and don't wait for WIN0. C needs WIN0.4. **D does not start before
-WIN0.2 and WIN0.3 are written into SPEC** (WIN0.5 is decided: repos live in Windows, so all four
+WIN0.2 and WIN0.3 are written into SPEC** ([done 2026-11-04]: SPEC §20.13, and the owner
+decided WIN0.5 d and g on them, so track D can start with WIN4) (WIN0.5 is decided: repos live in Windows, so all four
 tracks are in scope, and native Windows and WSL2 are both Tier 1).
 
 Every task below is done only when it works in the CLI, the TUI and the web, has its
@@ -2798,9 +2799,9 @@ done.
     that push kitty flags, win32-input-mode for the rest (PSReadLine reads records; CSI u breaks
     it). Recorded Claude Code, Codex and vim screens come through with the same text in both. The
     live-agent comparison with macOS became the fixture replay: the same recorded bytes through
-    ConPTY into ptyro's emulator. **Recommends (c): bundle conpty.dll and OpenConsole.exe**
+    ConPTY into ptyro's emulator. **Decided (c): bundle conpty.dll and OpenConsole.exe**
     (about 1.2 MB per architecture, MIT, signed by Microsoft), with the inbox ConPTY as the
-    fallback. Owner to confirm (WIN0.5 g, below).
+    fallback (owner, 2026-11-04; WIN0.5 g, below).
   - [x] **WIN0.3 Taking over a pseudoconsole.** Can a second process, given duplicated handles,
     keep driving a pseudoconsole after the first exits? If yes, a re-exec-like upgrade is
     possible. If no, live upgrade on Windows means holder processes (R-WIN-13) or none.
@@ -2808,8 +2809,8 @@ done.
     `HPCON`'s three handles and the child's handle reads, types, resizes and closes after the
     creator has exited, whether it inherited them at creation or had them copied in while it ran.
     The one trap is the old process's pending read, which must be cancelled first. So a
-    re-exec-like live upgrade is possible on Windows without holder processes. This reopens
-    WIN0.5 (d): the owner chose restart and resume when holders looked like the only way.
+    re-exec-like live upgrade is possible on Windows without holder processes. WIN0.5 (d) was
+    reopened on this and decided for a live upgrade (owner, 2026-11-04).
   - [x] **WIN0.4 Cross-build.** `cargo xwin check` for `x86_64-pc-windows-msvc` and
     `aarch64-pc-windows-msvc` from this Mac: which crates build once the `compile_error!` moves
     from `ptyro-core` to the daemon side, and whether ring, the bundled SQLite and zstd build with
@@ -2836,12 +2837,12 @@ done.
       - **Upkeep, the real cost:** every change from WIN onward must keep Windows green. That means a Windows path for each new Unix call, `cfg(unix)` tests marked with a reason, and Windows-only flakes like m9's. Plan on roughly 10–20% more effort per feature that touches processes, files or the PTY, and close to none for TUI, web or protocol work [U, an estimate].
       - **Release:** two more targets (x64, ARM64) and code signing (WIN12).
     - (c) **Setup, verify, worktree and `run` commands:** a per-project `shell = auto | pwsh | bash | cmd | sh`, `auto` by default (DD3.4 item 3).
-    - (d) **Upgrade on Windows: restart and resume.** No holder processes. R-WIN-13 stays an idea.
-      *Reopened 2026-11-03 for the owner:* WIN0.3 found a live upgrade without holder processes
-      (the new daemon inherits each pseudoconsole's handles, as `handoff.rs` hands over fds on
-      Unix). Keep restart and resume, or make WIN9 a live upgrade?
-    - (g) *Proposed 2026-11-03, for the owner:* **bundle the packaged ConPTY** (conpty.dll and
-      OpenConsole.exe from Microsoft.Windows.Console.ConPTY, pinned, beside `ptyro.exe`), with the
+    - (d) **Upgrade on Windows: a live upgrade by handover** (owner, 2026-11-04). No holder
+      processes; R-WIN-13 stays an idea. ~~Restart and resume~~ (2026-10-31, when holders looked
+      like the only way) is now only the fallback when a handover fails. WIN0.3 found the new
+      daemon can inherit each pseudoconsole's handles, as `handoff.rs` hands over fds on Unix.
+    - (g) **Bundle the packaged ConPTY** (owner, 2026-11-04): conpty.dll and OpenConsole.exe from
+      Microsoft.Windows.Console.ConPTY, pinned and signature checked, beside `ptyro.exe`, with the
       inbox one as the fallback. WIN0.2's evidence is in SPEC §20.13.
     - (e) **Windows 11 only**, x64 and ARM64.
     - (f) **WSL2 is Tier 1 too.** ~~*The catch:* GitHub's hosted Windows runners are believed to offer only WSL1, because WSL2 needs nested virtualization [U, check in WIN2].~~ [checked 2026-11-03: `windows-latest` has WSL2 and boots Ubuntu 24.04 with systemd; CI's `wsl` job runs `make test-wsl` there. The rest of this item is moot.] Tier 1 WSL2 then needs either a self-hosted runner (a Windows 11 machine or VM with WSL2, registered to the repo; free apart from the machine) or a cloud VM size that supports nested virtualization (paid). Until one exists, `make test-wsl` runs by hand before each release.
@@ -2985,7 +2986,8 @@ done.
     - a Job Object per session that kills the whole tree;
     - Ctrl+C, exit codes, `ClosePseudoConsole` on terminate;
     - PATHEXT resolution, with `.cmd`/`.bat` wrapped in `cmd.exe /d /c` and escaped as Rust's std does;
-    - a bundled `conpty.dll` only if WIN0.2 chose (c).
+    - the bundled `conpty.dll` + `OpenConsole.exe` (WIN0.5 g), found beside `ptyro.exe`; the inbox ConPTY when they are missing, which `doctor` reports;
+    - keys: kitty CSI u to a program that pushed kitty flags, win32-input-mode otherwise (SPEC §20.13).
   - The daemon listens on `\\.\pipe\ptyro-<user SID hash>[-instance]` with a user-only DACL and `PIPE_REJECT_REMOTE_CLIENTS`. The client's pid is recorded where the Unix code records the peer. `PTYRO_SOCKET` names a pipe on Windows.
   - Status sources (OSC 7501, 133, 9, 777, hooks) checked end to end with the fake agent under ConPTY.
 - [ ] **WIN6 Shells and commands** (R-WIN-11) **M**
@@ -3005,9 +3007,10 @@ done.
   - Profiles can set Claude's shell (`CLAUDE_CODE_GIT_BASH_PATH`) and notice Codex's Windows sandbox mode.
   - Each adapter's status, resume and injection checked on Windows. The fake agent builds and runs there.
   - Worktrees: `core.longpaths=true` on repos ptyro creates worktrees for. A warning before a worktree path gets too deep. `doctor` suggests Dev Drive and a Defender exclusion for the worktree root, with the steps.
-- [ ] **WIN9 Upgrade and survival** **M** (WIN0.5 d: restart and resume)
-  - Restart-and-resume: `daemon upgrade` on Windows renames the running exe aside, hibernates, starts the new one, and resumes conversations (M4). Shells start fresh in their directory. The upgrade dialog says plainly what will restart.
-  - Holder processes (R-WIN-13) were not chosen; WIN0.3's answer is still written down. SPEC §4.5 gets a Windows part.
+- [ ] **WIN9 Upgrade and survival** **M** (WIN0.5 d: live upgrade by handover, decided 2026-11-04)
+  - Live upgrade: `daemon upgrade` on Windows renames the running exe aside and starts the new one, which inherits each session's pipe ends, its `HPCON`'s three handles, the child and its Job Object (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), as `handoff.rs` does with fds on Unix. Every reader is cancelled (`CancelIoEx`) before the handover, and what it already read is passed on, so no output is lost (SPEC §20.13). Shells, agents and running commands carry on.
+  - Fallback when a handover fails validation: restart and resume (hibernate, resume conversations through M4, shells start fresh in their directory), with the upgrade dialog saying plainly what will restart.
+  - Holder processes (R-WIN-13) were not chosen; they would also survive a daemon crash, which a handover doesn't. SPEC §4.5 gets a Windows part.
 - [ ] **WIN10 Start at login and alerts** (R-WIN-14) **M**
   - `ptyro service install|uninstall` on Windows registers a per-user logon Scheduled Task, not a Service (SPEC §20 says why).
   - Toasts with ptyro's AppUserModelID (a Start-menu shortcut made by the installer, or by `service install`). Clicking a toast opens the session (Windows Terminal tab, or the web).
@@ -3021,6 +3024,7 @@ done.
     unsigned programs outright, with no per-file exception (SPEC §20.12). Options to weigh:
     Azure Trusted Signing, or an OV/EV certificate (owner's decision: an account and a cost).
   - ~~`install.ps1` (one line in the README)~~ [built WIN3], a winget manifest and a scoop bucket.
+  - The zips carry the pinned packaged ConPTY (conpty.dll, OpenConsole.exe) for their architecture, its signature checked when the release is built (WIN0.5 g).
   - `ptyro uninstall` removes the logon task, the shortcut and, after asking, the data.
 - [ ] **WIN13 Tests and CI** **L**
   - A `windows-latest` job runs `make test` (`make` from MSYS2 or Chocolatey; the Makefile stays the only entry point).

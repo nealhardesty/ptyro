@@ -279,7 +279,7 @@ Boundary rules **[decided]**:
 | Linux x86_64 / aarch64 | Tier 1 |
 | macOS aarch64 / x86_64 | Tier 1 |
 | WSL2 | **Tier 1 [decided 2026-10-31, owner]** (Linux build). `make check` passes [V 2026-11-02]: WSL 2.6.2.0, kernel 6.6.87.2, Ubuntu 24.04.3, Windows 11 build 26200, systemd on, master at v0.0.46. All 73 test binaries pass, with bash 5.2 and zsh present but no fish or pwsh (`tests/win1.rs` skips those two), and no browser, so web-e2e didn't run. Survival after the last terminal (WIN0.1) is answered: WSL stops a distro about 15 s after the last Windows-side `wsl.exe` exits, systemd services and linger included, so the daemon holds WSL open itself while it runs (`[daemon] hold_wsl`, on by default; §20.10, WIN2). CI's `wsl` job runs `make test-wsl` on a hosted `windows-latest` runner, which has WSL2 (§20.10) |
-| Windows 11 native (x64, ARM64) | **Tier 1 [decided 2026-10-31, owner]. The client is built (WIN3, 2026-11-03): `ptyro.exe` drives the daemon in WSL (`--remote wsl://`, §16.2), the TUI included; the native daemon is not built yet** (ConPTY, named pipes; track D, RESEARCH DD3). CI builds it and runs the client crates' tests on `windows-latest` (§20.11). Windows 10 is not supported |
+| Windows 11 native (x64, ARM64) | **Tier 1 [decided 2026-10-31, owner]. The client is built (WIN3, 2026-11-03): `ptyro.exe` drives the daemon in WSL (`--remote wsl://`, §16.2), the TUI included; the native daemon is not built yet** (ConPTY, named pipes; track D, RESEARCH DD3). It will bundle Microsoft's packaged ConPTY and upgrade live by handing pseudoconsoles over [decided 2026-11-04, owner; §20.13]. CI builds it and runs the client crates' tests on `windows-latest` (§20.11). Windows 10 is not supported |
 
 Inside WSL, `ptyro_core::wsl` is the one rule (WIN2) [V 2026-11-02, WSL 2.6.2]: it is WSL if the kernel release (`/proc/sys/kernel/osrelease`) says `microsoft`, `WSL_DISTRO_NAME` is set, or interop is registered (`/proc/sys/fs/binfmt_misc/WSLInterop`). WSL1's release ends in `-Microsoft` and WSL2's says `microsoft-standard`. The distro comes from `WSL_DISTRO_NAME`, or from `wslpath -w /` (`\\wsl.localhost\<distro>\`) when that's missing: a systemd user unit, which is how `ptyro service install` runs the daemon, doesn't get the variable. About's `system` reads `linux x86_64, WSL2 (Ubuntu)`, its JSON has a `wsl` object, and `doctor` has a `wsl` section (WSL1 is a warning).
 
@@ -6763,7 +6763,7 @@ judges the output with ptyro's own sniffer and emulator; the full tables are in
   `ReadFile` on the output pipe swallowed a chunk as it exited, in 2 of 10 runs. A handover must
   cancel its reader (`CancelIoEx`) and pass on what it already read. The layout is internal, but
   it hasn't changed since Windows 10 1809, and bundling conpty.dll pins it. [V]
-- **What it decides** (DD3.4; the owner's to confirm, ROADMAP WIN0):
+- **What it decides** (DD3.4; decided by the owner 2026-11-04, ROADMAP WIN0.5 d and g) **[decided]**:
   - **The PTY: (c).** Bundle the packaged conpty.dll and OpenConsole.exe: about 1.2 MB per
     architecture, MIT, signed by Microsoft. Use the inbox ConPTY only when they are missing. The
     packaged one is the only one that keeps ptyro's side channels in order, lets ptyro answer
@@ -6775,8 +6775,8 @@ judges the output with ptyro's own sniffer and emulator; the full tables are in
     program that reads records breaks it.
   - **Live upgrade:** possible without holder processes. The old daemon hands the new one, by
     inheritance as `handoff.rs` does on Unix, each session's pipe ends, its three `HPCON` handles,
-    the child and its job object, and stops reading first. The owner's WIN0.5 (d) chose restart
-    and resume when holder processes looked like the only way.
+    the child and its job object, and stops reading first. The owner chose this (WIN0.5 d,
+    2026-11-04) over restart and resume, which stays as the fallback when a handover fails.
 
 ### 20.9 Chrome shows a service worker's certificate, not the connection's
 
