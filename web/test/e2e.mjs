@@ -64,6 +64,31 @@ const scenarios = {
     await tab.waitFor("its card", card(made.name));
   },
 
+  // ＋, "A command…", a command line, Start: the daemon runs it through its own shell (the
+  // web sends the line, not an argv: WIN4), in a worktree that exists.
+  async command() {
+    for (let tries = 0; ; tries++) {
+      await sleep(700 * (tries + 1));
+      await tab.click("button.icon.plus");
+      try { await tab.waitFor("the sheet", `!!document.querySelector(".sheet-foot .primary")`, 2500); break; }
+      catch (e) { if (tries >= 4) throw e; await fresh("#/"); await sleep(500); }
+    }
+    const line = "echo e2e-$((6 * 7)); cat";
+    await tab.eval(`(() => {
+      const [agent, where] = document.querySelectorAll(".sheet select");
+      agent.value = "@command"; agent.dispatchEvent(new Event("change", { bubbles: true }));
+      const wt = [...where.options].find((o) => o.value.startsWith("w:"));
+      if (!wt) throw new Error("no worktree to run it in");
+      where.value = wt.value; where.dispatchEvent(new Event("change", { bubbles: true }));
+      const cmd = document.querySelector(".sheet label.field:not([hidden]) input");
+      cmd.value = ${JSON.stringify(line)}; cmd.dispatchEvent(new Event("input", { bubbles: true }));
+    })()`);
+    await tab.click(".sheet-foot .primary");
+    const ran = await until("the command's session", () => sessions().find((s) => s.argv?.[s.argv.length - 1] === line));
+    if (ran.kind !== "command" || ran.argv.length !== 3 || ran.argv[1] !== "-c") throw new Error(`ran as ${JSON.stringify(ran.argv)} (${ran.kind})`);
+    await until("the shell's arithmetic in its output", () => ptyro("read", ran.name).includes("e2e-42"));
+  },
+
   // An agent asks permission; Allow on the card answers it.
   async permission() {
     ptyro("new", "-d", "-n", "blocked1", "--agent", "claude");

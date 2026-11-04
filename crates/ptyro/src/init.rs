@@ -313,7 +313,7 @@ pub async fn run(ctx: &Ctx, yes: bool, dry_run: bool) -> Result<i32, Error> {
 
     // ── extras ──
     section("extras");
-    let shell = std::env::var("SHELL").unwrap_or_default();
+    let shell = ptyro_core::shell::default_shell();
     let home = expand_home("~");
     let (path, line) = if shell.ends_with("zsh") {
         (home.join(".zshrc"), "source <(ptyro completions zsh)")

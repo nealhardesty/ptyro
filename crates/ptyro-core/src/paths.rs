@@ -1,5 +1,6 @@
 //! File-system layout (SPEC §14.1): XDG on Linux *and* macOS; on Windows, the config under
-//! `%APPDATA%\ptyro` and the rest under `%LOCALAPPDATA%\ptyro` (WIN3); `PTYRO_HOME` puts
+//! `%APPDATA%\ptyro` and the rest under `%LOCALAPPDATA%\ptyro` (WIN3), unless the XDG variables
+//! are set, which win there too (WIN4); `PTYRO_HOME` puts
 //! everything under one directory (tests, portable installs); `PTYRO_SOCKET` overrides only the
 //! socket.
 
@@ -37,15 +38,17 @@ impl Paths {
                 socket: PathBuf::new(),
             }
         } else if cfg!(windows) {
-            // Windows' own places: roaming config, the rest local to this computer. There is no
-            // daemon here, so `run` and its socket are only named (a native daemon is track D).
+            // Windows' own places: roaming config, the rest local to this computer, unless an
+            // XDG variable names one (a user who keeps one layout across machines, Git Bash's).
+            // There is no daemon here, so `run` and its socket are only named (track D).
             let w = etcetera::base_strategy::Windows::new().map_err(std::io::Error::other)?;
             let local = w.cache_dir().join("ptyro");
+            let xdg = |k: &str| var(k).filter(|p| p.is_absolute()).map(|p| p.join("ptyro"));
             Self {
-                config: w.config_dir().join("ptyro"),
-                data: local.join("data"),
-                state: local.join("state"),
-                runtime: local.join("run"),
+                config: xdg("XDG_CONFIG_HOME").unwrap_or_else(|| w.config_dir().join("ptyro")),
+                data: xdg("XDG_DATA_HOME").unwrap_or_else(|| local.join("data")),
+                state: xdg("XDG_STATE_HOME").unwrap_or_else(|| local.join("state")),
+                runtime: xdg("XDG_RUNTIME_DIR").unwrap_or_else(|| local.join("run")),
                 socket: PathBuf::new(),
             }
         } else {
@@ -130,6 +133,22 @@ mod tests {
         assert!(roaming.ends_with(r"appdata\roaming\ptyro"), "{roaming}");
         let local = p.data.to_string_lossy().to_ascii_lowercase();
         assert!(local.ends_with(r"appdata\local\ptyro\data"), "{local}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_takes_the_xdg_variables_when_they_are_set() {
+        let p = Paths::resolve(|k| match k {
+            "XDG_CONFIG_HOME" => Some(PathBuf::from(r"D:\cfg")),
+            "XDG_STATE_HOME" => Some(PathBuf::from(r"D:\state")),
+            "XDG_DATA_HOME" => Some(PathBuf::from("relative")),
+            _ => None,
+        })
+        .unwrap();
+        assert_eq!(p.config, PathBuf::from(r"D:\cfg\ptyro"));
+        assert_eq!(p.state, PathBuf::from(r"D:\state\ptyro"));
+        let data = p.data.to_string_lossy().to_ascii_lowercase();
+        assert!(data.ends_with(r"appdata\local\ptyro\data"), "a relative one is ignored: {data}");
     }
 
     #[cfg(unix)] // Unix paths

@@ -5891,21 +5891,15 @@ impl App {
     fn prompt_done(&mut self, text: String, kind: PromptKind) {
         match kind {
             PromptKind::Command(w) => {
-                let argv: Vec<String> = if text.trim().is_empty() {
-                    Vec::new()
-                } else {
-                    // Run through the shell so pipes, quotes and $VARS work as typed.
-                    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-                    vec![shell, "-c".into(), text.trim().to_owned()]
-                };
-                if w.worktree.is_some() {
-                    self.spawn_spec(
-                        SpawnSpec { argv, worktree: w.worktree, ..SpawnSpec::default() },
-                        w.split,
-                    );
-                } else {
-                    self.spawn(argv, w.split, None);
-                }
+                // Run through the daemon's shell, so pipes, quotes and $VARS work as typed;
+                // nothing typed is a shell.
+                let command = Some(text.trim().to_owned()).filter(|t| !t.is_empty());
+                let cwd =
+                    if w.worktree.is_some() { std::path::PathBuf::new() } else { self.here() };
+                self.spawn_spec(
+                    SpawnSpec { command, worktree: w.worktree, cwd, ..SpawnSpec::default() },
+                    w.split,
+                );
             }
             PromptKind::WorktreeName(mut w) => {
                 // Nothing typed: the name it offered (UX1.24).

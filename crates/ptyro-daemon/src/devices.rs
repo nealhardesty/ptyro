@@ -219,6 +219,7 @@ pub fn needed(req: &Request) -> Scope {
         Spawn { spec }
             if spec.agent.is_some()
                 && spec.argv.is_empty()
+                && spec.command.is_none()
                 && spec.verify.is_none()
                 && spec.lead.is_none()
                 && !spec.mcp =>
@@ -668,6 +669,12 @@ mod tests {
             ..SpawnSpec::default()
         };
         assert_eq!(needed(&Request::Spawn { spec: verify }), Scope::Full);
+        // A command line is full scope, whether or not an agent is named beside it.
+        for agent in [None, Some("claude".to_owned())] {
+            let line =
+                SpawnSpec { agent, command: Some("rm -rf ~".into()), ..SpawnSpec::default() };
+            assert_eq!(needed(&Request::Spawn { spec: line }), Scope::Full);
+        }
         assert!(url_ok("https://fcm.googleapis.com/fcm/send/abc", &[]).is_ok());
         assert!(url_ok("https://web.push.apple.com/QGx", &[]).is_ok());
         assert!(url_ok("https://internal.corp/admin", &[]).is_err());

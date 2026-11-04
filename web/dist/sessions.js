@@ -140,7 +140,7 @@ export function newTask(where, task) {
                 if (isAgent)
                     Object.assign(spec, { agent: a, prompt: text, title: text });
                 else if (a === "@command")
-                    spec.argv = ["sh", "-c", command.value.trim()];
+                    spec.command = command.value.trim();
                 s.close();
                 await startSession(spec);
             }
@@ -175,7 +175,7 @@ export function newTask(where, task) {
                 if (r && !isAgent) {
                     const spec = { worktree: r.info.id, cwd: "" };
                     if (a === "@command")
-                        spec.argv = ["sh", "-c", command.value.trim()];
+                        spec.command = command.value.trim();
                     await startSession(spec);
                 }
             }

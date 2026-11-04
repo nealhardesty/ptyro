@@ -10,7 +10,6 @@
 
 use ptyro_core::sync::MutexExt;
 use std::collections::BTreeMap;
-use std::os::fd::OwnedFd;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -182,7 +181,7 @@ pub struct Session {
     /// child that stops reading input while still writing output would otherwise deadlock
     /// both), and a child that never reads must not make the daemon queue without end.
     writer: mpsc::Sender<WriterMsg>,
-    master: Option<OwnedFd>,
+    master: Option<ptyro_pty::Master>,
     events: broadcast::Sender<DomainEvent>,
     store: Option<Store>,
     run_id: String,
@@ -751,7 +750,7 @@ impl Session {
         self.changed.send_modify(|v| *v += 1);
     }
 
-    async fn reader_task(self: Arc<Self>, mut reader: ptyro_pty::OwnedReadPty) {
+    async fn reader_task(self: Arc<Self>, mut reader: ptyro_pty::Reader) {
         let mut buf = vec![0u8; 64 * 1024];
         let mut pause = self.io.pause.clone();
         self.io.readers.fetch_add(1, Ordering::SeqCst);
@@ -1008,8 +1007,8 @@ impl Session {
             Some((code, signal)) => ProcessState::Exited { code, signal },
             None => match child.wait().await {
                 Ok(s) => {
-                    use std::os::unix::process::ExitStatusExt;
-                    ProcessState::Exited { code: s.code(), signal: s.signal() }
+                    let (code, signal) = ptyro_pty::exit_parts(&s);
+                    ProcessState::Exited { code, signal }
                 }
                 Err(e) => ProcessState::Failed { error: e.to_string() },
             },
@@ -1496,11 +1495,11 @@ async fn sleep_until(t: Option<std::time::Instant>) {
     }
 }
 
-async fn writer_task(mut w: ptyro_pty::OwnedWritePty, mut rx: mpsc::Receiver<WriterMsg>) {
+async fn writer_task(mut w: ptyro_pty::Writer, mut rx: mpsc::Receiver<WriterMsg>) {
     while let Some(msg) = rx.recv().await {
         let ok = match msg {
             WriterMsg::Bytes(b) => w.write_all(&b).await.is_ok(),
-            WriterMsg::Resize(s) => w.resize(ptyro_pty::pty_size(s)).is_ok(),
+            WriterMsg::Resize(s) => ptyro_pty::resize(&w, s).is_ok(),
         };
         if !ok {
             // The child is gone; keep draining so senders never block.

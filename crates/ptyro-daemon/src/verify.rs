@@ -96,9 +96,12 @@ impl Daemon {
             let _ = std::fs::create_dir_all(d);
         }
         let started = Instant::now();
-        let mut c = tokio::process::Command::new(crate::daemon::user_shell());
-        c.arg("-c")
-            .arg(format!("exec 2>&1; {command}"))
+        let argv = ptyro_core::shell::command_argv(
+            &ptyro_core::shell::default_shell(),
+            &format!("exec 2>&1; {command}"),
+        );
+        let mut c = tokio::process::Command::new(&argv[0]);
+        c.args(&argv[1..])
             .current_dir(dir)
             .env_clear()
             .envs(self.base_env.iter().map(|(k, v)| (k, v)))
@@ -107,8 +110,8 @@ impl Daemon {
             .env("PTYRO_CHECK", "1")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
-            .process_group(0)
             .kill_on_drop(true);
+        ptyro_pty::own_group(&mut c);
         // Its output goes to the log file as it is written, never into the daemon's memory:
         // a check that prints without end is stopped at a size, not at the daemon's death.
         let ran = run_to_log(c, log, CHECK_TIMEOUT, CHECK_LOG_CAP)
@@ -616,8 +619,8 @@ pub(crate) async fn run_to_log(
     c.stdout(std::process::Stdio::from(file.try_clone()?))
         .stderr(std::process::Stdio::from(file))
         .stdin(std::process::Stdio::null())
-        .process_group(0)
         .kill_on_drop(true);
+    ptyro_pty::own_group(&mut c);
     let mut child = c.spawn()?;
     // The whole group goes when this returns early or is dropped: `cargo test` under the shell
     // goes too, not just the shell.

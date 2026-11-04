@@ -352,8 +352,8 @@ pub fn spawn_child(
         .envs(s.env.iter().map(|(k, v)| (k, v)))
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .process_group(0);
+        .stderr(std::process::Stdio::piped());
+    ptyro_pty::own_group(&mut cmd);
     let mut child = cmd.spawn()?;
     let stdin: OwnedFd =
         child.stdin.take().ok_or_else(|| std::io::Error::other("no stdin"))?.into_owned_fd()?;

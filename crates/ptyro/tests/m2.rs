@@ -576,3 +576,69 @@ async fn a_shell_that_exits_is_removed_unless_shell_exit_is_keep() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(resolve(&c, "@exited").await.contains(&started[1]), "kept as exited");
 }
+
+/// A command line as typed (the TUI's and the web's "run a command", WIN4) runs through the
+/// daemon's own shell, not one the client names: pipes and `$((…))` work, it is a command
+/// session, and its exit code is the line's.
+#[tokio::test]
+async fn a_command_line_runs_through_the_daemons_shell() {
+    let d = TempDaemon::start_with_env(BIN, &[("SHELL", "/bin/sh")]).unwrap();
+    let c = d.client().await.unwrap();
+    let line = "printf 'a b c' | wc -w >/dev/null && exit $((6 * 7))";
+    let spec = SpawnSpec {
+        command: Some(format!("  {line} ")),
+        cwd: std::env::temp_dir(),
+        name: Some("typed".into()),
+        ..SpawnSpec::default()
+    };
+    let info = match c.request(Request::Spawn { spec }).await.expect("spawn") {
+        Reply::Session { info } => info,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(info.kind, ptyro_core::session::SessionKind::Command);
+    assert_eq!(info.argv, ["/bin/sh", "-c", line]);
+    let ended = wait_state(&c, "typed", |s| !s.is_live()).await;
+    assert_eq!(ended.state, ProcessState::Exited { code: Some(42), signal: None });
+    // Nothing but spaces is no command: a shell.
+    let blank = SpawnSpec {
+        command: Some("   ".into()),
+        cwd: std::env::temp_dir(),
+        ..SpawnSpec::default()
+    };
+    match c.request(Request::Spawn { spec: blank }).await.expect("spawn") {
+        Reply::Session { info } => {
+            assert_eq!(info.kind, ptyro_core::session::SessionKind::Shell);
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// The TUI's "run a command" sends the line, and the daemon picks the shell (WIN4): a client
+/// whose own `$SHELL` doesn't exist on the daemon's computer (a Windows client of WSL) still
+/// gets the line run.
+#[tokio::test]
+async fn tui_runs_a_typed_command_through_the_daemons_shell() {
+    let d = TempDaemon::start_with_env(BIN, &[("SHELL", "/bin/sh")]).unwrap();
+    let c = d.client().await.unwrap();
+    spawn(&c, "home", &["sh", "-c", "exec cat"]).await;
+    let line = "echo tui-$((6 * 7)); exec cat";
+    let r = run(tui(&d, &["attach", "home"])
+        .env("SHELL", "/nonexistent/the-clients-shell")
+        .send(1.4, "\\x11:")
+        .send(1.8, "session.command")
+        .send(2.1, "\\r")
+        .send(2.5, line)
+        .send(2.9, "\\r")
+        .snapshot(4.0)
+        .send(4.3, "\\x11d")
+        .timeout(5.5))
+    .await;
+    let ran = newcomer(&c, &["home"]).await;
+    let info = match c.request(Request::List).await.expect("list") {
+        Reply::Sessions { sessions } => sessions.into_iter().find(|s| s.name == ran).unwrap(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(info.argv, ["/bin/sh", "-c", line], "{}", r.at(4.0));
+    assert_eq!(info.kind, ptyro_core::session::SessionKind::Command);
+    assert!(r.at(4.0).contains("tui-42"), "{}", r.at(4.0));
+}

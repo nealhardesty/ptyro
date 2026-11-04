@@ -2976,10 +2976,13 @@ done.
 
 ### Track D — A native daemon (only after WIN0.2, WIN0.3, WIN0.5)
 
-- [ ] **WIN4 Platform seams** **M**: no behaviour change, tests green before and after.
-  - All PTY, process, port and probe code behind `ptyro-pty`'s existing functions, with a `cfg(windows)` module next to `cfg(unix)`.
-  - One `paths` module in `ptyro-core`: `%LOCALAPPDATA%\ptyro` for state and the database, `%APPDATA%\ptyro` for config, XDG variables when set.
-  - One `default_shell()` replacing the 33 places that read `$SHELL` directly. One `command_shell()` replacing the `sh -c` sites outside tests.
+- [x] **WIN4 Platform seams** **M**: no behaviour change, tests green before and after. [built 2026-11-04]
+  - ~~All PTY, process, port and probe code behind `ptyro-pty`'s existing functions, with a `cfg(windows)` module next to `cfg(unix)`.~~ `ptyro-pty` is `unix.rs` (today's code) and `windows.rs` behind one set of functions and types (`Reader`, `Writer`, `Master`, `Signal`; `resize`, `exit_parts`, `own_group` are new). The Windows side compiles, gives process groups and exit codes, and answers "not yet: WIN5, run the daemon in WSL" for sessions; the PTY types have no values there. `make check-windows` and CI's `windows` job build and test it. The daemon's own `process_group(0)`, `ExitStatusExt` and a copy of `alive()` went behind it. Left where their tasks are: the handoff (WIN9), the socket and signal handling (WIN5), file modes (WIN7), `wsl_hold` (WSL only).
+  - ~~One `paths` module in `ptyro-core`: `%LOCALAPPDATA%\ptyro` for state and the database, `%APPDATA%\ptyro` for config, XDG variables when set.~~ WIN3 built the module; the XDG variables now win on Windows too (SPEC §14.1).
+  - ~~One `default_shell()` replacing the 33 places that read `$SHELL` directly. One `command_shell()` replacing the `sh -c` sites outside tests.~~ `ptyro_core::shell`: `default_shell()` (5 readers were left by then), `default_shell_argv()`, `command_argv(shell, line)` (each shell's flag), `command_shell(line)` and `editor_command(editor, path)`.
+    - Found: the TUI's "run a command" sent the *client's* `$SHELL` and the web `sh -c` to the daemon, which a Windows client would get wrong for WSL. They now send the line (`SpawnSpec.command`, protocol 1.27) and the daemon runs it through its own shell; it needs full scope from a device, like any command line.
+    - Found: `ptyro config edit` and `cs contract edit` ran `sh -c`, which a Windows client doesn't have; `editor_command` quotes the path for PowerShell or cmd there.
+    - Kept on `sh`, each for its task: Claude Code's status line (Claude runs it through bash everywhere: WIN8), the inspector's "commit in editor" (`"$@"`: WIN6), a verify check's `exec 2>&1` (WIN6), ssh remotes (WIN11), and what runs inside WSL.
 - [ ] **WIN5 ConPTY sessions and named pipes** (R-WIN-09, R-WIN-10) **L**
   - The ConPTY backend:
     - `CreatePseudoConsole` and `ResizePseudoConsole`, with overlapped pipe I/O (or one reader thread per session, if WIN0.2 says so);
@@ -2996,6 +2999,7 @@ done.
   - Git Bash found where Git for Windows puts it. If missing, a `.sh` setup step offers `winget install Git.Git` as its fix.
   - CRLF in scripts detected and offered a fix.
   - Competitors' committed configs (M5.10) keep working through bash.
+  - From WIN4: a verify check runs `exec 2>&1; <command>` (POSIX), the inspector's "commit in editor" runs `sh -c 'git add -- "$@" && …'`, and `command_argv` gives cmd.exe a line Rust's `Command` quotes with `\"`, which cmd doesn't read (`raw_arg` there).
 - [ ] **WIN7 Processes and files** (R-WIN-12) **M**
   - Foreground process for UX1.4 (an agent started by hand in a shell): the process tree under the shell (Toolhelp32), or the console process list.
   - Listening ports with `GetExtendedTcpTable` (`ports.rs`). "In use by" with Restart Manager (the chat.db check). Locks with `std::fs::File::lock`.
@@ -3004,6 +3008,7 @@ done.
 - [ ] **WIN8 Agents and worktrees on Windows** (R-WIN-17, R-WIN-18) **M**
   - `locate.rs` finds `claude.exe` (native installer), npm's `.cmd` shims, `codex.exe`, `opencode`, `agy`.
   - Hooks written into agent settings run under Git Bash and PowerShell alike: `ptyro.exe` by full path, quoted for spaces. Tested against Claude's `"shell"` field.
+  - `ptyro statusline` runs the user's own status line with `sh -c` (`relay.rs`): Claude Code runs one through bash on Windows too (Git Bash), so it needs Git Bash's `sh` found there (WIN4 left it).
   - Profiles can set Claude's shell (`CLAUDE_CODE_GIT_BASH_PATH`) and notice Codex's Windows sandbox mode.
   - Each adapter's status, resume and injection checked on Windows. The fake agent builds and runs there.
   - Worktrees: `core.longpaths=true` on repos ptyro creates worktrees for. A warning before a worktree path gets too deep. `doctor` suggests Dev Drive and a Defender exclusion for the worktree root, with the steps.

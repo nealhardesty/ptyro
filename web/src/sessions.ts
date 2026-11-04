@@ -137,7 +137,7 @@ export function newTask(where?: string, task?: string): void {
         const w = data.worktrees.get(id)!;
         const spec: any = { worktree: w.id, cwd: "" };
         if (isAgent) Object.assign(spec, { agent: a, prompt: text, title: text });
-        else if (a === "@command") spec.argv = ["sh", "-c", command.value.trim()];
+        else if (a === "@command") spec.command = command.value.trim();
         s.close();
         await startSession(spec);
       } else {
@@ -156,7 +156,7 @@ export function newTask(where?: string, task?: string): void {
         // A shell or command in a new worktree: start it once the worktree exists.
         if (r && !isAgent) {
           const spec: any = { worktree: r.info.id, cwd: "" };
-          if (a === "@command") spec.argv = ["sh", "-c", command.value.trim()];
+          if (a === "@command") spec.command = command.value.trim();
           await startSession(spec);
         }
       }

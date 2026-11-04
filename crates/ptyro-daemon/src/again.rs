@@ -100,7 +100,7 @@ impl Daemon {
         mut spec: SpawnSpec,
     ) -> Result<SpawnSpec, Error> {
         spec.again = false;
-        if spec.agent.is_some() || !spec.argv.is_empty() {
+        if spec.agent.is_some() || !spec.argv.is_empty() || spec.command.is_some() {
             return Ok(spec);
         }
         if spec.worktree.is_none() {

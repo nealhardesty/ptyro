@@ -358,13 +358,7 @@ fn shell(config: &Config, r: &mut Report) {
     use ptyro_core::shell::ShellKind;
     const S: &str = "shell";
     let argv = if config.shell.command.is_empty() {
-        vec![
-            std::env::var("SHELL")
-                .ok()
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| "/bin/sh".into()),
-            "-l".into(),
-        ]
+        ptyro_core::shell::default_shell_argv()
     } else {
         config.shell.command.clone()
     };

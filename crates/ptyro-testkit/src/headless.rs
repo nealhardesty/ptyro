@@ -193,7 +193,7 @@ pub async fn run(mut s: Script) -> Result<Report> {
             () = until(next_resize) => {
                 let (_, size) = resizes.next().expect("peeked");
                 emu.resize(size);
-                child.writer.resize(ptyro_pty::pty_size(size))?;
+                ptyro_pty::resize(&child.writer, size)?;
             },
             () = until(next_snap) => {
                 let t = snapshots.next().expect("peeked");

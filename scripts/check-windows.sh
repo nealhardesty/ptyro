@@ -3,8 +3,9 @@
 # macOS with cargo-xwin, for x64 and ARM64. No Windows machine or Visual Studio needed.
 #
 # It checks the Windows client (WIN3): every crate it is made of, with its tests, and the ptyro
-# binary (whose own tests need a daemon, so they are Unix's). The daemon side (ptyro-daemon,
-# ptyro-pty, ptyro-testkit) isn't Windows' yet (track D).
+# binary (whose own tests need a daemon, so they are Unix's); and ptyro-pty, whose Windows side
+# is the seam ConPTY fills (WIN4, then WIN5). The rest of the daemon side (ptyro-daemon,
+# ptyro-testkit) isn't Windows' yet (track D).
 #
 #   make check-windows                     x64 and ARM64
 #   make check-windows TARGETS=x86_64      one of them
@@ -18,7 +19,7 @@ set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 targets=${TARGETS:-"x86_64 aarch64"}
 # The Windows client's crates (SPEC §20.11), each with its tests.
-crates=${CRATES:-"ptyro-core ptyro-protocol ptyro-term ptyro-store ptyro-agents ptyro-git ptyro-meaning ptyro-run ptyro-drive ptyro-client ptyro-tui"}
+crates=${CRATES:-"ptyro-core ptyro-protocol ptyro-term ptyro-store ptyro-agents ptyro-git ptyro-meaning ptyro-run ptyro-drive ptyro-client ptyro-tui ptyro-pty"}
 optional=${OPTIONAL:-}
 skip() { echo "check-windows: skipped: $1 (make check-windows says how)"; exit 0; }
 

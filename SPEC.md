@@ -1013,6 +1013,13 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built WIN4] Protocol 1.27** (additive): `SpawnSpec.command`, a command line as typed. The
+daemon runs it through its own default shell (`$SHELL -c` on Unix; on Windows PowerShell, §3.4),
+so a client no longer builds the shell's argv itself: the TUI's "run a command" used the
+*client's* `$SHELL` and the web `sh -c`, which a Windows client would have got wrong for its WSL
+daemon. It needs full scope from a paired device, like any command line (§16.4), and `again`
+leaves it alone. An older daemon ignores the field and starts a shell.
+
 **[built UX3.7] Protocol 1.26** (additive): quick new is per worktree and always an agent.
 `LastLaunch` gains `worktree?` (an address) and answers what `again` starts there, always
 `Some`: the agent that worktree last started (agent, profile, argv), else its project's
@@ -4042,7 +4049,8 @@ workspace, found by `$PTYRO_SCRATCHPAD`. ptyro never owns the only copy: it is a
 
 **[built WIN3]** On Windows (the client of a WSL daemon): config `%APPDATA%\ptyro\`, and data,
 state and runtime under `%LOCALAPPDATA%\ptyro\` (`data\`, `state\`, `run\`); there is no
-socket there. A file "only its owner reads" is mode 0600 on Unix; on Windows these folders'
+socket there. **[built WIN4]** An `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME` or
+`XDG_RUNTIME_DIR` that is set to an absolute path wins there too (`<it>\ptyro\`), as on Unix. A file "only its owner reads" is mode 0600 on Unix; on Windows these folders'
 inherited access list already keeps them to the user (`ptyro_core::os`). That config holds this
 client's own settings (`client.default_remote`, the TUI's look and keys); the daemon's is in WSL,
 as for any `--remote` client. Which is whose is `settings::read_by_client` (the client reads `ui.*`
@@ -6659,6 +6667,16 @@ Windows) wasn't needed to get the list below: compile errors are the same either
   and the rest pass; tests of Unix behaviour (shells, the daemon's emulator and recorder, modes,
   symlinks, `sh`) are `#[cfg(unix)]`. ptyro-agents and ptyro-git only compile there: they run in
   the daemon, and their tests assume Unix paths and Unix git. [V]
+
+  **Built (WIN4, 2026-11-04):** `ptyro-pty` builds for Windows too (x64 and ARM64, clippy clean):
+  pty-process, rustix and libc are its Unix dependencies, and `windows.rs` stands beside
+  `unix.rs` with the same functions. Its PTY types (`Reader`, `Writer`, `Master`) are empty enums
+  there, so code that holds one type-checks and can't be reached; `spawn` says sessions on Windows
+  are WIN5's and to run the daemon in WSL. `Signal` keeps the POSIX numbers clients send. Local
+  time there is the time crate's offset. `make check-windows` and `make test-windows` include it.
+  Smart App Control refused ptyro-pty's unsigned debug test binary on this machine (Device Guard)
+  while it ran ptyro-core's (139 tests passed, `shell::default_shell` picking pwsh first), so
+  ptyro-pty's Windows tests run in CI's `windows` job (§20.12). [V]
 
   What this table said, before it was built: the client side (core, protocol, client, term, tui and the binary without the daemon) is
   about 65 small changes, nearly all "a file only its owner reads" and "who am I", plus two real
