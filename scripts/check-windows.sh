@@ -3,7 +3,7 @@
 # macOS with cargo-xwin, for x64 and ARM64. No Windows machine or Visual Studio needed.
 #
 # It checks the Windows client (WIN3): every crate it is made of, with its tests, and the ptyro
-# binary; and the native daemon's crates (ptyro-pty, ptyro-daemon, ptyro-testkit: WIN5), each
+# binary (its tests need Unix; win5.rs runs on Windows itself); and the native daemon's crates (ptyro-pty, ptyro-daemon, ptyro-testkit: WIN5), each
 # with its tests. The tests themselves run on Windows (`make test-windows`, CI's windows job).
 #
 #   make check-windows                     x64 and ARM64
@@ -69,6 +69,6 @@ for t in $targets; do
   echo "check-windows: $t-pc-windows-msvc: every crate with its tests, and ptyro.exe"
   # shellcheck disable=SC2086
   cargo xwin check --target "$t-pc-windows-msvc" --all-targets $pkgs
-  cargo xwin check --target "$t-pc-windows-msvc" -p ptyro --bins --tests
+  cargo xwin check --target "$t-pc-windows-msvc" -p ptyro --bins
 done
 echo "check-windows: ok ($targets)"
