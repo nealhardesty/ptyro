@@ -1134,6 +1134,7 @@ mod tests {
         assert!(out.events.contains(&TermEvent::Cwd("/home/me/src".into())), "{:?}", out.events);
     }
 
+    #[cfg(unix)] // maps Windows paths only inside WSL (the daemon's emulator)
     #[test]
     fn osc_9_9_windows_paths_are_mapped_into_wsl() {
         let wsl = Some("/mnt/");

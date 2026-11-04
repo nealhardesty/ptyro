@@ -35,14 +35,13 @@ async fn cli(args: &[&str]) -> Result<Value, Error> {
 
 /// Start `args` as a ptyro of its own, detached: it may outlive (or end) whatever asked.
 fn detached(args: &[&str]) -> Result<(), Error> {
-    use std::os::unix::process::CommandExt;
     let exe = std::env::current_exe().map_err(|e| Error::internal(format!("ptyro's path: {e}")))?;
-    std::process::Command::new(exe)
-        .args(args)
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .process_group(0)
+        .stderr(std::process::Stdio::null());
+    ptyro_core::os::detach(&mut cmd)
         .spawn()
         .map(|_| ())
         .map_err(|e| Error::internal(format!("ptyro {}: {e}", args.join(" "))))
@@ -256,6 +255,34 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
         }
         // `ptyro pair --open`: the computer's own browser (inside WSL, Windows') gets a paired
         // web app. `--json` returns at once instead of waiting for the browser.
+        // A session in a new tab of a terminal on the computer (WIN3). The server has no terminal
+        // of its own (the daemon started it), so inside WSL it asks Windows Terminal, when it's
+        // there; elsewhere there is none to ask.
+        "session.tab" => {
+            let id = str_of(a, "session")?;
+            let mut here = ptyro_tui::tab::here();
+            here.tmux = false;
+            here.windows_terminal = here.wt_exe.is_some();
+            let plan = ptyro_tui::tab::plan(ptyro_tui::tab::Place::Tab, id, None, &here).map_err(|_| {
+                Error::new(
+                    ErrorCode::Unsupported,
+                    "nothing on the computer can be asked for a terminal tab: that works when it is \
+                     WSL with Windows Terminal",
+                )
+            })?;
+            let (exe, args) =
+                plan.argv.split_first().ok_or_else(|| Error::internal("no command"))?;
+            let ok = tokio::process::Command::new(exe)
+                .args(args)
+                .stdin(std::process::Stdio::null())
+                .status()
+                .await
+                .is_ok_and(|s| s.success());
+            if !ok {
+                return Err(Error::internal(format!("{exe} didn't open it")));
+            }
+            Ok(json!({ "said": format!("Opened in {}", plan.what) }))
+        }
         "pair.open" => {
             let r = cli(&["pair", "--open", "--json"]).await?;
             if r["ok"] == json!(false) {

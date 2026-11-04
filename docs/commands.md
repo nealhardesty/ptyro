@@ -10,7 +10,8 @@ Conventions:
 
 - `[x]` is optional, `A|B` is a choice, `…` repeats.
 - Every command takes `--remote [ssh://][user@]host[:port]` (or `PTYRO_REMOTE`) to act on another
-  machine's daemon over ssh.
+  machine's daemon over ssh, or `--remote wsl://[distro]` for the daemon in a WSL distro (from
+  Windows, or from another distro). Without either, `client.default_remote` is used if set.
 - Listing and query commands take `--json`; the shapes are in [`cli-json.md`](cli-json.md).
 - Aliases: `a` (attach), `ls` (list), `runs`, `recipes`, `changeset`, `gates`, `leases`,
   `checkpoints` / `ckpt`, `projects`, `workspace`, `worktree`, `profiles`, `report-agent`.
@@ -39,7 +40,7 @@ Conventions:
 | `ptyro new … --prompt TEXT\|@SNIPPET \| --prompt-file F` · `--title T` | the first prompt, typed once the agent's input box is really there · its title (default: the prompt; the name comes from it too) |
 | `ptyro new … --verify CHECK` · `--structured` · `--unqueued` | verified-done · drive it over its protocol (chat view) · skip the review queue's hold |
 | `ptyro new … --lead [--max-workers N] [--lead-agent A]` | a lead agent with `ptyro mcp` (default 4 workers) |
-| `ptyro attach [SESSION] [-w WS] [--raw] [--view-only]` | open the TUI on a session; `--raw`: that session only, no chrome |
+| `ptyro attach [SESSION] [-w WS] [--raw] [--view-only] [--tab\|--pane]` | open the TUI on a session; `--raw`: that session only, no chrome; `--tab`/`--pane`: in a new tab or pane of this terminal instead (tmux, Windows Terminal) |
 | `ptyro list` (alias `ls`) `[-a] [--status S] [-p P] [-w WS] [--json]` | sessions: where they run, profile, ports; `-a` adds earlier daemon runs; `--status running` is what is alive, `--status active` what is busy now (working, blocked, or running a command) |
 | `ptyro stop SESSIONS…` | stop gracefully, keeping them listed (agents finish their turn first) |
 | `ptyro kill SESSIONS… [--keep] [-s N]` (a signal number, e.g. `-s 9`) | stop (HUP → TERM → KILL) and remove |
@@ -191,7 +192,7 @@ See [`remote.md`](remote.md).
 | `ptyro devices [ls \| revoke ID \| push-test]` | paired devices |
 | `ptyro machine [ls \| add (ssh://HOST \| CODE) [--name N] \| rm M \| hide M WS \| unhide M WS \| retry M \| pair]` | other machines whose workspaces show here beside yours (`laptop2:work`, `laptop2:fix-flaky-test`): add one over ssh or with the code `machine pair` printed on it; they must run the same version |
 | `ptyro web [on\|off\|status] [--access localhost\|tailscale\|open] [--pair] [--json]` | have the daemon run the web app's server (`ptyro daemon start --serve` too): on, off, or where it is and what to do next |
-| `ptyro --remote HOST …` / `ptyro proxy` | any command against another machine's daemon / the bridge it runs there |
+| `ptyro --remote HOST …` / `ptyro proxy` | any command against another machine's daemon / the bridge it runs there; `--remote wsl://[distro]` is the daemon in a WSL distro (what `ptyro.exe` on Windows uses; `client.default_remote` keeps one) |
 
 ## Recordings
 

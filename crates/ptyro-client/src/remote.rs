@@ -1,6 +1,10 @@
 //! Reaching a daemon on another machine (SPEC §16.2, M9.1): `ssh host ptyro proxy` carries the
 //! protocol over ssh's stdio, so there are no ports and no new authentication. ssh runs with
 //! `BatchMode`: the TUI owns the terminal, so it can't ask for a password (use keys or an agent).
+//!
+//! `wsl://<distro>` (WIN3) is the same over `wsl.exe`: Windows' ptyro reaching the daemon in a
+//! WSL distro (`wsl://` alone is the default distro). It works from inside WSL too, through
+//! interop, which is how it is tested.
 
 use std::process::Stdio;
 use std::time::Duration;
@@ -79,6 +83,169 @@ pub fn ssh(target: &str) -> Result<Child, ClientError> {
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     cmd.spawn().map_err(|e| ClientError::Unavailable(format!("cannot run {exe}: {e}")))
+}
+
+/// The distro of a `wsl://` target: `wsl://Ubuntu` is `Some("Ubuntu")`, `wsl://` is `Some("")`
+/// (the default distro); anything else is `None`.
+pub fn wsl_distro(target: &str) -> Option<&str> {
+    target.strip_prefix("wsl://").map(|d| d.trim_end_matches('/'))
+}
+
+/// What runs inside the distro: `sh` with the places ptyro is installed under put first on
+/// `PATH` (as over ssh), then `ptyro proxy`. The binary goes in as `$0`, never into the script.
+pub fn proxy_argv(bin: &str) -> Vec<String> {
+    [
+        "sh",
+        "-c",
+        "PATH=\"$HOME/.cargo/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\" exec \"$0\" proxy",
+        bin,
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+/// `wsl.exe`: by name on Windows; inside WSL where Windows keeps it (its folder may not be on
+/// `PATH`); `PTYRO_WSL` replaces it (a test double).
+pub fn wsl_exe() -> String {
+    if let Ok(w) = std::env::var("PTYRO_WSL") {
+        return w;
+    }
+    match ptyro_core::wsl::detect() {
+        Some(w) => w.windows_exe("wsl.exe").to_string_lossy().into_owned(),
+        None => "wsl.exe".into(),
+    }
+}
+
+/// The arguments for `wsl.exe` that run `ptyro proxy` in `distro` (empty: the default one).
+pub fn wsl_args(distro: &str, bin: &str) -> Result<Vec<String>, ClientError> {
+    // A distro's name is letters, digits, `.`, `_` and `-` (WSL's own rule); nothing option-like.
+    if distro.starts_with('-')
+        || !distro.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+    {
+        return Err(ClientError::Unavailable(format!("bad WSL distro name {distro:?}")));
+    }
+    let mut args = Vec::new();
+    if !distro.is_empty() {
+        args.extend(["-d".to_owned(), distro.to_owned()]);
+    }
+    args.push("--exec".into());
+    args.extend(proxy_argv(bin));
+    Ok(args)
+}
+
+/// Start `ptyro proxy` in a WSL distro through `wsl.exe`.
+pub fn wsl(distro: &str) -> Result<Child, ClientError> {
+    let exe = wsl_exe();
+    let bin = std::env::var("PTYRO_REMOTE_BIN").unwrap_or_else(|_| "ptyro".into());
+    Command::new(&exe)
+        .args(wsl_args(distro, &bin)?)
+        // wsl.exe's own messages ("There is no distribution…") in UTF-8, not UTF-16.
+        .env("WSL_UTF8", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| ClientError::Unavailable(format!("cannot run {exe}: {e} (is WSL installed?)")))
+}
+
+/// A failed handshake through `wsl.exe`, with what it (or ptyro in the distro) said.
+pub async fn explain_wsl(
+    e: ClientError,
+    distro: &str,
+    child: &mut Child,
+    stderr: Option<JoinHandle<String>>,
+) -> ClientError {
+    if matches!(e, ClientError::Rejected(_)) {
+        return e;
+    }
+    let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+    let _ = child.start_kill();
+    let said = match stderr {
+        Some(h) => tokio::time::timeout(Duration::from_secs(1), h)
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default(),
+        None => String::new(),
+    };
+    // Older wsl.exe ignores WSL_UTF8 and writes UTF-16: drop its NULs.
+    let said = said.replace('\0', "");
+    let said: Vec<&str> = said.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let tail = said[said.len().saturating_sub(2)..].join(" / ");
+    // wsl.exe says "there is no distribution" on stdout, where the protocol was expected, so the
+    // error above can be a framing one: ask it which distros there are instead.
+    if !distro.is_empty()
+        && let Some(names) = distros().await
+        && !names.iter().any(|n| n.eq_ignore_ascii_case(distro))
+    {
+        return ClientError::Unavailable(format!(
+            "wsl://{distro}: there is no WSL distro named {distro}{}",
+            if names.is_empty() {
+                " (WSL has none: `wsl --install`)".to_owned()
+            } else {
+                format!("; yours: {}", names.join(", "))
+            }
+        ));
+    }
+    let d = if distro.is_empty() { String::new() } else { format!(" -d {distro}") };
+    ClientError::Unavailable(format!(
+        "wsl://{distro}: {e}{}. Check that `wsl{d} -- ptyro --version` works: ptyro must be \
+         installed in that distro (its README has the one-line install)",
+        if tail.is_empty() { String::new() } else { format!(" (wsl: {tail})") },
+    ))
+}
+
+/// `ptyro --version` in a WSL distro (`ptyro 0.0.48`), found where `proxy` looks; `None` when it
+/// isn't there or the distro doesn't answer within 20 s (the first start of a distro is slow).
+pub async fn version_in(distro: &str) -> Option<String> {
+    let bin = std::env::var("PTYRO_REMOTE_BIN").unwrap_or_else(|_| "ptyro".into());
+    let mut args = wsl_args(distro, &bin).ok()?;
+    // The same script as `proxy`, asking for the version instead.
+    let script = args.iter().position(|a| a == "-c").map(|i| i + 1)?;
+    args[script] = args[script].replace(" proxy", " --version");
+    let out = tokio::time::timeout(
+        Duration::from_secs(20),
+        Command::new(wsl_exe())
+            .args(&args)
+            .env("WSL_UTF8", "1")
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    let v = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    (out.status.success() && v.starts_with("ptyro ")).then_some(v)
+}
+
+/// The distros WSL has (`wsl.exe -l -q`); `None` when it can't say.
+pub async fn distros() -> Option<Vec<String>> {
+    let out = tokio::time::timeout(
+        Duration::from_secs(5),
+        Command::new(wsl_exe()).args(["-l", "-q"]).env("WSL_UTF8", "1").output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    Some(parse_distros(&out.stdout))
+}
+
+/// `wsl.exe -l -q`'s output: one name a line (CRLF), UTF-8 with `WSL_UTF8`, UTF-16 without.
+pub fn parse_distros(out: &[u8]) -> Vec<String> {
+    let text = if out.len() >= 2 && out.iter().skip(1).step_by(2).all(|&b| b == 0) {
+        let units: Vec<u16> =
+            out.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
+        String::from_utf16_lossy(&units)
+    } else {
+        String::from_utf8_lossy(out).into_owned()
+    };
+    text.lines()
+        .map(|l| l.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}'))
+        .filter(|l| !l.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Start `argv` with its stdin and stdout as the protocol stream (MM1.B's bridge).
@@ -183,6 +350,7 @@ mod tests {
         assert!(remote_command("/opt/my ptyro").ends_with(" '/opt/my ptyro'"));
     }
 
+    #[cfg(unix)] // runs sh
     #[test]
     fn remote_bin_cannot_escape_the_script() {
         // The login shell then `sh -c` see exactly one argument, whatever the name holds.
@@ -194,6 +362,43 @@ mod tests {
                 .unwrap();
             assert_eq!(String::from_utf8_lossy(&out.stdout), format!("{bin}proxy"), "{cmd}");
         }
+    }
+
+    #[test]
+    fn wsl_targets_name_a_distro_or_the_default() {
+        assert_eq!(wsl_distro("wsl://Ubuntu"), Some("Ubuntu"));
+        assert_eq!(wsl_distro("wsl://"), Some(""));
+        assert_eq!(wsl_distro("wsl://Ubuntu-24.04/"), Some("Ubuntu-24.04"));
+        assert_eq!(wsl_distro("me@box"), None);
+        let a = wsl_args("Ubuntu", "ptyro").unwrap();
+        assert_eq!(&a[..4], ["-d", "Ubuntu", "--exec", "sh"]);
+        assert_eq!(a.last().map(String::as_str), Some("ptyro"));
+        assert_eq!(wsl_args("", "ptyro").unwrap()[0], "--exec", "the default distro");
+        for bad in ["-d", "--exec", "a b", "x;y", "Ub$untu"] {
+            assert!(wsl_args(bad, "ptyro").is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn wsl_lists_its_distros_in_either_encoding() {
+        assert_eq!(parse_distros(b"Ubuntu\r\ndocker-desktop\r\n"), ["Ubuntu", "docker-desktop"]);
+        let utf16: Vec<u8> =
+            "Ubuntu\r\nDebian\r\n".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert_eq!(parse_distros(&utf16), ["Ubuntu", "Debian"]);
+        assert!(parse_distros(b"").is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_proxy_script_runs_the_binary_it_is_given() {
+        let a = proxy_argv("/opt/it's here/ptyro");
+        let out = std::process::Command::new(&a[0])
+            .arg(&a[1])
+            .arg(a[2].replace(" exec ", " printf %s "))
+            .arg(&a[3])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "/opt/it's here/ptyroproxy");
     }
 
     #[test]

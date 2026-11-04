@@ -1,5 +1,7 @@
-//! File-system layout (SPEC §14.1): XDG on Linux *and* macOS; `PTYRO_HOME` puts everything under
-//! one directory (tests, portable installs); `PTYRO_SOCKET` overrides only the socket.
+//! File-system layout (SPEC §14.1): XDG on Linux *and* macOS; on Windows, the config under
+//! `%APPDATA%\ptyro` and the rest under `%LOCALAPPDATA%\ptyro` (WIN3); `PTYRO_HOME` puts
+//! everything under one directory (tests, portable installs); `PTYRO_SOCKET` overrides only the
+//! socket.
 
 use std::path::{Path, PathBuf};
 
@@ -25,13 +27,25 @@ impl Paths {
 
     /// Resolve with an explicit variable lookup (testable without touching the real environment).
     pub fn resolve(var: impl Fn(&str) -> Option<PathBuf>) -> std::io::Result<Self> {
-        let uid = rustix::process::getuid().as_raw();
+        let uid = crate::os::uid().unwrap_or(0);
         let mut paths = if let Some(home) = var("PTYRO_HOME").map(absolute) {
             Self {
                 config: home.join("config"),
                 data: home.join("data"),
                 state: home.join("state"),
                 runtime: home.join("run"),
+                socket: PathBuf::new(),
+            }
+        } else if cfg!(windows) {
+            // Windows' own places: roaming config, the rest local to this computer. There is no
+            // daemon here, so `run` and its socket are only named (a native daemon is track D).
+            let w = etcetera::base_strategy::Windows::new().map_err(std::io::Error::other)?;
+            let local = w.cache_dir().join("ptyro");
+            Self {
+                config: w.config_dir().join("ptyro"),
+                data: local.join("data"),
+                state: local.join("state"),
+                runtime: local.join("run"),
                 socket: PathBuf::new(),
             }
         } else {
@@ -76,9 +90,9 @@ impl Paths {
     }
 }
 
-/// The user this process runs as.
+/// The user this process runs as (0 on Windows, which has no uids: `crate::os::uid`).
 pub fn current_uid() -> u32 {
-    rustix::process::getuid().as_raw()
+    crate::os::uid().unwrap_or(0)
 }
 
 /// Relative to where this process is now, as an absolute path: the daemon detaches into its own
@@ -106,6 +120,19 @@ fn fnv1a(bytes: &[u8]) -> u32 {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_keeps_the_config_roaming_and_the_rest_local() {
+        let p = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| PathBuf::from(r"C:\h"))).unwrap();
+        assert_eq!(p.config, PathBuf::from(r"C:\h\config"));
+        let p = Paths::resolve(|_| None).unwrap();
+        let roaming = p.config.to_string_lossy().to_ascii_lowercase();
+        assert!(roaming.ends_with(r"appdata\roaming\ptyro"), "{roaming}");
+        let local = p.data.to_string_lossy().to_ascii_lowercase();
+        assert!(local.ends_with(r"appdata\local\ptyro\data"), "{local}");
+    }
+
+    #[cfg(unix)] // Unix paths
     #[test]
     fn ptyro_home_puts_everything_under_one_dir() {
         let p = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| PathBuf::from("/h"))).unwrap();
@@ -132,6 +159,7 @@ mod tests {
         assert!(e.to_string().contains("PTYRO_SOCKET"), "{e}");
     }
 
+    #[cfg(unix)] // Unix paths
     #[test]
     fn socket_override_wins() {
         let p = Paths::resolve(|k| match k {

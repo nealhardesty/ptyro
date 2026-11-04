@@ -2,7 +2,7 @@
 // (stop, restart, rename, hibernate, convert, adopt…), plus its scrollback, events, replay and
 // export, and talking to several at once.
 
-import { conn } from "./conn.js";
+import { conn, host } from "./conn.js";
 import { css, F } from "./color.js";
 import { againLabel, can, data, liveWorktrees, refreshLaunch } from "./data.js";
 import type { Worktree } from "./data.js";
@@ -19,6 +19,7 @@ const ACTIONS = {
   "session.kill": "Kill the session now",
   "session.restart": "Start the session's command again, in place",
   "session.rename": "Change the session's name (its address)",
+  "session.tab": "Open this session in a terminal on the computer: a new Windows Terminal tab (when the computer is WSL)",
   "session.retitle": "Change what the session is titled",
   "session.resume": "Bring a hibernated agent back into its conversation",
   "session.hibernate": "Stop an idle agent and keep it resumable",
@@ -267,6 +268,11 @@ function stop(s: Session): void {
   confirm(`Stop ${s.name}?`, "It gets a moment to finish, then it's stopped.", "Stop", async () => { notice(await ask({ t: "kill", addr: addr(s), signal: null }), `Stopped ${s.name}`); });
 }
 
+/// `ptyro attach <id> --tab` on the computer: a Windows Terminal tab there (WSL), attached.
+async function openOnComputer(s: Session): Promise<void> {
+  try { const r = await host("session.tab", { session: s.id }); ui.toast(r.said ?? "Opened"); } catch (e) { ui.toast(errText(e)); }
+}
+
 /// What the session's ⋯ button offers: only what makes sense for it now.
 export function sessionMenu(s: Session): void {
   const dormant = s.state.t === "dormant";
@@ -292,6 +298,7 @@ export function sessionMenu(s: Session): void {
     { title: tip("session.events"), label: "Events", run: () => go(`#/events/${enc(s.id)}`) },
     { title: tip("session.replay"), label: "Replay", hint: "Its recording, played back", run: () => go(`#/replay/${enc(s.id)}`) },
     { title: tip("session.export"), label: "Save its recording…", run: () => exportSession(s.id, s.name) },
+    can("full") && { title: tip("session.tab"), label: "Open on the computer", hint: "A new Windows Terminal tab there", run: () => void openOnComputer(s) },
     { title: tip("session.rename"), label: "Rename…", run: () => renameSession(s) },
     { title: tip("session.retitle"), label: "Set title…", run: () => retitleSession(s) },
     live(s) && { title: tip("session.kill"), label: "Kill now", danger: true, hint: "No waiting", run: () => confirm(`Kill ${s.name}?`, "It's stopped at once, with no chance to clean up.", "Kill", async () => notice(await ask({ t: "kill", addr: addr(s), signal: 9 }), `Killed ${s.name}`)) },

@@ -315,10 +315,8 @@ pub fn load_tailnet(dir: &Path, name: &str, now: OffsetDateTime) -> Option<Tailn
 /// window left, and does nothing otherwise), writing it under `dir`. Blocks: run it off the
 /// async threads.
 pub fn fetch_tailnet(dir: &Path, name: &str) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
     let d = tailnet_dir(dir);
-    std::fs::create_dir_all(&d).map_err(|e| format!("{}: {e}", d.display()))?;
-    let _ = std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700));
+    ptyro_core::os::private_dir(&d).map_err(|e| format!("{}: {e}", d.display()))?;
     let mut child = std::process::Command::new("tailscale")
         .arg("cert")
         .arg("--cert-file")

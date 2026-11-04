@@ -1512,8 +1512,7 @@ fn insert_node(
 
 /// Owner-only (0600): chat text is private.
 fn private(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    let _ = ptyro_core::os::make_private(path);
 }
 
 fn node_by_id(db: &Connection, id: &str) -> Result<Option<ChatNode>> {
@@ -1992,6 +1991,7 @@ mod tests {
         assert!(d.fts5 && d.integrity == "ok", "{d:?}");
     }
 
+    #[cfg(unix)] // file modes
     #[tokio::test]
     async fn a_late_write_after_a_delete_is_dropped_and_copies_are_private() {
         let db = db_with_chat().await;
@@ -2174,6 +2174,7 @@ mod tests {
         assert_eq!(all, ["k1", "k2"]);
     }
 
+    #[cfg(unix)] // file modes
     #[test]
     fn a_newer_schema_is_refused_untouched() {
         let dir = tempfile::tempdir().unwrap();

@@ -182,6 +182,7 @@ fn tilde(p: &Path) -> String {
 }
 
 #[cfg(test)]
+#[cfg(unix)] // fakes agents with execute bits
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;

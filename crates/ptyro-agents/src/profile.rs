@@ -516,7 +516,7 @@ pub fn sync_shares_from(
             if let Some(parent) = dst.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            match std::os::unix::fs::symlink(&src, &dst) {
+            match link(&src, &dst) {
                 Ok(()) => out.push(ShareOutcome::Linked(dst)),
                 Err(e) => out.push(ShareOutcome::Refused(format!("{}: {e}", dst.display()))),
             }
@@ -529,6 +529,24 @@ fn same_dir(a: &Path, b: &Path) -> bool {
     match (a.canonicalize(), b.canonicalize()) {
         (Ok(a), Ok(b)) => a == b,
         _ => a == b,
+    }
+}
+
+/// A symbolic link at `dst` to `src`. Windows tells file links from folder links, and makes them
+/// only with Developer Mode or the right privilege: without, the error says so and the share is
+/// refused, as any other failed link is.
+fn link(src: &Path, dst: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(src, dst)
+    }
+    #[cfg(windows)]
+    {
+        if src.is_dir() {
+            std::os::windows::fs::symlink_dir(src, dst)
+        } else {
+            std::os::windows::fs::symlink_file(src, dst)
+        }
     }
 }
 

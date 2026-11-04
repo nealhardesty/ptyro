@@ -236,13 +236,10 @@ pub async fn create(ctx: &Ctx, o: &Opts) -> Result<Made, Error> {
     std::fs::create_dir_all(dir).map_err(|e| io("the destination folder", e))?;
     let part = dir.join(format!(".ptyro-backup-{}.part", std::process::id()));
     {
-        use std::os::unix::fs::OpenOptionsExt;
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&part)
-            .map_err(|e| io(&part.display().to_string(), e))?;
+        let file =
+            ptyro_core::os::private(std::fs::OpenOptions::new().write(true).create_new(true))
+                .open(&part)
+                .map_err(|e| io(&part.display().to_string(), e))?;
         let status = std::process::Command::new("tar")
             .args(["-czf", "-", "-C"])
             .arg(stage.path())

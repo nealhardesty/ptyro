@@ -431,6 +431,7 @@ fn reaching_a_setting_by_a_wrong_name_suggests_one() {
     assert_eq!(member_of("agents.pair.args").unwrap().1, "pair");
 }
 
+#[cfg(unix)] // file modes
 #[test]
 fn a_change_goes_to_the_layer_it_names_and_can_be_undone() {
     let lk = Lookups::default();

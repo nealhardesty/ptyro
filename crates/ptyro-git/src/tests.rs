@@ -395,6 +395,7 @@ fn clone_tree_copies() {
 /// Config an agent could write (`.git/config` is in its worktree's reach) names code: hooks and
 /// `core.fsmonitor`. What ptyro runs by itself (status, diffs, checkpoints) runs neither; what
 /// the user asked for (a commit here) runs their hooks.
+#[cfg(unix)] // execute bits
 #[test]
 fn background_calls_run_no_repository_code() {
     let f = fixture();

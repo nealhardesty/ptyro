@@ -777,13 +777,15 @@ pub fn fallback_editor() -> Option<String> {
     let path = std::env::var_os("PATH")?;
     ["nvim", "vim", "nano", "vi"]
         .into_iter()
-        .find(|e| std::env::split_paths(&path).any(|d| is_exec(&d.join(e))))
+        .find(|e| {
+            let names = crate::os::program_names(e);
+            std::env::split_paths(&path).any(|d| names.iter().any(|n| is_exec(&d.join(n))))
+        })
         .map(str::to_owned)
 }
 
 pub(crate) fn is_exec(p: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    crate::os::is_executable(p)
 }
 
 /// The words to start an editor with, for editors that run in a terminal: `-c 'set autoread'`
@@ -1015,6 +1017,7 @@ mod tests {
         assert_eq!((m.text.as_str(), m.conflicts), ("new text\n", 0));
     }
 
+    #[cfg(unix)] // symlinks and modes
     #[test]
     fn a_symlinked_pad_is_written_through() {
         let d = tempfile::tempdir().unwrap();
@@ -1087,6 +1090,7 @@ mod hardening {
         assert!(p.list_files().is_empty(), "no lossy snapshot was saved");
     }
 
+    #[cfg(unix)] // symlinks and modes
     #[test]
     fn writing_keeps_a_private_pads_permissions_and_leaves_no_temp_files() {
         use std::os::unix::fs::PermissionsExt;

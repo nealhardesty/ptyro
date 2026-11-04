@@ -116,6 +116,7 @@ function fixesFor(c: any): Item[] {
   if (c.section === "remote" || /restart/.test(c.text)) out.push({ label: "Restart ptyro", run: () => restartDaemon() });
   if (c.section === "daemon" && /binary|upgrade|older|newer/i.test(c.text)) out.push({ label: "Upgrade the daemon", run: () => upgradeDaemon() });
   if (c.section === "wsl" && c.name === "survival" && /hold_wsl is off/.test(c.text)) out.push({ label: "Keep WSL running while ptyro runs", hint: "Settings → daemon → hold_wsl", run: () => go("#/settings/daemon") });
+  if (c.section === "terminal" && c.name === "windows terminal" && c.level !== "ok") out.push({ label: "Change ptyro's prefix", hint: "Or remove the binding in Windows Terminal", run: () => go("#/settings/interface") });
   if (c.section === "wsl" && c.name === "network") out.push({ label: "Change who can reach it", hint: "Tailscale reaches a phone through WSL", run: () => go("#/settings/remote") });
   if (c.section === "integrations") out.push({ label: "Integrations", run: () => go("#/integrations") });
   if (c.section === "worktrees" && c.name === "stale" && c.level !== "ok") out.push({ label: "Clean up", hint: "Archive, remove or keep each", run: () => go("#/gc") });

@@ -11,7 +11,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
 use futures::{SinkExt, StreamExt};
 use ptyro_core::paths::Paths;
@@ -22,10 +24,19 @@ use ptyro_protocol::{
     ServerMsg, decode, encode, framing,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
+#[cfg(unix)]
 use tokio::net::UnixStream;
+
+/// The local daemon's stream: its Unix socket. Windows has no local daemon (ptyro there is a
+/// client of the one in WSL, `--remote wsl://`), so the type is only a placeholder, never made.
+#[cfg(unix)]
+pub type LocalStream = UnixStream;
+#[cfg(not(unix))]
+pub type LocalStream = tokio::io::DuplexStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::codec::Framed;
 
+#[cfg(unix)]
 const SPAWN_WAIT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, thiserror::Error)]
@@ -145,6 +156,21 @@ impl Client {
                     Ok(c)
                 }
                 Err(e) => Err(remote::explain_command(e, via, &mut child, stderr).await),
+            };
+        }
+        if let Some(target) = &opts.remote
+            && let Some(distro) = remote::wsl_distro(target)
+        {
+            let mut wsl = remote::wsl(distro)?;
+            let stream = pipes(&mut wsl)?;
+            let stderr = wsl.stderr.take().map(remote::collect);
+            let via = format!("wsl://{distro}");
+            return match Self::handshake(stream, opts, Some(via)).await {
+                Ok(mut c) => {
+                    c._ssh = Some(wsl);
+                    Ok(c)
+                }
+                Err(e) => Err(remote::explain_wsl(e, distro, &mut wsl, stderr).await),
             };
         }
         if let Some(target) = &opts.remote {
@@ -332,8 +358,19 @@ impl Client {
     }
 }
 
+/// Windows has no local daemon: say how to reach the one in WSL.
+#[cfg(not(unix))]
+pub async fn connect_raw(_opts: &ConnectOptions) -> Result<LocalStream, ClientError> {
+    Err(ClientError::Unavailable(
+        "ptyro on Windows uses the daemon in WSL: `ptyro --remote wsl://` (the default distro) or \
+         `wsl://<distro>`; `ptyro config set client.default_remote wsl://` makes it the default"
+            .into(),
+    ))
+}
+
 /// The daemon's socket, starting the daemon first when allowed and none is listening. `ptyro
 /// proxy` bridges this to ssh.
+#[cfg(unix)]
 pub async fn connect_raw(opts: &ConnectOptions) -> Result<UnixStream, ClientError> {
     let stream = match UnixStream::connect(&opts.paths.socket).await {
         Ok(s) => Ok(s),
@@ -349,6 +386,7 @@ pub async fn connect_raw(opts: &ConnectOptions) -> Result<UnixStream, ClientErro
 
 /// Whether the process on the other end of the socket is ours: tokens, typed input and prompts go
 /// down it, so a socket another user made in a shared directory must not be talked to.
+#[cfg(unix)]
 fn ours(stream: &UnixStream, opts: &ConnectOptions) -> Result<(), ClientError> {
     match stream.peer_cred() {
         Ok(c) if c.uid() == ptyro_core::paths::current_uid() => Ok(()),
@@ -373,12 +411,14 @@ fn response_id(bytes: &[u8]) -> Option<u32> {
     (env.t == "response").then_some(env.id).flatten()
 }
 
+#[cfg(unix)]
 fn is_absent(e: &std::io::Error) -> bool {
     matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused)
 }
 
 /// Start `ptyro daemon start --spawned` and wait until it accepts connections. The daemon
 /// detaches itself (`setsid`) before starting its runtime; we never fork a tokio process.
+#[cfg(unix)]
 async fn spawn_daemon(opts: &ConnectOptions) -> Result<UnixStream, ClientError> {
     let exe = match &opts.daemon_exe {
         Some(p) => p.clone(),
@@ -520,6 +560,7 @@ mod tests {
         assert!(c.pending.locked().as_ref().unwrap().is_empty());
     }
 
+    #[cfg(unix)] // a real Unix socket
     #[tokio::test]
     async fn a_socket_of_ours_is_talked_to_and_losing_the_start_race_keeps_waiting() {
         use std::os::unix::fs::PermissionsExt;

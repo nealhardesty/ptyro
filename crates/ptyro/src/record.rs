@@ -139,7 +139,6 @@ pub async fn export(
 /// Write `bytes` to `p` (0600), replacing a file of ours there but never writing through a
 /// symlink or into someone else's file.
 fn write_new_private(p: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
     match std::fs::symlink_metadata(p) {
         Ok(m) if m.file_type().is_symlink() => {
             return Err(std::io::Error::other(
@@ -150,12 +149,9 @@ fn write_new_private(p: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
         Ok(_) => return Err(std::io::Error::other("exists and isn't a file")),
         Err(_) => {}
     }
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
-        .open(p)?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    let mut f = ptyro_core::os::no_follow(ptyro_core::os::private(&mut opts), false).open(p)?;
     f.write_all(bytes)
 }
 

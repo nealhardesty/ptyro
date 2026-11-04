@@ -461,7 +461,7 @@ pub fn workspace_label(name: &str) -> String {
 
 /// `14:02`, local time, of a moment in ms.
 pub fn clock(ms: u64) -> String {
-    ptyro_pty::local_time_hm_at(i64::try_from(ms / 1000).unwrap_or(0))
+    crate::clock::local_hm_at(i64::try_from(ms / 1000).unwrap_or(0))
         .map_or_else(String::new, |(h, m)| format!("{h:02}:{m:02}"))
 }
 
@@ -1619,7 +1619,7 @@ fn draw_status(app: &App, f: &mut Frame<'_>, r: Rect) {
         bar.fg(app.depth.fit(t.dim)),
     ));
     if app.config.ui.clock
-        && let Some((h, m)) = ptyro_pty::local_time_hm()
+        && let Some((h, m)) = crate::clock::local_hm()
     {
         right.push(Span::styled(format!("{h:02}:{m:02} "), bar));
     }

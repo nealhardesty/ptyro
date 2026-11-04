@@ -593,6 +593,30 @@ pub struct Config {
     pub summaries: Summaries,
     pub scratchpad: Scratchpad,
     pub chat: Chat,
+    pub client: Client,
+}
+
+/// This ptyro as a client (WIN3): where its daemon is when none runs on this computer.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Client {
+    /// The daemon to use when `--remote` and `PTYRO_REMOTE` don't say: `wsl://` (the default WSL
+    /// distro), `wsl://<distro>`, or an ssh host (`[ssh://][user@]host[:port]`). Windows asks
+    /// once, when a WSL distro has ptyro, and keeps the answer here.
+    pub default_remote: Option<String>,
+}
+
+impl Client {
+    fn validate(&self) -> Result<(), String> {
+        match self.default_remote.as_deref().map(str::trim) {
+            Some(r) if r.is_empty() || r.contains(char::is_whitespace) || r.starts_with('-') => {
+                Err(format!(
+                    "client.default_remote: {r:?} (wsl://, wsl://<distro>, or an ssh host)"
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 /// Chats (SPEC §22.13): plain conversations with your agents, kept in `chat.db`.
@@ -929,7 +953,6 @@ fn tailscale_running() -> bool {
 /// stays a symlink: the file it points at is what is replaced.
 pub(crate) fn write_private(path: &Path, text: &str) -> Result<(), crate::Error> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     let io = |p: &Path, e: std::io::Error| crate::Error::internal(format!("{}: {e}", p.display()));
     let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     if let Some(dir) = target.parent() {
@@ -942,10 +965,7 @@ pub(crate) fn write_private(path: &Path, text: &str) -> Result<(), crate::Error>
         N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     let write = || -> Result<(), crate::Error> {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
+        let mut f = crate::os::private(std::fs::OpenOptions::new().write(true).create_new(true))
             .open(&tmp)
             .map_err(|e| io(&tmp, e))?;
         f.write_all(text.as_bytes()).map_err(|e| io(&tmp, e))?;
@@ -1652,6 +1672,7 @@ impl Config {
 
     fn validate(&self) -> Result<(), String> {
         self.scratchpad.validate()?;
+        self.client.validate()?;
         self.chat.validate()?;
         if self.ui.prefix.keys().is_empty() {
             return Err("ui.prefix: needs at least one key".into());
@@ -2043,7 +2064,9 @@ fn on_path(path: &std::ffi::OsStr, prog: &str) -> bool {
             return f;
         }
     }
-    let found = std::env::split_paths(path).any(|d| crate::scratchpad::is_exec(&d.join(prog)));
+    let names = crate::os::program_names(prog);
+    let found = std::env::split_paths(path)
+        .any(|d| names.iter().any(|n| crate::scratchpad::is_exec(&d.join(n))));
     let mut seen = SEEN.locked();
     match seen.as_mut() {
         Some((p, at, map)) if p == path && at.elapsed() < FOR => {
@@ -2513,6 +2536,7 @@ mod tests {
         assert!(e.contains("chat.tools.find") && e.contains("another name"), "{e}");
     }
 
+    #[cfg(unix)] // Unix execute bits, modes and symlinks
     #[test]
     fn serving_the_web_app_is_one_setting_that_keeps_the_rest_of_the_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -2731,6 +2755,7 @@ scope = "global"
         ok(&cb("listen = \"127.0.0.1:7591\"\npublic_url = \"http://100.64.0.1:7591\""));
     }
 
+    #[cfg(unix)] // Unix execute bits, modes and symlinks
     #[test]
     fn the_spec_profile_example_parses() {
         let c = Config::parse(
@@ -2786,6 +2811,7 @@ code = { command = ["code", "{path}"] }
 
     /// Inside WSL (WIN2): the file manager is Windows' Explorer on the Windows form of the path,
     /// and VS Code is found where its installer puts it, told which distro it is in.
+    #[cfg(unix)] // Unix execute bits, modes and symlinks
     #[test]
     fn inside_wsl_the_editors_are_windows_ones() {
         use std::os::unix::fs::PermissionsExt;
@@ -2840,6 +2866,7 @@ code = { command = ["code", "{path}"] }
 
     /// A `PATH` of these programs, and an Applications folder of these apps (gone with the
     /// `TempDir`).
+    #[cfg(unix)] // execute bits
     fn installed(programs: &[&str], apps: &[&str]) -> (tempfile::TempDir, Installed) {
         use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
@@ -2864,6 +2891,7 @@ code = { command = ["code", "{path}"] }
         )
     }
 
+    #[cfg(unix)] // Unix execute bits, modes and symlinks
     #[test]
     fn only_installed_editors_are_offered() {
         let c = Config::parse(
@@ -2888,6 +2916,7 @@ code = { command = ["code", "{path}"] }
         );
     }
 
+    #[cfg(unix)] // Unix execute bits, modes and symlinks
     #[test]
     fn terminal_apps_open_a_window_in_the_worktree() {
         let c = Config::parse("[editors]\ndefault = \"iterm\"\n").unwrap();
@@ -2931,6 +2960,7 @@ code = { command = ["code", "{path}"] }
         }
     }
 
+    #[cfg(unix)] // Unix execute bits, modes and symlinks
     #[test]
     fn the_file_manager_answers_to_every_name() {
         let (_t, here) = installed(&["xdg-open"], &[]);
@@ -3047,6 +3077,7 @@ mod hardening {
         assert!(expand_home("~/x").is_absolute());
     }
 
+    #[cfg(unix)] // Unix paths (the agents' config home is the daemon's)
     #[test]
     fn config_home_follows_xdg_unless_it_is_relative() {
         let home = Path::new("/home/me");
@@ -3139,6 +3170,7 @@ mod hardening {
         assert!(std::fs::read_to_string(&fresh).unwrap().contains("serve = true"));
     }
 
+    #[cfg(unix)] // Unix execute bits, modes and symlinks
     #[test]
     fn writing_a_config_keeps_a_symlink_and_never_shares_a_temp_file() {
         use std::os::unix::fs::PermissionsExt;

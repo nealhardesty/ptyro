@@ -93,6 +93,34 @@ impl Wsl {
     }
 }
 
+/// A Windows path as the WSL distro sees it, for a Windows client of the daemon in WSL (WIN3):
+/// `C:\src\app` is `<mount_root>c/src/app`, `\\wsl.localhost\Ubuntu\home\me` (or
+/// `\\wsl$\…`) is `/home/me`. The `\\?\` that canonical Windows paths start with is ignored.
+/// `None` for a path WSL can't reach (a network share).
+pub fn path_in_distro(windows: &str, mount_root: &str) -> Option<String> {
+    let mut p = windows.trim();
+    if let Some(rest) = p.strip_prefix(r"\\?\UNC\") {
+        return unc_in_distro(rest);
+    }
+    p = p.strip_prefix(r"\\?\").unwrap_or(p);
+    if let Some(rest) = p.strip_prefix(r"\\") {
+        return unc_in_distro(rest);
+    }
+    let w = Wsl { version: 2, distro: None, interop: true, mount_root: mount_root.to_owned() };
+    w.linux_path(p).map(|l| l.to_string_lossy().into_owned())
+}
+
+/// `wsl.localhost\<distro>\rest` (or `wsl$\…`) as `/rest`.
+fn unc_in_distro(unc: &str) -> Option<String> {
+    let mut parts = unc.splitn(3, '\\');
+    let host = parts.next()?;
+    if !host.eq_ignore_ascii_case("wsl.localhost") && !host.eq_ignore_ascii_case("wsl$") {
+        return None;
+    }
+    let _distro = parts.next()?;
+    Some(format!("/{}", parts.next().unwrap_or("").replace('\\', "/")))
+}
+
 /// This machine, asked once; `None` when it isn't WSL.
 pub fn detect() -> Option<&'static Wsl> {
     static WSL: std::sync::OnceLock<Option<Wsl>> = std::sync::OnceLock::new();
@@ -253,6 +281,19 @@ mod tests {
         assert_eq!(w.linux_path(r"C:\Users\me"), Some(PathBuf::from("/mnt/c/Users/me")));
         assert_eq!(w.linux_path("%USERPROFILE%"), None, "cmd.exe echoes an unset variable");
         assert_eq!(w.linux_path(""), None);
+    }
+
+    #[test]
+    fn windows_paths_become_the_distros() {
+        let p = |w: &str| path_in_distro(w, "/mnt/");
+        assert_eq!(p(r"C:\Users\me\src").as_deref(), Some("/mnt/c/Users/me/src"));
+        assert_eq!(p(r"\\?\D:\work").as_deref(), Some("/mnt/d/work"), "canonical form");
+        assert_eq!(p(r"\\wsl.localhost\Ubuntu\home\me\dev").as_deref(), Some("/home/me/dev"));
+        assert_eq!(p(r"\\wsl$\Ubuntu-24.04\home\me").as_deref(), Some("/home/me"));
+        assert_eq!(p(r"\\?\UNC\wsl.localhost\Ubuntu\srv").as_deref(), Some("/srv"));
+        assert_eq!(p(r"\\wsl.localhost\Ubuntu").as_deref(), Some("/"));
+        assert_eq!(p(r"\\fileserver\share\x"), None, "a network share");
+        assert_eq!(path_in_distro(r"E:\a", "/win/").as_deref(), Some("/win/e/a"));
     }
 
     #[test]

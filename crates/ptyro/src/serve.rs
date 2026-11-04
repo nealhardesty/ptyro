@@ -562,10 +562,12 @@ async fn exit_with_daemon(socket: std::path::PathBuf) {
     // The daemon that started us is our parent: when it is gone (killed, crashed, replaced) the
     // next one starts a server of its own, and ours would hold the port for good. A crash leaves
     // the socket file behind, so the file alone can't say.
+    #[cfg(unix)]
     let parent = std::os::unix::process::parent_id();
     let mut missing = 0;
     for tick in 0u64.. {
         tokio::time::sleep(Duration::from_secs(1)).await;
+        #[cfg(unix)]
         if std::os::unix::process::parent_id() != parent {
             std::process::exit(0);
         }

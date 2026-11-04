@@ -464,6 +464,7 @@ mod tests {
         assert!(PWSH.contains("]9;9;"), "Windows Terminal's directory report on Windows");
     }
 
+    #[cfg(unix)] // shells start in the daemon's sessions (Unix)
     #[test]
     fn bash_reads_the_login_files_or_bashrc_then_the_snippet() {
         let dir = Path::new("/d");
@@ -476,6 +477,7 @@ mod tests {
         assert!(integrate(&v(&["bash"]), dir, None).unwrap().env.is_empty(), "not a login shell");
     }
 
+    #[cfg(unix)] // shells start in the daemon's sessions (Unix)
     #[test]
     fn zsh_starts_from_ptyros_zdotdir_and_hands_the_users_back() {
         let i = integrate(&v(&["/bin/zsh", "-l"]), Path::new("/d"), None).unwrap();
@@ -498,6 +500,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)] // shells start in the daemon's sessions (Unix)
     #[test]
     fn fish_and_pwsh_load_the_snippet_after_their_own_config() {
         let f = integrate(&v(&["fish", "-l"]), Path::new("/d"), None).unwrap();

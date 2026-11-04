@@ -26,11 +26,7 @@ fn running_tours() -> usize {
     let Ok(dir) = std::fs::read_dir(std::env::temp_dir()) else { return 0 };
     dir.flatten()
         .filter(|e| e.file_name().to_string_lossy().starts_with("ptyro-tour-"))
-        .filter(|e| {
-            std::fs::symlink_metadata(e.path()).is_ok_and(|m| {
-                std::os::unix::fs::MetadataExt::uid(&m) == ptyro_core::paths::current_uid()
-            })
-        })
+        .filter(|e| std::fs::symlink_metadata(e.path()).is_ok_and(|m| ours(&m)))
         .count()
 }
 
@@ -38,14 +34,13 @@ fn running_tours() -> usize {
 /// (mode 0700, and it must not exist): a name anyone can guess, in a directory everyone can
 /// write to, must never be one somebody else made first.
 fn make_dir() -> Result<std::path::PathBuf, Error> {
-    use std::os::unix::fs::DirBuilderExt;
     for tries in 0..100u64 {
         let dir = std::env::temp_dir().join(format!(
             "ptyro-tour-{}-{}",
             std::process::id(),
             ptyro_core::now_ms() + tries
         ));
-        match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+        match ptyro_core::os::create_private_dir(&dir) {
             Ok(()) => return Ok(dir),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(e) => return Err(Error::internal(format!("{}: {e}", dir.display()))),
@@ -54,7 +49,47 @@ fn make_dir() -> Result<std::path::PathBuf, Error> {
     Err(Error::internal("no free name for the tour's directory"))
 }
 
+/// The tour is a throwaway ptyro with a daemon of its own: Unix's (Linux, macOS, WSL2).
+fn windows() -> Result<(), Error> {
+    if cfg!(windows) {
+        return Err(Error::new(
+            ptyro_core::ErrorCode::Unsupported,
+            "the tour runs its own daemon, which on Windows lives in WSL: `wsl -- ptyro tour`",
+        ));
+    }
+    Ok(())
+}
+
+/// Made by this user (a tour directory in the shared temp folder).
+fn ours(m: &std::fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::MetadataExt::uid(m) == ptyro_core::paths::current_uid()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = m;
+        true
+    }
+}
+
+/// Alive, or another user's to signal: either way not a leftover to sweep.
+fn signalable_or_others(pid: i32) -> bool {
+    #[cfg(unix)]
+    {
+        rustix::process::Pid::from_raw(pid).is_some_and(|p| {
+            !matches!(rustix::process::test_kill_process(p), Err(rustix::io::Errno::SRCH))
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        true
+    }
+}
+
 pub async fn run(ctx: &Ctx) -> Result<i32, Error> {
+    windows()?;
     crate::cli::check_attachable()?;
     let exe = std::env::current_exe().map_err(|e| Error::internal(format!("ptyro's path: {e}")))?;
     sweep(&exe);
@@ -88,7 +123,7 @@ pub async fn run(ctx: &Ctx) -> Result<i32, Error> {
 /// paired with a device for the tour. The web app opens it in a new tab and its coach walks the
 /// steps; `web_end` there stops all of it and deletes it. Returns `{url, dir}`.
 pub async fn web_start(ctx: &Ctx) -> Result<serde_json::Value, Error> {
-    use std::os::unix::process::CommandExt;
+    windows()?;
     let exe = std::env::current_exe().map_err(|e| Error::internal(format!("ptyro's path: {e}")))?;
     // Each tour is a daemon, a server and a repository: a few, not as many as are asked for.
     if running_tours() >= MAX_TOURS {
@@ -139,12 +174,13 @@ pub async fn web_start(ctx: &Ctx) -> Result<serde_json::Value, Error> {
         .port();
     let log = std::fs::File::create(dir.join("serve.log"))
         .map_err(|e| Error::internal(format!("the tour's log: {e}")))?;
-    env(&mut Command::new(&exe), &home)
+    let mut serve = Command::new(&exe);
+    env(&mut serve, &home)
         .args(["serve", "--loopback-http", "--port", &port.to_string()])
         .stdin(std::process::Stdio::null())
         .stdout(log.try_clone().map_err(|e| Error::internal(e.to_string()))?)
-        .stderr(log)
-        .process_group(0)
+        .stderr(log);
+    ptyro_core::os::detach(&mut serve)
         .spawn()
         .map_err(|e| fail("the tour's server", &dir, &exe, &home, e.to_string()))?;
     for _ in 0..100 {
@@ -190,6 +226,7 @@ pub async fn web_start(ctx: &Ctx) -> Result<serde_json::Value, Error> {
 /// End the web tour this server belongs to: its daemon stops, its directory goes, and this
 /// server with them. Refused for anything that isn't a tour's own ptyro.
 pub async fn web_end() -> Result<serde_json::Value, Error> {
+    windows()?;
     let home = std::env::var_os("PTYRO_HOME").map(std::path::PathBuf::from);
     let dir = home
         .as_deref()
@@ -229,12 +266,8 @@ fn sweep(exe: &Path) {
             continue;
         };
         // Another user's tour is theirs to clean up: a pid we may not signal is alive, not gone.
-        let alive = rustix::process::Pid::from_raw(pid).is_some_and(|p| {
-            !matches!(rustix::process::test_kill_process(p), Err(rustix::io::Errno::SRCH))
-        });
-        let ours = std::fs::symlink_metadata(e.path()).is_ok_and(|m| {
-            std::os::unix::fs::MetadataExt::uid(&m) == ptyro_core::paths::current_uid()
-        });
+        let alive = signalable_or_others(pid);
+        let ours = std::fs::symlink_metadata(e.path()).is_ok_and(|m| ours(&m));
         if alive || !ours {
             continue;
         }

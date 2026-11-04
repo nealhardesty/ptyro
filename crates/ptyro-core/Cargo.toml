@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 etcetera.workspace = true
+getrandom.workspace = true
 rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -142,6 +142,8 @@ pub const ACTIONS: &[ActionSpec] = &[
         "Summarize it: what it's doing, in a line, from a small model ([summaries])",
     ),
     a("session.mute", "Mute this session's notifications for an hour (the inbox still gets them)"),
+    a("session.tab", "Open this session in a new tab of your terminal (tmux, Windows Terminal)"),
+    a("session.pane", "Open this session in a new pane beside this one (tmux, Windows Terminal)"),
     a("notify.test", "Send a test notification through every channel and sink"),
     a(
         "session.last",

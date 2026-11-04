@@ -123,6 +123,9 @@ enabled = true                            # a `≈` line after each agent turn, 
 enabled = true                            # record every session's output (per agent: record = false)
 max_bytes = "16MiB"                       # per session, as a ring
 
+[client]
+# default_remote = "wsl://Ubuntu"         # where this ptyro's daemon is, when --remote / PTYRO_REMOTE don't say (wsl://, wsl://<distro>, an ssh host); on Windows asked the first time
+
 [remote]
 serve = true                              # the daemon runs `ptyro serve` (docs/remote.md)
 access = "localhost"                      # who can reach it: localhost, tailscale (and your tailnet) or open (every network)

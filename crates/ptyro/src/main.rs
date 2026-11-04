@@ -30,6 +30,7 @@ mod tls;
 mod tour;
 mod uninstall;
 mod webapp;
+mod winclient;
 mod wsl_conf;
 
 use std::path::PathBuf;
@@ -49,8 +50,9 @@ struct Cli {
     /// Talk to the daemon in JSON instead of MessagePack (debugging).
     #[arg(long, global = true, hide = true)]
     json_wire: bool,
-    /// Use the daemon on another machine, over ssh: `[ssh://][user@]host[:port]` (or set
-    /// PTYRO_REMOTE). Needs ptyro there and key-based ssh login
+    /// Use the daemon on another machine, over ssh: `[ssh://][user@]host[:port]`, or in a WSL
+    /// distro: `wsl://[distro]` (or set PTYRO_REMOTE; `client.default_remote` keeps one). Needs
+    /// ptyro there, and for ssh a key-based login
     #[arg(long, global = true, value_name = "HOST")]
     remote: Option<String>,
     #[command(subcommand)]
@@ -162,6 +164,12 @@ enum Cmd {
         /// Watch without typing or resizing (another client keeps control)
         #[arg(long)]
         view_only: bool,
+        /// Open it in a new tab of this terminal instead (tmux, Windows Terminal)
+        #[arg(long, conflicts_with = "pane")]
+        tab: bool,
+        /// Open it in a new pane beside this one instead (tmux, Windows Terminal)
+        #[arg(long)]
+        pane: bool,
     },
     /// List sessions
     #[command(alias = "ls")]
@@ -1188,9 +1196,21 @@ fn main() {
         Some(Cmd::Daemon { cmd: DaemonCmd::Start { foreground, spawned, serve } }) => {
             cli::daemon_start(foreground, spawned, serve)
         }
+        #[cfg(unix)]
         Some(Cmd::FakeAgent { args }) => ptyro_testkit::fake_agent::main(&args),
-        #[cfg(debug_assertions)]
+        #[cfg(all(unix, debug_assertions))]
         Some(Cmd::FakeGh { args }) => ptyro_testkit::fake_gh::main(&args),
+        // The pretend agent and gh run in the daemon's sessions, which are WSL's.
+        #[cfg(not(unix))]
+        Some(Cmd::FakeAgent { .. }) => {
+            eprintln!("{}", cli::WINDOWS_DAEMON);
+            2
+        }
+        #[cfg(all(not(unix), debug_assertions))]
+        Some(Cmd::FakeGh { .. }) => {
+            eprintln!("{}", cli::WINDOWS_DAEMON);
+            2
+        }
         // These run inside agents on every hook: no runtime, no config, never a failure.
         Some(Cmd::Hook { adapter, event, args }) => relay::hook(&adapter, &event, &args),
         Some(Cmd::StatuslineRelay) => relay::statusline(),

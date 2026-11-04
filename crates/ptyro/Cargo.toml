@@ -24,13 +24,10 @@ hyper-util.workspace = true
 ptyro-agents.workspace = true
 ptyro-client.workspace = true
 ptyro-core.workspace = true
-ptyro-daemon.workspace = true
 ptyro-protocol.workspace = true
 ptyro-run.workspace = true
 ptyro-store.workspace = true
 ptyro-term.workspace = true
-ptyro-pty.workspace = true
-ptyro-testkit.workspace = true
 ptyro-tui.workspace = true
 qrcode.workspace = true
 regex.workspace = true
@@ -52,6 +49,13 @@ time.workspace = true
 toml_edit.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+# The daemon side is Unix's (Linux, macOS, WSL2). On Windows, ptyro is a client of the daemon in
+# WSL (ROADMAP WIN3); commands that need a daemon here say so.
+[target.'cfg(unix)'.dependencies]
+ptyro-daemon.workspace = true
+ptyro-pty.workspace = true
+ptyro-testkit.workspace = true
 
 [dev-dependencies]
 aes-gcm.workspace = true

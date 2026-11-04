@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "3"
 
 [workspace.package]
-version = "0.0.48"
+version = "0.0.49"
 edition = "2024"
 rust-version = "1.99"
 license = "MIT"
@@ -92,6 +92,7 @@ criterion = { version = "0.8.2", default-features = false, features = ["cargo_be
 insta = "1.49.0"
 proptest = "1.12.0"
 tempfile = "3.27.0"
+getrandom = "0.4.3"
 
 [workspace.lints.rust]
 unsafe_code = "deny"            # ptyro-pty may `#![allow(unsafe_code)]` with a justification

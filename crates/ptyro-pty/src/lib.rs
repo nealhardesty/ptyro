@@ -76,10 +76,7 @@ pub const STRIP_ENV: &[&str] = &[
 /// `CLAUDE_CODE_OAUTH_TOKEN` and the like are set for the session and must survive.
 pub const STRIP_ENV_PREFIXES: &[&str] = &["CLAUDE_CODE_IDE_"];
 
-/// Variables a client may pass along with a spawn so sessions see the *client's* SSH agent and
-/// display, like tmux's `update-environment` (SPEC §5.1).
-pub const CLIENT_ENV: &[&str] =
-    &["SSH_AUTH_SOCK", "SSH_CONNECTION", "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY"];
+pub use ptyro_core::os::CLIENT_ENV;
 
 /// Build the child's complete environment from `base` (the daemon's), applying the strip list,
 /// then `extra` (client and ptyro variables), then the terminal identity.

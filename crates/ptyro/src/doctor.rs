@@ -135,6 +135,7 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Repor
     shell(&config, &mut r);
     if terminal_too {
         terminal(&mut r).await;
+        windows_terminal(&config, &mut r);
     }
     git(&mut r).await;
     agents(&config, &mut r).await;
@@ -641,7 +642,8 @@ fn print(r: &Report, json: bool) {
 
 async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
     const S: &str = "daemon";
-    // The socket directory must be private (SPEC §17).
+    // The socket directory must be private (SPEC §17). Windows has no socket of its own.
+    #[cfg(unix)]
     if let Some(dir) = ctx.paths.socket.parent() {
         use std::os::unix::fs::MetadataExt;
         match std::fs::metadata(dir) {
@@ -819,6 +821,121 @@ fn stale_text(entries: &[ptyro_core::model::GcEntry], stale_days: u32) -> String
         if n == 1 { "" } else { "s" },
         why.join(", ")
     )
+}
+
+/// Inside Windows Terminal (`WT_SESSION`, from Windows or WSL): a key binding of its own that
+/// takes ptyro's prefix, so the key never reaches ptyro (WIN3). Its built-in bindings don't use
+/// Ctrl+Q or Ctrl+Space \[S\], so only the user's `settings.json` can.
+fn windows_terminal(config: &Config, r: &mut Report) {
+    if std::env::var_os("WT_SESSION").is_none_or(|v| v.is_empty()) {
+        return;
+    }
+    let prefixes: Vec<String> = config.ui.prefix.keys().iter().filter_map(|k| wt_key(k)).collect();
+    for file in wt_settings_files() {
+        let Ok(text) = std::fs::read_to_string(&file) else { continue };
+        let taken = wt_takes(&text, &prefixes);
+        if taken.is_empty() {
+            r.add(
+                "terminal",
+                "windows terminal",
+                Level::Ok,
+                "its key bindings leave ptyro's prefix alone",
+            );
+        } else {
+            r.add(
+                "terminal",
+                "windows terminal",
+                Level::Warn,
+                format!(
+                    "Windows Terminal binds {} ({}), so it never reaches ptyro: remove that binding \
+                     there, or change ptyro's prefix (Settings → interface → prefix)",
+                    taken.join(" and "),
+                    file.display()
+                ),
+            );
+        }
+        return;
+    }
+}
+
+/// ptyro's key (`C-q`, `C-Space`, `M-x`) as Windows Terminal writes it (`ctrl+q`, `ctrl+space`).
+pub(crate) fn wt_key(k: &str) -> Option<String> {
+    let mut mods: Vec<&str> = Vec::new();
+    let mut rest = k;
+    loop {
+        if let Some(r) = rest.strip_prefix("C-") {
+            mods.push("ctrl");
+            rest = r;
+        } else if let Some(r) = rest.strip_prefix("M-") {
+            mods.push("alt");
+            rest = r;
+        } else if let Some(r) = rest.strip_prefix("S-") {
+            mods.push("shift");
+            rest = r;
+        } else {
+            break;
+        }
+    }
+    if rest.is_empty() {
+        return None;
+    }
+    mods.push(rest);
+    Some(mods.join("+").to_ascii_lowercase())
+}
+
+/// Which of `keys` (Windows Terminal's spelling) `settings.json` binds to something. An entry
+/// that frees a key (`"command": "unbound"` or `null`) doesn't count. JSON with comments and
+/// trailing commas, as Windows Terminal allows: each `"keys"` is looked at in its own `{…}`.
+pub(crate) fn wt_takes(settings: &str, keys: &[String]) -> Vec<String> {
+    let norm = |s: &str| s.to_ascii_lowercase().replace(' ', "");
+    let mut out: Vec<String> = Vec::new();
+    let mut at = 0;
+    while let Some(i) = settings[at..].find("\"keys\"") {
+        let i = at + i;
+        at = i + 6;
+        let start = settings[..i].rfind('{').unwrap_or(0);
+        let end = settings[i..].find('}').map_or(settings.len(), |e| i + e);
+        let entry = &settings[start..end];
+        let freed = entry.contains("\"unbound\"")
+            || entry
+                .split("\"command\"")
+                .nth(1)
+                .is_some_and(|c| c.trim_start_matches([' ', ':']).starts_with("null"));
+        if freed {
+            continue;
+        }
+        // The value: a string, or an array of them, after `"keys":`.
+        let value = &settings[i + 6..end];
+        let value = value.trim_start_matches([' ', '\t', ':']);
+        for k in keys {
+            let found =
+                value.split(['"', ',']).map(norm).take_while(|w| !w.contains('}')).any(|w| w == *k);
+            if found && !out.contains(k) {
+                out.push(k.clone());
+            }
+        }
+    }
+    out
+}
+
+/// Windows Terminal's `settings.json` (the Store build, its Preview, an unpackaged one), from
+/// Windows or from WSL.
+fn wt_settings_files() -> Vec<std::path::PathBuf> {
+    let local = if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from)
+    } else {
+        ptyro_core::wsl::detect().and_then(|w| w.windows_home()).map(|h| h.join("AppData/Local"))
+    };
+    let Some(local) = local else { return Vec::new() };
+    [
+        "Packages/Microsoft.WindowsTerminal_8wekyb3d8bbwe/LocalState/settings.json",
+        "Packages/Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe/LocalState/settings.json",
+        "Microsoft/Windows Terminal/settings.json",
+    ]
+    .iter()
+    .map(|p| local.join(p))
+    .filter(|p| p.is_file())
+    .collect()
 }
 
 pub(crate) async fn terminal(r: &mut Report) {
@@ -1156,6 +1273,28 @@ mod tests {
         let dying = WslHold { last_exit: Some("wsl.exe exited (1)".into()), ..WslHold::default() };
         let (l, t) = survival(Some(Some(&dying)), true);
         assert!(l == Level::Warn && t.contains("exited (1)"), "{t}");
+    }
+
+    #[test]
+    fn windows_terminal_bindings_that_take_the_prefix_are_found() {
+        use super::{wt_key, wt_takes};
+        assert_eq!(wt_key("C-q").as_deref(), Some("ctrl+q"));
+        assert_eq!(wt_key("C-Space").as_deref(), Some("ctrl+space"));
+        assert_eq!(wt_key("M-x").as_deref(), Some("alt+x"));
+        let ours = vec!["ctrl+q".to_owned(), "ctrl+space".to_owned()];
+        // The owner's real settings (2026-11-03): nothing of ours.
+        let mine = r#"{ "actions": [ { "command": { "action": "copy" }, "id": "User.copy", "keys": "ctrl+shift+c" },
+            { "command": "paste", "keys": "ctrl+shift+v" }, ], // trailing comma, a comment
+            "keybindings": [ { "id": "User.find", "keys": "ctrl+shift+f" } ] }"#;
+        assert!(wt_takes(mine, &ours).is_empty());
+        let taken = r#"{ "keybindings": [ { "id": "Terminal.CloseWindow", "keys": "Ctrl+Q" },
+            { "command": "unbound", "keys": "ctrl+space" } ] }"#;
+        assert_eq!(wt_takes(taken, &ours), ["ctrl+q"], "case and an unbinding");
+        let arrays =
+            r#"{ "actions": [ { "command": "find", "keys": ["ctrl+space", "ctrl+f"] } ] }"#;
+        assert_eq!(wt_takes(arrays, &ours), ["ctrl+space"]);
+        let nulled = r#"{ "keybindings": [ { "command": null, "keys": "ctrl+q" } ] }"#;
+        assert!(wt_takes(nulled, &ours).is_empty());
     }
 
     #[test]

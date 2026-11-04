@@ -17,7 +17,8 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::os::unix::fs::{FileExt, OpenOptionsExt};
+#[cfg(unix)]
+use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -59,7 +60,30 @@ fn now_unix_ms() -> u64 {
 }
 
 fn open_append(path: &Path) -> io::Result<File> {
-    OpenOptions::new().create(true).read(true).append(true).mode(0o600).open(path)
+    ptyro_core::os::private(OpenOptions::new().create(true).read(true).append(true)).open(path)
+}
+
+/// `pread` on Windows: `seek_read` until `buf` is full. It moves the file's cursor, which an
+/// append-mode file ignores for its writes.
+#[cfg(windows)]
+trait FileExt {
+    fn read_exact_at(&self, buf: &mut [u8], off: u64) -> io::Result<()>;
+}
+#[cfg(windows)]
+impl FileExt for File {
+    fn read_exact_at(&self, mut buf: &mut [u8], mut off: u64) -> io::Result<()> {
+        use std::os::windows::fs::FileExt as _;
+        while !buf.is_empty() {
+            match self.seek_read(buf, off)? {
+                0 => return Err(io::ErrorKind::UnexpectedEof.into()),
+                n => {
+                    buf = &mut buf[n..];
+                    off += n as u64;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// A recording that begins with another magic than ours is another version's (a rollback, or a
@@ -107,8 +131,7 @@ fn valid_len(file: &File) -> io::Result<u64> {
 impl Recorder {
     /// Open (or continue) the recording in `dir` for a session of `size`.
     pub fn open(dir: &Path, size: TermSize, max_bytes: u64) -> io::Result<Self> {
-        std::fs::create_dir_all(dir)?;
-        let _ = std::fs::set_permissions(dir, std::os::unix::fs::PermissionsExt::from_mode(0o700));
+        ptyro_core::os::private_dir(dir)?;
         let path = dir.join("pty.log");
         set_aside_unknown(&path);
         let mut file = open_append(&path)?;
@@ -406,6 +429,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(unix)] // Windows can't cut a file another handle has open (recordings are the daemon's)
     #[test]
     fn reopening_cuts_a_torn_tail_and_rewrites_a_torn_header() {
         let dir = tempfile_dir();

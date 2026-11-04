@@ -24,6 +24,19 @@ pub fn parse_size(s: &str) -> Result<TermSize, String> {
     Ok(TermSize::new(cols, rows))
 }
 
+/// Windows runs no daemon of its own (WIN3): the one in WSL does.
+#[cfg(not(unix))]
+pub fn daemon_start(_foreground: bool, _spawned: bool, _serve: bool) -> i32 {
+    eprintln!("{WINDOWS_DAEMON}");
+    ErrorCode::Unsupported.exit_code()
+}
+
+/// What a daemon-side command says on Windows.
+#[cfg(not(unix))]
+pub const WINDOWS_DAEMON: &str = "ptyro: on Windows, ptyro is a client of the daemon in WSL. Run \
+    this inside WSL (`wsl -- ptyro …`), or use `ptyro --remote wsl://` from here";
+
+#[cfg(unix)]
 pub fn daemon_start(foreground: bool, spawned: bool, serve: bool) -> i32 {
     if serve {
         // Written before it starts, so the daemon reads it as its first config.
@@ -122,6 +135,21 @@ async fn dispatch(
 ) -> Result<i32, Error> {
     let paths = Paths::from_env().map_err(|e| Error::internal(e.to_string()))?;
     let encoding = if json_wire { Encoding::Json } else { Encoding::MsgPack };
+    // Where the daemon is (WIN3). Commands that never talk to one don't go looking for it.
+    let discover = !matches!(
+        cmd,
+        Some(
+            Cmd::Config { .. }
+                | Cmd::Completions { .. }
+                | Cmd::ShellInit { .. }
+                | Cmd::Init { .. }
+                | Cmd::Uninstall { .. }
+                | Cmd::Backup { .. }
+                | Cmd::Daemon { .. }
+                | Cmd::Proxy
+        )
+    );
+    let remote = crate::winclient::resolve(remote, &paths, discover).await;
     let ctx = Ctx { paths, encoding, remote };
     match cmd {
         None if !task.is_empty() => start_task(&ctx, &task.join(" ")).await,
@@ -206,8 +234,25 @@ async fn dispatch(
                 None => new(&ctx, a).await,
             }
         }
-        Some(Cmd::Attach { session, workspace, raw, view_only }) => {
+        Some(Cmd::Attach { session, workspace, raw, view_only, tab, pane }) => {
             let client = ctx.connect(true).await?;
+            if tab || pane {
+                let info = match &session {
+                    Some(addr) => get(&client, addr).await?,
+                    None => most_recent(&client).await?.ok_or_else(|| {
+                        Error::new(
+                            ErrorCode::NotFound,
+                            "no sessions yet; start one with `ptyro new`",
+                        )
+                    })?,
+                };
+                let place =
+                    if pane { ptyro_tui::tab::Place::Pane } else { ptyro_tui::tab::Place::Tab };
+                let said = ptyro_tui::tab::open(place, &info.id.full(), ctx.remote.as_deref())
+                    .map_err(|e| Error::new(ErrorCode::Unsupported, e))?;
+                eprintln!("{} {said}", info.name);
+                return Ok(0);
+            }
             let info = match (session, &workspace) {
                 (Some(addr), _) => Some(get(&client, &addr).await?),
                 // The workspace's own view decides what to show.
@@ -790,16 +835,28 @@ pub struct NewArgs {
 
 /// The variables a session should see from this client (SSH agent, display).
 pub fn client_env() -> BTreeMap<String, String> {
-    ptyro_pty::CLIENT_ENV
+    ptyro_core::os::CLIENT_ENV
         .iter()
         .filter_map(|k| std::env::var(k).ok().map(|v| ((*k).to_owned(), v)))
         .collect()
 }
 
+/// The current directory, as the daemon sees it: here, canonical; on Windows, where the daemon
+/// is WSL's (WIN3), the same folder as the distro names it (`C:\src` is `/mnt/c/src`).
 pub fn current_dir() -> Result<std::path::PathBuf, Error> {
     let cwd =
         std::env::current_dir().map_err(|e| Error::invalid(format!("current directory: {e}")))?;
-    cwd.canonicalize().map_err(|e| Error::invalid(format!("{}: {e}", cwd.display())))
+    let cwd = cwd.canonicalize().map_err(|e| Error::invalid(format!("{}: {e}", cwd.display())))?;
+    if cfg!(windows) {
+        let shown = cwd.to_string_lossy();
+        return ptyro_core::wsl::path_in_distro(&shown, "/mnt/").map(Into::into).ok_or_else(|| {
+            Error::invalid(format!(
+                "{shown} isn't a folder WSL can reach: work from a drive (C:\\…) or the distro \
+                 (\\\\wsl.localhost\\…)"
+            ))
+        });
+    }
+    Ok(cwd)
 }
 
 /// Ask a yes/no question on the terminal; `false` without one.
@@ -1421,11 +1478,7 @@ async fn daemon(ctx: &Ctx, cmd: DaemonCmd) -> Result<i32, Error> {
         DaemonCmd::HandoffVersion => {
             println!(
                 "{}",
-                ptyro_daemon::HANDOFF_VERSIONS
-                    .iter()
-                    .map(u32::to_string)
-                    .collect::<Vec<_>>()
-                    .join(" ")
+                HANDOFF_VERSIONS.iter().map(u32::to_string).collect::<Vec<_>>().join(" ")
             );
             Ok(0)
         }
@@ -1502,3 +1555,9 @@ async fn machine(ctx: &Ctx, cmd: Option<crate::MachineCmd>) -> Result<i32, Error
         M::Pair { url, json } => crate::machines::pair(ctx, url, json).await,
     }
 }
+
+/// The handoff images this binary's daemon can take over from; none on Windows (no daemon).
+#[cfg(unix)]
+const HANDOFF_VERSIONS: &[u32] = ptyro_daemon::HANDOFF_VERSIONS;
+#[cfg(not(unix))]
+const HANDOFF_VERSIONS: &[u32] = &[];

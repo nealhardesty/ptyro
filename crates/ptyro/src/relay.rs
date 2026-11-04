@@ -6,12 +6,15 @@
 //! Stop bounce, a PreToolUse denial). Outside ptyro (`PTYRO_SESSION_ID` unset) they do nothing.
 
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
-use ptyro_protocol::{
-    ClientInfo, ClientKind, ClientMsg, Encoding, PROTO, Request, ServerMsg, decode, encode,
-};
+#[cfg(unix)]
+use ptyro_protocol::{ClientInfo, ClientKind, PROTO, decode};
+use ptyro_protocol::{ClientMsg, Encoding, Request, ServerMsg, encode};
 
 const BUDGET: Duration = Duration::from_millis(500);
 /// Long enough for a verified-done check (the hook's own timeout in the agent caps it too).
@@ -20,6 +23,7 @@ const STOP_BUDGET: Duration = Duration::from_secs(900);
 const APPROVAL_BUDGET: Duration = Duration::from_secs(3600);
 const MAX_STDIN: u64 = 4 * 1024 * 1024;
 
+#[cfg_attr(not(unix), allow(dead_code))]
 fn frame(msg: &ClientMsg) -> Option<Vec<u8>> {
     let body = encode(msg, Encoding::MsgPack).ok()?;
     let mut out = (body.len() as u32).to_be_bytes().to_vec();
@@ -27,6 +31,7 @@ fn frame(msg: &ClientMsg) -> Option<Vec<u8>> {
     Some(out)
 }
 
+#[cfg(unix)]
 fn read_frame(s: &mut UnixStream) -> Option<Vec<u8>> {
     let mut len = [0u8; 4];
     s.read_exact(&mut len).ok()?;
@@ -44,7 +49,18 @@ pub fn request(req: Request, budget: Duration) -> Option<ServerMsg> {
     request_at(std::path::Path::new(&std::env::var_os("PTYRO_SOCKET")?), req, budget)
 }
 
+/// Windows has no daemon socket (hooks run inside the WSL sessions, never here): nothing to ask.
+#[cfg(not(unix))]
+pub fn request_at(
+    _socket: &std::path::Path,
+    _req: Request,
+    _budget: Duration,
+) -> Option<ServerMsg> {
+    None
+}
+
 /// [`request`] to a given socket (shell completions use the client's own).
+#[cfg(unix)]
 pub fn request_at(socket: &std::path::Path, req: Request, budget: Duration) -> Option<ServerMsg> {
     let start = Instant::now();
     let mut s = UnixStream::connect(socket).ok()?;

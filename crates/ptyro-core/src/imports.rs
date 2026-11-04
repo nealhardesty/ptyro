@@ -74,7 +74,6 @@ pub fn read_repo_file(
     follow_links: bool,
 ) -> Result<Option<String>, String> {
     use std::io::Read;
-    use std::os::unix::fs::OpenOptionsExt;
     let shown = path.strip_prefix(checkout).unwrap_or(path).display().to_string();
     let meta = match std::fs::symlink_metadata(path) {
         Ok(m) => m,
@@ -97,8 +96,7 @@ pub fn read_repo_file(
     }
     let mut opts = std::fs::OpenOptions::new();
     opts.read(true);
-    // NONBLOCK so a FIFO can't hold us; it is refused below anyway.
-    opts.custom_flags(opts_flags(follow_links) | rustix::fs::OFlags::NONBLOCK.bits() as i32);
+    crate::os::no_follow(&mut opts, follow_links);
     let file = opts.open(path).map_err(|e| format!("{shown}: {e}"))?;
     let meta = file.metadata().map_err(|e| format!("{shown}: {e}"))?;
     if !meta.is_file() {
@@ -115,10 +113,6 @@ pub fn read_repo_file(
         return Err(format!("{shown} is larger than {} KiB", MAX_FILE >> 10));
     }
     Ok(Some(text))
-}
-
-fn opts_flags(follow_links: bool) -> i32 {
-    if follow_links { 0 } else { rustix::fs::OFlags::NOFOLLOW.bits() as i32 }
 }
 
 fn read(
@@ -640,6 +634,7 @@ pub fn strip_json_comments(text: &str) -> String {
 mod tests;
 
 #[cfg(test)]
+#[cfg(unix)] // runs sh
 mod quoting {
     use super::*;
 
@@ -664,6 +659,7 @@ mod quoting {
 #[cfg(test)]
 mod hostile_files {
     use super::*;
+    #[cfg(unix)]
     use crate::project::ProjectConfig;
 
     #[test]
@@ -698,6 +694,7 @@ mod hostile_files {
         assert!(discover(d.path()).iter().any(|i| i.notes.iter().any(|n| n.contains("deeply"))));
     }
 
+    #[cfg(unix)] // symlinks
     #[test]
     fn repository_files_are_never_read_through_links_or_without_bounds() {
         let d = tempfile::tempdir().unwrap();
