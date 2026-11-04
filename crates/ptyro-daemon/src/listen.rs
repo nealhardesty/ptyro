@@ -147,14 +147,17 @@ mod unix {
 mod windows {
     use super::*;
     use tokio::net::windows::named_pipe::NamedPipeServer;
+    use tokio::sync::mpsc;
 
     pub(crate) type Stream = NamedPipeServer;
 
-    /// A named pipe: one instance waits for the next client, and a new one takes its place as
-    /// soon as one connects (pipes have no backlog: no instance means "nobody listens").
+    /// A named pipe. Pipes have no backlog: with no instance waiting, a client is told "all
+    /// pipe instances are busy". So a task accepts from the moment the pipe exists (long before
+    /// the daemon's own loop starts) and keeps a fresh instance waiting at all times, queueing
+    /// what connected for [`Listener::accept`], as a socket's backlog would.
     pub(crate) struct Listener {
-        name: String,
-        next: tokio::sync::Mutex<NamedPipeServer>,
+        rx: tokio::sync::Mutex<mpsc::UnboundedReceiver<(Stream, Option<u32>)>>,
+        task: tokio::task::JoinHandle<()>,
     }
 
     impl Listener {
@@ -163,7 +166,33 @@ mod windows {
             let first = ptyro_pty::pipe::server(&name, true).with_context(|| {
                 format!("{name} is in use by another process (another ptyro daemon?)")
             })?;
-            Ok(Self { name, next: tokio::sync::Mutex::new(first) })
+            let (tx, rx) = mpsc::unbounded_channel();
+            let task = tokio::spawn(async move {
+                let mut next = first;
+                loop {
+                    if let Err(e) = next.connect().await {
+                        tracing::warn!("accept failed: {e}");
+                        tokio::time::sleep(ACCEPT_PAUSE).await;
+                        continue;
+                    }
+                    match ptyro_pty::pipe::server(&name, false) {
+                        Ok(fresh) => {
+                            let stream = std::mem::replace(&mut next, fresh);
+                            let pid = ptyro_pty::pipe::client_pid(&stream);
+                            if tx.send((stream, pid)).is_err() {
+                                return;
+                            }
+                        }
+                        Err(e) => {
+                            // Without a next instance this one has to go back to waiting.
+                            tracing::warn!("can't make the pipe's next instance: {e}");
+                            let _ = next.disconnect();
+                            tokio::time::sleep(ACCEPT_PAUSE).await;
+                        }
+                    }
+                }
+            });
+            Ok(Self { rx: tokio::sync::Mutex::new(rx), task })
         }
 
         /// Nothing to carry on Windows until its live upgrade (WIN9).
@@ -173,30 +202,16 @@ mod windows {
 
         /// The next connection (from this user: the pipe admits no one else), and its pid.
         pub(crate) async fn accept(&self) -> (Stream, Option<u32>) {
-            let mut next = self.next.lock().await;
-            loop {
-                if let Err(e) = next.connect().await {
-                    tracing::warn!("accept failed: {e}");
-                    tokio::time::sleep(ACCEPT_PAUSE).await;
-                    continue;
-                }
-                match ptyro_pty::pipe::server(&self.name, false) {
-                    Ok(fresh) => {
-                        let stream = std::mem::replace(&mut *next, fresh);
-                        let pid = ptyro_pty::pipe::client_pid(&stream);
-                        return (stream, pid);
-                    }
-                    Err(e) => {
-                        // Without a next instance this one has to go back to waiting.
-                        tracing::warn!("can't make the pipe's next instance: {e}");
-                        let _ = next.disconnect();
-                        tokio::time::sleep(ACCEPT_PAUSE).await;
-                    }
-                }
+            match self.rx.lock().await.recv().await {
+                Some(c) => c,
+                // The accepting task is gone (it never ends by itself): nothing more comes.
+                None => std::future::pending().await,
             }
         }
 
-        pub(crate) fn close(self) {}
+        pub(crate) fn close(self) {
+            self.task.abort();
+        }
     }
 
     /// A pipe has no directory to prepare.

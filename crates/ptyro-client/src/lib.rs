@@ -400,18 +400,15 @@ async fn open_local(socket: &std::path::Path) -> std::io::Result<LocalStream> {
     UnixStream::connect(socket).await
 }
 
-/// Open the daemon's pipe. Every instance busy (a client connecting right now) is waited out a
-/// moment, as a socket's backlog would.
+/// Open the daemon's pipe. Every instance busy (clients connecting right now) is waited out, as
+/// a connect to a socket waits in its backlog.
 #[cfg(windows)]
 async fn open_local(pipe: &std::path::Path) -> std::io::Result<LocalStream> {
     const ERROR_PIPE_BUSY: i32 = 231;
     let start = Instant::now();
     loop {
         match tokio::net::windows::named_pipe::ClientOptions::new().open(pipe) {
-            Err(e)
-                if e.raw_os_error() == Some(ERROR_PIPE_BUSY)
-                    && start.elapsed() < Duration::from_secs(2) =>
-            {
+            Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) && start.elapsed() < SPAWN_WAIT => {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
             other => return other,
