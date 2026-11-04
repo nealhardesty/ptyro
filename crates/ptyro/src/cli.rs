@@ -149,7 +149,18 @@ async fn dispatch(
                 | Cmd::Proxy
         )
     );
-    let remote = crate::winclient::resolve(remote, &paths, discover).await;
+    // Uninstall is about this computer: a saved or given remote never sends it to another
+    // machine's daemon, which it would stop with every session.
+    let remote = if matches!(cmd, Some(Cmd::Uninstall { .. })) {
+        if let Some(r) = remote {
+            return Err(Error::invalid(format!(
+                "uninstall removes ptyro from this computer, not from {r}: run `ptyro uninstall` there"
+            )));
+        }
+        None
+    } else {
+        crate::winclient::resolve(remote, &paths, discover).await
+    };
     let ctx = Ctx { paths, encoding, remote };
     match cmd {
         None if !task.is_empty() => start_task(&ctx, &task.join(" ")).await,

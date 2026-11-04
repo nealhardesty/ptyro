@@ -3,8 +3,12 @@
 # and changelog notes, and update the Homebrew tap. Like CI, it calls make targets only.
 #
 # Nothing is published unless, for the tagged commit: the tag is on master and matches the crate
-# version; the checks pass on Linux (x86_64 and arm64) and macOS; licenses, advisories and the
-# web build are clean; and every platform's tarball installs through scripts/install.sh.
+# version; the checks pass on Linux (x86_64 and arm64), macOS and Windows (the client); licenses,
+# advisories and the web build are clean; and every platform's archive installs through its
+# installer (scripts/install.sh; Windows' zip through scripts/install.ps1).
+#
+# A rehearsal: run it by hand with dry_run on any branch (`gh workflow run release.yml --ref <branch>
+# -f tag=<branch> -f dry_run=true`). It builds and checks everything and publishes nothing.
 name: release
 
 on:
@@ -13,8 +17,12 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to (re)build, e.g. v0.1.0"
+        description: "Existing tag to (re)build, e.g. v0.1.0 (a branch, for a dry run)"
         required: true
+      dry_run:
+        description: "Build and check everything, publish nothing (the tag may be a branch)"
+        type: boolean
+        default: false
 
 # Read-only by default; only `publish` may write (it creates the release and the attestations).
 # The build jobs run every dependency's build scripts, so they never hold a write token.
@@ -34,6 +42,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { ref: "${{ env.TAG }}", fetch-depth: 0, persist-credentials: false }
       - name: the tag is on master and is the crate's version
+        if: ${{ !inputs.dry_run }}
         run: |
           git fetch --quiet origin master
           git merge-base --is-ancestor HEAD origin/master || { echo "$TAG is not on master: merge it first"; exit 1; }
@@ -46,17 +55,28 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
+        include:
+          - { os: ubuntu-24.04, target: check }
+          - { os: ubuntu-24.04-arm, target: check }
+          - { os: macos-15, target: check }
+          # The Windows client (WIN3), as CI's windows job checks it.
+          - { os: windows-latest, target: test-windows }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    defaults:
+      run: { shell: bash }
     steps:
+      - if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { ref: "${{ env.TAG }}", persist-credentials: false }
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: "22" }
       - run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - run: make check
+      - if: runner.os == 'Windows'
+        run: command -v make || choco install make -y --no-progress
+      - run: make ${{ matrix.target }}
 
   supply:
     needs: gate
@@ -84,11 +104,23 @@ jobs:
           - { os: macos-15, triple: aarch64-apple-darwin }
           # macos-13 is retired; macos-15-intel is the supported x86_64 image.
           - { os: macos-15-intel, triple: x86_64-apple-darwin }
+          # ptyro.exe, the Windows client (WIN3): a zip each, built and installed natively.
+          - { os: windows-latest, triple: x86_64-pc-windows-msvc }
+          - { os: windows-11-arm, triple: aarch64-pc-windows-msvc }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    defaults:
+      run: { shell: bash }
     steps:
+      - if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { ref: "${{ env.TAG }}", fetch-depth: 0, persist-credentials: false }
+      # The Arm image may come without rustup: the checksum-verified installer brings it.
+      - if: runner.os == 'Windows'
+        run: |
+          command -v make || choco install make -y --no-progress
+          command -v rustup || { sh scripts/rust-install.sh && echo "$USERPROFILE/.cargo/bin" >> "$GITHUB_PATH"; }
       - run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with: { key: "${{ matrix.triple }}" }
@@ -102,10 +134,13 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-${{ matrix.triple }}
-          path: dist/*.tar.gz*
+          path: |
+            dist/*.tar.gz*
+            dist/*.zip*
 
   publish:
     needs: build
+    if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-24.04
     # Set the tap secret on this environment, restricted to `v*` tags (README, Development).
     environment: release
@@ -130,13 +165,14 @@ jobs:
         with:
           subject-path: |
             dist/*.tar.gz
+            dist/*.zip
             dist/*.cdx.json
             dist/SHA256SUMS
       - name: GitHub release
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "ptyro $TAG" --notes-file notes.md --verify-tag
-          gh release upload "$TAG" dist/*.tar.gz dist/*.cdx.json dist/SHA256SUMS dist/ptyro.rb --clobber
+          gh release upload "$TAG" dist/*.tar.gz dist/*.zip dist/*.cdx.json dist/SHA256SUMS dist/ptyro.rb --clobber
       # Needs a secret HOMEBREW_TAP_TOKEN on the `release` environment: a fine-grained token with
       # contents: write on nealhardesty/homebrew-ptyro only.
       - name: Homebrew tap

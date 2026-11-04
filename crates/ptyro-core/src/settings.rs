@@ -888,6 +888,16 @@ pub fn matches(pattern: &str, key: &str) -> bool {
 }
 
 /// The setting a concrete key is.
+/// Whether the client (the TUI, the CLI) reads `key` from its own computer's file, rather than
+/// the daemon from its own: the screen, keys, themes, the clipboard and where the daemon is. With
+/// a remote daemon (`ptyro.exe` and WSL, or ssh) the two files differ, so the settings panel and
+/// `config set` say whose a setting is (ROADMAP WIN3). `ui.shell_exit` is the daemon's: it
+/// decides what happens to a shell that exits.
+pub fn read_by_client(key: &str) -> bool {
+    let top = key.split('.').next().unwrap_or(key);
+    matches!(top, "ui" | "keys" | "themes" | "clipboard" | "client") && key != "ui.shell_exit"
+}
+
 pub fn find(key: &str) -> Option<&'static Setting> {
     SETTINGS.iter().find(|s| matches(s.key, key))
 }

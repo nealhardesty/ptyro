@@ -19,6 +19,12 @@ another one; `--shared` for the committed one). Each setting says when a change 
 a daemon restart (which the panel offers). A new option isn't done until it has its entry in
 `ptyro-core`'s settings table (SPEC §13.7); a test fails without one.
 
+**With a daemon on another computer** (`ptyro.exe` on Windows and the daemon in WSL, or
+`--remote` over ssh) there are two files: this computer's holds what the screen reads (`ui`,
+`keys`, `themes`, `clipboard`, `client`), and the daemon's computer holds everything else. The
+settings panel tags those "daemon's" and opens the daemon's own file to change one; `ptyro config
+set` of one says so and names the command that changes it there.
+
 `ptyro config edit` creates a commented `config.toml` (every ordinary setting, with its default
 and what it does, all commented out) and validates it when you save. Changes
 apply live. `ptyro config check` validates the file, `ptyro config show` prints the effective

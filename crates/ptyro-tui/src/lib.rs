@@ -120,10 +120,13 @@ pub async fn run(mut connect: ConnectOptions, paths: &Paths, opts: Options) -> R
     let config = Config::load(&Config::path(paths)).unwrap_or_default();
     let mut tui = ratatui::init();
     let (outer, typed) = outer::query();
-    let kitty = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
+    let push_kitty = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
+    // A Windows console hands keys over as records with every modifier, so Shift+Enter, Ctrl-I
+    // and Tab already arrive apart, as the kitty protocol has them elsewhere (SPEC §20.11).
+    let kitty = push_kitty || cfg!(windows);
     connect.outer = Some(ptyro_protocol::OuterTerm { kitty_keyboard: kitty, ..outer });
     let mut out = std::io::stdout();
-    if kitty {
+    if push_kitty {
         // Lets us tell Shift+Enter, Ctrl-I/Tab etc. apart and re-encode them faithfully.
         let _ = execute!(
             out,
@@ -146,7 +149,7 @@ pub async fn run(mut connect: ConnectOptions, paths: &Paths, opts: Options) -> R
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let mut out = std::io::stdout();
-        if kitty {
+        if push_kitty {
             let _ = execute!(out, PopKeyboardEnhancementFlags);
         }
         let _ = execute!(out, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture);
@@ -168,7 +171,7 @@ pub async fn run(mut connect: ConnectOptions, paths: &Paths, opts: Options) -> R
         // Give the save a moment to leave before the connection drops.
         tokio::time::sleep(Duration::from_millis(30)).await;
     }
-    if kitty {
+    if push_kitty {
         let _ = execute!(out, PopKeyboardEnhancementFlags);
     }
     let _ = execute!(

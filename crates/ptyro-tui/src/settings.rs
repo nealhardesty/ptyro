@@ -36,6 +36,9 @@ pub enum Action {
     Run(&'static str),
     /// Open a file in the editor at a line.
     EditFile(PathBuf, Option<usize>),
+    /// A setting the daemon reads, asked to change from a client of a remote daemon: open the
+    /// daemon's own file there (at this setting, when there is one).
+    Daemon(Option<String>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -404,6 +407,9 @@ pub struct Panel {
     note: Option<(String, bool)>,
     help: bool,
     pub hits: RefCell<Hits>,
+    /// The daemon this TUI talks to, when it's another computer's (`wsl://Ubuntu`): it reads its
+    /// own file, so its settings are changed there, not in this one (WIN3).
+    pub remote: Option<String>,
 }
 
 /// The checks only the TUI can make of a whole user config: key bindings and themes.
@@ -463,6 +469,7 @@ impl Panel {
             note: None,
             help: false,
             hits: RefCell::default(),
+            remote: None,
         };
         p.refresh();
         p.cursor = p.first_selectable(0);
@@ -1286,9 +1293,48 @@ impl Panel {
         vec![]
     }
 
+    /// Whether `key` (a setting, or a collection's path) is the remote daemon's to read.
+    fn daemons(&self, key: &str) -> bool {
+        self.remote.is_some() && !settings::read_by_client(key)
+    }
+
+    /// A key that would change `row` when the row is the remote daemon's: what to open instead.
+    fn daemon_edit(&self, row: &Row, code: KeyCode) -> Option<Action> {
+        let editing = matches!(
+            code,
+            KeyCode::Enter
+                | KeyCode::Right
+                | KeyCode::Backspace
+                | KeyCode::Delete
+                | KeyCode::Char { c: 'l' | ' ' | '+' | '=' | '-' | 'r' | 'd' | 'R' | 'n' }
+        );
+        if !editing {
+            return None;
+        }
+        let (key, at) = match row {
+            Row::Setting(p, i) => {
+                let e = self.entry(*p, *i);
+                (e.key.clone(), Some(e.key.clone()))
+            }
+            // Entering a member only shows its settings; removing or renaming it changes it.
+            Row::Member { path, .. }
+                if !matches!(code, KeyCode::Enter | KeyCode::Right | KeyCode::Char { c: 'l' }) =>
+            {
+                ((*path).to_owned(), None)
+            }
+            Row::Add { path, .. } | Row::Binding { path, .. } => ((*path).to_owned(), None),
+            _ if code == KeyCode::Char { c: 'n' } => (self.section().id.to_owned(), None),
+            _ => return None,
+        };
+        self.daemons(&key).then_some(Action::Daemon(at))
+    }
+
     fn items_key(&mut self, key: KeyEvent) -> Vec<Action> {
         let rows = self.rows();
         let row = rows.get(self.cursor).cloned();
+        if let Some(a) = row.as_ref().and_then(|r| self.daemon_edit(r, key.code)) {
+            return vec![a];
+        }
         match key.code {
             KeyCode::Esc | KeyCode::Left | KeyCode::Char { c: 'h' } => {
                 if let Some((path, name)) = self.drill.take() {
@@ -2431,7 +2477,7 @@ pub fn draw(app: &App, p: &Panel, f: &mut Frame<'_>, area: Rect) {
                 let changed = e.changed();
                 let mark = if changed { "● " } else { "  " };
                 let name = pad(&label_of(e, p.drill.is_some(), p.search.is_some()), label_w + 1);
-                let tag = origin_tag(e);
+                let tag = if p.daemons(&e.key) { "daemon's".to_owned() } else { origin_tag(e) };
                 let val_w = w.saturating_sub(2 + label_w + 1 + tag.chars().count() + 2);
                 let mut value = e.pretty();
                 if matches!(e.setting.kind, Kind::Bool) {
@@ -2649,6 +2695,17 @@ fn detail_lines<'a>(app: &App, p: &Panel, row: &Row, w: usize, d: &mut Vec<Line<
                 ),
                 dim,
             )));
+            if let Some(r) = p.remote.as_deref().filter(|_| p.daemons(&e.key)) {
+                d.push(Line::from(Span::styled(
+                    fit(
+                        &format!(
+                            "the daemon's: {r} reads its own file, not this computer's (shown here) · ⏎ changes it there"
+                        ),
+                        w,
+                    ),
+                    fg(app, t.blocked),
+                )));
+            }
         }
         Row::Member { path, name, .. } => {
             let col = settings::collection(path).expect("collection");

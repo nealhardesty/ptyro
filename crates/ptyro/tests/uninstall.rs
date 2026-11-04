@@ -386,3 +386,31 @@ async fn a_backup_holds_the_state_not_the_logins_and_never_replaces_a_file() {
     assert!(out.status.success(), "{}", text(&out));
     assert!(kept.exists() && !w.d.paths.data.exists());
 }
+
+/// Uninstall is about this computer: a saved remote (`client.default_remote`, which a Windows
+/// client keeps, or `PTYRO_REMOTE`) is ignored, so it plans this machine's daemon and never
+/// another's; asked with `--remote` it refuses and says where to run it.
+#[tokio::test]
+async fn uninstall_never_follows_a_saved_remote() {
+    let w = World::new();
+    let plan = |extra: &[&str], remote_env: bool| {
+        let mut c = w.d.cmd();
+        c.args(extra).args(["uninstall", "--dry-run", "--json"]).env("HOME", w.home());
+        if remote_env {
+            c.env("PTYRO_REMOTE", "ssh://nowhere.invalid");
+        }
+        c.output().unwrap()
+    };
+    let out = plan(&[], true);
+    assert!(out.status.success(), "{}", text(&out));
+    let p: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(p["daemon_running"], true, "{p}");
+    let out = plan(&["--remote", "wsl://Ubuntu"], false);
+    assert!(!out.status.success());
+    assert!(
+        text(&out).contains("not from wsl://Ubuntu: run `ptyro uninstall` there"),
+        "{}",
+        text(&out)
+    );
+    assert!(w.d.client().await.is_ok(), "the daemon was left running");
+}

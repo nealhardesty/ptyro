@@ -536,6 +536,12 @@ pub async fn plan(ctx: &Ctx, env: &Env, opts: &Opts) -> Result<Plan, Error> {
     if let BinaryAction::Keep { reason } = &binary.action {
         kept.push(format!("the ptyro binary ({reason})"));
     }
+    if cfg!(windows) {
+        kept.push(
+            "ptyro in WSL, with its daemon and sessions: `wsl -- ptyro uninstall` removes it there"
+                .to_owned(),
+        );
+    }
     Ok(Plan {
         sandbox,
         daemon_running: running,
@@ -582,6 +588,8 @@ pub fn render(plan: &Plan, env: &Env) -> String {
         (true, None) => s.push_str(
             "  the daemon    is running (it didn't answer): it stops, and its sessions\n",
         ),
+        // Windows runs none: the daemon is WSL's (kept, as the plan says).
+        (false, _) if cfg!(windows) => {}
         (false, _) => s.push_str("  the daemon    is not running\n"),
     }
     for d in plan.dirs.iter().filter(|d| !d.keep) {
@@ -692,6 +700,62 @@ pub struct Step {
     pub step: String,
     pub ok: bool,
     pub detail: String,
+}
+
+#[cfg(unix)]
+fn remove_binary(path: &Path) -> Result<String, String> {
+    std::fs::remove_file(path).map(|()| String::new()).map_err(|e| {
+        format!("{e}: remove it yourself (`sudo rm {}` if it needs it)", path.display())
+    })
+}
+
+/// Windows won't delete a running program, but it will move one: ptyro.exe goes to the temp
+/// folder, and a detached `cmd` deletes it there once this process has ended. The folder it was
+/// in goes too when nothing else is in it, and leaves your PATH, where install.ps1 put it.
+#[cfg(windows)]
+fn remove_binary(path: &Path) -> Result<String, String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let manual = |e: std::io::Error| format!("{e}: delete {} yourself", path.display());
+    if std::fs::remove_file(path).is_err() {
+        let gone =
+            std::env::temp_dir().join(format!("ptyro-uninstalled-{}.exe", std::process::id()));
+        std::fs::rename(path, &gone).map_err(manual)?;
+        let _ = std::process::Command::new("cmd.exe")
+            .raw_arg(format!("/d /c ping -n 3 127.0.0.1 >nul & del /f /q \"{}\"", gone.display()))
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
+    let Some(dir) = path.parent() else { return Ok(String::new()) };
+    // install.ps1 renames a ptyro.exe it couldn't overwrite to ptyro.exe.old.
+    let _ = std::fs::remove_file(dir.join("ptyro.exe.old"));
+    if std::fs::remove_dir(dir).is_err() {
+        return Ok(String::new());
+    }
+    // `…\Programs\ptyro\bin`: its parent too, when that's empty now.
+    if dir.file_name().is_some_and(|n| n.eq_ignore_ascii_case("bin")) {
+        let _ = dir.parent().map(std::fs::remove_dir);
+    }
+    let quoted = dir.display().to_string().replace('\'', "''");
+    // Prints `removed` when the folder was on the user's PATH and now isn't.
+    let script = format!(
+        "$old = [Environment]::GetEnvironmentVariable('Path', 'User'); \
+         $p = @($old -split ';' | Where-Object {{ $_ -and $_ -ne '{quoted}' }}) -join ';'; \
+         if ($p -ne $old) {{ [Environment]::SetEnvironmentVariable('Path', $p, 'User'); 'removed' }}"
+    );
+    let out = std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output();
+    Ok(match out {
+        Ok(o) if o.status.success() && String::from_utf8_lossy(&o.stdout).contains("removed") => {
+            format!("and {} left your PATH", dir.display())
+        }
+        Ok(o) if o.status.success() => String::new(),
+        _ => format!("take {} off your PATH if it's there", dir.display()),
+    })
 }
 
 fn step(out: &mut Vec<Step>, json: bool, name: &str, r: Result<String, String>) {
@@ -817,22 +881,26 @@ async fn execute(ctx: &Ctx, env: &Env, plan: &Plan, opts: &Opts, json: bool) -> 
         let r = crate::service::uninstall(ctx, false).map(|_| String::new()).map_err(|e| e.message);
         step(&mut steps, json, "remove the login service", r);
     }
-    // The daemon, and what it holds: nothing is deleted under one that still runs.
-    let stop = crate::cli::stop_daemon(ctx, true, false).await;
-    let stopped = stop.is_ok() && !daemon_running(&ctx.paths);
-    step(
-        &mut steps,
-        json,
-        "stop the daemon",
-        match (&stop, stopped) {
-            (_, true) => Ok(String::new()),
-            (Err(e), _) => Err(e.message.clone()),
-            _ => {
-                Err("it is still running: stop it (`ptyro daemon stop`) and run this again"
-                    .to_owned())
-            }
-        },
-    );
+    // The daemon, and what it holds: nothing is deleted under one that still runs. Windows has
+    // none of its own to stop.
+    let stopped = if cfg!(windows) {
+        true
+    } else {
+        let stop = crate::cli::stop_daemon(ctx, true, false).await;
+        let stopped = stop.is_ok() && !daemon_running(&ctx.paths);
+        step(
+            &mut steps,
+            json,
+            "stop the daemon",
+            match (&stop, stopped) {
+                (_, true) => Ok(String::new()),
+                (Err(e), _) => Err(e.message.clone()),
+                _ => Err("it is still running: stop it (`ptyro daemon stop`) and run this again"
+                    .to_owned()),
+            },
+        );
+        stopped
+    };
     if stopped {
         if !plan.worktrees.is_empty() {
             let ws = plan.worktrees.clone();
@@ -910,12 +978,7 @@ async fn execute(ctx: &Ctx, env: &Env, plan: &Plan, opts: &Opts, json: bool) -> 
     }
     match &plan.binary.action {
         BinaryAction::Remove => {
-            let r = std::fs::remove_file(&plan.binary.path).map(|()| String::new()).map_err(|e| {
-                format!(
-                    "{e}: remove it yourself (`sudo rm {}` if it needs it)",
-                    plan.binary.path.display()
-                )
-            });
+            let r = remove_binary(&plan.binary.path);
             step(&mut steps, json, &format!("remove {}", plan.binary.path.display()), r);
         }
         BinaryAction::ViaCargo => {

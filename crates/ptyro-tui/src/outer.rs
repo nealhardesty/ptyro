@@ -3,32 +3,25 @@
 //! Keys typed while we wait for the answer arrive in the same reads: they are kept and replayed.
 
 #[cfg(unix)]
-use std::io::{Read, Write};
+use std::io::Read;
+use std::io::Write;
 #[cfg(unix)]
 use std::os::fd::AsFd;
-#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ptyro_protocol::OuterTerm;
 
+/// What we ask: both default colours, then the device attributes, which every terminal answers.
+const QUERY: &[u8] = b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b[c";
+
 /// Must run in raw mode and before crossterm's event reader starts. The reply to the DA1 query
 /// we append marks the end, so terminals that ignore OSC 10/11 cost one round trip, not a timeout.
 /// Also returns the keys typed meanwhile, for the caller to replay.
-///
-/// Windows: a console has no descriptor to poll, and Windows Terminal hands the replies over as
-/// console input records (crossterm's key events), so nothing is asked yet: sessions get the
-/// default colours (ROADMAP WIN3).
-#[cfg(not(unix))]
-pub fn query() -> (OuterTerm, Vec<KeyEvent>) {
-    (OuterTerm::default(), Vec::new())
-}
-
-/// See above.
 #[cfg(unix)]
 pub fn query() -> (OuterTerm, Vec<KeyEvent>) {
     let mut out = std::io::stdout();
-    if out.write_all(b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b[c").and_then(|()| out.flush()).is_err() {
+    if out.write_all(QUERY).and_then(|()| out.flush()).is_err() {
         return (OuterTerm::default(), Vec::new());
     }
     let stdin = std::io::stdin();
@@ -59,6 +52,97 @@ pub fn query() -> (OuterTerm, Vec<KeyEvent>) {
         kitty_keyboard: false,
     };
     (outer, typed(&reply))
+}
+
+/// Windows: a console has no descriptor to poll, and the answers come in as key presses, one per
+/// character with no modifiers and the ESCs dropped (Windows Terminal, seen 2026-11-03, SPEC
+/// §20.11): `]10;rgb:cccc/cccc/cccc\` `]11;rgb:0c0c/0c0c/0c0c\` `[?61;4;6;…c`. crossterm's own
+/// reader takes them, and [`console_replies`] tells them from the keys typed meanwhile.
+#[cfg(windows)]
+pub fn query() -> (OuterTerm, Vec<KeyEvent>) {
+    use crossterm::event::{Event, poll, read};
+    let mut out = std::io::stdout();
+    if out.write_all(QUERY).and_then(|()| out.flush()).is_err() {
+        return (OuterTerm::default(), Vec::new());
+    }
+    let mut keys = Vec::new();
+    let start = Instant::now();
+    while let Some(left) = Duration::from_millis(300).checked_sub(start.elapsed()) {
+        if !poll(left).unwrap_or(false) {
+            break;
+        }
+        match read() {
+            Ok(Event::Key(k)) => keys.push(k),
+            Ok(_) => {}
+            Err(_) => break,
+        }
+        if console_replies(&keys).answered {
+            break;
+        }
+    }
+    let r = console_replies(&keys);
+    (OuterTerm { fg: r.fg, bg: r.bg, kitty_keyboard: false }, r.typed)
+}
+
+/// What [`console_replies`] found among a Windows console's key presses.
+#[cfg(any(windows, test))]
+struct ConsoleReplies {
+    fg: Option<[u8; 3]>,
+    bg: Option<[u8; 3]>,
+    /// The device attributes answer came, so nothing more is on its way.
+    answered: bool,
+    typed: Vec<KeyEvent>,
+}
+
+/// Picks the terminal's answers out of the key presses (see the Windows [`query`]); every other
+/// key, a lone `]` or `[` included, is the user's.
+#[cfg(any(windows, test))]
+fn console_replies(keys: &[KeyEvent]) -> ConsoleReplies {
+    use crossterm::event::KeyEventKind;
+    let ch = |i: usize| match keys.get(i) {
+        Some(k) if k.kind == KeyEventKind::Press && k.modifiers.is_empty() => match k.code {
+            KeyCode::Char(c) => Some(c),
+            _ => None,
+        },
+        _ => None,
+    };
+    // The length of the run from `i` whose characters all pass `ok`.
+    let run =
+        |i: usize, ok: &dyn Fn(char) -> bool| (i..).take_while(|&j| ch(j).is_some_and(ok)).count();
+    let mut r = ConsoleReplies { fg: None, bg: None, answered: false, typed: Vec::new() };
+    let mut i = 0;
+    while i < keys.len() {
+        let osc = (ch(i) == Some(']') && ch(i + 1) == Some('1') && ch(i + 3) == Some(';'))
+            .then(|| ch(i + 2))
+            .flatten()
+            .filter(|n| matches!(n, '0' | '1'));
+        if let Some(n) = osc {
+            let len =
+                run(i + 4, &|c| c.is_ascii_hexdigit() || matches!(c, 'r' | 'g' | 'b' | ':' | '/'));
+            let body: String = (i + 4..i + 4 + len).filter_map(ch).collect();
+            let rgb =
+                color(format!("\x1b]1{n};{body}\x07").as_bytes(), format!("\x1b]1{n};").as_bytes());
+            if let Some(rgb) = rgb {
+                *(if n == '0' { &mut r.fg } else { &mut r.bg }) = Some(rgb);
+                i += 4 + len;
+                if ch(i) == Some('\\') {
+                    i += 1;
+                }
+                continue;
+            }
+        }
+        if ch(i) == Some('[') && ch(i + 1) == Some('?') {
+            let len = run(i + 2, &|c| c.is_ascii_digit() || c == ';');
+            if ch(i + 2 + len) == Some('c') {
+                r.answered = true;
+                i += 3 + len;
+                continue;
+            }
+        }
+        r.typed.push(keys[i]);
+        i += 1;
+    }
+    r
 }
 
 /// The keys among the replies: OSC answers and `CSI ? … c` are dropped, the rest decoded as a
@@ -213,6 +297,47 @@ mod tests {
         assert_eq!(color(b"\x1b]10;rgb:ffffffff/00000000/00000000\x07", b"\x1b]10;"), None);
         assert_eq!(color(b"\x1b]10;rgb:+fff/0/0\x07", b"\x1b]10;"), None);
         assert_eq!(color(b"\x1b]10;rgb:/0/0\x07", b"\x1b]10;"), None);
+    }
+
+    #[test]
+    fn windows_console_replies_are_told_from_typed_keys() {
+        use crossterm::event::KeyEventKind;
+        let press = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+        let keys = |s: &str| s.chars().map(press).collect::<Vec<_>>();
+        // What Windows Terminal sent on 2026-11-03 (Campbell), ESCs already gone.
+        let wt = "]10;rgb:cccc/cccc/cccc\\]11;rgb:0c0c/0c0c/0c0c\\[?61;4;6;7;14;21;22;23;24;28;32;42;52c";
+        let r = console_replies(&keys(wt));
+        assert_eq!((r.fg, r.bg, r.answered), (Some([0xcc; 3]), Some([0x0c; 3]), true));
+        assert!(r.typed.is_empty());
+        // Partway, the device attributes not in yet: keep waiting.
+        assert!(!console_replies(&keys(&wt[..30])).answered);
+        // Typed before, between and after, a Ctrl key and a release among them: all kept, in order.
+        let mut ks = keys("a]");
+        ks.push(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        ks.extend(keys("]11;rgb:1c/1c/1c\\"));
+        ks.push(KeyEvent::new_with_kind(
+            KeyCode::Char('a'),
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        ));
+        ks.extend(keys("[?1;0c[x"));
+        let r = console_replies(&ks);
+        assert_eq!((r.fg, r.bg, r.answered), (None, Some([0x1c; 3]), true));
+        let typed: Vec<_> = r.typed.iter().map(|k| (k.code, k.modifiers, k.kind)).collect();
+        assert_eq!(
+            typed,
+            vec![
+                (KeyCode::Char('a'), KeyModifiers::NONE, KeyEventKind::Press),
+                (KeyCode::Char(']'), KeyModifiers::NONE, KeyEventKind::Press),
+                (KeyCode::Char('c'), KeyModifiers::CONTROL, KeyEventKind::Press),
+                (KeyCode::Char('a'), KeyModifiers::NONE, KeyEventKind::Release),
+                (KeyCode::Char('['), KeyModifiers::NONE, KeyEventKind::Press),
+                (KeyCode::Char('x'), KeyModifiers::NONE, KeyEventKind::Press),
+            ]
+        );
+        // A terminal that ignores OSC 10/11 answers only the attributes.
+        let r = console_replies(&keys("[?1;0c"));
+        assert_eq!((r.fg, r.bg, r.answered, r.typed.len()), (None, None, true, 0));
     }
 
     #[test]

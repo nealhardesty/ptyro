@@ -148,6 +148,29 @@ fn extra_for(layer: &Layer) -> impl Fn(&str) -> Result<(), String> + use<> {
     move |text: &str| if user { semantic(text) } else { Ok(()) }
 }
 
+/// With a remote daemon (ptyro.exe and WSL, or ssh), a setting it reads lives in its own file, not
+/// this computer's: say so after changing this one, and how to change it there (WIN3).
+fn elsewhere(ctx: &Ctx, user: bool, key: &str, args: &str) {
+    if let Some(r) = ctx.remote.as_deref().filter(|_| user && !settings::read_by_client(key)) {
+        eprintln!("note: {}", there(r, key, args));
+    }
+}
+
+/// What [`elsewhere`] says, for the remote `r`.
+fn there(r: &str, key: &str, args: &str) -> String {
+    let run = match ptyro_client::remote::wsl_distro(r) {
+        Some("") => format!("wsl -- ptyro config {args}"),
+        Some(d) => format!("wsl -d {d} -- ptyro config {args}"),
+        None => match ptyro_client::remote::parse(r) {
+            (dest, Some(port)) => format!("ssh -p {port} {dest} ptyro config {args}"),
+            (dest, None) => format!("ssh {dest} ptyro config {args}"),
+        },
+    };
+    format!(
+        "the daemon on {r} reads {key} from its own config, not this computer's: change it there with `{run}` (or in the TUI's settings, which opens it there)"
+    )
+}
+
 pub async fn run(ctx: &Ctx, cmd: ConfigCmd) -> Result<i32, Error> {
     run_paths(&ctx.paths, cmd, ctx).await
 }
@@ -170,6 +193,7 @@ async fn run_paths(paths: &Paths, cmd: ConfigCmd, ctx: &Ctx) -> Result<i32, Erro
                 return bind(&layer, &name, Some(v));
             }
             change(&layer, &Op::Set { key: key.clone(), value: v }, &format!("{key} is set"))?;
+            elsewhere(ctx, project.is_none(), &key, &format!("set {key} {}", value.join(" ")));
             Ok(0)
         }
         ConfigCmd::Unset { keys, project, shared } => {
@@ -184,6 +208,7 @@ async fn run_paths(paths: &Paths, cmd: ConfigCmd, ctx: &Ctx) -> Result<i32, Erro
                     &Op::Unset { key: key.clone() },
                     &format!("{key} is back to its default"),
                 )?;
+                elsewhere(ctx, project.is_none(), &key, &format!("unset {key}"));
             }
             Ok(0)
         }
@@ -681,6 +706,16 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::*;
+
+    #[test]
+    fn a_remote_daemons_setting_says_where_to_change_it() {
+        let w = there("wsl://Ubuntu", "daemon.hold_wsl", "set daemon.hold_wsl off");
+        assert!(w.contains("`wsl -d Ubuntu -- ptyro config set daemon.hold_wsl off`"), "{w}");
+        assert!(there("wsl://", "k", "unset k").contains("`wsl -- ptyro config unset k`"));
+        let s = there("ssh://me@box:2222", "k", "unset k");
+        assert!(s.contains("`ssh -p 2222 me@box ptyro config unset k`"), "{s}");
+        assert!(there("box", "k", "unset k").contains("`ssh box ptyro config unset k`"));
+    }
 
     #[test]
     fn project_takes_its_name_only_with_an_equals_sign() {

@@ -788,3 +788,29 @@ fn a_draft_of_several_lines_is_edited_a_line_at_a_time() {
     assert_eq!(e.at, e.text.chars().count(), "the shorter line's end");
     assert!(!e.vertical(false));
 }
+
+/// With a remote daemon (ptyro.exe and WSL), a setting the daemon reads is changed in the daemon's
+/// own file: any key that would change it here asks to open that instead, and this computer's file
+/// is left alone. The screen's own settings still change here.
+#[test]
+fn a_remote_daemons_settings_are_changed_there() {
+    let mut t = T::new("");
+    t.p.remote = Some("wsl://Ubuntu".into());
+    t.go("daemon.hold_wsl");
+    for k in ["<Enter>", "<Space>", "r", "<BS>"] {
+        assert_eq!(t.press(k), vec![Action::Daemon(Some("daemon.hold_wsl".into()))], "{k}");
+    }
+    assert_eq!(t.file(), "", "this computer's file isn't the one it reads");
+    // Moving about still works.
+    t.press("<Down><Up>");
+    assert_eq!(t.selected().as_deref(), Some("daemon.hold_wsl"));
+    // The screen's settings are this computer's.
+    t.go("ui.mouse");
+    assert!(t.press("<Space>").iter().all(|a| !matches!(a, Action::Daemon(_))));
+    assert!(t.file().contains("mouse"), "{}", t.file());
+    // Without a remote, it's all one file.
+    let mut t = T::new("");
+    t.go("daemon.hold_wsl");
+    assert!(t.press("<Space>").iter().all(|a| !matches!(a, Action::Daemon(_))));
+    assert!(t.file().contains("hold_wsl"), "{}", t.file());
+}
