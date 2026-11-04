@@ -4,6 +4,7 @@
 
 import { conn, host, store, token } from "./conn.js";
 import { aboutDoc, aboutText, data } from "./data.js";
+import { fixLineEndings } from "./projects.js";
 import { actions, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, form, go, h, menu, pending, poll, row, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
 import type { Item } from "./kit.js";
 import { qrMatrix } from "./qr.js";
@@ -119,6 +120,10 @@ function fixesFor(c: any): Item[] {
   if (c.section === "terminal" && c.name === "windows terminal" && c.level !== "ok") out.push({ label: "Change ptyro's prefix", hint: "Or remove the binding in Windows Terminal", run: () => go("#/settings/interface") });
   if (c.section === "wsl" && c.name === "network") out.push({ label: "Change who can reach it", hint: "Tailscale reaches a phone through WSL", run: () => go("#/settings/remote") });
   if (c.section === "integrations") out.push({ label: "Integrations", run: () => go("#/integrations") });
+  if (c.section === "scripts" && /line-endings/.test(c.text)) {
+    const p = [...data.projects.values()].find((x) => x.slug === c.name);
+    if (p) out.push({ label: "Rewrite them with LF", hint: "In every checkout", run: async () => { if (await fixLineEndings(p.id, p.slug)) health.reload(""); } });
+  }
   if (c.section === "worktrees" && c.name === "stale" && c.level !== "ok") out.push({ label: "Clean up", hint: "Archive, remove or keep each", run: () => go("#/gc") });
   if (c.section === "worktrees" && c.name === "archived") out.push({ label: "Archived", run: () => go("#/archives") });
   return out;

@@ -37,10 +37,17 @@ const KEEP_CHECKPOINTS: u32 = 200;
 /// What the bounce prompt starts with (a prompt that doesn't is the user's: it resets bounces).
 pub const BOUNCE_MARK: &str = "[via ptyro: verify]";
 
+/// A check ready to run: its line as written (for the evidence) and the argv that runs it.
+pub(crate) struct Resolved {
+    pub line: String,
+    pub argv: Vec<String>,
+}
+
 impl Daemon {
     /// `scripts.run.<name>`, `run:<name>` or a bare run-script name → its command (trusted
-    /// scripts only); anything else is a shell command as written.
-    pub(crate) fn resolve_command(&self, wt: &WorktreeInfo, cmd: &str) -> Result<String, Error> {
+    /// scripts only); anything else is a shell command as written. Either way, in the shell the
+    /// project's scripts run in (`[scripts] shell`, WIN6).
+    pub(crate) fn resolve_command(&self, wt: &WorktreeInfo, cmd: &str) -> Result<Resolved, Error> {
         let cmd = cmd.trim();
         let p = self
             .project_by_id(&wt.project)
@@ -52,7 +59,12 @@ impl Daemon {
                 (!cmd.contains(char::is_whitespace) && cfg.scripts.run.contains_key(cmd))
                     .then_some(cmd)
             });
-        let Some(name) = name else { return Ok(cmd.to_owned()) };
+        let argv = |role: &str, line: &str| {
+            cfg.script_argv(role, line)
+                .map(|argv| Resolved { line: line.to_owned(), argv })
+                .map_err(|m| Error::new(ErrorCode::NotFound, format!("{}: {}", p.slug, m.message)))
+        };
+        let Some(name) = name else { return argv("check", cmd) };
         let (_, script) = cfg.scripts.run_script(Some(name)).ok_or_else(|| {
             Error::missing(
                 "run script",
@@ -68,7 +80,7 @@ impl Daemon {
                 ),
             ));
         }
-        Ok(script.command.clone())
+        argv(&format!("run:{name}"), &script.command)
     }
 
     /// Run a check in a worktree and keep what it said (`log`), with the worktree's variables.
@@ -83,11 +95,11 @@ impl Daemon {
         self.run_in(&wt.path, &command, log, self.worktree_env(wt), extra).await
     }
 
-    /// `sh -c command` in `dir`: combined output to `log`, exit code, tail, tree, timing.
+    /// A resolved check in `dir`: combined output to `log`, exit code, tail, tree, timing.
     pub(crate) async fn run_in(
         self: &Arc<Self>,
         dir: &Path,
-        command: &str,
+        check: &Resolved,
         log: &Path,
         env: Vec<(String, String)>,
         extra: Option<BTreeMap<String, String>>,
@@ -96,13 +108,10 @@ impl Daemon {
             let _ = std::fs::create_dir_all(d);
         }
         let started = Instant::now();
-        let argv = ptyro_core::shell::command_argv(
-            &ptyro_core::shell::default_shell(),
-            &format!("exec 2>&1; {command}"),
-        );
-        let mut c = tokio::process::Command::new(&argv[0]);
-        c.args(&argv[1..])
-            .current_dir(dir)
+        let command = check.line.as_str();
+        // stdout and stderr both go to the log (`run_to_log`), interleaved as written.
+        let mut c = ptyro_pty::command(&check.argv);
+        c.current_dir(dir)
             .env_clear()
             .envs(self.base_env.iter().map(|(k, v)| (k, v)))
             .envs(env)

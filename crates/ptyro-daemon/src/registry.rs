@@ -688,6 +688,21 @@ impl Daemon {
                 }
                 Ok(Reply::Done)
             }
+            Request::ProjectLineEndings { addr } => {
+                let p = self.find_project(&addr)?;
+                let checkouts: Vec<(String, std::path::PathBuf)> = {
+                    let reg = self.registry.locked();
+                    reg.worktrees
+                        .iter()
+                        .filter(|w| w.project == p.id)
+                        .map(|w| (w.qualified(), w.path.clone()))
+                        .collect()
+                };
+                let root = p.root.clone();
+                let notes =
+                    crate::worktrees::blocking(move || line_endings(&root, &checkouts)).await?;
+                Ok(Reply::Notes { notes })
+            }
             Request::Discover { refresh } => self.discover(refresh).await,
             Request::WorkspaceList => {
                 Ok(Reply::Workspaces { workspaces: self.registry.locked().workspaces.clone() })
@@ -906,4 +921,35 @@ pub(crate) fn innermost<'a>(
         .filter(|(_, root)| path.starts_with(root))
         .max_by_key(|(_, root)| root.as_os_str().len())
         .map(|(w, _)| w)
+}
+
+/// `ProjectLineEndings`: in each checkout, the bash scripts its scripts run that have CRLF line
+/// endings, rewritten with LF (each checkout reads its own `.ptyro.toml`). What was done, and
+/// how to keep it from coming back.
+fn line_endings(root: &std::path::Path, checkouts: &[(String, std::path::PathBuf)]) -> Vec<String> {
+    let mut notes = Vec::new();
+    for (name, path) in checkouts {
+        let Ok(cfg) = ptyro_core::project::ProjectConfig::load(root, path) else { continue };
+        let files = cfg.scripts.crlf_files(path);
+        if files.is_empty() {
+            continue;
+        }
+        match ptyro_core::project::rewrite_lf(path, &files) {
+            Ok(done) if !done.is_empty() => {
+                notes.push(format!("{name}: {} now LF", done.join(", ")));
+            }
+            Ok(_) => {}
+            Err(e) => notes.push(format!("{name}: {e}")),
+        }
+    }
+    if notes.is_empty() {
+        notes.push("no script here has Windows (CRLF) line endings".into());
+    } else {
+        notes.push(
+            "git may check them out with CRLF again (core.autocrlf on Windows): a `*.sh text eol=lf` \
+             line in .gitattributes, committed, keeps them LF"
+                .into(),
+        );
+    }
+    notes
 }

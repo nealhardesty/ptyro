@@ -255,6 +255,7 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"project_scripts","addr":a,"worktree":null}), FULL, false),
         s(json!({"t":"project_trust","addr":a,"fingerprint":"x"}), FULL, false),
         s(json!({"t":"project_untrust","addr":a}), FULL, false),
+        s(json!({"t":"project_line_endings","addr":a}), FULL, false),
         s(json!({"t":"project_suggest","addr":a,"apply":null}), FULL, false),
         s(json!({"t":"discover","refresh":false}), FULL, false),
         s(json!({"t":"workspace_new","name":"x","profile":null,"notify":null}), FULL, false),

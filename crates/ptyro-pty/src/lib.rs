@@ -140,6 +140,20 @@ pub struct PtyChild {
     pub master: Master,
 }
 
+/// A command for `argv` (a program and its arguments). On Windows, cmd.exe's command text goes
+/// raw (`cmdline::cmd_tail`): Rust's quoting is the MSVC rules, which cmd doesn't follow.
+pub fn command(argv: &[String]) -> tokio::process::Command {
+    let (prog, args) = argv.split_first().map_or(("", &[][..]), |(p, a)| (p.as_str(), a));
+    let mut c = tokio::process::Command::new(prog);
+    #[cfg(windows)]
+    if let Some(tail) = cmdline::cmd_tail(Path::new(prog), args) {
+        c.raw_arg(tail);
+        return c;
+    }
+    c.args(args);
+    c
+}
+
 /// The stop sequence (SPEC §5.1): SIGHUP, then SIGTERM after `grace.0`, then SIGKILL after
 /// `grace.1`. Returns once the child has exited.
 pub async fn terminate(

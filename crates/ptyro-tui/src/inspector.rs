@@ -404,20 +404,10 @@ impl App {
                 // `git commit` in a session: your editor, inside ptyro, as the worktree's profile.
                 let Some(wt) = self.worktree(&i.worktree).cloned() else { return };
                 let spec = ptyro_core::session::SpawnSpec {
-                    // Stage the marked files (or everything) first, then the editor.
-                    argv: if i.marked.is_empty() {
-                        vec![
-                            "sh".into(),
-                            "-c".into(),
-                            "git add --all && exec git commit --verbose".into(),
-                        ]
-                    } else {
-                        ["sh", "-c", "git add -- \"$@\" && exec git commit --verbose", "sh"]
-                            .iter()
-                            .map(|x| (*x).to_owned())
-                            .chain(i.marked.iter().cloned())
-                            .collect()
-                    },
+                    // Stage the marked files (or everything) first, then the editor: as a
+                    // one-off git alias, which git runs with its own `sh` on every platform
+                    // (Git for Windows brings one), so it works whatever the daemon's shell.
+                    argv: commit_in_editor(&i.marked.iter().cloned().collect::<Vec<_>>()),
                     cwd: wt.path.clone(),
                     worktree: Some(wt.id.clone()),
                     name: Some(format!("{}.commit", wt.name.trim_start_matches('@'))),
@@ -822,4 +812,65 @@ fn draw_diff(app: &App, i: &Inspector, f: &mut Frame<'_>, area: Rect) {
         }
     }
     f.render_widget(Paragraph::new(out), hunks);
+}
+
+/// `git commit --verbose` in your editor, after staging `marked` (or everything): a one-off
+/// alias (`!` aliases run in git's own `sh`, Git for Windows' on Windows), so the argv is git's
+/// alone and no shell of the daemon's has to read it.
+fn commit_in_editor(marked: &[String]) -> Vec<String> {
+    let stage = if marked.is_empty() { "git add --all" } else { "git add -- \"$@\"" };
+    let alias = format!("alias.ptyro-commit=!f() {{ {stage} && exec git commit --verbose; }}; f");
+    ["git", "-c", &alias, "ptyro-commit"]
+        .iter()
+        .map(|x| (*x).to_owned())
+        .chain(marked.iter().cloned())
+        .collect()
+}
+
+#[cfg(all(test, unix))] // runs git and sh
+mod commit_tests {
+    #[test]
+    fn the_alias_stages_what_was_marked_and_only_that() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("HOME", dir.path())
+                .env("GIT_EDITOR", "true")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        git(&["init", "-q"]);
+        git(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@x",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "0",
+        ]);
+        std::fs::write(dir.path().join("a b.txt"), "a").unwrap();
+        std::fs::write(dir.path().join("c.txt"), "c").unwrap();
+        let argv = super::commit_in_editor(&["a b.txt".to_owned()]);
+        let mut cmd = std::process::Command::new(&argv[0]);
+        cmd.args(&argv[1..])
+            .current_dir(dir.path())
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", dir.path())
+            .env("GIT_EDITOR", "sh -c 'echo marked > \"$1\"' sh")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@x")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@x");
+        assert!(cmd.status().unwrap().success());
+        assert_eq!(git(&["show", "--name-only", "--format=%s"]).trim(), "marked\n\na b.txt");
+        assert_eq!(git(&["status", "--porcelain"]).trim(), "?? c.txt", "not marked: not staged");
+    }
 }

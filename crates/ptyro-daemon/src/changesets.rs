@@ -2211,9 +2211,28 @@ impl Daemon {
         env: Vec<(std::ffi::OsString, std::ffi::OsString)>,
     ) -> CheckResult {
         let started = now_ms();
-        let argv = ptyro_core::shell::command_shell(cmd);
-        let mut c = tokio::process::Command::new(&argv[0]);
-        c.args(&argv[1..]).current_dir(dir).env_clear().envs(env);
+        let failed = |text: String| CheckResult {
+            command: cmd.to_owned(),
+            ok: false,
+            exit_code: None,
+            tail: text,
+            at_ms: now_ms(),
+            duration_ms: 0,
+        };
+        // A change set's check: `sh -c` on Unix, as it always was; on Windows `.sh` and `.ps1`
+        // files in their own shells and the rest in PowerShell (`[scripts] shell`'s auto, WIN6).
+        let argv = if cfg!(windows) {
+            match ptyro_core::shell::ScriptEnv::here(|e| {
+                ptyro_core::shell::script_argv(ptyro_core::shell::ScriptShell::Auto, cmd, false, e)
+            }) {
+                Ok(a) => a,
+                Err(m) => return failed(m.message),
+            }
+        } else {
+            ptyro_core::shell::command_shell(cmd)
+        };
+        let mut c = ptyro_pty::command(&argv);
+        c.current_dir(dir).env_clear().envs(env);
         // Its output goes to a file as it is written (never held in memory), and the group is
         // stopped on a timeout or when it writes too much.
         let log =

@@ -168,7 +168,11 @@ ptyro new                                      # starts the daemon, then a shell
 `local` means this computer's own daemon; `ptyro config unset client.default_remote` goes back
 to WSL. The zip ships Microsoft's packaged ConPTY (`conpty.dll`, `OpenConsole.exe`) beside
 `ptyro.exe`: it passes programs' output through untouched, where Windows' own repaints it, so
-`ptyro doctor` warns when those two files are missing. The daemon listens on a named pipe only
+`ptyro doctor` warns when those two files are missing. A project's scripts run in the shell
+they're written for: a `.ps1` file in PowerShell, a `.sh` file (and Conductor's and the other
+tools' imported scripts) in Git Bash, the rest in PowerShell; `[scripts] shell` in
+`.ptyro.toml` (or the settings panel) picks one for the whole project. A bash script checked out
+with Windows line endings is a `doctor` finding, and `ptyro project line-endings` fixes it. The daemon listens on a named pipe only
 you can open. Not there yet: a live `daemon upgrade` (stop and start it; agents' conversations
 can be resumed) and the foreground program's name and directory.
 

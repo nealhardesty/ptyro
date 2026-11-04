@@ -356,6 +356,10 @@ pub const ACTIONS: &[ActionSpec] = &[
         "Forget this project (its worktrees stay on disk; it won't register on its own again)",
     ),
     a("project.untrust", "Stop trusting this project's scripts"),
+    a(
+        "project.line_endings",
+        "Rewrite this project's bash scripts that have Windows (CRLF) line endings with LF, in every checkout",
+    ),
     a("project.pin", "Pin this project to a profile (its sessions run as it)"),
     a("project.unpin", "Unpin this project from its profile"),
     a("project.leave", "Take this project out of this workspace (it stays registered)"),
