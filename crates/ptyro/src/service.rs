@@ -10,6 +10,9 @@
 //!   never triggers a restart loop.
 //! - Nothing is started or stopped behind your back: install starts the service only when no
 //!   daemon is running, uninstall leaves a running daemon alone.
+//! - Inside WSL (WIN2) with systemd off, install enables the unit by hand and offers to turn
+//!   systemd on (`crate::wsl_conf`). What keeps the daemon running after the last terminal
+//!   closes is its own hold on WSL (`[daemon] hold_wsl`), not the service.
 
 use std::path::PathBuf;
 
@@ -174,7 +177,20 @@ pub fn install(ctx: &Ctx, dry_run: bool) -> Result<i32, Error> {
             )?;
         }
     } else {
+        let wsl = ptyro_core::wsl::detect().is_some();
         write(&systemd_path(), &systemd_unit(&exe, &env), dry_run)?;
+        if wsl && !crate::wsl_conf::systemd_on() {
+            // No systemd to ask yet (WIN2): enable the unit by hand, with the link `systemctl
+            // enable` makes, so it starts on the first boot with systemd, and offer to turn it on.
+            link_wanted(dry_run)?;
+            if !crate::wsl_conf::enable_systemd(dry_run)? {
+                eprintln!(
+                    "the service is installed, and starts once systemd is on in this distro: \
+                     run `ptyro daemon install-service` in a terminal to turn it on"
+                );
+            }
+            return Ok(0);
+        }
         sh(&["systemctl", "--user", "daemon-reload"], dry_run)?;
         sh(&["systemctl", "--user", "enable", UNIT], dry_run)?;
         if running {
@@ -189,6 +205,26 @@ pub fn install(ctx: &Ctx, dry_run: bool) -> Result<i32, Error> {
         );
     }
     Ok(0)
+}
+
+/// `<config>/systemd/user/default.target.wants/ptyro.service`: what `systemctl --user enable`
+/// links, made by hand where systemd isn't running yet.
+fn wanted_link() -> PathBuf {
+    systemd_path().with_file_name("default.target.wants").join(UNIT)
+}
+
+fn link_wanted(dry_run: bool) -> Result<(), Error> {
+    let link = wanted_link();
+    eprintln!("$ ln -sf {} {}", systemd_path().display(), link.display());
+    if dry_run {
+        return Ok(());
+    }
+    let fail = |e: std::io::Error| Error::internal(format!("{}: {e}", link.display()));
+    if let Some(d) = link.parent() {
+        std::fs::create_dir_all(d).map_err(fail)?;
+    }
+    let _ = std::fs::remove_file(&link);
+    std::os::unix::fs::symlink(systemd_path(), &link).map_err(fail)
 }
 
 pub fn uninstall(ctx: &Ctx, dry_run: bool) -> Result<i32, Error> {
@@ -207,9 +243,17 @@ pub fn uninstall(ctx: &Ctx, dry_run: bool) -> Result<i32, Error> {
         remove(&path, dry_run)?;
     } else {
         let path = systemd_path();
-        let _ = sh(&["systemctl", "--user", "disable", UNIT], dry_run);
+        let systemd = crate::wsl_conf::systemd_on();
+        if systemd {
+            let _ = sh(&["systemctl", "--user", "disable", UNIT], dry_run);
+        } else if !dry_run {
+            // Enabled by hand before systemd ran (WSL): the link is all there is to undo.
+            let _ = std::fs::remove_file(wanted_link());
+        }
         remove(&path, dry_run)?;
-        sh(&["systemctl", "--user", "daemon-reload"], dry_run)?;
+        if systemd {
+            sh(&["systemctl", "--user", "daemon-reload"], dry_run)?;
+        }
         eprintln!("a running daemon keeps running; `ptyro daemon stop` stops it");
     }
     Ok(0)

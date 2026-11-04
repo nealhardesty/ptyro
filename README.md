@@ -46,8 +46,11 @@ Google, or any other tool named here; their names and trademarks belong to their
 
 ## Requirements
 
-- **Linux or macOS.** WSL2 should work and is being verified. Native Windows 11 is planned, not
-  built yet (ROADMAP WIN).
+- **Linux, macOS or WSL2.** On WSL2 nothing needs setting up: WSL normally stops a distro
+  about 15 seconds after its last terminal closes, so ptyro's daemon keeps WSL running while it
+  runs, and your agents keep working with every terminal closed. `ptyro daemon stop` lets WSL
+  stop; `[daemon] hold_wsl = false` (Settings → daemon) turns that off. Native Windows 11 is
+  planned, not built yet (ROADMAP WIN).
 - **Rust 1.99 or later** to build. A checkout pins 1.99.1 in `rust-toolchain.toml`, and
   [rustup](https://rustup.rs) fetches it for you. No Rust yet? In a checkout, `make rust-install`
   installs rustup and the pinned toolchain on Linux, macOS and Windows. It needs a C compiler,
@@ -452,6 +455,7 @@ ptyro pair phone               # a one-time QR code (10 min; full control, it wa
                                # over Tailscale it uses Tailscale's certificate when your tailnet has HTTPS
                                # certificates on (nothing to install, Android included); else it says how to
                                # trust ptyro's certificate once
+ptyro pair --open              # or pair this computer's own browser (inside WSL, the Windows one): it opens signed in
 ptyro devices revoke ID        # cut a device off at once
 ptyro --remote me@workbox      # the TUI (or any command) on another machine, over ssh
 ```
@@ -618,7 +622,8 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
   keeps drawing; ptyro only adds its marks around it. `ptyro … --json | ConvertFrom-Json` gives
   you objects.
 - **Completions:** `source <(ptyro completions zsh)` (or bash, fish…). **Start at login:**
-  `ptyro daemon install-service` (systemd or launchd).
+  `ptyro daemon install-service` (systemd or launchd). Inside WSL with systemd off, it offers to
+  turn systemd on (it asks, then edits `/etc/wsl.conf` with sudo; WSL restarts once).
 - **Something odd?** A `⚕` in the status bar means the doctor found something: `Ctrl-Q M` lists
   it, each with its fix (tmux options, a login, a daemon upgrade). Or run
   `ptyro doctor`. `ptyro daemon logs` shows the daemon's log, and
@@ -682,7 +687,7 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make scratchpad-demo` (`ARGS=tui\|clean`) | the scratchpad in a throwaway ptyro: items added, listed, ticked, restored; `tui` opens it |
 | `make verify-claude` | check the Claude adapter against the real Claude Code on your machine (one tiny turn) |
 | `make verify-structured` | check structured mode against the real agents here |
-| `make test-wsl` (`DISTRO=…`, `WSL_DIR=…`) | CI's main job (`make check`) inside WSL2, run by hand before each release until CI has a WSL2 runner: inside the distro it checks this checkout; on Windows (Git Bash, MSYS2) it runs it in the distro through `wsl.exe` (default `~/dev/ptyro`) |
+| `make test-wsl` (`DISTRO=…`, `WSL_DIR=…`) | CI's main job (`make check`) inside WSL2, which CI also runs on a hosted Windows runner (the `wsl` job): inside the distro it checks this checkout; on Windows (Git Bash, MSYS2) it runs it in the distro through `wsl.exe` (default `~/dev/ptyro`) |
 | `make spike-wsl` (`ARGS="start [label]"`, `check`, `clean`) | ROADMAP WIN0.1, run inside WSL2: three heartbeats (a plain process, a ptyro daemon started on demand, one run by a systemd user unit), then close every WSL terminal; an hour later `check` says how long each lived and writes a report with the WSL version and settings |
 | `make spike-chat` (`ARGS="claude codex"`) / `make spike-chat-fts` (`NODES=…`) | try the chat engine's claims against the real agents here (a few cents of tokens; Gemini and OpenCode if installed) / FTS5 and a 100k-node chat index in SQLite |
 | `make spike-chat-meaning` (`NODES=…`) | meaning search's cost over 100k chat messages with a synthetic model the real one's size: embedding, the backfill, a search's scan, the vectors' size (nothing downloaded) |

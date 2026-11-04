@@ -254,6 +254,22 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
             }
             Ok(json!({ "notes": notes(&r) }))
         }
+        // `ptyro pair --open`: the computer's own browser (inside WSL, Windows') gets a paired
+        // web app. `--json` returns at once instead of waiting for the browser.
+        "pair.open" => {
+            let r = cli(&["pair", "--open", "--json"]).await?;
+            if r["ok"] == json!(false) {
+                return Err(Error::invalid(r["err"].as_str().unwrap_or("failed").to_owned()));
+            }
+            let doc: Value =
+                serde_json::from_str(r["out"].as_str().unwrap_or("{}")).unwrap_or_default();
+            Ok(json!({
+                "opened": doc["opened"],
+                "url": doc["url"],
+                "device": doc["device"]["name"],
+                "notes": doc["notes"],
+            }))
+        }
         "service.install" | "service.uninstall" => {
             let verb =
                 if op.ends_with("uninstall") { "uninstall-service" } else { "install-service" };

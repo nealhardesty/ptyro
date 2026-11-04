@@ -774,6 +774,7 @@ pub const SETTINGS: &[Setting] = &[
     s("daemon.frame_interval_ms", "daemon", int(1, 1000), "The shortest wait between screen updates sent to a client. Lower is smoother and busier.").adv().new_only().unit("ms"),
     s("daemon.log_level", "daemon", pick(LOG_LEVEL), "How much the daemon writes to its log. (PTYRO_LOG, when set, wins.)"),
     s("daemon.restore_on_start", "daemon", pick(RESTORE), "What agent sessions of an earlier daemon become when it starts.").restart(),
+    s("daemon.hold_wsl", "daemon", Kind::Bool, "Inside WSL: keep WSL running while ptyro does, so agents keep working after you close the last terminal. Off, WSL stops everything about 15 seconds after the last terminal closes. Does nothing outside WSL.").also("wsl windows keep alive survive idle shutdown close terminal"),
     s("daemon.machine_name", "daemon", Kind::Text, "What to call this computer in the web page's title and the TUI, to tell several apart. Letters, digits, spaces; 24 characters at most.").also("hostname computer name machine tab title").or("this computer's name").eg("studio"),
     s("recorder.enabled", "daemon", Kind::Bool, "Record every session's output with timing, for replay and for scrolling back past what is in memory.").new_only(),
     s("recorder.max_bytes", "daemon", Kind::Bytes, "The most one session's recording takes, like 16MiB (at least 256KiB).").new_only(),

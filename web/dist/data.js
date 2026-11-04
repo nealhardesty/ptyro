@@ -115,7 +115,7 @@ export function aboutDoc(host, status) {
         version: d.version ?? "", protocol: d.proto ? `${d.proto.major}.${d.proto.minor}` : "",
         repository: REPOSITORY, issues: ISSUES, license: LICENSE, build: {}, system: "",
         places: [d.socket && { name: "socket", path: d.socket, exists: true }, d.log_dir && { name: "logs", path: d.log_dir, exists: true }].filter(Boolean),
-        daemon: { running: !!status, version: d.version, protocol: d.proto ? `${d.proto.major}.${d.proto.minor}` : "", pid: d.pid, started_ms: d.started_ms, same: null, fix: null },
+        daemon: { running: !!status, version: d.version, protocol: d.proto ? `${d.proto.major}.${d.proto.minor}` : "", pid: d.pid, started_ms: d.started_ms, same: null, fix: null, holds_wsl: d.wsl_hold ? (d.wsl_hold.holding ? `yes, agents keep working with every terminal closed (wsl.exe, pid ${d.wsl_hold.pid})` : `no: ${d.wsl_hold.why_not ?? d.wsl_hold.last_exit ?? "starting"}`) : undefined },
         web: d.web ? { wanted: d.web.wanted, up: d.web.up, url: d.web.url, text: [d.web.up ? `up at ${d.web.url}` : d.web.wanted ? "on, but not up yet" : "off"] } : null,
         tools: [], limited: true,
     };
@@ -131,6 +131,7 @@ export function aboutText(doc) {
         v("ptyro", `${doc.version} (protocol ${doc.protocol})`),
         v("source", doc.repository), v("licence", doc.license), v("report", `${doc.issues} (paste this block)`),
         v("daemon", d.running ? `running, version ${d.version} (protocol ${d.protocol}), pid ${d.pid}` : "not running"),
+        ...(d.holds_wsl ? [v("holds WSL", d.holds_wsl)] : []),
         ...(doc.web ? [v("web app", doc.web.text?.[0] ?? "")] : []),
         ...(doc.places ?? []).map((p) => v(p.name, p.path)),
     ].join("\n") + "\n";

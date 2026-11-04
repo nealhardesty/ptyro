@@ -1381,6 +1381,28 @@ pub struct DaemonStatus {
     /// name): what a client of a remote daemon shows, not its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<String>,
+    /// Inside WSL: the daemon holding WSL open while it runs (`[daemon] hold_wsl`, SPEC §20.10).
+    /// `None` outside WSL (and from a daemon older than 0.0.48).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wsl_hold: Option<WslHold>,
+}
+
+/// The daemon's hold on WSL: a `wsl.exe` back into its own distro, so WSL doesn't stop the distro
+/// (and every agent in it) once the last terminal closes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WslHold {
+    /// The holder runs now.
+    pub holding: bool,
+    pub pid: Option<u32>,
+    pub since_ms: Option<u64>,
+    /// Why it doesn't hold: the setting is off, interop is off, the distro has no name…
+    #[serde(default)]
+    pub why_not: Option<String>,
+    /// How the last holder ended, when it ended by itself.
+    #[serde(default)]
+    pub last_exit: Option<String>,
+    #[serde(default)]
+    pub restarts: u32,
 }
 
 /// The web app's server, `ptyro serve`, as the daemon sees it (`[remote] serve`, SPEC §16.3).

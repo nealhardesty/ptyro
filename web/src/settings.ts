@@ -17,6 +17,7 @@ const ACTIONS = {
   "devices.list": "Devices paired with ptyro, what each may do, when it was last here",
   "devices.revoke": "Unpair a device: its token stops working at once",
   "pair.device": "Make a pairing link for another device",
+  "pair.open": "Open the web app in the computer's own browser, paired (inside WSL: the Windows browser)",
   "profile.list": "Profiles: accounts agents run under, each with its logins",
   "profile.show": "A profile: its directories, git identity and variables",
   "profile.new": "Add a profile, adopting directories you already have",
@@ -114,6 +115,7 @@ function fixesFor(c: any): Item[] {
   if (c.section === "ptyro" && c.name.startsWith("config")) out.push({ label: "Edit the config", run: () => go("#/config") });
   if (c.section === "remote" || /restart/.test(c.text)) out.push({ label: "Restart ptyro", run: () => restartDaemon() });
   if (c.section === "daemon" && /binary|upgrade|older|newer/i.test(c.text)) out.push({ label: "Upgrade the daemon", run: () => upgradeDaemon() });
+  if (c.section === "wsl" && c.name === "survival" && /hold_wsl is off/.test(c.text)) out.push({ label: "Keep WSL running while ptyro runs", hint: "Settings → daemon → hold_wsl", run: () => go("#/settings/daemon") });
   if (c.section === "wsl" && c.name === "network") out.push({ label: "Change who can reach it", hint: "Tailscale reaches a phone through WSL", run: () => go("#/settings/remote") });
   if (c.section === "integrations") out.push({ label: "Integrations", run: () => go("#/integrations") });
   if (c.section === "worktrees" && c.name === "stale" && c.level !== "ok") out.push({ label: "Clean up", hint: "Archive, remove or keep each", run: () => go("#/gc") });
@@ -186,6 +188,16 @@ function pairAnother(): void {
     ]);
     devices.reload("");
   }, { intro: h("span", { class: "form-err" }, FULL_WARNING) });
+}
+
+/// `ptyro pair --open` on the computer: its own browser (inside WSL, Windows') opens the web app,
+/// paired as "browser".
+async function openOnComputer(): Promise<void> {
+  const r = await doHost("pair.open", {}, "Opening…");
+  if (!r) return;
+  const said = r.opened ? "Opened in the computer's browser." : `Nothing on the computer opens a browser; open ${r.url} there.`;
+  showNotes("Open on the computer", [said, ...((r.notes as string[] | undefined) ?? [])]);
+  devices.reload("");
 }
 
 function devicesView(): HTMLElement {
@@ -432,6 +444,7 @@ function aboutView(): HTMLElement {
         ["Source", aboutValue(doc.repository, true)], ["Report a problem", aboutValue(doc.issues, true)], ["Licence", doc.license]])),
       section("Running", facts([
         ["Daemon", d.running ? `running · ${d.version} (protocol ${d.protocol}) · pid ${d.pid} · up ${ago(d.started_ms)}` : "not running (it starts on demand)"],
+        ["Holds WSL", d.holds_wsl ?? null],
         ["Web app", w ? (w.text ?? []).join(" · ") : null]])),
       section("Where things live", facts((doc.places ?? []).map((p: any) => [p.name[0].toUpperCase() + p.name.slice(1), aboutValue(p.path)] as [string, HTMLElement]))),
       (doc.tools ?? []).length ? section("Tools", facts((doc.tools as any[]).map((t) => [t.name, t.text] as [string, string]))) : null,
@@ -457,6 +470,7 @@ function daemonView(): HTMLElement {
   const body = pending(status, "") ?? h("div", { class: "stack-in", title: tip("daemon.status") },
     facts([["Version", `${s.version} (protocol ${s.proto.major}.${s.proto.minor})`], ["Process", String(s.pid)], ["Up for", ago(s.started_ms)], ["Sessions", `${s.sessions} (${s.live_sessions} running)`], ["Clients", String(s.clients)],
       ["Upgrades", s.generation ? `${s.generation}${s.rolled_back ? " (the last was rolled back)" : ""}` : null],
+      ["Holds WSL", s.wsl_hold ? aboutDoc(null, s).daemon.holds_wsl : null],
       ["Memory", s.metrics ? `${Math.round(s.metrics.rss_kib / 1024)} MB · ${s.metrics.open_fds} fds · lag ${s.metrics.loop_lag_ms_max} ms` : null], ["Socket", s.socket], ["Logs", s.log_dir]]),
     conn.scope === "full" ? h("div", { class: "stack-in" },
       bar(
@@ -467,6 +481,7 @@ function daemonView(): HTMLElement {
       section("Start at login", h("p", { class: "sub" }, "A systemd or launchd service starts the daemon (and this server) when you log in."),
         bar(h("button", { title: tip("daemon.service"), onclick: async () => { const r = await doHost("service.install"); if (r) showNotes("Login service", r.notes ?? []); } }, "Install the service"),
           h("button", { title: tip("daemon.unservice"), onclick: async () => { const r = await doHost("service.uninstall"); if (r) showNotes("Login service", r.notes ?? []); } }, "Remove it"))),
+
       section("Back up or leave", h("p", { class: "sub" }, "A backup holds your config, history, scratchpad and settings, in a private file on the computer. Uninstalling removes ptyro; your repositories stay."),
         bar(h("button", { title: tip("backup.create"), onclick: backupNow }, "Back up ptyro's state"),
           h("button", { class: "deny", title: tip("uninstall.plan"), onclick: showUninstall }, "Uninstall…")))) : h("p", { class: "intro" }, "Logs, upgrading and the service need a device paired with --scope full."));
@@ -575,6 +590,7 @@ function webView(): HTMLElement {
       full ? bar(
         w.wanted ? h("button", { class: "deny", title: tip("web.off"), onclick: turnWebOff }, "Stop serving") : h("button", { class: "primary", title: tip("web.on"), onclick: turnWebOn }, "Run it with the daemon"),
         h("button", { title: tip("pair.device"), onclick: pairAnother }, "Pair a device…"),
+        w.up ? h("button", { title: tip("pair.open"), onclick: openOnComputer }, "Open on the computer") : null,
         h("button", { title: tip("web.logs"), onclick: () => void showWebLogs() }, "Log")) : h("p", { class: "intro" }, "Turning it on or off needs a device paired with ", h("code", {}, "ptyro pair --scope full"), "."));
   })());
   return h("div", {}, ui.header("Web app", "#/more"), h("main", { class: "stack" }, body));

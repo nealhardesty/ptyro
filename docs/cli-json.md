@@ -293,7 +293,7 @@ Pinned by `crates/ptyro/tests/m11.rs`.
 - `ptyro doctor --json`, `ptyro profile doctor --json` → `[{section, name, level, text}]`.
   `level` is `ok`, `note`, `warn` or `problem`; any `problem` makes the exit code 1.
 - `ptyro about --json` → `{version, protocol, repository, issues, license, build: {commit?, date?, target}, exe?, system, places: [{name, path, exists}], daemon: {running, version?, protocol?, pid?, started_ms?, same?, fix?}, web?: {wanted, up, url?, text: [string]}, tools: [{name, kind, found, text}], report}`. `report` is the whole thing as text, for a bug report; `daemon.same` is `false`, with a `fix`, when the daemon is another version than this ptyro.
-- `ptyro daemon status --json` → `{version, proto: {major, minor}, pid, started_ms, sessions, live_sessions, clients, socket, log_dir, generation, upgraded_ms, rolled_back, metrics}`
+- `ptyro daemon status --json` → `{version, proto: {major, minor}, pid, started_ms, sessions, live_sessions, clients, socket, log_dir, generation, upgraded_ms, rolled_back, metrics}`; inside WSL also `wsl_hold: {holding, pid, since_ms, why_not, last_exit, restarts}` (whether the daemon keeps WSL running; `why_not` says why it doesn't)
   - `generation`: live upgrades since the daemon started; `upgraded_ms`: when the last one happened (or `null`); `rolled_back`: the last upgrade was refused by the new binary and rolled back.
   - `metrics`: `{rss_kib, open_fds, tasks_alive, loop_lag_ms_max, loop_lag_ms_p99, pty_readers, bytes_read, frames_sent, crashes, scrollback_bytes, sessions: [[name, bytes]]}`. Event-loop lag covers the last minute; the totals carry across upgrades.
 - `ptyro daemon upgrade --json` → `{from, to, pid, sessions, rolled_back, ms}` once the new image answers (exit 1 if `rolled_back`).

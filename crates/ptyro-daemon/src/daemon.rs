@@ -136,6 +136,8 @@ pub struct Daemon {
     /// Claude permission prompts held for a remote answer (M9.5).
     pub(crate) held: Mutex<HashMap<SessionId, crate::approvals::Held>>,
     pub(crate) serve_child: crate::serve_child::ServeChild,
+    /// Inside WSL, the `wsl.exe` that keeps the distro running (SPEC §20.10).
+    pub(crate) wsl_hold: crate::wsl_hold::Holder,
     /// The scratchpad's revisions and write lock (NOTE1).
     pub(crate) pad_state: crate::scratchpad::PadState,
     // ── change sets (M11) ──
@@ -254,6 +256,7 @@ impl Daemon {
             vapid: Mutex::new(None),
             held: Mutex::new(HashMap::new()),
             serve_child: crate::serve_child::ServeChild::default(),
+            wsl_hold: crate::wsl_hold::Holder::default(),
             pad_state: crate::scratchpad::PadState::default(),
             cs: Mutex::new(HashMap::new()),
             launching: Mutex::new(Default::default()),
@@ -938,6 +941,7 @@ impl Daemon {
             metrics: Some(self.metrics()),
             web: Some(self.web_status()),
             machine: Some(self.machine()),
+            wsl_hold: self.wsl_hold_status(),
         }
     }
 
@@ -1453,6 +1457,7 @@ impl Daemon {
                 self.secrets.locked().clear();
                 // A web app running with other `[remote]` settings starts again with these.
                 self.serve_child.wake();
+                self.wsl_hold.wake();
                 tracing::info!("config reloaded");
                 None
             }

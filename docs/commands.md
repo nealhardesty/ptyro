@@ -187,7 +187,7 @@ See [`remote.md`](remote.md).
 | Command | Does |
 |---|---|
 | `ptyro serve [--access localhost\|tailscale\|open] [--port N] [--cert PEM --key PEM]` | the web app and the protocol over WebSocket for paired devices, always HTTPS with a certificate ptyro makes (phones trust its CA once, from `/ca.crt`); `--access` and `--port` default to `[remote] access` and `port`; `--cert`/`--key` use your own certificate |
-| `ptyro pair [NAME] [--scope read\|approve\|control\|full] [--url URL] [--json]` | pair a phone or browser: a QR code with a one-time code (10 minutes; scope `full` by default, with a warning; a name that exists is replaced), then waits for the device |
+| `ptyro pair [NAME] [--scope read\|approve\|control\|full] [--url URL] [--json] [--open]` | pair a phone or browser: a QR code with a one-time code (10 minutes; scope `full` by default, with a warning; a name that exists is replaced), then waits for the device; `--open` pairs this computer's own browser instead (inside WSL, the Windows one; it offers to have Windows trust ptyro's certificate first) |
 | `ptyro devices [ls \| revoke ID \| push-test]` | paired devices |
 | `ptyro machine [ls \| add (ssh://HOST \| CODE) [--name N] \| rm M \| hide M WS \| unhide M WS \| retry M \| pair]` | other machines whose workspaces show here beside yours (`laptop2:work`, `laptop2:fix-flaky-test`): add one over ssh or with the code `machine pair` printed on it; they must run the same version |
 | `ptyro web [on\|off\|status] [--access localhost\|tailscale\|open] [--pair] [--json]` | have the daemon run the web app's server (`ptyro daemon start --serve` too): on, off, or where it is and what to do next |

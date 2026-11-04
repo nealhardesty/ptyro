@@ -30,6 +30,7 @@ mod tls;
 mod tour;
 mod uninstall;
 mod webapp;
+mod wsl_conf;
 
 use std::path::PathBuf;
 
@@ -626,6 +627,10 @@ enum Cmd {
         /// Print the device and its link as JSON (no QR code)
         #[arg(long)]
         json: bool,
+        /// Open the link in this computer's own browser instead, pairing that browser (inside
+        /// WSL, the Windows one); the name defaults to "browser"
+        #[arg(long)]
+        open: bool,
     },
     /// Paired devices
     Devices {

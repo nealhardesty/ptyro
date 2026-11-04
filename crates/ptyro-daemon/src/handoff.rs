@@ -280,6 +280,8 @@ impl Daemon {
         let _ = self.goodbye.send(Some("the daemon is upgrading; reconnecting".into()));
         // The managed `ptyro serve` (M9.2) goes; the next image starts its own.
         self.serve_child.kill();
+        // So does the hold on WSL (a rollback's supervisor starts it again within 10 s).
+        self.wsl_hold.kill();
         // Park the readers: every byte read is in an emulator, the rest waits in the kernel.
         let _ = self.io_pause.send(true);
         let deadline = std::time::Instant::now() + Duration::from_secs(2);

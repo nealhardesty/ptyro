@@ -293,7 +293,13 @@ fn json_shapes() {
         ("integrations", vec!["integrations", "ls", "--json"]),
         ("config_check", vec!["config", "check", "--json"]),
     ] {
-        all.insert(name.into(), shape(&w.json(&args)));
+        let mut v = w.json(&args);
+        // Only inside WSL (SPEC §20.10), so not in a snapshot every platform shares; its shape
+        // is checked where it exists (tests/win2.rs) and written down in docs/cli-json.md.
+        if let Some(m) = v.as_object_mut() {
+            m.remove("wsl_hold");
+        }
+        all.insert(name.into(), shape(&v));
     }
     // A status event (kinds differ in their detail).
     let ev: Value = w

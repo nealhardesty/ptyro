@@ -405,6 +405,10 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("remote.web_on", "Have the daemon run the web app's server, now and whenever it starts"),
     a("remote.web_off", "Stop the daemon running the web app's server (devices stay paired)"),
     a("remote.pair", "Pair a phone: a QR code to scan, in a split"),
+    a(
+        "remote.pair.browser",
+        "Open the web app in this computer's browser, paired (inside WSL: the Windows browser)",
+    ),
     a("devices.list", "Paired devices"),
     a("devices.revoke", "Cut a paired device off now"),
     a("devices.push_test", "Send a test push to your devices"),

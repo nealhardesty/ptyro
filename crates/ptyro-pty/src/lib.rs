@@ -160,6 +160,25 @@ pub fn signal_group(pid: u32, sig: Signal) -> io::Result<()> {
     Ok(rustix::process::kill_process_group(pid, sig)?)
 }
 
+/// Have Linux kill `cmd`'s process when the thread that starts it ends (`PR_SET_PDEATHSIG`):
+/// the caller keeps that thread alive exactly as long as it wants the child. Nothing elsewhere.
+#[allow(unsafe_code)] // pre_exec runs one async-signal-safe prctl between fork and exec
+pub fn die_with_parent(cmd: &mut std::process::Command) {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: the closure only calls prctl, which is async-signal-safe, and allocates nothing.
+        unsafe {
+            cmd.pre_exec(|| {
+                rustix::process::set_parent_process_death_signal(Some(Signal::KILL))
+                    .map_err(io::Error::from)
+            });
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = cmd;
+}
+
 /// Whether the program in the PTY has the terminal in raw mode (no line editing): full-screen
 /// programs and agents do, a shell waiting at its prompt line or `cat` don't.
 pub fn is_raw(master: &OwnedFd) -> Option<bool> {

@@ -2688,7 +2688,7 @@ done.
    - Windows Terminal's own "duplicate tab in the same directory" uses the same OSC `9;9`, so
      both should agree.
 3. **WIN0.1, the WSL survival spike.** `make spike-wsl` (`scripts/spike-wsl.sh`, written
-   2026-11-01; only its mechanics were tried, on macOS with `SPIKE_WSL_ANY=1`, never in WSL).
+   2026-11-01; first run in WSL 2026-11-02, see WIN0.1 below).
    - `make spike-wsl ARGS="start <label>"` starts three heartbeats, each writing
      `<epoch> <boot id>` every 10 s. Each daemon has its own `PTYRO_HOME`, so your real ptyro is
      never touched.
@@ -2711,8 +2711,10 @@ done.
    - **If the script misbehaves in WSL, fix it first.** It is untested there: interop (`cmd.exe`,
      `wsl.exe` output in UTF-16), the systemd user instance and `loginctl` are the likely spots.
 4. **WIN2.** It needs WIN0.1's answer.
-   - Also settle the [U] fact that hosted `windows-latest` runners have only WSL1, in RESEARCH
-     IV.3 and WIN0.5 (f). Run `wsl --status` in a throwaway workflow on a branch.
+   - ~~Also settle the [U] fact that hosted `windows-latest` runners have only WSL1, in RESEARCH
+     IV.3 and WIN0.5 (f). Run `wsl --status` in a throwaway workflow on a branch.~~ [settled
+     2026-11-03] They have WSL2 (WSL 3.0.3.0, systemd on); `windows-11-arm` has none. CI's `wsl`
+     job runs `make test-wsl` (SPEC §20.10).
    - If they do have only WSL1, registering this machine as a self-hosted runner is the cheap way
      to get WSL2 into CI. The runner's labels and setup go in the README.
 5. **WIN0.4, then WIN3** (the native client against the WSL daemon). Do WIN0.4 natively first.
@@ -2760,13 +2762,19 @@ done.
   owner's Mac has it in `~/.gitconfig`), a bare `git push` also tries a stale local `master`.
 
 - [ ] **WIN0 Spikes and decisions** **M**
-  - [ ] **WIN0.1 Does WSL keep the daemon alive?** (R-WIN-05) On the current WSL release, start
+  - [x] **WIN0.1 Does WSL keep the daemon alive?** (R-WIN-05) On the current WSL release, start
     the daemon from a terminal, and separately as a systemd user service, then close every
     terminal and check an hour later. Try with and without `vmIdleTimeout=-1` /
     `instanceIdleTimeout=-1` and `[boot] systemd=true`. Reports since WSL 2.5.7 say the distro
     stops 15–20 s after the last terminal closes, even with a service running (microsoft/WSL
     #13291, #13416) [S]. Write the result and the keep-alive that works into SPEC §20. If none
     works, say so in the README's requirements. `make spike-wsl` (`scripts/spike-wsl.sh`, written; see the handoff above for how to run it).
+    **Answered 2026-11-03** (WSL 2.6.2.0, SPEC §20.10): no setting inside the distro keeps it up.
+    A throwaway systemd distro, with a system service and a user service under linger, stopped
+    13–14 s after its last `wsl.exe` exited. The overnight spike lived because its heartbeats
+    were started from a terminal, whose `wslhost.exe` outlived the terminal and held the distro.
+    What does hold it is a `wsl.exe` back into the distro, so the daemon now runs one (WIN2
+    "Survival"). Left for later: Windows sleep and hibernate.
   - [ ] **WIN0.2 ConPTY fidelity.** (R-WIN-09) `make spike-conpty`: a small Windows program that
     plays `ptyro-term`'s fixture streams through ConPTY and compares what comes out. Run it with
     and without `PSEUDOCONSOLE_PASSTHROUGH_MODE`, and with the conhost built into Windows against
@@ -2798,7 +2806,7 @@ done.
     - (c) **Setup, verify, worktree and `run` commands:** a per-project `shell = auto | pwsh | bash | cmd | sh`, `auto` by default (DD3.4 item 3).
     - (d) **Upgrade on Windows: restart and resume.** No holder processes. R-WIN-13 stays an idea.
     - (e) **Windows 11 only**, x64 and ARM64.
-    - (f) **WSL2 is Tier 1 too.** *The catch:* GitHub's hosted Windows runners are believed to offer only WSL1, because WSL2 needs nested virtualization [U, check in WIN2]. Tier 1 WSL2 then needs either a self-hosted runner (a Windows 11 machine or VM with WSL2, registered to the repo; free apart from the machine) or a cloud VM size that supports nested virtualization (paid). Until one exists, `make test-wsl` runs by hand before each release.
+    - (f) **WSL2 is Tier 1 too.** ~~*The catch:* GitHub's hosted Windows runners are believed to offer only WSL1, because WSL2 needs nested virtualization [U, check in WIN2].~~ [checked 2026-11-03: `windows-latest` has WSL2 and boots Ubuntu 24.04 with systemd; CI's `wsl` job runs `make test-wsl` there. The rest of this item is moot.] Tier 1 WSL2 then needs either a self-hosted runner (a Windows 11 machine or VM with WSL2, registered to the repo; free apart from the machine) or a cloud VM size that supports nested virtualization (paid). Until one exists, `make test-wsl` runs by hand before each release.
     - Following from (b) and (f): once WIN ships, the ROADMAP convention "a milestone is not done until that demo works on Linux *and* macOS" becomes "Linux, macOS, Windows 11 and WSL2" (WIN14 changes it).
 
 ### Track A — PowerShell everywhere
@@ -2846,25 +2854,26 @@ done.
 
 - [ ] **WIN2 WSL: bridged and doctored** (R-WIN-04, R-WIN-05) **M**
   - ~~Detect WSL (`WSL_DISTRO_NAME`, or `/proc/sys/kernel/osrelease`), shown in About and `doctor`.~~ [built 2026-11-02] `ptyro_core::wsl` (SPEC §3.4), which falls back to `wslpath -w /` for the distro when the daemon runs as a systemd unit. The emulator's OSC 9;9 mapping uses it too.
-  - **Survival:** whatever WIN0.1 found works becomes what ptyro does by default. For example, `ptyro service install` uses systemd when it is enabled, and if it isn't, offers to turn it on (it edits `/etc/wsl.conf` after asking, then says `wsl --shutdown` is needed).
+  - ~~**Survival:** whatever WIN0.1 found works becomes what ptyro does by default. For example, `ptyro service install` uses systemd when it is enabled, and if it isn't, offers to turn it on (it edits `/etc/wsl.conf` after asking, then says `wsl --shutdown` is needed).~~ [built 2026-11-03] The daemon holds WSL open while it runs, with a `wsl.exe` back into its own distro (`[daemon] hold_wsl`, on by default, in the settings panel; SPEC §20.10). It changes no system setting: the hold ends when the daemon does. `daemon status`, About (CLI, TUI, web) and the web's Daemon page say whether it holds. `install-service` with systemd off enables the unit by hand and offers to turn systemd on (it asks, then edits `/etc/wsl.conf` through sudo). A first version (PR #54, before the measurement) turned on systemd and linger instead; measured, neither keeps WSL up, so it was replaced before merging.
   - **Bridges:**
     - ~~alerts become Windows toasts through `powershell.exe`, unless a sink is configured;~~ [built 2026-11-02] the `desktop` channel is a Windows toast inside WSL. The owner chose (2026-11-02) to keep it off by default, as on other platforms: it shows once `desktop` is among the channels;
-    - ~~links, the pairing page and files open on Windows (`wslpath -w`, `explorer.exe`);~~ [built 2026-11-02] About's `⏎` and the file manager (`files`) open through `explorer.exe` with the Windows path (`{winpath}`). Nothing opens the pairing page by itself; its address opens from the TUI or Windows Terminal like any link;
+    - ~~links, the pairing page and files open on Windows (`wslpath -w`, `explorer.exe`);~~ [built 2026-11-02] About's `⏎` and the file manager (`files`) open through `explorer.exe` with the Windows path (`{winpath}`). [built 2026-11-03] The pairing page too: `ptyro pair --open` opens a one-time link in the Windows browser, which signs that browser in, and offers to have Windows trust ptyro's certificate first (user store, Windows confirms). TUI `remote.pair.browser`, web More → Web app → Open on the computer (SPEC §16.4);
     - ~~"open in editor" prefers VS Code's Remote-WSL when `code` is the editor.~~ [built 2026-11-02] `code`/`cursor` are found under the Windows profile when off `PATH` and run with `WSL_DISTRO_NAME`, which VS Code's script needs to open through Remote-WSL (SPEC §20.10).
   - **doctor**, each finding with its fix offered, not a command to type:
-    - the daemon won't survive the last terminal;
-    - systemd is off;
-    - the repo is under `/mnt/<drive>` (offer to clone it into the distro and register the copy); [warning built 2026-11-02; the owner chose (2026-11-02) to build the "move it" fix later]
-    - setup scripts with CRLF line endings; [warning built 2026-11-02: any file a project's script names; converting it is for later, with the move]
+    - ~~the daemon won't survive the last terminal;~~ [built 2026-11-03] `wsl survival`, from the daemon's own status: ok while it holds WSL; with `hold_wsl` off, a warning whose fix opens the setting (the TUI's badge and the web's Health page); a daemon too old to hold gets `ptyro daemon upgrade`;
+    - ~~systemd is off;~~ [dropped 2026-11-03] systemd doesn't keep WSL up (WIN0.1), so it isn't a doctor finding; `install-service` offers it, since the service needs it;
+    - ~~interop is off~~ [built 2026-11-03] tells interop turned off in `/etc/wsl.conf` from WSL's binfmt entry gone (another distro's systemd can drop it), each with its fix;
+    - ~~the repo is under `/mnt/<drive>`~~ [warning built 2026-11-02] Its "move it" fix (clone into the distro, register the copy) is **shelved** (owner, 2026-11-03: the warning is good enough for now). If it comes back, it is its own task;
+    - ~~setup scripts with CRLF line endings~~ [warning built 2026-11-02: any file a project's script names] Converting them was to come with the move, so it is shelved with it;
     - ~~`serve` unreachable from the phone without `networkingMode=mirrored` or Tailscale;~~ [built 2026-11-02] with `access = open` under NAT (`wslinfo`). The TUI health badge and the web's Health page open the `remote.access` setting as the fix;
-    - a WSL version with a known regression.
+    - ~~a WSL version with a known regression.~~ [resolved 2026-11-03] The regression people meet (microsoft/WSL#13416: the distro stops 15 s after the last terminal, services or not; 2.5.10 through 2.7.3) is what the daemon's hold works around, and the hold doesn't depend on the version, so there is no list of bad versions to keep. Verified on 2.6.2.0 (SPEC §20.10); hosted runners carry 3.0.3.0.
   - ~~Windows Terminal: aggregate progress through OSC 9;4 when `WT_SESSION` is set (R-STA-07, C12).~~ [built 2026-11-02] yellow while a session needs you, red while one has an error, busy while one works; each look is chosen in the settings panel (`ui.progress_blocked`, `progress_errored`, `progress_working`; owner's ask, 2026-11-02).
-  - ~~`make test-wsl`: the test suite run inside a WSL distro, documented for a Windows machine.~~ [built 2026-11-02] `make check` inside the distro, or from Git Bash through `wsl.exe`. In CI too, if a `windows-latest` runner with WSL is affordable (WIN0.5 b).
+  - ~~`make test-wsl`: the test suite run inside a WSL distro, documented for a Windows machine.~~ [built 2026-11-02] `make check` inside the distro, or from Git Bash through `wsl.exe`. [built 2026-11-03] In CI too: the `wsl` job, on `windows-latest` (it has WSL2: SPEC §20.10), free for a public repo and about 20 minutes, in parallel with the other jobs.
 
   *Done when:* on Windows 11 with WSL2, a daemon started from Windows Terminal is still running an
   hour after every terminal closed (or `doctor` says why not and fixes it). An agent's alert pops
   up as a Windows toast, the pairing page opens in the Windows browser, and a repo under `/mnt/c`
-  gets its warning with a working "move it" fix.
+  gets its warning ~~with a working "move it" fix~~ (shelved, owner 2026-11-03).
 
 ### Track C — A native client
 

@@ -40,7 +40,8 @@ pub enum Fix {
     Tmux { name: String, value: String },
     /// A TUI action: stale worktrees open the clean-up list (`worktree.gc`).
     Action(&'static str),
-    /// Open the settings panel at this option: WSL hiding an open web app opens `remote.access`.
+    /// Open the settings panel at this option: WSL hiding an open web app opens `remote.access`,
+    /// WSL stopping ptyro with the last terminal opens `daemon.hold_wsl`.
     Setting(&'static str),
 }
 
@@ -104,6 +105,8 @@ pub fn finding(c: &Check) -> Option<Finding> {
         Some(Fix::Action("worktree.gc"))
     } else if c.section == "wsl" && c.name == "network" {
         Some(Fix::Setting("remote.access"))
+    } else if c.section == "wsl" && c.name == "survival" && c.text.contains("hold_wsl is off") {
+        Some(Fix::Setting("daemon.hold_wsl"))
     } else if c.section == "tmux" {
         Some(Fix::Tmux { name: c.name.clone(), value: "on".into() })
     } else if c.name == "config mode" {
@@ -378,6 +381,14 @@ mod tests {
         let wsl =
             finding(&check("wsl", "network", "warn", "WSL's NAT networking hides it")).unwrap();
         assert_eq!(wsl.fix, Some(Fix::Setting("remote.access")));
+        // WSL stopping ptyro with the last terminal: the setting that holds it, or the upgrade
+        // that brings a daemon that can.
+        let text = "[daemon] hold_wsl is off: WSL stops ptyro. Turn it on in Settings → daemon";
+        let survival = finding(&check("wsl", "survival", "warn", text)).unwrap();
+        assert_eq!(survival.fix, Some(Fix::Setting("daemon.hold_wsl")));
+        let text = "older than this ptyro and doesn't hold WSL open. `ptyro daemon upgrade` (…)";
+        let old = finding(&check("wsl", "survival", "warn", text)).unwrap();
+        assert_eq!(old.fix, Some(Fix::Cli(vec!["daemon".into(), "upgrade".into()])));
         let login = finding(&check(
             "profile work",
             "claude",

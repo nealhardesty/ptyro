@@ -143,7 +143,8 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Repor
 }
 
 /// Inside WSL (WIN2, SPEC §3.4): which one, whether Windows programs can be started from it,
-/// whether a phone can reach the web app, and projects that WSL makes slow or breaks.
+/// whether ptyro keeps running with every terminal closed, whether a phone can reach the web
+/// app, and projects that WSL makes slow or breaks.
 async fn wsl(ctx: &Ctx, config: &Config, w: &ptyro_core::wsl::Wsl, r: &mut Report) {
     const S: &str = "wsl";
     if w.version == 1 {
@@ -168,12 +169,8 @@ async fn wsl(ctx: &Ctx, config: &Config, w: &ptyro_core::wsl::Wsl, r: &mut Repor
     if w.interop {
         r.add(S, "interop", Level::Ok, "Windows programs can be started from here");
     } else {
-        r.add(
-            S,
-            "interop",
-            Level::Note,
-            "Windows programs can't be started from here: interop is off ([interop] enabled in /etc/wsl.conf)",
-        );
+        let conf = std::fs::read_to_string("/etc/wsl.conf").unwrap_or_default();
+        r.add(S, "interop", Level::Warn, interop_off(&conf));
     }
     // WSL's default NAT network hides the distro from the Wi-Fi: `access = open` reaches only
     // this computer. Mirrored networking or Tailscale reach a phone.
@@ -196,7 +193,18 @@ async fn wsl(ctx: &Ctx, config: &Config, w: &ptyro_core::wsl::Wsl, r: &mut Repor
             );
         }
     }
-    let Ok(c) = ctx.connect(false).await else { return };
+    let c = ctx.connect(false).await.ok();
+    let status = match &c {
+        Some(c) => match c.request(Request::Status).await {
+            Ok(Reply::Status { status }) => Some(status),
+            _ => None,
+        },
+        None => None,
+    };
+    let (level, text) =
+        survival(status.as_ref().map(|s| s.wsl_hold.as_ref()), config.daemon.hold_wsl);
+    r.add(S, "survival", level, text);
+    let Some(c) = c else { return };
     let Ok(Reply::Projects { projects }) = c.request(Request::ProjectList).await else { return };
     for p in projects.iter().filter(|p| p.machine.is_none()) {
         if on_windows_drive(w, &p.root) {
@@ -227,6 +235,92 @@ async fn wsl(ctx: &Ctx, config: &Config, w: &ptyro_core::wsl::Wsl, r: &mut Repor
                 ),
             );
         }
+    }
+}
+
+/// Whether ptyro keeps running once the last WSL terminal closes (SPEC §20.10): the daemon's hold
+/// on WSL, as its status says. `status`: `None` when no daemon runs, `Some(None)` from a daemon
+/// that predates the hold.
+pub(crate) fn survival(
+    status: Option<Option<&ptyro_protocol::WslHold>>,
+    wanted: bool,
+) -> (Level, String) {
+    const STOPS: &str = "WSL stops ptyro, and every agent in it, about 15 seconds after you close the last terminal";
+    match status {
+        None if wanted => (
+            Level::Ok,
+            "the daemon isn't running; when it is, it keeps WSL running, so agents keep working \
+             with every terminal closed"
+                .into(),
+        ),
+        None => (
+            Level::Warn,
+            format!("[daemon] hold_wsl is off: {STOPS}. Turn it on in Settings → daemon"),
+        ),
+        Some(None) => (
+            Level::Warn,
+            format!(
+                "the running daemon is older than this ptyro and doesn't hold WSL open: {STOPS}. \
+                 `ptyro daemon upgrade` (sessions keep running)"
+            ),
+        ),
+        Some(Some(h)) if h.holding => (
+            Level::Ok,
+            format!(
+                "the daemon keeps WSL running (wsl.exe, pid {}), so agents keep working with every \
+                 terminal closed",
+                h.pid.map_or_else(|| "?".into(), |p| p.to_string())
+            ),
+        ),
+        Some(Some(h)) => match h.why_not.as_deref() {
+            Some(w) if w.contains("hold_wsl is off") => (
+                Level::Warn,
+                format!("[daemon] hold_wsl is off: {STOPS}. Turn it on in Settings → daemon"),
+            ),
+            Some(w) if w.contains("PTYRO_WSL_HOLD") => {
+                (Level::Note, format!("the daemon doesn't hold WSL open ({w}): {STOPS}"))
+            }
+            Some(w) => {
+                (Level::Warn, format!("the daemon can't hold WSL open, because {w}: {STOPS}"))
+            }
+            None => (
+                Level::Warn,
+                format!(
+                    "the daemon's hold on WSL keeps ending ({}; it retries): {STOPS}. \
+                     `ptyro daemon logs` says more",
+                    h.last_exit.as_deref().unwrap_or("not started yet")
+                ),
+            ),
+        },
+    }
+}
+
+/// Why Windows programs can't start here, with the fix: interop turned off in `/etc/wsl.conf`, or
+/// WSL's binfmt entry gone (another distro's systemd can drop it for the whole VM; SPEC §20.10).
+fn interop_off(wsl_conf: &str) -> String {
+    let mut section = String::new();
+    let off = wsl_conf.lines().any(|l| {
+        let l = l.split('#').next().unwrap_or("").trim();
+        if let Some(s) = l.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            section = s.trim().to_ascii_lowercase();
+            return false;
+        }
+        section == "interop"
+            && l.split_once('=').is_some_and(|(k, v)| {
+                k.trim().eq_ignore_ascii_case("enabled") && v.trim().eq_ignore_ascii_case("false")
+            })
+    });
+    if off {
+        "Windows programs can't be started from here, so no toasts, no opening links in Windows, \
+         and no hold on WSL: interop is off in /etc/wsl.conf. Remove `enabled = false` under \
+         [interop], then restart WSL (`wsl --shutdown` in PowerShell)"
+            .into()
+    } else {
+        "Windows programs can't be started from here, so no toasts, no opening links in Windows, \
+         and no hold on WSL: WSL's interop entry is missing (another distro's systemd can remove \
+         it). Restore it with `sudo sh -c \"echo :WSLInterop:M::MZ::/init:PF > \
+         /proc/sys/fs/binfmt_misc/register\"`, or restart WSL (`wsl --shutdown` in PowerShell)"
+            .into()
     }
 }
 
@@ -1037,6 +1131,42 @@ async fn profiles(ctx: &Ctx, config: &Config, only: Option<String>, r: &mut Repo
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn wsl_survival_says_whether_the_daemon_holds_wsl_and_what_to_do() {
+        use super::{Level, survival};
+        use ptyro_protocol::WslHold;
+        let held = WslHold { holding: true, pid: Some(42), ..WslHold::default() };
+        let (l, t) = survival(Some(Some(&held)), true);
+        assert!(l == Level::Ok && t.contains("pid 42"), "{t}");
+        let off =
+            WslHold { why_not: Some("[daemon] hold_wsl is off".into()), ..WslHold::default() };
+        let (l, t) = survival(Some(Some(&off)), false);
+        assert!(
+            l == Level::Warn && t.contains("hold_wsl is off") && t.contains("15 seconds"),
+            "{t}"
+        );
+        assert_eq!(survival(None, true).0, Level::Ok, "no daemon yet, the setting on");
+        assert_eq!(survival(None, false).0, Level::Warn, "no daemon, the setting off");
+        let (l, t) = survival(Some(None), true);
+        assert!(l == Level::Warn && t.contains("`ptyro daemon upgrade`"), "an older daemon: {t}");
+        let no = WslHold { why_not: Some("interop is off".into()), ..WslHold::default() };
+        assert!(survival(Some(Some(&no)), true).1.contains("because interop is off"));
+        let tests = WslHold { why_not: Some("PTYRO_WSL_HOLD=0".into()), ..WslHold::default() };
+        assert_eq!(survival(Some(Some(&tests)), true).0, Level::Note);
+        let dying = WslHold { last_exit: Some("wsl.exe exited (1)".into()), ..WslHold::default() };
+        let (l, t) = survival(Some(Some(&dying)), true);
+        assert!(l == Level::Warn && t.contains("exited (1)"), "{t}");
+    }
+
+    #[test]
+    fn interop_off_names_the_cause_and_its_fix() {
+        use super::interop_off;
+        let t = interop_off("[interop]\nenabled = false\n");
+        assert!(t.contains("off in /etc/wsl.conf"), "{t}");
+        let t = interop_off("[boot]\nsystemd=true\n[network]\nenabled=false\n");
+        assert!(t.contains("binfmt_misc/register") && t.contains("wsl --shutdown"), "{t}");
+    }
+
     #[test]
     fn wsl_finds_projects_on_windows_drives_and_crlf_scripts() {
         use std::path::Path;
