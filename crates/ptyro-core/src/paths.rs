@@ -211,6 +211,7 @@ mod tests {
         assert_eq!(p.socket, PathBuf::from("/h/run/ptyro.sock"));
     }
 
+    #[cfg(unix)] // a socket's path; Windows names a pipe
     #[test]
     fn long_socket_paths_fall_back_to_tmp() {
         let deep = PathBuf::from("/x".repeat(80));

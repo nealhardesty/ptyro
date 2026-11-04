@@ -29,6 +29,7 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::System::Console::{
     COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole,
+    SetConsoleCtrlHandler,
 };
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -209,11 +210,21 @@ impl Pty {
     }
 
     /// Close it: every program attached gets `CTRL_CLOSE_EVENT`, and its output pipe ends once
-    /// the console host has written what it has.
+    /// the console host has written what it has. `ClosePseudoConsole` can wait for the console
+    /// host, and so for a program that ignores the close (seen: minutes, on CI), so it runs on a
+    /// thread of its own: a stop or a drop never blocks the caller.
     fn close(&self) {
         if let Some(hpc) = self.hpc.locked().take() {
-            // SAFETY: taken out from under the lock, so this is its one close.
-            unsafe { (self.api.close)(hpc) };
+            let close = self.api.close;
+            let hpc = Hpc(hpc);
+            let run = move || {
+                let hpc = hpc;
+                // SAFETY: taken out from under the lock, so this is its one close.
+                unsafe { close(hpc.0) };
+            };
+            if std::thread::Builder::new().name("conpty-close".into()).spawn(run).is_err() {
+                run();
+            }
         }
     }
 }
@@ -223,6 +234,12 @@ impl Drop for Pty {
         self.close();
     }
 }
+
+/// An HPCON on its way to the thread that closes it.
+#[derive(Clone, Copy)]
+struct Hpc(HPCON);
+// SAFETY: ConPTY's functions take an HPCON from any thread; this one is closed exactly once.
+unsafe impl Send for Hpc {}
 
 fn coord(size: TermSize) -> COORD {
     COORD { X: size.cols.min(i16::MAX as u16) as i16, Y: size.rows.min(i16::MAX as u16) as i16 }
@@ -455,8 +472,21 @@ fn job() -> io::Result<Owned> {
     Ok(job)
 }
 
+/// Programs ptyro starts handle Ctrl+C normally, whatever ptyro was started with. A process
+/// started with `CREATE_NEW_PROCESS_GROUP` (a detached daemon: `ptyro_core::os::detach`; CI's
+/// runners) ignores Ctrl+C, and its children inherit that, so a session's Ctrl+C would do
+/// nothing. Undoing it here makes the children inherit normal handling; ptyro's own Ctrl+C
+/// handler (`--foreground`) is unaffected.
+/// Done before every spawn (it costs nothing): whatever set the flag since, children start
+/// clear of it.
+fn ctrl_c_for_children() {
+    // SAFETY: no handler is added or removed, only the process's "ignore Ctrl+C" flag cleared.
+    unsafe { SetConsoleCtrlHandler(None, 0) };
+}
+
 /// Start `argv` in a new pseudoconsole of `size`, in a job of its own.
 pub fn spawn(req: SpawnRequest<'_>) -> io::Result<PtyChild> {
+    ctrl_c_for_children();
     let Some((prog, args)) = req.argv.split_first() else {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "empty command"));
     };
@@ -815,6 +845,10 @@ mod tests {
 
     #[tokio::test]
     async fn ctrl_c_reaches_the_program() {
+        // As CI's runners and a detached daemon start ptyro: ignoring Ctrl+C, which children
+        // inherit unless ptyro undoes it.
+        // SAFETY: sets this test process's "ignore Ctrl+C" flag; no handler involved.
+        unsafe { SetConsoleCtrlHandler(None, 1) };
         let mut c = start(&["ping.exe", "-n", "600", "127.0.0.1"]);
         read_until(&mut c.reader, "127.0.0.1").await;
         signal_group(c.pid, Signal::INT).unwrap();
