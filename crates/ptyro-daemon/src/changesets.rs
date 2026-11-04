@@ -3655,7 +3655,8 @@ fn overlay_files(
                         let _ = std::fs::remove_dir_all(&aside);
                         std::fs::rename(&link, &aside).map_err(cs_err)?;
                     }
-                    std::os::unix::fs::symlink(&p.path, &link).map_err(cs_err)?;
+                    ptyro_core::os::symlink(std::path::Path::new(&p.path), &link)
+                        .map_err(cs_err)?;
                     written.push(format!("{}.ptyro-link", link.to_string_lossy()));
                     notes.push(format!("{}: node_modules/{dep} → ../{}", m.name, p.name));
                 }

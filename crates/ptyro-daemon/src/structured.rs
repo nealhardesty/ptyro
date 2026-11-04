@@ -11,7 +11,6 @@
 
 use ptyro_core::sync::MutexExt;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -24,8 +23,91 @@ use ptyro_drive::{Driver, Effect};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
-use tokio::net::unix::pipe;
 use tokio::sync::{mpsc, watch};
+
+/// The agent's three pipes, as each platform drives them. On Unix, duplicates of their
+/// descriptors are kept for a live upgrade, which carries them by number.
+#[cfg(unix)]
+mod pipes {
+    use std::io;
+    use std::os::fd::{AsRawFd, OwnedFd};
+    use tokio::net::unix::pipe;
+
+    pub type In = pipe::Sender;
+    pub type Out = pipe::Receiver;
+    pub type ErrOut = pipe::Receiver;
+    /// Duplicates for the next image.
+    pub type Kept = [OwnedFd; 3];
+
+    fn dup(f: &OwnedFd) -> io::Result<OwnedFd> {
+        rustix::io::fcntl_dupfd_cloexec(f, 0).map_err(io::Error::from)
+    }
+
+    fn open(i: OwnedFd, o: OwnedFd, e: OwnedFd) -> io::Result<(In, Out, ErrOut, Option<Kept>)> {
+        let kept = [dup(&i)?, dup(&o)?, dup(&e)?];
+        Ok((
+            pipe::Sender::from_owned_fd(i)?,
+            pipe::Receiver::from_owned_fd(o)?,
+            pipe::Receiver::from_owned_fd(e)?,
+            Some(kept),
+        ))
+    }
+
+    pub fn from_child(
+        c: &mut tokio::process::Child,
+    ) -> io::Result<(In, Out, ErrOut, Option<Kept>)> {
+        let missing = |what| io::Error::other(format!("no {what}"));
+        let i = c.stdin.take().ok_or_else(|| missing("stdin"))?.into_owned_fd()?;
+        let o = c.stdout.take().ok_or_else(|| missing("stdout"))?.into_owned_fd()?;
+        let e = c.stderr.take().ok_or_else(|| missing("stderr"))?.into_owned_fd()?;
+        open(i, o, e)
+    }
+
+    /// The previous image's pipes, by number.
+    pub fn adopt(fds: [i32; 3]) -> io::Result<(In, Out, ErrOut, Option<Kept>)> {
+        let [i, o, e] = fds;
+        open(
+            ptyro_pty::handoff::adopt(i)?,
+            ptyro_pty::handoff::adopt(o)?,
+            ptyro_pty::handoff::adopt(e)?,
+        )
+    }
+
+    pub fn numbers(k: &Kept) -> [i32; 3] {
+        [k[0].as_raw_fd(), k[1].as_raw_fd(), k[2].as_raw_fd()]
+    }
+}
+
+/// Windows: the child's own pipes; nothing is carried over until its live upgrade (WIN9).
+#[cfg(windows)]
+mod pipes {
+    use std::io;
+
+    pub type In = tokio::process::ChildStdin;
+    pub type Out = tokio::process::ChildStdout;
+    pub type ErrOut = tokio::process::ChildStderr;
+    pub type Kept = std::convert::Infallible;
+
+    pub fn from_child(
+        c: &mut tokio::process::Child,
+    ) -> io::Result<(In, Out, ErrOut, Option<Kept>)> {
+        let missing = |what| io::Error::other(format!("no {what}"));
+        Ok((
+            c.stdin.take().ok_or_else(|| missing("stdin"))?,
+            c.stdout.take().ok_or_else(|| missing("stdout"))?,
+            c.stderr.take().ok_or_else(|| missing("stderr"))?,
+            None,
+        ))
+    }
+
+    pub fn adopt(_fds: [i32; 3]) -> io::Result<(In, Out, ErrOut, Option<Kept>)> {
+        Err(io::Error::new(io::ErrorKind::Unsupported, "nothing is handed over on Windows yet"))
+    }
+
+    pub fn numbers(k: &Kept) -> [i32; 3] {
+        match *k {}
+    }
+}
 
 use crate::session::{Session, Spawned};
 
@@ -63,7 +145,7 @@ pub struct Structured {
     pending: AtomicBool,
     render: Mutex<Render>,
     /// Duplicates of the agent's stdin, stdout and stderr, for the next image.
-    fds: Mutex<Option<[OwnedFd; 3]>>,
+    fds: Mutex<Option<pipes::Kept>>,
     /// The driver's state and unread bytes while parked for an upgrade.
     parked: Mutex<Option<(serde_json::Value, Vec<u8>)>>,
     /// OpenCode's server: port and password.
@@ -79,9 +161,9 @@ pub struct Start {
 /// Everything the driver task needs.
 pub struct Resume {
     driver: Box<dyn Driver>,
-    stdin: OwnedFd,
-    stdout: OwnedFd,
-    stderr: Option<OwnedFd>,
+    stdin: pipes::In,
+    stdout: pipes::Out,
+    stderr: Option<pipes::ErrOut>,
     buffer: Vec<u8>,
     fresh: bool,
 }
@@ -279,10 +361,7 @@ impl Structured {
         let (driver, buffer) = self.parked.locked().clone().unwrap_or_default();
         let fds = if live {
             // By number: the upgrade carries them over a socket (H2.7).
-            self.fds
-                .locked()
-                .as_ref()
-                .map(|f| [f[0].as_raw_fd(), f[1].as_raw_fd(), f[2].as_raw_fd()])
+            self.fds.locked().as_ref().map(pipes::numbers)
         } else {
             None
         };
@@ -308,15 +387,11 @@ impl Structured {
         *st.draft.locked() = si.draft;
         *st.render.locked() = si.render;
         let resume = match (si.fds, live) {
-            (Some([i, o, e]), true) => {
+            (Some(fds), true) => {
                 let driver = ptyro_drive::restore(&si.protocol, si.driver)
                     .ok_or_else(|| std::io::Error::other("driver state didn't restore"))?;
-                let (stdin, stdout, stderr) = (
-                    ptyro_pty::handoff::adopt(i)?,
-                    ptyro_pty::handoff::adopt(o)?,
-                    ptyro_pty::handoff::adopt(e)?,
-                );
-                st.keep_fds(&stdin, &stdout, &stderr)?;
+                let (stdin, stdout, stderr, kept) = pipes::adopt(fds)?;
+                *st.fds.locked() = kept;
                 Some(Resume {
                     driver,
                     stdin,
@@ -330,12 +405,6 @@ impl Structured {
         };
         Ok((st, resume))
     }
-
-    fn keep_fds(&self, i: &OwnedFd, o: &OwnedFd, e: &OwnedFd) -> std::io::Result<()> {
-        let dup = |f: &OwnedFd| rustix::io::fcntl_dupfd_cloexec(f, 0).map_err(std::io::Error::from);
-        *self.fds.locked() = Some([dup(i)?, dup(o)?, dup(e)?]);
-        Ok(())
-    }
 }
 
 /// Start the agent with pipes, in its own process group (so stopping it reaches its children).
@@ -343,7 +412,7 @@ pub fn spawn_child(
     s: &Spawned,
     st: &Structured,
     start: Start,
-) -> std::io::Result<(tokio::process::Child, Resume)> {
+) -> std::io::Result<(ptyro_pty::Child, Resume)> {
     let (exe, args) = s.argv.split_first().ok_or_else(|| std::io::Error::other("no command"))?;
     let mut cmd = tokio::process::Command::new(exe);
     cmd.args(args)
@@ -355,15 +424,10 @@ pub fn spawn_child(
         .stderr(std::process::Stdio::piped());
     ptyro_pty::own_group(&mut cmd);
     let mut child = cmd.spawn()?;
-    let stdin: OwnedFd =
-        child.stdin.take().ok_or_else(|| std::io::Error::other("no stdin"))?.into_owned_fd()?;
-    let stdout: OwnedFd =
-        child.stdout.take().ok_or_else(|| std::io::Error::other("no stdout"))?.into_owned_fd()?;
-    let stderr: OwnedFd =
-        child.stderr.take().ok_or_else(|| std::io::Error::other("no stderr"))?.into_owned_fd()?;
-    st.keep_fds(&stdin, &stdout, &stderr)?;
+    let (stdin, stdout, stderr, kept) = pipes::from_child(&mut child)?;
+    *st.fds.locked() = kept;
     Ok((
-        child,
+        ptyro_pty::contain(child)?,
         Resume {
             driver: start.driver,
             stdin,
@@ -378,14 +442,14 @@ pub fn spawn_child(
 /// Run the driver (and the side tasks) for a session.
 pub fn run(session: Arc<Session>, r: Resume) {
     let Some(st) = session.structured.clone() else { return };
-    if let Some(e) = r.stderr.as_ref().and_then(|f| rustix::io::fcntl_dupfd_cloexec(f, 0).ok()) {
+    let mut r = r;
+    if let Some(e) = r.stderr.take() {
         tokio::spawn(drain_stderr(Arc::clone(&st), e));
     }
     tokio::spawn(driver_loop(session, st, r));
 }
 
-async fn drain_stderr(st: Arc<Structured>, fd: OwnedFd) {
-    let Ok(rx) = pipe::Receiver::from_owned_fd(fd) else { return };
+async fn drain_stderr(st: Arc<Structured>, rx: pipes::ErrOut) {
     let mut lines = BufReader::new(rx).lines();
     while let Ok(Some(l)) = lines.next_line().await {
         let mut t = st.stderr_tail.locked();
@@ -403,8 +467,7 @@ fn high(signal: ptyro_core::status::Signal) -> Sourced {
 async fn driver_loop(session: Arc<Session>, st: Arc<Structured>, r: Resume) {
     let Some(mut rx) = st.rx.locked().take() else { return };
     let mut driver = r.driver;
-    let Ok(mut stdin) = pipe::Sender::from_owned_fd(r.stdin) else { return };
-    let Ok(mut stdout) = pipe::Receiver::from_owned_fd(r.stdout) else { return };
+    let (mut stdin, mut stdout) = (r.stdin, r.stdout);
     let io = session.io_control();
     let mut pause = io.pause.clone();
     io.readers.fetch_add(1, Ordering::SeqCst);
@@ -496,7 +559,7 @@ struct Ctx<'a> {
 }
 
 impl Ctx<'_> {
-    async fn apply(&mut self, effects: Vec<Effect>, stdin: &mut pipe::Sender) {
+    async fn apply(&mut self, effects: Vec<Effect>, stdin: &mut pipes::In) {
         let mut signals = Vec::new();
         for e in effects {
             match e {

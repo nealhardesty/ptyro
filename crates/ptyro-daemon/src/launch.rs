@@ -4,7 +4,6 @@
 use ptyro_core::sync::MutexExt;
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
-use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -374,9 +373,7 @@ impl Daemon {
             }
             let written = path
                 .parent()
-                .map_or(Ok(()), |d| {
-                    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(d)
-                })
+                .map_or(Ok(()), ptyro_core::os::create_private_dirs)
                 .and_then(|()| std::fs::write(path, content));
             if let Err(e) = written {
                 tracing::warn!("shell integration: {}: {e}", path.display());
@@ -407,7 +404,7 @@ impl Daemon {
         let _claim = Claim::take(self, &l)?;
         let plan = self.profile_plan(&l.place.profile).await?;
         for dir in &plan.create_dirs {
-            let _ = std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir);
+            let _ = ptyro_core::os::create_private_dirs(dir);
         }
         let wt = l.place.worktree.as_deref().and_then(|id| self.worktree_by_id(id));
         let wt_env = wt.as_ref().map(|w| self.worktree_env(w)).unwrap_or_default();
@@ -541,8 +538,7 @@ impl Daemon {
                 for (path, content) in &lp.files {
                     if std::fs::read_to_string(path).ok().as_deref() != Some(content.as_str()) {
                         if let Some(dir) = path.parent() {
-                            let _ =
-                                std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir);
+                            let _ = ptyro_core::os::create_private_dirs(dir);
                         }
                         std::fs::write(path, content)
                             .map_err(|e| Error::internal(format!("{}: {e}", path.display())))?;

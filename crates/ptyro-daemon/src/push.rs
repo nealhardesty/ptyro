@@ -74,16 +74,13 @@ fn new_secret() -> std::io::Result<SecretKey> {
 
 fn write_private(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)?;
+    let mut f = ptyro_core::os::private(
+        std::fs::OpenOptions::new().write(true).create(true).truncate(true),
+    )
+    .open(path)?;
     f.write_all(data)
 }
 
@@ -299,8 +296,9 @@ mod tests {
         let path = dir.path().join("k");
         let v = Vapid::load_or_create(&path).unwrap();
         assert_eq!(Vapid::load_or_create(&path).unwrap().public_b64(), v.public_b64(), "persisted");
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        if let Some(mode) = ptyro_core::os::mode(&std::fs::metadata(&path).unwrap()) {
+            assert_eq!(mode & 0o777, 0o600);
+        }
         let h = v.authorization("https://push.example.net/wpush/abc", "mailto:a@b").unwrap();
         let t = h.strip_prefix("vapid t=").unwrap().split(", k=").next().unwrap();
         let parts: Vec<&str> = t.split('.').collect();

@@ -75,9 +75,8 @@ fn apply(git: &Git, dir: &Path, patch_text: &str) -> Result<(), Error> {
 /// would write there (or carry a key out as an ordinary file). A source that is not a plain file,
 /// or a destination that is a link or sits behind one, is skipped.
 fn copy_files(from: &Path, to: &Path, files: &[String]) -> Result<(), Error> {
+    use ptyro_core::os::{no_follow, with_mode};
     use std::io::Write;
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    let nofollow = rustix::fs::OFlags::NOFOLLOW.bits() as i32;
     for f in files {
         let rel = Path::new(f);
         if rel.is_absolute()
@@ -97,16 +96,16 @@ fn copy_files(from: &Path, to: &Path, files: &[String]) -> Result<(), Error> {
             std::fs::create_dir_all(d).map_err(|e| Error::internal(e.to_string()))?;
         }
         let copy = || -> std::io::Result<()> {
-            let mut input =
-                std::fs::OpenOptions::new().read(true).custom_flags(nofollow).open(&src)?;
-            let mode = input.metadata()?.permissions().mode() & 0o777;
-            let mut out = std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(mode)
-                .custom_flags(nofollow)
-                .open(&dst)?;
+            let mut input = no_follow(std::fs::OpenOptions::new().read(true), false).open(&src)?;
+            let mode = ptyro_core::os::mode(&input.metadata()?).map_or(0o644, |m| m & 0o777);
+            let mut out = no_follow(
+                with_mode(
+                    std::fs::OpenOptions::new().write(true).create(true).truncate(true),
+                    mode,
+                ),
+                false,
+            )
+            .open(&dst)?;
             std::io::copy(&mut input, &mut out)?;
             out.flush()
         };
@@ -992,7 +991,7 @@ fn pair_off(git: &Git, root: &Path, wt: &Path, c: &Pair) -> Result<Vec<String>, 
     Ok(notes)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))] // symlinks
 mod tests {
     use std::os::unix::fs::symlink;
 

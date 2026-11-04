@@ -609,13 +609,10 @@ pub(crate) async fn run_to_log(
     cap: u64,
 ) -> std::io::Result<Ran> {
     use std::io::{Read, Seek, SeekFrom};
-    use std::os::unix::fs::OpenOptionsExt;
-    let file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(log)?;
+    let file = ptyro_core::os::private(
+        std::fs::OpenOptions::new().write(true).create(true).truncate(true),
+    )
+    .open(log)?;
     c.stdout(std::process::Stdio::from(file.try_clone()?))
         .stderr(std::process::Stdio::from(file))
         .stdin(std::process::Stdio::null())
@@ -762,6 +759,7 @@ mod tests {
         assert!(deny_output("gemini", "no").contains("\"deny\""));
     }
 
+    #[cfg(unix)] // runs sh
     #[tokio::test]
     async fn a_check_that_prints_without_end_is_stopped_and_only_its_tail_is_kept() {
         let dir = tempfile::tempdir().unwrap();

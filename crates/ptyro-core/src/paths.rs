@@ -40,7 +40,7 @@ impl Paths {
         } else if cfg!(windows) {
             // Windows' own places: roaming config, the rest local to this computer, unless an
             // XDG variable names one (a user who keeps one layout across machines, Git Bash's).
-            // There is no daemon here, so `run` and its socket are only named (track D).
+            // The daemon's "socket" is a named pipe, set below.
             let w = etcetera::base_strategy::Windows::new().map_err(std::io::Error::other)?;
             let local = w.cache_dir().join("ptyro");
             let xdg = |k: &str| var(k).filter(|p| p.is_absolute()).map(|p| p.join("ptyro"));
@@ -67,6 +67,22 @@ impl Paths {
                 socket: PathBuf::new(),
             }
         };
+        if cfg!(windows) {
+            paths.socket = match var("PTYRO_SOCKET") {
+                Some(p) if p.to_string_lossy().starts_with(PIPE_PREFIX) => p,
+                Some(p) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!(
+                            "PTYRO_SOCKET is {}, but on Windows it names a pipe: {PIPE_PREFIX}<name>",
+                            p.display()
+                        ),
+                    ));
+                }
+                None => pipe_for(&paths.runtime),
+            };
+            return Ok(paths);
+        }
         paths.socket = match var("PTYRO_SOCKET").map(absolute) {
             Some(s) if s.as_os_str().len() > MAX_SOCKET_PATH + 3 => {
                 return Err(std::io::Error::new(
@@ -91,6 +107,22 @@ impl Paths {
     pub fn log_dir(&self) -> PathBuf {
         self.state.clone()
     }
+}
+
+/// Where every Windows named pipe's name starts.
+pub const PIPE_PREFIX: &str = r"\\.\pipe\";
+
+/// The daemon's pipe on Windows (WIN5): one per user and per `PTYRO_HOME`, named after the
+/// runtime folder (under the user's own profile), so two users or two homes never meet. The
+/// pipe admits only its user, and a client checks who serves it (`ptyro_pty::pipe`).
+fn pipe_for(runtime: &Path) -> PathBuf {
+    let key = runtime.to_string_lossy().to_lowercase();
+    PathBuf::from(format!("{PIPE_PREFIX}ptyro-{:08x}", fnv1a(key.as_bytes())))
+}
+
+/// Whether `socket` names a Windows pipe rather than a file.
+pub fn is_pipe(socket: &Path) -> bool {
+    socket.to_string_lossy().starts_with(PIPE_PREFIX)
 }
 
 /// The user this process runs as (0 on Windows, which has no uids: `crate::os::uid`).
@@ -133,6 +165,26 @@ mod tests {
         assert!(roaming.ends_with(r"appdata\roaming\ptyro"), "{roaming}");
         let local = p.data.to_string_lossy().to_ascii_lowercase();
         assert!(local.ends_with(r"appdata\local\ptyro\data"), "{local}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_names_a_pipe_per_user_and_home() {
+        let plain = Paths::resolve(|_| None).unwrap();
+        assert!(is_pipe(&plain.socket), "{}", plain.socket.display());
+        let home = |h: &str| {
+            let h = PathBuf::from(h);
+            Paths::resolve(move |k| (k == "PTYRO_HOME").then(|| h.clone())).unwrap().socket
+        };
+        assert_ne!(home(r"C:\a"), home(r"C:\b"));
+        assert_eq!(home(r"C:\a"), home(r"C:\A"), "Windows paths ignore case");
+        let given =
+            Paths::resolve(|k| (k == "PTYRO_SOCKET").then(|| PathBuf::from(r"\\.\pipe\mine")))
+                .unwrap();
+        assert_eq!(given.socket, PathBuf::from(r"\\.\pipe\mine"));
+        let e = Paths::resolve(|k| (k == "PTYRO_SOCKET").then(|| PathBuf::from(r"C:\x.sock")))
+            .unwrap_err();
+        assert!(e.to_string().contains("names a pipe"), "{e}");
     }
 
     #[cfg(windows)]

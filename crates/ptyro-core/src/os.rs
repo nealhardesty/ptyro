@@ -151,6 +151,40 @@ pub fn private_dir(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// A symbolic link at `link` to `target`. On Windows a directory link or a file link, as
+/// `target` is; Windows makes one only with Developer Mode on or as an administrator, and
+/// otherwise says so (WIN7 falls back to a junction or a copy).
+pub fn symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        // A relative target is relative to the link's own folder, as the link will read it.
+        let seen = link.parent().map_or_else(|| target.to_path_buf(), |d| d.join(target));
+        if seen.is_dir() {
+            std::os::windows::fs::symlink_dir(target, link)
+        } else {
+            std::os::windows::fs::symlink_file(target, link)
+        }
+    }
+}
+
+/// The disk a file takes: its allocated blocks on Unix (a sparse file counts what it uses);
+/// its length on Windows.
+pub fn allocated(meta: &std::fs::Metadata) -> u64 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        meta.blocks() * 512
+    }
+    #[cfg(not(unix))]
+    {
+        meta.len()
+    }
+}
+
 /// The permission bits as Unix writes them (`0o644`), for messages like "is 644: others can read
 /// it". `None` on Windows, where access lists aren't modes.
 pub fn mode(meta: &std::fs::Metadata) -> Option<u32> {

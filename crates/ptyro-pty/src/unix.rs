@@ -120,6 +120,12 @@ pub fn exit_parts(status: &std::process::ExitStatus) -> (Option<i32>, Option<i32
     (status.code(), status.signal())
 }
 
+/// A program started on pipes, as a session's [`Child`]: already its own process group
+/// (`own_group`), so nothing to add on Unix.
+pub fn contain(child: tokio::process::Child) -> io::Result<Child> {
+    Ok(child)
+}
+
 /// Start `cmd` in a process group of its own, so stopping the group reaches what it starts.
 pub fn own_group(cmd: &mut tokio::process::Command) -> &mut tokio::process::Command {
     cmd.process_group(0)

@@ -474,18 +474,14 @@ impl Daemon {
         let k = ptyro_agents::adapter::random_hex().into_bytes();
         // Created private: never readable by others, even for a moment.
         use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)
+        if let Ok(mut f) = ptyro_core::os::private(
+            std::fs::OpenOptions::new().write(true).create(true).truncate(true),
+        )
+        .open(&path)
         {
             let _ = f.write_all(&k);
         }
-        let _ =
-            std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600));
+        let _ = ptyro_core::os::make_private(&path);
         k
     }
 

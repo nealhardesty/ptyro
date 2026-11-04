@@ -18,6 +18,8 @@
 //!   ends those (same marker) before it starts the next one.
 //! - `[daemon] hold_wsl = false` lets WSL stop on its own schedule; `PTYRO_WSL_HOLD=0` does the
 //!   same for one daemon (the test suite sets it, so test daemons don't each start one).
+// Only a daemon inside WSL holds it open; a native Windows one never does.
+#![cfg_attr(windows, allow(dead_code, unused_imports))]
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -54,9 +56,13 @@ impl Holder {
         let marker = r.marker.take();
         let pids = r.pid.take().into_iter().chain(marker.iter().flat_map(|m| with_marker(m)));
         for pid in pids {
+            // Only WSL (Linux) ever has a holder to kill.
+            #[cfg(unix)]
             if let Some(p) = i32::try_from(pid).ok().and_then(rustix::process::Pid::from_raw) {
                 let _ = rustix::process::kill_process(p, rustix::process::Signal::KILL);
             }
+            #[cfg(not(unix))]
+            let _ = pid;
         }
         r.since_ms = None;
     }
@@ -205,8 +211,15 @@ impl Daemon {
     }
 }
 
+/// A holder runs inside WSL only; a native Windows daemon never starts one.
+#[cfg(not(unix))]
+fn spawn(_: &ptyro_core::wsl::Wsl, _: &Arc<Mutex<Run>>) -> Result<u32, String> {
+    Err("only inside WSL".into())
+}
+
 /// Start the holder on a thread of its own that waits for it: `PR_SET_PDEATHSIG` fires when the
 /// thread that forked it ends, so that thread must live as long as the holder does.
+#[cfg(unix)]
 fn spawn(w: &ptyro_core::wsl::Wsl, run: &Arc<Mutex<Run>>) -> Result<u32, String> {
     use std::os::unix::process::CommandExt as _;
     let distro = w.distro.clone().ok_or("the distro's name is unknown")?;
@@ -263,7 +276,7 @@ fn spawn(w: &ptyro_core::wsl::Wsl, run: &Arc<Mutex<Run>>) -> Result<u32, String>
     rx.recv_timeout(Duration::from_secs(10)).map_err(|_| "wsl.exe didn't start".to_owned())?
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

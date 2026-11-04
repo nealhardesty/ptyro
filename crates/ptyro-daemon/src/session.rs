@@ -994,7 +994,7 @@ impl Session {
         self.signal(signals);
     }
 
-    async fn waiter_task(self: Arc<Self>, mut child: tokio::process::Child) {
+    async fn waiter_task(self: Arc<Self>, mut child: ptyro_pty::Child) {
         // The exit is seen without reaping (H2.7): the leader stays a zombie, holding its pid and
         // so its group's id, until no one else is left in the group. A stop sequence that still
         // signals the group then can't reach a stranger that was given the id.
@@ -1023,7 +1023,7 @@ impl Session {
     /// A child inherited from the previous daemon image: the reaper tells us how it ended.
     async fn reaped_task(
         self: Arc<Self>,
-        ended: tokio::sync::oneshot::Receiver<ptyro_pty::handoff::Ended>,
+        ended: tokio::sync::oneshot::Receiver<crate::handoff::Ended>,
     ) {
         let state = match ended.await {
             Ok((code, signal)) => ProcessState::Exited { code, signal },
@@ -1226,9 +1226,40 @@ fn keyframe(term: &mut Term) -> (Vec<u8>, TermSize) {
 
 // ── live upgrade (M8.1) ─────────────────────────────────────────────────────
 
+/// The previous image's PTY master, when the session is still live: the master for probes and
+/// the reader and writer halves. An inherited master we don't use is closed, never left
+/// inheritable.
+#[cfg(unix)]
+#[allow(clippy::type_complexity)]
+fn inherit_pty(
+    fd: Option<i32>,
+    live: bool,
+) -> std::io::Result<(Option<ptyro_pty::Master>, Option<(ptyro_pty::Reader, ptyro_pty::Writer)>)> {
+    let inherited = fd.map(ptyro_pty::handoff::adopt).transpose()?;
+    match inherited.filter(|_| live) {
+        Some(fd) => {
+            let (r, w, dup) = ptyro_pty::handoff::adopt_pty(fd)?;
+            Ok((Some(dup), Some((r, w))))
+        }
+        None => Ok((None, None)),
+    }
+}
+
+/// Windows inherits no pseudoconsole until its live upgrade (WIN9).
+#[cfg(not(unix))]
+#[allow(clippy::type_complexity)]
+fn inherit_pty(
+    _fd: Option<i32>,
+    _live: bool,
+) -> std::io::Result<(Option<ptyro_pty::Master>, Option<(ptyro_pty::Reader, ptyro_pty::Writer)>)> {
+    Ok((None, None))
+}
+
 impl Session {
     /// Close-on-exec again for the PTY master (an upgrade that was called off).
+    #[cfg_attr(windows, allow(dead_code))] // the live upgrade's: Unix until WIN9
     pub(crate) fn master_private(&self) {
+        #[cfg(unix)]
         if let Some(m) = &self.master {
             let _ = ptyro_pty::handoff::private(m);
         }
@@ -1254,11 +1285,15 @@ impl Session {
             Some(st) => Some(st.image(self.is_live())?),
             None => None,
         };
+        // By number: the upgrade carries it over a socket (H2.7), it isn't made inheritable.
+        // Windows hands pseudoconsoles over another way (WIN9).
+        #[cfg(unix)]
         let master_fd = match (&self.master, self.is_live()) {
-            // By number: the upgrade carries it over a socket (H2.7), it isn't made inheritable.
             (Some(m), true) => Some(std::os::fd::AsRawFd::as_raw_fd(m)),
             _ => None,
         };
+        #[cfg(not(unix))]
+        let master_fd = None;
         Ok(SessionImage {
             id: self.id.full(),
             meta: self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone(),
@@ -1308,15 +1343,9 @@ impl Session {
             structured_img.as_ref().is_some_and(crate::structured::StructuredImage::has_pipes);
         let live = (img.master_fd.is_some() || piped) && meta.state.is_live() && meta.pid.is_some();
         let (writer_tx, writer_rx) = mpsc::channel(WRITER_QUEUE);
-        let mut halves = None;
-        // Always take an inherited master: one we don't use is closed, not left inheritable.
-        let inherited = img.master_fd.map(ptyro_pty::handoff::adopt).transpose()?;
-        let master = match inherited.filter(|_| live) {
-            Some(fd) => {
-                let (r, w, dup) = ptyro_pty::handoff::adopt_pty(fd)?;
-                halves = Some((r, w));
-                Some(dup)
-            }
+        let (master, halves) = inherit_pty(img.master_fd, live)?;
+        let master = match master {
+            Some(m) => Some(m),
             None => {
                 if meta.state.is_live() && !live {
                     // It was running but its PTY (or pipes) didn't make it: it is gone for us.

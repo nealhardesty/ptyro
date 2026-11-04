@@ -24,7 +24,9 @@ use std::time::Duration;
 
 use ptyro_core::TermSize;
 use ptyro_core::sync::MutexExt;
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, STILL_ACTIVE, WAIT_OBJECT_0};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, STILL_ACTIVE, WAIT_OBJECT_0,
+};
 use windows_sys::Win32::System::Console::{
     COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole,
 };
@@ -39,10 +41,10 @@ use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows_sys::Win32::System::Threading::{
     CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
-    EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, INFINITE, InitializeProcThreadAttributeList,
-    LPPROC_THREAD_ATTRIBUTE_LIST, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION,
-    ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess,
-    UpdateProcThreadAttribute, WaitForSingleObject,
+    EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, GetExitCodeProcess, INFINITE,
+    InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
+    PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES,
+    STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
 use crate::cmdline;
@@ -228,12 +230,13 @@ fn coord(size: TermSize) -> COORD {
 
 // ── the session's process and job ─────────────────────────────────────────────────────────
 
-/// What a running session has: its program, its job, its console, and a way to type Ctrl+C.
+/// What a running session has: its program, its job, and (in a console) the console and a way
+/// to type Ctrl+C. A program on plain pipes (a structured agent) has neither.
 struct Proc {
     process: Owned,
     job: Owned,
-    pty: Arc<Pty>,
-    input: Mutex<std::fs::File>,
+    pty: Option<Arc<Pty>>,
+    input: Option<Mutex<std::fs::File>>,
 }
 
 impl Proc {
@@ -505,7 +508,8 @@ pub fn spawn(req: SpawnRequest<'_>) -> io::Result<PtyChild> {
     std::mem::forget(in_w);
     let ctrl_c = input.try_clone()?;
     let pid = pi.dwProcessId;
-    let proc = Arc::new(Proc { process, job, pty: pty.clone(), input: Mutex::new(ctrl_c) });
+    let proc =
+        Arc::new(Proc { process, job, pty: Some(pty.clone()), input: Some(Mutex::new(ctrl_c)) });
     procs().locked().insert(pid, proc.clone());
     watch_until_empty(proc.clone());
 
@@ -589,7 +593,9 @@ fn watch_until_empty(proc: Arc<Proc>) {
         while proc.active() > 0 {
             std::thread::sleep(Duration::from_millis(100));
         }
-        proc.pty.close();
+        if let Some(pty) = &proc.pty {
+            pty.close();
+        }
     });
 }
 
@@ -615,11 +621,49 @@ pub fn signal_group(pid: u32, sig: Signal) -> io::Result<()> {
                 return Err(last_error("TerminateJobObject"));
             }
         }
-        Signal::HUP | Signal::TERM => proc.pty.close(),
-        Signal::INT => proc.input.locked().write_all(b"\x03")?,
+        Signal::HUP | Signal::TERM => match &proc.pty {
+            Some(pty) => pty.close(),
+            // No console to close: a program on pipes is ended.
+            None => {
+                // SAFETY: the job handle is open.
+                if unsafe { TerminateJobObject(proc.job.0, 1) } == 0 {
+                    return Err(last_error("TerminateJobObject"));
+                }
+            }
+        },
+        Signal::INT => {
+            if let Some(input) = &proc.input {
+                input.locked().write_all(b"\x03")?;
+            }
+        }
         _ => {}
     }
     Ok(())
+}
+
+/// A program started without a console (a structured agent, on pipes) in a job of its own, so
+/// a stop reaches everything it starts, as [`spawn`]'s are. What it started before this returns
+/// isn't in the job: it is called right after the spawn.
+pub fn contain(child: tokio::process::Child) -> io::Result<Child> {
+    let pid = child.id().ok_or_else(|| io::Error::other("the program exited at once"))?;
+    let raw = child.raw_handle().ok_or_else(|| io::Error::other("no process handle"))?;
+    let job = job()?;
+    let mut own: HANDLE = std::ptr::null_mut();
+    // SAFETY: `raw` is the child's open process handle (`child` is alive for this call); we keep
+    // a duplicate of our own, so dropping `child` afterwards leaves ours open.
+    unsafe {
+        if AssignProcessToJobObject(job.0, raw as HANDLE) == 0 {
+            return Err(last_error("AssignProcessToJobObject"));
+        }
+        let me = GetCurrentProcess();
+        if DuplicateHandle(me, raw as HANDLE, me, &mut own, 0, 0, DUPLICATE_SAME_ACCESS) == 0 {
+            return Err(last_error("DuplicateHandle"));
+        }
+    }
+    let proc = Arc::new(Proc { process: Owned(own), job, pty: None, input: None });
+    procs().locked().insert(pid, proc.clone());
+    drop(child);
+    Ok(Child { pid, proc })
 }
 
 /// Linux only (`PR_SET_PDEATHSIG`); nothing elsewhere. A session's job ends with ptyro anyway.

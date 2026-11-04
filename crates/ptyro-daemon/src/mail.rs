@@ -1866,8 +1866,15 @@ fn hunk_excerpt(doc: &ptyro_core::model::DiffDoc, files: &[String]) -> String {
     out
 }
 
+/// Claude's inbox socket on Windows: not seen there yet (WIN8 looks), so mail goes the other way.
+#[cfg(not(unix))]
+async fn send_socket(_path: &str, _text: &str) -> std::io::Result<()> {
+    Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "Claude's inbox socket on Windows"))
+}
+
 /// Claude's inbox socket: NDJSON, one user message (SPEC §20.1, spike: unverified on a real
 /// session). Read between tool calls, so it reaches a working agent.
+#[cfg(unix)]
 async fn send_socket(path: &str, text: &str) -> std::io::Result<()> {
     use tokio::io::AsyncWriteExt;
     let mut s = tokio::time::timeout(Duration::from_secs(2), tokio::net::UnixStream::connect(path))
