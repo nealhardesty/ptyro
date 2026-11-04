@@ -2163,7 +2163,7 @@ By kind:
 | Signals, process groups, `setsid` | 18 refs in 12 files | Job Objects, ConPTY resize, console control events |
 | `/proc`, `lsof` | 24 refs in 6 files | Toolhelp32, Restart Manager, `GetExtendedTcpTable` (R-WIN-12) |
 | flock / fcntl | 24 refs in 4 files | `File::lock` |
-| Live upgrade (`handoff.rs`, memfd, `execve`) | 1 module | No port; restart-and-resume or holder processes (R-WIN-13) |
+| Live upgrade (`handoff.rs`, memfd, `execve`) | 1 module | Handover of each pseudoconsole's handles (DD3.4 2 c, decided 2026-11-04) |
 | Start at login (`service.rs`) | 1 module | Per-user logon task (R-WIN-14) |
 
 ### DD3.4 Design options for the hard parts
@@ -2174,13 +2174,15 @@ By kind:
    - (c) As (b), plus a bundled newer `conpty.dll`/`OpenConsole.exe`.
 
    **Suggested:** (b). Add (c) only if WIN0.2 shows the conhost built into Windows mangles what ptyro needs. `ptyro-pty`'s public functions (`spawn`, `terminate`, `signal_group`, `foreground`, `is_raw`) are already the seam.
-   **WIN0.2 (2026-11-03) [V]:** it does mangle it. The inbox conhost sends OSCs ahead of their text, answers queries itself, drops OSC 10/11 and sixel, and repaints on resize; the packaged conpty.dll passes everything through. So the suggestion is now **(c)** (SPEC §20.13).
+   **WIN0.2 (2026-11-03) [V]:** it does mangle it. The inbox conhost sends OSCs ahead of their text, answers queries itself, drops OSC 10/11 and sixel, and repaints on resize; the packaged conpty.dll passes everything through. So the suggestion is now **(c)** (SPEC §20.13). **Decided (c)** (owner, 2026-11-04).
 2. **Live upgrade and survival.**
    - (a) None on Windows. `ptyro daemon upgrade` hibernates, restarts and resumes the agents' conversations (M4 resume), and shells start fresh.
    - (b) **Holder processes:** `ptyro hold` is one small process per session that owns the pseudoconsole, the Job Object and the child, and serves the PTY over a private pipe. The daemon restarts and adopts the holders again. This also survives a **daemon crash**, which re-exec on Unix doesn't (zmx, shpool and dtach work this way, C14–C16). The cost is one process per session and a small second protocol.
 
    **Suggested:** (a) first, (b) once Windows has users. Decide in WIN0.5.
    - (c) **Handover** (found by WIN0.3, 2026-11-03) [V]: a pseudoconsole outlives the process that made it when another process holds its pipe ends, its `HPCON`'s three handles and the child. So the old daemon can hand each session to the new one by inheritance, as on Unix, without holder processes. It doesn't survive a daemon crash; holders still would (SPEC §20.13).
+
+   **Decided (c)** (owner, 2026-11-04), with (a) as the fallback when a handover fails (WIN9).
 3. **What runs setup, verify, worktree and `run` commands.**
    - (a) pwsh always: breaks every bash setup script, including the competitors' configs ptyro reads (M5.10).
    - (b) Git Bash required: one more install, and it starts slowly (Warp).
@@ -3065,7 +3067,7 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 | R-WIN-10 | **Named-pipe transport** for the daemon: user-only DACL, remote clients rejected, the client's pid recorded like the Unix peer check | herdr, unofficial Zellij port | WIN5 | M | ★★★ | → WIN5 |
 | R-WIN-11 | **One command-shell policy** for setup, verify, worktree and `run` commands: per-project `shell = auto\|pwsh\|bash\|cmd\|sh`, `auto` by extension; Git Bash found, or offered as a fix | Claude Code hooks' `shell` field | WIN6 | M | ★★★ | → WIN6 |
 | R-WIN-12 | **Windows process facts**: foreground process (process tree or console process list), listening ports (`GetExtendedTcpTable`), "in use by" (Restart Manager), locks (`File::lock`) | — | WIN7 | M | ★★ | → WIN7 |
-| R-WIN-13 | **Session holder processes** (`ptyro hold`): one small process owns each PTY, so the daemon can restart or upgrade without losing a session. ~~The only route to live upgrade on Windows~~ (WIN0.3, 2026-11-03 [V]: a handover of the pseudoconsole's handles works too); on Unix it would also survive a daemon crash | zmx, shpool, dtach (C14–C16) | Backlog | L | ★ | parked (owner, 2026-10-31: restart and resume on Windows, WIN9; WIN0.5 d reopened 2026-11-03) |
+| R-WIN-13 | **Session holder processes** (`ptyro hold`): one small process owns each PTY, so the daemon can restart or upgrade without losing a session. ~~The only route to live upgrade on Windows~~ (WIN0.3, 2026-11-03 [V]: a handover of the pseudoconsole's handles works too); on Unix it would also survive a daemon crash | zmx, shpool, dtach (C14–C16) | Backlog | L | ★ | parked (owner, 2026-11-04: WIN9 upgrades live by handover, no holders) |
 | R-WIN-14 | **Start at login and alerts the Windows way**: a per-user logon task (never a Service: session 0 has no user profile), toasts with an AppUserModelID and click-to-focus | — | WIN10 | M | ★★ | → WIN10 |
 | R-WIN-15 | **Packaging**: winget, scoop, `install.ps1`, a signed zip, ARM64; uninstall removes the logon task and the shortcut | herdr (`install.ps1`, `install.cmd`) | WIN12 | M | ★★ | → WIN12 (`install.ps1` and the x64/ARM64 zips built in WIN3, 2026-11-03; signing, winget, scoop open) |
 | R-WIN-16 | **Windows machines in MM1**: link over `machine-bridge` (no remote shell involved); `--remote` to a Windows ssh host with a command that pwsh and cmd both run | MM1 | WIN11 | M | ★ | → WIN11 |

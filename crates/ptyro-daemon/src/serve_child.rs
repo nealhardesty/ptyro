@@ -48,14 +48,6 @@ impl ServeChild {
     }
 }
 
-/// A process is alive (and ours to look at).
-fn alive(pid: u32) -> bool {
-    i32::try_from(pid)
-        .ok()
-        .and_then(rustix::process::Pid::from_raw)
-        .is_some_and(|p| rustix::process::test_kill_process(p).is_ok())
-}
-
 /// The last thing the server said, for "why did it stop".
 /// `serve.log` is kept under this; past it, it moves to `serve.log.1` (one older copy).
 const SERVE_LOG_MAX: u64 = 5 << 20;
@@ -171,7 +163,7 @@ impl Daemon {
             .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
             .and_then(|v| v["pid"].as_u64())
             .and_then(|p| u32::try_from(p).ok())
-            .is_some_and(alive);
+            .is_some_and(ptyro_core::os::alive);
         if !live {
             let _ = std::fs::remove_file(record);
         }
@@ -203,7 +195,7 @@ impl Daemon {
                 .unwrap_or_default();
         let recorded = record["pid"].as_u64().and_then(|p| u32::try_from(p).ok());
         let up = mine.is_some() && recorded == mine;
-        let by_hand = recorded.filter(|p| Some(*p) != mine && alive(*p));
+        let by_hand = recorded.filter(|p| Some(*p) != mine && ptyro_core::os::alive(*p));
         WebServe {
             wanted: config.remote.serve,
             up,

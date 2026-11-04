@@ -60,9 +60,9 @@ test: ## Run all tests (every test binary runs, so one failure doesn't hide the 
 	PTYRO_WSL_HOLD=0 $(CARGO) test --workspace --no-fail-fast
 	OPTIONAL=1 sh scripts/check-windows.sh
 
-# The Windows client's crates whose tests run on Windows itself; the rest only compile there
-# (agents and git run in the daemon, in WSL). SPEC §20.11.
-WINDOWS_TESTED := -p ptyro-core -p ptyro-protocol -p ptyro-term -p ptyro-store -p ptyro-meaning -p ptyro-run -p ptyro-drive -p ptyro-client -p ptyro-tui
+# The Windows client's crates whose tests run on Windows itself, and ptyro-pty's Windows seam
+# (WIN4); the rest only compile there (agents and git run in the daemon, in WSL). SPEC §20.11.
+WINDOWS_TESTED := -p ptyro-core -p ptyro-protocol -p ptyro-term -p ptyro-store -p ptyro-meaning -p ptyro-run -p ptyro-drive -p ptyro-client -p ptyro-tui -p ptyro-pty
 
 test-windows: ## On Windows itself (CI's windows job): the client crates' tests, and the rest of the client (ptyro.exe included) compiled
 	$(CARGO) test --no-fail-fast $(WINDOWS_TESTED)

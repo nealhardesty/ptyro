@@ -1,4 +1,5 @@
-//! Process name and cwd probes (SPEC §5.1): `/proc` on Linux, libproc on macOS.
+//! Process name and cwd probes (SPEC §5.1): `/proc` on Linux, libproc on macOS; on Windows
+//! (WIN7) none yet, so each answers "unknown".
 
 use std::path::PathBuf;
 
@@ -25,6 +26,7 @@ pub fn looks_like_version(s: &str) -> bool {
 }
 
 /// The basename of argv[0].
+#[cfg(any(unix, test))]
 fn basename(arg0: &[u8]) -> String {
     let s = String::from_utf8_lossy(arg0);
     s.rsplit('/').next().unwrap_or(&s).trim_start_matches('-').to_owned()
@@ -147,9 +149,15 @@ pub fn cwd_of(_pid: u32) -> Option<PathBuf> {
 /// The POSIX session `pid` belongs to (its session leader's pid). Every ptyro session's child
 /// leads its own, so a descendant that was reparented (double-fork, `nohup … &`, `disown`)
 /// still names it; only `setsid` leaves.
+#[cfg(unix)]
 pub fn session_leader(pid: u32) -> Option<u32> {
     let pid = rustix::process::Pid::from_raw(pid as i32)?;
     rustix::process::getsid(Some(pid)).ok().map(|p| p.as_raw_nonzero().get() as u32)
+}
+
+#[cfg(not(unix))]
+pub fn session_leader(_pid: u32) -> Option<u32> {
+    None
 }
 
 /// One variable from the environment `pid` was started with, as the kernel recorded it at exec
@@ -175,32 +183,54 @@ pub fn local_time_hm() -> Option<(u8, u8)> {
 }
 
 /// The local hour and minute of a moment (seconds since the epoch), honouring `TZ`.
-#[allow(unsafe_code)] // localtime_r has no std equivalent; it writes only into `tm`.
 pub fn local_time_hm_at(secs: i64) -> Option<(u8, u8)> {
+    local_at(secs).map(|t| (t.hour, t.minute))
+}
+
+/// Local date and time as `2026-10-24 14:02` (honouring `TZ`), for the scratchpad's stamps.
+pub fn local_datetime() -> Option<String> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+    let t = local_at(i64::try_from(now).ok()?)?;
+    Some(format!("{:04}-{:02}-{:02} {:02}:{:02}", t.year, t.month, t.day, t.hour, t.minute))
+}
+
+/// A moment in local time.
+struct Local {
+    year: i32,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+}
+
+/// libc's `localtime_r`, which honours `TZ`.
+#[cfg(unix)]
+#[allow(unsafe_code)] // localtime_r has no std equivalent; it writes only into `tm`.
+fn local_at(secs: i64) -> Option<Local> {
     let t = libc::time_t::try_from(secs).ok()?;
     // SAFETY: `tm` is a zeroed out-parameter owned by this frame; localtime_r is reentrant.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     let ok = unsafe { !libc::localtime_r(&t, &mut tm).is_null() };
-    ok.then_some((tm.tm_hour as u8, tm.tm_min as u8))
+    ok.then_some(Local {
+        year: tm.tm_year + 1900,
+        month: (tm.tm_mon + 1) as u8,
+        day: tm.tm_mday as u8,
+        hour: tm.tm_hour as u8,
+        minute: tm.tm_min as u8,
+    })
 }
 
-/// Local date and time as `2026-10-24 14:02` (honouring `TZ`), for the scratchpad's stamps.
-#[allow(unsafe_code)] // localtime_r has no std equivalent; it writes only into `tm`.
-pub fn local_datetime() -> Option<String> {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
-    let t = libc::time_t::try_from(now).ok()?;
-    // SAFETY: `tm` is a zeroed out-parameter owned by this frame; localtime_r is reentrant.
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    let ok = unsafe { !libc::localtime_r(&t, &mut tm).is_null() };
-    ok.then(|| {
-        format!(
-            "{:04}-{:02}-{:02} {:02}:{:02}",
-            tm.tm_year + 1900,
-            tm.tm_mon + 1,
-            tm.tm_mday,
-            tm.tm_hour,
-            tm.tm_min
-        )
+/// The time crate's local offset, which is sound on Windows (no environment races there).
+#[cfg(windows)]
+fn local_at(secs: i64) -> Option<Local> {
+    let at = time::OffsetDateTime::from_unix_timestamp(secs).ok()?;
+    let t = at.to_offset(time::UtcOffset::local_offset_at(at).ok()?);
+    Some(Local {
+        year: t.year(),
+        month: t.month().into(),
+        day: t.day(),
+        hour: t.hour(),
+        minute: t.minute(),
     })
 }
 
@@ -268,6 +298,7 @@ mod tests {
     }
 
     /// argv[0] parsing (`/proc/<pid>/cmdline`, macOS `KERN_PROCARGS2`) on this very process.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn argv0_reads_our_own() {
         let me = std::env::args().next().unwrap();

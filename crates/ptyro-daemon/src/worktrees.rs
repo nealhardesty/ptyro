@@ -19,7 +19,7 @@ use ptyro_core::{Error, ErrorCode, SessionId, TermSize, names, now_ms};
 use ptyro_git::{BranchFate, Git, Source};
 use ptyro_protocol::{DomainEvent, Reply, Request};
 
-use crate::daemon::{Daemon, user_shell};
+use crate::daemon::Daemon;
 use crate::launch::Launch;
 use crate::registry::git_err;
 use crate::session::{Place, Session};
@@ -645,7 +645,7 @@ impl Daemon {
         let name = self.free_name(&format!("{}.{label}", wt.name.trim_start_matches('@')));
         self.launch(Launch {
             id: SessionId::new(),
-            argv: vec![user_shell(), "-c".into(), command],
+            argv: ptyro_core::shell::command_argv(&ptyro_core::shell::default_shell(), &command),
             kind: SessionKind::Script,
             name,
             cwd: wt.path.clone(),

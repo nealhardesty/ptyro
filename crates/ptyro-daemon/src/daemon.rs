@@ -710,6 +710,19 @@ impl Daemon {
                 // Extra arguments; the adapter builds the rest at launch.
                 (spec.argv.clone(), SessionKind::Agent)
             }
+            // A command line as typed (the TUI's and the web's "command"): through this
+            // computer's shell, which the client doesn't know (WIN4).
+            (None, true)
+                if let Some(line) = spec.command.as_deref().filter(|l| !l.trim().is_empty()) =>
+            {
+                (
+                    ptyro_core::shell::command_argv(
+                        &ptyro_core::shell::default_shell(),
+                        line.trim(),
+                    ),
+                    SessionKind::Command,
+                )
+            }
             (None, true) => (shell_command(&config), SessionKind::Shell),
             // A bare shell (`ptyro new -- pwsh`) is a shell session: status from its prompt
             // marks, and its integration added (SPEC §8.7).
@@ -1517,14 +1530,10 @@ impl Daemon {
 /// What a new shell session runs: `[shell] command`, else the login shell (`$SHELL -l`).
 pub(crate) fn shell_command(config: &ptyro_core::config::Config) -> Vec<String> {
     if config.shell.command.is_empty() {
-        vec![user_shell(), "-l".into()]
+        ptyro_core::shell::default_shell_argv()
     } else {
         config.shell.command.clone()
     }
-}
-
-pub(crate) fn user_shell() -> String {
-    std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/sh".into())
 }
 
 /// `*` matches any run of characters, `?` exactly one. Linear in practice (it backtracks only

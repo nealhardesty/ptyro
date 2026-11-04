@@ -279,7 +279,7 @@ Boundary rules **[decided]**:
 | Linux x86_64 / aarch64 | Tier 1 |
 | macOS aarch64 / x86_64 | Tier 1 |
 | WSL2 | **Tier 1 [decided 2026-10-31, owner]** (Linux build). `make check` passes [V 2026-11-02]: WSL 2.6.2.0, kernel 6.6.87.2, Ubuntu 24.04.3, Windows 11 build 26200, systemd on, master at v0.0.46. All 73 test binaries pass, with bash 5.2 and zsh present but no fish or pwsh (`tests/win1.rs` skips those two), and no browser, so web-e2e didn't run. Survival after the last terminal (WIN0.1) is answered: WSL stops a distro about 15 s after the last Windows-side `wsl.exe` exits, systemd services and linger included, so the daemon holds WSL open itself while it runs (`[daemon] hold_wsl`, on by default; §20.10, WIN2). CI's `wsl` job runs `make test-wsl` on a hosted `windows-latest` runner, which has WSL2 (§20.10) |
-| Windows 11 native (x64, ARM64) | **Tier 1 [decided 2026-10-31, owner]. The client is built (WIN3, 2026-11-03): `ptyro.exe` drives the daemon in WSL (`--remote wsl://`, §16.2), the TUI included; the native daemon is not built yet** (ConPTY, named pipes; track D, RESEARCH DD3). CI builds it and runs the client crates' tests on `windows-latest` (§20.11). Windows 10 is not supported |
+| Windows 11 native (x64, ARM64) | **Tier 1 [decided 2026-10-31, owner]. The client is built (WIN3, 2026-11-03): `ptyro.exe` drives the daemon in WSL (`--remote wsl://`, §16.2), the TUI included; the native daemon is not built yet** (ConPTY, named pipes; track D, RESEARCH DD3). It will bundle Microsoft's packaged ConPTY and upgrade live by handing pseudoconsoles over [decided 2026-11-04, owner; §20.13]. CI builds it and runs the client crates' tests on `windows-latest` (§20.11). Windows 10 is not supported |
 
 Inside WSL, `ptyro_core::wsl` is the one rule (WIN2) [V 2026-11-02, WSL 2.6.2]: it is WSL if the kernel release (`/proc/sys/kernel/osrelease`) says `microsoft`, `WSL_DISTRO_NAME` is set, or interop is registered (`/proc/sys/fs/binfmt_misc/WSLInterop`). WSL1's release ends in `-Microsoft` and WSL2's says `microsoft-standard`. The distro comes from `WSL_DISTRO_NAME`, or from `wslpath -w /` (`\\wsl.localhost\<distro>\`) when that's missing: a systemd user unit, which is how `ptyro service install` runs the daemon, doesn't get the variable. About's `system` reads `linux x86_64, WSL2 (Ubuntu)`, its JSON has a `wsl` object, and `doctor` has a `wsl` section (WSL1 is a warning).
 
@@ -1012,6 +1012,13 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
 - One edge: a project pad's editor session still running in a 0.0.9 daemon that hands off to
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
+
+**[built WIN4] Protocol 1.27** (additive): `SpawnSpec.command`, a command line as typed. The
+daemon runs it through its own default shell (`$SHELL -c` on Unix; on Windows PowerShell, §3.4),
+so a client no longer builds the shell's argv itself: the TUI's "run a command" used the
+*client's* `$SHELL` and the web `sh -c`, which a Windows client would have got wrong for its WSL
+daemon. It needs full scope from a paired device, like any command line (§16.4), and `again`
+leaves it alone. An older daemon ignores the field and starts a shell.
 
 **[built UX3.7] Protocol 1.26** (additive): quick new is per worktree and always an agent.
 `LastLaunch` gains `worktree?` (an address) and answers what `again` starts there, always
@@ -4042,7 +4049,8 @@ workspace, found by `$PTYRO_SCRATCHPAD`. ptyro never owns the only copy: it is a
 
 **[built WIN3]** On Windows (the client of a WSL daemon): config `%APPDATA%\ptyro\`, and data,
 state and runtime under `%LOCALAPPDATA%\ptyro\` (`data\`, `state\`, `run\`); there is no
-socket there. A file "only its owner reads" is mode 0600 on Unix; on Windows these folders'
+socket there. **[built WIN4]** An `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME` or
+`XDG_RUNTIME_DIR` that is set to an absolute path wins there too (`<it>\ptyro\`), as on Unix. A file "only its owner reads" is mode 0600 on Unix; on Windows these folders'
 inherited access list already keeps them to the user (`ptyro_core::os`). That config holds this
 client's own settings (`client.default_remote`, the TUI's look and keys); the daemon's is in WSL,
 as for any `--remote` client. Which is whose is `settings::read_by_client` (the client reads `ui.*`
@@ -6660,6 +6668,16 @@ Windows) wasn't needed to get the list below: compile errors are the same either
   symlinks, `sh`) are `#[cfg(unix)]`. ptyro-agents and ptyro-git only compile there: they run in
   the daemon, and their tests assume Unix paths and Unix git. [V]
 
+  **Built (WIN4, 2026-11-04):** `ptyro-pty` builds for Windows too (x64 and ARM64, clippy clean):
+  pty-process, rustix and libc are its Unix dependencies, and `windows.rs` stands beside
+  `unix.rs` with the same functions. Its PTY types (`Reader`, `Writer`, `Master`) are empty enums
+  there, so code that holds one type-checks and can't be reached; `spawn` says sessions on Windows
+  are WIN5's and to run the daemon in WSL. `Signal` keeps the POSIX numbers clients send. Local
+  time there is the time crate's offset. `make check-windows` and `make test-windows` include it.
+  Smart App Control refused ptyro-pty's unsigned debug test binary on this machine (Device Guard)
+  while it ran ptyro-core's (139 tests passed, `shell::default_shell` picking pwsh first), so
+  ptyro-pty's Windows tests run in CI's `windows` job (§20.12). [V]
+
   What this table said, before it was built: the client side (core, protocol, client, term, tui and the binary without the daemon) is
   about 65 small changes, nearly all "a file only its owner reads" and "who am I", plus two real
   designs: the client's transport, and reading the outer terminal's replies. The `ptyro-tui` row
@@ -6763,7 +6781,7 @@ judges the output with ptyro's own sniffer and emulator; the full tables are in
   `ReadFile` on the output pipe swallowed a chunk as it exited, in 2 of 10 runs. A handover must
   cancel its reader (`CancelIoEx`) and pass on what it already read. The layout is internal, but
   it hasn't changed since Windows 10 1809, and bundling conpty.dll pins it. [V]
-- **What it decides** (DD3.4; the owner's to confirm, ROADMAP WIN0):
+- **What it decides** (DD3.4; decided by the owner 2026-11-04, ROADMAP WIN0.5 d and g) **[decided]**:
   - **The PTY: (c).** Bundle the packaged conpty.dll and OpenConsole.exe: about 1.2 MB per
     architecture, MIT, signed by Microsoft. Use the inbox ConPTY only when they are missing. The
     packaged one is the only one that keeps ptyro's side channels in order, lets ptyro answer
@@ -6775,8 +6793,8 @@ judges the output with ptyro's own sniffer and emulator; the full tables are in
     program that reads records breaks it.
   - **Live upgrade:** possible without holder processes. The old daemon hands the new one, by
     inheritance as `handoff.rs` does on Unix, each session's pipe ends, its three `HPCON` handles,
-    the child and its job object, and stops reading first. The owner's WIN0.5 (d) chose restart
-    and resume when holder processes looked like the only way.
+    the child and its job object, and stops reading first. The owner chose this (WIN0.5 d,
+    2026-11-04) over restart and resume, which stays as the fallback when a handover fails.
 
 ### 20.9 Chrome shows a service worker's certificate, not the connection's
 

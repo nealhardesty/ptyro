@@ -160,6 +160,8 @@ pub fn statusline() -> i32 {
         );
     }
     if let Some(cmd) = user_statusline(&payload) {
+        // Not the platform's shell: Claude Code runs a status line through bash everywhere (Git
+        // Bash on Windows), so the command is bash's (WIN8).
         let child = std::process::Command::new("sh")
             .args(["-c", &cmd])
             .stdin(std::process::Stdio::piped())

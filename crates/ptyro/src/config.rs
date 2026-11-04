@@ -666,11 +666,9 @@ fn edit(path: &std::path::Path, key: Option<&str>) -> Result<i32, Error> {
         None => String::new(),
     };
     loop {
-        let status = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(format!("{editor}{jump} \"$1\""))
-            .arg("sh")
-            .arg(path)
+        let argv = ptyro_core::shell::editor_command(&format!("{editor}{jump}"), path);
+        let status = std::process::Command::new(&argv[0])
+            .args(&argv[1..])
             .status()
             .map_err(|e| Error::internal(format!("{editor}: {e}")))?;
         if !status.success() {

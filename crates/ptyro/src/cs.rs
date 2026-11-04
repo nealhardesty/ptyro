@@ -885,11 +885,9 @@ async fn contract(c: &Client, set: String, cmd: ContractCmd) -> Result<i32, Erro
             let editor = std::env::var("VISUAL")
                 .or_else(|_| std::env::var("EDITOR"))
                 .unwrap_or_else(|_| "vi".into());
-            let status = std::process::Command::new("sh")
-                .arg("-c")
-                .arg(format!("{editor} \"$1\""))
-                .arg("sh")
-                .arg(&path)
+            let argv = ptyro_core::shell::editor_command(&editor, &path);
+            let status = std::process::Command::new(&argv[0])
+                .args(&argv[1..])
                 .status()
                 .map_err(|e| Error::internal(format!("{editor}: {e}")))?;
             if !status.success() {

@@ -455,6 +455,11 @@ pub struct SpawnSpec {
     /// A client's tool (an editor, a `ptyro …` command's output): not remembered for `again`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub tool: bool,
+    /// A command line, as typed (with no `argv` or `agent`): the daemon runs it through its own
+    /// default shell (`$SHELL -c` on Unix), so the client needn't know which shell that is
+    /// (protocol 1.27, WIN4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 }
 
 /// What a workspace last started (UX3.2), so `again` can start another of it.

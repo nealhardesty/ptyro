@@ -126,7 +126,8 @@ pub fn shell_init_missing(config: &ptyro_core::config::Config) -> Option<(PathBu
     if config.shell.integration {
         return None;
     }
-    let shell = config.shell.command.first().cloned().or_else(|| std::env::var("SHELL").ok())?;
+    let shell =
+        config.shell.command.first().cloned().unwrap_or_else(ptyro_core::shell::default_shell);
     let home = PathBuf::from(std::env::var_os("HOME")?);
     let (rc, line) = ptyro_core::shell::ShellKind::of_program(&shell)?.rc_line(&home);
     let text = std::fs::read_to_string(&rc).unwrap_or_default();

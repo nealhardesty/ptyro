@@ -2211,8 +2211,9 @@ impl Daemon {
         env: Vec<(std::ffi::OsString, std::ffi::OsString)>,
     ) -> CheckResult {
         let started = now_ms();
-        let mut c = tokio::process::Command::new("sh");
-        c.arg("-c").arg(cmd).current_dir(dir).env_clear().envs(env);
+        let argv = ptyro_core::shell::command_shell(cmd);
+        let mut c = tokio::process::Command::new(&argv[0]);
+        c.args(&argv[1..]).current_dir(dir).env_clear().envs(env);
         // Its output goes to a file as it is written (never held in memory), and the group is
         // stopped on a timeout or when it writes too much.
         let log =

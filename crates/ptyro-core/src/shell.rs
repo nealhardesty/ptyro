@@ -114,6 +114,94 @@ fn is_login(kind: ShellKind, args: &[String]) -> bool {
     })
 }
 
+/// The shell to start when nothing names one: on Unix `$SHELL`, else `/bin/sh`. On Windows
+/// (RESEARCH DD3.4 item 4) PowerShell 7 (`pwsh.exe`) when it is installed, else Windows
+/// PowerShell, else `%COMSPEC%` (cmd.exe).
+pub fn default_shell() -> String {
+    let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    default_shell_from(&var, &|prog| std::env::split_paths(&path).any(|d| d.join(prog).is_file()))
+}
+
+/// [`default_shell`] with the environment and the `PATH` lookup given.
+fn default_shell_from(
+    var: &dyn Fn(&str) -> Option<String>,
+    on_path: &dyn Fn(&str) -> bool,
+) -> String {
+    if cfg!(windows) {
+        ["pwsh.exe", "powershell.exe"]
+            .into_iter()
+            .find(|p| on_path(p))
+            .map(str::to_owned)
+            .or_else(|| var("COMSPEC"))
+            .unwrap_or_else(|| "cmd.exe".into())
+    } else {
+        var("SHELL").unwrap_or_else(|| "/bin/sh".into())
+    }
+}
+
+/// What a new shell session runs when `[shell] command` is empty: the default shell, as a login
+/// shell on Unix (`$SHELL -l`). Windows has no login shells.
+pub fn default_shell_argv() -> Vec<String> {
+    let shell = default_shell();
+    if cfg!(windows) { vec![shell] } else { vec![shell, "-l".into()] }
+}
+
+/// How `shell` runs one command line: `-c` for POSIX shells and fish, `-NoProfile -Command` for
+/// PowerShell, `/d /s /c` for cmd.exe. (cmd.exe doesn't read the `\"` that Rust's `Command`
+/// quotes with, so a line with quotes needs `raw_arg` there: WIN6. Windows 11 always has Windows
+/// PowerShell on `PATH`, so cmd.exe is only the last resort of [`default_shell`].)
+pub fn command_argv(shell: &str, line: &str) -> Vec<String> {
+    let base = shell.rsplit(['/', '\\']).next().unwrap_or(shell).to_ascii_lowercase();
+    let flags: &[&str] = if base == "cmd" || base == "cmd.exe" {
+        &["/d", "/s", "/c"]
+    } else if ShellKind::of_program(shell) == Some(ShellKind::Pwsh) {
+        &["-NoProfile", "-Command"]
+    } else {
+        &["-c"]
+    };
+    std::iter::once(shell)
+        .chain(flags.iter().copied())
+        .chain(std::iter::once(line))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The argv that runs a command line ptyro itself was given to run (a check, a status line's
+/// command): `sh -c` on Unix, the [`default_shell`] on Windows.
+pub fn command_shell(line: &str) -> Vec<String> {
+    if cfg!(windows) { command_argv(&default_shell(), line) } else { command_argv("sh", line) }
+}
+
+/// The argv that opens `path` in `editor`, a command line such as `$VISUAL` (`code --wait`,
+/// `vim +12`): on Unix `sh -c '<editor> "$1"' sh <path>`, so the path is never parsed by the
+/// shell; on Windows the default shell, with the path quoted for it.
+pub fn editor_command(editor: &str, path: &Path) -> Vec<std::ffi::OsString> {
+    if !cfg!(windows) {
+        let line = format!("{editor} \"$1\"");
+        let mut argv: Vec<std::ffi::OsString> =
+            command_argv("sh", &line).into_iter().map(Into::into).collect();
+        argv.extend(["sh".into(), path.as_os_str().to_owned()]);
+        return argv;
+    }
+    editor_command_in(&default_shell(), editor, &path.to_string_lossy())
+        .into_iter()
+        .map(Into::into)
+        .collect()
+}
+
+/// [`editor_command`] on Windows, for `shell`.
+fn editor_command_in(shell: &str, editor: &str, path: &str) -> Vec<String> {
+    let line = if ShellKind::of_program(shell) == Some(ShellKind::Pwsh) {
+        // `&` runs a quoted program path too; single quotes are literal, `''` is one quote.
+        format!("& {editor} '{}'", path.replace('\'', "''"))
+    } else {
+        // cmd.exe: a Windows path holds no `"`.
+        format!("{editor} \"{path}\"")
+    };
+    command_argv(shell, &line)
+}
+
 /// The variables [`integrate`] may set, cleared from every shell's environment first, so none
 /// left over from elsewhere can steer the startup files.
 pub const VARS: [&str; 3] = ["PTYRO_BASH_LOGIN", "PTYRO_ZDOTDIR", "PTYRO_ZDOTDIR_UNSET"];
@@ -416,6 +504,72 @@ mod tests {
 
     fn v(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn the_default_shell_is_shell_on_unix_and_powershell_first_on_windows() {
+        let env = |k: &str| match k {
+            "SHELL" => Some("/bin/zsh".to_owned()),
+            "COMSPEC" => Some(r"C:\Windows\system32\cmd.exe".to_owned()),
+            _ => None,
+        };
+        if cfg!(windows) {
+            assert_eq!(default_shell_from(&env, &|_| true), "pwsh.exe");
+            assert_eq!(default_shell_from(&env, &|p| p == "powershell.exe"), "powershell.exe");
+            assert_eq!(default_shell_from(&env, &|_| false), r"C:\Windows\system32\cmd.exe");
+            assert_eq!(default_shell_from(&|_| None, &|_| false), "cmd.exe");
+        } else {
+            assert_eq!(default_shell_from(&env, &|_| true), "/bin/zsh");
+            assert_eq!(default_shell_from(&|_| None, &|_| true), "/bin/sh");
+        }
+    }
+
+    #[test]
+    fn each_shell_runs_a_command_line_its_own_way() {
+        assert_eq!(command_argv("sh", "make test"), v(&["sh", "-c", "make test"]));
+        assert_eq!(command_argv("/bin/zsh", "a | b"), v(&["/bin/zsh", "-c", "a | b"]));
+        assert_eq!(command_argv("fish", "x"), v(&["fish", "-c", "x"]));
+        assert_eq!(
+            command_argv("pwsh.exe", "Get-Date"),
+            v(&["pwsh.exe", "-NoProfile", "-Command", "Get-Date"])
+        );
+        assert_eq!(
+            command_argv(r"C:\WINDOWS\system32\WindowsPowerShell\v1.0\powershell.exe", "x")[1],
+            "-NoProfile"
+        );
+        assert_eq!(
+            command_argv(r"C:\Windows\system32\cmd.exe", "dir"),
+            v(&[r"C:\Windows\system32\cmd.exe", "/d", "/s", "/c", "dir"])
+        );
+        assert_eq!(command_argv("CMD.EXE", "dir")[1], "/d");
+        if !cfg!(windows) {
+            assert_eq!(command_shell("echo hi"), v(&["sh", "-c", "echo hi"]));
+        }
+    }
+
+    #[test]
+    fn an_editor_gets_the_path_unparsed_or_quoted_for_its_shell() {
+        if !cfg!(windows) {
+            let argv = editor_command("vim +3", Path::new("/a b/$x's.toml"));
+            assert_eq!(argv, ["sh", "-c", "vim +3 \"$1\"", "sh", "/a b/$x's.toml"]);
+        }
+        assert_eq!(
+            editor_command_in("pwsh.exe", "code --wait", r"C:\it's\c.toml"),
+            v(&["pwsh.exe", "-NoProfile", "-Command", r"& code --wait 'C:\it''s\c.toml'"])
+        );
+        assert_eq!(
+            editor_command_in("cmd.exe", "notepad", r"C:\a b\c.toml"),
+            v(&["cmd.exe", "/d", "/s", "/c", r#"notepad "C:\a b\c.toml""#])
+        );
+    }
+
+    #[cfg(unix)] // runs sh
+    #[test]
+    fn the_unix_editor_line_reaches_the_editor_with_the_path_intact() {
+        let path = Path::new("/tmp/a b/$HOME's \"x\".toml");
+        let argv = editor_command("printf '%s'", path);
+        let out = std::process::Command::new(&argv[0]).args(&argv[1..]).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), path.to_string_lossy());
     }
 
     #[test]
