@@ -6684,14 +6684,99 @@ Windows) wasn't needed to get the list below: compile errors are the same either
   source; S for Windows Terminal's records, from its documentation]
 - **Smart App Control blocks some unsigned programs and not others.** With it on, a freshly built
   unsigned `probe.exe` (debug and release) was refused ("An Application Control policy has blocked
-  this file", CodeIntegrity event 3077) while every unsigned `ptyro.exe` build that day ran. It
-  decides per file, from Microsoft's cloud reputation; there's no per-file exception, and turning
-  it off can't be undone without reinstalling Windows. Signing (WIN12) is the real answer;
-  install.ps1 says what happened if `ptyro.exe` is refused. [V]
+  this file", CodeIntegrity event 3077). Every unsigned `ptyro.exe` that day ran, debug and
+  release (the release build is what the zips ship). It judges a file by its contents, not its
+  name or folder: a fresh hello-world ran, the refused probe stayed refused under another name,
+  and `ptyro.exe` renamed still ran. The probe was small, put the console in raw mode and read
+  keys, which may look like a keylogger (a guess). The ConPTY spike (§20.13) ran as a debug build
+  and was refused as a release build. There's no per-file exception, and turning it off can't be
+  undone without reinstalling Windows. Signing (WIN12) is the real answer; install.ps1 says what
+  happened if `ptyro.exe` is refused. [V]
 - **PowerShell's execution policy** (Restricted by default) refuses `install.ps1` run as a file,
   but not `irm … | iex`, which evaluates a string. [V]
 - **`wt.exe` splits its command line at every `;`**, also inside a `powershell -Command` string
   after `--`: a script file avoids it (as `tab.rs` escapes `\;`). [V]
+
+### 20.13 ConPTY (WIN0.2, WIN0.3) **[verified 2026-11-03: Windows 11 build 26200.9711 (25H2), x64; inbox conhost 10.0.26100.1; conpty.dll and OpenConsole.exe 1.25.2609.30003 from the NuGet package Microsoft.Windows.Console.ConPTY 1.25.260930003 (MIT, Microsoft-signed)]**
+
+`make spike-conpty` (`spikes/conpty`, `scripts/spike-conpty.sh`) plays what ptyro needs through
+both ConPTYs: Windows' own (`CreatePseudoConsole` in kernel32, the conhost in System32) and the
+newer one Microsoft ships as a package (`ConptyCreatePseudoConsole` in conpty.dll, which runs the
+OpenConsole.exe beside it), each with and without `PSEUDOCONSOLE_PASSTHROUGH_MODE`. A host
+process records what comes out; a child writes each case and logs what reaches it. The report
+judges the output with ptyro's own sniffer and emulator; the full tables are in
+`spikes/conpty/REPORT.md`. The results held across five runs. [V]
+
+- **Two different machines.** The inbox conhost keeps its own screen buffer and paints it into
+  the pipe. The packaged one passes the program's bytes through as they are: 2 MiB of coloured
+  lines came out byte for byte. `PSEUDOCONSOLE_PASSTHROUGH_MODE` (`0x8`) changes nothing on
+  either: the inbox conhost accepts the flag and goes on painting, and the packaged one passes
+  bytes through without it. [V]
+- **What each writes first.** Inbox: `\e[?9001h\e[?1004h\e[?25l\e[2J\e[m\e[H`. Packaged:
+  `\e[1t\e[c\e[?1004h\e[?9001h` (it asks the terminal for DA1, but doesn't wait for the answer:
+  the child's first output came 31 ms after the spawn, against 12 ms for the inbox one). Both ask
+  for win32-input-mode (`?9001h`) and focus reports (`?1004h`) for themselves, and turn both off
+  when the pseudoconsole closes. The inbox one also sets the title to the child's path (OSC 0). [V]
+- **Sequences a program writes, inbox:** OSC 133 is understood and stays in place. Every other
+  OSC ptyro reads (7501, 9, 777, 9;4, 9;9, 7, 52, 21337, 99), the mode switches (2026, 2004,
+  1000/1006, 1004, kitty's `>1u`), DECSCUSR, the tmux DCS wrapper and APC pass through, but at
+  once, ahead of the text written before them, which waits for conhost's next paint. OSC 8 gets
+  an `id=`, OSC 2 comes out later as OSC 0, sixel is dropped, and SGR is re-encoded: it looks the
+  same, but a foreground colour is left on blank cells. **Packaged:** every one kept, in place. [V]
+- **Queries, inbox:** conhost answers DA1 (`\e[?61;6;7;21;22;23;24;28;32;42c`), DA2
+  (`\e[>0;10;1c`), DSR, CPR, DECRQM, DECRQSS and `CSI 18 t` itself, so the terminal never sees
+  them. It drops OSC 10/11 and XTGETTCAP, and passes on XTVERSION, kitty's `CSI ? u`, the OSC
+  7501 probe and `CSI 14/16 t`. **Packaged:** every query is passed on, for the terminal (ptyro)
+  to answer, as on Unix. After a resize it asks the terminal for the cursor position (`\e[6n`). [V]
+- **Keys.** A child in VT input mode reads every key and report unchanged (text, Enter, cursor
+  and function keys, Alt, Ctrl, UTF-8, bracketed paste, SGR mouse, focus, kitty CSI u), through
+  both. A child reading console records with VT input off, as PowerShell's PSReadLine and cmd
+  do, gets records with the right modifiers from plain VT (Ctrl+Up, Alt+x). But NUL becomes
+  Ctrl+Shift+2, not Ctrl+Space. Kitty's CSI u is dropped by the inbox conhost and arrives as
+  seven junk characters from the packaged one. Win32-input-mode (`CSI Vk;Sc;Uc;Kd;Cs;Rc _`) gives
+  that child exact records (Shift+Enter, Ctrl+Space) through both. The other way round, it fails:
+  win32-input-mode Shift+Enter reaches a VT child that pushed kitty flags as a plain `\r`, with
+  the Shift lost. [V]
+- **Ctrl+C and closing.** A typed `0x03` is CTRL_C_EVENT for a child with processed input, and
+  the byte for one without. `ClosePseudoConsole` returns at once (0 ms). The child gets
+  CTRL_CLOSE_EVENT and exits with `0xC000013A`. [V]
+- **Resizing.** The inbox conhost repaints the screen after a resize (1–2 KB, erase and home), and
+  when it does depends on timing. Replayed into ptyro's emulator, 60 lines and three resizes
+  ended with 28 to 48 lines of history, against the program's own 37: lines added, or lost. The
+  packaged one writes nothing but its cursor-position query, and the history is exactly 37. The
+  alternate screen came through a resize intact in both. [V]
+- **Recorded programs** (ptyro-term's fixtures: Claude Code twice, Codex, vim, ls): the same text
+  in every row through both. Identical styles through the packaged one; through the inbox one,
+  the same look (the foreground on blanks again). [V]
+- **Speed.** Key to echo: at most 1 ms through either. Throughput of 2 MiB of coloured lines:
+  about 6 MiB/s inbox, about 21 MiB/s packaged. [V]
+- **WIN0.3: a pseudoconsole outlives the process that made it, if another holds it.** An `HPCON`
+  is a pointer to three handles, `{ hSignal, hPtyReference, hConPtyProcess }` (microsoft/terminal
+  `src/winconpty/winconpty.h`), in both ConPTYs; the third is conhost.exe's or OpenConsole.exe's
+  process. The creator exited without `ClosePseudoConsole`. A process that had our two pipe ends,
+  those three handles and the child's process handle kept the session going: it got them either
+  inherited at its creation (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`) or copied into it while it ran
+  (`DuplicateHandle`), which both worked. The child's output kept coming, typing reached it, and
+  `ResizePseudoConsole` and `ClosePseudoConsole` worked on an `HPCON` rebuilt from the three
+  handles (allocated on the process heap, which `ClosePseudoConsole` frees). Held by nobody, the
+  child and its conhost died with the creator. **The one trap:** the creator's pending
+  `ReadFile` on the output pipe swallowed a chunk as it exited, in 2 of 10 runs. A handover must
+  cancel its reader (`CancelIoEx`) and pass on what it already read. The layout is internal, but
+  it hasn't changed since Windows 10 1809, and bundling conpty.dll pins it. [V]
+- **What it decides** (DD3.4; the owner's to confirm, ROADMAP WIN0):
+  - **The PTY: (c).** Bundle the packaged conpty.dll and OpenConsole.exe: about 1.2 MB per
+    architecture, MIT, signed by Microsoft. Use the inbox ConPTY only when they are missing. The
+    packaged one is the only one that keeps ptyro's side channels in order, lets ptyro answer
+    queries (OSC 10/11 for the outer colours, `CSI 16 t` for Claude Code), keeps sixel, leaves the
+    scrollback alone on resize and is 3.5 times faster, and it pins the `HPCON` layout.
+  - **Keys:** a Windows session sends kitty CSI u when its program has pushed kitty flags (ptyro's
+    emulator sees the push pass through), and otherwise win32-input-mode, which conhost asks for.
+    Plain VT works for everything but the keys only those two can tell apart. Sending CSI u to a
+    program that reads records breaks it.
+  - **Live upgrade:** possible without holder processes. The old daemon hands the new one, by
+    inheritance as `handoff.rs` does on Unix, each session's pipe ends, its three `HPCON` handles,
+    the child and its job object, and stops reading first. The owner's WIN0.5 (d) chose restart
+    and resume when holder processes looked like the only way.
 
 ### 20.9 Chrome shows a service worker's certificate, not the connection's
 

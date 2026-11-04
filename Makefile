@@ -28,7 +28,7 @@ WEB_STRICT ?= 1
 
 .DEFAULT_GOAL := help
 .PHONY: help rust-install build release install install-release test fmt fmt-check lint deny doc check ci clean tools \
-        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean scratchpad-demo orchestrate-demo changeset-demo verify-claude verify-structured spike-chat spike-chat-fts spike-wsl test-wsl check-windows test-windows tui-parity parity reset
+        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean scratchpad-demo orchestrate-demo changeset-demo verify-claude verify-structured spike-chat spike-chat-fts spike-wsl spike-conpty test-wsl check-windows test-windows tui-parity parity reset
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -156,6 +156,9 @@ spike-chat: ## CHAT0: try the chat engine's claims against the real Claude, Code
 
 spike-wsl: build ## WIN0.1: does WSL keep the daemon alive after the last terminal closes? Run inside WSL2: ARGS="start [label]", then (an hour later) check, clean; none = status
 	scripts/spike-wsl.sh $(ARGS)
+
+spike-conpty: ## WIN0.2/WIN0.3: play what ptyro needs through ConPTY (Windows' own and Microsoft's newer conpty.dll), test taking a pseudoconsole over, write spikes/conpty/REPORT.md; from WSL or Git Bash (ARGS=report: report again)
+	scripts/spike-conpty.sh $(ARGS)
 
 check-windows: ## Cross-check for Windows x64 and ARM64 with cargo-xwin (WIN0.4): the bundled C libraries today, the ptyro crates as WIN3 makes them build; TARGETS=x86_64|aarch64, XWIN_ACCEPT_LICENSE=1 once
 	TARGETS='$(TARGETS)' CRATES='$(CRATES)' sh scripts/check-windows.sh

@@ -2775,7 +2775,7 @@ done.
     were started from a terminal, whose `wslhost.exe` outlived the terminal and held the distro.
     What does hold it is a `wsl.exe` back into the distro, so the daemon now runs one (WIN2
     "Survival"). Left for later: Windows sleep and hibernate.
-  - [ ] **WIN0.2 ConPTY fidelity.** (R-WIN-09) `make spike-conpty`: a small Windows program that
+  - [x] **WIN0.2 ConPTY fidelity.** (R-WIN-09) [done 2026-11-03: SPEC §20.13, `spikes/conpty/REPORT.md`] `make spike-conpty`: a small Windows program that
     plays `ptyro-term`'s fixture streams through ConPTY and compares what comes out. Run it with
     and without `PSEUDOCONSOLE_PASSTHROUGH_MODE`, and with the conhost built into Windows against
     the `conpty.dll` from Microsoft's NuGet package. Check:
@@ -2788,9 +2788,28 @@ done.
     - real Claude Code and Codex screens, recorded and compared with the same versions on macOS.
 
     The results go into SPEC §20 and decide (b) or (c) in DD3.4 item 1.
-  - [ ] **WIN0.3 Taking over a pseudoconsole.** Can a second process, given duplicated handles,
+
+    **Answered (2026-11-03, Windows 11 25H2; SPEC §20.13).** The inbox conhost repaints its own
+    buffer. It sends ptyro's OSCs and mode switches ahead of their text, answers most queries
+    itself and drops OSC 10/11, re-encodes SGR, drops sixel, and repaints on resize, which adds or
+    loses history. The packaged conpty.dll passes the program's bytes through unchanged: in
+    order, every query passed on to ptyro, no repaint on resize, 3.5 times the throughput.
+    `PSEUDOCONSOLE_PASSTHROUGH_MODE` changes neither. Keys need care: kitty CSI u for programs
+    that push kitty flags, win32-input-mode for the rest (PSReadLine reads records; CSI u breaks
+    it). Recorded Claude Code, Codex and vim screens come through with the same text in both. The
+    live-agent comparison with macOS became the fixture replay: the same recorded bytes through
+    ConPTY into ptyro's emulator. **Recommends (c): bundle conpty.dll and OpenConsole.exe**
+    (about 1.2 MB per architecture, MIT, signed by Microsoft), with the inbox ConPTY as the
+    fallback. Owner to confirm (WIN0.5 g, below).
+  - [x] **WIN0.3 Taking over a pseudoconsole.** Can a second process, given duplicated handles,
     keep driving a pseudoconsole after the first exits? If yes, a re-exec-like upgrade is
     possible. If no, live upgrade on Windows means holder processes (R-WIN-13) or none.
+    **Yes (2026-11-03; SPEC §20.13), with both ConPTYs.** A process given the two pipe ends, the
+    `HPCON`'s three handles and the child's handle reads, types, resizes and closes after the
+    creator has exited, whether it inherited them at creation or had them copied in while it ran.
+    The one trap is the old process's pending read, which must be cancelled first. So a
+    re-exec-like live upgrade is possible on Windows without holder processes. This reopens
+    WIN0.5 (d): the owner chose restart and resume when holders looked like the only way.
   - [x] **WIN0.4 Cross-build.** `cargo xwin check` for `x86_64-pc-windows-msvc` and
     `aarch64-pc-windows-msvc` from this Mac: which crates build once the `compile_error!` moves
     from `ptyro-core` to the daemon side, and whether ring, the bundled SQLite and zstd build with
@@ -2818,6 +2837,12 @@ done.
       - **Release:** two more targets (x64, ARM64) and code signing (WIN12).
     - (c) **Setup, verify, worktree and `run` commands:** a per-project `shell = auto | pwsh | bash | cmd | sh`, `auto` by default (DD3.4 item 3).
     - (d) **Upgrade on Windows: restart and resume.** No holder processes. R-WIN-13 stays an idea.
+      *Reopened 2026-11-03 for the owner:* WIN0.3 found a live upgrade without holder processes
+      (the new daemon inherits each pseudoconsole's handles, as `handoff.rs` hands over fds on
+      Unix). Keep restart and resume, or make WIN9 a live upgrade?
+    - (g) *Proposed 2026-11-03, for the owner:* **bundle the packaged ConPTY** (conpty.dll and
+      OpenConsole.exe from Microsoft.Windows.Console.ConPTY, pinned, beside `ptyro.exe`), with the
+      inbox one as the fallback. WIN0.2's evidence is in SPEC §20.13.
     - (e) **Windows 11 only**, x64 and ARM64.
     - (f) **WSL2 is Tier 1 too.** ~~*The catch:* GitHub's hosted Windows runners are believed to offer only WSL1, because WSL2 needs nested virtualization [U, check in WIN2].~~ [checked 2026-11-03: `windows-latest` has WSL2 and boots Ubuntu 24.04 with systemd; CI's `wsl` job runs `make test-wsl` there. The rest of this item is moot.] Tier 1 WSL2 then needs either a self-hosted runner (a Windows 11 machine or VM with WSL2, registered to the repo; free apart from the machine) or a cloud VM size that supports nested virtualization (paid). Until one exists, `make test-wsl` runs by hand before each release.
     - Following from (b) and (f): once WIN ships, the ROADMAP convention "a milestone is not done until that demo works on Linux *and* macOS" becomes "Linux, macOS, Windows 11 and WSL2" (WIN14 changes it).

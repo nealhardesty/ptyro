@@ -26,8 +26,10 @@ function Install-Ptyro {
     # Windows PowerShell 5.1 may still offer TLS 1.0 first; GitHub needs 1.2.
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-    # The machine's own architecture, also from a 32-bit or emulated PowerShell.
-    $arch = $env:PROCESSOR_ARCHITEW6432
+    # The machine's own architecture. A process's environment names its own: an x64 PowerShell
+    # (or Git Bash) emulated on ARM64 says AMD64. The system's environment in the registry doesn't.
+    $arch = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' -ErrorAction SilentlyContinue).PROCESSOR_ARCHITECTURE
+    if (-not $arch) { $arch = $env:PROCESSOR_ARCHITEW6432 }
     if (-not $arch) { $arch = $env:PROCESSOR_ARCHITECTURE }
     switch ($arch) {
         'AMD64' { $triple = 'x86_64-pc-windows-msvc' }
@@ -63,7 +65,7 @@ function Install-Ptyro {
         }
         Write-Host "downloading ptyro $version for $triple"
         try { $zip = Get-Release "$name.zip" }
-        catch { throw "install: no download at $base/$name.zip (is $version released for $triple?)" }
+        catch { throw "install: no download at $base/$name.zip (is $version released for ${triple}?)" }
         try { $sums = Get-Release 'SHA256SUMS' }
         catch { throw "install: no checksums at $base/SHA256SUMS" }
 
