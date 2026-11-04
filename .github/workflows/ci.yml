@@ -42,7 +42,9 @@ jobs:
 
   # WSL2 is Tier 1 (SPEC §3.4): CI's main job inside a real WSL2 distro on a hosted Windows runner
   # (it has WSL2, systemd on: SPEC §20.10). The commit is cloned inside the distro, never checked
-  # out on Windows: CRLF line endings and the slow /mnt/d would both get in the way.
+  # out on Windows: CRLF line endings and the slow /mnt/d would both get in the way. The distro's
+  # disk is small: no incremental cache (rust-cache turns it off in the other jobs) and line
+  # tables only, or the link after the tests runs it out (ld segfaults, ext4 goes read-only).
   wsl:
     runs-on: windows-latest
     timeout-minutes: 60
@@ -54,6 +56,8 @@ jobs:
       - shell: wsl-bash {0}
         run: |
           set -e
+          export CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=line-tables-only
+          trap 'df -h / | tail -1; du -sh ~/ptyro/target 2>/dev/null' EXIT
           git init -q ~/ptyro && cd ~/ptyro
           git fetch -q --depth 1 https://github.com/${{ github.repository }} ${{ github.sha }}
           git checkout -q FETCH_HEAD
