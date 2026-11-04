@@ -2791,11 +2791,24 @@ done.
   - [ ] **WIN0.3 Taking over a pseudoconsole.** Can a second process, given duplicated handles,
     keep driving a pseudoconsole after the first exits? If yes, a re-exec-like upgrade is
     possible. If no, live upgrade on Windows means holder processes (R-WIN-13) or none.
-  - [ ] **WIN0.4 Cross-build.** `cargo xwin check` for `x86_64-pc-windows-msvc` and
+  - [x] **WIN0.4 Cross-build.** `cargo xwin check` for `x86_64-pc-windows-msvc` and
     `aarch64-pc-windows-msvc` from this Mac: which crates build once the `compile_error!` moves
     from `ptyro-core` to the daemon side, and whether ring, the bundled SQLite and zstd build with
     the xwin sysroot (H2 noted they fail with no Windows C compiler). This becomes
     `make check-windows` (WIN3).
+    **Done 2026-11-03** (from WSL, not the Mac: the same Linux host route; SPEC §20.11):
+    - ring, SQLite and zstd build for both targets. ring on ARM64 needs `scripts/xwin/clang`
+      (cargo-xwin's clang-cl flags in the form ring's GNU-style clang wants).
+    - With the `compile_error!` lifted, the client side needs about 65 small changes (file modes,
+      uids, `setsid`, process groups) and two designs: the client's transport (no Unix socket;
+      WIN3's `wsl://` goes over stdio) and how the TUI reads the outer terminal's colour replies
+      (`outer.rs` polls stdin's fd). The full table, crate by crate, is SPEC §20.11.
+    - `ptyro-tui` depends on `ptyro-pty` only for `CLIENT_ENV` and `local_time_hm`: moving those
+      to `ptyro-core` frees the whole client from Unix PTYs.
+    - `make check-windows` exists: today it checks the C libraries for both targets; WIN3 adds
+      each ptyro crate as it builds (`CRATES`), and puts it in `make test` and CI.
+    - Done natively? Not needed for the list (the compile errors are the same), and this
+      machine has no Build Tools. WIN3's first native build on Windows is still worth doing once.
   - [x] **WIN0.5 Owner decisions** (owner, 2026-10-31; in SPEC §3.4 as **[decided]**):
     - (a) **Repos live in Windows.** Native Windows is the goal, so all four tracks are in scope.
     - (b) **Native Windows is Tier 1.** *What it costs:*
@@ -2895,7 +2908,9 @@ done.
     - Ctrl-Q conflicts listed in `doctor`, as for VS Code (SPEC §20.5).
   - **`make check-windows`:** cargo-xwin builds both Windows targets from macOS or Linux. `make
     test` runs it when xwin is installed and says so when it isn't. CI gets a `windows-latest`
-    job that builds and runs the client crates' tests.
+    job that builds and runs the client crates' tests. [started 2026-11-03, WIN0.4] The target
+    exists and checks the bundled C libraries for both targets; add each crate to its `CRATES`
+    as it builds (SPEC §20.11 has the list and what each needs), then wire it into `make test`.
   - README: "Windows" section (install the client, point it at WSL).
 
   *Done when:* in Windows Terminal, `ptyro.exe` (no WSL shell open) shows the WSL daemon's
