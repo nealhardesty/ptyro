@@ -130,6 +130,10 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Repor
         wsl(ctx, &config, w, &mut r).await;
     }
     daemon(ctx, &config, quick, &mut r).await;
+    #[cfg(windows)]
+    if ctx.local {
+        conpty(&mut r);
+    }
     remote(ctx, &config, &mut r);
     scratchpad(ctx, &config, &mut r);
     shell(&config, &mut r);
@@ -815,6 +819,24 @@ fn stale_text(entries: &[ptyro_core::model::GcEntry], stale_days: u32) -> String
         if n == 1 { "" } else { "s" },
         why.join(", ")
     )
+}
+
+/// Which ConPTY a native Windows daemon's sessions run in (WIN5, SPEC §20.13), when it is the
+/// packaged one. Windows' own is the daemon's warning (shown under `daemon`, and in the TUI and
+/// the web), not said twice here.
+#[cfg(windows)]
+fn conpty(r: &mut Report) {
+    if let Some(dll) = ptyro_pty::packaged_conpty() {
+        r.add(
+            "windows",
+            "conpty",
+            Level::Ok,
+            format!(
+                "the packaged ConPTY ({}): programs' output passes through as it is",
+                dll.display()
+            ),
+        );
+    }
 }
 
 /// Inside Windows Terminal (`WT_SESSION`, from Windows or WSL): a key binding of its own that

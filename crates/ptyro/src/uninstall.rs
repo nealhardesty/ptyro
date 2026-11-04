@@ -730,7 +730,12 @@ fn remove_binary(path: &Path) -> Result<String, String> {
             .spawn();
     }
     let Some(dir) = path.parent() else { return Ok(String::new()) };
-    // install.ps1 renames a ptyro.exe it couldn't overwrite to ptyro.exe.old.
+    // The packaged ConPTY beside it (WIN5; the daemon, and so every OpenConsole.exe, has
+    // stopped by now), and what install.ps1 renamed aside when it couldn't overwrite a file.
+    for f in ["conpty.dll", "OpenConsole.exe"] {
+        let _ = std::fs::remove_file(dir.join(f));
+        let _ = std::fs::remove_file(dir.join(format!("{f}.old")));
+    }
     let _ = std::fs::remove_file(dir.join("ptyro.exe.old"));
     if std::fs::remove_dir(dir).is_err() {
         return Ok(String::new());

@@ -67,10 +67,16 @@ WINDOWS_TESTED := -p ptyro-core -p ptyro-protocol -p ptyro-term -p ptyro-store -
 conpty: ## Fetch Microsoft's packaged ConPTY (pinned, SHA-256 checked) that ptyro.exe ships with into target/conpty/ (INTO=<dir> ARCH=x86_64|aarch64 copies one beside a ptyro.exe)
 	INTO='$(INTO)' ARCH='$(ARCH)' sh scripts/conpty.sh
 
-test-windows: ## On Windows itself (CI's windows job): the client crates' tests, and the rest of the client (ptyro.exe included) compiled
-	$(CARGO) test --no-fail-fast $(WINDOWS_TESTED)
-	$(CARGO) check -p ptyro-agents -p ptyro-git --all-targets
+# The packaged ConPTY goes beside every test binary and ptyro.exe that starts sessions, and the
+# tests that need it are told it's there (they'd skip without it).
+WINDOWS_CONPTY_INTO := target/debug target/debug/deps
+
+test-windows: ## On Windows itself (CI's windows job): the client crates' and ptyro-pty's tests, a native daemon end to end in ConPTY (WIN5), the rest compiled
 	$(CARGO) build -p ptyro --bins
+	for d in $(WINDOWS_CONPTY_INTO); do INTO=$$d sh scripts/conpty.sh || exit 1; done
+	PTYRO_TEST_PACKAGED_CONPTY=1 $(CARGO) test --no-fail-fast $(WINDOWS_TESTED)
+	PTYRO_TEST_PACKAGED_CONPTY=1 $(CARGO) test --no-fail-fast -p ptyro --test win5
+	$(CARGO) check -p ptyro-agents -p ptyro-git -p ptyro-daemon -p ptyro-testkit --all-targets
 
 fmt: ## Format all code
 	$(CARGO) fmt --all

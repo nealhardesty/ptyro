@@ -60,9 +60,9 @@ jobs:
           make rust-install
           make test-wsl
 
-  # The Windows client (WIN3) on Windows itself: the client crates' tests, and ptyro.exe built
-  # (the daemon side is Unix's: SPEC §20.11). Line endings stay as committed: fixtures and
-  # scripts compare bytes.
+  # Windows itself: the client crates' tests (WIN3), and a native daemon end to end in ConPTY with
+  # the packaged ConPTY beside it (WIN5, `make test-windows`). Line endings stay as committed:
+  # fixtures and scripts compare bytes.
   windows:
     runs-on: windows-latest
     timeout-minutes: 60

@@ -1,7 +1,8 @@
 #!/bin/sh
 # Release tarball for one platform (ROADMAP M8.8): dist/ptyro-<version>-<target>.tar.gz with the
 # binary, shell completions, README, LICENSE and CHANGELOG, plus its .sha256. Windows gets a .zip
-# instead, with ptyro.exe and PowerShell's completions (WIN3; built on Windows, in Git Bash). Run
+# instead, with ptyro.exe, PowerShell's completions (WIN3; built on Windows, in Git Bash) and the
+# packaged ConPTY its sessions run in (conpty.dll, OpenConsole.exe: WIN5, `make conpty`). Run
 # via `make dist` (TRIPLE=<rust target triple> to cross-build; default: this machine).
 # `make dist` on a tag checks that the tag matches the crate version.
 set -eu
@@ -22,6 +23,10 @@ STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/$NAME/completions" dist
 cp "$BIN" README.md LICENSE "$STAGE/$NAME/"
+case "$TARGET" in
+  aarch64-pc-windows-*) INTO="$STAGE/$NAME" ARCH=aarch64 sh scripts/conpty.sh ;;
+  *-pc-windows-*) INTO="$STAGE/$NAME" ARCH=x86_64 sh scripts/conpty.sh ;;
+esac
 [ -f CHANGELOG.md ] && cp CHANGELOG.md "$STAGE/$NAME/"
 # Completions from the binary itself, when it runs here (not when cross-built).
 if "$BIN" --version >/dev/null 2>&1; then

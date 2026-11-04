@@ -372,6 +372,18 @@ async fn serve(
     if let Some(e) = config_error {
         daemon.warn(e);
     }
+    // Said where people look (doctor, the TUI's health badge, the web's Health page): sessions
+    // here run in Windows' own ConPTY, which repaints what programs write (SPEC §20.13).
+    #[cfg(windows)]
+    if ptyro_pty::packaged_conpty().is_none() {
+        daemon.warn(
+            "sessions use Windows' own ConPTY, which repaints programs' output: status can arrive \
+             out of order and colour queries go unanswered. ptyro.exe's folder should hold \
+             conpty.dll and OpenConsole.exe: install ptyro again (`irm \
+             https://raw.githubusercontent.com/nealhardesty/ptyro/master/scripts/install.ps1 | iex`)"
+                .into(),
+        );
+    }
     if let Some(e) = store_error {
         daemon.warn(e);
     }

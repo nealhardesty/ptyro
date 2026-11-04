@@ -31,7 +31,7 @@ ic renderer.
 
  Esc to cancel · Tab to amend
 ──── cursor CursorState { x: 1, y: 21, visible: false, shape: Block, blinking: false }
-──── modes TermModes { app_cursor: false, app_keypad: false, bracketed_paste: true, focus_events: true, alt_screen: false, show_cursor: false, mouse: Off, sgr_mouse: false, kitty: 5 }
+──── modes TermModes { app_cursor: false, app_keypad: false, bracketed_paste: true, focus_events: true, alt_screen: false, show_cursor: false, mouse: Off, sgr_mouse: false, kitty: 5, win32_input: false }
 ──── title Some("Golden.txt file creation")
 ──── ansi
 ␛[0mClaude Code's fullscreen renderer didn't finish starting last time on this machine, so this launch i␛[0m

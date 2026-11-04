@@ -94,6 +94,7 @@ fn modes(b: u8, c: u8) -> TermModes {
         },
         sgr_mouse: b & 64 != 0,
         kitty: c >> 3,
+        win32_input: b & 128 != 0,
     }
 }
 

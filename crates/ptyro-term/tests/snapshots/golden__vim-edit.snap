@@ -15,7 +15,7 @@ expression: "snapshot_text(&whole, &modes)"
 ~
 :set number                               3,13          All
 ──── cursor CursorState { x: 16, y: 2, visible: true, shape: Block, blinking: false }
-──── modes TermModes { app_cursor: true, app_keypad: true, bracketed_paste: true, focus_events: true, alt_screen: true, show_cursor: true, mouse: Off, sgr_mouse: false, kitty: 0 }
+──── modes TermModes { app_cursor: true, app_keypad: true, bracketed_paste: true, focus_events: true, alt_screen: true, show_cursor: true, mouse: Off, sgr_mouse: false, kitty: 0, win32_input: false }
 ──── title None
 ──── ansi
 ␛[0;93m  1 ␛[0malpha␛[0m
