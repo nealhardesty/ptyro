@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A ratchet on `.unwrap()` and `.expect(` in code that is not a test (ROADMAP H2.1).
 
-Counts them per crate, outside `#[cfg(test)]` modules, `tests.rs` files and `tests/`, and fails
+Counts them per crate, outside `#[cfg(test)]` (and `#[cfg(all(test, …))]`) modules, `tests.rs` files and `tests/`, and fails
 when a crate has more than `scripts/unwrap-baseline.txt` says. Fewer is welcome: run with
 `--update` to write the new, lower baseline. A new one needs a reason the code can't fail (say
 so in the `expect` message) and a raise of the baseline in the same change.
@@ -29,8 +29,9 @@ def count(crate: pathlib.Path) -> int:
         if f.name == "tests.rs" or "tests" in rel[:-1] or f"{crate.name}/src/{'/'.join(rel)}" in TEST_FILES:
             continue
         for line in f.read_text().splitlines():
-            if line.strip().startswith("#[cfg(test)]"):
-                break  # the tests are at the end of the file
+            # The tests are at the end of the file; a platform's own are `cfg(all(test, …))`.
+            if line.strip().startswith(("#[cfg(test)]", "#[cfg(all(test,")):
+                break
             code = line.split("//", 1)[0]
             n += len(PAT.findall(code))
     return n
