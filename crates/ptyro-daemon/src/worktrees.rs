@@ -637,6 +637,11 @@ impl Daemon {
                 .collect();
             futures::future::join_all(others.iter().map(|s| s.kill(None))).await;
         }
+        // In the shell the project's scripts are written for (WIN6): what's missing says how
+        // to get it.
+        let argv = cfg
+            .script_argv(&role, &command)
+            .map_err(|m| Error::new(ErrorCode::NotFound, format!("{}: {}", p.slug, m.message)))?;
         let target = (wt.clone(), p.clone());
         let workspace = self.home_workspace(None, Some(&p))?;
         // Scripts can't ask questions; a refusing guard still refuses.
@@ -645,7 +650,7 @@ impl Daemon {
         let name = self.free_name(&format!("{}.{label}", wt.name.trim_start_matches('@')));
         self.launch(Launch {
             id: SessionId::new(),
-            argv: ptyro_core::shell::command_argv(&ptyro_core::shell::default_shell(), &command),
+            argv,
             kind: SessionKind::Script,
             name,
             cwd: wt.path.clone(),

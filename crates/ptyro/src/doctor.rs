@@ -130,6 +130,7 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Repor
         wsl(ctx, &config, w, &mut r).await;
     }
     daemon(ctx, &config, quick, &mut r).await;
+    scripts(ctx, &mut r).await;
     #[cfg(windows)]
     if ctx.local {
         conpty(&mut r);
@@ -222,21 +223,6 @@ async fn wsl(ctx: &Ctx, config: &Config, w: &ptyro_core::wsl::Wsl, r: &mut Repor
                      than inside the distro. Clone it into the distro (~/dev/{}) and add that copy",
                     p.root.display(),
                     p.slug
-                ),
-            );
-        }
-        let Ok(pc) = ptyro_core::project::ProjectConfig::load(&p.root, &p.root) else { continue };
-        let crlf = crlf_scripts(&p.root, &pc.scripts);
-        if !crlf.is_empty() {
-            r.add(
-                S,
-                &p.slug,
-                Level::Warn,
-                format!(
-                    "{} {} Windows (CRLF) line endings: Linux runs it as `bash\\r` and fails. \
-                     Save it with LF endings (and `git config core.autocrlf input` stops it coming back)",
-                    crlf.join(", "),
-                    if crlf.len() == 1 { "has" } else { "have" }
                 ),
             );
         }
@@ -334,26 +320,53 @@ fn on_windows_drive(w: &ptyro_core::wsl::Wsl, root: &Path) -> bool {
     w.windows_path(root).is_some_and(|p| p.as_bytes().get(1) == Some(&b':'))
 }
 
-/// The files a project's scripts run (any word of a command naming a file in the repo) that have
-/// CRLF line endings.
-fn crlf_scripts(root: &Path, scripts: &ptyro_core::project::Scripts) -> Vec<String> {
-    let commands = [&scripts.setup, &scripts.archive, &scripts.after_turn]
-        .into_iter()
-        .flatten()
-        .chain(scripts.run.values().map(|r| &r.command));
-    let mut out: Vec<String> = Vec::new();
-    for word in commands.flat_map(|c| c.split_whitespace()) {
-        let word = word.trim_matches(['"', '\'']);
-        let word = word.strip_prefix("./").unwrap_or(word);
-        if word.starts_with('-') || word.starts_with('/') || out.iter().any(|o| o == word) {
-            continue;
+/// The projects' scripts (WIN6): bash scripts with Windows (CRLF) line endings, which bash
+/// can't run (anywhere, WSL and Git Bash included), each with the command that rewrites them;
+/// and on a native Windows daemon, a script that needs a shell Windows hasn't got.
+async fn scripts(ctx: &Ctx, r: &mut Report) {
+    const S: &str = "scripts";
+    let Ok(c) = ctx.connect(false).await else { return };
+    let Ok(Reply::Projects { projects }) = c.request(Request::ProjectList).await else { return };
+    for p in projects.iter().filter(|p| p.machine.is_none()) {
+        let Ok(pc) = ptyro_core::project::ProjectConfig::load(&p.root, &p.root) else { continue };
+        let crlf = pc.scripts.crlf_files(&p.root);
+        if !crlf.is_empty() {
+            r.add(S, &p.slug, Level::Warn, crlf_text(&p.slug, &crlf));
         }
-        let f = root.join(word);
-        if f.is_file() && std::fs::read(&f).is_ok_and(|b| b.windows(2).any(|p| p == b"\r\n")) {
-            out.push(word.to_owned());
+        if cfg!(windows) && ctx.local {
+            let mut roles: Vec<(String, String)> = [
+                ("setup", &pc.scripts.setup),
+                ("archive", &pc.scripts.archive),
+                ("after_turn", &pc.scripts.after_turn),
+            ]
+            .into_iter()
+            .filter_map(|(k, v)| v.clone().map(|v| (k.to_owned(), v)))
+            .collect();
+            roles.extend(
+                pc.scripts.run.iter().map(|(n, r)| (format!("run:{n}"), r.command.clone())),
+            );
+            if let Some((role, m)) = roles
+                .iter()
+                .find_map(|(role, line)| pc.script_argv(role, line).err().map(|m| (role, m)))
+            {
+                r.add(
+                    S,
+                    &format!("{} shell", p.slug),
+                    Level::Warn,
+                    format!("{role}: {}", m.message),
+                );
+            }
         }
     }
-    out
+}
+
+fn crlf_text(slug: &str, files: &[String]) -> String {
+    format!(
+        "{} {} Windows (CRLF) line endings, which bash can't run: `ptyro project line-endings {slug}` \
+         rewrites them with LF in every checkout",
+        files.join(", "),
+        if files.len() == 1 { "has" } else { "have" }
+    )
 }
 
 /// Shell sessions (WIN1, SPEC §8.7): the shell they run exists, and whether ptyro's integration
@@ -1340,8 +1353,10 @@ mod tests {
              [run.web]\ncommand = \"./run.sh\"\n[run.db]\ncommand = \"'scripts/setup.sh'\"\n",
         )
         .unwrap();
-        assert_eq!(super::crlf_scripts(t.path(), &scripts), ["scripts/setup.sh"]);
-        assert!(super::crlf_scripts(t.path(), &Default::default()).is_empty());
+        assert_eq!(scripts.crlf_files(t.path()), ["scripts/setup.sh"]);
+        assert!(ptyro_core::project::Scripts::default().crlf_files(t.path()).is_empty());
+        let text = super::crlf_text("api", &["scripts/setup.sh".to_owned()]);
+        assert!(text.contains("`ptyro project line-endings api`"), "{text}");
     }
 
     fn stale(name: &str, reason: &str, bytes: Option<u64>) -> ptyro_core::model::GcEntry {

@@ -40,7 +40,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 27 };
+pub const PROTO: Version = Version { major: 1, minor: 28 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -465,6 +465,11 @@ pub enum Request {
         fingerprint: String,
     },
     ProjectUntrust {
+        addr: String,
+    },
+    /// Rewrite with LF the files a project's scripts run with bash that have Windows (CRLF)
+    /// line endings, in its main checkout and every worktree (1.28, WIN6). `Notes` says what.
+    ProjectLineEndings {
         addr: String,
     },
     /// Git repositories under `discover.roots` (cached; `refresh` rescans).

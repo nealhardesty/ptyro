@@ -4037,8 +4037,12 @@ impl App {
                     _ => self.toast("only an agent session converts"),
                 }
             }
-            "project.remove" | "project.untrust" | "project.pin" | "project.unpin"
-            | "project.leave" => {
+            "project.remove"
+            | "project.untrust"
+            | "project.pin"
+            | "project.unpin"
+            | "project.leave"
+            | "project.line_endings" => {
                 let Some(p) = project.and_then(|p| self.project(&p).cloned()) else {
                     self.pick_project(None);
                     return;
@@ -4059,6 +4063,10 @@ impl App {
                     "project.untrust" => self.request(
                         Pending::Done("scripts no longer trusted".into()),
                         Request::ProjectUntrust { addr: p.id },
+                    ),
+                    "project.line_endings" => self.request(
+                        Pending::Done("line endings".into()),
+                        Request::ProjectLineEndings { addr: p.id },
                     ),
                     "project.unpin" => self.request(
                         Pending::Done("unpinned".into()),

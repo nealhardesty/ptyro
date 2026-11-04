@@ -51,6 +51,10 @@ pub fn command_line(program: &Path, args: &[String], cmd: &Path) -> io::Result<S
             quote_batch_arg(a, &mut line)?;
         }
         line.push('"');
+    } else if let Some(tail) = cmd_tail(program, args) {
+        quote_program(program, &mut line);
+        line.push(' ');
+        line.push_str(&tail);
     } else {
         quote_program(program, &mut line);
         for a in args {
@@ -62,6 +66,24 @@ pub fn command_line(program: &Path, args: &[String], cmd: &Path) -> io::Result<S
         }
     }
     Ok(line)
+}
+
+/// cmd.exe reads the text after `/c` (or `/k`) itself, not by the MSVC rules (a `\"` is two
+/// characters to it): its switches go as they are, and that text raw, in quotes when `/s` asks
+/// cmd to strip them. `None` for any other program, or a cmd.exe with no command.
+pub fn cmd_tail(program: &Path, args: &[String]) -> Option<String> {
+    // By either separator: a Windows path, read where `\` may not be one (tests on Unix).
+    let full = program.to_string_lossy();
+    let name = full.rsplit(['/', '\\']).next()?.to_ascii_lowercase();
+    if name != "cmd.exe" && name != "cmd" {
+        return None;
+    }
+    let at =
+        args.iter().position(|a| a.eq_ignore_ascii_case("/c") || a.eq_ignore_ascii_case("/k"))?;
+    let switches = args[..=at].join(" ");
+    let text = args[at + 1..].join(" ");
+    let quoted = args[..at].iter().any(|a| a.eq_ignore_ascii_case("/s"));
+    Some(if quoted { format!("{switches} \"{text}\"") } else { format!("{switches} {text}") })
 }
 
 fn nul(a: &str) -> io::Error {
@@ -193,6 +215,22 @@ mod tests {
             command_line(Path::new(r"C:\Program Files\x\x.exe"), &["-a".into(), "b c".into()], cmd);
         assert_eq!(l.unwrap(), r#""C:\Program Files\x\x.exe" -a "b c""#);
         assert!(command_line(Path::new("x.exe"), &["a\0b".into()], cmd).is_err());
+    }
+
+    #[test]
+    fn cmd_gets_its_command_text_as_written() {
+        let cmd = Path::new(r"C:\Windows\System32\cmd.exe");
+        let args = |a: &[&str]| a.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        // What `command_argv` makes for cmd: /s strips the quotes around the whole text.
+        let l = command_line(cmd, &args(&["/d", "/s", "/c", r#"echo "a b" & exit /b 3"#]), cmd);
+        assert_eq!(
+            l.unwrap(),
+            r#""C:\Windows\System32\cmd.exe" /d /s /c "echo "a b" & exit /b 3""#
+        );
+        // Without /s: the words as they are.
+        assert_eq!(cmd_tail(cmd, &args(&["/c", "dir", "/b"])).unwrap(), "/c dir /b");
+        assert_eq!(cmd_tail(Path::new("pwsh.exe"), &args(&["/c", "x"])), None);
+        assert_eq!(cmd_tail(cmd, &args(&["/d"])), None);
     }
 
     #[test]

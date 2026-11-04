@@ -2127,7 +2127,27 @@ Scripts are defined in the project config (§13.3): `setup`, `run.<name>` (named
 `default`), `archive` (before removal), `after_turn` (optional, after each agent turn — lint/format).
 
 - Run via `$SHELL -c` in the worktree, in their own PTY session (kind `script`), own process group,
-  with the env of §10.6.
+  with the env of §10.6. **[built WIN6]** In the shell they're written for, `[scripts] shell =
+  "auto" | "pwsh" | "bash" | "cmd" | "sh"` (`auto` by default; a project setting in the settings
+  panel). `auto`: a line whose first word is a `.ps1` file runs in PowerShell
+  (`-ExecutionPolicy Bypass`: Windows PowerShell's default refuses every script, and ptyro's
+  trust is the gate); a `.sh` file in bash; a script imported from another tool's config
+  (M5.10, written for bash) in bash; anything else in the default shell, `$SHELL -c` on Unix as
+  before, PowerShell on Windows (§3.4). On Windows, bash and sh are Git for Windows' (under
+  Program Files, `%LOCALAPPDATA%\Programs\Git`, or beside the `git` on `PATH`), never
+  `System32\bash.exe` (WSL's launcher). One that's missing is said with its fix (`winget install
+  --id Git.Git -e`), by the script's start and by `doctor` (`scripts <project> shell`). cmd's
+  command text goes raw (after `/c`): it doesn't read Rust's `\"` quoting. A shell other than
+  `auto` is part of the trust fingerprint (`auto` isn't, so scripts trusted before still are).
+  Verify checks (§15.6.5) resolve the same way; a change set's checks keep `sh -c` on Unix.
+- **[built WIN6] Line endings:** a bash script (a `.sh` file, or a `#!` line naming a POSIX
+  shell) named by a project's scripts with Windows (CRLF) line endings is a `doctor` finding
+  (`scripts <project>`, every platform: bash reads the `\r` as part of each command). `ptyro
+  project line-endings [P]` (TUI `project.line_endings`, the finding's ⏎; web: the project's ⋯,
+  and Health beside the finding; `Request::ProjectLineEndings`, protocol 1.28) rewrites them with
+  LF in the main checkout and every worktree (a temporary file, then a rename; links never
+  written through; `.bat`/`.cmd`, which want CRLF, and `.ps1` left alone), and says to commit
+  `*.sh text eol=lf` to `.gitattributes`.
 - **Trust:** scripts come from the repository and are arbitrary code. Before the first run — and
   after any change — ptyro shows the exact script text and asks to trust it. Trust is recorded as a
   SHA-256 fingerprint of the canonicalized `[scripts]` table per project. `ptyro project trust`.
@@ -2149,7 +2169,8 @@ Scripts are defined in the project config (§13.3): `setup`, `run.<name>` (named
     send back the fingerprint the user saw.
   - The TUI's wizard asks *before* creating the worktree, so `after_setup` still holds. A worktree
     whose checkout has different scripts than the one approved is reported as untrusted again.
-- **Script sessions** are named `<worktree>.<script>` and run `$SHELL -c` in the worktree with
+- **Script sessions** are named `<worktree>.<script>` and run `$SHELL -c` (WIN6: the shell
+  above) in the worktree with
   the §10.6 environment. They run under the worktree's profile; a guard that refuses still
   refuses, since a script can't answer a question.
 - **`after_turn`** runs with `wt run W after_turn`. The status engine calls it after each turn

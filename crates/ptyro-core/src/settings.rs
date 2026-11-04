@@ -622,6 +622,17 @@ const RUN_MODE: &[Choice] = &[
     c("exclusive", "starting one stops the other worktrees' run scripts"),
 ];
 
+const SCRIPT_SHELL: &[Choice] = &[
+    c(
+        "auto",
+        "a .ps1 file in PowerShell, a .sh file (or another tool's imported script) in bash, the rest in your default shell",
+    ),
+    c("pwsh", "PowerShell: pwsh, or Windows PowerShell where that's all there is"),
+    c("bash", "bash; on Windows, Git for Windows' Git Bash"),
+    c("cmd", "cmd.exe (Windows only)"),
+    c("sh", "sh; on Windows, Git Bash's"),
+];
+
 const CHAT_TITLE: &[Choice] = &[
     c("auto", "a short title from a small model after the first answer"),
     c("off", "the first line of the first message"),
@@ -768,7 +779,7 @@ pub const SETTINGS: &[Setting] = &[
     s("editors.*.inside", "scratchpad", Kind::Bool, "Open it as a ptyro session, for terminal editors."),
     // ── Daemon and recording ──
     // ── Shells ──
-    s("shell.command", "shells", Kind::Argv, "The shell new shell sessions run, like `pwsh -Login` for PowerShell. A bare bash, zsh, fish or PowerShell started any other way is a shell session too.").also("powershell pwsh zsh bash fish login terminal").or("your login shell").eg("pwsh -Login").new_only(),
+    s("shell.command", "shells", Kind::Argv, "The shell new shell sessions run, like `pwsh -Login` for PowerShell. A bare bash, zsh, fish or PowerShell started any other way is a shell session too.").also("powershell pwsh zsh bash fish login terminal").or("your login shell; on Windows PowerShell 7, else Windows PowerShell, else cmd").eg("pwsh -Login").new_only(),
     s("shell.integration", "shells", Kind::Bool, "Add ptyro's shell integration to the bash, zsh, fish and PowerShell sessions it starts, after your own startup files: prompt jumps in copy mode, working and idle, each command and its exit code, and the directory. Nothing to add to your rc file or $PROFILE.").also("osc 133 prompt marks shell-init profile rc").new_only(),
     s("daemon.scrollback_lines", "daemon", int(0, 1_000_000), "How many lines of history each session keeps to scroll back through. A very wide session keeps fewer, so one never holds more than 4 million cells (20,000 lines at 200 columns).").new_only().unit("lines"),
     s("daemon.frame_interval_ms", "daemon", int(1, 1000), "The shortest wait between screen updates sent to a client. Lower is smoother and busier.").adv().new_only().unit("ms"),
@@ -862,6 +873,7 @@ pub const SETTINGS: &[Setting] = &[
     s("scripts.archive", "scripts", Kind::Script, "Runs before a worktree is archived or removed.").or("none"),
     s("scripts.after_turn", "scripts", Kind::Script, "Runs after each agent turn, like a linter.").or("none"),
     s("scripts.run_mode", "scripts", pick(RUN_MODE), "Whether run scripts of different worktrees may run together."),
+    s("scripts.shell", "scripts", pick(SCRIPT_SHELL), "Which shell runs this project's scripts. Choosing one asks for the scripts' trust again: it changes what runs.").also("powershell pwsh bash git bash cmd sh windows interpreter"),
     s("scripts.run.*.command", "scripts", Kind::Script, "What it runs; $PTYRO_PORT is this worktree's port."),
     s("scripts.run.*.default", "scripts", Kind::Bool, "The one that starts when none is named."),
 ];

@@ -1009,3 +1009,46 @@ async fn tui_new_worktree_wizard() {
     let c = w.d.client().await.unwrap();
     assert_eq!(worktree(&c, "tool/spike").await.branch.as_deref(), Some("spike"));
 }
+
+/// WIN6: a project's scripts run in the shell they're written for (`[scripts] shell`), and a
+/// bash script with Windows (CRLF) line endings, which bash can't run, is rewritten with LF by
+/// `project line-endings` (in every checkout), after which it runs.
+#[tokio::test]
+async fn scripts_run_in_their_shell_and_crlf_scripts_are_fixed() {
+    let toml = "[scripts]\nshell = \"bash\"\n[scripts.run.which]\ncommand = \"echo bash-says-${BASH_VERSION:+yes}; sleep 30\"\n[scripts.run.crlf]\ncommand = \"./crlf.sh\"\n";
+    let w = World::new("[worktrees]\nfetch = false\n");
+    let root = w.repo(
+        "shells",
+        &[(".ptyro.toml", toml), ("crlf.sh", "#!/bin/sh\r\necho crlf-ran\r\nsleep 30\r\n")],
+    );
+    w.git(&root, &["update-index", "--chmod=+x", "crlf.sh"]);
+    std::fs::set_permissions(
+        root.join("crlf.sh"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    w.ok(&["project", "add", root.to_str().unwrap()]);
+    w.ok(&["project", "trust", "shells", "--yes"]);
+    let c = w.d.client().await.unwrap();
+    let run = |script: &str| Request::WorktreeRun {
+        addr: "shells/@root".into(),
+        script: Some(script.into()),
+        size: None,
+    };
+    let Reply::Session { info } = c.request(run("which")).await.unwrap() else { panic!() };
+    assert_eq!(info.argv[..2], ["bash", "-c"], "[scripts] shell = bash");
+    screen_with(&w.d, &c, &info.name, "bash-says-yes").await;
+    // The CRLF script: `#!/bin/sh\r` is no interpreter, and the doctor says how to fix it.
+    let doctor = w.ok(&["doctor"]);
+    assert!(doctor.contains("`ptyro project line-endings shells`"), "{doctor}");
+    let fixed = w.ok(&["project", "line-endings", "shells"]);
+    assert!(fixed.contains("crlf.sh now LF"), "{fixed}");
+    assert!(fixed.contains("eol=lf"), "how to keep it so: {fixed}");
+    assert_eq!(
+        std::fs::read_to_string(root.join("crlf.sh")).unwrap(),
+        "#!/bin/sh\necho crlf-ran\nsleep 30\n"
+    );
+    assert!(w.ok(&["project", "line-endings", "shells"]).contains("no script here"));
+    let Reply::Session { info } = c.request(run("crlf")).await.unwrap() else { panic!() };
+    screen_with(&w.d, &c, &info.name, "crlf-ran").await;
+}

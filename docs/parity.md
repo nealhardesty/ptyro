@@ -129,6 +129,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `project rm` | `project.remove` (asks first) | `project.remove`: a project's ⋯ menu (asks first) |
 | `project trust` | `project.trust` | `project.trust`: a project's page: review the scripts, then trust |
 | `project untrust` | `project.untrust` | `project.untrust`: a project's page |
+| `project line-endings` | `project.line_endings`; the health finding's ⏎ runs it | `project.line_endings`: a project's ⋯ → Fix scripts' line endings; Health offers it beside the finding |
 | `project config` | `project.config` (with where each value comes from, full sized) | `project.config`: a project's ⋯ menu, with where each value comes from |
 | `project pin` | `project.pin`: pick the profile | `project.pin`: a project's ⋯ menu: pick the profile |
 | `project unpin` | `project.unpin` | `project.pin`: a project's ⋯ menu → Unpin |

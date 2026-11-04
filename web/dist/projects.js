@@ -13,6 +13,7 @@ const ACTIONS = {
     "project.remove": "Forget a project (its worktrees stay on disk)",
     "project.trust": "Trust the project's scripts as they are now, so they run",
     "project.untrust": "Stop trusting the project's scripts",
+    "project.line_endings": "Rewrite the project's bash scripts that have Windows (CRLF) line endings with LF, in every checkout",
     "project.config": "The project's configuration, and where each value comes from",
     "project.pin": "Pin the project to a profile (its account)",
     "project.suggest": "What a first worktree could use: a setup script, files to copy",
@@ -191,6 +192,7 @@ function projectView(id) {
             { title: tip("project.config"), label: "Configuration", hint: "And where each value comes from", run: async () => { const r = await ask({ t: "project_config", addr: p.id }); if (r)
                     textSheet(`${p.slug}: configuration`, r.text); } },
             { title: tip("project.pin"), label: "Pin to a profile…", run: () => pinProject(p) },
+            { title: tip("project.line_endings"), label: "Fix scripts' line endings", hint: "Windows (CRLF) endings bash can't run", run: () => void fixLineEndings(p.id, p.slug) },
             { title: tip("radar"), label: "Collision radar", run: () => go(`#/radar/${enc(p.id)}`) },
             { title: tip("workspace.member"), label: "Workspaces…", run: () => projectWorkspaces(p) },
             { title: tip("project.remove"), label: "Forget this project", danger: true, run: () => removeProject(p) },
@@ -199,6 +201,13 @@ function projectView(id) {
                 projectScripts.reload(id); } }, "Stop trusting")
         : h("button", { class: "primary", title: tip("project.trust"), onclick: () => trustProject(p, scripts) }, "Review and trust…"))
         : h("p", { class: "sub" }, "This project has no scripts."))), section("Worktrees", h("div", { class: "rows" }, ...wts.map(worktreeRow)))));
+}
+/// Rewrite a project's bash scripts that have CRLF line endings, and say what was done.
+export async function fixLineEndings(id, slug) {
+    const r = await ask({ t: "project_line_endings", addr: id });
+    if (r)
+        textSheet(`${slug}: line endings`, r.notes.join("\n"));
+    return !!r;
 }
 function projectWorkspaces(p) {
     menu(`${p.slug}: workspaces`, [...data.workspaces.values()].map((w) => {

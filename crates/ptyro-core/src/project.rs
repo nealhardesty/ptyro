@@ -87,6 +87,9 @@ pub struct Scripts {
     pub after_turn: Option<String>,
     pub run_mode: RunMode,
     pub run: BTreeMap<String, RunScript>,
+    /// Which shell runs them (WIN6). Left out of the trust fingerprint while `auto`, so
+    /// scripts trusted before still are; choosing another changes what runs, so it asks again.
+    pub shell: crate::shell::ScriptShell,
 }
 
 impl Scripts {
@@ -157,13 +160,144 @@ impl Scripts {
 
     /// SHA-256 of the canonical JSON of the whole table (SPEC §10.5): any change re-asks.
     pub fn fingerprint(&self) -> String {
-        let canonical = serde_json::to_string(self).unwrap_or_default();
+        let canonical = serde_json::to_string(&self.trusted_view()).unwrap_or_default();
         let digest = Sha256::digest(canonical.as_bytes());
         digest.iter().map(|b| format!("{b:02x}")).collect()
     }
 }
 
+impl Scripts {
+    /// The files these scripts run with bash (a `.sh` file, or one whose `#!` line names a
+    /// POSIX shell) that have Windows (CRLF) line endings in `checkout`: bash reads the `\r`
+    /// as part of each command and fails. Paths relative to `checkout`. A `.bat`, `.cmd` or
+    /// `.ps1` file is left alone (cmd wants CRLF, PowerShell doesn't mind).
+    pub fn crlf_files(&self, checkout: &Path) -> Vec<String> {
+        let commands = [&self.setup, &self.archive, &self.after_turn]
+            .into_iter()
+            .flatten()
+            .chain(self.run.values().map(|r| &r.command));
+        let mut out: Vec<String> = Vec::new();
+        for word in commands.flat_map(|c| c.split_whitespace()) {
+            let word = word.trim_matches(['"', '\'']);
+            let word = word.strip_prefix("./").or_else(|| word.strip_prefix(".\\")).unwrap_or(word);
+            if word.is_empty() || word.starts_with('-') || out.iter().any(|o| o == word) {
+                continue;
+            }
+            let rel = Path::new(word);
+            if rel.is_absolute()
+                || rel.components().any(|c| matches!(c, std::path::Component::ParentDir))
+            {
+                continue;
+            }
+            let f = checkout.join(rel);
+            let Ok(meta) = std::fs::symlink_metadata(&f) else { continue };
+            if !meta.is_file() || meta.len() > 4 << 20 {
+                continue;
+            }
+            let Ok(bytes) = std::fs::read(&f) else { continue };
+            if bash_reads(rel, &bytes) && bytes.windows(2).any(|p| p == b"\r\n") {
+                out.push(word.to_owned());
+            }
+        }
+        out
+    }
+
+    /// What trust covers: every field as before `shell` existed, in the same order, and
+    /// `shell` after them only when it isn't `auto`, so a fingerprint taken before is the same.
+    fn trusted_view(&self) -> TrustedScripts<'_> {
+        TrustedScripts {
+            setup: &self.setup,
+            archive: &self.archive,
+            after_turn: &self.after_turn,
+            run_mode: self.run_mode,
+            run: &self.run,
+            shell: (!self.shell.is_auto()).then_some(self.shell),
+        }
+    }
+}
+
+/// Whether bash (or sh) is what runs this file: a `.sh` file, or a `#!` line naming a POSIX
+/// shell.
+fn bash_reads(path: &Path, bytes: &[u8]) -> bool {
+    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("sh")) {
+        return true;
+    }
+    let first = bytes.split(|b| *b == b'\n').next().unwrap_or_default();
+    let first = String::from_utf8_lossy(first);
+    first.starts_with("#!")
+        && ["sh", "bash", "zsh", "dash"]
+            .iter()
+            .any(|s| first.split(['/', ' ', '\r', '\t']).any(|w| w == *s))
+}
+
+/// Rewrite `files` (relative to `checkout`) with LF line endings: a temporary file beside each,
+/// then a rename, so a reader never sees half of one. Its permissions are kept. What was
+/// rewritten, relative.
+pub fn rewrite_lf(checkout: &Path, files: &[String]) -> std::io::Result<Vec<String>> {
+    let mut done = Vec::new();
+    for rel in files {
+        let f = checkout.join(rel);
+        let bytes = std::fs::read(&f)?;
+        let mut lf = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
+                i += 1;
+                continue;
+            }
+            lf.push(bytes[i]);
+            i += 1;
+        }
+        if lf == bytes {
+            continue;
+        }
+        let perms = std::fs::metadata(&f)?.permissions();
+        let tmp = f.with_extension(format!("ptyro-lf-{}", std::process::id()));
+        std::fs::write(&tmp, &lf)?;
+        std::fs::set_permissions(&tmp, perms)?;
+        std::fs::rename(&tmp, &f)?;
+        done.push(rel.clone());
+    }
+    Ok(done)
+}
+
+#[derive(Serialize)]
+struct TrustedScripts<'a> {
+    setup: &'a Option<String>,
+    archive: &'a Option<String>,
+    after_turn: &'a Option<String>,
+    run_mode: RunMode,
+    run: &'a BTreeMap<String, RunScript>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    shell: Option<crate::shell::ScriptShell>,
+}
+
 impl ProjectConfig {
+    /// Whether the script for `role` (`setup`, `archive`, `after_turn`, `run:<name>`) came from
+    /// another tool's committed config (M5.10), which writes for bash.
+    pub fn imported(&self, role: &str) -> bool {
+        let key = match role.strip_prefix("run:") {
+            Some(name) => format!("scripts.run.{name}"),
+            None => format!("scripts.{role}"),
+        };
+        [key.clone(), format!("{key}.command")]
+            .iter()
+            .filter_map(|k| self.origin.get(k))
+            .any(|f| f != FILE && f != LOCAL_FILE)
+    }
+
+    /// The argv `role`'s script line runs as here: `[scripts] shell`, `auto` by default (WIN6).
+    pub fn script_argv(
+        &self,
+        role: &str,
+        line: &str,
+    ) -> Result<Vec<String>, crate::shell::ShellMissing> {
+        let imported = self.imported(role);
+        crate::shell::ScriptEnv::here(|env| {
+            crate::shell::script_argv(self.scripts.shell, line, imported, env)
+        })
+    }
+
     /// What a person trusts when they trust a project's scripts: the scripts, and (when set)
     /// which of them is the verified-done check and whether it runs after every turn. With the
     /// defaults it is exactly [`Scripts::fingerprint`], so scripts trusted before still are.
@@ -172,7 +306,8 @@ impl ProjectConfig {
         if v.check.is_none() && !v.auto && v.max_bounces.is_none() {
             return self.scripts.fingerprint();
         }
-        let canonical = serde_json::to_string(&(&self.scripts, &self.verify)).unwrap_or_default();
+        let canonical = serde_json::to_string(&(&self.scripts.trusted_view(), &self.verify))
+            .unwrap_or_default();
         let digest = Sha256::digest(canonical.as_bytes());
         digest.iter().map(|b| format!("{b:02x}")).collect()
     }
@@ -430,6 +565,71 @@ review = "Review the diff against origin/main and list risks."
         )
         .unwrap_err();
         assert!(e.contains("command"), "{e}");
+    }
+
+    #[test]
+    fn bash_scripts_with_crlf_are_found_and_rewritten_and_nothing_else() {
+        let d = tempfile::tempdir().unwrap();
+        let w = |name: &str, text: &str| std::fs::write(d.path().join(name), text).unwrap();
+        w("setup.sh", "#!/bin/bash\r\necho hi\r\n");
+        w("build", "#!/usr/bin/env sh\r\nmake\r\n");
+        w("go.bat", "@echo off\r\n:top\r\n");
+        w("lf.sh", "echo fine\n");
+        let mut s = Scripts {
+            setup: Some("./setup.sh --fast && ./build".into()),
+            archive: Some("go.bat".into()),
+            ..Default::default()
+        };
+        s.run.insert("x".into(), RunScript { command: "sh lf.sh".into(), default: false });
+        let found = s.crlf_files(d.path());
+        assert_eq!(found, ["setup.sh", "build"], "the .bat keeps CRLF; lf.sh is fine");
+        let done = rewrite_lf(d.path(), &found).unwrap();
+        assert_eq!(done, found);
+        assert_eq!(
+            std::fs::read_to_string(d.path().join("setup.sh")).unwrap(),
+            "#!/bin/bash\necho hi\n"
+        );
+        assert!(s.crlf_files(d.path()).is_empty());
+        assert_eq!(
+            std::fs::read_to_string(d.path().join("go.bat")).unwrap(),
+            "@echo off\r\n:top\r\n"
+        );
+        // Outside the checkout is never looked at.
+        let out = Scripts { setup: Some("../x.sh /etc/y.sh".into()), ..Default::default() };
+        assert!(out.crlf_files(d.path()).is_empty());
+    }
+
+    #[test]
+    fn an_imported_script_is_known_as_one() {
+        let mut c = ProjectConfig::default();
+        c.origin.insert("scripts.setup".into(), ".conductor/settings.toml".into());
+        c.origin.insert("scripts.run.web.command".into(), FILE.into());
+        c.origin.insert("scripts.run.dev".into(), "conductor.json".into());
+        assert!(c.imported("setup"));
+        assert!(!c.imported("run:web"));
+        assert!(c.imported("run:dev"));
+        assert!(!c.imported("archive"));
+    }
+
+    #[test]
+    fn scripts_trusted_before_a_shell_could_be_chosen_stay_trusted() {
+        let mut s = Scripts {
+            setup: Some("./setup.sh".into()),
+            after_turn: Some("make lint".into()),
+            ..Default::default()
+        };
+        s.run.insert(
+            "web".into(),
+            RunScript { command: "npm run dev -- --port $PTYRO_PORT".into(), default: true },
+        );
+        // Taken with the code from before `[scripts] shell` (WIN6): it must not move.
+        assert_eq!(
+            s.fingerprint(),
+            "448325184a537bdb87009544cb0c4b8ad87ce2fd7c26c88b1e6eb124901c61dc"
+        );
+        // Choosing a shell changes what runs: trust is asked for again.
+        let bash = Scripts { shell: crate::shell::ScriptShell::Bash, ..s.clone() };
+        assert_ne!(bash.fingerprint(), s.fingerprint());
     }
 
     #[test]

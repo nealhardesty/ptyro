@@ -120,15 +120,18 @@ fn is_login(kind: ShellKind, args: &[String]) -> bool {
 pub fn default_shell() -> String {
     let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
     let path = std::env::var_os("PATH").unwrap_or_default();
-    default_shell_from(&var, &|prog| std::env::split_paths(&path).any(|d| d.join(prog).is_file()))
+    default_shell_from(cfg!(windows), &var, &|prog| {
+        std::env::split_paths(&path).any(|d| d.join(prog).is_file())
+    })
 }
 
 /// [`default_shell`] with the environment and the `PATH` lookup given.
 fn default_shell_from(
+    windows: bool,
     var: &dyn Fn(&str) -> Option<String>,
     on_path: &dyn Fn(&str) -> bool,
 ) -> String {
-    if cfg!(windows) {
+    if windows {
         ["pwsh.exe", "powershell.exe"]
             .into_iter()
             .find(|p| on_path(p))
@@ -171,6 +174,175 @@ pub fn command_argv(shell: &str, line: &str) -> Vec<String> {
 /// command): `sh -c` on Unix, the [`default_shell`] on Windows.
 pub fn command_shell(line: &str) -> Vec<String> {
     if cfg!(windows) { command_argv(&default_shell(), line) } else { command_argv("sh", line) }
+}
+
+/// Which shell runs a project's scripts (`[scripts] shell`, WIN6; RESEARCH DD3.4 item 3).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScriptShell {
+    /// By what the script is: a `.ps1` file is PowerShell's, a `.sh` file bash's, and so is a
+    /// script imported from another tool's config (they're written for bash); anything else
+    /// runs in the default shell ([`default_shell`]: `$SHELL` on Unix, PowerShell on Windows).
+    #[default]
+    Auto,
+    Pwsh,
+    Bash,
+    Cmd,
+    Sh,
+}
+
+impl ScriptShell {
+    pub const ALL: [ScriptShell; 5] = [Self::Auto, Self::Pwsh, Self::Bash, Self::Cmd, Self::Sh];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Pwsh => "pwsh",
+            Self::Bash => "bash",
+            Self::Cmd => "cmd",
+            Self::Sh => "sh",
+        }
+    }
+
+    pub fn is_auto(&self) -> bool {
+        *self == Self::Auto
+    }
+}
+
+/// What [`script_argv`] needs from the computer, given (so tests can say what's installed).
+pub struct ScriptEnv<'a> {
+    /// Windows' rules (else Unix's).
+    pub windows: bool,
+    pub var: &'a dyn Fn(&str) -> Option<String>,
+    pub is_file: &'a dyn Fn(&Path) -> bool,
+    /// Whether a program is on `PATH`.
+    pub on_path: &'a dyn Fn(&str) -> Option<PathBuf>,
+}
+
+impl ScriptEnv<'_> {
+    /// This computer.
+    pub fn here<R>(f: impl FnOnce(&ScriptEnv<'_>) -> R) -> R {
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let is_file = |p: &Path| p.is_file();
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let on_path = |prog: &str| {
+            std::env::split_paths(&path)
+                .flat_map(|d| crate::os::program_names(prog).into_iter().map(move |n| d.join(n)))
+                .find(|p| p.is_file())
+        };
+        f(&ScriptEnv { windows: cfg!(windows), var: &var, is_file: &is_file, on_path: &on_path })
+    }
+}
+
+/// What a script needs that this computer lacks, and the fix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellMissing {
+    pub shell: ScriptShell,
+    pub message: String,
+}
+
+/// The one shell a project's script line runs in, as an argv: [`ScriptShell`]'s rules, with
+/// `imported` for a script that came from another tool's config.
+pub fn script_argv(
+    choice: ScriptShell,
+    line: &str,
+    imported: bool,
+    env: &ScriptEnv<'_>,
+) -> Result<Vec<String>, ShellMissing> {
+    let shell = match choice {
+        ScriptShell::Auto => match first_word(line).rsplit('.').next().map(str::to_ascii_lowercase)
+        {
+            Some(ext) if ext == "ps1" => ScriptShell::Pwsh,
+            Some(ext) if ext == "sh" => ScriptShell::Bash,
+            _ if imported => ScriptShell::Bash,
+            _ => {
+                let on_path = |p: &str| (env.on_path)(p).is_some();
+                return Ok(command_argv(&default_shell_from(env.windows, env.var, &on_path), line));
+            }
+        },
+        other => other,
+    };
+    let missing = |message: String| ShellMissing { shell, message };
+    match shell {
+        ScriptShell::Auto => unreachable!("resolved above"),
+        ScriptShell::Pwsh => {
+            let ps = (env.on_path)("pwsh")
+                .or_else(|| env.windows.then(|| (env.on_path)("powershell")).flatten())
+                .ok_or_else(|| {
+                    missing(
+                        "this script is PowerShell's, and PowerShell isn't installed: \
+                     https://aka.ms/powershell (or set [scripts] shell)"
+                            .into(),
+                    )
+                })?;
+            // A trusted project's script runs whatever the execution policy (Windows
+            // PowerShell's default refuses every .ps1 file): ptyro's trust is the gate.
+            let mut argv = command_argv(&ps.to_string_lossy(), line);
+            argv.splice(2..2, ["-ExecutionPolicy".to_owned(), "Bypass".to_owned()]);
+            Ok(argv)
+        }
+        ScriptShell::Bash | ScriptShell::Sh if env.windows => {
+            let bash = git_bash(env).ok_or_else(|| missing(GIT_BASH_MISSING.into()))?;
+            let bash = bash.to_string_lossy().into_owned();
+            let prog = match bash.rsplit_once('\\') {
+                Some((dir, _)) if shell == ScriptShell::Sh => format!("{dir}\\sh.exe"),
+                _ => bash,
+            };
+            Ok(command_argv(&prog, line))
+        }
+        ScriptShell::Bash => Ok(command_argv("bash", line)),
+        ScriptShell::Sh => Ok(command_argv("sh", line)),
+        ScriptShell::Cmd if env.windows => {
+            let root = (env.var)("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
+            Ok(command_argv(&format!(r"{root}\System32\cmd.exe"), line))
+        }
+        ScriptShell::Cmd => Err(missing(
+            "[scripts] shell = \"cmd\" runs on Windows only: choose auto, bash or sh here".into(),
+        )),
+    }
+}
+
+/// What a script line starts with (a program or a script file), unquoted, `./` dropped.
+fn first_word(line: &str) -> &str {
+    let line = line.trim_start();
+    let word = match line.chars().next() {
+        Some(q @ ('"' | '\'')) => line[1..].split(q).next().unwrap_or(""),
+        _ => line.split_whitespace().next().unwrap_or(""),
+    };
+    word.strip_prefix("./").or_else(|| word.strip_prefix(".\\")).unwrap_or(word)
+}
+
+/// What a script that needs bash says when Windows has none.
+pub const GIT_BASH_MISSING: &str = "this script is bash's, and Windows has no bash for it: \
+    install Git for Windows, which brings Git Bash (`winget install --id Git.Git -e`), \
+    or set [scripts] shell for the project";
+
+/// Git for Windows' `bash.exe` (its `sh.exe` is beside it), where its installer puts it or
+/// beside the `git` on `PATH`. Never `System32\bash.exe`: that one starts WSL.
+pub fn git_bash(env: &ScriptEnv<'_>) -> Option<PathBuf> {
+    // Windows paths as strings: this runs (and is tested) where `\` may not be a separator.
+    let join = |dir: &str, rest: &str| format!("{}\\{rest}", dir.trim_end_matches('\\'));
+    let parent = |p: &str| p.rsplit_once('\\').map(|(d, _)| d.to_owned());
+    let mut candidates: Vec<String> = ["ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"]
+        .into_iter()
+        .filter_map(|k| (env.var)(k))
+        .map(|d| join(&d, r"Git\bin\bash.exe"))
+        .collect();
+    if let Some(local) = (env.var)("LOCALAPPDATA") {
+        candidates.push(join(&local, r"Programs\Git\bin\bash.exe"));
+    }
+    if let Some(dir) = (env.on_path)("git").and_then(|g| parent(&g.to_string_lossy())) {
+        // `Git\cmd\git.exe` (the installer's PATH entry) or `Git\bin\git.exe`.
+        candidates.push(join(&dir, "bash.exe"));
+        if let Some(up) = parent(&dir) {
+            candidates.push(join(&up, r"bin\bash.exe"));
+        }
+    }
+    let system = (env.var)("SystemRoot").map(|r| r.to_ascii_lowercase());
+    candidates.into_iter().map(PathBuf::from).find(|p| {
+        let lower = p.to_string_lossy().to_ascii_lowercase();
+        system.as_ref().is_none_or(|s| !lower.starts_with(s.as_str())) && (env.is_file)(p)
+    })
 }
 
 /// The argv that opens `path` in `editor`, a command line such as `$VISUAL` (`code --wait`,
@@ -513,15 +685,111 @@ mod tests {
             "COMSPEC" => Some(r"C:\Windows\system32\cmd.exe".to_owned()),
             _ => None,
         };
-        if cfg!(windows) {
-            assert_eq!(default_shell_from(&env, &|_| true), "pwsh.exe");
-            assert_eq!(default_shell_from(&env, &|p| p == "powershell.exe"), "powershell.exe");
-            assert_eq!(default_shell_from(&env, &|_| false), r"C:\Windows\system32\cmd.exe");
-            assert_eq!(default_shell_from(&|_| None, &|_| false), "cmd.exe");
-        } else {
-            assert_eq!(default_shell_from(&env, &|_| true), "/bin/zsh");
-            assert_eq!(default_shell_from(&|_| None, &|_| true), "/bin/sh");
-        }
+        assert_eq!(default_shell_from(true, &env, &|_| true), "pwsh.exe");
+        assert_eq!(default_shell_from(true, &env, &|p| p == "powershell.exe"), "powershell.exe");
+        assert_eq!(default_shell_from(true, &env, &|_| false), r"C:\Windows\system32\cmd.exe");
+        assert_eq!(default_shell_from(true, &|_| None, &|_| false), "cmd.exe");
+        assert_eq!(default_shell_from(false, &env, &|_| true), "/bin/zsh");
+        assert_eq!(default_shell_from(false, &|_| None, &|_| true), "/bin/sh");
+    }
+
+    /// A Windows computer as `script_argv` sees it: Git for Windows in Program Files (or not),
+    /// PowerShell 7 or only Windows PowerShell.
+    fn windows_env<R>(git: bool, pwsh: bool, f: impl FnOnce(&ScriptEnv<'_>) -> R) -> R {
+        let var = |k: &str| match k {
+            "ProgramFiles" => Some(r"C:\Program Files".to_owned()),
+            "SystemRoot" => Some(r"C:\Windows".to_owned()),
+            _ => None,
+        };
+        let is_file = move |p: &Path| git && p == Path::new(r"C:\Program Files\Git\bin\bash.exe");
+        let on_path = move |prog: &str| match prog {
+            "pwsh" | "pwsh.exe" if pwsh => {
+                Some(PathBuf::from(r"C:\Program Files\PowerShell\7\pwsh.exe"))
+            }
+            "powershell" | "powershell.exe" => {
+                Some(PathBuf::from(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"))
+            }
+            // WSL's launcher: never Git Bash.
+            "bash" => Some(PathBuf::from(r"C:\Windows\System32\bash.exe")),
+            _ => None,
+        };
+        f(&ScriptEnv { windows: true, var: &var, is_file: &is_file, on_path: &on_path })
+    }
+
+    fn unix_env<R>(f: impl FnOnce(&ScriptEnv<'_>) -> R) -> R {
+        let var = |k: &str| (k == "SHELL").then(|| "/bin/zsh".to_owned());
+        let on_path = |prog: &str| (prog == "pwsh").then(|| PathBuf::from("/usr/bin/pwsh"));
+        f(&ScriptEnv { windows: false, var: &var, is_file: &|_| false, on_path: &on_path })
+    }
+
+    #[test]
+    fn a_projects_scripts_run_in_the_shell_they_are_written_for() {
+        use ScriptShell::*;
+        let gb = r"C:\Program Files\Git\bin\bash.exe";
+        windows_env(true, true, |e| {
+            let run = |c, line: &str, imported| script_argv(c, line, imported, e).unwrap();
+            // Inline: the default shell, PowerShell 7 here.
+            assert_eq!(run(Auto, "npm ci", false)[..3], v(&["pwsh.exe", "-NoProfile", "-Command"]));
+            // A .sh file, quoted or behind ./, and anything imported: Git Bash.
+            assert_eq!(
+                run(Auto, "./scripts/setup.sh --fast", false),
+                v(&[gb, "-c", "./scripts/setup.sh --fast"])
+            );
+            assert_eq!(run(Auto, "'my dir/x.SH'", false)[0], gb);
+            assert_eq!(run(Auto, "npm ci", true)[0], gb, "imported scripts are bash's");
+            // A .ps1 file: PowerShell, whatever the execution policy.
+            assert_eq!(
+                run(Auto, r".\setup.ps1", false),
+                v(&[
+                    r"C:\Program Files\PowerShell\7\pwsh.exe",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    r".\setup.ps1"
+                ])
+            );
+            // Chosen: each one, sh beside Git Bash, cmd from System32.
+            assert_eq!(run(Sh, "make", false)[0], r"C:\Program Files\Git\bin\sh.exe");
+            assert_eq!(
+                run(Cmd, "dir", false),
+                v(&[r"C:\Windows\System32\cmd.exe", "/d", "/s", "/c", "dir"])
+            );
+            assert_eq!(run(Bash, "make", false)[0], gb);
+        });
+        // Without PowerShell 7, Windows PowerShell; without Git, bash scripts say what to do.
+        windows_env(false, false, |e| {
+            let ps = script_argv(Auto, "x.ps1", false, e).unwrap();
+            assert!(ps[0].ends_with("powershell.exe"), "{ps:?}");
+            let no = script_argv(Auto, "./setup.sh", false, e).unwrap_err();
+            assert_eq!(no.shell, Bash);
+            assert!(no.message.contains("winget install --id Git.Git"), "{}", no.message);
+            assert!(script_argv(Auto, "npm ci", true, e).is_err(), "System32's bash is WSL's");
+        });
+        unix_env(|e| {
+            let run = |c, line: &str, imported| script_argv(c, line, imported, e).unwrap();
+            assert_eq!(
+                run(Auto, "make test", false),
+                v(&["/bin/zsh", "-c", "make test"]),
+                "as before"
+            );
+            assert_eq!(run(Auto, "./setup.sh", false), v(&["bash", "-c", "./setup.sh"]));
+            assert_eq!(run(Auto, "npm ci", true), v(&["bash", "-c", "npm ci"]));
+            assert_eq!(run(Auto, "./setup.ps1", false)[0], "/usr/bin/pwsh");
+            assert_eq!(run(Sh, "make", false), v(&["sh", "-c", "make"]));
+            assert!(
+                script_argv(Cmd, "dir", false, e).unwrap_err().message.contains("Windows only")
+            );
+        });
+    }
+
+    #[test]
+    fn git_bash_is_found_beside_git_too() {
+        let var = |k: &str| (k == "SystemRoot").then(|| r"C:\Windows".to_owned());
+        let git = |prog: &str| (prog == "git").then(|| PathBuf::from(r"D:\Tools\Git\cmd\git.exe"));
+        let is_file = |p: &Path| p == Path::new(r"D:\Tools\Git\bin\bash.exe");
+        let e = ScriptEnv { windows: true, var: &var, is_file: &is_file, on_path: &git };
+        assert_eq!(git_bash(&e), Some(PathBuf::from(r"D:\Tools\Git\bin\bash.exe")));
     }
 
     #[test]

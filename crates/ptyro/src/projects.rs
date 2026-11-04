@@ -54,6 +54,12 @@ pub enum ProjectCmd {
         #[arg(add = ArgValueCandidates::new(crate::complete::projects))]
         project: Option<String>,
     },
+    /// Rewrite with LF the bash scripts the project's scripts run that have Windows (CRLF) line
+    /// endings, which bash can't run, in its main checkout and every worktree
+    LineEndings {
+        #[arg(add = ArgValueCandidates::new(crate::complete::projects))]
+        project: Option<String>,
+    },
     /// Print the project's effective config (.ptyro.toml + .ptyro.local.toml)
     Config {
         #[arg(add = ArgValueCandidates::new(crate::complete::projects))]
@@ -560,6 +566,16 @@ pub async fn project(ctx: &Ctx, cmd: ProjectCmd) -> Result<i32, Error> {
             }
             c.request(Request::ProjectTrust { addr, fingerprint: scripts.fingerprint }).await?;
             eprintln!("trusted; any change to them asks again");
+            Ok(0)
+        }
+        ProjectCmd::LineEndings { project } => {
+            let reply =
+                c.request(Request::ProjectLineEndings { addr: project_addr(project)? }).await?;
+            if let Reply::Notes { notes } = reply {
+                for n in notes {
+                    eprintln!("{n}");
+                }
+            }
             Ok(0)
         }
         ProjectCmd::Untrust { project } => {
