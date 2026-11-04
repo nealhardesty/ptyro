@@ -588,8 +588,6 @@ pub fn render(plan: &Plan, env: &Env) -> String {
         (true, None) => s.push_str(
             "  the daemon    is running (it didn't answer): it stops, and its sessions\n",
         ),
-        // Windows runs none: the daemon is WSL's (kept, as the plan says).
-        (false, _) if cfg!(windows) => {}
         (false, _) => s.push_str("  the daemon    is not running\n"),
     }
     for d in plan.dirs.iter().filter(|d| !d.keep) {
@@ -730,7 +728,12 @@ fn remove_binary(path: &Path) -> Result<String, String> {
             .spawn();
     }
     let Some(dir) = path.parent() else { return Ok(String::new()) };
-    // install.ps1 renames a ptyro.exe it couldn't overwrite to ptyro.exe.old.
+    // The packaged ConPTY beside it (WIN5; the daemon, and so every OpenConsole.exe, has
+    // stopped by now), and what install.ps1 renamed aside when it couldn't overwrite a file.
+    for f in ["conpty.dll", "OpenConsole.exe"] {
+        let _ = std::fs::remove_file(dir.join(f));
+        let _ = std::fs::remove_file(dir.join(format!("{f}.old")));
+    }
     let _ = std::fs::remove_file(dir.join("ptyro.exe.old"));
     if std::fs::remove_dir(dir).is_err() {
         return Ok(String::new());
@@ -881,11 +884,9 @@ async fn execute(ctx: &Ctx, env: &Env, plan: &Plan, opts: &Opts, json: bool) -> 
         let r = crate::service::uninstall(ctx, false).map(|_| String::new()).map_err(|e| e.message);
         step(&mut steps, json, "remove the login service", r);
     }
-    // The daemon, and what it holds: nothing is deleted under one that still runs. Windows has
-    // none of its own to stop.
-    let stopped = if cfg!(windows) {
-        true
-    } else {
+    // The daemon, and what it holds: nothing is deleted under one that still runs. On Windows
+    // that is a native daemon (WIN5); WSL's own ptyro is left alone, as the plan says.
+    let stopped = {
         let stop = crate::cli::stop_daemon(ctx, true, false).await;
         let stopped = stop.is_ok() && !daemon_running(&ctx.paths);
         step(

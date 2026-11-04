@@ -211,8 +211,9 @@ fn a_pr_with_no_checks_waits_out_the_grace_period() {
     w.until("the merge", || w.pr("api")["state"] == "MERGED");
     assert!(
         started.elapsed() >= Duration::from_millis(GRACE_MS - 500),
-        "merged after only {:?}",
-        started.elapsed()
+        "merged after only {:?}; gh calls:\n{}",
+        started.elapsed(),
+        w.gh_calls("api")
     );
     w.until("landed", || w.report("api")["set"]["phase"] == "landed");
 }

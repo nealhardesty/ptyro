@@ -3,9 +3,8 @@
 # macOS with cargo-xwin, for x64 and ARM64. No Windows machine or Visual Studio needed.
 #
 # It checks the Windows client (WIN3): every crate it is made of, with its tests, and the ptyro
-# binary (whose own tests need a daemon, so they are Unix's); and ptyro-pty, whose Windows side
-# is the seam ConPTY fills (WIN4, then WIN5). The rest of the daemon side (ptyro-daemon,
-# ptyro-testkit) isn't Windows' yet (track D).
+# binary (its tests need Unix; win5.rs runs on Windows itself); and the native daemon's crates (ptyro-pty, ptyro-daemon, ptyro-testkit: WIN5), each
+# with its tests. The tests themselves run on Windows (`make test-windows`, CI's windows job).
 #
 #   make check-windows                     x64 and ARM64
 #   make check-windows TARGETS=x86_64      one of them
@@ -19,7 +18,7 @@ set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 targets=${TARGETS:-"x86_64 aarch64"}
 # The Windows client's crates (SPEC §20.11), each with its tests.
-crates=${CRATES:-"ptyro-core ptyro-protocol ptyro-term ptyro-store ptyro-agents ptyro-git ptyro-meaning ptyro-run ptyro-drive ptyro-client ptyro-tui ptyro-pty"}
+crates=${CRATES:-"ptyro-core ptyro-protocol ptyro-term ptyro-store ptyro-agents ptyro-git ptyro-meaning ptyro-run ptyro-drive ptyro-client ptyro-tui ptyro-pty ptyro-daemon ptyro-testkit"}
 optional=${OPTIONAL:-}
 skip() { echo "check-windows: skipped: $1 (make check-windows says how)"; exit 0; }
 
@@ -67,7 +66,7 @@ pkgs=
 for c in $crates; do pkgs="$pkgs -p $c"; done
 cd "$root"
 for t in $targets; do
-  echo "check-windows: $t-pc-windows-msvc: the client crates with their tests, and ptyro.exe"
+  echo "check-windows: $t-pc-windows-msvc: every crate with its tests, and ptyro.exe"
   # shellcheck disable=SC2086
   cargo xwin check --target "$t-pc-windows-msvc" --all-targets $pkgs
   cargo xwin check --target "$t-pc-windows-msvc" -p ptyro --bins

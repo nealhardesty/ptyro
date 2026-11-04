@@ -154,7 +154,23 @@ Explorer). Sessions get Windows Terminal's own colours, and Shift+Enter works wi
 Settings: the screen's own (the look, keys, themes, the clipboard) are `ptyro.exe`'s; everything
 else is read by the daemon in WSL, so the settings panel marks those "daemon's" and opens the
 daemon's file to change them (`ptyro config set` of one says where it lives). Commands a daemon
-host runs (`daemon start`, `install-service`, `tour`) say to run them inside WSL.
+host runs (`install-service`, `tour`) say to run them inside WSL.
+
+**A daemon on Windows itself (preview).** ptyro can also run its daemon natively, with sessions
+in Windows' pseudoconsoles (ConPTY) and your repos on NTFS. It is still being built (shells,
+processes and agents on Windows come next), so WSL stays the default. To try it:
+
+```powershell
+ptyro config set client.default_remote local   # or once: ptyro --remote local …
+ptyro new                                      # starts the daemon, then a shell (PowerShell)
+```
+
+`local` means this computer's own daemon; `ptyro config unset client.default_remote` goes back
+to WSL. The zip ships Microsoft's packaged ConPTY (`conpty.dll`, `OpenConsole.exe`) beside
+`ptyro.exe`: it passes programs' output through untouched, where Windows' own repaints it, so
+`ptyro doctor` warns when those two files are missing. The daemon listens on a named pipe only
+you can open. Not there yet: a live `daemon upgrade` (stop and start it; agents' conversations
+can be resumed) and the foreground program's name and directory.
 
 ## Quick start
 
@@ -724,8 +740,9 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make scratchpad-demo` (`ARGS=tui\|clean`) | the scratchpad in a throwaway ptyro: items added, listed, ticked, restored; `tui` opens it |
 | `make verify-claude` | check the Claude adapter against the real Claude Code on your machine (one tiny turn) |
 | `make verify-structured` | check structured mode against the real agents here |
-| `make check-windows` (`TARGETS=x86_64\|aarch64`, `XWIN_ACCEPT_LICENSE=1` once) | cross-checks the Windows client for x64 and ARM64 from Linux or macOS with cargo-xwin (no Windows machine): every client crate with its tests, `ptyro-pty` (its Windows side), and `ptyro.exe`. Needs clang, lld and cargo-xwin, and says how to install what's missing. The first run downloads Microsoft's CRT and SDK (about 1 GB) under Microsoft's licence, which you accept with `XWIN_ACCEPT_LICENSE=1`. `make test` runs it too when the tools are there, and says so when they aren't |
-| `make test-windows` | on Windows itself (CI's `windows` job): the client crates' and `ptyro-pty`'s tests, the rest of the client compiled, and `ptyro.exe` built |
+| `make check-windows` (`TARGETS=x86_64\|aarch64`, `XWIN_ACCEPT_LICENSE=1` once) | cross-checks ptyro for Windows, x64 and ARM64, from Linux or macOS with cargo-xwin (no Windows machine): every crate with its tests, the native daemon's included, and `ptyro.exe` (its own tests are Unix's). Needs clang, lld and cargo-xwin, and says how to install what's missing. The first run downloads Microsoft's CRT and SDK (about 1 GB) under Microsoft's licence, which you accept with `XWIN_ACCEPT_LICENSE=1`. `make test` runs it too when the tools are there, and says so when they aren't |
+| `make conpty` (`INTO=<dir>`, `ARCH=x86_64\|aarch64`) | fetches Microsoft's packaged ConPTY (`conpty.dll`, `OpenConsole.exe`; one pinned NuGet version, its SHA-256 checked) into `target/conpty/<arch>/`, and with `INTO` copies one architecture's pair beside a `ptyro.exe`. The Windows zips and `make test-windows` use it |
+| `make test-windows` | on Windows itself (CI's `windows` job): the client crates' and `ptyro-pty`'s tests, a native daemon end to end in ConPTY (`tests/win5.rs`, with the packaged ConPTY beside it), the rest of the client compiled, and `ptyro.exe` built |
 | `make test-wsl` (`DISTRO=…`, `WSL_DIR=…`) | CI's main job (`make check`) inside WSL2, which CI also runs on a hosted Windows runner (the `wsl` job): inside the distro it checks this checkout; on Windows (Git Bash, MSYS2) it runs it in the distro through `wsl.exe` (default `~/dev/ptyro`) |
 | `make spike-conpty` (`ARGS=report`) | ROADMAP WIN0.2 and WIN0.3, from WSL or Git Bash on Windows: plays what ptyro needs (its OSCs, queries, keys, Ctrl+C, resizes, recorded Claude Code and Codex screens, a 2 MiB burst) through Windows' own ConPTY and Microsoft's packaged conpty.dll (fetched from NuGet, its signature checked), tests whether a second process can take a pseudoconsole over, and writes `spikes/conpty/REPORT.md` (SPEC §20.13). Smart App Control may refuse the unsigned spike; it says so |
 | `make spike-wsl` (`ARGS="start [label]"`, `check`, `clean`) | ROADMAP WIN0.1, run inside WSL2: three heartbeats (a plain process, a ptyro daemon started on demand, one run by a systemd user unit), then close every WSL terminal; an hour later `check` says how long each lived and writes a report with the WSL version and settings |

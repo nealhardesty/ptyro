@@ -14,7 +14,7 @@ expression: "snapshot_text(&whole, &modes)"
 
   Press enter to continue
 ──── cursor CursorState { x: 25, y: 10, visible: false, shape: Block, blinking: false }
-──── modes TermModes { app_cursor: false, app_keypad: false, bracketed_paste: true, focus_events: true, alt_screen: false, show_cursor: false, mouse: Off, sgr_mouse: false, kitty: 7 }
+──── modes TermModes { app_cursor: false, app_keypad: false, bracketed_paste: true, focus_events: true, alt_screen: false, show_cursor: false, mouse: Off, sgr_mouse: false, kitty: 7, win32_input: false }
 ──── title None
 ──── ansi
 ␛[0m

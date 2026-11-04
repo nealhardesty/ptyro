@@ -20,5 +20,9 @@ thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 
+# Who serves the daemon's named pipe (WIN5): ptyro-pty holds the Win32 calls.
+[target.'cfg(windows)'.dependencies]
+ptyro-pty.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true

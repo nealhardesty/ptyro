@@ -2114,14 +2114,8 @@ impl Daemon {
             t => config.chat.preset(t).unwrap_or_default(),
         };
         let dir = scratch(self, &info.id);
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            std::fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(&dir)
-                .map_err(|e| Error::internal(format!("{}: {e}", dir.display())))?;
-        }
+        ptyro_core::os::create_private_dirs(&dir)
+            .map_err(|e| Error::internal(format!("{}: {e}", dir.display())))?;
         let adapter = ptyro_agents::adapter_name(&config, &info.agent);
         let protocol = ptyro_agents::def(&config, &info.agent)
             .protocol
@@ -3303,15 +3297,12 @@ fn acp_server(name: &str, server: &serde_json::Value) -> serde_json::Value {
 /// Write `text` to `file`, readable by its owner alone (made so before anything is in it).
 fn write_private(file: &std::path::Path, text: &str) -> std::io::Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(file)?;
+    let mut f = ptyro_core::os::private(
+        std::fs::OpenOptions::new().write(true).create(true).truncate(true),
+    )
+    .open(file)?;
     // A file from before keeps its old mode: made private either way.
-    f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    ptyro_core::os::make_private(file)?;
     f.write_all(text.as_bytes())
 }
 
@@ -3734,9 +3725,7 @@ mod tests {
         assert_eq!(std::path::Path::new(cfg), dir.join("mcp.json"));
         assert!(std::fs::read_to_string(cfg).unwrap().contains("gh-mcp"));
         assert!(!a.iter().any(|x| x.contains("gh-mcp")));
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(cfg).unwrap().permissions().mode();
+        if let Some(mode) = ptyro_core::os::mode(&std::fs::metadata(cfg).unwrap()) {
             assert_eq!(mode & 0o777, 0o600);
         }
         // Codex: the shell on, the named server kept, the others off.

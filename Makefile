@@ -28,7 +28,7 @@ WEB_STRICT ?= 1
 
 .DEFAULT_GOAL := help
 .PHONY: help rust-install build release install install-release test fmt fmt-check lint deny doc check ci clean tools \
-        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean scratchpad-demo orchestrate-demo changeset-demo verify-claude verify-structured spike-chat spike-chat-fts spike-wsl spike-conpty test-wsl check-windows test-windows tui-parity parity reset
+        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean scratchpad-demo orchestrate-demo changeset-demo verify-claude verify-structured spike-chat spike-chat-fts spike-wsl spike-conpty test-wsl check-windows conpty test-windows tui-parity parity reset
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -64,10 +64,19 @@ test: ## Run all tests (every test binary runs, so one failure doesn't hide the 
 # (WIN4); the rest only compile there (agents and git run in the daemon, in WSL). SPEC §20.11.
 WINDOWS_TESTED := -p ptyro-core -p ptyro-protocol -p ptyro-term -p ptyro-store -p ptyro-meaning -p ptyro-run -p ptyro-drive -p ptyro-client -p ptyro-tui -p ptyro-pty
 
-test-windows: ## On Windows itself (CI's windows job): the client crates' tests, and the rest of the client (ptyro.exe included) compiled
-	$(CARGO) test --no-fail-fast $(WINDOWS_TESTED)
-	$(CARGO) check -p ptyro-agents -p ptyro-git --all-targets
+conpty: ## Fetch Microsoft's packaged ConPTY (pinned, SHA-256 checked) that ptyro.exe ships with into target/conpty/ (INTO=<dir> ARCH=x86_64|aarch64 copies one beside a ptyro.exe)
+	INTO='$(INTO)' ARCH='$(ARCH)' sh scripts/conpty.sh
+
+# The packaged ConPTY goes beside every test binary and ptyro.exe that starts sessions, and the
+# tests that need it are told it's there (they'd skip without it).
+WINDOWS_CONPTY_INTO := target/debug target/debug/deps
+
+test-windows: ## On Windows itself (CI's windows job): the client crates' and ptyro-pty's tests, a native daemon end to end in ConPTY (WIN5), the rest compiled
 	$(CARGO) build -p ptyro --bins
+	for d in $(WINDOWS_CONPTY_INTO); do INTO=$$d sh scripts/conpty.sh || exit 1; done
+	PTYRO_TEST_PACKAGED_CONPTY=1 $(CARGO) test --no-fail-fast $(WINDOWS_TESTED)
+	PTYRO_TEST_PACKAGED_CONPTY=1 $(CARGO) test --no-fail-fast -p ptyro --test win5
+	$(CARGO) check -p ptyro-agents -p ptyro-git -p ptyro-daemon -p ptyro-testkit --all-targets
 
 fmt: ## Format all code
 	$(CARGO) fmt --all

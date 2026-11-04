@@ -106,7 +106,7 @@ impl TempDaemon {
     fn wait_for_socket(&self) -> Result<()> {
         let start = Instant::now();
         while start.elapsed() < Duration::from_secs(10) {
-            if std::os::unix::net::UnixStream::connect(&self.paths.socket).is_ok() {
+            if accepts(&self.paths.socket) {
                 return Ok(());
             }
             std::thread::sleep(Duration::from_millis(20));
@@ -154,13 +154,17 @@ impl TempDaemon {
         bail!("timed out waiting for {needle:?}; screen was:\n{last}")
     }
 
-    /// Stop the daemon via SIGTERM and wait for it (also done on drop).
+    /// Stop the daemon gracefully (SIGTERM; on Windows, `ptyro daemon stop`) and wait for it
+    /// (also done on drop).
     pub fn stop(&mut self) {
         let Some(mut child) = self.child.take() else { return };
+        #[cfg(unix)]
         let _ = rustix::process::kill_process(
             rustix::process::Pid::from_raw(child.id() as i32).expect("pid"),
             rustix::process::Signal::TERM,
         );
+        #[cfg(windows)]
+        let _ = self.cmd().args(["daemon", "stop"]).output();
         let start = Instant::now();
         while start.elapsed() < Duration::from_secs(10) {
             if let Ok(Some(_)) = child.try_wait() {
@@ -189,6 +193,23 @@ impl TempDaemon {
 impl Drop for TempDaemon {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+/// Whether a daemon accepts connections at `socket`: a Unix socket that connects, or a Windows
+/// pipe that exists (every instance busy counts: someone serves it).
+fn accepts(socket: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        std::os::unix::net::UnixStream::connect(socket).is_ok()
+    }
+    #[cfg(windows)]
+    {
+        const ERROR_PIPE_BUSY: i32 = 231;
+        match std::fs::OpenOptions::new().read(true).write(true).open(socket) {
+            Ok(_) => true,
+            Err(e) => e.raw_os_error() == Some(ERROR_PIPE_BUSY),
+        }
     }
 }
 

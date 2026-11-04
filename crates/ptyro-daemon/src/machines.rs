@@ -346,20 +346,16 @@ impl Daemon {
 
     fn save_token(&self, name: &str, token: &str) -> Result<(), Error> {
         use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
         let path = self.token_path(name);
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| Error::internal(e.to_string()))?;
-            let _ =
-                std::fs::set_permissions(dir, std::os::unix::fs::PermissionsExt::from_mode(0o700));
+            let _ = ptyro_core::os::private_dir(dir);
         }
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)
-            .map_err(|e| Error::internal(format!("{}: {e}", path.display())))?;
+        let mut f = ptyro_core::os::private(
+            std::fs::OpenOptions::new().write(true).create(true).truncate(true),
+        )
+        .open(&path)
+        .map_err(|e| Error::internal(format!("{}: {e}", path.display())))?;
         f.write_all(token.as_bytes()).map_err(|e| Error::internal(e.to_string()))
     }
 

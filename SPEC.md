@@ -279,7 +279,7 @@ Boundary rules **[decided]**:
 | Linux x86_64 / aarch64 | Tier 1 |
 | macOS aarch64 / x86_64 | Tier 1 |
 | WSL2 | **Tier 1 [decided 2026-10-31, owner]** (Linux build). `make check` passes [V 2026-11-02]: WSL 2.6.2.0, kernel 6.6.87.2, Ubuntu 24.04.3, Windows 11 build 26200, systemd on, master at v0.0.46. All 73 test binaries pass, with bash 5.2 and zsh present but no fish or pwsh (`tests/win1.rs` skips those two), and no browser, so web-e2e didn't run. Survival after the last terminal (WIN0.1) is answered: WSL stops a distro about 15 s after the last Windows-side `wsl.exe` exits, systemd services and linger included, so the daemon holds WSL open itself while it runs (`[daemon] hold_wsl`, on by default; §20.10, WIN2). CI's `wsl` job runs `make test-wsl` on a hosted `windows-latest` runner, which has WSL2 (§20.10) |
-| Windows 11 native (x64, ARM64) | **Tier 1 [decided 2026-10-31, owner]. The client is built (WIN3, 2026-11-03): `ptyro.exe` drives the daemon in WSL (`--remote wsl://`, §16.2), the TUI included; the native daemon is not built yet** (ConPTY, named pipes; track D, RESEARCH DD3). It will bundle Microsoft's packaged ConPTY and upgrade live by handing pseudoconsoles over [decided 2026-11-04, owner; §20.13]. CI builds it and runs the client crates' tests on `windows-latest` (§20.11). Windows 10 is not supported |
+| Windows 11 native (x64, ARM64) | **Tier 1 [decided 2026-10-31, owner]. The client is built (WIN3, 2026-11-03): `ptyro.exe` drives the daemon in WSL (`--remote wsl://`, §16.2), the TUI included. The native daemon runs, opt-in (WIN5, 2026-11-04: ConPTY, a named pipe; `client.default_remote = local`); WSL's stays the default until shells, processes and agents work natively (WIN6–WIN8)** (track D, RESEARCH DD3). It will bundle Microsoft's packaged ConPTY and upgrade live by handing pseudoconsoles over [decided 2026-11-04, owner; §20.13]. CI builds it and runs the client crates' tests on `windows-latest` (§20.11). Windows 10 is not supported |
 
 Inside WSL, `ptyro_core::wsl` is the one rule (WIN2) [V 2026-11-02, WSL 2.6.2]: it is WSL if the kernel release (`/proc/sys/kernel/osrelease`) says `microsoft`, `WSL_DISTRO_NAME` is set, or interop is registered (`/proc/sys/fs/binfmt_misc/WSLInterop`). WSL1's release ends in `-Microsoft` and WSL2's says `microsoft-standard`. The distro comes from `WSL_DISTRO_NAME`, or from `wslpath -w /` (`\\wsl.localhost\<distro>\`) when that's missing: a systemd user unit, which is how `ptyro service install` runs the daemon, doesn't get the variable. About's `system` reads `linux x86_64, WSL2 (Ubuntu)`, its JSON has a `wsl` object, and `doctor` has a `wsl` section (WSL1 is a warning).
 
@@ -492,6 +492,10 @@ image is used to re-exec the *old* binary (kept at `state/daemon.prev`).
 
 - Open with `pty-process` (`Pty::new()`, `pts()`, `Command::spawn(pts)`): child becomes session
   leader with the PTY as controlling terminal (`setsid` + `TIOCSCTTY`).
+- **[built WIN5]** On Windows, `ptyro-pty`'s `windows.rs`: a pseudoconsole (the packaged ConPTY
+  beside `ptyro.exe`, else Windows' own) and a Job Object per session; signals mapped (INT is a
+  typed Ctrl+C, HUP/TERM close the console, KILL ends the job), the console closed when the job
+  is empty (which ends the output, as a PTY's last holder does). §20.13 has the facts.
 - Each child gets its **own process group**; signals go to the group (`killpg`) so tool subprocesses
   (dev servers, test runners) die with the session. **[built H2.7]** The leader is left a zombie
   (seen with `waitid(WNOWAIT)`) until no other process is in its group, then reaped. Its pid, and
@@ -609,6 +613,10 @@ against the **child's current modes** (only the daemon knows them):
 
 - `Key { code, mods, kind: press|repeat|release, text }` → `terminput` encoding:
   - if the child pushed kitty keyboard flags → kitty `CSI … u` per flags;
+  - **[built WIN5]** else, when the console host asked for win32-input-mode (`CSI ? 9001 h`,
+    what Windows' ConPTYs write first; the emulator follows it, alacritty doesn't), console
+    records `CSI Vk;Sc;Uc;Kd;Cs;Rc _`, down then up: Shift+Enter and Ctrl+Space reach PSReadLine
+    as themselves (§20.13);
   - else xterm encoding honouring DECCKM (app cursor) and DECKPAM (app keypad);
   - release/repeat events dropped unless the child asked for them.
 - `Mouse { kind, button, x, y, mods }` → only forwarded if the child enabled a mouse mode; encoded in
@@ -4050,7 +4058,10 @@ workspace, found by `$PTYRO_SCRATCHPAD`. ptyro never owns the only copy: it is a
 **[built WIN3]** On Windows (the client of a WSL daemon): config `%APPDATA%\ptyro\`, and data,
 state and runtime under `%LOCALAPPDATA%\ptyro\` (`data\`, `state\`, `run\`); there is no
 socket there. **[built WIN4]** An `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME` or
-`XDG_RUNTIME_DIR` that is set to an absolute path wins there too (`<it>\ptyro\`), as on Unix. A file "only its owner reads" is mode 0600 on Unix; on Windows these folders'
+`XDG_RUNTIME_DIR` that is set to an absolute path wins there too (`<it>\ptyro\`), as on Unix.
+**[built WIN5]** The daemon's "socket" there is a named pipe, `\\.\pipe\ptyro-<8 hex>`: a hash of
+the runtime folder, so one per user and per `PTYRO_HOME`. `PTYRO_SOCKET` must name a pipe
+(`\\.\pipe\…`) on Windows. A file "only its owner reads" is mode 0600 on Unix; on Windows these folders'
 inherited access list already keeps them to the user (`ptyro_core::os`). That config holds this
 client's own settings (`client.default_remote`, the TUI's look and keys); the daemon's is in WSL,
 as for any `--remote` client. Which is whose is `settings::read_by_client` (the client reads `ui.*`
@@ -5065,7 +5076,10 @@ works from Windows and, through interop, from inside WSL (which is how it is tes
 writes "there is no distribution" on stdout, where the protocol was expected, so a failed
 handshake asks `wsl.exe -l -q` (UTF-16, whatever `WSL_UTF8` says) and names the distros there
 are. `PTYRO_WSL` replaces `wsl.exe`. Variables cross both hops when listed in `WSLENV`.
-- **Where the daemon is:** `--remote`, else `PTYRO_REMOTE`, else `[client] default_remote`. On
+- **Where the daemon is:** `--remote`, else `PTYRO_REMOTE`, else `[client] default_remote`.
+  **[built WIN5]** `local` there is this computer's own daemon, on Windows the native one (over
+  its named pipe), and the only way a Windows client starts one by itself; with no remote, a
+  Windows client uses a native daemon already running but starts none. On
   Windows with none of them, the first command that needs a daemon (not `config`,
   `completions`, `shell-init`, `init`, `uninstall`, `backup`, `daemon`, `proxy`) asks each
   distro (WSL's order; `docker-desktop`, `rancher-desktop`, `podman-machine` left out) for
@@ -5577,7 +5591,7 @@ command): ptyro doesn't confine that.
 
 | Asset / threat | Mitigation |
 |---|---|
-| Socket hijack by other local users | dir `0700`, socket `0600`, peer-uid check on accept |
+| Socket hijack by other local users | dir `0700`, socket `0600`, peer-uid check on accept. **[built WIN5]** Windows: a named pipe whose every instance admits only the user's SID (`D:P(A;;GA;;;<sid>)`) and rejects remote clients; pipe names are one namespace per computer, so the client refuses a pipe whose server process runs as anyone else (`ptyro_pty::pipe`) |
 | Cloned repo runs arbitrary code | scripts/recipes require fingerprinted trust; agent executables only from user config |
 | Code ptyro runs for a repository: scripts, `after_turn`, verify checks, git (security review M3) | trust pins a script's *text*, not the files it calls, and agents edit those files: trusting `cargo test` trusts the tests. Scripts, `after_turn` and checks run as the user, with the daemon's environment and network, outside any agent sandbox; this is documented, not sandboxed (§10.5, §15.6.5, docs/config.md). Background git runs no repository code: `core.fsmonitor=false` always, `core.hooksPath=/dev/null` except for the operations the user asked for (commit, push, merge, rebase, cherry-pick, a new worktree), diffs with `--no-ext-diff --no-textconv` (§10.9) |
 | Session content sent to a model provider by summaries (UX1.3) | off by default; on, only a trimmed view goes (§11.2h), through the session's own profile, so its own account and provider. The profile's secret values and anything shaped like a credential are replaced before sending; the summariser runs with no tools, no MCP servers and no project directory |
@@ -6781,6 +6795,24 @@ judges the output with ptyro's own sniffer and emulator; the full tables are in
   `ReadFile` on the output pipe swallowed a chunk as it exited, in 2 of 10 runs. A handover must
   cancel its reader (`CancelIoEx`) and pass on what it already read. The layout is internal, but
   it hasn't changed since Windows 10 1809, and bundling conpty.dll pins it. [V]
+- **Built (WIN5, 2026-11-04)** [V on Windows 11 25H2, x64, unless marked]:
+  - `ptyro-pty`'s tests run natively there: 18 with the packaged ConPTY beside the test binary,
+    17 with Windows' own (the OSC-order test needs the packaged one). They cover a program's exit
+    code, typing and resizing (`mode con` reports 100 columns), Ctrl+C reaching `ping`, a stop
+    that ends a program and the one it started, a `.cmd` on the PATH given `50% & more`, and a
+    missing program named in the error.
+  - The pinned package (Microsoft.Windows.Console.ConPTY 1.25.260930003, SHA-256
+    `02b07b34…ae7ee`): its four files are Microsoft-signed (`Get-AuthenticodeSignature`).
+  - A release `ptyro.exe` with the packaged ConPTY beside it: `--remote local` started a daemon
+    on `\\.\pipe\ptyro-<hash>`; `new`, `read`, `ls --json` (the Windows cwd) and `kill` worked,
+    and a session saw `PTYRO=1`, `TERM=xterm-256color`.
+  - An anonymous pipe can't be overlapped, so each session's pipes go through tokio's blocking
+    pool (one waiting read per session). The console host keeps the output pipe open after the
+    program exits: the console is closed once the job is empty, and that ends the output.
+  - A process started with an empty `STARTUPINFO` std handle set (`STARTF_USESTDHANDLES`, none
+    given) writes to its console even when the daemon's stdout is a pipe.
+  - Smart App Control refused the unsigned debug `ptyro.exe` that carries the daemon, and ran
+    the release build (§20.12).
 - **What it decides** (DD3.4; decided by the owner 2026-11-04, ROADMAP WIN0.5 d and g) **[decided]**:
   - **The PTY: (c).** Bundle the packaged conpty.dll and OpenConsole.exe: about 1.2 MB per
     architecture, MIT, signed by Microsoft. Use the inbox ConPTY only when they are missing. The

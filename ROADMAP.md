@@ -2983,16 +2983,25 @@ done.
     - Found: the TUI's "run a command" sent the *client's* `$SHELL` and the web `sh -c` to the daemon, which a Windows client would get wrong for WSL. They now send the line (`SpawnSpec.command`, protocol 1.27) and the daemon runs it through its own shell; it needs full scope from a device, like any command line.
     - Found: `ptyro config edit` and `cs contract edit` ran `sh -c`, which a Windows client doesn't have; `editor_command` quotes the path for PowerShell or cmd there.
     - Kept on `sh`, each for its task: Claude Code's status line (Claude runs it through bash everywhere: WIN8), the inspector's "commit in editor" (`"$@"`: WIN6), a verify check's `exec 2>&1` (WIN6), ssh remotes (WIN11), and what runs inside WSL.
-- [ ] **WIN5 ConPTY sessions and named pipes** (R-WIN-09, R-WIN-10) **L**
-  - The ConPTY backend:
-    - `CreatePseudoConsole` and `ResizePseudoConsole`, with overlapped pipe I/O (or one reader thread per session, if WIN0.2 says so);
-    - a Job Object per session that kills the whole tree;
-    - Ctrl+C, exit codes, `ClosePseudoConsole` on terminate;
-    - PATHEXT resolution, with `.cmd`/`.bat` wrapped in `cmd.exe /d /c` and escaped as Rust's std does;
-    - the bundled `conpty.dll` + `OpenConsole.exe` (WIN0.5 g), found beside `ptyro.exe`; the inbox ConPTY when they are missing, which `doctor` reports;
-    - keys: kitty CSI u to a program that pushed kitty flags, win32-input-mode otherwise (SPEC §20.13).
-  - The daemon listens on `\\.\pipe\ptyro-<user SID hash>[-instance]` with a user-only DACL and `PIPE_REJECT_REMOTE_CLIENTS`. The client's pid is recorded where the Unix code records the peer. `PTYRO_SOCKET` names a pipe on Windows.
-  - Status sources (OSC 7501, 133, 9, 777, hooks) checked end to end with the fake agent under ConPTY.
+- [x] **WIN5 ConPTY sessions and named pipes** (R-WIN-09, R-WIN-10) **L** [built 2026-11-04; the native daemon is opt-in, WSL's stays the default (owner, 2026-11-04): `client.default_remote = local`]
+  - ~~The ConPTY backend~~ [built] in `ptyro-pty`'s `windows.rs` (SPEC §20.13 "Built"):
+    - ~~`CreatePseudoConsole` and `ResizePseudoConsole`, with overlapped pipe I/O (or one reader thread per session, if WIN0.2 says so);~~ anonymous pipes can't be overlapped: they go through tokio's blocking pool;
+    - ~~a Job Object per session that kills the whole tree;~~ `KILL_ON_JOB_CLOSE`, the program suspended until it is in the job; a structured agent's (on pipes) too (`ptyro_pty::contain`);
+    - ~~Ctrl+C, exit codes, `ClosePseudoConsole` on terminate;~~ INT types Ctrl+C, HUP/TERM close the console, KILL ends the job; the console closes itself once the job is empty, which ends the output;
+    - ~~PATHEXT resolution, with `.cmd`/`.bat` wrapped in `cmd.exe /d /c` and escaped as Rust's std does;~~ on the child's PATH; System32's cmd.exe, `%` neutralised, line breaks refused (`cmdline.rs`, tested on Unix too);
+    - ~~the bundled `conpty.dll` + `OpenConsole.exe` (WIN0.5 g), found beside `ptyro.exe`; the inbox ConPTY when they are missing, which `doctor` reports;~~ `make conpty` (pinned, SHA-256), in the zips, installed and uninstalled; the daemon warns without them (doctor, TUI, web);
+    - ~~keys: kitty CSI u to a program that pushed kitty flags, win32-input-mode otherwise (SPEC §20.13).~~ the emulator follows `?9001h`; `encode_key` sends console records then.
+  - ~~The daemon listens on `\\.\pipe\ptyro-<user SID hash>[-instance]` with a user-only DACL and `PIPE_REJECT_REMOTE_CLIENTS`. The client's pid is recorded where the Unix code records the peer. `PTYRO_SOCKET` names a pipe on Windows.~~ [built] The name hashes the user's runtime folder (per user and per `PTYRO_HOME`); the DACL admits only the user's SID; and since pipe names are one namespace, the client refuses a pipe another user serves (`ptyro_pty::pipe`). `listen.rs` is the seam.
+  - ~~Status sources (OSC 7501, 133, 9, 777, hooks) checked end to end with the fake agent under ConPTY.~~ [built] `tests/win5.rs` in CI's `windows` job, with the packaged ConPTY beside the binaries.
+  - **Found while building it:**
+    - the daemon itself builds for Windows now (its `compile_error!` is gone): file modes through `ptyro_core::os` (new: `symlink`, `allocated`), stopping on Ctrl+C/Break/close/shutdown; the handoff, the WSL hold and Claude's inbox socket stay Unix's (WIN9, WSL only, WIN8);
+    - `ptyro.exe` carries the daemon; `daemon start` works there; `local` is a remote value meaning this computer's own daemon, the only way Windows starts one by itself;
+    - the folder a Windows client sends a native daemon is the Windows path (verbatim prefixes dropped); the distro's only for a daemon elsewhere;
+    - the fake agent runs on Windows (`ptyro_pty::console`: raw input, size, input polling);
+    - Smart App Control here refused the unsigned debug `ptyro.exe` with the daemon in it and ran the release build: hand checks use release builds (§20.12).
+    - ~~`cs land` measured a PR's no-checks grace and its one-hour limit on the wall clock~~ [fixed]: in WSL2 that clock was seen 2 s ahead of the monotonic one after 30 s, which ended the grace early (`tests/land.rs` failed 2 in 5 here). It uses `Instant` now.
+    - **Not fixed, for its own change:** when reading the PR's head commit fails, `land_pr` merges without `--match-head-commit`, so a push since the checks can be merged unseen. Seen once in 20 runs of `tests/land.rs` here, under parallel load (0 in 38 on master, so possibly timing alone). It should poll again instead, which needs the fake `gh` to give every PR a `headRefOid`.
+  - **Left for later:** `is_raw` and the foreground program's name and directory (WIN7: the console's modes and process list); `daemon upgrade` says WIN9 and how to restart; hooks through Git Bash's `sh` as Claude uses it, with `ptyro.exe`'s path quoted for it (WIN8 checks real agents).
 - [ ] **WIN6 Shells and commands** (R-WIN-11) **M**
   - Default interactive shell `pwsh.exe` → `powershell.exe` → `%COMSPEC%`, changeable in the settings panel.
   - Per-project `shell = auto | pwsh | bash | cmd | sh` (schema entry), with `auto` choosing by extension: `.ps1` → pwsh, `.sh` → bash, inline → the default shell.

@@ -20,9 +20,11 @@ pty-process.workspace = true
 rustix.workspace = true
 libc.workspace = true
 
-# Local time on Windows (`probe.rs`): the time crate's local offset, sound there.
+# Local time on Windows (`probe.rs`): the time crate's local offset, sound there. ConPTY, Job
+# Objects and named pipes: windows-sys (WIN5).
 [target.'cfg(windows)'.dependencies]
 time = { workspace = true, features = ["local-offset"] }
+windows-sys.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

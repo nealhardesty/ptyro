@@ -36,6 +36,9 @@ pub struct TermModes {
     /// SGR (1006) mouse encoding; otherwise legacy X10.
     pub sgr_mouse: bool,
     pub kitty: u8,
+    /// win32-input-mode (`CSI ? 9001 h`): keys as console records, which Windows' console
+    /// hosts ask for (WIN5, SPEC §20.13). Kitty flags, when a program pushed some, win.
+    pub win32_input: bool,
 }
 
 impl TermModes {
@@ -71,6 +74,7 @@ impl TermModes {
             mouse,
             sgr_mouse: m.contains(TermMode::SGR_MOUSE),
             kitty,
+            win32_input: false,
         }
     }
 

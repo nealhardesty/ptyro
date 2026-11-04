@@ -22,6 +22,7 @@ pub static FRAMES_SENT: AtomicU64 = AtomicU64::new(0);
 static CRASH_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 /// The running totals, for the handoff image.
+#[cfg_attr(windows, allow(dead_code))] // the live upgrade's: Unix until WIN9
 pub fn counters() -> [u64; 3] {
     [
         BYTES_READ.load(Ordering::Relaxed),

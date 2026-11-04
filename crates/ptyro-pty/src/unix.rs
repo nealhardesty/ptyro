@@ -15,6 +15,8 @@ pub type Reader = pty_process::OwnedReadPty;
 pub type Writer = pty_process::OwnedWritePty;
 /// A duplicate of the PTY's master fd, for the probes.
 pub type Master = OwnedFd;
+/// The PTY's program.
+pub type Child = tokio::process::Child;
 
 fn pty_size(s: TermSize) -> pty_process::Size {
     pty_process::Size::new(s.rows, s.cols)
@@ -116,6 +118,12 @@ pub fn foreground_pid(master: &Master) -> Option<u32> {
 pub fn exit_parts(status: &std::process::ExitStatus) -> (Option<i32>, Option<i32>) {
     use std::os::unix::process::ExitStatusExt;
     (status.code(), status.signal())
+}
+
+/// A program started on pipes, as a session's [`Child`]: already its own process group
+/// (`own_group`), so nothing to add on Unix.
+pub fn contain(child: tokio::process::Child) -> io::Result<Child> {
+    Ok(child)
 }
 
 /// Start `cmd` in a process group of its own, so stopping the group reaches what it starts.

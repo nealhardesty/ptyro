@@ -14,6 +14,8 @@
 //! runtime didn't spawn them. The listening socket never closes, so clients and hooks queue in
 //! its backlog for the few milliseconds it takes. If the new binary refuses the image (another
 //! version), it re-execs `daemon.prev`, which reads its own image.
+// The live upgrade is Unix's until Windows hands pseudoconsoles over (WIN9).
+#![cfg_attr(windows, allow(dead_code, unused_imports))]
 
 use ptyro_core::sync::MutexExt;
 use std::collections::HashMap;
@@ -71,19 +73,23 @@ pub struct Inherited {
 /// Children we didn't spawn in this image (inherited across the re-exec): reaped on SIGCHLD.
 #[derive(Default)]
 pub struct Reaper {
-    pids: Mutex<HashMap<u32, oneshot::Sender<ptyro_pty::handoff::Ended>>>,
+    pids: Mutex<HashMap<u32, oneshot::Sender<Ended>>>,
 }
 
+/// How an inherited child ended: (exit code, terminating signal).
+pub type Ended = (Option<i32>, Option<i32>);
+
 impl Reaper {
-    pub fn watch(&self, pid: u32) -> oneshot::Receiver<ptyro_pty::handoff::Ended> {
+    pub fn watch(&self, pid: u32) -> oneshot::Receiver<Ended> {
         let (tx, rx) = oneshot::channel();
         self.pids.locked().insert(pid, tx);
         rx
     }
 
+    #[cfg(unix)]
     fn sweep(&self) {
         let mut pids = self.pids.locked();
-        let done: Vec<(u32, ptyro_pty::handoff::Ended)> = pids
+        let done: Vec<(u32, Ended)> = pids
             .keys()
             .filter_map(|&p| match ptyro_pty::handoff::try_reap(p) {
                 Ok(Some(e)) => Some((p, e)),
@@ -99,7 +105,13 @@ impl Reaper {
         }
     }
 
+    /// Reap on every SIGCHLD, and every few seconds in case one was coalesced away. Windows has
+    /// no inherited children until its live upgrade (WIN9).
+    #[cfg(windows)]
+    pub fn start(self: &Arc<Self>) {}
+
     /// Reap on every SIGCHLD, and every few seconds in case one was coalesced away.
+    #[cfg(unix)]
     pub fn start(self: &Arc<Self>) {
         let me = Arc::clone(self);
         tokio::spawn(async move {
@@ -131,6 +143,7 @@ pub(crate) fn running_binary() -> PathBuf {
 }
 
 /// `binary daemon handoff-version`: the image versions it accepts.
+#[cfg(unix)]
 fn accepts(binary: &Path) -> Result<Vec<u32>, String> {
     let out = std::process::Command::new(binary)
         .args(["daemon", "handoff-version"])
@@ -150,6 +163,7 @@ fn accepts(binary: &Path) -> Result<Vec<u32>, String> {
         .collect())
 }
 
+#[cfg(unix)]
 fn version_of(binary: &Path) -> String {
     std::process::Command::new(binary)
         .arg("--version")
@@ -159,6 +173,23 @@ fn version_of(binary: &Path) -> String {
         .unwrap_or_default()
 }
 
+#[cfg(windows)]
+impl Daemon {
+    /// `ptyro daemon upgrade` on Windows: its live upgrade (handing each pseudoconsole over,
+    /// WIN0.5 d) is WIN9's. Until then the daemon is restarted by hand, which ends its sessions.
+    pub(crate) async fn upgrade(
+        self: &Arc<Self>,
+        _binary: Option<PathBuf>,
+    ) -> Result<Reply, Error> {
+        Err(Error::new(
+            ErrorCode::Unsupported,
+            "a live upgrade on Windows isn't built yet (WIN9): `ptyro daemon stop` and start it \
+             again, which ends its sessions (agents' conversations can be resumed)",
+        ))
+    }
+}
+
+#[cfg(unix)]
 impl Daemon {
     /// `ptyro daemon upgrade [--binary B]`: check, answer, then hand off a moment later.
     pub(crate) async fn upgrade(self: &Arc<Self>, binary: Option<PathBuf>) -> Result<Reply, Error> {
@@ -364,6 +395,7 @@ impl Daemon {
 }
 
 /// An image's bytes as an [`Image`], or why this binary can't read them.
+#[cfg(unix)]
 fn decode(bytes: &[u8]) -> Result<Image, String> {
     let img =
         rmp_serde::from_slice::<Image>(bytes).map_err(|e| format!("unreadable image: {e}"))?;
@@ -373,8 +405,15 @@ fn decode(bytes: &[u8]) -> Result<Image, String> {
     Ok(img)
 }
 
+/// At startup on Windows: nothing is handed over until WIN9.
+#[cfg(windows)]
+pub fn take_image(_state_dir: &Path) -> Option<Inherited> {
+    None
+}
+
 /// At startup: an image handed to us by the previous daemon, if any. A refused image re-execs
 /// the previous binary (`daemon.prev`), which wrote it; this never returns in that case.
+#[cfg(unix)]
 pub fn take_image(state_dir: &Path) -> Option<Inherited> {
     let raw: i32 = std::env::var(ENV_FD).ok()?.parse().ok()?;
     let rolled_back = std::env::var_os(ENV_ROLLBACK).is_some();
@@ -429,7 +468,7 @@ pub fn take_image(state_dir: &Path) -> Option<Inherited> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

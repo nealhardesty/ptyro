@@ -152,7 +152,7 @@ fn bring_files(git: &Git, root: &Path, dst: &Path, cfg: &ProjectConfig) -> Vec<S
         if let Some(parent) = to.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let symlink = || std::os::unix::fs::symlink(&from, &to);
+        let symlink = || ptyro_core::os::symlink(&from, &to);
         let how = match cfg.worktree.share_mode {
             ShareMode::Symlink => symlink().map(|()| "linked"),
             ShareMode::Clone => match ptyro_git::clone_tree(&from, &to, false) {
@@ -1289,7 +1289,6 @@ fn today() -> String {
 /// The disk `path` takes (allocated blocks, so sparse files count what they use), without
 /// following links, and whether it stopped at `budget` with more left to count.
 pub(crate) fn disk_usage(path: &Path, budget: Duration) -> (u64, bool) {
-    use std::os::unix::fs::MetadataExt;
     let deadline = std::time::Instant::now() + budget;
     let (mut total, mut stack) = (0u64, vec![path.to_path_buf()]);
     while let Some(dir) = stack.pop() {
@@ -1299,7 +1298,7 @@ pub(crate) fn disk_usage(path: &Path, budget: Duration) -> (u64, bool) {
         let Ok(rd) = std::fs::read_dir(&dir) else { continue };
         for e in rd.flatten() {
             let Ok(m) = e.metadata() else { continue };
-            total += m.blocks() * 512;
+            total += ptyro_core::os::allocated(&m);
             if m.is_dir() {
                 stack.push(e.path());
             }
@@ -1312,6 +1311,7 @@ pub(crate) fn disk_usage(path: &Path, budget: Duration) -> (u64, bool) {
 mod tests {
     use super::*;
 
+    #[cfg(unix)] // symlinks
     #[test]
     fn symlinked_roots_are_refused() {
         let dir = tempfile::tempdir().unwrap();
@@ -1358,6 +1358,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)] // its tests make symlinks
     fn repo(dir: &Path) -> Git {
         let g = Git::new();
         for args in [
@@ -1372,6 +1373,7 @@ mod tests {
 
     /// A pull request's own checkout can hold a tracked link `a -> ~/.ssh`; with `share =
     /// ["a/x"]` the share (a link, or a copy of the main checkout's `a/x`) must not land in it.
+    #[cfg(unix)] // symlinks
     #[test]
     fn sharing_never_writes_through_a_link_in_the_new_worktree() {
         let d = tempfile::tempdir().unwrap();

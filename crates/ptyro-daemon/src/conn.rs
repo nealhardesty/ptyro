@@ -14,7 +14,6 @@ use ptyro_protocol::{
     framing,
 };
 use ptyro_term::StyleTable;
-use tokio::net::UnixStream;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio_util::codec::Framed;
@@ -80,7 +79,7 @@ struct Upstream {
     theirs: u64,
 }
 
-pub async fn serve(daemon: Arc<Daemon>, stream: UnixStream, pid: Option<u32>) {
+pub async fn serve(daemon: Arc<Daemon>, stream: crate::listen::Stream, pid: Option<u32>) {
     let mut framed = Framed::new(stream, framing());
     let Ok(Some(Ok(first))) = tokio::time::timeout(HELLO_TIMEOUT, framed.next()).await else {
         return;

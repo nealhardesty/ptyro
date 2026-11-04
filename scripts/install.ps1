@@ -97,16 +97,22 @@ function Install-Ptyro {
         $bin = Join-Path $prefix 'bin'
         New-Item -ItemType Directory -Force -Path $bin | Out-Null
         $exe = Join-Path $bin 'ptyro.exe'
-        # A running ptyro.exe can't be overwritten, but it can be renamed out of the way.
-        if (Test-Path -LiteralPath $exe) {
-            $old = "$exe.old"
-            Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
-            try { Copy-Item -LiteralPath (Join-Path $src 'ptyro.exe') -Destination $exe -Force }
-            catch { Move-Item -LiteralPath $exe -Destination $old -Force; Copy-Item -LiteralPath (Join-Path $src 'ptyro.exe') -Destination $exe }
-        } else {
-            Copy-Item -LiteralPath (Join-Path $src 'ptyro.exe') -Destination $exe
+        # ptyro.exe, and the packaged ConPTY its sessions run in (WIN0.5 g; older zips lack it).
+        # A running file can't be overwritten, but it can be renamed out of the way.
+        foreach ($file in 'ptyro.exe', 'conpty.dll', 'OpenConsole.exe') {
+            $from = Join-Path $src $file
+            if (-not (Test-Path -LiteralPath $from)) { continue }
+            $to = Join-Path $bin $file
+            if (Test-Path -LiteralPath $to) {
+                $old = "$to.old"
+                Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
+                try { Copy-Item -LiteralPath $from -Destination $to -Force }
+                catch { Move-Item -LiteralPath $to -Destination $old -Force; Copy-Item -LiteralPath $from -Destination $to }
+            } else {
+                Copy-Item -LiteralPath $from -Destination $to
+            }
+            Unblock-File -LiteralPath $to -ErrorAction SilentlyContinue
         }
-        Unblock-File -LiteralPath $exe -ErrorAction SilentlyContinue
         Write-Host "installed $exe"
 
         if ($env:PTYRO_NO_MODIFY_PATH -ne '1') {

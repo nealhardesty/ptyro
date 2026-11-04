@@ -12,7 +12,6 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-#[cfg(unix)]
 use std::time::Instant;
 
 use futures::{SinkExt, StreamExt};
@@ -27,16 +26,25 @@ use tokio::io::{AsyncRead, AsyncWrite};
 #[cfg(unix)]
 use tokio::net::UnixStream;
 
-/// The local daemon's stream: its Unix socket. Windows has no local daemon (ptyro there is a
-/// client of the one in WSL, `--remote wsl://`), so the type is only a placeholder, never made.
+/// The local daemon's stream: its Unix socket, or on Windows its named pipe (WIN5).
 #[cfg(unix)]
 pub type LocalStream = UnixStream;
-#[cfg(not(unix))]
-pub type LocalStream = tokio::io::DuplexStream;
+#[cfg(windows)]
+pub type LocalStream = tokio::net::windows::named_pipe::NamedPipeClient;
+
+/// The remote that means "this computer's own daemon" (`--remote local`,
+/// `client.default_remote = local`). On Windows it is also what lets ptyro start one: with no
+/// remote at all, ptyro there uses a daemon already running but starts none (WSL's is the
+/// default, WIN5).
+pub const LOCAL: &str = "local";
+
+/// Whether `remote` names this computer's own daemon.
+pub fn is_local(remote: Option<&str>) -> bool {
+    remote.map(str::trim) == Some(LOCAL)
+}
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::codec::Framed;
 
-#[cfg(unix)]
 const SPAWN_WAIT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, thiserror::Error)]
@@ -157,6 +165,9 @@ impl Client {
                 }
                 Err(e) => Err(remote::explain_command(e, via, &mut child, stderr).await),
             };
+        }
+        if is_local(opts.remote.as_deref()) {
+            return Self::handshake(connect_raw(opts).await?, opts, None).await;
         }
         if let Some(target) = &opts.remote
             && let Some(distro) = remote::wsl_distro(target)
@@ -358,30 +369,69 @@ impl Client {
     }
 }
 
-/// Windows has no local daemon: say how to reach the one in WSL.
-#[cfg(not(unix))]
-pub async fn connect_raw(_opts: &ConnectOptions) -> Result<LocalStream, ClientError> {
-    Err(ClientError::Unavailable(
-        "ptyro on Windows uses the daemon in WSL: `ptyro --remote wsl://` (the default distro) or \
-         `wsl://<distro>`; `ptyro config set client.default_remote wsl://` makes it the default"
-            .into(),
-    ))
-}
-
-/// The daemon's socket, starting the daemon first when allowed and none is listening. `ptyro
-/// proxy` bridges this to ssh.
-#[cfg(unix)]
-pub async fn connect_raw(opts: &ConnectOptions) -> Result<UnixStream, ClientError> {
-    let stream = match UnixStream::connect(&opts.paths.socket).await {
+/// The daemon's socket (a named pipe on Windows), starting the daemon first when allowed and
+/// none is listening. `ptyro proxy` bridges this to ssh.
+pub async fn connect_raw(opts: &ConnectOptions) -> Result<LocalStream, ClientError> {
+    // On Windows a native daemon starts only when asked for (`local`); WSL's is the default.
+    let may_start = opts.autospawn && (cfg!(unix) || is_local(opts.remote.as_deref()));
+    let stream = match open_local(&opts.paths.socket).await {
         Ok(s) => Ok(s),
-        Err(e) if opts.autospawn && is_absent(&e) => spawn_daemon(opts).await,
-        Err(e) if is_absent(&e) => {
-            Err(ClientError::Unavailable(format!("no daemon at {}", opts.paths.socket.display())))
-        }
+        Err(e) if may_start && is_absent(&e) => spawn_daemon(opts).await,
+        Err(e) if is_absent(&e) => Err(ClientError::Unavailable(no_daemon(opts))),
         Err(e) => Err(e.into()),
     }?;
     ours(&stream, opts)?;
     Ok(stream)
+}
+
+fn no_daemon(opts: &ConnectOptions) -> String {
+    if cfg!(windows) && !is_local(opts.remote.as_deref()) {
+        "no ptyro daemon runs on this computer. ptyro on Windows uses the daemon in WSL: \
+         `ptyro --remote wsl://`, or `ptyro config set client.default_remote wsl://`. To run one \
+         on Windows itself (still being built), `ptyro config set client.default_remote local`"
+            .into()
+    } else {
+        format!("no daemon at {}", opts.paths.socket.display())
+    }
+}
+
+#[cfg(unix)]
+async fn open_local(socket: &std::path::Path) -> std::io::Result<LocalStream> {
+    UnixStream::connect(socket).await
+}
+
+/// Open the daemon's pipe. Every instance busy (clients connecting right now) is waited out, as
+/// a connect to a socket waits in its backlog.
+#[cfg(windows)]
+async fn open_local(pipe: &std::path::Path) -> std::io::Result<LocalStream> {
+    const ERROR_PIPE_BUSY: i32 = 231;
+    let start = Instant::now();
+    loop {
+        match tokio::net::windows::named_pipe::ClientOptions::new().open(pipe) {
+            Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) && start.elapsed() < SPAWN_WAIT => {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            other => return other,
+        }
+    }
+}
+
+/// Whether the daemon at the other end of the pipe is ours: another user could have made the
+/// pipe's name first (pipe names are one namespace for the whole computer).
+#[cfg(windows)]
+fn ours(stream: &LocalStream, opts: &ConnectOptions) -> Result<(), ClientError> {
+    match ptyro_pty::pipe::server_is_ours(stream) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(ClientError::Unavailable(format!(
+            "{} is served by another user's program, not yours: refusing to talk to it. Set \
+             PTYRO_HOME or PTYRO_SOCKET to choose another pipe",
+            opts.paths.socket.display()
+        ))),
+        Err(e) => Err(ClientError::Unavailable(format!(
+            "can't tell who serves {}: {e}",
+            opts.paths.socket.display()
+        ))),
+    }
 }
 
 /// Whether the process on the other end of the socket is ours: tokens, typed input and prompts go
@@ -411,15 +461,14 @@ fn response_id(bytes: &[u8]) -> Option<u32> {
     (env.t == "response").then_some(env.id).flatten()
 }
 
-#[cfg(unix)]
 fn is_absent(e: &std::io::Error) -> bool {
     matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused)
 }
 
-/// Start `ptyro daemon start --spawned` and wait until it accepts connections. The daemon
-/// detaches itself (`setsid`) before starting its runtime; we never fork a tokio process.
-#[cfg(unix)]
-async fn spawn_daemon(opts: &ConnectOptions) -> Result<UnixStream, ClientError> {
+/// Start `ptyro daemon start --spawned` and wait until it accepts connections. On Unix the
+/// daemon detaches itself (`setsid`) before starting its runtime; we never fork a tokio process.
+/// On Windows it starts detached (no console, a process group of its own).
+async fn spawn_daemon(opts: &ConnectOptions) -> Result<LocalStream, ClientError> {
     let exe = match &opts.daemon_exe {
         Some(p) => p.clone(),
         None => match std::env::var_os("PTYRO_BIN") {
@@ -427,7 +476,10 @@ async fn spawn_daemon(opts: &ConnectOptions) -> Result<UnixStream, ClientError> 
             None => std::env::current_exe()?,
         },
     };
-    let mut child = std::process::Command::new(&exe)
+    let mut cmd = std::process::Command::new(&exe);
+    #[cfg(windows)]
+    ptyro_core::os::detach(&mut cmd);
+    let mut child = cmd
         .args(["daemon", "start", "--spawned"])
         // The daemon belongs to no session, even when an agent's CLI call started it: what it
         // runs must not be taken for that agent (who's calling, SPEC §17).
@@ -440,7 +492,7 @@ async fn spawn_daemon(opts: &ConnectOptions) -> Result<UnixStream, ClientError> 
     let start = Instant::now();
     let mut exited: Option<(Instant, std::process::ExitStatus)> = None;
     loop {
-        match UnixStream::connect(&opts.paths.socket).await {
+        match open_local(&opts.paths.socket).await {
             Ok(s) => {
                 // The daemon is ours to reap when it ends; nobody else will.
                 if exited.is_none() {

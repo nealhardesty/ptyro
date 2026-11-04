@@ -1,12 +1,5 @@
 //! The ptyro daemon (SPEC §4): owns every PTY and terminal state, serves clients over a Unix
-//! socket, and keeps sessions alive while no client is attached.
-
-// The daemon is Unix's (Linux, macOS, WSL2). On Windows, ptyro is a client of a WSL daemon (ROADMAP
-// WIN3); a native daemon is track D. Said here, before a Unix-only dependency fails and hides it.
-#[cfg(not(unix))]
-compile_error!(
-    "the ptyro daemon runs on Linux, macOS and WSL2; on Windows, ptyro is a client of the daemon in WSL (README, Windows)"
-);
+//! socket (a named pipe on Windows, WIN5), and keeps sessions alive while no client is attached.
 
 mod again;
 mod agents;
@@ -25,6 +18,7 @@ mod finish;
 mod github;
 mod handoff;
 mod launch;
+mod listen;
 mod machines;
 mod mail;
 mod meaning;
@@ -48,9 +42,8 @@ mod web;
 mod worktrees;
 mod wsl_hold;
 
-use std::fs::{DirBuilder, File, TryLockError};
+use std::fs::{File, TryLockError};
 use std::io::{Read, Seek, Write};
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -59,8 +52,6 @@ use anyhow::{Context, Result, bail};
 use ptyro_core::config::Config;
 use ptyro_core::paths::Paths;
 use ptyro_store::Store;
-use tokio::net::UnixListener;
-use tokio::signal::unix::{SignalKind, signal};
 
 pub use daemon::Daemon;
 
@@ -101,12 +92,14 @@ pub fn run(opts: Options) -> Result<()> {
     let _log_guard = init_logging(&paths, opts.foreground)?;
     watchdog::install_panic_hook(&paths.state);
     // A live upgrade's descriptors (the lock among them) come over a socket (H2.7): first.
+    #[cfg(unix)]
     match ptyro_pty::handoff::receive_carried() {
         Ok(0) => {}
         Ok(n) => tracing::info!("{n} descriptor(s) carried over from the previous image"),
         Err(e) => tracing::error!("carried descriptors: {e}"),
     }
     let lock = acquire_lock(&paths)?;
+    #[cfg(unix)]
     LOCK_FD.store(std::os::fd::AsRawFd::as_raw_fd(&lock), std::sync::atomic::Ordering::SeqCst);
     // A live upgrade hands us the previous image (or re-execs the old binary if we can't read it).
     let inherited = handoff::take_image(&paths.state);
@@ -120,27 +113,12 @@ pub fn run(opts: Options) -> Result<()> {
 }
 
 fn prepare_dirs(paths: &Paths) -> Result<()> {
-    let mut b = DirBuilder::new();
-    b.recursive(true).mode(0o700);
     for dir in [&paths.config, &paths.data, &paths.state] {
-        b.create(dir).with_context(|| format!("create {}", dir.display()))?;
+        ptyro_core::os::create_private_dirs(dir)
+            .with_context(|| format!("create {}", dir.display()))?;
     }
-    let sock_dir = paths.socket.parent().context("socket path has no parent")?;
-    b.create(sock_dir).with_context(|| format!("create {}", sock_dir.display()))?;
     // The socket directory may live in a shared /tmp: insist it is ours and private (SPEC §17).
-    let meta = std::fs::metadata(sock_dir)?;
-    let uid = rustix::process::getuid().as_raw();
-    if meta.uid() != uid {
-        bail!(
-            "{} is owned by uid {}, not us ({uid}); refusing to use it",
-            sock_dir.display(),
-            meta.uid()
-        );
-    }
-    if meta.mode() & 0o077 != 0 {
-        std::fs::set_permissions(sock_dir, std::fs::Permissions::from_mode(0o700))?;
-    }
-    Ok(())
+    listen::prepare(&paths.socket)
 }
 
 /// Changes the log filter while the daemon runs (`[daemon] log_level`, set by `init_logging`).
@@ -190,10 +168,18 @@ fn init_logging(
 }
 
 /// `daemon.lock`'s descriptor, for a live upgrade to carry over.
+#[cfg_attr(windows, allow(dead_code))] // the live upgrade's: Unix until WIN9
 pub(crate) static LOCK_FD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+
+/// Nothing is carried over on Windows until its live upgrade (WIN9).
+#[cfg(windows)]
+fn carried_lock(_path: &Path) -> Option<File> {
+    None
+}
 
 /// The lock the previous image held, carried over by a live upgrade (H2.7): never let go across the
 /// exec. Only when it really is `daemon.lock` (the same file).
+#[cfg(unix)]
 fn carried_lock(path: &Path) -> Option<File> {
     use std::os::unix::fs::MetadataExt;
     let raw: i32 = std::env::var(handoff::ENV_LOCK).ok()?.parse().ok()?;
@@ -272,40 +258,38 @@ fn watch_config(
     Some(debouncer)
 }
 
-/// The socket file's identity, to remove it on the way out only if it is still this daemon's.
-fn file_id(path: &Path) -> Option<(u64, u64)> {
-    use std::os::unix::fs::MetadataExt;
-    std::fs::symlink_metadata(path).ok().map(|m| (m.dev(), m.ino()))
-}
-
-fn remove_if_ours(path: &Path, ours: Option<(u64, u64)>) {
-    if ours.is_some() && file_id(path) == ours {
-        let _ = std::fs::remove_file(path);
-    }
-}
-
-fn bind(socket: &Path) -> Result<UnixListener> {
-    if socket.exists() {
-        // Only a refused connection proves nobody listens. Any other failure (a sandbox that
-        // forbids connecting, say) leaves the socket alone: it may be another daemon's.
-        match std::os::unix::net::UnixStream::connect(socket) {
-            Ok(_) => bail!("{} is in use by another process", socket.display()),
-            Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
-                std::fs::remove_file(socket)
-                    .with_context(|| format!("remove stale {}", socket.display()))?;
-            }
-            Err(e) => bail!(
-                "{} exists and can't be checked ({e}); not replacing it (another daemon may use it)",
-                socket.display()
-            ),
+/// What stops the daemon from outside: SIGTERM or SIGINT (`ptyro daemon stop` asks over the
+/// socket instead). SIGHUP is ignored: no controlling terminal to lose, so a stray one can't take
+/// sessions down.
+#[cfg(unix)]
+async fn stop_signal() -> Result<()> {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut term = signal(SignalKind::terminate())?;
+    let mut int = signal(SignalKind::interrupt())?;
+    let mut hup = signal(SignalKind::hangup())?;
+    loop {
+        tokio::select! {
+            _ = term.recv() => return Ok(()),
+            _ = int.recv() => return Ok(()),
+            _ = hup.recv() => {}
         }
     }
-    let old = rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o077));
-    let listener = UnixListener::bind(socket);
-    rustix::process::umask(old);
-    let listener = listener.with_context(|| format!("bind {}", socket.display()))?;
-    std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600))?;
-    Ok(listener)
+}
+
+/// On Windows: Ctrl+C or Ctrl+Break in the daemon's console (`--foreground`), its console
+/// closing, or Windows shutting down. A detached daemon has no console: `ptyro daemon stop`.
+#[cfg(windows)]
+async fn stop_signal() -> Result<()> {
+    use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close, ctrl_shutdown};
+    let (mut c, mut b) = (ctrl_c()?, ctrl_break()?);
+    let (mut close, mut shutdown) = (ctrl_close()?, ctrl_shutdown()?);
+    tokio::select! {
+        _ = c.recv() => {}
+        _ = b.recv() => {}
+        _ = close.recv() => {}
+        _ = shutdown.recv() => {}
+    }
+    Ok(())
 }
 
 async fn serve(
@@ -313,19 +297,16 @@ async fn serve(
     foreground: bool,
     inherited: Option<handoff::Inherited>,
 ) -> Result<()> {
-    use std::os::fd::AsRawFd;
     let listener = match &inherited {
         // The socket never closed: clients that connected meanwhile wait in its backlog.
-        Some(i) => {
-            let fd = ptyro_pty::handoff::adopt(i.image.listener_fd).context("inherited socket")?;
-            let std = std::os::unix::net::UnixListener::from(fd);
-            std.set_nonblocking(true)?;
-            UnixListener::from_std(std)?
-        }
-        None => bind(&paths.socket)?,
+        #[cfg(unix)]
+        Some(i) => listen::Listener::inherited(
+            ptyro_pty::handoff::adopt(i.image.listener_fd).context("inherited socket")?,
+            &paths.socket,
+        )?,
+        _ => listen::Listener::bind(&paths.socket)?,
     };
     let socket = paths.socket.clone();
-    let socket_id = file_id(&socket);
     let config_path = Config::path(&paths);
     let mut config_error = None;
     let config = match Config::load(&config_path) {
@@ -364,7 +345,7 @@ async fn serve(
     };
     let identity = inherited.as_ref().map(|i| (i.image.run_id.clone(), i.image.started_ms));
     let daemon = Daemon::with_identity(paths, store, config, registry, identity);
-    daemon.listener_fd.store(listener.as_raw_fd(), std::sync::atomic::Ordering::SeqCst);
+    daemon.listener_fd.store(listener.raw(), std::sync::atomic::Ordering::SeqCst);
     daemon.foreground.store(foreground, std::sync::atomic::Ordering::SeqCst);
     if let Some(mut i) = inherited {
         use std::sync::atomic::Ordering::SeqCst;
@@ -390,6 +371,18 @@ async fn serve(
     }
     if let Some(e) = config_error {
         daemon.warn(e);
+    }
+    // Said where people look (doctor, the TUI's health badge, the web's Health page): sessions
+    // here run in Windows' own ConPTY, which repaints what programs write (SPEC §20.13).
+    #[cfg(windows)]
+    if ptyro_pty::packaged_conpty().is_none() {
+        daemon.warn(
+            "sessions use Windows' own ConPTY, which repaints programs' output: status can arrive \
+             out of order and colour queries go unanswered. ptyro.exe's folder should hold \
+             conpty.dll and OpenConsole.exe: install ptyro again (`irm \
+             https://raw.githubusercontent.com/nealhardesty/ptyro/master/scripts/install.ps1 | iex`)"
+                .into(),
+        );
     }
     if let Some(e) = store_error {
         daemon.warn(e);
@@ -446,11 +439,10 @@ async fn serve(
     daemon.start_runs().await;
     let _watcher = watch_config(&daemon, &config_path);
     tracing::info!(pid = std::process::id(), socket = %socket.display(), "daemon started");
-    let uid = rustix::process::getuid().as_raw();
 
-    let mut term = signal(SignalKind::terminate())?;
-    let mut int = signal(SignalKind::interrupt())?;
-    let mut hup = signal(SignalKind::hangup())?;
+    let stop = stop_signal();
+    tokio::pin!(stop);
+    let mut stop_seen = false;
     let mut stopping = daemon.shutdown.subscribe();
     let mut goodbye = daemon.goodbye.subscribe();
     loop {
@@ -458,38 +450,23 @@ async fn serve(
         tokio::select! {
             // While handing off, new clients wait in the backlog for the next image.
             _ = goodbye.changed() => {}
-            accepted = listener.accept(), if !upgrading => {
-                let (stream, _) = match accepted {
-                    Ok(a) => a,
-                    Err(e) => {
-                        // Out of descriptors (EMFILE) fails at once, every time: without a pause
-                        // this loop would spin at full speed until one is free.
-                        tracing::warn!("accept failed: {e}");
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                        continue;
-                    }
-                };
-                match stream.peer_cred() {
-                    Ok(cred) if cred.uid() == uid => {
-                        let pid = cred.pid().and_then(|p| u32::try_from(p).ok());
-                        tokio::spawn(conn::serve(Arc::clone(&daemon), stream, pid));
-                    }
-                    Ok(cred) => tracing::warn!(peer_uid = cred.uid(), "rejected connection from another user"),
-                    Err(e) => tracing::warn!("peer credentials unavailable: {e}"),
-                }
+            (stream, pid) = listener.accept(), if !upgrading => {
+                tokio::spawn(conn::serve(Arc::clone(&daemon), stream, pid));
             }
-            _ = term.recv() => { let _ = daemon.shutdown.send(true); }
-            _ = int.recv() => { let _ = daemon.shutdown.send(true); }
-            // No controlling terminal to lose; ignore so a stray HUP can't take sessions down.
-            _ = hup.recv() => {}
+            r = &mut stop, if !stop_seen => {
+                stop_seen = true;
+                if let Err(e) = r {
+                    tracing::warn!("signal handling: {e}");
+                }
+                let _ = daemon.shutdown.send(true);
+            }
             () = async { let _ = stopping.wait_for(|s| *s).await; } => break,
         }
     }
     tracing::info!("shutting down");
     daemon.serve_child.kill();
     daemon.wsl_hold.kill();
-    drop(listener);
-    remove_if_ours(&socket, socket_id);
+    listener.close();
     // SIGTERM means `stop --hibernate` (SPEC §4.4); until hibernation exists (M4), stop gracefully.
     daemon.stop_all().await;
     if let Some(store) = &daemon.store {
@@ -500,9 +477,10 @@ async fn serve(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use listen::bind;
 
     #[tokio::test]
     async fn a_socket_is_replaced_only_when_nobody_listens_and_removed_only_if_ours() {
@@ -518,7 +496,7 @@ mod tests {
         // until it does, `bind` rightly leaves the file alone.)
         let start = std::time::Instant::now();
         let second = loop {
-            match bind(&path) {
+            match listen::Listener::bind(&path) {
                 Ok(l) => break l,
                 Err(e) if start.elapsed() < Duration::from_secs(5) => {
                     assert!(e.to_string().contains("in use"), "{e}");
@@ -527,18 +505,26 @@ mod tests {
                 Err(e) => panic!("{e}"),
             }
         };
-        let ours = file_id(&path);
         // Another daemon replaced the file meanwhile: leave its socket alone. (The old file is
         // kept linked while that happens: a file system may hand a freed inode number straight
         // to the next file made, and then "another file" would look like ours.)
-        drop(second);
         std::fs::hard_link(&path, d.path().join("old.sock")).unwrap();
         std::fs::remove_file(&path).unwrap();
         let third = bind(&path).unwrap();
-        remove_if_ours(&path, ours);
+        second.close();
         assert!(path.exists(), "not ours any more");
-        remove_if_ours(&path, file_id(&path));
-        assert!(!path.exists());
+        // Ours again (the other one went quiet): removed on the way out.
         drop(third);
+        let fourth = loop {
+            match listen::Listener::bind(&path) {
+                Ok(l) => break l,
+                Err(_) if start.elapsed() < Duration::from_secs(10) => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(e) => panic!("{e}"),
+            }
+        };
+        fourth.close();
+        assert!(!path.exists());
     }
 }

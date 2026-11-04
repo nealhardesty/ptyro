@@ -171,6 +171,9 @@ pub struct AlacrittyEmulator {
     /// History lines alacritty keeps at this width: `scrollback`, within [`MAX_HISTORY_CELLS`].
     history: usize,
     marks: MarkLimit,
+    /// win32-input-mode (`CSI ? 9001 h`), which Windows' console hosts ask for (SPEC §20.13):
+    /// alacritty doesn't know it, so it is followed here.
+    win32_input: bool,
 }
 
 /// The most history cells one session keeps (H2.7): `scrollback_lines` × width could otherwise
@@ -391,6 +394,7 @@ impl AlacrittyEmulator {
             scrollback,
             history,
             marks: MarkLimit::default(),
+            win32_input: false,
         }
     }
 
@@ -419,6 +423,12 @@ impl AlacrittyEmulator {
                 (b"16", b't') => {
                     out.replies.extend_from_slice(format!("\x1b[6;{CELL_H};{CELL_W}t").as_bytes())
                 }
+                // DECSET/DECRST 9001: win32-input-mode.
+                ([b'?', rest @ ..], b'h' | b'l')
+                    if rest.split(|b| *b == b';').any(|p| p == b"9001") =>
+                {
+                    self.win32_input = *final_byte == b'h';
+                }
                 _ => {}
             },
             Seq::Dcs(body) => {
@@ -426,7 +436,10 @@ impl AlacrittyEmulator {
                     xtgettcap(names, &mut out.replies);
                 }
             }
-            Seq::Ris => out.events.push(TermEvent::Reset),
+            Seq::Ris => {
+                self.win32_input = false;
+                out.events.push(TermEvent::Reset);
+            }
         }
     }
 
@@ -683,7 +696,7 @@ impl Emulator for AlacrittyEmulator {
     }
 
     fn modes(&self) -> TermModes {
-        TermModes::from_alacritty(*self.term.mode())
+        TermModes { win32_input: self.win32_input, ..TermModes::from_alacritty(*self.term.mode()) }
     }
 
     fn title(&self) -> Option<&str> {
@@ -1330,6 +1343,9 @@ pub struct EmuImage {
     pub title: Option<String>,
     pub fg: [u8; 3],
     pub bg: [u8; 3],
+    /// win32-input-mode (a Windows session, WIN5).
+    #[serde(default)]
+    pub win32_input: bool,
 }
 
 pub const EMU_IMAGE_VERSION: u32 = 1;
@@ -1437,6 +1453,7 @@ impl AlacrittyEmulator {
             title: self.title.clone(),
             fg: [self.fg.r, self.fg.g, self.fg.b],
             bg: [self.bg.r, self.bg.g, self.bg.b],
+            win32_input: self.win32_input,
         }
     }
 
@@ -1496,6 +1513,7 @@ impl AlacrittyEmulator {
         emu.title = img.title;
         emu.fg = Rgb { r: img.fg[0], g: img.fg[1], b: img.fg[2] };
         emu.bg = Rgb { r: img.bg[0], g: img.bg[1], b: img.bg[2] };
+        emu.win32_input = img.win32_input;
         emu
     }
 }
