@@ -2999,6 +2999,8 @@ done.
     - the folder a Windows client sends a native daemon is the Windows path (verbatim prefixes dropped); the distro's only for a daemon elsewhere;
     - the fake agent runs on Windows (`ptyro_pty::console`: raw input, size, input polling);
     - Smart App Control here refused the unsigned debug `ptyro.exe` with the daemon in it and ran the release build: hand checks use release builds (§20.12).
+    - ~~`cs land` measured a PR's no-checks grace and its one-hour limit on the wall clock~~ [fixed]: in WSL2 that clock was seen 2 s ahead of the monotonic one after 30 s, which ended the grace early (`tests/land.rs` failed 2 in 5 here). It uses `Instant` now.
+    - **Not fixed, for its own change:** when reading the PR's head commit fails, `land_pr` merges without `--match-head-commit`, so a push since the checks can be merged unseen. Seen once in 20 runs of `tests/land.rs` here, under parallel load (0 in 38 on master, so possibly timing alone). It should poll again instead, which needs the fake `gh` to give every PR a `headRefOid`.
   - **Left for later:** `is_raw` and the foreground program's name and directory (WIN7: the console's modes and process list); `daemon upgrade` says WIN9 and how to restart; hooks through Git Bash's `sh` as Claude uses it, with `ptyro.exe`'s path quoted for it (WIN8 checks real agents).
 - [ ] **WIN6 Shells and commands** (R-WIN-11) **M**
   - Default interactive shell `pwsh.exe` → `powershell.exe` → `%COMSPEC%`, changeable in the settings panel.

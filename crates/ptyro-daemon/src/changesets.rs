@@ -2994,8 +2994,10 @@ impl Daemon {
 
     /// Wait for a PR's checks, then merge it.
     async fn land_pr(self: &Arc<Self>, wt: &WorktreeInfo, n: u32) -> Result<String, String> {
-        let started = now_ms();
-        let deadline = started + 60 * 60 * 1000;
+        // Elapsed time on the monotonic clock: the wall clock can be stepped (NTP, or WSL2
+        // catching up with Windows, seen jumping 2 s in 30), which would cut the grace short.
+        let started = std::time::Instant::now();
+        let deadline = started + Duration::from_secs(60 * 60);
         loop {
             let pr = self.refresh_pr(wt).await.map_err(|e| e.message)?.ok_or("its PR is gone")?;
             if pr.state == "MERGED" {
@@ -3017,12 +3019,12 @@ impl Daemon {
             // can't ask either: that is "not known yet", not "green". Repositories with no CI
             // at all get a couple of minutes' grace and are then merged on the rest of their
             // state.
-            let unknown =
-                pr.checks.is_empty() && now_ms().saturating_sub(started) < no_checks_grace_ms();
+            let unknown = pr.checks.is_empty()
+                && started.elapsed() < Duration::from_millis(no_checks_grace_ms());
             if !unknown && !pr.checks.iter().any(|c| c.bucket == "pending") {
                 break;
             }
-            if now_ms() > deadline {
+            if std::time::Instant::now() > deadline {
                 return Err(format!("PR #{n}'s checks were still pending after an hour"));
             }
             let wait =
