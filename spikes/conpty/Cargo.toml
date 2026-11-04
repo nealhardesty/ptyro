@@ -1,0 +1,29 @@
+# WIN0.2 and WIN0.3 (ROADMAP): what ConPTY does to what ptyro needs, and whether a second process
+# can take a pseudoconsole over. `make spike-conpty` builds it for Windows, runs it there and
+# writes the report. Outside the workspace on purpose: it calls Windows directly (unsafe), which
+# the product crates keep to ptyro-pty.
+[package]
+name = "spike-conpty"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+ptyro-core = { path = "../../crates/ptyro-core" }
+ptyro-term = { path = "../../crates/ptyro-term" }
+serde_json = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Console",
+  "Win32_System_IO",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Memory",
+  "Win32_System_Pipes",
+  "Win32_System_Threading",
+] }
