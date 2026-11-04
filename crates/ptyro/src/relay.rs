@@ -8,11 +8,8 @@
 use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
-use std::time::Duration;
-#[cfg(unix)]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-#[cfg(unix)]
 use ptyro_protocol::{ClientInfo, ClientKind, PROTO, decode};
 use ptyro_protocol::{ClientMsg, Encoding, Request, ServerMsg, encode};
 
@@ -23,7 +20,6 @@ const STOP_BUDGET: Duration = Duration::from_secs(900);
 const APPROVAL_BUDGET: Duration = Duration::from_secs(3600);
 const MAX_STDIN: u64 = 4 * 1024 * 1024;
 
-#[cfg_attr(not(unix), allow(dead_code))]
 fn frame(msg: &ClientMsg) -> Option<Vec<u8>> {
     let body = encode(msg, Encoding::MsgPack).ok()?;
     let mut out = (body.len() as u32).to_be_bytes().to_vec();
@@ -31,8 +27,7 @@ fn frame(msg: &ClientMsg) -> Option<Vec<u8>> {
     Some(out)
 }
 
-#[cfg(unix)]
-fn read_frame(s: &mut UnixStream) -> Option<Vec<u8>> {
+fn read_frame(s: &mut impl Read) -> Option<Vec<u8>> {
     let mut len = [0u8; 4];
     s.read_exact(&mut len).ok()?;
     let n = u32::from_be_bytes(len) as usize;
@@ -49,14 +44,55 @@ pub fn request(req: Request, budget: Duration) -> Option<ServerMsg> {
     request_at(std::path::Path::new(&std::env::var_os("PTYRO_SOCKET")?), req, budget)
 }
 
-/// Windows has no daemon socket (hooks run inside the WSL sessions, never here): nothing to ask.
-#[cfg(not(unix))]
-pub fn request_at(
-    _socket: &std::path::Path,
-    _req: Request,
-    _budget: Duration,
-) -> Option<ServerMsg> {
-    None
+/// On Windows, the daemon's named pipe (WIN5): refused when another user serves it, as the
+/// client does. A pipe opened this way has no read timeout, so the exchange runs on a thread
+/// and is given up when the budget runs out (the thread ends with this short-lived process).
+#[cfg(windows)]
+pub fn request_at(socket: &std::path::Path, req: Request, budget: Duration) -> Option<ServerMsg> {
+    let start = Instant::now();
+    let mut pipe = loop {
+        match std::fs::OpenOptions::new().read(true).write(true).open(socket) {
+            Ok(f) => break f,
+            // Every instance busy: another client is connecting this moment.
+            Err(e) if e.raw_os_error() == Some(231) && start.elapsed() < budget => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(_) => return None,
+        }
+    };
+    if !ptyro_pty::pipe::file_server_is_ours(&pipe).ok()? {
+        return None;
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(exchange(&mut pipe, req));
+    });
+    rx.recv_timeout(budget.checked_sub(start.elapsed())?).ok()?
+}
+
+/// Hello, one request, and its answer (frames in between are pushes, skipped).
+#[cfg(windows)]
+fn exchange(s: &mut (impl Read + Write), req: Request) -> Option<ServerMsg> {
+    let hello = ClientMsg::Hello {
+        proto: PROTO,
+        client: ClientInfo {
+            kind: ClientKind::Hook,
+            version: env!("CARGO_PKG_VERSION").into(),
+            pid: std::process::id(),
+            outer: None,
+            token: None,
+            via: None,
+        },
+        features: vec![],
+    };
+    s.write_all(&frame(&hello)?).ok()?;
+    s.write_all(&frame(&ClientMsg::Request { id: 1, req })?).ok()?;
+    loop {
+        let (msg, _): (ServerMsg, _) = decode(&read_frame(s)?).ok()?;
+        if matches!(msg, ServerMsg::Response { .. } | ServerMsg::Reject { .. }) {
+            return Some(msg);
+        }
+    }
 }
 
 /// [`request`] to a given socket (shell completions use the client's own).

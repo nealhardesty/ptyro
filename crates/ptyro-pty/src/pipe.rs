@@ -109,11 +109,20 @@ pub fn client_pid(server: &NamedPipeServer) -> Option<u32> {
 
 /// Whether the process serving `client`'s pipe runs as this user.
 pub fn server_is_ours(client: &NamedPipeClient) -> io::Result<bool> {
+    handle_server_is_ours(client.as_raw_handle())
+}
+
+/// [`server_is_ours`] for a pipe opened another way (a `std::fs::File`, as the hook relay does).
+pub fn file_server_is_ours(file: &std::fs::File) -> io::Result<bool> {
+    handle_server_is_ours(file.as_raw_handle())
+}
+
+fn handle_server_is_ours(handle: std::os::windows::io::RawHandle) -> io::Result<bool> {
     let mut pid = 0u32;
     // SAFETY: a connected pipe handle we own; the server's process is opened for query only and
     // closed below.
     unsafe {
-        if GetNamedPipeServerProcessId(client.as_raw_handle(), &mut pid) == 0 {
+        if GetNamedPipeServerProcessId(handle, &mut pid) == 0 {
             return Err(last_error("GetNamedPipeServerProcessId"));
         }
         let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
