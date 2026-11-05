@@ -27,6 +27,7 @@ ptyro-protocol.workspace = true
 ptyro-pty.workspace = true
 ptyro-store.workspace = true
 ptyro-term.workspace = true
+regex.workspace = true
 rustix.workspace = true
 serde.workspace = true
 rmp-serde.workspace = true

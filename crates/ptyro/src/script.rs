@@ -696,6 +696,11 @@ mod tests {
             pad: false,
             model: None,
             chat: None,
+            loose: false,
+            slot: None,
+            watch: None,
+            scratch: false,
+            lost: false,
         };
         let mut r = StatusRecord::new(status, Confidence::High, SignalSource::Hook);
         r.since_ms = since;

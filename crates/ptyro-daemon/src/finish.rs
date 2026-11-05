@@ -99,9 +99,8 @@ impl Daemon {
             ))
         })?;
         let live: Vec<String> = self
-            .sessions_in(&wt.id)
+            .busy_in(&wt)
             .iter()
-            .filter(|s| s.busy())
             .map(|s| s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name.clone())
             .collect();
         if !live.is_empty() && !stop_sessions {
@@ -450,7 +449,7 @@ impl Daemon {
         if !wt.shipped() || !self.config().worktrees.archive_on_merge {
             return;
         }
-        if self.sessions_in(&wt.id).iter().any(|s| s.busy()) {
+        if !self.busy_in(wt).is_empty() {
             return;
         }
         let (me, id, label) = (Arc::clone(self), wt.id.clone(), wt.qualified());

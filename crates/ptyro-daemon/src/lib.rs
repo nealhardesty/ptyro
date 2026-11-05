@@ -31,6 +31,7 @@ mod runs;
 mod scratchpad;
 mod serve_child;
 mod session;
+mod shells;
 mod sidecar;
 mod structured;
 mod suggest;
@@ -434,7 +435,9 @@ async fn serve(
         });
     }
     daemon.restore_dormant().await;
+    daemon.restore_shells().await;
     daemon.start_auto_register();
+    daemon.start_shells();
     daemon.start_mail().await;
     daemon.start_runs().await;
     let _watcher = watch_config(&daemon, &config_path);

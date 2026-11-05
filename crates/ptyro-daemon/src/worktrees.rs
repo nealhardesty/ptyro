@@ -693,8 +693,9 @@ impl Daemon {
             .ok_or_else(|| Error::missing("project", &wt.project))?;
         let sessions = self.sessions_in(&wt.id);
         let live: Vec<&Arc<Session>> = sessions.iter().filter(|s| s.is_live()).collect();
-        // A quick terminal at its prompt goes with its worktree (UX1.25).
-        let busy: Vec<&&Arc<Session>> = live.iter().filter(|s| s.busy()).collect();
+        // A quick terminal at its prompt goes with its worktree (UX1.25); a loose shell standing
+        // in it holds it like its own (SPEC §23.8).
+        let busy = self.busy_in(&wt);
         if !busy.is_empty() && !opts.stop_sessions {
             let names: Vec<String> = busy
                 .iter()

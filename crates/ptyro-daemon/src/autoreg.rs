@@ -141,7 +141,21 @@ impl Daemon {
     /// Put a session under the worktree holding `dir` (`None`: outside every project), and tell
     /// clients. Its profile stays: it's fixed for the session's lifetime (SPEC §10.10).
     pub(crate) fn place_session(&self, s: &Arc<Session>, dir: Option<&Path>) {
+        // One that loses its place joins its workspace's SHELLS (§23.3). One put in SHELLS on
+        // purpose stays there (SPEC §23.2); one that only landed there gives its number up to
+        // move into the repository it is in now (UX1.5).
+        if dir.is_none() && self.shelve(s, false) {
+            return;
+        }
         let target = dir.and_then(|d| self.target(None, d).ok().flatten());
+        if target.is_some() {
+            let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            match &m.shelf {
+                Some(f) if f.pinned => return,
+                Some(_) => m.shelf = None,
+                None => {}
+            }
+        }
         {
             let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let (worktree, project) = match &target {
@@ -199,13 +213,13 @@ impl Daemon {
                 if me.config().discover.auto_register {
                     for s in me.sessions().into_iter().filter(|s| s.is_live()) {
                         let dir = me.current_dir(&s);
-                        let placed = s
-                            .meta
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .place
-                            .project
-                            .is_some();
+                        // A shell put in SHELLS never moves (SPEC §23.2), but the repository it
+                        // is in still joins the sidebar: it counts as placed here.
+                        let placed = {
+                            let m =
+                                s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                            m.place.project.is_some() || m.shelf.as_ref().is_some_and(|f| f.pinned)
+                        };
                         // Outside every project, in one now (added by hand since, say): move in.
                         // Cheap (no git), so not once only.
                         if !placed && me.in_a_project(&dir) {

@@ -300,9 +300,19 @@ impl App {
     /// `shell.new` (`!`, UX3.4): another shell, of its own, in the context's worktree (else
     /// where you are), full sized. The worktree's quick terminal is `C-t` / `T`.
     pub(crate) fn new_shell(&mut self) {
-        let (_, worktree) = self.context();
-        let cwd = if worktree.is_some() { Default::default() } else { self.here() };
-        self.spawn_spec(SpawnSpec { worktree, cwd, ..SpawnSpec::default() }, None);
+        // A worktree around: the selected row's (in the sidebar), else the focused session's.
+        // None (an empty pane, home, a chat, a shell of SHELLS, the SHELLS heading): a shell in
+        // the workspace's SHELLS (SPEC §23.6, amends UX3.4), not the first project's checkout.
+        let worktree = if self.focus == crate::app::Focus::Sidebar || self.context_hint().is_some()
+        {
+            self.context().1
+        } else {
+            self.focused_session().and_then(|id| self.session(id)).and_then(|s| s.worktree.clone())
+        };
+        if worktree.is_none() {
+            return self.shells_new(None, false);
+        }
+        self.spawn_spec(SpawnSpec { worktree, ..SpawnSpec::default() }, None);
     }
 
     // ── quick new (UX3.2, UX3.7) ────────────────────────────────────────────

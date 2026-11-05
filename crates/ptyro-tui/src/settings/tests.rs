@@ -348,7 +348,8 @@ fn the_key_bindings_section_lists_every_default_key_by_when_it_works() {
     assert!(titles.iter().any(|s| s.starts_with("Anywhere")), "{titles:?}");
     let keys: Vec<&Binding> =
         rows.iter().filter_map(|r| if let Row::Key(b) = r { Some(b) } else { None }).collect();
-    assert_eq!(keys.len(), keymap::default_keys().len() - 2 * 8, "the digits are one row each");
+    // The nine digits are one row per table; the ten Alt digits (SHELLS) one more.
+    assert_eq!(keys.len(), keymap::default_keys().len() - 2 * 8 - 9, "the digits are one row each");
     let c = keys.iter().find(|b| b.name == "C").unwrap();
     assert_eq!((c.action.as_str(), c.standing), ("config.panel", Standing::Default));
     assert!(c.help.starts_with("Settings"), "{}", c.help);
@@ -482,7 +483,7 @@ fn the_nine_session_digits_are_one_row_that_says_how_to_change_them() {
         .iter()
         .filter_map(|r| if let Row::Key(b) = r { Some(b).filter(|b| b.fixed) } else { None })
         .collect();
-    assert_eq!(fixed.len(), 2, "after the prefix and in the sidebar");
+    assert_eq!(fixed.len(), 3, "after the prefix, in the sidebar, and the Alt digits anywhere");
     let at = rows.iter().position(|r| matches!(r, Row::Key(b) if b.fixed)).unwrap();
     t.p.cursor = at;
     t.press("<Enter>");

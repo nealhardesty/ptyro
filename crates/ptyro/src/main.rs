@@ -25,6 +25,7 @@ mod remote;
 mod script;
 mod serve;
 mod service;
+mod shells;
 mod ship;
 mod tls;
 mod tour;
@@ -538,8 +539,19 @@ enum Cmd {
         #[arg(add = ArgValueCandidates::new(complete::sessions))]
         session: String,
     },
+    /// Your workspace's SHELLS: numbered terminals (any command) that belong to no worktree,
+    /// `Alt-1…9` in the TUI. `ptyro shells new -- htop`, `ptyro shells go 2`; every session
+    /// command takes `%N` (`ptyro send %3 make`)
+    #[command(args_conflicts_with_subcommands = true)]
+    Shells {
+        #[command(subcommand)]
+        cmd: Option<shells::ShellsCmd>,
+        #[command(flatten)]
+        ls: shells::LsArgs,
+    },
     /// Your worktree's quick terminal: one shell per worktree (or directory), reused, which the
-    /// TUI shows as a drawer under the pane (`C-q C-t`). Attaches, starting it if there's none
+    /// TUI shows as a drawer under the pane (`C-q C-t`). Your workspace's numbered shells are
+    /// `ptyro shells`. Attaches, starting it if there's none
     Shell {
         /// The worktree (default: the one you're in)
         #[arg(add = ArgValueCandidates::new(complete::worktrees))]

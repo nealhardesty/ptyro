@@ -796,6 +796,8 @@ impl Daemon {
                             self.events.send(DomainEvent::SessionUpdated { info: self.info(&s) });
                     }
                 }
+                // Its SHELLS keep their numbers in main where they're free (SPEC §23.3).
+                self.reslot();
                 let _ = self.events.send(DomainEvent::WorkspaceRemoved { id: w.id });
                 Ok(Reply::Done)
             }

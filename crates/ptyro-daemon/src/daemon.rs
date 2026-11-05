@@ -43,6 +43,8 @@ pub struct Daemon {
     focused: Mutex<Option<SessionId>>,
     /// Views saved while the store is unavailable.
     pub(crate) views: Mutex<BTreeMap<String, serde_json::Value>>,
+    /// The workspace the TUI showed last: what a bare `%N` means (SPEC §23.5).
+    pub(crate) shown_workspace: Mutex<Option<String>>,
     /// Repository roots never to register on their own (UX1.5).
     pub(crate) declined: Mutex<std::collections::HashSet<std::path::PathBuf>>,
     /// Worktrees being archived now: one archive each (a PR poll and a refresh can both see
@@ -200,6 +202,7 @@ impl Daemon {
             config: RwLock::new(config),
             focused: Mutex::new(None),
             views: Mutex::new(BTreeMap::new()),
+            shown_workspace: Mutex::new(None),
             declined: Mutex::new(std::collections::HashSet::new()),
             archiving: Mutex::new(std::collections::HashSet::new()),
             archive_list: tokio::sync::Mutex::new(()),
@@ -505,6 +508,10 @@ impl Daemon {
     pub fn resolve(&self, addr: &str) -> Result<Arc<Session>, Error> {
         let sessions = self.sessions();
         let addr = addr.trim();
+        // `%3`, `work%3`: a shell of SHELLS by its number (SPEC §23.5).
+        if let Some(found) = self.resolve_slot(addr) {
+            return found;
+        }
         match addr {
             "@last" => return sessions.last().cloned().ok_or_else(|| Error::not_found(addr)),
             "@focused" => {
@@ -641,6 +648,14 @@ impl Daemon {
     }
 
     pub(crate) fn forget_session(&self, id: SessionId) {
+        // A scratch shell's directory goes with it (SPEC §23.8).
+        let scratch = self.session(id).and_then(|s| {
+            let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            m.shelf.as_ref().and_then(|f| f.scratch.clone())
+        });
+        if let Some(dir) = scratch {
+            self.drop_scratch(&dir);
+        }
         self.sessions.writing().retain(|o| o.id != id);
         self.last_notified.locked().remove(&id);
         let _ = self.events.send(DomainEvent::SessionRemoved { id });
@@ -670,21 +685,50 @@ impl Daemon {
             return Err(Error::invalid(format!("--profile {a} contradicts the agent's @{b}")));
         }
         let explicit = spec.profile.clone().or(agent_profile);
+        // SHELLS (SPEC §23.2): a loose session belongs to its workspace, wherever it starts.
+        let asked_loose = spec.loose || spec.scratch || spec.slot.is_some();
+        if asked_loose && spec.worktree.is_some() {
+            return Err(Error::invalid(
+                "a shell in SHELLS belongs to its workspace, not a worktree: leave out the worktree",
+            ));
+        }
         // The repository it starts in becomes a project, so it shows in the sidebar (UX1.5).
-        if spec.worktree.is_none() {
+        if spec.worktree.is_none() && !asked_loose {
             self.auto_register(&spec.cwd, spec.workspace.as_deref()).await;
         }
-        let target = self.target(spec.worktree.as_deref(), &spec.cwd)?;
+        let target =
+            if asked_loose { None } else { self.target(spec.worktree.as_deref(), &spec.cwd)? };
+        // One started outside every project joins SHELLS too (SPEC §23.3), unless it is a
+        // quick terminal, the scratchpad's editor or a client's tool.
+        let loose = asked_loose || (target.is_none() && !spec.quick && !spec.pad && !spec.tool);
+        let id = SessionId::new();
+        let scratch = if spec.scratch { Some(self.make_scratch(id)?) } else { None };
+        // Any refusal from here on takes the new, empty scratch directory away again.
+        let mut scratch_guard = crate::shells::ScratchGuard(scratch.clone());
         // A worktree by address starts at its root; a directory inside one stays where asked.
-        let cwd = match (&spec.worktree, &target) {
-            (Some(_), Some((w, _))) => w.path.clone(),
+        let cwd = match (&spec.worktree, &target, &scratch) {
+            (_, _, Some(dir)) => dir.clone(),
+            (Some(_), Some((w, _)), _) => w.path.clone(),
             _ => spec.cwd.clone(),
+        };
+        // A shell of SHELLS asked for where this machine has no such directory (`~` from the
+        // web, a gone directory, another machine's path) starts at home (SPEC §23.4).
+        let cwd = match std::env::var_os("HOME").map(std::path::PathBuf::from) {
+            Some(home) if loose && !cwd.is_dir() => match cwd.strip_prefix("~") {
+                Ok(rest) if home.join(rest).is_dir() => home.join(rest),
+                _ => home,
+            },
+            _ => cwd,
         };
         if !cwd.is_dir() {
             return Err(Error::invalid(format!("not a directory: {}", cwd.display())));
         }
-        let workspace =
-            self.home_workspace(spec.workspace.as_deref(), target.as_ref().map(|(_, p)| p))?;
+        let workspace = match &spec.workspace {
+            None if loose => self.context_workspace(),
+            asked => self.home_workspace(asked.as_deref(), target.as_ref().map(|(_, p)| p))?,
+        };
+        let reservation =
+            if loose { Some(self.reserve_slot(&workspace, spec.slot)?) } else { None };
         let res = self.resolve_profile(
             explicit.as_deref(),
             target.as_ref(),
@@ -733,7 +777,6 @@ impl Daemon {
             }
             (None, false) => (spec.argv.clone(), SessionKind::Command),
         };
-        let id = SessionId::new();
         // What it's for (UX1.24): `--title`, else the prompt it starts with.
         let wording = spec.title.clone().or_else(|| spec.prompt.clone());
         let name = match spec.name {
@@ -800,7 +843,10 @@ impl Daemon {
             fork: false,
             chat_tools: policy.as_ref().is_some_and(|p| p.chat),
         });
-        let s = self
+        if let Some(r) = &reservation {
+            self.pend_shelf(id, r, scratch.clone(), asked_loose);
+        }
+        let launched = self
             .launch(Launch {
                 id,
                 argv,
@@ -813,7 +859,16 @@ impl Daemon {
                 replace: false,
                 agent: start,
             })
-            .await?;
+            .await;
+        drop(reservation);
+        let s = match launched {
+            Ok(s) => s,
+            Err(e) => {
+                crate::shells::take_pending(id);
+                return Err(e);
+            }
+        };
+        scratch_guard.0 = None;
         // Its title: `--title`, else the prompt (a snippet's text, not its `@name`).
         let title = spec.title.clone().or(prompt_text).map(|t| ptyro_core::session::brief(&t, 120));
         if title.is_some() {
@@ -1222,6 +1277,11 @@ impl Daemon {
                 Ok(Reply::Scrollback { doc })
             }
             Request::SaveView { name, view } => {
+                if name == "_tui"
+                    && let Some(ws) = view["workspace"].as_str()
+                {
+                    *self.shown_workspace.locked() = Some(ws.to_owned());
+                }
                 match &self.store {
                     Some(store) => store
                         .kv_set(format!("view:{name}"), view)
@@ -1377,6 +1437,9 @@ impl Daemon {
                 self.convert(&addr, structured, force).await
             }
             Request::Adopt { addr } => self.adopt(&addr).await,
+            req @ (Request::ShellMove { .. }
+            | Request::ShellPlace { .. }
+            | Request::ShellWatch { .. }) => self.handle_shells(req).await,
             Request::QuickShell { worktree, cwd, create, env, size, workspace } => {
                 self.quick_shell(worktree, cwd, create, env, size, workspace).await
             }

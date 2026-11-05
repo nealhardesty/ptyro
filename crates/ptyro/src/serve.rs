@@ -79,6 +79,7 @@ const ASSETS: &[(&str, &str, &[u8])] = &[
     js!("runs"),
     js!("screen"),
     js!("sessions"),
+    js!("shells"),
     js!("settings"),
     js!("panel"),
     js!("cfgkit"),

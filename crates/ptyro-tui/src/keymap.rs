@@ -127,6 +127,37 @@ pub const ACTIONS: &[ActionSpec] = &[
         arg: Arg::Number,
     },
     a("session.find", "Find a session (fuzzy) and show it here"),
+    ActionSpec {
+        id: "shells.go",
+        desc: "Show shell N of this workspace's SHELLS (an empty number starts a shell there)",
+        arg: Arg::Number,
+    },
+    a(
+        "shells.new",
+        "A new shell in this workspace's SHELLS, in the pane's directory, full sized (tmux's c)",
+    ),
+    a(
+        "shells.menu",
+        "The shells menu: this workspace's SHELLS by number; a digit shows one, c makes one",
+    ),
+    a(
+        "shells.scratch",
+        "A scratch shell in SHELLS: a new, empty directory of its own that goes with it",
+    ),
+    a(
+        "shells.command",
+        "A command in SHELLS (htop, ssh prod, a dev server), with a number of its own",
+    ),
+    a("shells.move", "Give this shell another number in SHELLS (one already there swaps)"),
+    a(
+        "shells.watch",
+        "Watch this shell: when its command ends, new output, silence, or a line that matches",
+    ),
+    a(
+        "shells.loose",
+        "Move this session to its workspace's SHELLS, with a number: it outlives its worktree",
+    ),
+    a("shells.adopt", "Move this shell from SHELLS into the worktree its directory is in"),
     a("attention.next", "Jump to the session that needs you most (blocked first)"),
     a("inbox", "The inbox: everything that wanted you, per workspace"),
     a("peek", "Peek at a session's screen and what it wants; reply or answer inline"),
@@ -538,6 +569,8 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Prefix, "v", "pane.split_right"),
     (Table::Prefix, "s", "pane.split_down"),
     (Table::Prefix, "c", "pane.close"),
+    (Table::Prefix, "C-c", "shells.new"),
+    (Table::Prefix, "e", "shells.menu"),
     (Table::Prefix, "z", "pane.zoom"),
     (Table::Prefix, "l", "pane.next"),
     (Table::Prefix, "h", "pane.prev"),
@@ -599,6 +632,7 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Nav, ".", "row.menu"),
     (Table::Nav, "!", "shell.new"),
     (Table::Nav, "C-t", "shell.drawer"),
+    (Table::Nav, "c", "shells.new"),
     (Table::Nav, "T", "shell.pane"),
     (Table::Nav, ";", "scratchpad.toggle"),
     (Table::Nav, "'", "scratchpad.add"),
@@ -655,7 +689,15 @@ pub fn default_keys() -> Vec<(String, String)> {
             out.push((named(t, &d.to_string()), format!("session.focus {d}")));
         }
     }
+    for (k, n) in shell_digits() {
+        out.push((named(Table::Global, &k), format!("shells.go {n}")));
+    }
     out
+}
+
+/// `M-1`…`M-9` and `M-0`: shells 1–10 of SHELLS (SPEC §23.6), with no prefix.
+pub fn shell_digits() -> Vec<(String, u8)> {
+    (1..=10u8).map(|n| (format!("M-{}", n % 10), n)).collect()
 }
 
 #[derive(Debug, Clone)]
@@ -704,6 +746,13 @@ impl Keymap {
             map.bindings.insert(
                 slot(Table::Nav, &k),
                 (k, Command { action: "session.focus", arg: Some(d.to_string()) }),
+            );
+        }
+        for (k, n) in shell_digits().into_iter().filter(|_| config.shell.alt_digits) {
+            let k = key(&k);
+            map.bindings.insert(
+                slot(Table::Global, &k),
+                (k, Command { action: "shells.go", arg: Some(n.to_string()) }),
             );
         }
         for (spec_key, value) in &config.keys {
@@ -767,6 +816,21 @@ impl Keymap {
                     out.push((
                         *t,
                         "1…9".into(),
+                        Command { action: c.action, arg: Some("N".into()) },
+                    ));
+                }
+                continue;
+            }
+            // `M-1`…`M-0` → `shells.go 1`…`10`: one `M-1…9` line, the defaults only.
+            if c.action == "shells.go"
+                && shell_digits()
+                    .iter()
+                    .any(|(k, n)| k == label && c.arg.as_deref() == Some(n.to_string().as_str()))
+            {
+                if c.arg.as_deref() == Some("1") {
+                    out.push((
+                        *t,
+                        "M-1…9".into(),
                         Command { action: c.action, arg: Some("N".into()) },
                     ));
                 }
@@ -901,7 +965,8 @@ mod tests {
         let (m, _) = Keymap::new(&Config::default());
         let rows = settings::bindings(&serde_json::Value::Null, &lk);
         // The nine digits are one row per table; everything else is a row of its own.
-        assert_eq!(rows.len(), DEFAULTS.len() + 2, "one row per default key");
+        // The nine digits are one row per table, the ten Alt digits one more.
+        assert_eq!(rows.len(), DEFAULTS.len() + 3, "one row per default key");
         for b in rows.iter().filter(|b| !b.fixed) {
             let table = match b.table {
                 "nav" => Table::Nav,

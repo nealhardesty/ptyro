@@ -83,3 +83,24 @@ pub fn mouse(m: &CMouse) -> MouseEvent {
     };
     MouseEvent { kind, x: m.column, y: m.row, mods: mods(m.modifiers) }
 }
+
+#[cfg(test)]
+mod shells_keys {
+    use super::*;
+    use crate::keymap::{Keymap, Table};
+
+    /// SH.0: `Alt-1` as crossterm reports it (from `ESC 1`, or the kitty protocol's `CSI 49;3u`:
+    /// both arrive as the character with Alt) reaches `shells.go 1`; `Alt-0` is shell 10.
+    #[test]
+    fn alt_digits_reach_the_shells() {
+        let (map, _) = Keymap::new(&ptyro_core::config::Config::default());
+        for (c, n) in [('1', 1), ('9', 9), ('0', 10)] {
+            let k = key(&CKey::new(CK::Char(c), KeyModifiers::ALT)).unwrap();
+            let cmd = map.lookup(Table::Global, k).unwrap_or_else(|| panic!("Alt-{c}"));
+            assert_eq!((cmd.action, cmd.number()), ("shells.go", Some(n)));
+        }
+        // Option-1 on a Mac without "Option as Meta" types `¡`: no Alt, nothing bound.
+        let k = key(&CKey::new(CK::Char('¡'), KeyModifiers::NONE)).unwrap();
+        assert!(map.lookup(Table::Global, k).is_none());
+    }
+}

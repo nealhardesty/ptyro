@@ -50,6 +50,13 @@ Conventions:
 | `ptyro convert SESSION [--to tui\|structured] [--force]` | switch an agent between its own TUI and structured mode, same conversation |
 | `ptyro summarize SESSION [--json]` | what it's doing, in a line, from a small model (`[summaries] command`, on its profile's account); works with summaries off |
 | `ptyro shell [WORKTREE] [--json] [--read [--scrollback [N]]]` | the worktree's quick terminal (one shell per worktree, or per directory outside one): attach with it in the TUI's drawer, print it as JSON, or print its screen (`--read`, which never starts one; an agent can read your terminal this way) |
+| `ptyro shells [ls] [--workspace WS] [--all] [--json]` | your workspace's SHELLS (SPEC §23): numbered terminals of any command that belong to the workspace, not a worktree, by number (`Alt-1…9` in the TUI) |
+| `ptyro shells new [-- CMD…] [-C DIR] [--slot N] [--scratch] [--name N] [--title T] [--workspace WS] [--attach] [--json]` | start one in SHELLS, here (or `-C DIR`), with the lowest free number or `--slot N`; `--scratch`: in a new, empty directory that goes with it |
+| `ptyro shells go N [--workspace WS]` | attach with shell N shown (the same as `ptyro attach %N`); one lost in a restart starts again |
+| `ptyro shells move N M [--workspace WS]` | give shell N the number M; a shell already there swaps with it |
+| `ptyro shells loose S` | move a worktree's session into its workspace's SHELLS: it outlives its worktree |
+| `ptyro shells adopt S [WORKTREE]` | move a shell from SHELLS into a worktree (default: the one its directory is in; refused across profiles) |
+| `ptyro shells watch S [--done\|--output\|--silence TIME\|--match PATTERN\|--off]` | tell you when its command ends, it prints, it goes quiet, or a line matches (`done` and `match` fire once) |
 | `ptyro adopt SESSION` | the Claude you started by hand in a shell session becomes a managed session (hooks, hibernation, mail), same conversation |
 | `ptyro scratchpad [edit] [--pane [--json]]` | the scratchpad (alias `pad`): one Markdown notes file for ideas and bugs, `$PTYRO_SCRATCHPAD` in every session. No subcommand: open it in your editor, here. `--pane`: the editor as a session of its own (what `C-q ;` shows), attached |
 | `ptyro scratchpad path\|cat [--tail N] [--json]` | where the file is / its text (`--json`: `{path, rev, text, open, done}`) |

@@ -226,6 +226,8 @@ pub enum Purpose {
     AddProject(Option<AfterAdd>),
     /// A row's actions (UX1.15): run with that row selected in the sidebar.
     RowMenu(Row),
+    /// What to watch a SHELLS shell for (SPEC §23.9).
+    ShellWatch(SessionId),
     /// A chat's agent (`None`: the new chat being written's).
     ChatAgent(Option<String>),
     /// A chat's tool preset.
@@ -333,6 +335,12 @@ pub enum PromptKind {
     ChatEdit(String, String),
     /// Find in this chat.
     ChatFindIn(String),
+    /// A SHELLS shell's new number (SPEC §23.3).
+    ShellMove(SessionId),
+    /// A command to run in SHELLS (SPEC §23.4).
+    ShellCommand,
+    /// The pattern a SHELLS shell is watched for (SPEC §23.9).
+    ShellMatch(SessionId),
     /// A question for `chat find`.
     ChatFind,
     /// Which agents a chat's last message is asked of (`chat.compare`).
@@ -631,7 +639,7 @@ pub enum Then {
 }
 
 /// An offer to run a TUI action.
-fn run_offer(label: &str, action: &'static str) -> Offer {
+pub(crate) fn run_offer(label: &str, action: &'static str) -> Offer {
     Offer { label: label.into(), then: Then::Run(Command { action, arg: None }) }
 }
 
@@ -3082,6 +3090,14 @@ impl App {
             ),
             "worktree.gc" => self.request(Pending::Gc, Request::Gc),
             "shell.new" => self.new_shell(),
+            // SHELLS (SPEC §23.6).
+            "shells.go" => match cmd.number() {
+                Some(n) if n > 0 => self.shells_go(n as u32),
+                _ => self.shells_menu(),
+            },
+            "shells.new" => self.shells_new(None, false),
+            "shells.menu" => self.shells_menu(),
+            a if a.starts_with("shells.") => self.shells_action(a),
             a if a.starts_with("machine.") => self.machine_action(a),
             "shell.here" | "shell.drawer" | "shell.pane" => {
                 // A quick terminal row is that one; anything else is where you are.
@@ -3544,6 +3560,10 @@ impl App {
                     self.toggle_quick(Some(id), None, None);
                 }
                 Some(Row::Set(run)) if cmd.action == "nav.open" => self.open_sets(Some(run)),
+                Some(Row::ShellNew(_)) if cmd.action == "nav.open" => {
+                    self.sidebar_zoom = false;
+                    self.shells_new(None, false);
+                }
                 // A workspace, project, worktree, change set or CHATS heading: ⏎ (and Space)
                 // fold it, h/l close and open it; `all chats…` (or the chat list's key) lists
                 // a workspace's chats.
@@ -3973,6 +3993,11 @@ impl App {
                 .and_then(worktree_hint)
                 .or_else(|| with("session.new", "start a task here")),
             Row::Project(_) => with("worktree.new", "new worktree"),
+            Row::Shells(_) => Some(match with("shells.new", "a new shell") {
+                Some(l) => format!("⏎ fold · {l} · {} jumps", self.shells_jump_hint()),
+                None => "⏎ fold".into(),
+            }),
+            Row::ShellNew(_) => Some("⏎ start a shell here".into()),
             // A quick terminal (UX1.25): the key that shows or hides it.
             Row::Quick(id) => {
                 let s = self.session(id)?;
@@ -4300,6 +4325,12 @@ impl App {
                 if s.worktree.is_some() {
                     v.extend(["inspector", "worktree.open", "script.run", "script.pick"]);
                 }
+                // SHELLS (SPEC §23.8): its number, a watch, back into a worktree; or there.
+                if s.loose {
+                    v.extend(["shells.move", "shells.watch", "shells.adopt"]);
+                } else if !s.quick && !s.pad && s.machine.is_none() {
+                    v.push("shells.loose");
+                }
                 v.push("pane.split_right");
                 if crate::tab::plan(crate::tab::Place::Tab, "", None, &crate::tab::here()).is_ok() {
                     v.extend(["session.tab", "session.pane"]);
@@ -4372,6 +4403,9 @@ impl App {
             Row::Chats(_) | Row::ChatNew(_) | Row::ChatAll(_) => {
                 vec!["chat.new", "chat.list", "chat.import"]
             }
+            Row::Shells(_) | Row::ShellNew(_) => {
+                vec!["shells.new", "shells.scratch", "shells.menu"]
+            }
             Row::Group(_) => Vec::new(),
         }
     }
@@ -4401,6 +4435,7 @@ impl App {
             Row::Workspace(w) => Some(format!("Workspace {}", crate::ui::workspace_label(w))),
             Row::Chat(id) => self.chat(id).map(|c| format!("Chat {}", c.label())),
             Row::Chats(_) | Row::ChatNew(_) | Row::ChatAll(_) => Some("Chats".into()),
+            Row::Shells(_) | Row::ShellNew(_) => Some("Shells".into()),
             Row::Group(_) => None,
         };
         let items: Vec<Item> = self
@@ -5798,6 +5833,9 @@ impl App {
                 self.focus = Focus::Sidebar;
                 self.run(&cmd);
             }
+            (Target::Action(cmd), Purpose::ShellWatch(id)) if cmd.action == "shells.watch_set" => {
+                self.shell_watch_picked(id, cmd.arg.as_deref().unwrap_or("done"));
+            }
             (Target::Action(cmd), _) => self.run(&cmd),
             // From the palette: go to a worktree (its first session) or a project.
             (Target::Worktree(id), _) => {
@@ -6011,6 +6049,14 @@ impl App {
                         confirmed: false,
                     },
                 );
+            }
+            PromptKind::ShellMove(id) => self.shell_move_typed(id, &text),
+            PromptKind::ShellCommand => self.shell_command_typed(&text),
+            PromptKind::ShellMatch(id) => {
+                let re = text.trim().to_owned();
+                if !re.is_empty() {
+                    self.set_watch(id, Some(ptyro_core::session::Watch::Match { re }));
+                }
             }
             PromptKind::Retitle(id) => {
                 let title = Some(text.trim().to_owned()).filter(|t| !t.is_empty());
@@ -6355,6 +6401,17 @@ impl App {
                             self.set_sel(&rows, row);
                             self.chat_row_open(&r);
                         }
+                        // SHELLS: its `＋` starts a shell in that workspace (SPEC §23.6).
+                        Some(Row::Shells(_)) if x - side.x > crate::chats::HEADING_PLUS => {
+                            self.set_sel(&rows, row);
+                            self.focus = Focus::Sidebar;
+                            self.shells_new(None, false);
+                        }
+                        Some(Row::ShellNew(_)) => {
+                            self.set_sel(&rows, row);
+                            self.focus = Focus::Sidebar;
+                            self.shells_new(None, false);
+                        }
                         // Its `＋` starts a chat in that workspace; the rest of it folds.
                         Some(Row::Chats(_)) if x - side.x >= crate::chats::HEADING_PLUS => {
                             self.set_sel(&rows, row);
@@ -6363,6 +6420,7 @@ impl App {
                         }
                         Some(
                             r @ (Row::Chats(_)
+                            | Row::Shells(_)
                             | Row::Workspace(_)
                             | Row::Project(_)
                             | Row::Worktree(_)),
@@ -6532,6 +6590,7 @@ impl App {
             show: self.show,
             chats: &self.chat_list,
             recent: self.config.chat.enabled.then_some(self.config.chat.recent as usize),
+            shells: self.config.shell.section,
         }
     }
 
@@ -6544,15 +6603,16 @@ impl App {
         self.tree().sessions()
     }
 
-    /// Visible session rows, in order: what `1`–`9` pick.
+    /// Visible session rows, in order: what `1`–`9` pick. SHELLS have their own numbers
+    /// (`Alt-1…9`, SPEC §23.6), so they aren't counted.
     pub fn numbered(&self) -> Vec<SessionId> {
-        Self::numbered_from(&self.rows())
+        self.numbered_from(&self.rows())
     }
 
-    pub fn numbered_from(rows: &[Row]) -> Vec<SessionId> {
+    pub fn numbered_from(&self, rows: &[Row]) -> Vec<SessionId> {
         rows.iter()
             .filter_map(|r| match r {
-                Row::Session(id) => Some(*id),
+                Row::Session(id) if !self.session(*id).is_some_and(|s| s.loose) => Some(*id),
                 _ => None,
             })
             .collect()
@@ -6618,13 +6678,19 @@ impl App {
                 | Row::Chats(_)
                 | Row::Chat(_)
                 | Row::ChatNew(_)
-                | Row::ChatAll(_) => return (None, None),
+                | Row::ChatAll(_)
+                | Row::Shells(_)
+                | Row::ShellNew(_) => return (None, None),
             }
         }
-        if let Some(s) = self.focused_session().and_then(|id| self.session(id))
-            && s.project.is_some()
-        {
-            return (s.project.clone(), s.worktree.clone());
+        if let Some(s) = self.focused_session().and_then(|id| self.session(id)) {
+            if s.project.is_some() {
+                return (s.project.clone(), s.worktree.clone());
+            }
+            // A shell of SHELLS is nobody's worktree (SPEC §23.6): no project here.
+            if s.loose {
+                return (None, None);
+            }
         }
         let first = self
             .tree()
@@ -9837,7 +9903,9 @@ mod tests {
         let rows = app.rows();
         assert!(rows.contains(&Row::Workspace("main".into())));
         let at = rows.iter().position(|r| *r == Row::Workspace("laptop2:work".into())).unwrap();
-        assert_eq!(rows[at + 1], Row::Session(remote.id), "its session under its header");
+        // A session outside every project is in the workspace's SHELLS (SPEC §23.3).
+        assert_eq!(rows[at + 1], Row::Shells("laptop2:work".into()));
+        assert_eq!(rows[at + 2], Row::Session(remote.id), "its session under its header");
         let shown = screen(&app);
         assert!(shown.contains("laptop2 / work"), "{shown}");
         assert!(!shown.contains("laptop2:fix-flaky-test"), "no machine twice in its rows: {shown}");
@@ -10090,6 +10158,7 @@ mod tests {
             [
                 Row::Workspace("main".into()),
                 Row::Project("p1".into()),
+                Row::Shells("main".into()),
                 Row::Chats("main".into()),
                 Row::Workspace("side".into()),
             ]
@@ -10182,8 +10251,12 @@ mod tests {
         assert_eq!(app.selected_row(), Some(Row::Workspace("main".into())));
         // ⏎ on its header opens it, its levels still folded; h folds it again, l opens it.
         app.run(&Command { action: "nav.open", arg: None });
-        let open =
-            [Row::Workspace("main".into()), Row::Project("p1".into()), Row::Chats("main".into())];
+        let open = [
+            Row::Workspace("main".into()),
+            Row::Project("p1".into()),
+            Row::Shells("main".into()),
+            Row::Chats("main".into()),
+        ];
         assert_eq!(app.rows(), open);
         app.run(&Command { action: "nav.collapse", arg: None });
         assert_eq!(app.rows(), [Row::Workspace("main".into())]);
@@ -10950,5 +11023,112 @@ mod tests {
         std::fs::write(&file, "[chat]\nenabled = true\n").unwrap();
         app.reload_config_with(false);
         assert!(asked(&mut app).iter().any(|p| matches!(p, Pending::Chats)), "on: fetched");
+    }
+
+    // ── SHELLS (SPEC §23.6, ROADMAP SH.2) ──────────────────────────────────────
+
+    fn loose(name: &str, slot: u32) -> SessionInfo {
+        let mut s = session(name);
+        s.loose = true;
+        s.slot = Some(slot);
+        s.workspace = Some("main".into());
+        s.argv = vec!["/bin/zsh".into()];
+        s
+    }
+
+    /// The spawn the TUI asked for, if any (no daemon here: it comes back unanswered).
+    fn spawn_asked(app: &mut App) -> Option<SpawnSpec> {
+        let mut found = None;
+        while let Ok(m) = app.rx.try_recv() {
+            if let AppMsg::Reply(Pending::Spawned { spec, .. }, _) = m {
+                found = Some(*spec);
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn shells_are_a_section_by_number_and_keep_out_of_the_sidebar_s_numbers() {
+        let mut app = app();
+        let (agent, _) = with_agents(&mut app);
+        let (two, one) = (loose("htop", 2), loose("dl", 1));
+        app.sessions.extend([two.clone(), one.clone()]);
+        let rows = app.rows();
+        let at = rows.iter().position(|r| *r == Row::Shells("main".into())).expect("SHELLS");
+        assert_eq!(rows[at + 1], Row::Session(one.id), "by number, not by age");
+        assert_eq!(rows[at + 2], Row::Session(two.id));
+        assert!(
+            rows.iter().position(|r| *r == Row::Chats("main".into())).is_none_or(|c| c > at),
+            "before CHATS"
+        );
+        // `C-q 1…9` count the other sessions; a shell's number is its own.
+        let numbered = app.numbered();
+        assert_eq!(numbered.first(), Some(&agent));
+        assert!(!numbered.contains(&one.id) && !numbered.contains(&two.id));
+        let shown = screen(&app);
+        assert!(shown.contains("SHELLS"), "{shown}");
+        assert!(shown.contains(" 1 "), "{shown}");
+        // `when-used` hides an empty section; `always` shows ＋ new shell in one.
+        app.sessions.retain(|s| !s.loose);
+        assert!(app.rows().contains(&Row::ShellNew("main".into())));
+        app.config.shell.section = ptyro_core::config::ShellsSection::WhenUsed;
+        assert!(!app.rows().iter().any(|r| matches!(r, Row::Shells(_) | Row::ShellNew(_))));
+    }
+
+    #[test]
+    fn alt_n_shows_a_shell_and_an_empty_number_starts_one_there() {
+        let mut app = app();
+        with_agents(&mut app);
+        let two = loose("htop", 2);
+        app.sessions.push(two.clone());
+        while app.rx.try_recv().is_ok() {}
+        app.run(&Command { action: "shells.go", arg: Some("2".into()) });
+        assert_eq!(app.focused_session(), Some(two.id));
+        app.run(&Command { action: "shells.go", arg: Some("5".into()) });
+        let spec = spawn_asked(&mut app).expect("a new shell was asked for");
+        assert!(spec.loose && spec.slot == Some(5), "{spec:?}");
+        assert_eq!(spec.workspace.as_deref(), Some("main"));
+        // It starts in the pane's directory (the shown shell's).
+        assert_eq!(spec.cwd, two.cwd);
+        // The keys: Alt-1…9 by default, and off with `[shell] alt_digits = false`.
+        let alt3 = KeyEvent::new(KeyCode::Char { c: '3' }, Mods(Mods::ALT));
+        let c = app.keymap.lookup(Table::Global, alt3).expect("M-3");
+        assert_eq!((c.action, c.number()), ("shells.go", Some(3)));
+        let mut config = Config::default();
+        config.shell.alt_digits = false;
+        let (off, _) = crate::keymap::Keymap::new(&config);
+        assert!(off.lookup(Table::Global, alt3).is_none());
+    }
+
+    #[test]
+    fn bang_with_no_worktree_around_starts_a_shell_in_shells() {
+        let mut app = app();
+        let (agent, _) = with_agents(&mut app);
+        // In a worktree's agent, `!` is a shell in that worktree.
+        app.show(agent, None);
+        while app.rx.try_recv().is_ok() {}
+        app.run(&Command { action: "shell.new", arg: None });
+        let spec = spawn_asked(&mut app).expect("spawn");
+        assert!(!spec.loose && spec.worktree.as_deref() == Some("p1-root"), "{spec:?}");
+        // In a shell of SHELLS (no worktree around): another one there, not the first project's.
+        let one = loose("dl", 1);
+        app.sessions.push(one.clone());
+        app.show(one.id, None);
+        app.run(&Command { action: "shell.new", arg: None });
+        let spec = spawn_asked(&mut app).expect("spawn");
+        assert!(spec.loose && spec.worktree.is_none(), "{spec:?}");
+    }
+
+    #[test]
+    fn a_shell_s_pane_header_is_the_strip_of_its_workspace_s_shells() {
+        let mut app = app();
+        with_project(&mut app);
+        let (one, two) = (loose("dl", 1), loose("htop", 2));
+        app.sessions.extend([one.clone(), two.clone()]);
+        app.show(two.id, None);
+        let shown = screen(&app);
+        let header = shown.lines().find(|l| l.contains("SHELLS ")).unwrap_or_default();
+        assert!(header.contains("[2 "), "the shown one in brackets: {shown}");
+        assert!(header.contains("1 "), "{header}");
     }
 }

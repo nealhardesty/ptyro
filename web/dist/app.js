@@ -6,7 +6,7 @@ import { Screen, modelLabel } from "./screen.js";
 import { conn, store, token } from "./conn.js";
 import { Term } from "./term.js";
 import { actions, ago, h, patch, sheet, tipOf, ui, views } from "./kit.js";
-import { data, loadAll, machineOf, onEvent, splitMachine } from "./data.js";
+import { can, data, loadAll, machineOf, onEvent, splitMachine } from "./data.js";
 import { staleMaybeChanged } from "./projects.js";
 import "./review.js";
 import "./runs.js";
@@ -17,6 +17,7 @@ import { machineChip } from "./machines.js";
 import { initNotes, notesConnected, notesEvent, notesLink, notesNeedsLoad, notesLoad, notesNoteButton, notesQuickAdd, notesShown, notesStart, notesView } from "./notes.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
 import { coach } from "./settings.js";
+import { goShell, shellStrip, shellsGroup } from "./shells.js";
 import { apply as showMachine, offlineText } from "./machine.js";
 // What this app does, by name: the Web column of docs/parity.md names these, and `make parity`
 // checks every name it uses is here (SPEC §1.3, ROADMAP WEB1). Each is its control's tooltip.
@@ -239,7 +240,8 @@ function listView() {
     const order = ["blocked", "errored", "working", "starting", "done", "idle", "unknown", "shell", "dormant", "exited"];
     const everything = [...app.sessions.values()].filter(KEEPS[show]).sort((a, b) => order.indexOf(statusOf(a)) - order.indexOf(statusOf(b)) || a.name.localeCompare(b.name));
     const all = [...app.sessions.values()].filter(KEEPS.all);
-    listCards = () => { const f = everything.filter(matches); return f.length ? f.map(sessionCard) : [h("p", { class: "empty" }, `Nothing matches “${query}”.`)]; };
+    // SHELLS have their group (SPEC §23.14), so they aren't among the cards twice.
+    listCards = () => { const f = everything.filter((s) => !s.loose && matches(s)); return f.length ? f.map(sessionCard) : query ? [h("p", { class: "empty" }, `Nothing matches “${query}”.`)] : []; };
     const body = everything.length ? listCards() : all.length ? [h("div", { class: "empty" }, h("p", {}, `Nothing is ${show} right now.`), h("button", { class: "small", title: tipOf("sidebar.filter"), onclick: () => setShow("all") }, "Show every session"))] : [h("div", { class: "empty" }, h("p", {}, "Nothing is running."), h("button", { class: "primary", title: tipOf("session.new"), onclick: () => newTask() }, "Start a task"), data.projects.size ? null : h("p", {}, h("a", { href: "#/setup", title: tipOf("first.run") }, "Set up ptyro first: your agents, accounts and repositories")))];
     const picked = [...marked].filter((id) => app.sessions.has(id));
     const tools = selecting
@@ -250,7 +252,8 @@ function listView() {
     const filter = all.length ? h("div", { class: "chips filter", title: tipOf("sidebar.filter") }, ...SHOWS.map((m, i) => h("button", { class: `${m === show ? "on" : ""} ${m}`, "aria-pressed": String(m === show), onclick: () => setShow(m) }, `${m} `, h("span", { class: "n" }, String(counts[i]))))) : null;
     // On a wide screen, the CHATS section beside them (the TUI's sidebar has it under each workspace).
     const aside = chatsShown() ? chatsAside() : null;
-    return h("div", {}, head, tools, filter, all.length > 6 || query ? searchBar : null, notesQuickAdd(), h("main", { class: `list${aside ? " with-chats" : ""}`, title: tip("sessions") }, h("div", { class: "cards" }, ...body), h("a", { class: "foot-link", href: "#/history", title: tipOf("session.history") }, "Earlier sessions"), aside));
+    const shells = can("full") || [...app.sessions.values()].some((s) => s.loose) ? shellsGroup(app.sessions.values(), sessionCard) : null;
+    return h("div", {}, head, tools, filter, all.length > 6 || query ? searchBar : null, notesQuickAdd(), h("main", { class: `list${aside ? " with-chats" : ""}`, title: tip("sessions") }, shells, h("div", { class: "cards" }, ...body), h("a", { class: "foot-link", href: "#/history", title: tipOf("session.history") }, "Earlier sessions"), aside));
 }
 function inboxView() {
     const items = app.inbox.map((e) => h("a", { class: `entry ${e.read_ms ? "read" : ""}`, href: `#/s/${encodeURIComponent(e.session)}` }, h("span", { class: `kind ${e.kind}` }, e.kind), h("div", { class: "main" }, h("div", { class: "name" }, e.title), h("div", { class: "detail" }, e.body)), h("time", {}, ago(e.at_ms))));
@@ -328,6 +331,8 @@ function sessionView(id) {
         ...(blocked ? [h("section", { class: "prompt" }, h("div", {}, h("b", {}, s.status?.kind === "permission" ? "Wants permission" : "Waiting for you"), s.held ? h("span", { class: "tag", title: "answers go to the agent as a decision" }, "exact") : null), h("pre", {}, s.status?.detail ?? s.attention?.text ?? ""), h("div", { class: "actions", title: tip("answer") }, h("button", { class: "allow", onclick: () => void answer(id, "allow") }, "Allow"), h("button", { class: "always", onclick: () => void answer(id, "always") }, "Always"), h("button", { class: "deny", onclick: () => void answer(id, "deny") }, "Deny")))] : []),
         ...(s.state.t === "dormant" ? [h("section", { class: "revive" }, h("span", {}, "Hibernated: its conversation is kept."), h("button", { class: "primary", title: tipOf("session.resume"), onclick: () => void conn.request({ t: "resume", addr: id }).then(() => toast("Resumed"), (e) => toast(e.message)) }, "Resume"))]
             : s.state.t !== "running" ? [h("section", { class: "revive" }, h("span", {}, s.state.t === "failed" ? "It failed to run." : s.state.code != null ? `Exited with ${s.state.code}.` : "Exited."), h("button", { class: "primary", title: tipOf("session.restart"), onclick: () => void conn.request({ t: "restart", addr: id }).then(() => toast("Restarted"), (e) => toast(e.message)) }, "Restart"))] : []),
+        // A shell of SHELLS: its workspace's shells by number, tmux's status line (SPEC §23.14).
+        s.loose ? shellStrip(app.sessions.values(), s) : null,
         chat ? sh.chat : sh.term.el,
         ...(chat ? [h("div", { class: "keys", title: tip("session.keys") }, ...[["Esc", { t: "esc" }], ["Tab", { t: "tab" }], ["↑", { t: "up" }], ["↓", { t: "down" }], ["←", { t: "left" }], ["→", { t: "right" }], ["⏎", { t: "enter" }]].map(([label, code]) => h("button", { onclick: () => sh.term.key({ code: code, mods: 0 }) }, label)), h("button", { onclick: () => sh.term.key({ code: { t: "char", c: "c" }, mods: 4 }) }, "^C"), notesNoteButton(s, false), h("button", { title: tip("session.view"), onclick: () => { if (!app.termView.delete(id))
                     app.termView.add(id); render(); } }, app.termView.has(id) ? "Chat" : "Terminal"))]
@@ -649,6 +654,13 @@ document.addEventListener("keydown", (e) => {
         e.preventDefault();
         newTask();
     }
+    // SHELLS (SPEC §23.14): a digit shows that shell, on the list and on a shell's page (the
+    // terminal, once tapped, has the keys).
+    else if (/^[1-9]$/.test(e.key) && (route().view === "list" || (route().view === "session" && app.sessions.get(route().id ?? "")?.loose))) {
+        e.preventDefault();
+        const here = app.sessions.get(route().id ?? "");
+        void goShell(app.sessions.values(), Number(e.key), here?.loose ? here.workspace : undefined);
+    }
     else if (e.key === "m" && chatsShown()) {
         e.preventDefault();
         newChat();
@@ -676,7 +688,7 @@ document.addEventListener("keydown", (e) => {
         setTimeout(() => (searchBox.isConnected ? searchBox : document.querySelector("input.search"))?.focus(), 50);
     }
     else if (e.key === "?")
-        sheet("Keys", [h("dl", { class: "facts" }, ...[["n", "New task"], ["m", "New chat"], ["/", "Find a session (in the chats: a chat; in a chat: a command)"], ["Ctrl-G", "Search every chat"], ["Enter", "In a chat: send (Shift+Enter: a new line)"], ["@", "In a chat's box: its folders"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g r", "Runs"], ["g e", "Change sets"], ["g i", "Inbox"], ["g m", "More"], ["Esc", "Close a dialog"]].flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
+        sheet("Keys", [h("dl", { class: "facts" }, ...[["n", "New task"], ["m", "New chat"], ["1…9", "Shell N of SHELLS (on the list and a shell's page)"], ["/", "Find a session (in the chats: a chat; in a chat: a command)"], ["Ctrl-G", "Search every chat"], ["Enter", "In a chat: send (Shift+Enter: a new line)"], ["@", "In a chat's box: its folders"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g r", "Runs"], ["g e", "Change sets"], ["g i", "Inbox"], ["g m", "More"], ["Esc", "Close a dialog"]].flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
 });
 window.addEventListener("hashchange", () => { takePairCode(); notesShown(); render(); });
 takePairCode();

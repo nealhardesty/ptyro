@@ -9,7 +9,7 @@ import { conn, store, token } from "./conn.js";
 import { Term } from "./term.js";
 import { actions, ago, h, patch, sheet, tipOf, ui, views } from "./kit.js";
 import type { Child } from "./kit.js";
-import { data, loadAll, machineOf, onEvent, splitMachine } from "./data.js";
+import { can, data, loadAll, machineOf, onEvent, splitMachine } from "./data.js";
 import { staleMaybeChanged } from "./projects.js";
 import "./review.js";
 import "./runs.js";
@@ -20,6 +20,7 @@ import { machineChip } from "./machines.js";
 import { initNotes, notesConnected, notesEvent, notesLink, notesNeedsLoad, notesLoad, notesNoteButton, notesQuickAdd, notesShown, notesStart, notesView } from "./notes.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
 import { coach } from "./settings.js";
+import { goShell, shellStrip, shellsGroup } from "./shells.js";
 import { apply as showMachine, offlineText } from "./machine.js";
 
 interface ChatItem { id: string; t: string; [k: string]: any }
@@ -264,7 +265,8 @@ function listView(): HTMLElement {
   const order = ["blocked", "errored", "working", "starting", "done", "idle", "unknown", "shell", "dormant", "exited"];
   const everything = [...app.sessions.values()].filter(KEEPS[show]).sort((a, b) => order.indexOf(statusOf(a)) - order.indexOf(statusOf(b)) || a.name.localeCompare(b.name));
   const all = [...app.sessions.values()].filter(KEEPS.all);
-  listCards = () => { const f = everything.filter(matches); return f.length ? f.map(sessionCard) : [h("p", { class: "empty" }, `Nothing matches “${query}”.`)]; };
+  // SHELLS have their group (SPEC §23.14), so they aren't among the cards twice.
+  listCards = () => { const f = everything.filter((s) => !s.loose && matches(s)); return f.length ? f.map(sessionCard) : query ? [h("p", { class: "empty" }, `Nothing matches “${query}”.`)] : []; };
   const body = everything.length ? listCards() : all.length ? [h("div", { class: "empty" },
     h("p", {}, `Nothing is ${show} right now.`),
     h("button", { class: "small", title: tipOf("sidebar.filter"), onclick: () => setShow("all") }, "Show every session"))] : [h("div", { class: "empty" },
@@ -286,7 +288,8 @@ function listView(): HTMLElement {
     ...SHOWS.map((m, i) => h("button", { class: `${m === show ? "on" : ""} ${m}`, "aria-pressed": String(m === show), onclick: () => setShow(m) }, `${m} `, h("span", { class: "n" }, String(counts[i]))))) : null;
   // On a wide screen, the CHATS section beside them (the TUI's sidebar has it under each workspace).
   const aside = chatsShown() ? chatsAside() : null;
-  return h("div", {}, head, tools, filter, all.length > 6 || query ? searchBar : null, notesQuickAdd(), h("main", { class: `list${aside ? " with-chats" : ""}`, title: tip("sessions") }, h("div", { class: "cards" }, ...body),
+  const shells = can("full") || [...app.sessions.values()].some((s) => s.loose) ? shellsGroup(app.sessions.values(), sessionCard) : null;
+  return h("div", {}, head, tools, filter, all.length > 6 || query ? searchBar : null, notesQuickAdd(), h("main", { class: `list${aside ? " with-chats" : ""}`, title: tip("sessions") }, shells, h("div", { class: "cards" }, ...body),
     h("a", { class: "foot-link", href: "#/history", title: tipOf("session.history") }, "Earlier sessions"), aside));
 }
 
@@ -382,6 +385,8 @@ function sessionView(id: string): HTMLElement {
     ...(s.state.t === "dormant" ? [h("section", { class: "revive" }, h("span", {}, "Hibernated: its conversation is kept."), h("button", { class: "primary", title: tipOf("session.resume"), onclick: () => void conn.request({ t: "resume", addr: id }).then(() => toast("Resumed"), (e) => toast((e as Error).message)) }, "Resume"))]
       : s.state.t !== "running" ? [h("section", { class: "revive" }, h("span", {}, s.state.t === "failed" ? "It failed to run." : s.state.code != null ? `Exited with ${s.state.code}.` : "Exited."),
           h("button", { class: "primary", title: tipOf("session.restart"), onclick: () => void conn.request({ t: "restart", addr: id }).then(() => toast("Restarted"), (e) => toast((e as Error).message)) }, "Restart"))] : []),
+    // A shell of SHELLS: its workspace's shells by number, tmux's status line (SPEC §23.14).
+    s.loose ? shellStrip(app.sessions.values(), s) : null,
     chat ? sh.chat : sh.term.el,
     ...(chat ? [h("div", { class: "keys", title: tip("session.keys") },
       ...([["Esc", { t: "esc" }], ["Tab", { t: "tab" }], ["↑", { t: "up" }], ["↓", { t: "down" }], ["←", { t: "left" }], ["→", { t: "right" }], ["⏎", { t: "enter" }]] as [string, object][]).map(([label, code]) => h("button", { onclick: () => sh.term.key({ code: code as any, mods: 0 }) }, label)),
@@ -668,6 +673,13 @@ document.addEventListener("keydown", (e) => {
   goKey = 0;
   if (e.key === "g") goKey = Date.now();
   else if (e.key === "n") { e.preventDefault(); newTask(); }
+  // SHELLS (SPEC §23.14): a digit shows that shell, on the list and on a shell's page (the
+  // terminal, once tapped, has the keys).
+  else if (/^[1-9]$/.test(e.key) && (route().view === "list" || (route().view === "session" && app.sessions.get(route().id ?? "")?.loose))) {
+    e.preventDefault();
+    const here = app.sessions.get(route().id ?? "");
+    void goShell(app.sessions.values(), Number(e.key), here?.loose ? here.workspace : undefined);
+  }
   else if (e.key === "m" && chatsShown()) { e.preventDefault(); newChat(); }
   else if (e.key === "/" && route().view === "chats") { e.preventDefault(); document.querySelector<HTMLInputElement>("input.search")?.focus(); }
   // In a chat, `/` starts a slash command in its composer.
@@ -676,7 +688,7 @@ document.addEventListener("keydown", (e) => {
     if (r) { e.preventDefault(); if (!r.value) { r.value = "/"; r.dispatchEvent(new Event("input")); } r.focus(); }
   }
   else if (e.key === "/") { e.preventDefault(); if (route().view !== "list") location.hash = "#/"; setTimeout(() => (searchBox.isConnected ? searchBox : document.querySelector<HTMLInputElement>("input.search"))?.focus(), 50); }
-  else if (e.key === "?") sheet("Keys", [h("dl", { class: "facts" }, ...([["n", "New task"], ["m", "New chat"], ["/", "Find a session (in the chats: a chat; in a chat: a command)"], ["Ctrl-G", "Search every chat"], ["Enter", "In a chat: send (Shift+Enter: a new line)"], ["@", "In a chat's box: its folders"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g r", "Runs"], ["g e", "Change sets"], ["g i", "Inbox"], ["g m", "More"], ["Esc", "Close a dialog"]] as [string, string][]).flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
+  else if (e.key === "?") sheet("Keys", [h("dl", { class: "facts" }, ...([["n", "New task"], ["m", "New chat"], ["1…9", "Shell N of SHELLS (on the list and a shell's page)"], ["/", "Find a session (in the chats: a chat; in a chat: a command)"], ["Ctrl-G", "Search every chat"], ["Enter", "In a chat: send (Shift+Enter: a new line)"], ["@", "In a chat's box: its folders"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g r", "Runs"], ["g e", "Change sets"], ["g i", "Inbox"], ["g m", "More"], ["Esc", "Close a dialog"]] as [string, string][]).flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
 });
 
 window.addEventListener("hashchange", () => { takePairCode(); notesShown(); render(); });

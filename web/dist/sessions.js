@@ -7,6 +7,7 @@ import { againLabel, can, data, liveWorktrees, refreshLaunch } from "./data.js";
 import { createWorktree, startSession } from "./flow.js";
 import { Screen } from "./screen.js";
 import { actions, ago, ask, badge, Cache, confirm, download, enc, errText, form, go, h, menu, pending, row, sheet, textSheet, ui, views } from "./kit.js";
+import { shellMenuItems } from "./shells.js";
 const ACTIONS = {
     "session.new": "Start a task: say what to do, which agent, and where",
     "session.menu": "More for this session: stop, restart, rename, summarize…",
@@ -321,6 +322,7 @@ export function sessionMenu(s) {
         { title: tip("session.replay"), label: "Replay", hint: "Its recording, played back", run: () => go(`#/replay/${enc(s.id)}`) },
         { title: tip("session.export"), label: "Save its recording…", run: () => exportSession(s.id, s.name) },
         can("full") && { title: tip("session.tab"), label: "Open on the computer", hint: "A new Windows Terminal tab there", run: () => void openOnComputer(s) },
+        ...shellMenuItems(s),
         { title: tip("session.rename"), label: "Rename…", run: () => renameSession(s) },
         { title: tip("session.retitle"), label: "Set title…", run: () => retitleSession(s) },
         live(s) && { title: tip("session.kill"), label: "Kill now", danger: true, hint: "No waiting", run: () => confirm(`Kill ${s.name}?`, "It's stopped at once, with no chance to clean up.", "Kill", async () => notice(await ask({ t: "kill", addr: addr(s), signal: 9 }), `Killed ${s.name}`)) },

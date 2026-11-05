@@ -15,7 +15,7 @@ use ptyro_core::model::{
 };
 use ptyro_core::scratchpad::{Item, Snapshot};
 use ptyro_core::screen::{ScreenDelta, ScrollbackDoc};
-use ptyro_core::session::{HistoryEntry, LastLaunch, SessionInfo, SpawnSpec};
+use ptyro_core::session::{HistoryEntry, LastLaunch, SessionInfo, SpawnSpec, Watch};
 use ptyro_core::status::{AttentionKind, InboxEntry, Usage};
 use ptyro_core::{ClientId, Error, SessionId, TermSize};
 use ptyro_run::wire::{
@@ -40,7 +40,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 28 };
+pub const PROTO: Version = Version { major: 1, minor: 29 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -301,6 +301,28 @@ pub enum Request {
         /// Its home workspace, for one outside any project (default `main`).
         #[serde(default)]
         workspace: Option<String>,
+    },
+    /// SHELLS (SPEC §23.3, protocol 1.29): give the loose session `addr` the number `slot` in its
+    /// workspace; one already there swaps with it. Replies `Session`.
+    ShellMove {
+        addr: String,
+        slot: u32,
+    },
+    /// SHELLS (SPEC §23.8): `loose` sets a worktree's session loose into its workspace's SHELLS
+    /// (the next free number); `!loose` adopts a loose one into `worktree` (else the worktree its
+    /// directory is in), giving up its number. Replies `Session`.
+    ShellPlace {
+        addr: String,
+        loose: bool,
+        #[serde(default)]
+        worktree: Option<String>,
+    },
+    /// SHELLS (SPEC §23.9): watch a session for its command's end, output, silence or a match;
+    /// `None` stops watching. Replies `Session`.
+    ShellWatch {
+        addr: String,
+        #[serde(default)]
+        watch: Option<Watch>,
     },
     /// The other machines this daemon mirrors (MM1.B). Replies `Machines`.
     MachineList,

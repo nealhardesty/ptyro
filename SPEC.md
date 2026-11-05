@@ -1025,6 +1025,11 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built SH] Protocol 1.29** (additive): SHELLS (§23.12). `ShellMove{addr, slot}`,
+`ShellPlace{addr, loose, worktree?}`, `ShellWatch{addr, watch?}` → `Session`. `SessionInfo.loose/slot/
+watch/scratch/lost` and `SpawnSpec.loose/slot/scratch`. `%N` and `ws%N` resolve wherever a session
+address goes.
+
 **[built WIN4] Protocol 1.27** (additive): `SpawnSpec.command`, a command line as typed. The
 daemon runs it through its own default shell (`$SHELL -c` on Unix; on Windows PowerShell, §3.4),
 so a client no longer builds the shell's argv itself: the TUI's "run a command" used the
@@ -7863,7 +7868,68 @@ agent installed:
 
 ---
 
-## 23. Shells: a workspace's numbered terminals **[decided 2026-11-04 (owner, ROADMAP SH); proposed, not built]**
+## 23. Shells: a workspace's numbered terminals **[decided 2026-11-04 (owner, ROADMAP SH); built 2026-11-04 (SH.1–SH.8); SH.0's real-terminal check open]**
+
+**As built (2026-11-04), and where it differs from the design below:**
+- **Daemon** (`crates/ptyro-daemon/src/shells.rs`): a loose session carries `Meta.shelf`
+  (`Shelf {slot, scratch, watch, lost}`), which crosses a live upgrade with the rest of `Meta`. Numbers
+  are handed out under a reservation (`RESERVED`), and a new session's shelf waits in `PENDING` until
+  `launch` puts it on the session, before `SessionCreated`. That way neither a client nor the
+  auto-register sweep ever sees it unplaced. A restart keeps the number (`carried`). `place_session(s,
+  None)` is where a session loses its place, and it now calls `shelve`. The sweep counts a loose
+  session as placed, so its new repository registers and it stays put.
+- **No new database columns** (§23.13 differs). What a restart offers back is a `kv` snapshot,
+  `shells:kept`, that the one-second tick rewrites when it changes: id, name, title, kind, argv, last
+  directory, workspace, profile, number, client env. One number per workspace is the daemon's rule
+  (the reservation), not a unique index. Nothing goes into `ptyro.db` but metadata, as before.
+- **Protocol 1.29**, not 1.28 (WIN6 took 1.28): `ShellMove`, `ShellPlace`, `ShellWatch`; `SessionInfo`
+  and `SpawnSpec` gain `loose`, `slot`, `scratch`, and `SessionInfo` also `watch` and `lost`. No
+  `ShellMoved` event: each moved session sends `SessionUpdated`. No `SlotTaken` error code: a taken
+  number is a `Conflict` that names the shell there.
+- **A loose spawn** whose directory doesn't exist on the daemon's machine (`~` from the web, a gone
+  directory, another machine's path) starts at home. `~/x` is expanded when it exists.
+- **Joining SHELLS** happens on a `ProjectRemove{release}`, at a spawn outside every project, and by
+  hand. A project dropped from a workspace (`ws remove`) keeps its sessions placed, and they are
+  listed unnumbered under SHELLS. So is any other session with no row (the old `other sessions`).
+  The note when one joins is in the log, not sent to clients.
+- **Put there, or landed there** (`Shelf.pinned`, the full suite's UX1.5 tests found it): a shell
+  asked for in SHELLS (`loose`, `--slot`, `--scratch`), one set loose by hand, and one offered back
+  after a restart are *pinned*: they never move, as §23.2 says. A session that only *landed* in
+  SHELLS (started outside every project, or its project let go) still moves into the repository it
+  `cd`s into once that is a project, and gives up its number. That keeps UX1.5's "the repository
+  you're in is a project" for a plain `ptyro new` in `/tmp`.
+- **The label** (`ptyro_core::session::shell_label`, shared by the TUI, the CLI and the web) is
+  the title, else an agent's or a command's *name* (`claude-rook`, `dev-server`), else for a
+  shell what runs in it and a short directory (`htop · ~/dl`, `…/tmp` outside home). §23.4's
+  directory-only label read badly for agents. A shell's pane header keeps the session's name
+  first, as every pane does, with the strip after it.
+- **Removal safety:** a live loose session whose directory is inside the worktree holds it
+  (`busy_in`). Like any of the worktree's own shells, it does so even at its prompt.
+- **Scratch shells** never ask: an empty directory goes with its shell, and one with files stays,
+  logged. `ptyro gc` doesn't list leftovers yet.
+- **Watches:** `output` fires when output arrives while nobody looks and nothing is pending (so it
+  doesn't repeat every second); `silence` once per quiet spell; `match` looks at the screen whenever
+  output changed, then clears.
+- **The TUI** (`crates/ptyro-tui/src/shells.rs`):
+  - Keys: `shells.go N` (`M-1…9`, `M-0`), `shells.new` (`C-q C-c`, `c` in the sidebar),
+    `shells.menu` (`C-q e`), `shells.command`, `shells.scratch`, `shells.move`, `shells.watch`,
+    `shells.loose`, `shells.adopt`.
+  - The shells menu is a hotkey picker: digits, `c`, `!` a command, `s`.
+  - `[shell] alt_digits` (default on) binds or frees the ten Alt digits. It is a setting in
+    Configuration → Shells rather than a switch in the Keys section, and the key list folds them
+    into one `M-1…9, M-0` row.
+  - The hints fall back to `C-q e 1…9` when `TERM_PROGRAM` is `Apple_Terminal` or `iTerm.app` and
+    the kitty protocol is off. The health badge doesn't offer the terminal setting yet.
+  - The header strip isn't clickable in the TUI yet. It is on the web.
+- **The web** (`web/src/shells.ts`): the SHELLS group above the cards, the strip with tap and swipe,
+  ⋯ items, and digits `1`–`9` on the list and on a shell's page while the terminal isn't focused. No
+  chord reaches the page through a focused terminal, so none is bound there.
+- **SH.0** checked what can be checked here. crossterm reports `ESC 1` and kitty's `CSI 49;3u` as
+  Alt+`1`, and that reaches `shells.go 1` (`keys.rs` test). `¡` doesn't. The real-terminal matrix is
+  `make verify-shells`, run by a person in each terminal. Its results are not recorded yet [U].
+- **Not built:** the tour's stop, `ptyro gc` listing scratch leftovers, the health-badge fix for
+  Option-as-Meta, and clicks on the TUI's strip.
+
 
 What tmux's windows give you, and ptyro hasn't: terminals that belong to no repository, made with
 one key and reached with one key and a number. Every workspace gets a **SHELLS** section beside
@@ -8135,7 +8201,7 @@ Keys are `[keys]` entries like every other: `"global:M-1" = "shells.go 1"` … `
 "shells.go 10"`, `"C-c" = "shells.new"`, `"e" = "shells.menu"`, `"nav:c" = "shells.new"`. The Keys
 section gets one more switch, **Alt-digits jump to shells**, which binds or frees all ten at once.
 
-### 23.12 Protocol (additive, the next minor after 1.27)
+### 23.12 Protocol (additive; built as 1.29)
 
 - `SessionInfo`: `loose: bool`, `slot: Option<u32>`, `watch: Option<Watch>`, `scratch: bool`
   (all `serde(default)`, skipped when empty).

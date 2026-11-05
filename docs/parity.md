@@ -53,6 +53,19 @@ its row: its TUI action and its web one, or `waived:` and why.
 | `events` | `inspector` (`D`), Events tab (`5`) | `session.events`: ⋯ → Events |
 | `report` | waived: run by programs inside a session to report their own state | waived: run by programs inside a session to report their own state |
 
+
+## Shells (SHELLS, SPEC §23)
+
+| Command | In the TUI | On the web |
+|---|---|---|
+| `shells ls` | `shells.menu` (`C-q e`); the sidebar's SHELLS section; `--all` is every workspace's section | `shells`: the SHELLS group, every workspace's shells with their workspace |
+| `shells new` | `shells.new` (`C-q C-c`, `c` in the sidebar, the heading's `＋`, `＋ new shell`, `!` with no worktree around): in the pane's directory; `--slot N` is `Alt-N` on an empty number (`shells.go`); `--scratch` is `shells.scratch` (`s` in the shells menu); a command (`-- htop`) is `shells.command` (`!` in the shells menu) | `shells.new`: ＋ on the SHELLS group → A shell, or A command… (with its number); `--scratch` is `shells.scratch` (＋ → A scratch shell) |
+| `shells go` | `shells.go` (`Alt-1`…`Alt-9`, `Alt-0` for 10; `C-q e N` where Alt can't be sent; ⏎ on its row): one lost in a restart starts again; an empty number starts a shell there | `shells.go`: tap its card, or its number on a shell's strip (swipe along the strip for the next); digit keys `1`–`9` on the list and a shell's page |
+| `shells move` | `shells.move` (its row menu, `.`; the palette): asks for the number | `shells.move`: ⋯ → Move to number… |
+| `shells loose` | `shells.loose` (a worktree session's row menu, `.`) | `shells.loose`: ⋯ → Move to SHELLS |
+| `shells adopt` | `shells.adopt` (a shell's row menu, `.`): into the worktree its directory is in | `shells.adopt`: ⋯ → Adopt into its worktree |
+| `shells watch` | `shells.watch` (a shell's row menu, `.`): done, output, silence 30s or 5m, match…, off | `shells.watch`: ⋯ → Watch… |
+
 ## Scratchpad
 
 The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every session (ROADMAP NOTE1).
