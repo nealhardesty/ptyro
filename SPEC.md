@@ -47,6 +47,7 @@ Status markers used below:
 20. Facts, gotchas, and external references
 21. Open questions
 22. Chat: general-purpose conversations
+23. Shells: a workspace's numbered terminals
 
 ---
 
@@ -129,6 +130,7 @@ Status markers used below:
 | **Agent** | A configured session kind backed by an adapter (`claude`, `codex`, `gemini`, `opencode`, `shell`, or a user-defined generic command). |
 | **Conversation** | The agent's own notion of a chat (Claude `session_id`, Codex `thread_id`, …). A ptyro session *has* zero or one current conversation id; resuming a dormant session reuses it. Never confuse the two ids. |
 | **Chat** | **[decided 2026-10-29, §22]** A general-purpose conversation with an agent: no repository, no worktree. A durable tree of nodes in `chat.db`, owned by one workspace on one machine, served by a replaceable *engine* (a hidden structured session). Not a session, and not the agent's *conversation* (a chat may use several over its life). |
+| **Shell (SHELLS)** | **[decided 2026-11-04, §23; proposed]** A session that belongs to a workspace instead of a worktree (`loose`), any command, listed in the workspace's SHELLS section under a **number** (its *slot*) that never changes on its own: `Alt-3`, `%3`. tmux's window. Not the quick terminal (one per worktree, §11.2h). |
 | **Pane** | A rectangle in a client's layout that displays one session. Panes are client-side view state; sessions are daemon-side. |
 | **Status** | The agent-level state of a running session (`working`, `blocked`, `idle`, …) — §9. |
 | **Attention** | A per-session flag meaning "something happened you haven't looked at" (§9.4). |
@@ -141,6 +143,7 @@ Workspace *──* Project 1──* Worktree 1──* Session 0..1── Convers
     │ *          │ 0..1                │ 1        │ 1
     └─1 Profile ─┴─ (pin)    Profile 1─┘          └─1 Profile, 1 home Workspace
                      (sessions may also be ad-hoc: no project, any cwd)
+Workspace 1──* loose Session, numbered 1, 2, 3…  (SHELLS, §23; proposed)
 Run 1──* Session  (orchestration membership, optional)
 Workspace 1──* Chat 1──* Node (a tree) ; Chat 1──* Conv ── its engine, a hidden structured Session  (§22)
 ```
@@ -171,6 +174,7 @@ Workspace 1──* Chat 1──* Node (a tree) ; Chat 1──* Conv ── its e
   | `@attention` | | oldest session with attention set |
   | `@blocked` / `@idle` / `@working` | | all sessions in that status (multi) |
   | `@all` | | all running sessions (multi) |
+| `%N`, `ws%N` | `%3`, `work%3` | shell N of the context (or named) workspace's SHELLS (§23.5; proposed) |
   | `@run:<id>` | | all sessions of a run (multi) |
 
 **[built M2]** Implemented now: handles (`7f3k`, `s:7f3k`, full id), names, `@last`, `@focused`
@@ -1196,6 +1200,7 @@ struct SpawnSpec {
 ```
 
 **[built UX3.2]** The real struct also has `again` and `tool` (§6.4, protocol 1.19).
+**[proposed SH, §23.12]** `loose`, `slot` and `scratch`: a loose spawn starts in the directory given but is never placed under the worktree that holds it.
 
 **[built]** Where it starts: a worktree given by address (`Worktree`) starts at its root. A
 directory (`Cwd`) starts exactly there, even inside a registered worktree; the innermost
@@ -2000,7 +2005,8 @@ modes, other-workspace badges and the per-workspace inbox tabs.
   `autoreg:declined`), and adding it by hand lifts that. `ProjectRemove{release: true}` (the
   TUI's undo) lets the project's running sessions go first, instead of refusing; they keep
   running outside any project. Clients hear `ProjectAutoAdded{info, workspace, notes}`.
-  `[discover] auto_register = false` turns it off. `project add` without `--workspace` uses the
+  `[discover] auto_register = false` turns it off. **[proposed SH, §23.2]** A loose session (one in
+  a workspace's SHELLS) is never moved: its repository may be registered, the shell stays put. `project add` without `--workspace` uses the
   workspace the TUI showed last.
 - Discovery walks `[discover] roots` (depth 3). It stops at repositories and skips hidden dirs,
   `node_modules`, `target`, `vendor` and `venv`, and caches the result for an hour in kv
@@ -2252,7 +2258,8 @@ others.
 
 `ptyro wt rm <wt>`:
 
-1. Refuse if any session is running in it (unless `--stop-sessions`).
+1. Refuse if any session is running in it (unless `--stop-sessions`). **[proposed SH, §23.8]** "In it"
+   includes a loose session (SHELLS) whose live directory is inside the worktree.
 2. Compute state: uncommitted changes, untracked non-ignored files, commits not on any remote,
    stashes. If any: **refuse** with a precise report, unless `--force` *and* interactive confirmation
    (or `--force --yes` in scripts).
@@ -2709,7 +2716,8 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
 ### 11.2c What M3 added **[built M3]**
 
 - **The sidebar tree** shows the workspace's projects, each with `@root` first and then the other
-  worktrees by creation, each with its sessions. Below them, under "other sessions", are the
+  worktrees by creation, each with its sessions. Below them, under "other sessions" (**[to be
+  replaced by SHELLS, §23.3]**), are the
   sessions whose home is this workspace but that aren't under one of its projects.
   - Rows show the pin's profile label (in its colour), the branch when it isn't the default
     `<name>` (or `ptyro/<name>`, the default before v0.0.13), what is left to do (`↑N` unpushed, `not pushed ↑N`, `● N` uncommitted, a
@@ -3172,6 +3180,10 @@ The daily loop (ROADMAP UX3, RESEARCH R-UX-34…37). `crates/ptyro-tui/src/scree
   `[ui] shell_style`, now `pane` by default. It belongs to a worktree: with no context worktree
   the TUI opens the project picker and carries on there (`AfterAdd::Run`); `QuickShell` refuses
   to start one outside a worktree (one per directory from before is still found).
+  **[amended 2026-11-04, owner; proposed SH.2, §23.6]** The project picker is for the quick
+  terminal only. `!` with no worktree around (an empty pane, home, a chat, a loose shell or the
+  SHELLS heading selected) starts a shell in the workspace's SHELLS instead. The quick terminal is
+  unchanged.
 
 - **The sidebar filter** (UX4.1, `sidebar.filter`: `f` after the prefix or in the sidebar; or click a
   chip): a strip under the sidebar's title, `all 14  running 6  active 2`, picks what the tree lists.
@@ -3284,6 +3296,8 @@ The full sidebar table (no prefix) is in [`docs/keys.md`](docs/keys.md#in-the-si
 | `o` | open worktree in editor (picker of configured editors; `nvim` opens *inside ptyro* as a session) |
 | `r` | run default run script; `R` picker |
 | `x` | stop session (confirm); `X` kill |
+| `Alt-1`…`Alt-9`, `Alt-0` (no prefix) | **[proposed SH, §23.6]** show shell N of the workspace's SHELLS; an empty number starts one there |
+| `C-c` / `e` | **[proposed SH]** a new shell in SHELLS (tmux's `c`) / the shells menu (a digit picks one) |
 | `b` | broadcast prompt to selected sessions (multi-select with `space` in sidebar) |
 | `w` | workspace switcher (shows each workspace's profile label and attention badges) |
 | `S` | change sets (§15.5.10): the list; in the sidebar on a set row, that set |
@@ -3376,6 +3390,7 @@ ptyro daemon start [--foreground]|stop [--force|--hibernate]|restart|status|logs
              |upgrade|install-service|uninstall-service
 ptyro gc [--dry-run]
 ptyro completions bash|zsh|fish        # dynamic: completes live session/worktree names
+ptyro shells [ls]|new [-- CMD…] [-C DIR] [--slot N] [--scratch]|go N|move N M|loose S|adopt S [WT]|watch S [--done|--output|--silence D|--match RE|--off]   # SHELLS (§23; proposed)
 ptyro shell-init bash|zsh|fish|pwsh    # OSC 7/133 snippets for shells ptyro didn't start (§8.7)
 ptyro hook <adapter> <event>           # internal; used by agent integrations
 ptyro proxy                            # internal; stdio⇄socket bridge for ssh remote (§16.2)
@@ -6877,6 +6892,22 @@ security state for as long as it runs, which deleting cookies and site data does
 state it was is not known (a guess: content from an earlier certificate counted against the
 host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
 
+### 20.14 tmux's windows, the model SHELLS borrows from **[V-local 2026-11-04: tmux 3.6b, a fresh server with `-f /dev/null`]**
+
+- Prefix table: `c` new-window, `0`…`9` `select-window -t :=N`, `n`/`p` next/previous, `l` last
+  window, `w` `choose-tree -Zw`, `,` rename-window, `&` kill-window (asks). `<` is a window menu
+  (swap left/right, kill, respawn, rename, new after, new at end).
+- Defaults: `base-index 0` (the first window is 0), `renumber-windows off` (closing window 2
+  leaves 0, 1, 3), `automatic-rename on` (the name follows the running program),
+  `monitor-activity off`, `monitor-silence 0` (off), `monitor-bell on`.
+- `new-window [-c start-directory] … [shell-command]`: without `-c` a window starts in the
+  session's directory, not the current pane's. Users who want the pane's bind
+  `new-window -c "#{pane_current_path}"`.
+- ptyro's choices against these (§23): numbers start at 1 (`Alt-1` is the key nearest the left
+  hand, and `Alt-0` is the tenth); numbers stay (as `renumber-windows off`); labels follow the
+  program but names stay (ptyro's name is an address, §2.3); the pane's directory by default;
+  long-command notifications on by default, told by OSC 133 exit codes instead of output guesses.
+
 ## 21. Open questions
 
 1. ~~**License**~~ — **decided 2026-10-20: MIT** ("for now"; `LICENSE` at repo root, `license =
@@ -7829,3 +7860,365 @@ agent installed:
   - the `read` preset on Codex outside `$HOME` (it stays readable).
   The first three fit `make verify-chat` (§22.16), which CHAT1.3 writes with a login for each.
   Facts found so far, dated and tagged, are in RESEARCH §IV.3.
+
+---
+
+## 23. Shells: a workspace's numbered terminals **[decided 2026-11-04 (owner, ROADMAP SH); proposed, not built]**
+
+What tmux's windows give you, and ptyro hasn't: terminals that belong to no repository, made with
+one key and reached with one key and a number. Every workspace gets a **SHELLS** section beside
+its CHATS. A shell there is an ordinary session (any command, not only a shell) with a **number**
+(its *slot*) that stays the same, so `Alt-3` is always the same shell. RESEARCH R-UX-40…42.
+
+### 23.1 Decided by the owner (2026-11-04)
+
+- **Per workspace.** Each workspace has its own SHELLS and its own numbers, like a tmux session's
+  windows (a workspace is ptyro's tmux session, §2.1). Switching workspaces switches the set.
+- **A new shell starts in the pane's directory**: the focused pane's, or the selected row's
+  (§23.4). tmux starts a new window in the session's directory unless you pass `-c` (§20.14).
+- **Any command can be in SHELLS**: a shell, `htop`, `ssh prod`, `claude` in `~/Downloads`. The
+  section is still called SHELLS.
+- **UX3.4 is amended**: `!` with no worktree around starts a shell in SHELLS instead of first asking
+  for a project (§23.6).
+- **The quick terminal doesn't change.** It is still one per worktree (`C-t`/`T`, §11.2h, §11.2i)
+  and never appears in SHELLS. SHELLS is a separate feature, not a new form of the quick terminal.
+
+### 23.2 What a shell in SHELLS is, and is not
+
+- **It is a session** (§7.1) of kind `shell` or `command` (an `agent` too, when started there),
+  with `loose = true` and a `slot`. Everything a session has works on it unchanged: `send`,
+  `read`, `wait`, rename and retitle, stop and kill, restart, copy mode, the recorder, splits
+  (`v`/`s` clone it into another loose session in its directory), broadcast (`b` to the rows
+  marked with `Space`: tmux's `synchronize-panes`), peek, the inbox, the filter, the finder.
+- **It belongs to its workspace, not to a worktree.** It has no `worktree` and no `project`, gets
+  no worktree environment and no ports (§10.6, §10.7), and runs no lifecycle scripts. It runs under
+  **the workspace's profile** (§10.10), so `git` and `gh` in it act as the workspace's identity.
+- **It stays where it was put (`loose`).** The daemon never places it under a worktree, wherever its
+  directory is or becomes:
+  - a `Cwd` spawn inside a worktree normally places the session there (§7.2); a loose spawn
+    is not placed;
+  - auto-registration (§10.1) may register the repository a loose shell `cd`s into, but never moves
+    the shell into it;
+  - only an explicit **adopt** (§23.8) moves it.
+- **It is not the quick terminal.** The quick terminal is quiet, unnumbered, one per worktree, and
+  stopped with its worktree. A loose shell raises attention like any session, has a number, and
+  outlives every worktree.
+- **It is not a chat.** It is a real PTY session with a terminal, in a directory, with no
+  `chat.db` record. Its contents never go into any database (§14.2).
+
+### 23.3 Slots: numbers that stay
+
+- **A loose session always has a slot**: a whole number from 1 up. When it is made it takes the
+  lowest free number in its workspace, or the one asked for (`--slot N`, `Alt-N` on an empty
+  slot). When it is removed, its number becomes free. Nothing is renumbered when another shell
+  goes: shell 3 stays shell 3 (tmux's `renumber-windows` is off by default, §20.14).
+- **Moving.** `shells.move` (CLI `shells move N M`) gives shell N the number M; when another shell
+  already has M, the two swap.
+- **Keys reach 1–10**: `Alt-1`…`Alt-9` are slots 1–9 and `Alt-0` is slot 10, as on a keyboard's
+  number row. Higher numbers are reached by address (`%12`), the finder, the shells menu, a click
+  and the web's strip.
+- **Sessions that lose their place join SHELLS.** This replaces the sidebar's unnumbered `other
+  sessions` group (`tree.rs`), which disappears. Such a session becomes loose, takes the lowest free
+  slot in its home workspace, and the daemon raises a note ("`make dev` moved to SHELLS as 4"):
+  - a session whose project is let go (`ProjectRemove{release}`);
+  - a session whose project leaves its workspace (`ws remove`);
+  - a session started outside every project (`ptyro new --cwd /tmp -- htop`);
+  - a session left running when its worktree goes: removal can't stop a busy one, and one set
+    loose by hand (§23.8) stays.
+
+  The one exception: a session started inside a repository that auto-registration would add is
+  placed in it, as today. The daemon registers the repository during the spawn rather than
+  leaving it to the 2-second sweep, so `ptyro new -C ~/dev/newrepo` still lands in `newrepo`.
+- **A removed workspace's shells move to `main`** (as chats do, §22.2), each keeping its number
+  when that is free there, else taking the lowest free one.
+- **Exited rows keep their number.** With `[ui] shell_exit = "keep"` an exited loose session holds
+  its slot until it is removed. With `close` (the default) it goes and its number becomes free.
+  `C-r` on a kept one starts it again in the same slot.
+
+### 23.4 Where a new shell starts, and what runs
+
+- **Directory** ("the pane's"), from the first of these that has one:
+  1. The selected sidebar row, when the sidebar has focus: a session's live directory
+     (`live_cwd`, else its `cwd`), a worktree's root, a project's main checkout, a loose shell's
+     live directory.
+  2. The focused pane's session: its live directory (OSC 7, else probed, §8.7), else its `cwd`.
+  3. `$HOME`. This covers an empty pane, a chat, home, or a session of another machine whose
+     directory doesn't exist here (a loose shell is made on the machine that owns the workspace,
+     §23.10).
+
+  The CLI uses its own working directory, or `-C DIR`. The web uses the directory of the session it
+  is showing, else `$HOME`. A directory that no longer exists falls back to `$HOME`, with a note
+  that says so.
+- **Command:** the configured shell (`[shell] command`, else `$SHELL -l`; §8.7), with shell
+  integration as for any shell (§8.7, WIN1). Or the command given (`shells new -- htop`, the
+  dialog's command line). Shell integration supplies the last command and its exit code, which
+  the row shows and §23.9 uses.
+- **Name** (the address, §2.3): a friendly pair (`quiet-jackdaw`), as for any shell. The slot is
+  the handy address (§23.5), so the name doesn't need to say anything.
+- **Label** (what the row shows, not an address): the title if one is set (`,`, then `C-t`), else
+  the foreground program and the directory (`htop`, `vim · ~/dl`), else the directory (`~/dl`).
+  The label follows what runs, as tmux's `automatic-rename` does (on by default, §20.14), while
+  the name stays put.
+
+### 23.5 Addresses
+
+`%N` is slot N of the **context workspace**. Every command that takes a session takes it:
+`ptyro send %3 'make test'`, `ptyro read %3`, `ptyro wait %2 --for idle`, `ptyro attach %1`.
+
+- The context workspace is `--workspace WS`, else the workspace of the session the command runs in
+  (`PTYRO_SESSION`), else the one the TUI showed last (as `project add` uses, §10.1).
+- `work%3` names a workspace; `laptop2:work%3` a workspace on another machine (§16.4b).
+- `%` because a shell doesn't treat it specially in a word's first position (`#` would start a
+  comment) and tmux uses it for pane ids. It never appears in a name (`[a-z0-9._-]`), so no name
+  can be mistaken for it.
+- An empty slot is an error that names the way out: `no shell 4 in main: \`ptyro shells new --slot
+  4\` starts one`.
+
+### 23.6 The TUI
+
+**The section.** Under each workspace's projects, before CHATS (shells are what you do,
+chats are what you ask), like CHATS in every other way:
+
+```
+▾ main
+  ▾ ptyro …
+  ▾ SHELLS             M-1…9  ＋
+    1  ~/dl                ✓ curl -O …      <- last command, its exit
+    2  htop                ● running
+    3  ssh prod            ◉ bell           <- wants you
+    4  make dev · ~/web    ✗ 2  12s
+  ▾ CHATS                       ＋
+```
+
+- The heading shows the jump key (`M-1…9`, or whatever is bound to `shells.go 1`) and `＋`, which a
+  click turns into a new shell. A workspace with no shells shows one dim row, `＋ new shell`.
+  `[shell] section = "when-used"` hides the empty section, and `never` hides it always (§23.11).
+- `⏎` or Space on the heading folds it, and so do `h`/`l`. `Z` folds it with the rest. The fold
+  key is `shells:<ws>`.
+- **Rows** are ordered by slot. Each shows its number, its label (§23.4), and then its state as a
+  quick terminal's line does (§11.2h): the command running, else the foreground program, else the
+  last command with `✓`/`✗`. Status glyphs and attention as for any session (§11.1). An exited row
+  dims, and a lost one says `↻ ⏎ starts it again` (§23.10).
+- **One number per row, one meaning per number.** A SHELLS row's number is its slot, drawn in the
+  heading's colour. The sidebar's own numbering (`C-q 1…9`, §11.3) skips SHELLS rows, as it skips
+  quick terminals. `j`/`k` include them, as they are sessions.
+- **The filter** (§11.2i UX4.1) treats them as sessions: `running` keeps the live ones, `active` the
+  busy ones. The heading goes when nothing under it is left.
+
+**Keys** (defaults; every one is in `[keys]`, the settings panel and the palette, with which-key
+showing it):
+
+| Key | Action | Does |
+|---|---|---|
+| `Alt-1` … `Alt-9`, `Alt-0` | `shells.go N` (global: no prefix) | show shell N of the context workspace, full sized as anything shown is (UX3.1); **an empty slot starts a new shell in it, here** (a note says "shell 7 started"), so a number is also a key that makes one |
+| `C-q C-c` (and `c` in the sidebar) | `shells.new` | a new shell in SHELLS, in the pane's directory, full sized: tmux's `C-b c` |
+| `C-q e` | `shells.menu` | the shells menu: every shell of the workspace with its number and label. A digit shows that shell, `j`/`k` ⏎ too; `c` makes a new one, `s` a scratch one (§23.8), `x` stops the selected one, `m` moves it to another number, `w` watches it (§23.9). Works without `Alt`: `C-q e 3` |
+| `!` with no worktree around | `shell.new` | **amends UX3.4**: in an empty pane, home, a chat, or with a loose shell or the SHELLS heading selected, `!` starts a shell in SHELLS instead of asking for a project. In a worktree `!` still starts a shell in the worktree |
+| `` ` `` | `session.last` | back and forth between the last two shown, as now (tmux's `last-window`) |
+| `,` `x` `X` `C-r` `.` `b` | as for any session | rename (C-t: title), stop, kill, restart, its menu (with Move to…, Watch…, Adopt into a worktree…), broadcast |
+
+- **The pane's header** for a loose session carries the strip, tmux's status line: `SHELLS  1 ~/dl
+  [2 htop]  3 ssh ◉  4 make  ＋`. The shown one is in brackets, a shell that wants you has its
+  glyph, and a click on a number shows that shell (on `＋`, makes one). The strip is drawn only on
+  a loose session's pane, so no other pane gets busier.
+- **Why `Alt` with no prefix**, and the cost. tmux's prefix-and-digit is two keys. Many tmux users [U]
+  bind `M-1…9` themselves, and the point of SHELLS is one-key reach. `Alt`-digits then don't reach
+  the program in the pane: readline's `digit-argument`, irssi and weechat's windows. Two fixes:
+  unbind them (`[keys] "global:M-1" = "none"`, or one switch in the settings panel's Keys section
+  that frees all ten), or press `C-q e N`, which always works. On macOS, Terminal.app and iTerm2
+  type `¡™£` for Option-digit unless Option is set to act as Meta (`docs/keys.md`). Ghostty, kitty,
+  WezTerm and Alacritty (with the kitty keyboard protocol) send `Alt`. When the TUI starts in a
+  terminal that will type characters instead (`TERM_PROGRAM` is `Apple_Terminal`, or iTerm2 without
+  the kitty protocol), the hints and the heading show `C-q e 1…9` instead, and the health badge
+  (`M`) offers the terminal setting that turns them on. SH.0 checks this in each terminal before
+  the default is fixed.
+
+### 23.7 The CLI
+
+`ptyro shell` (singular) stays the quick terminal (§11.2h). The plural group is SHELLS, and
+`ptyro shell --help` points to it:
+
+```text
+ptyro shells [ls] [--workspace WS] [--all] [--json]   # the workspace's shells, by number (--all: every workspace)
+ptyro shells new [-- CMD…] [-C DIR] [--slot N] [--name N] [--title T] [--scratch] [--workspace WS] [--attach] [--json]
+ptyro shells go N [--workspace WS]                    # attach with shell N shown (= ptyro attach %N)
+ptyro shells move N M [--workspace WS]                # renumber; swaps when M is taken
+ptyro shells loose <session>                          # set a worktree's session loose into SHELLS (§23.8)
+ptyro shells adopt <session> [WORKTREE]               # move a loose one into a worktree (default: where its directory is)
+ptyro shells watch <session> [--done|--output|--silence DUR|--match RE|--off]   # §23.9
+```
+
+- `ls --json` prints `[{slot, id, name, label, kind, state, cwd, live_cwd, command, last_exit,
+  watch, attention}]`. Text is one line a shell: `3  ssh prod  ◉ bell  ~`.
+- `new` prints the slot and name (`4 quiet-jackdaw`), `--json` the session. Without `--attach` it
+  doesn't attach, so scripts can run `ptyro shells new --slot 9 -- htop`.
+- `ls` and the session commands with `%N` work against other machines' workspaces as the session
+  commands already do (§16.4b).
+
+### 23.8 Moving between SHELLS and worktrees, and scratch shells
+
+tmux has `break-pane` and `join-pane`; SHELLS has these:
+
+- **Set loose** (`shells loose`, a session's menu: "Move to SHELLS"): a worktree's session becomes
+  loose with the next free number. It keeps its process, its environment (including the
+  worktree's variables and ports, which it started with) and its profile. Use it for a dev server
+  or a long job that should outlive the worktree.
+  - **Removal safety (§10.8) still counts it.** Removing or archiving a worktree treats every
+    session whose live directory is inside that worktree as the worktree's own for the busy
+    check, loose or not. Removing the directory out from under a running command is what §10.8
+    exists to prevent.
+- **Adopt** (`shells adopt`, a loose row's menu: "Adopt into a worktree…"): a loose session joins a
+  worktree, by default the one its live directory is in, and gives up its slot.
+  - **Refused when the profiles differ.** A session's profile is fixed (§10.10), so the error
+    offers a new shell in that worktree instead.
+  - It keeps the environment it started with. It gets no worktree variables or ports, and the
+    menu says so before it moves.
+- **Scratch shells** (`shells new --scratch`, `s` in the shells menu, the web's ＋ menu; R-UX-03):
+  a shell in a new, empty directory `<data>/scratch/<id>/` (0700). Its row shows `◌`. When it is
+  removed the directory goes with it. A directory that still holds files asks first ("keep
+  `scratch/7f3k` (3 files)?"), and `ptyro gc` lists the ones left behind.
+
+### 23.9 Watching a shell, and long commands
+
+A loose session raises attention like any session (a bell, OSC 9/777, an agent in it that waits).
+Two additions, built on the OSC 133 marks shell integration already supplies:
+
+- **Long commands** (`[shell] notify_after`, default `30s`): a command in a loose shell that ran at
+  least this long and ends while the shell isn't shown on any client raises attention:
+  `done ✓ make test (4m12s)`, or `error ✗2 make test`. It goes through the notifier like any
+  attention (§9.5: mutes, quiet hours, the inbox). `off` turns it off. This is what tmux users get
+  from `monitor-activity` and `monitor-silence` (both off by default, §20.14), told by the exit
+  code instead of guessed from output.
+- **Watch** (per shell; `w` in the shells menu, the row menu, `shells watch`, the web's ⋯): one of
+  - `done`: when the running command ends, however short it was;
+  - `output`: when new output arrives while it isn't shown (tmux's `monitor-activity`);
+  - `silence DUR`: when it has printed nothing for DUR (tmux's `monitor-silence`), such as a
+    build that hung;
+  - `match RE`: when a line matches, such as `ERROR|listening on`.
+
+  A watch fires once and then clears (`done`, `match`), or stays until it is turned off (`output`,
+  `silence`). The row shows `◎` while one is set. It is kept with the session, and lost with it.
+
+### 23.10 Daemon restarts, upgrades and other machines
+
+- **A live upgrade** (§4.5, the handover WIN0.5 decided for Windows) keeps loose sessions running,
+  as it keeps every PTY. Slots, watches and labels cross over with the session.
+- **A daemon restart or a reboot** ends the processes. tmux loses its windows too, and its users
+  install tmux-resurrect. `[shell] restore` decides what comes back (default `offer`):
+  - `offer`: each loose session comes back as a **lost** row in its slot, with its name, title,
+    last directory (`live_cwd`) and command, and its last screen from the recorder (§7.6) when one
+    was kept. `⏎`, `C-r` or `Alt-N` starts it again there, in that directory, with that command.
+  - `start`: loose *shells* start again by themselves in their last directory. Loose *commands*
+    (`ssh`, a dev server) are still only offered, since running them again unasked might do
+    something.
+  - `forget`: they're gone, as before.
+
+  A lost row's screen is the recorder's file, never a database (§14.2).
+- **Other machines** (§16.4b): a linked machine's workspace shows its own SHELLS, and its shells
+  run there. `＋`, `Alt-N` and `%N` act on the context workspace's machine, so `Alt-2` on a
+  `laptop2` workspace shows `laptop2`'s shell 2. Starting one needs `full` scope on a paired device,
+  as any spawn does.
+
+### 23.11 Configuration
+
+Each option gets a schema entry in the **Shells** section (`crates/ptyro-core/src/settings.rs`,
+beside `shell.command` and `shell.integration`) and is editable in the TUI's and the web's panel
+and with `ptyro config set`:
+
+| Key | Kind | Default | Help |
+|---|---|---|---|
+| `shell.section` | pick `always` / `when-used` / `never` | `always` | Show each workspace's SHELLS section in the sidebar: always (with `＋ new shell` when it is empty), only once it has a shell, or never (the keys still work). |
+| `shell.notify_after` | duration or `off` | `30s` | A command in a SHELLS shell that ran at least this long tells you when it ends, if you weren't looking: done ✓ or error ✗ with its exit code. |
+| `shell.restore` | pick `offer` / `start` / `forget` | `offer` | After ptyro restarts (not an upgrade), what happens to SHELLS: each comes back as a row that ⏎ starts again in its last directory, shells start again by themselves, or they're gone. |
+
+Keys are `[keys]` entries like every other: `"global:M-1" = "shells.go 1"` … `"global:M-0" =
+"shells.go 10"`, `"C-c" = "shells.new"`, `"e" = "shells.menu"`, `"nav:c" = "shells.new"`. The Keys
+section gets one more switch, **Alt-digits jump to shells**, which binds or frees all ten at once.
+
+### 23.12 Protocol (additive, the next minor after 1.27)
+
+- `SessionInfo`: `loose: bool`, `slot: Option<u32>`, `watch: Option<Watch>`, `scratch: bool`
+  (all `serde(default)`, skipped when empty).
+- `SpawnSpec`: `loose: bool`, `slot: Option<u32>`, `scratch: bool`. A loose spawn needs `workspace`
+  (else the client's last one); with `slot` taken it is refused (`SlotTaken{slot, session}`), and
+  the TUI then shows that shell instead.
+- `ShellMove{session, slot}` → `Session` (swaps when taken).
+- `ShellPlace{session, loose: true}` (set loose) | `ShellPlace{session, loose: false, worktree?}`
+  (adopt) → `Session`. Refused with the reason (`profile differs`, `not loose`).
+- `ShellWatch{session, watch: Option<Watch>}` → `Session`. `Watch = Done | Output | Silence{ms} |
+  Match{re}`.
+- `Resolve` learns `%N`, `ws%N` and `machine:ws%N` (§23.5). It takes the client's context workspace.
+- Events: the usual `SessionChanged`, plus `ShellMoved{workspace, from, to}` so clients can redraw
+  the strip without a full session list.
+- Scope: `ls`/`read` are `read`; new, move, place and watch are `full`, as spawns are.
+
+### 23.13 Storage
+
+One migration of `ptyro.db` (metadata only; §14.2): `session.loose INTEGER NOT NULL DEFAULT 0`,
+`session.slot INTEGER`, `session.watch TEXT` (JSON), `session.scratch TEXT` (its directory), and a
+unique index `(workspace, slot) WHERE loose AND ended_at IS NULL`. The index makes "one shell per
+number" the database's rule, not only the daemon's. The handoff image (§4.5) carries the same
+fields (`Place.loose`, `Place.slot`, `serde(default)`).
+
+### 23.14 The web
+
+The web has no splits and no `Alt` it can count on: on macOS the browser types characters, and
+`Cmd`-digit switches tabs. It gets the same things, shaped for a page and a phone:
+
+- **The session list** gets a SHELLS group above its chats aside. It holds numbered cards with
+  their label and state, a `＋` with a menu (new shell, scratch shell, a command), and the empty
+  `＋ new shell`.
+- **A shell's page** has the strip at the top (§23.6): `1 2 [3] 4 ＋`, which you tap to switch, and
+  swipe left and right on a phone. Its ⋯ menu has rename, move to number…, watch…, adopt…, stop.
+- **Keys on a desktop browser** while the page (not the terminal) has focus: `1`…`9` on the session
+  list open that shell. In the terminal, keys belong to the session, so the strip is the way.
+  Which chord, if any, reaches the page through a focused terminal canvas on Chrome, Safari and
+  Firefox is checked in SH.0, not assumed.
+- `ACTIONS` gains `shells`, `shells.new`, `shells.go`, `shells.move`, `shells.watch`,
+  `shells.place`, `shells.scratch`, each in its `docs/parity.md` row.
+
+### 23.15 Testing
+
+- Daemon (`tests/shells.rs`):
+  - lowest-free slots, `--slot` taken, swap on move;
+  - removal frees a number and nothing renumbers;
+  - a loose spawn inside a worktree isn't placed;
+  - auto-registration doesn't move a loose shell that `cd`s into a new repository;
+  - `release`, `ws remove` and a session started outside every project join SHELLS with a note;
+  - worktree removal still refuses a busy loose shell whose directory is inside it;
+  - adopt refuses another profile;
+  - `restore = offer|start|forget` across a daemon restart;
+  - a live upgrade keeps slots and watches;
+  - `notify_after` fires once for a long command and not for a short one;
+  - each watch kind;
+  - `%N` resolution with and without `--workspace`;
+  - a scratch directory goes, or asks.
+- TUI (`tree.rs` unit tests and the `m9`-style screen tests):
+  - the section, its fold and the empty row;
+  - the numbering split from the sidebar's;
+  - `Alt-N` on a full slot and on an empty one;
+  - `C-q e N`;
+  - `!` with no worktree;
+  - the strip, and the fallback hints when Alt can't be sent.
+- Web: in Chrome against a sandbox (the WEB1 recipe): the group, the strip, ＋, the ⋯ actions.
+  `make parity` covers every new command.
+- `make verify-shells` (SH.0's script): sends `Alt-1` from each installed terminal through the
+  TUI's input decoder and records what arrived.
+
+### 23.16 Not here, and open
+
+- **Not here:**
+  - the quick terminal in SHELLS, or SHELLS in a drawer (the owner kept them apart, §23.1);
+  - shells shared between workspaces;
+  - tmux's session groups;
+  - `ptyro import tmux` (R-UX-15, still its own idea);
+  - a **tmux key preset** (`[keys] preset = "tmux"`: `c`, `0–9`, `n`/`p`, `&`, `,`, `w`). It is
+    R-UX-42, `new`, and not part of SH: ptyro's defaults already use `n`, `p` and `w`, and a second
+    keymap is a second thing to document and test.
+- **Open, settled in SH.0 before SH.2:**
+  - which terminals deliver `Alt`-digits by default, and the exact detection for the fallback
+    hints;
+  - whether Windows Terminal leaves `Alt`-digits alone (it binds `Ctrl+Alt+digit` to tabs [U]);
+  - the web chord, if any;
+  - whether `C-q e` is the right key for the shells menu. `e` is free after the prefix today, and
+    `W` (tmux's `w`, choose-window) is the other candidate.

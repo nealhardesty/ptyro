@@ -46,6 +46,7 @@ Conventions:
 | **MM1** | Many machines | Every laptop's agents from one place: other machines' workspaces beside yours in one sidebar, one CLI and one phone app (done) |
 | **CHAT** | Chat | A quick, general chat on your registered agents: many chats, forks and threads, recent chats in the sidebar and a full searchable history (keyword, then smart), web search out of the box, in every workspace including linked machines' (proposed; sync across machines is CHAT6) |
 | **WIN** | Windows and PowerShell | pwsh sessions as good as bash everywhere; WSL2 checked, bridged and doctored; `ptyro.exe` in Windows Terminal on a WSL daemon; then a native daemon on ConPTY. Native Windows 11 and WSL2 both Tier 1 (decided 2026-10-31; RESEARCH DD3) |
+| **SH** | Shells | tmux's windows in ptyro: every workspace gets a SHELLS section of numbered terminals for any command, made with `C-q C-c` and reached with `Alt-1…9`, the numbers stay put, and long commands say when they end (proposed 2026-11-04) |
 | **Backlog** | Later / maybe | Editor, tasks, jj, libghostty, relay, … |
 
 Critical path: **M0 → M1 → M2 → M3 → M4** gives a daily-driver. M5 can interleave with M3/M4.
@@ -3060,6 +3061,86 @@ done.
 6. A pwsh shell session has prompt marks, status and its directory.
 
 Tracks A and B have their own *Done when* above and count on their own.
+
+## SH — Shells (proposed 2026-11-04; open)
+
+The owner misses tmux's freedom: terminals that belong to no repository, made with one key and
+reached with one key and a number (RESEARCH R-UX-40…42; design in SPEC §23). The owner decided
+(2026-11-04): **per workspace**; a new shell starts in **the pane's directory**; **any command** can
+be in SHELLS (still called SHELLS); **UX3.4 is amended** so `!` with no worktree starts one; the
+**quick terminal is untouched**, and this is a separate feature. CLI, TUI and web, with the
+parity rows, in each task.
+
+- [ ] **SH.0 (spike) Can the keys get through?** — S. Before SH.2 fixes the defaults, settle:
+  - Which terminals deliver `Alt-1…9` to the TUI out of the box: Terminal.app, iTerm2 (with and
+    without the kitty protocol), Ghostty, kitty, WezTerm, Alacritty, VS Code, Windows Terminal,
+    and inside tmux.
+  - How the TUI can tell, so its hints fall back to `C-q e N`.
+  - Which browser chord, if any, reaches the web page through a focused terminal canvas.
+  - `e` or `W` for the shells menu.
+
+  Write the results into SPEC §20 and §23.16. `make verify-shells` records what each terminal sent.
+- [ ] **SH.1 Loose sessions and slots (daemon, protocol, store)** — M. *R-UX-40.*
+  - `SessionInfo`/`SpawnSpec` gain `loose`, `slot` and `scratch`; protocol 1.28 adds
+    `ShellMove`, `ShellPlace` and `ShellWatch`; `Resolve` learns `%N`, `ws%N` and
+    `machine:ws%N` (SPEC §23.12).
+  - Slots: lowest free, never renumbered, swap on move, one per number (a unique index in the
+    `ptyro.db` migration, §23.13).
+  - A loose spawn inside a worktree isn't placed. Auto-registration never moves a loose session.
+    Removal safety counts a loose session whose live directory is inside the worktree.
+  - Sessions that lose their place (a released project, `ws remove`, started outside every
+    project) join SHELLS with a note, which replaces `other sessions`. A removed workspace's
+    shells go to `main`.
+  - The handoff image carries the new fields.
+  - *Done when:* `ptyro shells new` three times gives 1, 2, 3; removing 2 and making another gives
+    2; `ptyro send %3 'echo hi'` and `ptyro read %3` work; a loose shell that `cd`s into a new
+    repository stays in SHELLS while the repository is registered.
+- [ ] **SH.2 The TUI: the section, the keys, the strip** — M. *R-UX-40, amends UX3.4.*
+  - The SHELLS section under each workspace (before CHATS): rows by number, the empty
+    `＋ new shell` row, folding, the filter, and the sidebar's own numbers skipping it.
+  - `Alt-1…9`/`Alt-0` (`shells.go N`, global; an empty number makes one), `C-q C-c` / sidebar
+    `c` (`shells.new`), `C-q e` (the shells menu), and `!` with no worktree.
+  - The header strip on a loose pane, clickable.
+  - The fallback hints and the health badge's fix where `Alt` can't be sent.
+  - The Keys section's "Alt-digits jump to shells" switch.
+  - *Done when:* in a fresh workspace, `C-q C-c` twice and `Alt-1`/`Alt-2` flip between the two
+    shells full sized; `Alt-5` makes shell 5; `!` in an empty pane makes a SHELLS shell, not a
+    project picker; `C-q e 2` works in Terminal.app with Option not set as Meta.
+- [ ] **SH.3 The CLI** — S. `ptyro shells [ls]|new|go|move|loose|adopt|watch` with `--json` and
+  `--workspace` (§23.7), and `ptyro shell --help` pointing at `shells`. A `docs/parity.md` row for
+  each, `docs/commands.md`, and README's daily-use section.
+- [ ] **SH.4 The web** — M. The SHELLS group in the session list (numbered cards, `＋` with new,
+  scratch and a command), the strip on a shell's page (tap, and swipe on a phone), the ⋯ actions
+  (rename, move to number, watch, adopt, stop), digit keys on the list, and `ACTIONS` entries
+  (§23.14). Checked in Chrome against a sandbox. *Done when:* on a phone, ＋ makes shell 1, the
+  strip switches between 1 and 2, and `make parity` shows no web gap.
+- [ ] **SH.5 Long commands and watches** — M. *R-UX-41.* `[shell] notify_after` (default `30s`):
+  a long command in a loose shell that ends while it isn't shown raises `done ✓` / `error ✗N` with
+  its duration, through the notifier. Watches `done` / `output` / `silence DUR` / `match RE` per
+  shell (`w` in the shells menu, the row menu, `shells watch`, the web's ⋯), shown `◎` (§23.9).
+  *Done when:* `sleep 40; false` in shell 2 while shell 1 is shown puts `✗1 sleep 40 (40s)` in
+  the inbox and on the row; `watch --match listening` on a dev server fires once.
+- [ ] **SH.6 Restarts** — S. `[shell] restore = offer|start|forget` (default `offer`): after a
+  daemon restart each loose session comes back as a lost row in its number, with its last
+  directory, command and the recorder's last screen; `⏎`/`Alt-N` starts it again there. `start`
+  restarts shells, never commands (§23.10). A live upgrade already keeps them (SH.1).
+- [ ] **SH.7 Set loose, adopt, scratch** — S. *R-UX-03 (scratch sessions).*
+  - Move a worktree's session to SHELLS, and adopt a loose one into a worktree (refused across
+    profiles, which offers a new shell there instead).
+  - Scratch shells in `<data>/scratch/<id>/` that go when they're removed, asking first when
+    files remain; `ptyro gc` lists the ones left behind.
+  - In the TUI, the CLI and the web (§23.8).
+- [ ] **SH.8 Settings and docs** — S. Schema entries for `shell.section`, `shell.notify_after`
+  and `shell.restore` in the Shells section (help, default, kind), shown in the TUI's and the web's
+  panel. `docs/keys.md` (the keys, and the Option-as-Meta note extended to `Alt`-digits), README
+  (Daily use: shells), the tour's one new stop, and SPEC §23 changed from proposed to built.
+
+**Done when:** in one workspace, with no project open: `C-q C-c` makes shell 1 in `~`, `Alt-2`
+makes shell 2 running `htop`, `Alt-1` and `` C-q ` `` flip between them; `make test` started in
+shell 1 while shell 2 is shown says when it ends; `ptyro send %1 ls` from another terminal types into
+it; the phone's strip shows 1 and 2; after `ptyro daemon restart` both come back as rows that ⏎
+starts again in their directories. Then `C-t` in a worktree still opens that worktree's quick
+terminal, untouched.
 
 ## Backlog (unscheduled; ideas welcome)
 
