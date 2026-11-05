@@ -18,8 +18,9 @@ const WAIT: Duration = Duration::from_secs(40);
 /// PowerShell printing a numbered line every 100 ms, forever.
 const TICKER: &str =
     "$i = 0; while ($true) { $i++; Write-Output \"tick $i\"; Start-Sleep -Milliseconds 100 }";
-/// PowerShell that says it's ready, then exits with the number typed into it.
-const WAITER: &str = "Write-Output ready; $x = Read-Host; exit [int]$x";
+/// PowerShell that says it's ready, then exits with the number typed into it. `Read-Host` throws
+/// under `-NonInteractive` (and the script ends at once); reading the console's input doesn't.
+const WAITER: &str = "Write-Output ready; $x = [Console]::ReadLine(); exit [int]$x";
 
 fn agents_config() -> String {
     let mut c = String::from("[attention]\nmin_work = \"1s\"\n");
@@ -114,6 +115,8 @@ fn an_upgrade_hands_every_session_over() {
     ok(&d, &["new", "-d", "-n", "a1", "--agent", "claude"]);
     wait_screen(&d, "tick", "tick 3");
     wait_screen(&d, "ex", "ready");
+    let ex = json(&d, &["status", "ex", "--json"]);
+    assert_eq!(ex["session"]["state"]["t"], "running", "ex waits for its input: {ex:#}");
     ok(&d, &["send", "a1", "work 4 during the upgrade", "--wait-ready"]);
     wait_screen(&d, "a1", "work 4");
     let before = status(&d);
