@@ -313,6 +313,12 @@ pub struct SessionImage {
     /// A structured session's driver, transcript and pipes (M10).
     #[serde(default)]
     pub structured: Option<crate::structured::StructuredImage>,
+    /// Windows: the live session's handles as the next daemon has them (WIN9): a console
+    /// session's seven (`ptyro_pty::Handles`), a structured one's process and job (its pipes are
+    /// `structured.fds`). Filled in by the handover after it copied them across. Left out when
+    /// empty, so a Unix image is byte for byte what it was (the committed fixture says so).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub win_handles: Option<Vec<u64>>,
 }
 
 fn new_meta(
@@ -800,6 +806,32 @@ impl Session {
         self.changed.send_modify(|v| *v += 1);
     }
 
+    /// Output read off the pipe outside the read loop (a paused Windows reader's last bytes):
+    /// into the recorder and the emulator, as the loop does with what it reads.
+    #[cfg(windows)]
+    fn take_output(&self, bytes: &[u8]) {
+        let mut out = FeedOutput::default();
+        let changed = {
+            let mut term = self.term.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let term = &mut *term;
+            crate::watchdog::BYTES_READ.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+            self.record(bytes, term);
+            self.feed_isolated(term, bytes, &mut out);
+            term.tracker.update(&mut term.emu)
+        };
+        if changed {
+            self.last_output_ms.store(now_ms(), Ordering::Relaxed);
+            self.output_bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+        }
+        if !out.replies.is_empty() {
+            self.queue(WriterMsg::Bytes(out.replies));
+        }
+        self.handle_events(out.events);
+        if changed {
+            self.bump();
+        }
+    }
+
     async fn reader_task(self: Arc<Self>, mut reader: ptyro_pty::Reader) {
         let mut buf = vec![0u8; 64 * 1024];
         let mut pause = self.io.pause.clone();
@@ -808,9 +840,38 @@ impl Session {
             // A live upgrade: stop between reads (the kernel buffers output meanwhile), so the
             // emulator image misses nothing. Unparks if the upgrade is called off.
             if *pause.borrow_and_update() {
-                self.io.parked.fetch_add(1, Ordering::SeqCst);
-                let _ = pause.wait_for(|p| !*p).await;
-                self.io.parked.fetch_sub(1, Ordering::SeqCst);
+                // Windows: the reader's thread stops (its read under way cancelled), and what it
+                // read goes into the emulator before the image is made (WIN9).
+                #[cfg(windows)]
+                {
+                    let parked = match tokio::task::block_in_place(|| reader.pause()) {
+                        Ok(()) => {
+                            let rest = reader.take_pending();
+                            if !rest.is_empty() {
+                                self.take_output(&rest);
+                            }
+                            self.io.parked.fetch_add(1, Ordering::SeqCst);
+                            true
+                        }
+                        // Not counted as parked, so the handover sees a reader that didn't stop
+                        // and is called off rather than lose output.
+                        Err(e) => {
+                            tracing::error!(session = %self.id, "pausing output: {e}");
+                            false
+                        }
+                    };
+                    let _ = pause.wait_for(|p| !*p).await;
+                    if parked {
+                        self.io.parked.fetch_sub(1, Ordering::SeqCst);
+                    }
+                    reader.resume();
+                }
+                #[cfg(not(windows))]
+                {
+                    self.io.parked.fetch_add(1, Ordering::SeqCst);
+                    let _ = pause.wait_for(|p| !*p).await;
+                    self.io.parked.fetch_sub(1, Ordering::SeqCst);
+                }
             }
             let deadline = self
                 .term
@@ -1295,14 +1356,35 @@ fn inherit_pty(
     }
 }
 
-/// Windows inherits no pseudoconsole until its live upgrade (WIN9).
+/// An adopted session's program, for its exit: nothing on Unix (it's still our child, the reaper
+/// collects it), its handed-over process on Windows.
+#[cfg(unix)]
+type Program = ();
+#[cfg(not(unix))]
+type Program = ptyro_pty::Child;
+
+/// The pseudoconsole a live upgrade handed over (WIN9): rebuilt from the handles the previous
+/// daemon copied into this process, with its program for the exit. Handles of a session that
+/// isn't live any more are closed, never left open.
 #[cfg(not(unix))]
 #[allow(clippy::type_complexity)]
 fn inherit_pty(
-    _fd: Option<i32>,
-    _live: bool,
-) -> std::io::Result<(Option<ptyro_pty::Master>, Option<(ptyro_pty::Reader, ptyro_pty::Writer)>)> {
-    Ok((None, None))
+    handles: Option<&[u64]>,
+    live: bool,
+    pid: Option<u32>,
+) -> std::io::Result<(
+    Option<ptyro_pty::Master>,
+    Option<(ptyro_pty::Reader, ptyro_pty::Writer)>,
+    Option<ptyro_pty::Child>,
+)> {
+    let (Some(h), Some(pid)) = (handles.and_then(ptyro_pty::Handles::from_slice), pid) else {
+        return Ok((None, None, None));
+    };
+    let c = ptyro_pty::adopt(h, pid)?;
+    if !live {
+        return Ok((None, None, None));
+    }
+    Ok((Some(c.master), Some((c.reader, c.writer)), Some(c.child)))
 }
 
 impl Session {
@@ -1357,6 +1439,7 @@ impl Session {
             stale_after_ms: stale,
             engine_clocks,
             structured,
+            win_handles: None,
         })
     }
 
@@ -1391,9 +1474,28 @@ impl Session {
         let mut meta = img.meta;
         let piped =
             structured_img.as_ref().is_some_and(crate::structured::StructuredImage::has_pipes);
-        let live = (img.master_fd.is_some() || piped) && meta.state.is_live() && meta.pid.is_some();
+        // Its terminal came across: a descriptor by number (Unix), or the handles the handover
+        // copied into this process (Windows, WIN9).
+        #[cfg(unix)]
+        let carried = img.master_fd.is_some();
+        #[cfg(not(unix))]
+        let carried = img.win_handles.as_ref().is_some_and(|h| h.len() == 7);
+        let live = (carried || piped) && meta.state.is_live() && meta.pid.is_some();
         let (writer_tx, writer_rx) = mpsc::channel(WRITER_QUEUE);
-        let (master, halves) = inherit_pty(img.master_fd, live)?;
+        #[cfg(unix)]
+        let ((master, halves), mut program) = (inherit_pty(img.master_fd, live)?, None::<Program>);
+        #[cfg(not(unix))]
+        let (master, halves, mut program) =
+            inherit_pty(img.win_handles.as_deref().filter(|_| !piped), live, meta.pid)?;
+        // A structured agent's process and job (its pipes go with its driver).
+        #[cfg(not(unix))]
+        if piped
+            && live
+            && let (Some(h), Some(pid)) = (img.win_handles.as_deref(), meta.pid)
+            && let [process, job] = h
+        {
+            program = Some(ptyro_pty::adopt_program(pid, *process as usize, *job as usize)?);
+        }
         let master = match master {
             Some(m) => Some(m),
             None => {
@@ -1438,16 +1540,38 @@ impl Session {
             record_dir: Mutex::new(record.map(|(d, _)| d)),
             structured: structured.clone(),
         });
+        // How its program's end is learned: still our child by pid on Unix (the reaper), its
+        // handed-over process handle on Windows.
+        let ended = |pid: u32, program: &mut Option<Program>| {
+            #[cfg(unix)]
+            {
+                let _ = program;
+                reaper.watch(pid)
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = reaper;
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(mut child) = program.take() {
+                    tokio::spawn(async move {
+                        let code: Option<i32> = child.wait().await.ok().and_then(|s| s.code());
+                        let _ = tx.send((code, None));
+                    });
+                }
+                let _ = pid;
+                rx
+            }
+        };
         if let Some((r, w)) = halves {
             let pid = session.pid().unwrap_or_default();
             tokio::spawn(writer_task(w, writer_rx));
             tokio::spawn(Arc::clone(&session).reader_task(r));
-            tokio::spawn(Arc::clone(&session).reaped_task(reaper.watch(pid)));
+            tokio::spawn(Arc::clone(&session).reaped_task(ended(pid, &mut program)));
         }
         if let Some(r) = resume {
             let pid = session.pid().unwrap_or_default();
             crate::structured::run(Arc::clone(&session), r);
-            tokio::spawn(Arc::clone(&session).reaped_task(reaper.watch(pid)));
+            tokio::spawn(Arc::clone(&session).reaped_task(ended(pid, &mut program)));
         }
         Ok(session)
     }

@@ -497,6 +497,7 @@ mod tests {
             stale_after_ms: 30_000,
             engine_clocks: [Some(1), None, Some(3)],
             structured: None,
+            win_handles: None,
         };
         Image {
             version: IMAGE_VERSION,
