@@ -90,10 +90,20 @@ fn trust_dialog(screen: &str) -> bool {
         || screen.contains("Do you trust the files in this folder")
 }
 
-/// Dialogs that come before any hook: the folder trust question and the login screen.
+/// The first-run question when Claude finds its Chrome extension (2.1.318, seen on Windows,
+/// 2026-11-04): "No, keep browser tools off" is preselected.
+fn chrome_dialog(screen: &str) -> bool {
+    screen.contains("Claude in Chrome extension detected")
+}
+
+/// Dialogs that come before any hook: the folder trust question, the Chrome extension question
+/// and the login screen.
 fn on_screen(screen: &str) -> Option<Signal> {
     if trust_dialog(screen) {
         return Some(Signal::blocked("question", Some("trust this folder?".into())));
+    }
+    if chrome_dialog(screen) {
+        return Some(Signal::blocked("question", Some("use your Chrome browser?".into())));
     }
     if screen.contains("Select login method") {
         return Some(Signal::blocked("auth", Some("log in".into())));
@@ -366,6 +376,13 @@ impl Adapter for Claude {
     }
 
     fn answer_screen(&self, screen: &str, d: Decision) -> Option<Vec<u8>> {
+        if chrome_dialog(screen) {
+            // Down to "Yes, use my browser", Enter; Enter alone keeps the tools off.
+            return Some(match d {
+                Decision::Allow | Decision::Always => b"\x1b[B\r".to_vec(),
+                Decision::Deny => b"\r".to_vec(),
+            });
+        }
         if !trust_dialog(screen) {
             return self.answer(d);
         }
@@ -494,6 +511,23 @@ mod tests {
         // A dialog answered earlier, above the box now: ready.
         assert!(Claude.ready(&format!("{dialog}\n● answer: yes\n{drawn}")));
         assert!(Claude.ready_needs_screen());
+    }
+
+    /// As Claude 2.1.318 drew it on Windows, right after the trust question.
+    #[test]
+    fn the_chrome_extension_question_blocks_and_takes_its_own_keys() {
+        let screen = "  Claude in Chrome extension detected\n  Claude will use your Chrome browser by \
+            default — navigating sites, filling forms, and capturing screenshots in your\n  existing \
+            session.\n  ❯ No, keep browser tools off\n    Yes, use my browser\n  Enter to confirm · \
+            Esc to keep browser tools off";
+        let s = on_screen(screen).unwrap();
+        assert!(
+            matches!(&s, Signal::Status { status: AgentStatus::Blocked, detail: Some(d), .. } if d.contains("Chrome")),
+            "{s:?}"
+        );
+        assert!(!Claude.ready(screen));
+        assert_eq!(Claude.answer_screen(screen, Decision::Deny).unwrap(), b"\r");
+        assert_eq!(Claude.answer_screen(screen, Decision::Allow).unwrap(), b"\x1b[B\r");
     }
 
     #[test]
