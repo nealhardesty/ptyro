@@ -7163,7 +7163,9 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   with `%USERPROFILE%` as the home when `HOME` isn't set, in the npm prefix (the prefix itself, not
   `bin`), `%APPDATA%\npm`, `~\.local\bin` (Claude's native installer), WinGet's `Links`, Scoop's
   `shims`, `%NVM_SYMLINK%` (nvm-windows), `~\.bun\bin` and `npx`'s cache under
-  `%LOCALAPPDATA%\npm-cache\_npx`. An npm `.cmd` shim is read and what it starts runs instead: its
+  `%LOCALAPPDATA%\npm-cache\_npx`, and `%LOCALAPPDATA%\agy\bin` (the Antigravity CLI's installer).
+  An npm shim whose package is gone (a removed package, or an install that rolled back) runs
+  nothing and isn't found. An npm `.cmd` shim is read and what it starts runs instead: its
   last quoted `"%dp0%\…"`, inside its folder only, a `.js` with `node` (the shim's own `node.exe`
   first, as cmd-shim picks), anything else as it is. Through the shim, `cmd.exe` would stand
   between ptyro and the agent, ask "Terminate batch job (Y/N)?" at Ctrl+C, and be the session's

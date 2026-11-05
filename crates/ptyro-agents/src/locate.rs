@@ -97,6 +97,8 @@ pub fn find(prog: &str, path: &str) -> Option<Found> {
         dirs.push((home.join(".local").join("bin"), "~\\.local\\bin".into()));
         let local = var("LOCALAPPDATA").unwrap_or_else(|| home.join("AppData").join("Local"));
         dirs.push((local.join("Microsoft").join("WinGet").join("Links"), "WinGet".into()));
+        // The Antigravity CLI's installer (`install.ps1`) puts `agy.exe` here.
+        dirs.push((local.join("agy").join("bin"), "%LOCALAPPDATA%\\agy\\bin".into()));
         let scoop = var("SCOOP").unwrap_or_else(|| home.join("scoop"));
         dirs.push((scoop.join("shims"), "Scoop".into()));
         // nvm-windows: the active Node's folder, where its global packages' commands are.
