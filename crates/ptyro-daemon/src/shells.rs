@@ -675,10 +675,10 @@ impl Daemon {
                     }
                 }
                 Some(Watch::Match { re }) => {
+                    // Every tick: a screen that changed without counted output (a redraw) can
+                    // show the line too, and one watched shell's screen is cheap to read.
                     if e.re.as_ref().is_none_or(|(p, _)| p != re) {
                         e.re = regex::Regex::new(re).ok().map(|r| (re.clone(), r));
-                    } else if out == e.out {
-                        continue;
                     }
                     e.out = out;
                     let screen = s.read_screen(ScreenFormat::Plain);
