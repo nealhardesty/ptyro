@@ -8140,7 +8140,11 @@ its CHATS. A shell there is an ordinary session (any command, not only a shell) 
 - **Label** (what the row shows, not an address): the title if one is set (`,`, then `C-t`), else
   the foreground program and the directory (`htop`, `vim · ~/dl`), else the directory (`~/dl`).
   The label follows what runs, as tmux's `automatic-rename` does (on by default, §20.14), while
-  the name stays put.
+  the name stays put. A shell itself at its prompt isn't "what runs": its program's name is compared the way the
+  process list names it (`session::program_name`, and `programName` in the web's `shellkit.ts`,
+  one table for both), so a Windows daemon's `C:\…\pwsh.exe` at its prompt is `pwsh` and the label
+  is its directory, which reads with `\` (`…\app`). `$HOME` here is the platform's home
+  (`%USERPROFILE%` on Windows, which sets no `HOME`).
 
 ### 23.5 Addresses
 

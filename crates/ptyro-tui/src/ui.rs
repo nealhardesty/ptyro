@@ -1045,7 +1045,7 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
 /// What a quick terminal's line says it's doing: the command running (`cargo test`, `vim`),
 /// else the last one and how it went (`✓ make` / `✗ make`), else nothing.
 pub(crate) fn quick_doing(s: &SessionInfo) -> Option<String> {
-    let shell = s.argv.first().map(|a| a.rsplit('/').next().unwrap_or(a).trim_start_matches('-'));
+    let shell = s.argv.first().map(|a| ptyro_core::session::program_name(a));
     match &s.command {
         Some(c) if c.ended_ms.is_none() => Some(
             c.text
@@ -1053,7 +1053,7 @@ pub(crate) fn quick_doing(s: &SessionInfo) -> Option<String> {
                 .map_or_else(|| "running".into(), |t| ptyro_core::session::brief(t, 40)),
         ),
         _ if s.foreground.is_some()
-            && s.foreground.as_deref().map(|f| f.trim_start_matches('-')) != shell =>
+            && s.foreground.as_deref().map(|f| f.trim_start_matches('-')) != shell.as_deref() =>
         {
             s.foreground.clone()
         }

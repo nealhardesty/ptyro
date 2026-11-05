@@ -6,6 +6,7 @@
 
 import { startSession } from "./flow.js";
 import type { Session } from "./screen.js";
+import { shellLabel } from "./shellkit.js";
 import { actions, ask, enc, form, go, h, menu, ui } from "./kit.js";
 import type { Item } from "./kit.js";
 
@@ -31,20 +32,6 @@ export function shellsOf(sessions: Iterable<Session>, workspace?: string): Sessi
   return [...sessions]
     .filter((s) => s.loose && s.slot != null && (!workspace || (s.workspace ?? "main") === workspace))
     .sort((a, b) => (a.workspace ?? "").localeCompare(b.workspace ?? "") || (a.slot ?? 0) - (b.slot ?? 0));
-}
-
-const base = (p: string): string => p.split("/").filter(Boolean).pop() ?? p;
-
-/// A shell's label (SPEC §23.4): its title, else what runs in it and where, else where.
-export function shellLabel(s: Session): string {
-  if (s.title && s.title !== s.window_title) return s.title;
-  if (s.kind !== "shell") return s.name;
-  const dir = s.live_cwd ?? s.cwd ?? "";
-  const where = dir ? `…/${base(dir)}` : "";
-  const shell = s.argv?.[0] ? base(s.argv[0]).replace(/^-/, "") : "";
-  const fg = s.foreground?.replace(/^-/, "");
-  if (fg && fg !== shell) return `${fg} · ${where}`;
-  return where || s.name;
 }
 
 /// What its card says it's doing: the command running, else the last one and how it went.

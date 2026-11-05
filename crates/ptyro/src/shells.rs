@@ -303,8 +303,8 @@ async fn ls(ctx: &Ctx, a: LsArgs) -> Result<i32, Error> {
 
 /// A shell's label (SPEC §23.4): `ptyro_core::session::shell_label`.
 fn label(s: &SessionInfo) -> String {
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-    ptyro_core::session::shell_label(s, home.as_deref())
+    let home = ptyro_core::config::expand_home("~");
+    ptyro_core::session::shell_label(s, Some(&home))
 }
 
 /// The workspace of the session this command runs in, when it runs in one.

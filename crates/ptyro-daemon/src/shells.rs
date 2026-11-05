@@ -410,7 +410,7 @@ impl Daemon {
         let mut out: Vec<Arc<Session>> =
             self.sessions_in(&wt.id).into_iter().filter(|s| s.busy()).collect();
         // A shell reports its directory as the system sees it (macOS: /private/var for /var).
-        let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        let canon = |p: &Path| ptyro_core::os::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
         let root = canon(&wt.path);
         for s in self.sessions() {
             let loose =
@@ -489,7 +489,7 @@ impl Daemon {
     /// first by every client). Only directly under `<data>/scratch`, and never one in use.
     async fn scratch_remove(&self, path: &Path) -> Result<Reply, Error> {
         let root = self.paths.data.join("scratch");
-        let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        let canon = |p: &Path| ptyro_core::os::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
         let (root, dir) = (canon(&root), canon(path));
         if dir.parent() != Some(root.as_path()) || !dir.is_dir() {
             return Err(Error::invalid(format!(
@@ -534,7 +534,7 @@ impl Daemon {
         }
         // A shell reports where it is as the system sees it (macOS: /private/var for /var):
         // both spellings of the root count.
-        let real = root.canonicalize().unwrap_or_else(|_| root.clone());
+        let real = ptyro_core::os::canonicalize(&root).unwrap_or_else(|_| root.clone());
         used.into_iter()
             .filter_map(|p| {
                 if p.starts_with(&root) {
