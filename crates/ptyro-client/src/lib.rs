@@ -467,7 +467,7 @@ fn is_absent(e: &std::io::Error) -> bool {
 
 /// Start `ptyro daemon start --spawned` and wait until it accepts connections. On Unix the
 /// daemon detaches itself (`setsid`) before starting its runtime; we never fork a tokio process.
-/// On Windows it starts detached (no console, a process group of its own).
+/// On Windows it starts detached (a console with no window, a process group of its own).
 async fn spawn_daemon(opts: &ConnectOptions) -> Result<LocalStream, ClientError> {
     let exe = match &opts.daemon_exe {
         Some(p) => p.clone(),

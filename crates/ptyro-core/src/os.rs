@@ -93,7 +93,9 @@ pub fn no_follow(opts: &mut OpenOptions, follow_links: bool) -> &mut OpenOptions
 }
 
 /// Start `cmd` on its own, so it outlives whatever started it and a terminal's signals don't
-/// reach it: its own process group on Unix; on Windows a new process group with no console.
+/// reach it: its own process group on Unix; on Windows a new process group with a console of
+/// its own that has no window. Not `DETACHED_PROCESS` (no console at all): then every console
+/// program it starts (git, gh, cmd) opens a window of its own that flashes and closes.
 pub fn detach(cmd: &mut std::process::Command) -> &mut std::process::Command {
     #[cfg(unix)]
     {
@@ -103,9 +105,9 @@ pub fn detach(cmd: &mut std::process::Command) -> &mut std::process::Command {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+        cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP)
     }
 }
 
@@ -387,6 +389,45 @@ mod tests {
             assert!(path_starts_with(Path::new("/src/app/x"), Path::new("/src/app")));
             assert!(!path_starts_with(Path::new("/Src/app"), Path::new("/src")), "Unix keeps case");
         }
+    }
+
+    /// A detached process has a console of its own that no one sees, so the console programs it
+    /// starts (git, gh, cmd) share it instead of each opening a window that flashes and closes.
+    /// The test binary runs itself detached, as `console_probe`, which writes what it found.
+    #[cfg(windows)]
+    #[test]
+    fn a_detached_process_has_a_console_and_no_window() {
+        let d = tempfile::tempdir().unwrap();
+        let out = d.path().join("console.txt");
+        let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+        cmd.args(["--exact", "os::tests::console_probe", "--ignored"])
+            .env("PTYRO_TEST_CONSOLE_PROBE", &out)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        assert!(detach(&mut cmd).status().unwrap().success());
+        let found = std::fs::read_to_string(&out).unwrap();
+        assert_eq!(found, "console: yes, window: none", "a detached process's console");
+    }
+
+    /// Run by the test above, detached: whether this process has a console, and a window for it.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "run by a_detached_process_has_a_console_and_no_window"]
+    #[allow(unsafe_code)]
+    fn console_probe() {
+        use windows_sys::Win32::System::Console::{GetConsoleProcessList, GetConsoleWindow};
+        let Some(out) = std::env::var_os("PTYRO_TEST_CONSOLE_PROBE") else { return };
+        let mut pids = [0u32; 8];
+        // SAFETY: the buffer and its length agree; neither call keeps anything.
+        let attached = unsafe { GetConsoleProcessList(pids.as_mut_ptr(), 8) } > 0;
+        let window = !unsafe { GetConsoleWindow() }.is_null();
+        let said = format!(
+            "console: {}, window: {}",
+            if attached { "yes" } else { "no" },
+            if window { "shown" } else { "none" }
+        );
+        std::fs::write(out, said).unwrap();
     }
 
     /// Whatever this user may make (a symbolic link with Developer Mode; else a junction or a

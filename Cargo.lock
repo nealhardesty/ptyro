@@ -2397,6 +2397,7 @@ dependencies = [
  "toml",
  "toml_edit",
  "ulid",
+ "windows-sys 0.61.2",
  "yaml-rust2",
 ]
 

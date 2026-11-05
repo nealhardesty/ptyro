@@ -278,7 +278,8 @@ async fn stop_signal() -> Result<()> {
 }
 
 /// On Windows: Ctrl+C or Ctrl+Break in the daemon's console (`--foreground`), its console
-/// closing, or Windows shutting down. A detached daemon has no console: `ptyro daemon stop`.
+/// closing, or Windows shutting down. A detached daemon's console has no window to close:
+/// `ptyro daemon stop`.
 #[cfg(windows)]
 async fn stop_signal() -> Result<()> {
     use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close, ctrl_shutdown};

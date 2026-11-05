@@ -6774,6 +6774,15 @@ Windows) wasn't needed to get the list below: compile errors are the same either
   and was refused as a release build. There's no per-file exception, and turning it off can't be
   undone without reinstalling Windows. Signing (WIN12) is the real answer; install.ps1 says what
   happened if `ptyro.exe` is refused. [V]
+- **A detached daemon needs a console, just not a window.** Started with `DETACHED_PROCESS`
+  (no console at all), every console program the daemon ran in the background (git, gh, cmd) got
+  a console of its own, and so a window: with Windows Terminal as the default terminal, each git
+  call flashed a Windows Terminal window open and shut (2026-11-04, the native daemon from WIN7
+  polling git). `CREATE_NO_WINDOW` gives the daemon a console with no window, and its children
+  inherit it. `ptyro_core::os::detach` uses it; its test runs itself detached and asks
+  `GetConsoleProcessList` (no console under `DETACHED_PROCESS`, one with `CREATE_NO_WINDOW`) and
+  `GetConsoleWindow`. Smart App Control refused the rebuilt test binary here after running the
+  first build, so the passing run is CI's. [V for the windows and the missing console]
 - **PowerShell's execution policy** (Restricted by default) refuses `install.ps1` run as a file,
   but not `irm … | iex`, which evaluates a string. [V]
 - **`wt.exe` splits its command line at every `;`**, also inside a `powershell -Command` string
