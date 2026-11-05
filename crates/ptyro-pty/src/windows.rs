@@ -340,9 +340,28 @@ impl std::fmt::Debug for Child {
 
 // ── reading, writing, resizing ────────────────────────────────────────────────────────────
 
-/// The pseudoconsole's output.
+/// The pseudoconsole's output, read on a thread of its own so a live upgrade can stop it
+/// without losing a byte ([`winread`](crate::winread), WIN9). The console host closing its end
+/// is the output's end, as a PTY's EOF is.
 #[derive(Debug)]
-pub struct Reader(tokio::fs::File);
+pub struct Reader(pub crate::winread::PipeReader);
+
+impl Reader {
+    /// Stop reading for a handover; what was read stays for [`take_pending`](Self::take_pending).
+    pub fn pause(&self) -> io::Result<()> {
+        self.0.pause()
+    }
+
+    /// Read again (a handover that was called off).
+    pub fn resume(&self) {
+        self.0.resume();
+    }
+
+    /// What a paused reader read and nobody took yet.
+    pub fn take_pending(&mut self) -> Vec<u8> {
+        self.0.take_pending()
+    }
+}
 
 impl tokio::io::AsyncRead for Reader {
     fn poll_read(
@@ -350,11 +369,7 @@ impl tokio::io::AsyncRead for Reader {
         cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        match ready!(Pin::new(&mut self.0).poll_read(cx, buf)) {
-            // The console host closed its end: the output is over, as a PTY's EOF is.
-            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Poll::Ready(Ok(())),
-            other => Poll::Ready(other),
-        }
+        Pin::new(&mut self.0).poll_read(cx, buf)
     }
 }
 
@@ -551,7 +566,7 @@ pub fn spawn(req: SpawnRequest<'_>) -> io::Result<PtyChild> {
     Ok(PtyChild {
         pid,
         child: Child { pid, proc },
-        reader: Reader(tokio::fs::File::from_std(output)),
+        reader: Reader(crate::winread::PipeReader::new(output, "conpty-read")?),
         writer: Writer { file: tokio::fs::File::from_std(input), pty: pty.clone(), pending: None },
         master: Master { _pty: pty, pid },
     })
