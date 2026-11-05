@@ -85,6 +85,8 @@ struct Kept {
     slot: u32,
     #[serde(default)]
     client_env: BTreeMap<String, String>,
+    #[serde(default)]
+    pinned: bool,
 }
 
 /// What the tick remembers about one loose session between looks.
@@ -224,31 +226,41 @@ impl Daemon {
         true
     }
 
-    /// Give every loose session that shares a number in its workspace a free one (a removed
-    /// workspace's shells moved to `main`, say). The older keeps its number.
-    pub(crate) fn reslot(&self) {
-        let mut sessions: Vec<Arc<Session>> = self.sessions();
-        sessions.sort_by_key(|s| s.id.created_ms());
-        let mut seen: Vec<(String, u32)> = Vec::new();
-        for s in sessions {
-            let key = {
+    /// The shells that just moved into another workspace (a removed workspace's, to `main`) keep
+    /// their numbers where those are free there and take the lowest free one where not; the
+    /// shells already there never change (SPEC §23.3).
+    pub(crate) fn reslot(&self, moved: &[SessionId]) {
+        let _held = RESERVED.locked();
+        let mut movers: Vec<Arc<Session>> =
+            self.sessions().into_iter().filter(|s| moved.contains(&s.id)).collect();
+        movers.sort_by_key(|s| s.id.created_ms());
+        for s in movers {
+            let (ws, slot) = {
                 let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 let ws = m.place.workspace.clone().unwrap_or_else(|| MAIN_WORKSPACE.into());
-                m.shelf.as_ref().map(|f| (ws, f.slot))
+                match m.shelf.as_ref() {
+                    Some(f) => (ws, f.slot),
+                    None => continue,
+                }
             };
-            let Some((ws, slot)) = key else { continue };
-            if !seen.contains(&(ws.clone(), slot)) {
-                seen.push((ws, slot));
+            // Taken by a shell that is settled there: every other one, less the movers still to
+            // come (their numbers aren't theirs yet).
+            let taken: Vec<u32> = self
+                .shells_of(&ws)
+                .into_iter()
+                .filter(|(o, _)| o.id != s.id)
+                .filter(|(o, _)| !moved.contains(&o.id) || o.id.created_ms() < s.id.created_ms())
+                .map(|(_, n)| n)
+                .collect();
+            if !taken.contains(&slot) {
                 continue;
             }
-            let mine: Vec<u32> = seen.iter().filter(|(w, _)| *w == ws).map(|(_, n)| *n).collect();
-            let n = lowest_free(&mine);
+            let n = lowest_free(&taken);
             if let Some(f) =
                 s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).shelf.as_mut()
             {
                 f.slot = n;
             }
-            seen.push((ws, n));
             let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(&s) });
         }
     }
@@ -258,13 +270,66 @@ impl Daemon {
     pub(crate) fn resolve_slot(&self, addr: &str) -> Option<Result<Arc<Session>, Error>> {
         let (ws, n) = addr.rsplit_once('%')?;
         let n: u32 = n.parse().ok()?;
-        let ws = if ws.is_empty() { self.context_workspace() } else { ws.to_owned() };
+        let ws = match ws {
+            "" => self.context_workspace(),
+            // `s:<id>%N` (the CLI inside a session): that session's workspace.
+            w if w.starts_with("s:") && self.find_workspace(w).is_err() => match self.resolve(w) {
+                Ok(s) => s
+                    .meta
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .place
+                    .workspace
+                    .clone()
+                    .unwrap_or_else(|| MAIN_WORKSPACE.into()),
+                Err(e) => return Some(Err(e)),
+            },
+            w => w.to_owned(),
+        };
         Some(self.shell_at(&ws, n).ok_or_else(|| {
             Error::new(
                 ErrorCode::NotFound,
                 format!("no shell {n} in {ws}: `ptyro shells new --slot {n}` starts one"),
             )
         }))
+    }
+
+    /// A bare `%N` in a request from a command running inside a session (the CLI, an agent's
+    /// tool call) is that session's workspace's shell N: rewritten to `s:<id>%N`, which
+    /// `resolve_slot` reads (SPEC §23.5). Others, and clients outside any session, are left as
+    /// they are: there `%N` is the workspace the TUI shows.
+    pub(crate) fn scope_slots(&self, req: Request, caller: &crate::mail::Caller) -> Request {
+        use ptyro_protocol::ClientKind as K;
+        let Some(pid) =
+            caller.pid.filter(|_| matches!(caller.kind, Some(K::Cli | K::Hook | K::Test)))
+        else {
+            return req;
+        };
+        let Ok(mut v) = serde_json::to_value(&req) else { return req };
+        fn bare(s: &str) -> bool {
+            s.strip_prefix('%')
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        }
+        let mut found = false;
+        if let Some(o) = v.as_object() {
+            for k in ["addr", "session", "target"] {
+                found |= o.get(k).and_then(|x| x.as_str()).is_some_and(bare);
+            }
+        }
+        if !found {
+            return req;
+        }
+        let Some(me) = self.session_of_pid(pid) else { return req };
+        if let Some(o) = v.as_object_mut() {
+            for k in ["addr", "session", "target"] {
+                if let Some(x) = o.get_mut(k)
+                    && let Some(s) = x.as_str().filter(|s| bare(s))
+                {
+                    *x = serde_json::Value::String(format!("s:{}{s}", me.id.full()));
+                }
+            }
+        }
+        serde_json::from_value(v).unwrap_or(req)
     }
 
     /// Sessions that keep a worktree from going (SPEC §10.8, §23.8): its own that are busy, and
@@ -348,7 +413,10 @@ impl Daemon {
         if from == slot {
             return Ok(Reply::Session { info: self.info(&s) });
         }
-        let _held = RESERVED.locked();
+        let held = RESERVED.locked();
+        if held.iter().any(|k| k.0 == ws && k.1 == slot) {
+            return Err(Error::conflict(format!("shell {slot} of {ws} is starting: try again")));
+        }
         let other = self.shell_at(&ws, slot);
         let set = |t: &Arc<Session>, n: u32| {
             if let Some(f) =
@@ -362,6 +430,7 @@ impl Daemon {
             set(o, from);
             let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(o) });
         }
+        drop(held);
         let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(&s) });
         Ok(Reply::Session { info: self.info(&s) })
     }
@@ -438,9 +507,19 @@ impl Daemon {
 
     fn shell_watch(&self, addr: &str, watch: Option<Watch>) -> Result<Reply, Error> {
         let s = self.resolve(addr)?;
-        if let Some(Watch::Match { re }) = &watch {
-            regex::Regex::new(re).map_err(|e| Error::invalid(format!("match {re:?}: {e}")))?;
-        }
+        // What already matches on screen now is the baseline: only a new line is a hit.
+        let seen = match &watch {
+            Some(Watch::Match { re }) => {
+                let r = regex::Regex::new(re)
+                    .map_err(|e| Error::invalid(format!("match {re:?}: {e}")))?;
+                s.read_screen(ScreenFormat::Plain)
+                    .lines()
+                    .filter(|l| r.is_match(l))
+                    .map(|l| l.trim().to_owned())
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
         {
             let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let name = m.name.clone();
@@ -450,6 +529,7 @@ impl Daemon {
                 )));
             };
             f.watch = watch;
+            f.seen = seen;
         }
         let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(&s) });
         Ok(Reply::Session { info: self.info(&s) })
@@ -477,30 +557,48 @@ impl Daemon {
         });
     }
 
+    /// Write what a restart would offer back now (the tick does so too, once a second).
+    /// Not while the daemon stops: its shells end then, and are what a restart offers back.
+    pub(crate) fn save_kept(&self) {
+        if *self.shutdown.borrow() {
+            return;
+        }
+        self.save_kv(KEPT, serde_json::to_value(self.kept_now()).unwrap_or_default());
+    }
+
     /// The live loose sessions, as a restart would offer them.
     fn kept_now(&self) -> Vec<Kept> {
         self.sessions()
             .into_iter()
-            .filter(|s| s.is_live())
             .filter_map(|s| {
-                let info = self.info(&s);
-                let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                let f = m.shelf.as_ref()?;
-                // A scratch directory goes with its shell: nothing to come back to.
-                if f.scratch.is_some() {
+                // Kept: running, offered back and not yet started (a second restart must not
+                // lose it), or a dormant agent (its number comes back with it). Not one that
+                // ended for good, nor a scratch shell, whose directory went with it.
+                let keep = {
+                    let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    m.shelf.as_ref().is_some_and(|f| {
+                        f.scratch.is_none()
+                            && (m.state.is_live() || f.lost || m.state == ProcessState::Dormant)
+                    })
+                };
+                if !keep {
                     return None;
                 }
+                let live_cwd = s.is_live().then(|| self.info(&s).live_cwd).flatten();
+                let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let f = m.shelf.as_ref()?;
                 Some(Kept {
                     id: s.id.full(),
                     name: m.name.clone(),
                     title: m.title.clone(),
                     kind: m.kind,
                     argv: m.argv.clone(),
-                    cwd: info.live_cwd.clone().unwrap_or_else(|| m.cwd.clone()),
+                    cwd: live_cwd.unwrap_or_else(|| m.cwd.clone()),
                     workspace: m.place.workspace.clone().unwrap_or_else(|| MAIN_WORKSPACE.into()),
                     profile: m.place.profile.clone(),
                     slot: f.slot,
                     client_env: m.client_env.clone(),
+                    pinned: f.pinned,
                 })
             })
             .collect()
@@ -576,15 +674,22 @@ impl Daemon {
                         self.raise(&s, AttentionKind::Notification, text).await;
                     }
                 }
-                Some(Watch::Match { re }) if out != e.out => {
-                    e.out = out;
+                Some(Watch::Match { re }) => {
                     if e.re.as_ref().is_none_or(|(p, _)| p != re) {
                         e.re = regex::Regex::new(re).ok().map(|r| (re.clone(), r));
+                    } else if out == e.out {
+                        continue;
                     }
+                    e.out = out;
                     let screen = s.read_screen(ScreenFormat::Plain);
-                    let hit = e.re.as_ref().and_then(|(_, r)| {
-                        screen.lines().find(|l| r.is_match(l)).map(|l| l.trim().to_owned())
+                    let matching: Vec<String> = e.re.as_ref().map_or_else(Vec::new, |(_, r)| {
+                        screen
+                            .lines()
+                            .filter(|l| r.is_match(l))
+                            .map(|l| l.trim().to_owned())
+                            .collect()
                     });
+                    let hit = matching.into_iter().find(|l| !shelf.seen.contains(l));
                     if let Some(line) = hit {
                         let text = ptyro_core::session::brief(&format!("matched: {line}"), 160);
                         self.raise(&s, AttentionKind::Notification, text).await;
@@ -631,7 +736,23 @@ impl Daemon {
         let mut back = 0;
         for k in list {
             let Ok(id) = k.id.parse::<SessionId>() else { continue };
-            if self.session(id).is_some() {
+            if let Some(s) = self.session(id) {
+                // Already back (a live upgrade's, or a dormant agent `restore_dormant` brought
+                // back without its number): give it its number again.
+                let bare = s
+                    .meta
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .shelf
+                    .is_none();
+                if bare
+                    && let Ok(r) = self
+                        .reserve_slot(&k.workspace, Some(k.slot))
+                        .or_else(|_| self.reserve_slot(&k.workspace, None))
+                {
+                    s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).shelf =
+                        Some(Shelf { slot: r.key.1, pinned: k.pinned, ..Shelf::default() });
+                }
                 continue;
             }
             let ws = if self.find_workspace(&k.workspace).is_ok() {
@@ -644,11 +765,8 @@ impl Daemon {
             else {
                 continue;
             };
-            let cwd = if k.cwd.is_dir() {
-                k.cwd.clone()
-            } else {
-                std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| k.cwd.clone())
-            };
+            let cwd =
+                if k.cwd.is_dir() { k.cwd.clone() } else { ptyro_core::config::expand_home("~") };
             let spec = crate::session::DormantSpec {
                 name: self.free_name(&k.name),
                 kind: k.kind,

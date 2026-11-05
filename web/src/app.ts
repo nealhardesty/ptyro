@@ -20,7 +20,7 @@ import { machineChip } from "./machines.js";
 import { initNotes, notesConnected, notesEvent, notesLink, notesNeedsLoad, notesLoad, notesNoteButton, notesQuickAdd, notesShown, notesStart, notesView } from "./notes.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
 import { coach } from "./settings.js";
-import { goShell, shellStrip, shellsGroup } from "./shells.js";
+import { goShell, listWorkspace, shellStrip, shellsGroup } from "./shells.js";
 import { apply as showMachine, offlineText } from "./machine.js";
 
 interface ChatItem { id: string; t: string; [k: string]: any }
@@ -678,7 +678,7 @@ document.addEventListener("keydown", (e) => {
   else if (/^[1-9]$/.test(e.key) && (route().view === "list" || (route().view === "session" && app.sessions.get(route().id ?? "")?.loose))) {
     e.preventDefault();
     const here = app.sessions.get(route().id ?? "");
-    void goShell(app.sessions.values(), Number(e.key), here?.loose ? here.workspace : undefined);
+    void goShell(app.sessions.values(), Number(e.key), here?.loose ? here.workspace ?? "main" : listWorkspace());
   }
   else if (e.key === "m" && chatsShown()) { e.preventDefault(); newChat(); }
   else if (e.key === "/" && route().view === "chats") { e.preventDefault(); document.querySelector<HTMLInputElement>("input.search")?.focus(); }

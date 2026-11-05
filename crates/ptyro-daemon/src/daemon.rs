@@ -657,6 +657,8 @@ impl Daemon {
             self.drop_scratch(&dir);
         }
         self.sessions.writing().retain(|o| o.id != id);
+        // A removed shell is never offered back, even by a restart before the next tick.
+        self.save_kept();
         self.last_notified.locked().remove(&id);
         let _ = self.events.send(DomainEvent::SessionRemoved { id });
     }
@@ -699,8 +701,14 @@ impl Daemon {
         let target =
             if asked_loose { None } else { self.target(spec.worktree.as_deref(), &spec.cwd)? };
         // One started outside every project joins SHELLS too (SPEC §23.3), unless it is a
-        // quick terminal, the scratchpad's editor or a client's tool.
-        let loose = asked_loose || (target.is_none() && !spec.quick && !spec.pad && !spec.tool);
+        // quick terminal, the scratchpad's editor, a client's tool, or ptyro's own work in its
+        // data directory (a run's judge).
+        let loose = asked_loose
+            || (target.is_none()
+                && !spec.quick
+                && !spec.pad
+                && !spec.tool
+                && !spec.cwd.starts_with(&self.paths.data));
         let id = SessionId::new();
         let scratch = if spec.scratch { Some(self.make_scratch(id)?) } else { None };
         // Any refusal from here on takes the new, empty scratch directory away again.
@@ -711,14 +719,14 @@ impl Daemon {
             (Some(_), Some((w, _)), _) => w.path.clone(),
             _ => spec.cwd.clone(),
         };
-        // A shell of SHELLS asked for where this machine has no such directory (`~` from the
-        // web, a gone directory, another machine's path) starts at home (SPEC §23.4).
-        let cwd = match std::env::var_os("HOME").map(std::path::PathBuf::from) {
-            Some(home) if loose && !cwd.is_dir() => match cwd.strip_prefix("~") {
-                Ok(rest) if home.join(rest).is_dir() => home.join(rest),
-                _ => home,
-            },
-            _ => cwd,
+        // A shell asked for in SHELLS where this machine has no such directory (`~` from the
+        // web, a gone directory, another machine's path) starts at home (SPEC §23.4). Only one
+        // asked for there: any other spawn in a missing directory is refused, as ever.
+        let cwd = if asked_loose && !cwd.is_dir() {
+            let expanded = ptyro_core::config::expand_home(&cwd.to_string_lossy());
+            if expanded.is_dir() { expanded } else { ptyro_core::config::expand_home("~") }
+        } else {
+            cwd
         };
         if !cwd.is_dir() {
             return Err(Error::invalid(format!("not a directory: {}", cwd.display())));
@@ -1025,6 +1033,8 @@ impl Daemon {
         req: Request,
         caller: crate::mail::Caller,
     ) -> Result<Reply, Error> {
+        // `%N` from a command run inside a session means that session's workspace (SPEC §23.5).
+        let req = self.scope_slots(req, &caller);
         // Another machine's things (MM1.B): its requests go there, and lists here gain its part.
         // A link is answered with this machine's own, and never routed on (no echoes).
         // A chat's own agent (its history tools) only searches, reads and lists this machine's

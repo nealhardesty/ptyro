@@ -373,15 +373,12 @@ impl Inputs<'_> {
         numbered.sort_by_key(|s| s.slot);
         let (quick, rest): (Vec<&SessionInfo>, Vec<&SessionInfo>) =
             rest.into_iter().partition(|s| s.quick);
-        let tail = || {
-            quick
-                .iter()
-                .map(|s| Row::Quick(s.id))
-                .chain(rest.iter().map(|s| Row::Session(s.id)))
-                .collect::<Vec<Row>>()
-        };
+        let tail = || tail_rows(&quick, &rest);
+        // `never`: no SHELLS section, but nothing disappears: every session with no row is
+        // listed under "other sessions", as before SHELLS (the numbered ones by number).
         if self.shells == ShellsSection::Never {
-            let tail = tail();
+            let mut tail: Vec<Row> = numbered.iter().map(|s| Row::Session(s.id)).collect();
+            tail.extend(tail_rows(&quick, &rest));
             if tail.is_empty() {
                 return tail;
             }
@@ -466,6 +463,11 @@ impl Inputs<'_> {
             .filter(|c| c.workspace == ws && c.side_of.is_none() && !c.incognito)
             .count()
     }
+}
+
+/// Quick terminals, then other sessions, as rows.
+fn tail_rows(quick: &[&SessionInfo], rest: &[&SessionInfo]) -> Vec<Row> {
+    quick.iter().map(|s| Row::Quick(s.id)).chain(rest.iter().map(|s| Row::Session(s.id))).collect()
 }
 
 /// `laptop2:work` → (`laptop2`, `work`); `work` → (`None`, `work`).
@@ -1054,7 +1056,8 @@ mod tests {
         let rows = inputs(&collapsed, ShellsSection::Always);
         assert_eq!(rows.last(), Some(&Row::Shells("main".into())), "folded: the heading only");
         let rows = inputs(&HashSet::new(), ShellsSection::Never);
-        assert!(!rows.contains(&Row::Session(one.id)), "never: no SHELLS");
+        assert!(!rows.contains(&Row::Shells("main".into())), "never: no SHELLS heading");
+        assert!(rows.contains(&Row::Session(one.id)), "but no session disappears");
         assert!(rows.contains(&Row::Session(orphan.id)), "the others still show");
         assert!(rows.contains(&Row::Group("other sessions".into())));
     }

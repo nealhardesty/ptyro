@@ -170,6 +170,10 @@ pub struct Shelf {
     /// project let go) still moves into the repository it `cd`s into (UX1.5).
     #[serde(default)]
     pub pinned: bool,
+    /// The lines on screen that already matched a `match` watch when it was set: old news,
+    /// never a hit (SPEC §23.9).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub seen: Vec<String>,
 }
 
 /// What sessions tell the daemon's signal processor (`agents.rs`).

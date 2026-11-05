@@ -7927,6 +7927,23 @@ agent installed:
 - **SH.0** checked what can be checked here. crossterm reports `ESC 1` and kitty's `CSI 49;3u` as
   Alt+`1`, and that reaches `shells.go 1` (`keys.rs` test). `¡` doesn't. The real-terminal matrix is
   `make verify-shells`, run by a person in each terminal. Its results are not recorded yet [U].
+- **After the code review (2026-11-04):**
+  - A bare `%N` from a command running inside a session (the CLI, an agent) means that
+    session's workspace: `handle_as` rewrites it to `s:<id>%N`, found by the caller's pid
+    (`session_of_pid`). Outside a session it is still the workspace the TUI shows.
+  - Only a shell *asked* for in SHELLS falls back to home for a missing directory. Any other
+    spawn there is refused (`not a directory`), as before. ptyro's own work in its data
+    directory (a run's judge) never takes a number.
+  - The restart list keeps rows that were offered back but not yet started, and dormant loose
+    agents, whose numbers `restore_shells` gives back after `restore_dormant`.
+  - When a workspace goes, only its shells are renumbered: main's keep theirs.
+  - A move onto a number that a starting shell holds is refused.
+  - `--stop-sessions` (remove, archive) also stops the loose shells standing in the worktree.
+  - A `match` watch's baseline (the lines that already match) is taken when it is set.
+  - `section = "never"` lists every session with no row under "other sessions", numbered ones
+    included.
+  - The web's digit keys act on one workspace (the one whose shell was opened last, else
+    `main`), and the group splits by workspace.
 - **Not built:** the tour's stop, `ptyro gc` listing scratch leftovers, the health-badge fix for
   Option-as-Meta, and clicks on the TUI's strip.
 

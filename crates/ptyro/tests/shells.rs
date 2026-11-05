@@ -391,3 +391,138 @@ async fn restore_forget_brings_nothing_back() {
     let c = w.d.client().await.unwrap();
     assert!(!list(&c).await.iter().any(|x| x.id == s.id));
 }
+
+/// Review fixes (2026-11-04): only a shell asked for in SHELLS falls back to home; any other
+/// spawn in a missing directory is still refused, as it always was.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_missing_directory_is_refused_unless_a_shell_asked_for_shells() {
+    let w = World::new("");
+    let c = w.d.client().await.unwrap();
+    let gone = w.home().join("no-such-dir");
+    let spec = SpawnSpec { cwd: gone.clone(), argv: vec!["true".into()], ..SpawnSpec::default() };
+    let e = try_spawn(&c, spec).await.unwrap_err();
+    assert!(e.message.contains("not a directory"), "{}", e.message);
+    let s = shell(&c, &gone, None).await;
+    assert_eq!(s.cwd, w.home(), "a SHELLS shell starts at home instead");
+}
+
+/// A `%N` typed inside a session means that session's workspace, whatever the TUI shows; and
+/// a workspace's removal moves its shells to main without renumbering main's own.
+#[tokio::test(flavor = "multi_thread")]
+async fn percent_n_is_the_caller_s_workspace_and_a_removed_workspace_s_shells_fit_in() {
+    let w = World::new("");
+    let c = w.d.client().await.unwrap();
+    c.request(Request::WorkspaceNew { name: "work".into(), profile: None, notify: None })
+        .await
+        .unwrap();
+    let home = w.home();
+    let spawn_in = |ws: &str, slot: u32| SpawnSpec {
+        cwd: home.clone(),
+        loose: true,
+        slot: Some(slot),
+        workspace: Some(ws.into()),
+        ..SpawnSpec::default()
+    };
+    let main1 = try_spawn(&c, spawn_in("main", 1)).await.unwrap();
+    let main2 = try_spawn(&c, spawn_in("main", 2)).await.unwrap();
+    let work1 = try_spawn(&c, spawn_in("work", 1)).await.unwrap();
+    let work2 = try_spawn(&c, spawn_in("work", 2)).await.unwrap();
+    // From inside work's shell 2, `%1` is work's shell 1, not main's.
+    ready(&c, &work2).await;
+    ready(&c, &work1).await;
+    let socket = w.d.env().into_iter().find(|(k, _)| k == "PTYRO_SOCKET").unwrap().1;
+    send(
+        &c,
+        &work2.id.full(),
+        &format!("PTYRO_SOCKET={socket} PTYRO_NO_AUTOSPAWN=1 {BIN} send %1 'echo marker-work'"),
+    )
+    .await;
+    w.d.wait_for_text(&c, &work1.id.full(), "marker-work", WAIT)
+        .await
+        .expect("work's shell 1 got it");
+    let main_screen = match c
+        .request(Request::ReadScreen { addr: main1.id.full(), format: Default::default() })
+        .await
+        .unwrap()
+    {
+        Reply::Screen { text } => text,
+        r => panic!("{r:?}"),
+    };
+    assert!(!main_screen.contains("marker-work"), "main's shell 1 didn't: {main_screen}");
+    // Removing `work`: its shells go to main; main's 1 and 2 stay, the newcomers take 3 and 4.
+    c.request(Request::WorkspaceRemove { name: "work".into() }).await.unwrap();
+    let mut slots = Vec::new();
+    for s in [&main1, &main2, &work1, &work2] {
+        slots.push(get(&c, &s.id.full()).await.unwrap().slot);
+    }
+    assert_eq!(slots[..2], [Some(1), Some(2)], "main's own keep theirs");
+    let mut moved = slots[2..].to_vec();
+    moved.sort();
+    assert_eq!(moved, [Some(3), Some(4)]);
+}
+
+/// A match watch fires for a new line, never for one already on screen when it was set.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_match_watch_ignores_what_was_already_there() {
+    let w = World::new("");
+    let c = w.d.client().await.unwrap();
+    let s = shell(&c, &w.home(), None).await;
+    let id = s.id.full();
+    ready(&c, &s).await;
+    // Quoted, so only its output (not the line typed) says OLD-ERROR.
+    send(&c, &id, "echo OLD-ERR''OR").await;
+    w.d.wait_for_text(&c, &id, "\nOLD-ERROR", WAIT).await.unwrap();
+    let watch = Some(Watch::Match { re: "ERROR".into() });
+    c.request(Request::ShellWatch { addr: id.clone(), watch }).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    send(&c, &id, "true").await;
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert!(get(&c, &id).await.unwrap().attention.is_none(), "old news is no hit");
+    send(&c, &id, "echo NEW-ERR''OR").await;
+    let s = wait_for(&c, &id, "matched the new line", |s| s.attention.is_some()).await;
+    assert!(s.attention.unwrap().text.contains("NEW-ERROR"));
+}
+
+/// Shells offered back after a restart are still offered after another one, untouched.
+#[tokio::test(flavor = "multi_thread")]
+async fn lost_shells_survive_a_second_restart() {
+    let mut w = World::new("");
+    let c = w.d.client().await.unwrap();
+    let s = shell(&c, &w.home(), Some(3)).await;
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    drop(c);
+    w.d.restart().unwrap();
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    w.d.restart().unwrap();
+    let c = w.d.client().await.unwrap();
+    let back = list(&c).await.into_iter().find(|x| x.id == s.id).expect("still offered");
+    assert!(back.lost && back.slot == Some(3), "{back:#?}");
+}
+
+/// `--stop-sessions` stops a loose shell standing in the worktree too, before it goes.
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_sessions_stops_a_loose_shell_in_the_worktree() {
+    let w = World::new("");
+    let c = w.d.client().await.unwrap();
+    let code = repo(&w, "code");
+    c.request(Request::ProjectAdd { path: code.clone(), workspace: None }).await.unwrap();
+    let r = c
+        .request(Request::WorktreeNew {
+            spec: ptyro_core::model::WorktreeSpec {
+                project: "code".into(),
+                name: Some("wt".into()),
+                ..Default::default()
+            },
+        })
+        .await
+        .unwrap();
+    let Reply::WorktreeCreated { info: wt, .. } = r else { panic!("{r:?}") };
+    let inside = shell(&c, &wt.path, None).await;
+    let opts = ptyro_core::model::RemoveOpts { stop_sessions: true, ..Default::default() };
+    c.request(Request::WorktreeRemove { addr: wt.id.clone(), opts }).await.expect("removed");
+    let deadline = Instant::now() + WAIT;
+    while get(&c, &inside.id.full()).await.is_some_and(|s| s.state.is_live()) {
+        assert!(Instant::now() < deadline, "the loose shell kept running in a deleted directory");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}

@@ -736,7 +736,11 @@ impl Daemon {
                 notes.push(n);
             }
         }
-        futures::future::join_all(live.iter().map(|s| s.kill(None))).await;
+        // With --stop-sessions, a loose shell standing in it stops too (SPEC §23.8): its
+        // directory is about to go.
+        let mut stopping: Vec<&Arc<Session>> = live.clone();
+        stopping.extend(busy.iter().filter(|b| !live.iter().any(|l| l.id == b.id)));
+        futures::future::join_all(stopping.iter().map(|s| s.kill(None))).await;
         let _ = self.events.send(DomainEvent::WorktreeProgress {
             worktree: wt.qualified(),
             step: "removing".into(),

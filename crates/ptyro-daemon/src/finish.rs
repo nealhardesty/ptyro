@@ -116,8 +116,14 @@ impl Daemon {
         // Its agents stop first: whatever they write in the next seconds belongs in the
         // snapshot, not in a directory that is about to be deleted.
         if stop_sessions {
-            let running: Vec<_> =
+            let mut running: Vec<_> =
                 self.sessions_in(&wt.id).into_iter().filter(|s| s.is_live()).collect();
+            // A loose shell standing in it too (SPEC §23.8).
+            for b in self.busy_in(&wt) {
+                if !running.iter().any(|r| r.id == b.id) {
+                    running.push(b);
+                }
+            }
             futures::future::join_all(running.iter().map(|s| s.kill(None))).await;
         }
         self.progress(&wt, "archiving: a snapshot of its files");

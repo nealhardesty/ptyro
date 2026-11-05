@@ -16,6 +16,10 @@ const ACTIONS = {
     "shells.adopt": "Move this shell from SHELLS into the worktree its directory is in",
 };
 export const tip = actions(ACTIONS);
+/// The workspace the list's digit keys act on: the one whose shell was opened last, else
+/// `main`. Digit N is always shell N of one workspace, never of whichever sorts first.
+let lastWorkspace;
+export const listWorkspace = () => lastWorkspace ?? "main";
 /// A workspace's shells by number (every workspace's with none named).
 export function shellsOf(sessions, workspace) {
     return [...sessions]
@@ -88,23 +92,30 @@ function commandForm(workspace) {
 export function shellsGroup(sessions, card) {
     const list = shellsOf(sessions);
     const workspaces = new Set(list.map((s) => s.workspace ?? "main"));
+    if (lastWorkspace && !workspaces.has(lastWorkspace))
+        lastWorkspace = undefined;
+    if (!lastWorkspace && workspaces.size === 1)
+        lastWorkspace = [...workspaces][0];
     const head = h("div", { class: "shells-head", title: tip("shells") }, h("span", { class: "shells-title" }, "SHELLS"), h("button", { class: "icon plus", title: tip("shells.new"), "aria-label": "New shell", onclick: () => newShellMenu() }, "＋"));
     if (!list.length) {
         return h("section", { class: "shells" }, head, h("button", { class: "small shell-new", title: tip("shells.new"), onclick: () => void newLooseShell() }, "＋ new shell"));
     }
-    const cards = list.map((s) => {
+    const cardOf = (s) => {
         const el = card(s);
         el.classList.add("shell-card");
         el.prepend(h("span", { class: "slot", title: tip("shells.go") }, String(s.slot)));
-        const sub = h("span", { class: "shell-sub" }, shellLabel(s), workspaces.size > 1 ? ` · ${s.workspace ?? "main"}` : "", s.watch ? ` · ◎ ${watchLabel(s.watch)}` : "", s.scratch ? " · scratch" : "", doing(s) ? ` · ${doing(s)}` : "");
+        const sub = h("span", { class: "shell-sub" }, shellLabel(s), s.watch ? ` · ◎ ${watchLabel(s.watch)}` : "", s.scratch ? " · scratch" : "", doing(s) ? ` · ${doing(s)}` : "");
         el.append(sub);
         return el;
-    });
-    return h("section", { class: "shells" }, head, h("div", { class: "cards" }, ...cards));
+    };
+    // Several workspaces: one numbered list each, as each has its own numbers.
+    const groups = [...workspaces].map((ws) => h("div", { class: "shells-ws" }, workspaces.size > 1 ? h("div", { class: "shells-ws-name" }, ws, ws === listWorkspace() ? h("small", {}, " · 1–9 here") : null) : null, h("div", { class: "cards" }, ...list.filter((s) => (s.workspace ?? "main") === ws).map(cardOf))));
+    return h("section", { class: "shells" }, head, ...groups);
 }
 /// The strip on a shell's page: its workspace's shells by number, the shown one marked.
 export function shellStrip(sessions, s) {
     const ws = s.workspace ?? "main";
+    lastWorkspace = ws;
     const all = [...sessions];
     const list = shellsOf(all, ws);
     const nav = h("nav", { class: "shell-strip", title: tip("shells.go") }, ...list.map((o) => h("button", {
