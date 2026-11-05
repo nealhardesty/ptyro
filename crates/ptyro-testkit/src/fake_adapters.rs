@@ -557,27 +557,48 @@ pub fn main(args: &[String]) -> i32 {
     }
     f.oc(json!({ "type": "session.created", "properties": { "info": { "id": f.session } } }));
     f.report(&mut out, "state=idle");
+    // Codex 0.166 says idle over OSC 7501 as it starts (and nothing by hook until a prompt).
+    if f.adapter == "codex" && f.late_start.get() {
+        let _ = write!(out, "\x1b]7501;state=idle:app=fake-codex\x1b\\");
+    }
     // `PTYRO_FAKE_PASTE=1`: bracketed paste, as real agents ask for, so a pasted prompt over
     // several lines is one prompt. Off, each line is its own command (the scripted tests).
     if std::env::var("PTYRO_FAKE_PASTE").is_ok() {
         let _ = write!(out, "\x1b[?2004h");
     }
     let stdin = std::io::stdin();
+    // `PTYRO_FAKE_DROP_FIRST_ENTER=1`: the first prompt's Enter is lost, its text left in the
+    // composer until the next Enter, as Codex 0.166 drops one while busy just after it says idle.
+    let mut drop_first = std::env::var_os("PTYRO_FAKE_DROP_FIRST_ENTER").is_some();
+    let mut held: Option<String> = None;
     loop {
-        // Claude's input box sits under a rule, which is how ptyro tells it from the `❯` lines
-        // of the conversation above it.
-        if f.adapter == "claude" {
-            let _ = write!(out, "────────────────────────────────────────\r\n");
-        }
         // Codex 0.166 says nothing until the first prompt: its composer is how ptyro sees it's
         // ready (`›`).
         let late_codex =
             f.adapter == "codex" && std::env::var_os("PTYRO_FAKE_LATE_SESSION_START").is_some();
-        let _ = write!(out, "{}", if late_codex { "› " } else { "> " });
+        if held.is_none() {
+            // Claude's input box sits under a rule, which is how ptyro tells it from the `❯`
+            // lines of the conversation above it.
+            if f.adapter == "claude" {
+                let _ = write!(out, "────────────────────────────────────────\r\n");
+            }
+            let _ = write!(out, "{}", if late_codex { "› " } else { "> " });
+        }
         let _ = out.flush();
         let mut line = String::new();
         if stdin.lock().read_line(&mut line).unwrap_or(0) == 0 {
             return 0;
+        }
+        if let Some(h) = held.take() {
+            if !line.trim().is_empty() {
+                let _ = writeln!(out, "fake: a second prompt while one waits: {}", line.trim());
+            }
+            line = h;
+        } else if drop_first && !line.trim().is_empty() {
+            drop_first = false;
+            let _ = write!(out, "{}{}", if late_codex { "› " } else { "> " }, line.trim());
+            held = Some(line);
+            continue;
         }
         // The cooked terminal splits a paste at its new lines: join it up to its end mark (the
         // Enter after it ends that last line).

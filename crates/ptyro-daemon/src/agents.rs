@@ -795,6 +795,55 @@ impl Daemon {
         }
         s.record_event("prompt", serde_json::json!({ "chars": text.chars().count() }));
         let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(s) });
+        if enter && s.structured.is_none() && !text.is_empty() && !text.contains('\n') {
+            self.check_taken(s, text);
+        }
+    }
+
+    /// After a prompt is typed: if it still sits in the input box, its Enter was dropped (Codex
+    /// 0.166 is busy for a moment after it first says idle, and an Enter then is lost), so press
+    /// Enter again once the agent is idle. Twice at most, within ~10 s; only while the screen
+    /// shows this very prompt unsent, so nothing is ever sent twice (WIN8).
+    fn check_taken(&self, s: &Session, text: &str) {
+        let Some(adapter) = s.adapter() else { return };
+        let Some(s) = self.session(s.id) else { return };
+        let want: String = text.chars().take(40).collect();
+        let want = want.trim().to_owned();
+        tokio::spawn(async move {
+            let a = ptyro_agents::adapter(&adapter);
+            let mut presses = 0;
+            for _ in 0..20 {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                if !s.is_live() {
+                    return;
+                }
+                let screen = s.read_screen(ptyro_protocol::ScreenFormat::Plain);
+                let pending = a.pending_input(&screen).is_some_and(|p| p.starts_with(&want));
+                if !pending {
+                    return;
+                }
+                // Only while it waits for input (or hasn't said anything yet): busy, an Enter now
+                // would be dropped too; blocked, it would answer the question on screen (Enter is
+                // "Yes" in Claude's dialogs). The box holding our prompt is never a dialog.
+                if !matches!(
+                    s.status(),
+                    None | Some(AgentStatus::Idle | AgentStatus::Done | AgentStatus::Starting)
+                ) {
+                    continue;
+                }
+                if presses == 2 {
+                    return;
+                }
+                presses += 1;
+                s.record_event("prompt_enter_again", serde_json::json!({ "press": presses }));
+                let key = ptyro_core::input::KeyEvent::new(
+                    ptyro_core::input::KeyCode::Enter,
+                    ptyro_core::input::Mods::NONE,
+                );
+                s.input(&ptyro_core::input::InputEvent::Key { key }).await;
+                tokio::time::sleep(Duration::from_millis(1000)).await;
+            }
+        });
     }
 
     /// `send --wait-ready`: wait until the session is ready (up to `timeout_ms`), then type.

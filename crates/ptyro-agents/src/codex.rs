@@ -309,6 +309,16 @@ impl Adapter for Codex {
         })
     }
 
+    fn pending_input(&self, screen: &str) -> Option<String> {
+        // The composer is the last `›` line (the conversation's prompts above it have one too).
+        if trust_dialog(screen) {
+            return None;
+        }
+        let last = screen.lines().rev().find(|l| l.trim_start().starts_with('›'))?;
+        let t = last.trim_start().trim_start_matches('›').trim();
+        (!t.is_empty()).then(|| t.to_owned())
+    }
+
     fn ready(&self, screen: &str) -> bool {
         // The composer line; the update prompt and trust dialog come before it (SPEC §8.4).
         screen.lines().any(|l| l.trim_start().starts_with("› ") || l.trim() == "›")
@@ -339,6 +349,24 @@ impl Adapter for Codex {
 mod tests {
     use super::*;
     use ptyro_core::config::AgentDef;
+
+    /// As Codex 0.166 drew it on Windows with the Enter lost: the prompt still in the composer.
+    #[test]
+    fn what_waits_in_the_composer() {
+        let unsent = "  >_ OpenAI Codex (v0.166.0)\n› Reply with just the word PONG, nothing else.\n  \
+            GPT-6.1-Sol default · C:\\proj\n  ⚠ 1 warning · f2 to view";
+        assert_eq!(
+            Codex.pending_input(unsent).as_deref(),
+            Some("Reply with just the word PONG, nothing else.")
+        );
+        let sent =
+            "› Reply with just the word PONG, nothing else.\n• PONG\n› Ask Codex to do anything";
+        assert_eq!(
+            Codex.pending_input(sent).as_deref(),
+            Some("Ask Codex to do anything"),
+            "its placeholder: never our prompt"
+        );
+    }
 
     /// Codex 0.166's trust dialog, as it drew it on Windows: blocked, and not ready for a prompt.
     #[test]

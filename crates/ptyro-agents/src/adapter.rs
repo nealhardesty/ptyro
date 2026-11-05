@@ -149,6 +149,12 @@ pub trait Adapter: Send + Sync {
     fn ready_needs_screen(&self) -> bool {
         false
     }
+    /// What sits in its input box, typed and not sent, when it shows one: a prompt whose Enter
+    /// was dropped (Codex 0.166 is busy for a moment after it first says idle) is still there.
+    fn pending_input(&self, screen: &str) -> Option<String> {
+        let _ = screen;
+        None
+    }
     /// Keys that answer the permission prompt on screen, where the agent takes keys.
     fn answer(&self, d: Decision) -> Option<Vec<u8>> {
         let _ = d;

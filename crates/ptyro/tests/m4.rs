@@ -771,3 +771,37 @@ async fn a_late_session_start_does_not_end_the_turn() {
         lines[start..stop].iter().any(|l| l["kind"] == "status" && l["detail"]["to"] == "idle");
     assert!(!idle_between, "SessionStart ended the turn: {lines:#?}");
 }
+
+/// A prompt whose Enter is lost (Codex 0.166, busy just after it says idle) is still in the
+/// composer: ptyro presses Enter again, once, and the turn happens (WIN8).
+#[tokio::test]
+async fn a_prompt_whose_enter_was_lost_is_sent() {
+    let w = World::new(
+        "[agents.codex.env]\nPTYRO_FAKE_LATE_SESSION_START = \"1\"\nPTYRO_FAKE_DROP_FIRST_ENTER = \"1\"\n",
+    );
+    let c = w.d.client().await.unwrap();
+    agent(&c, "cx", "codex", None).await;
+    let out = w.cli(&[
+        "send",
+        "cx",
+        "work 0.2 hi",
+        "--wait-ready",
+        "--wait",
+        "--timeout",
+        "30s",
+        "--json",
+    ]);
+    let o = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success() && o.contains("\"idle\""),
+        "{o}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let ev = String::from_utf8_lossy(&w.cli(&["events", "-s", "cx", "--json", "-n", "200"]).stdout)
+        .into_owned();
+    let again = ev.lines().filter(|l| l.contains("prompt_enter_again")).count();
+    assert_eq!(again, 1, "one Enter more, no more: {ev}");
+    assert!(ev.contains("\"Stop\""), "the turn ran: {ev}");
+    let screen = String::from_utf8_lossy(&w.cli(&["read", "cx"]).stdout).into_owned();
+    assert!(!screen.contains("a second prompt while one waits"), "{screen}");
+}
