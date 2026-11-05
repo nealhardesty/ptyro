@@ -137,10 +137,10 @@ client: the TUI in Windows Terminal, and every command from PowerShell.
    and puts that folder on your `PATH` (`$env:PTYRO_VERSION`, `PTYRO_PREFIX`,
    `PTYRO_NO_MODIFY_PATH=1` change that). `ptyro uninstall` removes it again, `PATH` entry
    included. `ptyro.exe` isn't code-signed yet, so Windows' Smart App Control, when it's on, may
-   refuse to run it; the installer says so if it does. Or build it yourself: on Windows,
-   `cargo build --release -p ptyro` (Rust and the Visual Studio Build Tools' C++ workload: `make
-   rust-install` checks for them), or from Linux or WSL with `make check-windows`'s toolchain,
-   `cargo xwin build --release --target x86_64-pc-windows-msvc -p ptyro` (`aarch64-…` for ARM).
+   refuse to run it; the installer says so if it does. Or build it yourself: see
+   [Build on Windows](#build-on-windows); from Linux or WSL, `make check-windows`'s toolchain
+   cross-builds it (`cargo xwin build --release --target x86_64-pc-windows-msvc -p ptyro`,
+   `aarch64-…` for ARM).
 3. Run `ptyro`. The first time, it finds the WSL distro that has ptyro and asks to use it (or
    offers to install it there); the answer is kept in `client.default_remote`
    (`ptyro --remote wsl://<distro>` picks one for a single command).
@@ -742,9 +742,33 @@ Everything runs through `make`; `make` on its own lists the targets. CI calls th
 (`make check`, `make msrv`, `make deny`, `make fuzz-smoke`, `make web-check`, `make web-e2e`, `make installer-check`),
 never raw `cargo`, so local runs and CI behave the same.
 
+### Build on Windows
+
+From a clone on Windows, in PowerShell (it needs no `make`, and installs only what's missing,
+asking first only where Windows does):
+
+```powershell
+git clone https://github.com/nealhardesty/ptyro; cd ptyro
+powershell -ExecutionPolicy Bypass -File scripts\windows-setup.ps1
+```
+
+It installs, with winget: Git, rustup, the Visual Studio Build Tools' C++ workload (rustc links
+with MSVC; a few GB, and Windows asks for an administrator once) and GNU make. Then it fetches the
+Rust toolchain this checkout pins, builds `target\release\ptyro.exe`, puts Microsoft's packaged
+ConPTY beside it (pinned and SHA-256 checked, as `make conpty` does), and runs it once. Run it
+again any time: what's there is skipped. Afterwards `make build-windows` rebuilds (it installs
+nothing), and `make windows-setup` runs the whole thing; both work from PowerShell as well as Git
+Bash. The Makefile's other targets are POSIX shell: run them from Git Bash (`make test-windows` is
+CI's Windows job).
+
+With Smart App Control on, Windows may refuse a `ptyro.exe` you built: it runs only signed
+programs it knows, and decides build by build. The script says so when it happens; the client in
+WSL works meanwhile.
+
 | Target | Does |
 |---|---|
 | `make help` | list the targets (the default) |
+| `make windows-setup` / `make build-windows` | on Windows, from PowerShell or Git Bash ([Build on Windows](#build-on-windows)): install what building needs with winget, then build `ptyro.exe` with its ConPTY / rebuild it, installing nothing |
 | `make rust-install` | install rustup (checksum-verified, no `curl \| sh`) and the toolchain pinned in `rust-toolchain.toml`: Linux, macOS, and Windows from Git Bash, MSYS2 or Cygwin (the MSVC host) |
 | `make build` / `release` / `install` / `install-release` | debug build / optimized `target/release/ptyro` / install into `~/.cargo/bin` (a fast incremental build: seconds after the first) / the same with the full release optimizations (slow) |
 | `make run ARGS="ls"` / `make try CMD=claude` | run the dev build with arguments / start `CMD` in a new session and attach |

@@ -6894,8 +6894,12 @@ Windows) wasn't needed to get the list below: compile errors are the same either
   `ptyro doctor` from WSL hung until its timeout when it started the daemon). Before starting
   anything detached, ptyro clears the inherit flag on its own standard handles
   (`ptyro_pty::std_handles_private`); a child given them on purpose still gets std's copies.
-  [V for the hang; the fix rests on Windows' documented inherit flag: Smart App Control refused
-  the build that has it, 2026-11-05]
+  [V, 2026-11-05: with the fix, PowerShell's `$out = & ptyro.exe new …`, which starts the daemon,
+  returns at once with the output.] **Not covered:** handles the CLI itself inherited from *its*
+  parent that aren't its standard handles (a PowerShell started from WSL hands its interop pipes
+  on) still reach the daemon, so the WSL side of such a chain waits. The whole fix is to start a
+  daemon with no inheritance at all (`CreateProcessW` with `bInheritHandles` off; it wants
+  nothing inherited), which std's `Command` can't do.
 - **ConPTY holds a lone ESC.** Raw input reaches ConPTY as VT, where ESC may begin a sequence:
   a lone one (`send --raw '\e'`, an answer's "deny", a stop key) waited for the rest and never
   arrived (a Codex panel stayed open, 2026-11-04). For a program in win32-input-mode, a lone ESC
