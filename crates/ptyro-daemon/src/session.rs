@@ -145,6 +145,35 @@ pub struct Meta {
     pub run: Option<(String, String)>,
     /// Tripwires from its recipe step (M7.4): paths and commands PreToolUse denies.
     pub guard: Option<crate::runs::Guard>,
+    /// Its place in its workspace's SHELLS (SPEC §23), when it is loose. Left out when empty, so
+    /// an image without SHELLS is byte for byte what it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shelf: Option<Shelf>,
+}
+
+/// A loose session's place in its workspace's SHELLS (SPEC §23): its number, and the rest that
+/// goes with being there.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Shelf {
+    /// Its number (1, 2, 3…), unique among its workspace's loose sessions while it exists.
+    pub slot: u32,
+    /// Its own scratch directory, which goes with it (SPEC §23.8).
+    #[serde(default)]
+    pub scratch: Option<PathBuf>,
+    #[serde(default)]
+    pub watch: Option<ptyro_core::session::Watch>,
+    /// Lost in a daemon restart and offered again (SPEC §23.10).
+    #[serde(default)]
+    pub lost: bool,
+    /// Put in SHELLS on purpose (a shell asked for there, set loose, offered back): it never
+    /// moves into a project. One that only landed there (started outside every project, its
+    /// project let go) still moves into the repository it `cd`s into (UX1.5).
+    #[serde(default)]
+    pub pinned: bool,
+    /// The lines on screen that already matched a `match` watch when it was set: old news,
+    /// never a hit (SPEC §23.9).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub seen: Vec<String>,
 }
 
 /// What sessions tell the daemon's signal processor (`agents.rs`).
@@ -336,6 +365,7 @@ fn new_meta(
         verify: None,
         run: None,
         guard: None,
+        shelf: None,
     }
 }
 
@@ -569,7 +599,22 @@ impl Session {
             quick: meta.place.quick,
             pad: meta.place.pad,
             chat: meta.place.chat.clone(),
+            loose: meta.shelf.is_some(),
+            slot: meta.shelf.as_ref().map(|f| f.slot),
+            watch: meta.shelf.as_ref().and_then(|f| f.watch.clone()),
+            scratch: meta.shelf.as_ref().is_some_and(|f| f.scratch.is_some()),
+            lost: meta.shelf.as_ref().is_some_and(|f| f.lost),
         }
+    }
+
+    /// Its number in SHELLS, when it is loose (SPEC §23.3).
+    pub fn slot(&self) -> Option<u32> {
+        self.meta
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .shelf
+            .as_ref()
+            .map(|f| f.slot)
     }
 
     /// Remember this session in the store (fire and forget); `launch` only when it changes.

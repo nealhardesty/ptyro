@@ -429,3 +429,28 @@ a.button { display: inline-block; padding: 7px 12px; border-radius: 8px; border:
   .chats-aside .chat-row { text-decoration: none; color: inherit; }
   .chats-aside .foot-link { padding: 8px; }
 }
+
+/* SHELLS (SPEC §23.14): a workspace's numbered terminals, above the session cards. */
+.shells { padding: 6px 10px 0; }
+.shells-head { display: flex; align-items: center; gap: 8px; padding: 4px 2px; }
+.shells-title { font-size: 12px; font-weight: 700; letter-spacing: .08em; color: var(--muted); }
+.shells-head .plus { padding: 0 8px; }
+.shells .shell-new { margin: 2px 0 8px; color: var(--muted); }
+.shells .cards { padding: 0; }
+.shell-card { position: relative; padding-left: 40px !important; }
+.shell-card .slot { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); font-weight: 700;
+  font-variant-numeric: tabular-nums; color: var(--accent); font-size: 18px; }
+.shell-card .shell-sub { display: block; color: var(--muted); font-size: 12px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+/* The strip on a shell's page: tmux's status line, tap a number, swipe along it. */
+.shell-strip { display: flex; gap: 6px; padding: 6px 10px; overflow-x: auto; border-bottom: 1px solid var(--line);
+  touch-action: pan-y; }
+.shell-strip button { padding: 4px 10px; border-radius: 14px; font-size: 13px; white-space: nowrap; }
+.shell-strip button small { color: var(--muted); }
+.shell-strip button.on { background: var(--accent); color: #fff; border-color: transparent; }
+.shell-strip button.on small { color: #fff; }
+.shell-strip button.wants { border-color: var(--warn); }
+.shell-strip button.lost { opacity: .6; }
+.shell-strip .plus { color: var(--accent); }
+.shells-ws-name { font-size: 12px; color: var(--muted); padding: 6px 2px 2px; }
+.shells-ws-name small { color: var(--accent); }

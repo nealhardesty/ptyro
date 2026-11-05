@@ -649,7 +649,7 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
     let rows = app.rows();
     let sel = app.sel_index(&rows);
     let numbered: std::collections::HashMap<SessionId, usize> =
-        App::numbered_from(&rows).into_iter().enumerate().map(|(n, id)| (id, n)).collect();
+        app.numbered_from(&rows).into_iter().enumerate().map(|(n, id)| (id, n)).collect();
     let sessions: std::collections::HashMap<SessionId, &SessionInfo> =
         app.sessions.iter().map(|s| (s.id, s)).collect();
     let width = area.width as usize;
@@ -734,6 +734,18 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
                     spans.push(Span::styled(format!(" — {title}"), fg(app, t.dim)));
                 }
                 Line::from(spans)
+            }
+            Row::Session(id) if sessions.get(id).is_some_and(|s| s.loose) => {
+                let Some(l) = crate::shells::sidebar_line(app, row, focused, &shown) else {
+                    continue;
+                };
+                l
+            }
+            Row::Shells(_) | Row::ShellNew(_) => {
+                let Some(l) = crate::shells::sidebar_line(app, row, focused, &shown) else {
+                    continue;
+                };
+                l
             }
             Row::Session(id) => {
                 let Some(s) = sessions.get(id).copied() else { continue };
@@ -1031,7 +1043,7 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
 /// once, for the row in focus.
 /// What a quick terminal's line says it's doing: the command running (`cargo test`, `vim`),
 /// else the last one and how it went (`✓ make` / `✗ make`), else nothing.
-fn quick_doing(s: &SessionInfo) -> Option<String> {
+pub(crate) fn quick_doing(s: &SessionInfo) -> Option<String> {
     let shell = s.argv.first().map(|a| a.rsplit('/').next().unwrap_or(a).trim_start_matches('-'));
     match &s.command {
         Some(c) if c.ended_ms.is_none() => Some(
@@ -1396,6 +1408,11 @@ fn draw_header(
             }
             left.push(Span::styled(s.name.clone(), name));
             left.push(Span::styled(format!(" · {}", what(s)), base));
+            if s.loose {
+                // Its workspace's SHELLS, tmux's status line (SPEC §23.6).
+                left.push(Span::styled("  ", base));
+                left.extend(crate::shells::strip(app, s, base, focused));
+            }
             // The model its agent runs (`opus 5.5`), once the agent has said.
             if let Some(m) = s.model.as_deref().filter(|_| s.kind == SessionKind::Agent) {
                 left.push(Span::styled(

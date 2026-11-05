@@ -1069,12 +1069,63 @@ pub struct Shell {
     /// prompt marks, working/idle, the last command and its exit code, the directory. Off, only a
     /// `ptyro shell-init` line in an rc file gives them.
     pub integration: bool,
+    /// Each workspace's SHELLS section in the sidebar (SPEC §23.6): always, only once it has a
+    /// shell, or never (the keys still work).
+    pub section: ShellsSection,
+    /// A command in a SHELLS shell that ran at least this long tells you when it ends, when
+    /// you weren't looking (SPEC §23.9); `off` never.
+    pub notify_after: String,
+    /// After the daemon restarts (not an upgrade), what becomes of SHELLS (SPEC §23.10).
+    pub restore: ShellsRestore,
+    /// `Alt-1`…`Alt-9` and `Alt-0` show SHELLS shells 1–10 with no prefix (SPEC §23.6). Off
+    /// leaves them to the program in the pane; `C-q e N` still works.
+    pub alt_digits: bool,
 }
 
 impl Default for Shell {
     fn default() -> Self {
-        Self { command: Vec::new(), integration: true }
+        Self {
+            command: Vec::new(),
+            integration: true,
+            section: ShellsSection::Always,
+            notify_after: "30s".into(),
+            restore: ShellsRestore::Offer,
+            alt_digits: true,
+        }
     }
+}
+
+impl Shell {
+    /// `notify_after` as a duration; `None` when it is off (or unreadable: `config check` says).
+    pub fn notify_after(&self) -> Option<std::time::Duration> {
+        parse_duration(&self.notify_after).ok().filter(|d| !d.is_zero())
+    }
+}
+
+/// When a workspace's SHELLS section shows in the sidebar (`[shell] section`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShellsSection {
+    /// Always, with `＋ new shell` when it has none.
+    #[default]
+    Always,
+    /// Only once the workspace has a shell there.
+    WhenUsed,
+    /// Never (the keys and commands still work).
+    Never,
+}
+
+/// What becomes of SHELLS after a daemon restart (`[shell] restore`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShellsRestore {
+    /// Each comes back as a row in its number that ⏎ starts again in its last directory.
+    #[default]
+    Offer,
+    /// Shells start again by themselves; commands are only offered.
+    Start,
+    /// They're gone.
+    Forget,
 }
 
 /// Pull requests through `gh` (M6.5, M6.10).
@@ -1675,6 +1726,7 @@ impl Config {
         self.scratchpad.validate()?;
         self.client.validate()?;
         self.chat.validate()?;
+        parse_duration(&self.shell.notify_after).map_err(|e| format!("shell.notify_after: {e}"))?;
         if self.ui.prefix.keys().is_empty() {
             return Err("ui.prefix: needs at least one key".into());
         }

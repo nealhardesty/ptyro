@@ -780,6 +780,7 @@ impl Daemon {
                 // Its chats move to main (SPEC §22.2).
                 self.chats_follow_workspace(&w.id).await;
                 // Its sessions keep running; they now live in main.
+                let mut moved_ids = Vec::new();
                 for s in self.sessions() {
                     let moved = {
                         let mut m =
@@ -791,11 +792,14 @@ impl Daemon {
                         moved
                     };
                     if moved {
+                        moved_ids.push(s.id);
                         s.save(None);
                         let _ =
                             self.events.send(DomainEvent::SessionUpdated { info: self.info(&s) });
                     }
                 }
+                // Its SHELLS keep their numbers in main where they're free (SPEC §23.3).
+                self.reslot(&moved_ids);
                 let _ = self.events.send(DomainEvent::WorkspaceRemoved { id: w.id });
                 Ok(Reply::Done)
             }

@@ -693,8 +693,9 @@ impl Daemon {
             .ok_or_else(|| Error::missing("project", &wt.project))?;
         let sessions = self.sessions_in(&wt.id);
         let live: Vec<&Arc<Session>> = sessions.iter().filter(|s| s.is_live()).collect();
-        // A quick terminal at its prompt goes with its worktree (UX1.25).
-        let busy: Vec<&&Arc<Session>> = live.iter().filter(|s| s.busy()).collect();
+        // A quick terminal at its prompt goes with its worktree (UX1.25); a loose shell standing
+        // in it holds it like its own (SPEC §23.8).
+        let busy = self.busy_in(&wt);
         if !busy.is_empty() && !opts.stop_sessions {
             let names: Vec<String> = busy
                 .iter()
@@ -735,7 +736,11 @@ impl Daemon {
                 notes.push(n);
             }
         }
-        futures::future::join_all(live.iter().map(|s| s.kill(None))).await;
+        // With --stop-sessions, a loose shell standing in it stops too (SPEC §23.8): its
+        // directory is about to go.
+        let mut stopping: Vec<&Arc<Session>> = live.clone();
+        stopping.extend(busy.iter().filter(|b| !live.iter().any(|l| l.id == b.id)));
+        futures::future::join_all(stopping.iter().map(|s| s.kill(None))).await;
         let _ = self.events.send(DomainEvent::WorktreeProgress {
             worktree: wt.qualified(),
             step: "removing".into(),

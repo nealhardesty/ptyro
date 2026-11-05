@@ -253,7 +253,29 @@ a row's menu (`.`), makes one at any time.
   worktree last started (`claude`, `codex@work`…) right there, no questions (`ptyro new
   --again` from a shell). In a worktree that hasn't run one it starts the default agent, Claude
   unless you pick another under Configuration → Agents → Default agent (`[agents] default`).
-- `Ctrl-Q !` starts a new shell in this worktree, full sized, every press.
+- `Ctrl-Q !` starts a new shell in this worktree, full sized, every press. With no worktree
+  around (an empty pane, a shell of SHELLS), it starts one in SHELLS instead.
+- **SHELLS**, tmux's windows: numbered terminals that belong to the workspace, not a worktree.
+  `Ctrl-Q Ctrl-C` (or `c` in the sidebar) starts one in the pane's directory, and `Alt-1`…`Alt-9`
+  (`Alt-0` for 10) shows shell N from anywhere, no prefix. An empty number starts a shell there,
+  so `Alt-3` is also the way to make shell 3. A shell keeps its number until it goes. Run any
+  command there: `Ctrl-Q e` is the shells menu (a digit picks, `c` a new shell, `!` a command
+  like `htop` or `ssh prod`, `s` a scratch shell in a new, empty directory that goes with it).
+  Each workspace's SHELLS section in the sidebar lists them, and a shell's pane header is a
+  strip of them all, tmux's status line. A command there that ran 30 s or more tells you when it
+  ends, with its exit code (`[shell] notify_after`), and a row's menu (`.`) watches a shell for
+  its command's end, output, silence or a matching line, gives it another number, or adopts it
+  into the worktree it's in. A session's menu can also move it to SHELLS, so a dev server
+  outlives its worktree. After a restart they come back as rows that ⏎ (or `Alt-N`) starts again
+  in their last directory (`[shell] restore`). From a shell: `ptyro shells`, `ptyro shells new --
+  htop`, `ptyro shells go 2`, and `%2` wherever a session goes (`ptyro send %2 'make test'`,
+  `ptyro read %2`). On the web, the SHELLS group sits above the sessions and a shell's page has
+  the strip (tap a number, swipe along it).
+  - **On a Mac:** Terminal.app and iTerm2 type `¡™£` for Option-digit unless Option acts as
+    Meta (Terminal.app: Settings → Profiles → Keyboard; iTerm2: Profiles → Keys → Left Option
+    key: Esc+). Until then, `Ctrl-Q e` and the digit always works, and the hints say so.
+    Ghostty, kitty, WezTerm and Alacritty send Alt as they are. `make verify-shells` tells you
+    what yours sends. `[shell] alt_digits = false` leaves Alt-digits to the program in the pane.
 - `Ctrl-Q o` **opens the worktree in…** any editor installed here (nvim, vim, hx, VS Code,
   Zed, Cursor, or one of yours under `[editors]`; on macOS an app in Applications counts even
   without its command on `PATH`), the file manager (`finder`, or `files` on Linux), a terminal app
@@ -743,6 +765,7 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make changeset-demo` (`ARGS=tui\|clean`) | a change set across three repos, contract to merge train, with fake agents |
 | `make scratchpad-demo` (`ARGS=tui\|clean`) | the scratchpad in a throwaway ptyro: items added, listed, ticked, restored; `tui` opens it |
 | `make verify-claude` | check the Claude adapter against the real Claude Code on your machine (one tiny turn) |
+| `make verify-shells` | press Alt-1 and see whether this terminal sends Alt (SHELLS' `Alt-1…9`), or what to change so it does |
 | `make verify-structured` | check structured mode against the real agents here |
 | `make check-windows` (`TARGETS=x86_64\|aarch64`, `XWIN_ACCEPT_LICENSE=1` once) | cross-checks ptyro for Windows, x64 and ARM64, from Linux or macOS with cargo-xwin (no Windows machine): every crate with its tests, the native daemon's included, and `ptyro.exe` (its own tests are Unix's). Needs clang, lld and cargo-xwin, and says how to install what's missing. The first run downloads Microsoft's CRT and SDK (about 1 GB) under Microsoft's licence, which you accept with `XWIN_ACCEPT_LICENSE=1`. `make test` runs it too when the tools are there, and says so when they aren't |
 | `make conpty` (`INTO=<dir>`, `ARCH=x86_64\|aarch64`) | fetches Microsoft's packaged ConPTY (`conpty.dll`, `OpenConsole.exe`; one pinned NuGet version, its SHA-256 checked) into `target/conpty/<arch>/`, and with `INTO` copies one architecture's pair beside a `ptyro.exe`. The Windows zips and `make test-windows` use it |

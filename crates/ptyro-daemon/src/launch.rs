@@ -592,7 +592,7 @@ impl Daemon {
         // A relaunch in place keeps the session's part in a run.
         let carried = self.session(l.id).map(|old| {
             let m = old.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            (m.run.clone(), m.verify.clone(), m.guard.clone())
+            (m.run.clone(), m.verify.clone(), m.guard.clone(), m.shelf.clone())
         });
         let spawned_session = match structured {
             Some((protocol, opts, http)) => {
@@ -618,11 +618,19 @@ impl Daemon {
             };
             Error::new(code, format!("cannot start session: {e}"))
         })?;
-        if let Some((run, verify, guard)) = carried.filter(|_| l.replace) {
+        // Its number in SHELLS (SPEC §23), before anyone can see it: a new one's, else the one
+        // a restart keeps (no longer lost).
+        let pending = crate::shells::take_pending(l.id);
+        if let Some((run, verify, guard, shelf)) = carried.filter(|_| l.replace) {
             let mut m = session.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             m.run = run;
             m.verify = verify;
             m.guard = guard;
+            m.shelf = shelf.map(|f| crate::session::Shelf { lost: false, ..f });
+        }
+        if let Some(shelf) = pending {
+            session.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).shelf =
+                Some(shelf);
         }
         if l.replace {
             if !self.replace_session(&session) {

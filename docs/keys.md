@@ -70,7 +70,9 @@ action by name.
 | `C-q` or `C-Space` | the prefix again: the same as `Tab` (a prefix you set in `[ui] prefix` does it too) |
 | `\` | show or hide the sidebar |
 | `u` | do what the last message offers: undo it, or fix what it reports |
-| `!` | a new shell of its own in this worktree, full sized (every press starts another; the quick terminal is `C-t` / `T`) |
+| `!` | a new shell of its own in this worktree, full sized (every press starts another; the quick terminal is `C-t` / `T`). With no worktree around (an empty pane, a shell of SHELLS), a shell in SHELLS |
+| `C-c` | a new shell in the workspace's **SHELLS**, in the pane's directory, full sized (tmux's `c`) |
+| `e` | the shells menu: the workspace's SHELLS by number; a digit shows one, `c` a new shell, `!` a command (`htop`, `ssh prod`), `s` a scratch shell. `C-q e 3` works where Alt doesn't |
 | `C-t` | this worktree's quick terminal (one per worktree) in a drawer below a pane of its project (VS Code's toggle). Again focuses it, and once more hides it (the shell keeps running). When none of the project is open it is a panel of its own, and a note says so. With no worktree here it asks for a project first |
 | `T` | this worktree's quick terminal full sized. Again goes back |
 | `;` | the scratchpad: your notes file in the editor, shown as `[scratchpad] mode` says (below). Again focuses it, and once more hides it (the editor keeps running) |
@@ -97,6 +99,17 @@ action by name.
 `Ctrl-Z` (no prefix) goes to the program. An agent run directly in a session has no shell to
 `fg` it back, so when it suspends itself (Claude does), ptyro resumes it straight away and
 says so.
+
+**SHELLS, with no prefix:** `Alt-1` … `Alt-9` show shell 1–9 of the workspace's SHELLS, and
+`Alt-0` shell 10 (SPEC §23). An empty number starts a shell there, here, so a number is also the
+key that makes it. They work in a pane and in the sidebar: Alt-digits don't reach the program
+in the pane while they're bound (readline's `digit-argument`, irssi's and weechat's windows), and
+`[shell] alt_digits = false` (Configuration → Shells) gives them back. On macOS, Terminal.app and
+iTerm2 type `¡™£` for Option-digit unless Option is set to act as Meta (Terminal.app: Settings →
+Profiles → Keyboard → "Use Option as Meta key"; iTerm2: Profiles → Keys → Left Option key: Esc+).
+Until then the hints say `C-q e 1…9`, which always works. `make verify-shells` shows what your
+terminal sends. A shell's pane header is the strip of its workspace's shells, the shown one in
+brackets.
 
 In a pane whose session has exited, `⏎` runs it again; in a dormant one, `⏎` resumes it.
 `Ctrl-Q D`, `O` and `S` close their view again when it is already open.
@@ -135,6 +148,7 @@ Focus the sidebar with `Ctrl-Q Tab`, or `Ctrl-Q Ctrl-Q`. These keys need no pref
 | `.` | everything you can do with this row (a session, worktree or project), with the keys |
 | `;` / `'` | the scratchpad / add a line to it |
 | `F` / `!` | finish this worktree (commit, then a PR or integrate) / a new shell in it, full sized |
+| `c` | a new shell in SHELLS, in the selected row's directory (on a SHELLS heading: that workspace's) |
 | `C-t` / `T` | its quick terminal in a drawer / full sized (`⏎` on its `›_ quick shell` line shows or hides it too) |
 | `H` / `M` / `I` | home / mend what the health badge found / about ptyro |
 | `A` | adopt the Claude started by hand in this shell: a managed session, same conversation |

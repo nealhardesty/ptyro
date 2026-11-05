@@ -160,7 +160,8 @@ if (mode === "units") {
   assert.equal(key(view, "d").standing, "default");
   assert.equal(key(view, "d").when, "after the prefix");
   assert.ok(key(view, "C").help.startsWith("Settings") && key(view, "nav:j").table === "nav");
-  assert.equal(view.bindings.filter((b) => b.fixed).length, 2);
+  // The nine digits after the prefix and in the sidebar, and the ten Alt digits of SHELLS.
+  assert.equal(view.bindings.filter((b) => b.fixed).length, 3);
   r = await call("settings.apply", { scope: "user", change: { t: "bind", changes: [["d", "none"]] } });
   assert.deepEqual([key(r.view, "d").standing, key(r.view, "d").action, key(r.view, "d").default], ["unbound", "none", "app.detach"]);
   r = await call("settings.apply", { scope: "user", change: { t: "bind", changes: [["d", null]] } });

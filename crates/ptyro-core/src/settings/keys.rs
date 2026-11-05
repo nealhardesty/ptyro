@@ -172,8 +172,29 @@ pub fn bindings(root: &Value, lk: &Lookups) -> Vec<Binding> {
     out
 }
 
-/// The nine digit keys that show session 1 to 9 are one row while none of them is touched.
+/// The nine digit keys that show session 1 to 9 are one row while none of them is touched;
+/// so are the ten `M-` digits that show SHELLS shells 1–10 (`[shell] alt_digits` turns those
+/// on and off together).
 fn fold_digits(out: &mut Vec<Binding>) {
+    let alt = |b: &Binding| {
+        b.table == "global"
+            && b.default.as_deref().is_some_and(|d| d.starts_with("shells.go "))
+            && b.key.starts_with("M-")
+            && b.key.len() == 3
+    };
+    let all: Vec<&Binding> = out.iter().filter(|b| alt(b)).collect();
+    if all.len() == 10 && all.iter().all(|b| !b.mine && b.standing == Standing::Default) {
+        let first = all[0].clone();
+        out.retain(|b| !alt(b));
+        out.push(Binding {
+            name: name_in("global", "M-1"),
+            key: "M-1…9, M-0".to_owned(),
+            action: "shells.go N".to_owned(),
+            default: Some("shells.go N".to_owned()),
+            fixed: true,
+            ..first
+        });
+    }
     for table in ["prefix", "nav"] {
         let digit = |b: &Binding| {
             b.table == table

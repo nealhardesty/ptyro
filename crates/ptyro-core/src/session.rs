@@ -211,6 +211,102 @@ pub struct SessionInfo {
     /// sidebar.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pad: bool,
+    /// It belongs to its workspace's SHELLS, not to a worktree (SPEC §23.2): never placed under
+    /// one, whatever its directory.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub loose: bool,
+    /// Its number in its workspace's SHELLS (SPEC §23.3): `Alt-3`, `%3`. Stays until it goes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<u32>,
+    /// What it is watched for (SPEC §23.9).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watch: Option<Watch>,
+    /// It runs in a scratch directory of its own, which goes with it (SPEC §23.8).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub scratch: bool,
+    /// Lost in a daemon restart and offered again in its number (SPEC §23.10): ⏎ starts it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lost: bool,
+}
+
+/// A SHELLS shell's label (SPEC §23.4), the same in the TUI, the CLI and the web: its title,
+/// else an agent's or a command's name, else what runs in the shell and where (`htop · ~/dl`),
+/// else where (`~/dl`, `…/tmp` outside `home`).
+pub fn shell_label(s: &SessionInfo, home: Option<&std::path::Path>) -> String {
+    if let Some(t) = s.title.as_deref().filter(|t| s.window_title.as_deref() != Some(*t)) {
+        return t.to_owned();
+    }
+    if s.kind != SessionKind::Shell {
+        return s.name.clone();
+    }
+    let dir = s.live_cwd.as_deref().unwrap_or(&s.cwd);
+    let dir = match home.and_then(|h| dir.strip_prefix(h).ok()) {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+        Some(rest) => format!("~/{}", rest.display()),
+        None => match dir.file_name() {
+            Some(last) => format!("…/{}", last.to_string_lossy()),
+            None => dir.display().to_string(),
+        },
+    };
+    let shell = s.argv.first().map(|a| a.rsplit('/').next().unwrap_or(a).trim_start_matches('-'));
+    match s.foreground.as_deref().map(|f| f.trim_start_matches('-')) {
+        Some(fg) if Some(fg) != shell => format!("{fg} · {dir}"),
+        _ => dir,
+    }
+}
+
+/// What a SHELLS shell is watched for (SPEC §23.9).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "t", rename_all = "snake_case")]
+pub enum Watch {
+    /// When the running command ends, however short. Fires once.
+    Done,
+    /// When new output arrives while nobody looks (tmux's `monitor-activity`). Stays.
+    Output,
+    /// When it has printed nothing for `ms` (tmux's `monitor-silence`). Stays.
+    Silence { ms: u64 },
+    /// When a line on its screen matches `re`. Fires once.
+    Match { re: String },
+}
+
+impl Watch {
+    /// `done`, `output`, `silence 30s`, `match ERROR`: how people write and read it.
+    pub fn label(&self) -> String {
+        match self {
+            Self::Done => "done".into(),
+            Self::Output => "output".into(),
+            Self::Silence { ms } => format!("silence {}s", ms / 1000),
+            Self::Match { re } => format!("match {re}"),
+        }
+    }
+
+    /// The opposite of [`label`](Self::label): `done`, `output`, `silence 30s`, `match RE`.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        let text = text.trim();
+        let (word, rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
+        let rest = rest.trim();
+        match word {
+            "done" => Ok(Self::Done),
+            "output" => Ok(Self::Output),
+            "silence" => {
+                let d = crate::config::parse_duration(if rest.is_empty() { "30s" } else { rest })?;
+                if d.is_zero() {
+                    return Err("silence needs a time, like 30s".into());
+                }
+                Ok(Self::Silence { ms: d.as_millis() as u64 })
+            }
+            "match" if !rest.is_empty() => Ok(Self::Match { re: rest.to_owned() }),
+            "match" => Err("match needs a pattern, like `match ERROR|listening`".into()),
+            _ => {
+                Err(format!("{word:?}: watch for done, output, silence <time> or match <pattern>"))
+            }
+        }
+    }
+
+    /// Fires once and then clears (`done`, `match`), as against staying on (`output`, `silence`).
+    pub fn once(&self) -> bool {
+        matches!(self, Self::Done | Self::Match { .. })
+    }
 }
 
 /// A session's summary (UX1.3): `text` was made after turn `turn`, at `at_ms`.
@@ -460,6 +556,16 @@ pub struct SpawnSpec {
     /// (protocol 1.27, WIN4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// A shell in its workspace's SHELLS (SPEC §23): never placed under the worktree its
+    /// directory is in, and given a number.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub loose: bool,
+    /// The number it asks for in SHELLS (`--slot`, `Alt-N` on an empty one); taken is refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<u32>,
+    /// Start it in a new, empty scratch directory of its own (SPEC §23.8); implies `loose`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub scratch: bool,
 }
 
 /// What a workspace last started (UX3.2), so `again` can start another of it.

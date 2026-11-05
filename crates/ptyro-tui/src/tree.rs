@@ -6,6 +6,7 @@
 use std::collections::HashSet;
 
 use ptyro_core::SessionId;
+use ptyro_core::config::ShellsSection;
 use ptyro_core::model::{
     MAIN_WORKSPACE, ProjectInfo, WorkspaceInfo, WorktreeInfo, WorktreeState, split_machine,
 };
@@ -33,6 +34,10 @@ pub enum Row {
     ChatNew(String),
     /// `all chats… (N)`: the workspace's chat list.
     ChatAll(String),
+    /// A workspace's SHELLS heading (SPEC §23.6); ⏎ folds it. Its shells are `Session` rows.
+    Shells(String),
+    /// `＋ new shell` in a workspace with none yet.
+    ShellNew(String),
 }
 
 impl Row {
@@ -46,6 +51,7 @@ impl Row {
             Self::Set(id) | Self::Project(id) | Self::Worktree(id) => Some(id.clone()),
             Self::Workspace(ws) => Some(fold_key(ws)),
             Self::Chats(ws) => Some(chats_key(ws)),
+            Self::Shells(ws) => Some(shells_key(ws)),
             _ => None,
         }
     }
@@ -77,6 +83,11 @@ pub fn chats_key(workspace: &str) -> String {
     format!("chats:{workspace}")
 }
 
+/// The key a workspace's folded SHELLS section has in `collapsed`.
+pub fn shells_key(workspace: &str) -> String {
+    format!("shells:{workspace}")
+}
+
 pub struct Inputs<'a> {
     pub workspaces: &'a [WorkspaceInfo],
     pub projects: &'a [ProjectInfo],
@@ -93,6 +104,8 @@ pub struct Inputs<'a> {
     pub chats: &'a [ptyro_core::chats::ChatInfo],
     /// How many unpinned chats each CHATS section shows; `None`: chats are off.
     pub recent: Option<usize>,
+    /// When each workspace's SHELLS section shows (`[shell] section`, SPEC §23.6).
+    pub shells: ShellsSection,
 }
 
 impl Inputs<'_> {
@@ -189,6 +202,9 @@ impl Inputs<'_> {
             if self.recent.is_some() {
                 keys.insert(chats_key(&ws.name));
             }
+            if self.shells != ShellsSection::Never {
+                keys.insert(shells_key(&ws.name));
+            }
         }
         for p in self.project_ids() {
             keys.extend(self.worktrees_of(&p).into_iter().map(|w| w.id.clone()));
@@ -250,7 +266,8 @@ impl Inputs<'_> {
         let mut placed: HashSet<&str> = HashSet::new();
         for ws in self.order() {
             let folded = honour_collapse && self.collapsed.contains(&fold_key(&ws.name));
-            let body = self.body(ws, &mut placed, honour_collapse);
+            let (mut body, others, any_project) = self.body(ws, &mut placed, honour_collapse);
+            body.extend(self.shell_rows(&ws.name, others, any_project, honour_collapse));
             if self.filtering() && body.is_empty() {
                 continue;
             }
@@ -263,12 +280,14 @@ impl Inputs<'_> {
         rows
     }
 
+    /// A workspace's projects as rows, and the sessions of it that have no row there (its
+    /// SHELLS, and any whose project or worktree isn't shown), and whether it has a project.
     fn body<'b>(
         &'b self,
         ws: &'b WorkspaceInfo,
         placed: &mut HashSet<&'b str>,
         honour_collapse: bool,
-    ) -> Vec<Row> {
+    ) -> (Vec<Row>, Vec<&'b SessionInfo>, bool) {
         let mut rows = Vec::new();
         let projects: Vec<&ProjectInfo> = ws
             .projects
@@ -336,15 +355,54 @@ impl Inputs<'_> {
                 !under_project && !elsewhere && self.home(s) == ws.name
             })
             .collect();
-        if !others.is_empty() {
-            if !projects.is_empty() {
+        (rows, others, !projects.is_empty())
+    }
+
+    /// A workspace's SHELLS section (SPEC §23.6): its loose sessions by number, then any other
+    /// session with no row to hang under (it is listed rather than vanishing); `＋ new shell`
+    /// when there are none. `[shell] section = "never"` lists only those others, as before.
+    fn shell_rows(
+        &self,
+        ws: &str,
+        others: Vec<&SessionInfo>,
+        any_project: bool,
+        honour_collapse: bool,
+    ) -> Vec<Row> {
+        let (mut numbered, rest): (Vec<&SessionInfo>, Vec<&SessionInfo>) =
+            others.into_iter().partition(|s| s.loose && s.slot.is_some());
+        numbered.sort_by_key(|s| s.slot);
+        let (quick, rest): (Vec<&SessionInfo>, Vec<&SessionInfo>) =
+            rest.into_iter().partition(|s| s.quick);
+        let tail = || tail_rows(&quick, &rest);
+        // `never`: no SHELLS section, but nothing disappears: every session with no row is
+        // listed under "other sessions", as before SHELLS (the numbered ones by number).
+        if self.shells == ShellsSection::Never {
+            let mut tail: Vec<Row> = numbered.iter().map(|s| Row::Session(s.id)).collect();
+            tail.extend(tail_rows(&quick, &rest));
+            if tail.is_empty() {
+                return tail;
+            }
+            let mut rows = Vec::new();
+            if any_project {
                 rows.push(Row::Group("other sessions".into()));
             }
-            let (quick, others): (Vec<&SessionInfo>, Vec<&SessionInfo>) =
-                others.into_iter().partition(|s| s.quick);
-            rows.extend(quick.into_iter().map(|s| Row::Quick(s.id)));
-            rows.extend(others.into_iter().map(|s| Row::Session(s.id)));
+            rows.extend(tail);
+            return rows;
         }
+        let empty = numbered.is_empty() && quick.is_empty() && rest.is_empty();
+        if empty && (self.filtering() || self.shells == ShellsSection::WhenUsed) {
+            return Vec::new();
+        }
+        let mut rows = vec![Row::Shells(ws.to_owned())];
+        if honour_collapse && self.collapsed.contains(&shells_key(ws)) {
+            return rows;
+        }
+        if empty {
+            rows.push(Row::ShellNew(ws.to_owned()));
+            return rows;
+        }
+        rows.extend(numbered.iter().map(|s| Row::Session(s.id)));
+        rows.extend(tail());
         rows
     }
 }
@@ -405,6 +463,11 @@ impl Inputs<'_> {
             .filter(|c| c.workspace == ws && c.side_of.is_none() && !c.incognito)
             .count()
     }
+}
+
+/// Quick terminals, then other sessions, as rows.
+fn tail_rows(quick: &[&SessionInfo], rest: &[&SessionInfo]) -> Vec<Row> {
+    quick.iter().map(|s| Row::Quick(s.id)).chain(rest.iter().map(|s| Row::Session(s.id))).collect()
 }
 
 /// `laptop2:work` → (`laptop2`, `work`); `work` → (`None`, `work`).
@@ -479,6 +542,11 @@ mod tests {
             pad: false,
             model: None,
             chat: None,
+            loose: false,
+            slot: None,
+            watch: None,
+            scratch: false,
+            lost: false,
         }
     }
 
@@ -547,6 +615,7 @@ mod tests {
             show: Show::All,
             chats: &[],
             recent: None,
+            shells: ShellsSection::Never,
         }
         .rows();
         // The session of a removed worktree has no worktree row to hang under: it is listed with
@@ -631,6 +700,7 @@ mod tests {
             sets: &[],
             chats: &chats,
             recent: Some(1),
+            shells: ShellsSection::Never,
             show: Show::All,
         };
         assert_eq!(
@@ -689,6 +759,7 @@ mod tests {
             show: Show::All,
             chats: &[],
             recent: None,
+            shells: ShellsSection::Never,
         };
         let rows = i.rows();
         assert_eq!(
@@ -759,6 +830,7 @@ mod tests {
             show: Show::All,
             chats: &[],
             recent: None,
+            shells: ShellsSection::Never,
         };
         let rows = i.rows();
         assert_eq!(
@@ -823,6 +895,7 @@ mod tests {
             show: Show::All,
             chats: &[],
             recent: None,
+            shells: ShellsSection::Never,
         };
         assert_eq!(
             i.rows(),
@@ -893,6 +966,7 @@ mod tests {
             sets: &[],
             chats: &[],
             recent: None,
+            shells: ShellsSection::Never,
             show,
         };
         let ids = |show| -> Vec<SessionId> {
@@ -936,5 +1010,55 @@ mod tests {
         assert!(
             rows.contains(&Row::Project("p".into())) && !rows.contains(&Row::Session(working.id))
         );
+    }
+
+    /// SPEC §23.6: a workspace's SHELLS, its loose sessions by number then any other session
+    /// with no row; folded with its heading; `never` lists only the others, as before.
+    #[test]
+    fn shells_by_number_then_the_rest_folded_or_not() {
+        let wss = vec![ws("w", "main", &["p"])];
+        let projects = vec![project("p")];
+        let worktrees = vec![wt("root", "p", true, 1)];
+        let mut three = session("three", None, None, Some("main"));
+        (three.loose, three.slot) = (true, Some(3));
+        let mut one = session("one", None, None, Some("main"));
+        (one.loose, one.slot) = (true, Some(1));
+        let orphan = session("orphan", Some("gone"), Some("p"), Some("main"));
+        let sessions = vec![three.clone(), orphan.clone(), one.clone()];
+        let mut collapsed = HashSet::new();
+        let inputs = |collapsed: &HashSet<String>, shells| {
+            Inputs {
+                workspaces: &wss,
+                projects: &projects,
+                worktrees: &worktrees,
+                sessions: &sessions,
+                collapsed,
+                sets: &[],
+                show: Show::All,
+                chats: &[],
+                recent: None,
+                shells,
+            }
+            .rows()
+        };
+        let rows = inputs(&collapsed, ShellsSection::Always);
+        let at = rows.iter().position(|r| *r == Row::Shells("main".into())).unwrap();
+        assert_eq!(
+            rows[at..],
+            [
+                Row::Shells("main".into()),
+                Row::Session(one.id),
+                Row::Session(three.id),
+                Row::Session(orphan.id),
+            ]
+        );
+        collapsed.insert(shells_key("main"));
+        let rows = inputs(&collapsed, ShellsSection::Always);
+        assert_eq!(rows.last(), Some(&Row::Shells("main".into())), "folded: the heading only");
+        let rows = inputs(&HashSet::new(), ShellsSection::Never);
+        assert!(!rows.contains(&Row::Shells("main".into())), "never: no SHELLS heading");
+        assert!(rows.contains(&Row::Session(one.id)), "but no session disappears");
+        assert!(rows.contains(&Row::Session(orphan.id)), "the others still show");
+        assert!(rows.contains(&Row::Group("other sessions".into())));
     }
 }

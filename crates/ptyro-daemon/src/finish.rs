@@ -99,9 +99,8 @@ impl Daemon {
             ))
         })?;
         let live: Vec<String> = self
-            .sessions_in(&wt.id)
+            .busy_in(&wt)
             .iter()
-            .filter(|s| s.busy())
             .map(|s| s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name.clone())
             .collect();
         if !live.is_empty() && !stop_sessions {
@@ -117,8 +116,14 @@ impl Daemon {
         // Its agents stop first: whatever they write in the next seconds belongs in the
         // snapshot, not in a directory that is about to be deleted.
         if stop_sessions {
-            let running: Vec<_> =
+            let mut running: Vec<_> =
                 self.sessions_in(&wt.id).into_iter().filter(|s| s.is_live()).collect();
+            // A loose shell standing in it too (SPEC §23.8).
+            for b in self.busy_in(&wt) {
+                if !running.iter().any(|r| r.id == b.id) {
+                    running.push(b);
+                }
+            }
             futures::future::join_all(running.iter().map(|s| s.kill(None))).await;
         }
         self.progress(&wt, "archiving: a snapshot of its files");
@@ -450,7 +455,7 @@ impl Daemon {
         if !wt.shipped() || !self.config().worktrees.archive_on_merge {
             return;
         }
-        if self.sessions_in(&wt.id).iter().any(|s| s.busy()) {
+        if !self.busy_in(wt).is_empty() {
             return;
         }
         let (me, id, label) = (Arc::clone(self), wt.id.clone(), wt.qualified());

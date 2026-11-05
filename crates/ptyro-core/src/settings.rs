@@ -524,6 +524,16 @@ const SHELL_EXIT: &[Choice] = &[
     c("close", "the shell disappears from the sidebar and its pane"),
     c("keep", "the shell stays as an exited row, with its last screen"),
 ];
+const SHELLS_SECTION: &[Choice] = &[
+    c("always", "always, with ＋ new shell when the workspace has none"),
+    c("when-used", "only once the workspace has a shell there"),
+    c("never", "never (Alt-1…9, C-q C-c and `ptyro shells` still work)"),
+];
+const SHELLS_RESTORE: &[Choice] = &[
+    c("offer", "each comes back as a row in its number; ⏎ starts it again in its last directory"),
+    c("start", "shells start again by themselves; commands (ssh, a server) are only offered"),
+    c("forget", "they're gone"),
+];
 const DETAIL: &[Choice] = &[
     c("auto", "every row while they fit, else the ones that matter"),
     c("compact", "one line per row"),
@@ -781,6 +791,10 @@ pub const SETTINGS: &[Setting] = &[
     // ── Shells ──
     s("shell.command", "shells", Kind::Argv, "The shell new shell sessions run, like `pwsh -Login` for PowerShell. A bare bash, zsh, fish or PowerShell started any other way is a shell session too.").also("powershell pwsh zsh bash fish login terminal").or("your login shell; on Windows PowerShell 7, else Windows PowerShell, else cmd").eg("pwsh -Login").new_only(),
     s("shell.integration", "shells", Kind::Bool, "Add ptyro's shell integration to the bash, zsh, fish and PowerShell sessions it starts, after your own startup files: prompt jumps in copy mode, working and idle, each command and its exit code, and the directory. Nothing to add to your rc file or $PROFILE.").also("osc 133 prompt marks shell-init profile rc").new_only(),
+    s("shell.section", "shells", pick(SHELLS_SECTION), "Each workspace's SHELLS section in the sidebar: your numbered terminals that belong to no repository (any command), made with C-q C-c and reached with Alt-1…9.").also("shells tmux windows numbered terminals sidebar alt"),
+    s("shell.notify_after", "shells", Kind::Duration, "A command in a SHELLS shell that ran at least this long tells you when it ends, if you weren't looking: done ✓ or error ✗ with its exit code. off: never.").also("notify long command finished done monitor activity bell"),
+    s("shell.alt_digits", "shells", Kind::Bool, "Alt-1…9 and Alt-0 show shell 1–10 of the workspace's SHELLS with no prefix (an empty number starts one). Off leaves them to the program in the pane (readline's digit-argument, irssi and weechat windows); C-q e then a digit still works.").also("alt meta option digits keys jump windows tmux"),
+    s("shell.restore", "shells", pick(SHELLS_RESTORE), "After ptyro restarts (not an upgrade, which keeps them running), what becomes of your SHELLS.").also("restart resurrect reboot shells come back"),
     s("daemon.scrollback_lines", "daemon", int(0, 1_000_000), "How many lines of history each session keeps to scroll back through. A very wide session keeps fewer, so one never holds more than 4 million cells (20,000 lines at 200 columns).").new_only().unit("lines"),
     s("daemon.frame_interval_ms", "daemon", int(1, 1000), "The shortest wait between screen updates sent to a client. Lower is smoother and busier.").adv().new_only().unit("ms"),
     s("daemon.log_level", "daemon", pick(LOG_LEVEL), "How much the daemon writes to its log. (PTYRO_LOG, when set, wins.)"),

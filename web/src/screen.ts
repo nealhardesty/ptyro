@@ -69,6 +69,18 @@ export interface Session {
   inner_agent?: string | null;
   quick?: boolean;
   pad?: boolean;
+  /// SHELLS (SPEC §23): it belongs to its workspace, not a worktree, under a number.
+  loose?: boolean;
+  slot?: number | null;
+  watch?: { t: "done" | "output" | "silence" | "match"; ms?: number; re?: string } | null;
+  scratch?: boolean;
+  /// Lost in a daemon restart and offered again in its number: Restart starts it.
+  lost?: boolean;
+  argv?: string[];
+  cwd?: string;
+  live_cwd?: string | null;
+  foreground?: string | null;
+  window_title?: string | null;
   /// The chat it is the engine of (SPEC §22.2): hidden from the session list.
   chat?: string | null;
   profile?: string;
