@@ -395,6 +395,12 @@ impl Structured {
         self.bump_chat();
     }
 
+    /// Windows: the agent's three pipes' handles, by value, for a handover to copy (WIN9).
+    #[cfg(windows)]
+    pub fn pipe_handles(&self) -> Option<[usize; 3]> {
+        *self.fds.locked()
+    }
+
     pub fn image(&self, live: bool) -> std::io::Result<StructuredImage> {
         let (driver, buffer) = self.parked.locked().clone().unwrap_or_default();
         let fds = if live {

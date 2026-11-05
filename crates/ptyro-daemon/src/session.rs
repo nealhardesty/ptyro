@@ -1389,12 +1389,39 @@ fn inherit_pty(
 
 impl Session {
     /// Close-on-exec again for the PTY master (an upgrade that was called off).
-    #[cfg_attr(windows, allow(dead_code))] // the live upgrade's: Unix until WIN9
+    #[cfg(unix)]
     pub(crate) fn master_private(&self) {
-        #[cfg(unix)]
         if let Some(m) = &self.master {
             let _ = ptyro_pty::handoff::private(m);
         }
+    }
+
+    /// Windows: copy this live session's handles into `next` (the daemon a live upgrade
+    /// started) and put the values it has into `img` (WIN9).
+    #[cfg(windows)]
+    pub(crate) fn copy_handles_into(
+        &self,
+        next: &std::process::Child,
+        img: &mut SessionImage,
+    ) -> std::io::Result<()> {
+        if let Some(st) = &self.structured {
+            let pid = self.pid().ok_or_else(|| std::io::Error::other("no pid"))?;
+            let program = ptyro_pty::program_handles(pid)
+                .ok_or_else(|| std::io::Error::other("the agent's process isn't ours"))?;
+            let pipes = st.pipe_handles().ok_or_else(|| std::io::Error::other("no pipes"))?;
+            let p = ptyro_pty::duplicate_raw_into(next, &program)?;
+            let q = ptyro_pty::duplicate_raw_into(next, &pipes)?;
+            img.win_handles = Some(p.iter().map(|&h| h as u64).collect());
+            if let Some(si) = img.structured.as_mut() {
+                si.fds = Some([q[0] as i32, q[1] as i32, q[2] as i32]);
+            }
+            return Ok(());
+        }
+        let Some(m) = &self.master else { return Ok(()) };
+        let h = ptyro_pty::handles(m)
+            .ok_or_else(|| std::io::Error::other("its console is closed already"))?;
+        img.win_handles = Some(ptyro_pty::duplicate_into(next, &h)?.to_vec());
+        Ok(())
     }
 
     /// This session for the handoff image. Call with readers parked. A live session's PTY

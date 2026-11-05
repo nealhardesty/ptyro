@@ -862,6 +862,21 @@ pub fn anon_pipe() -> io::Result<(std::fs::File, std::fs::File)> {
     Ok(files)
 }
 
+/// Wait up to `timeout` for process `pid` to exit (any process: a live upgrade's previous
+/// daemon); `true` once it has, or if it can't be opened (already gone).
+pub fn wait_for_exit(pid: u32, timeout: Duration) -> bool {
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
+    // SAFETY: opening for SYNCHRONIZE only; the handle is ours and closed by `Owned`.
+    let h = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+    if h.is_null() {
+        return true;
+    }
+    let h = Owned(h);
+    let ms = timeout.as_millis().min(u128::from(u32::MAX - 1)) as u32;
+    // SAFETY: `h` is open for the wait.
+    unsafe { WaitForSingleObject(h.0, ms) == WAIT_OBJECT_0 }
+}
+
 /// A session's program's exit code, once it has exited (a handed-over one's, for the reaper);
 /// `None` while it runs or when it isn't ours.
 pub fn exit_code(pid: u32) -> Option<u32> {

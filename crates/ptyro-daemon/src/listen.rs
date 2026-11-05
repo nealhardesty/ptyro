@@ -162,8 +162,19 @@ mod windows {
 
     impl Listener {
         pub(crate) fn bind(socket: &Path) -> Result<Self> {
+            Self::bind_as(socket, true)
+        }
+
+        /// The pipe beside the previous daemon's instances, in a live upgrade (WIN9): its name
+        /// never goes away, so no client takes it for gone and starts a daemon of its own. The
+        /// old daemon's instances go when it exits.
+        pub(crate) fn bind_beside(socket: &Path) -> Result<Self> {
+            Self::bind_as(socket, false)
+        }
+
+        fn bind_as(socket: &Path, first: bool) -> Result<Self> {
             let name = socket.to_string_lossy().into_owned();
-            let first = ptyro_pty::pipe::server(&name, true).with_context(|| {
+            let first = ptyro_pty::pipe::server(&name, first).with_context(|| {
                 format!("{name} is in use by another process (another ptyro daemon?)")
             })?;
             let (tx, rx) = mpsc::unbounded_channel();
@@ -195,7 +206,8 @@ mod windows {
             Ok(Self { rx: tokio::sync::Mutex::new(rx), task })
         }
 
-        /// Nothing to carry on Windows until its live upgrade (WIN9).
+        /// Nothing carried by number on Windows: the next daemon makes its own instances of the
+        /// pipe (WIN9).
         pub(crate) fn raw(&self) -> i32 {
             -1
         }
