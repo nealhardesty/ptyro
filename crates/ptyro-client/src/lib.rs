@@ -478,7 +478,11 @@ async fn spawn_daemon(opts: &ConnectOptions) -> Result<LocalStream, ClientError>
     };
     let mut cmd = std::process::Command::new(&exe);
     #[cfg(windows)]
-    ptyro_core::os::detach(&mut cmd);
+    {
+        // Or the daemon holds the pipe a script reads our output from (it'd never end).
+        ptyro_pty::std_handles_private();
+        ptyro_core::os::detach(&mut cmd);
+    }
     let mut child = cmd
         .args(["daemon", "start", "--spawned"])
         // The daemon belongs to no session, even when an agent's CLI call started it: what it

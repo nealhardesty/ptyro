@@ -293,6 +293,7 @@ impl Daemon {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
+        ptyro_pty::std_handles_private();
         ptyro_core::os::detach(&mut cmd);
         let mut next = cmd.spawn()?;
         let result = self.write_handover(&mut next, &image_path, &ack, started).await;

@@ -862,6 +862,30 @@ pub fn anon_pipe() -> io::Result<(std::fs::File, std::fs::File)> {
     Ok(files)
 }
 
+/// Keep this process's standard handles out of what a detached child inherits. Windows starts a
+/// child inheriting every inheritable handle (std passes `bInheritHandles`), and a CLI's stdout
+/// is one: a daemon `ptyro` starts would hold the pipe a script reads `ptyro`'s output from, so
+/// the script never saw its end (`$x = ptyro ls` hung when it started the daemon). A child given
+/// these on purpose (`Stdio::inherit`) still gets them: std copies them for it.
+pub fn std_handles_private() {
+    use windows_sys::Win32::Foundation::{
+        HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, SetHandleInformation,
+    };
+    use windows_sys::Win32::System::Console::{
+        GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+    };
+    for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        // SAFETY: GetStdHandle only reads; a handle it gives is ours, and clearing its inherit
+        // flag changes nothing else about it.
+        unsafe {
+            let h = GetStdHandle(which);
+            if !h.is_null() && h != INVALID_HANDLE_VALUE {
+                SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0);
+            }
+        }
+    }
+}
+
 /// Wait up to `timeout` for process `pid` to exit (any process: a live upgrade's previous
 /// daemon); `true` once it has, or if it can't be opened (already gone).
 pub fn wait_for_exit(pid: u32, timeout: Duration) -> bool {

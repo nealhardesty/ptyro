@@ -256,7 +256,11 @@ fn acquire_lock(paths: &Paths) -> Result<File> {
         Err(TryLockError::WouldBlock) => {
             let mut pid = String::new();
             let _ = f.read_to_string(&mut pid);
-            bail!("daemon already running (pid {})", pid.trim());
+            // Windows keeps a locked file's contents from everyone else: no pid to say then.
+            match pid.trim() {
+                "" => bail!("daemon already running (`ptyro daemon status` says which)"),
+                pid => bail!("daemon already running (pid {pid})"),
+            }
         }
         Err(TryLockError::Error(e)) => return Err(e).context("lock daemon.lock"),
     }
