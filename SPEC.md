@@ -3453,7 +3453,9 @@ and then removes the session unless `--keep`. Still to come from this tree: `--v
 - **`new`** gains `--agent A[@P]`, `--profile`, `--wt`, `--new-wt [NAME]`, `--project`,
   `--override-pin` and `--yes`.
 - **`ls`** shows WHERE (the worktree, else `~`-shortened cwd), PROFILE (when any session isn't
-  `default`) and ports.
+  `default`), ports, and STATUS: an agent's status as `ptyro status` words it (`blocked:
+  trust this folder?`, `(guess)` when low), else what the program reports of itself (OSC 7501).
+  It showed only the latter, so an agent that reports nothing (Codex) read blank while blocked.
 - **Addresses** for projects and worktrees default to the one containing the current directory.
 - **`wt new`** on a TTY offers to trust untrusted scripts and run setup. `wt rm` on a refusal with
   `--force` shows the report and asks (unless `--yes`).
