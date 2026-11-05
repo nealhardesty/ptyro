@@ -768,7 +768,7 @@ fn full_path(f: &str) -> String {
         return f.to_owned();
     }
     let p = std::env::current_dir().map(|d| d.join(f)).unwrap_or_else(|_| f.into());
-    p.canonicalize().unwrap_or(p).to_string_lossy().into_owned()
+    ptyro_core::os::canonicalize(&p).unwrap_or(p).to_string_lossy().into_owned()
 }
 
 /// What `with_confirmation` sets when the person agrees (SPEC §22.7: another profile).

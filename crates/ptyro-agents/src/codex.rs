@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use crate::adapter::{
     Adapter, Caps, Decision, LaunchCtx, LaunchPlan, StopStep, str_of, tool_summary,
 };
-use crate::claude::shell_word;
+use crate::claude::hook_word;
 
 /// Hook events (Codex's own names) → the snake-case names its trust keys use.
 pub const EVENTS: &[(&str, &str)] = &[
@@ -48,6 +48,12 @@ fn hooks_need_review(screen: &str) -> bool {
 /// (default 1; SPEC §20.2), and its other hooks default to 600.
 fn hook_timeout(event_snake: &str) -> u32 {
     if matches!(event_snake, "session_end" | "interrupt") { 1 } else { 600 }
+}
+
+/// Its folder-trust question: "Do you trust …" until 0.164, "Trust this folder?" in 0.166 (seen
+/// on Windows, 2026-11-04), whose `› 1. Trust and continue` would pass for the composer.
+fn trust_dialog(screen: &str) -> bool {
+    screen.contains("Do you trust") || screen.contains("Trust this folder?")
 }
 
 /// The trust hash Codex pins a command hook with (SPEC §8.4; Codex-internal, golden-tested).
@@ -127,7 +133,7 @@ impl Codex {
         if !ctx.def.hooks() {
             return a;
         }
-        let ptyro = shell_word(ctx.ptyro);
+        let ptyro = hook_word(ctx.ptyro);
         let mut state = Vec::new();
         for (ev, snake) in EVENTS {
             let cmd = format!("{ptyro} hook codex {ev}");
@@ -273,7 +279,7 @@ impl Adapter for Codex {
     }
 
     fn on_screen(&self, screen: &str) -> Option<Signal> {
-        if screen.contains("Do you trust") {
+        if trust_dialog(screen) {
             Some(Signal::blocked("question", Some("trust this folder?".into())))
         } else if screen.contains("Update available") {
             Some(Signal::blocked("question", Some("update now or skip?".into())))
@@ -307,7 +313,7 @@ impl Adapter for Codex {
         // The composer line; the update prompt and trust dialog come before it (SPEC §8.4).
         screen.lines().any(|l| l.trim_start().starts_with("› ") || l.trim() == "›")
             && !screen.contains("Update available")
-            && !screen.contains("Do you trust")
+            && !trust_dialog(screen)
     }
 
     fn answer(&self, d: Decision) -> Option<Vec<u8>> {
@@ -333,6 +339,18 @@ impl Adapter for Codex {
 mod tests {
     use super::*;
     use ptyro_core::config::AgentDef;
+
+    /// Codex 0.166's trust dialog, as it drew it on Windows: blocked, and not ready for a prompt.
+    #[test]
+    fn the_0_166_trust_dialog_blocks_and_is_not_the_composer() {
+        let screen = "  Folder access\n  C:\\Users\\me\\proj\n  Trust this folder? Codex can read, \
+            edit, and run files here, subject to your permission settings.\n\
+            › 1. Trust and continue\n  2. Quit\n  enter continue · esc quit";
+        let s = Codex.on_screen(screen).unwrap();
+        assert!(matches!(s, Signal::Status { status: AgentStatus::Blocked, .. }), "{s:?}");
+        assert!(!Codex.ready(screen));
+        assert!(Codex.ready("› "), "the composer is still ready");
+    }
 
     #[test]
     fn trust_hashes_match_codex_bit_for_bit() {

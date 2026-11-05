@@ -45,7 +45,7 @@ impl Claude {
             hooks.insert(
                 (*ev).to_owned(),
                 // A Stop may run a verified-done check (M7.9): give it time.
-                json!([{ "hooks": [{ "type": "command", "command": format!("{} hook claude {ev}", shell_word(ctx.ptyro)), "timeout": match *ev { "Stop" => 900, "PermissionRequest" => 3600, _ => 5 } }] }]),
+                json!([{ "hooks": [hook_entry(ctx.ptyro, &format!("hook claude {ev}"), match *ev { "Stop" => 900, "PermissionRequest" => 3600, _ => 5 }, cfg!(windows))] }]),
             );
         }
         let hooks = serde_json::to_string_pretty(&json!({ "hooks": hooks })).unwrap_or_default();
@@ -71,7 +71,7 @@ impl Claude {
             plan.files.extend(files);
         }
         if ctx.def.usage.unwrap_or(true) {
-            let settings = json!({ "statusLine": { "type": "command", "command": format!("{} statusline-relay", shell_word(ctx.ptyro)) } });
+            let settings = json!({ "statusLine": { "type": "command", "command": format!("{} statusline-relay", hook_word(ctx.ptyro)) } });
             plan.argv.extend(["--settings".into(), settings.to_string()]);
         }
         if let Some(m) = ctx.mcp {
@@ -122,11 +122,46 @@ pub fn latest_conversation(config_dir: &std::path::Path, cwd: &std::path::Path) 
 
 /// Quote a path for a hook `command` (run by a shell).
 pub fn shell_word(s: &str) -> String {
-    if s.chars().all(|c| c.is_ascii_alphanumeric() || "/._-+:@".contains(c)) {
-        s.to_owned()
-    } else {
-        format!("'{}'", s.replace('\'', "'\\''"))
+    if plain(s) { s.to_owned() } else { format!("'{}'", s.replace('\'', "'\\''")) }
+}
+
+/// Nothing in it that any shell reads specially.
+fn plain(s: &str) -> bool {
+    s.chars().all(|c| c.is_ascii_alphanumeric() || "/._-+:@".contains(c))
+}
+
+/// Whether ptyro's path can't be written in a hook `command` without quotes. On Windows no
+/// quoting suits Git Bash, PowerShell and cmd at once, so the daemon gives a path that needs it
+/// as its 8.3 short name when it can (WIN8).
+pub fn needs_quoting(ptyro: &str) -> bool {
+    !plain(&ptyro.replace('\\', "/"))
+}
+
+/// ptyro's path as the program of a hook or status line `command`, which the agent runs in a
+/// shell. Unix: [`shell_word`]. Windows: with forward slashes, as Git Bash drops backslashes;
+/// unquoted when nothing needs quoting, which Git Bash, PowerShell and cmd all run; else in
+/// double quotes, which Git Bash and cmd read and PowerShell doesn't (SPEC §20.12).
+pub fn hook_word(ptyro: &str) -> String {
+    hook_word_for(ptyro, cfg!(windows))
+}
+
+fn hook_word_for(ptyro: &str, windows: bool) -> String {
+    if !windows {
+        return shell_word(ptyro);
     }
+    let p = ptyro.replace('\\', "/");
+    if plain(&p) { p } else { format!("\"{p}\"") }
+}
+
+/// A Claude hook running `ptyro <args>`. On Windows, a path that must be quoted names the
+/// hook's shell: PowerShell, which every Windows has, and its `& '…'` (Claude runs a hook in Git
+/// Bash when it finds one, else in PowerShell, and no quoting suits both).
+fn hook_entry(ptyro: &str, args: &str, timeout: u64, windows: bool) -> Value {
+    if windows && needs_quoting(ptyro) {
+        let p = ptyro.replace('\\', "/").replace('\'', "''");
+        return json!({ "type": "command", "command": format!("& '{p}' {args}"), "shell": "powershell", "timeout": timeout });
+    }
+    json!({ "type": "command", "command": format!("{} {args}", hook_word_for(ptyro, windows)), "timeout": timeout })
 }
 
 impl Adapter for Claude {
@@ -400,6 +435,35 @@ mod tests {
             project_root: None,
             mcp: None,
         }
+    }
+
+    /// Each form was run in Git Bash, PowerShell and cmd on Windows 11 (SPEC §20.12): unquoted
+    /// with forward slashes runs in all three; double quotes in Git Bash and cmd; `& '…'` in
+    /// PowerShell only, so a hook that needs it names PowerShell as its shell.
+    #[test]
+    fn hook_commands_suit_the_shells_windows_runs_them_in() {
+        let plain = r"C:\Users\me\AppData\Local\Programs\ptyro\bin\ptyro.exe";
+        assert!(!needs_quoting(plain));
+        assert_eq!(
+            hook_word_for(plain, true),
+            "C:/Users/me/AppData/Local/Programs/ptyro/bin/ptyro.exe"
+        );
+        let e = hook_entry(plain, "hook claude Stop", 900, true);
+        assert_eq!(
+            e["command"],
+            "C:/Users/me/AppData/Local/Programs/ptyro/bin/ptyro.exe hook claude Stop"
+        );
+        assert!(e.get("shell").is_none(), "Claude's own choice of shell runs it");
+        let spaced = r"C:\Users\John O'Neil\ptyro.exe";
+        assert!(needs_quoting(spaced));
+        assert_eq!(hook_word_for(spaced, true), "\"C:/Users/John O'Neil/ptyro.exe\"");
+        let e = hook_entry(spaced, "hook claude Stop", 900, true);
+        assert_eq!(e["command"], "& 'C:/Users/John O''Neil/ptyro.exe' hook claude Stop");
+        assert_eq!((e["shell"].as_str(), e["timeout"].as_u64()), (Some("powershell"), Some(900)));
+        // Unix is as it was: POSIX quoting, no shell named.
+        let e = hook_entry("/opt/my apps/ptyro", "hook claude Stop", 5, false);
+        assert_eq!(e["command"], "'/opt/my apps/ptyro' hook claude Stop");
+        assert!(e.get("shell").is_none());
     }
 
     #[test]

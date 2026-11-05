@@ -952,7 +952,8 @@ pub async fn new(ctx: &Ctx, a: NewArgs) -> Result<i32, Error> {
         check_attachable()?;
     }
     let cwd = match a.cwd {
-        Some(p) => p.canonicalize().map_err(|e| Error::invalid(format!("{}: {e}", p.display())))?,
+        Some(p) => ptyro_core::os::canonicalize(&p)
+            .map_err(|e| Error::invalid(format!("{}: {e}", p.display())))?,
         None => current_dir()?,
     };
     let size = if attaching { ptyro_tui::pane_size(&ctx.paths) } else { a.size };

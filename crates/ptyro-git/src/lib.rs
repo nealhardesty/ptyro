@@ -160,8 +160,8 @@ const TOUCHES_CONTENT: &[&str] = &[
 /// The same directory, whatever the spelling (symlinks, `..`, a trailing slash).
 fn same_path(a: &Path, b: &Path) -> bool {
     a == b
-        || match (a.canonicalize(), b.canonicalize()) {
-            (Ok(a), Ok(b)) => a == b,
+        || match (ptyro_core::os::canonicalize(a), ptyro_core::os::canonicalize(b)) {
+            (Ok(a), Ok(b)) => ptyro_core::os::same_path(&a, &b),
             _ => false,
         }
 }
@@ -237,7 +237,8 @@ impl Git {
         let mut c = Command::new("git");
         c.arg("-C").arg(dir).args(["-c", "core.fsmonitor=false"]);
         if !hooks {
-            c.args(["-c", "core.hooksPath=/dev/null", "-c", "diff.external="]);
+            let hooks = format!("core.hooksPath={}", ptyro_core::os::DEV_NULL);
+            c.args(["-c", hooks.as_str(), "-c", "diff.external="]);
             // Filters, merge drivers and diff converters are commands the repository's config
             // names and its `.gitattributes` selects: both are files an agent can write.
             if args.first().is_some_and(|a| TOUCHES_CONTENT.contains(a)) {
@@ -488,6 +489,9 @@ impl Git {
     /// `git worktree add` (SPEC §10.3 step 2).
     pub fn worktree_add(&self, root: &Path, path: &Path, source: &Source) -> Result<()> {
         let p = path.to_string_lossy();
+        if cfg!(windows) {
+            self.long_paths(root);
+        }
         let turn = self.turn(root);
         match source {
             Source::NewBranch { branch, base } => {
@@ -530,6 +534,15 @@ impl Git {
             }
         }
         Ok(())
+    }
+
+    /// `core.longpaths = true` in the repository's own config, unless it says otherwise already:
+    /// Git for Windows checks out a file whose path passes 260 characters only with it, and a
+    /// worktree's folder adds to every path in it (WIN8). Best effort.
+    pub(crate) fn long_paths(&self, root: &Path) {
+        if self.run(root, &["config", "--get", "core.longpaths"]).is_err() {
+            let _ = self.run(root, &["config", "--local", "core.longpaths", "true"]);
+        }
     }
 
     /// `git worktree prune`, in the repository's turn: a prune beside an add could drop the

@@ -4,6 +4,7 @@
 // moves it to another number, watches it, or adopts it into a worktree. The web has no Alt it
 // can count on, so the strip and the digits on the list are its keys.
 import { startSession } from "./flow.js";
+import { shellLabel } from "./shellkit.js";
 import { actions, ask, enc, form, go, h, menu, ui } from "./kit.js";
 const ACTIONS = {
     "shells": "SHELLS: your numbered terminals that belong to the workspace, not a worktree (any command)",
@@ -25,21 +26,6 @@ export function shellsOf(sessions, workspace) {
     return [...sessions]
         .filter((s) => s.loose && s.slot != null && (!workspace || (s.workspace ?? "main") === workspace))
         .sort((a, b) => (a.workspace ?? "").localeCompare(b.workspace ?? "") || (a.slot ?? 0) - (b.slot ?? 0));
-}
-const base = (p) => p.split("/").filter(Boolean).pop() ?? p;
-/// A shell's label (SPEC §23.4): its title, else what runs in it and where, else where.
-export function shellLabel(s) {
-    if (s.title && s.title !== s.window_title)
-        return s.title;
-    if (s.kind !== "shell")
-        return s.name;
-    const dir = s.live_cwd ?? s.cwd ?? "";
-    const where = dir ? `…/${base(dir)}` : "";
-    const shell = s.argv?.[0] ? base(s.argv[0]).replace(/^-/, "") : "";
-    const fg = s.foreground?.replace(/^-/, "");
-    if (fg && fg !== shell)
-        return `${fg} · ${where}`;
-    return where || s.name;
 }
 /// What its card says it's doing: the command running, else the last one and how it went.
 function doing(s) {

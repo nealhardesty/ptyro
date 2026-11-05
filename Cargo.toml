@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "3"
 
 [workspace.package]
-version = "0.0.55"
+version = "0.0.56"
 edition = "2024"
 rust-version = "1.99"
 license = "MIT"
@@ -94,14 +94,22 @@ proptest = "1.12.0"
 tempfile = "3.27.0"
 getrandom = "0.4.3"
 windows-sys = { version = "0.61", features = [
+  "Wdk_System_Threading",
   "Win32_Foundation",
+  "Win32_NetworkManagement_IpHelper",
+  "Win32_Networking_WinSock",
   "Win32_Security",
   "Win32_Security_Authorization",
   "Win32_Storage_FileSystem",
   "Win32_System_Console",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_JobObjects",
+  "Win32_System_Kernel",
   "Win32_System_LibraryLoader",
   "Win32_System_Pipes",
+  "Win32_System_Registry",
+  "Win32_System_RestartManager",
   "Win32_System_SystemInformation",
   "Win32_System_Threading",
 ] }

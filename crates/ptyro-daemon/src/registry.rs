@@ -59,7 +59,7 @@ impl Daemon {
         }
         if addr.starts_with(['/', '.', '~']) {
             let path = ptyro_core::config::expand_home(addr);
-            let path = path.canonicalize().unwrap_or(path);
+            let path = ptyro_core::os::canonicalize(&path).unwrap_or(path);
             let wt = innermost(reg.worktrees.iter(), &path);
             if let Some(p) = wt.and_then(|w| reg.projects.iter().find(|p| p.id == w.project)) {
                 return Ok(p.clone());
@@ -83,7 +83,7 @@ impl Daemon {
         let addr = addr.trim().strip_prefix("w:").unwrap_or(addr.trim());
         if addr.starts_with(['/', '.', '~']) {
             let path = ptyro_core::config::expand_home(addr);
-            let path = path.canonicalize().unwrap_or(path);
+            let path = ptyro_core::os::canonicalize(&path).unwrap_or(path);
             let reg = self.registry.locked();
             return innermost(reg.worktrees.iter(), &path)
                 .cloned()
@@ -324,7 +324,7 @@ impl Daemon {
         let facts = tokio::task::spawn_blocking(move || -> Result<_, Error> {
             let git = Git::new();
             let root = git.main_root(&path).map_err(git_err)?;
-            let root = root.canonicalize().unwrap_or(root);
+            let root = ptyro_core::os::canonicalize(&root).unwrap_or(root);
             let branch = git.default_branch(&root);
             let base = git.default_base(&root);
             let current = git.current_branch(&root);
@@ -338,7 +338,13 @@ impl Daemon {
         // otherwise both find it new and register it twice.
         let _one = self.project_adding.lock().await;
         let mut notes = Vec::new();
-        let existing = self.registry.locked().projects.iter().find(|p| p.root == root).cloned();
+        let existing = self
+            .registry
+            .locked()
+            .projects
+            .iter()
+            .find(|p| ptyro_core::os::same_path(&p.root, &root))
+            .cloned();
         let project = match existing {
             Some(p) => {
                 notes.push(format!("{} is already registered", p.slug));
@@ -904,7 +910,7 @@ fn canonical(path: &Path) -> std::path::PathBuf {
             return c.clone();
         }
     }
-    let c = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let c = ptyro_core::os::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let mut guard = CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let map = guard.get_or_insert_with(HashMap::new);
     if map.len() > 1024 {
@@ -922,7 +928,7 @@ pub(crate) fn innermost<'a>(
 ) -> Option<&'a WorktreeInfo> {
     worktrees
         .map(|w| (w, canonical(&w.path)))
-        .filter(|(_, root)| path.starts_with(root))
+        .filter(|(_, root)| ptyro_core::os::path_starts_with(path, root))
         .max_by_key(|(_, root)| root.as_os_str().len())
         .map(|(w, _)| w)
 }

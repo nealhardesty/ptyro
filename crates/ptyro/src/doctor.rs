@@ -96,16 +96,35 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Repor
     let config = match Config::load(&config_path) {
         Ok(c) => {
             r.add("ptyro", "config", Level::Ok, format!("{} is valid", config_path.display()));
-            if let Some(mode) = crate::config::too_open(&config_path) {
-                r.add(
-                    "ptyro",
-                    "config mode",
-                    Level::Warn,
+            if let Some(who) = crate::config::too_open(&config_path) {
+                let text = if cfg!(windows) {
                     format!(
-                        "{} is {mode:03o}: other users can read it, and it can hold secrets \
+                        "{} is readable by {who}: other users of this computer can read it, and it \
+                         can hold secrets",
+                        config_path.display()
+                    )
+                } else {
+                    format!(
+                        "{} is {who}: other users can read it, and it can hold secrets \
                          (`chmod 600 {}`)",
                         config_path.display(),
                         config_path.display()
+                    )
+                };
+                r.add("ptyro", "config mode", Level::Warn, text);
+            }
+            // Every shell ptyro starts reads its integration (SPEC §8.7): a folder others can
+            // write to is one they could slip a line into, until ptyro writes it again.
+            let shell = ctx.paths.data.join("integrations").join("shell");
+            if let Some(who) = ptyro_pty::acl::writable_by_others(&shell) {
+                r.add(
+                    "ptyro",
+                    "integrations",
+                    Level::Warn,
+                    format!(
+                        "{} can be changed by {who}: the shells ptyro starts read what's in it. \
+                         The daemon makes it yours alone the next time it starts a shell",
+                        shell.display()
                     ),
                 );
             }
@@ -751,6 +770,10 @@ async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
     if quick {
         return;
     }
+    #[cfg(windows)]
+    if ctx.local {
+        windows_worktrees(&c, r).await;
+    }
     // The hook self-test: the fake agent through each per-launch integration.
     for adapter in ["claude", "codex", "opencode"] {
         match c.request(Request::SelfTest { adapter: adapter.into() }).await {
@@ -764,6 +787,111 @@ async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
             Err(e) => r.add("integrations", adapter, Level::Problem, e.message),
         }
     }
+}
+
+/// A native daemon's worktrees (on Windows drives; a WSL daemon's live on ext4): a file whose path
+/// nears Windows' 260 characters while long paths are off, and a Dev Drive for them (WIN8).
+#[cfg(windows)]
+async fn windows_worktrees(c: &ptyro_client::Client, r: &mut Report) {
+    let Ok(Reply::Worktrees { worktrees }) =
+        c.request(Request::WorktreeList { project: None }).await
+    else {
+        return;
+    };
+    let on_drives: Vec<PathBuf> =
+        worktrees.into_iter().map(|w| w.path).filter(|p| drive(p).is_some()).collect();
+    if on_drives.is_empty() {
+        return;
+    }
+    let deepest = on_drives.iter().take(50).filter_map(|p| deepest_file(p)).max();
+    if let Some((level, text)) =
+        long_paths_finding(deepest, ptyro_pty::winproc::long_paths_enabled())
+    {
+        r.add("windows", "long paths", level, text);
+    }
+    let mut seen = Vec::new();
+    for p in &on_drives {
+        let Some(d) = drive(p) else { continue };
+        if seen.contains(&d) {
+            continue;
+        }
+        seen.push(d.clone());
+        let fs = ptyro_pty::winproc::filesystem(Path::new(&format!("{d}\\")));
+        let folder = p.parent().unwrap_or(p).display().to_string();
+        let (level, text) = dev_drive_finding(&d, fs.as_deref(), &folder);
+        r.add("windows", "dev drive", level, text);
+    }
+}
+
+/// `C:` for a path on a drive letter.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn drive(p: &Path) -> Option<String> {
+    let s = p.to_string_lossy();
+    let s = s.strip_prefix(r"\\?\").unwrap_or(&s);
+    let b = s.as_bytes();
+    (b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':')
+        .then(|| s[..2].to_ascii_uppercase())
+}
+
+/// The longest path of a file git tracks in the worktree `wt`, with its length.
+#[cfg(windows)]
+fn deepest_file(wt: &Path) -> Option<(usize, String)> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(wt)
+        .args(["ls-files", "-z"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let base = wt.to_string_lossy();
+    String::from_utf8_lossy(&out.stdout)
+        .split('\0')
+        .filter(|f| !f.is_empty())
+        .map(|f| format!("{base}\\{}", f.replace('/', "\\")))
+        .map(|p| (p.chars().count(), p))
+        .max()
+}
+
+/// Windows refuses a path past 260 characters to most programs unless long paths are on: warn at
+/// 230, before a deeper worktree folder or a dependency's files get there.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn long_paths_finding(deepest: Option<(usize, String)>, enabled: bool) -> Option<(Level, String)> {
+    let (n, path) = deepest?;
+    if enabled || n < 230 {
+        return None;
+    }
+    let how = if n > 260 { "past" } else { "near" };
+    Some((
+        Level::Warn,
+        format!(
+            "{path} is {n} characters, {how} Windows' 260, and long paths are off: many tools \
+             (npm, build tools) fail on it. Turn them on, in an administrator PowerShell: \
+             `New-ItemProperty -Path HKLM:\\SYSTEM\\CurrentControlSet\\Control\\FileSystem -Name \
+             LongPathsEnabled -Value 1 -PropertyType DWORD -Force`, or keep worktrees in a \
+             shorter folder ([worktrees] location). ptyro turns on git's own (core.longpaths)"
+        ),
+    ))
+}
+
+/// Worktrees on a Dev Drive (ReFS, which only a Dev Drive is among Windows' own drives) are
+/// faster for git and builds; elsewhere, how to make one, and Defender's part.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn dev_drive_finding(drive: &str, fs: Option<&str>, folder: &str) -> (Level, String) {
+    if fs.is_some_and(|f| f.eq_ignore_ascii_case("ReFS")) {
+        return (Level::Ok, format!("worktrees on {drive} are on a Dev Drive (ReFS)"));
+    }
+    let fs = fs.map_or_else(String::new, |f| format!(" ({f})"));
+    (
+        Level::Note,
+        format!(
+            "worktrees are on {drive}{fs}: a Dev Drive makes git and builds faster. Settings → \
+             System → Storage → Advanced storage settings → Disks & volumes → Create Dev Drive, \
+             then point [worktrees] location at it. Until then, Microsoft Defender scanning every \
+             file costs time: an exclusion for {folder} (administrator PowerShell: \
+             `Add-MpPreference -ExclusionPath '{folder}'`) trades that scanning for speed"
+        ),
+    )
 }
 
 /// Worktrees left behind once their work is done (and their build output with them): a warning,
@@ -1327,6 +1455,31 @@ async fn profiles(ctx: &Ctx, config: &Config, only: Option<String>, r: &mut Repo
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn windows_worktrees_say_when_paths_near_260_and_suggest_a_dev_drive() {
+        use super::{Level, dev_drive_finding, drive, long_paths_finding};
+        use std::path::Path;
+        assert_eq!(drive(Path::new(r"c:\Users\me\wt")).as_deref(), Some("C:"));
+        assert_eq!(drive(Path::new(r"\\?\D:\wt")).as_deref(), Some("D:"));
+        assert_eq!(drive(Path::new("/home/me/wt")), None, "a WSL daemon's worktrees");
+        let deep = |n| Some((n, "C:\\w\\x".to_owned()));
+        assert_eq!(long_paths_finding(deep(229), false), None, "far enough");
+        assert_eq!(long_paths_finding(deep(300), true), None, "long paths are on");
+        let (l, t) = long_paths_finding(deep(240), false).unwrap();
+        assert!(
+            l == Level::Warn && t.contains("near Windows' 260") && t.contains("LongPathsEnabled")
+        );
+        assert!(long_paths_finding(deep(261), false).unwrap().1.contains("past"));
+        let (l, t) = dev_drive_finding("D:", Some("ReFS"), r"D:\wt");
+        assert!(l == Level::Ok && t.contains("Dev Drive"), "{t}");
+        let (l, t) = dev_drive_finding("C:", Some("NTFS"), r"C:\wt");
+        assert!(
+            l == Level::Note
+                && t.contains("(NTFS)")
+                && t.contains("Add-MpPreference -ExclusionPath 'C:\\wt'")
+        );
+    }
+
     #[test]
     fn wsl_survival_says_whether_the_daemon_holds_wsl_and_what_to_do() {
         use super::{Level, survival};

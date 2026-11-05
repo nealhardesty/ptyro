@@ -27,3 +27,7 @@ yaml-rust2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+# The detach test asks Windows about the child's console.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys.workspace = true

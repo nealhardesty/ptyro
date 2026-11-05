@@ -116,7 +116,7 @@ pub(crate) fn real_path(path: &Path) -> PathBuf {
     let mut base = path.to_path_buf();
     let mut rest = Vec::new();
     loop {
-        if let Ok(c) = base.canonicalize() {
+        if let Ok(c) = ptyro_core::os::canonicalize(&base) {
             return rest.iter().rev().fold(c, |acc, x: &std::ffi::OsString| acc.join(x));
         }
         match (base.file_name().map(std::ffi::OsStr::to_os_string), base.parent()) {
@@ -3654,10 +3654,10 @@ fn overlay_files(
                         std::fs::create_dir_all(parent).map_err(cs_err)?;
                         // `node_modules` (or a scope folder) that is a link out of the member
                         // would have the swap below happen somewhere else.
-                        let inside = std::fs::canonicalize(parent)
+                        let inside = ptyro_core::os::canonicalize(parent)
                             .ok()
-                            .zip(std::fs::canonicalize(&mp).ok())
-                            .is_some_and(|(p, root)| p.starts_with(root));
+                            .zip(ptyro_core::os::canonicalize(&mp).ok())
+                            .is_some_and(|(p, root)| ptyro_core::os::path_starts_with(&p, &root));
                         if !inside {
                             notes.push(format!(
                                 "{}: node_modules leads out of the member; skipped",
@@ -3676,10 +3676,14 @@ fn overlay_files(
                         let _ = std::fs::remove_dir_all(&aside);
                         std::fs::rename(&link, &aside).map_err(cs_err)?;
                     }
-                    ptyro_core::os::symlink(std::path::Path::new(&p.path), &link)
+                    let how = ptyro_core::os::symlink(std::path::Path::new(&p.path), &link)
                         .map_err(cs_err)?;
                     written.push(format!("{}.ptyro-link", link.to_string_lossy()));
-                    notes.push(format!("{}: node_modules/{dep} → ../{}", m.name, p.name));
+                    let how = match how {
+                        ptyro_core::os::Linked::Symlink => String::new(),
+                        other => format!(" ({})", other.words()),
+                    };
+                    notes.push(format!("{}: node_modules/{dep} → ../{}{how}", m.name, p.name));
                 }
                 let _ = ptyro_git::Git::new().exclude(&mp, "/node_modules/");
             }

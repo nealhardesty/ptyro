@@ -931,7 +931,7 @@ impl Daemon {
             .iter()
             .flat_map(|d| {
                 let p = self.paths.data.join(d);
-                let real = p.canonicalize().ok();
+                let real = ptyro_core::os::canonicalize(&p).ok();
                 [Some(p), real]
             })
             .flatten()

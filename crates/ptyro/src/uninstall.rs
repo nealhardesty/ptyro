@@ -318,7 +318,13 @@ pub fn rc_mentions(text: &str) -> Vec<String> {
 
 fn git(dir: &Path, args: &[&str]) -> Option<String> {
     let out = std::process::Command::new("git")
-        .args(["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-C"])
+        .args([
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            &format!("core.hooksPath={}", ptyro_core::os::DEV_NULL),
+            "-C",
+        ])
         .arg(dir)
         .args(args)
         .stdin(std::process::Stdio::null())
@@ -789,7 +795,7 @@ fn remove_tree(p: &Path) -> std::io::Result<()> {
 fn remove_worktree(w: &Worktree) -> Result<String, String> {
     if let Some(repo) = w.repo.as_deref().filter(|r| r.exists()) {
         let ok = std::process::Command::new("git")
-            .args(["-c", "core.hooksPath=/dev/null", "-C"])
+            .args(["-c", &format!("core.hooksPath={}", ptyro_core::os::DEV_NULL), "-C"])
             .arg(repo)
             .args(["worktree", "remove", "--force", "--force"])
             .arg(&w.path)

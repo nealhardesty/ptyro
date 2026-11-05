@@ -79,7 +79,7 @@ impl App {
         }
         match machine {
             Some(_) => PathBuf::from("~"),
-            None => std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| "/".into()),
+            None => ptyro_core::config::expand_home("~"),
         }
     }
 
@@ -413,8 +413,8 @@ pub(crate) fn option_as_meta_steps() -> &'static str {
 
 /// A shell's label (SPEC §23.4): `ptyro_core::session::shell_label`.
 pub(crate) fn label(s: &SessionInfo) -> String {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    ptyro_core::session::shell_label(s, home.as_deref())
+    let home = ptyro_core::config::expand_home("~");
+    ptyro_core::session::shell_label(s, Some(&home))
 }
 
 /// What its row says it's doing: the command running, else the foreground program, else the

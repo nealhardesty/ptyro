@@ -93,7 +93,7 @@ impl Daemon {
         if !self.config().discover.auto_register {
             return Ok(None);
         }
-        let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+        let dir = ptyro_core::os::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
         if self.in_a_project(&dir) {
             return Ok(None);
         }
@@ -108,8 +108,10 @@ impl Daemon {
             let in_repo = dir.ancestors().any(|d| d.join(".git").exists());
             return if in_repo { Err(()) } else { Ok(None) };
         };
-        let root = root.canonicalize().unwrap_or(root);
-        let home = std::env::var_os("HOME").map(PathBuf::from).and_then(|h| h.canonicalize().ok());
+        let root = ptyro_core::os::canonicalize(&root).unwrap_or(root);
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .and_then(|h| ptyro_core::os::canonicalize(&h).ok());
         if home.as_deref() == Some(root.as_path())
             || self.declined.locked().contains(&root)
             || root.starts_with(&self.paths.data)

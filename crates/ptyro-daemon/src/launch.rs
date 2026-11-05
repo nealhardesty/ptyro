@@ -44,6 +44,33 @@ pub struct AgentStart {
 /// A structured launch (M10): the protocol, the driver's options, OpenCode's port and password.
 type StructuredStart = (String, ptyro_drive::Opts, Option<(u16, String)>);
 
+/// ptyro's own path, as the hooks and status line an agent runs call it. On Windows a path no
+/// shell's quoting suits (a space in the user's name) is given as its 8.3 short name when the
+/// volume keeps one (WIN8, SPEC §20.12).
+fn hook_ptyro() -> String {
+    let Ok(exe) = std::env::current_exe() else { return "ptyro".into() };
+    #[cfg(windows)]
+    if ptyro_agents::claude::needs_quoting(&exe.to_string_lossy())
+        && let Some(short) = ptyro_pty::winproc::short_path(&exe)
+    {
+        return short.to_string_lossy().into_owned();
+    }
+    exe.to_string_lossy().into_owned()
+}
+
+/// `CLAUDE_CODE_GIT_BASH_PATH` set to the Git Bash ptyro finds, when no variable in `set` (the
+/// daemon's, the profile's, the agent's) names one already.
+fn claude_git_bash<'a>(
+    mut set: impl Iterator<Item = &'a str>,
+    found: impl FnOnce() -> Option<PathBuf>,
+) -> Option<(String, String)> {
+    const VAR: &str = "CLAUDE_CODE_GIT_BASH_PATH";
+    if set.any(|k| k.eq_ignore_ascii_case(VAR)) {
+        return None;
+    }
+    found().map(|p| (VAR.to_owned(), p.to_string_lossy().into_owned()))
+}
+
 /// A port nobody listens on right now.
 fn free_port() -> Option<u16> {
     std::net::TcpListener::bind(("127.0.0.1", 0)).ok()?.local_addr().ok().map(|a| a.port())
@@ -103,7 +130,7 @@ impl Daemon {
                 .ok_or_else(|| Error::missing("project", &wt.project))?;
             return Ok(Some((wt, p)));
         }
-        let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+        let cwd = ptyro_core::os::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
         let reg = self.registry.locked();
         let ready = reg.worktrees.iter().filter(|w| w.state == WorktreeState::Ready);
         let best = crate::registry::innermost(ready, &cwd);
@@ -367,6 +394,16 @@ impl Daemon {
         let dir = self.paths.data.join("integrations").join("shell");
         let zdotdir = env.iter().find(|(k, _)| k == "ZDOTDIR").map(|(_, v)| v.to_string_lossy());
         let i = ptyro_core::shell::integrate(argv, &dir, zdotdir.as_deref())?;
+        // Every shell reads what's in it: a folder others can change is made the user's alone.
+        if let Some(who) = ptyro_pty::acl::writable_by_others(&dir) {
+            match ptyro_pty::acl::make_private(&dir) {
+                Ok(()) => tracing::info!(
+                    "{} could be changed by {who}: it is yours alone now",
+                    dir.display()
+                ),
+                Err(e) => tracing::warn!("{} can be changed by {who}: {e}", dir.display()),
+            }
+        }
         for (path, content) in &i.files {
             if std::fs::read_to_string(path).ok().as_deref() == Some(content.as_str()) {
                 continue;
@@ -445,8 +482,7 @@ impl Daemon {
             let home = ptyro_agents::home_var(&id)
                 .and_then(|v| plan.set.iter().find(|(k, _)| k == v).map(|(_, p)| PathBuf::from(p)))
                 .or_else(|| ptyro_agents::default_dir(&id));
-            let ptyro = std::env::current_exe()
-                .map_or_else(|_| "ptyro".into(), |p| p.to_string_lossy().into_owned());
+            let ptyro = hook_ptyro();
             let session = l.id.full();
             let project_root =
                 wt.as_ref().and_then(|w| self.project_by_id(&w.project)).map(|p| p.root);
@@ -551,6 +587,15 @@ impl Daemon {
                 sidecar = lp.sidecar;
                 adapter_id = Some(id);
             }
+        }
+        // Windows: Claude runs its Bash tool, hooks and status line in the same Git Bash as the
+        // relay and project scripts, unless someone already chose one (WIN8).
+        if cfg!(windows) && adapter_id.as_deref() == Some("claude") {
+            let set = plan.set.iter().chain(&agent_env).map(|(k, _)| k.as_str());
+            let base = self.base_env.iter().filter_map(|(k, _)| k.to_str());
+            agent_env.extend(claude_git_bash(set.chain(base), || {
+                ptyro_core::shell::ScriptEnv::here(ptyro_core::shell::git_bash)
+            }));
         }
         let mut env = self.session_env(l.id, &plan, &l.client_env, &wt_env, &agent_env);
         let exec = if l.kind == SessionKind::Shell && config.shell.integration {
@@ -702,5 +747,25 @@ impl Drop for Claim<'_> {
         if let Some(n) = &self.name {
             c.1.remove(n);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn claude_gets_the_git_bash_ptyro_found_unless_one_is_chosen() {
+        let gb = || Some(PathBuf::from(r"C:\Program Files\Git\bin\bash.exe"));
+        let got = claude_git_bash(["PATH", "HOME"].into_iter(), gb);
+        assert_eq!(
+            got,
+            Some(("CLAUDE_CODE_GIT_BASH_PATH".into(), r"C:\Program Files\Git\bin\bash.exe".into()))
+        );
+        // Chosen already (Windows names ignore case): left alone, nothing looked for.
+        let chosen = ["claude_code_git_bash_path"].into_iter();
+        assert_eq!(claude_git_bash(chosen, || panic!("not looked for")), None);
+        // No Git Bash: nothing set, and Claude falls back to PowerShell itself.
+        assert_eq!(claude_git_bash(std::iter::empty(), || None), None);
     }
 }

@@ -500,6 +500,14 @@ image is used to re-exec the *old* binary (kept at `state/daemon.prev`).
   beside `ptyro.exe`, else Windows' own) and a Job Object per session; signals mapped (INT is a
   typed Ctrl+C, HUP/TERM close the console, KILL ends the job), the console closed when the job
   is empty (which ends the output, as a PTY's last holder does). §20.13 has the facts.
+  **[built WIN7]** The probes there (`winproc.rs`): the foreground program is the newest child
+  of the session's program in its job (through a `cmd.exe` running a batch shim), its name the
+  image's stem, lowercase, or for an interpreter (node, bun, deno, python…) the script it runs
+  (a package's generic `cli.js` gives the package's folder); its directory is read from its
+  PEB; ports come from `GetExtendedTcpTable` with the Toolhelp32 tree; which session a process
+  is in is the job that holds it (`IsProcessInJob`: a process can't leave a job, and pids,
+  which Windows reuses, aren't followed up parents). `is_raw` is unknown: only Unix job control
+  reads it.
 - Each child gets its **own process group**; signals go to the group (`killpg`) so tool subprocesses
   (dev servers, test runners) die with the session. **[built H2.7]** The leader is left a zombie
   (seen with `waitid(WNOWAIT)`) until no other process is in its group, then reaped. Its pid, and
@@ -1459,7 +1467,13 @@ Verified against Claude Code **2.1.304** (§20).
     `idle_prompt`. Other notifications go to the inbox.
 - **Statusline relay:** `ptyro statusline-relay` forwards Claude's statusline JSON to the daemon
   (usage meters, §9.7) and runs the user's own `statusLine` command from the profile's
-  `settings.json`, printing its output, so the user's statusline is unchanged.
+  `settings.json`, printing its output, so the user's statusline is unchanged. It runs that
+  command where Claude would (`shell::claude_command_argv`): `sh -c` on Unix; on Windows in Git
+  Bash (`CLAUDE_CODE_GIT_BASH_PATH`, else where Git for Windows puts it), else in Windows
+  PowerShell (WIN8). On Windows the daemon also starts Claude with `CLAUDE_CODE_GIT_BASH_PATH`
+  set to the Git Bash it finds, unless the daemon's environment, the profile's `env` or the
+  agent's `env` names one already, so Claude's Bash tool, its hooks, the relay and project
+  scripts use one bash (a profile's `env` is where to choose another).
 - **Prompt delivery (changed from the proposal):**
   - Wait for a reliable `Idle` (hook or 7501), or for `ready(screen)` (the `❯` input box with
     no dialog on screen). Never type while `Blocked`; give up after 120 s with a "couldn't
@@ -1746,8 +1760,10 @@ runs), so a restart integrates afresh:
 
 **[built UX1.4] An agent started by hand in a shell session.** Once a second, a live `shell`
 session's foreground process is matched against the agents (a configured agent's command, else
-a built-in's program: `claude`, `codex`, `gemini`, `opencode`, `agy`). While one is in the
-foreground:
+a built-in's program: `claude`, `codex`, `gemini`, `opencode`, `agy`). On Windows a name matches
+without case or a runnable extension (`C:\Tools\MyAgent.EXE` is `myagent`), and an npm package's
+folder names its command (`claude-code`, as WIN7 names `node …\claude-code\cli.js`; WIN8). While
+one is in the foreground:
 - `SessionInfo.inner_agent` names its adapter, and the TUI reads `zsh › claude ◌`; the session
   isn't renamed.
 - What the shell said no longer holds (OSC 133 `C` was one long "working"): the engine forgets
@@ -2062,6 +2078,18 @@ Step 2's add, and every `worktree remove` and `prune`, take turns per repository
 common dir; 2026-10-31). git writes a new worktree's `worktrees/<name>/commondir` in two steps
 while a concurrent add reads every registered worktree, so a fan-out's parallel adds failed now
 and then with "failed to read .git/worktrees/<name>/commondir" (seen in CI on Linux).
+
+**On Windows (WIN8):** before step 2, ptyro sets `core.longpaths = true` in the repository's own
+config unless it has a value already: Git for Windows checks out a file whose path passes 260
+characters only with it, and a worktree's folder adds to every path. Long paths for other programs
+are Windows' own (`LongPathsEnabled`, off by default; it needs an administrator), so `doctor` (full,
+with a native daemon) warns when a tracked file in a worktree on a Windows drive reaches 230
+characters while it's off, with the command that turns it on and the other fix, a shorter
+`[worktrees] location`. It also says whether the worktrees' drive is a Dev Drive: ReFS, which a
+volume's filesystem says without an administrator (`GetVolumeInformationW`; `fsutil devdrv query`
+needs one), else how to make one and what a Defender exclusion for the folder trades (Defender's
+exclusions can't be read without an administrator, so it only suggests). A WSL daemon's worktrees
+live on ext4 and get neither.
 
 Branch-name templates: `{name}`, `{user}`, `{date}`, `{issue}`, `{slug}`; optional **auto-rename**
 (optional): after the first agent turn, offer a branch name derived from the first prompt
@@ -5632,6 +5660,7 @@ command): ptyro doesn't confine that.
 
 | Asset / threat | Mitigation |
 |---|---|
+| Files only you should read (the config, shell integration) | mode `0600`/`0700`; **[built WIN7]** on Windows the access list (`ptyro_pty::acl`): one wider than the user, SYSTEM and Administrators is a `doctor` finding with its fix, a config save narrows it, and the daemon narrows a shell-integration folder others could change |
 | Socket hijack by other local users | dir `0700`, socket `0600`, peer-uid check on accept. **[built WIN5]** Windows: a named pipe whose every instance admits only the user's SID (`D:P(A;;GA;;;<sid>)`) and rejects remote clients; pipe names are one namespace per computer, so the client refuses a pipe whose server process runs as anyone else (`ptyro_pty::pipe`) |
 | Cloned repo runs arbitrary code | scripts/recipes require fingerprinted trust; agent executables only from user config |
 | Code ptyro runs for a repository: scripts, `after_turn`, verify checks, git (security review M3) | trust pins a script's *text*, not the files it calls, and agents edit those files: trusting `cargo test` trusts the tests. Scripts, `after_turn` and checks run as the user, with the daemon's environment and network, outside any agent sandbox; this is documented, not sandboxed (§10.5, §15.6.5, docs/config.md). Background git runs no repository code: `core.fsmonitor=false` always, `core.hooksPath=/dev/null` except for the operations the user asked for (commit, push, merge, rebase, cherry-pick, a new worktree), diffs with `--no-ext-diff --no-textconv` (§10.9) |
@@ -6765,6 +6794,30 @@ Windows) wasn't needed to get the list below: compile errors are the same either
   and was refused as a release build. There's no per-file exception, and turning it off can't be
   undone without reinstalling Windows. Signing (WIN12) is the real answer; install.ps1 says what
   happened if `ptyro.exe` is refused. [V]
+- **A detached daemon needs a console, just not a window.** Started with `DETACHED_PROCESS`
+  (no console at all), every console program the daemon ran in the background (git, gh, cmd) got
+  a console of its own, and so a window: with Windows Terminal as the default terminal, each git
+  call flashed a Windows Terminal window open and shut (2026-11-04, the native daemon from WIN7
+  polling git). `CREATE_NO_WINDOW` gives the daemon a console with no window, and its children
+  inherit it. `ptyro_core::os::detach` uses it; its test runs itself detached and asks
+  `GetConsoleProcessList` (no console under `DETACHED_PROCESS`, one with `CREATE_NO_WINDOW`) and
+  `GetConsoleWindow`. It failed under `DETACHED_PROCESS` and passes with `CREATE_NO_WINDOW` on
+  Windows 11 (2026-11-05; Smart App Control refused one rebuild of the test binary the day before,
+  then let a later one run). [V]
+- **No one quoting suits every Windows shell.** An agent runs a hook or status line `command` in
+  a shell: Claude in Git Bash when it finds one, else PowerShell (its `shell` field, `"bash"` or
+  `"powershell"`, picks; a `statusLine` has none) [S, Claude's hooks and status line docs,
+  2026-11-04]. Run in Git Bash 2.x, Windows PowerShell 5.1 and cmd on Windows 11 build 26200:
+  a path with nothing to quote, written with forward slashes (`C:/Users/me/…/ptyro.exe hook …`),
+  runs in all three; with backslashes Git Bash drops them; a quoted path (`"C:/Program Files/…"
+  …`) runs in Git Bash and cmd but PowerShell reads a string, not a command; PowerShell's
+  `& '…' …` runs only there. So ptyro writes its path with forward slashes, unquoted; a path
+  that needs quotes (a space in the user's name) becomes its 8.3 short name
+  (`GetShortPathNameW`, kept on the system volume by default); and failing that, Claude's hooks
+  name PowerShell (`"shell": "powershell"`, `& '…'`), which every Windows has, while the status
+  line, Codex, Gemini and agy get double quotes (Git Bash and cmd). Claude's exec form (`args`,
+  no shell, v2.1.139) was passed over: reports say plugin `hooks.json` ignores it, and that on
+  Windows with Git Bash it still goes through bash [U]. [V for the three shells]
 - **PowerShell's execution policy** (Restricted by default) refuses `install.ps1` run as a file,
   but not `irm … | iex`, which evaluates a string. [V]
 - **`wt.exe` splits its command line at every `;`**, also inside a `powershell -Command` string
@@ -6854,6 +6907,15 @@ judges the output with ptyro's own sniffer and emulator; the full tables are in
     given) writes to its console even when the daemon's stdout is a pipe.
   - Smart App Control refused the unsigned debug `ptyro.exe` that carries the daemon, and ran
     the release build (§20.12).
+- **Built (WIN7, 2026-11-04)** [V on Windows 11 25H2 with a release `ptyro.exe`]:
+  - A shell session running `ping` reports `ping` as its foreground program, with its
+    directory (read from the PEB at `ProcessParameters` 0x20, `CurrentDirectory` 0x38, the
+    64-bit layout); a session's PowerShell listening on a port has it in `ls --json`.
+  - Windows refuses symbolic links without Developer Mode (`ERROR_PRIVILEGE_NOT_HELD`, 1314):
+    a folder is then linked as a junction (`mklink /J`, no privilege needed) and a file as a hard
+    link, or copied across drives; the notes say which.
+  - `canonicalize` gives `\\?\C:\…`; ptyro drops the prefix (the standard library adds it back
+    for long paths) and compares Windows paths without case.
 - **What it decides** (DD3.4; decided by the owner 2026-11-04, ROADMAP WIN0.5 d and g) **[decided]**:
   - **The PTY: (c).** Bundle the packaged conpty.dll and OpenConsole.exe: about 1.2 MB per
     architecture, MIT, signed by Microsoft. Use the inbox ConPTY only when they are missing. The
@@ -7094,7 +7156,17 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   beside it when none is on `PATH`; ptyro never downloads one. Sessions, chats, `doctor`
   (where, and how: `(nvm)`, `(npx cache)` with a note to `npm i -g`), `AgentChoice.found` (web and
   TUI agent pickers) and the first-run screen use it; "No agent found" and an asked-for agent that
-  isn't installed offer the install command. **Not built:** an `@` completion of the folders' files
+  isn't installed offer the install command. **On Windows (WIN8):** a program is found by
+  `PATHEXT` (`claude.exe`, `codex.cmd`; never npm's extensionless `sh` shim beside the `.cmd`),
+  with `%USERPROFILE%` as the home when `HOME` isn't set, in the npm prefix (the prefix itself, not
+  `bin`), `%APPDATA%\npm`, `~\.local\bin` (Claude's native installer), WinGet's `Links`, Scoop's
+  `shims`, `%NVM_SYMLINK%` (nvm-windows), `~\.bun\bin` and `npx`'s cache under
+  `%LOCALAPPDATA%\npm-cache\_npx`. An npm `.cmd` shim is read and what it starts runs instead: its
+  last quoted `"%dp0%\…"`, inside its folder only, a `.js` with `node` (the shim's own `node.exe`
+  first, as cmd-shim picks), anything else as it is. Through the shim, `cmd.exe` would stand
+  between ptyro and the agent, ask "Terminate batch job (Y/N)?" at Ctrl+C, and be the session's
+  program. A shim that can't be read runs as itself (WIN5 wraps it in `cmd.exe /d /c`). Claude's
+  install hint is `irm https://claude.ai/install.ps1 | iex` there. **Not built:** an `@` completion of the folders' files
   in the composer; agent-sent titles (no agent of the four sends one: §20.8); MCP for OpenCode chats
   (its server takes MCP servers per server instance, `POST /mcp`, and it isn't installed here to
   try; its permission rules for `<server>_*` are written [S]).
@@ -8069,7 +8141,11 @@ its CHATS. A shell there is an ordinary session (any command, not only a shell) 
 - **Label** (what the row shows, not an address): the title if one is set (`,`, then `C-t`), else
   the foreground program and the directory (`htop`, `vim · ~/dl`), else the directory (`~/dl`).
   The label follows what runs, as tmux's `automatic-rename` does (on by default, §20.14), while
-  the name stays put.
+  the name stays put. A shell itself at its prompt isn't "what runs": its program's name is compared the way the
+  process list names it (`session::program_name`, and `programName` in the web's `shellkit.ts`,
+  one table for both), so a Windows daemon's `C:\…\pwsh.exe` at its prompt is `pwsh` and the label
+  is its directory, which reads with `\` (`…\app`). `$HOME` here is the platform's home
+  (`%USERPROFILE%` on Windows, which sets no `HOME`).
 
 ### 23.5 Addresses
 

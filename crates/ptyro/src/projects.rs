@@ -449,9 +449,8 @@ pub async fn project(ctx: &Ctx, cmd: ProjectCmd) -> Result<i32, Error> {
     match cmd {
         ProjectCmd::Add { path, workspace } => {
             let path = match path {
-                Some(p) => {
-                    p.canonicalize().map_err(|e| Error::invalid(format!("{}: {e}", p.display())))?
-                }
+                Some(p) => ptyro_core::os::canonicalize(&p)
+                    .map_err(|e| Error::invalid(format!("{}: {e}", p.display())))?,
                 None => current_dir()?,
             };
             let Reply::Project { info, notes: n } =
@@ -807,8 +806,7 @@ pub async fn new_in_new_worktree(
     // The project: --project, else the one containing -C, else the current directory's.
     let project = match (project, &a.cwd) {
         (Some(p), _) => p,
-        (None, Some(dir)) => dir
-            .canonicalize()
+        (None, Some(dir)) => ptyro_core::os::canonicalize(dir)
             .map_err(|e| Error::invalid(format!("{}: {e}", dir.display())))?
             .to_string_lossy()
             .into_owned(),
