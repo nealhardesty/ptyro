@@ -1481,8 +1481,23 @@ Verified against Claude Code **2.1.304** (§20).
   - Then paste the text, wait 60 ms, and send Enter as an **encoded key event**. Claude speaks
     the kitty keyboard protocol and ignores a bare `\r` written straight after the text: a burst
     ending in `\r` reads as pasted (§20.1).
+  - **[WIN8, 2026-11-05]** For Claude a reliable idle isn't enough (`ready_needs_screen`): its
+    `SessionStart` comes while a resumed one still loads its transcript, and an Enter then is
+    encoded for keyboard modes it hasn't turned on (lost once in two tries on Windows). Its input
+    box must be on screen too: the `❯` (or old `│ >`) line right under a rule, so the `❯`
+    prompts of the conversation above it don't count, and a dialog counts only below the last box.
+  - **[WIN8]** After typing, ptyro watches the input box (`pending_input`): while this very prompt
+    still sits there unsent and the agent waits for input (idle, done, or not yet said), it
+    presses Enter again, twice at most within ~10 s; never while working (that Enter would be lost
+    too) or blocked (Enter would answer the dialog). Codex 0.166 says idle as it starts and is
+    then busy for a moment: the first prompt's Enter landed then and was dropped, every time.
+- **A session starting doesn't end a turn [WIN8]:** a `SessionStart` hook that comes while the
+  session is working moves nothing to idle (its conversation and model still count). Codex 0.166
+  sends it only with the first prompt, after OSC 7501's working (verified live, 2026-11-05).
 - **Folder trust:** `on_screen` recognises the trust dialog and reports blocked(question)
-  "trust this folder?". `ready()` is false while it shows, so ptyro never types into it.
+  "trust this folder?". `ready()` is false while it shows, so ptyro never types into it. So is
+  the first-run "Claude in Chrome extension detected" question (2.1.318), blocked(question)
+  "use your Chrome browser?"; its keys are Down, Enter (yes) and Enter (no, preselected).
 - **Answers** (`ptyro answer`, peek `y/a/n`, approve links): `1` (yes), `2` (yes, and don't ask
   again for this), Esc (no). On the folder-trust question the keys are Down, Enter (yes) and Esc
   (no): the adapter picks them from what is on screen (`answer_screen`, M11.0).
@@ -6820,6 +6835,16 @@ Windows) wasn't needed to get the list below: compile errors are the same either
   line, Codex, Gemini and agy get double quotes (Git Bash and cmd). Claude's exec form (`args`,
   no shell, v2.1.139) was passed over: reports say plugin `hooks.json` ignores it, and that on
   Windows with Git Bash it still goes through bash [U]. [V for the three shells]
+- **ConPTY holds a lone ESC.** Raw input reaches ConPTY as VT, where ESC may begin a sequence:
+  a lone one (`send --raw '\e'`, an answer's "deny", a stop key) waited for the rest and never
+  arrived (a Codex panel stayed open, 2026-11-04). For a program in win32-input-mode, a lone ESC
+  (at the end, or before another) goes as the Escape key's record (`input::raw_input`); whole
+  sequences (`\e[B`) and Alt+key (`\ex`) went through as they are. [V for the held ESC]
+- **Codex 0.166 on Windows** (2026-11-05): its approval overlay says its keys, `y` proceed, `p`
+  don't ask again, `esc` no (ptyro sent `a` for "always"; it sends `p` when offered); its trust
+  question is "Trust this folder?" with "1. Trust and continue" preselected (Enter) and Esc to
+  quit, and text typed into it can quit Codex; with no `[windows] sandbox` it runs each command as
+  you ("Environment: local") and asks first, offering no setup. [V]
 - **PowerShell's execution policy** (Restricted by default) refuses `install.ps1` run as a file,
   but not `irm … | iex`, which evaluates a string. [V]
 - **`wt.exe` splits its command line at every `;`**, also inside a `powershell -Command` string
