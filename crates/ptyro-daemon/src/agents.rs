@@ -756,11 +756,11 @@ impl Daemon {
             let last = s.last_output_ms.load(Ordering::Relaxed);
             last > 0 && now_ms().saturating_sub(last) >= 1_500
         };
-        if reliable_idle || adapter.ready(&screen) || quiet {
-            Readiness::Ready
-        } else {
-            Readiness::NotYet
-        }
+        // An agent whose input box shows (Claude) is ready once it's there: its idle may come
+        // first (a resumed one loading its transcript).
+        let ready_screen = adapter.ready(&screen);
+        let reliable_idle = reliable_idle && (!adapter.ready_needs_screen() || ready_screen);
+        if reliable_idle || ready_screen || quiet { Readiness::Ready } else { Readiness::NotYet }
     }
 
     /// Ready for typed input right now (prompt delivery's test).

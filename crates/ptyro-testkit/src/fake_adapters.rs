@@ -545,6 +545,11 @@ pub fn main(args: &[String]) -> i32 {
     }
     let stdin = std::io::stdin();
     loop {
+        // Claude's input box sits under a rule, which is how ptyro tells it from the `❯` lines
+        // of the conversation above it.
+        if f.adapter == "claude" {
+            let _ = write!(out, "────────────────────────────────────────\r\n");
+        }
         let _ = write!(out, "> ");
         let _ = out.flush();
         let mut line = String::new();

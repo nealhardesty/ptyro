@@ -309,14 +309,26 @@ impl Adapter for Claude {
     }
 
     fn ready(&self, screen: &str) -> bool {
-        // The prompt box: a `>` or `❯` input line between rules — but `❯` also marks the chosen
-        // option of its dialogs, so never while one is up.
-        on_screen(screen).is_none()
-            && !screen.contains("Do you want to proceed?")
-            && screen.lines().any(|l| {
-                let t = l.trim_start_matches(['│', ' ']);
-                t.starts_with("> ") || t.starts_with("❯ ") || t == ">" || t == "❯"
-            })
+        // The prompt box: a `>` or `❯` input line right under a rule (`────`, or the old box's
+        // `╭───`). Not a `❯ …` line of the conversation above it, which a resumed Claude shows
+        // while it still loads, nor the chosen option of a dialog.
+        let input = |l: &str| {
+            let t = l.trim_start_matches(['│', ' ']);
+            t.starts_with("> ") || t.starts_with("❯ ") || t == ">" || t == "❯"
+        };
+        let rule = |l: &str| l.trim_start().starts_with(['─', '╭']);
+        let lines: Vec<&str> = screen.lines().collect();
+        // The last box: a dialog takes its place, so one counts only from there down (above it
+        // is the conversation, answered dialogs included).
+        let Some(at) = lines.windows(2).rposition(|w| rule(w[0]) && input(w[1])) else {
+            return false;
+        };
+        let below = lines[at..].join("\n");
+        on_screen(&below).is_none() && !below.contains("Do you want to proceed?")
+    }
+
+    fn ready_needs_screen(&self) -> bool {
+        true
     }
 
     fn on_screen(&self, screen: &str) -> Option<Signal> {
@@ -464,6 +476,24 @@ mod tests {
         let e = hook_entry("/opt/my apps/ptyro", "hook claude Stop", 5, false);
         assert_eq!(e["command"], "'/opt/my apps/ptyro' hook claude Stop");
         assert!(e.get("shell").is_none());
+    }
+
+    /// The input box is the `❯` line under a rule. A resumed Claude prints the conversation
+    /// (its `❯` prompts) before the box: not ready yet (seen on Windows, 2026-11-04: an Enter
+    /// typed then was lost).
+    #[test]
+    fn ready_means_the_input_box_not_a_prompt_in_the_conversation() {
+        let loading = "❯ Remember the word BANANA. Reply with just OK.\n● OK\n✻ Baked for 1s\n";
+        assert!(!Claude.ready(loading));
+        let drawn =
+            format!("{loading}──────────────── c1 ─\n❯ \n────────────────\n  ⏵⏵ auto mode on");
+        assert!(Claude.ready(&drawn));
+        assert!(Claude.ready("╭──────────╮\n│ > │\n╰──────────╯"), "the older box");
+        let dialog = "──────────\n Do you want to proceed?\n ❯ 1. Yes\n   2. No";
+        assert!(!Claude.ready(dialog));
+        // A dialog answered earlier, above the box now: ready.
+        assert!(Claude.ready(&format!("{dialog}\n● answer: yes\n{drawn}")));
+        assert!(Claude.ready_needs_screen());
     }
 
     #[test]

@@ -143,6 +143,12 @@ pub trait Adapter: Send + Sync {
         let _ = screen;
         false
     }
+    /// Whether a hook's idle is not enough for typed input: the input box must be on screen
+    /// too. Claude's `SessionStart` comes while a resumed one still loads its transcript, and an
+    /// Enter typed then is lost (encoded for keyboard modes it hasn't turned on yet).
+    fn ready_needs_screen(&self) -> bool {
+        false
+    }
     /// Keys that answer the permission prompt on screen, where the agent takes keys.
     fn answer(&self, d: Decision) -> Option<Vec<u8>> {
         let _ = d;
