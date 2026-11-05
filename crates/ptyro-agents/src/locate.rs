@@ -144,7 +144,11 @@ fn find_in(prog: &str, path: &str, places: &Places) -> Option<Found> {
                 .collect(),
         }
     };
-    let in_dir = |d: &Path, p: &str| names(p).into_iter().map(|n| d.join(n)).find(|f| f.is_file());
+    // An npm shim whose package is gone (removed, or an install that rolled back) runs nothing:
+    // it isn't found, so the agent reads as not installed, with how to install it.
+    let in_dir = |d: &Path, p: &str| {
+        names(p).into_iter().map(|n| d.join(n)).find(|f| f.is_file() && !broken_shim(f))
+    };
     if prog.contains('/') || (exts.is_some() && prog.contains('\\')) {
         let p = PathBuf::from(prog);
         return p.is_file().then(|| Found { argv: vec![prog.to_owned()], path: p, via: None });
@@ -200,6 +204,14 @@ fn find_in(prog: &str, path: &str, places: &Places) -> Option<Found> {
         path: script,
         via: Some("npx cache".into()),
     })
+}
+
+/// An npm `.cmd` shim whose target isn't on disk: it would fail when run.
+fn broken_shim(f: &Path) -> bool {
+    let is_cmd = f.extension().is_some_and(|e| e.eq_ignore_ascii_case("cmd"));
+    is_cmd
+        && std::fs::read_to_string(f).is_ok_and(|t| t.contains("\"%dp0%\\node_modules\\"))
+        && shim_target(f).is_none()
 }
 
 /// What an npm `.cmd` shim starts, when `f` is one and that is on disk: the last quoted
@@ -449,5 +461,9 @@ mod windows_rules {
             [npm.join("agy.cmd").to_string_lossy()]
         );
         assert_eq!(shim_target(&npm.join("codex")), None, "only a .cmd is a shim");
+        // A shim left behind by an install that rolled back (its package gone): not found.
+        write(&npm.join("gemini.cmd"), &shim(r"node_modules\@google\gemini-cli\bundle\gemini.js"));
+        std::fs::remove_dir_all(home.join("bin")).unwrap();
+        assert!(find_in("gemini", &path, &places).is_none(), "a broken shim runs nothing");
     }
 }
