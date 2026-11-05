@@ -371,6 +371,55 @@ pub fn holders(path: &Path) -> Vec<(u32, String)> {
     }
 }
 
+/// The filesystem of the volume `root` (`C:\\`) is: `NTFS`, `ReFS` (a Dev Drive is always
+/// ReFS), `FAT32`… `None` when it can't be read. Needs no administrator, which asking whether it
+/// is a Dev Drive (`fsutil devdrv query`) does (WIN8).
+pub fn filesystem(root: &Path) -> Option<String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetVolumeInformationW;
+    let root: Vec<u16> = root.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let mut name = [0u16; 64];
+    // SAFETY: `root` is NUL-ended; `name` holds its stated length; the other outputs are
+    // optional and passed as null.
+    let ok = unsafe {
+        GetVolumeInformationW(
+            root.as_ptr(),
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            name.as_mut_ptr(),
+            name.len() as u32,
+        )
+    };
+    (ok != 0).then(|| wide_str(&name))
+}
+
+/// Whether Windows lets programs that say so use paths past 260 characters
+/// (`HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem` `LongPathsEnabled` = 1; off by
+/// default). `false` when it can't be read.
+pub fn long_paths_enabled() -> bool {
+    use windows_sys::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RegGetValueW};
+    let key: Vec<u16> = "SYSTEM\\CurrentControlSet\\Control\\FileSystem\0".encode_utf16().collect();
+    let value: Vec<u16> = "LongPathsEnabled\0".encode_utf16().collect();
+    let mut data = 0u32;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    // SAFETY: both names are NUL-ended; `data` is a DWORD and `size` says so.
+    let r = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_DWORD,
+            std::ptr::null_mut(),
+            (&raw mut data).cast(),
+            &mut size,
+        )
+    };
+    r == 0 && data == 1
+}
+
 /// `p`'s 8.3 short name (`C:\\Users\\JOHNSM~1\\…`), when its volume keeps them (the system
 /// volume does by default): a path with no spaces, for a hook `command` that no shell's quoting
 /// would suit (WIN8). `None` when it has none.
@@ -452,5 +501,13 @@ mod tests {
             }
             None => eprintln!("this volume keeps no 8.3 names"),
         }
+    }
+
+    #[test]
+    fn the_system_volume_has_a_filesystem_and_long_paths_read_as_a_bool() {
+        let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+        let fs = filesystem(Path::new(&format!("{drive}\\"))).unwrap();
+        assert!(["NTFS", "ReFS"].contains(&fs.as_str()), "{fs}");
+        let _ = long_paths_enabled();
     }
 }

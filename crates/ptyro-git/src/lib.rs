@@ -489,6 +489,9 @@ impl Git {
     /// `git worktree add` (SPEC §10.3 step 2).
     pub fn worktree_add(&self, root: &Path, path: &Path, source: &Source) -> Result<()> {
         let p = path.to_string_lossy();
+        if cfg!(windows) {
+            self.long_paths(root);
+        }
         let turn = self.turn(root);
         match source {
             Source::NewBranch { branch, base } => {
@@ -531,6 +534,15 @@ impl Git {
             }
         }
         Ok(())
+    }
+
+    /// `core.longpaths = true` in the repository's own config, unless it says otherwise already:
+    /// Git for Windows checks out a file whose path passes 260 characters only with it, and a
+    /// worktree's folder adds to every path in it (WIN8). Best effort.
+    pub(crate) fn long_paths(&self, root: &Path) {
+        if self.run(root, &["config", "--get", "core.longpaths"]).is_err() {
+            let _ = self.run(root, &["config", "--local", "core.longpaths", "true"]);
+        }
     }
 
     /// `git worktree prune`, in the repository's turn: a prune beside an add could drop the

@@ -452,13 +452,23 @@ impl Fake {
     }
 }
 
+/// A command line run as the real agents run theirs (hooks, status lines, the Bash tool): `sh -c`
+/// on Unix; on Windows Git Bash, else Windows PowerShell, as Claude Code does (WIN8). With `sh`
+/// here, the fake agent couldn't run a hook on Windows, where no `sh` is on `PATH`.
+fn agent_shell(line: &str) -> std::process::Command {
+    let argv =
+        ptyro_core::shell::ScriptEnv::here(|e| ptyro_core::shell::claude_command_argv(line, e));
+    let mut c = std::process::Command::new(&argv[0]);
+    c.args(&argv[1..]);
+    c
+}
+
 /// Read one key in raw mode (the permission dialog).
 /// Run hook commands with `payload` on stdin; the last JSON line any of them prints.
 fn run_hooks(cmds: &[String], payload: &Value) -> Option<Value> {
     let mut answer = None;
     for c in cmds {
-        if let Ok(mut child) = std::process::Command::new("sh")
-            .args(["-c", c])
+        if let Ok(mut child) = agent_shell(c)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .spawn()
@@ -646,8 +656,7 @@ pub fn main(args: &[String]) -> i32 {
                         "cost": { "total_cost_usd": 0.42 },
                         "context_window": { "used_percentage": 33 }
                     });
-                    if let Ok(mut c) = std::process::Command::new("sh")
-                        .args(["-c", cmd])
+                    if let Ok(mut c) = agent_shell(cmd)
                         .stdin(std::process::Stdio::piped())
                         .stdout(std::process::Stdio::piped())
                         .spawn()
@@ -692,8 +701,7 @@ pub fn main(args: &[String]) -> i32 {
             "sh" => {
                 f.turn(&mut out, &line, |out| {
                     let r = f.tool("Bash", json!({ "command": rest }), || {
-                        std::process::Command::new("sh")
-                            .args(["-c", rest])
+                        agent_shell(rest)
                             .output()
                             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
                             .unwrap_or_default()

@@ -567,3 +567,17 @@ fn worktrees_added_at_once_all_arrive() {
     }
     assert_eq!(f.git.worktree_list(&f.root).unwrap().len(), 41);
 }
+
+#[test]
+fn long_paths_are_turned_on_unless_the_repository_says_otherwise() {
+    let f = fixture();
+    f.git.long_paths(&f.root);
+    assert_eq!(f.git.run(&f.root, &["config", "--get", "core.longpaths"]).unwrap().trim(), "true");
+    f.git.run(&f.root, &["config", "core.longpaths", "false"]).unwrap();
+    f.git.long_paths(&f.root);
+    assert_eq!(
+        f.git.run(&f.root, &["config", "--get", "core.longpaths"]).unwrap().trim(),
+        "false",
+        "the repository's own choice stays"
+    );
+}

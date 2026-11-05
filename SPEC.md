@@ -2079,6 +2079,18 @@ common dir; 2026-10-31). git writes a new worktree's `worktrees/<name>/commondir
 while a concurrent add reads every registered worktree, so a fan-out's parallel adds failed now
 and then with "failed to read .git/worktrees/<name>/commondir" (seen in CI on Linux).
 
+**On Windows (WIN8):** before step 2, ptyro sets `core.longpaths = true` in the repository's own
+config unless it has a value already: Git for Windows checks out a file whose path passes 260
+characters only with it, and a worktree's folder adds to every path. Long paths for other programs
+are Windows' own (`LongPathsEnabled`, off by default; it needs an administrator), so `doctor` (full,
+with a native daemon) warns when a tracked file in a worktree on a Windows drive reaches 230
+characters while it's off, with the command that turns it on and the other fix, a shorter
+`[worktrees] location`. It also says whether the worktrees' drive is a Dev Drive: ReFS, which a
+volume's filesystem says without an administrator (`GetVolumeInformationW`; `fsutil devdrv query`
+needs one), else how to make one and what a Defender exclusion for the folder trades (Defender's
+exclusions can't be read without an administrator, so it only suggests). A WSL daemon's worktrees
+live on ext4 and get neither.
+
 Branch-name templates: `{name}`, `{user}`, `{date}`, `{issue}`, `{slug}`; optional **auto-rename**
 (optional): after the first agent turn, offer a branch name derived from the first prompt
 (`ptyro wt rename-branch`; never automatic once pushed).
