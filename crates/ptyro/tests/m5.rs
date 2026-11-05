@@ -506,7 +506,7 @@ async fn tui_broadcast_and_a_tour_of_its_own() {
     let tour = ptyro_testkit::headless::run(
         w.tui(&["tour"])
             .timeout(30.0)
-            .send_when("Tour 1/5: start a task", "\\x11d")
+            .send_when("Tour 1/6: start a task", "\\x11d")
             .until("the tour is over"),
     )
     .await

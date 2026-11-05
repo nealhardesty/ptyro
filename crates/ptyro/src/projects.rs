@@ -1336,14 +1336,21 @@ fn ask_clean(what: &str) -> Option<Clean> {
     }
 }
 
-pub async fn gc(ctx: &Ctx, dry_run: bool, json: bool) -> Result<i32, Error> {
+pub async fn gc(ctx: &Ctx, dry_run: bool, json: bool, only_scratch: bool) -> Result<i32, Error> {
     let c = ctx.connect(false).await.map_err(no_daemon)?;
     let Reply::Gc { entries, scratch } = c.request(Request::Gc).await? else {
         return Err(Error::internal("unexpected reply"));
     };
+    // `--scratch`: only scratch shells' directories left behind (`--json` too).
+    let entries = if only_scratch { Vec::new() } else { entries };
     if json {
-        // The stale worktrees, as always; scratch leftovers are listed by `ptyro gc` itself.
-        print_json(&entries);
+        // The stale worktrees, as always (scripts read that shape), or with --scratch the
+        // scratch leftovers.
+        if only_scratch {
+            print_json(&scratch);
+        } else {
+            print_json(&entries);
+        }
         return Ok(0);
     }
     if entries.is_empty() && scratch.is_empty() {
@@ -1366,9 +1373,11 @@ pub async fn gc(ctx: &Ctx, dry_run: bool, json: bool) -> Result<i32, Error> {
         eprintln!("{} on disk in all", ptyro_core::model::human_bytes(total));
     }
     for l in &scratch {
+        // Its own name (the shell's id) tells the rows apart; the whole path is long and alike.
+        let name = l.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         println!(
             "{:<28} {:<8} {:>11}  a scratch shell's directory, left behind with {} files in it",
-            truncate(&l.path.display().to_string(), 28),
+            truncate(&format!("scratch/{name}"), 28),
             age(l.modified_ms),
             ptyro_core::model::human_bytes(l.bytes),
             l.files

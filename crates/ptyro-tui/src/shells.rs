@@ -334,11 +334,13 @@ impl App {
         self.alt_seen || self.kitty || !option_types_characters()
     }
 
-    /// What each key press says about Alt: one with Alt proves it reaches ptyro; Option-digit
-    /// arriving as `¡™£…` (Option not set as Meta) is said once, with what to do (SPEC §23.6).
-    /// The character still goes where it was going: it may be meant.
+    /// What each key press says about Alt: Alt with a *digit* proves Alt-digits reach ptyro
+    /// (Option-Left arrives as Alt-b in Terminal.app even without Option as Meta, so any other Alt
+    /// key proves nothing); Option-digit arriving as `¡™£…` is said once, with what to do (SPEC
+    /// §23.6). The character still goes where it was going: it may be meant.
     pub(crate) fn learn_alt(&mut self, key: KeyEvent) {
-        if key.mods.has(Mods::ALT) {
+        let digit = matches!(key.code, KeyCode::Char { c } if c.is_ascii_digit());
+        if key.mods.has(Mods::ALT) && digit {
             if !self.alt_seen {
                 self.alt_seen = true;
                 self.dirty = true;

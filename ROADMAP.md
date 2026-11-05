@@ -3175,7 +3175,8 @@ parity rows, in each task.
   - The health badge finds Alt-digits typed as characters (Terminal.app, iTerm2), says where
     the terminal's setting is, and ⏎ opens `shell.alt_digits`.
   - `ptyro doctor` says the same from a shell.
-  - A key with Alt clears it. Option-digit typing `¡` says so once.
+  - Alt with a digit clears it (any other Alt key proves nothing). Option-digit typing `¡` says
+    so once.
 
   *Done (2026-11-04):* `learn_alt`, `ALT_FINDING`;
   `a_key_with_alt_proves_alt_reaches_and_the_finding_goes`.

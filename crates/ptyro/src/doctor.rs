@@ -139,7 +139,7 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Repor
     scratchpad(ctx, &config, &mut r);
     shell(&config, &mut r);
     if terminal_too {
-        terminal(&mut r).await;
+        terminal(&mut r, &config).await;
         windows_terminal(&config, &mut r);
     }
     git(&mut r).await;
@@ -983,7 +983,7 @@ fn wt_settings_files() -> Vec<std::path::PathBuf> {
     .collect()
 }
 
-pub(crate) async fn terminal(r: &mut Report) {
+pub(crate) async fn terminal(r: &mut Report, config: &Config) {
     const S: &str = "terminal";
     let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
     let term = var("TERM").unwrap_or_else(|| "(unset)".into());
@@ -998,8 +998,11 @@ pub(crate) async fn terminal(r: &mut Report) {
             "COLORTERM doesn't say truecolor; colours may be reduced",
         ),
     }
+    let mut kitty = false;
     if std::io::IsTerminal::is_terminal(&std::io::stdout()) && var("TMUX").is_none() {
-        match crossterm::terminal::supports_keyboard_enhancement() {
+        let answer = crossterm::terminal::supports_keyboard_enhancement();
+        kitty = matches!(answer, Ok(true));
+        match answer {
             Ok(true) => r.add(S, "keys", Level::Ok, "kitty keyboard protocol (Shift+Enter reaches agents)"),
             Ok(false) => r.add(
                 S,
@@ -1011,19 +1014,33 @@ pub(crate) async fn terminal(r: &mut Report) {
         }
     }
     // SHELLS' Alt-1…9 (SPEC §23.6): macOS's own terminals type ¡™£ for Option-digit until
-    // Option is set to act as Meta, which no program can read; `make verify-shells` checks it.
-    match var("TERM_PROGRAM").as_deref() {
-        Some("Apple_Terminal") => r.add(
-            S,
-            "alt keys",
-            Level::Note,
-            "Terminal.app types ¡™£ for Option-digit unless \"Use Option as Meta key\" is on (Settings → Profiles → Keyboard): until then SHELLS' Alt-1…9 don't reach ptyro, and C-q e 1…9 does",
+    // Option is set to act as Meta, which no program can read (`make verify-shells` checks it);
+    // the kitty keyboard protocol reports Alt either way. The menu key is the keymap's own.
+    let menu = ptyro_tui::keymap::Keymap::new(config)
+        .0
+        .key_for("shells.menu")
+        .map_or_else(|| "the palette's shells.menu".to_owned(), |k| format!("{k} 1…9"));
+    let setting = match var("TERM_PROGRAM").as_deref() {
+        Some("Apple_Terminal") => Some(
+            "Terminal.app types ¡™£ for Option-digit unless \"Use Option as Meta key\" is on (Settings → Profiles → Keyboard)",
         ),
-        Some("iTerm.app") => r.add(
+        Some("iTerm.app") => Some(
+            "iTerm2 types ¡™£ for Option-digit unless the left Option key sends Esc+ (Settings → Profiles → Keys)",
+        ),
+        _ => None,
+    };
+    match setting {
+        _ if !config.shell.alt_digits => r.add(
+            S,
+            "alt keys",
+            Level::Ok,
+            format!("Alt-1…9 are switched off ([shell] alt_digits): {menu} shows your shells"),
+        ),
+        Some(why) if !kitty => r.add(
             S,
             "alt keys",
             Level::Note,
-            "iTerm2 types ¡™£ for Option-digit unless the left Option key sends Esc+ (Settings → Profiles → Keys): until then SHELLS' Alt-1…9 don't reach ptyro, and C-q e 1…9 does",
+            format!("{why}: until then SHELLS' Alt-1…9 don't reach ptyro, and {menu} does"),
         ),
         _ => r.add(S, "alt keys", Level::Ok, "Alt-1…9 reach ptyro (SHELLS)"),
     }

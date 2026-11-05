@@ -7949,22 +7949,29 @@ agent installed:
     clipped to what shows): a number shows that shell (one lost in a restart starts again), and
     `＋` starts one in that workspace.
   - **Leftover scratch directories** (`Reply::Gc.scratch`, `ScratchLeftover {path, files, bytes,
-    modified_ms}`): a directory in `<data>/scratch/` that no session uses. `ShellScratchRemove{path}`
+    modified_ms}`): a directory in `<data>/scratch/` that no session uses. "Uses" means its shelf's
+    scratch directory, where it started, or where it is now, so a scratch shell adopted into a
+    worktree still holds it. A directory still being made for a starting shell (`STARTING`) is
+    held too. An empty one is simply removed instead of listed. Sizes are measured at most every
+    half hour, for three seconds at most, counting files only. `ShellScratchRemove{path}`
     (`full`) deletes one, only directly in `scratch/` and never one in use. They are shown by:
     - `ptyro gc`, which lists them after the worktrees and asks `d` for each (`--json` is still
-      the worktrees only);
+      the worktrees; `--scratch [--json]` the leftovers alone);
     - the TUI's `G` list, where ⏎ deletes one after a yes;
     - the web's Clean up page ("Left behind by scratch shells", Delete asks);
     - `ptyro doctor`, which notes how many (`shells scratch`).
   - **Option-as-Meta:**
-    - A key with Alt proves Alt reaches ptyro (`App.alt_seen`). Hints then say `M-1…9`, and the
-      finding goes.
+    - Alt with a digit proves Alt reaches ptyro (`App.alt_seen`). Hints then say `M-1…9`, and
+      the finding goes. Any other Alt key proves nothing: Terminal.app sends Option-Left as
+      Alt-b even without Option as Meta.
     - Option-digit arriving as `º¡™£¢∞§¶•ª` while Alt hasn't been seen is said once, as a toast
       naming the terminal's setting. The character still goes to the program.
     - The health badge's finding `shells alt keys` (Terminal.app and iTerm2 without the kitty
       protocol) says where the setting lives, and ⏎ opens `shell.alt_digits` for anyone who'd
       rather free the keys. ptyro never edits the terminal's own settings.
-    - `ptyro doctor`'s `terminal alt keys` says the same from a shell.
+    - `ptyro doctor`'s `terminal alt keys` says the same from a shell. It names the shells menu as
+      the keymap binds it, says nothing is wrong when `alt_digits` is off, and trusts the kitty
+      keyboard protocol.
   - **The tour's sixth stop**, "keep a shell of your own" (TUI and web), moves on once a shell is
     in SHELLS. The headless tour test presses Alt-1 there.
 

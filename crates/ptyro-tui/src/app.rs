@@ -6330,7 +6330,8 @@ impl App {
             return;
         }
         // A number on a shell's header strip shows that shell; its `＋` starts one.
-        if matches!(m.kind, K::Down(_)) && self.strip_click(x, y) {
+        if matches!(m.kind, K::Down(crossterm::event::MouseButton::Left)) && self.strip_click(x, y)
+        {
             return;
         }
         // Dragging a divider or a selection continues wherever the mouse goes.
@@ -11218,7 +11219,10 @@ mod tests {
             fix: None,
         });
         assert!(!app.alt_seen);
+        // Alt-b (Option-Left in Terminal.app, with or without Option as Meta) proves nothing.
         app.learn_alt(KeyEvent::new(KeyCode::Char { c: 'b' }, Mods(Mods::ALT)));
+        assert!(!app.alt_seen && app.health.findings.len() == 1);
+        app.learn_alt(KeyEvent::new(KeyCode::Char { c: '3' }, Mods(Mods::ALT)));
         assert!(app.alt_seen && app.alt_digits_reach());
         assert!(app.health.findings.is_empty(), "it works after all: no finding");
     }

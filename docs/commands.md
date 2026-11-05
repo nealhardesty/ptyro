@@ -136,7 +136,7 @@ Conventions:
 | `ptyro wt finish [W] [--integrate]` | commit what's left (its agent asked to; else its title is the message), then a PR, or integrate |
 | `ptyro wt archive [W] [--stop-sessions]` / `restore [P/]NAME` / `archives [-p P] [--json]` | keep its branch and a snapshot of its files, remove the checkout (never loses work) / bring it back as it was / list them |
 | `ptyro wt archive-rm [P/]NAME… [-y]` | delete archives for good: the saved files, and each branch if merged or pushed (asks unless `-y`); `[worktrees] archive_purge_days` does it on its own |
-| `ptyro gc [--dry-run] [--json]` | stale worktrees (gone, merged, unused; locked ones are kept), biggest on disk first; asks for each: archive, remove, keep (lock) or skip. Then scratch shells' directories left behind with files in them: `d` deletes one (`--json` lists the worktrees only) |
+| `ptyro gc [--dry-run] [--json] [--scratch]` | stale worktrees (gone, merged, unused; locked ones are kept), biggest on disk first; asks for each: archive, remove, keep (lock) or skip. Then scratch shells' directories left behind with files in them: `d` deletes one. `--json` lists the worktrees; `--scratch` only the scratch leftovers (`--scratch --json`: those as JSON) |
 | `ptyro ws ls\|new\|set\|rm\|rename\|add\|remove …` | workspaces: `new NAME [--profile P] [--notify all\|badge\|mute]`, `add WS PROJECT` |
 | `ptyro profile ls\|show\|new\|rm\|rename\|env\|login\|sync\|detect\|doctor …` | profiles; `detect [--apply]` finds your existing multi-account setups; edits keep your config's comments |
 
