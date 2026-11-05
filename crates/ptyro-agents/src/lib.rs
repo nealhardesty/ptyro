@@ -88,10 +88,14 @@ pub fn adapter(id: &str) -> Box<dyn Adapter> {
 
 /// The adapter of the agent `program` (a process name, `claude`) runs, when it is one: a
 /// configured agent's command, else a built-in's (UX1.4: an agent started by hand in a shell).
+/// On Windows a name is matched without case or `.exe`, and an npm package's folder names its
+/// command (`claude-code`, as WIN7 names `node …\claude-code\cli.js`).
 pub fn adapter_for_program(config: &Config, program: &str) -> Option<String> {
-    let base = |p: &str| p.rsplit('/').next().unwrap_or(p).to_owned();
+    let program = program_stem(program, cfg!(windows));
+    let program = locate::program_of_package(&program).map_or(program, str::to_owned);
     let configured = names(config).into_iter().find(|a| {
-        command(config, a).and_then(|c| c.first().map(|p| base(p))).as_deref() == Some(program)
+        command(config, a).and_then(|c| c.first().map(|p| program_stem(p, cfg!(windows))))
+            == Some(program.clone())
     });
     let builtin = || BUILTIN.iter().find(|(_, p)| *p == program).map(|(n, _)| (*n).to_owned());
     configured
@@ -99,6 +103,21 @@ pub fn adapter_for_program(config: &Config, program: &str) -> Option<String> {
         .filter(|a| a != "generic")
         .or_else(|| builtin().map(|n| adapter_name(config, &n)))
         .filter(|a| a != "generic")
+}
+
+/// A program as a name to compare: its file name; on Windows (`windows`) without a runnable
+/// extension and lowercase, as Windows ignores case (`C:\Tools\MyAgent.EXE` is `myagent`).
+fn program_stem(p: &str, windows: bool) -> String {
+    let seps: &[char] = if windows { &['/', '\\'] } else { &['/'] };
+    let base = p.rsplit(seps).next().unwrap_or(p);
+    if !windows {
+        return base.to_owned();
+    }
+    let lower = base.to_ascii_lowercase();
+    [".exe", ".cmd", ".bat", ".com"]
+        .iter()
+        .find_map(|e| lower.strip_suffix(e))
+        .map_or(lower.clone(), str::to_owned)
 }
 
 /// Every agent name: built-ins, then configured ones.
@@ -186,6 +205,19 @@ mod tests {
             toml::from_str("command = [\"/opt/bin/my-agent\"]\nadapter = \"codex\"").unwrap(),
         );
         assert_eq!(super::adapter_for_program(&config, "my-agent").as_deref(), Some("codex"));
+        // An npm package's folder names its command: `node …\claude-code\cli.js` is Claude.
+        assert_eq!(super::adapter_for_program(&config, "claude-code").as_deref(), Some("claude"));
+        assert_eq!(super::adapter_for_program(&config, "gemini-cli").as_deref(), Some("gemini"));
+    }
+
+    #[test]
+    fn windows_names_ignore_case_and_extensions() {
+        use super::program_stem;
+        assert_eq!(program_stem(r"C:\Tools\MyAgent.EXE", true), "myagent");
+        assert_eq!(program_stem("codex.cmd", true), "codex");
+        assert_eq!(program_stem("claude", true), "claude");
+        assert_eq!(program_stem("/opt/bin/My-Agent", false), "My-Agent", "Unix keeps case");
+        assert_eq!(program_stem("tool.exe", false), "tool.exe");
     }
 
     use super::*;

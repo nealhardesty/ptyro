@@ -1754,8 +1754,10 @@ runs), so a restart integrates afresh:
 
 **[built UX1.4] An agent started by hand in a shell session.** Once a second, a live `shell`
 session's foreground process is matched against the agents (a configured agent's command, else
-a built-in's program: `claude`, `codex`, `gemini`, `opencode`, `agy`). While one is in the
-foreground:
+a built-in's program: `claude`, `codex`, `gemini`, `opencode`, `agy`). On Windows a name matches
+without case or a runnable extension (`C:\Tools\MyAgent.EXE` is `myagent`), and an npm package's
+folder names its command (`claude-code`, as WIN7 names `node …\claude-code\cli.js`; WIN8). While
+one is in the foreground:
 - `SessionInfo.inner_agent` names its adapter, and the TUI reads `zsh › claude ◌`; the session
   isn't renamed.
 - What the shell said no longer holds (OSC 133 `C` was one long "working"): the engine forgets
@@ -7121,7 +7123,17 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   beside it when none is on `PATH`; ptyro never downloads one. Sessions, chats, `doctor`
   (where, and how: `(nvm)`, `(npx cache)` with a note to `npm i -g`), `AgentChoice.found` (web and
   TUI agent pickers) and the first-run screen use it; "No agent found" and an asked-for agent that
-  isn't installed offer the install command. **Not built:** an `@` completion of the folders' files
+  isn't installed offer the install command. **On Windows (WIN8):** a program is found by
+  `PATHEXT` (`claude.exe`, `codex.cmd`; never npm's extensionless `sh` shim beside the `.cmd`),
+  with `%USERPROFILE%` as the home when `HOME` isn't set, in the npm prefix (the prefix itself, not
+  `bin`), `%APPDATA%\npm`, `~\.local\bin` (Claude's native installer), WinGet's `Links`, Scoop's
+  `shims`, `%NVM_SYMLINK%` (nvm-windows), `~\.bun\bin` and `npx`'s cache under
+  `%LOCALAPPDATA%\npm-cache\_npx`. An npm `.cmd` shim is read and what it starts runs instead: its
+  last quoted `"%dp0%\…"`, inside its folder only, a `.js` with `node` (the shim's own `node.exe`
+  first, as cmd-shim picks), anything else as it is. Through the shim, `cmd.exe` would stand
+  between ptyro and the agent, ask "Terminate batch job (Y/N)?" at Ctrl+C, and be the session's
+  program. A shim that can't be read runs as itself (WIN5 wraps it in `cmd.exe /d /c`). Claude's
+  install hint is `irm https://claude.ai/install.ps1 | iex` there. **Not built:** an `@` completion of the folders' files
   in the composer; agent-sent titles (no agent of the four sends one: §20.8); MCP for OpenCode chats
   (its server takes MCP servers per server instance, `POST /mcp`, and it isn't installed here to
   try; its permission rules for `<server>_*` are written [S]).
