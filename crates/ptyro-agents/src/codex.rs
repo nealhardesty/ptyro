@@ -296,7 +296,7 @@ impl Adapter for Codex {
         if let Some(s) = self.on_screen(screen) {
             return Some(s);
         }
-        // [unverified] Its approval overlay and its working line.
+        // Its approval overlay (0.166's wording, seen on Windows 2026-11-05) and its working line.
         if screen.contains("Would you like to run the following command?")
             || screen.contains("Would you like to make the following edits?")
         {
@@ -327,12 +327,28 @@ impl Adapter for Codex {
     }
 
     fn answer(&self, d: Decision) -> Option<Vec<u8>> {
-        // [unverified] The approval overlay: y yes · a always · Esc no.
+        // The approval overlay: y yes · a always (before 0.166) · Esc no.
         Some(match d {
             Decision::Allow => b"y".to_vec(),
             Decision::Always => b"a".to_vec(),
             Decision::Deny => b"\x1b".to_vec(),
         })
+    }
+
+    fn answer_screen(&self, screen: &str, d: Decision) -> Option<Vec<u8>> {
+        // Its trust question: "1. Trust and continue" is preselected, Esc quits.
+        if trust_dialog(screen) {
+            return Some(match d {
+                Decision::Allow | Decision::Always => b"\r".to_vec(),
+                Decision::Deny => b"\x1b".to_vec(),
+            });
+        }
+        // 0.166's overlay says its keys: "Yes, proceed (y)", "Yes, and don't ask again … (p)",
+        // "No, … (esc)" (seen on Windows, 2026-11-05).
+        if d == Decision::Always && screen.contains("(p)") {
+            return Some(b"p".to_vec());
+        }
+        self.answer(d)
     }
 
     fn stop(&self) -> Vec<StopStep> {
@@ -349,6 +365,25 @@ impl Adapter for Codex {
 mod tests {
     use super::*;
     use ptyro_core::config::AgentDef;
+
+    /// Codex 0.166's approval overlay and trust question, as drawn on Windows (2026-11-05).
+    #[test]
+    fn answers_take_the_keys_the_screen_shows() {
+        let overlay = "  Would you like to run the following command?\n  Environment: local\n  $ echo hi\n\
+            › 1. Yes, proceed (y)\n  2. Yes, and don't ask again for commands that start with `echo hi` (p)\n\
+            3. No, and tell Codex what to do differently (esc)\n  Press enter to confirm or esc to cancel";
+        assert_eq!(Codex.answer_screen(overlay, Decision::Allow).unwrap(), b"y");
+        assert_eq!(Codex.answer_screen(overlay, Decision::Always).unwrap(), b"p");
+        assert_eq!(Codex.answer_screen(overlay, Decision::Deny).unwrap(), b"\x1b");
+        assert_eq!(
+            Codex.answer_screen("Would you like to run", Decision::Always).unwrap(),
+            b"a",
+            "before 0.166"
+        );
+        let trust = "  Trust this folder? Codex can read …\n› 1. Trust and continue\n  2. Quit";
+        assert_eq!(Codex.answer_screen(trust, Decision::Allow).unwrap(), b"\r");
+        assert_eq!(Codex.answer_screen(trust, Decision::Deny).unwrap(), b"\x1b");
+    }
 
     /// As Codex 0.166 drew it on Windows with the Enter lost: the prompt still in the composer.
     #[test]
