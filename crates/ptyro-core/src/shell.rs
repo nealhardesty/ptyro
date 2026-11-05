@@ -345,6 +345,29 @@ pub fn git_bash(env: &ScriptEnv<'_>) -> Option<PathBuf> {
     })
 }
 
+/// How Claude Code runs a status line's (or a hook's) command, so ptyro runs the user's own the
+/// same way: `sh -c` on Unix; on Windows in Git Bash (`CLAUDE_CODE_GIT_BASH_PATH`, else where
+/// Git for Windows puts it), else in Windows PowerShell [S: Claude's status line and hooks docs,
+/// 2026-11-04] (WIN8).
+pub fn claude_command_argv(line: &str, env: &ScriptEnv<'_>) -> Vec<String> {
+    if !env.windows {
+        return command_argv("sh", line);
+    }
+    let set =
+        (env.var)("CLAUDE_CODE_GIT_BASH_PATH").map(PathBuf::from).filter(|p| (env.is_file)(p));
+    if let Some(bash) = set.or_else(|| git_bash(env)) {
+        return command_argv(&bash.to_string_lossy(), line);
+    }
+    let ps = (env.on_path)("powershell").map_or_else(
+        || {
+            let root = (env.var)("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
+            format!(r"{root}\System32\WindowsPowerShell\v1.0\powershell.exe")
+        },
+        |p| p.to_string_lossy().into_owned(),
+    );
+    command_argv(&ps, line)
+}
+
 /// The argv that opens `path` in `editor`, a command line such as `$VISUAL` (`code --wait`,
 /// `vim +12`): on Unix `sh -c '<editor> "$1"' sh <path>`, so the path is never parsed by the
 /// shell; on Windows the default shell, with the path quoted for it.
@@ -781,6 +804,33 @@ mod tests {
                 script_argv(Cmd, "dir", false, e).unwrap_err().message.contains("Windows only")
             );
         });
+    }
+
+    #[test]
+    fn a_claude_status_line_runs_where_claude_would_run_it() {
+        let gb = r"C:\Program Files\Git\bin\bash.exe";
+        windows_env(true, true, |e| {
+            assert_eq!(claude_command_argv("~/sl.sh", e), v(&[gb, "-c", "~/sl.sh"]));
+        });
+        // Without Git Bash: Windows PowerShell, never PowerShell 7 or WSL's bash.
+        windows_env(false, true, |e| {
+            assert_eq!(
+                claude_command_argv("node C:/sl.mjs", e),
+                v(&[
+                    r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                    "-NoProfile",
+                    "-Command",
+                    "node C:/sl.mjs"
+                ])
+            );
+        });
+        // The Git Bash a user points Claude at wins.
+        let var =
+            |k: &str| (k == "CLAUDE_CODE_GIT_BASH_PATH").then(|| r"D:\Git\bin\bash.exe".to_owned());
+        let is_file = |p: &Path| p == Path::new(r"D:\Git\bin\bash.exe");
+        let e = ScriptEnv { windows: true, var: &var, is_file: &is_file, on_path: &|_| None };
+        assert_eq!(claude_command_argv("x", &e)[0], r"D:\Git\bin\bash.exe");
+        unix_env(|e| assert_eq!(claude_command_argv("x", e), v(&["sh", "-c", "x"])));
     }
 
     #[test]

@@ -196,10 +196,12 @@ pub fn statusline() -> i32 {
         );
     }
     if let Some(cmd) = user_statusline(&payload) {
-        // Not the platform's shell: Claude Code runs a status line through bash everywhere (Git
-        // Bash on Windows), so the command is bash's (WIN8).
-        let child = std::process::Command::new("sh")
-            .args(["-c", &cmd])
+        // Where Claude Code itself would run it: `sh` on Unix; Git Bash, else PowerShell, on
+        // Windows (WIN8).
+        let argv =
+            ptyro_core::shell::ScriptEnv::here(|e| ptyro_core::shell::claude_command_argv(&cmd, e));
+        let child = std::process::Command::new(&argv[0])
+            .args(&argv[1..])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())

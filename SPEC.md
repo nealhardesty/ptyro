@@ -1467,7 +1467,10 @@ Verified against Claude Code **2.1.304** (§20).
     `idle_prompt`. Other notifications go to the inbox.
 - **Statusline relay:** `ptyro statusline-relay` forwards Claude's statusline JSON to the daemon
   (usage meters, §9.7) and runs the user's own `statusLine` command from the profile's
-  `settings.json`, printing its output, so the user's statusline is unchanged.
+  `settings.json`, printing its output, so the user's statusline is unchanged. It runs that
+  command where Claude would (`shell::claude_command_argv`): `sh -c` on Unix; on Windows in Git
+  Bash (`CLAUDE_CODE_GIT_BASH_PATH`, else where Git for Windows puts it), else in Windows
+  PowerShell (WIN8).
 - **Prompt delivery (changed from the proposal):**
   - Wait for a reliable `Idle` (hook or 7501), or for `ready(screen)` (the `❯` input box with
     no dialog on screen). Never type while `Blocked`; give up after 120 s with a "couldn't
