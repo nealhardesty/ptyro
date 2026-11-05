@@ -6801,8 +6801,9 @@ Windows) wasn't needed to get the list below: compile errors are the same either
   polling git). `CREATE_NO_WINDOW` gives the daemon a console with no window, and its children
   inherit it. `ptyro_core::os::detach` uses it; its test runs itself detached and asks
   `GetConsoleProcessList` (no console under `DETACHED_PROCESS`, one with `CREATE_NO_WINDOW`) and
-  `GetConsoleWindow`. Smart App Control refused the rebuilt test binary here after running the
-  first build, so the passing run is CI's. [V for the windows and the missing console]
+  `GetConsoleWindow`. It failed under `DETACHED_PROCESS` and passes with `CREATE_NO_WINDOW` on
+  Windows 11 (2026-11-05; Smart App Control refused one rebuild of the test binary the day before,
+  then let a later one run). [V]
 - **No one quoting suits every Windows shell.** An agent runs a hook or status line `command` in
   a shell: Claude in Git Bash when it finds one, else PowerShell (its `shell` field, `"bash"` or
   `"powershell"`, picks; a `statusLine` has none) [S, Claude's hooks and status line docs,
