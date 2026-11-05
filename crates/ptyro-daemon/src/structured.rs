@@ -76,36 +76,74 @@ mod pipes {
     pub fn numbers(k: &Kept) -> [i32; 3] {
         [k[0].as_raw_fd(), k[1].as_raw_fd(), k[2].as_raw_fd()]
     }
+
+    /// Nothing to stop: an async pipe's read that's dropped reads nothing.
+    #[allow(clippy::unnecessary_wraps)]
+    pub fn quiesce(_out: &mut Out) -> io::Result<Vec<u8>> {
+        Ok(Vec::new())
+    }
+
+    pub fn unquiesce(_out: &Out) {}
 }
 
-/// Windows: the child's own pipes; nothing is carried over until its live upgrade (WIN9).
+/// Windows: plain anonymous pipes, made here (std's are overlapped, which a blocking read can't
+/// drive), read on a thread a handover can stop (`winread`, WIN9). A handover copies their
+/// handles into the next daemon, which takes them by value.
 #[cfg(windows)]
 mod pipes {
     use std::io;
+    use std::os::windows::io::AsRawHandle;
 
-    pub type In = tokio::process::ChildStdin;
-    pub type Out = tokio::process::ChildStdout;
-    pub type ErrOut = tokio::process::ChildStderr;
-    pub type Kept = std::convert::Infallible;
+    pub type In = tokio::fs::File;
+    pub type Out = ptyro_pty::winread::PipeReader;
+    pub type ErrOut = ptyro_pty::winread::PipeReader;
+    /// The three pipes' handles, by value (`In`, `Out` and `ErrOut` own them), for a handover.
+    pub type Kept = [usize; 3];
 
-    pub fn from_child(
-        c: &mut tokio::process::Child,
-    ) -> io::Result<(In, Out, ErrOut, Option<Kept>)> {
-        let missing = |what| io::Error::other(format!("no {what}"));
-        Ok((
-            c.stdin.take().ok_or_else(|| missing("stdin"))?,
-            c.stdout.take().ok_or_else(|| missing("stdout"))?,
-            c.stderr.take().ok_or_else(|| missing("stderr"))?,
-            None,
-        ))
+    /// The child's ends (stdin, stdout, stderr), for its `Stdio`, and ours.
+    #[allow(clippy::type_complexity)]
+    pub fn for_child() -> io::Result<([std::fs::File; 3], (In, Out, ErrOut, Option<Kept>))> {
+        let (in_r, in_w) = ptyro_pty::anon_pipe()?;
+        let (out_r, out_w) = ptyro_pty::anon_pipe()?;
+        let (err_r, err_w) = ptyro_pty::anon_pipe()?;
+        let kept = [
+            in_w.as_raw_handle() as usize,
+            out_r.as_raw_handle() as usize,
+            err_r.as_raw_handle() as usize,
+        ];
+        let ours = (
+            tokio::fs::File::from_std(in_w),
+            ptyro_pty::winread::PipeReader::new(out_r, "agent-stdout")?,
+            ptyro_pty::winread::PipeReader::new(err_r, "agent-stderr")?,
+            Some(kept),
+        );
+        Ok(([in_r, out_w, err_w], ours))
     }
 
-    pub fn adopt(_fds: [i32; 3]) -> io::Result<(In, Out, ErrOut, Option<Kept>)> {
-        Err(io::Error::new(io::ErrorKind::Unsupported, "nothing is handed over on Windows yet"))
+    /// The previous daemon's pipes, by the values it copied into this process.
+    pub fn adopt(fds: [i32; 3]) -> io::Result<(In, Out, ErrOut, Option<Kept>)> {
+        let [i, o, e] = fds.map(|h| h as u32 as usize);
+        let input = ptyro_pty::adopt_pipe(i)?;
+        let out = ptyro_pty::winread::adopt(o, "agent-stdout")?;
+        let err = ptyro_pty::winread::adopt(e, "agent-stderr")?;
+        Ok((tokio::fs::File::from_std(input), out, err, Some([i, o, e])))
     }
 
+    /// The values a handover writes: handle values fit in 32 bits (Windows keeps them so, for
+    /// 32-bit programs).
     pub fn numbers(k: &Kept) -> [i32; 3] {
-        match *k {}
+        k.map(|h| h as i32)
+    }
+
+    /// Stop reading for a handover, and what was read but not yet taken.
+    pub fn quiesce(out: &mut Out) -> io::Result<Vec<u8>> {
+        tokio::task::block_in_place(|| out.pause())?;
+        Ok(out.take_pending())
+    }
+
+    /// Read again (a handover that was called off).
+    pub fn unquiesce(out: &Out) {
+        out.resume();
     }
 }
 
@@ -415,16 +453,26 @@ pub fn spawn_child(
 ) -> std::io::Result<(ptyro_pty::Child, Resume)> {
     let (exe, args) = s.argv.split_first().ok_or_else(|| std::io::Error::other("no command"))?;
     let mut cmd = tokio::process::Command::new(exe);
-    cmd.args(args)
-        .current_dir(&s.cwd)
-        .env_clear()
-        .envs(s.env.iter().map(|(k, v)| (k, v)))
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
+    cmd.args(args).current_dir(&s.cwd).env_clear().envs(s.env.iter().map(|(k, v)| (k, v)));
     ptyro_pty::own_group(&mut cmd);
-    let mut child = cmd.spawn()?;
-    let (stdin, stdout, stderr, kept) = pipes::from_child(&mut child)?;
+    #[cfg(unix)]
+    let (child, (stdin, stdout, stderr, kept)) = {
+        cmd.stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = cmd.spawn()?;
+        let p = pipes::from_child(&mut child)?;
+        (child, p)
+    };
+    #[cfg(windows)]
+    let (child, (stdin, stdout, stderr, kept)) = {
+        let ([i, o, e], ours) = pipes::for_child()?;
+        cmd.stdin(i).stdout(o).stderr(e);
+        let child = cmd.spawn()?;
+        // Our copies of the child's ends close with `cmd`, so its output ends when it exits.
+        drop(cmd);
+        (child, ours)
+    };
     *st.fds.locked() = kept;
     Ok((
         ptyro_pty::contain(child)?,
@@ -488,11 +536,17 @@ async fn driver_loop(session: Arc<Session>, st: Arc<Structured>, r: Resume) {
     let mut chunk = vec![0u8; 64 * 1024];
     loop {
         if *pause.borrow_and_update() {
+            // Windows: the reader's thread stops, and what it read joins the buffer (WIN9).
+            match pipes::quiesce(&mut stdout) {
+                Ok(rest) => buf.extend_from_slice(&rest),
+                Err(e) => tracing::warn!(session = %session.id, "pausing the agent's output: {e}"),
+            }
             *st.parked.locked() = Some((driver.save(), buf.clone()));
             io.parked.fetch_add(1, Ordering::SeqCst);
             let _ = pause.wait_for(|p| !*p).await;
             io.parked.fetch_sub(1, Ordering::SeqCst);
             *st.parked.locked() = None;
+            pipes::unquiesce(&stdout);
         }
         // Whole lines only; a partial one waits for the rest.
         while let Some(i) = buf.iter().position(|b| *b == b'\n') {

@@ -11,7 +11,7 @@
 #![allow(unsafe_code)] // Win32 calls; each block says what it relies on.
 
 use std::io::{self, Read};
-use std::os::windows::io::{AsRawHandle, FromRawHandle};
+use std::os::windows::io::AsRawHandle;
 use std::pin::Pin;
 use std::sync::{Arc, Condvar, Mutex};
 use std::task::{Context, Poll};
@@ -193,20 +193,16 @@ impl tokio::io::AsyncRead for PipeReader {
     }
 }
 
-/// A pipe's read end from a handle a handover gave this process (ours alone from here).
-///
-/// # Safety
-/// `h` must be an open handle to a pipe's read end that nothing else in this process owns.
-pub unsafe fn from_handle(h: HANDLE, name: &str) -> io::Result<PipeReader> {
-    // SAFETY: the caller hands us `h` to own.
-    let file = unsafe { std::fs::File::from_raw_handle(h) };
-    PipeReader::new(file, name)
+/// A pipe's read end a handover gave this process, by its value (checked to be an open pipe).
+pub fn adopt(h: usize, name: &str) -> io::Result<PipeReader> {
+    PipeReader::new(crate::windows::adopt_pipe(h)?, name)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::os::windows::io::FromRawHandle;
     use tokio::io::AsyncReadExt;
 
     fn pipe() -> (std::fs::File, std::fs::File) {

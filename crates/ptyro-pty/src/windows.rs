@@ -714,23 +714,7 @@ pub fn duplicate_into(next: &std::process::Child, h: &Handles) -> io::Result<Han
 
 /// [`duplicate_into`] the process `process` (a handle with PROCESS_DUP_HANDLE).
 fn duplicate_to(process: HANDLE, h: &Handles) -> io::Result<Handles> {
-    let dup = |src: usize| -> io::Result<usize> {
-        let mut t: HANDLE = std::ptr::null_mut();
-        // SAFETY: `src` is open in this process (the session holds it); `process` is our child's
-        // handle, which has every access, PROCESS_DUP_HANDLE among them.
-        let ok = unsafe {
-            DuplicateHandle(
-                GetCurrentProcess(),
-                src as HANDLE,
-                process,
-                &mut t,
-                0,
-                0,
-                DUPLICATE_SAME_ACCESS,
-            )
-        };
-        if ok == 0 { Err(last_error("DuplicateHandle")) } else { Ok(t as usize) }
-    };
+    let dup = |src: usize| dup_one(process, src);
     let [a, b, c] = h.console;
     Ok(Handles {
         input: dup(h.input)?,
@@ -741,14 +725,64 @@ fn duplicate_to(process: HANDLE, h: &Handles) -> io::Result<Handles> {
     })
 }
 
+/// One handle of ours, copied into `process`: its value there.
+fn dup_one(process: HANDLE, src: usize) -> io::Result<usize> {
+    let mut t: HANDLE = std::ptr::null_mut();
+    // SAFETY: `src` is open in this process (its owner holds it); `process` has
+    // PROCESS_DUP_HANDLE (our child's handle has every access, or our own pseudo-handle).
+    let ok = unsafe {
+        DuplicateHandle(
+            GetCurrentProcess(),
+            src as HANDLE,
+            process,
+            &mut t,
+            0,
+            0,
+            DUPLICATE_SAME_ACCESS,
+        )
+    };
+    if ok == 0 { Err(last_error("DuplicateHandle")) } else { Ok(t as usize) }
+}
+
+/// A handle value a previous daemon wrote into its image, checked before we own it: open in
+/// this process (`GetHandleInformation`), and when `pipe`, a pipe. The image is the previous
+/// daemon's, in our private state folder; this keeps a stale or garbled one from making us
+/// close or use a handle that is something else here.
+fn image_handle(h: usize, pipe: bool) -> io::Result<HANDLE> {
+    use windows_sys::Win32::Foundation::GetHandleInformation;
+    use windows_sys::Win32::Storage::FileSystem::{FILE_TYPE_PIPE, GetFileType};
+    let raw = h as HANDLE;
+    let mut flags = 0u32;
+    // SAFETY: asking about a handle value only reads.
+    if h == 0 || unsafe { GetHandleInformation(raw, &mut flags) } == 0 {
+        return Err(io::Error::other(format!("handle {h:#x} isn't open here")));
+    }
+    // SAFETY: as above.
+    if pipe && unsafe { GetFileType(raw) } != FILE_TYPE_PIPE {
+        return Err(io::Error::other(format!("handle {h:#x} isn't a pipe")));
+    }
+    Ok(raw)
+}
+
+/// A pipe handle a previous daemon copied into this process, as a file we own.
+pub fn adopt_pipe(h: usize) -> io::Result<std::fs::File> {
+    let raw = image_handle(h, true)?;
+    // SAFETY: open here and a pipe (checked); the handover gave it to us alone.
+    Ok(unsafe { std::fs::File::from_raw_handle(raw) })
+}
+
 /// A session a previous daemon handed over: its console, rebuilt from the three handles, its
-/// program and job, and its pipes, read and written from here on.
-///
-/// # Safety
-/// Every handle in `h` must be open in this process and owned by nothing else here: the previous
-/// daemon copied them in for this ([`duplicate_into`]).
-pub unsafe fn adopt(h: Handles, pid: u32) -> io::Result<PtyChild> {
+/// program and job, and its pipes, read and written from here on. Every handle is checked to
+/// be open here first ([`image_handle`]); the previous daemon copied them in for us alone
+/// ([`duplicate_into`]).
+pub fn adopt(h: Handles, pid: u32) -> io::Result<PtyChild> {
     use windows_sys::Win32::System::Memory::{GetProcessHeap, HeapAlloc};
+    for (v, pipe) in [(h.input, true), (h.output, true), (h.process, false), (h.job, false)]
+        .into_iter()
+        .chain(h.console.map(|c| (c, false)))
+    {
+        image_handle(v, pipe)?;
+    }
     // Our own HPCON from the three handles, on the process heap: ClosePseudoConsole frees it.
     // SAFETY: an allocation the size of the struct, filled before it is used.
     let hpc = unsafe {
@@ -761,7 +795,8 @@ pub unsafe fn adopt(h: Handles, pid: u32) -> io::Result<PtyChild> {
         p as HPCON
     };
     let pty = Arc::new(Pty { hpc: Mutex::new(Some(hpc)), api: conpty().api });
-    // SAFETY: each handle is ours alone from here (the caller's promise), given to one owner.
+    // SAFETY: each handle is open here (checked above) and ours alone (the handover's), given to
+    // one owner.
     let (input, output) = unsafe {
         (
             std::fs::File::from_raw_handle(h.input as HANDLE),
@@ -785,6 +820,46 @@ pub unsafe fn adopt(h: Handles, pid: u32) -> io::Result<PtyChild> {
         writer: Writer { file: tokio::fs::File::from_std(input), pty: pty.clone(), pending: None },
         master: Master { _pty: pty, pid },
     })
+}
+
+/// A program on pipes (a structured agent): its process and job, by value, for a handover.
+pub fn program_handles(pid: u32) -> Option<[usize; 2]> {
+    let p = proc_of(pid)?;
+    Some([p.process.0 as usize, p.job.0 as usize])
+}
+
+/// Copy handles (by value) into `next`, the daemon started for the handover: their values
+/// there, in the same order.
+pub fn duplicate_raw_into(next: &std::process::Child, hs: &[usize]) -> io::Result<Vec<usize>> {
+    let process = std::os::windows::io::AsRawHandle::as_raw_handle(next) as HANDLE;
+    hs.iter().map(|&h| dup_one(process, h)).collect()
+}
+
+/// A program on pipes a previous daemon handed over: its process and job are ours from here
+/// (each checked to be open here first).
+pub fn adopt_program(pid: u32, process: usize, job: usize) -> io::Result<Child> {
+    let proc = Arc::new(Proc {
+        process: Owned(image_handle(process, false)?),
+        job: Owned(image_handle(job, false)?),
+        pty: None,
+        input: None,
+        output: 0,
+    });
+    procs().locked().insert(pid, proc.clone());
+    Ok(Child { pid, proc })
+}
+
+/// An anonymous pipe, (read end, write end), neither inheritable: a program on pipes gets its
+/// end through `Stdio`, which copies it for the child. Plain anonymous pipes (not std's
+/// overlapped ones) so [`PipeReader`](crate::winread::PipeReader) reads them and a handover can
+/// stop it.
+pub fn anon_pipe() -> io::Result<(std::fs::File, std::fs::File)> {
+    let (r, w) = pipe()?;
+    // SAFETY: each handle is ours alone, given to one File.
+    let files =
+        unsafe { (std::fs::File::from_raw_handle(r.0), std::fs::File::from_raw_handle(w.0)) };
+    std::mem::forget((r, w));
+    Ok(files)
 }
 
 /// A session's program's exit code, once it has exited (a handed-over one's, for the reaper);
@@ -993,8 +1068,7 @@ mod tests {
         let pid = c.pid;
         // The old daemon is gone without closing anything: forget what it held.
         std::mem::forget(c);
-        // SAFETY: `dup` was copied into this process for this, and nothing else owns it.
-        let mut n = unsafe { adopt(dup, pid) }.unwrap();
+        let mut n = adopt(dup, pid).unwrap();
         n.writer.write_all(b"echo handed-over\r").await.unwrap();
         read_until(&mut n.reader, "handed-over").await;
         resize(&n.writer, TermSize::new(100, 30)).unwrap();
