@@ -1,7 +1,8 @@
 //! The tour (UX1.22, `ptyro tour`): ptyro's daily loop, done for real. A pretend agent works in
 //! a throwaway repository under a ptyro of its own; a coach in the corner says what to do next,
 //! with the keys as this keymap binds them, and moves on when it has been done: start a task,
-//! answer the agent, review its change, finish it into main, clean up.
+//! answer the agent, review its change, finish it into main, clean up, and keep a shell of your
+//! own in SHELLS (SPEC §23).
 //!
 //! The coach never takes keys: everything is done with the real ones, in the real TUI.
 
@@ -19,6 +20,8 @@ pub enum Step {
     Review,
     Finish,
     CleanUp,
+    /// A shell of your own in SHELLS: numbered, in no worktree (SPEC §23).
+    Shells,
     Done,
 }
 
@@ -37,7 +40,7 @@ impl Default for Tour {
     }
 }
 
-const STEPS: usize = 5;
+const STEPS: usize = 6;
 
 impl Tour {
     /// Move on as far as what's on screen allows; whether the step changed.
@@ -79,7 +82,10 @@ impl Tour {
                     .worktree
                     .as_deref()
                     .is_none_or(|w| app.worktree(w).is_none())
-                    .then_some(Step::Done),
+                    .then_some(Step::Shells),
+                Step::Shells => {
+                    app.sessions.iter().any(|s| s.loose && s.slot.is_some()).then_some(Step::Done)
+                }
                 Step::Done => None,
             };
             match next {
@@ -120,6 +126,7 @@ impl Tour {
             Step::Review => 3,
             Step::Finish => 4,
             Step::CleanUp => 5,
+            Step::Shells => 6,
             Step::Done => STEPS,
         };
         let (title, lines): (&str, Vec<String>) = match self.step {
@@ -182,10 +189,30 @@ impl Tour {
                     "its branch kept, and you can restore it.".into(),
                 ],
             ),
+            Step::Shells => {
+                // Alt-1 where it reaches ptyro; the shells menu and a digit where it doesn't.
+                let menu = key("shells.menu");
+                let one = if app.alt_digits_reach() && app.config.shell.alt_digits {
+                    "M-1".to_owned()
+                } else {
+                    format!("{menu} 1")
+                };
+                (
+                    "keep a shell of your own",
+                    vec![
+                        "SHELLS: numbered terminals of your own, in no worktree (tmux's windows).".into(),
+                        format!("Press {one} to start shell 1 here; {one} again, from anywhere, comes back to it."),
+                        format!(
+                            "{} starts another; {menu} lists them (a digit picks one).",
+                            key("shells.new")
+                        ),
+                    ],
+                )
+            }
             Step::Done => (
                 "that's the loop",
                 vec![
-                    "Task, answer, review, finish, clean up: by keys alone.".into(),
+                    "Task, answer, review, finish, clean up, and a shell of your own: by keys alone.".into(),
                     format!(
                         "{} lists every key, {} finds any action.",
                         key("help"),

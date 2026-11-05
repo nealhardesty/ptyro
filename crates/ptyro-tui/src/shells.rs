@@ -87,6 +87,11 @@ impl App {
     /// that number; `scratch`: in a new, empty directory of its own.
     pub(crate) fn shells_new(&mut self, slot: Option<u32>, scratch: bool) {
         let ws = self.shells_ws();
+        self.shells_new_in(ws, slot, scratch);
+    }
+
+    /// `shells_new` in a given workspace (a click on another workspace's strip).
+    pub(crate) fn shells_new_in(&mut self, ws: String, slot: Option<u32>, scratch: bool) {
         let cwd = self.shell_dir(&ws);
         let spec = SpawnSpec {
             cwd,
@@ -103,6 +108,11 @@ impl App {
     /// gets a new shell, here.
     pub(crate) fn shells_go(&mut self, n: u32) {
         let ws = self.shells_ws();
+        self.shells_go_in(ws, n);
+    }
+
+    /// `shells_go` in a given workspace.
+    pub(crate) fn shells_go_in(&mut self, ws: String, n: u32) {
         let found = self.shells_in(&ws).into_iter().find(|s| s.slot == Some(n)).cloned();
         match found {
             Some(s) => {
@@ -116,7 +126,7 @@ impl App {
             }
             None => {
                 self.toast(format!("shell {n} started here"));
-                self.shells_new(Some(n), false);
+                self.shells_new_in(ws, Some(n), false);
             }
         }
     }
@@ -164,6 +174,22 @@ impl App {
             palette: Palette::new(format!("Shells of {short}"), items).with_hotkeys(),
             purpose: Purpose::Palette,
         });
+    }
+
+    /// A click on a pane header's strip, at (`x`, `y`): `true` when it hit one.
+    pub(crate) fn strip_click(&mut self, x: u16, y: u16) -> bool {
+        let hit = self
+            .strip_hits
+            .borrow()
+            .iter()
+            .find(|h| h.y == y && (h.x0..h.x1).contains(&x))
+            .map(|h| h.hit.clone());
+        match hit {
+            Some(StripHit::Go(ws, n)) => self.shells_go_in(ws, n),
+            Some(StripHit::New(ws)) => self.shells_new_in(ws, None, false),
+            None => return false,
+        }
+        true
     }
 
     /// The loose session an action is about: the selected row's (in the sidebar), else the
@@ -303,12 +329,37 @@ impl App {
 
     /// Whether this terminal sends `Alt` with a digit, or types a character for it instead
     /// (macOS's Terminal.app and iTerm2, unless Option is set to act as Meta, which no program
-    /// can see; the kitty keyboard protocol reports `Alt` either way).
+    /// can see until a key says so; the kitty keyboard protocol reports `Alt` either way).
     pub(crate) fn alt_digits_reach(&self) -> bool {
-        if self.kitty {
-            return true;
+        self.alt_seen || self.kitty || !option_types_characters()
+    }
+
+    /// What each key press says about Alt: one with Alt proves it reaches ptyro; Option-digit
+    /// arriving as `¡™£…` (Option not set as Meta) is said once, with what to do (SPEC §23.6).
+    /// The character still goes where it was going: it may be meant.
+    pub(crate) fn learn_alt(&mut self, key: KeyEvent) {
+        if key.mods.has(Mods::ALT) {
+            if !self.alt_seen {
+                self.alt_seen = true;
+                self.dirty = true;
+                // It works after all (Option set as Meta): the badge stops saying otherwise.
+                self.health.findings.retain(|f| f.what != ALT_FINDING);
+                self.health.announced = self.health.findings.len();
+            }
+            return;
         }
-        !matches!(std::env::var("TERM_PROGRAM").as_deref(), Ok("Apple_Terminal" | "iTerm.app"))
+        let KeyCode::Char { c } = key.code else { return };
+        let Some(n) = option_digit(c) else { return };
+        if self.option_said || self.alt_seen || !self.config.shell.alt_digits {
+            return;
+        }
+        self.option_said = true;
+        let menu = self.keymap.key_for("shells.menu").unwrap_or_else(|| "C-q e".into());
+        self.toast(format!(
+            "that was Option-{n}? {} typed {c} instead of Alt-{n}: {} (until then, {menu} {n})",
+            terminal_name(),
+            option_as_meta_steps()
+        ));
     }
 
     /// The jump keys as hints say them: `M-1…9` when they're bound and reach the TUI, else
@@ -326,6 +377,35 @@ impl App {
             Some(k) => format!("{k} 1…9"),
             None => key_label(&self.keymap.prefix),
         }
+    }
+}
+
+/// The health finding about Option-digit typing characters (`health.rs`).
+pub(crate) const ALT_FINDING: &str = "shells alt keys";
+
+/// macOS's Terminal.app and iTerm2 type a character for Option-digit unless told otherwise.
+pub(crate) fn option_types_characters() -> bool {
+    matches!(std::env::var("TERM_PROGRAM").as_deref(), Ok("Apple_Terminal" | "iTerm.app"))
+}
+
+/// The digit a US-layout Option-digit character stands for (`¡` is Option-1).
+fn option_digit(c: char) -> Option<u8> {
+    "º¡™£¢∞§¶•ª".chars().position(|x| x == c).map(|i| i as u8)
+}
+
+fn terminal_name() -> &'static str {
+    match std::env::var("TERM_PROGRAM").as_deref() {
+        Ok("iTerm.app") => "iTerm2",
+        Ok("Apple_Terminal") => "Terminal.app",
+        _ => "this terminal",
+    }
+}
+
+/// Where this terminal's "Option as Meta" lives.
+pub(crate) fn option_as_meta_steps() -> &'static str {
+    match std::env::var("TERM_PROGRAM").as_deref() {
+        Ok("iTerm.app") => "turn on Esc+ for the left Option key (Settings → Profiles → Keys)",
+        _ => "turn on \"Use Option as Meta key\" (Settings → Profiles → Keyboard)",
     }
 }
 
@@ -422,19 +502,25 @@ pub(crate) fn sidebar_line(
 
 /// The strip in a loose session's pane header (SPEC §23.6), tmux's status line: every shell of
 /// its workspace by number, the shown one in brackets, one that wants you with its glyph.
-pub(crate) fn strip(app: &App, s: &SessionInfo, base: Style, focused: bool) -> Vec<Span<'static>> {
+pub(crate) fn strip(
+    app: &App,
+    s: &SessionInfo,
+    base: Style,
+    focused: bool,
+) -> Vec<(Span<'static>, Option<StripHit>)> {
     let t = &app.theme;
     let ws = app.tree().home(s);
-    let mut out = vec![Span::styled("SHELLS ", base.add_modifier(Modifier::DIM))];
+    let mut out = vec![(Span::styled("SHELLS ", base.add_modifier(Modifier::DIM)), None)];
     for o in app.shells_in(&ws) {
         let n = o.slot.unwrap_or_default();
+        let hit = Some(StripHit::Go(ws.clone(), n));
         if o.id == s.id {
             let style = if focused {
                 base.fg(app.depth.fit(t.accent)).add_modifier(Modifier::BOLD)
             } else {
                 base.add_modifier(Modifier::BOLD)
             };
-            out.push(Span::styled(format!("[{n} {}]", label(o)), style));
+            out.push((Span::styled(format!("[{n} {}]", label(o)), style), hit));
         } else {
             let mark = if o.attention.is_some() {
                 " ◉"
@@ -444,10 +530,26 @@ pub(crate) fn strip(app: &App, s: &SessionInfo, base: Style, focused: bool) -> V
                 ""
             };
             let word = ptyro_core::session::brief(&label(o), 12);
-            out.push(Span::styled(format!("{n} {word}{mark}"), base));
+            out.push((Span::styled(format!("{n} {word}{mark}"), base), hit));
         }
-        out.push(Span::styled(" ", base));
+        out.push((Span::styled(" ", base), None));
     }
-    out.push(Span::styled("＋", base.fg(app.depth.fit(t.accent))));
+    out.push((Span::styled("＋", base.fg(app.depth.fit(t.accent))), Some(StripHit::New(ws))));
     out
+}
+
+/// What a click on the strip does: show shell N of a workspace, or start one there (`＋`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StripHit {
+    Go(String, u32),
+    New(String),
+}
+
+/// Where a strip's number was drawn this frame (`App.strip_hits`): columns `x0..x1` of row `y`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StripAt {
+    pub x0: u16,
+    pub x1: u16,
+    pub y: u16,
+    pub hit: StripHit,
 }

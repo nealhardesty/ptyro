@@ -1338,17 +1338,19 @@ fn ask_clean(what: &str) -> Option<Clean> {
 
 pub async fn gc(ctx: &Ctx, dry_run: bool, json: bool) -> Result<i32, Error> {
     let c = ctx.connect(false).await.map_err(no_daemon)?;
-    let Reply::Gc { entries } = c.request(Request::Gc).await? else {
+    let Reply::Gc { entries, scratch } = c.request(Request::Gc).await? else {
         return Err(Error::internal("unexpected reply"));
     };
     if json {
+        // The stale worktrees, as always; scratch leftovers are listed by `ptyro gc` itself.
         print_json(&entries);
         return Ok(0);
     }
-    if entries.is_empty() {
+    if entries.is_empty() && scratch.is_empty() {
         eprintln!("nothing stale");
         return Ok(0);
     }
+    let scratch_list = scratch.clone();
     for e in &entries {
         let w = &e.worktree;
         println!(
@@ -1362,6 +1364,15 @@ pub async fn gc(ctx: &Ctx, dry_run: bool, json: bool) -> Result<i32, Error> {
     let total: u64 = entries.iter().filter_map(|e| e.bytes).sum();
     if total > 0 {
         eprintln!("{} on disk in all", ptyro_core::model::human_bytes(total));
+    }
+    for l in &scratch {
+        println!(
+            "{:<28} {:<8} {:>11}  a scratch shell's directory, left behind with {} files in it",
+            truncate(&l.path.display().to_string(), 28),
+            age(l.modified_ms),
+            ptyro_core::model::human_bytes(l.bytes),
+            l.files
+        );
     }
     if dry_run {
         return Ok(0);
@@ -1400,5 +1411,28 @@ pub async fn gc(ctx: &Ctx, dry_run: bool, json: bool) -> Result<i32, Error> {
             Err(e) => eprintln!("  {}", e.message),
         }
     }
+    clean_scratch(&c, &scratch_list).await;
     Ok(0)
+}
+
+/// Scratch shells' directories left behind (SPEC §23.8): each said, and deleted after a yes.
+async fn clean_scratch(c: &ptyro_client::Client, list: &[ptyro_core::model::ScratchLeftover]) {
+    use std::io::{BufRead, IsTerminal, Write};
+    if list.is_empty() || !std::io::stdin().is_terminal() {
+        return;
+    }
+    for l in list {
+        eprint!("{}: d delete it and its {} files · ⏎ keep ", l.path.display(), l.files);
+        let _ = std::io::stderr().flush();
+        let mut line = String::new();
+        let _ = std::io::stdin().lock().read_line(&mut line);
+        if !matches!(line.trim(), "d" | "D") {
+            continue;
+        }
+        match c.request(Request::ShellScratchRemove { path: l.path.clone() }).await {
+            Ok(Reply::Removed { notes }) => notes.iter().for_each(|n| eprintln!("  {n}")),
+            Ok(_) => {}
+            Err(e) => eprintln!("  {}", e.message),
+        }
+    }
 }

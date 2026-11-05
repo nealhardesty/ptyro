@@ -97,6 +97,7 @@ pub(crate) fn fg(app: &App, c: Color) -> Style {
 
 pub fn draw(app: &App, f: &mut Frame<'_>) {
     app.links.borrow_mut().clear();
+    app.strip_hits.borrow_mut().clear();
     let area = f.area();
     if app.opts.raw {
         draw_raw(app, f, area);
@@ -1409,9 +1410,23 @@ fn draw_header(
             left.push(Span::styled(s.name.clone(), name));
             left.push(Span::styled(format!(" · {}", what(s)), base));
             if s.loose {
-                // Its workspace's SHELLS, tmux's status line (SPEC §23.6).
+                // Its workspace's SHELLS, tmux's status line (SPEC §23.6); a click on a number
+                // shows that shell (`App.strip_hits`).
                 left.push(Span::styled("  ", base));
-                left.extend(crate::shells::strip(app, s, base, focused));
+                let mut x = r.x as usize + left.iter().map(Span::width).sum::<usize>();
+                for (span, hit) in crate::shells::strip(app, s, base, focused) {
+                    let w = span.width();
+                    if let Some(hit) = hit {
+                        app.strip_hits.borrow_mut().push(crate::shells::StripAt {
+                            x0: x as u16,
+                            x1: (x + w) as u16,
+                            y: r.y,
+                            hit,
+                        });
+                    }
+                    x += w;
+                    left.push(span);
+                }
             }
             // The model its agent runs (`opus 5.5`), once the agent has said.
             if let Some(m) = s.model.as_deref().filter(|_| s.kind == SessionKind::Agent) {
@@ -1505,6 +1520,13 @@ fn draw_header(
     }
     let used: usize = right.iter().map(Span::width).sum();
     let left_w = (r.width as usize).saturating_sub(used);
+    // A strip cut off by the right side catches no clicks there.
+    let edge = r.x + left_w as u16;
+    let mine = |h: &crate::shells::StripAt| h.y == r.y && h.x0 >= r.x && h.x0 < r.x + r.width;
+    for h in app.strip_hits.borrow_mut().iter_mut().filter(|h| mine(h)) {
+        h.x1 = h.x1.min(edge);
+    }
+    app.strip_hits.borrow_mut().retain(|h| h.x0 < h.x1);
     f.render_widget(
         Paragraph::new(Line::from(left)).style(base),
         Rect { width: left_w as u16, ..r },

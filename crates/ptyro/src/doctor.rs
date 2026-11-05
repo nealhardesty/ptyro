@@ -771,8 +771,24 @@ async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
 /// Archives are only a note: they take next to nothing.
 async fn worktrees(c: &ptyro_client::Client, config: &Config, r: &mut Report) {
     const S: &str = "worktrees";
-    if let Ok(Reply::Gc { entries }) = c.request(Request::Gc).await {
+    if let Ok(Reply::Gc { entries, scratch }) = c.request(Request::Gc).await {
         r.add(S, "stale", stale_level(&entries), stale_text(&entries, config.worktrees.stale_days));
+        // Scratch shells' directories left behind with files in them (SPEC §23.8).
+        if !scratch.is_empty() {
+            let bytes: u64 = scratch.iter().map(|l| l.bytes).sum();
+            r.add(
+                "shells",
+                "scratch",
+                Level::Note,
+                format!(
+                    "{} scratch shell director{} left behind with files in {} ({}): `ptyro gc` lists them and deletes the ones you say",
+                    scratch.len(),
+                    if scratch.len() == 1 { "y" } else { "ies" },
+                    if scratch.len() == 1 { "it" } else { "them" },
+                    ptyro_core::model::human_bytes(bytes)
+                ),
+            );
+        }
     }
     if let Ok(Reply::Archives { entries }) =
         c.request(Request::WorktreeArchives { project: None }).await
@@ -993,6 +1009,23 @@ pub(crate) async fn terminal(r: &mut Report) {
             ),
             Err(_) => {}
         }
+    }
+    // SHELLS' Alt-1…9 (SPEC §23.6): macOS's own terminals type ¡™£ for Option-digit until
+    // Option is set to act as Meta, which no program can read; `make verify-shells` checks it.
+    match var("TERM_PROGRAM").as_deref() {
+        Some("Apple_Terminal") => r.add(
+            S,
+            "alt keys",
+            Level::Note,
+            "Terminal.app types ¡™£ for Option-digit unless \"Use Option as Meta key\" is on (Settings → Profiles → Keyboard): until then SHELLS' Alt-1…9 don't reach ptyro, and C-q e 1…9 does",
+        ),
+        Some("iTerm.app") => r.add(
+            S,
+            "alt keys",
+            Level::Note,
+            "iTerm2 types ¡™£ for Option-digit unless the left Option key sends Esc+ (Settings → Profiles → Keys): until then SHELLS' Alt-1…9 don't reach ptyro, and C-q e 1…9 does",
+        ),
+        _ => r.add(S, "alt keys", Level::Ok, "Alt-1…9 reach ptyro (SHELLS)"),
     }
     if var("TMUX").is_some() {
         let opt = |name: &'static str| async move {

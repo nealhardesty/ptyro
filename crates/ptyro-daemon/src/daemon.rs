@@ -1449,7 +1449,8 @@ impl Daemon {
             Request::Adopt { addr } => self.adopt(&addr).await,
             req @ (Request::ShellMove { .. }
             | Request::ShellPlace { .. }
-            | Request::ShellWatch { .. }) => self.handle_shells(req).await,
+            | Request::ShellWatch { .. }
+            | Request::ShellScratchRemove { .. }) => self.handle_shells(req).await,
             Request::QuickShell { worktree, cwd, create, env, size, workspace } => {
                 self.quick_shell(worktree, cwd, create, env, size, workspace).await
             }

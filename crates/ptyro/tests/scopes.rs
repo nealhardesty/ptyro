@@ -219,6 +219,7 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"shell_move","addr":"%1","slot":2}), FULL, false),
         s(json!({"t":"shell_place","addr":"%1","loose":true,"worktree":null}), FULL, false),
         s(json!({"t":"shell_watch","addr":"%1","watch":{"t":"done"}}), FULL, false),
+        s(json!({"t":"shell_scratch_remove","path":"/nonexistent-scopes-test"}), FULL, false),
         s(
             json!({"t":"quick_shell","worktree":null,"cwd":"/nonexistent-scopes-test","create":true,"env":{},"size":null,"workspace":null}),
             FULL,

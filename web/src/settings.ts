@@ -647,7 +647,7 @@ async function startTour(): Promise<void> {
 }
 
 // the coach, in a tour's own page (`ptyro.tour` is set when its pairing link says so)
-const STEPS = ["Start a task", "Answer the agent", "Review its change", "Finish it", "Clean up"] as const;
+const STEPS = ["Start a task", "Answer the agent", "Review its change", "Finish it", "Clean up", "Keep a shell"] as const;
 const tour = { step: 0, worktree: "", agent: "", blocked: false };
 
 function advanceTour(): void {
@@ -670,6 +670,9 @@ function advanceTour(): void {
       if (w && ((w.pr?.state === "MERGED") || (w.integrated && st && (st.staged ?? 0) + (st.modified ?? 0) + (st.untracked ?? 0) === 0 && st.head && w.integrated.startsWith(st.head)))) tour.step = 4;
     } else if (tour.step === 4) {
       if (!data.worktrees.has(tour.worktree)) tour.step = 5;
+    } else if (tour.step === 5) {
+      // A shell of your own in SHELLS (SPEC §23): numbered, in no worktree.
+      if (sessions.some((s) => s.loose && s.slot != null)) tour.step = 6;
     }
     if (tour.step === before) break;
   }
@@ -681,7 +684,8 @@ const COACH: string[][] = [
   ["See what it changed: Projects tab → its worktree → Changes.", "Tap a line to leave a comment for the agent."],
   ["Ship it: on the worktree's page tap Finish → Merge into the main branch."],
   ["Clean up: on the worktree's page, ⋯ → Archive (or Remove)."],
-  ["That's the loop. Everything you did was real, in a ptyro of its own."],
+  ["Keep a shell of your own: on the Sessions tab, tap ＋ beside SHELLS → A shell.", "It's numbered and in no worktree: tap its number on a shell's page to come back to it."],
+  ["That's the loop, and a shell of your own. Everything you did was real, in a ptyro of its own."],
 ];
 
 let coachEl: HTMLElement | null = null;
@@ -691,9 +695,9 @@ export function coach(): void {
   advanceTour();
   const lines = COACH[tour.step];
   const el = h("aside", { class: "coach", "aria-live": "polite" },
-    h("b", {}, tour.step < 5 ? `Tour ${tour.step + 1}/5 · ${STEPS[tour.step]}` : "Tour done"),
+    h("b", {}, tour.step < STEPS.length ? `Tour ${tour.step + 1}/${STEPS.length} · ${STEPS[tour.step]}` : "Tour done"),
     ...lines.map((l, i) => h("div", { class: i === 1 && tour.step === 0 ? "say" : "" }, l)),
-    h("button", { class: tour.step === 5 ? "primary small" : "small", onclick: () => confirm("End the tour?", "Its ptyro, repository and agent are deleted. Your own ptyro is untouched.", "End the tour", async () => { if (await doHost("tour.end")) { store.remove("ptyro.tour"); ui.toast("The tour is over"); setTimeout(() => window.close(), 800); } }, false) }, "End the tour"));
+    h("button", { class: tour.step === STEPS.length ? "primary small" : "small", onclick: () => confirm("End the tour?", "Its ptyro, repository and agent are deleted. Your own ptyro is untouched.", "End the tour", async () => { if (await doHost("tour.end")) { store.remove("ptyro.tour"); ui.toast("The tour is over"); setTimeout(() => window.close(), 800); } }, false) }, "End the tour"));
   if (coachEl) coachEl.replaceWith(el); else document.body.append(el);
   coachEl = el;
 }

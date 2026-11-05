@@ -691,7 +691,7 @@ async fn deleting_an_archive_forgets_it_and_keeps_an_unmerged_branch() {
 
 async fn gc_entries(c: &Client) -> Vec<ptyro_core::model::GcEntry> {
     match c.request(Request::Gc).await.unwrap() {
-        Reply::Gc { entries } => entries,
+        Reply::Gc { entries, .. } => entries,
         other => panic!("{other:?}"),
     }
 }
@@ -1119,19 +1119,21 @@ async fn the_tour_walks_the_loop_for_real_and_cleans_up() {
         .env("GIT_CONFIG_NOSYSTEM", "1");
     let r = ptyro_testkit::headless::run(
         script
-            .send_when("Tour 1/5: start a task", "\\x11n")
+            .send_when("Tour 1/6: start a task", "\\x11n")
             .send_when("What should it do?", "fix the typo in greeting.txt")
             .send_when("fix-typo-greeting", "\\r")
             .send_when("to peek, then y", "\\x11p")
             .send_when("y allow", "y")
-            .send_when("Tour 3/5", "")
+            .send_when("Tour 3/6", "")
             .send_when("It's done", "\\x11D")
-            .send_when("Tour 4/5", "q")
-            .send_when("Tour 4/5", "\\x11\\t")
-            .send_when("Tour 4/5", "F")
+            .send_when("Tour 4/6", "q")
+            .send_when("Tour 4/6", "\\x11\\t")
+            .send_when("Tour 4/6", "F")
             .send_when("Finish ", "i")
-            .send_when("Tour 5/5", "F")
+            .send_when("Tour 5/6", "F")
             .send_when("snapshot", "\\r")
+            // Alt-1 (ESC 1): shell 1 of SHELLS, the last stop.
+            .send_when("Tour 6/6", "\\x1b1")
             .send_when("that's the loop", "\\x11d")
             .until("the tour is over"),
     )

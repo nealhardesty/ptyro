@@ -108,8 +108,10 @@ in the pane while they're bound (readline's `digit-argument`, irssi's and weecha
 iTerm2 type `¡™£` for Option-digit unless Option is set to act as Meta (Terminal.app: Settings →
 Profiles → Keyboard → "Use Option as Meta key"; iTerm2: Profiles → Keys → Left Option key: Esc+).
 Until then the hints say `C-q e 1…9`, which always works. `make verify-shells` shows what your
-terminal sends. A shell's pane header is the strip of its workspace's shells, the shown one in
-brackets.
+terminal sends. Once any key with Alt arrives, ptyro knows Alt works here and the hints say
+so; Option-digit arriving as `¡™£` is pointed out once, and the health badge (`M`) says where the
+setting is. A shell's pane header is the strip of its workspace's shells, the shown one in
+brackets: a click on a number shows that shell, a click on `＋` starts one.
 
 In a pane whose session has exited, `⏎` runs it again; in a dormant one, `⏎` resumes it.
 `Ctrl-Q D`, `O` and `S` close their view again when it is already open.

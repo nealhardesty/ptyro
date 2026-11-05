@@ -55,6 +55,38 @@ impl Drop for ScratchGuard {
     }
 }
 
+/// Everything under `dir` (not following links): (entries, bytes, newest change in ms). Stops
+/// counting after 100,000 entries: a leftover that big is reported as at least that.
+fn tally(dir: &Path) -> (u64, u64, u64) {
+    let (mut files, mut bytes, mut newest) = (0u64, 0u64, 0u64);
+    let mut todo = vec![dir.to_path_buf()];
+    let stamp = |m: &std::fs::Metadata| {
+        m.modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_millis() as u64)
+    };
+    if let Ok(m) = std::fs::symlink_metadata(dir) {
+        newest = stamp(&m);
+    }
+    while let Some(d) = todo.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            let Ok(m) = e.path().symlink_metadata() else { continue };
+            files += 1;
+            bytes += m.len();
+            newest = newest.max(stamp(&m));
+            if m.is_dir() {
+                todo.push(e.path());
+            }
+            if files >= 100_000 {
+                return (files, bytes, newest);
+            }
+        }
+    }
+    (files, bytes, newest)
+}
+
 /// The lowest number from 1 that isn't in `taken`.
 fn lowest_free(taken: &[u32]) -> u32 {
     let mut n = 1;
@@ -382,6 +414,69 @@ impl Daemon {
         }
     }
 
+    /// Scratch directories no shell uses any more (SPEC §23.8): what `gc` lists, newest first.
+    pub(crate) async fn scratch_leftovers(&self) -> Vec<ptyro_core::model::ScratchLeftover> {
+        let root = self.paths.data.join("scratch");
+        let used: Vec<PathBuf> = self
+            .sessions()
+            .iter()
+            .filter_map(|s| {
+                let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                m.shelf.as_ref().and_then(|f| f.scratch.clone())
+            })
+            .collect();
+        let mut out = tokio::task::spawn_blocking(move || {
+            let Ok(dirs) = std::fs::read_dir(&root) else { return Vec::new() };
+            dirs.flatten()
+                .map(|d| d.path())
+                .filter(|p| p.is_dir() && !used.contains(p))
+                .map(|path| {
+                    let (files, bytes, modified_ms) = tally(&path);
+                    ptyro_core::model::ScratchLeftover { path, files, bytes, modified_ms }
+                })
+                .collect::<Vec<_>>()
+        })
+        .await
+        .unwrap_or_default();
+        out.sort_by_key(|l| std::cmp::Reverse(l.modified_ms));
+        out
+    }
+
+    /// `ShellScratchRemove`: a leftover scratch directory, and what's in it, deleted (asked
+    /// first by every client). Only directly under `<data>/scratch`, and never one in use.
+    fn scratch_remove(&self, path: &Path) -> Result<Reply, Error> {
+        let root = self.paths.data.join("scratch");
+        let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        let (root, dir) = (canon(&root), canon(path));
+        if dir.parent() != Some(root.as_path()) || !dir.is_dir() {
+            return Err(Error::invalid(format!(
+                "{} isn't a scratch shell's directory (they live in {})",
+                path.display(),
+                root.display()
+            )));
+        }
+        let in_use = self.sessions().iter().any(|s| {
+            let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            m.shelf.as_ref().and_then(|f| f.scratch.as_deref()).is_some_and(|d| canon(d) == dir)
+        });
+        if in_use {
+            return Err(Error::conflict(format!(
+                "{} is a running scratch shell's directory: stop that shell first",
+                dir.display()
+            )));
+        }
+        let (files, bytes, _) = tally(&dir);
+        std::fs::remove_dir_all(&dir)
+            .map_err(|e| Error::internal(format!("deleting {}: {e}", dir.display())))?;
+        Ok(Reply::Removed {
+            notes: vec![format!(
+                "deleted {} ({files} files, {})",
+                dir.display(),
+                ptyro_core::model::human_bytes(bytes)
+            )],
+        })
+    }
+
     /// `ShellMove`, `ShellPlace`, `ShellWatch`.
     pub(crate) async fn handle_shells(self: &Arc<Self>, req: Request) -> Result<Reply, Error> {
         match req {
@@ -390,6 +485,7 @@ impl Daemon {
                 self.shell_place(&addr, loose, worktree.as_deref())
             }
             Request::ShellWatch { addr, watch } => self.shell_watch(&addr, watch),
+            Request::ShellScratchRemove { path } => self.scratch_remove(&path),
             _ => Err(Error::internal("not a shells request")),
         }
     }
