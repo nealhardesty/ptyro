@@ -235,6 +235,7 @@ pub(crate) const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
         &[
             ("session.new", "a task"),
             ("session.again", "+ again"),
+            ("shells.new", "a SHELLS shell"),
             ("worktree.new", "worktree"),
             ("project.add", "project"),
             ("workspace.switch", "workspace"),
