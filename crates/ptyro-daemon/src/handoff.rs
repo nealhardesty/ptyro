@@ -235,8 +235,9 @@ impl Daemon {
             tokio::time::sleep(Duration::from_millis(150)).await;
             if let Err(e) = me.hand_over(&target2).await {
                 tracing::error!("upgrade called off: {e}");
+                // The fix first: the TUI and the web offer a finding's first `ptyro …` command.
                 me.warn(format!(
-                    "the last daemon upgrade was called off, and this daemon carries on with every session: {e}. `ptyro daemon restart --hibernate` restarts it instead (agents resume their conversations; shells and commands start again)"
+                    "the last daemon upgrade was called off, and this daemon carries on with every session. `ptyro daemon restart --hibernate` restarts it on the new binary instead (agents resume their conversations; shells and running commands start again). Why: {e}"
                 ));
                 me.call_off_handover();
             }

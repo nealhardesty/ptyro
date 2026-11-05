@@ -118,7 +118,11 @@ function fixesFor(c) {
         out.push({ label: "Edit the config", run: () => go("#/config") });
     if (c.section === "remote" || /restart/.test(c.text))
         out.push({ label: "Restart ptyro", run: () => restartDaemon() });
-    if (c.section === "daemon" && /binary|upgrade|older|newer/i.test(c.text))
+    // An upgrade that was called off is fixed by a restart (agents hibernate and resume), not by
+    // trying the same upgrade again.
+    if (c.section === "daemon" && /called off/i.test(c.text))
+        out.push({ label: "Restart the daemon", hint: "Agents resume their conversations; shells and commands start again", run: () => restartDaemon() });
+    else if (c.section === "daemon" && /binary|upgrade|older|newer/i.test(c.text))
         out.push({ label: "Upgrade the daemon", run: () => upgradeDaemon() });
     if (c.section === "wsl" && c.name === "survival" && /hold_wsl is off/.test(c.text))
         out.push({ label: "Keep WSL running while ptyro runs", hint: "Settings → daemon → hold_wsl", run: () => go("#/settings/daemon") });
