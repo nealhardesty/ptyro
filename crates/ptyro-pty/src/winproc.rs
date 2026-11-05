@@ -400,7 +400,9 @@ pub fn filesystem(root: &Path) -> Option<String> {
 /// (`HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem` `LongPathsEnabled` = 1; off by
 /// default). `false` when it can't be read.
 pub fn long_paths_enabled() -> bool {
-    use windows_sys::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RegGetValueW};
+    use windows_sys::Win32::System::Registry::{
+        HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RegGetValueW,
+    };
     let key: Vec<u16> = "SYSTEM\\CurrentControlSet\\Control\\FileSystem\0".encode_utf16().collect();
     let value: Vec<u16> = "LongPathsEnabled\0".encode_utf16().collect();
     let mut data = 0u32;
