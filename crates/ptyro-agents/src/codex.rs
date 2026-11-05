@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use crate::adapter::{
     Adapter, Caps, Decision, LaunchCtx, LaunchPlan, StopStep, str_of, tool_summary,
 };
-use crate::claude::shell_word;
+use crate::claude::hook_word;
 
 /// Hook events (Codex's own names) → the snake-case names its trust keys use.
 pub const EVENTS: &[(&str, &str)] = &[
@@ -127,7 +127,7 @@ impl Codex {
         if !ctx.def.hooks() {
             return a;
         }
-        let ptyro = shell_word(ctx.ptyro);
+        let ptyro = hook_word(ctx.ptyro);
         let mut state = Vec::new();
         for (ev, snake) in EVENTS {
             let cmd = format!("{ptyro} hook codex {ev}");

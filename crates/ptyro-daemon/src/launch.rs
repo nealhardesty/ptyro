@@ -44,6 +44,20 @@ pub struct AgentStart {
 /// A structured launch (M10): the protocol, the driver's options, OpenCode's port and password.
 type StructuredStart = (String, ptyro_drive::Opts, Option<(u16, String)>);
 
+/// ptyro's own path, as the hooks and status line an agent runs call it. On Windows a path no
+/// shell's quoting suits (a space in the user's name) is given as its 8.3 short name when the
+/// volume keeps one (WIN8, SPEC §20.12).
+fn hook_ptyro() -> String {
+    let Ok(exe) = std::env::current_exe() else { return "ptyro".into() };
+    #[cfg(windows)]
+    if ptyro_agents::claude::needs_quoting(&exe.to_string_lossy())
+        && let Some(short) = ptyro_pty::winproc::short_path(&exe)
+    {
+        return short.to_string_lossy().into_owned();
+    }
+    exe.to_string_lossy().into_owned()
+}
+
 /// A port nobody listens on right now.
 fn free_port() -> Option<u16> {
     std::net::TcpListener::bind(("127.0.0.1", 0)).ok()?.local_addr().ok().map(|a| a.port())
@@ -455,8 +469,7 @@ impl Daemon {
             let home = ptyro_agents::home_var(&id)
                 .and_then(|v| plan.set.iter().find(|(k, _)| k == v).map(|(_, p)| PathBuf::from(p)))
                 .or_else(|| ptyro_agents::default_dir(&id));
-            let ptyro = std::env::current_exe()
-                .map_or_else(|_| "ptyro".into(), |p| p.to_string_lossy().into_owned());
+            let ptyro = hook_ptyro();
             let session = l.id.full();
             let project_root =
                 wt.as_ref().and_then(|w| self.project_by_id(&w.project)).map(|p| p.root);

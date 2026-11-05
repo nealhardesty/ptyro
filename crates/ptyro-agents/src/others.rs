@@ -10,7 +10,7 @@ use crate::adapter::{
     Adapter, Caps, Decision, LaunchCtx, LaunchPlan, Sidecar, StopStep, random_hex, str_of,
     tool_summary, uuid_v4,
 };
-use crate::claude::shell_word;
+use crate::claude::hook_word;
 
 // ── Gemini CLI ────────────────────────────────────────────────────────────
 
@@ -32,7 +32,7 @@ pub const GEMINI_EVENTS: &[&str] = &[
 pub fn gemini_extension(ptyro: &str) -> Vec<(&'static str, String)> {
     let mut hooks = serde_json::Map::new();
     for ev in GEMINI_EVENTS {
-        hooks.insert((*ev).into(), json!([{ "hooks": [{ "type": "command", "command": format!("{} hook gemini {ev}", shell_word(ptyro)) }] }]));
+        hooks.insert((*ev).into(), json!([{ "hooks": [{ "type": "command", "command": format!("{} hook gemini {ev}", hook_word(ptyro)) }] }]));
     }
     vec![
         (
@@ -274,7 +274,7 @@ pub const AGY_EVENTS: &[&str] =
 pub fn agy_hooks(ptyro: &str) -> String {
     let mut hooks = serde_json::Map::new();
     for ev in AGY_EVENTS {
-        hooks.insert((*ev).into(), json!([{ "hooks": [{ "type": "command", "command": format!("{} hook antigravity {ev}", shell_word(ptyro)) }] }]));
+        hooks.insert((*ev).into(), json!([{ "hooks": [{ "type": "command", "command": format!("{} hook antigravity {ev}", hook_word(ptyro)) }] }]));
     }
     serde_json::to_string_pretty(&json!({ "hooks": hooks })).unwrap_or_default()
 }

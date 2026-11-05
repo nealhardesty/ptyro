@@ -371,6 +371,29 @@ pub fn holders(path: &Path) -> Vec<(u32, String)> {
     }
 }
 
+/// `p`'s 8.3 short name (`C:\\Users\\JOHNSM~1\\…`), when its volume keeps them (the system
+/// volume does by default): a path with no spaces, for a hook `command` that no shell's quoting
+/// would suit (WIN8). `None` when it has none.
+pub fn short_path(p: &Path) -> Option<PathBuf> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+    let long: Vec<u16> = p.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let mut buf = vec![0u16; 260];
+    for _ in 0..2 {
+        // SAFETY: `long` is NUL-ended; `buf` holds `buf.len()` u16s, and a too-small one is
+        // answered with the length it needs.
+        let n = unsafe { GetShortPathNameW(long.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) };
+        match n as usize {
+            0 => return None,
+            n if n < buf.len() => {
+                return Some(PathBuf::from(std::ffi::OsString::from_wide(&buf[..n])));
+            }
+            n => buf = vec![0u16; n],
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -412,5 +435,22 @@ mod tests {
         let _held = std::fs::File::create(&f).unwrap();
         let who = holders(&f);
         assert!(who.iter().any(|(p, _)| *p == std::process::id()), "{who:?}");
+    }
+
+    /// A folder with a space has a short name with none (on a volume that keeps them; the
+    /// test says so and passes when this one doesn't).
+    #[test]
+    fn a_short_path_has_no_spaces() {
+        let d = tempfile::tempdir().unwrap();
+        let long = d.path().join("John Smith").join("ptyro.exe");
+        std::fs::create_dir_all(long.parent().unwrap()).unwrap();
+        std::fs::write(&long, "MZ").unwrap();
+        match short_path(&long) {
+            Some(s) => {
+                assert!(!s.to_string_lossy().contains(' '), "{s:?}");
+                assert_eq!(std::fs::read(&s).unwrap(), b"MZ", "the same file");
+            }
+            None => eprintln!("this volume keeps no 8.3 names"),
+        }
     }
 }

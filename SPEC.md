@@ -6785,6 +6785,20 @@ Windows) wasn't needed to get the list below: compile errors are the same either
   `GetConsoleProcessList` (no console under `DETACHED_PROCESS`, one with `CREATE_NO_WINDOW`) and
   `GetConsoleWindow`. Smart App Control refused the rebuilt test binary here after running the
   first build, so the passing run is CI's. [V for the windows and the missing console]
+- **No one quoting suits every Windows shell.** An agent runs a hook or status line `command` in
+  a shell: Claude in Git Bash when it finds one, else PowerShell (its `shell` field, `"bash"` or
+  `"powershell"`, picks; a `statusLine` has none) [S, Claude's hooks and status line docs,
+  2026-11-04]. Run in Git Bash 2.x, Windows PowerShell 5.1 and cmd on Windows 11 build 26200:
+  a path with nothing to quote, written with forward slashes (`C:/Users/me/…/ptyro.exe hook …`),
+  runs in all three; with backslashes Git Bash drops them; a quoted path (`"C:/Program Files/…"
+  …`) runs in Git Bash and cmd but PowerShell reads a string, not a command; PowerShell's
+  `& '…' …` runs only there. So ptyro writes its path with forward slashes, unquoted; a path
+  that needs quotes (a space in the user's name) becomes its 8.3 short name
+  (`GetShortPathNameW`, kept on the system volume by default); and failing that, Claude's hooks
+  name PowerShell (`"shell": "powershell"`, `& '…'`), which every Windows has, while the status
+  line, Codex, Gemini and agy get double quotes (Git Bash and cmd). Claude's exec form (`args`,
+  no shell, v2.1.139) was passed over: reports say plugin `hooks.json` ignores it, and that on
+  Windows with Git Bash it still goes through bash [U]. [V for the three shells]
 - **PowerShell's execution policy** (Restricted by default) refuses `install.ps1` run as a file,
   but not `irm … | iex`, which evaluates a string. [V]
 - **`wt.exe` splits its command line at every `;`**, also inside a `powershell -Command` string
