@@ -58,6 +58,19 @@ fn hook_ptyro() -> String {
     exe.to_string_lossy().into_owned()
 }
 
+/// `CLAUDE_CODE_GIT_BASH_PATH` set to the Git Bash ptyro finds, when no variable in `set` (the
+/// daemon's, the profile's, the agent's) names one already.
+fn claude_git_bash<'a>(
+    mut set: impl Iterator<Item = &'a str>,
+    found: impl FnOnce() -> Option<PathBuf>,
+) -> Option<(String, String)> {
+    const VAR: &str = "CLAUDE_CODE_GIT_BASH_PATH";
+    if set.any(|k| k.eq_ignore_ascii_case(VAR)) {
+        return None;
+    }
+    found().map(|p| (VAR.to_owned(), p.to_string_lossy().into_owned()))
+}
+
 /// A port nobody listens on right now.
 fn free_port() -> Option<u16> {
     std::net::TcpListener::bind(("127.0.0.1", 0)).ok()?.local_addr().ok().map(|a| a.port())
@@ -575,6 +588,15 @@ impl Daemon {
                 adapter_id = Some(id);
             }
         }
+        // Windows: Claude runs its Bash tool, hooks and status line in the same Git Bash as the
+        // relay and project scripts, unless someone already chose one (WIN8).
+        if cfg!(windows) && adapter_id.as_deref() == Some("claude") {
+            let set = plan.set.iter().chain(&agent_env).map(|(k, _)| k.as_str());
+            let base = self.base_env.iter().filter_map(|(k, _)| k.to_str());
+            agent_env.extend(claude_git_bash(set.chain(base), || {
+                ptyro_core::shell::ScriptEnv::here(ptyro_core::shell::git_bash)
+            }));
+        }
         let mut env = self.session_env(l.id, &plan, &l.client_env, &wt_env, &agent_env);
         let exec = if l.kind == SessionKind::Shell && config.shell.integration {
             self.shell_integration(&argv, &mut env)
@@ -725,5 +747,25 @@ impl Drop for Claim<'_> {
         if let Some(n) = &self.name {
             c.1.remove(n);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn claude_gets_the_git_bash_ptyro_found_unless_one_is_chosen() {
+        let gb = || Some(PathBuf::from(r"C:\Program Files\Git\bin\bash.exe"));
+        let got = claude_git_bash(["PATH", "HOME"].into_iter(), gb);
+        assert_eq!(
+            got,
+            Some(("CLAUDE_CODE_GIT_BASH_PATH".into(), r"C:\Program Files\Git\bin\bash.exe".into()))
+        );
+        // Chosen already (Windows names ignore case): left alone, nothing looked for.
+        let chosen = ["claude_code_git_bash_path"].into_iter();
+        assert_eq!(claude_git_bash(chosen, || panic!("not looked for")), None);
+        // No Git Bash: nothing set, and Claude falls back to PowerShell itself.
+        assert_eq!(claude_git_bash(std::iter::empty(), || None), None);
     }
 }
