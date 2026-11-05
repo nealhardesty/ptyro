@@ -167,7 +167,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `wt restore` | `worktree.restore`: pick from the archived ones (`^x` there deletes one) | `worktree.restore`: Archived (Projects tab): tap one |
 | `wt archives` | `worktree.restore` lists them | `worktree.restore`: Archived lists them |
 | `wt archive-rm` | `worktree.archive_delete`: pick an archived one (asks first), or `^x` in `worktree.restore`'s list | `worktree.archive_delete`: Archived (Projects tab): tap one → Delete |
-| `gc` | `worktree.gc` (`G`, or ⏎ on the health finding): stale worktrees with their size, ⏎ archives one, `^l` keeps it (locks); a merged worktree's `x` archives it | `worktree.gc`: 🧹 on the Projects tab (`🧹3` when some are stale): their size, archive or keep one |
+| `gc` | `worktree.gc` (`G`, or ⏎ on the health finding): stale worktrees with their size, ⏎ archives one, `^l` keeps it (locks); a merged worktree's `x` archives it; scratch shells' directories left behind are listed after them, ⏎ deletes one (asked) | `worktree.gc`: 🧹 on the Projects tab (`🧹3` when some are stale): their size, archive or keep one; "Left behind by scratch shells" below them, Delete (asked) |
 | `ws ls` | `workspace.switch` (`w`) | `workspace.switch`: chips on the Projects tab; Workspaces lists them |
 | `ws new` | `workspace.switch` (`w`) → "+ new workspace" | `workspace.new`: ＋ on Workspaces |
 | `ws set` | `workspace.profile` and `workspace.notify` | `workspace.set`: a workspace's menu: its profile and notifications |

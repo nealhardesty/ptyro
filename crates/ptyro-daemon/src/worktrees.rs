@@ -1046,7 +1046,9 @@ impl Daemon {
         }
         self.measure(&mut entries).await;
         entries.sort_by_key(|e| std::cmp::Reverse(e.bytes.unwrap_or(0)));
-        Ok(Reply::Gc { entries })
+        // And scratch shells' directories left behind (SPEC §23.8).
+        let scratch = self.scratch_leftovers().await;
+        Ok(Reply::Gc { entries, scratch })
     }
 
     /// What each entry's directory takes on disk: measured at most every half hour (the doctor

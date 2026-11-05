@@ -43,16 +43,88 @@ impl Drop for Reservation {
     }
 }
 
-/// A scratch directory made for a spawn that may still be refused: dropped while still set, it
-/// goes again (only while empty: `remove_dir` never takes what someone put there).
-pub(crate) struct ScratchGuard(pub(crate) Option<PathBuf>);
+/// Scratch directories made for shells still starting: never a leftover, never deleted.
+static STARTING: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+/// A scratch directory made for a spawn that may still be refused. While it lives, `gc` leaves
+/// the directory alone (`STARTING`); dropped unkept, the directory goes again (only while empty:
+/// `remove_dir` never takes what someone put there).
+pub(crate) struct ScratchGuard {
+    dir: Option<PathBuf>,
+    keep: bool,
+}
+
+impl ScratchGuard {
+    pub(crate) fn new(dir: Option<PathBuf>) -> Self {
+        if let Some(d) = &dir {
+            STARTING.locked().push(d.clone());
+        }
+        Self { dir, keep: false }
+    }
+
+    /// The shell started: its directory is its own now.
+    pub(crate) fn keep(&mut self) {
+        self.keep = true;
+    }
+}
 
 impl Drop for ScratchGuard {
     fn drop(&mut self) {
-        if let Some(dir) = self.0.take() {
-            let _ = std::fs::remove_dir(dir);
+        if let Some(dir) = self.dir.take() {
+            STARTING.locked().retain(|d| *d != dir);
+            if !self.keep {
+                let _ = std::fs::remove_dir(dir);
+            }
         }
     }
+}
+
+/// What a leftover holds, measured at most every half hour (as worktrees' sizes are).
+/// (files, bytes, newest change in ms) of a directory, as `tally` counts them.
+type Tally = (u64, u64, u64);
+static TALLIES: Mutex<BTreeMap<PathBuf, (Tally, std::time::Instant)>> = Mutex::new(BTreeMap::new());
+
+/// The files under `dir` (not following links; directories aren't counted): (files, bytes,
+/// newest change in ms). Gives up after three seconds or 100,000 files: a leftover that big
+/// shows at least that.
+fn tally(dir: &Path) -> Tally {
+    const FRESH: Duration = Duration::from_secs(1800);
+    if let Some((t, at)) = TALLIES.locked().get(dir)
+        && at.elapsed() < FRESH
+    {
+        return *t;
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let (mut files, mut bytes, mut newest) = (0u64, 0u64, 0u64);
+    let stamp = |m: &std::fs::Metadata| {
+        m.modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_millis() as u64)
+    };
+    if let Ok(m) = std::fs::symlink_metadata(dir) {
+        newest = stamp(&m);
+    }
+    let mut todo = vec![dir.to_path_buf()];
+    'walk: while let Some(d) = todo.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            let Ok(m) = e.path().symlink_metadata() else { continue };
+            newest = newest.max(stamp(&m));
+            if m.is_dir() {
+                todo.push(e.path());
+                continue;
+            }
+            files += 1;
+            bytes += m.len();
+            if files >= 100_000 || std::time::Instant::now() > deadline {
+                break 'walk;
+            }
+        }
+    }
+    let t = (files, bytes, newest);
+    TALLIES.locked().insert(dir.to_path_buf(), (t, std::time::Instant::now()));
+    t
 }
 
 /// The lowest number from 1 that isn't in `taken`.
@@ -382,6 +454,98 @@ impl Daemon {
         }
     }
 
+    /// Scratch directories no shell uses any more (SPEC §23.8): what `gc` lists, newest first.
+    pub(crate) async fn scratch_leftovers(&self) -> Vec<ptyro_core::model::ScratchLeftover> {
+        let root = self.paths.data.join("scratch");
+        let used = self.scratch_in_use();
+        let mut out = tokio::task::spawn_blocking(move || {
+            let Ok(dirs) = std::fs::read_dir(&root) else { return Vec::new() };
+            let starting = STARTING.locked().clone();
+            let mut out = Vec::new();
+            for path in dirs.flatten().map(|d| d.path()) {
+                if !path.is_dir()
+                    || starting.contains(&path)
+                    || used.iter().any(|u| u.starts_with(&path))
+                {
+                    continue;
+                }
+                // Empty: nothing of anyone's in it, so it simply goes (ptyro's own tidying).
+                if std::fs::remove_dir(&path).is_ok() {
+                    continue;
+                }
+                let (files, bytes, modified_ms) = tally(&path);
+                out.push(ptyro_core::model::ScratchLeftover { path, files, bytes, modified_ms });
+            }
+            TALLIES.locked().retain(|p, _| out.iter().any(|l| l.path == *p));
+            out
+        })
+        .await
+        .unwrap_or_default();
+        out.sort_by_key(|l| std::cmp::Reverse(l.modified_ms));
+        out
+    }
+
+    /// `ShellScratchRemove`: a leftover scratch directory, and what's in it, deleted (asked
+    /// first by every client). Only directly under `<data>/scratch`, and never one in use.
+    async fn scratch_remove(&self, path: &Path) -> Result<Reply, Error> {
+        let root = self.paths.data.join("scratch");
+        let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        let (root, dir) = (canon(&root), canon(path));
+        if dir.parent() != Some(root.as_path()) || !dir.is_dir() {
+            return Err(Error::invalid(format!(
+                "{} isn't a scratch shell's directory (they live in {})",
+                path.display(),
+                root.display()
+            )));
+        }
+        let starting = STARTING.locked().iter().any(|d| canon(d) == dir);
+        if starting || self.scratch_in_use().iter().any(|u| canon(u).starts_with(&dir)) {
+            return Err(Error::conflict(format!(
+                "{} is a scratch shell's directory still in use: stop that shell first",
+                dir.display()
+            )));
+        }
+        let gone = dir.clone();
+        tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&gone))
+            .await
+            .map_err(|e| Error::internal(e.to_string()))?
+            .map_err(|e| Error::internal(format!("deleting {}: {e}", dir.display())))?;
+        TALLIES.locked().remove(&dir);
+        Ok(Reply::Removed { notes: vec![format!("deleted {}", dir.display())] })
+    }
+
+    /// Every directory a session has in `scratch/` now: its own scratch directory, where it was
+    /// started, and where it is (a scratch shell adopted into a worktree still runs there).
+    fn scratch_in_use(&self) -> Vec<PathBuf> {
+        let root = self.paths.data.join("scratch");
+        let mut used = Vec::new();
+        for s in self.sessions() {
+            let (scratch, cwd) = {
+                let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                (m.shelf.as_ref().and_then(|f| f.scratch.clone()), m.cwd.clone())
+            };
+            used.extend(scratch);
+            used.push(cwd);
+            if s.is_live()
+                && let Some(here) = self.info(&s).live_cwd
+            {
+                used.push(here);
+            }
+        }
+        // A shell reports where it is as the system sees it (macOS: /private/var for /var):
+        // both spellings of the root count.
+        let real = root.canonicalize().unwrap_or_else(|_| root.clone());
+        used.into_iter()
+            .filter_map(|p| {
+                if p.starts_with(&root) {
+                    Some(p)
+                } else {
+                    p.strip_prefix(&real).ok().map(|rest| root.join(rest))
+                }
+            })
+            .collect()
+    }
+
     /// `ShellMove`, `ShellPlace`, `ShellWatch`.
     pub(crate) async fn handle_shells(self: &Arc<Self>, req: Request) -> Result<Reply, Error> {
         match req {
@@ -390,6 +554,7 @@ impl Daemon {
                 self.shell_place(&addr, loose, worktree.as_deref())
             }
             Request::ShellWatch { addr, watch } => self.shell_watch(&addr, watch),
+            Request::ShellScratchRemove { path } => self.scratch_remove(&path).await,
             _ => Err(Error::internal("not a shells request")),
         }
     }

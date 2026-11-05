@@ -526,3 +526,70 @@ async fn stop_sessions_stops_a_loose_shell_in_the_worktree() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
+
+/// SH.7's leftovers: a scratch shell's directory kept for its files is listed by `gc`, and
+/// deleted when asked; a running scratch shell's, or anything outside `scratch/`, never is.
+#[tokio::test(flavor = "multi_thread")]
+async fn gc_lists_a_scratch_directory_left_behind_and_deletes_it_when_asked() {
+    let w = World::new("");
+    let c = w.d.client().await.unwrap();
+    let spec = SpawnSpec { cwd: w.home(), scratch: true, ..SpawnSpec::default() };
+    let s = try_spawn(&c, spec).await.unwrap();
+    std::fs::write(s.cwd.join("notes.txt"), "keep me\n").unwrap();
+    // In use: not a leftover, and not deleted.
+    assert!(gc_scratch(&c).await.is_empty());
+    let e = c.request(Request::ShellScratchRemove { path: s.cwd.clone() }).await.unwrap_err();
+    assert!(e.message.contains("still in use"), "{}", e.message);
+    kill_and_wait(&c, &s).await;
+    let left = gc_scratch(&c).await;
+    assert_eq!(left.len(), 1, "{left:?}");
+    assert_eq!(left[0].files, 1);
+    assert!(left[0].bytes >= 8);
+    // Only scratch directories: never a path elsewhere.
+    let e = c.request(Request::ShellScratchRemove { path: w.home() }).await.unwrap_err();
+    assert!(e.message.contains("isn't a scratch shell's directory"), "{}", e.message);
+    assert!(w.home().is_dir());
+    let r = c.request(Request::ShellScratchRemove { path: left[0].path.clone() }).await.unwrap();
+    assert!(matches!(r, Reply::Removed { .. }), "{r:?}");
+    assert!(!s.cwd.exists());
+    assert!(gc_scratch(&c).await.is_empty());
+}
+
+async fn gc_scratch(c: &Client) -> Vec<ptyro_core::model::ScratchLeftover> {
+    match c.request(Request::Gc).await.unwrap() {
+        Reply::Gc { scratch, .. } => scratch,
+        r => panic!("{r:?}"),
+    }
+}
+
+/// Review fixes for SH.10: a scratch shell adopted into a worktree still runs in its scratch
+/// directory, so it is never a leftover nor deleted; an empty leftover is simply tidied away.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_scratch_directory_in_use_is_never_a_leftover_and_empty_ones_go() {
+    let w = World::new("");
+    let c = w.d.client().await.unwrap();
+    let code = repo(&w, "code");
+    c.request(Request::ProjectAdd { path: code.clone(), workspace: None }).await.unwrap();
+    let spec = SpawnSpec { cwd: w.home(), scratch: true, ..SpawnSpec::default() };
+    let s = try_spawn(&c, spec).await.unwrap();
+    std::fs::write(s.cwd.join("work.txt"), "mine\n").unwrap();
+    let r = c
+        .request(Request::ShellPlace {
+            addr: s.id.full(),
+            loose: false,
+            worktree: Some("code/@root".into()),
+        })
+        .await
+        .unwrap();
+    let Reply::Session { info } = r else { panic!("{r:?}") };
+    assert!(!info.loose, "adopted");
+    assert!(gc_scratch(&c).await.is_empty(), "it still runs there: no leftover");
+    let e = c.request(Request::ShellScratchRemove { path: s.cwd.clone() }).await.unwrap_err();
+    assert!(e.message.contains("still in use"), "{}", e.message);
+    assert!(s.cwd.join("work.txt").is_file());
+    // An empty directory in scratch/ that nobody uses: tidied, not listed.
+    let empty = s.cwd.parent().unwrap().join("left-empty");
+    std::fs::create_dir(&empty).unwrap();
+    assert!(gc_scratch(&c).await.is_empty());
+    assert!(!empty.exists(), "an empty leftover goes by itself");
+}

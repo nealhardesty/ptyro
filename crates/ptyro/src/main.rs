@@ -726,6 +726,9 @@ enum Cmd {
         /// List them as JSON (implies --dry-run)
         #[arg(long)]
         json: bool,
+        /// Only scratch shells' directories left behind (SHELLS); with --json, those as JSON
+        #[arg(long)]
+        scratch: bool,
     },
     /// Show, check or edit the configuration (~/.config/ptyro/config.toml)
     Config {

@@ -199,6 +199,20 @@ impl App {
                 fix: Some(Fix::Append { file: rc, line }),
             });
         }
+        // SHELLS' Alt-1…9 typed as characters here (SPEC §23.6): how to turn Option into Meta,
+        // and ⏎ opens the setting that frees the keys instead.
+        if self.config.shell.alt_digits && !self.alt_digits_reach() {
+            let menu = self.keymap.key_for("shells.menu").unwrap_or_else(|| "C-q e".into());
+            findings.push(Finding {
+                problem: false,
+                what: crate::shells::ALT_FINDING.into(),
+                text: format!(
+                    "Option-digit types ¡™£ here, so Alt-1…9 can't show your shells: {}; until then {menu} 1…9 does (or switch them off)",
+                    crate::shells::option_as_meta_steps()
+                ),
+                fix: Some(Fix::Setting("shell.alt_digits")),
+            });
+        }
         let n = findings.len();
         let had_stale = self.health.findings.iter().any(|f| f.what == STALE);
         let stale = findings.iter().find(|f| f.what == STALE).map(|f| f.text.clone());

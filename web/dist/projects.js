@@ -403,7 +403,8 @@ function worktreeView(rest) {
     return h("div", {}, ui.header(w.is_root ? `${proj?.slug ?? ""} · main` : w.title || w.name, "#/p", h("button", { class: "icon", title: tip("worktree.show"), "aria-label": "More", onclick: () => worktreeMenu(w) }, "⋯")), h("div", { class: "chips tabs-in" }, ...tabs.map((t) => h("button", { class: t.id === current ? "on" : "", onclick: () => { tab = t.id; go(`#/wt/${enc(w.id)}/${t.id}`); } }, t.label))), h("main", { class: "stack", title: tip("worktree.show") }, content));
 }
 // ── clean-up, archives ──────────────────────────────────────────────────────────────────────
-const gc = new Cache(() => conn.request({ t: "gc" }).then((r) => r.entries));
+// Stale worktrees, and scratch shells' directories left behind (SPEC §23.8).
+const gc = new Cache(() => conn.request({ t: "gc" }).then((r) => ({ entries: r.entries, scratch: r.scratch ?? [] })));
 const archives = new Cache(() => conn.request({ t: "worktree_archives", project: null }).then((r) => r.entries));
 /// `512 B`, `3.4 MiB`, `12.0 GiB`, as the CLI and the TUI say it.
 function bytes(b) {
@@ -424,11 +425,12 @@ export function staleMaybeChanged(e) {
 /// The Projects tab's 🧹, with how many worktrees are stale once it's known (the TUI's ⚕ says
 /// the same): the reminder to clean up, where you'd see it.
 function cleanUpButton() {
-    const n = conn.scope === "full" ? gc.get("")?.length ?? 0 : 0;
+    const n = conn.scope === "full" ? gc.get("")?.entries.length ?? 0 : 0;
     return h("button", { class: "icon", title: n ? `${n} stale worktree${n === 1 ? "" : "s"}: ${tip("worktree.gc")}` : tip("worktree.gc"), "aria-label": n ? `Clean up ${n}` : "Clean up", onclick: () => go("#/gc") }, n ? `🧹${n}` : "🧹");
 }
 function gcView() {
-    const entries = gc.get("");
+    const entries = gc.get("")?.entries;
+    const scratch = gc.get("")?.scratch ?? [];
     const total = (entries ?? []).reduce((t, e) => t + (e.bytes ?? 0), 0);
     const done = (msg) => async (req) => { await ask(req, msg); gc.reload(""); };
     const body = pending(gc, "", "Looking for stale worktrees…") ?? (entries.length
@@ -440,7 +442,14 @@ function gcView() {
             ])
         })))
         : h("p", { class: "empty" }, "Nothing is stale."));
-    return h("div", {}, ui.header("Clean up", "#/p", h("button", { class: "icon", onclick: () => gc.reload(""), "aria-label": "Look again" }, "↻")), h("main", { class: "stack", title: tip("worktree.gc") }, h("p", { class: "intro" }, `Worktrees that are merged, abandoned or gone, biggest first${total ? ` (${bytes(total)} in all, build output included)` : ""}. Nothing is removed unless you say so.`), body));
+    // A scratch shell's directory stays when files are left in it: shown here, deleted when asked.
+    const left = scratch.length ? section("Left behind by scratch shells", h("div", { class: "rows" }, ...scratch.map((l) => {
+        const name = String(l.path).split("/").pop() ?? l.path;
+        return row(name, `${l.files} files · changed ${ago(l.modified_ms)} ago`, bytes(l.bytes), {
+            onclick: () => confirm(`Delete ${name}?`, `${l.path} and the ${l.files} files in it go for good.`, "Delete", () => done("Deleted")({ t: "shell_scratch_remove", path: l.path })),
+        });
+    }))) : null;
+    return h("div", {}, ui.header("Clean up", "#/p", h("button", { class: "icon", onclick: () => gc.reload(""), "aria-label": "Look again" }, "↻")), h("main", { class: "stack", title: tip("worktree.gc") }, h("p", { class: "intro" }, `Worktrees that are merged, abandoned or gone, biggest first${total ? ` (${bytes(total)} in all, build output included)` : ""}. Nothing is removed unless you say so.`), body, left));
 }
 function archivesView() {
     const entries = archives.get("");

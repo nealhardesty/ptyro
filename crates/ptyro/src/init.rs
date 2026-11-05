@@ -117,7 +117,7 @@ pub async fn run(ctx: &Ctx, yes: bool, dry_run: bool) -> Result<i32, Error> {
 
     section("your terminal");
     let mut r = crate::doctor::Report::default();
-    crate::doctor::terminal(&mut r).await;
+    crate::doctor::terminal(&mut r, &current).await;
     crate::doctor::print_checks(&r);
 
     section("agents");

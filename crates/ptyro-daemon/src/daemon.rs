@@ -712,7 +712,7 @@ impl Daemon {
         let id = SessionId::new();
         let scratch = if spec.scratch { Some(self.make_scratch(id)?) } else { None };
         // Any refusal from here on takes the new, empty scratch directory away again.
-        let mut scratch_guard = crate::shells::ScratchGuard(scratch.clone());
+        let mut scratch_guard = crate::shells::ScratchGuard::new(scratch.clone());
         // A worktree by address starts at its root; a directory inside one stays where asked.
         let cwd = match (&spec.worktree, &target, &scratch) {
             (_, _, Some(dir)) => dir.clone(),
@@ -876,7 +876,7 @@ impl Daemon {
                 return Err(e);
             }
         };
-        scratch_guard.0 = None;
+        scratch_guard.keep();
         // Its title: `--title`, else the prompt (a snippet's text, not its `@name`).
         let title = spec.title.clone().or(prompt_text).map(|t| ptyro_core::session::brief(&t, 120));
         if title.is_some() {
@@ -1449,7 +1449,8 @@ impl Daemon {
             Request::Adopt { addr } => self.adopt(&addr).await,
             req @ (Request::ShellMove { .. }
             | Request::ShellPlace { .. }
-            | Request::ShellWatch { .. }) => self.handle_shells(req).await,
+            | Request::ShellWatch { .. }
+            | Request::ShellScratchRemove { .. }) => self.handle_shells(req).await,
             Request::QuickShell { worktree, cwd, create, env, size, workspace } => {
                 self.quick_shell(worktree, cwd, create, env, size, workspace).await
             }

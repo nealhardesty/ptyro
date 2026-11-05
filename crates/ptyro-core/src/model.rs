@@ -623,6 +623,18 @@ impl GcEntry {
     }
 }
 
+/// A scratch shell's directory left behind (SPEC §23.8): its shell went while files were still
+/// in it (they're never deleted unasked), or the daemon stopped before it could tidy up.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScratchLeftover {
+    pub path: PathBuf,
+    /// Files and directories in it, all the way down.
+    pub files: u64,
+    pub bytes: u64,
+    /// When something in it last changed.
+    pub modified_ms: u64,
+}
+
 /// `512 B`, `3.4 MiB`, `12.0 GiB`.
 pub fn human_bytes(b: u64) -> String {
     const U: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];

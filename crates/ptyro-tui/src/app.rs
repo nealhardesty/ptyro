@@ -820,6 +820,12 @@ pub struct App {
     pub last_cli: Option<Vec<String>>,
     /// Addresses drawn on screen this frame, for the terminal to make links (OSC 8, UX2.1).
     pub links: std::cell::RefCell<Vec<crate::about::Link>>,
+    /// Where the pane headers' SHELLS strips were drawn this frame, for clicks (SPEC §23.6).
+    pub strip_hits: std::cell::RefCell<Vec<crate::shells::StripAt>>,
+    /// The terminal has sent a key with Alt: Alt-1…9 reach ptyro here, whatever it's called.
+    pub alt_seen: bool,
+    /// Said once that Option-digit typed a character instead of Alt (SPEC §23.6).
+    pub option_said: bool,
     pub started: Instant,
 }
 
@@ -937,6 +943,9 @@ impl App {
             health: crate::health::Health::default(),
             last_cli: None,
             links: std::cell::RefCell::new(Vec::new()),
+            strip_hits: std::cell::RefCell::new(Vec::new()),
+            alt_seen: false,
+            option_said: false,
             started: Instant::now(),
         }
     }
@@ -2348,11 +2357,11 @@ impl App {
                     action: Confirmed::RemoveWorktree { id, force: true },
                 });
             }
-            (Pending::Gc, Ok(Reply::Gc { entries })) => {
-                if entries.is_empty() {
+            (Pending::Gc, Ok(Reply::Gc { entries, scratch })) => {
+                if entries.is_empty() && scratch.is_empty() {
                     self.toast("nothing stale: every worktree is in use");
                 } else {
-                    let items = entries
+                    let mut items: Vec<Item> = entries
                         .iter()
                         .map(|e| Item {
                             label: e.worktree.qualified(),
@@ -2366,6 +2375,21 @@ impl App {
                             target: Target::Worktree(e.worktree.id.clone()),
                         })
                         .collect();
+                    // Scratch shells' directories left behind (SPEC §23.8): ⏎ deletes, asked.
+                    items.extend(scratch.iter().map(|l| Item {
+                        label: format!(
+                            "scratch {}",
+                            l.path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default()
+                        ),
+                        detail: format!(
+                            "{} · {} files · left behind by a scratch shell, changed {} ago · ⏎ deletes it",
+                            ptyro_core::model::human_bytes(l.bytes),
+                            l.files,
+                            crate::ui::ago(l.modified_ms)
+                        ),
+                        key: None,
+                        target: Target::Path(l.path.clone()),
+                    }));
                     self.overlay = Some(Overlay::Picker {
                         palette: Palette::new(
                             "Stale worktrees, biggest first   ⏎ archive (its work is kept) · ^l keep it (lock)",
@@ -2663,6 +2687,7 @@ impl App {
             }
             return;
         }
+        self.learn_alt(key);
         if self.first_run.is_some() && !self.prefix && !self.keymap.is_prefix(key) {
             self.first_run_key(key);
             return;
@@ -5739,6 +5764,18 @@ impl App {
                     self.confirm_archive(&w);
                 }
             }
+            (Target::Path(path), Purpose::Gc) => {
+                self.overlay = Some(Overlay::Confirm {
+                    text: format!(
+                        "Delete {} and everything in it? A scratch shell left it behind. [y/N]",
+                        path.display()
+                    ),
+                    action: Confirmed::Send(
+                        Box::new(Request::ShellScratchRemove { path }),
+                        "deleted".into(),
+                    ),
+                });
+            }
             (Target::Path(word), Purpose::CliPick(mut job)) => {
                 job.done.push(word.to_string_lossy().into_owned());
                 self.cli_step(*job);
@@ -6290,6 +6327,11 @@ impl App {
             return;
         }
         if self.full_view() {
+            return;
+        }
+        // A number on a shell's header strip shows that shell; its `＋` starts one.
+        if matches!(m.kind, K::Down(crossterm::event::MouseButton::Left)) && self.strip_click(x, y)
+        {
             return;
         }
         // Dragging a divider or a selection continues wherever the mouse goes.
@@ -7599,6 +7641,12 @@ mod tests {
         }
         assert_eq!(step(&mut app), Step::CleanUp);
         app.worktrees.retain(|x| x.id != w.id);
+        // Last, a shell of your own in SHELLS: the coach names the key, and one made moves on.
+        assert_eq!(step(&mut app), Step::Shells);
+        assert!(coach(&app).contains("Press M-1 to start shell 1"), "{}", coach(&app));
+        let mut one = session("dl");
+        (one.loose, one.slot) = (true, Some(1));
+        app.sessions.push(one);
         assert_eq!(step(&mut app), Step::Done);
         assert!(coach(&app).contains("C-q d leaves the tour"), "{}", coach(&app));
         // `help.tour` inside the tour starts it over (outside, the TUI steps aside for it).
@@ -11130,5 +11178,52 @@ mod tests {
         let header = shown.lines().find(|l| l.contains("SHELLS ")).unwrap_or_default();
         assert!(header.contains("[2 "), "the shown one in brackets: {shown}");
         assert!(header.contains("1 "), "{header}");
+    }
+
+    #[test]
+    fn a_click_on_the_strip_shows_that_shell_and_plus_starts_one() {
+        use crossterm::event::{MouseButton, MouseEventKind as K};
+        let mut app = app();
+        with_project(&mut app);
+        let (one, two) = (loose("dl", 1), loose("htop", 2));
+        app.sessions.extend([one.clone(), two.clone()]);
+        app.show(two.id, None);
+        let shown = screen(&app);
+        let (y, line) =
+            shown.lines().enumerate().find(|(_, l)| l.contains("SHELLS ")).expect("the strip");
+        // The column of `1 ` in the strip (after `SHELLS `), counted in cells.
+        let at = |needle: &str| {
+            let byte = line.find(needle).unwrap();
+            line[..byte].chars().count() as u16
+        };
+        let x1 = at("SHELLS ") + "SHELLS ".len() as u16;
+        app.on_mouse(&mouse(K::Down(MouseButton::Left), x1, y as u16));
+        assert_eq!(app.focused_session(), Some(one.id), "shell 1 is shown");
+        // Its `＋` asks for a new shell in the same workspace.
+        let shown = screen(&app);
+        let line = shown.lines().nth(y).unwrap();
+        let plus = line[..line.find('＋').unwrap()].chars().count() as u16;
+        while app.rx.try_recv().is_ok() {}
+        app.on_mouse(&mouse(K::Down(MouseButton::Left), plus, y as u16));
+        let spec = spawn_asked(&mut app).expect("a new shell");
+        assert!(spec.loose && spec.workspace.as_deref() == Some("main"), "{spec:?}");
+    }
+
+    #[test]
+    fn a_key_with_alt_proves_alt_reaches_and_the_finding_goes() {
+        let mut app = app();
+        app.health.findings.push(crate::health::Finding {
+            problem: false,
+            what: crate::shells::ALT_FINDING.into(),
+            text: "Option-digit types ¡™£ here".into(),
+            fix: None,
+        });
+        assert!(!app.alt_seen);
+        // Alt-b (Option-Left in Terminal.app, with or without Option as Meta) proves nothing.
+        app.learn_alt(KeyEvent::new(KeyCode::Char { c: 'b' }, Mods(Mods::ALT)));
+        assert!(!app.alt_seen && app.health.findings.len() == 1);
+        app.learn_alt(KeyEvent::new(KeyCode::Char { c: '3' }, Mods(Mods::ALT)));
+        assert!(app.alt_seen && app.alt_digits_reach());
+        assert!(app.health.findings.is_empty(), "it works after all: no finding");
     }
 }

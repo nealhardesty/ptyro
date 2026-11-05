@@ -3154,15 +3154,35 @@ parity rows, in each task.
   - Scratch shells in `<data>/scratch/<id>/` that go when they're removed, asking first when
     files remain; `ptyro gc` lists the ones left behind.
   - In the TUI, the CLI and the web (§23.8).
-  *Done (2026-11-04):* a scratch directory with files stays (logged) instead of asking, and
-  `ptyro gc` doesn't list leftovers yet.
+  *Done (2026-11-04):* a scratch directory with files stays (logged) instead of asking; `gc`
+  lists the ones left behind (SH.10).
 - [x] **SH.8 Settings and docs** — S. Schema entries for `shell.section`, `shell.notify_after`
   and `shell.restore` in the Shells section (help, default, kind), shown in the TUI's and the web's
   panel. `docs/keys.md` (the keys, and the Option-as-Meta note extended to `Alt`-digits), README
   (Daily use: shells), the tour's one new stop, and SPEC §23 changed from proposed to built.
   *Done (2026-11-04):* `shell.section`, `shell.notify_after`, `shell.alt_digits` and
-  `shell.restore` are in Configuration → Shells (TUI and web, one schema). The tour's stop is not
-  built.
+  `shell.restore` are in Configuration → Shells (TUI and web, one schema). The tour's stop is
+  SH.12.
+- [x] **SH.9 Clicks on the TUI's strip** — S. A number on a shell's pane header shows that shell;
+  `＋` starts one there. *Done (2026-11-04):* `App.strip_hits`, filled as the header is drawn and
+  clipped to what shows; `a_click_on_the_strip_shows_that_shell_and_plus_starts_one`.
+- [x] **SH.10 Scratch leftovers in `gc`** — S. Scratch directories no shell uses are listed by
+  `ptyro gc` (`d` deletes after the worktrees), the TUI's `G` list (⏎ deletes, asked), the web's
+  Clean up page (Delete, asked), and noted by `ptyro doctor`. *Done (2026-11-04):*
+  `Reply::Gc.scratch`, `ShellScratchRemove` (only directly in `scratch/`, never one in use);
+  `gc_lists_a_scratch_directory_left_behind_and_deletes_it_when_asked`.
+- [x] **SH.11 Option-as-Meta, said where it matters** — S.
+  - The health badge finds Alt-digits typed as characters (Terminal.app, iTerm2), says where
+    the terminal's setting is, and ⏎ opens `shell.alt_digits`.
+  - `ptyro doctor` says the same from a shell.
+  - Alt with a digit clears it (any other Alt key proves nothing). Option-digit typing `¡` says
+    so once.
+
+  *Done (2026-11-04):* `learn_alt`, `ALT_FINDING`;
+  `a_key_with_alt_proves_alt_reaches_and_the_finding_goes`.
+- [x] **SH.12 The tour's stop** — S. A sixth stop, "keep a shell of your own" (TUI and web): Alt-1
+  (else `C-q e 1`) makes shell 1, and the tour moves on. *Done (2026-11-04):* `Step::Shells`; the
+  headless tour test presses Alt-1 there.
 
 **Done when:** in one workspace, with no project open: `C-q C-c` makes shell 1 in `~`, `Alt-2`
 makes shell 2 running `htop`, `Alt-1` and `` C-q ` `` flip between them; `make test` started in

@@ -260,9 +260,9 @@ a row's menu (`.`), makes one at any time.
   (`Alt-0` for 10) shows shell N from anywhere, no prefix. An empty number starts a shell there,
   so `Alt-3` is also the way to make shell 3. A shell keeps its number until it goes. Run any
   command there: `Ctrl-Q e` is the shells menu (a digit picks, `c` a new shell, `!` a command
-  like `htop` or `ssh prod`, `s` a scratch shell in a new, empty directory that goes with it).
+  like `htop` or `ssh prod`, `s` a scratch shell in a new, empty directory that goes with it; one left with files in it shows up in `ptyro gc` and `Ctrl-Q G`).
   Each workspace's SHELLS section in the sidebar lists them, and a shell's pane header is a
-  strip of them all, tmux's status line. A command there that ran 30 s or more tells you when it
+  strip of them all, tmux's status line (click a number to go there, `＋` for a new one). A command there that ran 30 s or more tells you when it
   ends, with its exit code (`[shell] notify_after`), and a row's menu (`.`) watches a shell for
   its command's end, output, silence or a matching line, gives it another number, or adopts it
   into the worktree it's in. A session's menu can also move it to SHELLS, so a dev server
@@ -273,7 +273,7 @@ a row's menu (`.`), makes one at any time.
   the strip (tap a number, swipe along it).
   - **On a Mac:** Terminal.app and iTerm2 type `¡™£` for Option-digit unless Option acts as
     Meta (Terminal.app: Settings → Profiles → Keyboard; iTerm2: Profiles → Keys → Left Option
-    key: Esc+). Until then, `Ctrl-Q e` and the digit always works, and the hints say so.
+    key: Esc+). Until then, `Ctrl-Q e` and the digit always works, the hints say so, and the health badge (`Ctrl-Q M`) points at the setting.
     Ghostty, kitty, WezTerm and Alacritty send Alt as they are. `make verify-shells` tells you
     what yours sends. `[shell] alt_digits = false` leaves Alt-digits to the program in the pane.
 - `Ctrl-Q o` **opens the worktree in…** any editor installed here (nvim, vim, hx, VS Code,

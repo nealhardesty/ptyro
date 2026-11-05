@@ -317,6 +317,12 @@ pub enum Request {
         #[serde(default)]
         worktree: Option<String>,
     },
+    /// SHELLS (SPEC §23.8): delete a scratch shell's directory left behind (one `Gc` lists),
+    /// with what is in it. Refused for one a live shell still uses, or anywhere else. Replies
+    /// `Removed`.
+    ShellScratchRemove {
+        path: PathBuf,
+    },
     /// SHELLS (SPEC §23.9): watch a session for its command's end, output, silence or a match;
     /// `None` stops watching. Replies `Session`.
     ShellWatch {
@@ -1635,6 +1641,9 @@ pub enum Reply {
     },
     Gc {
         entries: Vec<GcEntry>,
+        /// Scratch shells' directories left behind (SPEC §23.8), newest first.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        scratch: Vec<ptyro_core::model::ScratchLeftover>,
     },
     Archives {
         entries: Vec<ptyro_core::model::ArchiveEntry>,

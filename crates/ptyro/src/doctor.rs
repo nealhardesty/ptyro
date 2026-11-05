@@ -139,7 +139,7 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Repor
     scratchpad(ctx, &config, &mut r);
     shell(&config, &mut r);
     if terminal_too {
-        terminal(&mut r).await;
+        terminal(&mut r, &config).await;
         windows_terminal(&config, &mut r);
     }
     git(&mut r).await;
@@ -771,8 +771,24 @@ async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
 /// Archives are only a note: they take next to nothing.
 async fn worktrees(c: &ptyro_client::Client, config: &Config, r: &mut Report) {
     const S: &str = "worktrees";
-    if let Ok(Reply::Gc { entries }) = c.request(Request::Gc).await {
+    if let Ok(Reply::Gc { entries, scratch }) = c.request(Request::Gc).await {
         r.add(S, "stale", stale_level(&entries), stale_text(&entries, config.worktrees.stale_days));
+        // Scratch shells' directories left behind with files in them (SPEC §23.8).
+        if !scratch.is_empty() {
+            let bytes: u64 = scratch.iter().map(|l| l.bytes).sum();
+            r.add(
+                "shells",
+                "scratch",
+                Level::Note,
+                format!(
+                    "{} scratch shell director{} left behind with files in {} ({}): `ptyro gc` lists them and deletes the ones you say",
+                    scratch.len(),
+                    if scratch.len() == 1 { "y" } else { "ies" },
+                    if scratch.len() == 1 { "it" } else { "them" },
+                    ptyro_core::model::human_bytes(bytes)
+                ),
+            );
+        }
     }
     if let Ok(Reply::Archives { entries }) =
         c.request(Request::WorktreeArchives { project: None }).await
@@ -967,7 +983,7 @@ fn wt_settings_files() -> Vec<std::path::PathBuf> {
     .collect()
 }
 
-pub(crate) async fn terminal(r: &mut Report) {
+pub(crate) async fn terminal(r: &mut Report, config: &Config) {
     const S: &str = "terminal";
     let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
     let term = var("TERM").unwrap_or_else(|| "(unset)".into());
@@ -982,8 +998,11 @@ pub(crate) async fn terminal(r: &mut Report) {
             "COLORTERM doesn't say truecolor; colours may be reduced",
         ),
     }
+    let mut kitty = false;
     if std::io::IsTerminal::is_terminal(&std::io::stdout()) && var("TMUX").is_none() {
-        match crossterm::terminal::supports_keyboard_enhancement() {
+        let answer = crossterm::terminal::supports_keyboard_enhancement();
+        kitty = matches!(answer, Ok(true));
+        match answer {
             Ok(true) => r.add(S, "keys", Level::Ok, "kitty keyboard protocol (Shift+Enter reaches agents)"),
             Ok(false) => r.add(
                 S,
@@ -993,6 +1012,37 @@ pub(crate) async fn terminal(r: &mut Report) {
             ),
             Err(_) => {}
         }
+    }
+    // SHELLS' Alt-1…9 (SPEC §23.6): macOS's own terminals type ¡™£ for Option-digit until
+    // Option is set to act as Meta, which no program can read (`make verify-shells` checks it);
+    // the kitty keyboard protocol reports Alt either way. The menu key is the keymap's own.
+    let menu = ptyro_tui::keymap::Keymap::new(config)
+        .0
+        .key_for("shells.menu")
+        .map_or_else(|| "the palette's shells.menu".to_owned(), |k| format!("{k} 1…9"));
+    let setting = match var("TERM_PROGRAM").as_deref() {
+        Some("Apple_Terminal") => Some(
+            "Terminal.app types ¡™£ for Option-digit unless \"Use Option as Meta key\" is on (Settings → Profiles → Keyboard)",
+        ),
+        Some("iTerm.app") => Some(
+            "iTerm2 types ¡™£ for Option-digit unless the left Option key sends Esc+ (Settings → Profiles → Keys)",
+        ),
+        _ => None,
+    };
+    match setting {
+        _ if !config.shell.alt_digits => r.add(
+            S,
+            "alt keys",
+            Level::Ok,
+            format!("Alt-1…9 are switched off ([shell] alt_digits): {menu} shows your shells"),
+        ),
+        Some(why) if !kitty => r.add(
+            S,
+            "alt keys",
+            Level::Note,
+            format!("{why}: until then SHELLS' Alt-1…9 don't reach ptyro, and {menu} does"),
+        ),
+        _ => r.add(S, "alt keys", Level::Ok, "Alt-1…9 reach ptyro (SHELLS)"),
     }
     if var("TMUX").is_some() {
         let opt = |name: &'static str| async move {
