@@ -58,6 +58,9 @@ struct Fake {
     oc: Option<std::sync::Arc<OcServer>>,
     /// The `--mcp-config` JSON (claude).
     mcp: Option<Value>,
+    /// `PTYRO_FAKE_LATE_SESSION_START=1`: SessionStart only with the first prompt, after the
+    /// turn's OSC 7501 working, as Codex 0.166 sends it. Set until it has been sent.
+    late_start: std::cell::Cell<bool>,
 }
 
 fn arg_value(args: &[String], flag: &str) -> Option<String> {
@@ -88,6 +91,9 @@ impl Fake {
             psp: adapter == "claude" || adapter == "opencode" || adapter == "antigravity",
             oc: None,
             mcp: arg_value(args, "--mcp-config").and_then(|m| serde_json::from_str(&m).ok()),
+            late_start: std::cell::Cell::new(
+                std::env::var_os("PTYRO_FAKE_LATE_SESSION_START").is_some(),
+            ),
             adapter,
         };
         match f.adapter.as_str() {
@@ -268,6 +274,7 @@ impl Fake {
         body: impl FnOnce(&mut std::io::Stdout) -> String,
     ) {
         let p = json!({ "prompt": prompt });
+        self.late_session_start(out);
         match self.adapter.as_str() {
             "gemini" => self.hook("BeforeAgent", p),
             "antigravity" => self.hook("PreInvocation", p),
@@ -324,6 +331,16 @@ impl Fake {
         let _ = child.kill();
         let _ = child.wait();
         result
+    }
+
+    /// `PTYRO_FAKE_LATE_SESSION_START=1`, at the first prompt: Codex 0.166's order, OSC 7501's
+    /// working (which it sends), then SessionStart, then the prompt's own hooks.
+    fn late_session_start(&self, out: &mut std::io::Stdout) {
+        if self.late_start.replace(false) {
+            let _ = write!(out, "\x1b]7501;state=working:app=fake-{}\x1b\\", self.adapter);
+            let _ = out.flush();
+            self.hook("SessionStart", json!({ "source": "startup" }));
+        }
     }
 
     fn report(&self, out: &mut std::io::Stdout, pairs: &str) {
@@ -532,10 +549,12 @@ pub fn main(args: &[String]) -> i32 {
     let _ = writeln!(out, "fake {} session={} resumed={}", f.adapter, f.session, f.resumed);
     // Claude's SessionStart and every Codex hook name the model the agent runs.
     let model = if f.adapter == "claude" { "claude-opus-5-5" } else { "gpt-5.6-sol" };
-    f.hook(
-        "SessionStart",
-        json!({ "source": if f.resumed { "resume" } else { "startup" }, "model": model }),
-    );
+    if !f.late_start.get() {
+        f.hook(
+            "SessionStart",
+            json!({ "source": if f.resumed { "resume" } else { "startup" }, "model": model }),
+        );
+    }
     f.oc(json!({ "type": "session.created", "properties": { "info": { "id": f.session } } }));
     f.report(&mut out, "state=idle");
     // `PTYRO_FAKE_PASTE=1`: bracketed paste, as real agents ask for, so a pasted prompt over
@@ -550,7 +569,11 @@ pub fn main(args: &[String]) -> i32 {
         if f.adapter == "claude" {
             let _ = write!(out, "────────────────────────────────────────\r\n");
         }
-        let _ = write!(out, "> ");
+        // Codex 0.166 says nothing until the first prompt: its composer is how ptyro sees it's
+        // ready (`›`).
+        let late_codex =
+            f.adapter == "codex" && std::env::var_os("PTYRO_FAKE_LATE_SESSION_START").is_some();
+        let _ = write!(out, "{}", if late_codex { "› " } else { "> " });
         let _ = out.flush();
         let mut line = String::new();
         if stdin.lock().read_line(&mut line).unwrap_or(0) == 0 {
@@ -596,6 +619,7 @@ pub fn main(args: &[String]) -> i32 {
                 let (secs, text) = rest.split_once(' ').unwrap_or((rest, "done"));
                 let secs: f64 = secs.parse().unwrap_or(1.0);
                 let prompt = json!({ "prompt": format!("work {rest}") });
+                f.late_session_start(&mut out);
                 match f.adapter.as_str() {
                     "gemini" => f.hook("BeforeAgent", prompt),
                     "antigravity" => f.hook("PreInvocation", prompt),

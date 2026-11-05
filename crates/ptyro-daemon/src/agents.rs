@@ -641,6 +641,14 @@ impl Daemon {
             });
         }
         s.record_event("hook", serde_json::json!({ "adapter": adapter, "event": event, "tool": payload.get("tool_name") }));
+        // A session starting can't end a turn: Codex 0.166 sends SessionStart only with the
+        // first prompt, after OSC 7501 has said working, and its idle ended the turn at once
+        // (`wait --for idle` returned before the turn did; WIN8). What else it says (the
+        // conversation, the model) still counts.
+        if event == "SessionStart" && s.status() == Some(AgentStatus::Working) {
+            signals
+                .retain(|x| !matches!(x.signal, Signal::Status { status: AgentStatus::Idle, .. }));
+        }
         // Verified-done: Claude's turn may not end until the check passes (M7.9).
         if adapter == "claude"
             && event == "Stop"
