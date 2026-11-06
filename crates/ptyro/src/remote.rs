@@ -192,7 +192,7 @@ pub fn served(paths: &ptyro_core::paths::Paths) -> Option<Served> {
     let s: Served =
         serde_json::from_str(&std::fs::read_to_string(paths.state.join("serve.json")).ok()?)
             .ok()?;
-    if !ptyro_core::os::alive(s.pid) {
+    if !ptyro_pty::alive(s.pid) {
         return None;
     }
     // A pid can be reused after a crash: what listens where it said it would settles it.

@@ -129,8 +129,8 @@ pub fn detach(cmd: &mut std::process::Command) -> &mut std::process::Command {
     }
 }
 
-/// Whether process `pid` is running (and ours to signal). Windows: never asked there, since
-/// nothing ptyro starts runs natively yet; `false`.
+/// Whether process `pid` is running (and ours to signal). Windows: `false` here, which can't ask
+/// without `unsafe`; `ptyro_pty::alive` asks Windows too.
 pub fn alive(pid: u32) -> bool {
     #[cfg(unix)]
     {

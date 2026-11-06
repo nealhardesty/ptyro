@@ -163,7 +163,7 @@ impl Daemon {
             .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
             .and_then(|v| v["pid"].as_u64())
             .and_then(|p| u32::try_from(p).ok())
-            .is_some_and(ptyro_core::os::alive);
+            .is_some_and(ptyro_pty::alive);
         if !live {
             let _ = std::fs::remove_file(record);
         }
@@ -197,7 +197,7 @@ impl Daemon {
                 .unwrap_or_default();
         let recorded = record["pid"].as_u64().and_then(|p| u32::try_from(p).ok());
         let up = mine.is_some() && recorded == mine;
-        let by_hand = recorded.filter(|p| Some(*p) != mine && ptyro_core::os::alive(*p));
+        let by_hand = recorded.filter(|p| Some(*p) != mine && ptyro_pty::alive(*p));
         WebServe {
             wanted: config.remote.serve,
             up,
