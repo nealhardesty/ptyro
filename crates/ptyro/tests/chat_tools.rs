@@ -128,7 +128,8 @@ fn a_read_chat_reads_its_folder_and_the_default_chat_only_searches() {
         after(&w.argv(c["id"].as_str().unwrap()), "--add-dir").is_empty()
     });
     // A folder that isn't there is refused, with the reason.
-    let out = w.cli(&["chat", "set", &addr, "--folder", "/no/such/folder"]);
+    let missing = if cfg!(windows) { r"C:\no\such\folder" } else { "/no/such/folder" };
+    let out = w.cli(&["chat", "set", &addr, "--folder", missing]);
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("no such folder"));
     // Codex: the read chat's folder in its permission profile (best effort: outside $HOME).

@@ -789,9 +789,11 @@ async fn run(s: Script) -> Report {
 
 #[tokio::test]
 async fn tui_wizard_fast_path_trusts_sets_up_and_follows_the_agent() {
-    let w = World::new(
-        "[worktrees]\nfetch = false\n[profiles.work]\nlabel = \"wrk\"\ncolor = \"blue\"\nmatch = { paths = [\"/**/proj\"] }\n",
-    );
+    // (A Windows path starts with its drive: `C:/…/proj` is `**/proj` there.)
+    let pin = if cfg!(windows) { "**/proj" } else { "/**/proj" };
+    let w = World::new(&format!(
+        "[worktrees]\nfetch = false\n[profiles.work]\nlabel = \"wrk\"\ncolor = \"blue\"\nmatch = {{ paths = [\"{pin}\"] }}\n",
+    ));
     let root =
         w.repo("proj", &[(".ptyro.toml", "[scripts]\nsetup = \"echo setup-ran; sleep 1\"\n")]);
     w.ok(&["project", "add", root.to_str().unwrap()]);

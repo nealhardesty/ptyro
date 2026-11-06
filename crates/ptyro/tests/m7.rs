@@ -95,6 +95,9 @@ impl World {
         self.git(&h, &["clone", "-q", &format!("{name}.git"), name]);
         let root = h.join(name);
         std::fs::write(root.join("f.txt"), "one\ntwo\n").unwrap();
+        // The checks and steps here are POSIX shell lines: bash everywhere (Git Bash on
+        // Windows, where a line would otherwise run in PowerShell).
+        std::fs::write(root.join(".ptyro.toml"), "[scripts]\nshell = \"bash\"\n").unwrap();
         self.git(&root, &["add", "-A"]);
         self.git(&root, &["commit", "-q", "-m", "init"]);
         self.git(&root, &["push", "-q", "origin", "main"]);
@@ -295,7 +298,13 @@ fn done_when_a_lead_coordinates_workers_within_its_policy() {
     loop {
         let t = w.screen("lead");
         if t.lines()
-            .map(|l| l.trim().trim_start_matches("\"body\": \"").trim_end_matches("\","))
+            // (Through ConPTY a message's lines arrive one Enter each, each its own `> ` input.)
+            .map(|l| {
+                l.trim()
+                    .trim_start_matches("> ")
+                    .trim_start_matches("\"body\": \"")
+                    .trim_end_matches("\",")
+            })
             .any(|l| l.starts_with("w1 finished turn") && l.ends_with(": one"))
         {
             break;

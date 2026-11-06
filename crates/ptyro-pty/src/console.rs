@@ -145,16 +145,44 @@ mod windows {
         Ok(((w.Right - w.Left + 1) as u16, (w.Bottom - w.Top + 1) as u16))
     }
 
+    /// A key's character waits to be read. The console's handle is signalled for every input
+    /// record (focus, window size, a key let go), which a read wouldn't return: those are taken
+    /// off and the wait goes on, else a read after "ready" would block on nothing (WIN13: the
+    /// fake agent's dialog never saw its hook's answer).
     pub fn input_ready(timeout: Duration) -> bool {
+        use windows_sys::Win32::System::Console::{
+            INPUT_RECORD, KEY_EVENT, PeekConsoleInputW, ReadConsoleInputW,
+        };
         let h = stdin();
-        let ms = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
-        // SAFETY: waiting on our own console input handle; the count is written on success.
-        unsafe {
-            if WaitForSingleObject(h, ms) != WAIT_OBJECT_0 {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            let ms = u32::try_from(left.as_millis()).unwrap_or(u32::MAX);
+            // SAFETY: our own console input handle; the records are written into `rec`, which
+            // holds one, and `n` says how many.
+            unsafe {
+                if WaitForSingleObject(h, ms) != WAIT_OBJECT_0 {
+                    return false;
+                }
+                let mut rec: INPUT_RECORD = std::mem::zeroed();
+                let mut n = 0u32;
+                if PeekConsoleInputW(h, &mut rec, 1, &mut n) == 0 || n == 0 {
+                    // Not a console (a pipe): something is there to read.
+                    let mut events = 0u32;
+                    return GetNumberOfConsoleInputEvents(h, &mut events) == 0 || events > 0;
+                }
+                let key = rec.EventType == KEY_EVENT as u16
+                    && rec.Event.KeyEvent.bKeyDown != 0
+                    && rec.Event.KeyEvent.uChar.UnicodeChar != 0;
+                if key {
+                    return true;
+                }
+                // Not a character a read would return: take it off and wait on.
+                ReadConsoleInputW(h, &mut rec, 1, &mut n);
+            }
+            if std::time::Instant::now() >= deadline {
                 return false;
             }
-            let mut n = 0u32;
-            GetNumberOfConsoleInputEvents(h, &mut n) != 0 && n > 0
         }
     }
 }

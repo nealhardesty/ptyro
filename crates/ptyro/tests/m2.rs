@@ -430,7 +430,7 @@ async fn tui_closes_the_pane_of_a_removed_session() {
         .timeout(7.0)));
     // The split's clone goes: its pane closes, and never shows another session (UX3.1).
     let clone = newcomer(&c, &["alpha"]).await;
-    tokio::time::sleep(Duration::from_millis(1800)).await;
+    tokio::time::sleep(ptyro_testkit::headless::scaled(Duration::from_millis(1800))).await;
     c.request(Request::Kill { addr: clone.clone(), signal: Some(9) }).await.expect("kill");
     // A shell that dies is removed by the daemon itself (`[ui] shell_exit = "close"`).
     let deadline = Instant::now() + WAIT;

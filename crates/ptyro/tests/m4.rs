@@ -336,7 +336,25 @@ async fn codex_gemini_antigravity_and_opencode_adapters() {
     // Codex: the chained notify program got the turn's JSON.
     let deadline = Instant::now() + WAIT;
     while !std::fs::read_to_string(&chained).is_ok_and(|t| t.contains("agent-turn-complete")) {
-        assert!(Instant::now() < deadline, "the user's notify wasn't chained");
+        if Instant::now() >= deadline {
+            // What there is to go on: the file, and the same line run by hand.
+            let by_hand = std::process::Command::new("sh")
+                .args([
+                    "-c",
+                    &format!(
+                        "echo \"$1\" >> {}",
+                        ptyro_testkit::program::shell_path(&chained.to_string_lossy())
+                    ),
+                    "x",
+                    "by-hand",
+                ])
+                .output();
+            panic!(
+                "the user's notify wasn't chained: the file holds {:?}; by hand: {by_hand:?}, then {:?}",
+                std::fs::read_to_string(&chained).ok(),
+                std::fs::read_to_string(&chained).ok()
+            );
+        }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     // Codex's side thread (it writes the title) reports through notify too: ignored, so it

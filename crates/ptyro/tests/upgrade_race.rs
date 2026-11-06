@@ -51,6 +51,7 @@ impl World {
     }
 
     /// Daemon processes that run on this world's home (the old image would show up here).
+    #[cfg(not(windows))]
     fn daemon_pids(&self) -> Vec<u32> {
         let home = self.d.paths.state.to_string_lossy().into_owned();
         let ps = std::process::Command::new("ps").args(["-axo", "pid=,command="]).output().unwrap();
@@ -62,13 +63,9 @@ impl World {
     }
 }
 
+/// (Windows asked directly: Git Bash's `kill` knows MSYS pids, not Windows'.)
 fn alive(pid: u32) -> bool {
-    std::process::Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    ptyro_pty::alive(pid)
 }
 
 const SLOW: &str = r#"
@@ -156,10 +153,29 @@ fn an_upgrade_during_a_slow_launch_waits_and_loses_nothing() {
             std::thread::sleep(Duration::from_millis(100));
         }
     }
-    // One daemon only: the old image is gone.
-    let daemons = w.daemon_pids();
-    let daemon = before["pid"].as_u64().unwrap() as u32;
-    assert!(daemons.iter().all(|p| *p == daemon), "a stray daemon: {daemons:?} (daemon {daemon})");
+    // One daemon only: the old image is gone (Windows: the one before the handover has exited;
+    // `ps` there is MSYS's, which doesn't see Windows' processes).
+    #[cfg(windows)]
+    {
+        let now = w.json(&["daemon", "status", "--json"])["pid"].as_u64().unwrap() as u32;
+        let old = before["pid"].as_u64().unwrap() as u32;
+        if upgraded {
+            assert_ne!(now, old);
+            assert!(
+                ptyro_pty::wait_for_exit(old, Duration::from_secs(10)),
+                "the old daemon {old} lives on"
+            );
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let daemons = w.daemon_pids();
+        let daemon = before["pid"].as_u64().unwrap() as u32;
+        assert!(
+            daemons.iter().all(|p| *p == daemon),
+            "a stray daemon: {daemons:?} (daemon {daemon})"
+        );
+    }
 }
 
 /// A refused handoff rolls back to `daemon.prev`; the daemon then runs from that very file, so

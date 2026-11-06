@@ -280,9 +280,9 @@ fn histories_become_searchable_read_only_chats() {
     write(
         &w.home().join(".claude/projects/-wt").join("wt-1.jsonl"),
         &format!(
-            r#"{{"type":"user","uuid":"w1","sessionId":"wt-1","cwd":"{}","timestamp":"2026-10-21T09:00:00Z","message":{{"role":"user","content":"fix the flaky test"}}}}
+            r#"{{"type":"user","uuid":"w1","sessionId":"wt-1","cwd":{},"timestamp":"2026-10-21T09:00:00Z","message":{{"role":"user","content":"fix the flaky test"}}}}
 "#,
-            wt.to_string_lossy()
+            serde_json::to_string(&wt.to_string_lossy()).unwrap()
         ),
     );
     let r = w.json(&["chat", "import", "--agent", "claude", "--json"]);

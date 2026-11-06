@@ -139,11 +139,17 @@ async fn until(t: Option<Instant>) {
 /// a loaded machine (CI's Windows runners: `make test` sets 2 there, WIN13) draws slower than a
 /// script written on a fast one expects. Sends, resizes, snapshots and the timeout stretch;
 /// [`Report::at`] still takes the script's own times.
-fn time_scale() -> f64 {
+pub fn time_scale() -> f64 {
     ptyro_core::test_knob("PTYRO_TEST_TIME_SCALE")
         .and_then(|s| s.parse::<f64>().ok())
         .filter(|k| *k >= 1.0 && k.is_finite())
         .unwrap_or(1.0)
+}
+
+/// `d` on the scripts' clock: what a test waits for alongside a script (a kill timed against
+/// its snapshots) stretches with it.
+pub fn scaled(d: Duration) -> Duration {
+    d.mul_f64(time_scale())
 }
 
 pub async fn run(mut s: Script) -> Result<Report> {

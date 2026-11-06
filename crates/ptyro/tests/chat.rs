@@ -131,7 +131,7 @@ fn a_chat_is_answered_kept_and_carried_on_after_a_restart() {
     // The MCP servers are in a file only its owner reads, never in the argv any client (or
     // `ps`) sees: a server's definition can carry its tokens.
     let cfg = argv[argv.iter().position(|a| *a == "--mcp-config").unwrap() + 1];
-    assert!(cfg.ends_with("/mcp.json"), "{cfg}");
+    assert!(std::path::Path::new(cfg).ends_with("mcp.json"), "{cfg}");
     assert!(!argv.iter().any(|a| a.contains("mcpServers") || a.contains("PTYRO_SOCKET")));
     assert!(std::fs::read_to_string(cfg).unwrap().contains("mcpServers"));
     assert!(argv.windows(2).any(|p| p == ["--tools", "WebSearch,WebFetch"]), "{argv:?}");

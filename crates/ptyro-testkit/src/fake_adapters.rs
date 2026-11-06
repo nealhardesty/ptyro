@@ -482,6 +482,68 @@ fn agent_shell(line: &str) -> std::process::Command {
     c
 }
 
+/// One line as a real agent reads it on Windows (WIN13): raw VT input, echoed as typed, with a
+/// bracketed paste kept whole (its new lines in it, markers and all, for the caller to join), and
+/// Enter outside a paste ending it. A cooked console's line editor would take the paste's ESC as
+/// "clear the line" and drop its new lines. The bytes read (0: the input ended).
+fn read_line_raw(out: &mut std::io::Stdout, line: &mut String) -> usize {
+    let stdin = std::io::stdin();
+    let _raw = ptyro_pty::console::RawInput::new();
+    let mut bytes: Vec<u8> = Vec::new();
+    let mut in_paste = false;
+    // Inside an escape sequence (ESC, then `[` and parameters up to a final byte): not echoed.
+    let mut esc = 0u8;
+    let mut b = [0u8; 1];
+    loop {
+        if stdin.lock().read(&mut b).unwrap_or(0) == 0 {
+            break;
+        }
+        let c = b[0];
+        bytes.push(c);
+        if esc > 0 {
+            esc = match (esc, c) {
+                (1, b'[') => 2,
+                (2, 0x40..=0x7e) | (1, _) => 0,
+                (e, _) => e,
+            };
+            if esc == 0 {
+                if bytes.ends_with(b"\x1b[200~") {
+                    in_paste = true;
+                } else if bytes.ends_with(b"\x1b[201~") {
+                    in_paste = false;
+                }
+            }
+            continue;
+        }
+        match c {
+            0x1b => esc = 1,
+            b'\r' | b'\n' if !in_paste => {
+                bytes.pop();
+                let _ = write!(out, "\r\n");
+                break;
+            }
+            b'\r' => {
+                bytes.pop();
+                bytes.push(b'\n');
+                let _ = write!(out, "\r\n");
+            }
+            0x7f | 0x08 => {
+                bytes.pop();
+                if bytes.pop().is_some() {
+                    let _ = write!(out, "\x08 \x08");
+                }
+            }
+            _ => {
+                let _ = out.write_all(&[c]);
+            }
+        }
+        let _ = out.flush();
+    }
+    *line = String::from_utf8_lossy(&bytes).into_owned();
+    line.push('\n');
+    bytes.len().max(1)
+}
+
 /// Read one key in raw mode (the permission dialog).
 /// Run hook commands with `payload` on stdin; the last JSON line any of them prints.
 fn run_hooks(cmds: &[String], payload: &Value) -> Option<Value> {
@@ -588,7 +650,12 @@ pub fn main(args: &[String]) -> i32 {
         }
         let _ = out.flush();
         let mut line = String::new();
-        if stdin.lock().read_line(&mut line).unwrap_or(0) == 0 {
+        let got = if cfg!(windows) && std::env::var_os("PTYRO_FAKE_PASTE").is_some() {
+            read_line_raw(&mut out, &mut line)
+        } else {
+            stdin.lock().read_line(&mut line).unwrap_or(0)
+        };
+        if got == 0 {
             return 0;
         }
         if let Some(h) = held.take() {
