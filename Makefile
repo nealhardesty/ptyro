@@ -66,8 +66,9 @@ install-release: ## Install the fully optimized build (what a release ships: slo
 FLAKE_BUDGET ?= 2
 ifeq ($(OS),Windows_NT)
 # On Windows the packaged ConPTY goes beside the test binaries, and the tests that need it are
-# told it's there (they'd skip without it); there's nothing to cross-check from Windows itself.
-TEST_ENV = PTYRO_TEST_PACKAGED_CONPTY=1
+# told it's there (they'd skip without it); scripted TUI runs take twice their times (CI's
+# Windows runners draw slower); there's nothing to cross-check from Windows itself.
+TEST_ENV = PTYRO_TEST_PACKAGED_CONPTY=1 PTYRO_TEST_TIME_SCALE=2
 TEST_PREP = for d in target/debug target/debug/deps; do INTO=$$d sh scripts/conpty.sh || exit 1; done
 TEST_CROSS = @echo "check-windows: this is Windows: the tests above ran here"
 else

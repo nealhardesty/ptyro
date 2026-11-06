@@ -1667,7 +1667,9 @@ async fn the_web_app_asks_the_daemon_and_the_machine() {
     );
     // A tour is for its own ptyro only: this one refuses to end itself.
     let (_, v) = host(serve.port, Some(&full), &json!({ "op": "tour.end" }));
-    assert_eq!(v["error"]["code"], "invalid", "{v}");
+    // (Windows has no tour of its own: it runs in WSL, and says so.)
+    let refused = if cfg!(windows) { "unsupported" } else { "invalid" };
+    assert_eq!(v["error"]["code"], refused, "{v}");
 }
 
 /// CFG1.3: the web settings panel's logic (`web/test/config.mjs`), and through `ptyro serve` the

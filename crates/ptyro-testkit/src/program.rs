@@ -63,6 +63,12 @@ pub fn say_then_wait(words: &str, secs: u32) -> Vec<String> {
     vec![format!("say:{words}"), secs.to_string()]
 }
 
+/// A path as a command line in any agent's shell takes it unquoted: with `/` on Windows, which
+/// Git Bash, PowerShell and cmd all read (Git Bash drops `\\`), as ptyro writes hooks (WIN8).
+pub fn shell_path(p: &str) -> String {
+    if cfg!(windows) { p.replace('\\', "/") } else { p.to_owned() }
+}
+
 /// `PATH` with `dir` first, joined the platform's way (`:`; `;` on Windows).
 pub fn path_with(dir: &Path) -> String {
     let rest = std::env::var_os("PATH").unwrap_or_default();

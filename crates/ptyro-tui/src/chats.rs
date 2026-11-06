@@ -1788,7 +1788,7 @@ impl App {
             arg.to_owned()
         } else {
             let p = std::env::current_dir().map(|d| d.join(arg)).unwrap_or_else(|_| arg.into());
-            p.canonicalize().unwrap_or(p).to_string_lossy().into_owned()
+            ptyro_core::os::canonicalize(&p).unwrap_or(p).to_string_lossy().into_owned()
         };
         let Some(chat) = chat else {
             if let Some(ChatPanel::View(v)) = &mut self.chat_panel {

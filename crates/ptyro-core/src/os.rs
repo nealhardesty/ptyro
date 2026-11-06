@@ -228,6 +228,13 @@ pub fn looks_like_path(s: &str) -> bool {
             && matches!(b[2], b'\\' | b'/'))
 }
 
+/// A path as patterns (globs, leases, guards, profiles' `match.paths`) spell one: with `/`
+/// between its parts, also on Windows, where it comes with `\\` (WIN13: a lease on `src/api.rs`
+/// never matched `src\\api.rs`). Unchanged elsewhere.
+pub fn slash_path(p: &str) -> String {
+    if cfg!(windows) { p.replace('\\', "/") } else { p.to_owned() }
+}
+
 /// A folder a shell reported (OSC 7), as this computer names it. On Windows, Git Bash and MSYS2
 /// report `/c/Users/me` and some programs `/C:/Users/me`: both are `C:\\Users\\me` (WIN13).
 /// Anything else, and everything elsewhere, is unchanged.

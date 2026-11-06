@@ -2127,10 +2127,11 @@ impl Daemon {
                 continue;
             }
             let owner = homes.iter().find(|(_, h)| abs.starts_with(h)).map(|(n, _)| n.clone());
-            let rel = abs
-                .strip_prefix(&root)
-                .map(|r| r.to_string_lossy().into_owned())
-                .unwrap_or_else(|_| abs.to_string_lossy().into_owned());
+            let rel = ptyro_core::os::slash_path(
+                &abs.strip_prefix(&root)
+                    .map(|r| r.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| abs.to_string_lossy().into_owned()),
+            );
             let ok = match (&role, &owner) {
                 (Role::Lead, None) if set.layout == Layout::Solo => abs.starts_with(&root),
                 (Role::Lead, Some(_)) if set.layout == Layout::Solo => true,

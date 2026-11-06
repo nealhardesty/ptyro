@@ -188,7 +188,7 @@ fn find_in(prog: &str, path: &str, places: &Places) -> Option<Found> {
         if let Some((argv, real)) = unshim(&f) {
             return Some(Found { argv, path: real, via: Some(via.clone()) });
         }
-        let real = f.canonicalize().unwrap_or_else(|_| f.clone());
+        let real = ptyro_core::os::canonicalize(&f).unwrap_or_else(|_| f.clone());
         let argv = if node_script(&real) && on_path("node").is_none() {
             let Some(n) = node(dir) else { continue };
             vec![n.to_string_lossy().into_owned(), real.to_string_lossy().into_owned()]

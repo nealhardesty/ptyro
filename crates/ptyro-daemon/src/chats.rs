@@ -3082,7 +3082,7 @@ fn with_seed(unseen: &[ChatNode], text: &str, tokens: u32) -> String {
 /// Gemini's own folders for the chat directory `dir`: the ones under `<gemini dir>/tmp` and
 /// `history` whose `.project_root` names it (its session files are in them).
 fn remove_gemini_copies(gemini: &std::path::Path, dir: &std::path::Path) {
-    let want = [Some(dir.to_path_buf()), dir.canonicalize().ok()];
+    let want = [Some(dir.to_path_buf()), ptyro_core::os::canonicalize(dir).ok()];
     for base in ["tmp", "history"] {
         let Ok(rd) = std::fs::read_dir(gemini.join(base)) else { continue };
         for e in rd.flatten() {
@@ -3176,7 +3176,7 @@ fn codex_needs(plan: &ptyro_agents::profile::Plan, program: &[String]) -> Vec<Pa
     for prog in program.iter().filter(|p| p.contains('/')) {
         let f = PathBuf::from(prog);
         // Both where it is linked from and where it really is (nvm, bun, Homebrew).
-        for p in [Some(f.clone()), f.canonicalize().ok()].into_iter().flatten() {
+        for p in [Some(f.clone()), ptyro_core::os::canonicalize(&f).ok()].into_iter().flatten() {
             if let Some(d) = p.parent() {
                 v.push(d.to_owned());
             }
@@ -3273,8 +3273,8 @@ fn chat_folders(folders: &[String]) -> Result<Vec<String>, Error> {
                 "{f:?}: give the folder's full path (~/notes works)"
             )));
         }
-        let real = p
-            .canonicalize()
+        // (Without Windows' `\\?\` prefix, which an agent can't read: WIN13.)
+        let real = ptyro_core::os::canonicalize(&p)
             .ok()
             .filter(|r| r.is_dir())
             .ok_or_else(|| Error::invalid(format!("{f}: no such folder on this machine")))?;

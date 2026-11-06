@@ -25,7 +25,7 @@ impl World {
         let hs = h.to_string_lossy().into_owned();
         let env = [("HOME", hs.as_str()), ("GIT_CONFIG_NOSYSTEM", "1"), ("SHELL", "/bin/sh")];
         let mut config = format!(
-            "[chat]\ntitle_command = [\"/bin/sh\", \"-c\", \"cat >/dev/null; echo Titled\"]\n{chat}\n[profiles.work]\nlabel = \"work\"\n"
+            "[chat]\ntitle_command = [\"sh\", \"-c\", \"cat >/dev/null; echo Titled\"]\n{chat}\n[profiles.work]\nlabel = \"work\"\n"
         );
         for a in ["claude", "codex"] {
             config.push_str(&format!(
@@ -310,7 +310,7 @@ fn search_scopes_find_and_the_history_tools() {
 
     // From inside a chat's agent (the fake runs `sh` as a tool): its profile's chats only, and
     // it may not change anything.
-    let q = format!("sh {BIN} chat search jitter --json");
+    let q = format!("sh {} chat search jitter --json", ptyro_testkit::program::shell_path(BIN));
     let out = w.ok(&["chat", "send", &retry, &q]);
     assert!(out.contains("Retry design") || out.contains("ran:"), "{out}");
     let shown = w.show(&retry);
@@ -323,7 +323,7 @@ fn search_scopes_find_and_the_history_tools() {
         .collect();
     assert!(!tool.contains("Work notes"), "a default-profile chat never sees a work one: {tool}");
     assert!(!tool.contains("Retry design\""), "nor itself");
-    let rm = format!("sh {BIN} chat rm {retry}");
+    let rm = format!("sh {} chat rm {retry}", ptyro_testkit::program::shell_path(BIN));
     w.idle(&retry);
     w.ok(&["chat", "send", &retry, &rm]);
     let shown = w.show(&retry);
@@ -338,9 +338,19 @@ fn search_scopes_find_and_the_history_tools() {
     // Nor read one outside its scope, or itself, by name.
     let work = w.addr_of("Work notes");
     w.idle(&retry);
-    w.ok(&["chat", "send", &retry, &format!("sh {BIN} chat show {work}")]);
+    w.ok(&[
+        "chat",
+        "send",
+        &retry,
+        &format!("sh {} chat show {work}", ptyro_testkit::program::shell_path(BIN)),
+    ]);
     w.idle(&retry);
-    w.ok(&["chat", "send", &retry, &format!("sh {BIN} chat show {retry}")]);
+    w.ok(&[
+        "chat",
+        "send",
+        &retry,
+        &format!("sh {} chat show {retry}", ptyro_testkit::program::shell_path(BIN)),
+    ]);
     let shown = w.show(&retry);
     let tool: Vec<String> = shown["nodes"]
         .as_array()

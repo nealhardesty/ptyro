@@ -574,7 +574,8 @@ async fn the_task_box_takes_several_lines_as_one_prompt() {
         script
             .send_when("▾ main", "\\x11n")
             .send_when("What should it do?", "fix the login")
-            .send_when("fix the login", "\\x0a")
+            // Ctrl+J; through ConPTY (Windows) a typed LF is Enter, and ESC CR is Alt+Enter.
+            .send_when("fix the login", if cfg!(windows) { "\\x1b\\r" } else { "\\x0a" })
             .send_when("new line", "and the logout")
             .send_when("and the logout", "\\r")
             .until("prompt over 2 lines"),
@@ -1130,6 +1131,8 @@ async fn quitting_from_the_tui_stops_the_daemon() {
 /// UX1.22: `ptyro tour` is the daily loop for real: a task, its permission prompt answered from
 /// peek, its diff reviewed, finished into main, cleaned up. Each key goes in once the coach
 /// asks for it. The tour runs in a ptyro of its own and deletes it afterwards.
+// Unix: on Windows the tour runs in WSL (`wsl -- ptyro tour`), not natively.
+#[cfg(unix)]
 #[tokio::test]
 async fn the_tour_walks_the_loop_for_real_and_cleans_up() {
     let home = tempfile::tempdir().unwrap();

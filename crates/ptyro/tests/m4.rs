@@ -294,7 +294,10 @@ async fn codex_gemini_antigravity_and_opencode_adapters() {
     let chained = w.home().join("chained.txt");
     std::fs::write(
         codex_home.join("config.toml"),
-        format!("notify = [\"sh\", \"-c\", \"echo \\\"$1\\\" >> {}\", \"x\"]\n", chained.display()),
+        format!(
+            "notify = [\"sh\", \"-c\", \"echo \\\"$1\\\" >> {}\", \"x\"]\n",
+            ptyro_testkit::program::shell_path(&chained.to_string_lossy())
+        ),
     )
     .unwrap();
     let c = w.d.client().await.unwrap();
@@ -507,8 +510,8 @@ async fn notifications_sinks_mutes_and_signed_links() {
     let log = tmp.path().join("sink.jsonl");
     let cfg = format!(
         "[notifications]\nchannels = [\"inbox\", \"sinks\"]\non = [\"blocked\", \"idle\", \"errored\"]\nsinks = [{{ type = \"command\", command = [\"sh\", \"-c\", \"cat >> {} && echo >> {}\"], on = [\"blocked\", \"idle\"] }}]\ncallback = {{ listen = \"127.0.0.1:{port}\" }}\n",
-        log.display(),
-        log.display()
+        ptyro_testkit::program::shell_path(&log.to_string_lossy()),
+        ptyro_testkit::program::shell_path(&log.to_string_lossy())
     );
     let w = World::new(&cfg);
     let c = w.d.client().await.unwrap();
@@ -595,7 +598,7 @@ async fn after_turn_runs_trusted_scripts_and_branches_follow_prompts() {
     let root = h.join("r");
     std::fs::write(
         root.join(".ptyro.toml"),
-        "[scripts]\nafter_turn = \"echo linted-$PTYRO_WORKTREE_NAME\"\n",
+        "[scripts]\nshell = \"bash\"\nafter_turn = \"echo linted-$PTYRO_WORKTREE_NAME\"\n",
     )
     .unwrap();
     w.git(&root, &["add", "-A"]);

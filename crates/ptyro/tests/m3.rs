@@ -636,7 +636,12 @@ async fn profiles_pins_guards_and_environments() {
         &w.d,
         &c,
         &s.name,
-        &format!("ssh=ssh -i {}/.ssh/id_me -o IdentitiesOnly=yes", h.display()),
+        // (Windows: a path with `\\` is quoted for the shell git runs it in.)
+        &if cfg!(windows) {
+            format!("ssh=ssh -i '{}' -o IdentitiesOnly=yes", h.join(".ssh/id_me").display())
+        } else {
+            format!("ssh=ssh -i {}/.ssh/id_me -o IdentitiesOnly=yes", h.display())
+        },
     )
     .await;
 

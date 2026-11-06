@@ -32,7 +32,7 @@ impl World {
         let hs = h.to_string_lossy().into_owned();
         let env = [("HOME", hs.as_str()), ("GIT_CONFIG_NOSYSTEM", "1"), ("SHELL", "/bin/sh")];
         let mut config = String::from(
-            "[chat]\ntitle_command = [\"/bin/sh\", \"-c\", \"cat >/dev/null; echo '\\\"A fake title.\\\"'\"]\n",
+            "[chat]\ntitle_command = [\"sh\", \"-c\", \"cat >/dev/null; echo '\\\"A fake title.\\\"'\"]\n",
         );
         for a in ["claude", "codex", "gemini", "opencode"] {
             config.push_str(&format!(
@@ -368,7 +368,7 @@ fn one_answer_at_a_time_and_an_agent_that_wont_start_says_so() {
 fn an_agent_that_stops_before_answering_is_said_and_ask_keeps_nothing() {
     let w = World::with(
         "",
-        "[agents.broken]\ncommand = [\"/bin/sh\", \"-c\", \"exit 3\"]\nprotocol = \"acp\"\n",
+        "[agents.broken]\ncommand = [\"sh\", \"-c\", \"exit 3\"]\nprotocol = \"acp\"\n",
     );
     let out = w.cli(&["chat", "ask", "--agent", "broken", "hello?"]);
     assert!(!out.status.success());

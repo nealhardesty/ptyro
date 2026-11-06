@@ -135,7 +135,29 @@ async fn until(t: Option<Instant>) {
     }
 }
 
+/// How much slower than the script's own times to run it (`PTYRO_TEST_TIME_SCALE`, default 1):
+/// a loaded machine (CI's Windows runners: `make test` sets 2 there, WIN13) draws slower than a
+/// script written on a fast one expects. Sends, resizes, snapshots and the timeout stretch;
+/// [`Report::at`] still takes the script's own times.
+fn time_scale() -> f64 {
+    ptyro_core::test_knob("PTYRO_TEST_TIME_SCALE")
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|k| *k >= 1.0 && k.is_finite())
+        .unwrap_or(1.0)
+}
+
 pub async fn run(mut s: Script) -> Result<Report> {
+    let k = time_scale();
+    for (t, _) in &mut s.sends {
+        *t = t.mul_f64(k);
+    }
+    for (t, _) in &mut s.resizes {
+        *t = t.mul_f64(k);
+    }
+    for t in &mut s.snapshots {
+        *t = t.mul_f64(k);
+    }
+    s.timeout = s.timeout.mul_f64(k);
     s.sends.sort_by_key(|(t, _)| *t);
     s.resizes.sort_by_key(|(t, _)| *t);
     s.snapshots.sort();
@@ -198,7 +220,8 @@ pub async fn run(mut s: Script) -> Result<Report> {
             () = until(next_snap) => {
                 let t = snapshots.next().expect("peeked");
                 tracker.update(&mut emu);
-                report.snapshots.push((t, render(&emu, &mut tracker, s.ansi)));
+                // Under the script's own time, which `at` looks up.
+                report.snapshots.push((t.div_f64(k), render(&emu, &mut tracker, s.ansi)));
             },
             () = until(emu.sync_deadline()) => emu.expire_sync(&mut out),
             () = tokio::time::sleep_until(deadline.into()) => break,

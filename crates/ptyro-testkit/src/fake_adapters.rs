@@ -222,6 +222,8 @@ impl Fake {
             "claude" | "codex" => self.hooks.get(event).cloned().unwrap_or_default(),
             "gemini" | "antigravity" => {
                 let bin = std::env::var("PTYRO_BIN").unwrap_or_else(|_| "ptyro".into());
+                // Forward slashes, as ptyro writes a hook's path (Git Bash drops backslashes).
+                let bin = crate::program::shell_path(&bin);
                 vec![format!("{bin} hook {} {event}", self.adapter)]
             }
             _ => Vec::new(),

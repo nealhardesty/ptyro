@@ -116,7 +116,12 @@ fn an_upgrade_during_a_slow_launch_waits_and_loses_nothing() {
     if upgraded {
         let up: Value = serde_json::from_slice(&up.stdout).unwrap();
         assert_eq!(up["rolled_back"], false, "{up}");
-        assert_eq!(up["pid"], before["pid"]);
+        // Unix upgrades in place (exec); Windows hands over to a new process (SPEC §4.5).
+        if cfg!(windows) {
+            assert_ne!(up["pid"], before["pid"]);
+        } else {
+            assert_eq!(up["pid"], before["pid"]);
+        }
     } else {
         let msg = String::from_utf8_lossy(&up.stderr).into_owned();
         assert!(msg.contains("still starting"), "an unexplained failure: {msg}");

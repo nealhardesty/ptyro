@@ -28,7 +28,7 @@ impl World {
         let hs = h.to_string_lossy().into_owned();
         let env = [("HOME", hs.as_str()), ("GIT_CONFIG_NOSYSTEM", "1"), ("SHELL", "/bin/sh")];
         let mut config = format!(
-            "[chat]\ntitle_command = [\"/bin/sh\", \"-c\", \"cat >/dev/null; echo Titled\"]\n{chat}\n"
+            "[chat]\ntitle_command = [\"sh\", \"-c\", \"cat >/dev/null; echo Titled\"]\n{chat}\n"
         );
         for a in ["claude", "codex"] {
             config.push_str(&format!(

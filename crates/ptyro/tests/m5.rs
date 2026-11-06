@@ -514,7 +514,11 @@ async fn tui_broadcast_and_a_tour_of_its_own() {
         assert!(screen.contains("worked: broadcasted"), "{s}: {screen}");
     }
     // The tour (UX1.22) runs a ptyro of its own: leaving it at its first step, this daemon has
-    // none of its project or sessions, and its own are as they were.
+    // none of its project or sessions, and its own are as they were. (Unix: on Windows the tour
+    // runs in WSL.)
+    if cfg!(windows) {
+        return;
+    }
     let tour = ptyro_testkit::headless::run(
         w.tui(&["tour"])
             .timeout(30.0)

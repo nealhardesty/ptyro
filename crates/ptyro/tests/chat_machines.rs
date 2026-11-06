@@ -56,7 +56,7 @@ fn write_env(path: &Path, d: &TempDaemon) {
 
 fn config(machine: &str) -> String {
     let mut c = format!(
-        "[daemon]\nmachine_name = \"{machine}\"\n[profiles.work]\nlabel = \"work\"\n[chat]\ntitle_command = [\"/bin/sh\", \"-c\", \"cat >/dev/null; echo {machine} chat\"]\n"
+        "[daemon]\nmachine_name = \"{machine}\"\n[profiles.work]\nlabel = \"work\"\n[chat]\ntitle_command = [\"sh\", \"-c\", \"cat >/dev/null; echo {machine} chat\"]\n"
     );
     for a in ["claude", "codex"] {
         c.push_str(&format!(
@@ -443,12 +443,22 @@ async fn a_chats_history_tools_search_and_read_linked_machines_within_its_scope(
             until("the tool ran", || async { answers(here, &id).await.len() > n }).await;
         }
     };
-    say(format!("sh {BIN} chat search zebra --json")).await;
+    say(format!("sh {} chat search zebra --json", ptyro_testkit::program::shell_path(BIN))).await;
     let out = tool_output(&here, &asker.id).await;
     assert!(out.contains("crossing"), "its profile's chat there is found: {out}");
     assert!(!out.contains("stripes"), "another profile's never: {out}");
-    say(format!("sh {BIN} chat show laptop2:c:{} --format json", mine.handle)).await;
-    say(format!("sh {BIN} chat show laptop2:c:{} --format json", work.handle)).await;
+    say(format!(
+        "sh {} chat show laptop2:c:{} --format json",
+        ptyro_testkit::program::shell_path(BIN),
+        mine.handle
+    ))
+    .await;
+    say(format!(
+        "sh {} chat show laptop2:c:{} --format json",
+        ptyro_testkit::program::shell_path(BIN),
+        work.handle
+    ))
+    .await;
     let out = tool_output(&here, &asker.id).await;
     assert!(out.contains("zebra crossing"), "read there: {out}");
     assert!(!out.contains("zebra stripes"), "not read: {out}");

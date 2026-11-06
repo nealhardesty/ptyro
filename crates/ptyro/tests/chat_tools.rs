@@ -27,7 +27,7 @@ impl World {
         let hs = h.to_string_lossy().into_owned();
         let env = [("HOME", hs.as_str()), ("GIT_CONFIG_NOSYSTEM", "1"), ("SHELL", "/bin/sh")];
         let mut config = String::from(
-            "[chat]\ntitle_command = [\"/bin/sh\", \"-c\", \"cat >/dev/null; echo '\\\"A fake title.\\\"'\"]\n",
+            "[chat]\ntitle_command = [\"sh\", \"-c\", \"cat >/dev/null; echo '\\\"A fake title.\\\"'\"]\n",
         );
         config.push_str(extra);
         for a in ["claude", "codex", "gemini", "opencode"] {
