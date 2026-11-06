@@ -602,7 +602,21 @@ pub(crate) fn write_atomic(path: &std::path::Path, text: &str, mode: u32) -> Res
         f.write_all(text.as_bytes())?;
         f.sync_all()?;
         drop(f);
-        std::fs::rename(&tmp, &target)
+        // Windows refuses a rename onto a file another writer (or a virus scanner) has open at
+        // that moment (os errors 5, 32): tried again briefly, as two saves at once are (WIN13).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            match std::fs::rename(&tmp, &target) {
+                Err(e)
+                    if cfg!(windows)
+                        && matches!(e.raw_os_error(), Some(5 | 32))
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                r => break r,
+            }
+        }
     })();
     if let Err(e) = written {
         let _ = std::fs::remove_file(&tmp);

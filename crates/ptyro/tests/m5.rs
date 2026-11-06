@@ -212,10 +212,10 @@ fn send_wait_read_and_events() {
     assert!(m.contains("a1 matched \"answer: yes\""), "{m}");
     let any = w.ok(&["wait", "a1", "a2", "--for", "idle", "--any"]);
     assert!(any.contains("idle"), "{any}");
-    // A stalled turn: working but silent.
+    // A stalled turn: working but silent. a2's turn before it (the command it was allowed) ends
+    // first, else that turn's end is what the waits below see; then this one begins.
+    w.ok(&["wait", "a2", "--for", "idle", "--timeout", "20s"]);
     w.ok(&["send", "a2", "work 5 slow"]);
-    // Working first: on a slow machine `send` returns before the turn has begun, and a wait for
-    // idle would be over at once.
     w.ok(&["wait", "a2", "--for", "working", "--timeout", "20s"]);
     let stall = w.cli(&["wait", "a2", "--for", "idle", "--stall", "1s", "--timeout", "20s"]);
     assert_eq!(stall.status.code(), Some(7));
