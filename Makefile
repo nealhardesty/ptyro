@@ -2,14 +2,18 @@
 
 # rustup installs to ~/.cargo/bin; make it work even when that isn't on the caller's PATH yet.
 # On Windows that is under %USERPROFILE%, which MSYS2 (unlike Git Bash) doesn't make $HOME.
-CARGO_BIN := $(or $(if $(filter Windows_NT,$(OS)),$(shell cygpath -u '$(USERPROFILE)' 2>/dev/null)),$(HOME))/.cargo/bin
+# Windows with no sh on PATH (a plain PowerShell): make then runs recipes in cmd.exe and names
+# its shell bare `sh.exe`. The lookups below are POSIX shell, so they're skipped there; only
+# `windows-setup` and `build-windows` are meant to run from there.
+NO_SH := $(and $(filter Windows_NT,$(OS)),$(filter sh.exe,$(SHELL)))
+CARGO_BIN := $(or $(if $(filter Windows_NT,$(OS)),$(if $(NO_SH),,$(shell cygpath -u '$(USERPROFILE)' 2>/dev/null))),$(HOME))/.cargo/bin
 CALLER_PATH := $(PATH)
 # A native Windows make (Chocolatey's) sees Windows' own PATH, where rustup-init puts cargo itself.
 ifeq ($(findstring ;,$(PATH)),)
 export PATH := $(CARGO_BIN):$(PATH)
 endif
 # Resolved with the PATH above: make execs simple recipes with its startup PATH, not the exported one.
-CARGO ?= $(or $(shell PATH="$(PATH)" command -v cargo),cargo)
+CARGO ?= $(if $(NO_SH),cargo,$(or $(shell PATH="$(PATH)" command -v cargo),cargo))
 PTYRO := target/debug/ptyro
 HEADLESS := target/debug/ptyro-headless
 # Program for `make try` / `make headless` / `make fixture`.
@@ -28,7 +32,7 @@ WEB_STRICT ?= 1
 
 .DEFAULT_GOAL := help
 .PHONY: help rust-install build release install install-release test fmt fmt-check lint deny doc check ci clean tools \
-        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean scratchpad-demo orchestrate-demo changeset-demo verify-claude verify-structured verify-shells spike-chat spike-chat-fts spike-wsl spike-conpty test-wsl check-windows conpty test-windows tui-parity parity reset
+        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean scratchpad-demo orchestrate-demo changeset-demo verify-claude verify-structured verify-shells spike-chat spike-chat-fts spike-wsl spike-conpty test-wsl check-windows conpty windows-setup build-windows test-windows tui-parity parity reset
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -64,6 +68,20 @@ test: ## Run all tests (every test binary runs, so one failure doesn't hide the 
 # (WIN4); the rest only compile there (agents and git run in the daemon, in WSL). SPEC §20.11.
 WINDOWS_TESTED := -p ptyro-core -p ptyro-protocol -p ptyro-term -p ptyro-store -p ptyro-meaning -p ptyro-run -p ptyro-drive -p ptyro-client -p ptyro-tui -p ptyro-pty
 
+# Windows itself, from PowerShell or Git Bash: one command each, so make's cmd.exe runs them too
+# (no sh on PATH in a plain PowerShell). Elsewhere (Linux, WSL) they say where to run them.
+ifeq ($(OS),Windows_NT)
+WINDOWS_SETUP = powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/windows-setup.ps1
+else
+WINDOWS_SETUP = @echo "this runs on Windows itself (PowerShell or Git Bash); from Linux or WSL, make check-windows cross-checks and cargo xwin cross-builds" && false
+endif
+
+windows-setup: ## On Windows (PowerShell or Git Bash): install what building needs with winget (Git, rustup, the C++ build tools, make), then build ptyro.exe with its ConPTY beside it
+	$(WINDOWS_SETUP)
+
+build-windows: ## On Windows: release ptyro.exe in target/release/, with the packaged ConPTY beside it (installs nothing)
+	$(WINDOWS_SETUP) -NoInstall
+
 conpty: ## Fetch Microsoft's packaged ConPTY (pinned, SHA-256 checked) that ptyro.exe ships with into target/conpty/ (INTO=<dir> ARCH=x86_64|aarch64 copies one beside a ptyro.exe)
 	INTO='$(INTO)' ARCH='$(ARCH)' sh scripts/conpty.sh
 
@@ -75,7 +93,7 @@ test-windows: ## On Windows itself (CI's windows job): the client crates' and pt
 	$(CARGO) build -p ptyro --bins
 	for d in $(WINDOWS_CONPTY_INTO); do INTO=$$d sh scripts/conpty.sh || exit 1; done
 	PTYRO_TEST_PACKAGED_CONPTY=1 $(CARGO) test --no-fail-fast $(WINDOWS_TESTED)
-	PTYRO_TEST_PACKAGED_CONPTY=1 $(CARGO) test --no-fail-fast -p ptyro --test win5 --test win6
+	PTYRO_TEST_PACKAGED_CONPTY=1 $(CARGO) test --no-fail-fast -p ptyro --test win5 --test win6 --test win9 --test win10 --test win11
 	$(CARGO) check -p ptyro-agents -p ptyro-git -p ptyro-daemon -p ptyro-testkit --all-targets
 
 fmt: ## Format all code
@@ -108,7 +126,7 @@ ratchet-update: ## Write the current unwrap()/expect() counts as the new baselin
 	python3 scripts/unwrap-ratchet.py --update
 
 # The oldest compiler the workspace claims to build with (`rust-version` in Cargo.toml).
-MSRV := $(shell sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml | head -1).0
+MSRV := $(if $(NO_SH),,$(shell sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml | head -1)).0
 msrv: ## Type-check the workspace with the oldest supported compiler (installs it with rustup)
 	rustup toolchain install $(MSRV) --profile minimal
 	$(CARGO) +$(MSRV) check --workspace --locked
@@ -272,7 +290,7 @@ homebrew-formula: ## Render dist/ptyro.rb from the release checksums in dist/ (a
 sbom: ## Software bill of materials (CycloneDX) from Cargo.lock: dist/ptyro-<version>.cdx.json
 	python3 scripts/sbom.py
 
-dist-check: ## Install the tarball in dist/ with scripts/install.sh (Windows: the zip with install.ps1) into a temp prefix and run it (after `make dist`)
+dist-check: ## Install the tarball in dist/ with scripts/install.sh (Windows: the zip with install.ps1) into a temp prefix, run it, and uninstall it with --uninstall (after `make dist`)
 	TARGET=$(TRIPLE) scripts/installer-check.sh
 
 brew-check: ## Install the tarball in dist/ through the Homebrew formula from a throwaway tap, test and audit it (after `make dist`; PTYRO_REQUIRE_BREW=1 fails without brew)

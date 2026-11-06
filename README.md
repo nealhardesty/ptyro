@@ -73,15 +73,26 @@ git clone https://github.com/nealhardesty/ptyro.git && cd ptyro
 make install            # builds and installs ~/.cargo/bin/ptyro
 ```
 
-Or, without a checkout, a prebuilt release (Linux and macOS, x86_64 and aarch64):
+Or, without a checkout, the latest prebuilt release (Linux and macOS, x86_64 and aarch64):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/nealhardesty/ptyro/master/scripts/install.sh | sh
+curl -fsSL https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh | sh
 ```
 
 It downloads the tarball for your machine, checks it against the release's `SHA256SUMS` (and its
 signed build provenance when you have `gh`), and installs `~/.local/bin/ptyro` (`PTYRO_VERSION`,
-`PTYRO_PREFIX` choose another). Or build it yourself:
+`PTYRO_PREFIX` choose another). Every release carries the script, so this URL is always the newest
+one. Options go after `sh -s --`:
+
+```bash
+curl -fsSL https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh | sh -s -- --uninstall --dry-run
+curl -fsSL https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh | sh -s -- --uninstall
+curl -fsSL https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh | sh -s -- --help
+```
+
+`--uninstall` hands over to `ptyro uninstall` (see [Removing ptyro](#removing-ptyro) below), and
+anything after it goes along too (`--dry-run`, `--yes`, `--backup FILE`). If the installed binary
+won't run, the script removes just what it installed. Or build it yourself:
 
 ```bash
 cargo install --locked --git https://github.com/nealhardesty/ptyro ptyro
@@ -115,7 +126,9 @@ ptyro doctor     # checks agents, logins, integrations, terminal and tmux
 **Upgrading** while agents run: install the new binary (run the install script again), then
 `ptyro daemon upgrade`. Every session keeps running.
 
-**Removing ptyro:** `ptyro uninstall` shows what it keeps on your machine (sessions, worktrees
+### Removing ptyro
+
+`ptyro uninstall` (or the install script's `--uninstall`, or `-Uninstall` on Windows) shows what it keeps on your machine (sessions, worktrees
 with any uncommitted work flagged, its directories, the login service, integrations, shell-rc
 lines, the binary), asks, and removes it; `ptyro backup` saves its state first. Your repositories,
 their branches and `.ptyro.toml` stay. See [`docs/uninstall.md`](docs/uninstall.md).
@@ -129,18 +142,25 @@ client: the TUI in Windows Terminal, and every command from PowerShell.
 2. Install `ptyro.exe`, from PowerShell (x64 and ARM64):
 
    ```powershell
-   irm https://raw.githubusercontent.com/nealhardesty/ptyro/master/scripts/install.ps1 | iex
+   irm https://github.com/nealhardesty/ptyro/releases/latest/download/install.ps1 | iex
    ```
 
    It downloads the release's zip for your machine, checks it against `SHA256SUMS` (and its
    signed build provenance when you have `gh`), installs `%LOCALAPPDATA%\Programs\ptyro\bin\ptyro.exe`
    and puts that folder on your `PATH` (`$env:PTYRO_VERSION`, `PTYRO_PREFIX`,
    `PTYRO_NO_MODIFY_PATH=1` change that). `ptyro uninstall` removes it again, `PATH` entry
-   included. `ptyro.exe` isn't code-signed yet, so Windows' Smart App Control, when it's on, may
-   refuse to run it; the installer says so if it does. Or build it yourself: on Windows,
-   `cargo build --release -p ptyro` (Rust and the Visual Studio Build Tools' C++ workload: `make
-   rust-install` checks for them), or from Linux or WSL with `make check-windows`'s toolchain,
-   `cargo xwin build --release --target x86_64-pc-windows-msvc -p ptyro` (`aarch64-…` for ARM).
+   included. So does the script: `iex` takes no arguments, so set `PTYRO_UNINSTALL` or run it as
+   a script block, whose arguments go to `ptyro uninstall`:
+
+   ```powershell
+   $env:PTYRO_UNINSTALL = '1'; irm https://github.com/nealhardesty/ptyro/releases/latest/download/install.ps1 | iex
+   & ([scriptblock]::Create((irm https://github.com/nealhardesty/ptyro/releases/latest/download/install.ps1))) -Uninstall --dry-run
+   ```
+ `ptyro.exe` isn't code-signed yet, so Windows' Smart App Control, when it's on, may
+   refuse to run it; the installer says so if it does. Or build it yourself: see
+   [Build on Windows](#build-on-windows); from Linux or WSL, `make check-windows`'s toolchain
+   cross-builds it (`cargo xwin build --release --target x86_64-pc-windows-msvc -p ptyro`,
+   `aarch64-…` for ARM).
 3. Run `ptyro`. The first time, it finds the WSL distro that has ptyro and asks to use it (or
    offers to install it there); the answer is kept in `client.default_remote`
    (`ptyro --remote wsl://<distro>` picks one for a single command).
@@ -154,7 +174,20 @@ Explorer). Sessions get Windows Terminal's own colours, and Shift+Enter works wi
 Settings: the screen's own (the look, keys, themes, the clipboard) are `ptyro.exe`'s; everything
 else is read by the daemon in WSL, so the settings panel marks those "daemon's" and opens the
 daemon's file to change them (`ptyro config set` of one says where it lives). Commands a daemon
-host runs (`install-service`, `tour`) say to run them inside WSL.
+host runs (`tour`) say to run them inside WSL.
+
+**Start at login.** `ptyro daemon install-service` (the TUI's palette, `daemon.service`; the web
+app's More → Daemon → Install the service) adds a logon task to Windows' Task Scheduler that
+starts WSL and its ptyro daemon when you log on, so your agents and the web app are there before
+you open a terminal. It runs as you, needs no administrator, and opens no window
+(`ptyrow.exe`, installed beside `ptyro.exe`, starts it hidden). `ptyro daemon uninstall-service`
+removes it.
+
+**Notifications.** The daemon's desktop notifications are Windows toasts from "ptyro", with its
+icon. Clicking one opens that session in a new Windows Terminal tab; a permission prompt's toast
+has Approve and Deny buttons when [approve links](#agent-status-and-notifications) are on. `ptyro.exe` registers
+itself with Windows the first time it runs (in your user's registry, no administrator), and
+`ptyro uninstall` takes that away again.
 
 **A daemon on Windows itself (preview).** ptyro can also run its daemon natively, with sessions
 in Windows' pseudoconsoles (ConPTY) and your repos on NTFS. It is still being built (shells,
@@ -173,8 +206,16 @@ they're written for: a `.ps1` file in PowerShell, a `.sh` file (and Conductor's 
 tools' imported scripts) in Git Bash, the rest in PowerShell; `[scripts] shell` in
 `.ptyro.toml` (or the settings panel) picks one for the whole project. A bash script checked out
 with Windows line endings is a `doctor` finding, and `ptyro project line-endings` fixes it. The daemon listens on a named pipe only
-you can open. Not there yet: a live `daemon upgrade` (stop and start it; agents' conversations
+you can open. `ptyro daemon install-service` then starts this native daemon at logon instead of
+WSL's, and `ptyro serve` (the web app, with its own certificate, pairing and Tailscale's) runs
+here too. Not there yet: a live `daemon upgrade` (stop and start it; agents' conversations
 can be resumed) and the foreground program's name and directory.
+
+**Reaching a Windows computer from elsewhere.** `ptyro --remote me@winbox` works over Windows'
+own OpenSSH server (Settings → System → Optional features → OpenSSH Server): ptyro notices the
+host is Windows and runs `ptyro proxy` there as it is, reaching whichever daemon that computer
+uses, WSL's included. `ptyro machine add` links it into [another machine's view](#your-phone-and-other-machines)
+either over ssh or with a code from its `ptyro machine pair`.
 
 ## Quick start
 
@@ -749,9 +790,33 @@ Everything runs through `make`; `make` on its own lists the targets. CI calls th
 (`make check`, `make msrv`, `make deny`, `make fuzz-smoke`, `make web-check`, `make web-e2e`, `make installer-check`),
 never raw `cargo`, so local runs and CI behave the same.
 
+### Build on Windows
+
+From a clone on Windows, in PowerShell (it needs no `make`, and installs only what's missing,
+asking first only where Windows does):
+
+```powershell
+git clone https://github.com/nealhardesty/ptyro; cd ptyro
+powershell -ExecutionPolicy Bypass -File scripts\windows-setup.ps1
+```
+
+It installs, with winget: Git, rustup, the Visual Studio Build Tools' C++ workload (rustc links
+with MSVC; a few GB, and Windows asks for an administrator once) and GNU make. Then it fetches the
+Rust toolchain this checkout pins, builds `target\release\ptyro.exe`, puts Microsoft's packaged
+ConPTY beside it (pinned and SHA-256 checked, as `make conpty` does), and runs it once. Run it
+again any time: what's there is skipped. Afterwards `make build-windows` rebuilds (it installs
+nothing), and `make windows-setup` runs the whole thing; both work from PowerShell as well as Git
+Bash. The Makefile's other targets are POSIX shell: run them from Git Bash (`make test-windows` is
+CI's Windows job).
+
+With Smart App Control on, Windows may refuse a `ptyro.exe` you built: it runs only signed
+programs it knows, and decides build by build. The script says so when it happens; the client in
+WSL works meanwhile.
+
 | Target | Does |
 |---|---|
 | `make help` | list the targets (the default) |
+| `make windows-setup` / `make build-windows` | on Windows, from PowerShell or Git Bash ([Build on Windows](#build-on-windows)): install what building needs with winget, then build `ptyro.exe` with its ConPTY / rebuild it, installing nothing |
 | `make rust-install` | install rustup (checksum-verified, no `curl \| sh`) and the toolchain pinned in `rust-toolchain.toml`: Linux, macOS, and Windows from Git Bash, MSYS2 or Cygwin (the MSVC host) |
 | `make build` / `release` / `install` / `install-release` | debug build / optimized `target/release/ptyro` / install into `~/.cargo/bin` (a fast incremental build: seconds after the first) / the same with the full release optimizations (slow) |
 | `make run ARGS="ls"` / `make try CMD=claude` | run the dev build with arguments / start `CMD` in a new session and attach |
@@ -793,7 +858,7 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make web` / `make web-check` | build the web app (needs Node) / check the committed `web/dist` matches (CI) |
 | `make dist` (`TRIPLE=…`) / `changelog` / `homebrew-formula` | release tarball (on Windows, a zip) + `.sha256` in `dist/` / regenerate `CHANGELOG.md` / render `dist/ptyro.rb` from the checksums |
 | `make sbom` | the software bill of materials (CycloneDX) from `Cargo.lock`: `dist/ptyro-<version>.cdx.json` |
-| `make dist-check` (`TRIPLE=…`) / `make installer-check` | install the tarball in `dist/` with `scripts/install.sh` into a temp prefix and run it (a tampered tarball must be refused); on Windows (Git Bash), the zip through `scripts/install.ps1` / `make dist` and then that |
+| `make dist-check` (`TRIPLE=…`) / `make installer-check` | install the tarball in `dist/` with `scripts/install.sh` into a temp prefix and run it (a tampered tarball must be refused), then remove it again with `--uninstall`; on Windows (Git Bash), the zip through `scripts/install.ps1` / `make dist` and then that |
 | `make brew-check` (`TRIPLE=…`) | install the tarball in `dist/` through the Homebrew formula from a throwaway local tap, then `brew test` and `brew audit --strict` it (a wrong checksum must be refused); skips without Homebrew unless `PTYRO_REQUIRE_BREW=1`; refuses if a Homebrew `ptyro` is already installed; run after `make dist` |
 | `make bump` (`V=patch\|minor\|major\|X.Y.Z`) | set the version in `Cargo.toml` and `Cargo.lock` (default: next patch); it prints the commit and tag to run |
 | `make check-macos` | type-check the workspace for macOS from Linux |

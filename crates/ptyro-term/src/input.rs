@@ -141,6 +141,24 @@ pub fn encode_key(key: &KeyEvent, modes: &TermModes) -> Vec<u8> {
     out
 }
 
+/// Raw input (`send --raw`, an answer's keys) for a program in win32-input-mode: a lone ESC, at
+/// the end or before another ESC, becomes the Escape key's record. ConPTY reads raw input as VT,
+/// where a lone ESC may begin a sequence, so it waits for the rest and the key never arrives
+/// (seen on Windows: `send --raw '\e'` didn't close a Codex panel, and an answer's Esc is
+/// "deny"). A whole sequence (`\e[B`) or ESC before a character (Alt+x) arrives as it is.
+pub fn raw_input(bytes: &[u8], modes: &TermModes) -> Vec<u8> {
+    if !modes.win32_input || modes.kitty != 0 || !bytes.contains(&0x1b) {
+        return bytes.to_vec();
+    }
+    let esc = encode_win32(&KeyEvent::new(KeyCode::Esc, Mods::NONE));
+    let mut out = Vec::with_capacity(bytes.len());
+    for (i, &b) in bytes.iter().enumerate() {
+        let lone = b == 0x1b && matches!(bytes.get(i + 1), None | Some(0x1b));
+        if lone { out.extend_from_slice(&esc) } else { out.push(b) }
+    }
+    out
+}
+
 /// win32-input-mode: a key as the console records a Windows console host builds input from,
 /// `CSI Vk ; Sc ; Uc ; Kd ; Cs ; Rc _`: virtual-key code, scan code (0: the host looks it up),
 /// the character as UTF-16, down or up, the modifier state, the repeat count. A press (or a
@@ -385,6 +403,19 @@ mod tests {
         assert_eq!(encode_mouse(&down, &x10), [0x1b, b'[', b'M', 32, 37, 35]);
         assert_eq!(encode_mouse(&up, &x10), [0x1b, b'[', b'M', 35, 37, 35]);
         assert!(encode_mouse(&down, &TermModes::default()).is_empty());
+    }
+
+    #[test]
+    fn a_lone_escape_reaches_a_windows_console_as_the_key() {
+        let w = TermModes { win32_input: true, ..Default::default() };
+        let esc = "\x1b[27;0;27;1;0;1_\x1b[27;0;27;0;0;1_";
+        let r = |b: &[u8], m: &TermModes| String::from_utf8(raw_input(b, m)).unwrap();
+        assert_eq!(r(b"\x1b", &w), esc);
+        assert_eq!(r(b"\x1b\x1b", &w), format!("{esc}{esc}"));
+        assert_eq!(r(b"k\x1b", &w), format!("k{esc}"));
+        assert_eq!(r(b"\x1b[B\r", &w), "\x1b[B\r", "a whole sequence stays");
+        assert_eq!(r(b"\x1bx", &w), "\x1bx", "Alt+x stays");
+        assert_eq!(r(b"\x1b", &TermModes::default()), "\x1b", "elsewhere, as it is");
     }
 
     #[test]

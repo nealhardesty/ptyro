@@ -116,7 +116,6 @@ pub struct Daemon {
     // ── live upgrade (M8.1) ──
     pub(crate) upgrading: std::sync::atomic::AtomicBool,
     /// Tells every PTY reader to park.
-    #[cfg_attr(windows, allow(dead_code))] // the live upgrade's: Unix until WIN9
     pub(crate) io_pause: watch::Sender<bool>,
     pub(crate) io: crate::session::IoControl,
     /// Some(reason): connections say goodbye and close (an upgrade).
@@ -321,7 +320,6 @@ impl Daemon {
         }
     }
 
-    #[cfg_attr(windows, allow(dead_code))] // the live upgrade's: Unix until WIN9
     pub(crate) fn focused_id(&self) -> Option<SessionId> {
         *self.focused.locked()
     }

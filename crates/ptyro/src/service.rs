@@ -1,5 +1,8 @@
 //! `ptyro daemon install-service` / `uninstall-service` (M5.7): start the daemon at login with a
-//! systemd user unit (Linux) or a launchd agent (macOS).
+//! systemd user unit (Linux), a launchd agent (macOS), or on Windows a per-user logon task in the
+//! Task Scheduler (WIN10; never a Windows Service, which runs in session 0 without the user's
+//! profile, credentials or desktop, all of which agents need). The task runs the windowless
+//! `ptyrow.exe daemon start --spawned`, so no console window opens at login.
 //!
 //! Choices that matter:
 //! - The unit records this shell's `PATH` (and `PTYRO_HOME`/XDG overrides): a service manager's
@@ -79,8 +82,9 @@ pub fn systemd_unit(exe: &str, env: &[(&str, String)]) -> String {
     u
 }
 
+/// XML text: `&`, `<`, `>` and `"` escaped (a user name or a path may hold them).
 fn xml(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
 pub fn launchd_plist(exe: &str, env: &[(&str, String)], log: &str) -> String {
@@ -143,27 +147,235 @@ fn daemon_running(ctx: &Ctx) -> bool {
     std::fs::File::open(&lock).is_ok_and(|f| f.try_lock_shared().is_err())
 }
 
-/// The login service is the WSL daemon's (systemd in the distro).
-fn windows_service() -> Error {
-    Error::new(
-        ErrorCode::Unsupported,
-        "the login service is the daemon's, in WSL: `wsl -- ptyro daemon install-service`",
+/// The Windows logon task, in a Task Scheduler folder of ptyro's own.
+pub const TASK: &str = "\\ptyro\\daemon";
+
+/// [`TASK`], or the test's own (`PTYRO_TEST_SERVICE_TASK`, debug builds), which is never started:
+/// a test must not leave a daemon of the real home running.
+pub fn task() -> String {
+    ptyro_core::test_knob("PTYRO_TEST_SERVICE_TASK").unwrap_or_else(|| TASK.to_owned())
+}
+
+/// The logon task (Task Scheduler's XML): when `user` logs on, run `ptyrow` (no window) with
+/// `args` to start the daemon, as that user with their interactive login and no more than their own rights.
+/// Defined this way (not `schtasks /SC ONLOGON`, whose trigger is anyone's and needs an
+/// administrator), it needs none. No time limit, on battery too; a second start is ignored.
+pub fn task_xml(user: &str, ptyrow: &str, args: &str) -> String {
+    let (user, ptyrow, args, task) = (xml(user), xml(ptyrow), xml(args), xml(&task()));
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.3" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Starts the ptyro daemon when you log on (ptyro daemon install-service; remove with ptyro daemon uninstall-service).</Description>
+    <URI>{task}</URI>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>{user}</UserId>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>{user}</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>false</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>{ptyrow}</Command>
+      <Arguments>{args}</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+"#
     )
 }
 
-/// Where the login service's file is (whether or not it is installed).
+/// `schtasks.exe` with `args`, quietly; whether it succeeded, and what it said.
+fn schtasks(args: &[&str]) -> Result<(bool, String), Error> {
+    let out = std::process::Command::new("schtasks.exe")
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| Error::new(ErrorCode::Unsupported, format!("schtasks.exe: {e}")))?;
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout).trim(),
+        String::from_utf8_lossy(&out.stderr).trim()
+    );
+    Ok((out.status.success(), said))
+}
+
+/// Where the login service is, for people: its file, or on Windows its task.
 pub fn file() -> std::path::PathBuf {
-    if cfg!(target_os = "macos") { launchd_path() } else { systemd_path() }
+    if cfg!(windows) {
+        PathBuf::from(format!("Task Scheduler {}", task()))
+    } else if cfg!(target_os = "macos") {
+        launchd_path()
+    } else {
+        systemd_path()
+    }
 }
 
 /// The login service is installed (`ptyro daemon install-service`).
 pub fn installed() -> bool {
-    if cfg!(target_os = "macos") { launchd_path().exists() } else { systemd_path().exists() }
+    if cfg!(windows) {
+        schtasks(&["/Query", "/TN", &task()]).is_ok_and(|(ok, _)| ok)
+    } else if cfg!(target_os = "macos") {
+        launchd_path().exists()
+    } else {
+        systemd_path().exists()
+    }
+}
+
+/// Windows: register the logon task (`ptyrow.exe` beside this ptyro.exe runs the daemon without
+/// a window), and start it now when no daemon runs.
+fn install_windows(ctx: &Ctx, dry_run: bool) -> Result<i32, Error> {
+    let exe = std::env::current_exe().map_err(|e| Error::internal(format!("where am I? {e}")))?;
+    let exe = ptyro_core::os::plain(&exe);
+    let ptyrow = exe.with_file_name("ptyrow.exe");
+    if !ptyrow.is_file() && !dry_run {
+        return Err(Error::new(
+            ErrorCode::Unsupported,
+            format!(
+                "{} isn't there: it starts the daemon at login without a window. Install ptyro again (`irm https://github.com/nealhardesty/ptyro/releases/latest/download/install.ps1 | iex`), or build it (`make build-windows`)",
+                ptyrow.display()
+            ),
+        ));
+    }
+    let user = match (std::env::var("USERDOMAIN"), std::env::var("USERNAME")) {
+        (Ok(d), Ok(u)) if !d.is_empty() => format!("{d}\\{u}"),
+        (_, Ok(u)) => u,
+        _ => return Err(Error::internal("who am I? USERNAME isn't set")),
+    };
+    // The daemon this computer uses: WSL's (`client.default_remote = "wsl://…"`), which the
+    // task boots and starts, or the native one.
+    let wsl = ctx.remote.as_deref().filter(|r| ptyro_client::remote::wsl_distro(r).is_some());
+    let args = match wsl {
+        Some(r) => format!("--remote {r} daemon start"),
+        None => "daemon start --spawned".to_owned(),
+    };
+    let text = task_xml(&user, &ptyrow.to_string_lossy(), &args);
+    let task = task();
+    let file = ctx.paths.state.join("ptyro-logon-task.xml");
+    eprintln!("$ schtasks /Create /TN {task} /XML {} /F", file.display());
+    if dry_run {
+        print!("{text}");
+        return Ok(0);
+    }
+    // Task Scheduler reads UTF-16 (with its byte order mark), as the XML says.
+    let mut bytes = vec![0xff, 0xfe];
+    bytes.extend(text.encode_utf16().flat_map(u16::to_le_bytes));
+    let _ = std::fs::create_dir_all(&ctx.paths.state);
+    std::fs::write(&file, bytes)
+        .map_err(|e| Error::internal(format!("{}: {e}", file.display())))?;
+    let made = schtasks(&["/Create", "/TN", &task, "/XML", &file.to_string_lossy(), "/F"]);
+    let _ = std::fs::remove_file(&file);
+    match made? {
+        (true, _) => match wsl {
+            Some(r) => eprintln!(
+                "the daemon in WSL ({r}) starts when you log on, WSL with it (Task Scheduler {task})"
+            ),
+            None => eprintln!("the daemon starts when you log on (Task Scheduler {task})"),
+        },
+        (false, said) => {
+            return Err(Error::internal(format!("Task Scheduler refused the logon task: {said}")));
+        }
+    }
+    for k in ["PTYRO_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"] {
+        let here = std::env::var(k).ok().filter(|v| !v.is_empty());
+        let user = user_env(k);
+        if here.is_some() && here != user {
+            eprintln!(
+                "note: {k} is set in this terminal only; the daemon started at logon gets your user's environment. `setx {k} \"{}\"` keeps it for that daemon too",
+                here.unwrap_or_default()
+            );
+        }
+    }
+    if task != TASK {
+        eprintln!("(a test's task: not started)");
+    } else if wsl.is_none() && daemon_running(ctx) {
+        eprintln!("a daemon is already running: the task takes over at your next logon");
+    } else if let (false, said) = schtasks(&["/Run", "/TN", &task])? {
+        eprintln!("note: the task didn't start now ({said}); it does at your next logon");
+    } else {
+        eprintln!("started it now");
+    }
+    Ok(0)
+}
+
+/// The user's own environment variable `k` (what a program started at logon gets), on Windows.
+fn user_env(k: &str) -> Option<String> {
+    #[cfg(windows)]
+    return ptyro_pty::winreg::get_string("Environment", k).filter(|v| !v.is_empty());
+    #[cfg(not(windows))]
+    {
+        let _ = k;
+        None
+    }
+}
+
+/// Windows: the logon task goes; a running daemon keeps running.
+fn uninstall_windows(dry_run: bool) -> Result<i32, Error> {
+    let task = task();
+    eprintln!("$ schtasks /Delete /TN {task} /F");
+    if dry_run {
+        return Ok(0);
+    }
+    match schtasks(&["/Delete", "/TN", &task, "/F"])? {
+        (true, _) => eprintln!("the daemon no longer starts at logon"),
+        (false, _) if !installed() => eprintln!("(no logon task was installed)"),
+        (false, said) => {
+            return Err(Error::internal(format!("Task Scheduler didn't remove {task}: {said}")));
+        }
+    }
+    remove_task_folder(&task);
+    eprintln!("a running daemon keeps running; `ptyro daemon stop` stops it");
+    Ok(0)
+}
+
+/// The task's Task Scheduler folder (`\ptyro`), when nothing else is in it: `schtasks` can't
+/// remove a folder, Task Scheduler's own API can (and refuses one that isn't empty).
+fn remove_task_folder(task: &str) {
+    let Some((folder, _)) = task.rsplit_once('\\').filter(|(f, _)| !f.is_empty()) else { return };
+    let _ = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$s = New-Object -ComObject Schedule.Service; $s.Connect(); \
+             $s.GetFolder('\\').DeleteFolder($env:PTYRO_TASK_FOLDER.TrimStart('\\'), 0)",
+        ])
+        .env("PTYRO_TASK_FOLDER", folder)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
 }
 
 pub fn install(ctx: &Ctx, dry_run: bool) -> Result<i32, Error> {
     if cfg!(windows) {
-        return Err(windows_service());
+        return install_windows(ctx, dry_run);
     }
     let exe = exe()?;
     let env = carried();
@@ -238,12 +450,12 @@ fn link_wanted(dry_run: bool) -> Result<(), Error> {
     #[cfg(unix)]
     return std::os::unix::fs::symlink(systemd_path(), &link).map_err(fail);
     #[cfg(not(unix))]
-    Err(windows_service())
+    Err(Error::new(ErrorCode::Unsupported, "systemd's links are Linux's"))
 }
 
 pub fn uninstall(ctx: &Ctx, dry_run: bool) -> Result<i32, Error> {
     if cfg!(windows) {
-        return Err(windows_service());
+        return uninstall_windows(dry_run);
     }
     if cfg!(target_os = "macos") {
         let path = launchd_path();
@@ -300,6 +512,29 @@ mod tests {
         let u = systemd_unit("/bin/ptyro", &[("PATH", "/a\nExecStartPre=/bin/evil".to_owned())]);
         assert!(!u.lines().any(|l| l.starts_with("ExecStartPre")), "{u}");
         assert!(u.contains("Environment=\"PATH=/a\\nExecStartPre=/bin/evil\""), "{u}");
+    }
+
+    /// The logon task runs ptyrow (no window) as this user, at logon, with no more than their
+    /// rights and no time limit; a name or path with XML's specials can't change its shape.
+    #[test]
+    fn the_windows_logon_task_is_this_users_and_windowless() {
+        let x = task_xml(
+            "WORK\\Ann & <Bo>",
+            r"C:\Users\Ann & Bo\ptyro\ptyrow.exe",
+            "daemon start --spawned",
+        );
+        assert!(x.contains("<UserId>WORK\\Ann &amp; &lt;Bo&gt;</UserId>"), "{x}");
+        assert!(x.contains(r"<Command>C:\Users\Ann &amp; Bo\ptyro\ptyrow.exe</Command>"), "{x}");
+        assert!(x.contains("<Arguments>daemon start --spawned</Arguments>"));
+        assert!(x.contains("<LogonType>InteractiveToken</LogonType>"));
+        assert!(x.contains("<RunLevel>LeastPrivilege</RunLevel>"));
+        assert!(x.contains("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"));
+        assert!(x.contains("<LogonTrigger>") && !x.contains("<BootTrigger>"));
+        assert_eq!(x.matches("<UserId>").count(), 2, "the trigger and the principal: this user");
+        assert!(x.contains(&format!("<URI>{TASK}</URI>")));
+        // WSL's daemon: the task boots the distro and starts it there.
+        let x = task_xml("me", r"C:\p\ptyrow.exe", "--remote wsl://Ubuntu daemon start");
+        assert!(x.contains("<Arguments>--remote wsl://Ubuntu daemon start</Arguments>"), "{x}");
     }
 
     #[test]

@@ -90,10 +90,30 @@ fn trust_dialog(screen: &str) -> bool {
         || screen.contains("Do you trust the files in this folder")
 }
 
-/// Dialogs that come before any hook: the folder trust question and the login screen.
+/// An input line's text: `❯ text`, `> text` (inside the old box's `│`), or `""` for an empty one.
+fn input_line(l: &str) -> Option<String> {
+    let t = l.trim_start_matches(['│', ' ']);
+    let rest = ["❯ ", "> "]
+        .iter()
+        .find_map(|m| t.strip_prefix(m))
+        .or((t == "❯" || t == ">").then_some(""))?;
+    Some(rest.trim_end_matches(['│', ' ']).to_owned())
+}
+
+/// The first-run question when Claude finds its Chrome extension (2.1.318, seen on Windows,
+/// 2026-11-04): "No, keep browser tools off" is preselected.
+fn chrome_dialog(screen: &str) -> bool {
+    screen.contains("Claude in Chrome extension detected")
+}
+
+/// Dialogs that come before any hook: the folder trust question, the Chrome extension question
+/// and the login screen.
 fn on_screen(screen: &str) -> Option<Signal> {
     if trust_dialog(screen) {
         return Some(Signal::blocked("question", Some("trust this folder?".into())));
+    }
+    if chrome_dialog(screen) {
+        return Some(Signal::blocked("question", Some("use your Chrome browser?".into())));
     }
     if screen.contains("Select login method") {
         return Some(Signal::blocked("auth", Some("log in".into())));
@@ -309,14 +329,30 @@ impl Adapter for Claude {
     }
 
     fn ready(&self, screen: &str) -> bool {
-        // The prompt box: a `>` or `❯` input line between rules — but `❯` also marks the chosen
-        // option of its dialogs, so never while one is up.
-        on_screen(screen).is_none()
-            && !screen.contains("Do you want to proceed?")
-            && screen.lines().any(|l| {
-                let t = l.trim_start_matches(['│', ' ']);
-                t.starts_with("> ") || t.starts_with("❯ ") || t == ">" || t == "❯"
-            })
+        // The prompt box: a `>` or `❯` input line right under a rule (`────`, or the old box's
+        // `╭───`). Not a `❯ …` line of the conversation above it, which a resumed Claude shows
+        // while it still loads, nor the chosen option of a dialog.
+        let input = |l: &str| input_line(l).is_some();
+        let rule = |l: &str| l.trim_start().starts_with(['─', '╭']);
+        let lines: Vec<&str> = screen.lines().collect();
+        // The last box: a dialog takes its place, so one counts only from there down (above it
+        // is the conversation, answered dialogs included).
+        let Some(at) = lines.windows(2).rposition(|w| rule(w[0]) && input(w[1])) else {
+            return false;
+        };
+        let below = lines[at..].join("\n");
+        on_screen(&below).is_none() && !below.contains("Do you want to proceed?")
+    }
+
+    fn ready_needs_screen(&self) -> bool {
+        true
+    }
+
+    fn pending_input(&self, screen: &str) -> Option<String> {
+        let lines: Vec<&str> = screen.lines().collect();
+        let rule = |l: &str| l.trim_start().starts_with(['─', '╭']);
+        let at = lines.windows(2).rposition(|w| rule(w[0]) && input_line(w[1]).is_some())?;
+        input_line(lines[at + 1]).filter(|t| !t.is_empty())
     }
 
     fn on_screen(&self, screen: &str) -> Option<Signal> {
@@ -354,6 +390,13 @@ impl Adapter for Claude {
     }
 
     fn answer_screen(&self, screen: &str, d: Decision) -> Option<Vec<u8>> {
+        if chrome_dialog(screen) {
+            // Down to "Yes, use my browser", Enter; Enter alone keeps the tools off.
+            return Some(match d {
+                Decision::Allow | Decision::Always => b"\x1b[B\r".to_vec(),
+                Decision::Deny => b"\r".to_vec(),
+            });
+        }
         if !trust_dialog(screen) {
             return self.answer(d);
         }
@@ -464,6 +507,52 @@ mod tests {
         let e = hook_entry("/opt/my apps/ptyro", "hook claude Stop", 5, false);
         assert_eq!(e["command"], "'/opt/my apps/ptyro' hook claude Stop");
         assert!(e.get("shell").is_none());
+    }
+
+    /// The input box is the `❯` line under a rule. A resumed Claude prints the conversation
+    /// (its `❯` prompts) before the box: not ready yet (seen on Windows, 2026-11-04: an Enter
+    /// typed then was lost).
+    #[test]
+    fn ready_means_the_input_box_not_a_prompt_in_the_conversation() {
+        let loading = "❯ Remember the word BANANA. Reply with just OK.\n● OK\n✻ Baked for 1s\n";
+        assert!(!Claude.ready(loading));
+        let drawn =
+            format!("{loading}──────────────── c1 ─\n❯ \n────────────────\n  ⏵⏵ auto mode on");
+        assert!(Claude.ready(&drawn));
+        assert!(Claude.ready("╭──────────╮\n│ > │\n╰──────────╯"), "the older box");
+        let dialog = "──────────\n Do you want to proceed?\n ❯ 1. Yes\n   2. No";
+        assert!(!Claude.ready(dialog));
+        // A dialog answered earlier, above the box now: ready.
+        assert!(Claude.ready(&format!("{dialog}\n● answer: yes\n{drawn}")));
+        assert!(Claude.ready_needs_screen());
+    }
+
+    /// As Claude 2.1.318 drew it on Windows, right after the trust question.
+    #[test]
+    fn the_chrome_extension_question_blocks_and_takes_its_own_keys() {
+        let screen = "  Claude in Chrome extension detected\n  Claude will use your Chrome browser by \
+            default — navigating sites, filling forms, and capturing screenshots in your\n  existing \
+            session.\n  ❯ No, keep browser tools off\n    Yes, use my browser\n  Enter to confirm · \
+            Esc to keep browser tools off";
+        let s = on_screen(screen).unwrap();
+        assert!(
+            matches!(&s, Signal::Status { status: AgentStatus::Blocked, detail: Some(d), .. } if d.contains("Chrome")),
+            "{s:?}"
+        );
+        assert!(!Claude.ready(screen));
+        assert_eq!(Claude.answer_screen(screen, Decision::Deny).unwrap(), b"\r");
+        assert_eq!(Claude.answer_screen(screen, Decision::Allow).unwrap(), b"\x1b[B\r");
+    }
+
+    #[test]
+    fn what_waits_in_the_input_box() {
+        let unsent =
+            "❯ earlier prompt\n● ok\n──────── c1 ─\n❯ Reply with PONG\n────────\n  ⏵⏵ auto";
+        assert_eq!(Claude.pending_input(unsent).as_deref(), Some("Reply with PONG"));
+        let sent = "❯ Reply with PONG\n● PONG\n──────── c1 ─\n❯ \n────────";
+        assert_eq!(Claude.pending_input(sent), None, "the box is empty: it was taken");
+        assert_eq!(Claude.pending_input("│ > hello │"), None, "no rule above: not the box");
+        assert_eq!(Claude.pending_input("╭────╮\n│ > hello   │\n╰────╯").as_deref(), Some("hello"));
     }
 
     #[test]

@@ -27,6 +27,7 @@ pub mod settings;
 pub mod shell;
 pub mod status;
 pub mod sync;
+pub mod winapp;
 pub mod window;
 pub mod wsl;
 

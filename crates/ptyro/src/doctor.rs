@@ -153,6 +153,7 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Repor
     #[cfg(windows)]
     if ctx.local {
         conpty(&mut r);
+        windows_app(&mut r);
     }
     remote(ctx, &config, &mut r);
     scratchpad(ctx, &config, &mut r);
@@ -789,6 +790,36 @@ async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
     }
 }
 
+/// Codex's Windows sandbox, from its `config.toml`: `[windows] sandbox` (`elevated`,
+/// `unelevated`, `mxc`) or `[features] prefer_mxc`. Unset, Codex 0.166 runs each command as you,
+/// outside any sandbox, and asks before it (seen on Windows, 2026-11-05: "Environment: local");
+/// it offered no setup.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn codex_sandbox(config: Option<&str>) -> (Level, String) {
+    let v: toml::Value = config
+        .and_then(|t| toml::from_str(t).ok())
+        .unwrap_or(toml::Value::Table(Default::default()));
+    if let Some(mode) = v.get("windows").and_then(|w| w.get("sandbox")).and_then(|m| m.as_str()) {
+        return (Level::Ok, format!("commands run in its Windows sandbox ({mode})"));
+    }
+    if v.get("features").and_then(|f| f.get("prefer_mxc")).and_then(toml::Value::as_bool)
+        == Some(true)
+    {
+        return (
+            Level::Ok,
+            "commands run in its Windows sandbox (MXC, where Windows supports it)".into(),
+        );
+    }
+    (
+        Level::Note,
+        "no Windows sandbox: Codex runs each command as you and asks first. To sandbox it, set \
+         `[windows] sandbox = \"unelevated\"` in its config.toml (no administrator needed; weaker \
+         network isolation), or set up the elevated one as OpenAI's guide says: \
+         https://learn.chatgpt.com/docs/windows/windows-sandbox"
+            .into(),
+    )
+}
+
 /// A native daemon's worktrees (on Windows drives; a WSL daemon's live on ext4): a file whose path
 /// nears Windows' 260 characters while long paths are off, and a Dev Drive for them (WIN8).
 #[cfg(windows)]
@@ -994,6 +1025,67 @@ fn conpty(r: &mut Report) {
             ),
         );
     }
+}
+
+/// What makes ptyro an app Windows knows (WIN10): toasts under its own name whose click opens
+/// the session, and the logon task that starts the daemon.
+#[cfg(windows)]
+fn windows_app(r: &mut Report) {
+    let (named, opener) = crate::winapp::status();
+    let task = crate::service::installed();
+    for (name, level, text) in app_findings(named, opener.as_deref(), task) {
+        r.add("windows", name, level, text);
+    }
+}
+
+/// `windows_app`'s findings, from what Windows has: pure, so they're tested everywhere.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn app_findings(
+    named: bool,
+    opener: Option<&Path>,
+    task: bool,
+) -> Vec<(&'static str, Level, String)> {
+    let mut out = Vec::new();
+    let fix = "run any ptyro command on Windows and it registers itself again";
+    match (named, opener) {
+        (true, Some(o)) if o.is_file() => out.push((
+            "notifications",
+            Level::Ok,
+            format!(
+                "toasts come from \"ptyro\" ({}); clicking one opens its session ({})",
+                crate::winapp::aumid(),
+                o.display()
+            ),
+        )),
+        (_, Some(o)) => out.push((
+            "notifications",
+            Level::Warn,
+            format!("a toast's click runs {}, which isn't there: {fix}", o.display()),
+        )),
+        _ => out.push((
+            "notifications",
+            Level::Warn,
+            format!("ptyro isn't registered with Windows, so toasts can't open sessions: {fix}"),
+        )),
+    }
+    out.push(if task {
+        (
+            "login",
+            Level::Ok,
+            format!("the daemon starts when you log on (Task Scheduler {})", crate::service::TASK),
+        )
+    } else {
+        (
+            "login",
+            Level::Note,
+            "the daemon starts with your first ptyro command; to have it running from logon \
+             (agents keep working, the web app answers): More → Daemon → Install the service \
+             in the web app, the palette's daemon.service in the TUI, or \
+             `ptyro daemon install-service`"
+                .into(),
+        )
+    });
+    out
 }
 
 /// Inside Windows Terminal (`WT_SESSION`, from Windows or WSL): a key binding of its own that
@@ -1409,6 +1501,12 @@ async fn profiles(ctx: &Ctx, config: &Config, only: Option<String>, r: &mut Repo
                 }
             };
             r.add(&section, agent, level, format!("{state} · {shown}"));
+            // A native Codex on Windows: whether commands run in its sandbox (WIN8).
+            if cfg!(windows) && ctx.local && agent == "codex" {
+                let text = std::fs::read_to_string(dir.join("config.toml")).ok();
+                let (level, what) = codex_sandbox(text.as_deref());
+                r.add(&section, "codex sandbox", level, what);
+            }
         }
         match &info.git_email {
             Some(e) => r.add(&section, "git", Level::Ok, e.clone()),
@@ -1455,6 +1553,18 @@ async fn profiles(ctx: &Ctx, config: &Config, only: Option<String>, r: &mut Repo
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn codex_says_whether_its_commands_run_in_a_windows_sandbox() {
+        use super::{Level, codex_sandbox};
+        let (l, t) = codex_sandbox(Some("[windows]\nsandbox = \"elevated\"\n"));
+        assert!(l == Level::Ok && t.contains("(elevated)"), "{t}");
+        let (l, t) = codex_sandbox(Some("[features]\nprefer_mxc = true\n"));
+        assert!(l == Level::Ok && t.contains("MXC"), "{t}");
+        let (l, t) = codex_sandbox(Some("[tui]\nscreen_reader_detection_done = true\n"));
+        assert!(l == Level::Note && t.contains("[windows] sandbox = \"unelevated\""), "{t}");
+        assert_eq!(codex_sandbox(None).0, Level::Note, "no config.toml at all");
+    }
+
     #[test]
     fn windows_worktrees_say_when_paths_near_260_and_suggest_a_dev_drive() {
         use super::{Level, dev_drive_finding, drive, long_paths_finding};

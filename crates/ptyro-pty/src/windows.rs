@@ -254,6 +254,8 @@ struct Proc {
     job: Owned,
     pty: Option<Arc<Pty>>,
     input: Option<Mutex<std::fs::File>>,
+    /// The output pipe's handle (its reader's thread owns it), by value: a handover copies it.
+    output: usize,
 }
 
 impl Proc {
@@ -340,9 +342,28 @@ impl std::fmt::Debug for Child {
 
 // ── reading, writing, resizing ────────────────────────────────────────────────────────────
 
-/// The pseudoconsole's output.
+/// The pseudoconsole's output, read on a thread of its own so a live upgrade can stop it
+/// without losing a byte ([`winread`](crate::winread), WIN9). The console host closing its end
+/// is the output's end, as a PTY's EOF is.
 #[derive(Debug)]
-pub struct Reader(tokio::fs::File);
+pub struct Reader(pub crate::winread::PipeReader);
+
+impl Reader {
+    /// Stop reading for a handover; what was read stays for [`take_pending`](Self::take_pending).
+    pub fn pause(&self) -> io::Result<()> {
+        self.0.pause()
+    }
+
+    /// Read again (a handover that was called off).
+    pub fn resume(&self) {
+        self.0.resume();
+    }
+
+    /// What a paused reader read and nobody took yet.
+    pub fn take_pending(&mut self) -> Vec<u8> {
+        self.0.take_pending()
+    }
+}
 
 impl tokio::io::AsyncRead for Reader {
     fn poll_read(
@@ -350,11 +371,7 @@ impl tokio::io::AsyncRead for Reader {
         cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        match ready!(Pin::new(&mut self.0).poll_read(cx, buf)) {
-            // The console host closed its end: the output is over, as a PTY's EOF is.
-            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Poll::Ready(Ok(())),
-            other => Poll::Ready(other),
-        }
+        Pin::new(&mut self.0).poll_read(cx, buf)
     }
 }
 
@@ -543,15 +560,21 @@ pub fn spawn(req: SpawnRequest<'_>) -> io::Result<PtyChild> {
     std::mem::forget(in_w);
     let ctrl_c = input.try_clone()?;
     let pid = pi.dwProcessId;
-    let proc =
-        Arc::new(Proc { process, job, pty: Some(pty.clone()), input: Some(Mutex::new(ctrl_c)) });
+    let output_raw = std::os::windows::io::AsRawHandle::as_raw_handle(&output) as usize;
+    let proc = Arc::new(Proc {
+        process,
+        job,
+        pty: Some(pty.clone()),
+        input: Some(Mutex::new(ctrl_c)),
+        output: output_raw,
+    });
     procs().locked().insert(pid, proc.clone());
     watch_until_empty(proc.clone());
 
     Ok(PtyChild {
         pid,
         child: Child { pid, proc },
-        reader: Reader(tokio::fs::File::from_std(output)),
+        reader: Reader(crate::winread::PipeReader::new(output, "conpty-read")?),
         writer: Writer { file: tokio::fs::File::from_std(input), pty: pty.clone(), pending: None },
         master: Master { _pty: pty, pid },
     })
@@ -634,6 +657,256 @@ fn watch_until_empty(proc: Arc<Proc>) {
     });
 }
 
+// ── the live upgrade's handover (WIN9) ──────────────────────────────────────────────────
+
+/// A console session's handles, as values in one process: what a live upgrade copies into the
+/// next daemon (SPEC §4.5, WIN0.3): the two pipe ends, the pseudoconsole's three (an `HPCON` is a
+/// pointer to `{ hSignal, hPtyReference, hConPtyProcess }`), the program and its job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Handles {
+    pub input: usize,
+    pub output: usize,
+    pub console: [usize; 3],
+    pub process: usize,
+    pub job: usize,
+}
+
+impl Handles {
+    pub fn to_vec(self) -> Vec<u64> {
+        let [a, b, c] = self.console;
+        [self.input, self.output, a, b, c, self.process, self.job].map(|h| h as u64).to_vec()
+    }
+
+    pub fn from_slice(v: &[u64]) -> Option<Self> {
+        let [input, output, a, b, c, process, job] = <[u64; 7]>::try_from(v).ok()?;
+        let u = |h: u64| h as usize;
+        Some(Self {
+            input: u(input),
+            output: u(output),
+            console: [u(a), u(b), u(c)],
+            process: u(process),
+            job: u(job),
+        })
+    }
+}
+
+/// The handles of `master`'s session, while it runs in a console.
+pub fn handles(master: &Master) -> Option<Handles> {
+    let proc = proc_of(master.pid)?;
+    let hpc = (*proc.pty.as_ref()?.hpc.locked())?;
+    // SAFETY: an open HPCON points at its three handles (WIN0.3; pinned by the packaged ConPTY).
+    let parts = unsafe { *(hpc as *const [HANDLE; 3]) };
+    let input = std::os::windows::io::AsRawHandle::as_raw_handle(&*proc.input.as_ref()?.locked());
+    Some(Handles {
+        input: input as usize,
+        output: proc.output,
+        console: parts.map(|h| h as usize),
+        process: proc.process.0 as usize,
+        job: proc.job.0 as usize,
+    })
+}
+
+/// Copy `h` into `next` (the daemon started for the handover): the values there. Nothing is
+/// made inheritable, so no other child of ours can take one with it.
+pub fn duplicate_into(next: &std::process::Child, h: &Handles) -> io::Result<Handles> {
+    duplicate_to(std::os::windows::io::AsRawHandle::as_raw_handle(next) as HANDLE, h)
+}
+
+/// [`duplicate_into`] the process `process` (a handle with PROCESS_DUP_HANDLE).
+fn duplicate_to(process: HANDLE, h: &Handles) -> io::Result<Handles> {
+    let dup = |src: usize| dup_one(process, src);
+    let [a, b, c] = h.console;
+    Ok(Handles {
+        input: dup(h.input)?,
+        output: dup(h.output)?,
+        console: [dup(a)?, dup(b)?, dup(c)?],
+        process: dup(h.process)?,
+        job: dup(h.job)?,
+    })
+}
+
+/// One handle of ours, copied into `process`: its value there.
+fn dup_one(process: HANDLE, src: usize) -> io::Result<usize> {
+    let mut t: HANDLE = std::ptr::null_mut();
+    // SAFETY: `src` is open in this process (its owner holds it); `process` has
+    // PROCESS_DUP_HANDLE (our child's handle has every access, or our own pseudo-handle).
+    let ok = unsafe {
+        DuplicateHandle(
+            GetCurrentProcess(),
+            src as HANDLE,
+            process,
+            &mut t,
+            0,
+            0,
+            DUPLICATE_SAME_ACCESS,
+        )
+    };
+    if ok == 0 { Err(last_error("DuplicateHandle")) } else { Ok(t as usize) }
+}
+
+/// A handle value a previous daemon wrote into its image, checked before we own it: open in
+/// this process (`GetHandleInformation`), and when `pipe`, a pipe. The image is the previous
+/// daemon's, in our private state folder; this keeps a stale or garbled one from making us
+/// close or use a handle that is something else here.
+fn image_handle(h: usize, pipe: bool) -> io::Result<HANDLE> {
+    use windows_sys::Win32::Foundation::GetHandleInformation;
+    use windows_sys::Win32::Storage::FileSystem::{FILE_TYPE_PIPE, GetFileType};
+    let raw = h as HANDLE;
+    let mut flags = 0u32;
+    // SAFETY: asking about a handle value only reads.
+    if h == 0 || unsafe { GetHandleInformation(raw, &mut flags) } == 0 {
+        return Err(io::Error::other(format!("handle {h:#x} isn't open here")));
+    }
+    // SAFETY: as above.
+    if pipe && unsafe { GetFileType(raw) } != FILE_TYPE_PIPE {
+        return Err(io::Error::other(format!("handle {h:#x} isn't a pipe")));
+    }
+    Ok(raw)
+}
+
+/// A pipe handle a previous daemon copied into this process, as a file we own.
+pub fn adopt_pipe(h: usize) -> io::Result<std::fs::File> {
+    let raw = image_handle(h, true)?;
+    // SAFETY: open here and a pipe (checked); the handover gave it to us alone.
+    Ok(unsafe { std::fs::File::from_raw_handle(raw) })
+}
+
+/// A session a previous daemon handed over: its console, rebuilt from the three handles, its
+/// program and job, and its pipes, read and written from here on. Every handle is checked to
+/// be open here first ([`image_handle`]); the previous daemon copied them in for us alone
+/// ([`duplicate_into`]).
+pub fn adopt(h: Handles, pid: u32) -> io::Result<PtyChild> {
+    use windows_sys::Win32::System::Memory::{GetProcessHeap, HeapAlloc};
+    for (v, pipe) in [(h.input, true), (h.output, true), (h.process, false), (h.job, false)]
+        .into_iter()
+        .chain(h.console.map(|c| (c, false)))
+    {
+        image_handle(v, pipe)?;
+    }
+    // Our own HPCON from the three handles, on the process heap: ClosePseudoConsole frees it.
+    // SAFETY: an allocation the size of the struct, filled before it is used.
+    let hpc = unsafe {
+        let p =
+            HeapAlloc(GetProcessHeap(), 0, std::mem::size_of::<[HANDLE; 3]>()) as *mut [HANDLE; 3];
+        if p.is_null() {
+            return Err(io::Error::other("HeapAlloc"));
+        }
+        *p = h.console.map(|x| x as HANDLE);
+        p as HPCON
+    };
+    let pty = Arc::new(Pty { hpc: Mutex::new(Some(hpc)), api: conpty().api });
+    // SAFETY: each handle is open here (checked above) and ours alone (the handover's), given to
+    // one owner.
+    let (input, output) = unsafe {
+        (
+            std::fs::File::from_raw_handle(h.input as HANDLE),
+            std::fs::File::from_raw_handle(h.output as HANDLE),
+        )
+    };
+    let ctrl_c = input.try_clone()?;
+    let proc = Arc::new(Proc {
+        process: Owned(h.process as HANDLE),
+        job: Owned(h.job as HANDLE),
+        pty: Some(pty.clone()),
+        input: Some(Mutex::new(ctrl_c)),
+        output: h.output,
+    });
+    procs().locked().insert(pid, proc.clone());
+    watch_until_empty(proc.clone());
+    Ok(PtyChild {
+        pid,
+        child: Child { pid, proc },
+        reader: Reader(crate::winread::PipeReader::new(output, "conpty-read")?),
+        writer: Writer { file: tokio::fs::File::from_std(input), pty: pty.clone(), pending: None },
+        master: Master { _pty: pty, pid },
+    })
+}
+
+/// A program on pipes (a structured agent): its process and job, by value, for a handover.
+pub fn program_handles(pid: u32) -> Option<[usize; 2]> {
+    let p = proc_of(pid)?;
+    Some([p.process.0 as usize, p.job.0 as usize])
+}
+
+/// Copy handles (by value) into `next`, the daemon started for the handover: their values
+/// there, in the same order.
+pub fn duplicate_raw_into(next: &std::process::Child, hs: &[usize]) -> io::Result<Vec<usize>> {
+    let process = std::os::windows::io::AsRawHandle::as_raw_handle(next) as HANDLE;
+    hs.iter().map(|&h| dup_one(process, h)).collect()
+}
+
+/// A program on pipes a previous daemon handed over: its process and job are ours from here
+/// (each checked to be open here first).
+pub fn adopt_program(pid: u32, process: usize, job: usize) -> io::Result<Child> {
+    let proc = Arc::new(Proc {
+        process: Owned(image_handle(process, false)?),
+        job: Owned(image_handle(job, false)?),
+        pty: None,
+        input: None,
+        output: 0,
+    });
+    procs().locked().insert(pid, proc.clone());
+    Ok(Child { pid, proc })
+}
+
+/// An anonymous pipe, (read end, write end), neither inheritable: a program on pipes gets its
+/// end through `Stdio`, which copies it for the child. Plain anonymous pipes (not std's
+/// overlapped ones) so [`PipeReader`](crate::winread::PipeReader) reads them and a handover can
+/// stop it.
+pub fn anon_pipe() -> io::Result<(std::fs::File, std::fs::File)> {
+    let (r, w) = pipe()?;
+    // SAFETY: each handle is ours alone, given to one File.
+    let files =
+        unsafe { (std::fs::File::from_raw_handle(r.0), std::fs::File::from_raw_handle(w.0)) };
+    std::mem::forget((r, w));
+    Ok(files)
+}
+
+/// Keep this process's standard handles out of what a detached child inherits. Windows starts a
+/// child inheriting every inheritable handle (std passes `bInheritHandles`), and a CLI's stdout
+/// is one: a daemon `ptyro` starts would hold the pipe a script reads `ptyro`'s output from, so
+/// the script never saw its end (`$x = ptyro ls` hung when it started the daemon). A child given
+/// these on purpose (`Stdio::inherit`) still gets them: std copies them for it.
+pub fn std_handles_private() {
+    use windows_sys::Win32::Foundation::{
+        HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, SetHandleInformation,
+    };
+    use windows_sys::Win32::System::Console::{
+        GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+    };
+    for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        // SAFETY: GetStdHandle only reads; a handle it gives is ours, and clearing its inherit
+        // flag changes nothing else about it.
+        unsafe {
+            let h = GetStdHandle(which);
+            if !h.is_null() && h != INVALID_HANDLE_VALUE {
+                SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0);
+            }
+        }
+    }
+}
+
+/// Wait up to `timeout` for process `pid` to exit (any process: a live upgrade's previous
+/// daemon); `true` once it has, or if it can't be opened (already gone).
+pub fn wait_for_exit(pid: u32, timeout: Duration) -> bool {
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
+    // SAFETY: opening for SYNCHRONIZE only; the handle is ours and closed by `Owned`.
+    let h = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+    if h.is_null() {
+        return true;
+    }
+    let h = Owned(h);
+    let ms = timeout.as_millis().min(u128::from(u32::MAX - 1)) as u32;
+    // SAFETY: `h` is open for the wait.
+    unsafe { WaitForSingleObject(h.0, ms) == WAIT_OBJECT_0 }
+}
+
+/// A session's program's exit code, once it has exited (a handed-over one's, for the reaper);
+/// `None` while it runs or when it isn't ours.
+pub fn exit_code(pid: u32) -> Option<u32> {
+    proc_of(pid).filter(|p| !p.running()).and_then(|p| p.exit_code())
+}
+
 // ── signals and waits ─────────────────────────────────────────────────────────────────────
 
 fn gone() -> io::Error {
@@ -695,7 +968,7 @@ pub fn contain(child: tokio::process::Child) -> io::Result<Child> {
             return Err(last_error("DuplicateHandle"));
         }
     }
-    let proc = Arc::new(Proc { process: Owned(own), job, pty: None, input: None });
+    let proc = Arc::new(Proc { process: Owned(own), job, pty: None, input: None, output: 0 });
     procs().locked().insert(pid, proc.clone());
     drop(child);
     Ok(Child { pid, proc })
@@ -815,6 +1088,34 @@ mod tests {
             out.extend_from_slice(&buf[..n]);
         }
         String::from_utf8_lossy(&out).into_owned()
+    }
+
+    /// A handover in one process: the session's handles copied (here, into this process),
+    /// adopted, and driven from the copies while the original is left as a daemon that exited
+    /// leaves it, never closed: typing, resizing and the exit code all work (WIN9).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_session_handed_over_runs_on_from_its_copied_handles() {
+        let mut c = start(&["cmd.exe", "/d", "/k", "prompt $G$G"]);
+        read_until(&mut c.reader, ">>").await;
+        tokio::task::block_in_place(|| c.reader.pause()).unwrap();
+        let _ = c.reader.take_pending();
+        let h = handles(&c.master).expect("a console session has handles");
+        // SAFETY: the pseudo-handle for this process.
+        let dup = duplicate_to(unsafe { GetCurrentProcess() }, &h).unwrap();
+        assert_ne!(dup, h, "copies, not the same handles");
+        assert_eq!(Handles::from_slice(&dup.to_vec()), Some(dup));
+        let pid = c.pid;
+        // The old daemon is gone without closing anything: forget what it held.
+        std::mem::forget(c);
+        let mut n = adopt(dup, pid).unwrap();
+        n.writer.write_all(b"echo handed-over\r").await.unwrap();
+        read_until(&mut n.reader, "handed-over").await;
+        resize(&n.writer, TermSize::new(100, 30)).unwrap();
+        n.writer.write_all(b"mode con\r").await.unwrap();
+        read_until(&mut n.reader, "100").await;
+        n.writer.write_all(b"exit 7\r").await.unwrap();
+        assert_eq!(n.child.wait().await.unwrap().code(), Some(7));
+        assert_eq!(exit_code(pid), Some(7));
     }
 
     #[test]

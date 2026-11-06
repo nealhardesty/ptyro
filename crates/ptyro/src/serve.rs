@@ -559,8 +559,31 @@ async fn accept_loop(
 }
 
 /// Started by the daemon: leave when it is gone (it is our parent), or its socket has been
-/// missing for 30 s.
+/// missing for 30 s. On Windows (WIN11) the daemon names itself (`PTYRO_DAEMON_PID`) and we wait
+/// on its process; its socket is a named pipe, which is never looked at (asking for a pipe's
+/// attributes can take an instance its clients are waiting for).
 async fn exit_with_daemon(socket: std::path::PathBuf) {
+    #[cfg(windows)]
+    {
+        let _ = socket;
+        let Some(pid) = std::env::var("PTYRO_DAEMON_PID").ok().and_then(|p| p.parse::<u32>().ok())
+        else {
+            return;
+        };
+        std::thread::spawn(move || {
+            loop {
+                if ptyro_pty::wait_for_exit(pid, Duration::from_secs(3600)) {
+                    std::process::exit(0);
+                }
+            }
+        });
+    }
+    #[cfg(not(windows))]
+    exit_with_parent(socket).await;
+}
+
+#[cfg(not(windows))]
+async fn exit_with_parent(socket: std::path::PathBuf) {
     // The daemon that started us is our parent: when it is gone (killed, crashed, replaced) the
     // next one starts a server of its own, and ours would hold the port for good. A crash leaves
     // the socket file behind, so the file alone can't say.
@@ -670,8 +693,7 @@ async fn tailnet_cert_task(
 
 /// This machine's MagicDNS names (`box.tailnet.ts.net` and `box`), if Tailscale is up.
 fn tailnet_names() -> Vec<String> {
-    let Ok(out) = std::process::Command::new("tailscale").args(["status", "--json"]).output()
-    else {
+    let Ok(out) = ptyro_core::os::tailscale().args(["status", "--json"]).output() else {
         return Vec::new();
     };
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_default();

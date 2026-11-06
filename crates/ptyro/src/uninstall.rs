@@ -144,6 +144,9 @@ pub struct Plan {
     pub worktrees: Vec<Worktree>,
     pub uncommitted_total: usize,
     pub service: Option<PathBuf>,
+    /// Windows knows ptyro as an app (WIN10): its AppUserModelID and its `ptyro:` link handler.
+    #[serde(default)]
+    pub windows_app: bool,
     pub integrations: Vec<Integration>,
     pub rc: Vec<RcEdit>,
     pub tailscale: Option<String>,
@@ -459,7 +462,7 @@ fn integrations_found(config: &Config, env: &Env) -> Vec<Integration> {
 fn tailscale_mapping(config: &Config) -> Option<String> {
     let port = config.remote.port.to_string();
     let port = port.as_str();
-    let out = std::process::Command::new("tailscale")
+    let out = ptyro_core::os::tailscale()
         .args(["serve", "status", "--json"])
         .stdin(std::process::Stdio::null())
         .output()
@@ -501,6 +504,13 @@ pub async fn plan(ctx: &Ctx, env: &Env, opts: &Opts) -> Result<Plan, Error> {
     // The machine's own files: only when this is the install, not a sandbox.
     let machine = sandbox.is_none();
     let service = (machine && crate::service::installed()).then(crate::service::file);
+    #[cfg(windows)]
+    let windows_app = machine && {
+        let (named, opener) = crate::winapp::status();
+        named || opener.is_some()
+    };
+    #[cfg(not(windows))]
+    let windows_app = false;
     let integrations = if machine { integrations_found(&config, env) } else { Vec::new() };
     let mut rc = Vec::new();
     if machine {
@@ -558,6 +568,7 @@ pub async fn plan(ctx: &Ctx, env: &Env, opts: &Opts) -> Result<Plan, Error> {
         worktrees,
         uncommitted_total,
         service,
+        windows_app,
         integrations,
         rc,
         tailscale,
@@ -640,6 +651,12 @@ pub fn render(plan: &Plan, env: &Env) -> String {
     }
     if let Some(f) = &plan.service {
         let _ = writeln!(s, "  service       {} (starts the daemon at login)", tilde(f, home));
+    }
+    if plan.windows_app {
+        let _ = writeln!(
+            s,
+            "  windows       ptyro's toast name and icon, and its ptyro: link handler (your registry)"
+        );
     }
     if !plan.integrations.is_empty() {
         let names: Vec<String> = plan
@@ -736,7 +753,8 @@ fn remove_binary(path: &Path) -> Result<String, String> {
     let Some(dir) = path.parent() else { return Ok(String::new()) };
     // The packaged ConPTY beside it (WIN5; the daemon, and so every OpenConsole.exe, has
     // stopped by now), and what install.ps1 renamed aside when it couldn't overwrite a file.
-    for f in ["conpty.dll", "OpenConsole.exe"] {
+    // ptyrow.exe too, the windowless launcher (WIN10).
+    for f in ["conpty.dll", "OpenConsole.exe", "ptyrow.exe"] {
         let _ = std::fs::remove_file(dir.join(f));
         let _ = std::fs::remove_file(dir.join(format!("{f}.old")));
     }
@@ -890,6 +908,13 @@ async fn execute(ctx: &Ctx, env: &Env, plan: &Plan, opts: &Opts, json: bool) -> 
         let r = crate::service::uninstall(ctx, false).map(|_| String::new()).map_err(|e| e.message);
         step(&mut steps, json, "remove the login service", r);
     }
+    #[cfg(windows)]
+    if plan.windows_app {
+        let r = crate::winapp::remove(&ctx.paths.data)
+            .map(|()| String::new())
+            .map_err(|e| e.to_string());
+        step(&mut steps, json, "unregister ptyro from Windows", r);
+    }
     // The daemon, and what it holds: nothing is deleted under one that still runs. On Windows
     // that is a native daemon (WIN5); WSL's own ptyro is left alone, as the plan says.
     let stopped = {
@@ -968,7 +993,7 @@ async fn execute(ctx: &Ctx, env: &Env, plan: &Plan, opts: &Opts, json: bool) -> 
         );
     }
     if plan.tailscale.is_some() {
-        let ok = std::process::Command::new("tailscale")
+        let ok = ptyro_core::os::tailscale()
             .args(["serve", "--https=443", "off"])
             .output()
             .is_ok_and(|o| o.status.success());

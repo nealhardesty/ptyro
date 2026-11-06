@@ -160,6 +160,7 @@ fn plan_with(worktrees: Vec<Worktree>) -> Plan {
         uncommitted_total: worktrees.iter().filter(|w| w.uncommitted > 0).count(),
         worktrees,
         service: None,
+        windows_app: false,
         integrations: vec![Integration { agent: "gemini".into(), profile: None }],
         rc: Vec::new(),
         tailscale: None,

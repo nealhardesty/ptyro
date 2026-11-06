@@ -45,7 +45,7 @@ mod wsl_hold;
 
 use std::fs::{File, TryLockError};
 use std::io::{Read, Seek, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -99,9 +99,15 @@ pub fn run(opts: Options) -> Result<()> {
         Ok(n) => tracing::info!("{n} descriptor(s) carried over from the previous image"),
         Err(e) => tracing::error!("carried descriptors: {e}"),
     }
-    let lock = acquire_lock(&paths)?;
+    let _ = STARTED_FROM.set(handoff::running_binary());
+    // Windows: a live upgrade's previous daemon still holds the lock until we've taken over; we
+    // take it once it has exited (WIN9).
+    let handed_over = cfg!(windows) && std::env::var_os(handoff::ENV_PARENT).is_some();
+    let lock = if handed_over { None } else { Some(acquire_lock(&paths)?) };
     #[cfg(unix)]
-    LOCK_FD.store(std::os::fd::AsRawFd::as_raw_fd(&lock), std::sync::atomic::Ordering::SeqCst);
+    if let Some(lock) = &lock {
+        LOCK_FD.store(std::os::fd::AsRawFd::as_raw_fd(lock), std::sync::atomic::Ordering::SeqCst);
+    }
     // A live upgrade hands us the previous image (or re-execs the old binary if we can't read it).
     let inherited = handoff::take_image(&paths.state);
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
@@ -168,11 +174,59 @@ fn init_logging(
     Ok(guard)
 }
 
+/// The binary this daemon was started from (a Windows upgrade's default: an install renames the
+/// running `ptyro.exe` aside and puts the new one at this path).
+static STARTED_FROM: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+#[cfg(windows)]
+pub(crate) fn started_from() -> &'static Path {
+    STARTED_FROM.get_or_init(handoff::running_binary)
+}
+
+/// Windows: the lock a handed-over daemon takes once the previous one has exited (WIN9), held
+/// until this process ends.
+#[cfg(windows)]
+static LATE_LOCK: std::sync::OnceLock<File> = std::sync::OnceLock::new();
+
+/// Windows, after a live upgrade took everything over: tell the previous daemon (it then exits),
+/// wait for it to be gone, and take `daemon.lock`.
+#[cfg(windows)]
+fn finish_handover(paths: &Paths, daemon: &Arc<Daemon>) {
+    let Some(parent) = std::env::var(handoff::ENV_PARENT).ok().and_then(|p| p.parse::<u32>().ok())
+    else {
+        return;
+    };
+    if let Err(e) = std::fs::write(handoff::ack_path(&paths.state, parent), b"ok") {
+        tracing::error!("telling the previous daemon we took over: {e}");
+    }
+    let paths = paths.clone();
+    let daemon = Arc::clone(daemon);
+    tokio::task::spawn_blocking(move || {
+        if !ptyro_pty::wait_for_exit(parent, Duration::from_secs(60)) {
+            tracing::error!("the previous daemon (pid {parent}) is still running");
+        }
+        // The lock goes when its holder's process does, as soon as Windows gets round to it.
+        for _ in 0..100 {
+            match acquire_lock(&paths) {
+                Ok(f) => {
+                    let _ = LATE_LOCK.set(f);
+                    return;
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(100)),
+            }
+        }
+        daemon.warn(
+            "this daemon took over in an upgrade but couldn't take daemon.lock: is another ptyro daemon running? `ptyro daemon status`".into(),
+        );
+    });
+}
+
 /// `daemon.lock`'s descriptor, for a live upgrade to carry over.
-#[cfg_attr(windows, allow(dead_code))] // the live upgrade's: Unix until WIN9
+#[cfg(unix)]
 pub(crate) static LOCK_FD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
 
-/// Nothing is carried over on Windows until its live upgrade (WIN9).
+/// Windows carries no lock across a live upgrade: the next daemon takes it once the previous one
+/// has exited (`finish_handover`, WIN9).
 #[cfg(windows)]
 fn carried_lock(_path: &Path) -> Option<File> {
     None
@@ -202,7 +256,11 @@ fn acquire_lock(paths: &Paths) -> Result<File> {
         Err(TryLockError::WouldBlock) => {
             let mut pid = String::new();
             let _ = f.read_to_string(&mut pid);
-            bail!("daemon already running (pid {})", pid.trim());
+            // Windows keeps a locked file's contents from everyone else: no pid to say then.
+            match pid.trim() {
+                "" => bail!("daemon already running (`ptyro daemon status` says which)"),
+                pid => bail!("daemon already running (pid {pid})"),
+            }
         }
         Err(TryLockError::Error(e)) => return Err(e).context("lock daemon.lock"),
     }
@@ -306,6 +364,8 @@ async fn serve(
             ptyro_pty::handoff::adopt(i.image.listener_fd).context("inherited socket")?,
             &paths.socket,
         )?,
+        #[cfg(windows)]
+        Some(_) => listen::Listener::bind_beside(&paths.socket)?,
         _ => listen::Listener::bind(&paths.socket)?,
     };
     let socket = paths.socket.clone();
@@ -370,6 +430,8 @@ async fn serve(
                 "the last daemon upgrade was refused by the new binary and rolled back".into(),
             );
         }
+        #[cfg(windows)]
+        finish_handover(&daemon.paths, &daemon);
     }
     if let Some(e) = config_error {
         daemon.warn(e);
@@ -382,7 +444,7 @@ async fn serve(
             "sessions use Windows' own ConPTY, which repaints programs' output: status can arrive \
              out of order and colour queries go unanswered. ptyro.exe's folder should hold \
              conpty.dll and OpenConsole.exe: install ptyro again (`irm \
-             https://raw.githubusercontent.com/nealhardesty/ptyro/master/scripts/install.ps1 | iex`)"
+             https://github.com/nealhardesty/ptyro/releases/latest/download/install.ps1 | iex`)"
                 .into(),
         );
     }

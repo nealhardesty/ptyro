@@ -31,6 +31,7 @@ mod tls;
 mod tour;
 mod uninstall;
 mod webapp;
+mod winapp;
 mod winclient;
 mod wsl_conf;
 
@@ -920,6 +921,9 @@ enum Cmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Internal: open a `ptyro://attach/…` link (what Windows runs when a toast is clicked)
+    #[command(hide = true)]
+    OpenUrl { uri: String },
     /// Internal: Claude's statusLine command (usage meters)
     #[command(hide = true)]
     StatuslineRelay,
@@ -1209,7 +1213,8 @@ fn main() {
     let cli = Cli::parse();
     let code = match cli.cmd {
         Some(Cmd::Daemon { cmd: DaemonCmd::Start { foreground, spawned, serve } }) => {
-            cli::daemon_start(foreground, spawned, serve)
+            winclient::start_in_wsl(cli.remote.as_deref())
+                .unwrap_or_else(|| cli::daemon_start(foreground, spawned, serve))
         }
         Some(Cmd::FakeAgent { args }) => ptyro_testkit::fake_agent::main(&args),
         #[cfg(debug_assertions)]
@@ -1217,6 +1222,7 @@ fn main() {
         // These run inside agents on every hook: no runtime, no config, never a failure.
         Some(Cmd::Hook { adapter, event, args }) => relay::hook(&adapter, &event, &args),
         Some(Cmd::StatuslineRelay) => relay::statusline(),
+        Some(Cmd::OpenUrl { uri }) => winapp::open_url(&uri),
         cmd => {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()

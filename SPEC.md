@@ -338,7 +338,8 @@ tokio process. **[built M1]** Readiness is "the socket accepts": the client poll
 20 ms for ≤ 5 s, and if the child exits early it points at the log directory. That is simpler than
 the planned ready pipe and equally robust (a second client racing the first simply finds the
 socket). Users may instead run the
-daemon under a systemd user unit or a launchd agent (`ptyro daemon install-service`).
+daemon under a systemd user unit, a launchd agent, or on Windows a per-user logon task
+(`ptyro daemon install-service`; §12 `install-service`, WIN10).
 
 ### 4.2 Actors **[decided]**
 
@@ -487,6 +488,58 @@ image is used to re-exec the *old* binary (kept at `state/daemon.prev`).
     can be sent.
   - Something typed while the old image is between its reply and the exec is lost with that
     connection; the client sees the error.
+
+**[built WIN9, 2026-11-05] On Windows.** There is no `execve`, so the next daemon is another
+process: the daemon's pid changes; every session's program, console, job, screen and status carry
+on (WIN0.3 found a pseudoconsole outlives its creator when another process holds its handles; the
+owner chose this over restart-and-resume, WIN0.5 d). `ptyro daemon upgrade [--binary P]`:
+- **Which binary.** The one the daemon was started from, unless `--binary` names another. An
+  install can't overwrite a running `ptyro.exe`, so `install.ps1` renames it to `ptyro.exe.old`
+  and puts the new one at that path. The same `handoff-version` check refuses an image version the
+  new binary can't read.
+- **Quiescing** as on Unix (goodbye, the managed `ptyro serve` stopped, the store flushed), with
+  one difference: each pipe is read on a thread of its own (`ptyro_pty::winread`), because a read
+  on an anonymous pipe blocks a thread and a read that's under way when its future is dropped
+  carries on, landing in a buffer the next owner never sees (WIN0.3's lost chunk). A pause asks
+  the thread to stop and cancels its read (`CancelSynchronousIo`, asked again until the thread
+  says it's idle: a read started just after a cancel isn't cancelled by it); what it read and
+  nobody took goes into the emulator (or a structured agent's driver buffer) before the image is
+  made. A reader that doesn't stop within 3 s isn't counted as parked, and the handover is called
+  off rather than lose output.
+- **Structured agents** get plain anonymous pipes on Windows (`ptyro_pty::anon_pipe`), not std's
+  overlapped ones, which a blocking read can't drive: their output goes through the same reader.
+- **The handover.** The old daemon starts `P daemon start --spawned|--foreground` detached, with
+  `PTYRO_HANDOFF_IMAGE` (a file in `state/`) and `PTYRO_HANDOFF_PARENT` (its own pid). It copies
+  every live session's handles into the new process (`DuplicateHandle`; nothing is made
+  inheritable, so no other child can take one): a console session's two pipe ends, the
+  `HPCON`'s three, the program and its job (`ptyro_pty::Handles`); a structured agent's three
+  pipes, process and job. The image records the values the new process has (`win_handles`,
+  `structured.fds`; left out when empty, so a Unix image is unchanged), and is written whole
+  (temporary name, then a rename). The new daemon waits for it, adopts every session (its
+  `HPCON` rebuilt from the three handles on the process heap; each handle checked to be open
+  there, and a pipe where one is expected, before it's owned), and writes `handoff-<pid>.ack`.
+  The old daemon then exits without closing anything.
+- **The pipe and the lock.** The new daemon makes its pipe instances beside the old daemon's
+  (`FILE_FLAG_FIRST_PIPE_INSTANCE` off), so the name never goes away: a client that finds no pipe
+  starts a daemon of its own, which would have raced for the lock. Connections the old daemon
+  receives meanwhile are dropped and retried. The new daemon takes `daemon.lock` once the old
+  process is gone (a byte-range lock is released when its holder exits; retried up to 10 s).
+- **Exits.** An adopted program's exit code comes from its process handle, which the new daemon
+  holds; there is no reaping.
+- **A handover that fails** (the new binary refuses the image or exits, or doesn't take over
+  within 30 s, or a reader didn't stop): the new process is ended, its copies with it, and the old
+  daemon carries on with every session. The status says so as a rollback (`generation` goes up,
+  `rolled_back`), and a finding where people look says so with the fix first:
+  `ptyro daemon restart --hibernate` (agents resume their conversations; shells and running
+  commands start again). The TUI runs it, and the web's Health page offers "Restart the daemon",
+  not another try at the same upgrade.
+- **Seen on Windows 11** (2026-11-05, a release build, the packaged ConPTY): a ticker and a
+  program waiting for input went through two upgrades in 572 ms and 537 ms; each program kept its
+  pid, the ticker never stopped, typing reached the waiting one and its exit code (4) came back,
+  the old daemon was gone, a second daemon was refused the lock, and a session started after
+  worked. Upgrading to a ptyro from before WIN9 (it can't take a handover, finds the lock held
+  and exits) left the daemon carrying on, said as a rollback. `tests/win9.rs` runs these in CI.
+  [V]
 
 ---
 
@@ -1485,8 +1538,23 @@ Verified against Claude Code **2.1.304** (§20).
   - Then paste the text, wait 60 ms, and send Enter as an **encoded key event**. Claude speaks
     the kitty keyboard protocol and ignores a bare `\r` written straight after the text: a burst
     ending in `\r` reads as pasted (§20.1).
+  - **[WIN8, 2026-11-05]** For Claude a reliable idle isn't enough (`ready_needs_screen`): its
+    `SessionStart` comes while a resumed one still loads its transcript, and an Enter then is
+    encoded for keyboard modes it hasn't turned on (lost once in two tries on Windows). Its input
+    box must be on screen too: the `❯` (or old `│ >`) line right under a rule, so the `❯`
+    prompts of the conversation above it don't count, and a dialog counts only below the last box.
+  - **[WIN8]** After typing, ptyro watches the input box (`pending_input`): while this very prompt
+    still sits there unsent and the agent waits for input (idle, done, or not yet said), it
+    presses Enter again, twice at most within ~10 s; never while working (that Enter would be lost
+    too) or blocked (Enter would answer the dialog). Codex 0.166 says idle as it starts and is
+    then busy for a moment: the first prompt's Enter landed then and was dropped, every time.
+- **A session starting doesn't end a turn [WIN8]:** a `SessionStart` hook that comes while the
+  session is working moves nothing to idle (its conversation and model still count). Codex 0.166
+  sends it only with the first prompt, after OSC 7501's working (verified live, 2026-11-05).
 - **Folder trust:** `on_screen` recognises the trust dialog and reports blocked(question)
-  "trust this folder?". `ready()` is false while it shows, so ptyro never types into it.
+  "trust this folder?". `ready()` is false while it shows, so ptyro never types into it. So is
+  the first-run "Claude in Chrome extension detected" question (2.1.318), blocked(question)
+  "use your Chrome browser?"; its keys are Down, Enter (yes) and Enter (no, preselected).
 - **Answers** (`ptyro answer`, peek `y/a/n`, approve links): `1` (yes), `2` (yes, and don't ask
   again for this), Esc (no). On the folder-trust question the keys are Down, Enter (yes) and Esc
   (no): the adapter picks them from what is on screen (`answer_screen`, M11.0).
@@ -1964,7 +2032,7 @@ conformance`):
   - `osc`/`bell`: a `Notify` event; each TUI writes OSC 777 (and OSC 9) to its own terminal, in
     tmux DCS passthrough when inside tmux;
   - `desktop`: `notify-send` (with `--` before the agent-controlled title and body) /
-    `osascript` / inside WSL with interop, a Windows toast (§20.10), or `desktop_command` with `{title}`/`{body}` (an argv run without a shell; the
+    `osascript` / a Windows toast, natively (WIN10) and inside WSL with interop (§20.10, §20.12), or `desktop_command` with `{title}`/`{body}` (an argv run without a shell; the
     values are agent-controlled, so a `sh -c` wrapper around them is unsafe);
   - `sinks`: ntfy, Pushover, Slack, Discord, Telegram (through `curl --config -`, so tokens and
     webhook URLs never appear in a process listing), or `command` (JSON on stdin). Secrets are
@@ -3459,7 +3527,9 @@ and then removes the session unless `--keep`. Still to come from this tree: `--v
 - **`new`** gains `--agent A[@P]`, `--profile`, `--wt`, `--new-wt [NAME]`, `--project`,
   `--override-pin` and `--yes`.
 - **`ls`** shows WHERE (the worktree, else `~`-shortened cwd), PROFILE (when any session isn't
-  `default`) and ports.
+  `default`), ports, and STATUS: an agent's status as `ptyro status` words it (`blocked:
+  trust this folder?`, `(guess)` when low), else what the program reports of itself (OSC 7501).
+  It showed only the latter, so an agent that reports nothing (Codex) read blank while blocked.
 - **Addresses** for projects and worktrees default to the one containing the current directory.
 - **`wt new`** on a TTY offers to trust untrusted scripts and run setup. `wt rm` on a refusal with
   `--force` shows the report and asks (unless `--yes`).
@@ -3565,6 +3635,25 @@ and then removes the session unless `--keep`. Still to come from this tree: `--v
     `systemd =` under `[boot]` is replaced, nothing else changes). Then it says how to restart
     WSL: `ptyro daemon stop --hibernate`, then `wsl --shutdown`. The service is for starting at
     login; what keeps the daemon running once the last terminal closes is its hold on WSL (§20.10).
+  - **Windows** (WIN10) **[built 2026-11-05]**: a per-user logon task in Task Scheduler,
+    `\ptyro\daemon`, never a Windows Service (a service runs in session 0, without the user's
+    profile, credentials or desktop, all of which agents need). Its XML (`service::task_xml`):
+    a `LogonTrigger` for this user (`USERDOMAIN\USERNAME`), principal `InteractiveToken` with
+    `LeastPrivilege`, no time limit, on battery too, `IgnoreNew`; the action runs
+    `ptyrow.exe daemon start --spawned`, or, when this computer's daemon is WSL's
+    (`client.default_remote = "wsl://<distro>"`), `ptyrow.exe --remote wsl://<distro> daemon
+    start`, which runs `ptyro daemon start` in that distro through `wsl.exe` and so boots WSL at
+    logon (a systemd unit inside WSL only starts once something starts WSL; the daemon's hold
+    keeps it running after, §20.10). `ptyrow.exe` is a GUI-subsystem trampoline shipped
+    beside `ptyro.exe` that starts it with `CREATE_NO_WINDOW`: a console program started by Task
+    Scheduler would keep a console (or Windows Terminal) window open for as long as it runs. A
+    trigger for this user alone needs no administrator (`schtasks /SC ONLOGON` would). Registered
+    with `schtasks /Create /TN \ptyro\daemon /XML <UTF-16 file> /F`, started at once with
+    `schtasks /Run` when no daemon runs; `uninstall-service` deletes it, and the `\ptyro` folder
+    when empty (Task Scheduler's COM API; `schtasks` can't). The task's daemon gets the user's
+    own environment (the registry's), so a `PTYRO_HOME` or XDG variable set only in the shell is
+    named, with `setx` as the fix. `doctor` says whether the task is there; `ptyro uninstall`
+    removes it.
   - **launchd:** `~/Library/LaunchAgents/dev.ptyro.daemon.plist` with `RunAtLoad` and
     `KeepAlive{SuccessfulExit=false}`, loaded by `launchctl bootstrap gui/<uid>`.
   - **Uninstall** never stops a running daemon. Without systemd running it removes the link by
@@ -5144,6 +5233,24 @@ failed handshake reports ssh's last stderr lines. `ptyro proxy` connects to (or 
 local daemon and copies bytes both ways. Commands that read local files still read this
 machine's (docs/remote.md).
 
+**[built WIN11, 2026-11-05]** A Windows host has no `sh`: its OpenSSH server runs the command in
+`cmd.exe` or PowerShell, which both run `ptyro proxy` as it is (a binary with a space goes in
+double quotes, which cmd takes). The POSIX command goes first; when it fails and ssh itself got
+through (not exit 255), the client asks the host `echo %OS% $env:OS` (`Windows_NT` from cmd or
+PowerShell, whatever the locale) and, when the answer differs from what it tried, tries the
+other command and remembers the host (`<state>/ssh-windows-hosts`, `[user@]host[:port]` a
+line), so the next connection starts with the right one. A POSIX host pays nothing; a failing
+one pays one probe. On a Windows computer whose daemon is WSL's (`client.default_remote =
+"wsl://…"`), `ptyro proxy` hands its stdin and stdout to `wsl.exe` running the same bridge in
+that distro, so ssh reaches the daemon the owner uses there (never inside WSL itself, where the
+same config would send it round again). `ptyro serve` runs natively too: its CA and keys are
+written private (narrowed to the user, SYSTEM and Administrators when their folder lets others
+read), its certificate names `%COMPUTERNAME%`, the Tailscale CLI is found where its installer
+puts it when it isn't on `PATH`, `pair --open` offers to trust ptyro's CA in Windows' user store
+as it does from WSL, and a server the daemon started leaves when that daemon's process is gone
+(Windows has no parent pid to watch). MM1 links a Windows machine either way: over ssh as
+above, or over `machine-bridge` to its `ptyro serve` (`tests/win11.rs`).
+
 **[built WIN3]** `--remote wsl://<distro>` (`wsl://` is the default distro) runs `wsl.exe [-d
 <distro>] --exec sh -c 'PATH=… exec "$0" proxy' <bin>`, the same script as over ssh, with
 `WSL_UTF8=1`. Distro names are `[A-Za-z0-9._-]`, so nothing option-like reaches `wsl.exe`. It
@@ -5768,7 +5875,16 @@ are built on tags later. CI only ever calls make targets.
   `make test-windows` on Windows (`check`); `make tools deny web-check msrv fuzz-smoke` pass
   (`supply`); and each of the four tarballs (`make changelog dist`, x86_64/aarch64 Linux,
   aarch64/x86_64 macOS) installs through `scripts/install.sh` into a temporary prefix, runs, and
-  is refused when tampered with (`make dist-check`, `scripts/installer-check.sh`). **[built WIN3]**
+  is refused when tampered with (`make dist-check`, `scripts/installer-check.sh`), then is removed
+  by `install.sh --uninstall` (fed on stdin, as `curl … | sh -s -- --uninstall` would): a
+  `--dry-run` keeps it; otherwise it hands over to `ptyro uninstall` with the remaining arguments
+  (from `/dev/tty` when stdin is the script, so its question can be answered), and a binary that
+  won't run is removed by the script itself, with its completions. `install.ps1 -Uninstall` (or
+  `PTYRO_UNINSTALL=1`, since `irm | iex` passes no arguments) does the same with `ptyro.exe`, and
+  never calls `exit`, which would close an `iex` caller's PowerShell. Both installers are release
+  assets (in `SHA256SUMS` and the provenance), so the documented URL is
+  `https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh` (`.ps1`), the
+  installer of the release it installs. **[built WIN3]**
   So do the two Windows zips (`ptyro-<v>-{x86_64,aarch64}-pc-windows-msvc.zip`: `ptyro.exe`,
   PowerShell completions, README, LICENSE, CHANGELOG), built natively on `windows-latest` and
   `windows-11-arm` (rustup installed there by `scripts/rust-install.sh` when the image lacks it),
@@ -6637,11 +6753,13 @@ here):
   `System32/WindowsPowerShell/v1.0`) when `PATH` doesn't have them (`Wsl::windows_exe`).
   `%USERPROFILE%` comes from `cmd.exe /d /c echo %USERPROFILE%`, run from `/mnt/c` (from a Linux folder
   cmd.exe complains about UNC paths first). [V]
-- **Toasts:** Windows PowerShell 5.1's WinRT toast API (`ToastNotificationManager`, template
-  `ToastText02`, the AppUserModelID of Windows PowerShell) shows a toast from WSL with no module
-  installed. The title and body go as environment variables listed in `WSLENV` and become XML text
-  nodes, so agent text never becomes script. Both test toasts appear in Windows' notification
-  log (owner, 2026-11-02), the second with a 漢字 title [V]. Clicking it does nothing yet (WIN10 gives ptyro its own AppUserModelID).
+- **Toasts:** Windows PowerShell 5.1's WinRT toast API (`ToastNotificationManager`) shows a
+  toast from WSL with no module installed. The title and body go as environment variables listed
+  in `WSLENV` and become XML text nodes, so agent text never becomes script. Both test toasts
+  appear in Windows' notification log (owner, 2026-11-02), the second with a 漢字 title [V].
+  Since WIN10 the same script serves the native daemon too, and a toast comes from ptyro (its
+  AppUserModelID, once `ptyro.exe` has registered it) and opens its session when clicked (§20.12
+  "ptyro as a Windows app").
 - **Survival after the last terminal (WIN0.1).** WSL 2.6.2.0, Windows 11 build 26200
   (2026-11-03), measured with throwaway distros (`wsl --import` of an Alpine and an Ubuntu base
   rootfs) beside the owner's Ubuntu, so no terminal had to close. "Stops" is `wsl -l --running`
@@ -6824,10 +6942,70 @@ Windows) wasn't needed to get the list below: compile errors are the same either
   line, Codex, Gemini and agy get double quotes (Git Bash and cmd). Claude's exec form (`args`,
   no shell, v2.1.139) was passed over: reports say plugin `hooks.json` ignores it, and that on
   Windows with Git Bash it still goes through bash [U]. [V for the three shells]
+- **A detached child inherits the parent's standard handles.** std starts a Windows child with
+  `bInheritHandles`, so it gets every inheritable handle, the parent's stdout among them, whatever
+  its own `Stdio` says: a daemon the CLI started held the pipe a script (or WSL's interop) read
+  the CLI's output from, and the reader waited for its end for as long as the daemon ran (seen:
+  `ptyro doctor` from WSL hung until its timeout when it started the daemon). Before starting
+  anything detached, ptyro clears the inherit flag on its own standard handles
+  (`ptyro_pty::std_handles_private`); a child given them on purpose still gets std's copies.
+  [V, 2026-11-05: with the fix, PowerShell's `$out = & ptyro.exe new …`, which starts the daemon,
+  returns at once with the output.] **Not covered:** handles the CLI itself inherited from *its*
+  parent that aren't its standard handles (a PowerShell started from WSL hands its interop pipes
+  on) still reach the daemon, so the WSL side of such a chain waits. The whole fix is to start a
+  daemon with no inheritance at all (`CreateProcessW` with `bInheritHandles` off; it wants
+  nothing inherited), which std's `Command` can't do.
+- **ConPTY holds a lone ESC.** Raw input reaches ConPTY as VT, where ESC may begin a sequence:
+  a lone one (`send --raw '\e'`, an answer's "deny", a stop key) waited for the rest and never
+  arrived (a Codex panel stayed open, 2026-11-04). For a program in win32-input-mode, a lone ESC
+  (at the end, or before another) goes as the Escape key's record (`input::raw_input`); whole
+  sequences (`\e[B`) and Alt+key (`\ex`) went through as they are. [V for the held ESC]
+- **Codex 0.166 on Windows** (2026-11-05): its approval overlay says its keys, `y` proceed, `p`
+  don't ask again, `esc` no (ptyro sent `a` for "always"; it sends `p` when offered); its trust
+  question is "Trust this folder?" with "1. Trust and continue" preselected (Enter) and Esc to
+  quit, and text typed into it can quit Codex; with no `[windows] sandbox` it runs each command as
+  you ("Environment: local") and asks first, offering no setup. [V]
 - **PowerShell's execution policy** (Restricted by default) refuses `install.ps1` run as a file,
   but not `irm … | iex`, which evaluates a string. [V]
 - **`wt.exe` splits its command line at every `;`**, also inside a `powershell -Command` string
   after `--`: a script file avoids it (as `tab.rs` escapes `\;`). [V]
+- **ptyro as a Windows app (WIN10)** [V, 2026-11-05, Windows 11 build 26200]:
+  - An unpackaged app's toasts carry its name and icon when its AppUserModelID is registered
+    under `HKCU\Software\Classes\AppUserModelId\<AUMID>` (`DisplayName`, `IconUri` a PNG
+    path); no Start-menu shortcut is needed and no administrator. ptyro's is `dev.ptyro.app`,
+    its icon the web app's, written to `<data>\ptyro.png`.
+  - A toast whose `<toast>` has `launch="<uri>" activationType="protocol"` opens that URI when
+    clicked, through the URI's registered handler (`HKCU\Software\Classes\ptyro`, with
+    `URL Protocol` and `shell\open\command`), for any AppUserModelID, PowerShell's included.
+    Buttons work the same way (`<action activationType="protocol" arguments="<url>">`): the
+    Approve and Deny links open in the browser. A toast's `Tag` (≤ 64 characters) makes the
+    next one for the same session replace it.
+  - `ptyro.exe` registers both itself at start (the native daemon, and any client command but
+    `uninstall`), writing only what differs, so an install that moved fixes itself; never from
+    a sandbox (`PTYRO_HOME`, as tests run). `ptyro uninstall` removes them.
+  - Links are `ptyro://attach/<session>[?remote=local|wsl://<distro>]`. A browser can hand
+    Windows any `ptyro:` link (it asks first), so `open-url` follows only that shape: an address
+    of `[A-Za-z0-9._-]` not starting with `-`, a remote of those two forms; anything else opens
+    nothing. A click runs `ptyrow.exe open-url "%1"`, which opens a Windows Terminal tab
+    (`wt.exe -w 0 new-tab -- ptyro.exe [--remote R] attach <session>`; `-w 0` makes a window
+    when none is open), else a console window of its own. Seen: a WSL session opened in a tab
+    from its link.
+  - The toast script checks the registry itself (`Test-Path`), so a WSL daemon's toasts become
+    ptyro's the moment `ptyro.exe` has run on that Windows, with nothing cached.
+- **Task Scheduler** [V, 2026-11-05]: `schtasks /Create /XML` reads a UTF-16 file with its byte
+  order mark. `schtasks /Query /XML` gives the principal's user as a SID and the trigger's as
+  `DOMAIN\user`, and leaves out `RunLevel` when it is `LeastPrivilege` (the default). A
+  per-user `LogonTrigger` with an `InteractiveToken` registers without elevation.
+- **Windows hosts over ssh (WIN11)**: Windows' OpenSSH server hands a command to `cmd.exe` (its
+  default) or to PowerShell (`DefaultShell`); neither has `sh`, both run `ptyro proxy` as it
+  is (install.ps1 put its folder on the user's `PATH`, which an ssh session gets). Both answer
+  `echo %OS% $env:OS` with `Windows_NT` in their output, a POSIX shell with neither, whatever the
+  locale (the "not recognized" message is localized). [S, Microsoft's OpenSSH docs; the probe's
+  answers V in cmd and PowerShell 5.1 on Windows 11]
+- **A named pipe is never `stat`ed.** Asking for a pipe's attributes (`Path::exists` on
+  `\\.\pipe\…`) opens it, which can take an instance a client is waiting for; a server the
+  daemon started watches the daemon's process instead (`PTYRO_DAEMON_PID`, `WaitForSingleObject`).
+  [S]
 
 ### 20.13 ConPTY (WIN0.2, WIN0.3) **[verified 2026-11-03: Windows 11 build 26200.9711 (25H2), x64; inbox conhost 10.0.26100.1; conpty.dll and OpenConsole.exe 1.25.2609.30003 from the NuGet package Microsoft.Windows.Console.ConPTY 1.25.260930003 (MIT, Microsoft-signed)]**
 
@@ -7167,7 +7345,9 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   with `%USERPROFILE%` as the home when `HOME` isn't set, in the npm prefix (the prefix itself, not
   `bin`), `%APPDATA%\npm`, `~\.local\bin` (Claude's native installer), WinGet's `Links`, Scoop's
   `shims`, `%NVM_SYMLINK%` (nvm-windows), `~\.bun\bin` and `npx`'s cache under
-  `%LOCALAPPDATA%\npm-cache\_npx`. An npm `.cmd` shim is read and what it starts runs instead: its
+  `%LOCALAPPDATA%\npm-cache\_npx`, and `%LOCALAPPDATA%\agy\bin` (the Antigravity CLI's installer).
+  An npm shim whose package is gone (a removed package, or an install that rolled back) runs
+  nothing and isn't found. An npm `.cmd` shim is read and what it starts runs instead: its
   last quoted `"%dp0%\…"`, inside its folder only, a `.js` with `node` (the shim's own `node.exe`
   first, as cmd-shim picks), anything else as it is. Through the shim, `cmd.exe` would stand
   between ptyro and the agent, ask "Terminate batch job (Y/N)?" at Ctrl+C, and be the session's

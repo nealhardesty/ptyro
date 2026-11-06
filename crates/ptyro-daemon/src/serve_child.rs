@@ -163,13 +163,15 @@ impl Daemon {
             .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
             .and_then(|v| v["pid"].as_u64())
             .and_then(|p| u32::try_from(p).ok())
-            .is_some_and(ptyro_core::os::alive);
+            .is_some_and(ptyro_pty::alive);
         if !live {
             let _ = std::fs::remove_file(record);
         }
         let child = std::process::Command::new(exe)
             .args(["serve", "--managed"])
             .envs(self.base_env.iter().map(|(k, v)| (k, v)))
+            // Who to outlive by no more than a moment (Windows has no parent to watch: WIN11).
+            .env("PTYRO_DAEMON_PID", std::process::id().to_string())
             .stdin(std::process::Stdio::null())
             .stdout(log.try_clone()?)
             .stderr(log)
@@ -195,7 +197,7 @@ impl Daemon {
                 .unwrap_or_default();
         let recorded = record["pid"].as_u64().and_then(|p| u32::try_from(p).ok());
         let up = mine.is_some() && recorded == mine;
-        let by_hand = recorded.filter(|p| Some(*p) != mine && ptyro_core::os::alive(*p));
+        let by_hand = recorded.filter(|p| Some(*p) != mine && ptyro_pty::alive(*p));
         WebServe {
             wanted: config.remote.serve,
             up,

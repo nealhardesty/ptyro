@@ -2,11 +2,20 @@
 # Install a ptyro release (ROADMAP H2.2/H2.3): download the tarball for this machine, check its
 # SHA-256 against the release's SHA256SUMS (and its signed provenance when `gh` is installed),
 # and put the binary in ~/.local/bin. Downloading with curl leaves no macOS quarantine mark, so
-# Gatekeeper doesn't block it (a browser download does; see README).
+# Gatekeeper doesn't block it (a browser download does; see README). Every release carries this
+# script as an asset, so the URL below is always the newest one.
 #
-#   curl -fsSL https://raw.githubusercontent.com/nealhardesty/ptyro/master/scripts/install.sh | sh
+#   curl -fsSL https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh | sh
+#   curl -fsSL .../install.sh | sh -s -- --uninstall      # remove it (through `ptyro uninstall`)
+#   curl -fsSL .../install.sh | sh -s -- --uninstall --dry-run   # what that would remove
 #   sh install.sh                 # the latest release
 #   PTYRO_VERSION=0.0.5 sh install.sh
+#
+# Options:
+#   --uninstall [ARGS]     hand over to `ptyro uninstall ARGS` (it lists everything it removes and
+#                          asks first; --dry-run, --yes, --backup FILE…). If the installed binary
+#                          won't run, remove just what this script installed.
+#   -h, --help             this help
 #
 # Environment:
 #   PTYRO_VERSION          the version to install, like 0.0.5 (default: the latest release)
@@ -17,7 +26,7 @@
 #   PTYRO_VERIFY=0         don't try `gh attestation verify`
 #   PTYRO_REQUIRE_ATTESTATION=1   fail unless the provenance verifies (needs `gh`)
 #
-# To remove it again: `ptyro uninstall`.
+# To remove it again: `ptyro uninstall`, or this script with --uninstall.
 set -eu
 
 REPO=nealhardesty/ptyro
@@ -25,13 +34,60 @@ say() { printf '%s\n' "$*"; }
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# Removing it is ptyro's own job: `ptyro uninstall` knows its directories, worktrees, service and
+# rc-file lines, shows them, and asks. This only finds the binary and covers a broken one.
+uninstall() {
+  prefix="${PTYRO_PREFIX:-$HOME/.local}"
+  bin="$prefix/bin/ptyro"
+  [ -x "$bin" ] || ! have ptyro || bin=$(command -v ptyro)
+  if [ -x "$bin" ] && "$bin" --version >/dev/null 2>&1; then
+    say "handing over to $bin uninstall"
+    # Piped from curl, stdin is this script: ptyro's question needs the terminal.
+    if [ ! -t 0 ] && (: </dev/tty) 2>/dev/null; then
+      "$bin" uninstall "$@" </dev/tty || return $?
+    else
+      "$bin" uninstall "$@" || return $?
+    fi
+    # The completions this script put outside ptyro's data directory (another PTYRO_PREFIX).
+    [ -e "$bin" ] || rm -rf "$prefix/share/ptyro/completions"
+    return 0
+  fi
+  if [ ! -e "$prefix/bin/ptyro" ]; then
+    say "ptyro isn't installed in $prefix/bin or on your PATH: nothing to remove"
+    return 0
+  fi
+  case " $* " in *" --dry-run "*)
+    say "$prefix/bin/ptyro doesn't run, so ptyro uninstall can't. Without --dry-run, this removes what this script installed: $prefix/bin/ptyro and $prefix/share/ptyro/completions"
+    return 0 ;;
+  esac
+  say "$prefix/bin/ptyro doesn't run, so ptyro uninstall can't: removing what this script installed"
+  rm -f "$prefix/bin/ptyro"
+  rm -rf "$prefix/share/ptyro/completions"
+  say "removed $prefix/bin/ptyro and its completions; ptyro's config and data, if any, stay"
+}
+
+case "${1:-}" in
+  --uninstall) shift; uninstall "$@"; exit ;;
+  -h | --help)
+    cat <<EOF
+usage: install.sh                  install the latest ptyro release in ${PTYRO_PREFIX:-$HOME/.local}/bin
+       install.sh --uninstall [ARGS]   remove ptyro through \`ptyro uninstall ARGS\`
+                                       (--dry-run shows what; --yes, --backup FILE…)
+piped:  curl -fsSL https://github.com/$REPO/releases/latest/download/install.sh | sh -s -- --uninstall
+environment: PTYRO_VERSION, PTYRO_PREFIX, PTYRO_RELEASE_URL, PTYRO_VERIFY=0, PTYRO_REQUIRE_ATTESTATION=1
+EOF
+    exit 0 ;;
+  "") ;;
+  *) die "unknown option $1 (--uninstall, --help)" ;;
+esac
+
 have curl || die "curl is needed"
 have tar || die "tar is needed"
 
 case "$(uname -s)" in
   Linux) os=unknown-linux-gnu ;;
   Darwin) os=apple-darwin ;;
-  MINGW* | MSYS* | CYGWIN*) die "on Windows, install ptyro.exe from PowerShell: irm https://raw.githubusercontent.com/$REPO/master/scripts/install.ps1 | iex (and this script inside WSL for the daemon)" ;;
+  MINGW* | MSYS* | CYGWIN*) die "on Windows, install ptyro.exe from PowerShell: irm https://github.com/$REPO/releases/latest/download/install.ps1 | iex (and this script inside WSL for the daemon)" ;;
   *) die "$(uname -s) isn't supported: ptyro runs on Linux and macOS (WSL2 works on Windows)" ;;
 esac
 case "$(uname -m)" in

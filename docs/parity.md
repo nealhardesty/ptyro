@@ -306,6 +306,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `machine retry` | `machine.retry`: first in the row menu of its workspace while it's down | `machine.retry`: a machine's menu → Try its link now |
 | `machine pair` | `machine.pair` (the code, full sized) | `machine.pair`: More → Machines → Make a code |
 | `proxy` | waived: the bridge `--remote` runs over ssh on the other machine | waived: the bridge `--remote` runs over ssh between two computers |
+| `open-url` (hidden) | waived: Windows runs it when a toast or a `ptyro:` link is clicked; the TUI opens sessions in tabs with `session.tab` | waived: Windows runs it when a toast is clicked; the web app opens a session on the computer with ⋯ → Open on the computer |
 | `replay` | `session.replay` (plays full sized) | `session.replay`: ⋯ → Replay: its recording as a player with a scrubber and speeds; `session.history` lists earlier sessions |
 | `export` | `session.export`: the format and the file | `session.export`: ⋯ → Save its recording (text or asciicast, as a download) |
 

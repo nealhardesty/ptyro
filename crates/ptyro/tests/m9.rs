@@ -710,6 +710,62 @@ fn remote_over_ssh() {
     );
 }
 
+/// `--remote` to a Windows host (WIN11): its ssh server runs commands with `cmd.exe`, which has
+/// no `sh`. The client finds that out once (asking the host's `%OS%`), runs `ptyro proxy` there
+/// as it is, and remembers: the next connection goes straight to it.
+#[test]
+fn remote_over_ssh_to_a_windows_host() {
+    let w = World::new("", &[]);
+    w.ok(&["new", "-d", "-n", "on-windows", "--", "sh", "-c", "echo hello from windows; sleep 60"]);
+    let local = tempfile::tempdir().unwrap();
+    let log = local.path().join("ssh-commands");
+    let ssh = local.path().join("windows-ssh");
+    // cmd.exe as the far side's shell: no `sh`, `%OS%` is Windows_NT, `ptyro proxy` runs.
+    std::fs::write(
+        &ssh,
+        format!(
+            "#!/bin/sh\nfor last; do :; done\necho \"$last\" >> '{log}'\n\
+             case \"$last\" in\n\
+             'sh -c'*) echo \"'sh' is not recognized as an internal or external command,\" >&2; exit 1 ;;\n\
+             'echo %OS% $env:OS') echo 'Windows_NT $env:OS'; exit 0 ;;\n\
+             esac\n\
+             export PTYRO_HOME='{home}'\nunset PTYRO_SOCKET\nexec sh -c \"$last\"\n",
+            log = log.display(),
+            home = w.d.home.path().display()
+        ),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let remote = || {
+        std::process::Command::new(BIN)
+            .args(["--remote", "me@winbox", "ls", "--json"])
+            .env("PTYRO_HOME", local.path())
+            .env("PTYRO_SSH", &ssh)
+            .env("PTYRO_REMOTE_BIN", BIN)
+            .env_remove("PTYRO_SOCKET")
+            .env_remove("PTYRO_SESSION_ID")
+            .output()
+            .unwrap()
+    };
+    let out = remote();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let list: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(list.as_array().unwrap().iter().any(|s| s["name"] == "on-windows"), "{list}");
+    let said = std::fs::read_to_string(&log).unwrap();
+    let lines: Vec<&str> = said.lines().collect();
+    assert_eq!(lines.len(), 3, "sh, the probe, then ptyro itself: {said}");
+    assert!(lines[0].starts_with("sh -c"), "{said}");
+    assert_eq!(lines[1], "echo %OS% $env:OS");
+    assert_eq!(lines[2], format!("{BIN} proxy"));
+    // Remembered: straight to `ptyro proxy` now.
+    let out = remote();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let said = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(said.lines().count(), 4, "{said}");
+    assert_eq!(said.lines().last(), Some(format!("{BIN} proxy").as_str()));
+}
+
 /// Decrypt a Web Push body the way a browser does (RFC 8291), with the subscription's keys.
 fn decrypt(body: &[u8], ua_secret: &p256::SecretKey, auth: &[u8]) -> Vec<u8> {
     use aes_gcm::aead::{Aead, KeyInit};
