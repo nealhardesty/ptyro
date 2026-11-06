@@ -214,6 +214,9 @@ fn send_wait_read_and_events() {
     assert!(any.contains("idle"), "{any}");
     // A stalled turn: working but silent.
     w.ok(&["send", "a2", "work 5 slow"]);
+    // Working first: on a slow machine `send` returns before the turn has begun, and a wait for
+    // idle would be over at once.
+    w.ok(&["wait", "a2", "--for", "working", "--timeout", "20s"]);
     let stall = w.cli(&["wait", "a2", "--for", "idle", "--stall", "1s", "--timeout", "20s"]);
     assert_eq!(stall.status.code(), Some(7));
     assert!(String::from_utf8_lossy(&stall.stdout).contains("a2 stalled"));

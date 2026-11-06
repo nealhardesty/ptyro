@@ -235,6 +235,53 @@ pub fn slash_path(p: &str) -> String {
     if cfg!(windows) { p.replace('\\', "/") } else { p.to_owned() }
 }
 
+/// Add `args` to `cmd`, each in double quotes on Windows. Rust leaves an argument without a space
+/// unquoted, and MSYS programs (Git Bash's `sh`, `bash`) expand an unquoted `{…}` themselves: a
+/// JSON argument such as `{"type":"x"}` arrived there empty (WIN13: a user's Codex notify run
+/// through ptyro). Quoted by the rules every Windows program parses its command line with.
+pub fn quoted_args(
+    cmd: &mut std::process::Command,
+    args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>,
+) -> &mut std::process::Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        for a in args {
+            cmd.raw_arg(windows_quoted(&a.as_ref().to_string_lossy()));
+        }
+        cmd
+    }
+    #[cfg(not(windows))]
+    {
+        cmd.args(args)
+    }
+}
+
+/// One argument for a Windows command line, always in double quotes: a run of `\\` before a
+/// quote (or the end) doubled, each `"` escaped.
+pub fn windows_quoted(a: &str) -> String {
+    let mut out = String::from("\"");
+    let mut slashes = 0usize;
+    for c in a.chars() {
+        match c {
+            '\\' => slashes += 1,
+            '"' => {
+                out.push_str(&"\\".repeat(slashes * 2 + 1));
+                out.push('"');
+                slashes = 0;
+            }
+            _ => {
+                out.push_str(&"\\".repeat(slashes));
+                out.push(c);
+                slashes = 0;
+            }
+        }
+    }
+    out.push_str(&"\\".repeat(slashes * 2));
+    out.push('"');
+    out
+}
+
 /// A folder a shell reported (OSC 7), as this computer names it. On Windows, Git Bash and MSYS2
 /// report `/c/Users/me` and some programs `/C:/Users/me`: both are `C:\\Users\\me` (WIN13).
 /// Anything else, and everything elsewhere, is unchanged.
@@ -438,7 +485,15 @@ pub fn uid() -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{looks_like_path, windows_folder_from_posix};
+    use super::{looks_like_path, windows_folder_from_posix, windows_quoted};
+
+    #[test]
+    fn windows_arguments_are_always_quoted() {
+        assert_eq!(windows_quoted(r#"{"type":"x"}"#), r#""{\"type\":\"x\"}""#);
+        assert_eq!(windows_quoted(r"C:\a b\"), r#""C:\a b\\""#);
+        assert_eq!(windows_quoted(r#"a\"b"#), r#""a\\\"b""#);
+        assert_eq!(windows_quoted(""), r#""""#);
+    }
 
     #[test]
     fn a_shells_posix_folder_is_its_windows_one() {

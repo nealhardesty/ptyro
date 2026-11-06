@@ -136,7 +136,11 @@ fn a_chat_is_answered_kept_and_carried_on_after_a_restart() {
     assert!(std::fs::read_to_string(cfg).unwrap().contains("mcpServers"));
     assert!(argv.windows(2).any(|p| p == ["--tools", "WebSearch,WebFetch"]), "{argv:?}");
     let cwd = e["cwd"].as_str().unwrap().to_owned();
-    assert!(cwd.ends_with(&format!("chat/{}", c["id"].as_str().unwrap())), "{cwd}");
+    assert!(
+        std::path::Path::new(&cwd)
+            .ends_with(std::path::Path::new("chat").join(c["id"].as_str().unwrap())),
+        "{cwd}"
+    );
 
     // A second message goes to the same engine; the record is user, answer, user, answer.
     let out = w.ok(&["chat", "send", &addr, "second one"]);

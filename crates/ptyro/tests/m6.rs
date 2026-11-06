@@ -396,8 +396,9 @@ fn pull_requests_and_the_pr_event_loop() {
         "test result: FAILED. assertion `left == right` in parse_ok\n",
     )
     .unwrap();
-    let screen = w.wait_screen("fixer", "CI on PR #7 is failing");
-    assert!(screen.contains("assertion `left == right` in parse_ok"), "{screen}");
+    // (The fake takes each line of a message as it comes: wait for the log's, not the header's.)
+    w.wait_screen("fixer", "CI on PR #7 is failing");
+    let screen = w.wait_screen("fixer", "assertion `left == right` in parse_ok");
     assert!(!screen.contains("old comment"), "the baseline isn't delivered");
     // `pr fix` sends the same on demand; `pr checks` exits 1 while one fails.
     assert_eq!(w.cli(&["pr", "checks", "svc/fix"]).status.code(), Some(1));

@@ -144,7 +144,19 @@ impl World {
         let deadline = Instant::now() + WAIT * 3;
         while self.run_status(id) != status {
             if Instant::now() >= deadline {
-                panic!("never: run {id} {status}; it is:\n{:#}", self.run(id));
+                // Its sessions' screens too: where a step stopped is on one of them.
+                let run = self.run(id);
+                let screens: Vec<String> = run["state"]["sessions"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|s| s.as_str())
+                    .map(|s| {
+                        let out = self.cli(&["read", s]);
+                        format!("── {s}:\n{}", String::from_utf8_lossy(&out.stdout))
+                    })
+                    .collect();
+                panic!("never: run {id} {status}; it is:\n{run:#}\n{}", screens.join("\n"));
             }
             std::thread::sleep(Duration::from_millis(200));
         }
