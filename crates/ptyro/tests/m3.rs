@@ -819,8 +819,10 @@ async fn tui_wizard_fast_path_trusts_sets_up_and_follows_the_agent() {
         .send(2.4, "\\r")
         .snapshot(3.4)
         .send(3.6, "y")
-        .snapshot(6.5)
-        .send(7.0, "\\x11d"))
+        // Setup runs, then the pane follows the agent: as long as that takes (a cold PowerShell
+        // on a loaded Windows runner overran a fixed 6.5 s).
+        .until("profile=work")
+        .timeout(40.0))
     .await;
     let start = r.at(1.4);
     assert!(start.contains("▾ proj [wrk]"), "the tree, with the pin's label: {start}");
@@ -833,7 +835,7 @@ async fn tui_wizard_fast_path_trusts_sets_up_and_follows_the_agent() {
         trust.contains("Trust scripts?") && trust.contains("echo setup-ran; sleep 1"),
         "{trust}"
     );
-    let done = r.at(6.5);
+    let done = r.screen.clone();
     assert!(
         done.contains("fake-claude wt="),
         "the pane follows the agent once setup is done: {done}"

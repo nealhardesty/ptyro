@@ -74,7 +74,8 @@ TEST_ENV = PTYRO_TEST_PACKAGED_CONPTY=1 PTYRO_TEST_TIME_SCALE=2 RUST_TEST_THREAD
 TEST_PREP = for d in target/debug target/debug/deps; do INTO=$$d sh scripts/conpty.sh || exit 1; done
 TEST_CROSS = @echo "check-windows: this is Windows: the tests above ran here"
 else
-TEST_ENV =
+# macOS runners have three cores: m7's nine tests at once took 102 s there, and missed windows.
+TEST_ENV = $(if $(filter Darwin,$(shell uname -s)),RUST_TEST_THREADS=2)
 TEST_PREP = @true
 TEST_CROSS = OPTIONAL=1 sh scripts/check-windows.sh
 endif

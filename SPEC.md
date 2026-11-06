@@ -5842,8 +5842,8 @@ are built on tags later. CI only ever calls make targets.
 - **Windows.** CI's `windows` job runs `make test` on `windows-latest` (Git Bash; `make` from
   Chocolatey): every crate's tests natively, native daemons in ConPTY with the packaged ConPTY
   beside the test binaries (`PTYRO_TEST_PACKAGED_CONPTY=1`), two tests at a time per binary
-  (`RUST_TEST_THREADS=2`: m7's nine at once took 144 s there and missed their windows, each
-  alone 14 s) and scripted TUI runs at half speed (`PTYRO_TEST_TIME_SCALE=2`). A test that can't run there is
+  (`RUST_TEST_THREADS=2`, also on macOS's three-core runners: m7's nine at once took 144 s
+  on Windows and 102 s on macOS and missed their windows, each alone 14 s) and scripted TUI runs at half speed (`PTYRO_TEST_TIME_SCALE=2`). A test that can't run there is
   `#[cfg(unix)]` with its reason on the line above (a Unix mode, a signal, a symbolic link
   without Developer Mode, a POSIX shell's job control, a stand-in that is a shell script by
   nature). Stand-in programs on `PATH` (`gh`, `claude`, `ssh`, `tailscale`, an editor) go
