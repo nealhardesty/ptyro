@@ -271,6 +271,13 @@ a row's menu (`.`), makes one at any time.
   htop`, `ptyro shells go 2`, and `%2` wherever a session goes (`ptyro send %2 'make test'`,
   `ptyro read %2`). On the web, the SHELLS group sits above the sessions and a shell's page has
   the strip (tap a number, swipe along it).
+  - **Panes, like tmux:** `Ctrl-Q v` / `Ctrl-Q s` on a shell of SHELLS splits its window with a
+    copy of it, a shell in the same directory. The copy is a pane of the same number, not a new
+    one: shell 3's second pane is `%3.2`. Showing the shell (`Alt-3`, its row) brings back the
+    whole window as you left it: the splits, their sizes, and which pane had focus. Its row menu
+    breaks a pane out to a number of its own, or joins a shell into another window. From a shell:
+    `ptyro shells split %3 [--down]`, `ptyro shells break %3.2`, `ptyro shells join %5 3`. On the
+    web, a window's panes are a second strip under the first, and ⋯ splits, breaks or joins.
   - **On a Mac:** Terminal.app and iTerm2 type `¡™£` for Option-digit unless Option acts as
     Meta (Terminal.app: Settings → Profiles → Keyboard; iTerm2: Profiles → Keys → Left Option
     key: Esc+). Until then, `Ctrl-Q e` and the digit always works, the hints say so, and the health badge (`Ctrl-Q M`) points at the setting.

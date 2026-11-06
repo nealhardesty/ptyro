@@ -11,9 +11,10 @@ use std::time::Duration;
 
 use ptyro_core::config::ShellsRestore;
 use ptyro_core::model::{MAIN_WORKSPACE, WorktreeInfo};
-use ptyro_core::session::{ProcessState, SessionKind, Watch};
+use ptyro_core::session::{ProcessState, SessionKind, SpawnSpec, Watch};
 use ptyro_core::status::AttentionKind;
 use ptyro_core::sync::MutexExt;
+use ptyro_core::window::{MAX_PANES, SplitDir, WindowLayout};
 use ptyro_core::{Error, ErrorCode, SessionId, TermSize, now_ms};
 use ptyro_protocol::{DomainEvent, Reply, Request, ScreenFormat};
 use serde::{Deserialize, Serialize};
@@ -136,6 +137,11 @@ fn lowest_free(taken: &[u32]) -> u32 {
     n
 }
 
+/// `launch` will make session `id` pane `pane` of window `slot` (`ShellSplit`, SPEC §23.17).
+pub(crate) fn pend_pane(id: SessionId, slot: u32, pane: u32) {
+    PENDING.locked().insert(id, Shelf { slot, pane, pinned: true, ..Shelf::default() });
+}
+
 /// `launch` takes the shelf a new session was given (`None`: not loose).
 pub(crate) fn take_pending(id: SessionId) -> Option<Shelf> {
     PENDING.locked().remove(&id)
@@ -159,6 +165,11 @@ struct Kept {
     client_env: BTreeMap<String, String>,
     #[serde(default)]
     pinned: bool,
+    /// Its pane in its window, and the window's layout (SPEC §23.17).
+    #[serde(default)]
+    pane: u32,
+    #[serde(default)]
+    layout: Option<WindowLayout>,
 }
 
 /// What the tick remembers about one loose session between looks.
@@ -185,27 +196,105 @@ impl Daemon {
             .unwrap_or_else(|| MAIN_WORKSPACE.into())
     }
 
-    /// Every loose session of `workspace` (live, exited, lost), with its number.
+    /// Every loose session of `workspace` (live, exited, lost), with its number, by number
+    /// and pane (a window's panes share its number, SPEC §23.17).
     pub(crate) fn shells_of(&self, workspace: &str) -> Vec<(Arc<Session>, u32)> {
-        let mut out: Vec<(Arc<Session>, u32)> = self
+        let mut out: Vec<(Arc<Session>, u32, u32)> = self
             .sessions()
             .into_iter()
             .filter_map(|s| {
-                let slot = {
+                let place = {
                     let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     let ws = m.place.workspace.as_deref().unwrap_or(MAIN_WORKSPACE);
-                    m.shelf.as_ref().filter(|_| ws == workspace).map(|f| f.slot)
+                    m.shelf.as_ref().filter(|_| ws == workspace).map(|f| (f.slot, f.pane()))
                 };
-                slot.map(|n| (s, n))
+                place.map(|(n, p)| (s, n, p))
             })
             .collect();
-        out.sort_by_key(|(_, n)| *n);
-        out
+        out.sort_by_key(|(_, n, p)| (*n, *p));
+        out.into_iter().map(|(s, n, _)| (s, n)).collect()
     }
 
-    /// The loose session numbered `slot` in `workspace`.
+    /// The loose session numbered `slot` in `workspace`: its window's first pane.
     pub(crate) fn shell_at(&self, workspace: &str, slot: u32) -> Option<Arc<Session>> {
         self.shells_of(workspace).into_iter().find(|(_, n)| *n == slot).map(|(s, _)| s)
+    }
+
+    /// Window `slot`'s panes in `workspace`, with their pane numbers, in order.
+    pub(crate) fn panes_of(&self, workspace: &str, slot: u32) -> Vec<(Arc<Session>, u32)> {
+        self.shells_of(workspace)
+            .into_iter()
+            .filter(|(_, n)| *n == slot)
+            .map(|(s, _)| {
+                let pane = s
+                    .meta
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .shelf
+                    .as_ref()
+                    .map_or(1, Shelf::pane);
+                (s, pane)
+            })
+            .collect()
+    }
+
+    /// A loose session's workspace and number.
+    fn window_of(s: &Session) -> Option<(String, u32)> {
+        let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let ws = m.place.workspace.clone().unwrap_or_else(|| MAIN_WORKSPACE.into());
+        m.shelf.as_ref().map(|f| (ws, f.slot))
+    }
+
+    /// The number, and the next free pane, of the window loose session `src` is in, for a new
+    /// pane there; refused at [`MAX_PANES`].
+    pub(crate) fn next_pane(&self, src: SessionId) -> Result<(u32, u32), Error> {
+        let s = self.session(src).ok_or_else(|| Error::not_found(src.full()))?;
+        let Some((ws, slot)) = Self::window_of(&s) else {
+            let name =
+                s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name.clone();
+            return Err(Error::invalid(format!("{name} isn't in SHELLS")));
+        };
+        let mut taken: Vec<u32> = self.panes_of(&ws, slot).into_iter().map(|(_, p)| p).collect();
+        if taken.len() >= MAX_PANES {
+            return Err(Error::conflict(format!(
+                "shell {slot} has {MAX_PANES} panes, the most a window holds: `ptyro shells break` moves one to a number of its own"
+            )));
+        }
+        // Panes still starting there (two splits at once never share a number).
+        taken.extend(PENDING.locked().values().filter(|f| f.slot == slot).map(Shelf::pane));
+        Ok((slot, lowest_free(&taken)))
+    }
+
+    /// Window `slot` of `workspace` changed its panes (or `base` is its new arrangement): every
+    /// pane gets the same layout, fitted to the panes there are, and clients hear of each one
+    /// whose layout changed. One pane left: no layout.
+    pub(crate) fn relayout(&self, workspace: &str, slot: u32, base: Option<WindowLayout>) {
+        let panes = self.panes_of(workspace, slot);
+        let base = base.or_else(|| {
+            panes.iter().find_map(|(s, _)| {
+                let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                m.shelf.as_ref().and_then(|f| f.layout.clone())
+            })
+        });
+        let numbers: Vec<u32> = panes.iter().map(|(_, p)| *p).collect();
+        let layout = (numbers.len() > 1).then(|| {
+            let mut l = base.unwrap_or_else(|| WindowLayout::single(numbers[0]));
+            l.fit(&numbers);
+            l
+        });
+        for (s, _) in &panes {
+            let changed = {
+                let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                m.shelf.as_mut().is_some_and(|f| {
+                    let changed = f.layout != layout;
+                    f.layout = layout.clone();
+                    changed
+                })
+            };
+            if changed {
+                let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(s) });
+            }
+        }
     }
 
     /// The lowest number free in `workspace` (counting ones being handed out).
@@ -306,28 +395,32 @@ impl Daemon {
         let mut movers: Vec<Arc<Session>> =
             self.sessions().into_iter().filter(|s| moved.contains(&s.id)).collect();
         movers.sort_by_key(|s| s.id.created_ms());
+        // A window's panes move together: the number its first mover got is theirs too.
+        let mut renumbered: HashMap<(String, u32), u32> = HashMap::new();
+        let mut settled: Vec<SessionId> = Vec::new();
         for s in movers {
-            let (ws, slot) = {
-                let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                let ws = m.place.workspace.clone().unwrap_or_else(|| MAIN_WORKSPACE.into());
-                match m.shelf.as_ref() {
-                    Some(f) => (ws, f.slot),
-                    None => continue,
+            let Some((ws, slot)) = Self::window_of(&s) else { continue };
+            settled.push(s.id);
+            let n = match renumbered.get(&(ws.clone(), slot)) {
+                Some(&n) => n,
+                None => {
+                    // Taken by a shell that is settled there: every one that didn't move, and
+                    // the movers already placed (the others' numbers aren't theirs yet).
+                    let taken: Vec<u32> = self
+                        .shells_of(&ws)
+                        .into_iter()
+                        .filter(|(o, _)| o.id != s.id)
+                        .filter(|(o, _)| !moved.contains(&o.id) || settled.contains(&o.id))
+                        .map(|(_, n)| n)
+                        .collect();
+                    let n = if taken.contains(&slot) { lowest_free(&taken) } else { slot };
+                    renumbered.insert((ws, slot), n);
+                    n
                 }
             };
-            // Taken by a shell that is settled there: every other one, less the movers still to
-            // come (their numbers aren't theirs yet).
-            let taken: Vec<u32> = self
-                .shells_of(&ws)
-                .into_iter()
-                .filter(|(o, _)| o.id != s.id)
-                .filter(|(o, _)| !moved.contains(&o.id) || o.id.created_ms() < s.id.created_ms())
-                .map(|(_, n)| n)
-                .collect();
-            if !taken.contains(&slot) {
+            if n == slot {
                 continue;
             }
-            let n = lowest_free(&taken);
             if let Some(f) =
                 s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).shelf.as_mut()
             {
@@ -341,7 +434,7 @@ impl Daemon {
     /// isn't one of those.
     pub(crate) fn resolve_slot(&self, addr: &str) -> Option<Result<Arc<Session>, Error>> {
         let (ws, n) = addr.rsplit_once('%')?;
-        let n: u32 = n.parse().ok()?;
+        let (n, pane) = ptyro_core::window::parse_address(n)?;
         let ws = match ws {
             "" => self.context_workspace(),
             // `s:<id>%N` (the CLI inside a session): that session's workspace.
@@ -358,10 +451,20 @@ impl Daemon {
             },
             w => w.to_owned(),
         };
-        Some(self.shell_at(&ws, n).ok_or_else(|| {
-            Error::new(
+        let Some(first) = self.shell_at(&ws, n) else {
+            return Some(Err(Error::new(
                 ErrorCode::NotFound,
                 format!("no shell {n} in {ws}: `ptyro shells new --slot {n}` starts one"),
+            )));
+        };
+        // `%3.2`: pane 2 of shell 3 (SPEC §23.17); `%3` is its first pane.
+        let Some(p) = pane else { return Some(Ok(first)) };
+        let panes = self.panes_of(&ws, n);
+        Some(panes.iter().find(|(_, q)| *q == p).map(|(s, _)| Arc::clone(s)).ok_or_else(|| {
+            let have: Vec<String> = panes.iter().map(|(_, q)| format!("%{n}.{q}")).collect();
+            Error::new(
+                ErrorCode::NotFound,
+                format!("shell {n} of {ws} has no pane {p} (it has {})", have.join(", ")),
             )
         }))
     }
@@ -379,8 +482,7 @@ impl Daemon {
         };
         let Ok(mut v) = serde_json::to_value(&req) else { return req };
         fn bare(s: &str) -> bool {
-            s.strip_prefix('%')
-                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+            s.strip_prefix('%').is_some_and(|n| ptyro_core::window::parse_address(n).is_some())
         }
         let mut found = false;
         if let Some(o) = v.as_object() {
@@ -550,6 +652,11 @@ impl Daemon {
     pub(crate) async fn handle_shells(self: &Arc<Self>, req: Request) -> Result<Reply, Error> {
         match req {
             Request::ShellMove { addr, slot } => self.shell_move(&addr, slot),
+            Request::ShellSplit { addr, dir, env, size } => {
+                self.shell_split(&addr, dir, env, size).await
+            }
+            Request::ShellJoin { addr, into, dir } => self.shell_join(&addr, into, dir),
+            Request::ShellLayout { addr, layout } => self.shell_layout(&addr, layout),
             Request::ShellPlace { addr, loose, worktree } => {
                 self.shell_place(&addr, loose, worktree.as_deref())
             }
@@ -582,7 +689,9 @@ impl Daemon {
         if held.iter().any(|k| k.0 == ws && k.1 == slot) {
             return Err(Error::conflict(format!("shell {slot} of {ws} is starting: try again")));
         }
-        let other = self.shell_at(&ws, slot);
+        // Whole windows move: every pane of each (SPEC §23.17).
+        let mine = self.panes_of(&ws, from);
+        let theirs = self.panes_of(&ws, slot);
         let set = |t: &Arc<Session>, n: u32| {
             if let Some(f) =
                 t.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).shelf.as_mut()
@@ -590,13 +699,16 @@ impl Daemon {
                 f.slot = n;
             }
         };
-        set(&s, slot);
-        if let Some(o) = &other {
-            set(o, from);
-            let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(o) });
+        for (t, _) in &mine {
+            set(t, slot);
+        }
+        for (t, _) in &theirs {
+            set(t, from);
         }
         drop(held);
-        let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(&s) });
+        for (t, _) in mine.iter().chain(&theirs) {
+            let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(t) });
+        }
         Ok(Reply::Session { info: self.info(&s) })
     }
 
@@ -654,6 +766,7 @@ impl Daemon {
                 wt.qualified()
             )));
         }
+        let window = Self::window_of(&s);
         let scratch = {
             let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let scratch = m.shelf.take().and_then(|f| f.scratch);
@@ -666,7 +779,144 @@ impl Daemon {
             tracing::info!("{name} left SHELLS: its scratch directory {} stays", dir.display());
         }
         s.save(None);
+        // The panes it leaves behind close the gap.
+        if let Some((ws, slot)) = window {
+            self.relayout(&ws, slot, None);
+        }
         let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(&s) });
+        Ok(Reply::Session { info: self.info(&s) })
+    }
+
+    /// `ShellSplit` (SPEC §23.17): a copy of a loose session as a new pane of its window: a
+    /// shell (whatever the source runs, as tmux's `split-window`) in its live directory, in its
+    /// workspace, under its profile, beside or below it.
+    async fn shell_split(
+        self: &Arc<Self>,
+        addr: &str,
+        dir: SplitDir,
+        env: BTreeMap<String, String>,
+        size: Option<TermSize>,
+    ) -> Result<Reply, Error> {
+        let src = self.resolve(addr)?;
+        let info = self.info(&src);
+        let Some((ws, slot)) = Self::window_of(&src) else {
+            return Err(Error::invalid(format!(
+                "{} isn't in SHELLS: split it in its pane instead (`v`/`s` in the TUI)",
+                info.name
+            )));
+        };
+        let here = info.live_cwd.clone().filter(|p| p.is_dir()).unwrap_or_else(|| info.cwd.clone());
+        let env = if env.is_empty() {
+            src.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).client_env.clone()
+        } else {
+            env
+        };
+        let spec = SpawnSpec {
+            cwd: here,
+            env,
+            size: size.or(Some(info.size)),
+            workspace: Some(ws.clone()),
+            profile: Some(info.profile.clone()),
+            pane_of: Some(src.id),
+            ..SpawnSpec::default()
+        };
+        let s = self.spawn(spec).await?;
+        let mut base = self.layout_of(&ws, slot);
+        let at = info.pane.unwrap_or(1);
+        if let Some(new) = s
+            .meta
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .shelf
+            .as_ref()
+            .map(Shelf::pane)
+        {
+            base.insert(at, new, dir);
+        }
+        self.relayout(&ws, slot, Some(base));
+        Ok(Reply::Session { info: self.info(&s) })
+    }
+
+    /// Window `slot`'s layout as it stands (one pane: that pane alone).
+    fn layout_of(&self, ws: &str, slot: u32) -> WindowLayout {
+        let panes = self.panes_of(ws, slot);
+        let stored = panes.iter().find_map(|(s, _)| {
+            let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            m.shelf.as_ref().and_then(|f| f.layout.clone())
+        });
+        let first = panes.first().map_or(1, |(_, p)| *p);
+        stored.unwrap_or_else(|| WindowLayout::single(first))
+    }
+
+    /// `ShellJoin` (SPEC §23.17): into another window as a new pane (`join-pane`), or with no
+    /// `into` out of its window to the lowest free number (`break-pane`).
+    fn shell_join(&self, addr: &str, into: Option<u32>, dir: SplitDir) -> Result<Reply, Error> {
+        let s = self.resolve(addr)?;
+        let name = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name.clone();
+        let Some((ws, from)) = Self::window_of(&s) else {
+            return Err(Error::invalid(format!(
+                "{name} isn't in SHELLS: `ptyro shells loose {name}` moves it there"
+            )));
+        };
+        let set = |slot: u32, pane: u32| {
+            if let Some(f) =
+                s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).shelf.as_mut()
+            {
+                (f.slot, f.pane, f.layout) = (slot, pane, None);
+            }
+        };
+        let to = match into {
+            None => {
+                if self.panes_of(&ws, from).len() < 2 {
+                    return Err(Error::invalid(format!(
+                        "shell {from} has one pane: it has a number of its own already"
+                    )));
+                }
+                let r = self.reserve_slot(&ws, None)?;
+                set(r.key.1, 1);
+                r.key.1
+            }
+            Some(n) if n == from => {
+                return Err(Error::invalid(format!("{name} is in shell {n} already")));
+            }
+            Some(n) => {
+                let target = self.panes_of(&ws, n);
+                if target.is_empty() {
+                    return Err(Error::new(
+                        ErrorCode::NotFound,
+                        format!("no shell {n} in {ws} to join"),
+                    ));
+                }
+                if target.len() >= MAX_PANES {
+                    return Err(Error::conflict(format!(
+                        "shell {n} has {MAX_PANES} panes, the most a window holds"
+                    )));
+                }
+                let taken: Vec<u32> = target.iter().map(|(_, p)| *p).collect();
+                let pane = lowest_free(&taken);
+                let mut base = self.layout_of(&ws, n);
+                let at = base.focus;
+                set(n, pane);
+                base.insert(at, pane, dir);
+                self.relayout(&ws, n, Some(base));
+                n
+            }
+        };
+        self.relayout(&ws, from, None);
+        let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(&s) });
+        tracing::info!("{name} is in shell {to} of {ws} now");
+        Ok(Reply::Session { info: self.info(&s) })
+    }
+
+    /// `ShellLayout` (SPEC §23.17): a client rearranged a window (shares, focus, zoom).
+    fn shell_layout(&self, addr: &str, layout: WindowLayout) -> Result<Reply, Error> {
+        let s = self.resolve(addr)?;
+        let Some((ws, slot)) = Self::window_of(&s) else {
+            let name =
+                s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name.clone();
+            return Err(Error::invalid(format!("{name} isn't in SHELLS")));
+        };
+        self.relayout(&ws, slot, Some(layout));
         Ok(Reply::Session { info: self.info(&s) })
     }
 
@@ -764,6 +1014,8 @@ impl Daemon {
                     slot: f.slot,
                     client_env: m.client_env.clone(),
                     pinned: f.pinned,
+                    pane: f.pane(),
+                    layout: f.layout.clone(),
                 })
             })
             .collect()
@@ -899,6 +1151,25 @@ impl Daemon {
         }
         let scrollback = self.config().daemon.scrollback_lines;
         let mut back = 0;
+        // A window's panes come back together, in the number its first pane got (SPEC §23.17).
+        let mut windows: HashMap<(String, u32), u32> = HashMap::new();
+        let mut number = |me: &Self, ws: &str, k: &Kept| -> Option<(u32, Option<Reservation>)> {
+            if let Some(&n) = windows.get(&(ws.to_owned(), k.slot)) {
+                return Some((n, None));
+            }
+            let r =
+                me.reserve_slot(ws, Some(k.slot)).or_else(|_| me.reserve_slot(ws, None)).ok()?;
+            windows.insert((ws.to_owned(), k.slot), r.key.1);
+            Some((r.key.1, Some(r)))
+        };
+        let shelf = |slot: u32, k: &Kept, lost: bool| Shelf {
+            slot,
+            pinned: k.pinned || lost,
+            lost,
+            pane: k.pane,
+            layout: k.layout.clone(),
+            ..Shelf::default()
+        };
         for k in list {
             let Ok(id) = k.id.parse::<SessionId>() else { continue };
             if let Some(s) = self.session(id) {
@@ -910,13 +1181,10 @@ impl Daemon {
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .shelf
                     .is_none();
-                if bare
-                    && let Ok(r) = self
-                        .reserve_slot(&k.workspace, Some(k.slot))
-                        .or_else(|_| self.reserve_slot(&k.workspace, None))
-                {
+                if bare && let Some((n, r)) = number(self, &k.workspace, &k) {
                     s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).shelf =
-                        Some(Shelf { slot: r.key.1, pinned: k.pinned, ..Shelf::default() });
+                        Some(shelf(n, &k, false));
+                    drop(r);
                 }
                 continue;
             }
@@ -925,11 +1193,7 @@ impl Daemon {
             } else {
                 MAIN_WORKSPACE.into()
             };
-            let Ok(r) =
-                self.reserve_slot(&ws, Some(k.slot)).or_else(|_| self.reserve_slot(&ws, None))
-            else {
-                continue;
-            };
+            let Some((slot, r)) = number(self, &ws, &k) else { continue };
             let cwd =
                 if k.cwd.is_dir() { k.cwd.clone() } else { ptyro_core::config::expand_home("~") };
             let spec = crate::session::DormantSpec {
@@ -953,8 +1217,7 @@ impl Daemon {
                 let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 m.state = ProcessState::Failed { error: "lost when ptyro restarted".into() };
                 m.client_env = k.client_env.clone();
-                m.shelf =
-                    Some(Shelf { slot: r.key.1, lost: true, pinned: true, ..Shelf::default() });
+                m.shelf = Some(shelf(slot, &k, true));
             }
             let dir = self.paths.data.join("sessions").join(id.full());
             if dir.is_dir() {
@@ -974,6 +1237,9 @@ impl Daemon {
                     }
                 });
             }
+        }
+        for ((ws, _), n) in windows {
+            self.relayout(&ws, n, None);
         }
         if back > 0 {
             tracing::info!("{back} shell(s) of SHELLS offered again after the restart");

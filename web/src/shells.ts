@@ -19,6 +19,10 @@ const ACTIONS = {
   "shells.watch": "Tell me when this shell's command ends, it prints, goes quiet, or shows a line that matches",
   "shells.loose": "Move this session to its workspace's SHELLS: it outlives its worktree",
   "shells.adopt": "Move this shell from SHELLS into the worktree its directory is in",
+  "shells.split": "Split this shell's window with a copy of it: a shell in the same directory, a pane of the same number",
+  "shells.pane": "Show another pane of this shell's window: tap its .number",
+  "shells.break": "Move this pane out of its window to a number of its own",
+  "shells.join": "Move this shell into another window as a pane",
 } as const;
 export const tip = actions(ACTIONS);
 
@@ -31,8 +35,24 @@ export const listWorkspace = (): string => lastWorkspace ?? "main";
 export function shellsOf(sessions: Iterable<Session>, workspace?: string): Session[] {
   return [...sessions]
     .filter((s) => s.loose && s.slot != null && (!workspace || (s.workspace ?? "main") === workspace))
-    .sort((a, b) => (a.workspace ?? "").localeCompare(b.workspace ?? "") || (a.slot ?? 0) - (b.slot ?? 0));
+    .sort((a, b) => (a.workspace ?? "").localeCompare(b.workspace ?? "") || (a.slot ?? 0) - (b.slot ?? 0) || (a.pane ?? 1) - (b.pane ?? 1));
 }
+
+/// A workspace's windows: the first pane of each number (SPEC §23.17).
+export function windowsOf(sessions: Iterable<Session>, workspace?: string): Session[] {
+  const seen = new Set<string>();
+  return shellsOf(sessions, workspace).filter((s) => {
+    const k = `${s.workspace ?? "main"}%${s.slot}`;
+    return seen.has(k) ? false : (seen.add(k), true);
+  });
+}
+
+/// A window's panes, in pane order.
+const panesOf = (sessions: Iterable<Session>, s: Session): Session[] =>
+  shellsOf(sessions, s.workspace ?? "main").filter((o) => o.slot === s.slot);
+
+/// `3`, or `3.2` for a pane of a window of several.
+const paneName = (s: Session): string => (s.layout && s.pane ? `${s.slot}.${s.pane}` : String(s.slot));
 
 /// What its card says it's doing: the command running, else the last one and how it went.
 function doing(s: Session): string {
@@ -55,7 +75,10 @@ export async function newLooseShell(opts: { workspace?: string; slot?: number; a
 
 /// Show shell N (one lost in a restart starts again); an empty number gets a new shell.
 export async function goShell(sessions: Iterable<Session>, n: number, workspace?: string): Promise<void> {
-  const s = shellsOf(sessions, workspace).find((x) => x.slot === n);
+  // A window opens on the pane that had focus there.
+  const panes = shellsOf(sessions, workspace).filter((x) => x.slot === n);
+  const focus = panes[0]?.layout?.focus;
+  const s = panes.find((x) => focus != null && x.pane === focus) ?? panes[0];
   if (!s) { ui.toast(`Shell ${n} started`); return newLooseShell({ workspace, slot: n }); }
   if (s.lost) await ask({ t: "restart", addr: s.id }, `Shell ${n} started again`);
   go(`#/s/${enc(s.id)}`);
@@ -93,10 +116,13 @@ export function shellsGroup(sessions: Iterable<Session>, card: (s: Session) => H
     return h("section", { class: "shells" }, head,
       h("button", { class: "small shell-new", title: tip("shells.new"), onclick: () => void newLooseShell() }, "＋ new shell"));
   }
+  const firsts = windowsOf(list);
   const cardOf = (s: Session) => {
     const el = card(s);
     el.classList.add("shell-card");
-    el.prepend(h("span", { class: "slot", title: tip("shells.go") }, String(s.slot)));
+    const later = (s.pane ?? 1) > 1 && !!s.layout && firsts.every((o) => o.id !== s.id);
+    if (later) el.classList.add("pane");
+    el.prepend(h("span", { class: "slot", title: tip(later ? "shells.pane" : "shells.go") }, later ? `.${s.pane}` : String(s.slot)));
     const sub = h("span", { class: "shell-sub" }, shellLabel(s), s.watch ? ` · ◎ ${watchLabel(s.watch)}` : "", s.scratch ? " · scratch" : "", doing(s) ? ` · ${doing(s)}` : "");
     el.append(sub);
     return el;
@@ -113,14 +139,24 @@ export function shellStrip(sessions: Iterable<Session>, s: Session): HTMLElement
   const ws = s.workspace ?? "main";
   lastWorkspace = ws;
   const all = [...sessions];
-  const list = shellsOf(all, ws);
+  const list = windowsOf(all, ws);
   const nav = h("nav", { class: "shell-strip", title: tip("shells.go") },
     ...list.map((o) => h("button", {
-      class: `${o.id === s.id ? "on" : ""}${o.attention ? " wants" : ""}${o.lost ? " lost" : ""}`,
-      "aria-pressed": String(o.id === s.id),
+      class: `${o.slot === s.slot ? "on" : ""}${o.attention ? " wants" : ""}${o.lost ? " lost" : ""}`,
+      "aria-pressed": String(o.slot === s.slot),
       onclick: () => void goShell(all, o.slot ?? 0, ws),
-    }, `${o.slot} `, h("small", {}, shellLabel(o)))),
+    }, `${o.slot} `, h("small", {}, shellLabel(o.slot === s.slot ? s : o)))),
     h("button", { class: "plus", title: tip("shells.new"), "aria-label": "New shell", onclick: () => newShellMenu(ws) }, "＋"));
+  // A window of several panes: its panes under the strip, a tap shows one (the web shows one
+  // pane at a time; the TUI shows the window's layout).
+  const panes = s.layout ? panesOf(all, s) : [];
+  const sub = panes.length > 1 ? h("nav", { class: "pane-strip", title: tip("shells.pane") },
+    ...panes.map((o) => h("button", {
+      class: `${o.id === s.id ? "on" : ""}${o.attention ? " wants" : ""}`,
+      "aria-pressed": String(o.id === s.id),
+      onclick: () => go(`#/s/${enc(o.id)}`),
+    }, `.${o.pane} `, h("small", {}, shellLabel(o)))),
+    h("button", { class: "plus", title: tip("shells.split"), "aria-label": "Split", onclick: () => void splitShell(s, "right") }, "＋")) : null;
   // A swipe along it goes to the next or the previous shell (a phone's way to flip through).
   let x0: number | null = null;
   nav.addEventListener("touchstart", (e) => { x0 = e.touches[0]?.clientX ?? null; }, { passive: true });
@@ -131,23 +167,41 @@ export function shellStrip(sessions: Iterable<Session>, s: Session): HTMLElement
     if (to && to.id !== s.id) go(`#/s/${enc(to.id)}`);
     x0 = null;
   });
-  return nav;
+  return sub ? h("div", { class: "shell-strips" }, nav, sub) : nav;
+}
+
+/// A copy of a shell as a new pane of its window (`dir`: beside or below it), then its page.
+export async function splitShell(s: Session, dir: "right" | "down"): Promise<void> {
+  const r = await ask<{ info?: Session }>({ t: "shell_split", addr: s.id, dir }, `Shell ${s.slot}: a new pane`);
+  if (r?.info) go(`#/s/${enc(r.info.id)}`);
+}
+
+function joinForm(s: Session): void {
+  form(`Join shell ${paneName(s)} into another window`, [{ key: "into", label: "Shell number", type: "number", required: true }], "Join", async (v) => {
+    const into = Number(v.into);
+    if (!(into >= 1)) throw new Error("a shell's number, from 1 up");
+    await ask({ t: "shell_join", addr: s.id, into, dir: "down" }, `Joined shell ${into}`);
+  });
 }
 
 /// The neighbour of a shell in its workspace's SHELLS (`dir` = 1 next, -1 previous), for a swipe.
 export function neighbour(sessions: Iterable<Session>, s: Session, dir: 1 | -1): Session | undefined {
-  const list = shellsOf(sessions, s.workspace ?? "main");
-  const i = list.findIndex((o) => o.id === s.id);
+  const list = windowsOf(sessions, s.workspace ?? "main");
+  const i = list.findIndex((o) => o.slot === s.slot);
   return i < 0 ? undefined : list[(i + dir + list.length) % list.length];
 }
 
 /// What a session's ⋯ menu offers about SHELLS.
-export function shellMenuItems(s: Session): Item[] {
+export function shellMenuItems(s: Session): (Item | false)[] {
   if (s.quick || s.pad || s.machine) return [];
   if (!s.loose) {
     return s.state.t === "running" ? [{ title: tip("shells.loose"), label: "Move to SHELLS", hint: "A number of its own; it outlives its worktree", run: () => ask({ t: "shell_place", addr: s.id, loose: true, worktree: null }, `${s.name} is in SHELLS now`) }] : [];
   }
   return [
+    { title: tip("shells.split"), label: "Split beside", hint: "A copy of it in the same directory, a pane of this number", run: () => void splitShell(s, "right") },
+    { title: tip("shells.split"), label: "Split below", hint: "The same, below it", run: () => void splitShell(s, "down") },
+    !!s.layout && { title: tip("shells.break"), label: "Break out to its own number", hint: `It's pane ${s.pane} of shell ${s.slot} now`, run: () => ask({ t: "shell_join", addr: s.id, into: null, dir: "right" }, `${s.name} has a number of its own now`) },
+    { title: tip("shells.join"), label: "Join another window…", hint: "As a pane of that number", run: () => joinForm(s) },
     { title: tip("shells.move"), label: "Move to number…", hint: `It's shell ${s.slot} now`, run: () => moveForm(s) },
     { title: tip("shells.watch"), label: "Watch…", hint: s.watch ? `Now: ${watchLabel(s.watch)}` : "Its command ends, output, silence, a match", run: () => watchMenu(s) },
     { title: tip("shells.adopt"), label: "Adopt into its worktree", hint: "The one its directory is in", run: () => ask({ t: "shell_place", addr: s.id, loose: false, worktree: null }, `${s.name} joined its worktree`) },

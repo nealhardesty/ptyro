@@ -370,7 +370,8 @@ impl Inputs<'_> {
     ) -> Vec<Row> {
         let (mut numbered, rest): (Vec<&SessionInfo>, Vec<&SessionInfo>) =
             others.into_iter().partition(|s| s.loose && s.slot.is_some());
-        numbered.sort_by_key(|s| s.slot);
+        // A window's panes follow its first, in pane order (SPEC §23.17).
+        numbered.sort_by_key(|s| (s.slot, s.pane));
         let (quick, rest): (Vec<&SessionInfo>, Vec<&SessionInfo>) =
             rest.into_iter().partition(|s| s.quick);
         let tail = || tail_rows(&quick, &rest);
@@ -547,6 +548,8 @@ mod tests {
             watch: None,
             scratch: false,
             lost: false,
+            pane: None,
+            layout: None,
         }
     }
 

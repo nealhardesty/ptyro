@@ -701,6 +701,8 @@ mod tests {
             watch: None,
             scratch: false,
             lost: false,
+            pane: None,
+            layout: None,
         };
         let mut r = StatusRecord::new(status, Confidence::High, SignalSource::Hook);
         r.since_ms = since;

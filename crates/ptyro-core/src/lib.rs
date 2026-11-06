@@ -27,6 +27,7 @@ pub mod settings;
 pub mod shell;
 pub mod status;
 pub mod sync;
+pub mod window;
 pub mod wsl;
 
 pub use error::{Error, ErrorCode};

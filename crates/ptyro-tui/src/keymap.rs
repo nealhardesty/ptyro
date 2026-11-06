@@ -158,6 +158,11 @@ pub const ACTIONS: &[ActionSpec] = &[
         "Move this session to its workspace's SHELLS, with a number: it outlives its worktree",
     ),
     a("shells.adopt", "Move this shell from SHELLS into the worktree its directory is in"),
+    a(
+        "shells.break",
+        "Break this pane out of its SHELLS window to a number of its own (tmux's break-pane)",
+    ),
+    a("shells.join", "Join this shell into another SHELLS window as a pane (tmux's join-pane)"),
     a("attention.next", "Jump to the session that needs you most (blocked first)"),
     a("inbox", "The inbox: everything that wanted you, per workspace"),
     a("peek", "Peek at a session's screen and what it wants; reply or answer inline"),

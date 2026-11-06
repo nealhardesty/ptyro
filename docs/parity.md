@@ -65,6 +65,9 @@ its row: its TUI action and its web one, or `waived:` and why.
 | `shells loose` | `shells.loose` (a worktree session's row menu, `.`) | `shells.loose`: ⋯ → Move to SHELLS |
 | `shells adopt` | `shells.adopt` (a shell's row menu, `.`): into the worktree its directory is in | `shells.adopt`: ⋯ → Adopt into its worktree |
 | `shells watch` | `shells.watch` (a shell's row menu, `.`): done, output, silence 30s or 5m, match…, off | `shells.watch`: ⋯ → Watch… |
+| `shells split` | `pane.split_right` / `pane.split_down` (`v` / `s`, the row menu's split) on a shell of SHELLS: a copy of it (a shell in its directory) as a pane of its window; showing any pane (`Alt-N`, ⏎ on its row) shows the window's layout | `shells.split`: ⋯ → Split beside / Split below, or ＋ on the pane strip; the panes show one at a time (`shells.pane`, the pane strip under the shell strip) |
+| `shells break` | `shells.break` (a pane's row menu, `.`; the palette) | `shells.break`: ⋯ → Break out to its own number |
+| `shells join` | `shells.join` (a shell's row menu, `.`; the palette): asks for the window's number | `shells.join`: ⋯ → Join another window… |
 
 ## Scratchpad
 

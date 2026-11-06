@@ -34,7 +34,7 @@ impl App {
             .unwrap_or_else(|| self.workspace.clone())
     }
 
-    /// A workspace's loose sessions, by number.
+    /// A workspace's loose sessions, by number and pane.
     pub(crate) fn shells_in(&self, ws: &str) -> Vec<&SessionInfo> {
         let tree = self.tree();
         let mut v: Vec<&SessionInfo> = self
@@ -42,7 +42,14 @@ impl App {
             .iter()
             .filter(|s| s.loose && s.slot.is_some() && tree.home(s) == ws)
             .collect();
-        v.sort_by_key(|s| s.slot);
+        v.sort_by_key(|s| (s.slot, s.pane));
+        v
+    }
+
+    /// A workspace's windows: the first pane of each number (SPEC §23.17).
+    pub(crate) fn windows_in(&self, ws: &str) -> Vec<&SessionInfo> {
+        let mut v = self.shells_in(ws);
+        v.dedup_by_key(|s| s.slot);
         v
     }
 
@@ -113,7 +120,9 @@ impl App {
 
     /// `shells_go` in a given workspace.
     pub(crate) fn shells_go_in(&mut self, ws: String, n: u32) {
-        let found = self.shells_in(&ws).into_iter().find(|s| s.slot == Some(n)).cloned();
+        // A window shows with the pane that had focus there (SPEC §23.17).
+        let key = (ws.clone(), n);
+        let found = self.window_focus(&key).and_then(|id| self.session(id)).cloned();
         match found {
             Some(s) => {
                 if s.lost {
@@ -136,12 +145,14 @@ impl App {
     pub(crate) fn shells_menu(&mut self) {
         let ws = self.shells_ws();
         let mut items: Vec<Item> = self
-            .shells_in(&ws)
+            .windows_in(&ws)
             .into_iter()
             .map(|s| {
                 let n = s.slot.unwrap_or_default();
+                let panes = s.layout.as_ref().map_or(1, |l| l.panes().len());
+                let more = if panes > 1 { format!("  ⊞{panes}") } else { String::new() };
                 Item {
-                    label: format!("{n}  {}", label(s)),
+                    label: format!("{n}  {}{more}", label(s)),
                     detail: doing(s).unwrap_or_else(|| state_word(s)),
                     key: (n <= 9).then(|| n.to_string()),
                     target: Target::Action(Command {
@@ -244,6 +255,8 @@ impl App {
                 });
             }
             "shells.watch" => self.open_shell_watch(&s),
+            "shells.break" => self.window_break(&s),
+            "shells.join" => self.window_join_ask(&s),
             _ => {}
         }
     }
@@ -467,7 +480,13 @@ pub(crate) fn sidebar_line(
                 name = name.add_modifier(Modifier::BOLD);
             }
             let marked = app.marked.contains(&s.id);
-            let num = s.slot.map_or_else(|| "  ".into(), |n| format!("{n:>2} "));
+            // A window's later panes hang under its first (SPEC §23.17): `└.2`.
+            let first = app.windows_in(&app.tree().home(s)).iter().any(|o| o.id == s.id);
+            let num = match (s.slot, s.pane) {
+                (Some(_), Some(p)) if !first => format!(" └.{p} "),
+                (Some(n), _) => format!("{n:>2} "),
+                _ => "  ".into(),
+            };
             let mut spans = vec![
                 Span::raw(" "),
                 if marked {
@@ -478,6 +497,9 @@ pub(crate) fn sidebar_line(
                 Span::styled(format!("{g} "), fg(gc)),
                 Span::styled(label(s), name),
             ];
+            if first && let Some(l) = &s.layout {
+                spans.push(Span::styled(format!(" ⊞{}", l.panes().len()), fg(t.dim)));
+            }
             if s.scratch {
                 spans.push(Span::styled(" ◌", fg(t.dim)));
             }
@@ -513,10 +535,16 @@ pub(crate) fn strip(
     let t = &app.theme;
     let ws = app.tree().home(s);
     let mut out = vec![(Span::styled("SHELLS ", base.add_modifier(Modifier::DIM)), None)];
-    for o in app.shells_in(&ws) {
+    for o in app.windows_in(&ws) {
         let n = o.slot.unwrap_or_default();
         let hit = Some(StripHit::Go(ws.clone(), n));
-        if o.id == s.id {
+        if o.slot == s.slot {
+            // A window's pane says which one it is: `[3.2 label]`.
+            let n = match s.pane.filter(|_| s.layout.is_some()) {
+                Some(p) => format!("{n}.{p}"),
+                None => n.to_string(),
+            };
+            let o = s;
             let style = if focused {
                 base.fg(app.depth.fit(t.accent)).add_modifier(Modifier::BOLD)
             } else {

@@ -174,6 +174,26 @@ pub struct Shelf {
     /// never a hit (SPEC §23.9).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub seen: Vec<String>,
+    /// Its pane in its window (SPEC §23.17): the sessions sharing a number are one window. 0
+    /// (from before windows) reads as 1; see [`Shelf::pane`].
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pane: u32,
+    /// Its window's layout, when the window has more than one pane. Every pane holds the same
+    /// copy (`Daemon::relayout` writes them all), so it moves with the number and crosses a
+    /// live upgrade with the rest of `Meta`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<ptyro_core::window::WindowLayout>,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+impl Shelf {
+    /// Its pane number, from 1.
+    pub fn pane(&self) -> u32 {
+        self.pane.max(1)
+    }
 }
 
 /// What sessions tell the daemon's signal processor (`agents.rs`).
@@ -604,6 +624,8 @@ impl Session {
             watch: meta.shelf.as_ref().and_then(|f| f.watch.clone()),
             scratch: meta.shelf.as_ref().is_some_and(|f| f.scratch.is_some()),
             lost: meta.shelf.as_ref().is_some_and(|f| f.lost),
+            pane: meta.shelf.as_ref().map(Shelf::pane),
+            layout: meta.shelf.as_ref().and_then(|f| f.layout.clone()),
         }
     }
 

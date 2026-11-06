@@ -76,6 +76,9 @@ export interface Session {
   scratch?: boolean;
   /// Lost in a daemon restart and offered again in its number: Restart starts it.
   lost?: boolean;
+  /// Its pane in its SHELLS window (SPEC §23.17), and the window's layout when it has several.
+  pane?: number | null;
+  layout?: { focus?: number; zoom?: boolean; root: unknown } | null;
   argv?: string[];
   cwd?: string;
   live_cwd?: string | null;

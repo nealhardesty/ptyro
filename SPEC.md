@@ -1033,6 +1033,10 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built SH.13] Protocol 1.30** (additive): SHELLS windows (§23.17). `ShellSplit{addr, dir,
+env, size?}`, `ShellJoin{addr, into?, dir}`, `ShellLayout{addr, layout}` → `Session`.
+`SessionInfo.pane/layout`. `%N.P` addresses a pane. An older daemon refuses the new requests.
+
 **[built SH] Protocol 1.29** (additive): SHELLS (§23.12). `ShellMove{addr, slot}`,
 `ShellPlace{addr, loose, worktree?}`, `ShellWatch{addr, watch?}` → `Session`. `SessionInfo.loose/slot/
 watch/scratch/lost` and `SpawnSpec.loose/slot/scratch`. `%N` and `ws%N` resolve wherever a session
@@ -3193,6 +3197,8 @@ The daily loop (ROADMAP UX3, RESEARCH R-UX-34…37). `crates/ptyro-tui/src/scree
     cloned beside or below it: an agent as the same agent and profile in the same worktree with a
     fresh conversation (`override_pin`/`confirmed`: its source already runs there); anything else
     as a shell in its directory; an empty pane a shell here. The pane count is checked first.
+    **[changed SH.13]** A shell of SHELLS is split by the daemon instead (`ShellSplit`, §23.17):
+    the copy is a pane of its window, never a session placed in the worktree it stands in.
   - A split's pane whose session is removed closes; it never takes another session (UX1.23 still
     applies to a single pane). A restored view closes a split's empty panes and fills only a
     single one. Sessions that go are dropped from the kept layout, which goes when it is empty.
@@ -3423,7 +3429,7 @@ ptyro daemon start [--foreground]|stop [--force|--hibernate]|restart|status|logs
              |upgrade|install-service|uninstall-service
 ptyro gc [--dry-run]
 ptyro completions bash|zsh|fish        # dynamic: completes live session/worktree names
-ptyro shells [ls]|new [-- CMD…] [-C DIR] [--slot N] [--scratch]|go N|move N M|loose S|adopt S [WT]|watch S [--done|--output|--silence D|--match RE|--off]   # SHELLS (§23; proposed)
+ptyro shells [ls]|new [-- CMD…] [-C DIR] [--slot N] [--scratch]|go N|move N M|split [S] [--down]|break S|join S N|loose S|adopt S [WT]|watch S [--done|--output|--silence D|--match RE|--off]   # SHELLS (§23; proposed)
 ptyro shell-init bash|zsh|fish|pwsh    # OSC 7/133 snippets for shells ptyro didn't start (§8.7)
 ptyro hook <adapter> <event>           # internal; used by agent integrations
 ptyro proxy                            # internal; stdio⇄socket bridge for ssh remote (§16.2)
@@ -8071,7 +8077,7 @@ its CHATS. A shell there is an ordinary session (any command, not only a shell) 
 - **It is a session** (§7.1) of kind `shell` or `command` (an `agent` too, when started there),
   with `loose = true` and a `slot`. Everything a session has works on it unchanged: `send`,
   `read`, `wait`, rename and retitle, stop and kill, restart, copy mode, the recorder, splits
-  (`v`/`s` clone it into another loose session in its directory), broadcast (`b` to the rows
+  (`v`/`s`: a copy of it, a shell in its directory, as a pane of its window, §23.17), broadcast (`b` to the rows
   marked with `Space`: tmux's `synchronize-panes`), peek, the inbox, the filter, the finder.
 - **It belongs to its workspace, not to a worktree.** It has no `worktree` and no `project`, gets
   no worktree environment and no ports (§10.6, §10.7), and runs no lifecycle scripts. It runs under
@@ -8158,6 +8164,7 @@ its CHATS. A shell there is an ordinary session (any command, not only a shell) 
 - `%` because a shell doesn't treat it specially in a word's first position (`#` would start a
   comment) and tmux uses it for pane ids. It never appears in a name (`[a-z0-9._-]`), so no name
   can be mistaken for it.
+- `%3.2` is pane 2 of shell 3's window (§23.17), and `%3` its first pane.
 - An empty slot is an error that names the way out: `no shell 4 in main: \`ptyro shells new --slot
   4\` starts one`.
 
@@ -8409,3 +8416,71 @@ The web has no splits and no `Alt` it can count on: on macOS the browser types c
   - the web chord, if any;
   - whether `C-q e` is the right key for the shells menu. `e` is free after the prefix today, and
     `W` (tmux's `w`, choose-window) is the other candidate.
+
+### 23.17 Windows: a number's panes **[decided 2026-11-06 (owner); built 2026-11-06 (SH.13)]**
+
+tmux's window holds panes, and so does a number in SHELLS. The owner asked for it after a split
+of a SHELLS shell opened a session in a worktree. The cause: `split_clone` sent a plain spawn in the
+shell's directory, so the daemon placed it under the innermost worktree there (§7.2). The owner's
+choices (2026-11-06): the layout lives in the daemon, the web shows one pane at a time with a pane
+strip, and a split is always a shell.
+
+- **A split is a copy.** `v`/`s` on a shell of SHELLS (CLI `shells split`, the web's ⋯ → Split
+  beside/below) asks the daemon for `ShellSplit{addr, dir}`. The daemon starts a shell, whatever
+  the source runs (as tmux's `split-window`), with these from the source:
+  - its live directory, else where it started;
+  - its workspace and profile;
+  - the client's environment, else the source's.
+
+  It is loose, never placed under a worktree, and becomes a new **pane** of the source's number.
+  Panes don't take numbers: the next new shell still gets the lowest free number.
+- **Panes.** `Shelf.pane` (from 1; 0 from before windows reads as 1). The sessions that share a
+  number are one window. Its first pane is the window's row, and `%3` names it. `%3.2` names pane
+  2 (every session address takes it; `ptyro_core::window::parse_address`). A pane takes the
+  lowest free pane number in its window. At most four panes (`window::MAX_PANES`, the TUI's split
+  limit); a fifth is refused and pointed to `shells break`.
+- **The layout** (`window::WindowLayout`): a split tree whose leaves are pane numbers, each
+  split's share in thousandths (not floats, so layouts compare exactly), the focused pane, and
+  zoom.
+  - Every pane's `Shelf.layout` holds the same copy, written by `Daemon::relayout` whenever the
+    window's panes change. So it moves with the number (`shells move` moves every pane), crosses
+    a live upgrade with `Meta`, and is in the restart list (`Kept.pane`, `Kept.layout`).
+  - `relayout` fits the layout to the panes there are (`WindowLayout::fit`): a gone pane's
+    sibling takes its space, and a pane it lacks goes beside the last.
+  - A window of one pane has no layout.
+  - `SessionInfo.pane` and `SessionInfo.layout` carry it to clients.
+- **Break and join** (`ShellJoin{addr, into?, dir}`). With no `into`, the pane moves to the
+  lowest free number as a window of its own (tmux's `break-pane`); a window of one pane is
+  refused. With `into: N`, it becomes a new pane of window N, `dir` from N's focused pane (tmux's
+  `join-pane`).
+- **What changes the window:**
+  - a pane that goes: `forget_session` relayouts, and the next pane becomes `%N`;
+  - adoption into a worktree: `ShellPlace{loose: false}` relayouts the panes it leaves;
+  - a restart: the panes come back together in the number their first pane gets, and `reslot`
+    renumbers a moved workspace's windows whole.
+- **The TUI** (`crates/ptyro-tui/src/windows.rs`):
+  - Showing any pane (⏎ on its row, `Alt-N`, the strip, the finder) shows the whole window as
+    the daemon has it: `place` builds a screen from the layout, its pane ids the pane numbers.
+    The screen it replaces is kept, so `` ` `` goes back.
+  - `Alt-N` opens the window on the pane that had focus there.
+  - `sync_window` (each `tick`) compares the window on screen with `App.window_seen`, the layout
+    last agreed with the daemon:
+    - a resize, a focus move or zoom made here is sent (`ShellLayout`);
+    - a change made elsewhere is shown (another client's split, a pane that went);
+    - a screen that mixes the window with other sessions, or lacks some of its panes, is left
+      alone.
+  - The sidebar hangs a window's later panes under its row as `└.2`, and the window's row shows
+    `⊞N`. The strip and the shells menu list windows. A pane's header strip says `[3.2 …]`.
+  - `shells.break` and `shells.join` are in a shell's row menu and the palette; join asks for the
+    number.
+- **The CLI:**
+  - `shells split [S] [--down] [--attach]`, where S defaults to the session it runs in;
+  - `shells break S`;
+  - `shells join S N [--right]`;
+  - `shells ls` lists panes under their window, and its `--json` rows carry `pane`.
+- **The web:** a shell's page in a window of several has a **pane strip** under the shell
+  strip: `.1 [.2] .3 ＋`. Tap shows a pane (`shells.pane`), and `＋` splits. The ⋯ menu has Split
+  beside, Split below, Break out to its own number, and Join another window…. The list shows a
+  window's later panes as indented `.2` cards. The web still shows one pane at a time (§23.14).
+- **Not here:** splitting a worktree's sessions into windows (their splits stay a TUI layout,
+  §11.2i), a desktop split view on the web, and more than four panes.

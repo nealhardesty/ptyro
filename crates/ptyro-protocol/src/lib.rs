@@ -40,7 +40,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 29 };
+pub const PROTO: Version = Version { major: 1, minor: 30 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -329,6 +329,35 @@ pub enum Request {
         addr: String,
         #[serde(default)]
         watch: Option<Watch>,
+    },
+    /// SHELLS windows (SPEC §23.17, protocol 1.30): a copy of the loose session `addr` (a shell
+    /// in its live directory, under its profile) as a new pane of its window, beside it
+    /// (`right`) or below it (`down`). `env` and `size` are the client's, as for `Spawn`.
+    /// Replies `Session` (the new pane).
+    ShellSplit {
+        addr: String,
+        #[serde(default)]
+        dir: ptyro_core::window::SplitDir,
+        #[serde(default)]
+        env: BTreeMap<String, String>,
+        #[serde(default)]
+        size: Option<TermSize>,
+    },
+    /// SHELLS windows (SPEC §23.17): move the loose session `addr` into window `into` of its
+    /// workspace as a new pane (`dir` from that window's focused pane), or with no `into` out of
+    /// its window to a number of its own (tmux's `join-pane` and `break-pane`). Replies `Session`.
+    ShellJoin {
+        addr: String,
+        #[serde(default)]
+        into: Option<u32>,
+        #[serde(default)]
+        dir: ptyro_core::window::SplitDir,
+    },
+    /// SHELLS windows (SPEC §23.17): the arrangement of the window `addr` is a pane of (shares,
+    /// focus, zoom), as a client changed it. Fitted to the window's panes. Replies `Session`.
+    ShellLayout {
+        addr: String,
+        layout: ptyro_core::window::WindowLayout,
     },
     /// The other machines this daemon mirrors (MM1.B). Replies `Machines`.
     MachineList,
