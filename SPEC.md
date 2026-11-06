@@ -5831,7 +5831,16 @@ are built on tags later. CI only ever calls make targets.
   `make test-windows` on Windows (`check`); `make tools deny web-check msrv fuzz-smoke` pass
   (`supply`); and each of the four tarballs (`make changelog dist`, x86_64/aarch64 Linux,
   aarch64/x86_64 macOS) installs through `scripts/install.sh` into a temporary prefix, runs, and
-  is refused when tampered with (`make dist-check`, `scripts/installer-check.sh`). **[built WIN3]**
+  is refused when tampered with (`make dist-check`, `scripts/installer-check.sh`), then is removed
+  by `install.sh --uninstall` (fed on stdin, as `curl … | sh -s -- --uninstall` would): a
+  `--dry-run` keeps it; otherwise it hands over to `ptyro uninstall` with the remaining arguments
+  (from `/dev/tty` when stdin is the script, so its question can be answered), and a binary that
+  won't run is removed by the script itself, with its completions. `install.ps1 -Uninstall` (or
+  `PTYRO_UNINSTALL=1`, since `irm | iex` passes no arguments) does the same with `ptyro.exe`, and
+  never calls `exit`, which would close an `iex` caller's PowerShell. Both installers are release
+  assets (in `SHA256SUMS` and the provenance), so the documented URL is
+  `https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh` (`.ps1`), the
+  installer of the release it installs. **[built WIN3]**
   So do the two Windows zips (`ptyro-<v>-{x86_64,aarch64}-pc-windows-msvc.zip`: `ptyro.exe`,
   PowerShell completions, README, LICENSE, CHANGELOG), built natively on `windows-latest` and
   `windows-11-arm` (rustup installed there by `scripts/rust-install.sh` when the image lacks it),

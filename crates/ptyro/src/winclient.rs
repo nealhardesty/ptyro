@@ -13,7 +13,8 @@ const NOT_YOURS: &[&str] =
     &["docker-desktop", "docker-desktop-data", "rancher-desktop", "podman-machine"];
 
 /// What the README installs with (the release tarball, checked against `SHA256SUMS`).
-pub const INSTALL: &str = "curl -fsSL https://raw.githubusercontent.com/nealhardesty/ptyro/master/scripts/install.sh | sh";
+pub const INSTALL: &str =
+    "curl -fsSL https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh | sh";
 
 /// The daemon to use. `given` is `--remote`.
 pub async fn resolve(given: Option<String>, paths: &Paths, discover: bool) -> Option<String> {

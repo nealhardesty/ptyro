@@ -73,15 +73,26 @@ git clone https://github.com/nealhardesty/ptyro.git && cd ptyro
 make install            # builds and installs ~/.cargo/bin/ptyro
 ```
 
-Or, without a checkout, a prebuilt release (Linux and macOS, x86_64 and aarch64):
+Or, without a checkout, the latest prebuilt release (Linux and macOS, x86_64 and aarch64):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/nealhardesty/ptyro/master/scripts/install.sh | sh
+curl -fsSL https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh | sh
 ```
 
 It downloads the tarball for your machine, checks it against the release's `SHA256SUMS` (and its
 signed build provenance when you have `gh`), and installs `~/.local/bin/ptyro` (`PTYRO_VERSION`,
-`PTYRO_PREFIX` choose another). Or build it yourself:
+`PTYRO_PREFIX` choose another). Every release carries the script, so this URL is always the newest
+one. Options go after `sh -s --`:
+
+```bash
+curl -fsSL https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh | sh -s -- --uninstall --dry-run
+curl -fsSL https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh | sh -s -- --uninstall
+curl -fsSL https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh | sh -s -- --help
+```
+
+`--uninstall` hands over to `ptyro uninstall` (see [Removing ptyro](#removing-ptyro) below), and
+anything after it goes along too (`--dry-run`, `--yes`, `--backup FILE`). If the installed binary
+won't run, the script removes just what it installed. Or build it yourself:
 
 ```bash
 cargo install --locked --git https://github.com/nealhardesty/ptyro ptyro
@@ -115,7 +126,9 @@ ptyro doctor     # checks agents, logins, integrations, terminal and tmux
 **Upgrading** while agents run: install the new binary (run the install script again), then
 `ptyro daemon upgrade`. Every session keeps running.
 
-**Removing ptyro:** `ptyro uninstall` shows what it keeps on your machine (sessions, worktrees
+### Removing ptyro
+
+`ptyro uninstall` (or the install script's `--uninstall`, or `-Uninstall` on Windows) shows what it keeps on your machine (sessions, worktrees
 with any uncommitted work flagged, its directories, the login service, integrations, shell-rc
 lines, the binary), asks, and removes it; `ptyro backup` saves its state first. Your repositories,
 their branches and `.ptyro.toml` stay. See [`docs/uninstall.md`](docs/uninstall.md).
@@ -129,14 +142,21 @@ client: the TUI in Windows Terminal, and every command from PowerShell.
 2. Install `ptyro.exe`, from PowerShell (x64 and ARM64):
 
    ```powershell
-   irm https://raw.githubusercontent.com/nealhardesty/ptyro/master/scripts/install.ps1 | iex
+   irm https://github.com/nealhardesty/ptyro/releases/latest/download/install.ps1 | iex
    ```
 
    It downloads the release's zip for your machine, checks it against `SHA256SUMS` (and its
    signed build provenance when you have `gh`), installs `%LOCALAPPDATA%\Programs\ptyro\bin\ptyro.exe`
    and puts that folder on your `PATH` (`$env:PTYRO_VERSION`, `PTYRO_PREFIX`,
    `PTYRO_NO_MODIFY_PATH=1` change that). `ptyro uninstall` removes it again, `PATH` entry
-   included. `ptyro.exe` isn't code-signed yet, so Windows' Smart App Control, when it's on, may
+   included. So does the script: `iex` takes no arguments, so set `PTYRO_UNINSTALL` or run it as
+   a script block, whose arguments go to `ptyro uninstall`:
+
+   ```powershell
+   $env:PTYRO_UNINSTALL = '1'; irm https://github.com/nealhardesty/ptyro/releases/latest/download/install.ps1 | iex
+   & ([scriptblock]::Create((irm https://github.com/nealhardesty/ptyro/releases/latest/download/install.ps1))) -Uninstall --dry-run
+   ```
+ `ptyro.exe` isn't code-signed yet, so Windows' Smart App Control, when it's on, may
    refuse to run it; the installer says so if it does. Or build it yourself: see
    [Build on Windows](#build-on-windows); from Linux or WSL, `make check-windows`'s toolchain
    cross-builds it (`cargo xwin build --release --target x86_64-pc-windows-msvc -p ptyro`,
@@ -810,7 +830,7 @@ WSL works meanwhile.
 | `make web` / `make web-check` | build the web app (needs Node) / check the committed `web/dist` matches (CI) |
 | `make dist` (`TRIPLE=…`) / `changelog` / `homebrew-formula` | release tarball (on Windows, a zip) + `.sha256` in `dist/` / regenerate `CHANGELOG.md` / render `dist/ptyro.rb` from the checksums |
 | `make sbom` | the software bill of materials (CycloneDX) from `Cargo.lock`: `dist/ptyro-<version>.cdx.json` |
-| `make dist-check` (`TRIPLE=…`) / `make installer-check` | install the tarball in `dist/` with `scripts/install.sh` into a temp prefix and run it (a tampered tarball must be refused); on Windows (Git Bash), the zip through `scripts/install.ps1` / `make dist` and then that |
+| `make dist-check` (`TRIPLE=…`) / `make installer-check` | install the tarball in `dist/` with `scripts/install.sh` into a temp prefix and run it (a tampered tarball must be refused), then remove it again with `--uninstall`; on Windows (Git Bash), the zip through `scripts/install.ps1` / `make dist` and then that |
 | `make brew-check` (`TRIPLE=…`) | install the tarball in `dist/` through the Homebrew formula from a throwaway local tap, then `brew test` and `brew audit --strict` it (a wrong checksum must be refused); skips without Homebrew unless `PTYRO_REQUIRE_BREW=1`; refuses if a Homebrew `ptyro` is already installed; run after `make dist` |
 | `make bump` (`V=patch\|minor\|major\|X.Y.Z`) | set the version in `Cargo.toml` and `Cargo.lock` (default: next patch); it prints the commit and tag to run |
 | `make check-macos` | type-check the workspace for macOS from Linux |

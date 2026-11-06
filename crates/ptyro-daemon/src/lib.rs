@@ -444,7 +444,7 @@ async fn serve(
             "sessions use Windows' own ConPTY, which repaints programs' output: status can arrive \
              out of order and colour queries go unanswered. ptyro.exe's folder should hold \
              conpty.dll and OpenConsole.exe: install ptyro again (`irm \
-             https://raw.githubusercontent.com/nealhardesty/ptyro/master/scripts/install.ps1 | iex`)"
+             https://github.com/nealhardesty/ptyro/releases/latest/download/install.ps1 | iex`)"
                 .into(),
         );
     }
