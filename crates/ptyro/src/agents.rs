@@ -39,7 +39,7 @@ pub enum IntegrationsCmd {
     },
 }
 
-fn status_text(s: &SessionInfo) -> String {
+pub(crate) fn status_text(s: &SessionInfo) -> String {
     if !s.state.is_live() {
         return s.state.label();
     }

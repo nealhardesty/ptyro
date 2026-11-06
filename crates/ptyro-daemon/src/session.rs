@@ -494,7 +494,12 @@ impl Session {
 
     /// Raw bytes to the program (answers, stop keys).
     pub fn write_raw(&self, bytes: &[u8]) {
-        self.write_input(bytes.to_vec(), bytes == b"\x1a");
+        // A Windows console program (win32-input-mode) gets a lone Esc as the key (WIN8).
+        let encoded = {
+            let term = self.term.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            ptyro_term::input::raw_input(bytes, &term.emu.modes())
+        };
+        self.write_input(encoded, bytes == b"\x1a");
     }
 
     /// Raw bytes from `send --raw`: after any prompt being typed, never inside it (M7.7). Stop

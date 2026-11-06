@@ -1299,10 +1299,15 @@ async fn list(ctx: &Ctx, json: bool, filter: Filter) -> Result<i32, Error> {
             Some(role) => format!("script {}", role.trim_start_matches("run:")),
             None => s.foreground.clone().unwrap_or_else(|| s.argv.join(" ")),
         };
-        let status = s.program_status.as_ref().map_or(String::new(), |p| {
-            let kind = p.kind.as_deref().map(|k| format!("/{k}")).unwrap_or_default();
-            format!("{}{kind}", p.state)
-        });
+        // What it's doing: an agent's status as `ptyro status` says it ("blocked: trust this
+        // folder?"), else what the program reports of itself. An agent's used to be missing here.
+        let status = match &s.status {
+            Some(_) if s.state.is_live() => crate::agents::status_text(s),
+            _ => s.program_status.as_ref().map_or(String::new(), |p| {
+                let kind = p.kind.as_deref().map(|k| format!("/{k}")).unwrap_or_default();
+                format!("{}{kind}", p.state)
+            }),
+        };
         let place = s
             .worktree
             .as_deref()

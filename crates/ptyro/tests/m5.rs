@@ -199,6 +199,14 @@ fn send_wait_read_and_events() {
     let blocked = w.ok(&["send", "a1", "ask rm -rf build", "--wait"]);
     assert!(blocked.contains("a1 blocked"), "{blocked}");
     w.ok(&["answer", "a1", "allow"]);
+    // `ls` says so in its STATUS column, as `status` does, also for an agent that reports
+    // nothing of itself over OSC 7501 (Codex): ptyro's status, not only the program's.
+    let b2 = w.ok(&["send", "a2", "ask rm -rf dist", "--wait"]);
+    assert!(b2.contains("a2 blocked"), "{b2}");
+    let ls = w.ok(&["ls"]);
+    let row = ls.lines().find(|l| l.contains(" a2 ")).unwrap_or_default();
+    assert!(row.contains("blocked"), "{ls}");
+    w.ok(&["answer", "a2", "allow"]);
     // --match on the screen, --any across sessions.
     let m = w.ok(&["wait", "a1", "--match", "answer: (yes|no)", "--timeout", "10s"]);
     assert!(m.contains("a1 matched \"answer: yes\""), "{m}");
