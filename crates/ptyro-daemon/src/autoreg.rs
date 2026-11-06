@@ -151,9 +151,12 @@ impl Daemon {
         }
         let target = dir.and_then(|d| self.target(None, d).ok().flatten());
         if target.is_some() {
+            // A pane of a window of several stays with its window (SPEC §23.17).
+            let in_window =
+                self.window_of_shelf(s).is_some_and(|(ws, n)| self.panes_of(&ws, n).len() > 1);
             let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             match &m.shelf {
-                Some(f) if f.pinned => return,
+                Some(f) if f.pinned || in_window => return,
                 Some(_) => m.shelf = None,
                 None => {}
             }

@@ -8436,9 +8436,15 @@ strip, and a split is always a shell.
   Panes don't take numbers: the next new shell still gets the lowest free number.
 - **Panes.** `Shelf.pane` (from 1; 0 from before windows reads as 1). The sessions that share a
   number are one window. Its first pane is the window's row, and `%3` names it. `%3.2` names pane
-  2 (every session address takes it; `ptyro_core::window::parse_address`). A pane takes the
-  lowest free pane number in its window. At most four panes (`window::MAX_PANES`, the TUI's split
-  limit); a fifth is refused and pointed to `shells break`.
+  2 (every session address takes it; `ptyro_core::window::parse_address`).
+  - A new pane takes the lowest free pane number above the window's first pane, so a copy never
+    becomes `%N` (the window's row) ahead of the shell it copies.
+  - At most four panes (`window::MAX_PANES`, the TUI's split limit), counting panes still
+    starting: the count and the claim are one step under `PENDING`. A fifth is refused and
+    pointed to `shells break`.
+  - A window's layout is read, changed and written back under one lock (`ARRANGING`), so two
+    splits finishing together keep both.
+  - `shells move` is refused while a pane of either window is starting.
 - **The layout** (`window::WindowLayout`): a split tree whose leaves are pane numbers, each
   split's share in thousandths (not floats, so layouts compare exactly), the focused pane, and
   zoom.
@@ -8456,8 +8462,12 @@ strip, and a split is always a shell.
 - **What changes the window:**
   - a pane that goes: `forget_session` relayouts, and the next pane becomes `%N`;
   - adoption into a worktree: `ShellPlace{loose: false}` relayouts the panes it leaves;
-  - a restart: the panes come back together in the number their first pane gets, and `reslot`
-    renumbers a moved workspace's windows whole.
+  - a restart: the panes come back together in the number their first pane gets, keyed by the
+    workspace they were saved in, so a gone workspace's window 3 never merges with main's.
+    Panes a live upgrade already brought back hold their window's number. `reslot` renumbers a
+    moved workspace's windows whole;
+  - a shell that only landed in SHELLS still moves into the repository it `cd`s into (UX1.5),
+    unless it is a pane of a window of several: then it stays with its window.
 - **The TUI** (`crates/ptyro-tui/src/windows.rs`):
   - Showing any pane (⏎ on its row, `Alt-N`, the strip, the finder) shows the whole window as
     the daemon has it: `place` builds a screen from the layout, its pane ids the pane numbers.
@@ -8466,9 +8476,15 @@ strip, and a split is always a shell.
   - `sync_window` (each `tick`) compares the window on screen with `App.window_seen`, the layout
     last agreed with the daemon:
     - a resize, a focus move or zoom made here is sent (`ShellLayout`);
-    - a change made elsewhere is shown (another client's split, a pane that went);
-    - a screen that mixes the window with other sessions, or lacks some of its panes, is left
-      alone.
+    - a change made elsewhere is shown (another client's split, a pane that went), whole, with
+      the daemon's focused pane, so two TUIs on one window settle on one focus rather than each
+      sending its own;
+    - the TUI's own sends are remembered (`App.window_sent`), so their echoes, which can arrive
+      after a newer change here, are not taken for news;
+    - nothing is sent from a screen that mixes the window with other sessions or lacks some of
+      its panes;
+    - the quick terminal's drawer stays open under the same pane, and doesn't count when deciding
+      whether the screen replaced is kept.
   - The sidebar hangs a window's later panes under its row as `└.2`, and the window's row shows
     `⊞N`. The strip and the shells menu list windows. A pane's header strip says `[3.2 …]`.
   - `shells.break` and `shells.join` are in a shell's row menu and the palette; join asks for the
@@ -8479,7 +8495,8 @@ strip, and a split is always a shell.
   - `shells join S N [--right]`;
   - `shells ls` lists panes under their window, and its `--json` rows carry `pane`.
 - **The web:** a shell's page in a window of several has a **pane strip** under the shell
-  strip: `.1 [.2] .3 ＋`. Tap shows a pane (`shells.pane`), and `＋` splits. The ⋯ menu has Split
+  strip: `.1 [.2] .3 ＋`. Tap shows a pane (`shells.pane`), and `＋` splits. A swipe on the
+  shell strip goes to the next window, on the pane that had focus there. The ⋯ menu has Split
   beside, Split below, Break out to its own number, and Join another window…. The list shows a
   window's later panes as indented `.2` cards. The web still shows one pane at a time (§23.14).
 - **Not here:** splitting a worktree's sessions into windows (their splits stay a TUI layout,

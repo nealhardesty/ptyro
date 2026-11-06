@@ -140,11 +140,34 @@ impl App {
     /// (`` ` `` brings it back) and isn't the same window.
     pub(crate) fn apply_window(&mut self, screen: Screen) {
         let now = self.snapshot();
-        let same = now.panes.values().flatten().all(|id| screen.shows(*id).is_some());
+        // The quick terminal's drawer isn't the window's: it stays open, under the same pane.
+        let drawer = self.drawer.and_then(|d| {
+            let quick = self.panes.get(&d.pane)?.session?;
+            let host = self.panes.get(&d.host)?.session?;
+            Some((quick, host))
+        });
+        let same = now
+            .panes
+            .iter()
+            .filter(|(p, _)| self.drawer.is_none_or(|d| d.pane != **p))
+            .filter_map(|(_, s)| *s)
+            .all(|id| screen.shows(id).is_some());
         if !same && now.panes.values().any(Option::is_some) {
             self.kept = Some(Box::new(now));
         }
         self.apply_screen(screen);
+        if let Some((quick, host)) = drawer
+            && let Some(h) = self.snapshot().shows(host)
+            && let Some(p) = self.layout.split_at(
+                h,
+                Dir::Down,
+                1.0 - self.drawer_share,
+                crate::layout::MAX_WITH_DRAWER,
+            )
+        {
+            self.panes.insert(p, PaneState { session: Some(quick), ..PaneState::default() });
+            self.drawer = Some(Drawer { host: h, pane: p });
+        }
     }
 
     /// Show the kept layout, keeping the screen it replaces in its place.

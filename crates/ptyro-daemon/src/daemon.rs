@@ -744,8 +744,7 @@ impl Daemon {
             asked => self.home_workspace(asked.as_deref(), target.as_ref().map(|(_, p)| p))?,
         };
         // A new pane of a window (`ShellSplit`, SPEC §23.17) shares its number.
-        let joining = spec.pane_of.map(|src| self.next_pane(src)).transpose()?;
-        let reservation = if loose && joining.is_none() {
+        let reservation = if loose && spec.pane_of.is_none() {
             Some(self.reserve_slot(&workspace, spec.slot)?)
         } else {
             None
@@ -866,8 +865,9 @@ impl Daemon {
         });
         if let Some(r) = &reservation {
             self.pend_shelf(id, r, scratch.clone(), asked_loose);
-        } else if let Some((slot, pane)) = joining {
-            crate::shells::pend_pane(id, slot, pane);
+        } else if let Some(src) = spec.pane_of {
+            // Last, so a refusal earlier leaves nothing pending.
+            self.pend_pane(src, id)?;
         }
         let launched = self
             .launch(Launch {

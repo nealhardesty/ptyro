@@ -685,6 +685,10 @@ async fn a_split_is_a_copy_in_the_same_window() {
     let now = get(&c, "%5").await.unwrap();
     assert_eq!(now.id, two.id);
     assert_eq!(now.layout.unwrap().panes().len(), 3);
+    // A copy never takes the freed pane 1 ahead of the original: it goes after.
+    let after = split(&c, "%5", SplitDir::Right).await.unwrap();
+    assert!(after.pane > Some(2), "{:?}", after.pane);
+    assert_eq!(get(&c, "%5").await.unwrap().id, two.id, "the original stays first");
 
     // A session that isn't in SHELLS is split in its pane, not here.
     let placed =
@@ -713,4 +717,31 @@ async fn a_window_comes_back_whole_after_a_restart() {
     assert!(a.lost && b.lost);
     assert_eq!((a.slot, a.pane, b.slot, b.pane), (Some(3), Some(1), Some(3), Some(2)));
     assert_eq!(b.layout.as_ref().map(|l| l.panes()), Some(vec![1, 2]));
+}
+
+/// SPEC §23.17: a shell that only landed in SHELLS moves into the repository it `cd`s into
+/// (UX1.5), but not once it is a pane of a window of several: the window stays whole.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pane_of_a_window_stays_when_its_directory_becomes_a_project() {
+    let w = World::new("");
+    let c = w.d.client().await.unwrap();
+    let code = repo(&w, "code");
+    c.request(Request::ProjectAdd { path: code.clone(), workspace: None }).await.unwrap();
+    // Started outside every project: it lands in SHELLS, unpinned.
+    let out = w.dir("out");
+    let spec = SpawnSpec { cwd: out, size: Some(TermSize::new(100, 30)), ..SpawnSpec::default() };
+    let first = try_spawn(&c, spec).await.unwrap();
+    assert!(first.loose, "{first:#?}");
+    ready(&c, &first).await;
+    let n = first.slot.unwrap();
+    split(&c, &first.id.full(), SplitDir::Down).await.unwrap();
+    send(&c, &first.id.full(), &format!("cd {}", code.display())).await;
+    wait_for(&c, &first.id.full(), "in code", |s| s.live_cwd.as_deref() == Some(code.as_path()))
+        .await;
+    // The sweep runs every 2 s: give it two turns.
+    tokio::time::sleep(Duration::from_millis(4500)).await;
+    let now = get(&c, &first.id.full()).await.unwrap();
+    assert!(now.loose && now.worktree.is_none(), "it left its window: {now:#?}");
+    assert_eq!(now.slot, Some(n));
+    assert_eq!(now.layout.map(|l| l.panes().len()), Some(2));
 }

@@ -171,10 +171,15 @@ impl App {
         }
     }
 
-    /// Show the focused session's window again as the daemon has it.
+    /// Show the focused session's window again as the daemon has it, its focus included: two
+    /// clients on one window agree on the focused pane instead of each sending its own.
     fn reshow_window(&mut self) {
         let Some(id) = self.focused_session() else { return };
-        let Some(screen) = self.window_screen(id) else { return };
+        let Some(mut screen) = self.window_screen(id) else { return };
+        let focus = self.session(id).and_then(|s| s.layout.as_ref()).map(|l| l.focus);
+        if let Some(f) = focus.filter(|f| screen.layout.contains(*f)) {
+            screen.focus = f;
+        }
         self.apply_window(screen);
         self.view_changed();
     }

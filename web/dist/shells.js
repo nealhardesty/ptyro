@@ -147,9 +147,10 @@ export function shellStrip(sessions, s) {
         const x1 = e.changedTouches[0]?.clientX;
         if (x0 == null || x1 == null || Math.abs(x1 - x0) < 60)
             return;
+        // Another window, opened on the pane that had focus there (never this window again).
         const to = neighbour(all, s, x1 < x0 ? 1 : -1);
-        if (to && to.id !== s.id)
-            go(`#/s/${enc(to.id)}`);
+        if (to && to.slot !== s.slot)
+            void goShell(all, to.slot ?? 0, ws);
         x0 = null;
     });
     return sub ? h("div", { class: "shell-strips" }, nav, sub) : nav;

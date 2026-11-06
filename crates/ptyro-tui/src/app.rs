@@ -11282,6 +11282,63 @@ mod tests {
     }
 
     #[test]
+    fn news_about_a_window_keeps_the_quick_terminal_s_drawer_and_the_kept_screen() {
+        let mut app = app();
+        let (agent, _) = with_agents(&mut app);
+        app.show(agent, None);
+        let (a, _) = window_of_two(&mut app);
+        app.show(a.id, None);
+        let kept = app.kept.clone();
+        assert!(kept.is_some(), "the agent's screen is kept");
+        // The quick terminal's drawer under pane 1.
+        let host = app.focused;
+        let quick = quick("dl.shell", None);
+        app.sessions.push(quick.clone());
+        let d = app.layout.split_at(host, Dir::Down, 0.7, crate::layout::MAX_WITH_DRAWER).unwrap();
+        app.panes.insert(d, PaneState { session: Some(quick.id), ..PaneState::default() });
+        app.drawer = Some(crate::quick::Drawer { host, pane: d });
+        app.sync_window();
+        // News: another client resized the window.
+        let mut theirs = a.layout.clone().unwrap();
+        if let ptyro_core::window::PaneTree::Split { share, .. } = &mut theirs.root {
+            *share = 650;
+        }
+        for s in app.sessions.iter_mut().filter(|s| s.slot == Some(3)) {
+            s.layout = Some(theirs.clone());
+        }
+        app.sync_window();
+        let d = app.drawer.expect("the drawer stays open");
+        assert_eq!(app.panes[&d.pane].session, Some(quick.id));
+        assert_eq!(app.panes[&d.host].session, Some(a.id), "under the same pane");
+        assert_eq!(app.kept, kept, "the kept screen is still the agent's");
+    }
+
+    #[test]
+    fn another_client_s_focus_is_followed_not_fought() {
+        let mut app = app();
+        with_agents(&mut app);
+        let (a, b) = window_of_two(&mut app);
+        app.show(a.id, None);
+        app.sync_window();
+        // The daemon's layout says pane 2 has focus (another TUI, or a split from the CLI):
+        // this one follows, and so has nothing to send back.
+        let mut theirs = a.layout.clone().unwrap();
+        // Something else changed too, so it is news: the shares.
+        if let ptyro_core::window::PaneTree::Split { share, .. } = &mut theirs.root {
+            *share = 600;
+        }
+        theirs.focus = 2;
+        for s in app.sessions.iter_mut().filter(|s| s.slot == Some(3)) {
+            s.layout = Some(theirs.clone());
+        }
+        while app.rx.try_recv().is_ok() {}
+        app.sync_window();
+        assert_eq!(app.focused_session(), Some(b.id));
+        app.sync_window();
+        assert!(asked(&mut app).is_empty(), "no layout sent back");
+    }
+
+    #[test]
     fn bang_with_no_worktree_around_starts_a_shell_in_shells() {
         let mut app = app();
         let (agent, _) = with_agents(&mut app);

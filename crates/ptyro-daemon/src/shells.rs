@@ -137,9 +137,18 @@ fn lowest_free(taken: &[u32]) -> u32 {
     n
 }
 
-/// `launch` will make session `id` pane `pane` of window `slot` (`ShellSplit`, SPEC §23.17).
-pub(crate) fn pend_pane(id: SessionId, slot: u32, pane: u32) {
-    PENDING.locked().insert(id, Shelf { slot, pane, pinned: true, ..Shelf::default() });
+/// Held while a window's layout is read, changed and written back (`Daemon::rearrange`), so two
+/// changes at once (two splits finishing together) never lose one. Taken before any `meta`.
+static ARRANGING: Mutex<()> = Mutex::new(());
+
+/// The number a new pane of a window takes (SPEC §23.17): the lowest free one above its first
+/// pane, so a copy never becomes the window's first pane (`%N`, its row) ahead of the original.
+fn next_pane_number(taken: &[u32]) -> u32 {
+    let mut n = taken.iter().min().map_or(1, |m| m + 1);
+    while taken.contains(&n) {
+        n += 1;
+    }
+    n
 }
 
 /// `launch` takes the shelf a new session was given (`None`: not loose).
@@ -238,6 +247,11 @@ impl Daemon {
             .collect()
     }
 
+    /// A loose session's workspace and number (for code outside this module).
+    pub(crate) fn window_of_shelf(&self, s: &Session) -> Option<(String, u32)> {
+        Self::window_of(s)
+    }
+
     /// A loose session's workspace and number.
     fn window_of(s: &Session) -> Option<(String, u32)> {
         let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -245,30 +259,61 @@ impl Daemon {
         m.shelf.as_ref().map(|f| (ws, f.slot))
     }
 
-    /// The number, and the next free pane, of the window loose session `src` is in, for a new
-    /// pane there; refused at [`MAX_PANES`].
-    pub(crate) fn next_pane(&self, src: SessionId) -> Result<(u32, u32), Error> {
+    /// The pane numbers window `slot` of `workspace` has, with those still starting (`pending`
+    /// is `PENDING`, held by the caller, so the count and the claim are one step).
+    fn panes_taken(
+        &self,
+        workspace: &str,
+        slot: u32,
+        pending: &BTreeMap<SessionId, Shelf>,
+    ) -> Vec<u32> {
+        let mut taken: Vec<u32> =
+            self.panes_of(workspace, slot).into_iter().map(|(_, p)| p).collect();
+        // A starting pane's workspace isn't known here: one of that number anywhere counts.
+        taken.extend(pending.values().filter(|f| f.slot == slot && f.pane > 0).map(Shelf::pane));
+        taken
+    }
+
+    /// `launch` will make session `id` a new pane of the window loose session `src` is in
+    /// (`ShellSplit`); refused at [`MAX_PANES`], counting panes still starting.
+    pub(crate) fn pend_pane(&self, src: SessionId, id: SessionId) -> Result<(), Error> {
         let s = self.session(src).ok_or_else(|| Error::not_found(src.full()))?;
         let Some((ws, slot)) = Self::window_of(&s) else {
             let name =
                 s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name.clone();
             return Err(Error::invalid(format!("{name} isn't in SHELLS")));
         };
-        let mut taken: Vec<u32> = self.panes_of(&ws, slot).into_iter().map(|(_, p)| p).collect();
+        let mut pending = PENDING.locked();
+        let taken = self.panes_taken(&ws, slot, &pending);
         if taken.len() >= MAX_PANES {
             return Err(Error::conflict(format!(
                 "shell {slot} has {MAX_PANES} panes, the most a window holds: `ptyro shells break` moves one to a number of its own"
             )));
         }
-        // Panes still starting there (two splits at once never share a number).
-        taken.extend(PENDING.locked().values().filter(|f| f.slot == slot).map(Shelf::pane));
-        Ok((slot, lowest_free(&taken)))
+        let pane = next_pane_number(&taken);
+        pending.insert(id, Shelf { slot, pane, pinned: true, ..Shelf::default() });
+        Ok(())
+    }
+
+    /// Change window `slot`'s layout as it stands (`edit`) and write it to every pane, as one
+    /// step.
+    fn rearrange(&self, workspace: &str, slot: u32, edit: impl FnOnce(&mut WindowLayout)) {
+        let _one = ARRANGING.locked();
+        let mut l = self.layout_of(workspace, slot);
+        edit(&mut l);
+        self.relayout_held(workspace, slot, Some(l));
     }
 
     /// Window `slot` of `workspace` changed its panes (or `base` is its new arrangement): every
     /// pane gets the same layout, fitted to the panes there are, and clients hear of each one
     /// whose layout changed. One pane left: no layout.
     pub(crate) fn relayout(&self, workspace: &str, slot: u32, base: Option<WindowLayout>) {
+        let _one = ARRANGING.locked();
+        self.relayout_held(workspace, slot, base);
+    }
+
+    /// `relayout`, with `ARRANGING` held.
+    fn relayout_held(&self, workspace: &str, slot: u32, base: Option<WindowLayout>) {
         let panes = self.panes_of(workspace, slot);
         let base = base.or_else(|| {
             panes.iter().find_map(|(s, _)| {
@@ -689,6 +734,15 @@ impl Daemon {
         if held.iter().any(|k| k.0 == ws && k.1 == slot) {
             return Err(Error::conflict(format!("shell {slot} of {ws} is starting: try again")));
         }
+        // A pane starting in either window would land in the number it was split from.
+        if let Some(n) = PENDING
+            .locked()
+            .values()
+            .find(|f| f.pane > 0 && (f.slot == from || f.slot == slot))
+            .map(|f| f.slot)
+        {
+            return Err(Error::conflict(format!("a pane of shell {n} is starting: try again")));
+        }
         // Whole windows move: every pane of each (SPEC §23.17).
         let mine = self.panes_of(&ws, from);
         let theirs = self.panes_of(&ws, slot);
@@ -799,7 +853,7 @@ impl Daemon {
     ) -> Result<Reply, Error> {
         let src = self.resolve(addr)?;
         let info = self.info(&src);
-        let Some((ws, slot)) = Self::window_of(&src) else {
+        let Some((ws, _)) = Self::window_of(&src) else {
             return Err(Error::invalid(format!(
                 "{} isn't in SHELLS: split it in its pane instead (`v`/`s` in the TUI)",
                 info.name
@@ -821,19 +875,25 @@ impl Daemon {
             ..SpawnSpec::default()
         };
         let s = self.spawn(spec).await?;
-        let mut base = self.layout_of(&ws, slot);
-        let at = info.pane.unwrap_or(1);
-        if let Some(new) = s
+        let at = self.session(src.id).map_or(info.pane.unwrap_or(1), |o| {
+            o.meta
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .shelf
+                .as_ref()
+                .map_or(1, Shelf::pane)
+        });
+        let new = s
             .meta
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .shelf
             .as_ref()
-            .map(Shelf::pane)
-        {
-            base.insert(at, new, dir);
+            .map(Shelf::pane);
+        // Where the new pane is now (its window may have moved while it started).
+        if let (Some((ws, slot)), Some(new)) = (Self::window_of(&s), new) {
+            self.rearrange(&ws, slot, |l| l.insert(at, new, dir));
         }
-        self.relayout(&ws, slot, Some(base));
         Ok(Reply::Session { info: self.info(&s) })
     }
 
@@ -887,18 +947,22 @@ impl Daemon {
                         format!("no shell {n} in {ws} to join"),
                     ));
                 }
-                if target.len() >= MAX_PANES {
-                    return Err(Error::conflict(format!(
-                        "shell {n} has {MAX_PANES} panes, the most a window holds"
-                    )));
-                }
-                let taken: Vec<u32> = target.iter().map(|(_, p)| *p).collect();
-                let pane = lowest_free(&taken);
-                let mut base = self.layout_of(&ws, n);
-                let at = base.focus;
-                set(n, pane);
-                base.insert(at, pane, dir);
-                self.relayout(&ws, n, Some(base));
+                let pane = {
+                    let pending = PENDING.locked();
+                    let taken = self.panes_taken(&ws, n, &pending);
+                    if taken.len() >= MAX_PANES {
+                        return Err(Error::conflict(format!(
+                            "shell {n} has {MAX_PANES} panes, the most a window holds"
+                        )));
+                    }
+                    let pane = next_pane_number(&taken);
+                    set(n, pane);
+                    pane
+                };
+                self.rearrange(&ws, n, |l| {
+                    let at = l.focus;
+                    l.insert(at, pane, dir);
+                });
                 n
             }
         };
@@ -1152,14 +1216,25 @@ impl Daemon {
         let scrollback = self.config().daemon.scrollback_lines;
         let mut back = 0;
         // A window's panes come back together, in the number its first pane got (SPEC §23.17).
-        let mut windows: HashMap<(String, u32), u32> = HashMap::new();
+        // Keyed by the workspace it was saved in (one that's gone goes to main, where it must
+        // not merge with main's own window of that number), to (where it is, its number).
+        let mut windows: HashMap<(String, u32), (String, u32)> = HashMap::new();
+        // Panes already back with their number (a live upgrade's) hold their window's.
+        for k in &list {
+            let Some(s) = k.id.parse::<SessionId>().ok().and_then(|id| self.session(id)) else {
+                continue;
+            };
+            if let Some((ws, n)) = Self::window_of(&s) {
+                windows.insert((k.workspace.clone(), k.slot), (ws, n));
+            }
+        }
         let mut number = |me: &Self, ws: &str, k: &Kept| -> Option<(u32, Option<Reservation>)> {
-            if let Some(&n) = windows.get(&(ws.to_owned(), k.slot)) {
-                return Some((n, None));
+            if let Some((_, n)) = windows.get(&(k.workspace.clone(), k.slot)) {
+                return Some((*n, None));
             }
             let r =
                 me.reserve_slot(ws, Some(k.slot)).or_else(|_| me.reserve_slot(ws, None)).ok()?;
-            windows.insert((ws.to_owned(), k.slot), r.key.1);
+            windows.insert((k.workspace.clone(), k.slot), (ws.to_owned(), r.key.1));
             Some((r.key.1, Some(r)))
         };
         let shelf = |slot: u32, k: &Kept, lost: bool| Shelf {
@@ -1238,7 +1313,7 @@ impl Daemon {
                 });
             }
         }
-        for ((ws, _), n) in windows {
+        for (ws, n) in windows.into_values() {
             self.relayout(&ws, n, None);
         }
         if back > 0 {
