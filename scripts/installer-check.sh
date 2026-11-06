@@ -27,6 +27,7 @@ case "$TARGET" in
     run | tee "$work/out"
     got=$("$work/prefix/bin/ptyro.exe" --version | tr -d '\r')
     [ "$got" = "ptyro $VERSION" ] || { echo "dist-check: installed binary says '$got', expected 'ptyro $VERSION'" >&2; exit 1; }
+    [ -f "$work/prefix/bin/ptyrow.exe" ] || { echo "dist-check: ptyrow.exe (the windowless launcher) wasn't installed beside ptyro.exe" >&2; exit 1; }
     # A tampered download is refused (PowerShell's error goes to stderr), the good install left alone.
     echo tampered >> "$work/release/$NAME.zip"
     run >"$work/out" 2>&1 || true
@@ -44,6 +45,7 @@ case "$TARGET" in
     printf 'broken\n' >"$work/prefix/bin/ptyro.exe"
     uninstall >"$work/out" 2>&1 || true
     [ ! -e "$work/prefix/bin/ptyro.exe" ] || { echo "dist-check: -Uninstall didn't remove a broken ptyro.exe" >&2; cat "$work/out" >&2; exit 1; }
+    [ ! -e "$work/prefix/bin/ptyrow.exe" ] || { echo "dist-check: -Uninstall left ptyrow.exe" >&2; cat "$work/out" >&2; exit 1; }
     echo "dist-check ok: $NAME installs through install.ps1, runs, a tampered zip is refused, and -Uninstall works"
     exit 0
     ;;

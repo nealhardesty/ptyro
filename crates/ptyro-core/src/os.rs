@@ -92,6 +92,24 @@ pub fn no_follow(opts: &mut OpenOptions, follow_links: bool) -> &mut OpenOptions
     }
 }
 
+/// The Tailscale CLI (TS1): `tailscale` on `PATH`; on Windows (WIN11) where its installer puts
+/// it when that folder isn't on `PATH` (`%ProgramFiles%\\Tailscale\\tailscale.exe`).
+pub fn tailscale() -> std::process::Command {
+    #[cfg(windows)]
+    {
+        let on_path = std::env::var_os("PATH")
+            .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("tailscale.exe").is_file()));
+        if !on_path
+            && let Some(exe) = std::env::var_os("ProgramFiles")
+                .map(|d| std::path::PathBuf::from(d).join("Tailscale").join("tailscale.exe"))
+                .filter(|p| p.is_file())
+        {
+            return std::process::Command::new(exe);
+        }
+    }
+    std::process::Command::new("tailscale")
+}
+
 /// Start `cmd` on its own, so it outlives whatever started it and a terminal's signals don't
 /// reach it: its own process group on Unix; on Windows a new process group with a console of
 /// its own that has no window. Not `DETACHED_PROCESS` (no console at all): then every console
@@ -111,8 +129,8 @@ pub fn detach(cmd: &mut std::process::Command) -> &mut std::process::Command {
     }
 }
 
-/// Whether process `pid` is running (and ours to signal). Windows: never asked there, since
-/// nothing ptyro starts runs natively yet; `false`.
+/// Whether process `pid` is running (and ours to signal). Windows: `false` here, which can't ask
+/// without `unsafe`; `ptyro_pty::alive` asks Windows too.
 pub fn alive(pid: u32) -> bool {
     #[cfg(unix)]
     {

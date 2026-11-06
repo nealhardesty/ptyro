@@ -3045,13 +3045,15 @@ done.
   - **Found while building it:** a daemon the CLI started inherited the CLI's stdout (std's `bInheritHandles`), so a script reading `ptyro`'s output waited for as long as the daemon ran; fixed for the CLI's own standard handles and seen live (PowerShell's `$out = & ptyro.exe new …` returns at once). **Open:** handles the CLI inherited from its own parent (a PowerShell started from WSL passes its interop pipes on) still reach the daemon; starting it with no inheritance at all (`CreateProcessW`, `bInheritHandles` off) is the whole fix (SPEC §20.12). And "daemon already running (pid )": Windows hides a locked file's contents from others, so the message no longer promises a pid it can't read.
   - **Not verified live:** the refused-image path (`PTYRO_TEST_REFUSE_HANDOFF`) is a debug-build knob, so it is CI's (`tests/win9.rs`); live, the same rollback was seen by upgrading to a pre-WIN9 ptyro. Structured agents' handover rests on the same mechanism and CI; no structured agent ran on the Windows machine.
 
-- [ ] **WIN10 Start at login and alerts** (R-WIN-14) **M**
-  - `ptyro service install|uninstall` on Windows registers a per-user logon Scheduled Task, not a Service (SPEC §20 says why).
-  - Toasts with ptyro's AppUserModelID (a Start-menu shortcut made by the installer, or by `service install`). Clicking a toast opens the session (Windows Terminal tab, or the web).
-- [ ] **WIN11 Remote and machines** (R-WIN-16) **M**
-  - A Windows machine in MM1 links over `machine-bridge` (WebSocket, no remote shell).
-  - `--remote` to a Windows ssh host builds a command that pwsh and cmd both run (no `sh -c`, `remote.rs`).
-  - `ptyro serve` on Windows: TLS, pairing, Tailscale certificate (TS1).
+- [x] **WIN10 Start at login and alerts** (R-WIN-14) **M** [built 2026-11-05; SPEC §12 `install-service`, §20.12]
+  - ~~`ptyro service install|uninstall` on Windows registers a per-user logon Scheduled Task, not a Service (SPEC §20 says why).~~ [built] `ptyro daemon install-service` / `uninstall-service` (the TUI's `daemon.service`, the web's More → Daemon → Install the service): `\ptyro\daemon`, triggered at this user's logon, as them, with no more than their rights, no administrator needed. It runs the new `ptyrow.exe` (a windowless trampoline beside `ptyro.exe`, in the zips and install.ps1), so no console window stays open. `doctor` says whether it's there; `ptyro uninstall` removes it.
+  - ~~Toasts with ptyro's AppUserModelID (a Start-menu shortcut made by the installer, or by `service install`). Clicking a toast opens the session (Windows Terminal tab, or the web).~~ [built] No shortcut: the AppUserModelID is registered in the user's registry (name and icon), with a `ptyro:` link handler, by `ptyro.exe` itself as it starts (nothing to remember). Toasts come from ptyro natively and from WSL once `ptyro.exe` has run; a click opens the session in a Windows Terminal tab (`ptyro://attach/<id>?remote=…`, checked strictly since a browser can hand one over), else a console window; Approve/Deny buttons when the answer links are on; a newer toast for a session replaces the older. Seen on Windows 11: the registration, a toast from PowerShell's script, and a WSL session opened in a tab from its link.
+  - **Not verified live:** a toast under ptyro's own name from a native daemon (the native daemon's debug build was refused by Smart App Control here); CI's `windows` job runs `tests/win10.rs` (the task registered, read back from Task Scheduler and removed; refused links).
+- [x] **WIN11 Remote and machines** (R-WIN-16) **M** [built 2026-11-05; SPEC §16.2, §20.12]
+  - ~~A Windows machine in MM1 links over `machine-bridge` (WebSocket, no remote shell).~~ [built] and over ssh; `tests/win11.rs` links two native daemons both ways.
+  - ~~`--remote` to a Windows ssh host builds a command that pwsh and cmd both run (no `sh -c`, `remote.rs`).~~ [built] `ptyro proxy` as it is; the client finds a Windows host by asking it `%OS%` when the POSIX command fails, and remembers it. `ptyro proxy` on a Windows computer whose daemon is WSL's bridges into that distro.
+  - ~~`ptyro serve` on Windows: TLS, pairing, Tailscale certificate (TS1).~~ [built] Keys written private (an access list, not a mode), the certificate names the computer, `tailscale.exe` found where its installer puts it, `pair --open` trusts the CA in Windows' store natively, and a server the daemon started leaves with it (`PTYRO_DAEMON_PID`).
+  - **Not verified live:** Smart App Control refused the debug build that runs `tests/win11.rs` here (2026-11-05); CI's `windows` job runs it. No real Windows OpenSSH server or Tailscale was tried: the ssh path is tested with a stand-in that behaves as cmd.exe does (`tests/m9.rs`).
 - [ ] **WIN12 Packaging and release** (R-WIN-15) **M**
   - ~~`make release` builds~~ [built WIN3: the release workflow's Windows zips] and signs `x86_64`
     and `aarch64` Windows zips. Signing matters beyond trust: Smart App Control refuses some
@@ -3059,7 +3061,7 @@ done.
     Azure Trusted Signing, or an OV/EV certificate (owner's decision: an account and a cost).
   - ~~`install.ps1` (one line in the README)~~ [built WIN3], a winget manifest and a scoop bucket.
   - The zips carry the pinned packaged ConPTY (conpty.dll, OpenConsole.exe) for their architecture, its signature checked when the release is built (WIN0.5 g).
-  - `ptyro uninstall` removes the logon task, the shortcut and, after asking, the data.
+  - ~~`ptyro uninstall` removes the logon task, the shortcut and, after asking, the data.~~ [built WIN10] the logon task, ptyro's registration with Windows (there is no shortcut), `ptyrow.exe` and, after asking, the data.
 - [ ] **WIN13 Tests and CI** **L**
   - A `windows-latest` job runs `make test` (`make` from MSYS2 or Chocolatey; the Makefile stays the only entry point).
   - Every test that can't run on Windows is marked `cfg(unix)` with a reason. The rest pass, the m9 web tests included.

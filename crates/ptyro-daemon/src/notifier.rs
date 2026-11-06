@@ -753,31 +753,81 @@ fn json_post(url: &str, v: &serde_json::Value) -> Result<String, String> {
     ])
 }
 
-/// A Windows toast from inside WSL (WIN2), shown by Windows PowerShell's own toast API. The title
-/// and body are agent text: they arrive as environment variables (through `WSLENV`) and become
-/// text nodes, never part of the script.
-const WSL_TOAST: &str = "$ErrorActionPreference='Stop'; \
-[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null; \
-$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02); \
-$n = $t.GetElementsByTagName('text'); \
-$n.Item(0).AppendChild($t.CreateTextNode($env:PTYRO_TOAST_TITLE)) > $null; \
-$n.Item(1).AppendChild($t.CreateTextNode($env:PTYRO_TOAST_BODY)) > $null; \
-$app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe'; \
-[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show([Windows.UI.Notifications.ToastNotification]::new($t))";
+/// A Windows toast (WIN2 from WSL, WIN10 natively), shown by Windows PowerShell's toast API.
+/// Every value is agent text or a link: each arrives as an environment variable (through
+/// `WSLENV` from WSL) and becomes a text node or an attribute set through the XML API, never
+/// part of the script. It comes from ptyro (its name and icon) once `ptyro.exe` has registered
+/// itself on this Windows, else from PowerShell; a click opens the session through ptyro's
+/// `ptyro:` link handler when that is registered; Approve/Deny buttons open the answer links.
+/// A newer toast for the same session replaces the older one.
+const TOAST: &str = concat!(
+    r"$ErrorActionPreference='Stop'; ",
+    r"[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null; ",
+    r"[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime] > $null; ",
+    r"$x = New-Object Windows.Data.Xml.Dom.XmlDocument; ",
+    r"$x.LoadXml('<toast><visual><binding template=''ToastGeneric''><text/><text/></binding></visual></toast>'); ",
+    r"$n = $x.GetElementsByTagName('text'); ",
+    r"$n.Item(0).AppendChild($x.CreateTextNode($env:PTYRO_TOAST_TITLE)) > $null; ",
+    r"$n.Item(1).AppendChild($x.CreateTextNode($env:PTYRO_TOAST_BODY)) > $null; ",
+    r"$k = 'HKCU:\Software\Classes\'; ",
+    r"$app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'; ",
+    r"if (Test-Path ($k + 'AppUserModelId\dev.ptyro.app')) { $app = 'dev.ptyro.app' }; ",
+    r"$t = $x.DocumentElement; ",
+    r"if ($env:PTYRO_TOAST_LAUNCH -and (Test-Path ($k + 'ptyro\shell\open\command'))) { ",
+    r"$t.SetAttribute('launch', $env:PTYRO_TOAST_LAUNCH); $t.SetAttribute('activationType', 'protocol') }; ",
+    r"if ($env:PTYRO_TOAST_APPROVE -and $env:PTYRO_TOAST_DENY) { ",
+    r"$a = $x.CreateElement('actions'); ",
+    r"foreach ($p in @(@('Approve', $env:PTYRO_TOAST_APPROVE), @('Deny', $env:PTYRO_TOAST_DENY))) { ",
+    r"$e = $x.CreateElement('action'); $e.SetAttribute('content', $p[0]); $e.SetAttribute('arguments', $p[1]); ",
+    r"$e.SetAttribute('activationType', 'protocol'); $a.AppendChild($e) > $null }; ",
+    r"$t.AppendChild($a) > $null }; ",
+    r"$m = [Windows.UI.Notifications.ToastNotification]::new($x); ",
+    r"if ($env:PTYRO_TOAST_TAG) { $m.Tag = $env:PTYRO_TOAST_TAG }; ",
+    r"[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show($m)",
+);
+
+/// What [`TOAST`] reads, for `note`: its click opens the session on `remote`'s daemon (`local`
+/// for a native one, `wsl://<distro>` for WSL's), as the Windows client reaches it.
+fn toast_env(note: &Note, remote: Option<&str>) -> Vec<(&'static str, String)> {
+    let mut env = vec![
+        ("PTYRO_TOAST_TITLE", note.title.clone()),
+        ("PTYRO_TOAST_BODY", note.body.clone()),
+        // Windows keeps a tag to 64 characters; a session's id is 26.
+        ("PTYRO_TOAST_TAG", note.session.chars().take(64).collect()),
+    ];
+    if let Some(l) = ptyro_core::winapp::attach_link(&note.session, remote) {
+        env.push(("PTYRO_TOAST_LAUNCH", l));
+    }
+    if let (Some(a), Some(d)) = (&note.approve_url, &note.deny_url) {
+        env.push(("PTYRO_TOAST_APPROVE", a.clone()));
+        env.push(("PTYRO_TOAST_DENY", d.clone()));
+    }
+    env
+}
 
 fn desktop(note: &Note, custom: Option<&[String]>) -> String {
+    // Natively on Windows (WIN10): PowerShell, with no window.
+    if custom.is_none() && cfg!(windows) {
+        let mut cmd = std::process::Command::new("powershell.exe");
+        cmd.args(["-NoProfile", "-NonInteractive", "-Command", TOAST]);
+        cmd.envs(toast_env(note, Some("local")));
+        ptyro_core::os::detach(&mut cmd);
+        return spawn_reaped(cmd, "Windows toast (powershell.exe)");
+    }
     let wsl = ptyro_core::wsl::detect().filter(|w| w.interop);
     if let (None, Some(w)) = (custom, wsl) {
         let ps = w.windows_exe("powershell.exe");
+        let remote = w.distro.as_ref().map(|d| format!("wsl://{d}"));
+        let env = toast_env(note, remote.as_deref());
+        let names: Vec<&str> = env.iter().map(|(k, _)| *k).collect();
         let wslenv = match std::env::var("WSLENV") {
-            Ok(v) if !v.is_empty() => format!("{v}:PTYRO_TOAST_TITLE:PTYRO_TOAST_BODY"),
-            _ => "PTYRO_TOAST_TITLE:PTYRO_TOAST_BODY".into(),
+            Ok(v) if !v.is_empty() => format!("{v}:{}", names.join(":")),
+            _ => names.join(":"),
         };
         let c = std::path::Path::new(&w.mount_root).join("c");
         let mut cmd = std::process::Command::new(&ps);
-        cmd.args(["-NoProfile", "-NonInteractive", "-Command", WSL_TOAST])
-            .env("PTYRO_TOAST_TITLE", &note.title)
-            .env("PTYRO_TOAST_BODY", &note.body)
+        cmd.args(["-NoProfile", "-NonInteractive", "-Command", TOAST])
+            .envs(env)
             .env("WSLENV", wslenv);
         if c.is_dir() {
             cmd.current_dir(c);
@@ -952,6 +1002,43 @@ pub type Mutes = HashMap<String, Option<u64>>;
 
 #[cfg(test)]
 mod tests {
+    /// A toast's text and links reach PowerShell as variables, never inside the script; its
+    /// click opens the session on the daemon that sent it; the answer links become buttons.
+    #[test]
+    fn a_toast_carries_its_values_outside_the_script() {
+        let note = super::Note {
+            session: "01m6mxc13w7wz153srvrxtcsg5".into(),
+            session_name: "fix-auth".into(),
+            kind: ptyro_core::status::AttentionKind::Blocked,
+            title: "fix-auth needs you".into(),
+            body: "'; Remove-Item C:\\ -Recurse; '".into(),
+            profile: "default".into(),
+            workspace: None,
+            project: None,
+            approve_url: Some("http://127.0.0.1:7420/a/xyz".into()),
+            deny_url: Some("http://127.0.0.1:7420/a/abc".into()),
+        };
+        let env: std::collections::HashMap<_, _> =
+            super::toast_env(&note, Some("wsl://Ubuntu")).into_iter().collect();
+        assert_eq!(env["PTYRO_TOAST_BODY"], note.body);
+        assert_eq!(
+            env["PTYRO_TOAST_LAUNCH"],
+            "ptyro://attach/01m6mxc13w7wz153srvrxtcsg5?remote=wsl:%2F%2FUbuntu"
+        );
+        assert_eq!(env["PTYRO_TOAST_APPROVE"], "http://127.0.0.1:7420/a/xyz");
+        assert_eq!(env["PTYRO_TOAST_TAG"], note.session);
+        let local: std::collections::HashMap<_, _> =
+            super::toast_env(&note, Some("local")).into_iter().collect();
+        assert!(local["PTYRO_TOAST_LAUNCH"].ends_with("?remote=local"));
+        // The script reads every value from its variable, and holds no double quote (which
+        // Windows' command-line quoting would have to carry).
+        for k in env.keys() {
+            assert!(super::TOAST.contains(&format!("$env:{k}")), "{k}");
+        }
+        assert!(!super::TOAST.contains('"'));
+        assert!(super::TOAST.contains("'dev.ptyro.app'"));
+    }
+
     use super::*;
 
     #[test]

@@ -38,7 +38,7 @@ const ACTIONS = {
     "daemon.stop": "Stop every session and the daemon",
     "backup.create": "Save ptyro's own state (config, database, scratchpad) to a private .tar.gz in your home directory on the computer",
     "uninstall.plan": "What uninstalling ptyro would remove and what stays, and the command to run on the computer (it can't be done from here)",
-    "daemon.service": "Start ptyro at login (a systemd or launchd service)",
+    "daemon.service": "Start ptyro at login (a systemd or launchd service, or a Windows logon task)",
     "daemon.unservice": "Remove the login service",
     "web.status": "The web app's server: whether it is up, its address, and who started it",
     "web.on": "Have the daemon run the web app's server, now and whenever it starts",
@@ -483,7 +483,7 @@ function daemonView() {
         ["Upgrades", s.generation ? `${s.generation}${s.rolled_back ? " (the last was rolled back)" : ""}` : null],
         ["Holds WSL", s.wsl_hold ? aboutDoc(null, s).daemon.holds_wsl : null],
         ["Memory", s.metrics ? `${Math.round(s.metrics.rss_kib / 1024)} MB · ${s.metrics.open_fds} fds · lag ${s.metrics.loop_lag_ms_max} ms` : null], ["Socket", s.socket], ["Logs", s.log_dir]]), conn.scope === "full" ? h("div", { class: "stack-in" }, bar(h("button", { title: tip("daemon.logs"), onclick: () => showLogs() }, "Logs"), h("button", { title: tip("daemon.upgrade"), onclick: upgradeDaemon }, "Upgrade"), h("button", { title: tip("daemon.restart"), onclick: restartDaemon }, "Restart"), h("button", { class: "deny", title: tip("daemon.stop"), onclick: () => confirm("Stop the daemon?", "Every session is stopped and ptyro goes away, this app with it, until you run ptyro again on the computer.", "Stop it", async () => { if (await doHost("daemon.stop", {}, "Stopping…"))
-            ui.toast("Stopped: run ptyro to start it again"); }) }, "Stop")), section("Start at login", h("p", { class: "sub" }, "A systemd or launchd service starts the daemon (and this server) when you log in."), bar(h("button", { title: tip("daemon.service"), onclick: async () => { const r = await doHost("service.install"); if (r)
+            ui.toast("Stopped: run ptyro to start it again"); }) }, "Stop")), section("Start at login", h("p", { class: "sub" }, "A systemd or launchd service, or on Windows a logon task, starts the daemon (and this server) when you log in."), bar(h("button", { title: tip("daemon.service"), onclick: async () => { const r = await doHost("service.install"); if (r)
             showNotes("Login service", r.notes ?? []); } }, "Install the service"), h("button", { title: tip("daemon.unservice"), onclick: async () => { const r = await doHost("service.uninstall"); if (r)
             showNotes("Login service", r.notes ?? []); } }, "Remove it"))), section("Back up or leave", h("p", { class: "sub" }, "A backup holds your config, history, scratchpad and settings, in a private file on the computer. Uninstalling removes ptyro; your repositories stay."), bar(h("button", { title: tip("backup.create"), onclick: backupNow }, "Back up ptyro's state"), h("button", { class: "deny", title: tip("uninstall.plan"), onclick: showUninstall }, "Uninstall…")))) : h("p", { class: "intro" }, "Logs, upgrading and the service need a device paired with --scope full."));
     return h("div", {}, ui.header("Daemon", "#/more"), h("main", { class: "stack" }, body));

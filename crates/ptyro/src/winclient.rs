@@ -16,6 +16,39 @@ const NOT_YOURS: &[&str] =
 pub const INSTALL: &str =
     "curl -fsSL https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh | sh";
 
+/// `ptyro --remote wsl://<distro> daemon start` on Windows (what the logon task runs when the
+/// daemon is WSL's, WIN10): start the daemon in that distro, which boots it, and hold it there as
+/// the daemon does. `None` for anything else (the native daemon starts as usual).
+pub fn start_in_wsl(remote: Option<&str>) -> Option<i32> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let distro = remote.and_then(ptyro_client::remote::wsl_distro)?;
+    let bin = std::env::var("PTYRO_REMOTE_BIN").unwrap_or_else(|_| "ptyro".into());
+    let mut args = match ptyro_client::remote::wsl_args(distro, &bin) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("ptyro: {e}");
+            return Some(2);
+        }
+    };
+    // The bridge's own script, starting the daemon instead.
+    let script = args.iter().position(|a| a == "-c").map(|i| i + 1)?;
+    args[script] = args[script].replace(" proxy", " daemon start");
+    let status = std::process::Command::new(ptyro_client::remote::wsl_exe())
+        .args(&args)
+        .env("WSL_UTF8", "1")
+        .stdin(std::process::Stdio::null())
+        .status();
+    Some(match status {
+        Ok(s) => s.code().unwrap_or(1),
+        Err(e) => {
+            eprintln!("ptyro: wsl.exe: {e} (is WSL installed?)");
+            8
+        }
+    })
+}
+
 /// The daemon to use. `given` is `--remote`.
 pub async fn resolve(given: Option<String>, paths: &Paths, discover: bool) -> Option<String> {
     if given.is_some() {

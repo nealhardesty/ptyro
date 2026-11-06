@@ -32,7 +32,22 @@ pub use unix::*;
 mod windows;
 #[cfg(windows)]
 pub mod winread;
+#[cfg(windows)]
+pub mod winreg;
 pub use ports::listening_ports;
+
+/// Whether process `pid` is running: [`ptyro_core::os::alive`] on Unix; on Windows (WIN11, where
+/// `ptyro serve` and its record run natively) whether it can be waited on and hasn't exited.
+pub fn alive(pid: u32) -> bool {
+    #[cfg(windows)]
+    {
+        pid != 0 && !wait_for_exit(pid, std::time::Duration::ZERO)
+    }
+    #[cfg(not(windows))]
+    {
+        ptyro_core::os::alive(pid)
+    }
+}
 pub use probe::{
     cwd_of, exec_env_var, local_datetime, local_time_hm, local_time_hm_at, parent_pid, process_name,
 };
