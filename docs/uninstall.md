@@ -42,6 +42,12 @@ ptyro uninstall                    # the plan, then [y/N]
 ptyro uninstall --backup ~/ptyro.tar.gz   # a backup first; nothing is removed if it fails
 ```
 
+The install scripts hand over to it, passing their remaining arguments along:
+`curl -fsSL https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh | sh -s -- --uninstall`
+(on Windows, `install.ps1 -Uninstall`; see the README). If the installed binary won't run, they
+remove only what they installed (the binary, its completions, on Windows the ConPTY files and the
+`PATH` entry), and `--dry-run` only says so.
+
 It stops the daemon and every session, then removes:
 
 - **ptyro's directories**: config, data (history, scratchpad, managed profiles and the agent
@@ -109,5 +115,6 @@ Tailscale mapping and the binary belong to the machine and are left alone. `make
 
 ### Reinstalling
 
-`scripts/install.sh` (and the release tarballs) put the binary back; `ptyro` then starts from
+The install script (`curl -fsSL https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh | sh`)
+and the release tarballs put the binary back; `ptyro` then starts from
 the first run. Restore a backup by hand first if you want your history.

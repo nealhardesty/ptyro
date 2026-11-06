@@ -33,7 +33,18 @@ case "$TARGET" in
     grep -q "checksum" "$work/out" || { echo "dist-check: a tampered zip wasn't refused for its checksum" >&2; cat "$work/out" >&2; exit 1; }
     if grep -q "^installed " "$work/out"; then echo "dist-check: a tampered zip was installed" >&2; exit 1; fi
     "$work/prefix/bin/ptyro.exe" --version >/dev/null
-    echo "dist-check ok: $NAME installs through install.ps1, runs, and a tampered zip is refused"
+    # -Uninstall --dry-run (handed to ptyro.exe uninstall) removes nothing; a ptyro.exe that
+    # doesn't run is removed by the script itself.
+    uninstall() {
+      PTYRO_PREFIX="$(w "$work/prefix")" powershell.exe -NoProfile -ExecutionPolicy Bypass \
+        -File "$(w scripts/install.ps1)" -Uninstall "$@"
+    }
+    uninstall --dry-run >"$work/out" 2>&1 || true
+    [ -f "$work/prefix/bin/ptyro.exe" ] || { echo "dist-check: -Uninstall --dry-run removed ptyro.exe" >&2; cat "$work/out" >&2; exit 1; }
+    printf 'broken\n' >"$work/prefix/bin/ptyro.exe"
+    uninstall >"$work/out" 2>&1 || true
+    [ ! -e "$work/prefix/bin/ptyro.exe" ] || { echo "dist-check: -Uninstall didn't remove a broken ptyro.exe" >&2; cat "$work/out" >&2; exit 1; }
+    echo "dist-check ok: $NAME installs through install.ps1, runs, a tampered zip is refused, and -Uninstall works"
     exit 0
     ;;
 esac
@@ -58,4 +69,24 @@ echo tampered >> "$work/release/$NAME.tar.gz"
 if run >"$work/out" 2>&1; then echo "dist-check: a tampered tarball was installed" >&2; exit 1; fi
 grep -q "checksum" "$work/out" || { echo "dist-check: the refusal doesn't say why" >&2; cat "$work/out" >&2; exit 1; }
 "$work/prefix/bin/ptyro" --version >/dev/null
-echo "dist-check ok: $NAME installs, runs, and a tampered tarball is refused"
+# --uninstall, piped as from curl, hands over to `ptyro uninstall`. Everything ptyro could find
+# (its directories, a runtime dir, a daemon) is under $work: no XDG variable points elsewhere.
+uninstall() {
+  env -u PTYRO_SOCKET -u PTYRO_SESSION_ID -u PTYRO_CONFIG -u PTYRO_HOME -u XDG_RUNTIME_DIR \
+    -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME \
+    HOME="$work/home" TMPDIR="$work/tmp" PTYRO_PREFIX="$work/prefix" \
+    sh -s -- --uninstall "$@" <scripts/install.sh
+}
+mkdir -p "$work/tmp"
+uninstall --dry-run >"$work/out" 2>&1 || { echo "dist-check: --uninstall --dry-run failed" >&2; cat "$work/out" >&2; exit 1; }
+[ -x "$work/prefix/bin/ptyro" ] || { echo "dist-check: --uninstall --dry-run removed the binary" >&2; exit 1; }
+uninstall --yes >"$work/out" 2>&1 || { echo "dist-check: --uninstall --yes failed" >&2; cat "$work/out" >&2; exit 1; }
+[ ! -e "$work/prefix/bin/ptyro" ] || { echo "dist-check: --uninstall left the binary" >&2; cat "$work/out" >&2; exit 1; }
+[ ! -e "$work/prefix/share/ptyro/completions" ] || { echo "dist-check: --uninstall left the completions" >&2; exit 1; }
+# A binary that doesn't run can't uninstall itself: the script removes what it installed.
+mkdir -p "$work/prefix/bin" && printf 'broken\n' >"$work/prefix/bin/ptyro" && chmod 755 "$work/prefix/bin/ptyro"
+uninstall --dry-run >"$work/out" 2>&1 && [ -e "$work/prefix/bin/ptyro" ] ||
+  { echo "dist-check: --uninstall --dry-run removed a broken binary" >&2; cat "$work/out" >&2; exit 1; }
+uninstall >"$work/out" 2>&1 && [ ! -e "$work/prefix/bin/ptyro" ] ||
+  { echo "dist-check: --uninstall didn't remove a broken binary" >&2; cat "$work/out" >&2; exit 1; }
+echo "dist-check ok: $NAME installs, runs, a tampered tarball is refused, and --uninstall removes it"

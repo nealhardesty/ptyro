@@ -155,7 +155,9 @@ jobs:
         with: { path: dist, pattern: "dist-*", merge-multiple: true }
       - name: checksums, bill of materials and notes
         run: |
-          (cd dist && cat *.sha256 > SHA256SUMS && sha256sum -c SHA256SUMS)
+          # The installers ride along, so releases/latest/download/install.sh is always the newest.
+          cp scripts/install.sh scripts/install.ps1 dist/
+          (cd dist && cat *.sha256 > SHA256SUMS && sha256sum install.sh install.ps1 >> SHA256SUMS && sha256sum -c SHA256SUMS)
           make sbom
           scripts/changelog.sh --notes "$TAG" > notes.md
           make homebrew-formula VERSION="${TAG#v}"
@@ -167,12 +169,14 @@ jobs:
             dist/*.tar.gz
             dist/*.zip
             dist/*.cdx.json
+            dist/install.sh
+            dist/install.ps1
             dist/SHA256SUMS
       - name: GitHub release
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "ptyro $TAG" --notes-file notes.md --verify-tag
-          gh release upload "$TAG" dist/*.tar.gz dist/*.zip dist/*.cdx.json dist/SHA256SUMS dist/ptyro.rb --clobber
+          gh release upload "$TAG" dist/*.tar.gz dist/*.zip dist/*.cdx.json dist/install.sh dist/install.ps1 dist/SHA256SUMS dist/ptyro.rb --clobber
       # Needs a secret HOMEBREW_TAP_TOKEN on the `release` environment: a fine-grained token with
       # contents: write on nealhardesty/homebrew-ptyro only.
       - name: Homebrew tap

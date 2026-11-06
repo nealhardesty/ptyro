@@ -290,7 +290,7 @@ homebrew-formula: ## Render dist/ptyro.rb from the release checksums in dist/ (a
 sbom: ## Software bill of materials (CycloneDX) from Cargo.lock: dist/ptyro-<version>.cdx.json
 	python3 scripts/sbom.py
 
-dist-check: ## Install the tarball in dist/ with scripts/install.sh (Windows: the zip with install.ps1) into a temp prefix and run it (after `make dist`)
+dist-check: ## Install the tarball in dist/ with scripts/install.sh (Windows: the zip with install.ps1) into a temp prefix, run it, and uninstall it with --uninstall (after `make dist`)
 	TARGET=$(TRIPLE) scripts/installer-check.sh
 
 brew-check: ## Install the tarball in dist/ through the Homebrew formula from a throwaway tap, test and audit it (after `make dist`; PTYRO_REQUIRE_BREW=1 fails without brew)
