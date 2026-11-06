@@ -7,6 +7,7 @@ use clap::{Args, Subcommand};
 use clap_complete::ArgValueCandidates;
 use ptyro_core::Error;
 use ptyro_core::session::{SessionInfo, SpawnSpec, Watch};
+use ptyro_core::window::SplitDir;
 use ptyro_protocol::{Reply, Request};
 use serde::Serialize;
 
@@ -72,6 +73,36 @@ pub enum ShellsCmd {
         #[arg(short, long, add = ArgValueCandidates::new(complete::workspaces))]
         workspace: Option<String>,
     },
+    /// Split a shell's window with a copy of it: a shell in the same directory, a pane of the
+    /// same number (`%3.2`); beside it, or below with --down
+    Split {
+        /// The shell to copy (`%3`, `%3.2`, a name; default: the one you're in)
+        #[arg(add = ArgValueCandidates::new(complete::sessions))]
+        session: Option<String>,
+        /// Below it instead of beside it
+        #[arg(long)]
+        down: bool,
+        /// Attach to the window once the pane starts
+        #[arg(long)]
+        attach: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Move a pane out of its window to a number of its own (tmux's break-pane)
+    Break {
+        #[arg(add = ArgValueCandidates::new(complete::sessions))]
+        session: String,
+    },
+    /// Move a shell into window N as a pane, below its focused pane (tmux's join-pane)
+    Join {
+        #[arg(add = ArgValueCandidates::new(complete::sessions))]
+        session: String,
+        /// The window (shell number) to join
+        into: u32,
+        /// Beside that pane instead of below it
+        #[arg(long)]
+        right: bool,
+    },
     /// Move a worktree's session into its workspace's SHELLS: it outlives the worktree
     Loose {
         #[arg(add = ArgValueCandidates::new(complete::sessions))]
@@ -110,6 +141,8 @@ pub enum ShellsCmd {
 #[derive(Serialize)]
 struct Row<'a> {
     slot: u32,
+    /// Its pane in the window (SPEC §23.17): `%3.2`.
+    pane: u32,
     id: String,
     name: &'a str,
     label: String,
@@ -183,6 +216,47 @@ pub async fn run(ctx: &Ctx, cmd: Option<ShellsCmd>, plain: LsArgs) -> Result<i32
             println!("{} is shell {to} now", info.name);
             Ok(0)
         }
+        ShellsCmd::Split { session, down, attach, json } => {
+            if attach {
+                check_attachable()?;
+            }
+            let c = ctx.connect(true).await?;
+            let addr = match session.or_else(|| std::env::var("PTYRO_SESSION_ID").ok()) {
+                Some(a) => a,
+                None => {
+                    return Err(Error::invalid(
+                        "which shell? `ptyro shells split %3` (or run it inside one)",
+                    ));
+                }
+            };
+            let dir = if down { SplitDir::Down } else { SplitDir::Right };
+            let req = Request::ShellSplit { addr, dir, env: client_env(), size: None };
+            let info = session_of(c.request(req).await?)?;
+            if attach {
+                return attach_with(ctx, c, Some(info), ptyro_tui::Options::default()).await;
+            }
+            if json {
+                println!("{}", serde_json::to_string_pretty(&info).unwrap_or_default());
+            } else {
+                println!("{} {}", pane_addr(&info), info.name);
+            }
+            Ok(0)
+        }
+        ShellsCmd::Break { session } => {
+            let c = ctx.connect(false).await.map_err(no_daemon)?;
+            let req = Request::ShellJoin { addr: session, into: None, dir: SplitDir::Right };
+            let info = session_of(c.request(req).await?)?;
+            println!("{} is shell {} now", info.name, info.slot.unwrap_or_default());
+            Ok(0)
+        }
+        ShellsCmd::Join { session, into, right } => {
+            let c = ctx.connect(false).await.map_err(no_daemon)?;
+            let dir = if right { SplitDir::Right } else { SplitDir::Down };
+            let req = Request::ShellJoin { addr: session, into: Some(into), dir };
+            let info = session_of(c.request(req).await?)?;
+            println!("{} is {} now", info.name, pane_addr(&info));
+            Ok(0)
+        }
         ShellsCmd::Loose { session } => {
             let c = ctx.connect(false).await.map_err(no_daemon)?;
             let req = Request::ShellPlace { addr: session, loose: true, worktree: None };
@@ -239,12 +313,13 @@ async fn ls(ctx: &Ctx, a: LsArgs) -> Result<i32, Error> {
         .filter(|s| s.loose && s.slot.is_some())
         .filter(|s| ws.as_deref().is_none_or(|w| s.workspace.as_deref() == Some(w)))
         .collect();
-    shells.sort_by_key(|s| (s.workspace.clone(), s.slot));
+    shells.sort_by_key(|s| (s.workspace.clone(), s.slot, s.pane));
     if a.json {
         let rows: Vec<Row<'_>> = shells
             .iter()
             .map(|s| Row {
                 slot: s.slot.unwrap_or_default(),
+                pane: s.pane.unwrap_or(1),
                 id: s.id.full(),
                 name: &s.name,
                 label: label(s),
@@ -269,8 +344,20 @@ async fn ls(ctx: &Ctx, a: LsArgs) -> Result<i32, Error> {
         println!("no shells in {here} yet: `ptyro shells new` starts one (Alt-1 in the TUI)");
         return Ok(0);
     }
+    let mut last: Option<(Option<&str>, Option<u32>)> = None;
     for s in shells {
-        let mut line = format!("{:>2}  {}", s.slot.unwrap_or_default(), label(s));
+        // A window's later panes hang under its first (SPEC §23.17).
+        let window = (s.workspace.as_deref(), s.slot);
+        let later = last == Some(window);
+        last = Some(window);
+        let panes = s.layout.as_ref().map_or(1, |l| l.panes().len());
+        let mut line = if later {
+            format!("   └.{} {}", s.pane.unwrap_or(1), label(s))
+        } else if panes > 1 {
+            format!("{:>2}  {}  ⊞{panes}", s.slot.unwrap_or_default(), label(s))
+        } else {
+            format!("{:>2}  {}", s.slot.unwrap_or_default(), label(s))
+        };
         if a.all {
             line = format!("{:<10} {line}", s.workspace.as_deref().unwrap_or("main"));
         }
@@ -299,6 +386,15 @@ async fn ls(ctx: &Ctx, a: LsArgs) -> Result<i32, Error> {
         println!("{line}");
     }
     Ok(0)
+}
+
+/// `%3`, or `%3.2` for a pane of a window of several (SPEC §23.17).
+fn pane_addr(s: &SessionInfo) -> String {
+    let n = s.slot.unwrap_or_default();
+    match s.pane.filter(|_| s.layout.is_some()) {
+        Some(p) => format!("%{n}.{p}"),
+        None => format!("%{n}"),
+    }
 }
 
 /// A shell's label (SPEC §23.4): `ptyro_core::session::shell_label`.

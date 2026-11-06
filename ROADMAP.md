@@ -3202,6 +3202,17 @@ parity rows, in each task.
 - [x] **SH.12 The tour's stop** — S. A sixth stop, "keep a shell of your own" (TUI and web): Alt-1
   (else `C-q e 1`) makes shell 1, and the tour moves on. *Done (2026-11-04):* `Step::Shells`; the
   headless tour test presses Alt-1 there.
+- [x] **SH.13 Windows: a number's panes** — M. (R-UX-43) A split of a SHELLS shell is a copy of
+  it (a shell in its live directory, same workspace and profile), never a session placed in the
+  worktree it stands in (the bug that started this). It becomes a pane of the same number, `%3.2`.
+  The daemon keeps the window's layout, so showing any pane shows the whole window in the TUI.
+  Break a pane out, or join a shell into a window. CLI `shells split|break|join`, the TUI's `v`/`s`
+  plus `shells.break`/`shells.join`, and the web's pane strip and ⋯ items (SPEC §23.17).
+  *Done (2026-11-06):* `ptyro_core::window`, `Daemon::relayout`, protocol **1.30**,
+  `crates/ptyro-tui/src/windows.rs`; tested by `a_split_is_a_copy_in_the_same_window` and
+  `a_window_comes_back_whole_after_a_restart` (daemon), and the TUI's
+  `showing_a_window_shows_its_whole_layout_and_keeps_the_screen_it_replaces` and
+  `a_window_s_arrangement_goes_to_the_daemon_and_comes_back_from_it`.
 
 **Done when:** in one workspace, with no project open: `C-q C-c` makes shell 1 in `~`, `Alt-2`
 makes shell 2 running `htop`, `Alt-1` and `` C-q ` `` flip between them; `make test` started in

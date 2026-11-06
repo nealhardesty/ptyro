@@ -336,6 +336,11 @@ impl Layout {
         split_rect(area, Dir::Down, 1.0 - share)
     }
 
+    /// A layout of this tree (a SHELLS window's, SPEC §23.17), its pane ids its leaves.
+    pub fn from_root(root: Node) -> Self {
+        Self { root, next: 0 }.sanitize()
+    }
+
     /// Rebuild `next` after deserializing (it isn't trusted).
     pub fn sanitize(mut self) -> Self {
         let max = self.panes().into_iter().max().unwrap_or(0);

@@ -33,6 +33,7 @@ pub mod theme;
 pub mod tour;
 pub mod tree;
 mod ui;
+mod windows;
 
 use std::io::{IsTerminal, Write};
 use std::time::{Duration, Instant};

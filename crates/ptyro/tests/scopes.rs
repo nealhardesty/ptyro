@@ -217,6 +217,13 @@ fn table() -> Vec<Sample> {
         // ── full ──
         // SHELLS (SPEC §23.12): numbering, placing and watching act like starting one.
         s(json!({"t":"shell_move","addr":"%1","slot":2}), FULL, false),
+        s(json!({"t":"shell_split","addr":"%1","dir":"down"}), FULL, false),
+        s(json!({"t":"shell_join","addr":"%1.2","into":null}), FULL, false),
+        s(
+            json!({"t":"shell_layout","addr":"%1","layout":{"root":{"t":"pane","pane":1}}}),
+            FULL,
+            false,
+        ),
         s(json!({"t":"shell_place","addr":"%1","loose":true,"worktree":null}), FULL, false),
         s(json!({"t":"shell_watch","addr":"%1","watch":{"t":"done"}}), FULL, false),
         s(json!({"t":"shell_scratch_remove","path":"/nonexistent-scopes-test"}), FULL, false),

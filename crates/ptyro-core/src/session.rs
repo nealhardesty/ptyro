@@ -227,6 +227,13 @@ pub struct SessionInfo {
     /// Lost in a daemon restart and offered again in its number (SPEC §23.10): ⏎ starts it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub lost: bool,
+    /// Its pane in its SHELLS window (SPEC §23.17): `%3.2` is pane 2 of shell 3. Pane 1 is the
+    /// window's own row; a window of one pane has only pane 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane: Option<u32>,
+    /// Its window's layout, when the window has more than one pane (every pane carries it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<crate::window::WindowLayout>,
 }
 
 /// A SHELLS shell's label (SPEC §23.4), the same in the TUI, the CLI and the web: its title,
@@ -587,6 +594,10 @@ pub struct SpawnSpec {
     /// Start it in a new, empty scratch directory of its own (SPEC §23.8); implies `loose`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub scratch: bool,
+    /// The daemon's own: start it as a new pane of this loose session's window (`ShellSplit`,
+    /// SPEC §23.17). Never on the wire.
+    #[serde(skip)]
+    pub pane_of: Option<SessionId>,
 }
 
 /// What a workspace last started (UX3.2), so `again` can start another of it.

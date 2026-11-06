@@ -337,6 +337,8 @@ pub enum PromptKind {
     ChatFindIn(String),
     /// A SHELLS shell's new number (SPEC §23.3).
     ShellMove(SessionId),
+    /// The window a SHELLS shell joins as a pane (SPEC §23.17).
+    ShellJoin(SessionId),
     /// A command to run in SHELLS (SPEC §23.4).
     ShellCommand,
     /// The pattern a SHELLS shell is watched for (SPEC §23.9).
@@ -745,7 +747,7 @@ pub struct App {
     pub chats: HashMap<SessionId, crate::chat::ChatView>,
     pub chat_terminal: HashSet<SessionId>,
     subscribed: HashSet<SessionId>,
-    sizes: HashMap<SessionId, TermSize>,
+    pub(crate) sizes: HashMap<SessionId, TermSize>,
     pub layout: Layout,
     pub panes: HashMap<PaneId, PaneState>,
     pub focused: PaneId,
@@ -826,6 +828,12 @@ pub struct App {
     pub alt_seen: bool,
     /// Said once that Option-digit typed a character instead of Alt (SPEC §23.6).
     pub option_said: bool,
+    /// The SHELLS window on screen and its layout as last agreed with the daemon (SPEC §23.17):
+    /// what tells a change made here from one made elsewhere.
+    pub(crate) window_seen:
+        Option<(crate::windows::WindowKey, Option<ptyro_core::window::WindowLayout>)>,
+    /// The layouts sent for it lately: their echoes aren't news from elsewhere.
+    pub(crate) window_sent: Vec<ptyro_core::window::WindowLayout>,
     pub started: Instant,
 }
 
@@ -946,6 +954,8 @@ impl App {
             strip_hits: std::cell::RefCell::new(Vec::new()),
             alt_seen: false,
             option_said: false,
+            window_seen: None,
+            window_sent: Vec::new(),
             started: Instant::now(),
         }
     }
@@ -1519,6 +1529,7 @@ impl App {
             self.refresh_again();
         }
         self.health_tick(self.started);
+        self.sync_window();
     }
 
     fn start_prefix(&mut self, key: KeyEvent) {
@@ -4353,6 +4364,11 @@ impl App {
                 // SHELLS (SPEC §23.8): its number, a watch, back into a worktree; or there.
                 if s.loose {
                     v.extend(["shells.move", "shells.watch", "shells.adopt"]);
+                    // Its window (SPEC §23.17): out to a number of its own, or into another.
+                    if s.layout.is_some() {
+                        v.push("shells.break");
+                    }
+                    v.push("shells.join");
                 } else if !s.quick && !s.pad && s.machine.is_none() {
                     v.push("shells.loose");
                 }
@@ -6088,6 +6104,7 @@ impl App {
                 );
             }
             PromptKind::ShellMove(id) => self.shell_move_typed(id, &text),
+            PromptKind::ShellJoin(id) => self.window_join_typed(id, &text),
             PromptKind::ShellCommand => self.shell_command_typed(&text),
             PromptKind::ShellMatch(id) => {
                 let re = text.trim().to_owned();
@@ -11146,6 +11163,179 @@ mod tests {
         config.shell.alt_digits = false;
         let (off, _) = crate::keymap::Keymap::new(&config);
         assert!(off.lookup(Table::Global, alt3).is_none());
+    }
+
+    /// Shell 3 as a window of two panes (SPEC §23.17): `a` left, `b` right (30/70), `b` focused.
+    fn window_of_two(app: &mut App) -> (SessionInfo, SessionInfo) {
+        use ptyro_core::window::{PaneTree, SplitDir, WindowLayout};
+        let layout = WindowLayout {
+            root: PaneTree::Split {
+                dir: SplitDir::Right,
+                share: 300,
+                a: Box::new(PaneTree::Pane { pane: 1 }),
+                b: Box::new(PaneTree::Pane { pane: 2 }),
+            },
+            focus: 2,
+            zoom: false,
+        };
+        let (mut a, mut b) = (loose("left", 3), loose("right", 3));
+        (a.pane, b.pane) = (Some(1), Some(2));
+        (a.layout, b.layout) = (Some(layout.clone()), Some(layout));
+        app.sessions.extend([a.clone(), b.clone()]);
+        (a, b)
+    }
+
+    #[test]
+    fn a_split_of_a_shell_in_shells_asks_the_daemon_for_a_pane_of_its_window() {
+        let mut app = app();
+        with_agents(&mut app);
+        let one = loose("dl", 1);
+        app.sessions.push(one.clone());
+        app.show(one.id, None);
+        while app.rx.try_recv().is_ok() {}
+        app.run(&Command { action: "pane.split_right", arg: None });
+        // `ShellSplit`: the daemon starts the copy where the shell is, and places it in the
+        // window; no spawn in a directory that a worktree could claim (the old bug).
+        let spec = spawn_asked(&mut app).expect("a pane was asked for");
+        assert_eq!(spec, SpawnSpec::default(), "not a plain spawn: {spec:?}");
+        assert_eq!(app.layout.panes().len(), 1, "the window's screen comes from the daemon");
+    }
+
+    #[test]
+    fn showing_a_window_shows_its_whole_layout_and_keeps_the_screen_it_replaces() {
+        let mut app = app();
+        let (agent, _) = with_agents(&mut app);
+        let (a, b) = window_of_two(&mut app);
+        app.show(agent, None);
+        app.run(&Command { action: "shells.go", arg: Some("3".into()) });
+        assert_eq!(app.focused_session(), Some(b.id), "the pane that had focus there");
+        assert_eq!(app.layout.panes().len(), 2);
+        let shown: Vec<_> = app.panes.values().filter_map(|p| p.session).collect();
+        assert!(shown.contains(&a.id) && shown.contains(&b.id));
+        let rects = app.pane_rects();
+        let left = rects.iter().find(|(p, _)| app.panes[p].session == Some(a.id)).unwrap().1;
+        let right = rects.iter().find(|(p, _)| app.panes[p].session == Some(b.id)).unwrap().1;
+        assert!(left.width < right.width, "30/70: {left:?} {right:?}");
+        // The agent's screen is kept: ` brings it back.
+        app.run(&Command { action: "session.last", arg: None });
+        assert_eq!(app.focused_session(), Some(agent));
+        // A click on the window's first pane shows the window, that pane focused.
+        app.show(a.id, None);
+        assert_eq!((app.focused_session(), app.layout.panes().len()), (Some(a.id), 2));
+        // The sidebar hangs pane 2 under the window's row.
+        let rows = app.rows();
+        let at = rows.iter().position(|r| *r == Row::Session(a.id)).unwrap();
+        assert_eq!(rows[at + 1], Row::Session(b.id));
+        let text = screen(&app);
+        assert!(text.contains("└.2") && text.contains("⊞2"), "{text}");
+    }
+
+    #[test]
+    fn a_window_s_arrangement_goes_to_the_daemon_and_comes_back_from_it() {
+        let mut app = app();
+        with_agents(&mut app);
+        let (a, b) = window_of_two(&mut app);
+        app.show(b.id, None);
+        app.sync_window();
+        let agreed = app.window_seen.clone().and_then(|(_, l)| l).expect("seen");
+        // Focus moves here: sent (and taken as agreed until the daemon says otherwise).
+        app.focused =
+            app.panes.iter().find(|(_, p)| p.session == Some(a.id)).map(|(k, _)| *k).unwrap();
+        while app.rx.try_recv().is_ok() {}
+        app.sync_window();
+        let sent = app.window_seen.clone().and_then(|(_, l)| l).expect("sent");
+        assert_eq!(sent.focus, 1);
+        assert_ne!(sent, agreed);
+        assert!(!asked(&mut app).is_empty(), "a request went out");
+        // The daemon echoes it: nothing more to send.
+        for s in app.sessions.iter_mut().filter(|s| s.slot == Some(3)) {
+            s.layout = Some(sent.clone());
+        }
+        app.sync_window();
+        assert!(asked(&mut app).is_empty());
+        // Two changes here before the first comes back: its echo doesn't undo the second.
+        let mut l = sent.clone();
+        l.zoom = true;
+        app.zoom = true;
+        app.sync_window();
+        app.zoom = false;
+        app.sync_window();
+        assert!(!app.zoom);
+        for s in app.sessions.iter_mut().filter(|s| s.slot == Some(3)) {
+            s.layout = Some(l.clone());
+        }
+        app.sync_window();
+        assert!(!app.zoom, "the echo of the first change is old news");
+        for s in app.sessions.iter_mut().filter(|s| s.slot == Some(3)) {
+            s.layout = Some(sent.clone());
+        }
+        app.sync_window();
+        assert!(app.window_sent.is_empty(), "caught up");
+        // Another client zooms the window: shown here.
+        let mut zoomed = sent.clone();
+        zoomed.zoom = true;
+        for s in app.sessions.iter_mut().filter(|s| s.slot == Some(3)) {
+            s.layout = Some(zoomed.clone());
+        }
+        app.sync_window();
+        assert!(app.zoom, "another client's change is shown");
+    }
+
+    #[test]
+    fn news_about_a_window_keeps_the_quick_terminal_s_drawer_and_the_kept_screen() {
+        let mut app = app();
+        let (agent, _) = with_agents(&mut app);
+        app.show(agent, None);
+        let (a, _) = window_of_two(&mut app);
+        app.show(a.id, None);
+        let kept = app.kept.clone();
+        assert!(kept.is_some(), "the agent's screen is kept");
+        // The quick terminal's drawer under pane 1.
+        let host = app.focused;
+        let quick = quick("dl.shell", None);
+        app.sessions.push(quick.clone());
+        let d = app.layout.split_at(host, Dir::Down, 0.7, crate::layout::MAX_WITH_DRAWER).unwrap();
+        app.panes.insert(d, PaneState { session: Some(quick.id), ..PaneState::default() });
+        app.drawer = Some(crate::quick::Drawer { host, pane: d });
+        app.sync_window();
+        // News: another client resized the window.
+        let mut theirs = a.layout.clone().unwrap();
+        if let ptyro_core::window::PaneTree::Split { share, .. } = &mut theirs.root {
+            *share = 650;
+        }
+        for s in app.sessions.iter_mut().filter(|s| s.slot == Some(3)) {
+            s.layout = Some(theirs.clone());
+        }
+        app.sync_window();
+        let d = app.drawer.expect("the drawer stays open");
+        assert_eq!(app.panes[&d.pane].session, Some(quick.id));
+        assert_eq!(app.panes[&d.host].session, Some(a.id), "under the same pane");
+        assert_eq!(app.kept, kept, "the kept screen is still the agent's");
+    }
+
+    #[test]
+    fn another_client_s_focus_is_followed_not_fought() {
+        let mut app = app();
+        with_agents(&mut app);
+        let (a, b) = window_of_two(&mut app);
+        app.show(a.id, None);
+        app.sync_window();
+        // The daemon's layout says pane 2 has focus (another TUI, or a split from the CLI):
+        // this one follows, and so has nothing to send back.
+        let mut theirs = a.layout.clone().unwrap();
+        // Something else changed too, so it is news: the shares.
+        if let ptyro_core::window::PaneTree::Split { share, .. } = &mut theirs.root {
+            *share = 600;
+        }
+        theirs.focus = 2;
+        for s in app.sessions.iter_mut().filter(|s| s.slot == Some(3)) {
+            s.layout = Some(theirs.clone());
+        }
+        while app.rx.try_recv().is_ok() {}
+        app.sync_window();
+        assert_eq!(app.focused_session(), Some(b.id));
+        app.sync_window();
+        assert!(asked(&mut app).is_empty(), "no layout sent back");
     }
 
     #[test]

@@ -229,10 +229,12 @@ pub fn needed(req: &Request) -> Scope {
         // The same requests when they start something: a shell, a command line of its own, a
         // new pad pane, switching the web app's server on or off.
         Spawn { .. } | QuickShell { .. } | ScratchPane { .. } | Web { .. } => Scope::Full,
-        // SHELLS (SPEC §23.12): numbering, placing and watching act like starting one.
+        // SHELLS (SPEC §23.12): numbering, placing and watching act like starting one; a split
+        // starts one, and joining or arranging a window's panes acts like moving one (§23.17).
         ShellMove { .. } | ShellPlace { .. } | ShellWatch { .. } | ShellScratchRemove { .. } => {
             Scope::Full
         }
+        ShellSplit { .. } | ShellJoin { .. } | ShellLayout { .. } => Scope::Full,
         // Everything else changes the machine, the config, the daemon or who may talk to it.
         MachineAdd { .. } | MachineRemove { .. } | MachineHide { .. } | MachineRetry { .. } => Scope::Full,
         // It copies coding history into chat.db, as `[chat] import` (a setting: full) does.

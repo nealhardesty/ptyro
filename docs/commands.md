@@ -50,10 +50,13 @@ Conventions:
 | `ptyro convert SESSION [--to tui\|structured] [--force]` | switch an agent between its own TUI and structured mode, same conversation |
 | `ptyro summarize SESSION [--json]` | what it's doing, in a line, from a small model (`[summaries] command`, on its profile's account); works with summaries off |
 | `ptyro shell [WORKTREE] [--json] [--read [--scrollback [N]]]` | the worktree's quick terminal (one shell per worktree, or per directory outside one): attach with it in the TUI's drawer, print it as JSON, or print its screen (`--read`, which never starts one; an agent can read your terminal this way) |
-| `ptyro shells [ls] [--workspace WS] [--all] [--json]` | your workspace's SHELLS (SPEC §23): numbered terminals of any command that belong to the workspace, not a worktree, by number (`Alt-1…9` in the TUI) |
+| `ptyro shells [ls] [--workspace WS] [--all] [--json]` | your workspace's SHELLS (SPEC §23): numbered terminals of any command that belong to the workspace, not a worktree, by number (`Alt-1…9` in the TUI); a window's later panes are listed under it (`└.2`) |
 | `ptyro shells new [-- CMD…] [-C DIR] [--slot N] [--scratch] [--name N] [--title T] [--workspace WS] [--attach] [--json]` | start one in SHELLS, here (or `-C DIR`), with the lowest free number or `--slot N`; `--scratch`: in a new, empty directory that goes with it |
 | `ptyro shells go N [--workspace WS]` | attach with shell N shown (the same as `ptyro attach %N`); one lost in a restart starts again |
 | `ptyro shells move N M [--workspace WS]` | give shell N the number M; a shell already there swaps with it |
+| `ptyro shells split [S] [--down] [--attach] [--json]` | split shell S's window (default: the one you're in) with a copy of it: a shell in the same directory, under the same profile, as a pane of the same number (`%3.2`), beside it or `--down` below it; at most 4 panes (SPEC §23.17) |
+| `ptyro shells break S` | move a pane out of its window to the lowest free number (tmux's `break-pane`) |
+| `ptyro shells join S N [--right]` | move shell S into window N as a pane, below that window's focused pane (`--right`: beside it; tmux's `join-pane`) |
 | `ptyro shells loose S` | move a worktree's session into its workspace's SHELLS: it outlives its worktree |
 | `ptyro shells adopt S [WORKTREE]` | move a shell from SHELLS into a worktree (default: the one its directory is in; refused across profiles) |
 | `ptyro shells watch S [--done\|--output\|--silence TIME\|--match PATTERN\|--off]` | tell you when its command ends, it prints, it goes quiet, or a line matches (`done` and `match` fire once) |

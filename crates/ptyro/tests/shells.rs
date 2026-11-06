@@ -11,6 +11,7 @@ use ptyro_client::Client;
 use ptyro_core::TermSize;
 use ptyro_core::session::{ProcessState, SessionInfo, SpawnSpec, Watch};
 use ptyro_core::status::AttentionKind;
+use ptyro_core::window::SplitDir;
 use ptyro_protocol::{Reply, Request};
 use ptyro_testkit::TempDaemon;
 
@@ -592,4 +593,155 @@ async fn a_scratch_directory_in_use_is_never_a_leftover_and_empty_ones_go() {
     std::fs::create_dir(&empty).unwrap();
     assert!(gc_scratch(&c).await.is_empty());
     assert!(!empty.exists(), "an empty leftover goes by itself");
+}
+
+async fn split(c: &Client, addr: &str, dir: SplitDir) -> Result<SessionInfo, ptyro_core::Error> {
+    let req = Request::ShellSplit {
+        addr: addr.into(),
+        dir,
+        env: Default::default(),
+        size: Some(TermSize::new(100, 30)),
+    };
+    match c.request(req).await? {
+        Reply::Session { info } => Ok(info),
+        other => panic!("{other:?}"),
+    }
+}
+
+async fn join(c: &Client, addr: &str, into: Option<u32>) -> Result<SessionInfo, ptyro_core::Error> {
+    match c.request(Request::ShellJoin { addr: addr.into(), into, dir: SplitDir::Down }).await? {
+        Reply::Session { info } => Ok(info),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// SPEC §23.17: a split of a SHELLS shell is a copy of it (a shell in the same directory, in
+/// SHELLS, never placed in the worktree it stands in) as a pane of the same number; panes are
+/// `%N.P`, every pane carries the window's layout, and break, join, move and removal keep it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_split_is_a_copy_in_the_same_window() {
+    let w = World::new("");
+    let c = w.d.client().await.unwrap();
+    let code = repo(&w, "code");
+    c.request(Request::ProjectAdd { path: code.clone(), workspace: None }).await.unwrap();
+    let one = shell(&c, &w.home(), None).await;
+    ready(&c, &one).await;
+    // It stands inside a worktree: the copy must still be a shell of SHELLS, there.
+    let sub = code.join("src");
+    std::fs::create_dir_all(&sub).unwrap();
+    send(&c, &one.id.full(), &format!("cd {}", sub.display())).await;
+    wait_for(&c, &one.id.full(), "in src", |s| s.live_cwd.as_deref() == Some(sub.as_path())).await;
+
+    let two = split(&c, "%1", SplitDir::Right).await.unwrap();
+    assert!(two.loose && two.worktree.is_none() && two.project.is_none(), "{two:#?}");
+    assert_eq!((two.slot, two.pane), (Some(1), Some(2)));
+    assert_eq!(two.cwd, sub, "it starts where its source is now");
+    assert_eq!(two.profile, one.profile);
+    let l = two.layout.clone().expect("a window of two has a layout");
+    assert_eq!((l.panes(), l.focus), (vec![1, 2], 2));
+    let first = get(&c, "%1").await.unwrap();
+    assert_eq!(first.id, one.id, "%1 is the window's first pane");
+    assert_eq!(first.layout, Some(l), "every pane carries the layout");
+    assert_eq!(get(&c, "%1.2").await.unwrap().id, two.id);
+    let e = c.request(Request::Get { addr: "%1.7".into() }).await.unwrap_err();
+    assert!(e.message.contains("no pane 7") && e.message.contains("%1.2"), "{}", e.message);
+    // Panes don't take numbers: the next shell is 2.
+    let other = shell(&c, &w.home(), None).await;
+    assert_eq!(other.slot, Some(2));
+
+    // Below pane 2; then a client's arrangement (focus, zoom) reaches every pane.
+    let three = split(&c, "%1.2", SplitDir::Down).await.unwrap();
+    assert_eq!(three.pane, Some(3));
+    let mut l = three.layout.clone().unwrap();
+    assert_eq!(l.panes(), vec![1, 2, 3]);
+    (l.focus, l.zoom) = (1, true);
+    c.request(Request::ShellLayout { addr: "%1".into(), layout: l.clone() }).await.unwrap();
+    assert_eq!(get(&c, "%1.3").await.unwrap().layout, Some(l));
+
+    // Break pane 2 out: the lowest free number, a window of its own; then join it back.
+    let broke = join(&c, "%1.2", None).await.unwrap();
+    assert_eq!((broke.slot, broke.pane, broke.layout.is_some()), (Some(3), Some(1), false));
+    assert_eq!(get(&c, "%1").await.unwrap().layout.unwrap().panes(), vec![1, 3]);
+    let back = join(&c, "%3", Some(1)).await.unwrap();
+    assert_eq!((back.slot, back.pane), (Some(1), Some(2)));
+    // Below the focused pane (1).
+    assert_eq!(get(&c, "%1").await.unwrap().layout.unwrap().panes(), vec![1, 2, 3]);
+    assert!(join(&c, "%2", Some(2)).await.is_err(), "joining its own window");
+    assert!(join(&c, "%2", None).await.is_err(), "breaking out a window of one pane");
+
+    // A fourth pane is the most.
+    split(&c, "%1", SplitDir::Right).await.unwrap();
+    let e = split(&c, "%1", SplitDir::Right).await.unwrap_err();
+    assert!(e.message.contains("4 panes"), "{}", e.message);
+
+    // Moving the number moves every pane.
+    c.request(Request::ShellMove { addr: "%1.3".into(), slot: 5 }).await.unwrap();
+    for s in list(&c).await.iter().filter(|s| [one.id, two.id, three.id].contains(&s.id)) {
+        assert_eq!(s.slot, Some(5), "{}", s.name);
+    }
+
+    // The first pane goes: the window stays, and its next pane is `%5`.
+    kill_and_wait(&c, &one).await;
+    let now = get(&c, "%5").await.unwrap();
+    assert_eq!(now.id, two.id);
+    assert_eq!(now.layout.unwrap().panes().len(), 3);
+    // A copy never takes the freed pane 1 ahead of the original: it goes after.
+    let after = split(&c, "%5", SplitDir::Right).await.unwrap();
+    assert!(after.pane > Some(2), "{:?}", after.pane);
+    assert_eq!(get(&c, "%5").await.unwrap().id, two.id, "the original stays first");
+
+    // A session that isn't in SHELLS is split in its pane, not here.
+    let placed =
+        try_spawn(&c, SpawnSpec { cwd: code.clone(), ..SpawnSpec::default() }).await.unwrap();
+    assert!(placed.worktree.is_some());
+    let e = split(&c, &placed.id.full(), SplitDir::Right).await.unwrap_err();
+    assert!(e.message.contains("isn't in SHELLS"), "{}", e.message);
+}
+
+/// SPEC §23.17: a window lost in a restart comes back whole: its panes in one number, with
+/// their pane numbers and its layout.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_window_comes_back_whole_after_a_restart() {
+    let mut w = World::new("");
+    let c = w.d.client().await.unwrap();
+    shell(&c, &w.home(), Some(2)).await;
+    let first = shell(&c, &w.home(), Some(3)).await;
+    let pane = split(&c, "%3", SplitDir::Down).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    drop(c);
+    w.d.restart().unwrap();
+    let c = w.d.client().await.unwrap();
+    let all = list(&c).await;
+    let a = all.iter().find(|x| x.id == first.id).expect("offered");
+    let b = all.iter().find(|x| x.id == pane.id).expect("offered");
+    assert!(a.lost && b.lost);
+    assert_eq!((a.slot, a.pane, b.slot, b.pane), (Some(3), Some(1), Some(3), Some(2)));
+    assert_eq!(b.layout.as_ref().map(|l| l.panes()), Some(vec![1, 2]));
+}
+
+/// SPEC §23.17: a shell that only landed in SHELLS moves into the repository it `cd`s into
+/// (UX1.5), but not once it is a pane of a window of several: the window stays whole.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pane_of_a_window_stays_when_its_directory_becomes_a_project() {
+    let w = World::new("");
+    let c = w.d.client().await.unwrap();
+    let code = repo(&w, "code");
+    c.request(Request::ProjectAdd { path: code.clone(), workspace: None }).await.unwrap();
+    // Started outside every project: it lands in SHELLS, unpinned.
+    let out = w.dir("out");
+    let spec = SpawnSpec { cwd: out, size: Some(TermSize::new(100, 30)), ..SpawnSpec::default() };
+    let first = try_spawn(&c, spec).await.unwrap();
+    assert!(first.loose, "{first:#?}");
+    ready(&c, &first).await;
+    let n = first.slot.unwrap();
+    split(&c, &first.id.full(), SplitDir::Down).await.unwrap();
+    send(&c, &first.id.full(), &format!("cd {}", code.display())).await;
+    wait_for(&c, &first.id.full(), "in code", |s| s.live_cwd.as_deref() == Some(code.as_path()))
+        .await;
+    // The sweep runs every 2 s: give it two turns.
+    tokio::time::sleep(Duration::from_millis(4500)).await;
+    let now = get(&c, &first.id.full()).await.unwrap();
+    assert!(now.loose && now.worktree.is_none(), "it left its window: {now:#?}");
+    assert_eq!(now.slot, Some(n));
+    assert_eq!(now.layout.map(|l| l.panes().len()), Some(2));
 }

@@ -112,6 +112,12 @@ impl App {
             self.swap_screens();
             return p;
         }
+        // A pane of a SHELLS window: the whole window, as the daemon keeps it (SPEC §23.17).
+        if let Some(screen) = self.window_screen(id) {
+            let p = screen.focus;
+            self.apply_window(screen);
+            return p;
+        }
         if self.is_split() {
             self.kept = Some(Box::new(self.snapshot()));
             self.apply_screen(Screen {
@@ -127,6 +133,40 @@ impl App {
         match self.drawer {
             Some(d) if d.pane == self.focused && self.layout.contains(d.host) => d.host,
             _ => self.focused,
+        }
+    }
+
+    /// Show a SHELLS window's screen in place of this one, which is kept when it shows anything
+    /// (`` ` `` brings it back) and isn't the same window.
+    pub(crate) fn apply_window(&mut self, screen: Screen) {
+        let now = self.snapshot();
+        // The quick terminal's drawer isn't the window's: it stays open, under the same pane.
+        let drawer = self.drawer.and_then(|d| {
+            let quick = self.panes.get(&d.pane)?.session?;
+            let host = self.panes.get(&d.host)?.session?;
+            Some((quick, host))
+        });
+        let same = now
+            .panes
+            .iter()
+            .filter(|(p, _)| self.drawer.is_none_or(|d| d.pane != **p))
+            .filter_map(|(_, s)| *s)
+            .all(|id| screen.shows(id).is_some());
+        if !same && now.panes.values().any(Option::is_some) {
+            self.kept = Some(Box::new(now));
+        }
+        self.apply_screen(screen);
+        if let Some((quick, host)) = drawer
+            && let Some(h) = self.snapshot().shows(host)
+            && let Some(p) = self.layout.split_at(
+                h,
+                Dir::Down,
+                1.0 - self.drawer_share,
+                crate::layout::MAX_WITH_DRAWER,
+            )
+        {
+            self.panes.insert(p, PaneState { session: Some(quick), ..PaneState::default() });
+            self.drawer = Some(Drawer { host: h, pane: p });
         }
     }
 
@@ -278,6 +318,12 @@ impl App {
             _ => self.focused_session(),
         };
         let spec = match source.and_then(|id| self.session(id)) {
+            // A shell of SHELLS: a copy of it as a pane of its window (SPEC §23.17).
+            Some(s) if s.loose && s.slot.is_some() => {
+                let id = s.id;
+                self.focus = Focus::Pane;
+                return self.window_split(id, dir);
+            }
             Some(s) if s.kind == SessionKind::Agent && s.agent.is_some() => SpawnSpec {
                 agent: s.agent.clone(),
                 profile: Some(s.profile.clone()),

@@ -454,3 +454,13 @@ a.button { display: inline-block; padding: 7px 12px; border-radius: 8px; border:
 .shell-strip .plus { color: var(--accent); }
 .shells-ws-name { font-size: 12px; color: var(--muted); padding: 6px 2px 2px; }
 .shells-ws-name small { color: var(--accent); }
+/* SHELLS windows (SPEC §23.17): a window's panes under the strip, and pane cards in the list. */
+.shell-strips { display: flex; flex-direction: column; }
+.pane-strip { display: flex; gap: 6px; padding: 4px 10px 6px 28px; overflow-x: auto; border-bottom: 1px solid var(--line); }
+.pane-strip button { padding: 2px 8px; border-radius: 12px; font-size: 12px; white-space: nowrap; }
+.pane-strip button small { color: var(--muted); }
+.pane-strip button.on { background: var(--accent); color: #fff; border-color: transparent; }
+.pane-strip button.on small { color: #fff; }
+.pane-strip button.wants { border-color: var(--warn); }
+.pane-strip .plus { color: var(--accent); }
+.shell-card.pane { margin-left: 22px; }

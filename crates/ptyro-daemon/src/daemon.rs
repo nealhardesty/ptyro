@@ -647,14 +647,21 @@ impl Daemon {
 
     pub(crate) fn forget_session(&self, id: SessionId) {
         // A scratch shell's directory goes with it (SPEC §23.8).
-        let scratch = self.session(id).and_then(|s| {
+        let (scratch, window) = self.session(id).map_or((None, None), |s| {
             let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            m.shelf.as_ref().and_then(|f| f.scratch.clone())
+            let window = m.shelf.as_ref().map(|f| {
+                (m.place.workspace.clone().unwrap_or_else(|| MAIN_WORKSPACE.into()), f.slot)
+            });
+            (m.shelf.as_ref().and_then(|f| f.scratch.clone()), window)
         });
         if let Some(dir) = scratch {
             self.drop_scratch(&dir);
         }
         self.sessions.writing().retain(|o| o.id != id);
+        // The panes left in its window close the gap (SPEC §23.17).
+        if let Some((ws, slot)) = window {
+            self.relayout(&ws, slot, None);
+        }
         // A removed shell is never offered back, even by a restart before the next tick.
         self.save_kept();
         self.last_notified.locked().remove(&id);
@@ -686,7 +693,8 @@ impl Daemon {
         }
         let explicit = spec.profile.clone().or(agent_profile);
         // SHELLS (SPEC §23.2): a loose session belongs to its workspace, wherever it starts.
-        let asked_loose = spec.loose || spec.scratch || spec.slot.is_some();
+        let asked_loose =
+            spec.loose || spec.scratch || spec.slot.is_some() || spec.pane_of.is_some();
         if asked_loose && spec.worktree.is_some() {
             return Err(Error::invalid(
                 "a shell in SHELLS belongs to its workspace, not a worktree: leave out the worktree",
@@ -733,8 +741,12 @@ impl Daemon {
             None if loose => self.context_workspace(),
             asked => self.home_workspace(asked.as_deref(), target.as_ref().map(|(_, p)| p))?,
         };
-        let reservation =
-            if loose { Some(self.reserve_slot(&workspace, spec.slot)?) } else { None };
+        // A new pane of a window (`ShellSplit`, SPEC §23.17) shares its number.
+        let reservation = if loose && spec.pane_of.is_none() {
+            Some(self.reserve_slot(&workspace, spec.slot)?)
+        } else {
+            None
+        };
         let res = self.resolve_profile(
             explicit.as_deref(),
             target.as_ref(),
@@ -851,6 +863,9 @@ impl Daemon {
         });
         if let Some(r) = &reservation {
             self.pend_shelf(id, r, scratch.clone(), asked_loose);
+        } else if let Some(src) = spec.pane_of {
+            // Last, so a refusal earlier leaves nothing pending.
+            self.pend_pane(src, id)?;
         }
         let launched = self
             .launch(Launch {
@@ -1446,6 +1461,9 @@ impl Daemon {
             }
             Request::Adopt { addr } => self.adopt(&addr).await,
             req @ (Request::ShellMove { .. }
+            | Request::ShellSplit { .. }
+            | Request::ShellJoin { .. }
+            | Request::ShellLayout { .. }
             | Request::ShellPlace { .. }
             | Request::ShellWatch { .. }
             | Request::ShellScratchRemove { .. }) => self.handle_shells(req).await,
