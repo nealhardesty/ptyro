@@ -134,8 +134,17 @@ impl World {
         self.run(id)["state"]["status"].as_str().unwrap_or_default().to_owned()
     }
 
+    /// A whole run takes longer than a step: a fan-out makes worktrees, runs agents and tests
+    /// and ranks them (CI's macOS runners took past 30 s once). When it never gets there, the
+    /// run's state says where it stopped.
     fn wait_run(&self, id: &str, status: &str) -> Value {
-        self.until(&format!("run {id} {status}"), || self.run_status(id) == status);
+        let deadline = Instant::now() + WAIT * 3;
+        while self.run_status(id) != status {
+            if Instant::now() >= deadline {
+                panic!("never: run {id} {status}; it is:\n{:#}", self.run(id));
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
         self.run(id)
     }
 

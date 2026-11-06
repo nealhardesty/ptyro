@@ -321,7 +321,6 @@ fn list(file: &Path) -> Vec<String> {
 /// scratchpad; no agent logins; and it never replaces a file.
 #[tokio::test]
 async fn a_backup_holds_the_state_not_the_logins_and_never_replaces_a_file() {
-    use std::os::unix::fs::PermissionsExt;
     let w = World::new();
     w.project("app");
     w.d.write_config("[ui]\nmouse = false # mine\n").unwrap();
@@ -335,7 +334,12 @@ async fn a_backup_holds_the_state_not_the_logins_and_never_replaces_a_file() {
     let file = w.home().join("out/b.tar.gz");
     let said = w.ok(&["backup", "-o", file.to_str().unwrap()]);
     assert!(said.contains("data/ptyro.db") && said.contains("agent logins"), "{said}");
-    assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(ptyro_pty::acl::readable_by_others(&file), None);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+    }
     let names = list(&file);
     for want in [
         "ptyro-backup/README.txt",

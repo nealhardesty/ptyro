@@ -29,9 +29,15 @@ impl World {
         )
         .unwrap();
         // An editor that shows where it is and stays.
-        let ed = h.join("fake-editor");
-        std::fs::write(&ed, "#!/bin/sh\necho \"EDITING $*\"\nexec sleep 60\n").unwrap();
-        std::fs::set_permissions(&ed, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let say = ptyro_testkit::program::say_then_wait("EDITING", 60);
+        let ed = ptyro_testkit::program::program(
+            &h,
+            "fake-editor",
+            BIN,
+            "echo \"EDITING $*\"\nexec sleep 60",
+            &say.iter().map(String::as_str).collect::<Vec<_>>(),
+            &[],
+        );
         let config = format!(
             "[worktrees]\nfetch = false\n[agents.claude]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\n[scratchpad]\neditor = \"{}\"\n{extra}",
             ed.display()

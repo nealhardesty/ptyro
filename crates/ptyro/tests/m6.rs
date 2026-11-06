@@ -37,14 +37,17 @@ impl World {
         .unwrap();
         // A fake `gh` on the daemon's PATH.
         let bin = h.join("fakebin");
-        std::fs::create_dir_all(&bin).unwrap();
-        std::fs::write(bin.join("gh"), format!("#!/bin/sh\nexec \"{BIN}\" fake-gh \"$@\"\n"))
-            .unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(bin.join("gh"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        ptyro_testkit::program::program(
+            &bin,
+            "gh",
+            BIN,
+            &format!("exec \"{BIN}\" fake-gh \"$@\""),
+            &[BIN, "fake-gh"],
+            &[],
+        );
         let gh = h.join("gh-state");
         std::fs::create_dir_all(&gh).unwrap();
-        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
+        let path = ptyro_testkit::program::path_with(&bin);
         let (hs, gs) = (h.to_string_lossy().into_owned(), gh.to_string_lossy().into_owned());
         let env = [
             ("HOME", hs.as_str()),

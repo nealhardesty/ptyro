@@ -7,6 +7,7 @@ pub mod fake_gh;
 pub mod fake_structured;
 pub mod fuzz;
 pub mod headless;
+pub mod program;
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};

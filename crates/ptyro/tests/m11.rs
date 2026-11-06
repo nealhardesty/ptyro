@@ -55,18 +55,17 @@ impl World {
             ("SHELL".into(), "/bin/sh".into()),
         ];
         if gh {
-            use std::os::unix::fs::PermissionsExt;
             let bin = h.join("fakebin");
-            std::fs::create_dir_all(&bin).unwrap();
-            std::fs::write(bin.join("gh"), format!("#!/bin/sh\nexec \"{BIN}\" fake-gh \"$@\"\n"))
-                .unwrap();
-            std::fs::set_permissions(bin.join("gh"), std::fs::Permissions::from_mode(0o755))
-                .unwrap();
+            ptyro_testkit::program::program(
+                &bin,
+                "gh",
+                BIN,
+                &format!("exec \"{BIN}\" fake-gh \"$@\""),
+                &[BIN, "fake-gh"],
+                &[],
+            );
             std::fs::create_dir_all(h.join("gh-state")).unwrap();
-            env.push((
-                "PATH".into(),
-                format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default()),
-            ));
+            env.push(("PATH".into(), ptyro_testkit::program::path_with(&bin)));
             env.push(("PTYRO_FAKE_GH".into(), h.join("gh-state").to_string_lossy().into_owned()));
             env.push(("PTYRO_FAKE_GH_PER_REPO".into(), "1".into()));
             env.push(("PTYRO_TEST_FAST_POLL".into(), "1".into()));

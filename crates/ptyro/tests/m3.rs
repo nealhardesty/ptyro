@@ -30,17 +30,20 @@ impl World {
         let h = home.path().canonicalize().unwrap();
         std::fs::write(h.join(".gitconfig"), "[user]\n\tname = Test User\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n").unwrap();
         // A fake `claude` on PATH: prints where and as whom it runs.
-        std::fs::create_dir_all(h.join("bin")).unwrap();
-        let fake = h.join("bin/claude");
-        std::fs::write(&fake, "#!/bin/sh\necho \"fake-claude wt=$PTYRO_WORKTREE_NAME profile=$PTYRO_PROFILE\"\nexec sleep 60\n").unwrap();
-        std::os::unix::fs::PermissionsExt::set_mode(
-            &mut std::fs::metadata(&fake).unwrap().permissions(),
-            0o755,
+        let say = ptyro_testkit::program::say_then_wait(
+            "fake-claude wt=${PTYRO_WORKTREE_NAME} profile=${PTYRO_PROFILE}",
+            60,
         );
-        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .unwrap();
+        ptyro_testkit::program::program(
+            &h.join("bin"),
+            "claude",
+            BIN,
+            "echo \"fake-claude wt=$PTYRO_WORKTREE_NAME profile=$PTYRO_PROFILE\"\nexec sleep 60",
+            &say.iter().map(String::as_str).collect::<Vec<_>>(),
+            &[],
+        );
         let hs = h.to_string_lossy().into_owned();
-        let path = format!("{}/bin:{}", hs, std::env::var("PATH").unwrap_or_default());
+        let path = ptyro_testkit::program::path_with(&h.join("bin"));
         let env = [
             ("HOME", hs.as_str()),
             ("GIT_CONFIG_NOSYSTEM", "1"),
@@ -1022,6 +1025,7 @@ async fn scripts_run_in_their_shell_and_crlf_scripts_are_fixed() {
         &[(".ptyro.toml", toml), ("crlf.sh", "#!/bin/sh\r\necho crlf-ran\r\nsleep 30\r\n")],
     );
     w.git(&root, &["update-index", "--chmod=+x", "crlf.sh"]);
+    #[cfg(unix)]
     std::fs::set_permissions(
         root.join("crlf.sh"),
         std::os::unix::fs::PermissionsExt::from_mode(0o755),

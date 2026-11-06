@@ -2,7 +2,6 @@
 //! take seconds): the upgrade waits for the launch, the new session is in the new daemon, and no
 //! second daemon is left behind. And a rolled-back upgrade does not stop the next one.
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Output, Stdio};
 use std::time::{Duration, Instant};
@@ -160,8 +159,12 @@ fn an_upgrade_during_a_slow_launch_waits_and_loses_nothing() {
 
 /// A refused handoff rolls back to `daemon.prev`; the daemon then runs from that very file, so
 /// the next upgrade must not copy it onto itself, and goes through.
+// Unix: the next binary is a sh wrapper, and rolling back to `daemon.prev` is Unix's upgrade
+// (Windows hands over to a new process: tests/win9.rs, its refused handover included).
+#[cfg(unix)]
 #[test]
 fn an_upgrade_after_a_rollback_works() {
+    use std::os::unix::fs::PermissionsExt;
     let w = World::new("", &[("PTYRO_TEST_REFUSE_HANDOFF", "1")]);
     assert!(
         w.cli(&["new", "-d", "-n", "keep", "--", "sh", "-c", "echo alive; sleep 60"])

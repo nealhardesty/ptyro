@@ -164,19 +164,27 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("s.cast");
         write_new_private(&p, b"one").unwrap();
-        let mode =
-            std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&p).unwrap().permissions());
-        assert_eq!(mode & 0o777, 0o600);
+        assert_eq!(ptyro_pty::acl::readable_by_others(&p), None);
+        #[cfg(unix)]
+        assert_eq!(
+            std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&p).unwrap().permissions())
+                & 0o777,
+            0o600
+        );
         // Again: a file of ours is replaced.
         write_new_private(&p, b"two").unwrap();
         assert_eq!(std::fs::read(&p).unwrap(), b"two");
-        // A link planted at the name is refused, and what it points at is left alone.
-        let target = d.path().join("elsewhere");
-        std::fs::write(&target, "keep").unwrap();
-        let link = d.path().join("link.cast");
-        std::os::unix::fs::symlink(&target, &link).unwrap();
-        assert!(write_new_private(&link, b"x").is_err());
-        assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep");
+        // A link planted at the name is refused, and what it points at is left alone (Unix:
+        // Windows wants Developer Mode to make one).
+        #[cfg(unix)]
+        {
+            let target = d.path().join("elsewhere");
+            std::fs::write(&target, "keep").unwrap();
+            let link = d.path().join("link.cast");
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            assert!(write_new_private(&link, b"x").is_err());
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep");
+        }
         // A directory isn't a file to replace.
         assert!(write_new_private(d.path(), b"x").is_err());
     }

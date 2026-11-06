@@ -1208,6 +1208,11 @@ fn parse_number(s: &str) -> Result<u32, String> {
 }
 
 fn main() {
+    // A debug build under another name is a test's stand-in program (WIN13, Windows only).
+    #[cfg(all(windows, debug_assertions))]
+    if let Some(code) = ptyro_testkit::program::run_shim() {
+        std::process::exit(code);
+    }
     // A shell asking for completions: answer and exit before anything else happens.
     complete::handle(Cli::command);
     let cli = Cli::parse();

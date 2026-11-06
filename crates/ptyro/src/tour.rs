@@ -430,9 +430,13 @@ mod tests {
         let a = make_dir().unwrap();
         let b = make_dir().unwrap();
         assert_ne!(a, b);
-        let mode =
-            std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&a).unwrap().permissions());
-        assert_eq!(mode & 0o777, 0o700);
+        assert_eq!(ptyro_pty::acl::readable_by_others(&a), None);
+        #[cfg(unix)]
+        assert_eq!(
+            std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&a).unwrap().permissions())
+                & 0o777,
+            0o700
+        );
         assert!(a.file_name().unwrap().to_string_lossy().starts_with("ptyro-tour-"));
         assert!(running_tours() >= 2);
         let _ = std::fs::remove_dir(&a);

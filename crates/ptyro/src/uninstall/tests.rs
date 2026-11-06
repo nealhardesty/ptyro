@@ -139,6 +139,8 @@ fn sizes_read_as_people_do_and_links_are_not_followed() {
     std::fs::write(d.path().join("a"), vec![0u8; 100]).unwrap();
     std::fs::create_dir(d.path().join("sub")).unwrap();
     std::fs::write(d.path().join("sub/b"), vec![0u8; 50]).unwrap();
+    // (Unix: Windows wants Developer Mode to make a link.)
+    #[cfg(unix)]
     std::os::unix::fs::symlink("/", d.path().join("link")).unwrap();
     assert_eq!(dir_size(d.path()), 150, "a link to / is not walked");
     assert_eq!(dir_size(&d.path().join("missing")), 0);

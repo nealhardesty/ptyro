@@ -245,6 +245,7 @@ fn the_doctor_names_the_startup_file_under_xdg_config_home() {
     ] {
         let exe = bin.path().join(shell);
         std::fs::write(&exe, "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
         std::fs::set_permissions(&exe, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
         let config = format!("[shell]\nintegration = false\ncommand = [\"{}\"]\n", exe.display());

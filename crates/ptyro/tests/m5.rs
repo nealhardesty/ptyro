@@ -365,7 +365,11 @@ fn doctor_self_test_and_service() {
     assert!(w.ok(&["profile", "doctor", "--json"]).trim_start().starts_with('['));
     // The service: --dry-run prints the unit; a real install calls systemctl.
     let unit = w.ok(&["daemon", "install-service", "--dry-run"]);
-    if cfg!(target_os = "linux") {
+    #[cfg(not(target_os = "linux"))]
+    let _ = unit;
+    // systemd's (Windows' logon task: tests/win10.rs).
+    #[cfg(target_os = "linux")]
+    {
         assert!(
             unit.contains("ExecStart=") && unit.contains("daemon start --foreground"),
             "{unit}"

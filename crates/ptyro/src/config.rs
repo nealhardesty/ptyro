@@ -709,6 +709,7 @@ fn edit(path: &std::path::Path, key: Option<&str>) -> Result<i32, Error> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     use super::*;
@@ -779,11 +780,17 @@ mod tests {
         let real = d.path().join("dotfiles/ptyro.toml");
         std::fs::create_dir_all(real.parent().unwrap()).unwrap();
         std::fs::write(&real, "[ui]\nmouse = true\n").unwrap();
-        let link = d.path().join("config.toml");
-        std::os::unix::fs::symlink(&real, &link).unwrap();
-        write_private(&link, "[ui]\nmouse = false\n").unwrap();
-        // The link is still a link, and the file it points at changed.
-        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        // Through a link where links need no privilege (Windows wants Developer Mode for one).
+        #[cfg(unix)]
+        {
+            let link = d.path().join("config.toml");
+            std::os::unix::fs::symlink(&real, &link).unwrap();
+            write_private(&link, "[ui]\nmouse = false\n").unwrap();
+            // The link is still a link, and the file it points at changed.
+            assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        }
+        #[cfg(not(unix))]
+        write_private(&real, "[ui]\nmouse = false\n").unwrap();
         assert_eq!(std::fs::read_to_string(&real).unwrap(), "[ui]\nmouse = false\n");
         // No temporary file is left, and two writers never share a name.
         let left: Vec<_> = std::fs::read_dir(d.path().join("dotfiles"))
@@ -809,6 +816,8 @@ mod tests {
         assert_eq!(with_lock(&real, || 7), 7);
     }
 
+    // Unix modes; on Windows write_private's access list is tested by tests/win11.rs.
+    #[cfg(unix)]
     #[test]
     fn configs_are_written_private() {
         let d = tempfile::tempdir().unwrap();

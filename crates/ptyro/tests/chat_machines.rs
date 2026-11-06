@@ -18,22 +18,31 @@ const BIN: &str = env!("CARGO_BIN_EXE_ptyro");
 const WAIT: Duration = Duration::from_secs(30);
 
 fn fake_ssh(dir: &Path, name: &str, env: &Path) -> PathBuf {
-    let path = dir.join(name);
-    std::fs::write(
-        &path,
-        format!(
-            "#!/bin/sh\nexec env $(cat '{}') PTYRO_NO_AUTOSPAWN=1 '{BIN}' proxy\n",
-            env.display()
-        ),
+    ptyro_testkit::program::program(
+        dir,
+        name,
+        BIN,
+        &format!("exec env $(cat '{}') PTYRO_NO_AUTOSPAWN=1 '{BIN}' proxy", env.display()),
+        &[BIN, "proxy"],
+        &[("PTYRO_NO_AUTOSPAWN", "1")],
     )
-    .unwrap();
-    std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    path
 }
 
+/// The daemon `d`'s variables, for the "ssh" to it (`laptopN.env` is `ssh-to-laptopN`'s).
 fn write_env(path: &Path, d: &TempDaemon) {
     let line: Vec<String> = d.env().into_iter().map(|(k, v)| format!("{k}={v}")).collect();
     std::fs::write(path, line.join(" ")).unwrap();
+    // Windows' stand-in reads them from its shim, not the file.
+    #[cfg(windows)]
+    {
+        let stem = path.file_stem().unwrap().to_string_lossy();
+        let exe = path.with_file_name(format!("ssh-to-{stem}.exe"));
+        let env = d.env();
+        let mut pairs: Vec<(&str, &str)> =
+            env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        pairs.push(("PTYRO_NO_AUTOSPAWN", "1"));
+        ptyro_testkit::program::set_shim(&exe, &[BIN, "proxy"], &pairs);
+    }
 }
 
 fn config(machine: &str) -> String {

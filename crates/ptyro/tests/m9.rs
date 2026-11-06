@@ -620,7 +620,8 @@ fn the_daemon_reports_its_machine() {
 }
 
 /// A stand-in for ssh: checks its arguments, then runs the remote command against the "remote"
-/// daemon's home.
+/// daemon's home. Unix: it runs that command with `sh`, as an ssh server would.
+#[cfg(unix)]
 fn fake_ssh(dir: &std::path::Path, remote_home: &std::path::Path) -> PathBuf {
     let path = dir.join("fake-ssh");
     let log = dir.join("ssh-args");
@@ -640,6 +641,8 @@ fn fake_ssh(dir: &std::path::Path, remote_home: &std::path::Path) -> PathBuf {
 
 /// `--remote` (M9.1): the CLI (and the TUI, the same client) works against a daemon on another
 /// machine through `ssh host ptyro proxy`; frames are compressed; a failing ssh says why.
+// Unix: the stand-in for ssh is a sh script (tests/win11.rs links Windows machines over ssh).
+#[cfg(unix)]
 #[test]
 fn remote_over_ssh() {
     let w = World::new("", &[]);
@@ -713,6 +716,8 @@ fn remote_over_ssh() {
 /// `--remote` to a Windows host (WIN11): its ssh server runs commands with `cmd.exe`, which has
 /// no `sh`. The client finds that out once (asking the host's `%OS%`), runs `ptyro proxy` there
 /// as it is, and remembers: the next connection goes straight to it.
+// Unix: the stand-in for ssh is a sh script that plays a Windows host's cmd.exe.
+#[cfg(unix)]
 #[test]
 fn remote_over_ssh_to_a_windows_host() {
     let w = World::new("", &[]);
@@ -1747,7 +1752,6 @@ const TAILNET: &str = "box.tail1234.ts.net";
 /// with `fail` on stderr when that is given.
 fn fake_tailscale(fail: Option<&str>) -> (tempfile::TempDir, String) {
     use rcgen::{CertificateParams, DistinguishedName, IsCa, Issuer, KeyPair, KeyUsagePurpose};
-    use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::Builder::new().prefix("ptyro-ts-").tempdir().unwrap();
     let ca_key = KeyPair::generate().unwrap();
     let mut ca = CertificateParams::new(Vec::<String>::new()).unwrap();
@@ -1777,12 +1781,38 @@ fn fake_tailscale(fail: Option<&str>) -> (tempfile::TempDir, String) {
              cp {d}/leaf.crt \"$c\"; cp {d}/leaf.key \"$k\""
         ),
     };
-    let script = format!(
-        "#!/bin/sh\ncase \"$1\" in\n  status) cat {d}/status.json;;\n  cert) shift\n{cert};;\nesac\n"
+    let script =
+        format!("case \"$1\" in\n  status) cat {d}/status.json;;\n  cert) shift\n{cert};;\nesac");
+    // Windows: the same in PowerShell, which the stand-in runs with its arguments.
+    let p = |f: &str| dir.path().join(f).display().to_string().replace('\'', "''");
+    let ps_cert = match fail {
+        Some(why) => format!("[Console]::Error.WriteLine('{}'); exit 1", why.replace('\'', "''")),
+        None => format!(
+            "for ($i = 1; $i -lt $args.Count; $i++) {{ if ($args[$i] -eq '--cert-file') {{ $c = $args[$i + 1] }} \
+             elseif ($args[$i] -eq '--key-file') {{ $k = $args[$i + 1] }} }}; \
+             Copy-Item -LiteralPath '{}' $c; Copy-Item -LiteralPath '{}' $k",
+            p("leaf.crt"),
+            p("leaf.key")
+        ),
+    };
+    let ps = dir.path().join("tailscale.ps1");
+    std::fs::write(
+        &ps,
+        format!(
+            "switch ($args[0]) {{ 'status' {{ Get-Content -Raw -LiteralPath '{}' }} 'cert' {{ {ps_cert} }} }}\n",
+            p("status.json")
+        ),
+    )
+    .unwrap();
+    let ps = ps.display().to_string();
+    ptyro_testkit::program::program(
+        dir.path(),
+        "tailscale",
+        BIN,
+        &script,
+        &["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", &ps],
+        &[],
     );
-    let bin = dir.path().join("tailscale");
-    std::fs::write(&bin, script).unwrap();
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     (dir, ca_cert.pem())
 }
 
@@ -1814,7 +1844,7 @@ async fn healthz_as(port: u16, ca_pem: &str, name: &str) -> Result<String, Strin
 
 fn serve_over_tailscale(w: &World, fake: &std::path::Path, extra: &[&str]) -> (Child, u16) {
     let port = free_port();
-    let path = format!("{}:{}", fake.display(), std::env::var("PATH").unwrap_or_default());
+    let path = ptyro_testkit::program::path_with(fake);
     let child =
         w.d.cmd()
             .args(["serve", "--access", "tailscale", "--port", &port.to_string()])
@@ -1865,11 +1895,12 @@ async fn serve_uses_tailscales_certificate_for_the_tailnet_name() {
     assert_eq!(rec["cert"], "tailscale", "{rec}");
     assert_eq!(rec["tailscale_name"], TAILNET);
     assert!(rec["cert_note"].is_null(), "{rec}");
+    let d = w.d.paths.data.join("serve/tls/tailscale");
+    assert_eq!(ptyro_pty::acl::readable_by_others(&d), None);
+    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let d = w.d.paths.data.join("serve/tls/tailscale");
-        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode(&d), 0o700);
+        assert_eq!(std::fs::metadata(&d).unwrap().permissions().mode() & 0o777, 0o700);
     }
     let _ = child.kill();
     let _ = child.wait();

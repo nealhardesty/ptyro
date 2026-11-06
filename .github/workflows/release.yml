@@ -59,10 +59,11 @@ jobs:
           - { os: ubuntu-24.04, target: check }
           - { os: ubuntu-24.04-arm, target: check }
           - { os: macos-15, target: check }
-          # The Windows client (WIN3), as CI's windows job checks it.
+          # Windows, as CI's windows job checks it (every test, natively: WIN13).
           - { os: windows-latest, target: test-windows }
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # Windows runs every test natively (WIN13), which takes longer.
+    timeout-minutes: 120
     defaults:
       run: { shell: bash }
     steps:

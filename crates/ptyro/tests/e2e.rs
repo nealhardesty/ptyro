@@ -263,7 +263,10 @@ async fn an_incompatible_protocol_major_is_rejected() {
     use futures::{SinkExt, StreamExt};
     use ptyro_protocol::{ClientInfo, ClientKind, Encoding, Version, decode, encode, framing};
     let d = TempDaemon::start(BIN).unwrap();
-    let stream = tokio::net::UnixStream::connect(&d.paths.socket).await.unwrap();
+    // The daemon's own socket (a named pipe on Windows), spoken to directly.
+    let mut opts = ptyro_client::ConnectOptions::new(d.paths.clone(), ClientKind::Test);
+    opts.autospawn = false;
+    let stream = ptyro_client::connect_raw(&opts).await.unwrap();
     let mut framed = tokio_util::codec::Framed::new(stream, framing());
     let hello = ClientMsg::Hello {
         proto: Version { major: 99, minor: 0 },
@@ -341,6 +344,8 @@ fn cli_autospawns_and_maps_errors_to_exit_codes() {
     assert_eq!(run(&["daemon", "status"]).status.code(), Some(8));
 }
 
+// Unix: SIGTERM and a process's signal test (tests/win5.rs stops a native daemon).
+#[cfg(unix)]
 #[test]
 fn sigterm_stops_the_daemon_and_its_sessions() {
     let mut d = TempDaemon::start(BIN).unwrap();

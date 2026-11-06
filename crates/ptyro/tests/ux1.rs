@@ -36,9 +36,16 @@ impl World {
             "[user]\n\tname = T\n\temail = t@example.com\n[init]\n\tdefaultBranch = main\n",
         )
         .unwrap();
-        let sh = h.join("fake-shell");
-        std::fs::write(&sh, format!("#!/bin/sh\n{shell}\n")).unwrap();
-        std::fs::set_permissions(&sh, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        // (Windows' sessions start PowerShell, whatever `SHELL` says; it waits as this does.)
+        let say = ptyro_testkit::program::say_then_wait("", 60);
+        let sh = ptyro_testkit::program::program(
+            &h,
+            "fake-shell",
+            BIN,
+            shell,
+            &say.iter().map(String::as_str).collect::<Vec<_>>(),
+            &[],
+        );
         let config = format!(
             "[attention]\nmin_work = \"1s\"\n[worktrees]\nfetch = false\n[agents.claude]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\n{extra}"
         );
@@ -89,6 +96,8 @@ async fn wait_for(
 }
 
 /// UX1.2: a session says what it was asked, what it answered, and a shell what it ran.
+// Unix: the shell is a sh script printing OSC 133 marks (Windows' sessions start PowerShell).
+#[cfg(unix)]
 #[tokio::test]
 async fn sessions_report_their_task_reply_and_shell_command() {
     let shell = r"printf '\033]133;A\007$ \033]133;B\007\033]133;C;cmdline=make test; echo ok\007'
@@ -895,6 +904,8 @@ async fn a_fresh_ptyro_opens_the_first_run_once() {
 
 /// UX1.3: with `[summaries]` on, a finished turn gets a line from the summarizer, which reads a
 /// redacted prompt on stdin; `Summarize` asks for one now.
+// Unix: the summarizer stand-in is a sh script that saves its stdin.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_finished_turn_is_summarized_in_a_line() {
     let dir = tempfile::tempdir().unwrap();
@@ -957,6 +968,7 @@ async fn quick(
     }
 }
 
+#[cfg(unix)] // only the quick terminal's test, which is Unix's
 async fn listed(c: &Client) -> Vec<SessionInfo> {
     match c.request(Request::List).await.unwrap() {
         Reply::Sessions { sessions } => sessions,
@@ -967,6 +979,8 @@ async fn listed(c: &Client) -> Vec<SessionInfo> {
 /// UX1.25: one quick terminal per worktree (only a worktree, UX3.4), reused; quiet but for a blocked
 /// agent in it; at its prompt it goes with its worktree, running something it holds it up; and
 /// `exit` forgets it.
+// Unix: it needs a job-control shell's foreground process group (`/bin/sh -i`).
+#[cfg(unix)]
 #[tokio::test]
 async fn a_quick_terminal_is_one_per_worktree_quiet_and_goes_with_it() {
     // An interactive shell with job control: a command runs as the foreground process group.
@@ -1160,21 +1174,24 @@ async fn ux1_done_when_from_a_fresh_machine_to_a_merged_and_cleaned_up_pr() {
     // Only `claude` installed (the pretend one), and a `gh`.
     let bin = h.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
-    let exe = |name: &str, body: String| {
-        std::fs::write(bin.join(name), format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(
-            bin.join(name),
-            std::os::unix::fs::PermissionsExt::from_mode(0o755),
-        )
-        .unwrap();
-    };
-    exe(
+    ptyro_testkit::program::program(
+        &bin,
         "claude",
-        format!(
+        BIN,
+        &format!(
             "PTYRO_FAKE_TOUR=1 PTYRO_FAKE_PASTE=1 exec \"{BIN}\" fake-agent --as claude \"$@\""
         ),
+        &[BIN, "fake-agent", "--as", "claude"],
+        &[("PTYRO_FAKE_TOUR", "1"), ("PTYRO_FAKE_PASTE", "1")],
     );
-    exe("gh", format!("exec \"{BIN}\" fake-gh \"$@\""));
+    ptyro_testkit::program::program(
+        &bin,
+        "gh",
+        BIN,
+        &format!("exec \"{BIN}\" fake-gh \"$@\""),
+        &[BIN, "fake-gh"],
+        &[],
+    );
     let gh = h.join("gh-state");
     std::fs::create_dir_all(&gh).unwrap();
     // myrepo, cloned from a "remote" (where the PR's branch is pushed).
@@ -1195,7 +1212,7 @@ async fn ux1_done_when_from_a_fresh_machine_to_a_merged_and_cleaned_up_pr() {
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-qm", "A greeting"]);
     git(&repo, &["push", "-q", "origin", "main"]);
-    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
+    let path = ptyro_testkit::program::path_with(&bin);
     let (hs, gs) = (h.to_string_lossy().into_owned(), gh.to_string_lossy().into_owned());
     let env = [
         ("HOME", hs.as_str()),

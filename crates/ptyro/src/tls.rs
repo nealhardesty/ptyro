@@ -458,13 +458,18 @@ mod tests {
 
     #[test]
     fn certificates_are_made_once_kept_private_and_renewed_when_needed() {
-        use std::os::unix::fs::PermissionsExt;
         let d = tempfile::tempdir().unwrap();
         let names = vec!["localhost".to_owned(), "127.0.0.1".to_owned()];
         let first = load_or_make(d.path(), &names, now(), None).unwrap();
         for k in ["ca-key.pem", "server-key.pem"] {
-            let mode = std::fs::metadata(d.path().join(k)).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o600, "{k}");
+            assert_eq!(ptyro_pty::acl::readable_by_others(&d.path().join(k)), None, "{k}");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode =
+                    std::fs::metadata(d.path().join(k)).unwrap().permissions().mode() & 0o777;
+                assert_eq!(mode, 0o600, "{k}");
+            }
         }
         assert_eq!(expires(d.path()), Some(now() + Duration::days(SERVER_DAYS)));
         let server = std::fs::read_to_string(d.path().join("server.pem")).unwrap();
