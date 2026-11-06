@@ -185,19 +185,49 @@ impl Client {
             };
         }
         if let Some(target) = &opts.remote {
-            let mut ssh = remote::ssh(target)?;
-            let stream = pipes(&mut ssh)?;
-            let stderr = ssh.stderr.take().map(remote::collect);
-            let via = format!("ssh://{}", remote::host_of(target));
-            return match Self::handshake(stream, opts, Some(via)).await {
-                Ok(mut c) => {
-                    c._ssh = Some(ssh);
-                    Ok(c)
-                }
-                Err(e) => Err(remote::explain(e, target, &mut ssh, stderr).await),
+            // A POSIX host runs ptyro through `sh`, a Windows one (WIN11) as it is. The command
+            // that worked for this host last time goes first; when ptyro didn't start and ssh
+            // itself got through, the host is asked which it is, and the other is tried.
+            let windows = remote::windows_hint(&opts.paths.state, target);
+            let (e, ssh_failed) = match Self::over_ssh(target, windows, opts).await {
+                Ok(c) => return Ok(c),
+                Err(failed) => failed,
             };
+            if ssh_failed || matches!(e, ClientError::Rejected(_)) {
+                return Err(e);
+            }
+            let is = remote::is_windows(target).await;
+            if is == windows {
+                return Err(e);
+            }
+            remote::set_windows_hint(&opts.paths.state, target, is);
+            return Self::over_ssh(target, is, opts).await.map_err(|(e, _)| e);
         }
         Self::handshake(connect_raw(opts).await?, opts, None).await
+    }
+
+    /// `ptyro proxy` on `target` over ssh, as a Windows host or a POSIX one runs it. A failure
+    /// says whether ssh itself failed (exit 255: it never reached a shell there).
+    async fn over_ssh(
+        target: &str,
+        windows: bool,
+        opts: &ConnectOptions,
+    ) -> Result<Self, (ClientError, bool)> {
+        let mut ssh = remote::ssh(target, windows).map_err(|e| (e, true))?;
+        let stream = pipes(&mut ssh).map_err(|e| (e, true))?;
+        let stderr = ssh.stderr.take().map(remote::collect);
+        let via = format!("ssh://{}", remote::host_of(target));
+        match Self::handshake(stream, opts, Some(via)).await {
+            Ok(mut c) => {
+                c._ssh = Some(ssh);
+                Ok(c)
+            }
+            Err(e) => {
+                let e = remote::explain(e, target, &mut ssh, stderr).await;
+                let ssh_failed = matches!(ssh.try_wait(), Ok(Some(s)) if s.code() == Some(255));
+                Err((e, ssh_failed))
+            }
+        }
     }
 
     /// Connect locally on behalf of a client that reached us another way (`ptyro serve`): `via`

@@ -9,8 +9,28 @@ use crate::DevicesCmd;
 use crate::cli::{Ctx, no_daemon, unexpected};
 
 /// Bridge stdin/stdout to this machine's daemon socket, starting the daemon if needed. The
-/// bytes are the protocol itself; nothing is interpreted here.
+/// bytes are the protocol itself; nothing is interpreted here. On a Windows computer whose
+/// daemon is WSL's (`client.default_remote = "wsl://…"`, WIN11), that is the daemon `ssh` there
+/// reaches: `wsl.exe` runs this same bridge inside the distro, on our stdin and stdout.
 pub async fn proxy(ctx: &Ctx) -> Result<i32, Error> {
+    // Windows only: inside the distro the same config would send it round again.
+    if cfg!(windows)
+        && let Some(distro) = ctx.remote.as_deref().and_then(ptyro_client::remote::wsl_distro)
+    {
+        let bin = std::env::var("PTYRO_REMOTE_BIN").unwrap_or_else(|_| "ptyro".into());
+        let status = tokio::process::Command::new(ptyro_client::remote::wsl_exe())
+            .args(ptyro_client::remote::wsl_args(distro, &bin).map_err(Error::from)?)
+            .env("WSL_UTF8", "1")
+            .status()
+            .await
+            .map_err(|e| {
+                Error::new(
+                    ErrorCode::DaemonUnavailable,
+                    format!("wsl.exe: {e} (is WSL installed?)"),
+                )
+            })?;
+        return Ok(status.code().unwrap_or(1));
+    }
     let opts =
         ptyro_client::ConnectOptions::new(ctx.paths.clone(), ptyro_protocol::ClientKind::Proxy);
     let mut sock = ptyro_client::connect_raw(&opts).await.map_err(Error::from)?;
@@ -53,7 +73,7 @@ pub fn tailscale_name() -> Option<String> {
 }
 
 fn tailscale_status() -> Option<serde_json::Value> {
-    let out = std::process::Command::new("tailscale").args(["status", "--json"]).output().ok()?;
+    let out = ptyro_core::os::tailscale().args(["status", "--json"]).output().ok()?;
     serde_json::from_slice(&out.stdout).ok()
 }
 
@@ -222,12 +242,23 @@ fn trust_check_script(fingerprint: &str) -> String {
     )
 }
 
-/// Inside WSL: whether Windows trusts ptyro's CA for this user, so its browsers open the web app
-/// without a warning. `None`: PowerShell didn't say.
-fn windows_trusts(w: &ptyro_core::wsl::Wsl, fingerprint: &str) -> Option<bool> {
-    let out = std::process::Command::new(w.windows_exe("powershell.exe"))
+/// Windows' PowerShell, from inside WSL (`w`) or on Windows itself (`None`, WIN11).
+fn powershell(w: Option<&ptyro_core::wsl::Wsl>) -> std::process::Command {
+    match w {
+        Some(w) => {
+            let mut c = std::process::Command::new(w.windows_exe("powershell.exe"));
+            c.current_dir(std::path::Path::new(&w.mount_root).join("c"));
+            c
+        }
+        None => std::process::Command::new("powershell.exe"),
+    }
+}
+
+/// Whether Windows trusts ptyro's CA for this user, so its browsers open the web app without a
+/// warning: asked from inside WSL (`w`) or on Windows itself. `None`: PowerShell didn't say.
+fn windows_trusts(w: Option<&ptyro_core::wsl::Wsl>, fingerprint: &str) -> Option<bool> {
+    let out = powershell(w)
         .args(["-NoProfile", "-NonInteractive", "-Command", &trust_check_script(fingerprint)])
-        .current_dir(std::path::Path::new(&w.mount_root).join("c"))
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .output()
@@ -241,19 +272,26 @@ fn windows_trusts(w: &ptyro_core::wsl::Wsl, fingerprint: &str) -> Option<bool> {
 
 /// Put ptyro's CA in Windows' trusted roots for this user (no administrator needed). Windows
 /// shows its own "install this certificate?" dialog, so nothing is trusted without a click there.
-fn trust_on_windows(w: &ptyro_core::wsl::Wsl, ca_pem: &str) -> Result<(), Error> {
-    let home = w.windows_home().ok_or_else(|| Error::internal("no Windows home (interop?)"))?;
-    let file = home.join("AppData/Local/Temp/ptyro-ca.crt");
+fn trust_on_windows(w: Option<&ptyro_core::wsl::Wsl>, ca_pem: &str) -> Result<(), Error> {
+    let file = match w {
+        Some(w) => w
+            .windows_home()
+            .ok_or_else(|| Error::internal("no Windows home (interop?)"))?
+            .join("AppData/Local/Temp/ptyro-ca.crt"),
+        None => std::env::temp_dir().join(format!("ptyro-ca-{}.crt", std::process::id())),
+    };
     std::fs::write(&file, ca_pem)
         .map_err(|e| Error::internal(format!("{}: {e}", file.display())))?;
-    let win = w.windows_path(&file).unwrap_or_default();
+    let win = match w {
+        Some(w) => w.windows_path(&file).unwrap_or_default(),
+        None => file.display().to_string(),
+    };
     let script = format!(
         "Import-Certificate -FilePath '{}' -CertStoreLocation Cert:\\CurrentUser\\Root | Out-Null",
         win.replace('\'', "''")
     );
-    let status = std::process::Command::new(w.windows_exe("powershell.exe"))
+    let status = powershell(w)
         .args(["-NoProfile", "-Command", &script])
-        .current_dir(std::path::Path::new(&w.mount_root).join("c"))
         .stdin(std::process::Stdio::null())
         .status();
     let _ = std::fs::remove_file(&file);
@@ -348,11 +386,14 @@ pub async fn pair(
     let link = format!("{base}/#pair={code}");
     // `--open` pairs the browser right here: the "only on this computer" note doesn't apply.
     let mut notes = if open { Vec::new() } else { notes };
-    // Inside WSL, Windows' browsers check certificates against Windows' own store: without ptyro's
-    // CA there, the page opens on a warning. Offer to put it there (Windows asks too).
+    // Windows' browsers check certificates against Windows' own store, from WSL and on Windows
+    // itself (WIN11): without ptyro's CA there, the page opens on a warning. Offer to put it
+    // there (Windows asks too).
+    let wsl = ptyro_core::wsl::detect().filter(|w| w.interop);
     if open
-        && let (Some(f), Some(w)) = (&ca, ptyro_core::wsl::detect().filter(|w| w.interop))
-        && windows_trusts(w, f) == Some(false)
+        && let Some(f) = &ca
+        && (wsl.is_some() || cfg!(windows))
+        && windows_trusts(wsl, f) == Some(false)
     {
         let pem = std::fs::read_to_string(crate::tls::dir(&ctx.paths.data).join("ca.pem"));
         let asked = !json
@@ -361,7 +402,7 @@ pub async fn pair(
                  warning first. Trust it for your Windows user? (Windows asks you to confirm)",
             );
         match pem {
-            Ok(pem) if asked => match trust_on_windows(w, &pem) {
+            Ok(pem) if asked => match trust_on_windows(wsl, &pem) {
                 Ok(()) => eprintln!("Windows trusts ptyro's certificate now."),
                 Err(e) => eprintln!("note: {e}"),
             },

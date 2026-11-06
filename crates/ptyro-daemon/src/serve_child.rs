@@ -170,6 +170,8 @@ impl Daemon {
         let child = std::process::Command::new(exe)
             .args(["serve", "--managed"])
             .envs(self.base_env.iter().map(|(k, v)| (k, v)))
+            // Who to outlive by no more than a moment (Windows has no parent to watch: WIN11).
+            .env("PTYRO_DAEMON_PID", std::process::id().to_string())
             .stdin(std::process::Stdio::null())
             .stdout(log.try_clone()?)
             .stderr(log)

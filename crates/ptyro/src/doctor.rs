@@ -153,6 +153,7 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Repor
     #[cfg(windows)]
     if ctx.local {
         conpty(&mut r);
+        windows_app(&mut r);
     }
     remote(ctx, &config, &mut r);
     scratchpad(ctx, &config, &mut r);
@@ -1024,6 +1025,67 @@ fn conpty(r: &mut Report) {
             ),
         );
     }
+}
+
+/// What makes ptyro an app Windows knows (WIN10): toasts under its own name whose click opens
+/// the session, and the logon task that starts the daemon.
+#[cfg(windows)]
+fn windows_app(r: &mut Report) {
+    let (named, opener) = crate::winapp::status();
+    let task = crate::service::installed();
+    for (name, level, text) in app_findings(named, opener.as_deref(), task) {
+        r.add("windows", name, level, text);
+    }
+}
+
+/// `windows_app`'s findings, from what Windows has: pure, so they're tested everywhere.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn app_findings(
+    named: bool,
+    opener: Option<&Path>,
+    task: bool,
+) -> Vec<(&'static str, Level, String)> {
+    let mut out = Vec::new();
+    let fix = "run any ptyro command on Windows and it registers itself again";
+    match (named, opener) {
+        (true, Some(o)) if o.is_file() => out.push((
+            "notifications",
+            Level::Ok,
+            format!(
+                "toasts come from \"ptyro\" ({}); clicking one opens its session ({})",
+                crate::winapp::aumid(),
+                o.display()
+            ),
+        )),
+        (_, Some(o)) => out.push((
+            "notifications",
+            Level::Warn,
+            format!("a toast's click runs {}, which isn't there: {fix}", o.display()),
+        )),
+        _ => out.push((
+            "notifications",
+            Level::Warn,
+            format!("ptyro isn't registered with Windows, so toasts can't open sessions: {fix}"),
+        )),
+    }
+    out.push(if task {
+        (
+            "login",
+            Level::Ok,
+            format!("the daemon starts when you log on (Task Scheduler {})", crate::service::TASK),
+        )
+    } else {
+        (
+            "login",
+            Level::Note,
+            "the daemon starts with your first ptyro command; to have it running from logon \
+             (agents keep working, the web app answers): More → Daemon → Install the service \
+             in the web app, the palette's daemon.service in the TUI, or \
+             `ptyro daemon install-service`"
+                .into(),
+        )
+    });
+    out
 }
 
 /// Inside Windows Terminal (`WT_SESSION`, from Windows or WSL): a key binding of its own that

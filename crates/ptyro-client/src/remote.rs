@@ -60,9 +60,25 @@ pub fn remote_command(bin: &str) -> String {
     )
 }
 
-/// Start ssh to `target` running `ptyro proxy`. `PTYRO_SSH` replaces the ssh command (e.g.
-/// `tailscale ssh`, or a test double); `PTYRO_REMOTE_BIN` names ptyro on the far side.
-pub fn ssh(target: &str) -> Result<Child, ClientError> {
+/// The command run on a Windows host (WIN11), whose ssh server hands it to `cmd.exe` (its
+/// default) or PowerShell: both run `ptyro proxy` as it is, from the `PATH` install.ps1 set, and
+/// neither has `sh`. A binary with a space is quoted the way `cmd.exe` takes it (PowerShell
+/// would need `&`, which `cmd.exe` refuses: give such a host a path without spaces).
+pub fn windows_command(bin: &str) -> String {
+    if bin.chars().all(|c| c.is_ascii_alphanumeric() || "\\/:._-".contains(c)) {
+        format!("{bin} proxy")
+    } else {
+        format!("\"{}\" proxy", bin.replace('"', ""))
+    }
+}
+
+/// Asked of a host when ptyro couldn't start there: `cmd.exe` prints `Windows_NT` for `%OS%`,
+/// PowerShell for `$env:OS`, and a POSIX shell neither. No locale changes it.
+pub const OS_PROBE: &str = "echo %OS% $env:OS";
+
+/// The ssh command (`PTYRO_SSH`, e.g. `tailscale ssh` or a test double; else `ssh`) to `target`,
+/// running `remote`.
+fn ssh_command(target: &str, remote: &str) -> Result<Command, ClientError> {
     let prog = std::env::var("PTYRO_SSH").unwrap_or_else(|_| "ssh".into());
     let mut words = prog.split_whitespace();
     let exe = words.next().unwrap_or("ssh").to_owned();
@@ -70,18 +86,69 @@ pub fn ssh(target: &str) -> Result<Child, ClientError> {
     if dest.is_empty() || dest.starts_with('-') {
         return Err(ClientError::Unavailable(format!("bad remote target {target:?}")));
     }
-    let bin = std::env::var("PTYRO_REMOTE_BIN").unwrap_or_else(|_| "ptyro".into());
     let mut cmd = Command::new(&exe);
     cmd.args(words)
         .args(["-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15"])
         .args(port.map(|p| vec!["-p".to_owned(), p.to_string()]).unwrap_or_default())
         .arg("--")
         .arg(&dest)
-        .arg(remote_command(&bin))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .arg(remote)
         .kill_on_drop(true);
+    Ok(cmd)
+}
+
+/// Whether `target` is a Windows host (asked with [`OS_PROBE`], within 15 s).
+pub async fn is_windows(target: &str) -> bool {
+    let Ok(mut cmd) = ssh_command(target, OS_PROBE) else { return false };
+    cmd.stdin(Stdio::null()).stderr(Stdio::null());
+    let out = tokio::time::timeout(Duration::from_secs(15), cmd.output()).await;
+    matches!(out, Ok(Ok(o)) if String::from_utf8_lossy(&o.stdout).contains("Windows_NT"))
+}
+
+/// Where the client remembers which ssh hosts are Windows, so it starts the right command
+/// there the first time: one `[user@]host[:port]` a line.
+fn hosts_file(state: &std::path::Path) -> std::path::PathBuf {
+    state.join("ssh-windows-hosts")
+}
+
+fn host_key(target: &str) -> String {
+    match parse(target) {
+        (dest, Some(p)) => format!("{dest}:{p}"),
+        (dest, None) => dest,
+    }
+}
+
+/// `target` was found to be a Windows host.
+pub fn windows_hint(state: &std::path::Path, target: &str) -> bool {
+    let key = host_key(target);
+    std::fs::read_to_string(hosts_file(state)).is_ok_and(|t| t.lines().any(|l| l == key))
+}
+
+/// Remember (or forget) that `target` is a Windows host. Best effort.
+pub fn set_windows_hint(state: &std::path::Path, target: &str, windows: bool) {
+    let key = host_key(target);
+    let file = hosts_file(state);
+    let mut hosts: Vec<String> = std::fs::read_to_string(&file)
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.is_empty() && *l != key)
+        .map(str::to_owned)
+        .collect();
+    if windows {
+        hosts.push(key);
+    }
+    let _ = std::fs::create_dir_all(state);
+    let _ = std::fs::write(&file, hosts.iter().map(|h| format!("{h}\n")).collect::<String>());
+}
+
+/// Start ssh to `target` running `ptyro proxy`: through `sh` on a POSIX host, as it is on a
+/// Windows one. `PTYRO_REMOTE_BIN` names ptyro on the far side.
+pub fn ssh(target: &str, windows: bool) -> Result<Child, ClientError> {
+    let bin = std::env::var("PTYRO_REMOTE_BIN").unwrap_or_else(|_| "ptyro".into());
+    let remote = if windows { windows_command(&bin) } else { remote_command(&bin) };
+    let mut cmd = ssh_command(target, &remote)?;
+    let exe = cmd.as_std().get_program().to_string_lossy().into_owned();
+    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     cmd.spawn().map_err(|e| ClientError::Unavailable(format!("cannot run {exe}: {e}")))
 }
 
@@ -350,6 +417,25 @@ mod tests {
         assert!(remote_command("/opt/my ptyro").ends_with(" '/opt/my ptyro'"));
     }
 
+    /// A Windows host runs `ptyro proxy` itself (cmd.exe and PowerShell alike; neither has
+    /// `sh`); which hosts are Windows is remembered by host and port.
+    #[test]
+    fn windows_hosts_get_a_command_cmd_and_powershell_run() {
+        assert_eq!(windows_command("ptyro"), "ptyro proxy");
+        assert_eq!(windows_command(r"C:\Tools\ptyro.exe"), r"C:\Tools\ptyro.exe proxy");
+        assert_eq!(windows_command(r"C:\My Tools\ptyro.exe"), r#""C:\My Tools\ptyro.exe" proxy"#);
+        assert!(!windows_command("ptyro").contains("sh -c"));
+        let d = tempfile::tempdir().unwrap();
+        assert!(!windows_hint(d.path(), "me@win:2222"));
+        set_windows_hint(d.path(), "ssh://me@win:2222", true);
+        set_windows_hint(d.path(), "other", true);
+        assert!(windows_hint(d.path(), "me@win:2222"));
+        assert!(!windows_hint(d.path(), "me@win"), "another port is another host");
+        set_windows_hint(d.path(), "me@win:2222", false);
+        assert!(!windows_hint(d.path(), "me@win:2222"));
+        assert!(windows_hint(d.path(), "other"));
+    }
+
     #[cfg(unix)] // runs sh
     #[test]
     fn remote_bin_cannot_escape_the_script() {
@@ -403,7 +489,7 @@ mod tests {
 
     #[test]
     fn option_like_targets_are_refused() {
-        assert!(ssh("-oProxyCommand=evil").is_err());
-        assert!(ssh("ssh://-oProxyCommand=evil").is_err());
+        assert!(ssh("-oProxyCommand=evil", false).is_err());
+        assert!(ssh("ssh://-oProxyCommand=evil", true).is_err());
     }
 }

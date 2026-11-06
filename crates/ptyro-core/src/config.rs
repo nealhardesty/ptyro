@@ -909,7 +909,7 @@ pub fn set_serve(path: &Path, on: bool, access: Option<&str>) -> Result<Vec<Stri
 /// This machine's name on the tailnet if Tailscale can issue a certificate for it, else why not,
 /// worded so the person can fix it.
 pub fn tailnet_cert_domain() -> Result<String, String> {
-    let out = std::process::Command::new("tailscale")
+    let out = crate::os::tailscale()
         .args(["status", "--json"])
         .output()
         .map_err(|_| "Tailscale isn't installed".to_owned())?;
@@ -940,7 +940,7 @@ pub fn tailnet_cert_domain_from(status: &serde_json::Value) -> Result<String, St
 
 /// Tailscale is installed and connected on this machine.
 fn tailscale_running() -> bool {
-    std::process::Command::new("tailscale")
+    crate::os::tailscale()
         .args(["status", "--json"])
         .output()
         .ok()

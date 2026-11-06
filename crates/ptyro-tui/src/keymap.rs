@@ -218,7 +218,10 @@ pub const ACTIONS: &[ActionSpec] = &[
         "app.uninstall",
         "Uninstall ptyro: shows what goes and what stays, then asks (in a split; it ends this TUI and the daemon)",
     ),
-    a("daemon.service", "Start the daemon at login (a systemd user unit or launchd agent)"),
+    a(
+        "daemon.service",
+        "Start the daemon at login (a systemd user unit, a launchd agent, or a Windows logon task)",
+    ),
     a("daemon.unservice", "Stop starting the daemon at login"),
     a("integrations", "The agent integrations: what's installed and what each launch gets"),
     a("integrations.install", "Install an agent's opt-in integration (Gemini, Antigravity)"),

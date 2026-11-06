@@ -41,7 +41,7 @@ const ACTIONS = {
   "daemon.stop": "Stop every session and the daemon",
   "backup.create": "Save ptyro's own state (config, database, scratchpad) to a private .tar.gz in your home directory on the computer",
   "uninstall.plan": "What uninstalling ptyro would remove and what stays, and the command to run on the computer (it can't be done from here)",
-  "daemon.service": "Start ptyro at login (a systemd or launchd service)",
+  "daemon.service": "Start ptyro at login (a systemd or launchd service, or a Windows logon task)",
   "daemon.unservice": "Remove the login service",
   "web.status": "The web app's server: whether it is up, its address, and who started it",
   "web.on": "Have the daemon run the web app's server, now and whenever it starts",
@@ -487,7 +487,7 @@ function daemonView(): HTMLElement {
         h("button", { title: tip("daemon.upgrade"), onclick: upgradeDaemon }, "Upgrade"),
         h("button", { title: tip("daemon.restart"), onclick: restartDaemon }, "Restart"),
         h("button", { class: "deny", title: tip("daemon.stop"), onclick: () => confirm("Stop the daemon?", "Every session is stopped and ptyro goes away, this app with it, until you run ptyro again on the computer.", "Stop it", async () => { if (await doHost("daemon.stop", {}, "Stopping…")) ui.toast("Stopped: run ptyro to start it again"); }) }, "Stop")),
-      section("Start at login", h("p", { class: "sub" }, "A systemd or launchd service starts the daemon (and this server) when you log in."),
+      section("Start at login", h("p", { class: "sub" }, "A systemd or launchd service, or on Windows a logon task, starts the daemon (and this server) when you log in."),
         bar(h("button", { title: tip("daemon.service"), onclick: async () => { const r = await doHost("service.install"); if (r) showNotes("Login service", r.notes ?? []); } }, "Install the service"),
           h("button", { title: tip("daemon.unservice"), onclick: async () => { const r = await doHost("service.uninstall"); if (r) showNotes("Login service", r.notes ?? []); } }, "Remove it"))),
 

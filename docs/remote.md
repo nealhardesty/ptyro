@@ -31,6 +31,11 @@ daemon's socket (starting it if needed). Frames are compressed (zstd) on this pa
 - **Where ptyro is.** ptyro must be installed there. It's found in `~/.cargo/bin`,
   `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin` or the remote `PATH`. Set
   `PTYRO_REMOTE_BIN` to name another path.
+- **A Windows host.** Windows' OpenSSH server runs commands in `cmd.exe` or PowerShell, which
+  have no `sh`. When the usual command fails, ptyro asks the host whether it is Windows, runs
+  `ptyro proxy` there as it is, and remembers the host for next time. There, `ptyro proxy`
+  reaches whichever daemon that computer uses, the one in WSL included (its
+  `client.default_remote`). A `PTYRO_REMOTE_BIN` with a space works with `cmd.exe`, the default.
 - **Another transport.** `PTYRO_SSH` replaces the ssh command, e.g. `PTYRO_SSH="tailscale ssh"`.
 - **Files stay local.** Commands that read files on *this* machine still read them here:
   `replay`/`export` (recordings), `config`, `init`, and paths you pass to `project add`. Use them

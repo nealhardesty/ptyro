@@ -57,11 +57,11 @@ function Uninstall-Ptyro {
         return
     }
     if ($args -contains '--dry-run') {
-        Write-Host "$mine doesn't run, so ptyro uninstall can't. Without --dry-run, this removes what this script installed: ptyro.exe, conpty.dll and OpenConsole.exe from $bin, and $bin from your PATH"
+        Write-Host "$mine doesn't run, so ptyro uninstall can't. Without --dry-run, this removes what this script installed: ptyro.exe, ptyrow.exe, conpty.dll and OpenConsole.exe from $bin, and $bin from your PATH"
         return
     }
     Write-Host "$mine doesn't run, so ptyro uninstall can't: removing what this script installed"
-    foreach ($file in 'ptyro.exe', 'conpty.dll', 'OpenConsole.exe') {
+    foreach ($file in 'ptyro.exe', 'ptyrow.exe', 'conpty.dll', 'OpenConsole.exe') {
         Remove-Item -LiteralPath (Join-Path $bin $file), (Join-Path $bin "$file.old") -Force -ErrorAction SilentlyContinue
     }
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -157,9 +157,10 @@ function Install-Ptyro {
         $bin = Join-Path $prefix 'bin'
         New-Item -ItemType Directory -Force -Path $bin | Out-Null
         $exe = Join-Path $bin 'ptyro.exe'
-        # ptyro.exe, and the packaged ConPTY its sessions run in (WIN0.5 g; older zips lack it).
+        # ptyro.exe, ptyrow.exe (starts it without a window: WIN10), and the packaged ConPTY its
+        # sessions run in (WIN0.5 g; older zips lack these).
         # A running file can't be overwritten, but it can be renamed out of the way.
-        foreach ($file in 'ptyro.exe', 'conpty.dll', 'OpenConsole.exe') {
+        foreach ($file in 'ptyro.exe', 'ptyrow.exe', 'conpty.dll', 'OpenConsole.exe') {
             $from = Join-Path $src $file
             if (-not (Test-Path -LiteralPath $from)) { continue }
             $to = Join-Path $bin $file

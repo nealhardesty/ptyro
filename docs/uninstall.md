@@ -56,7 +56,8 @@ It stops the daemon and every session, then removes:
 - **its worktrees**, through `git worktree remove` so the repository forgets them (the branches
   stay). Each is checked with git, not the daemon's last look: uncommitted changes are listed and
   **will be lost**; commits not pushed anywhere are noted (they are on the branch, which stays);
-- **the login service** (a launchd agent or systemd user unit) and the **agent integrations**
+- **the login service** (a launchd agent, systemd user unit, or Windows logon task), ptyro's
+  **registration with Windows** (its toasts' name and icon, its `ptyro:` link handler) and the **agent integrations**
   ptyro installed (`integrations install gemini|antigravity`);
 - **the lines ptyro added to your shell's rc files**: only the exact lines `ptyro init` and the
   mend list write (`source <(ptyro completions zsh)`, `eval "$(ptyro shell-init zsh)"`, their

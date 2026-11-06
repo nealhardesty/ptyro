@@ -51,6 +51,11 @@ pub fn daemon_start(foreground: bool, spawned: bool, serve: bool) -> i32 {
     }
     #[cfg(not(unix))]
     let _ = spawned;
+    // Windows: ptyro is an app Windows knows (its toasts' name and icon, its links) (WIN10).
+    #[cfg(windows)]
+    if let Ok(p) = Paths::from_env() {
+        crate::winapp::ensure(&p.data);
+    }
     match ptyro_daemon::run(ptyro_daemon::Options { foreground }) {
         Ok(()) => 0,
         Err(e) => {
@@ -145,6 +150,11 @@ async fn dispatch(
                 | Cmd::Proxy
         )
     );
+    // Windows: so the toasts of a daemon in WSL say "ptyro" and open their session (WIN10). Not
+    // on the way out.
+    if !matches!(cmd, Some(Cmd::Uninstall { .. })) {
+        crate::winapp::ensure(&paths.data);
+    }
     // Uninstall is about this computer: a saved or given remote never sends it to another
     // machine's daemon, which it would stop with every session.
     let remote = if matches!(cmd, Some(Cmd::Uninstall { .. })) {
@@ -600,7 +610,9 @@ async fn dispatch(
             c.request(Request::Report { addr, state, kind, msg, progress }).await?;
             Ok(0)
         }
-        Some(Cmd::Hook { .. } | Cmd::StatuslineRelay) => unreachable!("handled in main"),
+        Some(Cmd::Hook { .. } | Cmd::StatuslineRelay | Cmd::OpenUrl { .. }) => {
+            unreachable!("handled in main")
+        }
         Some(Cmd::ShellInit { shell }) => {
             print!("{}", shell_init(shell));
             Ok(0)

@@ -174,7 +174,20 @@ Explorer). Sessions get Windows Terminal's own colours, and Shift+Enter works wi
 Settings: the screen's own (the look, keys, themes, the clipboard) are `ptyro.exe`'s; everything
 else is read by the daemon in WSL, so the settings panel marks those "daemon's" and opens the
 daemon's file to change them (`ptyro config set` of one says where it lives). Commands a daemon
-host runs (`install-service`, `tour`) say to run them inside WSL.
+host runs (`tour`) say to run them inside WSL.
+
+**Start at login.** `ptyro daemon install-service` (the TUI's palette, `daemon.service`; the web
+app's More → Daemon → Install the service) adds a logon task to Windows' Task Scheduler that
+starts WSL and its ptyro daemon when you log on, so your agents and the web app are there before
+you open a terminal. It runs as you, needs no administrator, and opens no window
+(`ptyrow.exe`, installed beside `ptyro.exe`, starts it hidden). `ptyro daemon uninstall-service`
+removes it.
+
+**Notifications.** The daemon's desktop notifications are Windows toasts from "ptyro", with its
+icon. Clicking one opens that session in a new Windows Terminal tab; a permission prompt's toast
+has Approve and Deny buttons when [approve links](#agent-status-and-notifications) are on. `ptyro.exe` registers
+itself with Windows the first time it runs (in your user's registry, no administrator), and
+`ptyro uninstall` takes that away again.
 
 **A daemon on Windows itself (preview).** ptyro can also run its daemon natively, with sessions
 in Windows' pseudoconsoles (ConPTY) and your repos on NTFS. It is still being built (shells,
@@ -193,8 +206,16 @@ they're written for: a `.ps1` file in PowerShell, a `.sh` file (and Conductor's 
 tools' imported scripts) in Git Bash, the rest in PowerShell; `[scripts] shell` in
 `.ptyro.toml` (or the settings panel) picks one for the whole project. A bash script checked out
 with Windows line endings is a `doctor` finding, and `ptyro project line-endings` fixes it. The daemon listens on a named pipe only
-you can open. Not there yet: a live `daemon upgrade` (stop and start it; agents' conversations
+you can open. `ptyro daemon install-service` then starts this native daemon at logon instead of
+WSL's, and `ptyro serve` (the web app, with its own certificate, pairing and Tailscale's) runs
+here too. Not there yet: a live `daemon upgrade` (stop and start it; agents' conversations
 can be resumed) and the foreground program's name and directory.
+
+**Reaching a Windows computer from elsewhere.** `ptyro --remote me@winbox` works over Windows'
+own OpenSSH server (Settings → System → Optional features → OpenSSH Server): ptyro notices the
+host is Windows and runs `ptyro proxy` there as it is, reaching whichever daemon that computer
+uses, WSL's included. `ptyro machine add` links it into [another machine's view](#your-phone-and-other-machines)
+either over ssh or with a code from its `ptyro machine pair`.
 
 ## Quick start
 

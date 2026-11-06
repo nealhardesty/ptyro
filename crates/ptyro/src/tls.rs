@@ -317,7 +317,7 @@ pub fn load_tailnet(dir: &Path, name: &str, now: OffsetDateTime) -> Option<Tailn
 pub fn fetch_tailnet(dir: &Path, name: &str) -> Result<(), String> {
     let d = tailnet_dir(dir);
     ptyro_core::os::private_dir(&d).map_err(|e| format!("{}: {e}", d.display()))?;
-    let mut child = std::process::Command::new("tailscale")
+    let mut child = ptyro_core::os::tailscale()
         .arg("cert")
         .arg("--cert-file")
         .arg(d.join(format!("{name}.crt")))
@@ -391,12 +391,18 @@ pub(crate) fn fingerprint(der: &[u8]) -> String {
 }
 
 fn write_private(path: &Path, text: &str) -> Result<(), Error> {
-    // Keys: 0600 from the first byte, replaced whole, never left half-written.
-    crate::config::write_atomic(path, text, 0o600)
+    // Keys: 0600 from the first byte, replaced whole, never left half-written; on Windows
+    // (WIN11) narrowed to the user, SYSTEM and Administrators when the folder lets others read.
+    crate::config::write_private(path, text)
 }
 
-/// This machine's name (`uname -n`), without a domain.
+/// This machine's name (`uname -n`; Windows' `COMPUTERNAME`, WIN11), without a domain.
 pub fn host_name() -> String {
+    if cfg!(windows)
+        && let Some(n) = std::env::var("COMPUTERNAME").ok().filter(|n| !n.is_empty())
+    {
+        return n;
+    }
     std::process::Command::new("uname")
         .arg("-n")
         .output()

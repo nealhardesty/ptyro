@@ -166,7 +166,8 @@ try {
         }
         exit 1
     }
-    Say "built $exe ($ran), with conpty.dll and OpenConsole.exe beside it"
+    if (-not (Test-Path (Join-Path $out 'ptyrow.exe'))) { Fail "the build made no ptyrow.exe beside $exe" }
+    Say "built $exe ($ran), with ptyrow.exe, conpty.dll and OpenConsole.exe beside it"
     Say "run it: & '$exe'   (the Makefile's other targets run from Git Bash: they're POSIX shell)"
 } finally {
     Pop-Location
