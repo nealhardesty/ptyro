@@ -7018,6 +7018,34 @@ Windows) wasn't needed to get the list below: compile errors are the same either
   `echo %OS% $env:OS` with `Windows_NT` in their output, a POSIX shell with neither, whatever the
   locale (the "not recognized" message is localized). [S, Microsoft's OpenSSH docs; the probe's
   answers V in cmd and PowerShell 5.1 on Windows 11]
+- **What running every test on Windows found (WIN13)** [V, 2026-11-06, CI's `windows-latest`
+  and Windows 11 build 26200]:
+  - **Paths as patterns see `/`.** A tool's file comes as `src\api.rs` on Windows, and leases,
+    guards, change-set fences and a profile's `match.paths` are written with `/`: none of them
+    matched until both sides were spelled with `/` (`os::slash_path`).
+  - **An address typed as `C:\…` is a path** (`os::looks_like_path`): `--project C:\src\app`
+    was looked up as a project's name.
+  - **Git Bash reports its folder as `/c/Users/…`** (OSC 7); the native daemon reads it as
+    `C:\Users\…` (`os::reported_folder`).
+  - **`std::fs::canonicalize` gives `\\?\C:\…`,** which git can't read a config at, nor an
+    agent a folder: ptyro's own `os::canonicalize` drops the prefix, product code and tests.
+  - **`curl -o /dev/null` fails on Windows after a good answer**: `NUL` (`os::DEV_NULL`).
+  - **MSYS programs expand an unquoted `{…}` themselves**, and Rust leaves an argument without
+    a space unquoted: compact JSON (`{"type":"x"}`) reached Git Bash's `sh` as an empty
+    argument (reproduced with Git for Windows 2.x's `sh.exe`). ptyro quotes every argument of a
+    program it chains on Windows (`os::quoted_args`).
+  - **A console's input handle is signalled for every record** (focus, window size, a key let
+    go), not only for a character: `input_ready` takes the others off and waits on.
+  - **Windows keeps a file in use for a moment** after the process that had it exits (os error
+    32): removing a folder right after the daemon stops is tried again for a few seconds.
+  - **A link to a folder is removed with `remove_dir`** there, not `remove_file`.
+  - **A cooked console's line editor** takes ESC as "clear the line": a bracketed paste typed
+    into a program reading lines in cooked mode loses its markers and new lines. Programs that
+    ask for bracketed paste read raw VT input (real agents do; so does the fake agent then).
+  - **`daemon stop` without `--force` refuses while sessions run**: the testkit's stop on Windows
+    (no SIGTERM there) is `--force`, else the kill after it lost unsaved state.
+  - **A daemon's health** reads the working set (`K32GetProcessMemoryInfo`) and the handle count
+    (`GetProcessHandleCount`): `ps` and `/proc` aren't there.
 - **A named pipe is never `stat`ed.** Asking for a pipe's attributes (`Path::exists` on
   `\\.\pipe\…`) opens it, which can take an instance a client is waiting for; a server the
   daemon started watches the daemon's process instead (`PTYRO_DAEMON_PID`, `WaitForSingleObject`).

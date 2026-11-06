@@ -210,7 +210,9 @@ impl Fake {
 
     fn hook_out(&self, event: &str, payload: Value) -> Option<Value> {
         let (cmds, payload) = self.hook_prep(event, payload);
-        run_hooks(&cmds, &payload)
+        // A Stop may run the session's verified-done check first, as ptyro's relay allows.
+        let limit = if event == "Stop" { Duration::from_secs(900) } else { HOOK_TIMEOUT };
+        run_hooks(&cmds, &payload, limit)
     }
 
     /// The hook commands for `event` and the payload they get.
@@ -398,7 +400,7 @@ impl Fake {
                     "claude" => {
                         let (cmds, payload) = f.hook_prep("PermissionRequest", tool.clone());
                         std::thread::spawn(move || {
-                            let _ = decided_tx.send(run_hooks(&cmds, &payload));
+                            let _ = decided_tx.send(run_hooks(&cmds, &payload, HELD_TIMEOUT));
                         });
                     }
                     _ => f.hook("PermissionRequest", tool.clone()),
@@ -546,25 +548,54 @@ fn read_line_raw(out: &mut std::io::Stdout, line: &mut String) -> usize {
 
 /// Read one key in raw mode (the permission dialog).
 /// Run hook commands with `payload` on stdin; the last JSON line any of them prints.
-fn run_hooks(cmds: &[String], payload: &Value) -> Option<Value> {
+/// How long a hook may run before it is killed and the agent goes on, as real agents do
+/// (Codex's `timeout`, Claude's): a shell that hangs as it starts (seen once on a loaded
+/// Windows runner, WIN13) costs a turn's hooks, not the session.
+const HOOK_TIMEOUT: Duration = Duration::from_secs(30);
+/// A `PermissionRequest` hook ptyro holds for a phone's answer (the relay's own bound).
+const HELD_TIMEOUT: Duration = Duration::from_secs(3600);
+
+fn run_hooks(cmds: &[String], payload: &Value, limit: Duration) -> Option<Value> {
     let mut answer = None;
     for c in cmds {
-        if let Ok(mut child) = agent_shell(c)
+        let Ok(mut child) = agent_shell(c)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .spawn()
-        {
-            if let Some(mut stdin) = child.stdin.take() {
-                let _ = stdin.write_all(payload.to_string().as_bytes());
-            }
-            if let Ok(out) = child.wait_with_output() {
-                let text = String::from_utf8_lossy(&out.stdout);
-                if let Some(v) =
-                    text.lines().rev().find_map(|l| serde_json::from_str::<Value>(l.trim()).ok())
-                {
-                    answer = Some(v);
+        else {
+            continue;
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(payload.to_string().as_bytes());
+        }
+        // Its output on a thread, so a hook past its time can be killed.
+        let (tx, rx) = std::sync::mpsc::channel();
+        if let Some(mut stdout) = child.stdout.take() {
+            std::thread::spawn(move || {
+                let mut text = String::new();
+                let _ = stdout.read_to_string(&mut text);
+                let _ = tx.send(text);
+            });
+        }
+        let deadline = std::time::Instant::now() + limit;
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break;
                 }
             }
+        }
+        let text = rx.recv_timeout(Duration::from_secs(2)).unwrap_or_default();
+        if let Some(v) =
+            text.lines().rev().find_map(|l| serde_json::from_str::<Value>(l.trim()).ok())
+        {
+            answer = Some(v);
         }
     }
     answer
