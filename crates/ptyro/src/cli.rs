@@ -652,13 +652,19 @@ async fn upgrade(ctx: &Ctx, binary: Option<std::path::PathBuf>, json: bool) -> R
             );
         } else if status.rolled_back {
             eprintln!(
-                "the new binary refused the handoff, so the daemon rolled back to {} (sessions kept); see `ptyro daemon logs`",
+                "the upgrade was called off, so the daemon {} carries on with every session; see `ptyro daemon logs`, or `ptyro daemon restart --hibernate` to restart it instead (agents resume their conversations; shells and commands start again)",
                 status.version
             );
-        } else {
+        } else if status.pid == before.pid {
             eprintln!(
                 "upgraded in {ms} ms: daemon {} (pid {}, unchanged), {} session(s)",
                 status.version, status.pid, status.sessions
+            );
+        } else {
+            // Windows: the new daemon is another process; every session's program is the same.
+            eprintln!(
+                "upgraded in {ms} ms: daemon {} (pid {}, was {}), {} session(s) handed over",
+                status.version, status.pid, before.pid, status.sessions
             );
         }
         return Ok(if status.rolled_back { 1 } else { 0 });

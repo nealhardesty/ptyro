@@ -488,6 +488,58 @@ image is used to re-exec the *old* binary (kept at `state/daemon.prev`).
   - Something typed while the old image is between its reply and the exec is lost with that
     connection; the client sees the error.
 
+**[built WIN9, 2026-11-05] On Windows.** There is no `execve`, so the next daemon is another
+process: the daemon's pid changes; every session's program, console, job, screen and status carry
+on (WIN0.3 found a pseudoconsole outlives its creator when another process holds its handles; the
+owner chose this over restart-and-resume, WIN0.5 d). `ptyro daemon upgrade [--binary P]`:
+- **Which binary.** The one the daemon was started from, unless `--binary` names another. An
+  install can't overwrite a running `ptyro.exe`, so `install.ps1` renames it to `ptyro.exe.old`
+  and puts the new one at that path. The same `handoff-version` check refuses an image version the
+  new binary can't read.
+- **Quiescing** as on Unix (goodbye, the managed `ptyro serve` stopped, the store flushed), with
+  one difference: each pipe is read on a thread of its own (`ptyro_pty::winread`), because a read
+  on an anonymous pipe blocks a thread and a read that's under way when its future is dropped
+  carries on, landing in a buffer the next owner never sees (WIN0.3's lost chunk). A pause asks
+  the thread to stop and cancels its read (`CancelSynchronousIo`, asked again until the thread
+  says it's idle: a read started just after a cancel isn't cancelled by it); what it read and
+  nobody took goes into the emulator (or a structured agent's driver buffer) before the image is
+  made. A reader that doesn't stop within 3 s isn't counted as parked, and the handover is called
+  off rather than lose output.
+- **Structured agents** get plain anonymous pipes on Windows (`ptyro_pty::anon_pipe`), not std's
+  overlapped ones, which a blocking read can't drive: their output goes through the same reader.
+- **The handover.** The old daemon starts `P daemon start --spawned|--foreground` detached, with
+  `PTYRO_HANDOFF_IMAGE` (a file in `state/`) and `PTYRO_HANDOFF_PARENT` (its own pid). It copies
+  every live session's handles into the new process (`DuplicateHandle`; nothing is made
+  inheritable, so no other child can take one): a console session's two pipe ends, the
+  `HPCON`'s three, the program and its job (`ptyro_pty::Handles`); a structured agent's three
+  pipes, process and job. The image records the values the new process has (`win_handles`,
+  `structured.fds`; left out when empty, so a Unix image is unchanged), and is written whole
+  (temporary name, then a rename). The new daemon waits for it, adopts every session (its
+  `HPCON` rebuilt from the three handles on the process heap; each handle checked to be open
+  there, and a pipe where one is expected, before it's owned), and writes `handoff-<pid>.ack`.
+  The old daemon then exits without closing anything.
+- **The pipe and the lock.** The new daemon makes its pipe instances beside the old daemon's
+  (`FILE_FLAG_FIRST_PIPE_INSTANCE` off), so the name never goes away: a client that finds no pipe
+  starts a daemon of its own, which would have raced for the lock. Connections the old daemon
+  receives meanwhile are dropped and retried. The new daemon takes `daemon.lock` once the old
+  process is gone (a byte-range lock is released when its holder exits; retried up to 10 s).
+- **Exits.** An adopted program's exit code comes from its process handle, which the new daemon
+  holds; there is no reaping.
+- **A handover that fails** (the new binary refuses the image or exits, or doesn't take over
+  within 30 s, or a reader didn't stop): the new process is ended, its copies with it, and the old
+  daemon carries on with every session. The status says so as a rollback (`generation` goes up,
+  `rolled_back`), and a finding where people look says so with the fix first:
+  `ptyro daemon restart --hibernate` (agents resume their conversations; shells and running
+  commands start again). The TUI runs it, and the web's Health page offers "Restart the daemon",
+  not another try at the same upgrade.
+- **Seen on Windows 11** (2026-11-05, a release build, the packaged ConPTY): a ticker and a
+  program waiting for input went through two upgrades in 572 ms and 537 ms; each program kept its
+  pid, the ticker never stopped, typing reached the waiting one and its exit code (4) came back,
+  the old daemon was gone, a second daemon was refused the lock, and a session started after
+  worked. Upgrading to a ptyro from before WIN9 (it can't take a handover, finds the lock held
+  and exits) left the daemon carrying on, said as a rollback. `tests/win9.rs` runs these in CI.
+  [V]
+
 ---
 
 ## 5. Terminal layer: PTYs, emulation, input, queries
@@ -6835,6 +6887,15 @@ Windows) wasn't needed to get the list below: compile errors are the same either
   line, Codex, Gemini and agy get double quotes (Git Bash and cmd). Claude's exec form (`args`,
   no shell, v2.1.139) was passed over: reports say plugin `hooks.json` ignores it, and that on
   Windows with Git Bash it still goes through bash [U]. [V for the three shells]
+- **A detached child inherits the parent's standard handles.** std starts a Windows child with
+  `bInheritHandles`, so it gets every inheritable handle, the parent's stdout among them, whatever
+  its own `Stdio` says: a daemon the CLI started held the pipe a script (or WSL's interop) read
+  the CLI's output from, and the reader waited for its end for as long as the daemon ran (seen:
+  `ptyro doctor` from WSL hung until its timeout when it started the daemon). Before starting
+  anything detached, ptyro clears the inherit flag on its own standard handles
+  (`ptyro_pty::std_handles_private`); a child given them on purpose still gets std's copies.
+  [V for the hang; the fix rests on Windows' documented inherit flag: Smart App Control refused
+  the build that has it, 2026-11-05]
 - **ConPTY holds a lone ESC.** Raw input reaches ConPTY as VT, where ESC may begin a sequence:
   a lone one (`send --raw '\e'`, an answer's "deny", a stop key) waited for the rest and never
   arrived (a Codex panel stayed open, 2026-11-04). For a program in win32-input-mode, a lone ESC

@@ -180,6 +180,8 @@ pub async fn web_start(ctx: &Ctx) -> Result<serde_json::Value, Error> {
         .stdin(std::process::Stdio::null())
         .stdout(log.try_clone().map_err(|e| Error::internal(e.to_string()))?)
         .stderr(log);
+    #[cfg(windows)]
+    ptyro_pty::std_handles_private();
     ptyro_core::os::detach(&mut serve)
         .spawn()
         .map_err(|e| fail("the tour's server", &dir, &exe, &home, e.to_string()))?;

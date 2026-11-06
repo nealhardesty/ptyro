@@ -30,6 +30,8 @@ pub mod winproc;
 pub use unix::*;
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+pub mod winread;
 pub use ports::listening_ports;
 pub use probe::{
     cwd_of, exec_env_var, local_datetime, local_time_hm, local_time_hm_at, parent_pid, process_name,

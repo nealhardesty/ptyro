@@ -41,6 +41,9 @@ fn detached(args: &[&str]) -> Result<(), Error> {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
+    // Windows: or it holds the pipe whoever reads our output waits on, for as long as it runs.
+    #[cfg(windows)]
+    ptyro_pty::std_handles_private();
     ptyro_core::os::detach(&mut cmd)
         .spawn()
         .map(|_| ())

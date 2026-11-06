@@ -75,7 +75,7 @@ test-windows: ## On Windows itself (CI's windows job): the client crates' and pt
 	$(CARGO) build -p ptyro --bins
 	for d in $(WINDOWS_CONPTY_INTO); do INTO=$$d sh scripts/conpty.sh || exit 1; done
 	PTYRO_TEST_PACKAGED_CONPTY=1 $(CARGO) test --no-fail-fast $(WINDOWS_TESTED)
-	PTYRO_TEST_PACKAGED_CONPTY=1 $(CARGO) test --no-fail-fast -p ptyro --test win5 --test win6
+	PTYRO_TEST_PACKAGED_CONPTY=1 $(CARGO) test --no-fail-fast -p ptyro --test win5 --test win6 --test win9
 	$(CARGO) check -p ptyro-agents -p ptyro-git -p ptyro-daemon -p ptyro-testkit --all-targets
 
 fmt: ## Format all code
