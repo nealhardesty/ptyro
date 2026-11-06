@@ -7,6 +7,8 @@ use std::time::Duration;
 
 use ptyro_testkit::TempDaemon;
 
+/// `work/app` as `--json` spells it (`work\\\\app` on Windows).
+const WORK_APP: &str = if cfg!(windows) { "work\\\\app" } else { "work/app" };
 const BIN: &str = env!("CARGO_BIN_EXE_ptyro");
 
 const MINE: &str = "# my settings\n[ui]\nmouse = false # I use my terminal's selection\n\n[daemon]\nscrollback_lines = 5000\n";
@@ -36,7 +38,7 @@ fn text(o: &Output) -> String {
 #[tokio::test]
 async fn the_panel_changes_a_switch_a_choice_a_number_and_a_list_and_the_daemon_uses_them() {
     let home = tempfile::Builder::new().prefix("ptyro-cfg1-").tempdir().unwrap();
-    let h = home.path().canonicalize().unwrap();
+    let h = ptyro_core::os::canonicalize(home.path()).unwrap();
     let hs = h.to_string_lossy().into_owned();
     // A repository under a folder discovery doesn't look in yet.
     let work = h.join("work/app");
@@ -47,7 +49,7 @@ async fn the_panel_changes_a_switch_a_choice_a_number_and_a_list_and_the_daemon_
         let o = d.cmd().args(["project", "discover", "--refresh", "--json"]).output().unwrap();
         String::from_utf8_lossy(&o.stdout).into_owned()
     };
-    assert!(!discover(&d).contains("work/app"), "not found under the default folders");
+    assert!(!discover(&d).contains(WORK_APP), "not found under the default folders");
 
     let mut s = ptyro_testkit::headless::Script::new(vec![BIN.to_owned()])
         .size(120, 36)
@@ -86,7 +88,7 @@ async fn the_panel_changes_a_switch_a_choice_a_number_and_a_list_and_the_daemon_
     assert!(file.contains("[daemon]\nscrollback_lines = 5000\n"), "{file}");
     // The running daemon reloaded the file and uses the new folders.
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
-    while !discover(&d).contains("work/app") {
+    while !discover(&d).contains(WORK_APP) {
         assert!(
             std::time::Instant::now() < deadline,
             "the daemon never used the new discover.roots"
@@ -100,7 +102,7 @@ async fn the_panel_changes_a_switch_a_choice_a_number_and_a_list_and_the_daemon_
 #[tokio::test]
 async fn config_get_set_unset_list_add_and_rm_on_the_command_line() {
     let home = tempfile::Builder::new().prefix("ptyro-cfg1-").tempdir().unwrap();
-    let h = home.path().canonicalize().unwrap();
+    let h = ptyro_core::os::canonicalize(home.path()).unwrap();
     let hs = h.to_string_lossy().into_owned();
     let repo = h.join("repo");
     std::fs::create_dir_all(&repo).unwrap();

@@ -21,7 +21,7 @@ struct World {
 impl World {
     fn new() -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-gates-").tempdir().unwrap();
-        let h = home.path().canonicalize().unwrap();
+        let h = ptyro_core::os::canonicalize(home.path()).unwrap();
         std::fs::write(
             h.join(".gitconfig"),
             "[user]\n\tname = Owner\n\temail = owner@example.com\n[init]\n\tdefaultBranch = main\n",
@@ -30,14 +30,14 @@ impl World {
         let hs = h.to_string_lossy().into_owned();
         let env = [("HOME", hs.as_str()), ("GIT_CONFIG_NOSYSTEM", "1"), ("SHELL", "/bin/sh")];
         let config = format!(
-            "[attention]\nmin_work = \"1s\"\n[worktrees]\nfetch = false\n[agents.claude]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\n"
+            "[attention]\nmin_work = \"1s\"\n[worktrees]\nfetch = false\n[agents.claude]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"claude\"]\n"
         );
         let d = TempDaemon::start_with(BIN, &env, Some(&config)).unwrap();
         Self { home, d }
     }
 
     fn home(&self) -> PathBuf {
-        self.home.path().canonicalize().unwrap()
+        ptyro_core::os::canonicalize(self.home.path()).unwrap()
     }
 
     fn cli(&self, args: &[&str]) -> Output {

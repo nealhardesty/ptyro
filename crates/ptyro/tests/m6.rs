@@ -29,7 +29,7 @@ impl World {
     /// `worktrees`: more keys for its `[worktrees]` table.
     fn with_worktrees(worktrees: &str, extra: &str) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-m6-").tempdir().unwrap();
-        let h = home.path().canonicalize().unwrap();
+        let h = ptyro_core::os::canonicalize(home.path()).unwrap();
         std::fs::write(
             h.join(".gitconfig"),
             "[user]\n\tname = Owner\n\temail = owner@example.com\n[init]\n\tdefaultBranch = main\n",
@@ -37,14 +37,17 @@ impl World {
         .unwrap();
         // A fake `gh` on the daemon's PATH.
         let bin = h.join("fakebin");
-        std::fs::create_dir_all(&bin).unwrap();
-        std::fs::write(bin.join("gh"), format!("#!/bin/sh\nexec \"{BIN}\" fake-gh \"$@\"\n"))
-            .unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(bin.join("gh"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        ptyro_testkit::program::program(
+            &bin,
+            "gh",
+            BIN,
+            &format!("exec \"{BIN}\" fake-gh \"$@\""),
+            &[BIN, "fake-gh"],
+            &[],
+        );
         let gh = h.join("gh-state");
         std::fs::create_dir_all(&gh).unwrap();
-        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
+        let path = ptyro_testkit::program::path_with(&bin);
         let (hs, gs) = (h.to_string_lossy().into_owned(), gh.to_string_lossy().into_owned());
         let env = [
             ("HOME", hs.as_str()),
@@ -55,14 +58,14 @@ impl World {
             ("PTYRO_TEST_FAST_POLL", "1"),
         ];
         let config = format!(
-            "[attention]\nmin_work = \"1s\"\n[worktrees]\nfetch = false\n{worktrees}[agents.claude]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\n{extra}"
+            "[attention]\nmin_work = \"1s\"\n[worktrees]\nfetch = false\n{worktrees}[agents.claude]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"claude\"]\n{extra}"
         );
         let d = TempDaemon::start_with(BIN, &env, Some(&config)).unwrap();
         Self { home, gh, d }
     }
 
     fn home(&self) -> PathBuf {
-        self.home.path().canonicalize().unwrap()
+        ptyro_core::os::canonicalize(self.home.path()).unwrap()
     }
 
     fn cli(&self, args: &[&str]) -> Output {
@@ -393,8 +396,9 @@ fn pull_requests_and_the_pr_event_loop() {
         "test result: FAILED. assertion `left == right` in parse_ok\n",
     )
     .unwrap();
-    let screen = w.wait_screen("fixer", "CI on PR #7 is failing");
-    assert!(screen.contains("assertion `left == right` in parse_ok"), "{screen}");
+    // (The fake takes each line of a message as it comes: wait for the log's, not the header's.)
+    w.wait_screen("fixer", "CI on PR #7 is failing");
+    let screen = w.wait_screen("fixer", "assertion `left == right` in parse_ok");
     assert!(!screen.contains("old comment"), "the baseline isn't delivered");
     // `pr fix` sends the same on demand; `pr checks` exits 1 while one fails.
     assert_eq!(w.cli(&["pr", "checks", "svc/fix"]).status.code(), Some(1));

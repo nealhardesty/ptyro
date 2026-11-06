@@ -28,7 +28,7 @@ fn agents_config(extra: &str) -> String {
     let mut c = String::from("[attention]\nmin_work = \"1s\"\n");
     for a in ["claude", "codex", "gemini", "opencode", "antigravity"] {
         c.push_str(&format!(
-            "[agents.{a}]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"{a}\"]\n"
+            "[agents.{a}]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"{a}\"]\n"
         ));
     }
     c.push_str(extra);
@@ -38,7 +38,7 @@ fn agents_config(extra: &str) -> String {
 impl World {
     fn new(extra_config: &str) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-m4-").tempdir().unwrap();
-        let h = home.path().canonicalize().unwrap();
+        let h = ptyro_core::os::canonicalize(home.path()).unwrap();
         std::fs::write(
             h.join(".gitconfig"),
             "[user]\n\tname = T\n\temail = t@example.com\n[init]\n\tdefaultBranch = main\n",
@@ -51,7 +51,7 @@ impl World {
     }
 
     fn home(&self) -> PathBuf {
-        self.home.path().canonicalize().unwrap()
+        ptyro_core::os::canonicalize(self.home.path()).unwrap()
     }
 
     fn cli(&self, args: &[&str]) -> Output {
@@ -294,7 +294,10 @@ async fn codex_gemini_antigravity_and_opencode_adapters() {
     let chained = w.home().join("chained.txt");
     std::fs::write(
         codex_home.join("config.toml"),
-        format!("notify = [\"sh\", \"-c\", \"echo \\\"$1\\\" >> {}\", \"x\"]\n", chained.display()),
+        format!(
+            "notify = [\"sh\", \"-c\", \"echo \\\"$1\\\" >> {}\", \"x\"]\n",
+            ptyro_testkit::program::shell_path(&chained.to_string_lossy())
+        ),
     )
     .unwrap();
     let c = w.d.client().await.unwrap();
@@ -333,7 +336,25 @@ async fn codex_gemini_antigravity_and_opencode_adapters() {
     // Codex: the chained notify program got the turn's JSON.
     let deadline = Instant::now() + WAIT;
     while !std::fs::read_to_string(&chained).is_ok_and(|t| t.contains("agent-turn-complete")) {
-        assert!(Instant::now() < deadline, "the user's notify wasn't chained");
+        if Instant::now() >= deadline {
+            // What there is to go on: the file, and the same line run by hand.
+            let by_hand = std::process::Command::new("sh")
+                .args([
+                    "-c",
+                    &format!(
+                        "echo \"$1\" >> {}",
+                        ptyro_testkit::program::shell_path(&chained.to_string_lossy())
+                    ),
+                    "x",
+                    "by-hand",
+                ])
+                .output();
+            panic!(
+                "the user's notify wasn't chained: the file holds {:?}; by hand: {by_hand:?}, then {:?}",
+                std::fs::read_to_string(&chained).ok(),
+                std::fs::read_to_string(&chained).ok()
+            );
+        }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     // Codex's side thread (it writes the title) reports through notify too: ignored, so it
@@ -507,8 +528,8 @@ async fn notifications_sinks_mutes_and_signed_links() {
     let log = tmp.path().join("sink.jsonl");
     let cfg = format!(
         "[notifications]\nchannels = [\"inbox\", \"sinks\"]\non = [\"blocked\", \"idle\", \"errored\"]\nsinks = [{{ type = \"command\", command = [\"sh\", \"-c\", \"cat >> {} && echo >> {}\"], on = [\"blocked\", \"idle\"] }}]\ncallback = {{ listen = \"127.0.0.1:{port}\" }}\n",
-        log.display(),
-        log.display()
+        ptyro_testkit::program::shell_path(&log.to_string_lossy()),
+        ptyro_testkit::program::shell_path(&log.to_string_lossy())
     );
     let w = World::new(&cfg);
     let c = w.d.client().await.unwrap();
@@ -595,7 +616,7 @@ async fn after_turn_runs_trusted_scripts_and_branches_follow_prompts() {
     let root = h.join("r");
     std::fs::write(
         root.join(".ptyro.toml"),
-        "[scripts]\nafter_turn = \"echo linted-$PTYRO_WORKTREE_NAME\"\n",
+        "[scripts]\nshell = \"bash\"\nafter_turn = \"echo linted-$PTYRO_WORKTREE_NAME\"\n",
     )
     .unwrap();
     w.git(&root, &["add", "-A"]);
@@ -702,7 +723,7 @@ async fn tui_attention_peek_answer_and_inbox() {
 #[tokio::test]
 async fn osc7501_conformance_and_auto_hibernation() {
     let w = World::new(&format!(
-        "[agents.sleepy]\nadapter = \"claude\"\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\nhibernate_after = \"1s\"\n"
+        "[agents.sleepy]\nadapter = \"claude\"\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"claude\"]\nhibernate_after = \"1s\"\n"
     ));
     let c = w.d.client().await.unwrap();
     // A plain program's records: invalid ones discarded, subtrees cleared, the latest speaks.

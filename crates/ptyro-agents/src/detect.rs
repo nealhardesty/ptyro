@@ -176,8 +176,13 @@ fn definition(line: &str) -> Option<(String, String)> {
     Some((name.to_owned(), body.to_owned()))
 }
 
+/// `p` as people write it: under `home`, `~/…` with `/` throughout (also on Windows, where a
+/// shell's rc file is still a POSIX shell's).
 fn display(home: &Path, p: &Path) -> String {
-    p.strip_prefix(home).map_or_else(|_| p.display().to_string(), |r| format!("~/{}", r.display()))
+    p.strip_prefix(home).map_or_else(
+        |_| p.display().to_string(),
+        |r| format!("~/{}", r.to_string_lossy().replace('\\', "/")),
+    )
 }
 
 /// Scan `home` (normally `$HOME`) for multi-account setups, and fish's config under `config`

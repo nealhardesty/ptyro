@@ -150,11 +150,9 @@ pub fn hook(adapter: &str, event: &str, args: &[String]) -> i32 {
     };
     // The user's notify runs whatever happens to ptyro.
     if let Some((argv, json)) = chain {
-        let _ = std::process::Command::new(&argv[0])
-            .args(&argv[1..])
-            .arg(json)
-            .stdin(std::process::Stdio::null())
-            .spawn();
+        let mut cmd = std::process::Command::new(&argv[0]);
+        ptyro_core::os::quoted_args(&mut cmd, argv[1..].iter().chain(std::iter::once(&json)));
+        let _ = cmd.stdin(std::process::Stdio::null()).spawn();
     }
     let Ok(session) = std::env::var("PTYRO_SESSION_ID") else { return 0 };
     let mut env = std::collections::BTreeMap::new();

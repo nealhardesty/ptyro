@@ -655,7 +655,7 @@ mod tests {
         assert!(a.windows(2).any(|w| w[0] == "--session-id" && w[1] == conv));
         assert!(a.windows(2).any(|w| w[0] == "-n" && w[1] == "brisk-rook"));
         let dir = a.windows(2).find(|w| w[0] == "--plugin-dir").map(|w| w[1].clone()).unwrap();
-        assert!(dir.starts_with("/data/integrations/claude/"));
+        assert!(std::path::Path::new(&dir).starts_with("/data/integrations/claude"), "{dir}");
         let hooks = &plan.files.iter().find(|(p, _)| p.ends_with("hooks/hooks.json")).unwrap().1;
         assert!(hooks.contains("/usr/bin/ptyro hook claude PermissionRequest"));
         assert!(a.iter().any(|x| x.contains("statusline-relay")));

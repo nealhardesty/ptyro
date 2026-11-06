@@ -102,6 +102,8 @@ fn only_the_lines_ptyro_wrote_leave_an_rc_file() {
     assert_eq!(strip_rc("a\nsource <(ptyro completions bash)").0, "a");
 }
 
+// Unix: the layout under test is $HOME and the XDG folders as Unix spells them.
+#[cfg(unix)]
 #[test]
 fn a_plan_never_guesses_where_ptyro_lives() {
     let paths = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| PathBuf::from("/h"))).unwrap();
@@ -139,6 +141,8 @@ fn sizes_read_as_people_do_and_links_are_not_followed() {
     std::fs::write(d.path().join("a"), vec![0u8; 100]).unwrap();
     std::fs::create_dir(d.path().join("sub")).unwrap();
     std::fs::write(d.path().join("sub/b"), vec![0u8; 50]).unwrap();
+    // (Unix: Windows wants Developer Mode to make a link.)
+    #[cfg(unix)]
     std::os::unix::fs::symlink("/", d.path().join("link")).unwrap();
     assert_eq!(dir_size(d.path()), 150, "a link to / is not walked");
     assert_eq!(dir_size(&d.path().join("missing")), 0);
@@ -210,6 +214,8 @@ fn the_plan_says_what_goes_what_is_lost_and_what_stays() {
     assert!(render(&brew, &env("/home/me", None)).contains("`brew uninstall ptyro`"));
 }
 
+// Unix: shell rc files under $HOME and XDG, as Unix spells them.
+#[cfg(unix)]
 #[test]
 fn rc_files_follow_xdg_and_home() {
     let mut e = env("/home/me", None);

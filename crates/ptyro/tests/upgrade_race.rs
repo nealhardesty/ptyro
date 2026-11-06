@@ -2,7 +2,6 @@
 //! take seconds): the upgrade waits for the launch, the new session is in the new daemon, and no
 //! second daemon is left behind. And a rolled-back upgrade does not stop the next one.
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Output, Stdio};
 use std::time::{Duration, Instant};
@@ -21,7 +20,7 @@ struct World {
 impl World {
     fn new(extra: &str, daemon_env: &[(&str, &str)]) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-race-").tempdir().unwrap();
-        let hs = home.path().canonicalize().unwrap().to_string_lossy().into_owned();
+        let hs = ptyro_core::os::canonicalize(home.path()).unwrap().to_string_lossy().into_owned();
         let mut env = vec![("HOME", hs.as_str()), ("SHELL", "/bin/sh")];
         env.extend_from_slice(daemon_env);
         let d = TempDaemon::start_with(BIN, &env, Some(extra)).unwrap();
@@ -29,7 +28,7 @@ impl World {
     }
 
     fn home(&self) -> PathBuf {
-        self.home.path().canonicalize().unwrap()
+        ptyro_core::os::canonicalize(self.home.path()).unwrap()
     }
 
     fn cli(&self, args: &[&str]) -> Output {
@@ -52,6 +51,7 @@ impl World {
     }
 
     /// Daemon processes that run on this world's home (the old image would show up here).
+    #[cfg(not(windows))]
     fn daemon_pids(&self) -> Vec<u32> {
         let home = self.d.paths.state.to_string_lossy().into_owned();
         let ps = std::process::Command::new("ps").args(["-axo", "pid=,command="]).output().unwrap();
@@ -63,13 +63,9 @@ impl World {
     }
 }
 
+/// (Windows asked directly: Git Bash's `kill` knows MSYS pids, not Windows'.)
 fn alive(pid: u32) -> bool {
-    std::process::Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    ptyro_pty::alive(pid)
 }
 
 const SLOW: &str = r#"
@@ -117,7 +113,12 @@ fn an_upgrade_during_a_slow_launch_waits_and_loses_nothing() {
     if upgraded {
         let up: Value = serde_json::from_slice(&up.stdout).unwrap();
         assert_eq!(up["rolled_back"], false, "{up}");
-        assert_eq!(up["pid"], before["pid"]);
+        // Unix upgrades in place (exec); Windows hands over to a new process (SPEC §4.5).
+        if cfg!(windows) {
+            assert_ne!(up["pid"], before["pid"]);
+        } else {
+            assert_eq!(up["pid"], before["pid"]);
+        }
     } else {
         let msg = String::from_utf8_lossy(&up.stderr).into_owned();
         assert!(msg.contains("still starting"), "an unexplained failure: {msg}");
@@ -152,16 +153,39 @@ fn an_upgrade_during_a_slow_launch_waits_and_loses_nothing() {
             std::thread::sleep(Duration::from_millis(100));
         }
     }
-    // One daemon only: the old image is gone.
-    let daemons = w.daemon_pids();
-    let daemon = before["pid"].as_u64().unwrap() as u32;
-    assert!(daemons.iter().all(|p| *p == daemon), "a stray daemon: {daemons:?} (daemon {daemon})");
+    // One daemon only: the old image is gone (Windows: the one before the handover has exited;
+    // `ps` there is MSYS's, which doesn't see Windows' processes).
+    #[cfg(windows)]
+    {
+        let now = w.json(&["daemon", "status", "--json"])["pid"].as_u64().unwrap() as u32;
+        let old = before["pid"].as_u64().unwrap() as u32;
+        if upgraded {
+            assert_ne!(now, old);
+            assert!(
+                ptyro_pty::wait_for_exit(old, Duration::from_secs(10)),
+                "the old daemon {old} lives on"
+            );
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let daemons = w.daemon_pids();
+        let daemon = before["pid"].as_u64().unwrap() as u32;
+        assert!(
+            daemons.iter().all(|p| *p == daemon),
+            "a stray daemon: {daemons:?} (daemon {daemon})"
+        );
+    }
 }
 
 /// A refused handoff rolls back to `daemon.prev`; the daemon then runs from that very file, so
 /// the next upgrade must not copy it onto itself, and goes through.
+// Unix: the next binary is a sh wrapper, and rolling back to `daemon.prev` is Unix's upgrade
+// (Windows hands over to a new process: tests/win9.rs, its refused handover included).
+#[cfg(unix)]
 #[test]
 fn an_upgrade_after_a_rollback_works() {
+    use std::os::unix::fs::PermissionsExt;
     let w = World::new("", &[("PTYRO_TEST_REFUSE_HANDOFF", "1")]);
     assert!(
         w.cli(&["new", "-d", "-n", "keep", "--", "sh", "-c", "echo alive; sleep 60"])

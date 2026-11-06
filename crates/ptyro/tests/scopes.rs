@@ -462,7 +462,7 @@ impl Drop for Serve {
 #[test]
 fn a_device_is_denied_exactly_what_its_scope_is_too_low_for() {
     let home = tempfile::Builder::new().prefix("ptyro-scopes-").tempdir().unwrap();
-    let hs = home.path().canonicalize().unwrap();
+    let hs = ptyro_core::os::canonicalize(home.path()).unwrap();
     let hs_str = hs.to_string_lossy().into_owned();
     let d = TempDaemon::start_with(
         BIN,

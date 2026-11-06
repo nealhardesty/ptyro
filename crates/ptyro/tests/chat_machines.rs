@@ -18,31 +18,49 @@ const BIN: &str = env!("CARGO_BIN_EXE_ptyro");
 const WAIT: Duration = Duration::from_secs(30);
 
 fn fake_ssh(dir: &Path, name: &str, env: &Path) -> PathBuf {
-    let path = dir.join(name);
-    std::fs::write(
-        &path,
-        format!(
-            "#!/bin/sh\nexec env $(cat '{}') PTYRO_NO_AUTOSPAWN=1 '{BIN}' proxy\n",
-            env.display()
-        ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    path
+    let exe = ptyro_testkit::program::program(
+        dir,
+        name,
+        BIN,
+        &format!("exec env $(cat '{}') PTYRO_NO_AUTOSPAWN=1 '{BIN}' proxy", env.display()),
+        &[BIN, "proxy"],
+        &[("PTYRO_NO_AUTOSPAWN", "1")],
+    );
+    // Windows: ssh's own arguments aren't proxy's.
+    #[cfg(windows)]
+    ptyro_testkit::program::set_shim_with(
+        &exe,
+        &[BIN, "proxy"],
+        &[("PTYRO_NO_AUTOSPAWN", "1")],
+        false,
+    );
+    exe
 }
 
+/// The daemon `d`'s variables, for the "ssh" to it (`laptopN.env` is `ssh-to-laptopN`'s).
 fn write_env(path: &Path, d: &TempDaemon) {
     let line: Vec<String> = d.env().into_iter().map(|(k, v)| format!("{k}={v}")).collect();
     std::fs::write(path, line.join(" ")).unwrap();
+    // Windows' stand-in reads them from its shim, not the file.
+    #[cfg(windows)]
+    {
+        let stem = path.file_stem().unwrap().to_string_lossy();
+        let exe = path.with_file_name(format!("ssh-to-{stem}.exe"));
+        let env = d.env();
+        let mut pairs: Vec<(&str, &str)> =
+            env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        pairs.push(("PTYRO_NO_AUTOSPAWN", "1"));
+        ptyro_testkit::program::set_shim_with(&exe, &[BIN, "proxy"], &pairs, false);
+    }
 }
 
 fn config(machine: &str) -> String {
     let mut c = format!(
-        "[daemon]\nmachine_name = \"{machine}\"\n[profiles.work]\nlabel = \"work\"\n[chat]\ntitle_command = [\"/bin/sh\", \"-c\", \"cat >/dev/null; echo {machine} chat\"]\n"
+        "[daemon]\nmachine_name = \"{machine}\"\n[profiles.work]\nlabel = \"work\"\n[chat]\ntitle_command = [\"sh\", \"-c\", \"cat >/dev/null; echo {machine} chat\"]\n"
     );
     for a in ["claude", "codex"] {
         c.push_str(&format!(
-            "[agents.{a}]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"{a}\"]\n"
+            "[agents.{a}]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"{a}\"]\n"
         ));
     }
     c
@@ -57,7 +75,7 @@ struct Two {
 impl Two {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap();
+        let root = ptyro_core::os::canonicalize(dir.path()).unwrap();
         let (env1, env2) = (root.join("laptop1.env"), root.join("laptop2.env"));
         let to1 = fake_ssh(&root, "ssh-to-laptop1", &env1).to_string_lossy().into_owned();
         let to2 = fake_ssh(&root, "ssh-to-laptop2", &env2).to_string_lossy().into_owned();
@@ -425,12 +443,22 @@ async fn a_chats_history_tools_search_and_read_linked_machines_within_its_scope(
             until("the tool ran", || async { answers(here, &id).await.len() > n }).await;
         }
     };
-    say(format!("sh {BIN} chat search zebra --json")).await;
+    say(format!("sh {} chat search zebra --json", ptyro_testkit::program::shell_path(BIN))).await;
     let out = tool_output(&here, &asker.id).await;
     assert!(out.contains("crossing"), "its profile's chat there is found: {out}");
     assert!(!out.contains("stripes"), "another profile's never: {out}");
-    say(format!("sh {BIN} chat show laptop2:c:{} --format json", mine.handle)).await;
-    say(format!("sh {BIN} chat show laptop2:c:{} --format json", work.handle)).await;
+    say(format!(
+        "sh {} chat show laptop2:c:{} --format json",
+        ptyro_testkit::program::shell_path(BIN),
+        mine.handle
+    ))
+    .await;
+    say(format!(
+        "sh {} chat show laptop2:c:{} --format json",
+        ptyro_testkit::program::shell_path(BIN),
+        work.handle
+    ))
+    .await;
     let out = tool_output(&here, &asker.id).await;
     assert!(out.contains("zebra crossing"), "read there: {out}");
     assert!(!out.contains("zebra stripes"), "not read: {out}");

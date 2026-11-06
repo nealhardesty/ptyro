@@ -42,7 +42,7 @@ impl World {
 
     fn build(extra: &str, gh: bool) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-m11-").tempdir().unwrap();
-        let h = home.path().canonicalize().unwrap();
+        let h = ptyro_core::os::canonicalize(home.path()).unwrap();
         std::fs::write(
             h.join(".gitconfig"),
             "[user]\n\tname = Owner\n\temail = owner@example.com\n[init]\n\tdefaultBranch = main\n",
@@ -55,18 +55,17 @@ impl World {
             ("SHELL".into(), "/bin/sh".into()),
         ];
         if gh {
-            use std::os::unix::fs::PermissionsExt;
             let bin = h.join("fakebin");
-            std::fs::create_dir_all(&bin).unwrap();
-            std::fs::write(bin.join("gh"), format!("#!/bin/sh\nexec \"{BIN}\" fake-gh \"$@\"\n"))
-                .unwrap();
-            std::fs::set_permissions(bin.join("gh"), std::fs::Permissions::from_mode(0o755))
-                .unwrap();
+            ptyro_testkit::program::program(
+                &bin,
+                "gh",
+                BIN,
+                &format!("exec \"{BIN}\" fake-gh \"$@\""),
+                &[BIN, "fake-gh"],
+                &[],
+            );
             std::fs::create_dir_all(h.join("gh-state")).unwrap();
-            env.push((
-                "PATH".into(),
-                format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default()),
-            ));
+            env.push(("PATH".into(), ptyro_testkit::program::path_with(&bin)));
             env.push(("PTYRO_FAKE_GH".into(), h.join("gh-state").to_string_lossy().into_owned()));
             env.push(("PTYRO_FAKE_GH_PER_REPO".into(), "1".into()));
             env.push(("PTYRO_TEST_FAST_POLL".into(), "1".into()));
@@ -76,7 +75,7 @@ impl World {
             String::from("[attention]\nmin_work = \"1s\"\n[worktrees]\nfetch = false\n");
         for a in ["claude", "codex"] {
             config.push_str(&format!(
-                "[agents.{a}]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"{a}\"]\n"
+                "[agents.{a}]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"{a}\"]\n"
             ));
         }
         config.push_str(extra);
@@ -85,7 +84,7 @@ impl World {
     }
 
     fn home(&self) -> PathBuf {
-        self.home.path().canonicalize().unwrap()
+        ptyro_core::os::canonicalize(self.home.path()).unwrap()
     }
 
     fn cli(&self, args: &[&str]) -> Output {

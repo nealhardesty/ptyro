@@ -2127,10 +2127,11 @@ impl Daemon {
                 continue;
             }
             let owner = homes.iter().find(|(_, h)| abs.starts_with(h)).map(|(n, _)| n.clone());
-            let rel = abs
-                .strip_prefix(&root)
-                .map(|r| r.to_string_lossy().into_owned())
-                .unwrap_or_else(|_| abs.to_string_lossy().into_owned());
+            let rel = ptyro_core::os::slash_path(
+                &abs.strip_prefix(&root)
+                    .map(|r| r.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| abs.to_string_lossy().into_owned()),
+            );
             let ok = match (&role, &owner) {
                 (Role::Lead, None) if set.layout == Layout::Solo => abs.starts_with(&root),
                 (Role::Lead, Some(_)) if set.layout == Layout::Solo => true,
@@ -3561,8 +3562,10 @@ fn overlay_files(
         let path = PathBuf::from(p);
         if let Some(backup) = p.strip_suffix(".ptyro-link") {
             let link = PathBuf::from(backup);
-            if std::fs::symlink_metadata(&link).is_ok_and(|m| m.file_type().is_symlink()) {
-                let _ = std::fs::remove_file(&link);
+            // A link (or, on Windows, the junction made when links need Developer Mode): a
+            // link to a folder goes with `remove_dir` there, which leaves the folder alone (WIN13).
+            if std::fs::read_link(&link).is_ok() {
+                let _ = std::fs::remove_file(&link).or_else(|_| std::fs::remove_dir(&link));
             }
             let aside = link.with_file_name(format!(
                 ".{}.ptyro-aside",

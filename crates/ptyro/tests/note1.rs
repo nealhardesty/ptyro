@@ -22,18 +22,24 @@ struct World {
 impl World {
     fn new(extra: &str) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-note1-").tempdir().unwrap();
-        let h = home.path().canonicalize().unwrap();
+        let h = ptyro_core::os::canonicalize(home.path()).unwrap();
         std::fs::write(
             h.join(".gitconfig"),
             "[user]\n\tname = T\n\temail = t@example.com\n[init]\n\tdefaultBranch = main\n",
         )
         .unwrap();
         // An editor that shows where it is and stays.
-        let ed = h.join("fake-editor");
-        std::fs::write(&ed, "#!/bin/sh\necho \"EDITING $*\"\nexec sleep 60\n").unwrap();
-        std::fs::set_permissions(&ed, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let say = ptyro_testkit::program::say_then_wait("EDITING", 60);
+        let ed = ptyro_testkit::program::program(
+            &h,
+            "fake-editor",
+            BIN,
+            "echo \"EDITING $*\"\nexec sleep 60",
+            &say.iter().map(String::as_str).collect::<Vec<_>>(),
+            &[],
+        );
         let config = format!(
-            "[worktrees]\nfetch = false\n[agents.claude]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\n[scratchpad]\neditor = \"{}\"\n{extra}",
+            "[worktrees]\nfetch = false\n[agents.claude]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"claude\"]\n[scratchpad]\neditor = '{}'\n{extra}",
             ed.display()
         );
         let hs = h.to_string_lossy().into_owned();
@@ -43,7 +49,7 @@ impl World {
     }
 
     fn home(&self) -> PathBuf {
-        self.home.path().canonicalize().unwrap()
+        ptyro_core::os::canonicalize(self.home.path()).unwrap()
     }
 
     /// `ptyro scratchpad …`, its output.
@@ -115,7 +121,7 @@ async fn the_file_the_variable_and_the_cli() {
     let Reply::Session { .. } = c.request(Request::Spawn { spec }).await.unwrap() else { panic!() };
     let screen =
         w.d.wait_for_text(&c, "sh", &format!("pad={}", file.display()), WAIT).await.unwrap();
-    assert!(screen.contains("pad=/"), "{screen}");
+    assert!(screen.contains(if cfg!(windows) { ":\\" } else { "pad=/" }), "a full path: {screen}");
 
     // add: words, a section, a pipe, a note.
     let (ok, _, err) = w.pad(&["add", "login", "times out", "on safari"]);

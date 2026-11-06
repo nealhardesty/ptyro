@@ -27,11 +27,11 @@ impl World {
     /// The same, and those in `missing` aren't installed.
     fn with(broken: &[&str], missing: &[&str]) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-compare-").tempdir().unwrap();
-        let h = home.path().canonicalize().unwrap();
+        let h = ptyro_core::os::canonicalize(home.path()).unwrap();
         let hs = h.to_string_lossy().into_owned();
         let env = [("HOME", hs.as_str()), ("GIT_CONFIG_NOSYSTEM", "1"), ("SHELL", "/bin/sh")];
         let mut config = String::from(
-            "[chat]\ntitle_command = [\"/bin/sh\", \"-c\", \"cat >/dev/null; echo '\\\"A fake title.\\\"'\"]\n\
+            "[chat]\ntitle_command = [\"sh\", \"-c\", \"cat >/dev/null; echo '\\\"A fake title.\\\"'\"]\n\
              [profiles.work]\nlabel = \"work\"\n[profiles.personal]\nlabel = \"personal\"\n",
         );
         for a in ["claude", "codex", "gemini", "opencode"] {
@@ -41,11 +41,11 @@ impl World {
                 ));
             } else if broken.contains(&a) {
                 config.push_str(&format!(
-                    "\n[agents.{a}]\ncommand = [\"/bin/sh\", \"-c\", \"echo not logged in >&2; exit 3\"]\n"
+                    "\n[agents.{a}]\ncommand = [\"sh\", \"-c\", \"echo not logged in >&2; exit 3\"]\n"
                 ));
             } else {
                 config.push_str(&format!(
-                    "\n[agents.{a}]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"{a}\"]\n"
+                    "\n[agents.{a}]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"{a}\"]\n"
                 ));
             }
         }
@@ -54,7 +54,7 @@ impl World {
     }
 
     fn home(&self) -> PathBuf {
-        self.home.path().canonicalize().unwrap()
+        ptyro_core::os::canonicalize(self.home.path()).unwrap()
     }
 
     fn cli(&self, args: &[&str]) -> Output {

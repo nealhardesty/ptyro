@@ -152,6 +152,14 @@ fn pipes(
     }
 }
 
+/// How long the daemon's Welcome may take. It answers within milliseconds when it is idle, but a
+/// daemon still starting, or busy on a loaded machine (CI's two-core Windows runners: seen past
+/// 5 s, WIN13), is slower, and an ssh or `wsl.exe` hop starts a shell first (a distro's first
+/// start takes seconds). What this guards against is a peer that will never answer.
+fn handshake_timeout(through_a_transport: bool) -> Duration {
+    Duration::from_secs(if through_a_transport { 30 } else { 15 })
+}
+
 impl Client {
     pub async fn connect(opts: &ConnectOptions) -> Result<Self, ClientError> {
         if let Some((argv, via)) = &opts.command {
@@ -264,7 +272,7 @@ impl Client {
         let bytes =
             encode(&hello, opts.encoding).map_err(|e| ClientError::Protocol(e.to_string()))?;
         framed.send(bytes).await?;
-        let reply = tokio::time::timeout(Duration::from_secs(5), framed.next())
+        let reply = tokio::time::timeout(handshake_timeout(via.is_some()), framed.next())
             .await
             .map_err(|_| ClientError::Unavailable("daemon did not answer the handshake".into()))?
             .ok_or_else(|| ClientError::Unavailable("daemon closed the connection".into()))??;

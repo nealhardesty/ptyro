@@ -188,7 +188,7 @@ fn find_in(prog: &str, path: &str, places: &Places) -> Option<Found> {
         if let Some((argv, real)) = unshim(&f) {
             return Some(Found { argv, path: real, via: Some(via.clone()) });
         }
-        let real = f.canonicalize().unwrap_or_else(|_| f.clone());
+        let real = ptyro_core::os::canonicalize(&f).unwrap_or_else(|_| f.clone());
         let argv = if node_script(&real) && on_path("node").is_none() {
             let Some(n) = node(dir) else { continue };
             vec![n.to_string_lossy().into_owned(), real.to_string_lossy().into_owned()]
@@ -426,15 +426,16 @@ mod windows_rules {
         assert_eq!(f.via.as_deref(), Some("~\\.local\\bin"));
         // npm's three files for codex: the extensionless `sh` shim is passed over, and the
         // `.cmd` runs its script with the `node.exe` beside it (no node on PATH).
-        let script = npm.join("node_modules/@openai/codex/bin/codex.js");
+        let script =
+            npm.join("node_modules").join("@openai").join("codex").join("bin").join("codex.js");
         write(&script, "#!/usr/bin/env node\n");
         write(&npm.join("codex"), "#!/bin/sh\n");
         write(&npm.join("codex.cmd"), &shim(r"node_modules\@openai\codex\bin\codex.js"));
         write(&npm.join("node.exe"), "MZ");
         let f = find_in("codex", &path, &places).unwrap();
         assert_eq!(
-            f.argv,
-            [npm.join("node.exe").to_string_lossy(), script.to_string_lossy()],
+            f.argv.iter().map(PathBuf::from).collect::<Vec<_>>(),
+            [npm.join("node.exe"), script.clone()],
             "{f:?}"
         );
         assert_eq!((f.path, f.via.as_deref()), (script, Some("npm")));
@@ -442,7 +443,8 @@ mod windows_rules {
         let bin = npm.join("node_modules/opencode-ai/bin/opencode.exe");
         write(&bin, "MZ");
         write(&npm.join("opencode.cmd"), &shim(r"node_modules\opencode-ai\bin\opencode.exe"));
-        assert_eq!(find_in("opencode", &path, &places).unwrap().argv, [bin.to_string_lossy()]);
+        let as_paths = |argv: &[String]| argv.iter().map(PathBuf::from).collect::<Vec<_>>();
+        assert_eq!(as_paths(&find_in("opencode", &path, &places).unwrap().argv), [bin]);
         // On PATH too: what the shim starts, found by `PATHEXT`.
         let on_path = home.join("bin");
         let gem = on_path.join("node_modules/@google/gemini-cli/bundle/gemini.js");
@@ -453,7 +455,7 @@ mod windows_rules {
         );
         write(&on_path.join("node.exe"), "MZ");
         let f = find_in("gemini", &path, &places).unwrap();
-        assert_eq!(f.argv, [on_path.join("node.exe").to_string_lossy(), gem.to_string_lossy()]);
+        assert_eq!(as_paths(&f.argv), [on_path.join("node.exe"), gem]);
         assert_eq!(f.via, None);
         // A shim whose target climbs out of its folder, or isn't there, runs as itself.
         write(&npm.join("agy.cmd"), &shim(r"..\..\evil.exe"));

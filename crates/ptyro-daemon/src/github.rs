@@ -875,9 +875,12 @@ impl Daemon {
     }
 }
 
+/// `gh` on the daemon's `PATH`: `gh.exe` on Windows, which is what `Command` runs there (found by
+/// WIN13: a real `gh.exe` was never seen).
 fn which_gh(env: &[(OsString, OsString)]) -> bool {
     let path = env.iter().find(|(k, _)| k == "PATH").map(|(_, v)| v.clone()).unwrap_or_default();
-    std::env::split_paths(&path).any(|d| d.join("gh").is_file())
+    let name = if cfg!(windows) { "gh.exe" } else { "gh" };
+    std::env::split_paths(&path).any(|d| d.join(name).is_file())
 }
 
 /// FNV-1a: a stable id for GitHub node ids.

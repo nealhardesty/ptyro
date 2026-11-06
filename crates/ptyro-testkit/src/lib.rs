@@ -7,6 +7,7 @@ pub mod fake_gh;
 pub mod fake_structured;
 pub mod fuzz;
 pub mod headless;
+pub mod program;
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
@@ -70,6 +71,13 @@ impl TempDaemon {
         let mut cmd = Command::new(&self.bin);
         isolate(&mut cmd, self.home.path(), &self.bin);
         cmd.envs(self.daemon_env.iter().map(|(k, v)| (k, v)));
+        // Windows programs (agents, PowerShell) find home by `USERPROFILE`: a test's `HOME` is it.
+        if cfg!(windows)
+            && let Some((_, home)) = self.daemon_env.iter().find(|(k, _)| k == "HOME")
+            && !self.daemon_env.iter().any(|(k, _)| k == "USERPROFILE")
+        {
+            cmd.env("USERPROFILE", home);
+        }
         let child = cmd
             .args(["daemon", "start", "--foreground"])
             .stdin(std::process::Stdio::null())
@@ -163,10 +171,13 @@ impl TempDaemon {
             rustix::process::Pid::from_raw(child.id() as i32).expect("pid"),
             rustix::process::Signal::TERM,
         );
+        // Windows has no SIGTERM: `daemon stop --force` is the same graceful stop (sessions end,
+        // agents hibernate, state is saved). Without --force it refuses while sessions run, and
+        // the kill below then lost what wasn't saved yet (WIN13). It waits for the exit itself.
         #[cfg(windows)]
-        let _ = self.cmd().args(["daemon", "stop"]).output();
+        let _ = self.cmd().args(["daemon", "stop", "--force"]).output();
         let start = Instant::now();
-        while start.elapsed() < Duration::from_secs(10) {
+        while start.elapsed() < Duration::from_secs(if cfg!(windows) { 30 } else { 10 }) {
             if let Ok(Some(_)) = child.try_wait() {
                 return;
             }
@@ -226,6 +237,10 @@ fn isolate(cmd: &mut Command, home: &Path, bin: &Path) {
     // Inside WSL a daemon holds the distro open with a wsl.exe of its own (SPEC §20.10): test
     // daemons don't, unless a test asks (`start_with_env(…, &[("PTYRO_WSL_HOLD", "1")])`).
     cmd.env("PTYRO_WSL_HOLD", "0");
+    // A Windows client with no remote looks for ptyro in WSL first: a test's is its own daemon.
+    if cfg!(windows) {
+        cmd.env("PTYRO_REMOTE", "local");
+    }
 }
 
 /// Whether something is listening on `127.0.0.1:port`. Connecting to a free ephemeral port can

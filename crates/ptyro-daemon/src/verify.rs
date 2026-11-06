@@ -529,11 +529,12 @@ impl Daemon {
                         &if p.is_absolute() { p } else { cwd.join(p) },
                     ));
                 match root.as_deref().map(crate::changesets::real_path) {
-                    Some(r) => abs
-                        .strip_prefix(&r)
-                        .map(|x| x.to_string_lossy().into_owned())
-                        .unwrap_or_else(|_| abs.to_string_lossy().into_owned()),
-                    None => f.trim_start_matches("./").to_owned(),
+                    Some(r) => ptyro_core::os::slash_path(
+                        &abs.strip_prefix(&r)
+                            .map(|x| x.to_string_lossy().into_owned())
+                            .unwrap_or_else(|_| abs.to_string_lossy().into_owned()),
+                    ),
+                    None => ptyro_core::os::slash_path(f.trim_start_matches("./")),
                 }
             };
         if let Some(g) = &guard {

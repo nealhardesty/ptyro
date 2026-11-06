@@ -1029,6 +1029,7 @@ impl Session {
                     continue;
                 }
                 TermEvent::Cwd(path) => {
+                    let path = ptyro_core::os::reported_folder(&path);
                     let mut meta =
                         self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     if meta.reported_cwd.as_ref() == Some(&path) {

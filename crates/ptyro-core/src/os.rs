@@ -214,6 +214,100 @@ pub fn path_starts_with(path: &Path, base: &Path) -> bool {
     p.len() >= b.len() && p[..b.len()] == b[..]
 }
 
+/// Whether an address someone typed is a path rather than a name: `/…`, `./…`, `~/…`, or a
+/// Windows one (`C:\\…`, `C:/…`, `\\\\server\\…`), wherever ptyro runs (a Windows client may talk to
+/// any daemon; a name never looks like one). Found by WIN13: `--project C:\\src\\app` was
+/// looked up as a name.
+pub fn looks_like_path(s: &str) -> bool {
+    let b = s.as_bytes();
+    s.starts_with(['/', '.', '~'])
+        || s.starts_with("\\\\")
+        || (b.len() >= 3
+            && b[0].is_ascii_alphabetic()
+            && b[1] == b':'
+            && matches!(b[2], b'\\' | b'/'))
+}
+
+/// A path as patterns (globs, leases, guards, profiles' `match.paths`) spell one: with `/`
+/// between its parts, also on Windows, where it comes with `\\` (WIN13: a lease on `src/api.rs`
+/// never matched `src\\api.rs`). Unchanged elsewhere.
+pub fn slash_path(p: &str) -> String {
+    if cfg!(windows) { p.replace('\\', "/") } else { p.to_owned() }
+}
+
+/// Add `args` to `cmd`, each in double quotes on Windows. Rust leaves an argument without a space
+/// unquoted, and MSYS programs (Git Bash's `sh`, `bash`) expand an unquoted `{…}` themselves: a
+/// JSON argument such as `{"type":"x"}` arrived there empty (WIN13: a user's Codex notify run
+/// through ptyro). Quoted by the rules every Windows program parses its command line with.
+pub fn quoted_args(
+    cmd: &mut std::process::Command,
+    args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>,
+) -> &mut std::process::Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        for a in args {
+            cmd.raw_arg(windows_quoted(&a.as_ref().to_string_lossy()));
+        }
+        cmd
+    }
+    #[cfg(not(windows))]
+    {
+        cmd.args(args)
+    }
+}
+
+/// One argument for a Windows command line, always in double quotes: a run of `\\` before a
+/// quote (or the end) doubled, each `"` escaped.
+pub fn windows_quoted(a: &str) -> String {
+    let mut out = String::from("\"");
+    let mut slashes = 0usize;
+    for c in a.chars() {
+        match c {
+            '\\' => slashes += 1,
+            '"' => {
+                out.push_str(&"\\".repeat(slashes * 2 + 1));
+                out.push('"');
+                slashes = 0;
+            }
+            _ => {
+                out.push_str(&"\\".repeat(slashes));
+                out.push(c);
+                slashes = 0;
+            }
+        }
+    }
+    out.push_str(&"\\".repeat(slashes * 2));
+    out.push('"');
+    out
+}
+
+/// A folder a shell reported (OSC 7), as this computer names it. On Windows, Git Bash and MSYS2
+/// report `/c/Users/me` and some programs `/C:/Users/me`: both are `C:\\Users\\me` (WIN13).
+/// Anything else, and everything elsewhere, is unchanged.
+pub fn reported_folder(p: &Path) -> PathBuf {
+    if !cfg!(windows) {
+        return p.to_path_buf();
+    }
+    windows_folder_from_posix(&p.to_string_lossy()).unwrap_or_else(|| p.to_path_buf())
+}
+
+/// [`reported_folder`]'s Windows rule, on any system: `/c/x` or `/C:/x` → `C:\\x`.
+pub fn windows_folder_from_posix(s: &str) -> Option<PathBuf> {
+    let b = s.as_bytes();
+    if b.len() < 2 || b[0] != b'/' || !b[1].is_ascii_alphabetic() {
+        return None;
+    }
+    let drive = (b[1] as char).to_ascii_uppercase();
+    let rest = match &s[2..] {
+        "" | ":" => "",
+        r if r.starts_with('/') => r,
+        r if r.starts_with(":/") => &r[1..],
+        _ => return None,
+    };
+    Some(PathBuf::from(format!("{drive}:\\{}", rest.trim_start_matches('/').replace('/', "\\"))))
+}
+
 /// Whether two paths name the same place, as [`path_starts_with`] compares.
 pub fn same_path(a: &Path, b: &Path) -> bool {
     path_starts_with(a, b) && path_starts_with(b, a)
@@ -391,6 +485,36 @@ pub fn uid() -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
+    use super::{looks_like_path, windows_folder_from_posix, windows_quoted};
+
+    #[test]
+    fn windows_arguments_are_always_quoted() {
+        assert_eq!(windows_quoted(r#"{"type":"x"}"#), r#""{\"type\":\"x\"}""#);
+        assert_eq!(windows_quoted(r"C:\a b\"), r#""C:\a b\\""#);
+        assert_eq!(windows_quoted(r#"a\"b"#), r#""a\\\"b""#);
+        assert_eq!(windows_quoted(""), r#""""#);
+    }
+
+    #[test]
+    fn a_shells_posix_folder_is_its_windows_one() {
+        let w = |s: &str| windows_folder_from_posix(s).map(|p| p.to_string_lossy().into_owned());
+        assert_eq!(w("/c/Users/me/sub dir").as_deref(), Some(r"C:\Users\me\sub dir"));
+        assert_eq!(w("/C:/Users/me").as_deref(), Some(r"C:\Users\me"));
+        assert_eq!(w("/d").as_deref(), Some(r"D:\"));
+        assert_eq!(w("/tmp/x"), None, "MSYS's own /tmp isn't a drive");
+        assert_eq!(w("/usr"), None);
+        assert_eq!(w("relative"), None);
+    }
+
+    #[test]
+    fn paths_typed_on_any_system_are_paths() {
+        for p in ["/srv/app", "./app", "../app", "~/app", r"C:\src\app", "c:/src", r"\\nas\share"] {
+            assert!(looks_like_path(p), "{p}");
+        }
+        for n in ["app", "my-repo", "p:1a2b", "C:", "c:app"] {
+            assert!(!looks_like_path(n), "{n}");
+        }
+    }
 
     #[test]
     fn windows_paths_lose_their_verbatim_prefix_and_compare_without_case() {

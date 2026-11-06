@@ -263,7 +263,10 @@ async fn an_incompatible_protocol_major_is_rejected() {
     use futures::{SinkExt, StreamExt};
     use ptyro_protocol::{ClientInfo, ClientKind, Encoding, Version, decode, encode, framing};
     let d = TempDaemon::start(BIN).unwrap();
-    let stream = tokio::net::UnixStream::connect(&d.paths.socket).await.unwrap();
+    // The daemon's own socket (a named pipe on Windows), spoken to directly.
+    let mut opts = ptyro_client::ConnectOptions::new(d.paths.clone(), ClientKind::Test);
+    opts.autospawn = false;
+    let stream = ptyro_client::connect_raw(&opts).await.unwrap();
     let mut framed = tokio_util::codec::Framed::new(stream, framing());
     let hello = ClientMsg::Hello {
         proto: Version { major: 99, minor: 0 },
@@ -292,6 +295,8 @@ fn only_one_daemon_per_home_and_stale_sockets_are_recovered() {
     assert!(String::from_utf8_lossy(&second.stderr).contains("already running"));
 
     d.crash();
+    // (Unix: a named pipe goes with the process that served it.)
+    #[cfg(unix)]
     assert!(d.paths.socket.exists(), "a crash leaves the socket behind");
     // A new client auto-spawns a daemon, which clears the stale socket.
     let out = d.cmd().args(["new", "-d", "--", "sh", "-c", "sleep 30"]).output().unwrap();
@@ -310,6 +315,9 @@ fn cli_autospawns_and_maps_errors_to_exit_codes() {
             .args(args)
             .env("PTYRO_HOME", home.path())
             .env("PTYRO_BIN", BIN)
+            // Windows: only `local` starts a native daemon (with no remote, a Windows client
+            // looks for ptyro in WSL first).
+            .env("PTYRO_REMOTE", if cfg!(windows) { "local" } else { "" })
             .env_remove("PTYRO_SOCKET")
             .env_remove("PTYRO_SESSION_ID")
             .output()
@@ -341,6 +349,8 @@ fn cli_autospawns_and_maps_errors_to_exit_codes() {
     assert_eq!(run(&["daemon", "status"]).status.code(), Some(8));
 }
 
+// Unix: SIGTERM and a process's signal test (tests/win5.rs stops a native daemon).
+#[cfg(unix)]
 #[test]
 fn sigterm_stops_the_daemon_and_its_sessions() {
     let mut d = TempDaemon::start(BIN).unwrap();

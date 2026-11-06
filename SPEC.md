@@ -5836,6 +5836,30 @@ CI: GitHub Actions on Linux + macOS runs `make check` (fmt-check, clippy `-D war
 spike smoke) plus cargo-deny (`deny.toml`: licenses, advisories, bans, sources); release artifacts
 are built on tags later. CI only ever calls make targets.
 
+**[built WIN13]**
+- **The flake budget.** `make test` runs every test binary through `ptyro-flaky` (a binary in
+  `ptyro-testkit`): it builds the tests (`cargo test --no-run`, cargo's JSON names each binary
+  and its package), runs each in its package's folder as cargo would, and runs any test that
+  failed again, once, on its own (`--exact`). A test that passes then is a flake: named in the
+  output, in `target/flakes.txt` and in the CI job's summary (`GITHUB_STEP_SUMMARY`). The run
+  fails when a test fails twice, a binary fails without naming a test twice, doc tests fail
+  (run last, once), or flakes exceed `FLAKE_BUDGET` (2). Retries can't hide a flaky suite, and
+  a flake is never silent (owner, 2026-11-06: retry once, capped).
+- **Windows.** CI's `windows` job runs `make test` on `windows-latest` (Git Bash; `make` from
+  Chocolatey): every crate's tests natively, native daemons in ConPTY with the packaged ConPTY
+  beside the test binaries (`PTYRO_TEST_PACKAGED_CONPTY=1`), two tests at a time per binary
+  (`RUST_TEST_THREADS=2`, also on macOS's three-core runners: m7's nine at once took 144 s
+  on Windows and 102 s on macOS and missed their windows, each alone 14 s) and scripted TUI runs at half speed (`PTYRO_TEST_TIME_SCALE=2`). A test that can't run there is
+  `#[cfg(unix)]` with its reason on the line above (a Unix mode, a signal, a symbolic link
+  without Developer Mode, a POSIX shell's job control, a stand-in that is a shell script by
+  nature). Stand-in programs on `PATH` (`gh`, `claude`, `ssh`, `tailscale`, an editor) go
+  through `ptyro_testkit::program`: a `#!/bin/sh` script on Unix; on Windows, where a script
+  can't run by name and `Command` finds only `.exe` files, the debug `ptyro.exe` hard-linked
+  under the program's name with what to run beside it in `<name>.shim` (JSON `argv` and `env`;
+  `say:` prints and waits). A debug `ptyro.exe` started under another name with a shim runs it
+  first thing; a release build never looks. `make check-windows` cross-checks every crate's
+  tests from Linux.
+
 **[built M8]**
 - **Fuzzing.** Eleven targets live in `ptyro-testkit::fuzz`:
   - `sniff`: the same findings however the reads are split;
@@ -7002,6 +7026,34 @@ Windows) wasn't needed to get the list below: compile errors are the same either
   `echo %OS% $env:OS` with `Windows_NT` in their output, a POSIX shell with neither, whatever the
   locale (the "not recognized" message is localized). [S, Microsoft's OpenSSH docs; the probe's
   answers V in cmd and PowerShell 5.1 on Windows 11]
+- **What running every test on Windows found (WIN13)** [V, 2026-11-06, CI's `windows-latest`
+  and Windows 11 build 26200]:
+  - **Paths as patterns see `/`.** A tool's file comes as `src\api.rs` on Windows, and leases,
+    guards, change-set fences and a profile's `match.paths` are written with `/`: none of them
+    matched until both sides were spelled with `/` (`os::slash_path`).
+  - **An address typed as `C:\…` is a path** (`os::looks_like_path`): `--project C:\src\app`
+    was looked up as a project's name.
+  - **Git Bash reports its folder as `/c/Users/…`** (OSC 7); the native daemon reads it as
+    `C:\Users\…` (`os::reported_folder`).
+  - **`std::fs::canonicalize` gives `\\?\C:\…`,** which git can't read a config at, nor an
+    agent a folder: ptyro's own `os::canonicalize` drops the prefix, product code and tests.
+  - **`curl -o /dev/null` fails on Windows after a good answer**: `NUL` (`os::DEV_NULL`).
+  - **MSYS programs expand an unquoted `{…}` themselves**, and Rust leaves an argument without
+    a space unquoted: compact JSON (`{"type":"x"}`) reached Git Bash's `sh` as an empty
+    argument (reproduced with Git for Windows 2.x's `sh.exe`). ptyro quotes every argument of a
+    program it chains on Windows (`os::quoted_args`).
+  - **A console's input handle is signalled for every record** (focus, window size, a key let
+    go), not only for a character: `input_ready` takes the others off and waits on.
+  - **Windows keeps a file in use for a moment** after the process that had it exits (os error
+    32): removing a folder right after the daemon stops is tried again for a few seconds.
+  - **A link to a folder is removed with `remove_dir`** there, not `remove_file`.
+  - **A cooked console's line editor** takes ESC as "clear the line": a bracketed paste typed
+    into a program reading lines in cooked mode loses its markers and new lines. Programs that
+    ask for bracketed paste read raw VT input (real agents do; so does the fake agent then).
+  - **`daemon stop` without `--force` refuses while sessions run**: the testkit's stop on Windows
+    (no SIGTERM there) is `--force`, else the kill after it lost unsaved state.
+  - **A daemon's health** reads the working set (`K32GetProcessMemoryInfo`) and the handle count
+    (`GetProcessHandleCount`): `ps` and `/proc` aren't there.
 - **A named pipe is never `stat`ed.** Asking for a pipe's attributes (`Path::exists` on
   `\\.\pipe\…`) opens it, which can take an instance a client is waiting for; a server the
   daemon started watches the daemon's process instead (`PTYRO_DAEMON_PID`, `WaitForSingleObject`).

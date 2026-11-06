@@ -137,12 +137,14 @@ pub fn matches(def: &ProfileDef, remotes: &[String], path: &Path) -> bool {
         let pat = ptyro_git::normalize_remote(pat);
         norm.iter().any(|r| crate::glob::matches(&pat, r))
     });
-    let path_s = path.to_string_lossy();
-    let path_hit = def
-        .matches
-        .paths
-        .iter()
-        .any(|pat| crate::glob::matches(&expand_home(pat).to_string_lossy(), &path_s));
+    // Both with `/` (a Windows path and an expanded `~/…` mix separators otherwise).
+    let path_s = ptyro_core::os::slash_path(&path.to_string_lossy());
+    let path_hit = def.matches.paths.iter().any(|pat| {
+        crate::glob::matches(
+            &ptyro_core::os::slash_path(&expand_home(pat).to_string_lossy()),
+            &path_s,
+        )
+    });
     remote_hit || path_hit
 }
 

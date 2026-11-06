@@ -29,6 +29,9 @@ const CLAUDE_ID: &str = "5b1d7a52-0000-4000-8000-00000000c1a0";
 const CODEX_ID: &str = "01a17172-da66-7120-83a8-564b2ed106e4";
 
 fn claude_session(cwd: &str) -> String {
+    // JSON-escaped (a Windows path's `\\`).
+    let cwd = serde_json::to_string(cwd).unwrap();
+    let cwd = &cwd[1..cwd.len() - 1];
     format!(
         r#"{{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"{CLAUDE_ID}","cwd":"{cwd}","timestamp":"2026-10-20T09:00:00.000Z","isSidechain":false,"message":{{"role":"user","content":"explain a monad like I am five"}}}}
 {{"type":"assistant","uuid":"a1","parentUuid":"u1","sessionId":"{CLAUDE_ID}","cwd":"{cwd}","timestamp":"2026-10-20T09:00:05.000Z","isSidechain":false,"message":{{"role":"assistant","content":[{{"type":"tool_use","id":"toolu_1","name":"WebSearch","input":{{"query":"monad for kids"}}}}]}}}}
@@ -37,6 +40,11 @@ fn claude_session(cwd: &str) -> String {
 {{"type":"custom-title","customTitle":"Monads for kids","sessionId":"{CLAUDE_ID}"}}
 "#
     )
+}
+
+/// Claude's folder for a project: its path with every separator (and a drive's `:`) a `-`.
+fn claude_slug(dir: &std::path::Path) -> String {
+    dir.to_string_lossy().replace(['/', '\\', ':'], "-")
 }
 
 fn claude_more() -> String {
@@ -66,11 +74,11 @@ const GEMINI: &str = r#"{"sessionId":"9e3b0c44-0000-4000-8000-00000000ge01","pro
 impl World {
     fn new(extra: &str) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-import-").tempdir().unwrap();
-        let h = home.path().canonicalize().unwrap();
+        let h = ptyro_core::os::canonicalize(home.path()).unwrap();
         // The histories, as each agent leaves them.
         let repo = h.join("repo");
         std::fs::create_dir_all(&repo).unwrap();
-        let slug = repo.to_string_lossy().replace('/', "-");
+        let slug = claude_slug(&repo);
         write(
             &h.join(".claude/projects").join(&slug).join(format!("{CLAUDE_ID}.jsonl")),
             &claude_session(&repo.to_string_lossy()),
@@ -92,12 +100,12 @@ impl World {
         let hs = h.to_string_lossy().into_owned();
         let env = [("HOME", hs.as_str()), ("GIT_CONFIG_NOSYSTEM", "1"), ("SHELL", "/bin/sh")];
         let mut config = String::from(
-            "[chat]\ntitle_command = [\"/bin/sh\", \"-c\", \"cat >/dev/null; echo '\\\"A fake title.\\\"'\"]\n",
+            "[chat]\ntitle_command = [\"sh\", \"-c\", \"cat >/dev/null; echo '\\\"A fake title.\\\"'\"]\n",
         );
         config.push_str(extra);
         for a in ["claude", "codex", "gemini", "opencode"] {
             config.push_str(&format!(
-                "\n[agents.{a}]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"{a}\"]\n"
+                "\n[agents.{a}]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"{a}\"]\n"
             ));
         }
         let d = TempDaemon::start_with(BIN, &env, Some(&config)).unwrap();
@@ -105,11 +113,11 @@ impl World {
     }
 
     fn home(&self) -> PathBuf {
-        self.home.path().canonicalize().unwrap()
+        ptyro_core::os::canonicalize(self.home.path()).unwrap()
     }
 
     fn claude_file(&self) -> PathBuf {
-        let slug = self.home().join("repo").to_string_lossy().replace('/', "-");
+        let slug = claude_slug(&self.home().join("repo"));
         self.home().join(".claude/projects").join(slug).join(format!("{CLAUDE_ID}.jsonl"))
     }
 
@@ -173,9 +181,9 @@ fn histories_become_searchable_read_only_chats() {
     write(
         &w.home().join(".claude/projects/-own").join("own-1.jsonl"),
         &format!(
-            r#"{{"type":"user","uuid":"o1","sessionId":"own-1","cwd":"{}","timestamp":"2026-10-20T09:00:00Z","message":{{"role":"user","content":"a chat engine's turn"}}}}
+            r#"{{"type":"user","uuid":"o1","sessionId":"own-1","cwd":{},"timestamp":"2026-10-20T09:00:00Z","message":{{"role":"user","content":"a chat engine's turn"}}}}
 "#,
-            own.to_string_lossy()
+            serde_json::to_string(&own.to_string_lossy()).unwrap()
         ),
     );
     // A dry run counts, and writes nothing.
@@ -272,9 +280,9 @@ fn histories_become_searchable_read_only_chats() {
     write(
         &w.home().join(".claude/projects/-wt").join("wt-1.jsonl"),
         &format!(
-            r#"{{"type":"user","uuid":"w1","sessionId":"wt-1","cwd":"{}","timestamp":"2026-10-21T09:00:00Z","message":{{"role":"user","content":"fix the flaky test"}}}}
+            r#"{{"type":"user","uuid":"w1","sessionId":"wt-1","cwd":{},"timestamp":"2026-10-21T09:00:00Z","message":{{"role":"user","content":"fix the flaky test"}}}}
 "#,
-            wt.to_string_lossy()
+            serde_json::to_string(&wt.to_string_lossy()).unwrap()
         ),
     );
     let r = w.json(&["chat", "import", "--agent", "claude", "--json"]);

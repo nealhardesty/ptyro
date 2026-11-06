@@ -602,7 +602,21 @@ pub(crate) fn write_atomic(path: &std::path::Path, text: &str, mode: u32) -> Res
         f.write_all(text.as_bytes())?;
         f.sync_all()?;
         drop(f);
-        std::fs::rename(&tmp, &target)
+        // Windows refuses a rename onto a file another writer (or a virus scanner) has open at
+        // that moment (os errors 5, 32): tried again briefly, as two saves at once are (WIN13).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            match std::fs::rename(&tmp, &target) {
+                Err(e)
+                    if cfg!(windows)
+                        && matches!(e.raw_os_error(), Some(5 | 32))
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                r => break r,
+            }
+        }
     })();
     if let Err(e) = written {
         let _ = std::fs::remove_file(&tmp);
@@ -709,6 +723,7 @@ fn edit(path: &std::path::Path, key: Option<&str>) -> Result<i32, Error> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     use super::*;
@@ -779,11 +794,17 @@ mod tests {
         let real = d.path().join("dotfiles/ptyro.toml");
         std::fs::create_dir_all(real.parent().unwrap()).unwrap();
         std::fs::write(&real, "[ui]\nmouse = true\n").unwrap();
-        let link = d.path().join("config.toml");
-        std::os::unix::fs::symlink(&real, &link).unwrap();
-        write_private(&link, "[ui]\nmouse = false\n").unwrap();
-        // The link is still a link, and the file it points at changed.
-        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        // Through a link where links need no privilege (Windows wants Developer Mode for one).
+        #[cfg(unix)]
+        {
+            let link = d.path().join("config.toml");
+            std::os::unix::fs::symlink(&real, &link).unwrap();
+            write_private(&link, "[ui]\nmouse = false\n").unwrap();
+            // The link is still a link, and the file it points at changed.
+            assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        }
+        #[cfg(not(unix))]
+        write_private(&real, "[ui]\nmouse = false\n").unwrap();
         assert_eq!(std::fs::read_to_string(&real).unwrap(), "[ui]\nmouse = false\n");
         // No temporary file is left, and two writers never share a name.
         let left: Vec<_> = std::fs::read_dir(d.path().join("dotfiles"))
@@ -809,6 +830,8 @@ mod tests {
         assert_eq!(with_lock(&real, || 7), 7);
     }
 
+    // Unix modes; on Windows write_private's access list is tested by tests/win11.rs.
+    #[cfg(unix)]
     #[test]
     fn configs_are_written_private() {
         let d = tempfile::tempdir().unwrap();

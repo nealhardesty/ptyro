@@ -1784,11 +1784,11 @@ impl App {
     /// `none` takes them all away.
     pub(crate) fn chat_folder(&mut self, chat: Option<String>, arg: &str) {
         let clear = matches!(arg, "none" | "-");
-        let dir = if arg.starts_with('/') || arg.starts_with('~') || clear {
+        let dir = if (ptyro_core::os::looks_like_path(arg) && !arg.starts_with('.')) || clear {
             arg.to_owned()
         } else {
             let p = std::env::current_dir().map(|d| d.join(arg)).unwrap_or_else(|_| arg.into());
-            p.canonicalize().unwrap_or(p).to_string_lossy().into_owned()
+            ptyro_core::os::canonicalize(&p).unwrap_or(p).to_string_lossy().into_owned()
         };
         let Some(chat) = chat else {
             if let Some(ChatPanel::View(v)) = &mut self.chat_panel {

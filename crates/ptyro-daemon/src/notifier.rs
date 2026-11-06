@@ -719,7 +719,8 @@ pub(crate) fn curl(cfg: &[String]) -> Result<String, String> {
             "-m",
             "10",
             "-o",
-            "/dev/null",
+            // (Windows' curl can't write /dev/null, and fails after a good answer: WIN13.)
+            ptyro_core::os::DEV_NULL,
             "-w",
             "%{http_code}",
             "--config",

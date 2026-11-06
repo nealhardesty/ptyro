@@ -210,7 +210,9 @@ impl Fake {
 
     fn hook_out(&self, event: &str, payload: Value) -> Option<Value> {
         let (cmds, payload) = self.hook_prep(event, payload);
-        run_hooks(&cmds, &payload)
+        // A Stop may run the session's verified-done check first, as ptyro's relay allows.
+        let limit = if event == "Stop" { Duration::from_secs(900) } else { HOOK_TIMEOUT };
+        run_hooks(&cmds, &payload, limit)
     }
 
     /// The hook commands for `event` and the payload they get.
@@ -222,6 +224,8 @@ impl Fake {
             "claude" | "codex" => self.hooks.get(event).cloned().unwrap_or_default(),
             "gemini" | "antigravity" => {
                 let bin = std::env::var("PTYRO_BIN").unwrap_or_else(|_| "ptyro".into());
+                // Forward slashes, as ptyro writes a hook's path (Git Bash drops backslashes).
+                let bin = crate::program::shell_path(&bin);
                 vec![format!("{bin} hook {} {event}", self.adapter)]
             }
             _ => Vec::new(),
@@ -396,7 +400,7 @@ impl Fake {
                     "claude" => {
                         let (cmds, payload) = f.hook_prep("PermissionRequest", tool.clone());
                         std::thread::spawn(move || {
-                            let _ = decided_tx.send(run_hooks(&cmds, &payload));
+                            let _ = decided_tx.send(run_hooks(&cmds, &payload, HELD_TIMEOUT));
                         });
                     }
                     _ => f.hook("PermissionRequest", tool.clone()),
@@ -480,27 +484,118 @@ fn agent_shell(line: &str) -> std::process::Command {
     c
 }
 
+/// One line as a real agent reads it on Windows (WIN13): raw VT input, echoed as typed, with a
+/// bracketed paste kept whole (its new lines in it, markers and all, for the caller to join), and
+/// Enter outside a paste ending it. A cooked console's line editor would take the paste's ESC as
+/// "clear the line" and drop its new lines. The bytes read (0: the input ended).
+fn read_line_raw(out: &mut std::io::Stdout, line: &mut String) -> usize {
+    let stdin = std::io::stdin();
+    let _raw = ptyro_pty::console::RawInput::new();
+    let mut bytes: Vec<u8> = Vec::new();
+    let mut in_paste = false;
+    // Inside an escape sequence (ESC, then `[` and parameters up to a final byte): not echoed.
+    let mut esc = 0u8;
+    let mut b = [0u8; 1];
+    loop {
+        if stdin.lock().read(&mut b).unwrap_or(0) == 0 {
+            break;
+        }
+        let c = b[0];
+        bytes.push(c);
+        if esc > 0 {
+            esc = match (esc, c) {
+                (1, b'[') => 2,
+                (2, 0x40..=0x7e) | (1, _) => 0,
+                (e, _) => e,
+            };
+            if esc == 0 {
+                if bytes.ends_with(b"\x1b[200~") {
+                    in_paste = true;
+                } else if bytes.ends_with(b"\x1b[201~") {
+                    in_paste = false;
+                }
+            }
+            continue;
+        }
+        match c {
+            0x1b => esc = 1,
+            b'\r' | b'\n' if !in_paste => {
+                bytes.pop();
+                let _ = write!(out, "\r\n");
+                break;
+            }
+            b'\r' => {
+                bytes.pop();
+                bytes.push(b'\n');
+                let _ = write!(out, "\r\n");
+            }
+            0x7f | 0x08 => {
+                bytes.pop();
+                if bytes.pop().is_some() {
+                    let _ = write!(out, "\x08 \x08");
+                }
+            }
+            _ => {
+                let _ = out.write_all(&[c]);
+            }
+        }
+        let _ = out.flush();
+    }
+    *line = String::from_utf8_lossy(&bytes).into_owned();
+    line.push('\n');
+    bytes.len().max(1)
+}
+
 /// Read one key in raw mode (the permission dialog).
 /// Run hook commands with `payload` on stdin; the last JSON line any of them prints.
-fn run_hooks(cmds: &[String], payload: &Value) -> Option<Value> {
+/// How long a hook may run before it is killed and the agent goes on, as real agents do
+/// (Codex's `timeout`, Claude's): a shell that hangs as it starts (seen once on a loaded
+/// Windows runner, WIN13) costs a turn's hooks, not the session.
+const HOOK_TIMEOUT: Duration = Duration::from_secs(30);
+/// A `PermissionRequest` hook ptyro holds for a phone's answer (the relay's own bound).
+const HELD_TIMEOUT: Duration = Duration::from_secs(3600);
+
+fn run_hooks(cmds: &[String], payload: &Value, limit: Duration) -> Option<Value> {
     let mut answer = None;
     for c in cmds {
-        if let Ok(mut child) = agent_shell(c)
+        let Ok(mut child) = agent_shell(c)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .spawn()
-        {
-            if let Some(mut stdin) = child.stdin.take() {
-                let _ = stdin.write_all(payload.to_string().as_bytes());
-            }
-            if let Ok(out) = child.wait_with_output() {
-                let text = String::from_utf8_lossy(&out.stdout);
-                if let Some(v) =
-                    text.lines().rev().find_map(|l| serde_json::from_str::<Value>(l.trim()).ok())
-                {
-                    answer = Some(v);
+        else {
+            continue;
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(payload.to_string().as_bytes());
+        }
+        // Its output on a thread, so a hook past its time can be killed.
+        let (tx, rx) = std::sync::mpsc::channel();
+        if let Some(mut stdout) = child.stdout.take() {
+            std::thread::spawn(move || {
+                let mut text = String::new();
+                let _ = stdout.read_to_string(&mut text);
+                let _ = tx.send(text);
+            });
+        }
+        let deadline = std::time::Instant::now() + limit;
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break;
                 }
             }
+        }
+        let text = rx.recv_timeout(Duration::from_secs(2)).unwrap_or_default();
+        if let Some(v) =
+            text.lines().rev().find_map(|l| serde_json::from_str::<Value>(l.trim()).ok())
+        {
+            answer = Some(v);
         }
     }
     answer
@@ -586,7 +681,12 @@ pub fn main(args: &[String]) -> i32 {
         }
         let _ = out.flush();
         let mut line = String::new();
-        if stdin.lock().read_line(&mut line).unwrap_or(0) == 0 {
+        let got = if cfg!(windows) && std::env::var_os("PTYRO_FAKE_PASTE").is_some() {
+            read_line_raw(&mut out, &mut line)
+        } else {
+            stdin.lock().read_line(&mut line).unwrap_or(0)
+        };
+        if got == 0 {
             return 0;
         }
         if let Some(h) = held.take() {

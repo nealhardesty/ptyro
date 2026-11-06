@@ -268,6 +268,36 @@ pub fn cwd(pid: u32) -> Option<PathBuf> {
 /// Interpreters whose name says nothing: the script they run names the program.
 const INTERPRETERS: &[&str] = &["node", "bun", "deno", "python", "pythonw", "py", "ruby", "perl"];
 
+/// This process's memory in use (its working set) in KiB, for the daemon's health (WIN13:
+/// `ps` and `/proc` aren't there); 0 when Windows doesn't say.
+pub fn own_memory_kib() -> u64 {
+    use windows_sys::Win32::System::ProcessStatus::{
+        K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+    };
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    // SAFETY: a zeroed counters struct of the size we pass; the pseudo-handle needs no closing.
+    unsafe {
+        let mut c: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
+        let size = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+        if K32GetProcessMemoryInfo(GetCurrentProcess(), &mut c, size) == 0 {
+            return 0;
+        }
+        (c.WorkingSetSize / 1024) as u64
+    }
+}
+
+/// How many handles this process holds (the Windows count of open files, pipes, threads…), for
+/// the daemon's health; 0 when Windows doesn't say.
+pub fn own_handles() -> u32 {
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessHandleCount};
+    let mut n = 0u32;
+    // SAFETY: the pseudo-handle needs no closing; `n` is written on success.
+    if unsafe { GetProcessHandleCount(GetCurrentProcess(), &mut n) } == 0 {
+        return 0;
+    }
+    n
+}
+
 /// The name to show for `pid`: its image's stem, lowercase as Windows ignores case (`claude`
 /// for `Claude.exe`), or for an
 /// interpreter the script it runs (`codex` for `node …\codex.js`; for a package's `cli.js` or
@@ -447,6 +477,12 @@ pub fn short_path(p: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn this_process_has_memory_and_handles() {
+        assert!(super::own_memory_kib() > 100);
+        assert!(super::own_handles() > 3);
+    }
+
     use super::*;
 
     #[test]

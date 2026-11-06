@@ -22,27 +22,27 @@ struct World {
 impl World {
     fn new() -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-land-").tempdir().unwrap();
-        let h = home.path().canonicalize().unwrap();
+        let h = ptyro_core::os::canonicalize(home.path()).unwrap();
         std::fs::write(
             h.join(".gitconfig"),
             "[user]\n\tname = Owner\n\temail = owner@example.com\n[init]\n\tdefaultBranch = main\n",
         )
         .unwrap();
-        use std::os::unix::fs::PermissionsExt;
         let bin = h.join("fakebin");
-        std::fs::create_dir_all(&bin).unwrap();
-        std::fs::write(bin.join("gh"), format!("#!/bin/sh\nexec \"{BIN}\" fake-gh \"$@\"\n"))
-            .unwrap();
-        std::fs::set_permissions(bin.join("gh"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        ptyro_testkit::program::program(
+            &bin,
+            "gh",
+            BIN,
+            &format!("exec \"{BIN}\" fake-gh \"$@\""),
+            &[BIN, "fake-gh"],
+            &[],
+        );
         std::fs::create_dir_all(h.join("gh-state")).unwrap();
         let env = [
             ("HOME".to_owned(), h.to_string_lossy().into_owned()),
             ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
             ("SHELL".into(), "/bin/sh".into()),
-            (
-                "PATH".into(),
-                format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default()),
-            ),
+            ("PATH".into(), ptyro_testkit::program::path_with(&bin)),
             ("PTYRO_FAKE_GH".into(), h.join("gh-state").to_string_lossy().into_owned()),
             ("PTYRO_FAKE_GH_PER_REPO".into(), "1".into()),
             ("PTYRO_TEST_FAST_POLL".into(), "1".into()),
@@ -55,7 +55,7 @@ impl World {
     }
 
     fn home(&self) -> PathBuf {
-        self.home.path().canonicalize().unwrap()
+        ptyro_core::os::canonicalize(self.home.path()).unwrap()
     }
 
     fn cli(&self, args: &[&str]) -> Output {

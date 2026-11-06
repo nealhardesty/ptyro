@@ -123,7 +123,7 @@ async fn a_session_runs_in_conpty_over_the_pipe_and_its_exit_code_is_kept() {
     let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
     let info = spawn(&c, "ps", &argv).await;
     let text = d.wait_for_text(&c, &info.name, "term=", WAIT).await.unwrap();
-    let tmp = std::env::temp_dir().canonicalize().unwrap();
+    let tmp = ptyro_core::os::canonicalize(&std::env::temp_dir()).unwrap();
     let tmp = tmp.to_string_lossy();
     let tmp = tmp.trim_start_matches(r"\\?\").trim_end_matches('\\');
     assert!(text.contains("ptyro=1 term=xterm-256color"), "{text}");

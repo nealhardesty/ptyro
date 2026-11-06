@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use ptyro_client::Client;
 use ptyro_core::TermSize;
 use ptyro_core::session::{SessionInfo, SpawnSpec};
+#[cfg(unix)] // only the Unix tests read a status
 use ptyro_core::status::AgentStatus;
 use ptyro_protocol::{Reply, Request};
 use ptyro_testkit::TempDaemon;
@@ -30,17 +31,24 @@ impl World {
     /// The same, with `extra` appended to its config (whole sections).
     fn with_config(shell: &str, extra: &str) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-ux1-").tempdir().unwrap();
-        let h = home.path().canonicalize().unwrap();
+        let h = ptyro_core::os::canonicalize(home.path()).unwrap();
         std::fs::write(
             h.join(".gitconfig"),
             "[user]\n\tname = T\n\temail = t@example.com\n[init]\n\tdefaultBranch = main\n",
         )
         .unwrap();
-        let sh = h.join("fake-shell");
-        std::fs::write(&sh, format!("#!/bin/sh\n{shell}\n")).unwrap();
-        std::fs::set_permissions(&sh, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        // (Windows' sessions start PowerShell, whatever `SHELL` says; it waits as this does.)
+        let say = ptyro_testkit::program::say_then_wait("", 60);
+        let sh = ptyro_testkit::program::program(
+            &h,
+            "fake-shell",
+            BIN,
+            shell,
+            &say.iter().map(String::as_str).collect::<Vec<_>>(),
+            &[],
+        );
         let config = format!(
-            "[attention]\nmin_work = \"1s\"\n[worktrees]\nfetch = false\n[agents.claude]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\n{extra}"
+            "[attention]\nmin_work = \"1s\"\n[worktrees]\nfetch = false\n[agents.claude]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"claude\"]\n{extra}"
         );
         let (hs, ss) = (h.to_string_lossy().into_owned(), sh.to_string_lossy().into_owned());
         let env = [("HOME", hs.as_str()), ("GIT_CONFIG_NOSYSTEM", "1"), ("SHELL", ss.as_str())];
@@ -49,12 +57,13 @@ impl World {
     }
 
     fn home(&self) -> PathBuf {
-        self.home.path().canonicalize().unwrap()
+        ptyro_core::os::canonicalize(self.home.path()).unwrap()
     }
 }
 
 /// ptyro under another name, so its process is called that: a hard link (the kernel names a
 /// process after the path it was started by), else a copy.
+#[cfg(unix)] // the hand-started agents' tests, which are Unix's
 fn named(path: &std::path::Path) {
     if std::fs::hard_link(BIN, path).is_err() {
         std::fs::copy(BIN, path).unwrap();
@@ -89,6 +98,8 @@ async fn wait_for(
 }
 
 /// UX1.2: a session says what it was asked, what it answered, and a shell what it ran.
+// Unix: the shell is a sh script printing OSC 133 marks (Windows' sessions start PowerShell).
+#[cfg(unix)]
 #[tokio::test]
 async fn sessions_report_their_task_reply_and_shell_command() {
     let shell = r"printf '\033]133;A\007$ \033]133;B\007\033]133;C;cmdline=make test; echo ok\007'
@@ -261,6 +272,8 @@ async fn a_session_starts_in_the_directory_asked_for_inside_a_project() {
 }
 
 /// UX1.5: a shell that `cd`s into another repository puts that one in the sidebar too.
+// Unix: the session's shell is a sh script written as `$SHELL` (Windows starts PowerShell).
+#[cfg(unix)]
 #[tokio::test]
 async fn a_shell_that_moves_into_a_repository_registers_it() {
     let w = World::new("exec sleep 60");
@@ -291,6 +304,8 @@ async fn a_shell_that_moves_into_a_repository_registers_it() {
 
 /// UX1.4: Claude typed into a shell session isn't one long "working" command: the session
 /// notes it (`zsh › claude`) and reads its status off its screen, at low confidence.
+// Unix: the session's shell is a sh script written as `$SHELL` (Windows starts PowerShell).
+#[cfg(unix)]
 #[tokio::test]
 async fn an_agent_started_by_hand_in_a_shell_reports_idle_blocked_and_working() {
     // A real process named `claude` (ptyro by another name), started from the shell after an
@@ -358,6 +373,8 @@ async fn an_agent_started_by_hand_in_a_shell_reports_idle_blocked_and_working() 
 
 /// UX1.4: adopting the Claude started by hand: it exits, and a managed session resumes the
 /// conversation it was in (its newest transcript for that directory).
+// Unix: the session's shell is a sh script written as `$SHELL` (Windows starts PowerShell).
+#[cfg(unix)]
 #[tokio::test]
 async fn adopting_a_hand_started_claude_resumes_its_conversation() {
     let w = World::new("exec sleep 60");
@@ -557,7 +574,8 @@ async fn the_task_box_takes_several_lines_as_one_prompt() {
         script
             .send_when("▾ main", "\\x11n")
             .send_when("What should it do?", "fix the login")
-            .send_when("fix the login", "\\x0a")
+            // Ctrl+J; through ConPTY (Windows) a typed LF is Enter, and ESC CR is Alt+Enter.
+            .send_when("fix the login", if cfg!(windows) { "\\x1b\\r" } else { "\\x0a" })
             .send_when("new line", "and the logout")
             .send_when("and the logout", "\\r")
             .until("prompt over 2 lines"),
@@ -895,6 +913,8 @@ async fn a_fresh_ptyro_opens_the_first_run_once() {
 
 /// UX1.3: with `[summaries]` on, a finished turn gets a line from the summarizer, which reads a
 /// redacted prompt on stdin; `Summarize` asks for one now.
+// Unix: the summarizer stand-in is a sh script that saves its stdin.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_finished_turn_is_summarized_in_a_line() {
     let dir = tempfile::tempdir().unwrap();
@@ -908,7 +928,7 @@ async fn a_finished_turn_is_summarized_in_a_line() {
     )
     .unwrap();
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    let extra = format!("[summaries]\nenabled = true\ncommand = [\"{}\"]\n", script.display());
+    let extra = format!("[summaries]\nenabled = true\ncommand = ['{}']\n", script.display());
     let w = World::with_config("exec sleep 30", &extra);
     let c = w.d.client().await.unwrap();
     let agent = SpawnSpec {
@@ -957,6 +977,7 @@ async fn quick(
     }
 }
 
+#[cfg(unix)] // only the quick terminal's test, which is Unix's
 async fn listed(c: &Client) -> Vec<SessionInfo> {
     match c.request(Request::List).await.unwrap() {
         Reply::Sessions { sessions } => sessions,
@@ -967,6 +988,8 @@ async fn listed(c: &Client) -> Vec<SessionInfo> {
 /// UX1.25: one quick terminal per worktree (only a worktree, UX3.4), reused; quiet but for a blocked
 /// agent in it; at its prompt it goes with its worktree, running something it holds it up; and
 /// `exit` forgets it.
+// Unix: it needs a job-control shell's foreground process group (`/bin/sh -i`).
+#[cfg(unix)]
 #[tokio::test]
 async fn a_quick_terminal_is_one_per_worktree_quiet_and_goes_with_it() {
     // An interactive shell with job control: a command runs as the foreground process group.
@@ -1108,6 +1131,8 @@ async fn quitting_from_the_tui_stops_the_daemon() {
 /// UX1.22: `ptyro tour` is the daily loop for real: a task, its permission prompt answered from
 /// peek, its diff reviewed, finished into main, cleaned up. Each key goes in once the coach
 /// asks for it. The tour runs in a ptyro of its own and deletes it afterwards.
+// Unix: on Windows the tour runs in WSL (`wsl -- ptyro tour`), not natively.
+#[cfg(unix)]
 #[tokio::test]
 async fn the_tour_walks_the_loop_for_real_and_cleans_up() {
     let home = tempfile::tempdir().unwrap();
@@ -1151,7 +1176,7 @@ async fn the_tour_walks_the_loop_for_real_and_cleans_up() {
 #[tokio::test]
 async fn ux1_done_when_from_a_fresh_machine_to_a_merged_and_cleaned_up_pr() {
     let tmp = tempfile::Builder::new().prefix("ptyro-ux1-done-").tempdir().unwrap();
-    let h = tmp.path().canonicalize().unwrap();
+    let h = ptyro_core::os::canonicalize(tmp.path()).unwrap();
     std::fs::write(
         h.join(".gitconfig"),
         "[user]\n\tname = Owner\n\temail = owner@example.com\n[init]\n\tdefaultBranch = main\n",
@@ -1160,21 +1185,24 @@ async fn ux1_done_when_from_a_fresh_machine_to_a_merged_and_cleaned_up_pr() {
     // Only `claude` installed (the pretend one), and a `gh`.
     let bin = h.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
-    let exe = |name: &str, body: String| {
-        std::fs::write(bin.join(name), format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(
-            bin.join(name),
-            std::os::unix::fs::PermissionsExt::from_mode(0o755),
-        )
-        .unwrap();
-    };
-    exe(
+    ptyro_testkit::program::program(
+        &bin,
         "claude",
-        format!(
+        BIN,
+        &format!(
             "PTYRO_FAKE_TOUR=1 PTYRO_FAKE_PASTE=1 exec \"{BIN}\" fake-agent --as claude \"$@\""
         ),
+        &[BIN, "fake-agent", "--as", "claude"],
+        &[("PTYRO_FAKE_TOUR", "1"), ("PTYRO_FAKE_PASTE", "1")],
     );
-    exe("gh", format!("exec \"{BIN}\" fake-gh \"$@\""));
+    ptyro_testkit::program::program(
+        &bin,
+        "gh",
+        BIN,
+        &format!("exec \"{BIN}\" fake-gh \"$@\""),
+        &[BIN, "fake-gh"],
+        &[],
+    );
     let gh = h.join("gh-state");
     std::fs::create_dir_all(&gh).unwrap();
     // myrepo, cloned from a "remote" (where the PR's branch is pushed).
@@ -1195,7 +1223,7 @@ async fn ux1_done_when_from_a_fresh_machine_to_a_merged_and_cleaned_up_pr() {
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-qm", "A greeting"]);
     git(&repo, &["push", "-q", "origin", "main"]);
-    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
+    let path = ptyro_testkit::program::path_with(&bin);
     let (hs, gs) = (h.to_string_lossy().into_owned(), gh.to_string_lossy().into_owned());
     let env = [
         ("HOME", hs.as_str()),
@@ -1288,7 +1316,7 @@ async fn next_agent(c: &Client, wt: &str) -> String {
 async fn again_starts_the_agent_the_worktree_last_started() {
     let w = World::with_config(
         "exec /bin/sh -i",
-        &format!("[agents.codex]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"codex\"]\n"),
+        &format!("[agents.codex]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"codex\"]\n"),
     );
     let dir = repo(&w, "myrepo");
     let c = w.d.client().await.unwrap();
@@ -1347,7 +1375,7 @@ async fn again_starts_the_configured_default_agent_first() {
     let w = World::with_config(
         "exec /bin/sh -i",
         &format!(
-            "[agents]\ndefault = \"codex\"\n[agents.codex]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"codex\"]\n"
+            "[agents]\ndefault = \"codex\"\n[agents.codex]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"codex\"]\n"
         ),
     );
     let dir = repo(&w, "myrepo");

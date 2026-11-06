@@ -79,12 +79,15 @@ async fn selectors_expand_to_the_right_sessions() {
     assert_eq!(err.code, ErrorCode::Ambiguous, "single-target requests refuse ambiguous selectors");
 }
 
+#[cfg(unix)] // the suspend test's, which is Unix's
 fn ctrl_z(session: &SessionInfo) -> ClientMsg {
     use ptyro_core::input::{InputEvent, KeyCode, KeyEvent, Mods};
     let key = KeyEvent::new(KeyCode::Char { c: 'z' }, Mods(Mods::CTRL));
     ClientMsg::Input { session: session.id, event: InputEvent::Key { key } }
 }
 
+// Unix: SIGTSTP and SIGCONT are Unix job control; Windows has none.
+#[cfg(unix)]
 #[tokio::test]
 async fn ctrl_z_suspending_the_session_itself_is_resumed() {
     let d = TempDaemon::start(BIN).unwrap();
@@ -374,8 +377,10 @@ async fn tui_splits_and_restores_the_layout_on_reattach() {
         split.contains("osc7501=yes") && split.contains(&header),
         "both panes visible:\n{split}"
     );
-    // Ctrl-Space (NUL), the second default prefix, works like Ctrl-Q.
-    let r2 = run(tui(&d, &[]).snapshot(1.8).send(2.2, "\\x00d").timeout(4.0)).await;
+    // Ctrl-Space (NUL), the second default prefix, works like Ctrl-Q. Windows: a NUL typed into
+    // ConPTY may not arrive as Ctrl+Space's key (unverified there), so it detaches with Ctrl-Q.
+    let detach = if cfg!(windows) { "\\x11d" } else { "\\x00d" };
+    let r2 = run(tui(&d, &[]).snapshot(1.8).send(2.2, detach).timeout(4.0)).await;
     let restored = r2.at(1.8);
     assert!(
         restored.contains("osc7501=yes") && restored.contains(&header),
@@ -384,6 +389,8 @@ async fn tui_splits_and_restores_the_layout_on_reattach() {
     assert_eq!(r2.exit, Some(0), "Ctrl-Space d detaches:\n{}", r2.screen);
 }
 
+// Unix: SIGTSTP and SIGCONT are Unix job control; Windows has none.
+#[cfg(unix)]
 #[tokio::test]
 async fn tui_says_when_it_resumed_a_suspended_session() {
     let d = TempDaemon::start(BIN).unwrap();
@@ -423,7 +430,7 @@ async fn tui_closes_the_pane_of_a_removed_session() {
         .timeout(7.0)));
     // The split's clone goes: its pane closes, and never shows another session (UX3.1).
     let clone = newcomer(&c, &["alpha"]).await;
-    tokio::time::sleep(Duration::from_millis(1800)).await;
+    tokio::time::sleep(ptyro_testkit::headless::scaled(Duration::from_millis(1800))).await;
     c.request(Request::Kill { addr: clone.clone(), signal: Some(9) }).await.expect("kill");
     // A shell that dies is removed by the daemon itself (`[ui] shell_exit = "close"`).
     let deadline = Instant::now() + WAIT;
@@ -584,7 +591,12 @@ async fn a_shell_that_exits_is_removed_unless_shell_exit_is_keep() {
 async fn a_command_line_runs_through_the_daemons_shell() {
     let d = TempDaemon::start_with_env(BIN, &[("SHELL", "/bin/sh")]).unwrap();
     let c = d.client().await.unwrap();
-    let line = "printf 'a b c' | wc -w >/dev/null && exit $((6 * 7))";
+    // The daemon's shell: sh on Unix, PowerShell on Windows (which ignores `SHELL`).
+    let line = if cfg!(windows) {
+        "if ((Write-Output 'a b c' | Measure-Object -Word).Words -eq 3) { exit (6 * 7) }"
+    } else {
+        "printf 'a b c' | wc -w >/dev/null && exit $((6 * 7))"
+    };
     let spec = SpawnSpec {
         command: Some(format!("  {line} ")),
         cwd: std::env::temp_dir(),
@@ -596,7 +608,11 @@ async fn a_command_line_runs_through_the_daemons_shell() {
         other => panic!("{other:?}"),
     };
     assert_eq!(info.kind, ptyro_core::session::SessionKind::Command);
-    assert_eq!(info.argv, ["/bin/sh", "-c", line]);
+    if cfg!(windows) {
+        assert_eq!(info.argv, ptyro_core::shell::command_shell(line));
+    } else {
+        assert_eq!(info.argv, ["/bin/sh", "-c", line]);
+    }
     let ended = wait_state(&c, "typed", |s| !s.is_live()).await;
     assert_eq!(ended.state, ProcessState::Exited { code: Some(42), signal: None });
     // Nothing but spaces is no command: a shell.
@@ -621,7 +637,11 @@ async fn tui_runs_a_typed_command_through_the_daemons_shell() {
     let d = TempDaemon::start_with_env(BIN, &[("SHELL", "/bin/sh")]).unwrap();
     let c = d.client().await.unwrap();
     spawn(&c, "home", &["sh", "-c", "exec cat"]).await;
-    let line = "echo tui-$((6 * 7)); exec cat";
+    let line = if cfg!(windows) {
+        "Write-Output ('tui-' + 6 * 7); Start-Sleep 30"
+    } else {
+        "echo tui-$((6 * 7)); exec cat"
+    };
     let r = run(tui(&d, &["attach", "home"])
         .env("SHELL", "/nonexistent/the-clients-shell")
         .send(1.4, "\\x11:")
@@ -638,7 +658,11 @@ async fn tui_runs_a_typed_command_through_the_daemons_shell() {
         Reply::Sessions { sessions } => sessions.into_iter().find(|s| s.name == ran).unwrap(),
         other => panic!("{other:?}"),
     };
-    assert_eq!(info.argv, ["/bin/sh", "-c", line], "{}", r.at(4.0));
+    if cfg!(windows) {
+        assert_eq!(info.argv, ptyro_core::shell::command_shell(line), "{}", r.at(4.0));
+    } else {
+        assert_eq!(info.argv, ["/bin/sh", "-c", line], "{}", r.at(4.0));
+    }
     assert_eq!(info.kind, ptyro_core::session::SessionKind::Command);
     assert!(r.at(4.0).contains("tui-42"), "{}", r.at(4.0));
 }

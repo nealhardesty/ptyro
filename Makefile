@@ -60,13 +60,30 @@ install-release: ## Install the fully optimized build (what a release ships: slo
 	$(CARGO) install --locked --path crates/ptyro
 
 ## ── quality ────────────────────────────────────────────────────────────────
-test: ## Run all tests (every test binary runs, so one failure doesn't hide the rest), then the Windows cross-check when cargo-xwin is installed
-	PTYRO_WSL_HOLD=0 $(CARGO) test --workspace --no-fail-fast
-	OPTIONAL=1 sh scripts/check-windows.sh
+# `make test` runs every test binary through ptyro-flaky (WIN13): a test that fails runs again
+# once, alone; passing then, it is a flake, named in the output, target/flakes.txt and CI's job
+# summary. More than FLAKE_BUDGET flakes, or a test failing twice, fails the run.
+FLAKE_BUDGET ?= 2
+ifeq ($(OS),Windows_NT)
+# On Windows the packaged ConPTY goes beside the test binaries, and the tests that need it are
+# told it's there (they'd skip without it); scripted TUI runs take twice their times and two
+# tests run at a time per binary (CI's Windows runners start processes slower: m7's nine tests
+# at once took 144 s and missed their windows, each alone takes 14 s); there's nothing to
+# cross-check from Windows itself.
+TEST_ENV = PTYRO_TEST_PACKAGED_CONPTY=1 PTYRO_TEST_TIME_SCALE=2 RUST_TEST_THREADS=2
+TEST_PREP = for d in target/debug target/debug/deps; do INTO=$$d sh scripts/conpty.sh || exit 1; done
+TEST_CROSS = @echo "check-windows: this is Windows: the tests above ran here"
+else
+# macOS runners have three cores: m7's nine tests at once took 102 s there, and missed windows.
+TEST_ENV = $(if $(filter Darwin,$(shell uname -s)),RUST_TEST_THREADS=2)
+TEST_PREP = @true
+TEST_CROSS = OPTIONAL=1 sh scripts/check-windows.sh
+endif
 
-# The Windows client's crates whose tests run on Windows itself, and ptyro-pty's Windows seam
-# (WIN4); the rest only compile there (agents and git run in the daemon, in WSL). SPEC §20.11.
-WINDOWS_TESTED := -p ptyro-core -p ptyro-protocol -p ptyro-term -p ptyro-store -p ptyro-meaning -p ptyro-run -p ptyro-drive -p ptyro-client -p ptyro-tui -p ptyro-pty
+test: ## Run all tests (every test binary runs; a failing test runs again once, and more than FLAKE_BUDGET=2 flakes fail the run), then the Windows cross-check when cargo-xwin is installed. On Windows (Git Bash), the same tests natively
+	$(TEST_PREP)
+	PTYRO_WSL_HOLD=0 FLAKE_BUDGET=$(FLAKE_BUDGET) $(TEST_ENV) $(CARGO) run -q -p ptyro-testkit --bin ptyro-flaky -- --workspace
+	$(TEST_CROSS)
 
 # Windows itself, from PowerShell or Git Bash: one command each, so make's cmd.exe runs them too
 # (no sh on PATH in a plain PowerShell). Elsewhere (Linux, WSL) they say where to run them.
@@ -85,16 +102,8 @@ build-windows: ## On Windows: release ptyro.exe in target/release/, with the pac
 conpty: ## Fetch Microsoft's packaged ConPTY (pinned, SHA-256 checked) that ptyro.exe ships with into target/conpty/ (INTO=<dir> ARCH=x86_64|aarch64 copies one beside a ptyro.exe)
 	INTO='$(INTO)' ARCH='$(ARCH)' sh scripts/conpty.sh
 
-# The packaged ConPTY goes beside every test binary and ptyro.exe that starts sessions, and the
-# tests that need it are told it's there (they'd skip without it).
-WINDOWS_CONPTY_INTO := target/debug target/debug/deps
-
-test-windows: ## On Windows itself (CI's windows job): the client crates' and ptyro-pty's tests, a native daemon end to end in ConPTY (WIN5), the rest compiled
-	$(CARGO) build -p ptyro --bins
-	for d in $(WINDOWS_CONPTY_INTO); do INTO=$$d sh scripts/conpty.sh || exit 1; done
-	PTYRO_TEST_PACKAGED_CONPTY=1 $(CARGO) test --no-fail-fast $(WINDOWS_TESTED)
-	PTYRO_TEST_PACKAGED_CONPTY=1 $(CARGO) test --no-fail-fast -p ptyro --test win5 --test win6 --test win9 --test win10 --test win11
-	$(CARGO) check -p ptyro-agents -p ptyro-git -p ptyro-daemon -p ptyro-testkit --all-targets
+test-windows: ## On Windows itself (Git Bash; CI's windows job and the release check): `make test`, every test natively, a native daemon's in ConPTY with the packaged ConPTY beside them
+	$(MAKE) test
 
 fmt: ## Format all code
 	$(CARGO) fmt --all

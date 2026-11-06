@@ -23,16 +23,16 @@ impl World {
     /// `extra`: more config at the end.
     fn new(extra: &str) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-chat4-").tempdir().unwrap();
-        let h = home.path().canonicalize().unwrap();
+        let h = ptyro_core::os::canonicalize(home.path()).unwrap();
         let hs = h.to_string_lossy().into_owned();
         let env = [("HOME", hs.as_str()), ("GIT_CONFIG_NOSYSTEM", "1"), ("SHELL", "/bin/sh")];
         let mut config = String::from(
-            "[chat]\ntitle_command = [\"/bin/sh\", \"-c\", \"cat >/dev/null; echo '\\\"A fake title.\\\"'\"]\n",
+            "[chat]\ntitle_command = [\"sh\", \"-c\", \"cat >/dev/null; echo '\\\"A fake title.\\\"'\"]\n",
         );
         config.push_str(extra);
         for a in ["claude", "codex", "gemini", "opencode"] {
             config.push_str(&format!(
-                "\n[agents.{a}]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"{a}\"]\n"
+                "\n[agents.{a}]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"{a}\"]\n"
             ));
         }
         let d = TempDaemon::start_with(BIN, &env, Some(&config)).unwrap();
@@ -40,7 +40,7 @@ impl World {
     }
 
     fn home(&self) -> PathBuf {
-        self.home.path().canonicalize().unwrap()
+        ptyro_core::os::canonicalize(self.home.path()).unwrap()
     }
 
     fn cli(&self, args: &[&str]) -> Output {
@@ -128,7 +128,8 @@ fn a_read_chat_reads_its_folder_and_the_default_chat_only_searches() {
         after(&w.argv(c["id"].as_str().unwrap()), "--add-dir").is_empty()
     });
     // A folder that isn't there is refused, with the reason.
-    let out = w.cli(&["chat", "set", &addr, "--folder", "/no/such/folder"]);
+    let missing = if cfg!(windows) { r"C:\no\such\folder" } else { "/no/such/folder" };
+    let out = w.cli(&["chat", "set", &addr, "--folder", missing]);
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("no such folder"));
     // Codex: the read chat's folder in its permission profile (best effort: outside $HOME).

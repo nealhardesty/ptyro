@@ -2461,9 +2461,10 @@ pub(crate) fn edit_rows(
     (shown, cursor)
 }
 
-/// The key that starts a new line, as this terminal can send it.
+/// The key that starts a new line, as this terminal can send it: Shift+Enter with the kitty
+/// protocol, and on Windows, whose console sends whole key records (Shift+Enter is itself).
 pub(crate) fn newline_hint(app: &App) -> &'static str {
-    if app.kitty { "⇧⏎ new line" } else { "C-j new line" }
+    if app.kitty || cfg!(windows) { "⇧⏎ new line" } else { "C-j new line" }
 }
 
 #[cfg(test)]

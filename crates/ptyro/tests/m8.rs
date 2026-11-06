@@ -29,18 +29,18 @@ impl World {
 
     fn with_env(extra: &str, daemon_env: &[(&str, &str)]) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-m8-").tempdir().unwrap();
-        let hs = home.path().canonicalize().unwrap().to_string_lossy().into_owned();
+        let hs = ptyro_core::os::canonicalize(home.path()).unwrap().to_string_lossy().into_owned();
         let mut env = vec![("HOME", hs.as_str()), ("SHELL", "/bin/sh")];
         env.extend_from_slice(daemon_env);
         let config = format!(
-            "[attention]\nmin_work = \"1s\"\n[agents.claude]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\n{extra}"
+            "[attention]\nmin_work = \"1s\"\n[agents.claude]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"claude\"]\n{extra}"
         );
         let d = TempDaemon::start_with(BIN, &env, Some(&config)).unwrap();
         Self { home, d }
     }
 
     fn home(&self) -> PathBuf {
-        self.home.path().canonicalize().unwrap()
+        ptyro_core::os::canonicalize(self.home.path()).unwrap()
     }
 
     fn cli(&self, args: &[&str]) -> Output {
@@ -132,11 +132,16 @@ fn done_when_an_upgrade_mid_turn_is_invisible() {
 
     let up = w.json(&["daemon", "upgrade", "--json"]);
     assert_eq!(up["rolled_back"], false, "{up}");
-    assert_eq!(up["pid"], before["pid"], "re-exec keeps the pid");
+    // Unix re-execs in place; Windows hands over to a new process (SPEC §4.5).
+    if cfg!(windows) {
+        assert_ne!(up["pid"], before["pid"], "a new daemon process took over");
+    } else {
+        assert_eq!(up["pid"], before["pid"], "re-exec keeps the pid");
+    }
     assert_eq!(up["sessions"], 3);
 
     let after = w.status();
-    assert_eq!(after["pid"], before["pid"]);
+    assert_eq!(after["pid"], up["pid"]);
     assert_eq!(after["generation"], 1, "{after:#}");
     assert_eq!(after["started_ms"], before["started_ms"], "the daemon's identity carries over");
     assert!(after["upgraded_ms"].as_u64().unwrap_or(0) > 0);
@@ -174,7 +179,11 @@ fn done_when_an_upgrade_mid_turn_is_invisible() {
     }
     // A second upgrade works from an upgraded daemon.
     let up2 = w.json(&["daemon", "upgrade", "--json"]);
-    assert_eq!(up2["pid"], before["pid"]);
+    if cfg!(windows) {
+        assert_ne!(up2["pid"], up["pid"]);
+    } else {
+        assert_eq!(up2["pid"], before["pid"]);
+    }
     assert_eq!(w.status()["generation"], 2);
 }
 

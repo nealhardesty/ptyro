@@ -1279,10 +1279,13 @@ async fn list(ctx: &Ctx, json: bool, filter: Filter) -> Result<i32, Error> {
             all.retain(|s| filter.keeps(s, &projects));
             (all, worktrees)
         }
-        // No local daemon simply means no sessions; an unreachable remote is an error.
+        // No local daemon simply means no sessions (`local` too: this computer's own, as a
+        // Windows client names it); an unreachable remote is an error.
         Err(e)
-            if e.code == ErrorCode::DaemonUnavailable
-                && ctx.options(ClientKind::Cli, false).remote.is_none() =>
+            if e.code == ErrorCode::DaemonUnavailable && {
+                let remote = ctx.options(ClientKind::Cli, false).remote;
+                remote.is_none() || ptyro_client::is_local(remote.as_deref())
+            } =>
         {
             (Vec::new(), Vec::new())
         }

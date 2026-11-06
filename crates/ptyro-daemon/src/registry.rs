@@ -57,7 +57,7 @@ impl Daemon {
         if let Some(p) = reg.projects.iter().find(|p| p.slug == addr || p.id == addr) {
             return Ok(p.clone());
         }
-        if addr.starts_with(['/', '.', '~']) {
+        if ptyro_core::os::looks_like_path(addr) {
             let path = ptyro_core::config::expand_home(addr);
             let path = ptyro_core::os::canonicalize(&path).unwrap_or(path);
             let wt = innermost(reg.worktrees.iter(), &path);
@@ -81,7 +81,7 @@ impl Daemon {
     /// A worktree by `project/name` (`myrepo/@root`), unique name, id suffix, or path.
     pub fn find_worktree(&self, addr: &str) -> Result<WorktreeInfo, Error> {
         let addr = addr.trim().strip_prefix("w:").unwrap_or(addr.trim());
-        if addr.starts_with(['/', '.', '~']) {
+        if ptyro_core::os::looks_like_path(addr) {
             let path = ptyro_core::config::expand_home(addr);
             let path = ptyro_core::os::canonicalize(&path).unwrap_or(path);
             let reg = self.registry.locked();

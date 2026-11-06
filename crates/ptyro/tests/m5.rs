@@ -23,7 +23,7 @@ fn agents_config(extra: &str) -> String {
     let mut c = String::from("[attention]\nmin_work = \"1s\"\n[worktrees]\nfetch = false\n");
     for a in ["claude", "codex"] {
         c.push_str(&format!(
-            "[agents.{a}]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"{a}\"]\n"
+            "[agents.{a}]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"{a}\"]\n"
         ));
     }
     c.push_str(extra);
@@ -33,7 +33,7 @@ fn agents_config(extra: &str) -> String {
 impl World {
     fn new(extra_config: &str) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-m5-").tempdir().unwrap();
-        let h = home.path().canonicalize().unwrap();
+        let h = ptyro_core::os::canonicalize(home.path()).unwrap();
         std::fs::write(
             h.join(".gitconfig"),
             "[user]\n\tname = T\n\temail = t@example.com\n[init]\n\tdefaultBranch = main\n",
@@ -46,7 +46,7 @@ impl World {
     }
 
     fn home(&self) -> PathBuf {
-        self.home.path().canonicalize().unwrap()
+        ptyro_core::os::canonicalize(self.home.path()).unwrap()
     }
 
     fn cli(&self, args: &[&str]) -> Output {
@@ -212,8 +212,11 @@ fn send_wait_read_and_events() {
     assert!(m.contains("a1 matched \"answer: yes\""), "{m}");
     let any = w.ok(&["wait", "a1", "a2", "--for", "idle", "--any"]);
     assert!(any.contains("idle"), "{any}");
-    // A stalled turn: working but silent.
+    // A stalled turn: working but silent. a2's turn before it (the command it was allowed) ends
+    // first, else that turn's end is what the waits below see; then this one begins.
+    w.ok(&["wait", "a2", "--for", "idle", "--timeout", "20s"]);
     w.ok(&["send", "a2", "work 5 slow"]);
+    w.ok(&["wait", "a2", "--for", "working", "--timeout", "20s"]);
     let stall = w.cli(&["wait", "a2", "--for", "idle", "--stall", "1s", "--timeout", "20s"]);
     assert_eq!(stall.status.code(), Some(7));
     assert!(String::from_utf8_lossy(&stall.stdout).contains("a2 stalled"));
@@ -365,7 +368,11 @@ fn doctor_self_test_and_service() {
     assert!(w.ok(&["profile", "doctor", "--json"]).trim_start().starts_with('['));
     // The service: --dry-run prints the unit; a real install calls systemctl.
     let unit = w.ok(&["daemon", "install-service", "--dry-run"]);
-    if cfg!(target_os = "linux") {
+    #[cfg(not(target_os = "linux"))]
+    let _ = unit;
+    // systemd's (Windows' logon task: tests/win10.rs).
+    #[cfg(target_os = "linux")]
+    {
         assert!(
             unit.contains("ExecStart=") && unit.contains("daemon start --foreground"),
             "{unit}"
@@ -510,7 +517,11 @@ async fn tui_broadcast_and_a_tour_of_its_own() {
         assert!(screen.contains("worked: broadcasted"), "{s}: {screen}");
     }
     // The tour (UX1.22) runs a ptyro of its own: leaving it at its first step, this daemon has
-    // none of its project or sessions, and its own are as they were.
+    // none of its project or sessions, and its own are as they were. (Unix: on Windows the tour
+    // runs in WSL.)
+    if cfg!(windows) {
+        return;
+    }
     let tour = ptyro_testkit::headless::run(
         w.tui(&["tour"])
             .timeout(30.0)

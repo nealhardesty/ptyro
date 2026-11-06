@@ -27,20 +27,23 @@ struct World {
 impl World {
     fn new(config: &str) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-home-").tempdir().unwrap();
-        let h = home.path().canonicalize().unwrap();
+        let h = ptyro_core::os::canonicalize(home.path()).unwrap();
         std::fs::write(h.join(".gitconfig"), "[user]\n\tname = Test User\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n").unwrap();
         // A fake `claude` on PATH: prints where and as whom it runs.
-        std::fs::create_dir_all(h.join("bin")).unwrap();
-        let fake = h.join("bin/claude");
-        std::fs::write(&fake, "#!/bin/sh\necho \"fake-claude wt=$PTYRO_WORKTREE_NAME profile=$PTYRO_PROFILE\"\nexec sleep 60\n").unwrap();
-        std::os::unix::fs::PermissionsExt::set_mode(
-            &mut std::fs::metadata(&fake).unwrap().permissions(),
-            0o755,
+        let say = ptyro_testkit::program::say_then_wait(
+            "fake-claude wt=${PTYRO_WORKTREE_NAME} profile=${PTYRO_PROFILE}",
+            60,
         );
-        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .unwrap();
+        ptyro_testkit::program::program(
+            &h.join("bin"),
+            "claude",
+            BIN,
+            "echo \"fake-claude wt=$PTYRO_WORKTREE_NAME profile=$PTYRO_PROFILE\"\nexec sleep 60",
+            &say.iter().map(String::as_str).collect::<Vec<_>>(),
+            &[],
+        );
         let hs = h.to_string_lossy().into_owned();
-        let path = format!("{}/bin:{}", hs, std::env::var("PATH").unwrap_or_default());
+        let path = ptyro_testkit::program::path_with(&h.join("bin"));
         let env = [
             ("HOME", hs.as_str()),
             ("GIT_CONFIG_NOSYSTEM", "1"),
@@ -52,7 +55,7 @@ impl World {
     }
 
     fn home(&self) -> PathBuf {
-        self.home.path().canonicalize().unwrap()
+        ptyro_core::os::canonicalize(self.home.path()).unwrap()
     }
 
     fn git(&self, dir: &Path, args: &[&str]) -> String {
@@ -185,6 +188,8 @@ copy = ["config/local.yml"]
 share = ["node_modules"]
 
 [scripts]
+# POSIX shell lines: bash everywhere (Git Bash on Windows, where `auto` would be PowerShell).
+shell = "bash"
 setup = "echo setup-ran port=$PTYRO_PORT name=$PTYRO_WORKTREE_NAME conductor=$CONDUCTOR_WORKSPACE_NAME > setup.out"
 archive = "echo archived > $PTYRO_ROOT_PATH/archived.txt"
 
@@ -387,7 +392,7 @@ async fn the_worktree_lifecycle() {
 
 #[tokio::test]
 async fn scripts_status_and_run_modes() {
-    let toml = "[scripts]\nrun_mode = \"exclusive\"\n[scripts.run.dev]\ncommand = \"echo dev-$PTYRO_WORKTREE_NAME; sleep 30\"\ndefault = true\n[scripts.run.once]\ncommand = \"echo once\"\n";
+    let toml = "[scripts]\nshell = \"bash\"\nrun_mode = \"exclusive\"\n[scripts.run.dev]\ncommand = \"echo dev-$PTYRO_WORKTREE_NAME; sleep 30\"\ndefault = true\n[scripts.run.once]\ncommand = \"echo once\"\n";
     let w = World::new("[worktrees]\nfetch = false\n");
     let root = w.repo("svc", &[(".ptyro.toml", toml)]);
     w.ok(&["project", "add", root.to_str().unwrap()]);
@@ -541,7 +546,7 @@ async fn profiles_pins_guards_and_environments() {
     let s = spawn(&c, sh(ENV_DUMP, "acme-app/@root")).await.unwrap();
     assert_eq!(s.profile, "work");
     let screen = screen_with(&w.d, &c, &s.name, "profile=work").await;
-    assert!(screen.contains(&format!("cfg={}/.claude-work", h.display())), "{screen}");
+    assert!(screen.contains(&format!("cfg={}", h.join(".claude-work").display())), "{screen}");
     assert!(screen.contains("email=me@acme.example profile=work tok=tok-from-command"), "{screen}");
     assert!(screen.contains("key=none"), "credentials are scrubbed: {screen}");
 
@@ -631,7 +636,12 @@ async fn profiles_pins_guards_and_environments() {
         &w.d,
         &c,
         &s.name,
-        &format!("ssh=ssh -i {}/.ssh/id_me -o IdentitiesOnly=yes", h.display()),
+        // (Windows: a path with `\\` is quoted for the shell git runs it in.)
+        &if cfg!(windows) {
+            format!("ssh=ssh -i '{}' -o IdentitiesOnly=yes", h.join(".ssh/id_me").display())
+        } else {
+            format!("ssh=ssh -i {}/.ssh/id_me -o IdentitiesOnly=yes", h.display())
+        },
     )
     .await;
 
@@ -779,9 +789,11 @@ async fn run(s: Script) -> Report {
 
 #[tokio::test]
 async fn tui_wizard_fast_path_trusts_sets_up_and_follows_the_agent() {
-    let w = World::new(
-        "[worktrees]\nfetch = false\n[profiles.work]\nlabel = \"wrk\"\ncolor = \"blue\"\nmatch = { paths = [\"/**/proj\"] }\n",
-    );
+    // (A Windows path starts with its drive: `C:/…/proj` is `**/proj` there.)
+    let pin = if cfg!(windows) { "**/proj" } else { "/**/proj" };
+    let w = World::new(&format!(
+        "[worktrees]\nfetch = false\n[profiles.work]\nlabel = \"wrk\"\ncolor = \"blue\"\nmatch = {{ paths = [\"{pin}\"] }}\n",
+    ));
     let root =
         w.repo("proj", &[(".ptyro.toml", "[scripts]\nsetup = \"echo setup-ran; sleep 1\"\n")]);
     w.ok(&["project", "add", root.to_str().unwrap()]);
@@ -807,8 +819,10 @@ async fn tui_wizard_fast_path_trusts_sets_up_and_follows_the_agent() {
         .send(2.4, "\\r")
         .snapshot(3.4)
         .send(3.6, "y")
-        .snapshot(6.5)
-        .send(7.0, "\\x11d"))
+        // Setup runs, then the pane follows the agent: as long as that takes (a cold PowerShell
+        // on a loaded Windows runner overran a fixed 6.5 s).
+        .until("profile=work")
+        .timeout(40.0))
     .await;
     let start = r.at(1.4);
     assert!(start.contains("▾ proj [wrk]"), "the tree, with the pin's label: {start}");
@@ -821,7 +835,7 @@ async fn tui_wizard_fast_path_trusts_sets_up_and_follows_the_agent() {
         trust.contains("Trust scripts?") && trust.contains("echo setup-ran; sleep 1"),
         "{trust}"
     );
-    let done = r.at(6.5);
+    let done = r.screen.clone();
     assert!(
         done.contains("fake-claude wt="),
         "the pane follows the agent once setup is done: {done}"
@@ -1022,6 +1036,7 @@ async fn scripts_run_in_their_shell_and_crlf_scripts_are_fixed() {
         &[(".ptyro.toml", toml), ("crlf.sh", "#!/bin/sh\r\necho crlf-ran\r\nsleep 30\r\n")],
     );
     w.git(&root, &["update-index", "--chmod=+x", "crlf.sh"]);
+    #[cfg(unix)]
     std::fs::set_permissions(
         root.join("crlf.sh"),
         std::os::unix::fs::PermissionsExt::from_mode(0o755),
@@ -1036,7 +1051,9 @@ async fn scripts_run_in_their_shell_and_crlf_scripts_are_fixed() {
         size: None,
     };
     let Reply::Session { info } = c.request(run("which")).await.unwrap() else { panic!() };
-    assert_eq!(info.argv[..2], ["bash", "-c"], "[scripts] shell = bash");
+    // Git Bash by its full path on Windows (SPEC §8.7).
+    let shell = std::path::Path::new(&info.argv[0]).file_stem().unwrap().to_string_lossy();
+    assert_eq!((shell.as_ref(), info.argv[1].as_str()), ("bash", "-c"), "[scripts] shell = bash");
     screen_with(&w.d, &c, &info.name, "bash-says-yes").await;
     // The CRLF script: `#!/bin/sh\r` is no interpreter, and the doctor says how to fix it.
     let doctor = w.ok(&["doctor"]);

@@ -13,7 +13,7 @@ struct Fixture {
 
 fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
-    let base = dir.path().canonicalize().unwrap();
+    let base = ptyro_core::os::canonicalize(dir.path()).unwrap();
     let gitconfig = base.join("gitconfig");
     std::fs::write(
         &gitconfig,
@@ -526,6 +526,8 @@ fn only_ptyros_own_lock_is_taken_off_before_removal() {
     assert!(wt.exists());
 }
 
+// Unix: a Windows file name can't hold a newline.
+#[cfg(unix)]
 #[test]
 fn a_worktree_path_with_a_newline_is_one_path() {
     let f = fixture();

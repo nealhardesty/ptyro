@@ -801,11 +801,28 @@ fn step(out: &mut Vec<Step>, json: bool, name: &str, r: Result<String, String>) 
 }
 
 fn remove_tree(p: &Path) -> std::io::Result<()> {
-    match std::fs::symlink_metadata(p) {
-        Ok(m) if m.is_dir() => std::fs::remove_dir_all(p),
-        Ok(_) => std::fs::remove_file(p),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e),
+    // Windows keeps a file in use for a moment after the process that had it exits (a virus
+    // scanner, the indexer, a child still closing): a sharing violation (32) or a denial (5)
+    // there is tried again for a few seconds before it counts (WIN13, seen right after the
+    // daemon stopped).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let r = match std::fs::symlink_metadata(p) {
+            Ok(m) if m.is_dir() => std::fs::remove_dir_all(p),
+            Ok(_) => std::fs::remove_file(p),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        };
+        match r {
+            Err(e)
+                if cfg!(windows)
+                    && matches!(e.raw_os_error(), Some(32 | 5))
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            r => return r,
+        }
     }
 }
 

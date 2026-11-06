@@ -28,7 +28,7 @@ impl World {
     /// Each agent's table gets `per_agent(name)` (an `env = {…}` line).
     fn with_agents(extra: &str, per_agent: impl Fn(&str) -> String) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-m7-").tempdir().unwrap();
-        let h = home.path().canonicalize().unwrap();
+        let h = ptyro_core::os::canonicalize(home.path()).unwrap();
         std::fs::write(
             h.join(".gitconfig"),
             "[user]\n\tname = Owner\n\temail = owner@example.com\n[init]\n\tdefaultBranch = main\n",
@@ -40,7 +40,7 @@ impl World {
             String::from("[attention]\nmin_work = \"1s\"\n[worktrees]\nfetch = false\n");
         for a in ["claude", "codex", "gemini"] {
             config.push_str(&format!(
-                "[agents.{a}]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"{a}\"]\n{}\n",
+                "[agents.{a}]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"{a}\"]\n{}\n",
                 per_agent(a)
             ));
         }
@@ -50,7 +50,7 @@ impl World {
     }
 
     fn home(&self) -> PathBuf {
-        self.home.path().canonicalize().unwrap()
+        ptyro_core::os::canonicalize(self.home.path()).unwrap()
     }
 
     fn cli(&self, args: &[&str]) -> Output {
@@ -95,6 +95,9 @@ impl World {
         self.git(&h, &["clone", "-q", &format!("{name}.git"), name]);
         let root = h.join(name);
         std::fs::write(root.join("f.txt"), "one\ntwo\n").unwrap();
+        // The checks and steps here are POSIX shell lines: bash everywhere (Git Bash on
+        // Windows, where a line would otherwise run in PowerShell).
+        std::fs::write(root.join(".ptyro.toml"), "[scripts]\nshell = \"bash\"\n").unwrap();
         self.git(&root, &["add", "-A"]);
         self.git(&root, &["commit", "-q", "-m", "init"]);
         self.git(&root, &["push", "-q", "origin", "main"]);
@@ -134,8 +137,29 @@ impl World {
         self.run(id)["state"]["status"].as_str().unwrap_or_default().to_owned()
     }
 
+    /// A whole run takes longer than a step: a fan-out makes worktrees, runs agents and tests
+    /// and ranks them (CI's macOS runners took past 30 s once). When it never gets there, the
+    /// run's state says where it stopped.
     fn wait_run(&self, id: &str, status: &str) -> Value {
-        self.until(&format!("run {id} {status}"), || self.run_status(id) == status);
+        let deadline = Instant::now() + WAIT * 3;
+        while self.run_status(id) != status {
+            if Instant::now() >= deadline {
+                // Its sessions' screens too: where a step stopped is on one of them.
+                let run = self.run(id);
+                let screens: Vec<String> = run["state"]["sessions"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|s| s.as_str())
+                    .map(|s| {
+                        let out = self.cli(&["read", s]);
+                        format!("── {s}:\n{}", String::from_utf8_lossy(&out.stdout))
+                    })
+                    .collect();
+                panic!("never: run {id} {status}; it is:\n{run:#}\n{}", screens.join("\n"));
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
         self.run(id)
     }
 
@@ -286,7 +310,13 @@ fn done_when_a_lead_coordinates_workers_within_its_policy() {
     loop {
         let t = w.screen("lead");
         if t.lines()
-            .map(|l| l.trim().trim_start_matches("\"body\": \"").trim_end_matches("\","))
+            // (Through ConPTY a message's lines arrive one Enter each, each its own `> ` input.)
+            .map(|l| {
+                l.trim()
+                    .trim_start_matches("> ")
+                    .trim_start_matches("\"body\": \"")
+                    .trim_end_matches("\",")
+            })
             .any(|l| l.starts_with("w1 finished turn") && l.ends_with(": one"))
         {
             break;
@@ -341,7 +371,7 @@ fn done_when_a_lead_coordinates_workers_within_its_policy() {
 #[test]
 fn agents_cannot_answer_prompts_pair_devices_or_grant_trust() {
     let w = World::new(&format!(
-        "[agents.peek]\ncommand = [\"{BIN}\", \"attach\", \"victim\"]\nenv = {{ PTYRO_ALLOW_NESTED = \"1\" }}\n"
+        "[agents.peek]\ncommand = ['{BIN}', \"attach\", \"victim\"]\nenv = {{ PTYRO_ALLOW_NESTED = \"1\" }}\n"
     ));
     let root = w.project("app");
     std::fs::write(root.join(".ptyro.toml"), "[scripts]\nsetup = \"echo hi\"\n").unwrap();

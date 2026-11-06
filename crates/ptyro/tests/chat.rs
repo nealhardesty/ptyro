@@ -28,15 +28,15 @@ impl World {
     /// `extra`: more config at the end (agents).
     fn with(chat: &str, extra: &str) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-chat-").tempdir().unwrap();
-        let h = home.path().canonicalize().unwrap();
+        let h = ptyro_core::os::canonicalize(home.path()).unwrap();
         let hs = h.to_string_lossy().into_owned();
         let env = [("HOME", hs.as_str()), ("GIT_CONFIG_NOSYSTEM", "1"), ("SHELL", "/bin/sh")];
         let mut config = String::from(
-            "[chat]\ntitle_command = [\"/bin/sh\", \"-c\", \"cat >/dev/null; echo '\\\"A fake title.\\\"'\"]\n",
+            "[chat]\ntitle_command = [\"sh\", \"-c\", \"cat >/dev/null; echo '\\\"A fake title.\\\"'\"]\n",
         );
         for a in ["claude", "codex", "gemini", "opencode"] {
             config.push_str(&format!(
-                "[agents.{a}]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"{a}\"]\n"
+                "[agents.{a}]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"{a}\"]\n"
             ));
         }
         config.insert_str(config.find("[agents").unwrap(), &format!("{chat}\n"));
@@ -46,7 +46,7 @@ impl World {
     }
 
     fn home(&self) -> PathBuf {
-        self.home.path().canonicalize().unwrap()
+        ptyro_core::os::canonicalize(self.home.path()).unwrap()
     }
 
     fn cli(&self, args: &[&str]) -> Output {
@@ -131,12 +131,16 @@ fn a_chat_is_answered_kept_and_carried_on_after_a_restart() {
     // The MCP servers are in a file only its owner reads, never in the argv any client (or
     // `ps`) sees: a server's definition can carry its tokens.
     let cfg = argv[argv.iter().position(|a| *a == "--mcp-config").unwrap() + 1];
-    assert!(cfg.ends_with("/mcp.json"), "{cfg}");
+    assert!(std::path::Path::new(cfg).ends_with("mcp.json"), "{cfg}");
     assert!(!argv.iter().any(|a| a.contains("mcpServers") || a.contains("PTYRO_SOCKET")));
     assert!(std::fs::read_to_string(cfg).unwrap().contains("mcpServers"));
     assert!(argv.windows(2).any(|p| p == ["--tools", "WebSearch,WebFetch"]), "{argv:?}");
     let cwd = e["cwd"].as_str().unwrap().to_owned();
-    assert!(cwd.ends_with(&format!("chat/{}", c["id"].as_str().unwrap())), "{cwd}");
+    assert!(
+        std::path::Path::new(&cwd)
+            .ends_with(std::path::Path::new("chat").join(c["id"].as_str().unwrap())),
+        "{cwd}"
+    );
 
     // A second message goes to the same engine; the record is user, answer, user, answer.
     let out = w.ok(&["chat", "send", &addr, "second one"]);
@@ -368,7 +372,7 @@ fn one_answer_at_a_time_and_an_agent_that_wont_start_says_so() {
 fn an_agent_that_stops_before_answering_is_said_and_ask_keeps_nothing() {
     let w = World::with(
         "",
-        "[agents.broken]\ncommand = [\"/bin/sh\", \"-c\", \"exit 3\"]\nprotocol = \"acp\"\n",
+        "[agents.broken]\ncommand = [\"sh\", \"-c\", \"exit 3\"]\nprotocol = \"acp\"\n",
     );
     let out = w.cli(&["chat", "ask", "--agent", "broken", "hello?"]);
     assert!(!out.status.success());

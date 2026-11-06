@@ -14,8 +14,8 @@ const WAIT: Duration = Duration::from_secs(30);
 
 fn config(meaning: bool) -> String {
     format!(
-        "[chat]\nmeaning = {meaning}\ntitle_command = [\"/bin/sh\", \"-c\", \"cat >/dev/null; echo Titled\"]\n\
-         [agents.claude]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\n"
+        "[chat]\nmeaning = {meaning}\ntitle_command = [\"sh\", \"-c\", \"cat >/dev/null; echo Titled\"]\n\
+         [agents.claude]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"claude\"]\n"
     )
 }
 
@@ -79,7 +79,7 @@ fn model(dir: &Path) {
 #[test]
 fn meaning_search_finds_what_words_dont() {
     let home = tempfile::Builder::new().prefix("ptyro-meaning-").tempdir().unwrap();
-    let hs = home.path().canonicalize().unwrap().to_string_lossy().into_owned();
+    let hs = ptyro_core::os::canonicalize(home.path()).unwrap().to_string_lossy().into_owned();
     let env = [
         ("HOME", hs.as_str()),
         ("GIT_CONFIG_NOSYSTEM", "1"),
