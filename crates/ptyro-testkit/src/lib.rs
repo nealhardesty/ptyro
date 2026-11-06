@@ -227,6 +227,10 @@ fn isolate(cmd: &mut Command, home: &Path, bin: &Path) {
     // Inside WSL a daemon holds the distro open with a wsl.exe of its own (SPEC §20.10): test
     // daemons don't, unless a test asks (`start_with_env(…, &[("PTYRO_WSL_HOLD", "1")])`).
     cmd.env("PTYRO_WSL_HOLD", "0");
+    // A Windows client with no remote looks for ptyro in WSL first: a test's is its own daemon.
+    if cfg!(windows) {
+        cmd.env("PTYRO_REMOTE", "local");
+    }
 }
 
 /// Whether something is listening on `127.0.0.1:port`. Connecting to a free ephemeral port can

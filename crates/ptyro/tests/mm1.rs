@@ -58,7 +58,7 @@ impl Two {
     /// Two daemons, each able to reach the other over its "ssh".
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap();
+        let root = ptyro_core::os::canonicalize(dir.path()).unwrap();
         let work = root.join("work");
         std::fs::create_dir_all(&work).unwrap();
         let (env1, env2) = (root.join("laptop1.env"), root.join("laptop2.env"));

@@ -29,7 +29,7 @@ impl World {
 
     fn with_env(extra: &str, daemon_env: &[(&str, &str)]) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-m8-").tempdir().unwrap();
-        let hs = home.path().canonicalize().unwrap().to_string_lossy().into_owned();
+        let hs = ptyro_core::os::canonicalize(home.path()).unwrap().to_string_lossy().into_owned();
         let mut env = vec![("HOME", hs.as_str()), ("SHELL", "/bin/sh")];
         env.extend_from_slice(daemon_env);
         let config = format!(
@@ -40,7 +40,7 @@ impl World {
     }
 
     fn home(&self) -> PathBuf {
-        self.home.path().canonicalize().unwrap()
+        ptyro_core::os::canonicalize(self.home.path()).unwrap()
     }
 
     fn cli(&self, args: &[&str]) -> Output {

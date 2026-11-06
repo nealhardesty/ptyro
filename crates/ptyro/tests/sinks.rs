@@ -86,7 +86,7 @@ struct World {
 impl World {
     fn new(sink_url: &str) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-sinks-").tempdir().unwrap();
-        let h = home.path().canonicalize().unwrap();
+        let h = ptyro_core::os::canonicalize(home.path()).unwrap();
         let hs = h.to_string_lossy().into_owned();
         let env = [("HOME", hs.as_str()), ("GIT_CONFIG_NOSYSTEM", "1"), ("SHELL", "/bin/sh")];
         let config = format!(

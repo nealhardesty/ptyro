@@ -20,7 +20,7 @@ struct World {
 impl World {
     fn new(extra: &str, daemon_env: &[(&str, &str)]) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-race-").tempdir().unwrap();
-        let hs = home.path().canonicalize().unwrap().to_string_lossy().into_owned();
+        let hs = ptyro_core::os::canonicalize(home.path()).unwrap().to_string_lossy().into_owned();
         let mut env = vec![("HOME", hs.as_str()), ("SHELL", "/bin/sh")];
         env.extend_from_slice(daemon_env);
         let d = TempDaemon::start_with(BIN, &env, Some(extra)).unwrap();
@@ -28,7 +28,7 @@ impl World {
     }
 
     fn home(&self) -> PathBuf {
-        self.home.path().canonicalize().unwrap()
+        ptyro_core::os::canonicalize(self.home.path()).unwrap()
     }
 
     fn cli(&self, args: &[&str]) -> Output {

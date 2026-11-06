@@ -11,6 +11,7 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
+use std::time::{Duration, Instant};
 
 /// A test binary cargo built: what it is, and where it runs (its package's folder, as cargo
 /// runs it).
@@ -68,8 +69,17 @@ fn package_name(id: &str) -> Option<String> {
     }
 }
 
+/// How long one test binary may run before it counts as hung (`TEST_BINARY_TIMEOUT`, seconds).
+fn binary_timeout() -> Duration {
+    Duration::from_secs(
+        std::env::var("TEST_BINARY_TIMEOUT").ok().and_then(|s| s.parse().ok()).unwrap_or(1200),
+    )
+}
+
 /// Run `exe` with `args` in `dir`, its output passed through as it comes; whether it passed, and
-/// the tests it said failed.
+/// the tests it said failed. It's done when the process exits, not when its output closes: a
+/// daemon a test started may hold that pipe for as long as it runs (Windows hands handles down).
+/// Past [`binary_timeout`] it is killed and fails.
 fn run(b: &Binary, args: &[&str]) -> (bool, Vec<String>) {
     let child = Command::new(&b.exe)
         .args(args)
@@ -85,20 +95,53 @@ fn run(b: &Binary, args: &[&str]) -> (bool, Vec<String>) {
             return (false, Vec::new());
         }
     };
-    let mut failed = Vec::new();
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
     if let Some(out) = child.stdout.take() {
-        let mut stdout = std::io::stdout().lock();
-        for line in BufReader::new(out).lines().map_while(Result::ok) {
-            let _ = writeln!(stdout, "{line}");
-            if let Some(name) =
-                line.strip_prefix("test ").and_then(|l| l.strip_suffix(" ... FAILED"))
-            {
-                failed.push(name.to_owned());
+        std::thread::spawn(move || {
+            for line in BufReader::new(out).lines().map_while(Result::ok) {
+                if tx.send(line).is_err() {
+                    break;
+                }
             }
+        });
+    }
+    let mut failed = Vec::new();
+    let mut take = |line: String| {
+        println!("{line}");
+        if let Some(name) = line.strip_prefix("test ").and_then(|l| l.strip_suffix(" ... FAILED")) {
+            failed.push(name.to_owned());
+        }
+    };
+    let deadline = Instant::now() + binary_timeout();
+    let status = loop {
+        while let Ok(line) = rx.try_recv() {
+            take(line);
+        }
+        match child.try_wait() {
+            Ok(Some(s)) => break Some(s),
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                println!(
+                    "ptyro-flaky: {} ran past {}s: killed",
+                    label(b),
+                    binary_timeout().as_secs()
+                );
+                break None;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(_) => break None,
+        }
+    };
+    // What it wrote last, unless something it left behind keeps the pipe open.
+    let grace = Instant::now() + Duration::from_secs(2);
+    while let Some(left) = grace.checked_duration_since(Instant::now()) {
+        match rx.recv_timeout(left) {
+            Ok(line) => take(line),
+            Err(_) => break,
         }
     }
-    let ok = child.wait().is_ok_and(|s| s.success());
-    (ok, failed)
+    (status.is_some_and(|s| s.success()), failed)
 }
 
 #[derive(Default)]

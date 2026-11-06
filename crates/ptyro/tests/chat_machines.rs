@@ -66,7 +66,7 @@ struct Two {
 impl Two {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap();
+        let root = ptyro_core::os::canonicalize(dir.path()).unwrap();
         let (env1, env2) = (root.join("laptop1.env"), root.join("laptop2.env"));
         let to1 = fake_ssh(&root, "ssh-to-laptop1", &env1).to_string_lossy().into_owned();
         let to2 = fake_ssh(&root, "ssh-to-laptop2", &env2).to_string_lossy().into_owned();

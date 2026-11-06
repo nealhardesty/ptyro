@@ -66,7 +66,7 @@ const GEMINI: &str = r#"{"sessionId":"9e3b0c44-0000-4000-8000-00000000ge01","pro
 impl World {
     fn new(extra: &str) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-import-").tempdir().unwrap();
-        let h = home.path().canonicalize().unwrap();
+        let h = ptyro_core::os::canonicalize(home.path()).unwrap();
         // The histories, as each agent leaves them.
         let repo = h.join("repo");
         std::fs::create_dir_all(&repo).unwrap();
@@ -105,7 +105,7 @@ impl World {
     }
 
     fn home(&self) -> PathBuf {
-        self.home.path().canonicalize().unwrap()
+        ptyro_core::os::canonicalize(self.home.path()).unwrap()
     }
 
     fn claude_file(&self) -> PathBuf {

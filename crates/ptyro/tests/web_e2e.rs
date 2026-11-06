@@ -63,7 +63,7 @@ fn the_web_app_works_in_a_real_browser() {
     };
 
     let home = tempfile::Builder::new().prefix("ptyro-e2e-").tempdir().unwrap();
-    let hp = home.path().canonicalize().unwrap();
+    let hp = ptyro_core::os::canonicalize(home.path()).unwrap();
     std::fs::write(hp.join(".gitconfig"), "[user]\n\tname = e2e\n\temail = e2e@example.com\n")
         .unwrap();
     let hs = hp.to_string_lossy().into_owned();

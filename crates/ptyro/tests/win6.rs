@@ -20,7 +20,7 @@ struct World {
 impl World {
     fn new() -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-win6-").tempdir().unwrap();
-        let h = home.path().canonicalize().unwrap();
+        let h = ptyro_core::os::canonicalize(home.path()).unwrap();
         let h = PathBuf::from(h.to_string_lossy().trim_start_matches(r"\\?\"));
         std::fs::write(
             h.join(".gitconfig"),
@@ -35,7 +35,7 @@ impl World {
     }
 
     fn home(&self) -> PathBuf {
-        let h = self.home.path().canonicalize().unwrap();
+        let h = ptyro_core::os::canonicalize(self.home.path()).unwrap();
         PathBuf::from(h.to_string_lossy().trim_start_matches(r"\\?\"))
     }
 

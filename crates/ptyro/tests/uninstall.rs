@@ -33,7 +33,7 @@ fn git(home: &Path, dir: &Path, args: &[&str]) -> String {
 impl World {
     fn new() -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-uninst-").tempdir().unwrap();
-        let h = home.path().canonicalize().unwrap();
+        let h = ptyro_core::os::canonicalize(home.path()).unwrap();
         std::fs::write(
             h.join(".gitconfig"),
             "[user]\n\tname = T\n\temail = t@example.com\n[init]\n\tdefaultBranch = main\n",
@@ -50,7 +50,7 @@ impl World {
     }
 
     fn home(&self) -> PathBuf {
-        self.home.path().canonicalize().unwrap()
+        ptyro_core::os::canonicalize(self.home.path()).unwrap()
     }
 
     /// A repository cloned from a bare "remote" with one pushed commit, registered as a project.
@@ -212,7 +212,7 @@ async fn snapshot_refs_are_kept_unless_purged() {
 #[test]
 fn a_machine_install_loses_its_files_its_shell_lines_and_its_binary() {
     let base = tempfile::Builder::new().prefix("ptyro-machine-").tempdir().unwrap();
-    let h = base.path().canonicalize().unwrap();
+    let h = ptyro_core::os::canonicalize(base.path()).unwrap();
     let (config, data, state, run) =
         (h.join("xdg/config"), h.join("xdg/data"), h.join("xdg/state"), h.join("xdg/run"));
     for d in [&config, &data, &state, &run] {
@@ -290,7 +290,7 @@ fn a_machine_install_loses_its_files_its_shell_lines_and_its_binary() {
 #[test]
 fn it_refuses_inside_a_session() {
     let base = tempfile::tempdir().unwrap();
-    let h = base.path().canonicalize().unwrap();
+    let h = ptyro_core::os::canonicalize(base.path()).unwrap();
     let out = Command::new(BIN)
         .args(["uninstall", "--yes"])
         .env_clear()

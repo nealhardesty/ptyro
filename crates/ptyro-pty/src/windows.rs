@@ -1075,10 +1075,11 @@ mod tests {
     }
 
     /// Read until `want` shows up in the output (ConPTY paints, so it may come in pieces).
+    /// PowerShell's first start on a loaded CI runner took past 20 s (WIN13).
     async fn read_until(r: &mut Reader, want: &str) -> String {
         let mut out = Vec::new();
         let mut buf = [0u8; 4096];
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
         while !String::from_utf8_lossy(&out).contains(want) {
             let n = tokio::time::timeout_at(deadline, r.read(&mut buf))
                 .await

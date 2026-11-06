@@ -137,13 +137,16 @@ fn work_profile_environment() {
     let c = config();
     let env = env_of(&c, "work", LEAKY_BASE);
     let get = |k: &str| env.get(k).map(String::as_str);
+    // A path compares as one (Windows joins with `\\`).
+    let path = |k: &str| env.get(k).map(std::path::PathBuf::from);
+    let want = |p: &str| Some(std::path::PathBuf::from(p));
     assert_eq!(get("CLAUDE_CONFIG_DIR"), Some("/acct/claude-work"));
     assert_eq!(get("CODEX_HOME"), Some("/acct/codex-work"));
     assert_eq!(get("OPENAI_API_KEY"), Some("resolved:op read codex:profiles.work.codex.api_key"));
     assert_eq!(get("CODEX_API_KEY"), get("OPENAI_API_KEY"));
     // Omitted agents get a managed dir, never the agent's default one.
-    assert_eq!(get("GEMINI_CLI_HOME"), Some("/data/profiles/work/gemini"));
-    assert_eq!(get("GH_CONFIG_DIR"), Some("/data/profiles/work/gh"));
+    assert_eq!(path("GEMINI_CLI_HOME"), want("/data/profiles/work/gemini"));
+    assert_eq!(path("GH_CONFIG_DIR"), want("/data/profiles/work/gh"));
     assert_eq!(get("GH_TOKEN"), Some("ghp_literal"));
     assert_eq!(get("GIT_AUTHOR_NAME"), Some("Work Me"));
     assert_eq!(get("GIT_COMMITTER_EMAIL"), Some("me@acme.example"));
@@ -213,7 +216,7 @@ fn shares_link_but_never_overwrite_or_share_credentials() {
     std::fs::create_dir_all(&work).unwrap();
     std::fs::write(work.join("settings.json"), "mine").unwrap();
     let c = Config::parse(&format!(
-        "[profiles.work]\nclaude = \"{}\"\nshare = {{ claude = [\"CLAUDE.md\", \"skills\", \"settings.json\", \"missing\"] }}\n",
+        "[profiles.work]\nclaude = '{}'\nshare = {{ claude = [\"CLAUDE.md\", \"skills\", \"settings.json\", \"missing\"] }}\n",
         work.display()
     ))
     .unwrap();
@@ -294,7 +297,7 @@ fn credential_files_are_refused_however_they_are_spelled() {
     std::fs::create_dir_all(&work).unwrap();
     // (The config parser refuses most of these; the planner must hold on its own.)
     let mut c =
-        Config::parse(&format!("[profiles.work]\nclaude = \"{}\"\n", work.display())).unwrap();
+        Config::parse(&format!("[profiles.work]\nclaude = '{}'\n", work.display())).unwrap();
     c.profiles.get_mut("work").unwrap().share.insert(
         "claude".into(),
         [

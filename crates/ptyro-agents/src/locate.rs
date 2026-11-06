@@ -433,8 +433,8 @@ mod windows_rules {
         write(&npm.join("node.exe"), "MZ");
         let f = find_in("codex", &path, &places).unwrap();
         assert_eq!(
-            f.argv,
-            [npm.join("node.exe").to_string_lossy(), script.to_string_lossy()],
+            f.argv.iter().map(PathBuf::from).collect::<Vec<_>>(),
+            [npm.join("node.exe"), script.clone()],
             "{f:?}"
         );
         assert_eq!((f.path, f.via.as_deref()), (script, Some("npm")));

@@ -110,7 +110,7 @@ async fn integrated(
     marker: &str,
 ) {
     let dir = tempfile::Builder::new().prefix("ptyro-win1-cwd-").tempdir().unwrap();
-    let start = dir.path().canonicalize().unwrap();
+    let start = ptyro_core::os::canonicalize(dir.path()).unwrap();
     let sub = start.join("sub dir");
     std::fs::create_dir(&sub).unwrap();
     let info = spawn(c, name, argv, &start).await;
@@ -200,7 +200,7 @@ async fn shell_command_and_switching_the_integration_off() {
     let d =
         TempDaemon::start_with(BIN, &[("HOME", h), ("SHELL", "/bin/bash")], Some(&config)).unwrap();
     let c = d.client().await.unwrap();
-    let dir = std::env::temp_dir().canonicalize().unwrap();
+    let dir = ptyro_core::os::canonicalize(&std::env::temp_dir()).unwrap();
     let info = spawn(&c, "default", &[], &dir).await;
     assert_eq!(info.kind, SessionKind::Shell);
     send(&c, "default", "echo shell=$0").await;

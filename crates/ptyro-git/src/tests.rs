@@ -13,7 +13,7 @@ struct Fixture {
 
 fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
-    let base = dir.path().canonicalize().unwrap();
+    let base = ptyro_core::os::canonicalize(dir.path()).unwrap();
     let gitconfig = base.join("gitconfig");
     std::fs::write(
         &gitconfig,

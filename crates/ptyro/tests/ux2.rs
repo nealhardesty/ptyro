@@ -20,7 +20,7 @@ struct World {
 impl World {
     fn new(config: &str) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-home-").tempdir().unwrap();
-        let h = home.path().canonicalize().unwrap();
+        let h = ptyro_core::os::canonicalize(home.path()).unwrap();
         std::fs::write(
             h.join(".gitconfig"),
             "[user]\n\tname = Test User\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n",
@@ -33,7 +33,7 @@ impl World {
     }
 
     fn home(&self) -> PathBuf {
-        self.home.path().canonicalize().unwrap()
+        ptyro_core::os::canonicalize(self.home.path()).unwrap()
     }
 
     fn git(&self, dir: &Path, args: &[&str]) -> String {

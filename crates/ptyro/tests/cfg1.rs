@@ -36,7 +36,7 @@ fn text(o: &Output) -> String {
 #[tokio::test]
 async fn the_panel_changes_a_switch_a_choice_a_number_and_a_list_and_the_daemon_uses_them() {
     let home = tempfile::Builder::new().prefix("ptyro-cfg1-").tempdir().unwrap();
-    let h = home.path().canonicalize().unwrap();
+    let h = ptyro_core::os::canonicalize(home.path()).unwrap();
     let hs = h.to_string_lossy().into_owned();
     // A repository under a folder discovery doesn't look in yet.
     let work = h.join("work/app");
@@ -100,7 +100,7 @@ async fn the_panel_changes_a_switch_a_choice_a_number_and_a_list_and_the_daemon_
 #[tokio::test]
 async fn config_get_set_unset_list_add_and_rm_on_the_command_line() {
     let home = tempfile::Builder::new().prefix("ptyro-cfg1-").tempdir().unwrap();
-    let h = home.path().canonicalize().unwrap();
+    let h = ptyro_core::os::canonicalize(home.path()).unwrap();
     let hs = h.to_string_lossy().into_owned();
     let repo = h.join("repo");
     std::fs::create_dir_all(&repo).unwrap();

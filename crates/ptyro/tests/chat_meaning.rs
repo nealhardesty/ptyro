@@ -79,7 +79,7 @@ fn model(dir: &Path) {
 #[test]
 fn meaning_search_finds_what_words_dont() {
     let home = tempfile::Builder::new().prefix("ptyro-meaning-").tempdir().unwrap();
-    let hs = home.path().canonicalize().unwrap().to_string_lossy().into_owned();
+    let hs = ptyro_core::os::canonicalize(home.path()).unwrap().to_string_lossy().into_owned();
     let env = [
         ("HOME", hs.as_str()),
         ("GIT_CONFIG_NOSYSTEM", "1"),

@@ -50,7 +50,7 @@ async fn a_program_reports_only_for_its_own_session() {
     let c = d.client().await.unwrap();
     let out = d.home.path().join("out");
     std::fs::create_dir_all(&out).unwrap();
-    let home = d.home.path().canonicalize().unwrap();
+    let home = ptyro_core::os::canonicalize(d.home.path()).unwrap();
     let b = shell(&c, &home, "bee", "sleep 120".into()).await;
     let (o1, o2) = (out.join("other"), out.join("own"));
     shell(

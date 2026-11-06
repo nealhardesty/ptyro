@@ -30,7 +30,7 @@ impl World {
     /// The same, with `extra` appended to its config (whole sections).
     fn with_config(shell: &str, extra: &str) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-ux1-").tempdir().unwrap();
-        let h = home.path().canonicalize().unwrap();
+        let h = ptyro_core::os::canonicalize(home.path()).unwrap();
         std::fs::write(
             h.join(".gitconfig"),
             "[user]\n\tname = T\n\temail = t@example.com\n[init]\n\tdefaultBranch = main\n",
@@ -56,7 +56,7 @@ impl World {
     }
 
     fn home(&self) -> PathBuf {
-        self.home.path().canonicalize().unwrap()
+        ptyro_core::os::canonicalize(self.home.path()).unwrap()
     }
 }
 
@@ -1165,7 +1165,7 @@ async fn the_tour_walks_the_loop_for_real_and_cleans_up() {
 #[tokio::test]
 async fn ux1_done_when_from_a_fresh_machine_to_a_merged_and_cleaned_up_pr() {
     let tmp = tempfile::Builder::new().prefix("ptyro-ux1-done-").tempdir().unwrap();
-    let h = tmp.path().canonicalize().unwrap();
+    let h = ptyro_core::os::canonicalize(tmp.path()).unwrap();
     std::fs::write(
         h.join(".gitconfig"),
         "[user]\n\tname = Owner\n\temail = owner@example.com\n[init]\n\tdefaultBranch = main\n",

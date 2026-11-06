@@ -799,8 +799,7 @@ Rust toolchain this checkout pins, builds `target\release\ptyro.exe`, puts Micro
 ConPTY beside it (pinned and SHA-256 checked, as `make conpty` does), and runs it once. Run it
 again any time: what's there is skipped. Afterwards `make build-windows` rebuilds (it installs
 nothing), and `make windows-setup` runs the whole thing; both work from PowerShell as well as Git
-Bash. The Makefile's other targets are POSIX shell: run them from Git Bash (`make test-windows` is
-CI's Windows job).
+Bash. The Makefile's other targets are POSIX shell: run them from Git Bash (`make test` runs every test there, as CI's Windows job does).
 
 With Smart App Control on, Windows may refuse a `ptyro.exe` you built: it runs only signed
 programs it knows, and decides build by build. The script says so when it happens; the client in
@@ -813,7 +812,7 @@ WSL works meanwhile.
 | `make rust-install` | install rustup (checksum-verified, no `curl \| sh`) and the toolchain pinned in `rust-toolchain.toml`: Linux, macOS, and Windows from Git Bash, MSYS2 or Cygwin (the MSVC host) |
 | `make build` / `release` / `install` / `install-release` | debug build / optimized `target/release/ptyro` / install into `~/.cargo/bin` (a fast incremental build: seconds after the first) / the same with the full release optimizations (slow) |
 | `make run ARGS="ls"` / `make try CMD=claude` | run the dev build with arguments / start `CMD` in a new session and attach |
-| `make test` / `make smoke` | all tests / quick end-to-end checks of the PTY and emulator |
+| `make test` (`FLAKE_BUDGET=2`) / `make smoke` | all tests: a test that fails runs again once, alone, and if it passes then it's a flake, named in the output and `target/flakes.txt`; a test failing twice, or more flakes than the budget, fails the run. On Windows (Git Bash) the same tests run natively / quick end-to-end checks of the PTY and emulator |
 | `make fmt` / `fmt-check` / `lint` | format / fail if unformatted / clippy with warnings as errors |
 | `make check` / `make ci` | fmt-check, lint, doc, lock-check, ratchet, test, smoke: CI's main job on every platform / those plus `deny`, `web-check`, `web-e2e`, `msrv`, `fuzz-smoke` and `installer-check`: everything CI runs |
 | `make lock-check` / `make ratchet` / `make ratchet-update` | fail if `Cargo.lock` is out of date / fail if a crate has more `unwrap()`/`expect()` in non-test code than `scripts/unwrap-baseline.txt` allows (only ever lower it) / write the current counts as the baseline |
@@ -832,9 +831,9 @@ WSL works meanwhile.
 | `make verify-claude` | check the Claude adapter against the real Claude Code on your machine (one tiny turn) |
 | `make verify-shells` | press Alt-1 and see whether this terminal sends Alt (SHELLS' `Alt-1…9`), or what to change so it does |
 | `make verify-structured` | check structured mode against the real agents here |
-| `make check-windows` (`TARGETS=x86_64\|aarch64`, `XWIN_ACCEPT_LICENSE=1` once) | cross-checks ptyro for Windows, x64 and ARM64, from Linux or macOS with cargo-xwin (no Windows machine): every crate with its tests, the native daemon's included, and `ptyro.exe` (its own tests are Unix's). Needs clang, lld and cargo-xwin, and says how to install what's missing. The first run downloads Microsoft's CRT and SDK (about 1 GB) under Microsoft's licence, which you accept with `XWIN_ACCEPT_LICENSE=1`. `make test` runs it too when the tools are there, and says so when they aren't |
+| `make check-windows` (`TARGETS=x86_64\|aarch64`, `XWIN_ACCEPT_LICENSE=1` once) | cross-checks ptyro for Windows, x64 and ARM64, from Linux or macOS with cargo-xwin (no Windows machine): every crate with all its tests (what can't run on Windows is `cfg(unix)`, with its reason). Needs clang, lld and cargo-xwin, and says how to install what's missing. The first run downloads Microsoft's CRT and SDK (about 1 GB) under Microsoft's licence, which you accept with `XWIN_ACCEPT_LICENSE=1`. `make test` runs it too when the tools are there, and says so when they aren't |
 | `make conpty` (`INTO=<dir>`, `ARCH=x86_64\|aarch64`) | fetches Microsoft's packaged ConPTY (`conpty.dll`, `OpenConsole.exe`; one pinned NuGet version, its SHA-256 checked) into `target/conpty/<arch>/`, and with `INTO` copies one architecture's pair beside a `ptyro.exe`. The Windows zips and `make test-windows` use it |
-| `make test-windows` | on Windows itself (CI's `windows` job): the client crates' and `ptyro-pty`'s tests, a native daemon end to end in ConPTY (`tests/win5.rs`, with the packaged ConPTY beside it), the rest of the client compiled, and `ptyro.exe` built |
+| `make test-windows` | on Windows itself (the release check): `make test`, every test natively, native daemons in ConPTY with the packaged ConPTY beside the test binaries |
 | `make test-wsl` (`DISTRO=…`, `WSL_DIR=…`) | CI's main job (`make check`) inside WSL2, which CI also runs on a hosted Windows runner (the `wsl` job): inside the distro it checks this checkout; on Windows (Git Bash, MSYS2) it runs it in the distro through `wsl.exe` (default `~/dev/ptyro`) |
 | `make spike-conpty` (`ARGS=report`) | ROADMAP WIN0.2 and WIN0.3, from WSL or Git Bash on Windows: plays what ptyro needs (its OSCs, queries, keys, Ctrl+C, resizes, recorded Claude Code and Codex screens, a 2 MiB burst) through Windows' own ConPTY and Microsoft's packaged conpty.dll (fetched from NuGet, its signature checked), tests whether a second process can take a pseudoconsole over, and writes `spikes/conpty/REPORT.md` (SPEC §20.13). Smart App Control may refuse the unsigned spike; it says so |
 | `make spike-wsl` (`ARGS="start [label]"`, `check`, `clean`) | ROADMAP WIN0.1, run inside WSL2: three heartbeats (a plain process, a ptyro daemon started on demand, one run by a systemd user unit), then close every WSL terminal; an hour later `check` says how long each lived and writes a report with the WSL version and settings |

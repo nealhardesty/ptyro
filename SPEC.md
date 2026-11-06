@@ -5830,6 +5830,28 @@ CI: GitHub Actions on Linux + macOS runs `make check` (fmt-check, clippy `-D war
 spike smoke) plus cargo-deny (`deny.toml`: licenses, advisories, bans, sources); release artifacts
 are built on tags later. CI only ever calls make targets.
 
+**[built WIN13]**
+- **The flake budget.** `make test` runs every test binary through `ptyro-flaky` (a binary in
+  `ptyro-testkit`): it builds the tests (`cargo test --no-run`, cargo's JSON names each binary
+  and its package), runs each in its package's folder as cargo would, and runs any test that
+  failed again, once, on its own (`--exact`). A test that passes then is a flake: named in the
+  output, in `target/flakes.txt` and in the CI job's summary (`GITHUB_STEP_SUMMARY`). The run
+  fails when a test fails twice, a binary fails without naming a test twice, doc tests fail
+  (run last, once), or flakes exceed `FLAKE_BUDGET` (2). Retries can't hide a flaky suite, and
+  a flake is never silent (owner, 2026-11-06: retry once, capped).
+- **Windows.** CI's `windows` job runs `make test` on `windows-latest` (Git Bash; `make` from
+  Chocolatey): every crate's tests natively, native daemons in ConPTY with the packaged ConPTY
+  beside the test binaries (`PTYRO_TEST_PACKAGED_CONPTY=1`). A test that can't run there is
+  `#[cfg(unix)]` with its reason on the line above (a Unix mode, a signal, a symbolic link
+  without Developer Mode, a POSIX shell's job control, a stand-in that is a shell script by
+  nature). Stand-in programs on `PATH` (`gh`, `claude`, `ssh`, `tailscale`, an editor) go
+  through `ptyro_testkit::program`: a `#!/bin/sh` script on Unix; on Windows, where a script
+  can't run by name and `Command` finds only `.exe` files, the debug `ptyro.exe` hard-linked
+  under the program's name with what to run beside it in `<name>.shim` (JSON `argv` and `env`;
+  `say:` prints and waits). A debug `ptyro.exe` started under another name with a shim runs it
+  first thing; a release build never looks. `make check-windows` cross-checks every crate's
+  tests from Linux.
+
 **[built M8]**
 - **Fuzzing.** Eleven targets live in `ptyro-testkit::fuzz`:
   - `sniff`: the same findings however the reads are split;
