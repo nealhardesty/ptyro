@@ -33,7 +33,7 @@ impl World {
         let mut env = vec![("HOME", hs.as_str()), ("SHELL", "/bin/sh")];
         env.extend_from_slice(daemon_env);
         let config = format!(
-            "[attention]\nmin_work = \"1s\"\n[agents.claude]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\n{extra}"
+            "[attention]\nmin_work = \"1s\"\n[agents.claude]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"claude\"]\n{extra}"
         );
         let d = TempDaemon::start_with(BIN, &env, Some(&config)).unwrap();
         Self { home, d }

@@ -15,7 +15,7 @@ const WAIT: Duration = Duration::from_secs(30);
 fn config(meaning: bool) -> String {
     format!(
         "[chat]\nmeaning = {meaning}\ntitle_command = [\"/bin/sh\", \"-c\", \"cat >/dev/null; echo Titled\"]\n\
-         [agents.claude]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\n"
+         [agents.claude]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"claude\"]\n"
     )
 }
 

@@ -68,7 +68,7 @@ fn the_web_app_works_in_a_real_browser() {
         .unwrap();
     let hs = hp.to_string_lossy().into_owned();
     let config = format!(
-        "[attention]\nmin_work = \"1s\"\n[agents.claude]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\n[ui]\n# e2e: keep this comment\n"
+        "[attention]\nmin_work = \"1s\"\n[agents.claude]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"claude\"]\n[ui]\n# e2e: keep this comment\n"
     );
     let d =
         TempDaemon::start_with(BIN, &[("HOME", hs.as_str()), ("SHELL", "/bin/sh")], Some(&config))

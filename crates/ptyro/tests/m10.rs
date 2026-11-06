@@ -37,7 +37,7 @@ impl World {
             String::from("[attention]\nmin_work = \"1s\"\n[worktrees]\nfetch = false\n");
         for a in ["claude", "codex", "gemini", "opencode"] {
             config.push_str(&format!(
-                "[agents.{a}]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"{a}\"]\n"
+                "[agents.{a}]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"{a}\"]\n"
             ));
         }
         config.push_str(extra);

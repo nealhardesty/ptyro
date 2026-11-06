@@ -23,7 +23,7 @@ fn agents_config(extra: &str) -> String {
     let mut c = String::from("[attention]\nmin_work = \"1s\"\n[worktrees]\nfetch = false\n");
     for a in ["claude", "codex"] {
         c.push_str(&format!(
-            "[agents.{a}]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"{a}\"]\n"
+            "[agents.{a}]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"{a}\"]\n"
         ));
     }
     c.push_str(extra);

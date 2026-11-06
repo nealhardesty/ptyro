@@ -102,6 +102,8 @@ fn only_the_lines_ptyro_wrote_leave_an_rc_file() {
     assert_eq!(strip_rc("a\nsource <(ptyro completions bash)").0, "a");
 }
 
+// Unix: the layout under test is $HOME and the XDG folders as Unix spells them.
+#[cfg(unix)]
 #[test]
 fn a_plan_never_guesses_where_ptyro_lives() {
     let paths = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| PathBuf::from("/h"))).unwrap();
@@ -212,6 +214,8 @@ fn the_plan_says_what_goes_what_is_lost_and_what_stays() {
     assert!(render(&brew, &env("/home/me", None)).contains("`brew uninstall ptyro`"));
 }
 
+// Unix: shell rc files under $HOME and XDG, as Unix spells them.
+#[cfg(unix)]
 #[test]
 fn rc_files_follow_xdg_and_home() {
     let mut e = env("/home/me", None);

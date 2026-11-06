@@ -29,7 +29,7 @@ impl World {
         );
         for a in ["claude", "codex"] {
             config.push_str(&format!(
-                "[agents.{a}]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"{a}\"]\n"
+                "[agents.{a}]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"{a}\"]\n"
             ));
         }
         let d = TempDaemon::start_with(BIN, &env, Some(&config)).unwrap();

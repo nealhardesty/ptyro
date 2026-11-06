@@ -42,7 +42,14 @@ pub fn program(
 /// Windows: what the stand-in at `exe` runs (written again when it changes, e.g. once the
 /// daemon it reaches is running). An `env` value of `None`-like `"\0"` unsets the variable.
 pub fn set_shim(exe: &Path, argv: &[&str], env: &[(&str, &str)]) {
+    set_shim_with(exe, argv, env, true);
+}
+
+/// [`set_shim`], and whether the stand-in's own arguments go after `argv` (a stand-in for ssh
+/// ignores them: they are ssh's options and the remote command).
+pub fn set_shim_with(exe: &Path, argv: &[&str], env: &[(&str, &str)], pass_args: bool) {
     let doc = serde_json::json!({
+        "pass_args": pass_args,
         "argv": argv,
         "env": env.iter().map(|(k, v)| (k.to_string(), serde_json::Value::from(*v))).collect::<serde_json::Map<_, _>>(),
     });
@@ -91,7 +98,10 @@ pub fn run_shim() -> Option<i32> {
         return Some(0);
     }
     let mut cmd = std::process::Command::new(prog);
-    cmd.args(args).args(std::env::args_os().skip(1));
+    cmd.args(args);
+    if doc["pass_args"] != false {
+        cmd.args(std::env::args_os().skip(1));
+    }
     for (k, v) in doc["env"].as_object().into_iter().flatten() {
         match v.as_str() {
             Some("\0") => cmd.env_remove(k),

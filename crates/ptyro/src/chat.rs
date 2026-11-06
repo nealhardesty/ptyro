@@ -764,7 +764,7 @@ fn with_context(question: String, context: &str) -> String {
 /// A folder as typed, made full against this directory (`.`, `notes`); `~` and full paths are
 /// left for the chat's machine to read.
 fn full_path(f: &str) -> String {
-    if f.starts_with('/') || f.starts_with('~') {
+    if ptyro_core::os::looks_like_path(f) && !f.starts_with('.') {
         return f.to_owned();
     }
     let p = std::env::current_dir().map(|d| d.join(f)).unwrap_or_else(|_| f.into());

@@ -18,14 +18,23 @@ const BIN: &str = env!("CARGO_BIN_EXE_ptyro");
 const WAIT: Duration = Duration::from_secs(30);
 
 fn fake_ssh(dir: &Path, name: &str, env: &Path) -> PathBuf {
-    ptyro_testkit::program::program(
+    let exe = ptyro_testkit::program::program(
         dir,
         name,
         BIN,
         &format!("exec env $(cat '{}') PTYRO_NO_AUTOSPAWN=1 '{BIN}' proxy", env.display()),
         &[BIN, "proxy"],
         &[("PTYRO_NO_AUTOSPAWN", "1")],
-    )
+    );
+    // Windows: ssh's own arguments aren't proxy's.
+    #[cfg(windows)]
+    ptyro_testkit::program::set_shim_with(
+        &exe,
+        &[BIN, "proxy"],
+        &[("PTYRO_NO_AUTOSPAWN", "1")],
+        false,
+    );
+    exe
 }
 
 /// The daemon `d`'s variables, for the "ssh" to it (`laptopN.env` is `ssh-to-laptopN`'s).
@@ -41,7 +50,7 @@ fn write_env(path: &Path, d: &TempDaemon) {
         let mut pairs: Vec<(&str, &str)> =
             env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
         pairs.push(("PTYRO_NO_AUTOSPAWN", "1"));
-        ptyro_testkit::program::set_shim(&exe, &[BIN, "proxy"], &pairs);
+        ptyro_testkit::program::set_shim_with(&exe, &[BIN, "proxy"], &pairs, false);
     }
 }
 
@@ -51,7 +60,7 @@ fn config(machine: &str) -> String {
     );
     for a in ["claude", "codex"] {
         c.push_str(&format!(
-            "[agents.{a}]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"{a}\"]\n"
+            "[agents.{a}]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"{a}\"]\n"
         ));
     }
     c

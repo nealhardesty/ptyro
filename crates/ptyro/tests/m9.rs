@@ -32,7 +32,7 @@ impl World {
         let mut e = vec![("HOME", hs.as_str()), ("SHELL", "/bin/sh")];
         e.extend_from_slice(env);
         let config = format!(
-            "[attention]\nmin_work = \"1s\"\n[agents.claude]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\n{extra}"
+            "[attention]\nmin_work = \"1s\"\n[agents.claude]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"claude\"]\n{extra}"
         );
         let d = TempDaemon::start_with(BIN, &e, Some(&config)).unwrap();
         Self { home, d }
@@ -1627,7 +1627,7 @@ async fn the_web_app_asks_the_daemon_and_the_machine() {
     );
     assert_eq!(v["t"], "ok", "{v}");
     let text = format!(
-        "[attention]\nmin_work = \"1s\"\n[agents.claude]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\n[ui]\nsidebar_width = 33\n"
+        "[attention]\nmin_work = \"1s\"\n[agents.claude]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"claude\"]\n[ui]\nsidebar_width = 33\n"
     );
     let (_, v) = host(serve.port, Some(&full), &json!({ "op": "config.save", "text": text }));
     assert_eq!(v["t"], "ok", "{v}");

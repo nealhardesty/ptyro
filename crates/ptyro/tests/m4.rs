@@ -28,7 +28,7 @@ fn agents_config(extra: &str) -> String {
     let mut c = String::from("[attention]\nmin_work = \"1s\"\n");
     for a in ["claude", "codex", "gemini", "opencode", "antigravity"] {
         c.push_str(&format!(
-            "[agents.{a}]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"{a}\"]\n"
+            "[agents.{a}]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"{a}\"]\n"
         ));
     }
     c.push_str(extra);
@@ -702,7 +702,7 @@ async fn tui_attention_peek_answer_and_inbox() {
 #[tokio::test]
 async fn osc7501_conformance_and_auto_hibernation() {
     let w = World::new(&format!(
-        "[agents.sleepy]\nadapter = \"claude\"\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\nhibernate_after = \"1s\"\n"
+        "[agents.sleepy]\nadapter = \"claude\"\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"claude\"]\nhibernate_after = \"1s\"\n"
     ));
     let c = w.d.client().await.unwrap();
     // A plain program's records: invalid ones discarded, subtrees cleared, the latest speaks.

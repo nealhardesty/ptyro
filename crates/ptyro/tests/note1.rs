@@ -39,7 +39,7 @@ impl World {
             &[],
         );
         let config = format!(
-            "[worktrees]\nfetch = false\n[agents.claude]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\n[scratchpad]\neditor = \"{}\"\n{extra}",
+            "[worktrees]\nfetch = false\n[agents.claude]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"claude\"]\n[scratchpad]\neditor = '{}'\n{extra}",
             ed.display()
         );
         let hs = h.to_string_lossy().into_owned();
@@ -121,7 +121,7 @@ async fn the_file_the_variable_and_the_cli() {
     let Reply::Session { .. } = c.request(Request::Spawn { spec }).await.unwrap() else { panic!() };
     let screen =
         w.d.wait_for_text(&c, "sh", &format!("pad={}", file.display()), WAIT).await.unwrap();
-    assert!(screen.contains("pad=/"), "{screen}");
+    assert!(screen.contains(if cfg!(windows) { ":\\" } else { "pad=/" }), "a full path: {screen}");
 
     // add: words, a section, a pipe, a note.
     let (ok, _, err) = w.pad(&["add", "login", "times out", "on safari"]);

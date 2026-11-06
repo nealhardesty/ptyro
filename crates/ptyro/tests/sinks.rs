@@ -90,7 +90,7 @@ impl World {
         let hs = h.to_string_lossy().into_owned();
         let env = [("HOME", hs.as_str()), ("GIT_CONFIG_NOSYSTEM", "1"), ("SHELL", "/bin/sh")];
         let config = format!(
-            "[attention]\nmin_work = \"1s\"\n[notifications]\nchannels = [\"inbox\", \"sinks\"]\non = [\"blocked\"]\nsinks = [{{ type = \"ntfy\", url = \"{sink_url}\", token = \"{TOKEN}\", on = [\"blocked\"] }}]\n[agents.claude]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\n"
+            "[attention]\nmin_work = \"1s\"\n[notifications]\nchannels = [\"inbox\", \"sinks\"]\non = [\"blocked\"]\nsinks = [{{ type = \"ntfy\", url = \"{sink_url}\", token = \"{TOKEN}\", on = [\"blocked\"] }}]\n[agents.claude]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"claude\"]\n"
         );
         let d = TempDaemon::start_with(BIN, &env, Some(&config)).unwrap();
         Self { home, d }

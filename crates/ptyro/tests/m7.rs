@@ -40,7 +40,7 @@ impl World {
             String::from("[attention]\nmin_work = \"1s\"\n[worktrees]\nfetch = false\n");
         for a in ["claude", "codex", "gemini"] {
             config.push_str(&format!(
-                "[agents.{a}]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"{a}\"]\n{}\n",
+                "[agents.{a}]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"{a}\"]\n{}\n",
                 per_agent(a)
             ));
         }
@@ -350,7 +350,7 @@ fn done_when_a_lead_coordinates_workers_within_its_policy() {
 #[test]
 fn agents_cannot_answer_prompts_pair_devices_or_grant_trust() {
     let w = World::new(&format!(
-        "[agents.peek]\ncommand = [\"{BIN}\", \"attach\", \"victim\"]\nenv = {{ PTYRO_ALLOW_NESTED = \"1\" }}\n"
+        "[agents.peek]\ncommand = ['{BIN}', \"attach\", \"victim\"]\nenv = {{ PTYRO_ALLOW_NESTED = \"1\" }}\n"
     ));
     let root = w.project("app");
     std::fs::write(root.join(".ptyro.toml"), "[scripts]\nsetup = \"echo hi\"\n").unwrap();

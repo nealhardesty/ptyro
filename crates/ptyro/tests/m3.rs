@@ -188,6 +188,8 @@ copy = ["config/local.yml"]
 share = ["node_modules"]
 
 [scripts]
+# POSIX shell lines: bash everywhere (Git Bash on Windows, where `auto` would be PowerShell).
+shell = "bash"
 setup = "echo setup-ran port=$PTYRO_PORT name=$PTYRO_WORKTREE_NAME conductor=$CONDUCTOR_WORKSPACE_NAME > setup.out"
 archive = "echo archived > $PTYRO_ROOT_PATH/archived.txt"
 
@@ -390,7 +392,7 @@ async fn the_worktree_lifecycle() {
 
 #[tokio::test]
 async fn scripts_status_and_run_modes() {
-    let toml = "[scripts]\nrun_mode = \"exclusive\"\n[scripts.run.dev]\ncommand = \"echo dev-$PTYRO_WORKTREE_NAME; sleep 30\"\ndefault = true\n[scripts.run.once]\ncommand = \"echo once\"\n";
+    let toml = "[scripts]\nshell = \"bash\"\nrun_mode = \"exclusive\"\n[scripts.run.dev]\ncommand = \"echo dev-$PTYRO_WORKTREE_NAME; sleep 30\"\ndefault = true\n[scripts.run.once]\ncommand = \"echo once\"\n";
     let w = World::new("[worktrees]\nfetch = false\n");
     let root = w.repo("svc", &[(".ptyro.toml", toml)]);
     w.ok(&["project", "add", root.to_str().unwrap()]);
@@ -544,7 +546,7 @@ async fn profiles_pins_guards_and_environments() {
     let s = spawn(&c, sh(ENV_DUMP, "acme-app/@root")).await.unwrap();
     assert_eq!(s.profile, "work");
     let screen = screen_with(&w.d, &c, &s.name, "profile=work").await;
-    assert!(screen.contains(&format!("cfg={}/.claude-work", h.display())), "{screen}");
+    assert!(screen.contains(&format!("cfg={}", h.join(".claude-work").display())), "{screen}");
     assert!(screen.contains("email=me@acme.example profile=work tok=tok-from-command"), "{screen}");
     assert!(screen.contains("key=none"), "credentials are scrubbed: {screen}");
 
@@ -1040,7 +1042,9 @@ async fn scripts_run_in_their_shell_and_crlf_scripts_are_fixed() {
         size: None,
     };
     let Reply::Session { info } = c.request(run("which")).await.unwrap() else { panic!() };
-    assert_eq!(info.argv[..2], ["bash", "-c"], "[scripts] shell = bash");
+    // Git Bash by its full path on Windows (SPEC §8.7).
+    let shell = std::path::Path::new(&info.argv[0]).file_stem().unwrap().to_string_lossy();
+    assert_eq!((shell.as_ref(), info.argv[1].as_str()), ("bash", "-c"), "[scripts] shell = bash");
     screen_with(&w.d, &c, &info.name, "bash-says-yes").await;
     // The CRLF script: `#!/bin/sh\r` is no interpreter, and the doctor says how to fix it.
     let doctor = w.ok(&["doctor"]);

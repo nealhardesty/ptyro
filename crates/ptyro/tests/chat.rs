@@ -36,7 +36,7 @@ impl World {
         );
         for a in ["claude", "codex", "gemini", "opencode"] {
             config.push_str(&format!(
-                "[agents.{a}]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"{a}\"]\n"
+                "[agents.{a}]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"{a}\"]\n"
             ));
         }
         config.insert_str(config.find("[agents").unwrap(), &format!("{chat}\n"));

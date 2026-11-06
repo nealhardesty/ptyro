@@ -393,6 +393,8 @@ mod tests {
 
     use super::*;
 
+    // Unix: on Windows the tour runs in WSL (`wsl -- ptyro tour`), so it never sweeps there.
+    #[cfg(unix)]
     #[test]
     fn a_tour_left_behind_is_swept_and_a_running_one_is_not() {
         let tmp = std::env::temp_dir();

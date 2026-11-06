@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use ptyro_client::Client;
 use ptyro_core::TermSize;
 use ptyro_core::session::{SessionInfo, SpawnSpec};
+#[cfg(unix)] // only the Unix tests read a status
 use ptyro_core::status::AgentStatus;
 use ptyro_protocol::{Reply, Request};
 use ptyro_testkit::TempDaemon;
@@ -47,7 +48,7 @@ impl World {
             &[],
         );
         let config = format!(
-            "[attention]\nmin_work = \"1s\"\n[worktrees]\nfetch = false\n[agents.claude]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"claude\"]\n{extra}"
+            "[attention]\nmin_work = \"1s\"\n[worktrees]\nfetch = false\n[agents.claude]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"claude\"]\n{extra}"
         );
         let (hs, ss) = (h.to_string_lossy().into_owned(), sh.to_string_lossy().into_owned());
         let env = [("HOME", hs.as_str()), ("GIT_CONFIG_NOSYSTEM", "1"), ("SHELL", ss.as_str())];
@@ -62,6 +63,7 @@ impl World {
 
 /// ptyro under another name, so its process is called that: a hard link (the kernel names a
 /// process after the path it was started by), else a copy.
+#[cfg(unix)] // the hand-started agents' tests, which are Unix's
 fn named(path: &std::path::Path) {
     if std::fs::hard_link(BIN, path).is_err() {
         std::fs::copy(BIN, path).unwrap();
@@ -270,6 +272,8 @@ async fn a_session_starts_in_the_directory_asked_for_inside_a_project() {
 }
 
 /// UX1.5: a shell that `cd`s into another repository puts that one in the sidebar too.
+// Unix: the session's shell is a sh script written as `$SHELL` (Windows starts PowerShell).
+#[cfg(unix)]
 #[tokio::test]
 async fn a_shell_that_moves_into_a_repository_registers_it() {
     let w = World::new("exec sleep 60");
@@ -300,6 +304,8 @@ async fn a_shell_that_moves_into_a_repository_registers_it() {
 
 /// UX1.4: Claude typed into a shell session isn't one long "working" command: the session
 /// notes it (`zsh › claude`) and reads its status off its screen, at low confidence.
+// Unix: the session's shell is a sh script written as `$SHELL` (Windows starts PowerShell).
+#[cfg(unix)]
 #[tokio::test]
 async fn an_agent_started_by_hand_in_a_shell_reports_idle_blocked_and_working() {
     // A real process named `claude` (ptyro by another name), started from the shell after an
@@ -367,6 +373,8 @@ async fn an_agent_started_by_hand_in_a_shell_reports_idle_blocked_and_working() 
 
 /// UX1.4: adopting the Claude started by hand: it exits, and a managed session resumes the
 /// conversation it was in (its newest transcript for that directory).
+// Unix: the session's shell is a sh script written as `$SHELL` (Windows starts PowerShell).
+#[cfg(unix)]
 #[tokio::test]
 async fn adopting_a_hand_started_claude_resumes_its_conversation() {
     let w = World::new("exec sleep 60");
@@ -919,7 +927,7 @@ async fn a_finished_turn_is_summarized_in_a_line() {
     )
     .unwrap();
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    let extra = format!("[summaries]\nenabled = true\ncommand = [\"{}\"]\n", script.display());
+    let extra = format!("[summaries]\nenabled = true\ncommand = ['{}']\n", script.display());
     let w = World::with_config("exec sleep 30", &extra);
     let c = w.d.client().await.unwrap();
     let agent = SpawnSpec {
@@ -1305,7 +1313,7 @@ async fn next_agent(c: &Client, wt: &str) -> String {
 async fn again_starts_the_agent_the_worktree_last_started() {
     let w = World::with_config(
         "exec /bin/sh -i",
-        &format!("[agents.codex]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"codex\"]\n"),
+        &format!("[agents.codex]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"codex\"]\n"),
     );
     let dir = repo(&w, "myrepo");
     let c = w.d.client().await.unwrap();
@@ -1364,7 +1372,7 @@ async fn again_starts_the_configured_default_agent_first() {
     let w = World::with_config(
         "exec /bin/sh -i",
         &format!(
-            "[agents]\ndefault = \"codex\"\n[agents.codex]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"codex\"]\n"
+            "[agents]\ndefault = \"codex\"\n[agents.codex]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"codex\"]\n"
         ),
     );
     let dir = repo(&w, "myrepo");

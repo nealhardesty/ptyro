@@ -45,7 +45,7 @@ impl World {
                 ));
             } else {
                 config.push_str(&format!(
-                    "\n[agents.{a}]\ncommand = [\"{BIN}\", \"fake-agent\", \"--as\", \"{a}\"]\n"
+                    "\n[agents.{a}]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"{a}\"]\n"
                 ));
             }
         }

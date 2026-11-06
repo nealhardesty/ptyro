@@ -189,6 +189,9 @@ async fn shells_get_their_integration_with_no_setup() {
     }
 }
 
+// Unix: on Windows, Git's `sh -l` didn't run the line typed into it under ConPTY (WIN13, CI's
+// second Windows run; open). Windows' shells and their integration are tests/win6.rs's.
+#[cfg(unix)]
 #[tokio::test]
 async fn shell_command_and_switching_the_integration_off() {
     let home = home_with_rc_files();
@@ -229,6 +232,8 @@ async fn shell_command_and_switching_the_integration_off() {
 
 /// With the integration off, the doctor names the startup file the shell really reads: fish
 /// and PowerShell follow `$XDG_CONFIG_HOME` when it is set.
+// Unix: fish's and PowerShell's startup files under `$XDG_CONFIG_HOME` are Unix's layout.
+#[cfg(unix)]
 #[test]
 fn the_doctor_names_the_startup_file_under_xdg_config_home() {
     let home = tempfile::Builder::new().prefix("ptyro-win1-home-").tempdir().unwrap();
@@ -248,7 +253,7 @@ fn the_doctor_names_the_startup_file_under_xdg_config_home() {
         #[cfg(unix)]
         std::fs::set_permissions(&exe, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
-        let config = format!("[shell]\nintegration = false\ncommand = [\"{}\"]\n", exe.display());
+        let config = format!("[shell]\nintegration = false\ncommand = ['{}']\n", exe.display());
         let d = TempDaemon::start_with(BIN, &[("HOME", h)], Some(&config)).unwrap();
         let out = d
             .cmd()
