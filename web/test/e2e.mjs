@@ -216,6 +216,18 @@ const scenarios = {
     ptyro("new", "-d", "-n", "after-offline", "--", "sh", "-c", "cat");
     await tab.waitFor("a session started while away", card("after-offline"));
   },
+
+  // More → Set up ptyro: the daemon's checklist (a fake machine), Install, the run's lines and its
+  // report; admin steps (apt) aren't run from the web and say where to run them (BOOT1).
+  async setup() {
+    await fresh("#/setup");
+    const text = (t) => `document.body.innerText.includes(${JSON.stringify(t)})`;
+    await tab.waitFor("the checklist", text("Antigravity"), 30_000);
+    await tab.waitFor("the admin note", text("Administrator rights are asked for only on the computer itself"));
+    await tab.eval(`[...document.querySelectorAll("button")].find(b => b.textContent === "Install the ticked ones").click()`);
+    await tab.waitFor("the run's report", text("2 installed, 0 failed, 2 not run."), 30_000);
+    await tab.waitFor("its lines", text("fake vendor: install claude"));
+  },
 };
 
 let failed = 0;

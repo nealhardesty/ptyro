@@ -31,6 +31,7 @@ mod runs;
 mod scratchpad;
 mod serve_child;
 mod session;
+mod setup;
 mod shells;
 mod sidecar;
 mod structured;

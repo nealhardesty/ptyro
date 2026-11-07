@@ -1808,6 +1808,8 @@ impl App {
                 self.usage.insert((usage.profile.clone(), usage.agent.clone()), usage);
             }
             DomainEvent::RunUpdated { run } => self.run_updated(run),
+            // The web's setup runs (the TUI runs its own, `ptyro setup` in a split).
+            DomainEvent::SetupProgress { .. } => {}
             DomainEvent::ChatUpdated { info } => self.chat_updated(info),
             DomainEvent::ChatRemoved { id, machine } => self.chat_removed(&id, machine.as_deref()),
             DomainEvent::ProjectUpdated { info } => {

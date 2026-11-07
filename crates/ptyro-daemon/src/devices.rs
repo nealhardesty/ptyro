@@ -178,7 +178,9 @@ pub fn needed(req: &Request) -> Scope {
         | MachineList
         | ScratchTodo { .. }
         | ScratchHistory
-        | ScratchPane { create: false, .. } => Scope::Read,
+        | ScratchPane { create: false, .. }
+        // What's installed on the machine, and what installing would run (BOOT1).
+        | SetupPlan { .. } => Scope::Read,
         Answer { decision, .. } if is_always(decision) => Scope::Control,
         Answer { .. }
         | GateResolve { .. }
@@ -239,6 +241,8 @@ pub fn needed(req: &Request) -> Scope {
         MachineAdd { .. } | MachineRemove { .. } | MachineHide { .. } | MachineRetry { .. } => Scope::Full,
         // It copies coding history into chat.db, as `[chat] import` (a setting: full) does.
         ChatImport { .. } => Scope::Full,
+        // Installs software on the machine (never with administrator rights, BOOT1).
+        SetupRun { .. } => Scope::Full,
         Shutdown { .. } | Upgrade { .. } | DevicePair { .. } | DeviceClaim { .. } | DeviceList | DeviceRevoke { .. } | SaveView { .. } | ReloadConfig | ProjectAdd { .. } | ProjectRemove { .. } | ProjectPin { .. } | ProjectScripts { .. } | ProjectTrust { .. } | ProjectUntrust { .. } | ProjectLineEndings { .. } | Discover { .. } | WorkspaceNew { .. } | WorkspaceSet { .. } | WorkspaceRename { .. } | WorkspaceRemove { .. } | WorkspaceMember { .. } | WorktreeNew { .. } | WorktreeRemove { .. } | WorktreeRefresh { .. } | WorktreeRun { .. } | WorktreeLock { .. } | WorktreeRenameBranch { .. } | Gc | ProjectSuggest { .. } | WorktreeArchive { .. } | WorktreeRestore { .. } | WorktreeArchiveDelete { .. } | WorktreeFinish { .. } | ProfileEnv { .. } | ProfileRename { .. } | ProfileResolve { .. } | Hook { .. } | StatusLine { .. } | Report { .. } | NotifyTest | Doctor | SelfTest { .. } | WorktreeCommit { .. } | WorktreeIntegrate { .. } | WorktreePair { .. } | PrCreate { .. } | PrFix { .. } | PrAutomerge { .. } | PrWatch { .. } | PrReply { .. } | ReviewRemove { .. } | ReviewDone { .. } | RunFork { .. } | RecipeRun { .. } | Fanout { .. } | Pick { .. } | Discard { .. } | MsgCheck { .. } | MsgAck { .. } | LeaseClaim { .. } | LeaseRelease { .. } | CheckpointRestore { .. } | SetVerify { .. } | LeadStart { .. } | Lead { .. } | Cs { .. } => Scope::Full,
     }
 }

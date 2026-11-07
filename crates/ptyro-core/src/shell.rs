@@ -495,6 +495,52 @@ fn ext(kind: ShellKind) -> &'static str {
 }
 
 /// POSIX single quotes.
+/// Lines that put `dirs` at the front of `PATH`, each once, for an rc file: what `ptyro
+/// shell-init` prints first, for every shell (not only ptyro's), so the tools `ptyro setup`
+/// installed into ptyro's own folder are found (BOOT1, SPEC §24.2). `dirs[0]` ends up first.
+pub fn path_lines(kind: ShellKind, dirs: &[PathBuf]) -> String {
+    if dirs.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("# The tools `ptyro setup` installed into ptyro's own folder.\n");
+    for d in dirs.iter().rev() {
+        let d = d.to_string_lossy();
+        out.push_str(&match kind {
+            ShellKind::Bash | ShellKind::Zsh => {
+                let q = sh_quote(&msys_form(&d));
+                format!("case \":$PATH:\" in *:{q}:*) ;; *) PATH={q}:\"$PATH\"; export PATH ;; esac\n")
+            }
+            ShellKind::Fish => {
+                let q = fish_quote(&msys_form(&d));
+                format!("contains -- {q} $PATH; or set -gx PATH {q} $PATH\n")
+            }
+            ShellKind::Pwsh => {
+                let q = format!("'{}'", d.replace('\'', "''"));
+                format!(
+                    "if (($env:PATH -split [IO.Path]::PathSeparator) -notcontains {q}) {{ $env:PATH = {q} + [IO.Path]::PathSeparator + $env:PATH }}\n"
+                )
+            }
+        });
+    }
+    out
+}
+
+/// A Windows folder as a POSIX shell on Windows takes it in `PATH` (Git Bash, MSYS2, fish on
+/// MSYS): `C:\Users\me\x` → `/c/Users/me/x`, as `cygpath -u` gives it; `PATH` there is
+/// `:`-separated, so a drive's colon can't stay. Anything else is left as it is.
+pub fn msys_form(p: &str) -> String {
+    let b = p.as_bytes();
+    if b.len() >= 2
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && (b.len() == 2 || matches!(b[2], b'\\' | b'/'))
+    {
+        format!("/{}{}", (b[0] as char).to_ascii_lowercase(), p[2..].replace('\\', "/"))
+    } else {
+        p.to_owned()
+    }
+}
+
 fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
@@ -699,6 +745,33 @@ mod tests {
 
     fn v(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn path_lines_put_the_tools_first_once_in_every_shell() {
+        let dirs = [PathBuf::from("/h/ptyro-tools/node/bin"), PathBuf::from("/h/it's/npm/bin")];
+        assert_eq!(path_lines(ShellKind::Bash, &[]), "");
+        let sh = path_lines(ShellKind::Zsh, &dirs);
+        assert!(sh.contains(r#"case ":$PATH:" in *:'/h/ptyro-tools/node/bin':*) ;; *) PATH='/h/ptyro-tools/node/bin':"$PATH"; export PATH ;; esac"#), "{sh}");
+        // The last line is the first dir: it ends up in front.
+        assert!(sh.trim_end().lines().last().unwrap().contains("node/bin"));
+        assert!(sh.contains(r"'/h/it'\''s/npm/bin'"));
+        let fish = path_lines(ShellKind::Fish, &dirs);
+        assert!(fish.contains("contains -- '/h/ptyro-tools/node/bin' $PATH; or set -gx PATH '/h/ptyro-tools/node/bin' $PATH"));
+        // Windows folders for Git Bash's and fish's PATH: `/c/…`; PowerShell keeps its own form.
+        let win = [PathBuf::from(r"C:\Users\RUNNER~1\ptyro-tools\node")];
+        assert!(
+            path_lines(ShellKind::Bash, &win)
+                .contains("PATH='/c/Users/RUNNER~1/ptyro-tools/node':\"$PATH\"")
+        );
+        assert!(path_lines(ShellKind::Fish, &win).contains("'/c/Users/RUNNER~1/ptyro-tools/node'"));
+        assert!(
+            path_lines(ShellKind::Pwsh, &win).contains(r"'C:\Users\RUNNER~1\ptyro-tools\node'")
+        );
+        assert_eq!(msys_form("D:"), "/d");
+        assert_eq!(msys_form("/usr/bin"), "/usr/bin");
+        let ps = path_lines(ShellKind::Pwsh, &dirs);
+        assert!(ps.contains("-notcontains '/h/it''s/npm/bin'"), "{ps}");
     }
 
     #[test]

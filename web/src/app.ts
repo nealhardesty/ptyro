@@ -19,7 +19,7 @@ import { chatsAside, chatsShown, findAllChats, newChat } from "./chats.js";
 import { machineChip } from "./machines.js";
 import { initNotes, notesConnected, notesEvent, notesLink, notesNeedsLoad, notesLoad, notesNoteButton, notesQuickAdd, notesShown, notesStart, notesView } from "./notes.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
-import { coach } from "./settings.js";
+import { coach, setupEvent } from "./settings.js";
 import { goShell, listWorkspace, shellStrip, shellsGroup } from "./shells.js";
 import { apply as showMachine, offlineText } from "./machine.js";
 
@@ -642,6 +642,8 @@ conn.listeners.add((msg) => {
       if (shell && shell.id === e.session) shell.term.fromProgram(e.text);
     } else if (e.t === "scratch_changed") {
       notesEvent(e);
+    } else if (e.t === "setup_progress") {
+      setupEvent(e);
     }
   }
 });

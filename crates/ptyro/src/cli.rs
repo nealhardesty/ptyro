@@ -144,6 +144,8 @@ async fn dispatch(
                 | Cmd::Completions { .. }
                 | Cmd::ShellInit { .. }
                 | Cmd::Init { .. }
+                | Cmd::Setup { .. }
+                | Cmd::Install { .. }
                 | Cmd::Uninstall { .. }
                 | Cmd::Backup { .. }
                 | Cmd::Daemon { .. }
@@ -161,6 +163,14 @@ async fn dispatch(
         if let Some(r) = remote {
             return Err(Error::invalid(format!(
                 "uninstall removes ptyro from this computer, not from {r}: run `ptyro uninstall` there"
+            )));
+        }
+        None
+    } else if matches!(cmd, Some(Cmd::Setup { .. } | Cmd::Install { .. })) {
+        // Setup installs on this computer, with no daemon (BOOT1).
+        if let Some(r) = remote.filter(|r| !ptyro_client::is_local(Some(r))) {
+            return Err(Error::invalid(format!(
+                "setup installs on this computer, not on {r}: run `ptyro setup` there"
             )));
         }
         None
@@ -324,6 +334,13 @@ async fn dispatch(
             Ok(0)
         }
         Some(Cmd::Init { yes, dry_run }) => crate::init::run(&ctx, yes, dry_run).await,
+        Some(Cmd::Setup { yes, agents, tools, dry_run, json }) => {
+            let a = crate::setup::SetupArgs { yes, agents, tools, dry_run, json };
+            crate::setup::setup(&ctx, a).await
+        }
+        Some(Cmd::Install { names, yes, dry_run, json }) => {
+            crate::setup::install(&ctx, names, yes, dry_run, json).await
+        }
         Some(Cmd::About { json }) => crate::about::run(&ctx, json).await,
         Some(Cmd::Doctor { quick, json }) => crate::doctor::run_cmd(&ctx, quick, json).await,
         Some(Cmd::Tour { here: false }) => run_tour(&ctx).await,
@@ -614,13 +631,13 @@ async fn dispatch(
             unreachable!("handled in main")
         }
         Some(Cmd::ShellInit { shell }) => {
-            print!("{}", shell_init(shell));
+            print!("{}", shell_init(shell, &ctx.paths));
             Ok(0)
         }
         Some(Cmd::Daemon { cmd }) => daemon(&ctx, cmd).await,
         Some(Cmd::FakeAgent { .. }) => unreachable!("handled in main"),
         #[cfg(debug_assertions)]
-        Some(Cmd::FakeGh { .. }) => unreachable!("handled in main"),
+        Some(Cmd::FakeGh { .. } | Cmd::FakeInstaller { .. }) => unreachable!("handled in main"),
     }
 }
 
@@ -1224,8 +1241,13 @@ impl Shell {
 /// Shell integration (SPEC §5.7, `ptyro_core::shell`): OSC 133 prompt marks (copy-mode prompt
 /// jumps, last exit status) and the directory. Each snippet does nothing outside ptyro (`$PTYRO`
 /// unset).
-pub fn shell_init(shell: Shell) -> &'static str {
-    shell.kind().snippet()
+/// The snippet, after the lines that put the tools `ptyro setup` installed on `PATH` (only the
+/// folders that exist: nothing for a machine that never needed them).
+pub fn shell_init(shell: Shell, paths: &Paths) -> String {
+    let dirs: Vec<_> =
+        ptyro_agents::setup::path_dirs(paths).into_iter().filter(|d| d.is_dir()).collect();
+    let kind = shell.kind();
+    format!("{}{}", ptyro_core::shell::path_lines(kind, &dirs), kind.snippet())
 }
 
 /// `ls --status/--project/--workspace`.

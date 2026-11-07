@@ -40,7 +40,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 30 };
+pub const PROTO: Version = Version { major: 1, minor: 31 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -358,6 +358,20 @@ pub enum Request {
     ShellLayout {
         addr: String,
         layout: ptyro_core::window::WindowLayout,
+    },
+    /// Setup (SPEC §24.2, protocol 1.31): the checklist on the daemon's machine: what is
+    /// installed, and what installing `picks` (item ids, `agy` and `github-cli` too) with what
+    /// they need would run; `None`, the defaults. Replies `SetupPlan`.
+    SetupPlan {
+        #[serde(default)]
+        picks: Option<Vec<String>>,
+    },
+    /// Setup (protocol 1.31): install `picks` and what they need on the daemon's machine, one
+    /// run at a time. Steps that need administrator rights are never run here (a password never
+    /// goes over the network): each is reported with its command. Progress comes as
+    /// `SetupProgress` events. Replies `SetupStarted`.
+    SetupRun {
+        picks: Vec<String>,
     },
     /// The other machines this daemon mirrors (MM1.B). Replies `Machines`.
     MachineList,
@@ -1868,6 +1882,15 @@ pub enum Reply {
         /// Uncompressed P-256 point, base64url.
         key: String,
     },
+    /// The setup checklist (protocol 1.31).
+    SetupPlan {
+        plan: ptyro_agents::setup::Plan,
+    },
+    /// A setup run started: `SetupProgress` events with this `run` follow.
+    SetupStarted {
+        run: String,
+        plan: ptyro_agents::setup::Plan,
+    },
     /// The handoff starts now; the connection will close.
     Upgrading {
         from: String,
@@ -2106,6 +2129,12 @@ pub enum DomainEvent {
         id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         machine: Option<String>,
+    },
+    /// A setup run's progress (protocol 1.31): a step started, a line of its output, ✓, ✗ with
+    /// the fix, and at the end the report.
+    SetupProgress {
+        run: String,
+        event: ptyro_agents::setup::Event,
     },
 }
 

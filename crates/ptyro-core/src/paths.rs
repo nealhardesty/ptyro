@@ -18,6 +18,8 @@ pub struct Paths {
     pub state: PathBuf,
     pub runtime: PathBuf,
     pub socket: PathBuf,
+    /// [`Paths::tools`].
+    pub tools: PathBuf,
 }
 
 impl Paths {
@@ -36,6 +38,7 @@ impl Paths {
                 state: home.join("state"),
                 runtime: home.join("run"),
                 socket: PathBuf::new(),
+                tools: home.join("ptyro-tools"),
             }
         } else if cfg!(windows) {
             // Windows' own places: roaming config, the rest local to this computer, unless an
@@ -50,6 +53,10 @@ impl Paths {
                 state: xdg("XDG_STATE_HOME").unwrap_or_else(|| local.join("state")),
                 runtime: xdg("XDG_RUNTIME_DIR").unwrap_or_else(|| local.join("run")),
                 socket: PathBuf::new(),
+                tools: var("XDG_DATA_HOME")
+                    .filter(|p| p.is_absolute())
+                    .unwrap_or_else(|| w.cache_dir())
+                    .join("ptyro-tools"),
             }
         } else {
             let xdg = etcetera::base_strategy::Xdg::new().map_err(std::io::Error::other)?;
@@ -65,6 +72,7 @@ impl Paths {
                 state: xdg.state_dir().unwrap_or_else(|| xdg.data_dir()).join("ptyro"),
                 runtime,
                 socket: PathBuf::new(),
+                tools: xdg.data_dir().join("ptyro-tools"),
             }
         };
         if cfg!(windows) {
@@ -106,6 +114,14 @@ impl Paths {
 
     pub fn log_dir(&self) -> PathBuf {
         self.state.clone()
+    }
+
+    /// Where `ptyro setup` puts the tools it installs without admin rights (BOOT1, SPEC §24.2):
+    /// nodejs.org's Node.js and an npm prefix. Beside the data directory, not in it, because the
+    /// tools are the user's and `ptyro uninstall` leaves them: `~/.local/share/ptyro-tools`,
+    /// `%LOCALAPPDATA%\ptyro-tools`, `$PTYRO_HOME/ptyro-tools`.
+    pub fn tools(&self) -> PathBuf {
+        self.tools.clone()
     }
 }
 
@@ -209,6 +225,11 @@ mod tests {
         let p = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| PathBuf::from("/h"))).unwrap();
         assert_eq!(p.config, PathBuf::from("/h/config"));
         assert_eq!(p.socket, PathBuf::from("/h/run/ptyro.sock"));
+        // Setup's tools sit beside the data, inside the home (BOOT1).
+        assert_eq!(p.tools(), PathBuf::from("/h/ptyro-tools"));
+        // Even when the home is itself named ptyro: never outside it.
+        let p = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| PathBuf::from("/t/ptyro"))).unwrap();
+        assert_eq!(p.tools(), PathBuf::from("/t/ptyro/ptyro-tools"));
     }
 
     #[cfg(unix)] // a socket's path; Windows names a pipe

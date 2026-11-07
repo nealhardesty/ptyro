@@ -62,14 +62,18 @@ It stops the daemon and every session, then removes:
 - **the lines ptyro added to your shell's rc files**: only the exact lines `ptyro init` and the
   mend list write (`source <(ptyro completions zsh)`, `eval "$(ptyro shell-init zsh)"`, their
   bash, fish and PowerShell forms, the last in `$PROFILE`) with the comment ptyro put above one. Anything else that mentions ptyro
-  stays and is listed;
+  stays and is listed. When `ptyro setup` installed tools into ptyro's tools folder, the
+  `shell-init` line was what put them on `PATH`: a plain `PATH` line for that folder takes its
+  place (the plan shows it), so they keep working;
 - **a Tailscale mapping** (`tailscale serve` on :443 to ptyro's port) when `[remote] tailscale`
   made one;
 - **the binary**, when it was put there by hand (`~/.local/bin`, `/usr/local/bin`, a path you
   chose). A Homebrew install says `brew uninstall ptyro`; a package manager's file says to use it;
   `~/.cargo/bin` runs `cargo uninstall ptyro`; a build in a `target/` directory is never removed.
 
-**What stays, always:** your repositories, their branches, `.ptyro.toml` and `.ptyro.local.toml`,
+**What stays, always:** the agents and tools `ptyro setup` installed, its tools folder
+(`~/.local/share/ptyro-tools`, `%LOCALAPPDATA%\ptyro-tools`) and, on Windows, the entries it put in
+your `PATH` (the plan names them); your repositories, their branches, `.ptyro.toml` and `.ptyro.local.toml`,
 the lines ptyro added to `.git/info/exclude`, and, unless you say `--purge-refs`, the snapshots
 under `refs/ptyro/` in your repositories (archived and taken-over work). They stay as ordinary git refs
 (`git for-each-ref refs/ptyro`), so the work can be recovered with git, but ptyro's own list of

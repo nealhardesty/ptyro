@@ -181,6 +181,7 @@ impl Daemon {
         let (io_pause, pause_rx) = watch::channel(false);
         let (run_id, started_ms) = identity.unwrap_or_else(|| (SessionId::new().full(), now_ms()));
         let chats = crate::chats::Chats::open(&paths.data.join("chat.db"));
+        let tools_path = ptyro_agents::setup::path_dirs(&paths);
         Arc::new(Self {
             paths,
             started_ms,
@@ -195,6 +196,15 @@ impl Daemon {
             base_env: std::env::vars_os()
                 .filter(|(k, _)| {
                     !k.to_string_lossy().starts_with("PTYRO_HANDOFF_") && k != "PTYRO_SESSION_ID"
+                })
+                .map(|(k, v)| {
+                    // The tools `ptyro setup` puts in ptyro's own folder come first on every
+                    // child's PATH (BOOT1), even when installed after the daemon started.
+                    if k.eq_ignore_ascii_case("PATH") {
+                        (k, ptyro_agents::setup::path_with(&tools_path, &v))
+                    } else {
+                        (k, v)
+                    }
                 })
                 .collect(),
             store,
@@ -1180,6 +1190,8 @@ impl Daemon {
             | Request::MachineRemove { .. }
             | Request::MachineHide { .. }
             | Request::MachineRetry { .. }) => self.handle_machines(req).await,
+            Request::SetupPlan { picks } => self.setup_plan(picks).await,
+            Request::SetupRun { picks } => self.setup_run(picks).await,
             Request::LastLaunch { worktree, .. } => {
                 Ok(Reply::LastLaunch { launch: Some(self.launch_for(worktree.as_deref())?) })
             }

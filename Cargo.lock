@@ -2359,6 +2359,7 @@ version = "0.0.63"
 dependencies = [
  "ptyro-core",
  "ptyro-git",
+ "ptyro-pty",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -2472,6 +2473,7 @@ name = "ptyro-protocol"
 version = "0.0.63"
 dependencies = [
  "bytes",
+ "ptyro-agents",
  "ptyro-core",
  "ptyro-run",
  "rmp-serde",
