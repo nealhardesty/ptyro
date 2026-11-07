@@ -13,13 +13,40 @@ export const isHere = (e) => e.state === "installed" || e.state === "other";
 /// No coding agent on any side (missing everywhere; an outdated one is still there): the
 /// first-run banner shows.
 export const noAgent = (plan) => !!plan?.entries?.length && !plan.entries.some((e) => e.kind === "agent" && e.state !== "missing");
+/// Whether the first-run banner may ask (a survey) and show: only on a device that can install
+/// (`full`: on another the page could only say it can't), not after "Not now", and not once this
+/// device has seen an agent on the computer. `plan`: the answer, once asked.
+export function bannerWants(o) {
+    return o.scope === "full" && !o.later && !o.seen;
+}
+/// What is left for the computer (the owner's parity exception, 2026-11-06): the ticked
+/// administrator steps, and what waits for one on its side (Gemini CLI after Node.js from apt),
+/// in the plan's order. The daemon skips them all (`Admin::Never`).
+export function leftForComputer(plan) {
+    const entries = plan?.entries ?? [];
+    const key = (side, id) => `${side ?? "local"}:${id}`;
+    const left = new Set(entries.filter((e) => e.ticked && e.action?.admin).map((e) => key(e.side, e.id)));
+    for (let grew = true; grew;) {
+        grew = false;
+        for (const e of entries) {
+            if (!e.ticked || !e.action || left.has(key(e.side, e.id)))
+                continue;
+            if ((e.action.after ?? []).some((id) => left.has(key(e.side, id)))) {
+                left.add(key(e.side, e.id));
+                grew = true;
+            }
+        }
+    }
+    return entries.filter((e) => left.has(key(e.side, e.id)));
+}
 export function adminSteps(plan) {
     const entries = plan?.entries ?? [];
     const sides = [...new Set(entries.map((e) => e.side ?? "local"))];
     const two = sides.length > 1;
+    const left = leftForComputer(plan);
     const out = [];
     for (const side of sides) {
-        const these = entries.filter((e) => (e.side ?? "local") === side && e.ticked && e.action?.admin);
+        const these = left.filter((e) => (e.side ?? "local") === side);
         if (!these.length)
             continue;
         const where = two ? ` --where ${side === "wsl" ? "wsl" : "windows"}` : "";
@@ -27,45 +54,56 @@ export function adminSteps(plan) {
     }
     return out;
 }
-/// Ticked items the web can run that wait for an administrator step first (Gemini CLI after Node.js
-/// from apt): `["Gemini CLI", "Node.js"]` pairs, so the page says to run that one first.
+/// Ticked items with no administrator step of their own that wait for one (Gemini CLI after
+/// Node.js from apt): `["Gemini CLI", "Node.js"]` pairs, so the page says why they're left too.
 export function waitsForAdmin(plan) {
-    const entries = plan?.entries ?? [];
+    const left = leftForComputer(plan);
     const out = [];
-    for (const e of entries) {
-        if (!e.ticked || !e.action || e.action.admin)
+    for (const e of left) {
+        if (e.action?.admin)
             continue;
-        for (const id of e.action.after ?? []) {
-            const dep = entries.find((x) => x.id === id && x.side === e.side);
-            if (dep?.action?.admin)
+        for (const id of e.action?.after ?? []) {
+            const dep = left.find((x) => x.id === id && x.side === e.side);
+            if (dep)
                 out.push([e.name, dep.name]);
         }
     }
     return out;
 }
-/// The steps the web runs: ticked, with an action that needs no administrator rights.
-export const webSteps = (plan) => (plan?.entries ?? []).filter((e) => e.ticked && e.action && !e.action.admin);
+/// The steps the web runs: ticked, with an action, and not left for the computer.
+export function webSteps(plan) {
+    const left = new Set(leftForComputer(plan));
+    return (plan?.entries ?? []).filter((e) => e.ticked && e.action && !left.has(e));
+}
 /// A setup run as this page follows it: its lines, then its report once every side has
 /// finished. `theirs`: it was going already (another device, or before a reload), not started
-/// here.
+/// here. `ended`: it finished while this page was away, so there is no report to show.
 export class SetupLog {
     id = "";
     starting = false;
     theirs = false;
+    ended = false;
     sides = 1;
     seq = 0;
+    /// The plan the run runs (`SetupStarted`'s or `running.plan`), for its sides and its words.
+    plan = null;
     lines = [];
     reports = [];
     report = null;
     /// Events from before this page's own run said its id.
     early = [];
+    /// Events of the followed run that came after a gap in `seq`: held until the plan's `running`
+    /// fills it.
+    held = [];
     /// The latest events of a run this page doesn't follow (yet): kept, so joining it from a
     /// plan's `running` misses nothing that came between.
     stray = { run: "", events: [] };
-    get running() { return this.id !== "" && !this.report; }
+    get running() { return this.id !== "" && !this.report && !this.ended; }
     reset() {
-        Object.assign(this, { id: "", starting: false, theirs: false, sides: 1, seq: 0, lines: [], reports: [], report: null, early: [] });
+        Object.assign(this, { id: "", starting: false, theirs: false, ended: false, sides: 1, seq: 0, plan: null, lines: [], reports: [], report: null, early: [], held: [] });
     }
+    line(t) { this.lines.push(t); if (this.lines.length > 400)
+        this.lines.shift(); }
     /// This page asks for a run.
     start() { this.reset(); this.starting = true; }
     /// It was refused or failed: nothing is followed.
@@ -74,28 +112,65 @@ export class SetupLog {
     /// runs, never the page's own.
     started(run, plan) {
         this.id = run;
+        this.plan = plan;
         this.sides = setupSides(plan);
         this.starting = false;
         for (const e of this.early.splice(0))
             this.event(e);
     }
-    /// A plan's `running`: follow that run, from its events so far, then what came since.
-    adopt(running) {
-        if (!running || running.run === this.id || this.starting)
-            return false;
-        this.reset();
-        this.id = running.run;
-        this.theirs = true;
-        this.sides = setupSides(running.plan);
-        for (const e of running.events)
-            this.event({ run: running.run, ...e });
-        if (this.stray.run === running.run)
-            for (const e of this.stray.events.splice(0))
-                this.event(e);
-        return true;
+    /// A plan's `running`, from a request sent while this page followed `asked` (`id` then):
+    /// - another run: follow it, from its events so far, then what came since (`"joined"`);
+    /// - the run followed: add what this page missed (`"merged"`, or `"done"` if it ended);
+    /// - nothing, while the run followed when it was asked is still followed here: it ended while
+    ///   this page was away (`"ended"`, or `"done"` when held events had its finish).
+    sync(running, asked) {
+        if (this.starting)
+            return "";
+        if (running && running.run === this.id) {
+            if (!this.running)
+                return "";
+            return this.merge(running.events) ? "done" : "merged";
+        }
+        if (running) {
+            this.reset();
+            this.id = running.run;
+            this.theirs = true;
+            this.plan = running.plan;
+            this.sides = setupSides(running.plan);
+            const stray = this.stray.run === running.run ? this.stray.events.splice(0) : [];
+            this.merge([...running.events.map((e) => ({ run: running.run, ...e })), ...stray]);
+            return "joined";
+        }
+        if (!this.running || asked !== this.id)
+            return "";
+        if (this.merge([]))
+            return "done";
+        this.ended = true;
+        this.line("… It finished while this page was away: the checklist below is how the computer is now.");
+        return "ended";
     }
-    /// One event. Returns `"new"` for the first event of a run this page doesn't know (so it asks
-    /// the daemon about it), `"done"` when the run it follows finished, else `""`.
+    /// Add `events` (in `seq` order, those not seen yet) and what was held, saying so when some
+    /// are gone (the daemon keeps the latest 500). True when that ended the run.
+    merge(events) {
+        const all = [...events, ...this.held.splice(0)].map((e) => ({ run: this.id, ...e }))
+            .filter((e) => !e.seq || e.seq > this.seq)
+            .sort((x, y) => (x.seq ?? 0) - (y.seq ?? 0));
+        const first = all.find((e) => e.seq);
+        if (first?.seq && first.seq > this.seq + 1)
+            this.line(`… ${first.seq - this.seq - 1} earlier line(s) from while this page was away aren't shown`);
+        for (const e of all) {
+            if (e.seq) {
+                if (e.seq <= this.seq)
+                    continue;
+                this.seq = e.seq - 1;
+            }
+            this.event(e);
+        }
+        return !!this.report;
+    }
+    /// One event. Returns `"new"` for the first event of a run this page doesn't know, and
+    /// `"gap"` when the followed run's events skipped some (this page was away), so it asks the
+    /// daemon; `"done"` when the run it follows finished; else `""`.
     event(e) {
         if (this.starting && !this.id) {
             this.early.push(e);
@@ -110,27 +185,34 @@ export class SetupLog {
                 this.stray.events.shift();
             return first && !this.running ? "new" : "";
         }
+        if (!this.running)
+            return "";
         if (e.seq) {
             if (e.seq <= this.seq)
                 return "";
+            if (e.seq > this.seq + 1) {
+                this.held.push(e);
+                return this.held.length === 1 ? "gap" : "";
+            }
             this.seq = e.seq;
         }
         const ev = e.event;
         const at = this.sides > 1 ? (e.side === "wsl" ? "WSL: " : "Windows: ") : "";
-        const line = (t) => { this.lines.push(t); if (this.lines.length > 400)
-            this.lines.shift(); };
+        const left = (id) => leftForComputer(this.plan).some((x) => x.id === id && (x.side ?? "local") === (e.side ?? "local"));
         if (ev.event === "started")
-            line(`▸ ${at}${ev.name}: ${ev.command}`);
+            this.line(`▸ ${at}${ev.name}: ${ev.command}`);
         else if (ev.event === "line")
-            line(`  │ ${ev.text}`);
+            this.line(`  │ ${ev.text}`);
         else if (ev.event === "done")
-            line(`✓ ${at}${ev.id}${ev.version ? " " + ev.version : ""}`);
+            this.line(`✓ ${at}${ev.id}${ev.version ? " " + ev.version : ""}`);
         else if (ev.event === "failed")
-            line(`✗ ${at}${ev.id}: ${ev.error}\n  fix: ${ev.fix}`);
+            this.line(`✗ ${at}${ev.id}: ${ev.error}\n  fix: ${ev.fix}`);
+        else if (ev.event === "skipped" && left(ev.id))
+            this.line(`– ${at}${ev.id}: left for the computer: ${ev.fix}`);
         else if (ev.event === "skipped")
-            line(`– ${at}${ev.id}: ${ev.reason}\n  fix: ${ev.fix}`);
+            this.line(`– ${at}${ev.id}: ${ev.reason}\n  fix: ${ev.fix}`);
         else if (ev.event === "blocked")
-            line(`✗ ${at}${ev.id}: can't be installed here: ${ev.reason}\n  fix: ${ev.fix}`);
+            this.line(`✗ ${at}${ev.id}: can't be installed here: ${ev.reason}\n  fix: ${ev.fix}`);
         else if (ev.event === "finished") {
             this.reports.push(ev.report);
             if (this.reports.length >= this.sides) {
@@ -141,11 +223,30 @@ export class SetupLog {
         }
         return "";
     }
-    /// The report in words: `2 installed, 0 failed, 1 not run.`
+    /// The report in words: `2 installed, 1 failed. git and GitHub CLI are left for the computer
+    /// (they need administrator rights): run ptyro install git gh there.`
     summary() {
         const r = this.report;
         if (!r)
             return "";
-        return `${r.done.length} installed, ${r.failed.length} failed, ${r.skipped.length} not run${r.blocked.length ? `, ${r.blocked.length} can't be installed here` : ""}.`;
+        const left = leftForComputer(this.plan);
+        const isLeft = (id) => left.some((e) => e.id === id);
+        const kept = r.skipped.filter((id) => isLeft(id));
+        const parts = [`${r.done.length} installed`];
+        if (r.failed.length)
+            parts.push(`${r.failed.length} failed`);
+        const other = r.skipped.length - kept.length;
+        if (other)
+            parts.push(`${other} not run`);
+        if (r.blocked.length)
+            parts.push(`${r.blocked.length} can't be installed here`);
+        let text = `${parts.join(", ")}.`;
+        if (kept.length) {
+            const names = [...new Set(kept.map((id) => left.find((e) => e.id === id)?.name ?? id))];
+            const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0];
+            const cmds = adminSteps(this.plan).map((a) => a.command).join(" and ");
+            text += ` ${list} ${names.length > 1 ? "are" : "is"} left for the computer (administrator rights): run ${cmds} there.`;
+        }
+        return text;
     }
 }

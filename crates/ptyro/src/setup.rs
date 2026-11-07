@@ -215,7 +215,7 @@ pub async fn setup(ctx: &Ctx, a: SetupArgs) -> Result<i32, Error> {
     }
     let plan = sides.plan(&picks);
     let admin = if a.yes { Admin::Silent } else { Admin::Ask };
-    go(ctx, &*host, &sides, &plan, admin, a.json, false)
+    go(ctx, &*host, &sides, &plan, admin, a.json, false, "`ptyro setup`")
 }
 
 pub async fn install(ctx: &Ctx, a: InstallArgs) -> Result<i32, Error> {
@@ -264,11 +264,20 @@ pub async fn install(ctx: &Ctx, a: InstallArgs) -> Result<i32, Error> {
         }
     }
     let admin = asked.unwrap_or(if a.yes { Admin::Silent } else { Admin::Ask });
-    go(ctx, &*host, &sides, &plan, admin, a.json, quiet)
+    let who = if quiet {
+        "`ptyro install`, for Windows' ptyro"
+    } else if a.confirmed {
+        "the TUI's setup checklist"
+    } else {
+        "`ptyro install`"
+    };
+    go(ctx, &*host, &sides, &plan, admin, a.json, quiet, who)
 }
 
 /// Run the plan with live output, side by side (this computer first, then WSL's), then what's
-/// next. `quiet`: run for Windows' ptyro, which says the rest itself.
+/// next. `quiet`: run for Windows' ptyro, which says the rest itself. `who`: what holds the
+/// machine's setup lock meanwhile, for a second run to say (`setup::lock`).
+#[allow(clippy::too_many_arguments)]
 fn go(
     ctx: &Ctx,
     host: &dyn setup::Host,
@@ -277,6 +286,7 @@ fn go(
     admin: Admin,
     json: bool,
     quiet: bool,
+    who: &str,
 ) -> Result<i32, Error> {
     let two = plan.sides().len() > 1;
     let tag =
@@ -301,6 +311,8 @@ fn go(
         }
         return Ok(0);
     }
+    // One install at a time on this machine, whoever starts it (the web's run takes it too).
+    let lock = setup::lock::Lock::take(&ctx.paths.state, who).map_err(Error::conflict)?;
     let names: BTreeMap<String, String> =
         plan.entries.iter().map(|e| (e.id.clone(), e.name.clone())).collect();
     let name = |id: &str| names.get(id).cloned().unwrap_or_else(|| id.to_owned());
@@ -349,6 +361,7 @@ fn go(
         total.merge(&report);
         reports.push((side, report));
     }
+    drop(lock);
     if tools {
         offer_path(&ctx.paths, admin != Admin::Ask);
     }

@@ -404,7 +404,25 @@ async fn the_daemon_says_a_run_is_going_with_its_progress() {
     assert_eq!(kept, live, "the events so far, as they were sent");
     let again =
         c.request(Request::SetupRun { picks: vec!["opencode".into()], wsl_picks: None }).await;
-    assert!(format!("{again:?}").contains("a setup run is going already"), "{again:?}");
+    assert!(
+        format!("{again:?}").contains("setup is already running (from the web app"),
+        "{again:?}"
+    );
+    // The machine's lock: `ptyro install` from a terminal on the same machine is refused too,
+    // saying where the run came from, and installs nothing.
+    let o = d
+        .cmd()
+        .args(["install", "opencode", "--yes"])
+        .env("PTYRO_TEST_SETUP", &fake)
+        .env("PTYRO_WSL", m.dir.path().join("no-wsl"))
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success(), "{said}");
+    assert!(
+        said.contains("setup is already running (from the web app, through the daemon (process "),
+        "{said}"
+    );
 
     std::fs::write(m.fake().join("go"), "").unwrap();
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -435,6 +453,39 @@ async fn the_daemon_says_a_run_is_going_with_its_progress() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert!(m.calls().iter().all(|c| !c.contains("opencode")), "{:?}", m.calls());
+}
+
+/// One install at a time on a machine, from any client (the machine's setup lock): a second
+/// `ptyro install` while one runs says where the first came from and installs nothing; the first
+/// carries on, and afterwards the lock is free again.
+#[test]
+fn two_installs_at_once_the_second_is_refused() {
+    let m = Machine::new(fresh_linux(json!({ "outcomes": { "antigravity": "wait" } })));
+    let first = m
+        .cmd(&["install", "agy", "--yes"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !m.calls().iter().any(|c| c.starts_with("install antigravity")) {
+        assert!(Instant::now() < deadline, "the first never started: {:?}", m.calls());
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let second = m.run(&["install", "opencode", "--yes"], "");
+    let said = text(&second);
+    // (Written before `go` and read after: a wait that ran out would install it anyway.)
+    std::fs::write(m.fake().join("go"), "").unwrap();
+    assert!(!second.status.success(), "{said}");
+    assert!(said.contains("setup is already running (from `ptyro install` (process "), "{said}");
+    let first = first.wait_with_output().unwrap();
+    assert!(first.status.success(), "{}", text(&first));
+    assert!(m.installed("antigravity").is_some());
+    assert!(m.installed("opencode").is_none());
+    assert!(!m.calls().iter().any(|c| c.contains("opencode")), "{:?}", m.calls());
+    let again = m.run(&["install", "opencode", "--yes"], "");
+    assert!(again.status.success(), "free again: {}", text(&again));
 }
 
 /// At a terminal, the rc file gets ptyro's line (the form `ptyro uninstall` takes out again), and

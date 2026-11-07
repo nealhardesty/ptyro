@@ -3284,7 +3284,9 @@ machine". The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-desi
   admin steps show `ptyro install …` (Copy) and the TUI's `C-q U` / `ptyro setup`, the waiver in
   `docs/parity.md`. One run at a time on the web too: `SetupPlan.running` carries the run going
   with its numbered events (`SetupProgress.seq`), and a page that didn't start it follows it
-  instead of offering a second (SPEC §24.6). Tested by `web/test/setup.mjs`, `boot1.rs` (the
+  instead of offering a second, and catches up after a reconnect. A machine-wide lock
+  (`<state>/setup.lock`, `setup::lock`) taken by `ptyro install`/`setup` and the daemon's run
+  makes it one install at a time from any client (SPEC §24.6). Tested by `web/test/setup.mjs`, `boot1.rs` (the
   fake machine's new `wait` outcome) and three browser scenarios in `make web-e2e`.
 - [x] **BOOT4 Logins** **M**: one account per agent and `gh`, through each tool's own flow in a
   session, confirmed by its status command; ptyro never sees a credential. Setup ends by showing

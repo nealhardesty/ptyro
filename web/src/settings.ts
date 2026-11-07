@@ -8,7 +8,7 @@ import { fixLineEndings } from "./projects.js";
 import { actions, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, form, go, h, menu, pending, poll, row, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
 import type { Item } from "./kit.js";
 import { qrMatrix } from "./qr.js";
-import { adminSteps, isHere, noAgent, SetupLog, waitsForAdmin, webSteps } from "./setupkit.js";
+import { adminSteps, bannerWants, isHere, noAgent, SetupLog, waitsForAdmin, webSteps } from "./setupkit.js";
 import { allSessions } from "./sessions.js";
 
 const ACTIONS = {
@@ -644,28 +644,64 @@ function setupView(rest: string): HTMLElement {
 const ids = (k: string): string[] | null => k === "" ? null : k === "none" ? [] : k.split(",");
 const setupPlan = new Cache<any>((key) => {
   const [mine, wsl] = key.split("|");
+  // What this page followed when it asked, and how many asks came before: a plan that says
+  // nothing is running means the run ended only if it was asked for after the run was known.
+  const asked = installRun.id;
+  const at = asks;
   return conn.request({ t: "setup_plan", picks: ids(mine), wsl_picks: wsl === undefined ? null : ids(wsl) ?? [] }).then((r) => {
-    if (installRun.adopt(r.running)) ui.render();
+    const said = installRun.sync(r.running, asked);
+    // The checklist and the logins as they are after a run that ended out of this page's sight
+    // (or that a join found finished): this survey may be from before its end.
+    if (said === "ended" || said === "done" || (said === "joined" && installRun.report)) {
+      setupLogins.reload("");
+      setTimeout(() => setupPlan.refresh(installKey), 0);
+    }
+    if (said) ui.render();
+    if (noAgent(r.plan)) store.remove(AGENT_SEEN); else if (r.plan?.entries?.length) store.set(AGENT_SEEN, "1");
+    // Asked again while this one was out (a run's first event, a reconnect): ask once more, as
+    // this survey may be from before it.
+    if (asks > at) setTimeout(askPlan, 0);
     return r;
   });
 });
 let installKey = "";
+let asks = 0;
+/// Ask the daemon for the plan again (and what is running), keeping what is shown meanwhile.
+function askPlan(): void { asks++; setupPlan.refresh(installKey); }
 /// The run this page follows: its own, or one going already (BOOT3: one at a time, everywhere).
 const installRun = new SetupLog();
 
 /// A setup run's progress (`setup_progress` events).
 export function setupEvent(e: any): void {
   const said = installRun.event(e);
-  // A run this page didn't start: the plan says what it is and what it has done so far.
-  if (said === "new") setupPlan.refresh(installKey);
+  // A run this page didn't start, or lines it missed: the plan says what is going and what it
+  // has done so far.
+  if (said === "new" || said === "gap") askPlan();
   if (said === "done") { setupPlan.reload(); setupLogins.reload(""); }
   ui.render();
 }
 
-/// The first-run banner on the Sessions tab: no coding agent on the computer yet (BOOT3).
+/// A fresh connection (a reconnect: a phone woke up): events may have been missed meanwhile, so
+/// a run this page follows, or the checklist on screen, asks the daemon again.
+export function setupConnected(): void {
+  if (installRun.running || location.hash.startsWith("#/setup")) askPlan();
+}
+
+/// This device saw a coding agent on the computer: the banner stops asking (a survey each time).
+const AGENT_SEEN = "ptyro.setup.agent";
+const bannerRetry = { wait: 5_000, timer: 0 };
+
+/// The first-run banner on the Sessions tab: no coding agent on the computer yet (BOOT3). Only
+/// for a device that can install (`full`), and never again once this device has seen an agent.
 export function setupBanner(): HTMLElement | null {
-  if (store.get("ptyro.setup.later") === "1" || conn.state !== "open") return null;
+  if (conn.state !== "open" || !bannerWants({ scope: conn.scope, later: store.get("ptyro.setup.later") === "1", seen: store.get(AGENT_SEEN) === "1" })) return null;
+  // A failed ask is tried again, waiting longer each time (up to five minutes).
+  if (setupPlan.error("") && !bannerRetry.timer) {
+    bannerRetry.timer = window.setTimeout(() => { bannerRetry.timer = 0; setupPlan.reload(""); }, bannerRetry.wait);
+    bannerRetry.wait = Math.min(bannerRetry.wait * 2, 300_000);
+  }
   const plan = setupPlan.get("")?.plan;
+  if (plan) bannerRetry.wait = 5_000;
   if (!noAgent(plan)) return null;
   return h("div", { class: "banner warn setup-banner", title: tip("setup.banner") },
     h("b", {}, "No coding agent is installed on this computer yet. "),
@@ -767,13 +803,13 @@ function installSection(): HTMLElement {
     admin.length ? h("div", { class: "banner warn setup-admin", title: tip("setup.admin") },
       h("b", {}, "Administrator rights are asked for only on the computer itself"),
       h("p", { class: "sub" }, "A password or a Windows prompt never goes through this page, so these aren't installed from here. On the computer, run:"),
-      ...admin.map((a) => h("div", { class: "setup-cmd" }, h("code", {}, a.command), copyButton(a.command), h("small", {}, ` ${a.names.join(", ")}${two ? ` on ${sideName(a.side)}` : ""}`))),
+      ...admin.map((a) => h("div", { class: "setup-cmd" }, h("code", {}, a.command), copyButton(a.command), h("small", {}, ` ${a.names.join(", ")}${two ? ` on ${sideName(a.side)}` : ""}: left for the computer`))),
       h("p", { class: "sub" }, "Or in ptyro there: press the prefix (C-q unless you changed it), then U, for this checklist, which asks for the password once. ", h("code", {}, "ptyro setup"), " in a terminal does the same."),
-      ...waits.map(([what, first]) => h("p", { class: "sub" }, `${what} needs ${first} first: install that on the computer, then come back for ${what}.`))) : null,
+      ...waits.map(([what, first]) => h("p", { class: "sub" }, `${what} needs ${first} first, so it's in that command too.`))) : null,
     bar(h("button", { class: "primary", title: tip("setup.install"), disabled: running || !steps.length, onclick: () => void startInstall(picked(mineSide), two ? picked("wsl") : null) },
       running ? "Installing…" : steps.length ? `Install ${steps.length}` : "Nothing to install from here")),
     installRun.lines.length ? h("pre", { class: "log" }, installRun.lines.join("\n")) : null,
-    installRun.report ? h("p", { class: "sub" }, installRun.summary()) : null);
+    installRun.report ? h("p", { class: "sub setup-summary" }, installRun.summary()) : null);
 }
 
 async function startInstall(picks: string[], wslPicks: string[] | null): Promise<void> {
@@ -788,7 +824,7 @@ async function startInstall(picks: string[], wslPicks: string[] | null): Promise
     hostFail(e);
     // Refused because a run is going already (another device): the plan says which, and this
     // page follows it.
-    setupPlan.refresh(installKey);
+    askPlan();
   }
   ui.render();
 }

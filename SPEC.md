@@ -9361,8 +9361,12 @@ as a waiver in the web cells of `setup` and `install` in `docs/parity.md`.
 - **The first-run banner** (`setupBanner`, `setup.banner`) at the top of the Sessions tab while no
   coding agent is installed on any side (`noAgent`: every agent's state `missing`; an outdated
   one counts as there): "Set up agents and tools" opens the page; "Not now" hides it on that
-  device (`ptyro.setup.later` in its storage). It asks the daemon's `SetupPlan` once per
-  connection (the defaults, the same cache the page uses), so it costs one survey.
+  device (`ptyro.setup.later` in its storage). Only a device paired with `full` scope sees it
+  (`bannerWants`): another could only reach a page saying it can't install. It asks the daemon's
+  `SetupPlan` (the defaults, the same cache the page uses: one survey) once per page load, a
+  failed ask tried again after 5 s, then twice as long each time up to five minutes; once any
+  plan has shown this device an agent (`ptyro.setup.agent` in its storage), the banner stops
+  asking at all. A plan that shows no agent (the setup page's) clears that again.
 
 **The page:** the checklist first, then Log in (BOOT4's, with the profiles line), then the first
 run's accounts and repositories. The doctor's "Your agents" list went: Already here says the same,
@@ -9383,16 +9387,39 @@ side's cell without its mark), `why` (what a cell can't say) and `state` (in wor
 which both use, so the two can't drift. The page reads the plan's own fields (ticked, picked,
 side, action) only for its checkboxes and counts.
 
-**Administrator steps** (`setup.admin`, `adminSteps` in `web/src/setupkit.ts`): a box per side
-with the command to run on the computer, `ptyro install <ids>` (`--where windows|wsl` when there
-are two sides), with Copy, the items it covers, and the TUI's way ("press the prefix … then U",
-`app.setup`, which asks for the password once) or `ptyro setup`. A ticked item that waits for one
-(`action.after`: Gemini CLI after Node.js from apt) is named: "install that on the computer,
-then come back". The run still gets every pick; the daemon skips the admin steps with their fix
-(`Admin::Never`, §24.2), so the log says the same.
+**Administrator steps** (`setup.admin`, `adminSteps` in `web/src/setupkit.ts`): what is left for
+the computer (`leftForComputer`): each ticked step that needs administrator rights, and each
+ticked item that waits for one on its side (`action.after`, transitively: Gemini CLI after Node.js
+from apt). A box per side gives the command to run on the computer, `ptyro install <ids>`
+(`--where windows|wsl` when there are two sides), with Copy, the items it covers ("left for the
+computer"), why a waiting one is in it ("Gemini CLI needs Node.js first, so it's in that command
+too"), and the TUI's way ("press the prefix … then U", `app.setup`, which asks for the password
+once) or `ptyro setup`. The run still gets every pick (so its plan is the one shown, and a
+prerequisite the plan re-ticks is skipped the same either way); the daemon skips what is left,
+with its fix (`Admin::Never`, §24.2). The page words it so: Install counts only what will run
+(`webSteps`: "Install 1", or "Nothing to install from here"); a skipped line of the log reads
+"git: left for the computer: …"; and the report keeps those apart from what wasn't run for other
+reasons: "1 installed. git and GitHub CLI are left for the computer (administrator rights): run
+ptyro install git gh there."
 
-**One run at a time, on the web too.** The daemon's guard (`RUNNING`) already refused a second
-`SetupRun`; a page that hadn't started the run didn't know of it. Now the daemon keeps the run
+**One install at a time on a machine, from any client** (the review's ruling, 2026-11-07). The
+guard is where every path meets: `ptyro_agents::setup::lock`, an exclusive lock on
+`<state>/setup.lock` (the operating system's, `File::try_lock`: `flock` on Unix, `LockFileEx` on
+Windows, so it is let go however the holder ends). `ptyro install` and `ptyro setup` take it
+around their installs (`go` in `crates/ptyro/src/setup.rs`; the logins after them run without
+it), so the TUI's splits, which run them, do too; the daemon's `SetupRun` takes it with its own
+flag (`Running`). The holder writes who it is to `<state>/setup.who` (a file of its own, since
+Windows' locks keep others from reading the locked one): "`ptyro install`", "`ptyro setup`",
+"the TUI's setup checklist", "`ptyro install`, for Windows' ptyro", "the web app, through the
+daemon", each with its process id. A second run, from anywhere, stops before installing anything:
+"setup is already running (from the web app, through the daemon (process 4242)): wait for it to
+finish, then try again" (the CLI's error, exit 1; the web's toast, after which the page joins the
+run). Each machine side has its own: Windows' ptyro and WSL's keep their state apart, as their
+package managers are apart. A filesystem that can't lock doesn't stop an install (it goes ahead
+unguarded, as before).
+
+**Following a run on the web.** The daemon's guard already refused a second `SetupRun`; a page
+that hadn't started the run didn't know of it. Now the daemon keeps the run
 going (`CURRENT` in `crates/ptyro-daemon/src/setup.rs`: its id, the plan it runs, its latest 500
 events), numbers each event (`seq`, from 1), and every `SetupPlan` carries it as `running`. The
 page follows it (`SetupLog.adopt`, `web/src/setupkit.ts`): "Setup is already running on the
@@ -9400,26 +9427,46 @@ computer …: its progress is below" at the top, its lines so far, every box and
 ("Installing…") until it ends, then its report. Events of a run the page doesn't follow are kept
 (the latest 600) and the first one makes the page ask for the plan again, so a run started
 elsewhere while the page is open is joined too; joining adds what came between, by `seq`, once. A
-refused `SetupRun` (started elsewhere a moment before) asks for the plan too. Its sides are counted
+refused `SetupRun` (started elsewhere a moment before) asks for the plan too, and an ask made
+while one is out is made again when it lands (its survey may be from before the run), so a run
+started just as the page opens is joined as well. A join that finds the run finished already, or a
+run ending while the page was away, refreshes the checklist and the logins.
+
+**Away and back** (a phone's socket drops; `setupConnected` on every new connection): a page
+following a run, or showing the checklist, asks for the plan again. The same run still going: what
+the page missed is added from `running.events` (beyond the last `seq` it had); a jump in `seq`
+while connected (`"gap"`) holds the later events and asks too; when the daemon no longer has the
+earliest missed ones, the log says how many aren't shown. Nothing running, asked for after the run
+was known: it ended while the page was away, so the page says "It finished while this page was
+away: the checklist below is how the computer is now", frees Install and refreshes the checklist
+(the report itself is gone). A plan asked for before this page's own run was known never ends it. Its sides are counted
 from the run's own plan (`SetupStarted`'s, or `running.plan`), never a cached one. Recording an
 event and sending it happen under one lock, so a plan holds an event or comes before it. `CURRENT`
 is cleared when the run lets go of its place (`Running`'s `Drop`, a panic included). The TUI's
-installs run the CLI in a split, outside the daemon, so they aren't in this guard (§24.5: the TUI
-keeps its own).
+splits run the CLI, which takes the machine's lock, so they and the web's runs exclude each other
+too (the TUI keeps its own guard as well, §24.5, so it doesn't open a second split).
 
 **Tests, with no real installer:** the logic without a browser, `web/test/setup.mjs` (`make
-web-test`): the banner's rule; administrator commands per side and what waits for them; a run's
+web-test`): the banner's rule and who it asks for (`full` only, not after "Not now" or an agent
+seen); what is left for the computer per side, its commands, and Install's count; the report's
+"left for the computer"; a run that ended while away (and not one asked before the run was known);
+a gap filled from `running`, and what the daemon no longer has said; a run's
 own events (early ones, sides from its plan, a duplicate shown once, an older daemon's unnumbered
 ones); joining a run going already from `running` with what came between, once and in order; a
 finish that arrives before the plan that names the run; not joining its own run while starting
 it. `checklist::lines` in `setup/tests.rs` (one side and two). The daemon, `boot1.rs`
 (`the_daemon_says_a_run_is_going_with_its_progress`): the lines and default agent; a run going
 (the fake machine's new `wait` outcome: an installer that waits for a file `go`) shows in every
-plan with its events exactly as sent, numbered from 1; a second run refused; gone after the
-report. In a real browser (`make web-e2e`, `web/test/e2e.mjs`): the banner opening the page;
+plan with its events exactly as sent, numbered from 1; a second run refused, and `ptyro install`
+on the same machine refused with "from the web app, through the daemon"; gone after the report.
+`two_installs_at_once_the_second_is_refused` (`boot1.rs`): two CLI installs on the fake machine,
+the second refused saying `ptyro install`, nothing of it installed, the lock free afterwards;
+`setup::lock`'s own test. In a real browser (`make web-e2e`, `web/test/e2e.mjs`): the banner opening the page;
 Settings → Agents and tools with the TUI's lines, the admin command and the TUI's way, Install 2's
 report and Already here with the default agent; a page opened again while a run waits saying it is
-already running, with its lines and no second Install, then its report.
+already running, with its lines and no second Install, then its report and Already here; then the
+server stopped mid-run, the run ending meanwhile, and the page, reconnected, saying it finished
+away, with the checklist as it is now.
 
 **Decided by the builder:** the words travel with the plan (not a catalog in the web, nor rules
 re-written in TypeScript); the running run rides on `SetupPlan` rather than a request of its own,

@@ -30,12 +30,27 @@ static CURRENT: Mutex<Option<SetupRunning>> = Mutex::new(None);
 const KEPT: usize = 500;
 
 /// Holds the one run's place; let go however its holder ends, a panic included, so a later run
-/// is never refused for one that is gone.
-struct Running;
+/// is never refused for one that is gone. Besides this daemon's own flag it holds the machine's
+/// setup lock (`setup::lock`), which `ptyro install` and `ptyro setup` take too: one install at a
+/// time whoever starts it.
+struct Running {
+    _lock: setup::lock::Lock,
+}
 
 impl Running {
-    fn take() -> Option<Self> {
-        (!RUNNING.swap(true, Ordering::AcqRel)).then_some(Self)
+    fn take(state: &std::path::Path) -> Result<Self, String> {
+        if RUNNING.swap(true, Ordering::AcqRel) {
+            return Err(
+                "setup is already running (from the web app): wait for it to finish".to_owned()
+            );
+        }
+        match setup::lock::Lock::take(state, "the web app, through the daemon") {
+            Ok(lock) => Ok(Self { _lock: lock }),
+            Err(why) => {
+                RUNNING.store(false, Ordering::Release);
+                Err(why)
+            }
+        }
     }
 }
 
@@ -174,9 +189,7 @@ impl Daemon {
     ) -> Result<Reply, Error> {
         let picks = ids(&picks)?;
         let wsl_picks = wsl_picks.map(|p| ids(&p)).transpose()?;
-        let Some(running) = Running::take() else {
-            return Err(Error::conflict("a setup run is going already: wait for it to finish"));
-        };
+        let running = Running::take(&self.paths.state).map_err(Error::conflict)?;
         let (host, plan, _) = plan_on(&self.paths, Some(picks), wsl_picks).await?;
         let run = ptyro_run::short_id("setup", 6);
         if let Ok(mut c) = CURRENT.lock() {
@@ -213,14 +226,15 @@ mod tests {
 
     #[test]
     fn the_run_guard_lets_go_even_after_a_panic() {
-        let held = Running::take().expect("free at first");
-        assert!(Running::take().is_none(), "one at a time");
+        let dir = tempfile::tempdir().unwrap();
+        let held = Running::take(dir.path()).expect("free at first");
+        assert!(Running::take(dir.path()).is_err(), "one at a time");
         let r = std::thread::spawn(move || {
             let _held = held;
             panic!("a run that panicked");
         })
         .join();
         assert!(r.is_err());
-        assert!(Running::take().is_some(), "free again after the panic");
+        assert!(Running::take(dir.path()).is_ok(), "free again after the panic");
     }
 }

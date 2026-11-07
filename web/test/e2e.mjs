@@ -6,7 +6,7 @@
 // A scenario that needs the server restarted prints "@@serve down" / "@@serve up" and waits for
 // a line on stdin from the Rust test.
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -243,7 +243,8 @@ const scenarios = {
     await tab.waitFor("the TUI's way", text("then U"));
     await tab.waitFor("the back arrow to Settings", `!!document.querySelector('header a[href="#/settings"]')`);
     await tab.eval(`[...document.querySelectorAll("button")].find(b => b.textContent === "Install 2").click()`);
-    await tab.waitFor("the run's report", text("2 installed, 0 failed, 2 not run."), 30_000);
+    await tab.waitFor("the run's report", text("2 installed. git and GitHub CLI are left for the computer (administrator rights): run ptyro install git gh there."), 30_000);
+    await tab.waitFor("the admin skips' lines", text("git: left for the computer"));
     await tab.waitFor("its lines", text("fake vendor: install claude"));
     await tab.waitFor("Already here", `[...document.querySelectorAll(".setup-here")].some(e => e.innerText.includes("Claude Code") && e.innerText.includes("your default agent"))`, 30_000);
   },
@@ -253,23 +254,46 @@ const scenarios = {
   // lines and offers no second Install; once it ends, the report shows there.
   async setupRunning() {
     const world = join(E.fake, "world.json");
-    writeFileSync(world, JSON.stringify({ platform: "linux", programs: ["apt-get", "sudo"], outcomes: { antigravity: "wait" } }));
-    try {
-      await fresh("#/setup");
-      const text = (t) => `document.body.innerText.includes(${JSON.stringify(t)})`;
-      await tab.waitFor("the checklist", `!!document.querySelector('input[aria-label="Antigravity"]')`, 30_000);
-      await tab.eval(`document.querySelector('input[aria-label="Antigravity"]').click()`);
-      await tab.waitFor("Antigravity ticked", `[...document.querySelectorAll("button")].some(b => b.textContent === "Install 1" && !b.disabled)`, 30_000);
+    const go = join(E.fake, "go");
+    rmSync(go, { force: true });
+    writeFileSync(world, JSON.stringify({ platform: "linux", programs: ["apt-get", "sudo"], outcomes: { antigravity: "wait", opencode: "wait" } }));
+    const text = (t) => `document.body.innerText.includes(${JSON.stringify(t)})`;
+    const install = async (name) => {
+      await tab.waitFor("the checklist", `!!document.querySelector('input[aria-label=${JSON.stringify(name)}]')`, 30_000);
+      await tab.eval(`document.querySelector('input[aria-label=${JSON.stringify(name)}]').click()`);
+      await tab.waitFor(`${name} ticked`, `[...document.querySelectorAll("button")].some(b => b.textContent === "Install 1" && !b.disabled)`, 30_000);
       await tab.eval(`[...document.querySelectorAll("button")].find(b => b.textContent === "Install 1").click()`);
       await tab.waitFor("its installer waiting", text("fake vendor: waiting for go"), 30_000);
+    };
+    try {
+      await fresh("#/setup");
+      await install("Antigravity");
       // A page that didn't start it (this one, opened again).
       await fresh("#/setup");
       await tab.waitFor("the run going already", text("Setup is already running on the computer"), 30_000);
       await tab.waitFor("its lines so far", text("fake vendor: waiting for go"));
       await tab.waitFor("no second install", `[...document.querySelectorAll("button")].some(b => b.textContent === "Installing…" && b.disabled)`);
-      writeFileSync(join(E.fake, "go"), "");
-      await tab.waitFor("its report", text("1 installed, 0 failed, 2 not run."), 30_000);
+      writeFileSync(go, "");
+      await tab.waitFor("its report", text("1 installed. git and GitHub CLI are left for the computer"), 30_000);
+      await tab.waitFor("the checklist after it", `[...document.querySelectorAll(".setup-here")].some(e => e.innerText.includes("Antigravity"))`, 30_000);
+
+      // Away and back: the page's connection drops mid-run (the server goes), the run ends
+      // meanwhile, and the page, back, says so and shows the checklist as it is now.
+      rmSync(go, { force: true });
+      await fresh("#/setup");
+      await install("OpenCode");
+      await hostOp("down");
+      await tab.waitFor("the offline banner", `!!document.querySelector(".offline")`, 30_000);
+      writeFileSync(go, "");
+      await until("the run to end in the daemon", () => readFileSync(join(E.fake, "calls.log"), "utf8").includes("install opencode") && existsSync(join(E.fake, "installed", "opencode")));
+      await sleep(500);
+      await hostOp("up");
+      await tab.waitFor("the note that it finished away", text("It finished while this page was away"), 60_000);
+      await tab.waitFor("the checklist as it is now", `[...document.querySelectorAll(".setup-here")].some(e => e.innerText.includes("OpenCode"))`, 30_000);
+      await tab.waitFor("Install free again", `![...document.querySelectorAll("button")].some(b => b.textContent === "Installing…")`);
     } finally {
+      // Never leave a fake installer holding the run for the scenarios after this one.
+      writeFileSync(go, "");
       writeFileSync(world, JSON.stringify({ platform: "linux", programs: ["apt-get", "sudo"] }));
     }
   },
