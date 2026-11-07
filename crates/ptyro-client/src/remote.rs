@@ -289,6 +289,12 @@ pub async fn version_in(distro: &str) -> Option<String> {
 
 /// The distros WSL has (`wsl.exe -l -q`); `None` when it can't say.
 pub async fn distros() -> Option<Vec<String>> {
+    distros_listed().await.map(|(_, d)| d)
+}
+
+/// [`distros`], and whether `wsl -l -q` succeeded (it fails, with its own message as the lines,
+/// when WSL isn't installed or has no distro).
+pub async fn distros_listed() -> Option<(bool, Vec<String>)> {
     let out = tokio::time::timeout(
         Duration::from_secs(5),
         Command::new(wsl_exe()).args(["-l", "-q"]).env("WSL_UTF8", "1").output(),
@@ -296,7 +302,7 @@ pub async fn distros() -> Option<Vec<String>> {
     .await
     .ok()?
     .ok()?;
-    Some(parse_distros(&out.stdout))
+    Some((out.status.success(), parse_distros(&out.stdout)))
 }
 
 /// `wsl.exe -l -q`'s output: one name a line (CRLF), UTF-8 with `WSL_UTF8`, UTF-16 without.

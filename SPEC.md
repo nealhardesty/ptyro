@@ -9036,11 +9036,14 @@ runs in WSL: the Windows side is set up from Windows, and the plan says how).
 
 **Usable WSL** (`ptyro_client::wsl_setup::probe`): `wsl.exe -l -q` answers, it lists a distro
 (tools' own, `docker-desktop` and the like, and anything that isn't a distro's name are left
-out), and `ptyro --version` answers in it (`remote::version_in`, the bridge's `PATH`). The
+out, as is a line starting with `-`; first run's WSL search uses the same filter), and `ptyro --version` answers in it (`remote::version_in`, the bridge's `PATH`). The
 distro of `client.default_remote` (`wsl://<distro>`) is asked first, then the others in WSL's
 order. Setup never runs `wsl --install`, installs a distro, or puts ptyro in one. Without a
 usable WSL only Windows' side is offered, and the plan says why with the fix: `wsl --install`
-for no WSL or no distro; for no ptyro, `wsl -d <distro> -- sh -c '<README's install line>'`
+for no WSL or no distro ("WSL isn't installed or has no distro" when `wsl -l -q` fails, as
+Windows 11's inbox `wsl.exe` does without WSL; "WSL has no Linux distro" when it lists only
+tools' own); for no ptyro, `wsl -d <distro> -- sh -c "<README's install line>"` (double quotes:
+cmd.exe doesn't quote with `'`)
 (`wsl_setup::install_line`); for a ptyro too old to answer `setup --survey`, the same line to
 update it. Setup run again afterwards offers WSL's side (the design's "added later").
 
@@ -9049,17 +9052,20 @@ arguments passed as `"$@"` (`wsl_setup::ptyro_args`), so the two engines can't d
 - what is there: `ptyro setup --survey` (hidden) prints its `Survey` as JSON; Windows' ptyro plans
   WSL's side from it with its own engine, so the checklist re-plans on every tick without asking
   WSL again;
-- a run: `ptyro install --json <ids>` with `--yes` (when given), `--admin=ask` (hidden; the
-  person said yes already: run, and let sudo ask in this terminal, `wsl.exe` passing the
-  terminal through) or `--admin=never` (a daemon, for the web). Its JSON events come back line
+- a run: `ptyro install --json <ids>` with the hidden `--admin=ask` (the person said yes
+  already: run, and let sudo ask in this terminal, `wsl.exe` passing the terminal through),
+  `--admin=silent` (`--yes`: only what needs no prompt) or `--admin=never` (a daemon, for the
+  web). Its JSON events come back line
   by line and go out as Windows' own (`wsl_setup::run`); if it ends without its report, each step
   it didn't get to is reported failed with why and the command to run there.
-- `ptyro install --admin` also keeps WSL's ptyro quiet about what Windows' says already
-  ("Looking…", "here already").
+- `ptyro install --admin=…`, in each of the three modes, also keeps WSL's ptyro quiet about what
+  Windows' says already ("Looking…", "here already").
 
 **CLI.** `--where wsl|windows|both` on `setup` and `install`. The default is the side the user's
-daemon runs on: WSL's when `client.default_remote` (or `PTYRO_REMOTE`) is `wsl://…` and WSL is
-usable, else Windows'. `--where windows` doesn't look at WSL at all; `--where wsl` without a
+daemon runs on: WSL's when `client.default_remote` (or `PTYRO_REMOTE`) is `wsl://<distro>` and
+that distro is the usable one (`wsl://`, the default distro: any), else Windows'. When the
+daemon's distro can't be reached but another has ptyro, the default is Windows and a line says
+so (`--where wsl` installs into that other one). `--where windows` doesn't look at WSL at all; `--where wsl` without a
 usable WSL exits 1 with the reason and fix; `--where both` without one says so and sets up
 Windows. On Linux and macOS only `--where local` is accepted (exit 2 otherwise, saying sides are
 Windows'); inside WSL the message says to run `ptyro setup --where windows` in a Windows

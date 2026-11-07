@@ -8,10 +8,6 @@ use std::io::IsTerminal;
 use ptyro_core::config::Config;
 use ptyro_core::paths::Paths;
 
-/// Distros that are some tool's own, never where you work.
-const NOT_YOURS: &[&str] =
-    &["docker-desktop", "docker-desktop-data", "rancher-desktop", "podman-machine"];
-
 /// What the README installs with (the release tarball, checked against `SHA256SUMS`).
 pub use ptyro_client::wsl_setup::INSTALL;
 
@@ -65,13 +61,8 @@ pub async fn resolve(given: Option<String>, paths: &Paths, discover: bool) -> Op
     if cfg!(windows) && discover { first_run(paths).await } else { None }
 }
 
-/// The distros worth asking, in WSL's order (the default first), tools' own left out.
-pub fn candidates(all: &[String]) -> Vec<String> {
-    all.iter()
-        .filter(|d| !NOT_YOURS.iter().any(|n| d.to_ascii_lowercase().starts_with(n)))
-        .cloned()
-        .collect()
-}
+/// The distros worth asking (setup's filter, BOOT8: one list of what isn't yours).
+pub use ptyro_client::wsl_setup::candidates;
 
 /// What first run says and offers, from what it found: `(distro, version)` pairs that have ptyro,
 /// and the distro to install into when none has.
@@ -201,6 +192,7 @@ mod tests {
             ["Ubuntu", "Debian"]
         );
         assert!(candidates(&s(&["docker-desktop"])).is_empty());
+        assert!(candidates(&s(&["--install", "has no installed distributions."])).is_empty());
     }
 
     #[test]

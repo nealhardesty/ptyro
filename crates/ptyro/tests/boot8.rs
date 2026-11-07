@@ -162,10 +162,15 @@ fn without_a_usable_wsl_only_windows_is_offered_and_the_plan_says_why() {
     assert!(p["wsl"]["reason"].as_str().unwrap().contains("WSL isn't installed"), "{p}");
     assert!(p["wsl"]["fix"].as_str().unwrap().contains("wsl --install"), "{p}");
     assert!(p["entries"].as_array().unwrap().iter().all(|e| e["side"] == "windows"), "{p}");
-    // WSL with no distro.
+    // WSL with no distro: `wsl -l -q` fails, as Windows 11's inbox stub does without WSL too.
     let m = Machine::new(windows());
     let p = m.plan(&[]);
-    assert!(p["wsl"]["reason"].as_str().unwrap().contains("no Linux distro"), "{p}");
+    assert_eq!(p["wsl"]["reason"], "WSL isn't installed or has no distro", "{p}");
+    // Only a tool's own distro: WSL works, with nothing to work in.
+    let m = Machine::new(windows());
+    m.distro("docker-desktop", Some(json!({})));
+    let p = m.plan(&[]);
+    assert_eq!(p["wsl"]["reason"], "WSL has no Linux distro", "{p}");
     // A distro without ptyro: the fix is the line that puts it there; setup never runs it.
     let m = Machine::new(windows());
     m.distro("docker-desktop", Some(json!({})));
@@ -173,7 +178,8 @@ fn without_a_usable_wsl_only_windows_is_offered_and_the_plan_says_why() {
     let p = m.plan(&[]);
     assert_eq!(p["wsl"]["reason"], "ptyro isn't installed in Ubuntu (WSL)", "{p}");
     let fix = p["wsl"]["fix"].as_str().unwrap();
-    assert!(fix.contains("wsl -d Ubuntu -- sh -c 'curl -fsSL https://github.com/"), "{fix}");
+    assert!(fix.contains("wsl -d Ubuntu -- sh -c \"curl -fsSL https://github.com/"), "{fix}");
+    assert!(fix.contains("install.sh | sh\""), "{fix}");
     assert!(!m.wsl_log().contains("install.sh"), "never installed by setup");
     assert_eq!(
         runs(&p),
@@ -216,6 +222,19 @@ fn both_sides_are_one_plan_and_the_default_is_where_the_daemon_runs() {
     assert!(runs(&p).iter().all(|(s, _)| s == "windows"), "{p}");
     assert_eq!(entry(&p, "wsl", "git")["state"], "installed", "WSL's own survey");
     assert_eq!(entry(&p, "windows", "git")["state"], "missing");
+    // The daemon in a distro setup can't reach: Windows by default, and it says why, though
+    // another distro has ptyro.
+    m.distro("Debian", None);
+    m.daemon_in("Debian");
+    let p = m.plan(&[]);
+    assert_eq!(p["wsl"]["distro"], "Ubuntu", "{p}");
+    assert!(runs(&p).iter().all(|(s, _)| s == "windows"), "{p}");
+    let o = m.run(&["setup", "--dry-run"], "");
+    assert!(
+        text(&o).contains("your daemon is in Debian, which setup can't reach; Ubuntu has ptyro"),
+        "{}",
+        text(&o)
+    );
     // WSL's daemon: WSL by default.
     m.daemon_in("Ubuntu");
     let p = m.plan(&[]);
@@ -289,7 +308,11 @@ fn both_sides_install_with_each_event_saying_its_side() {
     let finished: Vec<&Value> = events.iter().filter(|e| e["event"] == "finished").collect();
     assert_eq!(finished.len(), 2, "one report a side");
     // WSL's half ran through wsl.exe as the distro's own `ptyro install`, asked nothing.
-    assert!(m.wsl_log().contains("ptyro install --json --yes claude gh"), "{}", m.wsl_log());
+    assert!(
+        m.wsl_log().contains("ptyro install --json --admin=silent claude gh"),
+        "{}",
+        m.wsl_log()
+    );
     // In words: a heading a side.
     let m = Machine::with_ubuntu(json!({}));
     let o = m.run(&["install", "claude", "--yes", "--where", "both"], "");
@@ -316,6 +339,14 @@ fn admin_in_wsl_is_asked_for_in_the_terminal_through_wsl_exe() {
     assert_eq!(o.status.code(), Some(1));
     assert!(text(&o).contains("would ask for a password (--yes asks nothing)"), "{}", text(&o));
     assert_eq!(m.calls(Some("Ubuntu")), Vec::<String>::new());
+    // And WSL's ptyro stays quiet: what's installed is Windows' to say.
+    assert!(m.wsl_log().contains("ptyro install --json --admin=silent gh"), "{}", m.wsl_log());
+    assert!(
+        !text(&o).contains("Looking at what's installed…\nLooking at what's installed…"),
+        "{}",
+        text(&o)
+    );
+    assert_eq!(text(&o).matches("Looking at what's installed").count(), 1, "{}", text(&o));
 }
 
 #[test]

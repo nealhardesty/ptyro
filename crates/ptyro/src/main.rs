@@ -803,8 +803,9 @@ enum Cmd {
         /// is the side your daemon runs on
         #[arg(long = "where", value_name = "WHERE")]
         place: Option<String>,
-        /// Asked already by Windows' ptyro: ask (sudo may prompt here) or never (BOOT8)
-        #[arg(long, hide = true, value_name = "ask|never")]
+        /// Asked already by Windows' ptyro: ask (sudo may prompt here), silent (only without
+        /// a prompt: --yes) or never (BOOT8)
+        #[arg(long, hide = true, value_name = "ask|silent|never")]
         admin: Option<String>,
         /// A person answers on stdin though it isn't a terminal (as for setup)
         #[arg(long, hide = true)]

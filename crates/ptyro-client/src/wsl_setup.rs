@@ -24,17 +24,20 @@ pub const INSTALL: &str =
 const NOT_YOURS: &[&str] =
     &["docker-desktop", "docker-desktop-data", "rancher-desktop", "podman-machine"];
 
-/// `wsl -d <distro> -- sh -c '<install line>'`: putting ptyro in a distro, for a fix.
+/// `wsl -d <distro> -- sh -c "<install line>"`: putting ptyro in a distro, for a fix. Double
+/// quotes, which cmd.exe and PowerShell both keep together (the line has no `$`).
 pub fn install_line(distro: &str) -> String {
     let d = if distro.is_empty() { String::new() } else { format!(" -d {distro}") };
-    format!("wsl{d} -- sh -c '{INSTALL}'")
+    format!("wsl{d} -- sh -c \"{INSTALL}\"")
 }
 
 /// The distros worth asking, in WSL's order (the default first): tools' own left out, and
-/// anything that isn't a distro's name (what `wsl -l -q` says when there are none).
+/// anything that isn't a distro's name (what `wsl -l -q` says when there are none, or a
+/// `--install` from its help).
 pub fn candidates(all: &[String]) -> Vec<String> {
     all.iter()
         .filter(|d| !NOT_YOURS.iter().any(|n| d.to_ascii_lowercase().starts_with(n)))
+        .filter(|d| !d.starts_with('-'))
         .filter(|d| d.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)))
         .cloned()
         .collect()
@@ -44,7 +47,7 @@ pub fn candidates(all: &[String]) -> Vec<String> {
 /// `--version`. `prefer` is the distro the user's daemon is in (`client.default_remote`); it
 /// is asked first, then the others in WSL's order.
 pub async fn probe(prefer: Option<&str>) -> WslStatus {
-    let Some(all) = remote::distros().await else {
+    let Some((listed, all)) = remote::distros_listed().await else {
         return WslStatus::Unusable {
             reason: "WSL isn't installed (wsl.exe didn't answer)".into(),
             fix: format!(
@@ -55,8 +58,11 @@ pub async fn probe(prefer: Option<&str>) -> WslStatus {
     };
     let mut names = candidates(&all);
     if names.is_empty() {
+        // Windows 11's inbox wsl.exe answers even without WSL, failing with its own message.
+        let reason =
+            if listed { "WSL has no Linux distro" } else { "WSL isn't installed or has no distro" };
         return WslStatus::Unusable {
-            reason: "WSL has no Linux distro".into(),
+            reason: reason.into(),
             fix: format!(
                 "`wsl --install` adds one (Ubuntu); then put ptyro in it ({}) and set up again",
                 install_line("")
@@ -162,7 +168,7 @@ pub fn run(distro: &str, plan: &Plan, admin: Admin, on: &mut dyn FnMut(Event)) -
     args.push(
         match admin {
             Admin::Ask => "--admin=ask",
-            Admin::Silent => "--yes",
+            Admin::Silent => "--admin=silent",
             Admin::Never => "--admin=never",
         }
         .into(),
@@ -266,7 +272,8 @@ mod tests {
                 "Ubuntu",
                 "docker-desktop",
                 "Windows Subsystem for Linux has no installed distributions.",
-                "Debian-12"
+                "Debian-12",
+                "--install",
             ])),
             ["Ubuntu", "Debian-12"]
         );
@@ -281,6 +288,7 @@ mod tests {
         assert!(!script.contains("a'b"));
         assert_eq!(a.last().unwrap(), "a'b");
         assert!(ptyro_args("-bad", &[]).is_err());
-        assert_eq!(install_line("Ubuntu"), format!("wsl -d Ubuntu -- sh -c '{INSTALL}'"));
+        assert_eq!(install_line("Ubuntu"), format!("wsl -d Ubuntu -- sh -c \"{INSTALL}\""));
+        assert!(!install_line("").contains('\''), "cmd.exe doesn't quote with '");
     }
 }

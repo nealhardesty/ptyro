@@ -174,7 +174,7 @@ ptyro setup --yes --agents claude,codex --tools git,gh   # unattended: scripts, 
   `wsl.exe`, so its sudo prompt is in your terminal too. WSL is yours to bring: setup never
   installs WSL, a distro, or ptyro in one. Without them it sets up Windows and says what's
   missing, with the line to fix it (ptyro in WSL is
-  `wsl -- sh -c 'curl -fsSL https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh | sh'`);
+  `wsl -- sh -c "curl -fsSL https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh | sh"`);
   run setup again afterwards for WSL's side. In the TUI, `app.setup` asks where first; the web
   app shows both columns when its daemon runs on Windows.
 

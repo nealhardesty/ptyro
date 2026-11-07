@@ -5,7 +5,7 @@
 import { conn, host, store, token } from "./conn.js";
 import { aboutDoc, aboutText, data } from "./data.js";
 import { fixLineEndings } from "./projects.js";
-import { actions, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, form, go, h, menu, pending, poll, row, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
+import { actions, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, form, go, h, menu, pending, poll, row, section, setupSides, sheet, textSheet, ui, views, webHref } from "./kit.js";
 import type { Item } from "./kit.js";
 import { qrMatrix } from "./qr.js";
 import { allSessions } from "./sessions.js";
@@ -755,15 +755,17 @@ function installSection(): HTMLElement {
     here.length ? h("p", { class: "sub" }, "Already here: ", here.map((e: any) => `${e.name} (${stateText(e)})`).join(", ")) : null,
     wsl ? h("p", { class: "sub" }, wsl) : null,
     cmds.length ? h("p", { class: "sub" }, "Administrator rights are asked for only on the computer itself: run ", ...cmds.flatMap((c, i) => [i ? " and " : "", h("code", {}, c)]), " there (or ", h("code", {}, "ptyro setup"), "). From here they show the command instead.") : null,
-    bar(h("button", { class: "primary", title: tip("setup.install"), disabled: running || !ticked.length, onclick: () => void startInstall(picked(mineSide), two ? picked("wsl") : null, sides.filter((s) => ticked.some((e: any) => e.side === s)).length) }, running ? "Installing…" : "Install the ticked ones")),
+    bar(h("button", { class: "primary", title: tip("setup.install"), disabled: running || !ticked.length, onclick: () => void startInstall(picked(mineSide), two ? picked("wsl") : null) }, running ? "Installing…" : "Install the ticked ones")),
     installRun.lines.length ? h("pre", { class: "log" }, installRun.lines.join("\n")) : null,
     installRun.report ? h("p", { class: "sub" }, `${installRun.report.done.length} installed, ${installRun.report.failed.length} failed, ${installRun.report.skipped.length} not run${installRun.report.blocked?.length ? `, ${installRun.report.blocked.length} can't be installed here` : ""}.`) : null);
 }
 
-async function startInstall(picks: string[], wslPicks: string[] | null, sides: number): Promise<void> {
-  Object.assign(installRun, { id: "", starting: true, early: [], lines: [], reports: [], sides: Math.max(1, sides), report: null });
+async function startInstall(picks: string[], wslPicks: string[] | null): Promise<void> {
+  Object.assign(installRun, { id: "", starting: true, early: [], lines: [], reports: [], sides: 1, report: null });
   try {
     const r = await conn.request({ t: "setup_run", picks, wsl_picks: wslPicks });
+    // The plan the daemon runs (it looked at WSL again), not the page's: its sides each report.
+    installRun.sides = setupSides(r.plan);
     installRun.id = r.run;
     for (const e of installRun.early.splice(0)) setupEvent(e);
     ui.render();

@@ -367,6 +367,13 @@ export function download(name: string, text: string, type = "text/plain"): void 
 
 /// Go to a route.
 export const go = (hash: string): void => { location.hash = hash; };
+
+/// How many sides a setup run reports on (each ends with its own `finished`, BOOT8): those with
+/// a ticked entry that runs or is blocked, in the plan the daemon actually runs.
+export function setupSides(plan: { entries?: { side?: string; ticked?: boolean; action?: unknown; blocked?: unknown }[] } | null | undefined): number {
+  const sides = new Set((plan?.entries ?? []).filter((e) => e.ticked && (e.action || e.blocked)).map((e) => e.side ?? "local"));
+  return Math.max(1, sides.size);
+}
 export const enc = encodeURIComponent;
 /// `decodeURIComponent` that never throws: a malformed escape in a route (`%E0%A4%A`) is kept as typed.
 export function safeDecode(s: string): string {

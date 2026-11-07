@@ -38,7 +38,7 @@ pub struct InstallArgs {
     pub dry_run: bool,
     pub json: bool,
     pub place: Option<String>,
-    /// Hidden `--admin ask|never`: Windows' ptyro running this in a WSL distro, the person having
+    /// Hidden `--admin ask|silent|never`: Windows' ptyro running this in a WSL distro, the person having
     /// said yes there already. `ask`: sudo may prompt in the terminal; `never`: for the web.
     pub admin: Option<String>,
     pub tty: bool,
@@ -191,10 +191,31 @@ async fn look(
             Where::Windows
         }
         Some(p) => p,
-        None if prefer.is_some() && sides.wsl.is_some() => Where::Wsl,
-        None => Where::Windows,
+        // The daemon's distro, and only it: another distro with ptyro isn't where the
+        // sessions run, so the default stays Windows and the status line says why.
+        None => match (prefer.as_deref(), sides.status.as_ref().and_then(WslStatus::usable)) {
+            (Some(p), Some(d)) if p.is_empty() || p.eq_ignore_ascii_case(d) => Where::Wsl,
+            (Some(p), _) => {
+                if !quiet {
+                    eprintln!("{}", daemon_elsewhere(p, sides.status.as_ref()));
+                }
+                Where::Windows
+            }
+            (None, _) => Where::Windows,
+        },
     };
     Ok((host, sides, place))
+}
+
+/// Why the default isn't the daemon's distro `prefer` (`client.default_remote`).
+fn daemon_elsewhere(prefer: &str, status: Option<&WslStatus>) -> String {
+    match status {
+        Some(WslStatus::Usable { distro, .. }) => format!(
+            "WSL: your daemon is in {prefer}, which setup can't reach; {distro} has ptyro, so `--where wsl` installs there. By default this sets up Windows only."
+        ),
+        Some(s) => s.words(),
+        None => String::new(),
+    }
 }
 
 /// The ids `names` mean, each of `kind`; `none` is none.
@@ -270,9 +291,12 @@ pub async fn install(ctx: &Ctx, a: InstallArgs) -> Result<i32, Error> {
     let asked = match a.admin.as_deref() {
         None => None,
         Some("ask") => Some(Admin::Ask),
+        Some("silent") => Some(Admin::Silent),
         Some("never") => Some(Admin::Never),
         Some(other) => {
-            return Err(Error::invalid(format!("--admin takes ask or never, not {other:?}")));
+            return Err(Error::invalid(format!(
+                "--admin takes ask, silent or never, not {other:?}"
+            )));
         }
     };
     if !a.yes && !a.dry_run && asked.is_none() && !interactive(a.tty) {
