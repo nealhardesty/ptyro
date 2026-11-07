@@ -884,10 +884,12 @@ async fn a_fresh_ptyro_opens_the_first_run_once() {
     let d = TempDaemon::start(BIN).unwrap();
     let home = tempfile::tempdir().unwrap();
     let script = |d: &TempDaemon| {
+        // The first run's setup checklist looks at a fake machine (BOOT1's), never this one.
         let mut s = ptyro_testkit::headless::Script::new(vec![BIN.to_owned()])
             .size(110, 30)
             .timeout(30.0)
-            .env("HOME", &home.path().to_string_lossy());
+            .env("HOME", &home.path().to_string_lossy())
+            .env("PTYRO_TEST_SETUP", &home.path().join("fake-machine").to_string_lossy());
         for (k, v) in d.env() {
             s = s.env(&k, &v);
         }
@@ -1254,17 +1256,21 @@ async fn ux1_done_when_from_a_fresh_machine_to_a_merged_and_cleaned_up_pr() {
             false
         })
     };
+    // The first run's setup checklist looks at a fake machine (BOOT1's), never this one.
+    let fake = tempfile::tempdir().unwrap();
     let mut script = ptyro_testkit::headless::Script::new(vec![BIN.to_owned()])
         .cwd(&repo)
         .size(120, 32)
-        .timeout(120.0);
+        .timeout(120.0)
+        .env("PTYRO_TEST_SETUP", &fake.path().to_string_lossy());
     for (k, v) in env.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).chain(d.env()) {
         script = script.env(&k, &v);
     }
     let r = ptyro_testkit::headless::run(
         script
-            // 1. The first run (no config): ⏎ keeps what it found, myrepo included.
-            .send_when("Welcome to ptyro", "\\r")
+            // 1. The first run (no config): s (not now) installs nothing and keeps what it
+            // found, myrepo included.
+            .send_when("Welcome to ptyro", "s")
             .send_when("▾ main", "\\x11n")
             // 2. A task, ⏎.
             .send_when("What should it do?", "fix the typo in greeting.txt")

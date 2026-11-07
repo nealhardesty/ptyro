@@ -1,6 +1,7 @@
 //! `ptyro init` (SPEC §12.3, M5.5): first-run setup in a few questions.
 //!
-//! 1. What's here: the terminal (and tmux advice), the agent CLIs and their versions.
+//! 1. What's here: the terminal (and tmux advice), the agent CLIs and their versions; the setup
+//!    checklist (`ptyro setup`, BOOT2) offered, to install agents and tools.
 //! 2. Existing multi-account setups (aliases, functions, exports, `~/.claude-*` dirs, git
 //!    `includeIf`), offered as profiles, matched to repositories by their paths.
 //! 3. Prefix key, worktree location, desktop notifications.
@@ -123,12 +124,30 @@ pub async fn run(ctx: &Ctx, yes: bool, dry_run: bool) -> Result<i32, Error> {
     section("agents");
     let mut r = crate::doctor::Report::default();
     crate::doctor::agents(&current, &mut r).await;
-    if r.0.is_empty() {
-        eprintln!(
-            "  none found on PATH (claude, codex, gemini, opencode, agy); install one, then `ptyro init` again"
-        );
+    let none = r.0.is_empty();
+    if none {
+        eprintln!("  none found on PATH (claude, codex, gemini, opencode, agy)");
     }
     crate::doctor::print_checks(&r);
+    // The setup checklist (BOOT2): the agents and tools to install, then their logins. Asked
+    // first (yes by default when no agent is here); never with --yes or --dry-run.
+    if !ask.yes && ask.yes_no("  open the setup checklist, to install agents and tools?", none) {
+        let a = crate::setup::SetupArgs {
+            yes: false,
+            agents: None,
+            tools: None,
+            dry_run: false,
+            json: false,
+            place: None,
+            survey: false,
+            tty: false,
+        };
+        if let Err(e) = crate::setup::setup(ctx, a).await {
+            eprintln!("  setup: {}", e.message);
+        }
+    } else if none {
+        eprintln!("  `ptyro setup` installs them (a checklist), any time");
+    }
 
     section("accounts");
     let home = expand_home("~");

@@ -811,6 +811,10 @@ enum Cmd {
         /// A person answers on stdin though it isn't a terminal (as for setup)
         #[arg(long, hide = true)]
         tty: bool,
+        /// The person said yes already, in the TUI's checklist (BOOT2): no question first;
+        /// administrator rights are still asked for here, and the logins walked through
+        #[arg(long, hide = true)]
+        confirmed: bool,
     },
     /// Log in to the agents and the GitHub CLI, one account each: each tool's own sign-in, in
     /// this terminal, confirmed by its own status command (ptyro never sees a credential)

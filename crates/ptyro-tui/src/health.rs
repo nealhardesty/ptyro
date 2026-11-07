@@ -43,6 +43,10 @@ pub enum Fix {
     /// Open the settings panel at this option: WSL hiding an open web app opens `remote.access`,
     /// WSL stopping ptyro with the last terminal opens `daemon.hold_wsl`.
     Setting(&'static str),
+    /// Open the setup checklist (BOOT2) with these ticked (none: the defaults), on the side a
+    /// suggested `--where` names: an agent or git not found, no agent at all, or a doctor line
+    /// that suggests `ptyro setup` / `ptyro install`.
+    Setup { names: Vec<String>, place: Option<String> },
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +67,9 @@ pub struct Health {
     /// A fresh result that arrived while the mend list was open: its rows point into
     /// `findings`, so it is taken once the list is closed.
     pub deferred: Option<Vec<Check>>,
+    /// Look again as soon as the run in flight is in: what it reports may predate a change
+    /// (the setup checklist's install just ended, BOOT2).
+    pub again: bool,
 }
 
 /// The command a doctor message suggests: the first `` `ptyro …` `` in it, with a
@@ -97,6 +104,55 @@ fn private_path(text: &str) -> Option<&str> {
     })
 }
 
+/// A finding the setup checklist fixes (BOOT2): what it names to install ticked there.
+/// - a `` `ptyro setup …` `` or `` `ptyro install NAME…` `` the doctor suggests;
+/// - an agent not found (`claude not found: …`), or git (`git not found: …`): that one;
+/// - no agent found at all: the defaults.
+fn setup_fix(c: &Check) -> Option<Fix> {
+    if let Some(words) = suggested_cli(c) {
+        let (first, rest) = words.split_first()?;
+        if first != "setup" && first != "install" {
+            return None;
+        }
+        // Names, and `--where X` (`--where=X`) kept as the side; other flags dropped, with the
+        // value of those that take one (`--agents a,b` names too, as setup's).
+        let (mut names, mut place) = (Vec::new(), None);
+        let mut it = rest.iter();
+        while let Some(w) = it.next() {
+            match w.split_once('=') {
+                Some(("--where", v)) => place = Some(v.to_owned()),
+                Some((f, v)) if f == "--agents" || f == "--tools" => names.extend(
+                    v.split(',').filter(|n| !n.is_empty() && *n != "none").map(str::to_owned),
+                ),
+                _ if w == "--where" => place = it.next().cloned(),
+                _ if w == "--agents" || w == "--tools" => {
+                    if let Some(v) = it.next() {
+                        names.extend(
+                            v.split(',')
+                                .filter(|n| !n.is_empty() && *n != "none")
+                                .map(str::to_owned),
+                        );
+                    }
+                }
+                _ if w.starts_with('-') => {}
+                _ => names.push(w.clone()),
+            }
+        }
+        return Some(Fix::Setup { names, place });
+    }
+    if c.section == "agents" && c.name == "agents" {
+        return Some(Fix::Setup { names: Vec::new(), place: None });
+    }
+    let prog = c
+        .text
+        .strip_suffix("not found")
+        .or_else(|| c.text.split_once(" not found").map(|(p, _)| p))?;
+    let prog = prog.trim();
+    let known = ptyro_agents::setup::resolve(prog).ok()?;
+    matches!(c.section.as_str(), "agents" | "git")
+        .then(|| Fix::Setup { names: vec![known.program.clone()], place: None })
+}
+
 /// A doctor check as a finding: only warnings and problems, with the fix its text implies.
 pub fn finding(c: &Check) -> Option<Finding> {
     let problem = match c.level.as_str() {
@@ -116,6 +172,8 @@ pub fn finding(c: &Check) -> Option<Finding> {
         Some(Fix::Tmux { name: c.name.clone(), value: "on".into() })
     } else if c.name == "config mode" {
         private_path(&c.text).map(|p| Fix::Private(PathBuf::from(p)))
+    } else if let Some(fix) = setup_fix(c) {
+        Some(fix)
     } else {
         suggested_cli(c).map(Fix::Cli)
     };
@@ -184,8 +242,21 @@ impl App {
         )
     }
 
+    /// Look again now, or once the run in flight is in.
+    pub(crate) fn health_again(&mut self) {
+        if self.health.running {
+            self.health.again = true;
+        } else {
+            self.check_health();
+        }
+    }
+
     pub(crate) fn got_health(&mut self, checks: Vec<Check>) {
         self.health.running = false;
+        if std::mem::take(&mut self.health.again) {
+            // What this run found may be from before the change: the next one says.
+            self.check_health();
+        }
         if self.health_open() {
             self.health.deferred = Some(checks);
             return;
@@ -264,6 +335,7 @@ impl App {
                     }
                     Some(Fix::Action(_)) => format!("{} · ⏎ opens the clean-up list", f.text),
                     Some(Fix::Setting(key)) => format!("{} · ⏎ opens the setting {key}", f.text),
+                    Some(Fix::Setup { .. }) => format!("{} · ⏎ opens the setup checklist", f.text),
                     None => f.text.clone(),
                 },
                 key: None,
@@ -294,6 +366,9 @@ impl App {
             Some(Fix::Cli(args)) => self.run_cli(&args),
             Some(Fix::Action(action)) => self.run(&crate::keymap::Command { action, arg: None }),
             Some(Fix::Setting(key)) => self.open_settings(Some(key)),
+            Some(Fix::Setup { names, place }) => {
+                self.open_setup((!names.is_empty()).then_some(names), place)
+            }
             Some(Fix::Append { file, line }) => {
                 self.overlay = Some(Overlay::Confirm {
                     text: format!(
@@ -378,6 +453,7 @@ impl App {
             .chain((2..).map(|k| format!("{base}-{k}")))
             .find(|n| self.sessions.iter().all(|s| s.name != *n))
             .expect("infinite");
+        self.last_split = Some(name.clone());
         self.spawn_tool(argv, Some(name), false);
     }
 }
@@ -388,6 +464,50 @@ mod tests {
 
     fn check(section: &str, name: &str, level: &str, text: &str) -> Check {
         Check { section: section.into(), name: name.into(), level: level.into(), text: text.into() }
+    }
+
+    #[test]
+    fn an_agent_or_tool_not_found_opens_the_setup_checklist() {
+        let fix = |section: &str, name: &str, level: &str, text: &str| {
+            finding(&check(section, name, level, text)).unwrap().fix
+        };
+        let s = |v: &[&str]| {
+            Some(Fix::Setup { names: v.iter().map(|s| (*s).to_owned()).collect(), place: None })
+        };
+        assert_eq!(
+            fix(
+                "agents",
+                "claude",
+                "problem",
+                "claude not found: `curl -fsSL https://claude.ai/install.sh | bash` installs it"
+            ),
+            s(&["claude"])
+        );
+        assert_eq!(fix("agents", "antigravity", "problem", "agy not found"), s(&["agy"]));
+        assert_eq!(
+            fix("git", "version", "problem", "git not found: projects and worktrees need it"),
+            s(&["git"])
+        );
+        assert_eq!(fix("agents", "agents", "warn", "no agent found: install one, e.g. …"), s(&[]));
+        assert_eq!(
+            fix("agents", "x", "warn", "run `ptyro install agy gh` to add them"),
+            s(&["agy", "gh"])
+        );
+        assert_eq!(fix("agents", "x", "warn", "`ptyro setup` installs them"), s(&[]));
+        // The side a line names is kept; a flag's value is never a name.
+        assert_eq!(
+            fix("agents", "x", "warn", "`ptyro install gh --where wsl` installs it there"),
+            Some(Fix::Setup { names: vec!["gh".into()], place: Some("wsl".into()) })
+        );
+        assert_eq!(
+            fix("agents", "x", "warn", "`ptyro setup --agents claude,codex --where=both`"),
+            Some(Fix::Setup {
+                names: vec!["claude".into(), "codex".into()],
+                place: Some("both".into())
+            })
+        );
+        // Something setup doesn't install keeps its own fix.
+        assert_eq!(fix("agents", "mine", "problem", "my-agent not found"), None);
     }
 
     #[test]

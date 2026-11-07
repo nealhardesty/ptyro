@@ -28,6 +28,7 @@ mod runs;
 mod screens;
 mod sets;
 pub mod settings;
+mod setup_list;
 mod shells;
 pub mod theme;
 pub mod tour;

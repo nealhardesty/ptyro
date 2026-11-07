@@ -125,7 +125,7 @@ doesn't set the mark). Then let ptyro look around:
 
 ```bash
 ptyro setup      # installs the coding agents and the tools they need (a checklist)
-ptyro init       # finds your agents, accounts and repositories; asks a few questions
+ptyro init       # finds your agents, accounts and repositories; asks a few questions (and offers setup)
 ptyro doctor     # checks agents, logins, integrations, terminal and tmux
 ```
 
@@ -164,10 +164,19 @@ ptyro login --check                           # where each login stands, changin
   them: sudo asks for your password once, in your terminal, before the first of them (on Windows
   each installer raises its own UAC prompt). ptyro never sees the password. `--yes` asks nothing:
   a step that would need a password is skipped and its command printed for you to run.
-- **No daemon needed**, so it works on a machine where ptyro has never run. In the TUI it's
-  `app.setup` and `app.install` in the palette (the checklist in a split). The web app has it
+- **No daemon needed**, so it works on a machine where ptyro has never run. The web app has it
   under More → Set up ptyro, except steps that need admin rights, which only run on the computer
   itself: the page shows their command instead.
+- **In the TUI, it's the first thing you see.** The first `ptyro` on a new machine opens with the
+  same checklist at the top of the first-run screen: Agents, Tools and Already here, each with a
+  line saying what it is, how it installs and whether it asks for admin rights or a login.
+  Something ticked for another says so ("ticked because Gemini CLI needs it"). `Space` ticks,
+  `j`/`k` move, `⏎` installs what's ticked (and keeps the rest of the first run's choices), `s`
+  is "not now". The install runs in a split: its live output, sudo's password prompt, then each
+  login and the line about profiles, exactly as `ptyro setup` does in a terminal. Any time later,
+  `Ctrl-Q U` (or `app.setup` in the palette) opens the checklist again on its own, the health
+  badge's fixes (`Ctrl-Q M`) open it for a missing agent or git, and `ptyro init` offers it too.
+  `app.install` installs one by name.
 - **Windows: WSL, Windows, or both.** On Windows each agent and tool can go into your WSL
   distro, onto Windows itself, or both: the checklist has a column each, a number ticks it on
   the side your daemon runs on (WSL's when ptyro works with ptyro in WSL), and `3:wsl`,
@@ -177,8 +186,9 @@ ptyro login --check                           # where each login stands, changin
   installs WSL, a distro, or ptyro in one. Without them it sets up Windows and says what's
   missing, with the line to fix it (ptyro in WSL is
   `wsl -- sh -c "curl -fsSL https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh | sh"`);
-  run setup again afterwards for WSL's side. In the TUI, `app.setup` asks where first; the web
-  app shows both columns when its daemon runs on Windows.
+  run setup again afterwards for WSL's side. The TUI's checklist has the same two columns
+  (`←`/`→` picks one, `Space` ticks it there); the web app shows both when its daemon runs on
+  Windows.
 - **Logins, one account each.** After installing, setup logs you in to each agent and the GitHub
   CLI it installed, one after another, through the tool's own sign-in: a page in your browser,
   or a link and a code to enter, right there in your terminal (Ctrl+C skips one). ptyro never
@@ -293,8 +303,9 @@ cd ~/dev/myrepo
 ptyro                   # open the TUI (a shell session to start with)
 ```
 
-The very first time, with no config yet, ptyro shows what it found (your agents, the accounts in
-your shell setup, your repositories) as a list to tick, and writes the config from that. Outside a
+The very first time, with no config yet, ptyro shows what it found as a list to tick: the agents
+and tools to install (the setup checklist, [above](#agents-and-tools-ptyro-setup)), the accounts
+in your shell setup and your repositories, and writes the config from that. Outside a
 repository, it opens **home**: who needs you, PRs, recent projects and repositories found, each a
 `⏎` away from a task (`Ctrl-Q H` brings it back).
 

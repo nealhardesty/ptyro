@@ -3154,14 +3154,16 @@ learning anything up front.
   upgrade|service|unservice` and `integrations[.install|.uninstall]`.
 - **The first run and home** (UX1.19, `crates/ptyro-tui/src/onboard.rs`). When `ptyro` had to
   start the first session itself (`Options::welcome`):
-  - with no config file (and `PTYRO_FIRST_RUN` not `0`): the first run, over everything. Agents
-    found on `PATH` (the default marked), accounts `detect()` finds in your shell setup (ticked),
+  - with no config file (and `PTYRO_FIRST_RUN` not `0`): the first run, over everything. First
+    the setup checklist (BOOT2, §24.5: agents and tools to install, what's here already with the
+    default agent marked), then accounts `detect()` finds in your shell setup (ticked),
     repositories under `[discover] roots` (the one you're in ticked; it registers on its own
     anyway), desktop notifications (not ticked). Space ticks, ⏎ writes `config.toml` (0600,
     created only if absent, checked before writing) and registers the ticked repositories in
-    the current workspace, then offers the tour; Esc writes an empty config so it never comes
+    the current workspace (and installs what the checklist ticks, §24.5), then offers the
+    tour; `s` does the same without installing; Esc writes an empty config so it never comes
     back. `first.run` opens it again; `ptyro init` stays the terminal's version, with the
-    terminal checks and shell extras;
+    terminal checks and shell extras (and the CLI's checklist offered);
   - else, when the workspace has no project: **home** (`home`, `H`), one list of who needs you,
     worktrees with PRs and their checks, projects (most recently used first; ⏎ starts a task
     there), repositories found (⏎ adds one, then the task box), and a shell here.
@@ -8790,7 +8792,7 @@ strip, and a split is always a shell.
 - **Not here:** splitting a worktree's sessions into windows (their splits stay a TUI layout,
   §11.2i), a desktop split view on the web, and more than four panes.
 
-## 24. Bootstrap: agents, tools and updates **[decided 2026-11-06 (owner, ROADMAP BOOT); BOOT0 and BOOT1 built 2026-11-06; BOOT8 and BOOT4 built 2026-11-07]**
+## 24. Bootstrap: agents, tools and updates **[decided 2026-11-06 (owner, ROADMAP BOOT); BOOT0 and BOOT1 built 2026-11-06; BOOT8, BOOT4 and BOOT2 built 2026-11-07]**
 
 The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-design.md`: one setup checklist
 that installs the coding agents, git, the GitHub CLI and their prerequisites, walks through the
@@ -8861,7 +8863,7 @@ plan engine on the rest.
 
 **One engine:** `ptyro_agents::setup` (`crates/ptyro-agents/src/setup.rs`, with `setup/host.rs`,
 `run.rs`, `fake.rs`). A library, so the CLI runs it with no daemon (a fresh machine has none),
-the daemon runs it for the web, and the TUI runs the CLI's checklist in a split. Three steps:
+the daemon runs it for the web, and the TUI shows its own checklist on it, then installs through the CLI in a split (§24.5). Three steps:
 
 1. **`survey(host, latest)`** looks at every row of the table through a `Host`: the item's
    program found (`locate::find`, so npm's, nvm's and the vendors' folders count, with ptyro's
@@ -8962,9 +8964,9 @@ the id, the program or the name, any case, without spaces or dots: `agy`, `githu
 exit 0 when everything ran, 1 when anything failed or was skipped, and never talk to a daemon (an
 explicit `--remote` elsewhere is refused: setup is about this computer).
 
-**TUI:** `app.setup` and `app.install` (palette) run those commands in a split (UX1.21's
-`cli_actions`), a real terminal where sudo can ask. BOOT2 makes the checklist the first part of
-the onboarding screen.
+**TUI:** `app.install` (palette) runs `ptyro install` in a split (UX1.21's `cli_actions`), a
+real terminal where sudo can ask. `app.setup` was the same with `ptyro setup` until BOOT2 made it
+the checklist on screen (§24.5).
 **Web:** More → Set up ptyro → "Install agents and tools" (`setup.plan`, `setup.install` in
 `web/src/settings.ts`): the plan with checkboxes (re-planned on each tick, so prerequisites tick
 themselves), Install, and the run's lines from `setup_progress` events; administrator steps are
@@ -9214,3 +9216,123 @@ session running `ptyro login`, so both confirm the same way; setup walks without
 login; an unconfirmed login runs only when named or just installed (never because it was picked
 and was here already), and quitting it is a skip; login sessions are unrecorded (protocol 1.33); the web shows the daemon's
 side (`--where local`), naming WSL's command on a Windows daemon.
+
+### 24.5 The TUI checklist (BOOT2) **[built 2026-11-07]**
+
+The design's "where the checklist lives": the first part of the onboarding screen
+(`crates/ptyro-tui/src/onboard.rs`, UX1.19), and the same screen with only that part any time
+later. The owner chose one checklist screen (option A); the approved mockup's shape is kept:
+Agents, Tools and Already here, a line per item, prerequisites ticked with the reason, and
+"⏎ install N · Space toggle · s not now".
+
+**One set of ticking rules.** The CLI's checklist and the TUI's share
+`ptyro_agents::setup::checklist` (moved out of `crates/ptyro/src/setup.rs`): `Sides` (this
+computer's survey, WSL's, and WSL's status), `Picks` (what each side has ticked), `rows` (what can
+be ticked: not here on some side), `already` (here on every side), `toggle` (picked → unticked;
+else ticked where it can be; a prerequisite something ticked needs stays, saying "untick that
+first"; what's here can't be), `default_place` (BOOT8's default side) and the `mark`/`cell` words.
+The plan is still `setup::plan`; the TUI has no plan or run logic of its own.
+
+**Where it looks** (`crates/ptyro-tui/src/setup_list.rs`): in the TUI's own process, as `ptyro
+setup` does: `setup::host` + `setup::survey` on a blocking thread, and on Windows
+`wsl_setup::probe` and `survey` for the distro, the daemon's (`wsl://<distro>`, the TUI's
+connection) asked first. It arrives as `AppMsg::SetupFound`; until then the part says "looking at
+what's installed…". The default side is the daemon's (`checklist::default_place`), with the
+reason when it isn't. A daemon on another computer (`--remote`, not this Windows' WSL) is set up
+there: the first run says so, and `app.setup` runs that computer's `ptyro setup` in a split, as
+before.
+
+**On screen:** under Agents and Tools, each row is `[x]` picked, `[+]` ticked for something
+picked, `[ ]` not, then its name and one line, parts joined by ` · ` and wrapped between parts:
+the catalog's new `about` (one line per row, `catalog.toml`; Gemini CLI's label takes its place),
+the method it would use (`through` the action's when ticked, else the table's first method whose
+`needs` is present), "asks for admin", "needs Node.js" (required prerequisites), "ticked because
+Gemini CLI needs it", an outdated or too-old state, "can't here: …" for a blocked one, and "then
+log in" for an item with a login. On Windows with a usable WSL each row has a cell per side
+(`Windows`, `WSL (Ubuntu)`: `[x] WinGet (admin)`, `[ ]`, `✓ 2.43.0`), the cursor's cell
+reversed, and a line under the row per side for what a cell can't say (why it can't, what needs
+it). Already here lists each item with its version and path (each side's, named, on two), the
+default agent marked "your default agent". It fits 80 columns: a cell is 26 wide (an ellipsis
+ends a longer one), and when the cells leave less than 30 columns beside them the row's line goes
+under it, indented, wrapped between parts like the rest. The per-side lines under a row, WSL's
+state, the default side's reason and what a tick said wrap between words (a word longer than a
+line, a URL, breaks where the line ends, so all of it stays on screen). Then WSL's state when it is unusable or this is WSL, the
+default side's reason, and what the last tick said.
+
+**Keys:** `j`/`k` (arrows) move over the checklist's rows, then the first run's choices; `Space`
+ticks the row (on the cursor's side) or the choice; `←`/`→` (`h`/`l`) pick the side; `⏎` installs
+what's ticked and, in the first run, writes the config and registers the repositories as before;
+`s` is "not now": no installs (the first run's other choices still count; alone, it closes and
+says the key that brings it back); `Esc` skips the first run (an empty config) or closes the
+checklist. The footer counts the steps: "⏎ install 5 and use these" (first run), "⏎ install 4 ·
+Space toggle · j/k move · s not now" (alone; `· ←/→ side` with two sides).
+
+**⏎ runs the CLI.** What the person picked (not what ticked itself: the engine ticks
+prerequisites again) goes to `ptyro install <names…> --confirmed` in a split (`run_cli`), a real
+terminal, so everything the CLI does happens there unchanged: the order, live output, ✓/✗ with
+the fix, administrator rights asked once (sudo's prompt in that terminal, or each installer's
+UAC), the tools-folder `PATH` offer, the logins walked one by one (Ctrl+C skips one), and
+`PROFILES_HINT` last. `--confirmed` (hidden, `ptyro install` only) skips the `Install? [Y/n]` the
+checklist already asked; nothing else changes. On Windows (`cli_actions::where_runs`): with this
+computer's daemon, the same picks on both sides are one `--where both`, different picks a split per
+side (`--where windows`, then `--where wsl`); with WSL's daemon, WSL's side runs WSL's own ptyro in
+its split and Windows' this `ptyro.exe` through interop with `--where windows --tty`. **One split
+at a time** (`setup_list::SetupRun`, `App::setup_tick`): the next side's split starts once the one
+before it ends, so two package managers, sudo and UAC prompts, or two sets of sign-ins never
+overlap. **While it runs, the checklist doesn't open again**: `U`, the palette's `app.setup` and
+`first.run`, and a health fix show the running split instead and say "setup is still running in
+<split>: the checklist opens again once it's done" (no second install beside the first, as the
+daemon's one-run guard is for the web). The guard is this TUI client's (`App::setup_run`): another
+TUI attached at the same time, or this one after a reattach, doesn't know of the split. A split
+is running from its spawn's reply on (it is in the session list from then); a failed spawn frees
+the checklist at once, and a split closed or ended (its session gone, or not live) frees it on the
+next tick, then the next side's starts. When the last split ends, the health badge looks again
+(`health_again`): now, or, with a doctor run already in flight (whose answer may predate the
+install), as soon as that one is in, so it stops offering what was just installed. Nothing ticked, still looking, `s`
+or Esc: nothing installs, and the first run's message (or, alone, the checklist's) ends with how
+to open it again (`C-q U opens the setup checklist (agents and tools) any time`).
+
+**Where it opens:**
+- **The first run** (no config): at the top of the first-run screen (`first.run` reopens the whole
+  screen).
+- **`app.setup`**: `U` (after the prefix, and in the sidebar; in the prefix-pause menu as "set up
+  agents") and the palette: the checklist alone (" Setup ", "Set up this computer: …"), which writes no config.
+- **The health badge** (`M`): `health::Fix::Setup(names)` for a doctor line suggesting `` `ptyro
+  setup` `` or `` `ptyro install NAME…` ``, an agent not found (`claude not found: …`, in
+  `agents`), git not found, and "no agent found": ⏎ opens the checklist with those ticked (none:
+  the defaults), on the side a suggested `--where` names; flags' values are never names
+  (`--agents`/`--tools` lists are). With a daemon on another computer, the fix runs that
+  computer's `ptyro install <names> [--where …]` in a split (`ptyro setup` when it names none).
+  The doctor's own wording is BOOT9's.
+- **`ptyro init`** (the CLI): its agents step asks "open the setup checklist, to install agents
+  and tools?" (yes by default when no agent is found) and runs `ptyro setup`'s checklist in that
+  terminal, then carries on; never with `--yes` or `--dry-run`.
+
+**Tests, with no real installer:** the ticking rules and Windows' commands in
+`setup_list.rs` (defaults and `install … --confirmed`, a prerequisite ticked with its reason and
+kept, two columns and `--where both` vs. a split per side with WSL's daemon, Windows' ptyro out of
+WSL's reach, a daemon elsewhere); the screen in `app.rs`'s tests (the first run's sections, lines
+and footer count, Space on Gemini CLI ticking Node.js, ⏎'s `install` words and the config; the
+checklist alone and `s`); `health.rs` (which findings open it, with what ticked);
+`crates/ptyro/tests/boot2.rs`, `ptyro` in a PTY (`ptyro_testkit::headless`, `send_when`/`until`)
+on BOOT1's fake machine: the first run's ⏎ installing the defaults in a split with sudo asked once
+and each login, then the profiles line and the config; `C-q U` (twice) while that install runs
+saying setup is still running, each item installed once; `C-q U` later, `s` installing nothing, and
+Space then ⏎ installing only Antigravity (and its sign-in, just installed); `ptyro init` offering
+the checklist. UX1.19's tour test now leaves the first run with `s`, so it installs nothing, and
+both UX1.19 tests point `PTYRO_TEST_SETUP` at an empty fake machine, so the checklist never looks
+at the machine running the tests. The unit tests add: a running install refused a second, and the
+next side started only once the first ends; a failed spawn, a closed split and a died one each
+freeing it, and the badge looking again after a doctor run in flight; the 80-column screens (two
+sides with a per-side line, and Windows without WSL with its reason, fix and the default side's
+note); a fix's `--where`. The headless test of a running install asserts the "still running"
+message, then (once the split finishes in the daemon) that one install split ran and each item
+installed once.
+
+**Decided by the builder:** the checklist surveys in the TUI's process like the CLI (a daemon may
+not exist yet, and WSL's side needs Windows' ptyro), not through `SetupPlan`; installs run as the
+CLI in a split rather than through `SetupRun`, which never runs admin steps (the owner's
+exception keeps those to the TUI and the CLI on the computer); `--confirmed` for the question
+already asked; `U` for `app.setup`; the catalog's `about` lines; `s` keeps the first run's other
+choices; the health badge opens it for missing agents and git now, before BOOT9 rewrites the
+doctor's lines.
