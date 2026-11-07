@@ -5,7 +5,7 @@
 //   E2E='{"bin":..,"env":{..},"config":..,"repo":..}' node web/test/e2e.mjs CHROME BASE CODE [scenario...]
 // A scenario that needs the server restarted prints "@@serve down" / "@@serve up" and waits for
 // a line on stdin from the Rust test.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -277,6 +277,20 @@ const scenarios = {
       await tab.waitFor("its report", text("1 installed. git and GitHub CLI are left for the computer"), 30_000);
       await tab.waitFor("the checklist after it", `[...document.querySelectorAll(".setup-here")].some(e => e.innerText.includes("Antigravity"))`, 30_000);
 
+      // Setup running from a terminal (the machine's lock, not the daemon's run): the page says
+      // who instead of offering Install, and offers it again on its own once that ends.
+      rmSync(go, { force: true });
+      const cli = spawn(E.bin, ["install", "opencode", "--yes"], { env: { ...process.env, ...E.env, PTYRO_TEST_SETUP: E.fake }, cwd: E.repo, stdio: "ignore" });
+      await until("the terminal's install to start", () => existsSync(join(E.env.PTYRO_HOME, "state", "setup.who")));
+      await fresh("#/setup");
+      await tab.waitFor("who is installing", text("Setup is already running on the computer (from `ptyro install`"), 30_000);
+      await tab.waitFor("no Install meanwhile", `[...document.querySelectorAll("button")].some(b => b.textContent === "Waiting for the other setup" && b.disabled)`);
+      writeFileSync(go, "");
+      await new Promise((ok) => cli.on("exit", ok));
+      await tab.waitFor("Install offered again", `!document.body.innerText.includes("Setup is already running") && [...document.querySelectorAll(".setup-here")].some(e => e.innerText.includes("OpenCode"))`, 30_000);
+      // (The fake machine forgets it, for the next step.)
+      rmSync(join(E.fake, "installed", "opencode"), { force: true });
+
       // Away and back: the page's connection drops mid-run (the server goes), the run ends
       // meanwhile, and the page, back, says so and shows the checklist as it is now.
       rmSync(go, { force: true });
@@ -285,8 +299,8 @@ const scenarios = {
       await hostOp("down");
       await tab.waitFor("the offline banner", `!!document.querySelector(".offline")`, 30_000);
       writeFileSync(go, "");
-      await until("the run to end in the daemon", () => readFileSync(join(E.fake, "calls.log"), "utf8").includes("install opencode") && existsSync(join(E.fake, "installed", "opencode")));
-      await sleep(500);
+      // The run has let go of the machine's lock (after its last event): nothing is running.
+      await until("the run to end in the daemon", () => existsSync(join(E.fake, "installed", "opencode")) && !existsSync(join(E.env.PTYRO_HOME, "state", "setup.who")));
       await hostOp("up");
       await tab.waitFor("the note that it finished away", text("It finished while this page was away"), 60_000);
       await tab.waitFor("the checklist as it is now", `[...document.querySelectorAll(".setup-here")].some(e => e.innerText.includes("OpenCode"))`, 30_000);

@@ -175,7 +175,7 @@ ptyro login --check                           # where each login stands, changin
   counts only what will run from the page, and the result says what was left for the computer.
 - **One install at a time on a machine**, whoever starts it: a second `ptyro install`, `ptyro
   setup`, TUI checklist or web install while one runs says "setup is already running (from …)"
-  and installs nothing. A web page opened while one is going (from another device, or before a
+  before you choose anything, and installs nothing. A web page opened while one is going (from another device, or before a
   reload) says so and shows its progress; one that was away while it ended says so too.
 - **In the TUI, it's the first thing you see.** The first `ptyro` on a new machine opens with the
   same checklist at the top of the first-run screen: Agents, Tools and Already here, each with a

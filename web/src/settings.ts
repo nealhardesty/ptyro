@@ -661,11 +661,15 @@ const setupPlan = new Cache<any>((key) => {
     // Asked again while this one was out (a run's first event, a reconnect): ask once more, as
     // this survey may be from before it.
     if (asks > at) setTimeout(askPlan, 0);
+    // Someone else's install (a terminal's, the TUI's) sends no events here: look again in a
+    // while, as long as the page is open, to offer Install once it's done.
+    if (r.held_by && !r.running && !heldTimer) heldTimer = window.setTimeout(() => { heldTimer = 0; if (location.hash.startsWith("#/setup")) askPlan(); }, 10_000);
     return r;
   });
 });
 let installKey = "";
 let asks = 0;
+let heldTimer = 0;
 /// Ask the daemon for the plan again (and what is running), keeping what is shown meanwhile.
 function askPlan(): void { asks++; setupPlan.refresh(installKey); }
 /// The run this page follows: its own, or one going already (BOOT3: one at a time, everywhere).
@@ -743,7 +747,9 @@ function installSection(): HTMLElement {
     installKey = side === "wsl" ? keyOf(mine, next(wsl)) : keyOf(next(mine), wsl);
     ui.render();
   };
-  const running = installRun.running || installRun.starting;
+  // Setup running on the computer, but not as the daemon's run (a terminal's, the TUI's).
+  const held: string | null = !installRun.running && !installRun.starting ? reply.held_by ?? null : null;
+  const running = installRun.running || installRun.starting || !!held;
   const all = plan.entries;
   const entryOn = (id: string, side: string): any => all.find((y: any) => y.id === id && y.side === side);
   const box = (e: any): HTMLElement => {
@@ -788,7 +794,9 @@ function installSection(): HTMLElement {
   const admin = adminSteps(plan);
   const waits = waitsForAdmin(plan);
   const wsl = wslText(plan.wsl);
-  const who = installRun.theirs
+  const who = held
+    ? `Setup is already running on the computer (from ${held}): Install waits until it's done, and this page looks again on its own.`
+    : installRun.theirs
     ? "Setup is already running on the computer (started from another window, device or before this page opened): its progress is below. The checklist opens again once it's done."
     : "Installing on the computer: its progress is below.";
   return section(title,
@@ -807,7 +815,7 @@ function installSection(): HTMLElement {
       h("p", { class: "sub" }, "Or in ptyro there: press the prefix (C-q unless you changed it), then U, for this checklist, which asks for the password once. ", h("code", {}, "ptyro setup"), " in a terminal does the same."),
       ...waits.map(([what, first]) => h("p", { class: "sub" }, `${what} needs ${first} first, so it's in that command too.`))) : null,
     bar(h("button", { class: "primary", title: tip("setup.install"), disabled: running || !steps.length, onclick: () => void startInstall(picked(mineSide), two ? picked("wsl") : null) },
-      running ? "Installing…" : steps.length ? `Install ${steps.length}` : "Nothing to install from here")),
+      held ? "Waiting for the other setup" : running ? "Installing…" : steps.length ? `Install ${steps.length}` : "Nothing to install from here")),
     installRun.lines.length ? h("pre", { class: "log" }, installRun.lines.join("\n")) : null,
     installRun.report ? h("p", { class: "sub setup-summary" }, installRun.summary()) : null);
 }

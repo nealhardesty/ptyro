@@ -59,6 +59,9 @@ pub struct Setup {
     pub want: Option<Vec<String>>,
     /// The side to tick on instead of the default (a health fix's `--where`).
     pub want_place: Option<Where>,
+    /// Setup is running already (the machine's lock, `setup::lock`): who holds it. ⏎ installs
+    /// nothing meanwhile, and the checklist says so.
+    pub busy: Option<String>,
 }
 
 /// The checklist's install, running (BOOT2): one split at a time, so two package managers, sudo
@@ -82,7 +85,7 @@ impl Default for Setup {
 
 impl Setup {
     pub fn looking(want: Option<Vec<String>>) -> Self {
-        Self { found: Found::Looking, col: 0, said: None, want, want_place: None }
+        Self { found: Found::Looking, col: 0, said: None, want, want_place: None, busy: None }
     }
 
     pub fn ready(&self) -> Option<&Ready> {
@@ -97,9 +100,18 @@ impl Setup {
         self.ready().map(|r| checklist::rows(&r.plan)).unwrap_or_default()
     }
 
-    /// How many steps ⏎ runs.
+    /// How many steps ⏎ runs (none while setup runs elsewhere).
     pub fn steps(&self) -> usize {
+        if self.busy.is_some() {
+            return 0;
+        }
         self.ready().map_or(0, |r| r.plan.steps().len())
+    }
+
+    /// Look at the machine's setup lock in `state` again; true when someone holds it.
+    pub fn check_busy(&mut self, state: &std::path::Path) -> bool {
+        self.busy = ptyro_agents::setup::lock::Lock::held_by(state);
+        self.busy.is_some()
     }
 
     /// The survey is in: tick the defaults (or what was asked for) on the default side.

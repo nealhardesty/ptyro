@@ -34,19 +34,37 @@ impl Lock {
                     std::fs::write(&who_path, format!("{who} (process {})", std::process::id()));
                 Ok(Self { _file: Some(file), who: who_path })
             }
-            Err(TryLockError::WouldBlock) => {
-                let by = std::fs::read_to_string(&who_path)
-                    .ok()
-                    .map(|s| s.trim().to_owned())
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| "another ptyro".to_owned());
-                Err(format!(
-                    "setup is already running (from {by}): wait for it to finish, then try again"
-                ))
-            }
+            Err(TryLockError::WouldBlock) => Err(busy(&holder(&who_path))),
             Err(TryLockError::Error(_)) => Ok(Self { _file: None, who: who_path }),
         }
     }
+
+    /// Who holds the lock in `state` now ("`ptyro install` (process 4242)"), without taking
+    /// it; `None` when it is free. For a checklist to say so before anyone ticks anything.
+    pub fn held_by(state: &Path) -> Option<String> {
+        let file = OpenOptions::new().write(true).open(state.join("setup.lock")).ok()?;
+        match file.try_lock() {
+            // Free: let go at once (closing the file does).
+            Ok(()) => None,
+            Err(TryLockError::WouldBlock) => Some(holder(&state.join("setup.who"))),
+            Err(TryLockError::Error(_)) => None,
+        }
+    }
+}
+
+/// What the holder wrote of itself. (A new holder writes it just after it locks, so for an
+/// instant a contender may read the one before, or nothing: cosmetic.)
+fn holder(who: &Path) -> String {
+    std::fs::read_to_string(who)
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "another ptyro".to_owned())
+}
+
+/// The refusal, as every client says it.
+pub fn busy(holder: &str) -> String {
+    format!("setup is already running (from {holder}): wait for it to finish, then try again")
 }
 
 impl Drop for Lock {
@@ -64,11 +82,16 @@ mod tests {
     #[test]
     fn a_second_holder_is_refused_and_told_who_then_free_again() {
         let dir = tempfile::tempdir().unwrap();
+        assert_eq!(Lock::held_by(dir.path()), None, "nothing yet");
         let first = Lock::take(dir.path(), "the web app").unwrap();
+        let by = Lock::held_by(dir.path()).unwrap();
+        assert!(by.starts_with("the web app (process "), "{by}");
+        assert!(Lock::take(dir.path(), "x").is_err(), "held_by took nothing");
         let err = Lock::take(dir.path(), "`ptyro install` in a terminal").unwrap_err();
         assert!(err.starts_with("setup is already running (from the web app (process "), "{err}");
         drop(first);
         assert!(!dir.path().join("setup.who").exists());
+        assert_eq!(Lock::held_by(dir.path()), None);
         let again = Lock::take(dir.path(), "`ptyro setup`").unwrap();
         drop(again);
     }

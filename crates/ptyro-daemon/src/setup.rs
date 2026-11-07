@@ -177,7 +177,13 @@ impl Daemon {
         let wsl_picks = wsl_picks.map(|p| ids(&p)).transpose()?;
         let (_, plan, lines) = plan_on(&self.paths, picks, wsl_picks).await?;
         let default_agent = ptyro_agents::default_agent(&self.config());
-        Ok(Reply::SetupPlan { plan, lines, default_agent, running: current() })
+        let running = current();
+        // Someone else's install (a terminal's, the TUI's): the page says so instead of offering
+        // one that would be refused. (While this daemon's own run is starting, before `CURRENT`
+        // names it, this says it is the web app's.)
+        let held_by =
+            if running.is_none() { setup::lock::Lock::held_by(&self.paths.state) } else { None };
+        Ok(Reply::SetupPlan { plan, lines, default_agent, running, held_by })
     }
 
     /// `SetupRun`: the plan now, its progress as `SetupProgress` events (this computer's side

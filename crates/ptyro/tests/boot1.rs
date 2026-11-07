@@ -357,12 +357,13 @@ async fn the_daemon_says_a_run_is_going_with_its_progress() {
     let d = TempDaemon::start_with_env(BIN, &[("PTYRO_TEST_SETUP", fake.as_str())]).unwrap();
     let mut c = d.client().await.unwrap();
     let plan_req = || Request::SetupPlan { picks: None, wsl_picks: None };
-    let Reply::SetupPlan { plan, lines, default_agent, running } =
+    let Reply::SetupPlan { plan, lines, default_agent, running, held_by } =
         c.request(plan_req()).await.unwrap()
     else {
         panic!("not a plan");
     };
     assert!(running.is_none());
+    assert!(held_by.is_none());
     assert_eq!(default_agent, "claude");
     assert_eq!(lines.len(), plan.entries.len());
     let line = |id: &str| lines.iter().find(|l| l.id == id).unwrap().clone();
@@ -475,10 +476,16 @@ fn two_installs_at_once_the_second_is_refused() {
     }
     let second = m.run(&["install", "opencode", "--yes"], "");
     let said = text(&second);
-    // (Written before `go` and read after: a wait that ran out would install it anyway.)
+    // Asked up front, before the checklist or a question.
+    let checklist = m.run(&["setup"], "");
+    let shown = text(&checklist);
+    // (Written before the asserts: a failing one would leave the first waiting a minute.)
     std::fs::write(m.fake().join("go"), "").unwrap();
     assert!(!second.status.success(), "{said}");
     assert!(said.contains("setup is already running (from `ptyro install` (process "), "{said}");
+    assert!(!checklist.status.success(), "{shown}");
+    assert!(shown.contains("setup is already running (from `ptyro install` (process "), "{shown}");
+    assert!(!shown.contains("Agents"), "no checklist walked: {shown}");
     let first = first.wait_with_output().unwrap();
     assert!(first.status.success(), "{}", text(&first));
     assert!(m.installed("antigravity").is_some());
@@ -486,6 +493,58 @@ fn two_installs_at_once_the_second_is_refused() {
     assert!(!m.calls().iter().any(|c| c.contains("opencode")), "{:?}", m.calls());
     let again = m.run(&["install", "opencode", "--yes"], "");
     assert!(again.status.success(), "free again: {}", text(&again));
+}
+
+/// The other way round: `ptyro install` in a terminal holds the machine's lock, so the daemon's
+/// plan says who (for the web page to say so up front), and its `SetupRun` is refused with it;
+/// once that install ends, both are free again.
+#[tokio::test]
+async fn the_daemon_says_and_refuses_while_a_terminal_installs() {
+    let m = Machine::new(fresh_linux(json!({ "outcomes": { "antigravity": "wait" } })));
+    let fake = m.fake().display().to_string();
+    let d = TempDaemon::start_with_env(BIN, &[("PTYRO_TEST_SETUP", fake.as_str())]).unwrap();
+    let first = d
+        .cmd()
+        .args(["install", "agy", "--yes"])
+        .env("PTYRO_TEST_SETUP", &fake)
+        .env("PTYRO_WSL", m.dir.path().join("no-wsl"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !m.calls().iter().any(|c| c.starts_with("install antigravity")) {
+        assert!(Instant::now() < deadline, "the install never started: {:?}", m.calls());
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let c = d.client().await.unwrap();
+    let plan_req = || Request::SetupPlan { picks: None, wsl_picks: None };
+    let Reply::SetupPlan { running, held_by, .. } = c.request(plan_req()).await.unwrap() else {
+        panic!("not a plan");
+    };
+    assert!(running.is_none(), "not the daemon's run");
+    let by = held_by.expect("who holds it");
+    assert!(by.starts_with("`ptyro install` (process "), "{by}");
+    let r = c.request(Request::SetupRun { picks: vec!["opencode".into()], wsl_picks: None }).await;
+    std::fs::write(m.fake().join("go"), "").unwrap();
+    let said = format!("{r:?}");
+    assert!(said.contains("setup is already running (from `ptyro install` (process "), "{said}");
+    let first = first.wait_with_output().unwrap();
+    assert!(first.status.success(), "{}", text(&first));
+    assert!(!m.calls().iter().any(|c| c.contains("opencode")), "{:?}", m.calls());
+    let Reply::SetupPlan { held_by, .. } = c.request(plan_req()).await.unwrap() else {
+        panic!("not a plan");
+    };
+    assert!(held_by.is_none(), "free again");
+    // A refused run doesn't keep the daemon's own flag: the next one starts.
+    let Reply::SetupStarted { .. } = c
+        .request(Request::SetupRun { picks: vec!["opencode".into()], wsl_picks: None })
+        .await
+        .unwrap()
+    else {
+        panic!("not started");
+    };
 }
 
 /// At a terminal, the rc file gets ptyro's line (the form `ptyro uninstall` takes out again), and

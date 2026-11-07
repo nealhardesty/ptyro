@@ -88,6 +88,7 @@ export class SetupLog {
     /// The plan the run runs (`SetupStarted`'s or `running.plan`), for its sides and its words.
     plan = null;
     lines = [];
+    /// Each side's report, as its `finished` said, with the side.
     reports = [];
     report = null;
     /// Events from before this page's own run said its id.
@@ -214,9 +215,9 @@ export class SetupLog {
         else if (ev.event === "blocked")
             this.line(`✗ ${at}${ev.id}: can't be installed here: ${ev.reason}\n  fix: ${ev.fix}`);
         else if (ev.event === "finished") {
-            this.reports.push(ev.report);
+            this.reports.push({ side: e.side ?? "local", report: ev.report });
             if (this.reports.length >= this.sides) {
-                const all = (k) => this.reports.flatMap((r) => r[k] ?? []);
+                const all = (k) => this.reports.flatMap((r) => r.report[k] ?? []);
                 this.report = { done: all("done"), failed: all("failed"), skipped: all("skipped"), blocked: all("blocked") };
                 return "done";
             }
@@ -224,14 +225,15 @@ export class SetupLog {
         return "";
     }
     /// The report in words: `2 installed, 1 failed. git and GitHub CLI are left for the computer
-    /// (they need administrator rights): run ptyro install git gh there.`
+    /// (administrator rights): run ptyro install git gh there.` What was left for the computer is
+    /// told apart by side and id: a skip on one side for another reason stays "not run".
     summary() {
         const r = this.report;
         if (!r)
             return "";
         const left = leftForComputer(this.plan);
-        const isLeft = (id) => left.some((e) => e.id === id);
-        const kept = r.skipped.filter((id) => isLeft(id));
+        const leftOn = (side, id) => left.find((e) => e.id === id && (e.side ?? "local") === side);
+        const kept = this.reports.flatMap(({ side, report }) => (report.skipped ?? []).map((id) => leftOn(side, id)).filter(Boolean));
         const parts = [`${r.done.length} installed`];
         if (r.failed.length)
             parts.push(`${r.failed.length} failed`);
@@ -242,7 +244,7 @@ export class SetupLog {
             parts.push(`${r.blocked.length} can't be installed here`);
         let text = `${parts.join(", ")}.`;
         if (kept.length) {
-            const names = [...new Set(kept.map((id) => left.find((e) => e.id === id)?.name ?? id))];
+            const names = [...new Set(kept.map((e) => e.name ?? e.id))];
             const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0];
             const cmds = adminSteps(this.plan).map((a) => a.command).join(" and ");
             text += ` ${list} ${names.length > 1 ? "are" : "is"} left for the computer (administrator rights): run ${cmds} there.`;

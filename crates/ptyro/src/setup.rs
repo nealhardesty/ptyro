@@ -198,6 +198,9 @@ pub async fn setup(ctx: &Ctx, a: SetupArgs) -> Result<i32, Error> {
             "`ptyro setup` is a checklist: run it in a terminal, or pass --yes (with --agents and --tools, or the defaults: Claude Code, Codex, git, GitHub CLI)",
         ));
     }
+    // Already running (the web's, another terminal's, the TUI's): say so before the checklist,
+    // and hold the machine's lock from here, so nothing starts while this one is asked.
+    let lock = if a.dry_run { None } else { Some(take_lock(ctx, "`ptyro setup`")?) };
     let (host, sides, place) = look(&ctx.paths, a.place.as_deref(), false).await?;
     let mut picks = if named { sides.picks(place, &ids) } else { sides.defaults(place) };
     if a.dry_run {
@@ -215,7 +218,7 @@ pub async fn setup(ctx: &Ctx, a: SetupArgs) -> Result<i32, Error> {
     }
     let plan = sides.plan(&picks);
     let admin = if a.yes { Admin::Silent } else { Admin::Ask };
-    go(ctx, &*host, &sides, &plan, admin, a.json, false, "`ptyro setup`")
+    go(ctx, &*host, &sides, &plan, admin, a.json, false, lock, "`ptyro setup`")
 }
 
 pub async fn install(ctx: &Ctx, a: InstallArgs) -> Result<i32, Error> {
@@ -247,6 +250,15 @@ pub async fn install(ctx: &Ctx, a: InstallArgs) -> Result<i32, Error> {
         ));
     }
     let quiet = asked.is_some();
+    let who = if quiet {
+        "`ptyro install`, for Windows' ptyro"
+    } else if a.confirmed {
+        "the TUI's setup checklist"
+    } else {
+        "`ptyro install`"
+    };
+    // Already running: say so before asking anything, and hold the lock from here.
+    let lock = if a.dry_run { None } else { Some(take_lock(ctx, who)?) };
     let (host, sides, place) = look(&ctx.paths, a.place.as_deref(), quiet).await?;
     let plan = sides.plan(&sides.picks(place, &ids));
     if a.dry_run {
@@ -264,19 +276,12 @@ pub async fn install(ctx: &Ctx, a: InstallArgs) -> Result<i32, Error> {
         }
     }
     let admin = asked.unwrap_or(if a.yes { Admin::Silent } else { Admin::Ask });
-    let who = if quiet {
-        "`ptyro install`, for Windows' ptyro"
-    } else if a.confirmed {
-        "the TUI's setup checklist"
-    } else {
-        "`ptyro install`"
-    };
-    go(ctx, &*host, &sides, &plan, admin, a.json, quiet, who)
+    go(ctx, &*host, &sides, &plan, admin, a.json, quiet, lock, who)
 }
 
 /// Run the plan with live output, side by side (this computer first, then WSL's), then what's
-/// next. `quiet`: run for Windows' ptyro, which says the rest itself. `who`: what holds the
-/// machine's setup lock meanwhile, for a second run to say (`setup::lock`).
+/// next. `quiet`: run for Windows' ptyro, which says the rest itself. `lock`: the machine's
+/// setup lock, held since before the questions; `None`, it is taken here for `who`.
 #[allow(clippy::too_many_arguments)]
 fn go(
     ctx: &Ctx,
@@ -286,6 +291,7 @@ fn go(
     admin: Admin,
     json: bool,
     quiet: bool,
+    lock: Option<setup::lock::Lock>,
     who: &str,
 ) -> Result<i32, Error> {
     let two = plan.sides().len() > 1;
@@ -312,7 +318,10 @@ fn go(
         return Ok(0);
     }
     // One install at a time on this machine, whoever starts it (the web's run takes it too).
-    let lock = setup::lock::Lock::take(&ctx.paths.state, who).map_err(Error::conflict)?;
+    let lock = match lock {
+        Some(l) => l,
+        None => take_lock(ctx, who)?,
+    };
     let names: BTreeMap<String, String> =
         plan.entries.iter().map(|e| (e.id.clone(), e.name.clone())).collect();
     let name = |id: &str| names.get(id).cloned().unwrap_or_else(|| id.to_owned());
@@ -369,6 +378,11 @@ fn go(
         logins(host, sides, plan, &reports, admin);
     }
     Ok(if total.ok() { 0 } else { 1 })
+}
+
+/// The machine's setup lock (`setup::lock`): one install at a time, whoever starts it.
+fn take_lock(ctx: &Ctx, who: &str) -> Result<setup::lock::Lock, Error> {
+    setup::lock::Lock::take(&ctx.paths.state, who).map_err(Error::conflict)
 }
 
 /// After the installs (BOOT4): each side's logins, walked through in this terminal when a person

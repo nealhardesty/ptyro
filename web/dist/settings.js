@@ -642,11 +642,17 @@ const setupPlan = new Cache((key) => {
         // this survey may be from before it.
         if (asks > at)
             setTimeout(askPlan, 0);
+        // Someone else's install (a terminal's, the TUI's) sends no events here: look again in a
+        // while, as long as the page is open, to offer Install once it's done.
+        if (r.held_by && !r.running && !heldTimer)
+            heldTimer = window.setTimeout(() => { heldTimer = 0; if (location.hash.startsWith("#/setup"))
+                askPlan(); }, 10_000);
         return r;
     });
 });
 let installKey = "";
 let asks = 0;
+let heldTimer = 0;
 /// Ask the daemon for the plan again (and what is running), keeping what is shown meanwhile.
 function askPlan() { asks++; setupPlan.refresh(installKey); }
 /// The run this page follows: its own, or one going already (BOOT3: one at a time, everywhere).
@@ -725,7 +731,9 @@ function installSection() {
         installKey = side === "wsl" ? keyOf(mine, next(wsl)) : keyOf(next(mine), wsl);
         ui.render();
     };
-    const running = installRun.running || installRun.starting;
+    // Setup running on the computer, but not as the daemon's run (a terminal's, the TUI's).
+    const held = !installRun.running && !installRun.starting ? reply.held_by ?? null : null;
+    const running = installRun.running || installRun.starting || !!held;
     const all = plan.entries;
     const entryOn = (id, side) => all.find((y) => y.id === id && y.side === side);
     const box = (e) => {
@@ -772,10 +780,12 @@ function installSection() {
     const admin = adminSteps(plan);
     const waits = waitsForAdmin(plan);
     const wsl = wslText(plan.wsl);
-    const who = installRun.theirs
-        ? "Setup is already running on the computer (started from another window, device or before this page opened): its progress is below. The checklist opens again once it's done."
-        : "Installing on the computer: its progress is below.";
-    return section(title, running ? h("p", { class: "banner setup-running", title: tip("setup.running") }, `⏳ ${who}`) : null, h("div", { title: tip(two ? "setup.where" : "setup.plan") }, two ? h("p", { class: "sub" }, `WSL's ${plan.wsl.distro} has ${plan.wsl.version}: tick an agent or tool under Windows, WSL, or both.`) : null, group("Agents", "agent"), group("Tools", "tool"), open.length ? null : h("p", { class: "sub" }, "Every agent and tool ptyro sets up is here already."), here.length ? h("div", { class: "setup-group" }, h("h4", {}, "Already here"), ...here.map(hereLine)) : null, wsl ? h("p", { class: "sub" }, wsl) : null), admin.length ? h("div", { class: "banner warn setup-admin", title: tip("setup.admin") }, h("b", {}, "Administrator rights are asked for only on the computer itself"), h("p", { class: "sub" }, "A password or a Windows prompt never goes through this page, so these aren't installed from here. On the computer, run:"), ...admin.map((a) => h("div", { class: "setup-cmd" }, h("code", {}, a.command), copyButton(a.command), h("small", {}, ` ${a.names.join(", ")}${two ? ` on ${sideName(a.side)}` : ""}: left for the computer`))), h("p", { class: "sub" }, "Or in ptyro there: press the prefix (C-q unless you changed it), then U, for this checklist, which asks for the password once. ", h("code", {}, "ptyro setup"), " in a terminal does the same."), ...waits.map(([what, first]) => h("p", { class: "sub" }, `${what} needs ${first} first, so it's in that command too.`))) : null, bar(h("button", { class: "primary", title: tip("setup.install"), disabled: running || !steps.length, onclick: () => void startInstall(picked(mineSide), two ? picked("wsl") : null) }, running ? "Installing…" : steps.length ? `Install ${steps.length}` : "Nothing to install from here")), installRun.lines.length ? h("pre", { class: "log" }, installRun.lines.join("\n")) : null, installRun.report ? h("p", { class: "sub setup-summary" }, installRun.summary()) : null);
+    const who = held
+        ? `Setup is already running on the computer (from ${held}): Install waits until it's done, and this page looks again on its own.`
+        : installRun.theirs
+            ? "Setup is already running on the computer (started from another window, device or before this page opened): its progress is below. The checklist opens again once it's done."
+            : "Installing on the computer: its progress is below.";
+    return section(title, running ? h("p", { class: "banner setup-running", title: tip("setup.running") }, `⏳ ${who}`) : null, h("div", { title: tip(two ? "setup.where" : "setup.plan") }, two ? h("p", { class: "sub" }, `WSL's ${plan.wsl.distro} has ${plan.wsl.version}: tick an agent or tool under Windows, WSL, or both.`) : null, group("Agents", "agent"), group("Tools", "tool"), open.length ? null : h("p", { class: "sub" }, "Every agent and tool ptyro sets up is here already."), here.length ? h("div", { class: "setup-group" }, h("h4", {}, "Already here"), ...here.map(hereLine)) : null, wsl ? h("p", { class: "sub" }, wsl) : null), admin.length ? h("div", { class: "banner warn setup-admin", title: tip("setup.admin") }, h("b", {}, "Administrator rights are asked for only on the computer itself"), h("p", { class: "sub" }, "A password or a Windows prompt never goes through this page, so these aren't installed from here. On the computer, run:"), ...admin.map((a) => h("div", { class: "setup-cmd" }, h("code", {}, a.command), copyButton(a.command), h("small", {}, ` ${a.names.join(", ")}${two ? ` on ${sideName(a.side)}` : ""}: left for the computer`))), h("p", { class: "sub" }, "Or in ptyro there: press the prefix (C-q unless you changed it), then U, for this checklist, which asks for the password once. ", h("code", {}, "ptyro setup"), " in a terminal does the same."), ...waits.map(([what, first]) => h("p", { class: "sub" }, `${what} needs ${first} first, so it's in that command too.`))) : null, bar(h("button", { class: "primary", title: tip("setup.install"), disabled: running || !steps.length, onclick: () => void startInstall(picked(mineSide), two ? picked("wsl") : null) }, held ? "Waiting for the other setup" : running ? "Installing…" : steps.length ? `Install ${steps.length}` : "Nothing to install from here")), installRun.lines.length ? h("pre", { class: "log" }, installRun.lines.join("\n")) : null, installRun.report ? h("p", { class: "sub setup-summary" }, installRun.summary()) : null);
 }
 async function startInstall(picks, wslPicks) {
     installRun.start();

@@ -1903,6 +1903,11 @@ pub enum Reply {
         /// client that didn't start it shows it instead of offering a second.
         #[serde(default)]
         running: Option<SetupRunning>,
+        /// Protocol 1.34: setup is running on this machine but not as this daemon's run (`ptyro
+        /// install` in a terminal, the TUI's checklist): who holds the machine's setup lock. A
+        /// `SetupRun` now would be refused.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        held_by: Option<String>,
     },
     /// A setup run started: `SetupProgress` events with this `run` follow.
     SetupStarted {

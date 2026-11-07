@@ -1089,8 +1089,9 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
 
 **[built BOOT3] Protocol 1.34** (additive): the web's setup checklist (§24.6). `Reply::SetupPlan`
 adds `lines` (each entry's words, `checklist::Line`: `about`, `how`, `why`, `state`, as the TUI
-says them), `default_agent`, and `running` (`SetupRunning{run, plan, events}`: the run going now
-and its latest 500 events, each `SetupLogged{seq, side, event}`); `DomainEvent::SetupProgress`
+says them), `default_agent`, `running` (`SetupRunning{run, plan, events}`: the run going now
+and its latest 500 events, each `SetupLogged{seq, side, event}`), and `held_by` (who holds the
+machine's setup lock when it isn't the daemon's run: a terminal's or the TUI's install); `DomainEvent::SetupProgress`
 adds `seq` (from 1 in its run). An older daemon sends none of them (no lines, nothing running,
 `seq` 0: every event counts); an older client ignores them.
 
@@ -9288,9 +9289,11 @@ at a time** (`setup_list::SetupRun`, `App::setup_tick`): the next side's split s
 before it ends, so two package managers, sudo and UAC prompts, or two sets of sign-ins never
 overlap. **While it runs, the checklist doesn't open again**: `U`, the palette's `app.setup` and
 `first.run`, and a health fix show the running split instead and say "setup is still running in
-<split>: the checklist opens again once it's done" (no second install beside the first, as the
-daemon's one-run guard is for the web). The guard is this TUI client's (`App::setup_run`): another
-TUI attached at the same time, or this one after a reattach, doesn't know of the split. A split
+<split>: the checklist opens again once it's done" (no second install beside the first). That
+guard is this TUI client's (`App::setup_run`): another TUI attached at the same time, or this one
+after a reattach, doesn't know of the split and opens the checklist; but the machine's setup lock
+(§24.6) is under every install, so that checklist says setup is already running (and from where)
+and ⏎ starts nothing, and the web's runs are refused the same way. A split
 is running from its spawn's reply on (it is in the session list from then); a failed spawn frees
 the checklist at once, and a split closed or ended (its session gone, or not live) frees it on the
 next tick, then the next side's starts. When the last split ends, the health badge looks again
@@ -9406,17 +9409,38 @@ ptyro install git gh there."
 guard is where every path meets: `ptyro_agents::setup::lock`, an exclusive lock on
 `<state>/setup.lock` (the operating system's, `File::try_lock`: `flock` on Unix, `LockFileEx` on
 Windows, so it is let go however the holder ends). `ptyro install` and `ptyro setup` take it
-around their installs (`go` in `crates/ptyro/src/setup.rs`; the logins after them run without
-it), so the TUI's splits, which run them, do too; the daemon's `SetupRun` takes it with its own
-flag (`Running`). The holder writes who it is to `<state>/setup.who` (a file of its own, since
+first, before the checklist is walked or `Install? [Y/n]` is asked (holding it across those
+questions), and keep it through their installs (`go` in `crates/ptyro/src/setup.rs`; the logins
+after them run without it; `--dry-run` takes none); the TUI's splits, which run them, do too.
+The daemon's `SetupRun` takes it with its own flag (`Running`). The holder writes who it is to `<state>/setup.who` (a file of its own, since
 Windows' locks keep others from reading the locked one): "`ptyro install`", "`ptyro setup`",
 "the TUI's setup checklist", "`ptyro install`, for Windows' ptyro", "the web app, through the
-daemon", each with its process id. A second run, from anywhere, stops before installing anything:
-"setup is already running (from the web app, through the daemon (process 4242)): wait for it to
-finish, then try again" (the CLI's error, exit 1; the web's toast, after which the page joins the
-run). Each machine side has its own: Windows' ptyro and WSL's keep their state apart, as their
-package managers are apart. A filesystem that can't lock doesn't stop an install (it goes ahead
-unguarded, as before).
+daemon", each with its process id. A second run on that machine side stops before installing
+anything there: "setup is already running (from the web app, through the daemon (process 4242)):
+wait for it to finish, then try again" (the CLI's error, exit 5, `conflict`; on the web a toast).
+Each machine side has its own: Windows' ptyro and WSL's keep their state apart, as their package
+managers are apart. So a run of both sides checks WSL's lock only when it gets to WSL's half (WSL's
+own `ptyro install` takes it): with WSL's held, Windows' half installs and WSL's is reported failed
+with that message. A filesystem that can't lock doesn't stop an install (it goes ahead unguarded,
+as before).
+
+**Said up front, everywhere.** Who holds it is asked before anyone chooses
+(`Lock::held_by`, which takes nothing: it tries the lock and lets go at once):
+- **the CLI** takes the lock before its checklist or question, so it refuses at once;
+- **the TUI's checklist** looks when the survey is in (`Setup::check_busy`): it says "setup is
+  already running on this computer (from …): ⏎ installs nothing now; open the checklist again
+  once it's done", ⏎ counts nothing, and ⏎ looks again before opening a split (a toast with the
+  refusal instead);
+- **the web**: `SetupPlan.held_by` (protocol 1.34) names a holder that isn't the daemon's own run
+  (while `running` is empty). The page says "Setup is already running on the computer (from
+  `ptyro install` (process 4242)): Install waits until it's done", disables the boxes and Install
+  ("Waiting for the other setup"), and asks again every 10 s while it is open (such a run sends it
+  no events), offering Install once it is free. When the daemon's own run is the holder, `running`
+  names it and the page joins it (below); a refused `SetupRun` asks for the plan, so the page then
+  shows either.
+
+The check takes the lock for an instant, so a run starting in that instant may be refused with a
+stale holder's name or "another ptyro": cosmetic and rare, and trying again works.
 
 **Following a run on the web.** The daemon's guard already refused a second `SetupRun`; a page
 that hadn't started the run didn't know of it. Now the daemon keeps the run
@@ -9460,12 +9484,16 @@ it. `checklist::lines` in `setup/tests.rs` (one side and two). The daemon, `boot
 plan with its events exactly as sent, numbered from 1; a second run refused, and `ptyro install`
 on the same machine refused with "from the web app, through the daemon"; gone after the report.
 `two_installs_at_once_the_second_is_refused` (`boot1.rs`): two CLI installs on the fake machine,
-the second refused saying `ptyro install`, nothing of it installed, the lock free afterwards;
-`setup::lock`'s own test. In a real browser (`make web-e2e`, `web/test/e2e.mjs`): the banner opening the page;
+the second refused saying `ptyro install`, `ptyro setup` refused before its checklist, nothing of
+them installed, the lock free afterwards; `the_daemon_says_and_refuses_while_a_terminal_installs`:
+a terminal's install named in `SetupPlan.held_by` and refusing the daemon's `SetupRun` (whose own
+flag is let go, so the next starts); the TUI's `the_setup_checklist_says_when_setup_runs_elsewhere`;
+`setup::lock`'s own test (`held_by` takes nothing). In a real browser (`make web-e2e`, `web/test/e2e.mjs`): the banner opening the page;
 Settings → Agents and tools with the TUI's lines, the admin command and the TUI's way, Install 2's
 report and Already here with the default agent; a page opened again while a run waits saying it is
-already running, with its lines and no second Install, then its report and Already here; then the
-server stopped mid-run, the run ending meanwhile, and the page, reconnected, saying it finished
+already running, with its lines and no second Install, then its report and Already here; a
+terminal's `ptyro install` named on the page with Install held back, then offered again once it
+ends; then the server stopped mid-run, the run ending meanwhile, and the page, reconnected, saying it finished
 away, with the checklist as it is now.
 
 **Decided by the builder:** the words travel with the plan (not a catalog in the web, nor rules

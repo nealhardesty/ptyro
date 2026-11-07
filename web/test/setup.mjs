@@ -132,6 +132,20 @@ const finished = (done = [], skipped = []) => ({ event: "finished", report: { do
   assert.equal(log.theirs, false);
 }
 
+// What is left for the computer is told apart by side: git skipped on Windows for another
+// reason is "not run"; git left on WSL is the computer's.
+{
+  const log = new SetupLog();
+  log.start();
+  log.started("rs", { entries: [
+    { id: "git", name: "git", side: "windows", ticked: true, action: { admin: false, after: [] } },
+    { id: "git", name: "git", side: "wsl", ticked: true, action: { admin: true, after: [] } },
+  ] });
+  log.event(ev("rs", 1, finished([], ["git"]), "windows"));
+  log.event(ev("rs", 2, finished([], ["git"]), "wsl"));
+  assert.equal(log.summary(), "0 installed, 1 not run. git is left for the computer (administrator rights): run ptyro install git --where wsl there.");
+}
+
 // Away and back (a phone's socket dropped): the run ended meanwhile. A plan asked for after the
 // run was known, saying nothing is going, ends it with a note; one asked for before it (a race
 // with this page's own start) changes nothing.
