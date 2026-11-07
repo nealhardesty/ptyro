@@ -98,6 +98,35 @@ async fn the_first_run_installs_the_ticked_in_a_split_then_walks_the_logins() {
     assert!(w.d.paths.config.join("config.toml").exists(), "the first run wrote its config");
 }
 
+/// While the first run's install still runs (Claude Code's installer is slow here), `U`
+/// doesn't open a second checklist or start a second install: it shows the split and says
+/// setup is still running. Each item installs once.
+#[tokio::test]
+async fn a_running_install_is_never_joined_by_a_second() {
+    let w = World::new(json!({
+        "installed": { "git": "2.43.0" },
+        "outcomes": { "claude": "slow" },
+    }));
+    let r = run(w
+        .tui()
+        .send_when("✓ git", "\\r")
+        .send_when("▸ Claude Code", "\\x11U")
+        .send_when("setup is still running", "\\x11U")
+        .until("More accounts"))
+    .await
+    .unwrap();
+    assert!(r.screen.contains("More accounts"), "{}", r.screen);
+    let installs: Vec<String> =
+        w.log("calls.log").into_iter().filter(|c| c.starts_with("install ")).collect();
+    for id in ["claude", "codex", "gh"] {
+        assert_eq!(
+            installs.iter().filter(|c| c.starts_with(&format!("install {id} "))).count(),
+            1,
+            "{id} installed once: {installs:?}"
+        );
+    }
+}
+
 /// Later, `U` opens the checklist alone (a config exists: no first run). What's here isn't
 /// offered; Space ticks Antigravity, ⏎ installs just it, and its sign-in runs since it was just
 /// installed. `s` (not now) closes it with nothing installed, saying how to come back.
@@ -111,10 +140,10 @@ async fn the_checklist_comes_back_on_its_key_and_installs_what_is_ticked() {
         .tui()
         .send_when("▾ main", "\\x11U")
         .send_when("[ ] Antigravity", "s")
-        .until("opens the setup checklist again"))
+        .until("opens the setup checklist"))
     .await
     .unwrap();
-    assert!(r.screen.contains("C-q U opens the setup checklist again"), "{}", r.screen);
+    assert!(r.screen.contains("C-q U opens the setup checklist"), "{}", r.screen);
     assert!(w.log("calls.log").is_empty(), "nothing ran");
     // Then Antigravity: the cursor starts on it, the first row.
     let r = run(w

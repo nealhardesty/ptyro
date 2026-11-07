@@ -9251,8 +9251,10 @@ Gemini CLI needs it", an outdated or too-old state, "can't here: …" for a bloc
 log in" for an item with a login. On Windows with a usable WSL each row has a cell per side
 (`Windows`, `WSL (Ubuntu)`: `[x] WinGet (admin)`, `[ ]`, `✓ 2.43.0`), the cursor's cell
 reversed, and a line under the row per side for what a cell can't say (why it can't, what needs
-it). Already here lists each item with its version and path (each side's on two), the default
-agent marked "your default agent". Then WSL's state when it is unusable or this is WSL, the
+it). Already here lists each item with its version and path (each side's, named, on two), the
+default agent marked "your default agent". It fits 80 columns: a cell is 26 wide (an ellipsis
+ends a longer one), and when the cells leave less than 30 columns beside them the row's line goes
+under it, indented, wrapped between parts like the rest. Then WSL's state when it is unusable or this is WSL, the
 default side's reason, and what the last tick said.
 
 **Keys:** `j`/`k` (arrows) move over the checklist's rows, then the first run's choices; `Space`
@@ -9271,19 +9273,30 @@ UAC), the tools-folder `PATH` offer, the logins walked one by one (Ctrl+C skips 
 `PROFILES_HINT` last. `--confirmed` (hidden, `ptyro install` only) skips the `Install? [Y/n]` the
 checklist already asked; nothing else changes. On Windows (`cli_actions::where_runs`): with this
 computer's daemon, the same picks on both sides are one `--where both`, different picks a split per
-side (`--where windows`, `--where wsl`); with WSL's daemon, WSL's side runs WSL's own ptyro in its
-split and Windows' this `ptyro.exe` through interop with `--where windows --tty`. Nothing ticked:
-the first run just finishes; alone, it says so and how to come back.
+side (`--where windows`, then `--where wsl`); with WSL's daemon, WSL's side runs WSL's own ptyro in
+its split and Windows' this `ptyro.exe` through interop with `--where windows --tty`. **One split
+at a time** (`setup_list::SetupRun`, `App::setup_tick`): the next side's split starts once the one
+before it ends, so two package managers, sudo and UAC prompts, or two sets of sign-ins never
+overlap. **While it runs, the checklist doesn't open again**: `U`, the palette's `app.setup` and
+`first.run`, and a health fix show the running split instead and say "setup is still running in
+<split>: the checklist opens again once it's done" (no second install beside the first, as the
+daemon's one-run guard is for the web). When the last split ends, the health badge looks again
+(`check_health`), so it stops offering what was just installed. Nothing ticked, still looking, `s`
+or Esc: nothing installs, and the first run's message (or, alone, the checklist's) ends with how
+to open it again (`C-q U opens the setup checklist (agents and tools) any time`).
 
 **Where it opens:**
 - **The first run** (no config): at the top of the first-run screen (`first.run` reopens the whole
   screen).
-- **`app.setup`**: `U` (after the prefix, and in the sidebar) and the palette: the checklist
-  alone (" Setup ", "Set up this computer: …"), which writes no config.
+- **`app.setup`**: `U` (after the prefix, and in the sidebar; in the prefix-pause menu as "set up
+  agents") and the palette: the checklist alone (" Setup ", "Set up this computer: …"), which writes no config.
 - **The health badge** (`M`): `health::Fix::Setup(names)` for a doctor line suggesting `` `ptyro
   setup` `` or `` `ptyro install NAME…` ``, an agent not found (`claude not found: …`, in
   `agents`), git not found, and "no agent found": ⏎ opens the checklist with those ticked (none:
-  the defaults). The doctor's own wording is BOOT9's.
+  the defaults), on the side a suggested `--where` names; flags' values are never names
+  (`--agents`/`--tools` lists are). With a daemon on another computer, the fix runs that
+  computer's `ptyro install <names> [--where …]` in a split (`ptyro setup` when it names none).
+  The doctor's own wording is BOOT9's.
 - **`ptyro init`** (the CLI): its agents step asks "open the setup checklist, to install agents
   and tools?" (yes by default when no agent is found) and runs `ptyro setup`'s checklist in that
   terminal, then carries on; never with `--yes` or `--dry-run`.
@@ -9296,9 +9309,13 @@ and footer count, Space on Gemini CLI ticking Node.js, ⏎'s `install` words and
 checklist alone and `s`); `health.rs` (which findings open it, with what ticked);
 `crates/ptyro/tests/boot2.rs`, `ptyro` in a PTY (`ptyro_testkit::headless`, `send_when`/`until`)
 on BOOT1's fake machine: the first run's ⏎ installing the defaults in a split with sudo asked once
-and each login, then the profiles line and the config; `C-q U` later, `s` installing nothing, and
+and each login, then the profiles line and the config; `C-q U` (twice) while that install runs
+saying setup is still running, each item installed once; `C-q U` later, `s` installing nothing, and
 Space then ⏎ installing only Antigravity (and its sign-in, just installed); `ptyro init` offering
-the checklist. UX1.19's tour test now leaves the first run with `s`, so it installs nothing.
+the checklist. UX1.19's tour test now leaves the first run with `s`, so it installs nothing, and
+both UX1.19 tests point `PTYRO_TEST_SETUP` at an empty fake machine, so the checklist never looks
+at the machine running the tests. The unit tests add: a running install refused a second, and the
+next side started only once the first ends; the 80-column two-sided screen; a fix's `--where`.
 
 **Decided by the builder:** the checklist surveys in the TUI's process like the CLI (a daemon may
 not exist yet, and WSL's side needs Windows' ptyro), not through `SetupPlan`; installs run as the

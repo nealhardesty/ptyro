@@ -827,6 +827,10 @@ pub struct App {
     pub health: crate::health::Health,
     /// The last `ptyro …` command run in a split (`run_cli`).
     pub last_cli: Option<Vec<String>>,
+    /// The name of the split that command runs in.
+    pub last_split: Option<String>,
+    /// The setup checklist's install running in a split, and what runs after it (BOOT2).
+    pub setup_run: Option<crate::setup_list::SetupRun>,
     /// Addresses drawn on screen this frame, for the terminal to make links (OSC 8, UX2.1).
     pub links: std::cell::RefCell<Vec<crate::about::Link>>,
     /// Where the pane headers' SHELLS strips were drawn this frame, for clicks (SPEC §23.6).
@@ -957,6 +961,8 @@ impl App {
             first_run: None,
             health: crate::health::Health::default(),
             last_cli: None,
+            last_split: None,
+            setup_run: None,
             links: std::cell::RefCell::new(Vec::new()),
             strip_hits: std::cell::RefCell::new(Vec::new()),
             alt_seen: false,
@@ -1536,6 +1542,7 @@ impl App {
             self.refresh_again();
         }
         self.health_tick(self.started);
+        self.setup_tick();
         self.sync_window();
     }
 
@@ -3331,7 +3338,7 @@ impl App {
                 );
             }
             "first.run" => self.open_first_run(),
-            "app.setup" => self.open_setup(None),
+            "app.setup" => self.open_setup(None, None),
             "toast.act" => match self.toast.take().and_then(|t| t.offer) {
                 Some(Offer { then: Then::Run(cmd), .. }) => self.run(&cmd),
                 Some(Offer { then: Then::Send(req, done), .. }) => {
@@ -8723,6 +8730,8 @@ mod tests {
         assert!(text.contains("[profiles.work]") && text.contains("\"desktop\""), "{text}");
         assert!(app.toast.as_ref().unwrap().text.contains("1 profile(s), 0 project(s)"));
         assert!(app.toast.as_ref().unwrap().text.contains("take the tour"));
+        // Still looking, so nothing installed: it says how to come back to the checklist.
+        assert!(app.toast.as_ref().unwrap().text.contains("C-q U opens the setup checklist"));
     }
 
     /// BOOT2: the setup checklist is the first part of the first run: Agents, Tools and Already
@@ -8786,6 +8795,70 @@ mod tests {
             "Node.js comes with Gemini CLI, as the CLI plans it"
         );
         assert!(Config::path(&app.paths).exists(), "the first run's config is written too");
+    }
+
+    /// BOOT2: while the checklist's install runs, `U` (or a health fix, or `first.run`) never
+    /// opens another: it says so. Each side's split starts once the one before it ends.
+    #[test]
+    fn a_running_setup_is_never_joined_by_a_second_and_sides_run_in_turn() {
+        let mut app = app();
+        let words = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        app.setup_run = Some(crate::setup_list::SetupRun {
+            split: "ptyro-install".into(),
+            seen: false,
+            started: std::time::Instant::now(),
+            queue: vec![(None, words(&["install", "codex", "--confirmed", "--where", "wsl"]))],
+        });
+        app.open_setup(None, None);
+        assert!(app.first_run.is_none(), "no second checklist");
+        assert!(app.last_cli.is_none(), "no second install");
+        assert!(
+            app.toast.as_ref().unwrap().text.contains("setup is still running in ptyro-install")
+        );
+        app.open_first_run();
+        assert!(app.first_run.is_none());
+        // Still starting (not in the list yet): it waits.
+        app.setup_tick();
+        assert!(app.last_cli.is_none());
+        // Seen, then gone: WSL's side starts now, and is the one running.
+        app.setup_run.as_mut().unwrap().seen = true;
+        app.setup_tick();
+        assert_eq!(
+            app.last_cli,
+            Some(words(&["install", "codex", "--confirmed", "--where", "wsl"]))
+        );
+        let run = app.setup_run.as_ref().expect("WSL's side runs");
+        assert!(run.queue.is_empty());
+        app.setup_run.as_mut().unwrap().seen = true;
+        app.setup_tick();
+        assert!(app.setup_run.is_none(), "done: the checklist can open again");
+    }
+
+    /// BOOT2: two sides fit an 80-column terminal: the cells beside the name, the line under it.
+    #[test]
+    fn a_two_sided_checklist_fits_80_columns() {
+        let mut app = app();
+        use crate::onboard::FirstRun;
+        app.first_run = Some(FirstRun {
+            setup: crate::setup_list::tests::two(),
+            only_setup: true,
+            ..FirstRun::default()
+        });
+        let shown = screen_at(&app, 80);
+        assert!(shown.contains("WSL (Ubuntu)"), "{shown}");
+        assert!(shown.contains("[x] the vendor's installer"), "{shown}");
+        assert!(shown.contains("then log in"), "{shown}");
+        // The box's lines (`│` at both edges): nothing runs into its right edge, where a cut
+        // line would end.
+        for line in shown.lines() {
+            let c: Vec<char> = line.chars().collect();
+            let Some(left) = c.iter().position(|ch| *ch == '│') else { continue };
+            let Some(right) = c.iter().rposition(|ch| *ch == '│').filter(|r| *r > left + 10)
+            else {
+                continue;
+            };
+            assert_eq!(c[right - 1], ' ', "cut off:\n{shown}");
+        }
     }
 
     /// BOOT2: `app.setup` (`U`) is the checklist alone; `s` (not now) installs nothing and says

@@ -57,6 +57,22 @@ pub struct Setup {
     pub said: Option<String>,
     /// What to tick instead of the defaults (a health fix for one agent), by item id.
     pub want: Option<Vec<String>>,
+    /// The side to tick on instead of the default (a health fix's `--where`).
+    pub want_place: Option<Where>,
+}
+
+/// The checklist's install, running (BOOT2): one split at a time, so two package managers, sudo
+/// prompts or sign-ins never overlap. While it runs, the checklist isn't opened again (its
+/// split is shown instead); once the last one ends, the health badge looks again.
+#[derive(Debug, Clone)]
+pub struct SetupRun {
+    /// The split running now (its session name).
+    pub split: String,
+    /// Seen alive in the session list (until then it may still be starting).
+    pub seen: bool,
+    pub started: std::time::Instant,
+    /// What runs after it, in order (Windows' side, then WSL's).
+    pub queue: Vec<Split>,
 }
 
 impl Default for Setup {
@@ -67,7 +83,7 @@ impl Default for Setup {
 
 impl Setup {
     pub fn looking(want: Option<Vec<String>>) -> Self {
-        Self { found: Found::Looking, col: 0, said: None, want }
+        Self { found: Found::Looking, col: 0, said: None, want, want_place: None }
     }
 
     pub fn ready(&self) -> Option<&Ready> {
@@ -89,6 +105,10 @@ impl Setup {
 
     /// The survey is in: tick the defaults (or what was asked for) on the default side.
     pub fn found(&mut self, sides: Sides, place: Where, note: Option<String>) {
+        let place = match self.want_place {
+            Some(p) if !sides.sides(p).is_empty() => p,
+            _ => place,
+        };
         let picks = match &self.want {
             Some(ids) => sides.picks(place, ids),
             None => sides.defaults(place),
@@ -119,7 +139,7 @@ impl Setup {
         }
     }
 
-    /// What ⏎ runs, one split each: `(the ptyro to run, None for the daemon's; its words)`.
+    /// What ⏎ runs, one split each, one after the other: `(the ptyro to run, None for the daemon's; its words)`.
     /// This computer's picks (Windows' on Windows) and WSL's go as `ptyro install … --confirmed`
     /// with `--where` as `cli_actions::where_runs` says (BOOT8); the same picks on both sides
     /// with this computer's daemon are one `--where both`. Err: Windows' ptyro can't be reached
@@ -359,6 +379,32 @@ pub(crate) mod tests {
         // Unticking Gemini CLI lets Node.js go.
         s.toggle(at(&s, "gemini"));
         assert!(!s.rows()[at(&s, "node")].ticked);
+    }
+
+    /// Windows with a usable WSL (Ubuntu), git on Windows, looked at; the defaults on Windows.
+    pub(crate) fn two() -> Setup {
+        let mut s = Setup::looking(None);
+        let wsl = survey(Platform::Wsl, &[], &["apt-get", "sudo", "curl"]);
+        let sides = Sides {
+            here: survey(Platform::WindowsX64, &[("git", "2.51.0")], &["winget", "curl"]),
+            side: Side::Windows,
+            wsl: Some(wsl),
+            status: Some(WslStatus::Usable { distro: "Ubuntu".into(), version: "0.0.63".into() }),
+        };
+        s.found(sides, Where::Windows, None);
+        s
+    }
+
+    #[test]
+    fn a_wanted_side_ticks_there() {
+        let mut s = Setup::looking(Some(vec!["gh".into()]));
+        s.want_place = Some(Where::Wsl);
+        let t = two();
+        let Found::Ready(r) = t.found else { panic!() };
+        s.found(r.sides, Where::Windows, None);
+        let r = s.ready().unwrap();
+        assert_eq!(r.picks.wsl, ["gh"]);
+        assert!(r.picks.here.is_empty());
     }
 
     #[test]
