@@ -353,6 +353,34 @@ const scenarios = {
       writeFileSync(world, JSON.stringify({ platform: "linux", programs: ["apt-get", "sudo"] }));
     }
   },
+
+  // Moves to the recommended installer (BOOT7): Claude Code and Codex installed with npm are rows
+  // offering the move; Keep npm keeps Claude Code (it goes to Already here, not offered again);
+  // Codex ticked moves: the vendor's installer, then npm's copy removed, "1 moved…".
+  async move() {
+    const world = join(E.fake, "world.json");
+    mkdirSync(join(E.fake, "installed"), { recursive: true });
+    writeFileSync(join(E.fake, "installed", "codex"), "0.162.1");
+    writeFileSync(world, JSON.stringify({ platform: "linux", programs: ["apt-get", "sudo"], other: { claude: "npm", codex: "npm" } }));
+    const text = (t) => `document.body.innerText.includes(${JSON.stringify(t)})`;
+    try {
+      await fresh("#/setup");
+      await tab.waitFor("Codex offered the move", `!!document.querySelector('input[aria-label="Codex"]') && ${text("installed with npm · move to the recommended installer?")}`, 30_000);
+      await tab.waitFor("Claude Code offered it too", `!!document.querySelector('input[aria-label="Claude Code"]')`);
+      await tab.eval(`[...document.querySelectorAll(".setup-item-row")].find(r => r.innerText.includes("Claude Code")).querySelector("button.setup-keep").click()`);
+      await tab.waitFor("Claude Code kept", `!document.querySelector('input[aria-label="Claude Code"]') && [...document.querySelectorAll(".setup-here")].some(e => e.innerText.includes("Claude Code"))`, 30_000);
+      await tab.eval(`document.querySelector('input[aria-label="Codex"]').click()`);
+      await tab.waitFor("Codex ticked", `[...document.querySelectorAll("button")].some(b => b.textContent === "Install 1" && !b.disabled)`, 30_000);
+      await tab.eval(`[...document.querySelectorAll("button")].find(b => b.textContent === "Install 1").click()`);
+      await tab.waitFor("its report", text("1 moved to the recommended installer."), 60_000);
+      await tab.waitFor("the new one first", text("fake vendor: install codex"));
+      await tab.waitFor("then npm's copy removed", text("fake npm: removed codex"));
+      await tab.waitFor("Codex here, the recommended way", `[...document.querySelectorAll(".setup-here")].some(e => e.innerText.includes("Codex"))`, 30_000);
+    } finally {
+      for (const f of ["installed/codex", "new/codex", "removed/codex"]) rmSync(join(E.fake, f), { force: true });
+      writeFileSync(world, JSON.stringify({ platform: "linux", programs: ["apt-get", "sudo"] }));
+    }
+  },
 };
 
 let failed = 0;

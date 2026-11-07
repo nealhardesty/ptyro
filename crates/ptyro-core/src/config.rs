@@ -607,6 +607,9 @@ pub struct Updates {
     pub check: UpdateCheck,
     /// Updates not to offer: an agent (`codex`, every version) or one version (`codex@0.170.0`).
     pub ignore: Vec<String>,
+    /// Agents kept the way they were installed (BOOT7: `codex`): the move to the vendor's
+    /// recommended installer isn't offered again, and they update the way they're installed.
+    pub keep_installer: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -630,6 +633,13 @@ impl Updates {
             {
                 return Err(format!(
                     "updates.ignore: {i:?} (an agent, like \"codex\", or one version of it, like \"codex@0.170.0\")"
+                ));
+            }
+        }
+        for k in &self.keep_installer {
+            if k.trim().is_empty() || k.contains(char::is_whitespace) || k.contains('@') {
+                return Err(format!(
+                    "updates.keep_installer: {k:?} (an agent's name, like \"codex\")"
                 ));
             }
         }

@@ -201,6 +201,22 @@ pub fn run(plan: &Plan, host: &dyn Host, admin: Admin, on: &mut dyn FnMut(Event)
         }) else {
             continue;
         };
+        // A move to the recommended installer (BOOT7): installed, confirmed, then the old removed.
+        if action.moving
+            && let Some(mv) = &e.moves
+        {
+            match super::moving::run(host, item, method, e, mv, plan.platform, on) {
+                Ok(version) => {
+                    on(Event::Done { id: e.id.clone(), version });
+                    report.done.push(e.id.clone());
+                }
+                Err((error, fix)) => {
+                    on(Event::Failed { id: e.id.clone(), error, fix, in_use: false });
+                    report.failed.push(e.id.clone());
+                }
+            }
+            continue;
+        }
         on(Event::Started {
             id: e.id.clone(),
             name: e.name.clone(),

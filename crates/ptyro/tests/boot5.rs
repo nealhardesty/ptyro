@@ -368,7 +368,7 @@ async fn the_daemon_looks_once_a_day_and_the_webs_update_runs_through_it() {
     let mut pushes = c.pushes();
     c.send(ClientMsg::WatchEvents).unwrap();
     let Reply::SetupStarted { run, .. } = c
-        .request(Request::SetupRun { picks: vec!["claude".into()], wsl_picks: None })
+        .request(Request::SetupRun { picks: vec!["claude".into()], wsl_picks: None, moves: vec![] })
         .await
         .unwrap()
     else {

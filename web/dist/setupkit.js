@@ -8,8 +8,9 @@ export function setupSides(plan) {
     const sides = new Set((plan?.entries ?? []).filter((e) => e.ticked && (e.action || e.blocked)).map((e) => e.side ?? "local"));
     return Math.max(1, sides.size);
 }
-/// Installed already, as wanted (the engine's `here_already`).
-export const isHere = (e) => e.state === "installed" || e.state === "other";
+/// Installed already, as wanted (the engine's `here_already`): one installed another way and
+/// offered the move to the recommended installer (BOOT7, `moves`) is a row to tick instead.
+export const isHere = (e) => e.state === "installed" || (e.state === "other" && !e.moves);
 /// No coding agent on any side (missing everywhere; an outdated one is still there): the
 /// first-run banner shows.
 export const noAgent = (plan) => !!plan?.entries?.length && !plan.entries.some((e) => e.kind === "agent" && e.state !== "missing");
@@ -241,11 +242,16 @@ export class SetupLog {
         const leftOn = (side, id) => left.find((e) => e.id === id && (e.side ?? "local") === side);
         const kept = this.reports.flatMap(({ side, report }) => (report.skipped ?? []).map((id) => leftOn(side, id)).filter(Boolean));
         // An outdated agent ticked (BOOT5) runs its update: said as updated.
-        const updated = this.reports.flatMap(({ side, report }) => (report.done ?? []).filter((id) => (this.plan?.entries ?? []).some((e) => e.id === id && (e.side ?? "local") === side && e.action?.update)));
-        const installed = r.done.length - updated.length;
-        const parts = installed || !updated.length ? [`${installed} installed`] : [];
+        const doneAs = (what) => this.reports.flatMap(({ side, report }) => (report.done ?? []).filter((id) => (this.plan?.entries ?? []).some((e) => e.id === id && (e.side ?? "local") === side && e.action && what(e.action))));
+        const updated = doneAs((a) => a.update);
+        // One installed another way, ticked (BOOT7): moved to the recommended installer.
+        const moved = doneAs((a) => a.moving);
+        const installed = r.done.length - updated.length - moved.length;
+        const parts = installed || (!updated.length && !moved.length) ? [`${installed} installed`] : [];
         if (updated.length)
             parts.push(`${updated.length} updated`);
+        if (moved.length)
+            parts.push(`${moved.length} moved to the recommended installer`);
         if (r.failed.length)
             parts.push(`${r.failed.length} failed`);
         const other = r.skipped.length - kept.length;
@@ -267,7 +273,25 @@ export function updateOffer(c) {
     const d = c.data;
     if (c.section !== "updates" || c.level !== "warn" || !d?.id || !d.program)
         return null;
-    return { id: d.id, program: d.program, name: d.name ?? d.id, latest: d.latest, version: d.version, command: d.command ?? null, admin: !!d.admin, path: d.path ?? null, managed: d.managed ?? null };
+    return { id: d.id, program: d.program, name: d.name ?? d.id, latest: d.latest, version: d.version, command: d.command ?? null, admin: !!d.admin, path: d.path ?? null, managed: d.managed ?? null, via: d.via ?? null };
+}
+/// How an installer is said (the engine's `Via::words`).
+export const VIA_WORDS = { vendor: "the vendor's installer", npm: "npm", brew: "Homebrew", winget: "WinGet", apt: "apt", dnf: "dnf", xcode: "Xcode's Command Line Tools", "node-dist": "nodejs.org's build" };
+export const viaWords = (v) => (v && VIA_WORDS[v]) || v || "its installer";
+export function moveOffer(c) {
+    const m = c.data?.move;
+    if (c.section !== "updates" || !m?.id || !m.program || !m.from || !m.to)
+        return null;
+    return { id: m.id, program: m.program, name: m.name ?? m.id, from: m.from, to: m.to, uninstall: m.uninstall ?? "", admin: !!m.admin, keeps: m.keeps ?? [] };
+}
+/// The moves a run asks for (BOOT7): the agents ticked where the move is offered, either side.
+export function movesOf(plan) {
+    return [...new Set((plan?.entries ?? []).filter((e) => e.picked && e.moves).map((e) => e.id))];
+}
+/// What a move says before it runs: what it installs, what it removes, and what stays.
+export function moveWords(m) {
+    const keeps = m.keeps.length ? `your settings and logins (${m.keeps.join(", ")}) stay` : "your settings and logins stay";
+    return `${m.name} is installed with ${viaWords(m.from)}. Moving it installs it through ${viaWords(m.to)}, the recommended way, checks the new one runs, and only then removes ${viaWords(m.from)}'s copy (${m.uninstall}); ${keeps}. If the new install fails, the old one stays as it was.`;
 }
 export function selfUpdate(o) {
     if (o.id !== "ptyro")

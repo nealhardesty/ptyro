@@ -53,6 +53,118 @@ pub struct Versions {
     /// that began before one doesn't write over what that one found after it (its survey may
     /// predate the change).
     pub generation: u64,
+    /// The agents installed another way that can move to the recommended installer (BOOT7), as
+    /// last worked out, kept ones included ([`Movable::kept`] says which a config keeps).
+    pub movable: Vec<Movable>,
+    /// The agents installed another way that can't be offered the move, and why (BOOT7: said by
+    /// `doctor`).
+    pub unmovable: Vec<Unmovable>,
+}
+
+/// An agent installed another way that isn't offered the move, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Unmovable {
+    pub id: String,
+    pub name: String,
+    pub via: Via,
+    pub why: String,
+}
+
+/// The agents a survey finds installed another way that can't move, with why.
+pub fn unmovable(survey: &Survey) -> Vec<Unmovable> {
+    let has = |p: &str| survey.programs.contains(p);
+    catalog::items()
+        .iter()
+        .filter(|i| i.kind == Kind::Agent)
+        .filter_map(|i| {
+            let state = survey.states.get(&i.id)?;
+            let State::Other { via, .. } = state else { return None };
+            let why = setup::not_offered(i, survey.platform, state, &has)?;
+            Some(Unmovable { id: i.id.clone(), name: i.name.clone(), via: *via, why })
+        })
+        .collect()
+}
+
+/// An agent installed another way, and the move to the recommended installer it is offered
+/// (BOOT7): what `doctor`, the health badge and the web's Health page offer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Movable {
+    pub id: String,
+    pub name: String,
+    /// What `ptyro install` takes (`codex`).
+    pub program: String,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(flatten)]
+    pub moving: setup::Moving,
+}
+
+impl Movable {
+    /// `Codex is installed with npm: `ptyro install codex` moves it to the vendor's installer
+    /// (…)`, the words every place shows.
+    pub fn finding(&self) -> String {
+        let admin = if self.moving.admin {
+            ", as administrator: in a terminal on the computer"
+        } else {
+            ""
+        };
+        format!(
+            "{} is installed with {}: `ptyro install {}` moves it to {}, the recommended way (it installs the new one, checks it runs, then runs `{}`{admin}; {}); to keep {}, add {} to updates.keep_installer",
+            self.name,
+            self.moving.from.words(),
+            self.program,
+            self.moving.to.words(),
+            self.moving.uninstall,
+            self.moving.keeps_words(),
+            self.moving.from.words(),
+            self.id
+        )
+    }
+
+    /// The config keeps it the way it is (`updates.keep_installer`).
+    pub fn kept(&self, cfg: &Updates) -> bool {
+        kept(cfg).contains(&self.id)
+    }
+}
+
+/// The agents `updates.keep_installer` keeps the way they're installed (BOOT7), as ids (names as
+/// people say them; one that names no agent keeps nothing, which `doctor` says).
+pub fn kept(cfg: &Updates) -> std::collections::BTreeSet<String> {
+    cfg.keep_installer
+        .iter()
+        .filter_map(|n| setup::resolve(n).ok())
+        .filter(|i| i.kind == Kind::Agent)
+        .map(|i| i.id.clone())
+        .collect()
+}
+
+/// What is installed, to plan with (the setup checklists, `ptyro install`, the web's): every row
+/// against the remembered newest versions ([`known`]), with this side's `updates.keep_installer`
+/// ([`setup::Survey::keep`], BOOT7).
+pub fn survey(host: &dyn Host, state: &Path, cfg: &Updates) -> Survey {
+    let mut s = setup::survey(host, &known(state, cfg));
+    s.keep = kept(cfg);
+    s
+}
+
+/// The agents a survey finds installed another way that can move (BOOT7), kept ones included.
+pub fn movable(survey: &Survey) -> Vec<Movable> {
+    let has = |p: &str| survey.programs.contains(p);
+    catalog::items()
+        .iter()
+        .filter(|i| i.kind == Kind::Agent)
+        .filter_map(|i| {
+            let state = survey.states.get(&i.id)?;
+            let moving = setup::offer(i, survey.platform, state, &Default::default(), &has)?;
+            Some(Movable {
+                id: i.id.clone(),
+                name: i.name.clone(),
+                program: i.program.clone(),
+                version: state.version().map(str::to_owned),
+                moving,
+            })
+        })
+        .collect()
 }
 
 /// An installed agent with a newer version out, and how it updates.
@@ -84,6 +196,10 @@ pub struct Outdated {
     /// doesn't update it; how it updates instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed: Option<String>,
+    /// Installed another way, and offered the move to the recommended installer (BOOT7), which
+    /// also brings it up to date; cleared for one `updates.keep_installer` keeps ([`offered`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub move_to: Option<Via>,
 }
 
 impl Outdated {
@@ -108,7 +224,18 @@ impl Outdated {
             (Some(c), true) => format!(" (it runs `{c}`, as administrator)"),
             (None, _) => format!(" (the vendor's page says how: {})", self.doc),
         };
-        format!("{}: `{}` updates it{how}", self.line(), self.fix())
+        let moving = match (self.via, self.move_to) {
+            (Some(from), Some(to)) => format!(
+                "; or `ptyro install {}` moves it from {} to {}, the recommended way (to keep {}, add {} to updates.keep_installer)",
+                self.program,
+                from.words(),
+                to.words(),
+                from.words(),
+                self.id
+            ),
+            _ => String::new(),
+        };
+        format!("{}: `{}` updates it{how}{moving}", self.line(), self.fix())
     }
 }
 
@@ -332,6 +459,10 @@ pub fn outdated(survey: &Survey) -> Vec<Outdated> {
             doc: item.doc.clone(),
             path: None,
             managed: None,
+            move_to: via.and_then(|_| {
+                let state = survey.states.get(&item.id)?;
+                setup::offer(item, platform, state, &Default::default(), &has).map(|m| m.to)
+            }),
         });
     }
     out
@@ -366,6 +497,8 @@ pub fn remember(
     let survey =
         if full { setup::survey(host, &latest) } else { setup::survey_agents(host, &latest) };
     let mut outdated = outdated(&survey);
+    let movable = movable(&survey);
+    let unmovable = unmovable(&survey);
     // ptyro itself (BOOT6): its binary's version against its newest release.
     outdated.extend(own::finding(&own::Install::here(), latest.get(own::ID).map(String::as_str)));
     let v = edit(state, |v| {
@@ -377,6 +510,8 @@ pub fn remember(
         if v.generation == since {
             v.surveyed = now;
             v.outdated = outdated;
+            v.movable = movable;
+            v.unmovable = unmovable;
         }
     });
     (v, survey)
@@ -414,13 +549,25 @@ pub fn ignored(ignore: &[String], o: &Outdated) -> bool {
     })
 }
 
-/// What to offer: the outdated agents `updates.ignore` doesn't skip; nothing with
+/// What to offer: the outdated agents `updates.ignore` doesn't skip, each offered the move to the
+/// recommended installer unless `updates.keep_installer` keeps it (BOOT7); nothing with
 /// `updates.check = "off"`.
-pub fn offered<'a>(v: &'a Versions, cfg: &Updates) -> Vec<&'a Outdated> {
+pub fn offered(v: &Versions, cfg: &Updates) -> Vec<Outdated> {
     if cfg.check == UpdateCheck::Off {
         return Vec::new();
     }
-    v.outdated.iter().filter(|o| !ignored(&cfg.ignore, o)).collect()
+    let keep = kept(cfg);
+    v.outdated
+        .iter()
+        .filter(|o| !ignored(&cfg.ignore, o))
+        .cloned()
+        .map(|mut o| {
+            if keep.contains(&o.id) {
+                o.move_to = None;
+            }
+            o
+        })
+        .collect()
 }
 
 /// The newest versions to plan with (the setup checklist, `ptyro install`, the web's): the
@@ -444,6 +591,7 @@ pub fn known(state: &Path, cfg: &Updates) -> BTreeMap<String, String> {
             doc: String::new(),
             path: None,
             managed: None,
+            move_to: None,
         };
         !ignored(&cfg.ignore, &probe)
     });
@@ -458,11 +606,8 @@ pub fn note(state: &Path, cfg: &Updates) -> Vec<Outdated> {
     }
     let mut said = Vec::new();
     edit(state, |v| {
-        let fresh: Vec<Outdated> = offered(v, cfg)
-            .into_iter()
-            .filter(|o| v.noted.get(&o.id) != Some(&o.latest))
-            .cloned()
-            .collect();
+        let fresh: Vec<Outdated> =
+            offered(v, cfg).into_iter().filter(|o| v.noted.get(&o.id) != Some(&o.latest)).collect();
         for o in &fresh {
             v.noted.insert(o.id.clone(), o.latest.clone());
         }
@@ -482,6 +627,13 @@ pub fn note_line(said: &[Outdated]) -> Option<String> {
     };
     match said {
         [] => None,
+        // Installed another way (BOOT7): the move is offered with it.
+        [one @ Outdated { via: Some(from), move_to: Some(to), .. }] => Some(format!(
+            "{} (installed with {}; the move to {} is offered too)",
+            one.line(),
+            from.words(),
+            to.words()
+        )),
         [one] => Some(one.line()),
         many => Some(format!(
             "{} {what}: {}",

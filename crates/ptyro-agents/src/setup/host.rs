@@ -23,6 +23,20 @@ pub struct Installed {
     pub path: Option<String>,
     /// How it was installed, when its folder says (npm's, Homebrew's, WinGet's).
     pub via: Option<Via>,
+    /// Its folder is an administrator's (a system npm prefix): removing it needs those rights.
+    pub system: bool,
+    /// npm's: the global prefix it was installed into (the folder above `lib/node_modules`; on
+    /// Windows above `node_modules`), so removing it acts there, not on npm's prefix of the
+    /// moment. `None` for one npm didn't put there (Bun's global folder).
+    pub prefix: Option<String>,
+    /// npm's copy that another tool's global store holds instead of an npm prefix (`bun`,
+    /// `mise`, `pnpm`, `asdf`): that tool removes it.
+    pub store: Option<String>,
+    /// The file found, as a bare path (`path` is for people, and may carry a label).
+    pub file: Option<String>,
+    /// Where that file really is (links followed): how a vendor installer's copy is known
+    /// ([`super::installed_by`]).
+    pub real: Option<String>,
 }
 
 /// Whether administrator rights can be had.
@@ -64,6 +78,19 @@ pub trait Host: Sync {
     fn has(&self, program: &str) -> bool;
     /// The item's program, found, and the version it prints.
     fn installed(&self, item: &Item) -> Option<Installed>;
+    /// Every copy of the item's program, in the order they're found (`PATH` first, then npm's,
+    /// nvm's and the vendors' folders), each with the version it prints (BOOT7: the new copy
+    /// after a move, and whether the old one still comes first).
+    fn copies(&self, item: &Item) -> Vec<Installed>;
+    /// Remove the copy `method` installed (an `others` row) with `command` (its `uninstall`, as
+    /// the plan wrote it), each line of output to `line`.
+    fn uninstall(
+        &self,
+        item: &Item,
+        method: &Method,
+        command: &str,
+        line: &mut dyn FnMut(&str),
+    ) -> Result<(), String>;
     /// The Node.js version apt or dnf would install.
     fn candidate(&self, via: Via) -> Option<String>;
     fn elevation(&self) -> Elevation;
@@ -336,14 +363,30 @@ impl Host for RealHost {
 
     fn installed(&self, item: &Item) -> Option<Installed> {
         let found = crate::locate::find(&item.program, &self.path().to_string_lossy())?;
-        let mut cmd = found.argv.clone();
-        cmd.extend(item.version.iter().skip(1).cloned());
-        let text = capture(&cmd, &self.env(), Duration::from_secs(15)).map(|(_, t)| t);
-        Some(Installed {
-            version: text.as_deref().and_then(Version::parse).map(|v| v.to_string()),
-            path: Some(found.describe()),
-            via: installed_via(&found.path),
-        })
+        Some(self.copy_of(item, &found))
+    }
+
+    fn copies(&self, item: &Item) -> Vec<Installed> {
+        crate::locate::find_all(&item.program, &self.path().to_string_lossy())
+            .iter()
+            .map(|f| self.copy_of(item, f))
+            .collect()
+    }
+
+    fn uninstall(
+        &self,
+        _item: &Item,
+        method: &Method,
+        command: &str,
+        line: &mut dyn FnMut(&str),
+    ) -> Result<(), String> {
+        let shell = method.shell.ok_or("the table names no shell for this")?;
+        let cmd = if cfg!(unix) && self.root() && !self.has("sudo") && command.contains("sudo ") {
+            format!("sudo() {{ \"$@\"; }}; {command}")
+        } else {
+            command.to_owned()
+        };
+        stream(&shell.argv(&cmd), &self.env(), line)
     }
 
     fn candidate(&self, via: Via) -> Option<String> {
@@ -446,6 +489,26 @@ impl Host for RealHost {
 }
 
 impl RealHost {
+    /// A found copy, with the version it prints and how it came, by where its file really is (a
+    /// link in `~/.npm-global/bin` or Homebrew's `bin` names npm's or Homebrew's folder).
+    fn copy_of(&self, item: &Item, found: &crate::locate::Found) -> Installed {
+        let mut cmd = found.argv.clone();
+        cmd.extend(item.version.iter().skip(1).cloned());
+        let text = capture(&cmd, &self.env(), Duration::from_secs(15)).map(|(_, t)| t);
+        let real = ptyro_core::os::canonicalize(&found.path).unwrap_or_else(|_| found.path.clone());
+        let via = installed_via(&real).or_else(|| installed_via(&found.path));
+        Installed {
+            version: text.as_deref().and_then(Version::parse).map(|v| v.to_string()),
+            path: Some(found.describe()),
+            via,
+            system: via.is_some() && real.parent().is_some_and(admins_folder),
+            prefix: (via == Some(Via::Npm)).then(|| npm_prefix(&real)).flatten(),
+            store: (via == Some(Via::Npm)).then(|| npm_store(&real)).flatten().map(str::to_owned),
+            file: Some(found.path.to_string_lossy().into_owned()),
+            real: Some(real.to_string_lossy().into_owned()),
+        }
+    }
+
     /// [`Host::latest_reply`]: curl, 5 s to connect (a dead network fails fast), 10 s in all.
     fn reply(&self, url: &str) -> Result<String, String> {
         let words = argv(&["curl", "-fsSL", "--connect-timeout", "5", "--max-time", "10", url]);
@@ -470,12 +533,16 @@ fn argv(words: &[&str]) -> Vec<String> {
     words.iter().map(|w| (*w).to_owned()).collect()
 }
 
-/// How a program was installed, by the folder it is in.
-fn installed_via(path: &Path) -> Option<Via> {
+/// How a program was installed, by the folder it is in. A Homebrew keg first: Homebrew's
+/// Gemini CLI is an npm install inside its keg (`Cellar/gemini-cli/…/node_modules`), and is
+/// Homebrew's; npm with Homebrew's Node.js (`homebrew/lib/node_modules`) is npm's.
+pub(super) fn installed_via(path: &Path) -> Option<Via> {
     let p = path.to_string_lossy().replace('\\', "/").to_ascii_lowercase();
-    if p.contains("/node_modules/") || p.contains("/npm/") || p.contains("/_npx/") {
+    if p.contains("/cellar/") || p.contains("/caskroom/") {
+        Some(Via::Brew)
+    } else if p.contains("/node_modules/") || p.contains("/npm/") || p.contains("/_npx/") {
         Some(Via::Npm)
-    } else if p.contains("/cellar/") || p.contains("/caskroom/") || p.contains("/homebrew/") {
+    } else if p.contains("/homebrew/") {
         Some(Via::Brew)
     } else if p.contains("/winget/") {
         Some(Via::Winget)
@@ -494,6 +561,60 @@ pub(super) fn package_version(out: &str, field: &str) -> Option<String> {
     let value = value.split_once(':').map_or(value.as_str(), |(_, v)| v);
     let upstream = value.split(['+', '~', '-']).next()?;
     Version::parse(upstream).map(|v| v.to_string())
+}
+
+/// npm's global prefix for a file it installed: the folder above `lib/node_modules` (Windows:
+/// above `node_modules`, `%APPDATA%\npm`). `None` for Bun's global folder (`~/.bun/…`, which npm
+/// doesn't manage) or a path not under a prefix.
+pub(super) fn npm_prefix(real: &Path) -> Option<String> {
+    npm_prefix_on(real, cfg!(windows))
+}
+
+/// Another tool's global store holding a node package (`bun`, `mise`'s `npm:` backend, `pnpm`,
+/// an asdf plugin's): not an npm prefix, and that tool removes it. A Node.js that mise or asdf
+/// installed (`mise/installs/node/22`, `.asdf/installs/nodejs/22`) is a real npm prefix.
+pub(super) fn npm_store(real: &Path) -> Option<&'static str> {
+    let lower = real.to_string_lossy().replace('\\', "/").to_ascii_lowercase();
+    if lower.contains("/.bun/") {
+        Some("bun")
+    } else if lower.contains("/mise/installs/npm-") {
+        Some("mise")
+    } else if lower.contains("/pnpm/global/") || lower.contains("/.local/share/pnpm/") {
+        Some("pnpm")
+    } else if lower.contains("/.asdf/installs/") && !lower.contains("/.asdf/installs/nodejs/") {
+        Some("asdf")
+    } else {
+        None
+    }
+}
+
+/// [`npm_prefix`] for a platform's layout: Windows' prefix holds `node_modules` itself, elsewhere
+/// it is `lib/node_modules`. Another tool's store ([`npm_store`]) is no prefix.
+pub(super) fn npm_prefix_on(real: &Path, windows: bool) -> Option<String> {
+    let s = real.to_string_lossy();
+    let norm = s.replace('\\', "/");
+    if npm_store(real).is_some() {
+        return None;
+    }
+    let cut = if windows { norm.find("/node_modules/")? } else { norm.find("/lib/node_modules/")? };
+    Some(s[..cut].to_owned())
+}
+
+/// `dir` is an administrator's (BOOT7: a system npm prefix), by its owner and mode, without
+/// writing in it: neither this user's nor writable by everyone. Windows: never (npm's prefix is
+/// the user's own, and WinGet's uninstaller raises its own prompt).
+fn admins_folder(dir: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let Ok(m) = std::fs::metadata(dir) else { return false };
+        Some(m.uid()) != ptyro_core::os::uid() && m.mode() & 0o002 == 0
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+        false
+    }
 }
 
 /// The user can write in `dir`.

@@ -1051,6 +1051,21 @@ script or a third-party write-up; [U] = nothing documents it.
   `opencode.ai/v2/install`) is beta and its server API breaks v1 integrations [S:
   v2.opencode.ai/docs/migrate-v1, third-party]; OpenCode 1 and 2 share the `opencode` command
   [V docs.opencode.ai] (R-BOOT-03).
+- **Moving between installers (BOOT7, checked 2026-11-07):** settings and logins live in the
+  home, which no installer touches, so moving an agent from npm, Homebrew or WinGet to the vendor's
+  installer keeps them. Claude Code: `~/.claude`, `~/.claude.json`; its docs uninstall each method
+  (`npm uninstall -g @anthropic-ai/claude-code`, `brew uninstall --cask claude-code`, `winget
+  uninstall Anthropic.ClaudeCode`) and remove the configuration in a separate, warned step [V
+  code.claude.com/docs/en/setup]; "if `claude` still runs afterward, you likely have a second
+  installation" [V]. Codex: `~/.codex/config.toml` [V learn.chatgpt.com config-basic]; `auth.json`
+  in `CODEX_HOME` [S: the binary, SPEC §10.10]; npm's and Homebrew's uninstall forms are those
+  tools' own [S]. Where the vendors' installers put the copy: Claude Code `~/.local/bin/claude`
+  linking into `~/.local/share/claude/versions/` [V setup page]; Codex `~/.local/bin/codex`
+  linking into `$CODEX_HOME/packages/standalone/current/…`, on Windows a junction from
+  `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` into the same tree [S 2026-11-07: the vendor's scripts install.sh and
+  install.ps1]. Gemini CLI `~/.gemini` [S]; OpenCode `~/.config/opencode`, auth under
+  `~/.local/share/opencode` [S: the docs name neither]. Facts in SPEC §20.15; the table's `keeps`
+  and `uninstall`.
 - **WinGet packages present (winget-pkgs, 2026-11-06):** `Anthropic.ClaudeCode` 2.1.317,
   `OpenAI.Codex` 0.166.0, `Git.Git` 2.56.0.4, `GitHub.cli` 2.103.3, `OpenJS.NodeJS.LTS` 26.13.0 [V].
 
@@ -3108,7 +3123,7 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 
 | ID | Idea | Seen in | Fit | Size | Pri | Status |
 |---|---|---|---|---|---|---|
-| R-BOOT-01 | **Bootstrap a new machine from the ptyro binary**: a setup checklist (agents, git, gh, prerequisites like Node.js, their logins), the same any time later, WSL and/or Windows sides; agents and ptyro itself checked daily for new versions, each offered as a one-step update; ptyro downloads, verifies, installs and live-upgrades itself | owner (2026-11-06); vendors' own installers (Claude's native installer, Codex's and Antigravity's installers, npm) [V 2026-11-06, BOOT0: segment G18] | BOOT | L | ★★★ | → BOOT (design: docs/superpowers/specs/2026-11-06-bootstrap-agents-design.md) |
+| R-BOOT-01 | **Bootstrap a new machine from the ptyro binary**: a setup checklist (agents, git, gh, prerequisites like Node.js, their logins), the same any time later, WSL and/or Windows sides; agents and ptyro itself checked daily for new versions, each offered as a one-step update; ptyro downloads, verifies, installs and live-upgrades itself; an agent installed another way offered the move to the recommended installer (BOOT7, 2026-11-07) | owner (2026-11-06); vendors' own installers (Claude's native installer, Codex's and Antigravity's installers, npm) [V 2026-11-06, BOOT0: segment G18] | BOOT | L | ★★★ | → BOOT (design: docs/superpowers/specs/2026-11-06-bootstrap-agents-design.md) |
 | R-BOOT-02 | **Gemini CLI vs Antigravity:** since 2026-06-18 Google's consumer agent is Antigravity CLI (`agy`); Gemini CLI still serves paid Gemini API keys and some enterprise licences (Google's pages disagree on which) [V 2026-11-06: developers.googleblog.com, geminicli.com]. Setup lists both, Gemini CLI labelled for API-key users; "no agent found" messages name Antigravity for Google | Google | BOOT | S | ★★ | → BOOT |
 | R-BOOT-03 | **OpenCode 2's new server API:** OpenCode 2 (`@opencode/cli`, beta) breaks the v1 server API ptyro's OpenCode adapter speaks (SPEC §8.6), and shares the `opencode` command. BOOT0 installs OpenCode 1 (`opencode-ai`); the adapter needs a v2 driver before setup can offer v2 [S 2026-11-06: v2.opencode.ai/docs/migrate-v1; V: docs.opencode.ai] | anomalyco | BOOT, M4.9 | M | ★★ | candidate (BOOT0 pinned v1) |
 

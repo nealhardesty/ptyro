@@ -11,6 +11,11 @@
 //! | `stored-path` | folders installers "added to the registry's Path", one per line (written) |
 //! | `logged-in/<id>` | an item logged in since (written by the fake login, BOOT4) |
 //! | `logins.log` | each login run and each status asked, one per line (written) |
+//! | `new/<id>` | an item installed the recommended way beside its `other` copy (a move, BOOT7) |
+//! | `removed/<id>` | its `other` copy removed (a move's uninstall) |
+//!
+//! An item with an `other` installer has two copies once a move installs the new one: the old
+//! comes first (as an npm prefix early on `PATH` would) until it is removed.
 //!
 //! A login runs `ptyro fake-installer login ID` in the person's terminal: it prints a device
 //! code as a real one would and "logs in" by writing `logged-in/<id>`. A status command is
@@ -28,7 +33,7 @@ use ptyro_core::paths::Paths;
 use serde::Deserialize;
 
 use super::host::{Elevation, Host, Installed, Step, stream};
-use crate::catalog::{Item, Platform, Via};
+use crate::catalog::{Item, Method, Platform, Via};
 
 /// `world.json`. Every field is optional.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -68,6 +73,21 @@ pub struct World {
     /// out: a failure, or Ctrl+C), `nothing` (exits 0, still logged out: the person closed the
     /// page) or `slow` (the code, then two seconds before it logs in: time for a test's Ctrl+C).
     pub logins: BTreeMap<String, String>,
+    /// Items whose `other` copy is in an administrator's folder (a system npm prefix, BOOT7).
+    pub system: Vec<String>,
+    /// Per item, what removing its `other` copy does (BOOT7): `ok` (default), `fail` (exits 1,
+    /// the copy stays), `leftover` (exits 0, but the copy stays: npm acting on another prefix) or
+    /// `both` (removes the new copy too, as a shared bin folder would).
+    pub uninstalls: BTreeMap<String, String>,
+    /// Per item, a second copy of its `other` installer, elsewhere on `PATH` ahead of the new one
+    /// (another npm prefix): never removed by a move.
+    pub second: Vec<String>,
+    /// Per item, a copy from a third installer (`{"codex": "brew"}`), after the new one.
+    pub third: BTreeMap<String, Via>,
+    /// Items whose npm copy is in no npm prefix (Bun's global folder): no move is offered.
+    pub no_prefix: Vec<String>,
+    /// Items with a copy from an installer nothing classifies (Nix's store), last on `PATH`.
+    pub unknown: Vec<String>,
 }
 
 impl World {
@@ -107,6 +127,11 @@ impl FakeHost {
         Self { dir, world, used: AtomicBool::new(false), path: Mutex::new(path), dirs }
     }
 
+    /// A copy's file, under the fake's folder.
+    fn file(&self, kind: &str, item: &Item) -> String {
+        self.dir.join(kind).join(&item.program).display().to_string()
+    }
+
     fn version_of(&self, id: &str) -> Option<String> {
         std::fs::read_to_string(self.dir.join("installed").join(id))
             .ok()
@@ -129,12 +154,120 @@ impl Host for FakeHost {
     }
 
     fn installed(&self, item: &Item) -> Option<Installed> {
-        let version = self.version_of(&item.id)?;
-        Some(Installed {
-            version: Some(version).filter(|v| !v.is_empty()),
-            path: Some(format!("(fake) {}", item.program)),
-            via: self.world.other.get(&item.id).copied(),
-        })
+        self.copies(item).into_iter().next()
+    }
+
+    fn copies(&self, item: &Item) -> Vec<Installed> {
+        let id = &item.id;
+        let via = self.world.other.get(id).copied();
+        let mut out = Vec::new();
+        if let Some(version) = self.version_of(id)
+            && !self.dir.join("removed").join(id).exists()
+        {
+            out.push(Installed {
+                version: Some(version).filter(|v| !v.is_empty()),
+                path: Some(match via {
+                    Some(v) => format!("(fake {}) {}", v.name(), item.program),
+                    None => format!("(fake) {}", item.program),
+                }),
+                via,
+                system: via.is_some() && self.world.system.contains(id),
+                prefix: (via == Some(Via::Npm) && !self.world.no_prefix.contains(id))
+                    .then(|| self.dir.join("npm-prefix").display().to_string()),
+                store: self.world.no_prefix.contains(id).then(|| "bun".to_owned()),
+                file: Some(self.file("old-bin", item)),
+                real: Some(self.file("old-bin", item)),
+            });
+        }
+        if self.world.second.contains(id)
+            && let Some(version) = self.version_of(id)
+        {
+            out.push(Installed {
+                version: Some(version).filter(|v| !v.is_empty()),
+                path: Some(format!("(fake second) {}", item.program)),
+                via,
+                system: false,
+                prefix: None,
+                store: None,
+                file: Some(self.file("second-bin", item)),
+                real: Some(self.file("second-bin", item)),
+            });
+        }
+        if via.is_some()
+            && let Ok(v) = std::fs::read_to_string(self.dir.join("new").join(id))
+        {
+            // Where the recommended method puts it: a vendor installer's own place, else that
+            // package manager's.
+            let m = item.method(self.platform(), |_| true);
+            let (via, file) = match m {
+                Some(m) if m.via != Via::Vendor => (Some(m.via), self.file("new-bin", item)),
+                Some(m) => {
+                    let place = m.places.iter().find_map(|p| super::expand_place(p));
+                    let place = place.unwrap_or_else(|| self.file("new-bin", item));
+                    (None, std::path::Path::new(&place).join(&item.program).display().to_string())
+                }
+                None => (None, self.file("new-bin", item)),
+            };
+            out.push(Installed {
+                version: Some(v.trim().to_owned()).filter(|v| !v.is_empty()),
+                path: Some(format!("(fake) {}", item.program)),
+                via,
+                system: false,
+                prefix: None,
+                store: None,
+                file: Some(file.clone()),
+                real: Some(file),
+            });
+        }
+        if let Some(t) = self.world.third.get(id) {
+            out.push(Installed {
+                version: Some("0.1.0".into()),
+                path: Some(format!("(fake {}) {}", t.name(), item.program)),
+                via: Some(*t),
+                system: false,
+                prefix: None,
+                store: None,
+                file: Some(self.file("third-bin", item)),
+                real: Some(self.file("third-bin", item)),
+            });
+        }
+        // An installer nothing classifies (Nix): no package manager's folder, nor the vendor's.
+        if self.world.unknown.contains(id) {
+            let file = format!("/nix/store/fake-{id}/bin/{}", item.program);
+            out.push(Installed {
+                version: Some("0.1.0".into()),
+                path: Some(format!("(fake nix) {}", item.program)),
+                via: None,
+                system: false,
+                prefix: None,
+                store: None,
+                file: Some(file.clone()),
+                real: Some(file),
+            });
+        }
+        out
+    }
+
+    fn uninstall(
+        &self,
+        item: &Item,
+        method: &Method,
+        command: &str,
+        line: &mut dyn FnMut(&str),
+    ) -> Result<(), String> {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let admin = self.world.system.contains(&item.id);
+        let argv = vec![
+            exe.to_string_lossy().into_owned(),
+            "fake-installer".to_owned(),
+            item.id.clone(),
+            method.via.name().to_owned(),
+            "uninstall".to_owned(),
+            admin.to_string(),
+            command.to_owned(),
+        ];
+        let env = [("PTYRO_TEST_SETUP".into(), self.dir.clone().into_os_string())];
+        stream(&argv, &env, line)
     }
 
     fn candidate(&self, via: Via) -> Option<String> {
@@ -233,12 +366,20 @@ pub fn installer(args: &[String]) -> i32 {
     {
         return fake_login(&dir, id);
     }
-    let [id, via, what, admin] = args else {
-        eprintln!("fake-installer: expected ID VIA install|update ADMIN");
-        return 2;
+    let (id, via, what, admin, command) = match args {
+        [id, via, what, admin] => (id, via, what, admin, None),
+        [id, via, what, admin, command] => (id, via, what, admin, Some(command)),
+        _ => {
+            eprintln!("fake-installer: expected ID VIA install|update|uninstall ADMIN [COMMAND]");
+            return 2;
+        }
     };
     let world = World::read(&dir);
     log(&dir, &format!("{what} {id} via {via} admin={admin}"));
+    if what == "uninstall" {
+        log_to(&dir, "uninstall.log", command.map_or("", String::as_str));
+        return fake_uninstall(&dir, &world, id, via);
+    }
     let outcome = world.outcomes.get(id).map_or("ok", String::as_str);
     println!("fake {via}: {what} {id}");
     if let Some(need) = world.path_needs.get(id) {
@@ -262,6 +403,14 @@ pub fn installer(args: &[String]) -> i32 {
             );
             return 1;
         }
+        // Installs once; every install after fails (a reinstall that doesn't take).
+        "once" if dir.join(format!("once-{id}")).exists() => {
+            eprintln!("fake {via}: E: could not reach the server for {id}");
+            return 1;
+        }
+        "once" => {
+            let _ = std::fs::write(dir.join(format!("once-{id}")), "");
+        }
         "slow" => {
             for n in 1..=3 {
                 println!("fake {via}: step {n} of 3");
@@ -282,7 +431,10 @@ pub fn installer(args: &[String]) -> i32 {
     if outcome != "quiet" {
         let default = if id == "node" { "26.13.0" } else { "1.0.0" };
         let v = world.versions.get(id).map_or(default, String::as_str);
-        let d = dir.join("installed");
+        // Installed the recommended way beside a copy that came another way: a second copy (a
+        // move, BOOT7); else the item's one copy.
+        let beside = what == "install" && world.other.get(id).is_some_and(|o| o.name() != via);
+        let d = dir.join(if beside { "new" } else { "installed" });
         let _ = std::fs::create_dir_all(&d);
         let _ = std::fs::write(d.join(id), v);
         if let Some(add) = world.path_adds.get(id)
@@ -301,6 +453,35 @@ pub fn installer(args: &[String]) -> i32 {
     }
     println!("fake {via}: {id} is installed");
     0
+}
+
+/// A move's removal of the `other` copy (BOOT7), by `world.json`'s `uninstalls`.
+fn fake_uninstall(dir: &Path, world: &World, id: &str, via: &str) -> i32 {
+    println!("fake {via}: removing {id}");
+    match world.uninstalls.get(id).map_or("ok", String::as_str) {
+        "fail" => {
+            eprintln!("fake {via}: EACCES: permission denied, unlink '{id}'");
+            1
+        }
+        "leftover" => {
+            println!("fake {via}: removed 0 packages");
+            0
+        }
+        "both" => {
+            let _ = std::fs::create_dir_all(dir.join("removed"));
+            let _ = std::fs::write(dir.join("removed").join(id), "");
+            let _ = std::fs::remove_file(dir.join("new").join(id));
+            println!("fake {via}: removed {id}");
+            0
+        }
+        _ => {
+            let d = dir.join("removed");
+            let _ = std::fs::create_dir_all(&d);
+            let _ = std::fs::write(d.join(id), "");
+            println!("fake {via}: removed {id}");
+            0
+        }
+    }
 }
 
 /// `ptyro fake-installer login ID`: a login as the person sees it, a device code and a link,

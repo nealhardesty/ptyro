@@ -82,6 +82,49 @@ struct Places {
 
 /// `prog` on `path`, else where npm, nvm and `npx` put it under the home.
 pub fn find(prog: &str, path: &str) -> Option<Found> {
+    find_in(prog, path, &places()?)
+}
+
+/// Every copy of `prog`, in the order [`find`] would look: each `PATH` folder's, then npm's,
+/// nvm's and the vendors' folders', then `npx`'s cache; one per file (BOOT7: after a move to the
+/// recommended installer, the new copy, and whether the old one still comes first).
+pub fn find_all(prog: &str, path: &str) -> Vec<Found> {
+    let Some(places) = places() else { return Vec::new() };
+    let none = PathBuf::from(NO_PATH);
+    let only = |dirs: Vec<(PathBuf, String)>| Places {
+        dirs,
+        nvm: none.clone(),
+        npx: none.clone(),
+        exts: places.exts.clone(),
+    };
+    let mut out: Vec<Found> = Vec::new();
+    let mut seen: Vec<PathBuf> = Vec::new();
+    let mut add = |f: Option<Found>| {
+        let Some(f) = f else { return };
+        let real = ptyro_core::os::canonicalize(&f.path).unwrap_or_else(|_| f.path.clone());
+        if !seen.contains(&real) {
+            seen.push(real);
+            out.push(f);
+        }
+    };
+    for d in std::env::split_paths(path) {
+        let one = std::env::join_paths([&d]).map(|p| p.to_string_lossy().into_owned());
+        add(one.ok().and_then(|p| find_in(prog, &p, &only(Vec::new()))));
+    }
+    let mut dirs = places.dirs.clone();
+    dirs.extend(nvm_bins(&places.nvm).into_iter().map(|d| (d, "nvm".to_owned())));
+    for d in dirs {
+        add(find_in(prog, NO_PATH, &only(vec![d])));
+    }
+    add(find_in(prog, NO_PATH, &Places { dirs: Vec::new(), ..places }));
+    out
+}
+
+/// A `PATH` that finds nothing (an empty one would be the current folder).
+const NO_PATH: &str = "/nonexistent/ptyro-none";
+
+/// Where to look besides `PATH`, on this platform.
+fn places() -> Option<Places> {
     let home = home()?;
     let var = |v: &str| std::env::var_os(v).filter(|x| !x.is_empty()).map(PathBuf::from);
     let mut dirs: Vec<(PathBuf, String)> = Vec::new();
@@ -129,7 +172,7 @@ pub fn find(prog: &str, path: &str) -> Option<Found> {
             exts: None,
         }
     };
-    find_in(prog, path, &places)
+    Some(places)
 }
 
 /// After `PATH`: `places.dirs`, then nvm, then `npx`'s cache.

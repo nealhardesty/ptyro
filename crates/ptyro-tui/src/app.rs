@@ -8843,6 +8843,7 @@ mod tests {
             doc: String::new(),
             path: None,
             managed: None,
+            move_to: None,
         };
         // The badge's own ask: findings, no note.
         app.got_updates(vec![codex.clone()], Vec::new(), false);
@@ -8901,6 +8902,51 @@ mod tests {
         assert!(app.health.updates[0].text.starts_with("on box: "));
     }
 
+    /// BOOT7: an agent installed another way and out of date: the badge offers its update and,
+    /// beside it, the move (which opens the setup checklist with it ticked); kept, only the update.
+    #[tokio::test]
+    async fn an_agent_installed_another_way_is_offered_the_move_beside_its_update() {
+        use ptyro_agents::updates;
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().to_path_buf();
+        let paths = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| home.clone())).unwrap();
+        let connect = ConnectOptions::new(paths.clone(), ptyro_protocol::ClientKind::Tui);
+        let area = Rect::new(0, 0, 100, 30);
+        let mut app =
+            App::new(Options::default(), connect, paths.clone(), Config::default(), false, area);
+        let mut codex = updates::Outdated {
+            id: "codex".into(),
+            name: "Codex".into(),
+            program: "codex".into(),
+            version: "0.162.1".into(),
+            latest: "0.170.0".into(),
+            command: Some("npm install -g @openai/codex@latest".into()),
+            via: Some(ptyro_agents::catalog::Via::Npm),
+            admin: false,
+            doc: String::new(),
+            path: None,
+            managed: None,
+            move_to: Some(ptyro_agents::catalog::Via::Vendor),
+        };
+        app.got_updates(vec![codex.clone()], Vec::new(), false);
+        let mv = app.health.findings.iter().find(|f| f.what == "updates codex move").unwrap();
+        assert!(
+            mv.text.contains("Codex is installed with npm: moving it to the vendor's installer")
+        );
+        assert_eq!(
+            mv.fix,
+            Some(crate::health::Fix::Setup { names: vec!["codex".into()], place: None })
+        );
+        // Asked again: replaced, never piled up.
+        app.got_updates(vec![codex.clone()], Vec::new(), false);
+        assert_eq!(app.health.findings.iter().filter(|f| f.what.ends_with(" move")).count(), 1);
+        // Kept (the daemon clears `move_to`): the update alone.
+        codex.move_to = None;
+        app.got_updates(vec![codex], Vec::new(), false);
+        assert!(!app.health.findings.iter().any(|f| f.what.ends_with(" move")));
+        assert!(app.health.findings.iter().any(|f| f.what == "updates codex"));
+    }
+
     /// BOOT6: ptyro itself is one more row: the badge's finding updates it with `ptyro update
     /// ptyro` in a split where the daemon is, and the note names it among the agents.
     #[tokio::test]
@@ -8919,6 +8965,7 @@ mod tests {
             doc: String::new(),
             path: Some("/home/me/.local/bin/ptyro".into()),
             managed: None,
+            move_to: None,
         };
         let codex = updates::Outdated {
             id: "codex".into(),

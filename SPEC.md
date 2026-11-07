@@ -1087,6 +1087,16 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built BOOT7] Protocol 1.36** (additive): moves to the recommended installer (§24.9). A setup
+entry installed another way carries `moves` (the offer: `from`, `to`, `uninstall`, `admin`,
+`keeps`) unless `updates.keep_installer` keeps it, and its state `system` when its folder is an
+administrator's (and `prefix`, npm's); a ticked one's `action.moving` is the move.
+`Request::SetupRun` adds `moves`: the agents installed another way to move (ticked where offered,
+or Move on Health). Every other one stays as it is, so a client that names none, or predates 1.36,
+never moves anything (its update runs that installer's own). `updates::Outdated` adds `move_to`.
+An older daemon sends no `moves` (nothing is offered) and ignores the field; an older client
+ignores them.
+
 **[built BOOT5] Protocol 1.35** (additive): out of date, offered (§24.7). A setup entry in the
 `other` state (installed another way: npm, Homebrew) adds `latest` when a newer version is out,
 and ticking it plans that installer's own update; `outdated` entries now arrive whenever the
@@ -7287,6 +7297,15 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   (`false` or the line's name); 26.13.0 was the newest LTS on 2026-11-06, above a 27.0.0 alpha.
   Builds are `node-v<v>-<linux|darwin|win>-<x64|arm64>.<tar.xz|zip>`, with `SHASUMS256.txt`.
   WinGet's `OpenJS.NodeJS.LTS` is in winget-pkgs; nodejs.org names no winget command.
+- **Moving between installers keeps settings and logins (BOOT7, 2026-11-07):** each agent keeps
+  them in the home, apart from the program: Claude Code `~/.claude` and `~/.claude.json` (its setup
+  page removes them in a step of its own, after any uninstall; uninstalls are `npm uninstall -g
+  @anthropic-ai/claude-code`, `brew uninstall --cask claude-code`, `winget uninstall
+  Anthropic.ClaudeCode`) [V]; Codex `~/.codex/config.toml` [V config-basic], its `auth.json` in the
+  same `CODEX_HOME` [S]; Gemini CLI `~/.gemini` [S]; OpenCode `~/.config/opencode` and
+  `~/.local/share/opencode` [S]. Claude Code's npm package installs the same native binary as the
+  native installer [V]. If `claude` still runs after an uninstall, the docs point at a second
+  installation or a leftover alias [V]: the reason a move checks what runs afterwards (§24.9).
 
 ## 21. Open questions
 
@@ -8811,7 +8830,7 @@ strip, and a split is always a shell.
 - **Not here:** splitting a worktree's sessions into windows (their splits stay a TUI layout,
   §11.2i), a desktop split view on the web, and more than four panes.
 
-## 24. Bootstrap: agents, tools and updates **[decided 2026-11-06 (owner, ROADMAP BOOT); BOOT0 and BOOT1 built 2026-11-06; BOOT8, BOOT4, BOOT2, BOOT3, BOOT5 and BOOT6 built 2026-11-07]**
+## 24. Bootstrap: agents, tools and updates **[decided 2026-11-06 (owner, ROADMAP BOOT); BOOT0 and BOOT1 built 2026-11-06; BOOT8, BOOT4, BOOT2, BOOT3, BOOT5, BOOT6 and BOOT7 built 2026-11-07]**
 
 The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-design.md`: one setup checklist
 that installs the coding agents, git, the GitHub CLI and their prerequisites, walks through the
@@ -8901,8 +8920,9 @@ the daemon runs it for the web, and the TUI shows its own checklist on it, then 
 **States** (the design left the model to the builder): `missing`; `installed`; `outdated`
 (installed older than a newest version passed in: BOOT5 passes them, the engine then runs the
 method's `update`); `other` (installed through one of the row's `others`, by its folder:
-`node_modules`/`npm`/`_npx`, Homebrew's `Cellar`/`Caskroom`, WinGet's links; BOOT7 offers the
-move, the engine installs nothing for it); `too_old` (older than a minimum something ticked needs:
+`node_modules`/`npm`/`_npx`, Homebrew's `Cellar`/`Caskroom`, WinGet's links, read where the file
+really is (a link in `~/.npm-global/bin` names npm's folder); offered the move to the recommended
+installer unless kept, BOOT7, §24.9); `too_old` (older than a minimum something ticked needs:
 Node.js 18 for Gemini CLI's 20). Each entry has a `side`, only `local` until BOOT8 adds WSL's and
 Windows'.
 
@@ -9717,8 +9737,8 @@ Health → Look for newer versions now → Update → the setup page's "1 update
 the CLI note is the TUI's start; a TUI shows its daemon's machine (the coordinator's ruling); refreshes between looks and after every install keep findings true without
 the network; `generation` instead of holding the setup lock while looking (a daily look must never
 make `ptyro install` wait or be refused); `ptyro update --check` and `ptyro update` look even when
-off (asked for); an agent installed another way updates through its own installer until BOOT7
-offers the move; protocol 1.35 (above).
+off (asked for); an agent installed another way updates through its own installer, and BOOT7
+offers the move beside it (§24.9); protocol 1.35 (above).
 
 ### 24.8 ptyro updates itself (BOOT6) **[built 2026-11-07]**
 
@@ -9905,3 +9925,194 @@ run on Windows too, with this build hard-linked as the installed one. Unit tests
 `checksum_for`, the administrator's command, `swap` keeping and restoring (with an injected check,
 on every platform), `sweep` removing only leftovers (`own.rs`); the TUI's finding and note
 (`app.rs`); the web's `selfUpdate` (`web/test/setup.mjs`).
+
+### 24.9 Moves to the recommended installer (BOOT7) **[built 2026-11-07]**
+
+The design's goal 9 (the owner: "offer to move it to the recommended installer"): an agent
+installed some way other than the version table's recommended one (Codex through npm, Claude Code
+through npm, Homebrew or WinGet) is offered the move; the offer can be dismissed per agent, after
+which it updates the way it is installed. In all three clients.
+
+**Detected** as before (§24.2's `other` state, by where the program's file really is: Homebrew's
+`Cellar`/`Caskroom` first, since Homebrew's Gemini CLI is an npm install inside its keg; then
+`npm`'s `node_modules`; then `homebrew`, WinGet's links), now through the canonical path, so a
+link in `~/.npm-global/bin` or `/usr/local/bin` counts as npm's. `Installed.system`: the file's
+folder is neither the user's nor writable by everyone (a system npm prefix,
+`/usr/lib/node_modules`), so removing it needs administrator rights. `Installed.prefix`: npm's
+global prefix the copy is in (the folder above `lib/node_modules`; on Windows above
+`node_modules`, chosen by the platform), `None` for another tool's store (`Installed.store`: Bun's
+global folder, mise's `npm:` backend, pnpm's, an asdf plugin's), which npm doesn't manage: no move,
+and `doctor` names that tool's command (`mise uninstall npm:@openai/codex`, `bun remove -g …`). A
+Node.js that mise or asdf installed is a real npm prefix and moves as any. A prefix ptyro won't
+quote (a `'` in it) offers no move, and `doctor` says that, with `npm uninstall -g` to run there. `Installed.file` and `Installed.real`: the bare file found and where it really is (links
+followed).
+
+**The vendor's copy is known by its path.** A vendor installer's method names its `places`, where
+its copy really is: Claude Code `~/.local/share/claude` (the launcher `~/.local/bin/claude` links
+into its `versions/`) [V 2026-11-07, the setup page], on Windows `~/.local/bin/claude.exe` and
+`~/.local/share/claude` [V, its Windows uninstall]; Codex `~/.codex/packages/standalone` (install.sh
+links `~/.local/bin/codex` into `…/current`; `$CODEX_HOME` first when set, as the installers
+follow it; on Windows install.ps1's junctions, also `%CODEX_INSTALL_DIR%` or
+`%LOCALAPPDATA%/Programs/OpenAI/Codex`) [S 2026-11-07, the vendor's install.sh and install.ps1];
+OpenCode `~/.opencode` [V, its docs]. A place naming an unset variable is skipped; `~` is the home
+the platform's installers use (`USERPROFILE` on Windows, whatever Git Bash's `HOME` says).
+`setup::installed_by(copy, method)`: a package manager's copy
+by its folder (`via`); a vendor's only when its file (or where it really is) is under one of those
+places. A copy from an installer nothing classifies (Nix's store, Scoop's shims, mise or asdf
+shims, pipx, a wrapper script in `~/bin`) never counts. A vendor method with no `places` (not
+known) offers no move, and the table's tests require them wherever another way exists.
+
+**The offer** (`setup::offer`, `setup::Moving`): for an `other` agent that `Survey.keep` doesn't
+name, when the platform's recommended method is usable here (its `needs` present; Gemini CLI's npm
+needs Node.js) and the old installer's `others` row has an `uninstall`. Each `others` row in the
+table now carries `uninstall` (the vendor's documented one for Claude Code [V 2026-11-07, the setup
+page's "Uninstall Claude Code"]; npm's and Homebrew's own forms for Codex, OpenCode and Gemini CLI
+[S], marked in the row's note), never with `sudo` (the tests insist): ptyro adds `sudo ` for a
+`system` copy on Unix, and the whole move is then an administrator's step. Never for Homebrew,
+which refuses to run as root: a keg that isn't the user's isn't offered the move. npm's removal acts
+on the old copy's own prefix, `npm uninstall -g --prefix '<prefix>' <package>` (npm's documented
+`prefix` setting [S]), never npm's prefix of the moment (another nvm Node.js's, ptyro's own); a copy
+with no npm prefix (Bun's) isn't offered the move. `Entry.moves` carries
+the offer whether ticked or not; ticked, `Action{via: recommended, command: install + "\n" +
+uninstall, admin: either, moving: true}`. Each agent row gains `keeps`, where its settings and
+logins live, said in every offer.
+
+**Nothing is lost** (the ruling's checks, recorded in RESEARCH G18):
+- **Settings and logins stay.** They live in the home, which neither installer touches: Claude
+  Code `~/.claude` and `~/.claude.json` [V 2026-11-07: the docs remove them in a step of their own,
+  apart from every uninstall]; Codex `~/.codex` (`config.toml` [V 2026-11-07, config-basic];
+  `auth.json` there [S: the binary, §10.10]); Gemini CLI `~/.gemini` [S]; OpenCode
+  `~/.config/opencode` and `~/.local/share/opencode` [S]. Antigravity has no other way in the table,
+  so it is never offered a move. The tests confirm the login holds across a move (the fake
+  machine's `logged_in`: setup's login walk after the move says ✓).
+- **The new one first** (`setup/moving.rs`): the recommended method's install runs; then
+  `Host::copies` (every copy of the program, `PATH` first, then npm's, nvm's and the vendors'
+  folders: `locate::find_all`) must show a copy the recommended method installed
+  (`installed_by`: in the vendor's places; npm's for Gemini CLI) that answers `--version`. Any
+  other copy (Homebrew's beside npm's, Nix's) never counts; then the install runs.
+  A failed install, or one whose new copy can't be found answering, is `failed` with "nothing was
+  removed: Codex through npm is still installed and works" and the fix; the old copy is untouched.
+- **Then the old one goes**, with its installer's `uninstall` (`Host::uninstall`, the row's shell,
+  `sudo` as above). A failure is `failed` with what works and where ("Codex 0.170.0 through the
+  vendor's installer works (~/.local/bin/codex), but removing npm's copy … failed") and the fix
+  "finish the move by removing it yourself: `npm uninstall -g --prefix … @openai/codex`". Tried
+  again, a new copy already here is said and only the removal runs.
+- **The old one must be gone.** Its copy still there after a removal that said it worked (npm
+  acting elsewhere: "removed 0 packages") is `failed`, "npm's copy (…) is still there after `…`",
+  with the fix to delete that file, ready to paste (`rm '<file>'`; on Windows `Remove-Item
+  -LiteralPath`; an npm copy on Windows by its prefix's shims, `codex`, `codex.cmd`, `codex.ps1`,
+  and its package folder, never the script inside it, which would leave the shim on `PATH`), never
+  "run it again", which would do the same. Every message after the
+  removal looks for the new copy again before saying it works (or says it no longer runs, with
+  the install command).
+- **The new one must still run.** A removal can take the new install's link with it (an npm prefix
+  of `~/.local` shares `~/.local/bin` with the native installer): the recommended copy is looked
+  for again, and if it is gone it is installed again at once ("the removal took the new copy too,
+  installing it again"). If that fails, the move is `failed`: "npm's copy is removed, but the
+  removal took the new codex with it … no Codex runs now", fix: `ptyro install codex` or the
+  install command. A move never ends ✓ with nothing to run.
+- **The new one must be what runs.** Afterwards `Host::installed` (what `locate::find` picks: `PATH`
+  first) must be the recommended copy and answer `--version`. If another comes first (a second npm
+  prefix, a third installer), the move is `failed` (the vendor's own copy not answering is
+  `failed` with the install command to repair it, never a delete): "npm's codex (…) comes first on PATH, so it is the one that
+  runs", fix: delete it (or uninstall it with the tool that put it there), or put the new one's
+  folder ahead of it on `PATH`.
+- Each half is a `Started` event of its own (`Codex: installing it through the vendor's
+  installer`, `Codex: removing npm's copy`) with its command, so the CLI, the TUI's split and the
+  web's log show both. A move holds the machine's setup lock like every install (§24.6), and what is
+  remembered (`versions.json`) is refreshed afterwards even when it failed half way (it changed
+  what is installed).
+
+**Dismissed for good: `updates.keep_installer`** (a list of agent names, `["codex"]`; `[updates]`,
+in both settings screens with its schema entry; the config checks each is a bare name). Kept
+agents are `Survey.keep` (filled by `updates::survey` from each side's own config, so WSL's comes
+from WSL's ptyro): no `moves`, the row is "Already here", and ticking an out-of-date one runs its
+own installer's update (BOOT5). `ptyro update` never moves (it plans with every agent kept); the
+move is `ptyro install`'s.
+
+**Where it shows:**
+- **The checklists** (CLI, TUI, web; `checklist::here_already` and `about`): an offered agent is a
+  row, not Already here: "OpenAI's coding agent · installed with npm · move to the recommended
+  installer?"; ticked, "… · moves to the vendor's installer, then removes npm's copy · your
+  settings and logins (~/.codex) stay". The CLI's checklist note: "installed 0.162.1 through npm;
+  move to the recommended installer?". A two-sided cell: `npm: move?`, ticked `move to the vendor's
+  installer`.
+- **`ptyro install codex`** (the CLI's form: ticking it by name is the move) shows "Codex: move
+  from npm to the vendor's installer (path): install it through the vendor's installer, check it
+  runs, then `npm uninstall -g @openai/codex`; your settings and logins (~/.codex) stay" and asks
+  "Install? [Y/n, or k to keep Codex with npm and not be asked again]". `k` adds it to this
+  computer's `updates.keep_installer` and runs nothing for it this time. **A move is offered, never
+  done unasked** (the design): `--yes` alone leaves an agent installed another way as it is (its
+  own update when out of date, else nothing) and says "Codex is installed with npm: moving it to the
+  recommended installer needs a yes (`ptyro install codex` in a terminal, or --move); left as it
+  is"; `--move` (with `--yes`) is the unattended opt-in, on `ptyro setup` as on `ptyro install`
+  (`setup --yes` without it says the same for each ticked one it passes over). The TUI's
+  `--confirmed` moves (its row was ticked). A move on WSL's side (`--where wsl`) runs in WSL's
+  ptyro under the Windows question's yes, which passes the moves it covers (hidden `--moves`), so
+  WSL's ptyro asks nothing; keeping one of WSL's as installed is done in WSL (its step line says so).
+- **The TUI checklist**: `Space` ticks the row (⏎ runs `ptyro install codex --confirmed` in a
+  split as for any install); `K` keeps it (this computer's side; on WSL's it says how to keep it
+  there), written with the settings panel's own writer; the footer adds "K keep as installed" when
+  any row is offered the move.
+- **The web checklist**: the row's checkbox (`setup.move`), and "Keep npm" beside it (`setup.keep`,
+  the host operation `updates.keep`, which writes the computer's `updates.keep_installer` with the
+  CLI's own writer; the daemon reads the config live). An administrator's move is left for the
+  computer like any administrator step (§24.6: `ptyro install codex` to run there).
+- **The update findings** (§24.7's four places): `updates::Versions.movable` (each offered move,
+  kept ones included) is remembered with the survey; `Outdated.move_to` names the recommended
+  installer for one out of date, cleared by `updates::offered` (and `doctor`) when kept. Its words
+  add "; or `ptyro install codex` moves it from npm to the vendor's installer, the recommended way
+  (to keep npm, add codex to updates.keep_installer)". **`doctor`**: that warning, with `data.move`
+  (the `Movable`); an agent up to date but installed another way is a **note**, never a warning (a
+  normal state): "Codex is installed with npm: `ptyro install codex` moves it to the vendor's
+  installer …"; an `updates.keep_installer` entry naming no agent is a warning. **The badge**: beside
+  the update finding, `updates codex move` ("Codex is installed with npm: moving it to the vendor's
+  installer, the recommended way, also brings it up to date"), whose ⏎ opens the setup checklist
+  with it ticked (`Fix::Setup`). **The start-up note**: "Codex 0.170.0 is out (you have 0.162.1)
+  (installed with npm; the move to the vendor's installer is offered too)". **The web's Health
+  page**: a finding with `data.move` offers "Move Codex to the vendor's installer" (asked first, with
+  what it installs, removes and keeps; then the daemon's `SetupRun` of it on the setup page, whose
+  report says "1 moved to the recommended installer."; an administrator's shows `ptyro install codex`
+  to run on the computer) and "Keep Codex with npm"; its Update names no `moves`, so it updates
+  through npm and never moves. The checklist's Install sends `moves` for the rows ticked where the
+  move is offered.
+
+**Tests, never the network or a real installer:** the fake machine gains two copies for an `other`
+item (`new/<id>`, written when a step installs it the recommended way; `removed/<id>`, written by
+`ptyro fake-installer ID VIA uninstall ADMIN`), the old first on `PATH` until removed, and
+`world.json`'s `system` (copies in an administrator's folder) and `uninstalls` (`ok`, `fail`,
+`leftover`: exits 0 but the copy stays; `both`: takes the new copy too), `second` (another copy of
+the old installer, ahead of the new one), `third` (a third installer's copy), `no_prefix` (npm's
+copy in no prefix) and outcome `once` (installs once, then fails); each removal's command goes to
+`uninstall.log`. `crates/ptyro/tests/boot7.rs`: a successful move (the question's words, both
+commands in order, the removal against the old copy's prefix, the login still there, nothing
+offered afterwards); a new install that fails leaving the old one (and still offered); a removal
+that fails, its fix, and the retry running only the removal; a removal that leaves the old copy,
+said with the exact fix and no loop; another old copy first on `PATH`; a removal that takes the new
+copy, put back at once, or (put back failing) said plainly with no ✓; a third installer's copy not
+counted; `--yes` alone and `setup --yes` moving nothing; no move offered without a prefix; `k`
+written to the config, nothing run, never offered again, and the kept agent updating with npm; an
+up-to-date one a note in `doctor` and `ptyro update` never moving; the daemon's plan offering it,
+the Health page's update (no `moves`) running npm's update, and the checklist's tick moving it while
+an administrator's move is left for the computer. Unit tests: the engine's offer, plan, run, a
+failed install, a failed removal and its retry, kept, `system`'s sudo and `Admin::Never`, the
+findings with and without keep (`setup/tests.rs`); the catalog's `uninstall` and `keeps`
+(`catalog.rs`); the TUI's `K` and its tick (`setup_list.rs`) and the badge's move finding
+(`app.rs`); the web's `isHere`, `moveOffer`, `moveWords` and the moved summary
+(`web/test/setup.mjs`); in a real browser (`make web-e2e`'s `move`): Claude Code and Codex through
+npm offered, Keep npm moving Claude Code to Already here (the host operation also asks the daemon to
+`ReloadConfig`, so the plan asked for next already keeps it), and Codex ticked, "1 moved to the
+recommended installer." with both installers' lines.
+
+**Decided by the builder:** `ptyro install NAME` at a terminal offers the move in its question
+(`--move` with `--yes` unattended), and `k` there is the CLI's dismissal; `updates.keep_installer` as the setting's name, beside `updates.ignore`; the new copy is
+installed even when the old one shadows it and found through every copy (`locate::find_all`), so
+the old is removed only after the new one answered; a move counts as failed when the old copy still
+runs first (the goal is the new one running); `system` by the file's folder not being writable;
+`ptyro update` never moves; protocol 1.36's `SetupRun.moves` (absent: nothing moves).
+`PTYRO_NO_AUTOSPAWN=1` wins in the CLI's shared `Ctx::connect`, so no command (`doctor`'s check
+included) starts a daemon when it is set and no test leaves one running; the tests of autospawn
+itself (`e2e.rs`'s `cli_autospawns_and_maps_errors_to_exit_codes` and
+`only_one_daemon_per_home_and_stale_sockets_are_recovered`, `hardening.rs`) clear it. `doctor` notes an agent installed another way that isn't offered the
+move, and why (`updates::Versions.unmovable`: the vendor's place unknown, no npm prefix,
+someone else's Homebrew).

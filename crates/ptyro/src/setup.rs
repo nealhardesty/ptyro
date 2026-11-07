@@ -33,6 +33,8 @@ pub struct SetupArgs {
     /// Hidden: a person answers on stdin, terminal or not (the TUI's split in WSL running
     /// Windows' ptyro.exe through interop, whose console is a pipe).
     pub tty: bool,
+    /// `--move` (BOOT7): with `--yes`, move the ticked agents installed another way too.
+    pub move_: bool,
 }
 
 pub struct InstallArgs {
@@ -48,6 +50,10 @@ pub struct InstallArgs {
     /// Hidden `--confirmed`: the TUI's checklist asked already (BOOT2), so no `Install?`; the
     /// rest (sudo's prompt, the logins, the profiles line) is as when typed.
     pub confirmed: bool,
+    /// `--move` (BOOT7): with `--yes`, move the named agents installed another way too.
+    pub move_: bool,
+    /// Hidden `--moves`: the agents Windows' ptyro may move here (it asked already).
+    pub moves: Vec<String>,
 }
 
 /// A person can answer: a terminal (or a test's fake machine, which pipes its answers; or
@@ -103,8 +109,10 @@ async fn look(
         eprintln!("Looking at what's installed…");
     }
     let host = setup::host(paths);
-    // The remembered newest versions (BOOT5): an outdated agent shows so, and can be ticked.
-    let here = setup::survey(&*host, &known(paths));
+    // The remembered newest versions (BOOT5): an outdated agent shows so, and can be ticked;
+    // one installed another way is offered the move unless `updates.keep_installer` keeps it
+    // (BOOT7).
+    let here = updates::survey(&*host, &paths.state, &updates_config(paths));
     let platform = here.platform;
     let place = place_of(given, platform, "setup")?;
     if !platform.is_windows() {
@@ -188,7 +196,7 @@ fn ids_of(names: &[String], kind: Kind, flag: &str) -> Result<Vec<String>, Error
 pub async fn setup(ctx: &Ctx, a: SetupArgs) -> Result<i32, Error> {
     if a.survey {
         let host = setup::host(&ctx.paths);
-        let survey = setup::survey(&*host, &known(&ctx.paths));
+        let survey = updates::survey(&*host, &ctx.paths.state, &updates_config(&ctx.paths));
         let text = serde_json::to_string(&survey).map_err(|e| Error::internal(e.to_string()))?;
         println!("{text}");
         return Ok(0);
@@ -204,8 +212,14 @@ pub async fn setup(ctx: &Ctx, a: SetupArgs) -> Result<i32, Error> {
     // Already running (the web's, another terminal's, the TUI's): say so before the checklist,
     // and hold the machine's lock from here, so nothing starts while this one is asked.
     let lock = if a.dry_run { None } else { Some(take_lock(ctx, "`ptyro setup`")?) };
-    let (host, sides, place) = look(&ctx.paths, a.place.as_deref(), false).await?;
+    let (host, mut sides, place) = look(&ctx.paths, a.place.as_deref(), false).await?;
     let mut picks = if named { sides.picks(place, &ids) } else { sides.defaults(place) };
+    // Unattended, nothing moves unless `--move` (BOOT7: a move is offered, never done unasked);
+    // each one passed over is said.
+    if a.yes && !a.move_ {
+        say_unmoved(&sides.plan(&picks), &[]);
+        sides.keep_all(&[]);
+    }
     if a.dry_run {
         return show_plan(&sides.plan(&picks), a.json);
     }
@@ -262,8 +276,19 @@ pub async fn install(ctx: &Ctx, a: InstallArgs) -> Result<i32, Error> {
     };
     // Already running: say so before asking anything, and hold the lock from here.
     let lock = if a.dry_run { None } else { Some(take_lock(ctx, who)?) };
-    let (host, sides, place) = look(&ctx.paths, a.place.as_deref(), quiet).await?;
-    let plan = sides.plan(&sides.picks(place, &ids));
+    let (host, mut sides, place) = look(&ctx.paths, a.place.as_deref(), quiet).await?;
+    // A move is offered, never done unasked (BOOT7, the design): the question asks it, the TUI's
+    // checklist ticked it, or `--move` says so; unattended (`--yes`) the agent stays as it is.
+    if !(a.move_ || a.confirmed || (!a.yes && asked.is_none())) {
+        let offered = sides.plan(&sides.picks(place, &ids));
+        let allowed: Vec<String> =
+            a.moves.iter().flat_map(|m| setup::resolve(m).ok()).map(|i| i.id.clone()).collect();
+        if !quiet {
+            say_unmoved(&offered, &allowed);
+        }
+        sides.keep_all(&allowed);
+    }
+    let mut plan = sides.plan(&sides.picks(place, &ids));
     if a.dry_run {
         return show_plan(&plan, a.json);
     }
@@ -273,19 +298,97 @@ pub async fn install(ctx: &Ctx, a: InstallArgs) -> Result<i32, Error> {
         for e in plan.steps() {
             eprintln!("  {}", step_line(e, two));
         }
-        if !confirm("Install? [Y/n] ") {
-            eprintln!("Nothing installed.");
-            return Ok(0);
+        // A move to the recommended installer (BOOT7) can be declined for good: `k` keeps
+        // those the way they're installed (this computer's own; WSL's keeps its own).
+        let moving: Vec<&Entry> = plan
+            .steps()
+            .into_iter()
+            .filter(|e| e.side != Side::Wsl && e.action.as_ref().is_some_and(|a| a.moving))
+            .collect();
+        let q = if moving.is_empty() {
+            "Install? [Y/n] ".to_owned()
+        } else {
+            let each: Vec<String> = moving
+                .iter()
+                .map(|e| {
+                    let how = e.moves.as_ref().map_or("its installer", |m| m.from.words());
+                    format!("{} with {how}", e.name)
+                })
+                .collect();
+            format!("Install? [Y/n, or k to keep {} and not be asked again] ", each.join(" and "))
+        };
+        match answer(&q) {
+            Answer::Yes => {}
+            Answer::No => {
+                eprintln!("Nothing installed.");
+                return Ok(0);
+            }
+            Answer::Keep if !moving.is_empty() => {
+                let kept: Vec<String> = moving.iter().map(|e| e.id.clone()).collect();
+                let names: Vec<String> = moving.iter().map(|e| e.name.clone()).collect();
+                match keep_installer(&ctx.paths, &kept) {
+                    Ok(()) => eprintln!(
+                        "Kept {} the way {} installed: {} updates that way, and the move isn't offered again (updates.keep_installer).",
+                        names.join(" and "),
+                        if kept.len() == 1 { "it's" } else { "they're" },
+                        if kept.len() == 1 { "it" } else { "each" }
+                    ),
+                    Err(e) => eprintln!("Couldn't save updates.keep_installer ({e}): kept for now"),
+                }
+                // Not run this time either: kept is a no to the move, not a yes to an update.
+                let rest: Vec<String> = ids.iter().filter(|i| !kept.contains(i)).cloned().collect();
+                sides.here.keep.extend(kept);
+                let mut picks = sides.picks(place, &rest);
+                picks.wsl = sides.picks(place, &ids).wsl;
+                plan = sides.plan(&picks);
+                if plan.steps().is_empty() {
+                    eprintln!("Nothing else to install.");
+                    return Ok(0);
+                }
+            }
+            Answer::Keep => {
+                eprintln!("Nothing installed.");
+                return Ok(0);
+            }
         }
     }
     let admin = asked.unwrap_or(if a.yes { Admin::Silent } else { Admin::Ask });
     go(ctx, &*host, &sides, &plan, admin, a.json, quiet, lock, who)
 }
 
-/// The remembered newest versions to plan with (BOOT5, `updates::known`): less what
-/// `updates.ignore` skips; none with `updates.check = "off"`.
-fn known(paths: &Paths) -> BTreeMap<String, String> {
-    updates::known(&paths.state, &updates_config(paths))
+/// Unattended (`--yes` without `--move`), each picked agent installed another way that is left
+/// as it is, and how to move it (BOOT7).
+fn say_unmoved(plan: &Plan, allowed: &[String]) {
+    for e in
+        plan.entries.iter().filter(|e| e.picked && e.moves.is_some() && !allowed.contains(&e.id))
+    {
+        let m = e.moves.as_ref().map_or("another way", |m| m.from.words());
+        eprintln!(
+            "{} is installed with {m}: moving it to the recommended installer needs a yes (`ptyro install {}` in a terminal, or --move); left as it is",
+            e.name,
+            catalog::item(&e.id).map_or(e.id.as_str(), |i| i.program.as_str())
+        );
+    }
+}
+
+/// `ids` (agents installed another way) kept that way from now on (BOOT7): added to this
+/// computer's `updates.keep_installer`, so the move isn't offered again and they update the way
+/// they're installed.
+pub(crate) fn keep_installer(paths: &Paths, ids: &[String]) -> Result<(), String> {
+    let mut list = updates_config(paths).keep_installer;
+    for id in ids {
+        if !updates::kept(&ptyro_core::config::Updates {
+            keep_installer: list.clone(),
+            ..Default::default()
+        })
+        .contains(id)
+        {
+            list.push(id.clone());
+        }
+    }
+    let value =
+        format!("[{}]", list.iter().map(|k| format!("{k:?}")).collect::<Vec<_>>().join(", "));
+    crate::config::set_user(paths, "updates.keep_installer", &value)
 }
 
 fn updates_config(paths: &Paths) -> ptyro_core::config::Updates {
@@ -470,7 +573,16 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
     let names: BTreeMap<String, String> =
         todo.iter().map(|o| (o.id.clone(), o.name.clone())).collect();
     let name = |id: &str| names.get(id).cloned().unwrap_or_else(|| id.to_owned());
-    let mut plan = setup::plan(&survey, &todo_ids);
+    // An update never moves (BOOT7): each agent updates the way it's installed here; the move is
+    // `ptyro install`'s, offered beside the finding.
+    let never_move = |s: &setup::Survey| {
+        let mut s = s.clone();
+        s.keep.extend(
+            catalog::items().iter().filter(|i| i.kind == Kind::Agent).map(|i| i.id.clone()),
+        );
+        s
+    };
+    let mut plan = setup::plan(&never_move(&survey), &todo_ids);
     let mut done: Vec<String> = Vec::new();
     let mut failed: Vec<String> = Vec::new();
     let agents = todo.iter().any(|o| o.id != own::ID);
@@ -549,7 +661,7 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
         if still.is_empty() {
             break;
         }
-        plan = setup::plan(&fresh, &still);
+        plan = setup::plan(&never_move(&fresh), &still);
     }
     // ptyro itself last (BOOT6), still under the lock: its release, checked and swapped in.
     let mut ptyro_new: Option<String> = None;
@@ -620,7 +732,7 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
         }
         let tail = if failed.is_empty() { "." } else { ": each says its fix above." };
         eprintln!("\n{}{tail}", parts.join(", "));
-        let left: Vec<&Outdated> = updates::offered(&after, &cfg)
+        let left: Vec<Outdated> = updates::offered(&after, &cfg)
             .into_iter()
             .filter(|o| !todo.iter().any(|t| t.id == o.id))
             .collect();
@@ -858,9 +970,10 @@ fn go(
         total.merge(&report);
         reports.push((side, report));
     }
-    if !total.done.is_empty() {
-        // What is out of date changed (BOOT5): the badge and the start-up note follow. Under
-        // the lock still, so a look beside it can't write over this.
+    if !total.done.is_empty() || !total.failed.is_empty() {
+        // What is out of date changed (BOOT5; a move that failed half way changed it too,
+        // BOOT7): the badge and the start-up note follow. Under the lock still, so a look beside
+        // it can't write over this.
         updates::refresh(host, &ctx.paths.state, updates::now());
     }
     drop(lock);
@@ -966,6 +1079,28 @@ fn summary(r: &Report) -> String {
     }
     let tail = if r.ok() { "." } else { ": each says its fix above." };
     format!("{}{tail}", parts.join(", "))
+}
+
+enum Answer {
+    Yes,
+    No,
+    /// `k`: keep it the way it's installed (BOOT7's move declined for good).
+    Keep,
+}
+
+/// A `[Y/n/k]` question; nothing typed is yes, end of input is no.
+fn answer(q: &str) -> Answer {
+    eprint!("{q}");
+    let _ = std::io::stderr().flush();
+    let mut s = String::new();
+    match std::io::stdin().lock().read_line(&mut s) {
+        Ok(0) | Err(_) => Answer::No,
+        Ok(_) => match s.trim() {
+            "" | "y" | "Y" | "yes" => Answer::Yes,
+            "k" | "K" | "keep" => Answer::Keep,
+            _ => Answer::No,
+        },
+    }
 }
 
 /// A `[Y/n]` question; nothing typed is yes, end of input is no.
@@ -1091,6 +1226,23 @@ fn step_line(e: &Entry, two: bool) -> String {
     let at = if two { format!(" ({})", e.side.words()) } else { String::new() };
     let Some(a) = &e.action else { return format!("{}{at}", e.name) };
     let admin = if a.admin { " (as administrator)" } else { "" };
+    if let Some(m) = e.moves.as_ref().filter(|_| a.moving) {
+        let from = e.state.path().map(|p| format!(" ({p})")).unwrap_or_default();
+        // WSL's agents are kept as installed from WSL, in its own config.
+        let wsl = if e.side == Side::Wsl {
+            " (to keep it as installed instead, add it to updates.keep_installer in WSL)"
+        } else {
+            ""
+        };
+        return format!(
+            "{}{at}: {}{from}{admin}: install it through {}, check it runs, then `{}`; {}{wsl}",
+            e.name,
+            m.words(),
+            m.to.words(),
+            m.uninstall,
+            m.keeps_words()
+        );
+    }
     let what = if a.update { "update" } else { "install" };
     format!("{}{at}: {what} through {}{admin}", e.name, a.via.words())
 }
@@ -1128,6 +1280,15 @@ fn notes_of(plan: &Plan, e: &Entry, label: bool) -> Vec<String> {
     if matches!(e.state, State::TooOld { .. } | State::Outdated { .. }) {
         notes.push(e.state.words());
     }
+    // Installed another way (BOOT7): the move, offered or ticked.
+    if let Some(m) = &e.moves {
+        notes.push(e.state.words());
+        notes.push(if e.ticked {
+            format!("{}, then removes {}'s copy", m.words(), m.from.words())
+        } else {
+            "move to the recommended installer?".to_owned()
+        });
+    }
     if let Some(b) = &e.blocked {
         notes.push(format!("can't: {b}"));
     }
@@ -1145,7 +1306,7 @@ fn render_one(plan: &Plan, out: &mut dyn Write) -> std::io::Result<()> {
         writeln!(out, "\n{title}")?;
         for (i, e) in rows {
             let mut notes = notes_of(plan, e, true);
-            if let Some(a) = e.action.as_ref().filter(|_| e.ticked) {
+            if let Some(a) = e.action.as_ref().filter(|a| e.ticked && !a.moving) {
                 let admin = if a.admin { ", as administrator" } else { "" };
                 // Where "through" goes: before a reason it can't, as BOOT1 wrote it.
                 let at = notes.iter().position(|n| n.starts_with("can't")).unwrap_or(notes.len());
@@ -1344,6 +1505,7 @@ mod tests {
             states,
             programs: ["brew".to_owned()].into(),
             candidates: BTreeMap::new(),
+            keep: Default::default(),
         }
     }
 
