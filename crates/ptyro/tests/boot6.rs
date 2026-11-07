@@ -390,17 +390,15 @@ fn a_yes_installs_it_and_the_daemon_upgrades_live_with_every_session() {
     assert!(!v["outdated"].as_array().unwrap().iter().any(|o| o["id"] == "ptyro"), "{v}");
 }
 
-/// Windows with WSL: Windows' ptyro updates itself, then asks the distro's ptyro to update
-/// itself too (through `wsl.exe`), so both halves are the same version.
+/// "Windows" (the fake machine's platform) with its installed ptyro 0.0.1, and WSL's distro
+/// Ubuntu with ptyro, its own installed binary 0.0.1 (`ptyro fake-wsl`): the box, WSL's binary
+/// and fake-wsl's folder.
 #[cfg(unix)]
-#[test]
-fn on_windows_wsls_half_is_brought_along() {
-    let b = Box_::new(json!({ "platform": "windows-x64" }));
+fn windows_with_ubuntu() -> (Box_, PathBuf, PathBuf) {
+    let mut b = Box_::new(json!({ "platform": "windows-x64" }));
     std::fs::write(b.installed(), script("0.0.1")).unwrap();
     executable(&b.installed());
-    b.publish(V);
     b.release(V, &script(V), false);
-    // fake-wsl: a distro Ubuntu with ptyro, its own installed binary 0.0.1.
     let wsl = b.path("wsl");
     std::fs::write(wsl.join("distros"), "Ubuntu\n").unwrap();
     for d in ["ptyro", "fake", "home", "bin"] {
@@ -419,11 +417,20 @@ fn on_windows_wsls_half_is_brought_along() {
         &[BIN, "fake-wsl"],
         &[],
     );
-    let mut b = b;
     b.extra = vec![
         ("PTYRO_WSL".into(), stand_in.display().to_string()),
         ("PTYRO_FAKE_WSL".into(), wsl.display().to_string()),
     ];
+    (b, theirs, wsl)
+}
+
+/// Windows with WSL: Windows' ptyro updates itself, then asks the distro's ptyro to update
+/// itself too (through `wsl.exe`), so both halves are the same version.
+#[cfg(unix)]
+#[test]
+fn on_windows_wsls_half_is_brought_along() {
+    let (b, theirs, wsl) = windows_with_ubuntu();
+    b.publish(V);
     let o = b.run(&["update", "ptyro"], "y\n");
     let said = text(&o);
     assert!(o.status.success(), "{said}");
@@ -676,4 +683,25 @@ fn homebrew_behind_the_release_is_said_not_claimed() {
     assert!(said.contains(&format!("Homebrew's formula isn't at {V} yet")), "{said}");
     assert!(said.contains("brew update && brew upgrade ptyro"), "{said}");
     assert!(!said.contains("upgraded in"), "no daemon upgrade onto the old version: {said}");
+}
+
+/// GitHub's API out of requests (the lookup fails) while the remembered newest release is newer:
+/// ptyro is updated from what was remembered, and the other half with it, never one alone.
+#[cfg(unix)]
+#[test]
+fn with_the_lookup_failing_the_remembered_release_updates_both_halves() {
+    let (b, theirs, wsl) = windows_with_ubuntu();
+    // No `registry/ptyro`: the lookup fails. Each side remembers V from an earlier look.
+    let remembered = json!({ "checked": 1, "latest": { "ptyro": V } }).to_string();
+    for home in [b.path("ptyro"), wsl.join("Ubuntu/ptyro")] {
+        let state = ptyro_testkit::paths_for(&home).unwrap().state;
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(state.join("versions.json"), &remembered).unwrap();
+    }
+    let o = b.run(&["update", "ptyro"], "y\n");
+    let said = text(&o);
+    assert!(o.status.success(), "{said}");
+    assert!(said.contains("and WSL's ptyro (Ubuntu) 0.0.1"), "said in the question: {said}");
+    assert_eq!(version_of(&b.installed()), format!("ptyro {V}"));
+    assert_eq!(version_of(&theirs), format!("ptyro {V}"), "WSL's half too");
 }

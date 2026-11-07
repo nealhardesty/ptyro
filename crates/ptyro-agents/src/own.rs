@@ -814,6 +814,8 @@ fn pid_alive(pid: u32) -> bool {
 }
 
 fn sweep_with(binary: &Path, alive: &dyn Fn(u32) -> bool) {
+    // Beside the file itself: an update puts its aside files there, not beside a link to it.
+    let binary = ptyro_core::os::canonicalize(binary).unwrap_or_else(|_| binary.to_path_buf());
     let Some(dir) = binary.parent() else { return };
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     let names = ["ptyro.exe", "ptyrow.exe", "conpty.dll", "OpenConsole.exe"];
@@ -1120,6 +1122,20 @@ mod tests {
     }
 
     #[test]
+    fn the_release_is_fetched_over_https_only_and_never_for_ever() {
+        assert!(ptyro_core::test_knob("PTYRO_TEST_RELEASE_URL").is_none(), "no test knob here");
+        let a = curl_args("https://github.com/x", Path::new("/tmp/f"));
+        let has = |pair: &[&str]| a.windows(pair.len()).any(|w| w == pair);
+        assert!(has(&["--proto", "=https"]), "{a:?}");
+        assert!(has(&["--proto-redir", "=https"]), "{a:?}");
+        assert!(has(&["--tlsv1.2"]), "{a:?}");
+        assert!(has(&["--max-time", "1800"]), "{a:?}");
+        assert!(has(&["--speed-limit", "1024", "--speed-time", "60"]), "{a:?}");
+        assert!(has(&["--connect-timeout", "10"]), "{a:?}");
+        assert_eq!(a[a.len() - 3..], ["-o", "/tmp/f", "https://github.com/x"]);
+    }
+
+    #[test]
     fn an_archive_with_a_path_outside_it_is_refused() {
         assert!(names_inside("ptyro-1.0.0-x/\nptyro-1.0.0-x/ptyro\n").is_ok());
         assert!(names_inside("ptyro-1.0.0-x/../../etc/passwd\n").is_err());
@@ -1239,11 +1255,21 @@ mod tests {
         let sys = PathBuf::from(std::env::var("SystemRoot").unwrap()).join("System32");
         let target = dir.join("ptyro.exe");
         std::fs::copy(sys.join("PING.EXE"), &target).unwrap();
-        let mut running = Command::new(&target)
-            .args(["-n", "120", "127.0.0.1"])
-            .stdout(Stdio::null())
-            .spawn()
-            .unwrap();
+        /// Killed however the test ends, so it never outlives it or holds the folder.
+        struct Running(std::process::Child);
+        impl Drop for Running {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let running = Running(
+            Command::new(&target)
+                .args(["-n", "120", "127.0.0.1"])
+                .stdout(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
         assert!(std::fs::write(&target, "x").is_err(), "a running exe can't be overwritten");
         std::fs::write(src.join("ptyro.exe"), "new").unwrap();
         let files = vec![(src.join("ptyro.exe"), "ptyro.exe".to_owned())];
@@ -1258,9 +1284,16 @@ mod tests {
         assert!(aside.exists(), "still running, so still there");
         sweep(&target);
         assert!(aside.exists(), "this update's own, kept while it runs");
-        let _ = running.kill();
-        let _ = running.wait();
-        sweep_with(&target, &|_| false);
-        assert!(!aside.exists(), "swept once nothing runs it");
+        drop(running);
+        // Windows may hold the image (or a virus scanner the file) a moment after it ends.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            sweep_with(&target, &|_| false);
+            if !aside.exists() {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "swept once nothing runs it");
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
     }
 }

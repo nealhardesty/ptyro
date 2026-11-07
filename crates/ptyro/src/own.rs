@@ -48,15 +48,27 @@ pub(crate) struct Half {
 }
 
 /// The other half, when this is one: on Windows the ptyro in the WSL distro your daemon is in
-/// (or WSL's default), in WSL Windows' `ptyro.exe`. `None` elsewhere, or when it isn't there.
+/// (or WSL's default), in WSL Windows' `ptyro.exe`. `None` elsewhere, or when it isn't there;
+/// on Windows with a WSL that has a distro but no ptyro that answers, that is said (stderr), so
+/// one half is never updated without a word about the other.
 pub(crate) async fn other_half(paths: &Paths, platform: Platform) -> Option<Half> {
     if platform.is_windows() {
         let remote = crate::winclient::resolve(None, paths, false).await;
         let prefer =
             remote.as_deref().and_then(ptyro_client::remote::wsl_distro).map(str::to_owned);
-        let WslStatus::Usable { distro, version } = wsl_setup::probe(prefer.as_deref()).await
-        else {
-            return None;
+        let (distro, version) = match wsl_setup::probe(prefer.as_deref()).await {
+            WslStatus::Usable { distro, version } => (distro, version),
+            WslStatus::Unusable { reason, .. } => {
+                // No WSL, or no distro: there's no other half.
+                if !reason.starts_with("WSL isn't installed") && !reason.contains("no Linux distro")
+                {
+                    eprintln!(
+                        "note: WSL's ptyro couldn't be checked ({reason}); if it has one, `wsl ptyro update ptyro` brings it to the same version"
+                    );
+                }
+                return None;
+            }
+            _ => return None,
         };
         let words = ["update", "ptyro", "--yes"].map(str::to_owned);
         let mut argv = vec![ptyro_client::remote::wsl_exe()];

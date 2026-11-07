@@ -381,7 +381,14 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
     // Windows install with WSL is looked at now, before the lock (a cold distro takes seconds).
     let install = own::Install::here();
     let ptyro_named = ids.iter().any(|i| i == own::ID);
-    let ptyro_latest = looked.0.get(own::ID).cloned();
+    // As `updates::remember` will see it: this look's, else the one remembered (the API may be
+    // out of requests while the download still works), so the halves are decided on the same
+    // view the update list is.
+    let ptyro_latest = looked
+        .0
+        .get(own::ID)
+        .cloned()
+        .or_else(|| updates::load(&state).latest.get(own::ID).cloned());
     let ptyro_wanted = match own::finding(&install, ptyro_latest.as_deref()) {
         Some(o) if ids.is_empty() => !updates::ignored(&cfg.ignore, &o) && o.managed.is_none(),
         Some(_) => ptyro_named,
