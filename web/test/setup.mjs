@@ -189,11 +189,13 @@ const finished = (done = [], skipped = []) => ({ event: "finished", report: { do
 // BOOT5: the doctor's update finding, read into its parts; the sessions an update leaves on the
 // old version; and a run that updated says so.
 {
-  const c = { section: "updates", name: "antigravity", level: "warn", text: "Antigravity 1.4.0 is out (you have 1.3.2): `ptyro update agy` updates it (it runs `agy update`)" };
+  const data = { id: "antigravity", name: "Antigravity", program: "agy", version: "1.3.2", latest: "1.4.0", command: "agy update", admin: false };
+  const c = { section: "updates", name: "antigravity", level: "warn", text: "whatever the words say", data };
   assert.deepEqual(updateOffer(c), { id: "antigravity", name: "Antigravity", latest: "1.4.0", version: "1.3.2", program: "agy", command: "agy update", admin: false });
-  assert.equal(updateOffer({ ...c, text: "X 2.0 is out (you have 1.0): `ptyro update x` updates it (it runs `brew upgrade x`, as administrator)" }).admin, true);
+  assert.equal(updateOffer({ ...c, data: { ...data, admin: true } }).admin, true);
   assert.equal(updateOffer({ ...c, level: "note" }), null, "a skipped one (updates.ignore) offers no update");
-  assert.equal(updateOffer({ section: "agents", level: "warn", text: c.text }), null);
+  assert.equal(updateOffer({ ...c, data: undefined }), null, "no data, no button (never parsed from the words)");
+  assert.equal(updateOffer({ section: "agents", level: "warn", data }), null);
   const s = (name, agent, t = "running", machine = null) => ({ name, agent, state: { t }, machine });
   assert.deepEqual(runningAgent([s("a", "antigravity"), s("b", "claude"), s("c", "antigravity", "exited"), s("d", "antigravity", "running", "laptop2")], "antigravity"), ["a"]);
   const log = new SetupLog();
@@ -206,6 +208,17 @@ const finished = (done = [], skipped = []) => ({ event: "finished", report: { do
   both.started("u2", { entries: [{ id: "claude", side: "local", ticked: true, action: { update: true } }, { id: "gh", side: "local", ticked: true, action: {} }] });
   both.event(ev("u2", 1, finished(["claude", "gh"])));
   assert.equal(both.summary(), "1 installed, 1 updated.");
+  // An update refused because the program runs (in_use): the page offers to try it again; a
+  // plain failure doesn't; a new run starts with none.
+  const busy = new SetupLog();
+  busy.start();
+  busy.started("u3", { entries: [{ id: "claude", side: "windows", ticked: true, action: { update: true } }, { id: "codex", side: "windows", ticked: true, action: { update: true } }] });
+  busy.event(ev("u3", 1, { event: "failed", id: "claude", error: "it exited with 1: being used by another process", fix: "end the sessions", in_use: true }, "windows"));
+  busy.event(ev("u3", 2, { event: "failed", id: "codex", error: "no network", fix: "try again" }, "windows"));
+  busy.event(ev("u3", 3, { event: "finished", report: { done: [], failed: ["claude", "codex"], skipped: [], blocked: [] } }, "windows"));
+  assert.deepEqual(busy.retry, [{ id: "claude", side: "windows" }]);
+  busy.start();
+  assert.deepEqual(busy.retry, []);
 }
 
 console.log("setup: ok");

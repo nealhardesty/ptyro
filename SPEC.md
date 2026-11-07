@@ -1090,8 +1090,12 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
 **[built BOOT5] Protocol 1.35** (additive): out of date, offered (§24.7). A setup entry in the
 `other` state (installed another way: npm, Homebrew) adds `latest` when a newer version is out,
 and ticking it plans that installer's own update; `outdated` entries now arrive whenever the
-daemon remembers a newer version (`<state>/versions.json`), and ticking one runs its update. An
-older daemon sends no `latest` (the page shows no Update for it); an older client ignores it.
+daemon remembers a newer version (`<state>/versions.json`), and ticking one runs its update.
+`Request::Updates{note}` → `Reply::Updates{offered, note}` (`read` scope): the agents out of date
+on the daemon's machine, and with `note` the start-up note's, marked said. `setup::Event::Failed`
+adds `in_use` (an update refused because the program runs: a client offers to try again). An
+older daemon sends no `latest` or `in_use` and refuses `Updates` (the TUI then offers nothing); an
+older client ignores them.
 
 **[built BOOT3] Protocol 1.34** (additive): the web's setup checklist (§24.6). `Reply::SetupPlan`
 adds `lines` (each entry's words, `checklist::Line`: `about`, `how`, `why`, `state`, as the TUI
@@ -9431,7 +9435,8 @@ with that message. A filesystem that can't lock doesn't stop an install (it goes
 as before).
 
 **Said up front, everywhere.** Who holds it is asked before anyone chooses
-(`Lock::held_by`, which takes nothing: it tries the lock and lets go at once):
+(`Lock::held_by`, which never touches the lock: it reads `setup.who` and checks that the
+process named there still runs, BOOT5):
 - **the CLI** takes the lock before its checklist or question, so it refuses at once;
 - **the TUI's checklist** looks when the survey is in (`Setup::check_busy`): it says "setup is
   already running on this computer (from …): ⏎ installs nothing now; open the checklist again
@@ -9445,8 +9450,9 @@ as before).
   names it and the page joins it (below); a refused `SetupRun` asks for the plan, so the page then
   shows either.
 
-The check takes the lock for an instant, so a run starting in that instant may be refused with a
-stale holder's name or "another ptyro": cosmetic and rare, and trying again works.
+Asking can't make a run starting that instant be refused (BOOT5's fix: asking used to take the
+lock for an instant). For an instant after a holder locks and before it writes `setup.who`,
+`held_by` may say nothing: the take itself still refuses.
 
 **Following a run on the web.** The daemon's guard already refused a second `SetupRun`; a page
 that hadn't started the run didn't know of it. Now the daemon keeps the run
@@ -9520,15 +9526,25 @@ CLI): not git, the GitHub CLI or Node.js (the design's non-goal). ptyro itself i
 **The engine** (`ptyro_agents::updates`, beside the version table and the plan engine):
 - `sources()`: each agent row with a `latest` source (§24.1). BOOT6 adds ptyro as one more
   source and finding under the id `ptyro`; nothing else changes shape.
-- `lookup(host)`: each source's reply through `Host::latest_reply(url)` (the real host: `curl
-  -fsSL --max-time 20`, as the rest of setup downloads; the fake machine: offline), read by
-  `Latest::parse`. Found versions, and per source why it couldn't be had.
+- `lookup(host)`: every source at once (a scoped thread each), each reply through
+  `Host::latest_reply(url)` (the real host: `curl -fsSL --connect-timeout 5 --max-time 10`, as the
+  rest of setup downloads; the fake machine: offline), read by `Latest::parse`. A dead network
+  costs one wait of a few seconds, not one per agent. Found versions, and per source why it
+  couldn't be had.
 - `check(host, state, now)`: lookup, then `setup::survey` with the newest versions (an older
   agent is `outdated`; one installed another way is `other` with `latest`), and remember it.
   A failed lookup keeps the version found before, so offline changes nothing but the time.
-- `refresh(host, state, now)`: the survey again against what is remembered, no network: after an
-  install or update, and between the daily looks, so an agent that updated itself (Claude Code and
-  Antigravity do) stops being offered.
+- `refresh(host, state, now)`: the survey again against what is remembered, no network, by the
+  holder of the setup lock after an install or update. Between the daily looks the same is done
+  beside the installs (`look_beside`, below), so an agent that updated itself (Claude Code and
+  Antigravity do) stops being offered. Refreshes ask the agents only (`setup::survey_agents`: no
+  git, GitHub CLI or Node.js versions, no package manager's candidate).
+- `remember(host, state, now, since, looked, full)`: what a lookup found, written with the survey
+  (all rows when it is to plan with, the agents otherwise); `since` is the install count read
+  before the survey (below).
+- `setup::other_update(item, platform, via)`: an agent installed another way updates through that
+  installer's `others` row with an `update`; the findings and the plan both use it, so a row
+  without one is neither offered nor planned.
 - `outdated(survey)`: each out-of-date agent as `Outdated{id, name, program, version, latest,
   command, via, admin, doc}`: `command` is what the update runs, as typed (the recommended
   method's `update`, or for one installed another way that installer's own `update` from
@@ -9549,19 +9565,32 @@ other. `due(v, now)`: never looked, a day (`DAY_MS`) since `checked`, or the clo
 so the TUI's badge, the web's Health page and the start-up note all read one result.
 `start_updates` (`crates/ptyro-daemon/src/setup.rs`) waits a minute after the daemon starts
 (never on its start-up path), then every hour: with `updates.check = "daily"` and no install
-running, it looks if a day has passed, else only refreshes. `ptyro doctor` and `ptyro update`
-look afresh; `ptyro doctor --quick` (the TUI's badge, every 10 minutes) and the web's Health
-page refresh (installed versions asked again, newest versions as remembered). Start-up reads only
-the file. Each machine side checks its own: Windows' ptyro and WSL's keep their own state
-(§24.6), so a finding belongs to its side's file, its side's daemon and its side's `ptyro update`.
+running, it looks if a day has passed, else only refreshes. `ptyro doctor`, `ptyro update` and
+`ptyro update --check` look afresh; `ptyro doctor --quick`, the web's Health page and the daemon's
+`Updates` request refresh (installed versions asked again, newest versions as remembered).
+Start-up reads only what is remembered. Each machine side checks its own: Windows' ptyro and WSL's
+keep their own state (§24.6), so a finding belongs to its side's file, its side's daemon and its
+side's `ptyro update`.
+
+**A TUI shows its daemon's machine** (the coordinator's ruling, the review's I1 and I2): its
+badge's `updates` findings and its start-up note come from the daemon it is attached to
+(`Request::Updates`), whose machine runs the sessions, never from this computer's file when the
+daemon is elsewhere; its own `doctor --quick`'s `updates` section is dropped. The fix runs there
+too: `ptyro update` in a split the daemon starts (this computer's ptyro; WSL's own in WSL, as
+setup's WSL side runs; or the remote computer's). With an ssh daemon each finding and the note say
+where ("on box: Codex 0.170.0 is out …"); with WSL's daemon, "on WSL: …". Windows' own agents,
+when WSL's daemon is the attached one, are `ptyro doctor`'s (and `ptyro update`'s) on Windows.
 
 **A look beside an install** (the review lessons: no race where a second action starts while one
 runs, no stale view after one): every install and update takes the machine's setup lock (§24.6),
-and taking it bumps `generation` (`updates::started`). The daemon reads `generation` before it
-looks whether the lock is held, and its write keeps the newest versions it found but drops its
-view of what is installed if `generation` moved meanwhile (`check_since`, `refresh_since`). An
-install or update refreshes while it still holds the lock. So a look that began before an update
-never writes the old version back over it.
+and taking it bumps `generation` (`updates::started`). Every write of `versions.json` by someone
+not holding the lock goes through `look_beside` (the daemon's hourly look, `doctor`, `ptyro update
+--check`, the web's "look now", the `Updates` request): it reads `generation`, then whether the
+lock is held (`held_by`, which never touches it); while held it writes nothing and answers from
+memory; and its write keeps the newest versions it found but drops its view of what is installed
+if `generation` moved meanwhile. An install or update refreshes while it still holds the lock. So
+a look that began before an update never writes the old version back over it (unit-tested:
+`a_look_that_began_before_an_update_never_writes_the_old_version_back`).
 
 **Offline is quiet.** A failed lookup never prints at start-up, never blocks it (start-up reads
 the file), and is tried again the next day. Only `doctor` says so, as a note: "couldn't look for
@@ -9569,29 +9598,32 @@ newer versions (offline?): ptyro looks again tomorrow" (or which agents' sources
 reached). `ptyro update` offline says the same and exits 0.
 
 **The four places a finding shows:**
-1. **The start-up note**, once per new version: when the TUI starts (its first tick, with a
-   daemon on this computer or this Windows' WSL), `updates::note` returns what is offered and not
-   said yet and marks it said in `noted`, under the lock (said once, however many TUIs start).
+1. **The start-up note**, once per new version: when the TUI starts (its first tick with no
+   dialog or first run on screen to hide it), it asks its daemon `Updates{note: true}`, whose
+   `updates::note` returns what is offered and not said yet and marks it said in `noted`, under
+   the lock (said once, however many TUIs start).
    The TUI shows it as a message with an offer: "Codex 0.170.0 is out (you have 0.162.1) · C-q u
    updates it" (`toast.act` runs `app.update` for it); several: "2 agents have newer versions:
    Codex 0.170.0, Claude Code 2.1.400 · C-q u updates them". A newer version still is said again,
-   once. Not with a daemon on another computer (this computer's agents aren't what its sessions
-   run).
-2. **The TUI's health badge** (`M`): `doctor --quick`'s `updates` findings, `Fix::Update(names)`:
+   once. With a daemon on another computer it says which ("on box: …").
+2. **The TUI's health badge** (`M`): the daemon's `Updates` (asked with each doctor run),
+   `Fix::Update(names)`:
    ⏎ runs `ptyro update <names>` in a split, tracked as the checklist's installs are (§24.5: one
    at a time, never beside a running install, and the badge looks again when the split ends).
-3. **The web's Health page** (`#/health`): the same findings; a finding's menu offers "Update
-   <name> to <version>" (`updates.update`), "Look for newer versions now" (`updates.check`) and
+3. **The web's Health page** (`#/health`): the same findings (each check carries the engine's
+   `Outdated` as `data`, which the page reads instead of the words); a finding's menu offers
+   "Update <name> to <version>" (`updates.update`), "Look for newer versions now" (`updates.check`) and
    Update settings (`#/settings/updates`).
 4. **`ptyro doctor`**: section `updates`, looked up afresh: per agent out of date a warning with
    the words above, one skipped by `updates.ignore` a note, "up to date (looked 5 minutes ago)"
-   when nothing is, and "off (updates.check)" when off.
+   when nothing is, "off (updates.check)" when off, and a warning for an `updates.ignore` entry
+   that names no agent (a typo skips nothing).
 
 **The update itself, `ptyro update [NAME…] [--check] [-y] [--json]`:** names as `ptyro install`
 takes them, agents only (a tool is refused, exit 2: "ptyro updates the agents; git updates the way
-you installed it"; an unknown name exits 3). It takes the machine's setup lock first (another run
-holding it: "setup is already running (from …)", exit 5), looks afresh (offline: what is
-remembered), and plans each agent to update (those named, else every one out of date that
+you installed it"; an unknown name exits 3). Another run holding the machine's setup lock is said at once ("setup is already running (from …)",
+exit 5). It looks afresh first (offline: what is remembered), without the lock (a slow network
+never holds it), then takes the lock, writes what it found with a full survey, and plans each agent to update (those named, else every one out of date that
 `updates.ignore` doesn't skip; named ones are updated even when skipped) with the plan engine:
 an `outdated` entry runs its method's `update`, an `other` one with `latest` that installer's own
 (`setup::plan`; `setup::run` finds the method among `others` for an update). It shows each "Codex
@@ -9618,14 +9650,17 @@ installer's words for it ("being used by another process", `EBUSY`, "resource bu
 running, and Windows won't replace a program while it runs: end the sessions running it (or quit
 it wherever it runs), then `ptyro update codex` again" (on every client: the web's log shows it).
 `ptyro update` at a terminal on Windows then names the sessions running it and asks "Try again
-now? [Y/n]", and tries those again on a yes (as often as asked); `--yes` and `--json` don't ask.
+now? [Y/n]", and tries those again on a yes (as often as asked); one that updated itself meanwhile
+counts as done ("✓ Claude Code is up to date now"); `--yes` and `--json` don't ask. The event
+carries `in_use`, and the web's setup page shows "<name> is still running (sessions…)" with "Try
+updating <name> again" (`updates.retry`), which runs it again. Elsewhere (Linux's and macOS's
+"text file busy") the words don't blame Windows: "its file couldn't be replaced while it runs".
 
 **The TUI** (`app.update`, the palette; the badge's fix; the note's offer): `ptyro update
-[names]` in a split, as above, one at a time with setup's splits (`setup_run`, `setup_tick`). A
-running install shows instead; the machine's lock held elsewhere is said before any split opens.
-On Windows with WSL's daemon the split runs this ptyro.exe through interop with `--tty` (the
-update is Windows' side, where the badge's `doctor` looked); with a daemon on another computer,
-that computer's `ptyro update` (its own agents). The setup checklist (TUI, CLI and web) plans
+[names]` in a split where the daemon is, as above, one at a time with setup's splits (`setup_run`,
+`setup_tick`; a running one shows instead, saying "an update is still running in …" or "setup is
+still running in …"); with this computer's daemon, the machine's lock held elsewhere is said
+before any split opens. The setup checklist (TUI, CLI and web) plans
 with the remembered newest versions (`updates::known`: less what is skipped, none when off), so
 an outdated agent is a row there too ("2.1.300; 2.1.400 is out"), and ticking it updates it.
 
@@ -9665,10 +9700,10 @@ back); the TUI's note once and its fix's split one at a time (`app.rs`); the web
 running sessions and "1 updated." (`web/test/setup.mjs`); and in a real browser (`make web-e2e`):
 Health → Look for newer versions now → Update → the setup page's "1 updated." → nothing offered.
 
-**Decided by the builder:** the daemon looks (the badge and the web share one result) and the CLI
-note is the TUI's start; refreshes between looks and after every install keep findings true without
+**Decided by the builder:** the daemon looks (the badge, the note and the web share one result) and
+the CLI note is the TUI's start; a TUI shows its daemon's machine (the coordinator's ruling); refreshes between looks and after every install keep findings true without
 the network; `generation` instead of holding the setup lock while looking (a daily look must never
 make `ptyro install` wait or be refused); `ptyro update --check` and `ptyro update` look even when
 off (asked for); an agent installed another way updates through its own installer until BOOT7
-offers the move; on Windows the badge's update is Windows' side; protocol 1.35 (above).
+offers the move; protocol 1.35 (above).
 

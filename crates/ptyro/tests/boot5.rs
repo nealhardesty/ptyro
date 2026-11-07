@@ -319,7 +319,7 @@ fn windows_wont_replace_a_running_agent_and_offers_a_retry() {
     let o = m.run(&["update", "claude"], "y\nn\n");
     let t = text(&o);
     assert_eq!(o.status.code(), Some(1), "{t}");
-    assert!(t.contains("then `ptyro update claude` again"), "{t}");
+    assert!(t.contains("then try the update again (`ptyro update claude`)"), "{t}");
     assert_eq!(m.calls().len(), 1);
 }
 
@@ -398,4 +398,61 @@ async fn the_daemon_looks_once_a_day_and_the_webs_update_runs_through_it() {
     wait_for("an hour's refresh", || versions()["surveyed"] == NOW + 26 * HOUR);
     let v = versions();
     assert!(v["outdated"].as_array().unwrap().iter().all(|o| o["id"] != "claude"), "{v}");
+}
+
+/// An agent in use (the design's call): the update goes ahead, and the sessions still running the
+/// old version until they restart are named, before the question and after the update.
+#[test]
+fn the_sessions_running_an_agent_are_named_before_and_after_its_update() {
+    let m = machine();
+    let fake_agent = format!("['{BIN}', \"fake-agent\", \"--as\", \"claude\"]");
+    let config = format!("[agents.claude]\ncommand = {fake_agent}\n");
+    let env = m.env();
+    let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let d = TempDaemon::start_with(BIN, &env, Some(&config)).unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let o = d
+        .cmd()
+        .args(["new", "-d", "-n", "brisk-rook", "-a", "claude", "-C"])
+        .arg(work.path())
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", text(&o));
+    let mut child = d
+        .cmd()
+        .args(["update", "claude"])
+        .envs(env.iter().copied())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"y\n").unwrap();
+    let o = child.wait_with_output().unwrap();
+    let t = text(&o);
+    assert!(o.status.success(), "{t}");
+    assert!(
+        t.contains("    1 session still runs Claude Code 2.1.300 until restarted: brisk-rook"),
+        "{t}"
+    );
+    assert!(
+        t.contains("\n1 session still runs Claude Code 2.1.300 until restarted: brisk-rook"),
+        "{t}"
+    );
+    assert!(t.contains("1 updated."), "{t}");
+}
+
+/// A name in `updates.ignore` that isn't an agent (a typo) skips nothing, and `doctor` says so.
+#[test]
+fn doctor_says_when_the_ignore_list_names_no_agent() {
+    let m = machine();
+    m.config("[updates]\nignore = [\"codx@0.170.0\", \"codex\"]\n");
+    let checks = m.doctor(true);
+    let bad: Vec<&Value> = checks.iter().filter(|c| c["name"] == "ignore").collect();
+    assert_eq!(bad.len(), 1, "{checks:?}");
+    assert!(bad[0]["text"].as_str().unwrap().contains("\"codx@0.170.0\", which isn't an agent"));
+    // The finding carries what it is about, for a client to act on (the web's Update).
+    let claude = m.doctor(false).into_iter().find(|c| c["name"] == "claude").unwrap();
+    assert_eq!(claude["data"]["program"], "claude");
+    assert_eq!(claude["data"]["latest"], "2.1.400");
 }

@@ -9,8 +9,9 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
-use crate::app::{App, AppMsg, Confirmed, Overlay, Purpose};
+use crate::app::{App, AppMsg, Confirmed, Overlay, Pending, Purpose};
 use crate::palette::{Item, Palette, Target};
+use ptyro_protocol::Request;
 
 /// How often the doctor runs again.
 const EVERY: Duration = Duration::from_secs(600);
@@ -73,8 +74,11 @@ pub struct Health {
     /// Look again as soon as the run in flight is in: what it reports may predate a change
     /// (the setup checklist's install just ended, BOOT2).
     pub again: bool,
-    /// The start-up note about newer agent versions was looked for (BOOT5).
+    /// The start-up note about newer agent versions was asked for (BOOT5).
     pub noted: bool,
+    /// The agents out of date on the daemon's machine (`Request::Updates`), as findings: the
+    /// badge shows these, not this process's doctor's (which looked at this computer).
+    pub updates: Vec<Finding>,
 }
 
 /// The command a doctor message suggests: the first `` `ptyro …` `` in it, with a
@@ -207,7 +211,13 @@ pub fn shell_init_missing(config: &ptyro_core::config::Config) -> Option<(PathBu
 impl App {
     /// Periodically, in the background (from `tick`).
     pub(crate) fn health_tick(&mut self, started: Instant) {
-        if !self.health.noted && self.client.is_some() && !self.opts.raw {
+        // The start-up note, once nothing else is on screen (a dialog, the first run) to hide it.
+        if !self.health.noted
+            && self.client.is_some()
+            && !self.opts.raw
+            && self.overlay.is_none()
+            && self.first_run.is_none()
+        {
             self.health.noted = true;
             self.update_note();
         }
@@ -229,22 +239,50 @@ impl App {
     }
 
     /// The start-up note (BOOT5): an agent with a newer version out, said once per new version,
-    /// from what the daemon's daily look remembered (`<state>/versions.json`; never the
-    /// network), with the key that updates it. Not with a daemon on another computer: this
-    /// computer's agents aren't the ones its sessions run.
+    /// asked of the daemon this TUI is attached to (its machine's agents are the sessions'; it
+    /// answers from what its daily look remembered, never the network). The reply is toasted with
+    /// the key that updates it (`got_updates`).
     pub(crate) fn update_note(&mut self) {
-        if crate::setup_list::elsewhere(self.connect.remote.as_deref(), cfg!(windows)).is_some() {
-            return;
+        self.request(Pending::Updates { note: true }, Request::Updates { note: true });
+    }
+
+    /// The daemon's agents out of date: the badge's `updates` findings, each labelled with where
+    /// they are when that isn't this computer; with `note`, the start-up note too.
+    pub(crate) fn got_updates(
+        &mut self,
+        offered: Vec<ptyro_agents::updates::Outdated>,
+        note: Vec<ptyro_agents::updates::Outdated>,
+        noting: bool,
+    ) {
+        let prefix = self.update_place().map(|p| format!("on {p}: ")).unwrap_or_default();
+        self.health.updates = offered
+            .iter()
+            .map(|o| Finding {
+                problem: false,
+                what: format!("updates {}", o.id),
+                text: format!("{prefix}{}", o.finding()),
+                fix: Some(Fix::Update(vec![o.program.clone()])),
+            })
+            .collect();
+        if !self.health_open() {
+            self.health.findings.retain(|f| !f.what.starts_with("updates "));
+            self.health.findings.extend(self.health.updates.iter().cloned());
+            self.health.announced = self.health.announced.min(self.health.findings.len());
         }
-        let said = ptyro_agents::updates::note(&self.paths.state, &self.config.updates);
-        let Some(line) = ptyro_agents::updates::note_line(&said) else { return };
-        let label = if said.len() == 1 { "updates it" } else { "updates them" };
-        let names = said.iter().map(|o| o.program.clone()).collect::<Vec<_>>().join(" ");
-        let then = crate::app::Then::Run(crate::keymap::Command {
-            action: "app.update",
-            arg: Some(names),
-        });
-        self.toast_offer(line, false, crate::app::Offer { label: label.into(), then });
+        if noting && let Some(line) = ptyro_agents::updates::note_line(&note) {
+            let label = if note.len() == 1 { "updates it" } else { "updates them" };
+            let names = note.iter().map(|o| o.program.clone()).collect::<Vec<_>>().join(" ");
+            let then = crate::app::Then::Run(crate::keymap::Command {
+                action: "app.update",
+                arg: Some(names),
+            });
+            self.toast_offer(
+                format!("{prefix}{line}"),
+                false,
+                crate::app::Offer { label: label.into(), then },
+            );
+        }
+        self.dirty = true;
     }
 
     /// Run `ptyro doctor --quick --json` now.
@@ -252,6 +290,8 @@ impl App {
         let Ok(exe) = std::env::current_exe() else { return };
         self.health.running = true;
         self.health.last = Some(Instant::now());
+        // The agents out of date are the daemon's (its machine runs the sessions).
+        self.request(Pending::Updates { note: false }, Request::Updates { note: false });
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let out = tokio::process::Command::new(exe)
@@ -293,7 +333,11 @@ impl App {
             self.health.deferred = Some(checks);
             return;
         }
-        let mut findings: Vec<Finding> = checks.iter().filter_map(finding).collect();
+        // This process's doctor looked at this computer's agents; the daemon's are the ones the
+        // sessions run (`got_updates`).
+        let mut findings: Vec<Finding> =
+            checks.iter().filter(|c| c.section != "updates").filter_map(finding).collect();
+        findings.extend(self.health.updates.iter().cloned());
         if let Some((rc, line)) = shell_init_missing(&self.config) {
             findings.push(Finding {
                 problem: false,

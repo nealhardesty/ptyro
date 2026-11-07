@@ -52,6 +52,10 @@ pub enum Event {
         id: String,
         error: String,
         fix: String,
+        /// An update the program's file couldn't be replaced for, because it is running
+        /// (protocol 1.35, BOOT5): a client offers to try again once its sessions end.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        in_use: bool,
     },
     /// Not run: what it needs failed, or it needs administrator rights that can't be had here.
     Skipped {
@@ -215,8 +219,9 @@ pub fn run(plan: &Plan, host: &dyn Host, admin: Admin, on: &mut dyn FnMut(Event)
                 report.done.push(e.id.clone());
             }
             Err(error) => {
-                let fix = failure_fix(e, method.via, &error);
-                on(Event::Failed { id: e.id.clone(), error, fix });
+                let busy = action.update && in_use(&error);
+                let fix = failure_fix(e, method.via, &error, plan.platform);
+                on(Event::Failed { id: e.id.clone(), error, fix, in_use: busy });
                 report.failed.push(e.id.clone());
             }
         }
@@ -262,12 +267,17 @@ pub fn in_use(error: &str) -> bool {
     .any(|w| e.contains(w))
 }
 
-fn failure_fix(e: &Entry, via: Via, error: &str) -> String {
+fn failure_fix(e: &Entry, via: Via, error: &str, platform: crate::catalog::Platform) -> String {
     let cmd = e.action.as_ref().map(|a| a.command.as_str()).unwrap_or_default();
     let update = e.action.as_ref().is_some_and(|a| a.update);
     if update && in_use(error) {
+        let why = if platform.is_windows() {
+            "Windows won't replace a program while it runs"
+        } else {
+            "its file couldn't be replaced while it runs"
+        };
         return format!(
-            "{} is running, and Windows won't replace a program while it runs: end the sessions running it (or quit it wherever it runs), then `ptyro update {}` again",
+            "{} is running, and {why}: end the sessions running it (or quit it wherever it runs), then try the update again (`ptyro update {}`)",
             e.name,
             program(e)
         );

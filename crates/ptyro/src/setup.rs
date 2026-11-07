@@ -327,7 +327,15 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
             eprintln!("Looking for newer versions…");
         }
         let host = setup::host(&ctx.paths);
-        let (v, survey) = updates::check_with(&*host, &state, updates::now());
+        // Beside any install: one running now leaves what was remembered (said so), and one that
+        // starts while this looks keeps what it finds (`updates::look_beside`).
+        let busy = setup::lock::Lock::held_by(&state);
+        let (v, survey) = updates::look_beside(&*host, &state, updates::now(), true);
+        if let Some(by) = busy.filter(|_| !a.json) {
+            eprintln!(
+                "Setup is running (from {by}): this is what was found before; look again once it's done."
+            );
+        }
         if a.json {
             let out: Vec<&Outdated> =
                 v.outdated.iter().filter(|o| ids.is_empty() || ids.contains(&o.id)).collect();
@@ -348,13 +356,20 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
             "`ptyro update` asks before it updates: run it in a terminal, or pass --yes",
         ));
     }
-    // One install or update at a time on this machine, whoever starts it.
-    let lock = take_lock(ctx, "`ptyro update`")?;
+    // One install or update at a time on this machine, whoever starts it: said at once when one
+    // runs, before anything is looked up.
+    if let Some(by) = setup::lock::Lock::held_by(&state) {
+        return Err(Error::conflict(setup::lock::busy(&by)));
+    }
     if !a.json {
         eprintln!("Looking for newer versions…");
     }
     let host = setup::host(&ctx.paths);
-    let (v, survey) = updates::check_with(&*host, &state, updates::now());
+    // Looked up before the lock is taken: a slow network never holds it.
+    let looked = updates::lookup(&*host);
+    let lock = take_lock(ctx, "`ptyro update`")?;
+    let since = updates::generation(&state);
+    let (v, survey) = updates::remember(&*host, &state, updates::now(), since, Some(looked), true);
     let todo: Vec<Outdated> = v
         .outdated
         .iter()
@@ -384,8 +399,8 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
             eprintln!("  {} {} → {}{how}{admin}", o.name, o.version, o.latest);
             if let Some(names) = running.get(&o.id) {
                 eprintln!(
-                    "    {} still run {} {} until they restart: {}",
-                    sessions(names.len()),
+                    "    {} {} {} until restarted: {}",
+                    still_run(names.len()),
                     o.name,
                     o.version,
                     names.join(", ")
@@ -408,9 +423,7 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
     loop {
         let mut busy: Vec<String> = Vec::new();
         let mut on = |ev: Event| {
-            if let Event::Failed { id, error, .. } = &ev
-                && setup::in_use(error)
-            {
+            if let Event::Failed { id, in_use: true, .. } = &ev {
                 busy.push(id.clone());
             }
             if a.json {
@@ -459,7 +472,27 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
         if !confirm("Try again now? [Y/n] ") {
             break;
         }
-        plan = setup::plan(&setup::survey(&*host, &v.latest), &busy);
+        // Looked at again: one that updated itself meanwhile (Claude Code and Antigravity do)
+        // is done, not a failure.
+        let fresh = setup::survey(&*host, &v.latest);
+        let mut still: Vec<String> = Vec::new();
+        for id in busy {
+            let old = matches!(
+                fresh.states.get(&id),
+                Some(State::Outdated { .. } | State::Other { latest: Some(_), .. })
+            );
+            if old {
+                still.push(id);
+            } else {
+                eprintln!("✓ {} is up to date now", name(&id));
+                failed.retain(|f| f != &id);
+                done.push(id);
+            }
+        }
+        if still.is_empty() {
+            break;
+        }
+        plan = setup::plan(&fresh, &still);
     }
     let after = updates::refresh(&*host, &state, updates::now());
     drop(lock);
@@ -467,8 +500,8 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
         for id in &done {
             if let (Some(o), Some(n)) = (todo.iter().find(|o| &o.id == id), running.get(id)) {
                 eprintln!(
-                    "{} still run {} {} until they restart: {}",
-                    sessions(n.len()),
+                    "{} {} {} until restarted: {}",
+                    still_run(n.len()),
                     o.name,
                     o.version,
                     n.join(", ")
@@ -498,6 +531,11 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
 /// `1 session`, `2 sessions`.
 fn sessions(n: usize) -> String {
     if n == 1 { "1 session".into() } else { format!("{n} sessions") }
+}
+
+/// `1 session still runs`, `2 sessions still run`.
+fn still_run(n: usize) -> String {
+    if n == 1 { "1 session still runs".into() } else { format!("{n} sessions still run") }
 }
 
 /// A named agent with nothing to update: the newest already, not installed, or not known.
@@ -753,7 +791,7 @@ fn print_event(ev: &Event, name: &dyn Fn(&str) -> String, windows: bool) {
         Event::Done { id, version: None } => {
             eprintln!("✓ {} (installed; a new terminal may be needed to find it)", name(id))
         }
-        Event::Failed { id, error, fix } => {
+        Event::Failed { id, error, fix, .. } => {
             eprintln!("✗ {}: {error}", name(id));
             eprintln!("  fix: {fix}");
         }

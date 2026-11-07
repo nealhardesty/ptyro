@@ -195,7 +195,7 @@ impl Daemon {
                         let host = setup::host(&paths);
                         let now = updates::now();
                         let due = updates::due(&updates::load(&state), now);
-                        let v = updates::look_beside(&*host, &state, now, due);
+                        let (v, _) = updates::look_beside(&*host, &state, now, due);
                         if due && v.checked == now {
                             tracing::info!(
                                 "looked for newer agent versions: {} out of date, {} not reached",
@@ -209,6 +209,26 @@ impl Daemon {
                 tokio::time::sleep(knob_ms("PTYRO_TEST_UPDATES_EVERY_MS", UPDATES_EVERY)).await;
             }
         });
+    }
+
+    /// `Updates` (BOOT5): what is out of date here, for a TUI's badge and start-up note, which
+    /// show this daemon's machine (the sessions' agents), wherever the TUI runs. A refresh beside
+    /// the installs (`updates::look_beside`, no network); `note` also marks the note's said.
+    pub(crate) async fn updates(&self, note: bool) -> Result<Reply, Error> {
+        let cfg = self.config().updates;
+        let (paths, state) = (self.paths.clone(), self.paths.state.clone());
+        tokio::task::spawn_blocking(move || {
+            if cfg.check == ptyro_core::config::UpdateCheck::Off {
+                return Reply::Updates { offered: Vec::new(), note: Vec::new() };
+            }
+            let host = setup::host(&paths);
+            let (v, _) = updates::look_beside(&*host, &state, updates::now(), false);
+            let offered = updates::offered(&v, &cfg).into_iter().cloned().collect();
+            let note = if note { updates::note(&state, &cfg) } else { Vec::new() };
+            Reply::Updates { offered, note }
+        })
+        .await
+        .map_err(|e| Error::internal(e.to_string()))
     }
 
     /// `SetupPlan`.

@@ -257,14 +257,29 @@ pub struct Survey {
 /// Look at the machine: every row of the table through `host`. `latest` holds newest versions
 /// by item id (BOOT5's daily check); an older installed one is [`State::Outdated`].
 pub fn survey(host: &dyn Host, latest: &BTreeMap<String, String>) -> Survey {
+    survey_of(host, latest, &|_| true)
+}
+
+/// [`survey`] of the agents only (BOOT5's refreshes, every few minutes: no git, GitHub CLI or
+/// Node.js versions asked, no package manager's candidate); other rows are left out.
+pub fn survey_agents(host: &dyn Host, latest: &BTreeMap<String, String>) -> Survey {
+    survey_of(host, latest, &|i| i.kind == Kind::Agent)
+}
+
+fn survey_of(
+    host: &dyn Host,
+    latest: &BTreeMap<String, String>,
+    wanted_item: &dyn Fn(&Item) -> bool,
+) -> Survey {
     let platform = host.platform();
+    let items: Vec<&Item> = catalog::items().iter().filter(|i| wanted_item(i)).collect();
     let mut wanted: BTreeSet<String> = ["sudo", "curl"].map(str::to_owned).into();
-    for i in catalog::items() {
+    for i in &items {
         wanted.extend(i.methods(platform).filter_map(|m| m.needs.clone()));
     }
     let programs = wanted.into_iter().filter(|p| host.has(p)).collect::<BTreeSet<_>>();
     let mut states = BTreeMap::new();
-    for item in catalog::items() {
+    for item in &items {
         let state = match host.installed(item) {
             None => State::Missing,
             Some(found) => classify(item, platform, found, latest.get(&item.id)),
@@ -272,7 +287,7 @@ pub fn survey(host: &dyn Host, latest: &BTreeMap<String, String>) -> Survey {
         states.insert(item.id.clone(), state);
     }
     let mut candidates = BTreeMap::new();
-    if let Some(node) = catalog::item("node") {
+    if let Some(node) = items.iter().find(|i| i.id == "node") {
         for m in node.methods(platform).filter(|m| matches!(m.via, Via::Apt | Via::Dnf)) {
             if m.needs.as_ref().is_some_and(|n| programs.contains(n))
                 && let Some(v) = host.candidate(m.via)
@@ -282,6 +297,12 @@ pub fn survey(host: &dyn Host, latest: &BTreeMap<String, String>) -> Survey {
         }
     }
     Survey { platform, states, programs, candidates }
+}
+
+/// The way an agent installed another way (`via`) updates: that installer's `others` row with
+/// an `update` (BOOT5). The plan and the findings both use it, so they can't disagree.
+pub fn other_update(item: &Item, platform: Platform, via: Via) -> Option<&Method> {
+    item.others.iter().find(|m| m.via == via && m.on(platform) && m.update.is_some())
 }
 
 fn classify(item: &Item, platform: Platform, found: Installed, latest: Option<&String>) -> State {
@@ -519,11 +540,9 @@ pub fn plan(survey: &Survey, picks: &[String]) -> Plan {
             }
             State::Outdated { .. } => item.method(platform, has).map(|m| (m, true)),
             // Out of date, installed another way: that installer's own update (BOOT5).
-            State::Other { via, latest: Some(_), .. } => item
-                .others
-                .iter()
-                .find(|m| m.via == *via && m.on(platform) && m.update.is_some())
-                .map(|m| (m, true)),
+            State::Other { via, latest: Some(_), .. } => {
+                other_update(item, platform, *via).map(|m| (m, true))
+            }
             State::Installed { .. } | State::Other { .. } => None,
         };
         let after: Vec<String> = item

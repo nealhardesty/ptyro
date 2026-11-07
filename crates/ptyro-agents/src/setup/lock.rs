@@ -41,16 +41,30 @@ impl Lock {
         }
     }
 
-    /// Who holds the lock in `state` now ("`ptyro install` (process 4242)"), without taking
-    /// it; `None` when it is free. For a checklist to say so before anyone ticks anything.
+    /// Who holds the lock in `state` now ("`ptyro install` (process 4242)"); `None` when it is
+    /// free. For a checklist to say so before anyone ticks anything. It never touches the lock
+    /// (asking can't make a `ptyro install` starting that instant be refused): it reads what the
+    /// holder wrote of itself, `setup.who`, and checks that its process still runs (a holder that
+    /// crashed leaves the file behind, but the lock went with it).
     pub fn held_by(state: &Path) -> Option<String> {
-        let file = OpenOptions::new().write(true).open(state.join("setup.lock")).ok()?;
-        match file.try_lock() {
-            // Free: let go at once (closing the file does).
-            Ok(()) => None,
-            Err(TryLockError::WouldBlock) => Some(holder(&state.join("setup.who"))),
-            Err(TryLockError::Error(_)) => None,
-        }
+        let text = std::fs::read_to_string(state.join("setup.who")).ok()?;
+        let text = text.trim().to_owned();
+        let pid: u32 = text
+            .rsplit_once("(process ")
+            .and_then(|(_, rest)| rest.trim_end_matches(')').trim().parse().ok())?;
+        alive(pid).then_some(text)
+    }
+}
+
+/// Whether process `pid` is running.
+fn alive(pid: u32) -> bool {
+    #[cfg(windows)]
+    {
+        ptyro_pty::alive(pid)
+    }
+    #[cfg(not(windows))]
+    {
+        ptyro_core::os::alive(pid)
     }
 }
 
@@ -89,6 +103,11 @@ mod tests {
         let by = Lock::held_by(dir.path()).unwrap();
         assert!(by.starts_with("the web app (process "), "{by}");
         assert!(Lock::take(dir.path(), "x").is_err(), "held_by took nothing");
+        // A holder that crashed leaves its note behind, but not the lock: free.
+        let gone = dir.path().join("gone");
+        std::fs::create_dir_all(&gone).unwrap();
+        std::fs::write(gone.join("setup.who"), "`ptyro install` (process 4294967294)").unwrap();
+        assert_eq!(Lock::held_by(&gone), None);
         let err = Lock::take(dir.path(), "`ptyro install` in a terminal").unwrap_err();
         assert!(err.starts_with("setup is already running (from the web app (process "), "{err}");
         drop(first);

@@ -103,6 +103,9 @@ export class SetupLog {
   /// Each side's report, as its `finished` said, with the side.
   reports: { side: string; report: any }[] = [];
   report: { done: string[]; failed: string[]; skipped: string[]; blocked: string[] } | null = null;
+  /// Updates that failed because the program is running (BOOT5, `failed.in_use`): the page offers
+  /// to try each again once its sessions end.
+  retry: { id: string; side: string }[] = [];
   /// Events from before this page's own run said its id.
   private early: Progress[] = [];
   /// Events of the followed run that came after a gap in `seq`: held until the plan's `running`
@@ -115,7 +118,7 @@ export class SetupLog {
   get running(): boolean { return this.id !== "" && !this.report && !this.ended; }
 
   private reset(): void {
-    Object.assign(this, { id: "", starting: false, theirs: false, ended: false, sides: 1, seq: 0, plan: null, lines: [], reports: [], report: null, early: [], held: [] });
+    Object.assign(this, { id: "", starting: false, theirs: false, ended: false, sides: 1, seq: 0, plan: null, lines: [], reports: [], report: null, retry: [], early: [], held: [] });
   }
 
   private line(t: string): void { this.lines.push(t); if (this.lines.length > 400) this.lines.shift(); }
@@ -206,7 +209,10 @@ export class SetupLog {
     if (ev.event === "started") this.line(`▸ ${at}${ev.name}: ${ev.command}`);
     else if (ev.event === "line") this.line(`  │ ${ev.text}`);
     else if (ev.event === "done") this.line(`✓ ${at}${ev.id}${ev.version ? " " + ev.version : ""}`);
-    else if (ev.event === "failed") this.line(`✗ ${at}${ev.id}: ${ev.error}\n  fix: ${ev.fix}`);
+    else if (ev.event === "failed") {
+      this.line(`✗ ${at}${ev.id}: ${ev.error}\n  fix: ${ev.fix}`);
+      if (ev.in_use) this.retry.push({ id: ev.id, side: e.side ?? "local" });
+    }
     else if (ev.event === "skipped" && left(ev.id)) this.line(`– ${at}${ev.id}: left for the computer: ${ev.fix}`);
     else if (ev.event === "skipped") this.line(`– ${at}${ev.id}: ${ev.reason}\n  fix: ${ev.fix}`);
     else if (ev.event === "blocked") this.line(`✗ ${at}${ev.id}: can't be installed here: ${ev.reason}\n  fix: ${ev.fix}`);
@@ -250,15 +256,13 @@ export class SetupLog {
   }
 }
 
-/// An update the doctor offers (BOOT5, SPEC §24.7): its `updates` finding, "Codex 0.170.0 is out
-/// (you have 0.162.1): `ptyro update codex` updates it (it runs `…`)", as parts.
+/// An update the doctor offers (BOOT5, SPEC §24.7): its `updates` finding's `data`, the engine's
+/// `Outdated` (not its words, which may change).
 export interface UpdateOffer { id: string; program: string; name: string; latest: string; version: string; command: string | null; admin: boolean }
-export function updateOffer(c: { section?: string; name?: string; level?: string; text?: string }): UpdateOffer | null {
-  if (c.section !== "updates" || c.level !== "warn") return null;
-  const m = String(c.text ?? "").match(/^(.+?) (\S+) is out \(you have (\S+)\): `ptyro update ([^`]+)`/);
-  if (!m) return null;
-  const run = String(c.text).match(/\(it runs `([^`]+)`(, as administrator)?\)/);
-  return { id: String(c.name ?? m[4]), name: m[1], latest: m[2], version: m[3], program: m[4], command: run ? run[1] : null, admin: !!run?.[2] };
+export function updateOffer(c: { section?: string; level?: string; data?: any }): UpdateOffer | null {
+  const d = c.data;
+  if (c.section !== "updates" || c.level !== "warn" || !d?.id || !d.program) return null;
+  return { id: d.id, program: d.program, name: d.name ?? d.id, latest: d.latest, version: d.version, command: d.command ?? null, admin: !!d.admin };
 }
 
 /// The live sessions here running an agent (`id`, the engine's: `claude`, `antigravity`): an

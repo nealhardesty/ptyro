@@ -58,6 +58,7 @@ const ACTIONS = {
   "setup.where": "On Windows with WSL: where each agent or tool goes, into WSL's distro, onto Windows, or both (tick either column)",
   "setup.login": "Log in to each agent and the GitHub CLI, one account each: the tool's own sign-in in a session here, confirmed by its own status command (ptyro never sees the credentials)",
   "updates.update": "Update an agent that has a newer version out, on the computer, the way it was installed: the command it runs is shown first, and sessions running it keep the old version until they restart",
+  "updates.retry": "An update Windows (or the system) refused because the agent is running: end the sessions running it, then try again from here",
   "updates.check": "Look for newer versions of your agents now (ptyro looks once a day by itself; Settings → Updates turns that off or skips one)",
   "help.tour": "A tour: ptyro's daily loop with a pretend agent, in a throwaway ptyro of its own",
 } as const;
@@ -863,7 +864,22 @@ function installSection(): HTMLElement {
     bar(h("button", { class: "primary", title: tip("setup.install"), disabled: running || !steps.length, onclick: () => void startInstall(picked(mineSide), two ? picked("wsl") : null) },
       held ? "Waiting for the other setup" : running ? "Installing…" : steps.length ? `Install ${steps.length}` : "Nothing to install from here")),
     installRun.lines.length ? h("pre", { class: "log" }, installRun.lines.join("\n")) : null,
-    installRun.report ? h("p", { class: "sub setup-summary" }, installRun.summary()) : null);
+    installRun.report ? h("p", { class: "sub setup-summary" }, installRun.summary()) : null,
+    installRun.report ? retrySection(plan) : null);
+}
+
+/// An update refused because the agent is running (BOOT5): which sessions run it, and Try again
+/// once they've ended (the CLI and the TUI ask "Try again now?" the same way).
+function retrySection(plan: any): HTMLElement | null {
+  if (!installRun.retry.length) return null;
+  return h("div", { class: "banner warn setup-retry", title: tip("updates.retry") },
+    ...installRun.retry.map(({ id, side }) => {
+      const name = plan?.entries?.find((e: any) => e.id === id)?.name ?? id;
+      const running = runningAgent(allSessions().values(), id);
+      return h("div", { class: "stack-in" },
+        h("p", {}, h("b", {}, `${name} is still running`), running.length ? ` (${running.join(", ")})` : "", ", so its update couldn't replace it. End those sessions (or quit it wherever else it runs), then try again."),
+        bar(h("button", { class: "primary", title: tip("updates.retry"), onclick: () => void startInstall(side === "wsl" ? [] : [id], side === "wsl" ? [id] : null) }, `Try updating ${name} again`)));
+    }));
 }
 
 async function startInstall(picks: string[], wslPicks: string[] | null): Promise<void> {

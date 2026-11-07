@@ -180,7 +180,9 @@ pub fn needed(req: &Request) -> Scope {
         | ScratchHistory
         | ScratchPane { create: false, .. }
         // What's installed on the machine, and what installing would run (BOOT1).
-        | SetupPlan { .. } => Scope::Read,
+        | SetupPlan { .. }
+        // The agents out of date (BOOT5): only looks (and marks the start-up note said).
+        | Updates { .. } => Scope::Read,
         Answer { decision, .. } if is_always(decision) => Scope::Control,
         Answer { .. }
         | GateResolve { .. }

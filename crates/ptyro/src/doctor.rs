@@ -33,6 +33,10 @@ pub struct Check {
     pub name: String,
     pub level: Level,
     pub text: String,
+    /// What the finding is about, for a client to act on without reading the words (BOOT5: an
+    /// agent out of date, as `updates::Outdated`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
 }
 
 #[derive(Default)]
@@ -40,7 +44,19 @@ pub(crate) struct Report(pub Vec<Check>);
 
 impl Report {
     fn add(&mut self, section: &str, name: &str, level: Level, text: impl Into<String>) {
-        self.0.push(Check { section: section.into(), name: name.into(), level, text: text.into() });
+        self.0.push(Check {
+            section: section.into(),
+            name: name.into(),
+            level,
+            text: text.into(),
+            data: None,
+        });
+    }
+
+    fn add_data(&mut self, data: serde_json::Value) {
+        if let Some(last) = self.0.last_mut() {
+            last.data = Some(data);
+        }
     }
 }
 
@@ -192,10 +208,26 @@ async fn updates(ctx: &Ctx, config: &Config, fresh: bool, r: &mut Report) {
     let (paths, state) = (ctx.paths.clone(), ctx.paths.state.clone());
     let v = tokio::task::spawn_blocking(move || {
         let host = ptyro_agents::setup::host(&paths);
-        updates::look_beside(&*host, &state, updates::now(), fresh)
+        updates::look_beside(&*host, &state, updates::now(), fresh).0
     })
     .await
     .unwrap_or_default();
+    // A name the ignore list holds that isn't an agent (a typo) skips nothing: say so.
+    for i in &cfg.ignore {
+        let name = i.split_once('@').map_or(i.as_str(), |(n, _)| n);
+        let agent = ptyro_agents::setup::resolve(name)
+            .is_ok_and(|it| it.kind == ptyro_agents::catalog::Kind::Agent);
+        if !agent {
+            r.add(
+                S,
+                "ignore",
+                Level::Warn,
+                format!(
+                    "updates.ignore holds {i:?}, which isn't an agent ptyro updates (claude, codex, agy, opencode, gemini): it skips nothing"
+                ),
+            );
+        }
+    }
     if v.checked == 0 {
         r.add(
             S,
@@ -212,6 +244,7 @@ async fn updates(ctx: &Ctx, config: &Config, fresh: bool, r: &mut Report) {
         } else {
             any = true;
             r.add(S, &o.id, Level::Warn, o.finding());
+            r.add_data(serde_json::to_value(o).unwrap_or_default());
         }
     }
     let all_failed = !v.failed.is_empty() && v.failed.len() == updates::sources().len();

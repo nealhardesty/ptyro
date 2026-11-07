@@ -91,6 +91,9 @@ export class SetupLog {
     /// Each side's report, as its `finished` said, with the side.
     reports = [];
     report = null;
+    /// Updates that failed because the program is running (BOOT5, `failed.in_use`): the page offers
+    /// to try each again once its sessions end.
+    retry = [];
     /// Events from before this page's own run said its id.
     early = [];
     /// Events of the followed run that came after a gap in `seq`: held until the plan's `running`
@@ -101,7 +104,7 @@ export class SetupLog {
     stray = { run: "", events: [] };
     get running() { return this.id !== "" && !this.report && !this.ended; }
     reset() {
-        Object.assign(this, { id: "", starting: false, theirs: false, ended: false, sides: 1, seq: 0, plan: null, lines: [], reports: [], report: null, early: [], held: [] });
+        Object.assign(this, { id: "", starting: false, theirs: false, ended: false, sides: 1, seq: 0, plan: null, lines: [], reports: [], report: null, retry: [], early: [], held: [] });
     }
     line(t) { this.lines.push(t); if (this.lines.length > 400)
         this.lines.shift(); }
@@ -206,8 +209,11 @@ export class SetupLog {
             this.line(`  │ ${ev.text}`);
         else if (ev.event === "done")
             this.line(`✓ ${at}${ev.id}${ev.version ? " " + ev.version : ""}`);
-        else if (ev.event === "failed")
+        else if (ev.event === "failed") {
             this.line(`✗ ${at}${ev.id}: ${ev.error}\n  fix: ${ev.fix}`);
+            if (ev.in_use)
+                this.retry.push({ id: ev.id, side: e.side ?? "local" });
+        }
         else if (ev.event === "skipped" && left(ev.id))
             this.line(`– ${at}${ev.id}: left for the computer: ${ev.fix}`);
         else if (ev.event === "skipped")
@@ -258,13 +264,10 @@ export class SetupLog {
     }
 }
 export function updateOffer(c) {
-    if (c.section !== "updates" || c.level !== "warn")
+    const d = c.data;
+    if (c.section !== "updates" || c.level !== "warn" || !d?.id || !d.program)
         return null;
-    const m = String(c.text ?? "").match(/^(.+?) (\S+) is out \(you have (\S+)\): `ptyro update ([^`]+)`/);
-    if (!m)
-        return null;
-    const run = String(c.text).match(/\(it runs `([^`]+)`(, as administrator)?\)/);
-    return { id: String(c.name ?? m[4]), name: m[1], latest: m[2], version: m[3], program: m[4], command: run ? run[1] : null, admin: !!run?.[2] };
+    return { id: d.id, program: d.program, name: d.name ?? d.id, latest: d.latest, version: d.version, command: d.command ?? null, admin: !!d.admin };
 }
 /// The live sessions here running an agent (`id`, the engine's: `claude`, `antigravity`): an
 /// update leaves them on the old version until they restart, so the page names them.

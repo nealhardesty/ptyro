@@ -807,7 +807,75 @@ fn windows_refusing_to_replace_a_running_program_says_why_and_how_to_retry() {
         })
         .unwrap();
     assert!(fix.contains("Windows won't replace a program while it runs"), "{fix}");
-    assert!(fix.contains("`ptyro update claude` again"), "{fix}");
+    assert!(fix.contains("then try the update again (`ptyro update claude`)"), "{fix}");
+    assert!(events.iter().any(|e| matches!(e, Event::Failed { in_use: true, .. })));
+    // Elsewhere a running program's file is busy too (ETXTBSY), without blaming Windows.
+    let mut host = TestHost::on(Platform::Linux).have("claude", "2.1.300");
+    host.fail.insert("claude".into());
+    host.errors.insert("claude".into(), "it exited with 1: Text file busy".into());
+    let p = plan(&survey(&host, &latest), &picks(&["claude"]));
+    let (_, events) = run_all(&p, &host, Admin::Ask);
+    let fix = events
+        .iter()
+        .find_map(|e| match e {
+            Event::Failed { fix, .. } => Some(fix.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(fix.contains("its file couldn't be replaced while it runs"), "{fix}");
+    assert!(!fix.contains("Windows"), "{fix}");
     assert!(in_use("npm ERR! code EBUSY"));
     assert!(!in_use("it exited with 1: E: no network"));
+}
+
+#[test]
+fn a_look_that_began_before_an_update_never_writes_the_old_version_back() {
+    use crate::updates;
+    let dir = tempfile::tempdir().unwrap();
+    let mut host = TestHost::on(Platform::Linux).have("claude", "2.1.300");
+    host.replies.insert("claude".into(), "2.1.400".into());
+    updates::check(&host, dir.path(), 1);
+    assert_eq!(updates::load(dir.path()).outdated.len(), 1);
+    // A look beside the installs begins: it counts the installs, and sees 2.1.300.
+    let since = updates::generation(dir.path());
+    // Meanwhile an update takes the lock (counted), updates, and refreshes under it.
+    updates::started(dir.path());
+    host.installed.lock().unwrap().insert("claude".into(), "2.1.400".into());
+    updates::refresh(&host, dir.path(), 2);
+    assert!(updates::load(dir.path()).outdated.is_empty());
+    // The look lands late, with what it saw before: dropped by the count; its newest versions
+    // are still kept.
+    host.installed.lock().unwrap().insert("claude".into(), "2.1.300".into());
+    host.replies.insert("claude".into(), "2.1.401".into());
+    let looked = updates::lookup(&host);
+    let (v, _) = updates::remember(&host, dir.path(), 3, since, Some(looked), false);
+    assert!(v.outdated.is_empty(), "{:?}", v.outdated);
+    assert_eq!(v.surveyed, 2);
+    assert_eq!(v.latest["claude"], "2.1.401");
+    assert_eq!(v.checked, 3);
+    // A look with the count as it is now writes what it saw.
+    let since = updates::generation(dir.path());
+    let (v, _) = updates::remember(&host, dir.path(), 4, since, None, false);
+    assert_eq!(v.outdated.len(), 1);
+}
+
+#[test]
+fn an_agent_installed_another_way_without_an_update_command_is_not_offered_one() {
+    // `outdated` and `plan` choose the same method (`setup::other_update`): an `others` row
+    // with no `update` gives neither a command nor a step.
+    let item = catalog::item("codex").unwrap();
+    for m in item.others.iter() {
+        assert!(m.update.is_some(), "every row today has one: {:?}", m.via);
+    }
+    assert!(other_update(item, Platform::Linux, Via::Npm).is_some());
+    assert!(other_update(item, Platform::Linux, Via::Winget).is_none());
+}
+
+#[test]
+fn the_refresh_asks_only_the_agents() {
+    let host = TestHost::on(Platform::Linux).have("claude", "2.1.300").have("git", "2.43.0");
+    let s = survey_agents(&host, &BTreeMap::new());
+    assert!(s.states.contains_key("claude"));
+    assert!(!s.states.contains_key("git"), "no tool asked");
+    assert!(s.candidates.is_empty());
 }

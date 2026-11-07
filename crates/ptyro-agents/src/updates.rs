@@ -142,19 +142,28 @@ pub fn edit(state: &Path, change: impl FnOnce(&mut Versions)) -> Versions {
     let mut v = load(state);
     change(&mut v);
     if let Ok(text) = serde_json::to_string_pretty(&v) {
-        let tmp = state.join(format!("{FILE}.{}.tmp", std::process::id()));
-        let written = std::fs::File::create(&tmp)
-            .and_then(|mut f| f.write_all(text.as_bytes()).and_then(|()| f.sync_all()));
-        if written.is_ok() {
-            let _ = std::fs::rename(&tmp, path(state));
-        } else {
-            let _ = std::fs::remove_file(&tmp);
-        }
+        write_whole(state, &text);
     }
     if let Some(f) = held {
         let _ = f.unlock();
     }
     v
+}
+
+/// `text` into `versions.json` through a temporary file moved into place (tried twice: Windows'
+/// indexer or a virus scanner can hold the file a moment); the temporary file never stays.
+fn write_whole(state: &Path, text: &str) {
+    let tmp = state.join(format!("{FILE}.{}.tmp", std::process::id()));
+    let written = std::fs::File::create(&tmp)
+        .and_then(|mut f| f.write_all(text.as_bytes()).and_then(|()| f.sync_all()));
+    let moved = written.is_ok()
+        && (std::fs::rename(&tmp, path(state)).is_ok() || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            std::fs::rename(&tmp, path(state)).is_ok()
+        });
+    if !moved {
+        let _ = std::fs::remove_file(&tmp);
+    }
 }
 
 /// An install or update is starting (the machine's setup lock was just taken): a look already
@@ -163,26 +172,26 @@ pub fn started(state: &Path) {
     edit(state, |v| v.generation += 1);
 }
 
-/// Where the count of installs stands, to pass to [`check_since`] or [`refresh_since`] by a look
-/// that runs beside them (the daemon's): read before seeing that no install runs.
+/// Where the count of installs stands: read before a look begins, and passed to its write.
 pub fn generation(state: &Path) -> u64 {
     load(state).generation
 }
 
-/// A look by someone who doesn't hold the setup lock (the daemon's hourly one, `doctor`):
-/// `fresh` looks the newest versions up, else only asks the installed versions again. While an
-/// install or update runs, it writes nothing (what it would see may be half done) and answers
-/// with what is remembered; one that starts meanwhile keeps its own view ([`started`]).
-pub fn look_beside(host: &dyn Host, state: &Path, now: u64, fresh: bool) -> Versions {
+/// A look by anyone who doesn't hold the machine's setup lock (the daemon's hourly one,
+/// `doctor`, `ptyro update --check`, the web's "look now"): `fresh` looks the newest versions up
+/// (the network), else only asks the installed agents' versions again. While an install or
+/// update runs it writes nothing (what it would see may be half done) and answers with what is
+/// remembered; one that starts while it looks keeps its own view ([`started`]). Also the survey
+/// it saw (the agents only).
+pub fn look_beside(host: &dyn Host, state: &Path, now: u64, fresh: bool) -> (Versions, Survey) {
     let since = generation(state);
     if setup::lock::Lock::held_by(state).is_some() {
-        return load(state);
+        let v = load(state);
+        let survey = setup::survey_agents(host, &v.latest);
+        return (v, survey);
     }
-    if fresh {
-        check_since(host, state, now, since)
-    } else {
-        refresh_since(host, state, now, since)
-    }
+    let (found, failed) = if fresh { lookup(host) } else { Default::default() };
+    remember(host, state, now, since, fresh.then_some((found, failed)), false)
 }
 
 /// The newest versions are a day old (or were never looked up, or the clock went back).
@@ -200,26 +209,39 @@ pub fn sources() -> Vec<(&'static str, &'static Latest)> {
         .collect()
 }
 
-/// Look up every newest version: those found, and why each other couldn't be. A debug build's
+/// Look up every newest version, all at once (each at most a few seconds: a dead network costs
+/// one wait, not one per agent): those found, and why each other couldn't be. A debug build's
 /// `PTYRO_TEST_LATEST` names a fixture registry instead (`<dir>/<id>` holds the reply; none:
 /// offline), so no test ever reaches the network.
 pub fn lookup(host: &dyn Host) -> (BTreeMap<String, String>, BTreeMap<String, String>) {
     let platform = host.platform();
+    let registry = ptyro_core::test_knob("PTYRO_TEST_LATEST");
+    let replies: Vec<(&str, Result<String, String>)> = std::thread::scope(|scope| {
+        let asks: Vec<_> = sources()
+            .into_iter()
+            .map(|(id, latest)| {
+                let registry = registry.as_deref();
+                let handle = scope.spawn(move || {
+                    let url = latest.url(platform, Arch::host());
+                    let reply = match registry {
+                        Some(dir) => fixture(Path::new(dir), id, &url),
+                        None => host.latest_reply(&url),
+                    };
+                    reply.and_then(|body| latest.parse(&body).map_err(|e| e.to_string()))
+                });
+                (id, handle)
+            })
+            .collect();
+        asks.into_iter()
+            .map(|(id, h)| (id, h.join().unwrap_or_else(|_| Err("the lookup failed".into()))))
+            .collect()
+    });
     let (mut found, mut failed) = (BTreeMap::new(), BTreeMap::new());
-    for (id, latest) in sources() {
-        let url = latest.url(platform, Arch::host());
-        let reply = match ptyro_core::test_knob("PTYRO_TEST_LATEST") {
-            Some(dir) => fixture(Path::new(&dir), id, &url),
-            None => host.latest_reply(&url),
+    for (id, reply) in replies {
+        match reply {
+            Ok(v) => found.insert(id.to_owned(), v),
+            Err(why) => failed.insert(id.to_owned(), why),
         };
-        match reply.and_then(|body| latest.parse(&body).map_err(|e| e.to_string())) {
-            Ok(v) => {
-                found.insert(id.to_owned(), v);
-            }
-            Err(why) => {
-                failed.insert(id.to_owned(), why);
-            }
-        }
     }
     (found, failed)
 }
@@ -248,8 +270,7 @@ pub fn outdated(survey: &Survey) -> Vec<Outdated> {
                 (version, latest, item.method(platform, has), None)
             }
             Some(State::Other { version: Some(version), via, latest: Some(latest), .. }) => {
-                let m = item.others.iter().find(|m| m.via == *via && m.on(platform));
-                (version, latest, m, Some(*via))
+                (version, latest, setup::other_update(item, platform, *via), Some(*via))
             }
             _ => continue,
         };
@@ -269,33 +290,40 @@ pub fn outdated(survey: &Survey) -> Vec<Outdated> {
 }
 
 /// Look up the newest versions now (the network), see what is installed, and remember both.
-/// A failed lookup keeps the version found before, so offline changes nothing but the time.
+/// For whoever holds the machine's setup lock (and the tests): a look beside an install is
+/// [`look_beside`]. A failed lookup keeps the version found before.
 pub fn check(host: &dyn Host, state: &Path, now: u64) -> Versions {
-    check_with(host, state, now).0
+    let since = generation(state);
+    remember(host, state, now, since, Some(lookup(host)), true).0
 }
 
-/// [`check`] by a look beside the installs: an install that started since `generation` keeps
-/// what it found installed.
-pub fn check_since(host: &dyn Host, state: &Path, now: u64, generation: u64) -> Versions {
-    look(host, state, now, generation).0
-}
-
-/// [`check`], and the survey it made (with the newest versions: an outdated agent is
-/// [`State::Outdated`] in it), for planning the updates.
-pub fn check_with(host: &dyn Host, state: &Path, now: u64) -> (Versions, Survey) {
-    look(host, state, now, generation(state))
-}
-
-fn look(host: &dyn Host, state: &Path, now: u64, since: u64) -> (Versions, Survey) {
-    let (found, failed) = lookup(host);
+/// Remember newest versions looked up already (`found`, `failed`: [`lookup`], done before the
+/// setup lock was taken, so a slow network never holds it), and see what is installed against
+/// them; `None`: only see what is installed. `since`: the count of installs read before the
+/// survey ([`generation`]): if an install started since, what is installed isn't written (its
+/// own refresh says). `full`: every row of the table (to plan with), else the agents only.
+pub fn remember(
+    host: &dyn Host,
+    state: &Path,
+    now: u64,
+    since: u64,
+    looked: Option<(BTreeMap<String, String>, BTreeMap<String, String>)>,
+    full: bool,
+) -> (Versions, Survey) {
     let mut latest = load(state).latest;
-    latest.extend(found);
-    let survey = setup::survey(host, &latest);
+    let failed = looked.as_ref().map(|(found, failed)| {
+        latest.extend(found.clone());
+        failed.clone()
+    });
+    let survey =
+        if full { setup::survey(host, &latest) } else { setup::survey_agents(host, &latest) };
     let outdated = outdated(&survey);
     let v = edit(state, |v| {
-        v.checked = now;
-        v.latest = latest;
-        v.failed = failed;
+        if let Some(failed) = failed {
+            v.checked = now;
+            v.latest = latest;
+            v.failed = failed;
+        }
         if v.generation == since {
             v.surveyed = now;
             v.outdated = outdated;
@@ -305,25 +333,14 @@ fn look(host: &dyn Host, state: &Path, now: u64, since: u64) -> (Versions, Surve
 }
 
 /// See what is installed again against the remembered newest versions (no network): after an
-/// update or an install, and now and then in between, so an agent that updated itself (Claude
-/// Code and Antigravity do) stops being offered.
+/// update or an install, while still holding the setup lock, so the badge and the note stop
+/// offering what was just done. Beside the installs, it is [`look_beside`] with `fresh` false.
 pub fn refresh(host: &dyn Host, state: &Path, now: u64) -> Versions {
-    refresh_since(host, state, now, generation(state))
-}
-
-/// [`refresh`] by a look beside the installs (see [`check_since`]).
-pub fn refresh_since(host: &dyn Host, state: &Path, now: u64, since: u64) -> Versions {
-    let latest = load(state).latest;
-    if latest.is_empty() {
+    let since = generation(state);
+    if load(state).latest.is_empty() {
         return load(state);
     }
-    let outdated = outdated(&setup::survey(host, &latest));
-    edit(state, |v| {
-        if v.generation == since {
-            v.surveyed = now;
-            v.outdated = outdated;
-        }
-    })
+    remember(host, state, now, since, None, false).0
 }
 
 /// `updates.ignore` skips this one: its name (every version), or its name and this version.
