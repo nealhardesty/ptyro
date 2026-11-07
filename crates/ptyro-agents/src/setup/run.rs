@@ -65,7 +65,9 @@ pub enum Event {
         reason: String,
         fix: String,
     },
-    /// After the installs, before the report: the logins (BOOT4). Nothing yet.
+    /// After the installs, before the report: the items to log in next (BOOT4: what was
+    /// installed, or picked and here already, that has a login). The caller walks through them
+    /// ([`super::login`]), since a login needs the person's terminal.
     Logins {
         ids: Vec<String>,
     },
@@ -213,23 +215,13 @@ pub fn run(plan: &Plan, host: &dyn Host, admin: Admin, on: &mut dyn FnMut(Event)
             }
         }
     }
-    login_step(&report.done, on);
+    let logins = super::login::after(plan, &report);
+    if !logins.is_empty() {
+        on(Event::Logins { ids: logins });
+    }
     report.tools = host.tools_used();
     on(Event::Finished { report: report.clone() });
     report
-}
-
-/// BOOT4 walks through the logins here (each tool's own flow, in a session); for now it says
-/// which installed items would be next, and does nothing.
-fn login_step(done: &[String], on: &mut dyn FnMut(Event)) {
-    let ids: Vec<String> = done
-        .iter()
-        .filter(|id| catalog::item(id).is_some_and(|i| i.login.is_some()))
-        .cloned()
-        .collect();
-    if !ids.is_empty() {
-        on(Event::Logins { ids });
-    }
 }
 
 /// The name `ptyro install` takes for it (its command: `agy`, `gh`).

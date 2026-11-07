@@ -73,6 +73,11 @@ pub trait Host: Sync {
     fn run(&self, step: &Step<'_>, line: &mut dyn FnMut(&str)) -> Result<(), String>;
     /// Something went into ptyro's tools folders, so `PATH` needs them (shell-init's line).
     fn tools_used(&self) -> bool;
+    /// Run a login's status command (BOOT4) with its output thrown away: whether it exited 0.
+    /// `None`: it didn't start, or took too long.
+    fn status(&self, argv: &[String]) -> Option<bool>;
+    /// Run a login in the person's terminal (stdin, stdout and stderr its own) to its end.
+    fn interact(&self, argv: &[String]) -> Result<(), String>;
 }
 
 /// The machine for this process: the fake a test names (`PTYRO_TEST_SETUP`, debug builds), else
@@ -406,6 +411,41 @@ impl Host for RealHost {
     fn tools_used(&self) -> bool {
         self.used.load(Ordering::Relaxed)
     }
+
+    fn status(&self, argv: &[String]) -> Option<bool> {
+        let cmd = self.resolve(argv)?;
+        exit_ok(&cmd, &self.env(), Duration::from_secs(20))
+    }
+
+    fn interact(&self, argv: &[String]) -> Result<(), String> {
+        let cmd = self
+            .resolve(argv)
+            .ok_or_else(|| format!("{} isn't found", argv.first().map_or("it", String::as_str)))?;
+        let (prog, args) = cmd.split_first().ok_or("nothing to run")?;
+        // The person's own terminal: no window of its own on Windows either, since it shares
+        // this console (CREATE_NO_WINDOW would take the console away from it).
+        let status = Command::new(prog)
+            .args(args)
+            .env("PATH", self.path())
+            .status()
+            .map_err(|e| format!("couldn't start {prog}: {e}"))?;
+        match status.code() {
+            Some(0) => Ok(()),
+            Some(c) => Err(format!("it exited with {c}")),
+            None => Err("it was stopped".into()),
+        }
+    }
+}
+
+impl RealHost {
+    /// `argv` with its program found as the survey finds it (npm's, nvm's, the vendors' folders).
+    fn resolve(&self, argv: &[String]) -> Option<Vec<String>> {
+        let (prog, rest) = argv.split_first()?;
+        let found = crate::locate::find(prog, &self.path().to_string_lossy())?;
+        let mut cmd = found.argv;
+        cmd.extend(rest.iter().cloned());
+        Some(cmd)
+    }
 }
 
 fn argv(words: &[&str]) -> Vec<String> {
@@ -577,6 +617,31 @@ pub(super) fn stream(
     };
     let said: Vec<String> = tail.into_iter().collect();
     Err(if said.is_empty() { how } else { format!("{how}: {}", said.join(" / ")) })
+}
+
+/// Run `argv` with no input and its output thrown away (never read: a status command may print
+/// an account or a masked token), at most `limit`: whether it exited 0. `None`: it didn't start,
+/// or took too long (then it is killed).
+fn exit_ok(argv: &[String], env: &[(OsString, OsString)], limit: Duration) -> Option<bool> {
+    let (prog, args) = argv.split_first()?;
+    let mut cmd = Command::new(prog);
+    cmd.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let mut child = quiet(&mut cmd).spawn().ok()?;
+    let start = Instant::now();
+    loop {
+        if let Ok(Some(s)) = child.try_wait() {
+            return Some(s.success());
+        }
+        if start.elapsed() > limit {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 /// Run `argv` to its end (at most `limit`): whether it succeeded, and its output, a line each.

@@ -3266,9 +3266,20 @@ machine". The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-desi
   is installed. Installs that need admin rights are the TUI's and the CLI's only: the owner's
   parity exception, recorded in `docs/parity.md` with its reason. The web shows the command to
   run on the machine instead.
-- [ ] **BOOT4 Logins** **M**: one account per agent and `gh`, through each tool's own flow in a
+- [x] **BOOT4 Logins** **M**: one account per agent and `gh`, through each tool's own flow in a
   session, confirmed by its status command; ptyro never sees a credential. Setup ends by showing
   how to add accounts as profiles (`ptyro profile login`).
+
+  *Done (2026-11-07):* `ptyro_agents::setup::login` (status by the `check` command's exit code
+  alone, output unread; `log_in` runs the tool's own `start` in the person's terminal and asks
+  again; SPEC §24.4). `ptyro login [NAME…] [--check] [--json] [--where]`; `ptyro setup` and
+  `ptyro install` walk through the logins of what they installed (WSL's in WSL, through
+  `wsl.exe`), then name `ptyro profile new` / `ptyro profile login` for more accounts. TUI
+  `app.login` (a split); web More → Set up ptyro → Log in (`login.list`, and `login.start`
+  running `ptyro login <name>` in a daemon session that shows the link and code). OpenCode's
+  `auth list` was dropped as a `check` (it can't be shown to fail when logged out), so OpenCode,
+  Antigravity and Gemini CLI sign in when they start. Tested through the fake machine (`ptyro
+  fake-installer login`, `tests/boot4.rs`); no protocol change.
 - [ ] **BOOT5 Out of date, offered** **M**:
   - agents and ptyro, checked at most once a day (remembered in `<state>/versions.json`), and
     afresh by `doctor`;

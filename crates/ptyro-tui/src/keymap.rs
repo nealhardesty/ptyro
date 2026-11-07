@@ -237,6 +237,10 @@ pub const ACTIONS: &[ActionSpec] = &[
         "Set up agents and tools: the checklist (Claude Code, Codex, Antigravity, OpenCode, Gemini CLI, git, GitHub CLI, Node.js), in a split",
     ),
     a("app.install", "Install an agent or tool by name, with what it needs first, in a split"),
+    a(
+        "app.login",
+        "Log in to the agents and the GitHub CLI, one account each: each tool's own sign-in, in a split",
+    ),
     a("row.menu", "Everything you can do with this session, worktree or project, with its keys"),
     a("sidebar.wider", "Make the sidebar a column wider (also: drag its edge)"),
     a("sidebar.narrower", "Make the sidebar a column narrower (also: drag its edge)"),

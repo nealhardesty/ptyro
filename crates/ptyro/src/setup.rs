@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::io::{BufRead, IsTerminal, Write};
 
-use ptyro_agents::catalog::{self, Kind, Platform};
+use ptyro_agents::catalog::{Kind, Platform};
 use ptyro_agents::setup::{
     self, Admin, Entry, Event, Plan, Report, Side, Sided, State, Survey, Where, WslStatus,
 };
@@ -46,7 +46,7 @@ pub struct InstallArgs {
 
 /// A person can answer: a terminal (or a test's fake machine, which pipes its answers; or
 /// `--tty`, said by the TUI).
-fn interactive(tty: bool) -> bool {
+pub(crate) fn interactive(tty: bool) -> bool {
     tty || (std::io::stdin().is_terminal() && std::io::stderr().is_terminal())
         || ptyro_core::test_knob("PTYRO_TEST_SETUP").is_some()
 }
@@ -119,7 +119,7 @@ impl Sides {
 }
 
 /// `--where`, checked against this machine: on Windows any of them; elsewhere only `local`.
-fn place_of(given: Option<&str>, platform: Platform) -> Result<Option<Where>, Error> {
+pub(crate) fn place_of(given: Option<&str>, platform: Platform) -> Result<Option<Where>, Error> {
     let Some(w) = given else { return Ok(None) };
     let w: Where = w.parse().map_err(Error::invalid)?;
     if platform.is_windows() || w == Where::Local {
@@ -191,20 +191,29 @@ async fn look(
             Where::Windows
         }
         Some(p) => p,
-        // The daemon's distro, and only it: another distro with ptyro isn't where the
-        // sessions run, so the default stays Windows and the status line says why.
-        None => match (prefer.as_deref(), sides.status.as_ref().and_then(WslStatus::usable)) {
-            (Some(p), Some(d)) if p.is_empty() || p.eq_ignore_ascii_case(d) => Where::Wsl,
-            (Some(p), _) => {
-                if !quiet {
-                    eprintln!("{}", daemon_elsewhere(p, sides.status.as_ref()));
-                }
-                Where::Windows
-            }
-            (None, _) => Where::Windows,
-        },
+        None => default_place(prefer.as_deref(), sides.status.as_ref(), quiet),
     };
     Ok((host, sides, place))
+}
+
+/// The default side on Windows: the daemon's distro (`prefer`, from `client.default_remote`)
+/// when it is the usable one, else Windows. Another distro with ptyro isn't where the sessions
+/// run, so the default stays Windows and a line says why (unless `quiet`).
+pub(crate) fn default_place(
+    prefer: Option<&str>,
+    status: Option<&WslStatus>,
+    quiet: bool,
+) -> Where {
+    match (prefer, status.and_then(WslStatus::usable)) {
+        (Some(p), Some(d)) if p.is_empty() || p.eq_ignore_ascii_case(d) => Where::Wsl,
+        (Some(p), _) => {
+            if !quiet {
+                eprintln!("{}", daemon_elsewhere(p, status));
+            }
+            Where::Windows
+        }
+        (None, _) => Where::Windows,
+    }
 }
 
 /// Why the default isn't the daemon's distro `prefer` (`client.default_remote`).
@@ -353,6 +362,9 @@ fn go(
     if busy.is_empty() {
         if !quiet {
             eprintln!("Nothing to install.");
+            if !json {
+                logins(host, sides, plan, &[], admin);
+            }
         }
         return Ok(0);
     }
@@ -361,6 +373,7 @@ fn go(
     let name = |id: &str| names.get(id).cloned().unwrap_or_else(|| id.to_owned());
     let windows = plan.platform.is_windows();
     let mut total = Report::default();
+    let mut reports: Vec<(Side, Report)> = Vec::new();
     let mut tools = false;
     for side in &busy {
         let side = *side;
@@ -401,11 +414,44 @@ fn go(
             }
         };
         total.merge(&report);
+        reports.push((side, report));
     }
     if tools {
         offer_path(&ctx.paths, admin != Admin::Ask);
     }
+    if !quiet && !json {
+        logins(host, sides, plan, &reports, admin);
+    }
     Ok(if total.ok() { 0 } else { 1 })
+}
+
+/// After the installs (BOOT4): each side's logins, walked through in this terminal when a person
+/// is here (else where each stands), then how to add more accounts as profiles. The exit code
+/// stays the installs'.
+fn logins(
+    host: &dyn setup::Host,
+    sides: &Sides,
+    plan: &Plan,
+    reports: &[(Side, Report)],
+    admin: Admin,
+) {
+    let none = Report::default();
+    let mut any = false;
+    for side in plan.sides() {
+        let report = reports.iter().find(|(s, _)| *s == side).map_or(&none, |(_, r)| r);
+        let ids = setup::login::after(&plan.side(side), report);
+        let distro = if side == Side::Wsl { sides.distro() } else { None };
+        if side == Side::Wsl && distro.is_none() {
+            continue;
+        }
+        if plan.sides().len() > 1 && !ids.is_empty() {
+            eprintln!("\n── {} ──", side_name(side, sides));
+        }
+        any |= crate::logins::after_setup(host, &ids, distro, admin == Admin::Ask);
+    }
+    if any {
+        eprintln!("\n{}", setup::login::PROFILES_HINT);
+    }
 }
 
 /// `Windows`, `WSL (Ubuntu)`.
@@ -451,14 +497,8 @@ fn print_event(ev: &Event, name: &dyn Fn(&str) -> String, windows: bool) {
             eprintln!("– {}: not installed, {reason}", name(id));
             eprintln!("  fix: {fix}");
         }
-        Event::Logins { ids } => {
-            eprintln!("\nTo log in (each also asks the first time it starts):");
-            for id in ids {
-                if let Some(l) = catalog::item(id).and_then(|i| i.login.as_ref()) {
-                    eprintln!("  {}: `{}`", name(id), l.start.join(" "));
-                }
-            }
-        }
+        // The logins are walked through after every side's run (`logins`).
+        Event::Logins { .. } => {}
         Event::Finished { report } => eprintln!("\n{}", summary(report)),
     }
 }
@@ -899,7 +939,7 @@ fn checklist(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ptyro_agents::catalog::Platform;
+    use ptyro_agents::catalog::{self, Platform};
 
     fn survey(installed: &[(&str, &str)]) -> Survey {
         let mut states = BTreeMap::new();

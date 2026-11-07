@@ -267,8 +267,9 @@ pub struct Prereq {
     pub why: String,
 }
 
-/// How an item's login is started and confirmed. ptyro runs these in a session; it never reads
-/// the credential (BOOT4).
+/// How an item's login is started and confirmed (BOOT4, [`crate::setup::login`]). ptyro runs
+/// `start` where the person sees it, and decides "logged in" by `check`'s exit code alone, its
+/// output thrown away: it never reads, parses or stores a credential.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Login {

@@ -5550,7 +5550,8 @@ check. It speaks the protocol over its WebSocket, and a few things a browser can
   the device list, and `serve` must not be `--remote`): `config.get|check|save|show` (checked as
   `ptyro config check` does, written 0600 atomically, the daemon told to reload), `doctor`, `about`,
   `profile.new|rm|rename|sync|detect|detect_apply|login|doctor`, `integrations.ls|install|
-  uninstall`, `service.install|uninstall`, `daemon.logs|restart|stop`, `tour.start|end`. The work
+  uninstall`, `service.install|uninstall`, `daemon.logs|restart|stop`, `tour.start|end`,
+  `login.list|start` (BOOT4, §24.4). The work
   is the CLI's own (`profiles.rs`, `doctor.rs`, `config.rs` expose it as functions; the rest runs
   the CLI as a subprocess), so the two cannot drift.
 - **The web tour:** `tour.start` makes what `ptyro tour` makes (a throwaway directory with its own
@@ -8782,7 +8783,7 @@ strip, and a split is always a shell.
 - **Not here:** splitting a worktree's sessions into windows (their splits stay a TUI layout,
   §11.2i), a desktop split view on the web, and more than four panes.
 
-## 24. Bootstrap: agents, tools and updates **[decided 2026-11-06 (owner, ROADMAP BOOT); BOOT0 and BOOT1 built 2026-11-06; BOOT8 built 2026-11-07]**
+## 24. Bootstrap: agents, tools and updates **[decided 2026-11-06 (owner, ROADMAP BOOT); BOOT0 and BOOT1 built 2026-11-06; BOOT8 and BOOT4 built 2026-11-07]**
 
 The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-design.md`: one setup checklist
 that installs the coding agents, git, the GitHub CLI and their prerequisites, walks through the
@@ -8817,7 +8818,7 @@ build and Linux gets apt or dnf by what is there.
 
 **Marks:** every method, login and source carries `V`, `S` or `U` (§20 style), and anything not `V`
 carries a `note` saying what is second-hand or missing. A value nobody documents is left out:
-Antigravity's and Gemini CLI's logins have no `check`, and the tests insist such a login says why.
+Antigravity's, Gemini CLI's and OpenCode's logins have no `check` (OpenCode's `auth list` was one until BOOT4: it lists providers, and nothing documents that it fails when none is logged in), and the tests insist such a login says why.
 
 **Newest versions, without the network:** `Latest::url(platform, arch)` names what to fetch and
 `Latest::parse(body)` reads the reply. Sources: `npm` (`{"version"}`), `github-release`
@@ -8934,8 +8935,8 @@ needed").
 fix}`, `skipped{id, reason, fix}`, `logins{ids}`, `finished{report}` (`done`, `failed`, `skipped`,
 `blocked`, `tools`). **Fixes:** a failure offers `ptyro install <program>`
 again, the command to run yourself and the vendor's page; nodejs.org's build, the connection and
-the page. **Logins:** after the installs, `logins` names the installed items with a login; the CLI
-prints each one's own `start` command from the table. BOOT4 makes it walk through them.
+the page. **Logins:** after the installs, `logins` names what was installed, or picked and here
+already, that has a login (`setup::login::after`); the CLI then walks through them (BOOT4, §24.4).
 
 **`ptyro setup [-y] [--agents A,B] [--tools T,U] [--dry-run] [--json]`:** the checklist in a
 terminal (stderr): Agents and Tools numbered (`[x]` picked, `[+]` needed by something picked,
@@ -9109,3 +9110,83 @@ without a `wsl.exe` round trip per tick), then run by WSL's own `ptyro install`;
 Windows then WSL; each side reports its own `finished`; a Windows daemon keeps the WSL probe a
 minute; a daemon inside WSL doesn't reach Windows' side (it has no Windows ptyro it can rely on):
 the page names the command instead.
+
+### 24.4 Logins (BOOT4) **[built 2026-11-07]**
+
+The design's goal 5: each installed agent and the GitHub CLI logged in once, to the default
+profile, through the tool's own flow; setup ends by saying how to add more accounts.
+
+**The engine** (`ptyro_agents::setup::login`): `status(host, item)` is `logged_in`, `logged_out`,
+`unconfirmed` (the table names no `check`: Antigravity, Gemini CLI, OpenCode) or `missing`;
+`rows(host, ids)` lists them (`LoginRow`: id, name, side, state, the `start` command as typed,
+the `check`, the table's note); `log_in(host, item)` runs `start` in the person's terminal, then
+asks `check` again; `after(plan, report)` is what a run walks through. Two `Host` methods:
+`status(argv)` (the exit code, at most 20 s, then killed) and `interact(argv)` (stdin, stdout
+and stderr the person's own, to its end). Programs are found as the survey finds them
+(`locate::find`: npm's, nvm's and the vendors' folders).
+
+**Credentials never pass through ptyro.** "Logged in" is the `check` command's exit code alone:
+its stdout and stderr go to the null device, unread (`gh auth status` prints the account and a
+masked token; none of it reaches ptyro). The login itself is the tool's, in a terminal ptyro
+doesn't read. No pattern matching on output: no row needs it, and not reading is the stronger
+promise. A row's `check` must exit 0 only when logged in; OpenCode's `auth list` couldn't be shown
+to, so it was taken out of the table (§24.1) and OpenCode is `unconfirmed`.
+
+**Where a login runs** (the design's "where the user sees a browser or device code"):
+- **The CLI:** in the terminal it was typed in, with no daemon (a fresh machine has none). On
+  Windows the child shares the console (no `CREATE_NO_WINDOW`, which would take the console
+  away; no window opens either). While it runs, Ctrl+C is the login's (an agent quits with it, a
+  flow gives up), not ptyro's: a handler (a thread with its own Tokio runtime, from the first
+  login) ignores it during a login and exits 130 otherwise, so Ctrl+C at any other moment still
+  ends ptyro.
+- **The TUI:** `app.login` runs `ptyro login {where}` in a split, a real terminal.
+- **The web:** More → Set up ptyro → Log in. `login.list` (`POST /api/host`, `full` scope) is
+  `ptyro login --check --json`; Log in (`login.start`) spawns a session on the daemon running
+  `ptyro login <name>` under the default profile, in the home folder, and opens it. The tool's
+  link and code show in that terminal. A browser the tool opens opens on the computer running
+  ptyro, which helps only someone sitting there, so the page says to follow the link and enter
+  the code. Check again asks the status commands. No new daemon request: the protocol stays 1.32.
+- **WSL's side** (from Windows): `wsl -d <distro> -- ptyro login <ids>` with the terminal passed
+  through (`wsl_setup::interact`), so the login runs in that distro, by its own ptyro; `--check
+  --json` there comes back as rows marked `side: wsl` (`wsl_setup::logins`).
+
+**`ptyro login [NAME…] [--check] [--json] [--where wsl|windows|both]`:** no names, every item with
+a login that is installed. Each logged in says ✓; each logged out runs its login ("▸ Logging in to
+GitHub CLI: `gh auth login --web`", then a line saying the sign-in is the tool's and Ctrl+C skips
+it) and ends ✓, or ✗ with the fix (`ptyro login gh` tries again, or the command to run yourself).
+One that can't be checked runs only when named (`ptyro login agy` starts Antigravity: "sign in,
+then quit it to come back here") and ends "?", saying it can't be confirmed. A named one not
+installed says `ptyro install …`; one without a login (git) is refused (exit 2); an unknown name
+exits 3. It needs a terminal (the TUI's split and a web session are terminals); without one it
+refuses and points at `--check`. `--check` only says where each stands (what isn't installed only
+when named); `--json` (implies `--check`) prints the rows. Exit 1 when any ends logged out (or a
+named one isn't installed). `--where` and its default are setup's (§24.3); `--remote` is refused,
+as for setup: logins are this computer's.
+
+**Setup's end:** after every side's run, `ptyro setup` and `ptyro install` walk through
+`login::after` per side, under a heading each (WSL's in WSL, as above), asking nothing more: the
+person chose these by ticking them, and Ctrl+C skips any one. With `--yes` (no person) they only
+say where each stands and that `ptyro login` logs them in; with `--json` nothing is said (the
+`logins` event is in the stream); WSL's ptyro running for Windows' (`--admin=…`) leaves them to
+Windows'. When there were logins, setup's last line is `login::PROFILES_HINT`: more accounts are
+profiles, each with its own logins (`ptyro profile new work`, then `ptyro profile login work
+claude`). The exit code stays the installs': a login not done is said with its fix, never a
+failed setup.
+
+**Tests, with no real login and no credential:** the fake machine's `world.json` gains
+`logged_in` (ids logged in already) and `logins` (per id: `ok`, `fail` (exit 1), `nothing` (exit
+0, still logged out)). `interact` runs `ptyro fake-installer login ID` in the terminal, a real
+child that prints a device code and writes `logged-in/<id>`; `status` answers for the rows'
+`check` argv from those files; both log to `logins.log` (not `calls.log`, whose steps BOOT1's
+tests count). `crates/ptyro/tests/boot4.rs` covers setup's walk after the installs with the
+profiles line last; `--yes` running none; a failed and a "nothing done" login with their fixes;
+the unconfirmed one only when named; `--check`/`--json` asking only the status commands; WSL's
+side logged in in the distro through `ptyro fake-wsl`, and both sides' rows; the web's
+`login.list`, and a `login.start` session showing the code and ending logged in. The engine's
+rules are in `setup/tests.rs`.
+
+**Decided by the builder:** the exit code alone decides (no output read, so no patterns);
+OpenCode's `check` dropped; the CLI runs logins in its own terminal and the web in a daemon
+session running `ptyro login`, so both confirm the same way; setup walks without a question per
+login; an unconfirmed login runs only when named or just installed; the web shows the daemon's
+side, naming WSL's command on a Windows daemon; no protocol change.
