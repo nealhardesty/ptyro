@@ -6,7 +6,7 @@
 // A scenario that needs the server restarted prints "@@serve down" / "@@serve up" and waits for
 // a line on stdin from the Rust test.
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -217,16 +217,61 @@ const scenarios = {
     await tab.waitFor("a session started while away", card("after-offline"));
   },
 
-  // More → Set up ptyro: the daemon's checklist (a fake machine), Install, the run's lines and its
-  // report; admin steps (apt) aren't run from the web and say where to run them (BOOT1).
-  async setup() {
-    await fresh("#/setup");
+  // The first-run banner (BOOT3): no agent on the computer (the fake machine has none yet), so
+  // the Sessions tab offers the checklist, and its button opens it.
+  async banner() {
+    await fresh("#/");
     const text = (t) => `document.body.innerText.includes(${JSON.stringify(t)})`;
+    await tab.waitFor("the banner", text("No coding agent is installed on this computer yet"), 30_000);
+    await tab.eval(`[...document.querySelectorAll(".setup-banner a")].find(a => a.textContent === "Set up agents and tools").click()`);
+    await tab.waitFor("the checklist", `location.hash === "#/setup" && document.body.innerText.includes("Antigravity")`, 30_000);
+  },
+
+  // Settings → Agents and tools: the daemon's checklist (a fake machine) in the TUI's shape,
+  // Agents and Tools with each one's line; the administrator steps (apt) shown with the command
+  // to run on the computer and the TUI's way, never run from here; Install runs the rest, with
+  // its lines and report (BOOT1, BOOT3).
+  async setup() {
+    await fresh("#/settings");
+    const text = (t) => `document.body.innerText.includes(${JSON.stringify(t)})`;
+    await tab.waitFor("the Settings entry", `!!document.querySelector('a[href="#/setup/settings"]')`, 30_000);
+    await tab.eval(`document.querySelector('a.setup-link').click()`);
     await tab.waitFor("the checklist", text("Antigravity"), 30_000);
+    for (const t of ["AGENTS", "TOOLS", "Anthropic", "then log in", "asks for admin"]) await tab.waitFor(t, `document.body.innerText.toUpperCase().includes(${JSON.stringify(t.toUpperCase())})`);
     await tab.waitFor("the admin note", text("Administrator rights are asked for only on the computer itself"));
-    await tab.eval(`[...document.querySelectorAll("button")].find(b => b.textContent === "Install the ticked ones").click()`);
+    await tab.waitFor("the admin command", `[...document.querySelectorAll(".setup-admin code")].some(c => c.textContent === "ptyro install git gh")`);
+    await tab.waitFor("the TUI's way", text("then U"));
+    await tab.waitFor("the back arrow to Settings", `!!document.querySelector('header a[href="#/settings"]')`);
+    await tab.eval(`[...document.querySelectorAll("button")].find(b => b.textContent === "Install 2").click()`);
     await tab.waitFor("the run's report", text("2 installed, 0 failed, 2 not run."), 30_000);
     await tab.waitFor("its lines", text("fake vendor: install claude"));
+    await tab.waitFor("Already here", `[...document.querySelectorAll(".setup-here")].some(e => e.innerText.includes("Claude Code") && e.innerText.includes("your default agent"))`, 30_000);
+  },
+
+  // One setup at a time, on the web too (BOOT3): a run started here (Antigravity, whose fake
+  // installer waits) is still going when the page opens again; the new page says so, shows its
+  // lines and offers no second Install; once it ends, the report shows there.
+  async setupRunning() {
+    const world = join(E.fake, "world.json");
+    writeFileSync(world, JSON.stringify({ platform: "linux", programs: ["apt-get", "sudo"], outcomes: { antigravity: "wait" } }));
+    try {
+      await fresh("#/setup");
+      const text = (t) => `document.body.innerText.includes(${JSON.stringify(t)})`;
+      await tab.waitFor("the checklist", `!!document.querySelector('input[aria-label="Antigravity"]')`, 30_000);
+      await tab.eval(`document.querySelector('input[aria-label="Antigravity"]').click()`);
+      await tab.waitFor("Antigravity ticked", `[...document.querySelectorAll("button")].some(b => b.textContent === "Install 1" && !b.disabled)`, 30_000);
+      await tab.eval(`[...document.querySelectorAll("button")].find(b => b.textContent === "Install 1").click()`);
+      await tab.waitFor("its installer waiting", text("fake vendor: waiting for go"), 30_000);
+      // A page that didn't start it (this one, opened again).
+      await fresh("#/setup");
+      await tab.waitFor("the run going already", text("Setup is already running on the computer"), 30_000);
+      await tab.waitFor("its lines so far", text("fake vendor: waiting for go"));
+      await tab.waitFor("no second install", `[...document.querySelectorAll("button")].some(b => b.textContent === "Installing…" && b.disabled)`);
+      writeFileSync(join(E.fake, "go"), "");
+      await tab.waitFor("its report", text("1 installed, 0 failed, 2 not run."), 30_000);
+    } finally {
+      writeFileSync(world, JSON.stringify({ platform: "linux", programs: ["apt-get", "sudo"] }));
+    }
   },
 };
 

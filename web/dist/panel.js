@@ -10,7 +10,7 @@
 import { conn, host } from "./conn.js";
 import { APPLY, ORIGIN, article, fieldsOf, fromLines, gist, hexOf, keyLabel, labelOf, moveChanges, nameIn, needed, ownerOf, relevant, score, summary, toLines, withUnit } from "./cfgkit.js";
 import { data } from "./data.js";
-import { actions, badge, bar, confirm, enc, errText, form, go, h, row, sheet, ui, views } from "./kit.js";
+import { actions, badge, bar, confirm, enc, errText, form, go, h, row, sheet, tipOf, ui, views } from "./kit.js";
 import { cfgChanged, editConfigAt } from "./settings.js";
 const ACTIONS = {
     "settings": "Settings: every option in sections, with what it does, its default and where its value comes from",
@@ -703,7 +703,7 @@ function build(rest) {
             const n = count(sec);
             return h("a", { class: `cfg-link${sec.id === first ? " on" : ""}`, href: `#/settings/${sec.id}` }, h("span", {}, sec.title), n ? badge(String(n), "info") : null);
         };
-        nav.replaceChildren(...s.user.sections.map(link), h("div", { class: "cfg-sep" }, projectName() ? `Repository: ${projectName()}` : "Repository"), ...s.project.sections.map(link), h("a", { class: "cfg-link file", href: "#/config", title: tip("settings.file") }, h("span", {}, "Edit config.toml directly")));
+        nav.replaceChildren(h("a", { class: "cfg-link", href: "#/setup/settings", title: tipOf("setup.plan") }, h("span", {}, "Agents and tools")), ...s.user.sections.map(link), h("div", { class: "cfg-sep" }, projectName() ? `Repository: ${projectName()}` : "Repository"), ...s.project.sections.map(link), h("a", { class: "cfg-link file", href: "#/config", title: tip("settings.file") }, h("span", {}, "Edit config.toml directly")));
     }
     const settingSection = (e) => settingOf(e)?.section ?? "";
     /// The cards for entries of a view that pass the filters, in the schema's order.
@@ -724,7 +724,9 @@ function build(rest) {
             const off = sec.scope === "project" && !st.projectId;
             return row(h("span", {}, sec.title, n ? badge(`${n} changed`, "info") : null), off ? "Choose a repository above" : sec.blurb, "›", { href: `#/settings/${sec.id}`, cls: off ? "dim" : "" });
         });
-        return [h("div", { class: "rows" }, ...rows)];
+        // Setup's checklist lives under Settings too (BOOT3), where people look for "add an agent".
+        const setup = h("a", { class: "set setup-link", href: "#/setup/settings", title: tipOf("setup.plan") }, h("b", {}, "Agents and tools ›"), h("small", {}, "Install coding agents, git and the GitHub CLI, with what they need, and log in to each"));
+        return [setup, h("div", { class: "rows" }, ...rows)];
     }
     function sectionBody(sec) {
         const scope = sec.scope;

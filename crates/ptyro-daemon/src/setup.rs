@@ -11,16 +11,23 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ptyro_agents::catalog::Platform;
-use ptyro_agents::setup::{self, Admin, Plan, Side, Survey, WslStatus};
+use ptyro_agents::setup::{self, Admin, Plan, Side, Survey, WslStatus, checklist};
 use ptyro_client::wsl_setup;
 use ptyro_core::paths::Paths;
 use ptyro_core::{Error, ErrorCode};
-use ptyro_protocol::{DomainEvent, Reply};
+use ptyro_protocol::{DomainEvent, Reply, SetupLogged, SetupRunning};
 
 use crate::daemon::Daemon;
 
 /// One setup run at a time: two package managers at once fight over their locks.
 static RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// The run going now and its events so far (BOOT3), for `SetupPlan`'s `running`: a page that
+/// didn't start it (another device, or reloaded) shows it instead of offering a second.
+static CURRENT: Mutex<Option<SetupRunning>> = Mutex::new(None);
+
+/// How many of a run's events `CURRENT` keeps (the latest; a page shows 400 lines).
+const KEPT: usize = 500;
 
 /// Holds the one run's place; let go however its holder ends, a panic included, so a later run
 /// is never refused for one that is gone.
@@ -34,8 +41,39 @@ impl Running {
 
 impl Drop for Running {
     fn drop(&mut self) {
+        if let Ok(mut c) = CURRENT.lock() {
+            *c = None;
+        }
         RUNNING.store(false, Ordering::Release);
     }
+}
+
+/// The run going now, as `SetupPlan` shows it.
+fn current() -> Option<SetupRunning> {
+    CURRENT.lock().ok().and_then(|c| c.clone())
+}
+
+/// Keep one of the run's events, numbered, and tell every watcher; under `CURRENT`'s lock, so a
+/// `SetupPlan` either holds an event or comes before it is sent.
+fn record(
+    events: &tokio::sync::broadcast::Sender<DomainEvent>,
+    run: &str,
+    side: Side,
+    event: setup::Event,
+) {
+    let Ok(mut c) = CURRENT.lock() else { return };
+    let seq = match c.as_mut().filter(|c| c.run == run) {
+        Some(c) => {
+            let seq = c.events.last().map_or(1, |l| l.seq + 1);
+            c.events.push(SetupLogged { seq, side, event: event.clone() });
+            if c.events.len() > KEPT {
+                c.events.remove(0);
+            }
+            seq
+        }
+        None => 0,
+    };
+    let _ = events.send(DomainEvent::SetupProgress { run: run.to_owned(), event, side, seq });
 }
 
 /// Item ids for what a client named (`agy`, `github-cli`).
@@ -95,7 +133,7 @@ async fn plan_on(
     paths: &Paths,
     picks: Option<Vec<String>>,
     wsl_picks: Option<Vec<String>>,
-) -> Result<(Box<dyn setup::Host + Send>, Plan), Error> {
+) -> Result<(Box<dyn setup::Host + Send>, Plan, Vec<checklist::Line>), Error> {
     let paths = paths.clone();
     let (host, here) = tokio::task::spawn_blocking(move || {
         let host = setup::host(&paths);
@@ -108,7 +146,9 @@ async fn plan_on(
     let picks = picks.unwrap_or_else(|| setup::defaults(&here));
     let mine = setup::plan(&here, &picks);
     let theirs = wsl.as_ref().map(|s| setup::plan(s, &wsl_picks.unwrap_or_default()));
-    Ok((host, Plan::merge(mine, theirs, status)))
+    let plan = Plan::merge(mine, theirs, status);
+    let lines = checklist::lines(&plan, &here, wsl.as_ref());
+    Ok((host, plan, lines))
 }
 
 impl Daemon {
@@ -120,8 +160,9 @@ impl Daemon {
     ) -> Result<Reply, Error> {
         let picks = picks.map(|p| ids(&p)).transpose()?;
         let wsl_picks = wsl_picks.map(|p| ids(&p)).transpose()?;
-        let (_, plan) = plan_on(&self.paths, picks, wsl_picks).await?;
-        Ok(Reply::SetupPlan { plan })
+        let (_, plan, lines) = plan_on(&self.paths, picks, wsl_picks).await?;
+        let default_agent = ptyro_agents::default_agent(&self.config());
+        Ok(Reply::SetupPlan { plan, lines, default_agent, running: current() })
     }
 
     /// `SetupRun`: the plan now, its progress as `SetupProgress` events (this computer's side
@@ -136,16 +177,17 @@ impl Daemon {
         let Some(running) = Running::take() else {
             return Err(Error::conflict("a setup run is going already: wait for it to finish"));
         };
-        let (host, plan) = plan_on(&self.paths, Some(picks), wsl_picks).await?;
+        let (host, plan, _) = plan_on(&self.paths, Some(picks), wsl_picks).await?;
         let run = ptyro_run::short_id("setup", 6);
+        if let Ok(mut c) = CURRENT.lock() {
+            *c = Some(SetupRunning { run: run.clone(), plan: plan.clone(), events: Vec::new() });
+        }
         let events = self.events.clone();
         let (r, p) = (run.clone(), plan.clone());
         tokio::task::spawn_blocking(move || {
             let _running = running;
             for side in p.sides() {
-                let mut on = |event| {
-                    let _ = events.send(DomainEvent::SetupProgress { run: r.clone(), event, side });
-                };
+                let mut on = |event| record(&events, &r, side, event);
                 let part = p.side(side);
                 if !part.entries.iter().any(|e| e.will_run() || (e.ticked && e.blocked.is_some())) {
                     continue;

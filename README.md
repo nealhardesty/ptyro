@@ -164,9 +164,16 @@ ptyro login --check                           # where each login stands, changin
   them: sudo asks for your password once, in your terminal, before the first of them (on Windows
   each installer raises its own UAC prompt). ptyro never sees the password. `--yes` asks nothing:
   a step that would need a password is skipped and its command printed for you to run.
-- **No daemon needed**, so it works on a machine where ptyro has never run. The web app has it
-  under More → Set up ptyro, except steps that need admin rights, which only run on the computer
-  itself: the page shows their command instead.
+- **No daemon needed**, so it works on a machine where ptyro has never run.
+- **On the web, too.** The web app has the same checklist under Settings → Agents and tools (and
+  More → Set up ptyro): Agents, Tools and Already here, each with the same line as the TUI's.
+  Tick what you want and tap Install: it runs on the computer, with its output on the page. While
+  no agent is installed, the Sessions tab shows a banner that opens it ("Not now" hides it on that
+  device). Steps that need admin rights never run from the web, where a password or a Windows
+  prompt would go over the network: the page shows the command to run on the computer (with Copy),
+  and the TUI's way (`Ctrl-Q U`) or `ptyro setup`, which ask for the password there. One install
+  runs at a time: a page opened while one is going (from another device, or before a reload) says
+  so and shows its progress instead of starting another.
 - **In the TUI, it's the first thing you see.** The first `ptyro` on a new machine opens with the
   same checklist at the top of the first-run screen: Agents, Tools and Already here, each with a
   line saying what it is, how it installs and whether it asks for admin rights or a login.
@@ -196,8 +203,8 @@ ptyro login --check                           # where each login stands, changin
   status`, `codex login status`, `gh auth status`). Antigravity, Gemini CLI and OpenCode name no
   such command, so they sign in when they start; `ptyro login agy` starts one now. Later,
   `ptyro login` does the same for anything not logged in (`ptyro login gh` for one,
-  `--where wsl` for WSL's side). In the TUI it's `app.login`; on the web, More → Set up ptyro →
-  Log in, which runs the sign-in in a session and shows its link and code there. With `--yes`,
+  `--where wsl` for WSL's side). In the TUI it's `app.login`; on the web, Settings → Agents and
+  tools (or More → Set up ptyro) → Log in, which runs the sign-in in a session and shows its link and code there. With `--yes`,
   setup only says which aren't logged in.
 - **More accounts are profiles.** Setup logs in one account each. For a second (work and
   personal), make a profile and log it in: `ptyro profile new work`, then
@@ -904,7 +911,7 @@ WSL works meanwhile.
 | `make catalog-fixtures` | re-record the version table's newest-version replies (npm registry, GitHub releases, Claude's and Antigravity's feeds, nodejs.org) as test fixtures, and print each newest version: a live check that every source still answers (needs the network; review the diff, then update the versions the test expects) |
 | `make msrv` | type-check with the oldest compiler `rust-version` promises (installs it) |
 | `make icons` | render the web app's favicon, PWA (including maskable) and apple-touch icons from `docs/logos/ptyro-icon.svg` (needs `rsvg-convert`) |
-| `make web-test` | the web app's logic tests that need no daemon (settings, terminal keys and selection, QR codes; needs Node) |
+| `make web-test` | the web app's logic tests that need no daemon (settings, terminal keys and selection, QR codes, the setup checklist; needs Node) |
 | `make web-e2e` | the web app in a real headless Chrome, driven from Node over the DevTools protocol (no packages): the session list, a new task, answering a permission prompt, the settings panel with undo, typing into the terminal, going offline. Skips without Chrome unless `PTYRO_REQUIRE_BROWSER=1` (CI sets it) |
 | `make tools` / `make deny` | install cargo-deny / license, advisory and source checks |
 | `make parity` (or `make tui-parity`) | check that every CLI command has a TUI path and a web path, or a waiver, in [`docs/parity.md`](docs/parity.md); a gap fails it (`STRICT=0` / `WEB_STRICT=0` only list TUI / web gaps) |

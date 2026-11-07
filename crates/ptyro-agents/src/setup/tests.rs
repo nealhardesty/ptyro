@@ -573,3 +573,55 @@ fn the_logins_after_a_run_are_what_it_installed_and_what_was_picked() {
     assert_eq!(login::after(&p, &report), ["claude", "gh"]);
     assert!(events.iter().any(|e| matches!(e, Event::Logins { ids } if ids == &["claude", "gh"])));
 }
+
+/// The web's lines (BOOT3): each entry's words as the TUI says them. One side: the method in
+/// the line; two sides: the method in each side's cell, what a cell can't say beside it.
+#[test]
+fn the_checklists_lines_say_what_the_tui_does() {
+    use super::checklist::{cell, lines};
+    let linux =
+        TestHost::on(Platform::Linux).with(&["apt-get", "sudo", "curl"]).have("claude", "2.1.3");
+    let here = survey(&linux, &BTreeMap::new());
+    let one = plan(&here, &ids(&["gemini"]));
+    let ls = lines(&one, &here, None);
+    assert_eq!(ls.len(), one.entries.len());
+    let of = |ls: &[super::checklist::Line], id: &str, side: Side| {
+        ls.iter().find(|l| l.id == id && l.side == side).unwrap().clone()
+    };
+    let gemini = of(&ls, "gemini", Side::Local);
+    assert!(
+        gemini.about.contains("needs Node.js") && gemini.about.ends_with("then log in"),
+        "{gemini:?}"
+    );
+    assert_eq!(gemini.how, "npm");
+    assert!(of(&ls, "node", Side::Local).about.contains("ticked because Gemini CLI needs it"));
+    // Unticked: the method it would use, from what is on PATH.
+    assert!(
+        of(&ls, "gh", Side::Local).about.contains("apt · asks for admin"),
+        "{:?}",
+        of(&ls, "gh", Side::Local)
+    );
+    assert_eq!(of(&ls, "gh", Side::Local).how, "");
+    let claude = of(&ls, "claude", Side::Local);
+    assert_eq!((claude.how.as_str(), claude.state.as_str()), ("✓ 2.1.3", "installed 2.1.3"));
+
+    let win = TestHost::on(Platform::WindowsX64).with(&["winget"]);
+    let mine_s = survey(&win, &BTreeMap::new());
+    let status = WslStatus::Usable { distro: "Ubuntu".into(), version: "ptyro 0.0.63".into() };
+    let both = Plan::merge(
+        plan(&mine_s, &ids(&["git"])),
+        Some(plan(&here, &ids(&["gemini"]))),
+        Some(status),
+    );
+    let ls = lines(&both, &mine_s, Some(&here));
+    let git = of(&ls, "git", Side::Windows);
+    assert!(!git.about.contains("WinGet"), "the method is the cell's: {git:?}");
+    assert_eq!(git.how, "WinGet (admin)");
+    assert_eq!(cell(both.entry_on("git", Side::Windows)), "[x] WinGet (admin)");
+    let node = of(&ls, "node", Side::Wsl);
+    assert_eq!(node.why, ["ticked because Gemini CLI needs it"]);
+    // It travels as JSON and reads back.
+    let back: Vec<super::checklist::Line> =
+        serde_json::from_value(serde_json::to_value(&ls).unwrap()).unwrap();
+    assert_eq!(back, ls);
+}

@@ -1087,6 +1087,13 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built BOOT3] Protocol 1.34** (additive): the web's setup checklist (§24.6). `Reply::SetupPlan`
+adds `lines` (each entry's words, `checklist::Line`: `about`, `how`, `why`, `state`, as the TUI
+says them), `default_agent`, and `running` (`SetupRunning{run, plan, events}`: the run going now
+and its latest 500 events, each `SetupLogged{seq, side, event}`); `DomainEvent::SetupProgress`
+adds `seq` (from 1 in its run). An older daemon sends none of them (no lines, nothing running,
+`seq` 0: every event counts); an older client ignores them.
+
 **[built BOOT4] Protocol 1.33** (additive): `SpawnSpec.unrecorded` (§7.6): a session that is never
 recorded to disk, for logins (§24.4). An older daemon ignores the field and records as before.
 
@@ -8792,7 +8799,7 @@ strip, and a split is always a shell.
 - **Not here:** splitting a worktree's sessions into windows (their splits stay a TUI layout,
   §11.2i), a desktop split view on the web, and more than four panes.
 
-## 24. Bootstrap: agents, tools and updates **[decided 2026-11-06 (owner, ROADMAP BOOT); BOOT0 and BOOT1 built 2026-11-06; BOOT8, BOOT4 and BOOT2 built 2026-11-07]**
+## 24. Bootstrap: agents, tools and updates **[decided 2026-11-06 (owner, ROADMAP BOOT); BOOT0 and BOOT1 built 2026-11-06; BOOT8, BOOT4, BOOT2 and BOOT3 built 2026-11-07]**
 
 The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-design.md`: one setup checklist
 that installs the coding agents, git, the GitHub CLI and their prerequisites, walks through the
@@ -8970,8 +8977,8 @@ the checklist on screen (§24.5).
 **Web:** More → Set up ptyro → "Install agents and tools" (`setup.plan`, `setup.install` in
 `web/src/settings.ts`): the plan with checkboxes (re-planned on each tick, so prerequisites tick
 themselves), Install, and the run's lines from `setup_progress` events; administrator steps are
-shown with `ptyro install …` to run on the computer. BOOT3 gives it its full place (Settings, a
-first-run banner).
+shown with `ptyro install …` to run on the computer. BOOT3 gave it its full place (Settings, a
+first-run banner, §24.6).
 
 **Protocol 1.31** (§6.4): `SetupPlan{picks?}` → `SetupPlan{plan}` (`read` scope: it only looks,
 but runs each agent's `--version`); `SetupRun{picks}` → `SetupStarted{run, plan}` (`full`), then
@@ -9336,3 +9343,86 @@ exception keeps those to the TUI and the CLI on the computer); `--confirmed` for
 already asked; `U` for `app.setup`; the catalog's `about` lines; `s` keeps the first run's other
 choices; the health badge opens it for missing agents and git now, before BOOT9 rewrites the
 doctor's lines.
+
+### 24.6 The web checklist (BOOT3) **[built 2026-11-07]**
+
+The design's "the web has it under Settings, and as a first-run banner when no agent is
+installed", with the owner's parity exception: a step that needs administrator rights never runs
+from the web (a sudo password or a UAC prompt would go through it, over the network); the page
+shows the command to run on the computer, and the TUI's and the CLI's ways that do it. Recorded
+as a waiver in the web cells of `setup` and `install` in `docs/parity.md`.
+
+**One page, reached three ways.** BOOT1's More → Set up ptyro became the checklist page
+(`setupView` in `web/src/settings.ts`, `#/setup`), not a second one beside it:
+- **Settings → Agents and tools**: the first link of the settings panel's sections (wide
+  screens) and a card at the top of its home (narrow ones), `#/setup/settings` (its back arrow
+  returns to Settings).
+- **More → Set up ptyro**, as before.
+- **The first-run banner** (`setupBanner`, `setup.banner`) at the top of the Sessions tab while no
+  coding agent is installed on any side (`noAgent`: every agent's state `missing`; an outdated
+  one counts as there): "Set up agents and tools" opens the page; "Not now" hides it on that
+  device (`ptyro.setup.later` in its storage). It asks the daemon's `SetupPlan` once per
+  connection (the defaults, the same cache the page uses), so it costs one survey.
+
+**The page:** the checklist first, then Log in (BOOT4's, with the profiles line), then the first
+run's accounts and repositories. The doctor's "Your agents" list went: Already here says the same,
+with versions and paths. The checklist is the TUI's shape (§24.5): Agents, Tools and Already
+here; each row a checkbox, the name, and the TUI's own line under it; a prerequisite ticked for
+something is checked and locked (untick that first); on Windows with WSL a box per side with that
+side's cell ("WinGet (admin)", "✓ 2.43.0") and what it can't say. Already here: each item's
+state and path (each side's on two), the default agent marked. The button counts what the web
+will run ("Install 2": ticked, with an action that needs no administrator rights), or says
+"Nothing to install from here".
+
+**The words come from the engine.** The page has no catalog, so the daemon sends each entry's
+line with the plan (protocol 1.34's `lines`, `checklist::lines`): `about` (what the TUI shows after
+the name: the catalog's `about` or the label, the method, "asks for admin", "needs Node.js",
+"ticked because …", an outdated state, "then log in"; without the method on two sides), `how` (a
+side's cell without its mark), `why` (what a cell can't say) and `state` (in words). `about` and
+`why` moved from the TUI (`setup_list.rs`, `onboard.rs`) into `ptyro_agents::setup::checklist`,
+which both use, so the two can't drift. The page reads the plan's own fields (ticked, picked,
+side, action) only for its checkboxes and counts.
+
+**Administrator steps** (`setup.admin`, `adminSteps` in `web/src/setupkit.ts`): a box per side
+with the command to run on the computer, `ptyro install <ids>` (`--where windows|wsl` when there
+are two sides), with Copy, the items it covers, and the TUI's way ("press the prefix … then U",
+`app.setup`, which asks for the password once) or `ptyro setup`. A ticked item that waits for one
+(`action.after`: Gemini CLI after Node.js from apt) is named: "install that on the computer,
+then come back". The run still gets every pick; the daemon skips the admin steps with their fix
+(`Admin::Never`, §24.2), so the log says the same.
+
+**One run at a time, on the web too.** The daemon's guard (`RUNNING`) already refused a second
+`SetupRun`; a page that hadn't started the run didn't know of it. Now the daemon keeps the run
+going (`CURRENT` in `crates/ptyro-daemon/src/setup.rs`: its id, the plan it runs, its latest 500
+events), numbers each event (`seq`, from 1), and every `SetupPlan` carries it as `running`. The
+page follows it (`SetupLog.adopt`, `web/src/setupkit.ts`): "Setup is already running on the
+computer …: its progress is below" at the top, its lines so far, every box and Install disabled
+("Installing…") until it ends, then its report. Events of a run the page doesn't follow are kept
+(the latest 600) and the first one makes the page ask for the plan again, so a run started
+elsewhere while the page is open is joined too; joining adds what came between, by `seq`, once. A
+refused `SetupRun` (started elsewhere a moment before) asks for the plan too. Its sides are counted
+from the run's own plan (`SetupStarted`'s, or `running.plan`), never a cached one. Recording an
+event and sending it happen under one lock, so a plan holds an event or comes before it. `CURRENT`
+is cleared when the run lets go of its place (`Running`'s `Drop`, a panic included). The TUI's
+installs run the CLI in a split, outside the daemon, so they aren't in this guard (§24.5: the TUI
+keeps its own).
+
+**Tests, with no real installer:** the logic without a browser, `web/test/setup.mjs` (`make
+web-test`): the banner's rule; administrator commands per side and what waits for them; a run's
+own events (early ones, sides from its plan, a duplicate shown once, an older daemon's unnumbered
+ones); joining a run going already from `running` with what came between, once and in order; a
+finish that arrives before the plan that names the run; not joining its own run while starting
+it. `checklist::lines` in `setup/tests.rs` (one side and two). The daemon, `boot1.rs`
+(`the_daemon_says_a_run_is_going_with_its_progress`): the lines and default agent; a run going
+(the fake machine's new `wait` outcome: an installer that waits for a file `go`) shows in every
+plan with its events exactly as sent, numbered from 1; a second run refused; gone after the
+report. In a real browser (`make web-e2e`, `web/test/e2e.mjs`): the banner opening the page;
+Settings → Agents and tools with the TUI's lines, the admin command and the TUI's way, Install 2's
+report and Already here with the default agent; a page opened again while a run waits saying it is
+already running, with its lines and no second Install, then its report.
+
+**Decided by the builder:** the words travel with the plan (not a catalog in the web, nor rules
+re-written in TypeScript); the running run rides on `SetupPlan` rather than a request of its own,
+since the page always asks for the plan first; the run's events are numbered so a page can join
+mid-way without losing or repeating one; the banner hides per device; the button counts only what
+the web runs.

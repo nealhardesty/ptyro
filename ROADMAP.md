@@ -3271,10 +3271,21 @@ machine". The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-desi
   `ptyro init` offers the CLI's checklist. The ticking rules moved to
   `ptyro_agents::setup::checklist`, shared with `ptyro setup` (SPEC §24.5). Tested headless
   (`tests/boot2.rs`) on the fake machine.
-- [ ] **BOOT3 The web checklist** **M**, under Settings and as a first-run banner when no agent
+- [x] **BOOT3 The web checklist** **M**, under Settings and as a first-run banner when no agent
   is installed. Installs that need admin rights are the TUI's and the CLI's only: the owner's
   parity exception, recorded in `docs/parity.md` with its reason. The web shows the command to
   run on the machine instead.
+
+  *Done (2026-11-07):* BOOT1's More → Set up ptyro became the checklist page, also under
+  Settings → Agents and tools, and a banner on the Sessions tab while no agent is installed
+  ("Not now" per device). Agents, Tools and Already here with the TUI's own line per item: the
+  daemon sends the words with the plan (protocol 1.34 `lines`; `about`/`why` moved into
+  `ptyro_agents::setup::checklist`, shared with the TUI). Install N runs what needs no admin;
+  admin steps show `ptyro install …` (Copy) and the TUI's `C-q U` / `ptyro setup`, the waiver in
+  `docs/parity.md`. One run at a time on the web too: `SetupPlan.running` carries the run going
+  with its numbered events (`SetupProgress.seq`), and a page that didn't start it follows it
+  instead of offering a second (SPEC §24.6). Tested by `web/test/setup.mjs`, `boot1.rs` (the
+  fake machine's new `wait` outcome) and three browser scenarios in `make web-e2e`.
 - [x] **BOOT4 Logins** **M**: one account per agent and `gh`, through each tool's own flow in a
   session, confirmed by its status command; ptyro never sees a credential. Setup ends by showing
   how to add accounts as profiles (`ptyro profile login`).

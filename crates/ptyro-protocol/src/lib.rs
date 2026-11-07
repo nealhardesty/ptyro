@@ -40,7 +40,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 33 };
+pub const PROTO: Version = Version { major: 1, minor: 34 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1892,6 +1892,17 @@ pub enum Reply {
     /// The setup checklist (protocol 1.31).
     SetupPlan {
         plan: ptyro_agents::setup::Plan,
+        /// Protocol 1.34 (BOOT3): what the checklist says of each entry, in the TUI's words,
+        /// for a client without the catalog (the web).
+        #[serde(default)]
+        lines: Vec<ptyro_agents::setup::checklist::Line>,
+        /// Protocol 1.34: the agent sessions start with (`agents.default`), marked in Already here.
+        #[serde(default)]
+        default_agent: String,
+        /// Protocol 1.34: the run going now (one at a time), with its progress so far, so a
+        /// client that didn't start it shows it instead of offering a second.
+        #[serde(default)]
+        running: Option<SetupRunning>,
     },
     /// A setup run started: `SetupProgress` events with this `run` follow.
     SetupStarted {
@@ -2146,7 +2157,28 @@ pub enum DomainEvent {
         /// ends with its own `finished`).
         #[serde(default)]
         side: ptyro_agents::setup::Side,
+        /// Protocol 1.34: the event's number in its run, from 1 (0: an older daemon's,
+        /// unnumbered), so a client joining a run mid-way can tell what `SetupRunning` held.
+        #[serde(default)]
+        seq: u64,
     },
+}
+
+/// The setup run going now (protocol 1.34, `Reply::SetupPlan`): its id, the plan it runs (its
+/// sides each end with a `finished`), and its events so far (the latest few hundred).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetupRunning {
+    pub run: String,
+    pub plan: ptyro_agents::setup::Plan,
+    pub events: Vec<SetupLogged>,
+}
+
+/// One event of a setup run, as `DomainEvent::SetupProgress` carried it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetupLogged {
+    pub seq: u64,
+    pub side: ptyro_agents::setup::Side,
+    pub event: ptyro_agents::setup::Event,
 }
 
 /// What to do to a scratchpad item (`ScratchMark`).

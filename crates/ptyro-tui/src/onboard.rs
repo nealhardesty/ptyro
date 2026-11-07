@@ -708,18 +708,7 @@ fn setup_lines(app: &App, fr: &FirstRun, width: usize, lines: &mut Vec<Line<'sta
                 // What a side's cell can't say: why it can't, what needs it.
                 for s in &sides {
                     let Some(x) = plan.entry_on(&e.id, *s) else { continue };
-                    let mut why = Vec::new();
-                    if let Some(b) = &x.blocked {
-                        why.push(format!("can't: {b}"));
-                    }
-                    if !x.needed_by.is_empty() {
-                        let by: Vec<&str> = x
-                            .needed_by
-                            .iter()
-                            .map(|id| plan.entry(id).map_or(id.as_str(), |y| y.name.as_str()))
-                            .collect();
-                        why.push(format!("ticked because {} needs it", by.join(", ")));
-                    }
+                    let why = ptyro_agents::setup::checklist::why(plan, x);
                     if !why.is_empty() {
                         let text = format!("{}: {}", r.sides.name(*s), why.join("; "));
                         for l in wrap_words(&text, width.saturating_sub(8)) {

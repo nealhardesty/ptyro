@@ -81,6 +81,7 @@ const ASSETS: &[(&str, &str, &[u8])] = &[
     js!("sessions"),
     js!("shells"),
     js!("shellkit"),
+    js!("setupkit"),
     js!("settings"),
     js!("panel"),
     js!("cfgkit"),

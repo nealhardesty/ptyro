@@ -445,7 +445,7 @@ async fn the_daemon_on_windows_does_both_sides_without_admin() {
     let mut c = d.client().await.unwrap();
     let both = Some(vec!["claude".to_owned(), "gh".to_owned()]);
     let req = Request::SetupPlan { picks: Some(vec!["claude".into()]), wsl_picks: both.clone() };
-    let Reply::SetupPlan { plan } = c.request(req).await.unwrap() else { panic!("not a plan") };
+    let Reply::SetupPlan { plan, .. } = c.request(req).await.unwrap() else { panic!("not a plan") };
     let p = serde_json::to_value(&plan).unwrap();
     assert_eq!(p["wsl"]["state"], "usable", "{p}");
     assert_eq!(runs(&p), [pair("windows", "claude"), pair("wsl", "claude"), pair("wsl", "gh")]);
@@ -460,7 +460,7 @@ async fn the_daemon_on_windows_does_both_sides_without_admin() {
     while seen.iter().filter(|(_, e)| e["event"] == "finished").count() < 2 {
         assert!(Instant::now() < deadline, "no reports: {seen:?}");
         let Ok(Some(ServerMsg::Event {
-            event: DomainEvent::SetupProgress { run: r, event, side },
+            event: DomainEvent::SetupProgress { run: r, event, side, .. },
             ..
         })) = tokio::time::timeout(Duration::from_millis(500), pushes.recv()).await
         else {

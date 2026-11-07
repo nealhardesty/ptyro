@@ -464,3 +464,22 @@ a.button { display: inline-block; padding: 7px 12px; border-radius: 8px; border:
 .pane-strip button.wants { border-color: var(--warn); }
 .pane-strip .plus { color: var(--accent); }
 .shell-card.pane { margin-left: 22px; }
+
+/* setup's checklist (BOOT3): Agents, Tools and Already here, a line per item */
+.setup-group { display: grid; gap: 10px; margin: 6px 0 12px; }
+.setup-group h4 { margin: 4px 0 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; }
+.setup-item { display: grid; gap: 2px 10px; }
+.setup-item > small, .setup-here small { color: var(--muted); font-size: 12px; }
+.setup-cells { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 4px; }
+.setup-cell small { color: var(--muted); }
+.setup-here { font-size: 14px; overflow-wrap: anywhere; }
+.setup-admin { display: grid; gap: 6px; margin: 8px 0; }
+.setup-admin .sub { margin: 0; }
+.setup-cmd { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.setup-cmd code { padding: 4px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; overflow-wrap: anywhere; }
+.setup-running { margin: 8px 0; }
+.setup-banner { display: grid; gap: 6px; margin: 8px; }
+.setup-banner a.button.primary { background: var(--accent); color: #fff; border-color: transparent; font-weight: 600; }
+.setup-link { text-decoration: none; color: var(--text); }
+.setup-link small { color: var(--muted); }
+pre.log { margin: 8px 0 0; padding: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 50vh; overflow: auto; }
