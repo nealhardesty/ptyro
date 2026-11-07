@@ -8780,7 +8780,7 @@ decided where the design left it open.
 ### 24.1 The version table (BOOT0) **[built 2026-11-06]**
 
 **Where it lives:** `crates/ptyro-agents/src/catalog.toml`, embedded with `include_str!` and read
-by `ptyro_agents::catalog` (typed, `serde`, `deny_unknown_fields`). Data, not code, so a fact can be
+by `ptyro_agents::catalog` (typed, `serde`, `deny_unknown_fields`; a table that failed to load would be empty, so nothing breaks, and the tests load it). Data, not code, so a fact can be
 corrected without touching the logic, and the tests check every row on every load. Every value is
 from the vendor's documentation (or, where marked, the vendor's installer script or the program
 itself) on the row's `checked` date, and RESEARCH segment G records the same, with sources.
@@ -8815,7 +8815,7 @@ Antigravity's and Gemini CLI's logins have no `check`, and the tests insist such
 `crates/ptyro-agents/tests/fixtures/catalog/` (trimmed to the fields that matter; `make catalog-fixtures` records them again) and reject a
 reply that isn't a version (an HTML error page, the wrong tag prefix). git has no source: the
 design checks only agents and ptyro. `catalog::Version` reads `2.1.319 (Claude Code)`,
-`codex-cli 0.162.1`, `v24.13.0` and `gh version 2.57.0 (…)`, and orders them (a pre-release before
+`codex-cli 0.162.1`, `v24.13.0`, `gh version 2.57.0 (…)` and Git for Windows' `git version 2.51.0.windows.1` (2.51.0), and orders them (a pre-release before
 its release); `at_least` checks a minimum.
 
 **Decided by the builder** (the design's "verified when built"):

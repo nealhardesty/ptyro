@@ -2,7 +2,7 @@
 //! installed and updated, how to read its installed version, where its newest version comes
 //! from, what it needs first, and how its login is started and confirmed. The data is
 //! `catalog.toml` beside this file, embedded at build time and checked by the tests; every value
-//! in it is dated and marked [V]/[S]/[U] (RESEARCH segment G). Nothing here touches the network:
+//! in it is dated and marked `[V]`/`[S]`/`[U]` (RESEARCH segment G). Nothing here touches the network:
 //! [`Latest::url`] names what to fetch and [`Latest::parse`] reads what came back.
 
 use std::cmp::Ordering;
@@ -407,14 +407,16 @@ struct File {
 }
 
 /// Every item, agents first, in the table's order.
+/// A table that doesn't load is empty: every lookup finds nothing and the rest of ptyro works
+/// (the tests load it, so a release never ships one).
 pub fn items() -> &'static [Item] {
     static ITEMS: OnceLock<Vec<Item>> = OnceLock::new();
-    // The table is part of the build, and the tests load it: it can't fail at run time.
-    ITEMS.get_or_init(|| {
-        toml::from_str::<File>(DATA)
-            .expect("catalog.toml is part of the build and the tests load it")
-            .item
-    })
+    ITEMS.get_or_init(|| load(DATA).unwrap_or_default())
+}
+
+/// The rows in `text`, a table in `catalog.toml`'s form.
+pub fn load(text: &str) -> Result<Vec<Item>, toml::de::Error> {
+    toml::from_str::<File>(text).map(|f| f.item)
 }
 
 /// The item `id` (`claude`, `gh`).
@@ -445,8 +447,10 @@ impl Version {
                 Some((n, p)) => (n, Some(p.to_owned())),
                 None => (w, None),
             };
-            let parts: Vec<u64> = num.split('.').map(str::parse).collect::<Result<_, _>>().ok()?;
-            (parts.len() >= 2).then_some(Self { parts, pre })
+            // Up to the first part that isn't a number: Git for Windows says `2.51.0.windows.1`.
+            let parts: Vec<u64> = num.split('.').map_while(|p| p.parse().ok()).collect();
+            let whole = parts.len() == num.split('.').count();
+            (parts.len() >= 2).then_some(Self { parts, pre: if whole { pre } else { None } })
         })
     }
 
@@ -490,6 +494,10 @@ mod tests {
 
     #[test]
     fn the_table_loads_and_has_every_row() {
+        if let Err(e) = load(DATA) {
+            panic!("catalog.toml doesn't load: {e}");
+        }
+        assert!(load("[[item]]\nid = \"x\"\n").is_err(), "a row missing its fields is an error");
         let ids: Vec<&str> = items().iter().map(|i| i.id.as_str()).collect();
         assert_eq!(
             ids,
@@ -694,6 +702,21 @@ mod tests {
         assert_eq!(v("gh version 2.57.0 (2024-09-16)").parts, [2, 57, 0]);
         assert_eq!(v("0.164.0-alpha.7").pre.as_deref(), Some("alpha.7"));
         assert!(Version::parse("no version here").is_none());
+        // What the table's `version` argvs print on each platform.
+        assert_eq!(v("git version 2.51.0.windows.1").parts, [2, 51, 0]);
+        assert_eq!(v("git version 2.51.0.windows.1").pre, None);
+        assert!(v("git version 2.51.0.windows.1").at_least("2.23"));
+        assert_eq!(v("git version 2.39.5 (Apple Git-154)").parts, [2, 39, 5]);
+        assert_eq!(
+            v("gh version 2.83.0 (2025-11-04)\nhttps://github.com/cli/cli/releases/tag/v2.83.0")
+                .parts,
+            [2, 83, 0]
+        );
+        assert_eq!(v("v22.11.0").parts, [22, 11, 0]);
+        assert_eq!(v("v26.13.0\r\n").parts, [26, 13, 0]);
+        assert_eq!(v("0.67.0").parts, [0, 67, 0]);
+        assert_eq!(v("1.19.5").parts, [1, 19, 5]);
+        assert_eq!(v("codex-cli 0.167.0-alpha.2").pre.as_deref(), Some("alpha.2"));
         assert!(v("2.1.319") > v("2.1.99"));
         assert!(v("0.164.0-alpha.7") < v("0.164.0"));
         assert!(v("0.164.0-alpha.7") > v("0.163.0"));
