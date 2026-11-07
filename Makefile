@@ -32,7 +32,7 @@ WEB_STRICT ?= 1
 
 .DEFAULT_GOAL := help
 .PHONY: help rust-install build release install install-release test fmt fmt-check lint deny doc check ci clean tools \
-        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean scratchpad-demo orchestrate-demo changeset-demo verify-claude verify-structured verify-shells spike-chat spike-chat-fts spike-wsl spike-conpty test-wsl check-windows conpty windows-setup build-windows test-windows tui-parity parity reset
+        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update catalog-fixtures lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean scratchpad-demo orchestrate-demo changeset-demo verify-claude verify-structured verify-shells spike-chat spike-chat-fts spike-wsl spike-conpty test-wsl check-windows conpty windows-setup build-windows test-windows tui-parity parity reset
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -133,6 +133,9 @@ ratchet: ## Fail if a crate has more unwrap()/expect() in non-test code than scr
 
 ratchet-update: ## Write the current unwrap()/expect() counts as the new baseline (they should only go down)
 	python3 scripts/unwrap-ratchet.py --update
+
+catalog-fixtures: ## Re-record the version table's newest-version replies (npm, GitHub, Claude's and Antigravity's feeds, nodejs.org) as test fixtures, printing each newest version (needs the network; review the diff)
+	python3 scripts/catalog-fixtures.py
 
 # The oldest compiler the workspace claims to build with (`rust-version` in Cargo.toml).
 MSRV := $(if $(NO_SH),,$(shell sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml | head -1)).0

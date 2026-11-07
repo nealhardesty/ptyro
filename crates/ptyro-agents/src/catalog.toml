@@ -1,0 +1,469 @@
+# The version table (ROADMAP BOOT0, SPEC §24.1): how each agent and tool is installed, updated,
+# versioned and logged in to, per platform. Every value here was read from the vendor's own
+# documentation (or, where it says so, the vendor's installer script or the program itself) on
+# the date in `checked`. Each method, latest-version source and login carries a mark:
+#   V  verified against the vendor's current docs (or the program, run here)
+#   S  second-hand: the vendor's own script or a third-party write-up, not the docs
+#   U  unverified: nothing to read it from; `note` says what is missing
+# A value nobody documents is left out (no `check`, no `update`), never guessed. RESEARCH
+# segment G records the same facts, dated, with the sources.
+#
+# Platforms: linux, macos, wsl, windows-x64, windows-arm64.
+# `shell`: "sh" runs the command with `sh -c` (it may pipe into `bash`); "powershell" with
+#   `powershell -NoProfile -ExecutionPolicy Bypass -Command`.
+# `via`: vendor (the vendor's own installer), npm, brew, winget, apt, dnf, xcode, node-dist
+#   (the official nodejs.org build, unpacked into a folder ptyro owns: `url`, `sums`).
+# `needs`: a program that must be on PATH for this method (apt-get, dnf, brew, winget, npm).
+# `admin`: the method asks for administrator rights (sudo, or an installer's UAC prompt).
+# `methods` are in order of preference: a platform's first method whose `needs` is present wins.
+# `others` are the other ways an item may already be installed, with how each updates (BOOT5,
+#   BOOT7's moves to the recommended method).
+
+[[item]]
+id = "claude"
+name = "Claude Code"
+kind = "agent"
+program = "claude"
+doc = "https://code.claude.com/docs/en/setup"
+checked = "2026-11-06"
+version = ["claude", "--version"]          # `2.1.319 (Claude Code)`
+note = "Native installs update themselves in the background; `claude update` applies one now."
+login = { start = ["claude", "auth", "login"], check = ["claude", "auth", "status"], mark = "V", note = "docs: run `claude` and follow the browser; `claude auth status` exits 1 when logged out (checked with 2.1.319)" }
+latest = { source = "plain-text", url = "https://downloads.claude.ai/claude-code-releases/latest", mark = "S", note = "the URL the vendor's install.sh reads; the docs name the bucket, not this file" }
+prereqs = [
+  { item = "git", required = false, platforms = ["windows-x64", "windows-arm64"], why = "Git for Windows gives Claude its Bash tool; without it Claude uses PowerShell" },
+]
+
+[[item.methods]]
+platforms = ["linux", "macos", "wsl"]
+via = "vendor"
+shell = "sh"
+install = "curl -fsSL https://claude.ai/install.sh | bash"
+update = "claude update"
+auto_update = true
+mark = "V"
+
+[[item.methods]]
+platforms = ["windows-x64", "windows-arm64"]
+via = "vendor"
+shell = "powershell"
+install = "irm https://claude.ai/install.ps1 | iex"
+update = "claude update"
+auto_update = true
+mark = "V"
+
+[[item.others]]
+platforms = ["linux", "macos", "wsl"]
+via = "npm"
+shell = "sh"
+needs = "npm"
+install = "npm install -g @anthropic-ai/claude-code"
+update = "npm install -g @anthropic-ai/claude-code@latest"
+mark = "V"
+note = "the npm package needs Node.js 22 or later"
+
+[[item.others]]
+platforms = ["windows-x64", "windows-arm64"]
+via = "npm"
+shell = "powershell"
+needs = "npm"
+install = "npm install -g @anthropic-ai/claude-code"
+update = "npm install -g @anthropic-ai/claude-code@latest"
+mark = "V"
+note = "the npm package needs Node.js 22 or later"
+
+[[item.others]]
+platforms = ["macos", "linux"]
+via = "brew"
+shell = "sh"
+needs = "brew"
+install = "brew install --cask claude-code"
+update = "brew upgrade claude-code"
+mark = "V"
+note = "the `claude-code` cask is the stable channel; `claude-code@latest` updates with `brew upgrade claude-code@latest`"
+
+[[item.others]]
+platforms = ["windows-x64", "windows-arm64"]
+via = "winget"
+shell = "powershell"
+needs = "winget"
+install = "winget install Anthropic.ClaudeCode"
+update = "winget upgrade Anthropic.ClaudeCode"
+mark = "V"
+
+[[item]]
+id = "codex"
+name = "Codex"
+kind = "agent"
+program = "codex"
+doc = "https://learn.chatgpt.com/docs/codex/cli"
+checked = "2026-11-06"
+version = ["codex", "--version"]           # `codex-cli 0.162.1`
+note = "The docs update by running the installer again; the CLI also has `codex update`."
+login = { start = ["codex", "login"], check = ["codex", "login", "status"], mark = "V", note = "docs: run `codex` and choose Sign in with ChatGPT; `codex login status` exits 1 when logged out (checked with 0.162.1)" }
+latest = { source = "github-release", url = "https://releases.openai.com/codex/channels/latest", tag_prefix = "rust-v", mark = "S", note = "the channel the vendor's install.sh reads; GitHub-release JSON, `tag_name` = `rust-v<version>`" }
+prereqs = [
+  { item = "git", min = "2.23", required = false, why = "Codex's pull-request helpers need git 2.23 or later" },
+]
+
+[[item.methods]]
+platforms = ["linux", "macos", "wsl"]
+via = "vendor"
+shell = "sh"
+install = "curl -fsSL https://chatgpt.com/codex/install.sh | sh"
+update = "curl -fsSL https://chatgpt.com/codex/install.sh | sh"
+mark = "V"
+
+[[item.methods]]
+platforms = ["windows-x64", "windows-arm64"]
+via = "vendor"
+shell = "powershell"
+install = "irm https://chatgpt.com/codex/install.ps1 | iex"
+update = "irm https://chatgpt.com/codex/install.ps1 | iex"
+mark = "V"
+note = "the README runs it as `powershell -ExecutionPolicy ByPass -c \"irm https://chatgpt.com/codex/install.ps1 | iex\"`; the powershell shell passes the same policy"
+
+[[item.others]]
+platforms = ["linux", "macos", "wsl"]
+via = "npm"
+shell = "sh"
+needs = "npm"
+install = "npm install -g @openai/codex"
+update = "npm install -g @openai/codex@latest"
+mark = "S"
+note = "the install command is in the README; the update form is npm's own, not the vendor's"
+
+[[item.others]]
+platforms = ["windows-x64", "windows-arm64"]
+via = "npm"
+shell = "powershell"
+needs = "npm"
+install = "npm install -g @openai/codex"
+update = "npm install -g @openai/codex@latest"
+mark = "S"
+note = "the install command is in the README; the update form is npm's own, not the vendor's"
+
+[[item.others]]
+platforms = ["macos", "linux"]
+via = "brew"
+shell = "sh"
+needs = "brew"
+install = "brew install --cask codex"
+update = "brew upgrade --cask codex"
+mark = "S"
+note = "the install command is in the README; the update form is Homebrew's own"
+
+[[item]]
+id = "antigravity"
+name = "Antigravity"
+kind = "agent"
+program = "agy"
+doc = "https://antigravity.google/docs/getting-started?tab=cli"
+checked = "2026-11-06"
+version = ["agy", "--version"]
+note = "Google's agent for consumer Google accounts since 2026-06-18 (it replaced Gemini CLI for them). It updates itself in the background (AGY_CLI_DISABLE_AUTO_UPDATE=true stops that)."
+login = { start = ["agy"], mark = "U", note = "sign-in happens when `agy` starts (browser, or a code to paste over SSH); the docs name no status command, so a login can't be confirmed except by running it" }
+latest = { source = "agy-manifest", url = "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/{platform}.json", mark = "S", note = "the manifest the vendor's install.sh and install.ps1 read; {platform} is linux_amd64, darwin_arm64, windows_arm64…; musl builds (linux_amd64_musl) are not chosen here" }
+
+[[item.methods]]
+platforms = ["linux", "macos", "wsl"]
+via = "vendor"
+shell = "sh"
+install = "curl -fsSL https://antigravity.google/cli/install.sh | bash"
+update = "agy update"
+auto_update = true
+mark = "V"
+note = "install [V docs]; `agy update` [S: third-party guides, not in the docs]; the background updater [V docs]"
+
+[[item.methods]]
+platforms = ["windows-x64", "windows-arm64"]
+via = "vendor"
+shell = "powershell"
+install = "irm https://antigravity.google/cli/install.ps1 | iex"
+update = "agy update"
+auto_update = true
+mark = "V"
+note = "install [V docs]; `agy update` [S: third-party guides, not in the docs]; installs into %LOCALAPPDATA%\\agy\\bin"
+
+[[item]]
+id = "opencode"
+name = "OpenCode"
+kind = "agent"
+program = "opencode"
+doc = "https://docs.opencode.ai/docs/"
+checked = "2026-11-06"
+version = ["opencode", "--version"]
+note = "OpenCode 1. OpenCode 2 (@opencode/cli, `curl -fsSL https://opencode.ai/v2/install | bash`) changed its server API, which ptyro's adapter speaks, and is beta; the two share the `opencode` command."
+login = { start = ["opencode", "auth", "login"], check = ["opencode", "auth", "list"], mark = "U", note = "`opencode auth login` and `opencode auth list` are in the docs [V]; whether `auth list` fails when nothing is logged in is not, so `check` lists providers and doesn't confirm" }
+latest = { source = "npm", url = "https://registry.npmjs.org/opencode-ai/latest", mark = "V", note = "the vendor's install script reads the same registry entry" }
+prereqs = [
+  { item = "node", required = true, platforms = ["windows-x64", "windows-arm64"], why = "npm comes with Node.js; opencode-ai names no minimum Node.js version [U]" },
+]
+
+[[item.methods]]
+platforms = ["linux", "macos", "wsl"]
+via = "vendor"
+shell = "sh"
+install = "curl -fsSL https://opencode.ai/install | bash"
+update = "opencode upgrade"
+mark = "V"
+
+[[item.methods]]
+platforms = ["windows-x64", "windows-arm64"]
+via = "npm"
+shell = "powershell"
+needs = "npm"
+install = "npm install -g opencode-ai"
+update = "opencode upgrade"
+mark = "V"
+note = "the docs recommend WSL on Windows; natively they list npm, Chocolatey and Scoop. The npm package has builds for windows-x64 and windows-arm64"
+
+[[item.others]]
+platforms = ["macos", "linux"]
+via = "brew"
+shell = "sh"
+needs = "brew"
+install = "brew install anomalyco/tap/opencode"
+update = "brew upgrade opencode"
+mark = "S"
+note = "the install command is in the docs (`brew install opencode` is OpenCode 2); the update form is Homebrew's own"
+
+[[item.others]]
+platforms = ["linux", "macos", "wsl"]
+via = "npm"
+shell = "sh"
+needs = "npm"
+install = "npm install -g opencode-ai"
+update = "opencode upgrade"
+mark = "V"
+
+[[item]]
+id = "gemini"
+name = "Gemini CLI"
+kind = "agent"
+program = "gemini"
+label = "for Gemini API-key and enterprise accounts (others: Antigravity)"
+doc = "https://geminicli.com/docs/get-started/installation/"
+checked = "2026-11-06"
+version = ["gemini", "--version"]          # `0.33.0`
+note = "Replaced by Antigravity for unpaid and Google One accounts on 2026-06-18; Google's pages disagree on exactly who kept it. Requirements: macOS 15+, Windows 11 24H2+, Ubuntu 20.04+."
+login = { start = ["gemini"], mark = "U", note = "run `gemini` and choose Sign in with Google, a Gemini API key (GEMINI_API_KEY) or Vertex AI [V]; the docs name no status command" }
+latest = { source = "npm", url = "https://registry.npmjs.org/@google%2fgemini-cli/latest", mark = "V" }
+prereqs = [
+  { item = "node", min = "20.0.0", required = true, why = "Gemini CLI needs Node.js 20 or later" },
+]
+
+[[item.methods]]
+platforms = ["linux", "macos", "wsl"]
+via = "npm"
+shell = "sh"
+needs = "npm"
+install = "npm install -g @google/gemini-cli"
+update = "npm install -g @google/gemini-cli@latest"
+mark = "V"
+note = "into a user-owned npm prefix, never `sudo npm`"
+
+[[item.methods]]
+platforms = ["windows-x64", "windows-arm64"]
+via = "npm"
+shell = "powershell"
+needs = "npm"
+install = "npm install -g @google/gemini-cli"
+update = "npm install -g @google/gemini-cli@latest"
+mark = "V"
+note = "into a user-owned npm prefix, never `sudo npm`"
+
+[[item.others]]
+platforms = ["macos", "linux"]
+via = "brew"
+shell = "sh"
+needs = "brew"
+install = "brew install gemini-cli"
+update = "brew upgrade gemini-cli"
+mark = "S"
+note = "the install command is in the docs; the update form is Homebrew's own"
+
+[[item]]
+id = "git"
+name = "git"
+kind = "tool"
+program = "git"
+doc = "https://git-scm.com/install/"
+checked = "2026-11-06"
+version = ["git", "--version"]             # `git version 2.43.0`
+note = "Updated by its own package manager; ptyro doesn't check it for new versions."
+
+[[item.methods]]
+platforms = ["linux", "wsl"]
+via = "apt"
+shell = "sh"
+needs = "apt-get"
+install = "sudo apt-get install -y git"
+update = "sudo apt-get install -y git"
+admin = true
+mark = "V"
+note = "the docs give `apt-get install git` as root; -y and sudo are ptyro's"
+
+[[item.methods]]
+platforms = ["linux", "wsl"]
+via = "dnf"
+shell = "sh"
+needs = "dnf"
+install = "sudo dnf install -y git"
+update = "sudo dnf upgrade -y git"
+admin = true
+mark = "V"
+note = "the docs give `dnf install git` as root; -y and sudo are ptyro's"
+
+[[item.methods]]
+platforms = ["macos"]
+via = "brew"
+shell = "sh"
+needs = "brew"
+install = "brew install git"
+update = "brew upgrade git"
+mark = "V"
+
+[[item.methods]]
+platforms = ["macos"]
+via = "xcode"
+shell = "sh"
+install = "xcode-select --install"
+admin = true
+mark = "V"
+note = "Apple's Command Line Tools (a dialog asks); updated by Software Update"
+
+[[item.methods]]
+platforms = ["windows-x64", "windows-arm64"]
+via = "winget"
+shell = "powershell"
+needs = "winget"
+install = "winget install --id Git.Git -e --source winget"
+update = "winget upgrade --id Git.Git -e --source winget"
+admin = true
+mark = "V"
+note = "Git for Windows; the docs say the Git.Git package isn't maintained by that project and may lag"
+
+[[item]]
+id = "gh"
+name = "GitHub CLI"
+kind = "tool"
+program = "gh"
+doc = "https://github.com/cli/cli#installation"
+checked = "2026-11-06"
+version = ["gh", "--version"]              # `gh version 2.57.0 (2024-09-16)`
+note = "Updated by its own package manager; ptyro doesn't check it for new versions."
+login = { start = ["gh", "auth", "login", "--web"], check = ["gh", "auth", "status"], mark = "V", note = "`gh auth status` exits 1 when logged out (checked with 2.57.0)" }
+latest = { source = "github-release", url = "https://api.github.com/repos/cli/cli/releases/latest", tag_prefix = "v", mark = "V" }
+
+[[item.methods]]
+platforms = ["linux", "wsl"]
+via = "apt"
+shell = "sh"
+needs = "apt-get"
+install = '''
+(type -p wget >/dev/null || (sudo apt update && sudo apt install wget -y)) \
+&& sudo mkdir -p -m 755 /etc/apt/keyrings \
+&& out=$(mktemp) && wget -nv -O$out https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+&& cat $out | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
+&& sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+&& sudo mkdir -p -m 755 /etc/apt/sources.list.d \
+&& echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+&& sudo apt update \
+&& sudo apt install gh -y'''
+update = "sudo apt update && sudo apt install gh"
+admin = true
+mark = "V"
+note = "GitHub's own apt repository; the docs warn that Debian's and Ubuntu's community packages (2.45.x, 2.46.x) are broken"
+
+[[item.methods]]
+platforms = ["linux", "wsl"]
+via = "dnf"
+shell = "sh"
+needs = "dnf"
+install = "sudo dnf install -y dnf5-plugins && sudo dnf config-manager addrepo --from-repofile=https://cli.github.com/packages/rpm/gh-cli.repo && sudo dnf install -y gh"
+update = "sudo dnf update gh"
+admin = true
+mark = "V"
+note = "the DNF5 form; on DNF4 the docs use `dnf install 'dnf-command(config-manager)'` and `config-manager --add-repo`"
+
+[[item.methods]]
+platforms = ["macos"]
+via = "brew"
+shell = "sh"
+needs = "brew"
+install = "brew install gh"
+update = "brew upgrade gh"
+mark = "V"
+
+[[item.methods]]
+platforms = ["windows-x64", "windows-arm64"]
+via = "winget"
+shell = "powershell"
+needs = "winget"
+install = "winget install --id GitHub.cli --source winget"
+update = "winget upgrade --id GitHub.cli --source winget"
+admin = true
+mark = "V"
+
+[[item]]
+id = "node"
+name = "Node.js"
+kind = "tool"
+program = "node"
+doc = "https://nodejs.org/en/download"
+checked = "2026-11-06"
+version = ["node", "--version"]            # `v24.13.0`
+note = "Needed by the npm agents (Gemini CLI everywhere, OpenCode on Windows). A distro's own package can be too old (Ubuntu 24.04's is 18.x): then the nodejs.org build goes into a folder ptyro owns. Updated by its own package manager; ptyro doesn't check it for new versions."
+latest = { source = "node-dist", url = "https://nodejs.org/dist/index.json", mark = "V", note = "the newest release whose `lts` isn't false" }
+
+[[item.methods]]
+platforms = ["linux", "wsl"]
+via = "apt"
+shell = "sh"
+needs = "apt-get"
+install = "sudo apt-get install -y nodejs npm"
+update = "sudo apt-get install -y nodejs npm"
+admin = true
+mark = "S"
+note = "the distro's package, not nodejs.org's: used only when its version meets every minimum"
+
+[[item.methods]]
+platforms = ["linux", "wsl"]
+via = "dnf"
+shell = "sh"
+needs = "dnf"
+install = "sudo dnf install -y nodejs"
+update = "sudo dnf upgrade -y nodejs"
+admin = true
+mark = "S"
+note = "the distro's package, not nodejs.org's: used only when its version meets every minimum"
+
+[[item.methods]]
+platforms = ["macos"]
+via = "brew"
+shell = "sh"
+needs = "brew"
+install = "brew install node"
+update = "brew upgrade node"
+mark = "V"
+note = "the node formula is the newest release (26.13.0 on 2026-11-06, formulae.brew.sh)"
+
+[[item.methods]]
+platforms = ["windows-x64", "windows-arm64"]
+via = "winget"
+shell = "powershell"
+needs = "winget"
+install = "winget install -e --id OpenJS.NodeJS.LTS"
+update = "winget upgrade -e --id OpenJS.NodeJS.LTS"
+admin = true
+mark = "S"
+note = "the package exists in winget-pkgs (26.13.0 on 2026-11-06); nodejs.org's page names no winget command"
+
+[[item.methods]]
+platforms = ["linux", "wsl", "macos", "windows-x64", "windows-arm64"]
+via = "node-dist"
+url = "https://nodejs.org/dist/v{version}/node-v{version}-{os}-{arch}.{ext}"
+sums = "https://nodejs.org/dist/v{version}/SHASUMS256.txt"
+mark = "V"
+note = "the official build of the newest LTS ({os}: linux, darwin, win; {arch}: x64, arm64; {ext}: tar.xz, or zip on Windows), checked against SHASUMS256.txt; no admin rights"

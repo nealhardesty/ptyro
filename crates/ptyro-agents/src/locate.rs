@@ -50,14 +50,14 @@ pub fn program_of_package(folder: &str) -> Option<&'static str> {
     NPM.iter().find(|(_, pkg)| pkg.rsplit('/').next() == Some(folder)).map(|(n, _)| *n)
 }
 
-/// How to install a built-in agent's program, for the fix ptyro offers when it is missing.
+/// How to install a built-in agent's program, for the fix ptyro offers when it is missing: the
+/// vendor's recommended command on this platform, from the version table ([`crate::catalog`]).
 pub fn install_hint(program: &str) -> Option<String> {
-    match program {
-        "claude" if cfg!(windows) => Some("irm https://claude.ai/install.ps1 | iex".into()),
-        "claude" => Some("curl -fsSL https://claude.ai/install.sh | bash".into()),
-        "agy" => None,
-        p => NPM.iter().find(|(n, _)| *n == p).map(|(_, pkg)| format!("npm i -g {pkg}")),
-    }
+    hint_on(program, crate::catalog::Platform::current())
+}
+
+fn hint_on(program: &str, platform: crate::catalog::Platform) -> Option<String> {
+    crate::catalog::by_program(program)?.method(platform, |_| true)?.install.clone()
 }
 
 /// The user's home: `$HOME`, else `%USERPROFILE%` (Windows sets only that).
@@ -380,7 +380,36 @@ mod tests {
         // A configured full path is taken as it is.
         let full = bin.join("codex").to_string_lossy().into_owned();
         assert_eq!(find_in(&full, "", &places(home, &nvm)).unwrap().argv, [full]);
-        assert_eq!(install_hint("gemini").as_deref(), Some("npm i -g @google/gemini-cli"));
+        assert_eq!(install_hint("gemini").as_deref(), Some("npm install -g @google/gemini-cli"));
+    }
+
+    /// The hint is the version table's recommended command for the platform.
+    #[test]
+    fn install_hints_come_from_the_table() {
+        use crate::catalog::Platform::{Linux, Macos, WindowsArm64, WindowsX64, Wsl};
+        let h = |p, on| hint_on(p, on);
+        assert_eq!(
+            h("claude", Wsl).as_deref(),
+            Some("curl -fsSL https://claude.ai/install.sh | bash")
+        );
+        assert_eq!(
+            h("claude", WindowsX64).as_deref(),
+            Some("irm https://claude.ai/install.ps1 | iex")
+        );
+        assert_eq!(
+            h("codex", Macos).as_deref(),
+            Some("curl -fsSL https://chatgpt.com/codex/install.sh | sh")
+        );
+        assert_eq!(
+            h("agy", WindowsArm64).as_deref(),
+            Some("irm https://antigravity.google/cli/install.ps1 | iex")
+        );
+        assert_eq!(
+            h("opencode", Linux).as_deref(),
+            Some("curl -fsSL https://opencode.ai/install | bash")
+        );
+        assert_eq!(h("opencode", WindowsX64).as_deref(), Some("npm install -g opencode-ai"));
+        assert_eq!(h("my-own-agent", Linux), None);
     }
 }
 

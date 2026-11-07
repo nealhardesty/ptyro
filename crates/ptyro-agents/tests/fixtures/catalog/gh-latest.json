@@ -1,0 +1,18 @@
+{
+ "tag_name": "v2.103.3",
+ "name": "GitHub CLI 2.103.3",
+ "draft": false,
+ "prerelease": false,
+ "published_at": "2026-10-26T19:20:08Z",
+ "html_url": "https://github.com/cli/cli/releases/tag/v2.103.3",
+ "assets": [
+  {
+   "name": "gh_2.103.3_checksums.txt",
+   "browser_download_url": "https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_checksums.txt"
+  },
+  {
+   "name": "gh_2.103.3_linux_386.deb",
+   "browser_download_url": "https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_linux_386.deb"
+  }
+ ]
+}
