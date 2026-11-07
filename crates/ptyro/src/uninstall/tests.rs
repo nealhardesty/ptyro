@@ -249,3 +249,46 @@ fn integrations_are_found_where_ptyro_put_them() {
     std::fs::remove_dir_all(g.join("extensions")).unwrap();
     assert!(integrations_found(&cfg, &e).is_empty());
 }
+
+/// The tools `ptyro setup` installed were on PATH only through `ptyro shell-init`'s line: taking
+/// that line out puts a plain PATH line for them in its place (BOOT1), once.
+#[test]
+fn the_shell_init_line_leaves_a_path_line_for_setups_tools() {
+    let tools = [PathBuf::from("/h/ptyro-tools/node/bin")];
+    let rc = "export A=1\n\n# ptyro shell integration, and the tools ptyro setup installed\neval \"$(ptyro shell-init bash)\"\n";
+    let (text, gone, adds) = rewrite_rc(Path::new("/h/.bashrc"), rc, &tools);
+    assert_eq!(gone.iter().filter(|l| !l.trim().is_empty()).count(), 2);
+    assert!(!text.contains("ptyro shell-init"));
+    assert!(text.starts_with("export A=1\n"));
+    assert!(text.contains("PATH='/h/ptyro-tools/node/bin':\"$PATH\""), "{text}");
+    assert_eq!(adds.len(), 2, "the comment and one line: {adds:?}");
+    // Run again (uninstall twice): nothing more to take out or add.
+    let (again, gone2, adds2) = rewrite_rc(Path::new("/h/.bashrc"), &text, &tools);
+    assert_eq!((again.as_str(), gone2.len(), adds2.len()), (text.as_str(), 0, 0));
+    // fish gets fish's form; no tools folder, or only completions removed: nothing added.
+    let (fish, _, _) = rewrite_rc(
+        Path::new("/h/.config/fish/config.fish"),
+        "ptyro shell-init fish | source\n",
+        &tools,
+    );
+    assert!(fish.contains("contains -- '/h/ptyro-tools/node/bin' $PATH"), "{fish}");
+    assert!(
+        rewrite_rc(Path::new("/h/.zshrc"), "eval \"$(ptyro shell-init zsh)\"\n", &[]).2.is_empty()
+    );
+    assert!(
+        rewrite_rc(Path::new("/h/.zshrc"), "source <(ptyro completions zsh)\n", &tools)
+            .2
+            .is_empty()
+    );
+    // The plan says so.
+    let mut p = plan_with(Vec::new());
+    p.rc.push(RcEdit {
+        file: "/home/me/.bashrc".into(),
+        lines: gone,
+        mentions: Vec::new(),
+        adds: adds.clone(),
+    });
+    let shown = render(&p, &env("/home/me", None));
+    assert!(shown.contains("so the tools ptyro setup installed stay on PATH"), "{shown}");
+    assert!(shown.contains(adds[1].trim()), "{shown}");
+}

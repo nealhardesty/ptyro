@@ -157,7 +157,7 @@ ptyro setup --yes --agents claude,codex --tools git,gh   # unattended: scripts, 
   against its published checksums, in a folder of its own (`~/.local/share/ptyro-tools`), with no
   admin rights and no `sudo npm`. It then offers to add `ptyro shell-init`'s line to your shell's
   rc file so new terminals find it (on Windows, your `PATH`); ptyro's own sessions find it
-  already. `ptyro uninstall` leaves that folder alone: the tools are yours.
+  already. `ptyro uninstall` leaves that folder alone, and on PATH: the tools are yours.
 - **Admin rights only after asking, once.** apt, dnf and WinGet's machine-wide installers need
   them: sudo asks for your password once, in your terminal, before the first of them (on Windows
   each installer raises its own UAC prompt). ptyro never sees the password. `--yes` asks nothing:

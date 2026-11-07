@@ -130,19 +130,12 @@ pub async fn install(
 
 /// Run the plan with live output, then what's next.
 fn go(ctx: &Ctx, host: &dyn setup::Host, plan: &Plan, yes: bool, json: bool) -> Result<i32, Error> {
-    for e in plan.entries.iter().filter(|e| e.ticked && e.action.is_none()) {
-        match &e.blocked {
-            Some(why) => eprintln!("✗ {}: {why}", e.name),
-            None if e.picked => eprintln!("✓ {} is here already ({})", e.name, e.state.words()),
-            None => {}
-        }
+    for e in plan.entries.iter().filter(|e| e.picked && e.action.is_none() && e.blocked.is_none()) {
+        eprintln!("✓ {} is here already ({})", e.name, e.state.words());
     }
-    if plan.steps().is_empty() {
-        let blocked = plan.entries.iter().any(|e| e.blocked.is_some());
-        if !blocked {
-            eprintln!("Nothing to install.");
-        }
-        return Ok(if blocked { 1 } else { 0 });
+    if plan.steps().is_empty() && !plan.entries.iter().any(|e| e.ticked && e.blocked.is_some()) {
+        eprintln!("Nothing to install.");
+        return Ok(0);
     }
     let names: BTreeMap<String, String> =
         plan.entries.iter().map(|e| (e.id.clone(), e.name.clone())).collect();
@@ -191,6 +184,10 @@ fn print_event(ev: &Event, name: &dyn Fn(&str) -> String, windows: bool) {
             eprintln!("✗ {}: {error}", name(id));
             eprintln!("  fix: {fix}");
         }
+        Event::Blocked { id, reason, fix } => {
+            eprintln!("✗ {}: can't be installed here: {reason}", name(id));
+            eprintln!("  fix: {fix}");
+        }
         Event::Skipped { id, reason, fix } => {
             eprintln!("– {}: not installed, {reason}", name(id));
             eprintln!("  fix: {fix}");
@@ -214,6 +211,9 @@ fn summary(r: &Report) -> String {
     }
     if !r.skipped.is_empty() {
         parts.push(format!("{} not run", r.skipped.len()));
+    }
+    if !r.blocked.is_empty() {
+        parts.push(format!("{} can't be installed here", r.blocked.len()));
     }
     let tail = if r.ok() { "." } else { ": each says its fix above." };
     format!("{}{tail}", parts.join(", "))
@@ -284,26 +284,23 @@ fn offer_path(paths: &Paths, yes: bool) {
     }
 }
 
-/// Windows: `dirs` at the front of the user's `PATH` (HKCU\Environment), each once.
+/// Windows: `dirs` at the front of the user's `PATH` (HKCU\Environment), each once. Read and
+/// written as stored: `%VAR%` entries stay unexpanded and REG_EXPAND_SZ stays so (PowerShell's
+/// `[Environment]::SetEnvironmentVariable` would expand them for good and write REG_SZ).
 #[cfg(windows)]
 fn add_user_path(dirs: &[std::path::PathBuf]) -> Result<(), String> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let list: Vec<String> =
-        dirs.iter().map(|d| format!("'{}'", d.display().to_string().replace('\'', "''"))).collect();
-    let script = format!(
-        "$add = @({}); $cur = [Environment]::GetEnvironmentVariable('Path', 'User'); \
-         $parts = @($cur -split ';' | Where-Object {{ $_ -and ($add -notcontains $_) }}); \
-         [Environment]::SetEnvironmentVariable('Path', (($add + $parts) -join ';'), 'User')",
-        list.join(", ")
-    );
-    let ok = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script])
-        .creation_flags(CREATE_NO_WINDOW)
-        .status()
-        .map_err(|e| e.to_string())?
-        .success();
-    if ok { Ok(()) } else { Err("PowerShell couldn't set it".into()) }
+    use ptyro_pty::winreg::{Raw, announce_environment, get_raw, set_raw};
+    let cur =
+        get_raw(false, "Environment", "Path").unwrap_or(Raw { text: String::new(), expand: true });
+    let mine: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
+    let next = setup::prepend_entries(&cur.text, &mine);
+    if next != cur.text {
+        // A Path that held only plain folders may stay REG_SZ; one with `%VAR%` must expand.
+        set_raw("Environment", "Path", &next, cur.expand || next.contains('%'))
+            .map_err(|e| e.to_string())?;
+        announce_environment();
+    }
+    Ok(())
 }
 
 #[cfg(not(windows))]

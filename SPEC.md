@@ -8923,9 +8923,10 @@ keeps its last state), with ptyro's tools folders first on `PATH`, and on Window
 item is looked for again, and `Done` carries the version found (none: "a new terminal may be
 needed").
 
-**Events** (`setup::Event`, JSON-tagged `event`): `elevating{ids}`, `started{id, name, command,
-admin}`, `line{id, text}`, `done{id, version?}`, `failed{id, error, fix}`, `skipped{id, reason,
-fix}`, `logins{ids}`, `finished{report}`. **Fixes:** a failure offers `ptyro install <program>`
+**Events** (`setup::Event`, JSON-tagged `event`): `elevating{ids}`, `blocked{id, reason, fix}`,
+`started{id, name, command, admin}`, `line{id, text}`, `done{id, version?}`, `failed{id, error,
+fix}`, `skipped{id, reason, fix}`, `logins{ids}`, `finished{report}` (`done`, `failed`, `skipped`,
+`blocked`, `tools`). **Fixes:** a failure offers `ptyro install <program>`
 again, the command to run yourself and the vendor's page; nodejs.org's build, the connection and
 the page. **Logins:** after the installs, `logins` names the installed items with a login; the CLI
 prints each one's own `start` command from the table. BOOT4 makes it walk through them.
@@ -8977,6 +8978,37 @@ once / never with `--yes` / refused, the checklist's ticks and quitting, the Nod
 tools folder on `PATH` through a real `bash`, the rc line `ptyro uninstall` removes again, and the
 daemon's `SetupPlan`/`SetupRun` with its events and its never-admin rule. With the knob set, the
 checklist reads its answers from stdin even when it isn't a terminal.
+
+**Review fixes (2026-11-07):**
+- **Blocked items count.** A ticked item with no way here (Linux without apt or dnf for git)
+  gets `Event::Blocked{id, reason, fix}` before the steps and is in `Report::blocked`. `ok()` is
+  false, so `ptyro setup`/`install` exit 1. The CLI, `--json` and the web all show it, and a step
+  that needs a blocked item is skipped.
+- **Windows' PATH follows installers.** After each successful step, `RealHost` rebuilds its `PATH`
+  from the stored machine and user `Path` (read raw through `ptyro_pty::winreg::get_raw`,
+  `%VAR%` expanded) with `refreshed_path`: every entry it had, then the new ones, with the tools
+  folders in front. WinGet's Node.js adds `C:\Program Files\nodejs` only to the registry, and the
+  next step's `npm` then finds it. The fake models it with `path_adds`/`path_needs` and a
+  `stored-path` file.
+- **The user's `Path` is written as stored.** `add_user_path` reads `HKCU\Environment\Path` raw,
+  puts the tools folders in front with `prepend_entries` (nothing else changed or expanded), keeps
+  REG_EXPAND_SZ (`set_raw`), then broadcasts `WM_SETTINGCHANGE`. PowerShell's
+  `[Environment]::SetEnvironmentVariable` would have expanded `%VAR%` entries for good and written
+  REG_SZ.
+- **Git Bash's PATH form.** For bash, zsh and fish, `path_lines` writes a Windows folder as MSYS
+  writes it (`shell::msys_form`: `C:\Users\x` → `/c/Users/x`). `PATH` there is `:`-separated, so
+  the drive's colon would split it. PowerShell keeps the native form.
+- **A step ends when its program does.** `pump` stops reading 1 s after the program exits, so a
+  background process left holding stdout (a daemon an installer started) can't hang it.
+  `capture` kills at its limit.
+- **WinGet runs with no input.** The table's WinGet commands carry `--source winget
+  --accept-source-agreements --accept-package-agreements` (BOOT0's tests require them). Claude
+  Code's WinGet line gained `--id … -e` too, the same package written exactly.
+- **The daemon's one-run guard** is a drop guard, so a panicking run frees it.
+- **Uninstall keeps the tools working.** The plan lists `ptyro-tools` under Kept, and on Windows
+  the user `Path` entries in it. When it removes `ptyro shell-init`'s line from an rc file while
+  the tools folder exists, it writes `path_lines` for that shell in its place (`rewrite_rc`, shown
+  in the plan). If the file can't be written, the error gives the exact lines.
 
 **Decided by the builder** (the design's "Left to the builder"): the states above; elevation per
 mode as above; the engine in `ptyro-agents` (beside the table it reads; the protocol crate now

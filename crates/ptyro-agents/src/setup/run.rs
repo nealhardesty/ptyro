@@ -59,6 +59,12 @@ pub enum Event {
         reason: String,
         fix: String,
     },
+    /// Ticked, but nothing installs it here (no package manager its methods need): said first.
+    Blocked {
+        id: String,
+        reason: String,
+        fix: String,
+    },
     /// After the installs, before the report: the logins (BOOT4). Nothing yet.
     Logins {
         ids: Vec<String>,
@@ -74,6 +80,9 @@ pub struct Report {
     pub done: Vec<String>,
     pub failed: Vec<String>,
     pub skipped: Vec<String>,
+    /// Ticked but impossible here ([`super::Entry::blocked`]).
+    #[serde(default)]
+    pub blocked: Vec<String>,
     /// Something went into ptyro's tools folders: new terminals need them on `PATH`
     /// (`ptyro shell-init`'s line; on Windows the user's `PATH`).
     #[serde(default)]
@@ -82,7 +91,7 @@ pub struct Report {
 
 impl Report {
     pub fn ok(&self) -> bool {
-        self.failed.is_empty() && self.skipped.is_empty()
+        self.failed.is_empty() && self.skipped.is_empty() && self.blocked.is_empty()
     }
 }
 
@@ -117,12 +126,29 @@ pub fn run(plan: &Plan, host: &dyn Host, admin: Admin, on: &mut dyn FnMut(Event)
             }
         }
     };
+    for e in plan.entries.iter().filter(|e| e.ticked) {
+        let Some(why) = &e.blocked else { continue };
+        on(Event::Blocked {
+            id: e.id.clone(),
+            reason: why.clone(),
+            fix: format!(
+                "install what it needs (or it, from {}), then `ptyro install {}`",
+                e.doc,
+                program(e)
+            ),
+        });
+        report.blocked.push(e.id.clone());
+    }
     for e in steps {
         let Some(action) = &e.action else { continue };
         let not_there: Vec<&String> = action
             .after
             .iter()
-            .filter(|d| report.failed.contains(d) || report.skipped.contains(d))
+            .filter(|d| {
+                report.failed.contains(d)
+                    || report.skipped.contains(d)
+                    || report.blocked.contains(d)
+            })
             .collect();
         if let Some(d) = not_there.first() {
             let dn = plan.entry(d).map_or(d.as_str(), |x| x.name.as_str());

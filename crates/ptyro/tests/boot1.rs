@@ -5,7 +5,7 @@
 //! unit-tested in `ptyro_agents::setup`.
 
 use std::io::{BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
@@ -258,9 +258,14 @@ fn node_from_nodejs_org_when_apts_is_too_old_and_its_folder_goes_on_path() {
     // shell-init now puts the folder first on PATH, for every shell.
     let o = m.run(&["shell-init", "bash"], "");
     let init = String::from_utf8_lossy(&o.stdout).into_owned();
-    let tools = Path::new(&m.dir.path().join("ptyro")).join("ptyro-tools");
-    assert!(init.contains(&tools.display().to_string()), "{init}");
+    // Its own form for bash: `/c/…` on Windows (Git Bash), where `C:\…` would split at the colon.
+    let leaf = m.dir.path().file_name().unwrap().to_string_lossy().into_owned();
+    assert!(init.contains(&format!("{leaf}/ptyro/ptyro-tools/node")), "{init}");
+    if cfg!(windows) {
+        assert!(init.contains("PATH='/"), "{init}");
+    }
     assert!(init.contains("case \":$PATH:\""), "{init}");
+    assert!(!init.contains(":\\"), "no drive path left for bash: {init}");
 }
 
 #[test]
@@ -355,4 +360,56 @@ fn the_rc_line_is_offered_and_puts_the_tools_on_path() {
     let o = m.run(&["install", "node", "--yes"], "");
     assert!(o.status.success());
     assert_eq!(std::fs::read_to_string(m.home().join(".bashrc")).unwrap(), rc);
+}
+
+/// Windows: WinGet's Node.js adds its folder only to the stored Path; the next step (Gemini
+/// CLI's `npm install -g`) still finds it, because the PATH is refreshed after each step.
+#[test]
+fn a_folder_an_installer_stored_is_on_path_for_the_next_step() {
+    let m = Machine::new(json!({
+        "platform": "windows-x64",
+        "programs": ["winget"],
+        "path_adds": { "node": "Program Files/nodejs" },
+        "path_needs": { "gemini": "Program Files/nodejs" },
+    }));
+    let o = m.run(&["install", "gemini", "--yes"], "");
+    let t = text(&o);
+    assert!(o.status.success(), "{t}");
+    assert_eq!(
+        m.calls(),
+        ["install node via winget admin=true", "install gemini via npm admin=false"]
+    );
+    // Without the folder, the fake's npm isn't found: the check is real.
+    let m = Machine::new(json!({
+        "platform": "windows-x64",
+        "programs": ["winget"],
+        "path_needs": { "gemini": "Program Files/nodejs" },
+    }));
+    let o = m.run(&["install", "gemini", "--yes"], "");
+    assert_eq!(o.status.code(), Some(1));
+    assert!(text(&o).contains("npm: command not found"), "{}", text(&o));
+}
+
+/// Ticked but impossible here (a Linux with neither apt nor dnf): said with its fix, in the
+/// summary and the JSON, and the exit says not everything installed.
+#[test]
+fn what_cant_be_installed_here_is_said_and_fails_the_run() {
+    let m = Machine::new(json!({ "platform": "linux", "programs": ["curl"] }));
+    let o = m.run(&["setup", "--yes"], "");
+    let t = text(&o);
+    assert_eq!(o.status.code(), Some(1), "{t}");
+    assert!(t.contains("✗ git: can't be installed here: it needs `apt-get` or `dnf` first"), "{t}");
+    assert!(t.contains("fix: install what it needs"), "{t}");
+    assert!(t.contains("2 installed, 2 can't be installed here"), "{t}");
+    assert!(m.installed("claude").is_some());
+    // Only what's blocked: still said, still a failure.
+    let o = m.run(&["install", "gh", "--yes", "--json"], "");
+    assert_eq!(o.status.code(), Some(1));
+    let events: Vec<Value> = String::from_utf8_lossy(&o.stdout)
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert!(events.iter().any(|e| e["event"] == "blocked" && e["id"] == "gh"), "{events:?}");
+    let last = events.last().unwrap();
+    assert_eq!(last["report"]["blocked"], json!(["gh"]));
 }

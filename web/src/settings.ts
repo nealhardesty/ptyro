@@ -648,6 +648,7 @@ export function setupEvent(e: any): void {
   else if (ev.event === "done") line(`✓ ${ev.id}${ev.version ? " " + ev.version : ""}`);
   else if (ev.event === "failed") line(`✗ ${ev.id}: ${ev.error}\n  fix: ${ev.fix}`);
   else if (ev.event === "skipped") line(`– ${ev.id}: ${ev.reason}\n  fix: ${ev.fix}`);
+  else if (ev.event === "blocked") line(`✗ ${ev.id}: can't be installed here: ${ev.reason}\n  fix: ${ev.fix}`);
   else if (ev.event === "finished") { installRun.report = ev.report; setupPlan.reload(); }
   ui.render();
 }
@@ -693,9 +694,9 @@ function installSection(): HTMLElement {
     })),
     here.length ? h("p", { class: "sub" }, "Already here: ", here.map((e: any) => `${e.name} (${stateText(e)})`).join(", ")) : null,
     admin.length ? h("p", { class: "sub" }, "Administrator rights are asked for only on the computer itself: run ", h("code", {}, `ptyro install ${admin.map((e: any) => e.id).join(" ")}`), " there (or ", h("code", {}, "ptyro setup"), "). From here they show the command instead.") : null,
-    bar(h("button", { class: "primary", title: tip("setup.install"), disabled: running || !open.some((e: any) => e.ticked && e.action), onclick: () => void startInstall(picked) }, running ? "Installing…" : "Install the ticked ones")),
+    bar(h("button", { class: "primary", title: tip("setup.install"), disabled: running || !open.some((e: any) => e.ticked && (e.action || e.blocked)), onclick: () => void startInstall(picked) }, running ? "Installing…" : "Install the ticked ones")),
     installRun.lines.length ? h("pre", { class: "log" }, installRun.lines.join("\n")) : null,
-    installRun.report ? h("p", { class: "sub" }, `${installRun.report.done.length} installed, ${installRun.report.failed.length} failed, ${installRun.report.skipped.length} not run.`) : null);
+    installRun.report ? h("p", { class: "sub" }, `${installRun.report.done.length} installed, ${installRun.report.failed.length} failed, ${installRun.report.skipped.length} not run${installRun.report.blocked?.length ? `, ${installRun.report.blocked.length} can't be installed here` : ""}.`) : null);
 }
 
 async function startInstall(picks: string[]): Promise<void> {

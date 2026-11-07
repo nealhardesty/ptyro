@@ -8,10 +8,13 @@
 //! | `world.json` | the machine (read): see [`World`] |
 //! | `installed/<id>` | an item installed since (written by the fake installer): its version |
 //! | `calls.log` | each step run and each elevation asked, one per line (written) |
+//! | `stored-path` | folders installers "added to the registry's Path", one per line (written) |
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -44,6 +47,12 @@ pub struct World {
     pub outcomes: BTreeMap<String, String>,
     /// The version an item installs as (default `1.0.0`; Node.js `26.13.0`).
     pub versions: BTreeMap<String, String>,
+    /// Per item: a folder (under the fake's directory) its installer adds only to the stored
+    /// `Path`, as WinGet's Node.js does on Windows.
+    pub path_adds: BTreeMap<String, String>,
+    /// Per item: a folder that must be on the `PATH` its step runs with, or it fails as `npm`
+    /// not found would.
+    pub path_needs: BTreeMap<String, String>,
 }
 
 impl World {
@@ -67,12 +76,18 @@ pub(super) struct FakeHost {
     dir: PathBuf,
     world: World,
     used: AtomicBool,
+    /// The `PATH` steps run with, refreshed from `stored-path` after each, as the real host does
+    /// from the registry on Windows.
+    path: Mutex<OsString>,
+    dirs: Vec<PathBuf>,
 }
 
 impl FakeHost {
-    pub(super) fn new(dir: PathBuf, _paths: &Paths) -> Self {
+    pub(super) fn new(dir: PathBuf, paths: &Paths) -> Self {
         let world = World::read(&dir);
-        Self { dir, world, used: AtomicBool::new(false) }
+        let dirs = super::path_dirs(paths);
+        let path = super::path_with(&dirs, &std::env::var_os("PATH").unwrap_or_default());
+        Self { dir, world, used: AtomicBool::new(false), path: Mutex::new(path), dirs }
     }
 
     fn version_of(&self, id: &str) -> Option<String> {
@@ -132,10 +147,22 @@ impl Host for FakeHost {
             if step.update { "update" } else { "install" }.to_owned(),
             step.method.admin.to_string(),
         ];
-        let env = [("PTYRO_TEST_SETUP".into(), self.dir.clone().into_os_string())];
+        let path = self.path.lock().map(|p| p.clone()).unwrap_or_default();
+        let env =
+            [("PTYRO_TEST_SETUP".into(), self.dir.clone().into_os_string()), ("PATH".into(), path)];
         let r = stream(&argv, &env, line);
         if r.is_ok() && step.method.via == Via::NodeDist {
             self.used.store(true, Ordering::Relaxed);
+        }
+        if r.is_ok()
+            && let Ok(mut p) = self.path.lock()
+        {
+            let stored: Vec<PathBuf> = std::fs::read_to_string(self.dir.join("stored-path"))
+                .unwrap_or_default()
+                .lines()
+                .map(PathBuf::from)
+                .collect();
+            *p = super::refreshed_path(&p, &stored, &self.dirs);
         }
         r
     }
@@ -160,6 +187,14 @@ pub fn installer(args: &[String]) -> i32 {
     log(&dir, &format!("{what} {id} via {via} admin={admin}"));
     let outcome = world.outcomes.get(id).map_or("ok", String::as_str);
     println!("fake {via}: {what} {id}");
+    if let Some(need) = world.path_needs.get(id) {
+        let want = dir.join(need);
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        if !std::env::split_paths(&path).any(|p| p == want) {
+            eprintln!("fake {via}: {need} isn't on PATH (npm: command not found)");
+            return 1;
+        }
+    }
     match outcome {
         "fail" => {
             eprintln!("fake {via}: E: could not reach the server for {id}");
@@ -180,6 +215,12 @@ pub fn installer(args: &[String]) -> i32 {
         let d = dir.join("installed");
         let _ = std::fs::create_dir_all(&d);
         let _ = std::fs::write(d.join(id), v);
+        if let Some(add) = world.path_adds.get(id)
+            && let Ok(mut f) =
+                std::fs::OpenOptions::new().create(true).append(true).open(dir.join("stored-path"))
+        {
+            let _ = writeln!(f, "{}", dir.join(add).display());
+        }
         // nodejs.org's build lands in ptyro's tools folder, as the real one does.
         if via == "node-dist"
             && let Ok(paths) = Paths::from_env()

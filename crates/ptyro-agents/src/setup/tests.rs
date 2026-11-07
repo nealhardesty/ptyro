@@ -342,3 +342,75 @@ fn path_dirs_go_first_once() {
     assert_eq!(parts.len(), 3);
     assert_eq!(parts[..2], dirs[..]);
 }
+
+#[test]
+fn a_blocked_item_is_reported_and_counts_as_not_installed() {
+    // Linux without apt or dnf: git and gh have no way here; Claude and Codex install.
+    let h = TestHost::on(Platform::Linux);
+    let p = plan(&survey(&h, &BTreeMap::new()), &picks(&["claude", "git", "gh"]));
+    let (r, events) = run_all(&p, &h, Admin::Ask);
+    assert_eq!(r.done, ["claude"]);
+    assert_eq!(r.blocked, ["git", "gh"]);
+    assert!(!r.ok(), "something asked for didn't install");
+    let (reason, fix) = events
+        .iter()
+        .find_map(|e| match e {
+            Event::Blocked { id, reason, fix } if id == "git" => {
+                Some((reason.clone(), fix.clone()))
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert!(reason.contains("`apt-get` or `dnf`"), "{reason}");
+    assert!(fix.contains("`ptyro install git`"), "{fix}");
+    // A blocked item never runs.
+    assert!(h.calls().iter().all(|c| !c.starts_with("git") && !c.starts_with("gh")));
+}
+
+#[test]
+fn a_refreshed_path_keeps_what_it_had_and_adds_what_installers_stored() {
+    let tools = vec![std::path::PathBuf::from("/t/node/bin")];
+    let cur = std::env::join_paths(["/usr/bin", "/t/node/bin", "/bin"]).unwrap();
+    let fresh = [std::path::PathBuf::from("/opt/nodejs"), std::path::PathBuf::from("/usr/bin")];
+    let out = refreshed_path(&cur, &fresh, &tools);
+    let parts: Vec<_> = std::env::split_paths(&out).collect();
+    assert_eq!(
+        parts,
+        ["/t/node/bin", "/usr/bin", "/bin", "/opt/nodejs"].map(std::path::PathBuf::from)
+    );
+}
+
+#[test]
+fn stored_paths_expand_and_prepend_without_touching_the_rest() {
+    let var = |k: &str| (k == "USERPROFILE").then(|| r"C:\Users\me".to_owned());
+    assert_eq!(
+        expand_vars(r"%USERPROFILE%\bin;%NOPE%\x;50%;C:\y", var),
+        r"C:\Users\me\bin;%NOPE%\x;50%;C:\y"
+    );
+    let raw = r"%USERPROFILE%\AppData\Local\Microsoft\WindowsApps;;C:\Tools\;c:\pt\node";
+    let out = prepend_entries(raw, &[r"C:\pt\node".into(), r"C:\pt\npm".into()]);
+    assert_eq!(
+        out,
+        r"C:\pt\node;C:\pt\npm;%USERPROFILE%\AppData\Local\Microsoft\WindowsApps;C:\Tools\"
+    );
+    // Again: unchanged.
+    assert_eq!(prepend_entries(&out, &[r"C:\pt\node".into(), r"C:\pt\npm".into()]), out);
+}
+
+/// An installer that leaves a background process holding its output doesn't hang the step.
+#[cfg(unix)]
+#[test]
+fn a_step_ends_when_its_program_does_even_with_a_child_left_holding_the_pipe() {
+    let start = std::time::Instant::now();
+    let mut lines = Vec::new();
+    let argv: Vec<String> =
+        ["sh", "-c", "sleep 30 & echo installed"].iter().map(|s| (*s).to_owned()).collect();
+    let r = host::stream(&argv, &[], &mut |l| lines.push(l.to_owned()));
+    assert!(r.is_ok(), "{r:?}");
+    assert_eq!(lines, ["installed"]);
+    assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
+    let argv: Vec<String> =
+        ["sh", "-c", "sleep 30 & exit 3"].iter().map(|s| (*s).to_owned()).collect();
+    assert!(host::stream(&argv, &[], &mut |_| {}).unwrap_err().contains("exited with 3"));
+    assert!(start.elapsed() < std::time::Duration::from_secs(10));
+}

@@ -591,6 +591,19 @@ mod tests {
                             p.name()
                         );
                     }
+                    // WinGet runs with no input: its first-use agreements are accepted up
+                    // front, and its own source named (not the msstore's).
+                    for c in [Some(cmd), m.update.as_deref()].into_iter().flatten() {
+                        if m.via == Via::Winget {
+                            for flag in [
+                                "--source winget",
+                                "--accept-source-agreements",
+                                "--accept-package-agreements",
+                            ] {
+                                assert!(c.contains(flag), "{}: {c} lacks {flag}", i.id);
+                            }
+                        }
+                    }
                     // sudo means admin, and admin is said.
                     if cmd.contains("sudo ") {
                         assert!(m.admin, "{}: {cmd} uses sudo but isn't admin", i.id);

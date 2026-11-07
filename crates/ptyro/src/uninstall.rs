@@ -92,6 +92,10 @@ pub struct RcEdit {
     pub lines: Vec<String>,
     /// Other lines that mention ptyro's commands: left for you to look at.
     pub mentions: Vec<String>,
+    /// Lines written in place of `ptyro shell-init`'s, so the tools `ptyro setup` installed stay
+    /// on `PATH` (BOOT1): the tools are the user's and outlive ptyro.
+    #[serde(default)]
+    pub adds: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -306,6 +310,44 @@ pub fn strip_rc(text: &str) -> (String, Vec<String>) {
     (kept.join("\n"), removed)
 }
 
+/// Which shell reads an rc file, by its name.
+fn shell_of(file: &Path) -> Option<ptyro_core::shell::ShellKind> {
+    use ptyro_core::shell::ShellKind;
+    let name = file.file_name()?.to_string_lossy().to_ascii_lowercase();
+    match name.as_str() {
+        ".zshrc" => Some(ShellKind::Zsh),
+        ".bashrc" | ".bash_profile" | ".profile" => Some(ShellKind::Bash),
+        "config.fish" => Some(ShellKind::Fish),
+        n if n.ends_with(".ps1") => Some(ShellKind::Pwsh),
+        _ => None,
+    }
+}
+
+/// `file`'s text without ptyro's lines ([`strip_rc`]), the lines that went, and the lines added
+/// in their place: when `ptyro shell-init`'s line goes and `tools` (ptyro setup's folders that
+/// exist) were on `PATH` only through it, plain `PATH` lines for them, so what setup installed
+/// keeps working in new shells.
+pub fn rewrite_rc(
+    file: &Path,
+    text: &str,
+    tools: &[PathBuf],
+) -> (String, Vec<String>, Vec<String>) {
+    let (kept, gone) = strip_rc(text);
+    let had_init = gone.iter().any(|l| l.contains("ptyro shell-init"));
+    let Some(kind) = shell_of(file).filter(|_| had_init && !tools.is_empty()) else {
+        return (kept, gone, Vec::new());
+    };
+    let lines = ptyro_core::shell::path_lines(kind, tools);
+    let first = ptyro_core::shell::msys_form(&tools[0].to_string_lossy());
+    if kept.contains(&first) || kept.contains(&tools[0].to_string_lossy().into_owned()) {
+        return (kept, gone, Vec::new());
+    }
+    let sep = if kept.is_empty() || kept.ends_with('\n') { "" } else { "\n" };
+    let new = format!("{kept}{sep}\n{lines}");
+    let adds = lines.lines().map(str::to_owned).collect();
+    (new, gone, adds)
+}
+
 /// Lines that mention ptyro's shell commands but aren't the forms [`strip_rc`] takes out.
 pub fn rc_mentions(text: &str) -> Vec<String> {
     let re = rc_line_re();
@@ -512,14 +554,16 @@ pub async fn plan(ctx: &Ctx, env: &Env, opts: &Opts) -> Result<Plan, Error> {
     #[cfg(not(windows))]
     let windows_app = false;
     let integrations = if machine { integrations_found(&config, env) } else { Vec::new() };
+    let tools: Vec<PathBuf> =
+        ptyro_agents::setup::path_dirs(paths).into_iter().filter(|d| d.is_dir()).collect();
     let mut rc = Vec::new();
     if machine {
         for file in rc_files(env) {
             let Ok(text) = std::fs::read_to_string(&file) else { continue };
-            let (_, lines) = strip_rc(&text);
+            let (_, lines, adds) = rewrite_rc(&file, &text, &tools);
             let mentions = rc_mentions(&text);
             if !lines.is_empty() || !mentions.is_empty() {
-                rc.push(RcEdit { file, lines, mentions });
+                rc.push(RcEdit { file, lines, mentions, adds });
             }
         }
     }
@@ -551,6 +595,21 @@ pub async fn plan(ctx: &Ctx, env: &Env, opts: &Opts) -> Result<Plan, Error> {
     }
     if let BinaryAction::Keep { reason } = &binary.action {
         kept.push(format!("the ptyro binary ({reason})"));
+    }
+    if paths.tools().is_dir() {
+        kept.push(format!(
+            "{} (the agents and tools `ptyro setup` installed: they're yours, and stay on your PATH)",
+            paths.tools().display()
+        ));
+    }
+    #[cfg(windows)]
+    if machine && let Some(raw) = ptyro_pty::winreg::get_raw(false, "Environment", "Path") {
+        let root = paths.tools().display().to_string().to_ascii_lowercase();
+        let ours: Vec<&str> =
+            raw.text.split(';').filter(|e| e.to_ascii_lowercase().starts_with(&root)).collect();
+        if !ours.is_empty() {
+            kept.push(format!("your PATH's entries for those tools: {}", ours.join("; ")));
+        }
     }
     if cfg!(windows) {
         kept.push(
@@ -678,6 +737,14 @@ pub fn render(plan: &Plan, env: &Env) -> String {
         );
         for l in r.lines.iter().filter(|l| !l.trim().is_empty()) {
             let _ = writeln!(s, "                  {}", l.trim());
+        }
+        if !r.adds.is_empty() {
+            s.push_str(
+                "                and in their place, so the tools ptyro setup installed stay on PATH:\n",
+            );
+            for l in &r.adds {
+                let _ = writeln!(s, "                  {}", l.trim());
+            }
         }
     }
     if let Some(t) = &plan.tailscale {
@@ -998,10 +1065,22 @@ async fn execute(ctx: &Ctx, env: &Env, plan: &Plan, opts: &Opts, json: bool) -> 
             let _ = std::fs::remove_dir(h);
         }
     }
+    let tools: Vec<PathBuf> =
+        ptyro_agents::setup::path_dirs(&ctx.paths).into_iter().filter(|d| d.is_dir()).collect();
     for r in plan.rc.iter().filter(|r| !r.lines.is_empty()) {
         let res = std::fs::read_to_string(&r.file)
             .map_err(|e| e.to_string())
-            .and_then(|t| write_rc(&r.file, &strip_rc(&t).0));
+            .and_then(|t| write_rc(&r.file, &rewrite_rc(&r.file, &t, &tools).0))
+            .map_err(|e| {
+                if r.adds.is_empty() {
+                    e
+                } else {
+                    format!(
+                        "{e}; to keep the tools ptyro setup installed on PATH, add these lines yourself:\n{}",
+                        r.adds.join("\n")
+                    )
+                }
+            });
         step(
             &mut steps,
             json,

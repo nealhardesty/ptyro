@@ -507,11 +507,11 @@ pub fn path_lines(kind: ShellKind, dirs: &[PathBuf]) -> String {
         let d = d.to_string_lossy();
         out.push_str(&match kind {
             ShellKind::Bash | ShellKind::Zsh => {
-                let q = sh_quote(&d);
+                let q = sh_quote(&msys_form(&d));
                 format!("case \":$PATH:\" in *:{q}:*) ;; *) PATH={q}:\"$PATH\"; export PATH ;; esac\n")
             }
             ShellKind::Fish => {
-                let q = fish_quote(&d);
+                let q = fish_quote(&msys_form(&d));
                 format!("contains -- {q} $PATH; or set -gx PATH {q} $PATH\n")
             }
             ShellKind::Pwsh => {
@@ -523,6 +523,22 @@ pub fn path_lines(kind: ShellKind, dirs: &[PathBuf]) -> String {
         });
     }
     out
+}
+
+/// A Windows folder as a POSIX shell on Windows takes it in `PATH` (Git Bash, MSYS2, fish on
+/// MSYS): `C:\Users\me\x` → `/c/Users/me/x`, as `cygpath -u` gives it; `PATH` there is
+/// `:`-separated, so a drive's colon can't stay. Anything else is left as it is.
+pub fn msys_form(p: &str) -> String {
+    let b = p.as_bytes();
+    if b.len() >= 2
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && (b.len() == 2 || matches!(b[2], b'\\' | b'/'))
+    {
+        format!("/{}{}", (b[0] as char).to_ascii_lowercase(), p[2..].replace('\\', "/"))
+    } else {
+        p.to_owned()
+    }
 }
 
 fn sh_quote(s: &str) -> String {
@@ -742,6 +758,18 @@ mod tests {
         assert!(sh.contains(r"'/h/it'\''s/npm/bin'"));
         let fish = path_lines(ShellKind::Fish, &dirs);
         assert!(fish.contains("contains -- '/h/ptyro-tools/node/bin' $PATH; or set -gx PATH '/h/ptyro-tools/node/bin' $PATH"));
+        // Windows folders for Git Bash's and fish's PATH: `/c/…`; PowerShell keeps its own form.
+        let win = [PathBuf::from(r"C:\Users\RUNNER~1\ptyro-tools\node")];
+        assert!(
+            path_lines(ShellKind::Bash, &win)
+                .contains("PATH='/c/Users/RUNNER~1/ptyro-tools/node':\"$PATH\"")
+        );
+        assert!(path_lines(ShellKind::Fish, &win).contains("'/c/Users/RUNNER~1/ptyro-tools/node'"));
+        assert!(
+            path_lines(ShellKind::Pwsh, &win).contains(r"'C:\Users\RUNNER~1\ptyro-tools\node'")
+        );
+        assert_eq!(msys_form("D:"), "/d");
+        assert_eq!(msys_form("/usr/bin"), "/usr/bin");
         let ps = path_lines(ShellKind::Pwsh, &dirs);
         assert!(ps.contains("-notcontains '/h/it''s/npm/bin'"), "{ps}");
     }

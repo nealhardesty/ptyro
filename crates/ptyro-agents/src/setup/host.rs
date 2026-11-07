@@ -7,6 +7,7 @@ use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -100,12 +101,91 @@ pub fn path_with(dirs: &[PathBuf], base: &OsStr) -> OsString {
     std::env::join_paths(dirs.iter().cloned().chain(rest)).unwrap_or_else(|_| base.to_owned())
 }
 
+/// `current` (a `PATH`) after an installer changed the stored one: every entry it had, then the
+/// `fresh` entries it lacks, with ptyro's tools folders in front. Windows' installers (WinGet's
+/// Node.js) add their folder only to the registry's `Path`, so the next step (`npm install -g`)
+/// wouldn't find it without this.
+pub fn refreshed_path(current: &OsStr, fresh: &[PathBuf], tools: &[PathBuf]) -> OsString {
+    let same = |a: &Path, b: &Path| {
+        let n = |p: &Path| p.to_string_lossy().trim_end_matches(['\\', '/']).to_ascii_lowercase();
+        if cfg!(windows) { n(a) == n(b) } else { a == b }
+    };
+    let mut all: Vec<PathBuf> = std::env::split_paths(current).collect();
+    for f in fresh.iter().filter(|f| !f.as_os_str().is_empty()) {
+        if !all.iter().any(|a| same(a, f)) {
+            all.push(f.clone());
+        }
+    }
+    let joined = std::env::join_paths(all).unwrap_or_else(|_| current.to_owned());
+    path_with(tools, &joined)
+}
+
+/// `%NAME%` in a stored `Path` replaced by `var(NAME)` (one that isn't set stays as written), as
+/// Windows expands REG_EXPAND_SZ.
+pub fn expand_vars(s: &str, var: impl Fn(&str) -> Option<String>) -> String {
+    let mut out = String::new();
+    let mut rest = s;
+    while let Some(i) = rest.find('%') {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 1..];
+        match after.find('%') {
+            Some(j) if j > 0 => match var(&after[..j]) {
+                Some(v) => {
+                    out.push_str(&v);
+                    rest = &after[j + 1..];
+                }
+                None => {
+                    out.push('%');
+                    rest = after;
+                }
+            },
+            _ => {
+                out.push('%');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// A stored `Path` (`;`-separated, `%VAR%` as written) with `dirs` in front, each once (case
+/// doesn't matter, nor a trailing `\`); nothing else is changed or expanded.
+pub fn prepend_entries(raw: &str, dirs: &[String]) -> String {
+    let key = |e: &str| e.trim().trim_end_matches(['\\', '/']).to_ascii_lowercase();
+    let mine: Vec<String> = dirs.iter().map(|d| key(d)).collect();
+    let rest = raw.split(';').filter(|e| !e.trim().is_empty() && !mine.contains(&key(e)));
+    dirs.iter().map(String::as_str).chain(rest).collect::<Vec<_>>().join(";")
+}
+
+/// The machine's and the user's stored `Path` on Windows, expanded: what a new terminal gets.
+#[cfg(windows)]
+pub fn registry_path() -> Vec<PathBuf> {
+    use ptyro_pty::winreg::get_raw;
+    let machine =
+        get_raw(true, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment", "Path");
+    let user = get_raw(false, "Environment", "Path");
+    let var = |k: &str| std::env::var(k).ok();
+    [machine, user]
+        .into_iter()
+        .flatten()
+        .flat_map(|r| {
+            let text = if r.expand { expand_vars(&r.text, var) } else { r.text };
+            text.split(';').filter(|e| !e.trim().is_empty()).map(PathBuf::from).collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 /// This computer.
 pub struct RealHost {
     platform: Platform,
-    /// `PATH` with the tools folders first: what every step and probe runs with.
-    path: OsString,
+    /// `PATH` with the tools folders first: what every step and probe runs with. Refreshed from
+    /// the registry after each step on Windows.
+    path: Mutex<OsString>,
     tools: PathBuf,
+    /// The tools folders' program directories ([`path_dirs`]), kept in front of `path`.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    dirs: Vec<PathBuf>,
     used: AtomicBool,
 }
 
@@ -114,19 +194,24 @@ impl RealHost {
         let base = std::env::var_os("PATH").unwrap_or_default();
         Self {
             platform: Platform::current(),
-            path: path_with(&path_dirs(paths), &base),
+            path: Mutex::new(path_with(&path_dirs(paths), &base)),
             tools: paths.tools(),
+            dirs: path_dirs(paths),
             used: AtomicBool::new(false),
         }
     }
 
+    fn path(&self) -> OsString {
+        self.path.lock().map(|p| p.clone()).unwrap_or_default()
+    }
+
     fn env(&self) -> Vec<(OsString, OsString)> {
-        vec![("PATH".into(), self.path.clone())]
+        vec![("PATH".into(), self.path())]
     }
 
     fn which(&self, program: &str) -> Option<PathBuf> {
         let names = ptyro_core::os::program_names(program);
-        std::env::split_paths(&self.path)
+        std::env::split_paths(&self.path())
             .flat_map(|d| names.iter().map(move |n| d.join(n)))
             .find(|p| p.is_file())
     }
@@ -241,7 +326,7 @@ impl Host for RealHost {
     }
 
     fn installed(&self, item: &Item) -> Option<Installed> {
-        let found = crate::locate::find(&item.program, &self.path.to_string_lossy())?;
+        let found = crate::locate::find(&item.program, &self.path().to_string_lossy())?;
         let mut cmd = found.argv.clone();
         cmd.extend(item.version.iter().skip(1).cloned());
         let text = capture(&cmd, &self.env(), Duration::from_secs(15)).map(|(_, t)| t);
@@ -289,7 +374,7 @@ impl Host for RealHost {
             return true;
         }
         // The real terminal: sudo asks for the password itself, never through ptyro.
-        Command::new("sudo").arg("-v").env("PATH", &self.path).status().is_ok_and(|s| s.success())
+        Command::new("sudo").arg("-v").env("PATH", self.path()).status().is_ok_and(|s| s.success())
     }
 
     fn run(&self, step: &Step<'_>, line: &mut dyn FnMut(&str)) -> Result<(), String> {
@@ -308,7 +393,14 @@ impl Host for RealHost {
         if step.method.via == Via::Npm {
             env.extend(self.npm_env());
         }
-        stream(&shell.argv(&cmd), &env, line)
+        let r = stream(&shell.argv(&cmd), &env, line);
+        #[cfg(windows)]
+        if r.is_ok()
+            && let Ok(mut p) = self.path.lock()
+        {
+            *p = refreshed_path(&p, &registry_path(), &self.dirs);
+        }
+        r
     }
 
     fn tools_used(&self) -> bool {
@@ -402,14 +494,18 @@ fn lines_to(pipe: impl Read + Send + 'static, tx: std::sync::mpsc::Sender<String
     });
 }
 
-/// Run `argv`, each line of stdout and stderr to `line` as it comes. `Err`: its last lines and
-/// how it ended.
-pub(super) fn stream(
-    argv: &[String],
-    env: &[(OsString, OsString)],
+/// How long the output of a program that has ended is still read: a background process it left
+/// holding its stdout (a daemon an installer started) would otherwise keep the read open forever.
+const GRACE: Duration = Duration::from_millis(1000);
+
+/// Read `child`'s stdout and stderr line by line to `line` until it ends (and [`GRACE`] after,
+/// for what it printed last), or `limit` passes (then it is killed: `None`).
+fn pump(
+    mut child: std::process::Child,
     line: &mut dyn FnMut(&str),
-) -> Result<(), String> {
-    let mut child = spawn(argv, env)?;
+    limit: Option<Duration>,
+) -> Option<std::process::ExitStatus> {
+    use std::sync::mpsc::RecvTimeoutError;
     let (tx, rx) = std::sync::mpsc::channel();
     if let Some(o) = child.stdout.take() {
         lines_to(o, tx.clone());
@@ -418,17 +514,60 @@ pub(super) fn stream(
         lines_to(e, tx.clone());
     }
     drop(tx);
-    let mut tail: VecDeque<String> = VecDeque::new();
-    for l in rx {
-        line(&l);
-        if !l.trim().is_empty() {
-            tail.push_back(l);
-            if tail.len() > 3 {
-                tail.pop_front();
+    let start = Instant::now();
+    let mut ended: Option<(std::process::ExitStatus, Instant)> = None;
+    loop {
+        match rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(l) => line(&l),
+            // Both pipes closed: what's left is its exit.
+            Err(RecvTimeoutError::Disconnected) => {
+                return match ended {
+                    Some((s, _)) => Some(s),
+                    None => child.wait().ok(),
+                };
             }
+            Err(RecvTimeoutError::Timeout) => {}
+        }
+        if ended.is_none()
+            && let Ok(Some(s)) = child.try_wait()
+        {
+            ended = Some((s, Instant::now()));
+        }
+        match ended {
+            Some((s, at)) if at.elapsed() >= GRACE => return Some(s),
+            None if limit.is_some_and(|l| start.elapsed() > l) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            _ => {}
         }
     }
-    let status = child.wait().map_err(|e| e.to_string())?;
+}
+
+/// Run `argv`, each line of stdout and stderr to `line` as it comes. `Err`: its last lines and
+/// how it ended.
+pub(super) fn stream(
+    argv: &[String],
+    env: &[(OsString, OsString)],
+    line: &mut dyn FnMut(&str),
+) -> Result<(), String> {
+    let child = spawn(argv, env)?;
+    let mut tail: VecDeque<String> = VecDeque::new();
+    let status = pump(
+        child,
+        &mut |l| {
+            line(l);
+            if !l.trim().is_empty() {
+                tail.push_back(l.to_owned());
+                if tail.len() > 3 {
+                    tail.pop_front();
+                }
+            }
+        },
+        None,
+    )
+    .ok_or("it couldn't be waited for")?;
     if status.success() {
         return Ok(());
     }
@@ -440,38 +579,22 @@ pub(super) fn stream(
     Err(if said.is_empty() { how } else { format!("{how}: {}", said.join(" / ")) })
 }
 
-/// Run `argv` to its end (at most `limit`): whether it succeeded, and its output (stdout, then
-/// stderr). `None`: it didn't start, or took too long.
+/// Run `argv` to its end (at most `limit`): whether it succeeded, and its output, a line each.
+/// `None`: it didn't start, or took too long.
 pub(super) fn capture(
     argv: &[String],
     env: &[(OsString, OsString)],
     limit: Duration,
 ) -> Option<(bool, String)> {
-    let mut child = spawn(argv, env).ok()?;
-    let read = |p: Option<Box<dyn Read + Send>>| {
-        std::thread::spawn(move || {
-            let mut s = Vec::new();
-            if let Some(mut p) = p {
-                let _ = p.read_to_end(&mut s);
-            }
-            String::from_utf8_lossy(&s).into_owned()
-        })
-    };
-    let out = read(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let err = read(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let start = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(s)) => break s,
-            Ok(None) if start.elapsed() < limit => std::thread::sleep(Duration::from_millis(20)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-        }
-    };
-    let mut text = out.join().unwrap_or_default();
-    text.push_str(&err.join().unwrap_or_default());
+    let child = spawn(argv, env).ok()?;
+    let mut text = String::new();
+    let status = pump(
+        child,
+        &mut |l| {
+            text.push_str(l);
+            text.push('\n');
+        },
+        Some(limit),
+    )?;
     Some((status.success(), text))
 }

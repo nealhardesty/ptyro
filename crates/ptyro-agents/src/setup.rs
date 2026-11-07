@@ -29,7 +29,12 @@ use serde::{Deserialize, Serialize};
 use crate::catalog::{self, Item, Kind, Method, Platform, Version, Via};
 
 pub use fake::installer as fake_installer;
-pub use host::{Elevation, Host, Installed, RealHost, Step, host, path_dirs, path_with};
+#[cfg(windows)]
+pub use host::registry_path;
+pub use host::{
+    Elevation, Host, Installed, RealHost, Step, expand_vars, host, path_dirs, path_with,
+    prepend_entries, refreshed_path,
+};
 pub use run::{Admin, Event, Report, run};
 
 /// The design's default ticks (its "My calls"): Claude Code, Codex, git and the GitHub CLI. One
