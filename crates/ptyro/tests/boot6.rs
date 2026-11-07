@@ -705,3 +705,31 @@ fn with_the_lookup_failing_the_remembered_release_updates_both_halves() {
     assert_eq!(version_of(&b.installed()), format!("ptyro {V}"));
     assert_eq!(version_of(&theirs), format!("ptyro {V}"), "WSL's half too");
 }
+
+/// A WSL half whose ptyro is there but doesn't answer is said, so one half is never updated
+/// without a word about the other; a distro without ptyro is a normal state, and says nothing.
+#[cfg(unix)]
+#[test]
+fn a_wsl_half_that_cant_be_checked_is_said_and_one_without_ptyro_isnt() {
+    let (b, theirs, wsl) = windows_with_ubuntu();
+    b.publish(V);
+    std::fs::write(&theirs, "#!/bin/sh\necho broken >&2\nexit 1\n").unwrap();
+    let o = b.run(&["update", "ptyro", "--yes"], "");
+    let said = text(&o);
+    assert!(o.status.success(), "{said}");
+    assert!(said.contains("note: WSL's ptyro (Ubuntu) couldn't be checked"), "{said}");
+    assert!(said.contains("wsl -d Ubuntu -- ptyro update ptyro"), "{said}");
+    assert_eq!(version_of(&b.installed()), format!("ptyro {V}"), "this half updated");
+    // No ptyro in the distro at all: nothing to keep in step, nothing said.
+    let (b, _, wsl2) = windows_with_ubuntu();
+    let _ = wsl;
+    b.publish(V);
+    std::fs::remove_dir_all(wsl2.join("Ubuntu/ptyro")).unwrap();
+    std::fs::remove_dir_all(wsl2.join("Ubuntu/bin")).unwrap();
+    let o = b.run(&["update", "ptyro", "--yes"], "");
+    let said = text(&o);
+    assert!(o.status.success(), "{said}");
+    assert!(!said.contains("couldn't be checked"), "{said}");
+    assert!(!said.contains("WSL's ptyro"), "{said}");
+    assert_eq!(version_of(&b.installed()), format!("ptyro {V}"));
+}

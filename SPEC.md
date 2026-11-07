@@ -9805,7 +9805,9 @@ machine setup lock (§24.6) and `updates.check` / `updates.ignore` (`ptyro`, `pt
      back is said instead, with where the old one is). On success the old file is removed (on
      Windows, while the old image still runs — the daemon, a TUI — it can't be: every ptyro start
      sweeps install.ps1's `ptyro.exe.old` and an update's `ptyro.exe.old.<pid>` once that `<pid>`
-     no longer runs, so an update still going keeps what its rollback needs; the same for the
+     no longer runs, so an update still going keeps what its rollback needs; beside the file
+     itself, canonical, as the update put them there even when ptyro is reached through a link;
+     the same for the
      zip's `ptyrow.exe`, `conpty.dll`, `OpenConsole.exe`, which are swapped with it, as
      install.ps1 puts them). The release's shell completions are copied over `<prefix>/share/ptyro/completions` when
      that folder exists (as install.sh puts them).
@@ -9822,8 +9824,10 @@ machine setup lock (§24.6) and `updates.check` / `updates.ignore` (`ptyro`, `pt
 
 **`ptyro update`** (§24.7's, extended): `ptyro update ptyro` names it (`ptyro update` covers it
 with the agents, ptyro last; `--check` and `--json` include it). Whether it will be updated is
-known from the lookup, so on Windows with WSL the other half is looked at then, before the setup
-lock is taken (a cold distro takes seconds; the lock is never held across a probe). The question shows it as "ptyro
+known from the lookup's newest release, else the remembered one (as `updates::remember` builds the
+update list: GitHub's API may be out of requests while the download still works, and the halves
+are decided on the same view), so on Windows with WSL the other half is looked at then, before the
+setup lock is taken (a cold distro takes seconds; the lock is never held across a probe). The question shows it as "ptyro
 0.0.63 → 0.0.64: download ptyro 0.0.64 (ptyro-0.0.64-x86_64-unknown-linux-gnu.tar.gz), check it
 against SHA256SUMS, and replace /home/me/.local/bin/ptyro / then the daemon is upgraded live: every
 session carries on". After the swap, still under the lock, `versions.json` is refreshed (the
@@ -9836,9 +9840,14 @@ finding goes); then, the lock released:
   so Windows never passes flags to an older WSL ptyro that rejects them. Each half updates
   itself; the half that updated asks the other, when it says another version, to run `ptyro update
   ptyro --yes`:
-  - Windows → WSL: the distro of `client.default_remote` (else WSL's default) with ptyro, through
-    `wsl.exe` (`wsl_setup::probe` and `ptyro_args`, as setup's WSL side): it updates its binary and
-    live-upgrades WSL's daemon.
+  - Windows → WSL: the distro of `client.default_remote` (else WSL's others in WSL's order) whose
+    ptyro answers `--version` through `wsl.exe` (`ptyro_args`, as setup's WSL side): it updates its
+    binary and live-upgrades WSL's daemon. No WSL, no distro, or no ptyro in any (the distro's
+    shell can't find it: exit 127) is a normal state with no other half, and says nothing. A ptyro
+    that is there but doesn't answer (another exit, or no answer in 20 s) is said on stderr before
+    the question: "note: WSL's ptyro (Ubuntu) couldn't be checked (…), so it isn't updated with
+    this one: `wsl -d Ubuntu -- ptyro update ptyro` once it answers", so one half is never updated
+    without a word about the other.
   - WSL → Windows: Windows' `ptyro.exe` on `PATH` (WSL appends Windows' own), else where
     install.ps1 puts it (`%USERPROFILE%\AppData\Local\Programs\ptyro\bin`), through interop.
   It stops by itself: the other half, updated, sees this one at its version and doesn't ask back.

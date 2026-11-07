@@ -10,7 +10,6 @@ use std::process::Stdio;
 
 use ptyro_agents::catalog::{Platform, Version};
 use ptyro_agents::own::{self, How, Install};
-use ptyro_agents::setup::WslStatus;
 use ptyro_agents::updates::Outdated;
 use ptyro_client::wsl_setup;
 use ptyro_core::paths::Paths;
@@ -48,34 +47,31 @@ pub(crate) struct Half {
 }
 
 /// The other half, when this is one: on Windows the ptyro in the WSL distro your daemon is in
-/// (or WSL's default), in WSL Windows' `ptyro.exe`. `None` elsewhere, or when it isn't there;
-/// on Windows with a WSL that has a distro but no ptyro that answers, that is said (stderr), so
-/// one half is never updated without a word about the other.
+/// (or WSL's default), in WSL Windows' `ptyro.exe`. `None` elsewhere, or when there is none (no
+/// WSL, no distro, no ptyro in it: normal states, said by nothing here). A distro whose ptyro is
+/// there but doesn't answer is said (stderr), so one half is never updated without a word about
+/// the other.
 pub(crate) async fn other_half(paths: &Paths, platform: Platform) -> Option<Half> {
     if platform.is_windows() {
         let remote = crate::winclient::resolve(None, paths, false).await;
         let prefer =
             remote.as_deref().and_then(ptyro_client::remote::wsl_distro).map(str::to_owned);
-        let (distro, version) = match wsl_setup::probe(prefer.as_deref()).await {
-            WslStatus::Usable { distro, version } => (distro, version),
-            WslStatus::Unusable { reason, .. } => {
-                // No WSL, or no distro: there's no other half.
-                if !reason.starts_with("WSL isn't installed") && !reason.contains("no Linux distro")
-                {
-                    eprintln!(
-                        "note: WSL's ptyro couldn't be checked ({reason}); if it has one, `wsl ptyro update ptyro` brings it to the same version"
-                    );
-                }
+        let (distro, version) = match wsl_half(prefer.as_deref()).await {
+            WslHalf::Here { distro, version } => (distro, version),
+            WslHalf::None => return None,
+            WslHalf::Unchecked { distro, why } => {
+                eprintln!(
+                    "note: WSL's ptyro ({distro}) couldn't be checked ({why}), so it isn't updated with this one: `wsl -d {distro} -- ptyro update ptyro` once it answers"
+                );
                 return None;
             }
-            _ => return None,
         };
         let words = ["update", "ptyro", "--yes"].map(str::to_owned);
         let mut argv = vec![ptyro_client::remote::wsl_exe()];
         argv.extend(wsl_setup::ptyro_args(&distro, &words).ok()?);
         return Some(Half {
             label: format!("WSL's ptyro ({distro})"),
-            version: version.strip_prefix("ptyro ").map(|v| v.trim().to_owned()),
+            version: Some(version),
             argv,
             fix: format!(
                 "`wsl -d {distro} -- ptyro update ptyro`; a ptyro there from before ptyro updated itself: `{}`, then `wsl -d {distro} -- ptyro daemon upgrade`",
@@ -101,6 +97,69 @@ pub(crate) async fn other_half(paths: &Paths, platform: Platform) -> Option<Half
             own::REPO
         ),
     })
+}
+
+/// What WSL has for the other half.
+enum WslHalf {
+    /// No WSL, no distro, or no ptyro in any: nothing to keep in step.
+    None,
+    Here {
+        distro: String,
+        version: String,
+    },
+    /// ptyro is in `distro` but didn't answer `--version`.
+    Unchecked {
+        distro: String,
+        why: String,
+    },
+}
+
+/// Each distro worth asking (the daemon's first, then WSL's order) asked `ptyro --version`
+/// through `wsl.exe`: the first that answers is the half; one whose shell can't find ptyro (exit
+/// 127) has none; any other failure is a ptyro that couldn't be checked.
+async fn wsl_half(prefer: Option<&str>) -> WslHalf {
+    let Some((_, all)) = ptyro_client::remote::distros_listed().await else {
+        return WslHalf::None;
+    };
+    let mut names = wsl_setup::candidates(&all);
+    if let Some(p) = prefer
+        && let Some(i) = names.iter().position(|n| n.eq_ignore_ascii_case(p))
+    {
+        let p = names.remove(i);
+        names.insert(0, p);
+    }
+    let mut unchecked = None;
+    for d in names {
+        let Ok(argv) = wsl_setup::ptyro_args(&d, &["--version".to_owned()]) else { continue };
+        let ran = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            tokio::process::Command::new(ptyro_client::remote::wsl_exe())
+                .args(&argv)
+                .env("WSL_UTF8", "1")
+                .stdin(Stdio::null())
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await;
+        let why = match ran {
+            Ok(Ok(out)) => {
+                let text = String::from_utf8_lossy(&out.stdout);
+                let v = text.lines().find_map(|l| l.trim().strip_prefix("ptyro "));
+                match (out.status.code(), v) {
+                    (Some(0), Some(v)) => {
+                        return WslHalf::Here { distro: d, version: v.trim().to_owned() };
+                    }
+                    (Some(127), _) => continue,
+                    (Some(c), _) => format!("`ptyro --version` there exited with {c}"),
+                    (None, _) => "`ptyro --version` there was stopped".into(),
+                }
+            }
+            Ok(Err(e)) => format!("wsl.exe couldn't be run: {e}"),
+            Err(_) => "`ptyro --version` there didn't answer within 20 seconds".into(),
+        };
+        unchecked.get_or_insert(WslHalf::Unchecked { distro: d, why });
+    }
+    unchecked.unwrap_or(WslHalf::None)
 }
 
 /// Windows' `ptyro.exe`, seen from WSL: on `PATH` (WSL adds Windows' own), else where

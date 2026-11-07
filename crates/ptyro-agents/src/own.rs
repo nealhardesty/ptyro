@@ -1086,6 +1086,22 @@ mod tests {
         );
     }
 
+    /// The sweep looks beside the file itself, where an update put its aside files, even when
+    /// ptyro is reached through a link.
+    #[cfg(unix)]
+    #[test]
+    fn the_sweep_looks_beside_the_file_a_link_points_at() {
+        let d = tempfile::tempdir().unwrap();
+        let real = d.path().join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(real.join("ptyro.exe"), "x").unwrap();
+        std::fs::write(real.join("ptyro.exe.old.99"), "x").unwrap();
+        let link = d.path().join("ptyro.exe");
+        std::os::unix::fs::symlink(real.join("ptyro.exe"), &link).unwrap();
+        sweep_with(&link, &|_| false);
+        assert_eq!(names(&real), ["ptyro.exe"], "the stale aside file in the real folder is gone");
+    }
+
     #[test]
     fn a_renamed_running_image_still_names_the_installed_binary() {
         let n = |p: &str| installed_name(Path::new(p));
