@@ -37,6 +37,18 @@ impl Machine {
     }
 
     fn run(&self, args: &[&str], input: &str) -> Output {
+        let mut child = self
+            .cmd(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+        child.wait_with_output().unwrap()
+    }
+
+    fn cmd(&self, args: &[&str]) -> Command {
         let mut c = Command::new(BIN);
         c.args(args)
             .env("PTYRO_TEST_SETUP", self.fake())
@@ -49,10 +61,7 @@ impl Machine {
         for v in ["PTYRO_SOCKET", "PTYRO_SESSION_ID", "PTYRO_CONFIG", "PTYRO_REMOTE"] {
             c.env_remove(v);
         }
-        let mut child =
-            c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
-        child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
-        child.wait_with_output().unwrap()
+        c
     }
 
     /// `logins.log`: each login run (`login ID`) and status asked (`status ID`).
@@ -266,7 +275,12 @@ fn on_windows_a_wsl_sides_logins_run_in_that_distro() {
     let o = run(&["install", "claude", "--where", "wsl"], "y\n");
     let t = text(&o);
     assert!(o.status.success(), "{t}");
-    assert!(log("wsl/wsl.log").contains("ptyro login claude"), "{}", log("wsl/wsl.log"));
+    // Setup's list, with what it just installed, and a person at this terminal.
+    assert!(
+        log("wsl/wsl.log").contains("ptyro login --installed=claude --tty claude"),
+        "{}",
+        log("wsl/wsl.log")
+    );
     assert!(log("wsl/Ubuntu/fake/logins.log").contains("login claude"), "{t}");
     assert!(t.contains("✓ Claude Code: logged in"), "{t}");
     assert!(!log("fake/logins.log").contains("login claude"), "not on Windows' side");
@@ -334,6 +348,9 @@ fn the_web_lists_the_logins_and_runs_one_in_a_session() {
         assert!(Instant::now() < deadline, "the login never finished:\n{screen}");
         std::thread::sleep(Duration::from_millis(200));
     }
+    // What the sign-in printed (a code the person may paste) was never recorded to disk.
+    let recording = d.paths.data.join("sessions").join(&session);
+    assert!(!recording.exists(), "{} was recorded", recording.display());
     let v = host(json!({ "op": "login.list" }));
     let rows = v["reply"]["logins"].as_array().unwrap();
     assert_eq!(rows.iter().find(|r| r["id"] == "gh").unwrap()["state"], "logged_in", "{v}");
@@ -360,4 +377,136 @@ fn http(port: u16, path: &str, token: Option<&str>, body: &Value) -> (u16, Value
     let code = text.split_whitespace().nth(1).and_then(|c| c.parse().ok()).unwrap_or(0);
     let json = text.split("\r\n\r\n").nth(1).and_then(|b| serde_json::from_str(b).ok());
     (code, json.unwrap_or(Value::Null))
+}
+
+#[test]
+fn one_that_cant_be_checked_starts_when_just_installed_or_named_never_on_every_rerun() {
+    // Antigravity here already, Gemini CLI not: setup starts only the one it just installed.
+    let m = Machine::new(json!({
+        "installed": { "antigravity": "1.0.0", "node": "24.13.0" },
+        "programs": ["apt-get", "sudo", "curl"],
+    }));
+    let o = m.run(&["setup", "--agents", "agy,gemini", "--tools", "none"], "\n");
+    let t = text(&o);
+    assert!(o.status.success(), "{t}");
+    assert_eq!(m.ran(), ["login gemini"], "{t}");
+    assert!(t.contains("? Antigravity: can't be checked; it signs in when it starts (`ptyro login agy` starts it now)"), "{t}");
+    // Again: Gemini CLI is here now, so neither starts.
+    let o = m.run(&["setup", "--agents", "agy,gemini", "--tools", "none"], "\n");
+    assert!(o.status.success(), "{}", text(&o));
+    assert_eq!(m.ran(), ["login gemini"], "{}", text(&o));
+}
+
+#[test]
+fn quitting_one_that_cant_be_checked_is_a_skip_not_a_failure() {
+    // Ctrl+C (or however the agent quits) ends it non-zero.
+    let m = Machine::new(
+        json!({ "installed": { "antigravity": "1.0.0" }, "logins": { "antigravity": "fail" } }),
+    );
+    let o = m.run(&["login", "agy"], "");
+    let t = text(&o);
+    assert!(o.status.success(), "{t}");
+    assert!(t.contains("– Antigravity: skipped (it exited with 1). If it isn't signed in, it asks when it starts"), "{t}");
+    assert!(!t.contains("✗"), "{t}");
+}
+
+#[test]
+fn installed_but_not_found_yet_says_to_open_a_new_terminal() {
+    // An installer that reports success but puts the program off this terminal's PATH.
+    let m = Machine::new(json!({ "outcomes": { "claude": "quiet" } }));
+    let o = m.run(&["setup", "--agents", "claude", "--tools", "none"], "\n");
+    let t = text(&o);
+    assert!(o.status.success(), "{t}");
+    assert!(t.contains("– Claude Code: installed, but this terminal can't find it yet: open a new terminal, then `ptyro login claude`"), "{t}");
+    assert!(!t.contains("`ptyro install claude`"), "{t}");
+    assert!(!t.contains("No agent or GitHub CLI is installed yet"), "{t}");
+    assert!(m.ran().is_empty());
+}
+
+#[test]
+fn where_refusals_speak_of_logins() {
+    let m = Machine::new(json!({}));
+    let o = m.run(&["login", "--where", "wsl"], "");
+    assert_eq!(o.status.code(), Some(2));
+    let t = text(&o);
+    assert!(t.contains("an agent can be logged in on WSL's side, Windows', or both"), "{t}");
+    assert!(!t.contains("install"), "{t}");
+}
+
+/// Ctrl+C during a login is the login's: ptyro carries on with the rest (here the console's
+/// Ctrl+C reaching ptyro alone, as Windows' console sends it to every process on it).
+#[cfg(unix)]
+#[test]
+fn ctrl_c_during_a_login_never_ends_ptyro() {
+    let wait_for = |f: &dyn Fn() -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !f() {
+            assert!(Instant::now() < deadline, "never happened");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+    let interrupt = |pid: u32| {
+        assert!(Command::new("kill").args(["-INT", &pid.to_string()]).status().unwrap().success());
+    };
+
+    // This computer's login.
+    let m = Machine::new(json!({ "installed": { "gh": "2.57.0" }, "logins": { "gh": "slow" } }));
+    let child = m
+        .cmd(&["login"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for(&|| m.ran() == ["login gh"]);
+    std::thread::sleep(Duration::from_millis(200));
+    interrupt(child.id());
+    let o = child.wait_with_output().unwrap();
+    let t = text(&o);
+    assert!(o.status.success(), "{t}");
+    assert!(t.contains("✓ GitHub CLI: logged in"), "{t}");
+
+    // WSL's, from Windows: ptyro.exe waits on wsl.exe, and Ctrl+C mustn't end it there either.
+    let dir = tempfile::Builder::new().prefix("ptyro-boot4-int-").tempdir().unwrap();
+    let d = dir.path();
+    for p in ["fake", "home", "ptyro", "wsl/Ubuntu/fake", "wsl/Ubuntu/home", "wsl/Ubuntu/ptyro"] {
+        std::fs::create_dir_all(d.join(p)).unwrap();
+    }
+    std::fs::write(
+        d.join("fake/world.json"),
+        json!({ "platform": "windows-x64", "programs": ["winget"] }).to_string(),
+    )
+    .unwrap();
+    std::fs::write(d.join("wsl/distros"), "Ubuntu\n").unwrap();
+    let linux = json!({ "platform": "linux", "installed": { "codex": "0.162.1" }, "logins": { "codex": "slow" } });
+    std::fs::write(d.join("wsl/Ubuntu/fake/world.json"), linux.to_string()).unwrap();
+    let wsl = ptyro_testkit::program::program(
+        &d.join("bin"),
+        "wsl",
+        BIN,
+        &format!("exec \"{BIN}\" fake-wsl \"$@\""),
+        &[BIN, "fake-wsl"],
+        &[],
+    );
+    let mut c = Command::new(BIN);
+    c.args(["login", "--where", "wsl"])
+        .env("PTYRO_TEST_SETUP", d.join("fake"))
+        .env("PTYRO_HOME", d.join("ptyro"))
+        .env("HOME", d.join("home"))
+        .env("PTYRO_WSL", &wsl)
+        .env("PTYRO_FAKE_WSL", d.join("wsl"))
+        .env("PTYRO_NO_AUTOSPAWN", "1");
+    for v in ["PTYRO_SOCKET", "PTYRO_SESSION_ID", "PTYRO_CONFIG", "PTYRO_REMOTE"] {
+        c.env_remove(v);
+    }
+    let child =
+        c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let log = d.join("wsl/Ubuntu/fake/logins.log");
+    wait_for(&|| std::fs::read_to_string(&log).unwrap_or_default().contains("login codex"));
+    std::thread::sleep(Duration::from_millis(200));
+    interrupt(child.id());
+    let o = child.wait_with_output().unwrap();
+    let t = text(&o);
+    assert!(o.status.success(), "{t}");
+    assert!(t.contains("✓ Codex: logged in"), "{t}");
 }

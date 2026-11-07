@@ -1087,6 +1087,9 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built BOOT4] Protocol 1.33** (additive): `SpawnSpec.unrecorded` (§7.6): a session that is never
+recorded to disk, for logins (§24.4). An older daemon ignores the field and records as before.
+
 **[built BOOT8] Protocol 1.32** (additive): setup's sides (§24.3). `SetupPlan` and `SetupRun`
 take `wsl_picks?` (what to tick in WSL's distro, on a Windows daemon); `Plan.wsl` says what WSL
 is (usable, unusable with why and the fix, or "this is WSL"); each entry's `side` is `windows`,
@@ -1362,6 +1365,10 @@ Without a recorder (M8) a dormant pane shows a "☾ dormant: ⏎ resumes" card, 
   emulator bugs from real-world byte streams (attach the log to an issue).
 - Per-agent opt-out (`record = false`) and global `recorder.enabled`. Logs may contain secrets that
   scrolled through the terminal: files are `0600`, and `ptyro gc` prunes logs of removed sessions.
+- Per session, `SpawnSpec.unrecorded` (protocol 1.33, BOOT4): never recorded. Logins use it
+  (`profile login`, the web's Log in, §24.4), so a code the sign-in prints or the person pastes
+  never reaches disk. It is kept across `restart`, but not in the store: a login session
+  restarted after the daemon itself restarted is recorded as usual.
 
 **[built M8]** The format grew resize and keyframe records:
 - **Header and records.** The file starts `PTYROREC\x01`. Each record is
@@ -9141,21 +9148,31 @@ to, so it was taken out of the table (§24.1) and OpenCode is `unconfirmed`.
   ends ptyro.
 - **The TUI:** `app.login` runs `ptyro login {where}` in a split, a real terminal.
 - **The web:** More → Set up ptyro → Log in. `login.list` (`POST /api/host`, `full` scope) is
-  `ptyro login --check --json`; Log in (`login.start`) spawns a session on the daemon running
-  `ptyro login <name>` under the default profile, in the home folder, and opens it. The tool's
+  `ptyro login --check --json --where local`; Log in (`login.start`) spawns a session on the
+  daemon running `ptyro login --where local <name>` under the default profile, in the home
+  folder, unrecorded (§7.6: what the sign-in prints, or a code pasted into it, never reaches
+  disk; `profile login`'s session is unrecorded too), and opens it. `--where local` keeps both
+  on the daemon machine's side, with no WSL probe. The tool's
   link and code show in that terminal. A browser the tool opens opens on the computer running
   ptyro, which helps only someone sitting there, so the page says to follow the link and enter
-  the code. Check again asks the status commands. No new daemon request: the protocol stays 1.32.
+  the code. Check again asks the status commands. No new daemon request; the one protocol change
+  is 1.33's `SpawnSpec.unrecorded`.
 - **WSL's side** (from Windows): `wsl -d <distro> -- ptyro login <ids>` with the terminal passed
   through (`wsl_setup::interact`), so the login runs in that distro, by its own ptyro; `--check
-  --json` there comes back as rows marked `side: wsl` (`wsl_setup::logins`).
+  --json` there comes back as rows marked `side: wsl` (`wsl_setup::logins`). Windows' ptyro waits
+  on it with Ctrl+C held off as for its own logins (Windows' console sends Ctrl+C to every
+  process on it), so a Ctrl+C there skips that login and never ends ptyro.exe. Setup's walk there
+  passes the hidden `--installed=<ids>` (setup's list, not names asked for: what it just
+  installed) and `--tty` (a person is at this terminal).
 
 **`ptyro login [NAME…] [--check] [--json] [--where wsl|windows|both]`:** no names, every item with
 a login that is installed. Each logged in says ✓; each logged out runs its login ("▸ Logging in to
 GitHub CLI: `gh auth login --web`", then a line saying the sign-in is the tool's and Ctrl+C skips
 it) and ends ✓, or ✗ with the fix (`ptyro login gh` tries again, or the command to run yourself).
 One that can't be checked runs only when named (`ptyro login agy` starts Antigravity: "sign in,
-then quit it to come back here") and ends "?", saying it can't be confirmed. A named one not
+then quit it to come back here") and ends "?", saying it can't be confirmed; quit non-zero (Ctrl+C,
+or however the agent quits) it says "skipped", not a failure. A login ending non-zero for a tool
+that can be checked says how it ended, with the fix. A named one not
 installed says `ptyro install …`; one without a login (git) is refused (exit 2); an unknown name
 exits 3. It needs a terminal (the TUI's split and a web session are terminals); without one it
 refuses and points at `--check`. `--check` only says where each stands (what isn't installed only
@@ -9165,7 +9182,10 @@ as for setup: logins are this computer's.
 
 **Setup's end:** after every side's run, `ptyro setup` and `ptyro install` walk through
 `login::after` per side, under a heading each (WSL's in WSL, as above), asking nothing more: the
-person chose these by ticking them, and Ctrl+C skips any one. With `--yes` (no person) they only
+person chose these by ticking them, and Ctrl+C skips any one. One that can be checked runs when
+logged out; one that can't runs only if this run just installed it (it can't have signed in yet),
+so Antigravity already here isn't started on every setup. One just installed but not found from
+this terminal yet says to open a new terminal, then `ptyro login <name>`. With `--yes` (no person) they only
 say where each stands and that `ptyro login` logs them in; with `--json` nothing is said (the
 `logins` event is in the stream); WSL's ptyro running for Windows' (`--admin=…`) leaves them to
 Windows'. When there were logins, setup's last line is `login::PROFILES_HINT`: more accounts are
@@ -9175,18 +9195,22 @@ failed setup.
 
 **Tests, with no real login and no credential:** the fake machine's `world.json` gains
 `logged_in` (ids logged in already) and `logins` (per id: `ok`, `fail` (exit 1), `nothing` (exit
-0, still logged out)). `interact` runs `ptyro fake-installer login ID` in the terminal, a real
+0, still logged out), `slow` (two seconds before it logs in)). `interact` runs `ptyro fake-installer login ID` in the terminal, a real
 child that prints a device code and writes `logged-in/<id>`; `status` answers for the rows'
 `check` argv from those files; both log to `logins.log` (not `calls.log`, whose steps BOOT1's
 tests count). `crates/ptyro/tests/boot4.rs` covers setup's walk after the installs with the
 profiles line last; `--yes` running none; a failed and a "nothing done" login with their fixes;
 the unconfirmed one only when named; `--check`/`--json` asking only the status commands; WSL's
 side logged in in the distro through `ptyro fake-wsl`, and both sides' rows; the web's
-`login.list`, and a `login.start` session showing the code and ending logged in. The engine's
-rules are in `setup/tests.rs`.
+`login.list`, and a `login.start` session showing the code, ending logged in, and leaving no
+recording; an unconfirmed agent started only when just installed or named, and quitting it a
+skip; a just-installed one not found yet pointing at a new terminal; the `--where` refusal's
+words; and (Unix) SIGINT to ptyro during a login, its own and WSL's through `fake-wsl` (the
+fake's `slow` login), leaving it running to the end. The engine's rules are in `setup/tests.rs`.
 
 **Decided by the builder:** the exit code alone decides (no output read, so no patterns);
 OpenCode's `check` dropped; the CLI runs logins in its own terminal and the web in a daemon
 session running `ptyro login`, so both confirm the same way; setup walks without a question per
-login; an unconfirmed login runs only when named or just installed; the web shows the daemon's
-side, naming WSL's command on a Windows daemon; no protocol change.
+login; an unconfirmed login runs only when named or just installed (never because it was picked
+and was here already), and quitting it is a skip; login sessions are unrecorded (protocol 1.33); the web shows the daemon's
+side (`--where local`), naming WSL's command on a Windows daemon.

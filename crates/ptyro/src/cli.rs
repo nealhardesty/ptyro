@@ -350,8 +350,8 @@ async fn dispatch(
             let a = crate::setup::InstallArgs { names, yes, dry_run, json, place, admin, tty };
             crate::setup::install(&ctx, a).await
         }
-        Some(Cmd::Login { names, check, json, place, tty }) => {
-            let a = crate::logins::LoginArgs { names, check, json, place, tty };
+        Some(Cmd::Login { names, check, json, place, tty, installed }) => {
+            let a = crate::logins::LoginArgs { names, check, json, place, tty, installed };
             crate::logins::login(&ctx, a).await
         }
         Some(Cmd::About { json }) => crate::about::run(&ctx, json).await,

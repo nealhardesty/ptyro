@@ -80,17 +80,17 @@ impl Host for TestHost {
             .find(|i| i.login.as_ref().and_then(|l| l.check.as_ref()).is_some_and(|c| c == argv))?;
         Some(self.logged_in.lock().unwrap().contains(&item.id))
     }
-    fn interact(&self, argv: &[String]) -> Result<(), String> {
+    fn interact(&self, argv: &[String]) -> Result<Option<String>, String> {
         self.calls.lock().unwrap().push(format!("login {}", argv.join(" ")));
         let item = catalog::items()
             .iter()
             .find(|i| i.login.as_ref().is_some_and(|l| l.start == argv))
             .ok_or("no such login")?;
         if self.login_fails.contains(&item.id) {
-            return Err("it exited with 1".into());
+            return Ok(Some("it exited with 1".into()));
         }
         self.logged_in.lock().unwrap().insert(item.id.clone());
-        Ok(())
+        Ok(None)
     }
 }
 
@@ -536,18 +536,29 @@ fn a_login_is_decided_by_its_status_commands_exit_code_alone() {
 #[test]
 fn logging_in_runs_the_tools_own_flow_then_asks_its_status() {
     let item = |id: &str| catalog::item(id).unwrap();
-    let mut h = TestHost::on(Platform::Linux).have("codex", "0.162.1").have("gh", "2.57.0");
+    let mut h = TestHost::on(Platform::Linux)
+        .have("codex", "0.162.1")
+        .have("gh", "2.57.0")
+        .have("antigravity", "1.0.0");
     h.login_fails.insert("gh".into());
-    assert_eq!(login::log_in(&h, item("codex")), Ok(login::LoginState::LoggedIn));
-    let err = login::log_in(&h, item("gh")).unwrap_err();
-    assert!(err.contains("exited with 1"), "{err}");
+    h.login_fails.insert("antigravity".into());
+    let done = login::log_in(&h, item("codex")).unwrap();
+    assert_eq!((done.state, done.ended), (login::LoginState::LoggedIn, None));
+    let gh = login::log_in(&h, item("gh")).unwrap();
+    assert_eq!(gh.state, login::LoginState::LoggedOut);
+    assert_eq!(gh.ended.as_deref(), Some("it exited with 1"));
+    // An agent with no status command, quit with Ctrl+C: how it ended, nothing more known.
+    let agy = login::log_in(&h, item("antigravity")).unwrap();
+    assert_eq!(agy.state, login::LoginState::Unconfirmed);
+    assert!(agy.ended.is_some());
     assert_eq!(
         h.calls(),
         [
             "login codex login",
             "status codex login status",
             "login gh auth login --web",
-            "status gh auth status"
+            "status gh auth status",
+            "login agy",
         ]
     );
 }

@@ -57,6 +57,9 @@ pub struct Place {
     /// The chat it is the engine of (SPEC §22.2): hidden from the session tree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat: Option<String>,
+    /// Never recorded to disk (`SpawnSpec::unrecorded`: a login, BOOT4); kept across restarts.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unrecorded: bool,
 }
 
 pub struct Term {

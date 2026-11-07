@@ -119,20 +119,33 @@ impl Sides {
 }
 
 /// `--where`, checked against this machine: on Windows any of them; elsewhere only `local`.
-pub(crate) fn place_of(given: Option<&str>, platform: Platform) -> Result<Option<Where>, Error> {
+/// `cmd` is the command it's for (`setup`, `login`), for the words of a refusal.
+pub(crate) fn place_of(
+    given: Option<&str>,
+    platform: Platform,
+    cmd: &str,
+) -> Result<Option<Where>, Error> {
     let Some(w) = given else { return Ok(None) };
     let w: Where = w.parse().map_err(Error::invalid)?;
     if platform.is_windows() || w == Where::Local {
         return Ok(Some(w));
     }
+    let (here, sides) = if cmd == "login" {
+        (
+            "`ptyro login` here logs in to it",
+            "an agent can be logged in on WSL's side, Windows', or both",
+        )
+    } else {
+        ("setup here installs into it", "an agent can go into WSL, onto Windows, or both")
+    };
     Err(Error::invalid(if platform == Platform::Wsl {
         format!(
-            "--where {} is for Windows' ptyro: this is WSL, and setup here installs into it. For Windows itself, run `ptyro setup --where windows` in a Windows terminal",
+            "--where {} is for Windows' ptyro: this is WSL, and {here}. For Windows itself, run `ptyro {cmd} --where windows` in a Windows terminal",
             w.name()
         )
     } else {
         format!(
-            "--where {} is for Windows, where an agent can go into WSL, onto Windows, or both; on {} everything installs on this computer: leave --where out",
+            "--where {} is for Windows, where {sides}; on {} everything is on this computer: leave --where out",
             w.name(),
             platform.name()
         )
@@ -153,7 +166,7 @@ async fn look(
     let host = setup::host(paths);
     let here = setup::survey(&*host, &BTreeMap::new());
     let platform = here.platform;
-    let place = place_of(given, platform)?;
+    let place = place_of(given, platform, "setup")?;
     if !platform.is_windows() {
         let status = (platform == Platform::Wsl)
             .then(|| WslStatus::Inside { distro: std::env::var("WSL_DISTRO_NAME").ok() });
@@ -447,7 +460,7 @@ fn logins(
         if plan.sides().len() > 1 && !ids.is_empty() {
             eprintln!("\n── {} ──", side_name(side, sides));
         }
-        any |= crate::logins::after_setup(host, &ids, distro, admin == Admin::Ask);
+        any |= crate::logins::after_setup(host, &ids, &report.done, distro, admin == Admin::Ask);
     }
     if any {
         eprintln!("\n{}", setup::login::PROFILES_HINT);

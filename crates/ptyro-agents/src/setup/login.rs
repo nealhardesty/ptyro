@@ -46,11 +46,6 @@ pub struct LoginRow {
     pub note: Option<String>,
 }
 
-/// The items with a login (the agents and the GitHub CLI), in the table's order.
-pub fn ids() -> Vec<String> {
-    catalog::items().iter().filter(|i| i.login.is_some()).map(|i| i.id.clone()).collect()
-}
-
 /// Where `item`'s login stands on `host`.
 pub fn status(host: &dyn Host, item: &Item) -> LoginState {
     let Some(login) = &item.login else { return LoginState::Unconfirmed };
@@ -87,16 +82,22 @@ pub fn rows(host: &dyn Host, ids: &[String]) -> Vec<LoginRow> {
         .collect()
 }
 
+/// How a login ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Outcome {
+    /// Its status afterwards.
+    pub state: LoginState,
+    /// How it ended when it didn't exit 0 (`it exited with 1`, `it was stopped`): a failure,
+    /// Ctrl+C, or an agent quit that way.
+    pub ended: Option<String>,
+}
+
 /// Run `item`'s own login in the person's terminal, then ask its status command. `Err`: it
-/// couldn't start, or it failed (and still isn't logged in).
-pub fn log_in(host: &dyn Host, item: &Item) -> Result<LoginState, String> {
+/// couldn't start.
+pub fn log_in(host: &dyn Host, item: &Item) -> Result<Outcome, String> {
     let login = item.login.as_ref().ok_or("it has no login")?;
-    let ran = host.interact(&login.start);
-    let after = status(host, item);
-    match (ran, after) {
-        (Err(why), LoginState::LoggedOut | LoginState::Unconfirmed) => Err(why),
-        (_, state) => Ok(state),
-    }
+    let ended = host.interact(&login.start)?;
+    Ok(Outcome { state: status(host, item), ended })
 }
 
 /// The logins to walk through after a run: what it installed, and what was picked and is here

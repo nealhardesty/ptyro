@@ -510,6 +510,8 @@ pub(crate) async fn login(
         env: client_env(),
         size: if attaching { ptyro_tui::pane_size(&ctx.paths) } else { None },
         confirmed: true,
+        // A sign-in's codes never go to disk (BOOT4).
+        unrecorded: true,
         ..SpawnSpec::default()
     };
     let info = session_of(c.request(Request::Spawn { spec }).await?)?;

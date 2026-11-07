@@ -77,7 +77,8 @@ pub trait Host: Sync {
     /// `None`: it didn't start, or took too long.
     fn status(&self, argv: &[String]) -> Option<bool>;
     /// Run a login in the person's terminal (stdin, stdout and stderr its own) to its end.
-    fn interact(&self, argv: &[String]) -> Result<(), String>;
+    /// `Ok(None)`: it exited 0; `Ok(Some(how))`: it ended otherwise; `Err`: it didn't start.
+    fn interact(&self, argv: &[String]) -> Result<Option<String>, String>;
 }
 
 /// The machine for this process: the fake a test names (`PTYRO_TEST_SETUP`, debug builds), else
@@ -417,7 +418,7 @@ impl Host for RealHost {
         exit_ok(&cmd, &self.env(), Duration::from_secs(20))
     }
 
-    fn interact(&self, argv: &[String]) -> Result<(), String> {
+    fn interact(&self, argv: &[String]) -> Result<Option<String>, String> {
         let cmd = self
             .resolve(argv)
             .ok_or_else(|| format!("{} isn't found", argv.first().map_or("it", String::as_str)))?;
@@ -429,11 +430,11 @@ impl Host for RealHost {
             .env("PATH", self.path())
             .status()
             .map_err(|e| format!("couldn't start {prog}: {e}"))?;
-        match status.code() {
-            Some(0) => Ok(()),
-            Some(c) => Err(format!("it exited with {c}")),
-            None => Err("it was stopped".into()),
-        }
+        Ok(match status.code() {
+            Some(0) => None,
+            Some(c) => Some(format!("it exited with {c}")),
+            None => Some("it was stopped".into()),
+        })
     }
 }
 

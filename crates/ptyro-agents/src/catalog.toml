@@ -194,7 +194,7 @@ name = "OpenCode"
 kind = "agent"
 program = "opencode"
 doc = "https://docs.opencode.ai/docs/"
-checked = "2026-11-06"
+checked = "2026-11-07"
 version = ["opencode", "--version"]
 note = "OpenCode 1. OpenCode 2 (@opencode/cli, `curl -fsSL https://opencode.ai/v2/install | bash`) changed its server API, which ptyro's adapter speaks, and is beta; the two share the `opencode` command."
 login = { start = ["opencode", "auth", "login"], mark = "U", note = "`opencode auth login` is in the docs [V]; `opencode auth list` lists providers, but whether it fails when nothing is logged in isn't documented, so it isn't a `check` (2026-11-07: a check must exit 0 only when logged in)" }

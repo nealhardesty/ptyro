@@ -3279,7 +3279,8 @@ machine". The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-desi
   running `ptyro login <name>` in a daemon session that shows the link and code). OpenCode's
   `auth list` was dropped as a `check` (it can't be shown to fail when logged out), so OpenCode,
   Antigravity and Gemini CLI sign in when they start. Tested through the fake machine (`ptyro
-  fake-installer login`, `tests/boot4.rs`); no protocol change.
+  fake-installer login`, `tests/boot4.rs`). Login sessions are never recorded (protocol 1.33,
+  `SpawnSpec.unrecorded`).
 - [ ] **BOOT5 Out of date, offered** **M**:
   - agents and ptyro, checked at most once a day (remembered in `<state>/versions.json`), and
     afresh by `doctor`;

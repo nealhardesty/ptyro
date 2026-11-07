@@ -62,7 +62,8 @@ pub struct World {
     /// Items logged in already (BOOT4).
     pub logged_in: Vec<String>,
     /// Per item, what its login does: `ok` (default: logs in), `fail` (exits 1, still logged
-    /// out) or `nothing` (exits 0, still logged out: the person closed the page).
+    /// out: a failure, or Ctrl+C), `nothing` (exits 0, still logged out: the person closed the
+    /// page) or `slow` (the code, then two seconds before it logs in: time for a test's Ctrl+C).
     pub logins: BTreeMap<String, String>,
 }
 
@@ -195,7 +196,7 @@ impl Host for FakeHost {
         )
     }
 
-    fn interact(&self, argv: &[String]) -> Result<(), String> {
+    fn interact(&self, argv: &[String]) -> Result<Option<String>, String> {
         let item = crate::catalog::items()
             .iter()
             .find(|i| i.login.as_ref().map(|l| &l.start) == Some(&argv.to_vec()))
@@ -206,7 +207,7 @@ impl Host for FakeHost {
             .env("PTYRO_TEST_SETUP", &self.dir)
             .status()
             .map_err(|e| e.to_string())?;
-        if status.success() { Ok(()) } else { Err("it exited with 1".into()) }
+        Ok((!status.success()).then(|| "it exited with 1".to_owned()))
     }
 }
 
@@ -289,6 +290,15 @@ fn fake_login(dir: &Path, id: &str) -> i32 {
             1
         }
         "nothing" => 0,
+        "slow" => {
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            let d = dir.join("logged-in");
+            let _ = std::fs::create_dir_all(&d);
+            let _ = std::fs::write(d.join(id), "");
+            println!("fake login: logged in");
+            0
+        }
         _ => {
             let d = dir.join("logged-in");
             let _ = std::fs::create_dir_all(&d);

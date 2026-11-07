@@ -832,6 +832,10 @@ enum Cmd {
         /// A person answers on stdin though it isn't a terminal (as for setup)
         #[arg(long, hide = true)]
         tty: bool,
+        /// Setup's list of what to log in (from Windows' ptyro, for WSL's side): the names
+        /// aren't asked for by name, and these (comma-separated, maybe none) were just installed
+        #[arg(long, hide = true, value_name = "IDS")]
+        installed: Option<String>,
     },
     /// Which ptyro this is: version, repository, licence, build, where things live, whether the
     /// daemon and the web app run, and a block to paste into a bug report
