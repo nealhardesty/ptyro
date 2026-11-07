@@ -113,7 +113,9 @@ impl Ctx {
 
     fn options(&self, kind: ClientKind, autospawn: bool) -> ConnectOptions {
         let mut o = ConnectOptions::new(self.paths.clone(), kind);
-        o.autospawn = autospawn;
+        // `PTYRO_NO_AUTOSPAWN=1` (tests, scripts) wins over every command that would start one
+        // (`doctor`, `new`…), so nothing leaves a daemon running its caller didn't ask for.
+        o.autospawn = autospawn && o.autospawn;
         o.encoding = self.encoding;
         if self.remote.is_some() {
             o.remote.clone_from(&self.remote);
@@ -356,9 +358,18 @@ async fn dispatch(
             Ok(0)
         }
         Some(Cmd::Init { yes, dry_run }) => crate::init::run(&ctx, yes, dry_run).await,
-        Some(Cmd::Setup { yes, agents, tools, dry_run, json, place, survey, tty }) => {
-            let a =
-                crate::setup::SetupArgs { yes, agents, tools, dry_run, json, place, survey, tty };
+        Some(Cmd::Setup { yes, agents, tools, dry_run, json, place, survey, move_, tty }) => {
+            let a = crate::setup::SetupArgs {
+                yes,
+                agents,
+                tools,
+                dry_run,
+                json,
+                place,
+                survey,
+                tty,
+                move_,
+            };
             crate::setup::setup(&ctx, a).await
         }
         Some(Cmd::Install {

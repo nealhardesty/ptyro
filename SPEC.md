@@ -9940,7 +9940,22 @@ link in `~/.npm-global/bin` or `/usr/local/bin` counts as npm's. `Installed.syst
 folder is neither the user's nor writable by everyone (a system npm prefix,
 `/usr/lib/node_modules`), so removing it needs administrator rights. `Installed.prefix`: npm's
 global prefix the copy is in (the folder above `lib/node_modules`; on Windows above
-`node_modules`), `None` for Bun's global folder (`~/.bun/…`), which npm doesn't manage.
+`node_modules`, chosen by the platform), `None` for Bun's global folder (`~/.bun/…`) and a version
+manager's store (mise's `npm:` backend, asdf, pnpm's), which npm doesn't manage: that tool removes
+it. `Installed.file` and `Installed.real`: the bare file found and where it really is (links
+followed).
+
+**The vendor's copy is known by its path.** A vendor installer's method names its `places`, where
+its copy really is: Claude Code `~/.local/share/claude` (the launcher `~/.local/bin/claude` links
+into its `versions/`) [V 2026-11-07, the setup page], on Windows `~/.local/bin/claude.exe` and
+`~/.local/share/claude` [V, its Windows uninstall]; Codex `~/.codex/packages/standalone` (install.sh
+links `~/.local/bin/codex` into `…/current`; on Windows install.ps1's junctions, also
+`%LOCALAPPDATA%/Programs/OpenAI/Codex`) [S 2026-11-07, the vendor's install.sh and install.ps1];
+OpenCode `~/.opencode` [V, its docs]. `setup::installed_by(copy, method)`: a package manager's copy
+by its folder (`via`); a vendor's only when its file (or where it really is) is under one of those
+places. A copy from an installer nothing classifies (Nix's store, Scoop's shims, mise or asdf
+shims, pipx, a wrapper script in `~/bin`) never counts. A vendor method with no `places` (not
+known) offers no move, and the table's tests require them wherever another way exists.
 
 **The offer** (`setup::offer`, `setup::Moving`): for an `other` agent that `Survey.keep` doesn't
 name, when the platform's recommended method is usable here (its `needs` present; Gemini CLI's npm
@@ -9967,9 +9982,9 @@ logins live, said in every offer.
   machine's `logged_in`: setup's login walk after the move says ✓).
 - **The new one first** (`setup/moving.rs`): the recommended method's install runs; then
   `Host::copies` (every copy of the program, `PATH` first, then npm's, nvm's and the vendors'
-  folders: `locate::find_all`) must show a copy the recommended method installed (the vendor's
-  installer's: one no package manager claims; npm's for Gemini CLI) that answers `--version`. A
-  third installer's copy (Homebrew's beside npm's) never counts; then the install runs.
+  folders: `locate::find_all`) must show a copy the recommended method installed
+  (`installed_by`: in the vendor's places; npm's for Gemini CLI) that answers `--version`. Any
+  other copy (Homebrew's beside npm's, Nix's) never counts; then the install runs.
   A failed install, or one whose new copy can't be found answering, is `failed` with "nothing was
   removed: Codex through npm is still installed and works" and the fix; the old copy is untouched.
 - **Then the old one goes**, with its installer's `uninstall` (`Host::uninstall`, the row's shell,
@@ -9979,7 +9994,10 @@ logins live, said in every offer.
   again, a new copy already here is said and only the removal runs.
 - **The old one must be gone.** Its copy still there after a removal that said it worked (npm
   acting elsewhere: "removed 0 packages") is `failed`, "npm's copy (…) is still there after `…`",
-  with the fix to delete that file (never "run it again", which would do the same).
+  with the fix to delete that file, ready to paste (`rm '<file>'`; on Windows `Remove-Item
+  -LiteralPath '<file>'`), never "run it again", which would do the same. Every message after the
+  removal looks for the new copy again before saying it works (or says it no longer runs, with
+  the install command).
 - **The new one must still run.** A removal can take the new install's link with it (an npm prefix
   of `~/.local` shares `~/.local/bin` with the native installer): the recommended copy is looked
   for again, and if it is gone it is installed again at once ("the removal took the new copy too,
@@ -9987,8 +10005,8 @@ logins live, said in every offer.
   removal took the new codex with it … no Codex runs now", fix: `ptyro install codex` or the
   install command. A move never ends ✓ with nothing to run.
 - **The new one must be what runs.** Afterwards `Host::installed` (what `locate::find` picks: `PATH`
-  first) must be the recommended copy. If another comes first (a second npm prefix, a third
-  installer), the move is `failed`: "npm's codex (…) comes first on PATH, so it is the one that
+  first) must be the recommended copy and answer `--version`. If another comes first (a second npm
+  prefix, a third installer), or it doesn't answer, the move is `failed`: "npm's codex (…) comes first on PATH, so it is the one that
   runs", fix: delete it (or uninstall it with the tool that put it there), or put the new one's
   folder ahead of it on `PATH`.
 - Each half is a `Started` event of its own (`Codex: installing it through the vendor's
@@ -10019,7 +10037,8 @@ move is `ptyro install`'s.
   done unasked** (the design): `--yes` alone leaves an agent installed another way as it is (its
   own update when out of date, else nothing) and says "Codex is installed with npm: moving it to the
   recommended installer needs a yes (`ptyro install codex` in a terminal, or --move); left as it
-  is"; `--move` (with `--yes`) is the unattended opt-in; `ptyro setup --yes` never moves. The TUI's
+  is"; `--move` (with `--yes`) is the unattended opt-in, on `ptyro setup` as on `ptyro install`
+  (`setup --yes` without it says the same for each ticked one it passes over). The TUI's
   `--confirmed` moves (its row was ticked). A move on WSL's side (`--where wsl`) runs in WSL's
   ptyro under the Windows question's yes, which passes the moves it covers (hidden `--moves`), so
   WSL's ptyro asks nothing; keeping one of WSL's as installed is done in WSL (its step line says so).
@@ -10083,5 +10102,8 @@ installed even when the old one shadows it and found through every copy (`locate
 the old is removed only after the new one answered; a move counts as failed when the old copy still
 runs first (the goal is the new one running); `system` by the file's folder not being writable;
 `ptyro update` never moves; protocol 1.36's `SetupRun.moves` (absent: nothing moves).
-`ptyro doctor` no longer starts the daemon when `PTYRO_NO_AUTOSPAWN=1` (starting it was a side
-effect of checking it), so no test that runs `doctor` leaves one running.
+`PTYRO_NO_AUTOSPAWN=1` wins in the CLI's shared `Ctx::connect`, so no command (`doctor`'s check
+included) starts a daemon when it is set and no test leaves one running; the one test of
+autospawn itself clears it. `doctor` notes an agent installed another way that isn't offered the
+move, and why (`updates::Versions.unmovable`: the vendor's place unknown, no npm prefix,
+someone else's Homebrew).

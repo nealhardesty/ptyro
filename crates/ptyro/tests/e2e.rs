@@ -298,8 +298,14 @@ fn only_one_daemon_per_home_and_stale_sockets_are_recovered() {
     // (Unix: a named pipe goes with the process that served it.)
     #[cfg(unix)]
     assert!(d.paths.socket.exists(), "a crash leaves the socket behind");
-    // A new client auto-spawns a daemon, which clears the stale socket.
-    let out = d.cmd().args(["new", "-d", "--", "sh", "-c", "sleep 30"]).output().unwrap();
+    // A new client auto-spawns a daemon, which clears the stale socket (autospawn allowed here:
+    // the testkit's commands forbid it otherwise).
+    let out = d
+        .cmd()
+        .env_remove("PTYRO_NO_AUTOSPAWN")
+        .args(["new", "-d", "--", "sh", "-c", "sleep 30"])
+        .output()
+        .unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let ls = d.cmd().arg("ls").output().unwrap();
     assert!(String::from_utf8_lossy(&ls.stdout).contains("running"));

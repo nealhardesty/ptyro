@@ -34,6 +34,8 @@ struct TestHost {
     uninstall_fails: BTreeSet<String>,
     /// A third installer's copy, by id (after the new one).
     third: BTreeMap<String, Via>,
+    /// A copy nothing classifies (Nix's store), by id (last).
+    unknown: BTreeSet<String>,
     /// A removal takes the new copy with it (a shared bin folder).
     uninstall_takes_new: bool,
     /// Every install after the first fails.
@@ -75,16 +77,53 @@ impl Host for TestHost {
             let via = self.other.get(&item.id).copied();
             let prefix = (via == Some(Via::Npm)).then(|| "/home/me/.npm-global".to_owned());
             let path = Some("/home/me/.npm-global/bin/x".to_owned());
-            out.push(Installed { version: Some(v), path, via, system: false, prefix });
+            let file = path.clone();
+            let real = path.clone();
+            out.push(Installed { version: Some(v), path, via, system: false, prefix, file, real });
         }
         if let Some(v) = self.new.lock().unwrap().get(&item.id).cloned() {
+            // Where the vendor's installer puts it (the table's `places`).
+            let m = item.method(self.platform(), |_| true).unwrap();
+            let place = m.places.first().map(|p| expand_place(p)).unwrap_or_default();
+            let file = Some(format!("{place}/{}", item.program));
             let path = Some("~/.local/bin/x".into());
-            out.push(Installed { version: Some(v), path, via: None, system: false, prefix: None });
+            out.push(Installed {
+                version: Some(v),
+                path,
+                via: None,
+                system: false,
+                prefix: None,
+                real: file.clone(),
+                file,
+            });
         }
         if let Some(t) = self.third.get(&item.id) {
             let path = Some("/opt/homebrew/bin/x".into());
             let v = Some("0.1.0".to_owned());
-            out.push(Installed { version: v, path, via: Some(*t), system: false, prefix: None });
+            let (file, real) = (path.clone(), path.clone());
+            out.push(Installed {
+                version: v,
+                path,
+                via: Some(*t),
+                system: false,
+                prefix: None,
+                file,
+                real,
+            });
+        }
+        if self.unknown.contains(&item.id) {
+            let path = Some("/nix/store/abc-codex/bin/codex".into());
+            let v = Some("0.1.0".to_owned());
+            let (file, real) = (path.clone(), path.clone());
+            out.push(Installed {
+                version: v,
+                path,
+                via: None,
+                system: false,
+                prefix: None,
+                file,
+                real,
+            });
         }
         out
     }
@@ -1038,7 +1077,11 @@ fn a_removal_that_fails_says_the_command_that_finishes_it_and_a_retry_only_remov
             _ => None,
         })
         .unwrap();
-    assert!(error.contains("works (~/.local/bin/x), but removing npm's copy"), "{error}");
+    assert!(
+        error.starts_with("removing npm's copy")
+            && error.ends_with("through the vendor's installer works (~/.local/bin/x)"),
+        "{error}"
+    );
     assert!(
         fix.contains("`npm uninstall -g --prefix '/home/me/.npm-global' @openai/codex`"),
         "{fix}"
@@ -1139,7 +1182,10 @@ fn a_homebrew_keg_is_homebrews_even_with_node_modules_inside_and_npm_has_its_pre
     );
     assert_eq!(npm_prefix(nvm).as_deref(), Some("/home/me/.nvm/versions/node/v22.1.0"));
     let win = Path::new(r"C:\Users\me\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js");
-    assert_eq!(npm_prefix(win).as_deref(), Some(r"C:\Users\me\AppData\Roaming\npm"));
+    assert_eq!(
+        super::host::npm_prefix_on(win, true).as_deref(),
+        Some(r"C:\Users\me\AppData\Roaming\npm")
+    );
     // Bun's global folder isn't npm's to remove from.
     let bun = Path::new("/home/me/.bun/install/global/node_modules/@openai/codex/bin/codex.js");
     assert_eq!(npm_prefix(bun), None);
@@ -1198,4 +1244,61 @@ fn a_removal_that_takes_the_new_copy_too_installs_it_again_or_says_none_runs() {
         })
         .unwrap();
     assert!(error.contains("no Codex runs now"), "{error}");
+}
+
+#[test]
+fn an_unknown_installers_copy_never_counts_and_an_unknown_vendor_place_offers_no_move() {
+    // Nix's codex beside npm's: no package manager's, but not in the vendor's places either.
+    let mut h = npm_codex();
+    h.unknown.insert("codex".into());
+    let p = plan(&survey(&h, &BTreeMap::new()), &picks(&["codex"]));
+    let (r, events) = run_all(&p, &h, Admin::Ask);
+    assert_eq!(r.done, ["codex"], "{events:?}");
+    assert_eq!(
+        h.calls(),
+        ["codex vendor", "uninstall codex npm"],
+        "the vendor's installer ran first"
+    );
+    // A vendor installer whose place isn't known: no move, and why.
+    let mut item = catalog::item("codex").unwrap().clone();
+    for m in &mut item.methods {
+        m.places.clear();
+    }
+    let st = State::Other {
+        version: None,
+        via: Via::Npm,
+        path: None,
+        latest: None,
+        system: false,
+        prefix: Some("/home/me/.npm-global".into()),
+    };
+    assert!(offer(&item, Platform::Linux, &st, &BTreeSet::new(), &|_| true).is_none());
+    let why = not_offered(&item, Platform::Linux, &st, &|_| true).unwrap();
+    assert!(why.contains("isn't known"), "{why}");
+    // A copy is the vendor's only by its place.
+    let m = catalog::item("codex").unwrap().method(Platform::Linux, |_| true).unwrap();
+    let at =
+        |f: &str| Installed { file: Some(f.into()), real: Some(f.into()), ..Default::default() };
+    let home = expand_place("~");
+    assert!(installed_by(&at(&format!("{home}/.codex/packages/standalone/current/codex")), m));
+    assert!(!installed_by(&at("/nix/store/abc-codex/bin/codex"), m));
+    assert!(
+        !installed_by(&at(&format!("{home}/.local/bin/codex")), m),
+        "a wrapper in ~/.local/bin isn't"
+    );
+}
+
+#[test]
+fn npm_prefixes_by_the_platforms_layout_and_never_inside_a_tool_store() {
+    use super::host::npm_prefix_on;
+    use std::path::Path;
+    let lin = Path::new("/home/me/.npm-global/lib/node_modules/@openai/codex/bin/codex.js");
+    assert_eq!(npm_prefix_on(lin, false).as_deref(), Some("/home/me/.npm-global"));
+    // Windows: the prefix holds node_modules, even under a folder named lib.
+    let win = Path::new(r"D:\tools\lib\node_modules\npm\node_modules\@openai\codex\bin\codex.js");
+    assert_eq!(npm_prefix_on(win, true).as_deref(), Some(r"D:\tools\lib"));
+    let mise = Path::new(
+        "/home/me/.local/share/mise/installs/npm-openai-codex/0.162.1/lib/node_modules/@openai/codex/bin/codex.js",
+    );
+    assert_eq!(npm_prefix_on(mise, false), None);
 }

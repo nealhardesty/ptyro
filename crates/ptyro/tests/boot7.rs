@@ -203,7 +203,12 @@ fn a_removal_that_fails_says_how_to_finish_and_trying_again_only_removes() {
     assert_eq!(o.status.code(), Some(1), "{t}");
     assert_eq!(m.calls(), [INSTALL, REMOVE]);
     assert!(
-        t.contains("✗ Codex: Codex 0.170.0 through the vendor's installer works ((fake) codex), but removing npm's copy ((fake npm) codex) failed"),
+        t.contains("✗ Codex: removing npm's copy ((fake npm) codex) failed: it exited with 1"),
+        "{t}"
+    );
+    // Looked at again after the removal before saying the new one works.
+    assert!(
+        t.contains("; Codex 0.170.0 through the vendor's installer works ((fake) codex)"),
         "{t}"
     );
     assert!(
@@ -230,11 +235,15 @@ fn a_removal_that_leaves_the_old_copy_says_so_with_the_exact_fix() {
     let t = text(&o);
     assert_eq!(o.status.code(), Some(1), "{t}");
     assert!(
-        t.contains(&format!("but npm's copy ((fake npm) codex) is still there after `{}`", m.rm())),
+        t.contains(&format!(
+            "✗ Codex: npm's copy ((fake npm) codex) is still there after `{}`",
+            m.rm()
+        )),
         "{t}"
     );
-    // Never "run it again": the same removal would do the same.
-    assert!(t.contains("fix: remove it yourself: delete (fake npm) codex"), "{t}");
+    // Never "run it again": the same removal would do the same. The fix pastes as it is.
+    let old = m.fake().join("old-bin/codex");
+    assert!(t.contains(&format!("fix: remove it yourself: `rm '{}'`", old.display())), "{t}");
     assert!(!t.contains("fix: `ptyro install codex`"), "{t}");
 }
 
@@ -250,7 +259,14 @@ fn another_old_copy_still_first_on_path_is_said_with_its_fix() {
         ),
         "{t}"
     );
-    assert!(t.contains("fix: delete (fake second) codex (or uninstall it with the tool that put it there), or put (fake) codex's folder ahead of it on PATH"), "{t}");
+    let second = m.fake().join("second-bin/codex");
+    assert!(
+        t.contains(&format!(
+            "fix: remove it (`rm '{}'`), or uninstall it with the tool that put it there, or put (fake) codex's folder ahead of it on PATH",
+            second.display()
+        )),
+        "{t}"
+    );
 }
 
 #[test]
@@ -274,6 +290,18 @@ fn a_removal_that_takes_the_new_copy_puts_it_back_or_says_none_runs() {
 }
 
 #[test]
+fn an_unknown_installers_copy_isnt_the_vendors_so_the_vendors_installs_first() {
+    // Nix's codex beside npm's: nothing classifies it, and it isn't where the vendor's installer
+    // puts its copy, so the vendor's installer still runs before npm's copy goes.
+    let m = Machine::new(json!({ "unknown": ["codex"] }));
+    let o = m.run(&["install", "codex", "--yes", "--move"], "");
+    let t = text(&o);
+    assert!(o.status.success(), "{t}");
+    assert_eq!(m.calls(), [INSTALL, REMOVE]);
+    assert!(!t.contains("is here already"), "{t}");
+}
+
+#[test]
 fn a_third_installers_copy_isnt_the_new_one_and_unattended_never_moves() {
     // Homebrew's codex beside npm's: the vendor's still installs before npm's goes.
     let m = Machine::new(json!({ "third": { "codex": "brew" } }));
@@ -288,11 +316,28 @@ fn a_third_installers_copy_isnt_the_new_one_and_unattended_never_moves() {
     assert!(m.calls().is_empty(), "{:?}", m.calls());
     assert!(t.contains("Codex is installed with npm: moving it to the recommended installer needs a yes (`ptyro install codex` in a terminal, or --move); left as it is"), "{t}");
     let o = m.run(&["setup", "--yes", "--agents", "codex", "--tools", "none"], "");
-    assert!(o.status.success(), "{}", text(&o));
+    let t = text(&o);
+    assert!(o.status.success(), "{t}");
     assert!(m.calls().is_empty(), "{:?}", m.calls());
-    // Bun's global folder isn't npm's to remove from: no move offered.
+    assert!(t.contains("Codex is installed with npm: moving it to the recommended installer needs a yes (`ptyro install codex` in a terminal, or --move); left as it is"), "{t}");
+    // `setup --yes --move`: the opt-in, as for install.
+    let o = m.run(&["setup", "--yes", "--move", "--agents", "codex", "--tools", "none"], "");
+    assert!(o.status.success(), "{}", text(&o));
+    assert_eq!(m.calls(), [INSTALL, REMOVE]);
+    // Bun's global folder isn't npm's to remove from: no move offered, and doctor says why.
     let m = Machine::new(json!({ "no_prefix": ["codex"] }));
     assert!(m.plan().entry("codex").unwrap().moves.is_none());
+    m.publish_codex("0.162.1");
+    let o = m.run(&["doctor", "--json"], "");
+    let checks: Vec<Value> = serde_json::from_slice(&o.stdout).unwrap();
+    let codex = checks.iter().find(|c| c["section"] == "updates" && c["name"] == "codex").unwrap();
+    assert_eq!(codex["level"], "note");
+    assert!(
+        codex["text"].as_str().unwrap().contains(
+            "the move to the recommended installer isn't offered: it isn't in an npm prefix"
+        ),
+        "{codex}"
+    );
 }
 
 #[test]

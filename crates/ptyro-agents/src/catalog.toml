@@ -23,6 +23,8 @@
 # `others` are the other ways an item may already be installed, with how each updates (BOOT5,
 #   BOOT7's moves to the recommended method), and how each is removed (`uninstall`, never with sudo:
 #   ptyro adds it for a copy only an administrator can change).
+# `places`: where a vendor installer's copy really is (folders it links into), so the copy it
+#   installed is known by its path (BOOT7, checked 2026-11-07); none: unknown, no move offered.
 # `keeps`: where an agent's settings and logins live, in the home (BOOT7, checked 2026-11-07): no
 #   installer touches them, so a move between installers keeps them.
 
@@ -50,6 +52,7 @@ shell = "sh"
 install = "curl -fsSL https://claude.ai/install.sh | bash"
 update = "claude update"
 auto_update = true
+places = ["~/.local/share/claude"]   # [V 2026-11-07: the setup page, `~/.local/bin/claude` is a link into `~/.local/share/claude/versions/`]
 mark = "V"
 
 [[item.methods]]
@@ -59,6 +62,7 @@ shell = "powershell"
 install = "irm https://claude.ai/install.ps1 | iex"
 update = "claude update"
 auto_update = true
+places = ["~/.local/bin/claude.exe", "~/.local/share/claude"]   # [V 2026-11-07: the setup page's Windows uninstall removes these]
 mark = "V"
 
 [[item.others]]
@@ -127,6 +131,7 @@ via = "vendor"
 shell = "sh"
 install = "curl -fsSL https://chatgpt.com/codex/install.sh | sh"
 update = "curl -fsSL https://chatgpt.com/codex/install.sh | sh"
+places = ["~/.codex/packages/standalone"]   # [S 2026-11-07: install.sh links `~/.local/bin/codex` to `$CODEX_HOME/packages/standalone/current/…`]
 mark = "V"
 
 [[item.methods]]
@@ -135,6 +140,7 @@ via = "vendor"
 shell = "powershell"
 install = "irm https://chatgpt.com/codex/install.ps1 | iex"
 update = "irm https://chatgpt.com/codex/install.ps1 | iex"
+places = ["~/.codex/packages/standalone", "%LOCALAPPDATA%/Programs/OpenAI/Codex"]   # [S 2026-11-07: install.ps1, a junction from the visible bin to the release]
 mark = "V"
 note = "the README runs it as `powershell -ExecutionPolicy ByPass -c \"irm https://chatgpt.com/codex/install.ps1 | iex\"`; the powershell shell passes the same policy"
 
@@ -227,6 +233,7 @@ via = "vendor"
 shell = "sh"
 install = "curl -fsSL https://opencode.ai/install | bash"
 update = "opencode upgrade"
+places = ["~/.opencode"]   # [V 2026-11-06: the docs install into `~/.opencode/bin`, RESEARCH G18]
 mark = "V"
 
 [[item.methods]]

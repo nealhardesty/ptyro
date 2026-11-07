@@ -780,6 +780,10 @@ enum Cmd {
         /// What is installed, as JSON (for Windows' ptyro, asking a WSL distro's)
         #[arg(long, hide = true)]
         survey: bool,
+        /// With --yes, move a ticked agent installed another way (npm, Homebrew, WinGet) to the
+        /// recommended installer; without it, --yes leaves such an agent as it is
+        #[arg(long = "move")]
+        move_: bool,
         /// A person answers on stdin though it isn't a terminal (Windows' ptyro started from a
         /// split in WSL, whose console is a pipe there)
         #[arg(long, hide = true)]

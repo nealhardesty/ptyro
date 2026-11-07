@@ -29,6 +29,11 @@ pub struct Installed {
     /// Windows above `node_modules`), so removing it acts there, not on npm's prefix of the
     /// moment. `None` for one npm didn't put there (Bun's global folder).
     pub prefix: Option<String>,
+    /// The file found, as a bare path (`path` is for people, and may carry a label).
+    pub file: Option<String>,
+    /// Where that file really is (links followed): how a vendor installer's copy is known
+    /// ([`super::installed_by`]).
+    pub real: Option<String>,
 }
 
 /// Whether administrator rights can be had.
@@ -495,6 +500,8 @@ impl RealHost {
             via,
             system: via.is_some() && real.parent().is_some_and(admins_folder),
             prefix: (via == Some(Via::Npm)).then(|| npm_prefix(&real)).flatten(),
+            file: Some(found.path.to_string_lossy().into_owned()),
+            real: Some(real.to_string_lossy().into_owned()),
         }
     }
 
@@ -556,16 +563,23 @@ pub(super) fn package_version(out: &str, field: &str) -> Option<String> {
 /// above `node_modules`, `%APPDATA%\npm`). `None` for Bun's global folder (`~/.bun/…`, which npm
 /// doesn't manage) or a path not under a prefix.
 pub(super) fn npm_prefix(real: &Path) -> Option<String> {
+    npm_prefix_on(real, cfg!(windows))
+}
+
+/// [`npm_prefix`] for a platform's layout: Windows' prefix holds `node_modules` itself, elsewhere
+/// it is `lib/node_modules`. A version manager's store (mise's `npm:` backend, asdf, Bun's
+/// global folder) isn't a prefix to remove from: that tool's own uninstall is.
+pub(super) fn npm_prefix_on(real: &Path, windows: bool) -> Option<String> {
     let s = real.to_string_lossy();
     let norm = s.replace('\\', "/");
-    if norm.to_ascii_lowercase().contains("/.bun/") {
+    let lower = norm.to_ascii_lowercase();
+    if ["/.bun/", "/mise/installs/", "/.asdf/", "/.local/share/pnpm/"]
+        .iter()
+        .any(|t| lower.contains(t))
+    {
         return None;
     }
-    let cut = norm.find("/lib/node_modules/").or_else(|| {
-        let at = norm.find("/node_modules/")?;
-        // Windows' layout: the prefix holds `node_modules` itself.
-        (norm.contains(':') || norm.starts_with("//")).then_some(at)
-    })?;
+    let cut = if windows { norm.find("/node_modules/")? } else { norm.find("/lib/node_modules/")? };
     Some(s[..cut].to_owned())
 }
 

@@ -423,6 +423,10 @@ pub fn offer(
         return None;
     }
     let to = item.method(platform, has).filter(|m| m.via != *via && m.install.is_some())?;
+    // The vendor installer's copy must be known by its path, or the move can't tell it apart.
+    if to.via == Via::Vendor && to.places.is_empty() {
+        return None;
+    }
     let old = item.others.iter().find(|m| m.via == *via && m.on(platform))?;
     let plain = old.uninstall.as_deref()?;
     // npm's removal acts on the prefix the old copy is in (another nvm Node.js's, ptyro's own),
@@ -439,6 +443,71 @@ pub fn offer(
     let admin = *system;
     let uninstall = if admin && !platform.is_windows() { format!("sudo {plain}") } else { plain };
     Some(Moving { from: *via, to: to.via, uninstall, admin, keeps: item.keeps.clone() })
+}
+
+/// Why `item`, installed another way (`state`), isn't offered the move (BOOT7, said by `doctor`);
+/// `None` when it is, or isn't installed another way, or is kept.
+pub fn not_offered(
+    item: &Item,
+    platform: Platform,
+    state: &State,
+    has: &dyn Fn(&str) -> bool,
+) -> Option<String> {
+    let State::Other { via, system, prefix, .. } = state else { return None };
+    if offer(item, platform, state, &BTreeSet::new(), has).is_some() {
+        return None;
+    }
+    let to = item.method(platform, has);
+    Some(if *via == Via::Brew && *system {
+        "its Homebrew isn't yours, and Homebrew won't run as administrator: move it as the Homebrew owner".into()
+    } else if to.is_some_and(|m| m.via == Via::Vendor && m.places.is_empty()) {
+        format!(
+            "where {}'s own installer puts it on {} isn't known, so its copy couldn't be told apart",
+            item.name,
+            platform.name()
+        )
+    } else if *via == Via::Npm && prefix.is_none() {
+        "it isn't in an npm prefix (Bun's, mise's or another tool's store): remove it with that tool, then `ptyro install` it".into()
+    } else if to.is_none() {
+        format!("its recommended installer can't run here: see {}", item.doc)
+    } else {
+        format!("there's no known way to remove {}'s copy", via.words())
+    })
+}
+
+/// The copy `method` installed: a package manager's by its folder (`via`); a vendor's installer's
+/// by being in one of its `places` (any other copy no package manager claims, from Nix, Scoop,
+/// mise, pipx or a wrapper script, never counts).
+pub fn installed_by(c: &Installed, method: &Method) -> bool {
+    if method.via != Via::Vendor {
+        return c.via == Some(method.via);
+    }
+    if c.via.is_some() {
+        return false;
+    }
+    let norm = |p: &str| {
+        let n = p.replace('\\', "/");
+        let n = n.trim_end_matches('/').to_owned();
+        if cfg!(windows) { n.to_ascii_lowercase() } else { n }
+    };
+    method.places.iter().any(|place| {
+        let dir = norm(&expand_place(place));
+        [&c.real, &c.file].into_iter().flatten().any(|f| {
+            let f = norm(f);
+            f == dir || f.starts_with(&format!("{dir}/"))
+        })
+    })
+}
+
+/// A catalog place as a path here: `~` the home, `%VAR%` from the environment.
+pub fn expand_place(place: &str) -> String {
+    let home = ["HOME", "USERPROFILE"]
+        .into_iter()
+        .find_map(|v| std::env::var(v).ok().filter(|h| !h.is_empty()))
+        .unwrap_or_default();
+    let p =
+        place.strip_prefix('~').map_or_else(|| place.to_owned(), |rest| format!("{home}{rest}"));
+    expand_vars(&p, |v| std::env::var(v).ok())
 }
 
 /// A path as one word for the platform's shell (`sh` or PowerShell): single quotes; `None` for

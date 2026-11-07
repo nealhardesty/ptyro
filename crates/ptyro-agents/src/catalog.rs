@@ -203,6 +203,11 @@ pub struct Method {
     /// method), as the vendor or the package manager documents it.
     #[serde(default)]
     pub uninstall: Option<String>,
+    /// A vendor installer's: where its copy really is (folders, `~` for the home, `%VAR%` on
+    /// Windows), so the copy it installed is known by its path (BOOT7: a move removes the old
+    /// copy only once this one answers). Empty: not known, and no move to it is offered.
+    #[serde(default)]
+    pub places: Vec<String>,
     /// The item updates itself in the background when installed this way.
     #[serde(default)]
     pub auto_update: bool,
@@ -683,6 +688,17 @@ mod tests {
             assert!(i.login.is_some(), "{} has no login", i.id);
             for m in &i.methods {
                 assert!(!m.admin, "{}: the recommended way needs admin", i.id);
+                // A move to a vendor's installer needs to know its copy by its path (BOOT7):
+                // every agent with other ways says where, on every platform it moves to.
+                if m.via == Via::Vendor && !i.others.is_empty() {
+                    let others_here = m.platforms.iter().any(|p| i.others.iter().any(|o| o.on(*p)));
+                    assert!(
+                        !others_here || !m.places.is_empty(),
+                        "{}: the vendor's installer on {:?} names no `places`",
+                        i.id,
+                        m.platforms
+                    );
+                }
                 assert!(m.update.is_some() || m.auto_update, "{}: no way to update", i.id);
             }
         }

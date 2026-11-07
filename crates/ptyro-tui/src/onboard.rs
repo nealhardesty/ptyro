@@ -152,19 +152,8 @@ impl App {
             // Keep an agent installed another way as it is (BOOT7): no move, now or later.
             KeyCode::Char { c: 'K' } if fr.sel < ns => match fr.setup.keep(fr.sel) {
                 Ok(Some((id, name, via))) => {
-                    // The file as it is now: a CLI `k` or the web's Keep may have added one since
-                    // this TUI last read it.
                     let path = ptyro_core::config::Config::path(&self.paths);
-                    let mut list = ptyro_core::config::Config::load(&path)
-                        .map(|c| c.updates.keep_installer)
-                        .unwrap_or_else(|_| self.config.updates.keep_installer.clone());
-                    if !list.iter().any(|k| k.eq_ignore_ascii_case(&id)) {
-                        list.push(id);
-                    }
-                    let value = format!(
-                        "[{}]",
-                        list.iter().map(|k| format!("{k:?}")).collect::<Vec<_>>().join(", ")
-                    );
+                    let value = keep_value(&path, &self.config.updates.keep_installer, &id);
                     self.set_config(
                         "updates.keep_installer",
                         &value,
@@ -577,6 +566,18 @@ impl App {
 }
 
 /// The config the first run writes: its comments, the chosen profiles, notifications.
+/// `updates.keep_installer` with `id` added (BOOT7's `K`), from the file as it is now (a CLI `k`
+/// or the web's Keep may have added one since this TUI read it; `held` if it doesn't read).
+pub(crate) fn keep_value(path: &Path, held: &[String], id: &str) -> String {
+    let mut list = ptyro_core::config::Config::load(path)
+        .map(|c| c.updates.keep_installer)
+        .unwrap_or_else(|_| held.to_vec());
+    if !list.iter().any(|k| k.eq_ignore_ascii_case(id)) {
+        list.push(id.to_owned());
+    }
+    format!("[{}]", list.iter().map(|k| format!("{k:?}")).collect::<Vec<_>>().join(", "))
+}
+
 fn write_first_config(path: &Path, profiles: &[String], desktop: bool) -> Result<(), String> {
     let mut text = String::from(
         "# ptyro configuration. Every key is optional; `ptyro config edit` explains them, and\n# changes apply live.\n",
@@ -906,6 +907,20 @@ fn fit(text: &str, width: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn k_keeps_what_the_file_holds_now_not_what_was_read_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        // Written by a CLI `k` after this TUI read its config (which held none).
+        std::fs::write(&path, "[updates]\nkeep_installer = [\"claude\"]\n").unwrap();
+        assert_eq!(super::keep_value(&path, &[], "codex"), r#"["claude", "codex"]"#);
+        assert_eq!(super::keep_value(&path, &[], "claude"), r#"["claude"]"#, "once");
+        // A file that doesn't read: what was held.
+        let bad = dir.path().join("bad.toml");
+        std::fs::write(&bad, "[updates\n").unwrap();
+        assert_eq!(super::keep_value(&bad, &["gemini".into()], "codex"), r#"["gemini", "codex"]"#);
+    }
+
     #[test]
     fn a_checklist_line_wraps_between_its_parts() {
         let lines = super::fit("Google's coding agent · the vendor's installer · then log in", 30);

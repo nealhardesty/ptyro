@@ -253,6 +253,23 @@ async fn updates(ctx: &Ctx, config: &Config, fresh: bool, r: &mut Report) {
         r.add(S, &m.id, Level::Note, m.finding());
         r.add_data(serde_json::json!({ "move": m }));
     }
+    let keep = updates::kept(&cfg);
+    for u in v.unmovable.iter().filter(|u| !keep.contains(&u.id)) {
+        if v.outdated.iter().any(|o| o.id == u.id && !updates::ignored(&cfg.ignore, o)) {
+            continue;
+        }
+        r.add(
+            S,
+            &u.id,
+            Level::Note,
+            format!(
+                "{} is installed with {}; the move to the recommended installer isn't offered: {}",
+                u.name,
+                u.via.words(),
+                u.why
+            ),
+        );
+    }
     if v.checked == 0 {
         r.add(
             S,
@@ -848,10 +865,7 @@ async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
             Err(_) => {}
         }
     }
-    // Starting the daemon is a side effect of checking it: `PTYRO_NO_AUTOSPAWN=1` (tests,
-    // scripts) asks for none, so none is left running after.
-    let spawn = !quick && std::env::var("PTYRO_NO_AUTOSPAWN").map_or(true, |v| v != "1");
-    let c = match ctx.connect(spawn).await {
+    let c = match ctx.connect(!quick).await {
         Ok(c) => c,
         Err(e) if e.code == ErrorCode::DaemonUnavailable => {
             r.add(S, "running", Level::Note, "not running (it starts on demand)");

@@ -56,6 +56,33 @@ pub struct Versions {
     /// The agents installed another way that can move to the recommended installer (BOOT7), as
     /// last worked out, kept ones included ([`Movable::kept`] says which a config keeps).
     pub movable: Vec<Movable>,
+    /// The agents installed another way that can't be offered the move, and why (BOOT7: said by
+    /// `doctor`).
+    pub unmovable: Vec<Unmovable>,
+}
+
+/// An agent installed another way that isn't offered the move, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Unmovable {
+    pub id: String,
+    pub name: String,
+    pub via: Via,
+    pub why: String,
+}
+
+/// The agents a survey finds installed another way that can't move, with why.
+pub fn unmovable(survey: &Survey) -> Vec<Unmovable> {
+    let has = |p: &str| survey.programs.contains(p);
+    catalog::items()
+        .iter()
+        .filter(|i| i.kind == Kind::Agent)
+        .filter_map(|i| {
+            let state = survey.states.get(&i.id)?;
+            let State::Other { via, .. } = state else { return None };
+            let why = setup::not_offered(i, survey.platform, state, &has)?;
+            Some(Unmovable { id: i.id.clone(), name: i.name.clone(), via: *via, why })
+        })
+        .collect()
 }
 
 /// An agent installed another way, and the move to the recommended installer it is offered
@@ -471,6 +498,7 @@ pub fn remember(
         if full { setup::survey(host, &latest) } else { setup::survey_agents(host, &latest) };
     let mut outdated = outdated(&survey);
     let movable = movable(&survey);
+    let unmovable = unmovable(&survey);
     // ptyro itself (BOOT6): its binary's version against its newest release.
     outdated.extend(own::finding(&own::Install::here(), latest.get(own::ID).map(String::as_str)));
     let v = edit(state, |v| {
@@ -483,6 +511,7 @@ pub fn remember(
             v.surveyed = now;
             v.outdated = outdated;
             v.movable = movable;
+            v.unmovable = unmovable;
         }
     });
     (v, survey)

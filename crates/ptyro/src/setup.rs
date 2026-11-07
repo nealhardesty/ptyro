@@ -33,6 +33,8 @@ pub struct SetupArgs {
     /// Hidden: a person answers on stdin, terminal or not (the TUI's split in WSL running
     /// Windows' ptyro.exe through interop, whose console is a pipe).
     pub tty: bool,
+    /// `--move` (BOOT7): with `--yes`, move the ticked agents installed another way too.
+    pub move_: bool,
 }
 
 pub struct InstallArgs {
@@ -211,11 +213,13 @@ pub async fn setup(ctx: &Ctx, a: SetupArgs) -> Result<i32, Error> {
     // and hold the machine's lock from here, so nothing starts while this one is asked.
     let lock = if a.dry_run { None } else { Some(take_lock(ctx, "`ptyro setup`")?) };
     let (host, mut sides, place) = look(&ctx.paths, a.place.as_deref(), false).await?;
-    // Unattended, nothing moves (BOOT7: a move is offered, never done unasked).
-    if a.yes {
+    let mut picks = if named { sides.picks(place, &ids) } else { sides.defaults(place) };
+    // Unattended, nothing moves unless `--move` (BOOT7: a move is offered, never done unasked);
+    // each one passed over is said.
+    if a.yes && !a.move_ {
+        say_unmoved(&sides.plan(&picks), &[]);
         sides.keep_all(&[]);
     }
-    let mut picks = if named { sides.picks(place, &ids) } else { sides.defaults(place) };
     if a.dry_run {
         return show_plan(&sides.plan(&picks), a.json);
     }
@@ -280,18 +284,7 @@ pub async fn install(ctx: &Ctx, a: InstallArgs) -> Result<i32, Error> {
         let allowed: Vec<String> =
             a.moves.iter().flat_map(|m| setup::resolve(m).ok()).map(|i| i.id.clone()).collect();
         if !quiet {
-            for e in offered
-                .entries
-                .iter()
-                .filter(|e| e.picked && e.moves.is_some() && !allowed.contains(&e.id))
-            {
-                let m = e.moves.as_ref().map_or("another way", |m| m.from.words());
-                eprintln!(
-                    "{} is installed with {m}: moving it to the recommended installer needs a yes (`ptyro install {}` in a terminal, or --move); left as it is",
-                    e.name,
-                    catalog::item(&e.id).map_or(e.id.as_str(), |i| i.program.as_str())
-                );
-            }
+            say_unmoved(&offered, &allowed);
         }
         sides.keep_all(&allowed);
     }
@@ -361,6 +354,21 @@ pub async fn install(ctx: &Ctx, a: InstallArgs) -> Result<i32, Error> {
     }
     let admin = asked.unwrap_or(if a.yes { Admin::Silent } else { Admin::Ask });
     go(ctx, &*host, &sides, &plan, admin, a.json, quiet, lock, who)
+}
+
+/// Unattended (`--yes` without `--move`), each picked agent installed another way that is left
+/// as it is, and how to move it (BOOT7).
+fn say_unmoved(plan: &Plan, allowed: &[String]) {
+    for e in
+        plan.entries.iter().filter(|e| e.picked && e.moves.is_some() && !allowed.contains(&e.id))
+    {
+        let m = e.moves.as_ref().map_or("another way", |m| m.from.words());
+        eprintln!(
+            "{} is installed with {m}: moving it to the recommended installer needs a yes (`ptyro install {}` in a terminal, or --move); left as it is",
+            e.name,
+            catalog::item(&e.id).map_or(e.id.as_str(), |i| i.program.as_str())
+        );
+    }
 }
 
 /// `ids` (agents installed another way) kept that way from now on (BOOT7): added to this

@@ -1059,7 +1059,11 @@ script or a third-party write-up; [U] = nothing documents it.
   code.claude.com/docs/en/setup]; "if `claude` still runs afterward, you likely have a second
   installation" [V]. Codex: `~/.codex/config.toml` [V learn.chatgpt.com config-basic]; `auth.json`
   in `CODEX_HOME` [S: the binary, SPEC §10.10]; npm's and Homebrew's uninstall forms are those
-  tools' own [S]. Gemini CLI `~/.gemini` [S]; OpenCode `~/.config/opencode`, auth under
+  tools' own [S]. Where the vendors' installers put the copy: Claude Code `~/.local/bin/claude`
+  linking into `~/.local/share/claude/versions/` [V setup page]; Codex `~/.local/bin/codex`
+  linking into `$CODEX_HOME/packages/standalone/current/…`, on Windows a junction from
+  `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` into the same tree [S 2026-11-07: the vendor's scripts install.sh and
+  install.ps1]. Gemini CLI `~/.gemini` [S]; OpenCode `~/.config/opencode`, auth under
   `~/.local/share/opencode` [S: the docs name neither]. Facts in SPEC §20.15; the table's `keeps`
   and `uninstall`.
 - **WinGet packages present (winget-pkgs, 2026-11-06):** `Anthropic.ClaudeCode` 2.1.317,

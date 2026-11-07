@@ -7,8 +7,8 @@
 
 use super::host::{Host, Step};
 use super::run::Event;
-use super::{Entry, Moving};
-use crate::catalog::{Item, Method, Platform, Via};
+use super::{Entry, Moving, installed_by};
+use crate::catalog::{Item, Method, Platform};
 
 /// Move `e` (its plan entry, `mv` its offer) onto `method`, the recommended one: the version that
 /// runs afterwards, or what went wrong and its fix.
@@ -30,11 +30,11 @@ pub(super) fn run(
         item.doc
     );
     let id = e.id.clone();
-    // A copy the recommended method installed that answers `--version` (the vendor's installer
-    // leaves a copy no package manager claims); a third installer's copy never counts.
-    let ours = Some(mv.to).filter(|v| *v != Via::Vendor);
+    // A copy the recommended method installed, known by its path, that answers `--version`; a
+    // copy from any other installer (a third package manager, Nix, Scoop, a wrapper) never
+    // counts.
     let fresh = |host: &dyn Host| {
-        host.copies(item).into_iter().find(|c| c.via == ours && c.version.is_some())
+        host.copies(item).into_iter().find(|c| installed_by(c, method) && c.version.is_some())
     };
     let step = Step { item, method, update: false };
     let install_now = |on: &mut dyn FnMut(Event), what: String| {
@@ -66,7 +66,7 @@ pub(super) fn run(
             fresh(host).ok_or_else(|| {
                 (
                     format!(
-                        "the install through {to} finished, but no new {program} installed that way answers `{program} --version` (a new terminal may be needed to find it)"
+                        "the install through {to} finished, but no {program} where it installs answers `{program} --version` (a new terminal may be needed to find it)"
                     ),
                     kept.clone(),
                 )
@@ -74,6 +74,18 @@ pub(super) fn run(
         }
     };
     let new_path = new.path.clone().unwrap_or_else(|| program.clone());
+    let reinstall =
+        format!("install it again: `ptyro install {program}`, or run `{install}` yourself");
+    // What the new copy is now, for a message after the removal: looked at again, since a removal
+    // can take a link the new install put in a shared folder.
+    let now = |host: &dyn Host| match fresh(host) {
+        Some(c) => format!(
+            "{name} {} through {to} works ({})",
+            c.version.as_deref().unwrap_or_default(),
+            c.path.as_deref().unwrap_or(program)
+        ),
+        None => format!("{name} through {to} no longer runs either ({reinstall})"),
+    };
     let old = item
         .others
         .iter()
@@ -85,37 +97,32 @@ pub(super) fn run(
         command: mv.uninstall.clone(),
         admin: mv.admin,
     });
-    host.uninstall(item, old, &mv.uninstall, &mut |text| {
+    if let Err(err) = host.uninstall(item, old, &mv.uninstall, &mut |text| {
         on(Event::Line { id: id.clone(), text: text.to_owned() });
-    })
-    .map_err(|err| {
-        (
-            format!(
-                "{name} {} through {to} works ({new_path}), but removing {from}'s copy ({old_path}) failed: {err}",
-                new.version.as_deref().unwrap_or_default()
-            ),
+    }) {
+        return Err((
+            format!("removing {from}'s copy ({old_path}) failed: {err}; {}", now(host)),
             format!(
                 "finish the move by removing it yourself: `{}`; until then {from}'s copy may still be the one that runs ({})",
                 mv.uninstall,
                 mv.keeps_words()
             ),
-        )
-    })?;
+        ));
+    }
     // The old copy must be gone: the removal said it worked, but it may have acted elsewhere.
-    if host
+    if let Some(left) = host
         .copies(item)
-        .iter()
-        .any(|c| c.via == Some(mv.from) && c.path.as_deref() == Some(&old_path))
+        .into_iter()
+        .find(|c| c.via == Some(mv.from) && c.path.as_deref() == Some(&old_path))
     {
+        let file = left.file.clone().unwrap_or_else(|| old_path.clone());
         return Err((
             format!(
-                "{name} through {to} is installed ({new_path}), but {from}'s copy ({old_path}) is still there after `{}`",
-                mv.uninstall
+                "{from}'s copy ({old_path}) is still there after `{}`; {}",
+                mv.uninstall,
+                now(host)
             ),
-            format!(
-                "remove it yourself: delete {old_path}, or find which {from} holds it and run its uninstall there; {}",
-                mv.keeps_words()
-            ),
+            format!("remove it yourself: {}", delete_command(&file, platform)),
         ));
     }
     // The new copy must still be there and run: a removal can take a link the new install put
@@ -131,31 +138,43 @@ pub(super) fn run(
                 format!(
                     "{from}'s copy is removed, but the removal took the new {program} with it and installing it again didn't bring it back{why}: no {name} runs now"
                 ),
-                format!(
-                    "install it again: `ptyro install {program}`, or run `{install}` yourself; {}",
-                    mv.keeps_words()
-                ),
+                format!("{reinstall}; {}", mv.keeps_words()),
             ));
         }
     }
-    // The new copy must be what runs now.
+    // The new copy must be what runs now, and answer.
     match host.installed(item) {
-        Some(f) if f.via == ours => Ok(f.version.or(new.version)),
+        Some(f) if installed_by(&f, method) && f.version.is_some() => Ok(f.version),
         Some(f) => {
-            let first = f.path.unwrap_or_else(|| program.clone());
+            let first = f.path.clone().unwrap_or_else(|| program.clone());
             let how = f.via.map_or("another", |v| v.words());
-            Err((
+            let file = f.file.clone().unwrap_or_else(|| first.clone());
+            let why = if installed_by(&f, method) {
+                format!(
+                    "{name} through {to} is installed ({new_path}), but the {program} that runs first ({first}) doesn't answer `--version`"
+                )
+            } else {
                 format!(
                     "{name} through {to} is installed ({new_path}), but {how}'s {program} ({first}) comes first on PATH, so it is the one that runs"
-                ),
+                )
+            };
+            Err((
+                why,
                 format!(
-                    "delete {first} (or uninstall it with the tool that put it there), or put {new_path}'s folder ahead of it on PATH"
+                    "remove it ({}), or uninstall it with the tool that put it there, or put {new_path}'s folder ahead of it on PATH",
+                    delete_command(&file, platform)
                 ),
             ))
         }
-        None => Err((
-            format!("after the move no {program} is found to run"),
-            format!("install it again: `ptyro install {program}`, or run `{install}` yourself"),
-        )),
+        None => Err((format!("after the move no {program} is found to run"), reinstall)),
+    }
+}
+
+/// The command that deletes `file`, ready to paste in the platform's shell.
+fn delete_command(file: &str, platform: Platform) -> String {
+    if platform.is_windows() {
+        format!("`Remove-Item -LiteralPath '{}'`", file.replace('\'', "''"))
+    } else {
+        format!("`rm '{}'`", file.replace('\'', "'\\''"))
     }
 }

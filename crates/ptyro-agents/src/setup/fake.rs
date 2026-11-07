@@ -86,6 +86,8 @@ pub struct World {
     pub third: BTreeMap<String, Via>,
     /// Items whose npm copy is in no npm prefix (Bun's global folder): no move is offered.
     pub no_prefix: Vec<String>,
+    /// Items with a copy from an installer nothing classifies (Nix's store), last on `PATH`.
+    pub unknown: Vec<String>,
 }
 
 impl World {
@@ -123,6 +125,11 @@ impl FakeHost {
         let dirs = super::path_dirs(paths);
         let path = super::path_with(&dirs, &std::env::var_os("PATH").unwrap_or_default());
         Self { dir, world, used: AtomicBool::new(false), path: Mutex::new(path), dirs }
+    }
+
+    /// A copy's file, under the fake's folder.
+    fn file(&self, kind: &str, item: &Item) -> String {
+        self.dir.join(kind).join(&item.program).display().to_string()
     }
 
     fn version_of(&self, id: &str) -> Option<String> {
@@ -167,6 +174,8 @@ impl Host for FakeHost {
                 system: via.is_some() && self.world.system.contains(id),
                 prefix: (via == Some(Via::Npm) && !self.world.no_prefix.contains(id))
                     .then(|| self.dir.join("npm-prefix").display().to_string()),
+                file: Some(self.file("old-bin", item)),
+                real: Some(self.file("old-bin", item)),
             });
         }
         if self.world.second.contains(id)
@@ -178,17 +187,33 @@ impl Host for FakeHost {
                 via,
                 system: false,
                 prefix: None,
+                file: Some(self.file("second-bin", item)),
+                real: Some(self.file("second-bin", item)),
             });
         }
         if via.is_some()
             && let Ok(v) = std::fs::read_to_string(self.dir.join("new").join(id))
         {
+            // Where the recommended method puts it: a vendor installer's own place, else that
+            // package manager's.
+            let m = item.method(self.platform(), |_| true);
+            let (via, file) = match m {
+                Some(m) if m.via != Via::Vendor => (Some(m.via), self.file("new-bin", item)),
+                Some(m) => {
+                    let place = m.places.first().map(|p| super::expand_place(p));
+                    let place = place.unwrap_or_else(|| self.file("new-bin", item));
+                    (None, std::path::Path::new(&place).join(&item.program).display().to_string())
+                }
+                None => (None, self.file("new-bin", item)),
+            };
             out.push(Installed {
                 version: Some(v.trim().to_owned()).filter(|v| !v.is_empty()),
                 path: Some(format!("(fake) {}", item.program)),
-                via: None,
+                via,
                 system: false,
                 prefix: None,
+                file: Some(file.clone()),
+                real: Some(file),
             });
         }
         if let Some(t) = self.world.third.get(id) {
@@ -198,6 +223,21 @@ impl Host for FakeHost {
                 via: Some(*t),
                 system: false,
                 prefix: None,
+                file: Some(self.file("third-bin", item)),
+                real: Some(self.file("third-bin", item)),
+            });
+        }
+        // An installer nothing classifies (Nix): no package manager's folder, nor the vendor's.
+        if self.world.unknown.contains(id) {
+            let file = format!("/nix/store/fake-{id}/bin/{}", item.program);
+            out.push(Installed {
+                version: Some("0.1.0".into()),
+                path: Some(format!("(fake nix) {}", item.program)),
+                via: None,
+                system: false,
+                prefix: None,
+                file: Some(file.clone()),
+                real: Some(file),
             });
         }
         out

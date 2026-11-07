@@ -219,7 +219,7 @@ ptyro login --check                           # where each login stands, changin
   where neither installer looks, so they stay: you're still logged in afterwards. If the new
   install fails, the old one stays as it was; if removing the old one fails, ptyro says the
   command that finishes it; and if the old copy would still run first on your `PATH`, it says
-  so, with the fix. `--yes` alone never moves anything. Rather keep it as it is? Answer `k` when `ptyro install` asks, press `K` on
+  so, with the fix. `--yes` alone never moves anything (`--move` opts in, on `ptyro setup` too). Rather keep it as it is? Answer `k` when `ptyro install` asks, press `K` on
   its row in the TUI's checklist, or tap Keep on the web: it's added to `updates.keep_installer`
   (Settings → Updates), it updates the way it's installed, and the move isn't offered again. A
   move whose old copy only an administrator can remove (a system npm prefix) runs from a terminal
