@@ -146,6 +146,7 @@ async fn dispatch(
                 | Cmd::Init { .. }
                 | Cmd::Setup { .. }
                 | Cmd::Install { .. }
+                | Cmd::Login { .. }
                 | Cmd::Uninstall { .. }
                 | Cmd::Backup { .. }
                 | Cmd::Daemon { .. }
@@ -166,16 +167,17 @@ async fn dispatch(
             )));
         }
         None
-    } else if matches!(cmd, Some(Cmd::Setup { .. } | Cmd::Install { .. })) {
-        // Setup installs on this computer, with no daemon (BOOT1).
+    } else if matches!(cmd, Some(Cmd::Setup { .. } | Cmd::Install { .. } | Cmd::Login { .. })) {
+        // Setup installs on this computer, with no daemon (BOOT1); logins too (BOOT4).
         if let Some(r) = remote.filter(|r| !ptyro_client::is_local(Some(r))) {
+            let what = if matches!(cmd, Some(Cmd::Login { .. })) { "login" } else { "setup" };
             if r.starts_with("wsl://") {
                 return Err(Error::invalid(format!(
-                    "setup reaches WSL itself: `ptyro setup --where wsl` (or both), not --remote {r}"
+                    "{what} reaches WSL itself: `ptyro {what} --where wsl` (or both), not --remote {r}"
                 )));
             }
             return Err(Error::invalid(format!(
-                "setup installs on this computer, not on {r}: run `ptyro setup` there"
+                "{what} is about this computer, not {r}: run `ptyro {what}` there"
             )));
         }
         None
@@ -347,6 +349,10 @@ async fn dispatch(
         Some(Cmd::Install { names, yes, dry_run, json, place, admin, tty }) => {
             let a = crate::setup::InstallArgs { names, yes, dry_run, json, place, admin, tty };
             crate::setup::install(&ctx, a).await
+        }
+        Some(Cmd::Login { names, check, json, place, tty, installed }) => {
+            let a = crate::logins::LoginArgs { names, check, json, place, tty, installed };
+            crate::logins::login(&ctx, a).await
         }
         Some(Cmd::About { json }) => crate::about::run(&ctx, json).await,
         Some(Cmd::Doctor { quick, json }) => crate::doctor::run_cmd(&ctx, quick, json).await,

@@ -11,6 +11,7 @@ mod cs;
 mod doctor;
 mod host;
 mod init;
+mod logins;
 mod machines;
 mod mcp;
 mod orch;
@@ -810,6 +811,31 @@ enum Cmd {
         /// A person answers on stdin though it isn't a terminal (as for setup)
         #[arg(long, hide = true)]
         tty: bool,
+    },
+    /// Log in to the agents and the GitHub CLI, one account each: each tool's own sign-in, in
+    /// this terminal, confirmed by its own status command (ptyro never sees a credential)
+    Login {
+        /// claude, codex, agy, opencode, gemini, gh (default: every one installed that isn't
+        /// logged in)
+        #[arg(value_name = "NAME")]
+        names: Vec<String>,
+        /// Only say where each stands (exit 1 when one is logged out)
+        #[arg(long)]
+        check: bool,
+        /// Where each stands, as JSON (implies --check)
+        #[arg(long)]
+        json: bool,
+        /// On Windows: log in on WSL's side, Windows', or both (wsl, windows, both). The default
+        /// is the side your daemon runs on
+        #[arg(long = "where", value_name = "WHERE")]
+        place: Option<String>,
+        /// A person answers on stdin though it isn't a terminal (as for setup)
+        #[arg(long, hide = true)]
+        tty: bool,
+        /// Setup's list of what to log in (from Windows' ptyro, for WSL's side): the names
+        /// aren't asked for by name, and these (comma-separated, maybe none) were just installed
+        #[arg(long, hide = true, value_name = "IDS")]
+        installed: Option<String>,
     },
     /// Which ptyro this is: version, repository, licence, build, where things live, whether the
     /// daemon and the web app run, and a block to paste into a bug report

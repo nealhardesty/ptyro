@@ -194,10 +194,10 @@ name = "OpenCode"
 kind = "agent"
 program = "opencode"
 doc = "https://docs.opencode.ai/docs/"
-checked = "2026-11-06"
+checked = "2026-11-07"
 version = ["opencode", "--version"]
 note = "OpenCode 1. OpenCode 2 (@opencode/cli, `curl -fsSL https://opencode.ai/v2/install | bash`) changed its server API, which ptyro's adapter speaks, and is beta; the two share the `opencode` command."
-login = { start = ["opencode", "auth", "login"], check = ["opencode", "auth", "list"], mark = "U", note = "`opencode auth login` and `opencode auth list` are in the docs [V]; whether `auth list` fails when nothing is logged in is not, so `check` lists providers and doesn't confirm" }
+login = { start = ["opencode", "auth", "login"], mark = "U", note = "`opencode auth login` is in the docs [V]; `opencode auth list` lists providers, but whether it fails when nothing is logged in isn't documented, so it isn't a `check` (2026-11-07: a check must exit 0 only when logged in)" }
 latest = { source = "npm", url = "https://registry.npmjs.org/opencode-ai/latest", mark = "V", note = "the vendor's install script reads the same registry entry" }
 prereqs = [
   { item = "node", required = true, platforms = ["windows-x64", "windows-arm64"], why = "npm comes with Node.js; opencode-ai names no minimum Node.js version [U]" },

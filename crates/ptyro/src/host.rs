@@ -227,6 +227,20 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
             Ok(json!({ "session": info.id.full() }))
         }
 
+        // ── logins (BOOT4): where each stands, and one run in a session the web shows ──
+        "login.list" => {
+            let r = cli(&["login", "--check", "--json", "--where", "local"]).await?;
+            let rows: Value =
+                serde_json::from_str(r["out"].as_str().unwrap_or("")).map_err(|_| {
+                    Error::internal(format!("ptyro login --check: {}", notes(&r).join("; ")))
+                })?;
+            Ok(json!({ "logins": rows, "profiles": ptyro_agents::setup::login::PROFILES_HINT }))
+        }
+        "login.start" => {
+            let info = crate::logins::spawn(ctx, str_of(a, "id")?).await?;
+            Ok(json!({ "session": info.id.full() }))
+        }
+
         // ── agent integrations, the login service ──
         "integrations.ls" => {
             let r = cli(&["integrations", "ls", "--json"]).await?;

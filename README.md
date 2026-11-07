@@ -139,13 +139,15 @@ coding agents (Claude Code, Codex, Antigravity, OpenCode, and Gemini CLI for Gem
 enterprise accounts) and the tools (git, the GitHub CLI, Node.js), with what is already here.
 Claude Code, Codex, git and the GitHub CLI are ticked unless you have them. Type the numbers to
 tick or untick, then press Enter: each one installs with its output as it runs, ends ✓ or ✗ with
-the fix, and one failure doesn't stop the rest.
+the fix, and one failure doesn't stop the rest. Then it logs you in to each one (below).
 
 ```bash
 ptyro setup                                   # the checklist
 ptyro install agy                             # one by name (agy, gemini, gh, node…), any time later
 ptyro install gemini --dry-run                # what it would run, changing nothing
 ptyro setup --yes --agents claude,codex --tools git,gh   # unattended: scripts, a fresh VM
+ptyro login                                   # log in to each agent and gh that isn't yet
+ptyro login --check                           # where each login stands, changing nothing
 ```
 
 - **The vendors' own ways.** Each install command is the vendor's recommended one for your
@@ -177,6 +179,19 @@ ptyro setup --yes --agents claude,codex --tools git,gh   # unattended: scripts, 
   `wsl -- sh -c "curl -fsSL https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh | sh"`);
   run setup again afterwards for WSL's side. In the TUI, `app.setup` asks where first; the web
   app shows both columns when its daemon runs on Windows.
+- **Logins, one account each.** After installing, setup logs you in to each agent and the GitHub
+  CLI it installed, one after another, through the tool's own sign-in: a page in your browser,
+  or a link and a code to enter, right there in your terminal (Ctrl+C skips one). ptyro never
+  sees a credential: whether it worked is the tool's own status command saying so (`claude auth
+  status`, `codex login status`, `gh auth status`). Antigravity, Gemini CLI and OpenCode name no
+  such command, so they sign in when they start; `ptyro login agy` starts one now. Later,
+  `ptyro login` does the same for anything not logged in (`ptyro login gh` for one,
+  `--where wsl` for WSL's side). In the TUI it's `app.login`; on the web, More → Set up ptyro →
+  Log in, which runs the sign-in in a session and shows its link and code there. With `--yes`,
+  setup only says which aren't logged in.
+- **More accounts are profiles.** Setup logs in one account each. For a second (work and
+  personal), make a profile and log it in: `ptyro profile new work`, then
+  `ptyro profile login work claude`. Each profile keeps its own logins.
 
 ### Removing ptyro
 

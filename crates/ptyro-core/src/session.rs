@@ -594,6 +594,10 @@ pub struct SpawnSpec {
     /// Start it in a new, empty scratch directory of its own (SPEC §23.8); implies `loose`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub scratch: bool,
+    /// Never record it to disk (protocol 1.33, BOOT4): a login, whose sign-in may echo a code
+    /// the person pastes. An older daemon ignores it and records as usual.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unrecorded: bool,
     /// The daemon's own: start it as a new pane of this loose session's window (`ShellSplit`,
     /// SPEC §23.17). Never on the wire.
     #[serde(skip)]

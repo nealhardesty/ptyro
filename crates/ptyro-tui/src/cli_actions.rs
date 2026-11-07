@@ -112,6 +112,8 @@ pub const TEMPLATES: &[(&str, &[&str])] = &[
     // Setup (BOOT1): the checklist in the split's terminal, where sudo can ask for a password.
     ("app.setup", &["setup", "{where}"]),
     ("app.install", &["install", "{ask:What to install (e.g. agy, or gemini gh)}", "{where}"]),
+    // Logins (BOOT4): each tool's own sign-in in the split's terminal, where its code shows.
+    ("app.login", &["login", "{where}"]),
     // Detach first: the daemon stops, and this screen with it. It asks in the split.
     ("app.uninstall", &["uninstall"]),
 ];

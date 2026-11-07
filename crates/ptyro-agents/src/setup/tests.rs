@@ -16,6 +16,10 @@ struct TestHost {
     elevate: bool,
     fail: BTreeSet<String>,
     calls: Mutex<Vec<String>>,
+    /// Logged in (BOOT4): a status command for these exits 0.
+    logged_in: Mutex<BTreeSet<String>>,
+    /// Logins that fail (exit 1, still logged out).
+    login_fails: BTreeSet<String>,
 }
 
 impl TestHost {
@@ -68,6 +72,25 @@ impl Host for TestHost {
     }
     fn tools_used(&self) -> bool {
         self.calls().iter().any(|c| c.ends_with("node-dist"))
+    }
+    fn status(&self, argv: &[String]) -> Option<bool> {
+        self.calls.lock().unwrap().push(format!("status {}", argv.join(" ")));
+        let item = catalog::items()
+            .iter()
+            .find(|i| i.login.as_ref().and_then(|l| l.check.as_ref()).is_some_and(|c| c == argv))?;
+        Some(self.logged_in.lock().unwrap().contains(&item.id))
+    }
+    fn interact(&self, argv: &[String]) -> Result<Option<String>, String> {
+        self.calls.lock().unwrap().push(format!("login {}", argv.join(" ")));
+        let item = catalog::items()
+            .iter()
+            .find(|i| i.login.as_ref().is_some_and(|l| l.start == argv))
+            .ok_or("no such login")?;
+        if self.login_fails.contains(&item.id) {
+            return Ok(Some("it exited with 1".into()));
+        }
+        self.logged_in.lock().unwrap().insert(item.id.clone());
+        Ok(None)
     }
 }
 
@@ -484,4 +507,69 @@ fn where_means_sides_and_events_carry_theirs() {
         "WSL: WSL has no Linux distro, so this sets up Windows only. For WSL too: `wsl --install`"
     );
     assert_eq!(no.usable(), None);
+}
+
+#[test]
+fn a_login_is_decided_by_its_status_commands_exit_code_alone() {
+    let item = |id: &str| catalog::item(id).unwrap();
+    let h = TestHost::on(Platform::Linux).have("gh", "2.57.0").have("antigravity", "1.0.0");
+    assert_eq!(login::status(&h, item("gh")), login::LoginState::LoggedOut);
+    assert_eq!(login::status(&h, item("claude")), login::LoginState::Missing);
+    // No status command documented: it can't be confirmed, and nothing is run to find out.
+    assert_eq!(login::status(&h, item("antigravity")), login::LoginState::Unconfirmed);
+    assert_eq!(h.calls(), ["status gh auth status"]);
+    h.logged_in.lock().unwrap().insert("gh".into());
+    assert_eq!(login::status(&h, item("gh")), login::LoginState::LoggedIn);
+
+    // A list of them: the agents and gh, with what each runs and what confirms it.
+    let rows = login::rows(&h, &[]);
+    let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, ["claude", "codex", "antigravity", "opencode", "gemini", "gh"]);
+    let gh = rows.iter().find(|r| r.id == "gh").unwrap();
+    assert_eq!(gh.command, "gh auth login --web");
+    assert_eq!(gh.check.as_deref(), Some("gh auth status"));
+    assert_eq!(gh.side, Side::Local);
+    let only = login::rows(&h, &picks(&["gh", "git"]));
+    assert_eq!(only.len(), 1, "git has no login");
+}
+
+#[test]
+fn logging_in_runs_the_tools_own_flow_then_asks_its_status() {
+    let item = |id: &str| catalog::item(id).unwrap();
+    let mut h = TestHost::on(Platform::Linux)
+        .have("codex", "0.162.1")
+        .have("gh", "2.57.0")
+        .have("antigravity", "1.0.0");
+    h.login_fails.insert("gh".into());
+    h.login_fails.insert("antigravity".into());
+    let done = login::log_in(&h, item("codex")).unwrap();
+    assert_eq!((done.state, done.ended), (login::LoginState::LoggedIn, None));
+    let gh = login::log_in(&h, item("gh")).unwrap();
+    assert_eq!(gh.state, login::LoginState::LoggedOut);
+    assert_eq!(gh.ended.as_deref(), Some("it exited with 1"));
+    // An agent with no status command, quit with Ctrl+C: how it ended, nothing more known.
+    let agy = login::log_in(&h, item("antigravity")).unwrap();
+    assert_eq!(agy.state, login::LoginState::Unconfirmed);
+    assert!(agy.ended.is_some());
+    assert_eq!(
+        h.calls(),
+        [
+            "login codex login",
+            "status codex login status",
+            "login gh auth login --web",
+            "status gh auth status",
+            "login agy",
+        ]
+    );
+}
+
+#[test]
+fn the_logins_after_a_run_are_what_it_installed_and_what_was_picked() {
+    let h = TestHost::on(Platform::Linux).with(&["apt-get", "sudo"]).have("gh", "2.57.0");
+    let p = plan(&survey(&h, &BTreeMap::new()), &picks(&["claude", "git", "gh"]));
+    let (report, events) = run_all(&p, &h, Admin::Ask);
+    assert_eq!(report.done, ["claude", "git"]);
+    // git has no login; gh was picked and is here already.
+    assert_eq!(login::after(&p, &report), ["claude", "gh"]);
+    assert!(events.iter().any(|e| matches!(e, Event::Logins { ids } if ids == &["claude", "gh"])));
 }

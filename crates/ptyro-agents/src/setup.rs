@@ -18,6 +18,7 @@
 
 mod fake;
 mod host;
+pub mod login;
 mod run;
 #[cfg(test)]
 mod tests;

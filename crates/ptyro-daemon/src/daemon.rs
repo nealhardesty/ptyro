@@ -301,7 +301,7 @@ impl Daemon {
     ) -> Option<(PathBuf, u64)> {
         let config = self.config();
         let agent = place.agent.as_deref();
-        if !config.recorder.enabled || place.chat.is_some() {
+        if !config.recorder.enabled || place.chat.is_some() || place.unrecorded {
             return None;
         }
         if agent.is_some_and(|a| ptyro_agents::def(&config, a).record == Some(false)) {
@@ -431,6 +431,9 @@ impl Daemon {
                     quick: false,
                     pad: false,
                     chat: None,
+                    // Not in the store: a login session restarted after the daemon itself restarted is
+                    // recorded as usual (it has ended by then).
+                    unrecorded: false,
                 },
                 adapter,
                 conversation: r.conversation.clone(),
@@ -835,6 +838,7 @@ impl Daemon {
             quick: spec.quick && agent.is_none(),
             pad: spec.pad && agent.is_none(),
             chat: None,
+            unrecorded: spec.unrecorded,
         };
         // `@review` names a prompt snippet from the project's `[prompts]` (SPEC §13.3).
         let prompt = match spec.prompt.as_deref().and_then(|p| p.strip_prefix('@')) {

@@ -9,6 +9,12 @@
 //! | `installed/<id>` | an item installed since (written by the fake installer): its version |
 //! | `calls.log` | each step run and each elevation asked, one per line (written) |
 //! | `stored-path` | folders installers "added to the registry's Path", one per line (written) |
+//! | `logged-in/<id>` | an item logged in since (written by the fake login, BOOT4) |
+//! | `logins.log` | each login run and each status asked, one per line (written) |
+//!
+//! A login runs `ptyro fake-installer login ID` in the person's terminal: it prints a device
+//! code as a real one would and "logs in" by writing `logged-in/<id>`. A status command is
+//! answered from those files and `world.json`'s `logged_in`, for the items whose row has one.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -53,6 +59,12 @@ pub struct World {
     /// Per item: a folder that must be on the `PATH` its step runs with, or it fails as `npm`
     /// not found would.
     pub path_needs: BTreeMap<String, String>,
+    /// Items logged in already (BOOT4).
+    pub logged_in: Vec<String>,
+    /// Per item, what its login does: `ok` (default: logs in), `fail` (exits 1, still logged
+    /// out: a failure, or Ctrl+C), `nothing` (exits 0, still logged out: the person closed the
+    /// page) or `slow` (the code, then two seconds before it logs in: time for a test's Ctrl+C).
+    pub logins: BTreeMap<String, String>,
 }
 
 impl World {
@@ -65,9 +77,11 @@ impl World {
 }
 
 fn log(dir: &Path, what: &str) {
-    if let Ok(mut f) =
-        std::fs::OpenOptions::new().create(true).append(true).open(dir.join("calls.log"))
-    {
+    log_to(dir, "calls.log", what);
+}
+
+fn log_to(dir: &Path, file: &str, what: &str) {
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join(file)) {
         let _ = writeln!(f, "{what}");
     }
 }
@@ -170,15 +184,46 @@ impl Host for FakeHost {
     fn tools_used(&self) -> bool {
         self.used.load(Ordering::Relaxed)
     }
+
+    fn status(&self, argv: &[String]) -> Option<bool> {
+        let item = crate::catalog::items()
+            .iter()
+            .find(|i| i.login.as_ref().and_then(|l| l.check.as_ref()) == Some(&argv.to_vec()))?;
+        log_to(&self.dir, "logins.log", &format!("status {}", item.id));
+        Some(
+            self.dir.join("logged-in").join(&item.id).exists()
+                || self.world.logged_in.contains(&item.id),
+        )
+    }
+
+    fn interact(&self, argv: &[String]) -> Result<Option<String>, String> {
+        let item = crate::catalog::items()
+            .iter()
+            .find(|i| i.login.as_ref().map(|l| &l.start) == Some(&argv.to_vec()))
+            .ok_or("the fake knows no login like that")?;
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let status = std::process::Command::new(exe)
+            .args(["fake-installer", "login", &item.id])
+            .env("PTYRO_TEST_SETUP", &self.dir)
+            .status()
+            .map_err(|e| e.to_string())?;
+        Ok((!status.success()).then(|| "it exited with 1".to_owned()))
+    }
 }
 
 /// `ptyro fake-installer ID VIA install|update ADMIN` (hidden, debug builds): what each fake
-/// step runs. Its outcome comes from `world.json`.
+/// step runs, and `ptyro fake-installer login ID` each fake login (BOOT4). Its outcome comes
+/// from `world.json`.
 pub fn installer(args: &[String]) -> i32 {
     let Some(dir) = ptyro_core::test_knob("PTYRO_TEST_SETUP").map(PathBuf::from) else {
         eprintln!("fake-installer: PTYRO_TEST_SETUP is not set");
         return 2;
     };
+    if let [login, id] = args
+        && login == "login"
+    {
+        return fake_login(&dir, id);
+    }
     let [id, via, what, admin] = args else {
         eprintln!("fake-installer: expected ID VIA install|update ADMIN");
         return 2;
@@ -231,4 +276,35 @@ pub fn installer(args: &[String]) -> i32 {
     }
     println!("fake {via}: {id} is installed");
     0
+}
+
+/// `ptyro fake-installer login ID`: a login as the person sees it, a device code and a link,
+/// then (by `world.json`'s `logins`) logged in, failed, or nothing done.
+fn fake_login(dir: &Path, id: &str) -> i32 {
+    let world = World::read(dir);
+    log_to(dir, "logins.log", &format!("login {id}"));
+    println!("fake login: open https://example.invalid/device and enter the code FAKE-{id}");
+    match world.logins.get(id).map_or("ok", String::as_str) {
+        "fail" => {
+            eprintln!("fake login: the code expired");
+            1
+        }
+        "nothing" => 0,
+        "slow" => {
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            let d = dir.join("logged-in");
+            let _ = std::fs::create_dir_all(&d);
+            let _ = std::fs::write(d.join(id), "");
+            println!("fake login: logged in");
+            0
+        }
+        _ => {
+            let d = dir.join("logged-in");
+            let _ = std::fs::create_dir_all(&d);
+            let _ = std::fs::write(d.join(id), "");
+            println!("fake login: logged in");
+            0
+        }
+    }
 }
