@@ -53,6 +53,14 @@ impl Machine {
         ptyro_testkit::paths_for(&self.dir.path().join("ptyro")).unwrap()
     }
 
+    /// What removes npm's Codex here: npm's uninstall in the prefix it is in.
+    fn rm(&self) -> String {
+        format!(
+            "npm uninstall -g --prefix '{}' @openai/codex",
+            self.fake().join("npm-prefix").display()
+        )
+    }
+
     fn publish_codex(&self, version: &str) {
         let body = json!({ "tag_name": format!("rust-v{version}") }).to_string();
         std::fs::write(self.dir.path().join("registry/codex"), body).unwrap();
@@ -105,13 +113,6 @@ impl Machine {
     }
 }
 
-/// `doctor` starts this machine's daemon: stopped at the end, so no test leaves one running.
-impl Drop for Machine {
-    fn drop(&mut self) {
-        let _ = self.run(&["daemon", "stop"], "");
-    }
-}
-
 fn lines(file: &Path) -> Vec<String> {
     std::fs::read_to_string(file).unwrap_or_default().lines().map(str::to_owned).collect()
 }
@@ -130,7 +131,7 @@ fn a_move_installs_the_recommended_way_checks_it_then_removes_the_old() {
     let plan = m.plan();
     let e = plan.entry("codex").unwrap();
     let mv = e.moves.as_ref().expect("the move is offered");
-    assert_eq!(mv.uninstall, "npm uninstall -g @openai/codex");
+    assert_eq!(mv.uninstall, m.rm());
     assert!(e.action.as_ref().is_some_and(|a| a.moving));
     let o = m.run(&["setup", "--dry-run"], "");
     let t = text(&o);
@@ -145,7 +146,7 @@ fn a_move_installs_the_recommended_way_checks_it_then_removes_the_old() {
     let t = text(&o);
     assert!(o.status.success(), "{t}");
     assert!(
-        t.contains("Codex: move from npm to the vendor's installer ((fake npm) codex): install it through the vendor's installer, check it runs, then `npm uninstall -g @openai/codex`; your settings and logins (~/.codex) stay"),
+        t.contains(&format!("Codex: move from npm to the vendor's installer ((fake npm) codex): install it through the vendor's installer, check it runs, then `{}`; your settings and logins (~/.codex) stay", m.rm())),
         "{t}"
     );
     assert!(
@@ -154,7 +155,9 @@ fn a_move_installs_the_recommended_way_checks_it_then_removes_the_old() {
     );
     assert_eq!(m.calls(), [INSTALL, REMOVE], "installed first, then the old removed");
     assert!(t.contains("▸ Codex: installing it through the vendor's installer\n  $ curl -fsSL https://chatgpt.com/codex/install.sh | sh"), "{t}");
-    assert!(t.contains("▸ Codex: removing npm's copy\n  $ npm uninstall -g @openai/codex"), "{t}");
+    assert!(t.contains(&format!("▸ Codex: removing npm's copy\n  $ {}", m.rm())), "{t}");
+    // Against the prefix the old copy is in, not npm's of the moment.
+    assert_eq!(lines(&m.fake().join("uninstall.log")), [m.rm()]);
     assert!(t.contains("✓ Codex 0.170.0"), "{t}");
     // Its login is where it was: still logged in.
     assert!(t.contains("Codex") && t.contains("logged in"), "{t}");
@@ -173,7 +176,7 @@ fn a_move_installs_the_recommended_way_checks_it_then_removes_the_old() {
 #[test]
 fn a_new_install_that_fails_leaves_the_old_one_working() {
     let m = Machine::new(json!({ "outcomes": { "codex": "fail" } }));
-    let o = m.run(&["install", "codex", "--yes"], "");
+    let o = m.run(&["install", "codex", "--yes", "--move"], "");
     let t = text(&o);
     assert_eq!(o.status.code(), Some(1), "{t}");
     assert_eq!(m.calls(), [INSTALL], "nothing removed");
@@ -195,7 +198,7 @@ fn a_new_install_that_fails_leaves_the_old_one_working() {
 #[test]
 fn a_removal_that_fails_says_how_to_finish_and_trying_again_only_removes() {
     let m = Machine::new(json!({ "uninstalls": { "codex": "fail" } }));
-    let o = m.run(&["install", "codex", "--yes"], "");
+    let o = m.run(&["install", "codex", "--yes", "--move"], "");
     let t = text(&o);
     assert_eq!(o.status.code(), Some(1), "{t}");
     assert_eq!(m.calls(), [INSTALL, REMOVE]);
@@ -204,9 +207,7 @@ fn a_removal_that_fails_says_how_to_finish_and_trying_again_only_removes() {
         "{t}"
     );
     assert!(
-        t.contains(
-            "fix: finish the move by removing it yourself: `npm uninstall -g @openai/codex`"
-        ),
+        t.contains(&format!("fix: finish the move by removing it yourself: `{}`", m.rm())),
         "{t}"
     );
     // Once it can be removed: the new copy is here already, so only the removal runs.
@@ -215,7 +216,7 @@ fn a_removal_that_fails_says_how_to_finish_and_trying_again_only_removes() {
             .unwrap();
     world["uninstalls"] = json!({});
     std::fs::write(m.fake().join("world.json"), world.to_string()).unwrap();
-    let o = m.run(&["install", "codex", "--yes"], "");
+    let o = m.run(&["install", "codex", "--yes", "--move"], "");
     let t = text(&o);
     assert!(o.status.success(), "{t}");
     assert_eq!(m.calls(), [INSTALL, REMOVE, REMOVE]);
@@ -223,21 +224,75 @@ fn a_removal_that_fails_says_how_to_finish_and_trying_again_only_removes() {
 }
 
 #[test]
-fn an_old_copy_still_first_on_path_is_said_with_its_fix() {
+fn a_removal_that_leaves_the_old_copy_says_so_with_the_exact_fix() {
     let m = Machine::new(json!({ "uninstalls": { "codex": "leftover" } }));
-    let o = m.run(&["install", "codex", "--yes"], "");
+    let o = m.run(&["install", "codex", "--yes", "--move"], "");
     let t = text(&o);
     assert_eq!(o.status.code(), Some(1), "{t}");
     assert!(
-        t.contains("but npm's codex ((fake npm) codex) still comes first on PATH, so it is still the one that runs"),
+        t.contains(&format!("but npm's copy ((fake npm) codex) is still there after `{}`", m.rm())),
         "{t}"
     );
+    // Never "run it again": the same removal would do the same.
+    assert!(t.contains("fix: remove it yourself: delete (fake npm) codex"), "{t}");
+    assert!(!t.contains("fix: `ptyro install codex`"), "{t}");
+}
+
+#[test]
+fn another_old_copy_still_first_on_path_is_said_with_its_fix() {
+    let m = Machine::new(json!({ "second": ["codex"] }));
+    let o = m.run(&["install", "codex", "--yes", "--move"], "");
+    let t = text(&o);
+    assert_eq!(o.status.code(), Some(1), "{t}");
     assert!(
         t.contains(
-            "fix: `ptyro install codex` removes it again (`npm uninstall -g @openai/codex`)"
+            "but npm's codex ((fake second) codex) comes first on PATH, so it is the one that runs"
         ),
         "{t}"
     );
+    assert!(t.contains("fix: delete (fake second) codex (or uninstall it with the tool that put it there), or put (fake) codex's folder ahead of it on PATH"), "{t}");
+}
+
+#[test]
+fn a_removal_that_takes_the_new_copy_puts_it_back_or_says_none_runs() {
+    let m = Machine::new(json!({ "uninstalls": { "codex": "both" } }));
+    let o = m.run(&["install", "codex", "--yes", "--move"], "");
+    let t = text(&o);
+    assert!(o.status.success(), "{t}");
+    assert_eq!(m.calls(), [INSTALL, REMOVE, INSTALL], "put back at once");
+    assert!(t.contains("Codex: the removal took the new copy too, installing it again"), "{t}");
+    assert!(t.contains("✓ Codex 0.170.0"), "{t}");
+    // Putting it back fails: said plainly, never Done.
+    let m =
+        Machine::new(json!({ "uninstalls": { "codex": "both" }, "outcomes": { "codex": "once" } }));
+    let o = m.run(&["install", "codex", "--yes", "--move"], "");
+    let t = text(&o);
+    assert_eq!(o.status.code(), Some(1), "{t}");
+    assert!(t.contains("no Codex runs now"), "{t}");
+    assert!(t.contains("fix: install it again: `ptyro install codex`"), "{t}");
+    assert!(!t.contains("✓ Codex"), "{t}");
+}
+
+#[test]
+fn a_third_installers_copy_isnt_the_new_one_and_unattended_never_moves() {
+    // Homebrew's codex beside npm's: the vendor's still installs before npm's goes.
+    let m = Machine::new(json!({ "third": { "codex": "brew" } }));
+    let o = m.run(&["install", "codex", "--yes", "--move"], "");
+    assert!(o.status.success(), "{}", text(&o));
+    assert_eq!(m.calls(), [INSTALL, REMOVE]);
+    // `--yes` alone: offered, never done unasked; left as it is.
+    let m = Machine::new(json!({}));
+    let o = m.run(&["install", "codex", "--yes"], "");
+    let t = text(&o);
+    assert!(o.status.success(), "{t}");
+    assert!(m.calls().is_empty(), "{:?}", m.calls());
+    assert!(t.contains("Codex is installed with npm: moving it to the recommended installer needs a yes (`ptyro install codex` in a terminal, or --move); left as it is"), "{t}");
+    let o = m.run(&["setup", "--yes", "--agents", "codex", "--tools", "none"], "");
+    assert!(o.status.success(), "{}", text(&o));
+    assert!(m.calls().is_empty(), "{:?}", m.calls());
+    // Bun's global folder isn't npm's to remove from: no move offered.
+    let m = Machine::new(json!({ "no_prefix": ["codex"] }));
+    assert!(m.plan().entry("codex").unwrap().moves.is_none());
 }
 
 #[test]
@@ -273,7 +328,7 @@ fn a_dismissed_offer_stays_dismissed_and_it_updates_the_way_its_installed() {
     assert!(codex["data"].get("move_to").is_none(), "{codex}");
     assert!(!codex["text"].as_str().unwrap().contains("moves it"), "{codex}");
     // Ticked again, it updates with npm.
-    let o = m.run(&["install", "codex", "--yes"], "");
+    let o = m.run(&["install", "codex", "--yes", "--move"], "");
     assert!(o.status.success(), "{}", text(&o));
     assert_eq!(m.calls(), ["update codex via npm admin=false"]);
 }
@@ -286,7 +341,7 @@ fn up_to_date_its_a_note_and_update_never_moves() {
     let checks: Vec<Value> = serde_json::from_slice(&o.stdout).unwrap();
     let codex = checks.iter().find(|c| c["section"] == "updates" && c["name"] == "codex").unwrap();
     assert_eq!(codex["level"], "note", "a normal state: never a warning");
-    assert_eq!(codex["data"]["move"]["uninstall"], "npm uninstall -g @openai/codex");
+    assert_eq!(codex["data"]["move"]["uninstall"], m.rm());
     assert!(
         codex["text"].as_str().unwrap().starts_with(
             "Codex is installed with npm: `ptyro install codex` moves it to the vendor's installer"
@@ -328,22 +383,30 @@ async fn the_web_moves_through_the_daemon_and_keeps_admin_moves_for_the_computer
     };
     assert!(plan.entry("codex").unwrap().moves.is_some());
     let claude = plan.entry("claude").unwrap().moves.clone().unwrap();
-    assert!(claude.admin && claude.uninstall == "sudo npm uninstall -g @anthropic-ai/claude-code");
+    let prefix = m.fake().join("npm-prefix");
+    assert_eq!(
+        claude.uninstall,
+        format!("sudo npm uninstall -g --prefix '{}' @anthropic-ai/claude-code", prefix.display())
+    );
+    assert!(claude.admin);
     let about = &lines.iter().find(|l| l.id == "codex").unwrap().about;
     assert!(about.contains("installed with npm · move to the recommended installer?"), "{about}");
     let mut pushes = c.pushes();
     c.send(ClientMsg::WatchEvents).unwrap();
-    let run = |picks: &[&str], keep: &[&str]| Request::SetupRun {
+    let run = |picks: &[&str], moves: &[&str]| Request::SetupRun {
         picks: picks.iter().map(|s| (*s).to_owned()).collect(),
         wsl_picks: None,
-        keep: keep.iter().map(|s| (*s).to_owned()).collect(),
+        moves: moves.iter().map(|s| (*s).to_owned()).collect(),
     };
-    // The Health page's update, keeping npm: npm's own update.
-    let report = finish(&mut c, &mut pushes, run(&["codex"], &["codex"]), &m.fake()).await;
+    // The Health page's update (or any client that names no move, an older one too): npm's
+    // own update, never a move.
+    let report = finish(&mut c, &mut pushes, run(&["codex"], &[]), &m.fake()).await;
     assert_eq!(report.done, ["codex"]);
     assert_eq!(m.calls(), ["update codex via npm admin=false"]);
     // The checklist's tick: the move, and Claude Code's left for the computer.
-    let report = finish(&mut c, &mut pushes, run(&["codex", "claude"], &[]), &m.fake()).await;
+    let report =
+        finish(&mut c, &mut pushes, run(&["codex", "claude"], &["codex", "claude"]), &m.fake())
+            .await;
     assert_eq!(report.done, ["codex"]);
     assert_eq!(report.skipped, ["claude"], "an administrator's move never runs from the web");
     assert_eq!(&m.calls()[1..], [INSTALL, REMOVE]);

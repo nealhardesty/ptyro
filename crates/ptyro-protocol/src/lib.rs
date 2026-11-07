@@ -379,11 +379,12 @@ pub enum Request {
         /// Protocol 1.32: install these in WSL's distro too, through its ptyro (`wsl.exe`).
         #[serde(default)]
         wsl_picks: Option<Vec<String>>,
-        /// Protocol 1.36 (BOOT7): agents installed another way to keep that way for this run (an
-        /// update from the Health page, through that installer), as if `updates.keep_installer`
-        /// named them; the rest of `picks` installed another way move to the recommended installer.
+        /// Protocol 1.36 (BOOT7): the agents installed another way to move to the recommended
+        /// installer (the person ticked the offer, or chose Move). Every other agent installed
+        /// another way stays as it is (updated its own way), so a client that names none, or
+        /// predates this, never moves anything.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        keep: Vec<String>,
+        moves: Vec<String>,
     },
     /// The agents out of date on the daemon's machine (BOOT5, protocol 1.35), as its daily look
     /// remembered them (installed versions asked again, never the network), less what

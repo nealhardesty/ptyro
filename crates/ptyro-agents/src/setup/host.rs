@@ -25,6 +25,10 @@ pub struct Installed {
     pub via: Option<Via>,
     /// Its folder is an administrator's (a system npm prefix): removing it needs those rights.
     pub system: bool,
+    /// npm's: the global prefix it was installed into (the folder above `lib/node_modules`; on
+    /// Windows above `node_modules`), so removing it acts there, not on npm's prefix of the
+    /// moment. `None` for one npm didn't put there (Bun's global folder).
+    pub prefix: Option<String>,
 }
 
 /// Whether administrator rights can be had.
@@ -490,6 +494,7 @@ impl RealHost {
             path: Some(found.describe()),
             via,
             system: via.is_some() && real.parent().is_some_and(admins_folder),
+            prefix: (via == Some(Via::Npm)).then(|| npm_prefix(&real)).flatten(),
         }
     }
 
@@ -517,12 +522,16 @@ fn argv(words: &[&str]) -> Vec<String> {
     words.iter().map(|w| (*w).to_owned()).collect()
 }
 
-/// How a program was installed, by the folder it is in.
-fn installed_via(path: &Path) -> Option<Via> {
+/// How a program was installed, by the folder it is in. A Homebrew keg first: Homebrew's
+/// Gemini CLI is an npm install inside its keg (`Cellar/gemini-cli/…/node_modules`), and is
+/// Homebrew's; npm with Homebrew's Node.js (`homebrew/lib/node_modules`) is npm's.
+pub(super) fn installed_via(path: &Path) -> Option<Via> {
     let p = path.to_string_lossy().replace('\\', "/").to_ascii_lowercase();
-    if p.contains("/node_modules/") || p.contains("/npm/") || p.contains("/_npx/") {
+    if p.contains("/cellar/") || p.contains("/caskroom/") {
+        Some(Via::Brew)
+    } else if p.contains("/node_modules/") || p.contains("/npm/") || p.contains("/_npx/") {
         Some(Via::Npm)
-    } else if p.contains("/cellar/") || p.contains("/caskroom/") || p.contains("/homebrew/") {
+    } else if p.contains("/homebrew/") {
         Some(Via::Brew)
     } else if p.contains("/winget/") {
         Some(Via::Winget)
@@ -541,6 +550,23 @@ pub(super) fn package_version(out: &str, field: &str) -> Option<String> {
     let value = value.split_once(':').map_or(value.as_str(), |(_, v)| v);
     let upstream = value.split(['+', '~', '-']).next()?;
     Version::parse(upstream).map(|v| v.to_string())
+}
+
+/// npm's global prefix for a file it installed: the folder above `lib/node_modules` (Windows:
+/// above `node_modules`, `%APPDATA%\npm`). `None` for Bun's global folder (`~/.bun/…`, which npm
+/// doesn't manage) or a path not under a prefix.
+pub(super) fn npm_prefix(real: &Path) -> Option<String> {
+    let s = real.to_string_lossy();
+    let norm = s.replace('\\', "/");
+    if norm.to_ascii_lowercase().contains("/.bun/") {
+        return None;
+    }
+    let cut = norm.find("/lib/node_modules/").or_else(|| {
+        let at = norm.find("/node_modules/")?;
+        // Windows' layout: the prefix holds `node_modules` itself.
+        (norm.contains(':') || norm.starts_with("//")).then_some(at)
+    })?;
+    Some(s[..cut].to_owned())
 }
 
 /// `dir` is an administrator's (BOOT7: a system npm prefix), by its owner and mode, without

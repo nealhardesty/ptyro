@@ -283,6 +283,11 @@ export function moveOffer(c: { section?: string; data?: any }): MoveOffer | null
   return { id: m.id, program: m.program, name: m.name ?? m.id, from: m.from, to: m.to, uninstall: m.uninstall ?? "", admin: !!m.admin, keeps: m.keeps ?? [] };
 }
 
+/// The moves a run asks for (BOOT7): the agents ticked where the move is offered, either side.
+export function movesOf(plan: Plan): string[] {
+  return [...new Set((plan?.entries ?? []).filter((e) => e.picked && e.moves).map((e) => e.id as string))];
+}
+
 /// What a move says before it runs: what it installs, what it removes, and what stays.
 export function moveWords(m: MoveOffer): string {
   const keeps = m.keeps.length ? `your settings and logins (${m.keeps.join(", ")}) stay` : "your settings and logins stay";

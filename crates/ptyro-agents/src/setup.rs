@@ -194,6 +194,10 @@ pub enum State {
         /// it, after a move, needs administrator rights (BOOT7).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         system: bool,
+        /// npm's: the prefix it is in, which its removal acts on (BOOT7); `None` when npm doesn't
+        /// manage that folder (Bun's), and then no move is offered.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prefix: Option<String>,
     },
     /// Older than something ticked needs (Node.js 18 for Gemini CLI's 20).
     TooOld {
@@ -335,6 +339,7 @@ fn classify(item: &Item, platform: Platform, found: Installed, latest: Option<&S
             path: found.path,
             latest: newer,
             system: found.system,
+            prefix: found.prefix,
         };
     }
     if let (Some(v), Some(l)) = (&found.version, newer) {
@@ -409,19 +414,40 @@ pub fn offer(
     keep: &BTreeSet<String>,
     has: &dyn Fn(&str) -> bool,
 ) -> Option<Moving> {
-    let State::Other { via, system, .. } = state else { return None };
+    let State::Other { via, system, prefix, .. } = state else { return None };
     if keep.contains(&item.id) {
+        return None;
+    }
+    // Homebrew refuses to run as root, so a keg that isn't this user's can't be removed here.
+    if *via == Via::Brew && *system {
         return None;
     }
     let to = item.method(platform, has).filter(|m| m.via != *via && m.install.is_some())?;
     let old = item.others.iter().find(|m| m.via == *via && m.on(platform))?;
     let plain = old.uninstall.as_deref()?;
+    // npm's removal acts on the prefix the old copy is in (another nvm Node.js's, ptyro's own),
+    // never npm's prefix of the moment; one npm didn't install (Bun's) isn't offered.
+    let plain = if *via == Via::Npm {
+        let at = quote(prefix.as_deref()?, platform)?;
+        let rest = plain.strip_prefix("npm uninstall -g ")?;
+        format!("npm uninstall -g --prefix {at} {rest}")
+    } else {
+        plain.to_owned()
+    };
     // A copy only an administrator can change: sudo removes it (Windows' installers raise
     // their own prompt).
     let admin = *system;
-    let uninstall =
-        if admin && !platform.is_windows() { format!("sudo {plain}") } else { plain.to_owned() };
+    let uninstall = if admin && !platform.is_windows() { format!("sudo {plain}") } else { plain };
     Some(Moving { from: *via, to: to.via, uninstall, admin, keeps: item.keeps.clone() })
+}
+
+/// A path as one word for the platform's shell (`sh` or PowerShell): single quotes; `None` for
+/// one that can't be (a quote in it).
+fn quote(path: &str, platform: Platform) -> Option<String> {
+    if path.contains('\'') || (!platform.is_windows() && path.contains('\\')) {
+        return None;
+    }
+    Some(format!("'{path}'"))
 }
 
 /// One line of the checklist.

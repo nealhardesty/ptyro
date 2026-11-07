@@ -365,6 +365,7 @@ pub(crate) mod tests {
                 path: None,
                 latest: None,
                 system: false,
+                prefix: Some("/home/me/.npm-global".into()),
             },
         );
         let mut s = Setup::looking(Some(vec![]));

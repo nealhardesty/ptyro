@@ -76,8 +76,16 @@ pub struct World {
     /// Items whose `other` copy is in an administrator's folder (a system npm prefix, BOOT7).
     pub system: Vec<String>,
     /// Per item, what removing its `other` copy does (BOOT7): `ok` (default), `fail` (exits 1,
-    /// the copy stays) or `leftover` (exits 0, but the copy stays first on `PATH`).
+    /// the copy stays), `leftover` (exits 0, but the copy stays: npm acting on another prefix) or
+    /// `both` (removes the new copy too, as a shared bin folder would).
     pub uninstalls: BTreeMap<String, String>,
+    /// Per item, a second copy of its `other` installer, elsewhere on `PATH` ahead of the new one
+    /// (another npm prefix): never removed by a move.
+    pub second: Vec<String>,
+    /// Per item, a copy from a third installer (`{"codex": "brew"}`), after the new one.
+    pub third: BTreeMap<String, Via>,
+    /// Items whose npm copy is in no npm prefix (Bun's global folder): no move is offered.
+    pub no_prefix: Vec<String>,
 }
 
 impl World {
@@ -157,6 +165,19 @@ impl Host for FakeHost {
                 }),
                 via,
                 system: via.is_some() && self.world.system.contains(id),
+                prefix: (via == Some(Via::Npm) && !self.world.no_prefix.contains(id))
+                    .then(|| self.dir.join("npm-prefix").display().to_string()),
+            });
+        }
+        if self.world.second.contains(id)
+            && let Some(version) = self.version_of(id)
+        {
+            out.push(Installed {
+                version: Some(version).filter(|v| !v.is_empty()),
+                path: Some(format!("(fake second) {}", item.program)),
+                via,
+                system: false,
+                prefix: None,
             });
         }
         if via.is_some()
@@ -167,6 +188,16 @@ impl Host for FakeHost {
                 path: Some(format!("(fake) {}", item.program)),
                 via: None,
                 system: false,
+                prefix: None,
+            });
+        }
+        if let Some(t) = self.world.third.get(id) {
+            out.push(Installed {
+                version: Some("0.1.0".into()),
+                path: Some(format!("(fake {}) {}", t.name(), item.program)),
+                via: Some(*t),
+                system: false,
+                prefix: None,
             });
         }
         out
@@ -176,7 +207,7 @@ impl Host for FakeHost {
         &self,
         item: &Item,
         method: &Method,
-        _command: &str,
+        command: &str,
         line: &mut dyn FnMut(&str),
     ) -> Result<(), String> {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -188,6 +219,7 @@ impl Host for FakeHost {
             method.via.name().to_owned(),
             "uninstall".to_owned(),
             admin.to_string(),
+            command.to_owned(),
         ];
         let env = [("PTYRO_TEST_SETUP".into(), self.dir.clone().into_os_string())];
         stream(&argv, &env, line)
@@ -289,13 +321,18 @@ pub fn installer(args: &[String]) -> i32 {
     {
         return fake_login(&dir, id);
     }
-    let [id, via, what, admin] = args else {
-        eprintln!("fake-installer: expected ID VIA install|update ADMIN");
-        return 2;
+    let (id, via, what, admin, command) = match args {
+        [id, via, what, admin] => (id, via, what, admin, None),
+        [id, via, what, admin, command] => (id, via, what, admin, Some(command)),
+        _ => {
+            eprintln!("fake-installer: expected ID VIA install|update|uninstall ADMIN [COMMAND]");
+            return 2;
+        }
     };
     let world = World::read(&dir);
     log(&dir, &format!("{what} {id} via {via} admin={admin}"));
     if what == "uninstall" {
+        log_to(&dir, "uninstall.log", command.map_or("", String::as_str));
         return fake_uninstall(&dir, &world, id, via);
     }
     let outcome = world.outcomes.get(id).map_or("ok", String::as_str);
@@ -320,6 +357,14 @@ pub fn installer(args: &[String]) -> i32 {
                 "fake {via}: The process cannot access the file because it is being used by another process."
             );
             return 1;
+        }
+        // Installs once; every install after fails (a reinstall that doesn't take).
+        "once" if dir.join(format!("once-{id}")).exists() => {
+            eprintln!("fake {via}: E: could not reach the server for {id}");
+            return 1;
+        }
+        "once" => {
+            let _ = std::fs::write(dir.join(format!("once-{id}")), "");
         }
         "slow" => {
             for n in 1..=3 {
@@ -374,6 +419,13 @@ fn fake_uninstall(dir: &Path, world: &World, id: &str, via: &str) -> i32 {
             1
         }
         "leftover" => {
+            println!("fake {via}: removed 0 packages");
+            0
+        }
+        "both" => {
+            let _ = std::fs::create_dir_all(dir.join("removed"));
+            let _ = std::fs::write(dir.join("removed").join(id), "");
+            let _ = std::fs::remove_file(dir.join("new").join(id));
             println!("fake {via}: removed {id}");
             0
         }

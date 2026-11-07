@@ -174,6 +174,16 @@ pub fn run(distro: &str, plan: &Plan, admin: Admin, on: &mut dyn FnMut(Event)) -
         }
         .into(),
     );
+    // The moves this side's plan holds, asked for already here (BOOT7): only these move there.
+    let moves: Vec<String> = side
+        .entries
+        .iter()
+        .filter(|e| e.ticked && e.action.as_ref().is_some_and(|a| a.moving))
+        .map(|e| e.id.clone())
+        .collect();
+    if !moves.is_empty() {
+        args.push(format!("--moves={}", moves.join(",")));
+    }
     args.extend(picks.iter().cloned());
     let shown = format!("wsl -d {distro} -- ptyro install {}", picks.join(" "));
     let mut seen: Vec<String> = Vec::new();

@@ -152,7 +152,12 @@ impl App {
             // Keep an agent installed another way as it is (BOOT7): no move, now or later.
             KeyCode::Char { c: 'K' } if fr.sel < ns => match fr.setup.keep(fr.sel) {
                 Ok(Some((id, name, via))) => {
-                    let mut list = self.config.updates.keep_installer.clone();
+                    // The file as it is now: a CLI `k` or the web's Keep may have added one since
+                    // this TUI last read it.
+                    let path = ptyro_core::config::Config::path(&self.paths);
+                    let mut list = ptyro_core::config::Config::load(&path)
+                        .map(|c| c.updates.keep_installer)
+                        .unwrap_or_else(|_| self.config.updates.keep_installer.clone());
                     if !list.iter().any(|k| k.eq_ignore_ascii_case(&id)) {
                         list.push(id);
                     }
@@ -648,8 +653,9 @@ pub fn draw(app: &App, f: &mut Frame<'_>, area: Rect) {
         } else {
             "⏎ use these".to_owned()
         };
+        let keep = if fr.setup.offers_moves() { " · K keep as installed" } else { "" };
         format!(
-            " {go} · Space ticks · j/k move{side} · s not now (installs nothing) · Esc skip   (the repository you're in is added on its own)"
+            " {go} · Space ticks · j/k move{side}{keep} · s not now (installs nothing) · Esc skip   (the repository you're in is added on its own)"
         )
     };
     lines.push(Line::styled(keys, fg(app, t.accent)));

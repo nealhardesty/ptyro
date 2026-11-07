@@ -786,7 +786,9 @@ enum Cmd {
         tty: bool,
     },
     /// Install agents or tools by name, with what they need first: `ptyro install agy`,
-    /// `ptyro install gemini gh`
+    /// `ptyro install gemini gh`. An agent installed another way (npm, Homebrew, WinGet) is
+    /// offered the move to the recommended installer, which asks first; with --yes it is left as
+    /// it is (updated the way it's installed) unless --move
     Install {
         /// claude, codex, agy, opencode, gemini, git, gh, node
         #[arg(required = true, value_name = "NAME")]
@@ -816,6 +818,14 @@ enum Cmd {
         /// administrator rights are still asked for here, and the logins walked through
         #[arg(long, hide = true)]
         confirmed: bool,
+        /// Move a named agent installed another way (npm, Homebrew, WinGet) to the recommended
+        /// installer without asking (with --yes): the new one is installed and checked first,
+        /// then the old copy removed; settings and logins stay
+        #[arg(long = "move")]
+        move_: bool,
+        /// Asked already by Windows' ptyro: the agents it may move (BOOT7)
+        #[arg(long, hide = true, value_name = "IDS", value_delimiter = ',')]
+        moves: Vec<String>,
     },
     /// Update agents, and ptyro itself, when a newer version is out (or those named), each the
     /// way it was installed: `ptyro update`, `ptyro update codex`, `ptyro update ptyro`;

@@ -4,7 +4,7 @@
 // missed or shown twice.
 //   node web/test/setup.mjs
 import assert from "node:assert/strict";
-import { adminSteps, bannerWants, isHere, leftForComputer, moveOffer, moveWords, noAgent, retryOf, runningAgent, selfUpdate, SetupLog, updateOffer, viaWords, waitsForAdmin, webSteps } from "../dist/setupkit.js";
+import { adminSteps, bannerWants, isHere, leftForComputer, moveOffer, movesOf, moveWords, noAgent, retryOf, runningAgent, selfUpdate, SetupLog, updateOffer, viaWords, waitsForAdmin, webSteps } from "../dist/setupkit.js";
 
 const entry = (id, kind, state, more = {}) => ({ id, name: id[0].toUpperCase() + id.slice(1), kind, state, side: "local", ticked: false, picked: false, ...more });
 
@@ -267,4 +267,6 @@ console.log("setup: ok");
   const plan = { entries: [{ id: "claude", name: "Claude Code", side: "local", ticked: true, action: { moving: true, admin: true }, moves: { ...move, admin: true } }] };
   assert.deepEqual(adminSteps(plan), [{ side: "local", names: ["Claude Code"], command: "ptyro install claude" }]);
   assert.equal(webSteps(plan).length, 0);
+  // A run asks to move only what was ticked where offered.
+  assert.deepEqual(movesOf({ entries: [{ id: "codex", picked: true, moves: move }, { id: "claude", picked: false, moves: move }, { id: "gh", picked: true }, { id: "codex", side: "wsl", picked: true, moves: move }] }), ["codex"]);
 }

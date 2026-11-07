@@ -318,7 +318,7 @@ async fn the_daemon_plans_and_installs_without_admin() {
         .request(Request::SetupRun {
             picks: vec!["agy".into(), "git".into()],
             wsl_picks: None,
-            keep: vec![],
+            moves: vec![],
         })
         .await
         .unwrap()
@@ -380,7 +380,7 @@ async fn the_daemon_says_a_run_is_going_with_its_progress() {
     let mut pushes = c.pushes();
     c.send(ClientMsg::WatchEvents).unwrap();
     let Reply::SetupStarted { run, .. } = c
-        .request(Request::SetupRun { picks: vec!["agy".into()], wsl_picks: None, keep: vec![] })
+        .request(Request::SetupRun { picks: vec!["agy".into()], wsl_picks: None, moves: vec![] })
         .await
         .unwrap()
     else {
@@ -413,7 +413,7 @@ async fn the_daemon_says_a_run_is_going_with_its_progress() {
         .request(Request::SetupRun {
             picks: vec!["opencode".into()],
             wsl_picks: None,
-            keep: vec![],
+            moves: vec![],
         })
         .await;
     assert!(
@@ -541,7 +541,7 @@ async fn the_daemon_says_and_refuses_while_a_terminal_installs() {
         .request(Request::SetupRun {
             picks: vec!["opencode".into()],
             wsl_picks: None,
-            keep: vec![],
+            moves: vec![],
         })
         .await;
     std::fs::write(m.fake().join("go"), "").unwrap();
@@ -559,7 +559,7 @@ async fn the_daemon_says_and_refuses_while_a_terminal_installs() {
         .request(Request::SetupRun {
             picks: vec!["opencode".into()],
             wsl_picks: None,
-            keep: vec![],
+            moves: vec![],
         })
         .await
         .unwrap()

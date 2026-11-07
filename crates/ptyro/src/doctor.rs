@@ -848,7 +848,10 @@ async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
             Err(_) => {}
         }
     }
-    let c = match ctx.connect(!quick).await {
+    // Starting the daemon is a side effect of checking it: `PTYRO_NO_AUTOSPAWN=1` (tests,
+    // scripts) asks for none, so none is left running after.
+    let spawn = !quick && std::env::var("PTYRO_NO_AUTOSPAWN").map_or(true, |v| v != "1");
+    let c = match ctx.connect(spawn).await {
         Ok(c) => c,
         Err(e) if e.code == ErrorCode::DaemonUnavailable => {
             r.add(S, "running", Level::Note, "not running (it starts on demand)");

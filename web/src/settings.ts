@@ -8,7 +8,7 @@ import { fixLineEndings } from "./projects.js";
 import { actions, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, form, go, h, menu, pending, poll, row, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
 import type { Item } from "./kit.js";
 import { qrMatrix } from "./qr.js";
-import { adminSteps, bannerWants, isHere, moveOffer, moveWords, noAgent, retryOf, runningAgent, selfUpdate, SetupLog, updateOffer, viaWords, waitsForAdmin, webSteps } from "./setupkit.js";
+import { adminSteps, bannerWants, isHere, moveOffer, movesOf, moveWords, noAgent, retryOf, runningAgent, selfUpdate, SetupLog, updateOffer, viaWords, waitsForAdmin, webSteps } from "./setupkit.js";
 import type { MoveOffer } from "./setupkit.js";
 import type { UpdateOffer } from "./setupkit.js";
 import { allSessions } from "./sessions.js";
@@ -173,8 +173,9 @@ function askUpdate(o: UpdateOffer): void {
     `${o.name} ${o.version} → ${o.latest}. On the computer it runs `, h("code", {}, o.command ?? "the vendor's update"),
     o.admin ? ", which asks for administrator rights: the next page gives the command to run there." : ".",
     n ? ` ${n === 1 ? "1 session runs" : `${n} sessions run`} ${o.name} (${running.join(", ")}): ${n === 1 ? "it keeps" : "they keep"} ${o.version} until restarted.` : ""),
-  // Installed another way: updated that way, never moved by an update (BOOT7).
-  "Update", () => startUpdate(o.program, o.via && o.via !== "vendor" ? [o.program] : []), false);
+  // Installed another way: updated that way, never moved by an update (BOOT7: a run moves only
+  // what it names in `moves`).
+  "Update", () => startUpdate(o.program), false);
 }
 
 /// The move to the recommended installer (BOOT7), asked first. One whose old copy only an
@@ -189,7 +190,7 @@ function askMove(m: MoveOffer): void {
     ], []);
     return;
   }
-  confirm(`Move ${m.name}?`, h("span", {}, moveWords(m)), "Move", () => { installKey = ""; go("#/setup"); void startInstall([m.program], null); }, false);
+  confirm(`Move ${m.name}?`, h("span", {}, moveWords(m)), "Move", () => { installKey = ""; go("#/setup"); void startInstall([m.program], null, [m.program]); }, false);
 }
 
 /// Keep an agent installed another way as it is (BOOT7): the computer's `updates.keep_installer`.
@@ -233,10 +234,10 @@ async function startSelfUpdate(): Promise<void> {
 
 /// Run the update on the computer (the daemon's `SetupRun` of that agent: an outdated one runs its
 /// update) and show its progress on the setup page, which follows the run.
-function startUpdate(program: string, keep: string[] = []): void {
+function startUpdate(program: string): void {
   installKey = "";
   go("#/setup");
-  void startInstall([program], null, keep);
+  void startInstall([program], null);
 }
 
 /// Look for newer versions now (`ptyro update --check`), then show what's out of date.
@@ -934,7 +935,7 @@ function installSection(): HTMLElement {
       ...admin.map((a) => h("div", { class: "setup-cmd" }, h("code", {}, a.command), copyButton(a.command), h("small", {}, ` ${a.names.join(", ")}${two ? ` on ${sideName(a.side)}` : ""}: left for the computer`))),
       h("p", { class: "sub" }, "Or in ptyro there: press the prefix (C-q unless you changed it), then U, for this checklist, which asks for the password once. ", h("code", {}, "ptyro setup"), " in a terminal does the same."),
       ...waits.map(([what, first]) => h("p", { class: "sub" }, `${what} needs ${first} first, so it's in that command too.`))) : null,
-    bar(h("button", { class: "primary", title: tip("setup.install"), disabled: running || !steps.length, onclick: () => void startInstall(picked(mineSide), two ? picked("wsl") : null) },
+    bar(h("button", { class: "primary", title: tip("setup.install"), disabled: running || !steps.length, onclick: () => void startInstall(picked(mineSide), two ? picked("wsl") : null, movesOf(plan)) },
       held ? "Waiting for the other setup" : running ? "Installing…" : steps.length ? `Install ${steps.length}` : "Nothing to install from here")),
     installRun.lines.length ? h("pre", { class: "log" }, installRun.lines.join("\n")) : null,
     installRun.report ? h("p", { class: "sub setup-summary" }, installRun.summary()) : null,
@@ -956,11 +957,14 @@ function retrySection(plan: any): HTMLElement | null {
     }));
 }
 
-async function startInstall(picks: string[], wslPicks: string[] | null, keep: string[] = []): Promise<void> {
+/// Run picks on the computer. `moves`: the agents installed another way to move to the
+/// recommended installer (BOOT7: ticked where offered, or Move on Health); every other one stays
+/// as it is.
+async function startInstall(picks: string[], wslPicks: string[] | null, moves: string[] = []): Promise<void> {
   installRun.start();
   ui.render();
   try {
-    const r = await conn.request({ t: "setup_run", picks, wsl_picks: wslPicks, keep });
+    const r = await conn.request({ t: "setup_run", picks, wsl_picks: wslPicks, moves });
     // The plan the daemon runs (it looked at WSL again), not the page's: its sides each report.
     installRun.started(r.run, r.plan);
   } catch (e) {

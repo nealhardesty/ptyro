@@ -81,6 +81,20 @@ impl Sides {
         p
     }
 
+    /// Every agent kept the way it's installed on both sides, but `except` (BOOT7): nothing
+    /// moves unless asked for.
+    pub fn keep_all(&mut self, except: &[String]) {
+        let all: Vec<String> = catalog::items()
+            .iter()
+            .filter(|i| i.kind == catalog::Kind::Agent && !except.contains(&i.id))
+            .map(|i| i.id.clone())
+            .collect();
+        self.here.keep.extend(all.iter().cloned());
+        if let Some(w) = &mut self.wsl {
+            w.keep.extend(all);
+        }
+    }
+
     /// `Windows`, `WSL (Ubuntu)`, `this computer`.
     pub fn name(&self, side: Side) -> String {
         match (side, self.distro()) {

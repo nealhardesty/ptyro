@@ -48,6 +48,10 @@ pub struct InstallArgs {
     /// Hidden `--confirmed`: the TUI's checklist asked already (BOOT2), so no `Install?`; the
     /// rest (sudo's prompt, the logins, the profiles line) is as when typed.
     pub confirmed: bool,
+    /// `--move` (BOOT7): with `--yes`, move the named agents installed another way too.
+    pub move_: bool,
+    /// Hidden `--moves`: the agents Windows' ptyro may move here (it asked already).
+    pub moves: Vec<String>,
 }
 
 /// A person can answer: a terminal (or a test's fake machine, which pipes its answers; or
@@ -206,7 +210,11 @@ pub async fn setup(ctx: &Ctx, a: SetupArgs) -> Result<i32, Error> {
     // Already running (the web's, another terminal's, the TUI's): say so before the checklist,
     // and hold the machine's lock from here, so nothing starts while this one is asked.
     let lock = if a.dry_run { None } else { Some(take_lock(ctx, "`ptyro setup`")?) };
-    let (host, sides, place) = look(&ctx.paths, a.place.as_deref(), false).await?;
+    let (host, mut sides, place) = look(&ctx.paths, a.place.as_deref(), false).await?;
+    // Unattended, nothing moves (BOOT7: a move is offered, never done unasked).
+    if a.yes {
+        sides.keep_all(&[]);
+    }
     let mut picks = if named { sides.picks(place, &ids) } else { sides.defaults(place) };
     if a.dry_run {
         return show_plan(&sides.plan(&picks), a.json);
@@ -265,6 +273,28 @@ pub async fn install(ctx: &Ctx, a: InstallArgs) -> Result<i32, Error> {
     // Already running: say so before asking anything, and hold the lock from here.
     let lock = if a.dry_run { None } else { Some(take_lock(ctx, who)?) };
     let (host, mut sides, place) = look(&ctx.paths, a.place.as_deref(), quiet).await?;
+    // A move is offered, never done unasked (BOOT7, the design): the question asks it, the TUI's
+    // checklist ticked it, or `--move` says so; unattended (`--yes`) the agent stays as it is.
+    if !(a.move_ || a.confirmed || (!a.yes && asked.is_none())) {
+        let offered = sides.plan(&sides.picks(place, &ids));
+        let allowed: Vec<String> =
+            a.moves.iter().flat_map(|m| setup::resolve(m).ok()).map(|i| i.id.clone()).collect();
+        if !quiet {
+            for e in offered
+                .entries
+                .iter()
+                .filter(|e| e.picked && e.moves.is_some() && !allowed.contains(&e.id))
+            {
+                let m = e.moves.as_ref().map_or("another way", |m| m.from.words());
+                eprintln!(
+                    "{} is installed with {m}: moving it to the recommended installer needs a yes (`ptyro install {}` in a terminal, or --move); left as it is",
+                    e.name,
+                    catalog::item(&e.id).map_or(e.id.as_str(), |i| i.program.as_str())
+                );
+            }
+        }
+        sides.keep_all(&allowed);
+    }
     let mut plan = sides.plan(&sides.picks(place, &ids));
     if a.dry_run {
         return show_plan(&plan, a.json);
@@ -285,14 +315,14 @@ pub async fn install(ctx: &Ctx, a: InstallArgs) -> Result<i32, Error> {
         let q = if moving.is_empty() {
             "Install? [Y/n] ".to_owned()
         } else {
-            let names: Vec<&str> = moving.iter().map(|e| e.name.as_str()).collect();
-            let how: Vec<&str> =
-                moving.iter().filter_map(|e| Some(e.moves.as_ref()?.from.words())).collect();
-            format!(
-                "Install? [Y/n, or k to keep {} with {} and not be asked again] ",
-                names.join(" and "),
-                how.first().copied().unwrap_or("its installer")
-            )
+            let each: Vec<String> = moving
+                .iter()
+                .map(|e| {
+                    let how = e.moves.as_ref().map_or("its installer", |m| m.from.words());
+                    format!("{} with {how}", e.name)
+                })
+                .collect();
+            format!("Install? [Y/n, or k to keep {} and not be asked again] ", each.join(" and "))
         };
         match answer(&q) {
             Answer::Yes => {}
@@ -1190,8 +1220,14 @@ fn step_line(e: &Entry, two: bool) -> String {
     let admin = if a.admin { " (as administrator)" } else { "" };
     if let Some(m) = e.moves.as_ref().filter(|_| a.moving) {
         let from = e.state.path().map(|p| format!(" ({p})")).unwrap_or_default();
+        // WSL's agents are kept as installed from WSL, in its own config.
+        let wsl = if e.side == Side::Wsl {
+            " (to keep it as installed instead, add it to updates.keep_installer in WSL)"
+        } else {
+            ""
+        };
         return format!(
-            "{}{at}: {}{from}{admin}: install it through {}, check it runs, then `{}`; {}",
+            "{}{at}: {}{from}{admin}: install it through {}, check it runs, then `{}`; {}{wsl}",
             e.name,
             m.words(),
             m.to.words(),

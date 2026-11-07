@@ -8,7 +8,7 @@
 use super::host::{Host, Step};
 use super::run::Event;
 use super::{Entry, Moving};
-use crate::catalog::{Item, Method, Platform};
+use crate::catalog::{Item, Method, Platform, Via};
 
 /// Move `e` (its plan entry, `mv` its offer) onto `method`, the recommended one: the version that
 /// runs afterwards, or what went wrong and its fix.
@@ -30,9 +30,23 @@ pub(super) fn run(
         item.doc
     );
     let id = e.id.clone();
-    // A copy installed the new way that answers `--version`.
+    // A copy the recommended method installed that answers `--version` (the vendor's installer
+    // leaves a copy no package manager claims); a third installer's copy never counts.
+    let ours = Some(mv.to).filter(|v| *v != Via::Vendor);
     let fresh = |host: &dyn Host| {
-        host.copies(item).into_iter().find(|c| c.via != Some(mv.from) && c.version.is_some())
+        host.copies(item).into_iter().find(|c| c.via == ours && c.version.is_some())
+    };
+    let step = Step { item, method, update: false };
+    let install_now = |on: &mut dyn FnMut(Event), what: String| {
+        on(Event::Started {
+            id: id.clone(),
+            name: what,
+            command: install.clone(),
+            admin: method.admin,
+        });
+        host.run(&step, &mut |text| {
+            on(Event::Line { id: id.clone(), text: text.to_owned() });
+        })
     };
     let new = match fresh(host) {
         // Here already (a move whose removal failed before, tried again): only the old is left.
@@ -47,21 +61,12 @@ pub(super) fn run(
             c
         }
         None => {
-            on(Event::Started {
-                id: id.clone(),
-                name: format!("{name}: installing it through {to}"),
-                command: install.clone(),
-                admin: method.admin,
-            });
-            let step = Step { item, method, update: false };
-            host.run(&step, &mut |text| {
-                on(Event::Line { id: id.clone(), text: text.to_owned() });
-            })
-            .map_err(|err| (format!("the install through {to} failed: {err}"), kept.clone()))?;
+            install_now(on, format!("{name}: installing it through {to}"))
+                .map_err(|err| (format!("the install through {to} failed: {err}"), kept.clone()))?;
             fresh(host).ok_or_else(|| {
                 (
                     format!(
-                        "the install through {to} finished, but no new {program} answers `{program} --version` (a new terminal may be needed to find it)"
+                        "the install through {to} finished, but no new {program} installed that way answers `{program} --version` (a new terminal may be needed to find it)"
                     ),
                     kept.clone(),
                 )
@@ -96,20 +101,61 @@ pub(super) fn run(
             ),
         )
     })?;
+    // The old copy must be gone: the removal said it worked, but it may have acted elsewhere.
+    if host
+        .copies(item)
+        .iter()
+        .any(|c| c.via == Some(mv.from) && c.path.as_deref() == Some(&old_path))
+    {
+        return Err((
+            format!(
+                "{name} through {to} is installed ({new_path}), but {from}'s copy ({old_path}) is still there after `{}`",
+                mv.uninstall
+            ),
+            format!(
+                "remove it yourself: delete {old_path}, or find which {from} holds it and run its uninstall there; {}",
+                mv.keeps_words()
+            ),
+        ));
+    }
+    // The new copy must still be there and run: a removal can take a link the new install put
+    // in the same folder (an npm prefix of `~/.local` shares `~/.local/bin`). Put it back now.
+    if fresh(host).is_none() {
+        let again = install_now(
+            on,
+            format!("{name}: the removal took the new copy too, installing it again"),
+        );
+        if again.is_err() || fresh(host).is_none() {
+            let why = again.err().map(|e| format!(": {e}")).unwrap_or_default();
+            return Err((
+                format!(
+                    "{from}'s copy is removed, but the removal took the new {program} with it and installing it again didn't bring it back{why}: no {name} runs now"
+                ),
+                format!(
+                    "install it again: `ptyro install {program}`, or run `{install}` yourself; {}",
+                    mv.keeps_words()
+                ),
+            ));
+        }
+    }
     // The new copy must be what runs now.
     match host.installed(item) {
-        Some(f) if f.via == Some(mv.from) => Err((
-            format!(
-                "{name} through {to} is installed ({new_path}), but {from}'s {program} ({}) still comes first on PATH, so it is still the one that runs",
-                f.path.as_deref().unwrap_or(&old_path)
-            ),
-            format!(
-                "`ptyro install {program}` removes it again (`{}`); if it stays, delete {} or put {new_path}'s folder ahead of it on PATH",
-                mv.uninstall,
-                f.path.as_deref().unwrap_or(&old_path)
-            ),
+        Some(f) if f.via == ours => Ok(f.version.or(new.version)),
+        Some(f) => {
+            let first = f.path.unwrap_or_else(|| program.clone());
+            let how = f.via.map_or("another", |v| v.words());
+            Err((
+                format!(
+                    "{name} through {to} is installed ({new_path}), but {how}'s {program} ({first}) comes first on PATH, so it is the one that runs"
+                ),
+                format!(
+                    "delete {first} (or uninstall it with the tool that put it there), or put {new_path}'s folder ahead of it on PATH"
+                ),
+            ))
+        }
+        None => Err((
+            format!("after the move no {program} is found to run"),
+            format!("install it again: `ptyro install {program}`, or run `{install}` yourself"),
         )),
-        Some(f) => Ok(f.version.or(new.version)),
-        None => Ok(new.version),
     }
 }

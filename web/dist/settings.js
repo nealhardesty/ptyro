@@ -6,7 +6,7 @@ import { aboutDoc, aboutText, data } from "./data.js";
 import { fixLineEndings } from "./projects.js";
 import { actions, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, form, go, h, menu, pending, poll, row, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
 import { qrMatrix } from "./qr.js";
-import { adminSteps, bannerWants, isHere, moveOffer, moveWords, noAgent, retryOf, runningAgent, selfUpdate, SetupLog, updateOffer, viaWords, waitsForAdmin, webSteps } from "./setupkit.js";
+import { adminSteps, bannerWants, isHere, moveOffer, movesOf, moveWords, noAgent, retryOf, runningAgent, selfUpdate, SetupLog, updateOffer, viaWords, waitsForAdmin, webSteps } from "./setupkit.js";
 import { allSessions } from "./sessions.js";
 const ACTIONS = {
     "more": "Everything beyond the lists: health, devices, profiles, the config, the daemon",
@@ -182,8 +182,9 @@ function askUpdate(o) {
     const running = runningAgent(allSessions().values(), o.id);
     const n = running.length;
     confirm(`Update ${o.name}?`, h("span", {}, `${o.name} ${o.version} → ${o.latest}. On the computer it runs `, h("code", {}, o.command ?? "the vendor's update"), o.admin ? ", which asks for administrator rights: the next page gives the command to run there." : ".", n ? ` ${n === 1 ? "1 session runs" : `${n} sessions run`} ${o.name} (${running.join(", ")}): ${n === 1 ? "it keeps" : "they keep"} ${o.version} until restarted.` : ""), 
-    // Installed another way: updated that way, never moved by an update (BOOT7).
-    "Update", () => startUpdate(o.program, o.via && o.via !== "vendor" ? [o.program] : []), false);
+    // Installed another way: updated that way, never moved by an update (BOOT7: a run moves only
+    // what it names in `moves`).
+    "Update", () => startUpdate(o.program), false);
 }
 /// The move to the recommended installer (BOOT7), asked first. One whose old copy only an
 /// administrator can remove shows the command to run on the computer (the owner's exception).
@@ -197,7 +198,7 @@ function askMove(m) {
         ], []);
         return;
     }
-    confirm(`Move ${m.name}?`, h("span", {}, moveWords(m)), "Move", () => { installKey = ""; go("#/setup"); void startInstall([m.program], null); }, false);
+    confirm(`Move ${m.name}?`, h("span", {}, moveWords(m)), "Move", () => { installKey = ""; go("#/setup"); void startInstall([m.program], null, [m.program]); }, false);
 }
 /// Keep an agent installed another way as it is (BOOT7): the computer's `updates.keep_installer`.
 async function keepInstaller(program, name, from) {
@@ -238,10 +239,10 @@ async function startSelfUpdate() {
 }
 /// Run the update on the computer (the daemon's `SetupRun` of that agent: an outdated one runs its
 /// update) and show its progress on the setup page, which follows the run.
-function startUpdate(program, keep = []) {
+function startUpdate(program) {
     installKey = "";
     go("#/setup");
-    void startInstall([program], null, keep);
+    void startInstall([program], null);
 }
 /// Look for newer versions now (`ptyro update --check`), then show what's out of date.
 async function checkUpdates() {
@@ -896,7 +897,7 @@ function installSection() {
         : installRun.theirs
             ? "Setup is already running on the computer (started from another window, device or before this page opened): its progress is below. The checklist opens again once it's done."
             : "Installing on the computer: its progress is below.";
-    return section(title, running ? h("p", { class: "banner setup-running", title: tip("setup.running") }, `⏳ ${who}`) : null, h("div", { title: tip(two ? "setup.where" : "setup.plan") }, two ? h("p", { class: "sub" }, `WSL's ${plan.wsl.distro} has ${plan.wsl.version}: tick an agent or tool under Windows, WSL, or both.`) : null, group("Agents", "agent"), group("Tools", "tool"), open.length ? null : h("p", { class: "sub" }, "Every agent and tool ptyro sets up is here already."), here.length ? h("div", { class: "setup-group" }, h("h4", {}, "Already here"), ...here.map(hereLine)) : null, wsl ? h("p", { class: "sub" }, wsl) : null), admin.length ? h("div", { class: "banner warn setup-admin", title: tip("setup.admin") }, h("b", {}, "Administrator rights are asked for only on the computer itself"), h("p", { class: "sub" }, "A password or a Windows prompt never goes through this page, so these aren't installed from here. On the computer, run:"), ...admin.map((a) => h("div", { class: "setup-cmd" }, h("code", {}, a.command), copyButton(a.command), h("small", {}, ` ${a.names.join(", ")}${two ? ` on ${sideName(a.side)}` : ""}: left for the computer`))), h("p", { class: "sub" }, "Or in ptyro there: press the prefix (C-q unless you changed it), then U, for this checklist, which asks for the password once. ", h("code", {}, "ptyro setup"), " in a terminal does the same."), ...waits.map(([what, first]) => h("p", { class: "sub" }, `${what} needs ${first} first, so it's in that command too.`))) : null, bar(h("button", { class: "primary", title: tip("setup.install"), disabled: running || !steps.length, onclick: () => void startInstall(picked(mineSide), two ? picked("wsl") : null) }, held ? "Waiting for the other setup" : running ? "Installing…" : steps.length ? `Install ${steps.length}` : "Nothing to install from here")), installRun.lines.length ? h("pre", { class: "log" }, installRun.lines.join("\n")) : null, installRun.report ? h("p", { class: "sub setup-summary" }, installRun.summary()) : null, installRun.report ? retrySection(plan) : null);
+    return section(title, running ? h("p", { class: "banner setup-running", title: tip("setup.running") }, `⏳ ${who}`) : null, h("div", { title: tip(two ? "setup.where" : "setup.plan") }, two ? h("p", { class: "sub" }, `WSL's ${plan.wsl.distro} has ${plan.wsl.version}: tick an agent or tool under Windows, WSL, or both.`) : null, group("Agents", "agent"), group("Tools", "tool"), open.length ? null : h("p", { class: "sub" }, "Every agent and tool ptyro sets up is here already."), here.length ? h("div", { class: "setup-group" }, h("h4", {}, "Already here"), ...here.map(hereLine)) : null, wsl ? h("p", { class: "sub" }, wsl) : null), admin.length ? h("div", { class: "banner warn setup-admin", title: tip("setup.admin") }, h("b", {}, "Administrator rights are asked for only on the computer itself"), h("p", { class: "sub" }, "A password or a Windows prompt never goes through this page, so these aren't installed from here. On the computer, run:"), ...admin.map((a) => h("div", { class: "setup-cmd" }, h("code", {}, a.command), copyButton(a.command), h("small", {}, ` ${a.names.join(", ")}${two ? ` on ${sideName(a.side)}` : ""}: left for the computer`))), h("p", { class: "sub" }, "Or in ptyro there: press the prefix (C-q unless you changed it), then U, for this checklist, which asks for the password once. ", h("code", {}, "ptyro setup"), " in a terminal does the same."), ...waits.map(([what, first]) => h("p", { class: "sub" }, `${what} needs ${first} first, so it's in that command too.`))) : null, bar(h("button", { class: "primary", title: tip("setup.install"), disabled: running || !steps.length, onclick: () => void startInstall(picked(mineSide), two ? picked("wsl") : null, movesOf(plan)) }, held ? "Waiting for the other setup" : running ? "Installing…" : steps.length ? `Install ${steps.length}` : "Nothing to install from here")), installRun.lines.length ? h("pre", { class: "log" }, installRun.lines.join("\n")) : null, installRun.report ? h("p", { class: "sub setup-summary" }, installRun.summary()) : null, installRun.report ? retrySection(plan) : null);
 }
 /// An update refused because the agent is running (BOOT5): which sessions run it, and Try again
 /// once they've ended (the CLI and the TUI ask "Try again now?" the same way).
@@ -910,11 +911,14 @@ function retrySection(plan) {
         return h("div", { class: "stack-in" }, h("p", {}, h("b", {}, `${name} is still running`), running.length ? ` (${running.join(", ")})` : "", ", so its update couldn't replace it. End those sessions (or quit it wherever else it runs), then try again."), bar(h("button", { class: "primary", title: tip("updates.retry"), onclick: () => void startInstall(again.picks, again.wslPicks) }, again.label)));
     }));
 }
-async function startInstall(picks, wslPicks, keep = []) {
+/// Run picks on the computer. `moves`: the agents installed another way to move to the
+/// recommended installer (BOOT7: ticked where offered, or Move on Health); every other one stays
+/// as it is.
+async function startInstall(picks, wslPicks, moves = []) {
     installRun.start();
     ui.render();
     try {
-        const r = await conn.request({ t: "setup_run", picks, wsl_picks: wslPicks, keep });
+        const r = await conn.request({ t: "setup_run", picks, wsl_picks: wslPicks, moves });
         // The plan the daemon runs (it looked at WSL again), not the page's: its sides each report.
         installRun.started(r.run, r.plan);
     }
