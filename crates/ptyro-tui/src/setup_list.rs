@@ -68,9 +68,8 @@ pub struct Setup {
 pub struct SetupRun {
     /// The split running now (its session name).
     pub split: String,
-    /// Seen alive in the session list (until then it may still be starting).
+    /// Started: its spawn answered, so it is in the session list (until then it is starting).
     pub seen: bool,
-    pub started: std::time::Instant,
     /// What runs after it, in order (Windows' side, then WSL's).
     pub queue: Vec<Split>,
 }
@@ -392,6 +391,23 @@ pub(crate) mod tests {
             status: Some(WslStatus::Usable { distro: "Ubuntu".into(), version: "0.0.63".into() }),
         };
         s.found(sides, Where::Windows, None);
+        s
+    }
+
+    /// Windows with no usable WSL (its reason and the fix's long line), and a default-side note.
+    pub(crate) fn unusable() -> Setup {
+        let mut s = Setup::looking(None);
+        let sides = Sides {
+            here: survey(Platform::WindowsX64, &[], &["winget", "curl"]),
+            side: Side::Windows,
+            wsl: None,
+            status: Some(WslStatus::Unusable {
+                reason: "WSL isn't installed or has no distro".into(),
+                fix: "`wsl --install`, then ptyro in it: `wsl -d Ubuntu -- sh -c \"curl -fsSL https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh | sh\"`".into(),
+            }),
+        };
+        let note = "WSL: your daemon is in Debian, which setup can't reach; Ubuntu has ptyro, so `--where wsl` installs there. By default this sets up Windows only.";
+        s.found(sides, Where::Windows, Some(note.into()));
         s
     }
 

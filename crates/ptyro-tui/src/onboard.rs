@@ -174,7 +174,9 @@ impl App {
             }
             KeyCode::Esc => {
                 let only = self.first_run.take().is_some_and(|fr| fr.only_setup);
-                if !only {
+                if only {
+                    self.toast(self.setup_later());
+                } else {
                     // A config, even an empty one, so this screen doesn't come back.
                     self.finish_first_run(&[], true);
                 }
@@ -287,12 +289,7 @@ impl App {
             None => self.run_cli(&args),
         }
         let Some(split) = self.last_split.clone() else { return };
-        self.setup_run = Some(crate::setup_list::SetupRun {
-            split,
-            seen: false,
-            started: std::time::Instant::now(),
-            queue,
-        });
+        self.setup_run = Some(crate::setup_list::SetupRun { split, seen: false, queue });
     }
 
     /// The checklist's install still runs: show its split and say so (true), rather than open
@@ -309,6 +306,21 @@ impl App {
         true
     }
 
+    /// The reply to a spawn: the checklist's split started (it is in the session list from now
+    /// on), or it couldn't, which ends the run at once (and the splits queued after it: the
+    /// failure is said, and the checklist can open again).
+    pub(crate) fn setup_spawned(&mut self, name: Option<&str>, ok: bool) {
+        let Some(run) = &mut self.setup_run else { return };
+        if name != Some(run.split.as_str()) {
+            return;
+        }
+        if ok {
+            run.seen = true;
+        } else {
+            self.setup_run = None;
+        }
+    }
+
     /// From `tick`: once the running split ends, the next side's starts; after the last, the
     /// health badge looks again, so it no longer offers what was just installed.
     pub(crate) fn setup_tick(&mut self) {
@@ -319,8 +331,9 @@ impl App {
                 false
             }
             Some(_) => true,
-            // Gone (closed), or never started: give a slow start half a minute.
-            None => run.seen || run.started.elapsed() > std::time::Duration::from_secs(30),
+            // Gone after it started (closed, or removed); not started yet: its spawn's reply
+            // comes (`setup_spawned`), and a failure clears this at once.
+            None => run.seen,
         };
         if !ended {
             return;
@@ -328,9 +341,7 @@ impl App {
         let mut queue = std::mem::take(&mut run.queue);
         self.setup_run = None;
         if queue.is_empty() {
-            if self.client.is_some() && !self.health.running {
-                self.check_health();
-            }
+            self.health_again();
         } else {
             let next = queue.remove(0);
             self.setup_start(next, queue);
@@ -710,10 +721,10 @@ fn setup_lines(app: &App, fr: &FirstRun, width: usize, lines: &mut Vec<Line<'sta
                         why.push(format!("ticked because {} needs it", by.join(", ")));
                     }
                     if !why.is_empty() {
-                        lines.push(Line::styled(
-                            format!("       {}: {}", r.sides.name(*s), why.join("; ")),
-                            dim,
-                        ));
+                        let text = format!("{}: {}", r.sides.name(*s), why.join("; "));
+                        for l in wrap_words(&text, width.saturating_sub(8)) {
+                            lines.push(Line::styled(format!("       {l}"), dim));
+                        }
                     }
                 }
             }
@@ -758,11 +769,36 @@ fn setup_lines(app: &App, fr: &FirstRun, width: usize, lines: &mut Vec<Line<'sta
     };
     for note in [wsl, r.note.clone()].into_iter().flatten() {
         lines.push(Line::raw(""));
-        lines.push(Line::styled(format!(" {note}"), dim));
+        for l in wrap_words(&note, width.saturating_sub(2)) {
+            lines.push(Line::styled(format!(" {l}"), dim));
+        }
     }
     if let Some(said) = &fr.setup.said {
-        lines.push(Line::styled(format!(" {said}"), fg(app, t.blocked)));
+        for l in wrap_words(said, width.saturating_sub(2)) {
+            lines.push(Line::styled(format!(" {l}"), fg(app, t.blocked)));
+        }
     }
+}
+
+/// `text` in lines of at most `width` characters, broken between words (a word longer than a
+/// line, a URL say, is broken where the line ends, so all of it stays on screen).
+fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(20);
+    let mut out: Vec<String> = Vec::new();
+    for word in text.split_whitespace() {
+        let chars: Vec<char> = word.chars().collect();
+        for piece in chars.chunks(width) {
+            let piece: String = piece.iter().collect();
+            match out.last_mut() {
+                Some(l) if l.chars().count() + 1 + piece.chars().count() <= width => {
+                    l.push(' ');
+                    l.push_str(&piece);
+                }
+                _ => out.push(piece),
+            }
+        }
+    }
+    out
 }
 
 /// `text` in at most `width` characters, an ellipsis ending what's cut.
@@ -776,10 +812,15 @@ fn clip(text: &str, width: usize) -> String {
 }
 
 /// `text` (parts joined by ` · `) in lines of at most `width` characters, broken between
-/// parts (a part longer than a line is a line of its own).
+/// parts (a part longer than a line is broken between its words, on lines of its own).
 fn fit(text: &str, width: usize) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for part in text.split(" · ") {
+        if part.chars().count() > width {
+            // Longer than a line on its own: by words, on lines of its own.
+            out.extend(wrap_words(part, width));
+            continue;
+        }
         match out.last_mut() {
             Some(l) if l.chars().count() + 3 + part.chars().count() <= width => {
                 l.push_str(" · ");

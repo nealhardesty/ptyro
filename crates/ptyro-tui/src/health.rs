@@ -67,6 +67,9 @@ pub struct Health {
     /// A fresh result that arrived while the mend list was open: its rows point into
     /// `findings`, so it is taken once the list is closed.
     pub deferred: Option<Vec<Check>>,
+    /// Look again as soon as the run in flight is in: what it reports may predate a change
+    /// (the setup checklist's install just ended, BOOT2).
+    pub again: bool,
 }
 
 /// The command a doctor message suggests: the first `` `ptyro …` `` in it, with a
@@ -239,8 +242,21 @@ impl App {
         )
     }
 
+    /// Look again now, or once the run in flight is in.
+    pub(crate) fn health_again(&mut self) {
+        if self.health.running {
+            self.health.again = true;
+        } else {
+            self.check_health();
+        }
+    }
+
     pub(crate) fn got_health(&mut self, checks: Vec<Check>) {
         self.health.running = false;
+        if std::mem::take(&mut self.health.again) {
+            // What this run found may be from before the change: the next one says.
+            self.check_health();
+        }
         if self.health_open() {
             self.health.deferred = Some(checks);
             return;

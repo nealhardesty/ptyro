@@ -1971,6 +1971,13 @@ impl App {
                 return;
             }
         };
+        // The setup checklist's split started, or couldn't (BOOT2).
+        if let Pending::Spawned { spec, .. } = &pending
+            && self.setup_run.is_some()
+        {
+            let name = spec.name.clone();
+            self.setup_spawned(name.as_deref(), res.is_ok());
+        }
         // A reply that opens a dialog must not replace the box someone is typing in: it is
         // held aside while the reply is handled, then put back (and the reply said so).
         // (A peek's own screen arrives into the box it fills in: that one is not held.)
@@ -8799,14 +8806,13 @@ mod tests {
 
     /// BOOT2: while the checklist's install runs, `U` (or a health fix, or `first.run`) never
     /// opens another: it says so. Each side's split starts once the one before it ends.
-    #[test]
-    fn a_running_setup_is_never_joined_by_a_second_and_sides_run_in_turn() {
+    #[tokio::test]
+    async fn a_running_setup_is_never_joined_by_a_second_and_sides_run_in_turn() {
         let mut app = app();
         let words = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
         app.setup_run = Some(crate::setup_list::SetupRun {
             split: "ptyro-install".into(),
             seen: false,
-            started: std::time::Instant::now(),
             queue: vec![(None, words(&["install", "codex", "--confirmed", "--where", "wsl"]))],
         });
         app.open_setup(None, None);
@@ -8834,31 +8840,121 @@ mod tests {
         assert!(app.setup_run.is_none(), "done: the checklist can open again");
     }
 
+    /// BOOT2: the checklist's split frees it as soon as it can't start, is closed, or ends;
+    /// then the health badge looks again, after a run already in flight rather than not at all.
+    #[tokio::test]
+    async fn a_setup_split_that_fails_closes_or_dies_frees_the_checklist_and_the_badge_looks_again()
+    {
+        let mut app = app();
+        let run = || {
+            Some(crate::setup_list::SetupRun {
+                split: "ptyro-install".into(),
+                seen: false,
+                queue: Vec::new(),
+            })
+        };
+        let spawned = || Pending::Spawned {
+            split: None,
+            spec: Box::new(SpawnSpec {
+                name: Some("ptyro-install".into()),
+                ..SpawnSpec::default()
+            }),
+            back: false,
+        };
+        // A doctor run is in flight, from before the install.
+        app.health.running = true;
+        // 1. The spawn failed: freed at once, no half-minute wait.
+        app.setup_run = run();
+        app.on_reply(AppMsg::Reply(
+            spawned(),
+            Err(ptyro_core::Error::new(ErrorCode::Internal, "no pty")),
+        ));
+        assert!(app.setup_run.is_none(), "a failed spawn frees it");
+        // 2. Started, then closed by the person before the list ever showed it running.
+        app.setup_run = run();
+        let s = session("ptyro-install");
+        app.on_reply(AppMsg::Reply(spawned(), Ok(Reply::Session { info: s.clone() })));
+        assert!(app.setup_run.as_ref().unwrap().seen, "started");
+        app.setup_tick();
+        assert!(app.setup_run.is_some(), "still running");
+        app.on_event(DomainEvent::SessionRemoved { id: s.id });
+        app.setup_tick();
+        assert!(app.setup_run.is_none(), "closed: freed");
+        assert!(app.health.again, "the badge looks again once the run in flight is in");
+        // 3. Started, then its program died.
+        app.setup_run = run();
+        let mut s = session("ptyro-install");
+        app.on_reply(AppMsg::Reply(spawned(), Ok(Reply::Session { info: s.clone() })));
+        s.state = ProcessState::Exited { code: Some(1), signal: None };
+        app.upsert(s);
+        app.setup_tick();
+        assert!(app.setup_run.is_none(), "ended: freed");
+        // The badge: the run in flight answers with what it saw before the install (claude
+        // missing); it is looked at again, and that answer clears it.
+        let stale = crate::health::Check {
+            section: "agents".into(),
+            name: "claude".into(),
+            level: "problem".into(),
+            text: "claude not found".into(),
+        };
+        app.got_health(vec![stale]);
+        assert_eq!(app.health.findings.len(), 1);
+        assert!(app.health.running && !app.health.again, "looking again now");
+        app.got_health(Vec::new());
+        assert!(app.health.findings.is_empty(), "the badge shows the install's result");
+    }
+
     /// BOOT2: two sides fit an 80-column terminal: the cells beside the name, the line under it.
     #[test]
     fn a_two_sided_checklist_fits_80_columns() {
-        let mut app = app();
         use crate::onboard::FirstRun;
-        app.first_run = Some(FirstRun {
-            setup: crate::setup_list::tests::two(),
-            only_setup: true,
-            ..FirstRun::default()
-        });
-        let shown = screen_at(&app, 80);
+        // 80 columns, tall enough to show everything.
+        let draw = |app: &App| {
+            let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 60)).unwrap();
+            t.draw(|f| crate::ui::draw(app, f)).unwrap();
+            let buf = t.backend().buffer();
+            buf.content.chunks(80).fold(String::new(), |mut s, row| {
+                s.extend(row.iter().map(|c| c.symbol()));
+                s.push('\n');
+                s
+            })
+        };
+        // The box's lines (`│` at both edges): nothing runs into its right edge, where a cut
+        // line would end.
+        let fits = |shown: &str| {
+            for line in shown.lines() {
+                let c: Vec<char> = line.chars().collect();
+                let Some(left) = c.iter().position(|ch| *ch == '│') else { continue };
+                let Some(right) = c.iter().rposition(|ch| *ch == '│').filter(|r| *r > left + 10)
+                else {
+                    continue;
+                };
+                assert_eq!(c[right - 1], ' ', "cut off:\n{shown}");
+            }
+        };
+        let mut app = app();
+        let mut setup = crate::setup_list::tests::two();
+        // Gemini CLI on WSL's side: Node.js there, with the line saying why under its row.
+        setup.side_step(1);
+        let gemini = setup.rows().iter().position(|e| e.id == "gemini").unwrap();
+        setup.toggle(gemini);
+        app.first_run = Some(FirstRun { setup, only_setup: true, ..FirstRun::default() });
+        let shown = draw(&app);
         assert!(shown.contains("WSL (Ubuntu)"), "{shown}");
         assert!(shown.contains("[x] the vendor's installer"), "{shown}");
         assert!(shown.contains("then log in"), "{shown}");
-        // The box's lines (`│` at both edges): nothing runs into its right edge, where a cut
-        // line would end.
-        for line in shown.lines() {
-            let c: Vec<char> = line.chars().collect();
-            let Some(left) = c.iter().position(|ch| *ch == '│') else { continue };
-            let Some(right) = c.iter().rposition(|ch| *ch == '│').filter(|r| *r > left + 10)
-            else {
-                continue;
-            };
-            assert_eq!(c[right - 1], ' ', "cut off:\n{shown}");
-        }
+        assert!(shown.contains("WSL (Ubuntu): ticked because Gemini CLI needs it"), "{shown}");
+        fits(&shown);
+        // Windows without a usable WSL: its reason and fix, and the default side's, wrap.
+        app.first_run = Some(FirstRun {
+            setup: crate::setup_list::tests::unusable(),
+            only_setup: true,
+            ..FirstRun::default()
+        });
+        let shown = draw(&app);
+        assert!(shown.contains("WSL: WSL isn't installed or has no distro"), "{shown}");
+        assert!(shown.contains("By default this sets up Windows"), "{shown}");
+        fits(&shown);
     }
 
     /// BOOT2: `app.setup` (`U`) is the checklist alone; `s` (not now) installs nothing and says

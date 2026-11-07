@@ -9254,7 +9254,9 @@ reversed, and a line under the row per side for what a cell can't say (why it ca
 it). Already here lists each item with its version and path (each side's, named, on two), the
 default agent marked "your default agent". It fits 80 columns: a cell is 26 wide (an ellipsis
 ends a longer one), and when the cells leave less than 30 columns beside them the row's line goes
-under it, indented, wrapped between parts like the rest. Then WSL's state when it is unusable or this is WSL, the
+under it, indented, wrapped between parts like the rest. The per-side lines under a row, WSL's
+state, the default side's reason and what a tick said wrap between words (a word longer than a
+line, a URL, breaks where the line ends, so all of it stays on screen). Then WSL's state when it is unusable or this is WSL, the
 default side's reason, and what the last tick said.
 
 **Keys:** `j`/`k` (arrows) move over the checklist's rows, then the first run's choices; `Space`
@@ -9280,8 +9282,13 @@ before it ends, so two package managers, sudo and UAC prompts, or two sets of si
 overlap. **While it runs, the checklist doesn't open again**: `U`, the palette's `app.setup` and
 `first.run`, and a health fix show the running split instead and say "setup is still running in
 <split>: the checklist opens again once it's done" (no second install beside the first, as the
-daemon's one-run guard is for the web). When the last split ends, the health badge looks again
-(`check_health`), so it stops offering what was just installed. Nothing ticked, still looking, `s`
+daemon's one-run guard is for the web). The guard is this TUI client's (`App::setup_run`): another
+TUI attached at the same time, or this one after a reattach, doesn't know of the split. A split
+is running from its spawn's reply on (it is in the session list from then); a failed spawn frees
+the checklist at once, and a split closed or ended (its session gone, or not live) frees it on the
+next tick, then the next side's starts. When the last split ends, the health badge looks again
+(`health_again`): now, or, with a doctor run already in flight (whose answer may predate the
+install), as soon as that one is in, so it stops offering what was just installed. Nothing ticked, still looking, `s`
 or Esc: nothing installs, and the first run's message (or, alone, the checklist's) ends with how
 to open it again (`C-q U opens the setup checklist (agents and tools) any time`).
 
@@ -9315,7 +9322,12 @@ Space then ⏎ installing only Antigravity (and its sign-in, just installed); `p
 the checklist. UX1.19's tour test now leaves the first run with `s`, so it installs nothing, and
 both UX1.19 tests point `PTYRO_TEST_SETUP` at an empty fake machine, so the checklist never looks
 at the machine running the tests. The unit tests add: a running install refused a second, and the
-next side started only once the first ends; the 80-column two-sided screen; a fix's `--where`.
+next side started only once the first ends; a failed spawn, a closed split and a died one each
+freeing it, and the badge looking again after a doctor run in flight; the 80-column screens (two
+sides with a per-side line, and Windows without WSL with its reason, fix and the default side's
+note); a fix's `--where`. The headless test of a running install asserts the "still running"
+message, then (once the split finishes in the daemon) that one install split ran and each item
+installed once.
 
 **Decided by the builder:** the checklist surveys in the TUI's process like the CLI (a daemon may
 not exist yet, and WSL's side needs Windows' ptyro), not through `SetupPlan`; installs run as the

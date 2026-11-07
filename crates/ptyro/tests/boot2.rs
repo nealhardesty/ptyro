@@ -100,7 +100,7 @@ async fn the_first_run_installs_the_ticked_in_a_split_then_walks_the_logins() {
 
 /// While the first run's install still runs (Claude Code's installer is slow here), `U`
 /// doesn't open a second checklist or start a second install: it shows the split and says
-/// setup is still running. Each item installs once.
+/// setup is still running. One install split runs, to the end, and each item installs once.
 #[tokio::test]
 async fn a_running_install_is_never_joined_by_a_second() {
     let w = World::new(json!({
@@ -111,11 +111,29 @@ async fn a_running_install_is_never_joined_by_a_second() {
         .tui()
         .send_when("✓ git", "\\r")
         .send_when("▸ Claude Code", "\\x11U")
-        .send_when("setup is still running", "\\x11U")
-        .until("More accounts"))
+        .until("setup is still running"))
     .await
     .unwrap();
-    assert!(r.screen.contains("More accounts"), "{}", r.screen);
+    assert!(r.screen.contains("setup is still running in ptyro-install"), "{}", r.screen);
+    assert!(!r.screen.contains("Set up this computer"), "no second checklist:\n{}", r.screen);
+    // The split carries on in the daemon (the TUI is gone now): wait for its last login.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !w.log("logins.log").iter().any(|l| l == "login gh") {
+        assert!(std::time::Instant::now() < deadline, "the install never finished");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let c = w.d.client().await.unwrap();
+    let ptyro_protocol::Reply::Sessions { sessions } =
+        c.request(ptyro_protocol::Request::List).await.unwrap()
+    else {
+        panic!()
+    };
+    let splits: Vec<&str> = sessions
+        .iter()
+        .map(|s| s.name.as_str())
+        .filter(|n| n.starts_with("ptyro-install"))
+        .collect();
+    assert_eq!(splits, ["ptyro-install"], "one install split, never a second");
     let installs: Vec<String> =
         w.log("calls.log").into_iter().filter(|c| c.starts_with("install ")).collect();
     for id in ["claude", "codex", "gh"] {
