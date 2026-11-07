@@ -124,7 +124,7 @@ async fn first_run(paths: &Paths) -> Option<String> {
             Some(target)
         }
         Found::Install { distro } => {
-            let line = format!("wsl -d {distro} -- sh -c '{INSTALL}'");
+            let line = ptyro_client::wsl_setup::install_line(&distro);
             if !tty
                 || !crate::cli::confirm(&format!(
                     "No WSL distro has ptyro yet. Install it in {distro}?"
