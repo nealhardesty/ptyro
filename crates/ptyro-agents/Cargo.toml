@@ -18,10 +18,11 @@ toml.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+# ptyro's own update (BOOT6): its download's private folder.
+tempfile.workspace = true
 
 # The stored Path, read as Windows keeps it (setup, BOOT1).
 [target.'cfg(windows)'.dependencies]
 ptyro-pty.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true

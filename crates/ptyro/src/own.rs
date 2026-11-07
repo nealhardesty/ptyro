@@ -233,8 +233,9 @@ pub(crate) async fn spawn_update(ctx: &Ctx) -> Result<ptyro_core::session::Sessi
     }
     // This process's own binary runs it (on Linux even once it was replaced on disk).
     let exe = std::env::current_exe().map_err(|e| Error::internal(format!("ptyro's path: {e}")))?;
-    let exe = exe.to_string_lossy();
-    let exe = exe.strip_suffix(" (deleted)").unwrap_or(&exe).to_owned();
+    // A replaced file's ` (deleted)`, or an image an update renamed aside (`ptyro.exe.old`):
+    // the installed binary's own name.
+    let exe = own::installed_name(&exe).to_string_lossy().into_owned();
     let home = ["HOME", "USERPROFILE"]
         .into_iter()
         .find_map(|v| std::env::var_os(v).filter(|h| !h.is_empty()))

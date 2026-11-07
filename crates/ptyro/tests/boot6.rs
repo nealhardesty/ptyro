@@ -643,3 +643,37 @@ fn the_web_runs_it_in_a_session_the_daemons_live_upgrade_keeps() {
     let _ = serve.kill();
     let _ = serve.wait();
 }
+
+/// Homebrew's formula behind the release (or its auto-update off): `brew upgrade` changes
+/// nothing, and that is said, never reported as an update.
+#[cfg(unix)]
+#[test]
+fn homebrew_behind_the_release_is_said_not_claimed() {
+    let mut b = Box_::new(json!({ "platform": "macos" }));
+    let keg = b.path("brew/Cellar/ptyro/0.0.1/bin");
+    std::fs::create_dir_all(&keg).unwrap();
+    std::fs::create_dir_all(b.path("brew/bin")).unwrap();
+    let mine = keg.join("ptyro");
+    std::fs::write(&mine, script("0.0.1")).unwrap();
+    executable(&mine);
+    std::os::unix::fs::symlink(&mine, b.path("brew/bin/ptyro")).unwrap();
+    b.publish(V);
+    let tools = b.path("tools");
+    std::fs::create_dir_all(&tools).unwrap();
+    std::fs::write(
+        tools.join("brew"),
+        "#!/bin/sh\necho 'Warning: ptyro 0.0.1 already installed'\n",
+    )
+    .unwrap();
+    executable(&tools.join("brew"));
+    b.extra = vec![
+        ("PTYRO_TEST_SELF_EXE".into(), mine.display().to_string()),
+        ("PATH".into(), ptyro_testkit::program::path_with(&tools)),
+    ];
+    let o = b.run(&["update", "ptyro", "--yes"], "");
+    let said = text(&o);
+    assert_eq!(o.status.code(), Some(1), "{said}");
+    assert!(said.contains(&format!("Homebrew's formula isn't at {V} yet")), "{said}");
+    assert!(said.contains("brew update && brew upgrade ptyro"), "{said}");
+    assert!(!said.contains("upgraded in"), "no daemon upgrade onto the old version: {said}");
+}

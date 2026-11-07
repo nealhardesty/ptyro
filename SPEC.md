@@ -9736,8 +9736,14 @@ machine setup lock (§24.6) and `updates.check` / `updates.ignore` (`ptyro`, `pt
   adds it to the agents' sources, so it is fetched in the same concurrent look, with the same
   timeouts, and offline is just as quiet. A test's `PTYRO_TEST_LATEST/ptyro` holds the reply.
 - **What is installed:** `Install::here()`: this ptyro's binary (`current_exe`, on Linux with a
-  replaced file's ` (deleted)` dropped; a debug build's `PTYRO_TEST_SELF_EXE` names another), and
-  how it updates, by where it is (`classify`, as `ptyro uninstall` tells):
+  replaced file's ` (deleted)` dropped, on Windows an image an update renamed aside,
+  `ptyro.exe.old[.<pid>]`, named as `ptyro.exe`, so a daemon whose upgrade didn't happen never
+  writes under the aside name; a debug build's `PTYRO_TEST_SELF_EXE` names another), **resolved
+  to the file itself** (macOS's `current_exe` is the path that was run: on an Intel Mac Homebrew's
+  `/usr/local/bin/ptyro`, a link into its keg in a folder the user owns), and how it updates, by
+  where that file is (`classify`, as `ptyro uninstall` tells; a link in Homebrew's `bin` counts as
+  Homebrew's). An update replaces the file, never a link to it, so a link someone made keeps
+  pointing at the new binary:
   - `Release`: a folder the user can write (`~/.local/bin`, `%LOCALAPPDATA%\Programs\ptyro\bin`,
     or anywhere copied by hand): downloaded, checked and replaced here.
   - `Admin`: the same in a folder only an administrator can write (`/usr/local/bin` owned by
@@ -9764,12 +9770,17 @@ machine setup lock (§24.6) and `updates.check` / `updates.ignore` (`ptyro`, `pt
   Windows install.ps1 in an administrator PowerShell). The start-up note with ptyro among others
   says "2 newer versions are out: ptyro 0.0.64, Codex 0.170.0".
 - **The update** (`own::update`, only after the person's yes, under the setup lock), reporting
-  setup's events under the id `ptyro`, exactly as `install.sh` / `install.ps1` check a release:
+  setup's events under the id `ptyro`, exactly as `install.sh` / `install.ps1` check a release. The
+  version must be a plain release version (`1.2.3`, `1.2.3-rc.1`: `own::valid_version`) before it
+  goes into a URL or a path; the finding isn't offered otherwise.
   1. `ptyro-<v>-<triple>.tar.gz` (Windows: `.zip`) and `SHA256SUMS` downloaded with curl from
      `https://github.com/nealhardesty/ptyro/releases/download/v<v>` (a debug build's
      `PTYRO_TEST_RELEASE_URL`, as `install.sh`'s `PTYRO_RELEASE_URL`) into a temporary folder of
-     its own (untrusted until checked; removed afterwards, whatever happens). The triple is this
-     build's (`own::triple`).
+     its own (`tempfile`: created exclusively, private; untrusted until checked; removed
+     afterwards, whatever happens). curl is held to HTTPS (`--proto =https --proto-redir =https
+     --tlsv1.2`; plain HTTP only for a debug build's test knob), 10 s to connect, and gives up on
+     a download under 1 KB/s for a minute or past 30 minutes, so a stalled one ends with its error
+     and lets go of the setup lock. The triple is this build's (`own::triple`).
   2. Its SHA-256 against its `SHA256SUMS` line (either mode). **A mismatch is refused** and
      nothing is replaced: "the download's checksum is …, but the release's SHA256SUMS says …: it
      was changed or broken on the way, so it isn't installed", fix "nothing was replaced; `ptyro
@@ -9780,28 +9791,39 @@ machine setup lock (§24.6) and `updates.check` / `updates.ignore` (`ptyro`, `pt
      note, the checksum having matched; `PTYRO_VERIFY=0` skips it; `PTYRO_REQUIRE_ATTESTATION=1`
      refuses without it.
   4. Unpacked with `tar -xf` (Windows: System32's bsdtar, which reads a zip; Git's GNU tar can't),
-     `ptyro-<v>-<triple>/ptyro[.exe]` required.
+     `ptyro-<v>-<triple>/ptyro[.exe]` required. Its list (`tar -tf`) is checked first (no
+     absolute path, no `..`), and what was unpacked must be plain files and folders: a symbolic
+     link, or on Unix a file linked twice (a hard link in the archive), is refused.
   5. **Swapped in atomically, the old kept until the new one runs** (`own::swap`): each new file
      copied beside its place (the same folder, so the move is atomic); the old one kept aside
      (elsewhere hard-linked to `.ptyro.old.<pid>`, so the name is never missing; on Windows
-     renamed to `ptyro.exe.old`, since a running exe can't be overwritten but can be renamed);
+     renamed to `ptyro.exe.old.<pid>`, since a running exe can't be overwritten but can be
+     renamed);
      the new one renamed into place; then **`<path> --version` must say `ptyro <v>`**. If it
      doesn't (it won't run, Smart App Control, the wrong version), every file is put back: "the
-     new ptyro <v> didn't run (…), so the old one is back in place". On success the old file is
-     removed (on Windows, while the old image still runs — the daemon, a TUI — it can't be: every
-     ptyro start sweeps `ptyro.exe.old`, `ptyro.exe.old.<pid>` and the same for the zip's
-     `ptyrow.exe`, `conpty.dll`, `OpenConsole.exe`, which are swapped with it, as install.ps1 puts
-     them). The release's shell completions are copied over `<prefix>/share/ptyro/completions` when
+     new ptyro <v> didn't run (…), so the old one is back in place" (a file that couldn't be put
+     back is said instead, with where the old one is). On success the old file is removed (on
+     Windows, while the old image still runs — the daemon, a TUI — it can't be: every ptyro start
+     sweeps install.ps1's `ptyro.exe.old` and an update's `ptyro.exe.old.<pid>` once that `<pid>`
+     no longer runs, so an update still going keeps what its rollback needs; the same for the
+     zip's `ptyrow.exe`, `conpty.dll`, `OpenConsole.exe`, which are swapped with it, as
+     install.ps1 puts them). The release's shell completions are copied over `<prefix>/share/ptyro/completions` when
      that folder exists (as install.sh puts them).
   6. An administrator's binary (Unix, at a terminal: `Admin::Ask`): the same, with the place,
-     put-back and removal done by `sudo sh -c …` (sudo asks for the password in the terminal,
-     never through ptyro). With `--yes`, from the web, or on Windows, it isn't attempted: the
+     put-back and removal done by `sudo sh -c SCRIPT sh PATHS…` (the paths are arguments, never
+     in the script; sudo asks for the password in the terminal, never through ptyro). A put-back
+     sudo refuses is said with where the old binary is and the `sudo mv` that restores it. With `--yes`, from the web, or on Windows, it isn't attempted: the
      command above is the fix.
   Homebrew's: `brew upgrade ptyro` live, then the version Homebrew's `bin/ptyro` link answers (the
-  keg's folder changes with each version, so the daemon is upgraded onto the link).
+  keg's folder changes with each version, so the daemon is upgraded onto the link). One still
+  older than the release (the formula behind it, or Homebrew's auto-update off) isn't an update:
+  "Homebrew's formula isn't at <v> yet", fix `brew update && brew upgrade ptyro`, and no daemon
+  upgrade or other half follows.
 
 **`ptyro update`** (§24.7's, extended): `ptyro update ptyro` names it (`ptyro update` covers it
-with the agents, ptyro last; `--check` and `--json` include it). The question shows it as "ptyro
+with the agents, ptyro last; `--check` and `--json` include it). Whether it will be updated is
+known from the lookup, so on Windows with WSL the other half is looked at then, before the setup
+lock is taken (a cold distro takes seconds; the lock is never held across a probe). The question shows it as "ptyro
 0.0.63 → 0.0.64: download ptyro 0.0.64 (ptyro-0.0.64-x86_64-unknown-linux-gnu.tar.gz), check it
 against SHA256SUMS, and replace /home/me/.local/bin/ptyro / then the daemon is upgraded live: every
 session carries on". After the swap, still under the lock, `versions.json` is refreshed (the

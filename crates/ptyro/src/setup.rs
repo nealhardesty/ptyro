@@ -377,6 +377,18 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
     let host = setup::host(&ctx.paths);
     // Looked up before the lock is taken: a slow network never holds it.
     let looked = updates::lookup(&*host);
+    // ptyro itself (BOOT6): whether it will be updated (or was named), so the other half of a
+    // Windows install with WSL is looked at now, before the lock (a cold distro takes seconds).
+    let install = own::Install::here();
+    let ptyro_named = ids.iter().any(|i| i == own::ID);
+    let ptyro_latest = looked.0.get(own::ID).cloned();
+    let ptyro_wanted = match own::finding(&install, ptyro_latest.as_deref()) {
+        Some(o) if ids.is_empty() => !updates::ignored(&cfg.ignore, &o) && o.managed.is_none(),
+        Some(_) => ptyro_named,
+        None => ptyro_named && ptyro_latest.is_some(),
+    };
+    let half =
+        if ptyro_wanted { crate::own::other_half(&ctx.paths, host.platform()).await } else { None };
     let lock = take_lock(ctx, "`ptyro update`")?;
     let since = updates::generation(&state);
     let (v, survey) = updates::remember(&*host, &state, updates::now(), since, Some(looked), true);
@@ -393,15 +405,7 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
         })
         .cloned()
         .collect();
-    let install = own::Install::here();
     let ptyro_todo = todo.iter().find(|o| o.id == own::ID).cloned();
-    // Named and the newest already: the halves are still brought into step (BOOT6).
-    let ptyro_named = ids.iter().any(|i| i == own::ID);
-    let half = if ptyro_todo.is_some() || (ptyro_named && v.latest.contains_key(own::ID)) {
-        crate::own::other_half(&ctx.paths, survey.platform).await
-    } else {
-        None
-    };
     if !a.json {
         for id in ids.iter().filter(|id| !todo.iter().any(|o| &o.id == *id)) {
             eprintln!("{}", standing(id, &v, &survey));
