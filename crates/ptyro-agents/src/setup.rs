@@ -16,6 +16,7 @@
 //! build in a folder ptyro owns ([`ptyro_core::paths::Paths::tools`]), which goes on `PATH` through
 //! `ptyro shell-init` and the daemon's environment ([`path_dirs`]).
 
+pub mod checklist;
 mod fake;
 mod host;
 pub mod login;

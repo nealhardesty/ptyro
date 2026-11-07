@@ -239,10 +239,7 @@ impl App {
         };
         let choice = job.done.remove(i)[WHERE.len()..].to_owned();
         let wsl_daemon = where_offered(cfg!(windows), self.connect.remote.as_deref()) == Some(true);
-        let exe = std::env::current_exe()
-            .ok()
-            .and_then(|p| ptyro_core::wsl::path_in_distro(&p.to_string_lossy(), "/mnt/"));
-        let runs = where_runs(&choice, wsl_daemon, exe.as_deref());
+        let runs = where_runs(&choice, wsl_daemon, exe_in_wsl().as_deref());
         if runs.is_empty() {
             return self.toast_err("this ptyro.exe isn't where WSL can reach it: run `ptyro setup --where windows` in a Windows terminal");
         }
@@ -323,6 +320,13 @@ pub fn where_offered(windows: bool, remote: Option<&str>) -> Option<bool> {
         Some(r) if ptyro_client::is_local(Some(r)) => Some(false),
         Some(_) => None,
     }
+}
+
+/// This ptyro.exe as WSL names it (`/mnt/c/…`), for a split in WSL to run it through interop.
+pub fn exe_in_wsl() -> Option<String> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| ptyro_core::wsl::path_in_distro(&p.to_string_lossy(), "/mnt/"))
 }
 
 /// What a side choice runs, one split each: `(ptyro to run, None for the daemon's; words to add)`.

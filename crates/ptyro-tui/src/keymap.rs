@@ -231,10 +231,13 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("integrations", "The agent integrations: what's installed and what each launch gets"),
     a("integrations.install", "Install an agent's opt-in integration (Gemini, Antigravity)"),
     a("integrations.uninstall", "Remove an agent's opt-in integration"),
-    a("first.run", "The first-run screen again: agents, accounts and repositories found"),
+    a(
+        "first.run",
+        "The first-run screen again: agents and tools to install, accounts and repositories found",
+    ),
     a(
         "app.setup",
-        "Set up agents and tools: the checklist (Claude Code, Codex, Antigravity, OpenCode, Gemini CLI, git, GitHub CLI, Node.js), in a split",
+        "Set up agents and tools: the checklist (Claude Code, Codex, Antigravity, OpenCode, Gemini CLI, git, GitHub CLI, Node.js); ⏎ installs in a split, then the logins",
     ),
     a("app.install", "Install an agent or tool by name, with what it needs first, in a split"),
     a(
@@ -581,6 +584,7 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Prefix, "G", "worktree.gc"),
     (Table::Prefix, "M", "health"),
     (Table::Prefix, "I", "app.about"),
+    (Table::Prefix, "U", "app.setup"),
     (Table::Prefix, "C", "config.panel"),
     (Table::Prefix, "P", "project.add"),
     (Table::Prefix, "v", "pane.split_right"),
@@ -656,6 +660,7 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Nav, "H", "home"),
     (Table::Nav, "M", "health"),
     (Table::Nav, "I", "app.about"),
+    (Table::Nav, "U", "app.setup"),
     (Table::Nav, "C", "config.panel"),
     (Table::Nav, "F", "worktree.finish"),
     (Table::Nav, "P", "project.add"),

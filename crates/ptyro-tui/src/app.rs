@@ -600,7 +600,14 @@ pub enum AppMsg {
     Health(Vec<crate::health::Check>),
     /// What `ptyro about --json` said (UX2.1); `None` if it could not run.
     About(Option<serde_json::Value>),
+    /// What the setup checklist found (BOOT2): the sides, the default place, and why that
+    /// isn't the daemon's side; `None` if looking failed.
+    SetupFound(Option<Box<SetupLook>>),
 }
+
+/// What [`crate::setup_list::look`] found.
+pub type SetupLook =
+    (ptyro_agents::setup::checklist::Sides, ptyro_agents::setup::Where, Option<String>);
 
 /// One pane's live state.
 #[derive(Default)]
@@ -820,6 +827,10 @@ pub struct App {
     pub health: crate::health::Health,
     /// The last `ptyro …` command run in a split (`run_cli`).
     pub last_cli: Option<Vec<String>>,
+    /// The name of the split that command runs in.
+    pub last_split: Option<String>,
+    /// The setup checklist's install running in a split, and what runs after it (BOOT2).
+    pub setup_run: Option<crate::setup_list::SetupRun>,
     /// Addresses drawn on screen this frame, for the terminal to make links (OSC 8, UX2.1).
     pub links: std::cell::RefCell<Vec<crate::about::Link>>,
     /// Where the pane headers' SHELLS strips were drawn this frame, for clicks (SPEC §23.6).
@@ -950,6 +961,8 @@ impl App {
             first_run: None,
             health: crate::health::Health::default(),
             last_cli: None,
+            last_split: None,
+            setup_run: None,
             links: std::cell::RefCell::new(Vec::new()),
             strip_hits: std::cell::RefCell::new(Vec::new()),
             alt_seen: false,
@@ -1529,6 +1542,7 @@ impl App {
             self.refresh_again();
         }
         self.health_tick(self.started);
+        self.setup_tick();
         self.sync_window();
     }
 
@@ -1933,6 +1947,10 @@ impl App {
                 self.got_health(checks);
                 return;
             }
+            AppMsg::SetupFound(found) => {
+                self.setup_found(found);
+                return;
+            }
             AppMsg::About(doc) => {
                 if let Some(Overlay::About { doc: slot, .. }) = &mut self.overlay {
                     *slot = Some(doc.unwrap_or_else(|| serde_json::json!({ "failed": true })));
@@ -1953,6 +1971,13 @@ impl App {
                 return;
             }
         };
+        // The setup checklist's split started, or couldn't (BOOT2).
+        if let Pending::Spawned { spec, .. } = &pending
+            && self.setup_run.is_some()
+        {
+            let name = spec.name.clone();
+            self.setup_spawned(name.as_deref(), res.is_ok());
+        }
         // A reply that opens a dialog must not replace the box someone is typing in: it is
         // held aside while the reply is handled, then put back (and the reply said so).
         // (A peek's own screen arrives into the box it fills in: that one is not held.)
@@ -3320,6 +3345,7 @@ impl App {
                 );
             }
             "first.run" => self.open_first_run(),
+            "app.setup" => self.open_setup(None, None),
             "toast.act" => match self.toast.take().and_then(|t| t.offer) {
                 Some(Offer { then: Then::Run(cmd), .. }) => self.run(&cmd),
                 Some(Offer { then: Then::Send(req, done), .. }) => {
@@ -8673,10 +8699,8 @@ mod tests {
         );
         use crate::onboard::{Choice, ChoiceKind, FirstRun};
         app.first_run = Some(FirstRun {
-            agents: vec![
-                ("claude".into(), "claude".into(), true),
-                ("codex".into(), "codex".into(), false),
-            ],
+            setup: crate::setup_list::Setup::looking(None),
+            only_setup: false,
             choices: vec![
                 Choice {
                     section: "accounts",
@@ -8700,7 +8724,7 @@ mod tests {
         app.first_run_repos(vec!["/src/alpha".into()]);
         let shown = screen(&app);
         assert!(shown.contains("Welcome to ptyro"), "{shown}");
-        assert!(shown.contains("✓ claude (default)") && !shown.contains("✓ codex"), "{shown}");
+        assert!(shown.contains("agents and tools: looking at what's installed…"), "{shown}");
         assert!(shown.contains("[x] profile work") && shown.contains("[ ] alpha"), "{shown}");
         // j j: past the repository to notifications; Space ticks it; ⏎ writes the config.
         let k = |app: &mut App, code| app.first_run_key(KeyEvent::new(code, Mods::NONE));
@@ -8713,6 +8737,247 @@ mod tests {
         assert!(text.contains("[profiles.work]") && text.contains("\"desktop\""), "{text}");
         assert!(app.toast.as_ref().unwrap().text.contains("1 profile(s), 0 project(s)"));
         assert!(app.toast.as_ref().unwrap().text.contains("take the tour"));
+        // Still looking, so nothing installed: it says how to come back to the checklist.
+        assert!(app.toast.as_ref().unwrap().text.contains("C-q U opens the setup checklist"));
+    }
+
+    /// BOOT2: the setup checklist is the first part of the first run: Agents, Tools and Already
+    /// here, each with its line; a prerequisite ticks itself with the reason; ⏎ installs what's
+    /// ticked in a split (`ptyro install … --confirmed`) and keeps the other choices.
+    #[test]
+    fn the_first_run_starts_with_the_setup_checklist_and_enter_installs_in_a_split() {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path().to_path_buf();
+        let paths = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| h.clone())).unwrap();
+        let connect = ConnectOptions::new(paths.clone(), ptyro_protocol::ClientKind::Tui);
+        let mut app = App::new(
+            Options::default(),
+            connect,
+            paths,
+            Config::default(),
+            false,
+            Rect::new(0, 0, 160, 40),
+        );
+        use crate::onboard::FirstRun;
+        app.first_run = Some(FirstRun {
+            setup: crate::setup_list::tests::one(&[("claude", "2.1.319")]),
+            ..FirstRun::default()
+        });
+        let shown = screen_at(&app, 140);
+        for want in [
+            " Agents",
+            "[x] Codex",
+            "OpenAI's coding agent",
+            "then log in",
+            "[ ] Gemini CLI",
+            "for Gemini API-key and enterprise accounts (others: Antigravity)",
+            " Tools",
+            "[x] git",
+            "asks for admin",
+            " Already here",
+            "✓ Claude Code",
+            "your default agent",
+            "⏎ install 3 and use these",
+            "s not now",
+        ] {
+            assert!(shown.contains(want), "{want:?}:\n{shown}");
+        }
+        let k = |app: &mut App, code| app.first_run_key(KeyEvent::new(code, Mods::NONE));
+        // Down to Gemini CLI (Codex, Antigravity, OpenCode, Gemini CLI), Space ticks it, and
+        // Node.js with it.
+        for _ in 0..3 {
+            k(&mut app, KeyCode::Char { c: 'j' });
+        }
+        k(&mut app, KeyCode::Char { c: ' ' });
+        let shown = screen_at(&app, 140);
+        assert!(shown.contains("[+] Node.js"), "{shown}");
+        assert!(shown.contains("ticked because Gemini CLI needs it"), "{shown}");
+        assert!(shown.contains("⏎ install 5 and use these"), "{shown}");
+        k(&mut app, KeyCode::Enter);
+        assert!(app.first_run.is_none());
+        let words = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            app.last_cli,
+            Some(words(&["install", "codex", "gemini", "git", "gh", "--confirmed"])),
+            "Node.js comes with Gemini CLI, as the CLI plans it"
+        );
+        assert!(Config::path(&app.paths).exists(), "the first run's config is written too");
+    }
+
+    /// BOOT2: while the checklist's install runs, `U` (or a health fix, or `first.run`) never
+    /// opens another: it says so. Each side's split starts once the one before it ends.
+    #[tokio::test]
+    async fn a_running_setup_is_never_joined_by_a_second_and_sides_run_in_turn() {
+        let mut app = app();
+        let words = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        app.setup_run = Some(crate::setup_list::SetupRun {
+            split: "ptyro-install".into(),
+            seen: false,
+            queue: vec![(None, words(&["install", "codex", "--confirmed", "--where", "wsl"]))],
+        });
+        app.open_setup(None, None);
+        assert!(app.first_run.is_none(), "no second checklist");
+        assert!(app.last_cli.is_none(), "no second install");
+        assert!(
+            app.toast.as_ref().unwrap().text.contains("setup is still running in ptyro-install")
+        );
+        app.open_first_run();
+        assert!(app.first_run.is_none());
+        // Still starting (not in the list yet): it waits.
+        app.setup_tick();
+        assert!(app.last_cli.is_none());
+        // Seen, then gone: WSL's side starts now, and is the one running.
+        app.setup_run.as_mut().unwrap().seen = true;
+        app.setup_tick();
+        assert_eq!(
+            app.last_cli,
+            Some(words(&["install", "codex", "--confirmed", "--where", "wsl"]))
+        );
+        let run = app.setup_run.as_ref().expect("WSL's side runs");
+        assert!(run.queue.is_empty());
+        app.setup_run.as_mut().unwrap().seen = true;
+        app.setup_tick();
+        assert!(app.setup_run.is_none(), "done: the checklist can open again");
+    }
+
+    /// BOOT2: the checklist's split frees it as soon as it can't start, is closed, or ends;
+    /// then the health badge looks again, after a run already in flight rather than not at all.
+    #[tokio::test]
+    async fn a_setup_split_that_fails_closes_or_dies_frees_the_checklist_and_the_badge_looks_again()
+    {
+        let mut app = app();
+        let run = || {
+            Some(crate::setup_list::SetupRun {
+                split: "ptyro-install".into(),
+                seen: false,
+                queue: Vec::new(),
+            })
+        };
+        let spawned = || Pending::Spawned {
+            split: None,
+            spec: Box::new(SpawnSpec {
+                name: Some("ptyro-install".into()),
+                ..SpawnSpec::default()
+            }),
+            back: false,
+        };
+        // A doctor run is in flight, from before the install.
+        app.health.running = true;
+        // 1. The spawn failed: freed at once, no half-minute wait.
+        app.setup_run = run();
+        app.on_reply(AppMsg::Reply(
+            spawned(),
+            Err(ptyro_core::Error::new(ErrorCode::Internal, "no pty")),
+        ));
+        assert!(app.setup_run.is_none(), "a failed spawn frees it");
+        // 2. Started, then closed by the person before the list ever showed it running.
+        app.setup_run = run();
+        let s = session("ptyro-install");
+        app.on_reply(AppMsg::Reply(spawned(), Ok(Reply::Session { info: s.clone() })));
+        assert!(app.setup_run.as_ref().unwrap().seen, "started");
+        app.setup_tick();
+        assert!(app.setup_run.is_some(), "still running");
+        app.on_event(DomainEvent::SessionRemoved { id: s.id });
+        app.setup_tick();
+        assert!(app.setup_run.is_none(), "closed: freed");
+        assert!(app.health.again, "the badge looks again once the run in flight is in");
+        // 3. Started, then its program died.
+        app.setup_run = run();
+        let mut s = session("ptyro-install");
+        app.on_reply(AppMsg::Reply(spawned(), Ok(Reply::Session { info: s.clone() })));
+        s.state = ProcessState::Exited { code: Some(1), signal: None };
+        app.upsert(s);
+        app.setup_tick();
+        assert!(app.setup_run.is_none(), "ended: freed");
+        // The badge: the run in flight answers with what it saw before the install (claude
+        // missing); it is looked at again, and that answer clears it.
+        let stale = crate::health::Check {
+            section: "agents".into(),
+            name: "claude".into(),
+            level: "problem".into(),
+            text: "claude not found".into(),
+        };
+        app.got_health(vec![stale]);
+        assert_eq!(app.health.findings.len(), 1);
+        assert!(app.health.running && !app.health.again, "looking again now");
+        app.got_health(Vec::new());
+        assert!(app.health.findings.is_empty(), "the badge shows the install's result");
+    }
+
+    /// BOOT2: two sides fit an 80-column terminal: the cells beside the name, the line under it.
+    #[test]
+    fn a_two_sided_checklist_fits_80_columns() {
+        use crate::onboard::FirstRun;
+        // 80 columns, tall enough to show everything.
+        let draw = |app: &App| {
+            let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 60)).unwrap();
+            t.draw(|f| crate::ui::draw(app, f)).unwrap();
+            let buf = t.backend().buffer();
+            buf.content.chunks(80).fold(String::new(), |mut s, row| {
+                s.extend(row.iter().map(|c| c.symbol()));
+                s.push('\n');
+                s
+            })
+        };
+        // The box's lines (`│` at both edges): nothing runs into its right edge, where a cut
+        // line would end.
+        let fits = |shown: &str| {
+            for line in shown.lines() {
+                let c: Vec<char> = line.chars().collect();
+                let Some(left) = c.iter().position(|ch| *ch == '│') else { continue };
+                let Some(right) = c.iter().rposition(|ch| *ch == '│').filter(|r| *r > left + 10)
+                else {
+                    continue;
+                };
+                assert_eq!(c[right - 1], ' ', "cut off:\n{shown}");
+            }
+        };
+        let mut app = app();
+        let mut setup = crate::setup_list::tests::two();
+        // Gemini CLI on WSL's side: Node.js there, with the line saying why under its row.
+        setup.side_step(1);
+        let gemini = setup.rows().iter().position(|e| e.id == "gemini").unwrap();
+        setup.toggle(gemini);
+        app.first_run = Some(FirstRun { setup, only_setup: true, ..FirstRun::default() });
+        let shown = draw(&app);
+        assert!(shown.contains("WSL (Ubuntu)"), "{shown}");
+        assert!(shown.contains("[x] the vendor's installer"), "{shown}");
+        assert!(shown.contains("then log in"), "{shown}");
+        assert!(shown.contains("WSL (Ubuntu): ticked because Gemini CLI needs it"), "{shown}");
+        fits(&shown);
+        // Windows without a usable WSL: its reason and fix, and the default side's, wrap.
+        app.first_run = Some(FirstRun {
+            setup: crate::setup_list::tests::unusable(),
+            only_setup: true,
+            ..FirstRun::default()
+        });
+        let shown = draw(&app);
+        assert!(shown.contains("WSL: WSL isn't installed or has no distro"), "{shown}");
+        assert!(shown.contains("By default this sets up Windows"), "{shown}");
+        fits(&shown);
+    }
+
+    /// BOOT2: `app.setup` (`U`) is the checklist alone; `s` (not now) installs nothing and says
+    /// how to come back.
+    #[test]
+    fn the_setup_checklist_alone_closes_with_not_now() {
+        let mut app = app();
+        assert_eq!(app.keymap.key_for("app.setup").as_deref(), Some("C-q U"));
+        use crate::onboard::FirstRun;
+        app.first_run = Some(FirstRun {
+            setup: crate::setup_list::tests::one(&[]),
+            only_setup: true,
+            ..FirstRun::default()
+        });
+        let shown = screen(&app);
+        assert!(shown.contains("Set up this computer"), "{shown}");
+        assert!(shown.contains("⏎ install 4 · Space toggle"), "{shown}");
+        assert!(!shown.contains("repositories"), "{shown}");
+        app.first_run_key(KeyEvent::new(KeyCode::Char { c: 's' }, Mods::NONE));
+        assert!(app.first_run.is_none());
+        assert!(app.last_cli.is_none(), "nothing installed");
+        assert!(app.toast.as_ref().unwrap().text.contains("C-q U opens the setup checklist"));
+        assert!(!Config::path(&app.paths).exists(), "the checklist alone writes no config");
     }
 
     #[test]

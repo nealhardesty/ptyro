@@ -390,6 +390,9 @@ pub struct Item {
     /// A qualifier shown beside the name (Gemini CLI's "for Gemini API-key…").
     #[serde(default)]
     pub label: Option<String>,
+    /// What it is, in a line for people (the setup checklist's description, BOOT2).
+    #[serde(default)]
+    pub about: String,
     /// The vendor's documentation, where every value was checked.
     pub doc: String,
     /// When (`2026-11-06`).
@@ -560,6 +563,7 @@ mod tests {
     fn every_row_is_complete_on_every_platform() {
         for i in items() {
             assert!(i.doc.starts_with("https://"), "{}: doc", i.id);
+            assert!(!i.about.is_empty(), "{}: the checklist's line, `about`", i.id);
             let d: Vec<&str> = i.checked.split('-').collect();
             assert!(
                 d.len() == 3 && d.iter().all(|p| p.parse::<u32>().is_ok()) && d[0].len() == 4,
