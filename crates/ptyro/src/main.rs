@@ -25,6 +25,7 @@ mod remote;
 mod script;
 mod serve;
 mod service;
+mod setup;
 mod shells;
 mod ship;
 mod tls;
@@ -750,6 +751,44 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// The setup checklist: install coding agents (Claude Code, Codex, Antigravity, OpenCode,
+    /// Gemini CLI) and the tools they need (git, the GitHub CLI, Node.js) on this computer
+    Setup {
+        /// Ask nothing: install what --agents and --tools name (with neither, the defaults: Claude
+        /// Code, Codex, git, GitHub CLI). A step that needs administrator rights runs only if it
+        /// can without a password prompt; otherwise it is reported with its command
+        #[arg(short, long)]
+        yes: bool,
+        /// The agents to tick: claude, codex, agy, opencode, gemini (comma-separated; `none`)
+        #[arg(long, value_delimiter = ',', value_name = "NAMES")]
+        agents: Option<Vec<String>>,
+        /// The tools to tick: git, gh, node (comma-separated; `none`)
+        #[arg(long, value_delimiter = ',', value_name = "NAMES")]
+        tools: Option<Vec<String>>,
+        /// Show the checklist and what would run; change nothing
+        #[arg(long)]
+        dry_run: bool,
+        /// With --dry-run, the plan as JSON; otherwise each step's progress as a JSON line
+        #[arg(long)]
+        json: bool,
+    },
+    /// Install agents or tools by name, with what they need first: `ptyro install agy`,
+    /// `ptyro install gemini gh`
+    Install {
+        /// claude, codex, agy, opencode, gemini, git, gh, node
+        #[arg(required = true, value_name = "NAME")]
+        names: Vec<String>,
+        /// Don't ask first; a step that needs administrator rights runs only if it can without a
+        /// password prompt
+        #[arg(short, long)]
+        yes: bool,
+        /// Show what would run; change nothing
+        #[arg(long)]
+        dry_run: bool,
+        /// With --dry-run, the plan as JSON; otherwise each step's progress as a JSON line
+        #[arg(long)]
+        json: bool,
+    },
     /// Which ptyro this is: version, repository, licence, build, where things live, whether the
     /// daemon and the web app run, and a block to paste into a bug report
     About {
@@ -931,6 +970,13 @@ enum Cmd {
     #[cfg(debug_assertions)]
     #[command(hide = true)]
     FakeGh {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Built-in fake installer for setup's tests (BOOT1); debug builds only
+    #[cfg(debug_assertions)]
+    #[command(hide = true)]
+    FakeInstaller {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -1224,6 +1270,8 @@ fn main() {
         Some(Cmd::FakeAgent { args }) => ptyro_testkit::fake_agent::main(&args),
         #[cfg(debug_assertions)]
         Some(Cmd::FakeGh { args }) => ptyro_testkit::fake_gh::main(&args),
+        #[cfg(debug_assertions)]
+        Some(Cmd::FakeInstaller { args }) => ptyro_agents::setup::fake_installer(&args),
         // These run inside agents on every hook: no runtime, no config, never a failure.
         Some(Cmd::Hook { adapter, event, args }) => relay::hook(&adapter, &event, &args),
         Some(Cmd::StatuslineRelay) => relay::statusline(),

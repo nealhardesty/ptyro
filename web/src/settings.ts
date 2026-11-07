@@ -48,6 +48,8 @@ const ACTIONS = {
   "web.off": "Stop the daemon running the web app's server (paired devices stay paired)",
   "web.logs": "What the web app's server has said, the latest lines",
   "first.run": "First-run setup: your agents, accounts and repositories",
+  "setup.plan": "The setup checklist: which agents and tools are on the computer, and what installing the ticked ones would run",
+  "setup.install": "Install the ticked agents and tools on the computer, with what they need first; a step that needs administrator rights shows the command to run there",
   "help.tour": "A tour: ptyro's daily loop with a pretend agent, in a throwaway ptyro of its own",
 } as const;
 const tip = actions(ACTIONS);
@@ -84,7 +86,7 @@ function moreView(): HTMLElement {
     ["Web app", "The server your phone opens: up, its address, on or off", "#/web"],
     ["Daemon", "Version, logs, restart, login service", "#/daemon"],
     ["About", "Version, where to report a problem, where things live", "#/about"],
-    ["Set up ptyro", "Your agents, accounts and repositories", "#/setup"],
+    ["Set up ptyro", "Install agents and tools; your accounts and repositories", "#/setup"],
     ["Take the tour", "ptyro's daily loop with a pretend agent", "#/tour"],
   ];
   return h("div", {}, ui.header("More", false), h("main", { class: "stack", title: tip("more") },
@@ -616,6 +618,7 @@ function setupView(): HTMLElement {
   const repos = (discovered.get("") ?? []).filter((p) => ![...data.projects.values()].some((x) => x.root === p));
   return h("div", {}, ui.header("Set up ptyro", "#/more"), h("main", { class: "stack", title: tip("first.run") },
     h("p", { class: "intro" }, "Nothing changes until you tap a button."),
+    installSection(),
     section("Your agents", conn.scope !== "full" ? h("p", { class: "sub" }, "Needs a device paired with --scope full.") : pending(setupChecks, "", "Looking…") ?? (agents.length ? h("div", { class: "rows" }, ...agents.map((c) => row(h("span", {}, h("span", { class: `lvl ${(LEVEL[c.level] ?? ["", ""])[1]}` }, (LEVEL[c.level] ?? ["·"])[0]), " ", c.name), c.text))) : h("p", { class: "sub" }, "No agent CLIs found: install claude, codex, gemini or opencode."))),
     section("Your accounts", h("p", { class: "sub" }, "Several logins on one machine (aliases, ~/.claude-* directories, git identities) can become profiles."),
       bar(h("button", { onclick: () => void detectProfiles(), disabled: conn.scope !== "full" }, "Find my accounts"))),
@@ -624,6 +627,86 @@ function setupView(): HTMLElement {
       bar(h("button", { class: "primary", onclick: async () => { const n = setupPicks.size; for (const p of setupPicks) await ask({ t: "project_add", path: p, workspace: null }); setupPicks = new Set(); discovered.reload(""); ui.toast(`Added ${n}`); } }, "Add the ticked ones")))
       : h("p", { class: "sub" }, data.projects.size ? "Everything found is added already." : "None found under your discover roots: add one by its path on the Projects tab."))),
     bar(h("button", { class: "primary", onclick: () => go("#/") }, "Done"))));
+}
+
+// ── installing agents and tools (BOOT1: the daemon's setup engine, SPEC §24.2) ──────────────
+
+/// The checklist for some picks (the key: ids joined by commas; "" is the defaults).
+const setupPlan = new Cache<any>((key) => conn.request({ t: "setup_plan", picks: key === "" ? null : key === "none" ? [] : key.split(",") }).then((r) => r.plan));
+let installKey = "";
+/// The run this page started; events that arrive before its reply wait in `early`.
+const installRun = { id: "", starting: false, early: [] as any[], lines: [] as string[], report: null as any };
+
+/// A setup run's progress (`setup_progress` events): its lines, then its report.
+export function setupEvent(e: any): void {
+  if (installRun.starting && !installRun.id) { installRun.early.push(e); return; }
+  if (!installRun.id || e.run !== installRun.id) return;
+  const ev = e.event;
+  const line = (t: string): void => { installRun.lines.push(t); if (installRun.lines.length > 400) installRun.lines.shift(); };
+  if (ev.event === "started") line(`▸ ${ev.name}: ${ev.command}`);
+  else if (ev.event === "line") line(`  │ ${ev.text}`);
+  else if (ev.event === "done") line(`✓ ${ev.id}${ev.version ? " " + ev.version : ""}`);
+  else if (ev.event === "failed") line(`✗ ${ev.id}: ${ev.error}\n  fix: ${ev.fix}`);
+  else if (ev.event === "skipped") line(`– ${ev.id}: ${ev.reason}\n  fix: ${ev.fix}`);
+  else if (ev.event === "blocked") line(`✗ ${ev.id}: can't be installed here: ${ev.reason}\n  fix: ${ev.fix}`);
+  else if (ev.event === "finished") { installRun.report = ev.report; setupPlan.reload(); }
+  ui.render();
+}
+
+function stateText(e: any): string {
+  const v = e.version ? ` ${e.version}` : "";
+  switch (e.state) {
+    case "installed": return `installed${v}`;
+    case "other": return `installed${v} another way (${e.via})`;
+    case "outdated": return `${e.version}; ${e.latest} is out`;
+    case "too_old": return `${e.version}, older than the ${e.min} needed`;
+    default: return "not installed";
+  }
+}
+
+function installSection(): HTMLElement {
+  const title = "Install agents and tools";
+  if (conn.scope !== "full") return section(title, h("p", { class: "sub" }, "Needs a device paired with --scope full."));
+  const plan = setupPlan.get(installKey);
+  const waiting = pending(setupPlan, installKey, "Looking at what's installed…");
+  if (waiting || !plan) return section(title, waiting ?? h("p", { class: "sub" }, "Looking…"));
+  const picked: string[] = plan.entries.filter((e: any) => e.picked).map((e: any) => e.id);
+  const toggle = (id: string, on: boolean): void => {
+    const next = on ? [...picked, id] : picked.filter((p) => p !== id);
+    installKey = next.join(",");
+    if (!installKey) installKey = "none";
+    ui.render();
+  };
+  const here = plan.entries.filter((e: any) => e.state === "installed" || e.state === "other");
+  const open = plan.entries.filter((e: any) => !here.includes(e));
+  const admin = open.filter((e: any) => e.ticked && e.action?.admin);
+  const running = installRun.id !== "" && !installRun.report;
+  return section(title,
+    h("div", { class: "stack-in", title: tip("setup.plan") }, ...open.map((e: any) => {
+      const c = h("input", { type: "checkbox" }) as HTMLInputElement;
+      c.checked = e.ticked;
+      c.disabled = running || (e.ticked && !e.picked);
+      c.addEventListener("change", () => toggle(e.id, c.checked));
+      const notes = [e.label, e.needed_by?.length ? `needed by ${e.needed_by.join(", ")}` : null,
+        e.state !== "missing" ? stateText(e) : null, e.ticked && e.action ? `through ${e.action.via}${e.action.admin ? ", needs administrator rights" : ""}` : null,
+        e.blocked ? `can't: ${e.blocked}` : null].filter(Boolean).join("; ");
+      return h("label", { class: "field check" }, c, h("span", {}, e.name), notes ? h("small", {}, notes) : null);
+    })),
+    here.length ? h("p", { class: "sub" }, "Already here: ", here.map((e: any) => `${e.name} (${stateText(e)})`).join(", ")) : null,
+    admin.length ? h("p", { class: "sub" }, "Administrator rights are asked for only on the computer itself: run ", h("code", {}, `ptyro install ${admin.map((e: any) => e.id).join(" ")}`), " there (or ", h("code", {}, "ptyro setup"), "). From here they show the command instead.") : null,
+    bar(h("button", { class: "primary", title: tip("setup.install"), disabled: running || !open.some((e: any) => e.ticked && (e.action || e.blocked)), onclick: () => void startInstall(picked) }, running ? "Installing…" : "Install the ticked ones")),
+    installRun.lines.length ? h("pre", { class: "log" }, installRun.lines.join("\n")) : null,
+    installRun.report ? h("p", { class: "sub" }, `${installRun.report.done.length} installed, ${installRun.report.failed.length} failed, ${installRun.report.skipped.length} not run${installRun.report.blocked?.length ? `, ${installRun.report.blocked.length} can't be installed here` : ""}.`) : null);
+}
+
+async function startInstall(picks: string[]): Promise<void> {
+  Object.assign(installRun, { id: "", starting: true, early: [], lines: [], report: null });
+  try {
+    const r = await conn.request({ t: "setup_run", picks });
+    installRun.id = r.run;
+    for (const e of installRun.early.splice(0)) setupEvent(e);
+    ui.render();
+  } catch (e) { hostFail(e); } finally { installRun.starting = false; }
 }
 
 // ── the tour ────────────────────────────────────────────────────────────────────────────────

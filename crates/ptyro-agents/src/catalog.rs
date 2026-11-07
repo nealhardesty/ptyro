@@ -8,13 +8,13 @@
 use std::cmp::Ordering;
 use std::sync::OnceLock;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const DATA: &str = include_str!("catalog.toml");
 
 /// Where something is installed. WSL is a platform of its own: its Linux side is set up apart
 /// from Windows' (BOOT8).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Platform {
     Linux,
@@ -105,7 +105,7 @@ impl Mark {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Kind {
     Agent,
@@ -113,7 +113,7 @@ pub enum Kind {
 }
 
 /// How a method installs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Via {
     /// The vendor's own installer (Claude's native installer, Codex's, Antigravity's…).
@@ -127,6 +127,36 @@ pub enum Via {
     Xcode,
     /// The official nodejs.org build, unpacked into a folder ptyro owns ([`Method::url`]).
     NodeDist,
+}
+
+impl Via {
+    /// `node-dist`, as the table names it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Vendor => "vendor",
+            Self::Npm => "npm",
+            Self::Brew => "brew",
+            Self::Winget => "winget",
+            Self::Apt => "apt",
+            Self::Dnf => "dnf",
+            Self::Xcode => "xcode",
+            Self::NodeDist => "node-dist",
+        }
+    }
+
+    /// For people: `npm`, `Homebrew`, `the vendor's installer`.
+    pub fn words(self) -> &'static str {
+        match self {
+            Self::Vendor => "the vendor's installer",
+            Self::Npm => "npm",
+            Self::Brew => "Homebrew",
+            Self::Winget => "WinGet",
+            Self::Apt => "apt",
+            Self::Dnf => "dnf",
+            Self::Xcode => "Xcode's Command Line Tools",
+            Self::NodeDist => "nodejs.org's build",
+        }
+    }
 }
 
 /// What runs a method's command.
@@ -475,6 +505,18 @@ impl Ord for Version {
     }
 }
 
+impl std::fmt::Display for Version {
+    /// `2.1.319`, `0.164.0-alpha.7`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let nums: Vec<String> = self.parts.iter().map(u64::to_string).collect();
+        f.write_str(&nums.join("."))?;
+        match &self.pre {
+            Some(p) => write!(f, "-{p}"),
+            None => Ok(()),
+        }
+    }
+}
+
 impl PartialOrd for Version {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
@@ -548,6 +590,19 @@ mod tests {
                             i.id,
                             p.name()
                         );
+                    }
+                    // WinGet runs with no input: its first-use agreements are accepted up
+                    // front, and its own source named (not the msstore's).
+                    for c in [Some(cmd), m.update.as_deref()].into_iter().flatten() {
+                        if m.via == Via::Winget {
+                            for flag in [
+                                "--source winget",
+                                "--accept-source-agreements",
+                                "--accept-package-agreements",
+                            ] {
+                                assert!(c.contains(flag), "{}: {c} lacks {flag}", i.id);
+                            }
+                        }
                     }
                     // sudo means admin, and admin is said.
                     if cmd.contains("sudo ") {

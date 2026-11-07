@@ -232,6 +232,11 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("integrations.install", "Install an agent's opt-in integration (Gemini, Antigravity)"),
     a("integrations.uninstall", "Remove an agent's opt-in integration"),
     a("first.run", "The first-run screen again: agents, accounts and repositories found"),
+    a(
+        "app.setup",
+        "Set up agents and tools: the checklist (Claude Code, Codex, Antigravity, OpenCode, Gemini CLI, git, GitHub CLI, Node.js), in a split",
+    ),
+    a("app.install", "Install an agent or tool by name, with what it needs first, in a split"),
     a("row.menu", "Everything you can do with this session, worktree or project, with its keys"),
     a("sidebar.wider", "Make the sidebar a column wider (also: drag its edge)"),
     a("sidebar.narrower", "Make the sidebar a column narrower (also: drag its edge)"),

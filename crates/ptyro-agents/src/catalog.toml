@@ -15,6 +15,9 @@
 #   (the official nodejs.org build, unpacked into a folder ptyro owns: `url`, `sums`).
 # `needs`: a program that must be on PATH for this method (apt-get, dnf, brew, winget, npm).
 # `admin`: the method asks for administrator rights (sudo, or an installer's UAC prompt).
+# WinGet commands name `--source winget` and accept its source and package agreements up front:
+#   ptyro runs them with no input, and on a fresh machine WinGet's first-use prompt would read
+#   nothing and fail (winget's own flags, `winget install --help`).
 # `methods` are in order of preference: a platform's first method whose `needs` is present wins.
 # `others` are the other ways an item may already be installed, with how each updates (BOOT5,
 #   BOOT7's moves to the recommended method).
@@ -87,8 +90,8 @@ platforms = ["windows-x64", "windows-arm64"]
 via = "winget"
 shell = "powershell"
 needs = "winget"
-install = "winget install Anthropic.ClaudeCode"
-update = "winget upgrade Anthropic.ClaudeCode"
+install = "winget install --id Anthropic.ClaudeCode -e --source winget --accept-source-agreements --accept-package-agreements"
+update = "winget upgrade --id Anthropic.ClaudeCode -e --source winget --accept-source-agreements --accept-package-agreements"
 mark = "V"
 
 [[item]]
@@ -338,8 +341,8 @@ platforms = ["windows-x64", "windows-arm64"]
 via = "winget"
 shell = "powershell"
 needs = "winget"
-install = "winget install --id Git.Git -e --source winget"
-update = "winget upgrade --id Git.Git -e --source winget"
+install = "winget install --id Git.Git -e --source winget --accept-source-agreements --accept-package-agreements"
+update = "winget upgrade --id Git.Git -e --source winget --accept-source-agreements --accept-package-agreements"
 admin = true
 mark = "V"
 note = "Git for Windows; the docs say the Git.Git package isn't maintained by that project and may lag"
@@ -401,8 +404,8 @@ platforms = ["windows-x64", "windows-arm64"]
 via = "winget"
 shell = "powershell"
 needs = "winget"
-install = "winget install --id GitHub.cli --source winget"
-update = "winget upgrade --id GitHub.cli --source winget"
+install = "winget install --id GitHub.cli --source winget --accept-source-agreements --accept-package-agreements"
+update = "winget upgrade --id GitHub.cli --source winget --accept-source-agreements --accept-package-agreements"
 admin = true
 mark = "V"
 
@@ -454,8 +457,8 @@ platforms = ["windows-x64", "windows-arm64"]
 via = "winget"
 shell = "powershell"
 needs = "winget"
-install = "winget install -e --id OpenJS.NodeJS.LTS"
-update = "winget upgrade -e --id OpenJS.NodeJS.LTS"
+install = "winget install -e --id OpenJS.NodeJS.LTS --source winget --accept-source-agreements --accept-package-agreements"
+update = "winget upgrade -e --id OpenJS.NodeJS.LTS --source winget --accept-source-agreements --accept-package-agreements"
 admin = true
 mark = "S"
 note = "the package exists in winget-pkgs (26.13.0 on 2026-11-06); nodejs.org's page names no winget command"
