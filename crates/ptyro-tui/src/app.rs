@@ -9173,6 +9173,11 @@ mod tests {
     #[test]
     fn the_setup_checklist_says_when_setup_runs_elsewhere() {
         let mut app = app();
+        // Its own state folder: the lock it holds would make every other test's checklist (all
+        // in `app()`'s one folder, as are other test runs on this computer) see a setup running.
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path().to_path_buf();
+        app.paths = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| h.clone())).unwrap();
         use crate::onboard::FirstRun;
         let held = ptyro_agents::setup::lock::Lock::take(&app.paths.state, "the web app").unwrap();
         let mut setup = crate::setup_list::tests::one(&[]);

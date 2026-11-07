@@ -333,6 +333,15 @@ fn cli_autospawns_and_maps_errors_to_exit_codes() {
             .output()
             .unwrap()
     };
+    // The daemon this test starts goes with it, also when an assertion fails on the way.
+    struct Stop<F: Fn(&[&str]) -> std::process::Output>(F);
+    impl<F: Fn(&[&str]) -> std::process::Output> Drop for Stop<F> {
+        fn drop(&mut self) {
+            let _ = (self.0)(&["daemon", "stop", "--force"]);
+        }
+    }
+    let guard = Stop(run);
+    let run = |args: &[&str]| (guard.0)(args);
     let ls = run(&["ls"]);
     assert_eq!(ls.status.code(), Some(0), "ls without a daemon is fine");
     assert_eq!(run(&["daemon", "status"]).status.code(), Some(8), "and doesn't start one");

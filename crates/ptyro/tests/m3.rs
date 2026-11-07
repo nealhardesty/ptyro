@@ -200,8 +200,11 @@ default = true
 
 #[tokio::test]
 async fn the_worktree_lifecycle() {
+    // Below every OS's ephemeral range (Linux's starts at 32768, macOS's and Windows' at 49152):
+    // in it, an outgoing connection anywhere on the computer could hold a port of the block for
+    // a moment, and the daemon rightly skipped to the next block.
     let w =
-        World::new("[ports]\nrange = \"41000-41099\"\ncount = 5\n[compat]\nconductor_env = true\n");
+        World::new("[ports]\nrange = \"21000-21099\"\ncount = 5\n[compat]\nconductor_env = true\n");
     let root = w.repo(
         "app",
         &[
@@ -246,7 +249,7 @@ async fn the_worktree_lifecycle() {
         "module.exports = 1\n"
     );
     let ports = info.ports.expect("a port block");
-    assert_eq!((ports.base, ports.count), (41000, 5));
+    assert_eq!((ports.base, ports.count), (21000, 5));
     assert!(!info.path.join("setup.out").exists());
 
     w.ok(&["project", "trust", "app", "--yes"]);
@@ -270,7 +273,7 @@ async fn the_worktree_lifecycle() {
     let out = std::fs::read_to_string(second.path.join("setup.out")).unwrap();
     assert_eq!(
         out.trim(),
-        "setup-ran port=41005 name=second conductor=second",
+        "setup-ran port=21005 name=second conductor=second",
         "the second block, SPEC §10.6 env"
     );
 
@@ -366,7 +369,7 @@ async fn the_worktree_lifecycle() {
     w.git(&root, &["push", "-q", "origin", "main"]);
     let out = w.ok(&["wt", "rm", "app/first"]);
     assert!(out.contains("deleted branch first"), "{out}");
-    assert!(out.contains("released ports 41000-41004"), "{out}");
+    assert!(out.contains("released ports 21000-21004"), "{out}");
     assert!(!w.git(&root, &["branch"]).contains("first"));
     // The port block is free again.
     let r = new_wt(
@@ -381,7 +384,7 @@ async fn the_worktree_lifecycle() {
     .await
     .unwrap();
     let Reply::WorktreeCreated { info: third, .. } = r else { panic!() };
-    assert_eq!(third.ports.unwrap().base, 41000);
+    assert_eq!(third.ports.unwrap().base, 21000);
     // The main checkout can't be removed as a worktree.
     let e = c
         .request(Request::WorktreeRemove { addr: "app/@root".into(), opts: RemoveOpts::default() })
@@ -472,7 +475,8 @@ async fn listening_ports_are_reported_per_session() {
         eprintln!("skipped: no python3");
         return;
     }
-    let w = World::new("[ports]\nrange = \"42000-42099\"\n");
+    // Below the OSes' ephemeral ranges, as the lifecycle test's: its block is then never busy.
+    let w = World::new("[ports]\nrange = \"22000-22099\"\n");
     let root = w.repo("web", &[]);
     w.ok(&["project", "add", root.to_str().unwrap()]);
     let c = w.d.client().await.unwrap();
@@ -502,7 +506,7 @@ async fn listening_ports_are_reported_per_session() {
         else {
             panic!()
         };
-        if info.ports == vec![42000] {
+        if info.ports == vec![22000] {
             break;
         }
         assert!(Instant::now() < deadline, "ports never showed: {:?}", info.ports);

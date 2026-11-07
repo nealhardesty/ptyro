@@ -25,4 +25,7 @@ tempfile.workspace = true
 [target.'cfg(windows)'.dependencies]
 ptyro-pty.workspace = true
 
+[target.'cfg(unix)'.dev-dependencies]
+rustix.workspace = true
+
 [dev-dependencies]

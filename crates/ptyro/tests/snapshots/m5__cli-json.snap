@@ -75,7 +75,20 @@ expression: "Value::Object(all)"
     "kind": "string",
     "session": "string"
   },
-  "inbox": [],
+  "inbox": [
+    {
+      "at_ms": "number",
+      "body": "string",
+      "id": "number",
+      "kind": "string",
+      "profile": "string",
+      "read_ms": null,
+      "session": "string",
+      "session_name": "string",
+      "title": "string",
+      "workspace": "string"
+    }
+  ],
   "integrations": [
     {
       "active": "bool",
@@ -91,7 +104,11 @@ expression: "Value::Object(all)"
       "argv": [
         "string"
       ],
-      "attention": null,
+      "attention": {
+        "kind": "string",
+        "since_ms": "number",
+        "text": "string"
+      },
       "children": [],
       "controller": null,
       "conversation": "string",
@@ -204,7 +221,11 @@ expression: "Value::Object(all)"
       "argv": [
         "string"
       ],
-      "attention": null,
+      "attention": {
+        "kind": "string",
+        "since_ms": "number",
+        "text": "string"
+      },
       "children": [],
       "controller": null,
       "conversation": "string",
