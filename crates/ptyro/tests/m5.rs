@@ -19,8 +19,8 @@ struct World {
     d: TempDaemon,
 }
 
-fn agents_config(extra: &str) -> String {
-    let mut c = String::from("[attention]\nmin_work = \"1s\"\n[worktrees]\nfetch = false\n");
+fn agents_config(min_work: &str, extra: &str) -> String {
+    let mut c = format!("[attention]\nmin_work = \"{min_work}\"\n[worktrees]\nfetch = false\n");
     for a in ["claude", "codex"] {
         c.push_str(&format!(
             "[agents.{a}]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"{a}\"]\n"
@@ -32,6 +32,11 @@ fn agents_config(extra: &str) -> String {
 
 impl World {
     fn new(extra_config: &str) -> Self {
+        Self::with_min_work("1s", extra_config)
+    }
+
+    /// With `[attention] min_work` set to `min_work`.
+    fn with_min_work(min_work: &str, extra_config: &str) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-m5-").tempdir().unwrap();
         let h = ptyro_core::os::canonicalize(home.path()).unwrap();
         std::fs::write(
@@ -41,7 +46,8 @@ impl World {
         .unwrap();
         let hs = h.to_string_lossy().into_owned();
         let env = [("HOME", hs.as_str()), ("GIT_CONFIG_NOSYSTEM", "1"), ("SHELL", "/bin/sh")];
-        let d = TempDaemon::start_with(BIN, &env, Some(&agents_config(extra_config))).unwrap();
+        let d = TempDaemon::start_with(BIN, &env, Some(&agents_config(min_work, extra_config)))
+            .unwrap();
         Self { home, d }
     }
 
@@ -301,13 +307,13 @@ fn shape(v: &Value) -> Value {
 /// `make snapshots` accepts intended changes.
 #[test]
 fn json_shapes() {
-    let w = World::new("");
+    // Every turn's idle raises attention and an inbox entry (`min_work` 0 s), whatever the
+    // machine's load: at 1 s, a 0.1 s turn did only when a loaded machine stretched it past 1 s,
+    // and the snapshot's `inbox` and `attention` shapes changed with the load.
+    let w = World::with_min_work("0s", "");
     let root = w.repo("proj", &[(".ptyro.toml", "[scripts.run.dev]\ncommand = \"true\"\n")]);
     w.ok(&["project", "add", root.to_str().unwrap()]);
-    // A turn longer than `min_work` (1 s here), so its idle always raises attention and an inbox
-    // entry: a shorter one did only when a loaded machine stretched it past 1 s, and the
-    // snapshot's `inbox` and `attention` shapes changed with the machine's load.
-    w.ok(&["new", "-d", "-n", "j1", "--agent", "claude", "--prompt", "work 1.5 x"]);
+    w.ok(&["new", "-d", "-n", "j1", "--agent", "claude", "--prompt", "work 0.1 x"]);
     w.ok(&["wait", "j1", "--for", "idle", "--timeout", "20s"]);
     let mut all = serde_json::Map::new();
     for (name, args) in [

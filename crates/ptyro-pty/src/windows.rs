@@ -901,6 +901,51 @@ pub fn wait_for_exit(pid: u32, timeout: Duration) -> bool {
     unsafe { WaitForSingleObject(h.0, ms) == WAIT_OBJECT_0 }
 }
 
+/// When process `pid` started (its creation time, in 100 ns since 1601): with its id, it names
+/// one process, where an id alone may be a later one's that got it again. `None` when it can't
+/// be opened.
+pub fn process_started(pid: u32) -> Option<u64> {
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    // SAFETY: opening to read its times only; the handle is ours and closed by `Owned`.
+    let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if h.is_null() {
+        return None;
+    }
+    let h = Owned(h);
+    started_of(h.0)
+}
+
+fn started_of(h: HANDLE) -> Option<u64> {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::GetProcessTimes;
+    let zero = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+    let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+    // SAFETY: `h` is open for querying; the four times are written on success.
+    let ok = unsafe { GetProcessTimes(h, &mut created, &mut exited, &mut kernel, &mut user) } != 0;
+    ok.then(|| (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
+}
+
+/// Like [`wait_for_exit`], for the process `pid` that started at `started`
+/// ([`process_started`]): one with that id that started at another time is another process,
+/// whose own went long ago, so that counts as exited too.
+pub fn wait_for_exit_of(pid: u32, started: u64, timeout: Duration) -> bool {
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    };
+    // SAFETY: opening to wait on and read its times; the handle is ours and closed by `Owned`.
+    let h = unsafe { OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if h.is_null() {
+        return true;
+    }
+    let h = Owned(h);
+    if started_of(h.0) != Some(started) {
+        return true;
+    }
+    let ms = timeout.as_millis().min(u128::from(u32::MAX - 1)) as u32;
+    // SAFETY: `h` is open for the wait.
+    unsafe { WaitForSingleObject(h.0, ms) == WAIT_OBJECT_0 }
+}
+
 /// A session's program's exit code, once it has exited (a handed-over one's, for the reaper);
 /// `None` while it runs or when it isn't ours.
 pub fn exit_code(pid: u32) -> Option<u32> {

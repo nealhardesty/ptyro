@@ -571,9 +571,17 @@ async fn exit_with_daemon(socket: std::path::PathBuf) {
         else {
             return;
         };
+        // When it started, where the daemon says: a daemon gone before we first looked may have
+        // left its id to another process, which we would otherwise wait on instead.
+        let started =
+            std::env::var("PTYRO_DAEMON_STARTED").ok().and_then(|t| t.parse::<u64>().ok());
         std::thread::spawn(move || {
             loop {
-                if ptyro_pty::wait_for_exit(pid, Duration::from_secs(3600)) {
+                let gone = match started {
+                    Some(t) => ptyro_pty::wait_for_exit_of(pid, t, Duration::from_secs(3600)),
+                    None => ptyro_pty::wait_for_exit(pid, Duration::from_secs(3600)),
+                };
+                if gone {
                     std::process::exit(0);
                 }
             }

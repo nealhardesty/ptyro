@@ -644,14 +644,13 @@ impl Daemon {
         // A session starting can't end a turn: Codex 0.166 sends SessionStart only with the
         // first prompt, after OSC 7501 has said working, and its idle ended the turn at once
         // (`wait --for idle` returned before the turn did; WIN8). What else it says (the
-        // conversation, the model) still counts. A guessed working is no turn: the output
-        // heuristic calls start-up output working when the hook is slow to come (CI's Windows
-        // and WSL), and the start's idle must replace that guess, not wait 5 m for it to go stale.
-        let reliably_working =
-            s.engine.locked().record.as_ref().is_some_and(|r| {
-                r.status == AgentStatus::Working && r.confidence > Confidence::Low
-            });
-        if event == "SessionStart" && reliably_working {
+        // conversation, the model) still counts.
+        let in_turn = {
+            let last_prompt =
+                s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).last_prompt_ms;
+            start_holds_off_idle(s.engine.locked().record.as_ref(), last_prompt)
+        };
+        if event == "SessionStart" && in_turn {
             signals
                 .retain(|x| !matches!(x.signal, Signal::Status { status: AgentStatus::Idle, .. }));
         }
@@ -808,37 +807,80 @@ impl Daemon {
 
     /// After a prompt is typed: if it still sits in the input box, its Enter was dropped (Codex
     /// 0.166 is busy for a moment after it first says idle, and an Enter then is lost), so press
-    /// Enter again once the agent is idle. Twice at most, within ~10 s; only while the screen
-    /// shows this very prompt unsent, so nothing is ever sent twice (WIN8).
+    /// Enter again. Twice at most, within ~10 s; only while the screen shows this very prompt
+    /// unsent, so nothing is ever sent twice (WIN8).
+    ///
+    /// An Enter that lands on a dialog answers it (Enter is "Yes" in Claude's), so a press needs
+    /// every sign that the agent never took the prompt, and any doubt means no press [2026-11-07]:
+    /// - the box holds exactly this prompt (a long one, wrapped, can't be told: never pressed);
+    /// - the agent hasn't spoken since the Enter (a hook, OSC 7501: it took the prompt);
+    /// - it waits for input (idle, done, or not yet said), never blocked, and no dialog its
+    ///   adapter recognises is on screen;
+    /// - two looks 500 ms apart saw the same screen, with no output between them: an agent that
+    ///   took the prompt redraws, while a dropped Enter leaves the screen still.
+    ///
+    /// When the prompt still sits there and no press was safe, the session's events say the send
+    /// isn't confirmed (`prompt_unconfirmed`), and nothing is pressed.
     fn check_taken(&self, s: &Session, text: &str) {
         let Some(adapter) = s.adapter() else { return };
         let Some(s) = self.session(s.id) else { return };
-        let want: String = text.chars().take(40).collect();
-        let want = want.trim().to_owned();
+        let want = text.trim().to_owned();
+        let mut entered = now_ms();
         tokio::spawn(async move {
             let a = ptyro_agents::adapter(&adapter);
             let mut presses = 0;
+            // The last look that found this prompt unsent and the agent waiting: when, and what
+            // the screen was.
+            let mut seen: Option<(u64, String)> = None;
+            let unconfirmed = |why: &str| {
+                tracing::warn!(session = %s.id, "a typed prompt isn't confirmed: {why}");
+                s.record_event("prompt_unconfirmed", serde_json::json!({ "why": why }));
+            };
             for _ in 0..20 {
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 if !s.is_live() {
                     return;
                 }
+                let now = now_ms();
                 let screen = s.read_screen(ptyro_protocol::ScreenFormat::Plain);
-                let pending = a.pending_input(&screen).is_some_and(|p| p.starts_with(&want));
-                if !pending {
+                if !a.pending_input(&screen).is_some_and(|p| p.trim() == want) {
                     return;
                 }
-                // Only while it waits for input (or hasn't said anything yet): busy, an Enter now
-                // would be dropped too; blocked, it would answer the question on screen (Enter is
-                // "Yes" in Claude's dialogs). The box holding our prompt is never a dialog.
+                let (status, spoke) = {
+                    let e = s.engine.locked();
+                    (
+                        e.record.as_ref().map(|r| r.status),
+                        e.high_quiet_ms(now) <= now.saturating_sub(entered),
+                    )
+                };
+                if spoke {
+                    return;
+                }
+                let dialog =
+                    [a.on_screen(&screen), a.screen_status(&screen)].into_iter().any(|x| {
+                        matches!(x, Some(Signal::Status { status: AgentStatus::Blocked, .. }))
+                    });
+                if dialog || status == Some(AgentStatus::Blocked) {
+                    return;
+                }
                 if !matches!(
-                    s.status(),
+                    status,
                     None | Some(AgentStatus::Idle | AgentStatus::Done | AgentStatus::Starting)
                 ) {
+                    seen = None;
+                    continue;
+                }
+                let still = seen.as_ref().is_some_and(|(at, before)| {
+                    *before == screen && s.last_output_ms.load(Ordering::Relaxed) < *at
+                });
+                if !still {
+                    seen = Some((now, screen));
                     continue;
                 }
                 if presses == 2 {
-                    return;
+                    return unconfirmed(
+                        "still in the input box after Enter was pressed again twice",
+                    );
                 }
                 presses += 1;
                 s.record_event("prompt_enter_again", serde_json::json!({ "press": presses }));
@@ -847,7 +889,13 @@ impl Daemon {
                     ptyro_core::input::Mods::NONE,
                 );
                 s.input(&ptyro_core::input::InputEvent::Key { key }).await;
+                entered = now_ms();
+                seen = None;
                 tokio::time::sleep(Duration::from_millis(1000)).await;
+            }
+            let screen = s.read_screen(ptyro_protocol::ScreenFormat::Plain);
+            if a.pending_input(&screen).is_some_and(|p| p.trim() == want) {
+                unconfirmed("still in the input box, and pressing Enter again wasn't safe");
             }
         });
     }
@@ -1551,10 +1599,48 @@ impl Daemon {
     }
 }
 
+/// Whether a turn is going, so a `SessionStart` hook's idle mustn't end it (WIN8): the status
+/// says working, reliably (a hook, OSC 7501, a title or the screen), or as the output heuristic's
+/// guess made after a prompt was typed (the agent at work on it). A guess from before any prompt
+/// is start-up output, no turn: the start's idle replaces it [2026-11-07]. When the first hook
+/// was slow (CI's Windows and WSL), that guess stood for 5 m, and Codex never got its prompt.
+fn start_holds_off_idle(
+    record: Option<&ptyro_core::status::StatusRecord>,
+    last_prompt_ms: Option<u64>,
+) -> bool {
+    record.is_some_and(|r| {
+        r.status == AgentStatus::Working
+            && (r.confidence > Confidence::Low || last_prompt_ms.is_some_and(|p| r.since_ms >= p))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ptyro_core::status::StatusRecord;
+
+    #[test]
+    fn a_session_start_ends_a_start_up_guess_but_never_a_turn() {
+        let rec = |status, confidence, source, since_ms| StatusRecord {
+            status,
+            kind: None,
+            detail: None,
+            confidence,
+            source,
+            since_ms,
+            progress: None,
+        };
+        let guess = rec(AgentStatus::Working, Confidence::Low, SignalSource::Heuristic, 100);
+        let osc = rec(AgentStatus::Working, Confidence::High, SignalSource::Osc, 100);
+        let idle = rec(AgentStatus::Idle, Confidence::High, SignalSource::Hook, 100);
+        assert!(!start_holds_off_idle(None, None), "nothing said yet");
+        assert!(!start_holds_off_idle(Some(&guess), None), "start-up output, no prompt yet");
+        assert!(!start_holds_off_idle(Some(&guess), Some(150)), "guessed before the prompt");
+        assert!(start_holds_off_idle(Some(&guess), Some(100)), "guessed after the prompt");
+        assert!(start_holds_off_idle(Some(&guess), Some(50)), "guessed after the prompt");
+        assert!(start_holds_off_idle(Some(&osc), None), "Codex 0.166's own working");
+        assert!(!start_holds_off_idle(Some(&idle), Some(150)), "idle already");
+    }
 
     #[test]
     fn working_clears_only_what_the_agent_wanted() {

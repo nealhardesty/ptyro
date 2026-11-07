@@ -86,7 +86,7 @@ impl Lock {
         if held_here(&path) {
             return Some(holder(&state.join("setup.who")));
         }
-        let file = OpenOptions::new().write(true).open(&path).ok()?;
+        let file = probe_file(&path).ok()?;
         match file.try_lock_shared() {
             Ok(()) => {
                 // Free: what a gone holder left goes while this probe holds the lock, so a new
@@ -99,6 +99,13 @@ impl Lock {
             Err(TryLockError::Error(_)) => None,
         }
     }
+}
+
+/// The lock file, opened for a probe. Readable as well as writable: where `flock` is emulated
+/// with POSIX locks (NFS, see [`HELD`]), the probe's shared lock is a read lock, which a file
+/// opened only for writing can't take (`EBADF`), and every probe then said "free".
+fn probe_file(path: &Path) -> std::io::Result<File> {
+    OpenOptions::new().read(true).write(true).open(path)
 }
 
 /// How long [`Lock::take`] tries again while the lock is held (a probe's instant, never a run).
@@ -161,6 +168,21 @@ mod tests {
         other.try_lock_shared().unwrap();
         assert_eq!(Lock::held_by(dir.path()), None);
         drop(other);
+    }
+
+    /// The probe's file takes a POSIX read lock, as NFS's emulated `flock` makes its shared lock
+    /// (a file opened only for writing can't: `EBADF`).
+    #[cfg(unix)]
+    #[test]
+    fn the_probe_can_take_the_read_lock_nfs_makes_of_a_shared_one() {
+        use rustix::fs::{FlockOperation, fcntl_lock};
+        let dir = tempfile::tempdir().unwrap();
+        drop(Lock::take(dir.path(), "x").unwrap());
+        let path = dir.path().join("setup.lock");
+        let write_only = OpenOptions::new().write(true).open(&path).unwrap();
+        assert!(fcntl_lock(&write_only, FlockOperation::NonBlockingLockShared).is_err());
+        let probe = probe_file(&path).unwrap();
+        fcntl_lock(&probe, FlockOperation::NonBlockingLockShared).expect("a read lock");
     }
 
     /// Only the OS lock decides: a `setup.who` left behind naming a live, unrelated process (a

@@ -1598,11 +1598,29 @@ Verified against Claude Code **2.1.304** (§20).
     It relies on an agent emptying its box as it takes a prompt, as Claude and Codex do; the
     fake agent does too since 2026-11-07 (§18.2: it didn't, and a second Enter answered a
     permission dialog "no").
+  - **[2026-11-07] The second Enter never answers a dialog.** In Claude's dialogs Enter is
+    "Yes", so a press needs every sign that the agent never took the prompt, and any doubt
+    means no press:
+    - the box holds exactly this prompt (a long one, wrapped, can't be told, so it never gets
+      a second Enter);
+    - no hook or OSC 7501 report has come since the Enter (the agent spoke: it took it);
+    - the status is idle, done or not yet said, never blocked, and no dialog the adapter
+      recognises (`on_screen`, `screen_status`) is on screen;
+    - two looks 500 ms apart saw the same screen, with no output between them. An agent that
+      took the prompt redraws; a dropped Enter leaves the screen still.
+
+    When the prompt still sits in the box and no press was safe, ptyro presses nothing and the
+    session's events say so (`prompt_unconfirmed`, with why). Tested by m4
+    `a_second_enter_never_answers_a_dialog`: a Claude whose redraw lags keeps the taken prompt in
+    its box, shows a permission dialog at once, and leaves the status idle with slow hooks
+    (`PTYRO_FAKE_LAGGY_BOX`, `PTYRO_FAKE_HOOK_DELAY_MS`). Before the guard, ptyro pressed Enter
+    and the dialog took it.
 - **A session starting doesn't end a turn [WIN8]:** a `SessionStart` hook that comes while the
   session is working moves nothing to idle (its conversation and model still count). Codex 0.166
   sends it only with the first prompt, after OSC 7501's working (verified live, 2026-11-05).
-  Only a *reliable* working holds it off (above low confidence: a hook, OSC 7501, a title or
-  the screen). A working the output heuristic guessed from the agent's start-up output is no
+  Only a turn holds it off: a *reliable* working (above low confidence: a hook, OSC 7501, a
+  title or the screen), or the output heuristic's guess made after a prompt was typed (the agent
+  at work on it). A working guessed from the agent's start-up output, before any prompt, is no
   turn: `SessionStart`'s idle replaces it **[fixed 2026-11-07]**. When the first hook is slow
   (CI's Windows and WSL runners, a loaded laptop), the heuristic guessed working before it came,
   and the start's idle was dropped; the guess then stood until it went stale (5 m). An agent
@@ -5409,7 +5427,12 @@ is "the web is up when the daemon is".
   daemon gone before the server first looked had already left it to another parent, so the
   change never came. And the daemon starts no server once it is stopping (checked under the lock
   its stop's kill takes): a server started just after that kill outlived the daemon and held the
-  port from the next one (`m9` on WSL; tested by `a_managed_server_whose_daemon_is_already_gone_leaves`).
+  port from the next one (`m9` on WSL; tested by
+  `a_managed_server_whose_daemon_is_already_gone_leaves`). Nor while it hands over to a new
+  image: the exec keeps the daemon's pid, so a server started then would never notice (a
+  handover called off starts it again). On Windows the daemon names its start time too
+  (`PTYRO_DAEMON_STARTED`), and a process with its id that started at another time is another
+  one: the daemon is gone.
 - **After a reboot.** The daemon runs it, so it is up when the daemon is; `ptyro web on` and
   `ptyro init` say when the login service isn't installed (`ptyro daemon install-service`).
 - **Routes:** `/` and the embedded app; `/ws`; `POST /api/request` (`Authorization: Bearer`,
@@ -5900,15 +5923,21 @@ command): ptyro doesn't confine that.
 | Manual compatibility matrix | `docs/compat.md`: Claude Code, Codex, Gemini, OpenCode, nvim, vim, htop/btop, less, fzf, lazygit, tig, bash/zsh/fish readline, `vttest` sections — checked per release in Ghostty, kitty, WezTerm, Alacritty, iTerm2, Terminal.app, and inside tmux |
 
 **The fake agent behaves as the real ones do where ptyro looks [2026-11-07, the flakes task]:**
-- As Claude does, the fake Claude empties its input box when it takes a prompt (the prompt moves
-  up into the conversation), and draws what it took itself: its terminal doesn't echo, as Claude's
-  raw one doesn't, so a line typed ahead while it works can't land where the box is redrawn. It left the prompt in the box, so ptyro's WIN8 check ("this
-  very prompt still sits there unsent", §8.2) saw it unsent while a slow hook still left the status
-  idle, and pressed Enter again; the permission dialog that came next took that Enter as "no".
-  This was the `send --wait` race of ROADMAP WIN13 (m5 on macOS: "a1 isn't waiting on a prompt",
-  "a1 matched answer: no").
+- As Claude does, the fake Claude empties its input box when it takes a prompt (the prompt
+  moves up into the conversation), and draws what it took itself: its terminal doesn't echo,
+  as Claude's raw one doesn't, so a line typed ahead while it works can't land where the box is
+  redrawn. It used to leave the prompt in the box, so ptyro's WIN8 check ("this very prompt
+  still sits there unsent", §8.2) saw it unsent while a slow hook still left the status idle,
+  and pressed Enter again; the permission dialog that came next took that Enter as "no". This
+  was the `send --wait` flake of ROADMAP WIN13 (m5 on macOS: "a1 isn't waiting on a prompt",
+  "a1 matched answer: no"). The product's guard against it is in §8.2.
+- So the fake Claude never shows a typed-but-unsent draft: a dropped Enter on Claude's box
+  isn't modelled (Codex's is, `PTYRO_FAKE_DROP_FIRST_ENTER`). A test that needs one would draw
+  the draft from a raw-mode reader.
+- `PTYRO_FAKE_LAGGY_BOX=1` is a Claude whose redraw lags: a prompt it took stays in its box,
+  and `ask` shows its permission dialog at once, before its hooks.
 - `PTYRO_FAKE_HOOK_DELAY_MS=N` makes each of its hooks take N ms to start, as on a loaded
-  machine, so what ptyro does before a hook arrives is tested on every machine, not only on a
+  machine (both knobs are test knobs, `ptyro_core::test_knob`: a release build ignores them), so what ptyro does before a hook arrives is tested on every machine, not only on a
   slow CI runner (m4 `a_slow_session_start_replaces_a_guessed_working`, m5
   `a_prompt_taken_with_slow_hooks_is_entered_once`).
 - A test that asserts which source a status came from first waits for the agent's first
@@ -9488,7 +9517,9 @@ as before).
 **Said up front, everywhere.** Who holds it is asked before anyone chooses
 (`Lock::held_by`: only the operating system's lock decides, by a non-blocking probe that takes
 the lock *shared*, so two probes at once never see each other as a holder [fixed 2026-11-07: an
-exclusive probe made a checklist say setup was running when another one was only looking]; held,
+exclusive probe made a checklist say setup was running when another one was only looking]. The
+probe opens the file for reading as well: where `flock` is emulated with POSIX locks (NFS), a
+shared lock is a read lock, which a file open only for writing can't take; held,
 `setup.who` names who; free, a `setup.who` a holder left behind (Ctrl-C, a closed window, power
 lost) is removed while the probe holds the lock, whatever process now has its id; the holding
 process itself answers from its own set of held locks without probing, since a POSIX lock (NFS's

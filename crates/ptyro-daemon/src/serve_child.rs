@@ -167,11 +167,14 @@ impl Daemon {
         if !live {
             let _ = std::fs::remove_file(record);
         }
-        // Never once the daemon is stopping: a server started after its kill outlived the daemon
-        // and kept the port from the next one (seen in m9 on WSL). Checked and started under the
-        // lock the stop's kill takes, so one or the other comes first, whole.
+        // Never once the daemon is stopping or handing over to a new image: a server started
+        // after its kill outlived the daemon and kept the port from the next one (seen in m9 on
+        // WSL; through an upgrade's exec the pid stays, so it would never notice). Checked and
+        // started under the lock the stop's (and the handover's) kill takes, so one or the other
+        // comes first, whole. A handover called off clears `upgrading`, and the next look starts
+        // it again.
         let mut r = self.serve_child.run.locked();
-        if *self.shutdown.borrow() {
+        if *self.shutdown.borrow() || self.upgrading.load(std::sync::atomic::Ordering::SeqCst) {
             return Ok(());
         }
         let child = std::process::Command::new(exe)
@@ -179,6 +182,8 @@ impl Daemon {
             .envs(self.base_env.iter().map(|(k, v)| (k, v)))
             // Who to outlive by no more than a moment (Windows has no parent to watch: WIN11).
             .env("PTYRO_DAEMON_PID", std::process::id().to_string())
+            // And when it started (Windows): a later process given the same id isn't it (WIN11).
+            .envs(Self::started_env())
             .stdin(std::process::Stdio::null())
             .stdout(log.try_clone()?)
             .stderr(log)
@@ -188,6 +193,15 @@ impl Daemon {
         r.started_with = Some(self.config().remote);
         r.since_ms = Some(now_ms());
         Ok(())
+    }
+
+    /// `PTYRO_DAEMON_STARTED` on Windows, beside `PTYRO_DAEMON_PID`.
+    fn started_env() -> Vec<(&'static str, String)> {
+        #[cfg(windows)]
+        if let Some(t) = ptyro_pty::process_started(std::process::id()) {
+            return vec![("PTYRO_DAEMON_STARTED", t.to_string())];
+        }
+        Vec::new()
     }
 
     /// How the web app's server is.

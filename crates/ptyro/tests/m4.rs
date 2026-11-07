@@ -291,7 +291,9 @@ async fn claude_adapter_status_attention_answer_and_usage() {
 /// Codex, which shows no input box ptyro reads, never got its prompt (CI's Windows, m7).
 #[tokio::test]
 async fn a_slow_session_start_replaces_a_guessed_working() {
-    let w = World::new("[agents.codex.env]\nPTYRO_FAKE_HOOK_DELAY_MS = \"1500\"\n");
+    // Its hooks take 2.5 s to start: the heuristic looks every second, so it has guessed from
+    // the start-up output before the first hook comes.
+    let w = World::new("[agents.codex.env]\nPTYRO_FAKE_HOOK_DELAY_MS = \"2500\"\n");
     let c = w.d.client().await.unwrap();
     agent(&c, "cx", "codex", Some("work 0.1 hi")).await;
     let s = wait_for(&c, "cx", "a turn, idle from its hook", |s| {
@@ -301,6 +303,54 @@ async fn a_slow_session_start_replaces_a_guessed_working() {
     })
     .await;
     assert_eq!(s.status.unwrap().confidence, Confidence::High);
+    // The guess came first, and the start's idle replaced it.
+    let ev = w.ok(&["events", "-s", "cx", "--json", "-n", "200"]);
+    let statuses: Vec<serde_json::Value> = ev
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|e| e["kind"] == "status")
+        .map(|e| e["detail"].clone())
+        .collect();
+    assert_eq!(statuses[0]["source"], "heuristic", "{ev}");
+    assert_eq!(statuses[0]["to"], "working", "{ev}");
+    assert_eq!(
+        (&statuses[1]["source"], &statuses[1]["to"]),
+        (&"hook".into(), &"idle".into()),
+        "{ev}"
+    );
+}
+
+/// ptyro's second Enter (WIN8) never lands on a dialog: in Claude, Enter there is "Yes". This
+/// Claude's redraw lags: a prompt it took stays in its box, a permission dialog comes at once,
+/// and its slow hooks leave the status idle meanwhile, as a dropped Enter would look.
+#[tokio::test]
+async fn a_second_enter_never_answers_a_dialog() {
+    let w = World::new(
+        "[agents.claude.env]\nPTYRO_FAKE_LAGGY_BOX = \"1\"\nPTYRO_FAKE_HOOK_DELAY_MS = \"1500\"\n",
+    );
+    let c = w.d.client().await.unwrap();
+    agent(&c, "lag", "claude", None).await;
+    wait_for(&c, "lag", "a reliable idle", |s| {
+        is(s, AgentStatus::Idle)
+            && s.status.as_ref().is_some_and(|r| r.confidence == Confidence::High)
+    })
+    .await;
+    // Typed once ready, as `send --wait-ready` and a session's first prompt are: what ptyro
+    // then watches for a dropped Enter.
+    c.request(Request::SendText {
+        addr: "lag".into(),
+        text: "ask rm -rf build".into(),
+        enter: true,
+        wait_ready_ms: Some(30_000),
+    })
+    .await
+    .unwrap();
+    wait_for(&c, "lag", "blocked", |s| is(s, AgentStatus::Blocked)).await;
+    w.ok(&["answer", "lag", "allow"]);
+    let screen = w.d.wait_for_text(&c, "lag", "answer: ", WAIT).await.unwrap();
+    assert!(screen.contains("answer: yes"), "{screen}");
+    let ev = w.ok(&["events", "-s", "lag", "--json", "-n", "200"]);
+    assert!(!ev.contains("prompt_enter_again"), "{ev}");
 }
 
 #[tokio::test]
