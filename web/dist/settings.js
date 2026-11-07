@@ -4,7 +4,7 @@
 import { conn, host, store, token } from "./conn.js";
 import { aboutDoc, aboutText, data } from "./data.js";
 import { fixLineEndings } from "./projects.js";
-import { actions, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, form, go, h, menu, pending, poll, row, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
+import { actions, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, form, go, h, menu, pending, poll, row, section, setupSides, sheet, textSheet, ui, views, webHref } from "./kit.js";
 import { qrMatrix } from "./qr.js";
 import { allSessions } from "./sessions.js";
 const ACTIONS = {
@@ -47,6 +47,7 @@ const ACTIONS = {
     "first.run": "First-run setup: your agents, accounts and repositories",
     "setup.plan": "The setup checklist: which agents and tools are on the computer, and what installing the ticked ones would run",
     "setup.install": "Install the ticked agents and tools on the computer, with what they need first; a step that needs administrator rights shows the command to run there",
+    "setup.where": "On Windows with WSL: where each agent or tool goes, into WSL's distro, onto Windows, or both (tick either column)",
     "help.tour": "A tour: ptyro's daily loop with a pretend agent, in a throwaway ptyro of its own",
 };
 const tip = actions(ACTIONS);
@@ -607,12 +608,18 @@ function setupView() {
         : h("p", { class: "sub" }, data.projects.size ? "Everything found is added already." : "None found under your discover roots: add one by its path on the Projects tab."))), bar(h("button", { class: "primary", onclick: () => go("#/") }, "Done"))));
 }
 // ── installing agents and tools (BOOT1: the daemon's setup engine, SPEC §24.2) ──────────────
-/// The checklist for some picks (the key: ids joined by commas; "" is the defaults).
-const setupPlan = new Cache((key) => conn.request({ t: "setup_plan", picks: key === "" ? null : key === "none" ? [] : key.split(",") }).then((r) => r.plan));
+/// The checklist for some picks. The key: this computer's ids joined by commas ("" is the
+/// defaults, "none" nothing), then on Windows with WSL `|` and WSL's (BOOT8).
+const ids = (k) => k === "" ? null : k === "none" ? [] : k.split(",");
+const setupPlan = new Cache((key) => {
+    const [mine, wsl] = key.split("|");
+    return conn.request({ t: "setup_plan", picks: ids(mine), wsl_picks: wsl === undefined ? null : ids(wsl) ?? [] }).then((r) => r.plan);
+});
 let installKey = "";
-/// The run this page started; events that arrive before its reply wait in `early`.
-const installRun = { id: "", starting: false, early: [], lines: [], report: null };
-/// A setup run's progress (`setup_progress` events): its lines, then its report.
+/// The run this page started; events that arrive before its reply wait in `early`. `sides`:
+/// how many sides have work (each ends with its own report).
+const installRun = { id: "", starting: false, early: [], lines: [], reports: [], sides: 1, report: null };
+/// A setup run's progress (`setup_progress` events): its lines, then its report (one a side).
 export function setupEvent(e) {
     if (installRun.starting && !installRun.id) {
         installRun.early.push(e);
@@ -621,23 +628,28 @@ export function setupEvent(e) {
     if (!installRun.id || e.run !== installRun.id)
         return;
     const ev = e.event;
+    const at = installRun.sides > 1 ? (e.side === "wsl" ? "WSL: " : "Windows: ") : "";
     const line = (t) => { installRun.lines.push(t); if (installRun.lines.length > 400)
         installRun.lines.shift(); };
     if (ev.event === "started")
-        line(`▸ ${ev.name}: ${ev.command}`);
+        line(`▸ ${at}${ev.name}: ${ev.command}`);
     else if (ev.event === "line")
         line(`  │ ${ev.text}`);
     else if (ev.event === "done")
-        line(`✓ ${ev.id}${ev.version ? " " + ev.version : ""}`);
+        line(`✓ ${at}${ev.id}${ev.version ? " " + ev.version : ""}`);
     else if (ev.event === "failed")
-        line(`✗ ${ev.id}: ${ev.error}\n  fix: ${ev.fix}`);
+        line(`✗ ${at}${ev.id}: ${ev.error}\n  fix: ${ev.fix}`);
     else if (ev.event === "skipped")
-        line(`– ${ev.id}: ${ev.reason}\n  fix: ${ev.fix}`);
+        line(`– ${at}${ev.id}: ${ev.reason}\n  fix: ${ev.fix}`);
     else if (ev.event === "blocked")
-        line(`✗ ${ev.id}: can't be installed here: ${ev.reason}\n  fix: ${ev.fix}`);
+        line(`✗ ${at}${ev.id}: can't be installed here: ${ev.reason}\n  fix: ${ev.fix}`);
     else if (ev.event === "finished") {
-        installRun.report = ev.report;
-        setupPlan.reload();
+        installRun.reports.push(ev.report);
+        if (installRun.reports.length >= installRun.sides) {
+            const all = (k) => installRun.reports.flatMap((r) => r[k] ?? []);
+            installRun.report = { done: all("done"), failed: all("failed"), skipped: all("skipped"), blocked: all("blocked") };
+            setupPlan.reload();
+        }
     }
     ui.render();
 }
@@ -651,6 +663,15 @@ function stateText(e) {
         default: return "not installed";
     }
 }
+/// What WSL is, for the page (the CLI's words for it).
+function wslText(w) {
+    if (w?.state === "unusable")
+        return `WSL: ${w.reason}, so this sets up Windows only. For WSL too: ${w.fix}`;
+    if (w?.state === "inside")
+        return `This is WSL${w.distro ? ` (${w.distro})` : ""}: setup here installs into it. For Windows itself, run \`ptyro setup --where windows\` in a Windows terminal.`;
+    return null;
+}
+const isHere = (e) => e.state === "installed" || e.state === "other";
 function installSection() {
     const title = "Install agents and tools";
     if (conn.scope !== "full")
@@ -659,33 +680,72 @@ function installSection() {
     const waiting = pending(setupPlan, installKey, "Looking at what's installed…");
     if (waiting || !plan)
         return section(title, waiting ?? h("p", { class: "sub" }, "Looking…"));
-    const picked = plan.entries.filter((e) => e.picked).map((e) => e.id);
-    const toggle = (id, on) => {
-        const next = on ? [...picked, id] : picked.filter((p) => p !== id);
-        installKey = next.join(",");
-        if (!installKey)
-            installKey = "none";
+    const two = plan.wsl?.state === "usable";
+    const mineSide = plan.entries[0]?.side ?? "local";
+    const sides = two ? [mineSide, "wsl"] : [mineSide];
+    const rows = (side) => plan.entries.filter((e) => e.side === side);
+    const picked = (side) => rows(side).filter((e) => e.picked).map((e) => e.id);
+    const keyOf = (mine, wsl) => {
+        const k = (l) => l.length ? l.join(",") : "none";
+        return two ? `${k(mine)}|${wsl.join(",")}` : k(mine);
+    };
+    const toggle = (side, id, on) => {
+        const next = (l) => on ? [...l, id] : l.filter((p) => p !== id);
+        const mine = picked(mineSide), wsl = picked("wsl");
+        installKey = side === "wsl" ? keyOf(mine, next(wsl)) : keyOf(next(mine), wsl);
         ui.render();
     };
-    const here = plan.entries.filter((e) => e.state === "installed" || e.state === "other");
-    const open = plan.entries.filter((e) => !here.includes(e));
-    const admin = open.filter((e) => e.ticked && e.action?.admin);
     const running = installRun.id !== "" && !installRun.report;
-    return section(title, h("div", { class: "stack-in", title: tip("setup.plan") }, ...open.map((e) => {
+    const all = plan.entries;
+    const box = (e) => {
         const c = h("input", { type: "checkbox" });
         c.checked = e.ticked;
         c.disabled = running || (e.ticked && !e.picked);
-        c.addEventListener("change", () => toggle(e.id, c.checked));
-        const notes = [e.label, e.needed_by?.length ? `needed by ${e.needed_by.join(", ")}` : null,
-            e.state !== "missing" ? stateText(e) : null, e.ticked && e.action ? `through ${e.action.via}${e.action.admin ? ", needs administrator rights" : ""}` : null,
-            e.blocked ? `can't: ${e.blocked}` : null].filter(Boolean).join("; ");
-        return h("label", { class: "field check" }, c, h("span", {}, e.name), notes ? h("small", {}, notes) : null);
-    })), here.length ? h("p", { class: "sub" }, "Already here: ", here.map((e) => `${e.name} (${stateText(e)})`).join(", ")) : null, admin.length ? h("p", { class: "sub" }, "Administrator rights are asked for only on the computer itself: run ", h("code", {}, `ptyro install ${admin.map((e) => e.id).join(" ")}`), " there (or ", h("code", {}, "ptyro setup"), "). From here they show the command instead.") : null, bar(h("button", { class: "primary", title: tip("setup.install"), disabled: running || !open.some((e) => e.ticked && (e.action || e.blocked)), onclick: () => void startInstall(picked) }, running ? "Installing…" : "Install the ticked ones")), installRun.lines.length ? h("pre", { class: "log" }, installRun.lines.join("\n")) : null, installRun.report ? h("p", { class: "sub" }, `${installRun.report.done.length} installed, ${installRun.report.failed.length} failed, ${installRun.report.skipped.length} not run${installRun.report.blocked?.length ? `, ${installRun.report.blocked.length} can't be installed here` : ""}.`) : null);
+        c.addEventListener("change", () => toggle(e.side, e.id, c.checked));
+        return c;
+    };
+    const notes = (e, label) => [label ? e.label : null, e.needed_by?.length ? `needed by ${e.needed_by.join(", ")}` : null,
+        e.state !== "missing" ? stateText(e) : null, e.ticked && e.action ? `through ${e.action.via}${e.action.admin ? ", needs administrator rights" : ""}` : null,
+        e.blocked ? `can't: ${e.blocked}` : null].filter(Boolean).join("; ");
+    const sideName = (s) => s === "wsl" ? `WSL (${plan.wsl.distro})` : "Windows";
+    // An item is open while some side doesn't have it.
+    const open = rows(mineSide).filter((e) => sides.some((s) => { const x = all.find((y) => y.id === e.id && y.side === s); return x && !isHere(x); }));
+    const here = rows(mineSide).filter((e) => !open.includes(e));
+    const list = two
+        ? h("div", { class: "stack-in", title: tip("setup.where") }, ...open.map((e) => {
+            const cells = sides.map((s) => {
+                const x = all.find((y) => y.id === e.id && y.side === s);
+                if (!x)
+                    return null;
+                if (isHere(x))
+                    return h("small", {}, `${sideName(s)}: ✓ ${stateText(x)}`);
+                const n = notes(x, false);
+                return h("label", { class: "field check" }, box(x), h("span", {}, sideName(s)), n ? h("small", {}, n) : null);
+            });
+            return h("div", { class: "field" }, h("strong", {}, e.name), e.label ? h("small", {}, ` ${e.label}`) : null, ...cells);
+        }))
+        : h("div", { class: "stack-in", title: tip("setup.plan") }, ...open.map((e) => {
+            const n = notes(e, true);
+            return h("label", { class: "field check" }, box(e), h("span", {}, e.name), n ? h("small", {}, n) : null);
+        }));
+    const ticked = all.filter((e) => e.ticked && (e.action || e.blocked));
+    const admin = all.filter((e) => e.ticked && e.action?.admin);
+    const adminCmd = (side) => {
+        const l = admin.filter((e) => e.side === side).map((e) => e.id);
+        if (!l.length)
+            return null;
+        return side === "wsl" ? `wsl -d ${plan.wsl.distro} -- ptyro install ${l.join(" ")}` : `ptyro install ${l.join(" ")}`;
+    };
+    const cmds = sides.map(adminCmd).filter(Boolean);
+    const wsl = wslText(plan.wsl);
+    return section(title, two ? h("p", { class: "sub" }, `WSL's ${plan.wsl.distro} has ${plan.wsl.version}: tick an agent or tool under Windows, WSL, or both.`) : null, list, here.length ? h("p", { class: "sub" }, "Already here: ", here.map((e) => `${e.name} (${stateText(e)})`).join(", ")) : null, wsl ? h("p", { class: "sub" }, wsl) : null, cmds.length ? h("p", { class: "sub" }, "Administrator rights are asked for only on the computer itself: run ", ...cmds.flatMap((c, i) => [i ? " and " : "", h("code", {}, c)]), " there (or ", h("code", {}, "ptyro setup"), "). From here they show the command instead.") : null, bar(h("button", { class: "primary", title: tip("setup.install"), disabled: running || !ticked.length, onclick: () => void startInstall(picked(mineSide), two ? picked("wsl") : null) }, running ? "Installing…" : "Install the ticked ones")), installRun.lines.length ? h("pre", { class: "log" }, installRun.lines.join("\n")) : null, installRun.report ? h("p", { class: "sub" }, `${installRun.report.done.length} installed, ${installRun.report.failed.length} failed, ${installRun.report.skipped.length} not run${installRun.report.blocked?.length ? `, ${installRun.report.blocked.length} can't be installed here` : ""}.`) : null);
 }
-async function startInstall(picks) {
-    Object.assign(installRun, { id: "", starting: true, early: [], lines: [], report: null });
+async function startInstall(picks, wslPicks) {
+    Object.assign(installRun, { id: "", starting: true, early: [], lines: [], reports: [], sides: 1, report: null });
     try {
-        const r = await conn.request({ t: "setup_run", picks });
+        const r = await conn.request({ t: "setup_run", picks, wsl_picks: wslPicks });
+        // The plan the daemon runs (it looked at WSL again), not the page's: its sides each report.
+        installRun.sides = setupSides(r.plan);
         installRun.id = r.run;
         for (const e of installRun.early.splice(0))
             setupEvent(e);

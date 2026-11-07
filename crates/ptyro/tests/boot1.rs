@@ -46,6 +46,8 @@ impl Machine {
             .env("HOME", self.home())
             .env("USERPROFILE", self.home())
             .env("SHELL", "/bin/bash")
+            // A Windows machine looks for WSL (BOOT8): never the real one.
+            .env("PTYRO_WSL", self.dir.path().join("no-wsl"))
             .env("PTYRO_NO_AUTOSPAWN", "1");
         for v in ["PTYRO_SOCKET", "PTYRO_SESSION_ID", "PTYRO_CONFIG", "PTYRO_REMOTE"] {
             c.env_remove(v);
@@ -297,18 +299,22 @@ async fn the_daemon_plans_and_installs_without_admin() {
     let fake = m.fake().display().to_string();
     let d = TempDaemon::start_with_env(BIN, &[("PTYRO_TEST_SETUP", fake.as_str())]).unwrap();
     let mut c = d.client().await.unwrap();
-    let Reply::SetupPlan { plan } = c.request(Request::SetupPlan { picks: None }).await.unwrap()
+    let Reply::SetupPlan { plan } =
+        c.request(Request::SetupPlan { picks: None, wsl_picks: None }).await.unwrap()
     else {
         panic!("not a plan");
     };
     let steps: Vec<&str> = plan.steps().iter().map(|e| e.id.as_str()).collect();
     assert_eq!(steps, ["claude", "codex", "git", "gh"]);
-    let r = c.request(Request::SetupPlan { picks: Some(vec!["vim".into()]) }).await;
+    let r =
+        c.request(Request::SetupPlan { picks: Some(vec!["vim".into()]), wsl_picks: None }).await;
     assert!(r.is_err());
     let mut pushes = c.pushes();
     c.send(ClientMsg::WatchEvents).unwrap();
-    let Reply::SetupStarted { run, .. } =
-        c.request(Request::SetupRun { picks: vec!["agy".into(), "git".into()] }).await.unwrap()
+    let Reply::SetupStarted { run, .. } = c
+        .request(Request::SetupRun { picks: vec!["agy".into(), "git".into()], wsl_picks: None })
+        .await
+        .unwrap()
     else {
         panic!("not started");
     };
@@ -316,7 +322,7 @@ async fn the_daemon_plans_and_installs_without_admin() {
     let mut seen = Vec::new();
     let report = loop {
         assert!(Instant::now() < deadline, "no report: {seen:?}");
-        let Ok(Some(ServerMsg::Event { event: DomainEvent::SetupProgress { run: r, event } })) =
+        let Ok(Some(ServerMsg::Event { event: DomainEvent::SetupProgress { run: r, event, .. } })) =
             tokio::time::timeout(Duration::from_millis(500), pushes.recv()).await
         else {
             continue;

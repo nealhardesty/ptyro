@@ -1190,8 +1190,8 @@ impl Daemon {
             | Request::MachineRemove { .. }
             | Request::MachineHide { .. }
             | Request::MachineRetry { .. }) => self.handle_machines(req).await,
-            Request::SetupPlan { picks } => self.setup_plan(picks).await,
-            Request::SetupRun { picks } => self.setup_run(picks).await,
+            Request::SetupPlan { picks, wsl_picks } => self.setup_plan(picks, wsl_picks).await,
+            Request::SetupRun { picks, wsl_picks } => self.setup_run(picks, wsl_picks).await,
             Request::LastLaunch { worktree, .. } => {
                 Ok(Reply::LastLaunch { launch: Some(self.launch_for(worktree.as_deref())?) })
             }

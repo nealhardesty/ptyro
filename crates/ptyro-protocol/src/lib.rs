@@ -40,7 +40,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 31 };
+pub const PROTO: Version = Version { major: 1, minor: 32 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -365,6 +365,10 @@ pub enum Request {
     SetupPlan {
         #[serde(default)]
         picks: Option<Vec<String>>,
+        /// Protocol 1.32 (BOOT8): on a Windows daemon with a usable WSL, what to tick in WSL's
+        /// distro too (its rows come after Windows', `side: wsl`); `None`, nothing there.
+        #[serde(default)]
+        wsl_picks: Option<Vec<String>>,
     },
     /// Setup (protocol 1.31): install `picks` and what they need on the daemon's machine, one
     /// run at a time. Steps that need administrator rights are never run here (a password never
@@ -372,6 +376,9 @@ pub enum Request {
     /// `SetupProgress` events. Replies `SetupStarted`.
     SetupRun {
         picks: Vec<String>,
+        /// Protocol 1.32: install these in WSL's distro too, through its ptyro (`wsl.exe`).
+        #[serde(default)]
+        wsl_picks: Option<Vec<String>>,
     },
     /// The other machines this daemon mirrors (MM1.B). Replies `Machines`.
     MachineList,
@@ -2135,6 +2142,10 @@ pub enum DomainEvent {
     SetupProgress {
         run: String,
         event: ptyro_agents::setup::Event,
+        /// Protocol 1.32: the side it happened on (`windows` or `wsl` on Windows; each side
+        /// ends with its own `finished`).
+        #[serde(default)]
+        side: ptyro_agents::setup::Side,
     },
 }
 

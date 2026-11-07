@@ -2372,10 +2372,12 @@ name = "ptyro-client"
 version = "0.0.63"
 dependencies = [
  "futures",
+ "ptyro-agents",
  "ptyro-core",
  "ptyro-protocol",
  "ptyro-pty",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",

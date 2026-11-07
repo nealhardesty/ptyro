@@ -1087,6 +1087,12 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built BOOT8] Protocol 1.32** (additive): setup's sides (§24.3). `SetupPlan` and `SetupRun`
+take `wsl_picks?` (what to tick in WSL's distro, on a Windows daemon); `Plan.wsl` says what WSL
+is (usable, unusable with why and the fix, or "this is WSL"); each entry's `side` is `windows`,
+`wsl` or `local`; `SetupProgress` carries `side`, and each side ends with its own `finished`. An
+older client sends neither and gets this computer's side only.
+
 **[built BOOT1] Protocol 1.31** (additive): setup (§24.2). `SetupPlan{picks?}` → `SetupPlan{plan}`
 (`read`), `SetupRun{picks}` → `SetupStarted{run, plan}` (`full`), and the event
 `SetupProgress{run, event}` to every watcher. An older daemon refuses the new requests.
@@ -3504,8 +3510,8 @@ ptyro gc [--dry-run]
 ptyro completions bash|zsh|fish        # dynamic: completes live session/worktree names
 ptyro shells [ls]|new [-- CMD…] [-C DIR] [--slot N] [--scratch]|go N|move N M|split [S] [--down]|break S|join S N|loose S|adopt S [WT]|watch S [--done|--output|--silence D|--match RE|--off]   # SHELLS (§23; proposed)
 ptyro shell-init bash|zsh|fish|pwsh    # OSC 7/133 snippets for shells ptyro didn't start (§8.7)
-ptyro setup [-y] [--agents A,B] [--tools T,U] [--dry-run] [--json]   # the setup checklist (§24.2)
-ptyro install NAME… [-y] [--dry-run] [--json]                         # install agents/tools by name (§24.2)
+ptyro setup [-y] [--agents A,B] [--tools T,U] [--where W] [--dry-run] [--json]   # the setup checklist (§24.2, §24.3)
+ptyro install NAME… [-y] [--where W] [--dry-run] [--json]             # install agents/tools by name; W: wsl|windows|both (Windows)
 ptyro hook <adapter> <event>           # internal; used by agent integrations
 ptyro proxy                            # internal; stdio⇄socket bridge for ssh remote (§16.2)
 ptyro mcp                              # MCP server exposing ptyro to agents (§15.4)
@@ -8776,7 +8782,7 @@ strip, and a split is always a shell.
 - **Not here:** splitting a worktree's sessions into windows (their splits stay a TUI layout,
   §11.2i), a desktop split view on the web, and more than four panes.
 
-## 24. Bootstrap: agents, tools and updates **[decided 2026-11-06 (owner, ROADMAP BOOT); BOOT0 and BOOT1 built 2026-11-06]**
+## 24. Bootstrap: agents, tools and updates **[decided 2026-11-06 (owner, ROADMAP BOOT); BOOT0 and BOOT1 built 2026-11-06; BOOT8 built 2026-11-07]**
 
 The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-design.md`: one setup checklist
 that installs the coding agents, git, the GitHub CLI and their prerequisites, walks through the
@@ -8940,7 +8946,7 @@ since BOOT0). With `--agents`/`--tools`, exactly those (`none` for none; an agen
 an error naming the right flag); with neither, the defaults. `--yes` asks nothing; without it and
 without a terminal it refuses and says to pass `--yes`. `--dry-run` prints the checklist and each
 step's command (`--json`: the `Plan`); `--json` on a run prints each event as a JSON line on
-stdout. `--where` is BOOT8's.
+stdout. `--where` is BOOT8's (§24.3).
 **`ptyro install NAME… [-y] [--dry-run] [--json]`:** names as people say them (`setup::resolve`:
 the id, the program or the name, any case, without spaces or dots: `agy`, `github-cli`,
 `"Claude Code"`, `nodejs`); an unknown one exits 3 listing the known. It shows the steps and asks
@@ -9016,3 +9022,90 @@ depends on it for the wire types); the tools folder beside the data directory; `
 for nodejs.org's build; required prerequisites tick, recommended ones don't; outdated ones update
 through the recommended method's `update`.
 
+### 24.3 Windows: WSL, Windows, or both (BOOT8) **[built 2026-11-07]**
+
+The design's goal 4: on Windows each agent and tool can go into the WSL distro, onto Windows
+itself, or both; WSL is the user's to bring.
+
+**Sides.** `setup::Side` is `local` (this computer: Linux, macOS, and WSL seen from inside),
+`windows` or `wsl`. `setup::plan` labels a Windows machine's rows `windows`. A two-sided `Plan`
+holds Windows' rows, then WSL's (`Plan::merge`; `side()`, `entry_on()`, `sides()`), and
+`Plan::steps()` orders each item after what it needs on its own side. `Plan.wsl` is a
+`WslStatus`: `usable{distro, version}`, `unusable{reason, fix}`, or `inside{distro}` (the engine
+runs in WSL: the Windows side is set up from Windows, and the plan says how).
+
+**Usable WSL** (`ptyro_client::wsl_setup::probe`): `wsl.exe -l -q` answers, it lists a distro
+(tools' own, `docker-desktop` and the like, and anything that isn't a distro's name are left
+out, as is a line starting with `-`; first run's WSL search uses the same filter), and `ptyro --version` answers in it (`remote::version_in`, the bridge's `PATH`). The
+distro of `client.default_remote` (`wsl://<distro>`) is asked first, then the others in WSL's
+order. Setup never runs `wsl --install`, installs a distro, or puts ptyro in one. Without a
+usable WSL only Windows' side is offered, and the plan says why with the fix: `wsl --install`
+for no WSL or no distro ("WSL isn't installed or has no distro" when `wsl -l -q` fails, as
+Windows 11's inbox `wsl.exe` does without WSL; "WSL has no Linux distro" when it lists only
+tools' own); for no ptyro, `wsl -d <distro> -- sh -c "<README's install line>"` (double quotes:
+cmd.exe doesn't quote with `'`)
+(`wsl_setup::install_line`); for a ptyro too old to answer `setup --survey`, the same line to
+update it. Setup run again afterwards offers WSL's side (the design's "added later").
+
+**WSL's half is done by WSL's ptyro**, through `wsl.exe` with the bridge's `PATH` and the
+arguments passed as `"$@"` (`wsl_setup::ptyro_args`), so the two engines can't drift:
+- what is there: `ptyro setup --survey` (hidden) prints its `Survey` as JSON; Windows' ptyro plans
+  WSL's side from it with its own engine, so the checklist re-plans on every tick without asking
+  WSL again;
+- a run: `ptyro install --json <ids>` with the hidden `--admin=ask` (the person said yes
+  already: run, and let sudo ask in this terminal, `wsl.exe` passing the terminal through),
+  `--admin=silent` (`--yes`: only what needs no prompt) or `--admin=never` (a daemon, for the
+  web). Its JSON events come back line
+  by line and go out as Windows' own (`wsl_setup::run`); if it ends without its report, each step
+  it didn't get to is reported failed with why and the command to run there.
+- `ptyro install --admin=…`, in each of the three modes, also keeps WSL's ptyro quiet about what
+  Windows' says already ("Looking…", "here already").
+
+**CLI.** `--where wsl|windows|both` on `setup` and `install`. The default is the side the user's
+daemon runs on: WSL's when `client.default_remote` (or `PTYRO_REMOTE`) is `wsl://<distro>` and
+that distro is the usable one (`wsl://`, the default distro: any), else Windows'. When the
+daemon's distro can't be reached but another has ptyro, the default is Windows and a line says
+so (`--where wsl` installs into that other one). `--where windows` doesn't look at WSL at all; `--where wsl` without a
+usable WSL exits 1 with the reason and fix; `--where both` without one says so and sets up
+Windows. On Linux and macOS only `--where local` is accepted (exit 2 otherwise, saying sides are
+Windows'); inside WSL the message says to run `ptyro setup --where windows` in a Windows
+terminal. `--remote wsl://…` on setup is refused with a pointer to `--where wsl`. The checklist
+shows a column each (`Windows`, `WSL (<distro>)`: `[x] WinGet`, `[+] apt (admin)`, `✓ 2.43.0`),
+with each side's notes under the row; a number ticks it on the default side(s), and `3:wsl`,
+`3:windows`, `3:both` puts item 3 exactly there. A run does Windows' side, then WSL's, under a
+heading each; with `--json` on Windows each line is a `setup::Sided` (the event with `side`).
+The exit code covers both sides.
+
+**TUI.** `app.setup` and `app.install` gain the `{where}` template word (`cli_actions`): on
+Windows a picker (WSL, Windows, both; the daemon's side first). With this computer's daemon the
+split runs `ptyro.exe … --where X`. With WSL's daemon, splits run inside WSL: `wsl` runs WSL's own
+ptyro (its side natively, sudo in that terminal); `windows` runs this `ptyro.exe` through interop
+(its path as WSL names it, `/mnt/c/…`) with `--where windows --tty`, the hidden `--tty` saying a
+person answers although the console is a pipe there (Windows' admin prompts are UAC dialogs, not
+the terminal); `both` opens the two splits.
+
+**Web, daemon.** A daemon on Windows probes WSL like the CLI (the result kept a minute, as the
+page re-plans on every tick; forgotten after a run) and plans `wsl_picks` beside its own; its
+run does both sides with `Admin::Never` on each, so WSL's admin steps show their command too. The
+page shows a Windows and a WSL checkbox per item when WSL is usable (`setup.where`), the reason
+and fix when it isn't, and with the WSL daemon most Windows users run, "this is WSL" with the
+Windows command. Its log tags lines `WSL:`/`Windows:` and its summary waits for both reports.
+
+**Tests, with no WSL:** `ptyro fake-wsl` (hidden, debug builds; `ptyro_testkit::fake_wsl`) stands
+in for `wsl.exe` through `PTYRO_WSL` (a script on Unix, a `.shim` stand-in on Windows):
+`PTYRO_FAKE_WSL=<dir>` holds `distros`, and per distro `ptyro/` (present: ptyro is installed),
+`fake/` (its own fake machine), `old` (a pre-setup ptyro); it runs this same ptyro as the
+distro's and logs each call. `crates/ptyro/tests/boot8.rs` covers no WSL / no distro / no ptyro
+/ an old ptyro (Windows only, with the fix, never installed), the default side following
+`client.default_remote`, one plan of both sides, both sides installing with sided JSON events and
+a failure in WSL, sudo asked in the terminal through `wsl.exe` (and not with `--yes`), the
+two-column checklist's `N:side` ticks, sides refused on Linux and inside WSL, a Windows
+daemon's both-sided run with no admin, and one test with no platform faked that checks the real
+sides on Windows (CI's `windows` job) and the refusal elsewhere. `boot1.rs` points `PTYRO_WSL` at
+nothing so a faked Windows never reaches a real WSL.
+
+**Decided by the builder:** WSL's side is planned from its survey by Windows' engine (re-planning
+without a `wsl.exe` round trip per tick), then run by WSL's own `ptyro install`; the run order is
+Windows then WSL; each side reports its own `finished`; a Windows daemon keeps the WSL probe a
+minute; a daemon inside WSL doesn't reach Windows' side (it has no Windows ptyro it can rely on):
+the page names the command instead.
