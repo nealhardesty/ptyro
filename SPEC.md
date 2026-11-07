@@ -48,6 +48,7 @@ Status markers used below:
 21. Open questions
 22. Chat: general-purpose conversations
 23. Shells: a workspace's numbered terminals
+24. Bootstrap: agents, tools and updates
 
 ---
 
@@ -7211,6 +7212,41 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   program but names stay (ptyro's name is an address, §2.3); the pane's directory by default;
   long-command notifications on by default, told by OSC 133 exit codes instead of output guesses.
 
+### 20.15 Installers and newest-version feeds (BOOT0) **[V/S 2026-11-06: read from each vendor's docs and installer scripts; the version table §24.1 holds the per-value marks]**
+
+- **Claude Code:** the native installer (`curl -fsSL https://claude.ai/install.sh | bash`;
+  `irm https://claude.ai/install.ps1 | iex`) is the recommended way on every platform, x64 and
+  ARM64, and needs no admin. It updates itself in the background; `claude update` applies one now.
+  Its newest version is the plain-text body of
+  `https://downloads.claude.ai/claude-code-releases/latest` (what `install.sh` reads; `stable` is
+  beside it). `claude auth status` exits 1 when logged out. The npm package needs Node.js 22+.
+- **Codex:** the docs now lead with a standalone installer (`curl -fsSL
+  https://chatgpt.com/codex/install.sh | sh`; `irm https://chatgpt.com/codex/install.ps1 | iex`),
+  which needs no Node.js and installs into `~/.local/bin` (`~/.codex/packages/standalone`) or
+  `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin`. Updating is running it again (`codex update` exists
+  too). Its feed, `https://releases.openai.com/codex/channels/latest`, is GitHub-release JSON with
+  `tag_name` = `rust-v<version>`. `codex login status` exits 1 when logged out.
+- **Antigravity (`agy`):** its installer (`…/cli/install.sh | bash`, `…/cli/install.ps1 | iex`) puts
+  `agy` in `~/.local/bin` or `%LOCALAPPDATA%\agy\bin` and it updates itself in the background
+  (`AGY_CLI_DISABLE_AUTO_UPDATE=true` stops that). The installers read
+  `https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/<os>_<arch>.json`
+  (`linux_amd64`, `darwin_arm64`, `windows_arm64`, `linux_amd64_musl`…): `{version, url, sha512}`.
+  Sign-in happens when `agy` starts; no status command is documented.
+- **OpenCode:** OpenCode 2 (`@opencode/cli`, `opencode.ai/v2/install`, beta) replaced the server
+  API ptyro's adapter speaks (§8.6) and shares the `opencode` command, so the table installs
+  OpenCode 1: `curl -fsSL https://opencode.ai/install | bash` (into `~/.opencode/bin`), or
+  `npm install -g opencode-ai` on Windows (the docs recommend WSL there). Its newest version is
+  the npm registry's `opencode-ai/latest`; `opencode upgrade` updates it.
+- **Gemini CLI:** `npm install -g @google/gemini-cli`, Node.js 20+ (its `engines`, and the docs).
+  No login status command.
+- **GitHub CLI:** the docs warn off Debian's and Ubuntu's own `gh` (2.45.x/2.46.x broken); its
+  own apt and dnf repositories, Homebrew, and `winget install --id GitHub.cli --source winget`.
+  `gh auth status` exits 1 when logged out.
+- **Node.js:** `https://nodejs.org/dist/index.json` lists releases newest first, each with `lts`
+  (`false` or the line's name); 26.13.0 was the newest LTS on 2026-11-06, above a 27.0.0 alpha.
+  Builds are `node-v<v>-<linux|darwin|win>-<x64|arm64>.<tar.xz|zip>`, with `SHASUMS256.txt`.
+  WinGet's `OpenJS.NodeJS.LTS` is in winget-pkgs; nodejs.org names no winget command.
+
 ## 21. Open questions
 
 1. ~~**License**~~ — **decided 2026-10-20: MIT** ("for now"; `LICENSE` at repo root, `license =
@@ -7404,7 +7440,7 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   first, as cmd-shim picks), anything else as it is. Through the shim, `cmd.exe` would stand
   between ptyro and the agent, ask "Terminate batch job (Y/N)?" at Ctrl+C, and be the session's
   program. A shim that can't be read runs as itself (WIN5 wraps it in `cmd.exe /d /c`). Claude's
-  install hint is `irm https://claude.ai/install.ps1 | iex` there. **Not built:** an `@` completion of the folders' files
+  install hint is `irm https://claude.ai/install.ps1 | iex` there (every hint is the version table's, §24.1). **Not built:** an `@` completion of the folders' files
   in the composer; agent-sent titles (no agent of the four sends one: §20.8); MCP for OpenCode chats
   (its server takes MCP servers per server instance, `POST /mcp`, and it isn't installed here to
   try; its permission rules for `<server>_*` are written [S]).
@@ -8733,3 +8769,71 @@ strip, and a split is always a shell.
   window's later panes as indented `.2` cards. The web still shows one pane at a time (§23.14).
 - **Not here:** splitting a worktree's sessions into windows (their splits stay a TUI layout,
   §11.2i), a desktop split view on the web, and more than four panes.
+
+## 24. Bootstrap: agents, tools and updates **[decided 2026-11-06 (owner, ROADMAP BOOT); BOOT0 built 2026-11-06]**
+
+The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-design.md`: one setup checklist
+that installs the coding agents, git, the GitHub CLI and their prerequisites, walks through the
+logins, and later offers updates. Each phase below records what it built and what the builder
+decided where the design left it open.
+
+### 24.1 The version table (BOOT0) **[built 2026-11-06]**
+
+**Where it lives:** `crates/ptyro-agents/src/catalog.toml`, embedded with `include_str!` and read
+by `ptyro_agents::catalog` (typed, `serde`, `deny_unknown_fields`; a table that failed to load would be empty, so nothing breaks, and the tests load it). Data, not code, so a fact can be
+corrected without touching the logic, and the tests check every row on every load. Every value is
+from the vendor's documentation (or, where marked, the vendor's installer script or the program
+itself) on the row's `checked` date, and RESEARCH segment G records the same, with sources.
+
+**Rows:** the agents Claude Code (`claude`), Codex, Antigravity (`agy`), OpenCode and Gemini CLI
+(labelled "for Gemini API-key and enterprise accounts (others: Antigravity)"), and the tools
+git, the GitHub CLI (`gh`) and Node.js (`node`). An agent's row id is its built-in name (§8.1).
+
+**Per row:** `doc` (the vendor page) and `checked` (the date); `version` (the argv that prints the
+installed version); `login` (`start`, and `check`, which exits 0 when logged in, absent when the
+vendor documents none); `latest` (the newest-version source); `prereqs` (an item, its minimum
+version when one is named, required or only recommended, and on which platforms); `methods` (in
+order of preference) and `others` (other ways it may already be installed, with how each updates:
+for BOOT5's updates and BOOT7's moves).
+
+**Per method:** `platforms` (`linux`, `macos`, `wsl`, `windows-x64`, `windows-arm64`), `via`
+(`vendor`, `npm`, `brew`, `winget`, `apt`, `dnf`, `xcode`, `node-dist`), `shell` (`sh`, or `powershell`
+on Windows), `needs` (a program that must be on `PATH`, such as `apt-get`), `install`, `update`,
+`auto_update`, `admin`, and for `node-dist` the `url` and `sums` templates. `Item::method(platform,
+has)` picks the first method whose `needs` is present, so a Mac without Homebrew gets nodejs.org's
+build and Linux gets apt or dnf by what is there.
+
+**Marks:** every method, login and source carries `V`, `S` or `U` (§20 style), and anything not `V`
+carries a `note` saying what is second-hand or missing. A value nobody documents is left out:
+Antigravity's and Gemini CLI's logins have no `check`, and the tests insist such a login says why.
+
+**Newest versions, without the network:** `Latest::url(platform, arch)` names what to fetch and
+`Latest::parse(body)` reads the reply. Sources: `npm` (`{"version"}`), `github-release`
+(`tag_name` less a prefix: `v` for gh, `rust-v` for Codex's channel), `plain-text` (Claude's
+`latest`), `agy-manifest` (`{"version"}`, per `<os>_<arch>`) and `node-dist` (the newest LTS in
+`index.json`). The tests parse replies recorded on 2026-11-06 in
+`crates/ptyro-agents/tests/fixtures/catalog/` (trimmed to the fields that matter; `make catalog-fixtures` records them again) and reject a
+reply that isn't a version (an HTML error page, the wrong tag prefix). git has no source: the
+design checks only agents and ptyro. `catalog::Version` reads `2.1.319 (Claude Code)`,
+`codex-cli 0.162.1`, `v24.13.0`, `gh version 2.57.0 (…)` and Git for Windows' `git version 2.51.0.windows.1` (2.51.0), and orders them (a pre-release before
+its release); `at_least` checks a minimum.
+
+**Decided by the builder** (the design's "verified when built"):
+- **Codex installs with its standalone installer, not npm:** the vendor's docs now lead with it
+  on every platform. So Codex no longer needs Node.js, and the design's "Node.js, because Codex
+  needs it" default tick no longer follows. npm and Homebrew are `others`.
+- **OpenCode is OpenCode 1** (`opencode-ai`): OpenCode 2 is beta and changed the server API the
+  adapter speaks. On Windows it installs with npm (the docs recommend WSL), so it needs Node.js
+  there.
+- **Antigravity and Claude Code update themselves**; their `update` is the manual form.
+  Antigravity's `agy update` is [S] (third-party guides, not the docs).
+- **Admin:** no agent's recommended method needs it. apt, dnf, Xcode's tools and WinGet's
+  machine-wide Git, gh and Node.js installers do (`admin = true`); the tests require any `sudo`
+  command to say so.
+- **Not handled:** musl Linux for Antigravity's manifest (its installer picks `_musl` builds);
+  Alpine generally.
+
+**Uses today:** `locate::install_hint` (the fix offered when an agent isn't installed, in `doctor`,
+chats and the TUI's agent picker) is the table's first method for the platform. BOOT1 builds the
+plan engine on the rest.
+

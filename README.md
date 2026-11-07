@@ -61,7 +61,12 @@ Google, or any other tool named here; their names and trademarks belong to their
 - **git 2.40 or later**, and **GNU make** for building from a checkout.
 - **At least one agent CLI:** [Claude Code](https://code.claude.com) (the best supported),
   [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli)
-  or [OpenCode](https://opencode.ai). Any other program runs too, with less status detail.
+  (for Gemini API-key and enterprise accounts),
+  [Antigravity CLI](https://antigravity.google) (`agy`, Google's agent for personal accounts)
+  or [OpenCode](https://opencode.ai). Any other program runs too, with less status detail. When
+  one you ask for isn't installed, ptyro gives its vendor's recommended install command for your
+  platform (Claude Code's native installer, Codex's and Antigravity's own installers, npm for
+  Gemini CLI), from a table checked against each vendor's documentation (SPEC §24.1).
 - **A modern terminal:** Ghostty, kitty, WezTerm, Alacritty, iTerm2, foot… Inside tmux works too.
 - **Optional:** the [GitHub CLI](https://cli.github.com) (`gh`) for PRs and checks;
   [Tailscale](https://tailscale.com) for the phone app.
@@ -520,7 +525,7 @@ nothing else, and a preset of your own can add a shell (shown with `⚠`) or you
 incognito chat's, which keeps nothing; ptyro asks first when the project runs under another profile
 than the chat). Gemini CLI
 works even when it is only an `npx` alias: ptyro finds it in npm's cache, nvm or the npm prefix
-(`ptyro doctor` shows where, and offers `npm i -g @google/gemini-cli`). Its agent stops when idle and picks up again from the saved conversation,
+(`ptyro doctor` shows where, and offers `npm install -g @google/gemini-cli`). Its agent stops when idle and picks up again from the saved conversation,
 after a restart too. A linked machine's chats show under its workspaces and are used from here
 (they run there, on its agents). In a chat, `Alt-←`/`Alt-→` flips between answers, `C-f` finds in
 it, `/` in the composer lists commands (`/retry`, `/edit`, `/fork`, `/side`, `/agent`…) and `C-q C-g`
@@ -823,6 +828,7 @@ WSL works meanwhile.
 | `make fmt` / `fmt-check` / `lint` | format / fail if unformatted / clippy with warnings as errors |
 | `make check` / `make ci` | fmt-check, lint, doc, lock-check, ratchet, test, smoke: CI's main job on every platform / those plus `deny`, `web-check`, `web-e2e`, `msrv`, `fuzz-smoke` and `installer-check`: everything CI runs |
 | `make lock-check` / `make ratchet` / `make ratchet-update` | fail if `Cargo.lock` is out of date / fail if a crate has more `unwrap()`/`expect()` in non-test code than `scripts/unwrap-baseline.txt` allows (only ever lower it) / write the current counts as the baseline |
+| `make catalog-fixtures` | re-record the version table's newest-version replies (npm registry, GitHub releases, Claude's and Antigravity's feeds, nodejs.org) as test fixtures, and print each newest version: a live check that every source still answers (needs the network; review the diff, then update the versions the test expects) |
 | `make msrv` | type-check with the oldest compiler `rust-version` promises (installs it) |
 | `make icons` | render the web app's favicon, PWA (including maskable) and apple-touch icons from `docs/logos/ptyro-icon.svg` (needs `rsvg-convert`) |
 | `make web-test` | the web app's logic tests that need no daemon (settings, terminal keys and selection, QR codes; needs Node) |
