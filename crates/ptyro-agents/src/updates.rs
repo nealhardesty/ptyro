@@ -7,7 +7,8 @@
 //!
 //! Who looks: the daemon, in the background, once a day (so the TUI's health badge, the web's
 //! Health page and the start-up note all read the one result), and `ptyro doctor` and `ptyro
-//! update` afresh. Start-up reads only the file, never the network.
+//! update` afresh. Start-up never touches the network: the TUI asks its daemon, which answers
+//! from what the last look remembered.
 //!
 //! The rows are the version table's agents with a newest-version source ([`sources`]); ptyro's
 //! own update (BOOT6) adds itself as one more source and finding under the id `ptyro`.

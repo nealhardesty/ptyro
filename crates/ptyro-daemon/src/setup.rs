@@ -260,7 +260,18 @@ impl Daemon {
     ) -> Result<Reply, Error> {
         let picks = ids(&picks)?;
         let wsl_picks = wsl_picks.map(|p| ids(&p)).transpose()?;
-        let running = Running::take(&self.paths.state).map_err(Error::conflict)?;
+        // Another run holding the machine's lock is refused at once; the take itself (which waits
+        // out a probe's instant) runs off the runtime's workers.
+        if !RUNNING.load(Ordering::Acquire)
+            && let Some(by) = setup::lock::Lock::held_by(&self.paths.state)
+        {
+            return Err(Error::conflict(setup::lock::busy(&by)));
+        }
+        let state = self.paths.state.clone();
+        let running = tokio::task::spawn_blocking(move || Running::take(&state))
+            .await
+            .map_err(|e| Error::internal(e.to_string()))?
+            .map_err(Error::conflict)?;
         let (host, plan, _) =
             plan_on(&self.paths, &self.config().updates, Some(picks), wsl_picks).await?;
         let run = ptyro_run::short_id("setup", 6);

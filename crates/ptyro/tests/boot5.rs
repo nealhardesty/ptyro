@@ -463,7 +463,8 @@ fn doctor_says_when_the_ignore_list_names_no_agent() {
 #[test]
 fn a_stale_note_of_who_holds_setup_blocks_nothing() {
     let m = machine();
-    std::fs::create_dir_all(m.state()).unwrap();
+    // A real lock taken and let go first, so the probe runs (and frees and tidies).
+    drop(ptyro_agents::setup::lock::Lock::take(&m.state(), "`ptyro install`").unwrap());
     let stale = || {
         std::fs::write(
             m.state().join("setup.who"),
@@ -475,6 +476,7 @@ fn a_stale_note_of_who_holds_setup_blocks_nothing() {
     let checks = m.doctor(false);
     assert!(checks.iter().any(|c| c["name"] == "claude" && c["level"] == "warn"), "{checks:?}");
     assert_eq!(m.versions()["surveyed"], NOW, "the look wrote");
+    assert!(!m.state().join("setup.who").exists(), "the probe tidied the stale note away");
     stale();
     let o = m.run(&["update", "claude", "--yes"], "");
     assert!(o.status.success(), "{}", text(&o));

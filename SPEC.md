@@ -9438,12 +9438,16 @@ as before).
 **Said up front, everywhere.** Who holds it is asked before anyone chooses
 (`Lock::held_by`: only the operating system's lock decides, by a non-blocking probe; held,
 `setup.who` names who; free, a `setup.who` a holder left behind (Ctrl-C, a closed window, power
-lost) is removed while the probe holds the lock, whatever process now has its id; BOOT5 review):
+lost) is removed while the probe holds the lock, whatever process now has its id; the holding
+process itself answers from its own set of held locks without probing, since a POSIX lock (NFS's
+`flock` emulation) belongs to the process and a probe would let go of it; BOOT5 review):
 - **the CLI** takes the lock before its checklist or question, so it refuses at once;
 - **the TUI's checklist** looks when the survey is in (`Setup::check_busy`): it says "setup is
   already running on this computer (from …): ⏎ installs nothing now; open the checklist again
   once it's done", ⏎ counts nothing, and ⏎ looks again before opening a split (a toast with the
   refusal instead);
+- **the daemon's `SetupRun`** refuses at once when another holds the lock, and takes it off the
+  runtime's workers (the take waits out a probe's instant);
 - **the web**: `SetupPlan.held_by` (protocol 1.34) names a holder that isn't the daemon's own run
   (while `running` is empty). The page says "Setup is already running on the computer (from
   `ptyro install` (process 4242)): Install waits until it's done", disables the boxes and Install
@@ -9503,7 +9507,11 @@ the second refused saying `ptyro install`, `ptyro setup` refused before its chec
 them installed, the lock free afterwards; `the_daemon_says_and_refuses_while_a_terminal_installs`:
 a terminal's install named in `SetupPlan.held_by` and refusing the daemon's `SetupRun` (whose own
 flag is let go, so the next starts); the TUI's `the_setup_checklist_says_when_setup_runs_elsewhere`;
-`setup::lock`'s own test (`held_by` takes nothing). In a real browser (`make web-e2e`, `web/test/e2e.mjs`): the banner opening the page;
+`setup::lock`'s own tests (a second holder refused and told who, then free again; a stale
+`setup.who` naming a live, unrelated process never blocking and tidied away; a probe racing 200
+takes never refusing one; asking in the holding process showing the holder and keeping the lock)
+and boot5's `a_stale_note_of_who_holds_setup_blocks_nothing` (a real lock taken and let go, then
+a stale note: `doctor`'s look and `ptyro update` both proceed). In a real browser (`make web-e2e`, `web/test/e2e.mjs`): the banner opening the page;
 Settings → Agents and tools with the TUI's lines, the admin command and the TUI's way, Install 2's
 report and Already here with the default agent; a page opened again while a run waits saying it is
 already running, with its lines and no second Install, then its report and Already here; a
