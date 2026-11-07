@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use ptyro_agents::catalog::{self, Kind, Platform};
 use ptyro_agents::setup::checklist::{self, Picks, Sides, cell};
-use ptyro_agents::setup::{self, Entry, Plan, Side, State, Where, WslStatus};
+use ptyro_agents::setup::{self, Entry, Plan, Side, Where, WslStatus};
 use ptyro_client::wsl_setup;
 use ptyro_core::paths::Paths;
 
@@ -59,6 +59,9 @@ pub struct Setup {
     pub want: Option<Vec<String>>,
     /// The side to tick on instead of the default (a health fix's `--where`).
     pub want_place: Option<Where>,
+    /// Setup is running already (the machine's lock, `setup::lock`): who holds it. ⏎ installs
+    /// nothing meanwhile, and the checklist says so.
+    pub busy: Option<String>,
 }
 
 /// The checklist's install, running (BOOT2): one split at a time, so two package managers, sudo
@@ -82,7 +85,7 @@ impl Default for Setup {
 
 impl Setup {
     pub fn looking(want: Option<Vec<String>>) -> Self {
-        Self { found: Found::Looking, col: 0, said: None, want, want_place: None }
+        Self { found: Found::Looking, col: 0, said: None, want, want_place: None, busy: None }
     }
 
     pub fn ready(&self) -> Option<&Ready> {
@@ -97,9 +100,18 @@ impl Setup {
         self.ready().map(|r| checklist::rows(&r.plan)).unwrap_or_default()
     }
 
-    /// How many steps ⏎ runs.
+    /// How many steps ⏎ runs (none while setup runs elsewhere).
     pub fn steps(&self) -> usize {
+        if self.busy.is_some() {
+            return 0;
+        }
         self.ready().map_or(0, |r| r.plan.steps().len())
+    }
+
+    /// Look at the machine's setup lock in `state` again; true when someone holds it.
+    pub fn check_busy(&mut self, state: &std::path::Path) -> bool {
+        self.busy = ptyro_agents::setup::lock::Lock::held_by(state);
+        self.busy.is_some()
     }
 
     /// The survey is in: tick the defaults (or what was asked for) on the default side.
@@ -237,59 +249,7 @@ pub async fn look(paths: Paths, remote: Option<String>) -> Option<(Sides, Where,
     Some((sides, place, note.filter(|n| !n.is_empty())))
 }
 
-/// The line after a row's name: what it is, then how it installs and what comes with it
-/// ("Anthropic's coding agent · the vendor's installer · then log in"). With two sides the
-/// method is in each side's cell, so it's left out here.
-pub fn about(plan: &Plan, e: &Entry, programs: &dyn Fn(&str) -> bool, two: bool) -> String {
-    let Some(item) = catalog::item(&e.id) else { return String::new() };
-    // A label (Gemini CLI's "for Gemini API-key and enterprise accounts…") says more than what
-    // it is, so it takes that place.
-    let mut parts: Vec<String> = vec![e.label.clone().unwrap_or_else(|| item.about.clone())];
-    let platform = plan.platform;
-    if !two {
-        match (&e.action, &e.blocked) {
-            (Some(a), _) => {
-                let how = if a.update { "updates through " } else { "" };
-                parts.push(format!("{how}{}", a.via.words()));
-                if a.admin {
-                    parts.push("asks for admin".into());
-                }
-            }
-            (None, Some(b)) => parts.push(format!("can't here: {b}")),
-            (None, None) => {
-                if let Some(m) = item.method(platform, programs) {
-                    parts.push(m.via.words().to_owned());
-                    if m.admin {
-                        parts.push("asks for admin".into());
-                    }
-                }
-            }
-        }
-    }
-    let needs: Vec<&str> = item
-        .prereqs(platform)
-        .filter(|p| p.required)
-        .filter_map(|p| catalog::item(&p.item).map(|i| i.name.as_str()))
-        .collect();
-    if !needs.is_empty() {
-        parts.push(format!("needs {}", needs.join(", ")));
-    }
-    if !e.needed_by.is_empty() {
-        let by: Vec<&str> = e
-            .needed_by
-            .iter()
-            .map(|id| plan.entry(id).map_or(id.as_str(), |x| x.name.as_str()))
-            .collect();
-        parts.push(format!("ticked because {} needs it", by.join(", ")));
-    }
-    if matches!(e.state, State::TooOld { .. } | State::Outdated { .. }) {
-        parts.push(e.state.words());
-    }
-    if item.login.is_some() {
-        parts.push("then log in".into());
-    }
-    parts.join(" · ")
-}
+pub use ptyro_agents::setup::checklist::about;
 
 /// One row's cells, per side, for a two-sided checklist.
 pub fn cells(plan: &Plan, id: &str) -> Vec<String> {
@@ -313,7 +273,7 @@ pub const SECTIONS: [(&str, Kind); 2] = [("Agents", Kind::Agent), ("Tools", Kind
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use ptyro_agents::setup::Survey;
+    use ptyro_agents::setup::{State, Survey};
 
     pub(crate) fn survey(
         platform: Platform,

@@ -13,7 +13,7 @@ import { APPLY, ORIGIN, article, fieldsOf, fromLines, gist, hexOf, keyLabel, lab
 import type { Binding } from "./cfgkit.js";
 import type { Collection, Entry, Schema, Section, Setting, View } from "./cfgkit.js";
 import { data } from "./data.js";
-import { actions, badge, bar, confirm, enc, errText, form, go, h, row, sheet, ui, views } from "./kit.js";
+import { actions, badge, bar, confirm, enc, errText, form, go, h, row, sheet, tipOf, ui, views } from "./kit.js";
 import type { Child, Field } from "./kit.js";
 import { cfgChanged, editConfigAt } from "./settings.js";
 
@@ -607,6 +607,7 @@ function build(rest: string): Page {
       return h("a", { class: `cfg-link${sec.id === first ? " on" : ""}`, href: `#/settings/${sec.id}` }, h("span", {}, sec.title), n ? badge(String(n), "info") : null);
     };
     nav.replaceChildren(
+      h("a", { class: "cfg-link", href: "#/setup/settings", title: tipOf("setup.plan") }, h("span", {}, "Agents and tools")),
       ...s.user.sections.map(link),
       h("div", { class: "cfg-sep" }, projectName() ? `Repository: ${projectName()}` : "Repository"),
       ...s.project.sections.map(link),
@@ -633,7 +634,10 @@ function build(rest: string): Page {
       const off = sec.scope === "project" && !st.projectId;
       return row(h("span", {}, sec.title, n ? badge(`${n} changed`, "info") : null), off ? "Choose a repository above" : sec.blurb, "›", { href: `#/settings/${sec.id}`, cls: off ? "dim" : "" });
     });
-    return [h("div", { class: "rows" }, ...rows)];
+    // Setup's checklist lives under Settings too (BOOT3), where people look for "add an agent".
+    const setup = h("a", { class: "set setup-link", href: "#/setup/settings", title: tipOf("setup.plan") },
+      h("b", {}, "Agents and tools ›"), h("small", {}, "Install coding agents, git and the GitHub CLI, with what they need, and log in to each"));
+    return [setup, h("div", { class: "rows" }, ...rows)];
   }
 
   function sectionBody(sec: Section): Child[] {

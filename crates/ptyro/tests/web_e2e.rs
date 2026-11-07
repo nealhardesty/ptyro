@@ -116,6 +116,7 @@ fn the_web_app_works_in_a_real_browser() {
         .collect();
     let e2e = serde_json::json!({
         "bin": BIN, "env": env, "repo": repo, "config": d.paths.config.join("config.toml"),
+        "fake": fake,
     });
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/test/e2e.mjs");
     let mut js = Command::new(node)
