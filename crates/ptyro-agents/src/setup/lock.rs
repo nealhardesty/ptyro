@@ -76,6 +76,8 @@ impl Lock {
     /// Who holds the lock in `state` now ("`ptyro install` (process 4242)"); `None` when it is
     /// free. For a checklist to say so before anyone ticks anything. Only the operating system's
     /// lock decides: a non-blocking probe (held for an instant; [`Lock::take`] waits that out).
+    /// The probe's lock is shared, so two probes at once never take each other for a holder (an
+    /// exclusive one did: a checklist then said setup was running when nothing was).
     /// Held, `setup.who` names who; free, a `setup.who` left by a holder that ended without
     /// tidying (Ctrl-C, a closed window, power lost) is removed, whatever process now has its id.
     pub fn held_by(state: &Path) -> Option<String> {
@@ -85,7 +87,7 @@ impl Lock {
             return Some(holder(&state.join("setup.who")));
         }
         let file = OpenOptions::new().write(true).open(&path).ok()?;
-        match file.try_lock() {
+        match file.try_lock_shared() {
             Ok(()) => {
                 // Free: what a gone holder left goes while this probe holds the lock, so a new
                 // holder's note is never removed.
@@ -147,6 +149,18 @@ mod tests {
         assert_eq!(Lock::held_by(dir.path()), None);
         let again = Lock::take(dir.path(), "`ptyro setup`").unwrap();
         drop(again);
+    }
+
+    /// A probe at the same instant as another (two checklists looking, two test threads) is no
+    /// holder: probes share the lock.
+    #[test]
+    fn a_probe_beside_another_probe_finds_it_free() {
+        let dir = tempfile::tempdir().unwrap();
+        drop(Lock::take(dir.path(), "x").unwrap());
+        let other = OpenOptions::new().write(true).open(dir.path().join("setup.lock")).unwrap();
+        other.try_lock_shared().unwrap();
+        assert_eq!(Lock::held_by(dir.path()), None);
+        drop(other);
     }
 
     /// Only the OS lock decides: a `setup.who` left behind naming a live, unrelated process (a

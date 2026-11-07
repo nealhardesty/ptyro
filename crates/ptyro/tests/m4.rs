@@ -285,6 +285,24 @@ async fn claude_adapter_status_attention_answer_and_usage() {
     assert!(!get(&c, "cl").await.state.is_live());
 }
 
+/// An agent whose first hook is slow (a loaded runner): its start-up output is guessed
+/// "working", and the start's idle replaces the guess, so its prompt is typed. The idle used to
+/// be dropped as "a session starting can't end a turn": the guess stayed for 5 minutes, and a
+/// Codex, which shows no input box ptyro reads, never got its prompt (CI's Windows, m7).
+#[tokio::test]
+async fn a_slow_session_start_replaces_a_guessed_working() {
+    let w = World::new("[agents.codex.env]\nPTYRO_FAKE_HOOK_DELAY_MS = \"1500\"\n");
+    let c = w.d.client().await.unwrap();
+    agent(&c, "cx", "codex", Some("work 0.1 hi")).await;
+    let s = wait_for(&c, "cx", "a turn, idle from its hook", |s| {
+        s.turns >= 1
+            && is(s, AgentStatus::Idle)
+            && s.status.as_ref().is_some_and(|r| r.source == SignalSource::Hook)
+    })
+    .await;
+    assert_eq!(s.status.unwrap().confidence, Confidence::High);
+}
+
 #[tokio::test]
 async fn codex_gemini_antigravity_and_opencode_adapters() {
     let w = World::new("");
@@ -306,6 +324,13 @@ async fn codex_gemini_antigravity_and_opencode_adapters() {
     {
         let s = agent(&c, name, adapter, None).await;
         w.d.wait_for_text(&c, name, &format!("fake {adapter}"), WAIT).await.unwrap();
+        // Its first reliable word (a hook, OSC 7501 or the sidecar) before the prompt: until it
+        // comes, its start-up output can be guessed "working" (SPEC §9.3), which the wait for
+        // the prompt's working below would take (a slow WSL runner, every time).
+        wait_for(&c, name, "a reliable status", |s| {
+            s.status.as_ref().is_some_and(|r| r.confidence == Confidence::High)
+        })
+        .await;
         // Codex and Antigravity learn their conversation id at start; OpenCode with its first event.
         if adapter != "opencode" {
             wait_for(&c, name, "conversation", |s| s.conversation.is_some()).await;

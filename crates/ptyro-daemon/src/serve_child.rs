@@ -167,6 +167,13 @@ impl Daemon {
         if !live {
             let _ = std::fs::remove_file(record);
         }
+        // Never once the daemon is stopping: a server started after its kill outlived the daemon
+        // and kept the port from the next one (seen in m9 on WSL). Checked and started under the
+        // lock the stop's kill takes, so one or the other comes first, whole.
+        let mut r = self.serve_child.run.locked();
+        if *self.shutdown.borrow() {
+            return Ok(());
+        }
         let child = std::process::Command::new(exe)
             .args(["serve", "--managed"])
             .envs(self.base_env.iter().map(|(k, v)| (k, v)))
@@ -177,7 +184,6 @@ impl Daemon {
             .stderr(log)
             .spawn()?;
         tracing::info!(pid = child.id(), "started ptyro serve");
-        let mut r = self.serve_child.run.locked();
         r.child = Some(child);
         r.started_with = Some(self.config().remote);
         r.since_ms = Some(now_ms());

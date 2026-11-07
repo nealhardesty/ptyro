@@ -247,6 +247,23 @@ fn send_wait_read_and_events() {
     assert_eq!(gone[0]["name"], "a1", "stop keeps it listed");
 }
 
+/// A prompt the agent took is never entered again while its hooks are slow (a loaded macOS
+/// runner): ptyro's second Enter answered the permission dialog "no" (ROADMAP WIN13's open item).
+#[test]
+fn a_prompt_taken_with_slow_hooks_is_entered_once() {
+    let w = World::new("[agents.claude.env]\nPTYRO_FAKE_HOOK_DELAY_MS = \"1500\"\n");
+    w.ok(&["new", "-d", "-n", "s1", "--agent", "claude"]);
+    let out = w.json(&["send", "s1", "work 0.1 hi", "--wait-ready", "--wait", "--json"]);
+    assert_eq!(out[0]["state"], "idle", "{out}");
+    let blocked = w.ok(&["send", "s1", "ask rm -rf build", "--wait"]);
+    assert!(blocked.contains("s1 blocked"), "{blocked}");
+    w.ok(&["answer", "s1", "allow"]);
+    let m = w.ok(&["wait", "s1", "--match", "answer: (yes|no)", "--timeout", "20s"]);
+    assert!(m.contains("s1 matched \"answer: yes\""), "{m}");
+    let ev = w.ok(&["events", "-s", "s1", "--json", "-n", "200"]);
+    assert!(!ev.contains("prompt_enter_again"), "{ev}");
+}
+
 #[test]
 fn exit_codes_are_stable() {
     let w = World::new("");
@@ -287,7 +304,10 @@ fn json_shapes() {
     let w = World::new("");
     let root = w.repo("proj", &[(".ptyro.toml", "[scripts.run.dev]\ncommand = \"true\"\n")]);
     w.ok(&["project", "add", root.to_str().unwrap()]);
-    w.ok(&["new", "-d", "-n", "j1", "--agent", "claude", "--prompt", "work 0.1 x"]);
+    // A turn longer than `min_work` (1 s here), so its idle always raises attention and an inbox
+    // entry: a shorter one did only when a loaded machine stretched it past 1 s, and the
+    // snapshot's `inbox` and `attention` shapes changed with the machine's load.
+    w.ok(&["new", "-d", "-n", "j1", "--agent", "claude", "--prompt", "work 1.5 x"]);
     w.ok(&["wait", "j1", "--for", "idle", "--timeout", "20s"]);
     let mut all = serde_json::Map::new();
     for (name, args) in [
@@ -312,13 +332,15 @@ fn json_shapes() {
         }
         all.insert(name.into(), shape(&v));
     }
-    // A status event (kinds differ in their detail).
+    // A status event from a hook (kinds differ in their detail). Not just the first one: an
+    // agent's start-up output can be guessed "working" (detail "output") before its first hook
+    // comes, which a slow machine (CI's Windows) shows every time (SPEC §9.3).
     let ev: Value = w
         .ok(&["events", "-s", "j1", "--json", "-n", "200"])
         .lines()
         .map(|l| serde_json::from_str::<Value>(l).unwrap())
-        .find(|e| e["kind"] == "status")
-        .expect("a status event");
+        .find(|e| e["kind"] == "status" && e["detail"]["source"] == "hook")
+        .expect("a status event from a hook");
     all.insert("events".into(), shape(&ev));
     insta::assert_json_snapshot!("cli-json", Value::Object(all));
 }

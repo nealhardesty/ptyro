@@ -1595,9 +1595,19 @@ Verified against Claude Code **2.1.304** (§20).
     presses Enter again, twice at most within ~10 s; never while working (that Enter would be lost
     too) or blocked (Enter would answer the dialog). Codex 0.166 says idle as it starts and is
     then busy for a moment: the first prompt's Enter landed then and was dropped, every time.
+    It relies on an agent emptying its box as it takes a prompt, as Claude and Codex do; the
+    fake agent does too since 2026-11-07 (§18.2: it didn't, and a second Enter answered a
+    permission dialog "no").
 - **A session starting doesn't end a turn [WIN8]:** a `SessionStart` hook that comes while the
   session is working moves nothing to idle (its conversation and model still count). Codex 0.166
   sends it only with the first prompt, after OSC 7501's working (verified live, 2026-11-05).
+  Only a *reliable* working holds it off (above low confidence: a hook, OSC 7501, a title or
+  the screen). A working the output heuristic guessed from the agent's start-up output is no
+  turn: `SessionStart`'s idle replaces it **[fixed 2026-11-07]**. When the first hook is slow
+  (CI's Windows and WSL runners, a loaded laptop), the heuristic guessed working before it came,
+  and the start's idle was dropped; the guess then stood until it went stale (5 m). An agent
+  whose input box ptyro doesn't read (Codex) never got its prompt meanwhile, since delivery
+  waits for a reliable idle (the m7 "fake Codex never gets its prompt" flake on Windows).
 - **Folder trust:** `on_screen` recognises the trust dialog and reports blocked(question)
   "trust this folder?". `ready()` is false while it shows, so ptyro never types into it. So is
   the first-run "Claude in Chrome extension detected" question (2.1.318), blocked(question)
@@ -5394,7 +5404,12 @@ is "the web is up when the daemon is".
 - **No orphans.** A managed `ptyro serve` leaves within a second of its parent daemon going
   (`getppid` changes), however it went: a crash leaves the socket file behind, so the file alone
   can't say, and the next daemon's server would never get the port (`m9`: the daemon is killed
-  with SIGKILL and its replacement's server comes up).
+  with SIGKILL and its replacement's server comes up). **[fixed 2026-11-07]** The parent it
+  compares with is the daemon's own pid (`PTYRO_DAEMON_PID`), not the parent it saw first: a
+  daemon gone before the server first looked had already left it to another parent, so the
+  change never came. And the daemon starts no server once it is stopping (checked under the lock
+  its stop's kill takes): a server started just after that kill outlived the daemon and held the
+  port from the next one (`m9` on WSL; tested by `a_managed_server_whose_daemon_is_already_gone_leaves`).
 - **After a reboot.** The daemon runs it, so it is up when the daemon is; `ptyro web on` and
   `ptyro init` say when the login service isn't installed (`ptyro daemon install-service`).
 - **Routes:** `/` and the embedded app; `/ws`; `POST /api/request` (`Authorization: Bearer`,
@@ -5883,6 +5898,21 @@ command): ptyro doesn't confine that.
 | Git | temp repos; worktree create/remove safety matrix (dirty, untracked, unpushed, stash, locked) |
 | End-to-end | scripted TUI runs in a headless PTY (the testkit attaches a client, sends keys, asserts on cell cache). **Built in M1:** `ptyro-headless` (dev tool in `ptyro-testkit`) runs a program, even the ptyro TUI itself, inside the emulator with timed `--send`/`--resize`/`--snapshot`/`--expect`/`--record`; `make smoke` runs it in CI. `crates/ptyro/tests/e2e.rs` drives a real daemon in a temp `PTYRO_HOME` with the built-in fake agent. |
 | Manual compatibility matrix | `docs/compat.md`: Claude Code, Codex, Gemini, OpenCode, nvim, vim, htop/btop, less, fzf, lazygit, tig, bash/zsh/fish readline, `vttest` sections — checked per release in Ghostty, kitty, WezTerm, Alacritty, iTerm2, Terminal.app, and inside tmux |
+
+**The fake agent behaves as the real ones do where ptyro looks [2026-11-07, the flakes task]:**
+- As Claude does, the fake Claude empties its input box when it takes a prompt (the prompt moves
+  up into the conversation), and draws what it took itself: its terminal doesn't echo, as Claude's
+  raw one doesn't, so a line typed ahead while it works can't land where the box is redrawn. It left the prompt in the box, so ptyro's WIN8 check ("this
+  very prompt still sits there unsent", §8.2) saw it unsent while a slow hook still left the status
+  idle, and pressed Enter again; the permission dialog that came next took that Enter as "no".
+  This was the `send --wait` race of ROADMAP WIN13 (m5 on macOS: "a1 isn't waiting on a prompt",
+  "a1 matched answer: no").
+- `PTYRO_FAKE_HOOK_DELAY_MS=N` makes each of its hooks take N ms to start, as on a loaded
+  machine, so what ptyro does before a hook arrives is tested on every machine, not only on a
+  slow CI runner (m4 `a_slow_session_start_replaces_a_guessed_working`, m5
+  `a_prompt_taken_with_slow_hooks_is_entered_once`).
+- A test that asserts which source a status came from first waits for the agent's first
+  reliable word: before it, the output heuristic may guess "working" from start-up output (§9.3).
 
 CI: GitHub Actions on Linux + macOS runs `make check` (fmt-check, clippy `-D warnings`, tests,
 spike smoke) plus cargo-deny (`deny.toml`: licenses, advisories, bans, sources); release artifacts
@@ -9456,7 +9486,9 @@ with that message. A filesystem that can't lock doesn't stop an install (it goes
 as before).
 
 **Said up front, everywhere.** Who holds it is asked before anyone chooses
-(`Lock::held_by`: only the operating system's lock decides, by a non-blocking probe; held,
+(`Lock::held_by`: only the operating system's lock decides, by a non-blocking probe that takes
+the lock *shared*, so two probes at once never see each other as a holder [fixed 2026-11-07: an
+exclusive probe made a checklist say setup was running when another one was only looking]; held,
 `setup.who` names who; free, a `setup.who` a holder left behind (Ctrl-C, a closed window, power
 lost) is removed while the probe holds the lock, whatever process now has its id; the holding
 process itself answers from its own set of held locks without probing, since a POSIX lock (NFS's

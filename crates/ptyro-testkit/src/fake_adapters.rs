@@ -34,6 +34,7 @@
 //! With `PTYRO_FAKE_PASTE=1` it asks for bracketed paste, as Claude and Codex do: a pasted
 //! prompt over several lines is one short turn that says it back (`prompt over N lines: …`).
 //! | `exit` | SessionEnd, exit 0 |
+//! With `PTYRO_FAKE_HOOK_DELAY_MS=N` every hook takes N ms to start (a loaded machine).
 //!
 //! Like Claude, a Stop hook that answers `{"decision":"block"}` keeps the turn going (the fake
 //! "works" again and stops again). A verified-done bounce (`[via ptyro: verify]…`) and mail
@@ -546,6 +547,20 @@ fn read_line_raw(out: &mut std::io::Stdout, line: &mut String) -> usize {
     bytes.len().max(1)
 }
 
+/// Claude empties its input box as it takes a prompt, which moves up into the conversation.
+/// The fake draws what it took itself (its terminal doesn't echo, as Claude's raw one doesn't),
+/// so the cursor is still in the box, right after its `> `: the box's rule and line go, and the
+/// prompt is written as the conversation's line. Left in the box, a taken prompt looked unsent,
+/// and ptyro pressed Enter again while a slow hook still left the status idle; the dialog that
+/// came next took that Enter as "no".
+fn take_from_box(out: &mut std::io::Stdout, typed: &str) {
+    let _ = write!(out, "\r\x1b[1A\x1b[J> {typed}\r\n");
+    let _ = out.flush();
+}
+
+/// The rule Claude's input box sits under.
+const RULE: &str = "────────────────────────────────────────";
+
 /// Read one key in raw mode (the permission dialog).
 /// Run hook commands with `payload` on stdin; the last JSON line any of them prints.
 /// How long a hook may run before it is killed and the agent goes on, as real agents do
@@ -557,7 +572,13 @@ const HELD_TIMEOUT: Duration = Duration::from_secs(3600);
 
 fn run_hooks(cmds: &[String], payload: &Value, limit: Duration) -> Option<Value> {
     let mut answer = None;
+    // `PTYRO_FAKE_HOOK_DELAY_MS=N`: each hook takes N ms to start, as on a loaded machine (a
+    // macOS runner took over 500 ms), so what ptyro does before a hook arrives is testable.
+    let delay = std::env::var("PTYRO_FAKE_HOOK_DELAY_MS").ok().and_then(|v| v.parse().ok());
     for c in cmds {
+        if let Some(ms) = delay {
+            std::thread::sleep(Duration::from_millis(ms));
+        }
         let Ok(mut child) = agent_shell(c)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -662,6 +683,11 @@ pub fn main(args: &[String]) -> i32 {
         let _ = write!(out, "\x1b[?2004h");
     }
     let stdin = std::io::stdin();
+    // Claude draws what is typed into its box itself: the fake does too (`take_from_box`), so a
+    // line typed ahead while it works can't land where a taken prompt is redrawn.
+    let raw_lines = cfg!(windows) && std::env::var_os("PTYRO_FAKE_PASTE").is_some();
+    let unechoed =
+        (f.adapter == "claude" && !raw_lines).then(ptyro_pty::console::RawInput::unechoed);
     // `PTYRO_FAKE_DROP_FIRST_ENTER=1`: the first prompt's Enter is lost, its text left in the
     // composer until the next Enter, as Codex 0.166 drops one while busy just after it says idle.
     let mut drop_first = std::env::var_os("PTYRO_FAKE_DROP_FIRST_ENTER").is_some();
@@ -675,13 +701,13 @@ pub fn main(args: &[String]) -> i32 {
             // Claude's input box sits under a rule, which is how ptyro tells it from the `❯`
             // lines of the conversation above it.
             if f.adapter == "claude" {
-                let _ = write!(out, "────────────────────────────────────────\r\n");
+                let _ = write!(out, "{RULE}\r\n");
             }
             let _ = write!(out, "{}", if late_codex { "› " } else { "> " });
         }
         let _ = out.flush();
         let mut line = String::new();
-        let got = if cfg!(windows) && std::env::var_os("PTYRO_FAKE_PASTE").is_some() {
+        let got = if raw_lines {
             read_line_raw(&mut out, &mut line)
         } else {
             stdin.lock().read_line(&mut line).unwrap_or(0)
@@ -699,6 +725,8 @@ pub fn main(args: &[String]) -> i32 {
             let _ = write!(out, "{}{}", if late_codex { "› " } else { "> " }, line.trim());
             held = Some(line);
             continue;
+        } else if unechoed.is_some() && !line.contains("\x1b[200~") {
+            take_from_box(&mut out, line.trim_end_matches(['\r', '\n']));
         }
         // The cooked terminal splits a paste at its new lines: join it up to its end mark (the
         // Enter after it ends that last line).

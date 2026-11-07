@@ -644,8 +644,14 @@ impl Daemon {
         // A session starting can't end a turn: Codex 0.166 sends SessionStart only with the
         // first prompt, after OSC 7501 has said working, and its idle ended the turn at once
         // (`wait --for idle` returned before the turn did; WIN8). What else it says (the
-        // conversation, the model) still counts.
-        if event == "SessionStart" && s.status() == Some(AgentStatus::Working) {
+        // conversation, the model) still counts. A guessed working is no turn: the output
+        // heuristic calls start-up output working when the hook is slow to come (CI's Windows
+        // and WSL), and the start's idle must replace that guess, not wait 5 m for it to go stale.
+        let reliably_working =
+            s.engine.locked().record.as_ref().is_some_and(|r| {
+                r.status == AgentStatus::Working && r.confidence > Confidence::Low
+            });
+        if event == "SessionStart" && reliably_working {
             signals
                 .retain(|x| !matches!(x.signal, Signal::Status { status: AgentStatus::Idle, .. }));
         }
