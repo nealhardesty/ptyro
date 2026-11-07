@@ -278,3 +278,9 @@ export function runningAgent(sessions, id) {
             out.push(s.name);
     return out;
 }
+/// The Try again of an update refused because the agent runs (BOOT5): its label, and what to run
+/// (`SetupRun`'s picks for the daemon's side, or WSL's `wsl_picks` for one on WSL's side).
+export function retryOf(r, name) {
+    const wsl = r.side === "wsl";
+    return { label: `Try updating ${name} again`, picks: wsl ? [] : [r.id], wslPicks: wsl ? [r.id] : null };
+}

@@ -3314,7 +3314,7 @@ machine". The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-desi
   *Done (2026-11-07):* `ptyro_agents::updates` (the agents' newest versions through the table's
   sources, remembered in `<state>/versions.json` under its own lock; a refresh without the
   network between looks and after every install). The daemon looks once a day in the background;
-  `ptyro doctor` and `ptyro update` look afresh; start-up reads only the file. The finding
+  `ptyro doctor` and `ptyro update` look afresh; start-up never touches the network (the daemon answers from what it remembered). The finding
   ("Codex 0.170.0 is out (you have 0.162.1): `ptyro update codex` updates it (it runs …)") in
   the TUI's start-up note (once per new version, `C-q u`), the health badge (⏎: `ptyro update` in
   a split), the web's Health page (Update, Look for newer versions now) and `doctor`. `ptyro

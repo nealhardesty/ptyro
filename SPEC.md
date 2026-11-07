@@ -1092,7 +1092,8 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
 and ticking it plans that installer's own update; `outdated` entries now arrive whenever the
 daemon remembers a newer version (`<state>/versions.json`), and ticking one runs its update.
 `Request::Updates{note}` → `Reply::Updates{offered, note}` (`read` scope): the agents out of date
-on the daemon's machine, and with `note` the start-up note's, marked said. `setup::Event::Failed`
+on the daemon's machine, and with `note` the start-up note's, marked said (`note: true` needs
+`full` scope: it uses up the owner's once-per-version note; `note: false` is `read`). `setup::Event::Failed`
 adds `in_use` (an update refused because the program runs: a client offers to try again). An
 older daemon sends no `latest` or `in_use` and refuses `Updates` (the TUI then offers nothing); an
 older client ignores them.
@@ -9435,8 +9436,9 @@ with that message. A filesystem that can't lock doesn't stop an install (it goes
 as before).
 
 **Said up front, everywhere.** Who holds it is asked before anyone chooses
-(`Lock::held_by`, which never touches the lock: it reads `setup.who` and checks that the
-process named there still runs, BOOT5):
+(`Lock::held_by`: only the operating system's lock decides, by a non-blocking probe; held,
+`setup.who` names who; free, a `setup.who` a holder left behind (Ctrl-C, a closed window, power
+lost) is removed while the probe holds the lock, whatever process now has its id; BOOT5 review):
 - **the CLI** takes the lock before its checklist or question, so it refuses at once;
 - **the TUI's checklist** looks when the survey is in (`Setup::check_busy`): it says "setup is
   already running on this computer (from …): ⏎ installs nothing now; open the checklist again
@@ -9450,9 +9452,10 @@ process named there still runs, BOOT5):
   names it and the page joins it (below); a refused `SetupRun` asks for the plan, so the page then
   shows either.
 
-Asking can't make a run starting that instant be refused (BOOT5's fix: asking used to take the
-lock for an instant). For an instant after a holder locks and before it writes `setup.who`,
-`held_by` may say nothing: the take itself still refuses.
+Asking can't make a run starting that instant be refused: `Lock::take` tries again for 400 ms
+while the lock is held (a probe holds it for microseconds, a run for minutes) before it refuses.
+For an instant after a holder locks and before it writes `setup.who`, a refusal may name "another
+ptyro": cosmetic.
 
 **Following a run on the web.** The daemon's guard already refused a second `SetupRun`; a page
 that hadn't started the run didn't know of it. Now the daemon keeps the run
@@ -9568,14 +9571,16 @@ so the TUI's badge, the web's Health page and the start-up note all read one res
 running, it looks if a day has passed, else only refreshes. `ptyro doctor`, `ptyro update` and
 `ptyro update --check` look afresh; `ptyro doctor --quick`, the web's Health page and the daemon's
 `Updates` request refresh (installed versions asked again, newest versions as remembered).
-Start-up reads only what is remembered. Each machine side checks its own: Windows' ptyro and WSL's
+Start-up never touches the network: the TUI asks its daemon, which answers from what the last
+look remembered (asking each agent's version again, beside the installs). Each machine side checks its own: Windows' ptyro and WSL's
 keep their own state (§24.6), so a finding belongs to its side's file, its side's daemon and its
 side's `ptyro update`.
 
 **A TUI shows its daemon's machine** (the coordinator's ruling, the review's I1 and I2): its
 badge's `updates` findings and its start-up note come from the daemon it is attached to
 (`Request::Updates`), whose machine runs the sessions, never from this computer's file when the
-daemon is elsewhere; its own `doctor --quick`'s `updates` section is dropped. The fix runs there
+daemon is elsewhere; its own `doctor --quick`'s per-agent `updates` findings are dropped (its other `updates` warnings,
+such as a typo in `updates.ignore`, stay). The fix runs there
 too: `ptyro update` in a split the daemon starts (this computer's ptyro; WSL's own in WSL, as
 setup's WSL side runs; or the remote computer's). With an ssh daemon each finding and the note say
 where ("on box: Codex 0.170.0 is out …"); with WSL's daemon, "on WSL: …". Windows' own agents,
@@ -9586,14 +9591,14 @@ runs, no stale view after one): every install and update takes the machine's set
 and taking it bumps `generation` (`updates::started`). Every write of `versions.json` by someone
 not holding the lock goes through `look_beside` (the daemon's hourly look, `doctor`, `ptyro update
 --check`, the web's "look now", the `Updates` request): it reads `generation`, then whether the
-lock is held (`held_by`, which never touches it); while held it writes nothing and answers from
+lock is held (`held_by`'s probe); while held it writes nothing and answers from
 memory; and its write keeps the newest versions it found but drops its view of what is installed
 if `generation` moved meanwhile. An install or update refreshes while it still holds the lock. So
 a look that began before an update never writes the old version back over it (unit-tested:
 `a_look_that_began_before_an_update_never_writes_the_old_version_back`).
 
-**Offline is quiet.** A failed lookup never prints at start-up, never blocks it (start-up reads
-the file), and is tried again the next day. Only `doctor` says so, as a note: "couldn't look for
+**Offline is quiet.** A failed lookup never prints at start-up, never blocks it (start-up never
+touches the network: the daemon answers from what the last look remembered), and is tried again the next day. Only `doctor` says so, as a note: "couldn't look for
 newer versions (offline?): ptyro looks again tomorrow" (or which agents' sources couldn't be
 reached). `ptyro update` offline says the same and exits 0.
 

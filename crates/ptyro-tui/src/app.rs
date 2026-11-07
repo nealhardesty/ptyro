@@ -8857,9 +8857,25 @@ mod tests {
             text: "Claude Code 2.1.400 is out (you have 2.1.300): `ptyro update claude` updates it"
                 .into(),
         };
-        app.got_health(vec![local]);
+        let typo = crate::health::Check {
+            section: "updates".into(),
+            name: "ignore".into(),
+            level: "warn".into(),
+            text: "updates.ignore holds \"codx\", which isn't an agent ptyro updates".into(),
+        };
+        app.got_health(vec![local, typo]);
+        assert!(
+            app.health.findings.iter().any(|f| f.what == "updates ignore"),
+            "the local doctor's other updates warnings stay"
+        );
+        app.got_updates(Vec::new(), Vec::new(), false);
+        assert!(
+            app.health.findings.iter().any(|f| f.what == "updates ignore"),
+            "and stay when the daemon's answer comes"
+        );
+        app.got_updates(vec![codex.clone()], Vec::new(), false);
         let ups: Vec<&crate::health::Finding> =
-            app.health.findings.iter().filter(|f| f.what.starts_with("updates ")).collect();
+            app.health.findings.iter().filter(|f| crate::health::agent_update(f)).collect();
         assert_eq!(ups.len(), 1, "only the daemon's");
         assert_eq!(ups[0].fix, Some(crate::health::Fix::Update(vec!["codex".into()])));
         assert!(ups[0].text.starts_with("Codex 0.170.0 is out"), "{}", ups[0].text);

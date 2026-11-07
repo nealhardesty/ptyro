@@ -109,7 +109,7 @@ impl Machine {
         std::fs::read_to_string(file).unwrap_or_default().lines().map(str::to_owned).collect()
     }
 
-    /// Each newest-version source asked, in order.
+    /// Each newest-version source asked (looked up all at once, so in no set order).
     fn asked(&self) -> Vec<String> {
         self.lines(&self.registry().join("asked.log"))
     }
@@ -455,4 +455,28 @@ fn doctor_says_when_the_ignore_list_names_no_agent() {
     let claude = m.doctor(false).into_iter().find(|c| c["name"] == "claude").unwrap();
     assert_eq!(claude["data"]["program"], "claude");
     assert_eq!(claude["data"]["latest"], "2.1.400");
+}
+
+/// Only the OS lock says setup is running: a `setup.who` left behind (Ctrl-C, a closed window)
+/// naming a live, unrelated process (a reused id; here this test's own) neither refuses an
+/// update nor freezes the looks.
+#[test]
+fn a_stale_note_of_who_holds_setup_blocks_nothing() {
+    let m = machine();
+    std::fs::create_dir_all(m.state()).unwrap();
+    let stale = || {
+        std::fs::write(
+            m.state().join("setup.who"),
+            format!("`ptyro install` (process {})", std::process::id()),
+        )
+        .unwrap();
+    };
+    stale();
+    let checks = m.doctor(false);
+    assert!(checks.iter().any(|c| c["name"] == "claude" && c["level"] == "warn"), "{checks:?}");
+    assert_eq!(m.versions()["surveyed"], NOW, "the look wrote");
+    stale();
+    let o = m.run(&["update", "claude", "--yes"], "");
+    assert!(o.status.success(), "{}", text(&o));
+    assert_eq!(m.calls(), ["update claude via vendor admin=false"]);
 }

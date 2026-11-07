@@ -4,7 +4,7 @@
 // missed or shown twice.
 //   node web/test/setup.mjs
 import assert from "node:assert/strict";
-import { adminSteps, bannerWants, leftForComputer, noAgent, runningAgent, SetupLog, updateOffer, waitsForAdmin, webSteps } from "../dist/setupkit.js";
+import { adminSteps, bannerWants, leftForComputer, noAgent, retryOf, runningAgent, SetupLog, updateOffer, waitsForAdmin, webSteps } from "../dist/setupkit.js";
 
 const entry = (id, kind, state, more = {}) => ({ id, name: id[0].toUpperCase() + id.slice(1), kind, state, side: "local", ticked: false, picked: false, ...more });
 
@@ -217,6 +217,10 @@ const finished = (done = [], skipped = []) => ({ event: "finished", report: { do
   busy.event(ev("u3", 2, { event: "failed", id: "codex", error: "no network", fix: "try again" }, "windows"));
   busy.event(ev("u3", 3, { event: "finished", report: { done: [], failed: ["claude", "codex"], skipped: [], blocked: [] } }, "windows"));
   assert.deepEqual(busy.retry, [{ id: "claude", side: "windows" }]);
+  // Its button: the label, and the side it runs on (the daemon's picks, or WSL's).
+  assert.deepEqual(retryOf(busy.retry[0], "Claude Code"), { label: "Try updating Claude Code again", picks: ["claude"], wslPicks: null });
+  assert.deepEqual(retryOf({ id: "codex", side: "wsl" }, "Codex"), { label: "Try updating Codex again", picks: [], wslPicks: ["codex"] });
+  assert.deepEqual(retryOf({ id: "codex", side: "local" }, "Codex").picks, ["codex"]);
   busy.start();
   assert.deepEqual(busy.retry, []);
 }

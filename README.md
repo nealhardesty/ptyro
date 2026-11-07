@@ -244,8 +244,8 @@ ptyro update --check      # only look now, and say what's out of date
   setup page (an update refused because the agent is running offers "Try again" there); "Look for
   newer versions now" looks at once.
 - **Quiet offline.** A look that can't reach the internet says nothing and tries again the next
-  day; it never slows `ptyro` down (start-up only reads what the last look remembered, in
-  `versions.json` in ptyro's state folder).
+  day; it never slows `ptyro` down (start-up never touches the network: it asks the daemon, which
+  answers from what the last look remembered, in `versions.json` in ptyro's state folder).
 - **Your choice.** Settings → Updates (TUI and web): `updates.check = "off"` stops the looking,
   and `updates.ignore` skips an agent (`"codex"`) or one version of it (`"codex@0.170.0"`):
 

@@ -193,6 +193,15 @@ pub fn finding(c: &Check) -> Option<Finding> {
     Some(Finding { problem, what: format!("{} {}", c.section, c.name), text: c.text.clone(), fix })
 }
 
+/// A finding about one agent out of date (`updates <agent id>`), as the daemon's `Updates` gives
+/// them (the badge's other `updates` warnings, a typo in `updates.ignore`, aren't).
+pub(crate) fn agent_update(f: &Finding) -> bool {
+    f.what.strip_prefix("updates ").is_some_and(|id| {
+        ptyro_agents::catalog::item(id)
+            .is_some_and(|i| i.kind == ptyro_agents::catalog::Kind::Agent)
+    })
+}
+
 /// The shell's rc file and the line that sets up ptyro's integration in it, when it's missing:
 /// prompt marks (copy-mode jumps), the live directory and each command in the sidebar. Only when
 /// `shell.integration` is off: on (the default), ptyro adds it to the shells it starts.
@@ -265,7 +274,7 @@ impl App {
             })
             .collect();
         if !self.health_open() {
-            self.health.findings.retain(|f| !f.what.starts_with("updates "));
+            self.health.findings.retain(|f| !agent_update(f));
             self.health.findings.extend(self.health.updates.iter().cloned());
             self.health.announced = self.health.announced.min(self.health.findings.len());
         }
@@ -335,8 +344,17 @@ impl App {
         }
         // This process's doctor looked at this computer's agents; the daemon's are the ones the
         // sessions run (`got_updates`).
-        let mut findings: Vec<Finding> =
-            checks.iter().filter(|c| c.section != "updates").filter_map(finding).collect();
+        // Only its per-agent findings are dropped: its other `updates` warnings (a typo in
+        // `updates.ignore`) stay.
+        let agent = |n: &str| {
+            ptyro_agents::catalog::item(n)
+                .is_some_and(|i| i.kind == ptyro_agents::catalog::Kind::Agent)
+        };
+        let mut findings: Vec<Finding> = checks
+            .iter()
+            .filter(|c| c.section != "updates" || !agent(&c.name))
+            .filter_map(finding)
+            .collect();
         findings.extend(self.health.updates.iter().cloned());
         if let Some((rc, line)) = shell_init_missing(&self.config) {
             findings.push(Finding {

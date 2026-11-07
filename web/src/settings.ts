@@ -8,7 +8,7 @@ import { fixLineEndings } from "./projects.js";
 import { actions, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, form, go, h, menu, pending, poll, row, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
 import type { Item } from "./kit.js";
 import { qrMatrix } from "./qr.js";
-import { adminSteps, bannerWants, isHere, noAgent, runningAgent, SetupLog, updateOffer, waitsForAdmin, webSteps } from "./setupkit.js";
+import { adminSteps, bannerWants, isHere, noAgent, retryOf, runningAgent, SetupLog, updateOffer, waitsForAdmin, webSteps } from "./setupkit.js";
 import type { UpdateOffer } from "./setupkit.js";
 import { allSessions } from "./sessions.js";
 
@@ -875,10 +875,11 @@ function retrySection(plan: any): HTMLElement | null {
   return h("div", { class: "banner warn setup-retry", title: tip("updates.retry") },
     ...installRun.retry.map(({ id, side }) => {
       const name = plan?.entries?.find((e: any) => e.id === id)?.name ?? id;
+      const again = retryOf({ id, side }, name);
       const running = runningAgent(allSessions().values(), id);
       return h("div", { class: "stack-in" },
         h("p", {}, h("b", {}, `${name} is still running`), running.length ? ` (${running.join(", ")})` : "", ", so its update couldn't replace it. End those sessions (or quit it wherever else it runs), then try again."),
-        bar(h("button", { class: "primary", title: tip("updates.retry"), onclick: () => void startInstall(side === "wsl" ? [] : [id], side === "wsl" ? [id] : null) }, `Try updating ${name} again`)));
+        bar(h("button", { class: "primary", title: tip("updates.retry"), onclick: () => void startInstall(again.picks, again.wslPicks) }, again.label)));
     }));
 }
 

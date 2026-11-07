@@ -272,3 +272,10 @@ export function runningAgent(sessions: Iterable<{ name: string; agent?: string |
   for (const s of sessions) if (!s.machine && s.state.t === "running" && (s.agent === id || s.inner_agent === id)) out.push(s.name);
   return out;
 }
+
+/// The Try again of an update refused because the agent runs (BOOT5): its label, and what to run
+/// (`SetupRun`'s picks for the daemon's side, or WSL's `wsl_picks` for one on WSL's side).
+export function retryOf(r: { id: string; side: string }, name: string): { label: string; picks: string[]; wslPicks: string[] | null } {
+  const wsl = r.side === "wsl";
+  return { label: `Try updating ${name} again`, picks: wsl ? [] : [r.id], wslPicks: wsl ? [r.id] : null };
+}
