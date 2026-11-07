@@ -771,6 +771,17 @@ enum Cmd {
         /// With --dry-run, the plan as JSON; otherwise each step's progress as a JSON line
         #[arg(long)]
         json: bool,
+        /// On Windows: install into WSL, onto Windows, or both (wsl, windows, both). The default
+        /// is the side your daemon runs on (WSL's when client.default_remote is wsl://…)
+        #[arg(long = "where", value_name = "WHERE")]
+        place: Option<String>,
+        /// What is installed, as JSON (for Windows' ptyro, asking a WSL distro's)
+        #[arg(long, hide = true)]
+        survey: bool,
+        /// A person answers on stdin though it isn't a terminal (Windows' ptyro started from a
+        /// split in WSL, whose console is a pipe there)
+        #[arg(long, hide = true)]
+        tty: bool,
     },
     /// Install agents or tools by name, with what they need first: `ptyro install agy`,
     /// `ptyro install gemini gh`
@@ -788,6 +799,17 @@ enum Cmd {
         /// With --dry-run, the plan as JSON; otherwise each step's progress as a JSON line
         #[arg(long)]
         json: bool,
+        /// On Windows: install into WSL, onto Windows, or both (wsl, windows, both). The default
+        /// is the side your daemon runs on
+        #[arg(long = "where", value_name = "WHERE")]
+        place: Option<String>,
+        /// Asked already by Windows' ptyro: ask (sudo may prompt here), silent (only without
+        /// a prompt: --yes) or never (BOOT8)
+        #[arg(long, hide = true, value_name = "ask|silent|never")]
+        admin: Option<String>,
+        /// A person answers on stdin though it isn't a terminal (as for setup)
+        #[arg(long, hide = true)]
+        tty: bool,
     },
     /// Which ptyro this is: version, repository, licence, build, where things live, whether the
     /// daemon and the web app run, and a block to paste into a bug report
@@ -977,6 +999,13 @@ enum Cmd {
     #[cfg(debug_assertions)]
     #[command(hide = true)]
     FakeInstaller {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Built-in fake wsl.exe for setup's WSL side in tests (BOOT8); debug builds only
+    #[cfg(debug_assertions)]
+    #[command(hide = true)]
+    FakeWsl {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -1272,6 +1301,8 @@ fn main() {
         Some(Cmd::FakeGh { args }) => ptyro_testkit::fake_gh::main(&args),
         #[cfg(debug_assertions)]
         Some(Cmd::FakeInstaller { args }) => ptyro_agents::setup::fake_installer(&args),
+        #[cfg(debug_assertions)]
+        Some(Cmd::FakeWsl { args }) => ptyro_testkit::fake_wsl::main(&args),
         // These run inside agents on every hook: no runtime, no config, never a failure.
         Some(Cmd::Hook { adapter, event, args }) => relay::hook(&adapter, &event, &args),
         Some(Cmd::StatuslineRelay) => relay::statusline(),

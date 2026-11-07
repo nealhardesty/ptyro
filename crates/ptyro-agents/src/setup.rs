@@ -35,19 +35,124 @@ pub use host::{
     Elevation, Host, Installed, RealHost, Step, expand_vars, host, path_dirs, path_with,
     prepend_entries, refreshed_path,
 };
-pub use run::{Admin, Event, Report, run};
+pub use run::{Admin, Event, Report, Sided, run};
 
 /// The design's default ticks (its "My calls"): Claude Code, Codex, git and the GitHub CLI. One
 /// already installed isn't ticked. (Codex no longer needs Node.js, BOOT0, so Node.js isn't.)
 pub const DEFAULTS: &[&str] = &["claude", "codex", "git", "gh"];
 
-/// Where an item goes. One side today; BOOT8 adds WSL's and Windows' on a Windows machine.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+/// Where an item goes (BOOT8, SPEC §24.3). On Windows an item can go onto Windows itself, into
+/// the WSL distro, or both; everywhere else there is one side, this computer.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Side {
-    /// This computer, where the engine runs.
+    /// This computer, where the engine runs (Linux, macOS, and WSL seen from inside).
     #[default]
     Local,
+    /// Windows itself, from Windows' ptyro (the engine running there).
+    Windows,
+    /// The WSL distro, from Windows: its own ptyro does the work, through `wsl.exe`.
+    Wsl,
+}
+
+impl Side {
+    /// `Windows`, `WSL`, `this computer`.
+    pub fn words(self) -> &'static str {
+        match self {
+            Self::Local => "this computer",
+            Self::Windows => "Windows",
+            Self::Wsl => "WSL",
+        }
+    }
+}
+
+/// What `--where` asks for (BOOT8): on Windows `windows`, `wsl` or `both`; `local` is this
+/// computer everywhere (Windows itself, on Windows).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Where {
+    Local,
+    Windows,
+    Wsl,
+    Both,
+}
+
+impl std::str::FromStr for Where {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "local" | "here" => Ok(Self::Local),
+            "windows" | "win" => Ok(Self::Windows),
+            "wsl" | "linux" => Ok(Self::Wsl),
+            "both" => Ok(Self::Both),
+            _ => Err(format!("--where takes wsl, windows or both (not {s:?})")),
+        }
+    }
+}
+
+impl Where {
+    /// The sides it means on a machine whose own side is `here` (`Windows` on Windows, else
+    /// `Local`).
+    pub fn sides(self, here: Side) -> Vec<Side> {
+        match self {
+            Self::Local | Self::Windows => vec![here],
+            Self::Wsl => vec![Side::Wsl],
+            Self::Both => vec![here, Side::Wsl],
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Windows => "windows",
+            Self::Wsl => "wsl",
+            Self::Both => "both",
+        }
+    }
+}
+
+/// WSL, as setup on Windows found it (BOOT8). WSL is the user's to bring: setup never installs
+/// WSL, a distro, or ptyro inside one; without a usable one only the Windows side is offered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum WslStatus {
+    /// `wsl.exe`, a distro, and ptyro in it answering `--version`.
+    Usable { distro: String, version: String },
+    /// Not usable, why, and how to make it so.
+    Unusable { reason: String, fix: String },
+    /// The engine runs inside WSL (`distro`): this is the WSL side; Windows' side is set up
+    /// from Windows.
+    Inside {
+        #[serde(default)]
+        distro: Option<String>,
+    },
+}
+
+impl WslStatus {
+    pub fn usable(&self) -> Option<&str> {
+        match self {
+            Self::Usable { distro, .. } => Some(distro),
+            _ => None,
+        }
+    }
+
+    /// One line for a checklist: what WSL is, and what to do about it.
+    pub fn words(&self) -> String {
+        match self {
+            Self::Usable { distro, version } => {
+                format!("WSL: {distro}, with {version}: agents and tools can go there too")
+            }
+            Self::Unusable { reason, fix } => {
+                format!("WSL: {reason}, so this sets up Windows only. For WSL too: {fix}")
+            }
+            Self::Inside { distro } => format!(
+                "This is WSL{}: setup here installs into it. For Windows itself, run `ptyro setup --where windows` in a Windows terminal.",
+                distro.as_deref().map(|d| format!(" ({d})")).unwrap_or_default()
+            ),
+        }
+    }
 }
 
 /// What an item is on this machine.
@@ -244,24 +349,70 @@ impl Entry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Plan {
     pub platform: Platform,
-    /// Every row of the table, agents first, in its order.
+    /// Every row of the table, agents first, in its order; on Windows with a usable WSL, every
+    /// row again for WSL's side (`side: wsl`), after Windows' rows.
     pub entries: Vec<Entry>,
+    /// On Windows (and inside WSL): WSL as setup found it (BOOT8).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wsl: Option<WslStatus>,
 }
 
 impl Plan {
+    /// The entry for `id` (the first side's, when there are two: [`Plan::entry_on`]).
     pub fn entry(&self, id: &str) -> Option<&Entry> {
         self.entries.iter().find(|e| e.id == id)
     }
 
-    /// What runs, in order: each item after what it needs.
+    pub fn entry_on(&self, id: &str, side: Side) -> Option<&Entry> {
+        self.entries.iter().find(|e| e.id == id && e.side == side)
+    }
+
+    /// The sides it has rows for, in order.
+    pub fn sides(&self) -> Vec<Side> {
+        let mut out: Vec<Side> = Vec::new();
+        for e in &self.entries {
+            if !out.contains(&e.side) {
+                out.push(e.side);
+            }
+        }
+        out
+    }
+
+    /// Only `side`'s rows (what one engine runs).
+    pub fn side(&self, side: Side) -> Plan {
+        Plan {
+            platform: self.platform,
+            entries: self.entries.iter().filter(|e| e.side == side).cloned().collect(),
+            wsl: self.wsl.clone(),
+        }
+    }
+
+    /// Every row said to be `side`'s (WSL's plan, made from its survey, is `Wsl` on Windows).
+    pub fn on(mut self, side: Side) -> Plan {
+        for e in &mut self.entries {
+            e.side = side;
+        }
+        self
+    }
+
+    /// One plan of Windows' rows and WSL's (BOOT8): both sides on one checklist.
+    pub fn merge(mine: Plan, wsl: Option<Plan>, status: Option<WslStatus>) -> Plan {
+        let mut entries = mine.entries;
+        entries.extend(wsl.into_iter().flat_map(|p| p.on(Side::Wsl).entries));
+        Plan { platform: mine.platform, entries, wsl: status }
+    }
+
+    /// What runs, in order: each item after what it needs (on its own side).
     pub fn steps(&self) -> Vec<&Entry> {
         let mut left: Vec<&Entry> = self.entries.iter().filter(|e| e.will_run()).collect();
         let mut out: Vec<&Entry> = Vec::new();
         while !left.is_empty() {
             let ready = left.iter().position(|e| {
                 e.action.as_ref().is_none_or(|a| {
-                    a.after.iter().all(|d| out.iter().any(|o| &o.id == d))
-                        || a.after.iter().all(|d| !left.iter().any(|l| &l.id == d))
+                    a.after.iter().all(|d| out.iter().any(|o| &o.id == d && o.side == e.side))
+                        || a.after
+                            .iter()
+                            .all(|d| !left.iter().any(|l| &l.id == d && l.side == e.side))
                 })
             });
             // A cycle can't come from the table (the tests check), but never loop on one.
@@ -374,7 +525,7 @@ pub fn plan(survey: &Survey, picks: &[String]) -> Plan {
             name: item.name.clone(),
             kind: item.kind,
             label: item.label.clone(),
-            side: Side::Local,
+            side: if platform.is_windows() { Side::Windows } else { Side::Local },
             state: st,
             ticked: is_ticked,
             picked: picked.contains(item.id.as_str()),
@@ -384,7 +535,7 @@ pub fn plan(survey: &Survey, picks: &[String]) -> Plan {
             doc: item.doc.clone(),
         });
     }
-    Plan { platform, entries }
+    Plan { platform, entries, wsl: None }
 }
 
 /// `state` is enough for every `(by, min)` that needs it.

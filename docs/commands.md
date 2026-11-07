@@ -217,8 +217,8 @@ See [`remote.md`](remote.md).
 | Command | Does |
 |---|---|
 | `ptyro init [-y] [--dry-run]` | detect agents, accounts and repositories, then write your config |
-| `ptyro setup [-y] [--agents A,B] [--tools T,U] [--dry-run] [--json]` | the setup checklist: install coding agents (Claude Code, Codex, Antigravity, OpenCode, Gemini CLI) and tools (git, GitHub CLI, Node.js) with what they need first; `-y` asks nothing (the defaults, or what `--agents`/`--tools` name) and reports admin steps it can't do without a prompt |
-| `ptyro install NAME… [-y] [--dry-run] [--json]` | install agents or tools by name (`agy`, `gemini gh`), with their prerequisites |
+| `ptyro setup [-y] [--agents A,B] [--tools T,U] [--where wsl\|windows\|both] [--dry-run] [--json]` | the setup checklist: install coding agents (Claude Code, Codex, Antigravity, OpenCode, Gemini CLI) and tools (git, GitHub CLI, Node.js) with what they need first; `-y` asks nothing (the defaults, or what `--agents`/`--tools` name) and reports admin steps it can't do without a prompt; on Windows `--where` picks WSL's distro, Windows, or both (default: the side your daemon runs on) |
+| `ptyro install NAME… [-y] [--where wsl\|windows\|both] [--dry-run] [--json]` | install agents or tools by name (`agy`, `gemini gh`), with their prerequisites; on Windows into WSL, onto Windows, or both |
 | `ptyro about [--json]` | which ptyro this is: version and protocol, the repository, licence, build, where config, data, logs and the socket live, the daemon and web app, the tools found, and a block to paste into a bug report |
 | `ptyro doctor [--quick] [--json]` | diagnose agents, logins, integrations, terminal, tmux, daemon, git |
 | `ptyro tour` | the daily loop for real (task, answer, review, finish, clean up) with a pretend agent in a ptyro of its own, deleted afterwards |

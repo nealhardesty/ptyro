@@ -365,9 +365,13 @@ impl App {
     /// back. The CLI's long tail reaches the TUI this way (UX1.20, UX1.21), interactive ones
     /// included.
     pub fn run_cli(&mut self, args: &[String]) {
+        self.run_cli_with(self.daemon_ptyro(), args);
+    }
+
+    /// [`App::run_cli`] with another ptyro: Windows' ptyro.exe from a split in WSL (BOOT8).
+    pub fn run_cli_with(&mut self, bin: String, args: &[String]) {
         self.last_cli = Some(args.to_vec());
-        let argv: Vec<String> =
-            std::iter::once(self.daemon_ptyro()).chain(args.iter().cloned()).collect();
+        let argv: Vec<String> = std::iter::once(bin).chain(args.iter().cloned()).collect();
         let base = format!("ptyro-{}", args.first().map_or("cli", String::as_str));
         let base = ptyro_core::names::tidy(&base).unwrap_or(base);
         let name = std::iter::once(base.clone())

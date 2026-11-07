@@ -2,12 +2,17 @@
 //! machine, for clients that can't run the engine themselves (the web). The same engine as `ptyro
 //! setup` (`ptyro_agents::setup`); administrator steps never run here (`Admin::Never`): a
 //! password or a UAC prompt never goes through the web, so each is reported with its command.
+//! On a Windows daemon with a usable WSL, WSL's distro is a second side (BOOT8): its own ptyro
+//! plans and installs there, through `wsl.exe`, with the same rule.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-use ptyro_agents::setup::{self, Admin, Plan};
+use ptyro_agents::catalog::Platform;
+use ptyro_agents::setup::{self, Admin, Plan, Side, Survey, WslStatus};
+use ptyro_client::wsl_setup;
 use ptyro_core::paths::Paths;
 use ptyro_core::{Error, ErrorCode};
 use ptyro_protocol::{DomainEvent, Reply};
@@ -45,43 +50,116 @@ fn ids(names: &[String]) -> Result<Vec<String>, Error> {
     Ok(out)
 }
 
-fn plan_on(paths: &Paths, picks: Option<Vec<String>>) -> (Box<dyn setup::Host + Send>, Plan) {
-    let host = setup::host(paths);
-    let survey = setup::survey(&*host, &BTreeMap::new());
-    let picks = picks.unwrap_or_else(|| setup::defaults(&survey));
-    let plan = setup::plan(&survey, &picks);
-    (host, plan)
+/// WSL as last found, kept a minute: the web re-plans on every tick, and asking WSL's ptyro
+/// takes a second or two. A run forgets it (what's installed changed).
+static WSL_SEEN: Mutex<Option<(Instant, WslStatus, Option<Survey>)>> = Mutex::new(None);
+
+/// On a Windows daemon, WSL and what its distro has (BOOT8); inside WSL, that this is it.
+async fn wsl_side(platform: Platform) -> (Option<WslStatus>, Option<Survey>) {
+    if platform == Platform::Wsl {
+        let distro = std::env::var("WSL_DISTRO_NAME").ok();
+        return (Some(WslStatus::Inside { distro }), None);
+    }
+    if !platform.is_windows() {
+        return (None, None);
+    }
+    if let Ok(seen) = WSL_SEEN.lock()
+        && let Some((at, status, survey)) = seen.as_ref()
+        && at.elapsed() < Duration::from_secs(60)
+    {
+        return (Some(status.clone()), survey.clone());
+    }
+    let mut status = wsl_setup::probe(None).await;
+    let mut survey = None;
+    if let Some(d) = status.usable().map(str::to_owned) {
+        match wsl_setup::survey(&d).await {
+            Ok(s) => survey = Some(s),
+            Err(why) => status = why,
+        }
+    }
+    if let Ok(mut seen) = WSL_SEEN.lock() {
+        *seen = Some((Instant::now(), status.clone(), survey.clone()));
+    }
+    (Some(status), survey)
+}
+
+fn forget_wsl() {
+    if let Ok(mut seen) = WSL_SEEN.lock() {
+        *seen = None;
+    }
+}
+
+/// The plan for `picks` here (the defaults when `None`), and on Windows `wsl_picks` in WSL's
+/// distro beside it.
+async fn plan_on(
+    paths: &Paths,
+    picks: Option<Vec<String>>,
+    wsl_picks: Option<Vec<String>>,
+) -> Result<(Box<dyn setup::Host + Send>, Plan), Error> {
+    let paths = paths.clone();
+    let (host, here) = tokio::task::spawn_blocking(move || {
+        let host = setup::host(&paths);
+        let survey = setup::survey(&*host, &BTreeMap::new());
+        (host, survey)
+    })
+    .await
+    .map_err(|e| Error::internal(e.to_string()))?;
+    let (status, wsl) = wsl_side(here.platform).await;
+    let picks = picks.unwrap_or_else(|| setup::defaults(&here));
+    let mine = setup::plan(&here, &picks);
+    let theirs = wsl.as_ref().map(|s| setup::plan(s, &wsl_picks.unwrap_or_default()));
+    Ok((host, Plan::merge(mine, theirs, status)))
 }
 
 impl Daemon {
     /// `SetupPlan`.
-    pub(crate) async fn setup_plan(&self, picks: Option<Vec<String>>) -> Result<Reply, Error> {
+    pub(crate) async fn setup_plan(
+        &self,
+        picks: Option<Vec<String>>,
+        wsl_picks: Option<Vec<String>>,
+    ) -> Result<Reply, Error> {
         let picks = picks.map(|p| ids(&p)).transpose()?;
-        let paths = self.paths.clone();
-        let (_, plan) = tokio::task::spawn_blocking(move || plan_on(&paths, picks))
-            .await
-            .map_err(|e| Error::internal(e.to_string()))?;
+        let wsl_picks = wsl_picks.map(|p| ids(&p)).transpose()?;
+        let (_, plan) = plan_on(&self.paths, picks, wsl_picks).await?;
         Ok(Reply::SetupPlan { plan })
     }
 
-    /// `SetupRun`: the plan now, its progress as `SetupProgress` events.
-    pub(crate) async fn setup_run(self: &Arc<Self>, picks: Vec<String>) -> Result<Reply, Error> {
+    /// `SetupRun`: the plan now, its progress as `SetupProgress` events (this computer's side
+    /// first, then WSL's, each ending with its own `finished`).
+    pub(crate) async fn setup_run(
+        self: &Arc<Self>,
+        picks: Vec<String>,
+        wsl_picks: Option<Vec<String>>,
+    ) -> Result<Reply, Error> {
         let picks = ids(&picks)?;
+        let wsl_picks = wsl_picks.map(|p| ids(&p)).transpose()?;
         let Some(running) = Running::take() else {
             return Err(Error::conflict("a setup run is going already: wait for it to finish"));
         };
-        let paths = self.paths.clone();
-        let (host, plan) = tokio::task::spawn_blocking(move || plan_on(&paths, Some(picks)))
-            .await
-            .map_err(|e| Error::internal(e.to_string()))?;
+        let (host, plan) = plan_on(&self.paths, Some(picks), wsl_picks).await?;
         let run = ptyro_run::short_id("setup", 6);
         let events = self.events.clone();
         let (r, p) = (run.clone(), plan.clone());
         tokio::task::spawn_blocking(move || {
             let _running = running;
-            setup::run(&p, &*host, Admin::Never, &mut |event| {
-                let _ = events.send(DomainEvent::SetupProgress { run: r.clone(), event });
-            });
+            for side in p.sides() {
+                let mut on = |event| {
+                    let _ = events.send(DomainEvent::SetupProgress { run: r.clone(), event, side });
+                };
+                let part = p.side(side);
+                if !part.entries.iter().any(|e| e.will_run() || (e.ticked && e.blocked.is_some())) {
+                    continue;
+                }
+                match (side, p.wsl.as_ref().and_then(WslStatus::usable)) {
+                    (Side::Wsl, Some(distro)) => {
+                        wsl_setup::run(distro, &p, wsl_setup::Admin::Never, &mut on);
+                    }
+                    _ => {
+                        setup::run(&part, &*host, Admin::Never, &mut on);
+                    }
+                }
+            }
+            forget_wsl();
         });
         Ok(Reply::SetupStarted { run, plan })
     }

@@ -3258,7 +3258,7 @@ machine". The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-desi
   `ptyro install NAME…`; protocol 1.31 `SetupPlan`/`SetupRun`/`SetupProgress`; the TUI's
   `app.setup`/`app.install` (a split) and the web's More → Set up ptyro, so parity holds now
   (BOOT2 and BOOT3 give them their full places). Tested end to end through a fake machine
-  (`PTYRO_TEST_SETUP`, `ptyro fake-installer`). `--where` is BOOT8's.
+  (`PTYRO_TEST_SETUP`, `ptyro fake-installer`). `--where` is BOOT8's (built 2026-11-07).
 - [ ] **BOOT2 The TUI checklist** **M**, as the first part of the onboarding screen (UX1.19,
   `onboard.rs`; the owner chose one checklist screen). Reopened from `ptyro init`, the palette's
   `first.run`, and the health badge.
@@ -3282,9 +3282,13 @@ machine". The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-desi
   daemon, both halves are updated.
 - [ ] **BOOT7 Moves to the recommended installer** **S**, for an agent installed another way
   (Claude Code through npm or Homebrew, for example). The offer can be dismissed.
-- [ ] **BOOT8 Windows: WSL, Windows, or both** **S**. Per agent; WSL is the user's to bring. On a
+- [x] **BOOT8 Windows: WSL, Windows, or both** **S**. Per agent; WSL is the user's to bring. On a
   machine without a usable WSL, only the Windows side is offered, and the WSL side can be added
-  later from the same checklist.
+  later from the same checklist. **[built 2026-11-07]** `--where wsl|windows|both` on `setup` and
+  `install` (default: the daemon's side), a column per side in the checklist (`3:both`), WSL's
+  half done by the distro's own ptyro through `wsl.exe` (`ptyro_client::wsl_setup`), the TUI's
+  `{where}` picker, the web's per-side boxes on a Windows daemon, protocol 1.32; tested through
+  `ptyro fake-wsl` on every platform (SPEC §24.3).
 - [ ] **BOOT9 The stale suggestions** **S**: the "no agent found" messages (`doctor.rs`,
   `chats.rs`) put Gemini CLI first; they become "open setup", naming Antigravity for Google.
 
