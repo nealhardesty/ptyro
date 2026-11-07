@@ -194,6 +194,17 @@ pub fn prepend_entries(raw: &str, dirs: &[String]) -> String {
     dirs.iter().map(String::as_str).chain(rest).collect::<Vec<_>>().join(";")
 }
 
+/// The folders in a stored `Path`, as a new terminal reads them: each trimmed and unquoted
+/// (`"C:\Program Files\x"` is common there, and a `"` would make `join_paths` refuse the lot).
+#[cfg(any(windows, test))]
+pub fn path_entries(text: &str) -> Vec<PathBuf> {
+    text.split(';')
+        .map(|e| e.trim().trim_matches('"').trim())
+        .filter(|e| !e.is_empty() && !e.contains('"'))
+        .map(PathBuf::from)
+        .collect()
+}
+
 /// The machine's and the user's stored `Path` on Windows, expanded: what a new terminal gets.
 #[cfg(windows)]
 pub fn registry_path() -> Vec<PathBuf> {
@@ -207,7 +218,7 @@ pub fn registry_path() -> Vec<PathBuf> {
         .flatten()
         .flat_map(|r| {
             let text = if r.expand { expand_vars(&r.text, var) } else { r.text };
-            text.split(';').filter(|e| !e.trim().is_empty()).map(PathBuf::from).collect::<Vec<_>>()
+            path_entries(&text)
         })
         .collect()
 }

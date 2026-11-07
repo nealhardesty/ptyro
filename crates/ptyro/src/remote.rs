@@ -18,15 +18,19 @@ pub async fn proxy(ctx: &Ctx) -> Result<i32, Error> {
         && let Some(distro) = ctx.remote.as_deref().and_then(ptyro_client::remote::wsl_distro)
     {
         let bin = std::env::var("PTYRO_REMOTE_BIN").unwrap_or_else(|_| "ptyro".into());
-        // ssh's pipes are the protocol: wsl.exe needs no window (SPEC §20.12).
-        let status = ptyro_client::remote::hidden_wsl(
-            &ptyro_client::remote::wsl_args(distro, &bin).map_err(Error::from)?,
-        )
-        .status()
-        .await
-        .map_err(|e| {
-            Error::new(ErrorCode::DaemonUnavailable, format!("wsl.exe: {e} (is WSL installed?)"))
-        })?;
+        // Not hidden: this bridge always runs under ssh's console, and wsl.exe's own errors
+        // belong on ssh's terminal (SPEC §24.11).
+        let status = tokio::process::Command::new(ptyro_client::remote::wsl_exe())
+            .args(ptyro_client::remote::wsl_args(distro, &bin).map_err(Error::from)?)
+            .env("WSL_UTF8", "1")
+            .status()
+            .await
+            .map_err(|e| {
+                Error::new(
+                    ErrorCode::DaemonUnavailable,
+                    format!("wsl.exe: {e} (is WSL installed?)"),
+                )
+            })?;
         return Ok(status.code().unwrap_or(1));
     }
     let opts =

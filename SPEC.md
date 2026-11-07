@@ -10335,8 +10335,9 @@ What the whole-feature review found, and the rulings carried into one change (PR
 - **`wsl.exe` in the background has no window.** `ptyro_core::os::no_window` (`CREATE_NO_WINDOW`
   on Windows, nothing elsewhere) for every `wsl.exe` run whose output is read or is a pipe: the
   probe and its `-l -q`, `--version` in a distro, setup's survey and its daemon run, the logins'
-  `--check --json`, the self-update's version questions, the client's proxy bridge
-  (`remote::wsl`) and `ptyro proxy`'s, through `remote::hidden_wsl`. Those that share the
+  `--check --json`, the self-update's version questions and the client's proxy bridge
+  (`remote::wsl`), through `remote::hidden_wsl`. `ptyro proxy`'s own bridge keeps ssh's console,
+  so wsl.exe's errors reach ssh's terminal. Those that share the
   person's terminal keep its console (a login through `wsl_setup::interact`, setup's run that
   asks for sudo's password, first run's install in a distro, starting WSL's daemon from a
   terminal, the self-update of the other half). The holder that keeps a WSL distro open starts

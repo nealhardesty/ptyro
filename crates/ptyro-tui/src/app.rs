@@ -9259,8 +9259,14 @@ mod tests {
         assert!(
             app.toast.as_ref().unwrap().text.contains("setup is already running (from the web app")
         );
-        // Let go: the checklist installs again.
+        // Let go: the checklist installs again. Another test thread's fork can hold a copy of the
+        // lock's descriptor until its exec, so wait for the lock to be free, not just dropped.
         drop(held);
+        let free_by = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while ptyro_agents::setup::lock::Lock::held_by(&app.paths.state).is_some() {
+            assert!(std::time::Instant::now() < free_by, "the lock never came free");
+            std::thread::yield_now();
+        }
         app.first_run = Some(FirstRun {
             setup: crate::setup_list::tests::one(&[]),
             only_setup: true,
