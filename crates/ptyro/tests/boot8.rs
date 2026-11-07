@@ -451,7 +451,7 @@ async fn the_daemon_on_windows_does_both_sides_without_admin() {
     assert_eq!(runs(&p), [pair("windows", "claude"), pair("wsl", "claude"), pair("wsl", "gh")]);
     let mut pushes = c.pushes();
     c.send(ClientMsg::WatchEvents).unwrap();
-    let req = Request::SetupRun { picks: vec!["claude".into()], wsl_picks: both };
+    let req = Request::SetupRun { picks: vec!["claude".into()], wsl_picks: both, moves: vec![] };
     let Reply::SetupStarted { run, .. } = c.request(req).await.unwrap() else {
         panic!("not started")
     };

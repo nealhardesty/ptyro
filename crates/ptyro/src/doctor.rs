@@ -229,6 +229,47 @@ async fn updates(ctx: &Ctx, config: &Config, fresh: bool, r: &mut Report) {
             );
         }
     }
+    // Installed another way (BOOT7): the move to the recommended installer, offered as a note
+    // (a normal state, so it never counts as a warning), unless kept; one out of date says it
+    // with its update below.
+    for k in &cfg.keep_installer {
+        let agent = ptyro_agents::setup::resolve(k)
+            .is_ok_and(|it| it.kind == ptyro_agents::catalog::Kind::Agent);
+        if !agent {
+            r.add(
+                S,
+                "keep_installer",
+                Level::Warn,
+                format!(
+                    "updates.keep_installer holds {k:?}, which isn't an agent (claude, codex, agy, opencode, gemini): it keeps nothing"
+                ),
+            );
+        }
+    }
+    for m in v.movable.iter().filter(|m| !m.kept(&cfg)) {
+        if v.outdated.iter().any(|o| o.id == m.id && !updates::ignored(&cfg.ignore, o)) {
+            continue;
+        }
+        r.add(S, &m.id, Level::Note, m.finding());
+        r.add_data(serde_json::json!({ "move": m }));
+    }
+    let keep = updates::kept(&cfg);
+    for u in v.unmovable.iter().filter(|u| !keep.contains(&u.id)) {
+        if v.outdated.iter().any(|o| o.id == u.id && !updates::ignored(&cfg.ignore, o)) {
+            continue;
+        }
+        r.add(
+            S,
+            &u.id,
+            Level::Note,
+            format!(
+                "{} is installed with {}; the move to the recommended installer isn't offered: {}",
+                u.name,
+                u.via.words(),
+                u.why
+            ),
+        );
+    }
     if v.checked == 0 {
         r.add(
             S,
@@ -244,8 +285,19 @@ async fn updates(ctx: &Ctx, config: &Config, fresh: bool, r: &mut Report) {
             r.add(S, &o.id, Level::Note, format!("{}: skipped (updates.ignore)", o.line()));
         } else {
             any = true;
+            // Offered the move too unless `updates.keep_installer` keeps it (BOOT7).
+            let mut o = o.clone();
+            if updates::kept(&cfg).contains(&o.id) {
+                o.move_to = None;
+            }
             r.add(S, &o.id, Level::Warn, o.finding());
-            r.add_data(serde_json::to_value(o).unwrap_or_default());
+            let mut data = serde_json::to_value(&o).unwrap_or_default();
+            if o.move_to.is_some()
+                && let Some(m) = v.movable.iter().find(|m| m.id == o.id)
+            {
+                data["move"] = serde_json::to_value(m).unwrap_or_default();
+            }
+            r.add_data(data);
         }
     }
     let all_failed = !v.failed.is_empty() && v.failed.len() == updates::looked_up().len();

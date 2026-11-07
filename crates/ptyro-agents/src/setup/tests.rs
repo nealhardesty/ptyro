@@ -26,6 +26,22 @@ struct TestHost {
     asked: Mutex<Vec<String>>,
     /// A step's error, by item id (instead of the default failure).
     errors: BTreeMap<String, String>,
+    /// Copies installed the recommended way beside the `other` one (BOOT7's moves), by id.
+    new: Mutex<BTreeMap<String, String>>,
+    /// `other` copies removed.
+    removed: Mutex<BTreeSet<String>>,
+    /// Removals that fail.
+    uninstall_fails: BTreeSet<String>,
+    /// A third installer's copy, by id (after the new one).
+    third: BTreeMap<String, Via>,
+    /// A copy nothing classifies (Nix's store), by id (last).
+    unknown: BTreeSet<String>,
+    /// A second copy in the vendor's place that prints no version, after the old one (BOOT7).
+    vendor_mute: BTreeSet<String>,
+    /// A removal takes the new copy with it (a shared bin folder).
+    uninstall_takes_new: bool,
+    /// Every install after the first fails.
+    fail_after_first: bool,
 }
 
 impl TestHost {
@@ -53,8 +69,106 @@ impl Host for TestHost {
         self.programs.contains(p)
     }
     fn installed(&self, item: &Item) -> Option<Installed> {
-        let v = self.installed.lock().unwrap().get(&item.id).cloned()?;
-        Some(Installed { version: Some(v), path: None, via: self.other.get(&item.id).copied() })
+        self.copies(item).into_iter().next()
+    }
+    fn copies(&self, item: &Item) -> Vec<Installed> {
+        let mut out = Vec::new();
+        if let Some(v) = self.installed.lock().unwrap().get(&item.id).cloned()
+            && !self.removed.lock().unwrap().contains(&item.id)
+        {
+            let via = self.other.get(&item.id).copied();
+            let prefix = (via == Some(Via::Npm)).then(|| "/home/me/.npm-global".to_owned());
+            let path = Some("/home/me/.npm-global/bin/x".to_owned());
+            let file = path.clone();
+            let real = path.clone();
+            out.push(Installed {
+                version: Some(v),
+                path,
+                via,
+                system: false,
+                prefix,
+                store: None,
+                file,
+                real,
+            });
+        }
+        if self.vendor_mute.contains(&item.id) {
+            let m = item.method(self.platform(), |_| true).unwrap();
+            let place = m.places.iter().find_map(|p| expand_place(p)).unwrap_or_default();
+            let file = Some(format!("{place}/old/{}", item.program));
+            out.push(Installed {
+                path: file.clone(),
+                real: file.clone(),
+                file,
+                ..Default::default()
+            });
+        }
+        if let Some(v) = self.new.lock().unwrap().get(&item.id).cloned() {
+            // Where the vendor's installer puts it (the table's `places`).
+            let m = item.method(self.platform(), |_| true).unwrap();
+            let place = m.places.iter().find_map(|p| expand_place(p)).unwrap_or_default();
+            let file = Some(format!("{place}/{}", item.program));
+            let path = Some("~/.local/bin/x".into());
+            out.push(Installed {
+                version: Some(v),
+                path,
+                via: None,
+                system: false,
+                prefix: None,
+                store: None,
+                real: file.clone(),
+                file,
+            });
+        }
+        if let Some(t) = self.third.get(&item.id) {
+            let path = Some("/opt/homebrew/bin/x".into());
+            let v = Some("0.1.0".to_owned());
+            let (file, real) = (path.clone(), path.clone());
+            out.push(Installed {
+                version: v,
+                path,
+                via: Some(*t),
+                system: false,
+                prefix: None,
+                store: None,
+                file,
+                real,
+            });
+        }
+        if self.unknown.contains(&item.id) {
+            let path = Some("/nix/store/abc-codex/bin/codex".into());
+            let v = Some("0.1.0".to_owned());
+            let (file, real) = (path.clone(), path.clone());
+            out.push(Installed {
+                version: v,
+                path,
+                via: None,
+                system: false,
+                prefix: None,
+                store: None,
+                file,
+                real,
+            });
+        }
+        out
+    }
+    fn uninstall(
+        &self,
+        item: &Item,
+        method: &Method,
+        command: &str,
+        line: &mut dyn FnMut(&str),
+    ) -> Result<(), String> {
+        self.calls.lock().unwrap().push(format!("uninstall {} {}", item.id, method.via.name()));
+        line(command);
+        if self.uninstall_fails.contains(&item.id) {
+            return Err("it exited with 1: EACCES".into());
+        }
+        self.removed.lock().unwrap().insert(item.id.clone());
+        if self.uninstall_takes_new {
+            self.new.lock().unwrap().remove(&item.id);
+        }
+        Ok(())
     }
     fn candidate(&self, via: Via) -> Option<String> {
         self.candidates.get(via.name()).cloned()
@@ -70,14 +184,26 @@ impl Host for TestHost {
         let id = &step.item.id;
         self.calls.lock().unwrap().push(format!("{id} {}", step.method.via.name()));
         line(&format!("installing {id}"));
-        if self.fail.contains(id) {
+        let again = self
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|c| *c == &format!("{id} {}", step.method.via.name()))
+            .count()
+            > 1;
+        if self.fail.contains(id) || (self.fail_after_first && again) {
             return Err(self
                 .errors
                 .get(id)
                 .cloned()
                 .unwrap_or_else(|| "it exited with 1: E: no network".into()));
         }
-        self.installed.lock().unwrap().insert(id.clone(), "26.13.0".into());
+        if self.other.get(id).is_some_and(|v| *v != step.method.via) {
+            self.new.lock().unwrap().insert(id.clone(), "26.13.0".into());
+        } else {
+            self.installed.lock().unwrap().insert(id.clone(), "26.13.0".into());
+        }
         Ok(())
     }
     fn tools_used(&self) -> bool {
@@ -241,7 +367,14 @@ fn states_other_and_outdated() {
     assert!(matches!(s.states["claude"], State::Other { via: Via::Npm, .. }));
     assert!(matches!(&s.states["codex"], State::Outdated { latest, .. } if latest == "0.167.0"));
     let p = plan(&s, &picks(&["claude", "codex"]));
-    assert!(p.entry("claude").unwrap().action.is_none(), "BOOT7 offers the move");
+    // BOOT7: ticked, it moves to the recommended installer.
+    let claude = p.entry("claude").unwrap();
+    let a = claude.action.clone().expect("the move");
+    assert!(a.moving && !a.update && a.via == Via::Vendor, "{a:?}");
+    assert_eq!(
+        a.command,
+        "curl -fsSL https://claude.ai/install.sh | bash\nnpm uninstall -g --prefix '/home/me/.npm-global' @anthropic-ai/claude-code"
+    );
     let codex = p.entry("codex").unwrap().action.clone().unwrap();
     assert!(codex.update);
     assert_eq!(codex.command, "curl -fsSL https://chatgpt.com/codex/install.sh | sh");
@@ -658,6 +791,7 @@ fn updates_cfg(check: &str, ignore: &[&str]) -> ptyro_core::config::Updates {
             ptyro_core::config::UpdateCheck::Daily
         },
         ignore: ignore.iter().map(|s| (*s).to_owned()).collect(),
+        keep_installer: Vec::new(),
     }
 }
 
@@ -715,15 +849,20 @@ fn an_agent_installed_another_way_updates_that_way() {
     let out = updates::outdated(&s);
     assert_eq!(out[0].command.as_deref(), Some("npm install -g @openai/codex@latest"));
     assert_eq!(out[0].via, Some(Via::Npm));
-    let p = plan(&s, &picks(&["codex"]));
+    // Kept the way it is (`updates.keep_installer`, BOOT7): npm's own update.
+    let mut kept = s.clone();
+    kept.keep.insert("codex".into());
+    let p = plan(&kept, &picks(&["codex"]));
     let a = p.entry("codex").unwrap().action.clone().expect("an update");
-    assert!(a.update && a.via == Via::Npm, "{a:?}");
+    assert!(a.update && a.via == Via::Npm && !a.moving, "{a:?}");
+    assert!(p.entry("codex").unwrap().moves.is_none(), "kept: no move offered");
     let (r, _) = run_all(&p, &host, Admin::Ask);
     assert_eq!(r.done, ["codex"]);
     assert_eq!(host.calls(), ["codex npm"]);
-    // Not outdated: still "other", with nothing to do (BOOT7 offers the move).
-    let s = survey(&host, &BTreeMap::new());
+    // Not outdated and kept: still "other", with nothing to do.
+    let mut s = survey(&host, &BTreeMap::new());
     assert!(matches!(&s.states["codex"], State::Other { latest: None, .. }));
+    s.keep.insert("codex".into());
     assert!(plan(&s, &picks(&["codex"])).entry("codex").unwrap().action.is_none());
 }
 
@@ -878,4 +1017,461 @@ fn the_refresh_asks_only_the_agents() {
     assert!(s.states.contains_key("claude"));
     assert!(!s.states.contains_key("git"), "no tool asked");
     assert!(s.candidates.is_empty());
+}
+
+// ── BOOT7: moves to the recommended installer ──────────────────────────────────────────────
+
+fn npm_codex() -> TestHost {
+    let mut h = TestHost::on(Platform::Linux).with(&["npm"]).have("codex", "0.162.1");
+    h.other.insert("codex".into(), Via::Npm);
+    h
+}
+
+#[test]
+fn an_agent_installed_another_way_is_offered_the_move_and_ticking_it_moves() {
+    let h = npm_codex();
+    let s = survey(&h, &BTreeMap::new());
+    let p = plan(&s, &[]);
+    let e = p.entry("codex").unwrap();
+    let mv = e.moves.clone().expect("offered");
+    assert_eq!((mv.from, mv.to), (Via::Npm, Via::Vendor));
+    assert_eq!(mv.uninstall, "npm uninstall -g --prefix '/home/me/.npm-global' @openai/codex");
+    assert!(!mv.admin);
+    assert_eq!(mv.keeps, ["~/.codex"]);
+    assert!(e.action.is_none(), "not ticked: nothing runs");
+    // A row of the checklist (not "already here"), with the offer in its words.
+    assert!(!checklist::here_already(e));
+    assert!(checklist::rows(&p).iter().any(|r| r.id == "codex"));
+    let line = checklist::about(&p, e, &|_| true, false);
+    assert!(line.contains("installed with npm · move to the recommended installer?"), "{line}");
+    // Ticked: installed the vendor's way, checked, then npm's copy removed.
+    let p = plan(&s, &picks(&["codex"]));
+    let (r, events) = run_all(&p, &h, Admin::Ask);
+    assert_eq!(r.done, ["codex"], "{events:?}");
+    assert_eq!(h.calls(), ["codex vendor", "uninstall codex npm"]);
+    let starts: Vec<&str> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Started { command, .. } => Some(command.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        starts,
+        [
+            "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+            "npm uninstall -g --prefix '/home/me/.npm-global' @openai/codex"
+        ]
+    );
+    // Now the recommended one: installed, nothing offered.
+    let s = survey(&h, &BTreeMap::new());
+    assert!(matches!(s.states["codex"], State::Installed { .. }), "{:?}", s.states["codex"]);
+    assert!(plan(&s, &[]).entry("codex").unwrap().moves.is_none());
+}
+
+#[test]
+fn a_new_install_that_fails_leaves_the_old_one_as_it_was() {
+    let mut h = npm_codex();
+    h.fail.insert("codex".into());
+    let p = plan(&survey(&h, &BTreeMap::new()), &picks(&["codex"]));
+    let (r, events) = run_all(&p, &h, Admin::Ask);
+    assert_eq!(r.failed, ["codex"]);
+    assert_eq!(h.calls(), ["codex vendor"], "nothing removed");
+    let fix = events.iter().find_map(|e| match e {
+        Event::Failed { fix, .. } => Some(fix.clone()),
+        _ => None,
+    });
+    assert!(fix.unwrap().contains("nothing was removed: Codex through npm is still installed"));
+    let s = survey(&h, &BTreeMap::new());
+    assert!(
+        matches!(&s.states["codex"], State::Other { via: Via::Npm, version: Some(v), .. } if v == "0.162.1")
+    );
+}
+
+#[test]
+fn a_removal_that_fails_says_the_command_that_finishes_it_and_a_retry_only_removes() {
+    let mut h = npm_codex();
+    h.uninstall_fails.insert("codex".into());
+    let p = plan(&survey(&h, &BTreeMap::new()), &picks(&["codex"]));
+    let (r, events) = run_all(&p, &h, Admin::Ask);
+    assert_eq!(r.failed, ["codex"]);
+    let (error, fix) = events
+        .iter()
+        .find_map(|e| match e {
+            Event::Failed { error, fix, .. } => Some((error.clone(), fix.clone())),
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        error.starts_with("removing npm's copy")
+            && error.ends_with("through the vendor's installer works (~/.local/bin/x)"),
+        "{error}"
+    );
+    assert!(
+        fix.contains("`npm uninstall -g --prefix '/home/me/.npm-global' @openai/codex`"),
+        "{fix}"
+    );
+    // Tried again once it can be removed: the new copy is here, so only the removal runs.
+    h.uninstall_fails.clear();
+    let p = plan(&survey(&h, &BTreeMap::new()), &picks(&["codex"]));
+    let (r, _) = run_all(&p, &h, Admin::Ask);
+    assert_eq!(r.done, ["codex"]);
+    assert_eq!(h.calls(), ["codex vendor", "uninstall codex npm", "uninstall codex npm"]);
+}
+
+#[test]
+fn a_kept_agent_is_not_offered_the_move_and_a_system_copy_needs_admin() {
+    let h = npm_codex();
+    let mut s = survey(&h, &BTreeMap::new());
+    s.keep.insert("codex".into());
+    let p = plan(&s, &picks(&["codex"]));
+    let e = p.entry("codex").unwrap();
+    assert!(e.moves.is_none() && e.action.is_none());
+    assert!(checklist::here_already(e));
+    // In an administrator's folder (a system npm prefix): removing it is sudo's, and the whole
+    // move is an administrator's step (TUI and CLI only; the web shows the command).
+    let item = catalog::item("codex").unwrap();
+    let st = State::Other {
+        version: Some("0.162.1".into()),
+        via: Via::Npm,
+        path: None,
+        latest: None,
+        system: true,
+        prefix: Some("/usr".into()),
+        store: None,
+    };
+    let mv = offer(item, Platform::Linux, &st, &BTreeSet::new(), &|_| true).unwrap();
+    assert!(mv.admin);
+    assert_eq!(mv.uninstall, "sudo npm uninstall -g --prefix '/usr' @openai/codex");
+    let mut s = survey(&h, &BTreeMap::new());
+    s.states.insert("codex".into(), st);
+    let p = plan(&s, &picks(&["codex"]));
+    assert!(p.entry("codex").unwrap().action.as_ref().unwrap().admin);
+    let (r, _) = run_all(&p, &h, Admin::Never);
+    assert_eq!(r.skipped, ["codex"], "never over the network");
+    // The findings: offered unless kept.
+    let v = crate::updates::Versions {
+        movable: crate::updates::movable(&survey(&h, &BTreeMap::new())),
+        ..Default::default()
+    };
+    assert_eq!(v.movable.len(), 1);
+    assert!(
+        v.movable[0].finding().contains("`ptyro install codex` moves it to the vendor's installer")
+    );
+    let mut cfg = updates_cfg("daily", &[]);
+    assert!(!v.movable[0].kept(&cfg));
+    cfg.keep_installer = vec!["Codex".into()];
+    assert!(v.movable[0].kept(&cfg));
+}
+
+#[test]
+fn an_outdated_agent_installed_another_way_offers_both_until_kept() {
+    let mut h = npm_codex();
+    h.replies.insert("codex".into(), r#"{"tag_name":"rust-v0.170.0"}"#.into());
+    let dir = tempfile::tempdir().unwrap();
+    let v = crate::updates::check(&h, dir.path(), 1);
+    let o = &crate::updates::offered(&v, &updates_cfg("daily", &[]))[0];
+    assert_eq!(o.move_to, Some(Via::Vendor));
+    assert!(
+        o.finding()
+            .contains("; or `ptyro install codex` moves it from npm to the vendor's installer"),
+        "{}",
+        o.finding()
+    );
+    assert_eq!(
+        crate::updates::note_line(std::slice::from_ref(o)).unwrap(),
+        "Codex 0.170.0 is out (you have 0.162.1) (installed with npm; the move to the vendor's installer is offered too)"
+    );
+    let mut cfg = updates_cfg("daily", &[]);
+    cfg.keep_installer = vec!["codex".into()];
+    let o = &crate::updates::offered(&v, &cfg)[0];
+    assert_eq!(o.move_to, None);
+    assert!(!o.finding().contains("moves it"));
+}
+
+#[test]
+fn a_homebrew_keg_is_homebrews_even_with_node_modules_inside_and_npm_has_its_prefix() {
+    use super::host::{installed_via, npm_prefix};
+    use std::path::Path;
+    let keg = Path::new(
+        "/opt/homebrew/Cellar/gemini-cli/0.33.0/libexec/lib/node_modules/@google/gemini-cli/dist/index.js",
+    );
+    assert_eq!(installed_via(keg), Some(Via::Brew));
+    let cask = Path::new("/opt/homebrew/Caskroom/codex/0.162.1/codex");
+    assert_eq!(installed_via(cask), Some(Via::Brew));
+    // npm with Homebrew's Node.js: npm's.
+    let npm = Path::new("/opt/homebrew/lib/node_modules/@openai/codex/bin/codex.js");
+    assert_eq!(installed_via(npm), Some(Via::Npm));
+    assert_eq!(npm_prefix(npm).as_deref(), Some("/opt/homebrew"));
+    let nvm = Path::new(
+        "/home/me/.nvm/versions/node/v22.1.0/lib/node_modules/@openai/codex/bin/codex.js",
+    );
+    assert_eq!(npm_prefix(nvm).as_deref(), Some("/home/me/.nvm/versions/node/v22.1.0"));
+    let win = Path::new(r"C:\Users\me\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js");
+    assert_eq!(
+        super::host::npm_prefix_on(win, true).as_deref(),
+        Some(r"C:\Users\me\AppData\Roaming\npm")
+    );
+    // Bun's global folder isn't npm's to remove from.
+    let bun = Path::new("/home/me/.bun/install/global/node_modules/@openai/codex/bin/codex.js");
+    assert_eq!(npm_prefix(bun), None);
+    // The layout follows the path, wherever the tests run: a Windows prefix holds node_modules.
+    let win = Path::new(r"C:\Users\me\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js");
+    assert_eq!(npm_prefix(win).as_deref(), Some(r"C:\Users\me\AppData\Roaming\npm"));
+    let win_lib = Path::new(r"D:\tools\lib\node_modules\@openai\codex\bin\codex.js");
+    assert_eq!(npm_prefix(win_lib).as_deref(), Some(r"D:\tools\lib"));
+}
+
+#[test]
+fn no_move_is_offered_without_a_prefix_or_for_someone_elses_homebrew() {
+    let item = catalog::item("codex").unwrap();
+    let st = |via, system, prefix: Option<&str>| State::Other {
+        version: None,
+        via,
+        path: None,
+        latest: None,
+        system,
+        prefix: prefix.map(str::to_owned),
+        store: None,
+    };
+    let none = BTreeSet::new();
+    assert!(offer(item, Platform::Linux, &st(Via::Npm, false, None), &none, &|_| true).is_none());
+    assert!(offer(item, Platform::Macos, &st(Via::Brew, true, None), &none, &|_| true).is_none());
+    // A backslash is taken as it is inside single quotes, by sh as by PowerShell (a Windows
+    // folder a test's fake machine plans for Linux from).
+    let back = offer(
+        item,
+        Platform::Linux,
+        &st(Via::Npm, false, Some(r"C:\t\npm-prefix")),
+        &none,
+        &|_| true,
+    )
+    .unwrap();
+    assert_eq!(back.uninstall, r"npm uninstall -g --prefix 'C:\t\npm-prefix' @openai/codex");
+    let mine = offer(item, Platform::Macos, &st(Via::Brew, false, None), &none, &|_| true).unwrap();
+    assert_eq!(mine.uninstall, "brew uninstall --cask codex");
+}
+
+#[test]
+fn a_third_installers_copy_never_counts_as_the_new_one() {
+    let mut h = npm_codex();
+    // A copy from Homebrew answering already: not the vendor's, so the vendor's still installs.
+    h.new.lock().unwrap().clear();
+    h.third.insert("codex".into(), Via::Brew);
+    let p = plan(&survey(&h, &BTreeMap::new()), &picks(&["codex"]));
+    let (r, events) = run_all(&p, &h, Admin::Ask);
+    assert_eq!(r.done, ["codex"], "{events:?}");
+    assert_eq!(h.calls(), ["codex vendor", "uninstall codex npm"]);
+}
+
+#[test]
+fn a_removal_that_takes_the_new_copy_too_installs_it_again_or_says_none_runs() {
+    let mut h = npm_codex();
+    h.uninstall_takes_new = true;
+    let p = plan(&survey(&h, &BTreeMap::new()), &picks(&["codex"]));
+    let (r, events) = run_all(&p, &h, Admin::Ask);
+    assert_eq!(r.done, ["codex"], "{events:?}");
+    assert_eq!(h.calls(), ["codex vendor", "uninstall codex npm", "codex vendor"], "put back");
+    // Put back fails: never Done with nothing to run.
+    let mut h = npm_codex();
+    h.uninstall_takes_new = true;
+    h.fail_after_first = true;
+    let p = plan(&survey(&h, &BTreeMap::new()), &picks(&["codex"]));
+    let (r, events) = run_all(&p, &h, Admin::Ask);
+    assert_eq!(r.failed, ["codex"]);
+    let error = events
+        .iter()
+        .find_map(|e| match e {
+            Event::Failed { error, .. } => Some(error.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(error.contains("no Codex runs now"), "{error}");
+}
+
+#[test]
+fn an_unknown_installers_copy_never_counts_and_an_unknown_vendor_place_offers_no_move() {
+    // Nix's codex beside npm's: no package manager's, but not in the vendor's places either.
+    let mut h = npm_codex();
+    h.unknown.insert("codex".into());
+    let p = plan(&survey(&h, &BTreeMap::new()), &picks(&["codex"]));
+    let (r, events) = run_all(&p, &h, Admin::Ask);
+    assert_eq!(r.done, ["codex"], "{events:?}");
+    assert_eq!(
+        h.calls(),
+        ["codex vendor", "uninstall codex npm"],
+        "the vendor's installer ran first"
+    );
+    // A vendor installer whose place isn't known: no move, and why.
+    let mut item = catalog::item("codex").unwrap().clone();
+    for m in &mut item.methods {
+        m.places.clear();
+    }
+    let st = State::Other {
+        version: None,
+        via: Via::Npm,
+        path: None,
+        latest: None,
+        system: false,
+        prefix: Some("/home/me/.npm-global".into()),
+        store: None,
+    };
+    assert!(offer(&item, Platform::Linux, &st, &BTreeSet::new(), &|_| true).is_none());
+    let why = not_offered(&item, Platform::Linux, &st, &|_| true).unwrap();
+    assert!(why.contains("isn't known"), "{why}");
+    // A copy is the vendor's only by its place.
+    let m = catalog::item("codex").unwrap().method(Platform::Linux, |_| true).unwrap();
+    let at =
+        |f: &str| Installed { file: Some(f.into()), real: Some(f.into()), ..Default::default() };
+    let home = expand_place("~").unwrap();
+    assert!(installed_by(&at(&format!("{home}/.codex/packages/standalone/current/codex")), m));
+    assert!(!installed_by(&at("/nix/store/abc-codex/bin/codex"), m));
+    assert!(
+        !installed_by(&at(&format!("{home}/.local/bin/codex")), m),
+        "a wrapper in ~/.local/bin isn't"
+    );
+}
+
+#[test]
+fn npm_prefixes_by_the_platforms_layout_and_never_inside_a_tool_store() {
+    use super::host::npm_prefix_on;
+    use std::path::Path;
+    let lin = Path::new("/home/me/.npm-global/lib/node_modules/@openai/codex/bin/codex.js");
+    assert_eq!(npm_prefix_on(lin, false).as_deref(), Some("/home/me/.npm-global"));
+    // Windows: the prefix holds node_modules, even under a folder named lib.
+    let win = Path::new(r"D:\tools\lib\node_modules\npm\node_modules\@openai\codex\bin\codex.js");
+    assert_eq!(npm_prefix_on(win, true).as_deref(), Some(r"D:\tools\lib"));
+    let mise = Path::new(
+        "/home/me/.local/share/mise/installs/npm-openai-codex/0.162.1/lib/node_modules/@openai/codex/bin/codex.js",
+    );
+    assert_eq!(npm_prefix_on(mise, false), None);
+}
+
+#[test]
+fn a_vendor_place_follows_its_installers_variables_and_windows_home() {
+    let env = |pairs: &'static [(&'static str, &'static str)]| {
+        move |v: &str| pairs.iter().find(|(k, _)| *k == v).map(|(_, x)| (*x).to_owned())
+    };
+    let set = env(&[
+        ("HOME", "/c/Users/me"),
+        ("USERPROFILE", r"C:\Users\me"),
+        ("CODEX_HOME", "/data/codex"),
+    ]);
+    assert_eq!(
+        expand_place_with("%CODEX_HOME%/packages/standalone", &set, false).as_deref(),
+        Some("/data/codex/packages/standalone")
+    );
+    // Unset: that place is skipped, and the installer's default is the next one.
+    let unset = env(&[("HOME", "/home/me")]);
+    assert_eq!(expand_place_with("%CODEX_HOME%/packages/standalone", &unset, false), None);
+    assert_eq!(
+        expand_place_with("~/.codex/packages/standalone", &unset, false).as_deref(),
+        Some("/home/me/.codex/packages/standalone")
+    );
+    // Windows' home is USERPROFILE, whatever Git Bash's HOME says.
+    assert_eq!(
+        expand_place_with("~/.local/share/claude", &set, true).as_deref(),
+        Some(r"C:\Users\me/.local/share/claude")
+    );
+    assert_eq!(
+        expand_place_with("~/.local/share/claude", &set, false).as_deref(),
+        Some("/c/Users/me/.local/share/claude")
+    );
+    // The table names CODEX_HOME before the default, on every platform.
+    for p in [Platform::Linux, Platform::WindowsX64] {
+        let m = catalog::item("codex").unwrap().method(p, |_| true).unwrap();
+        assert_eq!(m.places.first().map(String::as_str), Some("%CODEX_HOME%/packages/standalone"));
+    }
+}
+
+#[test]
+fn the_vendors_own_copy_not_answering_is_repaired_never_deleted() {
+    let mut h = npm_codex();
+    h.vendor_mute.insert("codex".into());
+    let p = plan(&survey(&h, &BTreeMap::new()), &picks(&["codex"]));
+    let (r, events) = run_all(&p, &h, Admin::Ask);
+    assert_eq!(r.failed, ["codex"], "{events:?}");
+    let (error, fix) = events
+        .iter()
+        .find_map(|e| match e {
+            Event::Failed { error, fix, .. } => Some((error.clone(), fix.clone())),
+            _ => None,
+        })
+        .unwrap();
+    assert!(error.contains("doesn't answer `codex --version`"), "{error}");
+    assert!(
+        fix.starts_with(
+            "repair it by installing it again: install it again: `ptyro install codex`"
+        ),
+        "{fix}"
+    );
+    assert!(!fix.contains("rm ") && !fix.contains("Remove-Item"), "{fix}");
+}
+
+#[test]
+fn npm_under_mise_or_asdf_node_is_a_prefix_and_their_own_stores_name_their_command() {
+    use super::host::{npm_prefix_on, npm_store};
+    use std::path::Path;
+    let mise_node = Path::new(
+        "/home/me/.local/share/mise/installs/node/22.1.0/lib/node_modules/@openai/codex/bin/codex.js",
+    );
+    assert_eq!(
+        npm_prefix_on(mise_node, false).as_deref(),
+        Some("/home/me/.local/share/mise/installs/node/22.1.0")
+    );
+    let asdf_node = Path::new(
+        "/home/me/.asdf/installs/nodejs/22.1.0/lib/node_modules/@openai/codex/bin/codex.js",
+    );
+    assert_eq!(
+        npm_prefix_on(asdf_node, false).as_deref(),
+        Some("/home/me/.asdf/installs/nodejs/22.1.0")
+    );
+    let mise_npm = Path::new(
+        "/home/me/.local/share/mise/installs/npm-openai-codex/0.162.1/lib/node_modules/@openai/codex/bin/codex.js",
+    );
+    assert_eq!(npm_store(mise_npm), Some("mise"));
+    let item = catalog::item("codex").unwrap();
+    let st = |prefix: Option<&str>, store: Option<&str>| State::Other {
+        version: None,
+        via: Via::Npm,
+        path: None,
+        latest: None,
+        system: false,
+        prefix: prefix.map(str::to_owned),
+        store: store.map(str::to_owned),
+    };
+    let why = not_offered(item, Platform::Linux, &st(None, Some("mise")), &|_| true).unwrap();
+    assert!(why.contains("remove it with `mise uninstall npm:@openai/codex`"), "{why}");
+    let why = not_offered(item, Platform::Linux, &st(None, Some("bun")), &|_| true).unwrap();
+    assert!(why.contains("`bun remove -g @openai/codex`"), "{why}");
+    // A prefix that can't be put in a shell command: said so, not "no known way".
+    let why =
+        not_offered(item, Platform::Linux, &st(Some("/home/o'neil/.npm-global"), None), &|_| true)
+            .unwrap();
+    assert!(why.contains("has a character ptyro won't put in a shell command"), "{why}");
+}
+
+#[test]
+fn a_windows_npm_leftover_is_deleted_by_its_shims_and_package_folder() {
+    let cmd = super::moving::delete_command(
+        r"C:\Users\me\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js",
+        Some(r"C:\Users\me\AppData\Roaming\npm"),
+        Some("@openai/codex"),
+        "codex",
+        Platform::WindowsX64,
+    );
+    assert_eq!(
+        cmd,
+        r"`Remove-Item -LiteralPath 'C:\Users\me\AppData\Roaming\npm\codex', 'C:\Users\me\AppData\Roaming\npm\codex.cmd', 'C:\Users\me\AppData\Roaming\npm\codex.ps1'; Remove-Item -Recurse -LiteralPath 'C:\Users\me\AppData\Roaming\npm\node_modules\@openai\codex'`"
+    );
+    assert!(!cmd.contains("codex.js"));
+    // Elsewhere: the link PATH finds.
+    let unix = super::moving::delete_command(
+        "/home/me/.npm-global/bin/codex",
+        Some("/home/me/.npm-global"),
+        Some("@openai/codex"),
+        "codex",
+        Platform::Linux,
+    );
+    assert_eq!(unix, "`rm '/home/me/.npm-global/bin/codex'`");
 }

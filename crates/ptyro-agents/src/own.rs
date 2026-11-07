@@ -235,6 +235,7 @@ pub fn finding(install: &Install, latest: Option<&str>) -> Option<Outdated> {
         doc: RELEASES.into(),
         path: Some(install.path.to_string_lossy().into_owned()),
         managed,
+        move_to: None,
     })
 }
 
@@ -1029,6 +1030,7 @@ mod tests {
             doc: RELEASES.into(),
             path: Some("/home/me/.local/bin/ptyro".into()),
             managed: managed.map(str::to_owned),
+            move_to: None,
         }
     }
 

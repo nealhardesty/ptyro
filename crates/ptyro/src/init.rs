@@ -141,6 +141,7 @@ pub async fn run(ctx: &Ctx, yes: bool, dry_run: bool) -> Result<i32, Error> {
             place: None,
             survey: false,
             tty: false,
+            move_: false,
         };
         if let Err(e) = crate::setup::setup(ctx, a).await {
             eprintln!("  setup: {}", e.message);

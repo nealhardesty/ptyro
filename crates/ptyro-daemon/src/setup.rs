@@ -149,19 +149,33 @@ async fn plan_on(
     updates_cfg: &ptyro_core::config::Updates,
     picks: Option<Vec<String>>,
     wsl_picks: Option<Vec<String>>,
+    moves: Option<&[String]>,
 ) -> Result<(Box<dyn setup::Host + Send>, Plan, Vec<checklist::Line>), Error> {
     let paths = paths.clone();
     // The remembered newest versions (BOOT5): an outdated agent is offered its update, and
-    // ticking it runs that.
-    let latest = updates::known(&paths.state, updates_cfg);
+    // ticking it runs that. An agent installed another way is offered the move unless
+    // `updates.keep_installer` keeps it (BOOT7); a run (`moves`) moves only those it names.
+    let cfg = updates_cfg.clone();
     let (host, here) = tokio::task::spawn_blocking(move || {
         let host = setup::host(&paths);
-        let survey = setup::survey(&*host, &latest);
+        let survey = updates::survey(&*host, &paths.state, &cfg);
         (host, survey)
     })
     .await
     .map_err(|e| Error::internal(e.to_string()))?;
-    let (status, wsl) = wsl_side(here.platform).await;
+    let (status, mut wsl) = wsl_side(here.platform).await;
+    let mut here = here;
+    if let Some(moves) = moves {
+        let keep: Vec<String> = ptyro_agents::catalog::items()
+            .iter()
+            .filter(|i| i.kind == ptyro_agents::catalog::Kind::Agent && !moves.contains(&i.id))
+            .map(|i| i.id.clone())
+            .collect();
+        here.keep.extend(keep.iter().cloned());
+        if let Some(w) = &mut wsl {
+            w.keep.extend(keep);
+        }
+    }
     let picks = picks.unwrap_or_else(|| setup::defaults(&here));
     let mine = setup::plan(&here, &picks);
     let theirs = wsl.as_ref().map(|s| setup::plan(s, &wsl_picks.unwrap_or_default()));
@@ -223,7 +237,7 @@ impl Daemon {
             }
             let host = setup::host(&paths);
             let (v, _) = updates::look_beside(&*host, &state, updates::now(), false);
-            let offered = updates::offered(&v, &cfg).into_iter().cloned().collect();
+            let offered = updates::offered(&v, &cfg);
             let note = if note { updates::note(&state, &cfg) } else { Vec::new() };
             Reply::Updates { offered, note }
         })
@@ -240,7 +254,7 @@ impl Daemon {
         let picks = picks.map(|p| ids(&p)).transpose()?;
         let wsl_picks = wsl_picks.map(|p| ids(&p)).transpose()?;
         let (_, plan, lines) =
-            plan_on(&self.paths, &self.config().updates, picks, wsl_picks).await?;
+            plan_on(&self.paths, &self.config().updates, picks, wsl_picks, None).await?;
         let default_agent = ptyro_agents::default_agent(&self.config());
         let running = current();
         // Someone else's install (a terminal's, the TUI's): the page says so instead of offering
@@ -257,8 +271,10 @@ impl Daemon {
         self: &Arc<Self>,
         picks: Vec<String>,
         wsl_picks: Option<Vec<String>>,
+        moves: Vec<String>,
     ) -> Result<Reply, Error> {
         let picks = ids(&picks)?;
+        let moves = ids(&moves)?;
         let wsl_picks = wsl_picks.map(|p| ids(&p)).transpose()?;
         // Another run holding the machine's lock is refused at once; the take itself (which waits
         // out a probe's instant) runs off the runtime's workers.
@@ -273,7 +289,8 @@ impl Daemon {
             .map_err(|e| Error::internal(e.to_string()))?
             .map_err(Error::conflict)?;
         let (host, plan, _) =
-            plan_on(&self.paths, &self.config().updates, Some(picks), wsl_picks).await?;
+            plan_on(&self.paths, &self.config().updates, Some(picks), wsl_picks, Some(&moves))
+                .await?;
         let run = ptyro_run::short_id("setup", 6);
         if let Ok(mut c) = CURRENT.lock() {
             *c = Some(SetupRunning { run: run.clone(), plan: plan.clone(), events: Vec::new() });
@@ -295,8 +312,9 @@ impl Daemon {
                         wsl_setup::run(distro, &p, wsl_setup::Admin::Never, &mut on);
                     }
                     _ => {
-                        changed |=
-                            !setup::run(&part, &*host, Admin::Never, &mut on).done.is_empty();
+                        // A move that failed half way changed what is installed too (BOOT7).
+                        let r = setup::run(&part, &*host, Admin::Never, &mut on);
+                        changed |= !r.done.is_empty() || !r.failed.is_empty();
                     }
                 }
             }

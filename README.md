@@ -210,6 +210,21 @@ ptyro login --check                           # where each login stands, changin
   `--where wsl` for WSL's side). In the TUI it's `app.login`; on the web, Settings → Agents and
   tools (or More → Set up ptyro) → Log in, which runs the sign-in in a session and shows its link and code there. With `--yes`,
   setup only says which aren't logged in.
+- **Installed another way? Move it, or keep it.** An agent you installed with npm, Homebrew or
+  WinGet (Codex through `npm install -g @openai/codex`, say) shows in the checklist as "installed
+  with npm · move to the recommended installer?". Tick it (or `ptyro install codex`, which asks
+  first; unattended, `ptyro install codex --yes --move`) and ptyro moves it: it installs the vendor's recommended way first, checks the new one answers
+  `--version`, and only then removes the old copy with that tool's own uninstall (`npm uninstall
+  -g` in the prefix the old copy is in). Your settings and logins (`~/.codex`, `~/.claude`…) live in your home,
+  where neither installer looks, so they stay: you're still logged in afterwards. If the new
+  install fails, the old one stays as it was; if removing the old one fails, ptyro says the
+  command that finishes it; and if the old copy would still run first on your `PATH`, it says
+  so, with the fix. `--yes` alone never moves anything (`--move` opts in, on `ptyro setup` too). Rather keep it as it is? Answer `k` when `ptyro install` asks, press `K` on
+  its row in the TUI's checklist, or tap Keep on the web: it's added to `updates.keep_installer`
+  (Settings → Updates), it updates the way it's installed, and the move isn't offered again. A
+  move whose old copy only an administrator can remove (a system npm prefix) runs from a terminal
+  or the TUI; the web shows the command. `ptyro doctor`, the health badge and the web's Health
+  page offer the move too.
 - **More accounts are profiles.** Setup logs in one account each. For a second (work and
   personal), make a profile and log it in: `ptyro profile new work`, then
   `ptyro profile login work claude`. Each profile keeps its own logins.
@@ -244,8 +259,9 @@ ptyro update --check      # only look now, and say what's out of date
   password (sudo); the web app shows the command to run there instead.
 - **Each the way it was installed.** The update is the vendor's own (`claude update`, Codex's
   installer again), or for an agent you installed with npm or Homebrew, that tool's
-  (`npm install -g @openai/codex@latest`). git, the GitHub CLI and Node.js stay with their own
-  updaters.
+  (`npm install -g @openai/codex@latest`), with the move to the vendor's installer offered beside
+  it (above); `ptyro update` itself never moves anything. git, the GitHub CLI and Node.js stay
+  with their own updaters.
 - **Sessions keep running.** An agent can be updated while sessions use it; ptyro names the
   sessions that keep the old version until you restart them. On Windows, a program can't be
   replaced while it runs: ptyro says so, names the sessions running it, and offers to try again
@@ -267,6 +283,7 @@ ptyro update --check      # only look now, and say what's out of date
   [updates]
   check = "daily"            # or "off"
   ignore = ["codex@0.170.0"]
+  keep_installer = ["codex"] # keep these the way you installed them: no move offered
   ```
 
 ### Removing ptyro

@@ -185,6 +185,22 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
             })
         }
 
+        // Keep an agent installed another way as it is (BOOT7): added to the computer's
+        // `updates.keep_installer`, so the move isn't offered again; the daemon reads it live.
+        "updates.keep" => {
+            let name = str_of(a, "name")?;
+            let item = ptyro_agents::setup::resolve(name)
+                .map_err(|e| Error::new(ptyro_core::ErrorCode::NotFound, e))?;
+            crate::setup::keep_installer(&ctx.paths, std::slice::from_ref(&item.id))
+                .map_err(Error::invalid)?;
+            // The daemon reads it now, not when its watcher next looks: the page asks for the
+            // plan again at once.
+            if let Ok(c) = ctx.connect(false).await {
+                let _ = c.request(ptyro_protocol::Request::ReloadConfig).await;
+            }
+            Ok(json!({ "kept": item.id }))
+        }
+
         // ptyro itself (BOOT6): `ptyro update ptyro --yes` in a session on the daemon, which the
         // page opens; an administrator's binary is refused with the command to run there.
         "updates.self" => {

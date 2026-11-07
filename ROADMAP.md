@@ -3343,8 +3343,17 @@ machine". The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-desi
   (`updates.self`, a session the page opens). Tested end to end against a fake release server on
   127.0.0.1 (`PTYRO_TEST_RELEASE_URL`), with a tampered download, a rollback, the daemon's live
   upgrade, both halves through `ptyro fake-wsl` and Homebrew's (`tests/boot6.rs`; SPEC §24.8).
-- [ ] **BOOT7 Moves to the recommended installer** **S**, for an agent installed another way
-  (Claude Code through npm or Homebrew, for example). The offer can be dismissed.
+- [x] **BOOT7 Moves to the recommended installer** **S**, for an agent installed another way
+  (Claude Code through npm or Homebrew, for example). The offer can be dismissed. **[built
+  2026-11-07]** (R-BOOT-01) An agent installed another way is a checklist row offering the move
+  (CLI, TUI, web); ticking it (`ptyro install codex`) installs the recommended way, checks the new
+  copy answers `--version`, then removes the old with its installer's `uninstall` (now in the
+  table); settings and logins stay (`keeps`). A failed install leaves the old; a failed removal
+  says the command that finishes it; an old copy still first on `PATH` is said with its fix.
+  Dismissed per agent with `updates.keep_installer` (`k` at the CLI's question, `K` in the TUI,
+  Keep on the web), after which it updates its own way. Offered in `doctor`, the badge, the note
+  and the web's Health page; an administrator's move is TUI and CLI only. Protocol 1.36; tested on
+  the fake machine (SPEC §24.9).
 - [x] **BOOT8 Windows: WSL, Windows, or both** **S**. Per agent; WSL is the user's to bring. On a
   machine without a usable WSL, only the Windows side is offered, and the WSL side can be added
   later from the same checklist. **[built 2026-11-07]** `--where wsl|windows|both` on `setup` and
