@@ -38,7 +38,7 @@ pub use host::{
     Elevation, Host, Installed, RealHost, Step, expand_vars, host, path_dirs, path_with,
     prepend_entries, refreshed_path,
 };
-pub use run::{Admin, Event, Report, Sided, run};
+pub use run::{Admin, Event, Report, Sided, in_use, run};
 
 /// The design's default ticks (its "My calls"): Claude Code, Codex, git and the GitHub CLI. One
 /// already installed isn't ticked. (Codex no longer needs Node.js, BOOT0, so Node.js isn't.)
@@ -178,13 +178,16 @@ pub enum State {
         path: Option<String>,
     },
     /// Installed some way other than the table's recommended one (Claude Code through npm):
-    /// BOOT7 offers the move.
+    /// BOOT7 offers the move. Until then it updates the way it was installed (BOOT5).
     Other {
         #[serde(default)]
         version: Option<String>,
         via: Via,
         #[serde(default)]
         path: Option<String>,
+        /// A newer version is out (BOOT5): its update is that installer's own.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        latest: Option<String>,
     },
     /// Older than something ticked needs (Node.js 18 for Gemini CLI's 20).
     TooOld {
@@ -227,8 +230,11 @@ impl State {
             Self::Missing => "not installed".into(),
             Self::Installed { version, .. } => format!("installed{}", v(version.as_deref())),
             Self::Outdated { version, latest, .. } => format!("{version}; {latest} is out"),
-            Self::Other { version, via, .. } => {
+            Self::Other { version, via, latest: None, .. } => {
                 format!("installed{} through {}", v(version.as_deref()), via.words())
+            }
+            Self::Other { version, via, latest: Some(l), .. } => {
+                format!("{} through {}; {l} is out", version.as_deref().unwrap_or("?"), via.words())
             }
             Self::TooOld { version, min, .. } => format!("{version}, older than the {min} needed"),
         }
@@ -280,17 +286,21 @@ pub fn survey(host: &dyn Host, latest: &BTreeMap<String, String>) -> Survey {
 
 fn classify(item: &Item, platform: Platform, found: Installed, latest: Option<&String>) -> State {
     let recommended = item.methods(platform).next().map(|m| m.via);
+    let newer = match (&found.version, latest) {
+        (Some(v), Some(l)) => Version::parse(v)
+            .zip(Version::parse(l))
+            .is_some_and(|(have, new)| have < new)
+            .then(|| l.clone()),
+        _ => None,
+    };
     if let Some(via) = found.via
         && Some(via) != recommended
         && item.others.iter().any(|m| m.via == via && m.on(platform))
     {
-        return State::Other { version: found.version, via, path: found.path };
+        return State::Other { version: found.version, via, path: found.path, latest: newer };
     }
-    if let (Some(v), Some(l)) = (&found.version, latest)
-        && let (Some(have), Some(new)) = (Version::parse(v), Version::parse(l))
-        && have < new
-    {
-        return State::Outdated { version: v.clone(), latest: l.clone(), path: found.path };
+    if let (Some(v), Some(l)) = (&found.version, newer) {
+        return State::Outdated { version: v.clone(), latest: l, path: found.path };
     }
     State::Installed { version: found.version, path: found.path }
 }
@@ -508,6 +518,12 @@ pub fn plan(survey: &Survey, picks: &[String]) -> Plan {
                 method_for(item, survey, min.as_deref(), Version::parse(version), &has)
             }
             State::Outdated { .. } => item.method(platform, has).map(|m| (m, true)),
+            // Out of date, installed another way: that installer's own update (BOOT5).
+            State::Other { via, latest: Some(_), .. } => item
+                .others
+                .iter()
+                .find(|m| m.via == *via && m.on(platform) && m.update.is_some())
+                .map(|m| (m, true)),
             State::Installed { .. } | State::Other { .. } => None,
         };
         let after: Vec<String> = item

@@ -7,8 +7,6 @@
 //! install … --confirmed` in a split, a real terminal: live output, sudo's prompt (or Windows'
 //! UAC), then each tool's own login and the profiles line, exactly as the CLI does them.
 
-use std::collections::BTreeMap;
-
 use ptyro_agents::catalog::{self, Kind, Platform};
 use ptyro_agents::setup::checklist::{self, Picks, Sides, cell};
 use ptyro_agents::setup::{self, Entry, Plan, Side, Where, WslStatus};
@@ -224,7 +222,11 @@ pub fn elsewhere(remote: Option<&str>, windows: bool) -> Option<String> {
 pub async fn look(paths: Paths, remote: Option<String>) -> Option<(Sides, Where, Option<String>)> {
     let here = tokio::task::spawn_blocking(move || {
         let host = setup::host(&paths);
-        setup::survey(&*host, &BTreeMap::new())
+        // The remembered newest versions (BOOT5): an outdated agent can be ticked to update.
+        let cfg = ptyro_core::config::Config::load(&ptyro_core::config::Config::path(&paths))
+            .map(|c| c.updates)
+            .unwrap_or_default();
+        setup::survey(&*host, &ptyro_agents::updates::known(&paths.state, &cfg))
     })
     .await
     .ok()?;
@@ -274,6 +276,7 @@ pub const SECTIONS: [(&str, Kind); 2] = [("Agents", Kind::Agent), ("Tools", Kind
 pub(crate) mod tests {
     use super::*;
     use ptyro_agents::setup::{State, Survey};
+    use std::collections::BTreeMap;
 
     pub(crate) fn survey(
         platform: Platform,

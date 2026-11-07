@@ -20,6 +20,12 @@ struct TestHost {
     logged_in: Mutex<BTreeSet<String>>,
     /// Logins that fail (exit 1, still logged out).
     login_fails: BTreeSet<String>,
+    /// Newest-version replies by item id (BOOT5); none: offline for it.
+    replies: BTreeMap<String, String>,
+    /// Each newest-version source asked, by item id.
+    asked: Mutex<Vec<String>>,
+    /// A step's error, by item id (instead of the default failure).
+    errors: BTreeMap<String, String>,
 }
 
 impl TestHost {
@@ -65,7 +71,11 @@ impl Host for TestHost {
         self.calls.lock().unwrap().push(format!("{id} {}", step.method.via.name()));
         line(&format!("installing {id}"));
         if self.fail.contains(id) {
-            return Err("it exited with 1: E: no network".into());
+            return Err(self
+                .errors
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| "it exited with 1: E: no network".into()));
         }
         self.installed.lock().unwrap().insert(id.clone(), "26.13.0".into());
         Ok(())
@@ -91,6 +101,18 @@ impl Host for TestHost {
         }
         self.logged_in.lock().unwrap().insert(item.id.clone());
         Ok(None)
+    }
+    fn latest_reply(&self, url: &str) -> Result<String, String> {
+        let item = catalog::items()
+            .iter()
+            .find(|i| {
+                i.latest
+                    .as_ref()
+                    .is_some_and(|l| l.url(self.platform(), catalog::Arch::host()) == url)
+            })
+            .ok_or("no such source")?;
+        self.asked.lock().unwrap().push(item.id.clone());
+        self.replies.get(&item.id).cloned().ok_or_else(|| "offline".to_owned())
     }
 }
 
@@ -624,4 +646,168 @@ fn the_checklists_lines_say_what_the_tui_does() {
     let back: Vec<super::checklist::Line> =
         serde_json::from_value(serde_json::to_value(&ls).unwrap()).unwrap();
     assert_eq!(back, ls);
+}
+
+// ── BOOT5: out of date, offered (`crate::updates`) ──────────────────────────────────────────
+
+fn updates_cfg(check: &str, ignore: &[&str]) -> ptyro_core::config::Updates {
+    ptyro_core::config::Updates {
+        check: if check == "off" {
+            ptyro_core::config::UpdateCheck::Off
+        } else {
+            ptyro_core::config::UpdateCheck::Daily
+        },
+        ignore: ignore.iter().map(|s| (*s).to_owned()).collect(),
+    }
+}
+
+#[test]
+fn a_newer_version_is_found_remembered_and_offered_with_its_update() {
+    use crate::updates;
+    let dir = tempfile::tempdir().unwrap();
+    let mut host = TestHost::on(Platform::Linux).have("claude", "2.1.300").have("codex", "0.170.0");
+    host.replies.insert("claude".into(), "2.1.400\n".into());
+    host.replies.insert("codex".into(), r#"{"tag_name":"rust-v0.170.0"}"#.into());
+    let v = updates::check(&host, dir.path(), 1_000);
+    assert_eq!(v.checked, 1_000);
+    assert_eq!(v.latest["claude"], "2.1.400");
+    // The others (Antigravity, OpenCode, Gemini CLI) couldn't be reached: kept, quietly.
+    assert!(v.failed.contains_key("opencode"), "{:?}", v.failed);
+    assert_eq!(v.outdated.len(), 1, "Codex is the newest already: {:?}", v.outdated);
+    let o = &v.outdated[0];
+    assert_eq!(
+        (o.id.as_str(), o.version.as_str(), o.latest.as_str()),
+        ("claude", "2.1.300", "2.1.400")
+    );
+    assert_eq!(o.command.as_deref(), Some("claude update"));
+    assert_eq!(
+        o.finding(),
+        "Claude Code 2.1.400 is out (you have 2.1.300): `ptyro update claude` updates it (it runs `claude update`)"
+    );
+    // Remembered: the file holds it.
+    assert_eq!(updates::load(dir.path()), v);
+    // At most once a day: not due until a day has passed, and due if the clock went back.
+    assert!(!updates::due(&v, 1_000 + updates::DAY_MS - 1));
+    assert!(updates::due(&v, 1_000 + updates::DAY_MS));
+    assert!(updates::due(&v, 999));
+    assert!(updates::due(&updates::Versions::default(), 5));
+    // Offline the next day: the time moves on, the versions found before stay.
+    host.replies.clear();
+    let v2 = updates::check(&host, dir.path(), 1_000 + updates::DAY_MS);
+    assert_eq!(v2.latest["claude"], "2.1.400");
+    assert_eq!(v2.outdated, v.outdated);
+    assert!(v2.failed.contains_key("claude"));
+    assert_eq!(v2.checked, 1_000 + updates::DAY_MS);
+}
+
+#[test]
+fn an_agent_installed_another_way_updates_that_way() {
+    use crate::updates;
+    let mut host = TestHost::on(Platform::Linux).with(&["npm"]).have("codex", "0.162.1");
+    host.other.insert("codex".into(), Via::Npm);
+    let latest = BTreeMap::from([("codex".to_owned(), "0.170.0".to_owned())]);
+    let s = survey(&host, &latest);
+    assert!(
+        matches!(&s.states["codex"], State::Other { via: Via::Npm, latest: Some(l), .. } if l == "0.170.0"),
+        "{:?}",
+        s.states["codex"]
+    );
+    let out = updates::outdated(&s);
+    assert_eq!(out[0].command.as_deref(), Some("npm install -g @openai/codex@latest"));
+    assert_eq!(out[0].via, Some(Via::Npm));
+    let p = plan(&s, &picks(&["codex"]));
+    let a = p.entry("codex").unwrap().action.clone().expect("an update");
+    assert!(a.update && a.via == Via::Npm, "{a:?}");
+    let (r, _) = run_all(&p, &host, Admin::Ask);
+    assert_eq!(r.done, ["codex"]);
+    assert_eq!(host.calls(), ["codex npm"]);
+    // Not outdated: still "other", with nothing to do (BOOT7 offers the move).
+    let s = survey(&host, &BTreeMap::new());
+    assert!(matches!(&s.states["codex"], State::Other { latest: None, .. }));
+    assert!(plan(&s, &picks(&["codex"])).entry("codex").unwrap().action.is_none());
+}
+
+#[test]
+fn updates_ignore_skips_an_agent_or_one_version_and_off_offers_nothing() {
+    use crate::updates;
+    let dir = tempfile::tempdir().unwrap();
+    let mut host = TestHost::on(Platform::Linux).have("claude", "2.1.300").have("codex", "0.162.1");
+    host.replies.insert("claude".into(), "2.1.400".into());
+    host.replies.insert("codex".into(), r#"{"tag_name":"rust-v0.170.0"}"#.into());
+    let v = updates::check(&host, dir.path(), 1);
+    let ids = |cfg: &ptyro_core::config::Updates| -> Vec<String> {
+        updates::offered(&v, cfg).iter().map(|o| o.id.clone()).collect()
+    };
+    assert_eq!(ids(&updates_cfg("daily", &[])), ["claude", "codex"]);
+    assert_eq!(ids(&updates_cfg("daily", &["codex"])), ["claude"]);
+    assert_eq!(ids(&updates_cfg("daily", &["codex@0.170.0"])), ["claude"]);
+    // Another version of it is offered again.
+    assert_eq!(ids(&updates_cfg("daily", &["codex@0.169.0"])), ["claude", "codex"]);
+    // Names as people say them.
+    assert_eq!(ids(&updates_cfg("daily", &["Claude Code", "CODEX"])), Vec::<String>::new());
+    assert_eq!(ids(&updates_cfg("off", &[])), Vec::<String>::new());
+    // What checklists plan with: the remembered versions less the skipped; none when off.
+    let known = updates::known(dir.path(), &updates_cfg("daily", &["codex@0.170.0"]));
+    assert_eq!(known.keys().collect::<Vec<_>>(), ["claude"]);
+    assert!(updates::known(dir.path(), &updates_cfg("off", &[])).is_empty());
+}
+
+#[test]
+fn the_start_up_note_says_each_new_version_once() {
+    use crate::updates;
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = updates_cfg("daily", &[]);
+    // Nothing remembered yet: nothing said, and nothing written.
+    assert!(updates::note(dir.path(), &cfg).is_empty());
+    assert!(!updates::path(dir.path()).exists());
+    let mut host = TestHost::on(Platform::Linux).have("claude", "2.1.300");
+    host.replies.insert("claude".into(), "2.1.400".into());
+    updates::check(&host, dir.path(), 1);
+    let said = updates::note(dir.path(), &cfg);
+    assert_eq!(
+        updates::note_line(&said).as_deref(),
+        Some("Claude Code 2.1.400 is out (you have 2.1.300)")
+    );
+    // Said once: not again at the next start.
+    assert!(updates::note(dir.path(), &cfg).is_empty());
+    // A newer one still is a new version: said again, once.
+    host.replies.insert("claude".into(), "2.1.401".into());
+    updates::check(&host, dir.path(), 2);
+    assert_eq!(updates::note(dir.path(), &cfg).len(), 1);
+    assert!(updates::note(dir.path(), &cfg).is_empty());
+    // Updated meanwhile: refreshed without the network, nothing is offered.
+    host.installed.lock().unwrap().insert("claude".into(), "2.1.401".into());
+    let asked = host.asked.lock().unwrap().len();
+    let v = updates::refresh(&host, dir.path(), 3);
+    assert!(v.outdated.is_empty());
+    assert_eq!(host.asked.lock().unwrap().len(), asked, "refresh asks no source");
+    // Off: nothing said.
+    host.installed.lock().unwrap().insert("claude".into(), "2.1.300".into());
+    updates::refresh(&host, dir.path(), 4);
+    assert!(updates::note(dir.path(), &updates_cfg("off", &[])).is_empty());
+}
+
+#[test]
+fn windows_refusing_to_replace_a_running_program_says_why_and_how_to_retry() {
+    let mut host = TestHost::on(Platform::WindowsX64).have("claude", "2.1.300");
+    host.fail.insert("claude".into());
+    host.errors.insert(
+        "claude".into(),
+        "it exited with 1: The process cannot access the file because it is being used by another process.".into(),
+    );
+    let latest = BTreeMap::from([("claude".to_owned(), "2.1.400".to_owned())]);
+    let p = plan(&survey(&host, &latest), &picks(&["claude"]));
+    let (r, events) = run_all(&p, &host, Admin::Ask);
+    assert_eq!(r.failed, ["claude"]);
+    let fix = events
+        .iter()
+        .find_map(|e| match e {
+            Event::Failed { fix, .. } => Some(fix.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(fix.contains("Windows won't replace a program while it runs"), "{fix}");
+    assert!(fix.contains("`ptyro update claude` again"), "{fix}");
+    assert!(in_use("npm ERR! code EBUSY"));
+    assert!(!in_use("it exited with 1: E: no network"));
 }

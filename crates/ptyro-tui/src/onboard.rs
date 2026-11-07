@@ -284,6 +284,40 @@ impl App {
         }
     }
 
+    /// `app.update`, the health badge's fix for an agent out of date (BOOT5): `ptyro update
+    /// [names…]` in a split, a real terminal where it shows each update's command and asks
+    /// first, as the checklist's installs run: one at a time (never beside a running install),
+    /// and the badge looks again once it ends. The update is this computer's, where the badge
+    /// looked: on Windows with WSL's daemon, this ptyro.exe through interop (`--tty`); with a
+    /// daemon on another computer, that computer's `ptyro update` (its own agents).
+    pub fn update_agents(&mut self, names: Vec<String>) {
+        if self.setup_running() || self.first_run.is_some() {
+            return;
+        }
+        let remote = self.connect.remote.clone();
+        let mut args: Vec<String> = std::iter::once("update".to_owned()).chain(names).collect();
+        if crate::setup_list::elsewhere(remote.as_deref(), cfg!(windows)).is_some() {
+            return self.run_cli(&args);
+        }
+        if let Some(by) = ptyro_agents::setup::lock::Lock::held_by(&self.paths.state) {
+            return self.toast_err(ptyro_agents::setup::lock::busy(&by));
+        }
+        let split = if crate::cli_actions::where_offered(cfg!(windows), remote.as_deref())
+            == Some(true)
+        {
+            let Some(exe) = crate::cli_actions::exe_in_wsl() else {
+                return self.toast_err(
+                    "this ptyro.exe can't be reached from WSL: run `ptyro update` in a Windows terminal",
+                );
+            };
+            args.push("--tty".to_owned());
+            (Some(exe), args)
+        } else {
+            (None, args)
+        };
+        self.setup_start(split, Vec::new());
+    }
+
     /// Run one of the checklist's splits, `queue` after it.
     fn setup_start(
         &mut self,

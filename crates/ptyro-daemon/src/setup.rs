@@ -5,13 +5,13 @@
 //! On a Windows daemon with a usable WSL, WSL's distro is a second side (BOOT8): its own ptyro
 //! plans and installs there, through `wsl.exe`, with the same rule.
 
-use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ptyro_agents::catalog::Platform;
 use ptyro_agents::setup::{self, Admin, Plan, Side, Survey, WslStatus, checklist};
+use ptyro_agents::updates;
 use ptyro_client::wsl_setup;
 use ptyro_core::paths::Paths;
 use ptyro_core::{Error, ErrorCode};
@@ -146,13 +146,17 @@ fn forget_wsl() {
 /// distro beside it.
 async fn plan_on(
     paths: &Paths,
+    updates_cfg: &ptyro_core::config::Updates,
     picks: Option<Vec<String>>,
     wsl_picks: Option<Vec<String>>,
 ) -> Result<(Box<dyn setup::Host + Send>, Plan, Vec<checklist::Line>), Error> {
     let paths = paths.clone();
+    // The remembered newest versions (BOOT5): an outdated agent is offered its update, and
+    // ticking it runs that.
+    let latest = updates::known(&paths.state, updates_cfg);
     let (host, here) = tokio::task::spawn_blocking(move || {
         let host = setup::host(&paths);
-        let survey = setup::survey(&*host, &BTreeMap::new());
+        let survey = setup::survey(&*host, &latest);
         (host, survey)
     })
     .await
@@ -166,7 +170,47 @@ async fn plan_on(
     Ok((host, plan, lines))
 }
 
+/// The daily look for newer versions (BOOT5, SPEC §24.7): the first a minute after the daemon
+/// starts (never on its start-up path), then every hour it asks whether a day has passed since
+/// the last look (`<state>/versions.json`), and looks if so; otherwise it only asks the installed
+/// versions again, so an agent that updated itself stops being offered. Nothing while an install
+/// runs (the next hour does it), nothing with `updates.check = "off"`, and offline it stays
+/// quiet: the failure is remembered, and tried again the next day.
+const UPDATES_FIRST: Duration = Duration::from_secs(60);
+const UPDATES_EVERY: Duration = Duration::from_secs(3600);
+
+fn knob_ms(name: &str, or: Duration) -> Duration {
+    ptyro_core::test_knob(name).and_then(|v| v.parse().ok()).map_or(or, Duration::from_millis)
+}
+
 impl Daemon {
+    pub(crate) fn start_updates(self: &Arc<Self>) {
+        let me = Arc::clone(self);
+        tokio::spawn(async move {
+            tokio::time::sleep(knob_ms("PTYRO_TEST_UPDATES_FIRST_MS", UPDATES_FIRST)).await;
+            loop {
+                if me.config().updates.check == ptyro_core::config::UpdateCheck::Daily {
+                    let (paths, state) = (me.paths.clone(), me.paths.state.clone());
+                    let _ = tokio::task::spawn_blocking(move || {
+                        let host = setup::host(&paths);
+                        let now = updates::now();
+                        let due = updates::due(&updates::load(&state), now);
+                        let v = updates::look_beside(&*host, &state, now, due);
+                        if due && v.checked == now {
+                            tracing::info!(
+                                "looked for newer agent versions: {} out of date, {} not reached",
+                                v.outdated.len(),
+                                v.failed.len()
+                            );
+                        }
+                    })
+                    .await;
+                }
+                tokio::time::sleep(knob_ms("PTYRO_TEST_UPDATES_EVERY_MS", UPDATES_EVERY)).await;
+            }
+        });
+    }
+
     /// `SetupPlan`.
     pub(crate) async fn setup_plan(
         &self,
@@ -175,7 +219,8 @@ impl Daemon {
     ) -> Result<Reply, Error> {
         let picks = picks.map(|p| ids(&p)).transpose()?;
         let wsl_picks = wsl_picks.map(|p| ids(&p)).transpose()?;
-        let (_, plan, lines) = plan_on(&self.paths, picks, wsl_picks).await?;
+        let (_, plan, lines) =
+            plan_on(&self.paths, &self.config().updates, picks, wsl_picks).await?;
         let default_agent = ptyro_agents::default_agent(&self.config());
         let running = current();
         // Someone else's install (a terminal's, the TUI's): the page says so instead of offering
@@ -196,15 +241,18 @@ impl Daemon {
         let picks = ids(&picks)?;
         let wsl_picks = wsl_picks.map(|p| ids(&p)).transpose()?;
         let running = Running::take(&self.paths.state).map_err(Error::conflict)?;
-        let (host, plan, _) = plan_on(&self.paths, Some(picks), wsl_picks).await?;
+        let (host, plan, _) =
+            plan_on(&self.paths, &self.config().updates, Some(picks), wsl_picks).await?;
         let run = ptyro_run::short_id("setup", 6);
         if let Ok(mut c) = CURRENT.lock() {
             *c = Some(SetupRunning { run: run.clone(), plan: plan.clone(), events: Vec::new() });
         }
         let events = self.events.clone();
         let (r, p) = (run.clone(), plan.clone());
+        let state = self.paths.state.clone();
         tokio::task::spawn_blocking(move || {
             let _running = running;
+            let mut changed = false;
             for side in p.sides() {
                 let mut on = |event| record(&events, &r, side, event);
                 let part = p.side(side);
@@ -216,9 +264,15 @@ impl Daemon {
                         wsl_setup::run(distro, &p, wsl_setup::Admin::Never, &mut on);
                     }
                     _ => {
-                        setup::run(&part, &*host, Admin::Never, &mut on);
+                        changed |=
+                            !setup::run(&part, &*host, Admin::Never, &mut on).done.is_empty();
                     }
                 }
+            }
+            // What is out of date changed (an update, BOOT5): the Health page and the badge
+            // follow. Before the run lets go of the lock, so nothing starts meanwhile.
+            if changed {
+                updates::refresh(&*host, &state, updates::now());
             }
             forget_wsl();
         });

@@ -4,7 +4,7 @@
 // missed or shown twice.
 //   node web/test/setup.mjs
 import assert from "node:assert/strict";
-import { adminSteps, bannerWants, leftForComputer, noAgent, SetupLog, waitsForAdmin, webSteps } from "../dist/setupkit.js";
+import { adminSteps, bannerWants, leftForComputer, noAgent, runningAgent, SetupLog, updateOffer, waitsForAdmin, webSteps } from "../dist/setupkit.js";
 
 const entry = (id, kind, state, more = {}) => ({ id, name: id[0].toUpperCase() + id.slice(1), kind, state, side: "local", ticked: false, picked: false, ...more });
 
@@ -184,6 +184,28 @@ const finished = (done = [], skipped = []) => ({ event: "finished", report: { do
   log.event(ev("r7", 11, finished(["antigravity"])));
   assert.equal(log.sync(null, "r7"), "done");
   assert.match(log.lines.find((l) => l.includes("aren't shown") && l.includes("1 earlier")) ?? "", /1 earlier/);
+}
+
+// BOOT5: the doctor's update finding, read into its parts; the sessions an update leaves on the
+// old version; and a run that updated says so.
+{
+  const c = { section: "updates", name: "antigravity", level: "warn", text: "Antigravity 1.4.0 is out (you have 1.3.2): `ptyro update agy` updates it (it runs `agy update`)" };
+  assert.deepEqual(updateOffer(c), { id: "antigravity", name: "Antigravity", latest: "1.4.0", version: "1.3.2", program: "agy", command: "agy update", admin: false });
+  assert.equal(updateOffer({ ...c, text: "X 2.0 is out (you have 1.0): `ptyro update x` updates it (it runs `brew upgrade x`, as administrator)" }).admin, true);
+  assert.equal(updateOffer({ ...c, level: "note" }), null, "a skipped one (updates.ignore) offers no update");
+  assert.equal(updateOffer({ section: "agents", level: "warn", text: c.text }), null);
+  const s = (name, agent, t = "running", machine = null) => ({ name, agent, state: { t }, machine });
+  assert.deepEqual(runningAgent([s("a", "antigravity"), s("b", "claude"), s("c", "antigravity", "exited"), s("d", "antigravity", "running", "laptop2")], "antigravity"), ["a"]);
+  const log = new SetupLog();
+  log.start();
+  log.started("u1", { entries: [{ id: "claude", side: "local", ticked: true, action: { update: true } }, { id: "gh", side: "local", ticked: true, action: {} }] });
+  log.event(ev("u1", 1, finished(["claude"])));
+  assert.equal(log.summary(), "1 updated.");
+  const both = new SetupLog();
+  both.start();
+  both.started("u2", { entries: [{ id: "claude", side: "local", ticked: true, action: { update: true } }, { id: "gh", side: "local", ticked: true, action: {} }] });
+  both.event(ev("u2", 1, finished(["claude", "gh"])));
+  assert.equal(both.summary(), "1 installed, 1 updated.");
 }
 
 console.log("setup: ok");

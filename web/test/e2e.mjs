@@ -6,7 +6,7 @@
 // A scenario that needs the server restarted prints "@@serve down" / "@@serve up" and waits for
 // a line on stdin from the Rust test.
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -308,6 +308,48 @@ const scenarios = {
     } finally {
       // Never leave a fake installer holding the run for the scenarios after this one.
       writeFileSync(go, "");
+      writeFileSync(world, JSON.stringify({ platform: "linux", programs: ["apt-get", "sudo"] }));
+    }
+  },
+
+  // Out of date, offered (BOOT5): on Health, an `updates` finding's "Look for newer versions
+  // now" finds Claude Code's newer version (a test registry, never the network); its Update says
+  // what runs, then runs it through the daemon, the setup page following it to "1 updated.";
+  // Health then offers nothing for it.
+  async update() {
+    const world = join(E.fake, "world.json");
+    const reg = E.env.PTYRO_TEST_LATEST;
+    mkdirSync(reg, { recursive: true });
+    mkdirSync(join(E.fake, "installed"), { recursive: true });
+    writeFileSync(join(reg, "claude"), "2.1.400");
+    writeFileSync(join(E.fake, "installed", "claude"), "2.1.300");
+    writeFileSync(world, JSON.stringify({ platform: "linux", programs: ["apt-get", "sudo"], versions: { claude: "2.1.400" } }));
+    const text = (t) => `document.body.innerText.includes(${JSON.stringify(t)})`;
+    const sec = `[...document.querySelectorAll("section.block-sec")].find(s => s.querySelector("h3")?.textContent === "updates")`;
+    const tapIn = (what) => tab.eval(`[...${sec}.querySelectorAll(".row")].find(r => r.innerText.includes(${JSON.stringify(what)})).click()`);
+    const choose = (label) => tab.eval(`[...document.querySelectorAll(".menu button")].find(b => b.innerText.startsWith(${JSON.stringify(label)})).click()`);
+    try {
+      await fresh("#/health");
+      await tab.waitFor("the updates section", `!!${sec}`, 60_000);
+      await tab.eval(`${sec}.querySelector(".row").click()`);
+      await tab.waitFor("its menu", `!!document.querySelector(".menu button")`);
+      await choose("Look for newer versions now");
+      await tab.waitFor("Claude Code's newer version", `!!${sec} && ${sec}.innerText.includes("Claude Code 2.1.400 is out (you have 2.1.300)")`, 60_000);
+      await tab.waitFor("its command", text("it runs `claude update`"));
+      await tapIn("Claude Code 2.1.400 is out");
+      await tab.waitFor("the Update choice", `!!document.querySelector(".menu button")`);
+      await choose("Update Claude Code to 2.1.400");
+      await tab.waitFor("what it runs, asked first", `!!document.querySelector(".sheet") && document.querySelector(".sheet").innerText.includes("Claude Code 2.1.300 → 2.1.400")`);
+      await tab.eval(`[...document.querySelectorAll(".sheet-foot button")].find(b => b.textContent === "Update").click()`);
+      await tab.waitFor("the setup page following it", `location.hash === "#/setup"`, 30_000);
+      await tab.waitFor("its report", text("1 updated."), 60_000);
+      await tab.waitFor("its line", text("fake vendor: update claude"));
+      await until("Claude Code updated on the computer", () => readFileSync(join(E.fake, "installed", "claude"), "utf8").trim() === "2.1.400");
+      await fresh("#/health");
+      await tab.waitFor("the updates section again", `!!${sec}`, 60_000);
+      await tab.waitFor("nothing offered for it", `!${sec}.innerText.includes("Claude Code 2.1.400 is out")`, 30_000);
+    } finally {
+      rmSync(join(reg, "claude"), { force: true });
       writeFileSync(world, JSON.stringify({ platform: "linux", programs: ["apt-get", "sudo"] }));
     }
   },

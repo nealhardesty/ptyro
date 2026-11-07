@@ -187,9 +187,14 @@ pub fn run(plan: &Plan, host: &dyn Host, admin: Admin, on: &mut dyn FnMut(Event)
             report.skipped.push(e.id.clone());
             continue;
         }
-        let Some((item, method)) = catalog::item(&e.id)
-            .and_then(|i| Some((i, i.methods(plan.platform).find(|m| m.via == action.via)?)))
-        else {
+        // The recommended methods first; an update of one installed another way is that
+        // installer's own (BOOT5).
+        let Some((item, method)) = catalog::item(&e.id).and_then(|i| {
+            let mut all = i
+                .methods(plan.platform)
+                .chain(i.others.iter().filter(|m| m.on(plan.platform) && action.update));
+            Some((i, all.find(|m| m.via == action.via)?))
+        }) else {
             continue;
         };
         on(Event::Started {
@@ -210,7 +215,8 @@ pub fn run(plan: &Plan, host: &dyn Host, admin: Admin, on: &mut dyn FnMut(Event)
                 report.done.push(e.id.clone());
             }
             Err(error) => {
-                on(Event::Failed { id: e.id.clone(), error, fix: failure_fix(e, method.via) });
+                let fix = failure_fix(e, method.via, &error);
+                on(Event::Failed { id: e.id.clone(), error, fix });
                 report.failed.push(e.id.clone());
             }
         }
@@ -240,9 +246,38 @@ fn admin_fix(e: &Entry, admin: Admin) -> String {
     }
 }
 
-fn failure_fix(e: &Entry, via: Via) -> String {
+/// The failure is Windows refusing to replace a program that is running (an agent updated while
+/// a session runs it): what its error says, in the words Windows, npm and the installers use.
+pub fn in_use(error: &str) -> bool {
+    let e = error.to_ascii_lowercase();
+    [
+        "being used by another process",
+        "ebusy",
+        "resource busy or locked",
+        "text file busy",
+        "os error 32",
+        "sharing violation",
+    ]
+    .iter()
+    .any(|w| e.contains(w))
+}
+
+fn failure_fix(e: &Entry, via: Via, error: &str) -> String {
     let cmd = e.action.as_ref().map(|a| a.command.as_str()).unwrap_or_default();
+    let update = e.action.as_ref().is_some_and(|a| a.update);
+    if update && in_use(error) {
+        return format!(
+            "{} is running, and Windows won't replace a program while it runs: end the sessions running it (or quit it wherever it runs), then `ptyro update {}` again",
+            e.name,
+            program(e)
+        );
+    }
     match via {
+        _ if update => format!(
+            "`ptyro update {}` tries again; or run it yourself to see why: `{cmd}`; the vendor's page: {}",
+            program(e),
+            e.doc
+        ),
         Via::NodeDist => format!(
             "check the connection to nodejs.org, then `ptyro install node` again; or install Node.js from {}",
             e.doc

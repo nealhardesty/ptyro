@@ -230,7 +230,11 @@ export class SetupLog {
     const left = leftForComputer(this.plan);
     const leftOn = (side: string, id: string): any => left.find((e) => e.id === id && (e.side ?? "local") === side);
     const kept = this.reports.flatMap(({ side, report }) => (report.skipped ?? []).map((id: string) => leftOn(side, id)).filter(Boolean));
-    const parts = [`${r.done.length} installed`];
+    // An outdated agent ticked (BOOT5) runs its update: said as updated.
+    const updated = this.reports.flatMap(({ side, report }) => (report.done ?? []).filter((id: string) => (this.plan?.entries ?? []).some((e: any) => e.id === id && (e.side ?? "local") === side && e.action?.update)));
+    const installed = r.done.length - updated.length;
+    const parts = installed || !updated.length ? [`${installed} installed`] : [];
+    if (updated.length) parts.push(`${updated.length} updated`);
     if (r.failed.length) parts.push(`${r.failed.length} failed`);
     const other = r.skipped.length - kept.length;
     if (other) parts.push(`${other} not run`);
@@ -244,4 +248,23 @@ export class SetupLog {
     }
     return text;
   }
+}
+
+/// An update the doctor offers (BOOT5, SPEC §24.7): its `updates` finding, "Codex 0.170.0 is out
+/// (you have 0.162.1): `ptyro update codex` updates it (it runs `…`)", as parts.
+export interface UpdateOffer { id: string; program: string; name: string; latest: string; version: string; command: string | null; admin: boolean }
+export function updateOffer(c: { section?: string; name?: string; level?: string; text?: string }): UpdateOffer | null {
+  if (c.section !== "updates" || c.level !== "warn") return null;
+  const m = String(c.text ?? "").match(/^(.+?) (\S+) is out \(you have (\S+)\): `ptyro update ([^`]+)`/);
+  if (!m) return null;
+  const run = String(c.text).match(/\(it runs `([^`]+)`(, as administrator)?\)/);
+  return { id: String(c.name ?? m[4]), name: m[1], latest: m[2], version: m[3], program: m[4], command: run ? run[1] : null, admin: !!run?.[2] };
+}
+
+/// The live sessions here running an agent (`id`, the engine's: `claude`, `antigravity`): an
+/// update leaves them on the old version until they restart, so the page names them.
+export function runningAgent(sessions: Iterable<{ name: string; agent?: string | null; inner_agent?: string | null; machine?: string | null; state: { t: string } }>, id: string): string[] {
+  const out: string[] = [];
+  for (const s of sessions) if (!s.machine && s.state.t === "running" && (s.agent === id || s.inner_agent === id)) out.push(s.name);
+  return out;
 }

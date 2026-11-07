@@ -8,7 +8,8 @@ import { fixLineEndings } from "./projects.js";
 import { actions, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, form, go, h, menu, pending, poll, row, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
 import type { Item } from "./kit.js";
 import { qrMatrix } from "./qr.js";
-import { adminSteps, bannerWants, isHere, noAgent, SetupLog, waitsForAdmin, webSteps } from "./setupkit.js";
+import { adminSteps, bannerWants, isHere, noAgent, runningAgent, SetupLog, updateOffer, waitsForAdmin, webSteps } from "./setupkit.js";
+import type { UpdateOffer } from "./setupkit.js";
 import { allSessions } from "./sessions.js";
 
 const ACTIONS = {
@@ -56,6 +57,8 @@ const ACTIONS = {
   "setup.install": "Install the ticked agents and tools on the computer, with what they need first; a step that needs administrator rights shows the command to run there",
   "setup.where": "On Windows with WSL: where each agent or tool goes, into WSL's distro, onto Windows, or both (tick either column)",
   "setup.login": "Log in to each agent and the GitHub CLI, one account each: the tool's own sign-in in a session here, confirmed by its own status command (ptyro never sees the credentials)",
+  "updates.update": "Update an agent that has a newer version out, on the computer, the way it was installed: the command it runs is shown first, and sessions running it keep the old version until they restart",
+  "updates.check": "Look for newer versions of your agents now (ptyro looks once a day by itself; Settings → Updates turns that off or skips one)",
   "help.tour": "A tour: ptyro's daily loop with a pretend agent, in a throwaway ptyro of its own",
 } as const;
 const tip = actions(ACTIONS);
@@ -137,7 +140,47 @@ function fixesFor(c: any): Item[] {
   }
   if (c.section === "worktrees" && c.name === "stale" && c.level !== "ok") out.push({ label: "Clean up", hint: "Archive, remove or keep each", run: () => go("#/gc") });
   if (c.section === "worktrees" && c.name === "archived") out.push({ label: "Archived", run: () => go("#/archives") });
+  // Newer versions (BOOT5): the update, with its command; and looking again now.
+  const upd = updateOffer(c);
+  if (upd) out.push({ title: tip("updates.update"), label: `Update ${upd.name} to ${upd.latest}`, hint: upd.command ? `Runs ${upd.command}` : "Its vendor's update", run: () => askUpdate(upd) });
+  if (c.section === "updates") {
+    out.push({ title: tip("updates.check"), label: "Look for newer versions now", run: () => void checkUpdates() });
+    out.push({ label: "Update settings", hint: "Turn the daily look off, or skip an agent or a version", run: () => go("#/settings/updates") });
+  }
   return out;
+}
+
+/// Ask before updating (BOOT5): what runs, and which sessions keep the old version until they
+/// restart. An update that needs administrator rights shows its command instead (the owner's
+/// exception: a password never goes through the web).
+function askUpdate(o: UpdateOffer): void {
+  const running = runningAgent(allSessions().values(), o.id);
+  const n = running.length;
+  confirm(`Update ${o.name}?`, h("span", {},
+    `${o.name} ${o.version} → ${o.latest}. On the computer it runs `, h("code", {}, o.command ?? "the vendor's update"),
+    o.admin ? ", which asks for administrator rights: the next page gives the command to run there." : ".",
+    n ? ` ${n === 1 ? "1 session runs" : `${n} sessions run`} ${o.name} (${running.join(", ")}): ${n === 1 ? "it keeps" : "they keep"} ${o.version} until restarted.` : ""),
+  "Update", () => startUpdate(o.program), false);
+}
+
+/// Run the update on the computer (the daemon's `SetupRun` of that agent: an outdated one runs its
+/// update) and show its progress on the setup page, which follows the run.
+function startUpdate(program: string): void {
+  installKey = "";
+  go("#/setup");
+  void startInstall([program], null);
+}
+
+/// Look for newer versions now (`ptyro update --check`), then show what's out of date.
+async function checkUpdates(): Promise<void> {
+  ui.toast("Looking for newer versions…");
+  const r = await doHost("updates.check");
+  if (!r) return;
+  const out = (r.outdated as any[] ?? []).filter((o) => !(r.ignored as string[] ?? []).includes(o.id));
+  const failed = Object.keys(r.failed ?? {}).length;
+  ui.toast(out.length ? `${out.map((o) => `${o.name} ${o.latest}`).join(", ")} ${out.length === 1 ? "is" : "are"} out: Health offers ${out.length === 1 ? "it" : "each"}` : failed ? "Couldn't look for every newer version (offline?): ptyro looks again tomorrow" : "Your agents are up to date");
+  health.reload("");
+  setupPlan.reload();
 }
 
 function healthView(): HTMLElement {
@@ -788,7 +831,10 @@ function installSection(): HTMLElement {
       const words = lineOf(x).state ?? x.state;
       return two ? `${sideName(x.side)} ${words}${at}` : `${words}${at}`;
     });
-    return h("div", { class: "setup-here" }, h("span", { class: "lvl ok" }, "✓"), " ", h("b", {}, e.name), h("small", {}, ` ${each.join(" · ")}${e.id === reply.default_agent ? " · your default agent" : ""}`));
+    // Out of date, installed another way (npm, Homebrew): it updates that way (BOOT5).
+    const stale = sides.map((s) => entryOn(e.id, s)).find((x: any) => x?.state === "other" && x.latest);
+    return h("div", { class: "setup-here" }, h("span", { class: "lvl ok" }, "✓"), " ", h("b", {}, e.name), h("small", {}, ` ${each.join(" · ")}${e.id === reply.default_agent ? " · your default agent" : ""}`),
+      stale ? h("button", { class: "small", title: tip("updates.update"), disabled: running, onclick: () => void startInstall([e.id], null) }, `Update to ${stale.latest}`) : null);
   };
   const steps = webSteps(plan);
   const admin = adminSteps(plan);

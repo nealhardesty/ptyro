@@ -83,14 +83,17 @@ fn first_version(text: &str) -> Option<String> {
 }
 
 pub async fn run_cmd(ctx: &Ctx, quick: bool, json: bool) -> Result<i32, Error> {
-    let r = collect(ctx, quick, true).await;
+    // `doctor` looks for newer versions afresh (BOOT5); `--quick` (the health badge) reads what
+    // was remembered.
+    let r = collect(ctx, quick, true, !quick).await;
     print(&r, json);
     Ok(exit_code(&r))
 }
 
 /// Every check, in order. `terminal`: also the terminal this process runs in (a web page has
-/// none worth checking).
-pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Report {
+/// none worth checking). `fresh`: look up the agents' newest versions now (the network), not
+/// what the daily look remembered.
+pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool, fresh: bool) -> Report {
     let config_path = Config::path(&ctx.paths);
     let mut r = Report::default();
     let config = match Config::load(&config_path) {
@@ -164,8 +167,93 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Repor
     }
     git(&mut r).await;
     agents(&config, &mut r).await;
+    updates(ctx, &config, fresh, &mut r).await;
     profiles(ctx, &config, None, &mut r).await;
     r
+}
+
+/// Newer versions of the agents (BOOT5, SPEC §24.7): each one out of date, with its one-step
+/// update and the command it runs (the TUI's health badge and the web's Health page show these
+/// as they are). `fresh` looks them up now; otherwise the daily look's, with each installed
+/// version asked again (an agent that updated itself isn't offered).
+async fn updates(ctx: &Ctx, config: &Config, fresh: bool, r: &mut Report) {
+    use ptyro_agents::updates;
+    const S: &str = "updates";
+    let cfg = config.updates.clone();
+    if cfg.check == ptyro_core::config::UpdateCheck::Off {
+        r.add(
+            S,
+            "check",
+            Level::Note,
+            "off (updates.check): nothing is looked up; `ptyro update --check` looks when you ask",
+        );
+        return;
+    }
+    let (paths, state) = (ctx.paths.clone(), ctx.paths.state.clone());
+    let v = tokio::task::spawn_blocking(move || {
+        let host = ptyro_agents::setup::host(&paths);
+        updates::look_beside(&*host, &state, updates::now(), fresh)
+    })
+    .await
+    .unwrap_or_default();
+    if v.checked == 0 {
+        r.add(
+            S,
+            "agents",
+            Level::Note,
+            "not looked up yet: the daemon looks once a day (`ptyro update --check` looks now)",
+        );
+        return;
+    }
+    let mut any = false;
+    for o in &v.outdated {
+        if updates::ignored(&cfg.ignore, o) {
+            r.add(S, &o.id, Level::Note, format!("{}: skipped (updates.ignore)", o.line()));
+        } else {
+            any = true;
+            r.add(S, &o.id, Level::Warn, o.finding());
+        }
+    }
+    let all_failed = !v.failed.is_empty() && v.failed.len() == updates::sources().len();
+    if all_failed {
+        r.add(
+            S,
+            "lookup",
+            Level::Note,
+            "couldn't look for newer versions (offline?): ptyro looks again tomorrow",
+        );
+    } else if !v.failed.is_empty() {
+        let names: Vec<String> = v
+            .failed
+            .keys()
+            .map(|id| ptyro_agents::catalog::item(id).map_or(id.clone(), |i| i.name.clone()))
+            .collect();
+        r.add(
+            S,
+            "lookup",
+            Level::Note,
+            format!("couldn't look up {}'s newest version: tried again tomorrow", names.join(", ")),
+        );
+    }
+    if !any && !all_failed {
+        r.add(
+            S,
+            "agents",
+            Level::Ok,
+            format!("up to date (looked {})", ago(updates::now().saturating_sub(v.checked))),
+        );
+    }
+}
+
+/// `5 minutes ago`, `3 hours ago`.
+fn ago(ms: u64) -> String {
+    let m = ms / 60_000;
+    match m {
+        0 => "just now".into(),
+        1..=59 => format!("{m} minute(s) ago"),
+        60..=1439 => format!("{} hour(s) ago", m / 60),
+        _ => format!("{} day(s) ago", m / 1440),
+    }
 }
 
 /// Inside WSL (WIN2, SPEC §3.4): which one, whether Windows programs can be started from it,

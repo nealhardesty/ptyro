@@ -47,6 +47,9 @@ pub enum Fix {
     /// suggested `--where` names: an agent or git not found, no agent at all, or a doctor line
     /// that suggests `ptyro setup` / `ptyro install`.
     Setup { names: Vec<String>, place: Option<String> },
+    /// An agent out of date (BOOT5): `ptyro update <names>` in a split, one at a time like the
+    /// checklist's installs, and the badge looks again once it ends.
+    Update(Vec<String>),
 }
 
 #[derive(Debug, Clone)]
@@ -70,6 +73,8 @@ pub struct Health {
     /// Look again as soon as the run in flight is in: what it reports may predate a change
     /// (the setup checklist's install just ended, BOOT2).
     pub again: bool,
+    /// The start-up note about newer agent versions was looked for (BOOT5).
+    pub noted: bool,
 }
 
 /// The command a doctor message suggests: the first `` `ptyro …` `` in it, with a
@@ -170,6 +175,10 @@ pub fn finding(c: &Check) -> Option<Finding> {
         Some(Fix::Setting("daemon.hold_wsl"))
     } else if c.section == "tmux" {
         Some(Fix::Tmux { name: c.name.clone(), value: "on".into() })
+    } else if c.section == "updates"
+        && let Some(words) = suggested_cli(c).filter(|w| w.first().is_some_and(|f| f == "update"))
+    {
+        Some(Fix::Update(words[1..].to_vec()))
     } else if c.name == "config mode" {
         private_path(&c.text).map(|p| Fix::Private(PathBuf::from(p)))
     } else if let Some(fix) = setup_fix(c) {
@@ -198,6 +207,10 @@ pub fn shell_init_missing(config: &ptyro_core::config::Config) -> Option<(PathBu
 impl App {
     /// Periodically, in the background (from `tick`).
     pub(crate) fn health_tick(&mut self, started: Instant) {
+        if !self.health.noted && self.client.is_some() && !self.opts.raw {
+            self.health.noted = true;
+            self.update_note();
+        }
         if !self.health_open()
             && let Some(checks) = self.health.deferred.take()
         {
@@ -213,6 +226,25 @@ impl App {
         if due {
             self.check_health();
         }
+    }
+
+    /// The start-up note (BOOT5): an agent with a newer version out, said once per new version,
+    /// from what the daemon's daily look remembered (`<state>/versions.json`; never the
+    /// network), with the key that updates it. Not with a daemon on another computer: this
+    /// computer's agents aren't the ones its sessions run.
+    pub(crate) fn update_note(&mut self) {
+        if crate::setup_list::elsewhere(self.connect.remote.as_deref(), cfg!(windows)).is_some() {
+            return;
+        }
+        let said = ptyro_agents::updates::note(&self.paths.state, &self.config.updates);
+        let Some(line) = ptyro_agents::updates::note_line(&said) else { return };
+        let label = if said.len() == 1 { "updates it" } else { "updates them" };
+        let names = said.iter().map(|o| o.program.clone()).collect::<Vec<_>>().join(" ");
+        let then = crate::app::Then::Run(crate::keymap::Command {
+            action: "app.update",
+            arg: Some(names),
+        });
+        self.toast_offer(line, false, crate::app::Offer { label: label.into(), then });
     }
 
     /// Run `ptyro doctor --quick --json` now.
@@ -336,6 +368,11 @@ impl App {
                     Some(Fix::Action(_)) => format!("{} · ⏎ opens the clean-up list", f.text),
                     Some(Fix::Setting(key)) => format!("{} · ⏎ opens the setting {key}", f.text),
                     Some(Fix::Setup { .. }) => format!("{} · ⏎ opens the setup checklist", f.text),
+                    Some(Fix::Update(names)) => format!(
+                        "{} · ⏎ runs `ptyro update {}` in a split (it asks first)",
+                        f.text,
+                        names.join(" ")
+                    ),
                     None => f.text.clone(),
                 },
                 key: None,
@@ -369,6 +406,7 @@ impl App {
             Some(Fix::Setup { names, place }) => {
                 self.open_setup((!names.is_empty()).then_some(names), place)
             }
+            Some(Fix::Update(names)) => self.update_agents(names),
             Some(Fix::Append { file, line }) => {
                 self.overlay = Some(Overlay::Confirm {
                     text: format!(

@@ -3346,6 +3346,9 @@ impl App {
             }
             "first.run" => self.open_first_run(),
             "app.setup" => self.open_setup(None, None),
+            "app.update" => self.update_agents(
+                cmd.arg.as_deref().unwrap_or("").split_whitespace().map(str::to_owned).collect(),
+            ),
             "toast.act" => match self.toast.take().and_then(|t| t.offer) {
                 Some(Offer { then: Then::Run(cmd), .. }) => self.run(&cmd),
                 Some(Offer { then: Then::Send(req, done), .. }) => {
@@ -8802,6 +8805,67 @@ mod tests {
             "Node.js comes with Gemini CLI, as the CLI plans it"
         );
         assert!(Config::path(&app.paths).exists(), "the first run's config is written too");
+    }
+
+    /// BOOT5: an agent with a newer version is noted at start-up once per new version, with the
+    /// key that updates it; the health badge's finding updates it in a split (`ptyro update`),
+    /// one at a time like the checklist's installs.
+    #[tokio::test]
+    async fn an_agent_out_of_date_is_noted_once_and_its_fix_updates_it_in_a_split() {
+        use ptyro_agents::updates;
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().to_path_buf();
+        let paths = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| home.clone())).unwrap();
+        let connect = ConnectOptions::new(paths.clone(), ptyro_protocol::ClientKind::Tui);
+        let area = Rect::new(0, 0, 100, 30);
+        let mut app =
+            App::new(Options::default(), connect, paths.clone(), Config::default(), false, area);
+        // Nothing remembered: nothing said.
+        app.update_note();
+        assert!(app.toast.is_none());
+        let codex = updates::Outdated {
+            id: "codex".into(),
+            name: "Codex".into(),
+            program: "codex".into(),
+            version: "0.162.1".into(),
+            latest: "0.170.0".into(),
+            command: Some("curl -fsSL https://chatgpt.com/codex/install.sh | sh".into()),
+            via: None,
+            admin: false,
+            doc: String::new(),
+        };
+        updates::edit(&paths.state, |v| {
+            v.checked = 1;
+            v.latest.insert("codex".into(), "0.170.0".into());
+            v.outdated.push(codex.clone());
+        });
+        app.update_note();
+        let t = app.toast.take().expect("the note");
+        assert_eq!(t.text, "Codex 0.170.0 is out (you have 0.162.1) · C-q u updates it");
+        // Once per new version: not at the next start.
+        app.update_note();
+        assert!(app.toast.is_none());
+        // The badge's finding (doctor's words) runs `ptyro update codex` in a split.
+        let check = crate::health::Check {
+            section: "updates".into(),
+            name: "codex".into(),
+            level: "warn".into(),
+            text: codex.finding(),
+        };
+        let f = crate::health::finding(&check).unwrap();
+        assert_eq!(f.fix, Some(crate::health::Fix::Update(vec!["codex".into()])));
+        app.health.findings = vec![f];
+        app.fix(0);
+        let words = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(app.last_cli, Some(words(&["update", "codex"])));
+        assert!(app.setup_run.is_some(), "tracked like the checklist's installs");
+        // One at a time: a second update (or install) shows the running one instead.
+        app.last_cli = None;
+        app.update_agents(Vec::new());
+        assert!(app.last_cli.is_none());
+        assert!(
+            app.toast.as_ref().unwrap().text.contains("setup is still running in ptyro-update")
+        );
     }
 
     /// BOOT2: while the checklist's install runs, `U` (or a health fix, or `first.run`) never

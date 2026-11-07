@@ -32,6 +32,8 @@ impl Lock {
             Ok(()) => {
                 let _ =
                     std::fs::write(&who_path, format!("{who} (process {})", std::process::id()));
+                // A version check going beside this won't write over what it installs (BOOT5).
+                crate::updates::started(state);
                 Ok(Self { _file: Some(file), who: who_path })
             }
             Err(TryLockError::WouldBlock) => Err(busy(&holder(&who_path))),
