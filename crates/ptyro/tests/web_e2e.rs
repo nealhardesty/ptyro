@@ -36,6 +36,8 @@ fn serve(d: &TempDaemon, home: &Path, port: u16) -> Child {
         .cmd()
         .args(["serve", "--loopback-http", "--port", &port.to_string()])
         .env("HOME", home)
+        // Its host operations (`updates.check`, the logins) look at the same fake machine.
+        .env("PTYRO_TEST_SETUP", home.join("fake-setup"))
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

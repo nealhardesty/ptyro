@@ -816,6 +816,27 @@ enum Cmd {
         #[arg(long, hide = true)]
         confirmed: bool,
     },
+    /// Update agents that have a newer version out (or those named), each the way it was
+    /// installed: `ptyro update`, `ptyro update codex`; `--check` only looks
+    Update {
+        /// claude, codex, agy, opencode, gemini (default: every agent with a newer version,
+        /// less what `updates.ignore` skips)
+        #[arg(value_name = "NAME")]
+        names: Vec<String>,
+        /// Only look for newer versions now and say what's out of date (changes nothing)
+        #[arg(long)]
+        check: bool,
+        /// Don't ask first
+        #[arg(short, long)]
+        yes: bool,
+        /// With --check, what's out of date as JSON; otherwise each step's progress as a JSON
+        /// line
+        #[arg(long)]
+        json: bool,
+        /// A person answers on stdin though it isn't a terminal (as for setup)
+        #[arg(long, hide = true)]
+        tty: bool,
+    },
     /// Log in to the agents and the GitHub CLI, one account each: each tool's own sign-in, in
     /// this terminal, confirmed by its own status command (ptyro never sees a credential)
     Login {

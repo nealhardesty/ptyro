@@ -274,6 +274,12 @@ pub const SECTIONS: &[Section] = &[
         scope: Scope::User,
     },
     Section {
+        id: "updates",
+        title: "Updates",
+        blurb: "Newer versions of your agents: looked for once a day and offered, never installed without you.",
+        scope: Scope::User,
+    },
+    Section {
         id: "profiles",
         title: "Profiles",
         blurb: "Accounts and identities, one per context.",
@@ -566,6 +572,10 @@ const RESTORE: &[Choice] = &[
     c("resume", "resumed right away, three at a time"),
     c("none", "not restored"),
 ];
+const UPDATE_CHECK: &[Choice] = &[
+    c("daily", "look once a day, in the background, and offer what's newer"),
+    c("off", "never look (`ptyro update --check` still looks when you ask)"),
+];
 const SCOPE: &[Choice] = &[
     c("current-first", "this workspace first, then the others"),
     c("current", "this workspace only"),
@@ -816,6 +826,9 @@ pub const SETTINGS: &[Setting] = &[
     s("remote.approval_wait", "remote", Kind::Duration, "How long a Claude permission prompt waits for a phone's answer."),
     // ── Agents ──
     s("agents.default", "agents", dynamic(Source::Agents), "The agent new sessions start when nothing else says: `n`'s first choice, and what quick new (`C-n`) starts in a worktree that hasn't run one yet. A project's own default agent wins there.").or("claude").also("default agent claude codex gemini opencode quick new"),
+    // ── Updates ──
+    s("updates.check", "updates", pick(UPDATE_CHECK), "Look for newer versions of your agents (Claude Code, Codex, Antigravity, OpenCode, Gemini CLI) once a day. A newer one is offered with its one-step update at start-up, in the health badge (M), on the web's Health page and in `ptyro doctor`; nothing is updated without you. Offline, it stays quiet and looks again the next day.").also("update upgrade new version out of date outdated newer check latest"),
+    s("updates.ignore", "updates", Kind::List, "Updates not to offer: an agent's name to skip all of its updates (`codex`), or a name and version to skip just that one (`codex@0.170.0`).").also("skip mute dismiss update version outdated").or("none").eg("codex@0.170.0"),
     s("agents.*.adapter", "agents", pick(ADAPTERS), "Which kind of agent it is.").new_only().or("the name, if it is a known agent, else generic"),
     s("agents.*.command", "agents", Kind::Argv, "The program to run.").new_only().or("the agent's own name"),
     s("agents.*.args", "agents", Kind::List, "Arguments added to every start.").new_only(),

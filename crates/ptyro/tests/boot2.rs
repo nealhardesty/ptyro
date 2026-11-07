@@ -31,7 +31,14 @@ impl World {
         let (fake, home) = (path(&dir.path().join("fake")), path(&dir.path().join("home")));
         let d = TempDaemon::start_with_env(
             BIN,
-            &[("PTYRO_TEST_SETUP", &fake), ("HOME", &home), ("SHELL", "/bin/sh")],
+            &[
+                ("PTYRO_TEST_SETUP", &fake),
+                ("HOME", &home),
+                ("SHELL", "/bin/sh"),
+                // The daily look for newer versions (BOOT5) stays out of these screens: it never
+                // runs while a test does.
+                ("PTYRO_TEST_UPDATES_FIRST_MS", "3600000"),
+            ],
         )
         .unwrap();
         Self { dir, d }
@@ -152,7 +159,8 @@ async fn a_running_install_is_never_joined_by_a_second() {
 async fn the_checklist_comes_back_on_its_key_and_installs_what_is_ticked() {
     let all = json!({ "claude": "2.1.319", "codex": "0.162.1", "git": "2.43.0", "gh": "2.57.0" });
     let w = World::new(json!({ "installed": all, "logged_in": ["claude", "codex", "gh"] }));
-    w.d.write_config("").unwrap();
+    // No update offers (BOOT5) on these screens: nothing but the checklist's own messages.
+    w.d.write_config("[updates]\ncheck = \"off\"\n").unwrap();
     // Not now first: nothing runs.
     let r = run(w
         .tui()

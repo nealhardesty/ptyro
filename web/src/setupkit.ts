@@ -103,6 +103,9 @@ export class SetupLog {
   /// Each side's report, as its `finished` said, with the side.
   reports: { side: string; report: any }[] = [];
   report: { done: string[]; failed: string[]; skipped: string[]; blocked: string[] } | null = null;
+  /// Updates that failed because the program is running (BOOT5, `failed.in_use`): the page offers
+  /// to try each again once its sessions end.
+  retry: { id: string; side: string }[] = [];
   /// Events from before this page's own run said its id.
   private early: Progress[] = [];
   /// Events of the followed run that came after a gap in `seq`: held until the plan's `running`
@@ -115,7 +118,7 @@ export class SetupLog {
   get running(): boolean { return this.id !== "" && !this.report && !this.ended; }
 
   private reset(): void {
-    Object.assign(this, { id: "", starting: false, theirs: false, ended: false, sides: 1, seq: 0, plan: null, lines: [], reports: [], report: null, early: [], held: [] });
+    Object.assign(this, { id: "", starting: false, theirs: false, ended: false, sides: 1, seq: 0, plan: null, lines: [], reports: [], report: null, retry: [], early: [], held: [] });
   }
 
   private line(t: string): void { this.lines.push(t); if (this.lines.length > 400) this.lines.shift(); }
@@ -206,7 +209,10 @@ export class SetupLog {
     if (ev.event === "started") this.line(`▸ ${at}${ev.name}: ${ev.command}`);
     else if (ev.event === "line") this.line(`  │ ${ev.text}`);
     else if (ev.event === "done") this.line(`✓ ${at}${ev.id}${ev.version ? " " + ev.version : ""}`);
-    else if (ev.event === "failed") this.line(`✗ ${at}${ev.id}: ${ev.error}\n  fix: ${ev.fix}`);
+    else if (ev.event === "failed") {
+      this.line(`✗ ${at}${ev.id}: ${ev.error}\n  fix: ${ev.fix}`);
+      if (ev.in_use) this.retry.push({ id: ev.id, side: e.side ?? "local" });
+    }
     else if (ev.event === "skipped" && left(ev.id)) this.line(`– ${at}${ev.id}: left for the computer: ${ev.fix}`);
     else if (ev.event === "skipped") this.line(`– ${at}${ev.id}: ${ev.reason}\n  fix: ${ev.fix}`);
     else if (ev.event === "blocked") this.line(`✗ ${at}${ev.id}: can't be installed here: ${ev.reason}\n  fix: ${ev.fix}`);
@@ -230,7 +236,11 @@ export class SetupLog {
     const left = leftForComputer(this.plan);
     const leftOn = (side: string, id: string): any => left.find((e) => e.id === id && (e.side ?? "local") === side);
     const kept = this.reports.flatMap(({ side, report }) => (report.skipped ?? []).map((id: string) => leftOn(side, id)).filter(Boolean));
-    const parts = [`${r.done.length} installed`];
+    // An outdated agent ticked (BOOT5) runs its update: said as updated.
+    const updated = this.reports.flatMap(({ side, report }) => (report.done ?? []).filter((id: string) => (this.plan?.entries ?? []).some((e: any) => e.id === id && (e.side ?? "local") === side && e.action?.update)));
+    const installed = r.done.length - updated.length;
+    const parts = installed || !updated.length ? [`${installed} installed`] : [];
+    if (updated.length) parts.push(`${updated.length} updated`);
     if (r.failed.length) parts.push(`${r.failed.length} failed`);
     const other = r.skipped.length - kept.length;
     if (other) parts.push(`${other} not run`);
@@ -244,4 +254,28 @@ export class SetupLog {
     }
     return text;
   }
+}
+
+/// An update the doctor offers (BOOT5, SPEC §24.7): its `updates` finding's `data`, the engine's
+/// `Outdated` (not its words, which may change).
+export interface UpdateOffer { id: string; program: string; name: string; latest: string; version: string; command: string | null; admin: boolean }
+export function updateOffer(c: { section?: string; level?: string; data?: any }): UpdateOffer | null {
+  const d = c.data;
+  if (c.section !== "updates" || c.level !== "warn" || !d?.id || !d.program) return null;
+  return { id: d.id, program: d.program, name: d.name ?? d.id, latest: d.latest, version: d.version, command: d.command ?? null, admin: !!d.admin };
+}
+
+/// The live sessions here running an agent (`id`, the engine's: `claude`, `antigravity`): an
+/// update leaves them on the old version until they restart, so the page names them.
+export function runningAgent(sessions: Iterable<{ name: string; agent?: string | null; inner_agent?: string | null; machine?: string | null; state: { t: string } }>, id: string): string[] {
+  const out: string[] = [];
+  for (const s of sessions) if (!s.machine && s.state.t === "running" && (s.agent === id || s.inner_agent === id)) out.push(s.name);
+  return out;
+}
+
+/// The Try again of an update refused because the agent runs (BOOT5): its label, and what to run
+/// (`SetupRun`'s picks for the daemon's side, or WSL's `wsl_picks` for one on WSL's side).
+export function retryOf(r: { id: string; side: string }, name: string): { label: string; picks: string[]; wslPicks: string[] | null } {
+  const wsl = r.side === "wsl";
+  return { label: `Try updating ${name} again`, picks: wsl ? [] : [r.id], wslPicks: wsl ? [r.id] : null };
 }

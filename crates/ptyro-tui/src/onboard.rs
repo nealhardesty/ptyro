@@ -284,6 +284,43 @@ impl App {
         }
     }
 
+    /// `app.update`, the health badge's fix for an agent out of date, the start-up note's offer
+    /// (BOOT5): `ptyro update [names…]` in a split, a real terminal where it shows each update's
+    /// command and asks first, as the checklist's installs run: one at a time (never beside a
+    /// running install), and the badge looks again once it ends. It runs where the daemon is,
+    /// whose agents the findings are (`Request::Updates`): this computer's ptyro, WSL's own (its
+    /// split runs in WSL), or a remote computer's.
+    pub fn update_agents(&mut self, names: Vec<String>) {
+        if self.first_run.is_some() {
+            return self.toast("close the setup checklist first, then update (it runs in a split)");
+        }
+        if self.setup_running() {
+            return;
+        }
+        let args: Vec<String> = std::iter::once("update".to_owned()).chain(names).collect();
+        // This computer's lock, said before the split opens; elsewhere, `ptyro update` there
+        // says so itself.
+        if self.update_place().is_none()
+            && let Some(by) = ptyro_agents::setup::lock::Lock::held_by(&self.paths.state)
+        {
+            return self.toast_err(ptyro_agents::setup::lock::busy(&by));
+        }
+        self.setup_start((None, args), Vec::new());
+    }
+
+    /// Where the daemon's agents are, for words: `None` this computer; `WSL` (Windows with WSL's
+    /// daemon); or the remote computer's name.
+    pub(crate) fn update_place(&self) -> Option<String> {
+        let remote = self.connect.remote.as_deref();
+        if let Some(r) = crate::setup_list::elsewhere(remote, cfg!(windows)) {
+            let host = r.strip_prefix("ssh://").unwrap_or(&r);
+            let host = host.rsplit_once('@').map_or(host, |(_, h)| h).to_owned();
+            return Some(host);
+        }
+        (crate::cli_actions::where_offered(cfg!(windows), remote) == Some(true))
+            .then(|| "WSL".to_owned())
+    }
+
     /// Run one of the checklist's splits, `queue` after it.
     fn setup_start(
         &mut self,
@@ -306,9 +343,11 @@ impl App {
         if let Some(id) = self.sessions.iter().find(|s| s.name == split).map(|s| s.id) {
             self.show(id, None);
         }
-        self.toast(format!(
-            "setup is still running in {split}: the checklist opens again once it's done"
-        ));
+        self.toast(if split.starts_with("ptyro-update") {
+            format!("an update is still running in {split}: try again once it's done")
+        } else {
+            format!("setup is still running in {split}: the checklist opens again once it's done")
+        });
         true
     }
 

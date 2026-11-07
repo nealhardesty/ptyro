@@ -15,6 +15,7 @@ pub mod locate;
 pub mod others;
 pub mod profile;
 pub mod setup;
+pub mod updates;
 
 use std::path::PathBuf;
 

@@ -48,7 +48,8 @@ pub struct World {
     pub elevation: Option<String>,
     /// What asking for it (`sudo -v`) gets: default yes.
     pub elevate: Option<bool>,
-    /// Per item: `ok` (default), `fail`, `slow` (three lines, 300 ms apart, then ok), `wait` (a
+    /// Per item: `ok` (default), `fail`, `busy` (fails once as Windows does replacing a running
+    /// program, then ok), `slow` (three lines, 300 ms apart, then ok), `wait` (a
     /// line, then ok once the fake's directory holds a file `go`, or after a minute: a run that
     /// is still going for as long as a test needs), or `quiet` (ok, but nothing to find
     /// afterwards: an installer that put it off `PATH`).
@@ -211,6 +212,12 @@ impl Host for FakeHost {
             .map_err(|e| e.to_string())?;
         Ok((!status.success()).then(|| "it exited with 1".to_owned()))
     }
+
+    /// The fake machine has no network: its newest versions come from a fixture registry
+    /// (`PTYRO_TEST_LATEST`, [`crate::updates`]) or not at all.
+    fn latest_reply(&self, url: &str) -> Result<String, String> {
+        Err(format!("couldn't reach {url}: the fake machine is offline"))
+    }
 }
 
 /// `ptyro fake-installer ID VIA install|update ADMIN` (hidden, debug builds): what each fake
@@ -245,6 +252,14 @@ pub fn installer(args: &[String]) -> i32 {
     match outcome {
         "fail" => {
             eprintln!("fake {via}: E: could not reach the server for {id}");
+            return 1;
+        }
+        // Windows refusing to replace a running program, the first time only (BOOT5).
+        "busy" if !dir.join(format!("busy-{id}")).exists() => {
+            let _ = std::fs::write(dir.join(format!("busy-{id}")), "");
+            eprintln!(
+                "fake {via}: The process cannot access the file because it is being used by another process."
+            );
             return 1;
         }
         "slow" => {

@@ -146,6 +146,7 @@ async fn dispatch(
                 | Cmd::Init { .. }
                 | Cmd::Setup { .. }
                 | Cmd::Install { .. }
+                | Cmd::Update { .. }
                 | Cmd::Login { .. }
                 | Cmd::Uninstall { .. }
                 | Cmd::Backup { .. }
@@ -167,9 +168,23 @@ async fn dispatch(
             )));
         }
         None
-    } else if matches!(cmd, Some(Cmd::Setup { .. } | Cmd::Install { .. } | Cmd::Login { .. })) {
-        // Setup installs on this computer, with no daemon (BOOT1); logins too (BOOT4).
+    } else if matches!(
+        cmd,
+        Some(Cmd::Setup { .. } | Cmd::Install { .. } | Cmd::Login { .. } | Cmd::Update { .. })
+    ) {
+        // Setup installs on this computer, with no daemon (BOOT1); logins too (BOOT4), and
+        // updates (BOOT5).
         if let Some(r) = remote.filter(|r| !ptyro_client::is_local(Some(r))) {
+            if matches!(cmd, Some(Cmd::Update { .. })) {
+                let there = match r.strip_prefix("wsl://") {
+                    Some(d) if !d.is_empty() => format!("`wsl -d {d} -- ptyro update`"),
+                    Some(_) => "`wsl ptyro update`".to_owned(),
+                    None => format!("`ptyro update` on {r}"),
+                };
+                return Err(Error::invalid(format!(
+                    "update is about this computer's agents, not {r}'s: run {there}"
+                )));
+            }
             let what = if matches!(cmd, Some(Cmd::Login { .. })) { "login" } else { "setup" };
             if r.starts_with("wsl://") {
                 return Err(Error::invalid(format!(
@@ -358,6 +373,10 @@ async fn dispatch(
                 confirmed,
             };
             crate::setup::install(&ctx, a).await
+        }
+        Some(Cmd::Update { names, check, yes, json, tty }) => {
+            let a = crate::setup::UpdateArgs { names, check, yes, json, tty };
+            crate::setup::update(&ctx, a).await
         }
         Some(Cmd::Login { names, check, json, place, tty, installed }) => {
             let a = crate::logins::LoginArgs { names, check, json, place, tty, installed };

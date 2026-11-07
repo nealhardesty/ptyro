@@ -171,9 +171,19 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
 
         // ── health ──
         "doctor" => Ok(checks(
-            &crate::doctor::collect(ctx, a["quick"].as_bool().unwrap_or(false), false).await,
+            // The agents' newest versions as the daemon's daily look remembered them (BOOT5):
+            // `updates.check` (the page's "Look for newer versions now") looks afresh.
+            &crate::doctor::collect(ctx, a["quick"].as_bool().unwrap_or(false), false, false).await,
         )),
         "profile.doctor" => Ok(checks(&crate::doctor::profile_checks(ctx, opt(a, "name")).await?)),
+        // Newer versions of the agents, looked up now (BOOT5): `ptyro update --check --json`.
+        "updates.check" => {
+            let r = cli(&["update", "--check", "--json"]).await?;
+            let out = r["out"].as_str().unwrap_or_default();
+            serde_json::from_str(out).map_err(|_| {
+                Error::internal(format!("ptyro update --check: {}", notes(&r).join("; ")))
+            })
+        }
 
         // ── profiles ──
         "profile.new" => {
