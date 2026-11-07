@@ -8980,6 +8980,38 @@ mod tests {
         assert!(!Config::path(&app.paths).exists(), "the checklist alone writes no config");
     }
 
+    /// Setup running elsewhere (the machine's lock, held here as the web's run would): the
+    /// checklist says so before anything is ticked, ⏎ counts nothing, and ⏎ starts no split.
+    #[test]
+    fn the_setup_checklist_says_when_setup_runs_elsewhere() {
+        let mut app = app();
+        use crate::onboard::FirstRun;
+        let held = ptyro_agents::setup::lock::Lock::take(&app.paths.state, "the web app").unwrap();
+        let mut setup = crate::setup_list::tests::one(&[]);
+        assert!(setup.check_busy(&app.paths.state));
+        app.first_run = Some(FirstRun { setup, only_setup: true, ..FirstRun::default() });
+        let shown = screen(&app);
+        assert!(
+            shown.contains("setup is already running on this computer (from the web app"),
+            "{shown}"
+        );
+        assert!(shown.contains("⏎ done · Space toggle"), "{shown}");
+        app.first_run_key(KeyEvent::new(KeyCode::Enter, Mods::NONE));
+        assert!(app.last_cli.is_none(), "no split");
+        assert!(
+            app.toast.as_ref().unwrap().text.contains("setup is already running (from the web app")
+        );
+        // Let go: the checklist installs again.
+        drop(held);
+        app.first_run = Some(FirstRun {
+            setup: crate::setup_list::tests::one(&[]),
+            only_setup: true,
+            ..FirstRun::default()
+        });
+        app.first_run_key(KeyEvent::new(KeyCode::Enter, Mods::NONE));
+        assert!(app.last_cli.is_some(), "a split once it's free");
+    }
+
     #[test]
     fn home_lists_what_to_do_next() {
         let mut app = app();

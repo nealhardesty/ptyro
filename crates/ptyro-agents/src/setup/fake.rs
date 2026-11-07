@@ -48,8 +48,10 @@ pub struct World {
     pub elevation: Option<String>,
     /// What asking for it (`sudo -v`) gets: default yes.
     pub elevate: Option<bool>,
-    /// Per item: `ok` (default), `fail`, `slow` (three lines, 300 ms apart, then ok), or
-    /// `quiet` (ok, but nothing to find afterwards: an installer that put it off `PATH`).
+    /// Per item: `ok` (default), `fail`, `slow` (three lines, 300 ms apart, then ok), `wait` (a
+    /// line, then ok once the fake's directory holds a file `go`, or after a minute: a run that
+    /// is still going for as long as a test needs), or `quiet` (ok, but nothing to find
+    /// afterwards: an installer that put it off `PATH`).
     pub outcomes: BTreeMap<String, String>,
     /// The version an item installs as (default `1.0.0`; Node.js `26.13.0`).
     pub versions: BTreeMap<String, String>,
@@ -250,6 +252,14 @@ pub fn installer(args: &[String]) -> i32 {
                 println!("fake {via}: step {n} of 3");
                 let _ = std::io::stdout().flush();
                 std::thread::sleep(Duration::from_millis(300));
+            }
+        }
+        "wait" => {
+            println!("fake {via}: waiting for go");
+            let _ = std::io::stdout().flush();
+            let until = std::time::Instant::now() + Duration::from_secs(60);
+            while !dir.join("go").exists() && std::time::Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(50));
             }
         }
         _ => {}

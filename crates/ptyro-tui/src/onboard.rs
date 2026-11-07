@@ -249,6 +249,7 @@ impl App {
             Some(f) => {
                 let (sides, place, note) = *f;
                 fr.setup.found(sides, place, note);
+                fr.setup.check_busy(&self.paths.state);
             }
             None => fr.setup.found = Found::Failed,
         }
@@ -260,6 +261,11 @@ impl App {
     /// ⏎: what's ticked installs in a split (`ptyro install … --confirmed`), a real terminal:
     /// live output, sudo's prompt, then the logins and the profiles line.
     fn setup_go(&mut self, setup: &Setup, only: bool) {
+        // Started elsewhere meanwhile (the web, a terminal): say so rather than open a split
+        // that would only refuse.
+        if let Some(by) = ptyro_agents::setup::lock::Lock::held_by(&self.paths.state) {
+            return self.toast_err(ptyro_agents::setup::lock::busy(&by));
+        }
         let wsl_daemon =
             crate::cli_actions::where_offered(cfg!(windows), self.connect.remote.as_deref())
                 == Some(true);
@@ -708,18 +714,7 @@ fn setup_lines(app: &App, fr: &FirstRun, width: usize, lines: &mut Vec<Line<'sta
                 // What a side's cell can't say: why it can't, what needs it.
                 for s in &sides {
                     let Some(x) = plan.entry_on(&e.id, *s) else { continue };
-                    let mut why = Vec::new();
-                    if let Some(b) = &x.blocked {
-                        why.push(format!("can't: {b}"));
-                    }
-                    if !x.needed_by.is_empty() {
-                        let by: Vec<&str> = x
-                            .needed_by
-                            .iter()
-                            .map(|id| plan.entry(id).map_or(id.as_str(), |y| y.name.as_str()))
-                            .collect();
-                        why.push(format!("ticked because {} needs it", by.join(", ")));
-                    }
+                    let why = ptyro_agents::setup::checklist::why(plan, x);
                     if !why.is_empty() {
                         let text = format!("{}: {}", r.sides.name(*s), why.join("; "));
                         for l in wrap_words(&text, width.saturating_sub(8)) {
@@ -771,6 +766,15 @@ fn setup_lines(app: &App, fr: &FirstRun, width: usize, lines: &mut Vec<Line<'sta
         lines.push(Line::raw(""));
         for l in wrap_words(&note, width.saturating_sub(2)) {
             lines.push(Line::styled(format!(" {l}"), dim));
+        }
+    }
+    if let Some(by) = &fr.setup.busy {
+        let text = format!(
+            "setup is already running on this computer (from {by}): ⏎ installs nothing now; open the checklist again once it's done"
+        );
+        lines.push(Line::raw(""));
+        for l in wrap_words(&text, width.saturating_sub(2)) {
+            lines.push(Line::styled(format!(" {l}"), fg(app, t.blocked)));
         }
     }
     if let Some(said) = &fr.setup.said {
