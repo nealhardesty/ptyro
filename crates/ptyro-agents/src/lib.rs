@@ -6,6 +6,7 @@
 //! detection of existing multi-account setups. Adapters proper (hooks, status, resume) are M4.
 
 pub mod adapter;
+pub mod catalog;
 pub mod claude;
 pub mod codex;
 pub mod detect;

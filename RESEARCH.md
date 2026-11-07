@@ -1030,6 +1030,30 @@ Agentastic Companion (iPhone + Mac host, E2E, TestFlight) · Nimbalyst Mobile (E
 #### G17. ACP (Agent Client Protocol) — cross-cutting
 - Registry launched 2026-01-28; ~25–50 agents (one segment counted 44); Zed 1.0 (2026-04-29) headline feature; Microsoft "Intelligent Terminal" 0.1 (2026-06-02, a Windows Terminal fork with an ACP agent pane). Claude adapter package name [U]: `@agentclientprotocol/claude-agent-acp` (cited in OpenHands docs) vs older `claude-code-acp`. → R-ACP-01.
 
+#### G18. Installing, updating and logging in to the agents and tools (BOOT0) *(checked 2026-11-06)*
+The version table (`crates/ptyro-agents/src/catalog.toml`, SPEC §24.1) holds these, with the same
+marks. [V] = the vendor's current docs, or the program run here; [S] = the vendor's installer
+script or a third-party write-up; [U] = nothing documents it.
+
+| Item | Recommended install (2026-11-06) | Update | Installed version | Newest version from | Needs | Login / confirmed by |
+|---|---|---|---|---|---|---|
+| Claude Code | native installer: `curl -fsSL https://claude.ai/install.sh \| bash`; Windows x64/ARM64 `irm https://claude.ai/install.ps1 \| iex`, no admin [V code.claude.com/docs/en/setup] | background auto-update; `claude update` [V] | `claude --version` → `2.1.319 (Claude Code)` [V] | `https://downloads.claude.ai/claude-code-releases/latest`, plain text (2.1.319; `stable` 2.1.311) [S: install.sh] | Git for Windows recommended on Windows (Bash tool) [V]; npm form needs Node 22+ [V] | `claude auth login` / `claude auth status` (exit 1 logged out) [V, 2.1.319] |
+| Codex | standalone installer: `curl -fsSL https://chatgpt.com/codex/install.sh \| sh`; Windows `irm https://chatgpt.com/codex/install.ps1 \| iex` [V learn.chatgpt.com/docs/codex/cli, README] | run the installer again [V]; `codex update` [V, 0.162.1] | `codex --version` → `codex-cli 0.162.1` [V] | `https://releases.openai.com/codex/channels/latest`, GitHub-release JSON, `tag_name` `rust-v0.167.0` [S: install.sh] | none (npm form needs Node); git 2.23+ for PR helpers [V docs/install.md] | `codex login` / `codex login status` (exit 1 logged out) [V, 0.162.1] |
+| Antigravity (`agy`) | `curl -fsSL https://antigravity.google/cli/install.sh \| bash`; Windows `irm https://antigravity.google/cli/install.ps1 \| iex` (into `%LOCALAPPDATA%\agy\bin`) [V antigravity.google/docs/getting-started] | background self-updater, `AGY_CLI_DISABLE_AUTO_UPDATE=true` stops it [V docs/cli/troubleshooting]; `agy update` [S: realpython, computingforgeeks] | `agy --version` [V] | `https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/<os>_<arch>.json` → `{version, url, sha512}` (1.5.2) [S: install.sh/.ps1] | none | sign-in on first `agy` run (browser, or paste a code over SSH) [V docs/install]; no status command [U] |
+| OpenCode 1 | `curl -fsSL https://opencode.ai/install \| bash` (into `~/.opencode/bin`); Windows: WSL recommended, else `npm install -g opencode-ai` [V docs.opencode.ai] | `opencode upgrade` [V docs/cli] | `opencode --version` [V] | npm registry `opencode-ai/latest` (1.19.5) [V; the installer reads it] | Node on Windows (npm), minimum unnamed [U] | `opencode auth login` / `opencode auth list` [V]; whether `auth list` fails when empty [U] |
+| Gemini CLI (API-key, enterprise) | `npm install -g @google/gemini-cli` [V geminicli.com/docs/get-started/installation] | `npm install -g @google/gemini-cli@latest` [V] | `gemini --version` → `0.33.0` [V] | npm registry `@google/gemini-cli/latest` (0.67.0) [V] | Node.js 20+ [V docs, `engines`]; macOS 15+, Windows 11 24H2+, Ubuntu 20.04+ [V] | run `gemini`, choose Google / `GEMINI_API_KEY` / Vertex [V]; no status command [U] |
+| git | apt `apt-get install git`, dnf `dnf install git`, macOS `brew install git` or `xcode-select --install`, Windows `winget install --id Git.Git -e --source winget` [V git-scm.com/install] | its package manager | `git --version` | not checked (design) | — | — |
+| GitHub CLI | GitHub's apt/dnf repositories (docs warn Debian/Ubuntu community 2.45.x/2.46.x are broken), `brew install gh`, `winget install --id GitHub.cli --source winget` [V cli/cli docs/install_*.md] | `sudo apt install gh`, `sudo dnf update gh`, `brew upgrade gh`, `winget upgrade --id GitHub.cli --source winget` [V] | `gh --version` | GitHub `cli/cli` releases/latest (v2.103.3) [V] | — | `gh auth login --web` / `gh auth status` (exit 1 logged out) [V, 2.57.0] |
+| Node.js | nodejs.org build `node-v<v>-<os>-<arch>.<tar.xz\|zip>` + `SHASUMS256.txt` [V nodejs.org/dist]; `brew install node` (26.13.0) [V formulae.brew.sh]; `winget install -e --id OpenJS.NodeJS.LTS` [S: in winget-pkgs, not on nodejs.org]; distro `nodejs` [S] (Ubuntu 24.04's is 18.x) | its package manager | `node --version` → `v24.13.0` | `https://nodejs.org/dist/index.json`, newest with `lts` ≠ false (26.13.0 "Lithium", above 27.0.0-alpha) [V] | — | — |
+
+- **Changed since the design (2026-11-06):** Codex's docs now lead with the standalone installer,
+  not npm, so Codex no longer needs Node.js [V]. OpenCode 2 (`@opencode/cli` 2.2.6,
+  `opencode.ai/v2/install`) is beta and its server API breaks v1 integrations [S:
+  v2.opencode.ai/docs/migrate-v1, third-party]; OpenCode 1 and 2 share the `opencode` command
+  [V docs.opencode.ai] (R-BOOT-03).
+- **WinGet packages present (winget-pkgs, 2026-11-06):** `Anthropic.ClaudeCode` 2.1.317,
+  `OpenAI.Codex` 0.166.0, `Git.Git` 2.56.0.4, `GitHub.cli` 2.103.3, `OpenJS.NodeJS.LTS` 26.13.0 [V].
+
 #### Adjacent tooling
 
 | Tool | URL | What it is | Integration / idea |
@@ -3084,8 +3108,9 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 
 | ID | Idea | Seen in | Fit | Size | Pri | Status |
 |---|---|---|---|---|---|---|
-| R-BOOT-01 | **Bootstrap a new machine from the ptyro binary**: a setup checklist (agents, git, gh, prerequisites like Node.js, their logins), the same any time later, WSL and/or Windows sides; agents and ptyro itself checked daily for new versions, each offered as a one-step update; ptyro downloads, verifies, installs and live-upgrades itself | owner (2026-11-06); vendors' own installers (Claude's native installer, npm, Antigravity's) [V docs, to recheck when built] | BOOT | L | ★★★ | → BOOT (design: docs/superpowers/specs/2026-11-06-bootstrap-agents-design.md) |
+| R-BOOT-01 | **Bootstrap a new machine from the ptyro binary**: a setup checklist (agents, git, gh, prerequisites like Node.js, their logins), the same any time later, WSL and/or Windows sides; agents and ptyro itself checked daily for new versions, each offered as a one-step update; ptyro downloads, verifies, installs and live-upgrades itself | owner (2026-11-06); vendors' own installers (Claude's native installer, Codex's and Antigravity's installers, npm) [V 2026-11-06, BOOT0: segment G18] | BOOT | L | ★★★ | → BOOT (design: docs/superpowers/specs/2026-11-06-bootstrap-agents-design.md) |
 | R-BOOT-02 | **Gemini CLI vs Antigravity:** since 2026-06-18 Google's consumer agent is Antigravity CLI (`agy`); Gemini CLI still serves paid Gemini API keys and some enterprise licences (Google's pages disagree on which) [V 2026-11-06: developers.googleblog.com, geminicli.com]. Setup lists both, Gemini CLI labelled for API-key users; "no agent found" messages name Antigravity for Google | Google | BOOT | S | ★★ | → BOOT |
+| R-BOOT-03 | **OpenCode 2's new server API:** OpenCode 2 (`@opencode/cli`, beta) breaks the v1 server API ptyro's OpenCode adapter speaks (SPEC §8.6), and shares the `opencode` command. BOOT0 installs OpenCode 1 (`opencode-ai`); the adapter needs a v2 driver before setup can offer v2 [S 2026-11-06: v2.opencode.ai/docs/migrate-v1; V: docs.opencode.ai] | anomalyco | BOOT, M4.9 | M | ★★ | candidate (BOOT0 pinned v1) |
 
 ### III.3 Explicitly *not* recommended (with reasons)
 
@@ -3222,6 +3247,12 @@ follow you over SSH, and tmux plugins can't enforce policy. ptyro does all three
 
 ## Changelog
 
+- **2026-11-06 (BOOT0):** Every agent's and tool's install, update, version, newest-version
+  source and login checked against the vendors' docs and installer scripts for the version table:
+  new segment **G18**, facts in SPEC §20.15. Two surprises: Codex now installs with its own
+  standalone installer (no Node.js), and OpenCode 2's server API breaks ptyro's adapter, so the
+  table installs OpenCode 1 (**R-BOOT-03**). Antigravity's and Gemini CLI's logins have no
+  documented status command [U].
 - **2026-11-03:** WIN0.1 and WIN0.4, measured on the owner's Windows 11 machine. The unverified
   finding of 2026-10-31 holds and goes further: WSL stops a distro ~15 s after its last
   `wsl.exe`, systemd services and linger included (microsoft/WSL#13416 confirmed on 2.6.2 [V]);

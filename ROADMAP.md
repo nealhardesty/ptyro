@@ -3229,13 +3229,19 @@ The owner's goal: "just install ptyro from binary, then bootstrap everything els
 machine". The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-design.md`
 (decisions, anti-goals, the builder's open choices); RESEARCH R-BOOT-01, R-BOOT-02.
 
-- [ ] **BOOT0 The version table** **S**. One verified row per agent and tool, and per platform:
+- [x] **BOOT0 The version table** **S**. One verified row per agent and tool, and per platform:
   - the recommended install method and its command, and how to update;
   - how to read the installed version, and where the newest version comes from;
   - prerequisites (Node.js and its minimum version) and the login command.
   Claude Code, Codex, Antigravity, OpenCode and Gemini CLI, plus git, the GitHub CLI and
   Node.js. Each row is dated and checked against the vendor's documentation (RESEARCH
   segment G), and tested without the network (recorded fixtures).
+
+  *Done (2026-11-06):* `crates/ptyro-agents/src/catalog.toml` read by `ptyro_agents::catalog`
+  (SPEC §24.1, facts §20.15); `locate::install_hint` reads it; fixtures in
+  `tests/fixtures/catalog/`, recorded by `make catalog-fixtures`. Found when checking: Codex now
+  installs with its own standalone installer (no Node.js), and OpenCode 2 changed the server API
+  ptyro speaks, so the table installs OpenCode 1. (R-BOOT-01, R-BOOT-03)
 - [ ] **BOOT1 The plan engine and `ptyro setup` / `ptyro install <name>…`** **M**:
   - the checklist's states (missing, installed, outdated, installed another way);
   - prerequisites ticked for what needs them, and admin steps asked for once;
