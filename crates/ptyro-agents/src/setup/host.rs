@@ -567,7 +567,17 @@ pub(super) fn package_version(out: &str, field: &str) -> Option<String> {
 /// above `node_modules`, `%APPDATA%\npm`). `None` for Bun's global folder (`~/.bun/…`, which npm
 /// doesn't manage) or a path not under a prefix.
 pub(super) fn npm_prefix(real: &Path) -> Option<String> {
-    npm_prefix_on(real, cfg!(windows))
+    npm_prefix_on(real, windows_path(real))
+}
+
+/// The path is a Windows one (a drive letter, `C:\…`, or a share, `\\\\host\…`): npm's Windows layout
+/// applies to it, whatever this process runs on (a Linux path in WSL keeps the Unix one).
+fn windows_path(p: &Path) -> bool {
+    let s = p.to_string_lossy();
+    let b = s.as_bytes();
+    (b.len() > 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'\\' | b'/'))
+        || s.starts_with("\\\\")
+        || s.starts_with("//")
 }
 
 /// Another tool's global store holding a node package (`bun`, `mise`'s `npm:` backend, `pnpm`,

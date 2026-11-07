@@ -9940,7 +9940,7 @@ link in `~/.npm-global/bin` or `/usr/local/bin` counts as npm's. `Installed.syst
 folder is neither the user's nor writable by everyone (a system npm prefix,
 `/usr/lib/node_modules`), so removing it needs administrator rights. `Installed.prefix`: npm's
 global prefix the copy is in (the folder above `lib/node_modules`; on Windows above
-`node_modules`, chosen by the platform), `None` for another tool's store (`Installed.store`: Bun's
+`node_modules`, chosen by the path's own shape: a drive letter or share is Windows'), `None` for another tool's store (`Installed.store`: Bun's
 global folder, mise's `npm:` backend, pnpm's, an asdf plugin's), which npm doesn't manage: no move,
 and `doctor` names that tool's command (`mise uninstall npm:@openai/codex`, `bun remove -g …`). A
 Node.js that mise or asdf installed is a real npm prefix and moves as any. A prefix ptyro won't

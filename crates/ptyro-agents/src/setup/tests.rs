@@ -1215,6 +1215,11 @@ fn a_homebrew_keg_is_homebrews_even_with_node_modules_inside_and_npm_has_its_pre
     // Bun's global folder isn't npm's to remove from.
     let bun = Path::new("/home/me/.bun/install/global/node_modules/@openai/codex/bin/codex.js");
     assert_eq!(npm_prefix(bun), None);
+    // The layout follows the path, wherever the tests run: a Windows prefix holds node_modules.
+    let win = Path::new(r"C:\Users\me\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js");
+    assert_eq!(npm_prefix(win).as_deref(), Some(r"C:\Users\me\AppData\Roaming\npm"));
+    let win_lib = Path::new(r"D:\tools\lib\node_modules\@openai\codex\bin\codex.js");
+    assert_eq!(npm_prefix(win_lib).as_deref(), Some(r"D:\tools\lib"));
 }
 
 #[test]
@@ -1232,6 +1237,17 @@ fn no_move_is_offered_without_a_prefix_or_for_someone_elses_homebrew() {
     let none = BTreeSet::new();
     assert!(offer(item, Platform::Linux, &st(Via::Npm, false, None), &none, &|_| true).is_none());
     assert!(offer(item, Platform::Macos, &st(Via::Brew, true, None), &none, &|_| true).is_none());
+    // A backslash is taken as it is inside single quotes, by sh as by PowerShell (a Windows
+    // folder a test's fake machine plans for Linux from).
+    let back = offer(
+        item,
+        Platform::Linux,
+        &st(Via::Npm, false, Some(r"C:\t\npm-prefix")),
+        &none,
+        &|_| true,
+    )
+    .unwrap();
+    assert_eq!(back.uninstall, r"npm uninstall -g --prefix 'C:\t\npm-prefix' @openai/codex");
     let mine = offer(item, Platform::Macos, &st(Via::Brew, false, None), &none, &|_| true).unwrap();
     assert_eq!(mine.uninstall, "brew uninstall --cask codex");
 }

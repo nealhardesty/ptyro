@@ -553,10 +553,11 @@ pub fn expand_place_with(
     (!out.contains('%')).then_some(out)
 }
 
-/// A path as one word for the platform's shell (`sh` or PowerShell): single quotes; `None` for
-/// one that can't be (a quote in it).
-fn quote(path: &str, platform: Platform) -> Option<String> {
-    if path.contains('\'') || (!platform.is_windows() && path.contains('\\')) {
+/// A path as one word for the platform's shell (`sh` or PowerShell): single quotes, inside which
+/// both take every other character (a `\\` too) as it is; `None` for one that can't be (a quote
+/// in it).
+fn quote(path: &str, _platform: Platform) -> Option<String> {
+    if path.contains('\'') {
         return None;
     }
     Some(format!("'{path}'"))
