@@ -516,6 +516,10 @@ pub enum Pending {
     ChatPicked,
     /// What quick-new would start in this workspace (UX3.2), for its label.
     Again(Option<String>),
+    /// The daemon's agents out of date (BOOT5); `note`: the start-up note's too.
+    Updates {
+        note: bool,
+    },
     /// Wizard title: the profile a spawn would get and why.
     Resolved,
     /// Show the trust dialog for these scripts, then do `then`.
@@ -1228,6 +1232,7 @@ impl App {
                     | Pending::Registry
                     | Pending::Resolved
                     | Pending::PadItems { .. }
+                    | Pending::Updates { .. }
             ) {
                 let why = "not connected: waiting for the daemon to come back";
                 let _ = self.tx.send(AppMsg::Reply(
@@ -2021,6 +2026,11 @@ impl App {
                 r,
             ) => self.pad_reply(p, r),
             (Pending::List, Ok(Reply::Sessions { sessions })) => self.got_list(sessions),
+            (Pending::Updates { note: noting }, Ok(Reply::Updates { offered, note })) => {
+                self.got_updates(offered, note, noting)
+            }
+            // An older daemon (before protocol 1.35) can't say: nothing to offer.
+            (Pending::Updates { .. }, _) => {}
             (Pending::Chats, Ok(Reply::Chats { chats })) => self.got_chats(chats),
             (Pending::ArchivedChats, Ok(Reply::Chats { chats })) => self.got_archived(chats),
             (Pending::ChatMade { token, .. }, Ok(Reply::Chat { info })) => {
@@ -3346,6 +3356,9 @@ impl App {
             }
             "first.run" => self.open_first_run(),
             "app.setup" => self.open_setup(None, None),
+            "app.update" => self.update_agents(
+                cmd.arg.as_deref().unwrap_or("").split_whitespace().map(str::to_owned).collect(),
+            ),
             "toast.act" => match self.toast.take().and_then(|t| t.offer) {
                 Some(Offer { then: Then::Run(cmd), .. }) => self.run(&cmd),
                 Some(Offer { then: Then::Send(req, done), .. }) => {
@@ -8802,6 +8815,88 @@ mod tests {
             "Node.js comes with Gemini CLI, as the CLI plans it"
         );
         assert!(Config::path(&app.paths).exists(), "the first run's config is written too");
+    }
+
+    /// BOOT5: the daemon's agents out of date (`Request::Updates`) are the badge's findings and
+    /// the start-up note, with the key that updates them; the fix runs `ptyro update` in a split
+    /// where the daemon is, one at a time like the checklist's installs; a daemon on another
+    /// computer is named.
+    #[tokio::test]
+    async fn the_daemons_agents_out_of_date_are_noted_and_fixed_in_a_split() {
+        use ptyro_agents::updates;
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().to_path_buf();
+        let paths = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| home.clone())).unwrap();
+        let connect = ConnectOptions::new(paths.clone(), ptyro_protocol::ClientKind::Tui);
+        let area = Rect::new(0, 0, 100, 30);
+        let mut app =
+            App::new(Options::default(), connect, paths.clone(), Config::default(), false, area);
+        let codex = updates::Outdated {
+            id: "codex".into(),
+            name: "Codex".into(),
+            program: "codex".into(),
+            version: "0.162.1".into(),
+            latest: "0.170.0".into(),
+            command: Some("curl -fsSL https://chatgpt.com/codex/install.sh | sh".into()),
+            via: None,
+            admin: false,
+            doc: String::new(),
+        };
+        // The badge's own ask: findings, no note.
+        app.got_updates(vec![codex.clone()], Vec::new(), false);
+        assert!(app.toast.is_none());
+        // The start-up note's: the line, with the key.
+        app.got_updates(vec![codex.clone()], vec![codex.clone()], true);
+        let t = app.toast.take().expect("the note");
+        assert_eq!(t.text, "Codex 0.170.0 is out (you have 0.162.1) · C-q u updates it");
+        // The doctor's run (this computer) keeps the daemon's finding, never its own `updates`.
+        let local = crate::health::Check {
+            section: "updates".into(),
+            name: "claude".into(),
+            level: "warn".into(),
+            text: "Claude Code 2.1.400 is out (you have 2.1.300): `ptyro update claude` updates it"
+                .into(),
+        };
+        let typo = crate::health::Check {
+            section: "updates".into(),
+            name: "ignore".into(),
+            level: "warn".into(),
+            text: "updates.ignore holds \"codx\", which isn't an agent ptyro updates".into(),
+        };
+        app.got_health(vec![local, typo]);
+        assert!(
+            app.health.findings.iter().any(|f| f.what == "updates ignore"),
+            "the local doctor's other updates warnings stay"
+        );
+        app.got_updates(Vec::new(), Vec::new(), false);
+        assert!(
+            app.health.findings.iter().any(|f| f.what == "updates ignore"),
+            "and stay when the daemon's answer comes"
+        );
+        app.got_updates(vec![codex.clone()], Vec::new(), false);
+        let ups: Vec<&crate::health::Finding> =
+            app.health.findings.iter().filter(|f| crate::health::agent_update(f)).collect();
+        assert_eq!(ups.len(), 1, "only the daemon's");
+        assert_eq!(ups[0].fix, Some(crate::health::Fix::Update(vec!["codex".into()])));
+        assert!(ups[0].text.starts_with("Codex 0.170.0 is out"), "{}", ups[0].text);
+        let i = app.health.findings.iter().position(|f| f.what == "updates codex").unwrap();
+        app.fix(i);
+        let words = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(app.last_cli, Some(words(&["update", "codex"])));
+        assert!(app.setup_run.is_some(), "tracked like the checklist's installs");
+        // One at a time: a second update shows the running one, in an update's words.
+        app.last_cli = None;
+        app.update_agents(Vec::new());
+        assert!(app.last_cli.is_none());
+        let said = &app.toast.as_ref().unwrap().text;
+        assert!(said.contains("an update is still running in ptyro-update"), "{said}");
+        // A daemon on another computer: its agents, named so.
+        app.setup_run = None;
+        app.connect.remote = Some("ssh://me@box".into());
+        app.got_updates(vec![codex.clone()], vec![codex], true);
+        let t = app.toast.take().unwrap();
+        assert!(t.text.starts_with("on box: Codex 0.170.0 is out"), "{}", t.text);
+        assert!(app.health.updates[0].text.starts_with("on box: "));
     }
 
     /// BOOT2: while the checklist's install runs, `U` (or a health fix, or `first.run`) never

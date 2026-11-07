@@ -79,6 +79,9 @@ pub trait Host: Sync {
     /// Run a login in the person's terminal (stdin, stdout and stderr its own) to its end.
     /// `Ok(None)`: it exited 0; `Ok(Some(how))`: it ended otherwise; `Err`: it didn't start.
     fn interact(&self, argv: &[String]) -> Result<Option<String>, String>;
+    /// A newest-version source's reply (BOOT5), within seconds: `Err` when it can't be had
+    /// (offline, a proxy, the vendor down), which a version check takes quietly.
+    fn latest_reply(&self, url: &str) -> Result<String, String>;
 }
 
 /// The machine for this process: the fake a test names (`PTYRO_TEST_SETUP`, debug builds), else
@@ -436,9 +439,23 @@ impl Host for RealHost {
             None => Some("it was stopped".into()),
         })
     }
+
+    fn latest_reply(&self, url: &str) -> Result<String, String> {
+        self.reply(url)
+    }
 }
 
 impl RealHost {
+    /// [`Host::latest_reply`]: curl, 5 s to connect (a dead network fails fast), 10 s in all.
+    fn reply(&self, url: &str) -> Result<String, String> {
+        let words = argv(&["curl", "-fsSL", "--connect-timeout", "5", "--max-time", "10", url]);
+        match capture(&words, &self.env(), Duration::from_secs(15)) {
+            Some((true, body)) => Ok(body),
+            Some((false, err)) => Err(format!("couldn't reach {url}: {}", err.trim())),
+            None => Err(format!("couldn't reach {url}: curl didn't run or took too long")),
+        }
+    }
+
     /// `argv` with its program found as the survey finds it (npm's, nvm's, the vendors' folders).
     fn resolve(&self, argv: &[String]) -> Option<Vec<String>> {
         let (prog, rest) = argv.split_first()?;

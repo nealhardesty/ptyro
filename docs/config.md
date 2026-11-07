@@ -129,6 +129,10 @@ enabled = true                            # a `≈` line after each agent turn, 
 enabled = true                            # record every session's output (per agent: record = false)
 max_bytes = "16MiB"                       # per session, as a ring
 
+[updates]
+check = "daily"                           # look for newer agent versions once a day and offer them (never installed without you); "off" never looks
+# ignore = ["codex@0.170.0"]              # updates not to offer: an agent ("codex") or one version of it
+
 [client]
 # default_remote = "wsl://Ubuntu"         # where this ptyro's daemon is, when --remote / PTYRO_REMOTE don't say (wsl://, wsl://<distro>, an ssh host); on Windows asked the first time
 
@@ -291,7 +295,7 @@ ptyro follows the XDG directories:
 |---|---|
 | `~/.config/ptyro/` | `config.toml`, `recipes/`, `changesets/` (templates) |
 | `~/.local/share/ptyro/` | `ptyro.db`, `worktrees/`, `sessions/<id>/pty.log` (recordings), `scratchpad.md` and `scratchpad.history/` |
-| `~/.local/state/ptyro/` | logs, `crashes/` |
+| `~/.local/state/ptyro/` | logs, `crashes/`, `versions.json` (the agents' newest versions, as last looked up) |
 | `$XDG_RUNTIME_DIR/ptyro/` | the daemon's socket (without `XDG_RUNTIME_DIR`, as on macOS: `$TMPDIR/ptyro-<uid>/`; a path too long for a socket falls back to `/tmp/ptyro-<uid>-<hash>/`) |
 
 Set `PTYRO_HOME` to keep everything under one directory instead. `make sandbox` does exactly that.

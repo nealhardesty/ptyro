@@ -7,11 +7,12 @@
 use std::collections::BTreeMap;
 use std::io::{BufRead, IsTerminal, Write};
 
-use ptyro_agents::catalog::{Kind, Platform};
+use ptyro_agents::catalog::{self, Kind, Platform};
 use ptyro_agents::setup::checklist::{self, Picks, Sides, cell, here_already, mark, rows};
 use ptyro_agents::setup::{
     self, Admin, Entry, Event, Plan, Report, Side, Sided, State, Where, WslStatus,
 };
+use ptyro_agents::updates::{self, Outdated};
 use ptyro_client::wsl_setup;
 use ptyro_core::paths::Paths;
 use ptyro_core::{Error, ErrorCode};
@@ -101,7 +102,8 @@ async fn look(
         eprintln!("Looking at what's installed…");
     }
     let host = setup::host(paths);
-    let here = setup::survey(&*host, &BTreeMap::new());
+    // The remembered newest versions (BOOT5): an outdated agent shows so, and can be ticked.
+    let here = setup::survey(&*host, &known(paths));
     let platform = here.platform;
     let place = place_of(given, platform, "setup")?;
     if !platform.is_windows() {
@@ -185,7 +187,7 @@ fn ids_of(names: &[String], kind: Kind, flag: &str) -> Result<Vec<String>, Error
 pub async fn setup(ctx: &Ctx, a: SetupArgs) -> Result<i32, Error> {
     if a.survey {
         let host = setup::host(&ctx.paths);
-        let survey = setup::survey(&*host, &BTreeMap::new());
+        let survey = setup::survey(&*host, &known(&ctx.paths));
         let text = serde_json::to_string(&survey).map_err(|e| Error::internal(e.to_string()))?;
         println!("{text}");
         return Ok(0);
@@ -279,6 +281,348 @@ pub async fn install(ctx: &Ctx, a: InstallArgs) -> Result<i32, Error> {
     go(ctx, &*host, &sides, &plan, admin, a.json, quiet, lock, who)
 }
 
+/// The remembered newest versions to plan with (BOOT5, `updates::known`): less what
+/// `updates.ignore` skips; none with `updates.check = "off"`.
+fn known(paths: &Paths) -> BTreeMap<String, String> {
+    updates::known(&paths.state, &updates_config(paths))
+}
+
+fn updates_config(paths: &Paths) -> ptyro_core::config::Updates {
+    ptyro_core::config::Config::load(&ptyro_core::config::Config::path(paths))
+        .map(|c| c.updates)
+        .unwrap_or_default()
+}
+
+pub struct UpdateArgs {
+    pub names: Vec<String>,
+    pub check: bool,
+    pub yes: bool,
+    pub json: bool,
+    pub tty: bool,
+}
+
+/// `ptyro update [NAME…] [--check]` (BOOT5, SPEC §24.7): look for newer versions afresh, then
+/// update the agents that have one (those named, or every one `updates.ignore` doesn't skip),
+/// each through the plan engine with the method it was installed by, under the machine's setup
+/// lock, after a yes. Sessions running an updated agent keep the old version until they restart,
+/// and are named; on Windows, an agent that can't be replaced while it runs is offered a retry.
+pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
+    let cfg = updates_config(&ctx.paths);
+    let mut ids: Vec<String> = Vec::new();
+    for n in a.names.iter().flat_map(|n| n.split([',', ' '])).filter(|n| !n.is_empty()) {
+        let item = setup::resolve(n).map_err(|e| Error::new(ErrorCode::NotFound, e))?;
+        if item.kind != Kind::Agent {
+            return Err(Error::invalid(format!(
+                "ptyro updates the agents; {} updates the way you installed it (its package manager), as before",
+                item.name
+            )));
+        }
+        if !ids.contains(&item.id) {
+            ids.push(item.id.clone());
+        }
+    }
+    let state = ctx.paths.state.clone();
+    if a.check {
+        if !a.json {
+            eprintln!("Looking for newer versions…");
+        }
+        let host = setup::host(&ctx.paths);
+        // Beside any install: one running now leaves what was remembered (said so), and one that
+        // starts while this looks keeps what it finds (`updates::look_beside`).
+        let busy = setup::lock::Lock::held_by(&state);
+        let (v, survey) = updates::look_beside(&*host, &state, updates::now(), true);
+        if let Some(by) = busy.filter(|_| !a.json) {
+            eprintln!(
+                "Setup is running (from {by}): this is what was found before; look again once it's done."
+            );
+        }
+        if a.json {
+            let out: Vec<&Outdated> =
+                v.outdated.iter().filter(|o| ids.is_empty() || ids.contains(&o.id)).collect();
+            let doc = serde_json::json!({
+                "outdated": out,
+                "ignored": out.iter().filter(|o| updates::ignored(&cfg.ignore, o)).map(|o| &o.id).collect::<Vec<_>>(),
+                "failed": v.failed,
+                "checked": v.checked,
+            });
+            println!("{doc}");
+            return Ok(0);
+        }
+        say_where_each_stands(&v, &survey, &cfg, &ids);
+        return Ok(0);
+    }
+    if !a.yes && !interactive(a.tty) {
+        return Err(Error::invalid(
+            "`ptyro update` asks before it updates: run it in a terminal, or pass --yes",
+        ));
+    }
+    // One install or update at a time on this machine, whoever starts it: said at once when one
+    // runs, before anything is looked up.
+    if let Some(by) = setup::lock::Lock::held_by(&state) {
+        return Err(Error::conflict(setup::lock::busy(&by)));
+    }
+    if !a.json {
+        eprintln!("Looking for newer versions…");
+    }
+    let host = setup::host(&ctx.paths);
+    // Looked up before the lock is taken: a slow network never holds it.
+    let looked = updates::lookup(&*host);
+    let lock = take_lock(ctx, "`ptyro update`")?;
+    let since = updates::generation(&state);
+    let (v, survey) = updates::remember(&*host, &state, updates::now(), since, Some(looked), true);
+    let todo: Vec<Outdated> = v
+        .outdated
+        .iter()
+        .filter(|o| {
+            if ids.is_empty() { !updates::ignored(&cfg.ignore, o) } else { ids.contains(&o.id) }
+        })
+        .cloned()
+        .collect();
+    if !a.json {
+        for id in ids.iter().filter(|id| !todo.iter().any(|o| &o.id == *id)) {
+            eprintln!("{}", standing(id, &v, &survey));
+        }
+    }
+    if todo.is_empty() {
+        if ids.is_empty() && !a.json {
+            say_where_each_stands(&v, &survey, &cfg, &[]);
+        }
+        return Ok(0);
+    }
+    let todo_ids: Vec<String> = todo.iter().map(|o| o.id.clone()).collect();
+    let running = sessions_running(ctx, &todo_ids).await;
+    if !a.yes {
+        eprintln!();
+        for o in &todo {
+            let how = o.command.as_deref().map(|c| format!(": `{c}`")).unwrap_or_default();
+            let admin = if o.admin { " (as administrator)" } else { "" };
+            eprintln!("  {} {} → {}{how}{admin}", o.name, o.version, o.latest);
+            if let Some(names) = running.get(&o.id) {
+                eprintln!(
+                    "    {} {} {} until restarted: {}",
+                    still_run(names.len()),
+                    o.name,
+                    o.version,
+                    names.join(", ")
+                );
+            }
+        }
+        if !confirm("Update? [Y/n] ") {
+            eprintln!("Nothing updated.");
+            return Ok(0);
+        }
+    }
+    let admin = if a.yes { Admin::Silent } else { Admin::Ask };
+    let windows = survey.platform.is_windows();
+    let names: BTreeMap<String, String> =
+        todo.iter().map(|o| (o.id.clone(), o.name.clone())).collect();
+    let name = |id: &str| names.get(id).cloned().unwrap_or_else(|| id.to_owned());
+    let mut plan = setup::plan(&survey, &todo_ids);
+    let mut done: Vec<String> = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
+    loop {
+        let mut busy: Vec<String> = Vec::new();
+        let mut on = |ev: Event| {
+            if let Event::Failed { id, in_use: true, .. } = &ev {
+                busy.push(id.clone());
+            }
+            if a.json {
+                if let Ok(line) = serde_json::to_string(&ev) {
+                    println!("{line}");
+                }
+                return;
+            }
+            match &ev {
+                Event::Done { id, version } => eprintln!(
+                    "✓ {} {}",
+                    name(id),
+                    version
+                        .as_deref()
+                        .unwrap_or("(updated; a new terminal may be needed to find it)")
+                ),
+                Event::Finished { .. } | Event::Logins { .. } => {}
+                _ => print_event(&ev, &name, windows),
+            }
+        };
+        let report = setup::run(&plan, &*host, admin, &mut on);
+        done.extend(report.done.iter().cloned());
+        failed.retain(|f| !report.done.contains(f));
+        for f in report.failed.iter().chain(&report.skipped).chain(&report.blocked) {
+            if !failed.contains(f) {
+                failed.push(f.clone());
+            }
+        }
+        // Windows won't replace a program while it runs: say which sessions run it, and
+        // offer to try again once they're closed (a person at the terminal only).
+        if !(windows && admin == Admin::Ask && !a.json && !busy.is_empty()) {
+            break;
+        }
+        let now_running = sessions_running(ctx, &busy).await;
+        for id in &busy {
+            let who = now_running
+                .get(id)
+                .map(|n| format!(" ({}: {})", sessions(n.len()), n.join(", ")))
+                .unwrap_or_default();
+            eprintln!(
+                "\n{} is still running{who}, and Windows won't replace a program while it runs.",
+                name(id)
+            );
+        }
+        eprintln!("End those sessions (or quit it wherever else it runs), then try again here.");
+        if !confirm("Try again now? [Y/n] ") {
+            break;
+        }
+        // Looked at again: one that updated itself meanwhile (Claude Code and Antigravity do)
+        // is done, not a failure.
+        let fresh = setup::survey(&*host, &v.latest);
+        let mut still: Vec<String> = Vec::new();
+        for id in busy {
+            let old = matches!(
+                fresh.states.get(&id),
+                Some(State::Outdated { .. } | State::Other { latest: Some(_), .. })
+            );
+            if old {
+                still.push(id);
+            } else {
+                eprintln!("✓ {} is up to date now", name(&id));
+                failed.retain(|f| f != &id);
+                done.push(id);
+            }
+        }
+        if still.is_empty() {
+            break;
+        }
+        plan = setup::plan(&fresh, &still);
+    }
+    let after = updates::refresh(&*host, &state, updates::now());
+    drop(lock);
+    if !a.json {
+        for id in &done {
+            if let (Some(o), Some(n)) = (todo.iter().find(|o| &o.id == id), running.get(id)) {
+                eprintln!(
+                    "{} {} {} until restarted: {}",
+                    still_run(n.len()),
+                    o.name,
+                    o.version,
+                    n.join(", ")
+                );
+            }
+        }
+        let mut parts = vec![format!("{} updated", done.len())];
+        if !failed.is_empty() {
+            parts.push(format!("{} not updated", failed.len()));
+        }
+        let tail = if failed.is_empty() { "." } else { ": each says its fix above." };
+        eprintln!("\n{}{tail}", parts.join(", "));
+        let left: Vec<&Outdated> = updates::offered(&after, &cfg)
+            .into_iter()
+            .filter(|o| !todo.iter().any(|t| t.id == o.id))
+            .collect();
+        if !left.is_empty() {
+            eprintln!(
+                "Also out of date: {}",
+                left.iter().map(|o| o.line()).collect::<Vec<_>>().join("; ")
+            );
+        }
+    }
+    Ok(if failed.is_empty() { 0 } else { 1 })
+}
+
+/// `1 session`, `2 sessions`.
+fn sessions(n: usize) -> String {
+    if n == 1 { "1 session".into() } else { format!("{n} sessions") }
+}
+
+/// `1 session still runs`, `2 sessions still run`.
+fn still_run(n: usize) -> String {
+    if n == 1 { "1 session still runs".into() } else { format!("{n} sessions still run") }
+}
+
+/// A named agent with nothing to update: the newest already, not installed, or not known.
+fn standing(id: &str, v: &updates::Versions, survey: &setup::Survey) -> String {
+    let name = catalog::item(id).map_or(id, |i| i.name.as_str());
+    let program = catalog::item(id).map_or(id, |i| i.program.as_str());
+    match (survey.states.get(id), v.latest.get(id)) {
+        (None | Some(State::Missing), _) => {
+            format!("{name} isn't installed: `ptyro install {program}` installs it")
+        }
+        (Some(s), None) => format!(
+            "? {name} {}: its newest version couldn't be looked up ({})",
+            s.version().unwrap_or("(version unknown)"),
+            v.failed.get(id).map_or("no source", String::as_str)
+        ),
+        (Some(s), Some(l)) => {
+            format!("✓ {name} {} is the newest ({l})", s.version().unwrap_or("?"))
+        }
+    }
+}
+
+/// `--check`, or nothing to update: where each installed agent stands.
+fn say_where_each_stands(
+    v: &updates::Versions,
+    survey: &setup::Survey,
+    cfg: &ptyro_core::config::Updates,
+    ids: &[String],
+) {
+    let installed: Vec<&catalog::Item> = catalog::items()
+        .iter()
+        .filter(|i| i.kind == Kind::Agent && (ids.is_empty() || ids.contains(&i.id)))
+        .filter(|i| survey.states.get(&i.id).is_some_and(State::present))
+        .collect();
+    if installed.is_empty() {
+        eprintln!("No agent is installed: `ptyro setup` installs them.");
+        return;
+    }
+    let mut any = false;
+    for i in installed {
+        match v.outdated.iter().find(|o| o.id == i.id) {
+            Some(o) if updates::ignored(&cfg.ignore, o) => {
+                eprintln!("· {}: skipped (updates.ignore)", o.line())
+            }
+            Some(o) => {
+                any = true;
+                eprintln!("! {}", o.finding());
+            }
+            None => eprintln!("{}", standing(&i.id, v, survey)),
+        }
+    }
+    if !v.failed.is_empty() && v.failed.len() == updates::sources().len() {
+        eprintln!("Couldn't look for newer versions (offline?): ptyro looks again tomorrow.");
+    }
+    if any {
+        eprintln!("`ptyro update` updates them all.");
+    }
+}
+
+/// The live sessions on this computer's daemon running each agent (by id): their names. None
+/// when no daemon runs.
+async fn sessions_running(ctx: &Ctx, ids: &[String]) -> BTreeMap<String, Vec<String>> {
+    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let Ok(c) = ctx.connect(false).await else { return out };
+    let Ok(ptyro_protocol::Reply::Sessions { sessions }) =
+        c.request(ptyro_protocol::Request::List).await
+    else {
+        return out;
+    };
+    for s in sessions.iter().filter(|s| s.machine.is_none() && s.state.is_live()) {
+        let prog = s
+            .argv
+            .first()
+            .map(|p| {
+                let base = p.rsplit(['/', '\\']).next().unwrap_or(p);
+                base.strip_suffix(".exe").unwrap_or(base).to_owned()
+            })
+            .unwrap_or_default();
+        for id in ids {
+            let Some(item) = catalog::item(id) else { continue };
+            if s.agent.as_deref() == Some(id.as_str()) || prog == item.program {
+                out.entry(id.clone()).or_default().push(s.name.clone());
+            }
+        }
+    }
+    out
+}
+
 /// Run the plan with live output, side by side (this computer first, then WSL's), then what's
 /// next. `quiet`: run for Windows' ptyro, which says the rest itself. `lock`: the machine's
 /// setup lock, held since before the questions; `None`, it is taken here for `who`.
@@ -370,6 +714,11 @@ fn go(
         total.merge(&report);
         reports.push((side, report));
     }
+    if !total.done.is_empty() {
+        // What is out of date changed (BOOT5): the badge and the start-up note follow. Under
+        // the lock still, so a look beside it can't write over this.
+        updates::refresh(host, &ctx.paths.state, updates::now());
+    }
     drop(lock);
     if tools {
         offer_path(&ctx.paths, admin != Admin::Ask);
@@ -442,7 +791,7 @@ fn print_event(ev: &Event, name: &dyn Fn(&str) -> String, windows: bool) {
         Event::Done { id, version: None } => {
             eprintln!("✓ {} (installed; a new terminal may be needed to find it)", name(id))
         }
-        Event::Failed { id, error, fix } => {
+        Event::Failed { id, error, fix, .. } => {
             eprintln!("✗ {}: {error}", name(id));
             eprintln!("  fix: {fix}");
         }

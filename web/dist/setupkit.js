@@ -91,6 +91,9 @@ export class SetupLog {
     /// Each side's report, as its `finished` said, with the side.
     reports = [];
     report = null;
+    /// Updates that failed because the program is running (BOOT5, `failed.in_use`): the page offers
+    /// to try each again once its sessions end.
+    retry = [];
     /// Events from before this page's own run said its id.
     early = [];
     /// Events of the followed run that came after a gap in `seq`: held until the plan's `running`
@@ -101,7 +104,7 @@ export class SetupLog {
     stray = { run: "", events: [] };
     get running() { return this.id !== "" && !this.report && !this.ended; }
     reset() {
-        Object.assign(this, { id: "", starting: false, theirs: false, ended: false, sides: 1, seq: 0, plan: null, lines: [], reports: [], report: null, early: [], held: [] });
+        Object.assign(this, { id: "", starting: false, theirs: false, ended: false, sides: 1, seq: 0, plan: null, lines: [], reports: [], report: null, retry: [], early: [], held: [] });
     }
     line(t) { this.lines.push(t); if (this.lines.length > 400)
         this.lines.shift(); }
@@ -206,8 +209,11 @@ export class SetupLog {
             this.line(`  │ ${ev.text}`);
         else if (ev.event === "done")
             this.line(`✓ ${at}${ev.id}${ev.version ? " " + ev.version : ""}`);
-        else if (ev.event === "failed")
+        else if (ev.event === "failed") {
             this.line(`✗ ${at}${ev.id}: ${ev.error}\n  fix: ${ev.fix}`);
+            if (ev.in_use)
+                this.retry.push({ id: ev.id, side: e.side ?? "local" });
+        }
         else if (ev.event === "skipped" && left(ev.id))
             this.line(`– ${at}${ev.id}: left for the computer: ${ev.fix}`);
         else if (ev.event === "skipped")
@@ -234,7 +240,12 @@ export class SetupLog {
         const left = leftForComputer(this.plan);
         const leftOn = (side, id) => left.find((e) => e.id === id && (e.side ?? "local") === side);
         const kept = this.reports.flatMap(({ side, report }) => (report.skipped ?? []).map((id) => leftOn(side, id)).filter(Boolean));
-        const parts = [`${r.done.length} installed`];
+        // An outdated agent ticked (BOOT5) runs its update: said as updated.
+        const updated = this.reports.flatMap(({ side, report }) => (report.done ?? []).filter((id) => (this.plan?.entries ?? []).some((e) => e.id === id && (e.side ?? "local") === side && e.action?.update)));
+        const installed = r.done.length - updated.length;
+        const parts = installed || !updated.length ? [`${installed} installed`] : [];
+        if (updated.length)
+            parts.push(`${updated.length} updated`);
         if (r.failed.length)
             parts.push(`${r.failed.length} failed`);
         const other = r.skipped.length - kept.length;
@@ -251,4 +262,25 @@ export class SetupLog {
         }
         return text;
     }
+}
+export function updateOffer(c) {
+    const d = c.data;
+    if (c.section !== "updates" || c.level !== "warn" || !d?.id || !d.program)
+        return null;
+    return { id: d.id, program: d.program, name: d.name ?? d.id, latest: d.latest, version: d.version, command: d.command ?? null, admin: !!d.admin };
+}
+/// The live sessions here running an agent (`id`, the engine's: `claude`, `antigravity`): an
+/// update leaves them on the old version until they restart, so the page names them.
+export function runningAgent(sessions, id) {
+    const out = [];
+    for (const s of sessions)
+        if (!s.machine && s.state.t === "running" && (s.agent === id || s.inner_agent === id))
+            out.push(s.name);
+    return out;
+}
+/// The Try again of an update refused because the agent runs (BOOT5): its label, and what to run
+/// (`SetupRun`'s picks for the daemon's side, or WSL's `wsl_picks` for one on WSL's side).
+export function retryOf(r, name) {
+    const wsl = r.side === "wsl";
+    return { label: `Try updating ${name} again`, picks: wsl ? [] : [r.id], wslPicks: wsl ? [r.id] : null };
 }

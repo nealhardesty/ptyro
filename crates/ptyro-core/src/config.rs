@@ -594,6 +594,47 @@ pub struct Config {
     pub scratchpad: Scratchpad,
     pub chat: Chat,
     pub client: Client,
+    pub updates: Updates,
+}
+
+/// Newer versions of your agents (BOOT5, SPEC §24.7): looked for at most once a day, offered,
+/// never installed without you.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Updates {
+    /// `daily`: the daemon looks for newer versions once a day (`doctor` looks afresh); `off`:
+    /// nothing is fetched, and nothing is offered.
+    pub check: UpdateCheck,
+    /// Updates not to offer: an agent (`codex`, every version) or one version (`codex@0.170.0`).
+    pub ignore: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateCheck {
+    #[default]
+    Daily,
+    Off,
+}
+
+impl Updates {
+    fn validate(&self) -> Result<(), String> {
+        for i in &self.ignore {
+            let (name, version) = match i.split_once('@') {
+                Some((n, v)) => (n, Some(v)),
+                None => (i.as_str(), None),
+            };
+            if name.trim().is_empty()
+                || i.contains(char::is_whitespace)
+                || version.is_some_and(|v| v.trim().is_empty())
+            {
+                return Err(format!(
+                    "updates.ignore: {i:?} (an agent, like \"codex\", or one version of it, like \"codex@0.170.0\")"
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// This ptyro as a client (WIN3): where its daemon is when none runs on this computer.
@@ -1726,6 +1767,7 @@ impl Config {
         self.scratchpad.validate()?;
         self.client.validate()?;
         self.chat.validate()?;
+        self.updates.validate()?;
         parse_duration(&self.shell.notify_after).map_err(|e| format!("shell.notify_after: {e}"))?;
         if self.ui.prefix.keys().is_empty() {
             return Err("ui.prefix: needs at least one key".into());

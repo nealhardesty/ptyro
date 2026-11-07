@@ -241,6 +241,10 @@ pub const ACTIONS: &[ActionSpec] = &[
     ),
     a("app.install", "Install an agent or tool by name, with what it needs first, in a split"),
     a(
+        "app.update",
+        "Update your agents that have a newer version out (looked for once a day), in a split: it shows each update's command and asks first",
+    ),
+    a(
         "app.login",
         "Log in to the agents and the GitHub CLI, one account each: each tool's own sign-in, in a split",
     ),

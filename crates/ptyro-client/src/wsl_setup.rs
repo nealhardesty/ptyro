@@ -248,6 +248,7 @@ pub fn run(distro: &str, plan: &Plan, admin: Admin, on: &mut dyn FnMut(Event)) -
                 id: e.id.clone(),
                 error,
                 fix: format!("run it there to see why: `{shown}`"),
+                in_use: false,
             },
             &mut seen,
             &mut None,

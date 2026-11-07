@@ -460,6 +460,7 @@ async fn serve(
     daemon.start_pr_poller();
     daemon.start_review_ticks();
     daemon.start_archive_purge();
+    daemon.start_updates();
     if let Some(store) = &daemon.store {
         match store.close_orphans(daemon.run_id.clone()).await {
             Ok(n) if n > 0 => {

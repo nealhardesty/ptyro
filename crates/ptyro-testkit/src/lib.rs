@@ -103,6 +103,10 @@ impl TempDaemon {
             ("PTYRO_BIN".into(), self.bin.display().to_string()),
             ("PTYRO_SOCKET".into(), self.paths.socket.display().to_string()),
             ("PTYRO_ALLOW_NESTED".into(), "1".into()),
+            (
+                "PTYRO_TEST_LATEST".into(),
+                self.home.path().join("no-registry").display().to_string(),
+            ),
         ]
     }
 
@@ -235,6 +239,9 @@ fn isolate(cmd: &mut Command, home: &Path, bin: &Path) {
         cmd.env_remove(k);
     }
     cmd.env("PTYRO_HOME", home).env("PTYRO_BIN", bin);
+    // The agents' newest versions (BOOT5) come from a test registry, here an empty one: a
+    // `doctor` or the daemon's daily look never reaches the network from a test.
+    cmd.env("PTYRO_TEST_LATEST", home.join("no-registry"));
     // Inside WSL a daemon holds the distro open with a wsl.exe of its own (SPEC §20.10): test
     // daemons don't, unless a test asks (`start_with_env(…, &[("PTYRO_WSL_HOLD", "1")])`).
     cmd.env("PTYRO_WSL_HOLD", "0");

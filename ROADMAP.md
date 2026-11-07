@@ -3303,13 +3303,28 @@ machine". The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-desi
   Antigravity and Gemini CLI sign in when they start. Tested through the fake machine (`ptyro
   fake-installer login`, `tests/boot4.rs`). Login sessions are never recorded (protocol 1.33,
   `SpawnSpec.unrecorded`).
-- [ ] **BOOT5 Out of date, offered** **M**:
+- [x] **BOOT5 Out of date, offered** **M**:
   - agents and ptyro, checked at most once a day (remembered in `<state>/versions.json`), and
     afresh by `doctor`;
   - the finding, with its one-step update and the command, at start-up (once per new
     version), in the health badge, the web's Health page and `doctor`;
   - `updates.check` and `updates.ignore` in the settings schema and both settings screens;
   - offline is quiet.
+
+  *Done (2026-11-07):* `ptyro_agents::updates` (the agents' newest versions through the table's
+  sources, remembered in `<state>/versions.json` under its own lock; a refresh without the
+  network between looks and after every install). The daemon looks once a day in the background;
+  `ptyro doctor` and `ptyro update` look afresh; start-up never touches the network (the daemon answers from what it remembered). The finding
+  ("Codex 0.170.0 is out (you have 0.162.1): `ptyro update codex` updates it (it runs …)") in
+  the TUI's start-up note (once per new version, `C-q u`), the health badge (⏎: `ptyro update` in
+  a split), the web's Health page (Update, Look for newer versions now) and `doctor`. `ptyro
+  update [NAME…] [--check]`: under the machine's setup lock, after a yes, each agent the way it
+  was installed (npm's own for an npm install), naming the sessions that keep the old version;
+  Windows' refusal to replace a running program offered a retry. Settings → Updates:
+  `updates.check` (`daily`/`off`), `updates.ignore` (`codex`, `codex@0.170.0`). ptyro itself is
+  BOOT6's row. Protocol 1.35 (SPEC §24.7). Tested with a fixture registry (`PTYRO_TEST_LATEST`)
+  and a clock knob (`PTYRO_TEST_NOW`): `tests/boot5.rs`, `setup/tests.rs`, the TUI's, `web/test/setup.mjs`
+  and a browser scenario in `make web-e2e`.
 - [ ] **BOOT6 ptyro updates itself** **M**: the newer release downloaded and verified
   (`SHA256SUMS`, signed provenance), then offered: install, and `daemon upgrade` live. A
   package-managed ptyro (Homebrew) is updated through that manager. On Windows with WSL's

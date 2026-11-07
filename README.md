@@ -213,6 +213,48 @@ ptyro login --check                           # where each login stands, changin
   personal), make a profile and log it in: `ptyro profile new work`, then
   `ptyro profile login work claude`. Each profile keeps its own logins.
 
+### Keeping your agents up to date: `ptyro update`
+
+ptyro looks for newer versions of your agents (Claude Code, Codex, Antigravity, OpenCode, Gemini
+CLI) once a day, in the background, and tells you when one is out: once per new version when
+`ptyro` starts ("Codex 0.170.0 is out (you have 0.162.1)": press `Ctrl-Q u` while the note shows,
+or use the palette's `app.update`), in the health badge (`Ctrl-Q M`), on the web app's Health
+page, and in `ptyro doctor`, which always looks afresh. Each says what the update runs. Nothing
+is ever updated without you. The TUI shows the agents of the computer its daemon runs on (with
+WSL's daemon, WSL's; with a remote one, that computer's, named), since those are what your
+sessions run; `ptyro doctor` on a computer covers that computer's own.
+
+```bash
+ptyro update              # update every agent that has a newer version (it shows each command and asks)
+ptyro update codex        # just one
+ptyro update --check      # only look now, and say what's out of date
+```
+
+- **Each the way it was installed.** The update is the vendor's own (`claude update`, Codex's
+  installer again), or for an agent you installed with npm or Homebrew, that tool's
+  (`npm install -g @openai/codex@latest`). git, the GitHub CLI and Node.js stay with their own
+  updaters.
+- **Sessions keep running.** An agent can be updated while sessions use it; ptyro names the
+  sessions that keep the old version until you restart them. On Windows, a program can't be
+  replaced while it runs: ptyro says so, names the sessions running it, and offers to try again
+  once you've closed them.
+- **In the TUI and on the web, too.** In the TUI, `Enter` on the badge's finding (or the
+  palette's `app.update`) runs `ptyro update` in a split, where the daemon is. On the web, Health →
+  the finding → Update shows what it runs, then runs it on the computer with its progress on the
+  setup page (an update refused because the agent is running offers "Try again" there); "Look for
+  newer versions now" looks at once.
+- **Quiet offline.** A look that can't reach the internet says nothing and tries again the next
+  day; it never slows `ptyro` down (start-up never touches the network: it asks the daemon, which
+  answers from what the last look remembered, in `versions.json` in ptyro's state folder).
+- **Your choice.** Settings → Updates (TUI and web): `updates.check = "off"` stops the looking,
+  and `updates.ignore` skips an agent (`"codex"`) or one version of it (`"codex@0.170.0"`):
+
+  ```toml
+  [updates]
+  check = "daily"            # or "off"
+  ignore = ["codex@0.170.0"]
+  ```
+
 ### Removing ptyro
 
 `ptyro uninstall` (or the install script's `--uninstall`, or `-Uninstall` on Windows) shows what it keeps on your machine (sessions, worktrees

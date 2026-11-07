@@ -315,6 +315,8 @@ fn cli_autospawns_and_maps_errors_to_exit_codes() {
             .args(args)
             .env("PTYRO_HOME", home.path())
             .env("PTYRO_BIN", BIN)
+            // The daemon it starts never looks up agents' versions on the network (BOOT5).
+            .env("PTYRO_TEST_LATEST", home.path().join("no-registry"))
             // Windows: only `local` starts a native daemon (with no remote, a Windows client
             // looks for ptyro in WSL first).
             .env("PTYRO_REMOTE", if cfg!(windows) { "local" } else { "" })

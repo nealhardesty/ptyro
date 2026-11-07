@@ -40,7 +40,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 34 };
+pub const PROTO: Version = Version { major: 1, minor: 35 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -379,6 +379,14 @@ pub enum Request {
         /// Protocol 1.32: install these in WSL's distro too, through its ptyro (`wsl.exe`).
         #[serde(default)]
         wsl_picks: Option<Vec<String>>,
+    },
+    /// The agents out of date on the daemon's machine (BOOT5, protocol 1.35), as its daily look
+    /// remembered them (installed versions asked again, never the network), less what
+    /// `updates.ignore` skips; none with `updates.check = "off"`. `note`: also the start-up
+    /// note's, those not said yet, now marked said (once per new version). Replies `Updates`.
+    Updates {
+        #[serde(default)]
+        note: bool,
     },
     /// The other machines this daemon mirrors (MM1.B). Replies `Machines`.
     MachineList,
@@ -1908,6 +1916,13 @@ pub enum Reply {
         /// `SetupRun` now would be refused.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         held_by: Option<String>,
+    },
+    /// The agents out of date on the daemon's machine (protocol 1.35).
+    Updates {
+        offered: Vec<ptyro_agents::updates::Outdated>,
+        /// With `note`: the start-up note's, said now (a subset of `offered`).
+        #[serde(default)]
+        note: Vec<ptyro_agents::updates::Outdated>,
     },
     /// A setup run started: `SetupProgress` events with this `run` follow.
     SetupStarted {
