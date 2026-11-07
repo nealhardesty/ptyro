@@ -198,6 +198,10 @@ pub enum State {
         /// manage that folder (Bun's), and then no move is offered.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         prefix: Option<String>,
+        /// npm's copy in another tool's store (`bun`, `mise`, `pnpm`, `asdf`): that tool removes
+        /// it, and no move is offered.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        store: Option<String>,
     },
     /// Older than something ticked needs (Node.js 18 for Gemini CLI's 20).
     TooOld {
@@ -340,6 +344,7 @@ fn classify(item: &Item, platform: Platform, found: Installed, latest: Option<&S
             latest: newer,
             system: found.system,
             prefix: found.prefix,
+            store: found.store,
         };
     }
     if let (Some(v), Some(l)) = (&found.version, newer) {
@@ -453,12 +458,30 @@ pub fn not_offered(
     state: &State,
     has: &dyn Fn(&str) -> bool,
 ) -> Option<String> {
-    let State::Other { via, system, prefix, .. } = state else { return None };
+    let State::Other { via, system, prefix, store, .. } = state else { return None };
     if offer(item, platform, state, &BTreeSet::new(), has).is_some() {
         return None;
     }
     let to = item.method(platform, has);
-    Some(if *via == Via::Brew && *system {
+    let pkg = npm_package(item, *via, platform).unwrap_or_else(|| item.program.clone());
+    let program = &item.program;
+    Some(if let Some(tool) = store.as_deref().filter(|_| *via == Via::Npm) {
+        let cmd = match tool {
+            "bun" => format!("bun remove -g {pkg}"),
+            "mise" => format!("mise uninstall npm:{pkg}"),
+            "pnpm" => format!("pnpm remove -g {pkg}"),
+            _ => format!("asdf uninstall <plugin> <version>, for the plugin that installed {pkg}"),
+        };
+        format!(
+            "it is in {tool}'s store, not an npm prefix: remove it with `{cmd}`, then `ptyro install {program}`"
+        )
+    } else if let Some(p) =
+        prefix.as_deref().filter(|p| *via == Via::Npm && quote(p, platform).is_none())
+    {
+        format!(
+            "its npm prefix ({p}) has a character ptyro won't put in a shell command: remove it yourself with `npm uninstall -g {pkg}` from a terminal using that prefix, then `ptyro install {program}`"
+        )
+    } else if *via == Via::Brew && *system {
         "its Homebrew isn't yours, and Homebrew won't run as administrator: move it as the Homebrew owner".into()
     } else if to.is_some_and(|m| m.via == Via::Vendor && m.places.is_empty()) {
         format!(
@@ -467,12 +490,21 @@ pub fn not_offered(
             platform.name()
         )
     } else if *via == Via::Npm && prefix.is_none() {
-        "it isn't in an npm prefix (Bun's, mise's or another tool's store): remove it with that tool, then `ptyro install` it".into()
+        format!(
+            "it isn't in an npm prefix ptyro recognises: remove it with the tool that installed it, then `ptyro install {program}`"
+        )
     } else if to.is_none() {
         format!("its recommended installer can't run here: see {}", item.doc)
     } else {
         format!("there's no known way to remove {}'s copy", via.words())
     })
+}
+
+/// The npm package an `others` row of `via` installs here (`@openai/codex`), from its
+/// `uninstall`; `None` for one that isn't npm's.
+pub(crate) fn npm_package(item: &Item, via: Via, platform: Platform) -> Option<String> {
+    let m = item.others.iter().find(|m| m.via == via && m.on(platform))?;
+    m.uninstall.as_deref()?.strip_prefix("npm uninstall -g ").map(str::to_owned)
 }
 
 /// The copy `method` installed: a package manager's by its folder (`via`); a vendor's installer's
@@ -491,7 +523,7 @@ pub fn installed_by(c: &Installed, method: &Method) -> bool {
         if cfg!(windows) { n.to_ascii_lowercase() } else { n }
     };
     method.places.iter().any(|place| {
-        let dir = norm(&expand_place(place));
+        let Some(dir) = expand_place(place).map(|d| norm(&d)) else { return false };
         [&c.real, &c.file].into_iter().flatten().any(|f| {
             let f = norm(f);
             f == dir || f.starts_with(&format!("{dir}/"))
@@ -500,14 +532,25 @@ pub fn installed_by(c: &Installed, method: &Method) -> bool {
 }
 
 /// A catalog place as a path here: `~` the home, `%VAR%` from the environment.
-pub fn expand_place(place: &str) -> String {
-    let home = ["HOME", "USERPROFILE"]
-        .into_iter()
-        .find_map(|v| std::env::var(v).ok().filter(|h| !h.is_empty()))
-        .unwrap_or_default();
+/// `None` when it names a variable that isn't set (`%CODEX_HOME%`: the installer then uses its
+/// default, the next place).
+pub fn expand_place(place: &str) -> Option<String> {
+    expand_place_with(place, &|v| std::env::var(v).ok().filter(|x| !x.is_empty()), cfg!(windows))
+}
+
+/// [`expand_place`] with the environment given: the home is `USERPROFILE` on Windows (what its
+/// installers use, whatever Git Bash's `HOME` says), else `HOME`.
+pub fn expand_place_with(
+    place: &str,
+    var: &dyn Fn(&str) -> Option<String>,
+    windows: bool,
+) -> Option<String> {
+    let order = if windows { ["USERPROFILE", "HOME"] } else { ["HOME", "USERPROFILE"] };
+    let home = order.into_iter().find_map(var).unwrap_or_default();
     let p =
         place.strip_prefix('~').map_or_else(|| place.to_owned(), |rest| format!("{home}{rest}"));
-    expand_vars(&p, |v| std::env::var(v).ok())
+    let out = expand_vars(&p, var);
+    (!out.contains('%')).then_some(out)
 }
 
 /// A path as one word for the platform's shell (`sh` or PowerShell): single quotes; `None` for

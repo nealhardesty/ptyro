@@ -334,7 +334,7 @@ fn a_third_installers_copy_isnt_the_new_one_and_unattended_never_moves() {
     assert_eq!(codex["level"], "note");
     assert!(
         codex["text"].as_str().unwrap().contains(
-            "the move to the recommended installer isn't offered: it isn't in an npm prefix"
+            "the move to the recommended installer isn't offered: it is in bun's store, not an npm prefix: remove it with `bun remove -g @openai/codex`"
         ),
         "{codex}"
     );

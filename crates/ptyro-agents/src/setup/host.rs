@@ -29,6 +29,9 @@ pub struct Installed {
     /// Windows above `node_modules`), so removing it acts there, not on npm's prefix of the
     /// moment. `None` for one npm didn't put there (Bun's global folder).
     pub prefix: Option<String>,
+    /// npm's copy that another tool's global store holds instead of an npm prefix (`bun`,
+    /// `mise`, `pnpm`, `asdf`): that tool removes it.
+    pub store: Option<String>,
     /// The file found, as a bare path (`path` is for people, and may carry a label).
     pub file: Option<String>,
     /// Where that file really is (links followed): how a vendor installer's copy is known
@@ -500,6 +503,7 @@ impl RealHost {
             via,
             system: via.is_some() && real.parent().is_some_and(admins_folder),
             prefix: (via == Some(Via::Npm)).then(|| npm_prefix(&real)).flatten(),
+            store: (via == Some(Via::Npm)).then(|| npm_store(&real)).flatten().map(str::to_owned),
             file: Some(found.path.to_string_lossy().into_owned()),
             real: Some(real.to_string_lossy().into_owned()),
         }
@@ -566,17 +570,30 @@ pub(super) fn npm_prefix(real: &Path) -> Option<String> {
     npm_prefix_on(real, cfg!(windows))
 }
 
+/// Another tool's global store holding a node package (`bun`, `mise`'s `npm:` backend, `pnpm`,
+/// an asdf plugin's): not an npm prefix, and that tool removes it. A Node.js that mise or asdf
+/// installed (`mise/installs/node/22`, `.asdf/installs/nodejs/22`) is a real npm prefix.
+pub(super) fn npm_store(real: &Path) -> Option<&'static str> {
+    let lower = real.to_string_lossy().replace('\\', "/").to_ascii_lowercase();
+    if lower.contains("/.bun/") {
+        Some("bun")
+    } else if lower.contains("/mise/installs/npm-") {
+        Some("mise")
+    } else if lower.contains("/pnpm/global/") || lower.contains("/.local/share/pnpm/") {
+        Some("pnpm")
+    } else if lower.contains("/.asdf/installs/") && !lower.contains("/.asdf/installs/nodejs/") {
+        Some("asdf")
+    } else {
+        None
+    }
+}
+
 /// [`npm_prefix`] for a platform's layout: Windows' prefix holds `node_modules` itself, elsewhere
-/// it is `lib/node_modules`. A version manager's store (mise's `npm:` backend, asdf, Bun's
-/// global folder) isn't a prefix to remove from: that tool's own uninstall is.
+/// it is `lib/node_modules`. Another tool's store ([`npm_store`]) is no prefix.
 pub(super) fn npm_prefix_on(real: &Path, windows: bool) -> Option<String> {
     let s = real.to_string_lossy();
     let norm = s.replace('\\', "/");
-    let lower = norm.to_ascii_lowercase();
-    if ["/.bun/", "/mise/installs/", "/.asdf/", "/.local/share/pnpm/"]
-        .iter()
-        .any(|t| lower.contains(t))
-    {
+    if npm_store(real).is_some() {
         return None;
     }
     let cut = if windows { norm.find("/node_modules/")? } else { norm.find("/lib/node_modules/")? };

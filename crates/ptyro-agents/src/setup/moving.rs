@@ -116,13 +116,17 @@ pub(super) fn run(
         .find(|c| c.via == Some(mv.from) && c.path.as_deref() == Some(&old_path))
     {
         let file = left.file.clone().unwrap_or_else(|| old_path.clone());
+        let pkg = super::npm_package(item, mv.from, platform);
         return Err((
             format!(
                 "{from}'s copy ({old_path}) is still there after `{}`; {}",
                 mv.uninstall,
                 now(host)
             ),
-            format!("remove it yourself: {}", delete_command(&file, platform)),
+            format!(
+                "remove it yourself: {}",
+                delete_command(&file, left.prefix.as_deref(), pkg.as_deref(), program, platform)
+            ),
         ));
     }
     // The new copy must still be there and run: a removal can take a link the new install put
@@ -149,20 +153,23 @@ pub(super) fn run(
             let first = f.path.clone().unwrap_or_else(|| program.clone());
             let how = f.via.map_or("another", |v| v.words());
             let file = f.file.clone().unwrap_or_else(|| first.clone());
-            let why = if installed_by(&f, method) {
-                format!(
-                    "{name} through {to} is installed ({new_path}), but the {program} that runs first ({first}) doesn't answer `--version`"
-                )
-            } else {
+            // The vendor's own copy, not answering: put it right, never delete it.
+            if installed_by(&f, method) {
+                return Err((
+                    format!(
+                        "{name} through {to} is installed ({first}), but it doesn't answer `{program} --version`"
+                    ),
+                    format!("repair it by installing it again: {reinstall}"),
+                ));
+            }
+            let pkg = f.via.and_then(|v| super::npm_package(item, v, platform));
+            Err((
                 format!(
                     "{name} through {to} is installed ({new_path}), but {how}'s {program} ({first}) comes first on PATH, so it is the one that runs"
-                )
-            };
-            Err((
-                why,
+                ),
                 format!(
                     "remove it ({}), or uninstall it with the tool that put it there, or put {new_path}'s folder ahead of it on PATH",
-                    delete_command(&file, platform)
+                    delete_command(&file, f.prefix.as_deref(), pkg.as_deref(), program, platform)
                 ),
             ))
         }
@@ -170,10 +177,33 @@ pub(super) fn run(
     }
 }
 
-/// The command that deletes `file`, ready to paste in the platform's shell.
-fn delete_command(file: &str, platform: Platform) -> String {
+/// The command that deletes a copy, ready to paste in the platform's shell. An npm copy on
+/// Windows is its prefix's shims (`codex`, `codex.cmd`, `codex.ps1`, which npm writes and `PATH`
+/// finds) and its package folder: never the script inside it alone, which would leave the shim
+/// on `PATH`, broken. Elsewhere `file` is what `PATH` finds (npm's link in `bin`).
+pub(super) fn delete_command(
+    file: &str,
+    prefix: Option<&str>,
+    pkg: Option<&str>,
+    program: &str,
+    platform: Platform,
+) -> String {
+    let ps = |p: &str| format!("'{}'", p.replace('\'', "''"));
     if platform.is_windows() {
-        format!("`Remove-Item -LiteralPath '{}'`", file.replace('\'', "''"))
+        if let (Some(prefix), Some(pkg)) = (prefix, pkg) {
+            let prefix = prefix.trim_end_matches(['\\', '/']);
+            let shims: Vec<String> = ["", ".cmd", ".ps1"]
+                .iter()
+                .map(|ext| ps(&format!("{prefix}\\{program}{ext}")))
+                .collect();
+            let folder = format!("{prefix}\\node_modules\\{}", pkg.replace('/', "\\"));
+            return format!(
+                "`Remove-Item -LiteralPath {}; Remove-Item -Recurse -LiteralPath {}`",
+                shims.join(", "),
+                ps(&folder)
+            );
+        }
+        format!("`Remove-Item -LiteralPath {}`", ps(file))
     } else {
         format!("`rm '{}'`", file.replace('\'', "'\\''"))
     }

@@ -174,6 +174,7 @@ impl Host for FakeHost {
                 system: via.is_some() && self.world.system.contains(id),
                 prefix: (via == Some(Via::Npm) && !self.world.no_prefix.contains(id))
                     .then(|| self.dir.join("npm-prefix").display().to_string()),
+                store: self.world.no_prefix.contains(id).then(|| "bun".to_owned()),
                 file: Some(self.file("old-bin", item)),
                 real: Some(self.file("old-bin", item)),
             });
@@ -187,6 +188,7 @@ impl Host for FakeHost {
                 via,
                 system: false,
                 prefix: None,
+                store: None,
                 file: Some(self.file("second-bin", item)),
                 real: Some(self.file("second-bin", item)),
             });
@@ -200,7 +202,7 @@ impl Host for FakeHost {
             let (via, file) = match m {
                 Some(m) if m.via != Via::Vendor => (Some(m.via), self.file("new-bin", item)),
                 Some(m) => {
-                    let place = m.places.first().map(|p| super::expand_place(p));
+                    let place = m.places.iter().find_map(|p| super::expand_place(p));
                     let place = place.unwrap_or_else(|| self.file("new-bin", item));
                     (None, std::path::Path::new(&place).join(&item.program).display().to_string())
                 }
@@ -212,6 +214,7 @@ impl Host for FakeHost {
                 via,
                 system: false,
                 prefix: None,
+                store: None,
                 file: Some(file.clone()),
                 real: Some(file),
             });
@@ -223,6 +226,7 @@ impl Host for FakeHost {
                 via: Some(*t),
                 system: false,
                 prefix: None,
+                store: None,
                 file: Some(self.file("third-bin", item)),
                 real: Some(self.file("third-bin", item)),
             });
@@ -236,6 +240,7 @@ impl Host for FakeHost {
                 via: None,
                 system: false,
                 prefix: None,
+                store: None,
                 file: Some(file.clone()),
                 real: Some(file),
             });

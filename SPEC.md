@@ -9940,18 +9940,23 @@ link in `~/.npm-global/bin` or `/usr/local/bin` counts as npm's. `Installed.syst
 folder is neither the user's nor writable by everyone (a system npm prefix,
 `/usr/lib/node_modules`), so removing it needs administrator rights. `Installed.prefix`: npm's
 global prefix the copy is in (the folder above `lib/node_modules`; on Windows above
-`node_modules`, chosen by the platform), `None` for Bun's global folder (`~/.bun/…`) and a version
-manager's store (mise's `npm:` backend, asdf, pnpm's), which npm doesn't manage: that tool removes
-it. `Installed.file` and `Installed.real`: the bare file found and where it really is (links
+`node_modules`, chosen by the platform), `None` for another tool's store (`Installed.store`: Bun's
+global folder, mise's `npm:` backend, pnpm's, an asdf plugin's), which npm doesn't manage: no move,
+and `doctor` names that tool's command (`mise uninstall npm:@openai/codex`, `bun remove -g …`). A
+Node.js that mise or asdf installed is a real npm prefix and moves as any. A prefix ptyro won't
+quote (a `'` in it) offers no move, and `doctor` says that, with `npm uninstall -g` to run there. `Installed.file` and `Installed.real`: the bare file found and where it really is (links
 followed).
 
 **The vendor's copy is known by its path.** A vendor installer's method names its `places`, where
 its copy really is: Claude Code `~/.local/share/claude` (the launcher `~/.local/bin/claude` links
 into its `versions/`) [V 2026-11-07, the setup page], on Windows `~/.local/bin/claude.exe` and
 `~/.local/share/claude` [V, its Windows uninstall]; Codex `~/.codex/packages/standalone` (install.sh
-links `~/.local/bin/codex` into `…/current`; on Windows install.ps1's junctions, also
+links `~/.local/bin/codex` into `…/current`; `$CODEX_HOME` first when set, as the installers
+follow it; on Windows install.ps1's junctions, also `%CODEX_INSTALL_DIR%` or
 `%LOCALAPPDATA%/Programs/OpenAI/Codex`) [S 2026-11-07, the vendor's install.sh and install.ps1];
-OpenCode `~/.opencode` [V, its docs]. `setup::installed_by(copy, method)`: a package manager's copy
+OpenCode `~/.opencode` [V, its docs]. A place naming an unset variable is skipped; `~` is the home
+the platform's installers use (`USERPROFILE` on Windows, whatever Git Bash's `HOME` says).
+`setup::installed_by(copy, method)`: a package manager's copy
 by its folder (`via`); a vendor's only when its file (or where it really is) is under one of those
 places. A copy from an installer nothing classifies (Nix's store, Scoop's shims, mise or asdf
 shims, pipx, a wrapper script in `~/bin`) never counts. A vendor method with no `places` (not
@@ -9995,7 +10000,9 @@ logins live, said in every offer.
 - **The old one must be gone.** Its copy still there after a removal that said it worked (npm
   acting elsewhere: "removed 0 packages") is `failed`, "npm's copy (…) is still there after `…`",
   with the fix to delete that file, ready to paste (`rm '<file>'`; on Windows `Remove-Item
-  -LiteralPath '<file>'`), never "run it again", which would do the same. Every message after the
+  -LiteralPath`; an npm copy on Windows by its prefix's shims, `codex`, `codex.cmd`, `codex.ps1`,
+  and its package folder, never the script inside it, which would leave the shim on `PATH`), never
+  "run it again", which would do the same. Every message after the
   removal looks for the new copy again before saying it works (or says it no longer runs, with
   the install command).
 - **The new one must still run.** A removal can take the new install's link with it (an npm prefix
@@ -10006,7 +10013,8 @@ logins live, said in every offer.
   install command. A move never ends ✓ with nothing to run.
 - **The new one must be what runs.** Afterwards `Host::installed` (what `locate::find` picks: `PATH`
   first) must be the recommended copy and answer `--version`. If another comes first (a second npm
-  prefix, a third installer), or it doesn't answer, the move is `failed`: "npm's codex (…) comes first on PATH, so it is the one that
+  prefix, a third installer), the move is `failed` (the vendor's own copy not answering is
+  `failed` with the install command to repair it, never a delete): "npm's codex (…) comes first on PATH, so it is the one that
   runs", fix: delete it (or uninstall it with the tool that put it there), or put the new one's
   folder ahead of it on `PATH`.
 - Each half is a `Started` event of its own (`Codex: installing it through the vendor's
@@ -10103,7 +10111,8 @@ the old is removed only after the new one answered; a move counts as failed when
 runs first (the goal is the new one running); `system` by the file's folder not being writable;
 `ptyro update` never moves; protocol 1.36's `SetupRun.moves` (absent: nothing moves).
 `PTYRO_NO_AUTOSPAWN=1` wins in the CLI's shared `Ctx::connect`, so no command (`doctor`'s check
-included) starts a daemon when it is set and no test leaves one running; the one test of
-autospawn itself clears it. `doctor` notes an agent installed another way that isn't offered the
+included) starts a daemon when it is set and no test leaves one running; the tests of autospawn
+itself (`e2e.rs`'s `cli_autospawns_and_maps_errors_to_exit_codes` and
+`only_one_daemon_per_home_and_stale_sockets_are_recovered`, `hardening.rs`) clear it. `doctor` notes an agent installed another way that isn't offered the
 move, and why (`updates::Versions.unmovable`: the vendor's place unknown, no npm prefix,
 someone else's Homebrew).
