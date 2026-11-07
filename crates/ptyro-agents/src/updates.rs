@@ -10,8 +10,9 @@
 //! update` afresh. Start-up never touches the network: the TUI asks its daemon, which answers
 //! from what the last look remembered.
 //!
-//! The rows are the version table's agents with a newest-version source ([`sources`]); ptyro's
-//! own update (BOOT6) adds itself as one more source and finding under the id `ptyro`.
+//! The rows are the version table's agents with a newest-version source ([`sources`]), and
+//! ptyro itself (BOOT6, [`crate::own`]): one more source and finding under the id `ptyro`, whose
+//! update is ptyro's own download, check and swap rather than the plan engine's.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -21,6 +22,7 @@ use ptyro_core::config::{UpdateCheck, Updates};
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::{self, Arch, Kind, Latest, Version, Via};
+use crate::own;
 use crate::setup::{self, Host, State, Survey};
 
 /// How often the newest versions are looked up: at most once a day (the design's goal 8).
@@ -75,6 +77,13 @@ pub struct Outdated {
     /// The vendor's page.
     #[serde(default)]
     pub doc: String,
+    /// ptyro's own row (BOOT6): the binary the update replaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// ptyro's own row: a package manager owns the binary (cargo, a system package), so ptyro
+    /// doesn't update it; how it updates instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed: Option<String>,
 }
 
 impl Outdated {
@@ -91,12 +100,37 @@ impl Outdated {
     /// The finding as `doctor` (and so the health badge and the web) says it: the line, the
     /// one-step update, and the command it runs.
     pub fn finding(&self) -> String {
+        if let Some(path) = &self.path {
+            return self.own_finding(path);
+        }
         let how = match (&self.command, self.admin) {
             (Some(c), false) => format!(" (it runs `{c}`)"),
             (Some(c), true) => format!(" (it runs `{c}`, as administrator)"),
             (None, _) => format!(" (the vendor's page says how: {})", self.doc),
         };
         format!("{}: `{}` updates it{how}", self.line(), self.fix())
+    }
+}
+
+impl Outdated {
+    /// ptyro's own finding (BOOT6): how the binary at `path` updates.
+    fn own_finding(&self, path: &str) -> String {
+        let line = self.line();
+        let fix = self.fix();
+        match (&self.managed, &self.command, self.admin) {
+            (Some(m), _, _) => format!(
+                "{line}: it was installed with {m}, so update it that way (ptyro never replaces a binary a package manager owns)"
+            ),
+            (None, Some(c), false) => {
+                format!("{line}: `{fix}` updates it (it runs `{c}`, then upgrades the daemon live)")
+            }
+            (None, _, true) => format!(
+                "{line}: `{fix}` in a terminal on the computer updates it (it replaces {path} as administrator, then upgrades the daemon live)"
+            ),
+            (None, None, false) => format!(
+                "{line}: `{fix}` updates it (it downloads the release, checks it against SHA256SUMS, replaces {path} and upgrades the daemon live)"
+            ),
+        }
     }
 }
 
@@ -210,6 +244,17 @@ pub fn sources() -> Vec<(&'static str, &'static Latest)> {
         .collect()
 }
 
+/// Every source [`lookup`] asks: the agents', and ptyro's own releases unless this ptyro is a
+/// build in a cargo `target` folder (never offered an update, so never looked up).
+pub fn looked_up() -> Vec<(&'static str, &'static Latest)> {
+    static OWN: std::sync::OnceLock<Latest> = std::sync::OnceLock::new();
+    let mut all = sources();
+    if own::Install::here().how != own::How::Build {
+        all.push((own::ID, OWN.get_or_init(own::source)));
+    }
+    all
+}
+
 /// Look up every newest version, all at once (each at most a few seconds: a dead network costs
 /// one wait, not one per agent): those found, and why each other couldn't be. A debug build's
 /// `PTYRO_TEST_LATEST` names a fixture registry instead (`<dir>/<id>` holds the reply; none:
@@ -218,7 +263,7 @@ pub fn lookup(host: &dyn Host) -> (BTreeMap<String, String>, BTreeMap<String, St
     let platform = host.platform();
     let registry = ptyro_core::test_knob("PTYRO_TEST_LATEST");
     let replies: Vec<(&str, Result<String, String>)> = std::thread::scope(|scope| {
-        let asks: Vec<_> = sources()
+        let asks: Vec<_> = looked_up()
             .into_iter()
             .map(|(id, latest)| {
                 let registry = registry.as_deref();
@@ -285,6 +330,8 @@ pub fn outdated(survey: &Survey) -> Vec<Outdated> {
             via,
             admin: method.is_some_and(|m| m.admin),
             doc: item.doc.clone(),
+            path: None,
+            managed: None,
         });
     }
     out
@@ -318,7 +365,9 @@ pub fn remember(
     });
     let survey =
         if full { setup::survey(host, &latest) } else { setup::survey_agents(host, &latest) };
-    let outdated = outdated(&survey);
+    let mut outdated = outdated(&survey);
+    // ptyro itself (BOOT6): its binary's version against its newest release.
+    outdated.extend(own::finding(&own::Install::here(), latest.get(own::ID).map(String::as_str)));
     let v = edit(state, |v| {
         if let Some(failed) = failed {
             v.checked = now;
@@ -352,7 +401,12 @@ pub fn ignored(ignore: &[String], o: &Outdated) -> bool {
             Some((n, v)) => (n, Some(v)),
             None => (i.as_str(), None),
         };
-        setup::resolve(name).is_ok_and(|item| item.id == o.id)
+        let named = if name.trim().eq_ignore_ascii_case(own::ID) {
+            o.id == own::ID
+        } else {
+            setup::resolve(name).is_ok_and(|item| item.id == o.id)
+        };
+        named
             && version.is_none_or(|v| match (Version::parse(v), Version::parse(&o.latest)) {
                 (Some(a), Some(b)) => a == b,
                 _ => v.trim() == o.latest,
@@ -388,6 +442,8 @@ pub fn known(state: &Path, cfg: &Updates) -> BTreeMap<String, String> {
             via: None,
             admin: false,
             doc: String::new(),
+            path: None,
+            managed: None,
         };
         !ignored(&cfg.ignore, &probe)
     });
@@ -416,13 +472,19 @@ pub fn note(state: &Path, cfg: &Updates) -> Vec<Outdated> {
 }
 
 /// The note in a line: `Codex 0.170.0 is out (you have 0.162.1)`, or `2 agents have newer
-/// versions: Codex 0.170.0, Claude Code 2.1.400`.
+/// versions: Codex 0.170.0, Claude Code 2.1.400` (with ptyro among them, `2 newer versions are
+/// out: …`).
 pub fn note_line(said: &[Outdated]) -> Option<String> {
+    let what = if said.iter().any(|o| o.id == own::ID) {
+        "newer versions are out"
+    } else {
+        "agents have newer versions"
+    };
     match said {
         [] => None,
         [one] => Some(one.line()),
         many => Some(format!(
-            "{} agents have newer versions: {}",
+            "{} {what}: {}",
             many.len(),
             many.iter().map(|o| format!("{} {}", o.name, o.latest)).collect::<Vec<_>>().join(", ")
         )),

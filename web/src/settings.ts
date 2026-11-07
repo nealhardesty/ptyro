@@ -8,7 +8,7 @@ import { fixLineEndings } from "./projects.js";
 import { actions, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, form, go, h, menu, pending, poll, row, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
 import type { Item } from "./kit.js";
 import { qrMatrix } from "./qr.js";
-import { adminSteps, bannerWants, isHere, noAgent, retryOf, runningAgent, SetupLog, updateOffer, waitsForAdmin, webSteps } from "./setupkit.js";
+import { adminSteps, bannerWants, isHere, noAgent, retryOf, runningAgent, selfUpdate, SetupLog, updateOffer, waitsForAdmin, webSteps } from "./setupkit.js";
 import type { UpdateOffer } from "./setupkit.js";
 import { allSessions } from "./sessions.js";
 
@@ -59,6 +59,7 @@ const ACTIONS = {
   "setup.login": "Log in to each agent and the GitHub CLI, one account each: the tool's own sign-in in a session here, confirmed by its own status command (ptyro never sees the credentials)",
   "updates.update": "Update an agent that has a newer version out, on the computer, the way it was installed: the command it runs is shown first, and sessions running it keep the old version until they restart",
   "updates.retry": "An update Windows (or the system) refused because the agent is running: end the sessions running it, then try again from here",
+  "updates.self": "Update ptyro itself on the computer: the release is downloaded, checked against its SHA256SUMS and put in place, then the daemon is upgraded live (every session carries on); on Windows with WSL both halves. A binary only an administrator can replace shows the command to run there",
   "updates.check": "Look for newer versions of your agents now (ptyro looks once a day by itself; Settings → Updates turns that off or skips one)",
   "help.tour": "A tour: ptyro's daily loop with a pretend agent, in a throwaway ptyro of its own",
 } as const;
@@ -143,7 +144,9 @@ function fixesFor(c: any): Item[] {
   if (c.section === "worktrees" && c.name === "archived") out.push({ label: "Archived", run: () => go("#/archives") });
   // Newer versions (BOOT5): the update, with its command; and looking again now.
   const upd = updateOffer(c);
-  if (upd) out.push({ title: tip("updates.update"), label: `Update ${upd.name} to ${upd.latest}`, hint: upd.command ? `Runs ${upd.command}` : "Its vendor's update", run: () => askUpdate(upd) });
+  const own = upd && selfUpdate(upd);
+  if (upd && own) out.push({ title: tip("updates.self"), label: `Update ptyro to ${upd.latest}`, hint: own.kind === "run" ? "Then the daemon upgrades live" : own.kind === "command" ? "On the computer, as administrator" : `Through ${own.how}`, run: () => askSelfUpdate(upd) });
+  else if (upd) out.push({ title: tip("updates.update"), label: `Update ${upd.name} to ${upd.latest}`, hint: upd.command ? `Runs ${upd.command}` : "Its vendor's update", run: () => askUpdate(upd) });
   if (c.section === "updates") {
     out.push({ title: tip("updates.check"), label: "Look for newer versions now", run: () => void checkUpdates() });
     out.push({ label: "Update settings", hint: "Turn the daily look off, or skip an agent or a version", run: () => go("#/settings/updates") });
@@ -162,6 +165,38 @@ function askUpdate(o: UpdateOffer): void {
     o.admin ? ", which asks for administrator rights: the next page gives the command to run there." : ".",
     n ? ` ${n === 1 ? "1 session runs" : `${n} sessions run`} ${o.name} (${running.join(", ")}): ${n === 1 ? "it keeps" : "they keep"} ${o.version} until restarted.` : ""),
   "Update", () => startUpdate(o.program), false);
+}
+
+/// ptyro's own update (BOOT6): asked first, then `ptyro update ptyro --yes` in a session on the
+/// computer, which this page opens (its progress live; the daemon's live upgrade at its end keeps
+/// the session, and this page reconnects). For an administrator's binary, the command to run
+/// there; for a package manager's, how it updates.
+function askSelfUpdate(o: UpdateOffer): void {
+  const how = selfUpdate(o);
+  if (!how) return;
+  if (how.kind === "managed") {
+    textSheet("Update ptyro", `ptyro ${o.version} → ${o.latest}: it was installed with ${how.how}, so update it that way. ptyro never replaces a binary a package manager owns.`);
+    return;
+  }
+  if (how.kind === "command") {
+    sheet("Update ptyro on the computer", [
+      h("p", { class: "intro" }, `ptyro ${o.version} → ${o.latest}. ${o.path ?? "Its binary"} can only be replaced as administrator, and a password never goes through this page. On the computer, run:`),
+      how.command ? h("div", { class: "setup-cmd" }, h("code", {}, how.command), copyButton(how.command)) : null,
+      h("p", { class: "sub" }, "Or in a terminal there: ", h("code", {}, "ptyro update ptyro"), " (it asks for the password), or in ptyro press the prefix, then u."),
+    ], []);
+    return;
+  }
+  confirm(`Update ptyro to ${o.latest}?`, h("span", {},
+    `ptyro ${o.version} → ${o.latest} on the computer: it ${how.what}, then upgrades the daemon live. Every session carries on, and this page reconnects in a moment. On Windows with WSL, the other half is brought to ${o.latest} too.`),
+  "Update", () => void startSelfUpdate(), false);
+}
+
+async function startSelfUpdate(): Promise<void> {
+  const r = await doHost("updates.self");
+  if (!r) return;
+  ui.toast("Updating ptyro on the computer: its progress is here; Health looks again when you go back");
+  health.reload("");
+  go(`#/s/${enc(r.session)}`);
 }
 
 /// Run the update on the computer (the daemon's `SetupRun` of that agent: an outdated one runs its

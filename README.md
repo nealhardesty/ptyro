@@ -129,8 +129,9 @@ ptyro init       # finds your agents, accounts and repositories; asks a few ques
 ptyro doctor     # checks agents, logins, integrations, terminal and tmux
 ```
 
-**Upgrading** while agents run: install the new binary (run the install script again), then
-`ptyro daemon upgrade`. Every session keeps running.
+**Upgrading** while agents run: `ptyro update ptyro` (below) downloads the new release, checks it,
+puts it in place and upgrades the daemon live; every session keeps running. Running the install
+script again, then `ptyro daemon upgrade`, does the same by hand.
 
 ### Agents and tools: `ptyro setup`
 
@@ -213,10 +214,10 @@ ptyro login --check                           # where each login stands, changin
   personal), make a profile and log it in: `ptyro profile new work`, then
   `ptyro profile login work claude`. Each profile keeps its own logins.
 
-### Keeping your agents up to date: `ptyro update`
+### Keeping your agents, and ptyro, up to date: `ptyro update`
 
 ptyro looks for newer versions of your agents (Claude Code, Codex, Antigravity, OpenCode, Gemini
-CLI) once a day, in the background, and tells you when one is out: once per new version when
+CLI), and of ptyro itself, once a day, in the background, and tells you when one is out: once per new version when
 `ptyro` starts ("Codex 0.170.0 is out (you have 0.162.1)": press `Ctrl-Q u` while the note shows,
 or use the palette's `app.update`), in the health badge (`Ctrl-Q M`), on the web app's Health
 page, and in `ptyro doctor`, which always looks afresh. Each says what the update runs. Nothing
@@ -227,9 +228,20 @@ sessions run; `ptyro doctor` on a computer covers that computer's own.
 ```bash
 ptyro update              # update every agent that has a newer version (it shows each command and asks)
 ptyro update codex        # just one
+ptyro update ptyro        # ptyro itself
 ptyro update --check      # only look now, and say what's out of date
 ```
 
+- **ptyro itself.** Its newer release is downloaded only once you say yes, checked against the
+  release's `SHA256SUMS` (and its signed provenance when the GitHub CLI is installed), exactly as
+  the install scripts do, and put in place of the old binary; the old one is kept until the new
+  one runs, and put back if it doesn't. A download that fails its checksum is refused, and
+  nothing is replaced. Then the daemon is upgraded live: every session keeps running. On Windows
+  with WSL, Windows' `ptyro.exe` and the ptyro in your distro are updated together, so the two
+  always match. Installed with Homebrew, it runs `brew upgrade ptyro`; installed another way
+  (cargo, a system package), ptyro says how to update it and never replaces it. In a folder only
+  an administrator can write (`/usr/local/bin`), `ptyro update ptyro` in a terminal asks for your
+  password (sudo); the web app shows the command to run there instead.
 - **Each the way it was installed.** The update is the vendor's own (`claude update`, Codex's
   installer again), or for an agent you installed with npm or Homebrew, that tool's
   (`npm install -g @openai/codex@latest`). git, the GitHub CLI and Node.js stay with their own
@@ -241,13 +253,15 @@ ptyro update --check      # only look now, and say what's out of date
 - **In the TUI and on the web, too.** In the TUI, `Enter` on the badge's finding (or the
   palette's `app.update`) runs `ptyro update` in a split, where the daemon is. On the web, Health →
   the finding → Update shows what it runs, then runs it on the computer with its progress on the
-  setup page (an update refused because the agent is running offers "Try again" there); "Look for
-  newer versions now" looks at once.
+  setup page (an update refused because the agent is running offers "Try again" there); ptyro's
+  own "Update ptyro" opens its progress in a session, and the page reconnects once the daemon has
+  upgraded; "Look for newer versions now" looks at once.
 - **Quiet offline.** A look that can't reach the internet says nothing and tries again the next
   day; it never slows `ptyro` down (start-up never touches the network: it asks the daemon, which
   answers from what the last look remembered, in `versions.json` in ptyro's state folder).
 - **Your choice.** Settings → Updates (TUI and web): `updates.check = "off"` stops the looking,
-  and `updates.ignore` skips an agent (`"codex"`) or one version of it (`"codex@0.170.0"`):
+  and `updates.ignore` skips an agent (`"codex"`, or `"ptyro"`) or one version of it
+  (`"codex@0.170.0"`):
 
   ```toml
   [updates]

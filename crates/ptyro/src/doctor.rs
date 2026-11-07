@@ -216,14 +216,15 @@ async fn updates(ctx: &Ctx, config: &Config, fresh: bool, r: &mut Report) {
     for i in &cfg.ignore {
         let name = i.split_once('@').map_or(i.as_str(), |(n, _)| n);
         let agent = ptyro_agents::setup::resolve(name)
-            .is_ok_and(|it| it.kind == ptyro_agents::catalog::Kind::Agent);
+            .is_ok_and(|it| it.kind == ptyro_agents::catalog::Kind::Agent)
+            || name.trim().eq_ignore_ascii_case(ptyro_agents::own::ID);
         if !agent {
             r.add(
                 S,
                 "ignore",
                 Level::Warn,
                 format!(
-                    "updates.ignore holds {i:?}, which isn't an agent ptyro updates (claude, codex, agy, opencode, gemini): it skips nothing"
+                    "updates.ignore holds {i:?}, which isn't something ptyro updates (claude, codex, agy, opencode, gemini, ptyro): it skips nothing"
                 ),
             );
         }
@@ -247,7 +248,7 @@ async fn updates(ctx: &Ctx, config: &Config, fresh: bool, r: &mut Report) {
             r.add_data(serde_json::to_value(o).unwrap_or_default());
         }
     }
-    let all_failed = !v.failed.is_empty() && v.failed.len() == updates::sources().len();
+    let all_failed = !v.failed.is_empty() && v.failed.len() == updates::looked_up().len();
     if all_failed {
         r.add(
             S,

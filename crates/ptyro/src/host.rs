@@ -185,6 +185,13 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
             })
         }
 
+        // ptyro itself (BOOT6): `ptyro update ptyro --yes` in a session on the daemon, which the
+        // page opens; an administrator's binary is refused with the command to run there.
+        "updates.self" => {
+            let info = crate::own::spawn_update(ctx).await?;
+            Ok(json!({ "session": info.id.full() }))
+        }
+
         // ── profiles ──
         "profile.new" => {
             let adopt = a["adopt"]

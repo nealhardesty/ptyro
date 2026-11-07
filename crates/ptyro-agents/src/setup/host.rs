@@ -497,7 +497,7 @@ pub(super) fn package_version(out: &str, field: &str) -> Option<String> {
 }
 
 /// The user can write in `dir`.
-fn writable(dir: &Path) -> bool {
+pub(crate) fn writable(dir: &Path) -> bool {
     let probe = dir.join(format!(".ptyro-write-test-{}", std::process::id()));
     let ok = std::fs::OpenOptions::new().write(true).create_new(true).open(&probe).is_ok();
     if ok {
@@ -506,7 +506,7 @@ fn writable(dir: &Path) -> bool {
     ok
 }
 
-fn sha256_file(p: &Path) -> Result<String, String> {
+pub(crate) fn sha256_file(p: &Path) -> Result<String, String> {
     use sha2::{Digest, Sha256};
     let mut f = std::fs::File::open(p).map_err(|e| format!("{}: {e}", p.display()))?;
     let mut h = Sha256::new();
@@ -515,7 +515,7 @@ fn sha256_file(p: &Path) -> Result<String, String> {
 }
 
 /// No console window of its own on Windows (SPEC §20.12).
-fn quiet(cmd: &mut Command) -> &mut Command {
+pub(crate) fn quiet(cmd: &mut Command) -> &mut Command {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -605,7 +605,7 @@ fn pump(
 
 /// Run `argv`, each line of stdout and stderr to `line` as it comes. `Err`: its last lines and
 /// how it ended.
-pub(super) fn stream(
+pub(crate) fn stream(
     argv: &[String],
     env: &[(OsString, OsString)],
     line: &mut dyn FnMut(&str),
@@ -664,7 +664,7 @@ fn exit_ok(argv: &[String], env: &[(OsString, OsString)], limit: Duration) -> Op
 
 /// Run `argv` to its end (at most `limit`): whether it succeeded, and its output, a line each.
 /// `None`: it didn't start, or took too long.
-pub(super) fn capture(
+pub(crate) fn capture(
     argv: &[String],
     env: &[(OsString, OsString)],
     limit: Duration,

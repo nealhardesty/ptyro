@@ -325,6 +325,17 @@ impl std::fmt::Display for BadReply {
 impl std::error::Error for BadReply {}
 
 impl Latest {
+    /// A source that isn't a row of the table: ptyro's own releases (BOOT6, [`crate::own`]).
+    pub fn new(source: Source, url: &str, tag_prefix: Option<&str>, mark: Mark) -> Self {
+        Self {
+            source,
+            url: url.to_owned(),
+            tag_prefix: tag_prefix.map(str::to_owned),
+            mark,
+            note: None,
+        }
+    }
+
     /// What to fetch for `platform` (and, off Windows, `arch`).
     pub fn url(&self, platform: Platform, arch: Arch) -> String {
         let os = match platform {
