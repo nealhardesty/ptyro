@@ -3080,6 +3080,13 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 | R-WIN-19 | **PowerShell objects**: document `ptyro … --json \| ConvertFrom-Json`; a `Ptyro` module of cmdlets only if users ask | — | Backlog | S | ★ | parked (`--json` already does the job) |
 | R-WIN-20 | **ptyro in a pwsh prompt** (oh-my-posh, starship segment) | Backlog "status-line" | Backlog | S | ★ | merged into Backlog `ptyro status-line` |
 
+#### Bootstrap: agents, tools and updates (R-BOOT) *(added 2026-11-06; owner's request, ROADMAP BOOT)*
+
+| ID | Idea | Seen in | Fit | Size | Pri | Status |
+|---|---|---|---|---|---|---|
+| R-BOOT-01 | **Bootstrap a new machine from the ptyro binary**: a setup checklist (agents, git, gh, prerequisites like Node.js, their logins), the same any time later, WSL and/or Windows sides; agents and ptyro itself checked daily for new versions, each offered as a one-step update; ptyro downloads, verifies, installs and live-upgrades itself | owner (2026-11-06); vendors' own installers (Claude's native installer, npm, Antigravity's) [V docs, to recheck when built] | BOOT | L | ★★★ | → BOOT (design: docs/superpowers/specs/2026-11-06-bootstrap-agents-design.md) |
+| R-BOOT-02 | **Gemini CLI vs Antigravity:** since 2026-06-18 Google's consumer agent is Antigravity CLI (`agy`); Gemini CLI still serves paid Gemini API keys and some enterprise licences (Google's pages disagree on which) [V 2026-11-06: developers.googleblog.com, geminicli.com]. Setup lists both, Gemini CLI labelled for API-key users; "no agent found" messages name Antigravity for Google | Google | BOOT | S | ★★ | → BOOT |
+
 ### III.3 Explicitly *not* recommended (with reasons)
 
 - **A vector-DB memory layer** (Ruflo): its own figures are self-reported; a lightweight notes file covers the need.

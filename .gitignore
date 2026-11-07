@@ -32,3 +32,6 @@ rustc-ice-*.txt
 
 # Claude
 .claude/
+
+# Brainstorming mockups (superpowers visual companion)
+.superpowers/

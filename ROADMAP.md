@@ -3223,6 +3223,56 @@ it; the phone's strip shows 1 and 2; after `ptyro daemon restart` both come back
 starts again in their directories. Then `C-t` in a worktree still opens that worktree's quick
 terminal, untouched.
 
+## BOOT — Bootstrap: agents, tools and updates (proposed 2026-11-06; open)
+
+The owner's goal: "just install ptyro from binary, then bootstrap everything else on a new
+machine". The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-design.md`
+(decisions, anti-goals, the builder's open choices); RESEARCH R-BOOT-01, R-BOOT-02.
+
+- [ ] **BOOT0 The version table** **S**. One verified row per agent and tool, and per platform:
+  - the recommended install method and its command, and how to update;
+  - how to read the installed version, and where the newest version comes from;
+  - prerequisites (Node.js and its minimum version) and the login command.
+  Claude Code, Codex, Antigravity, OpenCode and Gemini CLI, plus git, the GitHub CLI and
+  Node.js. Each row is dated and checked against the vendor's documentation (RESEARCH
+  segment G), and tested without the network (recorded fixtures).
+- [ ] **BOOT1 The plan engine and `ptyro setup` / `ptyro install <name>…`** **M**:
+  - the checklist's states (missing, installed, outdated, installed another way);
+  - prerequisites ticked for what needs them, and admin steps asked for once;
+  - live output, and a fix offered per failure;
+  - `--yes --agents … --tools … --where …` for unattended machines.
+  It works before any daemon exists (a fresh Windows machine).
+- [ ] **BOOT2 The TUI checklist** **M**, as the first part of the onboarding screen (UX1.19,
+  `onboard.rs`; the owner chose one checklist screen). Reopened from `ptyro init`, the palette's
+  `first.run`, and the health badge.
+- [ ] **BOOT3 The web checklist** **M**, under Settings and as a first-run banner when no agent
+  is installed. Installs that need admin rights are the TUI's and the CLI's only: the owner's
+  parity exception, recorded in `docs/parity.md` with its reason. The web shows the command to
+  run on the machine instead.
+- [ ] **BOOT4 Logins** **M**: one account per agent and `gh`, through each tool's own flow in a
+  session, confirmed by its status command; ptyro never sees a credential. Setup ends by showing
+  how to add accounts as profiles (`ptyro profile login`).
+- [ ] **BOOT5 Out of date, offered** **M**:
+  - agents and ptyro, checked at most once a day (remembered in `<state>/versions.json`), and
+    afresh by `doctor`;
+  - the finding, with its one-step update and the command, at start-up (once per new
+    version), in the health badge, the web's Health page and `doctor`;
+  - `updates.check` and `updates.ignore` in the settings schema and both settings screens;
+  - offline is quiet.
+- [ ] **BOOT6 ptyro updates itself** **M**: the newer release downloaded and verified
+  (`SHA256SUMS`, signed provenance), then offered: install, and `daemon upgrade` live. A
+  package-managed ptyro (Homebrew) is updated through that manager. On Windows with WSL's
+  daemon, both halves are updated.
+- [ ] **BOOT7 Moves to the recommended installer** **S**, for an agent installed another way
+  (Claude Code through npm or Homebrew, for example). The offer can be dismissed.
+- [ ] **BOOT8 Windows: WSL, Windows, or both** **S**. Per agent; WSL is the user's to bring. On a
+  machine without a usable WSL, only the Windows side is offered, and the WSL side can be added
+  later from the same checklist.
+- [ ] **BOOT9 The stale suggestions** **S**: the "no agent found" messages (`doctor.rs`,
+  `chats.rs`) put Gemini CLI first; they become "open setup", naming Antigravity for Google.
+
+**Done when:** the design's five checks pass on fresh Windows 11, Ubuntu and macOS machines.
+
 ## Backlog (unscheduled; ideas welcome)
 
 Back-burnered by the owner:
