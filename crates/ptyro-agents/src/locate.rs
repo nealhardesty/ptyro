@@ -228,7 +228,36 @@ fn places() -> Option<Places> {
             exts: None,
         }
     };
+    let mut places = places;
+    for d in vendor_bins(crate::catalog::Platform::current()) {
+        if !places.dirs.iter().any(|(p, _)| *p == d.0) {
+            places.dirs.push(d);
+        }
+    }
     Some(places)
+}
+
+/// The folders the version table's vendor installers put their programs in on `platform` (each
+/// method's `bin`), expanded here, each with how to say it: what they installed is found before
+/// the daemon or a shell has the `PATH` they added (the final review's I2: one list, so `locate`
+/// and the table can't drift apart).
+fn vendor_bins(platform: crate::catalog::Platform) -> Vec<(PathBuf, String)> {
+    let mut out: Vec<(PathBuf, String)> = Vec::new();
+    for m in crate::catalog::items()
+        .iter()
+        .flat_map(|i| &i.methods)
+        .filter(|m| m.via == crate::catalog::Via::Vendor && m.on(platform))
+    {
+        for b in &m.bin {
+            let Some(dir) = crate::setup::expand_place(b) else { continue };
+            let dir = PathBuf::from(dir);
+            let say = if platform.is_windows() { b.replace('/', "\\") } else { b.clone() };
+            if !out.iter().any(|(p, _)| *p == dir) {
+                out.push((dir, say));
+            }
+        }
+    }
+    out
 }
 
 /// After `PATH`: `places.dirs`, then nvm, then `npx`'s cache.
@@ -402,6 +431,41 @@ fn tilde(p: &Path) -> String {
             format!("~{}", &s[h.len()..])
         }
         _ => s.into_owned(),
+    }
+}
+
+#[cfg(test)]
+mod vendor_tests {
+    use super::*;
+
+    /// Every folder the version table says a vendor installer puts its program in is one
+    /// `locate` searches (the final review's I2: `~/.opencode/bin` and Codex's Windows folder
+    /// were missing), so `find` sees a fresh install.
+    #[test]
+    fn every_vendor_bin_in_the_table_is_searched() {
+        let platform = crate::catalog::Platform::current();
+        let dirs: Vec<PathBuf> = places().expect("a home").dirs.into_iter().map(|d| d.0).collect();
+        let mut checked = 0;
+        for i in crate::catalog::items() {
+            for m in
+                i.methods.iter().filter(|m| m.via == crate::catalog::Via::Vendor && m.on(platform))
+            {
+                for b in &m.bin {
+                    let Some(d) = crate::setup::expand_place(b) else { continue };
+                    assert!(
+                        dirs.contains(&PathBuf::from(&d)),
+                        "{}: {b} ({d}) isn't searched: {dirs:?}",
+                        i.id
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 0, "no vendor bin on {platform:?}");
+        if !platform.is_windows() {
+            let home = home().unwrap();
+            assert!(dirs.contains(&home.join(".opencode").join("bin")), "{dirs:?}");
+        }
     }
 }
 

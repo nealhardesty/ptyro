@@ -35,8 +35,12 @@ pub struct Daemon {
     pub clients: AtomicU32,
     /// Set once shutdown starts; connections send `Goodbye` and close.
     pub shutdown: watch::Sender<bool>,
-    /// The environment the daemon started with: the base for every child (SPEC §5.1).
-    pub(crate) base_env: Vec<(OsString, OsString)>,
+    /// The environment the daemon started with: the base for every child (SPEC §5.1). Its
+    /// `PATH` follows what installers store on Windows ([`Self::refresh_path`]); read it with
+    /// [`Self::base_env`].
+    env: Mutex<Vec<(OsString, OsString)>>,
+    /// ptyro's tools folders' program directories, kept first on `PATH` (BOOT1).
+    tools_path: Vec<PathBuf>,
     pub store: Option<Store>,
     pub config: RwLock<Config>,
     /// The session most recently focused in any TUI (`@focused`).
@@ -193,20 +197,24 @@ impl Daemon {
             shutdown: watch::Sender::new(false),
             // The handoff's own variables are for this process, never its children; nor the
             // session of whichever client started us (it would place checks in it, M7.6).
-            base_env: std::env::vars_os()
-                .filter(|(k, _)| {
-                    !k.to_string_lossy().starts_with("PTYRO_HANDOFF_") && k != "PTYRO_SESSION_ID"
-                })
-                .map(|(k, v)| {
-                    // The tools `ptyro setup` puts in ptyro's own folder come first on every
-                    // child's PATH (BOOT1), even when installed after the daemon started.
-                    if k.eq_ignore_ascii_case("PATH") {
-                        (k, ptyro_agents::setup::path_with(&tools_path, &v))
-                    } else {
-                        (k, v)
-                    }
-                })
-                .collect(),
+            env: Mutex::new(
+                std::env::vars_os()
+                    .filter(|(k, _)| {
+                        !k.to_string_lossy().starts_with("PTYRO_HANDOFF_")
+                            && k != "PTYRO_SESSION_ID"
+                    })
+                    .map(|(k, v)| {
+                        // The tools `ptyro setup` puts in ptyro's own folder come first on every
+                        // child's PATH (BOOT1), even when installed after the daemon started.
+                        if k.eq_ignore_ascii_case("PATH") {
+                            (k, ptyro_agents::setup::path_with(&tools_path, &v))
+                        } else {
+                            (k, v)
+                        }
+                    })
+                    .collect(),
+            ),
+            tools_path,
             store,
             config: RwLock::new(config),
             focused: Mutex::new(None),
@@ -279,6 +287,32 @@ impl Daemon {
             lead_spawning: tokio::sync::Mutex::new(()),
             chats,
         })
+    }
+
+    /// The environment every child starts from (SPEC §5.1), its `PATH` as last refreshed.
+    pub(crate) fn base_env(&self) -> Vec<(OsString, OsString)> {
+        self.env.locked().clone()
+    }
+
+    /// Take into the daemon's `PATH` the folders installers stored since it started (SPEC
+    /// §24.2): on Windows the registry's `Path`, which `ptyro setup`, WinGet and the vendors'
+    /// installers write and a running process never sees otherwise; nothing elsewhere. Called
+    /// when a setup run or a session ends and before an agent or gh is looked for, so what setup
+    /// just installed starts without a daemon restart (the final review's I1). On Windows the
+    /// daemon's own `PATH` follows too, for the programs it runs without a child environment
+    /// (git).
+    pub(crate) fn refresh_path(&self) {
+        let Some(stored) = ptyro_agents::setup::stored_path() else { return };
+        let mut env = self.env.locked();
+        let Some((_, path)) = env.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case("PATH")) else {
+            return;
+        };
+        let fresh = ptyro_agents::setup::refreshed_path(path, &stored, &self.tools_path);
+        if fresh != *path {
+            #[cfg(windows)]
+            ptyro_pty::winreg::set_process_path(&fresh);
+            *path = fresh;
+        }
     }
 
     pub(crate) fn hub(&self) -> crate::session::Hub {

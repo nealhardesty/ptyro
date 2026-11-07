@@ -196,6 +196,14 @@ pub fn delete_tree(key: &str) -> io::Result<()> {
     check(r, &format!("HKCU\\{key}"))
 }
 
+/// Set this process's own `PATH`, what a `Command` without its own environment searches (the
+/// daemon's, after an installer stored a folder in the registry's `Path`, SPEC §24.2).
+pub fn set_process_path(path: &OsStr) {
+    // SAFETY: the standard library documents `set_var` as always safe on Windows, in
+    // multi-threaded programs too (the environment block is guarded by the OS).
+    unsafe { std::env::set_var("PATH", path) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

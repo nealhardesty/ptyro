@@ -2268,8 +2268,8 @@ impl Daemon {
         set: &ChangeSet,
     ) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
         let mut env = match self.profile_plan(&set.profile).await {
-            Ok(plan) => plan.apply(self.base_env.iter().cloned()),
-            Err(_) => self.base_env.clone(),
+            Ok(plan) => plan.apply(self.base_env().iter().cloned()),
+            Err(_) => self.base_env(),
         };
         env.push(("PTYRO_CS".into(), set.name.clone().into()));
         env.push(("PTYRO_CS_ROOT".into(), set.root.clone().into()));

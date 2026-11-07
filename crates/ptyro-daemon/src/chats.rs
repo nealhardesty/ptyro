@@ -2273,7 +2273,7 @@ impl Daemon {
             return Some(Vec::new());
         }
         let argv = self.agent_argv("codex")?;
-        let env = plan.apply(self.base_env.iter().cloned());
+        let env = plan.apply(self.base_env().iter().cloned());
         tokio::task::spawn_blocking(move || {
             let mut c = std::process::Command::new(&argv[0]);
             c.args(&argv[1..]).args(["mcp", "list", "--json"]).env_clear().envs(env);
@@ -2877,7 +2877,7 @@ impl Daemon {
             ),
             &secrets,
         );
-        let env = plan.apply(self.base_env.iter().cloned());
+        let env = plan.apply(self.base_env().iter().cloned());
         let dir = self.paths.data.join("summaries");
         let out = tokio::task::spawn_blocking(move || {
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;

@@ -121,10 +121,14 @@ export function newTask(where?: string, task?: string): void {
   const go1 = h("button", { class: "primary" }, "Start");
   // Setup is a tap away (BOOT9): with no agent on the computer, said first.
   const none = data.agents.length > 0 && !agents.length;
-  const setupLink = h("a", { href: "#/setup", title: tipOf("setup.offer"), onclick: () => s.close() }, none ? "Set up agents and tools" : "Install another agent");
+  // Only a device that can install (full scope) is offered it; others are told where.
+  const full = conn.scope === "full";
+  const setupLink = full
+    ? h("a", { href: "#/setup", title: tipOf("setup.offer"), onclick: () => s.close() }, none ? "Set up agents and tools" : "Install another agent")
+    : h("span", {}, "run ", h("code", {}, "ptyro setup"), " on the computer");
   const agentHint = none
     ? h("p", { class: "form-err" }, "No coding agent is installed on the computer yet: ", setupLink, " (Claude Code, Codex, or Antigravity for a Google account).")
-    : h("small", { class: "sub" }, setupLink);
+    : full ? h("small", { class: "sub" }, setupLink) : null;
   const s = sheet("New task", [
     h("label", { class: "field" }, h("span", {}, "Task"), prompt),
     h("label", { class: "field" }, h("span", {}, "Agent"), agent), agentHint, commandRow,

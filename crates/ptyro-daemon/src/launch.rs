@@ -379,7 +379,7 @@ impl Daemon {
         // The scratchpad (NOTE1.0): shells, agents and scripts find the notes file here.
         let pad = self.pad_path().into_os_string();
         extra.push(("PTYRO_SCRATCHPAD", pad.as_os_str()));
-        ptyro_pty::child_env(plan.strip(self.base_env.iter().cloned()), extra)
+        ptyro_pty::child_env(plan.strip(self.base_env().iter().cloned()), extra)
     }
 
     /// A shell session started with ptyro's integration (SPEC §8.7): writes the files it reads
@@ -595,7 +595,8 @@ impl Daemon {
         // relay and project scripts, unless someone already chose one (WIN8).
         if cfg!(windows) && adapter_id.as_deref() == Some("claude") {
             let set = plan.set.iter().chain(&agent_env).map(|(k, _)| k.as_str());
-            let base = self.base_env.iter().filter_map(|(k, _)| k.to_str());
+            let base_env = self.base_env();
+            let base = base_env.iter().filter_map(|(k, _)| k.to_str());
             agent_env.extend(claude_git_bash(set.chain(base), || {
                 ptyro_core::shell::ScriptEnv::here(ptyro_core::shell::git_bash)
             }));

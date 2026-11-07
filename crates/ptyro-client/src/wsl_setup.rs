@@ -114,12 +114,7 @@ pub async fn survey(distro: &str) -> Result<Survey, WslStatus> {
         .map_err(|e| unusable(e, "check the distro's name in `wsl -l`".into()))?;
     let out = tokio::time::timeout(
         Duration::from_secs(120),
-        tokio::process::Command::new(remote::wsl_exe())
-            .args(&args)
-            .env("WSL_UTF8", "1")
-            .stdin(Stdio::null())
-            .kill_on_drop(true)
-            .output(),
+        remote::hidden_wsl(&args).stdin(Stdio::null()).kill_on_drop(true).output(),
     )
     .await
     .map_err(|_| {
@@ -209,11 +204,10 @@ pub fn run(distro: &str, plan: &Plan, admin: Admin, on: &mut dyn FnMut(Event)) -
             Admin::Silent => cmd.stdin(Stdio::null()).stderr(Stdio::inherit()),
             Admin::Never => cmd.stdin(Stdio::null()).stderr(Stdio::piped()),
         };
-        #[cfg(windows)]
+        // The daemon's run (for the web): nobody's terminal, so no window (SPEC §20.12). The
+        // CLI's shares the person's terminal for sudo's prompt.
         if admin == Admin::Never {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            cmd.creation_flags(CREATE_NO_WINDOW);
+            ptyro_core::os::no_window(&mut cmd);
         }
         let mut child = cmd.spawn().map_err(|e| format!("couldn't run wsl.exe: {e}"))?;
         let errs = child.stderr.take().map(|mut e| {
@@ -270,7 +264,7 @@ pub fn run(distro: &str, plan: &Plan, admin: Admin, on: &mut dyn FnMut(Event)) -
 }
 
 /// `ptyro <args>` in `distro`, in this terminal: a login there (BOOT4), whose sign-in is the
-/// person's to see. Its exit code.
+/// person's to see. Its exit code. (It shares this terminal's console, so never `no_window`.)
 pub fn interact(distro: &str, args: &[String]) -> Result<i32, String> {
     let argv = ptyro_args(distro, args)?;
     let status = Command::new(remote::wsl_exe())
@@ -288,12 +282,7 @@ pub fn logins(distro: &str, ids: &[String]) -> Result<Vec<LoginRow>, String> {
     let argv = ptyro_args(distro, &args)?;
     let mut cmd = Command::new(remote::wsl_exe());
     cmd.args(&argv).env("WSL_UTF8", "1").stdin(Stdio::null()).stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    ptyro_core::os::no_window(&mut cmd);
     let out = cmd.output().map_err(|e| format!("couldn't run wsl.exe: {e}"))?;
     let text = String::from_utf8_lossy(&out.stdout);
     let mut rows: Vec<LoginRow> = serde_json::from_str(text.trim()).map_err(|_| {

@@ -110,6 +110,22 @@ pub fn tailscale() -> std::process::Command {
     std::process::Command::new("tailscale")
 }
 
+/// A console program ptyro runs in the background, its output read or dropped and never shown
+/// (a probe, a survey, `wsl.exe -l`): on Windows without a console window of its own
+/// (`CREATE_NO_WINDOW`), so a ptyro with no console (`ptyrow`, the daemon) never flashes one
+/// (SPEC §20.12). Not for a program that shares the person's terminal (a login, sudo's prompt):
+/// it needs that console. Nothing elsewhere.
+pub fn no_window(cmd: &mut std::process::Command) -> &mut std::process::Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW)
+    }
+    #[cfg(not(windows))]
+    cmd
+}
+
 /// Start `cmd` on its own, so it outlives whatever started it and a terminal's signals don't
 /// reach it: its own process group on Unix; on Windows a new process group with a console of
 /// its own that has no window. Not `DETACHED_PROCESS` (no console at all): then every console

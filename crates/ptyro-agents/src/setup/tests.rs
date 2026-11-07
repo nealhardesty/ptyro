@@ -1400,12 +1400,11 @@ fn the_vendors_own_copy_not_answering_is_repaired_never_deleted() {
         .unwrap();
     assert!(error.contains("doesn't answer `codex --version`"), "{error}");
     assert!(
-        fix.starts_with(
-            "repair it by installing it again: install it again: `ptyro install codex`"
-        ),
+        fix.starts_with("repair it by installing it again: `ptyro install codex`, or run `"),
         "{fix}"
     );
     assert!(!fix.contains("rm ") && !fix.contains("Remove-Item"), "{fix}");
+    assert_eq!(fix.matches("again").count(), 1, "said once: {fix}");
 }
 
 #[test]

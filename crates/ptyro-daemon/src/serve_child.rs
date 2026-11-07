@@ -179,7 +179,7 @@ impl Daemon {
         }
         let child = std::process::Command::new(exe)
             .args(["serve", "--managed"])
-            .envs(self.base_env.iter().map(|(k, v)| (k, v)))
+            .envs(self.base_env().iter().map(|(k, v)| (k, v)))
             // Who to outlive by no more than a moment (Windows has no parent to watch: WIN11).
             .env("PTYRO_DAEMON_PID", std::process::id().to_string())
             // And when it started (Windows): a later process given the same id isn't it (WIN11).

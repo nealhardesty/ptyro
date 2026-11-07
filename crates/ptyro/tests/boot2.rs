@@ -191,13 +191,19 @@ async fn the_checklist_comes_back_on_its_key_and_installs_what_is_ticked() {
     );
 }
 
-/// `ptyro init` offers the same checklist (the CLI's, in its terminal) in its agents step.
+/// `ptyro init` offers the same checklist (the CLI's, in its terminal) in its agents step; with
+/// no agent found, yes is its default (BOOT9), so Enter opens it.
 #[tokio::test]
 async fn init_offers_the_setup_checklist() {
     let w = World::new(json!({}));
     let r = run(w
         .ptyro(&["init"])
-        .send_when("open the setup checklist", "y\\r")
+        // No agent the developer has may be found (PATH, nvm's, npm's): none is, so the
+        // question defaults to yes.
+        .env("PATH", "/usr/bin:/bin")
+        .env("NVM_DIR", &path(&w.dir.path().join("no-nvm")))
+        .env("NPM_CONFIG_PREFIX", &path(&w.dir.path().join("no-npm")))
+        .send_when("open the setup checklist, to install agents and tools? [Y/n]", "\\r")
         .send_when("Enter to install", "q\\r")
         .until("Nothing installed."))
     .await

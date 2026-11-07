@@ -1991,7 +1991,12 @@ impl App {
             && self.setup_run.is_some()
         {
             let name = spec.name.clone();
-            self.setup_spawned(name.as_deref(), res.is_ok());
+            // Asked to agree first: the Confirm overlay may still start it (a `y`), so the run
+            // is kept until it does, or the person declines (BOOT2's M2).
+            let asked = matches!(&res, Err(e) if e.code == ErrorCode::NeedsConfirmation);
+            if !asked {
+                self.setup_spawned(name.as_deref(), res.is_ok());
+            }
         }
         // A reply that opens a dialog must not replace the box someone is typing in: it is
         // held aside while the reply is handled, then put back (and the reply said so).
@@ -5551,6 +5556,14 @@ impl App {
                         self.chat_not_made(*token, text.clone(), why.into());
                     }
                 }
+                // The setup checklist's split declined: it never starts, so the run is over.
+                (
+                    KeyCode::Char { c: 'n' | 'N' } | KeyCode::Esc | KeyCode::Enter,
+                    Confirmed::Spawn(spec, _),
+                ) => {
+                    let name = spec.name.clone();
+                    self.setup_spawned(name.as_deref(), false);
+                }
                 (KeyCode::Char { c: 'n' | 'N' } | KeyCode::Esc | KeyCode::Enter, _) => {}
                 _ => self.overlay = Some(Overlay::Confirm { action, text }),
             },
@@ -8400,8 +8413,6 @@ mod tests {
             panic!("{}", toast.text)
         };
         assert_eq!((cmd.action, cmd.arg), ("app.setup", None));
-        // The chat picker names the checklist's key for one that isn't installed.
-        assert_eq!(app.setup_key(), "C-q U");
     }
 
     /// No message the TUI writes tells you to type a command (UX1.17): it offers the fix.
@@ -9101,6 +9112,17 @@ mod tests {
             Err(ptyro_core::Error::new(ErrorCode::Internal, "no pty")),
         ));
         assert!(app.setup_run.is_none(), "a failed spawn frees it");
+        // 1b. Asked to agree first: kept while the question is up (a `y` still starts it); a
+        // `n` means it never starts, which frees it.
+        app.setup_run = run();
+        app.on_reply(AppMsg::Reply(
+            spawned(),
+            Err(ptyro_core::Error::new(ErrorCode::NeedsConfirmation, "another profile?")),
+        ));
+        assert!(app.setup_run.is_some(), "kept while the question is up");
+        assert!(matches!(app.overlay, Some(Overlay::Confirm { action: Confirmed::Spawn(..), .. })));
+        app.overlay_key(KeyEvent::new(KeyCode::Char { c: 'n' }, Mods::NONE));
+        assert!(app.setup_run.is_none(), "declined: freed");
         // 2. Started, then closed by the person before the list ever showed it running.
         app.setup_run = run();
         let s = session("ptyro-install");

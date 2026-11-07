@@ -539,8 +539,8 @@ function pickAgent(c) {
     const where = (a) => data.agents.find((x) => x.name === a)?.found ?? "";
     menu("Which agent? The conversation carries over", [
         ...agentNames().map((a) => ({ title: tip("chat.agent"), label: a, hint: [a === c.agent ? "now" : "", where(a)].filter(Boolean).join(" · "), run: () => update(c, { agent: a }, `The next message goes to ${a}`) })),
-        // Another one is a tap away (BOOT9).
-        { title: tipOf("setup.offer"), label: "Install another agent…", hint: "The setup checklist", run: () => go("#/setup") },
+        // Another one is a tap away (BOOT9), on a device that can install.
+        ...(conn.scope === "full" ? [{ title: tipOf("setup.offer"), label: "Install another agent…", hint: "The setup checklist", run: () => go("#/setup") }] : []),
     ]);
 }
 /// Whether `presets` is the daemon's list (yours too), not the built-in three it starts as.

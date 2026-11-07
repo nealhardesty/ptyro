@@ -208,7 +208,7 @@ ptyro login --check                           # where each login stands, changin
   such command, so they sign in when they start; `ptyro login agy` starts one now. Later,
   `ptyro login` does the same for anything not logged in (`ptyro login gh` for one,
   `--where wsl` for WSL's side). In the TUI it's `app.login`; on the web, Settings → Agents and
-  tools (or More → Set up ptyro) → Log in, which runs the sign-in in a session and shows its link and code there. With `--yes`,
+  tools (or More → Set up ptyro) → Log in, which runs the sign-in in a session and shows its link and code there (on Windows with WSL, WSL's logins are listed there too). With `--yes`,
   setup only says which aren't logged in.
 - **Installed another way? Move it, or keep it.** An agent you installed with npm, Homebrew or
   WinGet (Codex through `npm install -g @openai/codex`, say) shows in the checklist as "installed
@@ -261,7 +261,7 @@ ptyro update --check      # only look now, and say what's out of date
   nothing is replaced. Then the daemon is upgraded live: every session keeps running. On Windows
   with WSL, Windows' `ptyro.exe` and the ptyro in your distro are updated together, so the two
   always match. Installed with Homebrew, it runs `brew upgrade ptyro`; installed another way
-  (cargo, a system package), ptyro says how to update it and never replaces it. In a folder only
+  (cargo, a system package, Nix or Guix), ptyro says how to update it and never replaces it. In a folder only
   an administrator can write (`/usr/local/bin`), `ptyro update ptyro` in a terminal asks for your
   password (sudo); the web app shows the command to run there instead.
 - **Each the way it was installed.** The update is the vendor's own (`claude update`, Codex's

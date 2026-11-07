@@ -138,6 +138,9 @@ impl Daemon {
                         | DomainEvent::SessionCreated { info }
                         | DomainEvent::SessionRestarted { info },
                     ) => {
+                        // A split's `ptyro install` (or the person's own winget) has ended: what
+                        // it stored on Windows' Path is the daemon's now (SPEC §24.2).
+                        me.refresh_path();
                         if let Some(w) = info.worktree {
                             me.sync_locks().await;
                             let _ = me.status_tx.send(w);

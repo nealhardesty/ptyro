@@ -360,6 +360,99 @@ fn the_web_lists_the_logins_and_runs_one_in_a_session() {
     let _ = serve.wait();
 }
 
+/// The web on a Windows daemon with WSL (the final review's M2): `login.list` and `login.start`
+/// take `where: "wsl"`, so WSL's logins are listed and run from the page too, in a session
+/// running `ptyro login --where wsl <id>` (WSL's own ptyro, through wsl.exe, in that terminal).
+#[test]
+fn the_web_lists_and_runs_wsls_logins_too() {
+    let dir = tempfile::Builder::new().prefix("ptyro-boot4-wweb-").tempdir().unwrap();
+    let d = dir.path();
+    for p in ["fake", "home", "wsl/Ubuntu/fake", "wsl/Ubuntu/home", "wsl/Ubuntu/ptyro"] {
+        std::fs::create_dir_all(d.join(p)).unwrap();
+    }
+    let win = json!({ "platform": "windows-x64", "programs": ["winget"], "installed": { "gh": "2.57.0" } });
+    std::fs::write(d.join("fake/world.json"), win.to_string()).unwrap();
+    std::fs::write(d.join("wsl/distros"), "Ubuntu\n").unwrap();
+    let linux = json!({ "platform": "linux", "programs": ["apt-get", "sudo", "curl"], "installed": { "codex": "0.162.1" } });
+    std::fs::write(d.join("wsl/Ubuntu/fake/world.json"), linux.to_string()).unwrap();
+    let wsl = ptyro_testkit::program::program(
+        &d.join("bin"),
+        "wsl",
+        BIN,
+        &format!("exec \"{BIN}\" fake-wsl \"$@\""),
+        &[BIN, "fake-wsl"],
+        &[],
+    );
+    let s = |p: PathBuf| p.to_string_lossy().into_owned();
+    let (fake, home, wsl, fake_wsl) =
+        (s(d.join("fake")), s(d.join("home")), s(wsl), s(d.join("wsl")));
+    let env = [
+        ("PTYRO_TEST_SETUP", fake.as_str()),
+        ("HOME", home.as_str()),
+        ("SHELL", "/bin/sh"),
+        ("PTYRO_WSL", wsl.as_str()),
+        ("PTYRO_FAKE_WSL", fake_wsl.as_str()),
+    ];
+    let daemon = TempDaemon::start_with_env(BIN, &env).unwrap();
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let mut serve = daemon
+        .cmd()
+        .args(["serve", "--loopback-http", "--port", &port.to_string()])
+        .envs(env)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !ptyro_testkit::listening(port) {
+        assert!(Instant::now() < deadline, "serve never listened");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let token = {
+        let o = daemon.cmd().args(["pair", "phone", "--scope", "full", "--json"]).output().unwrap();
+        let v: Value = serde_json::from_slice(&o.stdout).unwrap();
+        let code = v["url"].as_str().unwrap().split("#pair=").nth(1).unwrap().to_owned();
+        let (_, body) = http(port, "/api/pair", None, &json!({ "code": code }));
+        body["token"].as_str().unwrap().to_owned()
+    };
+    let host = |body: Value| http(port, "/api/host", Some(&token), &body).1;
+
+    let v = host(json!({ "op": "login.list", "where": "wsl" }));
+    let rows = v["reply"]["logins"].as_array().unwrap_or_else(|| panic!("{v}"));
+    let codex = rows.iter().find(|r| r["id"] == "codex").unwrap_or_else(|| panic!("{v}"));
+    assert_eq!(codex["state"], "logged_out", "{v}");
+    assert_eq!(codex["side"], "wsl", "{v}");
+    let v = host(json!({ "op": "login.list", "where": "elsewhere" }));
+    assert_eq!(v["t"], "err", "{v}");
+
+    let v = host(json!({ "op": "login.start", "id": "codex", "where": "wsl" }));
+    let session = v["reply"]["session"].as_str().unwrap_or_else(|| panic!("{v}")).to_owned();
+    let log = |p: &str| std::fs::read_to_string(d.join(p)).unwrap_or_default();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !log("wsl/Ubuntu/fake/logins.log").contains("login codex") {
+        let o = daemon.cmd().args(["read", &session]).output().unwrap();
+        assert!(
+            Instant::now() < deadline,
+            "no login in WSL:\n{}",
+            String::from_utf8_lossy(&o.stdout)
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(!log("fake/logins.log").contains("login codex"), "not on Windows' side");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let v = host(json!({ "op": "login.list", "where": "wsl" }));
+        let rows = v["reply"]["logins"].as_array().unwrap_or_else(|| panic!("{v}"));
+        if rows.iter().find(|r| r["id"] == "codex").unwrap()["state"] == "logged_in" {
+            break;
+        }
+        assert!(Instant::now() < deadline, "never logged in: {v}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let _ = serve.kill();
+    let _ = serve.wait();
+}
+
 /// `POST path` with JSON (and a bearer token) → (status, the JSON body).
 fn http(port: u16, path: &str, token: Option<&str>, body: &Value) -> (u16, Value) {
     let body = body.to_string();
@@ -458,8 +551,9 @@ fn ctrl_c_during_a_login_never_ends_ptyro() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    // ptyro's handler is in place before it starts the login (`interrupts_skip`), so once the
+    // login has written its line, Ctrl+C is the login's: no wait beyond that condition.
     wait_for(&|| m.ran() == ["login gh"]);
-    std::thread::sleep(Duration::from_millis(200));
     interrupt(child.id());
     let o = child.wait_with_output().unwrap();
     let t = text(&o);
@@ -503,7 +597,6 @@ fn ctrl_c_during_a_login_never_ends_ptyro() {
         c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
     let log = d.join("wsl/Ubuntu/fake/logins.log");
     wait_for(&|| std::fs::read_to_string(&log).unwrap_or_default().contains("login codex"));
-    std::thread::sleep(Duration::from_millis(200));
     interrupt(child.id());
     let o = child.wait_with_output().unwrap();
     let t = text(&o);

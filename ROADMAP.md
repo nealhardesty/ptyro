@@ -3380,11 +3380,18 @@ machine". The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-desi
   daemon's chat, session, `gh` and git refusals (a session of a missing agent no longer says "No
   such file or directory"), `ptyro update` and `ptyro init` (which now notices no agent). The TUI
   offers each on `toast.act` ("C-q u set it up (the checklist)", that one ticked) and its chat
-  picker names `C-q U`; the web opens a sheet with Set up (`setup.offer`) for a refused request,
+  picker's missing agent sets itself up on ⏎; the web opens a sheet with Set up (`setup.offer`) for a refused request,
   offers it from Health's findings, and links setup from the new-task sheet and the chat's agent
   picker. No protocol change. SPEC §24.10; tested in `locate.rs`, the TUI's
   `a_missing_agent_offers_the_setup_checklist`, `chat_compare.rs`'s
   `a_missing_agent_offers_setup_not_the_os_error` and `web/test/setup.mjs`.
+  **[final fix wave 2026-11-07]** The whole-feature review's fixes (SPEC §24.11): a running
+  daemon finds what setup just installed on Windows (it merges the registry's `Path`, `boot1`'s
+  `an_agent_setup_installed_starts_without_a_daemon_restart`), `locate` searches the version
+  table's vendor folders (`bin`, so OpenCode's `~/.opencode/bin` and Codex's Windows folder are
+  found and BOOT7's OpenCode move can finish), the web logs WSL's side in too, a Nix-store ptyro
+  is Nix's to update, background `wsl.exe` runs have no window, and the setup lock, the TUI's
+  setup guard, the prompt watch and a shell watch's order are tightened.
 
 **Done when:** the design's five checks pass on fresh Windows 11, Ubuntu and macOS machines.
 What CI checks (on the fake machine, `PTYRO_TEST_SETUP`, with no network and no real installer;
@@ -3425,10 +3432,10 @@ ptyro installed from its release (`install.sh` / `install.ps1`), signed in to re
   (its own dialog), gh and Node.js where the table says; Claude and Codex sessions work.
 - **H6, add an agent later** (any of them): `ptyro install agy` installs Antigravity and starts
   its sign-in; on another, the web's Settings → Agents and tools → tick Antigravity → Install 1.
-- **H7, an older agent:** install an older Codex (`npm i -g @openai/codex@<an older version>`),
-  then `ptyro doctor`: "Codex … is out (you have …)", and the move to the vendor's installer
-  offered; start `ptyro`: the note says it once (`C-q u` updates it); `ptyro update codex`
-  updates it. Start again: no note.
+- **H7, an older agent** (the design's "With an older Claude Code"): install an older Claude Code
+  (`npm i -g @anthropic-ai/claude-code@<an older version>`), then `ptyro doctor`: "Claude Code …
+  is out (you have …)", and the move to the vendor's installer offered; start `ptyro`: the note
+  says it once (`C-q u` updates it); `ptyro update claude` updates it. Start again: no note.
 - **H8, an older ptyro:** install the previous release (`PTYRO_VERSION=<previous> install.sh`),
   start a session, run `ptyro update ptyro`: it downloads, checks SHA256SUMS (and, with gh, the
   provenance), replaces the binary and upgrades the daemon live; the session is still there. On

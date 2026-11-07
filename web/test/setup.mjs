@@ -4,7 +4,7 @@
 // missed or shown twice.
 //   node web/test/setup.mjs
 import assert from "node:assert/strict";
-import { adminSteps, bannerWants, isHere, leftForComputer, moveOffer, movesOf, moveWords, noAgent, retryOf, runningAgent, selfUpdate, setupOffer, SetupLog, updateOffer, viaWords, waitsForAdmin, webSteps } from "../dist/setupkit.js";
+import { adminSteps, bannerWants, isHere, leftForComputer, moveOffer, movesOf, moveWords, noAgent, retryOf, runningAgent, selfUpdate, setupLabel, setupOffer, SetupLog, updateOffer, viaWords, waitsForAdmin, webSteps } from "../dist/setupkit.js";
 
 const entry = (id, kind, state, more = {}) => ({ id, name: id[0].toUpperCase() + id.slice(1), kind, state, side: "local", ticked: false, picked: false, ...more });
 
@@ -284,4 +284,16 @@ console.log("setup: ok");
   assert.equal(setupOffer("`ptyro install codex` moves it to the vendor's installer"), null);
   assert.equal(setupOffer("Codex 0.170.0 is out: `ptyro update codex` updates it"), null);
   assert.equal(setupOffer("mine isn't installed (/opt/mine is nowhere ptyro looks): install it, or set [agents.mine] command to its full path"), null);
+}
+
+// A setup offer's button names what the checklist calls it: Antigravity, never its program
+// `agy` (BOOT9 review); the agent's name while no plan is known; the defaults with no picks.
+{
+  const agents = [{ name: "antigravity", program: "agy" }, { name: "codex", program: "codex" }];
+  const entries = [{ id: "antigravity", name: "Antigravity" }, { id: "gh", name: "GitHub CLI" }];
+  assert.equal(setupLabel(["agy"], agents, entries), "Set up Antigravity");
+  assert.equal(setupLabel(["agy", "gh"], agents, entries), "Set up Antigravity, GitHub CLI");
+  assert.equal(setupLabel(["agy"], agents, []), "Set up antigravity");
+  assert.equal(setupLabel(["codex"], agents, entries), "Set up codex");
+  assert.equal(setupLabel([], agents, entries), "Set up agents and tools");
 }

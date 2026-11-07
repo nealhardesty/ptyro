@@ -494,7 +494,6 @@ fn ext(kind: ShellKind) -> &'static str {
     }
 }
 
-/// POSIX single quotes.
 /// Lines that put `dirs` at the front of `PATH`, each once, for an rc file: what `ptyro
 /// shell-init` prints first, for every shell (not only ptyro's), so the tools `ptyro setup`
 /// installed into ptyro's own folder are found (BOOT1, SPEC §24.2). `dirs[0]` ends up first.
@@ -541,6 +540,7 @@ pub fn msys_form(p: &str) -> String {
     }
 }
 
+/// POSIX single quotes.
 fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }

@@ -901,7 +901,9 @@ impl Daemon {
             }
             let screen = s.read_screen(ptyro_protocol::ScreenFormat::Plain);
             if s.is_live() && in_box(a.pending_input(&screen).as_deref(), &want) {
-                unconfirmed(if a.drops_enter() {
+                unconfirmed(if spoke_since(entered) {
+                    "the agent answered, yet it still shows in its input box"
+                } else if a.drops_enter() {
                     "it still shows in its input box, and pressing Enter again wasn't safe"
                 } else {
                     "it still shows in its input box, and this agent isn't known to drop an Enter, so ptyro doesn't press it again"
@@ -1563,7 +1565,7 @@ impl Daemon {
         }
         for (profile, sessions) in by_profile {
             let Ok(plan) = self.profile_plan(&profile).await else { continue };
-            let env = plan.apply(self.base_env.iter().cloned());
+            let env = plan.apply(self.base_env().iter().cloned());
             let argv = self.agent_program("claude").unwrap_or_else(|| vec!["claude".into()]);
             // Bounded: a hung `claude agents` must not stall every session's ticks.
             let out = tokio::task::spawn_blocking(move || {
@@ -1657,11 +1659,16 @@ fn look_at_box(l: &BoxLook) -> BoxStep {
     if !l.in_box {
         return BoxStep::Taken;
     }
-    if l.spoke {
-        return BoxStep::Unconfirmed("the agent answered, yet it still shows in its input box");
-    }
+    // A dialog first: it is on screen until answered, whenever the agent's hooks come, so the
+    // report says so however late this look is (Task F re-review's R1).
     if l.dialog {
         return BoxStep::Unconfirmed("a dialog is on screen while it still shows in its input box");
+    }
+    if l.spoke {
+        // It took something: never pressed. A hook comes by socket and the box's redraw through
+        // the terminal, so a lagging screen can still show a prompt that was taken: watched to
+        // the end, and reported only if it stays (R2).
+        return BoxStep::Keep;
     }
     if !l.drops_enter {
         // Watched to the end, then reported if it stays (it may yet leave: a redraw that lags).
@@ -1724,8 +1731,14 @@ mod tests {
         };
         assert_eq!(look_at_box(&codex), BoxStep::Press, "every sign of a dropped Enter");
         assert_eq!(look_at_box(&BoxLook { in_box: false, ..codex }), BoxStep::Taken);
-        assert!(matches!(look_at_box(&BoxLook { spoke: true, ..codex }), BoxStep::Unconfirmed(_)));
+        // It answered: never pressed, watched on (a lagging redraw), reported at the end.
+        assert_eq!(look_at_box(&BoxLook { spoke: true, ..codex }), BoxStep::Keep);
         assert!(matches!(look_at_box(&BoxLook { dialog: true, ..codex }), BoxStep::Unconfirmed(_)));
+        // A dialog is said as a dialog, whether or not a hook came first.
+        assert_eq!(
+            look_at_box(&BoxLook { dialog: true, spoke: true, ..codex }),
+            BoxStep::Unconfirmed("a dialog is on screen while it still shows in its input box")
+        );
         assert_eq!(look_at_box(&BoxLook { still: false, ..codex }), BoxStep::Keep);
         assert_eq!(look_at_box(&BoxLook { waiting: false, ..codex }), BoxStep::Reset);
         assert!(matches!(look_at_box(&BoxLook { presses: 2, ..codex }), BoxStep::Unconfirmed(_)));
@@ -1736,7 +1749,7 @@ mod tests {
             look_at_box(&BoxLook { dialog: true, ..claude }),
             BoxStep::Unconfirmed(_)
         ));
-        assert!(matches!(look_at_box(&BoxLook { spoke: true, ..claude }), BoxStep::Unconfirmed(_)));
+        assert_eq!(look_at_box(&BoxLook { spoke: true, ..claude }), BoxStep::Keep);
     }
 
     #[test]

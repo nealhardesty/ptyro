@@ -212,6 +212,21 @@ pub fn registry_path() -> Vec<PathBuf> {
         .collect()
 }
 
+/// The folders installers stored in the `Path` a new terminal gets, for a process that has run
+/// since (the daemon, SPEC §24.2): Windows' registry; on the fake machine a test names
+/// (`PTYRO_TEST_SETUP`, debug builds), its `stored-path`. `None` elsewhere: a Unix `PATH` is
+/// the shell's, with nothing stored to read again (a vendor's own folder is one `locate`
+/// searches).
+pub fn stored_path() -> Option<Vec<PathBuf>> {
+    if let Some(dir) = ptyro_core::test_knob("PTYRO_TEST_SETUP") {
+        return Some(super::fake::stored(Path::new(&dir)));
+    }
+    #[cfg(windows)]
+    return Some(registry_path());
+    #[cfg(not(windows))]
+    None
+}
+
 /// This computer.
 pub struct RealHost {
     platform: Platform,

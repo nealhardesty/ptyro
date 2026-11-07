@@ -298,11 +298,19 @@ impl Daemon {
         let events = self.events.clone();
         let (r, p) = (run.clone(), plan.clone());
         let state = self.paths.state.clone();
+        let me = Arc::clone(self);
         tokio::task::spawn_blocking(move || {
             let _running = running;
             let mut changed = false;
             for side in p.sides() {
-                let mut on = |event| record(&events, &r, side, event);
+                let mut on = |event: setup::Event| {
+                    // What it installed is on the daemon's PATH before anyone hears it ended,
+                    // for the sessions and worktrees started next (SPEC §24.2).
+                    if matches!(event, setup::Event::Finished { .. }) {
+                        me.refresh_path();
+                    }
+                    record(&events, &r, side, event)
+                };
                 let part = p.side(side);
                 if !part.entries.iter().any(|e| e.will_run() || (e.ticked && e.blocked.is_some())) {
                     continue;

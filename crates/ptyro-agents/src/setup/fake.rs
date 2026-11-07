@@ -109,6 +109,15 @@ fn log_to(dir: &Path, file: &str, what: &str) {
     }
 }
 
+/// The folders the fake's installers "added to the registry's Path" (`stored-path`).
+pub(super) fn stored(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_to_string(dir.join("stored-path"))
+        .unwrap_or_default()
+        .lines()
+        .map(PathBuf::from)
+        .collect()
+}
+
 pub(super) struct FakeHost {
     dir: PathBuf,
     world: World,
@@ -307,12 +316,7 @@ impl Host for FakeHost {
         if r.is_ok()
             && let Ok(mut p) = self.path.lock()
         {
-            let stored: Vec<PathBuf> = std::fs::read_to_string(self.dir.join("stored-path"))
-                .unwrap_or_default()
-                .lines()
-                .map(PathBuf::from)
-                .collect();
-            *p = super::refreshed_path(&p, &stored, &self.dirs);
+            *p = super::refreshed_path(&p, &stored(&self.dir), &self.dirs);
         }
         r
     }

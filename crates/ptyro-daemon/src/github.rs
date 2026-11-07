@@ -134,7 +134,7 @@ impl Daemon {
         wt: &WorktreeInfo,
     ) -> Result<Vec<(OsString, OsString)>, Error> {
         let plan = self.profile_plan(&self.wt_profile(wt)).await?;
-        Ok(plan.apply(self.base_env.iter().cloned()))
+        Ok(plan.apply(self.base_env().iter().cloned()))
     }
 
     /// Run `gh` in the worktree. `Ok(stdout)` also when gh exits non-zero but printed JSON
@@ -646,7 +646,8 @@ impl Daemon {
                 let now = now_ms();
                 if now.saturating_sub(gh_checked_ms) > 60_000 || gh_checked_ms == 0 {
                     gh_checked_ms = now;
-                    have_gh = which_gh(&me.base_env);
+                    me.refresh_path();
+                    have_gh = which_gh(&me.base_env());
                 }
                 if !have_gh {
                     continue;
@@ -883,7 +884,11 @@ impl Daemon {
 /// `gh` on the daemon's `PATH`: `gh.exe` on Windows, which is what `Command` runs there (found by
 /// WIN13: a real `gh.exe` was never seen).
 fn which_gh(env: &[(OsString, OsString)]) -> bool {
-    let path = env.iter().find(|(k, _)| k == "PATH").map(|(_, v)| v.clone()).unwrap_or_default();
+    let path = env
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("PATH"))
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default();
     let name = if cfg!(windows) { "gh.exe" } else { "gh" };
     std::env::split_paths(&path).any(|d| d.join(name).is_file())
 }

@@ -20,6 +20,19 @@ fn held_here(path: &Path) -> bool {
     HELD.lock().map(|h| h.contains(path)).unwrap_or(false)
 }
 
+/// Mark `path` as this process's before its file is even opened: `false` when it is already
+/// (a second take here is refused without touching the file, whose closing would let go of the
+/// real lock on NFS). From here until [`release`], an in-process probe never runs.
+fn claim(path: &Path) -> bool {
+    HELD.lock().map(|mut h| h.insert(path.to_path_buf())).unwrap_or(true)
+}
+
+fn release(path: &Path) {
+    if let Ok(mut h) = HELD.lock() {
+        h.remove(path);
+    }
+}
+
 /// Holds the machine's setup lock until dropped.
 #[derive(Debug)]
 pub struct Lock {
@@ -36,14 +49,19 @@ impl Lock {
         let _ = std::fs::create_dir_all(state);
         let path = state.join("setup.lock");
         let who_path = state.join("setup.who");
+        // Claimed before the file is opened or locked, and given up on every way out without
+        // the lock: no in-process probe lands between (BOOT5 re-review's N1 and N2).
+        if !claim(&path) {
+            return Err(busy(&holder(&who_path)));
+        }
         let file = match OpenOptions::new().create(true).write(true).truncate(false).open(&path) {
             Ok(f) => f,
             // Nowhere to keep it (a read-only state folder): don't block the install over it.
-            Err(_) => return Ok(Self { _file: None, who: who_path, path }),
+            Err(_) => {
+                release(&path);
+                return Ok(Self { _file: None, who: who_path, path });
+            }
         };
-        if held_here(&path) {
-            return Err(busy(&holder(&who_path)));
-        }
         // A probe (`held_by`) holds it for an instant: tried again for a moment before refusing,
         // so asking who holds it never refuses a run starting then.
         let until = std::time::Instant::now() + PATIENCE;
@@ -56,17 +74,20 @@ impl Lock {
                     );
                     // A version check going beside this won't write over what it installs
                     // (BOOT5).
-                    if let Ok(mut h) = HELD.lock() {
-                        h.insert(path.clone());
-                    }
                     crate::updates::started(state);
                     return Ok(Self { _file: Some(file), who: who_path, path });
                 }
                 Err(TryLockError::WouldBlock) if std::time::Instant::now() < until => {
                     std::thread::sleep(std::time::Duration::from_millis(20));
                 }
-                Err(TryLockError::WouldBlock) => return Err(busy(&holder(&who_path))),
+                Err(TryLockError::WouldBlock) => {
+                    drop(file);
+                    release(&path);
+                    return Err(busy(&holder(&who_path)));
+                }
                 Err(TryLockError::Error(_)) => {
+                    drop(file);
+                    release(&path);
                     return Ok(Self { _file: None, who: who_path, path });
                 }
             }
@@ -128,11 +149,12 @@ pub fn busy(holder: &str) -> String {
 
 impl Drop for Lock {
     fn drop(&mut self) {
-        if self._file.is_some() {
+        if let Some(file) = self._file.take() {
             let _ = std::fs::remove_file(&self.who);
-            if let Ok(mut h) = HELD.lock() {
-                h.remove(&self.path);
-            }
+            // Closed (the lock let go) before the claim goes, so an in-process probe never
+            // touches the file while this one holds it.
+            drop(file);
+            release(&self.path);
         }
     }
 }
@@ -156,6 +178,38 @@ mod tests {
         assert_eq!(Lock::held_by(dir.path()), None);
         let again = Lock::take(dir.path(), "`ptyro setup`").unwrap();
         drop(again);
+    }
+
+    /// A second take in the holding process is refused before it opens the file (on NFS,
+    /// closing any descriptor of the file lets go of the process's lock). Seen here by putting
+    /// a folder where the lock file was: opening it first would fail, and the take would go
+    /// ahead unguarded instead of being refused.
+    #[cfg(unix)]
+    #[test]
+    fn a_second_take_here_never_opens_the_lock_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let held = Lock::take(dir.path(), "the web app").unwrap();
+        let path = dir.path().join("setup.lock");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let err = Lock::take(dir.path(), "x").expect_err("refused, the file never opened");
+        assert!(err.starts_with("setup is already running (from the web app"), "{err}");
+        drop(held);
+        std::fs::remove_dir(&path).unwrap();
+    }
+
+    /// A take refused because another holds it leaves no claim behind: afterwards a probe here
+    /// asks the operating system again, and finds it free.
+    #[test]
+    fn a_refused_take_leaves_no_claim_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        drop(Lock::take(dir.path(), "x").unwrap());
+        let other = OpenOptions::new().write(true).open(dir.path().join("setup.lock")).unwrap();
+        other.try_lock().unwrap();
+        assert!(Lock::take(dir.path(), "y").is_err(), "another holds it");
+        drop(other);
+        assert_eq!(Lock::held_by(dir.path()), None, "no claim left");
+        drop(Lock::take(dir.path(), "z").expect("free again"));
     }
 
     /// A probe at the same instant as another (two checklists looking, two test threads) is no
