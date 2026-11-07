@@ -1263,8 +1263,9 @@ async fn ux1_done_when_from_a_fresh_machine_to_a_merged_and_cleaned_up_pr() {
     }
     let r = ptyro_testkit::headless::run(
         script
-            // 1. The first run (no config): ⏎ keeps what it found, myrepo included.
-            .send_when("Welcome to ptyro", "\\r")
+            // 1. The first run (no config): s (not now) installs nothing and keeps what it
+            // found, myrepo included.
+            .send_when("Welcome to ptyro", "s")
             .send_when("▾ main", "\\x11n")
             // 2. A task, ⏎.
             .send_when("What should it do?", "fix the typo in greeting.txt")

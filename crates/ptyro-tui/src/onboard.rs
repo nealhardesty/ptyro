@@ -1,9 +1,13 @@
 //! The first run and home (ROADMAP UX1.19): what `ptyro init` asks, as a screen of checkboxes
 //! the first time `ptyro` opens with no config; and home, one list of what to do next (who needs
 //! you, PRs, recent projects, repositories found) when there's nothing to work on yet.
+//!
+//! The first run's first part is the setup checklist (BOOT2, `setup_list.rs`): the agents and
+//! tools to install. The same screen with only that part is `app.setup` (`U`).
 
 use std::path::{Path, PathBuf};
 
+use ptyro_agents::setup::WslStatus;
 use ptyro_core::config::{Config, expand_home};
 use ptyro_core::input::{KeyCode, KeyEvent};
 use ptyro_protocol::Request;
@@ -16,6 +20,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use crate::app::{AfterAdd, App, Offer, Overlay, Pending, Purpose, Then};
 use crate::keymap::Command;
 use crate::palette::{Item, Palette, Target};
+use crate::setup_list::{Found, Setup};
 use crate::ui::fg;
 
 /// One line of the first-run screen that can be ticked.
@@ -38,15 +43,21 @@ pub enum ChoiceKind {
 
 #[derive(Debug, Clone, Default)]
 pub struct FirstRun {
-    /// Agents on PATH: (name, program, found).
-    pub agents: Vec<(String, String, bool)>,
+    /// The setup checklist: agents and tools to install (BOOT2).
+    pub setup: Setup,
+    /// Opened for the checklist alone (`app.setup`, a health fix): no accounts, repositories or
+    /// notifications, and nothing written to the config.
+    pub only_setup: bool,
     pub choices: Vec<Choice>,
+    /// Over the checklist's rows, then the choices.
     pub sel: usize,
 }
 
-/// `prog` on `PATH`, or where npm, nvm or `npx` put it (the daemon runs it from there too).
-fn on_path(prog: &str) -> bool {
-    ptyro_agents::locate::find(prog, &std::env::var("PATH").unwrap_or_default()).is_some()
+impl FirstRun {
+    /// How many of the rows are the checklist's.
+    fn setup_rows(&self) -> usize {
+        self.setup.rows().len()
+    }
 }
 
 /// Skip the first-run screen (scripted setups): `PTYRO_FIRST_RUN=0`.
@@ -69,10 +80,6 @@ impl App {
     }
 
     pub fn open_first_run(&mut self) {
-        let agents = ptyro_agents::BUILTIN
-            .iter()
-            .map(|(n, p)| ((*n).to_owned(), (*p).to_owned(), on_path(p)))
-            .collect();
         let home = expand_home("~");
         let mut choices: Vec<Choice> =
             ptyro_agents::detect::detect(&home, &ptyro_core::config::config_home(&home))
@@ -99,7 +106,8 @@ impl App {
             on: false,
             kind: ChoiceKind::Desktop,
         });
-        self.first_run = Some(FirstRun { agents, choices, sel: 0 });
+        let setup = self.setup_look(None);
+        self.first_run = Some(FirstRun { setup, only_setup: false, choices, sel: 0 });
         // The repositories join once discovery answers.
         self.request(Pending::FirstRunRepos, Request::Discover { refresh: false });
         self.dirty = true;
@@ -130,27 +138,136 @@ impl App {
 
     pub(crate) fn first_run_key(&mut self, key: KeyEvent) {
         let Some(fr) = &mut self.first_run else { return };
-        let n = fr.choices.len();
+        let ns = fr.setup_rows();
+        let n = ns + fr.choices.len();
         match key.code {
             KeyCode::Down | KeyCode::Char { c: 'j' } if n > 0 => fr.sel = (fr.sel + 1) % n,
             KeyCode::Up | KeyCode::Char { c: 'k' } if n > 0 => fr.sel = (fr.sel + n - 1) % n,
+            KeyCode::Left | KeyCode::Char { c: 'h' } => fr.setup.side_step(-1),
+            KeyCode::Right | KeyCode::Char { c: 'l' } => fr.setup.side_step(1),
+            KeyCode::Char { c: ' ' } if fr.sel < ns => fr.setup.toggle(fr.sel),
             KeyCode::Char { c: ' ' } => {
-                if let Some(c) = fr.choices.get_mut(fr.sel) {
+                if let Some(c) = fr.choices.get_mut(fr.sel - ns) {
                     c.on = !c.on;
                 }
             }
             KeyCode::Enter => {
                 let fr = self.first_run.take().unwrap_or_default();
-                self.finish_first_run(&fr.choices);
+                if !fr.only_setup {
+                    self.finish_first_run(&fr.choices);
+                }
+                self.setup_go(&fr.setup, fr.only_setup);
+            }
+            // Not now: no installs (the first run's other choices still count).
+            KeyCode::Char { c: 's' } => {
+                let fr = self.first_run.take().unwrap_or_default();
+                if fr.only_setup {
+                    self.toast(self.setup_later());
+                } else {
+                    self.finish_first_run(&fr.choices);
+                }
             }
             KeyCode::Esc => {
-                self.first_run = None;
-                // A config, even an empty one, so this screen doesn't come back.
-                self.finish_first_run(&[]);
+                let only = self.first_run.take().is_some_and(|fr| fr.only_setup);
+                if !only {
+                    // A config, even an empty one, so this screen doesn't come back.
+                    self.finish_first_run(&[]);
+                }
             }
             _ => {}
         }
         self.dirty = true;
+    }
+
+    // ── the setup checklist (BOOT2) ─────────────────────────────────────────
+
+    /// `app.setup` (`U`), a health fix: the checklist on its own; `want` ticks those (item names,
+    /// as `ptyro install` takes them) instead of the defaults. With a daemon on another computer,
+    /// that computer's `ptyro setup`, in a split there.
+    pub fn open_setup(&mut self, want: Option<Vec<String>>) {
+        if crate::setup_list::elsewhere(self.connect.remote.as_deref(), cfg!(windows)).is_some() {
+            return self.start_cli("app.setup");
+        }
+        if self.first_run.is_some() {
+            return;
+        }
+        let want = want.map(|names| {
+            names
+                .iter()
+                .filter_map(|n| ptyro_agents::setup::resolve(n).ok().map(|i| i.id.clone()))
+                .collect()
+        });
+        let setup = self.setup_look(want);
+        self.overlay = None;
+        self.first_run = Some(FirstRun { setup, only_setup: true, choices: Vec::new(), sel: 0 });
+        self.dirty = true;
+    }
+
+    /// Start looking at what's installed (in the background); the checklist fills in once it
+    /// answers.
+    fn setup_look(&mut self, want: Option<Vec<String>>) -> Setup {
+        let remote = self.connect.remote.clone();
+        if let Some(r) = crate::setup_list::elsewhere(remote.as_deref(), cfg!(windows)) {
+            return Setup { found: Found::Elsewhere(r), ..Setup::looking(want) };
+        }
+        let (paths, tx) = (self.paths.clone(), self.tx.clone());
+        if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::spawn(async move {
+                let found = crate::setup_list::look(paths, remote).await;
+                let _ = tx.send(crate::app::AppMsg::SetupFound(found.map(Box::new)));
+            });
+        }
+        Setup::looking(want)
+    }
+
+    /// What setup found, for the checklist on screen.
+    pub(crate) fn setup_found(&mut self, found: Option<Box<crate::app::SetupLook>>) {
+        let Some(fr) = &mut self.first_run else { return };
+        if !matches!(fr.setup.found, Found::Looking) {
+            return;
+        }
+        match found {
+            Some(f) => {
+                let (sides, place, note) = *f;
+                fr.setup.found(sides, place, note);
+            }
+            None => fr.setup.found = Found::Failed,
+        }
+        // The checklist's rows come first now: the cursor on the first of them.
+        fr.sel = 0;
+        self.dirty = true;
+    }
+
+    /// ⏎: what's ticked installs in a split (`ptyro install … --confirmed`), a real terminal:
+    /// live output, sudo's prompt, then the logins and the profiles line.
+    fn setup_go(&mut self, setup: &Setup, only: bool) {
+        let wsl_daemon =
+            crate::cli_actions::where_offered(cfg!(windows), self.connect.remote.as_deref())
+                == Some(true);
+        match setup.commands(wsl_daemon, crate::cli_actions::exe_in_wsl().as_deref()) {
+            Ok(runs) if runs.is_empty() => {
+                if only {
+                    self.toast(format!("nothing ticked to install; {}", self.setup_later()));
+                }
+            }
+            Ok(runs) => {
+                for (bin, args) in runs {
+                    match bin {
+                        Some(bin) => self.run_cli_with(bin, &args),
+                        None => self.run_cli(&args),
+                    }
+                }
+            }
+            Err(e) => self.toast_err(e),
+        }
+    }
+
+    /// How to come back to the checklist: its key, or the palette.
+    fn setup_later(&self) -> String {
+        match self.keymap.key_for("app.setup") {
+            Some(k) => format!("{k} opens the setup checklist again"),
+            None => "the palette's app.setup opens the setup checklist again".to_owned(),
+        }
     }
 
     /// Write the config (profiles, notifications), register the repositories, offer the tour.
@@ -324,35 +441,17 @@ fn write_first_config(path: &Path, profiles: &[String], desktop: bool) -> Result
 pub fn draw(app: &App, f: &mut Frame<'_>, area: Rect) {
     let Some(fr) = &app.first_run else { return };
     let t = &app.theme;
-    let r = crate::ui::boxed(area, 92, area.height.saturating_sub(2));
+    let r = crate::ui::boxed(area, 110, area.height.saturating_sub(2));
     f.render_widget(Clear, r);
-    let mut lines = vec![
-        Line::styled(
-            "Welcome to ptyro. Here's what it found; tick what to use, then ⏎.",
-            ratatui::style::Style::new().add_modifier(Modifier::BOLD),
-        ),
-        Line::raw(""),
-        Line::styled(" agents", fg(app, t.dim).add_modifier(Modifier::ITALIC)),
-    ];
-    let default = ptyro_agents::default_agent(&app.config);
-    let mut any = false;
-    for (name, prog, found) in &fr.agents {
-        if !found {
-            continue;
-        }
-        any = true;
-        let def = if *name == default { " (default)" } else { "" };
-        lines.push(Line::styled(
-            format!("   ✓ {name}{def}  `{prog}` on your PATH"),
-            fg(app, t.done),
-        ));
-    }
-    if !any {
-        lines.push(Line::styled(
-            "   none found: install Claude Code, Codex, Gemini CLI or OpenCode; shells work meanwhile",
-            fg(app, t.blocked),
-        ));
-    }
+    let bold = ratatui::style::Style::new().add_modifier(Modifier::BOLD);
+    let head = if fr.only_setup {
+        "Set up this computer: tick the agents and tools to install, then ⏎."
+    } else {
+        "Welcome to ptyro. Tick what to install and what to use, then ⏎."
+    };
+    let mut lines = vec![Line::styled(head, bold)];
+    setup_lines(app, fr, r.width.saturating_sub(2) as usize, &mut lines);
+    let ns = fr.setup_rows();
     let mut section = "";
     for (i, c) in fr.choices.iter().enumerate() {
         if c.section != section {
@@ -365,7 +464,7 @@ pub fn draw(app: &App, f: &mut Frame<'_>, area: Rect) {
         }
         let mark = if c.on { "[x]" } else { "[ ]" };
         let mut style = ratatui::style::Style::new();
-        if i == fr.sel {
+        if ns + i == fr.sel {
             style = style.bg(app.depth.fit(t.selection_bg));
         }
         lines.push(Line::from(vec![
@@ -374,19 +473,33 @@ pub fn draw(app: &App, f: &mut Frame<'_>, area: Rect) {
             Span::styled(format!("  {}", c.detail), style.fg(app.depth.fit(t.dim))),
         ]));
     }
-    if !fr.choices.iter().any(|c| c.section == "repositories") {
+    if !fr.only_setup && !fr.choices.iter().any(|c| c.section == "repositories") {
         lines.push(Line::raw(""));
         lines.push(Line::styled(" repositories: looking…", fg(app, t.dim)));
     }
     lines.push(Line::raw(""));
-    lines.push(Line::styled(
-        " Space ticks · j/k move · ⏎ use these · Esc skip   (the repository you're in is added on its own)",
-        fg(app, t.accent),
-    ));
+    let steps = fr.setup.steps();
+    let two = fr.setup.ready().is_some_and(|r| r.plan.sides().len() > 1);
+    let side = if two { " · ←/→ side" } else { "" };
+    let keys = if fr.only_setup {
+        let go = if steps > 0 { format!("⏎ install {steps}") } else { "⏎ done".to_owned() };
+        format!(" {go} · Space toggle · j/k move{side} · s not now")
+    } else {
+        let go = if steps > 0 {
+            format!("⏎ install {steps} and use these")
+        } else {
+            "⏎ use these".to_owned()
+        };
+        format!(
+            " {go} · Space ticks · j/k move{side} · s not now (installs nothing) · Esc skip   (the repository you're in is added on its own)"
+        )
+    };
+    lines.push(Line::styled(keys, fg(app, t.accent)));
+    let title = if fr.only_setup { " Setup " } else { " First run " };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(fg(app, t.border_focus))
-        .title(Span::styled(" First run ", fg(app, t.accent).add_modifier(Modifier::BOLD)));
+        .title(Span::styled(title, fg(app, t.accent).add_modifier(Modifier::BOLD)));
     // Keep the selection in view.
     let inner_h = r.height.saturating_sub(2) as usize;
     let sel_line = lines
@@ -400,8 +513,190 @@ pub fn draw(app: &App, f: &mut Frame<'_>, area: Rect) {
     );
 }
 
+/// The checklist's part (BOOT2): Agents and Tools to tick, each with what it is and how it
+/// installs (a column per side on Windows with WSL), then Already here, then what WSL is.
+fn setup_lines(app: &App, fr: &FirstRun, width: usize, lines: &mut Vec<Line<'static>>) {
+    use crate::setup_list::{SECTIONS, about, cells, heads, programs_of};
+    use ptyro_agents::setup::checklist::{already, mark};
+    let t = &app.theme;
+    let dim = fg(app, t.dim);
+    let italic = dim.add_modifier(Modifier::ITALIC);
+    let r = match &fr.setup.found {
+        Found::Ready(r) => r,
+        Found::Looking => {
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(" agents and tools: looking at what's installed…", dim));
+            return;
+        }
+        Found::Failed => {
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(
+                " agents and tools: couldn't look at what's installed; `ptyro setup` in a terminal says why",
+                fg(app, t.blocked),
+            ));
+            return;
+        }
+        Found::Elsewhere(remote) => {
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(
+                format!(
+                    " agents and tools: the daemon is on {remote}, so they're set up there: `ptyro setup` on that computer"
+                ),
+                dim,
+            ));
+            return;
+        }
+    };
+    let plan = &r.plan;
+    let sides = plan.sides();
+    let two = sides.len() > 1;
+    let rows = fr.setup.rows();
+    const NAME: usize = 13;
+    const CELL: usize = 24;
+    let programs = programs_of(r, sides.first().copied().unwrap_or_default());
+    for (title, kind) in SECTIONS {
+        let these: Vec<(usize, &&ptyro_agents::setup::Entry)> =
+            rows.iter().enumerate().filter(|(_, e)| e.kind == kind).collect();
+        if these.is_empty() {
+            continue;
+        }
+        lines.push(Line::raw(""));
+        let mut head = vec![Span::styled(format!(" {title}"), italic)];
+        if two {
+            let pad = (NAME + 6).saturating_sub(title.len() + 1);
+            head.push(Span::raw(" ".repeat(pad)));
+            for h in heads(r) {
+                head.push(Span::styled(format!("{h:<CELL$} "), italic));
+            }
+        }
+        lines.push(Line::from(head));
+        for (i, e) in these {
+            let mut style = ratatui::style::Style::new();
+            if i == fr.sel {
+                style = style.bg(app.depth.fit(t.selection_bg));
+            }
+            let accent = style.fg(app.depth.fit(t.accent));
+            let mut spans = Vec::new();
+            if two {
+                spans.push(Span::styled(
+                    format!("   {:<NAME$}  ", e.name),
+                    style.add_modifier(Modifier::BOLD),
+                ));
+                for (c, text) in cells(plan, &e.id).into_iter().enumerate() {
+                    let mut st = accent;
+                    if i == fr.sel && c == fr.setup.col {
+                        st = st.add_modifier(Modifier::REVERSED);
+                    }
+                    spans.push(Span::styled(format!("{text:<CELL$}"), st));
+                    spans.push(Span::styled(" ", style));
+                }
+            } else {
+                spans.push(Span::styled(format!("   {} ", mark(e)), accent));
+                spans.push(Span::styled(
+                    format!("{:<NAME$}", e.name),
+                    style.add_modifier(Modifier::BOLD),
+                ));
+            }
+            // The line wraps between its parts, under itself, rather than run off the box.
+            let at: usize = spans.iter().map(|s| s.content.chars().count()).sum::<usize>() + 1;
+            let text = about(plan, e, &programs, two);
+            let mut wrapped = fit(&text, width.saturating_sub(at).max(20)).into_iter();
+            let detail = style.fg(app.depth.fit(t.dim));
+            spans.push(Span::styled(format!(" {}", wrapped.next().unwrap_or_default()), detail));
+            lines.push(Line::from(spans));
+            for more in wrapped {
+                lines.push(Line::from(Span::styled(format!("{}{more}", " ".repeat(at)), detail)));
+            }
+            if two {
+                // What a side's cell can't say: why it can't, what needs it.
+                for s in &sides {
+                    let Some(x) = plan.entry_on(&e.id, *s) else { continue };
+                    let mut why = Vec::new();
+                    if let Some(b) = &x.blocked {
+                        why.push(format!("can't: {b}"));
+                    }
+                    if !x.needed_by.is_empty() {
+                        let by: Vec<&str> = x
+                            .needed_by
+                            .iter()
+                            .map(|id| plan.entry(id).map_or(id.as_str(), |y| y.name.as_str()))
+                            .collect();
+                        why.push(format!("ticked because {} needs it", by.join(", ")));
+                    }
+                    if !why.is_empty() {
+                        lines.push(Line::styled(
+                            format!("       {}: {}", r.sides.name(*s), why.join("; ")),
+                            dim,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    let here = already(plan);
+    if !here.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(" Already here", italic));
+        let default = ptyro_agents::default_agent(&app.config);
+        for e in here {
+            let each: Vec<String> = sides
+                .iter()
+                .filter_map(|s| {
+                    let x = plan.entry_on(&e.id, *s)?;
+                    let at = x.state.path().map(|p| format!(" ({p})")).unwrap_or_default();
+                    let words = x.state.words();
+                    Some(if two {
+                        format!("{} {words}", r.sides.name(*s))
+                    } else {
+                        format!("{words}{at}")
+                    })
+                })
+                .collect();
+            let def = if e.id == default { " · your default agent" } else { "" };
+            lines.push(Line::from(vec![
+                Span::styled(format!("   ✓ {}", e.name), fg(app, t.done)),
+                Span::styled(format!("  {}{def}", each.join("; ")), dim),
+            ]));
+        }
+    }
+    let wsl = match &plan.wsl {
+        Some(w @ (WslStatus::Unusable { .. } | WslStatus::Inside { .. })) => Some(w.words()),
+        _ => None,
+    };
+    for note in [wsl, r.note.clone()].into_iter().flatten() {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(format!(" {note}"), dim));
+    }
+    if let Some(said) = &fr.setup.said {
+        lines.push(Line::styled(format!(" {said}"), fg(app, t.blocked)));
+    }
+}
+
+/// `text` (parts joined by ` · `) in lines of at most `width` characters, broken between
+/// parts (a part longer than a line is a line of its own).
+fn fit(text: &str, width: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for part in text.split(" · ") {
+        match out.last_mut() {
+            Some(l) if l.chars().count() + 3 + part.chars().count() <= width => {
+                l.push_str(" · ");
+                l.push_str(part);
+            }
+            _ => out.push(part.to_owned()),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_checklist_line_wraps_between_its_parts() {
+        let lines = super::fit("Google's coding agent · the vendor's installer · then log in", 30);
+        assert_eq!(lines, ["Google's coding agent", "the vendor's installer", "then log in"]);
+        assert_eq!(super::fit("a · b", 30), ["a · b"]);
+    }
+
     #[cfg(unix)] // file modes
     #[test]
     fn the_first_config_is_valid_private_and_never_overwrites() {

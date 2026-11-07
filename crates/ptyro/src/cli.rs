@@ -346,8 +346,17 @@ async fn dispatch(
                 crate::setup::SetupArgs { yes, agents, tools, dry_run, json, place, survey, tty };
             crate::setup::setup(&ctx, a).await
         }
-        Some(Cmd::Install { names, yes, dry_run, json, place, admin, tty }) => {
-            let a = crate::setup::InstallArgs { names, yes, dry_run, json, place, admin, tty };
+        Some(Cmd::Install { names, yes, dry_run, json, place, admin, tty, confirmed }) => {
+            let a = crate::setup::InstallArgs {
+                names,
+                yes,
+                dry_run,
+                json,
+                place,
+                admin,
+                tty,
+                confirmed,
+            };
             crate::setup::install(&ctx, a).await
         }
         Some(Cmd::Login { names, check, json, place, tty, installed }) => {

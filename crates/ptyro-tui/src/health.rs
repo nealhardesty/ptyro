@@ -43,6 +43,9 @@ pub enum Fix {
     /// Open the settings panel at this option: WSL hiding an open web app opens `remote.access`,
     /// WSL stopping ptyro with the last terminal opens `daemon.hold_wsl`.
     Setting(&'static str),
+    /// Open the setup checklist (BOOT2) with these ticked (none: the defaults): an agent or git
+    /// not found, no agent at all, or a doctor line that suggests `ptyro setup` / `ptyro install`.
+    Setup(Vec<String>),
 }
 
 #[derive(Debug, Clone)]
@@ -97,6 +100,32 @@ fn private_path(text: &str) -> Option<&str> {
     })
 }
 
+/// A finding the setup checklist fixes (BOOT2): what it names to install ticked there.
+/// - a `` `ptyro setup …` `` or `` `ptyro install NAME…` `` the doctor suggests;
+/// - an agent not found (`claude not found: …`), or git (`git not found: …`): that one;
+/// - no agent found at all: the defaults.
+fn setup_fix(c: &Check) -> Option<Fix> {
+    if let Some(words) = suggested_cli(c) {
+        return match words.first().map(String::as_str) {
+            Some("setup") => Some(Fix::Setup(Vec::new())),
+            Some("install") => Some(Fix::Setup(
+                words[1..].iter().filter(|w| !w.starts_with('-')).cloned().collect(),
+            )),
+            _ => None,
+        };
+    }
+    if c.section == "agents" && c.name == "agents" {
+        return Some(Fix::Setup(Vec::new()));
+    }
+    let prog = c
+        .text
+        .strip_suffix("not found")
+        .or_else(|| c.text.split_once(" not found").map(|(p, _)| p))?;
+    let prog = prog.trim();
+    let known = ptyro_agents::setup::resolve(prog).ok()?;
+    matches!(c.section.as_str(), "agents" | "git").then(|| Fix::Setup(vec![known.program.clone()]))
+}
+
 /// A doctor check as a finding: only warnings and problems, with the fix its text implies.
 pub fn finding(c: &Check) -> Option<Finding> {
     let problem = match c.level.as_str() {
@@ -116,6 +145,8 @@ pub fn finding(c: &Check) -> Option<Finding> {
         Some(Fix::Tmux { name: c.name.clone(), value: "on".into() })
     } else if c.name == "config mode" {
         private_path(&c.text).map(|p| Fix::Private(PathBuf::from(p)))
+    } else if let Some(fix) = setup_fix(c) {
+        Some(fix)
     } else {
         suggested_cli(c).map(Fix::Cli)
     };
@@ -264,6 +295,7 @@ impl App {
                     }
                     Some(Fix::Action(_)) => format!("{} · ⏎ opens the clean-up list", f.text),
                     Some(Fix::Setting(key)) => format!("{} · ⏎ opens the setting {key}", f.text),
+                    Some(Fix::Setup(_)) => format!("{} · ⏎ opens the setup checklist", f.text),
                     None => f.text.clone(),
                 },
                 key: None,
@@ -294,6 +326,7 @@ impl App {
             Some(Fix::Cli(args)) => self.run_cli(&args),
             Some(Fix::Action(action)) => self.run(&crate::keymap::Command { action, arg: None }),
             Some(Fix::Setting(key)) => self.open_settings(Some(key)),
+            Some(Fix::Setup(names)) => self.open_setup((!names.is_empty()).then_some(names)),
             Some(Fix::Append { file, line }) => {
                 self.overlay = Some(Overlay::Confirm {
                     text: format!(
@@ -388,6 +421,36 @@ mod tests {
 
     fn check(section: &str, name: &str, level: &str, text: &str) -> Check {
         Check { section: section.into(), name: name.into(), level: level.into(), text: text.into() }
+    }
+
+    #[test]
+    fn an_agent_or_tool_not_found_opens_the_setup_checklist() {
+        let fix = |section: &str, name: &str, level: &str, text: &str| {
+            finding(&check(section, name, level, text)).unwrap().fix
+        };
+        let s = |v: &[&str]| Some(Fix::Setup(v.iter().map(|s| (*s).to_owned()).collect()));
+        assert_eq!(
+            fix(
+                "agents",
+                "claude",
+                "problem",
+                "claude not found: `curl -fsSL https://claude.ai/install.sh | bash` installs it"
+            ),
+            s(&["claude"])
+        );
+        assert_eq!(fix("agents", "antigravity", "problem", "agy not found"), s(&["agy"]));
+        assert_eq!(
+            fix("git", "version", "problem", "git not found: projects and worktrees need it"),
+            s(&["git"])
+        );
+        assert_eq!(fix("agents", "agents", "warn", "no agent found: install one, e.g. …"), s(&[]));
+        assert_eq!(
+            fix("agents", "x", "warn", "run `ptyro install agy gh` to add them"),
+            s(&["agy", "gh"])
+        );
+        assert_eq!(fix("agents", "x", "warn", "`ptyro setup` installs them"), s(&[]));
+        // Something setup doesn't install keeps its own fix.
+        assert_eq!(fix("agents", "mine", "problem", "my-agent not found"), None);
     }
 
     #[test]

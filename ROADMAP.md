@@ -3259,9 +3259,18 @@ machine". The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-desi
   `app.setup`/`app.install` (a split) and the web's More → Set up ptyro, so parity holds now
   (BOOT2 and BOOT3 give them their full places). Tested end to end through a fake machine
   (`PTYRO_TEST_SETUP`, `ptyro fake-installer`). `--where` is BOOT8's (built 2026-11-07).
-- [ ] **BOOT2 The TUI checklist** **M**, as the first part of the onboarding screen (UX1.19,
+- [x] **BOOT2 The TUI checklist** **M**, as the first part of the onboarding screen (UX1.19,
   `onboard.rs`; the owner chose one checklist screen). Reopened from `ptyro init`, the palette's
   `first.run`, and the health badge.
+
+  *Done (2026-11-07):* the first run opens with Agents, Tools and Already here, a line per item
+  (the catalog's new `about`, the method, admin, "needs Node.js", "ticked because …", "then log
+  in"), a column per side on Windows with WSL; `Space` ticks, `⏎` installs in a split running
+  `ptyro install … --confirmed` (live output, sudo once, the logins, the profiles line), `s` not
+  now. Alone on `U` / `app.setup`; the health badge's fixes open it for a missing agent or git;
+  `ptyro init` offers the CLI's checklist. The ticking rules moved to
+  `ptyro_agents::setup::checklist`, shared with `ptyro setup` (SPEC §24.5). Tested headless
+  (`tests/boot2.rs`) on the fake machine.
 - [ ] **BOOT3 The web checklist** **M**, under Settings and as a first-run banner when no agent
   is installed. Installs that need admin rights are the TUI's and the CLI's only: the owner's
   parity exception, recorded in `docs/parity.md` with its reason. The web shows the command to

@@ -8,8 +8,9 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, IsTerminal, Write};
 
 use ptyro_agents::catalog::{Kind, Platform};
+use ptyro_agents::setup::checklist::{self, Picks, Sides, cell, here_already, mark, rows};
 use ptyro_agents::setup::{
-    self, Admin, Entry, Event, Plan, Report, Side, Sided, State, Survey, Where, WslStatus,
+    self, Admin, Entry, Event, Plan, Report, Side, Sided, State, Where, WslStatus,
 };
 use ptyro_client::wsl_setup;
 use ptyro_core::paths::Paths;
@@ -42,6 +43,9 @@ pub struct InstallArgs {
     /// said yes there already. `ask`: sudo may prompt in the terminal; `never`: for the web.
     pub admin: Option<String>,
     pub tty: bool,
+    /// Hidden `--confirmed`: the TUI's checklist asked already (BOOT2), so no `Install?`; the
+    /// rest (sudo's prompt, the logins, the profiles line) is as when typed.
+    pub confirmed: bool,
 }
 
 /// A person can answer: a terminal (or a test's fake machine, which pipes its answers; or
@@ -49,73 +53,6 @@ pub struct InstallArgs {
 pub(crate) fn interactive(tty: bool) -> bool {
     tty || (std::io::stdin().is_terminal() && std::io::stderr().is_terminal())
         || ptyro_core::test_knob("PTYRO_TEST_SETUP").is_some()
-}
-
-/// What each side has ticked (BOOT8): `here` is this computer (Windows itself, on Windows),
-/// `wsl` the WSL distro's.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct Picks {
-    here: Vec<String>,
-    wsl: Vec<String>,
-}
-
-impl Picks {
-    fn of(&mut self, side: Side) -> &mut Vec<String> {
-        if side == Side::Wsl { &mut self.wsl } else { &mut self.here }
-    }
-}
-
-/// What setup found: this computer, and on Windows with a usable WSL, the distro.
-struct Sides {
-    here: Survey,
-    /// This computer's side: `Windows` on Windows, else `Local`.
-    side: Side,
-    /// WSL's survey, when WSL is usable (and wanted).
-    wsl: Option<Survey>,
-    /// WSL as found (Windows), or that this is WSL; `None` elsewhere.
-    status: Option<WslStatus>,
-}
-
-impl Sides {
-    fn distro(&self) -> Option<&str> {
-        self.status.as_ref().and_then(WslStatus::usable).filter(|_| self.wsl.is_some())
-    }
-
-    /// The sides `place` means here, those that can be had.
-    fn sides(&self, place: Where) -> Vec<Side> {
-        place
-            .sides(self.side)
-            .into_iter()
-            .filter(|s| *s != Side::Wsl || self.wsl.is_some())
-            .collect()
-    }
-
-    fn plan(&self, picks: &Picks) -> Plan {
-        let mine = setup::plan(&self.here, &picks.here);
-        let wsl = self.wsl.as_ref().map(|s| setup::plan(s, &picks.wsl));
-        Plan::merge(mine, wsl, self.status.clone())
-    }
-
-    /// The default ticks not installed yet, on `place`'s sides.
-    fn defaults(&self, place: Where) -> Picks {
-        let mut p = Picks::default();
-        for side in self.sides(place) {
-            let survey = if side == Side::Wsl { self.wsl.as_ref() } else { Some(&self.here) };
-            if let Some(s) = survey {
-                *p.of(side) = setup::defaults(s);
-            }
-        }
-        p
-    }
-
-    /// `ids` ticked on `place`'s sides.
-    fn picks(&self, place: Where, ids: &[String]) -> Picks {
-        let mut p = Picks::default();
-        for side in self.sides(place) {
-            *p.of(side) = ids.to_vec();
-        }
-        p
-    }
 }
 
 /// `--where`, checked against this machine: on Windows any of them; elsewhere only `local`.
@@ -209,35 +146,18 @@ async fn look(
     Ok((host, sides, place))
 }
 
-/// The default side on Windows: the daemon's distro (`prefer`, from `client.default_remote`)
-/// when it is the usable one, else Windows. Another distro with ptyro isn't where the sessions
-/// run, so the default stays Windows and a line says why (unless `quiet`).
+/// The default side on Windows ([`checklist::default_place`]), saying why it isn't the
+/// daemon's distro when it isn't (unless `quiet`).
 pub(crate) fn default_place(
     prefer: Option<&str>,
     status: Option<&WslStatus>,
     quiet: bool,
 ) -> Where {
-    match (prefer, status.and_then(WslStatus::usable)) {
-        (Some(p), Some(d)) if p.is_empty() || p.eq_ignore_ascii_case(d) => Where::Wsl,
-        (Some(p), _) => {
-            if !quiet {
-                eprintln!("{}", daemon_elsewhere(p, status));
-            }
-            Where::Windows
-        }
-        (None, _) => Where::Windows,
+    let (place, why) = checklist::default_place(prefer, status);
+    if let Some(why) = why.filter(|w| !quiet && !w.is_empty()) {
+        eprintln!("{why}");
     }
-}
-
-/// Why the default isn't the daemon's distro `prefer` (`client.default_remote`).
-fn daemon_elsewhere(prefer: &str, status: Option<&WslStatus>) -> String {
-    match status {
-        Some(WslStatus::Usable { distro, .. }) => format!(
-            "WSL: your daemon is in {prefer}, which setup can't reach; {distro} has ptyro, so `--where wsl` installs there. By default this sets up Windows only."
-        ),
-        Some(s) => s.words(),
-        None => String::new(),
-    }
+    place
 }
 
 /// The ids `names` mean, each of `kind`; `none` is none.
@@ -333,7 +253,7 @@ pub async fn install(ctx: &Ctx, a: InstallArgs) -> Result<i32, Error> {
         return show_plan(&plan, a.json);
     }
     let two = plan.sides().len() > 1;
-    if !a.yes && asked.is_none() && !plan.steps().is_empty() {
+    if !a.yes && asked.is_none() && !a.confirmed && !plan.steps().is_empty() {
         eprintln!();
         for e in plan.steps() {
             eprintln!("  {}", step_line(e, two));
@@ -469,10 +389,7 @@ fn logins(
 
 /// `Windows`, `WSL (Ubuntu)`.
 fn side_name(side: Side, sides: &Sides) -> String {
-    match (side, sides.distro()) {
-        (Side::Wsl, Some(d)) => format!("WSL ({d})"),
-        (s, _) => s.words().to_owned(),
-    }
+    sides.name(side)
 }
 
 fn print_event(ev: &Event, name: &dyn Fn(&str) -> String, windows: bool) {
@@ -658,24 +575,6 @@ fn step_line(e: &Entry, two: bool) -> String {
     format!("{}{at}: {what} through {}{admin}", e.name, a.via.words())
 }
 
-fn here_already(e: &Entry) -> bool {
-    matches!(e.state, State::Installed { .. } | State::Other { .. })
-}
-
-/// The items a person can tick, in the checklist's order: what isn't here (or isn't new
-/// enough) on some side.
-fn rows(plan: &Plan) -> Vec<&Entry> {
-    let sides = plan.sides();
-    let Some(first) = sides.first() else { return Vec::new() };
-    plan.entries
-        .iter()
-        .filter(|e| e.side == *first)
-        .filter(|e| {
-            sides.iter().any(|s| plan.entry_on(&e.id, *s).is_some_and(|x| !here_already(x)))
-        })
-        .collect()
-}
-
 /// The checklist: agents, tools (numbered), and what's here already; with two sides, a column
 /// each. Then what WSL is, when it matters.
 fn render(plan: &Plan, out: &mut dyn Write) -> std::io::Result<()> {
@@ -715,16 +614,6 @@ fn notes_of(plan: &Plan, e: &Entry, label: bool) -> Vec<String> {
     notes
 }
 
-fn mark(e: &Entry) -> &'static str {
-    if e.picked {
-        "[x]"
-    } else if e.ticked {
-        "[+]"
-    } else {
-        "[ ]"
-    }
-}
-
 fn render_one(plan: &Plan, out: &mut dyn Write) -> std::io::Result<()> {
     let pick = rows(plan);
     for (title, kind) in [("Agents", Kind::Agent), ("Tools", Kind::Tool)] {
@@ -756,21 +645,6 @@ fn render_one(plan: &Plan, out: &mut dyn Write) -> std::io::Result<()> {
         }
     }
     Ok(())
-}
-
-/// One side's cell: `[x] WinGet`, `[+] apt (admin)`, `✓ 2.43.0`, `[ ]`.
-fn cell(e: Option<&Entry>) -> String {
-    let Some(e) = e else { return String::new() };
-    if here_already(e) {
-        return format!("✓ {}", e.state.version().unwrap_or("installed"));
-    }
-    match e.action.as_ref().filter(|_| e.ticked) {
-        Some(a) => {
-            format!("{} {}{}", mark(e), a.via.words(), if a.admin { " (admin)" } else { "" })
-        }
-        None if e.ticked && e.blocked.is_some() => format!("{} can't", mark(e)),
-        None => mark(e).to_owned(),
-    }
 }
 
 const NAME: usize = 13;
@@ -923,27 +797,8 @@ fn checklist(
                 }
                 continue;
             }
-            let here: Vec<&Entry> =
-                targets.iter().filter_map(|s| plan.entry_on(&e.id, *s)).collect();
-            if here.iter().any(|x| x.picked) {
-                for x in &here {
-                    picks.of(x.side).retain(|p| *p != e.id);
-                }
-                continue;
-            }
-            for x in here {
-                if x.ticked {
-                    let _ = writeln!(
-                        out,
-                        "  {} is needed by something ticked{}: untick that first",
-                        e.name,
-                        on(x.side)
-                    );
-                } else if here_already(x) {
-                    let _ = writeln!(out, "  {} is here already{}", e.name, on(x.side));
-                } else {
-                    picks.of(x.side).push(e.id.clone());
-                }
+            for line in checklist::toggle(sides, &plan, &mut picks, &e.id, place) {
+                let _ = writeln!(out, "  {line}");
             }
         }
     }
@@ -953,6 +808,7 @@ fn checklist(
 mod tests {
     use super::*;
     use ptyro_agents::catalog::{self, Platform};
+    use ptyro_agents::setup::Survey;
 
     fn survey(installed: &[(&str, &str)]) -> Survey {
         let mut states = BTreeMap::new();

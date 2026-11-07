@@ -600,7 +600,14 @@ pub enum AppMsg {
     Health(Vec<crate::health::Check>),
     /// What `ptyro about --json` said (UX2.1); `None` if it could not run.
     About(Option<serde_json::Value>),
+    /// What the setup checklist found (BOOT2): the sides, the default place, and why that
+    /// isn't the daemon's side; `None` if looking failed.
+    SetupFound(Option<Box<SetupLook>>),
 }
+
+/// What [`crate::setup_list::look`] found.
+pub type SetupLook =
+    (ptyro_agents::setup::checklist::Sides, ptyro_agents::setup::Where, Option<String>);
 
 /// One pane's live state.
 #[derive(Default)]
@@ -1931,6 +1938,10 @@ impl App {
             AppMsg::Reply(p, r) => (p, r),
             AppMsg::Health(checks) => {
                 self.got_health(checks);
+                return;
+            }
+            AppMsg::SetupFound(found) => {
+                self.setup_found(found);
                 return;
             }
             AppMsg::About(doc) => {
@@ -3320,6 +3331,7 @@ impl App {
                 );
             }
             "first.run" => self.open_first_run(),
+            "app.setup" => self.open_setup(None),
             "toast.act" => match self.toast.take().and_then(|t| t.offer) {
                 Some(Offer { then: Then::Run(cmd), .. }) => self.run(&cmd),
                 Some(Offer { then: Then::Send(req, done), .. }) => {
@@ -8673,10 +8685,8 @@ mod tests {
         );
         use crate::onboard::{Choice, ChoiceKind, FirstRun};
         app.first_run = Some(FirstRun {
-            agents: vec![
-                ("claude".into(), "claude".into(), true),
-                ("codex".into(), "codex".into(), false),
-            ],
+            setup: crate::setup_list::Setup::looking(None),
+            only_setup: false,
             choices: vec![
                 Choice {
                     section: "accounts",
@@ -8700,7 +8710,7 @@ mod tests {
         app.first_run_repos(vec!["/src/alpha".into()]);
         let shown = screen(&app);
         assert!(shown.contains("Welcome to ptyro"), "{shown}");
-        assert!(shown.contains("✓ claude (default)") && !shown.contains("✓ codex"), "{shown}");
+        assert!(shown.contains("agents and tools: looking at what's installed…"), "{shown}");
         assert!(shown.contains("[x] profile work") && shown.contains("[ ] alpha"), "{shown}");
         // j j: past the repository to notifications; Space ticks it; ⏎ writes the config.
         let k = |app: &mut App, code| app.first_run_key(KeyEvent::new(code, Mods::NONE));
@@ -8713,6 +8723,92 @@ mod tests {
         assert!(text.contains("[profiles.work]") && text.contains("\"desktop\""), "{text}");
         assert!(app.toast.as_ref().unwrap().text.contains("1 profile(s), 0 project(s)"));
         assert!(app.toast.as_ref().unwrap().text.contains("take the tour"));
+    }
+
+    /// BOOT2: the setup checklist is the first part of the first run: Agents, Tools and Already
+    /// here, each with its line; a prerequisite ticks itself with the reason; ⏎ installs what's
+    /// ticked in a split (`ptyro install … --confirmed`) and keeps the other choices.
+    #[test]
+    fn the_first_run_starts_with_the_setup_checklist_and_enter_installs_in_a_split() {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path().to_path_buf();
+        let paths = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| h.clone())).unwrap();
+        let connect = ConnectOptions::new(paths.clone(), ptyro_protocol::ClientKind::Tui);
+        let mut app = App::new(
+            Options::default(),
+            connect,
+            paths,
+            Config::default(),
+            false,
+            Rect::new(0, 0, 160, 40),
+        );
+        use crate::onboard::FirstRun;
+        app.first_run = Some(FirstRun {
+            setup: crate::setup_list::tests::one(&[("claude", "2.1.319")]),
+            ..FirstRun::default()
+        });
+        let shown = screen_at(&app, 140);
+        for want in [
+            " Agents",
+            "[x] Codex",
+            "OpenAI's coding agent",
+            "then log in",
+            "[ ] Gemini CLI",
+            "for Gemini API-key and enterprise accounts (others: Antigravity)",
+            " Tools",
+            "[x] git",
+            "asks for admin",
+            " Already here",
+            "✓ Claude Code",
+            "your default agent",
+            "⏎ install 3 and use these",
+            "s not now",
+        ] {
+            assert!(shown.contains(want), "{want:?}:\n{shown}");
+        }
+        let k = |app: &mut App, code| app.first_run_key(KeyEvent::new(code, Mods::NONE));
+        // Down to Gemini CLI (Codex, Antigravity, OpenCode, Gemini CLI), Space ticks it, and
+        // Node.js with it.
+        for _ in 0..3 {
+            k(&mut app, KeyCode::Char { c: 'j' });
+        }
+        k(&mut app, KeyCode::Char { c: ' ' });
+        let shown = screen_at(&app, 140);
+        assert!(shown.contains("[+] Node.js"), "{shown}");
+        assert!(shown.contains("ticked because Gemini CLI needs it"), "{shown}");
+        assert!(shown.contains("⏎ install 5 and use these"), "{shown}");
+        k(&mut app, KeyCode::Enter);
+        assert!(app.first_run.is_none());
+        let words = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            app.last_cli,
+            Some(words(&["install", "codex", "gemini", "git", "gh", "--confirmed"])),
+            "Node.js comes with Gemini CLI, as the CLI plans it"
+        );
+        assert!(Config::path(&app.paths).exists(), "the first run's config is written too");
+    }
+
+    /// BOOT2: `app.setup` (`U`) is the checklist alone; `s` (not now) installs nothing and says
+    /// how to come back.
+    #[test]
+    fn the_setup_checklist_alone_closes_with_not_now() {
+        let mut app = app();
+        assert_eq!(app.keymap.key_for("app.setup").as_deref(), Some("C-q U"));
+        use crate::onboard::FirstRun;
+        app.first_run = Some(FirstRun {
+            setup: crate::setup_list::tests::one(&[]),
+            only_setup: true,
+            ..FirstRun::default()
+        });
+        let shown = screen(&app);
+        assert!(shown.contains("Set up this computer"), "{shown}");
+        assert!(shown.contains("⏎ install 4 · Space toggle"), "{shown}");
+        assert!(!shown.contains("repositories"), "{shown}");
+        app.first_run_key(KeyEvent::new(KeyCode::Char { c: 's' }, Mods::NONE));
+        assert!(app.first_run.is_none());
+        assert!(app.last_cli.is_none(), "nothing installed");
+        assert!(app.toast.as_ref().unwrap().text.contains("C-q U opens the setup checklist"));
+        assert!(!Config::path(&app.paths).exists(), "the checklist alone writes no config");
     }
 
     #[test]
